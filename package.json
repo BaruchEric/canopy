@@ -1,0 +1,31 @@
+{
+  "name": "canopy",
+  "version": "0.1.0",
+  "description": "Multi-repo git cockpit: point it at a directory, see every repo as a live tree, drill into changes, commit/push with AI-suggested messages, open repos in kitty/VS Code, group them into workspaces.",
+  "type": "module",
+  "bin": {
+    "canopy": "bin/canopy.ts"
+  },
+  "scripts": {
+    "dev": "bun run --watch src/server/index.ts",
+    "dev:web": "vite ui",
+    "build": "vite build ui",
+    "typecheck": "tsc --noEmit -p tsconfig.json && tsc --noEmit -p ui/tsconfig.json",
+    "lint": "oxlint src ui/src bin",
+    "test": "bun test"
+  },
+  "dependencies": {
+    "react": "^19.1.0",
+    "react-dom": "^19.1.0",
+    "zustand": "^5.0.5"
+  },
+  "devDependencies": {
+    "@types/bun": "^1.2.19",
+    "@types/react": "^19.1.8",
+    "@types/react-dom": "^19.1.6",
+    "@vitejs/plugin-react": "^4.6.0",
+    "oxlint": "^1.8.0",
+    "typescript": "^5.8.3",
+    "vite": "^7.0.0"
+  }
+}
