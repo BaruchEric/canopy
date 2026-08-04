@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { getDiff, parsePorcelainV2 } from "./git";
+import { getDiff, isAccessDenied, parsePorcelainV2 } from "./git";
 import { heuristicMessage } from "./suggest";
 import type { RepoFile } from "./types";
 
@@ -86,6 +86,35 @@ describe("getDiff path containment", () => {
         getDiff("/tmp", bad, { untracked: true }),
       ).rejects.toThrow();
     }
+  });
+});
+
+describe("isAccessDenied", () => {
+  test("recognises a remote refusing us", () => {
+    const denials = [
+      // Verbatim from pushing a third-party clone over HTTPS.
+      "remote: Permission to ag-ui-protocol/ag-ui.git denied to BaruchEric.\n" +
+        "fatal: unable to access 'https://github.com/ag-ui-protocol/ag-ui/': " +
+        "The requested URL returned error: 403",
+      "ERROR: Permission to BuilderIO/agent-native.git denied to BaruchEric.",
+      "fatal: Authentication failed for 'https://github.com/x/y.git/'",
+      "remote: Repository not found.",
+    ];
+    for (const d of denials) expect(isAccessDenied(d)).toBe(true);
+  });
+
+  test("does not mistake a rejected ref for a refused remote", () => {
+    // Falling back to another remote on these would push a stale or
+    // unrelated branch somewhere it was never meant to go.
+    const rejections = [
+      " ! [rejected]        main -> main (non-fast-forward)\n" +
+        "error: failed to push some refs to 'origin'",
+      "error: remote unpack failed: unable to create temporary object directory\n" +
+        " ! [remote rejected] HEAD -> master (unpacker error)",
+      "fatal: The current branch main has no upstream branch.",
+      "1403 files changed, 403 insertions(+)",
+    ];
+    for (const r of rejections) expect(isAccessDenied(r)).toBe(false);
   });
 });
 

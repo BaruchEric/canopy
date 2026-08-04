@@ -3,7 +3,12 @@ import { api } from "../api";
 import { useStore } from "../store";
 import { ago, GLYPH, stateOf } from "../util";
 import { DiffView } from "./DiffView";
-import type { Repo, RepoFile } from "../../../src/core/types";
+import type {
+  LogEntry,
+  PushAccess,
+  Repo,
+  RepoFile,
+} from "../../../src/core/types";
 
 function FileRow({
   repo,
@@ -158,6 +163,61 @@ function WorkspaceMenu({
   );
 }
 
+function History({ repo }: { repo: Repo }) {
+  // Bumped by the repo SSE event, so a commit made in a terminal refreshes
+  // this list too — not just one made from the panel.
+  const updatedAt = useStore((s) => s.updatedAt[repo.id]);
+  const [open, setOpen] = useState(false);
+  const [log, setLog] = useState<LogEntry[] | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!open) return;
+    let live = true;
+    setError(null);
+    api
+      .log(repo.id)
+      .then((entries) => {
+        if (live) setLog(entries);
+      })
+      .catch((e: unknown) => {
+        if (live) setError(e instanceof Error ? e.message : String(e));
+      });
+    return () => {
+      live = false;
+    };
+  }, [open, repo.id, updatedAt]);
+
+  return (
+    <details className="history" onToggle={(e) => setOpen(e.currentTarget.open)}>
+      <summary className="panel-label">
+        history <span>{log ? log.length : "…"}</span>
+      </summary>
+      {error ? (
+        <p className="panel-error">Could not read the log: {error}</p>
+      ) : log === null ? (
+        <p className="panel-clean">Reading log…</p>
+      ) : log.length === 0 ? (
+        <p className="panel-clean">No commits yet.</p>
+      ) : (
+        <ul className="log">
+          {log.map((c) => (
+            <li key={c.hash} className="log-row">
+              <code className="log-hash">{c.hash}</code>
+              <span className="log-subject" title={c.subject}>
+                {c.subject}
+              </span>
+              <span className="log-meta">
+                {c.author} · {c.when}
+              </span>
+            </li>
+          ))}
+        </ul>
+      )}
+    </details>
+  );
+}
+
 function RepoPanel({ id }: { id: string }) {
   const repo = useStore((s) => s.repos.find((r) => r.id === id));
   const closePanel = useStore((s) => s.closePanel);
@@ -170,7 +230,26 @@ function RepoPanel({ id }: { id: string }) {
     null,
   );
 
+  const [access, setAccess] = useState<PushAccess>("unknown");
+
   useEffect(() => setNote(null), [id]);
+
+  // Answered from remote URLs alone for repos you own, so this costs nothing
+  // for almost every panel. Failures stay "unknown" and render nothing.
+  useEffect(() => {
+    let live = true;
+    setAccess("unknown");
+    api
+      .access(id)
+      .then((r) => {
+        if (live) setAccess(r.access);
+      })
+      .catch(() => {});
+    return () => {
+      live = false;
+    };
+  }, [id]);
+
   if (!repo) return null;
   const st = repo.status;
   const files = st?.files ?? [];
@@ -203,15 +282,40 @@ function RepoPanel({ id }: { id: string }) {
         : undefined;
     });
 
+  // commit + push is the one-click path: it fills in a blank message and an
+  // empty stage instead of refusing. Plain commit stays strict, so the
+  // checkboxes remain a way to commit exactly one thing.
   const doCommit = (thenPush: boolean) =>
     run(thenPush ? "commit+push" : "commit", async () => {
-      if (!message.trim()) throw new Error("write or suggest a message first");
-      if (!hasStaged && !stageAll)
+      if (files.length === 0) throw new Error("nothing to commit");
+
+      let msg = message.trim();
+      let heuristic = false;
+      if (!msg) {
+        if (!thenPush) throw new Error("write or suggest a message first");
+        const s = await api.suggest(id);
+        msg = s.message.trim();
+        heuristic = s.source === "heuristic";
+        if (!msg) throw new Error("could not generate a commit message");
+        setMessage(msg);
+      }
+
+      // Only auto-stage when nothing is staged at all — an explicit checkbox
+      // selection must never be widened into `git add -A`.
+      const autoStage = !hasStaged && !stageAll;
+      if (autoStage && !thenPush)
         throw new Error("nothing staged — tick “stage everything”");
-      await api.commit(id, message, stageAll);
+
+      await api.commit(id, msg, stageAll || autoStage);
       setMessage("");
       if (thenPush) await api.push(id);
-      return thenPush ? "committed and pushed" : "committed";
+
+      const done = thenPush ? "committed and pushed" : "committed";
+      const extras = [
+        autoStage ? "staged everything" : null,
+        heuristic ? "heuristic message — claude CLI unreachable" : null,
+      ].filter(Boolean);
+      return extras.length ? `${done} (${extras.join("; ")})` : done;
     });
 
   return (
@@ -274,6 +378,13 @@ function RepoPanel({ id }: { id: string }) {
           {busy === "push" ? "pushing…" : `push${st?.ahead ? ` ↑${st.ahead}` : ""}`}
         </button>
       </div>
+
+      {access === "denied" && (
+        <p className="panel-hint">
+          No remote accepts your pushes. Fork the repo, then add your copy as a
+          remote to push this branch.
+        </p>
+      )}
 
       <div className="panel-ws">
         <WorkspaceMenu repo={repo} onError={showError} />
@@ -341,6 +452,7 @@ function RepoPanel({ id }: { id: string }) {
                   type="button"
                   className="mini strong"
                   disabled={busy !== null}
+                  title="Suggests a message and stages everything if you left either blank"
                   onClick={() => void doCommit(true)}
                 >
                   {busy === "commit+push" ? "working…" : "commit + push"}
@@ -348,6 +460,8 @@ function RepoPanel({ id }: { id: string }) {
               </div>
             </div>
           )}
+
+          <History repo={repo} />
         </>
       )}
       {note && <p className={`note ${note.kind}`}>{note.text}</p>}

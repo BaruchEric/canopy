@@ -60,6 +60,10 @@ export interface CanopyConfig {
   recentRoots: string[];
 }
 
+/** Whether a push has anywhere to land. "unknown" means we could not tell and
+ *  the UI stays quiet — a hint on every repo is worse than no hint. */
+export type PushAccess = "ok" | "denied" | "unknown";
+
 export interface LogEntry {
   hash: string;
   subject: string;

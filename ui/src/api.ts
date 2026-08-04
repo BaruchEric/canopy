@@ -1,5 +1,6 @@
 import type {
   LogEntry,
+  PushAccess,
   Repo,
   ScanResult,
   ServerEvent,
@@ -34,6 +35,8 @@ export const api = {
   tree: () => req<ScanResult>("/api/tree"),
   rescan: () => req<ScanResult>("/api/rescan", { method: "POST" }),
   log: (id: string) => req<LogEntry[]>(`/api/repos/log?${rq(id)}`),
+  access: (id: string) =>
+    req<{ access: PushAccess }>(`/api/repos/access?${rq(id)}`),
   diff: (id: string, file: string, staged: boolean, untracked: boolean) =>
     req<{ diff: string }>(
       `/api/repos/diff?${rq(id, {

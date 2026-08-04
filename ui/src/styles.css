@@ -628,6 +628,70 @@ textarea {
   border: 1px solid color-mix(in srgb, var(--rust) 35%, transparent);
 }
 
+/* pre-flight push warning */
+/* Same shape as .note, in the warning colour — a pre-flight warning and the
+   failure it predicts should read as one voice. */
+.panel-hint {
+  margin: 0 14px 10px;
+  padding: 8px 10px;
+  border: 1px solid color-mix(in srgb, var(--lichen) 35%, transparent);
+  border-radius: var(--r);
+  font-size: 12px;
+  color: var(--lichen);
+}
+
+/* commit history */
+.history > summary {
+  cursor: pointer;
+  list-style: none;
+  justify-content: flex-start;
+  gap: 6px;
+}
+.history > summary::-webkit-details-marker {
+  display: none;
+}
+.history > summary::before {
+  content: "▸";
+  color: var(--ink-faint);
+}
+.history[open] > summary::before {
+  content: "▾";
+}
+.history > summary > span {
+  margin-left: auto;
+}
+.log {
+  list-style: none;
+  margin: 0 0 14px;
+  padding: 0;
+}
+.log-row {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  padding: 3px 14px;
+}
+.log-row:hover {
+  background: var(--bark2);
+}
+.log-hash {
+  flex: none;
+  color: var(--lichen);
+}
+.log-subject {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+.log-meta {
+  flex: none;
+  font-size: 11px;
+  white-space: nowrap;
+  color: var(--ink-faint);
+}
+
 /* ---------- responsive ---------- */
 @media (max-width: 1100px) {
   .body {

@@ -248,13 +248,86 @@ export async function commit(
   return r.stdout.trim();
 }
 
+/** Whether the remote refused *us*, as opposed to rejecting the ref. Only this
+ *  warrants trying a different remote: a non-fast-forward means we are behind,
+ *  and retrying elsewhere would push a stale branch somewhere new. Deliberately
+ *  narrow — a server-side unpack failure is a broken remote, not a wrong one. */
+export function isAccessDenied(stderr: string): boolean {
+  // 403 only where git frames it as a status, so a bare "403" elsewhere in
+  // push output (hook chatter, diff stats) cannot trigger a retry.
+  return /permission.+denied|(?:error|status)[^\n]{0,12}\b403\b|authentication failed|not authorized|access denied|repository not found/i.test(
+    stderr,
+  );
+}
+
+/** Push targets, most-preferred first: whatever the branch tracks, then every
+ *  other remote. Forks commonly track a read-only upstream while the writable
+ *  copy sits on a differently named remote. */
+async function pushTargets(
+  repoPath: string,
+  branch: string,
+): Promise<{ tracked: string; ordered: string[] }> {
+  const listed = await git(repoPath, ["remote"]);
+  const remotes =
+    listed.code === 0
+      ? listed.stdout
+          .split("\n")
+          .map((s) => s.trim())
+          .filter(Boolean)
+      : [];
+  const cfg = await git(repoPath, [
+    "config",
+    "--get",
+    `branch.${branch}.remote`,
+  ]);
+  const tracked = cfg.code === 0 ? cfg.stdout.trim() : "";
+  const ordered = remotes.includes(tracked)
+    ? [tracked, ...remotes.filter((r) => r !== tracked)]
+    : remotes;
+  return { tracked, ordered };
+}
+
 export async function push(repoPath: string): Promise<string> {
-  let r = await git(repoPath, ["push"], 120_000);
-  if (r.code !== 0 && /no upstream|set-upstream/i.test(r.stderr)) {
-    r = await git(repoPath, ["push", "-u", "origin", "HEAD"], 120_000);
+  const head = await git(repoPath, ["rev-parse", "--abbrev-ref", "HEAD"]);
+  const branch = head.stdout.trim();
+  if (!branch || branch === "HEAD") {
+    throw new Error("detached HEAD — check out a branch first");
   }
-  if (r.code !== 0) throw new Error(r.stderr.trim() || "git push failed");
-  return (r.stdout + r.stderr).trim();
+  const { tracked, ordered } = await pushTargets(repoPath, branch);
+  if (ordered.length === 0) throw new Error("no remote configured");
+
+  let lastErr = "";
+  for (const remote of ordered) {
+    // Adopt a remote as upstream only when the branch has none. If it already
+    // tracks something we cannot push to, quietly repointing it would hide
+    // how far behind that upstream we are.
+    const args =
+      remote === tracked
+        ? ["push"]
+        : tracked
+          ? ["push", remote, `HEAD:${branch}`]
+          : ["push", "-u", remote, `HEAD:${branch}`];
+    const r = await git(repoPath, args, 120_000);
+    if (r.code === 0) {
+      const out = (r.stdout + r.stderr).trim();
+      return remote === tracked ? out : `pushed to ${remote}\n${out}`;
+    }
+    lastErr = r.stderr.trim() || "git push failed";
+    if (!isAccessDenied(lastErr)) break;
+  }
+  // Every remote refused us. Say so plainly: the fallback cannot help a clone
+  // whose only remote belongs to someone else.
+  if (isAccessDenied(lastErr)) {
+    const tried =
+      ordered.length === 1
+        ? `its only remote (${ordered[0]})`
+        : `all ${ordered.length} remotes (${ordered.join(", ")})`;
+    throw new Error(
+      `${lastErr}\n\nNo remote accepted this push — tried ${tried}. ` +
+        `Fork the repo, then add your copy as a remote to push this branch.`,
+    );
+  }
+  throw new Error(lastErr);
 }
 
 export async function pull(repoPath: string): Promise<string> {

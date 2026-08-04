@@ -8,6 +8,7 @@ import {
   push,
   stageFile,
 } from "../core/git";
+import { githubLogin, pushAccess } from "../core/access";
 import { isOpenerId, openGroup, openIn } from "../core/openers";
 import { refreshRepo, scan } from "../core/scan";
 import {
@@ -28,6 +29,10 @@ interface ServerState {
   /** .git locations already rescanned for; stops repos that the scan cannot
    *  reach (deeper than maxDepth) from triggering a rescan on every write */
   probed: Set<string>;
+  /** GitHub identity, resolved once: undefined = not asked yet, null = no gh */
+  login?: string | null;
+  /** push permission memo, keyed "owner/name" — see core/access */
+  access: Map<string, boolean | null>;
   clients: Set<ReadableStreamDefaultController<Uint8Array>>;
   timers: Map<string, ReturnType<typeof setTimeout>>;
   watcher: FSWatcher | null;
@@ -226,6 +231,16 @@ async function handleApi(
     if (method === "GET" && action === "log") {
       return json(await getLog(repo.path));
     }
+    if (method === "GET" && action === "access") {
+      // Resolve the identity once per server, not once per request.
+      if (state.login === undefined) state.login = await githubLogin();
+      return json({
+        access: await pushAccess(repo.path, {
+          login: state.login,
+          permission: state.access,
+        }),
+      });
+    }
     if (method === "GET" && action === "diff") {
       const file = url.searchParams.get("file") ?? "";
       const staged = url.searchParams.get("staged") === "1";
@@ -309,6 +324,7 @@ export async function startServer(opts: {
     result,
     ignore: scanOptions.ignore,
     probed: new Set(),
+    access: new Map(),
     clients: new Set(),
     timers: new Map(),
     watcher: null,
