@@ -1,8 +1,10 @@
-import { useEffect, useState } from "react";
+import { Fragment, useEffect, useState } from "react";
+import type { CSSProperties } from "react";
 import { api } from "../api";
-import { useStore } from "../store";
+import { PANEL, useStore } from "../store";
 import { ago, GLYPH, stateOf } from "../util";
 import { DiffView } from "./DiffView";
+import { Resizer } from "./Resizer";
 import type {
   LogEntry,
   PushAccess,
@@ -218,7 +220,7 @@ function History({ repo }: { repo: Repo }) {
   );
 }
 
-function RepoPanel({ id }: { id: string }) {
+function RepoPanel({ id, width }: { id: string; width: number }) {
   const repo = useStore((s) => s.repos.find((r) => r.id === id));
   const closePanel = useStore((s) => s.closePanel);
   const [message, setMessage] = useState("");
@@ -319,7 +321,11 @@ function RepoPanel({ id }: { id: string }) {
     });
 
   return (
-    <section className={`panel s-${stateOf(repo)}`} aria-label={repo.name}>
+    <section
+      className={`panel s-${stateOf(repo)}`}
+      aria-label={repo.name}
+      style={{ "--panel-w": `${width}px` } as CSSProperties}
+    >
       <header className="panel-head">
         <span className="glyph">{GLYPH[stateOf(repo)]}</span>
         <span className="panel-name" title={repo.path}>
@@ -471,12 +477,32 @@ function RepoPanel({ id }: { id: string }) {
 
 export function Dock() {
   const panels = useStore((s) => s.panels);
+  const panelWidths = useStore((s) => s.panelWidths);
+  const setPanelWidth = useStore((s) => s.setPanelWidth);
   if (panels.length === 0) return null;
   return (
     <div className="dock">
-      {panels.map((id) => (
-        <RepoPanel key={id} id={id} />
-      ))}
+      {panels.map((id) => {
+        const width = panelWidths[id] ?? PANEL.initial;
+        return (
+          <Fragment key={id}>
+            <Resizer
+              className="panel-resizer"
+              label={`Width of the ${id} panel`}
+              value={width}
+              min={PANEL.min}
+              max={PANEL.max}
+              initial={PANEL.initial}
+              // the handle sits on the panel's left edge, so rightwards shrinks it
+              dir={-1}
+              cssVar="--panel-w"
+              target={(h) => h.nextElementSibling as HTMLElement | null}
+              onCommit={(px) => setPanelWidth(id, px)}
+            />
+            <RepoPanel id={id} width={width} />
+          </Fragment>
+        );
+      })}
     </div>
   );
 }

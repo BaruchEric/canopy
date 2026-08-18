@@ -97,8 +97,41 @@ textarea {
 }
 .body {
   display: grid;
-  grid-template-columns: 264px minmax(360px, 1fr) auto;
+  grid-template-columns: var(--sidebar-w, 264px) 6px minmax(360px, 1fr) auto;
   min-height: 0;
+}
+
+/* ---------- resizers ---------- */
+/* The strip carries no hairline of its own: the sidebar's border-right and
+   each panel's border-right already draw the seam it straddles. */
+.resizer {
+  position: relative;
+  z-index: 2;
+  flex: none;
+  width: 6px;
+  cursor: col-resize;
+  touch-action: none;
+}
+.resizer::before {
+  content: "";
+  position: absolute;
+  inset: 0 2px;
+  background: transparent;
+  transition: background 120ms ease;
+}
+.resizer:hover::before {
+  background: var(--ink-faint);
+}
+.resizer:focus-visible::before,
+.resizer.dragging::before {
+  background: var(--moss-deep);
+}
+.resizer:focus-visible {
+  outline: none;
+}
+body.resizing {
+  cursor: col-resize;
+  user-select: none;
 }
 .spacer {
   flex: 1;
@@ -411,7 +444,7 @@ textarea {
   background: var(--bark0);
 }
 .panel {
-  width: 440px;
+  width: var(--panel-w, 440px);
   flex: none;
   display: flex;
   flex-direction: column;
@@ -697,7 +730,8 @@ textarea {
   .body {
     grid-template-columns: minmax(0, 1fr) auto;
   }
-  .sidebar {
+  .sidebar,
+  .sidebar-resizer {
     display: none;
   }
   .root-path {
@@ -715,5 +749,8 @@ textarea {
   }
   .panel {
     width: 100vw;
+  }
+  .panel-resizer {
+    display: none;
   }
 }

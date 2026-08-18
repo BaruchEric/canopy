@@ -1,15 +1,19 @@
 import { useEffect, useState } from "react";
+import type { CSSProperties } from "react";
 import { Dock } from "./components/Dock";
 import { RepoGrid } from "./components/RepoGrid";
+import { Resizer } from "./components/Resizer";
 import { Sidebar } from "./components/Sidebar";
 import { TopBar } from "./components/TopBar";
-import { useStore } from "./store";
+import { SIDEBAR, useStore } from "./store";
 
 export function App() {
   const init = useStore((s) => s.init);
   const loaded = useStore((s) => s.loaded);
   const loadError = useStore((s) => s.loadError);
   const setDirtyOnly = useStore((s) => s.setDirtyOnly);
+  const sidebarWidth = useStore((s) => s.sidebarWidth);
+  const setSidebarWidth = useStore((s) => s.setSidebarWidth);
   const [attempt, setAttempt] = useState(0);
 
   useEffect(() => {
@@ -64,8 +68,23 @@ export function App() {
   return (
     <div className="app">
       <TopBar />
-      <div className="body">
+      <div
+        className="body"
+        style={{ "--sidebar-w": `${sidebarWidth}px` } as CSSProperties}
+      >
         <Sidebar />
+        <Resizer
+          className="sidebar-resizer"
+          label="Repository tree width"
+          value={sidebarWidth}
+          min={SIDEBAR.min}
+          max={SIDEBAR.max}
+          initial={SIDEBAR.initial}
+          dir={1}
+          cssVar="--sidebar-w"
+          target={(h) => h.parentElement}
+          onCommit={setSidebarWidth}
+        />
         <RepoGrid />
         <Dock />
       </div>
