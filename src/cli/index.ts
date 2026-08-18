@@ -9,7 +9,7 @@ import {
   upsertWorkspace,
 } from "../core/store";
 import { suggestMessage } from "../core/suggest";
-import { startServer } from "../server/index";
+import { PortUnavailableError, startServer } from "../server/index";
 import { bold, dim, lichen, moss, renderTree, sky } from "./render";
 
 const HELP = `${bold("canopy")} — multi-repo git cockpit
@@ -107,7 +107,32 @@ export async function main(argv: string[]): Promise<void> {
       }
       const port = portArg === undefined ? undefined : Number(portArg);
       const root = resolve(args[0] ?? ".");
-      const server = await startServer({ root, port });
+      const dir = args[0] ?? ".";
+      let server: Awaited<ReturnType<typeof startServer>>;
+      try {
+        server = await startServer({ root, port });
+      } catch (err) {
+        if (!(err instanceof PortUnavailableError)) throw err;
+        // Bun's own message ("Failed to start server. Is port N in use?")
+        // states the problem and no way out of it. Bun also reports
+        // EADDRINUSE when a low port merely needs root, so split the two here.
+        const privileged = err.port < 1024 && process.getuid?.() !== 0;
+        return fail(
+          [
+            privileged
+              ? `port ${err.port} needs root — ports below 1024 are privileged.`
+              : `port ${err.port} is already in use.`,
+            ...(privileged
+              ? []
+              : [
+                  `  something is listening there — it may be a canopy you already started:`,
+                  `    http://127.0.0.1:${err.port}`,
+                ]),
+            `  pick another port:`,
+            `    canopy ui ${dir} --port ${privileged ? 7850 : err.port + 10}`,
+          ].join("\n"),
+        );
+      }
       const url = `http://127.0.0.1:${server.port}`;
       console.log(`${moss("canopy")} ${dim("→")} ${sky(url)} ${dim(`(root: ${root})`)}`);
       await exec(["open", url]);

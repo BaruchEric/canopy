@@ -310,6 +310,31 @@ function sse(state: ServerState): Response {
   });
 }
 
+/**
+ * Thrown when the port cannot be bound, so the CLI can suggest --port instead
+ * of surfacing Bun's raw "Failed to start server" text. Deliberately not named
+ * "in use": Bun reports EADDRINUSE for privileged ports too, where the real
+ * cause is a missing root, so only the caller can tell the two apart.
+ */
+export class PortUnavailableError extends Error {
+  constructor(readonly port: number) {
+    super(`port ${port} is unavailable`);
+    this.name = "PortUnavailableError";
+  }
+}
+
+function bind<T>(port: number, listen: () => T): T {
+  try {
+    return listen();
+  } catch (err) {
+    // Match on the errno, not the message — Bun's wording is not an API.
+    if ((err as { code?: string }).code === "EADDRINUSE") {
+      throw new PortUnavailableError(port);
+    }
+    throw err;
+  }
+}
+
 export async function startServer(opts: {
   root: string;
   port?: number;
@@ -329,36 +354,40 @@ export async function startServer(opts: {
     timers: new Map(),
     watcher: null,
   };
-  startWatcher(state);
   await rememberRoot(root);
 
   const webDir = join(import.meta.dir, "../../dist/web");
-  const server = Bun.serve({
-    port,
-    // Loopback only: every mutating git route here is unauthenticated.
-    hostname: "127.0.0.1",
-    idleTimeout: 0,
-    fetch: async (req) => {
-      const url = new URL(req.url);
-      if (url.pathname === "/api/events") return sse(state);
-      if (url.pathname.startsWith("/api/")) {
-        try {
-          return await handleApi(state, req, url);
-        } catch (err) {
-          const status = err instanceof HttpError ? err.status : 500;
-          return json(
-            { error: String(err instanceof Error ? err.message : err) },
-            status,
-          );
+  const server = bind(port, () =>
+    Bun.serve({
+      port,
+      // Loopback only: every mutating git route here is unauthenticated.
+      hostname: "127.0.0.1",
+      idleTimeout: 0,
+      fetch: async (req) => {
+        const url = new URL(req.url);
+        if (url.pathname === "/api/events") return sse(state);
+        if (url.pathname.startsWith("/api/")) {
+          try {
+            return await handleApi(state, req, url);
+          } catch (err) {
+            const status = err instanceof HttpError ? err.status : 500;
+            return json(
+              { error: String(err instanceof Error ? err.message : err) },
+              status,
+            );
+          }
         }
-      }
-      const filePath =
-        url.pathname === "/" ? "index.html" : url.pathname.slice(1);
-      const file = Bun.file(join(webDir, filePath));
-      if (await file.exists()) return new Response(file);
-      return new Response(Bun.file(join(webDir, "index.html")));
-    },
-  });
+        const filePath =
+          url.pathname === "/" ? "index.html" : url.pathname.slice(1);
+        const file = Bun.file(join(webDir, filePath));
+        if (await file.exists()) return new Response(file);
+        return new Response(Bun.file(join(webDir, "index.html")));
+      },
+    }),
+  );
+  // Only after the bind succeeds: a watcher started earlier would outlive a
+  // failed listen and hold the process open.
+  startWatcher(state);
 
   const heartbeat = setInterval(() => {
     for (const c of state.clients) {
