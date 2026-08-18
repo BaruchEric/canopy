@@ -9,7 +9,7 @@ The write-capable, many-repo complement to [diffscope](../diffscope) (single-rep
 - **What:** one screen for the whole grove — every repo's branch, dirty files, ahead/behind, and last-commit age, live-updated as the filesystem changes.
 - **How:** a Bun server scans for `.git` dirs, shells out to `git`, watches the root recursively, and streams updates to a React SPA over SSE. Commit messages come from the `claude` CLI (heuristic fallback).
 - **Stack:** Bun + TypeScript (strict) server, React 19 + Vite + Zustand SPA, zero CSS frameworks. `bun test`, `tsc --noEmit`, `oxlint`.
-- **Run:** `bun install && bun run build && bun link`, then `canopy ui ~/Arik/dev`.
+- **Run:** `bun install && bun run build && bun link`, then `canopy ui ~/dev`.
 
 ## CLI
 
