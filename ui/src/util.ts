@@ -25,6 +25,81 @@ export function ago(unixSeconds: number | undefined): string {
   return `${Math.floor(s / 86400 / 30)}mo ago`;
 }
 
+/** API-equivalent dollars the way claude-history prints them: cents until
+ *  the number is big enough that they stop meaning anything. */
+export function usd(n: number | null | undefined): string {
+  if (n === null || n === undefined) return "n/a";
+  return n >= 100 ? `$${n.toFixed(0)}` : `$${n.toFixed(2)}`;
+}
+
+export function fmtTokens(n: number): string {
+  if (n >= 1_000_000_000) return `${(n / 1_000_000_000).toFixed(2)}B`;
+  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`;
+  if (n >= 1_000) return `${(n / 1_000).toFixed(1)}k`;
+  return String(n);
+}
+
+export function duration(ms: number | null): string {
+  if (ms === null || ms < 0) return "";
+  if (ms < 1000) return `${ms}ms`;
+  if (ms < 60_000) return `${(ms / 1000).toFixed(1)}s`;
+  if (ms < 3_600_000) return `${Math.round(ms / 60_000)}m`;
+  return `${(ms / 3_600_000).toFixed(1)}h`;
+}
+
+const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+const pad2 = (n: number): string => String(n).padStart(2, "0");
+
+/** A session's start, local: "Aug 24 19:50" this year, "Nov 03, 2025" before
+ *  it. Both are 12 characters so a column of them lines up. */
+export function when(iso: string | null | undefined, now = new Date()): string {
+  if (!iso) return "—";
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return "—";
+  const mon = MONTHS[d.getMonth()] ?? "";
+  if (d.getFullYear() === now.getFullYear()) {
+    return `${mon} ${pad2(d.getDate())} ${pad2(d.getHours())}:${pad2(d.getMinutes())}`;
+  }
+  return `${mon} ${pad2(d.getDate())}, ${d.getFullYear()}`;
+}
+
+/** A local YYYY-MM-DD as "Aug 24" for ring tooltips. */
+export function dayLabel(day: string): string {
+  const [, m, d] = day.split("-").map(Number);
+  return `${MONTHS[(m ?? 1) - 1] ?? ""} ${d ?? ""}`;
+}
+
+const isRecord = (v: unknown): v is Record<string, unknown> =>
+  typeof v === "object" && v !== null && !Array.isArray(v);
+
+/** One line for a tool call, from the JSON claude-history kept of its input:
+ *  the command for Bash, the path for file tools, else the tool's own name. */
+export function toolLine(name: string, inputJson: string): string {
+  let input: unknown;
+  try {
+    input = JSON.parse(inputJson);
+  } catch {
+    return inputJson.slice(0, 120);
+  }
+  if (!isRecord(input)) return "";
+  const pick = (k: string): string | null => {
+    const v = input[k];
+    return typeof v === "string" ? v : null;
+  };
+  const line =
+    pick("command") ??
+    pick("file_path") ??
+    pick("path") ??
+    pick("pattern") ??
+    pick("query") ??
+    pick("url") ??
+    pick("description") ??
+    pick("prompt") ??
+    pick("skill") ??
+    "";
+  return line.replace(/\s+/g, " ").trim().slice(0, 160);
+}
+
 export const GLYPH: Record<RepoState, string> = {
   error: "✗",
   conflict: "◆",

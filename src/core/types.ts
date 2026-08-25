@@ -67,6 +67,8 @@ export interface CanopyConfig {
   ignore: string[];
   workspaces: Workspace[];
   recentRoots: string[];
+  /** the claude-history CLI; null looks on PATH, then in ~/dev/dev-tools */
+  historyBin: string | null;
 }
 
 /** Whether a push has anywhere to land. "unknown" means we could not tell and
@@ -207,6 +209,169 @@ export type ServerEvent =
   | { type: "workspaces"; workspaces: Workspace[] }
   | { type: "run"; run: Run }
   | { type: "run-gone"; id: string };
+
+/* ---------- the archive: what claude-history holds for each repo ---------- */
+
+/** One repo's slice of the claude-history index. Totals are all-time; the day
+ *  arrays cover the overview's `days` (oldest first) and feed the rings. */
+export interface RepoHistory {
+  /** claude-history project id, the key its CLI takes */
+  project: string;
+  sessions: number;
+  /** API-equivalent list price of every token, not a bill */
+  costUsd: number;
+  tokens: number;
+  /** commits made while a session was running */
+  commits: number;
+  first: string | null;
+  last: string | null;
+  /** spend per local day */
+  days: number[];
+  /** sessions started per local day */
+  daySessions: number[];
+}
+
+/** The archive as the grove sees it, or the one-line reason it cannot. */
+export type HistoryOverview =
+  | {
+      available: true;
+      /** local dates (YYYY-MM-DD) the day arrays cover, oldest first */
+      days: string[];
+      /** the heaviest single day across every repo, so all rings share a scale */
+      maxDay: number;
+      /** by repo id; repos with no project in the archive are absent */
+      repos: Record<string, RepoHistory>;
+      fetchedAt: number;
+    }
+  | {
+      available: false;
+      /** why the claude-history CLI or its index cannot be reached */
+      reason: string;
+      fetchedAt: number;
+    };
+
+/** The repo's slice, when the archive is reachable and knows the repo. */
+export const historyFor = (
+  o: HistoryOverview | null,
+  repoId: string,
+): RepoHistory | undefined => (o?.available ? o.repos[repoId] : undefined);
+
+export const HISTORY_WINDOWS = ["30d", "90d", "all"] as const;
+export type HistoryWindow = (typeof HISTORY_WINDOWS)[number];
+
+/* The rows below are claude-history's own `--json` shapes, passed through
+   untouched (hence the snake_case): its README treats them as an API. */
+
+/** one row of `claude-history sessions --json` */
+export interface HistorySession {
+  id: string;
+  /** "mac", a remote name, or "cloud" */
+  host: string;
+  started_at: string | null;
+  ended_at: string | null;
+  title: string | null;
+  first_prompt: string | null;
+  turns: number;
+  tool_calls: number;
+  /** tokens and cost include the session's subagent runs */
+  tokens: number;
+  cost: number;
+  subs: number;
+  commits: number;
+  /** 0 once Claude Code has deleted the transcript; the mirror keeps it */
+  source_present: number;
+}
+
+export interface HistoryTurn {
+  idx: number;
+  started_at: string | null;
+  ended_at: string | null;
+  /** "prompt" or "command" (a slash command) */
+  prompt_kind: string;
+  prompt: string;
+  reply: string;
+  assistant_messages: number;
+  tool_calls: number;
+  input_tokens: number;
+  output_tokens: number;
+  cache_read_tokens: number;
+  cache_write_tokens: number;
+  thinking_tokens: number;
+  cost_usd: number | null;
+  /** JSON array of model ids */
+  models: string;
+}
+
+export interface HistoryTool {
+  turn_idx: number | null;
+  name: string;
+  /** JSON of the tool input, truncated by claude-history */
+  input: string;
+  result: string | null;
+  is_error: number;
+  duration_ms: number | null;
+}
+
+export interface HistorySubagent {
+  agent_type: string | null;
+  agent_description: string | null;
+  turns: number;
+  tool_calls: number;
+  cost_usd: number | null;
+}
+
+export interface HistoryCommit {
+  hash: string;
+  ts: string;
+  subject: string;
+}
+
+/** `claude-history show --json` */
+export interface HistorySessionDetail {
+  session: {
+    id: string;
+    project_id: string;
+    host: string;
+    cwd: string | null;
+    started_at: string | null;
+    ended_at: string | null;
+    title: string | null;
+    first_prompt: string | null;
+    /** JSON object of model id → API messages */
+    models: string;
+    turns: number;
+    messages: number;
+    tool_calls: number;
+    input_tokens: number;
+    output_tokens: number;
+    cache_read_tokens: number;
+    cache_write_tokens: number;
+    thinking_tokens: number;
+    cost_usd: number | null;
+    git_branch: string | null;
+    version: string | null;
+    source_present: number;
+    /** the vault note `claude-history export` writes for this session */
+    note_path?: string;
+  };
+  turns: HistoryTurn[];
+  tools: HistoryTool[];
+  subagents: HistorySubagent[];
+  commits: HistoryCommit[];
+}
+
+/** one hit of `claude-history search --json` */
+export interface HistoryHit {
+  session_id: string;
+  turn_idx: number;
+  /** "user" or "assistant" */
+  role: string;
+  /** matches wrapped in [square brackets] */
+  snippet: string;
+  project_id: string;
+  started_at: string | null;
+  title: string | null;
+}
 
 export const dirtyCount = (r: Repo): number => r.status?.files.length ?? 0;
 export const isDirty = (r: Repo): boolean =>

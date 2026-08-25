@@ -9,6 +9,15 @@ import {
   stageFile,
 } from "../core/git";
 import { githubLogin, pushAccess } from "../core/access";
+import {
+  HistoryError,
+  historyOverview,
+  historySearch,
+  historySession,
+  historySessions,
+  locateHistory,
+  openHistoryNote,
+} from "../core/history";
 import { isOpenerId, openGroup, openIn } from "../core/openers";
 import { refreshRepo, scan } from "../core/scan";
 import {
@@ -20,8 +29,11 @@ import {
 import { Runner } from "../core/runner";
 import { suggestMessage } from "../core/suggest";
 import {
+  HISTORY_WINDOWS,
   RUN_ACTIONS,
   type CanopyConfig,
+  type HistoryOverview,
+  type HistoryWindow,
   type Repo,
   type RunAction,
   type RunAnswer,
@@ -47,10 +59,85 @@ interface ServerState {
   watcher: FSWatcher | null;
   /** Claude Code jobs, one live session per repo at most */
   runner: Runner;
+  /** the claude-history overview, kept for HISTORY_TTL and for one scan */
+  history: HistoryCache | null;
+  /** an overview being built, so concurrent callers share it */
+  historyPending: Promise<HistoryCache> | null;
 }
+
+interface HistoryCache {
+  at: number;
+  /** the scan the repo→project map was built from */
+  scannedAt: number;
+  /** null when the CLI could not be located */
+  bin: string | null;
+  value: HistoryOverview;
+}
+
+/** claude-history syncs hourly; a five-minute memo keeps the two CLI calls
+ *  behind the overview off every reload. */
+const HISTORY_TTL = 5 * 60_000;
 
 const isRunAction = (v: unknown): v is RunAction =>
   typeof v === "string" && (RUN_ACTIONS as readonly string[]).includes(v);
+
+const isHistoryWindow = (v: unknown): v is HistoryWindow =>
+  typeof v === "string" && (HISTORY_WINDOWS as readonly string[]).includes(v);
+
+async function loadHistory(state: ServerState, force = false): Promise<HistoryCache> {
+  const c = state.history;
+  if (
+    !force &&
+    c &&
+    c.scannedAt === state.result.scannedAt &&
+    Date.now() - c.at < HISTORY_TTL
+  ) {
+    return c;
+  }
+  if (state.historyPending) return state.historyPending;
+  const scannedAt = state.result.scannedAt;
+  state.historyPending = (async () => {
+    const cfg = await loadConfig();
+    const loc = locateHistory(cfg);
+    let entry: HistoryCache;
+    if ("reason" in loc) {
+      entry = {
+        at: Date.now(),
+        scannedAt,
+        bin: null,
+        value: { available: false, reason: loc.reason, fetchedAt: Date.now() },
+      };
+    } else {
+      const value = await historyOverview(loc.bin, state.result.repos).catch(
+        (err: unknown): HistoryOverview => ({
+          available: false,
+          reason: String(err instanceof Error ? err.message : err),
+          fetchedAt: Date.now(),
+        }),
+      );
+      entry = { at: Date.now(), scannedAt, bin: loc.bin, value };
+    }
+    state.history = entry;
+    return entry;
+  })().finally(() => {
+    state.historyPending = null;
+  });
+  return state.historyPending;
+}
+
+/** The CLI and the project id behind one repo's history routes. */
+async function historyContext(
+  state: ServerState,
+  repo: Repo,
+): Promise<{ bin: string; project: string }> {
+  const c = await loadHistory(state);
+  const v = c.value;
+  if (!v.available) throw new HttpError(503, v.reason);
+  if (!c.bin) throw new HttpError(503, "claude-history is not available");
+  const h = v.repos[repo.id];
+  if (!h) throw new HttpError(404, "no Claude sessions recorded for this repo");
+  return { bin: c.bin, project: h.project };
+}
 
 /** The browser's reply to a run prompt, checked field by field: a malformed
  *  body must not reach the SDK as an "allow". */
@@ -217,6 +304,11 @@ async function handleApi(
     return json(state.result);
   }
 
+  if (path === "/api/history" && method === "GET") {
+    const c = await loadHistory(state, url.searchParams.get("refresh") === "1");
+    return json(c.value);
+  }
+
   if (path === "/api/runs" && method === "GET") {
     return json(state.runner.list());
   }
@@ -292,6 +384,30 @@ async function handleApi(
           permission: state.access,
         }),
       });
+    }
+    if (method === "GET" && action === "sessions") {
+      const { bin, project } = await historyContext(state, repo);
+      const w = url.searchParams.get("since") ?? "30d";
+      if (!isHistoryWindow(w)) return json({ error: "unknown window" }, 400);
+      return json(await historySessions(bin, project, w));
+    }
+    if (method === "GET" && action === "session") {
+      const { bin, project } = await historyContext(state, repo);
+      const sid = url.searchParams.get("session") ?? "";
+      return json(await historySession(bin, project, sid));
+    }
+    if (method === "GET" && action === "search") {
+      const { bin, project } = await historyContext(state, repo);
+      const q = (url.searchParams.get("q") ?? "").trim();
+      if (!q) return json({ error: "empty query" }, 400);
+      return json(await historySearch(bin, project, q));
+    }
+    if (method === "POST" && action === "note") {
+      const { bin, project } = await historyContext(state, repo);
+      const b = (await req.json()) as { session?: unknown };
+      if (typeof b.session !== "string") return json({ error: "missing session" }, 400);
+      await openHistoryNote(bin, project, b.session);
+      return json({ ok: true });
     }
     if (method === "GET" && action === "diff") {
       const file = url.searchParams.get("file") ?? "";
@@ -411,6 +527,8 @@ export async function startServer(opts: {
     clients: new Set(),
     timers: new Map(),
     watcher: null,
+    history: null,
+    historyPending: null,
     runner: new Runner({
       onChange: (run) => broadcast(state, { type: "run", run }),
       onGone: (id) => broadcast(state, { type: "run-gone", id }),
@@ -438,7 +556,10 @@ export async function startServer(opts: {
           try {
             return await handleApi(state, req, url);
           } catch (err) {
-            const status = err instanceof HttpError ? err.status : 500;
+            const status =
+              err instanceof HttpError || err instanceof HistoryError
+                ? err.status
+                : 500;
             return json(
               { error: String(err instanceof Error ? err.message : err) },
               status,

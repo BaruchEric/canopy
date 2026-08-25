@@ -3,6 +3,7 @@ import type { CSSProperties } from "react";
 import { api } from "../api";
 import { PANEL, runFor, useStore } from "../store";
 import { ago, GLYPH, stateOf } from "../util";
+import { ClaudeSection } from "./Claude";
 import { DiffView } from "./DiffView";
 import { RepoMenu } from "./RepoMenu";
 import { Resizer } from "./Resizer";
@@ -497,6 +498,7 @@ export function RepoPanel({
           )}
 
           <History repo={repo} />
+          <ClaudeSection repo={repo} />
         </>
       )}
       {note && <p className={`note ${note.kind}`}>{note.text}</p>}

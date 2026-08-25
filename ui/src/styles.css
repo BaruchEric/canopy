@@ -725,6 +725,9 @@ body.resizing {
 :root[data-density="compact"] .card-bot {
   margin-top: 2px;
 }
+:root[data-density="compact"] .card .rings {
+  margin-top: 5px;
+}
 :root[data-density="compact"] .grid-group {
   margin-bottom: 14px;
 }
@@ -1107,6 +1110,225 @@ body.resizing {
   font-size: 11px;
   white-space: nowrap;
   color: var(--ink-faint);
+}
+
+/* ---------- the rings: what Claude's work here has cost, day by day ---------- */
+/* A core sample of the last month. One column per local day, tinted in sap
+   (sky, the colour a live run already carries) by that day's API-equivalent
+   spend, on a log ramp shared by every repo so a heavy day looks heavy
+   everywhere. A calm month leaves only the faint ruler. */
+.rings {
+  display: grid;
+  grid-auto-flow: column;
+  grid-auto-columns: 1fr;
+  gap: 1px;
+  height: 3px;
+  margin-top: 8px;
+}
+.rings i {
+  display: block;
+  border-radius: 1px;
+  background: color-mix(in srgb, var(--sky) var(--p, 0%), var(--bark3));
+}
+.rings.tall {
+  height: 14px;
+  gap: 2px;
+  margin: 0 14px 4px;
+}
+.rings.tall i {
+  border-radius: 2px;
+}
+.rings.tall i:hover {
+  outline: 1px solid var(--sky);
+  outline-offset: 1px;
+}
+
+/* ---------- claude sessions, from the claude-history archive ---------- */
+/* a panel label that folds its section, in the same voice as the log's summary */
+.fold {
+  width: calc(100% - 28px);
+  cursor: pointer;
+  justify-content: flex-start;
+  gap: 6px;
+  text-align: left;
+}
+.fold::before {
+  content: "▸";
+  color: var(--ink-faint);
+}
+.fold.open::before {
+  content: "▾";
+}
+.fold > span {
+  margin-left: auto;
+}
+.claude {
+  padding-bottom: 8px;
+}
+.sess-tools {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 4px 14px 8px;
+}
+.sess-search {
+  flex: 1;
+  min-width: 0;
+  padding: 3px 9px;
+}
+.sess-search::placeholder {
+  color: var(--ink-faint);
+}
+.seg-window {
+  flex: none;
+}
+.sess-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+.sess-row {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  width: 100%;
+  padding: 3px 14px;
+  text-align: left;
+}
+.sess-row:hover,
+.sess.open > .sess-row {
+  background: var(--bark2);
+}
+.sess-when {
+  flex: none;
+  width: 12ch;
+  font-size: 11px;
+  color: var(--ink-faint);
+  font-variant-numeric: tabular-nums;
+}
+.sess-title {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+.sess.open .sess-title {
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+.sess-cost {
+  flex: none;
+  font-size: 11px;
+  color: var(--ink-dim);
+  font-variant-numeric: tabular-nums;
+}
+/* where a session ran, when it was not this machine */
+.host {
+  flex: none;
+  font-size: 10px;
+  line-height: 15px;
+  padding: 0 6px;
+  border-radius: 999px;
+  border: 1px solid var(--hair2);
+  color: var(--ink-dim);
+}
+.sess-snip {
+  margin: 0;
+  padding: 0 14px 4px calc(14px + 12ch + 8px);
+  font-size: 11px;
+  color: var(--ink-dim);
+  overflow-wrap: anywhere;
+}
+.sess-snip mark {
+  color: inherit;
+  background: color-mix(in srgb, var(--lichen) 28%, transparent);
+  border-radius: 2px;
+}
+.sess-loading {
+  margin: 4px 14px 8px;
+}
+.sess-detail {
+  margin: 4px 14px 10px;
+  padding: 10px 12px;
+  border: 1px solid var(--hair);
+  border-radius: var(--r);
+  background: var(--bark0);
+}
+.sess-detail .facts {
+  align-items: center;
+}
+.sess-detail .note {
+  margin: 8px 0 0;
+}
+/* the turns borrow the run console's trunk, on this panel's darker ground */
+.turns {
+  margin-top: 12px;
+}
+.turns .node {
+  box-shadow: 0 0 0 2px var(--bark0);
+}
+.turns .k-text .node {
+  background: var(--bark0);
+}
+.turns .step-title {
+  color: var(--ink);
+}
+.cmd {
+  color: var(--lichen);
+}
+.reply {
+  margin: 4px 0 0;
+  font-size: 12px;
+  color: var(--ink-dim);
+}
+.more-link {
+  color: var(--sky);
+  font-size: 11px;
+}
+.turns .step-out {
+  margin-top: 3px;
+}
+.tool-list {
+  list-style: none;
+  margin: 4px 0 6px;
+  padding: 0;
+  font-size: 11px;
+  color: var(--ink-dim);
+}
+.tool-list li {
+  display: flex;
+  gap: 6px;
+  padding: 1px 0;
+  min-width: 0;
+}
+.tool-list b {
+  flex: none;
+  font-weight: 400;
+  color: var(--ink);
+}
+.tool-list span {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+.tool-list em {
+  flex: none;
+  font-style: normal;
+  color: var(--ink-faint);
+}
+.tool-list .st-error b,
+.tool-list .st-error span {
+  color: var(--rust);
+}
+.sess-commits {
+  margin: 10px 0 0;
+}
+.sess-commits .log-row {
+  padding-left: 0;
+  padding-right: 0;
 }
 
 /* ---------- responsive ---------- */

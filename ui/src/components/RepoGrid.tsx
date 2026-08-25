@@ -5,13 +5,16 @@ import { runFor, useStore, visibleRepos } from "../store";
 import { ago, GLYPH, stateOf } from "../util";
 import { GroupHead } from "./GroupHead";
 import { RepoMenu } from "./RepoMenu";
+import { Rings } from "./Rings";
 import { RunChip } from "./RunChip";
-import type { Repo } from "../../../src/core/types";
+import { historyFor, type Repo } from "../../../src/core/types";
 
 const RepoCard = memo(function RepoCard({ repo }: { repo: Repo }) {
   const openRepo = useStore((s) => s.openRepo);
   const updatedAt = useStore((s) => s.updatedAt[repo.id]);
   const run = useStore((s) => runFor(s, repo.id));
+  const overview = useStore((s) => s.history);
+  const history = historyFor(overview, repo.id);
   const [pulse, setPulse] = useState(false);
   const first = useRef(true);
 
@@ -72,6 +75,9 @@ const RepoCard = memo(function RepoCard({ repo }: { repo: Repo }) {
           {ago(st?.lastCommit?.at)}
         </span>
       </div>
+      {history && overview?.available && (
+        <Rings history={history} days={overview.days} maxDay={overview.maxDay} />
+      )}
     </article>
   );
 });

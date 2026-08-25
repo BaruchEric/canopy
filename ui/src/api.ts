@@ -1,4 +1,9 @@
 import type {
+  HistoryHit,
+  HistoryOverview,
+  HistorySession,
+  HistorySessionDetail,
+  HistoryWindow,
   LogEntry,
   PushAccess,
   Repo,
@@ -77,6 +82,19 @@ export const api = {
     req<{ ok: true }>(`/api/repos/open?${rq(id)}`, {
       method: "POST",
       body: JSON.stringify({ app }),
+    }),
+  history: (refresh = false) =>
+    req<HistoryOverview>(refresh ? "/api/history?refresh=1" : "/api/history"),
+  sessions: (id: string, since: HistoryWindow) =>
+    req<HistorySession[]>(`/api/repos/sessions?${rq(id, { since })}`),
+  session: (id: string, session: string) =>
+    req<HistorySessionDetail>(`/api/repos/session?${rq(id, { session })}`),
+  search: (id: string, q: string) =>
+    req<HistoryHit[]>(`/api/repos/search?${rq(id, { q })}`),
+  openNote: (id: string, session: string) =>
+    req<{ ok: true }>(`/api/repos/note?${rq(id)}`, {
+      method: "POST",
+      body: JSON.stringify({ session }),
     }),
   runs: () => req<Run[]>("/api/runs"),
   run: (id: string, action: RunAction, note: string) =>

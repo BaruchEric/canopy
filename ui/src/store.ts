@@ -6,6 +6,7 @@ import { loadSettings, saveSettings, type Settings } from "./settings";
 import { clamp, needsAttention } from "./util";
 import {
   isRunActive,
+  type HistoryOverview,
   type Repo,
   type Run,
   type RunAction,
@@ -19,6 +20,9 @@ export const SIDEBAR = { min: 180, max: 560, initial: 264 };
 export const PANEL = { min: 300, max: 900, initial: 440 };
 
 const LAYOUT_KEY = "canopy.layout";
+
+/** how often a window re-reads the archive overview on its own */
+const HISTORY_REFRESH = 10 * 60_000;
 
 interface Layout {
   sidebarWidth: number;
@@ -128,10 +132,14 @@ interface CanopyState {
   runs: Record<string, Run>;
   /** the modal in front of the grove: a pre-flight for an action, or a run */
   sheet: Sheet | null;
+  /** the claude-history archive, per repo; null until the first fetch lands */
+  history: HistoryOverview | null;
 
   /** loads the tree and opens the SSE stream; returns its unsubscribe */
   init: () => Promise<() => void>;
   rescan: () => Promise<void>;
+  /** refetches the archive overview; a failure becomes an unavailable one */
+  loadHistory: (refresh?: boolean) => Promise<void>;
   setFilter: (f: string) => void;
   setDirtyOnly: (v: boolean) => void;
   toggleFilter: (f: RepoFilter) => void;
@@ -197,6 +205,7 @@ export const useStore = create<CanopyState>((set, get) => ({
   settings: loadSettings(),
   runs: {},
   sheet: null,
+  history: null,
 
   init: async () => {
     try {
@@ -219,9 +228,13 @@ export const useStore = create<CanopyState>((set, get) => ({
       set({ loadError: String(err instanceof Error ? err.message : err) });
       return () => {};
     }
+    // The archive is not in the way of first paint: it lands when it lands,
+    // and claude-history only syncs hourly, so a slow refresh is plenty.
+    void get().loadHistory();
+    const refresh = setInterval(() => void get().loadHistory(), HISTORY_REFRESH);
     // Handed back so the caller can close the stream — StrictMode mounts
     // effects twice, and an unclosed EventSource leaks a live connection.
-    return subscribe(
+    const unsubscribe = subscribe(
       (ev) => get().applyEvent(ev),
       () => {
         // the server may still be coming back up — a failed resync just
@@ -229,10 +242,30 @@ export const useStore = create<CanopyState>((set, get) => ({
         void get().rescan().catch(() => {});
       },
     );
+    return () => {
+      clearInterval(refresh);
+      unsubscribe();
+    };
+  },
+
+  loadHistory: async (refresh = false) => {
+    try {
+      set({ history: await api.history(refresh) });
+    } catch (err) {
+      set({
+        history: {
+          available: false,
+          reason: String(err instanceof Error ? err.message : err),
+          fetchedAt: Date.now(),
+        },
+      });
+    }
   },
 
   rescan: async () => {
     const [tree, runs] = await Promise.all([api.rescan(), api.runs()]);
+    // a rescan can bring new repos; the server rebuilds the repo→project map
+    void get().loadHistory(true);
     set((s) => {
       const panelWidths = pruneWidths(s.panelWidths, tree.repos);
       if (panelWidths !== s.panelWidths) {

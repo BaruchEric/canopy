@@ -13,6 +13,7 @@ const defaults = (): CanopyConfig => ({
   ignore: [],
   workspaces: [],
   recentRoots: [],
+  historyBin: null,
 });
 
 export function configDir(): string {
@@ -35,6 +36,8 @@ function normalize(parsed: Partial<CanopyConfig>): CanopyConfig {
     maxDepth: Number.isFinite(cfg.maxDepth) ? cfg.maxDepth : base.maxDepth,
     ignore: Array.isArray(cfg.ignore) ? cfg.ignore : [],
     recentRoots: Array.isArray(cfg.recentRoots) ? cfg.recentRoots : [],
+    historyBin:
+      typeof cfg.historyBin === "string" && cfg.historyBin ? cfg.historyBin : null,
     workspaces: (Array.isArray(cfg.workspaces) ? cfg.workspaces : []).filter(
       (w): w is Workspace =>
         Boolean(w) && typeof w.name === "string" && Array.isArray(w.repos),
