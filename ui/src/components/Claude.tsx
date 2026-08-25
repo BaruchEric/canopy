@@ -2,6 +2,7 @@ import { Fragment, useEffect, useState } from "react";
 import { api } from "../api";
 import { useStore } from "../store";
 import { duration, fmtTokens, toolLine, usd, when } from "../util";
+import { CommitRow } from "./Commit";
 import { Rings } from "./Rings";
 import { Seg } from "./Seg";
 import {
@@ -292,6 +293,7 @@ function Detail({ repo, id }: { repo: Repo; id: string }) {
   const [detail, setDetail] = useState<HistorySessionDetail | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [note, setNote] = useState<string | null>(null);
+  const [drilled, setDrilled] = useState<string | null>(null);
 
   useEffect(() => {
     let live = true;
@@ -403,13 +405,15 @@ function Detail({ repo, id }: { repo: Repo; id: string }) {
       {detail.commits.length > 0 && (
         <ul className="log sess-commits">
           {detail.commits.map((c) => (
-            <li key={c.hash} className="log-row">
-              <code className="log-hash">{c.hash.slice(0, 7)}</code>
-              <span className="log-subject" title={c.subject}>
-                {c.subject}
-              </span>
-              <span className="log-meta">{when(c.ts)}</span>
-            </li>
+            <CommitRow
+              key={c.hash}
+              repo={repo}
+              hash={c.hash}
+              subject={c.subject}
+              meta={when(c.ts)}
+              open={drilled === c.hash}
+              onToggle={() => setDrilled(drilled === c.hash ? null : c.hash)}
+            />
           ))}
         </ul>
       )}

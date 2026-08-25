@@ -82,6 +82,34 @@ export interface LogEntry {
   when: string;
 }
 
+/** One path a commit touched, with the line counts git's numstat gives it. */
+export interface CommitFile {
+  path: string;
+  /** the old path of a rename or copy */
+  orig?: string;
+  /** git's status letter: M A D R C T U, or X for anything it cannot name */
+  status: string;
+  /** null for a binary file, where lines mean nothing */
+  added: number | null;
+  deleted: number | null;
+}
+
+/** What the history drill shows for one commit. */
+export interface CommitDetail {
+  /** full 40-character hash */
+  hash: string;
+  short: string;
+  subject: string;
+  /** the message after the subject, trimmed; empty when there is none */
+  body: string;
+  author: string;
+  email: string;
+  /** committer time, unix seconds */
+  at: number;
+  parents: string[];
+  files: CommitFile[];
+}
+
 /* ---------- runs: a job handed to Claude Code for one repo ---------- */
 
 export const RUN_ACTIONS = [

@@ -1112,6 +1112,151 @@ body.resizing {
   color: var(--ink-faint);
 }
 
+/* ---------- the drill: one commit opened in place ---------- */
+/* The row is a button; open, it lets the subject wrap and hangs a card
+   beneath it on the panel's darker ground, the same card a session opens.
+   Each file carries a short bar, moss for lines added and rust for lines
+   removed, scaled to the biggest file in the commit: where the commit
+   grew and where it was pruned, before a single number is read. */
+.rev {
+  list-style: none;
+}
+.log-row {
+  width: 100%;
+  text-align: left;
+}
+.rev.open > .log-row {
+  background: var(--bark2);
+}
+.rev.open .log-subject {
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+.rev-loading,
+.rev-error {
+  margin: 4px 14px 8px;
+}
+.rev-detail {
+  margin: 4px 14px 10px;
+  padding: 10px 12px;
+  border: 1px solid var(--hair);
+  border-radius: var(--r);
+  background: var(--bark0);
+}
+.sess-commits .rev-detail {
+  margin-left: 0;
+  margin-right: 0;
+}
+.rev-head {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  min-width: 0;
+  font-size: 11px;
+  color: var(--ink-faint);
+}
+.rev-hash {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  text-align: left;
+  color: var(--lichen);
+}
+.rev-hash:hover {
+  color: var(--ink);
+}
+.rev-copied {
+  flex: none;
+  color: var(--moss);
+}
+.rev-who {
+  flex: none;
+  color: var(--ink-dim);
+}
+.rev-when {
+  flex: none;
+  font-variant-numeric: tabular-nums;
+}
+.rev-body {
+  margin: 8px 0 0;
+  font: inherit;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  color: var(--ink-dim);
+}
+.rev-sum {
+  display: flex;
+  gap: 10px;
+  margin: 10px 0 4px;
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--ink-faint);
+  font-variant-numeric: tabular-nums;
+}
+.rev-empty {
+  margin: 0;
+  color: var(--ink-faint);
+}
+.n-add {
+  color: var(--moss);
+}
+.n-del {
+  color: var(--rust);
+}
+.n-bin {
+  color: var(--ink-faint);
+}
+.rev-files {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+.rev-file-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 2px 0;
+}
+.rev-orig {
+  color: var(--ink-faint);
+}
+.rev-arrow {
+  color: var(--ink-faint);
+}
+.rev-bar {
+  flex: none;
+  display: flex;
+  width: 48px;
+  height: 3px;
+}
+.rev-bar i {
+  display: block;
+  height: 100%;
+}
+.rev-bar .add {
+  background: var(--moss);
+}
+.rev-bar .del {
+  background: var(--rust);
+}
+.rev-n {
+  flex: none;
+  display: flex;
+  gap: 5px;
+  justify-content: flex-end;
+  width: 10ch;
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+}
+.rev-file .diff {
+  margin: 4px 0 8px;
+  background: var(--bark1);
+}
+
 /* ---------- the rings: what Claude's work here has cost, day by day ---------- */
 /* A core sample of the last month. One column per local day, tinted in sap
    (sky, the colour a live run already carries) by that day's API-equivalent

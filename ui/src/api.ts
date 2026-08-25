@@ -1,4 +1,5 @@
 import type {
+  CommitDetail,
   HistoryHit,
   HistoryOverview,
   HistorySession,
@@ -43,6 +44,16 @@ export const api = {
   tree: () => req<ScanResult>("/api/tree"),
   rescan: () => req<ScanResult>("/api/rescan", { method: "POST" }),
   log: (id: string) => req<LogEntry[]>(`/api/repos/log?${rq(id)}`),
+  show: (id: string, hash: string) =>
+    req<CommitDetail>(`/api/repos/commit?${rq(id, { hash })}`),
+  commitDiff: (id: string, hash: string, file: string, orig?: string) =>
+    req<{ diff: string }>(
+      `/api/repos/diff?${rq(id, {
+        file,
+        commit: hash,
+        ...(orig === undefined ? {} : { orig }),
+      })}`,
+    ),
   access: (id: string) =>
     req<{ access: PushAccess }>(`/api/repos/access?${rq(id)}`),
   diff: (id: string, file: string, staged: boolean, untracked: boolean) =>

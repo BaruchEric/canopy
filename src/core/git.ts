@@ -1,6 +1,13 @@
 import { isAbsolute, resolve, sep } from "node:path";
 import { git } from "./exec";
-import type { GitUser, LogEntry, RepoFile, RepoStatus } from "./types";
+import type {
+  CommitDetail,
+  CommitFile,
+  GitUser,
+  LogEntry,
+  RepoFile,
+  RepoStatus,
+} from "./types";
 
 /** Resolve a repo-relative path, refusing anything that escapes the repo.
  *  Guards the `--no-index` diff, which happily reads files outside the repo. */
@@ -204,31 +211,210 @@ export async function getLog(repoPath: string, n = 20): Promise<LogEntry[]> {
     });
 }
 
+/** A hash as the UI sends it back: abbreviated or full, nothing else. Anything
+ *  looser could reach git's argv as an option (`--output=...`). */
+export function isHash(s: string): boolean {
+  return /^[0-9a-f]{4,40}$/i.test(s);
+}
+
+/** Split the fields of git's `-z` output. Git ends every field with NUL,
+ *  so the split leaves one empty tail, which is dropped. */
+function zFields(text: string): string[] {
+  const parts = text.split("\0");
+  if (parts[parts.length - 1] === "") parts.pop();
+  return parts;
+}
+
+interface Numstat {
+  path: string;
+  orig?: string;
+  added: number | null;
+  deleted: number | null;
+}
+
+/** Parse `git show --numstat -z`. A line is `added\tdeleted\tpath` with `-`
+ *  for both counts on a binary file. A rename has an empty path and carries
+ *  the old and new paths as the next two fields. */
+export function parseNumstatZ(text: string): Numstat[] {
+  const fields = zFields(text);
+  const out: Numstat[] = [];
+  const count = (s: string): number | null => (s === "-" ? null : Number(s));
+  for (let i = 0; i < fields.length; i++) {
+    const [a = "", d = "", path = ""] = (fields[i] ?? "").split("\t");
+    if (path !== "") {
+      out.push({ path, added: count(a), deleted: count(d) });
+      continue;
+    }
+    const orig = fields[++i] ?? "";
+    const dest = fields[++i] ?? "";
+    out.push({ path: dest, orig, added: count(a), deleted: count(d) });
+  }
+  return out;
+}
+
+interface NameStatus {
+  status: string;
+  path: string;
+  orig?: string;
+}
+
+/** Parse `git show --name-status -z`. A status letter, then the path; a
+ *  rename or copy carries a similarity score (`R075`) and two paths. */
+export function parseNameStatusZ(text: string): NameStatus[] {
+  const fields = zFields(text);
+  const out: NameStatus[] = [];
+  for (let i = 0; i < fields.length; i++) {
+    const code = fields[i] ?? "";
+    const status = code[0] ?? "X";
+    if (status === "R" || status === "C") {
+      const orig = fields[++i] ?? "";
+      const path = fields[++i] ?? "";
+      out.push({ status, path, orig });
+    } else {
+      out.push({ status, path: fields[++i] ?? "" });
+    }
+  }
+  return out;
+}
+
+/** Join the two listings on path. Both come from the same diff so they name
+ *  the same files in the same order; a path only numstat knows keeps a
+ *  status of X rather than being dropped, so the file count stays honest. */
+export function commitFiles(
+  numstat: Numstat[],
+  names: NameStatus[],
+): CommitFile[] {
+  const status = new Map(names.map((n) => [n.path, n]));
+  return numstat.map((n) => {
+    const s = status.get(n.path);
+    const file: CommitFile = {
+      path: n.path,
+      status: s?.status ?? "X",
+      added: n.added,
+      deleted: n.deleted,
+    };
+    const orig = n.orig ?? s?.orig;
+    if (orig !== undefined) file.orig = orig;
+    return file;
+  });
+}
+
+// Merges show their diff against the first parent, which is what the branch
+// saw land; the default for `git show` on a merge is a combined diff that
+// lists nothing for a clean merge.
+const SHOW = ["show", "--format=", "--diff-merges=first-parent", "-M"];
+
+export class UnknownCommitError extends Error {}
+
+/** Everything the drill shows for one commit: the message in full, who and
+ *  when, and each file with its line counts. */
+export async function getCommit(
+  repoPath: string,
+  hash: string,
+): Promise<CommitDetail> {
+  if (!isHash(hash)) throw new Error(`invalid commit hash: ${hash}`);
+  const [head, numstat, names] = await Promise.all([
+    git(repoPath, [
+      "show",
+      "--no-patch",
+      "--pretty=%H%x00%h%x00%s%x00%b%x00%an%x00%ae%x00%ct%x00%P",
+      hash,
+    ]),
+    git(repoPath, [...SHOW, "--numstat", "-z", hash]),
+    git(repoPath, [...SHOW, "--name-status", "-z", hash]),
+  ]);
+  if (head.code !== 0) {
+    const why = head.stderr.trim();
+    // Git says "unknown revision" for a hash it has never seen; anything
+    // else (an unreadable repo, say) is a different failure and keeps its text.
+    if (!why || /unknown revision|bad object|bad revision/i.test(why)) {
+      throw new UnknownCommitError(`no commit ${hash} in this repo`);
+    }
+    throw new Error(why);
+  }
+  const [
+    full = "",
+    short = "",
+    subject = "",
+    body = "",
+    author = "",
+    email = "",
+    ct = "0",
+    parents = "",
+  ] = head.stdout.split("\0");
+  return {
+    hash: full,
+    short,
+    subject,
+    body: body.trim(),
+    author,
+    email,
+    at: Number(ct),
+    parents: parents.trim().split(" ").filter(Boolean),
+    files: commitFiles(
+      parseNumstatZ(numstat.stdout),
+      parseNameStatusZ(names.stdout),
+    ),
+  };
+}
+
+/** Which diff of a file to show: the working tree against the index or HEAD,
+ *  a file git does not track yet, or what one commit did to it. */
+export type DiffTarget =
+  | { kind: "worktree"; staged: boolean }
+  | { kind: "untracked" }
+  | {
+      kind: "commit";
+      hash: string;
+      /** the path before a rename, so git can pair the two sides */
+      orig?: string;
+    };
+
 /** Diff for one file. Untracked files render as an all-added diff. */
 export async function getDiff(
   repoPath: string,
   file: string,
-  opts: { staged?: boolean; untracked?: boolean } = {},
+  target: DiffTarget,
 ): Promise<string> {
   // `file` reaches here straight from a query param — never let it leave the
   // repo. Validate, then hand git the original relative path so the diff
   // header still reads b/<file> rather than an absolute path.
   repoRelative(repoPath, file);
-  if (opts.untracked) {
-    const r = await git(repoPath, [
-      "diff",
-      "--no-index",
-      "--",
-      "/dev/null",
-      file,
-    ]);
-    return r.stdout; // --no-index exits 1 on differences; output is still the diff
+  switch (target.kind) {
+    case "untracked": {
+      const r = await git(repoPath, [
+        "diff",
+        "--no-index",
+        "--",
+        "/dev/null",
+        file,
+      ]);
+      return r.stdout; // --no-index exits 1 on differences; output is still the diff
+    }
+    case "worktree": {
+      const args = ["diff"];
+      if (target.staged) args.push("--cached");
+      args.push("--", file);
+      const r = await git(repoPath, args);
+      return r.code === 0 ? r.stdout : r.stderr;
+    }
+    case "commit": {
+      if (!isHash(target.hash)) {
+        throw new Error(`invalid commit hash: ${target.hash}`);
+      }
+      const paths = [file];
+      if (target.orig !== undefined) {
+        repoRelative(repoPath, target.orig);
+        paths.push(target.orig);
+      }
+      const r = await git(repoPath, [...SHOW, target.hash, "--", ...paths]);
+      return r.code === 0 ? r.stdout : r.stderr;
+    }
+    default: {
+      const _exhaustive: never = target;
+      return _exhaustive;
+    }
   }
-  const args = ["diff"];
-  if (opts.staged) args.push("--cached");
-  args.push("--", file);
-  const r = await git(repoPath, args);
-  return r.code === 0 ? r.stdout : r.stderr;
 }
 
 export async function stageFile(

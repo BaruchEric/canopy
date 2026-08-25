@@ -1,5 +1,14 @@
 import { describe, expect, test } from "bun:test";
-import { getDiff, isAccessDenied, parsePorcelainV2, parseUserConfig } from "./git";
+import {
+  commitFiles,
+  getDiff,
+  isAccessDenied,
+  isHash,
+  parseNameStatusZ,
+  parseNumstatZ,
+  parsePorcelainV2,
+  parseUserConfig,
+} from "./git";
 import { heuristicMessage } from "./suggest";
 import type { RepoFile } from "./types";
 
@@ -112,9 +121,72 @@ describe("getDiff path containment", () => {
   test("refuses paths that leave the repo", async () => {
     for (const bad of ["/etc/passwd", "../outside.txt", "a/../../outside"]) {
       await expect(
-        getDiff("/tmp", bad, { untracked: true }),
+        getDiff("/tmp", bad, { kind: "untracked" }),
       ).rejects.toThrow();
     }
+  });
+});
+
+describe("isHash", () => {
+  test("accepts abbreviated and full hashes only", () => {
+    expect(isHash("cb914ee")).toBe(true);
+    expect(isHash("5a4a6c6fe2cc739eae26d55effca9d0581fdf5f6")).toBe(true);
+    for (const bad of ["", "abc", "HEAD", "main", "--output=x", "cb914ee\n"]) {
+      expect(isHash(bad)).toBe(false);
+    }
+  });
+});
+
+describe("commit file listings", () => {
+  // Verbatim shapes from `git show --numstat -z` and `--name-status -z`
+  // for a commit that renamed and edited one file and touched a binary.
+  const NUMSTAT = "1\t0\t\0old.txt\0new name.txt\0-\t-\tpic.bin\0";
+  const NAMES = "R075\0old.txt\0new name.txt\0M\0pic.bin\0";
+
+  test("numstat reads counts, binary dashes and rename pairs", () => {
+    expect(parseNumstatZ(NUMSTAT)).toEqual([
+      { path: "new name.txt", orig: "old.txt", added: 1, deleted: 0 },
+      { path: "pic.bin", added: null, deleted: null },
+    ]);
+  });
+
+  test("name-status keeps the letter and drops the similarity score", () => {
+    expect(parseNameStatusZ(NAMES)).toEqual([
+      { status: "R", path: "new name.txt", orig: "old.txt" },
+      { status: "M", path: "pic.bin" },
+    ]);
+  });
+
+  test("the two listings join on the new path", () => {
+    expect(commitFiles(parseNumstatZ(NUMSTAT), parseNameStatusZ(NAMES))).toEqual([
+      { path: "new name.txt", orig: "old.txt", status: "R", added: 1, deleted: 0 },
+      { path: "pic.bin", status: "M", added: null, deleted: null },
+    ]);
+  });
+
+  test("empty output is an empty commit, not a phantom file", () => {
+    expect(parseNumstatZ("")).toEqual([]);
+    expect(parseNameStatusZ("")).toEqual([]);
+  });
+
+  test("a path only numstat knows keeps the count with status X", () => {
+    expect(commitFiles(parseNumstatZ("2\t2\ta.ts\0"), [])).toEqual([
+      { path: "a.ts", status: "X", added: 2, deleted: 2 },
+    ]);
+  });
+});
+
+describe("getDiff commit target", () => {
+  test("refuses a hash that is not a hash", async () => {
+    await expect(
+      getDiff("/tmp", "a.ts", { kind: "commit", hash: "--output=/tmp/x" }),
+    ).rejects.toThrow(/invalid commit hash/);
+  });
+
+  test("checks the rename source against the repo too", async () => {
+    await expect(
+      getDiff("/tmp", "a.ts", { kind: "commit", hash: "abcdef0", orig: "../b" }),
+    ).rejects.toThrow(/escapes/);
   });
 });
 

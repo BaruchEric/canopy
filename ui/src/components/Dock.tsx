@@ -4,6 +4,7 @@ import { api } from "../api";
 import { PANEL, runFor, useStore } from "../store";
 import { ago, GLYPH, stateOf } from "../util";
 import { ClaudeSection } from "./Claude";
+import { CommitRow } from "./Commit";
 import { DiffView } from "./DiffView";
 import { RepoMenu } from "./RepoMenu";
 import { Resizer } from "./Resizer";
@@ -175,6 +176,9 @@ function History({ repo }: { repo: Repo }) {
   const [open, setOpen] = useState(false);
   const [log, setLog] = useState<LogEntry[] | null>(null);
   const [error, setError] = useState<string | null>(null);
+  // One commit open at a time, by hash, so it survives the log refreshing
+  // underneath it and closes itself if the commit is rewritten away.
+  const [drilled, setDrilled] = useState<string | null>(null);
 
   useEffect(() => {
     if (!open) return;
@@ -207,15 +211,15 @@ function History({ repo }: { repo: Repo }) {
       ) : (
         <ul className="log">
           {log.map((c) => (
-            <li key={c.hash} className="log-row">
-              <code className="log-hash">{c.hash}</code>
-              <span className="log-subject" title={c.subject}>
-                {c.subject}
-              </span>
-              <span className="log-meta">
-                {c.author} · {c.when}
-              </span>
-            </li>
+            <CommitRow
+              key={c.hash}
+              repo={repo}
+              hash={c.hash}
+              subject={c.subject}
+              meta={`${c.author} · ${c.when}`}
+              open={drilled === c.hash}
+              onToggle={() => setDrilled(drilled === c.hash ? null : c.hash)}
+            />
           ))}
         </ul>
       )}

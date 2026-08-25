@@ -2,11 +2,15 @@ import { watch, type FSWatcher } from "node:fs";
 import { join, resolve } from "node:path";
 import {
   commit,
+  getCommit,
   getDiff,
   getLog,
+  isHash,
   pull,
   push,
   stageFile,
+  UnknownCommitError,
+  type DiffTarget,
 } from "../core/git";
 import { githubLogin, pushAccess } from "../core/access";
 import {
@@ -409,11 +413,38 @@ async function handleApi(
       await openHistoryNote(bin, project, b.session);
       return json({ ok: true });
     }
+    if (method === "GET" && action === "commit") {
+      const hash = url.searchParams.get("hash") ?? "";
+      if (!isHash(hash)) return json({ error: "invalid commit hash" }, 400);
+      try {
+        return json(await getCommit(repo.path, hash));
+      } catch (err) {
+        if (err instanceof UnknownCommitError) {
+          throw new HttpError(404, err.message);
+        }
+        throw err;
+      }
+    }
     if (method === "GET" && action === "diff") {
       const file = url.searchParams.get("file") ?? "";
-      const staged = url.searchParams.get("staged") === "1";
-      const untracked = url.searchParams.get("untracked") === "1";
-      const diff = await getDiff(repo.path, file, { staged, untracked });
+      const commit = url.searchParams.get("commit");
+      const orig = url.searchParams.get("orig");
+      let target: DiffTarget;
+      if (commit !== null) {
+        if (!isHash(commit)) return json({ error: "invalid commit hash" }, 400);
+        target =
+          orig === null
+            ? { kind: "commit", hash: commit }
+            : { kind: "commit", hash: commit, orig };
+      } else if (url.searchParams.get("untracked") === "1") {
+        target = { kind: "untracked" };
+      } else {
+        target = {
+          kind: "worktree",
+          staged: url.searchParams.get("staged") === "1",
+        };
+      }
+      const diff = await getDiff(repo.path, file, target);
       return json({ diff });
     }
     if (method === "POST" && action === "stage") {
