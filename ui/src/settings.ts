@@ -1,7 +1,13 @@
 /** Per-browser preferences. These never touch the server: they describe how
  *  this window shows the grove, not the grove itself. */
 
-export const SORT_MODES = ["folder", "activity", "recent", "name"] as const;
+export const SORT_MODES = [
+  "folder",
+  "activity",
+  "recent",
+  "name",
+  "user",
+] as const;
 export type SortMode = (typeof SORT_MODES)[number];
 
 export const OPEN_TARGETS = ["dock", "tab", "window"] as const;

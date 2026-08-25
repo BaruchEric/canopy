@@ -3,6 +3,7 @@ import { useShallow } from "zustand/react/shallow";
 import { api } from "../api";
 import { allRuns, attentionCount, useStore } from "../store";
 import { isRunActive } from "../../../src/core/types";
+import { FilterMenu } from "./Filters";
 import { Seg } from "./Seg";
 import { SettingsMenu } from "./Settings";
 
@@ -42,6 +43,7 @@ const SORT = [
   },
   { value: "recent", label: "recent", title: "By last commit: today, this week, this month…" },
   { value: "name", label: "name", title: "One flat list, a to z" },
+  { value: "user", label: "user", title: "By the git identity each repo commits as" },
 ] as const;
 
 /** Live runs across the grove. Absent when nothing is going; a click opens
@@ -84,6 +86,8 @@ export function TopBar() {
   const sort = useStore((s) => s.settings.sort);
   const setSetting = useStore((s) => s.setSetting);
   const rescan = useStore((s) => s.rescan);
+  const sidebarOpen = useStore((s) => s.sidebarOpen);
+  const toggleSidebar = useStore((s) => s.toggleSidebar);
   const [scanning, setScanning] = useState(false);
 
   const doRescan = async () => {
@@ -97,6 +101,29 @@ export function TopBar() {
 
   return (
     <header className="topbar">
+      <button
+        type="button"
+        className={sidebarOpen ? "icon-btn side-toggle" : "icon-btn side-toggle on"}
+        aria-expanded={sidebarOpen}
+        aria-controls="sidebar"
+        title={sidebarOpen ? "Hide the repo tree ([)" : "Show the repo tree ([)"}
+        onClick={toggleSidebar}
+      >
+        <svg
+          width="15"
+          height="15"
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke="currentColor"
+          strokeWidth="2"
+          strokeLinecap="round"
+          strokeLinejoin="round"
+          aria-hidden="true"
+        >
+          <rect x="3" y="4" width="18" height="16" rx="2.5" />
+          <path d="M9.5 4v16" />
+        </svg>
+      </button>
       <Wordmark />
       <span className="root-path" title={root}>
         {root}
@@ -168,6 +195,8 @@ export function TopBar() {
           ? "all quiet"
           : `${attention} need${attention === 1 ? "s" : ""} attention`}
       </button>
+
+      <FilterMenu />
 
       <label className="search">
         <svg

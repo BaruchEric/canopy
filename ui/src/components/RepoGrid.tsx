@@ -1,8 +1,9 @@
 import { memo, useEffect, useMemo, useRef, useState } from "react";
 import { useShallow } from "zustand/react/shallow";
-import { groupRepos } from "../grouping";
+import { groupRepos, sectionKey } from "../grouping";
 import { runFor, useStore, visibleRepos } from "../store";
 import { ago, GLYPH, stateOf } from "../util";
+import { GroupHead } from "./GroupHead";
 import { RepoMenu } from "./RepoMenu";
 import { RunChip } from "./RunChip";
 import type { Repo } from "../../../src/core/types";
@@ -78,6 +79,8 @@ const RepoCard = memo(function RepoCard({ repo }: { repo: Repo }) {
 export function RepoGrid() {
   const repos = useStore(useShallow(visibleRepos));
   const sort = useStore((s) => s.settings.sort);
+  const collapsed = useStore((s) => s.collapsed);
+  const toggleGroup = useStore((s) => s.toggleGroup);
   const groups = useMemo(() => groupRepos(repos, sort), [repos, sort]);
 
   if (repos.length === 0) {
@@ -92,19 +95,30 @@ export function RepoGrid() {
   }
   return (
     <main className="main">
-      {groups.map(({ key, label, repos: members }) => (
-        <section key={key} className="grid-group">
-          <h2 className="grid-head">
-            <span className="head-name">{label}</span>
-            <span className="grid-count">{members.length}</span>
-          </h2>
-          <div className="grid">
-            {members.map((r) => (
-              <RepoCard key={r.id} repo={r} />
-            ))}
-          </div>
-        </section>
-      ))}
+      {groups.map(({ key, label, hint, repos: members }) => {
+        const id = sectionKey(sort, key);
+        const open = !collapsed.includes(id);
+        return (
+          <section key={key} className="grid-group">
+            <GroupHead
+              className="grid-head"
+              label={label}
+              hint={hint}
+              open={open}
+              onToggle={() => toggleGroup(id)}
+            >
+              <span className="grid-count">{members.length}</span>
+            </GroupHead>
+            {open && (
+              <div className="grid">
+                {members.map((r) => (
+                  <RepoCard key={r.id} repo={r} />
+                ))}
+              </div>
+            )}
+          </section>
+        );
+      })}
     </main>
   );
 }

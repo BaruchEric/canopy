@@ -1,5 +1,6 @@
 import { create } from "zustand";
 import { api, subscribe } from "./api";
+import { applyQuery, type RepoFilter } from "./filters";
 import { openElsewhere } from "./routes";
 import { loadSettings, saveSettings, type Settings } from "./settings";
 import { clamp, needsAttention } from "./util";
@@ -22,16 +23,27 @@ const LAYOUT_KEY = "canopy.layout";
 interface Layout {
   sidebarWidth: number;
   panelWidths: Record<string, number>;
+  /** whether the repo tree is showing at all */
+  sidebarOpen: boolean;
+  /** folded sections, as sectionKey strings */
+  collapsed: string[];
 }
 
 function loadLayout(): Layout {
-  const fallback: Layout = { sidebarWidth: SIDEBAR.initial, panelWidths: {} };
+  const fallback: Layout = {
+    sidebarWidth: SIDEBAR.initial,
+    panelWidths: {},
+    sidebarOpen: true,
+    collapsed: [],
+  };
   try {
     const raw = localStorage.getItem(LAYOUT_KEY);
     if (!raw) return fallback;
     const saved = JSON.parse(raw) as {
       sidebarWidth?: unknown;
       panelWidths?: Record<string, unknown>;
+      sidebarOpen?: unknown;
+      collapsed?: unknown;
     };
     const panelWidths: Record<string, number> = {};
     for (const [id, w] of Object.entries(saved.panelWidths ?? {})) {
@@ -48,22 +60,30 @@ function loadLayout(): Layout {
           ? clamp(sw, SIDEBAR.min, SIDEBAR.max)
           : SIDEBAR.initial,
       panelWidths,
+      sidebarOpen: saved.sidebarOpen !== false,
+      collapsed: Array.isArray(saved.collapsed)
+        ? saved.collapsed.filter((k): k is string => typeof k === "string")
+        : [],
     };
   } catch {
     return fallback;
   }
 }
 
-function saveLayout(sidebarWidth: number, panelWidths: Record<string, number>) {
+function saveLayout(layout: Layout) {
   try {
-    localStorage.setItem(
-      LAYOUT_KEY,
-      JSON.stringify({ sidebarWidth, panelWidths }),
-    );
+    localStorage.setItem(LAYOUT_KEY, JSON.stringify(layout));
   } catch {
     // storage can be disabled outright; the layout just won't survive a reload
   }
 }
+
+const layoutOf = (s: CanopyState): Layout => ({
+  sidebarWidth: s.sidebarWidth,
+  panelWidths: s.panelWidths,
+  sidebarOpen: s.sidebarOpen,
+  collapsed: s.collapsed,
+});
 
 /** drops stored widths for repos that no longer exist in the scan */
 function pruneWidths(
@@ -85,6 +105,10 @@ interface CanopyState {
   loadError: string | null;
   filter: string;
   dirtyOnly: boolean;
+  /** lit status facets; a repo shows when it matches any of them */
+  filters: RepoFilter[];
+  /** lit git identities, as userKey strings (NOBODY for repos with none) */
+  users: string[];
   /** active workspace tab; null = all */
   activeWs: string | null;
   /** repo ids pinned open in the dock, left to right */
@@ -93,6 +117,9 @@ interface CanopyState {
   updatedAt: Record<string, number>;
   /** px width of the repo tree, dragged by the sidebar resizer */
   sidebarWidth: number;
+  sidebarOpen: boolean;
+  /** folded sections in the tree and the grid, as sectionKey strings */
+  collapsed: string[];
   /** repo id → px width of its dock panel; missing means PANEL.initial */
   panelWidths: Record<string, number>;
   /** per-browser preferences, persisted in localStorage */
@@ -107,6 +134,11 @@ interface CanopyState {
   rescan: () => Promise<void>;
   setFilter: (f: string) => void;
   setDirtyOnly: (v: boolean) => void;
+  toggleFilter: (f: RepoFilter) => void;
+  toggleUser: (key: string) => void;
+  /** turns every facet and identity chip off; the text and the attention
+   *  toggle have their own ways back */
+  clearFilters: () => void;
   setActiveWs: (name: string | null) => void;
   openPanel: (id: string) => void;
   /** opens a repo where the settings say to; modifier keys override that
@@ -116,6 +148,9 @@ interface CanopyState {
   applyEvent: (ev: ServerEvent) => void;
   setWorkspaces: (ws: Workspace[]) => void;
   setSidebarWidth: (px: number) => void;
+  toggleSidebar: () => void;
+  /** folds or unfolds one section; the tree and the grid fold together */
+  toggleGroup: (key: string) => void;
   setPanelWidth: (id: string, px: number) => void;
   setSetting: <K extends keyof Settings>(key: K, value: Settings[K]) => void;
 
@@ -150,11 +185,15 @@ export const useStore = create<CanopyState>((set, get) => ({
   loadError: null,
   filter: "",
   dirtyOnly: false,
+  filters: [],
+  users: [],
   activeWs: null,
   panels: [],
   updatedAt: {},
   sidebarWidth: layout.sidebarWidth,
   panelWidths: layout.panelWidths,
+  sidebarOpen: layout.sidebarOpen,
+  collapsed: layout.collapsed,
   settings: loadSettings(),
   runs: {},
   sheet: null,
@@ -196,7 +235,9 @@ export const useStore = create<CanopyState>((set, get) => ({
     const [tree, runs] = await Promise.all([api.rescan(), api.runs()]);
     set((s) => {
       const panelWidths = pruneWidths(s.panelWidths, tree.repos);
-      if (panelWidths !== s.panelWidths) saveLayout(s.sidebarWidth, panelWidths);
+      if (panelWidths !== s.panelWidths) {
+        saveLayout({ ...layoutOf(s), panelWidths });
+      }
       return {
         root: tree.root,
         repos: tree.repos,
@@ -212,6 +253,19 @@ export const useStore = create<CanopyState>((set, get) => ({
 
   setFilter: (filter) => set({ filter }),
   setDirtyOnly: (dirtyOnly) => set({ dirtyOnly }),
+  toggleFilter: (f) =>
+    set((s) => ({
+      filters: s.filters.includes(f)
+        ? s.filters.filter((x) => x !== f)
+        : [...s.filters, f],
+    })),
+  toggleUser: (key) =>
+    set((s) => ({
+      users: s.users.includes(key)
+        ? s.users.filter((x) => x !== key)
+        : [...s.users, key],
+    })),
+  clearFilters: () => set({ filters: [], users: [] }),
   setActiveWs: (activeWs) => set({ activeWs }),
 
   openPanel: (id) =>
@@ -240,7 +294,7 @@ export const useStore = create<CanopyState>((set, get) => ({
       set((s) => {
         const panelWidths = pruneWidths(s.panelWidths, ev.result.repos);
         if (panelWidths !== s.panelWidths) {
-          saveLayout(s.sidebarWidth, panelWidths);
+          saveLayout({ ...layoutOf(s), panelWidths });
         }
         return {
           root: ev.result.root,
@@ -270,8 +324,22 @@ export const useStore = create<CanopyState>((set, get) => ({
   setSidebarWidth: (px) =>
     set((s) => {
       const sidebarWidth = clamp(px, SIDEBAR.min, SIDEBAR.max);
-      saveLayout(sidebarWidth, s.panelWidths);
+      saveLayout({ ...layoutOf(s), sidebarWidth });
       return { sidebarWidth };
+    }),
+  toggleSidebar: () =>
+    set((s) => {
+      const sidebarOpen = !s.sidebarOpen;
+      saveLayout({ ...layoutOf(s), sidebarOpen });
+      return { sidebarOpen };
+    }),
+  toggleGroup: (key) =>
+    set((s) => {
+      const collapsed = s.collapsed.includes(key)
+        ? s.collapsed.filter((k) => k !== key)
+        : [...s.collapsed, key];
+      saveLayout({ ...layoutOf(s), collapsed });
+      return { collapsed };
     }),
   setPanelWidth: (id, px) =>
     set((s) => {
@@ -279,7 +347,7 @@ export const useStore = create<CanopyState>((set, get) => ({
         ...s.panelWidths,
         [id]: clamp(px, PANEL.min, PANEL.max),
       };
-      saveLayout(s.sidebarWidth, panelWidths);
+      saveLayout({ ...layoutOf(s), panelWidths });
       return { panelWidths };
     }),
   setSetting: (key, value) =>
@@ -349,8 +417,8 @@ export function allRuns(s: CanopyState): Run[] {
   return Object.values(s.runs).sort((a, b) => b.startedAt - a.startedAt);
 }
 
-/** repos in the active workspace, before the attention and text filters */
-function scopedRepos(s: CanopyState): Repo[] {
+/** repos in the active workspace, before any filter */
+export function scopedRepos(s: CanopyState): Repo[] {
   if (!s.activeWs) return s.repos;
   const ws = s.workspaces.find((w) => w.name === s.activeWs);
   return ws ? s.repos.filter((r) => ws.repos.includes(r.path)) : s.repos;
@@ -361,10 +429,16 @@ export function attentionCount(s: CanopyState): number {
   return scopedRepos(s).filter(needsAttention).length;
 }
 
+/** how many chips the filter menu has lit */
+export function activeFilterCount(s: CanopyState): number {
+  return s.filters.length + s.users.length;
+}
+
 export function visibleRepos(s: CanopyState): Repo[] {
-  let list = scopedRepos(s);
-  if (s.dirtyOnly) list = list.filter(needsAttention);
-  const f = s.filter.trim().toLowerCase();
-  if (f) list = list.filter((r) => r.id.toLowerCase().includes(f));
-  return list;
+  return applyQuery(scopedRepos(s), {
+    filters: s.filters,
+    users: s.users,
+    attention: s.dirtyOnly,
+    text: s.filter,
+  });
 }

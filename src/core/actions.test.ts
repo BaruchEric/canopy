@@ -16,6 +16,7 @@ function repo(over: Partial<Repo["status"] & { error: string }> = {}): Repo {
       behind: 0,
       files: [],
       lastCommit: null,
+      user: null,
       ...status,
     },
     ...(error ? { error } : {}),
@@ -89,6 +90,7 @@ describe("statusFingerprint", () => {
     behind: 0,
     files: [file, { ...file, path: "b.ts", untracked: true }],
     lastCommit: { hash: "abc", subject: "x", at: 1 },
+    user: null,
   };
   test("ignores file order but not file state, position, or head", () => {
     const swapped = { ...base, files: [...base.files].reverse() };

@@ -23,6 +23,8 @@ export function App() {
   const density = useStore((s) => s.settings.density);
   const sidebarWidth = useStore((s) => s.sidebarWidth);
   const setSidebarWidth = useStore((s) => s.setSidebarWidth);
+  const sidebarOpen = useStore((s) => s.sidebarOpen);
+  const toggleSidebar = useStore((s) => s.toggleSidebar);
   const openPanel = useStore((s) => s.openPanel);
   const [attempt, setAttempt] = useState(0);
   const pinned = useRef(false);
@@ -67,6 +69,10 @@ export function App() {
       if (e.key === "/") {
         e.preventDefault();
         document.getElementById("filter-input")?.focus();
+      } else if (e.key === "f") {
+        document.getElementById("filters-btn")?.click();
+      } else if (e.key === "[") {
+        toggleSidebar();
       } else if (e.key === "d") {
         setDirtyOnly(!useStore.getState().dirtyOnly);
       } else if (e.key === "s") {
@@ -78,7 +84,7 @@ export function App() {
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [setDirtyOnly, setSetting]);
+  }, [setDirtyOnly, setSetting, toggleSidebar]);
 
   if (!loaded) {
     if (loadError) {
@@ -108,22 +114,26 @@ export function App() {
     <div className="app">
       <TopBar />
       <div
-        className="body"
+        className={sidebarOpen ? "body" : "body no-side"}
         style={{ "--sidebar-w": `${sidebarWidth}px` } as CSSProperties}
       >
-        <Sidebar />
-        <Resizer
-          className="sidebar-resizer"
-          label="Repository tree width"
-          value={sidebarWidth}
-          min={SIDEBAR.min}
-          max={SIDEBAR.max}
-          initial={SIDEBAR.initial}
-          dir={1}
-          cssVar="--sidebar-w"
-          target={(h) => h.parentElement}
-          onCommit={setSidebarWidth}
-        />
+        {sidebarOpen && (
+          <>
+            <Sidebar />
+            <Resizer
+              className="sidebar-resizer"
+              label="Repository tree width"
+              value={sidebarWidth}
+              min={SIDEBAR.min}
+              max={SIDEBAR.max}
+              initial={SIDEBAR.initial}
+              dir={1}
+              cssVar="--sidebar-w"
+              target={(h) => h.parentElement}
+              onCommit={setSidebarWidth}
+            />
+          </>
+        )}
         <RepoGrid />
         <Dock />
       </div>

@@ -1,11 +1,13 @@
 import type { Repo } from "../../src/core/types";
 import type { SortMode } from "./settings";
-import { stateOf } from "./util";
+import { identities, stateOf, userKey } from "./util";
 
 export interface RepoGroup {
   key: string;
   /** section heading, in the same voice as the rest of the UI */
   label: string;
+  /** tooltip on the heading, when the label leaves something out */
+  hint?: string;
   repos: Repo[];
 }
 
@@ -24,6 +26,7 @@ const byUrgency = (a: Repo, b: Repo): number =>
 interface Bucket {
   key: string;
   label: string;
+  hint?: string;
 }
 
 /** Places each repo in the bucket `keyOf` names, keeps the buckets in the
@@ -90,6 +93,11 @@ function recentKey(r: Repo, now: number): string {
   return "dormant";
 }
 
+/** The key a folded section is remembered under. Modes keep their own, so
+ *  folding "dormant" leaves the folder view alone. */
+export const sectionKey = (mode: SortMode, key: string): string =>
+  `${mode}:${key}`;
+
 /**
  * Groups already-filtered repos for the tree and the grid. Both views call
  * this with the same mode, so a heading in one is the same heading in the
@@ -118,5 +126,22 @@ export function groupRepos(
         () => "all",
         byName,
       );
+    case "user": {
+      // one bucket per identity, named after the person; repos that commit
+      // as nobody and repos git cannot read bring up the rear
+      const people = identities(repos)
+        .map((u) => ({ key: u.key, label: u.label, hint: u.email || undefined }))
+        .sort((a, b) => a.label.localeCompare(b.label));
+      return bucket(
+        repos,
+        [
+          ...people,
+          { key: "none", label: "no identity" },
+          { key: "error", label: "unreadable" },
+        ],
+        (r) => (r.error ? "error" : (userKey(r) ?? "none")),
+        byName,
+      );
+    }
   }
 }

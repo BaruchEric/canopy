@@ -18,6 +18,13 @@ export interface LastCommit {
   at: number;
 }
 
+/** The identity a repo commits as: `user.name` / `user.email` as git resolves
+ *  them from inside that repo, so per-folder includeIf overrides count. */
+export interface GitUser {
+  name: string;
+  email: string;
+}
+
 export interface RepoStatus {
   branch: string;
   upstream: string | null;
@@ -25,6 +32,8 @@ export interface RepoStatus {
   behind: number;
   files: RepoFile[];
   lastCommit: LastCommit | null;
+  /** null when neither user.name nor user.email is set anywhere */
+  user: GitUser | null;
 }
 
 export interface Repo {

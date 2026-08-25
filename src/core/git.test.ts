@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { getDiff, isAccessDenied, parsePorcelainV2 } from "./git";
+import { getDiff, isAccessDenied, parsePorcelainV2, parseUserConfig } from "./git";
 import { heuristicMessage } from "./suggest";
 import type { RepoFile } from "./types";
 
@@ -14,6 +14,35 @@ const SAMPLE = [
   "u UU N... 100644 100644 100644 100644 ffff gggg hhhh conflict.ts",
   "? untracked file.md",
 ].join("\n");
+
+describe("parseUserConfig", () => {
+  test("reads both keys and keeps spaces in the name", () => {
+    expect(
+      parseUserConfig("user.name Eric Baruch\nuser.email eric@example.com\n"),
+    ).toEqual({ name: "Eric Baruch", email: "eric@example.com" });
+  });
+
+  test("the last value for a key wins, as it does for git", () => {
+    expect(
+      parseUserConfig(
+        [
+          "user.name Eric Baruch",
+          "user.email eric@example.com",
+          "user.email eric@work.example",
+        ].join("\n"),
+      ),
+    ).toEqual({ name: "Eric Baruch", email: "eric@work.example" });
+  });
+
+  test("one key alone is still an identity; none is null", () => {
+    expect(parseUserConfig("user.email eric@example.com")).toEqual({
+      name: "",
+      email: "eric@example.com",
+    });
+    expect(parseUserConfig("")).toBeNull();
+    expect(parseUserConfig("user.signingkey ABC")).toBeNull();
+  });
+});
 
 describe("parsePorcelainV2", () => {
   const st = parsePorcelainV2(SAMPLE);

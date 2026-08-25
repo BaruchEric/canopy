@@ -123,6 +123,13 @@ kbd {
   grid-template-columns: var(--sidebar-w, 264px) 6px minmax(360px, 1fr) auto;
   min-height: 0;
 }
+/* the tree folded away: the grid takes its columns */
+.body.no-side {
+  grid-template-columns: minmax(360px, 1fr) auto;
+}
+.side-toggle {
+  margin-right: -4px;
+}
 
 /* ---------- resizers ---------- */
 /* The strip carries no hairline of its own: the sidebar's border-right and
@@ -397,6 +404,52 @@ body.resizing {
   color: var(--ink-dim);
 }
 
+/* filter chips: one per facet, the count says what the chip would show */
+.filters-pop {
+  width: 380px;
+}
+.chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+}
+.chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 2px 9px;
+  border-radius: 999px;
+  border: 1px solid var(--hair2);
+  background: var(--bark2);
+  color: var(--ink-dim);
+  white-space: nowrap;
+  max-width: 100%;
+}
+.chip:hover:not(:disabled) {
+  color: var(--ink);
+  border-color: var(--ink-faint);
+}
+.chip:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+.chip.on {
+  color: var(--lichen);
+  border-color: color-mix(in srgb, var(--lichen) 55%, var(--hair2));
+  background: color-mix(in srgb, var(--lichen) 10%, var(--bark2));
+}
+.chip-n {
+  font-size: 11px;
+  color: var(--ink-faint);
+}
+.chip.on .chip-n {
+  color: inherit;
+  opacity: 0.75;
+}
+.pill svg {
+  flex: none;
+}
+
 /* ---------- buttons ---------- */
 .mini {
   display: inline-flex;
@@ -463,6 +516,32 @@ body.resizing {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+/* the name folds its section; the caret says which way it is */
+.head-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  padding: 0;
+  color: inherit;
+  letter-spacing: inherit;
+  text-transform: inherit;
+}
+.head-toggle:hover {
+  color: var(--ink-dim);
+}
+.caret {
+  flex: none;
+  transform: rotate(90deg);
+}
+.closed .caret {
+  transform: none;
+}
+@media (prefers-reduced-motion: no-preference) {
+  .caret {
+    transition: transform 0.15s ease;
+  }
 }
 /* the branch line: runs from the label to the far edge */
 .tree-head::after,
@@ -756,8 +835,12 @@ body.resizing {
   font-size: 12px;
   flex-wrap: wrap;
 }
-.upstream {
+.upstream,
+.who {
   color: var(--ink-faint);
+}
+.who {
+  margin-left: auto;
 }
 .panel-actions {
   display: flex;

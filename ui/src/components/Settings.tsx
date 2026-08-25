@@ -26,7 +26,9 @@ const DENSITY = [
 const KEYS = [
   ["/", "filter repos"],
   ["d", "only what needs attention"],
+  ["f", "filters"],
   ["s", "next grouping"],
+  ["[", "hide or show the repo tree"],
   ["esc", "clear the filter"],
 ] as const;
 

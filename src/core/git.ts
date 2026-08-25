@@ -1,6 +1,6 @@
 import { isAbsolute, resolve, sep } from "node:path";
 import { git } from "./exec";
-import type { LogEntry, RepoFile, RepoStatus } from "./types";
+import type { GitUser, LogEntry, RepoFile, RepoStatus } from "./types";
 
 /** Resolve a repo-relative path, refusing anything that escapes the repo.
  *  Guards the `--no-index` diff, which happily reads files outside the repo. */
@@ -80,7 +80,9 @@ function splitN(line: string, n: number): string[] {
 }
 
 /** Parse `git status --porcelain=v2 --branch` output. */
-export function parsePorcelainV2(text: string): Omit<RepoStatus, "lastCommit"> {
+export function parsePorcelainV2(
+  text: string,
+): Omit<RepoStatus, "lastCommit" | "user"> {
   let branch = "";
   let upstream: string | null = null;
   let ahead = 0;
@@ -144,8 +146,22 @@ export function parsePorcelainV2(text: string): Omit<RepoStatus, "lastCommit"> {
   return { branch, upstream, ahead, behind, files };
 }
 
+/** Parse `git config --get-regexp '^user\.(name|email)$'` output. Git prints
+ *  every matching entry, global before local, and the last one wins. That is
+ *  the same precedence a commit would use. */
+export function parseUserConfig(text: string): GitUser | null {
+  let name = "";
+  let email = "";
+  for (const line of text.split("\n")) {
+    const [key, value = ""] = splitN(line, 2);
+    if (key === "user.name") name = value.trim();
+    else if (key === "user.email") email = value.trim();
+  }
+  return name || email ? { name, email } : null;
+}
+
 export async function getStatus(repoPath: string): Promise<RepoStatus> {
-  const [st, log] = await Promise.all([
+  const [st, log, cfg] = await Promise.all([
     // -uall lists untracked files individually; without it a new directory
     // arrives as a single "dir/" entry that no per-file diff can render.
     git(repoPath, [
@@ -157,6 +173,8 @@ export async function getStatus(repoPath: string): Promise<RepoStatus> {
       "-uall",
     ]),
     git(repoPath, ["log", "-1", "--pretty=%h%x00%s%x00%ct"]),
+    // exits 1 when nothing matches, which just means no identity
+    git(repoPath, ["config", "--get-regexp", "^user\\.(name|email)$"]),
   ]);
   if (st.code !== 0) throw new Error(st.stderr.trim() || "git status failed");
   const status = parsePorcelainV2(st.stdout);
@@ -165,7 +183,8 @@ export async function getStatus(repoPath: string): Promise<RepoStatus> {
     const [hash = "", subject = "", ct = "0"] = log.stdout.trim().split("\0");
     lastCommit = { hash, subject, at: Number(ct) };
   }
-  return { ...status, lastCommit };
+  const user = cfg.code === 0 ? parseUserConfig(cfg.stdout) : null;
+  return { ...status, lastCommit, user };
 }
 
 export async function getLog(repoPath: string, n = 20): Promise<LogEntry[]> {

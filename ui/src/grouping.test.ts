@@ -19,6 +19,7 @@ function repo(
     behind: 0,
     files: [],
     lastCommit: null,
+    user: null,
     ...status,
   };
   return error
@@ -82,8 +83,40 @@ describe("groupRepos", () => {
     ]);
   });
 
+  test("user buckets by identity, nobody and unreadable last", () => {
+    const eric = { name: "Eric", email: "eric@example.com" };
+    const work = { name: "Eric", email: "eric@work.example" };
+    const bot = { name: "", email: "bot@example.com" };
+    const who = [
+      repo("a/one", "a", { user: eric }),
+      repo("a/two", "a", { user: { ...eric, email: "ERIC@example.com" } }),
+      repo("a/three", "a", { user: work }),
+      repo("a/four", "a", { user: bot }),
+      repo("a/five", "a", { user: null }),
+      repo("a/six", "a", null, "not a repo"),
+    ];
+    const groups = groupRepos(who, "user", NOW);
+    expect(ids(groups)).toEqual([
+      ["bot@example.com", ["four"]],
+      ["Eric <eric@example.com>", ["one", "two"]],
+      ["Eric <eric@work.example>", ["three"]],
+      ["no identity", ["five"]],
+      ["unreadable", ["six"]],
+    ]);
+    expect(groups[1]?.hint).toBe("eric@example.com");
+  });
+
+  test("user keeps a plain name when nobody shares it", () => {
+    const g = groupRepos(
+      [repo("a/one", "a", { user: { name: "Eric", email: "eric@example.com" } })],
+      "user",
+      NOW,
+    );
+    expect(g.map((x) => x.label)).toEqual(["Eric"]);
+  });
+
   test("empty input yields no groups in every mode", () => {
-    for (const mode of ["folder", "activity", "recent", "name"] as const) {
+    for (const mode of ["folder", "activity", "recent", "name", "user"] as const) {
       expect(groupRepos([], mode, NOW)).toEqual([]);
     }
   });

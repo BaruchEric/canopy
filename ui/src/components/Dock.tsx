@@ -362,6 +362,14 @@ export function RepoPanel({
         {(st?.ahead ?? 0) > 0 && <span className="ahead">↑{st?.ahead}</span>}
         {(st?.behind ?? 0) > 0 && <span className="behind">↓{st?.behind}</span>}
         <span className="when">{ago(st?.lastCommit?.at)}</span>
+        {st?.user && (
+          <span
+            className="who"
+            title={`commits as ${st.user.name} <${st.user.email}>`}
+          >
+            {st.user.name || st.user.email}
+          </span>
+        )}
       </div>
 
       {repoRun && (
