@@ -2,6 +2,9 @@ import type {
   LogEntry,
   PushAccess,
   Repo,
+  Run,
+  RunAction,
+  RunAnswer,
   ScanResult,
   ServerEvent,
   Workspace,
@@ -75,6 +78,21 @@ export const api = {
       method: "POST",
       body: JSON.stringify({ app }),
     }),
+  runs: () => req<Run[]>("/api/runs"),
+  run: (id: string, action: RunAction, note: string) =>
+    req<Run>(`/api/repos/run?${rq(id)}`, {
+      method: "POST",
+      body: JSON.stringify({ action, note }),
+    }),
+  answerRun: (id: string, promptId: string, answer: RunAnswer) =>
+    req<Run>("/api/runs/answer", {
+      method: "POST",
+      body: JSON.stringify({ id, promptId, answer }),
+    }),
+  stopRun: (id: string) =>
+    req<Run>("/api/runs/stop", { method: "POST", body: JSON.stringify({ id }) }),
+  dismissRun: (id: string) =>
+    req<{ ok: true }>(`/api/runs?${rq(id)}`, { method: "DELETE" }),
   workspaces: () => req<Workspace[]>("/api/workspaces"),
   wsAdd: (name: string, repos: string[]) =>
     req<Workspace[]>("/api/workspaces", {

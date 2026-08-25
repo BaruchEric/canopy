@@ -1,4 +1,4 @@
-import type { Repo } from "../../src/core/types";
+import { isDirty, type Repo } from "../../src/core/types";
 
 export type RepoState = "error" | "conflict" | "dirty" | "ahead" | "clean";
 
@@ -9,6 +9,11 @@ export function stateOf(r: Repo): RepoState {
   if ((r.status?.ahead ?? 0) > 0) return "ahead";
   return "clean";
 }
+
+/** The "needs attention" filter: local changes, unpushed commits, or a repo
+ *  git cannot read. Behind-only repos stay out; nothing of yours is at risk. */
+export const needsAttention = (r: Repo): boolean =>
+  isDirty(r) || Boolean(r.error);
 
 export function ago(unixSeconds: number | undefined): string {
   if (!unixSeconds) return "—";

@@ -1,10 +1,12 @@
 import { Fragment, useEffect, useState } from "react";
 import type { CSSProperties } from "react";
 import { api } from "../api";
-import { PANEL, useStore } from "../store";
+import { PANEL, runFor, useStore } from "../store";
 import { ago, GLYPH, stateOf } from "../util";
 import { DiffView } from "./DiffView";
+import { RepoMenu } from "./RepoMenu";
 import { Resizer } from "./Resizer";
+import { RunChip } from "./RunChip";
 import type {
   LogEntry,
   PushAccess,
@@ -220,9 +222,20 @@ function History({ repo }: { repo: Repo }) {
   );
 }
 
-function RepoPanel({ id, width }: { id: string; width: number }) {
+export function RepoPanel({
+  id,
+  width,
+  onClose,
+}: {
+  id: string;
+  width: number;
+  /** replaces "unpin from the dock", for a panel that owns its window */
+  onClose?: () => void;
+}) {
   const repo = useStore((s) => s.repos.find((r) => r.id === id));
-  const closePanel = useStore((s) => s.closePanel);
+  const repoRun = useStore((s) => runFor(s, id));
+  const unpin = useStore((s) => s.closePanel);
+  const closePanel = onClose ? (_id: string) => onClose() : unpin;
   const [message, setMessage] = useState("");
   // Off by default: on, it runs `git add -A` and silently commits everything
   // the per-file checkboxes were used to exclude.
@@ -331,6 +344,8 @@ function RepoPanel({ id, width }: { id: string; width: number }) {
         <span className="panel-name" title={repo.path}>
           {repo.id}
         </span>
+        <span className="spacer" />
+        <RepoMenu repo={repo} onError={showError} />
         <button
           type="button"
           className="mini close"
@@ -348,6 +363,12 @@ function RepoPanel({ id, width }: { id: string; width: number }) {
         {(st?.behind ?? 0) > 0 && <span className="behind">↓{st?.behind}</span>}
         <span className="when">{ago(st?.lastCommit?.at)}</span>
       </div>
+
+      {repoRun && (
+        <div className="panel-run">
+          <RunChip run={repoRun} long />
+        </div>
+      )}
 
       <div className="panel-actions">
         {(["kitty", "terminal", "code", "finder"] as const).map((app) => (

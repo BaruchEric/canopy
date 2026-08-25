@@ -1,51 +1,46 @@
 /* canopy — forest-floor instrument panel
-   bark surfaces, moss/lichen/rust/sky state colors, all-mono type */
+   bark surfaces, moss/lichen/rust/sky state colors, all-mono type.
+   Every color is a light-dark() pair; the theme setting only flips
+   color-scheme on <html>, so the OS choice and the manual one share tokens. */
 
 :root {
-  --bark0: #0c110d;
-  --bark1: #121a14;
-  --bark2: #19241b;
-  --bark3: #223022;
-  --hair: #24301f;
-  --hair2: #33422e;
-  --ink: #dce5da;
-  --ink-dim: #8fa083;
-  --ink-faint: #5d6b55;
-  --moss: #93c98b;
-  --moss-deep: #6aa065;
-  --moss-pale: #b8d9a8;
-  --lichen: #d9b36b;
-  --rust: #c97b5f;
-  --sky: #7fb4c9;
+  color-scheme: light dark;
+  --bark0: light-dark(#f2f4ee, #0c110d);
+  --bark1: light-dark(#fafbf8, #121a14);
+  --bark2: light-dark(#eef1e9, #19241b);
+  --bark3: light-dark(#e2e8db, #223022);
+  --hair: light-dark(#d8dfd0, #24301f);
+  --hair2: light-dark(#c3cdb8, #33422e);
+  --ink: light-dark(#232d20, #dce5da);
+  --ink-dim: light-dark(#64705a, #8fa083);
+  --ink-faint: light-dark(#97a28c, #5d6b55);
+  --moss: light-dark(#3e7a38, #93c98b);
+  --moss-deep: light-dark(#2c5d28, #6aa065);
+  --moss-pale: light-dark(#6aa065, #b8d9a8);
+  --lichen: light-dark(#a5762a, #d9b36b);
+  --rust: light-dark(#a84e2f, #c97b5f);
+  --sky: light-dark(#2f7a99, #7fb4c9);
   --trunk: #7a5c44;
+  /* a top-edge highlight, the way light catches bark */
+  --sheen: light-dark(rgb(255 255 255 / 0.6), rgb(255 255 255 / 0.04));
+  --shadow: light-dark(rgb(35 45 32 / 0.18), rgb(0 0 0 / 0.55));
   --mono:
     "Berkeley Mono", "JetBrains Mono", ui-monospace, "SF Mono", Menlo,
     monospace;
   --r: 6px;
+  --r-card: 8px;
 }
-
-@media (prefers-color-scheme: light) {
-  :root {
-    --bark0: #f2f4ee;
-    --bark1: #fafbf8;
-    --bark2: #eef1e9;
-    --bark3: #e2e8db;
-    --hair: #d8dfd0;
-    --hair2: #c3cdb8;
-    --ink: #232d20;
-    --ink-dim: #64705a;
-    --ink-faint: #97a28c;
-    --moss: #3e7a38;
-    --moss-deep: #2c5d28;
-    --moss-pale: #6aa065;
-    --lichen: #a5762a;
-    --rust: #a84e2f;
-    --sky: #2f7a99;
-  }
+:root[data-theme="dark"] {
+  color-scheme: dark;
+}
+:root[data-theme="light"] {
+  color-scheme: light;
 }
 
 * {
   box-sizing: border-box;
+  scrollbar-width: thin;
+  scrollbar-color: var(--hair2) transparent;
 }
 html,
 body,
@@ -67,9 +62,13 @@ button {
   cursor: pointer;
   padding: 0;
 }
+a {
+  color: var(--sky);
+}
 button:focus-visible,
 input:focus-visible,
 textarea:focus-visible,
+a:focus-visible,
 [tabindex]:focus-visible {
   outline: 2px solid var(--sky);
   outline-offset: 1px;
@@ -82,17 +81,41 @@ textarea {
   border: 1px solid var(--hair2);
   border-radius: var(--r);
 }
+kbd {
+  font: inherit;
+  font-size: 10px;
+  line-height: 15px;
+  padding: 0 5px;
+  border: 1px solid var(--hair2);
+  border-bottom-width: 2px;
+  border-radius: 4px;
+  color: var(--ink-faint);
+  background: var(--bark1);
+}
 
 .loading,
 .empty {
   color: var(--ink-dim);
   padding: 2rem;
 }
+.grove {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 14px;
+  text-align: center;
+}
+.grove p {
+  margin: 0;
+  max-width: 48ch;
+}
 
 /* ---------- frame ---------- */
 .app {
   display: grid;
-  grid-template-rows: 46px 1fr;
+  grid-template-rows: auto 1fr;
   height: 100vh;
 }
 .body {
@@ -141,10 +164,13 @@ body.resizing {
 .topbar {
   display: flex;
   align-items: center;
-  gap: 12px;
-  padding: 0 14px;
+  flex-wrap: wrap;
+  gap: 8px 12px;
+  min-height: 46px;
+  padding: 6px 14px;
   border-bottom: 1px solid var(--hair);
   background: var(--bark1);
+  box-shadow: inset 0 1px 0 var(--sheen);
 }
 .wordmark {
   display: inline-flex;
@@ -196,12 +222,37 @@ body.resizing {
   display: inline-flex;
   gap: 4px;
 }
+
+/* search box: glyph on the left, the shortcut on the right until it is used */
+.search {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+}
+.search svg {
+  position: absolute;
+  left: 10px;
+  color: var(--ink-faint);
+  pointer-events: none;
+}
+.search kbd {
+  position: absolute;
+  right: 7px;
+  pointer-events: none;
+}
+.search:focus-within kbd,
+.search:has(input:not(:placeholder-shown)) kbd {
+  display: none;
+}
 .filter {
-  width: 200px;
-  padding: 4px 10px;
+  width: 210px;
+  padding: 4px 30px 4px 29px;
 }
 .filter::placeholder {
   color: var(--ink-faint);
+}
+.filter::-webkit-search-cancel-button {
+  -webkit-appearance: none;
 }
 .toggle {
   display: inline-flex;
@@ -215,14 +266,148 @@ body.resizing {
   accent-color: var(--lichen);
 }
 
+/* the attention pill doubles as a live count */
+.pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  padding: 3px 11px 3px 9px;
+  border-radius: 999px;
+  border: 1px solid var(--hair2);
+  background: var(--bark2);
+  color: var(--ink-dim);
+  white-space: nowrap;
+}
+.pill:hover {
+  color: var(--ink);
+  border-color: var(--ink-faint);
+}
+.pill.on {
+  color: var(--lichen);
+  border-color: color-mix(in srgb, var(--lichen) 55%, var(--hair2));
+  background: color-mix(in srgb, var(--lichen) 10%, var(--bark2));
+}
+.dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  flex: none;
+}
+.dot.lichen {
+  background: var(--lichen);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--lichen) 22%, transparent);
+}
+.dot.moss {
+  background: var(--moss);
+}
+
+/* segmented choice: grouping in the top bar, every setting in the popover */
+.seg {
+  display: inline-flex;
+  gap: 2px;
+  padding: 2px;
+  border: 1px solid var(--hair2);
+  border-radius: 999px;
+  background: var(--bark0);
+}
+.seg button {
+  padding: 1px 10px;
+  border-radius: 999px;
+  color: var(--ink-dim);
+  white-space: nowrap;
+}
+.seg button:hover {
+  color: var(--ink);
+}
+.seg button[aria-checked="true"] {
+  color: var(--ink);
+  background: var(--bark3);
+  box-shadow: inset 0 1px 0 var(--sheen);
+}
+
+.icon-btn {
+  width: 28px;
+  height: 28px;
+  display: inline-grid;
+  place-items: center;
+  border-radius: 50%;
+  border: 1px solid transparent;
+  color: var(--ink-dim);
+}
+.icon-btn:hover,
+.icon-btn.on {
+  color: var(--ink);
+  background: var(--bark2);
+  border-color: var(--hair2);
+}
+
+/* ---------- settings popover ---------- */
+.settings {
+  position: relative;
+}
+.settings-pop {
+  position: absolute;
+  top: calc(100% + 8px);
+  right: 0;
+  z-index: 20;
+  width: 340px;
+  padding: 4px 0 8px;
+  background: var(--bark1);
+  border: 1px solid var(--hair2);
+  border-radius: 10px;
+  box-shadow:
+    inset 0 1px 0 var(--sheen),
+    0 18px 44px -18px var(--shadow);
+}
+.settings-row {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 6px;
+  padding: 8px 14px;
+}
+.settings-row + .settings-row {
+  border-top: 1px solid var(--hair);
+}
+.settings-row .panel-label {
+  margin: 0;
+  align-self: stretch;
+}
+.settings-hint {
+  margin: 0;
+  font-size: 11px;
+  color: var(--ink-faint);
+}
+.keys {
+  margin: 0;
+  display: grid;
+  gap: 5px;
+}
+.keys > div {
+  display: grid;
+  grid-template-columns: 3.2em 1fr;
+  gap: 10px;
+  align-items: baseline;
+}
+.keys dt {
+  text-align: right;
+}
+.keys dd {
+  margin: 0;
+  color: var(--ink-dim);
+}
+
 /* ---------- buttons ---------- */
 .mini {
+  display: inline-flex;
+  align-items: center;
   padding: 2px 8px;
   border-radius: var(--r);
   border: 1px solid var(--hair2);
   background: var(--bark2);
   color: var(--ink-dim);
   white-space: nowrap;
+  text-decoration: none;
 }
 .mini:hover:not(:disabled) {
   color: var(--ink);
@@ -262,6 +447,32 @@ body.resizing {
   color: var(--state);
 }
 
+/* ---------- section headings (tree and grid share one voice) ---------- */
+.tree-head,
+.grid-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 11px;
+  font-weight: 400;
+  text-transform: uppercase;
+  letter-spacing: 0.12em;
+  color: var(--ink-faint);
+}
+.head-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+/* the branch line: runs from the label to the far edge */
+.tree-head::after,
+.grid-head::after {
+  content: "";
+  flex: 1;
+  height: 1px;
+  background: var(--hair);
+}
+
 /* ---------- sidebar ---------- */
 .sidebar {
   border-right: 1px solid var(--hair);
@@ -273,17 +484,10 @@ body.resizing {
   margin-bottom: 4px;
 }
 .tree-head {
-  display: flex;
-  align-items: baseline;
-  justify-content: space-between;
   margin: 8px 14px 2px;
-  font-size: 11px;
-  font-weight: 400;
-  text-transform: uppercase;
-  letter-spacing: 0.12em;
-  color: var(--ink-faint);
 }
 .tree-counts {
+  order: 3;
   display: inline-flex;
   gap: 8px;
 }
@@ -330,18 +534,13 @@ body.resizing {
   min-width: 0;
 }
 .grid-group {
-  margin-bottom: 18px;
+  margin-bottom: 20px;
 }
 .grid-head {
-  font-size: 11px;
-  font-weight: 400;
-  text-transform: uppercase;
-  letter-spacing: 0.12em;
-  color: var(--ink-faint);
-  margin: 0 0 8px;
+  margin: 0 0 10px;
 }
 .grid-count {
-  margin-left: 8px;
+  color: var(--ink-faint);
 }
 .grid {
   display: grid;
@@ -349,15 +548,37 @@ body.resizing {
   gap: 10px;
 }
 .card {
+  position: relative;
   background: color-mix(in srgb, var(--state) 3%, var(--bark1));
   border: 1px solid color-mix(in srgb, var(--state) 14%, var(--hair));
-  border-radius: var(--r);
-  padding: 9px 12px;
+  border-radius: var(--r-card);
+  padding: 9px 12px 9px 14px;
   cursor: pointer;
+  box-shadow: inset 0 1px 0 var(--sheen);
+}
+/* the leaf edge: only repos that are not simply clean carry one, so a calm
+   grove reads flat and anything alive stands out */
+.card::before {
+  content: "";
+  position: absolute;
+  left: -1px;
+  top: 9px;
+  bottom: 9px;
+  width: 3px;
+  border-radius: 0 2px 2px 0;
+  background: var(--state);
+  opacity: 0;
+}
+.card:not(.s-clean)::before {
+  opacity: 0.9;
 }
 .card:hover {
   background: color-mix(in srgb, var(--state) 5%, var(--bark2));
-  border-color: color-mix(in srgb, var(--state) 28%, var(--hair2));
+  border-color: color-mix(in srgb, var(--state) 30%, var(--hair2));
+  box-shadow:
+    inset 0 1px 0 var(--sheen),
+    0 10px 22px -12px var(--shadow);
+  transform: translateY(-1px);
 }
 .card-top {
   display: flex;
@@ -370,28 +591,27 @@ body.resizing {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.card-openers {
-  margin-left: auto;
-  display: none;
-  gap: 4px;
-}
-.card:hover .card-openers,
-.card:focus-within .card-openers {
-  display: inline-flex;
-}
 .card-mid,
 .card-bot {
   display: flex;
-  align-items: baseline;
-  gap: 10px;
-  margin-top: 4px;
+  align-items: center;
+  gap: 8px;
+  margin-top: 5px;
   font-size: 12px;
+  min-width: 0;
 }
 .branch {
   color: var(--ink-dim);
+  font-size: 11px;
+  line-height: 17px;
+  padding: 0 7px;
+  border-radius: 999px;
+  border: 1px solid var(--hair);
+  background: var(--bark2);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  min-width: 0;
 }
 .ahead {
   color: var(--sky);
@@ -411,17 +631,46 @@ body.resizing {
 .when {
   margin-left: auto;
   color: var(--ink-faint);
+  white-space: nowrap;
 }
 
+/* ---------- compact density ---------- */
+:root[data-density="compact"] .grid {
+  grid-template-columns: repeat(auto-fill, minmax(236px, 1fr));
+  gap: 6px;
+}
+:root[data-density="compact"] .card {
+  padding: 6px 10px 6px 12px;
+}
+:root[data-density="compact"] .card-mid,
+:root[data-density="compact"] .card-bot {
+  margin-top: 2px;
+}
+:root[data-density="compact"] .grid-group {
+  margin-bottom: 14px;
+}
+:root[data-density="compact"] .tree-item {
+  padding: 1px 14px;
+}
+:root[data-density="compact"] .main {
+  padding: 10px 12px 40px;
+}
+
+/* ---------- motion ---------- */
 @media (prefers-reduced-motion: no-preference) {
   .card,
   .mini,
   .tab,
+  .pill,
+  .seg button,
+  .icon-btn,
   .tree-item {
     transition:
       background 120ms ease,
       border-color 120ms ease,
-      color 120ms ease;
+      color 120ms ease,
+      box-shadow 160ms ease,
+      transform 160ms ease;
   }
   .card.pulse {
     animation: pulse 1.1s ease-out 1;
@@ -432,6 +681,32 @@ body.resizing {
     }
     100% {
       box-shadow: 0 0 0 14px transparent;
+    }
+  }
+  .settings-pop {
+    animation: settle 140ms ease-out;
+  }
+  @keyframes settle {
+    from {
+      opacity: 0;
+      transform: translateY(-4px);
+    }
+  }
+  /* the loading crowns breathe, one after another */
+  .crowns.live circle {
+    transform-box: fill-box;
+    transform-origin: center;
+    animation: breathe 1.8s ease-in-out infinite;
+  }
+  .crowns.live circle:nth-child(2) {
+    animation-delay: 0.3s;
+  }
+  .crowns.live circle:nth-child(3) {
+    animation-delay: 0.6s;
+  }
+  @keyframes breathe {
+    50% {
+      transform: scale(1.12);
     }
   }
 }
@@ -456,6 +731,7 @@ body.resizing {
 .panel-head {
   position: sticky;
   top: 0;
+  z-index: 1;
   display: flex;
   align-items: center;
   gap: 8px;
@@ -528,6 +804,31 @@ body.resizing {
   color: var(--rust);
   margin: 14px;
   overflow-wrap: anywhere;
+}
+
+/* ---------- solo view (one repo in its own tab or window) ---------- */
+.solo {
+  display: grid;
+  grid-template-rows: auto 1fr;
+  height: 100vh;
+}
+.solo-id {
+  color: var(--ink-dim);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.solo-main {
+  min-height: 0;
+  display: flex;
+  justify-content: center;
+  background: var(--bark0);
+}
+.solo .panel {
+  width: 100%;
+  max-width: 980px;
+  height: 100%;
+  border-left: 1px solid var(--hair);
 }
 
 /* file rows */
@@ -751,6 +1052,624 @@ body.resizing {
     width: 100vw;
   }
   .panel-resizer {
+    display: none;
+  }
+  .seg-sort,
+  .ws-tabs {
+    display: none;
+  }
+  .filter {
+    width: 150px;
+  }
+}
+
+/* ---------- the ⋯ menu ---------- */
+.card-more {
+  margin-left: auto;
+  display: inline-flex;
+  flex: none;
+}
+.more {
+  width: 22px;
+  height: 22px;
+  margin: -3px -4px -3px 0;
+  display: inline-grid;
+  place-items: center;
+  border-radius: var(--r);
+  border: 1px solid transparent;
+  color: var(--ink-faint);
+  opacity: 0.55;
+}
+.card:hover .more,
+.card:focus-within .more,
+.panel-head .more {
+  opacity: 1;
+}
+.more:hover,
+.more.on {
+  color: var(--ink);
+  background: var(--bark2);
+  border-color: var(--hair2);
+}
+.menu {
+  position: fixed;
+  z-index: 30;
+  padding: 4px 0 6px;
+  background: var(--bark1);
+  border: 1px solid var(--hair2);
+  border-radius: 10px;
+  box-shadow:
+    inset 0 1px 0 var(--sheen),
+    0 18px 44px -18px var(--shadow);
+}
+.menu-label {
+  margin: 6px 12px 2px;
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.12em;
+  color: var(--ink-faint);
+}
+.menu-label + .menu-label,
+.menu-item + .menu-label,
+.menu-row + .menu-label {
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px solid var(--hair);
+  margin-left: 0;
+  margin-right: 0;
+  padding-left: 12px;
+  padding-right: 12px;
+}
+.menu-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 4px 12px;
+  text-align: left;
+  color: var(--ink-dim);
+}
+.menu-item:hover,
+.menu-item:focus-visible {
+  background: var(--bark2);
+  color: var(--ink);
+  outline: none;
+}
+.menu-item[aria-disabled="true"] {
+  opacity: 0.45;
+  cursor: default;
+}
+.menu-item[aria-disabled="true"]:hover {
+  background: none;
+  color: var(--ink-dim);
+}
+.menu-item.live {
+  color: var(--sky);
+}
+.menu-text {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.menu-fact {
+  margin-left: auto;
+  flex: none;
+  font-size: 11px;
+  color: var(--ink-faint);
+}
+.menu-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  padding: 4px 12px 2px;
+}
+.dot.sky {
+  background: var(--sky);
+}
+
+/* ---------- runs on the card, in the panel, in the top bar ---------- */
+/* While Claude works, the leaf edge carries sap (sky); while it waits for an
+   answer, the edge asks in lichen like everything else that needs a hand. */
+.card.run-working::before,
+.card.run-waiting::before {
+  opacity: 1;
+}
+.card.run-working::before {
+  background: var(--sky);
+}
+.card.run-waiting::before {
+  background: var(--lichen);
+}
+.run-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 11px;
+  line-height: 17px;
+  padding: 0 8px 0 6px;
+  border-radius: 999px;
+  border: 1px solid color-mix(in srgb, var(--tone) 45%, var(--hair2));
+  background: color-mix(in srgb, var(--tone) 10%, var(--bark2));
+  color: var(--tone);
+  white-space: nowrap;
+}
+.run-chip:hover {
+  border-color: var(--tone);
+}
+.run-chip .dot {
+  width: 6px;
+  height: 6px;
+  background: currentColor;
+}
+.st-working {
+  --tone: var(--sky);
+}
+.st-waiting {
+  --tone: var(--lichen);
+}
+.st-done {
+  --tone: var(--moss);
+}
+.st-failed {
+  --tone: var(--rust);
+}
+.st-stopped {
+  --tone: var(--ink-faint);
+}
+/* a commit or push that moved nothing: done, but not the kind of done the
+   card can show, so it borrows the "needs a hand" colour */
+.no-change {
+  --tone: var(--lichen);
+}
+.panel-run {
+  padding: 8px 14px 0;
+}
+.pill.runs {
+  color: var(--sky);
+  border-color: color-mix(in srgb, var(--sky) 45%, var(--hair2));
+}
+.pill.runs.on {
+  color: var(--lichen);
+  border-color: color-mix(in srgb, var(--lichen) 55%, var(--hair2));
+}
+
+/* ---------- the sheet: pre-flight, then the console ---------- */
+.sheet-back {
+  position: fixed;
+  inset: 0;
+  z-index: 40;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  background: color-mix(in srgb, var(--bark0) 72%, transparent);
+  backdrop-filter: blur(2px);
+}
+.sheet {
+  width: min(640px, 100%);
+  max-height: min(84vh, 920px);
+  display: flex;
+  flex-direction: column;
+  background: var(--bark1);
+  border: 1px solid var(--hair2);
+  border-radius: 12px;
+  box-shadow:
+    inset 0 1px 0 var(--sheen),
+    0 30px 70px -30px var(--shadow);
+  overflow: hidden;
+}
+.sheet-head {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 16px;
+  border-bottom: 1px solid var(--hair);
+}
+.sheet-head > div:first-child {
+  flex: 1;
+  min-width: 0;
+}
+.eyebrow {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.12em;
+  color: var(--ink-faint);
+}
+.sheet-title {
+  margin: 2px 0 0;
+  font-size: 15px;
+  font-weight: 700;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.sheet-repo {
+  color: var(--ink-dim);
+  font-weight: 400;
+}
+.sheet-head .close {
+  margin-left: 0;
+}
+.status {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--tone);
+  white-space: nowrap;
+}
+.status .dot {
+  width: 7px;
+  height: 7px;
+  background: currentColor;
+}
+.clock {
+  font-size: 12px;
+  color: var(--ink-faint);
+  font-variant-numeric: tabular-nums;
+}
+.sheet-body {
+  min-height: 0;
+  overflow-y: auto;
+  padding: 14px 16px;
+}
+.sheet-empty {
+  margin: 0;
+  padding: 24px 16px;
+  color: var(--ink-dim);
+}
+.plan {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.facts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.blurb {
+  margin: 0;
+  color: var(--ink-dim);
+  line-height: 1.55;
+}
+.plan-note {
+  width: 100%;
+  padding: 8px 10px;
+  resize: vertical;
+}
+.plan-note::placeholder {
+  color: var(--ink-faint);
+}
+.sheet-foot {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 16px;
+  border-top: 1px solid var(--hair);
+  background: var(--bark2);
+}
+.sheet-hint {
+  flex: 1;
+  min-width: 0;
+  font-size: 11px;
+  color: var(--ink-faint);
+}
+.sheet .note {
+  margin: 0;
+}
+
+/* the console: one trunk, a node per step, the same 3px as the leaf edge */
+.console {
+  padding: 12px 16px 16px;
+}
+.run-note {
+  margin: 0 0 12px;
+  padding: 8px 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  border: 1px solid var(--hair);
+  border-radius: var(--r);
+  color: var(--ink-dim);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.steps {
+  list-style: none;
+  margin: 0;
+  padding: 0 0 0 20px;
+  position: relative;
+}
+.steps::before {
+  content: "";
+  position: absolute;
+  left: 6px;
+  top: 8px;
+  bottom: 8px;
+  width: 3px;
+  border-radius: 2px;
+  background: var(--hair2);
+}
+.step {
+  position: relative;
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 3px 0 3px 2px;
+}
+.node {
+  position: absolute;
+  left: -16px;
+  top: 8px;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--ink-faint);
+  box-shadow: 0 0 0 2px var(--bark1);
+}
+.k-text .node {
+  background: var(--bark1);
+  border: 2px solid var(--ink-faint);
+}
+.k-note .node {
+  width: 5px;
+  height: 5px;
+  left: -15px;
+  top: 9px;
+  background: var(--hair2);
+}
+.k-tool.st-running .node {
+  background: var(--sky);
+}
+.k-tool.st-ok .node {
+  background: var(--moss);
+}
+.k-tool.st-error .node {
+  background: var(--rust);
+}
+.step-body {
+  flex: 1;
+  min-width: 0;
+}
+.step-title {
+  display: block;
+  font-size: 12px;
+  color: var(--ink);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.st-error .step-title {
+  color: var(--rust);
+}
+.step-out > summary {
+  cursor: pointer;
+  list-style: none;
+  font-size: 11px;
+  color: var(--ink-faint);
+}
+.step-out > summary::-webkit-details-marker {
+  display: none;
+}
+.step-out > summary::before {
+  content: "▸ ";
+}
+.step-out[open] > summary::before {
+  content: "▾ ";
+}
+.step-out pre {
+  margin: 4px 0 6px;
+  padding: 8px 10px;
+  max-height: 40vh;
+  overflow: auto;
+  font-size: 11.5px;
+  line-height: 1.4;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  background: var(--bark0);
+  border: 1px solid var(--hair);
+  border-radius: var(--r);
+}
+.step-text {
+  min-width: 0;
+  color: var(--ink);
+  line-height: 1.5;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.k-note .step-text,
+.thinking .step-text {
+  font-size: 11px;
+  color: var(--ink-faint);
+}
+
+/* a question or a permission: the run's "needs you" moment, in lichen */
+.ask {
+  margin: 12px 0 0;
+  padding: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  border: 1px solid color-mix(in srgb, var(--lichen) 55%, var(--hair2));
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--lichen) 7%, var(--bark1));
+}
+.ask .eyebrow {
+  color: var(--lichen);
+}
+.ask-detail {
+  margin: 0;
+  padding: 8px 10px;
+  max-height: 30vh;
+  overflow: auto;
+  font-size: 12px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  background: var(--bark0);
+  border: 1px solid var(--hair);
+  border-radius: var(--r);
+}
+.ask-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.question {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.q-text {
+  margin: 0;
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.options {
+  display: grid;
+  gap: 6px;
+}
+.option {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+  padding: 7px 10px;
+  text-align: left;
+  border: 1px solid var(--hair2);
+  border-radius: var(--r);
+  background: var(--bark1);
+}
+.option:hover {
+  border-color: var(--ink-faint);
+}
+.option.on {
+  border-color: var(--moss);
+  background: color-mix(in srgb, var(--moss) 10%, var(--bark1));
+}
+.opt-label {
+  font-weight: 700;
+}
+.opt-desc {
+  font-size: 11px;
+  color: var(--ink-dim);
+}
+.other {
+  width: 100%;
+  padding: 4px 8px;
+}
+.other::placeholder {
+  color: var(--ink-faint);
+}
+.outcome {
+  margin: 12px 0 0;
+  padding: 10px 12px;
+  border: 1px solid var(--hair2);
+  border-radius: 8px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.outcome p {
+  margin: 0;
+}
+.outcome p + p {
+  margin-top: 8px;
+}
+.outcome.ok {
+  border-color: color-mix(in srgb, var(--moss) 40%, transparent);
+}
+.outcome.err {
+  border-color: color-mix(in srgb, var(--rust) 40%, transparent);
+  color: var(--rust);
+}
+.outcome.dim {
+  color: var(--ink-dim);
+}
+.outcome.warn {
+  border-color: color-mix(in srgb, var(--lichen) 45%, transparent);
+}
+.outcome-lead {
+  color: var(--lichen);
+}
+
+.followup-hint {
+  margin: 12px 0 0;
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .card.run-working::before {
+    background: linear-gradient(
+      180deg,
+      var(--sky) 0 28%,
+      color-mix(in srgb, var(--sky) 25%, transparent) 28% 50%,
+      var(--sky) 50% 78%,
+      color-mix(in srgb, var(--sky) 25%, transparent) 78% 100%
+    );
+    background-size: 100% 200%;
+    animation: sap 1.5s linear infinite;
+  }
+  @keyframes sap {
+    from {
+      background-position: 0 0;
+    }
+    to {
+      background-position: 0 100%;
+    }
+  }
+  .card.run-waiting::before,
+  .st-waiting .dot,
+  .pill.runs.on .dot {
+    animation: needs 1s ease-in-out infinite alternate;
+  }
+  @keyframes needs {
+    from {
+      opacity: 0.35;
+    }
+    to {
+      opacity: 1;
+    }
+  }
+  .st-working .dot,
+  .dot.live,
+  .k-tool.st-running .node {
+    animation: breathe-dot 1.4s ease-in-out infinite;
+  }
+  @keyframes breathe-dot {
+    50% {
+      transform: scale(1.35);
+      opacity: 0.7;
+    }
+  }
+  .menu {
+    animation: settle 120ms ease-out;
+  }
+  .sheet {
+    animation: settle 160ms ease-out;
+  }
+  .more,
+  .run-chip,
+  .menu-item,
+  .option {
+    transition:
+      background 120ms ease,
+      border-color 120ms ease,
+      color 120ms ease,
+      opacity 120ms ease;
+  }
+}
+@media (max-width: 760px) {
+  .sheet-back {
+    padding: 0;
+    align-items: end;
+  }
+  .sheet {
+    width: 100%;
+    max-height: 92vh;
+    border-radius: 12px 12px 0 0;
+  }
+  .sheet-hint {
     display: none;
   }
 }

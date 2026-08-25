@@ -1,7 +1,17 @@
 import { create } from "zustand";
 import { api, subscribe } from "./api";
-import { clamp } from "./util";
-import type { Repo, ServerEvent, Workspace } from "../../src/core/types";
+import { openElsewhere } from "./routes";
+import { loadSettings, saveSettings, type Settings } from "./settings";
+import { clamp, needsAttention } from "./util";
+import {
+  isRunActive,
+  type Repo,
+  type Run,
+  type RunAction,
+  type RunAnswer,
+  type ServerEvent,
+  type Workspace,
+} from "../../src/core/types";
 
 /** drag limits for the two resizable panes, in px */
 export const SIDEBAR = { min: 180, max: 560, initial: 264 };
@@ -85,6 +95,12 @@ interface CanopyState {
   sidebarWidth: number;
   /** repo id → px width of its dock panel; missing means PANEL.initial */
   panelWidths: Record<string, number>;
+  /** per-browser preferences, persisted in localStorage */
+  settings: Settings;
+  /** Claude Code runs by id, live and recently finished */
+  runs: Record<string, Run>;
+  /** the modal in front of the grove: a pre-flight for an action, or a run */
+  sheet: Sheet | null;
 
   /** loads the tree and opens the SSE stream; returns its unsubscribe */
   init: () => Promise<() => void>;
@@ -93,11 +109,35 @@ interface CanopyState {
   setDirtyOnly: (v: boolean) => void;
   setActiveWs: (name: string | null) => void;
   openPanel: (id: string) => void;
+  /** opens a repo where the settings say to; modifier keys override that
+   *  the way they do for links (cmd/ctrl → tab, shift → window) */
+  openRepo: (id: string, mods?: ClickModifiers) => void;
   closePanel: (id: string) => void;
   applyEvent: (ev: ServerEvent) => void;
   setWorkspaces: (ws: Workspace[]) => void;
   setSidebarWidth: (px: number) => void;
   setPanelWidth: (id: string, px: number) => void;
+  setSetting: <K extends keyof Settings>(key: K, value: Settings[K]) => void;
+
+  /** opens the pre-flight dialog for an action on a repo */
+  plan: (repoId: string, action: RunAction) => void;
+  /** shows a run's console */
+  showRun: (runId: string) => void;
+  closeSheet: () => void;
+  startRun: (repoId: string, action: RunAction, note: string) => Promise<void>;
+  answerRun: (runId: string, promptId: string, answer: RunAnswer) => Promise<void>;
+  stopRun: (runId: string) => Promise<void>;
+  dismissRun: (runId: string) => Promise<void>;
+}
+
+export type Sheet =
+  | { kind: "plan"; repoId: string; action: RunAction }
+  | { kind: "run"; runId: string };
+
+export interface ClickModifiers {
+  metaKey?: boolean;
+  ctrlKey?: boolean;
+  shiftKey?: boolean;
 }
 
 const layout = loadLayout();
@@ -115,17 +155,22 @@ export const useStore = create<CanopyState>((set, get) => ({
   updatedAt: {},
   sidebarWidth: layout.sidebarWidth,
   panelWidths: layout.panelWidths,
+  settings: loadSettings(),
+  runs: {},
+  sheet: null,
 
   init: async () => {
     try {
-      const [tree, workspaces] = await Promise.all([
+      const [tree, workspaces, runs] = await Promise.all([
         api.tree(),
         api.workspaces(),
+        api.runs(),
       ]);
       set({
         root: tree.root,
         repos: tree.repos,
         workspaces,
+        runs: Object.fromEntries(runs.map((r) => [r.id, r])),
         loaded: true,
         loadError: null,
       });
@@ -148,7 +193,7 @@ export const useStore = create<CanopyState>((set, get) => ({
   },
 
   rescan: async () => {
-    const tree = await api.rescan();
+    const [tree, runs] = await Promise.all([api.rescan(), api.runs()]);
     set((s) => {
       const panelWidths = pruneWidths(s.panelWidths, tree.repos);
       if (panelWidths !== s.panelWidths) saveLayout(s.sidebarWidth, panelWidths);
@@ -159,6 +204,8 @@ export const useStore = create<CanopyState>((set, get) => ({
         // renders nothing, including its own close button
         panels: s.panels.filter((id) => tree.repos.some((r) => r.id === id)),
         panelWidths,
+        // runs are server state too: a stream gap may have hidden a finish
+        runs: Object.fromEntries(runs.map((r) => [r.id, r])),
       };
     });
   },
@@ -171,6 +218,15 @@ export const useStore = create<CanopyState>((set, get) => ({
     set((s) => ({
       panels: s.panels.includes(id) ? s.panels : [...s.panels, id],
     })),
+  openRepo: (id, mods) => {
+    const target = mods?.shiftKey
+      ? "window"
+      : mods?.metaKey || mods?.ctrlKey
+        ? "tab"
+        : get().settings.openIn;
+    if (target === "dock") get().openPanel(id);
+    else openElsewhere(id, target);
+  },
   closePanel: (id) =>
     set((s) => ({ panels: s.panels.filter((p) => p !== id) })),
 
@@ -197,6 +253,15 @@ export const useStore = create<CanopyState>((set, get) => ({
       });
     } else if (ev.type === "workspaces") {
       set({ workspaces: ev.workspaces });
+    } else if (ev.type === "run") {
+      set((s) => ({ runs: { ...s.runs, [ev.run.id]: ev.run } }));
+    } else if (ev.type === "run-gone") {
+      set((s) => {
+        const { [ev.id]: _gone, ...runs } = s.runs;
+        const sheet =
+          s.sheet?.kind === "run" && s.sheet.runId === ev.id ? null : s.sheet;
+        return { runs, sheet };
+      });
     }
   },
 
@@ -217,22 +282,88 @@ export const useStore = create<CanopyState>((set, get) => ({
       saveLayout(s.sidebarWidth, panelWidths);
       return { panelWidths };
     }),
+  setSetting: (key, value) =>
+    set((s) => {
+      const settings = { ...s.settings, [key]: value };
+      saveSettings(settings);
+      return { settings };
+    }),
+
+  plan: (repoId, action) => {
+    // A repo with a run going shows that run instead of starting a second.
+    const active = activeRunFor(get(), repoId);
+    set({ sheet: active ? { kind: "run", runId: active.id } : { kind: "plan", repoId, action } });
+  },
+  showRun: (runId) => set({ sheet: { kind: "run", runId } }),
+  closeSheet: () => set({ sheet: null }),
+  startRun: async (repoId, action, note) => {
+    const run = await api.run(repoId, action, note);
+    set((s) => ({
+      runs: { ...s.runs, [run.id]: run },
+      sheet: { kind: "run", runId: run.id },
+    }));
+  },
+  answerRun: async (runId, promptId, answer) => {
+    const run = await api.answerRun(runId, promptId, answer);
+    set((s) => ({ runs: { ...s.runs, [run.id]: run } }));
+  },
+  stopRun: async (runId) => {
+    const run = await api.stopRun(runId);
+    set((s) => ({ runs: { ...s.runs, [run.id]: run } }));
+  },
+  dismissRun: async (runId) => {
+    await api.dismissRun(runId);
+    set((s) => {
+      const { [runId]: _gone, ...runs } = s.runs;
+      const sheet =
+        s.sheet?.kind === "run" && s.sheet.runId === runId ? null : s.sheet;
+      return { runs, sheet };
+    });
+  },
 }));
 
+/** The run a repo's card should talk about: a live one first, else the most
+ *  recent finished one still on the server. */
+export function runFor(s: CanopyState, repoId: string): Run | undefined {
+  let best: Run | undefined;
+  for (const r of Object.values(s.runs)) {
+    if (r.repoId !== repoId) continue;
+    if (!best) {
+      best = r;
+      continue;
+    }
+    const a = isRunActive(r);
+    const b = isRunActive(best);
+    if (a !== b ? a : r.startedAt > best.startedAt) best = r;
+  }
+  return best;
+}
+
+export function activeRunFor(s: CanopyState, repoId: string): Run | undefined {
+  const r = runFor(s, repoId);
+  return r && isRunActive(r) ? r : undefined;
+}
+
+/** All runs, newest first. */
+export function allRuns(s: CanopyState): Run[] {
+  return Object.values(s.runs).sort((a, b) => b.startedAt - a.startedAt);
+}
+
+/** repos in the active workspace, before the attention and text filters */
+function scopedRepos(s: CanopyState): Repo[] {
+  if (!s.activeWs) return s.repos;
+  const ws = s.workspaces.find((w) => w.name === s.activeWs);
+  return ws ? s.repos.filter((r) => ws.repos.includes(r.path)) : s.repos;
+}
+
+/** how many repos the "needs attention" toggle would keep */
+export function attentionCount(s: CanopyState): number {
+  return scopedRepos(s).filter(needsAttention).length;
+}
+
 export function visibleRepos(s: CanopyState): Repo[] {
-  let list = s.repos;
-  if (s.activeWs) {
-    const ws = s.workspaces.find((w) => w.name === s.activeWs);
-    if (ws) list = list.filter((r) => ws.repos.includes(r.path));
-  }
-  if (s.dirtyOnly) {
-    list = list.filter(
-      (r) =>
-        (r.status?.files.length ?? 0) > 0 ||
-        (r.status?.ahead ?? 0) > 0 ||
-        Boolean(r.error),
-    );
-  }
+  let list = scopedRepos(s);
+  if (s.dirtyOnly) list = list.filter(needsAttention);
   const f = s.filter.trim().toLowerCase();
   if (f) list = list.filter((r) => r.id.toLowerCase().includes(f));
   return list;

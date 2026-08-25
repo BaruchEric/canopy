@@ -1,6 +1,75 @@
 import { useState } from "react";
+import { useShallow } from "zustand/react/shallow";
 import { api } from "../api";
-import { useStore } from "../store";
+import { allRuns, attentionCount, useStore } from "../store";
+import { isRunActive } from "../../../src/core/types";
+import { Seg } from "./Seg";
+import { SettingsMenu } from "./Settings";
+
+/** The three crowns and a trunk. `live` makes them breathe (loading screen). */
+export function Crowns({ size = 18, live = false }: { size?: number; live?: boolean }) {
+  return (
+    <svg
+      className={live ? "crowns live" : "crowns"}
+      width={size}
+      height={size}
+      viewBox="0 0 32 32"
+      aria-hidden="true"
+    >
+      <circle cx="11" cy="12" r="8" fill="var(--moss)" />
+      <circle cx="21" cy="10" r="7" fill="var(--moss-deep)" />
+      <circle cx="17" cy="16" r="7" fill="var(--moss-pale)" opacity="0.85" />
+      <rect x="15" y="20" width="3" height="9" rx="1" fill="var(--trunk)" />
+    </svg>
+  );
+}
+
+export function Wordmark() {
+  return (
+    <span className="wordmark" aria-label="canopy">
+      <Crowns />
+      canopy
+    </span>
+  );
+}
+
+const SORT = [
+  { value: "folder", label: "folder", title: "By topic folder, as on disk" },
+  {
+    value: "activity",
+    label: "activity",
+    title: "What needs a hand first: changes, unpushed, behind, quiet",
+  },
+  { value: "recent", label: "recent", title: "By last commit: today, this week, this month…" },
+  { value: "name", label: "name", title: "One flat list, a to z" },
+] as const;
+
+/** Live runs across the grove. Absent when nothing is going; a click opens
+ *  the run that needs an answer first, else the newest one. */
+function RunsPill() {
+  const runs = useStore(useShallow((s) => allRuns(s).filter(isRunActive)));
+  const showRun = useStore((s) => s.showRun);
+  if (runs.length === 0) return null;
+  const waiting = runs.filter((r) => r.status === "waiting");
+  const target = waiting[0] ?? runs[0];
+  const text =
+    waiting.length > 0
+      ? `${waiting.length} need${waiting.length === 1 ? "s" : ""} you`
+      : `${runs.length} claude run${runs.length === 1 ? "" : "s"}`;
+  return (
+    <button
+      type="button"
+      className={waiting.length > 0 ? "pill runs on" : "pill runs"}
+      title="Show the run"
+      onClick={() => {
+        if (target) showRun(target.id);
+      }}
+    >
+      <span className={waiting.length > 0 ? "dot lichen" : "dot sky live"} />
+      {text}
+    </button>
+  );
+}
 
 export function TopBar() {
   const root = useStore((s) => s.root);
@@ -8,9 +77,12 @@ export function TopBar() {
   const setFilter = useStore((s) => s.setFilter);
   const dirtyOnly = useStore((s) => s.dirtyOnly);
   const setDirtyOnly = useStore((s) => s.setDirtyOnly);
+  const attention = useStore(attentionCount);
   const workspaces = useStore((s) => s.workspaces);
   const activeWs = useStore((s) => s.activeWs);
   const setActiveWs = useStore((s) => s.setActiveWs);
+  const sort = useStore((s) => s.settings.sort);
+  const setSetting = useStore((s) => s.setSetting);
   const rescan = useStore((s) => s.rescan);
   const [scanning, setScanning] = useState(false);
 
@@ -25,15 +97,7 @@ export function TopBar() {
 
   return (
     <header className="topbar">
-      <span className="wordmark" aria-label="canopy">
-        <svg width="18" height="18" viewBox="0 0 32 32" aria-hidden="true">
-          <circle cx="11" cy="12" r="8" fill="var(--moss)" />
-          <circle cx="21" cy="10" r="7" fill="var(--moss-deep)" />
-          <circle cx="17" cy="16" r="7" fill="var(--moss-pale)" opacity="0.85" />
-          <rect x="15" y="20" width="3" height="9" rx="1" fill="var(--trunk)" />
-        </svg>
-        canopy
-      </span>
+      <Wordmark />
       <span className="root-path" title={root}>
         {root}
       </span>
@@ -81,25 +145,59 @@ export function TopBar() {
       </nav>
 
       <span className="spacer" />
-      <label className="toggle">
-        <input
-          type="checkbox"
-          checked={dirtyOnly}
-          onChange={(e) => setDirtyOnly(e.target.checked)}
-        />
-        needs attention
-      </label>
-      <input
-        id="filter-input"
-        className="filter"
-        type="search"
-        placeholder="filter repos  /"
-        value={filter}
-        onChange={(e) => setFilter(e.target.value)}
-        onKeyDown={(e) => {
-          if (e.key === "Escape") setFilter("");
-        }}
+
+      <Seg
+        className="seg-sort"
+        label="Group repos by"
+        value={sort}
+        options={SORT}
+        onChange={(v) => setSetting("sort", v)}
       />
+
+      <RunsPill />
+
+      <button
+        type="button"
+        className={dirtyOnly ? "pill on" : "pill"}
+        aria-pressed={dirtyOnly}
+        title="Only repos with changes, unpushed commits, or errors (d)"
+        onClick={() => setDirtyOnly(!dirtyOnly)}
+      >
+        <span className={attention > 0 ? "dot lichen" : "dot moss"} />
+        {attention === 0
+          ? "all quiet"
+          : `${attention} need${attention === 1 ? "s" : ""} attention`}
+      </button>
+
+      <label className="search">
+        <svg
+          width="13"
+          height="13"
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke="currentColor"
+          strokeWidth="2.2"
+          strokeLinecap="round"
+          aria-hidden="true"
+        >
+          <circle cx="11" cy="11" r="7" />
+          <path d="m20 20-3.8-3.8" />
+        </svg>
+        <input
+          id="filter-input"
+          className="filter"
+          type="search"
+          placeholder="filter repos"
+          aria-label="Filter repos"
+          value={filter}
+          onChange={(e) => setFilter(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === "Escape") setFilter("");
+          }}
+        />
+        <kbd aria-hidden="true">/</kbd>
+      </label>
+
       <button
         type="button"
         className="mini"
@@ -108,6 +206,8 @@ export function TopBar() {
       >
         {scanning ? "scanning…" : "rescan"}
       </button>
+
+      <SettingsMenu />
     </header>
   );
 }

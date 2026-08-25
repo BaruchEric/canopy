@@ -17,8 +17,17 @@ import {
   removeWorkspace,
   upsertWorkspace,
 } from "../core/store";
+import { Runner } from "../core/runner";
 import { suggestMessage } from "../core/suggest";
-import type { CanopyConfig, Repo, ScanResult, ServerEvent } from "../core/types";
+import {
+  RUN_ACTIONS,
+  type CanopyConfig,
+  type Repo,
+  type RunAction,
+  type RunAnswer,
+  type ScanResult,
+  type ServerEvent,
+} from "../core/types";
 import { DEFAULT_IGNORE } from "../core/scan";
 
 interface ServerState {
@@ -36,6 +45,28 @@ interface ServerState {
   clients: Set<ReadableStreamDefaultController<Uint8Array>>;
   timers: Map<string, ReturnType<typeof setTimeout>>;
   watcher: FSWatcher | null;
+  /** Claude Code jobs, one live session per repo at most */
+  runner: Runner;
+}
+
+const isRunAction = (v: unknown): v is RunAction =>
+  typeof v === "string" && (RUN_ACTIONS as readonly string[]).includes(v);
+
+/** The browser's reply to a run prompt, checked field by field: a malformed
+ *  body must not reach the SDK as an "allow". */
+function parseAnswer(v: unknown): RunAnswer | null {
+  if (!v || typeof v !== "object") return null;
+  const kind = (v as { kind?: unknown }).kind;
+  if (kind === "allow" || kind === "allow-all" || kind === "deny") return { kind };
+  if (kind !== "answers") return null;
+  const raw = (v as { answers?: unknown }).answers;
+  if (!raw || typeof raw !== "object") return null;
+  const answers: Record<string, string> = {};
+  for (const [q, a] of Object.entries(raw)) {
+    if (typeof a !== "string") return null;
+    answers[q] = a;
+  }
+  return { kind: "answers", answers };
 }
 
 /** Scan options from config — DEFAULT_IGNORE plus whatever the user added. */
@@ -186,6 +217,27 @@ async function handleApi(
     return json(state.result);
   }
 
+  if (path === "/api/runs" && method === "GET") {
+    return json(state.runner.list());
+  }
+  if (path === "/api/runs" && method === "DELETE") {
+    state.runner.dismiss(url.searchParams.get("id") ?? "");
+    return json({ ok: true });
+  }
+  if (path === "/api/runs/answer" && method === "POST") {
+    const b = (await req.json()) as { id?: unknown; promptId?: unknown; answer?: unknown };
+    const answer = parseAnswer(b.answer);
+    if (typeof b.id !== "string" || typeof b.promptId !== "string" || !answer) {
+      return json({ error: "malformed answer" }, 400);
+    }
+    return json(state.runner.answer(b.id, b.promptId, answer));
+  }
+  if (path === "/api/runs/stop" && method === "POST") {
+    const b = (await req.json()) as { id?: unknown };
+    if (typeof b.id !== "string") return json({ error: "missing run id" }, 400);
+    return json(state.runner.stop(b.id));
+  }
+
   if (path === "/api/workspaces" && method === "GET") {
     return json((await loadConfig()).workspaces);
   }
@@ -285,6 +337,12 @@ async function handleApi(
     if (method === "POST" && action === "refresh") {
       return json(await refreshAndBroadcast(state, repo.id));
     }
+    if (method === "POST" && action === "run") {
+      const b = (await req.json()) as { action?: unknown; note?: unknown };
+      if (!isRunAction(b.action)) return json({ error: "unknown action" }, 400);
+      const note = typeof b.note === "string" ? b.note : "";
+      return json(state.runner.start(repo, b.action, note), 201);
+    }
   }
   return json({ error: "not found" }, 404);
 }
@@ -353,6 +411,16 @@ export async function startServer(opts: {
     clients: new Set(),
     timers: new Map(),
     watcher: null,
+    runner: new Runner({
+      onChange: (run) => broadcast(state, { type: "run", run }),
+      onGone: (id) => broadcast(state, { type: "run-gone", id }),
+      // Re-read status directly rather than waiting on the watcher's
+      // debounce: the card and the run's outcome should agree at once.
+      status: (repoId) =>
+        refreshAndBroadcast(state, repoId)
+          .then((r) => r.status)
+          .catch(() => null),
+    }),
   };
   await rememberRoot(root);
 
@@ -403,6 +471,7 @@ export async function startServer(opts: {
     port: server.port ?? port,
     stop: () => {
       clearInterval(heartbeat);
+      state.runner.stopAll();
       state.watcher?.close();
       server.stop(true);
     },

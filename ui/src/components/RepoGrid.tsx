@@ -1,13 +1,16 @@
 import { memo, useEffect, useMemo, useRef, useState } from "react";
 import { useShallow } from "zustand/react/shallow";
-import { api } from "../api";
-import { useStore, visibleRepos } from "../store";
+import { groupRepos } from "../grouping";
+import { runFor, useStore, visibleRepos } from "../store";
 import { ago, GLYPH, stateOf } from "../util";
+import { RepoMenu } from "./RepoMenu";
+import { RunChip } from "./RunChip";
 import type { Repo } from "../../../src/core/types";
 
 const RepoCard = memo(function RepoCard({ repo }: { repo: Repo }) {
-  const openPanel = useStore((s) => s.openPanel);
+  const openRepo = useStore((s) => s.openRepo);
   const updatedAt = useStore((s) => s.updatedAt[repo.id]);
+  const run = useStore((s) => runFor(s, repo.id));
   const [pulse, setPulse] = useState(false);
   const first = useRef(true);
 
@@ -24,12 +27,17 @@ const RepoCard = memo(function RepoCard({ repo }: { repo: Repo }) {
 
   const st = repo.status;
   const state = stateOf(repo);
+  const live = run?.status === "working" || run?.status === "waiting" ? ` run-${run.status}` : "";
   return (
     <article
-      className={`card s-${state}${pulse ? " pulse" : ""}`}
-      onClick={() => openPanel(repo.id)}
+      className={`card s-${state}${pulse ? " pulse" : ""}${live}`}
+      onClick={(e) => openRepo(repo.id, e)}
+      onAuxClick={(e) => {
+        // middle click behaves like it does on a link
+        if (e.button === 1) openRepo(repo.id, { metaKey: true });
+      }}
       onKeyDown={(e) => {
-        if (e.key === "Enter") openPanel(repo.id);
+        if (e.key === "Enter") openRepo(repo.id, e);
       }}
       tabIndex={0}
       role="button"
@@ -38,30 +46,20 @@ const RepoCard = memo(function RepoCard({ repo }: { repo: Repo }) {
       <div className="card-top">
         <span className="glyph">{GLYPH[state]}</span>
         <span className="card-name">{repo.name}</span>
-        <span className="card-openers">
-          {(["kitty", "code", "finder"] as const).map((app) => (
-            <button
-              key={app}
-              type="button"
-              className="mini"
-              title={`Open in ${app}`}
-              onClick={(e) => {
-                e.stopPropagation();
-                void api.open(repo.id, app);
-              }}
-            >
-              {app}
-            </button>
-          ))}
+        <span className="card-more">
+          <RepoMenu repo={repo} />
         </span>
       </div>
       <div className="card-mid">
-        <span className="branch">{st?.branch ?? "—"}</span>
+        <span className="branch" title={st?.branch}>
+          {st?.branch ?? "—"}
+        </span>
         {(st?.ahead ?? 0) > 0 && <span className="ahead">↑{st?.ahead}</span>}
         {(st?.behind ?? 0) > 0 && <span className="behind">↓{st?.behind}</span>}
         {repo.error && <span className="err">not a readable repo</span>}
       </div>
       <div className="card-bot">
+        {run && <RunChip run={run} />}
         <span className={st?.files.length ? "changes" : "clean"}>
           {st?.files.length
             ? `${st.files.length} changed`
@@ -79,16 +77,8 @@ const RepoCard = memo(function RepoCard({ repo }: { repo: Repo }) {
 
 export function RepoGrid() {
   const repos = useStore(useShallow(visibleRepos));
-  const groups = useMemo(() => {
-    const m = new Map<string, Repo[]>();
-    for (const r of repos) {
-      const g = r.group || ".";
-      const arr = m.get(g) ?? [];
-      arr.push(r);
-      m.set(g, arr);
-    }
-    return [...m.entries()].sort(([a], [b]) => a.localeCompare(b));
-  }, [repos]);
+  const sort = useStore((s) => s.settings.sort);
+  const groups = useMemo(() => groupRepos(repos, sort), [repos, sort]);
 
   if (repos.length === 0) {
     return (
@@ -102,10 +92,10 @@ export function RepoGrid() {
   }
   return (
     <main className="main">
-      {groups.map(([group, members]) => (
-        <section key={group} className="grid-group">
+      {groups.map(({ key, label, repos: members }) => (
+        <section key={key} className="grid-group">
           <h2 className="grid-head">
-            {group}
+            <span className="head-name">{label}</span>
             <span className="grid-count">{members.length}</span>
           </h2>
           <div className="grid">

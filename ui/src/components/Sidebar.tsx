@@ -1,33 +1,26 @@
 import { useMemo } from "react";
 import { useShallow } from "zustand/react/shallow";
+import { groupRepos } from "../grouping";
 import { useStore, visibleRepos } from "../store";
 import { GLYPH, stateOf } from "../util";
 
 export function Sidebar() {
   const repos = useStore(useShallow(visibleRepos));
-  const openPanel = useStore((s) => s.openPanel);
+  const sort = useStore((s) => s.settings.sort);
+  const openRepo = useStore((s) => s.openRepo);
 
-  const groups = useMemo(() => {
-    const m = new Map<string, typeof repos>();
-    for (const r of repos) {
-      const g = r.group || ".";
-      const arr = m.get(g) ?? [];
-      arr.push(r);
-      m.set(g, arr);
-    }
-    return [...m.entries()].sort(([a], [b]) => a.localeCompare(b));
-  }, [repos]);
+  const groups = useMemo(() => groupRepos(repos, sort), [repos, sort]);
 
   return (
     <aside className="sidebar" aria-label="Repository tree">
-      {groups.map(([group, members]) => {
+      {groups.map(({ key, label, repos: members }) => {
         const dirty = members.filter(
           (r) => (r.status?.files.length ?? 0) > 0,
         ).length;
         return (
-          <section key={group} className="tree-group">
+          <section key={key} className="tree-group">
             <h2 className="tree-head">
-              {group}
+              <span className="head-name">{label}</span>
               <span className="tree-counts">
                 {dirty > 0 && <em className="c-dirty">{dirty}●</em>}
                 <span>{members.length}</span>
@@ -39,7 +32,10 @@ export function Sidebar() {
                   <button
                     type="button"
                     className={`tree-item s-${stateOf(r)}`}
-                    onClick={() => openPanel(r.id)}
+                    onClick={(e) => openRepo(r.id, e)}
+                    onAuxClick={(e) => {
+                      if (e.button === 1) openRepo(r.id, { metaKey: true });
+                    }}
                     title={r.id}
                   >
                     <span className="glyph">{GLYPH[stateOf(r)]}</span>
