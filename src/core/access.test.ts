@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { isGitHub, parseRemote } from "./access";
+import { isGitHub, parseRemote, webUrl } from "./access";
 
 describe("parseRemote", () => {
   test("reads the URL shapes git remotes actually take", () => {
@@ -51,5 +51,40 @@ describe("isGitHub", () => {
     ]) {
       expect(isGitHub(host)).toBe(false);
     }
+  });
+});
+
+describe("webUrl", () => {
+  test("maps the remotes of forges that serve the same path", () => {
+    expect(webUrl("git@github.com:BaruchEric/canopy.git")).toBe(
+      "https://github.com/BaruchEric/canopy",
+    );
+    expect(webUrl("https://github.com/BaruchEric/canopy.git")).toBe(
+      "https://github.com/BaruchEric/canopy",
+    );
+    expect(webUrl("git@gitlab.com:group/thing.git")).toBe(
+      "https://gitlab.com/group/thing",
+    );
+    expect(webUrl("ssh://git@codeberg.org/eric/thing.git")).toBe(
+      "https://codeberg.org/eric/thing",
+    );
+  });
+
+  test("keeps an https remote's own host, port and depth", () => {
+    expect(webUrl("https://git.example.test:8443/team/sub/thing.git")).toBe(
+      "https://git.example.test:8443/team/sub/thing",
+    );
+    // http upgrades, and a token in the URL never reaches the UI
+    expect(webUrl("http://eric:t0ken@git.example.test/eric/thing")).toBe(
+      "https://git.example.test/eric/thing",
+    );
+  });
+
+  test("gives no link rather than a dead one", () => {
+    // ssh to the forgejo mirror on the NAS: git answers there, http does not
+    expect(webUrl("ssh://git@192.168.1.10:2222/eric/_devhub.git")).toBeNull();
+    expect(webUrl("git@git.internal.test:eric/thing.git")).toBeNull();
+    expect(webUrl("/srv/git/thing.git")).toBeNull();
+    expect(webUrl("")).toBeNull();
   });
 });

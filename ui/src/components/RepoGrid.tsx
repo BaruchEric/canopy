@@ -4,6 +4,7 @@ import { groupRepos, sectionKey } from "../grouping";
 import { runFor, useStore, visibleRepos } from "../store";
 import { ago, GLYPH, stateOf } from "../util";
 import { GroupHead } from "./GroupHead";
+import { RepoLink } from "./RepoLink";
 import { RepoMenu } from "./RepoMenu";
 import { Rings } from "./Rings";
 import { RunChip } from "./RunChip";
@@ -50,10 +51,16 @@ const RepoCard = memo(function RepoCard({ repo }: { repo: Repo }) {
       <div className="card-top">
         <span className="glyph">{GLYPH[state]}</span>
         <span className="card-name">{repo.name}</span>
+        {repo.link && <RepoLink url={repo.link} name={repo.name} />}
         <span className="card-more">
           <RepoMenu repo={repo} />
         </span>
       </div>
+      {repo.description && (
+        <p className="card-desc" title={repo.description}>
+          {repo.description}
+        </p>
+      )}
       <div className="card-mid">
         <span className="branch" title={st?.branch}>
           {st?.branch ?? "—"}

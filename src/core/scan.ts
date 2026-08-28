@@ -1,6 +1,7 @@
 import { readdir, realpath, stat } from "node:fs/promises";
 import { basename, join, relative } from "node:path";
 import { getStatus } from "./git";
+import { readMeta } from "./meta";
 import type { Repo, ScanResult } from "./types";
 
 export const DEFAULT_IGNORE = [
@@ -100,17 +101,27 @@ export async function scan(
   const dirs = await findRepoDirs(root, opts);
   const repos = await withLimit(dirs, 8, async (dir): Promise<Repo> => {
     const id = repoId(root, dir);
-    const base: Omit<Repo, "status"> = {
+    // Started here, awaited below: the meta read is its own file and process
+    // work, so it overlaps getStatus instead of queueing in front of it. It
+    // also stays outside the catch — a repo whose status will not parse still
+    // has a remote worth linking to.
+    const meta = readMeta(dir);
+    let status = null;
+    let error: string | undefined;
+    try {
+      status = await getStatus(dir);
+    } catch (err) {
+      error = String(err);
+    }
+    return {
       id,
       name: basename(dir),
       path: dir,
       group: id === "." ? "" : (id.split("/")[0] ?? ""),
+      ...(await meta),
+      status,
+      ...(error === undefined ? {} : { error }),
     };
-    try {
-      return { ...base, status: await getStatus(dir) };
-    } catch (err) {
-      return { ...base, status: null, error: String(err) };
-    }
   });
   return { root, repos, scannedAt: Date.now() };
 }

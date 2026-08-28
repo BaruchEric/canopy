@@ -30,6 +30,21 @@ export function groveUrl(): string {
   return u.toString();
 }
 
+/** A solo window sized to the screen it opens on: wide enough for a diff, as
+ *  tall as the screen allows, centred. availHeight already excludes the menu
+ *  bar and the dock. Clamped at both ends so a laptop does not get a window
+ *  wider than its screen and a 5K display does not get one the width of a
+ *  wall. */
+export function popupFeatures(avail: { width: number; height: number }): string {
+  const w = Math.round(Math.min(1200, Math.max(720, avail.width * 0.55)));
+  const h = Math.min(1500, avail.height);
+  const width = Math.min(w, avail.width);
+  const height = Math.min(h, avail.height);
+  const left = Math.round(Math.max(0, (avail.width - width) / 2));
+  const top = Math.round(Math.max(0, (avail.height - height) / 2));
+  return `popup=yes,width=${width},height=${height},left=${left},top=${top}`;
+}
+
 /**
  * Opens a repo outside the dock. The window is named after the repo, so a
  * second click reuses it instead of stacking duplicates.
@@ -37,9 +52,13 @@ export function groveUrl(): string {
 export function openElsewhere(id: string, target: Exclude<OpenTarget, "dock">) {
   const name = `canopy:${id}`;
   const url = soloUrl(id);
+  const avail = {
+    width: window.screen?.availWidth || 1440,
+    height: window.screen?.availHeight || 900,
+  };
   const win =
     target === "window"
-      ? window.open(url, name, "popup=yes,width=620,height=940")
+      ? window.open(url, name, popupFeatures(avail))
       : window.open(url, name);
   win?.focus();
 }

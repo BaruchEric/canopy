@@ -45,6 +45,11 @@ export interface Repo {
   /** top-level folder under the scan root ("" when the repo is the root) */
   group: string;
   status: RepoStatus | null;
+  /** the remote as a page you can open; absent when no remote maps to one */
+  link?: string;
+  /** one line from the repo's manifest or README. Read at scan time only —
+   *  it is near-static, so a file event does not re-read it. */
+  description?: string;
   error?: string;
 }
 

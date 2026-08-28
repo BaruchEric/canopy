@@ -6,6 +6,7 @@ import { ago, GLYPH, stateOf } from "../util";
 import { ClaudeSection } from "./Claude";
 import { CommitRow } from "./Commit";
 import { DiffView } from "./DiffView";
+import { RepoLink } from "./RepoLink";
 import { RepoMenu } from "./RepoMenu";
 import { Resizer } from "./Resizer";
 import { RunChip } from "./RunChip";
@@ -349,6 +350,7 @@ export function RepoPanel({
         <span className="panel-name" title={repo.path}>
           {repo.id}
         </span>
+        {repo.link && <RepoLink url={repo.link} name={repo.name} />}
         <span className="spacer" />
         <RepoMenu repo={repo} onError={showError} />
         <button
@@ -360,6 +362,12 @@ export function RepoPanel({
           ✕
         </button>
       </header>
+
+      {repo.description && (
+        <p className="panel-desc" title={repo.description}>
+          {repo.description}
+        </p>
+      )}
 
       <div className="panel-sub">
         <span className="branch">{st?.branch ?? "—"}</span>

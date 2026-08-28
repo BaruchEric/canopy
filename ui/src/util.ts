@@ -108,6 +108,17 @@ export const GLYPH: Record<RepoState, string> = {
   clean: "○",
 };
 
+/** A remote link as a person reads it: "github.com/owner/name". Falls back to
+ *  the URL itself if it will not parse. */
+export function linkLabel(url: string): string {
+  try {
+    const u = new URL(url);
+    return `${u.host.replace(/^www\./, "")}${u.pathname}`;
+  } catch {
+    return url;
+  }
+}
+
 export function clamp(n: number, min: number, max: number): number {
   return Math.min(max, Math.max(min, n));
 }

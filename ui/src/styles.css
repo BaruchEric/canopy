@@ -670,6 +670,37 @@ body.resizing {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+/* the remote, one click out of canopy — quiet until the card is under the
+   cursor, like the ⋯ menu it sits beside */
+.card-link {
+  flex: none;
+  display: inline-grid;
+  place-items: center;
+  width: 18px;
+  height: 18px;
+  margin-left: -2px;
+  border-radius: var(--r);
+  color: var(--ink-faint);
+  opacity: 0.5;
+}
+.card:hover .card-link,
+.card:focus-within .card-link,
+.panel-head .card-link {
+  opacity: 1;
+}
+.card-link:hover {
+  color: var(--sky);
+  background: var(--bark2);
+}
+.card-desc {
+  margin: 4px 0 0;
+  font-size: 11.5px;
+  line-height: 1.35;
+  color: var(--ink-dim);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 .card-mid,
 .card-bot {
   display: flex;
@@ -722,7 +753,8 @@ body.resizing {
   padding: 6px 10px 6px 12px;
 }
 :root[data-density="compact"] .card-mid,
-:root[data-density="compact"] .card-bot {
+:root[data-density="compact"] .card-bot,
+:root[data-density="compact"] .card-desc {
   margin-top: 2px;
 }
 :root[data-density="compact"] .card .rings {
@@ -829,6 +861,19 @@ body.resizing {
 }
 .close {
   margin-left: auto;
+}
+/* the repo's own words, under its name — wraps to two lines at most, since
+   the panel has room the card does not */
+.panel-desc {
+  margin: 8px 0 0;
+  padding: 0 14px;
+  font-size: 12px;
+  line-height: 1.4;
+  color: var(--ink-dim);
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  overflow: hidden;
 }
 .panel-sub {
   display: flex;

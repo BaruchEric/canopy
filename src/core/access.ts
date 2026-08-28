@@ -36,17 +36,64 @@ export function parseRemote(url: string): RemoteRef | null {
 export const isGitHub = (host: string): boolean =>
   /(^|\.)github\.com$/i.test(host);
 
-async function remoteUrls(repoPath: string): Promise<string[]> {
+/** Forges that serve the same owner/name path over https as over ssh. An ssh
+ *  remote on any other host tells us nothing about what its web address is. */
+const WEB_FORGES =
+  /(^|\.)(?:github\.com|gitlab\.com|bitbucket\.org|codeberg\.org|git\.sr\.ht)$/i;
+
+/** The remote as a page you can open, or null when we cannot tell.
+ *  An https remote keeps its own host, so a self-hosted forge works; ssh and
+ *  scp remotes only map for the forges above. A link to a host that answers
+ *  git but not http is worse than no link at all. */
+export function webUrl(url: string): string | null {
+  const clean = url.trim();
+  const ref = parseRemote(clean);
+  if (!ref) return null;
+  if (/^https?:\/\//i.test(clean)) {
+    let u: URL;
+    try {
+      u = new URL(clean);
+    } catch {
+      return null;
+    }
+    // Credentials belong in the remote, never in a link the UI renders.
+    u.username = "";
+    u.password = "";
+    u.search = "";
+    u.hash = "";
+    u.protocol = "https:";
+    u.pathname = u.pathname.replace(/\.git$/, "").replace(/\/+$/, "");
+    return u.toString().replace(/\/$/, "");
+  }
+  if (!WEB_FORGES.test(ref.host)) return null;
+  return `https://${ref.host}/${ref.owner}/${ref.name}`;
+}
+
+/** Every configured remote, in `git config` order, as name/url pairs. */
+export async function listRemotes(
+  repoPath: string,
+): Promise<{ name: string; url: string }[]> {
   const r = await git(repoPath, [
     "config",
     "--get-regexp",
     String.raw`^remote\..*\.url`,
   ]);
   if (r.code !== 0) return [];
-  return r.stdout
-    .split("\n")
-    .map((line) => line.slice(line.indexOf(" ") + 1).trim())
-    .filter(Boolean);
+  const out: { name: string; url: string }[] = [];
+  for (const line of r.stdout.split("\n")) {
+    const sp = line.indexOf(" ");
+    if (sp === -1) continue;
+    const url = line.slice(sp + 1).trim();
+    // remote.<name>.url — the name itself may contain dots
+    const key = line.slice(0, sp);
+    const name = key.slice("remote.".length, key.lastIndexOf(".url"));
+    if (url && name) out.push({ name, url });
+  }
+  return out;
+}
+
+async function remoteUrls(repoPath: string): Promise<string[]> {
+  return (await listRemotes(repoPath)).map((r) => r.url);
 }
 
 /** The signed-in GitHub account, or null when gh is missing or logged out. */
