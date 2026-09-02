@@ -1,6 +1,6 @@
 # canopy
 
-A multi-repo git cockpit: point it at a directory and see every git repo under it as a live tree — then drill into changes, stage, commit (with AI-suggested messages), push, open repos in kitty / Terminal / VS Code / Finder, and group them into named workspaces. Web UI + full CLI.
+A multi-repo git cockpit: point it at a directory and see every git repo under it as a live tree — then drill into changes, stage, commit (with AI-suggested messages), push, open repos in kitty / Terminal / VS Code / Finder or in an interactive Claude Code session, and group them into named workspaces. Web UI + full CLI.
 
 The write-capable, many-repo complement to [diffscope](../diffscope) (single-repo, read-only).
 
@@ -21,7 +21,8 @@ canopy commit <repo> -m "msg"      # commit staged changes
 canopy commit <repo> --ai --all --push   # AI message, stage everything, push
 canopy suggest <repo>              # print an AI-suggested commit message
 canopy push <repo> | pull <repo>
-canopy open <repo> --app kitty     # kitty | terminal | code | finder
+canopy open <repo> --app kitty     # kitty | terminal | code | finder | agent
+canopy open <repo> --app agent     # interactive Claude Code in a terminal at the repo
 canopy ws                          # list workspaces
 canopy ws create <name> <dirs...>  # group repos
 canopy ws open <name> --app code   # one multi-root VS Code window
@@ -31,7 +32,7 @@ canopy ws open <name> --app kitty  # one kitty window, a tab per repo
 ## Web UI
 
 - **Left rail** — the repo tree grouped by topic folder, with dirty counts rolled up. Drag its edge to resize; the panel-left button (or `[`) folds it away.
-- **Center** — a dense card grid (auto-fills columns; ~16 across on a 7680px screen). Cards pulse when a repo changes on disk. Every card has a ⋯ menu: hand a job to Claude (commit, push, commit and push, deploy, ask claude…) or open the repo in kitty / Terminal / VS Code / Finder.
+- **Center** — a dense card grid (auto-fills columns; ~16 across on a 7680px screen). Cards pulse when a repo changes on disk. Every card has a ⋯ menu: hand a job to Claude (commit, push, commit and push, deploy, ask claude…), start an interactive Claude Code session at the repo (**agent**: a kitty window when kitty is installed, Terminal otherwise, held open at a prompt when the session ends), or open the repo in kitty / Terminal / VS Code / Finder.
 - **Runs** — a Claude job opens a pre-flight dialog (what will happen, an optional note), then a console that follows Claude step by step: every command with its output, Claude's own remarks, and a lichen "needs you" block whenever Claude asks a question or wants permission for something outside the job (allow once, allow all for this run, or deny). While a run is going the card's leaf edge carries sap; when it waits, the edge and a top-bar pill turn lichen. Finished runs stay on the card until dismissed. A commit or push that ends without moving git status says "no change" instead of "done", so a run that found nothing to do is not mistaken for one that did something.
 - **Right dock** — click any repo to pin a full detail panel: file list with stage checkboxes, inline diffs, commit box with **suggest** (Claude-written message), commit / commit+push, pull/push, openers, workspace membership, the commit log, and the repo's Claude sessions (below). Every commit in the log opens in place: the full hash (click to copy), author and time, the message body, then each file it touched with its status letter, lines added and removed, and a short bar (moss for added, rust for removed) scaled to the commit's biggest file. Click a file for the diff that commit made to it. Merges show against their first parent. The commits listed under a Claude session open the same way. Panels stack side-by-side — on an ultrawide you can hold half a dozen repos open at once.
 - **Rings** — a card whose repo Claude has worked in this month carries a thin strip along its bottom edge: one column per local day, tinted in sap by that day's API-equivalent spend on a log scale shared by the whole grove. A quiet month leaves a faint ruler; a card Claude has never touched has no strip. Hover for the month's totals. The panel shows the same strip taller, with a tooltip per day.

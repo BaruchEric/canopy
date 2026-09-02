@@ -22,12 +22,13 @@ usage:
   canopy commit <repo> --ai [--all] [--push]   AI message; --all stages everything
   canopy suggest <repo>              print an AI-suggested commit message
   canopy push <repo> | pull <repo>
-  canopy open <repo> [--app kitty|terminal|code|finder]
+  canopy open <repo> [--app kitty|terminal|code|finder|agent]
+                                     agent: interactive Claude Code in a terminal
   canopy ws                          list workspaces
   canopy ws create <name> <dirs...>  group repos into a workspace
   canopy ws add <name> <dirs...>
   canopy ws rm <name> [dir]          remove a repo, or the whole workspace
-  canopy ws open <name> [--app code|kitty|terminal|finder]
+  canopy ws open <name> [--app code|kitty|terminal|finder|agent]
 `;
 
 function flag(args: string[], name: string): boolean {
@@ -47,7 +48,7 @@ function opt(args: string[], name: string): string | undefined {
 function appOpt(args: string[], fallback: OpenerId): OpenerId {
   const v = opt(args, "--app") ?? fallback;
   if (!isOpenerId(v)) {
-    console.error(`unknown app: ${v} (use kitty, terminal, code, or finder)`);
+    console.error(`unknown app: ${v} (use kitty, terminal, code, finder, or agent)`);
     process.exit(1);
   }
   return v;

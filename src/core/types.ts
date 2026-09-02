@@ -115,6 +115,14 @@ export interface CommitDetail {
   files: CommitFile[];
 }
 
+/* ---------- openers: where a repo opens ---------- */
+
+/** Apps a repo opens in. `agent` is Claude Code itself: an interactive
+ *  session in a terminal window at the repo, kitty when it is installed and
+ *  Terminal otherwise. */
+export const OPENER_IDS = ["kitty", "terminal", "code", "finder", "agent"] as const;
+export type OpenerId = (typeof OPENER_IDS)[number];
+
 /* ---------- runs: a job handed to Claude Code for one repo ---------- */
 
 export const RUN_ACTIONS = [

@@ -10,11 +10,12 @@ import { RepoLink } from "./RepoLink";
 import { RepoMenu } from "./RepoMenu";
 import { Resizer } from "./Resizer";
 import { RunChip } from "./RunChip";
-import type {
-  LogEntry,
-  PushAccess,
-  Repo,
-  RepoFile,
+import {
+  OPENER_IDS,
+  type LogEntry,
+  type PushAccess,
+  type Repo,
+  type RepoFile,
 } from "../../../src/core/types";
 
 function FileRow({
@@ -392,11 +393,16 @@ export function RepoPanel({
       )}
 
       <div className="panel-actions">
-        {(["kitty", "terminal", "code", "finder"] as const).map((app) => (
+        {OPENER_IDS.map((app) => (
           <button
             key={app}
             type="button"
             className="mini"
+            title={
+              app === "agent"
+                ? "Start an interactive Claude Code session in a terminal here"
+                : undefined
+            }
             onClick={() =>
               void run(`open-${app}`, async () => {
                 await api.open(id, app);

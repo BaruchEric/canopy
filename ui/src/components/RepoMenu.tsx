@@ -5,12 +5,15 @@ import { api } from "../api";
 import { ACTIONS, canRun } from "../../../src/core/actions";
 import { activeRunFor, useStore } from "../store";
 import {
+  OPENER_IDS,
   RUN_ACTIONS,
+  type OpenerId,
   type Repo,
   type RunAction,
 } from "../../../src/core/types";
 
-const OPENERS = ["kitty", "terminal", "code", "finder"] as const;
+/** The "open in" row. The agent lives under "with claude" instead. */
+const OPENERS = OPENER_IDS.filter((app) => app !== "agent");
 
 /** What justifies the action, shown at the right edge of its row. */
 function fact(repo: Repo, action: RunAction): string {
@@ -117,7 +120,7 @@ export function RepoMenu({
     }
   };
 
-  const openIn = async (app: (typeof OPENERS)[number]) => {
+  const openIn = async (app: OpenerId) => {
     setOpen(false);
     try {
       await api.open(repo.id, app);
@@ -227,6 +230,16 @@ export function RepoMenu({
                 </button>
               );
             })}
+            <button
+              type="button"
+              role="menuitem"
+              className="menu-item"
+              title="Start an interactive Claude Code session in a terminal at this repo"
+              onClick={() => void openIn("agent")}
+            >
+              <span className="menu-text">agent</span>
+              <span className="menu-fact">interactive, in a terminal</span>
+            </button>
             <div className="menu-label">open in</div>
             <div className="menu-row">
               {OPENERS.map((app) => (
