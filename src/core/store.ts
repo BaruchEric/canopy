@@ -1,7 +1,13 @@
 import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join } from "node:path";
-import type { CanopyConfig, Workspace } from "./types";
+import {
+  LAUNCH_SOURCE,
+  type CanopyConfig,
+  type SourceInput,
+  type StoredSource,
+  type Workspace,
+} from "./types";
 
 export const DEFAULT_PORT = 7850;
 
@@ -13,8 +19,20 @@ const defaults = (): CanopyConfig => ({
   ignore: [],
   workspaces: [],
   recentRoots: [],
+  sources: [],
   historyBin: null,
 });
+
+/** A hand-edited source survives only when every field it needs is there;
+ *  a half entry would later become a repo id nothing can resolve. */
+function isStoredSource(v: unknown): v is StoredSource {
+  if (!v || typeof v !== "object") return false;
+  const s = v as Record<string, unknown>;
+  if (typeof s["id"] !== "string" || !s["id"] || s["id"] === LAUNCH_SOURCE) return false;
+  if (typeof s["label"] !== "string" || typeof s["path"] !== "string") return false;
+  if (s["kind"] === "local") return true;
+  return s["kind"] === "ssh" && typeof s["host"] === "string" && s["host"] !== "";
+}
 
 export function configDir(): string {
   return (
@@ -36,6 +54,7 @@ function normalize(parsed: Partial<CanopyConfig>): CanopyConfig {
     maxDepth: Number.isFinite(cfg.maxDepth) ? cfg.maxDepth : base.maxDepth,
     ignore: Array.isArray(cfg.ignore) ? cfg.ignore : [],
     recentRoots: Array.isArray(cfg.recentRoots) ? cfg.recentRoots : [],
+    sources: (Array.isArray(cfg.sources) ? cfg.sources : []).filter(isStoredSource),
     historyBin:
       typeof cfg.historyBin === "string" && cfg.historyBin ? cfg.historyBin : null,
     workspaces: (Array.isArray(cfg.workspaces) ? cfg.workspaces : []).filter(
@@ -123,5 +142,63 @@ export async function removeWorkspace(
       cfg.workspaces = cfg.workspaces.filter((w) => w.name !== name);
     }
     return cfg.workspaces;
+  });
+}
+
+/* ---------- sources ---------- */
+
+/** A label as an id: lowercase, one dash between words, nothing a URL or a
+ *  repo id would trip on. */
+export function slugify(label: string): string {
+  const slug = label
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "");
+  return slug || "source";
+}
+
+/** The first of `base`, `base-2`, `base-3`… not already taken. */
+export function uniqueId(base: string, taken: Iterable<string>): string {
+  const used = new Set([...taken, LAUNCH_SOURCE]);
+  if (!used.has(base)) return base;
+  for (let n = 2; ; n++) {
+    const id = `${base}-${n}`;
+    if (!used.has(id)) return id;
+  }
+}
+
+/** The label a source gets when none was given. */
+export function defaultLabel(input: SourceInput): string {
+  const base = input.path.replace(/\/+$/, "").split("/").pop() || input.path;
+  return input.kind === "ssh" ? `${input.host}:${base}` : base;
+}
+
+const samePlace = (a: SourceInput, b: StoredSource): boolean =>
+  a.kind === b.kind && a.path === b.path && (a.kind !== "ssh" || b.kind !== "ssh" || a.host === b.host);
+
+/** Persists a source. The path is stored as given: the server resolves it
+ *  before calling, since only the server can ask a remote host. */
+export async function addSource(input: SourceInput): Promise<StoredSource> {
+  return withConfig((cfg) => {
+    const dup = cfg.sources.find((s) => samePlace(input, s));
+    if (dup) throw new Error(`already added as ${dup.label}`);
+    const label = input.label?.trim() || defaultLabel(input);
+    const id = uniqueId(
+      slugify(label),
+      cfg.sources.map((s) => s.id),
+    );
+    const stored: StoredSource =
+      input.kind === "ssh"
+        ? { id, label, kind: "ssh", host: input.host, path: input.path }
+        : { id, label, kind: "local", path: input.path };
+    cfg.sources.push(stored);
+    return stored;
+  });
+}
+
+export async function removeSource(id: string): Promise<StoredSource[]> {
+  return withConfig((cfg) => {
+    cfg.sources = cfg.sources.filter((s) => s.id !== id);
+    return cfg.sources;
   });
 }

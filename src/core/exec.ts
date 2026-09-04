@@ -1,3 +1,7 @@
+import { mkdirSync } from "node:fs";
+import { parseLocator, remoteCommand, sshArgs } from "./host";
+import { configDir } from "./store";
+
 export interface ExecResult {
   code: number;
   stdout: string;
@@ -32,10 +36,37 @@ export async function exec(
   }
 }
 
+/** Where ssh keeps its control sockets: the config dir, made once. */
+let controlDir: string | null = null;
+function sshControlDir(): string {
+  if (controlDir === null) {
+    controlDir = configDir();
+    try {
+      mkdirSync(controlDir, { recursive: true });
+    } catch {
+      // a missing dir only costs the shared connection; ssh still works
+    }
+  }
+  return controlDir;
+}
+
+/** Run `cmd` where the target lives: here when `host` is null, else over
+ *  ssh. Remote runs assume a POSIX shell and key-based login. */
+export async function onHost(
+  host: string | null,
+  cmd: string[],
+  opts: { timeoutMs?: number } = {},
+): Promise<ExecResult> {
+  if (host === null) return exec(cmd, opts);
+  return exec([...sshArgs(host, sshControlDir()), remoteCommand(cmd)], opts);
+}
+
+/** git in a repo, wherever the repo's locator says it is. */
 export async function git(
   repoPath: string,
   args: string[],
   timeoutMs = 30_000,
 ): Promise<ExecResult> {
-  return exec(["git", "-C", repoPath, ...args], { timeoutMs });
+  const { host, path } = parseLocator(repoPath);
+  return onHost(host, ["git", "-C", path, ...args], { timeoutMs });
 }

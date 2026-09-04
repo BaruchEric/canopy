@@ -19,8 +19,8 @@ function repo(
     ...status,
   };
   return error
-    ? { id, name, path: `/x/${id}`, group: "g", status: null, error }
-    : { id, name, path: `/x/${id}`, group: "g", status: st };
+    ? { id, name, path: `/x/${id}`, group: "g", source: "launch", status: null, error }
+    : { id, name, path: `/x/${id}`, group: "g", source: "launch", status: st };
 }
 
 const file = { path: "a", index: ".", worktree: "M", untracked: false, conflicted: false };

@@ -4,7 +4,19 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { exec } from "./exec";
 import { commit, getStatus, stageFile } from "./git";
-import { findRepoDirs, repoId, scan } from "./scan";
+import {
+  findCommand,
+  findRepoDirs,
+  launchSource,
+  pruneNested,
+  repoId,
+  repoRel,
+  scan,
+  scanSource,
+  sourceGroup,
+  sourceRepoId,
+} from "./scan";
+import type { Source } from "./types";
 
 let root = "";
 
@@ -40,6 +52,76 @@ describe("findRepoDirs", () => {
   });
 });
 
+describe("remote find", () => {
+  test("the find mirrors the walk: .git down to the depth, hidden and ignored pruned", () => {
+    const cmd = findCommand("/home/me/dev", { maxDepth: 2, ignore: ["node_modules"] });
+    expect(cmd.slice(0, 3)).toEqual(["find", "-L", "/home/me/dev"]);
+    expect(cmd.slice(cmd.indexOf("-maxdepth"), cmd.indexOf("-maxdepth") + 2)).toEqual([
+      "-maxdepth",
+      "3",
+    ]);
+    expect(cmd).toContain("-print0");
+    expect(cmd.slice(-10)).toEqual([
+      "(",
+      "(",
+      "-name",
+      ".*",
+      "-o",
+      "-name",
+      "node_modules",
+      ")",
+      "-prune",
+      ")",
+    ]);
+  });
+
+  test("a repo inside a repo counts once, like the local walk", () => {
+    expect(
+      pruneNested(["/d/a/repo1/sub", "/d/a/repo1", "/d/b/repo2", "/d/a/repo1", "/d/a/repo10"]),
+    ).toEqual(["/d/a/repo1", "/d/a/repo10", "/d/b/repo2"]);
+  });
+});
+
+describe("source ids and groups", () => {
+  const extra: Source = {
+    id: "wsl-dev",
+    kind: "ssh",
+    host: "wsl",
+    path: "/home/me/dev",
+    label: "wsl:dev",
+    launch: false,
+  };
+  const launch = launchSource("/Users/me/dev");
+
+  test("launch root repos keep bare ids; extra sources prefix theirs", () => {
+    expect(sourceRepoId(launch, "web-apps/ripe")).toBe("web-apps/ripe");
+    expect(sourceRepoId(extra, "web-apps/ripe")).toBe("wsl-dev:web-apps/ripe");
+    expect(sourceRepoId(extra, ".")).toBe("wsl-dev:.");
+  });
+
+  test("the relative path comes back out of the id", () => {
+    expect(repoRel({ id: "web-apps/ripe", source: "launch" })).toBe("web-apps/ripe");
+    expect(repoRel({ id: "wsl-dev:web-apps/ripe", source: "wsl-dev" })).toBe("web-apps/ripe");
+    expect(repoRel({ id: "wsl-dev:.", source: "wsl-dev" })).toBe(".");
+  });
+
+  test("groups: the top folder here, the label then the folder elsewhere", () => {
+    expect(sourceGroup(launch, "web-apps/ripe")).toBe("web-apps");
+    expect(sourceGroup(launch, ".")).toBe("");
+    expect(sourceGroup(extra, "web-apps/ripe")).toBe("wsl:dev/web-apps");
+    expect(sourceGroup(extra, "ripe")).toBe("wsl:dev/ripe");
+    expect(sourceGroup(extra, ".")).toBe("wsl:dev");
+  });
+
+  test("a local extra source scans like the launch root, with prefixed ids", async () => {
+    const src: Source = { id: "extra", kind: "local", path: root, label: "extra", launch: false };
+    const repos = await scanSource(src, { maxDepth: 2 });
+    expect(repos.map((r) => r.id)).toEqual(["extra:a/repo1", "extra:a/repo2"]);
+    expect(repos.every((r) => r.source === "extra" && r.host === undefined)).toBe(true);
+    expect(repos[0]?.group).toBe("extra/a");
+  });
+});
+
 describe("scan + real git round trip", () => {
   test("status, stage, commit against a real repo", async () => {
     const repo = join(root, "a/repo1");
@@ -70,5 +152,9 @@ describe("scan + real git round trip", () => {
     const r2 = result.repos.find((r) => r.id === "a/repo2");
     expect(r2?.status).toBeNull();
     expect(r2?.error).toBeTruthy();
+    expect(result.sources).toHaveLength(1);
+    expect(result.sources[0]?.launch).toBe(true);
+    expect(result.sources[0]?.repos).toBe(result.repos.length);
+    expect(result.repos.every((r) => r.source === "launch")).toBe(true);
   });
 });

@@ -51,6 +51,7 @@ export function Sidebar() {
                     >
                       <span className="glyph">{GLYPH[stateOf(r)]}</span>
                       <span className="tree-name">{r.name}</span>
+                      {r.host && <span className="host-tag">{r.host}</span>}
                       {(r.status?.files.length ?? 0) > 0 && (
                         <span className="tree-n">{r.status?.files.length}</span>
                       )}

@@ -27,6 +27,10 @@ canopy ws                          # list workspaces
 canopy ws create <name> <dirs...>  # group repos
 canopy ws open <name> --app code   # one multi-root VS Code window
 canopy ws open <name> --app kitty  # one kitty window, a tab per repo
+canopy source                      # the extra folders the UI scans
+canopy source add ~/work           # scan another folder on this machine
+canopy source add ~/dev --host wsl # …or one on an ssh host
+canopy source rm <id>              # stop scanning it
 ```
 
 ## Web UI
@@ -36,6 +40,7 @@ canopy ws open <name> --app kitty  # one kitty window, a tab per repo
 - **Runs** — a Claude job opens a pre-flight dialog (what will happen, an optional note), then a console that follows Claude step by step: every command with its output, Claude's own remarks, and a lichen "needs you" block whenever Claude asks a question or wants permission for something outside the job (allow once, allow all for this run, or deny). While a run is going the card's leaf edge carries sap; when it waits, the edge and a top-bar pill turn lichen. Finished runs stay on the card until dismissed. A commit or push that ends without moving git status says "no change" instead of "done", so a run that found nothing to do is not mistaken for one that did something.
 - **Right dock** — click any repo to pin a full detail panel: file list with stage checkboxes, inline diffs, commit box with **suggest** (Claude-written message), commit / commit+push, pull/push, openers, workspace membership, the commit log, and the repo's Claude sessions (below). Every commit in the log opens in place: the full hash (click to copy), author and time, the message body, then each file it touched with its status letter, lines added and removed, and a short bar (moss for added, rust for removed) scaled to the commit's biggest file. Click a file for the diff that commit made to it. Merges show against their first parent. The commits listed under a Claude session open the same way. Panels stack side-by-side — on an ultrawide you can hold half a dozen repos open at once.
 - **Rings** — a card whose repo Claude has worked in this month carries a thin strip along its bottom edge: one column per local day, tinted in sap by that day's API-equivalent spend on a log scale shared by the whole grove. A quiet month leaves a faint ruler; a card Claude has never touched has no strip. Hover for the month's totals. The panel shows the same strip taller, with a tooltip per day.
+- **Folders** — the root path in the top bar opens the list of folders canopy scans: the one it was started on, plus any you add, each with its repo count, a rescan, and a remove. Add a folder on this machine (changes show up live through a file watcher) or one on another host over ssh: pick a host from `~/.ssh/config`, give a path (`~/dev` works) or hit **browse** to walk the folders there one level at a time (repos are marked; breadcrumbs go back up; "use this folder" fills the path), and its repos join the grove with a host tag on the card. Remote repos get status, log, diffs, stage, commit, push, pull, and AI-suggested messages the same way, every git call riding one shared ssh connection per host; they are re-read every five minutes instead of watched. The kitty, Terminal, and agent openers start an ssh session at the repo; VS Code opens it through Remote-SSH; Finder cannot. Claude runs stay local: the run action refuses a remote repo. Repos under an extra folder carry ids like `wsl-dev:web-apps/ripe` and group under the folder's label. A remote host needs key-based login, git on its PATH, and a POSIX shell.
 - **Top bar** — workspace tabs (with one-click "open all in code/kitty"), a grouping switch, a needs-attention pill that doubles as a live count, a filters pill, and a repo filter (`/` to focus, `d` to toggle needs-attention, `f` for the filter menu, `s` to cycle grouping).
 - **Filters** — the pill opens chips for status facets (changes, unpushed, behind, conflicts, off main, no upstream, unreadable) and, when the grove commits as more than one person, one chip per git identity. Each chip carries the count it would show. Lit chips in a row add up; the rows, the attention toggle, and the text box narrow each other. The pill reads "2 filters" while anything is lit so a thinned grove is never mistaken for a small one.
 - **Grouping** — `folder` mirrors the disk layout; `activity` puts repos with changes first, then unpushed, behind, quiet, unreadable; `recent` buckets by last commit (today, this week, this month, this season, dormant); `name` is one flat list; `user` buckets by the identity each repo commits as (`user.name` / `user.email` as git resolves them inside that repo, so a per-folder `includeIf` shows up), with "no identity" and unreadable repos last. The tree and the grid always agree, and that includes folding: click a section heading in either and it folds in both, remembered per grouping mode.
@@ -60,7 +65,8 @@ canopy finds the CLI at `historyBin` in its config, else `claude-history` on PAT
 
 - Config + workspaces: `~/.config/canopy/config.json` (override dir with `$CANOPY_CONFIG_DIR`). `historyBin` there points at the claude-history CLI when it is not on PATH.
 - Generated workspace files (`.code-workspace`, kitty sessions): `~/.config/canopy/workspaces/`.
-- Workspaces store absolute repo paths, so they work from any scan root.
+- Workspaces store absolute repo paths, so they work from any scan root. A repo on another host is stored as `ssh://<host><path>`.
+- Extra folders live under `sources` in the same config, each with an id, a label, a kind (`local` or `ssh`), the host for ssh, and the absolute path. The launch root is never stored. ssh control sockets sit next to the config as `ssh-*`.
 
 ## Development
 

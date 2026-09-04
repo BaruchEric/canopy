@@ -1,6 +1,8 @@
 import { readdir, readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { listRemotes, webUrl } from "./access";
+import { onHost } from "./exec";
+import { parseLocator } from "./host";
 
 /** A card holds one line. Longer than this and it is a paragraph, not a
  *  description. */
@@ -108,7 +110,20 @@ const MANIFESTS: { file: string; parse: (text: string) => string | null }[] = [
   { file: "composer.json", parse: fromJsonManifest },
 ];
 
-const README = /^readme(\.(md|markdown|mdx|rst|txt))?$/i;
+const README_NAMES = [
+  "readme",
+  "readme.md",
+  "readme.markdown",
+  "readme.mdx",
+  "readme.rst",
+  "readme.txt",
+];
+
+/** Every file a description can come from, lowercased. */
+const CANDIDATES = [...MANIFESTS.map((m) => m.file), ...README_NAMES];
+
+/** enough for any manifest, and for a README's opening paragraph */
+const READ_LIMIT = 64_000;
 
 /** What a card says about a repo beyond its git state. Both halves are
  *  best-effort: anything unreadable is simply left out. */
@@ -117,35 +132,95 @@ export interface RepoMeta {
   description?: string;
 }
 
-async function readDescription(repoPath: string): Promise<string | undefined> {
-  let entries: string[];
+/** The candidate files a repo has, keyed by lowercased name. */
+async function readCandidatesLocal(dir: string): Promise<Map<string, string>> {
+  const out = new Map<string, string>();
+  let entries;
   try {
-    entries = (await readdir(repoPath, { withFileTypes: true }))
-      .filter((e) => e.isFile() || e.isSymbolicLink())
-      .map((e) => e.name);
+    entries = await readdir(dir, { withFileTypes: true });
   } catch {
-    return undefined;
+    return out;
   }
-  const byLower = new Map(entries.map((n) => [n.toLowerCase(), n]));
-  const read = async (name: string): Promise<string | null> => {
+  for (const e of entries) {
+    const lower = e.name.toLowerCase();
+    if (!CANDIDATES.includes(lower) || !(e.isFile() || e.isSymbolicLink())) continue;
     try {
-      // enough for any manifest, and for a README's opening paragraph
-      const text = await readFile(join(repoPath, name), "utf8");
-      return text.slice(0, 64_000);
+      const text = await readFile(join(dir, e.name), "utf8");
+      out.set(lower, text.slice(0, READ_LIMIT));
     } catch {
-      return null;
+      // unreadable: leave it out
     }
-  };
-  for (const m of MANIFESTS) {
-    const name = byLower.get(m.file);
+  }
+  return out;
+}
+
+/** One ssh round trip for every candidate: `find` names them, and a tiny
+ *  shell prints each as `name\n<head>\n\0`. */
+export function remoteCandidatesCommand(dir: string): string[] {
+  const names = CANDIDATES.flatMap((n, i) =>
+    i === 0 ? ["-iname", n] : ["-o", "-iname", n],
+  );
+  return [
+    "find",
+    dir,
+    "-mindepth",
+    "1",
+    "-maxdepth",
+    "1",
+    "(",
+    "-type",
+    "f",
+    "-o",
+    "-type",
+    "l",
+    ")",
+    "(",
+    ...names,
+    ")",
+    "-exec",
+    "sh",
+    "-c",
+    `printf '%s\\n' "$1"; head -c ${READ_LIMIT} -- "$1"; printf '\\n\\0'`,
+    "_",
+    "{}",
+    ";",
+  ];
+}
+
+/** Undo the packing above: name, newline, text, then a NUL per file. */
+export function parseRemoteCandidates(text: string): Map<string, string> {
+  const out = new Map<string, string>();
+  for (const chunk of text.split("\0")) {
+    const nl = chunk.indexOf("\n");
+    if (nl === -1) continue;
+    const name = chunk.slice(0, nl).split("/").pop() ?? "";
     if (!name) continue;
-    const text = await read(name);
+    out.set(name.toLowerCase(), chunk.slice(nl + 1).replace(/\n$/, ""));
+  }
+  return out;
+}
+
+async function readCandidatesRemote(
+  host: string,
+  dir: string,
+): Promise<Map<string, string>> {
+  const r = await onHost(host, remoteCandidatesCommand(dir), { timeoutMs: 30_000 });
+  return parseRemoteCandidates(r.stdout);
+}
+
+async function readDescription(repoPath: string): Promise<string | undefined> {
+  const { host, path } = parseLocator(repoPath);
+  const files =
+    host === null
+      ? await readCandidatesLocal(path)
+      : await readCandidatesRemote(host, path);
+  for (const m of MANIFESTS) {
+    const text = files.get(m.file);
     const desc = text && m.parse(text);
     if (desc) return desc;
   }
-  const readme = entries.find((n) => README.test(n));
-  if (readme) {
-    const text = await read(readme);
+  for (const name of README_NAMES) {
+    const text = files.get(name);
     const desc = text && fromReadme(text);
     if (desc) return desc;
   }

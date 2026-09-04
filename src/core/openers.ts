@@ -1,10 +1,55 @@
 import { mkdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { exec } from "./exec";
+import { parseLocator, shellQuote } from "./host";
 import { configDir } from "./store";
 import { OPENER_IDS, type OpenerId } from "./types";
 
 export { OPENER_IDS, type OpenerId };
+
+/* ---------- repos on another host: an ssh session in place of a cd ---------- */
+
+/** What a terminal runs to land at a remote repo: the agent there, or the
+ *  login shell. `-t` gets a tty so either is interactive. */
+export function sshSessionArgs(
+  host: string,
+  path: string,
+  what: "shell" | "agent",
+): string[] {
+  const cmd = what === "agent" ? "claude" : 'exec "$SHELL" -l';
+  return ["ssh", "-t", "--", host, `cd ${shellQuote(path)} && ${cmd}`];
+}
+
+/** VS Code's Remote-SSH folder form, for the workspace file and the CLI. */
+export const remoteFolderUri = (host: string, path: string): string =>
+  `vscode-remote://ssh-remote+${host}${path}`;
+
+function remoteCommandFor(
+  app: Exclude<OpenerId, "agent">,
+  host: string,
+  path: string,
+): string[] {
+  switch (app) {
+    case "kitty":
+      return [
+        "open",
+        "-na",
+        "kitty.app",
+        "--args",
+        "--single-instance",
+        ...sshSessionArgs(host, path, "shell"),
+      ];
+    case "terminal":
+      return terminalLineArgs(sshSessionArgs(host, path, "shell").map(shellQuote).join(" "));
+    case "code":
+      if (!Bun.which("code")) {
+        throw new Error("the code CLI is not on PATH; a remote folder needs it");
+      }
+      return ["code", "--folder-uri", remoteFolderUri(host, path)];
+    case "finder":
+      throw new Error("Finder cannot show a folder on another host");
+  }
+}
 
 function commandFor(app: Exclude<OpenerId, "agent">, path: string): string[] {
   switch (app) {
@@ -60,18 +105,13 @@ export function kittyAgentArgs(path: string, shell = userShell()): string[] {
   ];
 }
 
-function shellQuote(s: string): string {
-  return `'${s.replace(/'/g, `'\\''`)}'`;
-}
-
 function appleScriptString(s: string): string {
   return `"${s.replace(/[\\"]/g, (c) => `\\${c}`)}"`;
 }
 
-/** Terminal.app: a new window whose login shell runs the agent at the repo.
- *  The path is quoted for that shell, then the whole line for AppleScript. */
-export function terminalAgentArgs(path: string): string[] {
-  const line = `cd ${shellQuote(path)} && claude`;
+/** Terminal.app: a new window whose login shell runs `line`, quoted once
+ *  more for AppleScript. */
+function terminalLineArgs(line: string): string[] {
   return [
     "osascript",
     "-e",
@@ -85,6 +125,18 @@ export function terminalAgentArgs(path: string): string[] {
   ];
 }
 
+/** Terminal.app running the agent at the repo: the path is quoted for the
+ *  shell, then the whole line for AppleScript. A remote repo gets an ssh
+ *  session that runs the agent there instead. */
+export function terminalAgentArgs(path: string): string[] {
+  const { host, path: dir } = parseLocator(path);
+  return terminalLineArgs(
+    host === null
+      ? `cd ${shellQuote(dir)} && claude`
+      : sshSessionArgs(host, dir, "agent").map(shellQuote).join(" "),
+  );
+}
+
 async function openAgentInTerminal(path: string): Promise<void> {
   const t = await exec(terminalAgentArgs(path), { timeoutMs: 15_000 });
   if (t.code !== 0) {
@@ -92,16 +144,33 @@ async function openAgentInTerminal(path: string): Promise<void> {
   }
 }
 
+/** A held kitty window running the agent wherever the repo is. */
+function kittyAgentArgsFor(path: string): string[] {
+  const { host, path: dir } = parseLocator(path);
+  if (host === null) return kittyAgentArgs(dir);
+  return [
+    "open",
+    "-na",
+    "kitty.app",
+    "--args",
+    "--single-instance",
+    "--hold",
+    ...sshSessionArgs(host, dir, "agent"),
+  ];
+}
+
 /** kitty first; when `open` cannot find it, Terminal. */
 async function openAgent(path: string): Promise<void> {
-  const k = await exec(kittyAgentArgs(path), { timeoutMs: 15_000 });
+  const k = await exec(kittyAgentArgsFor(path), { timeoutMs: 15_000 });
   if (k.code === 0) return;
   await openAgentInTerminal(path);
 }
 
 export async function openIn(app: OpenerId, path: string): Promise<void> {
   if (app === "agent") return openAgent(path);
-  const r = await exec(commandFor(app, path), { timeoutMs: 15_000 });
+  const { host, path: dir } = parseLocator(path);
+  const cmd = host === null ? commandFor(app, dir) : remoteCommandFor(app, host, dir);
+  const r = await exec(cmd, { timeoutMs: 15_000 });
   if (r.code !== 0) throw new Error(r.stderr.trim() || `failed to open ${app}`);
 }
 
@@ -128,8 +197,19 @@ export function kittySessionLines(
   const launch =
     app === "agent" ? `launch --hold ${agentShellCommand(shell).join(" ")}` : "launch";
   return (
-    paths.map((p) => `new_tab ${p.split("/").pop()}\ncd ${p}\n${launch}`).join("\n") +
-    "\n"
+    paths
+      .map((p) => {
+        const { host, path } = parseLocator(p);
+        const name = path.split("/").pop();
+        if (host === null) return `new_tab ${name}\ncd ${path}\n${launch}`;
+        // kitty splits launch lines like a shell, so the ssh line's quoting
+        // survives; the tab opens an ssh session in place of a cd.
+        const ssh = sshSessionArgs(host, path, app === "agent" ? "agent" : "shell")
+          .map(shellQuote)
+          .join(" ");
+        return `new_tab ${name}\nlaunch${app === "agent" ? " --hold" : ""} ${ssh}`;
+      })
+      .join("\n") + "\n"
   );
 }
 
@@ -149,7 +229,10 @@ export async function openGroup(
 
   if (app === "code") {
     const file = join(dir, `${safeFileName(name)}.code-workspace`);
-    const folders = paths.map((p) => ({ path: p }));
+    const folders = paths.map((p) => {
+      const { host, path } = parseLocator(p);
+      return host === null ? { path } : { uri: remoteFolderUri(host, path) };
+    });
     await writeFile(file, JSON.stringify({ folders }, null, 2) + "\n");
     await openIn("code", file);
     return;

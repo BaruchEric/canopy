@@ -194,6 +194,32 @@ body.resizing {
   white-space: nowrap;
   max-width: 26ch;
 }
+/* the root path doubles as the way into the folder list */
+.root-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 8px;
+  border-radius: var(--r);
+  border: 1px solid transparent;
+  color: var(--ink-faint);
+}
+.root-btn:hover,
+.root-btn.on {
+  color: var(--ink-dim);
+  background: var(--bark2);
+  border-color: var(--hair2);
+}
+.root-btn:hover .root-path,
+.root-btn.on .root-path {
+  color: inherit;
+}
+.root-btn .tab-count {
+  margin-left: 0;
+}
+.tab-count.rust {
+  color: var(--rust);
+}
 .ws-tabs {
   display: flex;
   align-items: center;
@@ -402,6 +428,202 @@ body.resizing {
 .keys dd {
   margin: 0;
   color: var(--ink-dim);
+}
+
+/* ---------- the folder list: every source, and a form for one more ---------- */
+.sources-pop {
+  left: 0;
+  right: auto;
+  width: 520px;
+}
+.src-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  align-self: stretch;
+  display: grid;
+  gap: 2px;
+}
+.src-row {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto auto;
+  align-items: center;
+  column-gap: 10px;
+  padding: 5px 6px;
+  border-radius: var(--r);
+}
+.src-row:hover {
+  background: var(--bark2);
+}
+.src-where {
+  font-size: 10.5px;
+  padding: 1px 6px;
+  border-radius: 999px;
+  border: 1px solid var(--hair2);
+  color: var(--sky);
+  white-space: nowrap;
+}
+.src-main {
+  display: grid;
+  min-width: 0;
+}
+.src-label {
+  font-weight: 700;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.src-launch {
+  margin-left: 8px;
+  font-style: normal;
+  font-weight: 400;
+  font-size: 10.5px;
+  color: var(--ink-faint);
+}
+.src-path {
+  font-size: 11px;
+  color: var(--ink-faint);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.src-n {
+  font-size: 11px;
+  color: var(--ink-dim);
+  white-space: nowrap;
+}
+.src-actions {
+  display: inline-flex;
+  gap: 4px;
+}
+.src-row.broken .src-where {
+  color: var(--rust);
+  border-color: color-mix(in srgb, var(--rust) 50%, var(--hair2));
+}
+.src-err {
+  grid-column: 1 / -1;
+  margin: 4px 0 0;
+  font-size: 11px;
+  color: var(--rust);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+.src-form {
+  display: grid;
+  gap: 8px;
+  align-self: stretch;
+}
+.src-fields {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+}
+.src-fields input {
+  min-width: 0;
+  padding: 4px 8px;
+}
+.src-host {
+  flex: 0 0 110px;
+}
+.src-input {
+  flex: 1 1 auto;
+}
+.src-label-input {
+  flex: 0 0 96px;
+}
+
+.mini.on {
+  color: var(--ink);
+  border-color: var(--ink-faint);
+}
+
+/* the folder browser: breadcrumbs, one level of subfolders, a pick */
+.browser {
+  display: grid;
+  gap: 6px;
+  padding: 8px;
+  border: 1px solid var(--hair2);
+  border-radius: var(--r);
+  background: var(--bark0);
+}
+.crumbs {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 1px;
+  min-height: 20px;
+}
+.crumb-wrap {
+  display: inline-flex;
+  align-items: center;
+}
+.crumb-sep {
+  color: var(--ink-faint);
+  padding: 0 1px;
+}
+.crumb {
+  padding: 1px 4px;
+  border-radius: var(--r);
+  color: var(--ink-dim);
+}
+.crumb:hover:not(:disabled) {
+  color: var(--ink);
+  background: var(--bark2);
+}
+.crumb.here {
+  color: var(--moss);
+  font-weight: 700;
+}
+.browse-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  max-height: 240px;
+  overflow-y: auto;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+  gap: 1px 6px;
+}
+.browse-item {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  padding: 2px 6px;
+  border-radius: var(--r);
+  color: var(--ink-dim);
+  text-align: left;
+}
+.browse-item:hover:not(:disabled) {
+  color: var(--ink);
+  background: var(--bark2);
+}
+.browse-item.repo {
+  color: var(--ink);
+}
+.browse-item.up {
+  color: var(--ink-faint);
+}
+.browse-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.browse-foot {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+/* a repo that lives on another host says so, next to its name */
+.host-tag {
+  flex: none;
+  font-size: 10px;
+  line-height: 1.4;
+  padding: 0 5px;
+  border-radius: 999px;
+  border: 1px solid color-mix(in srgb, var(--sky) 40%, var(--hair2));
+  color: var(--sky);
 }
 
 /* filter chips: one per facet, the count says what the chip would show */

@@ -36,14 +36,61 @@ export interface RepoStatus {
   user: GitUser | null;
 }
 
+/* ---------- sources: the folders canopy scans ---------- */
+
+/** Where a scanned folder is: on this machine, or on a host ssh can reach. */
+export type SourcePlace =
+  | { kind: "local"; path: string }
+  | { kind: "ssh"; host: string; path: string };
+
+/** What the browser or the CLI sends to add one. */
+export type SourceInput = SourcePlace & { label?: string };
+
+/** A folder canopy scans for repos. Extra sources live in config; the launch
+ *  root is the CLI argument and is never stored. */
+export type Source = SourcePlace & {
+  /** a slug of the label; repo ids under it read `<id>:<path>`. The launch
+   *  root is LAUNCH_SOURCE and its repo ids stay bare. */
+  id: string;
+  label: string;
+  /** the folder canopy was started on: always present, cannot be removed */
+  launch: boolean;
+};
+
+/** A source with what its last scan found. */
+export type SourceState = Source & {
+  repos: number;
+  scannedAt: number;
+  /** why the last scan failed; the repos from before it stay in place */
+  error?: string;
+};
+
+export const LAUNCH_SOURCE = "launch";
+
+/** One folder as the add-a-folder browser shows it. */
+export interface Listing {
+  /** absolute, as the host resolves it */
+  path: string;
+  /** null at the filesystem root */
+  parent: string | null;
+  /** visible subfolders, a to z; `repo` when one holds a .git */
+  dirs: { name: string; repo: boolean }[];
+}
+
 export interface Repo {
-  /** stable id — path relative to the scan root ("." for the root itself) */
+  /** stable id — path relative to the source root ("." for the root itself),
+   *  prefixed `<source id>:` for every source but the launch root */
   id: string;
   name: string;
-  /** absolute path */
+  /** absolute path, or `ssh://<host><path>` for a repo on another host */
   path: string;
-  /** top-level folder under the scan root ("" when the repo is the root) */
+  /** top-level folder under the scan root ("" when the repo is the root);
+   *  under an extra source, the source's label then that folder */
   group: string;
+  /** the source this repo was found under */
+  source: string;
+  /** the ssh host the repo lives on; absent for this machine */
+  host?: string;
   status: RepoStatus | null;
   /** the remote as a page you can open; absent when no remote maps to one */
   link?: string;
@@ -54,7 +101,10 @@ export interface Repo {
 }
 
 export interface ScanResult {
+  /** the launch root */
   root: string;
+  /** every source, the launch root first, with its scan outcome */
+  sources: SourceState[];
   repos: Repo[];
   scannedAt: number;
 }
@@ -72,9 +122,14 @@ export interface CanopyConfig {
   ignore: string[];
   workspaces: Workspace[];
   recentRoots: string[];
+  /** extra folders scanned alongside the launch root, in display order */
+  sources: StoredSource[];
   /** the claude-history CLI; null looks on PATH, then in ~/dev/dev-tools */
   historyBin: string | null;
 }
+
+/** A source as config holds it: everything but the launch flag. */
+export type StoredSource = SourcePlace & { id: string; label: string };
 
 /** Whether a push has anywhere to land. "unknown" means we could not tell and
  *  the UI stays quiet — a hint on every repo is worse than no hint. */

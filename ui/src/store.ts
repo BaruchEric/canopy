@@ -11,7 +11,10 @@ import {
   type Run,
   type RunAction,
   type RunAnswer,
+  type ScanResult,
   type ServerEvent,
+  type SourceInput,
+  type SourceState,
   type Workspace,
 } from "../../src/core/types";
 
@@ -102,6 +105,8 @@ function pruneWidths(
 
 interface CanopyState {
   root: string;
+  /** every scanned folder, the launch root first */
+  sources: SourceState[];
   repos: Repo[];
   workspaces: Workspace[];
   loaded: boolean;
@@ -138,6 +143,10 @@ interface CanopyState {
   /** loads the tree and opens the SSE stream; returns its unsubscribe */
   init: () => Promise<() => void>;
   rescan: () => Promise<void>;
+  /** adds a folder on this machine or over ssh; resolves once it is scanned */
+  addSource: (input: SourceInput) => Promise<void>;
+  removeSource: (id: string) => Promise<void>;
+  rescanSource: (id: string) => Promise<void>;
   /** refetches the archive overview; a failure becomes an unavailable one */
   loadHistory: (refresh?: boolean) => Promise<void>;
   setFilter: (f: string) => void;
@@ -185,8 +194,30 @@ export interface ClickModifiers {
 
 const layout = loadLayout();
 
+/** The state a fresh tree implies: the repos and sources themselves, and
+ *  the panels and widths that still have a repo to belong to. */
+function treeState(
+  s: CanopyState,
+  tree: ScanResult,
+): Pick<CanopyState, "root" | "sources" | "repos" | "panels" | "panelWidths"> {
+  const panelWidths = pruneWidths(s.panelWidths, tree.repos);
+  if (panelWidths !== s.panelWidths) {
+    saveLayout({ ...layoutOf(s), panelWidths });
+  }
+  return {
+    root: tree.root,
+    sources: tree.sources,
+    repos: tree.repos,
+    // drop panels whose repo no longer exists — a panel with no repo
+    // renders nothing, including its own close button
+    panels: s.panels.filter((id) => tree.repos.some((r) => r.id === id)),
+    panelWidths,
+  };
+}
+
 export const useStore = create<CanopyState>((set, get) => ({
   root: "",
+  sources: [],
   repos: [],
   workspaces: [],
   loaded: false,
@@ -216,6 +247,7 @@ export const useStore = create<CanopyState>((set, get) => ({
       ]);
       set({
         root: tree.root,
+        sources: tree.sources,
         repos: tree.repos,
         workspaces,
         runs: Object.fromEntries(runs.map((r) => [r.id, r])),
@@ -266,22 +298,27 @@ export const useStore = create<CanopyState>((set, get) => ({
     const [tree, runs] = await Promise.all([api.rescan(), api.runs()]);
     // a rescan can bring new repos; the server rebuilds the repo→project map
     void get().loadHistory(true);
-    set((s) => {
-      const panelWidths = pruneWidths(s.panelWidths, tree.repos);
-      if (panelWidths !== s.panelWidths) {
-        saveLayout({ ...layoutOf(s), panelWidths });
-      }
-      return {
-        root: tree.root,
-        repos: tree.repos,
-        // drop panels whose repo no longer exists — a panel with no repo
-        // renders nothing, including its own close button
-        panels: s.panels.filter((id) => tree.repos.some((r) => r.id === id)),
-        panelWidths,
-        // runs are server state too: a stream gap may have hidden a finish
-        runs: Object.fromEntries(runs.map((r) => [r.id, r])),
-      };
-    });
+    set((s) => ({
+      ...treeState(s, tree),
+      // runs are server state too: a stream gap may have hidden a finish
+      runs: Object.fromEntries(runs.map((r) => [r.id, r])),
+    }));
+  },
+
+  addSource: async (input) => {
+    const tree = await api.addSource(input);
+    void get().loadHistory(true);
+    set((s) => treeState(s, tree));
+  },
+  removeSource: async (id) => {
+    const tree = await api.removeSource(id);
+    void get().loadHistory(true);
+    set((s) => treeState(s, tree));
+  },
+  rescanSource: async (id) => {
+    const tree = await api.rescanSource(id);
+    void get().loadHistory(true);
+    set((s) => treeState(s, tree));
   },
 
   setFilter: (filter) => set({ filter }),
@@ -324,20 +361,7 @@ export const useStore = create<CanopyState>((set, get) => ({
         updatedAt: { ...s.updatedAt, [ev.repo.id]: Date.now() },
       }));
     } else if (ev.type === "scan") {
-      set((s) => {
-        const panelWidths = pruneWidths(s.panelWidths, ev.result.repos);
-        if (panelWidths !== s.panelWidths) {
-          saveLayout({ ...layoutOf(s), panelWidths });
-        }
-        return {
-          root: ev.result.root,
-          repos: ev.result.repos,
-          panels: s.panels.filter((id) =>
-            ev.result.repos.some((r) => r.id === id),
-          ),
-          panelWidths,
-        };
-      });
+      set((s) => treeState(s, ev.result));
     } else if (ev.type === "workspaces") {
       set({ workspaces: ev.workspaces });
     } else if (ev.type === "run") {

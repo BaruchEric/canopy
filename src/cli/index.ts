@@ -2,12 +2,16 @@ import { resolve } from "node:path";
 import { exec } from "../core/exec";
 import { commit, getStatus, pull, push } from "../core/git";
 import { isOpenerId, openGroup, openIn, type OpenerId } from "../core/openers";
+import { isSshHost } from "../core/host";
 import { DEFAULT_IGNORE, scan } from "../core/scan";
 import {
+  addSource,
   loadConfig,
+  removeSource,
   removeWorkspace,
   upsertWorkspace,
 } from "../core/store";
+import type { SourceInput } from "../core/types";
 import { suggestMessage } from "../core/suggest";
 import { PortUnavailableError, startServer } from "../server/index";
 import { bold, dim, lichen, moss, renderTree, sky } from "./render";
@@ -29,6 +33,9 @@ usage:
   canopy ws add <name> <dirs...>
   canopy ws rm <name> [dir]          remove a repo, or the whole workspace
   canopy ws open <name> [--app code|kitty|terminal|finder|agent]
+  canopy source                      list the extra folders the UI scans
+  canopy source add <dir> [--host h] [--label l]   scan another folder; --host for one over ssh
+  canopy source rm <id>              stop scanning it
 `;
 
 function flag(args: string[], name: string): boolean {
@@ -75,6 +82,8 @@ const COMMANDS = new Set([
   "pull",
   "open",
   "ws",
+  "source",
+  "sources",
   "help",
   "--help",
   "-h",
@@ -223,6 +232,46 @@ export async function main(argv: string[]): Promise<void> {
         return;
       }
       return fail(`unknown ws command: ${sub}`);
+    }
+    case "source":
+    case "sources": {
+      const sub = args.shift();
+      if (!sub) {
+        const cfg = await loadConfig();
+        if (cfg.sources.length === 0) {
+          console.log(dim("no extra folders — canopy source add <dir> [--host h]"));
+          return;
+        }
+        for (const s of cfg.sources) {
+          const where = s.kind === "ssh" ? sky(`${s.host}:`) : "";
+          console.log(`${bold(s.label)} ${dim(`(${s.id})`)}  ${where}${s.path}`);
+        }
+        return;
+      }
+      if (sub === "add") {
+        const host = opt(args, "--host");
+        const label = opt(args, "--label");
+        const dir = args.shift() ?? fail("usage: canopy source add <dir> [--host h] [--label l]");
+        let input: SourceInput;
+        if (host !== undefined) {
+          if (!isSshHost(host)) return fail(`not an ssh host alias: ${host}`);
+          input = { kind: "ssh", host, path: dir, ...(label ? { label } : {}) };
+        } else {
+          input = { kind: "local", path: resolve(dir), ...(label ? { label } : {}) };
+        }
+        // Stored as given: the UI resolves and checks a path when it adds
+        // one, and shows a scan error on the folder if this one is wrong.
+        const stored = await addSource(input);
+        console.log(`${moss("✓")} scanning ${bold(stored.label)} ${dim(`(${stored.id})`)} from the next canopy ui`);
+        return;
+      }
+      if (sub === "rm") {
+        const id = args.shift() ?? fail("usage: canopy source rm <id>");
+        const left = await removeSource(id);
+        console.log(`${moss("✓")} removed ${dim(`(${left.length} left)`)}`);
+        return;
+      }
+      return fail(`unknown source command: ${sub}`);
     }
     case "help":
     case "--help":

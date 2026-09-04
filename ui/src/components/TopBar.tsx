@@ -6,6 +6,7 @@ import { isRunActive } from "../../../src/core/types";
 import { FilterMenu } from "./Filters";
 import { Seg } from "./Seg";
 import { SettingsMenu } from "./Settings";
+import { SourcesMenu } from "./Sources";
 
 /** The three crowns and a trunk. `live` makes them breathe (loading screen). */
 export function Crowns({ size = 18, live = false }: { size?: number; live?: boolean }) {
@@ -74,7 +75,6 @@ function RunsPill() {
 }
 
 export function TopBar() {
-  const root = useStore((s) => s.root);
   const filter = useStore((s) => s.filter);
   const setFilter = useStore((s) => s.setFilter);
   const dirtyOnly = useStore((s) => s.dirtyOnly);
@@ -125,9 +125,7 @@ export function TopBar() {
         </svg>
       </button>
       <Wordmark />
-      <span className="root-path" title={root}>
-        {root}
-      </span>
+      <SourcesMenu />
 
       <nav className="ws-tabs" aria-label="Workspaces">
         <button

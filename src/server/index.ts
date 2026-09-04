@@ -1,4 +1,6 @@
 import { watch, type FSWatcher } from "node:fs";
+import { readFile, stat } from "node:fs/promises";
+import { homedir } from "node:os";
 import { join, resolve } from "node:path";
 import {
   commit,
@@ -22,11 +24,22 @@ import {
   locateHistory,
   openHistoryNote,
 } from "../core/history";
+import { browseLocal, browseRemote, expandHome, SshError } from "../core/browse";
+import { onHost } from "../core/exec";
+import { isSshHost, parseSshHosts, tildeQuote } from "../core/host";
 import { isOpenerId, openGroup, openIn } from "../core/openers";
-import { refreshRepo, scan } from "../core/scan";
 import {
+  launchSource,
+  refreshRepo,
+  repoRel,
+  scanSource,
+  type ScanOptions,
+} from "../core/scan";
+import {
+  addSource,
   loadConfig,
   rememberRoot,
+  removeSource,
   removeWorkspace,
   upsertWorkspace,
 } from "../core/store";
@@ -43,24 +56,39 @@ import {
   type RunAnswer,
   type ScanResult,
   type ServerEvent,
+  type Source,
+  type SourceInput,
+  type SourceState,
 } from "../core/types";
 import { DEFAULT_IGNORE } from "../core/scan";
 
-interface ServerState {
-  root: string;
-  result: ScanResult;
-  /** directory names the scan and the watcher both skip */
-  ignore: string[];
+/** One scanned folder as the server runs it: the source, its watcher when
+ *  it is local, and the guard against rescanning for the same new .git. */
+interface SourceRuntime {
+  src: SourceState;
+  watcher: FSWatcher | null;
   /** .git locations already rescanned for; stops repos that the scan cannot
    *  reach (deeper than maxDepth) from triggering a rescan on every write */
   probed: Set<string>;
+  /** a scan of this source in flight, so callers share it */
+  scanning: Promise<void> | null;
+}
+
+interface ServerState {
+  /** the launch root */
+  root: string;
+  /** every source, the launch root first */
+  sources: SourceRuntime[];
+  /** all sources' repos in one tree, rebuilt after any source scan */
+  result: ScanResult;
+  /** directory names the scan and the watcher both skip */
+  ignore: string[];
   /** GitHub identity, resolved once: undefined = not asked yet, null = no gh */
   login?: string | null;
   /** push permission memo, keyed "owner/name" — see core/access */
   access: Map<string, boolean | null>;
   clients: Set<ReadableStreamDefaultController<Uint8Array>>;
   timers: Map<string, ReturnType<typeof setTimeout>>;
-  watcher: FSWatcher | null;
   /** Claude Code jobs, one live session per repo at most */
   runner: Runner;
   /** the claude-history overview, kept for HISTORY_TTL and for one scan */
@@ -161,7 +189,7 @@ function parseAnswer(v: unknown): RunAnswer | null {
 }
 
 /** Scan options from config — DEFAULT_IGNORE plus whatever the user added. */
-function scanOpts(cfg: CanopyConfig): { maxDepth: number; ignore: string[] } {
+function scanOpts(cfg: CanopyConfig): Required<ScanOptions> {
   return {
     maxDepth: cfg.maxDepth,
     ignore: [...DEFAULT_IGNORE, ...cfg.ignore],
@@ -203,7 +231,7 @@ async function refreshAndBroadcast(
 ): Promise<Repo> {
   const repo = state.result.repos.find((r) => r.id === id);
   if (!repo) throw new HttpError(404, `unknown repo: ${id}`);
-  const fresh = await refreshRepo(state.root, repo);
+  const fresh = await refreshRepo(repo);
   // Re-find after the await: a concurrent rescan may have replaced the array,
   // and writing back a pre-await index would land in the wrong slot.
   const idx = state.result.repos.findIndex((r) => r.id === id);
@@ -214,21 +242,67 @@ async function refreshAndBroadcast(
 
 const WATCH_GIT_HINTS = ["HEAD", "index", "ORIG_HEAD", "refs"];
 
-/** Key for the debounce timer of a whole-tree rescan (no repo owns it). */
-const RESCAN_KEY = "\0rescan";
+/** How often a remote source's repos get their status re-read: there is no
+ *  watcher on another host, and a scan of a whole tree is too much to repeat. */
+const REMOTE_REFRESH = 5 * 60_000;
 
-function scheduleRescan(state: ServerState): void {
-  clearTimeout(state.timers.get(RESCAN_KEY));
+const bySource = (order: string[]) => (a: Repo, b: Repo): number =>
+  order.indexOf(a.source) - order.indexOf(b.source) || a.id.localeCompare(b.id);
+
+/** The tree the clients see, rebuilt from the sources after any change. */
+function rebuildResult(state: ServerState, repos: Repo[]): void {
+  const order = state.sources.map((rt) => rt.src.id);
+  state.result = {
+    root: state.root,
+    sources: state.sources.map((rt) => ({ ...rt.src })),
+    repos: [...repos].sort(bySource(order)),
+    scannedAt: Date.now(),
+  };
+}
+
+/** Rescans one source and swaps its repos into the tree. A failed scan keeps
+ *  the repos from the last good one and records why on the source. */
+function scanOne(state: ServerState, rt: SourceRuntime, opts: Required<ScanOptions>): Promise<void> {
+  if (rt.scanning) return rt.scanning;
+  rt.scanning = (async () => {
+    try {
+      const fresh = await scanSource(rt.src, opts);
+      const kept = state.result.repos.filter((r) => r.source !== rt.src.id);
+      rt.src = { ...rt.src, repos: fresh.length, scannedAt: Date.now(), error: undefined };
+      rebuildResult(state, [...kept, ...fresh]);
+    } catch (err) {
+      rt.src = { ...rt.src, error: String(err instanceof Error ? err.message : err) };
+      rebuildResult(state, state.result.repos);
+    }
+  })().finally(() => {
+    rt.scanning = null;
+  });
+  return rt.scanning;
+}
+
+async function scanAll(state: ServerState): Promise<void> {
+  const cfg = await loadConfig();
+  const opts = scanOpts(cfg);
+  state.ignore = opts.ignore;
+  await Promise.all(state.sources.map((rt) => scanOne(state, rt, opts)));
+}
+
+/** Key for the debounce timer of a whole-source rescan (no repo owns it). */
+const rescanKey = (id: string): string => `\0rescan:${id}`;
+
+function scheduleRescan(state: ServerState, rt: SourceRuntime): void {
+  const key = rescanKey(rt.src.id);
+  clearTimeout(state.timers.get(key));
   state.timers.set(
-    RESCAN_KEY,
+    key,
     setTimeout(() => {
-      state.timers.delete(RESCAN_KEY);
+      state.timers.delete(key);
       void (async () => {
         try {
           const cfg = await loadConfig();
           const opts = scanOpts(cfg);
           state.ignore = opts.ignore;
-          state.result = await scan(state.root, opts);
+          await scanOne(state, rt, opts);
           broadcast(state, { type: "scan", result: state.result });
         } catch {
           // a rescan that fails leaves the previous tree in place
@@ -238,10 +312,12 @@ function scheduleRescan(state: ServerState): void {
   );
 }
 
-function startWatcher(state: ServerState): void {
+function startWatcher(state: ServerState, rt: SourceRuntime): void {
+  if (rt.src.kind !== "local" || rt.watcher) return;
+  const sourceId = rt.src.id;
   try {
-    state.watcher = watch(
-      state.root,
+    rt.watcher = watch(
+      rt.src.path,
       { recursive: true },
       (_ev, filename) => {
         if (!filename) return;
@@ -252,11 +328,14 @@ function startWatcher(state: ServerState): void {
           const inner = parts[gitIdx + 1] ?? "";
           if (!WATCH_GIT_HINTS.includes(inner)) return;
         }
-        // longest repo id that prefixes the changed path
-        let match: string | null = null;
+        // longest repo (by its path under this source) that prefixes the
+        // changed path
+        let match: Repo | null = null;
         for (const r of state.result.repos) {
-          if (r.id === "." || filename === r.id || filename.startsWith(r.id + "/")) {
-            if (!match || r.id.length > match.length) match = r.id;
+          if (r.source !== sourceId) continue;
+          const rel = repoRel(r);
+          if (rel === "." || filename === rel || filename.startsWith(rel + "/")) {
+            if (!match || rel.length > repoRel(match).length) match = r;
           }
         }
         if (!match) {
@@ -264,13 +343,13 @@ function startWatcher(state: ServerState): void {
           // init — only a rescan can pick it up. Try each location once: if
           // the rescan does find it, later events match a repo id instead.
           const owner = parts.slice(0, gitIdx).join("/");
-          if (gitIdx !== -1 && !state.probed.has(owner)) {
-            state.probed.add(owner);
-            scheduleRescan(state);
+          if (gitIdx !== -1 && !rt.probed.has(owner)) {
+            rt.probed.add(owner);
+            scheduleRescan(state, rt);
           }
           return;
         }
-        const id = match;
+        const id = match.id;
         clearTimeout(state.timers.get(id));
         state.timers.set(
           id,
@@ -282,8 +361,86 @@ function startWatcher(state: ServerState): void {
       },
     );
   } catch (err) {
-    console.error("watcher unavailable:", err);
+    console.error(`watcher unavailable for ${rt.src.label}:`, err);
   }
+}
+
+/** Re-reads every remote repo's status, a few at a time. Broadcast per
+ *  repo, so a card updates as soon as its own answer is in. */
+async function refreshRemote(state: ServerState): Promise<void> {
+  const remote = new Set(
+    state.sources.filter((rt) => rt.src.kind === "ssh" && !rt.scanning).map((rt) => rt.src.id),
+  );
+  const ids = state.result.repos.filter((r) => remote.has(r.source)).map((r) => r.id);
+  let next = 0;
+  const worker = async (): Promise<void> => {
+    while (next < ids.length) {
+      const id = ids[next++];
+      if (id !== undefined) await refreshAndBroadcast(state, id).catch(() => {});
+    }
+  };
+  await Promise.all(Array.from({ length: Math.min(4, ids.length) }, worker));
+}
+
+/* ---------- adding a source: check the folder before storing it ---------- */
+
+/** Parses the add-a-folder body; anything off gets a 400 with the reason. */
+function parseSourceInput(v: unknown): SourceInput {
+  if (!v || typeof v !== "object") throw new HttpError(400, "malformed source");
+  const b = v as { kind?: unknown; path?: unknown; host?: unknown; label?: unknown };
+  const path = typeof b.path === "string" ? b.path.trim() : "";
+  const label = typeof b.label === "string" && b.label.trim() ? b.label.trim() : undefined;
+  if (b.kind === "local") {
+    if (!path) throw new HttpError(400, "a folder path is needed");
+    return { kind: "local", path, ...(label ? { label } : {}) };
+  }
+  if (b.kind === "ssh") {
+    const host = typeof b.host === "string" ? b.host.trim() : "";
+    if (!isSshHost(host)) throw new HttpError(400, "an ssh host alias is needed");
+    return { kind: "ssh", host, path: path || "~", ...(label ? { label } : {}) };
+  }
+  throw new HttpError(400, "kind must be local or ssh");
+}
+
+/** The folder as its host knows it: absolute, and confirmed to be a
+ *  directory. A remote check also proves ssh can get in at all. */
+async function resolveSource(input: SourceInput): Promise<SourceInput> {
+  if (input.kind === "local") {
+    const path = resolve(expandHome(input.path));
+    const st = await stat(path).catch(() => null);
+    if (!st?.isDirectory()) throw new HttpError(400, `not a folder: ${path}`);
+    return { ...input, path };
+  }
+  const r = await onHost(
+    input.host,
+    ["sh", "-c", `cd ${tildeQuote(input.path)} && pwd -P`],
+    { timeoutMs: 20_000 },
+  );
+  if (r.code === 255) {
+    throw new HttpError(502, `ssh ${input.host}: ${r.stderr.trim() || "connection failed"}`);
+  }
+  const path = r.stdout.trim();
+  if (r.code !== 0 || !path.startsWith("/")) {
+    throw new HttpError(400, `${input.host}: ${r.stderr.trim() || `not a folder: ${input.path}`}`);
+  }
+  return { ...input, path };
+}
+
+/** A local folder inside, or around, one already scanned would list the
+ *  same repos twice under two ids. */
+function overlapping(state: ServerState, path: string): Source | undefined {
+  return state.sources
+    .map((rt) => rt.src)
+    .find(
+      (s) =>
+        s.kind === "local" &&
+        (s.path === path || path.startsWith(s.path + "/") || s.path.startsWith(path + "/")),
+    );
+}
+
+async function sshHosts(): Promise<string[]> {
+  const text = await readFile(join(homedir(), ".ssh", "config"), "utf8").catch(() => "");
+  return parseSshHosts(text);
 }
 
 const json = (body: unknown, status = 200): Response =>
@@ -300,10 +457,78 @@ async function handleApi(
   if (path === "/api/tree" && method === "GET") return json(state.result);
 
   if (path === "/api/rescan" && method === "POST") {
-    const cfg = await loadConfig();
-    const opts = scanOpts(cfg);
+    await scanAll(state);
+    broadcast(state, { type: "scan", result: state.result });
+    return json(state.result);
+  }
+
+  if (path === "/api/sources" && method === "GET") return json(state.result.sources);
+  if (path === "/api/hosts" && method === "GET") return json(await sshHosts());
+  if (path === "/api/browse" && method === "GET") {
+    // Read-only, and loopback-only like everything else here; still, a
+    // remote listing goes through the same host check as adding one.
+    const dir = url.searchParams.get("path") ?? "~";
+    const host = url.searchParams.get("host");
+    if (host === null || host === "") {
+      try {
+        return json(await browseLocal(dir));
+      } catch (err) {
+        throw new HttpError(400, String(err instanceof Error ? err.message : err));
+      }
+    }
+    if (!isSshHost(host)) throw new HttpError(400, "an ssh host alias is needed");
+    try {
+      return json(await browseRemote(host, dir));
+    } catch (err) {
+      const msg = String(err instanceof Error ? err.message : err);
+      throw new HttpError(err instanceof SshError ? 502 : 400, msg);
+    }
+  }
+  if (path === "/api/sources" && method === "POST") {
+    const input = await resolveSource(parseSourceInput(await req.json()));
+    if (input.kind === "local") {
+      const clash = overlapping(state, input.path);
+      if (clash) throw new HttpError(409, `already covered by ${clash.label}`);
+    }
+    let stored;
+    try {
+      stored = await addSource(input);
+    } catch (err) {
+      throw new HttpError(409, String(err instanceof Error ? err.message : err));
+    }
+    const rt: SourceRuntime = {
+      src: { ...stored, launch: false, repos: 0, scannedAt: 0 },
+      watcher: null,
+      probed: new Set(),
+      scanning: null,
+    };
+    state.sources.push(rt);
+    const opts = scanOpts(await loadConfig());
+    await scanOne(state, rt, opts);
+    startWatcher(state, rt);
+    broadcast(state, { type: "scan", result: state.result });
+    return json(state.result, 201);
+  }
+  if (path === "/api/sources" && method === "DELETE") {
+    const id = url.searchParams.get("id") ?? "";
+    const rt = state.sources.find((s) => s.src.id === id);
+    if (!rt) throw new HttpError(404, `unknown source: ${id}`);
+    if (rt.src.launch) throw new HttpError(400, "the launch folder stays; start canopy elsewhere to change it");
+    await removeSource(id);
+    rt.watcher?.close();
+    clearTimeout(state.timers.get(rescanKey(id)));
+    state.sources = state.sources.filter((s) => s !== rt);
+    rebuildResult(state, state.result.repos.filter((r) => r.source !== id));
+    broadcast(state, { type: "scan", result: state.result });
+    return json(state.result);
+  }
+  if (path === "/api/sources/rescan" && method === "POST") {
+    const id = url.searchParams.get("id") ?? "";
+    const rt = state.sources.find((s) => s.src.id === id);
+    if (!rt) throw new HttpError(404, `unknown source: ${id}`);
+    const opts = scanOpts(await loadConfig());
     state.ignore = opts.ignore;
-    state.result = await scan(state.root, opts);
+    await scanOne(state, rt, opts);
     broadcast(state, { type: "scan", result: state.result });
     return json(state.result);
   }
@@ -485,6 +710,9 @@ async function handleApi(
       return json(await refreshAndBroadcast(state, repo.id));
     }
     if (method === "POST" && action === "run") {
+      // The runner spawns claude here, at the repo's path; there is no
+      // claude to spawn at a folder on another host.
+      if (repo.host) return json({ error: `Claude runs only work on this machine; ${repo.name} is on ${repo.host}` }, 400);
       const b = (await req.json()) as { action?: unknown; note?: unknown };
       if (!isRunAction(b.action)) return json({ error: "unknown action" }, 400);
       const note = typeof b.note === "string" ? b.note : "";
@@ -548,16 +776,23 @@ export async function startServer(opts: {
   const root = resolve(opts.root);
   const port = opts.port ?? cfg.port;
   const scanOptions = scanOpts(cfg);
-  const result = await scan(root, scanOptions);
+  const runtime = (src: Source): SourceRuntime => ({
+    src: { ...src, repos: 0, scannedAt: 0 },
+    watcher: null,
+    probed: new Set(),
+    scanning: null,
+  });
+  // A stored source that is the launch root again would list every repo
+  // twice; the launch root wins and keeps its bare ids.
+  const extras = cfg.sources.filter((s) => s.kind !== "local" || s.path !== root);
   const state: ServerState = {
     root,
-    result,
+    sources: [runtime(launchSource(root)), ...extras.map((s) => runtime({ ...s, launch: false }))],
+    result: { root, sources: [], repos: [], scannedAt: 0 },
     ignore: scanOptions.ignore,
-    probed: new Set(),
     access: new Map(),
     clients: new Set(),
     timers: new Map(),
-    watcher: null,
     history: null,
     historyPending: null,
     runner: new Runner({
@@ -572,6 +807,11 @@ export async function startServer(opts: {
     }),
   };
   await rememberRoot(root);
+  await Promise.all(state.sources.map((rt) => scanOne(state, rt, scanOptions)));
+  // The launch root failing to scan is fatal, as it always was: there is
+  // nothing to show. An extra source failing is a note on that source.
+  const launch = state.sources[0];
+  if (launch?.src.error) throw new Error(launch.src.error);
 
   const webDir = join(import.meta.dir, "../../dist/web");
   const server = bind(port, () =>
@@ -607,7 +847,8 @@ export async function startServer(opts: {
   );
   // Only after the bind succeeds: a watcher started earlier would outlive a
   // failed listen and hold the process open.
-  startWatcher(state);
+  for (const rt of state.sources) startWatcher(state, rt);
+  const remoteTimer = setInterval(() => void refreshRemote(state), REMOTE_REFRESH);
 
   const heartbeat = setInterval(() => {
     for (const c of state.clients) {
@@ -623,8 +864,10 @@ export async function startServer(opts: {
     port: server.port ?? port,
     stop: () => {
       clearInterval(heartbeat);
+      clearInterval(remoteTimer);
+      for (const t of state.timers.values()) clearTimeout(t);
       state.runner.stopAll();
-      state.watcher?.close();
+      for (const rt of state.sources) rt.watcher?.close();
       server.stop(true);
     },
   };

@@ -9,6 +9,7 @@ function repo(over: Partial<Repo["status"] & { error: string }> = {}): Repo {
     name: "orchard",
     path: "/tmp/grove/apps/orchard",
     group: "apps",
+    source: "launch",
     status: {
       branch: "main",
       upstream: "origin/main",

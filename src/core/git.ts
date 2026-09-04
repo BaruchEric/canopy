@@ -1,5 +1,6 @@
 import { isAbsolute, resolve, sep } from "node:path";
 import { git } from "./exec";
+import { parseLocator } from "./host";
 import type {
   CommitDetail,
   CommitFile,
@@ -15,7 +16,9 @@ export function repoRelative(repoPath: string, file: string): string {
   if (file === "" || isAbsolute(file) || file.includes("\0")) {
     throw new Error(`invalid path: ${file}`);
   }
-  const root = resolve(repoPath);
+  // The check is lexical, so a remote repo's path serves as well as a local
+  // one; only the locator's scheme has to come off first.
+  const root = resolve(parseLocator(repoPath).path);
   const full = resolve(root, file);
   if (full !== root && !full.startsWith(root + sep)) {
     throw new Error(`path escapes the repo: ${file}`);

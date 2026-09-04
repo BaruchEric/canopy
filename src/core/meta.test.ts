@@ -4,9 +4,29 @@ import {
   fromReadme,
   fromTomlManifest,
   MAX_DESCRIPTION,
+  parseRemoteCandidates,
   pickLink,
+  remoteCandidatesCommand,
   tidy,
 } from "./meta";
+
+describe("remote candidates", () => {
+  test("one find names every manifest and README, case-insensitively", () => {
+    const cmd = remoteCandidatesCommand("/home/me/dev/x");
+    expect(cmd.slice(0, 2)).toEqual(["find", "/home/me/dev/x"]);
+    expect(cmd.filter((a) => a === "-iname")).toHaveLength(10);
+    expect(cmd).toContain("readme.md");
+    expect(cmd.at(-1)).toBe(";");
+  });
+
+  test("the packed output comes apart by NUL, names lowercased", () => {
+    const text = "/x/Package.json\n{\"description\":\"a\"}\n\0/x/README.md\nHello\nworld\n\0";
+    const files = parseRemoteCandidates(text);
+    expect(files.get("package.json")).toBe('{"description":"a"}');
+    expect(files.get("readme.md")).toBe("Hello\nworld");
+    expect(files.size).toBe(2);
+  });
+});
 
 describe("tidy", () => {
   test("collapses whitespace and drops the empty case", () => {

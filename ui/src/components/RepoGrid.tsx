@@ -51,6 +51,11 @@ const RepoCard = memo(function RepoCard({ repo }: { repo: Repo }) {
       <div className="card-top">
         <span className="glyph">{GLYPH[state]}</span>
         <span className="card-name">{repo.name}</span>
+        {repo.host && (
+          <span className="host-tag" title={`on ${repo.host}, over ssh`}>
+            {repo.host}
+          </span>
+        )}
         {repo.link && <RepoLink url={repo.link} name={repo.name} />}
         <span className="card-more">
           <RepoMenu repo={repo} />

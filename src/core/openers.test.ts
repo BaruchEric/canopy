@@ -4,6 +4,8 @@ import {
   isOpenerId,
   kittyAgentArgs,
   kittySessionLines,
+  remoteFolderUri,
+  sshSessionArgs,
   terminalAgentArgs,
 } from "./openers";
 
@@ -34,6 +36,44 @@ describe("agent launch", () => {
       String.raw`do script "cd '/Users/me/it'\\''s \"here\"' && claude"`,
     );
     expect(args).toContain("activate");
+  });
+});
+
+describe("repos on another host", () => {
+  test("an ssh session lands at the repo, in a shell or the agent", () => {
+    expect(sshSessionArgs("wsl", "/home/me/a repo", "shell")).toEqual([
+      "ssh",
+      "-t",
+      "--",
+      "wsl",
+      `cd '/home/me/a repo' && exec "$SHELL" -l`,
+    ]);
+    expect(sshSessionArgs("wsl", "/home/me/x", "agent").at(-1)).toBe("cd '/home/me/x' && claude");
+  });
+
+  test("Terminal runs the ssh line for a remote agent", () => {
+    const args = terminalAgentArgs("ssh://wsl/home/me/x");
+    const script = args[args.indexOf("-e", 2) + 1];
+    expect(script).toBe(
+      // the shell sees cd '/home/me/x' inside the ssh line once AppleScript
+      // has unescaped its backslashes, as in the local case above
+      String.raw`do script "'ssh' '-t' '--' 'wsl' 'cd '\\''/home/me/x'\\'' && claude'"`,
+    );
+  });
+
+  test("a kitty session tab for a remote repo launches ssh instead of cd", () => {
+    const lines = kittySessionLines(["/Users/me/dev/a", "ssh://wsl/home/me/b"], "kitty");
+    expect(lines).toBe(
+      "new_tab a\ncd /Users/me/dev/a\nlaunch\n" +
+        `new_tab b\nlaunch 'ssh' '-t' '--' 'wsl' 'cd '\\''/home/me/b'\\'' && exec "$SHELL" -l'\n`,
+    );
+    expect(kittySessionLines(["ssh://wsl/home/me/b"], "agent", "/bin/zsh")).toContain(
+      "launch --hold 'ssh'",
+    );
+  });
+
+  test("VS Code gets the Remote-SSH folder form", () => {
+    expect(remoteFolderUri("wsl", "/home/me/dev")).toBe("vscode-remote://ssh-remote+wsl/home/me/dev");
   });
 });
 

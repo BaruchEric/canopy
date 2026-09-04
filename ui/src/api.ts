@@ -5,6 +5,7 @@ import type {
   HistorySession,
   HistorySessionDetail,
   HistoryWindow,
+  Listing,
   LogEntry,
   PushAccess,
   Repo,
@@ -13,6 +14,8 @@ import type {
   RunAnswer,
   ScanResult,
   ServerEvent,
+  SourceInput,
+  SourceState,
   Workspace,
 } from "../../src/core/types";
 
@@ -43,6 +46,26 @@ const rq = (id: string, extra: Record<string, string> = {}): string =>
 export const api = {
   tree: () => req<ScanResult>("/api/tree"),
   rescan: () => req<ScanResult>("/api/rescan", { method: "POST" }),
+  sources: () => req<SourceState[]>("/api/sources"),
+  addSource: (input: SourceInput) =>
+    req<ScanResult>("/api/sources", {
+      method: "POST",
+      body: JSON.stringify(input),
+    }),
+  removeSource: (id: string) =>
+    req<ScanResult>(`/api/sources?${rq(id)}`, { method: "DELETE" }),
+  rescanSource: (id: string) =>
+    req<ScanResult>(`/api/sources/rescan?${rq(id)}`, {
+      method: "POST",
+      body: "{}",
+    }),
+  /** aliases from ~/.ssh/config, for the add-a-folder form */
+  hosts: () => req<string[]>("/api/hosts"),
+  /** one folder's subfolders, here or on a host, for the folder browser */
+  browse: (path: string, host?: string) =>
+    req<Listing>(
+      `/api/browse?${new URLSearchParams({ path, ...(host ? { host } : {}) }).toString()}`,
+    ),
   log: (id: string) => req<LogEntry[]>(`/api/repos/log?${rq(id)}`),
   show: (id: string, hash: string) =>
     req<CommitDetail>(`/api/repos/commit?${rq(id, { hash })}`),
