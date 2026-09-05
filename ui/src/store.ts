@@ -23,6 +23,8 @@ import {
 /** drag limits for the two resizable panes, in px */
 export const SIDEBAR = { min: 180, max: 560, initial: 264 };
 export const PANEL = { min: 300, max: 900, initial: 440 };
+/** the solo view's centered panel; the window caps it before max does */
+export const SOLO = { min: 420, max: 2400, initial: 980 };
 
 const LAYOUT_KEY = "canopy.layout";
 
@@ -32,6 +34,8 @@ const HISTORY_REFRESH = 10 * 60_000;
 interface Layout {
   sidebarWidth: number;
   panelWidths: Record<string, number>;
+  /** px width of the panel in the solo view, shared by every solo tab */
+  soloWidth: number;
   /** whether the repo tree is showing at all */
   sidebarOpen: boolean;
   /** folded sections, as sectionKey strings */
@@ -42,6 +46,7 @@ function loadLayout(): Layout {
   const fallback: Layout = {
     sidebarWidth: SIDEBAR.initial,
     panelWidths: {},
+    soloWidth: SOLO.initial,
     sidebarOpen: true,
     collapsed: [],
   };
@@ -51,6 +56,7 @@ function loadLayout(): Layout {
     const saved = JSON.parse(raw) as {
       sidebarWidth?: unknown;
       panelWidths?: Record<string, unknown>;
+      soloWidth?: unknown;
       sidebarOpen?: unknown;
       collapsed?: unknown;
     };
@@ -63,12 +69,17 @@ function loadLayout(): Layout {
       }
     }
     const sw = saved.sidebarWidth;
+    const solo = saved.soloWidth;
     return {
       sidebarWidth:
         typeof sw === "number" && Number.isFinite(sw)
           ? clamp(sw, SIDEBAR.min, SIDEBAR.max)
           : SIDEBAR.initial,
       panelWidths,
+      soloWidth:
+        typeof solo === "number" && Number.isFinite(solo)
+          ? clamp(solo, SOLO.min, SOLO.max)
+          : SOLO.initial,
       sidebarOpen: saved.sidebarOpen !== false,
       collapsed: Array.isArray(saved.collapsed)
         ? saved.collapsed.filter((k): k is string => typeof k === "string")
@@ -90,6 +101,7 @@ function saveLayout(layout: Layout) {
 const layoutOf = (s: CanopyState): Layout => ({
   sidebarWidth: s.sidebarWidth,
   panelWidths: s.panelWidths,
+  soloWidth: s.soloWidth,
   sidebarOpen: s.sidebarOpen,
   collapsed: s.collapsed,
 });
@@ -133,6 +145,8 @@ interface CanopyState {
   collapsed: string[];
   /** repo id → px width of its dock panel; missing means PANEL.initial */
   panelWidths: Record<string, number>;
+  /** px width of the solo view's panel, dragged by its edge handles */
+  soloWidth: number;
   /** per-browser preferences, persisted in localStorage */
   settings: Settings;
   /** Claude Code runs by id, live and recently finished */
@@ -173,6 +187,7 @@ interface CanopyState {
   /** folds or unfolds one section; the tree and the grid fold together */
   toggleGroup: (key: string) => void;
   setPanelWidth: (id: string, px: number) => void;
+  setSoloWidth: (px: number) => void;
   setSetting: <K extends keyof Settings>(key: K, value: Settings[K]) => void;
 
   /** opens the pre-flight dialog for an action on a repo */
@@ -244,6 +259,7 @@ export const useStore = create<CanopyState>((set, get) => ({
   updatedAt: {},
   sidebarWidth: layout.sidebarWidth,
   panelWidths: layout.panelWidths,
+  soloWidth: layout.soloWidth,
   sidebarOpen: layout.sidebarOpen,
   collapsed: layout.collapsed,
   settings: loadSettings(),
@@ -424,6 +440,12 @@ export const useStore = create<CanopyState>((set, get) => ({
       };
       saveLayout({ ...layoutOf(s), panelWidths });
       return { panelWidths };
+    }),
+  setSoloWidth: (px) =>
+    set((s) => {
+      const soloWidth = clamp(px, SOLO.min, SOLO.max);
+      saveLayout({ ...layoutOf(s), soloWidth });
+      return { soloWidth };
     }),
   setSetting: (key, value) =>
     set((s) => {

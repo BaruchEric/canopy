@@ -13,6 +13,9 @@ interface ResizerProps {
   initial: number;
   /** 1 when the pane sits left of the handle, -1 when it sits right of it */
   dir: 1 | -1;
+  /** px of width per px of pointer travel: 2 for a centered pane, whose far
+   *  edge moves as much as the dragged one (default 1) */
+  factor?: number;
   /** custom property the live width is written to */
   cssVar: string;
   /** element that property lives on, resolved from the handle itself */
@@ -33,6 +36,7 @@ export function Resizer({
   max,
   initial,
   dir,
+  factor = 1,
   cssVar,
   target,
   onCommit,
@@ -58,7 +62,11 @@ export function Resizer({
     document.body.classList.add("resizing");
 
     const move = (ev: globalThis.PointerEvent) => {
-      const next = clamp(startValue + (ev.clientX - startX) * dir, min, max);
+      const next = clamp(
+        startValue + (ev.clientX - startX) * dir * factor,
+        min,
+        max,
+      );
       live.current = next;
       target(handle)?.style.setProperty(cssVar, `${next}px`);
     };

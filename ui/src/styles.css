@@ -1179,9 +1179,13 @@ body.resizing {
 }
 .solo .panel {
   width: 100%;
-  max-width: 980px;
+  max-width: var(--solo-w, 980px);
   height: 100%;
   border-left: 1px solid var(--hair);
+}
+/* the handles straddle the panel's own borders, like the dock's do */
+.solo-resizer {
+  margin: 0 -3px;
 }
 
 /* file rows */
@@ -1768,7 +1772,8 @@ body.resizing {
   .panel {
     width: 100vw;
   }
-  .panel-resizer {
+  .panel-resizer,
+  .solo-resizer {
     display: none;
   }
   .seg-sort,
