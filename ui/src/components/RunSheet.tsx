@@ -1,8 +1,13 @@
 import { useEffect, useRef, useState } from "react";
 import { ACTIONS, EXPECTS_CHANGE, repoFacts } from "../../../src/core/actions";
-import { useStore, type Sheet } from "../store";
+import { describeAgent, isDefaultAgent } from "../../../src/core/agent";
+import { agentFor, useStore, type Sheet } from "../store";
 import {
+  DEFAULT_AGENT,
   isRunActive,
+  type AgentEffort,
+  type AgentModel,
+  type AgentSettings,
   type Repo,
   type Run,
   type RunAction,
@@ -11,10 +16,12 @@ import {
   type RunQuestion,
   type RunStep,
 } from "../../../src/core/types";
+import { Seg } from "./Seg";
 
 const STATUS_WORD: Record<Run["status"], string> = {
   working: "working",
   waiting: "waiting for you",
+  idle: "your turn",
   done: "done",
   failed: "failed",
   stopped: "stopped",
@@ -70,16 +77,22 @@ export function RunSheet() {
   );
 }
 
+/** The repo a sheet is about: named outright, or through its run. */
+const sheetRepoId = (sheet: Sheet, runs: Record<string, Run>): string | undefined =>
+  sheet.kind === "run" ? runs[sheet.runId]?.repoId : sheet.repoId;
+
 function Body({ sheet }: { sheet: Sheet }) {
   const close = useStore((s) => s.closeSheet);
-  const repo = useStore((s) =>
-    s.repos.find((r) => r.id === (sheet.kind === "plan" ? sheet.repoId : s.runs[sheet.runId]?.repoId)),
-  );
+  const repo = useStore((s) => s.repos.find((r) => r.id === sheetRepoId(sheet, s.runs)));
   const run = useStore((s) => (sheet.kind === "run" ? s.runs[sheet.runId] : undefined));
 
   if (sheet.kind === "plan") {
     if (!repo) return <Missing what="That repo is no longer in the tree." onClose={close} />;
     return <Plan repo={repo} action={sheet.action} />;
+  }
+  if (sheet.kind === "agent") {
+    if (!repo) return <Missing what="That repo is no longer in the tree." onClose={close} />;
+    return <AgentForm repo={repo} />;
   }
   if (!run) return <Missing what="That run is gone." onClose={close} />;
   return <Console run={run} repo={repo} />;
@@ -104,6 +117,7 @@ function Missing({ what, onClose }: { what: string; onClose: () => void }) {
 function Plan({ repo, action }: { repo: Repo; action: RunAction }) {
   const close = useStore((s) => s.closeSheet);
   const startRun = useStore((s) => s.startRun);
+  const agent = useStore((s) => agentFor(s, repo));
   const spec = ACTIONS[action];
   const [note, setNote] = useState("");
   const [busy, setBusy] = useState(false);
@@ -142,6 +156,11 @@ function Plan({ repo, action }: { repo: Repo; action: RunAction }) {
               {f}
             </span>
           ))}
+          {!isDefaultAgent(agent) && (
+            <span className="branch" title="This repo's agent settings">
+              {describeAgent(agent)}
+            </span>
+          )}
         </div>
         <p className="blurb">{spec.blurb}</p>
         <textarea
@@ -159,7 +178,9 @@ function Plan({ repo, action }: { repo: Repo; action: RunAction }) {
       </div>
       <footer className="sheet-foot">
         <span className="sheet-hint">
-          Claude asks before running anything that is not part of the job.
+          {agent.yolo
+            ? "Yolo is on for this repo: Claude runs without asking."
+            : "Claude asks before running anything that is not part of the job."}
         </span>
         <button type="button" className="mini" onClick={close}>
           cancel
@@ -185,7 +206,9 @@ function Console({ run, repo }: { run: Run; repo: Repo | undefined }) {
   const stopRun = useStore((s) => s.stopRun);
   const dismissRun = useStore((s) => s.dismissRun);
   const answerRun = useStore((s) => s.answerRun);
+  const sayRun = useStore((s) => s.sayRun);
   const active = isRunActive(run);
+  const chat = run.action === "chat";
   const noChange =
     run.status === "done" && run.outcome === "unchanged" && EXPECTS_CHANGE[run.action];
   const now = useTick(active);
@@ -213,10 +236,11 @@ function Console({ run, repo }: { run: Run; repo: Repo | undefined }) {
   };
 
   // Claude's closing words arrive twice, as the last message and as the
-  // result. The outcome box shows them once.
+  // result. The outcome box shows them once. A chat has no outcome box: its
+  // replies stay in the timeline.
   const last = run.steps[run.steps.length - 1];
   const steps =
-    run.result && last?.kind === "text" && last.text === run.result.text
+    !chat && run.result && last?.kind === "text" && last.text === run.result.text
       ? run.steps.slice(0, -1)
       : run.steps;
 
@@ -271,6 +295,14 @@ function Console({ run, repo }: { run: Run; repo: Repo | undefined }) {
               <span className="step-text">thinking…</span>
             </li>
           )}
+          {chat && run.status === "idle" && run.steps.length === 0 && (
+            <li className="step k-note">
+              <span className="node" />
+              <span className="step-text">
+                Your first message starts Claude Code in {repo?.path ?? run.repoId}.
+              </span>
+            </li>
+          )}
         </ol>
         {run.prompt && (
           <Prompt
@@ -278,7 +310,7 @@ function Console({ run, repo }: { run: Run; repo: Repo | undefined }) {
             onAnswer={(a) => void act(() => answerRun(run.id, run.prompt?.id ?? "", a))}
           />
         )}
-        {run.result && run.status === "done" && (
+        {run.result && run.status === "done" && !chat && (
           <div className={noChange ? "outcome warn" : "outcome ok"}>
             {noChange && (
               <p className="outcome-lead">
@@ -286,6 +318,11 @@ function Console({ run, repo }: { run: Run; repo: Repo | undefined }) {
               </p>
             )}
             <p>{run.result.text || "Done."}</p>
+          </div>
+        )}
+        {chat && run.status === "done" && (
+          <div className="outcome dim">
+            <p>Chat ended.</p>
           </div>
         )}
         {run.status === "failed" && (
@@ -303,6 +340,13 @@ function Console({ run, repo }: { run: Run; repo: Repo | undefined }) {
         {error && <p className="note err">{error}</p>}
       </div>
 
+      {chat && active && (
+        <Composer
+          ready={run.status === "idle"}
+          onSend={(text) => act(() => sayRun(run.id, text))}
+        />
+      )}
+
       <footer className="sheet-foot">
         {run.result && (
           <span className="sheet-hint">
@@ -312,8 +356,13 @@ function Console({ run, repo }: { run: Run; repo: Repo | undefined }) {
         )}
         <span className="spacer" />
         {active ? (
-          <button type="button" className="mini" onClick={() => void act(() => stopRun(run.id))}>
-            stop
+          <button
+            type="button"
+            className="mini"
+            title={chat && run.status === "idle" ? "Close the conversation; Claude Code exits" : undefined}
+            onClick={() => void act(() => stopRun(run.id))}
+          >
+            {chat && run.status === "idle" ? "end chat" : "stop"}
           </button>
         ) : (
           <button type="button" className="mini" onClick={() => void act(() => dismissRun(run.id))}>
@@ -325,6 +374,68 @@ function Console({ run, repo }: { run: Run; repo: Repo | undefined }) {
         </button>
       </footer>
     </>
+  );
+}
+
+/** The chat's message box. Enter sends, shift-enter breaks a line. */
+function Composer({
+  ready,
+  onSend,
+}: {
+  ready: boolean;
+  onSend: (text: string) => Promise<void>;
+}) {
+  const [text, setText] = useState("");
+  const [busy, setBusy] = useState(false);
+  const box = useRef<HTMLTextAreaElement>(null);
+  const can = ready && !busy && text.trim().length > 0;
+
+  // Back to the box as soon as Claude has answered.
+  useEffect(() => {
+    if (ready) box.current?.focus();
+  }, [ready]);
+
+  const send = async () => {
+    if (!can) return;
+    const message = text;
+    setBusy(true);
+    setText("");
+    try {
+      await onSend(message);
+    } catch {
+      setText(message);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div className="composer">
+      <textarea
+        ref={box}
+        className="composer-box"
+        rows={2}
+        placeholder={ready ? "say something…" : "Claude is replying…"}
+        value={text}
+        onChange={(e) => setText(e.target.value)}
+        onKeyDown={(e) => {
+          if (e.key === "Enter" && !e.shiftKey) {
+            e.preventDefault();
+            void send();
+          }
+        }}
+        aria-label="Your message"
+      />
+      <button
+        type="button"
+        className="mini strong"
+        disabled={!can}
+        title="↩ sends, shift-↩ for a new line"
+        onClick={() => void send()}
+      >
+        send
+      </button>
+    </div>
   );
 }
 
@@ -346,11 +457,159 @@ function Step({ step }: { step: RunStep }) {
       </li>
     );
   }
+  if (step.kind === "user") {
+    return (
+      <li className="step k-user">
+        <span className="node" />
+        <div className="step-body">
+          <span className="eyebrow">you</span>
+          <span className="step-text">{step.text}</span>
+        </div>
+      </li>
+    );
+  }
   return (
     <li className={`step k-${step.kind}`}>
       <span className="node" />
       <span className="step-text">{step.text}</span>
     </li>
+  );
+}
+
+/* ---------- agent settings, per repo ---------- */
+
+const MODELS: { value: AgentModel; label: string; title?: string }[] = [
+  { value: "default", label: "default", title: "Whatever your claude picks" },
+  { value: "fable", label: "fable" },
+  { value: "opus", label: "opus" },
+  { value: "sonnet", label: "sonnet" },
+  { value: "haiku", label: "haiku" },
+];
+
+const EFFORTS: { value: AgentEffort; label: string; title?: string }[] = [
+  { value: "default", label: "default", title: "Whatever your claude picks" },
+  { value: "low", label: "low" },
+  { value: "medium", label: "medium" },
+  { value: "high", label: "high" },
+  { value: "xhigh", label: "xhigh" },
+  { value: "max", label: "max" },
+];
+
+const YOLO = [
+  { value: "ask", label: "ask", title: "Claude asks before anything the rules do not allow" },
+  {
+    value: "yolo",
+    label: "yolo",
+    title: "Skip every permission prompt (--dangerously-skip-permissions)",
+  },
+] as const;
+
+/** How Claude starts for this repo. Every change saves at once, like the
+ *  settings popover; the extra-flags box saves when it loses focus or on
+ *  enter, since a half-typed flag is not worth sending. */
+function AgentForm({ repo }: { repo: Repo }) {
+  const close = useStore((s) => s.closeSheet);
+  const saved = useStore((s) => agentFor(s, repo));
+  const setAgent = useStore((s) => s.setAgent);
+  const [extra, setExtra] = useState(saved.extra);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => setExtra(saved.extra), [saved.extra]);
+
+  const save = async (next: AgentSettings) => {
+    setError(null);
+    try {
+      await setAgent(repo.id, next);
+    } catch (err) {
+      setError(errText(err));
+    }
+  };
+  const set = <K extends keyof AgentSettings>(key: K, value: AgentSettings[K]) =>
+    void save({ ...saved, [key]: value });
+  const saveExtra = () => {
+    if (extra.trim() !== saved.extra) set("extra", extra.trim());
+  };
+
+  return (
+    <>
+      <header className="sheet-head">
+        <div>
+          <div className="eyebrow">with claude</div>
+          <h2 className="sheet-title">
+            agent settings <span className="sheet-repo">{repo.id}</span>
+          </h2>
+        </div>
+        <button type="button" className="mini close" onClick={close} aria-label="Close">
+          ✕
+        </button>
+      </header>
+      <div className="sheet-body agent-form">
+        <p className="blurb">
+          How Claude Code starts for this repo: the agent and herdr openers, and every run and
+          chat here. Saved on the server, so it holds from any browser.
+        </p>
+        <section className="settings-row">
+          <h3 className="panel-label">model</h3>
+          <Seg label="Model" value={saved.model} options={MODELS} onChange={(v) => set("model", v)} />
+        </section>
+        <section className="settings-row">
+          <h3 className="panel-label">effort</h3>
+          <Seg
+            label="Effort"
+            value={saved.effort}
+            options={EFFORTS}
+            onChange={(v) => set("effort", v)}
+          />
+        </section>
+        <section className="settings-row">
+          <h3 className="panel-label">permissions</h3>
+          <Seg
+            label="Permissions"
+            value={saved.yolo ? "yolo" : "ask"}
+            options={YOLO}
+            onChange={(v) => set("yolo", v === "yolo")}
+          />
+          {saved.yolo && (
+            <p className="settings-hint warn">
+              Every command runs without asking, in the terminal and in canopy's runs alike.
+            </p>
+          )}
+        </section>
+        <section className="settings-row">
+          <h3 className="panel-label">extra flags</h3>
+          <input
+            type="text"
+            className="agent-extra"
+            placeholder="--add-dir ../shared --name work"
+            value={extra}
+            onChange={(e) => setExtra(e.target.value)}
+            onBlur={saveExtra}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") saveExtra();
+            }}
+            aria-label="Extra flags for the claude command line"
+          />
+          <p className="settings-hint">
+            Appended to the claude command line as typed; quotes hold a word together.
+          </p>
+        </section>
+        {error && <p className="note err">{error}</p>}
+      </div>
+      <footer className="sheet-foot">
+        <span className="sheet-hint">{describeAgent(saved)}</span>
+        <button
+          type="button"
+          className="mini"
+          disabled={isDefaultAgent(saved)}
+          onClick={() => void save(DEFAULT_AGENT)}
+        >
+          reset
+        </button>
+        <button type="button" className="mini strong" onClick={close}>
+          done
+        </button>
+      </footer>
+    </>
   );
 }
 

@@ -6,6 +6,7 @@ import { isSshHost } from "../core/host";
 import { DEFAULT_IGNORE, scan } from "../core/scan";
 import {
   addSource,
+  agentFor,
   loadConfig,
   removeSource,
   removeWorkspace,
@@ -26,13 +27,14 @@ usage:
   canopy commit <repo> --ai [--all] [--push]   AI message; --all stages everything
   canopy suggest <repo>              print an AI-suggested commit message
   canopy push <repo> | pull <repo>
-  canopy open <repo> [--app kitty|terminal|code|finder|agent]
+  canopy open <repo> [--app kitty|terminal|code|finder|agent|herdr]
                                      agent: interactive Claude Code in a terminal
+                                     herdr: the same, in a herdr workspace
   canopy ws                          list workspaces
   canopy ws create <name> <dirs...>  group repos into a workspace
   canopy ws add <name> <dirs...>
   canopy ws rm <name> [dir]          remove a repo, or the whole workspace
-  canopy ws open <name> [--app code|kitty|terminal|finder|agent]
+  canopy ws open <name> [--app code|kitty|terminal|finder|agent|herdr]
   canopy source                      list the extra folders the UI scans
   canopy source add <dir> [--host h] [--label l]   scan another folder; --host for one over ssh
   canopy source rm <id>              stop scanning it
@@ -55,7 +57,7 @@ function opt(args: string[], name: string): string | undefined {
 function appOpt(args: string[], fallback: OpenerId): OpenerId {
   const v = opt(args, "--app") ?? fallback;
   if (!isOpenerId(v)) {
-    console.error(`unknown app: ${v} (use kitty, terminal, code, finder, or agent)`);
+    console.error(`unknown app: ${v} (use kitty, terminal, code, finder, agent, or herdr)`);
     process.exit(1);
   }
   return v;
@@ -192,7 +194,8 @@ export async function main(argv: string[]): Promise<void> {
     case "open": {
       const app = appOpt(args, "kitty");
       const repo = resolve(args[0] ?? fail("usage: canopy open <repo>"));
-      await openIn(app, repo);
+      // the repo's agent settings from the UI apply here too
+      await openIn(app, repo, agentFor(await loadConfig(), repo));
       return;
     }
     case "ws": {
@@ -228,7 +231,7 @@ export async function main(argv: string[]): Promise<void> {
         const cfg = await loadConfig();
         const ws = cfg.workspaces.find((w) => w.name === name);
         if (!ws) return fail(`unknown workspace: ${name}`);
-        await openGroup(app, name, ws.repos);
+        await openGroup(app, name, ws.repos, (p) => agentFor(cfg, p));
         return;
       }
       return fail(`unknown ws command: ${sub}`);

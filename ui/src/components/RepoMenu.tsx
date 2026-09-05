@@ -3,8 +3,10 @@ import type { KeyboardEvent as ReactKeyboardEvent, SyntheticEvent } from "react"
 import { createPortal } from "react-dom";
 import { api } from "../api";
 import { ACTIONS, canRun } from "../../../src/core/actions";
-import { activeRunFor, useStore } from "../store";
+import { describeAgent } from "../../../src/core/agent";
+import { activeRunFor, agentFor, useStore } from "../store";
 import {
+  CLAUDE_OPENERS,
   OPENER_IDS,
   RUN_ACTIONS,
   type OpenerId,
@@ -12,8 +14,11 @@ import {
   type RunAction,
 } from "../../../src/core/types";
 
-/** The "open in" row. The agent lives under "with claude" instead. */
-const OPENERS = OPENER_IDS.filter((app) => app !== "agent");
+/** The "open in" row. The openers that start Claude live under "with claude". */
+const OPENERS = OPENER_IDS.filter((app) => !CLAUDE_OPENERS.includes(app));
+
+/** The jobs; the chat has its own entry since it opens no pre-flight. */
+const JOBS = RUN_ACTIONS.filter((a) => a !== "chat");
 
 /** What justifies the action, shown at the right edge of its row. */
 function fact(repo: Repo, action: RunAction): string {
@@ -52,6 +57,9 @@ export function RepoMenu({
 }) {
   const plan = useStore((s) => s.plan);
   const showRun = useStore((s) => s.showRun);
+  const openChat = useStore((s) => s.openChat);
+  const editAgent = useStore((s) => s.editAgent);
+  const agent = useStore((s) => agentFor(s, repo));
   const active = useStore((s) => activeRunFor(s, repo.id));
   const [open, setOpen] = useState(false);
   const [pos, setPos] = useState<{ top: number; left: number } | null>(null);
@@ -136,6 +144,17 @@ export function RepoMenu({
     plan(repo.id, action);
   };
 
+  const chat = async () => {
+    setOpen(false);
+    try {
+      await openChat(repo.id);
+    } catch (err) {
+      const msg = String(err instanceof Error ? err.message : err);
+      if (onError) onError(msg);
+      else console.error(msg);
+    }
+  };
+
   // Events inside the portal bubble through React to the card, which would
   // open a panel for every menu click.
   const swallow = (e: SyntheticEvent) => e.stopPropagation();
@@ -201,12 +220,26 @@ export function RepoMenu({
                 <span className="menu-text">
                   {active.status === "waiting"
                     ? `${ACTIONS[active.action].verb} needs you`
-                    : `${ACTIONS[active.action].verb} in progress`}
+                    : active.status === "idle"
+                      ? "chat open, your turn"
+                      : `${ACTIONS[active.action].verb} in progress`}
                 </span>
                 <span className="menu-fact">show</span>
               </button>
             )}
-            {RUN_ACTIONS.map((action) => {
+            {!repo.host && (
+              <button
+                type="button"
+                role="menuitem"
+                className="menu-item"
+                title="Talk with Claude Code about this repo, here in canopy"
+                onClick={() => void chat()}
+              >
+                <span className="menu-text">{ACTIONS.chat.label}</span>
+                <span className="menu-fact">{active ? "show" : "in canopy"}</span>
+              </button>
+            )}
+            {JOBS.map((action) => {
               const check = active
                 ? { ok: false as const, why: "wait for the current run" }
                 : canRun(repo, action);
@@ -239,6 +272,29 @@ export function RepoMenu({
             >
               <span className="menu-text">agent</span>
               <span className="menu-fact">interactive, in a terminal</span>
+            </button>
+            <button
+              type="button"
+              role="menuitem"
+              className="menu-item"
+              title="Open this repo as a herdr workspace with Claude Code running in it"
+              onClick={() => void openIn("herdr")}
+            >
+              <span className="menu-text">herdr</span>
+              <span className="menu-fact">a workspace in herdr</span>
+            </button>
+            <button
+              type="button"
+              role="menuitem"
+              className="menu-item"
+              title="Model, effort and permissions for every Claude this repo starts"
+              onClick={() => {
+                setOpen(false);
+                editAgent(repo.id);
+              }}
+            >
+              <span className="menu-text">agent settings…</span>
+              <span className="menu-fact">{describeAgent(agent)}</span>
             </button>
             <div className="menu-label">open in</div>
             <div className="menu-row">

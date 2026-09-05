@@ -4,15 +4,18 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
   addSource,
+  agentFor,
   defaultLabel,
   loadConfig,
   rememberRoot,
   removeSource,
   removeWorkspace,
+  setAgent,
   slugify,
   uniqueId,
   upsertWorkspace,
 } from "./store";
+import { DEFAULT_AGENT } from "./types";
 
 let dir = "";
 const prev = process.env["CANOPY_CONFIG_DIR"];
@@ -80,6 +83,26 @@ describe("config store", () => {
     expect((await loadConfig()).sources.map((s) => s.id)).toEqual(["work", "work-2", "mini-work"]);
     const left = await removeSource("work-2");
     expect(left.map((s) => s.id)).toEqual(["work", "mini-work"]);
+  });
+
+  test("agent settings persist per repo path and vanish at the defaults", async () => {
+    const opus = { model: "opus", effort: "high", yolo: true, extra: "" } as const;
+    let agents = await setAgent("/Users/me/dev/x", opus);
+    expect(agents).toEqual({ "/Users/me/dev/x": opus });
+    let cfg = await loadConfig();
+    expect(agentFor(cfg, "/Users/me/dev/x")).toEqual(opus);
+    expect(agentFor(cfg, "/Users/me/dev/y")).toEqual(DEFAULT_AGENT);
+    // a stray value from a request is repaired, not stored
+    agents = await setAgent("ssh://wsl/home/me/z", {
+      ...DEFAULT_AGENT,
+      model: "gpt" as unknown as "opus",
+      extra: " --x ",
+    });
+    expect(agents["ssh://wsl/home/me/z"]).toEqual({ ...DEFAULT_AGENT, extra: "--x" });
+    agents = await setAgent("/Users/me/dev/x", DEFAULT_AGENT);
+    expect(Object.keys(agents)).toEqual(["ssh://wsl/home/me/z"]);
+    cfg = await loadConfig();
+    expect(cfg.agents["/Users/me/dev/x"]).toBeUndefined();
   });
 
   test("recent roots stay unique and capped", async () => {

@@ -27,6 +27,7 @@ import {
 import { browseLocal, browseRemote, expandHome, SshError } from "../core/browse";
 import { onHost } from "../core/exec";
 import { isSshHost, parseSshHosts, tildeQuote } from "../core/host";
+import { normalizeAgent } from "../core/agent";
 import { isOpenerId, openGroup, openIn } from "../core/openers";
 import {
   launchSource,
@@ -37,10 +38,12 @@ import {
 } from "../core/scan";
 import {
   addSource,
+  agentFor,
   loadConfig,
   rememberRoot,
   removeSource,
   removeWorkspace,
+  setAgent,
   upsertWorkspace,
 } from "../core/store";
 import { Runner } from "../core/runner";
@@ -558,6 +561,18 @@ async function handleApi(
     if (typeof b.id !== "string") return json({ error: "missing run id" }, 400);
     return json(state.runner.stop(b.id));
   }
+  if (path === "/api/runs/say" && method === "POST") {
+    const b = (await req.json()) as { id?: unknown; text?: unknown };
+    if (typeof b.id !== "string" || typeof b.text !== "string") {
+      return json({ error: "missing run id or text" }, 400);
+    }
+    return json(state.runner.say(b.id, b.text));
+  }
+
+  // agent settings, per repo, keyed by path like workspaces
+  if (path === "/api/agents" && method === "GET") {
+    return json((await loadConfig()).agents);
+  }
 
   if (path === "/api/workspaces" && method === "GET") {
     return json((await loadConfig()).workspaces);
@@ -589,7 +604,7 @@ async function handleApi(
     const cfg = await loadConfig();
     const ws = cfg.workspaces.find((w) => w.name === b.name);
     if (!ws) return json({ error: "unknown workspace" }, 404);
-    await openGroup(b.app, b.name, ws.repos);
+    await openGroup(b.app, b.name, ws.repos, (p) => agentFor(cfg, p));
     return json({ ok: true });
   }
 
@@ -703,8 +718,14 @@ async function handleApi(
     if (method === "POST" && action === "open") {
       const b = (await req.json()) as { app: string };
       if (!isOpenerId(b.app)) return json({ error: "unknown app" }, 400);
-      await openIn(b.app, repo.path);
+      await openIn(b.app, repo.path, agentFor(await loadConfig(), repo.path));
       return json({ ok: true });
+    }
+    if (method === "POST" && action === "agent") {
+      // Validated field by field: a stray value must not reach a command line.
+      const agents = await setAgent(repo.path, normalizeAgent(await req.json()));
+      broadcast(state, { type: "agents", agents });
+      return json(agents);
     }
     if (method === "POST" && action === "refresh") {
       return json(await refreshAndBroadcast(state, repo.id));
@@ -716,7 +737,8 @@ async function handleApi(
       const b = (await req.json()) as { action?: unknown; note?: unknown };
       if (!isRunAction(b.action)) return json({ error: "unknown action" }, 400);
       const note = typeof b.note === "string" ? b.note : "";
-      return json(state.runner.start(repo, b.action, note), 201);
+      const agent = agentFor(await loadConfig(), repo.path);
+      return json(state.runner.start(repo, b.action, note, agent), 201);
     }
   }
   return json({ error: "not found" }, 404);

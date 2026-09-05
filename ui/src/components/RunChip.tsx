@@ -24,6 +24,10 @@ export function RunChip({ run, long = false }: { run: Run; long?: boolean }) {
         ? long
           ? `${verb}: claude needs you`
           : "needs you"
+        : run.status === "idle"
+          ? long
+            ? "chat open, your turn"
+            : "chat open"
         : run.status === "done"
           ? long
             ? `${verb} done`

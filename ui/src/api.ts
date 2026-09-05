@@ -1,4 +1,5 @@
 import type {
+  AgentSettings,
   CommitDetail,
   HistoryHit,
   HistoryOverview,
@@ -117,6 +118,13 @@ export const api = {
       method: "POST",
       body: JSON.stringify({ app }),
     }),
+  /** every repo's agent settings, keyed by repo path */
+  agents: () => req<Record<string, AgentSettings>>("/api/agents"),
+  setAgent: (id: string, settings: AgentSettings) =>
+    req<Record<string, AgentSettings>>(`/api/repos/agent?${rq(id)}`, {
+      method: "POST",
+      body: JSON.stringify(settings),
+    }),
   history: (refresh = false) =>
     req<HistoryOverview>(refresh ? "/api/history?refresh=1" : "/api/history"),
   sessions: (id: string, since: HistoryWindow) =>
@@ -143,6 +151,9 @@ export const api = {
     }),
   stopRun: (id: string) =>
     req<Run>("/api/runs/stop", { method: "POST", body: JSON.stringify({ id }) }),
+  /** the next message in a chat */
+  say: (id: string, text: string) =>
+    req<Run>("/api/runs/say", { method: "POST", body: JSON.stringify({ id, text }) }),
   dismissRun: (id: string) =>
     req<{ ok: true }>(`/api/runs?${rq(id)}`, { method: "DELETE" }),
   workspaces: () => req<Workspace[]>("/api/workspaces"),

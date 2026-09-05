@@ -126,7 +126,38 @@ export interface CanopyConfig {
   sources: StoredSource[];
   /** the claude-history CLI; null looks on PATH, then in ~/dev/dev-tools */
   historyBin: string | null;
+  /** how Claude Code starts per repo, keyed by the repo's absolute path (or
+   *  ssh locator) like workspaces are; a repo with no entry uses the defaults */
+  agents: Record<string, AgentSettings>;
 }
+
+/* ---------- agent settings: how Claude Code starts for a repo ---------- */
+
+/** Model aliases the claude CLI takes; "default" leaves the choice to it. */
+export const AGENT_MODELS = ["default", "fable", "opus", "sonnet", "haiku"] as const;
+export type AgentModel = (typeof AGENT_MODELS)[number];
+
+export const AGENT_EFFORTS = ["default", "low", "medium", "high", "xhigh", "max"] as const;
+export type AgentEffort = (typeof AGENT_EFFORTS)[number];
+
+/** Applied wherever canopy starts Claude for the repo: the agent opener, a
+ *  herdr workspace, and the runs and chats in the browser. */
+export interface AgentSettings {
+  model: AgentModel;
+  effort: AgentEffort;
+  /** skip every permission prompt (the CLI's --dangerously-skip-permissions;
+   *  bypassPermissions mode for a run) */
+  yolo: boolean;
+  /** anything else for the claude command line, split like a shell would */
+  extra: string;
+}
+
+export const DEFAULT_AGENT: AgentSettings = {
+  model: "default",
+  effort: "default",
+  yolo: false,
+  extra: "",
+};
 
 /** A source as config holds it: everything but the launch flag. */
 export type StoredSource = SourcePlace & { id: string; label: string };
@@ -174,9 +205,14 @@ export interface CommitDetail {
 
 /** Apps a repo opens in. `agent` is Claude Code itself: an interactive
  *  session in a terminal window at the repo, kitty when it is installed and
- *  Terminal otherwise. */
-export const OPENER_IDS = ["kitty", "terminal", "code", "finder", "agent"] as const;
+ *  Terminal otherwise. `herdr` is the same session inside a herdr workspace
+ *  (herdr.dev, the terminal workspace manager for coding agents). Both start
+ *  Claude with the repo's agent settings. */
+export const OPENER_IDS = ["kitty", "terminal", "code", "finder", "agent", "herdr"] as const;
 export type OpenerId = (typeof OPENER_IDS)[number];
+
+/** The openers that start Claude rather than a plain app. */
+export const CLAUDE_OPENERS: readonly OpenerId[] = ["agent", "herdr"];
 
 /* ---------- runs: a job handed to Claude Code for one repo ---------- */
 
@@ -186,6 +222,7 @@ export const RUN_ACTIONS = [
   "commit-push",
   "deploy",
   "ask",
+  "chat",
 ] as const;
 export type RunAction = (typeof RUN_ACTIONS)[number];
 
@@ -194,6 +231,8 @@ export type RunStatus =
   | "working"
   /** a permission or a question is waiting for the user */
   | "waiting"
+  /** a chat between turns: Claude has answered and waits for the next message */
+  | "idle"
   | "done"
   | "failed"
   | "stopped";
@@ -212,8 +251,9 @@ export interface RunStep {
   id: string;
   /** unix ms */
   at: number;
-  /** Claude's words (text), a tool call, or a one-line remark from canopy */
-  kind: "text" | "tool" | "note";
+  /** Claude's words (text), a tool call, a one-line remark from canopy, or a
+   *  message the user sent in a chat */
+  kind: "text" | "tool" | "note" | "user";
   text?: string;
   tool?: RunTool;
 }
@@ -296,13 +336,16 @@ export function statusFingerprint(st: RepoStatus | null): string {
   });
 }
 
+/** A run with a live Claude process: working, waiting on a prompt, or a chat
+ *  between turns. One at a time per repo. */
 export const isRunActive = (r: Run): boolean =>
-  r.status === "working" || r.status === "waiting";
+  r.status === "working" || r.status === "waiting" || r.status === "idle";
 
 export type ServerEvent =
   | { type: "repo"; repo: Repo }
   | { type: "scan"; result: ScanResult }
   | { type: "workspaces"; workspaces: Workspace[] }
+  | { type: "agents"; agents: Record<string, AgentSettings> }
   | { type: "run"; run: Run }
   | { type: "run-gone"; id: string };
 

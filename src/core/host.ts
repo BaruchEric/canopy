@@ -38,6 +38,15 @@ export function shellQuote(s: string): string {
   return `'${s.replace(/'/g, `'\\''`)}'`;
 }
 
+/** A word a POSIX shell reads as itself. */
+const PLAIN_WORD = /^[A-Za-z0-9_@%+=:,./-]+$/;
+
+/** Words as one shell line, quoting only what needs it, so a command a
+ *  person will see (in a terminal tab, a held window) stays readable. */
+export function shellLine(words: string[]): string {
+  return words.map((w) => (PLAIN_WORD.test(w) ? w : shellQuote(w))).join(" ");
+}
+
 /** Quote a path for a remote shell while letting a leading `~` expand, so a
  *  source can be added as `~/dev` without knowing the remote home. */
 export function tildeQuote(p: string): string {

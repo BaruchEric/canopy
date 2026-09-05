@@ -1933,6 +1933,10 @@ body.resizing {
 .st-stopped {
   --tone: var(--ink-faint);
 }
+/* a chat between turns: Claude has answered and the next word is yours */
+.st-idle {
+  --tone: var(--moss);
+}
 /* a commit or push that moved nothing: done, but not the kind of done the
    card can show, so it borrows the "needs a hand" colour */
 .no-change {
@@ -2197,6 +2201,70 @@ body.resizing {
 .thinking .step-text {
   font-size: 11px;
   color: var(--ink-faint);
+}
+
+/* a message the user sent in a chat: a filled node and a "you" eyebrow, so
+   the two voices read apart at a glance */
+.k-user {
+  margin: 6px 0;
+}
+.k-user .node {
+  background: var(--moss);
+}
+.k-user .step-body {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 6px 10px;
+  border: 1px solid var(--hair);
+  border-radius: var(--r);
+  background: var(--bark2);
+}
+
+/* the chat's message box, between the timeline and the footer */
+.composer {
+  display: flex;
+  align-items: flex-end;
+  gap: 8px;
+  padding: 10px 16px;
+  border-top: 1px solid var(--hair);
+}
+.composer-box {
+  flex: 1;
+  min-width: 0;
+  padding: 6px 10px;
+  resize: none;
+  line-height: 1.45;
+}
+.composer-box::placeholder {
+  color: var(--ink-faint);
+}
+
+/* the per-repo agent settings: the popover's rows, in a sheet */
+.agent-form {
+  padding: 8px 0 10px;
+}
+.agent-form .blurb {
+  margin: 6px 16px 8px;
+}
+.agent-form .settings-row {
+  padding-left: 16px;
+  padding-right: 16px;
+}
+.agent-form .note {
+  margin: 8px 16px 0;
+}
+.agent-extra {
+  width: 100%;
+  padding: 4px 8px;
+  font-family: var(--mono, ui-monospace, monospace);
+  font-size: 12px;
+}
+.agent-extra::placeholder {
+  color: var(--ink-faint);
+}
+.settings-hint.warn {
+  color: var(--lichen);
 }
 
 /* a question or a permission: the run's "needs you" moment, in lichen */

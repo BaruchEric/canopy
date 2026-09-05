@@ -61,6 +61,14 @@ describe("buildPrompt", () => {
     const p = buildPrompt(repo(), "push", "  use the fork remote  ");
     expect(p).toContain("Note from the user (follow it where it applies):\nuse the fork remote");
   });
+  test("a chat frames the first message and keeps the safety rules only", () => {
+    const p = buildPrompt(repo(), "chat", "what does this repo do?");
+    expect(p).toContain("hold a conversation");
+    expect(p).toContain("Never rewrite published history");
+    expect(p).not.toContain("Finish with a short plain-prose summary");
+    expect(p.endsWith("First message from the user:\nwhat does this repo do?")).toBe(true);
+  });
+
   test("ask puts the note in as the task", () => {
     const p = buildPrompt(repo(), "ask", "rename foo to bar");
     expect(p).toContain("Task: see the note below.");

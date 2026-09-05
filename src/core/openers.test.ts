@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import {
   agentShellCommand,
+  claudeLine,
   isOpenerId,
   kittyAgentArgs,
   kittySessionLines,
@@ -9,9 +10,25 @@ import {
   terminalAgentArgs,
 } from "./openers";
 
+const opusYolo = { model: "opus", effort: "high", yolo: true, extra: "--add-dir '../my lib'" } as const;
+
 describe("agent launch", () => {
   test("runs claude through the login, interactive shell", () => {
     expect(agentShellCommand("/bin/zsh")).toEqual(["/bin/zsh", "-l", "-i", "-c", "claude"]);
+  });
+
+  test("the repo's agent settings become flags on that one line", () => {
+    expect(claudeLine(opusYolo)).toBe(
+      "claude --model opus --effort high --dangerously-skip-permissions --add-dir '../my lib'",
+    );
+    expect(agentShellCommand("/bin/zsh", opusYolo).at(-1)).toBe(claudeLine(opusYolo));
+    expect(kittyAgentArgs("/a/x", "/bin/zsh", opusYolo).at(-1)).toBe(claudeLine(opusYolo));
+    expect(sshSessionArgs("wsl", "/home/me/x", "agent", opusYolo).at(-1)).toBe(
+      `cd '/home/me/x' && ${claudeLine(opusYolo)}`,
+    );
+    expect(kittySessionLines(["/a/x"], "agent", "/bin/zsh", () => opusYolo)).toContain(
+      `launch --hold /bin/zsh -l -i -c ${claudeLine(opusYolo)}\n`,
+    );
   });
 
   test("kitty gets a held window at the repo running that shell", () => {
@@ -91,7 +108,8 @@ describe("kitty session", () => {
   });
 });
 
-test("agent is an opener id", () => {
+test("agent and herdr are opener ids", () => {
   expect(isOpenerId("agent")).toBe(true);
+  expect(isOpenerId("herdr")).toBe(true);
   expect(isOpenerId("emacs")).toBe(false);
 });

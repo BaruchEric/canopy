@@ -5,7 +5,9 @@ import { openElsewhere } from "./routes";
 import { loadSettings, saveSettings, type Settings } from "./settings";
 import { clamp, needsAttention } from "./util";
 import {
+  DEFAULT_AGENT,
   isRunActive,
+  type AgentSettings,
   type HistoryOverview,
   type Repo,
   type Run,
@@ -139,6 +141,8 @@ interface CanopyState {
   sheet: Sheet | null;
   /** the claude-history archive, per repo; null until the first fetch lands */
   history: HistoryOverview | null;
+  /** how Claude starts per repo, keyed by repo path; absent means defaults */
+  agents: Record<string, AgentSettings>;
 
   /** loads the tree and opens the SSE stream; returns its unsubscribe */
   init: () => Promise<() => void>;
@@ -173,18 +177,27 @@ interface CanopyState {
 
   /** opens the pre-flight dialog for an action on a repo */
   plan: (repoId: string, action: RunAction) => void;
+  /** opens a chat with Claude in a repo: the repo's live run if it has one,
+   *  else a new idle chat whose first message starts Claude */
+  openChat: (repoId: string) => Promise<void>;
+  /** opens the repo's agent settings */
+  editAgent: (repoId: string) => void;
+  setAgent: (repoId: string, settings: AgentSettings) => Promise<void>;
   /** shows a run's console */
   showRun: (runId: string) => void;
   closeSheet: () => void;
   startRun: (repoId: string, action: RunAction, note: string) => Promise<void>;
   answerRun: (runId: string, promptId: string, answer: RunAnswer) => Promise<void>;
+  /** the next message in a chat */
+  sayRun: (runId: string, text: string) => Promise<void>;
   stopRun: (runId: string) => Promise<void>;
   dismissRun: (runId: string) => Promise<void>;
 }
 
 export type Sheet =
   | { kind: "plan"; repoId: string; action: RunAction }
-  | { kind: "run"; runId: string };
+  | { kind: "run"; runId: string }
+  | { kind: "agent"; repoId: string };
 
 export interface ClickModifiers {
   metaKey?: boolean;
@@ -237,13 +250,15 @@ export const useStore = create<CanopyState>((set, get) => ({
   runs: {},
   sheet: null,
   history: null,
+  agents: {},
 
   init: async () => {
     try {
-      const [tree, workspaces, runs] = await Promise.all([
+      const [tree, workspaces, runs, agents] = await Promise.all([
         api.tree(),
         api.workspaces(),
         api.runs(),
+        api.agents(),
       ]);
       set({
         root: tree.root,
@@ -251,6 +266,7 @@ export const useStore = create<CanopyState>((set, get) => ({
         repos: tree.repos,
         workspaces,
         runs: Object.fromEntries(runs.map((r) => [r.id, r])),
+        agents,
         loaded: true,
         loadError: null,
       });
@@ -364,6 +380,8 @@ export const useStore = create<CanopyState>((set, get) => ({
       set((s) => treeState(s, ev.result));
     } else if (ev.type === "workspaces") {
       set({ workspaces: ev.workspaces });
+    } else if (ev.type === "agents") {
+      set({ agents: ev.agents });
     } else if (ev.type === "run") {
       set((s) => ({ runs: { ...s.runs, [ev.run.id]: ev.run } }));
     } else if (ev.type === "run-gone") {
@@ -419,6 +437,19 @@ export const useStore = create<CanopyState>((set, get) => ({
     const active = activeRunFor(get(), repoId);
     set({ sheet: active ? { kind: "run", runId: active.id } : { kind: "plan", repoId, action } });
   },
+  openChat: async (repoId) => {
+    const active = activeRunFor(get(), repoId);
+    if (active) {
+      set({ sheet: { kind: "run", runId: active.id } });
+      return;
+    }
+    await get().startRun(repoId, "chat", "");
+  },
+  editAgent: (repoId) => set({ sheet: { kind: "agent", repoId } }),
+  setAgent: async (repoId, settings) => {
+    const agents = await api.setAgent(repoId, settings);
+    set({ agents });
+  },
   showRun: (runId) => set({ sheet: { kind: "run", runId } }),
   closeSheet: () => set({ sheet: null }),
   startRun: async (repoId, action, note) => {
@@ -430,6 +461,10 @@ export const useStore = create<CanopyState>((set, get) => ({
   },
   answerRun: async (runId, promptId, answer) => {
     const run = await api.answerRun(runId, promptId, answer);
+    set((s) => ({ runs: { ...s.runs, [run.id]: run } }));
+  },
+  sayRun: async (runId, text) => {
+    const run = await api.say(runId, text);
     set((s) => ({ runs: { ...s.runs, [run.id]: run } }));
   },
   stopRun: async (runId) => {
@@ -473,6 +508,10 @@ export function activeRunFor(s: CanopyState, repoId: string): Run | undefined {
 export function allRuns(s: CanopyState): Run[] {
   return Object.values(s.runs).sort((a, b) => b.startedAt - a.startedAt);
 }
+
+/** The repo's agent settings, the defaults when it has none. */
+export const agentFor = (s: CanopyState, repo: Repo): AgentSettings =>
+  s.agents[repo.path] ?? DEFAULT_AGENT;
 
 /** repos in the active workspace, before any filter */
 export function scopedRepos(s: CanopyState): Repo[] {

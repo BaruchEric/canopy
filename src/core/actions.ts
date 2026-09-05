@@ -94,6 +94,18 @@ export const ACTIONS: Record<RunAction, ActionSpec> = {
     allowedTools: GIT_READ,
     maxTurns: 60,
   },
+  chat: {
+    label: "chat…",
+    verb: "chat",
+    blurb:
+      "A conversation with Claude Code in this repo, turn by turn, in canopy. It asks before running anything beyond reading files and git status.",
+    notePlaceholder: "say something about this repo",
+    noteRequired: false,
+    allowedTools: GIT_READ,
+    // Per user message, not per chat: the CLI counts the agentic turns of one
+    // reply and starts over with the next message.
+    maxTurns: 100,
+  },
 };
 
 /** Actions whose whole point is to move git status; a run of one of these
@@ -104,6 +116,7 @@ export const EXPECTS_CHANGE: Record<RunAction, boolean> = {
   "commit-push": true,
   deploy: false,
   ask: false,
+  chat: false,
 };
 
 /** The card chip's word while the run is going. */
@@ -113,6 +126,7 @@ export const PROGRESS: Record<RunAction, string> = {
   "commit-push": "committing and pushing",
   deploy: "deploying",
   ask: "working",
+  chat: "replying",
 };
 
 /** Whether the action makes sense for the repo right now. `why` is shown as
@@ -195,8 +209,17 @@ Push part:
 4. Deploy. Prefer the project's own script over a raw CLI call when both exist.
 5. Report the deployment URL and anything you noticed.`,
   ask: `Task: see the note below.`,
+  chat: `Task: hold a conversation. The user is chatting with you about this repository from canopy's chat box, and every later message arrives the same way. Answer each message on its own; when a message asks for work, do it. Keep replies short and in plain prose unless the user asks for more. Ask with AskUserQuestion when a choice is theirs to make.`,
 };
 
+/** The chat keeps the safety rules and drops the ones about how a job ends:
+ *  a conversation has no closing summary, and it is not done until the user
+ *  says so. */
+const CHAT_RULES = `Ground rules:
+- Work only inside this repository (submodules under it included).
+- Never rewrite published history, never force-push, never discard uncommitted work, never run destructive git commands (reset --hard, clean, checkout -- on tracked files).
+- Do not add a Co-Authored-By trailer or any mention of Claude to commit messages.
+- No backticks in commit messages.`;
 
 /** The full prompt for a run. The repo facts come from canopy's own status
  *  read, so Claude starts with the same picture the card shows. */
@@ -212,9 +235,16 @@ export function buildPrompt(repo: Repo, action: RunAction, note: string): string
   const noteBlock = trimmed
     ? action === "ask"
       ? `Note from the user:\n${trimmed}`
-      : `Note from the user (follow it where it applies):\n${trimmed}`
+      : action === "chat"
+        ? `First message from the user:\n${trimmed}`
+        : `Note from the user (follow it where it applies):\n${trimmed}`
     : "";
-  return [head, TASKS[action], noteBlock, RULES].filter(Boolean).join("\n\n");
+  // A chat's first message comes last, where a reply naturally follows it.
+  const parts =
+    action === "chat"
+      ? [head, TASKS[action], CHAT_RULES, noteBlock]
+      : [head, TASKS[action], noteBlock, RULES];
+  return parts.filter(Boolean).join("\n\n");
 }
 
 /** Paths inside the repo lose the repo prefix; the console has no room for

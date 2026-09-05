@@ -15,9 +15,12 @@ import {
   toolDetail,
   type ActionSpec,
 } from "./actions";
+import { claudeArgs } from "./agent";
 import {
+  DEFAULT_AGENT,
   isRunActive,
   statusFingerprint,
+  type AgentSettings,
   type Repo,
   type RepoStatus,
   type Run,
@@ -52,6 +55,8 @@ interface Live {
    *  reuses for the prompt's cwd and spec */
   repo: Repo;
   spec: ActionSpec;
+  /** the repo's agent settings when the run started */
+  agent: AgentSettings;
   bin: string;
   /** status fingerprint at start, compared with the one at the end */
   before: string;
@@ -60,6 +65,9 @@ interface Live {
   proc: Bun.Subprocess<"pipe", "pipe", "pipe"> | null;
   /** set by stop(): the exit that follows is a stop, not a failure */
   stopping: boolean;
+  /** a chat whose stdin was closed on purpose: the exit that follows is the
+   *  end of the conversation, not a failure */
+  ending: boolean;
   /** "allow all for this run" was chosen: later permissions pass silently */
   allowAll: boolean;
   /** settles the prompt the run is blocked on */
@@ -132,7 +140,12 @@ export function claudeBinary(): string | null {
   return Bun.which("claude");
 }
 
-function cliArgs(spec: ActionSpec): string[] {
+/** The print-mode command line. The repo's agent settings ride along the
+ *  way they would on an interactive `claude`, except that yolo becomes the
+ *  bypass permission mode: the interactive flag and the prompt tool are two
+ *  ways of answering the same question, and print mode takes the mode. */
+export function cliArgs(spec: ActionSpec, agent: AgentSettings = DEFAULT_AGENT): string[] {
+  const flags = claudeArgs({ ...agent, yolo: false });
   return [
     "-p",
     "--output-format",
@@ -144,7 +157,7 @@ function cliArgs(spec: ActionSpec): string[] {
     "--permission-prompt-tool",
     "stdio",
     "--permission-mode",
-    "default",
+    agent.yolo ? "bypassPermissions" : "default",
     "--max-turns",
     String(spec.maxTurns),
     // The same CLAUDE.md files and permission rules a terminal session
@@ -154,6 +167,7 @@ function cliArgs(spec: ActionSpec): string[] {
     "user,project,local",
     "--strict-mcp-config",
     ...(spec.allowedTools.length ? ["--allowedTools", spec.allowedTools.join(",")] : []),
+    ...flags,
   ];
 }
 
@@ -177,7 +191,9 @@ export class Runner {
     return undefined;
   }
 
-  start(repo: Repo, action: RunAction, note: string): Run {
+  /** Starts a run. A chat may start with nothing to say: it opens idle, with
+   *  no process, and the first message spawns Claude. */
+  start(repo: Repo, action: RunAction, note: string, agent: AgentSettings = DEFAULT_AGENT): Run {
     const busy = this.activeFor(repo.id);
     if (busy) {
       throw new Error(`${repo.name} already has a ${ACTIONS[busy.action].verb} run going`);
@@ -190,12 +206,14 @@ export class Runner {
     if (!bin) {
       throw new Error("the claude CLI is not on PATH; install Claude Code and sign in first");
     }
+    const chat = action === "chat";
     const run: Run = {
       id: crypto.randomUUID().slice(0, 8),
       repoId: repo.id,
       action,
-      note: note.trim(),
-      status: "working",
+      // a chat keeps its messages as steps; the note box is not its record
+      note: chat ? "" : note.trim(),
+      status: chat && !note.trim() ? "idle" : "working",
       startedAt: Date.now(),
       steps: [],
       prompt: null,
@@ -204,11 +222,13 @@ export class Runner {
       run,
       repo,
       spec,
+      agent,
       bin,
       before: statusFingerprint(repo.status),
       root: repo.path,
       proc: null,
       stopping: false,
+      ending: false,
       allowAll: false,
       answer: null,
       pendingRequest: null,
@@ -217,11 +237,42 @@ export class Runner {
     };
     this.live.set(run.id, live);
     this.prune();
+    if (chat) {
+      if (note.trim()) this.step(live, { kind: "user", text: note.trim() });
+      this.hooks.onChange(run);
+      if (note.trim()) void this.drive(live, buildPrompt(repo, action, note));
+      return run;
+    }
     this.hooks.onChange(run);
     void this.drive(live, buildPrompt(repo, action, live.run.note));
     return run;
   }
 
+  /** The user's next message in a chat. The first one spawns Claude with the
+   *  repo's framing around it; later ones go down the same stdin as plain
+   *  user messages, and the CLI keeps the conversation. */
+  say(id: string, text: string): Run {
+    const live = this.live.get(id);
+    if (!live) throw new Error(`unknown run: ${id}`);
+    if (live.run.action !== "chat") throw new Error("only a chat takes messages");
+    if (live.run.status !== "idle") throw new Error("Claude is still replying");
+    const message = text.trim();
+    if (!message) throw new Error("say something first");
+    this.step(live, { kind: "user", text: message });
+    live.run.status = "working";
+    this.emit(live);
+    if (live.proc) {
+      void this.send(live, {
+        type: "user",
+        message: { role: "user", content: message },
+        parent_tool_use_id: null,
+        session_id: "",
+      });
+    } else {
+      void this.drive(live, buildPrompt(live.repo, "chat", message));
+    }
+    return live.run;
+  }
 
   /** Settles the prompt the run is waiting on. */
   answer(id: string, promptId: string, answer: RunAnswer): Run {
@@ -234,14 +285,25 @@ export class Runner {
     return live.run;
   }
 
+  /** Stops a run. A chat between turns ends politely: its stdin closes, the
+   *  CLI exits on its own, and the chat is done rather than stopped. A chat
+   *  that never spawned Claude is simply done. */
   stop(id: string): Run {
     const live = this.live.get(id);
     if (!live) throw new Error(`unknown run: ${id}`);
-    if (isRunActive(live.run)) {
-      live.stopping = true;
-      live.answer?.({ kind: "deny" });
-      live.proc?.kill();
+    if (!isRunActive(live.run)) return live.run;
+    if (live.run.status === "idle") {
+      if (!live.proc) {
+        this.finish(live, "done");
+        return live.run;
+      }
+      live.ending = true;
+      live.proc.stdin.end();
+      return live.run;
     }
+    live.stopping = true;
+    live.answer?.({ kind: "deny" });
+    live.proc?.kill();
     return live.run;
   }
 
@@ -325,11 +387,12 @@ export class Runner {
   }
 
   private async drive(live: Live, message: string): Promise<void> {
-    const { bin, repo, spec } = live;
+    const { bin, repo, spec, agent } = live;
+    const chat = live.run.action === "chat";
     let stderr = "";
     let proc: Bun.Subprocess<"pipe", "pipe", "pipe"> | null = null;
     try {
-      proc = Bun.spawn([bin, ...cliArgs(spec)], {
+      proc = Bun.spawn([bin, ...cliArgs(spec, agent)], {
         cwd: repo.path,
         stdin: "pipe",
         stdout: "pipe",
@@ -354,13 +417,16 @@ export class Runner {
         } else {
           this.apply(live, m);
           // Stdin stays open while the turn runs, for the control replies.
-          // The result ends the turn; closing stdin lets the CLI exit.
-          if (m["type"] === "result") proc.stdin.end();
+          // The result ends the turn; closing stdin lets the CLI exit. A chat
+          // keeps it open: the next message continues the same session.
+          if (m["type"] === "result" && !chat) proc.stdin.end();
         }
       }
       const code = await proc.exited;
       if (live.stopping) {
         this.finish(live, "stopped");
+      } else if (live.ending && code === 0) {
+        this.finish(live, "done");
       } else if (isRunActive(live.run)) {
         const tail = stderr.trim();
         this.finish(
@@ -551,14 +617,25 @@ export class Runner {
         turns,
       };
       const ok = subtype === "success" && !isError;
-      if (!ok) {
-        live.run.error =
-          subtype === "error_max_turns"
-            ? `stopped after ${turns} turns without finishing`
-            : subtype === "error_max_budget_usd"
-              ? "stopped at the spending limit"
-              : text.trim() || "Claude Code reported an error";
+      const problem =
+        subtype === "error_max_turns"
+          ? `stopped after ${turns} turns without finishing`
+          : subtype === "error_max_budget_usd"
+            ? "stopped at the spending limit"
+            : text.trim() || "Claude Code reported an error";
+      if (live.run.action === "chat") {
+        // A chat's result ends one reply, not the conversation: the process
+        // stays, and the next message continues it. A reply that failed is
+        // said in the timeline and the chat goes on.
+        if (!ok) this.step(live, { kind: "note", text: problem });
+        if (isRunActive(live.run)) {
+          live.run.status = "idle";
+          live.run.prompt = null;
+        }
+        this.emit(live);
+        return;
       }
+      if (!ok) live.run.error = problem;
       this.finish(live, ok ? "done" : "failed");
     }
   }

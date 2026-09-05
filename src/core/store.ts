@@ -1,8 +1,11 @@
 import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join } from "node:path";
+import { isDefaultAgent, normalizeAgent } from "./agent";
 import {
+  DEFAULT_AGENT,
   LAUNCH_SOURCE,
+  type AgentSettings,
   type CanopyConfig,
   type SourceInput,
   type StoredSource,
@@ -21,7 +24,20 @@ const defaults = (): CanopyConfig => ({
   recentRoots: [],
   sources: [],
   historyBin: null,
+  agents: {},
 });
+
+/** Every stored entry re-validated; one left at the defaults is dropped, so
+ *  the file only holds repos that differ from them. */
+function normalizeAgents(v: unknown): Record<string, AgentSettings> {
+  if (!v || typeof v !== "object" || Array.isArray(v)) return {};
+  const out: Record<string, AgentSettings> = {};
+  for (const [path, raw] of Object.entries(v as Record<string, unknown>)) {
+    const a = normalizeAgent(raw);
+    if (!isDefaultAgent(a)) out[path] = a;
+  }
+  return out;
+}
 
 /** A hand-edited source survives only when every field it needs is there;
  *  a half entry would later become a repo id nothing can resolve. */
@@ -61,6 +77,7 @@ function normalize(parsed: Partial<CanopyConfig>): CanopyConfig {
       (w): w is Workspace =>
         Boolean(w) && typeof w.name === "string" && Array.isArray(w.repos),
     ),
+    agents: normalizeAgents(cfg.agents),
   };
 }
 
@@ -142,6 +159,26 @@ export async function removeWorkspace(
       cfg.workspaces = cfg.workspaces.filter((w) => w.name !== name);
     }
     return cfg.workspaces;
+  });
+}
+
+/* ---------- agent settings, per repo ---------- */
+
+/** The settings for a repo path, the defaults when it has none. */
+export const agentFor = (cfg: CanopyConfig, path: string): AgentSettings =>
+  cfg.agents[path] ?? DEFAULT_AGENT;
+
+/** Stores a repo's settings; setting everything back to the defaults removes
+ *  the entry. Returns the whole map, which is what the browsers hold. */
+export async function setAgent(
+  path: string,
+  settings: AgentSettings,
+): Promise<Record<string, AgentSettings>> {
+  return withConfig((cfg) => {
+    const a = normalizeAgent(settings);
+    if (isDefaultAgent(a)) delete cfg.agents[path];
+    else cfg.agents[path] = a;
+    return cfg.agents;
   });
 }
 

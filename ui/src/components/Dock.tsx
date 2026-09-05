@@ -401,7 +401,9 @@ export function RepoPanel({
             title={
               app === "agent"
                 ? "Start an interactive Claude Code session in a terminal here"
-                : undefined
+                : app === "herdr"
+                  ? "Open this repo as a herdr workspace with Claude Code running in it"
+                  : undefined
             }
             onClick={() =>
               void run(`open-${app}`, async () => {
