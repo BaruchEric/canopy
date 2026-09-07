@@ -351,7 +351,7 @@ export function RepoPanel({
         <span className="panel-name" title={repo.path}>
           {repo.id}
         </span>
-        {repo.link && <RepoLink url={repo.link} name={repo.name} />}
+        {repo.link && <RepoLink url={repo.link} name={repo.name} labeled />}
         <span className="spacer" />
         <RepoMenu repo={repo} onError={showError} />
         <button

@@ -2,6 +2,7 @@ import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import type { KeyboardEvent as ReactKeyboardEvent, SyntheticEvent } from "react";
 import { createPortal } from "react-dom";
 import { api } from "../api";
+import { linkLabel } from "../util";
 import { ACTIONS, canRun } from "../../../src/core/actions";
 import { describeAgent } from "../../../src/core/agent";
 import { activeRunFor, agentFor, useStore } from "../store";
@@ -297,6 +298,20 @@ export function RepoMenu({
               <span className="menu-fact">{describeAgent(agent)}</span>
             </button>
             <div className="menu-label">open in</div>
+            {repo.link && (
+              <a
+                role="menuitem"
+                className="menu-item"
+                href={repo.link}
+                target="_blank"
+                rel="noreferrer noopener"
+                title={linkLabel(repo.link)}
+                onClick={() => setOpen(false)}
+              >
+                <span className="menu-text">git remote</span>
+                <span className="menu-fact">browser ↗</span>
+              </a>
+            )}
             <div className="menu-row">
               {OPENERS.map((app) => (
                 <button

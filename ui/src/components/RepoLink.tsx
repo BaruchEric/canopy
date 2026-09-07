@@ -4,11 +4,11 @@ import { linkLabel } from "../util";
 /** The repo's remote, as a link out of canopy. Every way of activating a card
  *  opens the panel, so the anchor has to keep its click, its middle click and
  *  its Enter to itself. */
-export function RepoLink({ url, name }: { url: string; name: string }) {
+export function RepoLink({ url, name, labeled = false }: { url: string; name: string; labeled?: boolean }) {
   const stop = (e: SyntheticEvent) => e.stopPropagation();
   return (
     <a
-      className="card-link"
+      className={labeled ? "card-link card-link-labeled" : "card-link"}
       href={url}
       target="_blank"
       rel="noreferrer noopener"
@@ -32,6 +32,7 @@ export function RepoLink({ url, name }: { url: string; name: string }) {
         <path d="M14.5 7h2a5 5 0 0 1 0 10h-2" />
         <path d="M8 12h8" />
       </svg>
+      {labeled && <span>git remote</span>}
     </a>
   );
 }
