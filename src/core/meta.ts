@@ -130,6 +130,9 @@ const READ_LIMIT = 64_000;
 export interface RepoMeta {
   link?: string;
   description?: string;
+  /** every remote's url, in `git config` order; the same read the link comes
+   *  from, kept so a repo can be matched against the same repo on a forge */
+  remotes?: string[];
 }
 
 /** The candidate files a repo has, keyed by lowercased name. */
@@ -249,5 +252,10 @@ export async function readMeta(repoPath: string): Promise<RepoMeta> {
     readDescription(repoPath),
   ]);
   const link = pickLink(remotes);
-  return { ...(link ? { link } : {}), ...(description ? { description } : {}) };
+  const urls = remotes.map((r) => r.url);
+  return {
+    ...(link ? { link } : {}),
+    ...(description ? { description } : {}),
+    ...(urls.length ? { remotes: urls } : {}),
+  };
 }

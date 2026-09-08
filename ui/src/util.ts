@@ -1,8 +1,9 @@
 import { isDirty, type GitUser, type Repo } from "../../src/core/types";
 
-export type RepoState = "error" | "conflict" | "dirty" | "ahead" | "clean";
+export type RepoState = "error" | "conflict" | "dirty" | "ahead" | "clean" | "forge";
 
 export function stateOf(r: Repo): RepoState {
+  if (r.forge) return "forge";
   if (r.error) return "error";
   if (r.status?.files.some((f) => f.conflicted)) return "conflict";
   if ((r.status?.files.length ?? 0) > 0) return "dirty";
@@ -106,6 +107,7 @@ export const GLYPH: Record<RepoState, string> = {
   dirty: "●",
   ahead: "◐",
   clean: "○",
+  forge: "◌",
 };
 
 /** A remote link as a person reads it: "github.com/owner/name". Falls back to

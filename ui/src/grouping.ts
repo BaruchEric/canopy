@@ -13,7 +13,10 @@ export interface RepoGroup {
 
 const DAY = 86_400;
 
-const commitAt = (r: Repo): number => r.status?.lastCommit?.at ?? 0;
+/** When the repo last moved, in unix seconds. A forge repo has no local
+ *  commit to read, so its last push to the forge stands in. */
+const commitAt = (r: Repo): number =>
+  r.status?.lastCommit?.at ?? (r.forge?.updated ? r.forge.updated / 1000 : 0);
 const dirtyCount = (r: Repo): number => r.status?.files.length ?? 0;
 
 const byName = (a: Repo, b: Repo): number =>
@@ -57,6 +60,7 @@ const ACTIVITY: readonly Bucket[] = [
   { key: "ahead", label: "unpushed" },
   { key: "behind", label: "behind upstream" },
   { key: "quiet", label: "quiet" },
+  { key: "forge", label: "on the forge only" },
   { key: "error", label: "unreadable" },
 ];
 
@@ -71,6 +75,8 @@ function activityKey(r: Repo): string {
       return "ahead";
     case "clean":
       return (r.status?.behind ?? 0) > 0 ? "behind" : "quiet";
+    case "forge":
+      return "forge";
   }
 }
 

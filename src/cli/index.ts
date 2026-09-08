@@ -37,6 +37,7 @@ usage:
   canopy ws open <name> [--app code|kitty|terminal|finder|agent|herdr]
   canopy source                      list the extra folders the UI scans
   canopy source add <dir> [--host h] [--label l]   scan another folder; --host for one over ssh
+  canopy source add --forgejo <url> [--token f]    list a self-hosted Forgejo's repos
   canopy source rm <id>              stop scanning it
 `;
 
@@ -247,13 +248,28 @@ export async function main(argv: string[]): Promise<void> {
         }
         for (const s of cfg.sources) {
           const where = s.kind === "ssh" ? sky(`${s.host}:`) : "";
-          console.log(`${bold(s.label)} ${dim(`(${s.id})`)}  ${where}${s.path}`);
+          const at = s.kind === "forgejo" ? `${sky("forgejo ")}${s.url}` : `${where}${s.path}`;
+          console.log(`${bold(s.label)} ${dim(`(${s.id})`)}  ${at}`);
         }
         return;
       }
       if (sub === "add") {
         const host = opt(args, "--host");
         const label = opt(args, "--label");
+        const forgejo = opt(args, "--forgejo");
+        const token = opt(args, "--token");
+        if (forgejo !== undefined) {
+          const stored = await addSource({
+            kind: "forgejo",
+            url: forgejo,
+            ...(token ? { tokenFile: token } : {}),
+            ...(label ? { label } : {}),
+          });
+          console.log(
+            `${moss("✓")} listing ${bold(stored.label)} ${dim(`(${stored.id})`)} from the next canopy ui`,
+          );
+          return;
+        }
         const dir = args.shift() ?? fail("usage: canopy source add <dir> [--host h] [--label l]");
         let input: SourceInput;
         if (host !== undefined) {

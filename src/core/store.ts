@@ -45,7 +45,12 @@ function isStoredSource(v: unknown): v is StoredSource {
   if (!v || typeof v !== "object") return false;
   const s = v as Record<string, unknown>;
   if (typeof s["id"] !== "string" || !s["id"] || s["id"] === LAUNCH_SOURCE) return false;
-  if (typeof s["label"] !== "string" || typeof s["path"] !== "string") return false;
+  if (typeof s["label"] !== "string") return false;
+  if (s["kind"] === "forgejo") {
+    if (typeof s["url"] !== "string" || !s["url"]) return false;
+    return s["tokenFile"] === undefined || typeof s["tokenFile"] === "string";
+  }
+  if (typeof s["path"] !== "string") return false;
   if (s["kind"] === "local") return true;
   return s["kind"] === "ssh" && typeof s["host"] === "string" && s["host"] !== "";
 }
@@ -204,14 +209,23 @@ export function uniqueId(base: string, taken: Iterable<string>): string {
   }
 }
 
-/** The label a source gets when none was given. */
+/** The label a source gets when none was given: the folder's own name, or
+ *  the forge's hostname. */
 export function defaultLabel(input: SourceInput): string {
+  if (input.kind === "forgejo") {
+    const host = input.url.replace(/^[a-z]+:\/\//i, "").split("/")[0] ?? input.url;
+    return host.split(":")[0] || input.url;
+  }
   const base = input.path.replace(/\/+$/, "").split("/").pop() || input.path;
   return input.kind === "ssh" ? `${input.host}:${base}` : base;
 }
 
-const samePlace = (a: SourceInput, b: StoredSource): boolean =>
-  a.kind === b.kind && a.path === b.path && (a.kind !== "ssh" || b.kind !== "ssh" || a.host === b.host);
+const samePlace = (a: SourceInput, b: StoredSource): boolean => {
+  if (a.kind !== b.kind) return false;
+  if (a.kind === "forgejo") return b.kind === "forgejo" && a.url === b.url;
+  if (b.kind === "forgejo") return false;
+  return a.path === b.path && (a.kind !== "ssh" || b.kind !== "ssh" || a.host === b.host);
+};
 
 /** Persists a source. The path is stored as given: the server resolves it
  *  before calling, since only the server can ask a remote host. */
@@ -225,9 +239,17 @@ export async function addSource(input: SourceInput): Promise<StoredSource> {
       cfg.sources.map((s) => s.id),
     );
     const stored: StoredSource =
-      input.kind === "ssh"
-        ? { id, label, kind: "ssh", host: input.host, path: input.path }
-        : { id, label, kind: "local", path: input.path };
+      input.kind === "forgejo"
+        ? {
+            id,
+            label,
+            kind: "forgejo",
+            url: input.url,
+            ...(input.tokenFile ? { tokenFile: input.tokenFile } : {}),
+          }
+        : input.kind === "ssh"
+          ? { id, label, kind: "ssh", host: input.host, path: input.path }
+          : { id, label, kind: "local", path: input.path };
     cfg.sources.push(stored);
     return stored;
   });

@@ -12,6 +12,11 @@ const WHERE = [
     label: "over ssh",
     title: "A folder on a host from ~/.ssh/config; needs key login and git there",
   },
+  {
+    value: "forgejo",
+    label: "self-hosted git",
+    title: "A Forgejo or Gitea server; its API lists the repos it holds",
+  },
 ] as const;
 
 const errorText = (err: unknown): string =>
@@ -20,6 +25,14 @@ const errorText = (err: unknown): string =>
 function SourceRow({ src }: { src: SourceState }) {
   const rescanSource = useStore((s) => s.rescanSource);
   const removeSource = useStore((s) => s.removeSource);
+  // How many of a forge's repos have no clone here: the half the folder
+  // scans cannot show, and what the card grid holds when the view is
+  // "missing".
+  const missing = useStore((s) =>
+    src.kind === "forgejo"
+      ? s.repos.filter((r) => r.source === src.id && r.forge?.clonedAs === undefined).length
+      : 0,
+  );
   const [busy, setBusy] = useState<"rescan" | "remove" | null>(null);
   const [error, setError] = useState<string | null>(null);
 
@@ -36,10 +49,18 @@ function SourceRow({ src }: { src: SourceState }) {
     }
   };
 
-  const where = src.kind === "ssh" ? src.host : "here";
+  const forge = src.kind === "forgejo";
+  const where = src.kind === "ssh" ? src.host : forge ? "forge" : "here";
+  const at = src.kind === "forgejo" ? src.url : src.path;
+  const title =
+    src.kind === "ssh"
+      ? `over ssh to ${src.host}`
+      : forge
+        ? "a self-hosted git server, over its API"
+        : "on this machine";
   return (
     <li className={src.error ? "src-row broken" : "src-row"}>
-      <span className="src-where" title={src.kind === "ssh" ? `over ssh to ${src.host}` : "on this machine"}>
+      <span className="src-where" title={title}>
         {where}
       </span>
       <span className="src-main">
@@ -47,12 +68,14 @@ function SourceRow({ src }: { src: SourceState }) {
           {src.label}
           {src.launch && <em className="src-launch">launch folder</em>}
         </span>
-        <span className="src-path" title={src.path}>
-          {src.path}
+        <span className="src-path" title={at}>
+          {at}
         </span>
       </span>
       <span className="src-n">
-        {src.repos} repo{src.repos === 1 ? "" : "s"}
+        {forge
+          ? `${missing} of ${src.repos} not cloned`
+          : `${src.repos} repo${src.repos === 1 ? "" : "s"}`}
       </span>
       <span className="src-actions">
         <button
@@ -216,9 +239,10 @@ function FolderBrowser({
 
 function AddSourceForm({ onAdded }: { onAdded: () => void }) {
   const addSource = useStore((s) => s.addSource);
-  const [kind, setKind] = useState<"local" | "ssh">("local");
+  const [kind, setKind] = useState<"local" | "ssh" | "forgejo">("local");
   const [host, setHost] = useState("");
   const [path, setPath] = useState("");
+  const [token, setToken] = useState("");
   const [label, setLabel] = useState("");
   const [hosts, setHosts] = useState<string[] | null>(null);
   const [busy, setBusy] = useState(false);
@@ -248,12 +272,21 @@ function AddSourceForm({ onAdded }: { onAdded: () => void }) {
     setError(null);
     try {
       const trimmed = label.trim();
+      const named = trimmed ? { label: trimmed } : {};
       await addSource(
         kind === "ssh"
-          ? { kind, host: host.trim(), path: path.trim(), ...(trimmed ? { label: trimmed } : {}) }
-          : { kind, path: path.trim(), ...(trimmed ? { label: trimmed } : {}) },
+          ? { kind, host: host.trim(), path: path.trim(), ...named }
+          : kind === "forgejo"
+            ? {
+                kind,
+                url: path.trim(),
+                ...(token.trim() ? { tokenFile: token.trim() } : {}),
+                ...named,
+              }
+            : { kind, path: path.trim(), ...named },
       );
       setPath("");
+      setToken("");
       setLabel("");
       onAdded();
     } catch (err) {
@@ -263,8 +296,8 @@ function AddSourceForm({ onAdded }: { onAdded: () => void }) {
     }
   };
 
-  const ready = path.trim() !== "" && (kind === "local" || host.trim() !== "");
-  const canBrowse = kind === "local" || host.trim() !== "";
+  const ready = path.trim() !== "" && (kind !== "ssh" || host.trim() !== "");
+  const canBrowse = kind === "local" || (kind === "ssh" && host.trim() !== "");
   return (
     <form className="src-form" onSubmit={(e) => void submit(e)}>
       <Seg
@@ -298,22 +331,40 @@ function AddSourceForm({ onAdded }: { onAdded: () => void }) {
         )}
         <input
           className="src-input"
-          placeholder={kind === "ssh" ? "~/dev on that host" : "/path/to/folder or ~/folder"}
-          aria-label="folder path"
+          placeholder={
+            kind === "forgejo"
+              ? "https://git.example.com"
+              : kind === "ssh"
+                ? "~/dev on that host"
+                : "/path/to/folder or ~/folder"
+          }
+          aria-label={kind === "forgejo" ? "the forge's address" : "folder path"}
           value={path}
           autoComplete="off"
           spellCheck={false}
           onChange={(e) => setPath(e.target.value)}
         />
-        <button
-          type="button"
-          className={browsing ? "mini on" : "mini"}
-          disabled={!canBrowse}
-          title={canBrowse ? "Pick the folder from a list" : "Name the host first"}
-          onClick={() => setBrowsing(!browsing)}
-        >
-          browse
-        </button>
+        {kind === "forgejo" ? (
+          <input
+            className="src-input"
+            placeholder="token file, or $CANOPY_FORGEJO_TOKEN"
+            aria-label="path to a file holding the API token, optional"
+            value={token}
+            autoComplete="off"
+            spellCheck={false}
+            onChange={(e) => setToken(e.target.value)}
+          />
+        ) : (
+          <button
+            type="button"
+            className={browsing ? "mini on" : "mini"}
+            disabled={!canBrowse}
+            title={canBrowse ? "Pick the folder from a list" : "Name the host first"}
+            onClick={() => setBrowsing(!browsing)}
+          >
+            browse
+          </button>
+        )}
         <input
           className="src-label-input"
           placeholder="label"
@@ -326,7 +377,7 @@ function AddSourceForm({ onAdded }: { onAdded: () => void }) {
           {busy ? "scanning…" : "add"}
         </button>
       </div>
-      {browsing && (
+      {browsing && kind !== "forgejo" && (
         <FolderBrowser
           host={kind === "ssh" ? host.trim() : undefined}
           start={path.trim()}
@@ -345,7 +396,9 @@ function AddSourceForm({ onAdded }: { onAdded: () => void }) {
       <p className="settings-hint">
         {kind === "ssh"
           ? "Repos there show up like local ones: status, log, diffs, commit and push run through ssh. Claude runs stay on this machine."
-          : "Changes in the folder show up live. A folder inside one already listed is refused."}
+          : kind === "forgejo"
+            ? "The forge's own repos, read through its API: a card each, no working copy, so nothing git-driven runs on them. The token file holds a token with read access; only its path is stored."
+            : "Changes in the folder show up live. A folder inside one already listed is refused."}
       </p>
     </form>
   );
@@ -357,6 +410,8 @@ function AddSourceForm({ onAdded }: { onAdded: () => void }) {
 export function SourcesMenu() {
   const root = useStore((s) => s.root);
   const sources = useStore((s) => s.sources);
+  const forgeView = useStore((s) => s.settings.forge);
+  const setSetting = useStore((s) => s.setSetting);
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
 
@@ -409,7 +464,23 @@ export function SourcesMenu() {
       {open && (
         <div className="settings-pop sources-pop" role="dialog" aria-label="Scanned folders">
           <section className="settings-row">
-            <h3 className="panel-label">folders</h3>
+            <div className="src-head">
+              <h3 className="panel-label">folders</h3>
+              {sources.some((s) => s.kind === "forgejo") && (
+                <button
+                  type="button"
+                  className="mini"
+                  title={
+                    forgeView === "all"
+                      ? "Show only the forge repos with no clone on this machine"
+                      : "Show every repo the forge holds, the ones cloned here included"
+                  }
+                  onClick={() => setSetting("forge", forgeView === "all" ? "missing" : "all")}
+                >
+                  {forgeView === "all" ? "forge: everything" : "forge: missing only"}
+                </button>
+              )}
+            </div>
             <ul className="src-list">
               {sources.map((s) => (
                 <SourceRow key={s.id} src={s} />

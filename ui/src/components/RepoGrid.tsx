@@ -31,6 +31,7 @@ const RepoCard = memo(function RepoCard({ repo }: { repo: Repo }) {
   }, [updatedAt]);
 
   const st = repo.status;
+  const forge = repo.forge;
   const state = stateOf(repo);
   const live = run?.status === "working" || run?.status === "waiting" ? ` run-${run.status}` : "";
   return (
@@ -46,7 +47,7 @@ const RepoCard = memo(function RepoCard({ repo }: { repo: Repo }) {
       }}
       tabIndex={0}
       role="button"
-      aria-label={`Open ${repo.name}`}
+      aria-label={forge ? `Open ${repo.name} on the forge` : `Open ${repo.name}`}
     >
       <div className="card-top">
         <span className="glyph">{GLYPH[state]}</span>
@@ -54,6 +55,14 @@ const RepoCard = memo(function RepoCard({ repo }: { repo: Repo }) {
         {repo.host && (
           <span className="host-tag" title={`on ${repo.host}, over ssh`}>
             {repo.host}
+          </span>
+        )}
+        {forge && (
+          <span
+            className="host-tag forge"
+            title={`${forge.slug} on the forge${forge.private ? ", private" : ""}`}
+          >
+            forgejo
           </span>
         )}
         {repo.link && <RepoLink url={repo.link} name={repo.name} />}
@@ -67,8 +76,8 @@ const RepoCard = memo(function RepoCard({ repo }: { repo: Repo }) {
         </p>
       )}
       <div className="card-mid">
-        <span className="branch" title={st?.branch}>
-          {st?.branch ?? "—"}
+        <span className="branch" title={st?.branch ?? forge?.branch}>
+          {st?.branch ?? forge?.branch ?? "—"}
         </span>
         {(st?.ahead ?? 0) > 0 && <span className="ahead">↑{st?.ahead}</span>}
         {(st?.behind ?? 0) > 0 && <span className="behind">↓{st?.behind}</span>}
@@ -76,15 +85,25 @@ const RepoCard = memo(function RepoCard({ repo }: { repo: Repo }) {
       </div>
       <div className="card-bot">
         {run && <RunChip run={run} />}
-        <span className={st?.files.length ? "changes" : "clean"}>
-          {st?.files.length
-            ? `${st.files.length} changed`
-            : repo.error
-              ? ""
-              : "clean"}
-        </span>
-        <span className="when" title={st?.lastCommit?.subject}>
-          {ago(st?.lastCommit?.at)}
+        {forge ? (
+          <span className="clean" title={forge.clone}>
+            {forge.empty
+              ? "empty on the forge"
+              : forge.clonedAs
+                ? "cloned here"
+                : "not cloned here"}
+          </span>
+        ) : (
+          <span className={st?.files.length ? "changes" : "clean"}>
+            {st?.files.length
+              ? `${st.files.length} changed`
+              : repo.error
+                ? ""
+                : "clean"}
+          </span>
+        )}
+        <span className="when" title={forge ? "last push to the forge" : st?.lastCommit?.subject}>
+          {forge ? ago(forge.updated ? forge.updated / 1000 : undefined) : ago(st?.lastCommit?.at)}
         </span>
       </div>
       {history && overview?.available && (

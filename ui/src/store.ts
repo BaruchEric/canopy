@@ -375,6 +375,13 @@ export const useStore = create<CanopyState>((set, get) => ({
       panels: s.panels.includes(id) ? s.panels : [...s.panels, id],
     })),
   openRepo: (id, mods) => {
+    // A forge repo has no panel worth opening: there is no working tree, no
+    // log to read here, nothing to run. Its page is the whole of it.
+    const repo = get().repos.find((r) => r.id === id);
+    if (repo?.forge) {
+      window.open(repo.path, "_blank", "noopener,noreferrer");
+      return;
+    }
     const target = mods?.shiftKey
       ? "window"
       : mods?.metaKey || mods?.ctrlKey
@@ -535,11 +542,17 @@ export function allRuns(s: CanopyState): Run[] {
 export const agentFor = (s: CanopyState, repo: Repo): AgentSettings =>
   s.agents[repo.path] ?? DEFAULT_AGENT;
 
-/** repos in the active workspace, before any filter */
+/** repos in the active workspace, before any filter. A forge repo that is
+ *  already cloned here is the same repo as the card next to it, so unless
+ *  the setting says otherwise only the ones missing locally get one. */
 export function scopedRepos(s: CanopyState): Repo[] {
-  if (!s.activeWs) return s.repos;
+  const all =
+    s.settings.forge === "all"
+      ? s.repos
+      : s.repos.filter((r) => r.forge?.clonedAs === undefined);
+  if (!s.activeWs) return all;
   const ws = s.workspaces.find((w) => w.name === s.activeWs);
-  return ws ? s.repos.filter((r) => ws.repos.includes(r.path)) : s.repos;
+  return ws ? all.filter((r) => ws.repos.includes(r.path)) : all;
 }
 
 /** how many repos the "needs attention" toggle would keep */

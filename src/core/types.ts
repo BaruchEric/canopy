@@ -38,10 +38,13 @@ export interface RepoStatus {
 
 /* ---------- sources: the folders canopy scans ---------- */
 
-/** Where a scanned folder is: on this machine, or on a host ssh can reach. */
+/** Where a scanned source is: a folder on this machine, a folder on a host
+ *  ssh can reach, or a self-hosted Forgejo the API lists repos from. A
+ *  forgejo source has no folder — its repos are on the server, not here. */
 export type SourcePlace =
   | { kind: "local"; path: string }
-  | { kind: "ssh"; host: string; path: string };
+  | { kind: "ssh"; host: string; path: string }
+  | { kind: "forgejo"; url: string; tokenFile?: string };
 
 /** What the browser or the CLI sends to add one. */
 export type SourceInput = SourcePlace & { label?: string };
@@ -77,12 +80,33 @@ export interface Listing {
   dirs: { name: string; repo: boolean }[];
 }
 
+/** A repo canopy knows only from a forge's API: there is no working copy
+ *  here, so status, openers and runs do not apply to it. */
+export interface ForgeRepo {
+  kind: "forgejo";
+  /** `owner/name` on the forge */
+  slug: string;
+  /** the ssh url to clone it from */
+  clone: string;
+  /** the branch the forge calls default */
+  branch: string;
+  /** last push, ms since epoch; 0 when the forge did not say */
+  updated: number;
+  private: boolean;
+  /** a repo with no commits yet — there is nothing to clone */
+  empty: boolean;
+  /** the id of the local repo that already has this as a remote, when one
+   *  in this scan does. Filled in after every scan, not by the fetch. */
+  clonedAs?: string;
+}
+
 export interface Repo {
   /** stable id — path relative to the source root ("." for the root itself),
    *  prefixed `<source id>:` for every source but the launch root */
   id: string;
   name: string;
-  /** absolute path, or `ssh://<host><path>` for a repo on another host */
+  /** absolute path, `ssh://<host><path>` for a repo on another host, or the
+   *  forge's web address for a repo that only exists on a forge */
   path: string;
   /** top-level folder under the scan root ("" when the repo is the root);
    *  under an extra source, the source's label then that folder */
@@ -97,8 +121,17 @@ export interface Repo {
   /** one line from the repo's manifest or README. Read at scan time only —
    *  it is near-static, so a file event does not re-read it. */
   description?: string;
+  /** every configured remote's url, read with the meta. What ties a repo to
+   *  the same repo on a forge. */
+  remotes?: string[];
+  /** set only on a repo that lives on a forge and nowhere here */
+  forge?: ForgeRepo;
   error?: string;
 }
+
+/** A repo with no working copy on any machine canopy can reach: git cannot
+ *  be run against it, so status, diffs, openers and runs all refuse. */
+export const isForge = (r: Pick<Repo, "forge">): boolean => r.forge !== undefined;
 
 export interface ScanResult {
   /** the launch root */

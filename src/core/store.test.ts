@@ -67,6 +67,8 @@ describe("config store", () => {
   test("a default label is the folder name, with the host for ssh", () => {
     expect(defaultLabel({ kind: "local", path: "/Users/me/work/" })).toBe("work");
     expect(defaultLabel({ kind: "ssh", host: "wsl", path: "/home/me/dev" })).toBe("wsl:dev");
+    expect(defaultLabel({ kind: "forgejo", url: "https://git.beric.ca" })).toBe("git.beric.ca");
+    expect(defaultLabel({ kind: "forgejo", url: "http://192.168.1.76:3030" })).toBe("192.168.1.76");
   });
 
   test("sources persist, refuse a duplicate place, and go away", async () => {
@@ -83,6 +85,29 @@ describe("config store", () => {
     expect((await loadConfig()).sources.map((s) => s.id)).toEqual(["work", "work-2", "mini-work"]);
     const left = await removeSource("work-2");
     expect(left.map((s) => s.id)).toEqual(["work", "mini-work"]);
+  });
+
+  test("a forge is stored by address, with the token's path and never the token", async () => {
+    const f = await addSource({
+      kind: "forgejo",
+      url: "https://git.beric.ca",
+      tokenFile: "~/secrets/forgejo.txt",
+    });
+    expect(f).toEqual({
+      id: "git-beric-ca",
+      label: "git.beric.ca",
+      kind: "forgejo",
+      url: "https://git.beric.ca",
+      tokenFile: "~/secrets/forgejo.txt",
+    });
+    await expect(addSource({ kind: "forgejo", url: "https://git.beric.ca" })).rejects.toThrow(
+      "already added as git.beric.ca",
+    );
+    // a folder and a forge are never the same place, whatever they are called
+    const dirSource = await addSource({ kind: "local", path: "/tmp/git.beric.ca" });
+    expect(dirSource.id).toBe("git-beric-ca-2");
+    await removeSource("git-beric-ca");
+    await removeSource("git-beric-ca-2");
   });
 
   test("agent settings persist per repo path and vanish at the defaults", async () => {

@@ -19,6 +19,11 @@ export type Theme = (typeof THEMES)[number];
 export const DENSITIES = ["cozy", "compact"] as const;
 export type Density = (typeof DENSITIES)[number];
 
+export const FORGE_VIEWS = ["missing", "all"] as const;
+/** "missing" keeps only the forge repos with no clone on this machine, which
+ *  is the half a folder scan cannot already show. */
+export type ForgeView = (typeof FORGE_VIEWS)[number];
+
 export interface Settings {
   /** how the tree and the grid are grouped */
   sort: SortMode;
@@ -26,6 +31,8 @@ export interface Settings {
   openIn: OpenTarget;
   theme: Theme;
   density: Density;
+  /** which of a forge's repos are worth a card */
+  forge: ForgeView;
 }
 
 export const DEFAULT_SETTINGS: Settings = {
@@ -33,6 +40,7 @@ export const DEFAULT_SETTINGS: Settings = {
   openIn: "dock",
   theme: "system",
   density: "cozy",
+  forge: "missing",
 };
 
 const KEY = "canopy.settings";
@@ -59,6 +67,7 @@ export function loadSettings(): Settings {
       openIn: pick(OPEN_TARGETS, saved.openIn, DEFAULT_SETTINGS.openIn),
       theme: pick(THEMES, saved.theme, DEFAULT_SETTINGS.theme),
       density: pick(DENSITIES, saved.density, DEFAULT_SETTINGS.density),
+      forge: pick(FORGE_VIEWS, saved.forge, DEFAULT_SETTINGS.forge),
     };
   } catch {
     return DEFAULT_SETTINGS;

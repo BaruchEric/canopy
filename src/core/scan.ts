@@ -1,6 +1,7 @@
 import { readdir, realpath, stat } from "node:fs/promises";
 import { basename, dirname, join, relative } from "node:path";
 import { onHost } from "./exec";
+import { forgeRepo, listForgeRepos } from "./forge";
 import { getStatus } from "./git";
 import { parseLocator, toLocator } from "./host";
 import { readMeta } from "./meta";
@@ -207,6 +208,12 @@ export async function scanSource(
   source: Source,
   opts: ScanOptions = {},
 ): Promise<Repo[]> {
+  // A forge has no folder to walk: its API is the listing, and what comes
+  // back are repos on a server, with no working copy to read a status from.
+  if (source.kind === "forgejo") {
+    const listed = await listForgeRepos(source);
+    return listed.map((api) => forgeRepo(source, api));
+  }
   const host = source.kind === "ssh" ? source.host : null;
   const dirs =
     host === null
@@ -258,8 +265,10 @@ export async function scan(
   };
 }
 
-/** Re-read a single repo (after a mutation or fs event). */
+/** Re-read a single repo (after a mutation or fs event). A forge repo has
+ *  no working copy to re-read: only its source's next scan changes it. */
 export async function refreshRepo(repo: Repo): Promise<Repo> {
+  if (repo.forge) return repo;
   try {
     return { ...repo, status: await getStatus(repo.path), error: undefined };
   } catch (err) {

@@ -57,12 +57,14 @@ export function RepoMenu({
   onError?: (message: string) => void;
 }) {
   const plan = useStore((s) => s.plan);
+  const openRepo = useStore((s) => s.openRepo);
   const showRun = useStore((s) => s.showRun);
   const openChat = useStore((s) => s.openChat);
   const editAgent = useStore((s) => s.editAgent);
   const agent = useStore((s) => agentFor(s, repo));
   const active = useStore((s) => activeRunFor(s, repo.id));
   const [open, setOpen] = useState(false);
+  const [copied, setCopied] = useState(false);
   const [pos, setPos] = useState<{ top: number; left: number } | null>(null);
   const trigger = useRef<HTMLButtonElement>(null);
   const menu = useRef<HTMLDivElement>(null);
@@ -156,6 +158,20 @@ export function RepoMenu({
     }
   };
 
+  const forge = repo.forge;
+
+  const copyClone = async () => {
+    if (!forge || forge.empty) return;
+    try {
+      await navigator.clipboard.writeText(forge.clone);
+      setCopied(true);
+    } catch (err) {
+      const msg = String(err instanceof Error ? err.message : err);
+      if (onError) onError(msg);
+      else console.error(msg);
+    }
+  };
+
   // Events inside the portal bubble through React to the card, which would
   // open a panel for every menu click.
   const swallow = (e: SyntheticEvent) => e.stopPropagation();
@@ -173,6 +189,7 @@ export function RepoMenu({
         onClick={(e) => {
           e.stopPropagation();
           setPos(null);
+          setCopied(false);
           setOpen(!open);
         }}
         onPointerDown={swallow}
@@ -206,125 +223,171 @@ export function RepoMenu({
               onMenuKey(e);
             }}
           >
-            <div className="menu-label">with claude</div>
-            {active && (
-              <button
-                type="button"
-                role="menuitem"
-                className="menu-item live"
-                onClick={() => {
-                  setOpen(false);
-                  showRun(active.id);
-                }}
-              >
-                <span className="dot sky" />
-                <span className="menu-text">
-                  {active.status === "waiting"
-                    ? `${ACTIONS[active.action].verb} needs you`
-                    : active.status === "idle"
-                      ? "chat open, your turn"
-                      : `${ACTIONS[active.action].verb} in progress`}
-                </span>
-                <span className="menu-fact">show</span>
-              </button>
-            )}
-            {!repo.host && (
-              <button
-                type="button"
-                role="menuitem"
-                className="menu-item"
-                title="Talk with Claude Code about this repo, here in canopy"
-                onClick={() => void chat()}
-              >
-                <span className="menu-text">{ACTIONS.chat.label}</span>
-                <span className="menu-fact">{active ? "show" : "in canopy"}</span>
-              </button>
-            )}
-            {JOBS.map((action) => {
-              const check = active
-                ? { ok: false as const, why: "wait for the current run" }
-                : canRun(repo, action);
-              return (
+            {forge ? (
+              <>
+                <div className="menu-label">on the forge</div>
+                <a
+                  role="menuitem"
+                  className="menu-item"
+                  href={repo.path}
+                  target="_blank"
+                  rel="noreferrer noopener"
+                  title={linkLabel(repo.path)}
+                  onClick={() => setOpen(false)}
+                >
+                  <span className="menu-text">{forge.slug}</span>
+                  <span className="menu-fact">browser ↗</span>
+                </a>
                 <button
-                  key={action}
                   type="button"
                   role="menuitem"
                   className="menu-item"
-                  aria-disabled={!check.ok}
-                  title={check.ok ? undefined : check.why}
-                  tabIndex={check.ok ? 0 : -1}
-                  onClick={() => {
-                    if (check.ok) choose(action);
-                  }}
+                  aria-disabled={forge.empty}
+                  title={forge.empty ? "nothing pushed to it yet" : forge.clone}
+                  onClick={() => void copyClone()}
                 >
-                  <span className="menu-text">{ACTIONS[action].label}</span>
-                  <span className="menu-fact">
-                    {check.ok ? fact(repo, action) : check.why}
-                  </span>
+                  <span className="menu-text">copy the clone url</span>
+                  <span className="menu-fact">{copied ? "copied" : "ssh"}</span>
                 </button>
-              );
-            })}
-            <button
-              type="button"
-              role="menuitem"
-              className="menu-item"
-              title="Start an interactive Claude Code session in a terminal at this repo"
-              onClick={() => void openIn("agent")}
-            >
-              <span className="menu-text">agent</span>
-              <span className="menu-fact">interactive, in a terminal</span>
-            </button>
-            <button
-              type="button"
-              role="menuitem"
-              className="menu-item"
-              title="Open this repo as a herdr workspace with Claude Code running in it"
-              onClick={() => void openIn("herdr")}
-            >
-              <span className="menu-text">herdr</span>
-              <span className="menu-fact">a workspace in herdr</span>
-            </button>
-            <button
-              type="button"
-              role="menuitem"
-              className="menu-item"
-              title="Model, effort and permissions for every Claude this repo starts"
-              onClick={() => {
-                setOpen(false);
-                editAgent(repo.id);
-              }}
-            >
-              <span className="menu-text">agent settings…</span>
-              <span className="menu-fact">{describeAgent(agent)}</span>
-            </button>
-            <div className="menu-label">open in</div>
-            {repo.link && (
-              <a
-                role="menuitem"
-                className="menu-item"
-                href={repo.link}
-                target="_blank"
-                rel="noreferrer noopener"
-                title={linkLabel(repo.link)}
-                onClick={() => setOpen(false)}
-              >
-                <span className="menu-text">git remote</span>
-                <span className="menu-fact">browser ↗</span>
-              </a>
-            )}
-            <div className="menu-row">
-              {OPENERS.map((app) => (
+                {forge.clonedAs !== undefined && (
+                  <button
+                    type="button"
+                    role="menuitem"
+                    className="menu-item"
+                    title="Open the clone already on this machine"
+                    onClick={() => {
+                      setOpen(false);
+                      openRepo(forge.clonedAs ?? "");
+                    }}
+                  >
+                    <span className="menu-text">the clone here</span>
+                    <span className="menu-fact">{forge.clonedAs}</span>
+                  </button>
+                )}
+              </>
+            ) : (
+              <>
+              <div className="menu-label">with claude</div>
+              {active && (
                 <button
-                  key={app}
                   type="button"
                   role="menuitem"
-                  className="mini"
-                  onClick={() => void openIn(app)}
+                  className="menu-item live"
+                  onClick={() => {
+                    setOpen(false);
+                    showRun(active.id);
+                  }}
                 >
-                  {app}
+                  <span className="dot sky" />
+                  <span className="menu-text">
+                    {active.status === "waiting"
+                      ? `${ACTIONS[active.action].verb} needs you`
+                      : active.status === "idle"
+                        ? "chat open, your turn"
+                        : `${ACTIONS[active.action].verb} in progress`}
+                  </span>
+                  <span className="menu-fact">show</span>
                 </button>
-              ))}
-            </div>
+              )}
+              {!repo.host && (
+                <button
+                  type="button"
+                  role="menuitem"
+                  className="menu-item"
+                  title="Talk with Claude Code about this repo, here in canopy"
+                  onClick={() => void chat()}
+                >
+                  <span className="menu-text">{ACTIONS.chat.label}</span>
+                  <span className="menu-fact">{active ? "show" : "in canopy"}</span>
+                </button>
+              )}
+              {JOBS.map((action) => {
+                const check = active
+                  ? { ok: false as const, why: "wait for the current run" }
+                  : canRun(repo, action);
+                return (
+                  <button
+                    key={action}
+                    type="button"
+                    role="menuitem"
+                    className="menu-item"
+                    aria-disabled={!check.ok}
+                    title={check.ok ? undefined : check.why}
+                    tabIndex={check.ok ? 0 : -1}
+                    onClick={() => {
+                      if (check.ok) choose(action);
+                    }}
+                  >
+                    <span className="menu-text">{ACTIONS[action].label}</span>
+                    <span className="menu-fact">
+                      {check.ok ? fact(repo, action) : check.why}
+                    </span>
+                  </button>
+                );
+              })}
+              <button
+                type="button"
+                role="menuitem"
+                className="menu-item"
+                title="Start an interactive Claude Code session in a terminal at this repo"
+                onClick={() => void openIn("agent")}
+              >
+                <span className="menu-text">agent</span>
+                <span className="menu-fact">interactive, in a terminal</span>
+              </button>
+              <button
+                type="button"
+                role="menuitem"
+                className="menu-item"
+                title="Open this repo as a herdr workspace with Claude Code running in it"
+                onClick={() => void openIn("herdr")}
+              >
+                <span className="menu-text">herdr</span>
+                <span className="menu-fact">a workspace in herdr</span>
+              </button>
+              <button
+                type="button"
+                role="menuitem"
+                className="menu-item"
+                title="Model, effort and permissions for every Claude this repo starts"
+                onClick={() => {
+                  setOpen(false);
+                  editAgent(repo.id);
+                }}
+              >
+                <span className="menu-text">agent settings…</span>
+                <span className="menu-fact">{describeAgent(agent)}</span>
+              </button>
+              <div className="menu-label">open in</div>
+              {repo.link && (
+                <a
+                  role="menuitem"
+                  className="menu-item"
+                  href={repo.link}
+                  target="_blank"
+                  rel="noreferrer noopener"
+                  title={linkLabel(repo.link)}
+                  onClick={() => setOpen(false)}
+                >
+                  <span className="menu-text">git remote</span>
+                  <span className="menu-fact">browser ↗</span>
+                </a>
+              )}
+              <div className="menu-row">
+                {OPENERS.map((app) => (
+                  <button
+                    key={app}
+                    type="button"
+                    role="menuitem"
+                    className="mini"
+                    onClick={() => void openIn(app)}
+                  >
+                    {app}
+                  </button>
+                ))}
+              </div>
+              </>
+            )}
           </div>,
           document.body,
         )}

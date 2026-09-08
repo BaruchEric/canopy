@@ -26,6 +26,7 @@ import {
 } from "../core/history";
 import { browseLocal, browseRemote, expandHome, SshError } from "../core/browse";
 import { onHost } from "../core/exec";
+import { apiBase, ForgeAuthError, linkForgeClones, listForgeRepos } from "../core/forge";
 import { isSshHost, parseSshHosts, tildeQuote } from "../core/host";
 import { normalizeAgent } from "../core/agent";
 import { isOpenerId, openGroup, openIn } from "../core/openers";
@@ -258,7 +259,9 @@ function rebuildResult(state: ServerState, repos: Repo[]): void {
   state.result = {
     root: state.root,
     sources: state.sources.map((rt) => ({ ...rt.src })),
-    repos: [...repos].sort(bySource(order)),
+    // Which forge repos are already cloned here can only be told once every
+    // source is in the same list, so it is settled on the way out.
+    repos: linkForgeClones([...repos].sort(bySource(order))),
     scannedAt: Date.now(),
   };
 }
@@ -371,6 +374,14 @@ function startWatcher(state: ServerState, rt: SourceRuntime): void {
 /** Re-reads every remote repo's status, a few at a time. Broadcast per
  *  repo, so a card updates as soon as its own answer is in. */
 async function refreshRemote(state: ServerState): Promise<void> {
+  // A forge answers with the whole list or nothing, so its source is scanned
+  // again rather than walked repo by repo.
+  const forges = state.sources.filter((rt) => rt.src.kind === "forgejo" && !rt.scanning);
+  if (forges.length > 0) {
+    const opts = scanOpts(await loadConfig());
+    await Promise.all(forges.map((rt) => scanOne(state, rt, opts)));
+    broadcast(state, { type: "scan", result: state.result });
+  }
   const remote = new Set(
     state.sources.filter((rt) => rt.src.kind === "ssh" && !rt.scanning).map((rt) => rt.src.id),
   );
@@ -390,7 +401,14 @@ async function refreshRemote(state: ServerState): Promise<void> {
 /** Parses the add-a-folder body; anything off gets a 400 with the reason. */
 function parseSourceInput(v: unknown): SourceInput {
   if (!v || typeof v !== "object") throw new HttpError(400, "malformed source");
-  const b = v as { kind?: unknown; path?: unknown; host?: unknown; label?: unknown };
+  const b = v as {
+    kind?: unknown;
+    path?: unknown;
+    host?: unknown;
+    label?: unknown;
+    url?: unknown;
+    tokenFile?: unknown;
+  };
   const path = typeof b.path === "string" ? b.path.trim() : "";
   const label = typeof b.label === "string" && b.label.trim() ? b.label.trim() : undefined;
   if (b.kind === "local") {
@@ -402,12 +420,40 @@ function parseSourceInput(v: unknown): SourceInput {
     if (!isSshHost(host)) throw new HttpError(400, "an ssh host alias is needed");
     return { kind: "ssh", host, path: path || "~", ...(label ? { label } : {}) };
   }
-  throw new HttpError(400, "kind must be local or ssh");
+  if (b.kind === "forgejo") {
+    const raw = typeof b.url === "string" ? b.url.trim() : "";
+    if (!raw) throw new HttpError(400, "the forge's address is needed");
+    const tokenFile = typeof b.tokenFile === "string" ? b.tokenFile.trim() : "";
+    let url: string;
+    try {
+      url = apiBase(raw);
+    } catch (err) {
+      throw new HttpError(400, String(err instanceof Error ? err.message : err));
+    }
+    return {
+      kind: "forgejo",
+      url,
+      ...(tokenFile ? { tokenFile } : {}),
+      ...(label ? { label } : {}),
+    };
+  }
+  throw new HttpError(400, "kind must be local, ssh or forgejo");
 }
 
 /** The folder as its host knows it: absolute, and confirmed to be a
  *  directory. A remote check also proves ssh can get in at all. */
 async function resolveSource(input: SourceInput): Promise<SourceInput> {
+  if (input.kind === "forgejo") {
+    // Listing the repos is the only check worth making: it proves the
+    // address answers, the token is accepted, and there is something to show.
+    try {
+      await listForgeRepos(input, { timeoutMs: 20_000 });
+    } catch (err) {
+      const msg = String(err instanceof Error ? err.message : err);
+      throw new HttpError(err instanceof ForgeAuthError ? 400 : 502, msg);
+    }
+    return input;
+  }
   if (input.kind === "local") {
     const path = resolve(expandHome(input.path));
     const st = await stat(path).catch(() => null);
@@ -579,7 +625,15 @@ async function handleApi(
   }
   // workspace membership arrives as repo ids; stored as absolute paths.
   // An unknown id is a client bug — never store it as if it were a path.
-  const idToPath = (id: string): string => repoById(state, id).path;
+  // A forge repo has a web address where a path would be, and a workspace
+  // opens its members as folders, so it cannot join one.
+  const idToPath = (id: string): string => {
+    const repo = repoById(state, id);
+    if (repo.forge) {
+      throw new HttpError(400, `${repo.name} is on the forge, not a folder a workspace can open`);
+    }
+    return repo.path;
+  };
   if (path === "/api/workspaces" && method === "POST") {
     const b = (await req.json()) as { name: string; repos?: string[] };
     const workspaces = await upsertWorkspace(
@@ -615,6 +669,18 @@ async function handleApi(
   if (m) {
     const repo = repoById(state, url.searchParams.get("id") ?? "");
     const action = m[1];
+    // A forge repo is a listing, not a checkout: git has nothing to run
+    // against and no folder to open. Where the clone is known, say so — the
+    // card next to it is the one that answers.
+    if (repo.forge) {
+      const clone = repo.forge.clonedAs;
+      throw new HttpError(
+        400,
+        clone === undefined
+          ? `${repo.name} is only on the forge — clone it before ${action}`
+          : `${repo.name} is the forge's copy — ${action} belongs to the clone, ${clone}`,
+      );
+    }
 
     if (method === "GET" && action === "log") {
       return json(await getLog(repo.path));

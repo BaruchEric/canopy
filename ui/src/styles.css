@@ -436,6 +436,15 @@ body.resizing {
   right: auto;
   width: 520px;
 }
+/* the section head carries the one control that is about every forge at
+   once, so a source row keeps its width for the label and the path */
+.src-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  align-self: stretch;
+}
 .src-list {
   list-style: none;
   margin: 0;
@@ -615,7 +624,12 @@ body.resizing {
   gap: 6px;
 }
 
-/* a repo that lives on another host says so, next to its name */
+/* a repo that lives on another host, or only on a forge, says so next to
+   its name */
+.host-tag.forge {
+  border-color: color-mix(in srgb, var(--ink-dim) 45%, var(--hair2));
+  color: var(--ink-dim);
+}
 .host-tag {
   flex: none;
   font-size: 10px;
@@ -717,6 +731,11 @@ body.resizing {
 .s-conflict,
 .s-error {
   --state: var(--rust);
+}
+/* a repo that exists on a forge and nowhere on this disk: nothing to act
+   on, so it sits back from the ones that carry working state */
+.s-forge {
+  --state: var(--ink-faint);
 }
 .glyph {
   color: var(--state);
@@ -870,8 +889,14 @@ body.resizing {
   background: var(--state);
   opacity: 0;
 }
-.card:not(.s-clean)::before {
+.card:not(.s-clean):not(.s-forge)::before {
   opacity: 0.9;
+}
+.card.s-forge {
+  border-style: dashed;
+}
+.card.s-forge .card-name {
+  color: var(--ink-dim);
 }
 .card:hover {
   background: color-mix(in srgb, var(--state) 5%, var(--bark2));
