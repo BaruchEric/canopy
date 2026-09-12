@@ -1,0 +1,253 @@
+{
+  "version": 1,
+  "stale_days": 120,
+  "dev_port_base": 6100,
+  "terminal_app": "Terminal",
+  "ignore": [
+    "node_modules",
+    "vendor",
+    "dist",
+    "build",
+    "references",
+    "_devhub"
+  ],
+  "categories": {
+    "ai-agents": {
+      "label": "AI Agents & Assistants",
+      "blurb": "Agent platforms and autonomous AI assistants.",
+      "keywords": [
+        "agent",
+        "assistant",
+        "autonomous",
+        "telegram bot",
+        "openclaw",
+        "hermes",
+        "tool-calling",
+        "tool calling",
+        "multi-agent",
+        "orchestrat",
+        "claude code agent"
+      ]
+    },
+    "ai-tools": {
+      "label": "AI / ML Developer Tooling",
+      "blurb": "Claude/LLM tooling, ML utilities, RAG, transcription.",
+      "keywords": [
+        "mcp",
+        "rag",
+        "llm",
+        "embedding",
+        "transcription",
+        "transcribe",
+        "prompt",
+        "claude",
+        "openai",
+        "gemini",
+        "model context protocol",
+        "vector",
+        "fine-tune",
+        "heartbeat"
+      ]
+    },
+    "web-apps": {
+      "label": "Web Applications",
+      "blurb": "Personal product web apps (frontend + backend).",
+      "keywords": [
+        "react",
+        "next.js",
+        "nextjs",
+        "vite",
+        "firebase",
+        "vercel",
+        "spa",
+        "frontend",
+        "konva",
+        "tailwind",
+        "web app",
+        "ledger",
+        "tracker app",
+        "svelte",
+        "vue"
+      ]
+    },
+    "networking": {
+      "label": "Networking & Monitoring",
+      "blurb": "Network analysis, packet inspection, uptime/latency monitoring.",
+      "keywords": [
+        "network",
+        "packet",
+        "deep packet",
+        "dpi",
+        "ntop",
+        "latency",
+        "packet loss",
+        "throughput",
+        "monitoring",
+        "uptime",
+        "ping",
+        "traffic",
+        "tcp",
+        "snmp"
+      ],
+      "remote_keywords": [
+        "ntop"
+      ]
+    },
+    "dev-tools": {
+      "label": "Developer CLIs & Utilities",
+      "blurb": "Command-line tools and developer utilities.",
+      "keywords": [
+        "cli",
+        "command-line",
+        "command line",
+        "diff",
+        "lint",
+        "linter",
+        "typescript strict",
+        "utility",
+        "convert",
+        "formatter",
+        "codemod",
+        "scaffold",
+        "git diff"
+      ]
+    },
+    "infra": {
+      "label": "Infrastructure & Self-Hosting",
+      "blurb": "Self-hosting stacks, sync, deployment, databases.",
+      "keywords": [
+        "docker-compose",
+        "docker compose",
+        "self-host",
+        "selfhost",
+        "self host",
+        "postgres",
+        "database",
+        "rclone",
+        "syncthing",
+        "sync",
+        "ollama",
+        "deploy",
+        "kubernetes",
+        "k8s",
+        "zero-cache",
+        "zero cache",
+        "hono",
+        "compose"
+      ],
+      "marker_boosts": [
+        "docker-compose"
+      ]
+    },
+    "homelab": {
+      "label": "Homelab & Home Automation",
+      "blurb": "Smart-home control, home-automation hubs, and the NAS/edge that runs them.",
+      "keywords": [
+        "homelab",
+        "home automation",
+        "home-automation",
+        "smart home",
+        "smart-home",
+        "smartthings",
+        "home assistant",
+        "kasa",
+        "lutron",
+        "caseta",
+        "b-hyve",
+        "bhyve",
+        "home-relay",
+        "smart lock",
+        "thermostat"
+      ]
+    },
+    "notes": {
+      "label": "Research & Docs",
+      "blurb": "Non-code research, meeting prep, learning material.",
+      "keywords": [
+        "meeting",
+        "notes",
+        "research",
+        "wiki",
+        "learning",
+        "prep",
+        "cheatsheet",
+        "trading practice",
+        "course",
+        "study",
+        "writeup",
+        "write-up",
+        "documentation only"
+      ]
+    },
+    "ar-glasses": {
+      "label": "AR / Smart Glasses",
+      "blurb": "",
+      "keywords": [
+        "augmented reality",
+        "smart glasses",
+        "ar glasses",
+        "ar/vr",
+        "wearable",
+        "everysight",
+        "maverick",
+        "heads-up display",
+        "glasses"
+      ]
+    },
+    "security": {
+      "label": "Security & Supply Chain",
+      "blurb": "Security tooling, supply-chain inventory, vulnerability scanning.",
+      "keywords": [
+        "security",
+        "supply-chain",
+        "sbom",
+        "lockfile",
+        "inventory",
+        "cve",
+        "advisory",
+        "vulnerability",
+        "exposure",
+        "endpoint",
+        "malware",
+        "threat",
+        "scanner",
+        "pentest",
+        "bumblebee"
+      ]
+    },
+    "games": {
+      "label": "Games & Puzzles",
+      "blurb": "",
+      "keywords": [
+        "game",
+        "puzzle",
+        "sudoku",
+        "board game",
+        "arcade",
+        "gameplay",
+        "player",
+        "chess",
+        "tetris",
+        "maze",
+        "solver"
+      ]
+    },
+    "office": {
+      "label": "Office & Documents",
+      "blurb": "",
+      "keywords": [
+        "office",
+        "scan",
+        "scanner",
+        "scanning",
+        "document",
+        "documents",
+        "pdf",
+        "print",
+        "paperwork"
+      ]
+    }
+  },
+  "overrides": {},
+  "links": {}
+}

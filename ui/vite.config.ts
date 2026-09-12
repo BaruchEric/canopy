@@ -10,6 +10,7 @@ export default defineConfig({
   server: {
     port: 7851,
     proxy: {
+      "/library": "http://127.0.0.1:7850",
       "/api": "http://127.0.0.1:7850",
     },
   },

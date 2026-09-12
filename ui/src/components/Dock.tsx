@@ -364,6 +364,9 @@ export function RepoPanel({
         </button>
       </header>
 
+      {!repo.host && !repo.forge && <a className="panel-library" href={`?view=library&project=${encodeURIComponent(repo.path)}`}>
+        Library · tags, notes, links & dev server →
+      </a>}
       {repo.description && (
         <p className="panel-desc" title={repo.description}>
           {repo.description}

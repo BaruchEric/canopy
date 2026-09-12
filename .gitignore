@@ -3,3 +3,5 @@ dist/
 .DS_Store
 .playwright-cli/
 .impeccable/
+
+__pycache__/

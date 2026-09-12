@@ -1,3 +1,4 @@
+import { libraryCommand } from "../core/library";
 import { resolve } from "node:path";
 import { exec } from "../core/exec";
 import { commit, getStatus, pull, push } from "../core/git";
@@ -35,6 +36,8 @@ usage:
   canopy ws add <name> <dirs...>
   canopy ws rm <name> [dir]          remove a repo, or the whole workspace
   canopy ws open <name> [--app code|kitty|terminal|finder|agent|herdr]
+  canopy library [--root dir] <command> [args...]
+                                     organize projects, links, tags, health, and dev servers
   canopy source                      list the extra folders the UI scans
   canopy source add <dir> [--host h] [--label l]   scan another folder; --host for one over ssh
   canopy source add --forgejo <url> [--token f]    list a self-hosted Forgejo's repos
@@ -76,6 +79,7 @@ async function scanOpts(): Promise<{ maxDepth: number; ignore: string[] }> {
 }
 
 const COMMANDS = new Set([
+  "library",
   "tree",
   "status",
   "ui",
@@ -100,6 +104,11 @@ export async function main(argv: string[]): Promise<void> {
     args[0] !== undefined && COMMANDS.has(args[0]) ? args.shift() : undefined;
 
   switch (cmd) {
+    case "library": {
+      const root = resolve(opt(args, "--root") ?? ".");
+      process.exitCode = await libraryCommand(root, args);
+      return;
+    }
     case undefined:
     case "tree": {
       const root = resolve(args[0] ?? ".");

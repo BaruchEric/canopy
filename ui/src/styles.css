@@ -2499,3 +2499,18 @@ body.resizing {
     display: none;
   }
 }
+
+/* Workspace library shares the app shell and preserves the cockpit's layout. */
+.app-nav{display:flex;align-items:center;gap:8px;padding:7px 14px;border-bottom:1px solid var(--hair);background:var(--bark1);flex-shrink:0}
+.app-nav .wordmark{margin-right:18px}
+.app-nav button{padding:5px 12px;border-radius:var(--r);color:var(--ink-dim)}
+.app-nav button:hover,.app-nav button.on{background:var(--bark3);color:var(--moss)}
+.library-view{display:flex;flex:1;min-height:0;flex-direction:column}
+.library-toolbar{display:flex;gap:18px;align-items:center;padding:10px 16px;border-bottom:1px solid var(--hair);color:var(--ink-dim);flex-wrap:wrap}
+.library-toolbar>span:first-child{max-width:50vw;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.library-hint{flex:1}
+.library-frame{flex:1;width:100%;border:0;min-height:0;background:var(--bark0)}
+.library-message{padding:16px;color:var(--rust)}
+.library-message button{margin-left:12px}
+.panel-library{display:block;padding:8px 14px;color:var(--moss);font-size:11px;border-bottom:1px solid var(--hair)}
+@media(max-width:650px){.library-hint{display:none}.app-nav{gap:2px}.app-nav .wordmark{margin-right:4px}.app-nav button{padding:5px 8px}}

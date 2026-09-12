@@ -1,0 +1,17 @@
+/* Shared Canopy colors; library layout and editors retain their behavior. */
+:root{color-scheme:light dark;--bg:light-dark(#f2f4ee,#0c110d);--panel:light-dark(#fafbf8,#121a14);--border:light-dark(#d8dfd0,#24301f);--text:light-dark(#232d20,#dce5da);--muted:light-dark(#64705a,#8fa083);--accent:light-dark(#3e7a38,#93c98b)}
+:root[data-theme=light]{color-scheme:light}:root[data-theme=dark]{color-scheme:dark}
+body{background:var(--bg);color:var(--text);font-family:ui-monospace,SFMono-Regular,Menlo,monospace}
+header,.card,.modal,.modal-content,.modal-box{background:var(--panel);border-color:var(--border)}
+input,textarea,select,.btn{color:var(--text);background:var(--panel);border-color:var(--border)}
+a{color:var(--accent)}
+.helper-pill,#helperPill{display:none}
+
+:root{--panel2:var(--panel);--line:var(--border);--faint:var(--muted);--chip:var(--panel);--accent-bg:var(--panel);--accent-bg2:var(--border);--accent-dim:var(--accent)}
+.titleblock,.stamp,footer{display:none}
+div:has(>label + #cf-helper_port){display:none}
+input.cell-port,input.cell-path,.toolbar input[type=number],.drawer-body textarea{background:var(--panel);color:var(--text);border-color:var(--border)}
+.toolbar,.drawer-body,table.ports th{background:var(--panel);color:var(--muted);border-color:var(--border)}
+table.ports td{border-color:var(--border)}
+.toolbar{flex-wrap:wrap}
+div:has(>label + #cf-host_root){display:none}

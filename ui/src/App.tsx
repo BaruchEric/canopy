@@ -1,5 +1,7 @@
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import type { CSSProperties } from "react";
+import { Library } from "./components/Library";
+import { Wordmark } from "./components/TopBar";
 import { Dock } from "./components/Dock";
 import { RepoGrid } from "./components/RepoGrid";
 import { Resizer } from "./components/Resizer";
@@ -14,6 +16,31 @@ import { SIDEBAR, useStore } from "./store";
 const route = parseRoute(window.location.search);
 
 export function App() {
+  const [view, setView] = useState(() => new URLSearchParams(location.search).get("view") || "git");
+  const [project, setProject] = useState(() => new URLSearchParams(location.search).get("project"));
+  const navigate = useCallback((next: string) => {
+    const url = new URL(location.href);
+    if (next === "git") url.searchParams.delete("view");
+    else url.searchParams.set("view", next);
+    url.searchParams.delete("project");
+    history.pushState(null, "", url);
+    setView(next);
+    setProject(null);
+  }, []);
+  const showRepo = useCallback((id: string) => {
+    navigate("git");
+    useStore.getState().openPanel(id);
+    void useStore.getState().rescan();
+  }, [navigate]);
+  useEffect(() => {
+    const pop = () => {
+      const query = new URLSearchParams(location.search);
+      setView(query.get("view") || "git");
+      setProject(query.get("project"));
+    };
+    window.addEventListener("popstate", pop);
+    return () => window.removeEventListener("popstate", pop);
+  }, []);
   const init = useStore((s) => s.init);
   const loaded = useStore((s) => s.loaded);
   const loadError = useStore((s) => s.loadError);
@@ -65,7 +92,7 @@ export function App() {
     const onKey = (e: KeyboardEvent) => {
       const t = e.target as HTMLElement;
       if (t.tagName === "INPUT" || t.tagName === "TEXTAREA") return;
-      if (e.metaKey || e.ctrlKey || e.altKey) return;
+      if (view === "library" || view === "ports" || e.metaKey || e.ctrlKey || e.altKey) return;
       if (e.key === "/") {
         e.preventDefault();
         document.getElementById("filter-input")?.focus();
@@ -84,7 +111,7 @@ export function App() {
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [setDirtyOnly, setSetting, toggleSidebar]);
+  }, [setDirtyOnly, setSetting, toggleSidebar, view]);
 
   if (!loaded) {
     if (loadError) {
@@ -112,6 +139,13 @@ export function App() {
   if (route.solo && route.repo) return <Solo id={route.repo} />;
   return (
     <div className="app">
+      <nav className="app-nav" aria-label="Canopy views">
+        <Wordmark />
+        {([['git', 'Git cockpit'], ['library', 'Library'], ['ports', 'Ports']] as const).map(([key, label]) =>
+          <button type="button" key={key} aria-current={view === key ? "page" : undefined}
+            className={view === key ? "on" : ""} onClick={() => navigate(key)}>{label}</button>)}
+      </nav>
+      {view === "library" || view === "ports" ? <Library ports={view === "ports"} project={project} onRepo={showRepo} onPorts={() => navigate("ports")} /> : <>
       <TopBar />
       <div
         className={sidebarOpen ? "body" : "body no-side"}
@@ -137,6 +171,7 @@ export function App() {
         <RepoGrid />
         <Dock />
       </div>
+      </>}
       <RunSheet />
     </div>
   );

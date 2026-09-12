@@ -1,5 +1,6 @@
+import { Library } from "../core/library";
 import { watch, type FSWatcher } from "node:fs";
-import { readFile, stat } from "node:fs/promises";
+import { readFile, realpath, stat } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
 import {
@@ -861,7 +862,7 @@ export async function startServer(opts: {
   port?: number;
 }): Promise<{ port: number; stop: () => void }> {
   const cfg = await loadConfig();
-  const root = resolve(opts.root);
+  const root = await realpath(opts.root);
   const port = opts.port ?? cfg.port;
   const scanOptions = scanOpts(cfg);
   const runtime = (src: Source): SourceRuntime => ({
@@ -901,6 +902,7 @@ export async function startServer(opts: {
   const launch = state.sources[0];
   if (launch?.src.error) throw new Error(launch.src.error);
 
+  const library = new Library(root);
   const webDir = join(import.meta.dir, "../../dist/web");
   const server = bind(port, () =>
     Bun.serve({
@@ -910,6 +912,7 @@ export async function startServer(opts: {
       idleTimeout: 0,
       fetch: async (req) => {
         const url = new URL(req.url);
+        if (url.pathname === "/api/library" || url.pathname === "/library" || url.pathname.startsWith("/library/")) return library.handle(req);
         if (url.pathname === "/api/events") return sse(state);
         if (url.pathname.startsWith("/api/")) {
           try {
@@ -948,6 +951,8 @@ export async function startServer(opts: {
     }
   }, 25_000);
 
+  const stopLibrary = () => library.stop();
+  process.on("exit", stopLibrary);
   return {
     port: server.port ?? port,
     stop: () => {
@@ -955,6 +960,8 @@ export async function startServer(opts: {
       clearInterval(remoteTimer);
       for (const t of state.timers.values()) clearTimeout(t);
       state.runner.stopAll();
+      library.stop();
+      process.off("exit", stopLibrary);
       for (const rt of state.sources) rt.watcher?.close();
       server.stop(true);
     },

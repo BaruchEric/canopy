@@ -11,6 +11,67 @@ The write-capable, many-repo complement to [diffscope](../diffscope) (single-rep
 - **Stack:** Bun + TypeScript (strict) server, React 19 + Vite + Zustand SPA, zero CSS frameworks. `bun test`, `tsc --noEmit`, `oxlint`.
 - **Run:** `bun install && bun run build && bun link`, then `canopy ui ~/dev`.
 
+## Project library and dev servers
+
+Canopy now includes `_devhub`'s workspace-management features. Run
+`canopy ui ~/dev` and choose **Library** or **Ports** beside **Git cockpit**.
+Library organizes projects and saved references with categories, tags, notes,
+favorites, pins, archives, relations, sortable lists, and a file explorer. Its
+project details link back to Canopy's Git panel. Ports manages assignments,
+command detection, and starting, opening, stopping, and restarting dev servers.
+Library also provides bulk Fetch/Sync and individual Fetch/Pull/Push/Sync.
+
+These features require **Python 3.10+** and operate on the UI's launch folder.
+Use the workspace parent (`~/dev` for the existing `_devhub`), not Canopy's own
+checkout. Remote and Forgejo sources continue to work in the Git cockpit;
+Library currently manages the local launch folder.
+
+On first use, Canopy copies durable metadata from `<root>/_devhub` when present:
+categories, overrides, links, notes, favorites, pins, archives, tags, references,
+relations, and cached health. Your current uncommitted metadata is included.
+The source files are left intact; subsequent edits go to
+`~/.config/canopy/library/<root-hash>/` (or `$CANOPY_CONFIG_DIR/library/`). This is
+a one-time migration, not two-way synchronization. Explicit project move/rename
+and import actions still modify project folders, as they did in `_devhub`.
+
+All library commands share that same state:
+
+```bash
+canopy library --root ~/dev --help
+canopy library --root ~/dev doctor
+canopy library --root ~/dev classify
+canopy library --root ~/dev import https://example.org --title "A useful reference"
+canopy library --root ~/dev tag my-project active personal
+canopy library --root ~/dev note my-project "Next steps"
+canopy library --root ~/dev relate my-project another-project
+canopy library --root ~/dev attach "A useful reference" my-project
+canopy library --root ~/dev set-link my-project --deployed https://example.org
+canopy library --root ~/dev ports
+canopy library --root ~/dev dev my-project --dry-run
+canopy library --root ~/dev announce --project my-project --port 6100
+canopy library --root ~/dev git sync
+canopy library --root ~/dev build --no-fetch --no-check
+canopy library --root ~/dev index
+```
+
+`build` discovers nested projects and deployment targets; omit `--no-check` for
+live URL health checks and `--no-fetch` to fetch repositories. `index` exports a
+static snapshot in the state directory without staging Git files. Refresh the
+Library after CLI changes. Dev-server launching retains macOS Terminal/iTerm/Kitty
+support. Canopy starts and stops its own library helper; no separate helper or
+LaunchAgent is needed. Personal DNS setup and standalone gallery/endpoint-site
+publishing stay in `_devhub`.
+
+## Existing tunnel deployment
+
+For an authenticated HTTPS reverse proxy, set `CANOPY_PUBLIC_ORIGIN` to its
+exact origin (for example `https://canopy.beric.ca`) in the server environment.
+Library requests then accept that host with `X-Forwarded-Proto: https`, while
+retaining same-origin checks. Bun still binds only to loopback. Authentication
+must remain enabled on the proxy; this setting does not provide authentication.
+The existing macOS deployment runs as `ca.beric.canopy-server`, with
+Cloudflare Access protecting `canopy.beric.ca`.
+
 ## CLI
 
 ```bash
