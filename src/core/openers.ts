@@ -1,4 +1,4 @@
-import { mkdir, writeFile } from "node:fs/promises";
+import { lstat, mkdir, readdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { claudeArgs } from "./agent";
 import { exec } from "./exec";
@@ -40,7 +40,106 @@ export const remoteFolderUri = (host: string, path: string): string =>
 /** The openers that are a plain app: everything but the two that start Claude. */
 type AppOpener = Exclude<OpenerId, "agent" | "herdr">;
 
-function remoteCommandFor(app: AppOpener, host: string, path: string): string[] {
+/** How the terminal openers (kitty, Terminal, and the agent in either) place
+ *  a repo: a new OS window, or a tab in the front window. */
+export interface OpenOptions {
+  tab?: boolean;
+}
+
+/* ---------- kitty tabs: remote control over a socket ---------- */
+
+/** Where a kitty that canopy starts listens. kitty appends its pid to the
+ *  name, so lookups go by prefix. */
+const kittySocketPrefix = (): string => join(configDir(), "kitty.sock");
+
+/** Flags for every kitty window canopy opens: one kitty instance of its own
+ *  (a plain --single-instance would hand the window to the user's kitty,
+ *  which ignores the rest of these flags) that listens on a socket in the
+ *  config dir, socket-only, so a later tab can reach it. */
+export const kittyInstanceArgs = (prefix = kittySocketPrefix()): string[] => [
+  "--single-instance",
+  "--instance-group",
+  "canopy",
+  "--listen-on",
+  `unix:${prefix}`,
+  "-o",
+  "allow_remote_control=socket-only",
+];
+
+/** The kitten binary: on PATH, else inside the app bundle. */
+const kittenBin = (): string =>
+  Bun.which("kitten") ?? "/Applications/kitty.app/Contents/MacOS/kitten";
+
+/** Sockets a running kitty may answer on: canopy's own, and /tmp/kitty*,
+ *  the convention kitty.conf's listen_on example sets up. */
+async function kittySocketCandidates(): Promise<string[]> {
+  const found: string[] = [];
+  const places: Array<[string, string]> = [
+    [configDir(), "kitty.sock"],
+    ["/tmp", "kitty"],
+  ];
+  for (const [dir, prefix] of places) {
+    let names: string[];
+    try {
+      names = await readdir(dir);
+    } catch {
+      continue;
+    }
+    for (const name of names) {
+      if (!name.startsWith(prefix)) continue;
+      const p = join(dir, name);
+      try {
+        if ((await lstat(p)).isSocket()) found.push(p);
+      } catch {
+        // gone between readdir and stat
+      }
+    }
+  }
+  return found;
+}
+
+/** The first socket a kitty answers on, or null when none is reachable: no
+ *  kitty running, or one started without remote control. */
+async function kittySocket(): Promise<string | null> {
+  const kitten = kittenBin();
+  for (const sock of await kittySocketCandidates()) {
+    const r = await exec([kitten, "@", "--to", `unix:${sock}`, "ls"], { timeoutMs: 3_000 });
+    if (r.code === 0) return sock;
+  }
+  return null;
+}
+
+/** `kitten @ launch` for a tab in the front kitty window: at `dir` running
+ *  the shell, or running `cmd` (held open afterwards when asked). A remote
+ *  repo passes no dir and an ssh line as the command. */
+export function kittyTabArgs(
+  kitten: string,
+  sock: string,
+  dir: string | null,
+  cmd: string[] = [],
+  hold = false,
+): string[] {
+  return [
+    kitten,
+    "@",
+    "--to",
+    `unix:${sock}`,
+    "launch",
+    "--type=tab",
+    ...(dir === null ? [] : [`--cwd=${dir}`]),
+    ...(hold ? ["--hold"] : []),
+    ...cmd,
+  ];
+}
+
+async function kittyTab(sock: string, dir: string | null, cmd: string[], hold: boolean) {
+  const r = await exec(kittyTabArgs(kittenBin(), sock, dir, cmd, hold), { timeoutMs: 15_000 });
+  if (r.code !== 0) throw new Error(r.stderr.trim() || "kitty refused the tab");
+  // launch adds the tab; this brings the window forward
+  await exec(["open", "-a", "kitty.app"], { timeoutMs: 5_000 });
+}
+
+function remoteCommandFor(app: AppOpener, host: string, path: string, tab = false): string[] {
   switch (app) {
     case "kitty":
       return [
@@ -48,11 +147,11 @@ function remoteCommandFor(app: AppOpener, host: string, path: string): string[] 
         "-na",
         "kitty.app",
         "--args",
-        "--single-instance",
+        ...kittyInstanceArgs(),
         ...sshSessionArgs(host, path, "shell"),
       ];
     case "terminal":
-      return terminalLineArgs(sshSessionArgs(host, path, "shell").map(shellQuote).join(" "));
+      return terminalLineArgs(sshSessionArgs(host, path, "shell").map(shellQuote).join(" "), tab);
     case "code":
       if (!Bun.which("code")) {
         throw new Error("the code CLI is not on PATH; a remote folder needs it");
@@ -63,7 +162,7 @@ function remoteCommandFor(app: AppOpener, host: string, path: string): string[] 
   }
 }
 
-function commandFor(app: AppOpener, path: string): string[] {
+function commandFor(app: AppOpener, path: string, tab = false): string[] {
   switch (app) {
     case "kitty":
       return [
@@ -71,12 +170,14 @@ function commandFor(app: AppOpener, path: string): string[] {
         "-na",
         "kitty.app",
         "--args",
-        "--single-instance",
+        ...kittyInstanceArgs(),
         "--directory",
         path,
       ];
     case "terminal":
-      return ["open", "-a", "Terminal", path];
+      return tab
+        ? terminalLineArgs(`cd ${shellQuote(path)}`, true)
+        : ["open", "-a", "Terminal", path];
     case "code":
       return Bun.which("code")
         ? ["code", path]
@@ -116,7 +217,7 @@ export function kittyAgentArgs(
     "-na",
     "kitty.app",
     "--args",
-    "--single-instance",
+    ...kittyInstanceArgs(),
     "--hold",
     "--directory",
     path,
@@ -129,35 +230,48 @@ function appleScriptString(s: string): string {
 }
 
 /** Terminal.app: a new window whose login shell runs `line`, quoted once
- *  more for AppleScript. */
-function terminalLineArgs(line: string): string[] {
-  return [
-    "osascript",
-    "-e",
-    'tell application "Terminal"',
-    "-e",
-    `do script ${appleScriptString(line)}`,
-    "-e",
-    "activate",
-    "-e",
-    "end tell",
-  ];
+ *  more for AppleScript. As a tab: Terminal's dictionary has no "new tab",
+ *  so the script presses cmd-t in the front window and runs the line in
+ *  the tab that appears (which needs Accessibility access for the sender);
+ *  with no window open it falls back to a new one. */
+export function terminalLineArgs(line: string, tab = false): string[] {
+  const script = appleScriptString(line);
+  const lines = tab
+    ? [
+        'tell application "Terminal"',
+        "activate",
+        "if (count of windows) is 0 then",
+        `do script ${script}`,
+        "else",
+        'tell application "System Events" to keystroke "t" using command down',
+        "delay 0.4",
+        `do script ${script} in front window`,
+        "end if",
+        "end tell",
+      ]
+    : ['tell application "Terminal"', `do script ${script}`, "activate", "end tell"];
+  return ["osascript", ...lines.flatMap((l) => ["-e", l])];
 }
 
 /** Terminal.app running the agent at the repo: the path is quoted for the
  *  shell, then the whole line for AppleScript. A remote repo gets an ssh
  *  session that runs the agent there instead. */
-export function terminalAgentArgs(path: string, agent: AgentSettings = DEFAULT_AGENT): string[] {
+export function terminalAgentArgs(
+  path: string,
+  agent: AgentSettings = DEFAULT_AGENT,
+  tab = false,
+): string[] {
   const { host, path: dir } = parseLocator(path);
   return terminalLineArgs(
     host === null
       ? `cd ${shellQuote(dir)} && ${claudeLine(agent)}`
       : sshSessionArgs(host, dir, "agent", agent).map(shellQuote).join(" "),
+    tab,
   );
 }
 
-async function openAgentInTerminal(path: string, agent: AgentSettings): Promise<void> {
-  const t = await exec(terminalAgentArgs(path, agent), { timeoutMs: 15_000 });
+async function openAgentInTerminal(path: string, agent: AgentSettings, tab = false): Promise<void> {
+  const t = await exec(terminalAgentArgs(path, agent, tab), { timeoutMs: 15_000 });
   if (t.code !== 0) {
     throw new Error(t.stderr.trim() || "failed to open a terminal for the agent");
   }
@@ -172,28 +286,55 @@ function kittyAgentArgsFor(path: string, agent: AgentSettings): string[] {
     "-na",
     "kitty.app",
     "--args",
-    "--single-instance",
+    ...kittyInstanceArgs(),
     "--hold",
     ...sshSessionArgs(host, dir, "agent", agent),
   ];
 }
 
-/** kitty first; when `open` cannot find it, Terminal. */
-async function openAgent(path: string, agent: AgentSettings): Promise<void> {
+/** What a kitty tab at the repo runs: nothing (the shell at `dir`) or the
+ *  agent, here or over ssh. */
+function kittyTabPlan(
+  path: string,
+  what: "shell" | "agent",
+  agent: AgentSettings,
+): { dir: string | null; cmd: string[] } {
+  const { host, path: dir } = parseLocator(path);
+  if (host !== null) return { dir: null, cmd: sshSessionArgs(host, dir, what, agent) };
+  return { dir, cmd: what === "agent" ? agentShellCommand(userShell(), agent) : [] };
+}
+
+/** A tab in a reachable kitty, or false when there is none to add it to. */
+async function tryKittyTab(path: string, what: "shell" | "agent", agent: AgentSettings) {
+  const sock = await kittySocket();
+  if (sock === null) return false;
+  const { dir, cmd } = kittyTabPlan(path, what, agent);
+  await kittyTab(sock, dir, cmd, what === "agent");
+  return true;
+}
+
+/** kitty first; when `open` cannot find it, Terminal. As a tab: a kitty
+ *  that answers gets the tab; otherwise a new kitty window that will answer
+ *  next time, and Terminal only when kitty is not installed. */
+async function openAgent(path: string, agent: AgentSettings, tab = false): Promise<void> {
+  if (tab && (await tryKittyTab(path, "agent", agent))) return;
   const k = await exec(kittyAgentArgsFor(path, agent), { timeoutMs: 15_000 });
   if (k.code === 0) return;
-  await openAgentInTerminal(path, agent);
+  await openAgentInTerminal(path, agent, tab);
 }
 
 export async function openIn(
   app: OpenerId,
   path: string,
   agent: AgentSettings = DEFAULT_AGENT,
+  opts: OpenOptions = {},
 ): Promise<void> {
-  if (app === "agent") return openAgent(path, agent);
+  const tab = opts.tab === true;
+  if (app === "agent") return openAgent(path, agent, tab);
   if (app === "herdr") return openHerdr(path, agent);
+  if (app === "kitty" && tab && (await tryKittyTab(path, "shell", agent))) return;
   const { host, path: dir } = parseLocator(path);
-  const cmd = host === null ? commandFor(app, dir) : remoteCommandFor(app, host, dir);
+  const cmd = host === null ? commandFor(app, dir, tab) : remoteCommandFor(app, host, dir, tab);
   const r = await exec(cmd, { timeoutMs: 15_000 });
   if (r.code !== 0) throw new Error(r.stderr.trim() || `failed to open ${app}`);
 }

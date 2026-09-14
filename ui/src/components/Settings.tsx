@@ -8,6 +8,11 @@ const OPEN_IN = [
   { value: "window", label: "new window", title: "One repo per small window" },
 ] as const;
 
+const TERMINAL = [
+  { value: "window", label: "new window", title: "A new kitty or Terminal window per repo" },
+  { value: "tab", label: "tab", title: "A tab in the front kitty or Terminal window" },
+] as const;
+
 const THEME = [
   { value: "system", label: "system", title: "Follows the OS setting" },
   { value: "dark", label: "dark" },
@@ -91,6 +96,20 @@ export function SettingsMenu() {
             />
             <p className="settings-hint">
               Cmd-click always opens a tab, shift-click a window.
+            </p>
+          </section>
+          <section className="settings-row">
+            <h3 className="panel-label">kitty and Terminal</h3>
+            <Seg
+              label="How the terminal openers place a repo"
+              value={settings.terminal}
+              options={TERMINAL}
+              onChange={(v) => setSetting("terminal", v)}
+            />
+            <p className="settings-hint">
+              For "open in" and the agent. kitty tabs go to the kitty canopy
+              runs, its own instance; a Terminal tab presses cmd-t, which needs
+              Accessibility access for the server.
             </p>
           </section>
           <section className="settings-row">

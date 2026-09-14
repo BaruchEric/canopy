@@ -1,7 +1,6 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import type { KeyboardEvent as ReactKeyboardEvent, SyntheticEvent } from "react";
 import { createPortal } from "react-dom";
-import { api } from "../api";
 import { linkLabel } from "../util";
 import { ACTIONS, canRun } from "../../../src/core/actions";
 import { describeAgent } from "../../../src/core/agent";
@@ -58,6 +57,7 @@ export function RepoMenu({
 }) {
   const plan = useStore((s) => s.plan);
   const openRepo = useStore((s) => s.openRepo);
+  const openApp = useStore((s) => s.openApp);
   const showRun = useStore((s) => s.showRun);
   const openChat = useStore((s) => s.openChat);
   const editAgent = useStore((s) => s.editAgent);
@@ -134,7 +134,7 @@ export function RepoMenu({
   const openIn = async (app: OpenerId) => {
     setOpen(false);
     try {
-      await api.open(repo.id, app);
+      await openApp(repo.id, app);
     } catch (err) {
       const msg = String(err instanceof Error ? err.message : err);
       if (onError) onError(msg);

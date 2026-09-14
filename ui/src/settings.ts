@@ -13,6 +13,11 @@ export type SortMode = (typeof SORT_MODES)[number];
 export const OPEN_TARGETS = ["dock", "tab", "window"] as const;
 export type OpenTarget = (typeof OPEN_TARGETS)[number];
 
+/** How the terminal openers (kitty, Terminal, the agent in either) place a
+ *  repo: a new OS window, or a tab in the front window. */
+export const TERMINAL_MODES = ["window", "tab"] as const;
+export type TerminalMode = (typeof TERMINAL_MODES)[number];
+
 export const THEMES = ["system", "dark", "light"] as const;
 export type Theme = (typeof THEMES)[number];
 
@@ -29,6 +34,8 @@ export interface Settings {
   sort: SortMode;
   /** where a clicked repo opens */
   openIn: OpenTarget;
+  /** a window or a tab for kitty and Terminal */
+  terminal: TerminalMode;
   theme: Theme;
   density: Density;
   /** which of a forge's repos are worth a card */
@@ -38,6 +45,7 @@ export interface Settings {
 export const DEFAULT_SETTINGS: Settings = {
   sort: "folder",
   openIn: "dock",
+  terminal: "window",
   theme: "system",
   density: "cozy",
   forge: "missing",
@@ -65,6 +73,7 @@ export function loadSettings(): Settings {
     return {
       sort: pick(SORT_MODES, saved.sort, DEFAULT_SETTINGS.sort),
       openIn: pick(OPEN_TARGETS, saved.openIn, DEFAULT_SETTINGS.openIn),
+      terminal: pick(TERMINAL_MODES, saved.terminal, DEFAULT_SETTINGS.terminal),
       theme: pick(THEMES, saved.theme, DEFAULT_SETTINGS.theme),
       density: pick(DENSITIES, saved.density, DEFAULT_SETTINGS.density),
       forge: pick(FORGE_VIEWS, saved.forge, DEFAULT_SETTINGS.forge),

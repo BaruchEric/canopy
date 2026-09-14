@@ -19,12 +19,13 @@ describe("agent settings", () => {
 
   test("the defaults are recognised so the config can drop them", () => {
     expect(isDefaultAgent(DEFAULT_AGENT)).toBe(true);
-    expect(isDefaultAgent({ ...DEFAULT_AGENT, yolo: true })).toBe(false);
+    expect(isDefaultAgent({ ...DEFAULT_AGENT, yolo: false })).toBe(false);
     expect(isDefaultAgent({ ...DEFAULT_AGENT, extra: "--x" })).toBe(false);
   });
 
-  test("flags only for what is set", () => {
-    expect(claudeArgs(DEFAULT_AGENT)).toEqual([]);
+  test("flags only for what is set; yolo is set by default", () => {
+    expect(claudeArgs(DEFAULT_AGENT)).toEqual(["--dangerously-skip-permissions"]);
+    expect(claudeArgs({ ...DEFAULT_AGENT, yolo: false })).toEqual([]);
     expect(
       claudeArgs({ model: "fable", effort: "xhigh", yolo: true, extra: "--add-dir '../my lib'" }),
     ).toEqual([
@@ -48,12 +49,12 @@ describe("agent settings", () => {
   });
 
   test("one line for the menu", () => {
-    expect(describeAgent(DEFAULT_AGENT)).toBe("claude defaults");
+    expect(describeAgent(DEFAULT_AGENT)).toBe("yolo");
     expect(describeAgent({ model: "opus", effort: "default", yolo: true, extra: "" })).toBe(
       "opus · yolo",
     );
     expect(describeAgent({ model: "default", effort: "max", yolo: false, extra: "--x" })).toBe(
-      "max · --x",
+      "max · ask · --x",
     );
   });
 });

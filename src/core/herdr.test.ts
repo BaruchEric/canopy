@@ -22,7 +22,7 @@ describe("herdr names and argv", () => {
   });
 
   test("agent start passes the settings after --, and nothing without them", () => {
-    expect(herdrStartArgs("canopy", "wF:p1", DEFAULT_AGENT)).toEqual([
+    expect(herdrStartArgs("canopy", "wF:p1", { ...DEFAULT_AGENT, yolo: false })).toEqual([
       "agent",
       "start",
       "canopy",
@@ -50,7 +50,7 @@ describe("herdr names and argv", () => {
 
   test("a remote repo's pane runs an ssh session that starts claude there", () => {
     expect(
-      herdrRemoteLine("wsl", "/home/me/a repo", { ...DEFAULT_AGENT, model: "sonnet" }),
+      herdrRemoteLine("wsl", "/home/me/a repo", { ...DEFAULT_AGENT, model: "sonnet", yolo: false }),
     ).toBe(`ssh -t -- wsl 'cd '\\''/home/me/a repo'\\'' && claude --model sonnet'`);
   });
 });

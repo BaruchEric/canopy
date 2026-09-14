@@ -783,9 +783,11 @@ async function handleApi(
       return json(await suggestMessage(repo.path, files));
     }
     if (method === "POST" && action === "open") {
-      const b = (await req.json()) as { app: string };
+      const b = (await req.json()) as { app: string; tab?: unknown };
       if (!isOpenerId(b.app)) return json({ error: "unknown app" }, 400);
-      await openIn(b.app, repo.path, agentFor(await loadConfig(), repo.path));
+      await openIn(b.app, repo.path, agentFor(await loadConfig(), repo.path), {
+        tab: b.tab === true,
+      });
       return json({ ok: true });
     }
     if (method === "POST" && action === "agent") {

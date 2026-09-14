@@ -9,6 +9,7 @@ import {
   isRunActive,
   type AgentSettings,
   type HistoryOverview,
+  type OpenerId,
   type Repo,
   type Run,
   type RunAction,
@@ -179,6 +180,9 @@ interface CanopyState {
   /** opens a repo where the settings say to; modifier keys override that
    *  the way they do for links (cmd/ctrl → tab, shift → window) */
   openRepo: (id: string, mods?: ClickModifiers) => void;
+  /** opens a repo in an app through the server, as a tab when the settings
+   *  say so; rejects with the server's reason */
+  openApp: (id: string, app: OpenerId) => Promise<void>;
   closePanel: (id: string) => void;
   applyEvent: (ev: ServerEvent) => void;
   setWorkspaces: (ws: Workspace[]) => void;
@@ -389,6 +393,9 @@ export const useStore = create<CanopyState>((set, get) => ({
         : get().settings.openIn;
     if (target === "dock") get().openPanel(id);
     else openElsewhere(id, target);
+  },
+  openApp: async (id, app) => {
+    await api.open(id, app, get().settings.terminal === "tab");
   },
   closePanel: (id) =>
     set((s) => ({ panels: s.panels.filter((p) => p !== id) })),

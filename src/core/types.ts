@@ -179,7 +179,8 @@ export interface AgentSettings {
   model: AgentModel;
   effort: AgentEffort;
   /** skip every permission prompt (the CLI's --dangerously-skip-permissions;
-   *  bypassPermissions mode for a run) */
+   *  bypassPermissions mode for a run). On by default: canopy is a cockpit
+   *  for one's own repos, and a prompt nobody is watching just stalls. */
   yolo: boolean;
   /** anything else for the claude command line, split like a shell would */
   extra: string;
@@ -188,7 +189,7 @@ export interface AgentSettings {
 export const DEFAULT_AGENT: AgentSettings = {
   model: "default",
   effort: "default",
-  yolo: false,
+  yolo: true,
   extra: "",
 };
 

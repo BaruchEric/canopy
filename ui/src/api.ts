@@ -113,10 +113,11 @@ export const api = {
       `/api/repos/suggest?${rq(id)}`,
       { method: "POST", body: "{}" },
     ),
-  open: (id: string, app: string) =>
+  /** `tab` asks the terminal openers for a tab in the front window */
+  open: (id: string, app: string, tab = false) =>
     req<{ ok: true }>(`/api/repos/open?${rq(id)}`, {
       method: "POST",
-      body: JSON.stringify({ app }),
+      body: JSON.stringify({ app, tab }),
     }),
   /** every repo's agent settings, keyed by repo path */
   agents: () => req<Record<string, AgentSettings>>("/api/agents"),

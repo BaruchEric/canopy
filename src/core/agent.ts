@@ -26,7 +26,7 @@ export function normalizeAgent(v: unknown): AgentSettings {
   return {
     model: isModel(o["model"]) ? o["model"] : DEFAULT_AGENT.model,
     effort: isEffort(o["effort"]) ? o["effort"] : DEFAULT_AGENT.effort,
-    yolo: o["yolo"] === true,
+    yolo: typeof o["yolo"] === "boolean" ? o["yolo"] : DEFAULT_AGENT.yolo,
     extra: typeof o["extra"] === "string" ? o["extra"].trim() : "",
   };
 }
@@ -80,14 +80,14 @@ export function claudeArgs(a: AgentSettings): string[] {
   ];
 }
 
-/** One short line for the menu and the panel: "opus · high · yolo", or
- *  "claude defaults" when nothing is set. */
+/** One short line for the menu and the panel: "opus · high · yolo". The
+ *  permission word is always there, since it is the one worth a glance;
+ *  model and effort only when set. */
 export function describeAgent(a: AgentSettings): string {
-  const parts = [
+  return [
     ...(a.model === "default" ? [] : [a.model]),
     ...(a.effort === "default" ? [] : [a.effort]),
-    ...(a.yolo ? ["yolo"] : []),
+    a.yolo ? "yolo" : "ask",
     ...(a.extra ? [a.extra] : []),
-  ];
-  return parts.length ? parts.join(" · ") : "claude defaults";
+  ].join(" · ");
 }

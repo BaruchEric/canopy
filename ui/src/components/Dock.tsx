@@ -242,6 +242,7 @@ export function RepoPanel({
   const repo = useStore((s) => s.repos.find((r) => r.id === id));
   const repoRun = useStore((s) => runFor(s, id));
   const unpin = useStore((s) => s.closePanel);
+  const openApp = useStore((s) => s.openApp);
   const closePanel = onClose ? (_id: string) => onClose() : unpin;
   const [message, setMessage] = useState("");
   // Off by default: on, it runs `git add -A` and silently commits everything
@@ -410,7 +411,7 @@ export function RepoPanel({
             }
             onClick={() =>
               void run(`open-${app}`, async () => {
-                await api.open(id, app);
+                await openApp(id, app);
               })
             }
           >
