@@ -27,6 +27,7 @@ import {
 } from "../core/history";
 import { browseLocal, browseRemote, expandHome, SshError } from "../core/browse";
 import { onHost } from "../core/exec";
+import { parseTermMessage, startTerm, termSize, type TermSession } from "../core/term";
 import { apiBase, ForgeAuthError, linkForgeClones, listForgeRepos } from "../core/forge";
 import { isSshHost, parseSshHosts, tildeQuote } from "../core/host";
 import { normalizeAgent } from "../core/agent";
@@ -100,6 +101,16 @@ interface ServerState {
   history: HistoryCache | null;
   /** an overview being built, so concurrent callers share it */
   historyPending: Promise<HistoryCache> | null;
+  /** the shells open in browser terminals, ended with the server */
+  terms: Set<TermSession>;
+}
+
+/** what a terminal websocket carries from the upgrade to its handlers */
+interface TermSocket {
+  repo: Repo;
+  cols: number;
+  rows: number;
+  session?: TermSession;
 }
 
 interface HistoryCache {
@@ -886,6 +897,7 @@ export async function startServer(opts: {
     timers: new Map(),
     history: null,
     historyPending: null,
+    terms: new Set(),
     runner: new Runner({
       onChange: (run) => broadcast(state, { type: "run", run }),
       onGone: (id) => broadcast(state, { type: "run-gone", id }),
@@ -907,15 +919,30 @@ export async function startServer(opts: {
   const library = new Library(root);
   const webDir = join(import.meta.dir, "../../dist/web");
   const server = bind(port, () =>
-    Bun.serve({
+    Bun.serve<TermSocket>({
       port,
       // Loopback only: every mutating git route here is unauthenticated.
       hostname: "127.0.0.1",
       idleTimeout: 0,
-      fetch: async (req) => {
+      fetch: async (req, srv) => {
         const url = new URL(req.url);
         if (url.pathname === "/api/library" || url.pathname === "/library" || url.pathname.startsWith("/library/")) return library.handle(req);
         if (url.pathname === "/api/events") return sse(state);
+        if (url.pathname === "/api/term") {
+          // A shell in the browser: the socket carries the repo it lands in.
+          // The same rules as the openers: a forge repo has no folder to be in.
+          let repo: Repo;
+          try {
+            repo = repoById(state, url.searchParams.get("id") ?? "");
+          } catch (err) {
+            const status = err instanceof HttpError ? err.status : 500;
+            return json({ error: String(err instanceof Error ? err.message : err) }, status);
+          }
+          if (repo.forge) return json({ error: `${repo.name} is on the forge; there is no folder to open a shell in` }, 400);
+          const size = termSize(url.searchParams.get("cols"), url.searchParams.get("rows"));
+          if (srv.upgrade(req, { data: { repo, ...size } })) return undefined;
+          return json({ error: "a websocket is expected here" }, 426);
+        }
         if (url.pathname.startsWith("/api/")) {
           try {
             return await handleApi(state, req, url);
@@ -935,6 +962,50 @@ export async function startServer(opts: {
         const file = Bun.file(join(webDir, filePath));
         if (await file.exists()) return new Response(file);
         return new Response(Bun.file(join(webDir, "index.html")));
+      },
+      websocket: {
+        // Keystrokes go down as binary frames and the pty's output comes
+        // back the same way; the one text frame each way is JSON: a resize
+        // from the browser, the shell's exit from here.
+        open(ws) {
+          const { repo, cols, rows } = ws.data;
+          try {
+            const session = startTerm(repo.path, { cols, rows }, {
+              data: (chunk) => {
+                ws.sendBinary(chunk);
+              },
+              exit: (code) => {
+                state.terms.delete(session);
+                try {
+                  ws.send(JSON.stringify({ exit: code }));
+                  ws.close(1000, "the shell exited");
+                } catch {
+                  // the browser went first
+                }
+              },
+            });
+            ws.data.session = session;
+            state.terms.add(session);
+          } catch (err) {
+            ws.close(1011, String(err instanceof Error ? err.message : err).slice(0, 120));
+          }
+        },
+        message(ws, msg) {
+          const session = ws.data.session;
+          if (!session) return;
+          if (typeof msg === "string") {
+            const m = parseTermMessage(msg);
+            if (m?.kind === "resize") session.resize(m.size);
+            return;
+          }
+          session.write(msg);
+        },
+        close(ws) {
+          const session = ws.data.session;
+          if (!session) return;
+          state.terms.delete(session);
+          session.close();
+        },
       },
     }),
   );
@@ -962,6 +1033,8 @@ export async function startServer(opts: {
       clearInterval(remoteTimer);
       for (const t of state.timers.values()) clearTimeout(t);
       state.runner.stopAll();
+      for (const t of state.terms) t.close();
+      state.terms.clear();
       library.stop();
       process.off("exit", stopLibrary);
       for (const rt of state.sources) rt.watcher?.close();

@@ -61,6 +61,7 @@ export function RepoMenu({
   const showRun = useStore((s) => s.showRun);
   const openChat = useStore((s) => s.openChat);
   const editAgent = useStore((s) => s.editAgent);
+  const openTerm = useStore((s) => s.openTerm);
   const agent = useStore((s) => agentFor(s, repo));
   const active = useStore((s) => activeRunFor(s, repo.id));
   const [open, setOpen] = useState(false);
@@ -359,6 +360,19 @@ export function RepoMenu({
                 <span className="menu-fact">{describeAgent(agent)}</span>
               </button>
               <div className="menu-label">open in</div>
+              <button
+                type="button"
+                role="menuitem"
+                className="menu-item"
+                title="A shell at this repo, in a strip along the bottom of this window"
+                onClick={() => {
+                  setOpen(false);
+                  openTerm(repo.id);
+                }}
+              >
+                <span className="menu-text">shell</span>
+                <span className="menu-fact">in canopy</span>
+              </button>
               {repo.link && (
                 <a
                   role="menuitem"

@@ -191,7 +191,7 @@ function commandFor(app: AppOpener, path: string, tab = false): string[] {
 
 /** The user's login shell, or zsh, the macOS default, when the server was
  *  started without one (launchd sets no SHELL). */
-function userShell(): string {
+export function userShell(): string {
   return process.env.SHELL || "/bin/zsh";
 }
 

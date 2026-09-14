@@ -26,8 +26,13 @@ export const SIDEBAR = { min: 180, max: 560, initial: 264 };
 export const PANEL = { min: 300, max: 900, initial: 440 };
 /** the solo view's centered panel; the window caps it before max does */
 export const SOLO = { min: 420, max: 2400, initial: 980 };
+/** the terminal strip along the bottom, in px of height */
+export const TERM = { min: 120, max: 1200, initial: 300 };
 
 const LAYOUT_KEY = "canopy.layout";
+
+/** tab ids for the shells, unique for the page's life */
+let termSeq = 0;
 
 /** how often a window re-reads the archive overview on its own */
 const HISTORY_REFRESH = 10 * 60_000;
@@ -41,6 +46,8 @@ interface Layout {
   sidebarOpen: boolean;
   /** folded sections, as sectionKey strings */
   collapsed: string[];
+  /** px height of the terminal strip */
+  termHeight: number;
 }
 
 function loadLayout(): Layout {
@@ -50,6 +57,7 @@ function loadLayout(): Layout {
     soloWidth: SOLO.initial,
     sidebarOpen: true,
     collapsed: [],
+    termHeight: TERM.initial,
   };
   try {
     const raw = localStorage.getItem(LAYOUT_KEY);
@@ -60,6 +68,7 @@ function loadLayout(): Layout {
       soloWidth?: unknown;
       sidebarOpen?: unknown;
       collapsed?: unknown;
+      termHeight?: unknown;
     };
     const panelWidths: Record<string, number> = {};
     for (const [id, w] of Object.entries(saved.panelWidths ?? {})) {
@@ -71,6 +80,7 @@ function loadLayout(): Layout {
     }
     const sw = saved.sidebarWidth;
     const solo = saved.soloWidth;
+    const th = saved.termHeight;
     return {
       sidebarWidth:
         typeof sw === "number" && Number.isFinite(sw)
@@ -85,6 +95,10 @@ function loadLayout(): Layout {
       collapsed: Array.isArray(saved.collapsed)
         ? saved.collapsed.filter((k): k is string => typeof k === "string")
         : [],
+      termHeight:
+        typeof th === "number" && Number.isFinite(th)
+          ? clamp(th, TERM.min, TERM.max)
+          : TERM.initial,
     };
   } catch {
     return fallback;
@@ -105,6 +119,7 @@ const layoutOf = (s: CanopyState): Layout => ({
   soloWidth: s.soloWidth,
   sidebarOpen: s.sidebarOpen,
   collapsed: s.collapsed,
+  termHeight: s.termHeight,
 });
 
 /** drops stored widths for repos that no longer exist in the scan */
@@ -158,6 +173,12 @@ interface CanopyState {
   history: HistoryOverview | null;
   /** how Claude starts per repo, keyed by repo path; absent means defaults */
   agents: Record<string, AgentSettings>;
+  /** shells open in the strip along the bottom, left to right */
+  terms: TermTab[];
+  /** the shell showing in the strip; null when it is empty */
+  activeTerm: string | null;
+  /** px height of the strip, dragged by its top edge */
+  termHeight: number;
 
   /** loads the tree and opens the SSE stream; returns its unsubscribe */
   init: () => Promise<() => void>;
@@ -193,6 +214,13 @@ interface CanopyState {
   setPanelWidth: (id: string, px: number) => void;
   setSoloWidth: (px: number) => void;
   setSetting: <K extends keyof Settings>(key: K, value: Settings[K]) => void;
+  /** opens a new shell at a repo in the strip and shows it */
+  openTerm: (repoId: string) => void;
+  closeTerm: (id: string) => void;
+  showTerm: (id: string) => void;
+  /** marks a shell whose process has ended; its tab stays until closed */
+  endTerm: (id: string, code: number | null) => void;
+  setTermHeight: (px: number) => void;
 
   /** opens the pre-flight dialog for an action on a repo */
   plan: (repoId: string, action: RunAction) => void;
@@ -217,6 +245,18 @@ export type Sheet =
   | { kind: "plan"; repoId: string; action: RunAction }
   | { kind: "run"; runId: string }
   | { kind: "agent"; repoId: string };
+
+/** one shell in the bottom strip */
+export interface TermTab {
+  id: string;
+  repoId: string;
+  /** the repo's name, what the tab says */
+  name: string;
+  /** the repo's locator; the socket lands there */
+  path: string;
+  /** set once the shell has exited, with its code */
+  exit?: number | null;
+}
 
 export interface ClickModifiers {
   metaKey?: boolean;
@@ -271,6 +311,9 @@ export const useStore = create<CanopyState>((set, get) => ({
   sheet: null,
   history: null,
   agents: {},
+  terms: [],
+  activeTerm: null,
+  termHeight: layout.termHeight,
 
   init: async () => {
     try {
@@ -466,6 +509,33 @@ export const useStore = create<CanopyState>((set, get) => ({
       const settings = { ...s.settings, [key]: value };
       saveSettings(settings);
       return { settings };
+    }),
+  openTerm: (repoId) =>
+    set((s) => {
+      const repo = s.repos.find((r) => r.id === repoId);
+      if (!repo || repo.forge) return {};
+      termSeq += 1;
+      const tab: TermTab = { id: `t${termSeq}`, repoId, name: repo.name, path: repo.path };
+      return { terms: [...s.terms, tab], activeTerm: tab.id };
+    }),
+  closeTerm: (id) =>
+    set((s) => {
+      const i = s.terms.findIndex((t) => t.id === id);
+      if (i === -1) return {};
+      const terms = s.terms.filter((t) => t.id !== id);
+      // the neighbour takes over, the way a browser's tab strip does
+      const activeTerm =
+        s.activeTerm !== id ? s.activeTerm : (terms[i] ?? terms[i - 1])?.id ?? null;
+      return { terms, activeTerm };
+    }),
+  showTerm: (id) => set((s) => (s.terms.some((t) => t.id === id) ? { activeTerm: id } : {})),
+  endTerm: (id, code) =>
+    set((s) => ({ terms: s.terms.map((t) => (t.id === id ? { ...t, exit: code } : t)) })),
+  setTermHeight: (px) =>
+    set((s) => {
+      const termHeight = clamp(px, TERM.min, TERM.max);
+      saveLayout({ ...layoutOf(s), termHeight });
+      return { termHeight };
     }),
 
   plan: (repoId, action) => {

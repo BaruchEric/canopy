@@ -8,6 +8,7 @@ import { Resizer } from "./components/Resizer";
 import { RunSheet } from "./components/RunSheet";
 import { Sidebar } from "./components/Sidebar";
 import { Solo } from "./components/Solo";
+import { TermDock } from "./components/TermDock";
 import { Crowns, TopBar } from "./components/TopBar";
 import { parseRoute } from "./routes";
 import { SORT_MODES } from "./settings";
@@ -172,6 +173,7 @@ export function App() {
         <Dock />
       </div>
       </>}
+      <TermDock />
       <RunSheet />
     </div>
   );

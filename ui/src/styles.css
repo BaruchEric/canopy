@@ -27,6 +27,9 @@
   --rust: light-dark(#a84e2f, #c97b5f);
   --sky: light-dark(#2f7a99, #7fb4c9);
   --trunk: #7a5c44;
+  /* the two ANSI colors the palette has no name for; the shell paints with them */
+  --term-magenta: light-dark(#8a5a8f, #c9a0d0);
+  --term-cyan: light-dark(#2a8a8a, #7fcfc9);
   /* a top-edge highlight, the way light catches bark */
   --sheen: light-dark(rgb(255 255 255 / 0.6), rgb(255 255 255 / 0.04));
   --shadow: light-dark(rgb(35 45 32 / 0.18), rgb(0 0 0 / 0.55));
@@ -119,12 +122,19 @@ kbd {
 }
 
 /* ---------- frame ---------- */
+/* A column: the nav, the top bar, the view, and the terminal strip when
+   there is one. Flex rather than a grid so the library view, which has no
+   top bar, and the strip, which comes and goes, need no row counting. */
 .app {
-  display: grid;
-  grid-template-rows: auto 1fr;
+  display: flex;
+  flex-direction: column;
   height: 100vh;
 }
+.app > .topbar {
+  flex: none;
+}
 .body {
+  flex: 1;
   display: grid;
   grid-template-columns: var(--sidebar-w, 264px) 6px minmax(360px, 1fr) auto;
   min-height: 0;
@@ -335,6 +345,9 @@ body.resizing {
 .dot.lichen {
   background: var(--lichen);
   box-shadow: 0 0 0 3px color-mix(in srgb, var(--lichen) 22%, transparent);
+}
+.dot.faint {
+  background: var(--ink-faint);
 }
 .dot.moss {
   background: var(--moss);
@@ -2523,3 +2536,126 @@ body.resizing {
 .library-message button{margin-left:12px}
 .panel-library{display:block;padding:8px 14px;color:var(--moss);font-size:11px;border-bottom:1px solid var(--hair)}
 @media(max-width:650px){.library-hint{display:none}.app-nav{gap:2px}.app-nav .wordmark{margin-right:4px}.app-nav button{padding:5px 8px}}
+
+/* ---------- the terminal strip: shells along the bottom ---------- */
+.termdock {
+  position: relative;
+  flex: none;
+  display: flex;
+  flex-direction: column;
+  height: var(--term-h, 300px);
+  max-height: 80vh;
+  border-top: 1px solid var(--hair2);
+  background: var(--bark0);
+}
+/* the top edge, grabbable a few px either side of the hairline */
+.term-grip {
+  position: absolute;
+  top: -4px;
+  left: 0;
+  right: 0;
+  height: 9px;
+  z-index: 2;
+  cursor: row-resize;
+  touch-action: none;
+}
+.term-grip::after {
+  content: "";
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 3px;
+  height: 2px;
+  background: transparent;
+  transition: background 120ms ease;
+}
+.term-grip:hover::after,
+.term-grip:focus-visible::after,
+.term-grip.dragging::after {
+  background: var(--moss);
+}
+.term-grip:focus-visible {
+  outline: none;
+}
+.term-tabs {
+  flex: none;
+  display: flex;
+  align-items: flex-end;
+  gap: 2px;
+  padding: 4px 8px 0;
+  border-bottom: 1px solid var(--hair);
+  background: var(--bark1);
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+.term-caption {
+  align-self: center;
+  margin: 0 10px 4px 4px;
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.12em;
+  color: var(--ink-faint);
+}
+.term-tab {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: -1px;
+  padding: 4px 6px 5px 10px;
+  border: 1px solid transparent;
+  border-bottom: 0;
+  border-radius: var(--r) var(--r) 0 0;
+  font-size: 12px;
+  color: var(--ink-dim);
+  white-space: nowrap;
+  cursor: pointer;
+  user-select: none;
+}
+.term-tab:hover {
+  color: var(--ink);
+  background: var(--bark2);
+}
+.term-tab.on {
+  color: var(--ink);
+  background: var(--bark0);
+  border-color: var(--hair);
+}
+.term-tab.exited {
+  color: var(--ink-faint);
+}
+.term-tab.exited .term-tab-name {
+  text-decoration: line-through;
+  text-decoration-color: var(--hair2);
+}
+.term-x {
+  display: inline-grid;
+  place-items: center;
+  width: 16px;
+  height: 16px;
+  border-radius: 4px;
+  font-size: 13px;
+  line-height: 1;
+  color: var(--ink-faint);
+}
+.term-x:hover {
+  color: var(--rust);
+  background: var(--bark3);
+}
+.term-body {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+}
+.term-view {
+  position: absolute;
+  inset: 0;
+  padding: 6px 4px 4px 10px;
+}
+.term-view .xterm {
+  height: 100%;
+}
+/* xterm's own scrollbar sits inside the padded box; its viewport paints the
+   token background so the padding does not show as a frame */
+.term-view .xterm .xterm-viewport {
+  background: var(--bark0) !important;
+}
