@@ -10,6 +10,7 @@ import { RepoLink } from "./RepoLink";
 import { RepoMenu } from "./RepoMenu";
 import { Resizer } from "./Resizer";
 import { RunChip } from "./RunChip";
+import { PanelShells } from "./TermDock";
 import {
   OPENER_IDS,
   type LogEntry,
@@ -175,7 +176,8 @@ function History({ repo }: { repo: Repo }) {
   // Bumped by the repo SSE event, so a commit made in a terminal refreshes
   // this list too — not just one made from the panel.
   const updatedAt = useStore((s) => s.updatedAt[repo.id]);
-  const [open, setOpen] = useState(false);
+  const closed = useStore((s) => s.closedSections.includes("history"));
+  const toggleSection = useStore((s) => s.toggleSection);
   const [log, setLog] = useState<LogEntry[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   // One commit open at a time, by hash, so it survives the log refreshing
@@ -183,7 +185,7 @@ function History({ repo }: { repo: Repo }) {
   const [drilled, setDrilled] = useState<string | null>(null);
 
   useEffect(() => {
-    if (!open) return;
+    if (closed) return;
     let live = true;
     setError(null);
     api
@@ -197,10 +199,16 @@ function History({ repo }: { repo: Repo }) {
     return () => {
       live = false;
     };
-  }, [open, repo.id, updatedAt]);
+  }, [closed, repo.id, updatedAt]);
 
   return (
-    <details className="history" onToggle={(e) => setOpen(e.currentTarget.open)}>
+    <details
+      className="history"
+      open={!closed}
+      onToggle={(e) => {
+        if (!e.currentTarget.open !== closed) toggleSection("history");
+      }}
+    >
       <summary className="panel-label">
         history <span>{log ? log.length : "…"}</span>
       </summary>
@@ -243,6 +251,8 @@ export function RepoPanel({
   const repoRun = useStore((s) => runFor(s, id));
   const unpin = useStore((s) => s.closePanel);
   const openApp = useStore((s) => s.openApp);
+  const changesClosed = useStore((s) => s.closedSections.includes("changes"));
+  const toggleSection = useStore((s) => s.toggleSection);
   const closePanel = onClose ? (_id: string) => onClose() : unpin;
   const [message, setMessage] = useState("");
   // Off by default: on, it runs `git add -A` and silently commits everything
@@ -456,25 +466,31 @@ export function RepoPanel({
         </p>
       ) : (
         <>
-          <h3 className="panel-label">
+          <button
+            type="button"
+            className={`panel-label fold${changesClosed ? "" : " open"}`}
+            aria-expanded={!changesClosed}
+            onClick={() => toggleSection("changes")}
+          >
             changes <span>{files.length}</span>
-          </h3>
-          {files.length === 0 ? (
-            <p className="panel-clean">Working tree clean.</p>
-          ) : (
-            <ul className="files">
-              {files.map((f) => (
-                <FileRow
-                  key={f.path}
-                  repo={repo}
-                  file={f}
-                  onError={showError}
-                />
-              ))}
-            </ul>
-          )}
+          </button>
+          {!changesClosed &&
+            (files.length === 0 ? (
+              <p className="panel-clean">Working tree clean.</p>
+            ) : (
+              <ul className="files">
+                {files.map((f) => (
+                  <FileRow
+                    key={f.path}
+                    repo={repo}
+                    file={f}
+                    onError={showError}
+                  />
+                ))}
+              </ul>
+            ))}
 
-          {files.length > 0 && (
+          {!changesClosed && files.length > 0 && (
             <div className="commit-box">
               <textarea
                 placeholder="commit message"
@@ -521,6 +537,7 @@ export function RepoPanel({
             </div>
           )}
 
+          <PanelShells repo={repo} />
           <History repo={repo} />
           <ClaudeSection repo={repo} />
         </>

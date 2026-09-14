@@ -18,6 +18,27 @@ export type OpenTarget = (typeof OPEN_TARGETS)[number];
 export const TERMINAL_MODES = ["window", "tab"] as const;
 export type TerminalMode = (typeof TERMINAL_MODES)[number];
 
+/** Where a shell opened from a card lands: the repo's panel, the strip along
+ *  the bottom, a browser tab or window of its own, or auto, which is the panel
+ *  when the repo has one open and the strip otherwise. */
+export const SHELL_TARGETS = ["auto", "panel", "strip", "tab", "window"] as const;
+export type ShellTarget = (typeof SHELL_TARGETS)[number];
+
+/** The two places a shell can live inside a window. */
+export type ShellPlace = "panel" | "strip";
+
+/** Resolves the setting for one click. A solo window has no strip, so
+ *  everything that would go there goes to the panel instead. */
+export function shellPlace(
+  target: ShellTarget,
+  opts: { panelOpen: boolean; solo: boolean },
+): ShellPlace | "tab" | "window" {
+  if (target === "tab" || target === "window") return target;
+  if (opts.solo) return "panel";
+  if (target === "auto") return opts.panelOpen ? "panel" : "strip";
+  return target;
+}
+
 export const THEMES = ["system", "dark", "light"] as const;
 export type Theme = (typeof THEMES)[number];
 
@@ -36,6 +57,8 @@ export interface Settings {
   openIn: OpenTarget;
   /** a window or a tab for kitty and Terminal */
   terminal: TerminalMode;
+  /** where a shell in canopy lands */
+  shell: ShellTarget;
   theme: Theme;
   density: Density;
   /** which of a forge's repos are worth a card */
@@ -46,6 +69,7 @@ export const DEFAULT_SETTINGS: Settings = {
   sort: "folder",
   openIn: "dock",
   terminal: "window",
+  shell: "auto",
   theme: "system",
   density: "cozy",
   forge: "missing",
@@ -74,6 +98,7 @@ export function loadSettings(): Settings {
       sort: pick(SORT_MODES, saved.sort, DEFAULT_SETTINGS.sort),
       openIn: pick(OPEN_TARGETS, saved.openIn, DEFAULT_SETTINGS.openIn),
       terminal: pick(TERMINAL_MODES, saved.terminal, DEFAULT_SETTINGS.terminal),
+      shell: pick(SHELL_TARGETS, saved.shell, DEFAULT_SETTINGS.shell),
       theme: pick(THEMES, saved.theme, DEFAULT_SETTINGS.theme),
       density: pick(DENSITIES, saved.density, DEFAULT_SETTINGS.density),
       forge: pick(FORGE_VIEWS, saved.forge, DEFAULT_SETTINGS.forge),

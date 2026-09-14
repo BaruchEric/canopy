@@ -36,7 +36,8 @@ const REPLY_CLAMP = 480;
 export function ClaudeSection({ repo }: { repo: Repo }) {
   const overview = useStore((s) => s.history);
   const history = historyFor(overview, repo.id);
-  const [open, setOpen] = useState(false);
+  const closed = useStore((s) => s.closedSections.includes("claude"));
+  const toggleSection = useStore((s) => s.toggleSection);
 
   const summary =
     overview === null
@@ -51,9 +52,9 @@ export function ClaudeSection({ repo }: { repo: Repo }) {
     <section className="claude" aria-label="Claude sessions">
       <button
         type="button"
-        className={`panel-label fold${open ? " open" : ""}`}
-        aria-expanded={open}
-        onClick={() => setOpen(!open)}
+        className={`panel-label fold${closed ? "" : " open"}`}
+        aria-expanded={!closed}
+        onClick={() => toggleSection("claude")}
         title={
           history
             ? `${history.sessions} sessions in the archive, ${usd(history.costUsd)} API-equivalent all time`
@@ -65,7 +66,7 @@ export function ClaudeSection({ repo }: { repo: Repo }) {
       {history && overview?.available && (
         <Rings tall history={history} days={overview.days} maxDay={overview.maxDay} />
       )}
-      {open && <Body repo={repo} overview={overview} history={history} />}
+      {!closed && <Body repo={repo} overview={overview} history={history} />}
     </section>
   );
 }

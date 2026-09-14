@@ -364,7 +364,7 @@ export function RepoMenu({
                 type="button"
                 role="menuitem"
                 className="menu-item"
-                title="A shell at this repo, in a strip along the bottom of this window"
+                title="A shell at this repo, where the shell setting puts it"
                 onClick={() => {
                   setOpen(false);
                   openTerm(repo.id);

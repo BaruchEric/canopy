@@ -11,18 +11,28 @@ const features = (w: number, h: number): Record<string, number> => {
 };
 
 describe("parseRoute", () => {
+  test("reads the repo and the shell view", () => {
+    expect(parseRoute("?repo=web-apps/ripe&view=shell")).toEqual({
+      repo: "web-apps/ripe",
+      solo: false,
+      shell: true,
+    });
+    expect(parseRoute("?view=shell")).toEqual({ repo: null, solo: false, shell: false });
+  });
   test("reads the repo and the solo view", () => {
     expect(parseRoute("?repo=web-apps/ripe&view=solo")).toEqual({
       repo: "web-apps/ripe",
       solo: true,
+      shell: false,
     });
     expect(parseRoute("?repo=web-apps/ripe")).toEqual({
       repo: "web-apps/ripe",
       solo: false,
+      shell: false,
     });
     // solo needs a repo to be solo about
-    expect(parseRoute("?view=solo")).toEqual({ repo: null, solo: false });
-    expect(parseRoute("")).toEqual({ repo: null, solo: false });
+    expect(parseRoute("?view=solo")).toEqual({ repo: null, solo: false, shell: false });
+    expect(parseRoute("")).toEqual({ repo: null, solo: false, shell: false });
   });
 });
 

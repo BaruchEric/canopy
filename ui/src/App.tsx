@@ -8,7 +8,7 @@ import { Resizer } from "./components/Resizer";
 import { RunSheet } from "./components/RunSheet";
 import { Sidebar } from "./components/Sidebar";
 import { Solo } from "./components/Solo";
-import { TermDock } from "./components/TermDock";
+import { ShellSolo, TermDock } from "./components/TermDock";
 import { Crowns, TopBar } from "./components/TopBar";
 import { parseRoute } from "./routes";
 import { SORT_MODES } from "./settings";
@@ -82,7 +82,7 @@ export function App() {
   // A `?repo=` link pins that repo once the tree is in. Only once: a rescan
   // that drops the repo should not bring the panel back.
   useEffect(() => {
-    if (!loaded || route.solo || !route.repo || pinned.current) return;
+    if (!loaded || route.solo || route.shell || !route.repo || pinned.current) return;
     pinned.current = true;
     if (useStore.getState().repos.some((r) => r.id === route.repo)) {
       openPanel(route.repo);
@@ -138,6 +138,7 @@ export function App() {
     );
   }
   if (route.solo && route.repo) return <Solo id={route.repo} />;
+  if (route.shell && route.repo) return <ShellSolo id={route.repo} />;
   return (
     <div className="app">
       <nav className="app-nav" aria-label="Canopy views">

@@ -3,8 +3,11 @@ import type { CSSProperties, KeyboardEvent, PointerEvent } from "react";
 import { Terminal, type ITheme } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import "@xterm/xterm/css/xterm.css";
-import { TERM, useStore, type TermTab } from "../store";
+import { groveUrl } from "../routes";
+import { PANEL_TERM, TERM, useStore, type TermTab } from "../store";
 import { clamp } from "../util";
+import { Wordmark } from "./TopBar";
+import type { Repo } from "../../../src/core/types";
 
 /** The design tokens the terminal paints with, resolved through a probe
  *  element so `light-dark()` collapses to the scheme in force. */
@@ -94,12 +97,23 @@ function exitOf(text: string): number | null | undefined {
  * the tab's life, hidden rather than unmounted when another tab is showing,
  * so switching tabs never ends a session.
  */
-function TermView({ tab, active }: { tab: TermTab; active: boolean }) {
+export function TermView({
+  tab,
+  active,
+  onExit,
+}: {
+  tab: TermTab;
+  active: boolean;
+  /** told when the shell ends, for a view whose tab is not in the store */
+  onExit?: (code: number | null) => void;
+}) {
   const host = useRef<HTMLDivElement>(null);
   const termRef = useRef<Terminal | null>(null);
   const fitRef = useRef<FitAddon | null>(null);
   const theme = useStore((s) => s.settings.theme);
   const endTerm = useStore((s) => s.endTerm);
+  const exitRef = useRef(onExit);
+  exitRef.current = onExit;
 
   useEffect(() => {
     const el = host.current;
@@ -128,6 +142,7 @@ function TermView({ tab, active }: { tab: TermTab; active: boolean }) {
       if (ended) return;
       ended = true;
       endTerm(tab.id, code);
+      exitRef.current?.(code);
       term.write(`\r\n\x1b[2m${note}\x1b[0m`);
     };
     ws.onopen = () => term.focus();
@@ -189,15 +204,37 @@ function TermView({ tab, active }: { tab: TermTab; active: boolean }) {
   return <div ref={host} className="term-view" hidden={!active} />;
 }
 
-/** The strip's top edge: dragged to size it, arrowed by the keyboard,
- *  double-clicked to reset. */
-function TermGrip({ dock }: { dock: React.RefObject<HTMLElement | null> }) {
-  const height = useStore((s) => s.termHeight);
-  const setTermHeight = useStore((s) => s.setTermHeight);
+/** A shell area's top edge: dragged to size it, arrowed by the keyboard,
+ *  double-clicked to reset. It writes the height live to `cssVar` on `box`
+ *  while dragging, then commits it on release. */
+function TermGrip({
+  box,
+  cssVar,
+  label,
+  height,
+  setHeight,
+  bounds,
+  edge = "top",
+}: {
+  box: React.RefObject<HTMLElement | null>;
+  cssVar: string;
+  label: string;
+  height: number;
+  setHeight: (px: number) => void;
+  bounds: { min: number; max: number; initial: number };
+  /** which edge the grip sits on: "top" grows upward, "bottom" downward */
+  edge?: "top" | "bottom";
+}) {
   const [dragging, setDragging] = useState(false);
   const start = useRef<{ y: number; h: number } | null>(null);
 
-  const apply = (h: number) => dock.current?.style.setProperty("--term-h", `${h}px`);
+  const apply = (h: number) => box.current?.style.setProperty(cssVar, `${h}px`);
+  const clamped = (raw: number) => clamp(raw, bounds.min, bounds.max);
+  // a top grip grows as the pointer rises, a bottom grip as it falls
+  const sized = (e: PointerEvent<HTMLDivElement>) => {
+    const dy = start.current ? e.clientY - start.current.y : 0;
+    return clamped((start.current?.h ?? height) + (edge === "top" ? -dy : dy));
+  };
   const onDown = (e: PointerEvent<HTMLDivElement>) => {
     if (e.button !== 0) return;
     e.currentTarget.setPointerCapture(e.pointerId);
@@ -206,40 +243,111 @@ function TermGrip({ dock }: { dock: React.RefObject<HTMLElement | null> }) {
   };
   const onMove = (e: PointerEvent<HTMLDivElement>) => {
     if (!start.current) return;
-    apply(clamp(start.current.h + (start.current.y - e.clientY), TERM.min, TERM.max));
+    apply(sized(e));
   };
   const onUp = (e: PointerEvent<HTMLDivElement>) => {
     if (!start.current) return;
-    const h = clamp(start.current.h + (start.current.y - e.clientY), TERM.min, TERM.max);
+    const h = sized(e);
     start.current = null;
     setDragging(false);
-    setTermHeight(h);
+    setHeight(h);
   };
   const onKey = (e: KeyboardEvent<HTMLDivElement>) => {
     const step = e.shiftKey ? 64 : 16;
-    if (e.key === "ArrowUp") setTermHeight(height + step);
-    else if (e.key === "ArrowDown") setTermHeight(height - step);
+    if (e.key === "ArrowUp") setHeight(height + step);
+    else if (e.key === "ArrowDown") setHeight(height - step);
     else return;
     e.preventDefault();
   };
   return (
     <div
-      className={dragging ? "term-grip dragging" : "term-grip"}
+      className={`term-grip ${edge}${dragging ? " dragging" : ""}`}
       role="separator"
       aria-orientation="horizontal"
-      aria-label="Terminal strip height"
+      aria-label={label}
       aria-valuenow={height}
-      aria-valuemin={TERM.min}
-      aria-valuemax={TERM.max}
+      aria-valuemin={bounds.min}
+      aria-valuemax={bounds.max}
       tabIndex={0}
       title="Drag to resize, double-click to reset"
       onPointerDown={onDown}
       onPointerMove={onMove}
       onPointerUp={onUp}
       onPointerCancel={onUp}
-      onDoubleClick={() => setTermHeight(TERM.initial)}
+      onDoubleClick={() => setHeight(bounds.initial)}
       onKeyDown={onKey}
     />
+  );
+}
+
+/** Two shells at one repo get numbered so their tabs can be told apart. */
+function tabLabels(terms: TermTab[]): string[] {
+  const seen = new Map<string, number>();
+  return terms.map((t) => {
+    const n = (seen.get(t.repoId) ?? 0) + 1;
+    seen.set(t.repoId, n);
+    return n === 1 ? t.name : `${t.name} ${n}`;
+  });
+}
+
+/** The row of tabs over a set of shells, with what comes before and after
+ *  them (a caption, a "new" button) passed in. */
+function TermTabs({
+  terms,
+  active,
+  onShow,
+  caption,
+  extra,
+}: {
+  terms: TermTab[];
+  active: string | null;
+  onShow: (id: string) => void;
+  caption: string;
+  extra?: React.ReactNode;
+}) {
+  const closeTerm = useStore((s) => s.closeTerm);
+  const labels = tabLabels(terms);
+  return (
+    <div className="term-tabs" role="tablist" aria-label="Open shells">
+      {caption && <span className="term-caption">{caption}</span>}
+      {terms.map((t, i) => {
+        const label = labels[i] ?? t.name;
+        const on = t.id === active;
+        return (
+          <div
+            key={t.id}
+            role="tab"
+            tabIndex={on ? 0 : -1}
+            aria-selected={on}
+            className={`term-tab${on ? " on" : ""}${t.exit !== undefined ? " exited" : ""}`}
+            title={t.exit === undefined ? t.path : `${t.path} · exited`}
+            onClick={() => onShow(t.id)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter" || e.key === " ") {
+                e.preventDefault();
+                onShow(t.id);
+              }
+            }}
+          >
+            <span className={`dot ${t.exit === undefined ? "moss" : "faint"}`} aria-hidden="true" />
+            <span className="term-tab-name">{label}</span>
+            <button
+              type="button"
+              className="term-x"
+              aria-label={`Close the shell at ${label}`}
+              title="close"
+              onClick={(e) => {
+                e.stopPropagation();
+                closeTerm(t.id);
+              }}
+            >
+              ×
+            </button>
+          </div>
+        );
+      })}
+      {extra}
+    </div>
   );
 }
 
@@ -252,19 +360,12 @@ export function TermDock() {
   const terms = useStore((s) => s.terms);
   const activeTerm = useStore((s) => s.activeTerm);
   const termHeight = useStore((s) => s.termHeight);
+  const setTermHeight = useStore((s) => s.setTermHeight);
   const showTerm = useStore((s) => s.showTerm);
-  const closeTerm = useStore((s) => s.closeTerm);
   const dock = useRef<HTMLElement>(null);
+  const strip = terms.filter((t) => t.place === "strip");
 
-  // Two shells at one repo get numbered so the tabs can be told apart.
-  const seen = new Map<string, number>();
-  const labels = terms.map((t) => {
-    const n = (seen.get(t.repoId) ?? 0) + 1;
-    seen.set(t.repoId, n);
-    return n === 1 ? t.name : `${t.name} ${n}`;
-  });
-
-  if (terms.length === 0) return null;
+  if (strip.length === 0) return null;
   return (
     <section
       ref={dock}
@@ -272,51 +373,146 @@ export function TermDock() {
       aria-label="Shells"
       style={{ "--term-h": `${termHeight}px` } as CSSProperties}
     >
-      <TermGrip dock={dock} />
-      <div className="term-tabs" role="tablist" aria-label="Open shells">
-        <span className="term-caption">shells</span>
-        {terms.map((t, i) => {
-          const label = labels[i] ?? t.name;
-          const on = t.id === activeTerm;
-          return (
-            <div
-              key={t.id}
-              role="tab"
-              tabIndex={on ? 0 : -1}
-              aria-selected={on}
-              className={`term-tab${on ? " on" : ""}${t.exit !== undefined ? " exited" : ""}`}
-              title={t.exit === undefined ? t.path : `${t.path} · exited`}
-              onClick={() => showTerm(t.id)}
-              onKeyDown={(e) => {
-                if (e.key === "Enter" || e.key === " ") {
-                  e.preventDefault();
-                  showTerm(t.id);
-                }
-              }}
-            >
-              <span className={`dot ${t.exit === undefined ? "moss" : "faint"}`} aria-hidden="true" />
-              <span className="term-tab-name">{label}</span>
-              <button
-                type="button"
-                className="term-x"
-                aria-label={`Close the shell at ${label}`}
-                title="close"
-                onClick={(e) => {
-                  e.stopPropagation();
-                  closeTerm(t.id);
-                }}
-              >
-                ×
-              </button>
-            </div>
-          );
-        })}
-      </div>
+      <TermGrip
+        box={dock}
+        cssVar="--term-h"
+        label="Terminal strip height"
+        height={termHeight}
+        setHeight={setTermHeight}
+        bounds={TERM}
+      />
+      <TermTabs terms={strip} active={activeTerm} onShow={showTerm} caption="shells" />
       <div className="term-body">
-        {terms.map((t) => (
+        {strip.map((t) => (
           <TermView key={t.id} tab={t} active={t.id === activeTerm} />
         ))}
       </div>
     </section>
+  );
+}
+
+/**
+ * The shells living in one repo's panel: a section of the panel, tabs when
+ * there are two or more, the newest showing. Nothing renders while the repo
+ * has none there.
+ */
+export function PanelShells({ repo }: { repo: Repo }) {
+  const terms = useStore((s) => s.terms);
+  const openTerm = useStore((s) => s.openTerm);
+  const closed = useStore((s) => s.closedSections.includes("shell"));
+  const toggleSection = useStore((s) => s.toggleSection);
+  const panelTermHeight = useStore((s) => s.panelTermHeight);
+  const setPanelTermHeight = useStore((s) => s.setPanelTermHeight);
+  const inner = useRef<HTMLDivElement>(null);
+  const mine = terms.filter((t) => t.place === "panel" && t.repoId === repo.id);
+  const [chosen, setChosen] = useState<string | null>(null);
+  // the newest shell shows until another tab is picked
+  const latest = mine[mine.length - 1]?.id ?? null;
+  const [seenLatest, setSeenLatest] = useState(latest);
+  if (latest !== seenLatest) {
+    setSeenLatest(latest);
+    setChosen(latest);
+  }
+  const active = mine.some((t) => t.id === chosen) ? chosen : latest;
+
+  if (mine.length === 0) return null;
+  return (
+    <section className="panel-shells" aria-label={`Shells at ${repo.name}`}>
+      <button
+        type="button"
+        className={`panel-label fold${closed ? "" : " open"}`}
+        aria-expanded={!closed}
+        onClick={() => toggleSection("shell")}
+      >
+        shell <span>{mine.length}</span>
+      </button>
+      {/* Kept mounted while folded (display:none via `hidden`) so the shells
+          keep running: unmounting a TermView hangs up its pty. */}
+      <div
+        ref={inner}
+        className="panel-shells-body"
+        hidden={closed}
+        style={{ "--panel-term-h": `${panelTermHeight}px` } as CSSProperties}
+      >
+        <TermTabs
+          terms={mine}
+          active={active}
+          onShow={setChosen}
+          caption=""
+          extra={
+            <button
+              type="button"
+              className="term-new"
+              title="Another shell at this repo, here"
+              aria-label="New shell"
+              onClick={() => openTerm(repo.id, "panel")}
+            >
+              +
+            </button>
+          }
+        />
+        <div className="term-body">
+          {mine.map((t) => (
+            <TermView key={t.id} tab={t} active={t.id === active && !closed} />
+          ))}
+        </div>
+        <TermGrip
+          box={inner}
+          cssVar="--panel-term-h"
+          label={`Shell height at ${repo.name}`}
+          height={panelTermHeight}
+          setHeight={setPanelTermHeight}
+          bounds={PANEL_TERM}
+          edge="bottom"
+        />
+      </div>
+    </section>
+  );
+}
+
+/** One shell, edge to edge: what a "new tab" or "new window" shell shows. */
+export function ShellSolo({ id }: { id: string }) {
+  const root = useStore((s) => s.root);
+  const repo = useStore((s) => s.repos.find((r) => r.id === id));
+  const name = repo?.name;
+  const [tab] = useState<TermTab | null>(() =>
+    repo && !repo.forge
+      ? { id: "solo", repoId: repo.id, name: repo.name, path: repo.path, place: "strip" }
+      : null,
+  );
+  const [exited, setExited] = useState(false);
+
+  useEffect(() => {
+    document.title = name ? `${name} · shell · canopy` : "canopy";
+    return () => {
+      document.title = "canopy";
+    };
+  }, [name]);
+
+  return (
+    <div className="shell-solo">
+      <header className="topbar">
+        <Wordmark />
+        <span className="root-path" title={root}>
+          {root}
+        </span>
+        <span className="solo-id">{id}</span>
+        {exited && <span className="shell-exited">exited</span>}
+        <span className="spacer" />
+        <a className="mini" href={groveUrl()} target="_blank">
+          whole grove ↗
+        </a>
+      </header>
+      {tab ? (
+        <div className="term-body">
+          <TermView tab={tab} active onExit={() => setExited(true)} />
+        </div>
+      ) : (
+        <p className="empty">
+          No repo called {id} under {root}, or none with a folder to open a shell in.{" "}
+          <a href={groveUrl()}>Open the whole grove</a> instead.
+        </p>
+      )}
+    </div>
   );
 }

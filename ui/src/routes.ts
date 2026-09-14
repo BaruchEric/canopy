@@ -1,26 +1,32 @@
 import type { OpenTarget } from "./settings";
 
 /** What the URL asked this window to show. `/?repo=<id>` pins that repo on
- *  load; add `view=solo` and the window shows only that repo's panel. */
+ *  load; add `view=solo` and the window shows only that repo's panel,
+ *  `view=shell` and it shows only a shell at that repo. */
 export interface Route {
   repo: string | null;
   solo: boolean;
+  shell: boolean;
 }
 
 export function parseRoute(search: string): Route {
   const q = new URLSearchParams(search);
   const repo = q.get("repo");
-  return { repo: repo || null, solo: Boolean(repo) && q.get("view") === "solo" };
+  const view = repo ? q.get("view") : null;
+  return { repo: repo || null, solo: view === "solo", shell: view === "shell" };
 }
 
-export function soloUrl(id: string): string {
+function viewUrl(id: string, view: "solo" | "shell"): string {
   const u = new URL(window.location.href);
   u.search = "";
   u.hash = "";
   u.searchParams.set("repo", id);
-  u.searchParams.set("view", "solo");
+  u.searchParams.set("view", view);
   return u.toString();
 }
+
+export const soloUrl = (id: string): string => viewUrl(id, "solo");
+export const shellUrl = (id: string): string => viewUrl(id, "shell");
 
 /** The whole grove, whatever this window is showing. */
 export function groveUrl(): string {
@@ -50,8 +56,16 @@ export function popupFeatures(avail: { width: number; height: number }): string 
  * second click reuses it instead of stacking duplicates.
  */
 export function openElsewhere(id: string, target: Exclude<OpenTarget, "dock">) {
-  const name = `canopy:${id}`;
-  const url = soloUrl(id);
+  openNamed(`canopy:${id}`, soloUrl(id), target);
+}
+
+/** A shell at a repo in a tab or window of its own. Every click is a new
+ *  shell, so the window is named after the moment rather than the repo. */
+export function openShellElsewhere(id: string, target: "tab" | "window") {
+  openNamed(`canopy:shell:${id}:${Date.now()}`, shellUrl(id), target);
+}
+
+function openNamed(name: string, url: string, target: "tab" | "window") {
   const avail = {
     width: window.screen?.availWidth || 1440,
     height: window.screen?.availHeight || 900,

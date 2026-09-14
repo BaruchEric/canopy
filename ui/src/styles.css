@@ -2551,13 +2551,18 @@ body.resizing {
 /* the top edge, grabbable a few px either side of the hairline */
 .term-grip {
   position: absolute;
-  top: -4px;
   left: 0;
   right: 0;
   height: 9px;
   z-index: 2;
   cursor: row-resize;
   touch-action: none;
+}
+.term-grip.top {
+  top: -4px;
+}
+.term-grip.bottom {
+  bottom: -4px;
 }
 .term-grip::after {
   content: "";
@@ -2568,6 +2573,10 @@ body.resizing {
   height: 2px;
   background: transparent;
   transition: background 120ms ease;
+}
+.term-grip.bottom::after {
+  top: auto;
+  bottom: 3px;
 }
 .term-grip:hover::after,
 .term-grip:focus-visible::after,
@@ -2658,4 +2667,66 @@ body.resizing {
    token background so the padding does not show as a frame */
 .term-view .xterm .xterm-viewport {
   background: var(--bark0) !important;
+}
+
+/* a shell inside a panel: a fold header over a resizable body */
+.panel-shells {
+  display: flex;
+  flex-direction: column;
+  flex: none;
+  margin-top: 14px;
+  border-top: 1px solid var(--hair);
+  border-bottom: 1px solid var(--hair);
+  background: var(--bark0);
+}
+.panel-shells > .fold {
+  margin: 8px 14px 6px;
+}
+/* the tabs and the shell; its height is dragged by the grip on its lower edge */
+.panel-shells-body {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  height: var(--panel-term-h, 320px);
+  border-top: 1px solid var(--hair);
+}
+/* folded: really gone, so the shell's ResizeObserver stops fitting to a zero
+   box (which would send garbage rows to the pty). `display: flex` above beats
+   the browser's own [hidden] rule, so it has to be said here. */
+.panel-shells-body[hidden] {
+  display: none;
+}
+.term-new {
+  align-self: center;
+  margin: 0 0 4px 4px;
+  width: 20px;
+  height: 20px;
+  border-radius: var(--r);
+  font-size: 14px;
+  line-height: 1;
+  color: var(--ink-faint);
+}
+.term-new:hover {
+  color: var(--moss);
+  background: var(--bark2);
+}
+/* a shell of its own: what a new tab or window shows */
+.shell-solo {
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+  background: var(--bark0);
+}
+.shell-solo .topbar {
+  flex: none;
+}
+.shell-solo .term-body {
+  flex: 1;
+}
+.shell-exited {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.12em;
+  color: var(--ink-faint);
 }

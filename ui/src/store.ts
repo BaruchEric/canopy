@@ -1,8 +1,8 @@
 import { create } from "zustand";
 import { api, subscribe } from "./api";
 import { applyQuery, type RepoFilter } from "./filters";
-import { openElsewhere } from "./routes";
-import { loadSettings, saveSettings, type Settings } from "./settings";
+import { openElsewhere, openShellElsewhere, parseRoute } from "./routes";
+import { loadSettings, saveSettings, shellPlace, type Settings, type ShellPlace } from "./settings";
 import { clamp, needsAttention } from "./util";
 import {
   DEFAULT_AGENT,
@@ -28,6 +28,10 @@ export const PANEL = { min: 300, max: 900, initial: 440 };
 export const SOLO = { min: 420, max: 2400, initial: 980 };
 /** the terminal strip along the bottom, in px of height */
 export const TERM = { min: 120, max: 1200, initial: 300 };
+/** a shell living in a repo's panel: the bounds and default of its height */
+export const PANEL_TERM = { min: 120, max: 900, initial: 320 };
+/** sections that start folded, matching how the panel read before they could fold */
+const DEFAULT_CLOSED = ["history", "claude"];
 
 const LAYOUT_KEY = "canopy.layout";
 
@@ -44,10 +48,14 @@ interface Layout {
   soloWidth: number;
   /** whether the repo tree is showing at all */
   sidebarOpen: boolean;
-  /** folded sections, as sectionKey strings */
+  /** folded tree groups, as group-key strings */
   collapsed: string[];
+  /** folded panel sections (changes, shell, history, claude), as keys */
+  closedSections: string[];
   /** px height of the terminal strip */
   termHeight: number;
+  /** px height of a shell living in a repo's panel */
+  panelTermHeight: number;
 }
 
 function loadLayout(): Layout {
@@ -57,7 +65,9 @@ function loadLayout(): Layout {
     soloWidth: SOLO.initial,
     sidebarOpen: true,
     collapsed: [],
+    closedSections: [...DEFAULT_CLOSED],
     termHeight: TERM.initial,
+    panelTermHeight: PANEL_TERM.initial,
   };
   try {
     const raw = localStorage.getItem(LAYOUT_KEY);
@@ -68,7 +78,9 @@ function loadLayout(): Layout {
       soloWidth?: unknown;
       sidebarOpen?: unknown;
       collapsed?: unknown;
+      closedSections?: unknown;
       termHeight?: unknown;
+      panelTermHeight?: unknown;
     };
     const panelWidths: Record<string, number> = {};
     for (const [id, w] of Object.entries(saved.panelWidths ?? {})) {
@@ -81,6 +93,7 @@ function loadLayout(): Layout {
     const sw = saved.sidebarWidth;
     const solo = saved.soloWidth;
     const th = saved.termHeight;
+    const pth = saved.panelTermHeight;
     return {
       sidebarWidth:
         typeof sw === "number" && Number.isFinite(sw)
@@ -95,10 +108,17 @@ function loadLayout(): Layout {
       collapsed: Array.isArray(saved.collapsed)
         ? saved.collapsed.filter((k): k is string => typeof k === "string")
         : [],
+      closedSections: Array.isArray(saved.closedSections)
+        ? saved.closedSections.filter((k): k is string => typeof k === "string")
+        : [...DEFAULT_CLOSED],
       termHeight:
         typeof th === "number" && Number.isFinite(th)
           ? clamp(th, TERM.min, TERM.max)
           : TERM.initial,
+      panelTermHeight:
+        typeof pth === "number" && Number.isFinite(pth)
+          ? clamp(pth, PANEL_TERM.min, PANEL_TERM.max)
+          : PANEL_TERM.initial,
     };
   } catch {
     return fallback;
@@ -119,7 +139,9 @@ const layoutOf = (s: CanopyState): Layout => ({
   soloWidth: s.soloWidth,
   sidebarOpen: s.sidebarOpen,
   collapsed: s.collapsed,
+  closedSections: s.closedSections,
   termHeight: s.termHeight,
+  panelTermHeight: s.panelTermHeight,
 });
 
 /** drops stored widths for repos that no longer exist in the scan */
@@ -159,6 +181,8 @@ interface CanopyState {
   sidebarOpen: boolean;
   /** folded sections in the tree and the grid, as sectionKey strings */
   collapsed: string[];
+  /** folded panel sections (changes, shell, history, claude), as keys */
+  closedSections: string[];
   /** repo id → px width of its dock panel; missing means PANEL.initial */
   panelWidths: Record<string, number>;
   /** px width of the solo view's panel, dragged by its edge handles */
@@ -173,12 +197,14 @@ interface CanopyState {
   history: HistoryOverview | null;
   /** how Claude starts per repo, keyed by repo path; absent means defaults */
   agents: Record<string, AgentSettings>;
-  /** shells open in the strip along the bottom, left to right */
+  /** every shell open in this window, in the order opened */
   terms: TermTab[];
-  /** the shell showing in the strip; null when it is empty */
+  /** the shell showing in the strip; null when the strip is empty */
   activeTerm: string | null;
   /** px height of the strip, dragged by its top edge */
   termHeight: number;
+  /** px height of a shell in a repo's panel, dragged by its top edge */
+  panelTermHeight: number;
 
   /** loads the tree and opens the SSE stream; returns its unsubscribe */
   init: () => Promise<() => void>;
@@ -211,16 +237,20 @@ interface CanopyState {
   toggleSidebar: () => void;
   /** folds or unfolds one section; the tree and the grid fold together */
   toggleGroup: (key: string) => void;
+  /** folds or unfolds one panel section (changes, shell, history, claude) */
+  toggleSection: (key: string) => void;
   setPanelWidth: (id: string, px: number) => void;
   setSoloWidth: (px: number) => void;
   setSetting: <K extends keyof Settings>(key: K, value: Settings[K]) => void;
-  /** opens a new shell at a repo in the strip and shows it */
-  openTerm: (repoId: string) => void;
+  /** opens a new shell at a repo where the settings say: its panel, the
+   *  strip, or a tab or window of its own; `place` overrides the setting */
+  openTerm: (repoId: string, place?: ShellPlace) => void;
   closeTerm: (id: string) => void;
   showTerm: (id: string) => void;
   /** marks a shell whose process has ended; its tab stays until closed */
   endTerm: (id: string, code: number | null) => void;
   setTermHeight: (px: number) => void;
+  setPanelTermHeight: (px: number) => void;
 
   /** opens the pre-flight dialog for an action on a repo */
   plan: (repoId: string, action: RunAction) => void;
@@ -254,6 +284,8 @@ export interface TermTab {
   name: string;
   /** the repo's locator; the socket lands there */
   path: string;
+  /** the repo's panel, or the strip along the bottom */
+  place: ShellPlace;
   /** set once the shell has exited, with its code */
   exit?: number | null;
 }
@@ -306,6 +338,7 @@ export const useStore = create<CanopyState>((set, get) => ({
   soloWidth: layout.soloWidth,
   sidebarOpen: layout.sidebarOpen,
   collapsed: layout.collapsed,
+  closedSections: layout.closedSections,
   settings: loadSettings(),
   runs: {},
   sheet: null,
@@ -314,6 +347,7 @@ export const useStore = create<CanopyState>((set, get) => ({
   terms: [],
   activeTerm: null,
   termHeight: layout.termHeight,
+  panelTermHeight: layout.panelTermHeight,
 
   init: async () => {
     try {
@@ -441,7 +475,13 @@ export const useStore = create<CanopyState>((set, get) => ({
     await api.open(id, app, get().settings.terminal === "tab");
   },
   closePanel: (id) =>
-    set((s) => ({ panels: s.panels.filter((p) => p !== id) })),
+    set((s) => ({
+      panels: s.panels.filter((p) => p !== id),
+      // A shell lived in the panel, so it ends with it: dropping the tab
+      // unmounts its view, which closes the socket and hangs up the pty.
+      // A shell you want to keep outliving a panel belongs in the strip.
+      terms: s.terms.filter((t) => !(t.repoId === id && t.place === "panel")),
+    })),
 
   applyEvent: (ev) => {
     if (ev.type === "repo") {
@@ -489,6 +529,14 @@ export const useStore = create<CanopyState>((set, get) => ({
       saveLayout({ ...layoutOf(s), collapsed });
       return { collapsed };
     }),
+  toggleSection: (key) =>
+    set((s) => {
+      const closedSections = s.closedSections.includes(key)
+        ? s.closedSections.filter((k) => k !== key)
+        : [...s.closedSections, key];
+      saveLayout({ ...layoutOf(s), closedSections });
+      return { closedSections };
+    }),
   setPanelWidth: (id, px) =>
     set((s) => {
       const panelWidths = {
@@ -510,22 +558,46 @@ export const useStore = create<CanopyState>((set, get) => ({
       saveSettings(settings);
       return { settings };
     }),
-  openTerm: (repoId) =>
-    set((s) => {
-      const repo = s.repos.find((r) => r.id === repoId);
-      if (!repo || repo.forge) return {};
-      termSeq += 1;
-      const tab: TermTab = { id: `t${termSeq}`, repoId, name: repo.name, path: repo.path };
-      return { terms: [...s.terms, tab], activeTerm: tab.id };
-    }),
+  openTerm: (repoId, place) => {
+    const s = get();
+    const repo = s.repos.find((r) => r.id === repoId);
+    if (!repo || repo.forge) return;
+    const where =
+      place ??
+      shellPlace(s.settings.shell, {
+        panelOpen: s.panels.includes(repoId),
+        solo: parseRoute(window.location.search).solo,
+      });
+    if (where === "tab" || where === "window") {
+      openShellElsewhere(repoId, where);
+      return;
+    }
+    termSeq += 1;
+    const tab: TermTab = { id: `t${termSeq}`, repoId, name: repo.name, path: repo.path, place: where };
+    // A panel shell shows only inside its repo's panel and only while that
+    // section is unfolded, so open both. Otherwise the click does nothing you
+    // can see.
+    const openPanel = where === "panel" && !s.panels.includes(repoId);
+    const closedSections =
+      where === "panel" ? s.closedSections.filter((k) => k !== "shell") : s.closedSections;
+    if (closedSections !== s.closedSections) saveLayout({ ...layoutOf(s), closedSections });
+    set({
+      terms: [...s.terms, tab],
+      activeTerm: where === "strip" ? tab.id : s.activeTerm,
+      panels: openPanel ? [...s.panels, repoId] : s.panels,
+      closedSections,
+    });
+  },
   closeTerm: (id) =>
     set((s) => {
       const i = s.terms.findIndex((t) => t.id === id);
       if (i === -1) return {};
       const terms = s.terms.filter((t) => t.id !== id);
-      // the neighbour takes over, the way a browser's tab strip does
+      // the neighbour in the strip takes over, the way a browser's tab strip does
+      const strip = terms.filter((t) => t.place === "strip");
+      const j = s.terms.slice(0, i).filter((t) => t.place === "strip").length;
       const activeTerm =
-        s.activeTerm !== id ? s.activeTerm : (terms[i] ?? terms[i - 1])?.id ?? null;
+        s.activeTerm !== id ? s.activeTerm : (strip[j] ?? strip[j - 1])?.id ?? null;
       return { terms, activeTerm };
     }),
   showTerm: (id) => set((s) => (s.terms.some((t) => t.id === id) ? { activeTerm: id } : {})),
@@ -536,6 +608,12 @@ export const useStore = create<CanopyState>((set, get) => ({
       const termHeight = clamp(px, TERM.min, TERM.max);
       saveLayout({ ...layoutOf(s), termHeight });
       return { termHeight };
+    }),
+  setPanelTermHeight: (px) =>
+    set((s) => {
+      const panelTermHeight = clamp(px, PANEL_TERM.min, PANEL_TERM.max);
+      saveLayout({ ...layoutOf(s), panelTermHeight });
+      return { panelTermHeight };
     }),
 
   plan: (repoId, action) => {

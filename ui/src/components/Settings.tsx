@@ -13,6 +13,14 @@ const TERMINAL = [
   { value: "tab", label: "tab", title: "A tab in the front kitty or Terminal window" },
 ] as const;
 
+const SHELL = [
+  { value: "auto", label: "auto", title: "The repo's panel when it is open, else the strip" },
+  { value: "panel", label: "panel", title: "A section of the repo's panel; it ends when the panel closes" },
+  { value: "strip", label: "strip", title: "The strip along the bottom of the window" },
+  { value: "tab", label: "tab", title: "A browser tab of its own" },
+  { value: "window", label: "window", title: "A small browser window of its own" },
+] as const;
+
 const THEME = [
   { value: "system", label: "system", title: "Follows the OS setting" },
   { value: "dark", label: "dark" },
@@ -110,6 +118,21 @@ export function SettingsMenu() {
               For "open in" and the agent. kitty tabs go to the kitty canopy
               runs, its own instance; a Terminal tab presses cmd-t, which needs
               Accessibility access for the server.
+            </p>
+          </section>
+          <section className="settings-row">
+            <h3 className="panel-label">shell in canopy</h3>
+            <Seg
+              label="Where a shell opened from a card lands"
+              value={settings.shell}
+              options={SHELL}
+              onChange={(v) => setSetting("shell", v)}
+            />
+            <p className="settings-hint">
+              Auto puts the shell in the repo's panel when one is open and in
+              the strip along the bottom otherwise. A shell in a panel ends when
+              you close the panel; a strip shell lives until you close it or the
+              page.
             </p>
           </section>
           <section className="settings-row">
