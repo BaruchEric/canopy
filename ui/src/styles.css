@@ -9,6 +9,12 @@
   --bark1: light-dark(#fafbf8, #121a14);
   --bark2: light-dark(#eef1e9, #19241b);
   --bark3: light-dark(#e2e8db, #223022);
+  /* what floats above the page: popover, menu, sheet. Lighter than any
+     bark in the dark, plain white in the light, so a popup never reads
+     as part of the surface it opened from. */
+  --float: light-dark(#ffffff, #1f2d22);
+  --float-edge: light-dark(#b7c2ab, #3d4f38);
+  --float-shadow: light-dark(rgb(35 45 32 / 0.28), rgb(0 0 0 / 0.75));
   --hair: light-dark(#d8dfd0, #24301f);
   --hair2: light-dark(#c3cdb8, #33422e);
   --ink: light-dark(#232d20, #dce5da);
@@ -385,12 +391,13 @@ body.resizing {
   z-index: 20;
   width: 340px;
   padding: 4px 0 8px;
-  background: var(--bark1);
-  border: 1px solid var(--hair2);
+  background: var(--float);
+  border: 1px solid var(--float-edge);
   border-radius: 10px;
   box-shadow:
     inset 0 1px 0 var(--sheen),
-    0 18px 44px -18px var(--shadow);
+    0 2px 6px -2px var(--float-shadow),
+    0 22px 48px -16px var(--float-shadow);
 }
 .settings-row {
   display: flex;
@@ -1852,12 +1859,13 @@ body.resizing {
   position: fixed;
   z-index: 30;
   padding: 4px 0 6px;
-  background: var(--bark1);
-  border: 1px solid var(--hair2);
+  background: var(--float);
+  border: 1px solid var(--float-edge);
   border-radius: 10px;
   box-shadow:
     inset 0 1px 0 var(--sheen),
-    0 18px 44px -18px var(--shadow);
+    0 2px 6px -2px var(--float-shadow),
+    0 22px 48px -16px var(--float-shadow);
 }
 .menu-label {
   margin: 6px 12px 2px;
@@ -1889,7 +1897,7 @@ body.resizing {
 }
 .menu-item:hover,
 .menu-item:focus-visible {
-  background: var(--bark2);
+  background: color-mix(in srgb, var(--ink) 9%, var(--float));
   color: var(--ink);
   outline: none;
 }
@@ -2011,12 +2019,13 @@ body.resizing {
   max-height: min(84vh, 920px);
   display: flex;
   flex-direction: column;
-  background: var(--bark1);
-  border: 1px solid var(--hair2);
+  background: var(--float);
+  border: 1px solid var(--float-edge);
   border-radius: 12px;
   box-shadow:
     inset 0 1px 0 var(--sheen),
-    0 30px 70px -30px var(--shadow);
+    0 4px 10px -4px var(--float-shadow),
+    0 36px 80px -28px var(--float-shadow);
   overflow: hidden;
 }
 .sheet-head {
@@ -2108,7 +2117,7 @@ body.resizing {
   gap: 8px;
   padding: 10px 16px;
   border-top: 1px solid var(--hair);
-  background: var(--bark2);
+  background: color-mix(in srgb, var(--bark0) 45%, var(--float));
 }
 .sheet-hint {
   flex: 1;
