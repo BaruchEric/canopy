@@ -268,4 +268,63 @@ describe("Flows", () => {
     expect(gone).toEqual([flow.id]);
     expect(runner.dismissed).toContain("run1");
   });
+
+  test("a run that ends inside start is not lost", () => {
+    /** Mirrors the real Runner: its onChange hook can fire synchronously
+     *  inside start(), before the caller has anywhere to put the run's id. */
+    class FailFastRunner extends FakeRunner {
+      override start(r: Repo, action: string, spec: ActionSpec, note: string): Run {
+        const run = super.start(r, action, spec, note);
+        this.end(run.id, "failed", "", "spawn failed");
+        return run;
+      }
+    }
+    const runner = new FailFastRunner();
+    const flows = new Flows(runner, {
+      onChange: () => {},
+      onGone: () => {},
+      onFleet: () => {},
+      onFleetGone: () => {},
+      check: async () => ({ exit: 0, output: "" }),
+      evaluator: null,
+    });
+    runner.onChange = (run) => flows.onRun(run);
+    const flow = flows.start(repo(), TWO, "", DEFAULT_AGENT);
+    expect(flow.status).toBe("failed");
+    expect(flow.error).toBe("spawn failed");
+    expect(() => flows.start(repo(), TWO, "", DEFAULT_AGENT)).not.toThrow();
+  });
+
+  test("stop during a check ends the flow and starts nothing else", async () => {
+    const CHECKED_TWO = wf(`---\nblurb: b\n---\n\n## First\ncheck: slow\n\nDo the first.\n\n## Second\n\nDo the second.\n`);
+    const runner = new FakeRunner();
+    const checks: string[] = [];
+    let resolveCheck: (r: CheckResult) => void = () => {};
+    const pending = new Promise<CheckResult>((res) => {
+      resolveCheck = res;
+    });
+    const flows = new Flows(runner, {
+      onChange: () => {},
+      onGone: () => {},
+      onFleet: () => {},
+      onFleetGone: () => {},
+      check: async (_repo, command) => {
+        checks.push(command);
+        return pending;
+      },
+      evaluator: null,
+    });
+    runner.onChange = (run) => flows.onRun(run);
+    const flow = flows.start(repo(), CHECKED_TWO, "", DEFAULT_AGENT);
+    runner.end("run1", "done", "x");
+    await flush();
+    expect(checks).toEqual(["slow"]);
+    flows.stop(flow.id);
+    resolveCheck({ exit: 0, output: "" });
+    await flush();
+    const f = flows.get(flow.id);
+    expect(f?.status).toBe("stopped");
+    expect(f?.steps.map((s) => s.status)).toEqual(["failed", "skipped"]);
+    expect(runner.specs.length).toBe(1);
+  });
 });

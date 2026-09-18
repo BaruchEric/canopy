@@ -7,6 +7,7 @@ import { type ActionSpec } from "./actions";
 import { decide, verdictState } from "./verdict";
 import {
   isFlowActive,
+  isRunActive,
   statusFingerprint,
   type AgentSettings,
   type Fleet,
@@ -54,8 +55,6 @@ interface LiveFlow {
   workflow: Workflow;
   agent: AgentSettings;
   before: string;
-  /** set by stop(): the run's end that follows is ours */
-  stopping: boolean;
   /** the gate's reason a retry carries into the next prompt */
   retry?: string;
 }
@@ -153,7 +152,6 @@ export class Flows {
       workflow,
       agent,
       before: statusFingerprint(repo.status),
-      stopping: false,
     };
     this.live.set(flow.id, live);
     this.prune();
@@ -231,12 +229,15 @@ export class Flows {
     if (!live) throw new Error(`unknown flow: ${id}`);
     if (!isFlowActive(live.flow)) return live.flow;
     if (live.flow.status === "gated") return this.resume(id, "stop");
-    live.stopping = true;
     const step = live.flow.steps[live.flow.current];
-    if (step?.runId) {
+    const run = step && step.runId ? this.runner.get(step.runId) : undefined;
+    if (step && step.runId && run && isRunActive(run)) {
       // the run's stopped status comes back through onRun and ends the flow
       this.runner.stop(step.runId);
     } else {
+      // the run already ended (or never started) while we were awaiting a
+      // check or the evaluator: nothing more will come back through onRun,
+      // so end the flow here instead of waiting for an event that will not arrive
       if (step) {
         step.status = "failed";
         step.reason = "stopped";
@@ -319,6 +320,12 @@ export class Flows {
     flow.status = "working";
     this.byRun.set(run.id, flow.id);
     this.emit(live);
+    // the runner may call its onChange hook synchronously inside start(), before
+    // step.runId and byRun were set up to receive it; re-read the run now that
+    // both are in place, and if it already ended, feed that end through onRun
+    // ourselves so it is not lost.
+    const latest = this.runner.get(run.id);
+    if (latest && !isRunActive(latest)) this.onRun(latest);
   }
 
   private async afterRun(live: LiveFlow): Promise<void> {
