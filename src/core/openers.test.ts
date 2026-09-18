@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import {
   agentShellCommand,
   claudeLine,
+  fileOpenArgs,
   isOpenerId,
   kittyAgentArgs,
   kittyInstanceArgs,
@@ -180,4 +181,24 @@ test("agent and herdr are opener ids", () => {
   expect(isOpenerId("agent")).toBe(true);
   expect(isOpenerId("herdr")).toBe(true);
   expect(isOpenerId("emacs")).toBe(false);
+});
+
+describe("fileOpenArgs", () => {
+  test("a local file opens in VS Code at its line through -g", () => {
+    expect(fileOpenArgs(null, "/Users/me/dev/app", "src/a b.ts", 12)).toEqual([
+      "code",
+      "-g",
+      "/Users/me/dev/app/src/a b.ts:12",
+    ]);
+  });
+
+  test("a remote file goes through the host's Remote-SSH window", () => {
+    expect(fileOpenArgs("wsl", "/home/me/dev/app", "src/a.ts", 3)).toEqual([
+      "code",
+      "--remote",
+      "ssh-remote+wsl",
+      "-g",
+      "/home/me/dev/app/src/a.ts:3",
+    ]);
+  });
 });

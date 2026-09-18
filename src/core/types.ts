@@ -549,6 +549,33 @@ export interface HistoryHit {
   title: string | null;
 }
 
+/** one line `git grep` matched in a repo */
+export interface GrepHit {
+  /** path relative to the repo root */
+  file: string;
+  /** 1-based line */
+  line: number;
+  /** 1-based column of the first match on the line, in the clipped text */
+  col: number;
+  /** the line, clipped around the match when it is long */
+  text: string;
+}
+
+/** what one repo answered a search with */
+export interface GrepResult {
+  hits: GrepHit[];
+  /** the repo had more than the cap and the list stops short */
+  truncated: boolean;
+}
+
+/** one repo's row in a search across many */
+export interface GrepRepoResult extends GrepResult {
+  /** the repo id */
+  repo: string;
+  /** why this repo could not be searched; the hits are empty then */
+  error?: string;
+}
+
 export const dirtyCount = (r: Repo): number => r.status?.files.length ?? 0;
 export const isDirty = (r: Repo): boolean =>
   dirtyCount(r) > 0 || (r.status?.ahead ?? 0) > 0;

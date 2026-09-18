@@ -21,6 +21,7 @@ import { RepoLink } from "./RepoLink";
 import { RepoMenu } from "./RepoMenu";
 import { Resizer } from "./Resizer";
 import { RunChip } from "./RunChip";
+import { SearchSection } from "./Search";
 import { Seg, type SegOption } from "./Seg";
 import { PanelShells } from "./TermDock";
 import {
@@ -752,6 +753,7 @@ export function RepoPanel({
           )}
 
           <PanelShells repo={repo} />
+          <SearchSection repo={repo} />
           <History repo={repo} />
           <ClaudeSection repo={repo} />
         </>

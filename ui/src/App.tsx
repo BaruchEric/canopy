@@ -92,6 +92,13 @@ export function App() {
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       const t = e.target as HTMLElement;
+      // The one chord: it works from inside a box too, like an editor's.
+      if ((e.metaKey || e.ctrlKey) && e.shiftKey && !e.altKey && e.key.toLowerCase() === "f") {
+        if (view === "library" || view === "ports") return;
+        e.preventDefault();
+        useStore.getState().openSearch();
+        return;
+      }
       if (t.tagName === "INPUT" || t.tagName === "TEXTAREA") return;
       if (view === "library" || view === "ports" || e.metaKey || e.ctrlKey || e.altKey) return;
       if (e.key === "/") {

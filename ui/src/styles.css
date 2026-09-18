@@ -2843,3 +2843,120 @@ body.resizing {
   letter-spacing: 0.12em;
   color: var(--ink-faint);
 }
+
+/* ---------- search: file contents through git grep ---------- */
+
+.sheet.wide {
+  width: min(880px, 100%);
+}
+.grep-tools {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 4px 14px 8px;
+}
+.grep-sheet .grep-tools {
+  margin: 0 0 12px;
+}
+.grep-sum {
+  margin: 0 0 8px;
+  font-size: 11px;
+  color: var(--ink-faint);
+}
+.grep-repo {
+  border-top: 1px solid var(--hair2);
+}
+.grep-repo-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.grep-repo-name {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  gap: 8px;
+  align-items: baseline;
+  padding: 7px 0;
+  text-align: left;
+  font-weight: 500;
+  cursor: pointer;
+}
+.grep-repo-name::before {
+  content: "▸";
+  color: var(--ink-faint);
+}
+.grep-repo.open > .grep-repo-head > .grep-repo-name::before {
+  content: "▾";
+}
+.grep-repo-name > span {
+  font-size: 11px;
+  font-weight: 400;
+  color: var(--ink-faint);
+  font-variant-numeric: tabular-nums;
+}
+.grep-file {
+  margin: 2px 0 8px;
+}
+.grep .grep-file {
+  margin: 2px 14px 8px;
+}
+.grep-path {
+  font-size: 11px;
+  color: var(--ink-dim);
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  padding: 2px 0;
+}
+.grep-path > span {
+  color: var(--ink-faint);
+  margin-left: 6px;
+  font-variant-numeric: tabular-nums;
+}
+.grep-hits {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+.grep-hit {
+  display: flex;
+  gap: 10px;
+  width: 100%;
+  padding: 1px 4px;
+  text-align: left;
+  font-family: var(--mono);
+  font-size: 11.5px;
+  line-height: 1.45;
+  border-radius: 4px;
+  cursor: pointer;
+}
+.grep-hit:hover {
+  background: var(--bark2);
+}
+.grep-line {
+  flex: none;
+  width: 4ch;
+  text-align: right;
+  color: var(--ink-faint);
+  font-variant-numeric: tabular-nums;
+}
+.grep-text {
+  flex: 1;
+  min-width: 0;
+  white-space: pre;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  color: var(--ink-dim);
+}
+.grep-text mark {
+  color: var(--ink);
+  background: color-mix(in srgb, var(--lichen) 32%, transparent);
+  border-radius: 2px;
+}
+.grep-more {
+  font-size: 11px;
+}
+.grep-sheet .grep-more {
+  margin: 0 0 8px;
+}

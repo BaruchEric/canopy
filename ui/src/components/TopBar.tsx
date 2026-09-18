@@ -88,6 +88,7 @@ export function TopBar() {
   const rescan = useStore((s) => s.rescan);
   const sidebarOpen = useStore((s) => s.sidebarOpen);
   const toggleSidebar = useStore((s) => s.toggleSidebar);
+  const openSearch = useStore((s) => s.openSearch);
   const [scanning, setScanning] = useState(false);
 
   const doRescan = async () => {
@@ -170,6 +171,29 @@ export function TopBar() {
       </nav>
 
       <span className="spacer" />
+
+      <button
+        type="button"
+        className="icon-btn"
+        title="Search file contents across the repos in view (⌘⇧F)"
+        aria-label="Search file contents"
+        onClick={openSearch}
+      >
+        <svg
+          width="15"
+          height="15"
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke="currentColor"
+          strokeWidth="2"
+          strokeLinecap="round"
+          strokeLinejoin="round"
+          aria-hidden="true"
+        >
+          <circle cx="11" cy="11" r="7" />
+          <path d="m20 20-3.5-3.5" />
+        </svg>
+      </button>
 
       <Seg
         className="seg-sort"

@@ -31,7 +31,8 @@ import { parseTermMessage, startTerm, termSize, type TermSession } from "../core
 import { apiBase, ForgeAuthError, linkForgeClones, listForgeRepos } from "../core/forge";
 import { isSshHost, parseSshHosts, tildeQuote } from "../core/host";
 import { normalizeAgent } from "../core/agent";
-import { isOpenerId, openGroup, openIn } from "../core/openers";
+import { isOpenerId, openFile, openGroup, openIn } from "../core/openers";
+import { mapPool, searchRepo } from "../core/search";
 import {
   launchSource,
   refreshRepo,
@@ -55,6 +56,7 @@ import {
   HISTORY_WINDOWS,
   RUN_ACTIONS,
   type CanopyConfig,
+  type GrepRepoResult,
   type HistoryOverview,
   type HistoryWindow,
   type Repo,
@@ -504,6 +506,21 @@ async function sshHosts(): Promise<string[]> {
   return parseSshHosts(text);
 }
 
+/** how many repos a search runs git grep in at once */
+const GREP_CONCURRENCY = 8;
+/** the longest search a browser can ask for */
+const GREP_MAX = 200;
+
+/** One search term, checked: git grep reads a newline as two patterns and a
+ *  NUL cannot reach an argv at all, so both are refused rather than mangled. */
+function grepQuery(v: unknown): string {
+  const q = typeof v === "string" ? v.trim() : "";
+  if (q === "") throw new HttpError(400, "empty query");
+  if (q.length > GREP_MAX) throw new HttpError(400, `query longer than ${GREP_MAX} characters`);
+  if (/[\n\r\0]/.test(q)) throw new HttpError(400, "query must be one line");
+  return q;
+}
+
 const json = (body: unknown, status = 200): Response =>
   Response.json(body, { status });
 
@@ -592,6 +609,30 @@ async function handleApi(
     await scanOne(state, rt, opts);
     broadcast(state, { type: "scan", result: state.result });
     return json(state.result);
+  }
+
+  // A search across many repos at once: one row per repo, in the order
+  // asked, each with its hits or the reason it could not be searched. A
+  // slow host only costs its own row.
+  if (path === "/api/grep" && method === "POST") {
+    const b = (await req.json()) as { q?: unknown; ids?: unknown };
+    const q = grepQuery(b.q);
+    if (!Array.isArray(b.ids) || !b.ids.every((id): id is string => typeof id === "string")) {
+      return json({ error: "ids must be a list of repo ids" }, 400);
+    }
+    const repos = b.ids.map((id) => repoById(state, id));
+    const rows = await mapPool(repos, GREP_CONCURRENCY, async (repo): Promise<GrepRepoResult> => {
+      if (repo.forge) {
+        return { repo: repo.id, hits: [], truncated: false, error: "only on the forge" };
+      }
+      try {
+        return { repo: repo.id, ...(await searchRepo(repo.path, q)) };
+      } catch (err) {
+        const error = err instanceof Error ? err.message : String(err);
+        return { repo: repo.id, hits: [], truncated: false, error };
+      }
+    });
+    return json(rows);
   }
 
   if (path === "/api/history" && method === "GET") {
@@ -717,6 +758,18 @@ async function handleApi(
       const { bin, project } = await historyContext(state, repo);
       const sid = url.searchParams.get("session") ?? "";
       return json(await historySession(bin, project, sid));
+    }
+    if (method === "GET" && action === "grep") {
+      return json(await searchRepo(repo.path, grepQuery(url.searchParams.get("q"))));
+    }
+    if (method === "POST" && action === "openfile") {
+      const b = (await req.json()) as { file?: unknown; line?: unknown };
+      if (typeof b.file !== "string" || b.file === "" || b.file.includes("\0")) {
+        return json({ error: "file must be a path in the repo" }, 400);
+      }
+      const line = typeof b.line === "number" && Number.isInteger(b.line) && b.line > 0 ? b.line : 1;
+      await openFile(repo.path, b.file, line);
+      return json({ ok: true });
     }
     if (method === "GET" && action === "search") {
       const { bin, project } = await historyContext(state, repo);

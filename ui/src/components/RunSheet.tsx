@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { ACTIONS, EXPECTS_CHANGE, repoFacts } from "../../../src/core/actions";
 import { describeAgent, isDefaultAgent } from "../../../src/core/agent";
 import { agentFor, useStore, type Sheet } from "../store";
+import { SearchSheet } from "./Search";
 import {
   DEFAULT_AGENT,
   isRunActive,
@@ -60,7 +61,7 @@ export function RunSheet() {
     window.addEventListener("keydown", onKey);
     // Focus lands inside, so the keyboard user is in the dialog, not behind it.
     ref.current
-      ?.querySelector<HTMLElement>("textarea, button:not(.close)")
+      ?.querySelector<HTMLElement>("input[type=search], textarea, button:not(.close)")
       ?.focus();
     return () => window.removeEventListener("keydown", onKey);
   }, [sheet, close]);
@@ -70,7 +71,12 @@ export function RunSheet() {
     <div className="sheet-back" onPointerDown={(e) => {
       if (e.target === e.currentTarget) close();
     }}>
-      <div ref={ref} className="sheet" role="dialog" aria-modal="true">
+      <div
+        ref={ref}
+        className={sheet.kind === "search" ? "sheet wide" : "sheet"}
+        role="dialog"
+        aria-modal="true"
+      >
         <Body sheet={sheet} />
       </div>
     </div>
@@ -79,7 +85,7 @@ export function RunSheet() {
 
 /** The repo a sheet is about: named outright, or through its run. */
 const sheetRepoId = (sheet: Sheet, runs: Record<string, Run>): string | undefined =>
-  sheet.kind === "run" ? runs[sheet.runId]?.repoId : sheet.repoId;
+  sheet.kind === "run" ? runs[sheet.runId]?.repoId : sheet.kind === "search" ? undefined : sheet.repoId;
 
 function Body({ sheet }: { sheet: Sheet }) {
   const close = useStore((s) => s.closeSheet);
@@ -90,6 +96,7 @@ function Body({ sheet }: { sheet: Sheet }) {
     if (!repo) return <Missing what="That repo is no longer in the tree." onClose={close} />;
     return <Plan repo={repo} action={sheet.action} />;
   }
+  if (sheet.kind === "search") return <SearchSheet />;
   if (sheet.kind === "agent") {
     if (!repo) return <Missing what="That repo is no longer in the tree." onClose={close} />;
     return <AgentForm repo={repo} />;

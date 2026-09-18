@@ -37,6 +37,28 @@ export function sshSessionArgs(
 export const remoteFolderUri = (host: string, path: string): string =>
   `vscode-remote://ssh-remote+${host}${path}`;
 
+/** VS Code at one file and line: `-g path:line` here, the same behind
+ *  `--remote` for a repo on another host so the Remote-SSH window opens it. */
+export function fileOpenArgs(
+  host: string | null,
+  repoPath: string,
+  file: string,
+  line: number,
+): string[] {
+  const target = `${repoPath}/${file}:${line}`;
+  return host === null
+    ? ["code", "-g", target]
+    : ["code", "--remote", `ssh-remote+${host}`, "-g", target];
+}
+
+/** Open a file of a repo at a line in VS Code, wherever the repo lives. */
+export async function openFile(repoPath: string, file: string, line: number): Promise<void> {
+  if (!Bun.which("code")) throw new Error("the code CLI is not on PATH; opening a file needs it");
+  const { host, path } = parseLocator(repoPath);
+  const r = await exec(fileOpenArgs(host, path, file, line), { timeoutMs: 15_000 });
+  if (r.code !== 0) throw new Error(r.stderr.trim() || "failed to open the file");
+}
+
 /** The openers that are a plain app: everything but the two that start Claude. */
 type AppOpener = Exclude<OpenerId, "agent" | "herdr">;
 

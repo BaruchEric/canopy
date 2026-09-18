@@ -1,6 +1,8 @@
 import type {
   AgentSettings,
   CommitDetail,
+  GrepRepoResult,
+  GrepResult,
   HistoryHit,
   HistoryOverview,
   HistorySession,
@@ -134,6 +136,18 @@ export const api = {
     req<HistorySessionDetail>(`/api/repos/session?${rq(id, { session })}`),
   search: (id: string, q: string) =>
     req<HistoryHit[]>(`/api/repos/search?${rq(id, { q })}`),
+  /** file contents of one repo, through git grep */
+  grep: (id: string, q: string) =>
+    req<GrepResult>(`/api/repos/grep?${rq(id, { q })}`),
+  /** the same search across many repos, one row each in the order given */
+  grepAll: (q: string, ids: string[]) =>
+    req<GrepRepoResult[]>("/api/grep", { method: "POST", body: JSON.stringify({ q, ids }) }),
+  /** opens one file of a repo at a line in VS Code */
+  openFile: (id: string, file: string, line: number) =>
+    req<{ ok: true }>(`/api/repos/openfile?${rq(id)}`, {
+      method: "POST",
+      body: JSON.stringify({ file, line }),
+    }),
   openNote: (id: string, session: string) =>
     req<{ ok: true }>(`/api/repos/note?${rq(id)}`, {
       method: "POST",

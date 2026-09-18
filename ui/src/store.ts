@@ -31,7 +31,7 @@ export const TERM = { min: 120, max: 1200, initial: 300 };
 /** a shell living in a repo's panel: the bounds and default of its height */
 export const PANEL_TERM = { min: 120, max: 900, initial: 320 };
 /** sections that start folded, matching how the panel read before they could fold */
-const DEFAULT_CLOSED = ["history", "claude"];
+const DEFAULT_CLOSED = ["search", "history", "claude"];
 
 const LAYOUT_KEY = "canopy.layout";
 
@@ -193,6 +193,11 @@ interface CanopyState {
   runs: Record<string, Run>;
   /** the modal in front of the grove: a pre-flight for an action, or a run */
   sheet: Sheet | null;
+  /** the last term searched across repos; the sheet reopens on it */
+  searchQuery: string;
+  /** a term carried from the search sheet into one repo's search section,
+   *  taken by that section when it mounts or sees it */
+  pendingSearch: { repoId: string; q: string } | null;
   /** the claude-history archive, per repo; null until the first fetch lands */
   history: HistoryOverview | null;
   /** how Claude starts per repo, keyed by repo path; absent means defaults */
@@ -263,6 +268,14 @@ interface CanopyState {
   /** shows a run's console */
   showRun: (runId: string) => void;
   closeSheet: () => void;
+  /** opens the search across every repo in view */
+  openSearch: () => void;
+  setSearchQuery: (q: string) => void;
+  /** closes the search sheet, opens the repo's panel with its search section
+   *  unfolded, and hands that section the term */
+  searchIn: (repoId: string, q: string) => void;
+  /** the section took its term */
+  takePendingSearch: () => void;
   startRun: (repoId: string, action: RunAction, note: string) => Promise<void>;
   answerRun: (runId: string, promptId: string, answer: RunAnswer) => Promise<void>;
   /** the next message in a chat */
@@ -274,7 +287,8 @@ interface CanopyState {
 export type Sheet =
   | { kind: "plan"; repoId: string; action: RunAction }
   | { kind: "run"; runId: string }
-  | { kind: "agent"; repoId: string };
+  | { kind: "agent"; repoId: string }
+  | { kind: "search" };
 
 /** one shell in the bottom strip */
 export interface TermTab {
@@ -342,6 +356,8 @@ export const useStore = create<CanopyState>((set, get) => ({
   settings: loadSettings(),
   runs: {},
   sheet: null,
+  searchQuery: "",
+  pendingSearch: null,
   history: null,
   agents: {},
   terms: [],
@@ -636,6 +652,22 @@ export const useStore = create<CanopyState>((set, get) => ({
   },
   showRun: (runId) => set({ sheet: { kind: "run", runId } }),
   closeSheet: () => set({ sheet: null }),
+  openSearch: () => set({ sheet: { kind: "search" } }),
+  setSearchQuery: (q) => set({ searchQuery: q }),
+  searchIn: (repoId, q) =>
+    set((s) => {
+      const closedSections = s.closedSections.filter((k) => k !== "search");
+      if (closedSections.length !== s.closedSections.length) {
+        saveLayout({ ...layoutOf(s), closedSections });
+      }
+      return {
+        sheet: null,
+        pendingSearch: { repoId, q },
+        panels: s.panels.includes(repoId) ? s.panels : [...s.panels, repoId],
+        closedSections,
+      };
+    }),
+  takePendingSearch: () => set({ pendingSearch: null }),
   startRun: async (repoId, action, note) => {
     const run = await api.run(repoId, action, note);
     set((s) => ({
