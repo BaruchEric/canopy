@@ -1,6 +1,17 @@
-import { Fragment, useEffect, useState } from "react";
-import type { CSSProperties } from "react";
+import { Fragment, useEffect, useMemo, useState } from "react";
+import type { CSSProperties, DragEvent, KeyboardEvent } from "react";
 import { api } from "../api";
+import {
+  FILE_COL_INFO,
+  defaultDir,
+  filterFiles,
+  groupByFolder,
+  markOf,
+  moveCol,
+  sortFiles,
+  type FileCol,
+  type FileView,
+} from "../files";
 import { PANEL, runFor, useStore } from "../store";
 import { ago, GLYPH, stateOf } from "../util";
 import { ClaudeSection } from "./Claude";
@@ -10,6 +21,7 @@ import { RepoLink } from "./RepoLink";
 import { RepoMenu } from "./RepoMenu";
 import { Resizer } from "./Resizer";
 import { RunChip } from "./RunChip";
+import { Seg, type SegOption } from "./Seg";
 import { PanelShells } from "./TermDock";
 import {
   OPENER_IDS,
@@ -19,25 +31,35 @@ import {
   type RepoFile,
 } from "../../../src/core/types";
 
+/** The width of each column, in the order the settings put them. The
+ *  checkbox is always the first track. */
+function colTemplate(cols: FileCol[]): string {
+  const width: Record<FileCol, string> = {
+    mark: "auto",
+    file: "minmax(6em, 1fr)",
+    time: "auto",
+  };
+  return ["auto", ...cols.map((c) => width[c])].join(" ");
+}
+
 function FileRow({
   repo,
   file,
+  cols,
+  label,
   onError,
 }: {
   repo: Repo;
   file: RepoFile;
+  cols: FileCol[];
+  /** what the file cell says: the whole path, or the name under a folder heading */
+  label: string;
   onError: (message: string) => void;
 }) {
   const [diff, setDiff] = useState<string | null>(null);
   const [open, setOpen] = useState(false);
   const staged = file.index !== "." && !file.untracked;
-  const marker = file.conflicted
-    ? "U"
-    : file.untracked
-      ? "?"
-      : file.index !== "."
-        ? file.index
-        : file.worktree;
+  const marker = markOf(file);
 
   // Re-fetch on every open: the cached text goes stale as soon as the file is
   // edited or its staged/untracked state changes.
@@ -73,18 +95,214 @@ function FileRow({
           disabled={file.conflicted}
           onChange={() => void toggleStage()}
         />
-        <span className={`mark m-${marker}`}>{marker}</span>
-        <button
-          type="button"
-          className="file-name"
-          onClick={() => void toggleDiff()}
-          title={file.orig ? `${file.orig} → ${file.path}` : file.path}
-        >
-          {file.path}
-        </button>
+        {cols.map((col) => {
+          switch (col) {
+            case "mark":
+              return (
+                <span key={col} className={`mark m-${marker}`}>
+                  {marker}
+                </span>
+              );
+            case "file":
+              return (
+                <button
+                  key={col}
+                  type="button"
+                  className="file-name"
+                  onClick={() => void toggleDiff()}
+                  title={file.orig ? `${file.orig} → ${file.path}` : file.path}
+                >
+                  {label}
+                </button>
+              );
+            case "time":
+              return (
+                <span
+                  key={col}
+                  className="file-time"
+                  title={
+                    file.mtime === undefined
+                      ? "not on disk"
+                      : new Date(file.mtime * 1000).toLocaleString()
+                  }
+                >
+                  {ago(file.mtime)}
+                </span>
+              );
+          }
+        })}
       </div>
       {open && diff !== null && <DiffView diff={diff} />}
     </li>
+  );
+}
+
+const VIEWS: readonly SegOption<FileView>[] = [
+  { value: "list", label: "list", title: "Every file in one list" },
+  {
+    value: "folders",
+    label: "folders",
+    title: "Files under a heading per folder",
+  },
+];
+
+/** The changes list: a filter box, a header row whose buttons sort (click)
+ *  and reorder (drag, or Alt with an arrow key), then the rows. Column order
+ *  and sort are per-browser settings, so every panel agrees. */
+function ChangesList({
+  repo,
+  files,
+  onError,
+}: {
+  repo: Repo;
+  files: RepoFile[];
+  onError: (message: string) => void;
+}) {
+  const cols = useStore((s) => s.settings.fileCols);
+  const sort = useStore((s) => s.settings.fileSort);
+  const setSetting = useStore((s) => s.setSetting);
+  const view = useStore((s) => s.settings.fileView);
+  const [query, setQuery] = useState("");
+  const [dragging, setDragging] = useState<FileCol | null>(null);
+
+  const shown = useMemo(
+    () => sortFiles(filterFiles(files, query), sort),
+    [files, query, sort],
+  );
+  const groups = useMemo(
+    () => (view === "folders" ? groupByFolder(shown) : null),
+    [view, shown],
+  );
+
+  const sortBy = (col: FileCol) =>
+    setSetting(
+      "fileSort",
+      sort.col === col
+        ? { col, dir: sort.dir === "asc" ? "desc" : "asc" }
+        : { col, dir: defaultDir(col) },
+    );
+
+  const move = (from: FileCol, to: FileCol) => {
+    const next = moveCol(cols, from, to);
+    if (next !== cols) setSetting("fileCols", next);
+  };
+
+  const onDrop = (e: DragEvent, to: FileCol) => {
+    e.preventDefault();
+    if (dragging) move(dragging, to);
+    setDragging(null);
+  };
+
+  // Alt+arrow swaps the column with its neighbour, for keyboards and for
+  // anyone who would rather not drag.
+  const onKey = (e: KeyboardEvent, col: FileCol) => {
+    if (!e.altKey || (e.key !== "ArrowLeft" && e.key !== "ArrowRight")) return;
+    e.preventDefault();
+    const i = cols.indexOf(col);
+    const to = cols[e.key === "ArrowLeft" ? i - 1 : i + 1];
+    if (to) move(col, to);
+  };
+
+  const arrow = sort.dir === "asc" ? "↑" : "↓";
+
+  return (
+    <div
+      className="changes"
+      style={{ "--file-cols": colTemplate(cols) } as CSSProperties}
+    >
+      <div className="changes-tools">
+        <input
+          className="file-filter"
+          type="search"
+          placeholder="filter files"
+          aria-label="Filter changed files"
+          value={query}
+          onChange={(e) => setQuery(e.target.value)}
+        />
+        {query && (
+          <span className="changes-count">
+            {shown.length} of {files.length}
+          </span>
+        )}
+        <Seg
+          label="Changes view"
+          className="changes-view"
+          value={view}
+          options={VIEWS}
+          onChange={(v) => setSetting("fileView", v)}
+        />
+      </div>
+      <div className="file-table">
+        <div className="file-head" role="row">
+          <span />
+          {cols.map((col) => (
+            <button
+              key={col}
+              type="button"
+              className={`file-col${sort.col === col ? " sorted" : ""}${dragging === col ? " dragging" : ""}`}
+              title={`${FILE_COL_INFO[col].title}. Click to sort, drag or Alt+arrow to move.`}
+              aria-sort={
+                sort.col === col
+                  ? sort.dir === "asc"
+                    ? "ascending"
+                    : "descending"
+                  : undefined
+              }
+              draggable
+              onClick={() => sortBy(col)}
+              onKeyDown={(e) => onKey(e, col)}
+              onDragStart={(e) => {
+                e.dataTransfer.effectAllowed = "move";
+                setDragging(col);
+              }}
+              onDragEnd={() => setDragging(null)}
+              onDragOver={(e) => {
+                if (dragging) e.preventDefault();
+              }}
+              onDrop={(e) => onDrop(e, col)}
+            >
+              {FILE_COL_INFO[col].label || "•"}
+              {sort.col === col && <span className="sort-arrow">{arrow}</span>}
+            </button>
+          ))}
+        </div>
+        {shown.length === 0 ? (
+          <p className="panel-clean">No file matches.</p>
+        ) : (
+          <ul className="files">
+            {groups
+              ? groups.map((g) => (
+                  <Fragment key={g.folder}>
+                    <li className="file-folder" title={g.folder || "repo root"}>
+                      <span className="folder-name">{g.folder || "/"}</span>
+                      <span className="folder-count">{g.files.length}</span>
+                    </li>
+                    {g.files.map((f) => (
+                      <FileRow
+                        key={f.path}
+                        repo={repo}
+                        file={f}
+                        cols={cols}
+                        label={f.path.slice(g.folder ? g.folder.length + 1 : 0)}
+                        onError={onError}
+                      />
+                    ))}
+                  </Fragment>
+                ))
+              : shown.map((f) => (
+                  <FileRow
+                    key={f.path}
+                    repo={repo}
+                    file={f}
+                    cols={cols}
+                    label={f.path}
+                    onError={onError}
+                  />
+                ))}
+          </ul>
+        )}
+      </div>
+    </div>
   );
 }
 
@@ -375,9 +593,14 @@ export function RepoPanel({
         </button>
       </header>
 
-      {!repo.host && !repo.forge && <a className="panel-library" href={`?view=library&project=${encodeURIComponent(repo.path)}`}>
-        Library · tags, notes, links & dev server →
-      </a>}
+      {!repo.host && !repo.forge && (
+        <a
+          className="panel-library"
+          href={`?view=library&project=${encodeURIComponent(repo.path)}`}
+        >
+          Library · tags, notes, links & dev server →
+        </a>
+      )}
       {repo.description && (
         <p className="panel-desc" title={repo.description}>
           {repo.description}
@@ -445,7 +668,9 @@ export function RepoPanel({
           disabled={busy !== null || ((st?.ahead ?? 0) === 0 && !!st?.upstream)}
           onClick={() => void run("push", async () => (await api.push(id)).out)}
         >
-          {busy === "push" ? "pushing…" : `push${st?.ahead ? ` ↑${st.ahead}` : ""}`}
+          {busy === "push"
+            ? "pushing…"
+            : `push${st?.ahead ? ` ↑${st.ahead}` : ""}`}
         </button>
       </div>
 
@@ -461,9 +686,7 @@ export function RepoPanel({
       </div>
 
       {repo.error ? (
-        <p className="panel-error">
-          Could not read this repo: {repo.error}
-        </p>
+        <p className="panel-error">Could not read this repo: {repo.error}</p>
       ) : (
         <>
           <button
@@ -478,16 +701,7 @@ export function RepoPanel({
             (files.length === 0 ? (
               <p className="panel-clean">Working tree clean.</p>
             ) : (
-              <ul className="files">
-                {files.map((f) => (
-                  <FileRow
-                    key={f.path}
-                    repo={repo}
-                    file={f}
-                    onError={showError}
-                  />
-                ))}
-              </ul>
+              <ChangesList repo={repo} files={files} onError={showError} />
             ))}
 
           {!changesClosed && files.length > 0 && (

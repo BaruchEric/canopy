@@ -6,6 +6,7 @@ import {
   isHash,
   parseNameStatusZ,
   parseNumstatZ,
+  parseMtimes,
   parsePorcelainV2,
   parseUserConfig,
 } from "./git";
@@ -243,5 +244,22 @@ describe("heuristicMessage", () => {
 
   test("empty change set", () => {
     expect(heuristicMessage([])).toBe("update");
+  });
+});
+
+describe("parseMtimes", () => {
+  test("one entry per path, a blank line for a missing file", () => {
+    expect(parseMtimes("1700000000\n\n1700000001\n", 3)).toEqual([
+      1700000000,
+      undefined,
+      1700000001,
+    ]);
+  });
+  test("short or garbled output never lengthens the list", () => {
+    expect(parseMtimes("stat: illegal option\n", 2)).toEqual([
+      undefined,
+      undefined,
+    ]);
+    expect(parseMtimes("", 0)).toEqual([]);
   });
 });

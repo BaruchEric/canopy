@@ -9,6 +9,9 @@ export interface RepoFile {
   worktree: string;
   untracked: boolean;
   conflicted: boolean;
+  /** when the file on disk last changed, unix seconds; absent when it is
+   *  gone (deleted) or could not be read */
+  mtime?: number;
 }
 
 export interface LastCommit {

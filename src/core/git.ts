@@ -1,5 +1,6 @@
-import { isAbsolute, resolve, sep } from "node:path";
-import { git } from "./exec";
+import { stat } from "node:fs/promises";
+import { isAbsolute, join, resolve, sep } from "node:path";
+import { git, onHost } from "./exec";
 import { parseLocator } from "./host";
 import type {
   CommitDetail,
@@ -170,6 +171,49 @@ export function parseUserConfig(text: string): GitUser | null {
   return name || email ? { name, email } : null;
 }
 
+/** One line per path given, in order: the file's mtime in unix seconds, or
+ *  an empty line when it is gone. GNU stat is tried first and BSD stat when
+ *  that fails, since the host may be either; a missing file fails both. */
+export const MTIME_SCRIPT =
+  'cd "$0" && for f; do stat -c %Y -- "$f" 2>/dev/null || stat -f %m -- "$f" 2>/dev/null || echo; done';
+
+/** Read the script's output back into one entry per path asked about. */
+export function parseMtimes(text: string, n: number): (number | undefined)[] {
+  const lines = text.split("\n");
+  return Array.from({ length: n }, (_, i) => {
+    const v = lines[i]?.trim() ?? "";
+    return /^\d+$/.test(v) ? Number(v) : undefined;
+  });
+}
+
+/** More changed files than this get no time: a repo with an unignored
+ *  node_modules would otherwise stat tens of thousands of files per event. */
+const MTIME_CAP = 2000;
+
+async function fileMtimes(
+  repoPath: string,
+  paths: string[],
+): Promise<(number | undefined)[]> {
+  const { host, path: root } = parseLocator(repoPath);
+  const want = paths.slice(0, MTIME_CAP);
+  let times: (number | undefined)[];
+  if (host === null) {
+    times = await Promise.all(
+      want.map(async (p) => {
+        try {
+          return Math.floor((await stat(join(root, p))).mtimeMs / 1000);
+        } catch {
+          return undefined;
+        }
+      }),
+    );
+  } else {
+    const r = await onHost(host, ["sh", "-c", MTIME_SCRIPT, root, ...want]);
+    times = r.code === 0 ? parseMtimes(r.stdout, want.length) : [];
+  }
+  return paths.map((_, i) => times[i]);
+}
+
 export async function getStatus(repoPath: string): Promise<RepoStatus> {
   const [st, log, cfg] = await Promise.all([
     // -uall lists untracked files individually; without it a new directory
@@ -188,6 +232,16 @@ export async function getStatus(repoPath: string): Promise<RepoStatus> {
   ]);
   if (st.code !== 0) throw new Error(st.stderr.trim() || "git status failed");
   const status = parsePorcelainV2(st.stdout);
+  if (status.files.length > 0) {
+    const times = await fileMtimes(
+      repoPath,
+      status.files.map((f) => f.path),
+    );
+    status.files = status.files.map((f, i) => {
+      const t = times[i];
+      return t === undefined ? f : { ...f, mtime: t };
+    });
+  }
   let lastCommit = null;
   if (log.code === 0 && log.stdout.trim()) {
     const [hash = "", subject = "", ct = "0"] = log.stdout.trim().split("\0");

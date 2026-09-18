@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { shellPlace } from "./settings";
+import { loadSettings, shellPlace } from "./settings";
 
 describe("shellPlace", () => {
   test("auto follows the panel", () => {
@@ -17,5 +17,31 @@ describe("shellPlace", () => {
   test("a tab or a window is one whatever the window", () => {
     expect(shellPlace("tab", { panelOpen: true, solo: true })).toBe("tab");
     expect(shellPlace("window", { panelOpen: false, solo: false })).toBe("window");
+  });
+});
+
+describe("loadSettings", () => {
+  test("the changes list's columns and sort survive a reload, repaired", () => {
+    const store = new Map<string, string>();
+    (globalThis as { localStorage?: unknown }).localStorage = {
+      getItem: (k: string) => store.get(k) ?? null,
+      setItem: (k: string, v: string) => void store.set(k, v),
+    };
+    store.set(
+      "canopy.settings",
+      JSON.stringify({
+        fileCols: ["time", "file"],
+        fileSort: { col: "file", dir: "sideways" },
+        fileView: "folders",
+      }),
+    );
+    const s = loadSettings();
+    expect(s.fileCols).toEqual(["time", "file", "mark"]);
+    expect(s.fileSort).toEqual({ col: "file", dir: "desc" });
+    expect(s.fileView).toBe("folders");
+    store.set("canopy.settings", "{}");
+    expect(loadSettings().fileSort).toEqual({ col: "time", dir: "desc" });
+    expect(loadSettings().fileView).toBe("list");
+    delete (globalThis as { localStorage?: unknown }).localStorage;
   });
 });

@@ -1,6 +1,16 @@
 /** Per-browser preferences. These never touch the server: they describe how
  *  this window shows the grove, not the grove itself. */
 
+import {
+  FILE_COLS,
+  FILE_VIEWS,
+  SORT_DIRS,
+  colOrder,
+  type FileCol,
+  type FileSort,
+  type FileView,
+} from "./files";
+
 export const SORT_MODES = [
   "folder",
   "activity",
@@ -63,6 +73,12 @@ export interface Settings {
   density: Density;
   /** which of a forge's repos are worth a card */
   forge: ForgeView;
+  /** the columns of a panel's changes list, left to right */
+  fileCols: FileCol[];
+  /** how that list is ordered */
+  fileSort: FileSort;
+  /** one flat list, or grouped under folder headings */
+  fileView: FileView;
 }
 
 export const DEFAULT_SETTINGS: Settings = {
@@ -73,6 +89,9 @@ export const DEFAULT_SETTINGS: Settings = {
   theme: "system",
   density: "cozy",
   forge: "missing",
+  fileCols: [...FILE_COLS],
+  fileSort: { col: "time", dir: "desc" },
+  fileView: "list",
 };
 
 const KEY = "canopy.settings";
@@ -85,6 +104,17 @@ function pick<T extends string>(
   return typeof value === "string" && (allowed as readonly string[]).includes(value)
     ? (value as T)
     : fallback;
+}
+
+function fileSort(value: unknown): FileSort {
+  const v = (typeof value === "object" && value !== null ? value : {}) as {
+    col?: unknown;
+    dir?: unknown;
+  };
+  return {
+    col: pick(FILE_COLS, v.col, DEFAULT_SETTINGS.fileSort.col),
+    dir: pick(SORT_DIRS, v.dir, DEFAULT_SETTINGS.fileSort.dir),
+  };
 }
 
 export function loadSettings(): Settings {
@@ -102,6 +132,9 @@ export function loadSettings(): Settings {
       theme: pick(THEMES, saved.theme, DEFAULT_SETTINGS.theme),
       density: pick(DENSITIES, saved.density, DEFAULT_SETTINGS.density),
       forge: pick(FORGE_VIEWS, saved.forge, DEFAULT_SETTINGS.forge),
+      fileCols: colOrder(saved.fileCols),
+      fileSort: fileSort(saved.fileSort),
+      fileView: pick(FILE_VIEWS, saved.fileView, DEFAULT_SETTINGS.fileView),
     };
   } catch {
     return DEFAULT_SETTINGS;
