@@ -58,7 +58,7 @@ function bool(v: string | undefined, what: string): boolean {
 }
 
 function tools(v: string | undefined): string[] {
-  const words = (v ?? "git-read").split(",").map((w) => w.trim()).filter(Boolean);
+  const words = (v || "git-read").split(",").map((w) => w.trim()).filter(Boolean);
   const out: string[] = [];
   for (const w of words) {
     const set = TOOL_SETS[w];

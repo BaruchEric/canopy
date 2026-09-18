@@ -86,6 +86,12 @@ describe("parseWorkflow", () => {
     expect(e.workflow.noteRequired).toBe(true);
   });
 
+  test("a bare tools: line falls back to git-read", () => {
+    const e = parseWorkflow(`---\nblurb: b\n---\n\n## Do\ntools:\n\nWork.\n`, meta);
+    if (!e.ok) throw new Error(e.error);
+    expect(e.workflow.steps[0]?.tools).toEqual(["Bash(git status:*)", "Bash(git diff:*)", "Bash(git log:*)", "Bash(git show:*)", "Bash(git branch:*)", "Bash(git remote:*)", "Bash(git rev-parse:*)", "Bash(git fetch:*)"]);
+  });
+
   test.each([
     ["no frontmatter", `## Do\n\nWork.\n`, "frontmatter"],
     ["no blurb", `---\nname: x\n---\n\n## Do\n\nWork.\n`, "blurb"],
