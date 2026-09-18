@@ -27,13 +27,16 @@ import {
   openHistoryNote,
 } from "../core/history";
 import { browseLocal, browseRemote, expandHome, SshError } from "../core/browse";
-import { onHost } from "../core/exec";
+import { exec, onHost } from "../core/exec";
+import { Flows, type CheckResult } from "../core/flow";
 import { parseTermMessage, startTerm, termSize, type TermSession } from "../core/term";
 import { apiBase, ForgeAuthError, linkForgeClones, listForgeRepos } from "../core/forge";
-import { isSshHost, parseSshHosts, tildeQuote } from "../core/host";
+import { isSshHost, parseLocator, parseSshHosts, shellQuote, tildeQuote } from "../core/host";
+import { hasGatewayKey, jev } from "../core/jev";
 import { normalizeAgent } from "../core/agent";
 import { isOpenerId, openFile, openGroup, openIn } from "../core/openers";
 import { mapPool, searchRepo } from "../core/search";
+import { findWorkflow, loadWorkflows } from "../core/workflows";
 import {
   launchSource,
   refreshRepo,
@@ -57,6 +60,7 @@ import {
   HISTORY_WINDOWS,
   RUN_ACTIONS,
   type CanopyConfig,
+  type FlowChoice,
   type GrepRepoResult,
   type HistoryOverview,
   type HistoryWindow,
@@ -100,6 +104,8 @@ interface ServerState {
   timers: Map<string, ReturnType<typeof setTimeout>>;
   /** Claude Code jobs, one live session per repo at most */
   runner: Runner;
+  /** workflow runs, step by step, over the runner's jobs */
+  flows: Flows;
   /** the claude-history overview, kept for HISTORY_TTL and for one scan */
   history: HistoryCache | null;
   /** an overview being built, so concurrent callers share it */
@@ -131,6 +137,8 @@ const HISTORY_TTL = 5 * 60_000;
 
 const isRunAction = (v: unknown): v is RunAction =>
   typeof v === "string" && (RUN_ACTIONS as readonly string[]).includes(v);
+
+const isFlowChoice = (v: unknown): v is FlowChoice => v === "continue" || v === "retry" || v === "stop";
 
 const isHistoryWindow = (v: unknown): v is HistoryWindow =>
   typeof v === "string" && (HISTORY_WINDOWS as readonly string[]).includes(v);
@@ -225,6 +233,22 @@ class HttpError extends Error {
   ) {
     super(message);
   }
+}
+
+/** stdout and stderr of a check, tail-capped for the sheet */
+const CHECK_OUTPUT_CAP = 4000;
+const CHECK_TIMEOUT = 10 * 60_000;
+
+/** A step's check, in the repo, through a login shell so the user's PATH
+ *  (bun, cargo) applies; over ssh for a remote repo. */
+async function runCheck(repo: Repo, command: string): Promise<CheckResult> {
+  const { host, path } = parseLocator(repo.path);
+  const r =
+    host === null
+      ? await exec(["sh", "-lc", command], { cwd: path, timeoutMs: CHECK_TIMEOUT })
+      : await onHost(host, ["sh", "-lc", `cd ${shellQuote(path)} && ${command}`], { timeoutMs: CHECK_TIMEOUT });
+  const out = `${r.stdout}${r.stderr ? `\n${r.stderr}` : ""}`.trim();
+  return { exit: r.code, output: out.length > CHECK_OUTPUT_CAP ? `…${out.slice(-CHECK_OUTPUT_CAP)}` : out };
 }
 
 function broadcast(state: ServerState, event: ServerEvent): void {
@@ -669,6 +693,72 @@ async function handleApi(
     return json(state.runner.say(b.id, b.text));
   }
 
+  if (path === "/api/verdict" && method === "GET") return json({ ready: hasGatewayKey() });
+
+  if (path === "/api/flows" && method === "GET") return json(state.flows.list());
+  if (path === "/api/flows" && method === "DELETE") {
+    try {
+      state.flows.dismiss(url.searchParams.get("id") ?? "");
+    } catch (err) {
+      throw new HttpError(400, String(err instanceof Error ? err.message : err));
+    }
+    return json({ ok: true });
+  }
+  if (path === "/api/flows/resume" && method === "POST") {
+    const b = (await req.json()) as { id?: unknown; choice?: unknown };
+    if (typeof b.id !== "string" || !isFlowChoice(b.choice)) return json({ error: "missing flow id or choice" }, 400);
+    try {
+      return json(state.flows.resume(b.id, b.choice));
+    } catch (err) {
+      throw new HttpError(400, String(err instanceof Error ? err.message : err));
+    }
+  }
+  if (path === "/api/flows/stop" && method === "POST") {
+    const b = (await req.json()) as { id?: unknown };
+    if (typeof b.id !== "string") return json({ error: "missing flow id" }, 400);
+    try {
+      return json(state.flows.stop(b.id));
+    } catch (err) {
+      throw new HttpError(400, String(err instanceof Error ? err.message : err));
+    }
+  }
+
+  if (path === "/api/fleets" && method === "GET") return json(state.flows.fleets());
+  if (path === "/api/fleet" && method === "POST") {
+    const b = (await req.json()) as { workflow?: unknown; ids?: unknown; note?: unknown };
+    if (typeof b.workflow !== "string" || !Array.isArray(b.ids) || !b.ids.every((x) => typeof x === "string")) {
+      return json({ error: "missing workflow or ids" }, 400);
+    }
+    const ids = b.ids as string[];
+    const repos = ids.map((id) => state.result.repos.find((r) => r.id === id)).filter((r): r is Repo => r !== undefined);
+    if (!repos.length) return json({ error: "no known repos in ids" }, 400);
+    // The fleet's workflow is resolved once, from the bundled and user
+    // sources: a fleet runs the same file everywhere, so repo overrides
+    // do not apply.
+    const wf = findWorkflow(await loadWorkflows({ path: "", host: "none" }), b.workflow);
+    if (!wf) return json({ error: `unknown workflow: ${b.workflow}` }, 400);
+    const cfg = await loadConfig();
+    const note = typeof b.note === "string" ? b.note : "";
+    return json(state.flows.startFleet(repos, wf, note, (r) => agentFor(cfg, r.path)), 201);
+  }
+  if (path === "/api/fleet/stop" && method === "POST") {
+    const b = (await req.json()) as { id?: unknown };
+    if (typeof b.id !== "string") return json({ error: "missing fleet id" }, 400);
+    try {
+      return json(state.flows.stopFleet(b.id));
+    } catch (err) {
+      throw new HttpError(400, String(err instanceof Error ? err.message : err));
+    }
+  }
+  if (path === "/api/fleet" && method === "DELETE") {
+    try {
+      state.flows.dismissFleet(url.searchParams.get("id") ?? "");
+    } catch (err) {
+      throw new HttpError(400, String(err instanceof Error ? err.message : err));
+    }
+    return json({ ok: true });
+  }
+
   // agent settings, per repo, keyed by path like workspaces
   if (path === "/api/agents" && method === "GET") {
     return json((await loadConfig()).agents);
@@ -864,6 +954,27 @@ async function handleApi(
     if (method === "POST" && action === "refresh") {
       return json(await refreshAndBroadcast(state, repo.id));
     }
+    if (method === "GET" && action === "workflows") {
+      return json(await loadWorkflows(repo));
+    }
+    if (method === "POST" && action === "flow") {
+      if (repo.host) return json({ error: `Claude runs only work on this machine; ${repo.name} is on ${repo.host}` }, 400);
+      const b = (await req.json()) as { workflow?: unknown; note?: unknown };
+      if (typeof b.workflow !== "string") return json({ error: "missing workflow" }, 400);
+      const entries = await loadWorkflows(repo);
+      const wf = findWorkflow(entries, b.workflow);
+      if (!wf) {
+        const broken = entries.find((e) => !e.ok && e.name === b.workflow);
+        return json({ error: broken && !broken.ok ? broken.error : `unknown workflow: ${b.workflow}` }, 400);
+      }
+      const note = typeof b.note === "string" ? b.note : "";
+      const agent = agentFor(await loadConfig(), repo.path);
+      try {
+        return json(state.flows.start(repo, wf, note, agent), 201);
+      } catch (err) {
+        throw new HttpError(400, String(err instanceof Error ? err.message : err));
+      }
+    }
     if (method === "POST" && action === "run") {
       // The runner spawns claude here, at the repo's path; there is no
       // claude to spawn at a folder on another host.
@@ -941,6 +1052,31 @@ export async function startServer(opts: {
   // A stored source that is the launch root again would list every repo
   // twice; the launch root wins and keeps its bare ids.
   const extras = cfg.sources.filter((s) => s.kind !== "local" || s.path !== root);
+  const runner = new Runner({
+    onChange: (run) => {
+      broadcast(state, { type: "run", run });
+      state.flows.onRun(run);
+    },
+    onGone: (id) => broadcast(state, { type: "run-gone", id }),
+    // Re-read status directly rather than waiting on the watcher's
+    // debounce: the card and the run's outcome should agree at once.
+    status: (repoId) =>
+      refreshAndBroadcast(state, repoId)
+        .then((r) => r.status)
+        .catch(() => null),
+  });
+  const flows = new Flows(runner, {
+    onChange: (flow) => broadcast(state, { type: "flow", flow }),
+    onGone: (id) => broadcast(state, { type: "flow-gone", id }),
+    onFleet: (fleet) => broadcast(state, { type: "fleet", fleet }),
+    onFleetGone: (id) => broadcast(state, { type: "fleet-gone", id }),
+    check: runCheck,
+    evaluator: hasGatewayKey() ? jev : null,
+    status: (repoId) =>
+      refreshAndBroadcast(state, repoId)
+        .then((r) => r.status)
+        .catch(() => null),
+  });
   const state: ServerState = {
     root,
     sources: [runtime(launchSource(root)), ...extras.map((s) => runtime({ ...s, launch: false }))],
@@ -952,16 +1088,8 @@ export async function startServer(opts: {
     history: null,
     historyPending: null,
     terms: new Set(),
-    runner: new Runner({
-      onChange: (run) => broadcast(state, { type: "run", run }),
-      onGone: (id) => broadcast(state, { type: "run-gone", id }),
-      // Re-read status directly rather than waiting on the watcher's
-      // debounce: the card and the run's outcome should agree at once.
-      status: (repoId) =>
-        refreshAndBroadcast(state, repoId)
-          .then((r) => r.status)
-          .catch(() => null),
-    }),
+    runner,
+    flows,
   };
   await rememberRoot(root);
   await Promise.all(state.sources.map((rt) => scanOne(state, rt, scanOptions)));
@@ -1086,6 +1214,7 @@ export async function startServer(opts: {
       clearInterval(heartbeat);
       clearInterval(remoteTimer);
       for (const t of state.timers.values()) clearTimeout(t);
+      state.flows.stopAll();
       state.runner.stopAll();
       for (const t of state.terms) t.close();
       state.terms.clear();
