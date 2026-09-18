@@ -126,10 +126,15 @@ export class Flows {
    *  outermost call's start loop unwinds */
   private pumpAgain = new Set<string>();
 
+  /** whether a verdict gate can evaluate; without one it behaves like ask */
+  readonly hasEvaluator: boolean;
+
   constructor(
     private runner: FlowRunner,
     private hooks: FlowHooks,
-  ) {}
+  ) {
+    this.hasEvaluator = hooks.evaluator !== null;
+  }
 
   list(): Flow[] {
     return [...this.live.values()].map((l) => l.flow);

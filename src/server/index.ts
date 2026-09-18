@@ -693,7 +693,7 @@ async function handleApi(
     return json(state.runner.say(b.id, b.text));
   }
 
-  if (path === "/api/verdict" && method === "GET") return json({ ready: hasGatewayKey() });
+  if (path === "/api/verdict" && method === "GET") return json({ ready: state.flows.hasEvaluator });
 
   if (path === "/api/flows" && method === "GET") return json(state.flows.list());
   if (path === "/api/flows" && method === "DELETE") {
@@ -737,8 +737,9 @@ async function handleApi(
     // do not apply.
     const wf = findWorkflow(await loadWorkflows({ path: "", host: "none" }), b.workflow);
     if (!wf) return json({ error: `unknown workflow: ${b.workflow}` }, 400);
-    const cfg = await loadConfig();
     const note = typeof b.note === "string" ? b.note : "";
+    if (wf.noteRequired && !note.trim()) return json({ error: "this workflow needs a note" }, 400);
+    const cfg = await loadConfig();
     return json(state.flows.startFleet(repos, wf, note, (r) => agentFor(cfg, r.path)), 201);
   }
   if (path === "/api/fleet/stop" && method === "POST") {
@@ -979,6 +980,9 @@ async function handleApi(
       // The runner spawns claude here, at the repo's path; there is no
       // claude to spawn at a folder on another host.
       if (repo.host) return json({ error: `Claude runs only work on this machine; ${repo.name} is on ${repo.host}` }, 400);
+      // A workflow owns the repo while it runs, gate included: a second
+      // claude here would make the flow's next step throw and die.
+      if (state.flows.activeFor(repo.id)) throw new HttpError(409, "a workflow is running here");
       const b = (await req.json()) as { action?: unknown; note?: unknown };
       if (!isRunAction(b.action)) return json({ error: "unknown action" }, 400);
       const note = typeof b.note === "string" ? b.note : "";

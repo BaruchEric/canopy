@@ -225,9 +225,26 @@ export function FlowConsole({ flowId }: { flowId: string }) {
         <div className="sheet-body console">
           <Gate flow={flow} step={step} onChoose={(c) => void act(() => resumeFlow(flow.id, c))} />
           {run && <Timeline run={run} repo={repo} error={null} onAnswer={() => {}} />}
+          {error && <p className="note err">{error}</p>}
         </div>
       ) : run ? (
-        <Timeline run={run} repo={repo} error={error} onAnswer={(a) => void act(() => answerRun(run.id, run.prompt?.id ?? "", a))} />
+        <Timeline
+          run={run}
+          repo={repo}
+          error={error}
+          onAnswer={(a) => void act(() => answerRun(run.id, run.prompt?.id ?? "", a))}
+          extra={
+            <>
+              {step?.check && (
+                <details className="gate-check" open>
+                  <summary>{step.status === "failed" ? "check failed" : "check"}: {step.check.command}</summary>
+                  <pre>{step.check.output || "(no output)"}</pre>
+                </details>
+              )}
+              {flow.status === "failed" && <div className="outcome err"><p>{flow.error ?? "The workflow failed."}</p></div>}
+            </>
+          }
+        />
       ) : (
         <div className="sheet-body console">
           {step?.check ? (
@@ -271,7 +288,9 @@ export function FleetPlan({ workflow }: { workflow: string }) {
   const skipped = rows.filter((r) => r.skipped);
   const byReason = new Map<string, string[]>();
   for (const r of skipped) byReason.set(r.skipped ?? "", [...(byReason.get(r.skipped ?? "") ?? []), r.repo.name]);
+  const ready = !busy && running.length > 0 && (!w?.noteRequired || note.trim().length > 0);
   const go = async () => {
+    if (!ready) return;
     setBusy(true);
     setError(null);
     try {
@@ -302,7 +321,7 @@ export function FleetPlan({ workflow }: { workflow: string }) {
       <footer className="sheet-foot">
         <span className="sheet-hint">Three repos at a time. A workflow that stops to ask holds its place until you answer.</span>
         <button type="button" className="mini" onClick={close}>cancel</button>
-        <button type="button" className="mini strong" disabled={busy || !running.length} onClick={() => void go()}>{busy ? "starting…" : `run on ${running.length}`}</button>
+        <button type="button" className="mini strong" disabled={!ready} onClick={() => void go()}>{busy ? "starting…" : `run on ${running.length}`}</button>
       </footer>
     </>
   );

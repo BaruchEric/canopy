@@ -4,7 +4,7 @@ import { applyQuery, type RepoFilter } from "./filters";
 import { openElsewhere, openShellElsewhere, parseRoute } from "./routes";
 import { loadSettings, saveSettings, shellPlace, type Settings, type ShellPlace } from "./settings";
 import { clamp, needsAttention } from "./util";
-import { selectable } from "./flows";
+import { ownRun, selectable } from "./flows";
 import {
   DEFAULT_AGENT,
   isFlowActive,
@@ -807,15 +807,19 @@ export const useStore = create<CanopyState>((set, get) => ({
   },
   startFlow: async (repoId, workflow, note) => {
     const flow = await api.startFlow(repoId, workflow, note);
-    set((s) => ({ flows: { ...s.flows, [flow.id]: flow }, sheet: { kind: "flow", flowId: flow.id } }));
+    set((s) => ({
+      flows: { ...s.flows, [flow.id]: flow },
+      flowRuns: { ...s.flowRuns, ...flowRunsOf([flow]) },
+      sheet: { kind: "flow", flowId: flow.id },
+    }));
   },
   resumeFlow: async (flowId, choice) => {
     const flow = await api.resumeFlow(flowId, choice);
-    set((s) => ({ flows: { ...s.flows, [flow.id]: flow } }));
+    set((s) => ({ flows: { ...s.flows, [flow.id]: flow }, flowRuns: { ...s.flowRuns, ...flowRunsOf([flow]) } }));
   },
   stopFlow: async (flowId) => {
     const flow = await api.stopFlow(flowId);
-    set((s) => ({ flows: { ...s.flows, [flow.id]: flow } }));
+    set((s) => ({ flows: { ...s.flows, [flow.id]: flow }, flowRuns: { ...s.flowRuns, ...flowRunsOf([flow]) } }));
   },
   dismissFlow: async (flowId) => {
     await api.dismissFlow(flowId);
@@ -863,7 +867,7 @@ export const useStore = create<CanopyState>((set, get) => ({
 export function runFor(s: CanopyState, repoId: string): Run | undefined {
   let best: Run | undefined;
   for (const r of Object.values(s.runs)) {
-    if (s.flowRuns[r.id]) continue;
+    if (!ownRun(s.flowRuns, r)) continue;
     if (r.repoId !== repoId) continue;
     if (!best) {
       best = r;

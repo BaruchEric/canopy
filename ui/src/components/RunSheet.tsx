@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import { ACTIONS, repoFacts } from "../../../src/core/actions";
 import { describeAgent, isDefaultAgent } from "../../../src/core/agent";
 import { agentFor, useStore, type Sheet } from "../store";
@@ -227,11 +227,14 @@ export function Timeline({
   repo,
   error,
   onAnswer,
+  extra,
 }: {
   run: Run;
   repo: Repo | undefined;
   error: string | null;
   onAnswer: (a: RunAnswer) => void;
+  /** rendered at the end of the same scrolling body, for a flow's step check */
+  extra?: ReactNode;
 }) {
   const chat = run.chat;
   const active = isRunActive(run);
@@ -324,6 +327,7 @@ export function Timeline({
           Reopen the ⋯ menu to start another run, or ask Claude in a terminal to handle it.
         </p>
       )}
+      {extra}
       {error && <p className="note err">{error}</p>}
     </div>
   );

@@ -427,3 +427,20 @@ describe("fleets", () => {
     expect(flows.list().every((fl) => fl.status === "done")).toBe(true);
   });
 });
+
+describe("a flow reports the run ids it owns", () => {
+  test("every step that has run names the run the runner started", async () => {
+    const { runner, flows } = setup();
+    const flow = flows.start(repo(), TWO, "", DEFAULT_AGENT);
+    expect(flow.steps[0]?.runId).toBe("run1");
+    expect(runner.get("run1")?.repoId).toBe("r");
+    runner.end("run1", "done", "did the first");
+    await flush();
+    // The first step is gated; continue so the second one runs too.
+    flows.resume(flow.id, "continue");
+    await flush();
+    const after = flows.get(flow.id);
+    expect(after?.steps.map((s) => s.runId)).toEqual(["run1", "run2"]);
+    expect(runner.get("run2")).toBeDefined();
+  });
+});

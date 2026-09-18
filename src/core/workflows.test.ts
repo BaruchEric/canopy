@@ -3,6 +3,8 @@ import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { findWorkflow, loadWorkflows } from "./workflows";
+import { parseWorkflow } from "./workflow";
+import { readFile } from "node:fs/promises";
 
 let cfg = "";
 let repo = "";
@@ -60,12 +62,22 @@ describe("loadWorkflows", () => {
     const list = await loadWorkflows({ path: "/nonexistent" });
     const ship = findWorkflow(list, "ship");
     expect(ship?.steps.map((s) => s.name)).toEqual(["Gates", "Commit", "Push"]);
-    expect(ship?.steps[0]?.check).toContain("bun run typecheck");
+    expect(ship?.steps[0]?.check).toContain("package.json");
     expect(ship?.when).toBe("dirty-or-unpushed");
     expect(findWorkflow(list, "commit")?.when).toBe("dirty");
     expect(findWorkflow(list, "commit")?.expectsChange).toBe(true);
     expect(findWorkflow(list, "push")?.when).toBe("unpushed");
     expect(findWorkflow(list, "deploy")?.when).toBe("any");
     expect(findWorkflow(list, "review")?.steps[0]?.tools).not.toContain("Bash(git commit:*)");
+  });
+});
+
+describe("the documented example", () => {
+  test("docs/workflows/example-update-deps.md parses, with three steps", async () => {
+    const file = join(import.meta.dir, "../../docs/workflows/example-update-deps.md");
+    const e = parseWorkflow(await readFile(file, "utf8"), { name: "example-update-deps", source: "user", file });
+    expect(e.ok ? "" : e.error).toBe("");
+    if (!e.ok) return;
+    expect(e.workflow.steps.map((s) => s.name)).toEqual(["Update", "Gates", "Commit"]);
   });
 });

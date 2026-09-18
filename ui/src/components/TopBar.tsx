@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { useShallow } from "zustand/react/shallow";
 import { api } from "../api";
+import { ownRun } from "../flows";
 import { allRuns, attentionCount, useStore } from "../store";
 import { isRunActive } from "../../../src/core/types";
 import { FilterMenu } from "./Filters";
@@ -50,7 +51,7 @@ const SORT = [
 /** Live runs across the grove. Absent when nothing is going; a click opens
  *  the run that needs an answer first, else the newest one. */
 function RunsPill() {
-  const runs = useStore(useShallow((s) => allRuns(s).filter(isRunActive)));
+  const runs = useStore(useShallow((s) => allRuns(s).filter((r) => isRunActive(r) && ownRun(s.flowRuns, r))));
   const showRun = useStore((s) => s.showRun);
   if (runs.length === 0) return null;
   const waiting = runs.filter((r) => r.status === "waiting");

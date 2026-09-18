@@ -305,17 +305,25 @@ export function RepoMenu({
                   type="button"
                   role="menuitem"
                   className="menu-item"
-                  title="Talk with Claude Code about this repo, here in canopy"
-                  onClick={() => void chat()}
+                  aria-disabled={!!activeFlow}
+                  tabIndex={activeFlow ? -1 : 0}
+                  title={activeFlow ? "workflow running" : "Talk with Claude Code about this repo, here in canopy"}
+                  onClick={() => {
+                    if (!activeFlow) void chat();
+                  }}
                 >
                   <span className="menu-text">{ACTIONS.chat.label}</span>
-                  <span className="menu-fact">{active ? "show" : "in canopy"}</span>
+                  <span className="menu-fact">
+                    {activeFlow ? "workflow running" : active ? "show" : "in canopy"}
+                  </span>
                 </button>
               )}
               {JOBS.map((action) => {
-                const check = active
-                  ? { ok: false as const, why: "wait for the current run" }
-                  : checkWhen(repo, "any");
+                const check = activeFlow
+                  ? { ok: false as const, why: "workflow running" }
+                  : active
+                    ? { ok: false as const, why: "wait for the current run" }
+                    : checkWhen(repo, "any");
                 return (
                   <button
                     key={action}

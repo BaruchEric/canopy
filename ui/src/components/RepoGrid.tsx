@@ -1,7 +1,7 @@
 import { memo, useEffect, useMemo, useRef, useState } from "react";
 import { useShallow } from "zustand/react/shallow";
 import { groupRepos, sectionKey } from "../grouping";
-import { flowFor, runFor, useStore, visibleRepos } from "../store";
+import { activeFlowFor, flowFor, runFor, useStore, visibleRepos } from "../store";
 import { ago, GLYPH, stateOf } from "../util";
 import { GroupHead } from "./GroupHead";
 import { RepoLink } from "./RepoLink";
@@ -15,6 +15,7 @@ const RepoCard = memo(function RepoCard({ repo }: { repo: Repo }) {
   const updatedAt = useStore((s) => s.updatedAt[repo.id]);
   const run = useStore((s) => runFor(s, repo.id));
   const flow = useStore((s) => flowFor(s, repo.id));
+  const activeFlow = useStore((s) => activeFlowFor(s, repo.id));
   const overview = useStore((s) => s.history);
   const history = historyFor(overview, repo.id);
   const selecting = useStore((s) => s.selecting);
@@ -38,12 +39,10 @@ const RepoCard = memo(function RepoCard({ repo }: { repo: Repo }) {
   const st = repo.status;
   const forge = repo.forge;
   const state = stateOf(repo);
-  const live = flow
-    ? flow.status === "working"
+  const live = activeFlow
+    ? activeFlow.status === "working"
       ? " run-working"
-      : flow.status === "waiting" || flow.status === "gated"
-        ? " run-waiting"
-        : ""
+      : " run-waiting"
     : run?.status === "working" || run?.status === "waiting"
       ? ` run-${run.status}`
       : "";
@@ -115,7 +114,7 @@ const RepoCard = memo(function RepoCard({ repo }: { repo: Repo }) {
         {repo.error && <span className="err">not a readable repo</span>}
       </div>
       <div className="card-bot">
-        {flow ? <FlowChip flow={flow} /> : run && <RunChip run={run} />}
+        {activeFlow ? <FlowChip flow={activeFlow} /> : run ? <RunChip run={run} /> : flow && <FlowChip flow={flow} />}
         {forge ? (
           <span className="clean" title={forge.clone}>
             {forge.empty

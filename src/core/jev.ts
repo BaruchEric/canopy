@@ -14,8 +14,14 @@ const ATTEMPTS = 3;
 
 export type Evaluator = (state: string) => Promise<VerdictAnswers>;
 
+/** An empty or blank value is the same as no key at all: it would only buy a
+ *  doomed call, where an absent one parks the gate as ask. */
 function gatewayApiKey(): string | undefined {
-  return process.env["AI_GATEWAY_API_KEY"] ?? process.env["VERCEL_AI_GATEWAY_API_KEY"];
+  for (const name of ["AI_GATEWAY_API_KEY", "VERCEL_AI_GATEWAY_API_KEY"]) {
+    const value = process.env[name];
+    if (value !== undefined && value.trim() !== "") return value;
+  }
+  return undefined;
 }
 
 export function hasGatewayKey(): boolean {

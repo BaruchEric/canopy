@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
-import { fleetCounts, flowWord, oldestParked, selectable, stepWord } from "./flows";
-import type { Fleet, Flow, FlowStep, Repo } from "../../src/core/types";
+import { fleetCounts, flowWord, oldestParked, ownRun, selectable, stepWord } from "./flows";
+import type { Fleet, Flow, FlowStep, Repo, Run } from "../../src/core/types";
 
 const flow = (o: Partial<Flow> = {}): Flow => ({
   id: "f", repoId: "r", workflow: "ship", verb: "ship", note: "", status: "working",
@@ -56,5 +56,17 @@ describe("selectable", () => {
       { ...base, id: "forge", forge: { kind: "forgejo", full: "o/n" } } as unknown as Repo,
     ];
     expect(selectable(repos).map((r) => r.id)).toEqual(["ok"]);
+  });
+});
+
+describe("ownRun", () => {
+  const run = (id: string): Run =>
+    ({ id, repoId: "r", verb: "ask", status: "working", steps: [], startedAt: 0 }) as unknown as Run;
+  test("skips a run a flow owns and keeps every other one", () => {
+    const flowRuns = { "run-1": "flow-a" };
+    expect(ownRun(flowRuns, run("run-1"))).toBe(false);
+    expect(ownRun(flowRuns, run("run-2"))).toBe(true);
+    expect(ownRun({}, run("run-1"))).toBe(true);
+    expect([run("run-1"), run("run-2")].filter((r) => ownRun(flowRuns, r)).map((r) => r.id)).toEqual(["run-2"]);
   });
 });

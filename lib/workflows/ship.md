@@ -10,9 +10,9 @@ expects-change: true
 ## Gates
 tools: bun, read
 turns: 40
-check: bun run typecheck && bun run lint && bun test && bun run build
+check: [ ! -f package.json ] || for s in typecheck lint test build; do grep -q "\"$s\"" package.json && { bun run "$s" || exit 1; }; done; exit 0
 
-Task: run this project's own gates (typecheck, lint, tests, build, in whatever form the project defines them; look at package.json scripts, a Makefile, or CLAUDE.md). If a gate fails and the fix is obvious and inside this repo, fix it and run the gates again. Otherwise stop and say exactly what failed. Do not commit anything in this step.
+Task: run this project's own gates (typecheck, lint, tests, build, in whatever form the project defines them; look at package.json scripts, a Makefile, or CLAUDE.md). If a gate fails and the fix is obvious and inside this repo, fix it and run the gates again. Otherwise stop and say exactly what failed. Do not commit anything in this step. The check that runs after you does the same thing for a package.json project, running whichever of the typecheck, lint, test and build scripts that file defines.
 
 ## Commit
 tools: git-read, git-commit

@@ -1,6 +1,10 @@
 /** Words and arithmetic for flows and fleets in the UI. Pure. */
 
-import { isFlowActive, type Fleet, type Flow, type FlowStep, type Repo } from "../../src/core/types";
+import { isFlowActive, type Fleet, type Flow, type FlowStep, type Repo, type Run } from "../../src/core/types";
+
+/** True for a run no flow owns. A flow's step runs stay off the cards and out
+ *  of the top bar, since the flow's own chip already speaks for them. */
+export const ownRun = (flowRuns: Record<string, string>, run: Run): boolean => !flowRuns[run.id];
 
 export const STEP_WORD: Record<FlowStep["status"], string> = {
   pending: "waiting its turn",

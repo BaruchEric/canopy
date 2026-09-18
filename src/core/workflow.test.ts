@@ -1,4 +1,6 @@
 import { describe, expect, test } from "bun:test";
+import { readFile } from "node:fs/promises";
+import { join } from "node:path";
 import { parseWorkflow } from "./workflow";
 
 const meta = { name: "ship", source: "bundled" as const, file: "/x/ship.md" };
@@ -110,5 +112,19 @@ describe("parseWorkflow", () => {
       expect(e.name).toBe("ship");
       expect(e.file).toBe("/x/ship.md");
     }
+  });
+});
+
+describe("the bundled ship file", () => {
+  // The Gates check is one shell line with quotes, braces and a $ in it. The
+  // parser takes a key line's value raw, and this proves it stays that way.
+  const CHECK =
+    '[ ! -f package.json ] || for s in typecheck lint test build; do grep -q "\\"$s\\"" package.json && { bun run "$s" || exit 1; }; done; exit 0';
+  test("parses with its check kept character for character", async () => {
+    const file = join(import.meta.dir, "../../lib/workflows/ship.md");
+    const e = parseWorkflow(await readFile(file, "utf8"), { name: "ship", source: "bundled", file });
+    expect(e.ok).toBe(true);
+    if (!e.ok) return;
+    expect(e.workflow.steps[0]?.check).toBe(CHECK);
   });
 });

@@ -12,7 +12,7 @@ import {
   type FileCol,
   type FileView,
 } from "../files";
-import { PANEL, flowFor, runFor, useStore } from "../store";
+import { PANEL, activeFlowFor, flowFor, runFor, useStore } from "../store";
 import { ago, GLYPH, stateOf } from "../util";
 import { ClaudeSection } from "./Claude";
 import { CommitRow } from "./Commit";
@@ -469,6 +469,7 @@ export function RepoPanel({
   const repo = useStore((s) => s.repos.find((r) => r.id === id));
   const repoRun = useStore((s) => runFor(s, id));
   const repoFlow = useStore((s) => flowFor(s, id));
+  const repoActiveFlow = useStore((s) => activeFlowFor(s, id));
   const unpin = useStore((s) => s.closePanel);
   const openApp = useStore((s) => s.openApp);
   const changesClosed = useStore((s) => s.closedSections.includes("changes"));
@@ -627,7 +628,13 @@ export function RepoPanel({
 
       {(repoFlow || repoRun) && (
         <div className="panel-run">
-          {repoFlow ? <FlowChip flow={repoFlow} long /> : repoRun && <RunChip run={repoRun} long />}
+          {repoActiveFlow ? (
+            <FlowChip flow={repoActiveFlow} long />
+          ) : repoRun ? (
+            <RunChip run={repoRun} long />
+          ) : (
+            repoFlow && <FlowChip flow={repoFlow} long />
+          )}
         </div>
       )}
 
