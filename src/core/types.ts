@@ -391,7 +391,9 @@ export type ServerEvent =
   | { type: "workspaces"; workspaces: Workspace[] }
   | { type: "agents"; agents: Record<string, AgentSettings> }
   | { type: "run"; run: Run }
-  | { type: "run-gone"; id: string };
+  | { type: "run-gone"; id: string }
+  | { type: "flow"; flow: Flow }
+  | { type: "flow-gone"; id: string };
 
 /* ---------- the archive: what claude-history holds for each repo ---------- */
 
@@ -648,4 +650,51 @@ export interface Verdict {
   go: boolean;
   /** why it may not, one line; null when go */
   reason: string | null;
+}
+
+/* ---------- flows: one workflow running on one repo ---------- */
+
+export type FlowStatus = "working" | "waiting" | "gated" | "done" | "failed" | "stopped";
+export type StepStatus = "pending" | "running" | "checking" | "gated" | "passed" | "failed" | "skipped";
+export type FlowChoice = "continue" | "retry" | "stop";
+
+export interface FlowStep {
+  name: string;
+  status: StepStatus;
+  /** the step's Run, once it has one */
+  runId?: string;
+  check?: { command: string; exit: number; output: string };
+  verdict?: Verdict;
+  /** Claude's closing summary, the last text of the run */
+  summary?: string;
+  /** why a gate parked or a step failed, for the sheet */
+  reason?: string;
+}
+
+export interface Flow {
+  id: string;
+  repoId: string;
+  workflow: string;
+  verb: string;
+  fleetId?: string;
+  note: string;
+  status: FlowStatus;
+  steps: FlowStep[];
+  /** index of the step in progress or parked */
+  current: number;
+  startedAt: number;
+  endedAt?: number;
+  /** why a failed flow failed */
+  error?: string;
+  /** set when the flow ends, for workflows that expect change */
+  outcome?: "changed" | "unchanged";
+}
+
+/** A flow with a live step: running, waiting on a prompt, or parked at a gate. */
+export const isFlowActive = (f: Flow): boolean =>
+  f.status === "working" || f.status === "waiting" || f.status === "gated";
+
+/** filled in by the fleet task */
+export interface Fleet {
+  id: string;
 }

@@ -1,0 +1,442 @@
+/** Flows: one workflow on one repo, step by step. Every step is a normal Run
+ *  through the Runner; between steps come the check and the gate. Bun-only
+ *  through its hooks (the check and the evaluator), pure in its logic, so the
+ *  tests drive it with a fake runner. */
+
+import { type ActionSpec } from "./actions";
+import { decide, verdictState } from "./verdict";
+import {
+  isFlowActive,
+  statusFingerprint,
+  type AgentSettings,
+  type Fleet,
+  type Flow,
+  type FlowChoice,
+  type Repo,
+  type RepoStatus,
+  type Run,
+  type Workflow,
+  type VerdictAnswers,
+} from "./types";
+
+const KEEP_FINISHED = 60;
+
+export interface CheckResult {
+  exit: number;
+  output: string;
+}
+
+/** What Flows needs from the Runner; the real one satisfies it. */
+export interface FlowRunner {
+  start(repo: Repo, action: string, spec: ActionSpec, note: string, agent: AgentSettings): Run;
+  get(id: string): Run | undefined;
+  activeFor(repoId: string): Run | undefined;
+  stop(id: string): Run;
+  dismiss(id: string): void;
+}
+
+export interface FlowHooks {
+  onChange: (flow: Flow) => void;
+  onGone: (id: string) => void;
+  onFleet: (fleet: Fleet) => void;
+  onFleetGone: (id: string) => void;
+  /** runs a step's check in the repo */
+  check: (repo: Repo, command: string) => Promise<CheckResult>;
+  /** null when there is no gateway key: verdict gates then ask */
+  evaluator: ((state: string) => Promise<VerdictAnswers>) | null;
+  /** a fresh status for the repo, for the outcome; null when unreadable */
+  status?: (repoId: string) => Promise<RepoStatus | null>;
+}
+
+interface LiveFlow {
+  flow: Flow;
+  repo: Repo;
+  workflow: Workflow;
+  agent: AgentSettings;
+  before: string;
+  /** set by stop(): the run's end that follows is ours */
+  stopping: boolean;
+  /** the gate's reason a retry carries into the next prompt */
+  retry?: string;
+}
+
+/** Claude's closing words: the result, else the last text step. */
+export function summaryOf(run: Run): string {
+  if (run.result?.text) return run.result.text;
+  for (let i = run.steps.length - 1; i >= 0; i--) {
+    const s = run.steps[i];
+    if (s?.kind === "text" && s.text) return s.text;
+  }
+  return "";
+}
+
+/** The spec for one step's run: the step's prompt behind what earlier
+ *  steps reported, framed by the runner the way any job is. */
+export function stepSpec(
+  wf: Workflow,
+  index: number,
+  summaries: { name: string; summary: string }[],
+  retryReason?: string,
+): ActionSpec {
+  const step = wf.steps[index];
+  if (!step) throw new Error(`${wf.name} has no step ${index}`);
+  const earlier = summaries.length
+    ? `Earlier steps of this workflow, already done:\n${summaries
+        .map((s) => `- ${s.name}: ${s.summary.trim() || "(no summary)"}`)
+        .join("\n")}`
+    : "";
+  const retry = retryReason
+    ? `This step is being run again. The last try was not accepted because: ${retryReason}. Address that.`
+    : "";
+  return {
+    label: step.name,
+    verb: `${wf.verb} · ${step.name}`,
+    blurb: wf.blurb,
+    notePlaceholder: wf.notePlaceholder,
+    noteRequired: wf.noteRequired,
+    allowedTools: step.tools,
+    maxTurns: step.turns,
+    progress: `${wf.verb}: ${step.name}`,
+    // the flow judges the outcome over all its steps
+    expectsChange: false,
+    task: [earlier, retry, step.body].filter(Boolean).join("\n\n"),
+    mode: "job",
+  };
+}
+
+export class Flows {
+  private live = new Map<string, LiveFlow>();
+  /** run id to flow id, for onRun */
+  private byRun = new Map<string, string>();
+
+  constructor(
+    private runner: FlowRunner,
+    private hooks: FlowHooks,
+  ) {}
+
+  list(): Flow[] {
+    return [...this.live.values()].map((l) => l.flow);
+  }
+
+  get(id: string): Flow | undefined {
+    return this.live.get(id)?.flow;
+  }
+
+  activeFor(repoId: string): Flow | undefined {
+    for (const l of this.live.values()) {
+      if (l.flow.repoId === repoId && isFlowActive(l.flow)) return l.flow;
+    }
+    return undefined;
+  }
+
+  start(repo: Repo, workflow: Workflow, note: string, agent: AgentSettings, fleetId?: string): Flow {
+    const busyFlow = this.activeFor(repo.id);
+    if (busyFlow) throw new Error(`${repo.name} already has ${busyFlow.verb} going`);
+    const busyRun = this.runner.activeFor(repo.id);
+    if (busyRun) throw new Error(`${repo.name} already has a ${busyRun.verb} run going`);
+    if (workflow.noteRequired && !note.trim()) throw new Error("write what Claude should do first");
+    const flow: Flow = {
+      id: crypto.randomUUID().slice(0, 8),
+      repoId: repo.id,
+      workflow: workflow.name,
+      verb: workflow.verb,
+      ...(fleetId ? { fleetId } : {}),
+      note: note.trim(),
+      status: "working",
+      steps: workflow.steps.map((s) => ({ name: s.name, status: "pending" })),
+      current: 0,
+      startedAt: Date.now(),
+    };
+    const live: LiveFlow = {
+      flow,
+      repo,
+      workflow,
+      agent,
+      before: statusFingerprint(repo.status),
+      stopping: false,
+    };
+    this.live.set(flow.id, live);
+    this.prune();
+    void this.runStep(live);
+    return flow;
+  }
+
+  /** The Runner's every change comes here; a step's run ending moves the flow. */
+  onRun(run: Run): void {
+    const id = this.byRun.get(run.id);
+    const live = id ? this.live.get(id) : undefined;
+    if (!live) return;
+    const step = live.flow.steps[live.flow.current];
+    if (!step || step.runId !== run.id) return;
+    if (run.status === "working" || run.status === "waiting" || run.status === "idle") {
+      const status = run.status === "waiting" ? "waiting" : "working";
+      if (live.flow.status !== status) {
+        live.flow.status = status;
+        this.emit(live);
+      }
+      return;
+    }
+    this.byRun.delete(run.id);
+    if (run.status === "failed") {
+      step.status = "failed";
+      step.reason = run.error ?? "the run failed";
+      this.end(live, "failed", step.reason);
+      return;
+    }
+    if (run.status === "stopped") {
+      step.status = "failed";
+      step.reason = "stopped";
+      this.end(live, "stopped");
+      return;
+    }
+    step.summary = summaryOf(run);
+    void this.afterRun(live);
+  }
+
+  resume(id: string, choice: FlowChoice): Flow {
+    const live = this.live.get(id);
+    if (!live) throw new Error(`unknown flow: ${id}`);
+    if (live.flow.status !== "gated") throw new Error("the flow is not waiting at a gate");
+    const step = live.flow.steps[live.flow.current];
+    if (!step) throw new Error("no current step");
+    if (choice === "stop") {
+      step.status = "failed";
+      step.reason = "stopped at the gate";
+      this.end(live, "stopped");
+      return live.flow;
+    }
+    if (choice === "retry") {
+      live.retry = step.reason;
+      if (step.runId) {
+        try {
+          this.runner.dismiss(step.runId);
+        } catch {
+          // an active run cannot be dismissed; it is not, or we would not be gated
+        }
+      }
+      delete step.runId;
+      delete step.check;
+      delete step.verdict;
+      delete step.summary;
+      delete step.reason;
+      void this.runStep(live);
+      return live.flow;
+    }
+    void this.pass(live);
+    return live.flow;
+  }
+
+  stop(id: string): Flow {
+    const live = this.live.get(id);
+    if (!live) throw new Error(`unknown flow: ${id}`);
+    if (!isFlowActive(live.flow)) return live.flow;
+    if (live.flow.status === "gated") return this.resume(id, "stop");
+    live.stopping = true;
+    const step = live.flow.steps[live.flow.current];
+    if (step?.runId) {
+      // the run's stopped status comes back through onRun and ends the flow
+      this.runner.stop(step.runId);
+    } else {
+      if (step) {
+        step.status = "failed";
+        step.reason = "stopped";
+      }
+      this.end(live, "stopped");
+    }
+    return live.flow;
+  }
+
+  dismiss(id: string): void {
+    const live = this.live.get(id);
+    if (!live) return;
+    if (isFlowActive(live.flow)) throw new Error("stop the flow before dismissing it");
+    for (const s of live.flow.steps) {
+      if (s.runId) {
+        try {
+          this.runner.dismiss(s.runId);
+        } catch {
+          // already gone
+        }
+      }
+    }
+    this.live.delete(id);
+    this.hooks.onGone(id);
+  }
+
+  stopAll(): void {
+    for (const l of this.live.values()) {
+      if (isFlowActive(l.flow)) this.stop(l.flow.id);
+    }
+  }
+
+  private emit(live: LiveFlow): void {
+    this.hooks.onChange(live.flow);
+  }
+
+  private prune(): void {
+    const finished = [...this.live.values()]
+      .filter((l) => !isFlowActive(l.flow))
+      .sort((a, b) => (a.flow.endedAt ?? 0) - (b.flow.endedAt ?? 0));
+    while (finished.length > KEEP_FINISHED) {
+      const oldest = finished.shift();
+      if (!oldest) break;
+      this.live.delete(oldest.flow.id);
+      this.hooks.onGone(oldest.flow.id);
+    }
+  }
+
+  private summaries(live: LiveFlow): { name: string; summary: string }[] {
+    return live.flow.steps
+      .slice(0, live.flow.current)
+      .filter((s) => s.status === "passed")
+      .map((s) => ({ name: s.name, summary: s.summary ?? "" }));
+  }
+
+  private async runStep(live: LiveFlow): Promise<void> {
+    const { flow, workflow } = live;
+    const def = workflow.steps[flow.current];
+    const step = flow.steps[flow.current];
+    if (!def || !step) return;
+    if (!def.body) {
+      // check-only: no Claude, straight to the command
+      flow.status = "working";
+      await this.check(live);
+      return;
+    }
+    const spec = stepSpec(workflow, flow.current, this.summaries(live), live.retry);
+    delete live.retry;
+    let run: Run;
+    try {
+      run = this.runner.start(live.repo, workflow.name, spec, flow.note, live.agent);
+    } catch (err) {
+      step.status = "failed";
+      step.reason = String(err instanceof Error ? err.message : err);
+      this.end(live, "failed", step.reason);
+      return;
+    }
+    step.status = "running";
+    step.runId = run.id;
+    flow.status = "working";
+    this.byRun.set(run.id, flow.id);
+    this.emit(live);
+  }
+
+  private async afterRun(live: LiveFlow): Promise<void> {
+    const def = live.workflow.steps[live.flow.current];
+    if (def?.check) await this.check(live);
+    else await this.gate(live);
+  }
+
+  /** Runs the step's command; a non-zero exit ends the flow. */
+  private async check(live: LiveFlow): Promise<void> {
+    const def = live.workflow.steps[live.flow.current];
+    const step = live.flow.steps[live.flow.current];
+    if (!def?.check || !step) return;
+    step.status = "checking";
+    this.emit(live);
+    const r = await this.hooks.check(live.repo, def.check);
+    if (!isFlowActive(live.flow)) return;
+    step.check = { command: def.check, exit: r.exit, output: r.output };
+    if (r.exit !== 0) {
+      step.status = "failed";
+      step.reason = `check failed with exit ${r.exit}`;
+      this.end(live, "failed", step.reason);
+      return;
+    }
+    await this.gate(live);
+  }
+
+  private async gate(live: LiveFlow): Promise<void> {
+    const def = live.workflow.steps[live.flow.current];
+    const step = live.flow.steps[live.flow.current];
+    if (!def || !step) return;
+    switch (def.gate) {
+      case "continue":
+        await this.pass(live);
+        return;
+      case "ask":
+        this.park(live, "this step asks before the next one starts");
+        return;
+      case "verdict": {
+        if (!this.hooks.evaluator) {
+          this.park(live, "no gateway key, so the verdict is yours");
+          return;
+        }
+        let changed: boolean | null = null;
+        if (this.hooks.status) {
+          try {
+            const st = await this.hooks.status(live.flow.repoId);
+            changed = st ? statusFingerprint(st) !== live.before : null;
+          } catch {
+            changed = null;
+          }
+        }
+        try {
+          const answers = await this.hooks.evaluator(
+            verdictState({ summary: step.summary ?? "", check: step.check?.output ?? null, changed }),
+          );
+          if (!isFlowActive(live.flow)) return;
+          const v = decide(answers);
+          step.verdict = v;
+          if (v.go) await this.pass(live);
+          else this.park(live, v.reason ?? "the verdict said no");
+        } catch (err) {
+          if (!isFlowActive(live.flow)) return;
+          this.park(live, `verdict unavailable: ${String(err instanceof Error ? err.message : err)}`);
+        }
+        return;
+      }
+    }
+  }
+
+  private park(live: LiveFlow, reason: string): void {
+    const step = live.flow.steps[live.flow.current];
+    if (!step) return;
+    step.status = "gated";
+    step.reason = reason;
+    live.flow.status = "gated";
+    this.emit(live);
+  }
+
+  private async pass(live: LiveFlow): Promise<void> {
+    const step = live.flow.steps[live.flow.current];
+    if (!step) return;
+    step.status = "passed";
+    delete step.reason;
+    if (live.flow.current + 1 >= live.flow.steps.length) {
+      this.end(live, "done");
+      return;
+    }
+    live.flow.current += 1;
+    this.emit(live);
+    await this.runStep(live);
+  }
+
+  private end(live: LiveFlow, status: "done" | "failed" | "stopped", error?: string): void {
+    if (!isFlowActive(live.flow)) return;
+    live.flow.status = status;
+    live.flow.endedAt = Date.now();
+    if (error) live.flow.error = error;
+    for (const s of live.flow.steps) if (s.status === "pending") s.status = "skipped";
+    this.emit(live);
+    this.onFlowEnd(live.flow);
+    void this.settle(live);
+  }
+
+  /** Task 6 fills this in: a fleet's flow ending starts the next repo. */
+  protected onFlowEnd(_flow: Flow): void {}
+
+  private async settle(live: LiveFlow): Promise<void> {
+    if (!live.workflow.expectsChange || !this.hooks.status) return;
+    let after: string | null = null;
+    try {
+      const st = await this.hooks.status(live.flow.repoId);
+      after = st ? statusFingerprint(st) : null;
+    } catch {
+      after = null;
+    }
+    if (after === null || isFlowActive(live.flow)) return;
+    live.flow.outcome = after === live.before ? "unchanged" : "changed";
+    this.emit(live);
+  }
+}
