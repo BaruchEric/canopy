@@ -15,8 +15,10 @@
     "test": "bun test"
   },
   "dependencies": {
+    "@ai-sdk/gateway": "^4.0.85",
     "@xterm/addon-fit": "^0.11.0",
     "@xterm/xterm": "^6.0.0",
+    "ai": "^7.0.105",
     "react": "^19.1.0",
     "react-dom": "^19.1.0",
     "zustand": "^5.0.5"

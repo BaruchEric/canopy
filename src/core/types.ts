@@ -630,3 +630,22 @@ export interface Workflow {
 export type WorkflowEntry =
   | { ok: true; workflow: Workflow }
   | { ok: false; name: string; source: WorkflowSource; file: string; error: string };
+
+/* ---------- the verdict gate: Jev reads a step's summary ---------- */
+
+export type VerdictOutcome = "done" | "partial" | "blocked";
+
+/** the answers as the evaluator returns them, one per question */
+export interface VerdictAnswers {
+  outcome: { choice: VerdictOutcome; probabilities?: Record<string, number> };
+  needsYou: { probability: number };
+  offScope: { probability: number };
+}
+
+export interface Verdict {
+  answers: VerdictAnswers;
+  /** whether the flow may go on without the user */
+  go: boolean;
+  /** why it may not, one line; null when go */
+  reason: string | null;
+}
