@@ -2,7 +2,7 @@
  *  for when it makes sense, and the prompt it turns into. Browser-safe: the
  *  UI imports this for labels and preconditions, the runner for prompts. */
 
-import type { Repo, RunAction } from "./types";
+import type { Repo, RunAction, WorkflowWhen } from "./types";
 
 export interface ActionSpec {
   /** menu label */
@@ -64,6 +64,17 @@ const GIT_READ = [
 ];
 const GIT_COMMIT = ["Bash(git add:*)", "Bash(git commit:*)", "Bash(git restore --staged:*)"];
 const GIT_PUSH = ["Bash(git push:*)"];
+const BUN = ["Bash(bun run:*)", "Bash(bun test:*)", "Bash(bun install)", "Bash(bun x:*)", "Bash(bunx:*)"];
+const READ = ["Read", "Glob", "Grep"];
+
+/** The names a workflow step's `tools:` line may use in place of rules. */
+export const TOOL_SETS: Record<string, readonly string[]> = {
+  "git-read": GIT_READ,
+  "git-commit": GIT_COMMIT,
+  "git-push": GIT_PUSH,
+  bun: BUN,
+  read: READ,
+};
 
 export const ACTIONS: Record<RunAction, ActionSpec> = {
   commit: {
@@ -138,11 +149,7 @@ Push part:
     noteRequired: false,
     allowedTools: [
       ...GIT_READ,
-      "Bash(bun run:*)",
-      "Bash(bun test:*)",
-      "Bash(bun install)",
-      "Bash(bun x:*)",
-      "Bash(bunx:*)",
+      ...BUN,
       "Bash(npm run:*)",
       "Bash(cat:*)",
       "Bash(ls:*)",
@@ -209,6 +216,24 @@ export function canRun(repo: Repo, action: RunAction): RunCheck {
         ? { ok: true }
         : { ok: false, why: "nothing to commit or push" };
     default:
+      return { ok: true };
+  }
+}
+
+/** A workflow's precondition against the repo as the card shows it. */
+export function checkWhen(repo: Repo, when: WorkflowWhen): RunCheck {
+  if (repo.error) return { ok: false, why: "not a readable repo" };
+  const st = repo.status;
+  const dirty = (st?.files.length ?? 0) > 0;
+  const unpushed = (st?.ahead ?? 0) > 0 || !st?.upstream;
+  switch (when) {
+    case "dirty":
+      return dirty ? { ok: true } : { ok: false, why: "nothing to commit" };
+    case "unpushed":
+      return unpushed ? { ok: true } : { ok: false, why: "nothing to push" };
+    case "dirty-or-unpushed":
+      return dirty || unpushed ? { ok: true } : { ok: false, why: "nothing to commit or push" };
+    case "any":
       return { ok: true };
   }
 }

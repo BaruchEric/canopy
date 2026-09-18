@@ -586,3 +586,47 @@ export interface GrepRepoResult extends GrepResult {
 export const dirtyCount = (r: Repo): number => r.status?.files.length ?? 0;
 export const isDirty = (r: Repo): boolean =>
   dirtyCount(r) > 0 || (r.status?.ahead ?? 0) > 0;
+
+/* ---------- workflows: markdown files that drive Claude step by step ---------- */
+
+export const WORKFLOW_WHENS = ["dirty", "unpushed", "dirty-or-unpushed", "any"] as const;
+export type WorkflowWhen = (typeof WORKFLOW_WHENS)[number];
+
+export const GATE_KINDS = ["continue", "ask", "verdict"] as const;
+export type GateKind = (typeof GATE_KINDS)[number];
+
+/** where a workflow file came from; later sources win by name */
+export type WorkflowSource = "bundled" | "user" | "repo";
+
+export interface WorkflowStep {
+  name: string;
+  /** permission rules for this step's run, named sets already expanded */
+  tools: string[];
+  turns: number;
+  /** a shell command run in the repo after the step; exit 0 passes */
+  check: string | null;
+  gate: GateKind;
+  /** the step's prompt; empty for a check-only step */
+  body: string;
+}
+
+export interface Workflow {
+  /** `[a-z0-9-]+`, unique across the three sources */
+  name: string;
+  label: string;
+  verb: string;
+  blurb: string;
+  when: WorkflowWhen;
+  expectsChange: boolean;
+  notePlaceholder: string;
+  noteRequired: boolean;
+  steps: WorkflowStep[];
+  source: WorkflowSource;
+  /** absolute path of the file */
+  file: string;
+}
+
+/** what the menu lists: a workflow, or a file that failed to parse */
+export type WorkflowEntry =
+  | { ok: true; workflow: Workflow }
+  | { ok: false; name: string; source: WorkflowSource; file: string; error: string };
