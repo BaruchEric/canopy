@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { ACTIONS, repoFacts } from "../../../src/core/actions";
 import { describeAgent, isDefaultAgent } from "../../../src/core/agent";
 import { agentFor, useStore, type Sheet } from "../store";
+import { FleetPlan, FleetSheet, FlowConsole, FlowPlan } from "./FlowSheet";
 import { SearchSheet } from "./Search";
 import {
   DEFAULT_AGENT,
@@ -105,6 +106,13 @@ function Body({ sheet }: { sheet: Sheet }) {
     if (!repo) return <Missing what="That repo is no longer in the tree." onClose={close} />;
     return <AgentForm repo={repo} />;
   }
+  if (sheet.kind === "flow-plan") {
+    if (!repo) return <Missing what="That repo is no longer in the tree." onClose={close} />;
+    return <FlowPlan repo={repo} workflow={sheet.workflow} />;
+  }
+  if (sheet.kind === "flow") return <FlowConsole flowId={sheet.flowId} />;
+  if (sheet.kind === "fleet-plan") return <FleetPlan workflow={sheet.workflow} />;
+  if (sheet.kind === "fleet") return <FleetSheet fleetId={sheet.fleetId} />;
   if (!run) return <Missing what="That run is gone." onClose={close} />;
   return <Console run={run} repo={repo} />;
 }
@@ -210,6 +218,117 @@ function Plan({ repo, action }: { repo: Repo; action: RunAction }) {
   );
 }
 
+/* ---------- the timeline: note, steps, the prompt, the outcome ---------- */
+
+/** The run's timeline: note, steps, the prompt to answer, the outcome. Used
+ *  by the run console and by a flow's console for the current step. */
+export function Timeline({
+  run,
+  repo,
+  error,
+  onAnswer,
+}: {
+  run: Run;
+  repo: Repo | undefined;
+  error: string | null;
+  onAnswer: (a: RunAnswer) => void;
+}) {
+  const chat = run.chat;
+  const active = isRunActive(run);
+  const noChange = run.status === "done" && run.outcome === "unchanged" && run.expectsChange;
+  const list = useRef<HTMLDivElement>(null);
+  const stuck = useRef(true);
+
+  // Follow the newest step unless the reader has scrolled up to study
+  // something; a jump while they read would lose their place.
+  useEffect(() => {
+    const el = list.current;
+    if (!el || !stuck.current) return;
+    el.scrollTop = el.scrollHeight;
+  }, [run.steps.length, run.prompt, run.status]);
+
+  // Claude's closing words arrive twice, as the last message and as the
+  // result. The outcome box shows them once. A chat has no outcome box: its
+  // replies stay in the timeline.
+  const last = run.steps[run.steps.length - 1];
+  const steps =
+    !chat && run.result && last?.kind === "text" && last.text === run.result.text
+      ? run.steps.slice(0, -1)
+      : run.steps;
+
+  return (
+    <div
+      ref={list}
+      className="sheet-body console"
+      onScroll={(e) => {
+        const el = e.currentTarget;
+        stuck.current = el.scrollHeight - el.scrollTop - el.clientHeight < 48;
+      }}
+    >
+      {run.note && (
+        <p className="run-note">
+          <span className="eyebrow">your note</span>
+          {run.note}
+        </p>
+      )}
+      <ol className="steps">
+        {steps.map((s) => (
+          <Step key={s.id} step={s} />
+        ))}
+        {run.status === "working" && run.steps.length === 0 && (
+          <li className="step k-note">
+            <span className="node" />
+            <span className="step-text">starting Claude Code in {repo?.path ?? run.repoId}…</span>
+          </li>
+        )}
+        {run.status === "working" && run.steps.length > 0 && (
+          <li className="step k-note thinking">
+            <span className="node" />
+            <span className="step-text">thinking…</span>
+          </li>
+        )}
+        {chat && run.status === "idle" && run.steps.length === 0 && (
+          <li className="step k-note">
+            <span className="node" />
+            <span className="step-text">
+              Your first message starts Claude Code in {repo?.path ?? run.repoId}.
+            </span>
+          </li>
+        )}
+      </ol>
+      {run.prompt && <Prompt prompt={run.prompt} onAnswer={onAnswer} />}
+      {run.result && run.status === "done" && !chat && (
+        <div className={noChange ? "outcome warn" : "outcome ok"}>
+          {noChange && (
+            <p className="outcome-lead">
+              git status is the same as before this run, so the card still shows the repo as it was.
+            </p>
+          )}
+          <p>{run.result.text || "Done."}</p>
+        </div>
+      )}
+      {chat && run.status === "done" && (
+        <div className="outcome dim">
+          <p>Chat ended.</p>
+        </div>
+      )}
+      {run.status === "failed" && (
+        <div className="outcome err">
+          <p>{run.error ?? "The run failed."}</p>
+          {run.result?.text && run.result.text !== run.error && <p>{run.result.text}</p>}
+        </div>
+      )}
+      {run.status === "stopped" && <div className="outcome dim"><p>Stopped. Whatever Claude had already done stays done.</p></div>}
+      {noChange && !active && (
+        <p className="sheet-hint followup-hint">
+          Reopen the ⋯ menu to start another run, or ask Claude in a terminal to handle it.
+        </p>
+      )}
+      {error && <p className="note err">{error}</p>}
+    </div>
+  );
+}
+
 /* ---------- the console ---------- */
 
 function Console({ run, repo }: { run: Run; repo: Repo | undefined }) {
@@ -224,16 +343,6 @@ function Console({ run, repo }: { run: Run; repo: Repo | undefined }) {
   const now = useTick(active);
   const elapsed = (run.endedAt ?? now) - run.startedAt;
   const [error, setError] = useState<string | null>(null);
-  const list = useRef<HTMLDivElement>(null);
-  const stuck = useRef(true);
-
-  // Follow the newest step unless the reader has scrolled up to study
-  // something; a jump while they read would lose their place.
-  useEffect(() => {
-    const el = list.current;
-    if (!el || !stuck.current) return;
-    el.scrollTop = el.scrollHeight;
-  }, [run.steps.length, run.prompt, run.status]);
 
   const act = async (fn: () => Promise<void>) => {
     setError(null);
@@ -243,15 +352,6 @@ function Console({ run, repo }: { run: Run; repo: Repo | undefined }) {
       setError(errText(err));
     }
   };
-
-  // Claude's closing words arrive twice, as the last message and as the
-  // result. The outcome box shows them once. A chat has no outcome box: its
-  // replies stay in the timeline.
-  const last = run.steps[run.steps.length - 1];
-  const steps =
-    !chat && run.result && last?.kind === "text" && last.text === run.result.text
-      ? run.steps.slice(0, -1)
-      : run.steps;
 
   return (
     <>
@@ -274,80 +374,12 @@ function Console({ run, repo }: { run: Run; repo: Repo | undefined }) {
         </button>
       </header>
 
-      <div
-        ref={list}
-        className="sheet-body console"
-        onScroll={(e) => {
-          const el = e.currentTarget;
-          stuck.current = el.scrollHeight - el.scrollTop - el.clientHeight < 48;
-        }}
-      >
-        {run.note && (
-          <p className="run-note">
-            <span className="eyebrow">your note</span>
-            {run.note}
-          </p>
-        )}
-        <ol className="steps">
-          {steps.map((s) => (
-            <Step key={s.id} step={s} />
-          ))}
-          {run.status === "working" && run.steps.length === 0 && (
-            <li className="step k-note">
-              <span className="node" />
-              <span className="step-text">starting Claude Code in {repo?.path ?? run.repoId}…</span>
-            </li>
-          )}
-          {run.status === "working" && run.steps.length > 0 && (
-            <li className="step k-note thinking">
-              <span className="node" />
-              <span className="step-text">thinking…</span>
-            </li>
-          )}
-          {chat && run.status === "idle" && run.steps.length === 0 && (
-            <li className="step k-note">
-              <span className="node" />
-              <span className="step-text">
-                Your first message starts Claude Code in {repo?.path ?? run.repoId}.
-              </span>
-            </li>
-          )}
-        </ol>
-        {run.prompt && (
-          <Prompt
-            prompt={run.prompt}
-            onAnswer={(a) => void act(() => answerRun(run.id, run.prompt?.id ?? "", a))}
-          />
-        )}
-        {run.result && run.status === "done" && !chat && (
-          <div className={noChange ? "outcome warn" : "outcome ok"}>
-            {noChange && (
-              <p className="outcome-lead">
-                git status is the same as before this run, so the card still shows the repo as it was.
-              </p>
-            )}
-            <p>{run.result.text || "Done."}</p>
-          </div>
-        )}
-        {chat && run.status === "done" && (
-          <div className="outcome dim">
-            <p>Chat ended.</p>
-          </div>
-        )}
-        {run.status === "failed" && (
-          <div className="outcome err">
-            <p>{run.error ?? "The run failed."}</p>
-            {run.result?.text && run.result.text !== run.error && <p>{run.result.text}</p>}
-          </div>
-        )}
-        {run.status === "stopped" && <div className="outcome dim"><p>Stopped. Whatever Claude had already done stays done.</p></div>}
-        {noChange && !active && (
-          <p className="sheet-hint followup-hint">
-            Reopen the ⋯ menu to start another run, or ask Claude in a terminal to handle it.
-          </p>
-        )}
-        {error && <p className="note err">{error}</p>}
-      </div>
+      <Timeline
+        run={run}
+        repo={repo}
+        error={error}
+        onAnswer={(a) => void act(() => answerRun(run.id, run.prompt?.id ?? "", a))}
+      />
 
       {chat && active && (
         <Composer

@@ -1,19 +1,20 @@
 import { memo, useEffect, useMemo, useRef, useState } from "react";
 import { useShallow } from "zustand/react/shallow";
 import { groupRepos, sectionKey } from "../grouping";
-import { runFor, useStore, visibleRepos } from "../store";
+import { flowFor, runFor, useStore, visibleRepos } from "../store";
 import { ago, GLYPH, stateOf } from "../util";
 import { GroupHead } from "./GroupHead";
 import { RepoLink } from "./RepoLink";
 import { RepoMenu } from "./RepoMenu";
 import { Rings } from "./Rings";
-import { RunChip } from "./RunChip";
+import { FlowChip, RunChip } from "./RunChip";
 import { historyFor, type Repo } from "../../../src/core/types";
 
 const RepoCard = memo(function RepoCard({ repo }: { repo: Repo }) {
   const openRepo = useStore((s) => s.openRepo);
   const updatedAt = useStore((s) => s.updatedAt[repo.id]);
   const run = useStore((s) => runFor(s, repo.id));
+  const flow = useStore((s) => flowFor(s, repo.id));
   const overview = useStore((s) => s.history);
   const history = historyFor(overview, repo.id);
   const [pulse, setPulse] = useState(false);
@@ -33,7 +34,15 @@ const RepoCard = memo(function RepoCard({ repo }: { repo: Repo }) {
   const st = repo.status;
   const forge = repo.forge;
   const state = stateOf(repo);
-  const live = run?.status === "working" || run?.status === "waiting" ? ` run-${run.status}` : "";
+  const live = flow
+    ? flow.status === "working"
+      ? " run-working"
+      : flow.status === "waiting" || flow.status === "gated"
+        ? " run-waiting"
+        : ""
+    : run?.status === "working" || run?.status === "waiting"
+      ? ` run-${run.status}`
+      : "";
   return (
     <article
       className={`card s-${state}${pulse ? " pulse" : ""}${live}`}
@@ -84,7 +93,7 @@ const RepoCard = memo(function RepoCard({ repo }: { repo: Repo }) {
         {repo.error && <span className="err">not a readable repo</span>}
       </div>
       <div className="card-bot">
-        {run && <RunChip run={run} />}
+        {flow ? <FlowChip flow={flow} /> : run && <RunChip run={run} />}
         {forge ? (
           <span className="clean" title={forge.clone}>
             {forge.empty

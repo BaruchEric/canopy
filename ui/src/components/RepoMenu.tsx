@@ -2,13 +2,13 @@ import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import type { KeyboardEvent as ReactKeyboardEvent, SyntheticEvent } from "react";
 import { createPortal } from "react-dom";
 import { linkLabel } from "../util";
-import { ACTIONS, canRun } from "../../../src/core/actions";
+import { ACTIONS, canRun, checkWhen } from "../../../src/core/actions";
 import { describeAgent } from "../../../src/core/agent";
-import { activeRunFor, agentFor, useStore } from "../store";
+import { flowWord } from "../flows";
+import { activeFlowFor, activeRunFor, agentFor, useStore } from "../store";
 import {
   CLAUDE_OPENERS,
   OPENER_IDS,
-  RUN_ACTIONS,
   type OpenerId,
   type Repo,
   type RunAction,
@@ -17,26 +17,10 @@ import {
 /** The "open in" row. The openers that start Claude live under "with claude". */
 const OPENERS = OPENER_IDS.filter((app) => !CLAUDE_OPENERS.includes(app));
 
-/** The jobs; the chat has its own entry since it opens no pre-flight. */
-const JOBS = RUN_ACTIONS.filter((a) => a !== "chat");
-
-/** What justifies the action, shown at the right edge of its row. */
-function fact(repo: Repo, action: RunAction): string {
-  const st = repo.status;
-  if (!st) return "";
-  const files = st.files.length ? `${st.files.length} file${st.files.length === 1 ? "" : "s"}` : "";
-  const ahead = st.ahead ? `↑${st.ahead}` : !st.upstream ? "no upstream" : "";
-  switch (action) {
-    case "commit":
-      return files;
-    case "push":
-      return ahead;
-    case "commit-push":
-      return [files, ahead].filter(Boolean).join(" · ");
-    default:
-      return "";
-  }
-}
+/** The jobs; the built-in commit/push/commit-push/deploy have workflow twins
+ *  now, so only the free-form ask remains here. Chat has its own entry since
+ *  it opens no pre-flight. */
+const JOBS = ["ask"] as const;
 
 const MENU_W = 296;
 
@@ -64,6 +48,11 @@ export function RepoMenu({
   const openTerm = useStore((s) => s.openTerm);
   const agent = useStore((s) => agentFor(s, repo));
   const active = useStore((s) => activeRunFor(s, repo.id));
+  const workflows = useStore((s) => s.workflows[repo.id]);
+  const loadWorkflows = useStore((s) => s.loadWorkflows);
+  const planFlow = useStore((s) => s.planFlow);
+  const activeFlow = useStore((s) => activeFlowFor(s, repo.id));
+  const showFlow = useStore((s) => s.showFlow);
   const [open, setOpen] = useState(false);
   const [copied, setCopied] = useState(false);
   const [pos, setPos] = useState<{ top: number; left: number } | null>(null);
@@ -81,6 +70,12 @@ export function RepoMenu({
     const top = below + h > window.innerHeight - 8 ? Math.max(8, r.top - 6 - h) : below;
     setPos({ top, left });
   }, [open]);
+
+  // A fresh fetch on every open, so a workflow file edited since the last
+  // one shows up without a rescan.
+  useEffect(() => {
+    if (open && !repo.host && !repo.forge) void loadWorkflows(repo.id);
+  }, [open, repo.id, repo.host, repo.forge, loadWorkflows]);
 
   useEffect(() => {
     if (!open) return;
@@ -290,6 +285,21 @@ export function RepoMenu({
                   <span className="menu-fact">show</span>
                 </button>
               )}
+              {activeFlow && (
+                <button
+                  type="button"
+                  role="menuitem"
+                  className="menu-item live"
+                  onClick={() => {
+                    setOpen(false);
+                    showFlow(activeFlow.id);
+                  }}
+                >
+                  <span className="dot sky" />
+                  <span className="menu-text">{flowWord(activeFlow, true)}</span>
+                  <span className="menu-fact">show</span>
+                </button>
+              )}
               {!repo.host && (
                 <button
                   type="button"
@@ -320,8 +330,39 @@ export function RepoMenu({
                     }}
                   >
                     <span className="menu-text">{ACTIONS[action].label}</span>
+                    <span className="menu-fact">{check.ok ? "" : check.why}</span>
+                  </button>
+                );
+              })}
+              {!repo.host && (workflows ?? []).map((e) => {
+                if (!e.ok) {
+                  return (
+                    <button key={`wf-${e.name}`} type="button" role="menuitem" className="menu-item" aria-disabled title={e.error} tabIndex={-1}>
+                      <span className="menu-text">{e.name}</span>
+                      <span className="menu-fact">will not parse</span>
+                    </button>
+                  );
+                }
+                const w = e.workflow;
+                const check = active || activeFlow ? { ok: false as const, why: "wait for the current run" } : checkWhen(repo, w.when);
+                return (
+                  <button
+                    key={`wf-${w.name}`}
+                    type="button"
+                    role="menuitem"
+                    className="menu-item"
+                    aria-disabled={!check.ok}
+                    title={check.ok ? w.blurb : check.why}
+                    tabIndex={check.ok ? 0 : -1}
+                    onClick={() => {
+                      if (!check.ok) return;
+                      setOpen(false);
+                      planFlow(repo.id, w.name);
+                    }}
+                  >
+                    <span className="menu-text">{w.label}</span>
                     <span className="menu-fact">
-                      {check.ok ? fact(repo, action) : check.why}
+                      {check.ok ? (w.steps.length === 1 ? "" : `${w.steps.length} steps`) : check.why}
                     </span>
                   </button>
                 );

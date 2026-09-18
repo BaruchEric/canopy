@@ -1,5 +1,6 @@
 import { useStore } from "../store";
-import type { Run } from "../../../src/core/types";
+import { flowWord } from "../flows";
+import type { Flow, Run } from "../../../src/core/types";
 
 /** One word about a repo's run, on the card and in the panel. Clicking it
  *  opens the console; the finished states stay until the run is dismissed. */
@@ -51,6 +52,29 @@ export function RunChip({ run, long = false }: { run: Run; long?: boolean }) {
     >
       <span className="dot" />
       {text}
+    </button>
+  );
+}
+
+/** The flow's word on a card or in the panel. Same colours as a run's. */
+export function FlowChip({ flow, long = false }: { flow: Flow; long?: boolean }) {
+  const showFlow = useStore((s) => s.showFlow);
+  const status = flow.status === "gated" ? "waiting" : flow.status;
+  const noChange = flow.status === "done" && flow.outcome === "unchanged";
+  return (
+    <button
+      type="button"
+      className={`run-chip st-${status}${noChange ? " no-change" : ""}`}
+      title="Show the workflow"
+      onClick={(e) => {
+        e.stopPropagation();
+        showFlow(flow.id);
+      }}
+      onPointerDown={(e) => e.stopPropagation()}
+      onKeyDown={(e) => e.stopPropagation()}
+    >
+      <span className="dot" />
+      {flowWord(flow, long)}
     </button>
   );
 }
