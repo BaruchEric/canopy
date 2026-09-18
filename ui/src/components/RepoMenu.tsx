@@ -2,7 +2,7 @@ import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import type { KeyboardEvent as ReactKeyboardEvent, SyntheticEvent } from "react";
 import { createPortal } from "react-dom";
 import { linkLabel } from "../util";
-import { ACTIONS, canRun, checkWhen } from "../../../src/core/actions";
+import { ACTIONS, checkWhen } from "../../../src/core/actions";
 import { describeAgent } from "../../../src/core/agent";
 import { flowWord } from "../flows";
 import { activeFlowFor, activeRunFor, agentFor, useStore } from "../store";
@@ -315,7 +315,7 @@ export function RepoMenu({
               {JOBS.map((action) => {
                 const check = active
                   ? { ok: false as const, why: "wait for the current run" }
-                  : canRun(repo, action);
+                  : checkWhen(repo, "any");
                 return (
                   <button
                     key={action}

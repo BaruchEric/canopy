@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { ACTIONS, buildPrompt, canRun, describeTool, repoFacts, toolDetail } from "./actions";
+import { ACTIONS, buildPrompt, checkWhen, describeTool, repoFacts, toolDetail } from "./actions";
 import { RUN_ACTIONS, statusFingerprint, type Repo, type RepoStatus } from "./types";
 
 function repo(over: Partial<Repo["status"] & { error: string }> = {}): Repo {
@@ -26,31 +26,24 @@ function repo(over: Partial<Repo["status"] & { error: string }> = {}): Repo {
 
 const file = { path: "a.ts", index: ".", worktree: "M", untracked: false, conflicted: false };
 
-describe("canRun", () => {
-  test("commit needs changes, push needs something unpushed", () => {
-    expect(canRun(repo(), "commit")).toEqual({ ok: false, why: "nothing to commit" });
-    expect(canRun(repo({ files: [file] }), "commit")).toEqual({ ok: true });
-    expect(canRun(repo(), "push")).toEqual({ ok: false, why: "nothing to push" });
-    expect(canRun(repo({ ahead: 2 }), "push")).toEqual({ ok: true });
-  });
-  test("a branch with no upstream can always be pushed", () => {
-    expect(canRun(repo({ upstream: null }), "push")).toEqual({ ok: true });
-  });
-  test("commit and push needs either", () => {
-    expect(canRun(repo(), "commit-push").ok).toBe(false);
-    expect(canRun(repo({ ahead: 1 }), "commit-push").ok).toBe(true);
-    expect(canRun(repo({ files: [file] }), "commit-push").ok).toBe(true);
-  });
-  test("deploy and ask only need a readable repo", () => {
-    expect(canRun(repo(), "deploy")).toEqual({ ok: true });
-    expect(canRun(repo(), "ask")).toEqual({ ok: true });
-    expect(canRun(repo({ error: "boom" }), "ask").ok).toBe(false);
+describe("checkWhen", () => {
+  test("dirty, unpushed, either, any", () => {
+    expect(checkWhen(repo(), "dirty")).toEqual({ ok: false, why: "nothing to commit" });
+    expect(checkWhen(repo({ files: [file] }), "dirty")).toEqual({ ok: true });
+    expect(checkWhen(repo(), "unpushed")).toEqual({ ok: false, why: "nothing to push" });
+    expect(checkWhen(repo({ ahead: 2 }), "unpushed")).toEqual({ ok: true });
+    expect(checkWhen(repo({ upstream: null }), "unpushed")).toEqual({ ok: true });
+    expect(checkWhen(repo(), "dirty-or-unpushed").ok).toBe(false);
+    expect(checkWhen(repo({ ahead: 1 }), "dirty-or-unpushed").ok).toBe(true);
+    expect(checkWhen(repo(), "any")).toEqual({ ok: true });
+    expect(checkWhen({ ...repo(), error: "nope" }, "any").ok).toBe(false);
   });
 });
 
 describe("buildPrompt", () => {
   test("carries the repo path, the facts, the task, and the rules", () => {
-    const p = buildPrompt(repo({ files: [file], ahead: 1 }), ACTIONS.commit, "");
+    const job = { ...ACTIONS.ask, mode: "job" as const, task: "Task: commit the current changes." };
+    const p = buildPrompt(repo({ files: [file], ahead: 1 }), job, "");
     expect(p).toContain("/tmp/grove/apps/orchard");
     expect(p).toContain("main, 1 changed file, 1 unpushed");
     expect(p).toContain("Task: commit the current changes");
@@ -58,7 +51,8 @@ describe("buildPrompt", () => {
     expect(p).not.toContain("Note from the user");
   });
   test("a note is quoted and trimmed", () => {
-    const p = buildPrompt(repo(), ACTIONS.push, "  use the fork remote  ");
+    const job = { ...ACTIONS.ask, mode: "job" as const, task: "Task: x" };
+    const p = buildPrompt(repo(), job, "  use the fork remote  ");
     expect(p).toContain("Note from the user (follow it where it applies):\nuse the fork remote");
   });
   test("a chat frames the first message and keeps the safety rules only", () => {
@@ -73,15 +67,6 @@ describe("buildPrompt", () => {
     const p = buildPrompt(repo(), ACTIONS.ask, "rename foo to bar");
     expect(p).toContain("Task: see the note below.");
     expect(p).toContain("Note from the user:\nrename foo to bar");
-  });
-  test("commit and push runs handle submodules and stray files instead of stopping", () => {
-    for (const a of ["commit", "commit-push"] as const) {
-      const p = buildPrompt(repo({ files: [file] }), ACTIONS[a], "");
-      expect(p).toContain("submodule");
-      expect(p).toContain("AskUserQuestion");
-      expect(p).toContain("do not end the run by explaining");
-    }
-    expect(buildPrompt(repo({ ahead: 1 }), ACTIONS.push, "")).toContain("push the submodule first");
   });
   test("every action has a spec and a prompt", () => {
     for (const a of RUN_ACTIONS) {
@@ -98,16 +83,15 @@ describe("the spec carries the run's words", () => {
       expect(spec.task.length).toBeGreaterThan(0);
       expect(spec.progress.length).toBeGreaterThan(0);
     }
-    expect(ACTIONS.commit.expectsChange).toBe(true);
-    expect(ACTIONS.deploy.expectsChange).toBe(false);
+    expect(ACTIONS.ask.expectsChange).toBe(false);
     expect(ACTIONS.chat.mode).toBe("chat");
     expect(ACTIONS.ask.mode).toBe("ask");
-    expect(ACTIONS.commit.mode).toBe("job");
   });
 
   test("a job prompt ends with the ground rules; a chat prompt ends with the message", () => {
     const r = repo();
-    const job = buildPrompt(r, ACTIONS.commit, "be brief");
+    const jobSpec = { ...ACTIONS.ask, mode: "job" as const, task: "Task: x" };
+    const job = buildPrompt(r, jobSpec, "be brief");
     expect(job).toContain("Note from the user (follow it where it applies):\nbe brief");
     expect(job.trim().endsWith("No headings, no bullet lists.")).toBe(true);
     const chat = buildPrompt(r, ACTIONS.chat, "hello");

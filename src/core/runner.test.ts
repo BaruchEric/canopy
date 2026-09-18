@@ -5,8 +5,8 @@ import { DEFAULT_AGENT } from "./types";
 
 describe("the print-mode command line", () => {
   test("the default is the bypass mode; ask goes through the prompt tool", () => {
-    expect(cliArgs(ACTIONS.commit, DEFAULT_AGENT)).toContain("bypassPermissions");
-    const args = cliArgs(ACTIONS.commit, { ...DEFAULT_AGENT, yolo: false });
+    expect(cliArgs(ACTIONS.ask, DEFAULT_AGENT)).toContain("bypassPermissions");
+    const args = cliArgs(ACTIONS.ask, { ...DEFAULT_AGENT, yolo: false });
     expect(args.slice(0, 2)).toEqual(["-p", "--output-format"]);
     expect(args).toContain("--permission-prompt-tool");
     expect(args.slice(args.indexOf("--permission-mode"), args.indexOf("--permission-mode") + 2)).toEqual([

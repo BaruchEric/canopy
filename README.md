@@ -99,9 +99,9 @@ canopy source rm <id>              # stop scanning it
 ## Web UI
 
 - **Left rail** — the repo tree grouped by topic folder, with dirty counts rolled up. Drag its edge to resize; the panel-left button (or `[`) folds it away.
-- **Center** — a dense card grid (auto-fills columns; ~16 across on a 7680px screen). Cards pulse when a repo changes on disk. Every card has a ⋯ menu: chat with Claude about the repo (**chat…**, in canopy), hand it a job (commit, push, commit and push, deploy, ask claude…), start an interactive Claude Code session at the repo (**agent**: a kitty window when kitty is installed, Terminal otherwise, held open at a prompt when the session ends; **herdr**: a [herdr](https://herdr.dev) workspace at the repo with Claude running in its pane, or the workspace the repo already has, focused), set the repo's **agent settings…**, open a **shell** at the repo inside canopy, or open the repo in kitty / Terminal / VS Code / Finder.
+- **Center** — a dense card grid (auto-fills columns; ~16 across on a 7680px screen). Cards pulse when a repo changes on disk. Every card has a ⋯ menu: chat with Claude about the repo (**chat…**, in canopy), hand it a workflow (commit, push, ship, deploy, review) or a job (ask claude…), start an interactive Claude Code session at the repo (**agent**: a kitty window when kitty is installed, Terminal otherwise, held open at a prompt when the session ends; **herdr**: a [herdr](https://herdr.dev) workspace at the repo with Claude running in its pane, or the workspace the repo already has, focused), set the repo's **agent settings…**, open a **shell** at the repo inside canopy, or open the repo in kitty / Terminal / VS Code / Finder.
 - **Agent settings** — per repo: model (fable, opus, sonnet, haiku, or claude's own default), effort (low to max), permissions (yolo, the default, for `--dangerously-skip-permissions`, or ask), and any extra flags for the claude command line. Saved on the server, keyed by repo path like workspaces, and applied wherever canopy starts Claude for that repo: the agent and herdr openers, workspace "open all" in agent or herdr, the CLI's `canopy open`, and every run and chat. The menu shows the current settings in one line; the sheet resets them in one click.
-- **Runs** — a Claude job opens a pre-flight dialog (what will happen, an optional note), then a console that follows Claude step by step: every command with its output, Claude's own remarks, and a lichen "needs you" block whenever Claude asks a question or wants permission for something outside the job (allow once, allow all for this run, or deny). While a run is going the card's leaf edge carries sap; when it waits, the edge and a top-bar pill turn lichen. Finished runs stay on the card until dismissed. A commit or push that ends without moving git status says "no change" instead of "done", so a run that found nothing to do is not mistaken for one that did something.
+- **Runs** — a Claude job opens a pre-flight dialog (what will happen, an optional note), then a console that follows Claude step by step: every command with its output, Claude's own remarks, and a lichen "needs you" block whenever Claude asks a question or wants permission for something outside the job (allow once, allow all for this run, or deny). While a run is going the card's leaf edge carries sap; when it waits, the edge and a top-bar pill turn lichen. Finished runs stay on the card until dismissed. A workflow that expects a change and ends without moving git status says "no change" instead of "done" (see Workflows), so a flow that found nothing to do is not mistaken for one that did something.
 - **Chat** — the same console with a message box: your first message starts Claude Code in the repo, every later one continues the same session (Claude keeps the context, canopy keeps the process). Your messages sit in the timeline with Claude's replies and tool calls; permission prompts and questions work as in a run. Between turns the chip says "chat open"; **end chat** closes the conversation and Claude Code exits. A chat counts as the repo's one run at a time.
 - **Right dock** — click any repo to pin a full detail panel: file list with stage checkboxes (columns for the status letter, path, and when the file last changed on disk, newest first; click a heading to sort, drag one to reorder, type in the box to filter, or switch to **folders** for a heading per folder), inline diffs, commit box with **suggest** (Claude-written message), commit / commit+push, pull/push, openers, workspace membership, the commit log, and the repo's Claude sessions (below). Every commit in the log opens in place: the full hash (click to copy), author and time, the message body, then each file it touched with its status letter, lines added and removed, and a short bar (moss for added, rust for removed) scaled to the commit's biggest file. Click a file for the diff that commit made to it. Merges show against their first parent. The commits listed under a Claude session open the same way. Each of a panel's sections (changes, shell, history, claude) folds by its heading, remembered across every open panel. Panels stack side-by-side — on an ultrawide you can hold half a dozen repos open at once.
 - **Rings** — a card whose repo Claude has worked in this month carries a thin strip along its bottom edge: one column per local day, tinted in sap by that day's API-equivalent spend on a log scale shared by the whole grove. A quiet month leaves a faint ruler; a card Claude has never touched has no strip. Hover for the month's totals. The panel shows the same strip taller, with a tooltip per day.
@@ -119,9 +119,42 @@ Light and dark themes follow the OS unless the setting says otherwise. Reduced m
 
 ## Claude runs
 
-Each run is one Claude Code session in the repo's directory: canopy spawns the `claude` binary on your PATH in print mode with stream-json on stdin and stdout, so it runs on whatever your terminal `claude` runs on (a Claude Max login included), with no SDK and no API key. It loads your user and project settings and CLAUDE.md files the way a terminal session would, but no MCP servers. Each action pre-allows only the commands its name promises (commit: `git add`/`git commit`; push: `git push`; deploy: `bun run`, `bun test`, and friends) plus read-only git; anything else asks in the console. The repo's agent settings ride along: `--model` and `--effort` as set, and yolo runs the session in `bypassPermissions` mode, so nothing asks. Runs live in server memory: the last 60 finished ones stay visible until dismissed or the server restarts. One run per repo at a time.
+Each run is one Claude Code session in the repo's directory: canopy spawns the `claude` binary on your PATH in print mode with stream-json on stdin and stdout, so it runs on whatever your terminal `claude` runs on (a Claude Max login included), with no SDK and no API key. It loads your user and project settings and CLAUDE.md files the way a terminal session would, but no MCP servers. `ask claude…` pre-allows only read-only git; a workflow step pre-allows what its `tools:` line names (see Workflows); anything else asks in the console. The repo's agent settings ride along: `--model` and `--effort` as set, and yolo runs the session in `bypassPermissions` mode, so nothing asks. Runs live in server memory: the last 60 finished ones stay visible until dismissed or the server restarts. One run per repo at a time.
 
 A chat is a run whose process outlives its first reply: stdin stays open after each `result`, the next message goes down it as another user message, and the CLI continues the session. Ending the chat closes stdin and the CLI exits on its own.
+
+## Workflows
+
+A workflow is a markdown file: frontmatter names it and sets its precondition, the body is a series of `##` steps run one at a time through the same Runner a plain job uses, with a gate between steps.
+
+Frontmatter keys:
+
+| key | meaning | default |
+| --- | --- | --- |
+| `name` | id, unique across the three sources, `[a-z0-9-]+` | file name without `.md` |
+| `label` | menu text | name |
+| `verb` | confirm button and the flow's title | label |
+| `blurb` | one paragraph for the pre-flight | required |
+| `when` | precondition: `dirty`, `unpushed`, `dirty-or-unpushed`, `any` | `any` |
+| `expects-change` | a flow that leaves status untouched reports "no change" | false |
+| `note` | placeholder for the note box; `note-required: true` makes it the task | optional |
+
+A `##` heading is a step's name. The `key: value` lines right under it, up to the first blank line, are the step's keys; the rest of the section is the prompt:
+
+| key | meaning | default |
+| --- | --- | --- |
+| `tools` | comma-separated: named sets `git-read`, `git-commit`, `git-push`, `bun`, `read`, or literal rules like `Bash(cargo:*)` | `git-read` |
+| `turns` | max turns for this step's run | 30 |
+| `check` | a shell command run in the repo after the run ends; exit 0 passes | none |
+| `gate` | `continue`, `ask`, `verdict` | `continue` |
+
+A step whose body is empty is check-only: no Claude run, just the command. Workflows come from three folders, later ones winning by `name`: `lib/workflows/*.md` (bundled with canopy), `$CANOPY_CONFIG_DIR/workflows/*.md` (yours, `~/.config/canopy/workflows` by default), and `<repo>/.canopy/workflows/*.md` (that repo only, local repos only). The bundled five: **commit** (stages what belongs, writes the message, does not push), **push** (pushes the branch, rebasing only when safe), **ship** (gates, then commit, then push, stopping before committing if a gate fails), **deploy** (works out how the project deploys and runs it after its own gates), **review** (reads the diff and recent commits and reports what looks wrong, changing nothing).
+
+Every step's `check`, when present, runs first; a nonzero exit fails the step and the flow. Then the gate: `continue` starts the next step at once, `ask` parks the flow for you to continue, retry, or stop, and `verdict` hands the step's summary to an evaluator (Jev, over the Vercel AI Gateway) that decides the same three ways on its own. `verdict` needs `AI_GATEWAY_API_KEY` set in the server's environment; without it, a `verdict` gate behaves like `ask`.
+
+Select several repos on the board (the select button in the top bar) and run one workflow across all of them as a fleet: each repo whose precondition does not hold is skipped, the rest run up to three at a time, and the fleet's own sheet shows every repo's flow.
+
+`docs/workflows/example-update-deps.md` is a worked example meant to be copied to `$CANOPY_CONFIG_DIR/workflows/` rather than bundled, since a dependency bump belongs to you, not to canopy.
 
 ## herdr
 

@@ -39,10 +39,6 @@ const RULES = `Ground rules:
 - When you cannot finish the task as stated (nothing you would commit on your own, a decision only the user can make, a conflict), do not end the run by explaining. Ask with AskUserQuestion, giving the concrete options, then do what the user picks. Explaining is for the summary after the work.
 - Finish with a short plain-prose summary of what you did (commit hashes, remote, URL) and anything you left alone and why. No headings, no bullet lists.`;
 
-const SUBMODULE_STEP = `If an entry in git status is a submodule (git status --porcelain=v2 marks it with an S field, or git diff --submodule shows it), handle it inside the submodule first: go into its directory and commit there by the same rules (and when this task pushes, push the submodule before pushing this repo, so the pointer stays reachable), then stage the updated pointer in this repo and commit that. Untracked or modified content inside a submodule is a change to deal with, not a reason to stop.`;
-
-const STRAY_STEP = `For each file you would not commit on your own (build output, a stray backup, an editor file, something that looks accidental), ask with AskUserQuestion what to do with it: commit it, add it to .gitignore and commit that, delete it, or leave it. Do what the user picks. Skip the question only if the user's note already decided.`;
-
 /** The chat keeps the safety rules and drops the ones about how a job ends:
  *  a conversation has no closing summary, and it is not done until the user
  *  says so. */
@@ -77,94 +73,6 @@ export const TOOL_SETS: Record<string, readonly string[]> = {
 };
 
 export const ACTIONS: Record<RunAction, ActionSpec> = {
-  commit: {
-    label: "commit",
-    verb: "commit",
-    blurb:
-      "Claude reads the diff, stages what belongs, writes the message in this repo's style and commits. Unrelated changes become separate commits. Nothing is pushed.",
-    notePlaceholder: "anything Claude should know (optional)",
-    noteRequired: false,
-    allowedTools: [...GIT_READ, ...GIT_COMMIT],
-    maxTurns: 30,
-    progress: "committing",
-    expectsChange: true,
-    mode: "job",
-    task: `Task: commit the current changes, so that git status is clean afterwards.
-1. Look at git status and the full diff, including untracked files.
-2. ${SUBMODULE_STEP}
-3. ${STRAY_STEP}
-4. Stage what belongs together. If the changes are clearly unrelated, make more than one commit, each with its own coherent set of files. Otherwise make one.
-5. Match the style of recent messages (git log --oneline -15): imperative subject under 65 characters, optional body explaining why.
-6. Do not push.`,
-  },
-  push: {
-    label: "push",
-    verb: "push",
-    blurb:
-      "Claude pushes the current branch. A branch with no upstream gets one. If the remote is ahead, Claude rebases only when that is clearly safe, and otherwise stops and explains. Never a force push.",
-    notePlaceholder: "anything Claude should know (optional)",
-    noteRequired: false,
-    allowedTools: [...GIT_READ, ...GIT_PUSH],
-    maxTurns: 20,
-    progress: "pushing",
-    expectsChange: true,
-    mode: "job",
-    task: `Task: push the current branch, so that it is no longer ahead of its upstream.
-1. If the branch has an upstream, push to it. If not, push with -u to origin, or to the only remote if there is one; if several remotes and no origin, ask which one.
-2. If the push is rejected because the remote is ahead: fetch, and rebase onto the upstream only if the rebase completes without conflicts. On any conflict abort the rebase, leave the repo as it was, and ask how to proceed.
-3. If there are uncommitted changes as well, ask whether to commit them first (by the commit rules: submodules handled inside first, stray files decided one by one) or push only what is committed.
-4. If the commits being pushed point at submodule commits that are not on the submodule's remote, push the submodule first.
-5. Never force-push.`,
-  },
-  "commit-push": {
-    label: "commit and push",
-    verb: "commit and push",
-    blurb:
-      "Claude commits the changes the way the commit action does, then pushes the branch the way the push action does.",
-    notePlaceholder: "anything Claude should know (optional)",
-    noteRequired: false,
-    allowedTools: [...GIT_READ, ...GIT_COMMIT, ...GIT_PUSH],
-    maxTurns: 40,
-    progress: "committing and pushing",
-    expectsChange: true,
-    mode: "job",
-    task: `Task: commit the current changes and push the branch, so that git status is clean and the branch is level with its upstream afterwards.
-Commit part:
-1. Look at git status and the full diff, including untracked files.
-2. ${SUBMODULE_STEP}
-3. ${STRAY_STEP}
-4. Stage what belongs together. If the changes are clearly unrelated, make more than one commit. Otherwise make one.
-5. Match the style of recent messages (git log --oneline -15): imperative subject under 65 characters, optional body explaining why.
-Push part:
-6. Push to the upstream; with no upstream, push with -u to origin or the only remote; if several remotes and no origin, ask which one.
-7. If the remote is ahead: fetch and rebase only if it completes without conflicts; otherwise abort the rebase and ask how to proceed. Never force-push.
-8. Check git status and the ahead count once more; if anything is left, deal with it or ask.`,
-  },
-  deploy: {
-    label: "deploy",
-    verb: "deploy",
-    blurb:
-      "Claude works out how this project deploys (Vercel, Firebase, Cloudflare, a Dockerfile, a script...), runs the project's own gates first, and deploys. Uncommitted changes and anything outside the usual pipeline come back to you as a question.",
-    notePlaceholder: "target, environment, or anything else Claude should know (optional)",
-    noteRequired: false,
-    allowedTools: [
-      ...GIT_READ,
-      ...BUN,
-      "Bash(npm run:*)",
-      "Bash(cat:*)",
-      "Bash(ls:*)",
-    ],
-    maxTurns: 80,
-    progress: "deploying",
-    expectsChange: false,
-    mode: "job",
-    task: `Task: deploy this project to where it normally deploys.
-1. Find out how it deploys: vercel.json or .vercel, firebase.json, wrangler.toml, fly.toml, a Dockerfile or compose file, deploy scripts in package.json, a Makefile, and anything CLAUDE.md or README says about deploying. If nothing indicates a deploy target, say so and stop.
-2. If there are uncommitted changes, ask with AskUserQuestion whether to commit them first, deploy as-is, or stop.
-3. Run the project's own gates before deploying (typecheck, lint, tests, build, in whatever form the project defines them). Stop and report if one fails; do not deploy a failing build.
-4. Deploy. Prefer the project's own script over a raw CLI call when both exist.
-5. Report the deployment URL and anything you noticed.`,
-  },
   ask: {
     label: "ask claude…",
     verb: "ask",
@@ -200,25 +108,6 @@ Push part:
 /** Whether the action makes sense for the repo right now. `why` is shown as
  *  the disabled item's tooltip, so it names the missing thing, not a rule. */
 export type RunCheck = { ok: true } | { ok: false; why: string };
-
-export function canRun(repo: Repo, action: RunAction): RunCheck {
-  if (repo.error) return { ok: false, why: "not a readable repo" };
-  const st = repo.status;
-  const dirty = (st?.files.length ?? 0) > 0;
-  const unpushed = (st?.ahead ?? 0) > 0 || !st?.upstream;
-  switch (action) {
-    case "commit":
-      return dirty ? { ok: true } : { ok: false, why: "nothing to commit" };
-    case "push":
-      return unpushed ? { ok: true } : { ok: false, why: "nothing to push" };
-    case "commit-push":
-      return dirty || unpushed
-        ? { ok: true }
-        : { ok: false, why: "nothing to commit or push" };
-    default:
-      return { ok: true };
-  }
-}
 
 /** A workflow's precondition against the repo as the card shows it. */
 export function checkWhen(repo: Repo, when: WorkflowWhen): RunCheck {

@@ -253,14 +253,7 @@ export const CLAUDE_OPENERS: readonly OpenerId[] = ["agent", "herdr"];
 
 /* ---------- runs: a job handed to Claude Code for one repo ---------- */
 
-export const RUN_ACTIONS = [
-  "commit",
-  "push",
-  "commit-push",
-  "deploy",
-  "ask",
-  "chat",
-] as const;
+export const RUN_ACTIONS = ["ask", "chat"] as const;
 export type RunAction = (typeof RUN_ACTIONS)[number];
 
 export type RunStatus =
