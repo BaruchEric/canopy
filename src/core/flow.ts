@@ -119,6 +119,12 @@ export class Flows {
   /** run id to flow id, for onRun */
   private byRun = new Map<string, string>();
   private fleetsLive = new Map<string, { fleet: Fleet; workflow: Workflow; note: string; pending: Repo[]; agentFor: (repo: Repo) => AgentSettings }>();
+  /** fleet ids whose pump() is on the call stack right now, to keep a flow that
+   *  ends inside start() from re-entering and finishing the fleet early */
+  private pumping = new Set<string>();
+  /** fleet ids a nested pump() call asked to be pumped again once the
+   *  outermost call's start loop unwinds */
+  private pumpAgain = new Set<string>();
 
   constructor(
     private runner: FlowRunner,
@@ -351,8 +357,37 @@ export class Flows {
     return n;
   }
 
-  /** Starts pending repos up to the cap; ends the fleet when nothing is left. */
+  /** Starts pending repos up to the cap; ends the fleet when nothing is left.
+   *  `this.start(...)` can run a whole flow synchronously (a run that ends
+   *  inside start() feeds straight through onRun, pass, end, onFlowEnd, and
+   *  back into pump()) before the line below gets to record its flow id. A
+   *  nested call like that only marks the fleet in pumpAgain and returns;
+   *  the outermost call keeps starting repos until a pass leaves nothing
+   *  marked, and only it emits or finishes the fleet, exactly once. */
   private pump(fleetId: string): void {
+    if (this.pumping.has(fleetId)) {
+      this.pumpAgain.add(fleetId);
+      return;
+    }
+    this.pumping.add(fleetId);
+    try {
+      do {
+        this.pumpAgain.delete(fleetId);
+        this.startPending(fleetId);
+      } while (this.pumpAgain.has(fleetId));
+    } finally {
+      this.pumping.delete(fleetId);
+    }
+    const lf = this.fleetsLive.get(fleetId);
+    if (!lf || lf.fleet.status !== "working") return;
+    if (!lf.pending.length && this.running(fleetId) === 0) {
+      this.finishFleet(lf, "done");
+      return;
+    }
+    this.hooks.onFleet(lf.fleet);
+  }
+
+  private startPending(fleetId: string): void {
     const lf = this.fleetsLive.get(fleetId);
     if (!lf || lf.fleet.status !== "working") return;
     while (lf.pending.length && this.running(fleetId) < FLEET_CONCURRENCY) {
@@ -366,11 +401,6 @@ export class Flows {
         if (entry) entry.skipped = String(err instanceof Error ? err.message : err);
       }
     }
-    if (!lf.pending.length && this.running(fleetId) === 0) {
-      this.finishFleet(lf, "done");
-      return;
-    }
-    this.hooks.onFleet(lf.fleet);
   }
 
   private finishFleet(lf: { fleet: Fleet }, status: "done" | "stopped"): void {

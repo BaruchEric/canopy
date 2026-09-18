@@ -395,4 +395,35 @@ describe("fleets", () => {
     expect(flows.getFleet(fleet.id)?.repos[0]?.skipped).toContain("already has");
     expect(runner.specs.length).toBe(2);
   });
+
+  test("a fleet whose runs end inside start records every flow id", async () => {
+    /** Mirrors task 5's FailFastRunner, but ends done with a result rather
+     *  than failed: start() feeds the whole flow through synchronously,
+     *  onFlowEnd's pump() re-enters before this repo's flowId is recorded. */
+    class InstantRunner extends FakeRunner {
+      override start(r: Repo, action: string, spec: ActionSpec, note: string): Run {
+        const run = super.start(r, action, spec, note);
+        this.end(run.id, "done", "ok");
+        return run;
+      }
+    }
+    const runner = new InstantRunner();
+    const fleets: Fleet[] = [];
+    const flows = new Flows(runner, {
+      onChange: () => {},
+      onGone: () => {},
+      onFleet: (f) => fleets.push(structuredClone(f)),
+      onFleetGone: () => {},
+      check: async () => ({ exit: 0, output: "" }),
+      evaluator: null,
+    });
+    runner.onChange = (run) => flows.onRun(run);
+    const fleet = flows.startFleet([dirty("a"), dirty("b"), dirty("c")], DIRTY_WF, "", () => DEFAULT_AGENT);
+    await flush();
+    const f = flows.getFleet(fleet.id);
+    expect(f?.status).toBe("done");
+    expect(f?.repos.filter((r) => r.flowId).length).toBe(3);
+    expect(fleets.at(-1)?.repos.every((r) => r.flowId)).toBe(true);
+    expect(flows.list().every((fl) => fl.status === "done")).toBe(true);
+  });
 });
