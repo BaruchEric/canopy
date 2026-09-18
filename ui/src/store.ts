@@ -4,10 +4,15 @@ import { applyQuery, type RepoFilter } from "./filters";
 import { openElsewhere, openShellElsewhere, parseRoute } from "./routes";
 import { loadSettings, saveSettings, shellPlace, type Settings, type ShellPlace } from "./settings";
 import { clamp, needsAttention } from "./util";
+import { selectable } from "./flows";
 import {
   DEFAULT_AGENT,
+  isFlowActive,
   isRunActive,
   type AgentSettings,
+  type Fleet,
+  type Flow,
+  type FlowChoice,
   type HistoryOverview,
   type OpenerId,
   type Repo,
@@ -18,6 +23,7 @@ import {
   type ServerEvent,
   type SourceInput,
   type SourceState,
+  type WorkflowEntry,
   type Workspace,
 } from "../../src/core/types";
 
@@ -210,6 +216,19 @@ interface CanopyState {
   termHeight: number;
   /** px height of a shell in a repo's panel, dragged by its top edge */
   panelTermHeight: number;
+  /** flows by id, live and recently finished */
+  flows: Record<string, Flow>;
+  /** fleets by id, live and recently finished */
+  fleets: Record<string, Fleet>;
+  /** workflows the menu last fetched, by repo id */
+  workflows: Record<string, WorkflowEntry[]>;
+  /** run id to flow id, for every run a flow owns; those runs stay off the cards */
+  flowRuns: Record<string, string>;
+  /** select mode on the board */
+  selecting: boolean;
+  selected: string[];
+  /** whether the server has a gateway key, so verdict gates can judge */
+  verdictReady: boolean;
 
   /** loads the tree and opens the SSE stream; returns its unsubscribe */
   init: () => Promise<() => void>;
@@ -282,13 +301,37 @@ interface CanopyState {
   sayRun: (runId: string, text: string) => Promise<void>;
   stopRun: (runId: string) => Promise<void>;
   dismissRun: (runId: string) => Promise<void>;
+
+  /** loads (or reloads) the workflows a repo can run, for the menu */
+  loadWorkflows: (repoId: string) => Promise<void>;
+  /** opens the pre-flight for a workflow on a repo, or its live flow/run */
+  planFlow: (repoId: string, workflow: string) => void;
+  startFlow: (repoId: string, workflow: string, note: string) => Promise<void>;
+  resumeFlow: (flowId: string, choice: FlowChoice) => Promise<void>;
+  stopFlow: (flowId: string) => Promise<void>;
+  dismissFlow: (flowId: string) => Promise<void>;
+  showFlow: (flowId: string) => void;
+  /** turns select mode on the board on or off */
+  setSelecting: (on: boolean) => void;
+  toggleSelected: (repoId: string) => void;
+  setSelected: (ids: string[]) => void;
+  /** opens the pre-flight for a fleet workflow over the selected repos */
+  planFleet: (workflow: string) => void;
+  startFleet: (workflow: string, note: string) => Promise<void>;
+  stopFleet: (fleetId: string) => Promise<void>;
+  dismissFleet: (fleetId: string) => Promise<void>;
+  showFleet: (fleetId: string) => void;
 }
 
 export type Sheet =
   | { kind: "plan"; repoId: string; action: RunAction }
   | { kind: "run"; runId: string }
   | { kind: "agent"; repoId: string }
-  | { kind: "search" };
+  | { kind: "search" }
+  | { kind: "flow-plan"; repoId: string; workflow: string }
+  | { kind: "flow"; flowId: string }
+  | { kind: "fleet-plan"; workflow: string }
+  | { kind: "fleet"; fleetId: string };
 
 /** one shell in the bottom strip */
 export interface TermTab {
@@ -333,6 +376,15 @@ function treeState(
   };
 }
 
+/** run id to flow id, for every run a flow owns. */
+function flowRunsOf(flows: Flow[]): Record<string, string> {
+  const flowRuns: Record<string, string> = {};
+  for (const f of flows) {
+    for (const st of f.steps) if (st.runId) flowRuns[st.runId] = f.id;
+  }
+  return flowRuns;
+}
+
 export const useStore = create<CanopyState>((set, get) => ({
   root: "",
   sources: [],
@@ -364,14 +416,24 @@ export const useStore = create<CanopyState>((set, get) => ({
   activeTerm: null,
   termHeight: layout.termHeight,
   panelTermHeight: layout.panelTermHeight,
+  flows: {},
+  fleets: {},
+  workflows: {},
+  flowRuns: {},
+  selecting: false,
+  selected: [],
+  verdictReady: false,
 
   init: async () => {
     try {
-      const [tree, workspaces, runs, agents] = await Promise.all([
+      const [tree, workspaces, runs, agents, flows, fleets, verdict] = await Promise.all([
         api.tree(),
         api.workspaces(),
         api.runs(),
         api.agents(),
+        api.flows(),
+        api.fleets(),
+        api.verdict(),
       ]);
       set({
         root: tree.root,
@@ -380,6 +442,10 @@ export const useStore = create<CanopyState>((set, get) => ({
         workspaces,
         runs: Object.fromEntries(runs.map((r) => [r.id, r])),
         agents,
+        flows: Object.fromEntries(flows.map((f) => [f.id, f])),
+        fleets: Object.fromEntries(fleets.map((f) => [f.id, f])),
+        flowRuns: flowRunsOf(flows),
+        verdictReady: verdict.ready,
         loaded: true,
         loadError: null,
       });
@@ -424,13 +490,21 @@ export const useStore = create<CanopyState>((set, get) => ({
   },
 
   rescan: async () => {
-    const [tree, runs] = await Promise.all([api.rescan(), api.runs()]);
+    const [tree, runs, flows, fleets] = await Promise.all([
+      api.rescan(),
+      api.runs(),
+      api.flows(),
+      api.fleets(),
+    ]);
     // a rescan can bring new repos; the server rebuilds the repo→project map
     void get().loadHistory(true);
     set((s) => ({
       ...treeState(s, tree),
       // runs are server state too: a stream gap may have hidden a finish
       runs: Object.fromEntries(runs.map((r) => [r.id, r])),
+      flows: Object.fromEntries(flows.map((f) => [f.id, f])),
+      fleets: Object.fromEntries(fleets.map((f) => [f.id, f])),
+      flowRuns: flowRunsOf(flows),
     }));
   },
 
@@ -519,6 +593,27 @@ export const useStore = create<CanopyState>((set, get) => ({
         const sheet =
           s.sheet?.kind === "run" && s.sheet.runId === ev.id ? null : s.sheet;
         return { runs, sheet };
+      });
+    } else if (ev.type === "flow") {
+      set((s) => {
+        const flowRuns = { ...s.flowRuns };
+        for (const st of ev.flow.steps) if (st.runId) flowRuns[st.runId] = ev.flow.id;
+        return { flows: { ...s.flows, [ev.flow.id]: ev.flow }, flowRuns };
+      });
+    } else if (ev.type === "flow-gone") {
+      set((s) => {
+        const { [ev.id]: _gone, ...flows } = s.flows;
+        const flowRuns = Object.fromEntries(Object.entries(s.flowRuns).filter(([, f]) => f !== ev.id));
+        const sheet = s.sheet?.kind === "flow" && s.sheet.flowId === ev.id ? null : s.sheet;
+        return { flows, flowRuns, sheet };
+      });
+    } else if (ev.type === "fleet") {
+      set((s) => ({ fleets: { ...s.fleets, [ev.fleet.id]: ev.fleet } }));
+    } else if (ev.type === "fleet-gone") {
+      set((s) => {
+        const { [ev.id]: _gone, ...fleets } = s.fleets;
+        const sheet = s.sheet?.kind === "fleet" && s.sheet.fleetId === ev.id ? null : s.sheet;
+        return { fleets, sheet };
       });
     }
   },
@@ -696,6 +791,71 @@ export const useStore = create<CanopyState>((set, get) => ({
       return { runs, sheet };
     });
   },
+
+  loadWorkflows: async (repoId) => {
+    const list = await api.workflows(repoId);
+    set((s) => ({ workflows: { ...s.workflows, [repoId]: list } }));
+  },
+  planFlow: (repoId, workflow) => {
+    const active = activeFlowFor(get(), repoId) ?? undefined;
+    if (active) {
+      set({ sheet: { kind: "flow", flowId: active.id } });
+      return;
+    }
+    const run = activeRunFor(get(), repoId);
+    set({ sheet: run ? { kind: "run", runId: run.id } : { kind: "flow-plan", repoId, workflow } });
+  },
+  startFlow: async (repoId, workflow, note) => {
+    const flow = await api.startFlow(repoId, workflow, note);
+    set((s) => ({ flows: { ...s.flows, [flow.id]: flow }, sheet: { kind: "flow", flowId: flow.id } }));
+  },
+  resumeFlow: async (flowId, choice) => {
+    const flow = await api.resumeFlow(flowId, choice);
+    set((s) => ({ flows: { ...s.flows, [flow.id]: flow } }));
+  },
+  stopFlow: async (flowId) => {
+    const flow = await api.stopFlow(flowId);
+    set((s) => ({ flows: { ...s.flows, [flow.id]: flow } }));
+  },
+  dismissFlow: async (flowId) => {
+    await api.dismissFlow(flowId);
+    set((s) => {
+      const { [flowId]: _gone, ...flows } = s.flows;
+      const sheet = s.sheet?.kind === "flow" && s.sheet.flowId === flowId ? null : s.sheet;
+      return { flows, sheet };
+    });
+  },
+  showFlow: (flowId) => set({ sheet: { kind: "flow", flowId } }),
+  setSelecting: (on) =>
+    set((s) => ({ selecting: on, selected: on ? selectable(visibleRepos(s)).map((r) => r.id) : [] })),
+  toggleSelected: (repoId) =>
+    set((s) => ({
+      selected: s.selected.includes(repoId) ? s.selected.filter((x) => x !== repoId) : [...s.selected, repoId],
+    })),
+  setSelected: (ids) => set({ selected: ids }),
+  planFleet: (workflow) => set({ sheet: { kind: "fleet-plan", workflow } }),
+  startFleet: async (workflow, note) => {
+    const fleet = await api.startFleet(workflow, get().selected, note);
+    set((s) => ({
+      fleets: { ...s.fleets, [fleet.id]: fleet },
+      sheet: { kind: "fleet", fleetId: fleet.id },
+      selecting: false,
+      selected: [],
+    }));
+  },
+  stopFleet: async (fleetId) => {
+    const fleet = await api.stopFleet(fleetId);
+    set((s) => ({ fleets: { ...s.fleets, [fleet.id]: fleet } }));
+  },
+  dismissFleet: async (fleetId) => {
+    await api.dismissFleet(fleetId);
+    set((s) => {
+      const { [fleetId]: _gone, ...fleets } = s.fleets;
+      const sheet = s.sheet?.kind === "fleet" && s.sheet.fleetId === fleetId ? null : s.sheet;
+      return { fleets, sheet };
+    });
+  },
+  showFleet: (fleetId) => set({ sheet: { kind: "fleet", fleetId } }),
 }));
 
 /** The run a repo's card should talk about: a live one first, else the most
@@ -703,6 +863,7 @@ export const useStore = create<CanopyState>((set, get) => ({
 export function runFor(s: CanopyState, repoId: string): Run | undefined {
   let best: Run | undefined;
   for (const r of Object.values(s.runs)) {
+    if (s.flowRuns[r.id]) continue;
     if (r.repoId !== repoId) continue;
     if (!best) {
       best = r;
@@ -718,6 +879,21 @@ export function runFor(s: CanopyState, repoId: string): Run | undefined {
 export function activeRunFor(s: CanopyState, repoId: string): Run | undefined {
   const r = runFor(s, repoId);
   return r && isRunActive(r) ? r : undefined;
+}
+
+/** A repo's newest flow, active first. */
+export function flowFor(s: CanopyState, repoId: string): Flow | undefined {
+  let best: Flow | undefined;
+  for (const f of Object.values(s.flows)) {
+    if (f.repoId !== repoId) continue;
+    if (!best || (isFlowActive(f) && !isFlowActive(best)) || (isFlowActive(f) === isFlowActive(best) && f.startedAt > best.startedAt)) best = f;
+  }
+  return best;
+}
+
+export function activeFlowFor(s: CanopyState, repoId: string): Flow | undefined {
+  const f = flowFor(s, repoId);
+  return f && isFlowActive(f) ? f : undefined;
 }
 
 /** All runs, newest first. */

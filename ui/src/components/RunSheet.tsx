@@ -85,7 +85,11 @@ export function RunSheet() {
 
 /** The repo a sheet is about: named outright, or through its run. */
 const sheetRepoId = (sheet: Sheet, runs: Record<string, Run>): string | undefined =>
-  sheet.kind === "run" ? runs[sheet.runId]?.repoId : sheet.kind === "search" ? undefined : sheet.repoId;
+  sheet.kind === "run"
+    ? runs[sheet.runId]?.repoId
+    : sheet.kind === "plan" || sheet.kind === "agent" || sheet.kind === "flow-plan"
+      ? sheet.repoId
+      : undefined;
 
 function Body({ sheet }: { sheet: Sheet }) {
   const close = useStore((s) => s.closeSheet);

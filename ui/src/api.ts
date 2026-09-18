@@ -1,6 +1,9 @@
 import type {
   AgentSettings,
   CommitDetail,
+  Fleet,
+  Flow,
+  FlowChoice,
   GrepRepoResult,
   GrepResult,
   HistoryHit,
@@ -19,6 +22,7 @@ import type {
   ServerEvent,
   SourceInput,
   SourceState,
+  WorkflowEntry,
   Workspace,
 } from "../../src/core/types";
 
@@ -171,6 +175,37 @@ export const api = {
     req<Run>("/api/runs/say", { method: "POST", body: JSON.stringify({ id, text }) }),
   dismissRun: (id: string) =>
     req<{ ok: true }>(`/api/runs?${rq(id)}`, { method: "DELETE" }),
+  workflows: (id: string) => req<WorkflowEntry[]>(`/api/repos/workflows?${rq(id)}`),
+  startFlow: (id: string, workflow: string, note: string) =>
+    req<Flow>(`/api/repos/flow?${rq(id)}`, {
+      method: "POST",
+      body: JSON.stringify({ workflow, note }),
+    }),
+  flows: () => req<Flow[]>("/api/flows"),
+  resumeFlow: (id: string, choice: FlowChoice) =>
+    req<Flow>("/api/flows/resume", {
+      method: "POST",
+      body: JSON.stringify({ id, choice }),
+    }),
+  stopFlow: (id: string) =>
+    req<Flow>("/api/flows/stop", {
+      method: "POST",
+      body: JSON.stringify({ id }),
+    }),
+  dismissFlow: (id: string) => req<{ ok: true }>(`/api/flows?${rq(id)}`, { method: "DELETE" }),
+  verdict: () => req<{ ready: boolean }>("/api/verdict"),
+  fleets: () => req<Fleet[]>("/api/fleets"),
+  startFleet: (workflow: string, ids: string[], note: string) =>
+    req<Fleet>("/api/fleet", {
+      method: "POST",
+      body: JSON.stringify({ workflow, ids, note }),
+    }),
+  stopFleet: (id: string) =>
+    req<Fleet>("/api/fleet/stop", {
+      method: "POST",
+      body: JSON.stringify({ id }),
+    }),
+  dismissFleet: (id: string) => req<{ ok: true }>(`/api/fleet?${rq(id)}`, { method: "DELETE" }),
   workspaces: () => req<Workspace[]>("/api/workspaces"),
   wsAdd: (name: string, repos: string[]) =>
     req<Workspace[]>("/api/workspaces", {
