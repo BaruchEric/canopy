@@ -5,6 +5,7 @@ import { openElsewhere, openShellElsewhere, parseRoute } from "./routes";
 import { loadSettings, saveSettings, shellPlace, type Settings, type ShellPlace } from "./settings";
 import { clamp, needsAttention } from "./util";
 import { ownRun, selectable } from "./flows";
+import { appendFeed, describeEvent, type FeedEntry } from "./feed";
 import {
   DEFAULT_AGENT,
   isFlowActive,
@@ -36,6 +37,8 @@ export const SOLO = { min: 420, max: 2400, initial: 980 };
 export const TERM = { min: 120, max: 1200, initial: 300 };
 /** a shell living in a repo's panel: the bounds and default of its height */
 export const PANEL_TERM = { min: 120, max: 900, initial: 320 };
+/** the event feed along the bottom, in px of height */
+export const FEED = { min: 100, max: 900, initial: 220 };
 /** sections that start folded, matching how the panel read before they could fold */
 const DEFAULT_CLOSED = ["search", "history", "claude"];
 
@@ -62,6 +65,10 @@ interface Layout {
   termHeight: number;
   /** px height of a shell living in a repo's panel */
   panelTermHeight: number;
+  /** whether the event feed is showing along the bottom */
+  feedOpen: boolean;
+  /** px height of the event feed */
+  feedHeight: number;
 }
 
 function loadLayout(): Layout {
@@ -74,6 +81,8 @@ function loadLayout(): Layout {
     closedSections: [...DEFAULT_CLOSED],
     termHeight: TERM.initial,
     panelTermHeight: PANEL_TERM.initial,
+    feedOpen: false,
+    feedHeight: FEED.initial,
   };
   try {
     const raw = localStorage.getItem(LAYOUT_KEY);
@@ -87,6 +96,8 @@ function loadLayout(): Layout {
       closedSections?: unknown;
       termHeight?: unknown;
       panelTermHeight?: unknown;
+      feedOpen?: unknown;
+      feedHeight?: unknown;
     };
     const panelWidths: Record<string, number> = {};
     for (const [id, w] of Object.entries(saved.panelWidths ?? {})) {
@@ -100,6 +111,7 @@ function loadLayout(): Layout {
     const solo = saved.soloWidth;
     const th = saved.termHeight;
     const pth = saved.panelTermHeight;
+    const fh = saved.feedHeight;
     return {
       sidebarWidth:
         typeof sw === "number" && Number.isFinite(sw)
@@ -125,6 +137,11 @@ function loadLayout(): Layout {
         typeof pth === "number" && Number.isFinite(pth)
           ? clamp(pth, PANEL_TERM.min, PANEL_TERM.max)
           : PANEL_TERM.initial,
+      feedOpen: saved.feedOpen === true,
+      feedHeight:
+        typeof fh === "number" && Number.isFinite(fh)
+          ? clamp(fh, FEED.min, FEED.max)
+          : FEED.initial,
     };
   } catch {
     return fallback;
@@ -148,6 +165,8 @@ const layoutOf = (s: CanopyState): Layout => ({
   closedSections: s.closedSections,
   termHeight: s.termHeight,
   panelTermHeight: s.panelTermHeight,
+  feedOpen: s.feedOpen,
+  feedHeight: s.feedHeight,
 });
 
 /** drops stored widths for repos that no longer exist in the scan */
@@ -229,6 +248,24 @@ interface CanopyState {
   selected: string[];
   /** whether the server has a gateway key, so verdict gates can judge */
   verdictReady: boolean;
+  /** every server event since the page loaded, as lines, newest last */
+  feed: FeedEntry[];
+  /** the next feed entry's id */
+  feedSeq: number;
+  /** whether the feed is showing along the bottom */
+  feedOpen: boolean;
+  /** px height of the feed, dragged by its top edge */
+  feedHeight: number;
+  /** the source the feed is narrowed to; null is every source */
+  feedSource: string | null;
+  /** whether the feed shows lines that only say nothing changed */
+  feedQuiet: boolean;
+
+  toggleFeed: () => void;
+  clearFeed: () => void;
+  setFeedHeight: (px: number) => void;
+  setFeedSource: (id: string | null) => void;
+  setFeedQuiet: (on: boolean) => void;
 
   /** loads the tree and opens the SSE stream; returns its unsubscribe */
   init: () => Promise<() => void>;
@@ -423,6 +460,28 @@ export const useStore = create<CanopyState>((set, get) => ({
   selecting: false,
   selected: [],
   verdictReady: false,
+  feed: [],
+  feedSeq: 1,
+  feedOpen: layout.feedOpen,
+  feedHeight: layout.feedHeight,
+  feedSource: null,
+  feedQuiet: false,
+
+  toggleFeed: () =>
+    set((s) => {
+      const feedOpen = !s.feedOpen;
+      saveLayout({ ...layoutOf(s), feedOpen });
+      return { feedOpen };
+    }),
+  clearFeed: () => set({ feed: [] }),
+  setFeedHeight: (px) =>
+    set((s) => {
+      const feedHeight = clamp(px, FEED.min, FEED.max);
+      saveLayout({ ...layoutOf(s), feedHeight });
+      return { feedHeight };
+    }),
+  setFeedSource: (feedSource) => set({ feedSource }),
+  setFeedQuiet: (feedQuiet) => set({ feedQuiet }),
 
   init: async () => {
     try {
@@ -498,30 +557,32 @@ export const useStore = create<CanopyState>((set, get) => ({
     ]);
     // a rescan can bring new repos; the server rebuilds the repo→project map
     void get().loadHistory(true);
-    set((s) => ({
-      ...treeState(s, tree),
+    // Through applyEvent so the feed sees the scan even when this window
+    // asked for it: the broadcast that follows finds nothing new to say.
+    get().applyEvent({ type: "scan", result: tree });
+    set({
       // runs are server state too: a stream gap may have hidden a finish
       runs: Object.fromEntries(runs.map((r) => [r.id, r])),
       flows: Object.fromEntries(flows.map((f) => [f.id, f])),
       fleets: Object.fromEntries(fleets.map((f) => [f.id, f])),
       flowRuns: flowRunsOf(flows),
-    }));
+    });
   },
 
   addSource: async (input) => {
     const tree = await api.addSource(input);
     void get().loadHistory(true);
-    set((s) => treeState(s, tree));
+    get().applyEvent({ type: "scan", result: tree });
   },
   removeSource: async (id) => {
     const tree = await api.removeSource(id);
     void get().loadHistory(true);
-    set((s) => treeState(s, tree));
+    get().applyEvent({ type: "scan", result: tree });
   },
   rescanSource: async (id) => {
     const tree = await api.rescanSource(id);
     void get().loadHistory(true);
-    set((s) => treeState(s, tree));
+    get().applyEvent({ type: "scan", result: tree });
   },
 
   setFilter: (filter) => set({ filter }),
@@ -574,6 +635,15 @@ export const useStore = create<CanopyState>((set, get) => ({
     })),
 
   applyEvent: (ev) => {
+    // The feed says what changed, so the lines come from the event against
+    // the state before it is applied.
+    const lines = describeEvent(ev, get(), Date.now(), get().agents);
+    if (lines.length) {
+      set((s) => {
+        const { feed, seq } = appendFeed(s.feed, lines, s.feedSeq);
+        return { feed, feedSeq: seq };
+      });
+    }
     if (ev.type === "repo") {
       set((s) => ({
         repos: s.repos.map((r) => (r.id === ev.repo.id ? ev.repo : r)),

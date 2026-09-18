@@ -90,6 +90,8 @@ export function TopBar() {
   const sidebarOpen = useStore((s) => s.sidebarOpen);
   const toggleSidebar = useStore((s) => s.toggleSidebar);
   const openSearch = useStore((s) => s.openSearch);
+  const feedOpen = useStore((s) => s.feedOpen);
+  const toggleFeed = useStore((s) => s.toggleFeed);
   const selecting = useStore((s) => s.selecting);
   const selected = useStore((s) => s.selected);
   const setSelecting = useStore((s) => s.setSelecting);
@@ -175,6 +177,32 @@ export function TopBar() {
       </nav>
 
       <span className="spacer" />
+
+      <button
+        type="button"
+        className={feedOpen ? "icon-btn on" : "icon-btn"}
+        aria-pressed={feedOpen}
+        title={feedOpen ? "Hide the event feed (e)" : "Show the event feed: every source's events as they happen (e)"}
+        aria-label="Event feed"
+        onClick={toggleFeed}
+      >
+        <svg
+          width="15"
+          height="15"
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke="currentColor"
+          strokeWidth="2"
+          strokeLinecap="round"
+          strokeLinejoin="round"
+          aria-hidden="true"
+        >
+          <path d="M4 6h16" />
+          <path d="M4 12h10" />
+          <path d="M4 18h13" />
+          <circle cx="19" cy="17" r="2" fill="currentColor" stroke="none" />
+        </svg>
+      </button>
 
       <button
         type="button"

@@ -207,7 +207,7 @@ export function TermView({
 /** A shell area's top edge: dragged to size it, arrowed by the keyboard,
  *  double-clicked to reset. It writes the height live to `cssVar` on `box`
  *  while dragging, then commits it on release. */
-function TermGrip({
+export function TermGrip({
   box,
   cssVar,
   label,

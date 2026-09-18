@@ -3,6 +3,7 @@ import type { CSSProperties } from "react";
 import { Library } from "./components/Library";
 import { Wordmark } from "./components/TopBar";
 import { Dock } from "./components/Dock";
+import { FeedDock } from "./components/Feed";
 import { RepoGrid } from "./components/RepoGrid";
 import { Resizer } from "./components/Resizer";
 import { RunSheet } from "./components/RunSheet";
@@ -109,6 +110,8 @@ export function App() {
         document.getElementById("filters-btn")?.click();
       } else if (e.key === "[") {
         toggleSidebar();
+      } else if (e.key === "e") {
+        useStore.getState().toggleFeed();
       } else if (e.key === "d") {
         setDirtyOnly(!useStore.getState().dirtyOnly);
       } else if (e.key === "s") {
@@ -183,6 +186,7 @@ export function App() {
       </div>
       <SelectBar />
       </>}
+      <FeedDock />
       <TermDock />
       <RunSheet />
     </div>

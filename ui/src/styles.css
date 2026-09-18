@@ -3040,3 +3040,187 @@ body.resizing {
 .fleet-row.st-failed .dot, .fleet-row.st-stopped .dot { background: var(--rust); }
 .fleet-word { color: var(--ink-dim); font-size: 13px; }
 .fleet-summary { grid-column: 2; font-size: 13px; }
+
+/* ---------- the event feed along the bottom ---------- */
+/* One line per server event, every source in one stream. It sits above the
+   shell strip and takes the same grip, so the two read as one dock. */
+.feed {
+  position: relative;
+  flex: none;
+  display: flex;
+  flex-direction: column;
+  height: var(--feed-h, 220px);
+  max-height: 80vh;
+  border-top: 1px solid var(--hair2);
+  background: var(--bark0);
+}
+.feed-head {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 30px;
+  padding: 2px 8px 2px 8px;
+  border-bottom: 1px solid var(--hair);
+  background: var(--bark1);
+  font-size: 12px;
+}
+.feed-head .term-caption {
+  margin: 0 4px 0 4px;
+}
+.feed-chips {
+  display: flex;
+  align-items: center;
+  gap: 3px;
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+.feed-chip {
+  padding: 1px 8px;
+  border-radius: 999px;
+  border: 1px solid transparent;
+  font-size: 11px;
+  color: var(--ink-dim);
+  white-space: nowrap;
+}
+.feed-chip:hover {
+  color: var(--ink);
+  background: var(--bark2);
+}
+.feed-chip.on {
+  color: var(--ink);
+  background: var(--bark2);
+  border-color: var(--hair2);
+}
+.feed-chip.err {
+  color: var(--rust);
+}
+.feed-quiet {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 11px;
+  color: var(--ink-faint);
+  white-space: nowrap;
+  cursor: pointer;
+}
+.feed-quiet input {
+  margin: 0;
+  accent-color: var(--moss);
+}
+.feed-count {
+  min-width: 2ch;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+  color: var(--ink-faint);
+  font-size: 11px;
+}
+.feed-x {
+  width: 20px;
+  height: 20px;
+}
+.feed-list {
+  flex: 1;
+  min-height: 0;
+  margin: 0;
+  padding: 4px 0 6px;
+  list-style: none;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  font-family: var(--mono);
+  font-size: 12px;
+  line-height: 1.5;
+}
+.feed-empty {
+  padding: 10px 14px;
+  color: var(--ink-faint);
+  font-family: inherit;
+}
+.feed-row {
+  display: grid;
+  grid-template-columns: 8ch 5ch minmax(4ch, 10ch) minmax(6ch, 18ch) 1fr;
+  gap: 0 10px;
+  align-items: baseline;
+  padding: 1px 14px;
+  border-left: 2px solid transparent;
+}
+.feed-row:hover {
+  background: var(--bark1);
+}
+.feed-row.quiet {
+  color: var(--ink-faint);
+}
+.feed-time {
+  color: var(--ink-faint);
+  font-variant-numeric: tabular-nums;
+}
+.feed-kind {
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--ink-faint);
+}
+.feed-row.git .feed-kind { color: var(--moss); }
+.feed-row.scan .feed-kind { color: var(--ink-dim); }
+.feed-row.run .feed-kind { color: var(--sky); }
+.feed-row.flow .feed-kind { color: var(--sky); }
+.feed-row.fleet .feed-kind { color: var(--sky); }
+.feed-row.workspace .feed-kind,
+.feed-row.agent .feed-kind { color: var(--lichen); }
+.feed-row.quiet .feed-kind { color: var(--ink-faint); }
+.feed-source,
+.feed-repo {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.feed-source {
+  color: var(--ink-dim);
+}
+.feed-repo {
+  text-align: left;
+  color: var(--ink);
+  font: inherit;
+  padding: 0;
+  border-radius: 3px;
+}
+.feed-repo:hover {
+  color: var(--moss);
+  text-decoration: underline;
+  text-decoration-color: var(--hair2);
+}
+.feed-text {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.feed-jump {
+  position: absolute;
+  right: 18px;
+  bottom: 10px;
+  padding: 3px 10px;
+  border-radius: 999px;
+  border: 1px solid color-mix(in srgb, var(--moss) 55%, var(--hair2));
+  background: color-mix(in srgb, var(--moss) 12%, var(--bark1));
+  color: var(--ink);
+  font-size: 12px;
+  box-shadow: 0 2px 8px color-mix(in srgb, black 25%, transparent);
+}
+.feed-jump:hover {
+  background: color-mix(in srgb, var(--moss) 22%, var(--bark1));
+}
+@media (max-width: 720px) {
+  .feed-row {
+    grid-template-columns: 8ch 1fr;
+  }
+  .feed-kind,
+  .feed-source {
+    display: none;
+  }
+  .feed-repo {
+    grid-column: 2;
+  }
+  .feed-text {
+    grid-column: 1 / -1;
+    padding-left: 10ch;
+  }
+}
