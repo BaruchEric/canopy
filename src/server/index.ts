@@ -1,3 +1,4 @@
+import { ACTIONS } from "../core/actions";
 import { Library } from "../core/library";
 import { watch, type FSWatcher } from "node:fs";
 import { readFile, realpath, stat } from "node:fs/promises";
@@ -871,7 +872,7 @@ async function handleApi(
       if (!isRunAction(b.action)) return json({ error: "unknown action" }, 400);
       const note = typeof b.note === "string" ? b.note : "";
       const agent = agentFor(await loadConfig(), repo.path);
-      return json(state.runner.start(repo, b.action, note, agent), 201);
+      return json(state.runner.start(repo, b.action, ACTIONS[b.action], note, agent), 201);
     }
   }
   return json({ error: "not found" }, 404);

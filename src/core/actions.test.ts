@@ -50,7 +50,7 @@ describe("canRun", () => {
 
 describe("buildPrompt", () => {
   test("carries the repo path, the facts, the task, and the rules", () => {
-    const p = buildPrompt(repo({ files: [file], ahead: 1 }), "commit", "");
+    const p = buildPrompt(repo({ files: [file], ahead: 1 }), ACTIONS.commit, "");
     expect(p).toContain("/tmp/grove/apps/orchard");
     expect(p).toContain("main, 1 changed file, 1 unpushed");
     expect(p).toContain("Task: commit the current changes");
@@ -58,11 +58,11 @@ describe("buildPrompt", () => {
     expect(p).not.toContain("Note from the user");
   });
   test("a note is quoted and trimmed", () => {
-    const p = buildPrompt(repo(), "push", "  use the fork remote  ");
+    const p = buildPrompt(repo(), ACTIONS.push, "  use the fork remote  ");
     expect(p).toContain("Note from the user (follow it where it applies):\nuse the fork remote");
   });
   test("a chat frames the first message and keeps the safety rules only", () => {
-    const p = buildPrompt(repo(), "chat", "what does this repo do?");
+    const p = buildPrompt(repo(), ACTIONS.chat, "what does this repo do?");
     expect(p).toContain("hold a conversation");
     expect(p).toContain("Never rewrite published history");
     expect(p).not.toContain("Finish with a short plain-prose summary");
@@ -70,24 +70,50 @@ describe("buildPrompt", () => {
   });
 
   test("ask puts the note in as the task", () => {
-    const p = buildPrompt(repo(), "ask", "rename foo to bar");
+    const p = buildPrompt(repo(), ACTIONS.ask, "rename foo to bar");
     expect(p).toContain("Task: see the note below.");
     expect(p).toContain("Note from the user:\nrename foo to bar");
   });
   test("commit and push runs handle submodules and stray files instead of stopping", () => {
     for (const a of ["commit", "commit-push"] as const) {
-      const p = buildPrompt(repo({ files: [file] }), a, "");
+      const p = buildPrompt(repo({ files: [file] }), ACTIONS[a], "");
       expect(p).toContain("submodule");
       expect(p).toContain("AskUserQuestion");
       expect(p).toContain("do not end the run by explaining");
     }
-    expect(buildPrompt(repo({ ahead: 1 }), "push", "")).toContain("push the submodule first");
+    expect(buildPrompt(repo({ ahead: 1 }), ACTIONS.push, "")).toContain("push the submodule first");
   });
   test("every action has a spec and a prompt", () => {
     for (const a of RUN_ACTIONS) {
       expect(ACTIONS[a].label.length).toBeGreaterThan(0);
-      expect(buildPrompt(repo(), a, "x")).toContain("Task:");
+      expect(buildPrompt(repo(), ACTIONS[a], "x")).toContain("Task:");
     }
+  });
+});
+
+describe("the spec carries the run's words", () => {
+  test("every action says what it does and how it ends", () => {
+    for (const a of RUN_ACTIONS) {
+      const spec = ACTIONS[a];
+      expect(spec.task.length).toBeGreaterThan(0);
+      expect(spec.progress.length).toBeGreaterThan(0);
+    }
+    expect(ACTIONS.commit.expectsChange).toBe(true);
+    expect(ACTIONS.deploy.expectsChange).toBe(false);
+    expect(ACTIONS.chat.mode).toBe("chat");
+    expect(ACTIONS.ask.mode).toBe("ask");
+    expect(ACTIONS.commit.mode).toBe("job");
+  });
+
+  test("a job prompt ends with the ground rules; a chat prompt ends with the message", () => {
+    const r = repo();
+    const job = buildPrompt(r, ACTIONS.commit, "be brief");
+    expect(job).toContain("Note from the user (follow it where it applies):\nbe brief");
+    expect(job.trim().endsWith("No headings, no bullet lists.")).toBe(true);
+    const chat = buildPrompt(r, ACTIONS.chat, "hello");
+    expect(chat.trim().endsWith("First message from the user:\nhello")).toBe(true);
+    const ask = buildPrompt(r, ACTIONS.ask, "do x");
+    expect(ask).toContain("Note from the user:\ndo x");
   });
 });
 

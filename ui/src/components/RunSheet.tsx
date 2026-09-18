@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { ACTIONS, EXPECTS_CHANGE, repoFacts } from "../../../src/core/actions";
+import { ACTIONS, repoFacts } from "../../../src/core/actions";
 import { describeAgent, isDefaultAgent } from "../../../src/core/agent";
 import { agentFor, useStore, type Sheet } from "../store";
 import { SearchSheet } from "./Search";
@@ -215,12 +215,10 @@ function Console({ run, repo }: { run: Run; repo: Repo | undefined }) {
   const answerRun = useStore((s) => s.answerRun);
   const sayRun = useStore((s) => s.sayRun);
   const active = isRunActive(run);
-  const chat = run.action === "chat";
-  const noChange =
-    run.status === "done" && run.outcome === "unchanged" && EXPECTS_CHANGE[run.action];
+  const chat = run.chat;
+  const noChange = run.status === "done" && run.outcome === "unchanged" && run.expectsChange;
   const now = useTick(active);
   const elapsed = (run.endedAt ?? now) - run.startedAt;
-  const spec = ACTIONS[run.action];
   const [error, setError] = useState<string | null>(null);
   const list = useRef<HTMLDivElement>(null);
   const stuck = useRef(true);
@@ -257,7 +255,7 @@ function Console({ run, repo }: { run: Run; repo: Repo | undefined }) {
         <div>
           <div className="eyebrow">with claude</div>
           <h2 className="sheet-title">
-            {spec.verb} <span className="sheet-repo">{run.repoId}</span>
+            {run.verb} <span className="sheet-repo">{run.repoId}</span>
           </h2>
         </div>
         <span className={`status st-${run.status}${noChange ? " no-change" : ""}`}>

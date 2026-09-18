@@ -9,7 +9,6 @@
  *  CLI speaks to its own SDK, and only the small part of it used here. */
 
 import {
-  ACTIONS,
   buildPrompt,
   describeTool,
   toolDetail,
@@ -24,7 +23,6 @@ import {
   type Repo,
   type RepoStatus,
   type Run,
-  type RunAction,
   type RunAnswer,
   type RunPrompt,
   type RunQuestion,
@@ -193,12 +191,17 @@ export class Runner {
 
   /** Starts a run. A chat may start with nothing to say: it opens idle, with
    *  no process, and the first message spawns Claude. */
-  start(repo: Repo, action: RunAction, note: string, agent: AgentSettings = DEFAULT_AGENT): Run {
+  start(
+    repo: Repo,
+    action: string,
+    spec: ActionSpec,
+    note: string,
+    agent: AgentSettings = DEFAULT_AGENT,
+  ): Run {
     const busy = this.activeFor(repo.id);
     if (busy) {
-      throw new Error(`${repo.name} already has a ${ACTIONS[busy.action].verb} run going`);
+      throw new Error(`${repo.name} already has a ${busy.verb} run going`);
     }
-    const spec = ACTIONS[action];
     if (spec.noteRequired && !note.trim()) {
       throw new Error("write what Claude should do first");
     }
@@ -206,11 +209,15 @@ export class Runner {
     if (!bin) {
       throw new Error("the claude CLI is not on PATH; install Claude Code and sign in first");
     }
-    const chat = action === "chat";
+    const chat = spec.mode === "chat";
     const run: Run = {
       id: crypto.randomUUID().slice(0, 8),
       repoId: repo.id,
       action,
+      verb: spec.verb,
+      progress: spec.progress,
+      expectsChange: spec.expectsChange,
+      chat,
       // a chat keeps its messages as steps; the note box is not its record
       note: chat ? "" : note.trim(),
       status: chat && !note.trim() ? "idle" : "working",
@@ -240,11 +247,11 @@ export class Runner {
     if (chat) {
       if (note.trim()) this.step(live, { kind: "user", text: note.trim() });
       this.hooks.onChange(run);
-      if (note.trim()) void this.drive(live, buildPrompt(repo, action, note));
+      if (note.trim()) void this.drive(live, buildPrompt(repo, spec, note));
       return run;
     }
     this.hooks.onChange(run);
-    void this.drive(live, buildPrompt(repo, action, live.run.note));
+    void this.drive(live, buildPrompt(repo, spec, live.run.note));
     return run;
   }
 
@@ -254,7 +261,7 @@ export class Runner {
   say(id: string, text: string): Run {
     const live = this.live.get(id);
     if (!live) throw new Error(`unknown run: ${id}`);
-    if (live.run.action !== "chat") throw new Error("only a chat takes messages");
+    if (!live.run.chat) throw new Error("only a chat takes messages");
     if (live.run.status !== "idle") throw new Error("Claude is still replying");
     const message = text.trim();
     if (!message) throw new Error("say something first");
@@ -269,7 +276,7 @@ export class Runner {
         session_id: "",
       });
     } else {
-      void this.drive(live, buildPrompt(live.repo, "chat", message));
+      void this.drive(live, buildPrompt(live.repo, live.spec, message));
     }
     return live.run;
   }
@@ -388,7 +395,7 @@ export class Runner {
 
   private async drive(live: Live, message: string): Promise<void> {
     const { bin, repo, spec, agent } = live;
-    const chat = live.run.action === "chat";
+    const chat = live.run.chat;
     let stderr = "";
     let proc: Bun.Subprocess<"pipe", "pipe", "pipe"> | null = null;
     try {
@@ -623,7 +630,7 @@ export class Runner {
           : subtype === "error_max_budget_usd"
             ? "stopped at the spending limit"
             : text.trim() || "Claude Code reported an error";
-      if (live.run.action === "chat") {
+      if (live.run.chat) {
         // A chat's result ends one reply, not the conversation: the process
         // stays, and the next message continues it. A reply that failed is
         // said in the timeline and the chat goes on.

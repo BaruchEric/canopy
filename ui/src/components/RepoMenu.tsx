@@ -282,10 +282,10 @@ export function RepoMenu({
                   <span className="dot sky" />
                   <span className="menu-text">
                     {active.status === "waiting"
-                      ? `${ACTIONS[active.action].verb} needs you`
+                      ? `${active.verb} needs you`
                       : active.status === "idle"
                         ? "chat open, your turn"
-                        : `${ACTIONS[active.action].verb} in progress`}
+                        : `${active.verb} in progress`}
                   </span>
                   <span className="menu-fact">show</span>
                 </button>

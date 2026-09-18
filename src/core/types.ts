@@ -339,7 +339,14 @@ export interface RunResult {
 export interface Run {
   id: string;
   repoId: string;
-  action: RunAction;
+  /** a built-in action's name, or the workflow's name for a flow's step */
+  action: string;
+  /** the words the chip and the sheet use, copied from the spec at start */
+  verb: string;
+  progress: string;
+  expectsChange: boolean;
+  /** a chat keeps its process between turns and takes messages */
+  chat: boolean;
   /** what the user typed into the note box, if anything */
   note: string;
   status: RunStatus;

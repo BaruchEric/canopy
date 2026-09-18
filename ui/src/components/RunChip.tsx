@@ -1,4 +1,3 @@
-import { ACTIONS, EXPECTS_CHANGE, PROGRESS } from "../../../src/core/actions";
 import { useStore } from "../store";
 import type { Run } from "../../../src/core/types";
 
@@ -6,11 +5,10 @@ import type { Run } from "../../../src/core/types";
  *  opens the console; the finished states stay until the run is dismissed. */
 export function RunChip({ run, long = false }: { run: Run; long?: boolean }) {
   const showRun = useStore((s) => s.showRun);
-  const verb = ACTIONS[run.action].verb;
+  const verb = run.verb;
   // A commit or push that left git status exactly as it was is not a
   // success the card can show, so the chip says so instead of "done".
-  const noChange =
-    run.status === "done" && run.outcome === "unchanged" && EXPECTS_CHANGE[run.action];
+  const noChange = run.status === "done" && run.outcome === "unchanged" && run.expectsChange;
   const text = noChange
     ? long
       ? `${verb}: no change`
@@ -18,8 +16,8 @@ export function RunChip({ run, long = false }: { run: Run; long?: boolean }) {
     :
     run.status === "working"
       ? long
-        ? `claude is ${PROGRESS[run.action]}`
-        : `${PROGRESS[run.action]}…`
+        ? `claude is ${run.progress}`
+        : `${run.progress}…`
       : run.status === "waiting"
         ? long
           ? `${verb}: claude needs you`

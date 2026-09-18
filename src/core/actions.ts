@@ -18,7 +18,39 @@ export interface ActionSpec {
   /** permission rules added for the session; anything else asks first */
   allowedTools: string[];
   maxTurns: number;
+  /** the card chip's word while the run is going */
+  progress: string;
+  /** a run that leaves git status untouched is reported as "no change" */
+  expectsChange: boolean;
+  /** the task paragraph of the prompt */
+  task: string;
+  /** how the note is framed and how the prompt closes: a job ends with the
+   *  ground rules, an ask frames the note as the task, a chat puts the
+   *  first message last */
+  mode: "job" | "ask" | "chat";
 }
+
+const RULES = `Ground rules:
+- Work only inside this repository (submodules under it included).
+- Never rewrite published history, never force-push, never discard uncommitted work, never run destructive git commands (reset --hard, clean, checkout -- on tracked files).
+- Do not add a Co-Authored-By trailer or any mention of Claude to commit messages.
+- No backticks in commit messages.
+- canopy shows this repo as "changed" for as long as git status lists anything at all: untracked files, and submodules with new commits, modified content, or untracked content inside them. The job is done when the list is empty and the branch is not ahead, or when the user has decided to leave something.
+- When you cannot finish the task as stated (nothing you would commit on your own, a decision only the user can make, a conflict), do not end the run by explaining. Ask with AskUserQuestion, giving the concrete options, then do what the user picks. Explaining is for the summary after the work.
+- Finish with a short plain-prose summary of what you did (commit hashes, remote, URL) and anything you left alone and why. No headings, no bullet lists.`;
+
+const SUBMODULE_STEP = `If an entry in git status is a submodule (git status --porcelain=v2 marks it with an S field, or git diff --submodule shows it), handle it inside the submodule first: go into its directory and commit there by the same rules (and when this task pushes, push the submodule before pushing this repo, so the pointer stays reachable), then stage the updated pointer in this repo and commit that. Untracked or modified content inside a submodule is a change to deal with, not a reason to stop.`;
+
+const STRAY_STEP = `For each file you would not commit on your own (build output, a stray backup, an editor file, something that looks accidental), ask with AskUserQuestion what to do with it: commit it, add it to .gitignore and commit that, delete it, or leave it. Do what the user picks. Skip the question only if the user's note already decided.`;
+
+/** The chat keeps the safety rules and drops the ones about how a job ends:
+ *  a conversation has no closing summary, and it is not done until the user
+ *  says so. */
+const CHAT_RULES = `Ground rules:
+- Work only inside this repository (submodules under it included).
+- Never rewrite published history, never force-push, never discard uncommitted work, never run destructive git commands (reset --hard, clean, checkout -- on tracked files).
+- Do not add a Co-Authored-By trailer or any mention of Claude to commit messages.
+- No backticks in commit messages.`;
 
 const GIT_READ = [
   "Bash(git status:*)",
@@ -43,6 +75,16 @@ export const ACTIONS: Record<RunAction, ActionSpec> = {
     noteRequired: false,
     allowedTools: [...GIT_READ, ...GIT_COMMIT],
     maxTurns: 30,
+    progress: "committing",
+    expectsChange: true,
+    mode: "job",
+    task: `Task: commit the current changes, so that git status is clean afterwards.
+1. Look at git status and the full diff, including untracked files.
+2. ${SUBMODULE_STEP}
+3. ${STRAY_STEP}
+4. Stage what belongs together. If the changes are clearly unrelated, make more than one commit, each with its own coherent set of files. Otherwise make one.
+5. Match the style of recent messages (git log --oneline -15): imperative subject under 65 characters, optional body explaining why.
+6. Do not push.`,
   },
   push: {
     label: "push",
@@ -53,6 +95,15 @@ export const ACTIONS: Record<RunAction, ActionSpec> = {
     noteRequired: false,
     allowedTools: [...GIT_READ, ...GIT_PUSH],
     maxTurns: 20,
+    progress: "pushing",
+    expectsChange: true,
+    mode: "job",
+    task: `Task: push the current branch, so that it is no longer ahead of its upstream.
+1. If the branch has an upstream, push to it. If not, push with -u to origin, or to the only remote if there is one; if several remotes and no origin, ask which one.
+2. If the push is rejected because the remote is ahead: fetch, and rebase onto the upstream only if the rebase completes without conflicts. On any conflict abort the rebase, leave the repo as it was, and ask how to proceed.
+3. If there are uncommitted changes as well, ask whether to commit them first (by the commit rules: submodules handled inside first, stray files decided one by one) or push only what is committed.
+4. If the commits being pushed point at submodule commits that are not on the submodule's remote, push the submodule first.
+5. Never force-push.`,
   },
   "commit-push": {
     label: "commit and push",
@@ -63,6 +114,20 @@ export const ACTIONS: Record<RunAction, ActionSpec> = {
     noteRequired: false,
     allowedTools: [...GIT_READ, ...GIT_COMMIT, ...GIT_PUSH],
     maxTurns: 40,
+    progress: "committing and pushing",
+    expectsChange: true,
+    mode: "job",
+    task: `Task: commit the current changes and push the branch, so that git status is clean and the branch is level with its upstream afterwards.
+Commit part:
+1. Look at git status and the full diff, including untracked files.
+2. ${SUBMODULE_STEP}
+3. ${STRAY_STEP}
+4. Stage what belongs together. If the changes are clearly unrelated, make more than one commit. Otherwise make one.
+5. Match the style of recent messages (git log --oneline -15): imperative subject under 65 characters, optional body explaining why.
+Push part:
+6. Push to the upstream; with no upstream, push with -u to origin or the only remote; if several remotes and no origin, ask which one.
+7. If the remote is ahead: fetch and rebase only if it completes without conflicts; otherwise abort the rebase and ask how to proceed. Never force-push.
+8. Check git status and the ahead count once more; if anything is left, deal with it or ask.`,
   },
   deploy: {
     label: "deploy",
@@ -83,6 +148,15 @@ export const ACTIONS: Record<RunAction, ActionSpec> = {
       "Bash(ls:*)",
     ],
     maxTurns: 80,
+    progress: "deploying",
+    expectsChange: false,
+    mode: "job",
+    task: `Task: deploy this project to where it normally deploys.
+1. Find out how it deploys: vercel.json or .vercel, firebase.json, wrangler.toml, fly.toml, a Dockerfile or compose file, deploy scripts in package.json, a Makefile, and anything CLAUDE.md or README says about deploying. If nothing indicates a deploy target, say so and stop.
+2. If there are uncommitted changes, ask with AskUserQuestion whether to commit them first, deploy as-is, or stop.
+3. Run the project's own gates before deploying (typecheck, lint, tests, build, in whatever form the project defines them). Stop and report if one fails; do not deploy a failing build.
+4. Deploy. Prefer the project's own script over a raw CLI call when both exist.
+5. Report the deployment URL and anything you noticed.`,
   },
   ask: {
     label: "ask claude…",
@@ -93,6 +167,10 @@ export const ACTIONS: Record<RunAction, ActionSpec> = {
     noteRequired: true,
     allowedTools: GIT_READ,
     maxTurns: 60,
+    progress: "working",
+    expectsChange: false,
+    mode: "ask",
+    task: `Task: see the note below.`,
   },
   chat: {
     label: "chat…",
@@ -105,28 +183,11 @@ export const ACTIONS: Record<RunAction, ActionSpec> = {
     // Per user message, not per chat: the CLI counts the agentic turns of one
     // reply and starts over with the next message.
     maxTurns: 100,
+    progress: "replying",
+    expectsChange: false,
+    mode: "chat",
+    task: `Task: hold a conversation. The user is chatting with you about this repository from canopy's chat box, and every later message arrives the same way. Answer each message on its own; when a message asks for work, do it. Keep replies short and in plain prose unless the user asks for more. Ask with AskUserQuestion when a choice is theirs to make.`,
   },
-};
-
-/** Actions whose whole point is to move git status; a run of one of these
- *  that leaves status untouched is reported as "no change". */
-export const EXPECTS_CHANGE: Record<RunAction, boolean> = {
-  commit: true,
-  push: true,
-  "commit-push": true,
-  deploy: false,
-  ask: false,
-  chat: false,
-};
-
-/** The card chip's word while the run is going. */
-export const PROGRESS: Record<RunAction, string> = {
-  commit: "committing",
-  push: "pushing",
-  "commit-push": "committing and pushing",
-  deploy: "deploying",
-  ask: "working",
-  chat: "replying",
 };
 
 /** Whether the action makes sense for the repo right now. `why` is shown as
@@ -164,66 +225,9 @@ export function repoFacts(repo: Repo): string[] {
   return facts;
 }
 
-const RULES = `Ground rules:
-- Work only inside this repository (submodules under it included).
-- Never rewrite published history, never force-push, never discard uncommitted work, never run destructive git commands (reset --hard, clean, checkout -- on tracked files).
-- Do not add a Co-Authored-By trailer or any mention of Claude to commit messages.
-- No backticks in commit messages.
-- canopy shows this repo as "changed" for as long as git status lists anything at all: untracked files, and submodules with new commits, modified content, or untracked content inside them. The job is done when the list is empty and the branch is not ahead, or when the user has decided to leave something.
-- When you cannot finish the task as stated (nothing you would commit on your own, a decision only the user can make, a conflict), do not end the run by explaining. Ask with AskUserQuestion, giving the concrete options, then do what the user picks. Explaining is for the summary after the work.
-- Finish with a short plain-prose summary of what you did (commit hashes, remote, URL) and anything you left alone and why. No headings, no bullet lists.`;
-
-const SUBMODULE_STEP = `If an entry in git status is a submodule (git status --porcelain=v2 marks it with an S field, or git diff --submodule shows it), handle it inside the submodule first: go into its directory and commit there by the same rules (and when this task pushes, push the submodule before pushing this repo, so the pointer stays reachable), then stage the updated pointer in this repo and commit that. Untracked or modified content inside a submodule is a change to deal with, not a reason to stop.`;
-
-const STRAY_STEP = `For each file you would not commit on your own (build output, a stray backup, an editor file, something that looks accidental), ask with AskUserQuestion what to do with it: commit it, add it to .gitignore and commit that, delete it, or leave it. Do what the user picks. Skip the question only if the user's note already decided.`;
-
-const TASKS: Record<RunAction, string> = {
-  commit: `Task: commit the current changes, so that git status is clean afterwards.
-1. Look at git status and the full diff, including untracked files.
-2. ${SUBMODULE_STEP}
-3. ${STRAY_STEP}
-4. Stage what belongs together. If the changes are clearly unrelated, make more than one commit, each with its own coherent set of files. Otherwise make one.
-5. Match the style of recent messages (git log --oneline -15): imperative subject under 65 characters, optional body explaining why.
-6. Do not push.`,
-  push: `Task: push the current branch, so that it is no longer ahead of its upstream.
-1. If the branch has an upstream, push to it. If not, push with -u to origin, or to the only remote if there is one; if several remotes and no origin, ask which one.
-2. If the push is rejected because the remote is ahead: fetch, and rebase onto the upstream only if the rebase completes without conflicts. On any conflict abort the rebase, leave the repo as it was, and ask how to proceed.
-3. If there are uncommitted changes as well, ask whether to commit them first (by the commit rules: submodules handled inside first, stray files decided one by one) or push only what is committed.
-4. If the commits being pushed point at submodule commits that are not on the submodule's remote, push the submodule first.
-5. Never force-push.`,
-  "commit-push": `Task: commit the current changes and push the branch, so that git status is clean and the branch is level with its upstream afterwards.
-Commit part:
-1. Look at git status and the full diff, including untracked files.
-2. ${SUBMODULE_STEP}
-3. ${STRAY_STEP}
-4. Stage what belongs together. If the changes are clearly unrelated, make more than one commit. Otherwise make one.
-5. Match the style of recent messages (git log --oneline -15): imperative subject under 65 characters, optional body explaining why.
-Push part:
-6. Push to the upstream; with no upstream, push with -u to origin or the only remote; if several remotes and no origin, ask which one.
-7. If the remote is ahead: fetch and rebase only if it completes without conflicts; otherwise abort the rebase and ask how to proceed. Never force-push.
-8. Check git status and the ahead count once more; if anything is left, deal with it or ask.`,
-  deploy: `Task: deploy this project to where it normally deploys.
-1. Find out how it deploys: vercel.json or .vercel, firebase.json, wrangler.toml, fly.toml, a Dockerfile or compose file, deploy scripts in package.json, a Makefile, and anything CLAUDE.md or README says about deploying. If nothing indicates a deploy target, say so and stop.
-2. If there are uncommitted changes, ask with AskUserQuestion whether to commit them first, deploy as-is, or stop.
-3. Run the project's own gates before deploying (typecheck, lint, tests, build, in whatever form the project defines them). Stop and report if one fails; do not deploy a failing build.
-4. Deploy. Prefer the project's own script over a raw CLI call when both exist.
-5. Report the deployment URL and anything you noticed.`,
-  ask: `Task: see the note below.`,
-  chat: `Task: hold a conversation. The user is chatting with you about this repository from canopy's chat box, and every later message arrives the same way. Answer each message on its own; when a message asks for work, do it. Keep replies short and in plain prose unless the user asks for more. Ask with AskUserQuestion when a choice is theirs to make.`,
-};
-
-/** The chat keeps the safety rules and drops the ones about how a job ends:
- *  a conversation has no closing summary, and it is not done until the user
- *  says so. */
-const CHAT_RULES = `Ground rules:
-- Work only inside this repository (submodules under it included).
-- Never rewrite published history, never force-push, never discard uncommitted work, never run destructive git commands (reset --hard, clean, checkout -- on tracked files).
-- Do not add a Co-Authored-By trailer or any mention of Claude to commit messages.
-- No backticks in commit messages.`;
-
 /** The full prompt for a run. The repo facts come from canopy's own status
  *  read, so Claude starts with the same picture the card shows. */
-export function buildPrompt(repo: Repo, action: RunAction, note: string): string {
+export function buildPrompt(repo: Repo, spec: ActionSpec, note: string): string {
   const facts = repoFacts(repo);
   const head = [
     `You are in the git repository ${repo.name} at ${repo.path}, launched from canopy (a multi-repo git dashboard).`,
@@ -233,17 +237,17 @@ export function buildPrompt(repo: Repo, action: RunAction, note: string): string
     .join("\n");
   const trimmed = note.trim();
   const noteBlock = trimmed
-    ? action === "ask"
+    ? spec.mode === "ask"
       ? `Note from the user:\n${trimmed}`
-      : action === "chat"
+      : spec.mode === "chat"
         ? `First message from the user:\n${trimmed}`
         : `Note from the user (follow it where it applies):\n${trimmed}`
     : "";
   // A chat's first message comes last, where a reply naturally follows it.
   const parts =
-    action === "chat"
-      ? [head, TASKS[action], CHAT_RULES, noteBlock]
-      : [head, TASKS[action], noteBlock, RULES];
+    spec.mode === "chat"
+      ? [head, spec.task, CHAT_RULES, noteBlock]
+      : [head, spec.task, noteBlock, RULES];
   return parts.filter(Boolean).join("\n\n");
 }
 
