@@ -3,7 +3,7 @@
  *  through its hooks (the check and the evaluator), pure in its logic, so the
  *  tests drive it with a fake runner. */
 
-import { type ActionSpec } from "./actions";
+import { checkWhen, type ActionSpec } from "./actions";
 import { decide, verdictState } from "./verdict";
 import {
   isFlowActive,
@@ -19,6 +19,17 @@ import {
   type Workflow,
   type VerdictAnswers,
 } from "./types";
+
+export const FLEET_CONCURRENCY = 3;
+
+/** Why a fleet passes a repo over, or null when it may run. */
+export function fleetSkipReason(repo: Repo, workflow: Workflow): string | null {
+  if (repo.forge) return "a forge repo has no checkout";
+  if (repo.error) return "not a readable repo";
+  if (repo.host) return "Claude runs only work on this machine";
+  const c = checkWhen(repo, workflow.when);
+  return c.ok ? null : c.why;
+}
 
 const KEEP_FINISHED = 60;
 
@@ -107,6 +118,7 @@ export class Flows {
   private live = new Map<string, LiveFlow>();
   /** run id to flow id, for onRun */
   private byRun = new Map<string, string>();
+  private fleetsLive = new Map<string, { fleet: Fleet; workflow: Workflow; note: string; pending: Repo[]; agentFor: (repo: Repo) => AgentSettings }>();
 
   constructor(
     private runner: FlowRunner,
@@ -265,9 +277,107 @@ export class Flows {
   }
 
   stopAll(): void {
-    for (const l of this.live.values()) {
-      if (isFlowActive(l.flow)) this.stop(l.flow.id);
+    for (const f of this.fleetsLive.values()) if (f.fleet.status === "working") this.stopFleet(f.fleet.id);
+    for (const l of this.live.values()) if (isFlowActive(l.flow)) this.stop(l.flow.id);
+  }
+
+  fleets(): Fleet[] {
+    return [...this.fleetsLive.values()].map((f) => f.fleet);
+  }
+
+  getFleet(id: string): Fleet | undefined {
+    return this.fleetsLive.get(id)?.fleet;
+  }
+
+  startFleet(repos: Repo[], workflow: Workflow, note: string, agentFor: (repo: Repo) => AgentSettings): Fleet {
+    const fleet: Fleet = {
+      id: crypto.randomUUID().slice(0, 8),
+      workflow: workflow.name,
+      verb: workflow.verb,
+      note: note.trim(),
+      repos: repos.map((r) => {
+        const skipped = fleetSkipReason(r, workflow);
+        return skipped ? { repoId: r.id, skipped } : { repoId: r.id };
+      }),
+      status: "working",
+      startedAt: Date.now(),
+    };
+    const pending = repos.filter((r) => !fleetSkipReason(r, workflow));
+    this.fleetsLive.set(fleet.id, { fleet, workflow, note, pending, agentFor });
+    this.pump(fleet.id);
+    return fleet;
+  }
+
+  stopFleet(id: string): Fleet {
+    const lf = this.fleetsLive.get(id);
+    if (!lf) throw new Error(`unknown fleet: ${id}`);
+    if (lf.fleet.status !== "working") return lf.fleet;
+    for (const r of lf.pending) {
+      const entry = lf.fleet.repos.find((x) => x.repoId === r.id);
+      if (entry) entry.skipped = "stopped before it started";
     }
+    lf.pending = [];
+    // Marked stopped before the flows end, or the last flow's end would
+    // pump the fleet and finish it as done.
+    lf.fleet.status = "stopped";
+    lf.fleet.endedAt = Date.now();
+    for (const l of this.live.values()) {
+      if (l.flow.fleetId === id && isFlowActive(l.flow)) this.stop(l.flow.id);
+    }
+    this.hooks.onFleet(lf.fleet);
+    return lf.fleet;
+  }
+
+  dismissFleet(id: string): void {
+    const lf = this.fleetsLive.get(id);
+    if (!lf) return;
+    if (lf.fleet.status === "working") throw new Error("stop the fleet before dismissing it");
+    for (const r of lf.fleet.repos) {
+      if (r.flowId && this.live.has(r.flowId)) {
+        try {
+          this.dismiss(r.flowId);
+        } catch {
+          // a flow still active stays; it can be dismissed on its own later
+        }
+      }
+    }
+    this.fleetsLive.delete(id);
+    this.hooks.onFleetGone(id);
+  }
+
+  private running(fleetId: string): number {
+    let n = 0;
+    for (const l of this.live.values()) if (l.flow.fleetId === fleetId && isFlowActive(l.flow)) n += 1;
+    return n;
+  }
+
+  /** Starts pending repos up to the cap; ends the fleet when nothing is left. */
+  private pump(fleetId: string): void {
+    const lf = this.fleetsLive.get(fleetId);
+    if (!lf || lf.fleet.status !== "working") return;
+    while (lf.pending.length && this.running(fleetId) < FLEET_CONCURRENCY) {
+      const repo = lf.pending.shift();
+      if (!repo) break;
+      const entry = lf.fleet.repos.find((x) => x.repoId === repo.id);
+      try {
+        const flow = this.start(repo, lf.workflow, lf.note, lf.agentFor(repo), fleetId);
+        if (entry) entry.flowId = flow.id;
+      } catch (err) {
+        if (entry) entry.skipped = String(err instanceof Error ? err.message : err);
+      }
+    }
+    if (!lf.pending.length && this.running(fleetId) === 0) {
+      this.finishFleet(lf, "done");
+      return;
+    }
+    this.hooks.onFleet(lf.fleet);
+  }
+
+  private finishFleet(lf: { fleet: Fleet }, status: "done" | "stopped"): void {
+    if (lf.fleet.status !== "working") return;
+    lf.fleet.status = status;
+    lf.fleet.endedAt = Date.now();
+    this.hooks.onFleet(lf.fleet);
   }
 
   private emit(live: LiveFlow): void {
@@ -430,8 +540,9 @@ export class Flows {
     void this.settle(live);
   }
 
-  /** Task 6 fills this in: a fleet's flow ending starts the next repo. */
-  protected onFlowEnd(_flow: Flow): void {}
+  protected onFlowEnd(flow: Flow): void {
+    if (flow.fleetId) this.pump(flow.fleetId);
+  }
 
   private async settle(live: LiveFlow): Promise<void> {
     if (!live.workflow.expectsChange || !this.hooks.status) return;

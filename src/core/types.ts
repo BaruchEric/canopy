@@ -393,7 +393,9 @@ export type ServerEvent =
   | { type: "run"; run: Run }
   | { type: "run-gone"; id: string }
   | { type: "flow"; flow: Flow }
-  | { type: "flow-gone"; id: string };
+  | { type: "flow-gone"; id: string }
+  | { type: "fleet"; fleet: Fleet }
+  | { type: "fleet-gone"; id: string };
 
 /* ---------- the archive: what claude-history holds for each repo ---------- */
 
@@ -694,7 +696,23 @@ export interface Flow {
 export const isFlowActive = (f: Flow): boolean =>
   f.status === "working" || f.status === "waiting" || f.status === "gated";
 
-/** filled in by the fleet task */
+/* ---------- fleets: one workflow over many repos ---------- */
+
+export interface FleetRepo {
+  repoId: string;
+  /** the flow, once started */
+  flowId?: string;
+  /** why this repo was passed over, when it was */
+  skipped?: string;
+}
+
 export interface Fleet {
   id: string;
+  workflow: string;
+  verb: string;
+  note: string;
+  repos: FleetRepo[];
+  status: "working" | "done" | "stopped";
+  startedAt: number;
+  endedAt?: number;
 }

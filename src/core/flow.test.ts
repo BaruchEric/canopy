@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { Flows, stepSpec, summaryOf, type CheckResult, type FlowRunner } from "./flow";
 import { parseWorkflow } from "./workflow";
-import { DEFAULT_AGENT, type Flow, type Repo, type Run, type VerdictAnswers, type Workflow } from "./types";
+import { DEFAULT_AGENT, type Fleet, type Flow, type Repo, type Run, type VerdictAnswers, type Workflow } from "./types";
 import type { ActionSpec } from "./actions";
 
 const flush = () => new Promise<void>((r) => setTimeout(r, 0));
@@ -90,11 +90,13 @@ function setup(opts: {
   const changes: Flow[] = [];
   const gone: string[] = [];
   const checks: string[] = [];
+  const fleets: Fleet[] = [];
+  const fleetGone: string[] = [];
   const flows = new Flows(runner, {
     onChange: (f) => changes.push(structuredClone(f)),
     onGone: (id) => gone.push(id),
-    onFleet: () => {},
-    onFleetGone: () => {},
+    onFleet: (f) => fleets.push(structuredClone(f)),
+    onFleetGone: (id) => fleetGone.push(id),
     check: async (_repo, command) => {
       checks.push(command);
       return opts.check ? opts.check(command) : { exit: 0, output: "" };
@@ -103,7 +105,7 @@ function setup(opts: {
     status: opts.status,
   });
   runner.onChange = (run) => flows.onRun(run);
-  return { runner, flows, changes, gone, checks };
+  return { runner, flows, changes, gone, checks, fleets, fleetGone };
 }
 
 describe("stepSpec", () => {
@@ -326,5 +328,71 @@ describe("Flows", () => {
     expect(f?.status).toBe("stopped");
     expect(f?.steps.map((s) => s.status)).toEqual(["failed", "skipped"]);
     expect(runner.specs.length).toBe(1);
+  });
+});
+
+describe("fleets", () => {
+  const dirty = (id: string): Repo => ({
+    ...repo(),
+    id,
+    name: id,
+    path: `/tmp/${id}`,
+    status: { branch: "main", upstream: "o/main", ahead: 0, behind: 0, files: [{ path: "a", index: "M", worktree: " ", untracked: false }], lastCommit: null } as unknown as Repo["status"],
+  });
+  const DIRTY_WF = wf(`---\nblurb: b\nwhen: dirty\n---\n\n## Do\n\nx\n`);
+
+  test("skips repos the precondition or the machine rules out, runs three at a time, and ends when all have", async () => {
+    const { runner, flows, fleets } = setup();
+    const repos = [dirty("a"), dirty("b"), dirty("c"), dirty("d"), { ...repo(), id: "clean", name: "clean" }, { ...dirty("far"), host: "box" }, { ...dirty("forge"), forge: "x" } as unknown as Repo, { ...dirty("bad"), error: "nope" }];
+    const fleet = flows.startFleet(repos, DIRTY_WF, "n", () => DEFAULT_AGENT);
+    expect(fleet.repos.map((r) => r.skipped ?? "run")).toEqual(["run", "run", "run", "run", "nothing to commit", "Claude runs only work on this machine", "a forge repo has no checkout", "not a readable repo"]);
+    expect(runner.specs.length).toBe(3);
+    expect(flows.list().filter((f) => f.fleetId === fleet.id).length).toBe(3);
+    runner.end("run1", "done", "ok");
+    await flush();
+    expect(runner.specs.length).toBe(4);
+    runner.end("run2", "done", "ok");
+    runner.end("run3", "done", "ok");
+    runner.end("run4", "done", "ok");
+    await flush();
+    const f = flows.getFleet(fleet.id);
+    expect(f?.status).toBe("done");
+    expect(f?.repos.filter((r) => r.flowId).length).toBe(4);
+    expect(fleets.at(-1)?.status).toBe("done");
+  });
+
+  test("a parked flow holds its slot", async () => {
+    const ASK = wf(`---\nblurb: b\n---\n\n## Do\ngate: ask\n\nx\n`);
+    const { runner, flows } = setup();
+    flows.startFleet([dirty("a"), dirty("b"), dirty("c"), dirty("d")], ASK, "", () => DEFAULT_AGENT);
+    runner.end("run1", "done", "ok");
+    await flush();
+    expect(runner.specs.length).toBe(3);
+    const parked = flows.list().find((f) => f.status === "gated");
+    if (!parked) throw new Error("nothing parked");
+    flows.resume(parked.id, "continue");
+    await flush();
+    expect(runner.specs.length).toBe(4);
+  });
+
+  test("stop ends the running flows and drops the pending ones", async () => {
+    const { runner, flows, fleetGone } = setup();
+    const fleet = flows.startFleet([dirty("a"), dirty("b"), dirty("c"), dirty("d")], DIRTY_WF, "", () => DEFAULT_AGENT);
+    flows.stopFleet(fleet.id);
+    await flush();
+    expect(runner.stopped.sort()).toEqual(["run1", "run2", "run3"]);
+    const f = flows.getFleet(fleet.id);
+    expect(f?.status).toBe("stopped");
+    expect(f?.repos[3]?.skipped).toBe("stopped before it started");
+    flows.dismissFleet(fleet.id);
+    expect(fleetGone).toEqual([fleet.id]);
+  });
+
+  test("a repo that is busy when its turn comes is skipped, not failed", async () => {
+    const { runner, flows } = setup();
+    flows.start(dirty("a"), TWO, "", DEFAULT_AGENT);
+    const fleet = flows.startFleet([dirty("a"), dirty("b")], DIRTY_WF, "", () => DEFAULT_AGENT);
+    expect(flows.getFleet(fleet.id)?.repos[0]?.skipped).toContain("already has");
+    expect(runner.specs.length).toBe(2);
   });
 });
