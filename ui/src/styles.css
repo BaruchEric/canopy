@@ -3009,3 +3009,34 @@ body.resizing {
 .verdict-bars dd { margin: 0; display: flex; align-items: center; gap: 8px; }
 .verdict-bars .bar { display: inline-block; height: 8px; border-radius: 4px; background: var(--sky); min-width: 2px; }
 .verdict-bars .pct { color: var(--ink-dim); }
+
+/* ---------- select mode and fleets ---------- */
+.card .tick {
+  width: 16px; height: 16px; border: 1px solid var(--hair); border-radius: 4px;
+  display: inline-flex; align-items: center; justify-content: center;
+  font-size: 11px; margin-right: 6px; flex: none;
+}
+.card .tick.on { background: var(--moss); border-color: var(--moss); color: var(--bark1); }
+.card.picked { outline: 2px solid var(--moss); }
+.card.unpickable { opacity: 0.45; }
+.select-bar {
+  display: flex; align-items: center; gap: 8px; padding: 8px 16px;
+  border-top: 1px solid var(--hair); background: var(--float);
+}
+.select-count { font-size: 13px; color: var(--ink-dim); }
+.select-wf { font: inherit; font-size: 13px; padding: 4px 8px; }
+.fleet-list { margin: 8px 0; }
+.fleet-skipped { margin: 4px 0; color: var(--ink-dim); font-size: 13px; }
+.fleet-skipped .eyebrow { display: block; }
+.fleet-needs { border: 1px solid var(--lichen); border-radius: 8px; padding: 12px; margin-bottom: 12px; }
+.fleet-rows { list-style: none; margin: 0; padding: 0; }
+.fleet-row { display: grid; grid-template-columns: max-content 1fr; gap: 2px 12px; padding: 6px 0; border-bottom: 1px solid var(--hair); align-items: baseline; }
+.fleet-name { font: inherit; background: none; border: 0; padding: 0; cursor: pointer; display: inline-flex; align-items: center; gap: 6px; color: var(--ink); }
+.fleet-name:disabled { cursor: default; color: var(--ink-dim); }
+.fleet-name .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--hair); }
+.fleet-row.st-working .dot { background: var(--sky); }
+.fleet-row.st-waiting .dot { background: var(--lichen); }
+.fleet-row.st-done .dot { background: var(--moss); }
+.fleet-row.st-failed .dot, .fleet-row.st-stopped .dot { background: var(--rust); }
+.fleet-word { color: var(--ink-dim); font-size: 13px; }
+.fleet-summary { grid-column: 2; font-size: 13px; }

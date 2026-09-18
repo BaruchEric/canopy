@@ -89,6 +89,9 @@ export function TopBar() {
   const sidebarOpen = useStore((s) => s.sidebarOpen);
   const toggleSidebar = useStore((s) => s.toggleSidebar);
   const openSearch = useStore((s) => s.openSearch);
+  const selecting = useStore((s) => s.selecting);
+  const selected = useStore((s) => s.selected);
+  const setSelecting = useStore((s) => s.setSelecting);
   const [scanning, setScanning] = useState(false);
 
   const doRescan = async () => {
@@ -193,6 +196,16 @@ export function TopBar() {
           <circle cx="11" cy="11" r="7" />
           <path d="m20 20-3.5-3.5" />
         </svg>
+      </button>
+
+      <button
+        type="button"
+        className={selecting ? "pill on" : "pill"}
+        aria-pressed={selecting}
+        title="Pick repos to run one workflow on all of them"
+        onClick={() => setSelecting(!selecting)}
+      >
+        {selecting ? `${selected.length} picked` : "select"}
       </button>
 
       <Seg

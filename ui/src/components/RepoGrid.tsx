@@ -17,6 +17,10 @@ const RepoCard = memo(function RepoCard({ repo }: { repo: Repo }) {
   const flow = useStore((s) => flowFor(s, repo.id));
   const overview = useStore((s) => s.history);
   const history = historyFor(overview, repo.id);
+  const selecting = useStore((s) => s.selecting);
+  const picked = useStore((s) => s.selected.includes(repo.id));
+  const toggleSelected = useStore((s) => s.toggleSelected);
+  const canPick = !repo.forge && !repo.error && !repo.host;
   const [pulse, setPulse] = useState(false);
   const first = useRef(true);
 
@@ -45,20 +49,37 @@ const RepoCard = memo(function RepoCard({ repo }: { repo: Repo }) {
       : "";
   return (
     <article
-      className={`card s-${state}${pulse ? " pulse" : ""}${live}`}
-      onClick={(e) => openRepo(repo.id, e)}
+      className={`card s-${state}${pulse ? " pulse" : ""}${live}${selecting && picked ? " picked" : ""}${selecting && !canPick ? " unpickable" : ""}`}
+      onClick={(e) => {
+        if (selecting) {
+          if (canPick) toggleSelected(repo.id);
+          return;
+        }
+        openRepo(repo.id, e);
+      }}
       onAuxClick={(e) => {
         // middle click behaves like it does on a link
         if (e.button === 1) openRepo(repo.id, { metaKey: true });
       }}
       onKeyDown={(e) => {
-        if (e.key === "Enter") openRepo(repo.id, e);
+        if (e.key === "Enter") {
+          if (selecting) {
+            if (canPick) toggleSelected(repo.id);
+            return;
+          }
+          openRepo(repo.id, e);
+        }
       }}
       tabIndex={0}
       role="button"
       aria-label={forge ? `Open ${repo.name} on the forge` : `Open ${repo.name}`}
     >
       <div className="card-top">
+        {selecting && (
+          <span className={`tick${picked ? " on" : ""}`} aria-hidden="true">
+            {picked ? "✓" : ""}
+          </span>
+        )}
         <span className="glyph">{GLYPH[state]}</span>
         <span className="card-name">{repo.name}</span>
         {repo.host && (

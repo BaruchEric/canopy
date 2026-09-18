@@ -6,6 +6,7 @@ import { Dock } from "./components/Dock";
 import { RepoGrid } from "./components/RepoGrid";
 import { Resizer } from "./components/Resizer";
 import { RunSheet } from "./components/RunSheet";
+import { SelectBar } from "./components/SelectBar";
 import { Sidebar } from "./components/Sidebar";
 import { Solo } from "./components/Solo";
 import { ShellSolo, TermDock } from "./components/TermDock";
@@ -181,6 +182,7 @@ export function App() {
         <Dock />
       </div>
       </>}
+      <SelectBar />
       <TermDock />
       <RunSheet />
     </div>

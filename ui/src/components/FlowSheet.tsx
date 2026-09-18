@@ -1,8 +1,10 @@
 import { useState } from "react";
+import { useShallow } from "zustand/react/shallow";
 import { describeAgent, isDefaultAgent } from "../../../src/core/agent";
 import { repoFacts } from "../../../src/core/actions";
-import { isFlowActive, type Flow, type FlowStep, type Repo, type Verdict } from "../../../src/core/types";
-import { flowWord, stepWord } from "../flows";
+import { fleetSkipReason } from "../../../src/core/flow";
+import { isFlowActive, type Fleet, type Flow, type FlowStep, type Repo, type Verdict } from "../../../src/core/types";
+import { fleetCounts, flowWord, oldestParked, stepWord } from "../flows";
 import { agentFor, useStore } from "../store";
 import { Timeline } from "./RunSheet";
 
@@ -255,8 +257,151 @@ export function FlowConsole({ flowId }: { flowId: string }) {
 }
 
 export function FleetPlan({ workflow }: { workflow: string }) {
-  return <p className="sheet-empty">fleet plan for {workflow}: task 10</p>;
+  const close = useStore((s) => s.closeSheet);
+  const startFleet = useStore((s) => s.startFleet);
+  const selected = useStore((s) => s.selected);
+  const repos = useStore(useShallow((s) => s.repos.filter((r) => selected.includes(r.id))));
+  const entry = useStore((s) => Object.values(s.workflows).flat().find((e) => e.ok && e.workflow.name === workflow));
+  const [note, setNote] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const w = entry && entry.ok ? entry.workflow : undefined;
+  const rows = repos.map((r) => ({ repo: r, skipped: w ? fleetSkipReason(r, w) : null }));
+  const running = rows.filter((r) => !r.skipped);
+  const skipped = rows.filter((r) => r.skipped);
+  const byReason = new Map<string, string[]>();
+  for (const r of skipped) byReason.set(r.skipped ?? "", [...(byReason.get(r.skipped ?? "") ?? []), r.repo.name]);
+  const go = async () => {
+    setBusy(true);
+    setError(null);
+    try {
+      await startFleet(workflow, note);
+    } catch (err) {
+      setError(errText(err));
+      setBusy(false);
+    }
+  };
+  return (
+    <>
+      <header className="sheet-head">
+        <div>
+          <div className="eyebrow">with claude · fleet</div>
+          <h2 className="sheet-title">{w?.verb ?? workflow} <span className="sheet-repo">{running.length} of {repos.length} repos</span></h2>
+        </div>
+        <button type="button" className="mini close" onClick={close} aria-label="Close">✕</button>
+      </header>
+      <div className="sheet-body plan">
+        {w && <p className="blurb">{w.blurb}</p>}
+        <p className="fleet-list">{running.map((r) => r.repo.name).join(", ") || "nothing to run on"}</p>
+        {[...byReason.entries()].map(([why, names]) => (
+          <p key={why} className="fleet-skipped"><span className="eyebrow">skipped, {why}</span>{names.join(", ")}</p>
+        ))}
+        <textarea className="plan-note" rows={3} placeholder={w?.notePlaceholder ?? "anything Claude should know (optional)"} value={note} onChange={(e) => setNote(e.target.value)} aria-label="Note for Claude" />
+        {error && <p className="note err">{error}</p>}
+      </div>
+      <footer className="sheet-foot">
+        <span className="sheet-hint">Three repos at a time. A workflow that stops to ask holds its place until you answer.</span>
+        <button type="button" className="mini" onClick={close}>cancel</button>
+        <button type="button" className="mini strong" disabled={busy || !running.length} onClick={() => void go()}>{busy ? "starting…" : `run on ${running.length}`}</button>
+      </footer>
+    </>
+  );
 }
+
 export function FleetSheet({ fleetId }: { fleetId: string }) {
-  return <p className="sheet-empty">fleet {fleetId}: task 10</p>;
+  const close = useStore((s) => s.closeSheet);
+  const fleet = useStore((s) => s.fleets[fleetId]);
+  const flows = useStore((s) => s.flows);
+  const repos = useStore((s) => s.repos);
+  const stopFleet = useStore((s) => s.stopFleet);
+  const dismissFleet = useStore((s) => s.dismissFleet);
+  const showFlow = useStore((s) => s.showFlow);
+  const resumeFlow = useStore((s) => s.resumeFlow);
+  const answerRun = useStore((s) => s.answerRun);
+  const runs = useStore((s) => s.runs);
+  const [error, setError] = useState<string | null>(null);
+  if (!fleet) {
+    return (
+      <>
+        <p className="sheet-empty">That fleet is gone.</p>
+        <footer className="sheet-foot"><span className="spacer" /><button type="button" className="mini" onClick={close}>close</button></footer>
+      </>
+    );
+  }
+  const counts = fleetCounts(fleet, flows);
+  const parked = oldestParked(fleet, flows);
+  const parkedStep = parked?.steps[parked.current];
+  const parkedRun = parkedStep?.runId ? runs[parkedStep.runId] : undefined;
+  const working = fleet.status === "working";
+  const act = async (fn: () => Promise<void>) => {
+    setError(null);
+    try {
+      await fn();
+    } catch (err) {
+      setError(errText(err));
+    }
+  };
+  const name = (id: string) => repos.find((r) => r.id === id)?.name ?? id;
+  const word = (r: Fleet["repos"][number]): string => {
+    if (r.skipped) return `skipped, ${r.skipped}`;
+    const f = r.flowId ? flows[r.flowId] : undefined;
+    if (!f) return "waiting its turn";
+    return flowWord(f, true);
+  };
+  return (
+    <>
+      <header className="sheet-head">
+        <div>
+          <div className="eyebrow">with claude · fleet</div>
+          <h2 className="sheet-title">{fleet.verb} <span className="sheet-repo">{fleet.repos.length} repos</span></h2>
+        </div>
+        <span className={`status st-${counts.needsYou ? "waiting" : working ? "working" : "done"}`}>
+          <span className="dot" />
+          {working
+            ? `${counts.active} running, ${counts.pending} to go${counts.needsYou ? `, ${counts.needsYou} need${counts.needsYou === 1 ? "s" : ""} you` : ""}`
+            : `${counts.done} done, ${counts.failed} failed, ${counts.skipped} skipped`}
+        </span>
+        <button type="button" className="mini close" onClick={close} aria-label="Close">✕</button>
+      </header>
+      <div className="sheet-body console">
+        {parked && parkedStep && (
+          <section className="fleet-needs">
+            <p className="eyebrow">needs you: {name(parked.repoId)}</p>
+            {parked.status === "gated" ? (
+              <Gate flow={parked} step={parkedStep} onChoose={(c) => void act(() => resumeFlow(parked.id, c))} />
+            ) : parkedRun?.prompt ? (
+              <Timeline run={parkedRun} repo={repos.find((r) => r.id === parked.repoId)} error={null} onAnswer={(a) => void act(() => answerRun(parkedRun.id, parkedRun.prompt?.id ?? "", a))} />
+            ) : null}
+          </section>
+        )}
+        <ul className="fleet-rows">
+          {fleet.repos.map((r) => {
+            const f = r.flowId ? flows[r.flowId] : undefined;
+            const st = r.skipped ? "skipped" : !f ? "pending" : f.status === "gated" ? "waiting" : f.status;
+            const summary = f && !isFlowActive(f) ? (f.steps[f.current]?.summary ?? "").split(/(?<=\.)\s/)[0] : "";
+            return (
+              <li key={r.repoId} className={`fleet-row st-${st}`}>
+                <button type="button" className="fleet-name" disabled={!f} onClick={() => f && showFlow(f.id)}>
+                  <span className="dot" />
+                  {name(r.repoId)}
+                </button>
+                <span className="fleet-word">{word(r)}</span>
+                {summary && <span className="fleet-summary">{summary}</span>}
+              </li>
+            );
+          })}
+        </ul>
+        {error && <p className="note err">{error}</p>}
+      </div>
+      <footer className="sheet-foot">
+        <span className="spacer" />
+        {working ? (
+          <button type="button" className="mini" onClick={() => void act(() => stopFleet(fleet.id))}>stop all</button>
+        ) : (
+          <button type="button" className="mini" onClick={() => void act(() => dismissFleet(fleet.id))}>dismiss</button>
+        )}
+        <button type="button" className="mini strong" onClick={close}>{working ? "hide" : "close"}</button>
+      </footer>
+    </>
+  );
 }
