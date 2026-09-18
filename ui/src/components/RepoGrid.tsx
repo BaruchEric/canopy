@@ -58,6 +58,7 @@ const RepoCard = memo(function RepoCard({ repo }: { repo: Repo }) {
         openRepo(repo.id, e);
       }}
       onAuxClick={(e) => {
+        if (selecting) return;
         // middle click behaves like it does on a link
         if (e.button === 1) openRepo(repo.id, { metaKey: true });
       }}

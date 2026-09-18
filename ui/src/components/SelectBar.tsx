@@ -2,12 +2,11 @@ import { useEffect, useState } from "react";
 import { useShallow } from "zustand/react/shallow";
 import { useStore, visibleRepos } from "../store";
 import { selectable } from "../flows";
-import { api } from "../api";
-import type { WorkflowEntry } from "../../../src/core/types";
 
 /** The bar along the bottom in select mode: the count, a workflow picker,
- *  and start. The picker lists the bundled and user workflows, fetched
- *  through the first visible repo since the list is the same for all. */
+ *  and start. The picker lists the bundled and user workflows, loaded into
+ *  the store through the first visible repo since the list is the same
+ *  for all. */
 export function SelectBar() {
   const selecting = useStore((s) => s.selecting);
   const selected = useStore((s) => s.selected);
@@ -15,22 +14,20 @@ export function SelectBar() {
   const planFleet = useStore((s) => s.planFleet);
   const visible = useStore(useShallow((s) => selectable(visibleRepos(s)).map((r) => r.id)));
   const setSelected = useStore((s) => s.setSelected);
-  const [list, setList] = useState<WorkflowEntry[]>([]);
+  const loadWorkflows = useStore((s) => s.loadWorkflows);
+  const first = visible[0];
+  const list = useStore(
+    useShallow((s) => (first ? (s.workflows[first] ?? []) : []).filter((e) => e.ok && e.workflow.source !== "repo")),
+  );
   const [workflow, setWorkflow] = useState("");
   useEffect(() => {
-    if (!selecting || !visible[0]) return;
-    let live = true;
-    void api.workflows(visible[0]).then((l) => {
-      if (!live) return;
-      const ok = l.filter((e) => e.ok && e.workflow.source !== "repo");
-      setList(ok);
-      const first = ok[0];
-      if (first?.ok && !workflow) setWorkflow(first.workflow.name);
-    });
-    return () => {
-      live = false;
-    };
-  }, [selecting, visible[0]]);
+    if (!selecting || !first) return;
+    void loadWorkflows(first);
+  }, [selecting, first, loadWorkflows]);
+  useEffect(() => {
+    const firstOk = list[0];
+    if (firstOk?.ok && !workflow) setWorkflow(firstOk.workflow.name);
+  }, [list, workflow]);
   if (!selecting) return null;
   return (
     <div className="select-bar" role="toolbar" aria-label="Fleet">

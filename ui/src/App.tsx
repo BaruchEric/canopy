@@ -181,8 +181,8 @@ export function App() {
         <RepoGrid />
         <Dock />
       </div>
-      </>}
       <SelectBar />
+      </>}
       <TermDock />
       <RunSheet />
     </div>
