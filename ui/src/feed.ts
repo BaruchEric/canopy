@@ -5,6 +5,7 @@
 import type {
   Fleet,
   Flow,
+  Job,
   Repo,
   RepoStatus,
   Run,
@@ -20,7 +21,8 @@ export type FeedKind =
   | "flow"
   | "fleet"
   | "workspace"
-  | "agent";
+  | "agent"
+  | "launch";
 
 export interface FeedEntry {
   id: number;
@@ -47,6 +49,10 @@ export interface FeedSnapshot {
   flows: Record<string, Flow>;
   fleets: Record<string, Fleet>;
   workspaces: Workspace[];
+  /** downloads and builds; absent in a snapshot from before there were any */
+  jobs?: Record<string, Job>;
+  /** launch settings by repo path, so a change can be told from a no-op */
+  launchers?: Record<string, unknown>;
 }
 
 /** how many entries the feed keeps; older ones fall off the top */
@@ -320,7 +326,68 @@ export function describeEvent(
       const fleet = prev.fleets[ev.id];
       return [{ at, kind: "fleet", source: "", text: fleet ? `fleet ${fleet.workflow} dismissed` : "fleet dismissed", quiet: true }];
     }
+    case "job":
+      return jobLines(ev, prev, at);
+    case "job-gone": {
+      const job = prev.jobs?.[ev.id];
+      const repo = job ? prev.repos.find((r) => r.id === job.repoId) : undefined;
+      return [about(repo, "launch", at, job ? `${job.title} dismissed` : "job dismissed", true)];
+    }
+    case "builds": {
+      const repo = prev.repos.find((r) => r.id === ev.repoId);
+      const name = buildName(ev.build);
+      const text =
+        ev.what === "launched"
+          ? `launched ${name}`
+          : ev.what === "exited"
+            ? `${name} exited`
+            : ev.what === "removed"
+              ? `removed ${name}`
+              : ev.what === "installed"
+                ? `installed ${name}`
+                : `built ${name}`;
+      // a job's own end line already said it was installed or built
+      return [about(repo, "launch", at, text, ev.what === "installed" || ev.what === "built" || ev.what === "exited")];
+    }
+    case "launchers":
+      return launcherLines(ev, prev, at);
   }
+}
+
+/** `release:v1.0` as "v1.0", `pr:12` as "PR #12", `local` as "this checkout". */
+export function buildName(key: string): string {
+  if (key === "local") return "this checkout";
+  const pr = /^pr:(\d+)$/.exec(key);
+  if (pr) return `PR #${pr[1]}`;
+  return key.replace(/^release:/, "");
+}
+
+function jobLines(ev: Extract<ServerEvent, { type: "job" }>, prev: FeedSnapshot, at: number): FeedLine[] {
+  const job = ev.job;
+  const before = prev.jobs?.[job.id];
+  const repo = prev.repos.find((r) => r.id === job.repoId);
+  const lines: FeedLine[] = [];
+  const say = (text: string, quiet = false) => lines.push(about(repo, "launch", at, text, quiet));
+  if (!before) say(`${job.title} started`);
+  if (before?.status !== job.status) {
+    const secs = job.endedAt ? ` in ${Math.round((job.endedAt - job.startedAt) / 1000)}s` : "";
+    if (job.status === "done") say(`${job.title} done${secs}`);
+    else if (job.status === "failed") say(`${job.title} failed${job.error ? `: ${clip(job.error, 100)}` : ""}`);
+    else if (job.status === "stopped") say(`${job.title} stopped`);
+  }
+  return lines;
+}
+
+function launcherLines(ev: Extract<ServerEvent, { type: "launchers" }>, prev: FeedSnapshot, at: number): FeedLine[] {
+  const lines: FeedLine[] = [];
+  const was = prev.launchers ?? {};
+  for (const path of new Set([...Object.keys(was), ...Object.keys(ev.launchers)])) {
+    if (JSON.stringify(was[path] ?? null) === JSON.stringify(ev.launchers[path] ?? null)) continue;
+    const repo = prev.repos.find((r) => r.path === path);
+    const text = path in ev.launchers ? "launch settings changed" : "launch settings reset";
+    lines.push(repo ? about(repo, "launch", at, text) : { at, kind: "launch", source: "", text: `${text} for ${path}`, quiet: false });
+  }
+  return lines;
 }
 
 /** Appends lines to the feed, numbering them from `seq`, and keeps the feed

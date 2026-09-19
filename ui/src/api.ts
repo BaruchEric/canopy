@@ -11,9 +11,14 @@ import type {
   HistorySession,
   HistorySessionDetail,
   HistoryWindow,
+  Job,
+  LaunchSettings,
   Listing,
   LogEntry,
+  Build,
+  Pull,
   PushAccess,
+  Release,
   Repo,
   Run,
   RunAction,
@@ -206,6 +211,48 @@ export const api = {
       body: JSON.stringify({ id }),
     }),
   dismissFleet: (id: string) => req<{ ok: true }>(`/api/fleet?${rq(id)}`, { method: "DELETE" }),
+  /* the launcher: releases, pull requests and builds of one repo */
+  releases: (id: string) => req<Release[]>(`/api/repos/releases?${rq(id)}`),
+  pulls: (id: string) => req<Pull[]>(`/api/repos/pulls?${rq(id)}`),
+  builds: (id: string) => req<Build[]>(`/api/repos/builds?${rq(id)}`),
+  /** downloads and unpacks one release's asset; `asset` overrides the pick */
+  install: (id: string, tag: string, asset?: string) =>
+    req<Job>(`/api/repos/install?${rq(id)}`, {
+      method: "POST",
+      body: JSON.stringify({ tag, ...(asset ? { asset } : {}) }),
+    }),
+  /** checks a pull request out and builds it, or builds the checkout itself */
+  build: (id: string, pr?: number) =>
+    req<Job>(`/api/repos/build?${rq(id)}`, {
+      method: "POST",
+      body: JSON.stringify(pr === undefined ? {} : { pr }),
+    }),
+  launch: (id: string, build: string) =>
+    req<Build>(`/api/repos/launch?${rq(id)}`, {
+      method: "POST",
+      body: JSON.stringify({ build }),
+    }),
+  /** ends the process a launch started, when canopy still holds it */
+  halt: (id: string, build: string) =>
+    req<{ ok: true; stopped: boolean }>(`/api/repos/halt?${rq(id)}`, {
+      method: "POST",
+      body: JSON.stringify({ build }),
+    }),
+  uninstall: (id: string, build: string) =>
+    req<{ ok: true }>(`/api/repos/uninstall?${rq(id)}`, {
+      method: "POST",
+      body: JSON.stringify({ build }),
+    }),
+  /** every repo's launch settings, keyed by repo path */
+  launchers: () => req<Record<string, LaunchSettings>>("/api/launchers"),
+  setLaunch: (id: string, settings: LaunchSettings) =>
+    req<Record<string, LaunchSettings>>(`/api/repos/launcher?${rq(id)}`, {
+      method: "POST",
+      body: JSON.stringify(settings),
+    }),
+  jobs: () => req<Job[]>("/api/jobs"),
+  stopJob: (id: string) => req<Job>("/api/jobs/stop", { method: "POST", body: JSON.stringify({ id }) }),
+  dismissJob: (id: string) => req<{ ok: true }>(`/api/jobs?${rq(id)}`, { method: "DELETE" }),
   workspaces: () => req<Workspace[]>("/api/workspaces"),
   wsAdd: (name: string, repos: string[]) =>
     req<Workspace[]>("/api/workspaces", {

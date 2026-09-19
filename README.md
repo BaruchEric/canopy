@@ -89,6 +89,11 @@ canopy ws                          # list workspaces
 canopy ws create <name> <dirs...>  # group repos
 canopy ws open <name> --app code   # one multi-root VS Code window
 canopy ws open <name> --app kitty  # one kitty window, a tab per repo
+canopy launch <repo>               # builds here, the repo's releases, its open pull requests
+canopy launch <repo> v1.2.0        # install that release for this machine if needed, launch it
+canopy launch <repo> --pr 42       # check the pull request out as a worktree, build, launch
+canopy launch <repo> --here        # build this checkout with its build line, launch it
+canopy launch <repo> --build "cargo build --release" --run "./target/release/app"
 canopy source                      # the extra folders the UI scans
 canopy source add ~/work           # scan another folder on this machine
 canopy source add ~/dev --host wsl # …or one on an ssh host
@@ -161,6 +166,17 @@ Select several repos on the board (the select button in the top bar) and run one
 
 [herdr](https://herdr.dev) is a terminal workspace manager for coding agents. The herdr opener drives its socket API through the `herdr` CLI (on PATH or at `~/.local/bin/herdr`): it lists panes to find a workspace already at the repo's folder and focuses it (starting Claude there if nothing runs in that pane), or creates one with `herdr workspace create --cwd <repo> --label <name> --focus` and starts Claude in its pane with `herdr agent start <name> --kind claude --pane <id> -- <flags>`, the flags being the repo's agent settings. A repo on another host gets a workspace whose pane runs the ssh session. When herdr's server is not running, canopy starts a herdr client in kitty (or Terminal) and waits for the socket.
 
+## Launcher
+
+The launch section of a repo's panel (folded by default; **builds & releases** in the card's menu opens it) is a generic take on [freecad-launcher](https://github.com/deltahedra3d/freecad-launcher): where that app manages FreeCAD's AppImages and builds its pull requests, canopy does the same for any repo with a GitHub remote, on this machine.
+
+- **releases** lists the repo's releases from GitHub (through `gh`, so its login and rate limits apply), each with the one asset that fits this machine: a glob from the launch settings when one is set, else a guess from the names (the OS and arch words, then the preferred kind: `.dmg` before `.zip` on a Mac, `.AppImage` before a tarball on Linux). A release whose assets name only other platforms says so instead of guessing. **install** downloads the asset into `~/.config/canopy/builds/<owner>/<name>/release/<tag>/` and opens it up: a disk image's `.app` or `.pkg` is copied out, a zip or tarball extracted (one wrapping folder lifted away), a bare binary or AppImage made executable. Several versions sit side by side.
+- **pull requests** lists the open ones. **build** fetches `pull/<n>/head`, checks it out as a git worktree under `.../pr/<n>/` (the repo's own checkout is untouched), and runs the repo's build line there; a later build of the same PR refreshes the worktree. Pull requests are built on this machine only: a repo on another host lists them but cannot build them.
+- **builds** is what is here: the installed releases, the built pull requests, and **this checkout** when the settings give it a run line. **launch** starts one: an `.app` through `open -n`, a binary directly, a checkout through its run line from its root, all through your login shell so PATH is what your terminal has. A first launch of a build asks once (**run it?**). A launched build shows as **running** with a **stop** button until it exits (an `.app` is watched through `open -W`, and stop quits it by its executable's path), and a binary's or run line's output lands in `.../logs/`. Launches are counted per build, with the last time. The ✕ removes an installed release or a worktree.
+- **settings…** (also **launch settings…** in the menu) are four lines per repo, saved on the server like agent settings: `build` (run in a worktree after the fetch, and in this checkout on build), `run` (launches a checkout), `release asset` (the glob), and `launch a release` (how an installed release starts, `{file}` being what the download unpacked; blank opens it the way its kind says).
+
+Downloads and builds are **jobs**: each shows in the section with its progress and the tail of its output, can be stopped, and reports to the event feed. Not carried over from freecad-launcher: the 3D preview and the `.desktop` entries, which are FreeCAD's and Linux's respectively.
+
 ## Claude sessions
 
 Every session Claude Code has ever run in a repo, not only the ones canopy started, comes from [claude-history](../claude-history): the per-project archive and index of transcripts, prompts, tool calls, tokens, cost and the commits made while a session was running, from this Mac, the other hosts it pulls, and claude.ai/code. canopy shells out to that CLI's `--json` reports and never opens its sqlite file, so the archive's schema stays its own business.
@@ -174,7 +190,8 @@ canopy finds the CLI at `historyBin` in its config, else `claude-history` on PAT
 - Config + workspaces: `~/.config/canopy/config.json` (override dir with `$CANOPY_CONFIG_DIR`). `historyBin` there points at the claude-history CLI when it is not on PATH.
 - Generated workspace files (`.code-workspace`, kitty sessions): `~/.config/canopy/workspaces/`.
 - Workspaces store absolute repo paths, so they work from any scan root. A repo on another host is stored as `ssh://<host><path>`.
-- Agent settings live under `agents` in the same config, keyed the same way; a repo set back to the defaults loses its entry.
+- Agent settings live under `agents` in the same config, keyed the same way; a repo set back to the defaults loses its entry. Launch settings live under `launchers` the same way.
+- Installed releases, pull request worktrees, launch counts and launch logs: `~/.config/canopy/builds/<owner>/<name>/` by the repo's GitHub slug (`_local/<name>-<hash>` for a repo without one), with a `state.json` per repo.
 - Extra folders live under `sources` in the same config, each with an id, a label, a kind (`local`, `ssh` or `forgejo`), the host for ssh, and the absolute path — or, for a forge, its address and the path of the file holding its API token. The launch root is never stored. ssh control sockets sit next to the config as `ssh-*`.
 
 ## Development

@@ -15,6 +15,7 @@ import {
 import { PANEL, activeFlowFor, flowFor, runFor, useStore } from "../store";
 import { ago, GLYPH, stateOf } from "../util";
 import { ClaudeSection } from "./Claude";
+import { LaunchSection } from "./Launch";
 import { CommitRow } from "./Commit";
 import { DiffView } from "./DiffView";
 import { RepoLink } from "./RepoLink";
@@ -763,6 +764,7 @@ export function RepoPanel({
           <PanelShells repo={repo} />
           <SearchSection repo={repo} />
           <History repo={repo} />
+          <LaunchSection repo={repo} />
           <ClaudeSection repo={repo} />
         </>
       )}

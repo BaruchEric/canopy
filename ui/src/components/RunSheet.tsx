@@ -1,15 +1,18 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { ACTIONS, repoFacts } from "../../../src/core/actions";
 import { describeAgent, isDefaultAgent } from "../../../src/core/agent";
-import { agentFor, useStore, type Sheet } from "../store";
+import { describeLaunch, isDefaultLaunch } from "../../../src/core/launch";
+import { agentFor, launchFor, useStore, type Sheet } from "../store";
 import { FleetPlan, FleetSheet, FlowConsole, FlowPlan } from "./FlowSheet";
 import { SearchSheet } from "./Search";
 import {
   DEFAULT_AGENT,
+  DEFAULT_LAUNCH,
   isRunActive,
   type AgentEffort,
   type AgentModel,
   type AgentSettings,
+  type LaunchSettings,
   type Repo,
   type Run,
   type RunAction,
@@ -88,7 +91,7 @@ export function RunSheet() {
 const sheetRepoId = (sheet: Sheet, runs: Record<string, Run>): string | undefined =>
   sheet.kind === "run"
     ? runs[sheet.runId]?.repoId
-    : sheet.kind === "plan" || sheet.kind === "agent" || sheet.kind === "flow-plan"
+    : sheet.kind === "plan" || sheet.kind === "agent" || sheet.kind === "launch" || sheet.kind === "flow-plan"
       ? sheet.repoId
       : undefined;
 
@@ -105,6 +108,10 @@ function Body({ sheet }: { sheet: Sheet }) {
   if (sheet.kind === "agent") {
     if (!repo) return <Missing what="That repo is no longer in the tree." onClose={close} />;
     return <AgentForm repo={repo} />;
+  }
+  if (sheet.kind === "launch") {
+    if (!repo) return <Missing what="That repo is no longer in the tree." onClose={close} />;
+    return <LaunchForm repo={repo} />;
   }
   if (sheet.kind === "flow-plan") {
     if (!repo) return <Missing what="That repo is no longer in the tree." onClose={close} />;
@@ -647,6 +654,114 @@ function AgentForm({ repo }: { repo: Repo }) {
           className="mini"
           disabled={isDefaultAgent(saved)}
           onClick={() => void save(DEFAULT_AGENT)}
+        >
+          reset
+        </button>
+        <button type="button" className="mini strong" onClick={close}>
+          done
+        </button>
+      </footer>
+    </>
+  );
+}
+
+/* ---------- launch settings ---------- */
+
+const LAUNCH_FIELDS: { key: keyof LaunchSettings; label: string; placeholder: string; hint: string }[] = [
+  {
+    key: "build",
+    label: "build",
+    placeholder: "bun run build · cargo build --release · cmake -B build && cmake --build build",
+    hint: "Run in a pull request's worktree after the fetch, and in this checkout on build. Blank skips it.",
+  },
+  {
+    key: "run",
+    label: "run",
+    placeholder: "bun run dev · ./build/bin/app · open build/App.app",
+    hint: "Launches a checkout, from its root. Blank means a checkout cannot be launched, only built.",
+  },
+  {
+    key: "asset",
+    label: "release asset",
+    placeholder: "*-macos-arm64.dmg",
+    hint: "A glob for the release file to install on this machine. Blank picks by the platform words in the names.",
+  },
+  {
+    key: "launch",
+    label: "launch a release",
+    placeholder: "open {file} · {file} --flag",
+    hint: "How an installed release starts; {file} is the app or binary the download unpacked. Blank opens it the way its kind says.",
+  },
+];
+
+function LaunchForm({ repo }: { repo: Repo }) {
+  const close = useStore((s) => s.closeSheet);
+  const saved = useStore((s) => launchFor(s, repo));
+  const setLaunch = useStore((s) => s.setLaunch);
+  const [draft, setDraft] = useState<LaunchSettings>(saved);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => setDraft(saved), [saved]);
+
+  const save = async (next: LaunchSettings) => {
+    setError(null);
+    try {
+      await setLaunch(repo.id, next);
+    } catch (err) {
+      setError(errText(err));
+    }
+  };
+  const commit = (key: keyof LaunchSettings) => {
+    const value = draft[key].trim();
+    if (value !== saved[key]) void save({ ...saved, [key]: value });
+  };
+
+  return (
+    <>
+      <header className="sheet-head">
+        <div>
+          <div className="eyebrow">launch</div>
+          <h2 className="sheet-title">
+            launch settings <span className="sheet-repo">{repo.id}</span>
+          </h2>
+        </div>
+        <button type="button" className="mini close" onClick={close} aria-label="Close">
+          ✕
+        </button>
+      </header>
+      <div className="sheet-body agent-form">
+        <p className="blurb">
+          How this repo is built and run: its pull requests checked out here, the checkout itself,
+          and the releases it publishes on GitHub. Each line runs through your login shell from the
+          build's folder. Saved on the server, keyed by the repo's path.
+        </p>
+        {LAUNCH_FIELDS.map((f) => (
+          <section key={f.key} className="settings-row">
+            <h3 className="panel-label">{f.label}</h3>
+            <input
+              type="text"
+              className="agent-extra"
+              placeholder={f.placeholder}
+              value={draft[f.key]}
+              onChange={(e) => setDraft({ ...draft, [f.key]: e.target.value })}
+              onBlur={() => commit(f.key)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") commit(f.key);
+              }}
+              aria-label={f.label}
+            />
+            <p className="settings-hint">{f.hint}</p>
+          </section>
+        ))}
+        {error && <p className="note err">{error}</p>}
+      </div>
+      <footer className="sheet-foot">
+        <span className="sheet-hint">{describeLaunch(saved)}</span>
+        <button
+          type="button"
+          className="mini"
+          disabled={isDefaultLaunch(saved)}
+          onClick={() => void save(DEFAULT_LAUNCH)}
         >
           reset
         </button>

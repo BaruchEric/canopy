@@ -4,8 +4,9 @@ import { createPortal } from "react-dom";
 import { linkLabel } from "../util";
 import { ACTIONS, checkWhen } from "../../../src/core/actions";
 import { describeAgent } from "../../../src/core/agent";
+import { describeLaunch } from "../../../src/core/launch";
 import { flowWord } from "../flows";
-import { activeFlowFor, activeRunFor, agentFor, useStore } from "../store";
+import { activeFlowFor, activeRunFor, agentFor, launchFor, useStore } from "../store";
 import {
   CLAUDE_OPENERS,
   OPENER_IDS,
@@ -45,8 +46,11 @@ export function RepoMenu({
   const showRun = useStore((s) => s.showRun);
   const openChat = useStore((s) => s.openChat);
   const editAgent = useStore((s) => s.editAgent);
+  const editLaunch = useStore((s) => s.editLaunch);
+  const showLaunch = useStore((s) => s.showLaunch);
   const openTerm = useStore((s) => s.openTerm);
   const agent = useStore((s) => agentFor(s, repo));
+  const launch = useStore((s) => launchFor(s, repo));
   const active = useStore((s) => activeRunFor(s, repo.id));
   const workflows = useStore((s) => s.workflows[repo.id]);
   const loadWorkflows = useStore((s) => s.loadWorkflows);
@@ -407,6 +411,33 @@ export function RepoMenu({
               >
                 <span className="menu-text">agent settings…</span>
                 <span className="menu-fact">{describeAgent(agent)}</span>
+              </button>
+              <div className="menu-label">launch</div>
+              <button
+                type="button"
+                role="menuitem"
+                className="menu-item"
+                title="Released builds installed here, pull requests built here, and this checkout, each launched with a click"
+                onClick={() => {
+                  setOpen(false);
+                  showLaunch(repo.id);
+                }}
+              >
+                <span className="menu-text">builds & releases</span>
+                <span className="menu-fact">in the panel</span>
+              </button>
+              <button
+                type="button"
+                role="menuitem"
+                className="menu-item"
+                title="Build and run lines, and which release asset is for this machine"
+                onClick={() => {
+                  setOpen(false);
+                  editLaunch(repo.id);
+                }}
+              >
+                <span className="menu-text">launch settings…</span>
+                <span className="menu-fact">{describeLaunch(launch)}</span>
               </button>
               <div className="menu-label">open in</div>
               <button

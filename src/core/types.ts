@@ -165,7 +165,115 @@ export interface CanopyConfig {
   /** how Claude Code starts per repo, keyed by the repo's absolute path (or
    *  ssh locator) like workspaces are; a repo with no entry uses the defaults */
   agents: Record<string, AgentSettings>;
+  /** how a repo's builds are made and run, keyed like agents */
+  launchers: Record<string, LaunchSettings>;
 }
+
+/* ---------- the launcher: release builds and pull requests, run here ---------- */
+
+/** How canopy builds and runs a repo: its released builds, a pull request's
+ *  checkout, or the checkout itself. Blank fields fall back to what a file's
+ *  name says (asset, launch) or leave the step out (build, run). */
+export interface LaunchSettings {
+  /** a glob the release asset for this machine matches, `*-macos-arm64.dmg`;
+   *  blank picks by the platform words in the names */
+  asset: string;
+  /** shell line run in a checkout before it can be launched; blank skips it */
+  build: string;
+  /** shell line that launches a checkout, run from its root; blank means the
+   *  checkout cannot be launched */
+  run: string;
+  /** shell line that launches an installed release, `{file}` being the app or
+   *  binary the download unpacked; blank opens it the way its kind says */
+  launch: string;
+}
+
+export const DEFAULT_LAUNCH: LaunchSettings = { asset: "", build: "", run: "", launch: "" };
+
+export interface ReleaseAsset {
+  name: string;
+  size: number;
+  /** the public download address */
+  url: string;
+  /** the API address, which a private repo's download asks with a token */
+  apiUrl: string;
+}
+
+/** One release as the forge lists it, with the asset canopy would install. */
+export interface Release {
+  tag: string;
+  name: string;
+  prerelease: boolean;
+  /** unix ms; 0 for a draft */
+  publishedAt: number;
+  url: string;
+  assets: ReleaseAsset[];
+  /** the asset name that fits this machine, when one does */
+  pick: string | null;
+}
+
+/** An open pull request, enough to check it out and say what it is. */
+export interface Pull {
+  number: number;
+  title: string;
+  author: string;
+  /** the head branch */
+  branch: string;
+  draft: boolean;
+  /** unix ms */
+  updatedAt: number;
+  url: string;
+}
+
+export type BuildKind = "release" | "pr" | "local";
+
+/** Something the launcher can run: an installed release, a pull request's
+ *  built checkout, or the repo's own checkout. Keys read `release:<tag>`,
+ *  `pr:<number>` and `local`. */
+export interface Build {
+  key: string;
+  kind: BuildKind;
+  label: string;
+  /** the folder it lives in: the unpacked release, the worktree, or the repo */
+  dir: string;
+  /** what a launch runs, one line; null when nothing in the folder can run */
+  what: string | null;
+  /** unix ms when it was installed or last built; 0 for the local checkout */
+  at: number;
+  launches: number;
+  /** unix ms of the last launch */
+  lastLaunch: number | null;
+  /** a process canopy started from it is still going */
+  running: boolean;
+  /** the commit a pull request's checkout was built at */
+  head?: string;
+}
+
+export type JobKind = "install" | "build";
+export type JobStatus = "working" | "done" | "failed" | "stopped";
+
+/** A download or a build in progress, with the tail of its output. */
+export interface Job {
+  id: string;
+  repoId: string;
+  kind: JobKind;
+  /** the build key it produces */
+  build: string;
+  title: string;
+  status: JobStatus;
+  startedAt: number;
+  endedAt?: number;
+  /** the last JOB_TAIL lines the process printed */
+  lines: string[];
+  /** bytes so far and in total for a download; total 0 when unknown */
+  progress?: { done: number; total: number };
+  error?: string;
+}
+
+/** how many lines of output a job keeps */
+export const JOB_TAIL = 400;
+
+export const isJobActive = (j: Job): boolean => j.status === "working";
 
 /* ---------- agent settings: how Claude Code starts for a repo ---------- */
 
@@ -388,7 +496,15 @@ export type ServerEvent =
   | { type: "flow"; flow: Flow }
   | { type: "flow-gone"; id: string }
   | { type: "fleet"; fleet: Fleet }
-  | { type: "fleet-gone"; id: string };
+  | { type: "fleet-gone"; id: string }
+  | { type: "job"; job: Job }
+  | { type: "job-gone"; id: string }
+  /** a repo's builds changed outside a job: launched, exited, removed, or a
+   *  job just installed or built one; the panel re-reads the list */
+  | { type: "builds"; repoId: string; what: BuildChange; build: string }
+  | { type: "launchers"; launchers: Record<string, LaunchSettings> };
+
+export type BuildChange = "installed" | "built" | "launched" | "exited" | "removed";
 
 /* ---------- the archive: what claude-history holds for each repo ---------- */
 

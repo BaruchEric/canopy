@@ -16,6 +16,7 @@ const KIND_WORD: Record<FeedKind, string> = {
   fleet: "fleet",
   workspace: "ws",
   agent: "agent",
+  launch: "launch",
 };
 
 /**

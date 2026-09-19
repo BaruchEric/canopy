@@ -3224,3 +3224,151 @@ body.resizing {
     padding-left: 10ch;
   }
 }
+
+/* ---------- the launcher: builds, releases and pull requests in the panel ---------- */
+
+.launch {
+  padding-bottom: 8px;
+}
+.launch-body {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.launch-bar,
+.launch-hint {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 4px 14px 2px;
+}
+.launch-hint {
+  font-size: 11px;
+  color: var(--ink-dim);
+}
+.build-list,
+.job-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+.build {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 3px 14px;
+  font-size: 12px;
+}
+.build:hover {
+  background: var(--bark2);
+}
+.build.running {
+  background: color-mix(in srgb, var(--sky) 8%, transparent);
+}
+.build-label {
+  flex: none;
+  max-width: 14ch;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  font-weight: 600;
+  color: var(--ink);
+  text-decoration: none;
+}
+a.build-label:hover {
+  text-decoration: underline;
+}
+.build-head {
+  flex: none;
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--ink-faint);
+}
+.build-what {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  color: var(--ink-dim);
+  font-family: var(--mono);
+  font-size: 11px;
+}
+.build-meta,
+.build-note {
+  flex: none;
+  font-size: 11px;
+  color: var(--ink-faint);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+.build-note {
+  color: var(--moss);
+}
+.build .pill {
+  padding: 0 7px;
+  font-size: 10px;
+  line-height: 15px;
+}
+.build .mini:empty {
+  display: none;
+}
+.mini.confirm {
+  color: var(--lichen);
+  border-color: color-mix(in srgb, var(--lichen) 55%, var(--hair2));
+}
+
+/* a download or a build, with the tail of what it printed */
+.job {
+  margin: 2px 14px 6px;
+  padding: 6px 8px;
+  border: 1px solid var(--hair);
+  border-radius: 6px;
+  background: var(--bark0);
+}
+.job-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+}
+.job-title {
+  font-weight: 600;
+}
+.job-state {
+  font-size: 11px;
+  color: var(--ink-dim);
+  font-variant-numeric: tabular-nums;
+}
+.job.s-failed .job-state {
+  color: var(--rust);
+}
+.job.s-done .job-state {
+  color: var(--moss);
+}
+.job-bar {
+  height: 3px;
+  margin: 6px 0 2px;
+  border-radius: 2px;
+  background: var(--hair);
+  overflow: hidden;
+}
+.job-bar > span {
+  display: block;
+  height: 100%;
+  background: var(--sky);
+  transition: width 0.2s;
+}
+.job-tail {
+  margin: 6px 0 0;
+  max-height: 160px;
+  overflow: auto;
+  font-size: 11px;
+  line-height: 1.4;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  color: var(--ink-dim);
+}
+.dot.rust {
+  background: var(--rust);
+}

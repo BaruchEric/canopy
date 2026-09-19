@@ -34,6 +34,8 @@ import { apiBase, ForgeAuthError, linkForgeClones, listForgeRepos } from "../cor
 import { isSshHost, parseLocator, parseSshHosts, shellQuote, tildeQuote } from "../core/host";
 import { hasGatewayKey, jev } from "../core/jev";
 import { normalizeAgent } from "../core/agent";
+import { normalizeLaunch } from "../core/launch";
+import { Launcher, LauncherError } from "../core/launcher";
 import { isOpenerId, openFile, openGroup, openIn } from "../core/openers";
 import { mapPool, searchRepo } from "../core/search";
 import { findWorkflow, loadWorkflows } from "../core/workflows";
@@ -47,11 +49,13 @@ import {
 import {
   addSource,
   agentFor,
+  launchFor,
   loadConfig,
   rememberRoot,
   removeSource,
   removeWorkspace,
   setAgent,
+  setLaunch,
   upsertWorkspace,
 } from "../core/store";
 import { Runner } from "../core/runner";
@@ -112,6 +116,8 @@ interface ServerState {
   historyPending: Promise<HistoryCache> | null;
   /** the shells open in browser terminals, ended with the server */
   terms: Set<TermSession>;
+  /** installed releases, pull request builds and launched processes */
+  launcher: Launcher;
 }
 
 /** what a terminal websocket carries from the upgrade to its handlers */
@@ -761,6 +767,19 @@ async function handleApi(
   }
 
   // agent settings, per repo, keyed by path like workspaces
+  if (path === "/api/launchers" && method === "GET") {
+    return json((await loadConfig()).launchers);
+  }
+  if (path === "/api/jobs" && method === "GET") return json(state.launcher.list());
+  if (path === "/api/jobs" && method === "DELETE") {
+    state.launcher.dismiss(url.searchParams.get("id") ?? "");
+    return json({ ok: true });
+  }
+  if (path === "/api/jobs/stop" && method === "POST") {
+    const b = (await req.json()) as { id?: unknown };
+    if (typeof b.id !== "string") return json({ error: "missing id" }, 400);
+    return json(state.launcher.stop(b.id));
+  }
   if (path === "/api/agents" && method === "GET") {
     return json((await loadConfig()).agents);
   }
@@ -958,6 +977,58 @@ async function handleApi(
     if (method === "GET" && action === "workflows") {
       return json(await loadWorkflows(repo));
     }
+    // The launcher. Releases are read and installed for any repo with a
+    // GitHub remote, wherever its checkout is: the download lands here and
+    // runs here. Builds need the checkout, so a repo on another host gets
+    // 400 from the launcher itself.
+    if (method === "GET" && action === "releases") {
+      return json(await state.launcher.releases(repo, launchFor(await loadConfig(), repo.path)));
+    }
+    if (method === "GET" && action === "pulls") {
+      return json(await state.launcher.pulls(repo));
+    }
+    if (method === "GET" && action === "builds") {
+      return json(await state.launcher.builds(repo, launchFor(await loadConfig(), repo.path)));
+    }
+    if (method === "POST" && action === "install") {
+      const b = (await req.json()) as { tag?: unknown; asset?: unknown };
+      if (typeof b.tag !== "string" || !b.tag) return json({ error: "missing tag" }, 400);
+      const asset = typeof b.asset === "string" && b.asset ? b.asset : null;
+      const job = await state.launcher.install(repo, b.tag, asset, launchFor(await loadConfig(), repo.path));
+      return json(job, 201);
+    }
+    if (method === "POST" && action === "build") {
+      const b = (await req.json()) as { pr?: unknown };
+      const ref =
+        b.pr === undefined || b.pr === null
+          ? ({ kind: "local" } as const)
+          : typeof b.pr === "number" && Number.isInteger(b.pr) && b.pr > 0
+            ? ({ kind: "pr", number: b.pr } as const)
+            : null;
+      if (!ref) return json({ error: "pr must be a pull request number" }, 400);
+      return json(await state.launcher.build(repo, ref, launchFor(await loadConfig(), repo.path)), 201);
+    }
+    if (method === "POST" && action === "launch") {
+      const b = (await req.json()) as { build?: unknown };
+      if (typeof b.build !== "string") return json({ error: "missing build" }, 400);
+      return json(await state.launcher.launch(repo, b.build, launchFor(await loadConfig(), repo.path)));
+    }
+    if (method === "POST" && action === "halt") {
+      const b = (await req.json()) as { build?: unknown };
+      if (typeof b.build !== "string") return json({ error: "missing build" }, 400);
+      return json({ ok: true, stopped: state.launcher.stopLaunch(repo, b.build) });
+    }
+    if (method === "POST" && action === "uninstall") {
+      const b = (await req.json()) as { build?: unknown };
+      if (typeof b.build !== "string") return json({ error: "missing build" }, 400);
+      await state.launcher.remove(repo, b.build);
+      return json({ ok: true });
+    }
+    if (method === "POST" && action === "launcher") {
+      const launchers = await setLaunch(repo.path, normalizeLaunch(await req.json()));
+      broadcast(state, { type: "launchers", launchers });
+      return json(launchers);
+    }
     if (method === "POST" && action === "flow") {
       if (repo.host) return json({ error: `Claude runs only work on this machine; ${repo.name} is on ${repo.host}` }, 400);
       const b = (await req.json()) as { workflow?: unknown; note?: unknown };
@@ -1081,6 +1152,11 @@ export async function startServer(opts: {
         .then((r) => r.status)
         .catch(() => null),
   });
+  const launcher = new Launcher({
+    onJob: (job) => broadcast(state, { type: "job", job }),
+    onJobGone: (id) => broadcast(state, { type: "job-gone", id }),
+    onBuilds: (repoId, what, build) => broadcast(state, { type: "builds", repoId, what, build }),
+  });
   const state: ServerState = {
     root,
     sources: [runtime(launchSource(root)), ...extras.map((s) => runtime({ ...s, launch: false }))],
@@ -1094,6 +1170,7 @@ export async function startServer(opts: {
     terms: new Set(),
     runner,
     flows,
+    launcher,
   };
   await rememberRoot(root);
   await Promise.all(state.sources.map((rt) => scanOne(state, rt, scanOptions)));
@@ -1134,7 +1211,7 @@ export async function startServer(opts: {
             return await handleApi(state, req, url);
           } catch (err) {
             const status =
-              err instanceof HttpError || err instanceof HistoryError
+              err instanceof HttpError || err instanceof HistoryError || err instanceof LauncherError
                 ? err.status
                 : 500;
             return json(
@@ -1220,6 +1297,7 @@ export async function startServer(opts: {
       for (const t of state.timers.values()) clearTimeout(t);
       state.flows.stopAll();
       state.runner.stopAll();
+      state.launcher.shutdown();
       for (const t of state.terms) t.close();
       state.terms.clear();
       library.stop();

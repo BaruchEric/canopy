@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import type { Fleet, Flow, Repo, RepoStatus, Run, SourceState } from "../../src/core/types";
+import type { Fleet, Flow, Job, Repo, RepoStatus, Run, SourceState } from "../../src/core/types";
 import {
   appendFeed,
   clip,
@@ -231,6 +231,57 @@ describe("describeEvent", () => {
     expect(ag.map((l) => [l.repo, l.text])).toEqual([["alpha", "agent settings changed"]]);
     const reset = describeEvent({ type: "agents", agents: {} }, snap(), 5, { "/r/alpha": { model: "opus" } });
     expect(reset.map((l) => l.text)).toEqual(["agent settings reset"]);
+  });
+
+  test("jobs: start, end, dismissal; builds and launch settings", () => {
+    const job: Job = {
+      id: "j1",
+      repoId: "a",
+      kind: "install",
+      build: "release:v1.0",
+      title: "install v1.0",
+      status: "working",
+      startedAt: 1000,
+      lines: [],
+    };
+    const started = describeEvent({ type: "job", job }, snap(), 5);
+    expect(started.map((l) => [l.kind, l.repo, l.text])).toEqual([["launch", "alpha", "install v1.0 started"]]);
+    // the same job again, still working: nothing new to say
+    expect(describeEvent({ type: "job", job }, snap({ jobs: { j1: job } }), 5)).toEqual([]);
+    const done = describeEvent(
+      { type: "job", job: { ...job, status: "done", endedAt: 4000 } },
+      snap({ jobs: { j1: job } }),
+      5,
+    );
+    expect(done.map((l) => l.text)).toEqual(["install v1.0 done in 3s"]);
+    const failed = describeEvent(
+      { type: "job", job: { ...job, status: "failed", error: "download failed: 404" } },
+      snap({ jobs: { j1: job } }),
+      5,
+    );
+    expect(failed.map((l) => l.text)).toEqual(["install v1.0 failed: download failed: 404"]);
+    const gone = describeEvent({ type: "job-gone", id: "j1" }, snap({ jobs: { j1: job } }), 5);
+    expect(gone.map((l) => [l.text, l.quiet])).toEqual([["install v1.0 dismissed", true]]);
+
+    const launched = describeEvent({ type: "builds", repoId: "a", what: "launched", build: "pr:12" }, snap(), 5);
+    expect(launched.map((l) => [l.repo, l.text, l.quiet])).toEqual([["alpha", "launched PR #12", false]]);
+    const exited = describeEvent({ type: "builds", repoId: "a", what: "exited", build: "local" }, snap(), 5);
+    expect(exited.map((l) => [l.text, l.quiet])).toEqual([["this checkout exited", true]]);
+    const removed = describeEvent({ type: "builds", repoId: "a", what: "removed", build: "release:v1.0" }, snap(), 5);
+    expect(removed.map((l) => l.text)).toEqual(["removed v1.0"]);
+
+    const set = describeEvent(
+      { type: "launchers", launchers: { "/r/alpha": { asset: "", build: "make", run: "", launch: "" } } },
+      snap(),
+      5,
+    );
+    expect(set.map((l) => [l.repo, l.text])).toEqual([["alpha", "launch settings changed"]]);
+    const same = describeEvent(
+      { type: "launchers", launchers: { "/r/alpha": { asset: "", build: "make", run: "", launch: "" } } },
+      snap({ launchers: { "/r/alpha": { asset: "", build: "make", run: "", launch: "" } } }),
+      5,
+    );
+    expect(same).toEqual([]);
   });
 });
 

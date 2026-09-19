@@ -4,16 +4,20 @@ import { exec } from "../core/exec";
 import { commit, getStatus, pull, push } from "../core/git";
 import { isOpenerId, openGroup, openIn, type OpenerId } from "../core/openers";
 import { isSshHost } from "../core/host";
+import { buildKey, isSafeTag } from "../core/launch";
+import { Launcher, LauncherError, type LaunchRepo } from "../core/launcher";
 import { DEFAULT_IGNORE, scan } from "../core/scan";
 import {
   addSource,
   agentFor,
+  launchFor,
   loadConfig,
   removeSource,
   removeWorkspace,
+  setLaunch,
   upsertWorkspace,
 } from "../core/store";
-import type { SourceInput } from "../core/types";
+import type { Job, LaunchSettings, SourceInput } from "../core/types";
 import { suggestMessage } from "../core/suggest";
 import { PortUnavailableError, startServer } from "../server/index";
 import { bold, dim, lichen, moss, renderTree, sky } from "./render";
@@ -36,6 +40,12 @@ usage:
   canopy ws add <name> <dirs...>
   canopy ws rm <name> [dir]          remove a repo, or the whole workspace
   canopy ws open <name> [--app code|kitty|terminal|finder|agent|herdr]
+  canopy launch <repo>               builds here, then the repo's releases and open pull requests
+  canopy launch <repo> <tag>         install that release for this machine if needed, then launch it
+  canopy launch <repo> --pr N        check the pull request out as a worktree, build it, launch it
+  canopy launch <repo> --here        build this checkout with its build line, then launch it
+  canopy launch <repo> --rm <build>  remove an installed release (release:<tag>) or worktree (pr:N)
+  canopy launch <repo> --build "…" | --run "…" | --asset "glob" | --open "…"   set the launch lines
   canopy library [--root dir] <command> [args...]
                                      organize projects, links, tags, health, and dev servers
   canopy source                      list the extra folders the UI scans
@@ -88,6 +98,7 @@ const COMMANDS = new Set([
   "push",
   "pull",
   "open",
+  "launch",
   "ws",
   "source",
   "sources",
@@ -207,6 +218,103 @@ export async function main(argv: string[]): Promise<void> {
       // the repo's agent settings from the UI apply here too
       await openIn(app, repo, agentFor(await loadConfig(), repo));
       return;
+    }
+    case "launch": {
+      const pr = opt(args, "--pr");
+      const here = flag(args, "--here");
+      const rmKey = opt(args, "--rm");
+      const lines: Partial<LaunchSettings> = {};
+      for (const [flagName, key] of [["--build", "build"], ["--run", "run"], ["--asset", "asset"], ["--open", "launch"]] as const) {
+        const v = opt(args, flagName);
+        if (v !== undefined) lines[key] = v;
+      }
+      const path = resolve(args.shift() ?? fail("usage: canopy launch <repo> [tag] [--pr N] [--here] [--rm build]"));
+      const tag = args.shift();
+      const repo: LaunchRepo = { id: path, name: path.split("/").pop() ?? path, path };
+      if (Object.keys(lines).length) {
+        const cfg = await loadConfig();
+        await setLaunch(path, { ...launchFor(cfg, path), ...lines });
+        console.log(`${moss("✓")} launch settings saved`);
+        if (!tag && pr === undefined && !here && rmKey === undefined) return;
+      }
+      const settings = launchFor(await loadConfig(), path);
+      // The job's lines go to the terminal as they come; `ended` resolves
+      // with the job once it stops working.
+      let seen = 0;
+      let settle: ((job: Job) => void) | null = null;
+      const ended = new Promise<Job>((r) => (settle = r));
+      const launcher = new Launcher({
+        onJob: (job) => {
+          for (const line of job.lines.slice(seen)) console.log(dim(line));
+          seen = job.lines.length;
+          if (job.status !== "working") settle?.(job);
+        },
+        onJobGone: () => {},
+        onBuilds: () => {},
+      });
+      const finish = async (job: Job) => {
+        const done = await ended;
+        if (done.status !== "done") return fail(`${job.title} ${done.status}${done.error ? `: ${done.error}` : ""}`);
+        console.log(`${moss("✓")} ${job.title}`);
+      };
+      const launch = async (key: string) => {
+        const b = await launcher.launch(repo, key, settings);
+        console.log(`${moss("▶")} ${bold(b.label)} ${dim(b.what ?? "")} ${dim(`(${b.launches}× so far)`)}`);
+      };
+      try {
+        if (rmKey !== undefined) {
+          await launcher.remove(repo, rmKey);
+          console.log(`${moss("✓")} removed ${rmKey}`);
+          return;
+        }
+        if (pr !== undefined) {
+          if (!/^\d+$/.test(pr)) return fail(`not a pull request number: ${pr}`);
+          const key = buildKey({ kind: "pr", number: Number(pr) });
+          await finish(await launcher.build(repo, { kind: "pr", number: Number(pr) }, settings));
+          if (settings.run) await launch(key);
+          else console.log(dim("no run line set; the worktree is built but not launched"));
+          return;
+        }
+        if (here) {
+          await finish(await launcher.build(repo, { kind: "local" }, settings));
+          if (settings.run) await launch("local");
+          return;
+        }
+        if (tag !== undefined) {
+          if (!isSafeTag(tag)) return fail(`not a tag: ${tag}`);
+          const key = buildKey({ kind: "release", tag });
+          const have = (await launcher.builds(repo, settings)).some((b) => b.key === key);
+          if (!have) await finish(await launcher.install(repo, tag, null, settings));
+          await launch(key);
+          return;
+        }
+        const builds = await launcher.builds(repo, settings);
+        console.log(bold("builds here"));
+        if (builds.length === 0) console.log(dim("  none — canopy launch <repo> <tag>, --pr N, or --here"));
+        for (const b of builds) {
+          const meta = [b.launches ? `${b.launches}×` : null, b.running ? sky("running") : null].filter(Boolean).join(" ");
+          console.log(`  ${lichen("▸")} ${bold(b.label)} ${dim(b.what ?? "nothing launchable")} ${meta}`);
+        }
+        const [rels, pulls] = await Promise.all([
+          launcher.releases(repo, settings).catch((e: unknown) => (e instanceof LauncherError ? e.message : String(e))),
+          launcher.pulls(repo).catch((e: unknown) => (e instanceof LauncherError ? e.message : String(e))),
+        ]);
+        console.log(bold("releases"));
+        if (typeof rels === "string") console.log(dim(`  ${rels}`));
+        else if (rels.length === 0) console.log(dim("  none"));
+        else {
+          for (const r of rels.slice(0, 10)) {
+            console.log(`  ${lichen("▸")} ${bold(r.tag)}${r.prerelease ? dim(" pre") : ""} ${dim(r.pick ?? "no asset for this machine")}`);
+          }
+        }
+        console.log(bold("open pull requests"));
+        if (typeof pulls === "string") console.log(dim(`  ${pulls}`));
+        else if (pulls.length === 0) console.log(dim("  none"));
+        else for (const p of pulls.slice(0, 10)) console.log(`  ${lichen("▸")} ${bold(`#${p.number}`)} ${p.title} ${dim(p.author)}`);
+        return;
+      } catch (err) {
+        return fail(err instanceof Error ? err.message : String(err));
+      }
     }
     case "ws": {
       const sub = args.shift();

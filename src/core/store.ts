@@ -2,11 +2,14 @@ import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { isDefaultAgent, normalizeAgent } from "./agent";
+import { isDefaultLaunch, normalizeLaunch } from "./launch";
 import {
   DEFAULT_AGENT,
+  DEFAULT_LAUNCH,
   LAUNCH_SOURCE,
   type AgentSettings,
   type CanopyConfig,
+  type LaunchSettings,
   type SourceInput,
   type StoredSource,
   type Workspace,
@@ -25,6 +28,7 @@ const defaults = (): CanopyConfig => ({
   sources: [],
   historyBin: null,
   agents: {},
+  launchers: {},
 });
 
 /** Every stored entry re-validated; one left at the defaults is dropped, so
@@ -35,6 +39,17 @@ function normalizeAgents(v: unknown): Record<string, AgentSettings> {
   for (const [path, raw] of Object.entries(v as Record<string, unknown>)) {
     const a = normalizeAgent(raw);
     if (!isDefaultAgent(a)) out[path] = a;
+  }
+  return out;
+}
+
+/** The launch settings the same way: only repos that differ from the defaults. */
+function normalizeLaunchers(v: unknown): Record<string, LaunchSettings> {
+  if (!v || typeof v !== "object" || Array.isArray(v)) return {};
+  const out: Record<string, LaunchSettings> = {};
+  for (const [path, raw] of Object.entries(v as Record<string, unknown>)) {
+    const l = normalizeLaunch(raw);
+    if (!isDefaultLaunch(l)) out[path] = l;
   }
   return out;
 }
@@ -83,6 +98,7 @@ function normalize(parsed: Partial<CanopyConfig>): CanopyConfig {
         Boolean(w) && typeof w.name === "string" && Array.isArray(w.repos),
     ),
     agents: normalizeAgents(cfg.agents),
+    launchers: normalizeLaunchers(cfg.launchers),
   };
 }
 
@@ -184,6 +200,25 @@ export async function setAgent(
     if (isDefaultAgent(a)) delete cfg.agents[path];
     else cfg.agents[path] = a;
     return cfg.agents;
+  });
+}
+
+/* ---------- launch settings, per repo ---------- */
+
+/** The launch settings for a repo path, the defaults when it has none. */
+export const launchFor = (cfg: CanopyConfig, path: string): LaunchSettings =>
+  cfg.launchers[path] ?? DEFAULT_LAUNCH;
+
+/** Stores a repo's launch settings; all four blank removes the entry. */
+export async function setLaunch(
+  path: string,
+  settings: LaunchSettings,
+): Promise<Record<string, LaunchSettings>> {
+  return withConfig((cfg) => {
+    const l = normalizeLaunch(settings);
+    if (isDefaultLaunch(l)) delete cfg.launchers[path];
+    else cfg.launchers[path] = l;
+    return cfg.launchers;
   });
 }
 

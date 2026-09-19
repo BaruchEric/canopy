@@ -8,6 +8,7 @@ import { ownRun, selectable } from "./flows";
 import { appendFeed, describeEvent, type FeedEntry } from "./feed";
 import {
   DEFAULT_AGENT,
+  DEFAULT_LAUNCH,
   isFlowActive,
   isRunActive,
   type AgentSettings,
@@ -15,6 +16,8 @@ import {
   type Flow,
   type FlowChoice,
   type HistoryOverview,
+  type Job,
+  type LaunchSettings,
   type OpenerId,
   type Repo,
   type Run,
@@ -40,7 +43,18 @@ export const PANEL_TERM = { min: 120, max: 900, initial: 320 };
 /** the event feed along the bottom, in px of height */
 export const FEED = { min: 100, max: 900, initial: 220 };
 /** sections that start folded, matching how the panel read before they could fold */
-const DEFAULT_CLOSED = ["search", "history", "claude"];
+const DEFAULT_CLOSED = ["search", "history", "claude", "launch"];
+/** the folded-by-default set a layout saved before `knownSections` existed
+ *  had decided about; anything added to DEFAULT_CLOSED since folds for it */
+const OLD_KNOWN = ["search", "history", "claude"];
+
+/** The folded sections a saved layout means: what it stored, plus any section
+ *  that folds by default and did not exist when it was saved. Keeping the
+ *  stored list alone would open every new section in every panel. */
+export function closedSectionsOf(saved: string[], known: string[]): string[] {
+  const extra = DEFAULT_CLOSED.filter((k) => !known.includes(k) && !saved.includes(k));
+  return extra.length ? [...saved, ...extra] : saved;
+}
 
 const LAYOUT_KEY = "canopy.layout";
 
@@ -61,6 +75,9 @@ interface Layout {
   collapsed: string[];
   /** folded panel sections (changes, shell, history, claude), as keys */
   closedSections: string[];
+  /** the default-folded sections this layout has decided about, so a
+   *  section added later starts folded instead of open everywhere */
+  knownSections: string[];
   /** px height of the terminal strip */
   termHeight: number;
   /** px height of a shell living in a repo's panel */
@@ -79,6 +96,7 @@ function loadLayout(): Layout {
     sidebarOpen: true,
     collapsed: [],
     closedSections: [...DEFAULT_CLOSED],
+    knownSections: [...DEFAULT_CLOSED],
     termHeight: TERM.initial,
     panelTermHeight: PANEL_TERM.initial,
     feedOpen: false,
@@ -94,6 +112,7 @@ function loadLayout(): Layout {
       sidebarOpen?: unknown;
       collapsed?: unknown;
       closedSections?: unknown;
+      knownSections?: unknown;
       termHeight?: unknown;
       panelTermHeight?: unknown;
       feedOpen?: unknown;
@@ -127,8 +146,14 @@ function loadLayout(): Layout {
         ? saved.collapsed.filter((k): k is string => typeof k === "string")
         : [],
       closedSections: Array.isArray(saved.closedSections)
-        ? saved.closedSections.filter((k): k is string => typeof k === "string")
+        ? closedSectionsOf(
+            saved.closedSections.filter((k): k is string => typeof k === "string"),
+            Array.isArray(saved.knownSections)
+              ? saved.knownSections.filter((k): k is string => typeof k === "string")
+              : OLD_KNOWN,
+          )
         : [...DEFAULT_CLOSED],
+      knownSections: [...DEFAULT_CLOSED],
       termHeight:
         typeof th === "number" && Number.isFinite(th)
           ? clamp(th, TERM.min, TERM.max)
@@ -163,6 +188,7 @@ const layoutOf = (s: CanopyState): Layout => ({
   sidebarOpen: s.sidebarOpen,
   collapsed: s.collapsed,
   closedSections: s.closedSections,
+  knownSections: [...DEFAULT_CLOSED],
   termHeight: s.termHeight,
   panelTermHeight: s.panelTermHeight,
   feedOpen: s.feedOpen,
@@ -227,6 +253,12 @@ interface CanopyState {
   history: HistoryOverview | null;
   /** how Claude starts per repo, keyed by repo path; absent means defaults */
   agents: Record<string, AgentSettings>;
+  /** how a repo's builds are made and run, keyed by repo path */
+  launchers: Record<string, LaunchSettings>;
+  /** downloads and builds by id, live and recently finished */
+  jobs: Record<string, Job>;
+  /** repo id → bumped whenever its builds changed, so the launch section re-reads */
+  buildsAt: Record<string, number>;
   /** every shell open in this window, in the order opened */
   terms: TermTab[];
   /** the shell showing in the strip; null when the strip is empty */
@@ -321,6 +353,13 @@ interface CanopyState {
   /** opens the repo's agent settings */
   editAgent: (repoId: string) => void;
   setAgent: (repoId: string, settings: AgentSettings) => Promise<void>;
+  /** opens the repo's launch settings */
+  editLaunch: (repoId: string) => void;
+  setLaunch: (repoId: string, settings: LaunchSettings) => Promise<void>;
+  /** opens the repo's panel with its launch section unfolded */
+  showLaunch: (repoId: string) => void;
+  stopJob: (jobId: string) => Promise<void>;
+  dismissJob: (jobId: string) => Promise<void>;
   /** shows a run's console */
   showRun: (runId: string) => void;
   closeSheet: () => void;
@@ -364,6 +403,7 @@ export type Sheet =
   | { kind: "plan"; repoId: string; action: RunAction }
   | { kind: "run"; runId: string }
   | { kind: "agent"; repoId: string }
+  | { kind: "launch"; repoId: string }
   | { kind: "search" }
   | { kind: "flow-plan"; repoId: string; workflow: string }
   | { kind: "flow"; flowId: string }
@@ -449,6 +489,9 @@ export const useStore = create<CanopyState>((set, get) => ({
   pendingSearch: null,
   history: null,
   agents: {},
+  launchers: {},
+  jobs: {},
+  buildsAt: {},
   terms: [],
   activeTerm: null,
   termHeight: layout.termHeight,
@@ -485,7 +528,7 @@ export const useStore = create<CanopyState>((set, get) => ({
 
   init: async () => {
     try {
-      const [tree, workspaces, runs, agents, flows, fleets, verdict] = await Promise.all([
+      const [tree, workspaces, runs, agents, flows, fleets, verdict, launchers, jobs] = await Promise.all([
         api.tree(),
         api.workspaces(),
         api.runs(),
@@ -493,6 +536,8 @@ export const useStore = create<CanopyState>((set, get) => ({
         api.flows(),
         api.fleets(),
         api.verdict(),
+        api.launchers(),
+        api.jobs(),
       ]);
       set({
         root: tree.root,
@@ -501,6 +546,8 @@ export const useStore = create<CanopyState>((set, get) => ({
         workspaces,
         runs: Object.fromEntries(runs.map((r) => [r.id, r])),
         agents,
+        launchers,
+        jobs: Object.fromEntries(jobs.map((j) => [j.id, j])),
         flows: Object.fromEntries(flows.map((f) => [f.id, f])),
         fleets: Object.fromEntries(fleets.map((f) => [f.id, f])),
         flowRuns: flowRunsOf(flows),
@@ -549,11 +596,12 @@ export const useStore = create<CanopyState>((set, get) => ({
   },
 
   rescan: async () => {
-    const [tree, runs, flows, fleets] = await Promise.all([
+    const [tree, runs, flows, fleets, jobs] = await Promise.all([
       api.rescan(),
       api.runs(),
       api.flows(),
       api.fleets(),
+      api.jobs(),
     ]);
     // a rescan can bring new repos; the server rebuilds the repo→project map
     void get().loadHistory(true);
@@ -566,6 +614,7 @@ export const useStore = create<CanopyState>((set, get) => ({
       flows: Object.fromEntries(flows.map((f) => [f.id, f])),
       fleets: Object.fromEntries(fleets.map((f) => [f.id, f])),
       flowRuns: flowRunsOf(flows),
+      jobs: Object.fromEntries(jobs.map((j) => [j.id, j])),
     });
   },
 
@@ -685,6 +734,17 @@ export const useStore = create<CanopyState>((set, get) => ({
         const sheet = s.sheet?.kind === "fleet" && s.sheet.fleetId === ev.id ? null : s.sheet;
         return { fleets, sheet };
       });
+    } else if (ev.type === "job") {
+      set((s) => ({ jobs: { ...s.jobs, [ev.job.id]: ev.job } }));
+    } else if (ev.type === "job-gone") {
+      set((s) => {
+        const { [ev.id]: _gone, ...jobs } = s.jobs;
+        return { jobs };
+      });
+    } else if (ev.type === "builds") {
+      set((s) => ({ buildsAt: { ...s.buildsAt, [ev.repoId]: Date.now() } }));
+    } else if (ev.type === "launchers") {
+      set({ launchers: ev.launchers });
     }
   },
 
@@ -814,6 +874,33 @@ export const useStore = create<CanopyState>((set, get) => ({
   setAgent: async (repoId, settings) => {
     const agents = await api.setAgent(repoId, settings);
     set({ agents });
+  },
+  editLaunch: (repoId) => set({ sheet: { kind: "launch", repoId } }),
+  setLaunch: async (repoId, settings) => {
+    const launchers = await api.setLaunch(repoId, settings);
+    set({ launchers });
+  },
+  showLaunch: (repoId) =>
+    set((s) => {
+      const closedSections = s.closedSections.filter((k) => k !== "launch");
+      if (closedSections.length !== s.closedSections.length) {
+        saveLayout({ ...layoutOf(s), closedSections });
+      }
+      return {
+        panels: s.panels.includes(repoId) ? s.panels : [...s.panels, repoId],
+        closedSections,
+      };
+    }),
+  stopJob: async (jobId) => {
+    const job = await api.stopJob(jobId);
+    set((s) => ({ jobs: { ...s.jobs, [job.id]: job } }));
+  },
+  dismissJob: async (jobId) => {
+    await api.dismissJob(jobId);
+    set((s) => {
+      const { [jobId]: _gone, ...jobs } = s.jobs;
+      return { jobs };
+    });
   },
   showRun: (runId) => set({ sheet: { kind: "run", runId } }),
   closeSheet: () => set({ sheet: null }),
@@ -978,6 +1065,17 @@ export function allRuns(s: CanopyState): Run[] {
 /** The repo's agent settings, the defaults when it has none. */
 export const agentFor = (s: CanopyState, repo: Repo): AgentSettings =>
   s.agents[repo.path] ?? DEFAULT_AGENT;
+
+/** The repo's launch settings, the defaults when it has none. */
+export const launchFor = (s: CanopyState, repo: Repo): LaunchSettings =>
+  s.launchers[repo.path] ?? DEFAULT_LAUNCH;
+
+/** The repo's jobs, newest first. Callers select through useShallow. */
+export function jobsFor(s: CanopyState, repoId: string): Job[] {
+  return Object.values(s.jobs)
+    .filter((j) => j.repoId === repoId)
+    .sort((a, b) => b.startedAt - a.startedAt);
+}
 
 /** repos in the active workspace, before any filter. A forge repo that is
  *  already cloned here is the same repo as the card next to it, so unless
