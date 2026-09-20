@@ -5,9 +5,12 @@ import { join } from "node:path";
 import { exec } from "./exec";
 import { commit, getStatus, stageFile } from "./git";
 import {
+  catCommand,
   findCommand,
   findRepoDirs,
   launchSource,
+  parseGitmodules,
+  parseModuleDump,
   pruneNested,
   repoId,
   repoRel,
@@ -15,6 +18,7 @@ import {
   scanSource,
   sourceGroup,
   sourceRepoId,
+  withSubmodules,
 } from "./scan";
 import type { Source } from "./types";
 
@@ -30,6 +34,19 @@ beforeAll(async () => {
   await mkdir(join(root, "a/node_modules/dep/.git"), { recursive: true });
   // nothing below a repo root should be scanned
   await mkdir(join(root, "a/repo1/sub/.git"), { recursive: true });
+  // except its submodules: a checked-out one (with a .git), and one below
+  // that, count; a listed one never checked out does not
+  await mkdir(join(root, "b/deep/repo3/mods/one/.git"), { recursive: true });
+  await mkdir(join(root, "b/deep/repo3/mods/one/inner/.git"), { recursive: true });
+  await mkdir(join(root, "b/deep/repo3/mods/two"), { recursive: true });
+  await writeFile(
+    join(root, "b/deep/repo3/.gitmodules"),
+    '[submodule "one"]\n\tpath = mods/one\n\turl = x\n[submodule "two"]\n\tpath = mods/two\n\turl = y\n',
+  );
+  await writeFile(
+    join(root, "b/deep/repo3/mods/one/.gitmodules"),
+    '[submodule "inner"]\n\tpath = inner\n\turl = z\n',
+  );
   // plain folder, no repo
   await mkdir(join(root, "c/empty"), { recursive: true });
 });
@@ -39,16 +56,67 @@ afterAll(async () => {
 });
 
 describe("findRepoDirs", () => {
-  test("finds repos, skips ignored dirs, stops at repo roots", async () => {
+  test("finds repos, skips ignored dirs, stops at repo roots except for submodules", async () => {
     const dirs = await findRepoDirs(root);
     const rels = dirs.map((d) => repoId(root, d));
-    expect(rels).toEqual(["a/repo1", "a/repo2", "b/deep/repo3"]);
+    expect(rels).toEqual([
+      "a/repo1",
+      "a/repo2",
+      "b/deep/repo3",
+      "b/deep/repo3/mods/one",
+      "b/deep/repo3/mods/one/inner",
+    ]);
   });
 
   test("respects maxDepth", async () => {
     const dirs = await findRepoDirs(root, { maxDepth: 2 });
     const rels = dirs.map((d) => repoId(root, d));
     expect(rels).toEqual(["a/repo1", "a/repo2"]);
+  });
+});
+
+describe("submodules", () => {
+  test("parseGitmodules reads the paths and drops any that leave the repo", () => {
+    const text =
+      '[submodule "a"]\n  path = services/a/\n  url = u\n[submodule "b"]\npath=b\n[submodule "x"]\n  path = ../out\n  path = .\n';
+    expect(parseGitmodules(text)).toEqual(["services/a", "b"]);
+  });
+
+  test("withSubmodules keeps top repos and the submodules they list, down the chain", () => {
+    const dirs = [
+      "/d/homelab",
+      "/d/homelab/services/gate",
+      "/d/homelab/services/gate/inner",
+      "/d/homelab/vendor/plain",
+      "/d/other",
+    ];
+    const modules = new Map([
+      ["/d/homelab", ["services/gate", "services/missing"]],
+      ["/d/homelab/services/gate", ["inner"]],
+    ]);
+    expect(withSubmodules(dirs, modules)).toEqual([
+      "/d/homelab",
+      "/d/homelab/services/gate",
+      "/d/homelab/services/gate/inner",
+      "/d/other",
+    ]);
+  });
+
+  test("the cat line's output parses back into repo dir to paths", () => {
+    const cmd = catCommand(["/d/homelab/.gitmodules"]);
+    expect(cmd.slice(0, 2)).toEqual(["sh", "-c"]);
+    expect(cmd.slice(-1)).toEqual(["/d/homelab/.gitmodules"]);
+    const dump = "/d/homelab/.gitmodules\0[submodule \"g\"]\n\tpath = services/gate\n\0/d/x/.gitmodules\0\0";
+    const m = parseModuleDump(dump);
+    expect(m.get("/d/homelab")).toEqual(["services/gate"]);
+    expect(m.get("/d/x")).toEqual([]);
+  });
+
+  test("the cat line really prints path\\0contents\\0", async () => {
+    const r = await exec(catCommand([join(root, "b/deep/repo3/mods/one/.gitmodules")]));
+    expect(r.code).toBe(0);
+    const m = parseModuleDump(r.stdout);
+    expect(m.get(join(root, "b/deep/repo3/mods/one"))).toEqual(["inner"]);
   });
 });
 
@@ -61,6 +129,7 @@ describe("remote find", () => {
       "3",
     ]);
     expect(cmd).toContain("-print0");
+    expect(cmd).toContain(".gitmodules");
     expect(cmd.slice(-10)).toEqual([
       "(",
       "(",

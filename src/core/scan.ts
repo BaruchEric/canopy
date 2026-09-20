@@ -1,4 +1,4 @@
-import { readdir, realpath, stat } from "node:fs/promises";
+import { readdir, readFile, realpath, stat } from "node:fs/promises";
 import { basename, dirname, join, relative } from "node:path";
 import { onHost } from "./exec";
 import { forgeRepo, listForgeRepos } from "./forge";
@@ -27,8 +27,39 @@ export interface ScanOptions {
   ignore?: string[];
 }
 
+/** The `path = …` lines of a `.gitmodules` file: where a repo keeps its
+ *  submodules, relative to its root. A path that would leave the repo is
+ *  dropped, since a submodule cannot live outside it. */
+export function parseGitmodules(text: string): string[] {
+  const out: string[] = [];
+  for (const line of text.split("\n")) {
+    const m = /^\s*path\s*=\s*(.+?)\s*$/.exec(line);
+    if (!m) continue;
+    const p = (m[1] ?? "").replace(/\/+$/, "");
+    if (!p || p === "." || p.split("/").includes("..")) continue;
+    out.push(p);
+  }
+  return out;
+}
+
+/** The submodules of a local repo that are checked out: each `.gitmodules`
+ *  path whose folder holds a `.git` entry. An empty list when the file is
+ *  missing or unreadable. */
+async function checkedOutSubmodules(dir: string): Promise<string[]> {
+  const text = await readFile(join(dir, ".gitmodules"), "utf8").catch(() => null);
+  if (text === null) return [];
+  const paths = parseGitmodules(text);
+  const has = await Promise.all(
+    paths.map((p) => stat(join(dir, p, ".git")).then(() => true, () => false)),
+  );
+  return paths.filter((_, i) => has[i]).map((p) => join(dir, p));
+}
+
 /** Find directories containing a .git entry (dir or file — worktrees count).
- *  Does not descend below a found repo. */
+ *  Does not descend below a found repo, except into its checked-out
+ *  submodules: those are repos of their own, listed in `.gitmodules`, and
+ *  count however deep they sit. A plain clone vendored under a repo stays
+ *  hidden. */
 export async function findRepoDirs(
   root: string,
   opts: ScanOptions = {},
@@ -51,7 +82,7 @@ export async function findRepoDirs(
       return;
     }
     if (entries.some((e) => e.name === ".git")) {
-      found.push(dir);
+      await foundRepo(dir);
       return;
     }
     if (depth >= maxDepth) return;
@@ -72,17 +103,27 @@ export async function findRepoDirs(
     await Promise.all(linked.map((name) => walk(join(dir, name), depth + 1)));
   }
 
+  // A repo and, below it, its checked-out submodules. No cycle is possible:
+  // a `.gitmodules` path never climbs out of its repo.
+  async function foundRepo(dir: string): Promise<void> {
+    found.push(dir);
+    const subs = await checkedOutSubmodules(dir);
+    await Promise.all(subs.map(foundRepo));
+  }
+
   const rootStat = await stat(root).catch(() => null);
   if (!rootStat?.isDirectory()) throw new Error(`not a directory: ${root}`);
   await walk(root, 0);
-  return found.sort();
+  return [...new Set(found)].sort();
 }
 
 /* ---------- the same walk on another host, as one `find` ---------- */
 
 /** The `find` that mirrors `findRepoDirs`: every `.git` entry down to the
- *  depth limit, not descending into hidden or ignored folders. `find` still
- *  walks below a repo root, so `pruneNested` finishes the job. */
+ *  depth limit, not descending into hidden or ignored folders, plus every
+ *  `.gitmodules` file, which says which of the nested `.git`s are
+ *  submodules. `find` still walks below a repo root, so `withSubmodules`
+ *  finishes the job. */
 export function findCommand(
   root: string,
   opts: ScanOptions = {},
@@ -108,6 +149,12 @@ export function findCommand(
     ")",
     "-o",
     "(",
+    "-name",
+    ".gitmodules",
+    "-print0",
+    ")",
+    "-o",
+    "(",
     "(",
     ...skip,
     ")",
@@ -128,6 +175,50 @@ export function pruneNested(dirs: string[]): string[] {
   return out;
 }
 
+/** The top-level repos among every `.git` dir found, nested ones included,
+ *  plus each shown repo's checked-out submodules down the chain, as the
+ *  local walk has it. `modules` maps a repo dir to its `.gitmodules` paths. */
+export function withSubmodules(
+  dirs: string[],
+  modules: Map<string, string[]>,
+): string[] {
+  const all = new Set(dirs);
+  const out: string[] = [];
+  const visit = (d: string): void => {
+    out.push(d);
+    for (const p of modules.get(d) ?? []) {
+      const sub = join(d, p);
+      if (all.has(sub)) visit(sub);
+    }
+  };
+  pruneNested(dirs).forEach(visit);
+  return [...new Set(out)].sort();
+}
+
+/** One `sh` line that prints each file as `path\0contents\0`, for reading
+ *  every remote `.gitmodules` in one round trip. */
+export function catCommand(files: string[]): string[] {
+  return [
+    "sh",
+    "-c",
+    'for f in "$@"; do printf "%s\\0" "$f"; cat "$f" 2>/dev/null; printf "\\0"; done',
+    "sh",
+    ...files,
+  ];
+}
+
+/** `catCommand`'s output back into a map of repo dir to submodule paths. */
+export function parseModuleDump(text: string): Map<string, string[]> {
+  const parts = text.split("\0");
+  const out = new Map<string, string[]>();
+  for (let i = 0; i + 1 < parts.length; i += 2) {
+    const file = parts[i] ?? "";
+    if (!file) continue;
+    out.set(dirname(file), parseGitmodules(parts[i + 1] ?? ""));
+  }
+  return out;
+}
+
 export async function findRepoDirsRemote(
   host: string,
   root: string,
@@ -139,8 +230,15 @@ export async function findRepoDirsRemote(
   if (r.code !== 0 && !r.stdout) {
     throw new Error(r.stderr.trim() || `find failed on ${host}`);
   }
-  const gits = r.stdout.split("\0").filter(Boolean);
-  return pruneNested(gits.map((g) => dirname(g)));
+  const entries = r.stdout.split("\0").filter(Boolean);
+  const gits = entries.filter((e) => basename(e) === ".git").map((g) => dirname(g));
+  const moduleFiles = entries.filter((e) => basename(e) === ".gitmodules");
+  let modules = new Map<string, string[]>();
+  if (moduleFiles.length > 0) {
+    const c = await onHost(host, catCommand(moduleFiles), { timeoutMs: 60_000 });
+    modules = parseModuleDump(c.stdout);
+  }
+  return withSubmodules(gits, modules);
 }
 
 async function withLimit<T, R>(
