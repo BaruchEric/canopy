@@ -1,9 +1,12 @@
 import { memo, useEffect, useMemo, useRef, useState } from "react";
 import { useShallow } from "zustand/react/shallow";
-import { groupRepos, sectionKey } from "../grouping";
+import { pickable } from "../flows";
+import { changedAt, groupRepos, newestEdit, sectionKey } from "../grouping";
+import { pickCount, pickState } from "../select";
 import { activeFlowFor, flowFor, runFor, useStore, visibleRepos } from "../store";
 import { ago, GLYPH, stateOf } from "../util";
 import { GroupHead } from "./GroupHead";
+import { Tick } from "./SelectBar";
 import { RepoLink } from "./RepoLink";
 import { RepoMenu } from "./RepoMenu";
 import { Rings } from "./Rings";
@@ -21,7 +24,7 @@ const RepoCard = memo(function RepoCard({ repo }: { repo: Repo }) {
   const selecting = useStore((s) => s.selecting);
   const picked = useStore((s) => s.selected.includes(repo.id));
   const toggleSelected = useStore((s) => s.toggleSelected);
-  const canPick = !repo.forge && !repo.error && !repo.host;
+  const canPick = pickable(repo);
   const [pulse, setPulse] = useState(false);
   const first = useRef(true);
 
@@ -39,6 +42,18 @@ const RepoCard = memo(function RepoCard({ repo }: { repo: Repo }) {
   const st = repo.status;
   const forge = repo.forge;
   const state = stateOf(repo);
+  // The time is the last change of any kind, what "recent" sorts on. When
+  // that is an edit rather than the commit, the tooltip says which file and
+  // keeps the commit too.
+  const commit = st?.lastCommit;
+  const edit = newestEdit(repo);
+  const whenTitle = forge
+    ? "last push to the forge"
+    : edit && commit && edit.at > commit.at
+      ? `${edit.path} edited ${ago(edit.at)} · committed ${ago(commit.at)}: ${commit.subject}`
+      : edit && !commit
+        ? `${edit.path} edited ${ago(edit.at)}`
+        : commit?.subject;
   const live = activeFlow
     ? activeFlow.status === "working"
       ? " run-working"
@@ -51,7 +66,7 @@ const RepoCard = memo(function RepoCard({ repo }: { repo: Repo }) {
       className={`card s-${state}${pulse ? " pulse" : ""}${live}${selecting && picked ? " picked" : ""}${selecting && !canPick ? " unpickable" : ""}`}
       onClick={(e) => {
         if (selecting) {
-          if (canPick) toggleSelected(repo.id);
+          toggleSelected(repo.id, e.shiftKey);
           return;
         }
         openRepo(repo.id, e);
@@ -62,17 +77,28 @@ const RepoCard = memo(function RepoCard({ repo }: { repo: Repo }) {
         if (e.button === 1) openRepo(repo.id, { metaKey: true });
       }}
       onKeyDown={(e) => {
-        if (e.key === "Enter") {
+        if (e.key === "Enter" || (selecting && e.key === " ")) {
           if (selecting) {
-            if (canPick) toggleSelected(repo.id);
+            e.preventDefault();
+            toggleSelected(repo.id, e.shiftKey);
             return;
           }
           openRepo(repo.id, e);
         }
       }}
       tabIndex={0}
-      role="button"
-      aria-label={forge ? `Open ${repo.name} on the forge` : `Open ${repo.name}`}
+      role={selecting ? "checkbox" : "button"}
+      aria-checked={selecting ? picked : undefined}
+      aria-disabled={selecting && !canPick ? true : undefined}
+      aria-label={
+        selecting
+          ? canPick
+            ? `Pick ${repo.name}`
+            : `${repo.name} cannot join a fleet`
+          : forge
+            ? `Open ${repo.name} on the forge`
+            : `Open ${repo.name}`
+      }
     >
       <div className="card-top">
         {selecting && (
@@ -132,8 +158,8 @@ const RepoCard = memo(function RepoCard({ repo }: { repo: Repo }) {
                 : "clean"}
           </span>
         )}
-        <span className="when" title={forge ? "last push to the forge" : st?.lastCommit?.subject}>
-          {forge ? ago(forge.updated ? forge.updated / 1000 : undefined) : ago(st?.lastCommit?.at)}
+        <span className="when" title={whenTitle}>
+          {ago(changedAt(repo))}
         </span>
       </div>
       {history && overview?.available && (
@@ -143,11 +169,34 @@ const RepoCard = memo(function RepoCard({ repo }: { repo: Repo }) {
   );
 });
 
+/** A group heading's tick and count in select mode: the tick fills or
+ *  clears the group's pickable members, the count says how many are in. */
+function GroupPick({ label, ids, total }: { label: string; ids: string[]; total: number }) {
+  const state = useStore((s) => pickState(s.selected, ids));
+  const n = useStore((s) => pickCount(s.selected, ids));
+  const pickGroup = useStore((s) => s.pickGroup);
+  return (
+    <>
+      {ids.length > 0 && (
+        <Tick
+          state={state}
+          label={state === "all" ? `Unpick every repo in ${label}` : `Pick every repo in ${label}`}
+          onClick={() => pickGroup(ids)}
+        />
+      )}
+      <span className="grid-count" title={`${n} of ${ids.length} picked`}>
+        {n}/{total}
+      </span>
+    </>
+  );
+}
+
 export function RepoGrid() {
   const repos = useStore(useShallow(visibleRepos));
   const sort = useStore((s) => s.settings.sort);
   const collapsed = useStore((s) => s.collapsed);
   const toggleGroup = useStore((s) => s.toggleGroup);
+  const selecting = useStore((s) => s.selecting);
   const groups = useMemo(() => groupRepos(repos, sort), [repos, sort]);
 
   if (repos.length === 0) {
@@ -161,7 +210,7 @@ export function RepoGrid() {
     );
   }
   return (
-    <main className="main">
+    <main className={selecting ? "main selecting" : "main"}>
       {groups.map(({ key, label, hint, repos: members }) => {
         const id = sectionKey(sort, key);
         const open = !collapsed.includes(id);
@@ -174,7 +223,11 @@ export function RepoGrid() {
               open={open}
               onToggle={() => toggleGroup(id)}
             >
-              <span className="grid-count">{members.length}</span>
+              {selecting ? (
+                <GroupPick label={label} ids={members.filter(pickable).map((r) => r.id)} total={members.length} />
+              ) : (
+                <span className="grid-count">{members.length}</span>
+              )}
             </GroupHead>
             {open && (
               <div className="grid">

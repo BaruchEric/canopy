@@ -4,7 +4,8 @@ import { applyQuery, type RepoFilter } from "./filters";
 import { openElsewhere, openShellElsewhere, parseRoute } from "./routes";
 import { loadSettings, saveSettings, shellPlace, type Settings, type ShellPlace } from "./settings";
 import { clamp, needsAttention } from "./util";
-import { ownRun, selectable } from "./flows";
+import { ownRun, pickable, selectable } from "./flows";
+import { boardOrder, invertPick, pickWhere, rangeIds, setPick, togglePick } from "./select";
 import { appendFeed, describeEvent, type FeedEntry } from "./feed";
 import {
   DEFAULT_AGENT,
@@ -277,7 +278,10 @@ interface CanopyState {
   flowRuns: Record<string, string>;
   /** select mode on the board */
   selecting: boolean;
+  /** repo ids picked for a fleet; read through `pickedIds`, which drops the ones the view no longer shows */
   selected: string[];
+  /** the last repo clicked in select mode, where a shift-click's range starts */
+  selectAnchor: string | null;
   /** whether the server has a gateway key, so verdict gates can judge */
   verdictReady: boolean;
   /** every server event since the page loaded, as lines, newest last */
@@ -387,10 +391,19 @@ interface CanopyState {
   stopFlow: (flowId: string) => Promise<void>;
   dismissFlow: (flowId: string) => Promise<void>;
   showFlow: (flowId: string) => void;
-  /** turns select mode on the board on or off */
+  /** turns select mode on the board on or off; it starts with nothing picked */
   setSelecting: (on: boolean) => void;
-  toggleSelected: (repoId: string) => void;
+  /** flips one repo; with `extend`, sets every repo from the anchor to it to the anchor's state instead */
+  toggleSelected: (repoId: string, extend?: boolean) => void;
   setSelected: (ids: string[]) => void;
+  /** every pickable repo in view, none of them, or the other ones */
+  pickAll: () => void;
+  pickNone: () => void;
+  pickInvert: () => void;
+  /** a group's tick: fills the group unless it is full already, then clears it */
+  pickGroup: (ids: string[]) => void;
+  /** just the repos in view in one state */
+  pickFacet: (facet: RepoFilter) => void;
   /** opens the pre-flight for a fleet workflow over the selected repos */
   planFleet: (workflow: string) => void;
   startFleet: (workflow: string, note: string) => Promise<void>;
@@ -502,6 +515,7 @@ export const useStore = create<CanopyState>((set, get) => ({
   flowRuns: {},
   selecting: false,
   selected: [],
+  selectAnchor: null,
   verdictReady: false,
   feed: [],
   feedSeq: 1,
@@ -987,21 +1001,34 @@ export const useStore = create<CanopyState>((set, get) => ({
     });
   },
   showFlow: (flowId) => set({ sheet: { kind: "flow", flowId } }),
-  setSelecting: (on) =>
-    set((s) => ({ selecting: on, selected: on ? selectable(visibleRepos(s)).map((r) => r.id) : [] })),
-  toggleSelected: (repoId) =>
-    set((s) => ({
-      selected: s.selected.includes(repoId) ? s.selected.filter((x) => x !== repoId) : [...s.selected, repoId],
-    })),
+  setSelecting: (on) => set({ selecting: on, selected: [], selectAnchor: null }),
+  toggleSelected: (repoId, extend = false) =>
+    set((s) => {
+      const repo = s.repos.find((r) => r.id === repoId);
+      if (!repo || !pickable(repo)) return {};
+      if (extend && s.selectAnchor && s.selectAnchor !== repoId) {
+        // the range takes the anchor's state, so a shift-click after an
+        // unpick clears the stretch and one after a pick fills it
+        const ids = rangeIds(boardOrder(visibleRepos(s), s.settings.sort, s.collapsed), s.selectAnchor, repoId);
+        return { selected: setPick(s.selected, ids, s.selected.includes(s.selectAnchor)) };
+      }
+      return { selected: togglePick(s.selected, [repoId]), selectAnchor: repoId };
+    }),
   setSelected: (ids) => set({ selected: ids }),
+  pickAll: () => set((s) => ({ selected: pickableIds(s) })),
+  pickNone: () => set({ selected: [] }),
+  pickInvert: () => set((s) => ({ selected: invertPick(pickedIds(s), pickableIds(s)) })),
+  pickGroup: (ids) => set((s) => ({ selected: togglePick(s.selected, ids) })),
+  pickFacet: (facet) => set((s) => ({ selected: pickWhere(visibleRepos(s), facet) })),
   planFleet: (workflow) => set({ sheet: { kind: "fleet-plan", workflow } }),
   startFleet: async (workflow, note) => {
-    const fleet = await api.startFleet(workflow, get().selected, note);
+    const fleet = await api.startFleet(workflow, pickedIds(get()), note);
     set((s) => ({
       fleets: { ...s.fleets, [fleet.id]: fleet },
       sheet: { kind: "fleet", fleetId: fleet.id },
       selecting: false,
       selected: [],
+      selectAnchor: null,
     }));
   },
   stopFleet: async (fleetId) => {
@@ -1107,4 +1134,18 @@ export function visibleRepos(s: CanopyState): Repo[] {
     attention: s.dirtyOnly,
     text: s.filter,
   });
+}
+
+/** The ids a fleet could be pointed at right now: pickable and in view.
+ *  Callers select through useShallow. */
+export function pickableIds(s: CanopyState): string[] {
+  return selectable(visibleRepos(s)).map((r) => r.id);
+}
+
+/** The picked repos the view still shows. A pick survives a filter that
+ *  hides it and comes back when the filter goes, but never rides along on a
+ *  fleet or the count unseen. Callers select through useShallow. */
+export function pickedIds(s: CanopyState): string[] {
+  const have = new Set(s.selected);
+  return pickableIds(s).filter((id) => have.has(id));
 }

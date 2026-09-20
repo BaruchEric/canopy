@@ -3011,20 +3011,38 @@ body.resizing {
 .verdict-bars .pct { color: var(--ink-dim); }
 
 /* ---------- select mode and fleets ---------- */
-.card .tick {
+/* One tick everywhere: a span on a card or tree row (the row is the control),
+   a button on a heading or in the bar (tri-state, so it can say "some"). */
+.tick {
   width: 16px; height: 16px; border: 1px solid var(--hair); border-radius: 4px;
   display: inline-flex; align-items: center; justify-content: center;
-  font-size: 11px; margin-right: 6px; flex: none;
+  font-size: 11px; line-height: 1; flex: none; color: var(--ink-dim);
 }
-.card .tick.on { background: var(--moss); border-color: var(--moss); color: var(--bark1); }
+.card .tick { margin-right: 6px; }
+.tick.on, .tick.all { background: var(--moss); border-color: var(--moss); color: var(--bark1); }
+.tick.some { border-color: var(--moss); color: var(--moss); font-weight: 700; }
+.tick-btn { padding: 0; cursor: pointer; background: var(--bark2); }
+.tick-btn:hover { border-color: var(--moss); }
+.tick-btn.all:hover { background: var(--moss-pale); border-color: var(--moss-pale); }
+.tick-btn:focus-visible { outline: 2px solid var(--moss); outline-offset: 1px; }
 .card.picked { outline: 2px solid var(--moss); }
 .card.unpickable { opacity: 0.45; }
+/* a shift-click on a card is a range, not a text selection */
+.main.selecting, .sidebar.selecting { user-select: none; }
+.grid-head .tick { order: -1; }
+.tree-item.picked { background: color-mix(in srgb, var(--moss) 14%, transparent); color: var(--ink); }
+.tree-item.unpickable { opacity: 0.45; }
+.tree-counts { align-items: center; }
+.tree-counts .c-picked { color: var(--moss); }
 .select-bar {
   display: flex; align-items: center; gap: 8px; padding: 8px 16px;
   border-top: 1px solid var(--hair); background: var(--float);
+  flex-wrap: wrap;
 }
-.select-count { font-size: 13px; color: var(--ink-dim); }
+.select-count { font-size: 13px; color: var(--ink-dim); min-width: 9ch; }
 .select-wf { font: inherit; font-size: 13px; padding: 4px 8px; }
+.select-hint { font-size: 12px; color: var(--ink-faint); margin-left: 4px; }
+@media (max-width: 900px) { .select-hint { display: none; } }
 .fleet-list { margin: 8px 0; }
 .fleet-skipped { margin: 4px 0; color: var(--ink-dim); font-size: 13px; }
 .fleet-skipped .eyebrow { display: block; }

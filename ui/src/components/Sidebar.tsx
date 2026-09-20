@@ -1,21 +1,90 @@
-import { useMemo } from "react";
+import { memo, useMemo } from "react";
 import { useShallow } from "zustand/react/shallow";
+import { pickable } from "../flows";
 import { groupRepos, sectionKey } from "../grouping";
+import { pickCount, pickState } from "../select";
 import { useStore, visibleRepos } from "../store";
 import { GLYPH, stateOf } from "../util";
 import { GroupHead } from "./GroupHead";
+import { Tick } from "./SelectBar";
+import type { Repo } from "../../../src/core/types";
+
+/** One row of the tree. In select mode it picks the repo like the card
+ *  does, shift included, instead of opening it. */
+const TreeItem = memo(function TreeItem({ repo }: { repo: Repo }) {
+  const openRepo = useStore((s) => s.openRepo);
+  const selecting = useStore((s) => s.selecting);
+  const picked = useStore((s) => s.selected.includes(repo.id));
+  const toggleSelected = useStore((s) => s.toggleSelected);
+  const canPick = pickable(repo);
+  const state = stateOf(repo);
+  return (
+    <button
+      type="button"
+      className={`tree-item s-${state}${selecting && picked ? " picked" : ""}${selecting && !canPick ? " unpickable" : ""}`}
+      role={selecting ? "checkbox" : undefined}
+      aria-checked={selecting ? picked : undefined}
+      aria-disabled={selecting && !canPick ? true : undefined}
+      onClick={(e) => {
+        if (selecting) toggleSelected(repo.id, e.shiftKey);
+        else openRepo(repo.id, e);
+      }}
+      onAuxClick={(e) => {
+        if (!selecting && e.button === 1) openRepo(repo.id, { metaKey: true });
+      }}
+      title={selecting && !canPick ? `${repo.name} cannot join a fleet` : repo.id}
+    >
+      {selecting && (
+        <span className={`tick${picked ? " on" : ""}`} aria-hidden="true">
+          {picked ? "✓" : ""}
+        </span>
+      )}
+      <span className="glyph">{GLYPH[state]}</span>
+      <span className="tree-name">{repo.name}</span>
+      {repo.host && <span className="host-tag">{repo.host}</span>}
+      {(repo.status?.files.length ?? 0) > 0 && (
+        <span className="tree-n">{repo.status?.files.length}</span>
+      )}
+      {(repo.status?.ahead ?? 0) > 0 && (
+        <span className="tree-ahead">↑{repo.status?.ahead}</span>
+      )}
+    </button>
+  );
+});
+
+/** A tree heading's tick and count in select mode, the same `picked/total`
+ *  the grid heading says. */
+function TreePick({ label, ids, total }: { label: string; ids: string[]; total: number }) {
+  const state = useStore((s) => pickState(s.selected, ids));
+  const n = useStore((s) => pickCount(s.selected, ids));
+  const pickGroup = useStore((s) => s.pickGroup);
+  return (
+    <>
+      {ids.length > 0 && (
+        <Tick
+          state={state}
+          label={state === "all" ? `Unpick every repo in ${label}` : `Pick every repo in ${label}`}
+          onClick={() => pickGroup(ids)}
+        />
+      )}
+      <span className="c-picked" title={`${n} of ${ids.length} picked`}>
+        {n}/{total}
+      </span>
+    </>
+  );
+}
 
 export function Sidebar() {
   const repos = useStore(useShallow(visibleRepos));
   const sort = useStore((s) => s.settings.sort);
-  const openRepo = useStore((s) => s.openRepo);
   const collapsed = useStore((s) => s.collapsed);
   const toggleGroup = useStore((s) => s.toggleGroup);
+  const selecting = useStore((s) => s.selecting);
 
   const groups = useMemo(() => groupRepos(repos, sort), [repos, sort]);
 
   return (
-    <aside id="sidebar" className="sidebar" aria-label="Repository tree">
+    <aside id="sidebar" className={selecting ? "sidebar selecting" : "sidebar"} aria-label="Repository tree">
       {groups.map(({ key, label, hint, repos: members }) => {
         const dirty = members.filter(
           (r) => (r.status?.files.length ?? 0) > 0,
@@ -32,33 +101,21 @@ export function Sidebar() {
               onToggle={() => toggleGroup(id)}
             >
               <span className="tree-counts">
-                {dirty > 0 && <em className="c-dirty">{dirty}●</em>}
-                <span>{members.length}</span>
+                {selecting ? (
+                  <TreePick label={label} ids={members.filter(pickable).map((r) => r.id)} total={members.length} />
+                ) : (
+                  <>
+                    {dirty > 0 && <em className="c-dirty">{dirty}●</em>}
+                    <span>{members.length}</span>
+                  </>
+                )}
               </span>
             </GroupHead>
             {open && (
               <ul className="tree-list">
                 {members.map((r) => (
                   <li key={r.id}>
-                    <button
-                      type="button"
-                      className={`tree-item s-${stateOf(r)}`}
-                      onClick={(e) => openRepo(r.id, e)}
-                      onAuxClick={(e) => {
-                        if (e.button === 1) openRepo(r.id, { metaKey: true });
-                      }}
-                      title={r.id}
-                    >
-                      <span className="glyph">{GLYPH[stateOf(r)]}</span>
-                      <span className="tree-name">{r.name}</span>
-                      {r.host && <span className="host-tag">{r.host}</span>}
-                      {(r.status?.files.length ?? 0) > 0 && (
-                        <span className="tree-n">{r.status?.files.length}</span>
-                      )}
-                      {(r.status?.ahead ?? 0) > 0 && (
-                        <span className="tree-ahead">↑{r.status?.ahead}</span>
-                      )}
-                    </button>
+                    <TreeItem repo={r} />
                   </li>
                 ))}
               </ul>

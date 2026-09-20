@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import type { Repo, RepoStatus } from "../../src/core/types";
-import { groupRepos } from "./grouping";
+import { changedAt, groupRepos, newestEdit } from "./grouping";
 
 const NOW = 1_800_000_000;
 const DAY = 86_400;
@@ -56,9 +56,9 @@ describe("groupRepos", () => {
     expect(g.map((x) => x.label)).toEqual(["."]);
   });
 
-  test("activity puts the busiest repos first and unreadable ones last", () => {
+  test("activity groups by what needs a hand, newest change first inside each", () => {
     expect(ids(groupRepos(grove, "activity", NOW))).toEqual([
-      ["needs attention", ["alpha", "delta"]],
+      ["needs attention", ["delta", "alpha"]],
       ["unpushed", ["beta"]],
       ["behind upstream", ["gamma"]],
       ["quiet", ["zeta", "fresh"]],
@@ -66,15 +66,49 @@ describe("groupRepos", () => {
     ]);
   });
 
-  test("recent buckets by commit age, newest first, no commit at the end", () => {
+  test("recent buckets by commit age when nothing is edited, newest first, untouched last", () => {
     expect(ids(groupRepos(grove, "recent", NOW))).toEqual([
       ["today", ["zeta"]],
       ["this week", ["beta"]],
       ["this month", ["delta"]],
       ["this season", ["alpha"]],
       ["dormant", ["gamma"]],
-      ["no commits", ["fresh", "omega"]],
+      ["untouched", ["fresh", "omega"]],
     ]);
+  });
+
+  test("recent goes by the last commit or edit, whichever is newer", () => {
+    const hour = 3600;
+    const edited = (daysAgo: number, at: number) => ({ ...file, mtime: NOW - daysAgo * DAY + at });
+    const grove = [
+      // committed a month ago, edited an hour ago: today, ahead of a commit from this morning
+      repo("web/alpha", "web", { files: [edited(0, -hour)], lastCommit: at(40) }),
+      repo("web/zeta", "web", { lastCommit: at(0.5) }),
+      // a stale edit does not pull a fresh commit back
+      repo("tools/beta", "tools", { files: [edited(20, 0)], lastCommit: at(3) }),
+      // an edit with no mtime (a remote stat that failed) counts for nothing
+      repo("tools/delta", "tools", { files: [file], lastCommit: at(10) }),
+      // no commit but an edit is still a change
+      repo("web/fresh", "web", { files: [edited(2, 0)], lastCommit: null }),
+      repo("tools/omega", "tools", null, "not a repo"),
+    ];
+    expect(ids(groupRepos(grove, "recent", NOW))).toEqual([
+      ["today", ["alpha", "zeta"]],
+      ["this week", ["fresh", "beta"]],
+      ["this month", ["delta"]],
+      ["untouched", ["omega"]],
+    ]);
+  });
+
+  test("changedAt is the newer of commit and edit, newestEdit the file that set it", () => {
+    const r = repo("web/x", "web", {
+      files: [{ ...file, path: "old", mtime: NOW - 5 * DAY }, { ...file, path: "new", mtime: NOW - DAY }],
+      lastCommit: at(3),
+    });
+    expect(newestEdit(r)).toEqual({ path: "new", at: NOW - DAY });
+    expect(changedAt(r)).toBe(NOW - DAY);
+    expect(changedAt(repo("web/y", "web", { files: [file], lastCommit: at(3) }))).toBe(NOW - 3 * DAY);
+    expect(newestEdit(repo("web/z", "web", { lastCommit: at(3) }))).toBeNull();
   });
 
   test("name is one flat list", () => {
@@ -116,7 +150,7 @@ describe("groupRepos", () => {
   });
 
   test("empty input yields no groups in every mode", () => {
-    for (const mode of ["folder", "activity", "recent", "name", "user"] as const) {
+    for (const mode of ["recent", "folder", "activity", "name", "user"] as const) {
       expect(groupRepos([], mode, NOW)).toEqual([]);
     }
   });

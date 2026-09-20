@@ -214,7 +214,10 @@ describe("unpack: the shapes a release comes in", () => {
     await Bun.write(join(src, "README.txt"), "drag to Applications\n");
     const dir = join(scratch, "dmg-dir");
     await exec(["mkdir", "-p", dir]);
-    const r = await exec(["hdiutil", "create", "-quiet", "-srcfolder", src, "-volname", "Stub", "-fs", "HFS+", join(dir, "Stub.dmg")], { timeoutMs: 60_000 });
+    // makehybrid writes the filesystem straight into the file. `create -srcfolder`
+    // instead mounts a browsable /Volumes/Stub while it copies, and macOS 26's
+    // Finder answers a fresh volume holding one .app with "Install this app?"
+    const r = await exec(["hdiutil", "makehybrid", "-quiet", "-hfs", "-hfs-volume-name", "Stub", "-o", join(dir, "Stub.dmg"), src], { timeoutMs: 60_000 });
     expect(r.code).toBe(0);
     const target = await unpack(dir, "Stub.dmg", say);
     expect(target).toEqual({ kind: "app", name: "Stub.app" });

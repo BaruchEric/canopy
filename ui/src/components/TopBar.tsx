@@ -2,7 +2,7 @@ import { useState } from "react";
 import { useShallow } from "zustand/react/shallow";
 import { api } from "../api";
 import { ownRun } from "../flows";
-import { allRuns, attentionCount, useStore } from "../store";
+import { allRuns, attentionCount, pickedIds, useStore } from "../store";
 import { isRunActive } from "../../../src/core/types";
 import { FilterMenu } from "./Filters";
 import { Seg } from "./Seg";
@@ -37,13 +37,17 @@ export function Wordmark() {
 }
 
 const SORT = [
+  {
+    value: "recent",
+    label: "recent",
+    title: "By last change, a commit or an edit in the working tree: today, this week, this month…",
+  },
   { value: "folder", label: "folder", title: "By topic folder, as on disk" },
   {
     value: "activity",
     label: "activity",
     title: "What needs a hand first: changes, unpushed, behind, quiet",
   },
-  { value: "recent", label: "recent", title: "By last commit: today, this week, this month…" },
   { value: "name", label: "name", title: "One flat list, a to z" },
   { value: "user", label: "user", title: "By the git identity each repo commits as" },
 ] as const;
@@ -93,7 +97,7 @@ export function TopBar() {
   const feedOpen = useStore((s) => s.feedOpen);
   const toggleFeed = useStore((s) => s.toggleFeed);
   const selecting = useStore((s) => s.selecting);
-  const selected = useStore((s) => s.selected);
+  const picked = useStore((s) => pickedIds(s).length);
   const setSelecting = useStore((s) => s.setSelecting);
   const [scanning, setScanning] = useState(false);
 
@@ -231,10 +235,10 @@ export function TopBar() {
         type="button"
         className={selecting ? "pill on" : "pill"}
         aria-pressed={selecting}
-        title="Pick repos to run one workflow on all of them"
+        title="Pick repos to run one workflow on all of them (x)"
         onClick={() => setSelecting(!selecting)}
       >
-        {selecting ? `${selected.length} picked` : "select"}
+        {selecting ? `${picked} picked` : "select"}
       </button>
 
       <Seg

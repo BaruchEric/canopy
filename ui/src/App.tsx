@@ -102,7 +102,22 @@ export function App() {
         return;
       }
       if (t.tagName === "INPUT" || t.tagName === "TEXTAREA") return;
-      if (view === "library" || view === "ports" || e.metaKey || e.ctrlKey || e.altKey) return;
+      if (view === "library" || view === "ports") return;
+      const st = useStore.getState();
+      // Select mode's two keys. A sheet, a menu or a popover owns Escape
+      // while it is up, and a select box owns ⌘A, so neither reaches here then.
+      if (st.selecting && !st.sheet && !document.querySelector('[role="dialog"], [role="menu"]')) {
+        if (e.key === "Escape") {
+          st.setSelecting(false);
+          return;
+        }
+        if ((e.metaKey || e.ctrlKey) && !e.shiftKey && !e.altKey && e.key.toLowerCase() === "a" && t.tagName !== "SELECT") {
+          e.preventDefault();
+          st.pickAll();
+          return;
+        }
+      }
+      if (e.metaKey || e.ctrlKey || e.altKey) return;
       if (e.key === "/") {
         e.preventDefault();
         document.getElementById("filter-input")?.focus();
@@ -114,6 +129,8 @@ export function App() {
         useStore.getState().toggleFeed();
       } else if (e.key === "d") {
         setDirtyOnly(!useStore.getState().dirtyOnly);
+      } else if (e.key === "x") {
+        st.setSelecting(!st.selecting);
       } else if (e.key === "s") {
         const cur = useStore.getState().settings.sort;
         const next =

@@ -5,7 +5,7 @@ import { repoFacts } from "../../../src/core/actions";
 import { fleetSkipReason } from "../../../src/core/flow";
 import { isFlowActive, type Fleet, type Flow, type FlowStep, type Repo, type Verdict } from "../../../src/core/types";
 import { fleetCounts, flowWord, oldestParked, stepWord } from "../flows";
-import { agentFor, useStore } from "../store";
+import { agentFor, pickedIds, useStore } from "../store";
 import { Timeline } from "./RunSheet";
 
 const errText = (err: unknown) => String(err instanceof Error ? err.message : err);
@@ -276,7 +276,7 @@ export function FlowConsole({ flowId }: { flowId: string }) {
 export function FleetPlan({ workflow }: { workflow: string }) {
   const close = useStore((s) => s.closeSheet);
   const startFleet = useStore((s) => s.startFleet);
-  const selected = useStore((s) => s.selected);
+  const selected = useStore(useShallow(pickedIds));
   const repos = useStore(useShallow((s) => s.repos.filter((r) => selected.includes(r.id))));
   const entry = useStore((s) => Object.values(s.workflows).flat().find((e) => e.ok && e.workflow.name === workflow));
   const [note, setNote] = useState("");

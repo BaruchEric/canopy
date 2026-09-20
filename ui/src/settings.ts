@@ -12,9 +12,9 @@ import {
 } from "./files";
 
 export const SORT_MODES = [
+  "recent",
   "folder",
   "activity",
-  "recent",
   "name",
   "user",
 ] as const;
@@ -82,7 +82,7 @@ export interface Settings {
 }
 
 export const DEFAULT_SETTINGS: Settings = {
-  sort: "folder",
+  sort: "recent",
   openIn: "dock",
   terminal: "window",
   shell: "auto",

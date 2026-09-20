@@ -13,18 +13,27 @@ export interface RepoGroup {
 
 const DAY = 86_400;
 
-/** When the repo last moved, in unix seconds. A forge repo has no local
+/** When the repo last committed, in unix seconds. A forge repo has no local
  *  commit to read, so its last push to the forge stands in. */
-const commitAt = (r: Repo): number =>
+export const commitAt = (r: Repo): number =>
   r.status?.lastCommit?.at ?? (r.forge?.updated ? r.forge.updated / 1000 : 0);
-const dirtyCount = (r: Repo): number => r.status?.files.length ?? 0;
-
+/** The newest changed file in the working tree, or null with no changes
+ *  (or no mtimes, when the stat on a remote repo did not work). */
+export function newestEdit(r: Repo): { path: string; at: number } | null {
+  let best: { path: string; at: number } | null = null;
+  for (const f of r.status?.files ?? []) {
+    if (f.mtime !== undefined && (best === null || f.mtime > best.at)) best = { path: f.path, at: f.mtime };
+  }
+  return best;
+}
+/** When the repo last changed at all, in unix seconds: the newer of the
+ *  last commit and the newest edit. What the card's time and the "recent"
+ *  grouping go by. */
+export const changedAt = (r: Repo): number => Math.max(commitAt(r), newestEdit(r)?.at ?? 0);
 const byName = (a: Repo, b: Repo): number =>
   a.name.localeCompare(b.name) || a.id.localeCompare(b.id);
-const byCommit = (a: Repo, b: Repo): number =>
-  commitAt(b) - commitAt(a) || byName(a, b);
-const byUrgency = (a: Repo, b: Repo): number =>
-  dirtyCount(b) - dirtyCount(a) || byCommit(a, b);
+const byChange = (a: Repo, b: Repo): number =>
+  changedAt(b) - changedAt(a) || byName(a, b);
 
 interface Bucket {
   key: string;
@@ -80,17 +89,19 @@ function activityKey(r: Repo): string {
   }
 }
 
+/** Age buckets for the last change, commit or edit; the last one holds what
+ *  has neither. */
 const RECENT: readonly (Bucket & { within?: number })[] = [
   { key: "today", label: "today", within: DAY },
   { key: "week", label: "this week", within: 7 * DAY },
   { key: "month", label: "this month", within: 30 * DAY },
   { key: "season", label: "this season", within: 90 * DAY },
   { key: "dormant", label: "dormant" },
-  { key: "none", label: "no commits" },
+  { key: "none", label: "untouched" },
 ];
 
-function recentKey(r: Repo, now: number): string {
-  const at = commitAt(r);
+/** The age bucket a moment falls in, or `none` for no moment at all. */
+function ageKey(at: number, now: number): string {
   if (!at) return "none";
   const age = Math.max(0, now - at);
   for (const b of RECENT) {
@@ -122,9 +133,11 @@ export function groupRepos(
       return bucket(repos, folders, (r) => r.group || ".", byName);
     }
     case "activity":
-      return bucket(repos, ACTIVITY, activityKey, byUrgency);
+      // each group newest change first: what was touched last is what the
+      // hand is most likely still in
+      return bucket(repos, ACTIVITY, activityKey, byChange);
     case "recent":
-      return bucket(repos, RECENT, (r) => recentKey(r, now), byCommit);
+      return bucket(repos, RECENT, (r) => ageKey(changedAt(r), now), byChange);
     case "name":
       return bucket(
         repos,

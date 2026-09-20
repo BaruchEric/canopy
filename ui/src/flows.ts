@@ -77,5 +77,9 @@ export function oldestParked(fleet: Fleet, flows: Record<string, Flow>): Flow | 
   return best;
 }
 
+/** Whether a fleet may be pointed at this repo from this browser: a local
+ *  checkout git can read. A forge card has no checkout and flows are local-only. */
+export const pickable = (r: Repo): boolean => !r.forge && !r.error && !r.host;
+
 /** The repos a fleet may be pointed at from this browser. */
-export const selectable = (repos: Repo[]): Repo[] => repos.filter((r) => !r.forge && !r.error && !r.host);
+export const selectable = (repos: Repo[]): Repo[] => repos.filter(pickable);
