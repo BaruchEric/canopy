@@ -1006,6 +1006,32 @@ body.resizing {
 .behind {
   color: var(--rust);
 }
+/* a remote branch the checkout does not have: a chip like the branch, in
+   the remote's colour, clipped so a long agent branch name stays one line */
+.tip {
+  color: var(--sky);
+  font-size: 11px;
+  line-height: 17px;
+  padding: 0 7px;
+  border-radius: 999px;
+  border: 1px solid var(--hair);
+  background: var(--bark2);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+  max-width: 55%;
+  flex-shrink: 1;
+}
+.pulls {
+  color: var(--sky);
+  text-decoration: none;
+  white-space: nowrap;
+}
+.pulls:hover,
+.pulls:focus-visible {
+  text-decoration: underline;
+}
 .err {
   color: var(--rust);
 }

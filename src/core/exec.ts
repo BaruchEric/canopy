@@ -8,14 +8,22 @@ export interface ExecResult {
   stderr: string;
 }
 
+export interface ExecOptions {
+  cwd?: string;
+  timeoutMs?: number;
+  /** variables laid over the server's own environment */
+  env?: Record<string, string>;
+}
+
 /** Run a command, capture output. Never throws — errors land in code/stderr. */
 export async function exec(
   cmd: string[],
-  opts: { cwd?: string; timeoutMs?: number } = {},
+  opts: ExecOptions = {},
 ): Promise<ExecResult> {
   try {
     const proc = Bun.spawn(cmd, {
       cwd: opts.cwd,
+      env: opts.env ? { ...process.env, ...opts.env } : undefined,
       stdout: "pipe",
       stderr: "pipe",
       stdin: "ignore",
@@ -55,10 +63,11 @@ function sshControlDir(): string {
 export async function onHost(
   host: string | null,
   cmd: string[],
-  opts: { timeoutMs?: number } = {},
+  opts: Omit<ExecOptions, "cwd"> = {},
 ): Promise<ExecResult> {
   if (host === null) return exec(cmd, opts);
-  return exec([...sshArgs(host, sshControlDir()), remoteCommand(cmd)], opts);
+  // The env is this machine's; a remote command sees the host's own.
+  return exec([...sshArgs(host, sshControlDir()), remoteCommand(cmd)], { timeoutMs: opts.timeoutMs });
 }
 
 /** git in a repo, wherever the repo's locator says it is. */
@@ -66,7 +75,8 @@ export async function git(
   repoPath: string,
   args: string[],
   timeoutMs = 30_000,
+  env?: Record<string, string>,
 ): Promise<ExecResult> {
   const { host, path } = parseLocator(repoPath);
-  return onHost(host, ["git", "-C", path, ...args], { timeoutMs });
+  return onHost(host, ["git", "-C", path, ...args], { timeoutMs, env });
 }

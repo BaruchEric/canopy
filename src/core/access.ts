@@ -41,6 +41,34 @@ export const isGitHub = (host: string): boolean =>
 const WEB_FORGES =
   /(^|\.)(?:github\.com|gitlab\.com|bitbucket\.org|codeberg\.org|git\.sr\.ht)$/i;
 
+/** A remote on no public forge: the user's own server (a Forgejo on the
+ *  LAN, a NAS) or a path on this machine. Nobody else pushes there, so
+ *  activity on it is the user's and worth fetching. */
+export const isSelfHosted = (url: string): boolean => {
+  const ref = parseRemote(url);
+  return ref === null || !WEB_FORGES.test(ref.host);
+};
+
+/** Whether one remote is the user's own, which is what decides if the
+ *  server fetches it in the background: pushable on GitHub (the owner, or
+ *  an org that grants push, asked once and memoized), or self-hosted. The
+ *  upstream remote of a fork is someone else's, and left alone, or the
+ *  fork's card would carry the upstream's activity as its own. */
+export async function ownRemote(url: string, deps: AccessDeps): Promise<boolean> {
+  if (isSelfHosted(url)) return true;
+  return (await accessFromUrls([url], deps)) === "ok";
+}
+
+/** The names of a repo's own remotes, in `git config` order. */
+export async function ownRemotes(
+  remotes: { name: string; url: string }[],
+  deps: AccessDeps,
+): Promise<string[]> {
+  const own: string[] = [];
+  for (const r of remotes) if (await ownRemote(r.url, deps)) own.push(r.name);
+  return own;
+}
+
 /** The remote as a page you can open, or null when we cannot tell.
  *  An https remote keeps its own host, so a self-hosted forge works; ssh and
  *  scp remotes only map for the forges above. A link to a host that answers
@@ -128,8 +156,17 @@ export async function pushAccess(
   repoPath: string,
   deps: AccessDeps,
 ): Promise<PushAccess> {
+  return accessFromUrls(await remoteUrls(repoPath), deps);
+}
+
+/** The same answer from remote urls already in hand (a scanned repo carries
+ *  its own), so a pass over every repo costs no git at all. */
+export async function accessFromUrls(
+  urls: string[],
+  deps: AccessDeps,
+): Promise<PushAccess> {
   if (!deps.login) return "unknown";
-  const refs = (await remoteUrls(repoPath)).map(parseRemote);
+  const refs = urls.map(parseRemote);
   if (refs.length === 0) return "unknown";
 
   const mine = deps.login.toLowerCase();

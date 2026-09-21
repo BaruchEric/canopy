@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { isGitHub, parseRemote, webUrl } from "./access";
+import { isGitHub, isSelfHosted, ownRemote, ownRemotes, parseRemote, webUrl } from "./access";
 
 describe("parseRemote", () => {
   test("reads the URL shapes git remotes actually take", () => {
@@ -86,5 +86,41 @@ describe("webUrl", () => {
     expect(webUrl("git@git.internal.test:eric/thing.git")).toBeNull();
     expect(webUrl("/srv/git/thing.git")).toBeNull();
     expect(webUrl("")).toBeNull();
+  });
+});
+
+describe("isSelfHosted", () => {
+  test("a LAN forge, a NAS or a path is the user's own; a public forge is not", () => {
+    expect(isSelfHosted("ssh://git@192.168.1.76:2222/eric/DigitalMe.git")).toBe(true);
+    expect(isSelfHosted("https://git.beric.ca/eric/thing.git")).toBe(true);
+    expect(isSelfHosted("/Users/e/dev/other")).toBe(true);
+    expect(isSelfHosted("git@github.com:BaruchEric/canopy.git")).toBe(false);
+    expect(isSelfHosted("https://gitlab.com/someone/thing")).toBe(false);
+    expect(isSelfHosted("https://codeberg.org/someone/thing")).toBe(false);
+  });
+});
+
+describe("ownRemote and ownRemotes", () => {
+  const deps = (login: string | null, perm: [string, boolean | null][] = []) => ({ login, permission: new Map(perm) });
+  test("the login's own GitHub repos and self-hosted remotes are own without asking", async () => {
+    expect(await ownRemote("git@github.com:BaruchEric/canopy.git", deps("barucheric"))).toBe(true);
+    expect(await ownRemote("ssh://git@192.168.1.76:2222/eric/x.git", deps(null))).toBe(true);
+  });
+  test("someone else's repo on a public forge is not, even when the memo says push is denied or unknown", async () => {
+    expect(await ownRemote("https://github.com/PostHog/posthog", deps("barucheric", [["PostHog/posthog", false]]))).toBe(false);
+    expect(await ownRemote("https://github.com/PostHog/posthog", deps("barucheric", [["PostHog/posthog", null]]))).toBe(false);
+    expect(await ownRemote("https://gitlab.com/a/b", deps("barucheric"))).toBe(false);
+  });
+  test("an org repo the memo says is pushable is own", async () => {
+    expect(await ownRemote("https://github.com/Org/thing", deps("barucheric", [["Org/thing", true]]))).toBe(true);
+  });
+  test("a fork keeps its own remote and loses the upstream, in config order", async () => {
+    const remotes = [
+      { name: "upstream", url: "https://github.com/nousresearch/hermes-agent.git" },
+      { name: "origin", url: "https://github.com/BaruchEric/hermes-agent.git" },
+      { name: "nas", url: "ssh://git@192.168.1.76:2222/eric/hermes-agent.git" },
+    ];
+    expect(await ownRemotes(remotes, deps("barucheric", [["nousresearch/hermes-agent", false]]))).toEqual(["origin", "nas"]);
+    expect(await ownRemotes([], deps("barucheric"))).toEqual([]);
   });
 });

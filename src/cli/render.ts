@@ -40,6 +40,7 @@ export function statusSummary(r: Repo): string {
   if (st.files.length > 0) parts.push(lichen(`${st.files.length} changed`));
   if (st.ahead > 0) parts.push(sky(`↑${st.ahead}`));
   if (st.behind > 0) parts.push(rust(`↓${st.behind}`));
+  if (st.tip && st.tip.ref !== st.upstream) parts.push(sky(`⇣${st.tip.ref}`));
   if (parts.length === 0) parts.push(dim("clean"));
   return parts.join(" ");
 }

@@ -18,6 +18,7 @@ import { ClaudeSection } from "./Claude";
 import { LaunchSection } from "./Launch";
 import { CommitRow } from "./Commit";
 import { DiffView } from "./DiffView";
+import { Pulls, RemoteTipChip } from "./RemoteTip";
 import { RepoLink } from "./RepoLink";
 import { RepoMenu } from "./RepoMenu";
 import { Resizer } from "./Resizer";
@@ -616,6 +617,8 @@ export function RepoPanel({
         {st?.upstream && <span className="upstream">⇢ {st.upstream}</span>}
         {(st?.ahead ?? 0) > 0 && <span className="ahead">↑{st?.ahead}</span>}
         {(st?.behind ?? 0) > 0 && <span className="behind">↓{st?.behind}</span>}
+        {st?.tip && <RemoteTipChip tip={st.tip} upstream={st.upstream} />}
+        {repo.pulls && <Pulls pulls={repo.pulls} name={repo.name} />}
         <span className="when">{ago(st?.lastCommit?.at)}</span>
         {st?.user && (
           <span

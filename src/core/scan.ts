@@ -25,6 +25,10 @@ export const DEFAULT_IGNORE = [
 export interface ScanOptions {
   maxDepth?: number;
   ignore?: string[];
+  /** which of a repo's remotes (by path) can supply its remote tip: absent
+   *  means every remote, an empty list means none yet — the server answers
+   *  with the remotes it has found to be the user's own */
+  tipRemotes?: (path: string) => string[] | undefined;
 }
 
 /** The `path = …` lines of a `.gitmodules` file: where a repo keeps its
@@ -329,7 +333,7 @@ export async function scanSource(
     let status = null;
     let error: string | undefined;
     try {
-      status = await getStatus(path);
+      status = await getStatus(path, { tipRemotes: opts.tipRemotes?.(path) });
     } catch (err) {
       error = String(err);
     }
@@ -365,10 +369,10 @@ export async function scan(
 
 /** Re-read a single repo (after a mutation or fs event). A forge repo has
  *  no working copy to re-read: only its source's next scan changes it. */
-export async function refreshRepo(repo: Repo): Promise<Repo> {
+export async function refreshRepo(repo: Repo, tipRemotes?: string[]): Promise<Repo> {
   if (repo.forge) return repo;
   try {
-    return { ...repo, status: await getStatus(repo.path), error: undefined };
+    return { ...repo, status: await getStatus(repo.path, { tipRemotes }), error: undefined };
   } catch (err) {
     return { ...repo, status: null, error: String(err) };
   }

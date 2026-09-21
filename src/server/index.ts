@@ -6,6 +6,7 @@ import { homedir } from "node:os";
 import { join, resolve } from "node:path";
 import {
   commit,
+  fetchRepo,
   getCommit,
   getDiff,
   getLog,
@@ -16,7 +17,8 @@ import {
   UnknownCommitError,
   type DiffTarget,
 } from "../core/git";
-import { githubLogin, pushAccess } from "../core/access";
+import { githubLogin, listRemotes, ownRemotes, pushAccess } from "../core/access";
+import { linkPulls, parsePullCounts, PULLS_QUERY } from "../core/github";
 import {
   HistoryError,
   historyOverview,
@@ -68,6 +70,7 @@ import {
   type GrepRepoResult,
   type HistoryOverview,
   type HistoryWindow,
+  type PullCount,
   type Repo,
   type RunAction,
   type RunAnswer,
@@ -118,6 +121,13 @@ interface ServerState {
   terms: Set<TermSession>;
   /** installed releases, pull request builds and launched processes */
   launcher: Launcher;
+  /** open pull request counts by GitHub slug, from the last activity pass */
+  pulls: Map<string, PullCount>;
+  /** the names of each repo's own remotes, by path, settled once per repo:
+   *  what the background fetch pulls and where a tip may come from */
+  own: Map<string, string[]>;
+  /** an activity pass under way, so the timer never stacks a second one */
+  activity: Promise<void> | null;
 }
 
 /** what a terminal websocket carries from the upgrade to its handlers */
@@ -221,11 +231,14 @@ function parseAnswer(v: unknown): RunAnswer | null {
   return { kind: "answers", answers };
 }
 
-/** Scan options from config — DEFAULT_IGNORE plus whatever the user added. */
-function scanOpts(cfg: CanopyConfig): Required<ScanOptions> {
+/** Scan options from config — DEFAULT_IGNORE plus whatever the user added.
+ *  A repo's tip comes off the remotes the activity pass has found to be the
+ *  user's own; until it has looked, none. */
+function scanOpts(state: ServerState, cfg: CanopyConfig): Required<ScanOptions> {
   return {
     maxDepth: cfg.maxDepth,
     ignore: [...DEFAULT_IGNORE, ...cfg.ignore],
+    tipRemotes: (path) => state.own.get(path) ?? [],
   };
 }
 
@@ -280,7 +293,7 @@ async function refreshAndBroadcast(
 ): Promise<Repo> {
   const repo = state.result.repos.find((r) => r.id === id);
   if (!repo) throw new HttpError(404, `unknown repo: ${id}`);
-  const fresh = await refreshRepo(repo);
+  const fresh = await refreshRepo(repo, state.own.get(repo.path) ?? []);
   // Re-find after the await: a concurrent rescan may have replaced the array,
   // and writing back a pre-await index would land in the wrong slot.
   const idx = state.result.repos.findIndex((r) => r.id === id);
@@ -295,6 +308,9 @@ const WATCH_GIT_HINTS = ["HEAD", "index", "ORIG_HEAD", "refs"];
  *  watcher on another host, and a scan of a whole tree is too much to repeat. */
 const REMOTE_REFRESH = 5 * 60_000;
 
+/** How long after start the first fetch and pull request pass runs. */
+const ACTIVITY_DELAY = 3_000;
+
 const bySource = (order: string[]) => (a: Repo, b: Repo): number =>
   order.indexOf(a.source) - order.indexOf(b.source) || a.id.localeCompare(b.id);
 
@@ -305,8 +321,9 @@ function rebuildResult(state: ServerState, repos: Repo[]): void {
     root: state.root,
     sources: state.sources.map((rt) => ({ ...rt.src })),
     // Which forge repos are already cloned here can only be told once every
-    // source is in the same list, so it is settled on the way out.
-    repos: linkForgeClones([...repos].sort(bySource(order))),
+    // source is in the same list, so it is settled on the way out; the pull
+    // request counts ride along from the last activity pass.
+    repos: linkPulls(linkForgeClones([...repos].sort(bySource(order))), state.pulls),
     scannedAt: Date.now(),
   };
 }
@@ -333,7 +350,7 @@ function scanOne(state: ServerState, rt: SourceRuntime, opts: Required<ScanOptio
 
 async function scanAll(state: ServerState): Promise<void> {
   const cfg = await loadConfig();
-  const opts = scanOpts(cfg);
+  const opts = scanOpts(state, cfg);
   state.ignore = opts.ignore;
   await Promise.all(state.sources.map((rt) => scanOne(state, rt, opts)));
 }
@@ -351,7 +368,7 @@ function scheduleRescan(state: ServerState, rt: SourceRuntime): void {
       void (async () => {
         try {
           const cfg = await loadConfig();
-          const opts = scanOpts(cfg);
+          const opts = scanOpts(state, cfg);
           state.ignore = opts.ignore;
           await scanOne(state, rt, opts);
           broadcast(state, { type: "scan", result: state.result });
@@ -360,6 +377,19 @@ function scheduleRescan(state: ServerState, rt: SourceRuntime): void {
         }
       })();
     }, 1_000),
+  );
+}
+
+/** A status re-read for one repo, debounced: a burst of file events, or a
+ *  fetch and the watcher seeing its refs move, become one read. */
+function scheduleRefresh(state: ServerState, id: string): void {
+  clearTimeout(state.timers.get(id));
+  state.timers.set(
+    id,
+    setTimeout(() => {
+      state.timers.delete(id);
+      refreshAndBroadcast(state, id).catch(() => {});
+    }, 400),
   );
 }
 
@@ -400,15 +430,7 @@ function startWatcher(state: ServerState, rt: SourceRuntime): void {
           }
           return;
         }
-        const id = match.id;
-        clearTimeout(state.timers.get(id));
-        state.timers.set(
-          id,
-          setTimeout(() => {
-            state.timers.delete(id);
-            refreshAndBroadcast(state, id).catch(() => {});
-          }, 400),
-        );
+        scheduleRefresh(state, match.id);
       },
     );
   } catch (err) {
@@ -423,7 +445,7 @@ async function refreshRemote(state: ServerState): Promise<void> {
   // again rather than walked repo by repo.
   const forges = state.sources.filter((rt) => rt.src.kind === "forgejo" && !rt.scanning);
   if (forges.length > 0) {
-    const opts = scanOpts(await loadConfig());
+    const opts = scanOpts(state, await loadConfig());
     await Promise.all(forges.map((rt) => scanOne(state, rt, opts)));
     broadcast(state, { type: "scan", result: state.result });
   }
@@ -439,6 +461,85 @@ async function refreshRemote(state: ServerState): Promise<void> {
     }
   };
   await Promise.all(Array.from({ length: Math.min(4, ids.length) }, worker));
+}
+
+/** How many repos fetch at once: enough to get through the tree in a
+ *  minute or two, few enough not to swamp a link or a rate limit. */
+const FETCH_CONCURRENCY = 4;
+
+/** A repo's own remotes, remembered by path. `learned` says this was the
+ *  first look, so the caller can re-read a status taken before it. The
+ *  GitHub lookups behind it are memoized in `access`. */
+async function ownRemotesOf(state: ServerState, repo: Repo): Promise<{ names: string[]; learned: boolean }> {
+  const known = state.own.get(repo.path);
+  if (known !== undefined) return { names: known, learned: false };
+  if (state.login === undefined) state.login = await githubLogin();
+  const names = await ownRemotes(await listRemotes(repo.path), { login: state.login, permission: state.access });
+  state.own.set(repo.path, names);
+  return { names, learned: true };
+}
+
+/** Fetches every local repo's own remotes, a few at a time, and schedules
+ *  a status re-read for each repo whose remote refs moved, or whose status
+ *  was read before its own remotes were known and so has no tip yet. A
+ *  repo with a run under way is skipped: a fetch landing mid-run would
+ *  change the fingerprint the run's outcome is judged by. */
+async function fetchLocal(state: ServerState): Promise<void> {
+  const local = new Set(state.sources.filter((rt) => rt.src.kind === "local").map((rt) => rt.src.id));
+  const repos = state.result.repos.filter(
+    (r) => local.has(r.source) && !r.forge && !r.error && (r.remotes?.length ?? 0) > 0,
+  );
+  await mapPool(repos, FETCH_CONCURRENCY, async (repo) => {
+    const { names, learned } = await ownRemotesOf(state, repo);
+    if (names.length === 0) return;
+    if (state.runner.activeFor(repo.id)) return;
+    const { changed } = await fetchRepo(repo.path, names);
+    if (changed || learned) scheduleRefresh(state, repo.id);
+  });
+}
+
+/** Re-reads the open pull request counts for every repo the gh login can
+ *  see and broadcasts each repo whose count changed. A missing or logged
+ *  out gh leaves the counts as they were. */
+async function refreshPulls(state: ServerState): Promise<void> {
+  const r = await exec(["gh", "api", "graphql", "--paginate", "--slurp", "-f", `query=${PULLS_QUERY}`], {
+    timeoutMs: 60_000,
+  });
+  if (r.code !== 0) return;
+  let body: unknown;
+  try {
+    body = JSON.parse(r.stdout);
+  } catch {
+    return;
+  }
+  state.pulls = parsePullCounts(body);
+  const before = state.result.repos;
+  const after = linkPulls(before, state.pulls);
+  state.result.repos = after;
+  after.forEach((repo, i) => {
+    // A count first arriving as zero is what the browser already assumes;
+    // announcing it would pulse most of the board on every start.
+    const was = before[i]?.pulls?.open ?? 0;
+    if (repo !== before[i] && (was > 0 || (repo.pulls?.open ?? 0) > 0)) broadcast(state, { type: "repo", repo });
+  });
+}
+
+/** The activity pass: fetch the user's own repos, then count their pull
+ *  requests, each on the remote refresh timer and once soon after start. */
+function refreshActivity(state: ServerState): Promise<void> {
+  if (state.activity) return state.activity;
+  state.activity = (async () => {
+    try {
+      const cfg = await loadConfig();
+      if (cfg.fetch) await fetchLocal(state);
+      await refreshPulls(state);
+    } catch (err) {
+      console.error("activity refresh failed:", err);
+    }
+  })().finally(() => {
+    state.activity = null;
+  });
+  return state.activity;
 }
 
 /* ---------- adding a source: check the folder before storing it ---------- */
@@ -612,7 +713,7 @@ async function handleApi(
       scanning: null,
     };
     state.sources.push(rt);
-    const opts = scanOpts(await loadConfig());
+    const opts = scanOpts(state, await loadConfig());
     await scanOne(state, rt, opts);
     startWatcher(state, rt);
     broadcast(state, { type: "scan", result: state.result });
@@ -635,7 +736,7 @@ async function handleApi(
     const id = url.searchParams.get("id") ?? "";
     const rt = state.sources.find((s) => s.src.id === id);
     if (!rt) throw new HttpError(404, `unknown source: ${id}`);
-    const opts = scanOpts(await loadConfig());
+    const opts = scanOpts(state, await loadConfig());
     state.ignore = opts.ignore;
     await scanOne(state, rt, opts);
     broadcast(state, { type: "scan", result: state.result });
@@ -1117,7 +1218,6 @@ export async function startServer(opts: {
   const cfg = await loadConfig();
   const root = await realpath(opts.root);
   const port = opts.port ?? cfg.port;
-  const scanOptions = scanOpts(cfg);
   const runtime = (src: Source): SourceRuntime => ({
     src: { ...src, repos: 0, scannedAt: 0 },
     watcher: null,
@@ -1161,7 +1261,7 @@ export async function startServer(opts: {
     root,
     sources: [runtime(launchSource(root)), ...extras.map((s) => runtime({ ...s, launch: false }))],
     result: { root, sources: [], repos: [], scannedAt: 0 },
-    ignore: scanOptions.ignore,
+    ignore: [...DEFAULT_IGNORE, ...cfg.ignore],
     access: new Map(),
     clients: new Set(),
     timers: new Map(),
@@ -1171,9 +1271,12 @@ export async function startServer(opts: {
     runner,
     flows,
     launcher,
+    pulls: new Map(),
+    own: new Map(),
+    activity: null,
   };
   await rememberRoot(root);
-  await Promise.all(state.sources.map((rt) => scanOne(state, rt, scanOptions)));
+  await Promise.all(state.sources.map((rt) => scanOne(state, rt, scanOpts(state, cfg))));
   // The launch root failing to scan is fatal, as it always was: there is
   // nothing to show. An extra source failing is a note on that source.
   const launch = state.sources[0];
@@ -1275,7 +1378,12 @@ export async function startServer(opts: {
   // Only after the bind succeeds: a watcher started earlier would outlive a
   // failed listen and hold the process open.
   for (const rt of state.sources) startWatcher(state, rt);
-  const remoteTimer = setInterval(() => void refreshRemote(state), REMOTE_REFRESH);
+  const remoteTimer = setInterval(() => {
+    void refreshRemote(state).then(() => refreshActivity(state));
+  }, REMOTE_REFRESH);
+  // The first activity pass soon after the tree is up, not five minutes in:
+  // the cards should not claim "in sync" on the strength of last week's fetch.
+  const firstActivity = setTimeout(() => void refreshActivity(state), ACTIVITY_DELAY);
 
   const heartbeat = setInterval(() => {
     for (const c of state.clients) {
@@ -1294,6 +1402,7 @@ export async function startServer(opts: {
     stop: () => {
       clearInterval(heartbeat);
       clearInterval(remoteTimer);
+      clearTimeout(firstActivity);
       for (const t of state.timers.values()) clearTimeout(t);
       state.flows.stopAll();
       state.runner.stopAll();

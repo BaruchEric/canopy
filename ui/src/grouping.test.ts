@@ -111,6 +111,21 @@ describe("groupRepos", () => {
     expect(newestEdit(repo("web/z", "web", { lastCommit: at(3) }))).toBeNull();
   });
 
+  test("a remote-only commit counts as a change too, and moves the recent bucket", () => {
+    const tip = (daysAgo: number) => ({ ref: "origin/claude/tailcat", hash: "0e1d6fd", subject: "tailcat", at: NOW - daysAgo * DAY });
+    // committed here 12 hours ago, a branch pushed elsewhere five minutes ago
+    const pushed = repo("web/homelab", "web", { lastCommit: at(0.5), tip: tip(300 / 86_400) });
+    expect(changedAt(pushed)).toBe(NOW - 300);
+    // an old unmerged branch does not pull a fresh commit back
+    const stale = repo("web/pages", "web", { lastCommit: at(1), tip: tip(40) });
+    expect(changedAt(stale)).toBe(NOW - DAY);
+    expect(ids(groupRepos([stale, pushed, repo("web/quiet", "web", { lastCommit: at(20) })], "recent", NOW))).toEqual([
+      ["today", ["homelab"]],
+      ["this week", ["pages"]],
+      ["this month", ["quiet"]],
+    ]);
+  });
+
   test("name is one flat list", () => {
     expect(ids(groupRepos(grove, "name", NOW))).toEqual([
       ["a to z", ["alpha", "beta", "delta", "fresh", "gamma", "omega", "zeta"]],

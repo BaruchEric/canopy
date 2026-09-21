@@ -2,6 +2,7 @@ import { memo, useEffect, useMemo, useRef, useState } from "react";
 import { useShallow } from "zustand/react/shallow";
 import { pickable } from "../flows";
 import { changedAt, groupRepos, newestEdit, sectionKey } from "../grouping";
+import { Pulls, RemoteTipChip, whenTitle } from "./RemoteTip";
 import { pickCount, pickState } from "../select";
 import { activeFlowFor, flowFor, runFor, useStore, visibleRepos } from "../store";
 import { ago, GLYPH, stateOf } from "../util";
@@ -42,18 +43,9 @@ const RepoCard = memo(function RepoCard({ repo }: { repo: Repo }) {
   const st = repo.status;
   const forge = repo.forge;
   const state = stateOf(repo);
-  // The time is the last change of any kind, what "recent" sorts on. When
-  // that is an edit rather than the commit, the tooltip says which file and
-  // keeps the commit too.
-  const commit = st?.lastCommit;
-  const edit = newestEdit(repo);
-  const whenTitle = forge
-    ? "last push to the forge"
-    : edit && commit && edit.at > commit.at
-      ? `${edit.path} edited ${ago(edit.at)} · committed ${ago(commit.at)}: ${commit.subject}`
-      : edit && !commit
-        ? `${edit.path} edited ${ago(edit.at)}`
-        : commit?.subject;
+  // The time is the last change of any kind, what "recent" sorts on; the
+  // tooltip says which kind when it is not the commit.
+  const title = forge ? "last push to the forge" : whenTitle(st, newestEdit(repo));
   const live = activeFlow
     ? activeFlow.status === "working"
       ? " run-working"
@@ -137,6 +129,8 @@ const RepoCard = memo(function RepoCard({ repo }: { repo: Repo }) {
         </span>
         {(st?.ahead ?? 0) > 0 && <span className="ahead">↑{st?.ahead}</span>}
         {(st?.behind ?? 0) > 0 && <span className="behind">↓{st?.behind}</span>}
+        {st?.tip && <RemoteTipChip tip={st.tip} upstream={st.upstream} />}
+        {repo.pulls && <Pulls pulls={repo.pulls} name={repo.name} />}
         {repo.error && <span className="err">not a readable repo</span>}
       </div>
       <div className="card-bot">
@@ -158,7 +152,7 @@ const RepoCard = memo(function RepoCard({ repo }: { repo: Repo }) {
                 : "clean"}
           </span>
         )}
-        <span className="when" title={whenTitle}>
+        <span className="when" title={title}>
           {ago(changedAt(repo))}
         </span>
       </div>

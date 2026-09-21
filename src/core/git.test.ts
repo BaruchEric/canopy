@@ -8,6 +8,7 @@ import {
   parseNumstatZ,
   parseMtimes,
   parsePorcelainV2,
+  parseRemoteTip,
   parseUserConfig,
 } from "./git";
 import { heuristicMessage } from "./suggest";
@@ -24,6 +25,25 @@ const SAMPLE = [
   "u UU N... 100644 100644 100644 100644 ffff gggg hhhh conflict.ts",
   "? untracked file.md",
 ].join("\n");
+
+describe("parseRemoteTip", () => {
+  const line = (ref: string, symref = "") => [ref, "0e1d6fd", "1790000000", "tailcat: the pieces", symref].join("\0");
+  test("the first real branch, newest first as git sorted them", () => {
+    expect(parseRemoteTip([line("origin/claude/tailcat"), line("forgejo/main")].join("\n") + "\n")).toEqual({
+      ref: "origin/claude/tailcat",
+      hash: "0e1d6fd",
+      subject: "tailcat: the pieces",
+      at: 1790000000,
+    });
+  });
+  test("a remote's HEAD symref is skipped for the branch under it", () => {
+    expect(parseRemoteTip([line("origin/HEAD", "refs/remotes/origin/main"), line("origin/main")].join("\n"))?.ref).toBe("origin/main");
+  });
+  test("nothing unmerged is no tip", () => {
+    expect(parseRemoteTip("")).toBeUndefined();
+    expect(parseRemoteTip(line("origin/HEAD", "refs/remotes/origin/main"))).toBeUndefined();
+  });
+});
 
 describe("parseUserConfig", () => {
   test("reads both keys and keeps spaces in the name", () => {

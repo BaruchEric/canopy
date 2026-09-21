@@ -29,6 +29,7 @@ const defaults = (): CanopyConfig => ({
   historyBin: null,
   agents: {},
   launchers: {},
+  fetch: true,
 });
 
 /** Every stored entry re-validated; one left at the defaults is dropped, so
@@ -99,6 +100,7 @@ function normalize(parsed: Partial<CanopyConfig>): CanopyConfig {
     ),
     agents: normalizeAgents(cfg.agents),
     launchers: normalizeLaunchers(cfg.launchers),
+    fetch: typeof cfg.fetch === "boolean" ? cfg.fetch : base.fetch,
   };
 }
 

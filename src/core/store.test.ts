@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -36,6 +36,16 @@ describe("config store", () => {
     const cfg = await loadConfig();
     expect(cfg.port).toBe(7850);
     expect(cfg.workspaces).toEqual([]);
+    expect(cfg.fetch).toBe(true);
+  });
+
+  test("fetch is off only when the file says so in so many words", async () => {
+    const path = join(dir, "config.json");
+    await writeFile(path, JSON.stringify({ fetch: false }));
+    expect((await loadConfig()).fetch).toBe(false);
+    await writeFile(path, JSON.stringify({ fetch: "no" }));
+    expect((await loadConfig()).fetch).toBe(true);
+    await rm(path);
   });
 
   test("workspace upsert dedupes and appends", async () => {

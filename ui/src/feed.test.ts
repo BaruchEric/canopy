@@ -112,6 +112,13 @@ describe("statusLines", () => {
   test("in sync once ahead drops to zero", () => {
     expect(statusLines(status({ ahead: 3 }), status())).toEqual(["in sync with upstream"]);
   });
+  test("a remote branch moving past the checkout is a line, the same tip again is not", () => {
+    const tip = { ref: "origin/claude/tailcat", hash: "0e1d6fd", subject: "tailcat", at: 9 };
+    expect(statusLines(status(), status({ tip }))).toEqual(["origin/claude/tailcat pushed 0e1d6fd tailcat"]);
+    expect(statusLines(status({ tip }), status({ tip }))).toEqual([]);
+    // a fetch that pruned the branch says nothing: the checkout did not change
+    expect(statusLines(status({ tip }), status())).toEqual([]);
+  });
 });
 
 describe("describeEvent", () => {
@@ -120,6 +127,15 @@ describe("describeEvent", () => {
     expect(lines).toEqual([
       { at: 5, kind: "git", source: "launch", repoId: "a", repo: "alpha", text: "re-read, no change", quiet: true },
     ]);
+  });
+  test("a pull request count arriving or changing is a line, the same count or a first zero is quiet", () => {
+    const pulls = { open: 2, url: "https://github.com/o/alpha/pulls" };
+    const texts = (ev: Repo, prev: Repo) => describeEvent({ type: "repo", repo: ev }, snap({ repos: [prev] }), 5).map((l) => l.text);
+    expect(texts(repo({ pulls }), repo())).toEqual(["2 open pull requests"]);
+    expect(texts(repo({ pulls: { ...pulls, open: 1 } }), repo({ pulls }))).toEqual(["1 open pull request"]);
+    expect(texts(repo({ pulls: { ...pulls, open: 0 } }), repo({ pulls }))).toEqual(["no open pull requests"]);
+    expect(texts(repo({ pulls }), repo({ pulls }))).toEqual(["re-read, no change"]);
+    expect(texts(repo({ pulls: { ...pulls, open: 0 } }), repo())).toEqual(["re-read, no change"]);
   });
   test("a repo error is one line and not quiet", () => {
     const lines = describeEvent({ type: "repo", repo: repo({ error: "boom" }) }, snap(), 5);

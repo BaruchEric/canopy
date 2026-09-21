@@ -26,10 +26,13 @@ export function newestEdit(r: Repo): { path: string; at: number } | null {
   }
   return best;
 }
-/** When the repo last changed at all, in unix seconds: the newer of the
- *  last commit and the newest edit. What the card's time and the "recent"
- *  grouping go by. */
-export const changedAt = (r: Repo): number => Math.max(commitAt(r), newestEdit(r)?.at ?? 0);
+/** When the remote last got a commit the checkout does not have, or 0. */
+export const tipAt = (r: Repo): number => r.status?.tip?.at ?? 0;
+/** When the repo last changed anywhere, in unix seconds: the newest of the
+ *  last commit, the newest edit and the newest remote-only commit. What the
+ *  card's time and the "recent" grouping go by, so a push from another
+ *  machine or a cloud agent's branch moves the card too. */
+export const changedAt = (r: Repo): number => Math.max(commitAt(r), newestEdit(r)?.at ?? 0, tipAt(r));
 const byName = (a: Repo, b: Repo): number =>
   a.name.localeCompare(b.name) || a.id.localeCompare(b.id);
 const byChange = (a: Repo, b: Repo): number =>

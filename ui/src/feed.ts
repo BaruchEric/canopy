@@ -106,6 +106,9 @@ export function statusLines(before: RepoStatus | null, after: RepoStatus | null)
     if (after.behind) pos.push(`${after.behind} behind`);
     lines.push(pos.length ? pos.join(", ") : "in sync with upstream");
   }
+  if (after.tip && after.tip.hash !== before.tip?.hash) {
+    lines.push(`${after.tip.ref} pushed ${shortHash(after.tip.hash)} ${after.tip.subject}`);
+  }
   const was = new Map(before.files.map((f) => [f.path, f]));
   const now = new Map(after.files.map((f) => [f.path, f]));
   const added = after.files.filter((f) => !was.has(f.path)).map((f) => f.path);
@@ -130,6 +133,12 @@ function repoLines(ev: Extract<ServerEvent, { type: "repo" }>, prev: FeedSnapsho
   if (before?.error && !repo.error) lines.push(about(repo, "git", at, "error cleared"));
   const diffs = statusLines(before?.status ?? null, repo.status);
   for (const text of diffs) lines.push(about(repo, "git", at, text));
+  // Zero where there was no count is not news; zero where there were some is.
+  const open = repo.pulls?.open ?? 0;
+  const was = before?.pulls?.open ?? 0;
+  if (open !== was) {
+    lines.push(about(repo, "git", at, open === 0 ? "no open pull requests" : `${open} open pull request${open === 1 ? "" : "s"}`));
+  }
   if (lines.length === 0) lines.push(about(repo, "git", at, "re-read, no change", true));
   return lines;
 }

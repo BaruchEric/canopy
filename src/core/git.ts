@@ -7,6 +7,7 @@ import type {
   CommitFile,
   GitUser,
   LogEntry,
+  RemoteTip,
   RepoFile,
   RepoStatus,
 } from "./types";
@@ -171,6 +172,32 @@ export function parseUserConfig(text: string): GitUser | null {
   return name || email ? { name, email } : null;
 }
 
+/** The remote-tracking refs the checkout does not contain, newest committer
+ *  date first, under every remote or just the ones named. `--no-merged=HEAD`
+ *  is what "not contained" means to git; the count leaves room for each
+ *  remote's HEAD symref, which the parser skips. A pattern without a glob
+ *  matches whole path components, so `origin` never takes in `origin2`. */
+export const tipArgs = (remotes?: string[]): string[] => [
+  "for-each-ref",
+  "--sort=-committerdate",
+  "--no-merged=HEAD",
+  "--count=8",
+  "--format=%(refname:short)%00%(objectname:short)%00%(committerdate:unix)%00%(subject)%00%(symref)",
+  ...(remotes ? remotes.map((r) => `refs/remotes/${r}`) : ["refs/remotes"]),
+];
+
+/** The first real branch out of `TIP_ARGS` output: `origin/HEAD` is a symref
+ *  to the default branch and says nothing of its own. */
+export function parseRemoteTip(text: string): RemoteTip | undefined {
+  for (const line of text.split("\n")) {
+    if (line === "") continue;
+    const [ref = "", hash = "", ct = "", subject = "", symref = ""] = line.split("\0");
+    if (symref !== "" || !ref || !hash) continue;
+    return { ref, hash, subject, at: Number(ct) || 0 };
+  }
+  return undefined;
+}
+
 /** One line per path given, in order: the file's mtime in unix seconds, or
  *  an empty line when it is gone. GNU stat is tried first and BSD stat when
  *  that fails, since the host may be either; a missing file fails both. */
@@ -214,8 +241,14 @@ async function fileMtimes(
   return paths.map((_, i) => times[i]);
 }
 
-export async function getStatus(repoPath: string): Promise<RepoStatus> {
-  const [st, log, cfg] = await Promise.all([
+export interface StatusOptions {
+  /** the remotes whose branches can be the tip: every remote when absent,
+   *  none when empty (the caller has not decided which are the user's) */
+  tipRemotes?: string[];
+}
+
+export async function getStatus(repoPath: string, opts: StatusOptions = {}): Promise<RepoStatus> {
+  const [st, log, cfg, tips] = await Promise.all([
     // -uall lists untracked files individually; without it a new directory
     // arrives as a single "dir/" entry that no per-file diff can render.
     git(repoPath, [
@@ -229,6 +262,10 @@ export async function getStatus(repoPath: string): Promise<RepoStatus> {
     git(repoPath, ["log", "-1", "--pretty=%h%x00%s%x00%ct"]),
     // exits 1 when nothing matches, which just means no identity
     git(repoPath, ["config", "--get-regexp", "^user\\.(name|email)$"]),
+    // fails on an unborn HEAD, which just means no tip
+    opts.tipRemotes?.length === 0
+      ? Promise.resolve({ code: 1, stdout: "", stderr: "" })
+      : git(repoPath, tipArgs(opts.tipRemotes)),
   ]);
   if (st.code !== 0) throw new Error(st.stderr.trim() || "git status failed");
   const status = parsePorcelainV2(st.stdout);
@@ -248,7 +285,35 @@ export async function getStatus(repoPath: string): Promise<RepoStatus> {
     lastCommit = { hash, subject, at: Number(ct) };
   }
   const user = cfg.code === 0 ? parseUserConfig(cfg.stdout) : null;
-  return { ...status, lastCommit, user };
+  const tip = tips.code === 0 ? parseRemoteTip(tips.stdout) : undefined;
+  return { ...status, lastCommit, user, ...(tip ? { tip } : {}) };
+}
+
+/** A fetch may sit on a dead host or a credential lookup; a minute is long
+ *  enough for a real one over a slow link and short enough that four stuck
+ *  ones do not stall a whole refresh. */
+const FETCH_TIMEOUT = 60_000;
+
+/** Every remote-tracking ref with its hash, one string; the same before and
+ *  after a fetch means the fetch brought nothing. */
+export async function remoteRefs(repoPath: string): Promise<string> {
+  const r = await git(repoPath, ["for-each-ref", "--format=%(objectname) %(refname)", "refs/remotes"]);
+  return r.code === 0 ? r.stdout : "";
+}
+
+/** Fetch every remote, or just the ones named, pruning branches gone from
+ *  them. Never prompts: a remote that wants a password fails instead of
+ *  holding the process. The answer is whether any remote-tracking ref moved. */
+export async function fetchRepo(repoPath: string, remotes?: string[]): Promise<{ changed: boolean; error?: string }> {
+  if (remotes?.length === 0) return { changed: false };
+  const before = await remoteRefs(repoPath);
+  const which = remotes ? ["--multiple", ...remotes] : ["--all"];
+  const r = await git(repoPath, ["fetch", ...which, "--prune", "--quiet"], FETCH_TIMEOUT, {
+    GIT_TERMINAL_PROMPT: "0",
+  });
+  const after = await remoteRefs(repoPath);
+  const changed = before !== after;
+  return r.code === 0 ? { changed } : { changed, error: r.stderr.trim() || `git fetch exited ${r.code}` };
 }
 
 export async function getLog(repoPath: string, n = 20): Promise<LogEntry[]> {

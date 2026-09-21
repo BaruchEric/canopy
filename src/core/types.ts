@@ -28,6 +28,18 @@ export interface GitUser {
   email: string;
 }
 
+/** The newest commit on any remote-tracking branch that the checkout does
+ *  not have: work pushed from another machine, a cloud agent's branch, a PR
+ *  branch nobody checked out here. Only as fresh as the last fetch. */
+export interface RemoteTip {
+  /** `origin/feature`: the remote-tracking ref without `refs/remotes/` */
+  ref: string;
+  hash: string;
+  subject: string;
+  /** committer date, unix seconds */
+  at: number;
+}
+
 export interface RepoStatus {
   branch: string;
   upstream: string | null;
@@ -37,6 +49,17 @@ export interface RepoStatus {
   lastCommit: LastCommit | null;
   /** null when neither user.name nor user.email is set anywhere */
   user: GitUser | null;
+  /** absent when every remote-tracking branch is already in the checkout's
+   *  history, or the repo has no remotes */
+  tip?: RemoteTip;
+}
+
+/** Open pull requests on the repo's GitHub page, counted for the repos the
+ *  gh login can see; absent on any other repo. */
+export interface PullCount {
+  open: number;
+  /** the pull request list on GitHub */
+  url: string;
 }
 
 /* ---------- sources: the folders canopy scans ---------- */
@@ -127,6 +150,9 @@ export interface Repo {
   /** every configured remote's url, read with the meta. What ties a repo to
    *  the same repo on a forge. */
   remotes?: string[];
+  /** open pull requests on GitHub, when the repo has a GitHub remote the gh
+   *  login can see; re-read on the remote refresh timer */
+  pulls?: PullCount;
   /** set only on a repo that lives on a forge and nowhere here */
   forge?: ForgeRepo;
   error?: string;
@@ -167,6 +193,9 @@ export interface CanopyConfig {
   agents: Record<string, AgentSettings>;
   /** how a repo's builds are made and run, keyed like agents */
   launchers: Record<string, LaunchSettings>;
+  /** whether the server fetches the user's own local repos in the background
+   *  (every REMOTE_REFRESH), so behind counts and remote tips stay current */
+  fetch: boolean;
 }
 
 /* ---------- the launcher: release builds and pull requests, run here ---------- */
