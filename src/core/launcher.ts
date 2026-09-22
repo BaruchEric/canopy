@@ -683,12 +683,29 @@ export async function unpack(
     return r;
   };
   if (kind === "dmg") {
-    const mount = await mkdtemp(join(tmpdir(), "canopy-dmg-"));
     say("mounting the disk image");
-    // -noverify: the checksum pass reads the whole image a second time, and
-    // this one just came down over https
-    await run(["hdiutil", "attach", "-nobrowse", "-readonly", "-noverify", "-noautoopen", "-mountpoint", mount, file], "hdiutil attach");
+    // The image is attached through a hard link without its .dmg extension.
+    // This is canopy's own download being unpacked, not a disk image the
+    // user opened, and the helpers that offer to install whatever a fresh
+    // mount holds (Vorssaint's disk image installer, for one) see the mount
+    // even with -nobrowse and go by the .dmg name of the image behind it.
+    const image = join(dir, `${basename(asset, extname(asset))}.image`);
+    await rm(image, { force: true });
+    await link(file, image).catch(() => copyFile(file, image));
+    const mount = await mkdtemp(join(tmpdir(), "canopy-dmg-"));
     try {
+      // -noverify: the checksum pass reads the whole image a second time, and
+      // this one just came down over https
+      const attach = (extra: string[]) =>
+        run(["hdiutil", "attach", "-nobrowse", "-readonly", "-noverify", "-noautoopen", ...extra, "-mountpoint", mount, image], "hdiutil attach");
+      try {
+        await attach([]);
+      } catch (e) {
+        // a raw image, no UDIF wrapper: hdiutil tells one apart by its
+        // extension alone, so without one it has to be told
+        if (!/not recognized/.test(String(e))) throw e;
+        await attach(["-imagekey", "diskimage-class=CRawDiskImage"]);
+      }
       const names = (await readdir(mount)).filter((n) => /\.(app|pkg)$/i.test(n));
       if (names.length === 0) throw new Error("the disk image holds no .app or .pkg");
       for (const n of names) {
@@ -696,8 +713,10 @@ export async function unpack(
         await run(["cp", "-R", join(mount, n), join(dir, n)], "copy");
       }
     } finally {
+      // a detach of what never mounted just fails, quietly
       await exec(["hdiutil", "detach", mount, "-force"], { timeoutMs: 60_000 });
       await rm(mount, { recursive: true, force: true });
+      await rm(image, { force: true });
     }
     await rm(file, { force: true });
   } else if (kind === "zip") {

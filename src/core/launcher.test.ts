@@ -25,6 +25,9 @@ afterAll(async () => {
 
 const settle = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
+const LSREGISTER =
+  "/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister";
+
 /** A launcher whose hooks are recorded, and a way to wait for a job's end. */
 function harness() {
   const jobs: Job[] = [];
@@ -152,6 +155,9 @@ describe("builds and the local checkout", () => {
     for (let i = 0; i < 40 && changes.at(-1)?.what !== "exited"; i++) await settle(100);
     expect(changes.at(-1)).toEqual({ what: "exited", build: "release:v0.1" });
     expect((await exec(["pgrep", "-f", join(app, "Contents", "MacOS", "Stub")])).code).toBe(1);
+    // `open` registered the bundle with Launch Services; the scratch dir goes
+    // but the entry would stay, one more per run
+    await exec([LSREGISTER, "-u", app]);
   }, 15_000);
 
   test("launch refuses without a run line, and an unknown build", async () => {
@@ -208,24 +214,43 @@ describe("unpack: the shapes a release comes in", () => {
     expect((await exec(["test", "-x", join(dir, "Stub.app", "Contents", "MacOS", "Stub")])).code).toBe(0);
   });
 
-  test.skipIf(!mac)("a disk image: the app is copied out and the image dropped", async () => {
-    const src = join(scratch, "dmg-src");
+  /** A disk image of a folder holding the stub app and a README, written
+   *  without mounting anything: `create -srcfolder` mounts a browsable
+   *  /Volumes/Stub while it copies, and any helper that offers to install
+   *  the one app on a fresh disk image volume (Vorssaint's disk image
+   *  installer, on this Mac) asks "Install this app?" over the test run.
+   *  makehybrid writes the filesystem straight into the file; `raw` leaves
+   *  it that way, else it is converted (also mount-free) to the compressed
+   *  UDIF a release comes as. */
+  async function stubDmg(dir: string, raw: boolean) {
+    const src = join(dir, "src");
     await stubApp(join(src, "Stub.app"));
     await Bun.write(join(src, "README.txt"), "drag to Applications\n");
-    const dir = join(scratch, "dmg-dir");
-    await exec(["mkdir", "-p", dir]);
-    // makehybrid writes the filesystem straight into the file. `create -srcfolder`
-    // instead mounts a browsable /Volumes/Stub while it copies, and macOS 26's
-    // Finder answers a fresh volume holding one .app with "Install this app?"
-    const r = await exec(["hdiutil", "makehybrid", "-quiet", "-hfs", "-hfs-volume-name", "Stub", "-o", join(dir, "Stub.dmg"), src], { timeoutMs: 60_000 });
+    const hybrid = join(dir, raw ? "Stub.dmg" : "Stub-hybrid.dmg");
+    const r = await exec(["hdiutil", "makehybrid", "-quiet", "-hfs", "-hfs-volume-name", "Stub", "-o", hybrid, src], { timeoutMs: 60_000 });
     expect(r.code).toBe(0);
-    const target = await unpack(dir, "Stub.dmg", say);
-    expect(target).toEqual({ kind: "app", name: "Stub.app" });
-    const left = (await exec(["ls", dir])).stdout.trim().split("\n");
-    expect(left).toEqual(["Stub.app"]);
-    expect(said).toContain("mounting the disk image");
-    expect(said).toContain("copying Stub.app");
-  }, 60_000);
+    if (!raw) {
+      const c = await exec(["hdiutil", "convert", "-quiet", hybrid, "-format", "UDZO", "-o", join(dir, "Stub.dmg")], { timeoutMs: 60_000 });
+      expect(c.code).toBe(0);
+      await rm(hybrid);
+    }
+    await rm(src, { recursive: true });
+  }
+
+  for (const raw of [false, true]) {
+    test.skipIf(!mac)(`a ${raw ? "raw" : "compressed"} disk image: the app is copied out and the image dropped`, async () => {
+      const dir = join(scratch, raw ? "dmg-raw" : "dmg-udzo");
+      await stubDmg(dir, raw);
+      said.length = 0;
+      const target = await unpack(dir, "Stub.dmg", say);
+      expect(target).toEqual({ kind: "app", name: "Stub.app" });
+      // the image is gone, and so is the link it was attached through
+      const left = (await exec(["ls", "-A", dir])).stdout.trim().split("\n");
+      expect(left).toEqual(["Stub.app"]);
+      expect(said).toContain("mounting the disk image");
+      expect(said).toContain("copying Stub.app");
+    }, 60_000);
+  }
 
   test("a tarball wrapping one folder is lifted; the binary is made executable", async () => {
     const src = join(scratch, "tar-src", "tool-1.0");
