@@ -1,11 +1,13 @@
 import { describe, expect, test } from "bun:test";
 import {
+  HELPER_DEAD,
   helperOpeners,
   parseDefaultGateway,
   parseHelperIntent,
   parseHelperQuery,
   parseHelperReply,
   reachFrom,
+  staleHelpers,
 } from "./helper";
 import { DEFAULT_AGENT } from "./types";
 
@@ -165,5 +167,23 @@ describe("parseDefaultGateway", () => {
   test("null without a default route or with nothing to read", () => {
     expect(parseDefaultGateway("Iface\tDestination\tGateway\neth0\t0030A8C0\t00000000\t0001")).toBeNull();
     expect(parseDefaultGateway("")).toBeNull();
+  });
+});
+
+describe("staleHelpers", () => {
+  const peers = [
+    { name: "mbp", seen: 1_000 },
+    { name: "notebook", seen: 1_000 + HELPER_DEAD },
+  ];
+
+  test("names the peers not heard from inside the deadline", () => {
+    expect(staleHelpers(peers, 1_000 + HELPER_DEAD)).toEqual([]);
+    expect(staleHelpers(peers, 1_001 + HELPER_DEAD)).toEqual(["mbp"]);
+    expect(staleHelpers(peers, 1_001 + HELPER_DEAD * 2)).toEqual(["mbp", "notebook"]);
+  });
+
+  test("takes its own deadline, and nothing is stale in an empty list", () => {
+    expect(staleHelpers(peers, 1_100, 50)).toEqual(["mbp"]);
+    expect(staleHelpers([], Date.now())).toEqual([]);
   });
 });

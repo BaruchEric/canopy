@@ -40,7 +40,7 @@ import { normalizeAgent } from "../core/agent";
 import { normalizeLaunch } from "../core/launch";
 import { Launcher, LauncherError } from "../core/launcher";
 import { backendCaps, hostOpeners, isOpenerId, openFile, openGroup, openIn } from "../core/openers";
-import { clientKey, HELPER_TIMEOUT, isLoopback, parseDefaultGateway, parseHelperQuery, parseHelperReply, reachFrom, type HelperIntent } from "../core/helper";
+import { clientKey, HELPER_PING, HELPER_TIMEOUT, isLoopback, parseDefaultGateway, parseHelperQuery, parseHelperReply, reachFrom, staleHelpers, type HelperIntent } from "../core/helper";
 import { devicesOf, parseStream, type Stream } from "../core/presence";
 import { mapPool, searchRepo } from "../core/search";
 import { findWorkflow, loadWorkflows } from "../core/workflows";
@@ -192,6 +192,8 @@ interface Helper {
   ws: ServerWebSocket<Socket>;
   pending: Map<number, { resolve: () => void; reject: (e: Error) => void; timer: ReturnType<typeof setTimeout> }>;
   next: number;
+  /** when this end last heard from the helper, a pong included */
+  seen: number;
 }
 
 /** what a helper websocket carries: its registration (the address it
@@ -276,6 +278,28 @@ function dropHelper(state: ServerState, name: string, ws: ServerWebSocket<Socket
     p.reject(new HttpError(502, `the helper ${helper.info.name} went away`));
   }
   tellHelpers(state);
+}
+
+/** anything from a helper, a pong included, says its machine is still there */
+function helperSeen(state: ServerState, name: string, ws: ServerWebSocket<Socket>): void {
+  const helper = state.helpers.get(name);
+  if (helper && helper.ws === ws) helper.seen = Date.now();
+}
+
+/** Ping every helper and drop the ones that have not answered inside the
+ *  deadline. A client that dies with its machine sends no close frame, so
+ *  without this its entry would sit in the list for good: the browser would
+ *  keep offering a helper that is not there and every open through it would
+ *  wait out `HELPER_TIMEOUT` before failing. */
+function sweepHelpers(state: ServerState): void {
+  const peers = [...state.helpers.values()].map((h) => ({ name: h.info.name, seen: h.seen }));
+  for (const name of staleHelpers(peers, Date.now())) {
+    const helper = state.helpers.get(name);
+    if (!helper) continue;
+    helper.ws.close(1001, "no answer from this helper");
+    dropHelper(state, name, helper.ws);
+  }
+  for (const h of state.helpers.values()) if (h.ws.readyState === WebSocket.OPEN) h.ws.ping();
 }
 
 /** Where a click lands: on the helper the browser named (`helper` in the
@@ -1772,7 +1796,7 @@ export async function startServer(opts: {
                 p.reject(new HttpError(502, `the helper ${old.info.name} was replaced`));
               }
             }
-            state.helpers.set(info.name, { info, ws, pending: new Map(), next: 1 });
+            state.helpers.set(info.name, { info, ws, pending: new Map(), next: 1, seen: Date.now() });
             tellHelpers(state);
             return;
           }
@@ -1827,6 +1851,7 @@ export async function startServer(opts: {
         },
         message(ws, msg) {
           if (ws.data.kind === "helper") {
+            helperSeen(state, ws.data.info.name, ws);
             if (typeof msg === "string") helperReplied(state, ws.data.info.name, msg);
             return;
           }
@@ -1834,6 +1859,15 @@ export async function startServer(opts: {
           const session = sessionOf(term);
           if (session) relay(session, msg);
           else term.data.pending?.push(msg);
+        },
+        // The websocket layer answers a ping on its own; both handlers are
+        // here for what the frame proves, that the machine at the other end
+        // of a helper's socket is still up.
+        ping(ws) {
+          if (ws.data.kind === "helper") helperSeen(state, ws.data.info.name, ws);
+        },
+        pong(ws) {
+          if (ws.data.kind === "helper") helperSeen(state, ws.data.info.name, ws);
         },
         // The browser going away leaves the shell running: a reload, a
         // closed tab or a lost connection comes back to it by name. Ending a
@@ -1861,6 +1895,8 @@ export async function startServer(opts: {
   // the cards should not claim "in sync" on the strength of last week's fetch.
   const firstActivity = setTimeout(() => void refreshActivity(state), ACTIVITY_DELAY);
 
+  const helperTimer = setInterval(() => sweepHelpers(state), HELPER_PING);
+
   const heartbeat = setInterval(() => {
     for (const c of state.clients) {
       try {
@@ -1878,6 +1914,7 @@ export async function startServer(opts: {
     port: server.port ?? port,
     stop: () => {
       clearInterval(heartbeat);
+      clearInterval(helperTimer);
       clearInterval(remoteTimer);
       clearTimeout(firstActivity);
       for (const t of state.timers.values()) clearTimeout(t);

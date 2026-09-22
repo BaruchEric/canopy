@@ -27,6 +27,23 @@ export type HelperReply = { id: number; ok: true } | { id: number; error: string
 /** how long the backend waits for a helper to answer an intent */
 export const HELPER_TIMEOUT = 20_000;
 
+/** How often each end pings the other, and how long it goes unanswered
+ *  before that end treats the socket as gone. A peer that dies with its host
+ *  (a reboot, a pulled cable) sends no close frame, so the socket sits
+ *  half-open and neither end hears anything again: the helper would keep
+ *  believing it is registered and the backend would keep offering it. A ping
+ *  is answered by the websocket layer itself, so the pong is proof the host
+ *  on the other end is still there. */
+export const HELPER_PING = 20_000;
+export const HELPER_DEAD = 60_000;
+
+/** the peers not heard from inside the deadline, by name; what a sweep drops */
+export function staleHelpers<T extends { name: string; seen: number }>(peers: Iterable<T>, now: number, dead = HELPER_DEAD): string[] {
+  const gone: string[] = [];
+  for (const p of peers) if (now - p.seen > dead) gone.push(p.name);
+  return gone;
+}
+
 const isOpener = (v: unknown): v is OpenerId => typeof v === "string" && (OPENER_IDS as readonly string[]).includes(v);
 
 /** the registration off the socket's query: a name (up to 64 plain
