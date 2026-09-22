@@ -28,6 +28,7 @@ import {
   type FlowChoice,
   type HistoryOverview,
   type Job,
+  type KeptShell,
   type LaunchSettings,
   type OpenerId,
   type Repo,
@@ -326,6 +327,10 @@ interface CanopyState {
   /** every shell the server holds, with who is looking at each; the tabs
    *  here are the ones of those this window shows */
   shells: TermInfo[];
+  /** the shells a machine going down left behind, offered to restore */
+  kept: KeptShell[];
+  /** whether the backend is writing shell history out at all */
+  keeping: boolean;
   workspaces: Workspace[];
   loaded: boolean;
   /** why the initial load failed, if it did */
@@ -468,6 +473,13 @@ interface CanopyState {
   openTerm: (repoId: string, place?: ShellPlace) => void;
   closeTerm: (id: string) => void;
   showTerm: (id: string) => void;
+  /** starts a kept shell again where it was, with what it had; `resume`
+   *  also runs the line that picks its agent's conversation back up */
+  restoreShell: (id: string, resume?: boolean) => Promise<void>;
+  /** drops a kept shell's record and history without restoring it */
+  forgetShell: (id: string) => Promise<void>;
+  /** turns the backend's shell recording on or off */
+  setKeeping: (on: boolean) => Promise<void>;
   /** marks a shell whose process has ended; its tab stays until closed */
   endTerm: (id: string, code: number | null) => void;
   setTermHeight: (px: number) => void;
@@ -612,6 +624,8 @@ export const useStore = create<CanopyState>((set, get) => ({
   helpers: [],
   devices: [],
   shells: [],
+  kept: [],
+  keeping: false,
   workspaces: [],
   loaded: false,
   loadError: null,
@@ -667,7 +681,7 @@ export const useStore = create<CanopyState>((set, get) => ({
 
   init: async () => {
     try {
-      const [tree, workspaces, runs, agents, flows, fleets, verdict, launchers, jobs, held, client, helpers, devices] = await Promise.all([
+      const [tree, workspaces, runs, agents, flows, fleets, verdict, launchers, jobs, held, client, helpers, devices, kept] = await Promise.all([
         api.tree(),
         api.workspaces(),
         api.runs(),
@@ -683,6 +697,8 @@ export const useStore = create<CanopyState>((set, get) => ({
         api.client(),
         api.helpers(),
         api.devices().catch((): Device[] => []),
+        // a backend from before shells were kept has no list
+        api.kept().catch(() => ({ keeping: false, kept: [] as KeptShell[] })),
       ]);
       // The shells come back only now, against what the server still holds:
       // a tab shown sooner would open its socket and start a shell of its
@@ -710,6 +726,8 @@ export const useStore = create<CanopyState>((set, get) => ({
         helpers,
         devices,
         shells: held,
+        kept: kept.kept,
+        keeping: kept.keeping,
         workspaces,
         runs: Object.fromEntries(runs.map((r) => [r.id, r])),
         agents,
@@ -933,6 +951,8 @@ export const useStore = create<CanopyState>((set, get) => ({
       set({ helpers: ev.helpers });
     } else if (ev.type === "devices") {
       set({ devices: ev.devices });
+    } else if (ev.type === "kept") {
+      set({ kept: ev.kept });
     } else if (ev.type === "terms") {
       // a shell opened on another device shows up here too; a dockless
       // window (solo, shell) keeps no tabs of its own
@@ -990,6 +1010,32 @@ export const useStore = create<CanopyState>((set, get) => ({
         ? { ...focusPanel(s.panels, repoId), closedSections: unfoldIn(s.closedSections, repoId, "shell") }
         : {}),
     });
+  },
+  restoreShell: async (id, resume = false) => {
+    const s = get();
+    const rec = s.kept.find((k) => k.id === id);
+    if (!rec) return;
+    const repo = s.repos.find((r) => r.id === rec.repoId);
+    if (!repo) return;
+    await api.restoreShell(id, resume);
+    // the same tab the lost shell had, since it comes back under its name
+    const tab: TermTab = { id, repoId: repo.id, name: repo.name, path: repo.path, place: rec.place };
+    set((now) => ({
+      kept: now.kept.filter((k) => k.id !== id),
+      terms: now.terms.some((t) => t.id === id) ? now.terms : [...now.terms, tab],
+      activeTerm: rec.place === "strip" ? id : now.activeTerm,
+      ...(rec.place === "panel"
+        ? { ...focusPanel(now.panels, repo.id), closedSections: unfoldIn(now.closedSections, repo.id, "shell") }
+        : {}),
+    }));
+  },
+  forgetShell: async (id) => {
+    await api.forgetShell(id);
+    set((s) => ({ kept: s.kept.filter((k) => k.id !== id) }));
+  },
+  setKeeping: async (on) => {
+    const { keeping } = await api.setKeeping(on);
+    set({ keeping });
   },
   closeTerm: (id) => {
     const s = get();

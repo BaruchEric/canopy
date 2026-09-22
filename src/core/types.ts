@@ -278,6 +278,11 @@ export interface CanopyConfig {
   /** whether the server fetches the user's own local repos in the background
    *  (every REMOTE_REFRESH), so behind counts and remote tips stay current */
   fetch: boolean;
+  /** Whether a shell's history is written to disk so it can be restored
+   *  after the machine goes down. Off by default and deliberately: what a
+   *  shell printed is whatever it printed, secrets included, and this keeps
+   *  it in a file that outlives the process. */
+  keepShells: boolean;
 }
 
 /* ---------- the launcher: release builds and pull requests, run here ---------- */
@@ -623,7 +628,10 @@ export type ServerEvent =
    *  joins or leaves; the whole list each time, no tmux reconcile behind it */
   | { type: "terms"; terms: TermInfo[] }
   /** the browsers on the event stream, whenever one comes or goes */
-  | { type: "devices"; devices: Device[] };
+  | { type: "devices"; devices: Device[] }
+  /** the shells left behind by a backend that went down, whenever the list
+   *  changes: one is kept, restored or forgotten */
+  | { type: "kept"; kept: KeptShell[] };
 
 export type BuildChange = "installed" | "built" | "launched" | "exited" | "removed";
 
@@ -971,4 +979,29 @@ export interface TermInfo {
   /** the names of the devices with a socket on it, one each */
   viewers: string[];
   startedAt: number;
+  /** when this shell was restored from what a lost one left behind; absent
+   *  for a shell that has been running all along */
+  restoredAt?: number;
+}
+
+/** the agent canopy can tell was running in a shell */
+export type AgentKind = "claude" | "codex";
+
+/** What a shell left on disk for after the machine it ran on goes down.
+ *  Written only while `keepShells` is on, one record per shell, with its
+ *  history capped and old records dropped. A record whose session is still
+ *  live is not offered: this is what is left of the ones that are not. */
+export interface KeptShell {
+  id: string;
+  repoId: string;
+  /** the repo's locator, where the shell was */
+  path: string;
+  place: ShellPlace;
+  startedAt: number;
+  /** when its history was last captured */
+  savedAt: number;
+  /** lines of history kept */
+  lines: number;
+  /** what was running in it when it was last looked at, when canopy could tell */
+  agent: AgentKind | null;
 }

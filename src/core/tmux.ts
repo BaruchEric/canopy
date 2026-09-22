@@ -125,6 +125,33 @@ export const captureArgs = (base: string[], id: string, lines = HISTORY_LINES): 
   "-1",
 ];
 
+/** The same capture, plus the screen the pane shows now: what is on screen
+ *  is redrawn for a client that attaches, so `captureArgs` leaves it out,
+ *  but nothing redraws it after the machine goes down. This is the shape
+ *  kept on disk. */
+export const snapshotArgs = (base: string[], id: string, lines = HISTORY_LINES): string[] => [
+  ...base,
+  "capture-pane",
+  "-p",
+  "-e",
+  "-J",
+  "-t",
+  sessionName(id),
+  "-S",
+  `-${lines}`,
+  "-E",
+  "-",
+];
+
+/** what tmux can say about the pane: the command it is running and its
+ *  title, which is what `agentIn` reads to tell an agent shell apart */
+export const PANE_FORMAT = "#{pane_current_command}\t#{pane_title}";
+
+export const paneArgs = (base: string[], id: string): string[] => [...base, "display-message", "-p", "-t", sessionName(id), PANE_FORMAT];
+
+/** a line typed into a shell, Enter and all */
+export const sendLineArgs = (base: string[], id: string, line: string): string[] => [...base, "send-keys", "-t", sessionName(id), line, "Enter"];
+
 /** What a client is sent before tmux draws for it: the captured history as
  *  terminal lines, then enough newlines to push them off a screen of
  *  `rows`, since tmux's first draw clears the screen and what is on it then
@@ -208,14 +235,27 @@ export async function listSessions(base: string[]): Promise<TmuxSession[]> {
   return parseSessions(r.stdout);
 }
 
+/** Whether canopy's tmux server is answering at all. A session that is gone
+ *  while the server is up is a shell that exited; the server itself being
+ *  gone (its container restarted, the machine went down) is not, and the two
+ *  must never be confused, since one means there is nothing left to restore
+ *  and the other is exactly when what a shell left is wanted. Anything but a
+ *  clean answer counts as down, which keeps records rather than dropping
+ *  them on a hiccup. */
+export async function serverUp(base: string[]): Promise<boolean> {
+  return (await exec(listArgs(base), { timeoutMs: 10_000 })).code === 0;
+}
+
 /** ends canopy's tmux server and every shell on it (tests) */
 export async function killServer(base: string[]): Promise<void> {
   await exec([...base, "kill-server"], { timeoutMs: 10_000 });
 }
 
-/** The session for a shell, made when there is none by that name. */
-export async function newSession(base: string[], meta: TmuxMeta, size: TermSize): Promise<void> {
-  const r = await exec(newSessionArgs(base, meta, size, shellArgs(meta.path)), { timeoutMs: 15_000 });
+/** The session for a shell, made when there is none by that name. The
+ *  command is the login shell for the repo unless a caller has something to
+ *  run ahead of it (a restore replays what the lost shell printed). */
+export async function newSession(base: string[], meta: TmuxMeta, size: TermSize, command = shellArgs(meta.path)): Promise<void> {
+  const r = await exec(newSessionArgs(base, meta, size, command), { timeoutMs: 15_000 });
   if (r.code !== 0 && !isDuplicate(r.stderr)) throw new Error(r.stderr.trim() || "tmux could not start the shell");
 }
 
@@ -228,12 +268,43 @@ export async function killSession(base: string[], id: string): Promise<void> {
   await exec(killArgs(base, id), { timeoutMs: 10_000 });
 }
 
-/** what a new client is sent before tmux draws for it (see `primeText`) */
-export async function history(base: string[], id: string, rows: number, lines = HISTORY_LINES): Promise<string> {
+/** How much the session has scrolled off its screen; 0 for one that has not
+ *  yet, which is how a restored shell is told from one that has done work of
+ *  its own since. */
+export async function historySize(base: string[], id: string): Promise<number> {
   const size = await exec(historySizeArgs(base, id), { timeoutMs: 10_000 });
-  if (size.code !== 0 || !(Number(size.stdout.trim()) > 0)) return "";
+  if (size.code !== 0) return 0;
+  const n = Number(size.stdout.trim());
+  return Number.isFinite(n) && n > 0 ? n : 0;
+}
+
+/** What a new client is sent before tmux draws for it (see `primeText`).
+ *  A restored shell needs nothing special here: what it was restored from
+ *  was printed into the pane, so it is the session's own history like the
+ *  rest. */
+export async function history(base: string[], id: string, rows: number, lines = HISTORY_LINES): Promise<string> {
+  if (!(await historySize(base, id))) return "";
   const r = await exec(captureArgs(base, id, lines), { timeoutMs: 10_000 });
   return r.code === 0 ? primeText(r.stdout, rows) : "";
+}
+
+/** the pane's command and title, both empty when tmux will not say */
+export async function paneInfo(base: string[], id: string): Promise<{ command: string; title: string }> {
+  const r = await exec(paneArgs(base, id), { timeoutMs: 10_000 });
+  if (r.code !== 0) return { command: "", title: "" };
+  const [command = "", title = ""] = r.stdout.replace(/\n$/, "").split("\t");
+  return { command, title };
+}
+
+/** the session's history and screen as they stand, for the record on disk */
+export async function snapshot(base: string[], id: string, lines = HISTORY_LINES): Promise<string> {
+  const r = await exec(snapshotArgs(base, id, lines), { timeoutMs: 10_000 });
+  return r.code === 0 ? r.stdout : "";
+}
+
+/** types a line into a shell, as though the user had */
+export async function sendLine(base: string[], id: string, line: string): Promise<void> {
+  await exec(sendLineArgs(base, id, line), { timeoutMs: 10_000 });
 }
 
 /** A pty client on a session: what one browser socket sees and types

@@ -31,8 +31,9 @@ import {
 import { browseLocal, browseRemote, expandHome, SshError } from "../core/browse";
 import { exec, onHost } from "../core/exec";
 import { Flows, type CheckResult } from "../core/flow";
-import { isTermId, parseTermMessage, Scrollback, startTerm, termPlace, termSize, type TermSession, type TermSize } from "../core/term";
-import { attachTmuxTerm, hasSession, history, killSession, listSessions, newSession, tmuxBase } from "../core/tmux";
+import { isTermId, parseTermMessage, Scrollback, shellArgs, startTerm, termPlace, termSize, type TermSession, type TermSize } from "../core/term";
+import { attachTmuxTerm, hasSession, history, killSession, listSessions, newSession, paneInfo, sendLine, serverUp, snapshot, tmuxBase } from "../core/tmux";
+import { agentIn, clip, continueLine, countLines, expiredShells, forgetKept, KEEP_EVERY, listKept, lostShells, readKeptHistory, replayCommand, replayFile, restoredBanner, writeKept } from "../core/keep";
 import { apiBase, ForgeAuthError, linkForgeClones, listForgeRepos } from "../core/forge";
 import { isSshHost, parseLocator, parseSshHosts, shellQuote, tildeQuote } from "../core/host";
 import { hasGatewayKey, jev } from "../core/jev";
@@ -59,6 +60,7 @@ import {
   rememberRoot,
   removeSource,
   removeWorkspace,
+  saveConfig,
   setAgent,
   setLaunch,
   upsertWorkspace,
@@ -77,6 +79,7 @@ import {
   type GrepRepoResult,
   type HistoryOverview,
   type HistoryWindow,
+  type KeptShell,
   type PullCount,
   type Repo,
   type RunAction,
@@ -152,6 +155,11 @@ interface ServerState {
   own: Map<string, string[]>;
   /** an activity pass under way, so the timer never stacks a second one */
   activity: Promise<void> | null;
+  /** the shells a machine going down left behind, the ones no live session
+   *  answers for; what the browser is offered to restore */
+  kept: KeptShell[];
+  /** a snapshot pass under way, so the timer never stacks a second one */
+  keeping: Promise<void> | null;
 }
 
 /** One shell the server holds and the sockets on it. On a plain pty the
@@ -372,8 +380,110 @@ async function endTerm(state: ServerState, id: string): Promise<boolean> {
   if (live) live.ending = true;
   await killSession(state.tmux, id);
   state.terms.delete(id);
+  await forgetKept(id);
   tellTerms(state);
   return true;
+}
+
+/* ---------- what a shell leaves behind (core/keep) ---------- */
+
+/** Writes out what every shell the server holds has on its screen and in
+ *  its history. Only while `keepShells` is on: this is whatever the shell
+ *  printed, and it lands in a file that outlives the process. */
+async function snapshotShells(state: ServerState): Promise<void> {
+  const tmux = state.tmux;
+  if (!tmux) return;
+  for (const live of state.terms.values()) {
+    const { id, repoId, path, place, startedAt } = live.info;
+    try {
+      const [text, pane] = await Promise.all([snapshot(tmux, id), paneInfo(tmux, id)]);
+      const history = clip(text);
+      const rec: KeptShell = { id, repoId, path, place, startedAt, savedAt: Date.now(), lines: countLines(history), agent: agentIn(pane.command, pane.title) };
+      await writeKept(rec, history);
+    } catch {
+      // a shell that ended while the pass was running; the next one is right
+    }
+  }
+}
+
+/** The records on disk, minus the ones past the retention window and the
+ *  ones a live session answers for: what is left is offered to restore.
+ *  Broadcast when the list changed. */
+async function refreshKept(state: ServerState): Promise<KeptShell[]> {
+  const all = await listKept();
+  const gone = new Set(expiredShells(all, Date.now()));
+  for (const id of gone) await forgetKept(id);
+  const kept = lostShells(
+    all.filter((k) => !gone.has(k.id)),
+    state.terms.keys(),
+  );
+  const same = kept.length === state.kept.length && kept.every((k, i) => state.kept[i]?.id === k.id && state.kept[i]?.savedAt === k.savedAt);
+  state.kept = kept;
+  if (!same) broadcast(state, { type: "kept", kept });
+  return kept;
+}
+
+/** one snapshot pass and the refresh behind it, never two at once */
+function keepPass(state: ServerState): Promise<void> {
+  if (state.keeping) return state.keeping;
+  const pass = (async () => {
+    const cfg = await loadConfig();
+    if (cfg.keepShells) await snapshotShells(state);
+    await refreshKept(state);
+  })()
+    .catch(() => {})
+    .finally(() => {
+      state.keeping = null;
+    });
+  state.keeping = pass;
+  return pass;
+}
+
+/** A shell running again under the name it had, at the same repo, with what
+ *  it printed before the machine went down ahead of it and a banner saying
+ *  where that came from. The processes that were in it are gone: the agent
+ *  that was running is offered as a line to run, not resumed. */
+async function restoreTerm(state: ServerState, id: string, size: TermSize, resume: boolean): Promise<TermInfo> {
+  const tmux = state.tmux;
+  if (!tmux) throw new HttpError(400, "this backend holds shells on plain ptys, which nothing outlives");
+  const rec = state.kept.find((k) => k.id === id);
+  if (!rec) throw new HttpError(404, "no shell kept under that name");
+  if (state.terms.has(id) || (await hasSession(tmux, id))) throw new HttpError(409, "that shell is running already");
+  if (!state.result.repos.some((r) => r.id === rec.repoId)) throw new HttpError(400, `the repo that shell was in is not in the scan: ${rec.repoId}`);
+  // The replay runs in the pane, ahead of the shell, so what the lost shell
+  // had becomes this session's own tmux history: every client that attaches,
+  // now or tomorrow, gets it the way it gets any other history. The record
+  // goes first and the replay file is written after it, since forgetting a
+  // shell takes any replay file with it.
+  const history = await readKeptHistory(id);
+  await forgetKept(id);
+  const file = await replayFile(id, history);
+  const shell = shellArgs(rec.path);
+  const command = file ? replayCommand(file, restoredBanner(new Date(rec.savedAt).toLocaleString()), shell) : shell;
+  try {
+    await newSession(tmux, { id, repoId: rec.repoId, path: rec.path, place: rec.place }, size, command);
+  } catch (e) {
+    // nothing will read the replay now, and the retention sweep only knows
+    // about records
+    await forgetKept(id);
+    throw e;
+  }
+  const at = Date.now();
+  const live: LiveTerm = {
+    info: { id, repoId: rec.repoId, path: rec.path, place: rec.place, attached: false, viewers: [], startedAt: at, restoredAt: at },
+    pty: null,
+    sockets: new Set(),
+  };
+  state.terms.set(id, live);
+  const line = resume ? continueLine(rec.agent) : null;
+  if (line) {
+    // the shell has to be up to read it; send-keys is input, not a command
+    await Bun.sleep(400);
+    await sendLine(tmux, id, line);
+  }
+  tellTerms(state);
+  await refreshKept(state);
+  return termInfo(state, live);
 }
 
 /** A shell on a plain pty under the browser's name: the one session every
@@ -456,6 +566,11 @@ async function joinTmuxTerm(state: ServerState, tmux: string[], ws: ServerWebSoc
             ws.close(1000, "the client detached");
           } else {
             if (state.terms.get(id) === held) state.terms.delete(id);
+            // A shell that exited leaves nothing worth restoring, but the
+            // session can also be gone because the tmux server went with its
+            // container or its machine, which is the one case where what it
+            // left is the whole point. Only the first forgets.
+            void serverUp(tmux).then((up) => (up ? forgetKept(id) : undefined));
             ws.send(JSON.stringify({ exit: code }));
             ws.close(1000, "the shell exited");
           }
@@ -1162,6 +1277,32 @@ async function handleApi(
   }
 
   if (path === "/api/terms" && method === "GET") return json(await listTerms(state));
+  if (path === "/api/terms/kept" && method === "GET") {
+    await listTerms(state);
+    return json({ keeping: (await loadConfig()).keepShells, kept: await refreshKept(state) });
+  }
+  if (path === "/api/terms/kept" && method === "DELETE") {
+    const term = url.searchParams.get("term") ?? "";
+    if (!state.kept.some((k) => k.id === term)) return json({ error: "no shell kept under that name" }, 404);
+    await forgetKept(term);
+    await refreshKept(state);
+    return json({ ok: true });
+  }
+  if (path === "/api/terms/restore" && method === "POST") {
+    const b = (await req.json()) as { term?: unknown; cols?: unknown; rows?: unknown; resume?: unknown };
+    if (typeof b.term !== "string") return json({ error: "term must be a shell name" }, 400);
+    const size = termSize(typeof b.cols === "number" ? b.cols : 80, typeof b.rows === "number" ? b.rows : 24);
+    return json(await restoreTerm(state, b.term, size, b.resume === true));
+  }
+  if (path === "/api/keep" && method === "POST") {
+    const b = (await req.json()) as { on?: unknown };
+    if (typeof b.on !== "boolean") return json({ error: "on must be true or false" }, 400);
+    const cfg = await loadConfig();
+    await saveConfig({ ...cfg, keepShells: b.on });
+    // awaited, so the answer means the shells held right now are written
+    if (b.on) await keepPass(state);
+    return json({ keeping: b.on });
+  }
   if (path === "/api/terms" && method === "DELETE") {
     if (!(await endTerm(state, url.searchParams.get("term") ?? ""))) return json({ error: "no such shell" }, 404);
     return json({ ok: true });
@@ -1690,6 +1831,8 @@ export async function startServer(opts: {
     pulls: new Map(),
     own: new Map(),
     activity: null,
+    kept: [],
+    keeping: null,
   };
   await rememberRoot(root);
   await Promise.all(state.sources.map((rt) => scanOne(state, rt, scanOpts(state, cfg))));
@@ -1701,9 +1844,12 @@ export async function startServer(opts: {
   // browser rejoining finds them held. Said out loud, since a missing
   // tmux falls back to plain ptys and looks the same until a restart.
   await listTerms(state);
+  // and the ones a machine going down left behind, which are offered to
+  // restore rather than held
+  const kept = await refreshKept(state);
   console.error(
     state.tmux
-      ? `shells on tmux (${state.tmux[0]}), ${state.terms.size} held from before`
+      ? `shells on tmux (${state.tmux[0]}), ${state.terms.size} held from before${kept.length ? `, ${kept.length} to restore` : ""}`
       : "shells on plain ptys (no tmux found; they end with the server)",
   );
 
@@ -1897,6 +2043,10 @@ export async function startServer(opts: {
 
   const helperTimer = setInterval(() => sweepHelpers(state), HELPER_PING);
 
+  // What the shells have on their screens, written out while `keepShells`
+  // is on, so a machine going down does not take them with the tmux server.
+  const keepTimer = setInterval(() => void keepPass(state), KEEP_EVERY);
+
   const heartbeat = setInterval(() => {
     for (const c of state.clients) {
       try {
@@ -1915,6 +2065,7 @@ export async function startServer(opts: {
     stop: () => {
       clearInterval(heartbeat);
       clearInterval(helperTimer);
+      clearInterval(keepTimer);
       clearInterval(remoteTimer);
       clearTimeout(firstActivity);
       for (const t of state.timers.values()) clearTimeout(t);

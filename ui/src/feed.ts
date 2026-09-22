@@ -8,6 +8,7 @@ import type {
   Device,
   HelperInfo,
   Job,
+  KeptShell,
   Repo,
   RepoStatus,
   Run,
@@ -64,6 +65,9 @@ export interface FeedSnapshot {
   devices?: Device[];
   /** the shells held, so a start can be told from a join */
   shells?: TermInfo[];
+  /** the shells kept from before, so one being offered can be told from one
+   *  being restored or forgotten */
+  kept?: KeptShell[];
 }
 
 /** how many entries the feed keeps; older ones fall off the top */
@@ -417,6 +421,22 @@ export function describeEvent(
       }
       for (const b of before) {
         if (!ev.terms.some((t) => t.id === b.id)) lines.push(about(repoOf(b.repoId), "shell", at, "shell ended"));
+      }
+      return lines;
+    }
+    case "kept": {
+      // what the machine going down left behind, and what leaves the list
+      // again as it is restored or forgotten
+      const before = prev.kept ?? [];
+      const lines: FeedLine[] = [];
+      const repoOf = (id: string) => prev.repos.find((r) => r.id === id);
+      for (const k of ev.kept) {
+        if (!before.some((b) => b.id === k.id)) {
+          lines.push(about(repoOf(k.repoId), "shell", at, `a shell from before is here to restore${k.agent ? ` (${k.agent} was running)` : ""}`));
+        }
+      }
+      for (const b of before) {
+        if (!ev.kept.some((k) => k.id === b.id)) lines.push(about(repoOf(b.repoId), "shell", at, "a kept shell is gone from the list", true));
       }
       return lines;
     }

@@ -478,6 +478,47 @@ body.resizing {
   font-size: 11px;
   color: var(--ink-dim);
 }
+.kept-pop {
+  width: 340px;
+}
+.kept-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: grid;
+  gap: 10px;
+  align-self: stretch;
+}
+.kept-shell {
+  display: grid;
+  gap: 4px;
+  font-size: 12px;
+}
+.kept-where {
+  display: grid;
+  gap: 2px;
+  color: var(--ink);
+}
+.kept-fact {
+  font-size: 11px;
+  color: var(--ink-dim);
+}
+.kept-acts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.settings-line {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  color: var(--ink);
+  align-self: stretch;
+}
+.settings-hint.error {
+  color: var(--rust);
+}
 .keys {
   margin: 0;
   display: grid;

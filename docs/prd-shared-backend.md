@@ -1,6 +1,6 @@
 # PRD: canopy as a shared backend
 
-Status: Phases 1 to 4 resolved (2026-09-22): 1 to 3 deployed and verified, Phase 4's redeploy survival deployed and verified, its reboot restore decided against for now
+Status: Phases 1 to 4 done (2026-09-22): 1 to 3 deployed and verified, Phase 4 complete in code and tested, its reboot restore built after all (the 2026-09-22 decision against it was reversed the same day, on request)
 Owner: Eric
 Last updated: 2026-09-22
 
@@ -467,7 +467,8 @@ configuration.
 now" in "does not survive restart for now" coming due.
 
 **Status (2026-09-22): redeploy survival deployed on the mini and verified;
-reboot restore decided against for now (see Decisions).** The tmux server
+reboot restore built the same day, after the decision against it was
+reversed on request.** The tmux server
 that holds every shell runs in a container of its own, the `shells` service
 in `docker-compose.yml`, built from a `shells` stage of the same Dockerfile
 (the runtime, the user, claude, codex, `lib/tmux.conf` and no canopy code)
@@ -498,36 +499,64 @@ since that server lived and died with the canopy container.
   shells and their Claude sessions across a canopy process restart. Bring it into
   the container so a canopy redeploy or crash inside the container does not drop
   the shells. Built as the `shells` service, above.
-- **Reboot survival of the terminal.** A machine reboot kills the tmux server;
-  no in-memory design survives it. Persist each shell's scrollback to disk and,
-  on boot, offer to relaunch the shell at the same repo with its history
-  restored. This restores the terminal, not the live processes in it.
-- **Reboot survival of the work, not the process.** For a shell that was running
-  Claude, remember the repo and the session and offer `claude --continue` /
-  `--resume` on boot. This reconstructs the conversation; it does not resume a
-  frozen process, because that is not possible.
+- **Reboot survival of the terminal (done).** A machine reboot kills the tmux
+  server; no in-memory design survives it. `core/keep.ts` is what is left of a
+  shell after one: while `keepShells` is on, the backend snapshots every shell
+  it holds each `KEEP_EVERY` (60s) through `capture-pane` over the history and
+  the visible screen (`snapshotArgs`, which `captureArgs` leaves out because a
+  live attach redraws it and a reboot does not), clips it to `KEEP_LINES`
+  (2000) and `KEEP_BYTES` (256 KiB), and writes one 0600 record and one
+  history file per shell into `shells/` under the config dir, the volume the
+  shells container shares. On startup and on every list, `lostShells` is the
+  records no live session answers for: `GET /api/terms/kept` offers them,
+  `POST /api/terms/restore` starts one again **under the same id**, so every
+  saved tab and `?term=` url comes back to it, with the old history and a
+  `[restored by canopy]` banner sent ahead of the session's own (dropped once
+  the new session has scrolled a screen of its own, since by then it is a
+  working shell, not a restored one), and `DELETE /api/terms/kept` forgets one
+  instead. `expiredShells` drops a record `KEEP_DAYS` (7) after it was
+  written, and ending a shell forgets it at once. A client exiting because
+  its session is gone counts as the shell having exited only when `serverUp`
+  says canopy's tmux server is still answering: on the mini the shells live
+  in a container of their own, so that container restarting kills every
+  client at once under a canopy that is still up, and forgetting the records
+  there would throw away exactly what the restart is meant to leave behind.
+- **Reboot survival of the work, not the process (done).** `agentIn` reads
+  `pane_current_command` and `pane_title` to tell what was running: measured,
+  not assumed, since Claude Code sets its process title to its own version
+  (`2.1.278`) and titles the pane `claude …`, codex reports its own name, and
+  a plain shell reports the shell, which is what keeps a shell sitting in a
+  folder called `claude-history` from looking like an agent. A restore with
+  `resume` types `continueLine`'s `claude --continue` into the new shell. Only
+  Claude: codex has no continue this is sure of, so a codex shell comes back
+  as a terminal at its prompt and says which agent it had.
 
 **Requirements.**
 
-- Durability is opt-in and bounded (a cap on persisted scrollback, a retention
-  window), so it does not grow without limit.
-- A restored shell is clearly marked as restored, not as never having stopped.
+- Durability is opt-in and bounded: `keepShells` is off by default (a capture
+  is whatever the shell printed, secrets included, and it outlives the
+  process), the capture is capped by lines and by bytes, and a record is
+  dropped a week after it was written.
+- A restored shell is clearly marked as restored, not as never having stopped:
+  the banner ahead of its history says so and `TermInfo.restoredAt` carries it
+  to the browser.
 
 **Deliverables.** Scrollback persistence, a boot-time restore flow, and the
-Claude `--continue` reattach offer.
+Claude `--continue` reattach offer. All three landed 2026-09-22.
 
 **Acceptance criteria.**
 
 - After a container restart, shells and their Claude sessions are still live
   (tmux in the container). Met 2026-09-22.
-- After a mini reboot, canopy offers to restore each prior shell with its history
-  and, for Claude shells, to continue the conversation. Not adopted; see the
-  open question.
+- After a mini reboot, canopy offers to restore each prior shell with its
+  history and, for Claude shells, to continue the conversation. Met in code
+  and under test 2026-09-22 (`src/server/keep.test.ts` kills a session behind
+  canopy's back, which is the shape of a reboot, and restores it); the switch
+  is off until turned on, and it reaches the mini on the next deploy.
 
-**Open question, decided 2026-09-22.** Whether reboot restore is worth the
-complexity, or whether "the shells are gone, reopen them, `claude --continue`
-picks the thread back up" is enough. Decided: enough, for now. Under
-Decisions.
+**Open question, decided 2026-09-22, then reopened and settled the same day.**
+Whether reboot restore was worth the complexity. Decided first that it was
+not, then built on request; the reasons on both sides are under Decisions.
 
 ## Cross-cutting requirements
 
@@ -643,6 +672,24 @@ Resolved 2026-09-21.
   that mattered and was not in the archive. The gap this leaves is honest:
   a plain shell's history (a build's output, a long command) does not come
   back.
+- **Reversed the same day: reboot restore is built, and it is off by
+  default.** Decided 2026-09-22, hours after the decision above, on request.
+  The gap the first decision called honest is the one that bites: a build's
+  output and a long command's result are exactly what a reboot takes and the
+  archive never had. What changed the arithmetic is that the pieces were
+  already there, `capture-pane` for the history a new client is primed with
+  and a session id the browser already names its tabs by, so restore is a
+  record on disk and a `new-session` under the same id rather than a new
+  model. What stays true from the first decision is the limit: the processes
+  are gone and nothing brings them back, so this restores a terminal and
+  offers `claude --continue`, and it says so rather than pretending the
+  shell never stopped. The one thing that gave pause is what the recording
+  writes: a capture is whatever the shell printed, tokens and `.env` lines
+  and all, in a plaintext file that outlives the process on a box the whole
+  tailnet can reach. So it is opt-in (`keepShells`, off by default, one
+  switch in settings), 0600 in a 0700 dir, capped at 2000 lines or 256 KiB a
+  shell, and a record is forgotten a week after it was written or the moment
+  its shell is deliberately ended.
 
 ## Appendix: what containerizes and what is macOS-only
 
@@ -674,5 +721,6 @@ From an audit of the current code.
   2026-09-22 with no public edge.
 - Phase 4: durability, from process-restart survival in the container to
   reboot-time restore and Claude `--continue`. The first is the `shells`
-  service, deployed and verified 2026-09-22; the rest is decided against
-  for now.
+  service, deployed and verified 2026-09-22; the rest is `core/keep.ts` and
+  the restore routes, built the same day, off until `keepShells` is turned
+  on, and live on the mini at the next deploy.

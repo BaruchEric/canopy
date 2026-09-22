@@ -8,6 +8,7 @@ import { FilterMenu } from "./Filters";
 import { Seg } from "./Seg";
 import { SettingsMenu } from "./Settings";
 import { DevicesChip } from "./Devices";
+import { KeptShells } from "./KeptShells";
 import { SourcesMenu } from "./Sources";
 
 /** The three crowns and a trunk. `live` makes them breathe (loading screen). */
@@ -314,6 +315,7 @@ export function TopBar() {
         {scanning ? "scanning…" : "rescan"}
       </button>
 
+      <KeptShells />
       <DevicesChip />
       <SettingsMenu />
     </header>

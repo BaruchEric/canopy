@@ -17,6 +17,7 @@ import type {
   Job,
   LaunchSettings,
   Listing,
+  KeptShell,
   LogEntry,
   Build,
   Pull,
@@ -172,6 +173,17 @@ export const api = {
   terms: () => req<TermInfo[]>("/api/terms"),
   /** ends one shell; closing its socket alone leaves it running */
   endTerm: (id: string) => req<{ ok: true }>(`/api/terms?term=${encodeURIComponent(id)}`, { method: "DELETE" }),
+  /** the shells a machine going down left behind, and whether the backend
+   *  is recording them at all */
+  kept: () => req<{ keeping: boolean; kept: KeptShell[] }>("/api/terms/kept"),
+  /** starts a kept shell again under its own name; `resume` also runs the
+   *  line that picks the agent's conversation back up */
+  restoreShell: (id: string, resume: boolean, cols = 80, rows = 24) =>
+    req<TermInfo>("/api/terms/restore", { method: "POST", body: JSON.stringify({ term: id, cols, rows, resume }) }),
+  /** drops what a kept shell left, history and all */
+  forgetShell: (id: string) => req<{ ok: true }>(`/api/terms/kept?term=${encodeURIComponent(id)}`, { method: "DELETE" }),
+  /** turns the recording on or off for this backend */
+  setKeeping: (on: boolean) => req<{ keeping: boolean }>("/api/keep", { method: "POST", body: JSON.stringify({ on }) }),
   runs: () => req<Run[]>("/api/runs"),
   /** `client` is this browser's id, so the run says which device started it */
   run: (id: string, action: RunAction, note: string, client?: string) =>

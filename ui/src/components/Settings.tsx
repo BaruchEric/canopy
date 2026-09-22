@@ -54,6 +54,8 @@ export function SettingsMenu() {
   const client = useStore((s) => s.client);
   const helpers = useStore((s) => s.helpers);
   const caps = useStore(useShallow(capsFor));
+  const keeping = useStore((s) => s.keeping);
+  const setKeeping = useStore((s) => s.setKeeping);
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
 
@@ -178,6 +180,19 @@ export function SettingsMenu() {
             />
             <p className="settings-hint">
               How this browser appears to your other devices, and who a shell says is looking at it. Takes effect on the next reload.
+            </p>
+          </section>
+          <section className="settings-row">
+            <h3 className="panel-label">keep shell history</h3>
+            <label className="settings-line">
+              <input type="checkbox" checked={keeping} onChange={(e) => void setKeeping(e.target.checked)} />
+              write each shell out, so a reboot does not take it
+            </label>
+            <p className="settings-hint">
+              A backend setting, not this browser's. Off, the shells go with the machine. On, the backend writes every shell's screen and last 2000
+              lines to disk each minute, which is whatever the shell printed, secrets included, and forgets a record a week later. What comes back is a
+              new shell at the same repo with the old history ahead of it: the processes are gone, so a shell that had Claude in it is offered a
+              <code>claude --continue</code> instead.
             </p>
           </section>
           <section className="settings-row">
