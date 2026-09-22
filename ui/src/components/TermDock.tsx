@@ -3,12 +3,12 @@ import type { CSSProperties, KeyboardEvent, PointerEvent } from "react";
 import { Terminal, type ITheme } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import "@xterm/xterm/css/xterm.css";
-import { groveUrl } from "../routes";
+import { groveUrl, nameShellHere, parseRoute } from "../routes";
 import { PANEL_TERM, TERM, closedIn, panelTermHeightFor, useStore, type TermTab } from "../store";
-import { TERM_FONT } from "../term";
+import { TERM_FONT, termId } from "../term";
 import { clamp } from "../util";
 import { Wordmark } from "./TopBar";
-import type { Repo } from "../../../src/core/types";
+import { TERM_GONE, type Repo } from "../../../src/core/types";
 
 /** The design tokens the terminal paints with, resolved through a probe
  *  element so `light-dark()` collapses to the scheme in force. */
@@ -69,12 +69,26 @@ function xtermTheme(): ITheme {
   };
 }
 
-/** the socket for one shell, sized to the terminal that will show it */
-function socketUrl(tab: TermTab, cols: number, rows: number): string {
+/** The socket for one shell, sized to the terminal that will show it. The
+ *  server holds shells by the tab's id: the first socket joins the shell of
+ *  that name or starts one; a socket after a dropped connection (`rejoin`)
+ *  only joins, since a shell that is gone should say so rather than start
+ *  over under the same name. */
+function socketUrl(tab: TermTab, cols: number, rows: number, rejoin: boolean): string {
   const scheme = location.protocol === "https:" ? "wss" : "ws";
-  const q = new URLSearchParams({ id: tab.repoId, cols: String(cols), rows: String(rows) });
+  const q = new URLSearchParams({
+    id: tab.repoId,
+    term: tab.id,
+    place: tab.place,
+    cols: String(cols),
+    rows: String(rows),
+  });
+  if (rejoin) q.set("attach", "1");
   return `${scheme}://${location.host}/api/term?${q}`;
 }
+
+/** how long to wait before the n-th try at rejoining a dropped shell */
+const rejoinWait = (n: number): number => Math.min(30_000, 1000 * 2 ** Math.min(n, 5));
 
 /** what the server says in its one text frame */
 function exitOf(text: string): number | null | undefined {
@@ -132,32 +146,78 @@ export function TermView({
     termRef.current = term;
     fitRef.current = fit;
 
-    const ws = new WebSocket(socketUrl(tab, term.cols, term.rows));
-    ws.binaryType = "arraybuffer";
     const enc = new TextEncoder();
+    let ws: WebSocket | null = null;
     let ended = false;
-    const end = (code: number | null, note: string) => {
+    let gone = false;
+    let tries = 0;
+    let retry: ReturnType<typeof setTimeout> | null = null;
+    const note = (text: string) => term.write(`\r\n\x1b[2m${text}\x1b[0m`);
+    const end = (code: number | null, text: string) => {
       if (ended) return;
       ended = true;
       endTerm(tab.id, code);
       exitRef.current?.(code);
-      term.write(`\r\n\x1b[2m${note}\x1b[0m`);
+      note(text);
     };
-    ws.onopen = () => term.focus();
-    ws.onmessage = (e: MessageEvent<ArrayBuffer | string>) => {
-      if (typeof e.data === "string") {
-        const code = exitOf(e.data);
-        if (code !== undefined) end(code, `[the shell exited${code === null ? "" : ` with ${code}`}]`);
-        return;
-      }
-      term.write(new Uint8Array(e.data));
-    };
-    ws.onclose = (e) => end(null, e.reason ? `[${e.reason}]` : "[the connection closed]");
-    ws.onerror = () => end(null, "[could not reach the canopy server]");
-
     const send = (data: string | Uint8Array) => {
-      if (ws.readyState === WebSocket.OPEN) ws.send(data);
+      if (ws?.readyState === WebSocket.OPEN) ws.send(data);
     };
+    // The shell lives on the server: a connection that drops without the
+    // shell exiting (the server restarting, the laptop asleep, the tunnel
+    // gone) is rejoined, first after a second and then with longer waits,
+    // for as long as the view is up. A socket that has been open once only
+    // rejoins, and the server answers a rejoin for a shell it no longer
+    // holds with TERM_GONE, which ends the tab; one that never opened (the
+    // server was away) may still start the shell.
+    let opened = false;
+    const connect = () => {
+      if (gone || ended) return;
+      const rejoin = opened;
+      const sock = new WebSocket(socketUrl(tab, term.cols, term.rows, rejoin));
+      sock.binaryType = "arraybuffer";
+      ws = sock;
+      // A rejoined shell's output arrives again from the start of its
+      // scrollback, so the old copy goes when the first of it lands (not
+      // sooner: a rejoin the server refuses should leave the screen as it
+      // was). In band, since xterm's reset() from outside stops it painting.
+      let replaying = rejoin;
+      sock.onopen = () => {
+        opened = true;
+        tries = 0;
+        term.focus();
+      };
+      sock.onmessage = (e: MessageEvent<ArrayBuffer | string>) => {
+        if (typeof e.data === "string") {
+          const code = exitOf(e.data);
+          if (code !== undefined) end(code, `[the shell exited${code === null ? "" : ` with ${code}`}]`);
+          return;
+        }
+        if (replaying) {
+          replaying = false;
+          term.write("\x1b[2J\x1b[3J\x1b[H");
+        }
+        term.write(new Uint8Array(e.data));
+      };
+      sock.onclose = (e) => {
+        if (ws !== sock) return;
+        ws = null;
+        if (gone || ended) return;
+        if (e.code === TERM_GONE) {
+          end(null, "[the shell is gone]");
+          return;
+        }
+        if (e.code === 1011) {
+          end(null, e.reason ? `[${e.reason}]` : "[the shell could not start]");
+          return;
+        }
+        if (tries === 0) note(opened ? "[the connection dropped; rejoining]" : "[could not reach the canopy server; retrying]");
+        retry = setTimeout(connect, rejoinWait(tries));
+        tries += 1;
+      };
+    };
+    connect();
+
     const subs = [
       term.onData((data) => send(enc.encode(data))),
       // mouse reports and the like arrive as raw bytes in a string
@@ -171,10 +231,15 @@ export function TermView({
     });
     ro.observe(el);
     return () => {
+      gone = true;
+      if (retry) clearTimeout(retry);
       ro.disconnect();
       for (const s of subs) s.dispose();
-      ws.onclose = null;
-      ws.close();
+      // closing the socket leaves the shell running for the next view of it
+      if (ws) {
+        ws.onclose = null;
+        ws.close();
+      }
       term.dispose();
       termRef.current = null;
       fitRef.current = null;
@@ -475,12 +540,24 @@ export function ShellSolo({ id }: { id: string }) {
   const root = useStore((s) => s.root);
   const repo = useStore((s) => s.repos.find((r) => r.id === id));
   const name = repo?.name;
+  // The shell's name goes into the url, so a reload of this window comes
+  // back to the same shell rather than opening another.
   const [tab] = useState<TermTab | null>(() =>
     repo && !repo.forge
-      ? { id: "solo", repoId: repo.id, name: repo.name, path: repo.path, place: "strip" }
+      ? {
+          id: parseRoute(window.location.search).term ?? termId(),
+          repoId: repo.id,
+          name: repo.name,
+          path: repo.path,
+          place: "strip",
+        }
       : null,
   );
   const [exited, setExited] = useState(false);
+
+  useEffect(() => {
+    if (tab) nameShellHere(tab.id);
+  }, [tab]);
 
   useEffect(() => {
     document.title = name ? `${name} · shell · canopy` : "canopy";

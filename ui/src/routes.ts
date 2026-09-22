@@ -1,17 +1,35 @@
 /** What the URL asked this window to show. `/?repo=<id>` pins that repo on
  *  load; add `view=solo` and the window shows only that repo's panel,
- *  `view=shell` and it shows only a shell at that repo. */
+ *  `view=shell` and it shows only a shell at that repo, named by `term=`
+ *  once it has one so a reload comes back to the same shell. */
 export interface Route {
   repo: string | null;
   solo: boolean;
   shell: boolean;
+  /** the shell window's shell, once it has named one */
+  term: string | null;
 }
+
+const TERM_ID = /^[0-9a-f]{32}$/;
 
 export function parseRoute(search: string): Route {
   const q = new URLSearchParams(search);
   const repo = q.get("repo");
   const view = repo ? q.get("view") : null;
-  return { repo: repo || null, solo: view === "solo", shell: view === "shell" };
+  const term = q.get("term");
+  return {
+    repo: repo || null,
+    solo: view === "solo",
+    shell: view === "shell",
+    term: view === "shell" && term && TERM_ID.test(term) ? term : null,
+  };
+}
+
+/** Writes the shell's name into this window's URL, in place. */
+export function nameShellHere(term: string) {
+  const u = new URL(window.location.href);
+  u.searchParams.set("term", term);
+  window.history.replaceState(null, "", u.toString());
 }
 
 function viewUrl(id: string, view: "solo" | "shell"): string {

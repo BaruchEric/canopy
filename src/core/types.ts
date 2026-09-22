@@ -854,3 +854,27 @@ export interface Fleet {
   startedAt: number;
   endedAt?: number;
 }
+
+/* ---------- shells: the ptys the server keeps for browser terminals ---------- */
+
+/** the websocket close code for a socket that asked to rejoin a shell the
+ *  server no longer holds (it exited, or the server restarted) */
+export const TERM_GONE = 4404;
+
+/** The two places a shell can live inside a window. */
+export type ShellPlace = "panel" | "strip";
+
+/** One pty the server holds, as `GET /api/terms` lists it: a browser that
+ *  comes back reattaches to the ones it knows and adopts the rest. */
+export interface TermInfo {
+  /** the browser-made id the socket named it by */
+  id: string;
+  repoId: string;
+  /** the repo's locator, where the shell landed */
+  path: string;
+  /** where the browser that opened it kept it */
+  place: ShellPlace;
+  /** whether a socket is on it right now */
+  attached: boolean;
+  startedAt: number;
+}

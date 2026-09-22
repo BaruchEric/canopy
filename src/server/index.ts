@@ -31,7 +31,7 @@ import {
 import { browseLocal, browseRemote, expandHome, SshError } from "../core/browse";
 import { exec, onHost } from "../core/exec";
 import { Flows, type CheckResult } from "../core/flow";
-import { parseTermMessage, startTerm, termSize, type TermSession } from "../core/term";
+import { isTermId, parseTermMessage, Scrollback, startTerm, termPlace, termSize, type TermSession, type TermSize } from "../core/term";
 import { apiBase, ForgeAuthError, linkForgeClones, listForgeRepos } from "../core/forge";
 import { isSshHost, parseLocator, parseSshHosts, shellQuote, tildeQuote } from "../core/host";
 import { hasGatewayKey, jev } from "../core/jev";
@@ -76,11 +76,15 @@ import {
   type RunAnswer,
   type ScanResult,
   type ServerEvent,
+  type ShellPlace,
   type Source,
   type SourceInput,
   type SourceState,
+  type TermInfo,
+  TERM_GONE,
 } from "../core/types";
 import { DEFAULT_IGNORE } from "../core/scan";
+import type { ServerWebSocket } from "bun";
 
 /** One scanned folder as the server runs it: the source, its watcher when
  *  it is local, and the guard against rescanning for the same new .git. */
@@ -117,8 +121,9 @@ interface ServerState {
   history: HistoryCache | null;
   /** an overview being built, so concurrent callers share it */
   historyPending: Promise<HistoryCache> | null;
-  /** the shells open in browser terminals, ended with the server */
-  terms: Set<TermSession>;
+  /** the shells behind browser terminals, by the id the browser gave each;
+   *  a shell outlives its socket and ends with the server */
+  terms: Map<string, LiveTerm>;
   /** installed releases, pull request builds and launched processes */
   launcher: Launcher;
   /** open pull request counts by GitHub slug, from the last activity pass */
@@ -130,12 +135,73 @@ interface ServerState {
   activity: Promise<void> | null;
 }
 
+/** One shell the server holds: the pty, what it has written lately, and the
+ *  sockets on it right now (none while every browser is away). */
+interface LiveTerm {
+  info: TermInfo;
+  session: TermSession;
+  scrollback: Scrollback;
+  sockets: Set<ServerWebSocket<TermSocket>>;
+}
+
 /** what a terminal websocket carries from the upgrade to its handlers */
 interface TermSocket {
   repo: Repo;
+  /** the browser's name for the shell */
+  id: string;
+  place: ShellPlace;
+  /** only rejoin a held shell; a name the server does not hold is gone */
+  attach: boolean;
   cols: number;
   rows: number;
-  session?: TermSession;
+  live?: LiveTerm;
+}
+
+/** every shell, as the browser reads the list */
+function listTerms(state: ServerState): TermInfo[] {
+  return [...state.terms.values()].map((t) => ({ ...t.info, attached: t.sockets.size > 0 }));
+}
+
+/** Ends a shell by id; false when there is none. The exit hook drops it. */
+function endTerm(state: ServerState, id: string): boolean {
+  const live = state.terms.get(id);
+  if (!live) return false;
+  live.session.close();
+  return true;
+}
+
+/** A shell on a fresh pty under the browser's name. Throws when the spawn
+ *  fails (a folder that is gone, a shell that is not there). */
+function openTerm(state: ServerState, data: TermSocket, size: TermSize): LiveTerm {
+  const { repo, id, place } = data;
+  const scrollback = new Scrollback();
+  const sockets = new Set<ServerWebSocket<TermSocket>>();
+  const session = startTerm(repo.path, size, {
+    data: (chunk) => {
+      scrollback.push(chunk);
+      for (const ws of sockets) ws.sendBinary(chunk);
+    },
+    exit: (code) => {
+      state.terms.delete(id);
+      for (const ws of sockets) {
+        try {
+          ws.send(JSON.stringify({ exit: code }));
+          ws.close(1000, "the shell exited");
+        } catch {
+          // the browser went first
+        }
+      }
+      sockets.clear();
+    },
+  });
+  const live: LiveTerm = {
+    info: { id, repoId: repo.id, path: repo.path, place, attached: false, startedAt: Date.now() },
+    session,
+    scrollback,
+    sockets,
+  };
+  state.terms.set(id, live);
+  return live;
 }
 
 interface HistoryCache {
@@ -779,6 +845,12 @@ async function handleApi(
     state.runner.dismiss(url.searchParams.get("id") ?? "");
     return json({ ok: true });
   }
+
+  if (path === "/api/terms" && method === "GET") return json(listTerms(state));
+  if (path === "/api/terms" && method === "DELETE") {
+    if (!endTerm(state, url.searchParams.get("term") ?? "")) return json({ error: "no such shell" }, 404);
+    return json({ ok: true });
+  }
   if (path === "/api/runs/answer" && method === "POST") {
     const b = (await req.json()) as { id?: unknown; promptId?: unknown; answer?: unknown };
     const answer = parseAnswer(b.answer);
@@ -1267,7 +1339,7 @@ export async function startServer(opts: {
     timers: new Map(),
     history: null,
     historyPending: null,
-    terms: new Set(),
+    terms: new Map(),
     runner,
     flows,
     launcher,
@@ -1305,8 +1377,12 @@ export async function startServer(opts: {
             return json({ error: String(err instanceof Error ? err.message : err) }, status);
           }
           if (repo.forge) return json({ error: `${repo.name} is on the forge; there is no folder to open a shell in` }, 400);
+          const id = url.searchParams.get("term");
+          if (!isTermId(id)) return json({ error: "a shell is named by 32 hex digits in term=" }, 400);
+          const place = termPlace(url.searchParams.get("place"));
+          const attach = url.searchParams.get("attach") === "1";
           const size = termSize(url.searchParams.get("cols"), url.searchParams.get("rows"));
-          if (srv.upgrade(req, { data: { repo, ...size } })) return undefined;
+          if (srv.upgrade(req, { data: { repo, id, place, attach, ...size } })) return undefined;
           return json({ error: "a websocket is expected here" }, 426);
         }
         if (url.pathname.startsWith("/api/")) {
@@ -1332,45 +1408,49 @@ export async function startServer(opts: {
       websocket: {
         // Keystrokes go down as binary frames and the pty's output comes
         // back the same way; the one text frame each way is JSON: a resize
-        // from the browser, the shell's exit from here.
+        // from the browser, the shell's exit from here. A socket for a shell
+        // the server already holds joins it: what the shell wrote while no
+        // one was looking goes first, then the pty takes the socket's size so
+        // a full-screen program repaints. One that asked only to rejoin and
+        // names a shell not here is told so and closed.
         open(ws) {
-          const { repo, cols, rows } = ws.data;
+          const { id, attach, cols, rows } = ws.data;
+          const held = state.terms.get(id);
+          if (held) {
+            ws.data.live = held;
+            held.sockets.add(ws);
+            const missed = held.scrollback.bytes();
+            if (missed.length > 0) ws.sendBinary(missed);
+            held.session.resize({ cols, rows });
+            return;
+          }
+          if (attach) {
+            ws.close(TERM_GONE, "that shell is gone");
+            return;
+          }
           try {
-            const session = startTerm(repo.path, { cols, rows }, {
-              data: (chunk) => {
-                ws.sendBinary(chunk);
-              },
-              exit: (code) => {
-                state.terms.delete(session);
-                try {
-                  ws.send(JSON.stringify({ exit: code }));
-                  ws.close(1000, "the shell exited");
-                } catch {
-                  // the browser went first
-                }
-              },
-            });
-            ws.data.session = session;
-            state.terms.add(session);
+            const live = openTerm(state, ws.data, { cols, rows });
+            ws.data.live = live;
+            live.sockets.add(ws);
           } catch (err) {
             ws.close(1011, String(err instanceof Error ? err.message : err).slice(0, 120));
           }
         },
         message(ws, msg) {
-          const session = ws.data.session;
-          if (!session) return;
+          const live = ws.data.live;
+          if (!live) return;
           if (typeof msg === "string") {
             const m = parseTermMessage(msg);
-            if (m?.kind === "resize") session.resize(m.size);
+            if (m?.kind === "resize") live.session.resize(m.size);
             return;
           }
-          session.write(msg);
+          live.session.write(msg);
         },
+        // The browser going away leaves the shell running: a reload, a
+        // closed tab or a lost connection comes back to it by name. Ending a
+        // shell is DELETE /api/terms.
         close(ws) {
-          const session = ws.data.session;
-          if (!session) return;
-          state.terms.delete(session);
-          session.close();
+          ws.data.live?.sockets.delete(ws);
         },
       },
     }),
@@ -1407,7 +1487,7 @@ export async function startServer(opts: {
       state.flows.stopAll();
       state.runner.stopAll();
       state.launcher.shutdown();
-      for (const t of state.terms) t.close();
+      for (const t of state.terms.values()) t.session.close();
       state.terms.clear();
       library.stop();
       process.off("exit", stopLibrary);

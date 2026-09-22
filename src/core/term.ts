@@ -4,11 +4,18 @@
  * JSON text frame; the pty's output goes back as binary frames and the
  * shell's exit as one JSON text frame before the socket closes.
  *
- * The size, argv and message parsing are pure and tested; `startTerm` is
- * Bun-only, since the pty is Bun's.
+ * The pty outlives the socket: the browser names it (`termId`, made there),
+ * a socket for a name the server holds attaches to that shell, one for a
+ * name it does not starts a new shell under it, and a socket closing leaves
+ * the shell running for the next one. The server keeps the last stretch of
+ * output in a `Scrollback` so the next socket sees what it missed.
+ *
+ * The size, argv, id and message parsing and the scrollback are pure and
+ * tested; `startTerm` is Bun-only, since the pty is Bun's.
  */
 import { parseLocator } from "./host";
 import { sshSessionArgs, userShell } from "./openers";
+import type { ShellPlace } from "./types";
 
 export interface TermSize {
   cols: number;
@@ -36,6 +43,60 @@ export function shellArgs(locator: string, shell = userShell()): string[] {
   const { host, path } = parseLocator(locator);
   if (host === null) return [shell, "-l", "-i"];
   return sshSessionArgs(host, path, "shell");
+}
+
+/** what the browser names a shell: 32 hex digits of its own randomness */
+const TERM_ID = /^[0-9a-f]{32}$/;
+
+export const isTermId = (v: unknown): v is string => typeof v === "string" && TERM_ID.test(v);
+
+/** where a shell was opened, off the socket's query; the strip when unsaid */
+export const termPlace = (v: unknown): ShellPlace => (v === "panel" ? "panel" : "strip");
+
+/** what a shell keeps of its output for the next socket, in bytes */
+export const SCROLLBACK_CAP = 512 * 1024;
+
+/**
+ * The last `cap` bytes a pty wrote. Chunks go in whole and the oldest go out
+ * whole once the total is over the cap, so a replay may open mid-escape,
+ * which xterm reads past. One chunk over the cap on its own keeps its tail.
+ */
+export class Scrollback {
+  private chunks: Uint8Array[] = [];
+  private total = 0;
+
+  constructor(readonly cap = SCROLLBACK_CAP) {}
+
+  get size(): number {
+    return this.total;
+  }
+
+  push(chunk: Uint8Array): void {
+    if (chunk.length === 0) return;
+    if (chunk.length >= this.cap) {
+      this.chunks = [chunk.slice(chunk.length - this.cap)];
+      this.total = this.cap;
+      return;
+    }
+    this.chunks.push(chunk);
+    this.total += chunk.length;
+    while (this.total > this.cap) {
+      const gone = this.chunks.shift();
+      if (!gone) break;
+      this.total -= gone.length;
+    }
+  }
+
+  /** everything kept, oldest first, as one buffer */
+  bytes(): Uint8Array {
+    const out = new Uint8Array(this.total);
+    let at = 0;
+    for (const c of this.chunks) {
+      out.set(c, at);
+      at += c.length;
+    }
+    return out;
+  }
 }
 
 export type TermMessage = { kind: "resize"; size: TermSize };

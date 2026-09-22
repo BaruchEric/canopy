@@ -11,28 +11,39 @@ const features = (w: number, h: number): Record<string, number> => {
 };
 
 describe("parseRoute", () => {
+  const none = { repo: null, solo: false, shell: false, term: null };
   test("reads the repo and the shell view", () => {
     expect(parseRoute("?repo=web-apps/ripe&view=shell")).toEqual({
       repo: "web-apps/ripe",
       solo: false,
       shell: true,
+      term: null,
     });
-    expect(parseRoute("?view=shell")).toEqual({ repo: null, solo: false, shell: false });
+    expect(parseRoute("?view=shell")).toEqual(none);
+  });
+  test("a shell window's shell is named in the url, when well formed", () => {
+    const id = "0123456789abcdef0123456789abcdef";
+    expect(parseRoute(`?repo=web-apps/ripe&view=shell&term=${id}`).term).toBe(id);
+    expect(parseRoute("?repo=web-apps/ripe&view=shell&term=t1").term).toBeNull();
+    // only a shell window has one shell to name
+    expect(parseRoute(`?repo=web-apps/ripe&view=solo&term=${id}`).term).toBeNull();
   });
   test("reads the repo and the solo view", () => {
     expect(parseRoute("?repo=web-apps/ripe&view=solo")).toEqual({
       repo: "web-apps/ripe",
       solo: true,
       shell: false,
+      term: null,
     });
     expect(parseRoute("?repo=web-apps/ripe")).toEqual({
       repo: "web-apps/ripe",
       solo: false,
       shell: false,
+      term: null,
     });
     // solo needs a repo to be solo about
-    expect(parseRoute("?view=solo")).toEqual({ repo: null, solo: false, shell: false });
-    expect(parseRoute("")).toEqual({ repo: null, solo: false, shell: false });
+    expect(parseRoute("?view=solo")).toEqual(none);
+    expect(parseRoute("")).toEqual(none);
   });
 });
 

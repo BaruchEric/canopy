@@ -4,7 +4,8 @@ import { applyQuery, type RepoFilter } from "./filters";
 import { focusPanel, nextActive } from "./dock";
 import { openElsewhere, openShellElsewhere, parseRoute } from "./routes";
 import { loadSettings, saveSettings, shellPlace, type Settings, type ShellPlace } from "./settings";
-import { PANEL_TERM_ROWS, rowsPx } from "./term";
+import { PANEL_TERM_ROWS, loadTermTabs, reconcileTerms, rowsPx, termId, type TermTab } from "./term";
+export type { TermTab } from "./term";
 import { clamp, needsAttention } from "./util";
 import { ownRun, pickable, selectable } from "./flows";
 import { boardOrder, invertPick, pickWhere, rangeIds, setPick, togglePick } from "./select";
@@ -23,6 +24,7 @@ import {
   type LaunchSettings,
   type OpenerId,
   type Repo,
+  type TermInfo,
   type Run,
   type RunAction,
   type RunAnswer,
@@ -108,9 +110,6 @@ export function changed<T extends object>(next: T, before: T): Partial<T> {
 
 const LAYOUT_KEY = "canopy.layout";
 
-/** tab ids for the shells, unique for the page's life */
-let termSeq = 0;
-
 /** how often a window re-reads the archive overview on its own */
 const HISTORY_REFRESH = 10 * 60_000;
 
@@ -127,6 +126,10 @@ interface Layout {
   collapsed: string[];
   /** folded panel sections (changes, shell, history, claude…) by repo id */
   closedSections: ClosedSections;
+  /** the shell tabs, each named for its shell on the server, and the one
+   *  showing in the strip: a reload comes back to the shells still there */
+  terms: TermTab[];
+  activeTerm: string | null;
   /** the default-folded sections this layout has decided about, so a
    *  section added later starts folded instead of open everywhere */
   knownSections: string[];
@@ -164,6 +167,8 @@ function loadLayout(): Layout {
     feedHeight: FEED.initial,
     panels: [],
     activePanel: null,
+    terms: [],
+    activeTerm: null,
   };
   try {
     const raw = localStorage.getItem(LAYOUT_KEY);
@@ -183,6 +188,8 @@ function loadLayout(): Layout {
       feedHeight?: unknown;
       panels?: unknown;
       activePanel?: unknown;
+      terms?: unknown;
+      activeTerm?: unknown;
     };
     // Anything hand-edited or written by an older build gets clamped rather
     // than trusted — a bad number here would render an unusable panel.
@@ -241,6 +248,8 @@ function loadLayout(): Layout {
           : FEED.initial,
       panels: strings(saved.panels),
       activePanel: typeof saved.activePanel === "string" ? saved.activePanel : null,
+      terms: loadTermTabs(saved.terms),
+      activeTerm: typeof saved.activeTerm === "string" ? saved.activeTerm : null,
     };
   } catch {
     return fallback;
@@ -280,6 +289,8 @@ const layoutOf = (s: CanopyState): Omit<Layout, "knownSections"> => ({
   feedHeight: s.feedHeight,
   panels: s.panels,
   activePanel: s.activePanel,
+  terms: s.terms,
+  activeTerm: s.activeTerm,
 });
 
 /** drops entries for repos that no longer exist in the scan; the same
@@ -517,20 +528,6 @@ export type Sheet =
   | { kind: "fleet-plan"; workflow: string }
   | { kind: "fleet"; fleetId: string };
 
-/** one shell in the bottom strip */
-export interface TermTab {
-  id: string;
-  repoId: string;
-  /** the repo's name, what the tab says */
-  name: string;
-  /** the repo's locator; the socket lands there */
-  path: string;
-  /** the repo's panel, or the strip along the bottom */
-  place: ShellPlace;
-  /** set once the shell has exited, with its code */
-  exit?: number | null;
-}
-
 export interface ClickModifiers {
   metaKey?: boolean;
   ctrlKey?: boolean;
@@ -644,7 +641,7 @@ export const useStore = create<CanopyState>((set, get) => ({
 
   init: async () => {
     try {
-      const [tree, workspaces, runs, agents, flows, fleets, verdict, launchers, jobs] = await Promise.all([
+      const [tree, workspaces, runs, agents, flows, fleets, verdict, launchers, jobs, held] = await Promise.all([
         api.tree(),
         api.workspaces(),
         api.runs(),
@@ -654,7 +651,27 @@ export const useStore = create<CanopyState>((set, get) => ({
         api.verdict(),
         api.launchers(),
         api.jobs(),
+        // a server from before shells were held has no list; the grove
+        // should still load, just with no shells to come back to
+        api.terms().catch((): TermInfo[] => []),
       ]);
+      // The shells come back only now, against what the server still holds:
+      // a tab shown sooner would open its socket and start a shell of its
+      // own under the old name. A solo or shell window keeps none: what it
+      // saved is the grove's, and the grove is what shows them.
+      const terms = dockless() ? [] : reconcileTerms(layout.terms, held, tree.repos);
+      const strip = terms.filter((t) => t.place === "strip");
+      // A panel shell shows only inside its repo's panel, and a shell adopted
+      // from another window may have none here: open it, shell unfolded, the
+      // way openTerm does, so the shell is somewhere you can see.
+      const s = get();
+      let panels = s.panels;
+      let closedSections = s.closedSections;
+      for (const t of terms) {
+        if (t.place !== "panel" || panels.includes(t.repoId)) continue;
+        panels = [...panels, t.repoId];
+        closedSections = unfoldIn(closedSections, t.repoId, "shell");
+      }
       set({
         root: tree.root,
         sources: tree.sources,
@@ -668,6 +685,11 @@ export const useStore = create<CanopyState>((set, get) => ({
         fleets: Object.fromEntries(fleets.map((f) => [f.id, f])),
         flowRuns: flowRunsOf(flows),
         verdictReady: verdict.ready,
+        terms,
+        activeTerm: strip.some((t) => t.id === layout.activeTerm) ? layout.activeTerm : (strip.at(-1)?.id ?? null),
+        panels,
+        activePanel: s.activePanel ?? panels[0] ?? null,
+        closedSections,
         loaded: true,
         loadError: null,
       });
@@ -789,15 +811,18 @@ export const useStore = create<CanopyState>((set, get) => ({
   openApp: async (id, app) => {
     await api.open(id, app, get().settings.terminal === "tab");
   },
-  closePanel: (id) =>
-    set((s) => ({
+  closePanel: (id) => {
+    const s = get();
+    // A shell lived in the panel, so it ends with it. A shell you want to
+    // keep outliving a panel belongs in the strip.
+    const mine = (t: TermTab) => t.repoId === id && t.place === "panel";
+    endShells(s.terms.filter(mine));
+    set({
       panels: s.panels.filter((p) => p !== id),
       activePanel: nextActive(s.panels, id, s.activePanel),
-      // A shell lived in the panel, so it ends with it: dropping the tab
-      // unmounts its view, which closes the socket and hangs up the pty.
-      // A shell you want to keep outliving a panel belongs in the strip.
-      terms: s.terms.filter((t) => !(t.repoId === id && t.place === "panel")),
-    })),
+      terms: s.terms.filter((t) => !mine(t)),
+    });
+  },
 
   applyEvent: (ev) => {
     // The feed says what changed, so the lines come from the event against
@@ -900,8 +925,7 @@ export const useStore = create<CanopyState>((set, get) => ({
       openShellElsewhere(repoId, where);
       return;
     }
-    termSeq += 1;
-    const tab: TermTab = { id: `t${termSeq}`, repoId, name: repo.name, path: repo.path, place: where };
+    const tab: TermTab = { id: termId(), repoId, name: repo.name, path: repo.path, place: where };
     // A panel shell shows only inside its repo's panel and only while that
     // section is unfolded, so open both. Otherwise the click does nothing you
     // can see.
@@ -913,18 +937,19 @@ export const useStore = create<CanopyState>((set, get) => ({
         : {}),
     });
   },
-  closeTerm: (id) =>
-    set((s) => {
-      const i = s.terms.findIndex((t) => t.id === id);
-      if (i === -1) return {};
-      const terms = s.terms.filter((t) => t.id !== id);
-      // the neighbour in the strip takes over, the way a browser's tab strip does
-      const strip = terms.filter((t) => t.place === "strip");
-      const j = s.terms.slice(0, i).filter((t) => t.place === "strip").length;
-      const activeTerm =
-        s.activeTerm !== id ? s.activeTerm : (strip[j] ?? strip[j - 1])?.id ?? null;
-      return { terms, activeTerm };
-    }),
+  closeTerm: (id) => {
+    const s = get();
+    const i = s.terms.findIndex((t) => t.id === id);
+    if (i === -1) return;
+    endShells([s.terms[i]!]);
+    const terms = s.terms.filter((t) => t.id !== id);
+    // the neighbour in the strip takes over, the way a browser's tab strip does
+    const strip = terms.filter((t) => t.place === "strip");
+    const j = s.terms.slice(0, i).filter((t) => t.place === "strip").length;
+    const activeTerm =
+      s.activeTerm !== id ? s.activeTerm : (strip[j] ?? strip[j - 1])?.id ?? null;
+    set({ terms, activeTerm });
+  },
   showTerm: (id) => set((s) => (s.terms.some((t) => t.id === id) ? { activeTerm: id } : {})),
   endTerm: (id, code) =>
     set((s) => ({ terms: s.terms.map((t) => (t.id === id ? { ...t, exit: code } : t)) })),
@@ -1097,6 +1122,13 @@ export const useStore = create<CanopyState>((set, get) => ({
   showFleet: (fleetId) => set({ sheet: { kind: "fleet", fleetId } }),
 }));
 
+/** Ends the shells behind some tabs on the server. Closing a socket only
+ *  detaches, so this is the one way a tab's × or a closing panel hangs a
+ *  shell up. One that already exited needs nothing. */
+function endShells(tabs: TermTab[]) {
+  for (const t of tabs) if (t.exit === undefined) void api.endTerm(t.id).catch(() => {});
+}
+
 /** whether this window is a solo panel or a lone shell rather than the grove:
  *  it has no dock, so what it holds in `panels` is a copy of the grove's
  *  (plus any panel a shell opened here) and must not be written back */
@@ -1113,6 +1145,8 @@ useStore.subscribe((s, prev) => {
   if (dockless()) {
     delete patch.panels;
     delete patch.activePanel;
+    delete patch.terms;
+    delete patch.activeTerm;
   }
   if (Object.keys(patch).length > 0) saveLayout(patch);
 });

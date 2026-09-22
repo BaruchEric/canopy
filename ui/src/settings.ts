@@ -36,8 +36,10 @@ export type TerminalMode = (typeof TERMINAL_MODES)[number];
 export const SHELL_TARGETS = ["auto", "panel", "strip", "tab", "window"] as const;
 export type ShellTarget = (typeof SHELL_TARGETS)[number];
 
-/** The two places a shell can live inside a window. */
-export type ShellPlace = "panel" | "strip";
+/** The two places a shell can live inside a window; the server keeps it
+ *  with the shell, so a shell nobody saved comes back where it was. */
+export type { ShellPlace } from "../../src/core/types";
+import type { ShellPlace } from "../../src/core/types";
 
 /** Resolves the setting for one click. A solo window has no strip, so
  *  everything that would go there goes to the panel instead. */

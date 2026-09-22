@@ -27,6 +27,7 @@ import type {
   ServerEvent,
   SourceInput,
   SourceState,
+  TermInfo,
   WorkflowEntry,
   Workspace,
 } from "../../src/core/types";
@@ -162,6 +163,10 @@ export const api = {
       method: "POST",
       body: JSON.stringify({ session }),
     }),
+  /** the shells the server holds, attached or waiting for a browser */
+  terms: () => req<TermInfo[]>("/api/terms"),
+  /** ends one shell; closing its socket alone leaves it running */
+  endTerm: (id: string) => req<{ ok: true }>(`/api/terms?term=${encodeURIComponent(id)}`, { method: "DELETE" }),
   runs: () => req<Run[]>("/api/runs"),
   run: (id: string, action: RunAction, note: string) =>
     req<Run>(`/api/repos/run?${rq(id)}`, {

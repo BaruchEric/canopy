@@ -1,6 +1,74 @@
-/** The terminal's type, and the height a shell needs to show a number of
- *  lines of it. Both the xterm in TermDock.tsx and the store's default
+/** The shell tabs a window holds and how they find their shells again,
+ *  plus the terminal's type and the height a shell needs to show a number
+ *  of lines of it. Both the xterm in TermDock.tsx and the store's default
  *  shell height read from here, so they agree on what a row is. */
+
+import type { Repo, ShellPlace, TermInfo } from "../../src/core/types";
+
+/** One shell tab, in the strip along the bottom or in its repo's panel. */
+export interface TermTab {
+  /** the shell's name on the server too: a tab back from the layout finds
+   *  its shell by it */
+  id: string;
+  repoId: string;
+  /** the repo's name, what the tab says */
+  name: string;
+  /** the repo's locator; the socket lands there */
+  path: string;
+  /** the repo's panel, or the strip along the bottom */
+  place: ShellPlace;
+  /** set once the shell has exited, with its code */
+  exit?: number | null;
+}
+
+/** A name for a new shell: 32 hex digits of this window's randomness. The
+ *  server files the pty under it, and the layout keeps the tab under it, so
+ *  a reload finds the same shell. */
+export function termId(): string {
+  const bytes = new Uint8Array(16);
+  crypto.getRandomValues(bytes);
+  return Array.from(bytes, (b) => b.toString(16).padStart(2, "0")).join("");
+}
+
+const isPlace = (v: unknown): v is ShellPlace => v === "panel" || v === "strip";
+
+/** The tabs a saved layout holds, minus anything malformed and the ones
+ *  whose shell had already exited: they said so on screen once. */
+export function loadTermTabs(v: unknown): TermTab[] {
+  if (!Array.isArray(v)) return [];
+  const out: TermTab[] = [];
+  for (const t of v) {
+    if (!t || typeof t !== "object") continue;
+    const { id, repoId, name, path, place, exit } = t as Record<string, unknown>;
+    if (typeof id !== "string" || typeof repoId !== "string" || typeof name !== "string") continue;
+    if (typeof path !== "string" || !isPlace(place) || exit !== undefined) continue;
+    out.push({ id, repoId, name, path, place });
+  }
+  return out;
+}
+
+/**
+ * The tabs a window shows once it knows what the server holds: the saved
+ * tabs whose shell is still there, in their order, then every shell nobody
+ * saved (opened in a window since closed, or under a layout since lost), a
+ * tab where it was opened, so no live shell is ever out of sight. A saved
+ * tab whose shell is gone is dropped: it exited, or the server restarted
+ * and took every shell with it. A shell at a repo the scan no longer has
+ * cannot be shown (its socket names the repo) and is left alone.
+ */
+export function reconcileTerms(saved: TermTab[], live: TermInfo[], repos: Repo[]): TermTab[] {
+  const held = new Set(live.map((t) => t.id));
+  const repoOf = (id: string) => repos.find((r) => r.id === id);
+  const out = saved.filter((t) => held.has(t.id) && repoOf(t.repoId));
+  const seen = new Set(out.map((t) => t.id));
+  for (const t of live) {
+    if (seen.has(t.id)) continue;
+    const repo = repoOf(t.repoId);
+    if (!repo) continue;
+    out.push({ id: t.id, repoId: repo.id, name: repo.name, path: repo.path, place: t.place });
+  }
+  return out;
+}
 
 export const TERM_FONT = {
   family: '"Berkeley Mono", "JetBrains Mono", ui-monospace, "SF Mono", Menlo, monospace',
