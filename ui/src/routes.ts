@@ -1,5 +1,3 @@
-import type { OpenTarget } from "./settings";
-
 /** What the URL asked this window to show. `/?repo=<id>` pins that repo on
  *  load; add `view=solo` and the window shows only that repo's panel,
  *  `view=shell` and it shows only a shell at that repo. */
@@ -55,7 +53,7 @@ export function popupFeatures(avail: { width: number; height: number }): string 
  * Opens a repo outside the dock. The window is named after the repo, so a
  * second click reuses it instead of stacking duplicates.
  */
-export function openElsewhere(id: string, target: Exclude<OpenTarget, "dock">) {
+export function openElsewhere(id: string, target: "tab" | "window") {
   openNamed(`canopy:${id}`, soloUrl(id), target);
 }
 

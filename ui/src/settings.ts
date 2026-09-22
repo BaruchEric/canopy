@@ -20,7 +20,9 @@ export const SORT_MODES = [
 ] as const;
 export type SortMode = (typeof SORT_MODES)[number];
 
-export const OPEN_TARGETS = ["dock", "tab", "window"] as const;
+/** Where a click opens a repo: a panel beside the others in the dock, a tab
+ *  in one dock panel (`tabs`), a browser tab, or a small browser window. */
+export const OPEN_TARGETS = ["dock", "tabs", "tab", "window"] as const;
 export type OpenTarget = (typeof OPEN_TARGETS)[number];
 
 /** How the terminal openers (kitty, Terminal, the agent in either) place a
@@ -63,7 +65,8 @@ export type ForgeView = (typeof FORGE_VIEWS)[number];
 export interface Settings {
   /** how the tree and the grid are grouped */
   sort: SortMode;
-  /** where a clicked repo opens */
+  /** where a clicked repo opens; `tabs` also lays the dock out as one
+   *  tabbed panel instead of a row */
   openIn: OpenTarget;
   /** a window or a tab for kitty and Terminal */
   terminal: TerminalMode;

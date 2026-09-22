@@ -1,6 +1,7 @@
 import { create } from "zustand";
 import { api, subscribe } from "./api";
 import { applyQuery, type RepoFilter } from "./filters";
+import { focusPanel, nextActive } from "./dock";
 import { openElsewhere, openShellElsewhere, parseRoute } from "./routes";
 import { loadSettings, saveSettings, shellPlace, type Settings, type ShellPlace } from "./settings";
 import { clamp, needsAttention } from "./util";
@@ -35,6 +36,9 @@ import {
 /** drag limits for the two resizable panes, in px */
 export const SIDEBAR = { min: 180, max: 560, initial: 264 };
 export const PANEL = { min: 300, max: 900, initial: 440 };
+/** the dock when it is one tabbed panel: wider than a row's panel may be,
+ *  since it is the only one */
+export const DOCK = { min: 300, max: 1400, initial: 440 };
 /** the solo view's centered panel; the window caps it before max does */
 export const SOLO = { min: 420, max: 2400, initial: 980 };
 /** the terminal strip along the bottom, in px of height */
@@ -70,6 +74,8 @@ interface Layout {
   panelWidths: Record<string, number>;
   /** px width of the panel in the solo view, shared by every solo tab */
   soloWidth: number;
+  /** px width of the dock when it is tabbed, whichever tab shows */
+  dockWidth: number;
   /** whether the repo tree is showing at all */
   sidebarOpen: boolean;
   /** folded tree groups, as group-key strings */
@@ -94,6 +100,7 @@ function loadLayout(): Layout {
     sidebarWidth: SIDEBAR.initial,
     panelWidths: {},
     soloWidth: SOLO.initial,
+    dockWidth: DOCK.initial,
     sidebarOpen: true,
     collapsed: [],
     closedSections: [...DEFAULT_CLOSED],
@@ -110,6 +117,7 @@ function loadLayout(): Layout {
       sidebarWidth?: unknown;
       panelWidths?: Record<string, unknown>;
       soloWidth?: unknown;
+      dockWidth?: unknown;
       sidebarOpen?: unknown;
       collapsed?: unknown;
       closedSections?: unknown;
@@ -129,6 +137,7 @@ function loadLayout(): Layout {
     }
     const sw = saved.sidebarWidth;
     const solo = saved.soloWidth;
+    const dw = saved.dockWidth;
     const th = saved.termHeight;
     const pth = saved.panelTermHeight;
     const fh = saved.feedHeight;
@@ -142,6 +151,10 @@ function loadLayout(): Layout {
         typeof solo === "number" && Number.isFinite(solo)
           ? clamp(solo, SOLO.min, SOLO.max)
           : SOLO.initial,
+      dockWidth:
+        typeof dw === "number" && Number.isFinite(dw)
+          ? clamp(dw, DOCK.min, DOCK.max)
+          : DOCK.initial,
       sidebarOpen: saved.sidebarOpen !== false,
       collapsed: Array.isArray(saved.collapsed)
         ? saved.collapsed.filter((k): k is string => typeof k === "string")
@@ -186,6 +199,7 @@ const layoutOf = (s: CanopyState): Layout => ({
   sidebarWidth: s.sidebarWidth,
   panelWidths: s.panelWidths,
   soloWidth: s.soloWidth,
+  dockWidth: s.dockWidth,
   sidebarOpen: s.sidebarOpen,
   collapsed: s.collapsed,
   closedSections: s.closedSections,
@@ -226,6 +240,9 @@ interface CanopyState {
   activeWs: string | null;
   /** repo ids pinned open in the dock, left to right */
   panels: string[];
+  /** the panel showing when the dock is tabbed (`openIn: "tabs"`); kept
+   *  in every mode so switching the setting keeps the place */
+  activePanel: string | null;
   /** repo id → last SSE update, for the update pulse */
   updatedAt: Record<string, number>;
   /** px width of the repo tree, dragged by the sidebar resizer */
@@ -239,6 +256,8 @@ interface CanopyState {
   panelWidths: Record<string, number>;
   /** px width of the solo view's panel, dragged by its edge handles */
   soloWidth: number;
+  /** px width of the tabbed dock, dragged by its left edge */
+  dockWidth: number;
   /** per-browser preferences, persisted in localStorage */
   settings: Settings;
   /** Claude Code runs by id, live and recently finished */
@@ -320,7 +339,10 @@ interface CanopyState {
    *  toggle have their own ways back */
   clearFilters: () => void;
   setActiveWs: (name: string | null) => void;
+  /** opens a repo's panel in the dock, or brings its tab forward */
   openPanel: (id: string) => void;
+  /** brings an open panel's tab forward without opening anything */
+  showPanel: (id: string) => void;
   /** opens a repo where the settings say to; modifier keys override that
    *  the way they do for links (cmd/ctrl → tab, shift → window) */
   openRepo: (id: string, mods?: ClickModifiers) => void;
@@ -338,6 +360,7 @@ interface CanopyState {
   toggleSection: (key: string) => void;
   setPanelWidth: (id: string, px: number) => void;
   setSoloWidth: (px: number) => void;
+  setDockWidth: (px: number) => void;
   setSetting: <K extends keyof Settings>(key: K, value: Settings[K]) => void;
   /** opens a new shell at a repo where the settings say: its panel, the
    *  strip, or a tab or window of its own; `place` overrides the setting */
@@ -450,18 +473,27 @@ const layout = loadLayout();
 function treeState(
   s: CanopyState,
   tree: ScanResult,
-): Pick<CanopyState, "root" | "sources" | "repos" | "panels" | "panelWidths"> {
+): Pick<
+  CanopyState,
+  "root" | "sources" | "repos" | "panels" | "activePanel" | "panelWidths"
+> {
   const panelWidths = pruneWidths(s.panelWidths, tree.repos);
   if (panelWidths !== s.panelWidths) {
     saveLayout({ ...layoutOf(s), panelWidths });
   }
+  // drop panels whose repo no longer exists — a panel with no repo
+  // renders nothing, including its own close button
+  const panels = s.panels.filter((id) => tree.repos.some((r) => r.id === id));
   return {
     root: tree.root,
     sources: tree.sources,
     repos: tree.repos,
-    // drop panels whose repo no longer exists — a panel with no repo
-    // renders nothing, including its own close button
-    panels: s.panels.filter((id) => tree.repos.some((r) => r.id === id)),
+    panels,
+    // the showing tab may be among the dropped; then its neighbour shows
+    activePanel:
+      s.activePanel !== null && panels.includes(s.activePanel)
+        ? s.activePanel
+        : (panels[0] ?? null),
     panelWidths,
   };
 }
@@ -488,10 +520,12 @@ export const useStore = create<CanopyState>((set, get) => ({
   users: [],
   activeWs: null,
   panels: [],
+  activePanel: null,
   updatedAt: {},
   sidebarWidth: layout.sidebarWidth,
   panelWidths: layout.panelWidths,
   soloWidth: layout.soloWidth,
+  dockWidth: layout.dockWidth,
   sidebarOpen: layout.sidebarOpen,
   collapsed: layout.collapsed,
   closedSections: layout.closedSections,
@@ -665,10 +699,9 @@ export const useStore = create<CanopyState>((set, get) => ({
   clearFilters: () => set({ filters: [], users: [] }),
   setActiveWs: (activeWs) => set({ activeWs }),
 
-  openPanel: (id) =>
-    set((s) => ({
-      panels: s.panels.includes(id) ? s.panels : [...s.panels, id],
-    })),
+  openPanel: (id) => set((s) => focusPanel(s.panels, id)),
+  showPanel: (id) =>
+    set((s) => (s.panels.includes(id) ? { activePanel: id } : {})),
   openRepo: (id, mods) => {
     // A forge repo has no panel worth opening: there is no working tree, no
     // log to read here, nothing to run. Its page is the whole of it.
@@ -682,7 +715,7 @@ export const useStore = create<CanopyState>((set, get) => ({
       : mods?.metaKey || mods?.ctrlKey
         ? "tab"
         : get().settings.openIn;
-    if (target === "dock") get().openPanel(id);
+    if (target === "dock" || target === "tabs") get().openPanel(id);
     else openElsewhere(id, target);
   },
   openApp: async (id, app) => {
@@ -691,6 +724,7 @@ export const useStore = create<CanopyState>((set, get) => ({
   closePanel: (id) =>
     set((s) => ({
       panels: s.panels.filter((p) => p !== id),
+      activePanel: nextActive(s.panels, id, s.activePanel),
       // A shell lived in the panel, so it ends with it: dropping the tab
       // unmounts its view, which closes the socket and hangs up the pty.
       // A shell you want to keep outliving a panel belongs in the strip.
@@ -807,6 +841,12 @@ export const useStore = create<CanopyState>((set, get) => ({
       saveLayout({ ...layoutOf(s), soloWidth });
       return { soloWidth };
     }),
+  setDockWidth: (px) =>
+    set((s) => {
+      const dockWidth = clamp(px, DOCK.min, DOCK.max);
+      saveLayout({ ...layoutOf(s), dockWidth });
+      return { dockWidth };
+    }),
   setSetting: (key, value) =>
     set((s) => {
       const settings = { ...s.settings, [key]: value };
@@ -832,14 +872,13 @@ export const useStore = create<CanopyState>((set, get) => ({
     // A panel shell shows only inside its repo's panel and only while that
     // section is unfolded, so open both. Otherwise the click does nothing you
     // can see.
-    const openPanel = where === "panel" && !s.panels.includes(repoId);
     const closedSections =
       where === "panel" ? s.closedSections.filter((k) => k !== "shell") : s.closedSections;
     if (closedSections !== s.closedSections) saveLayout({ ...layoutOf(s), closedSections });
     set({
       terms: [...s.terms, tab],
       activeTerm: where === "strip" ? tab.id : s.activeTerm,
-      panels: openPanel ? [...s.panels, repoId] : s.panels,
+      ...(where === "panel" ? focusPanel(s.panels, repoId) : {}),
       closedSections,
     });
   },
@@ -901,7 +940,7 @@ export const useStore = create<CanopyState>((set, get) => ({
         saveLayout({ ...layoutOf(s), closedSections });
       }
       return {
-        panels: s.panels.includes(repoId) ? s.panels : [...s.panels, repoId],
+        ...focusPanel(s.panels, repoId),
         closedSections,
       };
     }),
@@ -929,7 +968,7 @@ export const useStore = create<CanopyState>((set, get) => ({
       return {
         sheet: null,
         pendingSearch: { repoId, q },
-        panels: s.panels.includes(repoId) ? s.panels : [...s.panels, repoId],
+        ...focusPanel(s.panels, repoId),
         closedSections,
       };
     }),

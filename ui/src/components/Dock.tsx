@@ -1,4 +1,4 @@
-import { Fragment, useEffect, useMemo, useState } from "react";
+import { Fragment, useEffect, useMemo, useRef, useState } from "react";
 import type { CSSProperties, DragEvent, KeyboardEvent } from "react";
 import { api } from "../api";
 import {
@@ -12,7 +12,7 @@ import {
   type FileCol,
   type FileView,
 } from "../files";
-import { PANEL, activeFlowFor, flowFor, runFor, useStore } from "../store";
+import { DOCK, PANEL, activeFlowFor, flowFor, runFor, useStore } from "../store";
 import { ago, GLYPH, stateOf } from "../util";
 import { ClaudeSection } from "./Claude";
 import { LaunchSection } from "./Launch";
@@ -462,11 +462,15 @@ export function RepoPanel({
   id,
   width,
   onClose,
+  hidden,
 }: {
   id: string;
   width: number;
   /** replaces "unpin from the dock", for a panel that owns its window */
   onClose?: () => void;
+  /** a tab that is not showing: the panel stays mounted (its shell keeps
+   *  its pty, its commit box its draft) but takes no room */
+  hidden?: boolean;
 }) {
   const repo = useStore((s) => s.repos.find((r) => r.id === id));
   const repoRun = useStore((s) => runFor(s, id));
@@ -578,6 +582,7 @@ export function RepoPanel({
     <section
       className={`panel s-${stateOf(repo)}`}
       aria-label={repo.name}
+      hidden={hidden}
       style={{ "--panel-w": `${width}px` } as CSSProperties}
     >
       <header className="panel-head">
@@ -776,33 +781,160 @@ export function RepoPanel({
   );
 }
 
+/** The tab strip of a tabbed dock: one tab per open panel, the showing one
+ *  lit, each with the repo's state glyph and its own close. Arrow keys move
+ *  along the strip, wrapping at either end, and take the focus with them. */
+function DockTabs({ panels, active }: { panels: string[]; active: string | null }) {
+  const repos = useStore((s) => s.repos);
+  const showPanel = useStore((s) => s.showPanel);
+  const closePanel = useStore((s) => s.closePanel);
+  const strip = useRef<HTMLDivElement>(null);
+  // the strip scrolls without a scrollbar, so the showing tab must be kept
+  // in sight itself: a card click far down the list opens a tab far right
+  useEffect(() => {
+    strip.current
+      ?.querySelector('[aria-selected="true"]')
+      ?.scrollIntoView({ block: "nearest", inline: "nearest" });
+  }, [active]);
+  const step = (from: HTMLElement, by: 1 | -1) => {
+    const row = from.parentElement;
+    if (!row) return;
+    const next =
+      by === 1
+        ? (from.nextElementSibling ?? row.firstElementChild)
+        : (from.previousElementSibling ?? row.lastElementChild);
+    const id = next instanceof HTMLElement ? next.dataset.id : undefined;
+    if (id === undefined || !(next instanceof HTMLElement)) return;
+    showPanel(id);
+    next.focus();
+  };
+  return (
+    <div className="dock-tabs" role="tablist" aria-label="Open repos" ref={strip}>
+      {panels.map((id) => {
+        const repo = repos.find((r) => r.id === id);
+        if (!repo) return null;
+        const on = id === active;
+        const state = stateOf(repo);
+        return (
+          <div
+            key={id}
+            role="tab"
+            tabIndex={on ? 0 : -1}
+            aria-selected={on}
+            data-id={id}
+            className={`dock-tab s-${state}${on ? " on" : ""}`}
+            title={repo.path}
+            onClick={() => showPanel(id)}
+            // middle click closes, as browser tabs do
+            onAuxClick={(e) => {
+              if (e.button === 1) closePanel(id);
+            }}
+            onKeyDown={(e) => {
+              if (e.key === "Enter" || e.key === " ") {
+                e.preventDefault();
+                showPanel(id);
+              } else if (e.key === "ArrowRight") {
+                e.preventDefault();
+                step(e.currentTarget, 1);
+              } else if (e.key === "ArrowLeft") {
+                e.preventDefault();
+                step(e.currentTarget, -1);
+              }
+            }}
+          >
+            <span className="glyph" aria-hidden="true">
+              {GLYPH[state]}
+            </span>
+            <span className="dock-tab-name">{repo.id}</span>
+            <button
+              type="button"
+              className="term-x"
+              aria-label={`Close the ${repo.name} tab`}
+              title="close"
+              onClick={(e) => {
+                e.stopPropagation();
+                closePanel(id);
+              }}
+            >
+              ×
+            </button>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+/**
+ * The panels pinned open on the right. Side by side by default, each with a
+ * handle on its left edge; with `openIn: "tabs"` one panel's width with a
+ * tab strip across the top, the open panels behind it, one showing. The
+ * panels are the same keyed children of the same element in both layouts,
+ * so flipping the setting moves them rather than remounting them: a shell in
+ * a panel keeps its pty across the switch.
+ */
 export function Dock() {
   const panels = useStore((s) => s.panels);
   const panelWidths = useStore((s) => s.panelWidths);
   const setPanelWidth = useStore((s) => s.setPanelWidth);
+  const tabbed = useStore((s) => s.settings.openIn === "tabs");
+  const active = useStore((s) => s.activePanel);
+  const dockWidth = useStore((s) => s.dockWidth);
+  const setDockWidth = useStore((s) => s.setDockWidth);
   if (panels.length === 0) return null;
+  // a stale active (never set, or pruned) shows the first tab rather than
+  // an empty dock with a strip of tabs above it
+  const showing = !tabbed
+    ? null
+    : active !== null && panels.includes(active)
+      ? active
+      : (panels[0] ?? null);
   return (
-    <div className="dock">
-      {panels.map((id) => {
+    <div
+      className={tabbed ? "dock tabbed" : "dock"}
+      // the tabbed dock's one width lives on the dock itself, where the grid
+      // columns read it and the handle writes it live
+      style={tabbed ? ({ "--panel-w": `${dockWidth}px` } as CSSProperties) : undefined}
+    >
+      {tabbed && (
+        <>
+          <Resizer
+            className="panel-resizer"
+            label="Width of the dock"
+            value={dockWidth}
+            min={DOCK.min}
+            max={DOCK.max}
+            initial={DOCK.initial}
+            dir={-1}
+            cssVar="--panel-w"
+            target={(h) => h.parentElement}
+            onCommit={setDockWidth}
+          />
+          <DockTabs panels={panels} active={showing} />
+        </>
+      )}
+      {panels.flatMap((id) => {
+        if (tabbed) {
+          return [<RepoPanel key={id} id={id} width={dockWidth} hidden={id !== showing} />];
+        }
         const width = panelWidths[id] ?? PANEL.initial;
-        return (
-          <Fragment key={id}>
-            <Resizer
-              className="panel-resizer"
-              label={`Width of the ${id} panel`}
-              value={width}
-              min={PANEL.min}
-              max={PANEL.max}
-              initial={PANEL.initial}
-              // the handle sits on the panel's left edge, so rightwards shrinks it
-              dir={-1}
-              cssVar="--panel-w"
-              target={(h) => h.nextElementSibling as HTMLElement | null}
-              onCommit={(px) => setPanelWidth(id, px)}
-            />
-            <RepoPanel id={id} width={width} />
-          </Fragment>
-        );
+        return [
+          <Resizer
+            key={`edge:${id}`}
+            className="panel-resizer"
+            label={`Width of the ${id} panel`}
+            value={width}
+            min={PANEL.min}
+            max={PANEL.max}
+            initial={PANEL.initial}
+            // the handle sits on the panel's left edge, so rightwards shrinks it
+            dir={-1}
+            cssVar="--panel-w"
+            target={(h) => h.nextElementSibling as HTMLElement | null}
+            onCommit={(px) => setPanelWidth(id, px)}
+          />,
+          <RepoPanel key={id} id={id} width={width} />,
+        ];
       })}
     </div>
   );

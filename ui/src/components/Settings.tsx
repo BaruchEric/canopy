@@ -3,7 +3,8 @@ import { useStore } from "../store";
 import { Seg } from "./Seg";
 
 const OPEN_IN = [
-  { value: "dock", label: "in the dock", title: "Pins a panel on the right" },
+  { value: "dock", label: "in the dock", title: "Pins a panel on the right, beside the others" },
+  { value: "tabs", label: "dock tabs", title: "One panel on the right, the open repos as tabs across it" },
   { value: "tab", label: "new tab", title: "One repo per browser tab" },
   { value: "window", label: "new window", title: "One repo per small window" },
 ] as const;

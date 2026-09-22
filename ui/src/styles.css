@@ -1145,6 +1145,84 @@ body.resizing {
   overflow-y: auto;
   padding-bottom: 20px;
 }
+/* a tab that is not showing: `display: flex` above beats the browser's own
+   [hidden] rule, so it has to be said here. The panel stays in the tree so
+   its shell keeps its pty and its commit box its draft. */
+.panel[hidden] {
+  display: none;
+}
+
+/* ---------- the tabbed dock ---------- */
+/* one panel's width, the open repos as tabs across the top of it: the handle
+   down the left edge, the strip, then every panel in the one cell below it,
+   the hidden ones taking no room */
+.dock.tabbed {
+  display: grid;
+  grid-template-columns: 6px var(--panel-w, 440px);
+  grid-template-rows: auto minmax(0, 1fr);
+  overflow: hidden;
+}
+.dock.tabbed > .panel-resizer {
+  grid-column: 1;
+  grid-row: 1 / -1;
+}
+.dock.tabbed > .dock-tabs {
+  grid-column: 2;
+  grid-row: 1;
+  min-width: 0;
+}
+.dock.tabbed > .panel {
+  grid-column: 2;
+  grid-row: 2;
+  width: auto;
+  min-width: 0;
+  min-height: 0;
+}
+.dock-tabs {
+  flex: none;
+  display: flex;
+  align-items: flex-end;
+  gap: 2px;
+  padding: 4px 8px 0;
+  border-bottom: 1px solid var(--hair);
+  background: var(--bark1);
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+.dock-tab {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  margin-bottom: -1px;
+  padding: 4px 6px 5px 10px;
+  border: 1px solid transparent;
+  border-bottom: 0;
+  border-radius: var(--r) var(--r) 0 0;
+  font-size: 12px;
+  color: var(--ink-dim);
+  white-space: nowrap;
+  cursor: pointer;
+  user-select: none;
+  /* a crowded strip scrolls; the tabs never squash to their glyphs */
+  flex: none;
+}
+.dock-tab:hover {
+  color: var(--ink);
+  background: var(--bark2);
+}
+.dock-tab.on {
+  color: var(--ink);
+  background: color-mix(in srgb, var(--state) 6%, var(--bark1));
+  border-color: color-mix(in srgb, var(--state) 20%, var(--hair));
+}
+.dock-tab-name {
+  max-width: 180px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.dock-tab.on .dock-tab-name {
+  font-weight: 700;
+}
 .panel-head {
   position: sticky;
   top: 0;
@@ -1965,6 +2043,9 @@ body.resizing {
   }
   .panel {
     width: 100vw;
+  }
+  .dock.tabbed {
+    grid-template-columns: 0 100vw;
   }
   .panel-resizer,
   .solo-resizer {
