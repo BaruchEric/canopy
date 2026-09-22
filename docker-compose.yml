@@ -1,33 +1,61 @@
-# canopy as a shared backend on the tailnet. Two services: a tailscale node
-# and canopy sharing its network, so canopy is reachable at the tailnet name
-# from any of your devices. See docs/deploy.md for the .env and first run.
-
+# canopy as a shared backend on the tailnet. The host is already a tailnet
+# node, so canopy's port is published on the host's tailnet address alone
+# (never the LAN, never 0.0.0.0) and every device on the tailnet reaches it as
+# http://<host>:7850. Settings come from a .env next to this file; see
+# docs/deploy.md for the first run. For a host that is NOT on the tailnet,
+# add docker-compose.sidecar.yml, which joins canopy to a tailscale sidecar.
 services:
-  # The tailnet node. canopy shares its network namespace, so the tailnet IP
-  # reaches canopy on :7850 with no ports published to the host.
-  ts:
-    image: tailscale/tailscale:latest
-    hostname: canopy
+  # The tmux server that holds every shell, in a container of its own so a
+  # canopy redeploy (which recreates the canopy container) leaves the shells
+  # running; canopy's tmux client reaches it over the socket on the shared
+  # config volume. Built from the `shells` stage of the Dockerfile, which
+  # carries no canopy code, so a canopy change does not move this image and
+  # compose leaves this container alone. The shells run HERE: this container
+  # needs every mount and setting a shell needs, the same as canopy's.
+  shells:
+    build:
+      context: .
+      target: shells
+      args:
+        UID: ${HOST_UID:-1000}
+        GID: ${HOST_GID:-1000}
+    image: canopy-shells:latest
     environment:
-      - TS_AUTHKEY=${TS_AUTHKEY}
-      - TS_STATE_DIR=/var/lib/tailscale
-      - TS_USERSPACE=false
+      - CANOPY_CONFIG_DIR=/config
     volumes:
-      - ts-state:/var/lib/tailscale
-    devices:
-      - /dev/net/tun:/dev/net/tun
-    cap_add:
-      - net_admin
-      - sys_module
+      - ${DEV_ROOT:-/home/eric/dev}:${DEV_ROOT:-/home/eric/dev}
+      - canopy-config:/config
+      - ${HOST_HOME:-/home/eric}/.claude:/home/bun/.claude
+      - ${HOST_HOME:-/home/eric}/.claude.json:/home/bun/.claude.json
+      - ${HOST_HOME:-/home/eric}/.codex:/home/bun/.codex
+      - ${HOST_HOME:-/home/eric}/.ssh:/home/bun/.ssh:ro
+    # up once the socket answers, so canopy's first new-session never starts
+    # a server of its own (one inside the canopy container, gone with it)
+    healthcheck:
+      test: ["CMD", "tmux", "-S", "/config/tmux.sock", "list-sessions"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+      start_period: 5s
+    init: true
     restart: unless-stopped
 
   canopy:
-    build: .
+    build:
+      context: .
+      # the uid and gid the container runs as: the host user who owns the
+      # repo tree and the logins (id -u, id -g)
+      args:
+        UID: ${HOST_UID:-1000}
+        GID: ${HOST_GID:-1000}
+    image: canopy-backend:latest
     depends_on:
-      - ts
-    # share the tailnet node's network: no host ports, reachable as the
-    # tailnet name (hostname above) on :7850
-    network_mode: service:ts
+      shells:
+        condition: service_healthy
+    ports:
+      # CANOPY_LISTEN is the host's tailnet IP (tailscale ip -4); loopback
+      # when unset, so a missing .env cannot put canopy on the LAN
+      - "${CANOPY_LISTEN:-127.0.0.1}:7850:7850"
     environment:
       - CANOPY_CONFIG_DIR=/config
       # how a client reaches THIS host over ssh for VS Code Remote-SSH; the
@@ -35,20 +63,25 @@ services:
       # the link resolves on the host too
       - CANOPY_SSH_HOST=${CANOPY_SSH_HOST:-canopy}
       - CANOPY_TMUX=1
-      # listen on the container's interfaces so the tailnet reaches it; on a
-      # Mac canopy binds loopback, but here the tailnet is the trust edge
+      # listen on the container's interfaces so the published port reaches
+      # it; on a Mac canopy binds loopback, but here the tailnet is the trust
+      # edge and docker publishes the port on that address only
       - CANOPY_BIND=0.0.0.0
     volumes:
       # the repos to scan, mounted at the SAME path they have on the host so
       # git in the container and VS Code Remote-SSH on the host agree
       - ${DEV_ROOT:-/home/eric/dev}:${DEV_ROOT:-/home/eric/dev}
-      # durable canopy config and the tmux socket
+      # durable canopy config and the tmux socket the shells service serves
       - canopy-config:/config
       # subscription logins, no API keys; refreshed by logging in on the host
-      - ${HOST_HOME:-/home/eric}/.claude:/root/.claude
-      - ${HOST_HOME:-/home/eric}/.codex:/root/.codex
+      - ${HOST_HOME:-/home/eric}/.claude:/home/bun/.claude
+      # claude's onboarding state and per-project trust live beside the dir;
+      # `claude` on the host must have run once so the file exists (a bind
+      # mount of a missing file would make it a directory)
+      - ${HOST_HOME:-/home/eric}/.claude.json:/home/bun/.claude.json
+      - ${HOST_HOME:-/home/eric}/.codex:/home/bun/.codex
       # keys and config for any repos kept on other hosts (ssh sources)
-      - ${HOST_HOME:-/home/eric}/.ssh:/root/.ssh:ro
+      - ${HOST_HOME:-/home/eric}/.ssh:/home/bun/.ssh:ro
     command:
       - bun
       - bin/canopy.ts
@@ -60,5 +93,4 @@ services:
     restart: unless-stopped
 
 volumes:
-  ts-state:
   canopy-config:
