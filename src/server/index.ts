@@ -1482,11 +1482,16 @@ export async function startServer(opts: {
 
   const library = new Library(root);
   const webDir = join(import.meta.dir, "../../dist/web");
+  // Loopback by default: every mutating git route here is unauthenticated,
+  // so on a Mac the server is reachable only from the same machine. A shared
+  // backend in a container sets CANOPY_BIND=0.0.0.0 to listen on the
+  // container's interfaces; its published port is bound to the tailnet
+  // address alone, so the tailnet is the trust edge (see docs/deploy.md).
+  const bindHost = process.env["CANOPY_BIND"] || "127.0.0.1";
   const server = bind(port, () =>
     Bun.serve<TermSocket>({
       port,
-      // Loopback only: every mutating git route here is unauthenticated.
-      hostname: "127.0.0.1",
+      hostname: bindHost,
       idleTimeout: 0,
       fetch: async (req, srv) => {
         const url = new URL(req.url);
@@ -1651,5 +1656,5 @@ export async function startServer(opts: {
 if (import.meta.main) {
   const root = process.argv[2] ?? process.cwd();
   const { port } = await startServer({ root });
-  console.log(`canopy server on http://127.0.0.1:${port} (root: ${root})`);
+  console.log(`canopy server on http://${process.env["CANOPY_BIND"] || "127.0.0.1"}:${port} (root: ${root})`);
 }

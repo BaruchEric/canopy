@@ -14,9 +14,11 @@ RUN bun run build
 FROM oven/bun:1
 # git for the scan and every mutation; tmux so a shell outlives a canopy
 # restart; python3 for the bundled Library; openssh for ssh sources and for
-# VS Code Remote-SSH from a client; curl to fetch the claude installer.
+# VS Code Remote-SSH from a client; curl to fetch the claude installer;
+# nodejs because the codex npm wrapper's launcher runs on node (bun does not
+# satisfy its `#!/usr/bin/env node` shebang).
 RUN apt-get update && apt-get install -y --no-install-recommends \
-      git tmux python3 openssh-client ca-certificates curl \
+      git tmux python3 openssh-client ca-certificates curl nodejs \
     && rm -rf /var/lib/apt/lists/*
 
 # git runs as root in the container over repos owned by the host user (the

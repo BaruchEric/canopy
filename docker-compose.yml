@@ -35,6 +35,9 @@ services:
       # the link resolves on the host too
       - CANOPY_SSH_HOST=${CANOPY_SSH_HOST:-canopy}
       - CANOPY_TMUX=1
+      # listen on the container's interfaces so the tailnet reaches it; on a
+      # Mac canopy binds loopback, but here the tailnet is the trust edge
+      - CANOPY_BIND=0.0.0.0
     volumes:
       # the repos to scan, mounted at the SAME path they have on the host so
       # git in the container and VS Code Remote-SSH on the host agree
