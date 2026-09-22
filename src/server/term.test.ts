@@ -2,18 +2,24 @@
  * The shells behind the terminal websocket, against a real server on a
  * scratch root with one repo: a shell outlives its socket, the next socket
  * for its name gets what it wrote in between, a rejoin for a name the
- * server does not hold is told so, and DELETE ends one.
+ * server does not hold is told so, DELETE ends one, and on tmux a shell
+ * outlives the server itself. The tmux server lives on a socket under the
+ * scratch config dir, so nothing here touches the real one.
  */
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { killServer, listSessions, tmuxBase } from "../core/tmux";
 import { TERM_GONE, type TermInfo } from "../core/types";
 import { startServer } from "./index";
 
 let scratch: string;
 let previous: string | undefined;
 let server: { port: number; stop: () => void };
+let root: string;
+
+const tmux = Bun.which("tmux") !== null;
 
 const dec = new TextDecoder();
 
@@ -56,10 +62,11 @@ async function until(pred: () => boolean, what: string, ms = 15_000): Promise<vo
 
 /** the list as the browser reads it; the wire shape is the server's own,
  *  which is what the assertions below check */
-async function terms(): Promise<TermInfo[]> {
-  const res = await fetch(`http://127.0.0.1:${server.port}/api/terms`);
+async function termsOn(port: number): Promise<TermInfo[]> {
+  const res = await fetch(`http://127.0.0.1:${port}/api/terms`);
   return (await res.json()) as TermInfo[];
 }
+const terms = () => termsOn(server.port);
 
 const ID = "0123456789abcdef0123456789abcdef";
 
@@ -67,13 +74,16 @@ beforeAll(async () => {
   scratch = await mkdtemp(join(tmpdir(), "canopy-term-"));
   previous = process.env["CANOPY_CONFIG_DIR"];
   process.env["CANOPY_CONFIG_DIR"] = join(scratch, "config");
-  const repo = join(scratch, "root", "app");
+  root = join(scratch, "root");
+  const repo = join(root, "app");
   await Bun.$`mkdir -p ${repo} && git -C ${repo} init -q`.quiet();
-  server = await startServer({ root: join(scratch, "root"), port: 0 });
+  server = await startServer({ root, port: 0 });
 });
 
 afterAll(async () => {
   server.stop();
+  const base = tmuxBase();
+  if (base) await killServer(base);
   if (previous === undefined) delete process.env["CANOPY_CONFIG_DIR"];
   else process.env["CANOPY_CONFIG_DIR"] = previous;
   await rm(scratch, { recursive: true, force: true });
@@ -149,5 +159,108 @@ describe("a shell behind the socket", () => {
   test("ending a shell that is not there is a 404", async () => {
     const res = await fetch(`http://127.0.0.1:${server.port}/api/terms?term=${ID}`, { method: "DELETE" });
     expect(res.status).toBe(404);
+  });
+
+  test.if(tmux)("draws on the normal screen and hands a new socket what scrolled off", async () => {
+    const id = "1111111111111111aaaaaaaaaaaaaaaa";
+    const first = connect({ term: id });
+    await first.opened;
+    first.ws.send(new TextEncoder().encode("for i in $(seq 1 40); do echo scrolled-$i; done\n"));
+    await until(() => first.text().includes("scrolled-40"), "forty lines");
+    // tmux's client would switch a terminal to its alternate screen, where
+    // nothing scrolls back; canopy's config keeps it off
+    expect(first.text()).not.toContain("?1049h");
+    first.ws.close();
+    await first.closed;
+
+    const second = connect({ term: id, attach: "1" });
+    await second.opened;
+    // line 1 is long off a 24-row screen: it can only have come from history
+    await until(() => second.text().includes("scrolled-1\r\n") && second.text().includes("scrolled-40"), "the history then the screen");
+    const res = await fetch(`http://127.0.0.1:${server.port}/api/terms?term=${id}`, { method: "DELETE" });
+    expect(res.status).toBe(200);
+    await second.closed;
+  });
+
+  test.if(tmux)("a detach from inside drops the socket without an exit, and a rejoin gets a new client", async () => {
+    const id = "2222222222222222bbbbbbbbbbbbbbbb";
+    const first = connect({ term: id });
+    await first.opened;
+    first.ws.send(new TextEncoder().encode("printf 'still-%s\\n' here\n"));
+    await until(() => first.text().includes("still-here"), "a line before the detach");
+    // $TMUX in the shell names canopy's socket, so this is the socket's own client going
+    first.ws.send(new TextEncoder().encode("tmux detach-client\n"));
+    const end = await first.closed;
+    expect(end.code).toBe(1000);
+    expect(first.frames.some((f) => f.includes('"exit"'))).toBe(false);
+    expect((await terms()).find((t) => t.id === id)?.attached).toBe(false);
+
+    const second = connect({ term: id, attach: "1" });
+    await second.opened;
+    await until(() => second.text().includes("still-here"), "the screen after the detach");
+    second.ws.send(new TextEncoder().encode("printf 'back-%s\\n' again\n"));
+    await until(() => second.text().includes("back-again"), "a line after the rejoin");
+    const res = await fetch(`http://127.0.0.1:${server.port}/api/terms?term=${id}`, { method: "DELETE" });
+    expect(res.status).toBe(200);
+    await second.closed;
+  });
+
+  test.if(tmux)("outlives the server: the next one finds it and a socket rejoins", async () => {
+    const id = "fedcbafedcbafedcbafedcbafedcbafe";
+    const first = connect({ term: id, place: "strip" });
+    await first.opened;
+    first.ws.send(new TextEncoder().encode("printf 'kept-%s\\n' one\n"));
+    await until(() => first.text().includes("kept-one"), "the line before the restart");
+
+    server.stop();
+    await first.closed;
+    // the session is still on tmux, with what canopy knows about it
+    const base = tmuxBase()!;
+    expect((await listSessions(base)).map((s) => [s.id, s.repoId, s.place])).toEqual([[id, "app", "strip"]]);
+
+    server = await startServer({ root, port: 0 });
+    expect(await terms()).toEqual([expect.objectContaining({ id, repoId: "app", place: "strip", attached: false })]);
+
+    const second = connect({ term: id, attach: "1" });
+    await second.opened;
+    // tmux repaints the screen on attach, and the line is still on it
+    await until(() => second.text().includes("kept-one"), "the screen after the restart");
+    second.ws.send(new TextEncoder().encode("printf 'kept-%s\\n' two\n"));
+    await until(() => second.text().includes("kept-two"), "a line after the restart");
+
+    const res = await fetch(`http://127.0.0.1:${server.port}/api/terms?term=${id}`, { method: "DELETE" });
+    expect(res.status).toBe(200);
+    await second.closed;
+    expect(await terms()).toEqual([]);
+    expect(await listSessions(base)).toEqual([]);
+  });
+});
+
+describe("a shell on a plain pty (CANOPY_TMUX=0)", () => {
+  test("ends with the server", async () => {
+    process.env["CANOPY_TMUX"] = "0";
+    let plain = await startServer({ root, port: 0 });
+    try {
+      const id = "0000000000000000ffffffffffffffff";
+      const q = new URLSearchParams({ id: "app", term: id, cols: "80", rows: "24" });
+      const ws = new WebSocket(`ws://127.0.0.1:${plain.port}/api/term?${q}`);
+      ws.binaryType = "arraybuffer";
+      let out = "";
+      ws.onmessage = (e: MessageEvent<ArrayBuffer | string>) => {
+        if (typeof e.data !== "string") out += dec.decode(new Uint8Array(e.data));
+      };
+      await new Promise<void>((resolve) => {
+        ws.onopen = () => resolve();
+      });
+      ws.send(new TextEncoder().encode("printf 'plain-%s\\n' one\n"));
+      await until(() => out.includes("plain-one"), "the plain shell's line");
+      expect((await termsOn(plain.port)).map((t) => t.id)).toEqual([id]);
+      plain.stop();
+      plain = await startServer({ root, port: 0 });
+      expect(await termsOn(plain.port)).toEqual([]);
+    } finally {
+      plain.stop();
+      delete process.env["CANOPY_TMUX"];
+    }
   });
 });

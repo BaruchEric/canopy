@@ -131,6 +131,10 @@ export interface TermSession {
   resize(size: TermSize): void;
   /** ends the shell; `exit` still fires once it is gone */
   close(): void;
+  /** ends the pty but leaves the shell running where it can (a tmux session
+   *  stays for the next attach); on a plain pty the shell has nowhere to
+   *  be, so this is close. `exit` fires either way. */
+  detach(): void;
 }
 
 export interface TermHooks {
@@ -138,10 +142,21 @@ export interface TermHooks {
   exit(code: number | null): void;
 }
 
-/** Spawns the shell for a repo on a pty of the given size. Throws when the
- *  spawn itself fails (a folder that is gone, a shell that is not there). */
-export function startTerm(locator: string, size: TermSize, hooks: TermHooks): TermSession {
-  const { host, path } = parseLocator(locator);
+/** the process on the pty, and how to hang it up */
+export interface PtyProcess {
+  argv: string[];
+  cwd?: string;
+  /** ends the shell itself; the process on the pty follows */
+  end?: () => Promise<void>;
+}
+
+/** A process on a pty of the given size, its output and exit in the hooks.
+ *  Throws when the spawn itself fails (a folder that is gone, a binary that
+ *  is not there). `close` runs `end` when there is one (the shell lives
+ *  elsewhere) and otherwise hangs the process up; `detach` only hangs up.
+ *  A process that ignores the hangup gets the same treatment a closed
+ *  terminal window gives it. */
+export function spawnOnPty(what: PtyProcess, size: TermSize, hooks: TermHooks): TermSession {
   let done = false;
   const terminal = new Bun.Terminal({
     cols: size.cols,
@@ -150,11 +165,7 @@ export function startTerm(locator: string, size: TermSize, hooks: TermHooks): Te
   });
   let proc: ReturnType<typeof Bun.spawn>;
   try {
-    proc = Bun.spawn(shellArgs(locator), {
-      cwd: host === null ? path : undefined,
-      env: termEnv(),
-      terminal,
-    });
+    proc = Bun.spawn(what.argv, { cwd: what.cwd, env: termEnv(), terminal });
   } catch (err) {
     terminal.close();
     throw err;
@@ -164,6 +175,13 @@ export function startTerm(locator: string, size: TermSize, hooks: TermHooks): Te
     terminal.close();
     hooks.exit(code);
   });
+  const hangup = () => {
+    if (done) return;
+    proc.kill("SIGHUP");
+    setTimeout(() => {
+      if (!done) proc.kill("SIGKILL");
+    }, 3_000).unref();
+  };
   return {
     write: (data) => {
       if (!done && !terminal.closed) terminal.write(data);
@@ -173,12 +191,16 @@ export function startTerm(locator: string, size: TermSize, hooks: TermHooks): Te
     },
     close: () => {
       if (done) return;
-      proc.kill("SIGHUP");
-      // a shell that ignores the hangup gets the same treatment a closed
-      // terminal window gives it
-      setTimeout(() => {
-        if (!done) proc.kill("SIGKILL");
-      }, 3_000).unref();
+      if (what.end) void what.end().finally(hangup);
+      else hangup();
     },
+    detach: hangup,
   };
+}
+
+/** Spawns the shell for a repo on a pty of the given size, straight on it:
+ *  the shell lives and dies with the pty. */
+export function startTerm(locator: string, size: TermSize, hooks: TermHooks): TermSession {
+  const { host, path } = parseLocator(locator);
+  return spawnOnPty({ argv: shellArgs(locator), cwd: host === null ? path : undefined }, size, hooks);
 }

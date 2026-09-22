@@ -28,6 +28,7 @@ usage:
   canopy [dir]                       tree of every repo under dir (default: .)
   canopy status [dir]                only repos that need attention
   canopy ui [dir] [--port N]        start the web UI and open the browser
+    --no-open                       start it without opening a browser tab
   canopy commit <repo> -m "msg"     commit staged changes
   canopy commit <repo> --ai [--all] [--push]   AI message; --all stages everything
   canopy suggest <repo>              print an AI-suggested commit message
@@ -134,6 +135,9 @@ export async function main(argv: string[]): Promise<void> {
       return;
     }
     case "ui": {
+      // A server something else restarts (launchd, a watcher) would open a
+      // tab on every start; --no-open is for those.
+      const noOpen = flag(args, "--no-open");
       const portArg = opt(args, "--port");
       if (portArg !== undefined && !/^\d+$/.test(portArg)) {
         return fail(`invalid --port: ${portArg}`);
@@ -168,7 +172,7 @@ export async function main(argv: string[]): Promise<void> {
       }
       const url = `http://127.0.0.1:${server.port}`;
       console.log(`${moss("canopy")} ${dim("→")} ${sky(url)} ${dim(`(root: ${root})`)}`);
-      await exec(["open", url]);
+      if (!noOpen) await exec(["open", url]);
       return; // keeps running — Bun.serve holds the process open
     }
     case "commit": {

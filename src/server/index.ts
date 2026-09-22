@@ -32,6 +32,7 @@ import { browseLocal, browseRemote, expandHome, SshError } from "../core/browse"
 import { exec, onHost } from "../core/exec";
 import { Flows, type CheckResult } from "../core/flow";
 import { isTermId, parseTermMessage, Scrollback, startTerm, termPlace, termSize, type TermSession, type TermSize } from "../core/term";
+import { attachTmuxTerm, hasSession, history, killSession, listSessions, newSession, tmuxBase } from "../core/tmux";
 import { apiBase, ForgeAuthError, linkForgeClones, listForgeRepos } from "../core/forge";
 import { isSshHost, parseLocator, parseSshHosts, shellQuote, tildeQuote } from "../core/host";
 import { hasGatewayKey, jev } from "../core/jev";
@@ -122,8 +123,11 @@ interface ServerState {
   /** an overview being built, so concurrent callers share it */
   historyPending: Promise<HistoryCache> | null;
   /** the shells behind browser terminals, by the id the browser gave each;
-   *  a shell outlives its socket and ends with the server */
+   *  a shell outlives its socket, and the server too when tmux holds it */
   terms: Map<string, LiveTerm>;
+  /** the argv front for canopy's tmux server, or null for plain ptys (no
+   *  tmux on PATH, or CANOPY_TMUX=0), which end with the server */
+  tmux: string[] | null;
   /** installed releases, pull request builds and launched processes */
   launcher: Launcher;
   /** open pull request counts by GitHub slug, from the last activity pass */
@@ -135,13 +139,16 @@ interface ServerState {
   activity: Promise<void> | null;
 }
 
-/** One shell the server holds: the pty, what it has written lately, and the
- *  sockets on it right now (none while every browser is away). */
+/** One shell the server holds and the sockets on it. On a plain pty the
+ *  one session is shared and its output kept for the next socket; on tmux
+ *  the shell is a session there and every socket runs a client of its own
+ *  (`TermSocket.client`), so `pty` is null. */
 interface LiveTerm {
   info: TermInfo;
-  session: TermSession;
-  scrollback: Scrollback;
+  pty: { session: TermSession; scrollback: Scrollback } | null;
   sockets: Set<ServerWebSocket<TermSocket>>;
+  /** set once DELETE has asked tmux to end it, so a client's exit is told apart from the shell's own */
+  ending?: boolean;
 }
 
 /** what a terminal websocket carries from the upgrade to its handlers */
@@ -155,24 +162,67 @@ interface TermSocket {
   cols: number;
   rows: number;
   live?: LiveTerm;
+  /** on tmux, this socket's own client on the session */
+  client?: TermSession;
+  /** what arrived while the shell was still starting, sent once it is up */
+  pending?: (string | Uint8Array)[];
 }
 
-/** every shell, as the browser reads the list */
-function listTerms(state: ServerState): TermInfo[] {
+/** what a socket's keystrokes and resizes go to */
+const sessionOf = (ws: ServerWebSocket<TermSocket>): TermSession | undefined => ws.data.client ?? ws.data.live?.pty?.session;
+
+/** one frame from the browser to the shell: keystrokes, or a resize */
+function relay(session: TermSession, msg: string | Uint8Array) {
+  if (typeof msg === "string") {
+    const m = parseTermMessage(msg);
+    if (m?.kind === "resize") session.resize(m.size);
+    return;
+  }
+  session.write(msg);
+}
+
+/** Every shell, as the browser reads the list. On tmux the sessions there
+ *  are the truth (another canopy on the same config dir may have made or
+ *  ended one), so the map is brought in line with them first. */
+async function listTerms(state: ServerState): Promise<TermInfo[]> {
+  if (state.tmux) {
+    const seen = new Set<string>();
+    for (const s of await listSessions(state.tmux)) {
+      seen.add(s.id);
+      if (state.terms.has(s.id)) continue;
+      state.terms.set(s.id, {
+        info: { id: s.id, repoId: s.repoId, path: s.path, place: s.place, attached: false, startedAt: s.createdAt },
+        pty: null,
+        sockets: new Set(),
+      });
+    }
+    // deleting the current entry while iterating a Map is defined behaviour
+    for (const id of state.terms.keys()) if (!seen.has(id)) state.terms.delete(id);
+  }
   return [...state.terms.values()].map((t) => ({ ...t.info, attached: t.sockets.size > 0 }));
 }
 
-/** Ends a shell by id; false when there is none. The exit hook drops it. */
-function endTerm(state: ServerState, id: string): boolean {
+/** Ends a shell by id; false when there is none. On a pty the exit hook
+ *  drops it; on tmux the session is killed and its clients follow. */
+async function endTerm(state: ServerState, id: string): Promise<boolean> {
   const live = state.terms.get(id);
-  if (!live) return false;
-  live.session.close();
+  if (!state.tmux) {
+    if (!live?.pty) return false;
+    live.pty.session.close();
+    return true;
+  }
+  if (!live && !(await hasSession(state.tmux, id))) return false;
+  if (live) live.ending = true;
+  await killSession(state.tmux, id);
+  state.terms.delete(id);
   return true;
 }
 
-/** A shell on a fresh pty under the browser's name. Throws when the spawn
- *  fails (a folder that is gone, a shell that is not there). */
-function openTerm(state: ServerState, data: TermSocket, size: TermSize): LiveTerm {
+/** A shell on a plain pty under the browser's name: the one session every
+ *  socket on it shares, its output kept for the next socket, its exit told
+ *  to them all. Throws when the spawn fails (a folder that is gone, a shell
+ *  that is not there). */
+function openPtyTerm(state: ServerState, data: TermSocket, size: TermSize): LiveTerm {
   const { repo, id, place } = data;
   const scrollback = new Scrollback();
   const sockets = new Set<ServerWebSocket<TermSocket>>();
@@ -196,12 +246,66 @@ function openTerm(state: ServerState, data: TermSocket, size: TermSize): LiveTer
   });
   const live: LiveTerm = {
     info: { id, repoId: repo.id, path: repo.path, place, attached: false, startedAt: Date.now() },
-    session,
-    scrollback,
+    pty: { session, scrollback },
     sockets,
   };
   state.terms.set(id, live);
   return live;
+}
+
+/** A socket onto a shell on tmux: the session made when this is the first
+ *  socket to name it, then what scrolled off before now, then a client of
+ *  the socket's own on the session, which tmux draws for and asks about the
+ *  terminal while the browser is there to answer. A session that turns out
+ *  gone (the shell exited with no one watching) is told so. */
+async function joinTmuxTerm(state: ServerState, tmux: string[], ws: ServerWebSocket<TermSocket>): Promise<void> {
+  const { repo, id, place, cols, rows } = ws.data;
+  const size = { cols, rows };
+  let live = state.terms.get(id);
+  if (!live) {
+    await newSession(tmux, { id, repoId: repo.id, path: repo.path, place }, size);
+    live = {
+      info: { id, repoId: repo.id, path: repo.path, place, attached: false, startedAt: Date.now() },
+      pty: null,
+      sockets: new Set(),
+    };
+    state.terms.set(id, live);
+  } else if (!(await hasSession(tmux, id))) {
+    state.terms.delete(id);
+    ws.close(TERM_GONE, "that shell is gone");
+    return;
+  }
+  const missed = await history(tmux, id, rows);
+  if (ws.readyState !== WebSocket.OPEN) return;
+  if (missed) ws.sendBinary(new TextEncoder().encode(missed));
+  const held = live;
+  const client = attachTmuxTerm(tmux, id, size, {
+    data: (chunk) => {
+      ws.sendBinary(chunk);
+    },
+    exit: (code) => {
+      held.sockets.delete(ws);
+      ws.data.client = undefined;
+      void (held.ending ? Promise.resolve(false) : hasSession(tmux, id)).then((alive) => {
+        try {
+          if (alive) {
+            // the client went but the shell did not (a detach from inside):
+            // no exit frame, so the browser rejoins and gets a new client
+            ws.close(1000, "the client detached");
+          } else {
+            if (state.terms.get(id) === held) state.terms.delete(id);
+            ws.send(JSON.stringify({ exit: code }));
+            ws.close(1000, "the shell exited");
+          }
+        } catch {
+          // the browser went first
+        }
+      });
+    },
+  });
+  ws.data.live = held;
+  ws.data.client = client;
+  held.sockets.add(ws);
 }
 
 interface HistoryCache {
@@ -846,9 +950,9 @@ async function handleApi(
     return json({ ok: true });
   }
 
-  if (path === "/api/terms" && method === "GET") return json(listTerms(state));
+  if (path === "/api/terms" && method === "GET") return json(await listTerms(state));
   if (path === "/api/terms" && method === "DELETE") {
-    if (!endTerm(state, url.searchParams.get("term") ?? "")) return json({ error: "no such shell" }, 404);
+    if (!(await endTerm(state, url.searchParams.get("term") ?? ""))) return json({ error: "no such shell" }, 404);
     return json({ ok: true });
   }
   if (path === "/api/runs/answer" && method === "POST") {
@@ -1340,6 +1444,7 @@ export async function startServer(opts: {
     history: null,
     historyPending: null,
     terms: new Map(),
+    tmux: tmuxBase(),
     runner,
     flows,
     launcher,
@@ -1353,6 +1458,15 @@ export async function startServer(opts: {
   // nothing to show. An extra source failing is a note on that source.
   const launch = state.sources[0];
   if (launch?.src.error) throw new Error(launch.src.error);
+  // The shells the last server left on tmux, before listening, so a
+  // browser rejoining finds them held. Said out loud, since a missing
+  // tmux falls back to plain ptys and looks the same until a restart.
+  await listTerms(state);
+  console.error(
+    state.tmux
+      ? `shells on tmux (${state.tmux[0]}), ${state.terms.size} held from before`
+      : "shells on plain ptys (no tmux found; they end with the server)",
+  );
 
   const library = new Library(root);
   const webDir = join(import.meta.dir, "../../dist/web");
@@ -1416,40 +1530,61 @@ export async function startServer(opts: {
         open(ws) {
           const { id, attach, cols, rows } = ws.data;
           const held = state.terms.get(id);
-          if (held) {
-            ws.data.live = held;
-            held.sockets.add(ws);
-            const missed = held.scrollback.bytes();
-            if (missed.length > 0) ws.sendBinary(missed);
-            held.session.resize({ cols, rows });
-            return;
-          }
-          if (attach) {
+          if (!held && attach) {
             ws.close(TERM_GONE, "that shell is gone");
             return;
           }
-          try {
-            const live = openTerm(state, ws.data, { cols, rows });
-            ws.data.live = live;
-            live.sockets.add(ws);
-          } catch (err) {
+          // Starting takes a moment; what the browser sends before then
+          // waits in `pending` and goes down once the shell is up.
+          ws.data.pending = [];
+          const settle = (ok: () => void) => {
+            const queued = ws.data.pending ?? [];
+            ws.data.pending = undefined;
+            if (ws.readyState !== WebSocket.OPEN) return;
+            ok();
+            const session = sessionOf(ws);
+            if (session) for (const msg of queued) relay(session, msg);
+          };
+          const failed = (err: unknown) => {
             ws.close(1011, String(err instanceof Error ? err.message : err).slice(0, 120));
+          };
+          const tmux = state.tmux;
+          if (tmux) {
+            joinTmuxTerm(state, tmux, ws).then(() => settle(() => {}), failed);
+            return;
+          }
+          if (held?.pty) {
+            const { session, scrollback } = held.pty;
+            settle(() => {
+              ws.data.live = held;
+              held.sockets.add(ws);
+              const missed = scrollback.bytes();
+              if (missed.length > 0) ws.sendBinary(missed);
+              session.resize({ cols, rows });
+            });
+            return;
+          }
+          try {
+            const live = openPtyTerm(state, ws.data, { cols, rows });
+            settle(() => {
+              ws.data.live = live;
+              live.sockets.add(ws);
+            });
+          } catch (err) {
+            failed(err);
           }
         },
         message(ws, msg) {
-          const live = ws.data.live;
-          if (!live) return;
-          if (typeof msg === "string") {
-            const m = parseTermMessage(msg);
-            if (m?.kind === "resize") live.session.resize(m.size);
-            return;
-          }
-          live.session.write(msg);
+          const session = sessionOf(ws);
+          if (session) relay(session, msg);
+          else ws.data.pending?.push(msg);
         },
         // The browser going away leaves the shell running: a reload, a
         // closed tab or a lost connection comes back to it by name. Ending a
-        // shell is DELETE /api/terms.
+        // shell is DELETE /api/terms. On tmux the socket's own client goes.
         close(ws) {
+          ws.data.client?.detach();
+          ws.data.client = undefined;
           ws.data.live?.sockets.delete(ws);
         },
       },
@@ -1487,7 +1622,11 @@ export async function startServer(opts: {
       state.flows.stopAll();
       state.runner.stopAll();
       state.launcher.shutdown();
-      for (const t of state.terms.values()) t.session.close();
+      // the ptys go with the server; a shell on tmux stays for the next one
+      for (const t of state.terms.values()) {
+        t.pty?.session.detach();
+        for (const ws of t.sockets) ws.data.client?.detach();
+      }
       state.terms.clear();
       library.stop();
       process.off("exit", stopLibrary);
