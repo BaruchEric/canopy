@@ -3,7 +3,7 @@ import { mkdtemp, mkdir, readFile, realpath, rm, writeFile } from "node:fs/promi
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Script } from "node:vm";
-import { Library, libraryArgs, libraryOriginAllowed } from "./library";
+import { Library, libraryArgs, libraryOriginAllowed, openBind, tailnetHost } from "./library";
 
 interface Manifest { categories: Record<string, { projects: Array<{name: string; tags: string[]}> }>; references: Array<{title: string}> }
 let base: string;
@@ -70,6 +70,36 @@ describe("workspace library integration", () => {
     expect(libraryOriginAllowed(req("canopy.example"), origin)).toBe(false);
     expect(libraryOriginAllowed(req("canopy.example.evil", {"x-forwarded-proto": "https"}), origin)).toBe(false);
     expect(libraryOriginAllowed(req("canopy.example", {"x-forwarded-proto": "https", origin: "https://evil.example"}), origin)).toBe(false);
+  });
+  test("a server listening beyond loopback takes same-origin requests by a tailnet name", () => {
+    const req = (host: string, headers: Record<string, string> = {}) =>
+      new Request(`http://${host}/library/`, {headers});
+    // the tailnet is the edge: an address literal, a MagicDNS name, a bare machine name
+    expect(libraryOriginAllowed(req("100.68.139.95:7850"), undefined, true)).toBe(true);
+    expect(libraryOriginAllowed(req("macmini-2018.tail2d2c60.ts.net:7850"), undefined, true)).toBe(true);
+    expect(libraryOriginAllowed(req("macmini-2018:7850", { origin: "http://macmini-2018:7850" }), undefined, true)).toBe(true);
+    // an Origin that is not the page's own, or a cross-site fetch, is still out
+    expect(libraryOriginAllowed(req("macmini-2018:7850", { origin: "http://evil.example" }), undefined, true)).toBe(false);
+    expect(libraryOriginAllowed(req("macmini-2018:7850", { "sec-fetch-site": "cross-site" }), undefined, true)).toBe(false);
+    // a dotted public name could be an attacker's domain pointed at the same address
+    expect(libraryOriginAllowed(req("canopy.attacker.example:7850"), undefined, true)).toBe(false);
+    // and none of it applies while the server binds loopback
+    expect(libraryOriginAllowed(req("100.68.139.95:7850"))).toBe(false);
+    expect(libraryOriginAllowed(req("macmini-2018:7850"), undefined, false)).toBe(false);
+  });
+  test("tailnetHost and openBind", () => {
+    expect(tailnetHost("100.64.0.1")).toBe(true);
+    expect(tailnetHost("100.127.255.254")).toBe(true);
+    expect(tailnetHost("100.63.0.1")).toBe(false);
+    expect(tailnetHost("100.128.0.1")).toBe(false);
+    expect(tailnetHost("mini.tail2d2c60.ts.net")).toBe(true);
+    expect(tailnetHost("mini")).toBe(true);
+    expect(tailnetHost("")).toBe(false);
+    expect(tailnetHost("mini.example.com")).toBe(false);
+    expect(openBind(undefined)).toBe(false);
+    expect(openBind("127.0.0.1")).toBe(false);
+    expect(openBind("0.0.0.0")).toBe(true);
+    expect(openBind("100.68.139.95")).toBe(true);
   });
   test("rejects foreign origins, lookalike hosts, and cross-site navigations before startup", async () => {
     expect((await request("/library/open", undefined, { Origin: "https://evil.example" })).status).toBe(403);

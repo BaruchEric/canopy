@@ -24,14 +24,32 @@ export async function libraryCommand(root: string, args: string[]): Promise<numb
   return child.exited;
 }
 
+/** Whether a request's host is one the tailnet edge vouches for: a tailnet
+ *  address literal (100.64.0.0/10), a MagicDNS name (`*.ts.net`, or a bare
+ *  machine name with no dots, which no public resolver can point elsewhere).
+ *  A dotted public name is not, since an attacker's domain could resolve to
+ *  the same address (DNS rebinding) and carry a matching Origin. */
+export function tailnetHost(hostname: string): boolean {
+  const ip = /^100\.(\d+)\.\d+\.\d+$/.exec(hostname);
+  if (ip) {
+    const second = Number(ip[1]);
+    return second >= 64 && second <= 127;
+  }
+  return hostname.endsWith(".ts.net") || (!hostname.includes(".") && hostname.length > 0);
+}
+
 /** Public access is opt-in for one HTTPS origin behind an authenticated reverse
- * proxy. Forwarded protocol is trusted only because Bun binds to loopback. */
-export function libraryOriginAllowed(req: Request, publicOrigin?: string): boolean {
+ * proxy. Forwarded protocol is trusted only because Bun binds to loopback.
+ * `open` is the shared-backend case: the server was told to listen beyond
+ * loopback (`CANOPY_BIND`) because the tailnet is the trust edge, so a
+ * same-origin request by a tailnet name is as good as one by localhost. */
+export function libraryOriginAllowed(req: Request, publicOrigin?: string, open = false): boolean {
   const url = new URL(req.url);
   const origin = req.headers.get("origin");
   const local = ["localhost", "127.0.0.1", "[::1]"].includes(url.hostname);
   if (req.headers.get("sec-fetch-site") === "cross-site") return false;
   if (local && (!origin || origin === url.origin)) return true;
+  if (open && tailnetHost(url.hostname) && (!origin || origin === url.origin)) return true;
   if (!publicOrigin) return false;
   try {
     const configured = new URL(publicOrigin);
@@ -43,6 +61,12 @@ export function libraryOriginAllowed(req: Request, publicOrigin?: string): boole
   }
 }
 
+/** whether the server listens beyond loopback: `CANOPY_BIND` names an address
+ *  that is not a loopback one */
+export function openBind(bind = process.env["CANOPY_BIND"]): boolean {
+  return !!bind && !["127.0.0.1", "localhost", "::1", "[::1]"].includes(bind);
+}
+
 /** One lazy, authenticated library worker per Canopy server. No separate setup,
  *  fixed helper port, source checkout, or macOS LaunchAgent is required. */
 export class Library {
@@ -52,7 +76,11 @@ export class Library {
   private stopped = false;
   private error = "";
 
-  constructor(private root: string, private publicOrigin = process.env["CANOPY_PUBLIC_ORIGIN"]) {}
+  constructor(
+    private root: string,
+    private publicOrigin = process.env["CANOPY_PUBLIC_ORIGIN"],
+    private open = openBind(),
+  ) {}
 
   stop(): void {
     this.stopped = true;
@@ -118,7 +146,7 @@ export class Library {
 
   async handle(req: Request): Promise<Response> {
     const url = new URL(req.url);
-    if (!libraryOriginAllowed(req, this.publicOrigin)) {
+    if (!libraryOriginAllowed(req, this.publicOrigin, this.open)) {
       return Response.json({ error: "Foreign origin" }, { status: 403 });
     }
     if (!["GET", "POST"].includes(req.method)) {

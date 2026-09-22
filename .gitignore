@@ -5,3 +5,6 @@ dist/
 .impeccable/
 
 __pycache__/
+
+# the compose settings for a shared-backend deploy (docs/deploy.md)
+.env
