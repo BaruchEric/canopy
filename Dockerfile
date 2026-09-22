@@ -19,10 +19,16 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
       git tmux python3 openssh-client ca-certificates curl \
     && rm -rf /var/lib/apt/lists/*
 
+# git runs as root in the container over repos owned by the host user (the
+# mounted tree), so trust every repo or it refuses with dubious ownership
+RUN git config --system --add safe.directory '*'
+
 # Claude Code, Anthropic's official native install (subscription login, no
 # API key; the login itself is a mounted ~/.claude, see deploy.md).
 RUN curl -fsSL https://claude.ai/install.sh | bash
 ENV PATH="/root/.local/bin:/root/.bun/bin:${PATH}"
+# a login shell (the in-browser terminal) must find claude and codex too
+RUN printf 'export PATH="/root/.local/bin:/root/.bun/bin:$PATH"\n' > /etc/profile.d/canopy-path.sh
 
 # Codex CLI, run inside a shell on your Codex subscription. If this package
 # name is wrong for your setup, install it your own way (see deploy.md); it
