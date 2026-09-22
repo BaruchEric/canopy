@@ -572,8 +572,8 @@ not, then built on request; the reasons on both sides are under Decisions.
 - **AI auth.** Every phase needs a logged-in `claude` and `codex` in the
   container, both on their subscriptions, no API keys. Mounted `~/.claude` and
   `~/.codex` on persistent volumes are the baseline; refresh by logging in on the
-  mini when a token expires. The `jev` verdict evaluator needs a gateway API key,
-  so it stays off and `verdict` gates fall back to `ask`.
+  mini when a token expires. The `jev` verdict evaluator needs a gateway API
+  key, which the mini's `.env` carries since 2026-09-22 (see Decisions).
 - **Repo sourcing.** The canonical `~/dev` lives on the mini and is mounted; any
   repo kept on another host arrives as an ssh source. Per repo, a deployment
   decision, not a code change; both already work.
@@ -623,9 +623,11 @@ Resolved 2026-09-21.
   `~/.claude` and `~/.codex` into persistent volumes so `claude` uses the Max
   subscription login and `codex` uses the ChatGPT/Codex subscription, both as
   OAuth, never an API key. Refresh by logging in on the mini when a token
-  expires; no secret is baked into the image. Consequence: the `jev` verdict
-  evaluator needs a gateway API key, so it stays off and `verdict` gates fall
-  back to `ask`. That is consistent with no-API and is fine.
+  expires; no secret is baked into the image. The `jev` verdict evaluator is
+  the one exception: it needs a gateway API key, and since 2026-09-22 the
+  mini's `.env` carries one (`VERCEL_AI_GATEWAY_API_KEY`), so `verdict` gates
+  evaluate there. Claude and codex still run on the subscriptions. Take the
+  line out of `.env` and the gates fall back to `ask`.
 - **Phase 2 helper: the helper dials the backend; the backend relays.**
   Decided 2026-09-22, replacing the loopback daemon planned on 2026-09-21. The
   loopback daemon needed the SPA, served from a plain-http tailnet origin, to

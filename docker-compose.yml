@@ -67,6 +67,11 @@ services:
       # it; on a Mac canopy binds loopback, but here the tailnet is the trust
       # edge and docker publishes the port on that address only
       - CANOPY_BIND=0.0.0.0
+      # gh's login for the pull request counts and the release listings, and
+      # the AI gateway key the verdict gates are evaluated with; both come
+      # from .env and both are optional
+      - GH_TOKEN=${GH_TOKEN:-}
+      - VERCEL_AI_GATEWAY_API_KEY=${VERCEL_AI_GATEWAY_API_KEY:-}
     volumes:
       # the repos to scan, mounted at the SAME path they have on the host so
       # git in the container and VS Code Remote-SSH on the host agree

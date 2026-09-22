@@ -68,6 +68,8 @@ CANOPY_LISTEN=100.68.139.95     # the mini's tailnet IP: tailscale ip -4
 CANOPY_SSH_HOST=macmini-2018    # the ssh alias clients use for VS Code
 DEV_ROOT=/home/eric/dev
 HOST_HOME=/home/eric
+GH_TOKEN=...                    # optional: gh auth token, for PR counts and releases
+VERCEL_AI_GATEWAY_API_KEY=...   # optional: lets verdict gates evaluate
 # HOST_UID=1000                 # id -u and id -g of that user, when not 1000
 # HOST_GID=1000
 ```
@@ -216,24 +218,26 @@ Claude still work locally.
 
 - The launcher (install, build, launch): it needs the checkout and a desktop
   on one machine. The server refuses it with a clear message and the UI hides
-  it. Release and pull request listings still read through `gh`, which the
-  image does not carry, so they answer 503 until it does. The desktop openers
-  are not off, they moved: see the helper section above.
-- The `jev` verdict evaluator needs a gateway API key, which we do not set, so
-  `verdict` workflow gates fall back to `ask`.
-- The history section (the rings, sessions, the Claude panel) reads through
-  the claude-history CLI, which the image does not carry. Once its checkout is
-  on the mini under the mounted tree, point the config at it: `historyBin` in
-  the `canopy-config` volume's `config.json`, e.g.
-  `/home/eric/dev/dev-tools/claude-history/bin/claude-history`. Until then the
-  overview answers `available: false` with that reason and the section stays
-  empty.
-- The background fetch of your own remotes and the pull request counts:
-  the image has no `gh` and the mounted `~/.ssh` is whatever the mini has, so
-  a GitHub remote over https fetches nothing (`GIT_TERMINAL_PROMPT=0` keeps
-  it quiet) and no card shows a `⇄ n` count. Cards still show what the mirror
-  knows: branch, ahead/behind against the refs the Mac last fetched, changes.
-  A `gh auth login` on the mini plus `gh` in the image would turn both on.
+  it. Release and pull request listings read through `gh`, which the image
+  carries (the final stage, so installing it did not touch the shells image),
+  logged in by `GH_TOKEN` from `.env`. The desktop openers are not off, they
+  moved: see the helper section above.
+- The history section (the rings, sessions, the Claude panel). It reads
+  through the claude-history CLI, and the archive it reads lives in the vault
+  on the Mac alone. The archive's projects are keyed by Mac paths
+  (`/Users/ericbaruch/dev/...`) while the mini's repos sit at
+  `/home/eric/dev/...`, and canopy matches the two by realpath. So pointing
+  `historyBin` at the mini's checkout would show nothing. Turning it on takes
+  a copy of the archive on the mini plus a path map, or a CLI run over ssh on
+  the Mac. Until then the overview answers `available: false` and the section
+  stays empty.
+- The background fetch of your own remotes. `gh` is in the image, but it is
+  deliberately not git's credential helper: the mini's tree is an rsync
+  mirror of the Mac's, and a fetch here would write refs the next sync
+  overwrites. A GitHub remote over https fetches nothing
+  (`GIT_TERMINAL_PROMPT=0` keeps it quiet). Cards show what the mirror knows:
+  branch, ahead/behind against the refs the Mac last fetched, changes, and
+  the `⇄ n` pull request count, which is a read through `gh` and works.
 - Without a helper, VS Code is the one opener kept, as a
   `vscode-remote://ssh-remote+<host>` link built from `CANOPY_SSH_HOST`, and a
   search hit's file open answers 400. With a helper picked, both go through it.
