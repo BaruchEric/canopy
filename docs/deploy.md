@@ -14,9 +14,12 @@ The shells live in a container of their own (the `shells` service, a tmux
 server), so a canopy redeploy or crash leaves them running with whatever is
 in them, a `claude` typed into a shell included. A run or chat started from
 the console is not a shell: it is a `claude -p` the canopy container spawns,
-and it dies with canopy. A reboot of the mini ends the shells too; that is
-the one durability gap left, and it is deliberate (the PRD's Phase 4
-decision).
+and it dies with canopy. A reboot of the mini ends the tmux server, and with
+`keepShells` on canopy offers each lost shell back: a new shell at the same
+repo, under the same name, with what the old one printed ahead of it. The
+processes are gone, so a shell that had Claude in it is offered a
+`claude --continue`. The switch is in settings and ships off; it is on for the
+mini.
 
 ## What runs where
 

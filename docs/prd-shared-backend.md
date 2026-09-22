@@ -1,6 +1,6 @@
 # PRD: canopy as a shared backend
 
-Status: Phases 1 to 4 done (2026-09-22): 1 to 3 deployed and verified, Phase 4 complete in code and tested, its reboot restore built after all (the 2026-09-22 decision against it was reversed the same day, on request)
+Status: Phases 1 to 4 done and deployed (2026-09-22), each verified on the mini. Phase 4's reboot restore was built after all: the decision against it, made the same day, was reversed hours later on request.
 Owner: Eric
 Last updated: 2026-09-22
 
@@ -18,11 +18,11 @@ The work is staged. Phase 1 is the headless container and a uniform in-browser
 core from any device. Phase 2 makes the desktop openers follow the client.
 Phase 3 makes the multi-device experience first-class over the tailnet, presence
 and cross-device sessions, with any public reach optional and gated. Phase 4 is
-durability, which is explicitly out of scope until then. A restart loses the
-running shells and their AI sessions, and for now that is fine (as of
-2026-09-22 a canopy restart no longer does; a reboot still does). It is one user
-(you), on one tailnet, using your `claude` and `codex` subscriptions, no API
-keys.
+durability, which is explicitly out of scope until then. A restart used to
+lose the running shells and their AI sessions; since 2026-09-22 a canopy
+redeploy or crash does not, and a reboot gives back the terminal and its
+history rather than the processes that were in it. It is one user (you), on one
+tailnet, using your `claude` and `codex` subscriptions, no API keys.
 
 ## Background and current state
 
@@ -48,9 +48,9 @@ Two facts shape this plan:
   headless. An audit of the coupling is in the appendix.
 
 Phase 0 already happened in part: shells now survive a canopy process restart
-through a private tmux server (built this session, not yet shipped). That is
-process-restart survival, not machine-reboot survival, and it is orthogonal to
-this plan. It stays useful but is not required by Phase 1.
+through a private tmux server. That is process-restart survival, which Phase 4
+later extended to a reboot, and it is orthogonal to this plan. It stays useful
+but is not required by Phase 1.
 
 ## Goals
 
@@ -64,8 +64,10 @@ this plan. It stays useful but is not required by Phase 1.
 
 ## Non-goals (for now)
 
-- Surviving a container restart or a machine reboot. Deferred to Phase 4
-  (a container restart is survived since 2026-09-22; a reboot is not).
+- Surviving a container restart or a machine reboot. Deferred to Phase 4, and
+  done there on 2026-09-22: a container restart keeps the shells running, and a
+  reboot brings each one's terminal and history back under the same name while
+  `keepShells` is on. What was in the shell is gone either way.
 - Multi-user or multi-tenant canopy. One user, many devices.
 - Replacing the local-Mac mode. `canopy ui ~/dev` on a Mac stays exactly as it
   is; this adds a deployment shape, it does not remove one.
@@ -551,8 +553,11 @@ Claude `--continue` reattach offer. All three landed 2026-09-22.
 - After a mini reboot, canopy offers to restore each prior shell with its
   history and, for Claude shells, to continue the conversation. Met in code
   and under test 2026-09-22 (`src/server/keep.test.ts` kills a session behind
-  canopy's back, which is the shape of a reboot, and restores it); the switch
-  is off until turned on, and it reaches the mini on the next deploy.
+  canopy's back, which is the shape of a reboot, and restores it), and
+  deployed to the mini the same day: with `keepShells` on there, a shell was
+  snapshotted, the `shells` container restarted under a live canopy, the
+  record survived that (it is not a shell exiting), and the restore came
+  back with the banner and what the shell had printed.
 
 **Open question, decided 2026-09-22, then reopened and settled the same day.**
 Whether reboot restore was worth the complexity. Decided first that it was
@@ -722,5 +727,5 @@ From an audit of the current code.
 - Phase 4: durability, from process-restart survival in the container to
   reboot-time restore and Claude `--continue`. The first is the `shells`
   service, deployed and verified 2026-09-22; the rest is `core/keep.ts` and
-  the restore routes, built the same day, off until `keepShells` is turned
-  on, and live on the mini at the next deploy.
+  the restore routes, built and deployed to the mini the same day, off
+  wherever `keepShells` is off.
