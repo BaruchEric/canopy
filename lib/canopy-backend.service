@@ -1,0 +1,34 @@
+# Bring the shared backend up once the host has its tailnet address.
+#
+# Why this exists: compose publishes canopy's port on the tailnet address
+# alone, and at boot docker starts its containers before tailscaled has
+# assigned that address, so the bind fails with "cannot assign requested
+# address" and the container exits 255. Docker's restart policy does not
+# retry a networking failure, so without this unit the backend simply does
+# not come back from a reboot.
+#
+# Install on the host (edit the path and user if yours differ):
+#   sudo cp lib/canopy-backend.service /etc/systemd/system/
+#   sudo systemctl daemon-reload && sudo systemctl enable --now canopy-backend
+#
+# It recreates only the canopy container, never the shells one, so running it
+# by hand on a live system does not end anyone's shells.
+
+[Unit]
+Description=canopy shared backend, once the tailnet address exists
+After=docker.service tailscaled.service network-online.target
+Requires=docker.service
+Wants=tailscaled.service network-online.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+User=eric
+WorkingDirectory=/home/eric/dev/dev-tools/canopy
+# up to two minutes for tailscaled to bring the address up
+ExecStartPre=/bin/sh -c 'for i in $(seq 1 60); do ip -4 addr show tailscale0 2>/dev/null | grep -q "inet 100\\." && exit 0; sleep 2; done; echo "tailscale0 has no tailnet address"; exit 1'
+ExecStart=/usr/bin/docker compose up -d shells
+ExecStart=/usr/bin/docker compose up -d --force-recreate --no-deps canopy
+
+[Install]
+WantedBy=multi-user.target

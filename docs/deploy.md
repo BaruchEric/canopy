@@ -82,6 +82,14 @@ breaks the VS Code link.
 docker compose up -d --build
 ```
 
+Then install the unit that brings it back after a reboot (see the gotcha
+below for why compose alone does not):
+
+```
+sudo cp lib/canopy-backend.service /etc/systemd/system/
+sudo systemctl daemon-reload && sudo systemctl enable --now canopy-backend
+```
+
 Reach it from any device on the tailnet at `http://macmini-2018:7850`. The
 first load lists your repos; open a shell, start a Claude chat, read a diff. On
 a phone the desktop openers are simply absent.
@@ -237,15 +245,28 @@ shell into them is an ssh session, so that host needs its own git, `claude`, and
 
 ## Gotchas met on the way
 
+- The backend does not come back from a reboot on its own, which is what
+  `lib/canopy-backend.service` is for. At boot docker starts its
+  `unless-stopped` containers before tailscaled has assigned the tailnet
+  address, so publishing the port on that address fails with "cannot assign
+  requested address" and the canopy container exits 255. Docker does not
+  retry a networking failure, and a later `docker compose up -d` on that
+  container starts it with no published port at all (`NetworkSettings.Ports`
+  comes back empty), so the fix is to recreate it: the unit waits for an
+  address on `tailscale0`, brings the shells container up, and recreates
+  canopy alone. The shells container has no published port, so it is never
+  the one that fails. Seen and fixed on the mini 2026-09-22.
 - `depends_on … service_healthy` orders a compose `up`; it does not order
   the daemon's `unless-stopped` restarts after a host reboot. If canopy is up
   before the shells container's socket and a browser opens a shell in that
   window, canopy's tmux client starts a server of its own inside the canopy
   container, and those shells die with the next redeploy while the log says
-  nothing. The window is a few seconds and a shell needs a person to open
-  one, so it has not happened, but after a reboot `docker top canopy-canopy-1`
-  should list no `tmux` (the image has no `ps`); if it does, `docker compose
-  restart canopy` once nothing is running in a shell.
+  nothing. Two reboots of the mini did not hit it (`docker top
+  canopy-canopy-1 | grep tmux` came back empty both times, and the unit above
+  starts the shells container first), but the check is worth doing after a
+  reboot; the image has no `ps`, so `docker top` is the way. If a tmux is
+  there, `docker compose up -d --force-recreate --no-deps canopy` once
+  nothing is running in a shell.
 
 - The server bound `127.0.0.1` inside the container, so docker's published
   port DNAT'd to the container's ethernet address and hit a wall. The compose
