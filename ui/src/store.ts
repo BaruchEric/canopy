@@ -4,6 +4,7 @@ import { applyQuery, type RepoFilter } from "./filters";
 import { focusPanel, nextActive } from "./dock";
 import { openElsewhere, openShellElsewhere, parseRoute } from "./routes";
 import { loadSettings, saveSettings, shellPlace, type Settings, type ShellPlace } from "./settings";
+import { PANEL_TERM_ROWS, rowsPx } from "./term";
 import { clamp, needsAttention } from "./util";
 import { ownRun, pickable, selectable } from "./flows";
 import { boardOrder, invertPick, pickWhere, rangeIds, setPick, togglePick } from "./select";
@@ -43,8 +44,12 @@ export const DOCK = { min: 300, max: 1400, initial: 440 };
 export const SOLO = { min: 420, max: 2400, initial: 980 };
 /** the terminal strip along the bottom, in px of height */
 export const TERM = { min: 120, max: 1200, initial: 300 };
-/** a shell living in a repo's panel: the bounds and default of its height */
-export const PANEL_TERM = { min: 120, max: 900, initial: 320 };
+/** a shell living in a repo's panel: the bounds of its body's height, and the
+ *  default, which is PANEL_TERM_ROWS lines of the terminal's font */
+export const PANEL_TERM = { min: 60, max: 900, initial: rowsPx(PANEL_TERM_ROWS) };
+/** the fixed default before the height followed the font; a layout that
+ *  stored it was never dragged, so the new default applies to it */
+const OLD_PANEL_TERM = 320;
 /** the event feed along the bottom, in px of height */
 export const FEED = { min: 100, max: 900, initial: 220 };
 /** sections that start folded, matching how the panel read before they could fold */
@@ -59,6 +64,44 @@ const OLD_KNOWN = ["search", "history", "claude"];
 export function closedSectionsOf(saved: string[], known: string[]): string[] {
   const extra = DEFAULT_CLOSED.filter((k) => !known.includes(k) && !saved.includes(k));
   return extra.length ? [...saved, ...extra] : saved;
+}
+
+/** folded sections by repo id; a repo with no entry folds DEFAULT_CLOSED */
+export type ClosedSections = Record<string, string[]>;
+
+/** the folded sections of one repo's panel */
+export function sectionsFor(closed: ClosedSections, repoId: string): string[] {
+  return closed[repoId] ?? DEFAULT_CLOSED;
+}
+
+/** whether `key` is folded in one repo's panel; a boolean, so a selector
+ *  built on it is stable where the array behind it is not */
+export function closedIn(s: { closedSections: ClosedSections }, repoId: string, key: string): boolean {
+  return sectionsFor(s.closedSections, repoId).includes(key);
+}
+
+/** `closed` with `key` folded or unfolded in one repo's panel, the others untouched */
+export function toggleIn(closed: ClosedSections, repoId: string, key: string): ClosedSections {
+  const mine = sectionsFor(closed, repoId);
+  return {
+    ...closed,
+    [repoId]: mine.includes(key) ? mine.filter((k) => k !== key) : [...mine, key],
+  };
+}
+
+/** `closed` with `key` unfolded in one repo's panel; the same object when it already is */
+export function unfoldIn(closed: ClosedSections, repoId: string, key: string): ClosedSections {
+  const mine = sectionsFor(closed, repoId);
+  return mine.includes(key) ? { ...closed, [repoId]: mine.filter((k) => k !== key) } : closed;
+}
+
+/** the fields of `next` that are not the same value as in `before` */
+export function changed<T extends object>(next: T, before: T): Partial<T> {
+  const out: Partial<T> = {};
+  for (const k of Object.keys(next) as (keyof T)[]) {
+    if (next[k] !== before[k]) out[k] = next[k];
+  }
+  return out;
 }
 
 const LAYOUT_KEY = "canopy.layout";
@@ -80,8 +123,8 @@ interface Layout {
   sidebarOpen: boolean;
   /** folded tree groups, as group-key strings */
   collapsed: string[];
-  /** folded panel sections (changes, shell, history, claude), as keys */
-  closedSections: string[];
+  /** folded panel sections (changes, shell, history, claude…) by repo id */
+  closedSections: ClosedSections;
   /** the default-folded sections this layout has decided about, so a
    *  section added later starts folded instead of open everywhere */
   knownSections: string[];
@@ -93,7 +136,14 @@ interface Layout {
   feedOpen: boolean;
   /** px height of the event feed */
   feedHeight: number;
+  /** the repos open in the dock, in order, so a reload shows the same ones */
+  panels: string[];
+  /** the dock's showing tab */
+  activePanel: string | null;
 }
+
+const strings = (v: unknown): string[] =>
+  Array.isArray(v) ? v.filter((k): k is string => typeof k === "string") : [];
 
 function loadLayout(): Layout {
   const fallback: Layout = {
@@ -103,12 +153,14 @@ function loadLayout(): Layout {
     dockWidth: DOCK.initial,
     sidebarOpen: true,
     collapsed: [],
-    closedSections: [...DEFAULT_CLOSED],
+    closedSections: {},
     knownSections: [...DEFAULT_CLOSED],
     termHeight: TERM.initial,
     panelTermHeight: PANEL_TERM.initial,
     feedOpen: false,
     feedHeight: FEED.initial,
+    panels: [],
+    activePanel: null,
   };
   try {
     const raw = localStorage.getItem(LAYOUT_KEY);
@@ -126,6 +178,8 @@ function loadLayout(): Layout {
       panelTermHeight?: unknown;
       feedOpen?: unknown;
       feedHeight?: unknown;
+      panels?: unknown;
+      activePanel?: unknown;
     };
     const panelWidths: Record<string, number> = {};
     for (const [id, w] of Object.entries(saved.panelWidths ?? {})) {
@@ -133,6 +187,15 @@ function loadLayout(): Layout {
       // than trusted — a bad number here would render an unusable panel.
       if (typeof w === "number" && Number.isFinite(w)) {
         panelWidths[id] = clamp(w, PANEL.min, PANEL.max);
+      }
+    }
+    // Folds are by repo. A layout from when they were one list for every
+    // panel (an array here) starts every panel at the defaults instead.
+    const known = Array.isArray(saved.knownSections) ? strings(saved.knownSections) : OLD_KNOWN;
+    const closedSections: ClosedSections = {};
+    if (saved.closedSections && typeof saved.closedSections === "object" && !Array.isArray(saved.closedSections)) {
+      for (const [id, keys] of Object.entries(saved.closedSections)) {
+        if (Array.isArray(keys)) closedSections[id] = closedSectionsOf(strings(keys), known);
       }
     }
     const sw = saved.sidebarWidth;
@@ -156,24 +219,15 @@ function loadLayout(): Layout {
           ? clamp(dw, DOCK.min, DOCK.max)
           : DOCK.initial,
       sidebarOpen: saved.sidebarOpen !== false,
-      collapsed: Array.isArray(saved.collapsed)
-        ? saved.collapsed.filter((k): k is string => typeof k === "string")
-        : [],
-      closedSections: Array.isArray(saved.closedSections)
-        ? closedSectionsOf(
-            saved.closedSections.filter((k): k is string => typeof k === "string"),
-            Array.isArray(saved.knownSections)
-              ? saved.knownSections.filter((k): k is string => typeof k === "string")
-              : OLD_KNOWN,
-          )
-        : [...DEFAULT_CLOSED],
+      collapsed: strings(saved.collapsed),
+      closedSections,
       knownSections: [...DEFAULT_CLOSED],
       termHeight:
         typeof th === "number" && Number.isFinite(th)
           ? clamp(th, TERM.min, TERM.max)
           : TERM.initial,
       panelTermHeight:
-        typeof pth === "number" && Number.isFinite(pth)
+        typeof pth === "number" && Number.isFinite(pth) && pth !== OLD_PANEL_TERM
           ? clamp(pth, PANEL_TERM.min, PANEL_TERM.max)
           : PANEL_TERM.initial,
       feedOpen: saved.feedOpen === true,
@@ -181,21 +235,34 @@ function loadLayout(): Layout {
         typeof fh === "number" && Number.isFinite(fh)
           ? clamp(fh, FEED.min, FEED.max)
           : FEED.initial,
+      panels: strings(saved.panels),
+      activePanel: typeof saved.activePanel === "string" ? saved.activePanel : null,
     };
   } catch {
     return fallback;
   }
 }
 
-function saveLayout(layout: Layout) {
+/** Writes the fields in `patch` over what is stored, leaving the rest as the
+ *  last window to save them left it. Two windows share the key (the grove
+ *  and a solo panel, say); one writing its whole copy would put back the
+ *  other's dock as it stood when this one loaded. */
+function saveLayout(patch: Partial<Layout>) {
   try {
-    localStorage.setItem(LAYOUT_KEY, JSON.stringify(layout));
+    const raw = localStorage.getItem(LAYOUT_KEY);
+    const stored: unknown = raw ? JSON.parse(raw) : {};
+    const base = stored && typeof stored === "object" && !Array.isArray(stored) ? stored : {};
+    localStorage.setItem(
+      LAYOUT_KEY,
+      JSON.stringify({ ...base, ...patch, knownSections: DEFAULT_CLOSED }),
+    );
   } catch {
     // storage can be disabled outright; the layout just won't survive a reload
   }
 }
 
-const layoutOf = (s: CanopyState): Layout => ({
+/** the persisted part of the state, minus `knownSections`, which is a constant */
+const layoutOf = (s: CanopyState): Omit<Layout, "knownSections"> => ({
   sidebarWidth: s.sidebarWidth,
   panelWidths: s.panelWidths,
   soloWidth: s.soloWidth,
@@ -203,21 +270,20 @@ const layoutOf = (s: CanopyState): Layout => ({
   sidebarOpen: s.sidebarOpen,
   collapsed: s.collapsed,
   closedSections: s.closedSections,
-  knownSections: [...DEFAULT_CLOSED],
   termHeight: s.termHeight,
   panelTermHeight: s.panelTermHeight,
   feedOpen: s.feedOpen,
   feedHeight: s.feedHeight,
+  panels: s.panels,
+  activePanel: s.activePanel,
 });
 
-/** drops stored widths for repos that no longer exist in the scan */
-function pruneWidths(
-  widths: Record<string, number>,
-  repos: Repo[],
-): Record<string, number> {
+/** drops entries for repos that no longer exist in the scan; the same
+ *  object when every one still does */
+export function pruneByRepo<T>(map: Record<string, T>, repos: Repo[]): Record<string, T> {
   const ids = new Set(repos.map((r) => r.id));
-  const kept = Object.entries(widths).filter(([id]) => ids.has(id));
-  if (kept.length === Object.keys(widths).length) return widths;
+  const kept = Object.entries(map).filter(([id]) => ids.has(id));
+  if (kept.length === Object.keys(map).length) return map;
   return Object.fromEntries(kept);
 }
 
@@ -250,8 +316,8 @@ interface CanopyState {
   sidebarOpen: boolean;
   /** folded sections in the tree and the grid, as sectionKey strings */
   collapsed: string[];
-  /** folded panel sections (changes, shell, history, claude), as keys */
-  closedSections: string[];
+  /** folded panel sections (changes, shell, history, claude…) by repo id */
+  closedSections: ClosedSections;
   /** repo id → px width of its dock panel; missing means PANEL.initial */
   panelWidths: Record<string, number>;
   /** px width of the solo view's panel, dragged by its edge handles */
@@ -356,8 +422,8 @@ interface CanopyState {
   toggleSidebar: () => void;
   /** folds or unfolds one section; the tree and the grid fold together */
   toggleGroup: (key: string) => void;
-  /** folds or unfolds one panel section (changes, shell, history, claude) */
-  toggleSection: (key: string) => void;
+  /** folds or unfolds one section (changes, shell, history, claude…) of one repo's panel */
+  toggleSection: (repoId: string, key: string) => void;
   setPanelWidth: (id: string, px: number) => void;
   setSoloWidth: (px: number) => void;
   setDockWidth: (px: number) => void;
@@ -469,21 +535,19 @@ export interface ClickModifiers {
 const layout = loadLayout();
 
 /** The state a fresh tree implies: the repos and sources themselves, and
- *  the panels and widths that still have a repo to belong to. */
+ *  the panels, widths and folds that still have a repo to belong to. */
 function treeState(
   s: CanopyState,
   tree: ScanResult,
 ): Pick<
   CanopyState,
-  "root" | "sources" | "repos" | "panels" | "activePanel" | "panelWidths"
+  "root" | "sources" | "repos" | "panels" | "activePanel" | "panelWidths" | "closedSections"
 > {
-  const panelWidths = pruneWidths(s.panelWidths, tree.repos);
-  if (panelWidths !== s.panelWidths) {
-    saveLayout({ ...layoutOf(s), panelWidths });
-  }
   // drop panels whose repo no longer exists — a panel with no repo
-  // renders nothing, including its own close button
-  const panels = s.panels.filter((id) => tree.repos.some((r) => r.id === id));
+  // renders nothing, including its own close button. The same array when
+  // none goes, so a scan that changes nothing does not count as a change.
+  const kept = s.panels.filter((id) => tree.repos.some((r) => r.id === id));
+  const panels = kept.length === s.panels.length ? s.panels : kept;
   return {
     root: tree.root,
     sources: tree.sources,
@@ -494,7 +558,8 @@ function treeState(
       s.activePanel !== null && panels.includes(s.activePanel)
         ? s.activePanel
         : (panels[0] ?? null),
-    panelWidths,
+    panelWidths: pruneByRepo(s.panelWidths, tree.repos),
+    closedSections: pruneByRepo(s.closedSections, tree.repos),
   };
 }
 
@@ -519,8 +584,8 @@ export const useStore = create<CanopyState>((set, get) => ({
   filters: [],
   users: [],
   activeWs: null,
-  panels: [],
-  activePanel: null,
+  panels: layout.panels,
+  activePanel: layout.activePanel,
   updatedAt: {},
   sidebarWidth: layout.sidebarWidth,
   panelWidths: layout.panelWidths,
@@ -558,19 +623,9 @@ export const useStore = create<CanopyState>((set, get) => ({
   feedSource: null,
   feedQuiet: false,
 
-  toggleFeed: () =>
-    set((s) => {
-      const feedOpen = !s.feedOpen;
-      saveLayout({ ...layoutOf(s), feedOpen });
-      return { feedOpen };
-    }),
+  toggleFeed: () => set((s) => ({ feedOpen: !s.feedOpen })),
   clearFeed: () => set({ feed: [] }),
-  setFeedHeight: (px) =>
-    set((s) => {
-      const feedHeight = clamp(px, FEED.min, FEED.max);
-      saveLayout({ ...layoutOf(s), feedHeight });
-      return { feedHeight };
-    }),
+  setFeedHeight: (px) => set({ feedHeight: clamp(px, FEED.min, FEED.max) }),
   setFeedSource: (feedSource) => set({ feedSource }),
   setFeedQuiet: (feedQuiet) => set({ feedQuiet }),
 
@@ -798,55 +853,20 @@ export const useStore = create<CanopyState>((set, get) => ({
 
   setWorkspaces: (workspaces) => set({ workspaces }),
 
-  setSidebarWidth: (px) =>
-    set((s) => {
-      const sidebarWidth = clamp(px, SIDEBAR.min, SIDEBAR.max);
-      saveLayout({ ...layoutOf(s), sidebarWidth });
-      return { sidebarWidth };
-    }),
-  toggleSidebar: () =>
-    set((s) => {
-      const sidebarOpen = !s.sidebarOpen;
-      saveLayout({ ...layoutOf(s), sidebarOpen });
-      return { sidebarOpen };
-    }),
+  setSidebarWidth: (px) => set({ sidebarWidth: clamp(px, SIDEBAR.min, SIDEBAR.max) }),
+  toggleSidebar: () => set((s) => ({ sidebarOpen: !s.sidebarOpen })),
   toggleGroup: (key) =>
-    set((s) => {
-      const collapsed = s.collapsed.includes(key)
+    set((s) => ({
+      collapsed: s.collapsed.includes(key)
         ? s.collapsed.filter((k) => k !== key)
-        : [...s.collapsed, key];
-      saveLayout({ ...layoutOf(s), collapsed });
-      return { collapsed };
-    }),
-  toggleSection: (key) =>
-    set((s) => {
-      const closedSections = s.closedSections.includes(key)
-        ? s.closedSections.filter((k) => k !== key)
-        : [...s.closedSections, key];
-      saveLayout({ ...layoutOf(s), closedSections });
-      return { closedSections };
-    }),
+        : [...s.collapsed, key],
+    })),
+  toggleSection: (repoId, key) =>
+    set((s) => ({ closedSections: toggleIn(s.closedSections, repoId, key) })),
   setPanelWidth: (id, px) =>
-    set((s) => {
-      const panelWidths = {
-        ...s.panelWidths,
-        [id]: clamp(px, PANEL.min, PANEL.max),
-      };
-      saveLayout({ ...layoutOf(s), panelWidths });
-      return { panelWidths };
-    }),
-  setSoloWidth: (px) =>
-    set((s) => {
-      const soloWidth = clamp(px, SOLO.min, SOLO.max);
-      saveLayout({ ...layoutOf(s), soloWidth });
-      return { soloWidth };
-    }),
-  setDockWidth: (px) =>
-    set((s) => {
-      const dockWidth = clamp(px, DOCK.min, DOCK.max);
-      saveLayout({ ...layoutOf(s), dockWidth });
-      return { dockWidth };
-    }),
+    set((s) => ({ panelWidths: { ...s.panelWidths, [id]: clamp(px, PANEL.min, PANEL.max) } })),
+  setSoloWidth: (px) => set({ soloWidth: clamp(px, SOLO.min, SOLO.max) }),
+  setDockWidth: (px) => set({ dockWidth: clamp(px, DOCK.min, DOCK.max) }),
   setSetting: (key, value) =>
     set((s) => {
       const settings = { ...s.settings, [key]: value };
@@ -872,14 +892,12 @@ export const useStore = create<CanopyState>((set, get) => ({
     // A panel shell shows only inside its repo's panel and only while that
     // section is unfolded, so open both. Otherwise the click does nothing you
     // can see.
-    const closedSections =
-      where === "panel" ? s.closedSections.filter((k) => k !== "shell") : s.closedSections;
-    if (closedSections !== s.closedSections) saveLayout({ ...layoutOf(s), closedSections });
     set({
       terms: [...s.terms, tab],
       activeTerm: where === "strip" ? tab.id : s.activeTerm,
-      ...(where === "panel" ? focusPanel(s.panels, repoId) : {}),
-      closedSections,
+      ...(where === "panel"
+        ? { ...focusPanel(s.panels, repoId), closedSections: unfoldIn(s.closedSections, repoId, "shell") }
+        : {}),
     });
   },
   closeTerm: (id) =>
@@ -897,18 +915,8 @@ export const useStore = create<CanopyState>((set, get) => ({
   showTerm: (id) => set((s) => (s.terms.some((t) => t.id === id) ? { activeTerm: id } : {})),
   endTerm: (id, code) =>
     set((s) => ({ terms: s.terms.map((t) => (t.id === id ? { ...t, exit: code } : t)) })),
-  setTermHeight: (px) =>
-    set((s) => {
-      const termHeight = clamp(px, TERM.min, TERM.max);
-      saveLayout({ ...layoutOf(s), termHeight });
-      return { termHeight };
-    }),
-  setPanelTermHeight: (px) =>
-    set((s) => {
-      const panelTermHeight = clamp(px, PANEL_TERM.min, PANEL_TERM.max);
-      saveLayout({ ...layoutOf(s), panelTermHeight });
-      return { panelTermHeight };
-    }),
+  setTermHeight: (px) => set({ termHeight: clamp(px, TERM.min, TERM.max) }),
+  setPanelTermHeight: (px) => set({ panelTermHeight: clamp(px, PANEL_TERM.min, PANEL_TERM.max) }),
 
   plan: (repoId, action) => {
     // A repo with a run going shows that run instead of starting a second.
@@ -934,16 +942,10 @@ export const useStore = create<CanopyState>((set, get) => ({
     set({ launchers });
   },
   showLaunch: (repoId) =>
-    set((s) => {
-      const closedSections = s.closedSections.filter((k) => k !== "launch");
-      if (closedSections.length !== s.closedSections.length) {
-        saveLayout({ ...layoutOf(s), closedSections });
-      }
-      return {
-        ...focusPanel(s.panels, repoId),
-        closedSections,
-      };
-    }),
+    set((s) => ({
+      ...focusPanel(s.panels, repoId),
+      closedSections: unfoldIn(s.closedSections, repoId, "launch"),
+    })),
   stopJob: async (jobId) => {
     const job = await api.stopJob(jobId);
     set((s) => ({ jobs: { ...s.jobs, [job.id]: job } }));
@@ -960,18 +962,12 @@ export const useStore = create<CanopyState>((set, get) => ({
   openSearch: () => set({ sheet: { kind: "search" } }),
   setSearchQuery: (q) => set({ searchQuery: q }),
   searchIn: (repoId, q) =>
-    set((s) => {
-      const closedSections = s.closedSections.filter((k) => k !== "search");
-      if (closedSections.length !== s.closedSections.length) {
-        saveLayout({ ...layoutOf(s), closedSections });
-      }
-      return {
-        sheet: null,
-        pendingSearch: { repoId, q },
-        ...focusPanel(s.panels, repoId),
-        closedSections,
-      };
-    }),
+    set((s) => ({
+      sheet: null,
+      pendingSearch: { repoId, q },
+      ...focusPanel(s.panels, repoId),
+      closedSections: unfoldIn(s.closedSections, repoId, "search"),
+    })),
   takePendingSearch: () => set({ pendingSearch: null }),
   startRun: async (repoId, action, note) => {
     const run = await api.run(repoId, action, note);
@@ -1084,6 +1080,26 @@ export const useStore = create<CanopyState>((set, get) => ({
   },
   showFleet: (fleetId) => set({ sheet: { kind: "fleet", fleetId } }),
 }));
+
+/** whether this window is a solo panel or a lone shell rather than the grove:
+ *  it has no dock, so what it holds in `panels` is a copy of the grove's
+ *  (plus any panel a shell opened here) and must not be written back */
+function dockless(): boolean {
+  if (typeof window === "undefined") return false;
+  const route = parseRoute(window.location.search);
+  return route.solo || route.shell;
+}
+
+// Whatever part of the layout a change touched is written as it happens, so
+// no action has to remember to. Only the changed fields go: see saveLayout.
+useStore.subscribe((s, prev) => {
+  const patch = changed(layoutOf(s), layoutOf(prev));
+  if (dockless()) {
+    delete patch.panels;
+    delete patch.activePanel;
+  }
+  if (Object.keys(patch).length > 0) saveLayout(patch);
+});
 
 /** The run a repo's card should talk about: a live one first, else the most
  *  recent finished one still on the server. */

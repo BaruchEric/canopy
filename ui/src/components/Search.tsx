@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { useShallow } from "zustand/react/shallow";
 import { api } from "../api";
 import { groupHits, markHit } from "../hits";
-import { useStore, visibleRepos } from "../store";
+import { closedIn, useStore, visibleRepos } from "../store";
 import type { GrepHit, GrepRepoResult, GrepResult, Repo } from "../../../src/core/types";
 
 const errText = (err: unknown) => String(err instanceof Error ? err.message : err);
@@ -122,7 +122,7 @@ function SearchBox({
 /* ---------- the panel section: one repo ---------- */
 
 export function SearchSection({ repo }: { repo: Repo }) {
-  const closed = useStore((s) => s.closedSections.includes("search"));
+  const closed = useStore((s) => closedIn(s, repo.id, "search"));
   const toggleSection = useStore((s) => s.toggleSection);
   const pending = useStore((s) => s.pendingSearch);
   const takePending = useStore((s) => s.takePendingSearch);
@@ -169,7 +169,7 @@ export function SearchSection({ repo }: { repo: Repo }) {
         type="button"
         className={`panel-label fold${closed ? "" : " open"}`}
         aria-expanded={!closed}
-        onClick={() => toggleSection("search")}
+        onClick={() => toggleSection(repo.id, "search")}
       >
         search{" "}
         <span>{count === null ? "" : `${count}${found?.result.truncated ? "+" : ""}`}</span>

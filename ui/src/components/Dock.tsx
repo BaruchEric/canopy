@@ -12,7 +12,7 @@ import {
   type FileCol,
   type FileView,
 } from "../files";
-import { DOCK, PANEL, activeFlowFor, flowFor, runFor, useStore } from "../store";
+import { DOCK, PANEL, activeFlowFor, closedIn, flowFor, runFor, useStore } from "../store";
 import { ago, GLYPH, stateOf } from "../util";
 import { ClaudeSection } from "./Claude";
 import { LaunchSection } from "./Launch";
@@ -397,7 +397,7 @@ function History({ repo }: { repo: Repo }) {
   // Bumped by the repo SSE event, so a commit made in a terminal refreshes
   // this list too — not just one made from the panel.
   const updatedAt = useStore((s) => s.updatedAt[repo.id]);
-  const closed = useStore((s) => s.closedSections.includes("history"));
+  const closed = useStore((s) => closedIn(s, repo.id, "history"));
   const toggleSection = useStore((s) => s.toggleSection);
   const [log, setLog] = useState<LogEntry[] | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -427,7 +427,7 @@ function History({ repo }: { repo: Repo }) {
       className="history"
       open={!closed}
       onToggle={(e) => {
-        if (!e.currentTarget.open !== closed) toggleSection("history");
+        if (!e.currentTarget.open !== closed) toggleSection(repo.id, "history");
       }}
     >
       <summary className="panel-label">
@@ -478,7 +478,7 @@ export function RepoPanel({
   const repoActiveFlow = useStore((s) => activeFlowFor(s, id));
   const unpin = useStore((s) => s.closePanel);
   const openApp = useStore((s) => s.openApp);
-  const changesClosed = useStore((s) => s.closedSections.includes("changes"));
+  const changesClosed = useStore((s) => closedIn(s, id, "changes"));
   const toggleSection = useStore((s) => s.toggleSection);
   const closePanel = onClose ? (_id: string) => onClose() : unpin;
   const [message, setMessage] = useState("");
@@ -585,6 +585,9 @@ export function RepoPanel({
       hidden={hidden}
       style={{ "--panel-w": `${width}px` } as CSSProperties}
     >
+      {/* Everything but the shells scrolls in here; the shells sit below it,
+          along the panel's bottom edge, whatever the scroll position. */}
+      <div className="panel-body">
       <header className="panel-head">
         <span className="glyph">{GLYPH[stateOf(repo)]}</span>
         <span className="panel-name" title={repo.path}>
@@ -711,7 +714,7 @@ export function RepoPanel({
             type="button"
             className={`panel-label fold${changesClosed ? "" : " open"}`}
             aria-expanded={!changesClosed}
-            onClick={() => toggleSection("changes")}
+            onClick={() => toggleSection(id, "changes")}
           >
             changes <span>{files.length}</span>
           </button>
@@ -769,7 +772,6 @@ export function RepoPanel({
             </div>
           )}
 
-          <PanelShells repo={repo} />
           <SearchSection repo={repo} />
           <History repo={repo} />
           <LaunchSection repo={repo} />
@@ -777,6 +779,8 @@ export function RepoPanel({
         </>
       )}
       {note && <p className={`note ${note.kind}`}>{note.text}</p>}
+      </div>
+      {!repo.error && <PanelShells repo={repo} />}
     </section>
   );
 }

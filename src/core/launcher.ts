@@ -5,10 +5,10 @@
  *  GitHub through `gh`, so its login and rate limits apply. The pure parts
  *  (what to pick, what to run) are in launch.ts. */
 
-import { chmod, mkdir, mkdtemp, readdir, readFile, rename, rm, stat, writeFile } from "node:fs/promises";
+import { chmod, copyFile, link, mkdir, mkdtemp, readdir, readFile, rename, rm, stat, writeFile } from "node:fs/promises";
 import { createHash } from "node:crypto";
 import { tmpdir } from "node:os";
-import { basename, join } from "node:path";
+import { basename, extname, join } from "node:path";
 import { isGitHub, listRemotes, parseRemote } from "./access";
 import { exec, git } from "./exec";
 import { parseLocator } from "./host";

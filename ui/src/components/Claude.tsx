@@ -1,6 +1,6 @@
 import { Fragment, useEffect, useState } from "react";
 import { api } from "../api";
-import { useStore } from "../store";
+import { closedIn, useStore } from "../store";
 import { duration, fmtTokens, toolLine, usd, when } from "../util";
 import { CommitRow } from "./Commit";
 import { Rings } from "./Rings";
@@ -36,7 +36,7 @@ const REPLY_CLAMP = 480;
 export function ClaudeSection({ repo }: { repo: Repo }) {
   const overview = useStore((s) => s.history);
   const history = historyFor(overview, repo.id);
-  const closed = useStore((s) => s.closedSections.includes("claude"));
+  const closed = useStore((s) => closedIn(s, repo.id, "claude"));
   const toggleSection = useStore((s) => s.toggleSection);
 
   const summary =
@@ -54,7 +54,7 @@ export function ClaudeSection({ repo }: { repo: Repo }) {
         type="button"
         className={`panel-label fold${closed ? "" : " open"}`}
         aria-expanded={!closed}
-        onClick={() => toggleSection("claude")}
+        onClick={() => toggleSection(repo.id, "claude")}
         title={
           history
             ? `${history.sessions} sessions in the archive, ${usd(history.costUsd)} API-equivalent all time`

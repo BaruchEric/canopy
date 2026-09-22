@@ -4,7 +4,8 @@ import { Terminal, type ITheme } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import "@xterm/xterm/css/xterm.css";
 import { groveUrl } from "../routes";
-import { PANEL_TERM, TERM, useStore, type TermTab } from "../store";
+import { PANEL_TERM, TERM, closedIn, useStore, type TermTab } from "../store";
+import { TERM_FONT } from "../term";
 import { clamp } from "../util";
 import { Wordmark } from "./TopBar";
 import type { Repo } from "../../../src/core/types";
@@ -68,9 +69,6 @@ function xtermTheme(): ITheme {
   };
 }
 
-const FONT =
-  '"Berkeley Mono", "JetBrains Mono", ui-monospace, "SF Mono", Menlo, monospace';
-
 /** the socket for one shell, sized to the terminal that will show it */
 function socketUrl(tab: TermTab, cols: number, rows: number): string {
   const scheme = location.protocol === "https:" ? "wss" : "ws";
@@ -120,9 +118,9 @@ export function TermView({
     if (!el) return;
     const term = new Terminal({
       cursorBlink: true,
-      fontFamily: FONT,
-      fontSize: 12.5,
-      lineHeight: 1.2,
+      fontFamily: TERM_FONT.family,
+      fontSize: TERM_FONT.size,
+      lineHeight: TERM_FONT.lineHeight,
       scrollback: 5000,
       macOptionIsMeta: true,
       theme: xtermTheme(),
@@ -392,18 +390,19 @@ export function TermDock() {
 }
 
 /**
- * The shells living in one repo's panel: a section of the panel, tabs when
- * there are two or more, the newest showing. Nothing renders while the repo
+ * The shells living in one repo's panel: the panel's footer, tabs when there
+ * are two or more, the newest showing, sized by a grip along its top edge
+ * since the panel's bottom is where it sits. Nothing renders while the repo
  * has none there.
  */
 export function PanelShells({ repo }: { repo: Repo }) {
   const terms = useStore((s) => s.terms);
   const openTerm = useStore((s) => s.openTerm);
-  const closed = useStore((s) => s.closedSections.includes("shell"));
+  const closed = useStore((s) => closedIn(s, repo.id, "shell"));
   const toggleSection = useStore((s) => s.toggleSection);
   const panelTermHeight = useStore((s) => s.panelTermHeight);
   const setPanelTermHeight = useStore((s) => s.setPanelTermHeight);
-  const inner = useRef<HTMLDivElement>(null);
+  const box = useRef<HTMLElement>(null);
   const mine = terms.filter((t) => t.place === "panel" && t.repoId === repo.id);
   const [chosen, setChosen] = useState<string | null>(null);
   // the newest shell shows until another tab is picked
@@ -417,23 +416,33 @@ export function PanelShells({ repo }: { repo: Repo }) {
 
   if (mine.length === 0) return null;
   return (
-    <section className="panel-shells" aria-label={`Shells at ${repo.name}`}>
+    <section
+      ref={box}
+      className="panel-shells"
+      aria-label={`Shells at ${repo.name}`}
+      style={{ "--panel-term-h": `${panelTermHeight}px` } as CSSProperties}
+    >
+      {!closed && (
+        <TermGrip
+          box={box}
+          cssVar="--panel-term-h"
+          label={`Shell height at ${repo.name}`}
+          height={panelTermHeight}
+          setHeight={setPanelTermHeight}
+          bounds={PANEL_TERM}
+        />
+      )}
       <button
         type="button"
         className={`panel-label fold${closed ? "" : " open"}`}
         aria-expanded={!closed}
-        onClick={() => toggleSection("shell")}
+        onClick={() => toggleSection(repo.id, "shell")}
       >
         shell <span>{mine.length}</span>
       </button>
       {/* Kept mounted while folded (display:none via `hidden`) so the shells
           keep running: unmounting a TermView hangs up its pty. */}
-      <div
-        ref={inner}
-        className="panel-shells-body"
-        hidden={closed}
-        style={{ "--panel-term-h": `${panelTermHeight}px` } as CSSProperties}
-      >
+      <div className="panel-shells-body" hidden={closed}>
         <TermTabs
           terms={mine}
           active={active}
@@ -456,15 +465,6 @@ export function PanelShells({ repo }: { repo: Repo }) {
             <TermView key={t.id} tab={t} active={t.id === active && !closed} />
           ))}
         </div>
-        <TermGrip
-          box={inner}
-          cssVar="--panel-term-h"
-          label={`Shell height at ${repo.name}`}
-          height={panelTermHeight}
-          setHeight={setPanelTermHeight}
-          bounds={PANEL_TERM}
-          edge="bottom"
-        />
       </div>
     </section>
   );

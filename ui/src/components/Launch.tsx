@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { useShallow } from "zustand/react/shallow";
 import { api } from "../api";
-import { jobsFor, launchFor, useStore } from "../store";
+import { closedIn, jobsFor, launchFor, useStore } from "../store";
 import { ago } from "../util";
 import { Seg } from "./Seg";
 import { fmtBytes } from "../../../src/core/launch";
@@ -30,7 +30,7 @@ const TAIL = 14;
  * opens and on the refresh button.
  */
 export function LaunchSection({ repo }: { repo: Repo }) {
-  const closed = useStore((s) => s.closedSections.includes("launch"));
+  const closed = useStore((s) => closedIn(s, repo.id, "launch"));
   const toggleSection = useStore((s) => s.toggleSection);
   const editLaunch = useStore((s) => s.editLaunch);
   const buildsAt = useStore((s) => s.buildsAt[repo.id]);
@@ -68,7 +68,7 @@ export function LaunchSection({ repo }: { repo: Repo }) {
         type="button"
         className={`panel-label fold${closed ? "" : " open"}`}
         aria-expanded={!closed}
-        onClick={() => toggleSection("launch")}
+        onClick={() => toggleSection(repo.id, "launch")}
         title="Released builds, pull requests and this checkout, launched from here"
       >
         launch <span>{summary}</span>

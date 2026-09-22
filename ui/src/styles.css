@@ -1142,6 +1142,15 @@ body.resizing {
   flex-direction: column;
   border-right: 1px solid var(--hair);
   background: var(--bark1);
+  overflow: hidden;
+}
+/* the scrolling part of a panel: head, actions and every section but the
+   shells, which sit below it along the panel's bottom edge */
+.panel-body {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
   overflow-y: auto;
   padding-bottom: 20px;
 }
@@ -2889,27 +2898,33 @@ body.resizing {
   background: var(--bark0) !important;
 }
 
-/* a shell inside a panel: a fold header over a resizable body */
+/* the shells at the foot of a panel: a fold header over a resizable body,
+   pinned below the scrolling part so they stay in view whatever it shows;
+   the grip rides the top edge, the one with room to pull */
 .panel-shells {
+  position: relative;
   display: flex;
   flex-direction: column;
   flex: none;
-  margin-top: 14px;
+  min-height: 0;
   border-top: 1px solid var(--hair);
-  border-bottom: 1px solid var(--hair);
   background: var(--bark0);
 }
 .panel-shells > .fold {
   margin: 8px 14px 6px;
 }
-/* the tabs and the shell; its height is dragged by the grip on its lower edge */
+/* the tabs at their own height over the shell, whose height is the dragged
+   one; the cap keeps a tall shell from squeezing the panel above it flat */
 .panel-shells-body {
-  position: relative;
   display: flex;
   flex-direction: column;
   min-height: 0;
-  height: var(--panel-term-h, 320px);
+  max-height: 60vh;
   border-top: 1px solid var(--hair);
+}
+.panel-shells-body > .term-body {
+  flex: 0 1 auto;
+  height: var(--panel-term-h, 100px);
 }
 /* folded: really gone, so the shell's ResizeObserver stops fitting to a zero
    box (which would send garbage rows to the pty). `display: flex` above beats
