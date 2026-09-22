@@ -60,7 +60,7 @@ export async function openFile(repoPath: string, file: string, line: number): Pr
 }
 
 /** The openers that are a plain app: everything but the two that start Claude. */
-type AppOpener = Exclude<OpenerId, "agent" | "herdr">;
+export type AppOpener = Exclude<OpenerId, "agent" | "herdr">;
 
 /** How the terminal openers (kitty, Terminal, and the agent in either) place
  *  a repo: a new OS window, or a tab in the front window. */
@@ -209,12 +209,70 @@ function commandFor(app: AppOpener, path: string, tab = false): string[] {
   }
 }
 
+/* ---------- the same openers on a Linux desktop (a helper there) ---------- */
+
+/** kitty on Linux is a plain binary: `--detach` returns at once the way
+ *  `open` does on a Mac, and the instance flags are the same. Terminal.app
+ *  and Finder have no Linux; the "finder" opener is `xdg-open` on the
+ *  folder, and "terminal" is refused, since which terminal a Linux desktop
+ *  has is anyone's guess and kitty is the one canopy drives. */
+export function linuxCommandFor(app: AppOpener, path: string, instance = kittyInstanceArgs()): string[] {
+  switch (app) {
+    case "kitty":
+      return ["kitty", "--detach", ...instance, "--directory", path];
+    case "code":
+      return ["code", path];
+    case "finder":
+      return ["xdg-open", path];
+    case "terminal":
+      throw new Error("Terminal.app is a Mac app; use kitty on Linux");
+  }
+}
+
+export function linuxRemoteCommandFor(
+  app: AppOpener,
+  host: string,
+  path: string,
+  instance = kittyInstanceArgs(),
+): string[] {
+  switch (app) {
+    case "kitty":
+      return ["kitty", "--detach", ...instance, ...sshSessionArgs(host, path, "shell")];
+    case "code":
+      return ["code", "--folder-uri", remoteFolderUri(host, path)];
+    case "finder":
+      throw new Error("xdg-open cannot show a folder on another host");
+    case "terminal":
+      throw new Error("Terminal.app is a Mac app; use kitty on Linux");
+  }
+}
+
+/** A held kitty window running the agent, here or over ssh, on Linux. */
+export function linuxAgentArgs(
+  path: string,
+  agent: AgentSettings = DEFAULT_AGENT,
+  shell = userShell(),
+  instance = kittyInstanceArgs(),
+): string[] {
+  const { host, path: dir } = parseLocator(path);
+  const cmd = host === null
+    ? ["--directory", dir, ...agentShellCommand(shell, agent)]
+    : sshSessionArgs(host, dir, "agent", agent);
+  return ["kitty", "--detach", ...instance, "--hold", ...cmd];
+}
+
+/** The platform the openers build for; the server and the helper each run
+ *  them where they are, so this is the process's own. */
+const platform = (): string => process.platform;
+
 /* ---------- the agent: Claude Code, interactive, in a terminal ---------- */
 
-/** The user's login shell, or zsh, the macOS default, when the server was
- *  started without one (launchd sets no SHELL). */
+/** The user's login shell, or the platform's default when the server was
+ *  started without one: zsh on a Mac (launchd sets no SHELL), bash elsewhere
+ *  (a container has no zsh, and a shell that is not there exits at once, so
+ *  every tmux session would die at birth). */
 export function userShell(): string {
-  return process.env.SHELL || "/bin/zsh";
+  return process.env.SHELL || (process.platform === "darwin" ? "/bin/zsh" : "/bin/bash");
 }
 
 /** Run `claude` through the login, interactive shell so the rc files apply:
@@ -340,6 +398,12 @@ async function tryKittyTab(path: string, what: "shell" | "agent", agent: AgentSe
  *  next time, and Terminal only when kitty is not installed. */
 async function openAgent(path: string, agent: AgentSettings, tab = false): Promise<void> {
   if (tab && (await tryKittyTab(path, "agent", agent))) return;
+  if (platform() !== "darwin") {
+    if (!Bun.which("kitty")) throw new Error("the agent needs kitty on PATH here");
+    const r = await exec(linuxAgentArgs(path, agent), { timeoutMs: 15_000 });
+    if (r.code !== 0) throw new Error(r.stderr.trim() || "failed to open kitty for the agent");
+    return;
+  }
   const k = await exec(kittyAgentArgsFor(path, agent), { timeoutMs: 15_000 });
   if (k.code === 0) return;
   await openAgentInTerminal(path, agent, tab);
@@ -356,7 +420,11 @@ export async function openIn(
   if (app === "herdr") return openHerdr(path, agent);
   if (app === "kitty" && tab && (await tryKittyTab(path, "shell", agent))) return;
   const { host, path: dir } = parseLocator(path);
-  const cmd = host === null ? commandFor(app, dir, tab) : remoteCommandFor(app, host, dir, tab);
+  const mac = platform() === "darwin";
+  const cmd = host === null
+    ? mac ? commandFor(app, dir, tab) : linuxCommandFor(app, dir)
+    : mac ? remoteCommandFor(app, host, dir, tab) : linuxRemoteCommandFor(app, host, dir);
+  if (!mac && !Bun.which(cmd[0]!)) throw new Error(`${cmd[0]} is not on PATH here`);
   const r = await exec(cmd, { timeoutMs: 15_000 });
   if (r.code !== 0) throw new Error(r.stderr.trim() || `failed to open ${app}`);
 }
@@ -431,12 +499,14 @@ export async function openGroup(
   if (app === "kitty" || app === "agent") {
     const file = join(dir, `${safeFileName(name)}.kitty-session`);
     await writeFile(file, kittySessionLines(paths, app, userShell(), agentFor));
+    const mac = platform() === "darwin";
+    if (!mac && !Bun.which("kitty")) throw new Error("a workspace of shells needs kitty on PATH here");
     const r = await exec(
-      ["open", "-na", "kitty.app", "--args", "--session", file],
+      mac ? ["open", "-na", "kitty.app", "--args", "--session", file] : ["kitty", "--detach", "--session", file],
       { timeoutMs: 15_000 },
     );
     if (r.code === 0) return;
-    if (app === "kitty") throw new Error(r.stderr.trim() || "failed to open kitty");
+    if (app === "kitty" || !mac) throw new Error(r.stderr.trim() || "failed to open kitty");
     await Promise.all(paths.map((p) => openAgentInTerminal(p, agentFor(p))));
     return;
   }

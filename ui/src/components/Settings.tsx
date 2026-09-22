@@ -1,5 +1,7 @@
 import { useEffect, useRef, useState } from "react";
-import { useStore } from "../store";
+import { useShallow } from "zustand/react/shallow";
+import { capsFor, useStore } from "../store";
+import { deviceName } from "../../../src/core/presence";
 import { Seg } from "./Seg";
 
 const OPEN_IN = [
@@ -49,6 +51,9 @@ const KEYS = [
 export function SettingsMenu() {
   const settings = useStore((s) => s.settings);
   const setSetting = useStore((s) => s.setSetting);
+  const client = useStore((s) => s.client);
+  const helpers = useStore((s) => s.helpers);
+  const caps = useStore(useShallow(capsFor));
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
 
@@ -134,6 +139,45 @@ export function SettingsMenu() {
               the strip along the bottom otherwise. A shell in a panel ends when
               you close the panel; a strip shell lives until you close it or the
               page.
+            </p>
+          </section>
+          <section className="settings-row">
+            <h3 className="panel-label">desktop openers</h3>
+            {helpers.length > 0 && (
+              <Seg
+                label="Which machine the desktop openers run on"
+                value={settings.helper ?? "auto"}
+                options={[
+                  { value: "auto", label: "auto", title: "The helper at this browser's address, else this Mac when it runs the backend" },
+                  ...helpers.map((h) => ({ value: h.name, label: h.name, title: `${h.platform}, from ${h.address}: ${h.openers.join(", ") || "no openers"}` })),
+                ]}
+                onChange={(v) => setSetting("helper", v === "auto" ? null : v)}
+              />
+            )}
+            <p className="settings-hint">
+              {caps.via === "backend"
+                ? "Through this Mac, which runs the backend."
+                : caps.helper
+                  ? `Through the helper ${caps.helper.name} on ${caps.helper.platform}: ${caps.helper.openers.join(", ") || "no openers"}.`
+                  : helpers.length > 0
+                    ? "None picked. The helpers above are attached to the backend now, one per machine; pick the one that is this machine. Picking another sends this browser's clicks to that machine's desktop."
+                    : "None. Run canopy helper --backend <this url> on this machine to open kitty, VS Code and the rest here."}
+              {client.address && ` This browser is seen as ${client.address}.`}
+            </p>
+          </section>
+          <section className="settings-row">
+            <h3 className="panel-label">this device</h3>
+            <input
+              className="settings-input"
+              type="text"
+              maxLength={40}
+              placeholder={deviceName(navigator.userAgent)}
+              value={settings.device}
+              aria-label="What this browser is called in the devices list"
+              onChange={(e) => setSetting("device", e.target.value)}
+            />
+            <p className="settings-hint">
+              How this browser appears to your other devices, and who a shell says is looking at it. Takes effect on the next reload.
             </p>
           </section>
           <section className="settings-row">

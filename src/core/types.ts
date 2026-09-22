@@ -178,6 +178,70 @@ export interface Backend {
   sshHost: string | null;
 }
 
+/** A helper: `canopy helper` running on a client machine, dialled in to the
+ *  backend over a websocket and registered with what it can open there. A
+ *  browser picks the helper that is its own machine by name (`helper` in its
+ *  settings); when the backend sees real client addresses, a browser adopts
+ *  the one helper at its own address by itself. */
+export interface HelperInfo {
+  /** the machine's name, what the helper was started with; one helper per
+   *  name, a newer one replacing an older */
+  name: string;
+  /** the helper's `process.platform`: darwin, linux */
+  platform: string;
+  /** the openers it runs there */
+  openers: OpenerId[];
+  /** unix ms of the registration */
+  since: number;
+  /** the address the backend saw the helper dial in from */
+  address: string;
+}
+
+/** What the backend knows about one browser: the address it sees it at, and
+ *  whether that is the backend's own machine with a desktop (a Mac running
+ *  canopy), in which case the openers run there with no helper. */
+export interface ClientInfo {
+  address: string;
+  local: boolean;
+  /** the address is one many browsers arrive under (docker's proxy in
+   *  front of a container hands the backend its own gateway for every
+   *  client), so it says nothing about which machine the browser is on */
+  shared: boolean;
+}
+
+/** One browser on the backend, as presence shows it: a browser profile is
+ *  one device (its id lives in localStorage, so two windows of one profile
+ *  are one device with two streams), named by the user or by its user
+ *  agent. Best effort: it comes off the event stream's open and close. */
+export interface Device {
+  /** the browser's own id, 16 hex digits it made and keeps */
+  id: string;
+  /** what the user calls it, or the browser's guess ("Mac, Chrome") */
+  name: string;
+  /** the browser's platform word: mac, android, windows, linux, ios, other */
+  platform: string;
+  /** the address the backend sees it at (a proxy's when `shared`) */
+  address: string;
+  /** unix ms of the oldest stream it has open now */
+  since: number;
+  /** how many event streams (windows, tabs) it has open */
+  streams: number;
+}
+
+export const DEVICE_PLATFORMS = ["mac", "android", "windows", "linux", "ios", "other"] as const;
+export type DevicePlatform = (typeof DEVICE_PLATFORMS)[number];
+
+/** What one browser can have opened on its own machine, and who does it: the
+ *  backend itself when the browser is on the backend host and that host has a
+ *  desktop, the helper the browser picked, or nobody, in which case the UI
+ *  shows no opener but the VS Code link. Derived in the browser from
+ *  `ClientInfo`, the helper list and its own choice. */
+export interface ClientCaps {
+  openers: OpenerId[];
+  via: "backend" | "helper" | null;
+  helper: HelperInfo | null;
+}
+
 export interface ScanResult {
   /** the launch root */
   root: string;
@@ -497,6 +561,8 @@ export interface Run {
   chat: boolean;
   /** what the user typed into the note box, if anything */
   note: string;
+  /** the device it was started from, when the request said */
+  by?: string;
   status: RunStatus;
   /** unix ms */
   startedAt: number;
@@ -549,7 +615,15 @@ export type ServerEvent =
   /** a repo's builds changed outside a job: launched, exited, removed, or a
    *  job just installed or built one; the panel re-reads the list */
   | { type: "builds"; repoId: string; what: BuildChange; build: string }
-  | { type: "launchers"; launchers: Record<string, LaunchSettings> };
+  | { type: "launchers"; launchers: Record<string, LaunchSettings> }
+  /** sent to the browsers on one address only: what their machine can open
+   *  changed, a helper came or went */
+  | { type: "helpers"; helpers: HelperInfo[] }
+  /** the shells the server holds, whenever one starts, ends, or a socket
+   *  joins or leaves; the whole list each time, no tmux reconcile behind it */
+  | { type: "terms"; terms: TermInfo[] }
+  /** the browsers on the event stream, whenever one comes or goes */
+  | { type: "devices"; devices: Device[] };
 
 export type BuildChange = "installed" | "built" | "launched" | "exited" | "removed";
 
@@ -894,5 +968,7 @@ export interface TermInfo {
   place: ShellPlace;
   /** whether a socket is on it right now */
   attached: boolean;
+  /** the names of the devices with a socket on it, one each */
+  viewers: string[];
   startedAt: number;
 }

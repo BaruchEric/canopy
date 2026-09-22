@@ -7,6 +7,7 @@ import { groveUrl, nameShellHere, parseRoute } from "../routes";
 import { PANEL_TERM, TERM, closedIn, panelTermHeightFor, useStore, type TermTab } from "../store";
 import { TERM_FONT, termId } from "../term";
 import { clamp } from "../util";
+import { clientId } from "../client";
 import { Wordmark } from "./TopBar";
 import { TERM_GONE, type Repo } from "../../../src/core/types";
 
@@ -82,6 +83,8 @@ function socketUrl(tab: TermTab, cols: number, rows: number, rejoin: boolean): s
     place: tab.place,
     cols: String(cols),
     rows: String(rows),
+    // which device is looking, for the shell's viewers
+    client: clientId(),
   });
   if (rejoin) q.set("attach", "1");
   return `${scheme}://${location.host}/api/term?${q}`;

@@ -6,7 +6,8 @@ import { ACTIONS, checkWhen } from "../../../src/core/actions";
 import { describeAgent } from "../../../src/core/agent";
 import { describeLaunch } from "../../../src/core/launch";
 import { flowWord } from "../flows";
-import { activeFlowFor, activeRunFor, agentFor, launchFor, useStore } from "../store";
+import { useShallow } from "zustand/react/shallow";
+import { activeFlowFor, activeRunFor, agentFor, capsFor, launchFor, useStore } from "../store";
 import {
   CLAUDE_OPENERS,
   OPENER_IDS,
@@ -51,10 +52,15 @@ export function RepoMenu({
   const openTerm = useStore((s) => s.openTerm);
   const agent = useStore((s) => agentFor(s, repo));
   const launch = useStore((s) => launchFor(s, repo));
-  // The desktop openers and the launcher run on the backend host; a headless
-  // backend (a container) cannot, so they are hidden there. VS Code is kept as
-  // a client-side Remote-SSH link that the browser opens on its own machine.
+  // The launcher runs on the backend host; a headless backend (a container)
+  // cannot, so it is hidden there. The desktop openers are what this browser
+  // can open: the backend's own desktop when it is a Mac this browser runs
+  // on, else a helper on this machine, else none. Without a `code` opener
+  // VS Code is kept as a client-side Remote-SSH link the browser opens itself.
   const backend = useStore((s) => s.backend);
+  const client = useStore(useShallow(capsFor));
+  const can = (app: OpenerId) => client.openers.includes(app);
+  const apps = OPENERS.filter(can);
   const active = useStore((s) => activeRunFor(s, repo.id));
   const workflows = useStore((s) => s.workflows[repo.id]);
   const loadWorkflows = useStore((s) => s.loadWorkflows);
@@ -383,29 +389,29 @@ export function RepoMenu({
                   </button>
                 );
               })}
-              {backend.openers && (
-                <>
-                  <button
-                    type="button"
-                    role="menuitem"
-                    className="menu-item"
-                    title="Start an interactive Claude Code session in a terminal at this repo"
-                    onClick={() => void openIn("agent")}
-                  >
-                    <span className="menu-text">agent</span>
-                    <span className="menu-fact">interactive, in a terminal</span>
-                  </button>
-                  <button
-                    type="button"
-                    role="menuitem"
-                    className="menu-item"
-                    title="Open this repo as a herdr workspace with Claude Code running in it"
-                    onClick={() => void openIn("herdr")}
-                  >
-                    <span className="menu-text">herdr</span>
-                    <span className="menu-fact">a workspace in herdr</span>
-                  </button>
-                </>
+              {can("agent") && (
+                <button
+                  type="button"
+                  role="menuitem"
+                  className="menu-item"
+                  title="Start an interactive Claude Code session in a terminal at this repo"
+                  onClick={() => void openIn("agent")}
+                >
+                  <span className="menu-text">agent</span>
+                  <span className="menu-fact">interactive, in a terminal</span>
+                </button>
+              )}
+              {can("herdr") && (
+                <button
+                  type="button"
+                  role="menuitem"
+                  className="menu-item"
+                  title="Open this repo as a herdr workspace with Claude Code running in it"
+                  onClick={() => void openIn("herdr")}
+                >
+                  <span className="menu-text">herdr</span>
+                  <span className="menu-fact">a workspace in herdr</span>
+                </button>
               )}
               <button
                 type="button"
@@ -479,9 +485,9 @@ export function RepoMenu({
                   <span className="menu-fact">browser ↗</span>
                 </a>
               )}
-              {backend.openers ? (
+              {apps.length > 0 && (
                 <div className="menu-row">
-                  {OPENERS.map((app) => (
+                  {apps.map((app) => (
                     <button
                       key={app}
                       type="button"
@@ -493,20 +499,18 @@ export function RepoMenu({
                     </button>
                   ))}
                 </div>
-              ) : (
-                !repo.host &&
-                backend.sshHost && (
-                  <a
-                    role="menuitem"
-                    className="menu-item"
-                    href={`vscode-remote://ssh-remote+${backend.sshHost}${repo.path}`}
-                    title="Open this repo in VS Code over Remote-SSH on your own machine"
-                    onClick={() => setOpen(false)}
-                  >
-                    <span className="menu-text">VS Code</span>
-                    <span className="menu-fact">remote ↗</span>
-                  </a>
-                )
+              )}
+              {!can("code") && !repo.host && backend.sshHost && (
+                <a
+                  role="menuitem"
+                  className="menu-item"
+                  href={`vscode-remote://ssh-remote+${backend.sshHost}${repo.path}`}
+                  title="Open this repo in VS Code over Remote-SSH on your own machine"
+                  onClick={() => setOpen(false)}
+                >
+                  <span className="menu-text">VS Code</span>
+                  <span className="menu-fact">remote ↗</span>
+                </a>
               )}
               </>
             )}

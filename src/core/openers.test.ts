@@ -8,10 +8,14 @@ import {
   kittyInstanceArgs,
   kittySessionLines,
   kittyTabArgs,
+  linuxAgentArgs,
+  linuxCommandFor,
+  linuxRemoteCommandFor,
   remoteFolderUri,
   sshSessionArgs,
   terminalAgentArgs,
   terminalLineArgs,
+  userShell,
 } from "./openers";
 import { DEFAULT_AGENT } from "./types";
 
@@ -199,6 +203,60 @@ describe("fileOpenArgs", () => {
       "ssh-remote+wsl",
       "-g",
       "/home/me/dev/app/src/a.ts:3",
+    ]);
+  });
+});
+
+describe("userShell", () => {
+  const saved = process.env.SHELL;
+  const restore = () => {
+    if (saved === undefined) delete process.env.SHELL;
+    else process.env.SHELL = saved;
+  };
+
+  test("the login shell the server was started with wins", () => {
+    process.env.SHELL = "/opt/homebrew/bin/fish";
+    try {
+      expect(userShell()).toBe("/opt/homebrew/bin/fish");
+    } finally {
+      restore();
+    }
+  });
+
+  test("without one, the platform's default: zsh on a Mac, bash elsewhere", () => {
+    delete process.env.SHELL;
+    try {
+      expect(userShell()).toBe(process.platform === "darwin" ? "/bin/zsh" : "/bin/bash");
+    } finally {
+      restore();
+    }
+  });
+});
+
+describe("the openers on a Linux desktop", () => {
+  const inst = ["--single-instance", "--instance-group", "canopy", "--listen-on", "unix:/x/kitty.sock", "-o", "allow_remote_control=socket-only"];
+
+  test("kitty detaches at the folder, code and xdg-open take the path", () => {
+    expect(linuxCommandFor("kitty", "/r", inst)).toEqual(["kitty", "--detach", ...inst, "--directory", "/r"]);
+    expect(linuxCommandFor("code", "/r", inst)).toEqual(["code", "/r"]);
+    expect(linuxCommandFor("finder", "/r", inst)).toEqual(["xdg-open", "/r"]);
+    expect(() => linuxCommandFor("terminal", "/r", inst)).toThrow(/Mac app/);
+  });
+
+  test("a repo on another host: kitty runs the ssh session, code the remote uri", () => {
+    expect(linuxRemoteCommandFor("kitty", "mini", "/r", inst)).toEqual([
+      "kitty", "--detach", ...inst, "ssh", "-t", "--", "mini", "cd '/r' && exec \"$SHELL\" -l",
+    ]);
+    expect(linuxRemoteCommandFor("code", "mini", "/r", inst)).toEqual(["code", "--folder-uri", "vscode-remote://ssh-remote+mini/r"]);
+    expect(() => linuxRemoteCommandFor("finder", "mini", "/r", inst)).toThrow(/another host/);
+  });
+
+  test("the agent is a held kitty window, at the folder or over ssh", () => {
+    expect(linuxAgentArgs("/r", ask, "/bin/bash", inst)).toEqual([
+      "kitty", "--detach", ...inst, "--hold", "--directory", "/r", "/bin/bash", "-l", "-i", "-c", "claude",
+    ]);
+    expect(linuxAgentArgs("ssh://mini/r", opusYolo, "/bin/bash", inst)).toEqual([
+      "kitty", "--detach", ...inst, "--hold", "ssh", "-t", "--", "mini", `cd '/r' && ${claudeLine(opusYolo)}`,
     ]);
   });
 });

@@ -2,11 +2,12 @@ import { useState } from "react";
 import { useShallow } from "zustand/react/shallow";
 import { api } from "../api";
 import { ownRun } from "../flows";
-import { allRuns, attentionCount, pickedIds, useStore } from "../store";
+import { allRuns, attentionCount, capsFor, pickedIds, useStore } from "../store";
 import { isRunActive } from "../../../src/core/types";
 import { FilterMenu } from "./Filters";
 import { Seg } from "./Seg";
 import { SettingsMenu } from "./Settings";
+import { DevicesChip } from "./Devices";
 import { SourcesMenu } from "./Sources";
 
 /** The three crowns and a trunk. `live` makes them breathe (loading screen). */
@@ -82,6 +83,11 @@ function RunsPill() {
 export function TopBar() {
   const filter = useStore((s) => s.filter);
   const setFilter = useStore((s) => s.setFilter);
+  // the workspace openers go where this browser can open: nothing on a
+  // phone, the helper on a laptop next to a headless backend
+  const caps = useStore(useShallow(capsFor));
+  const canOpen = caps.openers;
+  const helper = caps.helper?.name;
   const dirtyOnly = useStore((s) => s.dirtyOnly);
   const setDirtyOnly = useStore((s) => s.setDirtyOnly);
   const attention = useStore(attentionCount);
@@ -156,24 +162,28 @@ export function TopBar() {
               {w.name}
               <span className="tab-count">{w.repos.length}</span>
             </button>
-            {activeWs === w.name && (
+            {activeWs === w.name && (canOpen.includes("code") || canOpen.includes("kitty")) && (
               <span className="ws-actions">
-                <button
-                  type="button"
-                  className="mini"
-                  title="Open all repos in one VS Code window"
-                  onClick={() => void api.wsOpen(w.name, "code")}
-                >
-                  code
-                </button>
-                <button
-                  type="button"
-                  className="mini"
-                  title="Open a kitty tab per repo"
-                  onClick={() => void api.wsOpen(w.name, "kitty")}
-                >
-                  kitty
-                </button>
+                {canOpen.includes("code") && (
+                  <button
+                    type="button"
+                    className="mini"
+                    title="Open all repos in one VS Code window"
+                    onClick={() => void api.wsOpen(w.name, "code", helper)}
+                  >
+                    code
+                  </button>
+                )}
+                {canOpen.includes("kitty") && (
+                  <button
+                    type="button"
+                    className="mini"
+                    title="Open a kitty tab per repo"
+                    onClick={() => void api.wsOpen(w.name, "kitty", helper)}
+                  >
+                    kitty
+                  </button>
+                )}
               </span>
             )}
           </span>
@@ -304,6 +314,7 @@ export function TopBar() {
         {scanning ? "scanning…" : "rescan"}
       </button>
 
+      <DevicesChip />
       <SettingsMenu />
     </header>
   );

@@ -368,7 +368,7 @@ function Console({ run, repo }: { run: Run; repo: Repo | undefined }) {
     <>
       <header className="sheet-head">
         <div>
-          <div className="eyebrow">with claude</div>
+          <div className="eyebrow">with claude{run.by && <span className="run-by" title="the device that started it"> · from {run.by}</span>}</div>
           <h2 className="sheet-title">
             {run.verb} <span className="sheet-repo">{run.repoId}</span>
           </h2>

@@ -20,6 +20,7 @@ import {
 import type { Job, LaunchSettings, SourceInput } from "../core/types";
 import { suggestMessage } from "../core/suggest";
 import { PortUnavailableError, startServer } from "../server/index";
+import { helperName, localOpeners, runHelper } from "../core/helperd";
 import { bold, dim, lichen, moss, renderTree, sky } from "./render";
 
 const HELP = `${bold("canopy")} — multi-repo git cockpit
@@ -29,6 +30,8 @@ usage:
   canopy status [dir]                only repos that need attention
   canopy ui [dir] [--port N]        start the web UI and open the browser
     --no-open                       start it without opening a browser tab
+  canopy helper [--backend URL]     lend this machine's desktop openers to a shared backend
+    --name N | --openers a,b        what to register as (default: the hostname, what is installed)
   canopy commit <repo> -m "msg"     commit staged changes
   canopy commit <repo> --ai [--all] [--push]   AI message; --all stages everything
   canopy suggest <repo>              print an AI-suggested commit message
@@ -94,6 +97,7 @@ const COMMANDS = new Set([
   "tree",
   "status",
   "ui",
+  "helper",
   "commit",
   "suggest",
   "push",
@@ -174,6 +178,36 @@ export async function main(argv: string[]): Promise<void> {
       console.log(`${moss("canopy")} ${dim("→")} ${sky(url)} ${dim(`(root: ${root})`)}`);
       if (!noOpen) await exec(["open", url]);
       return; // keeps running — Bun.serve holds the process open
+    }
+    case "helper": {
+      // The other half of a headless backend: this process dials it and runs
+      // the desktop openers here for the browser on this machine. It keeps
+      // running until stopped; a launchd or systemd user unit is the usual way.
+      const backend = opt(args, "--backend") ?? process.env["CANOPY_BACKEND"] ?? "http://127.0.0.1:7850";
+      if (!/^https?:\/\//.test(backend)) return fail(`--backend must be an http(s) origin, got ${backend}`);
+      const name = opt(args, "--name") ?? helperName();
+      const listed = opt(args, "--openers");
+      let openers: OpenerId[];
+      if (listed === undefined) openers = localOpeners();
+      else {
+        openers = [];
+        for (const raw of listed.split(",")) {
+          const v = raw.trim();
+          if (v === "") continue;
+          if (!isOpenerId(v)) return fail(`unknown opener in --openers: ${v}`);
+          openers.push(v);
+        }
+      }
+      const stamp = () => dim(new Date().toLocaleTimeString());
+      const handle = runHelper({ backend, name, openers, log: (line) => console.log(`${stamp()} ${line}`) });
+      console.log(`${moss("canopy helper")} ${dim("→")} ${sky(backend)} ${dim(`as ${name}: ${openers.join(", ") || "no openers"}`)}`);
+      const bye = () => {
+        handle.stop();
+        process.exit(0);
+      };
+      process.on("SIGINT", bye);
+      process.on("SIGTERM", bye);
+      return; // keeps running — the socket holds the process open
     }
     case "commit": {
       // Strip flags first: otherwise `canopy commit --all <repo>` resolves

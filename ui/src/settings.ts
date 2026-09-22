@@ -84,6 +84,12 @@ export interface Settings {
   fileSort: FileSort;
   /** one flat list, or grouped under folder headings */
   fileView: FileView;
+  /** the name of the `canopy helper` that is this browser's own machine,
+   *  where the desktop openers run; null to adopt one by address, or none */
+  helper: string | null;
+  /** what this browser calls itself in the devices list; empty for the
+   *  guess off the user agent */
+  device: string;
 }
 
 export const DEFAULT_SETTINGS: Settings = {
@@ -97,6 +103,8 @@ export const DEFAULT_SETTINGS: Settings = {
   fileCols: [...FILE_COLS],
   fileSort: { col: "time", dir: "desc" },
   fileView: "list",
+  helper: null,
+  device: "",
 };
 
 const KEY = "canopy.settings";
@@ -140,6 +148,8 @@ export function loadSettings(): Settings {
       fileCols: colOrder(saved.fileCols),
       fileSort: fileSort(saved.fileSort),
       fileView: pick(FILE_VIEWS, saved.fileView, DEFAULT_SETTINGS.fileView),
+      helper: typeof saved.helper === "string" && /^[\w.-]{1,64}$/.test(saved.helper) ? saved.helper : null,
+      device: typeof saved.device === "string" ? saved.device.slice(0, 40) : "",
     };
   } catch {
     return DEFAULT_SETTINGS;

@@ -1,5 +1,8 @@
 import type {
   AgentSettings,
+  Device,
+  HelperInfo,
+  ClientInfo,
   CommitDetail,
   Fleet,
   Flow,
@@ -126,10 +129,12 @@ export const api = {
       { method: "POST", body: "{}" },
     ),
   /** `tab` asks the terminal openers for a tab in the front window */
-  open: (id: string, app: string, tab = false) =>
+  /** `helper` names the `canopy helper` that opens it on this machine;
+   *  without one the backend's own desktop does, when the browser is on it */
+  open: (id: string, app: string, tab = false, helper?: string) =>
     req<{ ok: true }>(`/api/repos/open?${rq(id)}`, {
       method: "POST",
-      body: JSON.stringify({ app, tab }),
+      body: JSON.stringify({ app, tab, helper }),
     }),
   /** every repo's agent settings, keyed by repo path */
   agents: () => req<Record<string, AgentSettings>>("/api/agents"),
@@ -153,10 +158,10 @@ export const api = {
   grepAll: (q: string, ids: string[]) =>
     req<GrepRepoResult[]>("/api/grep", { method: "POST", body: JSON.stringify({ q, ids }) }),
   /** opens one file of a repo at a line in VS Code */
-  openFile: (id: string, file: string, line: number) =>
+  openFile: (id: string, file: string, line: number, helper?: string) =>
     req<{ ok: true }>(`/api/repos/openfile?${rq(id)}`, {
       method: "POST",
-      body: JSON.stringify({ file, line }),
+      body: JSON.stringify({ file, line, helper }),
     }),
   openNote: (id: string, session: string) =>
     req<{ ok: true }>(`/api/repos/note?${rq(id)}`, {
@@ -168,10 +173,11 @@ export const api = {
   /** ends one shell; closing its socket alone leaves it running */
   endTerm: (id: string) => req<{ ok: true }>(`/api/terms?term=${encodeURIComponent(id)}`, { method: "DELETE" }),
   runs: () => req<Run[]>("/api/runs"),
-  run: (id: string, action: RunAction, note: string) =>
+  /** `client` is this browser's id, so the run says which device started it */
+  run: (id: string, action: RunAction, note: string, client?: string) =>
     req<Run>(`/api/repos/run?${rq(id)}`, {
       method: "POST",
-      body: JSON.stringify({ action, note }),
+      body: JSON.stringify({ action, note, client }),
     }),
   answerRun: (id: string, promptId: string, answer: RunAnswer) =>
     req<Run>("/api/runs/answer", {
@@ -204,6 +210,11 @@ export const api = {
     }),
   dismissFlow: (id: string) => req<{ ok: true }>(`/api/flows?${rq(id)}`, { method: "DELETE" }),
   verdict: () => req<{ ready: boolean }>("/api/verdict"),
+  /** what the backend knows of this browser, and the helpers dialled in */
+  client: () => req<ClientInfo>("/api/client"),
+  helpers: () => req<HelperInfo[]>("/api/helpers"),
+  /** the browsers on the event stream now */
+  devices: () => req<Device[]>("/api/devices"),
   fleets: () => req<Fleet[]>("/api/fleets"),
   startFleet: (workflow: string, ids: string[], note: string) =>
     req<Fleet>("/api/fleet", {
@@ -269,10 +280,10 @@ export const api = {
       method: "DELETE",
       body: JSON.stringify({ name, repo }),
     }),
-  wsOpen: (name: string, app: string) =>
+  wsOpen: (name: string, app: string, helper?: string) =>
     req<{ ok: true }>("/api/workspaces/open", {
       method: "POST",
-      body: JSON.stringify({ name, app }),
+      body: JSON.stringify({ name, app, helper }),
     }),
 };
 
@@ -281,8 +292,11 @@ export function subscribe(
   /** called when the stream comes back after a drop — the server replays
    *  nothing, so everything that changed during the gap must be refetched */
   onReconnect?: () => void,
+  /** who this browser is, for the devices list; none for an anonymous stream */
+  who: Record<string, string> = {},
 ): () => void {
-  const es = new EventSource("/api/events");
+  const q = new URLSearchParams(who).toString();
+  const es = new EventSource(q ? `/api/events?${q}` : "/api/events");
   let everOpened = false;
   es.onopen = () => {
     if (everOpened) onReconnect?.();

@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { PANEL_TERM_ROWS, cellHeight, loadTermTabs, reconcileTerms, rowsPx, termId, type TermTab } from "./term";
+import { PANEL_TERM_ROWS, adoptTerms, cellHeight, loadTermTabs, reconcileTerms, rowsPx, termId, type TermTab } from "./term";
 import type { Repo, TermInfo } from "../../src/core/types";
 
 describe("rowsPx", () => {
@@ -37,6 +37,7 @@ const info = (id: string, repoId: string, place: TermInfo["place"] = "strip"): T
   path: `/dev/${repoId}`,
   place,
   attached: false,
+  viewers: [],
   startedAt: 1,
 });
 
@@ -74,5 +75,31 @@ describe("reconcileTerms", () => {
   });
   test("nothing live means no tabs", () => {
     expect(reconcileTerms([tab("a", "app")], [], repos)).toEqual([]);
+  });
+});
+
+describe("adoptTerms", () => {
+  const repos = [repo("app"), repo("lib")];
+
+  test("keeps every tab and adds a held strip shell no tab names", () => {
+    const tabs = [tab("a", "app")];
+    const out = adoptTerms(tabs, [info("a", "app"), info("b", "lib")], repos, []);
+    expect(out.map((t) => t.id)).toEqual(["a", "b"]);
+    expect(out[1]).toEqual({ id: "b", repoId: "lib", name: "lib", path: "/dev/lib", place: "strip" });
+  });
+
+  test("a tab whose shell is gone stays (its socket's exit frame marks it)", () => {
+    const tabs = [tab("a", "app")];
+    expect(adoptTerms(tabs, [], repos, [])).toBe(tabs);
+  });
+
+  test("a panel shell is adopted only when its panel is open here", () => {
+    expect(adoptTerms([], [info("p", "app", "panel")], repos, []).length).toBe(0);
+    expect(adoptTerms([], [info("p", "app", "panel")], repos, ["app"]).map((t) => t.place)).toEqual(["panel"]);
+  });
+
+  test("a shell at a repo not in the scan is left alone, and nothing new returns the same array", () => {
+    const tabs = [tab("a", "app")];
+    expect(adoptTerms(tabs, [info("a", "app"), info("z", "gone")], repos, [])).toBe(tabs);
   });
 });

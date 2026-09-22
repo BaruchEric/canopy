@@ -4,12 +4,14 @@ import { applyQuery, type RepoFilter } from "./filters";
 import { focusPanel, nextActive } from "./dock";
 import { openElsewhere, openShellElsewhere, parseRoute } from "./routes";
 import { loadSettings, saveSettings, shellPlace, type Settings, type ShellPlace } from "./settings";
-import { PANEL_TERM_ROWS, loadTermTabs, reconcileTerms, rowsPx, termId, type TermTab } from "./term";
+import { PANEL_TERM_ROWS, adoptTerms, loadTermTabs, reconcileTerms, rowsPx, termId, type TermTab } from "./term";
+import { clientId, identity } from "./client";
 export type { TermTab } from "./term";
 import { clamp, needsAttention } from "./util";
 import { ownRun, pickable, selectable } from "./flows";
 import { boardOrder, invertPick, pickWhere, rangeIds, setPick, togglePick } from "./select";
 import { appendFeed, describeEvent, type FeedEntry } from "./feed";
+import { clientCaps } from "../../src/core/client";
 import {
   DEFAULT_AGENT,
   DEFAULT_LAUNCH,
@@ -17,6 +19,10 @@ import {
   isRunActive,
   type AgentSettings,
   type Backend,
+  type ClientCaps,
+  type ClientInfo,
+  type Device,
+  type HelperInfo,
   type Fleet,
   type Flow,
   type FlowChoice,
@@ -310,6 +316,16 @@ interface CanopyState {
   repos: Repo[];
   /** what this backend can do for its clients (desktop openers, ssh alias) */
   backend: Backend;
+  /** what the backend knows of this browser: its address, and whether it is
+   *  on the backend's own Mac */
+  client: ClientInfo;
+  /** the `canopy helper`s dialled in to the backend, by name */
+  helpers: HelperInfo[];
+  /** the browsers on the backend's event stream now, this one among them */
+  devices: Device[];
+  /** every shell the server holds, with who is looking at each; the tabs
+   *  here are the ones of those this window shows */
+  shells: TermInfo[];
   workspaces: Workspace[];
   loaded: boolean;
   /** why the initial load failed, if it did */
@@ -592,6 +608,10 @@ export const useStore = create<CanopyState>((set, get) => ({
   sources: [],
   repos: [],
   backend: { openers: true, sshHost: null },
+  client: { address: "", local: false, shared: false },
+  helpers: [],
+  devices: [],
+  shells: [],
   workspaces: [],
   loaded: false,
   loadError: null,
@@ -647,7 +667,7 @@ export const useStore = create<CanopyState>((set, get) => ({
 
   init: async () => {
     try {
-      const [tree, workspaces, runs, agents, flows, fleets, verdict, launchers, jobs, held] = await Promise.all([
+      const [tree, workspaces, runs, agents, flows, fleets, verdict, launchers, jobs, held, client, helpers, devices] = await Promise.all([
         api.tree(),
         api.workspaces(),
         api.runs(),
@@ -660,6 +680,9 @@ export const useStore = create<CanopyState>((set, get) => ({
         // a server from before shells were held has no list; the grove
         // should still load, just with no shells to come back to
         api.terms().catch((): TermInfo[] => []),
+        api.client(),
+        api.helpers(),
+        api.devices().catch((): Device[] => []),
       ]);
       // The shells come back only now, against what the server still holds:
       // a tab shown sooner would open its socket and start a shell of its
@@ -683,6 +706,10 @@ export const useStore = create<CanopyState>((set, get) => ({
         sources: tree.sources,
         repos: tree.repos,
         backend: tree.backend,
+        client,
+        helpers,
+        devices,
+        shells: held,
         workspaces,
         runs: Object.fromEntries(runs.map((r) => [r.id, r])),
         agents,
@@ -719,7 +746,11 @@ export const useStore = create<CanopyState>((set, get) => ({
         // leaves the current tree in place until the next event
         void get().rescan().catch(() => {});
       },
+      identity(get().settings.device),
     );
+    // A helper attaching between the first read and the stream opening
+    // sent a `helpers` event no one heard; one more read closes that gap.
+    void api.helpers().then((helpers) => set({ helpers })).catch(() => {});
     return () => {
       clearInterval(refresh);
       unsubscribe();
@@ -796,7 +827,12 @@ export const useStore = create<CanopyState>((set, get) => ({
   clearFilters: () => set({ filters: [], users: [] }),
   setActiveWs: (activeWs) => set({ activeWs }),
 
-  openPanel: (id) => set((s) => focusPanel(s.panels, id)),
+  openPanel: (id) =>
+    set((s) => {
+      const next = focusPanel(s.panels, id);
+      // a panel shell another device opened here waits for its panel
+      return { ...next, terms: dockless() ? s.terms : adoptTerms(s.terms, s.shells, s.repos, next.panels) };
+    }),
   showPanel: (id) =>
     set((s) => (s.panels.includes(id) ? { activePanel: id } : {})),
   openRepo: (id, mods) => {
@@ -816,7 +852,7 @@ export const useStore = create<CanopyState>((set, get) => ({
     else openElsewhere(id, target);
   },
   openApp: async (id, app) => {
-    await api.open(id, app, get().settings.terminal === "tab");
+    await api.open(id, app, get().settings.terminal === "tab", helperFor(get()));
   },
   closePanel: (id) => {
     const s = get();
@@ -893,6 +929,17 @@ export const useStore = create<CanopyState>((set, get) => ({
       set((s) => ({ buildsAt: { ...s.buildsAt, [ev.repoId]: Date.now() } }));
     } else if (ev.type === "launchers") {
       set({ launchers: ev.launchers });
+    } else if (ev.type === "helpers") {
+      set({ helpers: ev.helpers });
+    } else if (ev.type === "devices") {
+      set({ devices: ev.devices });
+    } else if (ev.type === "terms") {
+      // a shell opened on another device shows up here too; a dockless
+      // window (solo, shell) keeps no tabs of its own
+      set((s) => ({
+        shells: ev.terms,
+        terms: dockless() ? s.terms : adoptTerms(s.terms, ev.terms, s.repos, s.panels),
+      }));
     }
   },
 
@@ -1018,7 +1065,7 @@ export const useStore = create<CanopyState>((set, get) => ({
     })),
   takePendingSearch: () => set({ pendingSearch: null }),
   startRun: async (repoId, action, note) => {
-    const run = await api.run(repoId, action, note);
+    const run = await api.run(repoId, action, note, clientId());
     set((s) => ({
       runs: { ...s.runs, [run.id]: run },
       sheet: { kind: "run", runId: run.id },
@@ -1200,6 +1247,14 @@ export function activeFlowFor(s: CanopyState, repoId: string): Flow | undefined 
 export function allRuns(s: CanopyState): Run[] {
   return Object.values(s.runs).sort((a, b) => b.startedAt - a.startedAt);
 }
+
+/** What this browser can open and through what: its chosen helper, the one
+ *  at its address, the backend's own Mac, or nothing. */
+export const capsFor = (s: CanopyState): ClientCaps => clientCaps(s.client, s.helpers, s.settings.helper);
+
+/** The helper name an open request carries: the one `capsFor` settled on,
+ *  or none when the backend's own desktop (or nothing) is what opens. */
+export const helperFor = (s: CanopyState): string | undefined => capsFor(s).helper?.name;
 
 /** The repo's agent settings, the defaults when it has none. */
 export const agentFor = (s: CanopyState, repo: Repo): AgentSettings =>

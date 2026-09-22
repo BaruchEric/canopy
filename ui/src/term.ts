@@ -70,6 +70,27 @@ export function reconcileTerms(saved: TermTab[], live: TermInfo[], repos: Repo[]
   return out;
 }
 
+/** The tabs after the server said what it holds now: every tab this window
+ *  has stays (one whose shell ended is marked by its own socket's exit
+ *  frame and closed by hand, as before), and a held shell no tab names gets
+ *  one: in the strip, or in its repo's panel when that panel is open here.
+ *  A panel shell whose panel is closed waits for the panel to open or the
+ *  next load, so a shell opened on another device does not pop panels
+ *  open on this one. */
+export function adoptTerms(tabs: TermTab[], live: TermInfo[], repos: Repo[], panels: string[]): TermTab[] {
+  const seen = new Set(tabs.map((t) => t.id));
+  let out = tabs;
+  for (const t of live) {
+    if (seen.has(t.id)) continue;
+    if (t.place === "panel" && !panels.includes(t.repoId)) continue;
+    const repo = repos.find((r) => r.id === t.repoId);
+    if (!repo) continue;
+    if (out === tabs) out = [...tabs];
+    out.push({ id: t.id, repoId: repo.id, name: repo.name, path: repo.path, place: t.place });
+  }
+  return out;
+}
+
 export const TERM_FONT = {
   family: '"Berkeley Mono", "JetBrains Mono", ui-monospace, "SF Mono", Menlo, monospace',
   size: 12.5,

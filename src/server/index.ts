@@ -40,6 +40,8 @@ import { normalizeAgent } from "../core/agent";
 import { normalizeLaunch } from "../core/launch";
 import { Launcher, LauncherError } from "../core/launcher";
 import { backendCaps, hostOpeners, isOpenerId, openFile, openGroup, openIn } from "../core/openers";
+import { clientKey, HELPER_TIMEOUT, isLoopback, parseDefaultGateway, parseHelperQuery, parseHelperReply, reachFrom, type HelperIntent } from "../core/helper";
+import { devicesOf, parseStream, type Stream } from "../core/presence";
 import { mapPool, searchRepo } from "../core/search";
 import { findWorkflow, loadWorkflows } from "../core/workflows";
 import {
@@ -66,8 +68,12 @@ import { suggestMessage } from "../core/suggest";
 import {
   HISTORY_WINDOWS,
   RUN_ACTIONS,
+  type AgentSettings,
   type CanopyConfig,
+  type ClientInfo,
+  type Device,
   type FlowChoice,
+  type HelperInfo,
   type GrepRepoResult,
   type HistoryOverview,
   type HistoryWindow,
@@ -113,6 +119,15 @@ interface ServerState {
   /** push permission memo, keyed "owner/name" — see core/access */
   access: Map<string, boolean | null>;
   clients: Set<ReadableStreamDefaultController<Uint8Array>>;
+  /** what each event stream said about its browser, for the streams that
+   *  said anything; `devicesOf` folds them into the devices list */
+  streams: Map<ReadableStreamDefaultController<Uint8Array>, Stream>;
+  /** the helpers dialled in, by name; a browser opens through the one it
+   *  picked (or adopted by address, see `clientCaps` in core/client) */
+  helpers: Map<string, Helper>;
+  /** the address a browser has when docker's proxy is what delivered it:
+   *  the container's default gateway, null off Linux */
+  gateway: string | null;
   timers: Map<string, ReturnType<typeof setTimeout>>;
   /** Claude Code jobs, one live session per repo at most */
   runner: Runner;
@@ -161,11 +176,129 @@ interface TermSocket {
   attach: boolean;
   cols: number;
   rows: number;
+  /** the device this socket belongs to, by its stream's id, for `viewers` */
+  device: string | null;
   live?: LiveTerm;
   /** on tmux, this socket's own client on the session */
   client?: TermSession;
   /** what arrived while the shell was still starting, sent once it is up */
   pending?: (string | Uint8Array)[];
+}
+
+/** a helper on its websocket: what it registered and the intents it has
+ *  not answered yet, by id */
+interface Helper {
+  info: HelperInfo;
+  ws: ServerWebSocket<Socket>;
+  pending: Map<number, { resolve: () => void; reject: (e: Error) => void; timer: ReturnType<typeof setTimeout> }>;
+  next: number;
+}
+
+/** what a helper websocket carries: its registration (the address it
+ *  dialled from is in it); `kind` tells the two socket kinds apart */
+interface HelperSocket {
+  kind: "helper";
+  info: HelperInfo;
+}
+
+type Socket = (TermSocket & { kind: "term" }) | HelperSocket;
+
+/** what a headless backend answers when asked to run a desktop opener or the
+ *  launcher: they are macOS GUI commands, so a container cannot do them, and
+ *  the client's own machine is where such a thing belongs */
+const NO_DESKTOP = "this canopy backend has no desktop; openers run on your own machine";
+
+/** what the open routes answer when the browser named no attached helper and
+ *  is not on a Mac that runs canopy */
+const NO_HELPER = "no canopy helper is attached for this browser; run `canopy helper` on your machine and pick it in settings";
+
+/** What the backend knows about a browser at `key`: its address, whether
+ *  that is this machine with a desktop of its own, and whether it is the
+ *  address docker's proxy hands a container for every client. */
+function clientInfo(state: ServerState, key: string): ClientInfo {
+  return { address: key, local: isLoopback(key) && hostOpeners(), shared: key === state.gateway };
+}
+
+/** The container's default gateway on Linux, null elsewhere or when the
+ *  route table cannot be read: a published-port connection through docker's
+ *  userland proxy reaches the container from that address. */
+async function defaultGateway(): Promise<string | null> {
+  if (process.platform !== "linux") return null;
+  try {
+    return parseDefaultGateway(await readFile("/proc/net/route", "utf8"));
+  } catch {
+    return null;
+  }
+}
+
+const helperList = (state: ServerState): HelperInfo[] => [...state.helpers.values()].map((h) => h.info);
+
+/** the helper list to every stream, on any attach or detach */
+function tellHelpers(state: ServerState): void {
+  broadcast(state, { type: "helpers", helpers: helperList(state) });
+}
+
+/** one intent to the helper `name`, settled by its reply or the timeout */
+function askHelper(state: ServerState, name: string, intent: Omit<HelperIntent, "id">): Promise<void> {
+  const helper = state.helpers.get(name);
+  if (!helper) return Promise.reject(new HttpError(400, NO_HELPER));
+  const id = helper.next++;
+  return new Promise<void>((resolve, reject) => {
+    const timer = setTimeout(() => {
+      helper.pending.delete(id);
+      reject(new HttpError(504, `the helper ${helper.info.name} did not answer in time`));
+    }, HELPER_TIMEOUT);
+    helper.pending.set(id, { resolve, reject, timer });
+    helper.ws.send(JSON.stringify({ id, ...intent }));
+  });
+}
+
+/** a helper's reply lands on the intent it names */
+function helperReplied(state: ServerState, name: string, text: string): void {
+  const helper = state.helpers.get(name);
+  const reply = parseHelperReply(text);
+  if (!helper || !reply) return;
+  const p = helper.pending.get(reply.id);
+  if (!p) return;
+  helper.pending.delete(reply.id);
+  clearTimeout(p.timer);
+  if ("ok" in reply) p.resolve();
+  else p.reject(new HttpError(502, `${helper.info.name}: ${reply.error}`));
+}
+
+/** the helper `name` goes: its waiting intents fail, every stream hears */
+function dropHelper(state: ServerState, name: string, ws: ServerWebSocket<Socket>): void {
+  const helper = state.helpers.get(name);
+  if (!helper || helper.ws !== ws) return;
+  state.helpers.delete(name);
+  for (const p of helper.pending.values()) {
+    clearTimeout(p.timer);
+    p.reject(new HttpError(502, `the helper ${helper.info.name} went away`));
+  }
+  tellHelpers(state);
+}
+
+/** Where a click lands: on the helper the browser named (`helper` in the
+ *  body, its pick or the one it adopted), on the backend's own desktop for
+ *  a browser on a Mac that runs it, or nowhere (400 saying what is
+ *  missing). A helper reaches the backend's repos over ssh through
+ *  `CANOPY_SSH_HOST`, so a local path is rewritten to that locator on the
+ *  way; a repo already elsewhere keeps its own. */
+type OpenVia = { via: "backend" } | { via: "helper"; name: string };
+
+function openVia(state: ServerState, key: string, helper: unknown): OpenVia {
+  if (typeof helper === "string" && helper !== "") {
+    if (state.helpers.has(helper)) return { via: "helper", name: helper };
+    throw new HttpError(400, `the helper ${helper} is not attached; ${NO_HELPER}`);
+  }
+  if (isLoopback(key) && hostOpeners()) return { via: "backend" };
+  throw new HttpError(400, hostOpeners() ? NO_HELPER : `${NO_DESKTOP}; ${NO_HELPER}`);
+}
+
+function helperPath(path: string): string {
+  const r = reachFrom(path, process.env.CANOPY_SSH_HOST || null);
+  if (typeof r === "string") return r;
+  throw new HttpError(400, r.error);
 }
 
 /** what a socket's keystrokes and resizes go to */
@@ -191,7 +324,7 @@ async function listTerms(state: ServerState): Promise<TermInfo[]> {
       seen.add(s.id);
       if (state.terms.has(s.id)) continue;
       state.terms.set(s.id, {
-        info: { id: s.id, repoId: s.repoId, path: s.path, place: s.place, attached: false, startedAt: s.createdAt },
+        info: { id: s.id, repoId: s.repoId, path: s.path, place: s.place, attached: false, viewers: [], startedAt: s.createdAt },
         pty: null,
         sockets: new Set(),
       });
@@ -199,7 +332,7 @@ async function listTerms(state: ServerState): Promise<TermInfo[]> {
     // deleting the current entry while iterating a Map is defined behaviour
     for (const id of state.terms.keys()) if (!seen.has(id)) state.terms.delete(id);
   }
-  return [...state.terms.values()].map((t) => ({ ...t.info, attached: t.sockets.size > 0 }));
+  return [...state.terms.values()].map((t) => termInfo(state, t));
 }
 
 /** Ends a shell by id; false when there is none. On a pty the exit hook
@@ -215,6 +348,7 @@ async function endTerm(state: ServerState, id: string): Promise<boolean> {
   if (live) live.ending = true;
   await killSession(state.tmux, id);
   state.terms.delete(id);
+  tellTerms(state);
   return true;
 }
 
@@ -242,14 +376,16 @@ function openPtyTerm(state: ServerState, data: TermSocket, size: TermSize): Live
         }
       }
       sockets.clear();
+      tellTerms(state);
     },
   });
   const live: LiveTerm = {
-    info: { id, repoId: repo.id, path: repo.path, place, attached: false, startedAt: Date.now() },
+    info: { id, repoId: repo.id, path: repo.path, place, attached: false, viewers: [], startedAt: Date.now() },
     pty: { session, scrollback },
     sockets,
   };
   state.terms.set(id, live);
+  tellTerms(state);
   return live;
 }
 
@@ -265,13 +401,15 @@ async function joinTmuxTerm(state: ServerState, tmux: string[], ws: ServerWebSoc
   if (!live) {
     await newSession(tmux, { id, repoId: repo.id, path: repo.path, place }, size);
     live = {
-      info: { id, repoId: repo.id, path: repo.path, place, attached: false, startedAt: Date.now() },
+      info: { id, repoId: repo.id, path: repo.path, place, attached: false, viewers: [], startedAt: Date.now() },
       pty: null,
       sockets: new Set(),
     };
     state.terms.set(id, live);
+    tellTerms(state);
   } else if (!(await hasSession(tmux, id))) {
     state.terms.delete(id);
+    tellTerms(state);
     ws.close(TERM_GONE, "that shell is gone");
     return;
   }
@@ -300,12 +438,14 @@ async function joinTmuxTerm(state: ServerState, tmux: string[], ws: ServerWebSoc
         } catch {
           // the browser went first
         }
+        tellTerms(state);
       });
     },
   });
   ws.data.live = held;
   ws.data.client = client;
   held.sockets.add(ws);
+  tellTerms(state);
 }
 
 interface HistoryCache {
@@ -447,8 +587,49 @@ function broadcast(state: ServerState, event: ServerEvent): void {
       c.enqueue(data);
     } catch {
       state.clients.delete(c);
+      state.streams.delete(c);
     }
   }
+}
+
+const deviceList = (state: ServerState): Device[] => devicesOf(state.streams.values());
+
+/** the device a stream id belongs to right now, by name, or null */
+function deviceNameOf(state: ServerState, id: string | null): string | null {
+  if (!id) return null;
+  return deviceList(state).find((d) => d.id === id)?.name ?? null;
+}
+
+/** the devices list to every stream, a beat after the last change so a
+ *  reload (one stream closing, another opening) is one event, not two */
+function tellDevices(state: ServerState): void {
+  const t = state.timers.get("devices");
+  if (t) clearTimeout(t);
+  state.timers.set(
+    "devices",
+    setTimeout(() => {
+      state.timers.delete("devices");
+      broadcast(state, { type: "devices", devices: deviceList(state) });
+    }, 300),
+  );
+}
+
+/** one shell as the list shows it: attached when any socket is on it, the
+ *  devices behind those sockets by name */
+function termInfo(state: ServerState, t: LiveTerm): TermInfo {
+  const viewers: string[] = [];
+  for (const ws of t.sockets) {
+    const name = deviceNameOf(state, ws.data.device);
+    if (name && !viewers.includes(name)) viewers.push(name);
+  }
+  return { ...t.info, attached: t.sockets.size > 0, viewers };
+}
+
+/** the shells to every stream: after a start, an end, a join or a leave.
+ *  Off the map alone, no tmux reconcile (that shells out) behind it; the
+ *  GET does that. */
+function tellTerms(state: ServerState): void {
+  broadcast(state, { type: "terms", terms: [...state.terms.values()].map((t) => termInfo(state, t)) });
 }
 
 function repoById(state: ServerState, id: string): Repo {
@@ -477,11 +658,6 @@ const WATCH_GIT_HINTS = ["HEAD", "index", "ORIG_HEAD", "refs"];
 /** How often a remote source's repos get their status re-read: there is no
  *  watcher on another host, and a scan of a whole tree is too much to repeat. */
 const REMOTE_REFRESH = 5 * 60_000;
-
-/** what a headless backend answers when asked to run a desktop opener or the
- *  launcher: they are macOS GUI commands, so a container cannot do them, and
- *  the client's own machine is where such a thing belongs */
-const NO_DESKTOP = "this canopy backend has no desktop; openers run on your own machine";
 
 /** How long after start the first fetch and pull request pass runs. */
 const ACTIVITY_DELAY = 3_000;
@@ -836,11 +1012,16 @@ async function handleApi(
   state: ServerState,
   req: Request,
   url: URL,
+  key: string,
 ): Promise<Response> {
   const path = url.pathname;
   const method = req.method;
 
   if (path === "/api/tree" && method === "GET") return json(state.result);
+  // what the backend knows of this browser, and the helpers dialled in
+  if (path === "/api/client" && method === "GET") return json(clientInfo(state, key));
+  if (path === "/api/helpers" && method === "GET") return json(helperList(state));
+  if (path === "/api/devices" && method === "GET") return json(deviceList(state));
 
   if (path === "/api/rescan" && method === "POST") {
     await scanAll(state);
@@ -1100,13 +1281,23 @@ async function handleApi(
     return json(workspaces);
   }
   if (path === "/api/workspaces/open" && method === "POST") {
-    const b = (await req.json()) as { name: string; app: string };
+    const b = (await req.json()) as { name: string; app: string; helper?: unknown };
     if (!isOpenerId(b.app)) return json({ error: "unknown app" }, 400);
-    if (!hostOpeners()) return json({ error: NO_DESKTOP }, 400);
+    const via = openVia(state, key, b.helper);
     const cfg = await loadConfig();
     const ws = cfg.workspaces.find((w) => w.name === b.name);
     if (!ws) return json({ error: "unknown workspace" }, 404);
-    await openGroup(b.app, b.name, ws.repos, (p) => agentFor(cfg, p));
+    if (via.via === "backend") {
+      await openGroup(b.app, b.name, ws.repos, (p) => agentFor(cfg, p));
+    } else {
+      const agents: Record<string, AgentSettings> = {};
+      const repos = ws.repos.map((p) => {
+        const there = helperPath(p);
+        agents[there] = agentFor(cfg, p);
+        return there;
+      });
+      await askHelper(state, via.name, { group: { app: b.app, name: b.name, repos, agents } });
+    }
     return json({ ok: true });
   }
 
@@ -1158,13 +1349,14 @@ async function handleApi(
       return json(await searchRepo(repo.path, grepQuery(url.searchParams.get("q"))));
     }
     if (method === "POST" && action === "openfile") {
-      const b = (await req.json()) as { file?: unknown; line?: unknown };
+      const b = (await req.json()) as { file?: unknown; line?: unknown; helper?: unknown };
       if (typeof b.file !== "string" || b.file === "" || b.file.includes("\0")) {
         return json({ error: "file must be a path in the repo" }, 400);
       }
       const line = typeof b.line === "number" && Number.isInteger(b.line) && b.line > 0 ? b.line : 1;
-      if (!hostOpeners()) return json({ error: NO_DESKTOP }, 400);
-      await openFile(repo.path, b.file, line);
+      const via = openVia(state, key, b.helper);
+      if (via.via === "backend") await openFile(repo.path, b.file, line);
+      else await askHelper(state, via.name, { file: { path: helperPath(repo.path), file: b.file, line } });
       return json({ ok: true });
     }
     if (method === "GET" && action === "search") {
@@ -1243,12 +1435,13 @@ async function handleApi(
       return json(await suggestMessage(repo.path, files));
     }
     if (method === "POST" && action === "open") {
-      const b = (await req.json()) as { app: string; tab?: unknown };
+      const b = (await req.json()) as { app: string; tab?: unknown; helper?: unknown };
       if (!isOpenerId(b.app)) return json({ error: "unknown app" }, 400);
-      if (!hostOpeners()) return json({ error: NO_DESKTOP }, 400);
-      await openIn(b.app, repo.path, agentFor(await loadConfig(), repo.path), {
-        tab: b.tab === true,
-      });
+      const via = openVia(state, key, b.helper);
+      const agent = agentFor(await loadConfig(), repo.path);
+      const tab = b.tab === true;
+      if (via.via === "backend") await openIn(b.app, repo.path, agent, { tab });
+      else await askHelper(state, via.name, { open: { app: b.app, path: helperPath(repo.path), agent, tab } });
       return json({ ok: true });
     }
     if (method === "POST" && action === "agent") {
@@ -1343,26 +1536,33 @@ async function handleApi(
       // A workflow owns the repo while it runs, gate included: a second
       // claude here would make the flow's next step throw and die.
       if (state.flows.activeFor(repo.id)) throw new HttpError(409, "a workflow is running here");
-      const b = (await req.json()) as { action?: unknown; note?: unknown };
+      const b = (await req.json()) as { action?: unknown; note?: unknown; client?: unknown };
       if (!isRunAction(b.action)) return json({ error: "unknown action" }, 400);
       const note = typeof b.note === "string" ? b.note : "";
       const agent = agentFor(await loadConfig(), repo.path);
-      return json(state.runner.start(repo, b.action, ACTIONS[b.action], note, agent), 201);
+      // the device it was started from, when the browser said and is on the stream
+      const by = deviceNameOf(state, typeof b.client === "string" ? b.client : null) ?? undefined;
+      return json(state.runner.start(repo, b.action, ACTIONS[b.action], note, agent, by), 201);
     }
   }
   return json({ error: "not found" }, 404);
 }
 
-function sse(state: ServerState): Response {
+function sse(state: ServerState, who: Stream | null): Response {
   let ctrl: ReadableStreamDefaultController<Uint8Array>;
   const stream = new ReadableStream<Uint8Array>({
     start(c) {
       ctrl = c;
       state.clients.add(c);
       c.enqueue(enc.encode(`: hello\n\n`));
+      if (who) {
+        state.streams.set(c, who);
+        tellDevices(state);
+      }
     },
     cancel() {
       state.clients.delete(ctrl);
+      if (state.streams.delete(ctrl)) tellDevices(state);
     },
   });
   return new Response(stream, {
@@ -1452,6 +1652,9 @@ export async function startServer(opts: {
     ignore: [...DEFAULT_IGNORE, ...cfg.ignore],
     access: new Map(),
     clients: new Set(),
+    streams: new Map(),
+    helpers: new Map(),
+    gateway: await defaultGateway(),
     timers: new Map(),
     history: null,
     historyPending: null,
@@ -1489,14 +1692,24 @@ export async function startServer(opts: {
   // address alone, so the tailnet is the trust edge (see docs/deploy.md).
   const bindHost = process.env["CANOPY_BIND"] || "127.0.0.1";
   const server = bind(port, () =>
-    Bun.serve<TermSocket>({
+    Bun.serve<Socket>({
       port,
       hostname: bindHost,
       idleTimeout: 0,
       fetch: async (req, srv) => {
         const url = new URL(req.url);
         if (url.pathname === "/api/library" || url.pathname === "/library" || url.pathname.startsWith("/library/")) return library.handle(req);
-        if (url.pathname === "/api/events") return sse(state);
+        const key = clientKey(srv.requestIP(req)?.address ?? "127.0.0.1");
+        if (url.pathname === "/api/events") return sse(state, parseStream(url.searchParams, key));
+        if (url.pathname === "/api/helper") {
+          // a helper dialling in from a client machine: its registration
+          // rides in the query, one helper per name (a newer one wins)
+          const info = parseHelperQuery(url.searchParams, key);
+          if ("error" in info) return json({ error: info.error }, 400);
+          const data: HelperSocket = { kind: "helper", info };
+          if (srv.upgrade(req, { data })) return undefined;
+          return json({ error: "a websocket is expected here" }, 426);
+        }
         if (url.pathname === "/api/term") {
           // A shell in the browser: the socket carries the repo it lands in.
           // The same rules as the openers: a forge repo has no folder to be in.
@@ -1513,12 +1726,15 @@ export async function startServer(opts: {
           const place = termPlace(url.searchParams.get("place"));
           const attach = url.searchParams.get("attach") === "1";
           const size = termSize(url.searchParams.get("cols"), url.searchParams.get("rows"));
-          if (srv.upgrade(req, { data: { repo, id, place, attach, ...size } })) return undefined;
+          const dev = url.searchParams.get("client") ?? "";
+          const device = /^[0-9a-f]{16}$/.test(dev) ? dev : null;
+          const data: Socket = { kind: "term", repo, id, place, attach, device, ...size };
+          if (srv.upgrade(req, { data })) return undefined;
           return json({ error: "a websocket is expected here" }, 426);
         }
         if (url.pathname.startsWith("/api/")) {
           try {
-            return await handleApi(state, req, url);
+            return await handleApi(state, req, url, clientKey(srv.requestIP(req)?.address ?? "127.0.0.1"));
           } catch (err) {
             const status =
               err instanceof HttpError || err instanceof HistoryError || err instanceof LauncherError
@@ -1545,64 +1761,92 @@ export async function startServer(opts: {
         // a full-screen program repaints. One that asked only to rejoin and
         // names a shell not here is told so and closed.
         open(ws) {
-          const { id, attach, cols, rows } = ws.data;
+          if (ws.data.kind === "helper") {
+            const { info } = ws.data;
+            const old = state.helpers.get(info.name);
+            if (old) {
+              state.helpers.delete(info.name);
+              old.ws.close(1000, "another helper registered under this name");
+              for (const p of old.pending.values()) {
+                clearTimeout(p.timer);
+                p.reject(new HttpError(502, `the helper ${old.info.name} was replaced`));
+              }
+            }
+            state.helpers.set(info.name, { info, ws, pending: new Map(), next: 1 });
+            tellHelpers(state);
+            return;
+          }
+          const term = ws as ServerWebSocket<TermSocket>;
+          const { id, attach, cols, rows } = term.data;
           const held = state.terms.get(id);
           if (!held && attach) {
-            ws.close(TERM_GONE, "that shell is gone");
+            term.close(TERM_GONE, "that shell is gone");
             return;
           }
           // Starting takes a moment; what the browser sends before then
           // waits in `pending` and goes down once the shell is up.
-          ws.data.pending = [];
+          term.data.pending = [];
           const settle = (ok: () => void) => {
-            const queued = ws.data.pending ?? [];
-            ws.data.pending = undefined;
-            if (ws.readyState !== WebSocket.OPEN) return;
+            const queued = term.data.pending ?? [];
+            term.data.pending = undefined;
+            if (term.readyState !== WebSocket.OPEN) return;
             ok();
-            const session = sessionOf(ws);
+            const session = sessionOf(term);
             if (session) for (const msg of queued) relay(session, msg);
           };
           const failed = (err: unknown) => {
-            ws.close(1011, String(err instanceof Error ? err.message : err).slice(0, 120));
+            term.close(1011, String(err instanceof Error ? err.message : err).slice(0, 120));
           };
           const tmux = state.tmux;
           if (tmux) {
-            joinTmuxTerm(state, tmux, ws).then(() => settle(() => {}), failed);
+            joinTmuxTerm(state, tmux, term).then(() => settle(() => {}), failed);
             return;
           }
           if (held?.pty) {
             const { session, scrollback } = held.pty;
             settle(() => {
-              ws.data.live = held;
-              held.sockets.add(ws);
+              term.data.live = held;
+              held.sockets.add(term);
               const missed = scrollback.bytes();
-              if (missed.length > 0) ws.sendBinary(missed);
+              if (missed.length > 0) term.sendBinary(missed);
               session.resize({ cols, rows });
+              tellTerms(state);
             });
             return;
           }
           try {
-            const live = openPtyTerm(state, ws.data, { cols, rows });
+            const live = openPtyTerm(state, term.data, { cols, rows });
             settle(() => {
-              ws.data.live = live;
-              live.sockets.add(ws);
+              term.data.live = live;
+              live.sockets.add(term);
+              tellTerms(state);
             });
           } catch (err) {
             failed(err);
           }
         },
         message(ws, msg) {
-          const session = sessionOf(ws);
+          if (ws.data.kind === "helper") {
+            if (typeof msg === "string") helperReplied(state, ws.data.info.name, msg);
+            return;
+          }
+          const term = ws as ServerWebSocket<TermSocket>;
+          const session = sessionOf(term);
           if (session) relay(session, msg);
-          else ws.data.pending?.push(msg);
+          else term.data.pending?.push(msg);
         },
         // The browser going away leaves the shell running: a reload, a
         // closed tab or a lost connection comes back to it by name. Ending a
         // shell is DELETE /api/terms. On tmux the socket's own client goes.
         close(ws) {
-          ws.data.client?.detach();
-          ws.data.client = undefined;
-          ws.data.live?.sockets.delete(ws);
+          if (ws.data.kind === "helper") {
+            dropHelper(state, ws.data.info.name, ws);
+            return;
+          }
+          const term = ws as ServerWebSocket<TermSocket>;
+          term.data.client?.detach();
+          term.data.client = undefined;
+          if (term.data.live?.sockets.delete(term)) tellTerms(state);
         },
       },
     }),
@@ -1623,6 +1867,7 @@ export async function startServer(opts: {
         c.enqueue(enc.encode(`: ping\n\n`));
       } catch {
         state.clients.delete(c);
+        if (state.streams.delete(c)) tellDevices(state);
       }
     }
   }, 25_000);
@@ -1645,6 +1890,10 @@ export async function startServer(opts: {
         for (const ws of t.sockets) ws.data.client?.detach();
       }
       state.terms.clear();
+      for (const [name, h] of state.helpers) {
+        h.ws.close(1001, "the backend is stopping");
+        dropHelper(state, name, h.ws);
+      }
       library.stop();
       process.off("exit", stopLibrary);
       for (const rt of state.sources) rt.watcher?.close();

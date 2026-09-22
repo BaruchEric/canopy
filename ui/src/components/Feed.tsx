@@ -17,6 +17,8 @@ const KIND_WORD: Record<FeedKind, string> = {
   workspace: "ws",
   agent: "agent",
   launch: "launch",
+  client: "device",
+  shell: "shell",
 };
 
 /**

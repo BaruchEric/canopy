@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import type { Fleet, Flow, Job, Repo, RepoStatus, Run, SourceState } from "../../src/core/types";
+import type { Fleet, Flow, HelperInfo, Job, Repo, RepoStatus, Run, SourceState } from "../../src/core/types";
 import {
   appendFeed,
   clip,
@@ -299,6 +299,18 @@ describe("describeEvent", () => {
       5,
     );
     expect(same).toEqual([]);
+  });
+
+  test("helpers: one line per helper that came, went or came back", () => {
+    const mbp: HelperInfo = { name: "mbp", platform: "darwin", openers: ["kitty", "code"], since: 1, address: "100.72.29.68" };
+    const h = (o: Partial<HelperInfo> = {}): HelperInfo => ({ ...mbp, openers: [...mbp.openers], ...o });
+    const came = describeEvent({ type: "helpers", helpers: [h()] }, snap(), 5);
+    expect(came.map((l) => [l.kind, l.text, l.quiet])).toEqual([["client", "helper mbp attached from 100.72.29.68 (kitty, code)", false]]);
+    const gone = describeEvent({ type: "helpers", helpers: [] }, snap({ helpers: [h()] }), 5);
+    expect(gone.map((l) => l.text)).toEqual(["helper mbp gone"]);
+    const back = describeEvent({ type: "helpers", helpers: [h({ since: 2 })] }, snap({ helpers: [h()] }), 5);
+    expect(back.map((l) => [l.text, l.quiet])).toEqual([["helper mbp reattached", true]]);
+    expect(describeEvent({ type: "helpers", helpers: [h()] }, snap({ helpers: [h()] }), 5)).toEqual([]);
   });
 });
 

@@ -197,6 +197,7 @@ export class Runner {
     spec: ActionSpec,
     note: string,
     agent: AgentSettings = DEFAULT_AGENT,
+    by?: string,
   ): Run {
     const busy = this.activeFor(repo.id);
     if (busy) {
@@ -225,6 +226,7 @@ export class Runner {
       steps: [],
       prompt: null,
     };
+    if (by) run.by = by;
     const live: Live = {
       run,
       repo,

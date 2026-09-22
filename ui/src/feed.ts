@@ -5,12 +5,15 @@
 import type {
   Fleet,
   Flow,
+  Device,
+  HelperInfo,
   Job,
   Repo,
   RepoStatus,
   Run,
   ServerEvent,
   SourceState,
+  TermInfo,
   Workspace,
 } from "../../src/core/types";
 
@@ -22,7 +25,9 @@ export type FeedKind =
   | "fleet"
   | "workspace"
   | "agent"
-  | "launch";
+  | "launch"
+  | "client"
+  | "shell";
 
 export interface FeedEntry {
   id: number;
@@ -53,6 +58,12 @@ export interface FeedSnapshot {
   jobs?: Record<string, Job>;
   /** launch settings by repo path, so a change can be told from a no-op */
   launchers?: Record<string, unknown>;
+  /** the helpers attached, so an attach can be told from a detach */
+  helpers?: HelperInfo[];
+  /** the devices on the stream, so a join can be told from a leave */
+  devices?: Device[];
+  /** the shells held, so a start can be told from a join */
+  shells?: TermInfo[];
 }
 
 /** how many entries the feed keeps; older ones fall off the top */
@@ -360,6 +371,55 @@ export function describeEvent(
     }
     case "launchers":
       return launcherLines(ev, prev, at);
+    case "helpers": {
+      // one line per helper that came or went since the last list
+      const before = prev.helpers ?? [];
+      const lines: FeedLine[] = [];
+      for (const h of ev.helpers) {
+        const was = before.find((b) => b.name === h.name);
+        if (!was) lines.push(about(undefined, "client", at, `helper ${h.name} attached from ${h.address} (${h.openers.length ? h.openers.join(", ") : "no openers"})`));
+        else if (was.since !== h.since) lines.push(about(undefined, "client", at, `helper ${h.name} reattached`, true));
+      }
+      for (const b of before) {
+        if (!ev.helpers.some((h) => h.name === b.name)) lines.push(about(undefined, "client", at, `helper ${b.name} gone`));
+      }
+      return lines;
+    }
+    case "devices": {
+      // who came and who went; a stream count change alone is a quiet line
+      const before = prev.devices ?? [];
+      const lines: FeedLine[] = [];
+      for (const d of ev.devices) {
+        const was = before.find((b) => b.id === d.id);
+        if (!was) lines.push(about(undefined, "client", at, `${d.name} connected (${d.platform})`));
+        else if (was.streams !== d.streams) lines.push(about(undefined, "client", at, `${d.name}: ${d.streams} ${d.streams === 1 ? "window" : "windows"}`, true));
+        else if (was.name !== d.name) lines.push(about(undefined, "client", at, `${was.name} is now ${d.name}`, true));
+      }
+      for (const b of before) {
+        if (!ev.devices.some((d) => d.id === b.id)) lines.push(about(undefined, "client", at, `${b.name} left`));
+      }
+      return lines;
+    }
+    case "terms": {
+      // shells that started or ended; who joined or left one is quiet
+      const before = prev.shells ?? [];
+      const lines: FeedLine[] = [];
+      const repoOf = (id: string) => prev.repos.find((r) => r.id === id);
+      for (const t of ev.terms) {
+        const was = before.find((b) => b.id === t.id);
+        if (!was) lines.push(about(repoOf(t.repoId), "shell", at, `shell opened (${t.place})${t.viewers.length ? ` by ${t.viewers.join(", ")}` : ""}`));
+        else if (was.viewers.join() !== t.viewers.join()) {
+          const came = t.viewers.filter((v) => !was.viewers.includes(v));
+          const went = was.viewers.filter((v) => !t.viewers.includes(v));
+          const text = [...came.map((v) => `${v} joined the shell`), ...went.map((v) => `${v} left the shell`)].join(", ");
+          if (text) lines.push(about(repoOf(t.repoId), "shell", at, text, true));
+        }
+      }
+      for (const b of before) {
+        if (!ev.terms.some((t) => t.id === b.id)) lines.push(about(repoOf(b.repoId), "shell", at, "shell ended"));
+      }
+      return lines;
+    }
   }
 }
 
