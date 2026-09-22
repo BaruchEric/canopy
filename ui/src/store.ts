@@ -47,9 +47,6 @@ export const TERM = { min: 120, max: 1200, initial: 300 };
 /** a shell living in a repo's panel: the bounds of its body's height, and the
  *  default, which is PANEL_TERM_ROWS lines of the terminal's font */
 export const PANEL_TERM = { min: 60, max: 900, initial: rowsPx(PANEL_TERM_ROWS) };
-/** the fixed default before the height followed the font; a layout that
- *  stored it was never dragged, so the new default applies to it */
-const OLD_PANEL_TERM = 320;
 /** the event feed along the bottom, in px of height */
 export const FEED = { min: 100, max: 900, initial: 220 };
 /** sections that start folded, matching how the panel read before they could fold */
@@ -68,6 +65,11 @@ export function closedSectionsOf(saved: string[], known: string[]): string[] {
 
 /** folded sections by repo id; a repo with no entry folds DEFAULT_CLOSED */
 export type ClosedSections = Record<string, string[]>;
+
+/** the height of the shell in one repo's panel: its own, else the default */
+export function panelTermHeightFor(s: { panelTermHeights: Record<string, number> }, repoId: string): number {
+  return s.panelTermHeights[repoId] ?? PANEL_TERM.initial;
+}
 
 /** the folded sections of one repo's panel */
 export function sectionsFor(closed: ClosedSections, repoId: string): string[] {
@@ -130,8 +132,9 @@ interface Layout {
   knownSections: string[];
   /** px height of the terminal strip */
   termHeight: number;
-  /** px height of a shell living in a repo's panel */
-  panelTermHeight: number;
+  /** px height of the shell in each repo's panel, by repo id; a repo with
+   *  no entry gets the default */
+  panelTermHeights: Record<string, number>;
   /** whether the event feed is showing along the bottom */
   feedOpen: boolean;
   /** px height of the event feed */
@@ -156,7 +159,7 @@ function loadLayout(): Layout {
     closedSections: {},
     knownSections: [...DEFAULT_CLOSED],
     termHeight: TERM.initial,
-    panelTermHeight: PANEL_TERM.initial,
+    panelTermHeights: {},
     feedOpen: false,
     feedHeight: FEED.initial,
     panels: [],
@@ -175,20 +178,25 @@ function loadLayout(): Layout {
       closedSections?: unknown;
       knownSections?: unknown;
       termHeight?: unknown;
-      panelTermHeight?: unknown;
+      panelTermHeights?: Record<string, unknown>;
       feedOpen?: unknown;
       feedHeight?: unknown;
       panels?: unknown;
       activePanel?: unknown;
     };
-    const panelWidths: Record<string, number> = {};
-    for (const [id, w] of Object.entries(saved.panelWidths ?? {})) {
-      // Anything hand-edited or written by an older build gets clamped rather
-      // than trusted — a bad number here would render an unusable panel.
-      if (typeof w === "number" && Number.isFinite(w)) {
-        panelWidths[id] = clamp(w, PANEL.min, PANEL.max);
+    // Anything hand-edited or written by an older build gets clamped rather
+    // than trusted — a bad number here would render an unusable panel.
+    const sizes = (saved: Record<string, unknown> | undefined, bounds: { min: number; max: number }) => {
+      const out: Record<string, number> = {};
+      for (const [id, px] of Object.entries(saved ?? {})) {
+        if (typeof px === "number" && Number.isFinite(px)) out[id] = clamp(px, bounds.min, bounds.max);
       }
-    }
+      return out;
+    };
+    const panelWidths = sizes(saved.panelWidths, PANEL);
+    // one shell height per panel; the one global height a layout kept before
+    // this is left behind, so every panel starts at the default
+    const panelTermHeights = sizes(saved.panelTermHeights, PANEL_TERM);
     // Folds are by repo. A layout from when they were one list for every
     // panel (an array here) starts every panel at the defaults instead.
     const known = Array.isArray(saved.knownSections) ? strings(saved.knownSections) : OLD_KNOWN;
@@ -202,7 +210,6 @@ function loadLayout(): Layout {
     const solo = saved.soloWidth;
     const dw = saved.dockWidth;
     const th = saved.termHeight;
-    const pth = saved.panelTermHeight;
     const fh = saved.feedHeight;
     return {
       sidebarWidth:
@@ -226,10 +233,7 @@ function loadLayout(): Layout {
         typeof th === "number" && Number.isFinite(th)
           ? clamp(th, TERM.min, TERM.max)
           : TERM.initial,
-      panelTermHeight:
-        typeof pth === "number" && Number.isFinite(pth) && pth !== OLD_PANEL_TERM
-          ? clamp(pth, PANEL_TERM.min, PANEL_TERM.max)
-          : PANEL_TERM.initial,
+      panelTermHeights,
       feedOpen: saved.feedOpen === true,
       feedHeight:
         typeof fh === "number" && Number.isFinite(fh)
@@ -271,7 +275,7 @@ const layoutOf = (s: CanopyState): Omit<Layout, "knownSections"> => ({
   collapsed: s.collapsed,
   closedSections: s.closedSections,
   termHeight: s.termHeight,
-  panelTermHeight: s.panelTermHeight,
+  panelTermHeights: s.panelTermHeights,
   feedOpen: s.feedOpen,
   feedHeight: s.feedHeight,
   panels: s.panels,
@@ -351,8 +355,9 @@ interface CanopyState {
   activeTerm: string | null;
   /** px height of the strip, dragged by its top edge */
   termHeight: number;
-  /** px height of a shell in a repo's panel, dragged by its top edge */
-  panelTermHeight: number;
+  /** px height of the shell in each repo's panel, by repo id, dragged by its
+   *  top edge; `panelTermHeightFor` reads one */
+  panelTermHeights: Record<string, number>;
   /** flows by id, live and recently finished */
   flows: Record<string, Flow>;
   /** fleets by id, live and recently finished */
@@ -436,7 +441,7 @@ interface CanopyState {
   /** marks a shell whose process has ended; its tab stays until closed */
   endTerm: (id: string, code: number | null) => void;
   setTermHeight: (px: number) => void;
-  setPanelTermHeight: (px: number) => void;
+  setPanelTermHeight: (repoId: string, px: number) => void;
 
   /** opens the pre-flight dialog for an action on a repo */
   plan: (repoId: string, action: RunAction) => void;
@@ -541,7 +546,14 @@ function treeState(
   tree: ScanResult,
 ): Pick<
   CanopyState,
-  "root" | "sources" | "repos" | "panels" | "activePanel" | "panelWidths" | "closedSections"
+  | "root"
+  | "sources"
+  | "repos"
+  | "panels"
+  | "activePanel"
+  | "panelWidths"
+  | "panelTermHeights"
+  | "closedSections"
 > {
   // drop panels whose repo no longer exists — a panel with no repo
   // renders nothing, including its own close button. The same array when
@@ -559,6 +571,7 @@ function treeState(
         ? s.activePanel
         : (panels[0] ?? null),
     panelWidths: pruneByRepo(s.panelWidths, tree.repos),
+    panelTermHeights: pruneByRepo(s.panelTermHeights, tree.repos),
     closedSections: pruneByRepo(s.closedSections, tree.repos),
   };
 }
@@ -607,7 +620,7 @@ export const useStore = create<CanopyState>((set, get) => ({
   terms: [],
   activeTerm: null,
   termHeight: layout.termHeight,
-  panelTermHeight: layout.panelTermHeight,
+  panelTermHeights: layout.panelTermHeights,
   flows: {},
   fleets: {},
   workflows: {},
@@ -916,7 +929,10 @@ export const useStore = create<CanopyState>((set, get) => ({
   endTerm: (id, code) =>
     set((s) => ({ terms: s.terms.map((t) => (t.id === id ? { ...t, exit: code } : t)) })),
   setTermHeight: (px) => set({ termHeight: clamp(px, TERM.min, TERM.max) }),
-  setPanelTermHeight: (px) => set({ panelTermHeight: clamp(px, PANEL_TERM.min, PANEL_TERM.max) }),
+  setPanelTermHeight: (repoId, px) =>
+    set((s) => ({
+      panelTermHeights: { ...s.panelTermHeights, [repoId]: clamp(px, PANEL_TERM.min, PANEL_TERM.max) },
+    })),
 
   plan: (repoId, action) => {
     // A repo with a run going shows that run instead of starting a second.

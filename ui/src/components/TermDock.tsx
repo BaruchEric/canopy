@@ -4,7 +4,7 @@ import { Terminal, type ITheme } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import "@xterm/xterm/css/xterm.css";
 import { groveUrl } from "../routes";
-import { PANEL_TERM, TERM, closedIn, useStore, type TermTab } from "../store";
+import { PANEL_TERM, TERM, closedIn, panelTermHeightFor, useStore, type TermTab } from "../store";
 import { TERM_FONT } from "../term";
 import { clamp } from "../util";
 import { Wordmark } from "./TopBar";
@@ -400,7 +400,7 @@ export function PanelShells({ repo }: { repo: Repo }) {
   const openTerm = useStore((s) => s.openTerm);
   const closed = useStore((s) => closedIn(s, repo.id, "shell"));
   const toggleSection = useStore((s) => s.toggleSection);
-  const panelTermHeight = useStore((s) => s.panelTermHeight);
+  const panelTermHeight = useStore((s) => panelTermHeightFor(s, repo.id));
   const setPanelTermHeight = useStore((s) => s.setPanelTermHeight);
   const box = useRef<HTMLElement>(null);
   const mine = terms.filter((t) => t.place === "panel" && t.repoId === repo.id);
@@ -428,7 +428,7 @@ export function PanelShells({ repo }: { repo: Repo }) {
           cssVar="--panel-term-h"
           label={`Shell height at ${repo.name}`}
           height={panelTermHeight}
-          setHeight={setPanelTermHeight}
+          setHeight={(px) => setPanelTermHeight(repo.id, px)}
           bounds={PANEL_TERM}
         />
       )}

@@ -1,8 +1,10 @@
 import { describe, expect, test } from "bun:test";
 import {
+  PANEL_TERM,
   changed,
   closedIn,
   closedSectionsOf,
+  panelTermHeightFor,
   pruneByRepo,
   sectionsFor,
   toggleIn,
@@ -66,5 +68,12 @@ describe("pruneByRepo", () => {
   test("is the same object when every entry still has a repo", () => {
     const map = { a: ["search"], b: [] };
     expect(pruneByRepo(map, repos)).toBe(map);
+  });
+});
+
+describe("panelTermHeightFor", () => {
+  test("a repo's own height, else the default", () => {
+    expect(panelTermHeightFor({ panelTermHeights: { a: 240 } }, "a")).toBe(240);
+    expect(panelTermHeightFor({ panelTermHeights: { a: 240 } }, "b")).toBe(PANEL_TERM.initial);
   });
 });
