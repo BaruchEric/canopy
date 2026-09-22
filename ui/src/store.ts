@@ -16,6 +16,7 @@ import {
   isFlowActive,
   isRunActive,
   type AgentSettings,
+  type Backend,
   type Fleet,
   type Flow,
   type FlowChoice,
@@ -307,6 +308,8 @@ interface CanopyState {
   /** every scanned folder, the launch root first */
   sources: SourceState[];
   repos: Repo[];
+  /** what this backend can do for its clients (desktop openers, ssh alias) */
+  backend: Backend;
   workspaces: Workspace[];
   loaded: boolean;
   /** why the initial load failed, if it did */
@@ -546,6 +549,7 @@ function treeState(
   | "root"
   | "sources"
   | "repos"
+  | "backend"
   | "panels"
   | "activePanel"
   | "panelWidths"
@@ -561,6 +565,7 @@ function treeState(
     root: tree.root,
     sources: tree.sources,
     repos: tree.repos,
+    backend: tree.backend,
     panels,
     // the showing tab may be among the dropped; then its neighbour shows
     activePanel:
@@ -586,6 +591,7 @@ export const useStore = create<CanopyState>((set, get) => ({
   root: "",
   sources: [],
   repos: [],
+  backend: { openers: true, sshHost: null },
   workspaces: [],
   loaded: false,
   loadError: null,
@@ -676,6 +682,7 @@ export const useStore = create<CanopyState>((set, get) => ({
         root: tree.root,
         sources: tree.sources,
         repos: tree.repos,
+        backend: tree.backend,
         workspaces,
         runs: Object.fromEntries(runs.map((r) => [r.id, r])),
         agents,

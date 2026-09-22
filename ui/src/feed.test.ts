@@ -150,6 +150,7 @@ describe("describeEvent", () => {
       sources: [source({ scannedAt: 20 }), nas],
       repos: [repo(), repo({ id: "c", name: "gamma" }), repo({ id: "nas:d", name: "delta", source: "nas" })],
       scannedAt: 20,
+      backend: { openers: true, sshHost: null },
     };
     const lines = describeEvent({ type: "scan", result }, prev, 5);
     expect(lines.map((l) => [l.source, l.text, l.quiet])).toEqual([
@@ -158,13 +159,13 @@ describe("describeEvent", () => {
     ]);
   });
   test("a scan with the same scannedAt says nothing for that source", () => {
-    const result = { root: "/r", sources: [source()], repos: [repo()], scannedAt: 10 };
+    const result = { root: "/r", sources: [source()], repos: [repo()], scannedAt: 10 , backend: { openers: true, sshHost: null } };
     expect(describeEvent({ type: "scan", result }, snap(), 5)).toEqual([]);
   });
   test("a scan failure and its recovery", () => {
-    const failed = { root: "/r", sources: [source({ error: "no ssh", scannedAt: 20 })], repos: [repo()], scannedAt: 20 };
+    const failed = { root: "/r", sources: [source({ error: "no ssh", scannedAt: 20 })], repos: [repo()], scannedAt: 20 , backend: { openers: true, sshHost: null } };
     expect(describeEvent({ type: "scan", result: failed }, snap(), 5).map((l) => l.text)).toEqual(["scan failed: no ssh"]);
-    const back = { root: "/r", sources: [source({ scannedAt: 30 })], repos: [repo()], scannedAt: 30 };
+    const back = { root: "/r", sources: [source({ scannedAt: 30 })], repos: [repo()], scannedAt: 30 , backend: { openers: true, sshHost: null } };
     const prev = snap({ sources: [source({ error: "no ssh", scannedAt: 20 })] });
     expect(describeEvent({ type: "scan", result: back }, prev, 5).map((l) => l.text)).toEqual([
       "scan recovered",

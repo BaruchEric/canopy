@@ -1,0 +1,9 @@
+# installed and built fresh in the image
+node_modules
+dist
+# not needed to build or run, and large
+.git
+ui/node_modules
+# local scratch that must never enter the image
+*.log
+.DS_Store

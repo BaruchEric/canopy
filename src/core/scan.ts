@@ -5,6 +5,7 @@ import { forgeRepo, listForgeRepos } from "./forge";
 import { getStatus } from "./git";
 import { parseLocator, toLocator } from "./host";
 import { readMeta } from "./meta";
+import { backendCaps } from "./openers";
 import { LAUNCH_SOURCE, type Repo, type ScanResult, type Source } from "./types";
 
 export const DEFAULT_IGNORE = [
@@ -364,6 +365,7 @@ export async function scan(
     sources: [{ ...source, repos: repos.length, scannedAt }],
     repos,
     scannedAt,
+    backend: backendCaps(),
   };
 }
 

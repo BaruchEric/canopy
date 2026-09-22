@@ -16,9 +16,12 @@ per client, run on the client, hidden where the client cannot do them.
 
 The work is staged. Phase 1 is the headless container and a uniform in-browser
 core from any device. Phase 2 makes the desktop openers follow the client.
-Phase 3 takes it past the tailnet with real auth and presence. Phase 4 is
+Phase 3 makes the multi-device experience first-class over the tailnet, presence
+and cross-device sessions, with any public reach optional and gated. Phase 4 is
 durability, which is explicitly out of scope until then. A restart loses the
-running shells and their Claude sessions, and for now that is fine.
+running shells and their AI sessions, and for now that is fine. It is one user
+(you), on one tailnet, using your `claude` and `codex` subscriptions, no API
+keys.
 
 ## Background and current state
 
@@ -145,20 +148,34 @@ place, and it is the one that needs no helper.
 in-browser core to any device on the tailnet, with the desktop openers reduced
 to what needs no client helper.
 
+**Status (2026-09-22): the code is built and verified on a Mac; the mini deploy
+remains.** Done: `--no-open`; a `Backend` capability on the tree (`openers`,
+`sshHost`) computed by `backendCaps()`/`hostOpeners()`; the server refuses
+openers, file-open and the launcher with a clear message when headless; the UI
+hides the desktop openers, agent, herdr and the launch section and shows VS Code
+as a `vscode-remote://` link; `CANOPY_NO_DESKTOP=1` forces the mode on a Mac;
+`Dockerfile`, `docker-compose.yml` (tailscale sidecar, path-parity mount),
+`.dockerignore`, `docs/deploy.md`. Verified: all four gates green, and against a
+forced-headless server the API refuses openers/launch and the menu shows only
+the in-browser core plus the VS Code link. Remains, on the mini: build and run
+the compose, confirm the `codex` install, and the interactive `claude` / `codex`
+/ `tailscale` logins.
+
 **Scope.**
 
 - A headless build and run mode. The server must start and serve without a
   desktop, without opening a browser (`--no-open`, already added), and without
   assuming macOS.
-- A Dockerfile (Bun base, git, tmux, `claude`, the Python 3 stdlib for the
-  Library) and a docker-compose with:
+- A Dockerfile (Bun base, git, tmux, `claude`, `codex`, the Python 3 stdlib for
+  the Library) and a docker-compose with:
   - the canopy service,
   - a `tailscale/tailscale` sidecar, the canopy service joining its network
     (`network_mode: service:ts`), so canopy is a node on the tailnet,
-  - a bind mount or volume for the repo tree, or ssh config and keys for ssh
-    sources,
+  - a bind mount of the canonical `~/dev` on the mini for the repo tree (ssh
+    config and keys only for the repos kept on other hosts),
   - a persistent volume for `$CANOPY_CONFIG_DIR`,
-  - a mount or volume carrying an authenticated `claude` login.
+  - volumes carrying the authenticated `claude` and `codex` subscription logins
+    (`~/.claude`, `~/.codex`), no API keys.
 - Gate every host-touching opener behind a capability check that, in Phase 1, is
   a static "this backend has no desktop". Those openers are hidden. VS Code stays
   as a Remote-SSH link, computed from the repo's locator, and works because a
@@ -172,8 +189,9 @@ to what needs no client helper.
   search, diffs, history, chat all work in the container.
 - `fs.watch` recursive works against the mounted repo tree on Omarchy (native
   Linux inotify, so this holds; verify for bind mounts).
-- `claude` runs on linux-x64 (the 2018 mini is Intel) with the mounted Max
-  login. A run started from any client executes in the container.
+- `claude` and `codex` run on linux-x64 (the 2018 mini is Intel) with the
+  mounted subscription logins, no API keys. A `claude` run started from any
+  client executes in the container; `codex` runs the same way inside a shell.
 - Reaching `http://<mini-tailnet-name>:7850` from a laptop and a phone renders
   the same cockpit and the same repos.
 
@@ -260,45 +278,52 @@ reference helper for macOS and for Omarchy/Linux, and helper install docs.
 
 **Out of scope.** Off-tailnet reach, durability.
 
-## Phase 3: beyond the tailnet
+## Phase 3: the tailnet as the edge
 
-**Objective.** Reach canopy from outside the tailnet, safely, and know which
-client is which.
+**Objective.** Make the multi-device experience first-class over the tailnet:
+know which client is which, and see and resume sessions across your devices.
+Tailscale already reaches every one of your devices from anywhere, so this phase
+is about presence and portability, not public exposure. A public edge stays
+optional and gated.
 
 **Scope.**
 
-- **Authenticated public reach.** Expose the backend through an authenticated
-  origin (tailscale Funnel or a reverse proxy at an origin such as
-  `canopy.beric.ca`) with an auth gate in front of every route and the SSE and
-  websocket streams. `CANOPY_PUBLIC_ORIGIN` already exists as a seam.
 - **Identity and presence.** The backend knows which clients are connected and
-  can show it (who has a shell open, who is running a job). This turns "many
-  devices, one me" into something the UI can reflect and, later, coordinate.
+  shows it (who has a shell open, who is running a job). This turns "many
+  devices, one me" into something the UI reflects and, later, coordinates.
 - **Session portability.** Start a shell or a run on one device, see and resume
   it from another, because both are clients of the same backend. Much of this
-  falls out of the shared-backend model; this phase makes it explicit and safe
-  across the public edge.
+  falls out of the shared-backend model; this phase makes it explicit.
+- **Optional public reach (deferred by default).** If a device that cannot run
+  Tailscale ever needs in, expose the backend through an authenticated origin
+  (tailscale Funnel or a reverse proxy at `canopy.beric.ca`, the seam
+  `CANOPY_PUBLIC_ORIGIN` already exists) with an auth gate in front of every
+  route, stream, and socket. Not built unless that need appears; the default is
+  tailnet-only.
 
 **Requirements.**
 
-- No route, stream, or socket is reachable off the tailnet without auth.
-- No user data in URLs or query strings across the public edge.
 - Presence is best-effort and never blocks the core.
+- If the optional public edge is ever enabled, no route, stream, or socket is
+  reachable through it without auth, and no user data goes in URLs or query
+  strings.
 
-**Deliverables.** The auth gate, the origin and Funnel configuration, a presence
-model in the store and a small UI for it, and cross-device session visibility.
+**Deliverables.** A presence model in the store and a small UI for it,
+cross-device session visibility, and (only if enabled) the auth gate and origin
+configuration.
 
 **Acceptance criteria.**
 
-- From off the tailnet, an unauthenticated request to any route, stream, or
-  socket is refused; an authenticated one behaves as on the tailnet.
-- A shell started on the laptop is visible and resumable from the phone.
+- A shell started on the laptop is visible and resumable from the phone, both on
+  the tailnet.
+- If the public edge is enabled, an unauthenticated request through it is
+  refused and an authenticated one behaves as on the tailnet.
 
 **Risks and mitigations.**
 
-- **Public exposure of a machine-driving tool.** The backend runs shells and
-  Claude with your login. The auth gate is load-bearing; design it before
-  exposing anything, and keep the tailnet-only mode as the default.
+- **A machine-driving tool on a public edge.** The backend runs shells, Claude,
+  and Codex with your logins. Keep tailnet-only as the default; the auth gate is
+  load-bearing and gets designed before anything is exposed.
 
 **Out of scope.** Durability, multi-user.
 
@@ -348,14 +373,17 @@ is enough. Decide with real usage from Phases 1 to 3.
   it tailnet-only by default (Phase 1 and 2). The Phase 2 helper and the Phase 3
   public edge are the two new attack surfaces; both get authenticated channels
   before they carry anything.
-- **Claude auth.** Every phase needs a logged-in `claude` in the container.
-  Mounted `~/.claude` on a persistent volume is the baseline; document the
-  refresh path.
-- **Repo sourcing.** Repos live on the mini (mounted) or arrive as ssh sources.
-  The choice per repo is a deployment decision, not a code change; both already
-  work.
-- **Networking.** tailscale sidecar for the tailnet; Funnel or an origin proxy
-  for beyond. `CANOPY_PUBLIC_ORIGIN` is the existing seam.
+- **AI auth.** Every phase needs a logged-in `claude` and `codex` in the
+  container, both on their subscriptions, no API keys. Mounted `~/.claude` and
+  `~/.codex` on persistent volumes are the baseline; refresh by logging in on the
+  mini when a token expires. The `jev` verdict evaluator needs a gateway API key,
+  so it stays off and `verdict` gates fall back to `ask`.
+- **Repo sourcing.** The canonical `~/dev` lives on the mini and is mounted; any
+  repo kept on another host arrives as an ssh source. Per repo, a deployment
+  decision, not a code change; both already work.
+- **Networking.** tailscale sidecar puts canopy on the tailnet, which is the
+  default and only edge. A public Funnel or origin proxy stays optional and
+  gated; `CANOPY_PUBLIC_ORIGIN` is the existing seam for it.
 - **Portability.** Keep `src/core/types.ts` browser-safe, keep the pure opener
   argv builders pure so they can move to the client helper unchanged, and keep
   the openers behind the capability gate so a non-desktop backend degrades
@@ -371,17 +399,37 @@ is enough. Decide with real usage from Phases 1 to 3.
   (Phase 3)
 - A canopy redeploy inside the container drops no shells. (Phase 4)
 
-## Open decisions
+## Decisions
 
-- **Repos: mounted or ssh sources?** Do the git trees live on the mini and get
-  bind-mounted, or does canopy on the mini scan the other hosts over ssh? Changes
-  the compose mounts, not the code.
-- **Claude auth: mount or in-container login?** Mount an authenticated
-  `~/.claude`, or log in once inside the container's volume.
-- **Helper transport (Phase 2):** loopback daemon, native-messaging host, or a
-  URL-scheme handler on the client.
-- **Public edge (Phase 3):** tailscale Funnel or a reverse proxy at an origin,
-  and which auth in front.
+Resolved 2026-09-21.
+
+- **Repos: mounted, with ssh sources as the escape hatch.** The canonical `~/dev`
+  workspace lives on the mini and is bind-mounted into the container, so git runs
+  at full speed, the file watcher gives live updates, and a shell's `git`,
+  `claude`, and `codex` all run in the one container where the logins live. Repos
+  you deliberately keep on another host stay there and come in as ssh sources
+  (re-read on a timer, no watcher, and that host needs its own git and CLIs). It
+  is a per-repo choice, not a lock-in; canopy already mixes both. You edit the
+  mounted tree from any client through VS Code Remote-SSH into the mini.
+- **AI auth: mounted subscription logins, no API keys.** Mount the mini user's
+  `~/.claude` and `~/.codex` into persistent volumes so `claude` uses the Max
+  subscription login and `codex` uses the ChatGPT/Codex subscription, both as
+  OAuth, never an API key. Refresh by logging in on the mini when a token
+  expires; no secret is baked into the image. Consequence: the `jev` verdict
+  evaluator needs a gateway API key, so it stays off and `verdict` gates fall
+  back to `ask`. That is consistent with no-API and is fine.
+- **Phase 2 helper: a loopback daemon.** A small authenticated HTTP server bound
+  to `127.0.0.1` on the client, holding a per-client token and an allowlist of
+  openers. The SPA calls it to run an opener on that machine, and the pure argv
+  builders in `openers.ts` move into it almost unchanged. Not a browser
+  extension, not a general URL scheme. VS Code is the exception: it keeps its own
+  `vscode-remote://` scheme and needs no daemon.
+- **Phase 3 edge: the tailnet is the edge.** Tailscale already reaches every one
+  of your devices from anywhere, so for a single-user setup there is nothing to
+  expose publicly. Presence and cross-device sessions are the real Phase 3 work
+  and happen over the tailnet. A public Funnel or origin stays optional and
+  behind an auth gate, built only if a device that cannot run Tailscale ever
+  needs in.
 
 ## Appendix: what containerizes and what is macOS-only
 
@@ -407,7 +455,7 @@ From an audit of the current code.
   client, host openers hidden except VS Code links, no durability.
 - Phase 2: client capability handshake and a local helper, desktop openers follow
   the client, backend runs no desktop command.
-- Phase 3: authenticated reach beyond the tailnet, presence, cross-device session
-  visibility.
+- Phase 3: the tailnet as the edge, presence and cross-device session
+  visibility, with public reach optional and gated.
 - Phase 4: durability, from process-restart survival in the container to
   reboot-time restore and Claude `--continue`.

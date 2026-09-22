@@ -162,6 +162,22 @@ export interface Repo {
  *  be run against it, so status, diffs, openers and runs all refuse. */
 export const isForge = (r: Pick<Repo, "forge">): boolean => r.forge !== undefined;
 
+/** What this canopy backend can do for the clients on it, so the UI hides
+ *  controls a headless or non-macOS backend cannot perform rather than
+ *  showing them dead. A shared backend in a Linux container has `openers`
+ *  false: the desktop openers and the launcher are macOS `open`/`osascript`
+ *  and cannot run there. The in-browser core (shells, runs, git, search) is
+ *  unaffected; it belongs to wherever the repo lives, which is the backend. */
+export interface Backend {
+  /** the backend host is a macOS desktop, so the desktop openers (kitty,
+   *  Terminal, Finder, agent, herdr) and the launcher work; false in a
+   *  container, where the UI hides them */
+  openers: boolean;
+  /** the ssh alias a client uses to reach this backend for VS Code
+   *  Remote-SSH (from `CANOPY_SSH_HOST`), or null when unset */
+  sshHost: string | null;
+}
+
 export interface ScanResult {
   /** the launch root */
   root: string;
@@ -169,6 +185,8 @@ export interface ScanResult {
   sources: SourceState[];
   repos: Repo[];
   scannedAt: number;
+  /** what this backend can do for its clients */
+  backend: Backend;
 }
 
 export interface Workspace {

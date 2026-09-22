@@ -11,6 +11,7 @@ canopy — multi-repo git cockpit (Bun + TS server, React 19 + Vite SPA, full CL
 - Gates: `bun run typecheck && bun run lint && bun test && bun run build` — all four before calling anything done. Build is required: the server serves `dist/web`, so a stale build shows stale UI.
 - Single test file: `bun test src/core/git.test.ts`
 - Dev: `bun run dev` (API :7850) + `bun run dev:web` (Vite :7851, proxies /api). Production mode is the built SPA served by the Bun server on :7850 only.
+- Shared-backend mode (see `docs/prd-shared-backend.md`, `docs/deploy.md`): canopy can run headless in a container (`Dockerfile`, `docker-compose.yml` with a tailscale sidecar) as one always-on backend for every client on the tailnet. `hostOpeners()`/`backendCaps()` in `core/openers.ts` put a `Backend` (`openers`, `sshHost`) on `ScanResult`: when the host is not a mac desktop the server refuses the openers, file-open and the launcher with `NO_DESKTOP`, and the UI hides the desktop openers, agent, herdr and the launch section and renders VS Code as a `vscode-remote://ssh-remote+$CANOPY_SSH_HOST` link. `CANOPY_NO_DESKTOP=1` forces this on a mac; `CANOPY_SSH_HOST` names the ssh alias for the VS Code link; `canopy ui --no-open` skips opening a browser. The desktop openers and the launcher (`core/openers.ts`, `core/launcher.ts`) stay macOS-only by design; the in-browser core (shells, runs, git, search, diffs, history) is backend-host and works anywhere.
 
 ## Architecture
 

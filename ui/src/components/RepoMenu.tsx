@@ -51,6 +51,10 @@ export function RepoMenu({
   const openTerm = useStore((s) => s.openTerm);
   const agent = useStore((s) => agentFor(s, repo));
   const launch = useStore((s) => launchFor(s, repo));
+  // The desktop openers and the launcher run on the backend host; a headless
+  // backend (a container) cannot, so they are hidden there. VS Code is kept as
+  // a client-side Remote-SSH link that the browser opens on its own machine.
+  const backend = useStore((s) => s.backend);
   const active = useStore((s) => activeRunFor(s, repo.id));
   const workflows = useStore((s) => s.workflows[repo.id]);
   const loadWorkflows = useStore((s) => s.loadWorkflows);
@@ -379,26 +383,30 @@ export function RepoMenu({
                   </button>
                 );
               })}
-              <button
-                type="button"
-                role="menuitem"
-                className="menu-item"
-                title="Start an interactive Claude Code session in a terminal at this repo"
-                onClick={() => void openIn("agent")}
-              >
-                <span className="menu-text">agent</span>
-                <span className="menu-fact">interactive, in a terminal</span>
-              </button>
-              <button
-                type="button"
-                role="menuitem"
-                className="menu-item"
-                title="Open this repo as a herdr workspace with Claude Code running in it"
-                onClick={() => void openIn("herdr")}
-              >
-                <span className="menu-text">herdr</span>
-                <span className="menu-fact">a workspace in herdr</span>
-              </button>
+              {backend.openers && (
+                <>
+                  <button
+                    type="button"
+                    role="menuitem"
+                    className="menu-item"
+                    title="Start an interactive Claude Code session in a terminal at this repo"
+                    onClick={() => void openIn("agent")}
+                  >
+                    <span className="menu-text">agent</span>
+                    <span className="menu-fact">interactive, in a terminal</span>
+                  </button>
+                  <button
+                    type="button"
+                    role="menuitem"
+                    className="menu-item"
+                    title="Open this repo as a herdr workspace with Claude Code running in it"
+                    onClick={() => void openIn("herdr")}
+                  >
+                    <span className="menu-text">herdr</span>
+                    <span className="menu-fact">a workspace in herdr</span>
+                  </button>
+                </>
+              )}
               <button
                 type="button"
                 role="menuitem"
@@ -412,33 +420,37 @@ export function RepoMenu({
                 <span className="menu-text">agent settings…</span>
                 <span className="menu-fact">{describeAgent(agent)}</span>
               </button>
-              <div className="menu-label">launch</div>
-              <button
-                type="button"
-                role="menuitem"
-                className="menu-item"
-                title="Released builds installed here, pull requests built here, and this checkout, each launched with a click"
-                onClick={() => {
-                  setOpen(false);
-                  showLaunch(repo.id);
-                }}
-              >
-                <span className="menu-text">builds & releases</span>
-                <span className="menu-fact">in the panel</span>
-              </button>
-              <button
-                type="button"
-                role="menuitem"
-                className="menu-item"
-                title="Build and run lines, and which release asset is for this machine"
-                onClick={() => {
-                  setOpen(false);
-                  editLaunch(repo.id);
-                }}
-              >
-                <span className="menu-text">launch settings…</span>
-                <span className="menu-fact">{describeLaunch(launch)}</span>
-              </button>
+              {backend.openers && (
+                <>
+                  <div className="menu-label">launch</div>
+                  <button
+                    type="button"
+                    role="menuitem"
+                    className="menu-item"
+                    title="Released builds installed here, pull requests built here, and this checkout, each launched with a click"
+                    onClick={() => {
+                      setOpen(false);
+                      showLaunch(repo.id);
+                    }}
+                  >
+                    <span className="menu-text">builds & releases</span>
+                    <span className="menu-fact">in the panel</span>
+                  </button>
+                  <button
+                    type="button"
+                    role="menuitem"
+                    className="menu-item"
+                    title="Build and run lines, and which release asset is for this machine"
+                    onClick={() => {
+                      setOpen(false);
+                      editLaunch(repo.id);
+                    }}
+                  >
+                    <span className="menu-text">launch settings…</span>
+                    <span className="menu-fact">{describeLaunch(launch)}</span>
+                  </button>
+                </>
+              )}
               <div className="menu-label">open in</div>
               <button
                 type="button"
@@ -467,19 +479,35 @@ export function RepoMenu({
                   <span className="menu-fact">browser ↗</span>
                 </a>
               )}
-              <div className="menu-row">
-                {OPENERS.map((app) => (
-                  <button
-                    key={app}
-                    type="button"
+              {backend.openers ? (
+                <div className="menu-row">
+                  {OPENERS.map((app) => (
+                    <button
+                      key={app}
+                      type="button"
+                      role="menuitem"
+                      className="mini"
+                      onClick={() => void openIn(app)}
+                    >
+                      {app}
+                    </button>
+                  ))}
+                </div>
+              ) : (
+                !repo.host &&
+                backend.sshHost && (
+                  <a
                     role="menuitem"
-                    className="mini"
-                    onClick={() => void openIn(app)}
+                    className="menu-item"
+                    href={`vscode-remote://ssh-remote+${backend.sshHost}${repo.path}`}
+                    title="Open this repo in VS Code over Remote-SSH on your own machine"
+                    onClick={() => setOpen(false)}
                   >
-                    {app}
-                  </button>
-                ))}
-              </div>
+                    <span className="menu-text">VS Code</span>
+                    <span className="menu-fact">remote ↗</span>
+                  </a>
+                )
+              )}
               </>
             )}
           </div>,

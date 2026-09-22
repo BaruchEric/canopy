@@ -1,0 +1,61 @@
+# canopy as a shared backend on the tailnet. Two services: a tailscale node
+# and canopy sharing its network, so canopy is reachable at the tailnet name
+# from any of your devices. See docs/deploy.md for the .env and first run.
+
+services:
+  # The tailnet node. canopy shares its network namespace, so the tailnet IP
+  # reaches canopy on :7850 with no ports published to the host.
+  ts:
+    image: tailscale/tailscale:latest
+    hostname: canopy
+    environment:
+      - TS_AUTHKEY=${TS_AUTHKEY}
+      - TS_STATE_DIR=/var/lib/tailscale
+      - TS_USERSPACE=false
+    volumes:
+      - ts-state:/var/lib/tailscale
+    devices:
+      - /dev/net/tun:/dev/net/tun
+    cap_add:
+      - net_admin
+      - sys_module
+    restart: unless-stopped
+
+  canopy:
+    build: .
+    depends_on:
+      - ts
+    # share the tailnet node's network: no host ports, reachable as the
+    # tailnet name (hostname above) on :7850
+    network_mode: service:ts
+    environment:
+      - CANOPY_CONFIG_DIR=/config
+      # how a client reaches THIS host over ssh for VS Code Remote-SSH; the
+      # repo tree is mounted at the same path it has on the host (below), so
+      # the link resolves on the host too
+      - CANOPY_SSH_HOST=${CANOPY_SSH_HOST:-canopy}
+      - CANOPY_TMUX=1
+    volumes:
+      # the repos to scan, mounted at the SAME path they have on the host so
+      # git in the container and VS Code Remote-SSH on the host agree
+      - ${DEV_ROOT:-/home/eric/dev}:${DEV_ROOT:-/home/eric/dev}
+      # durable canopy config and the tmux socket
+      - canopy-config:/config
+      # subscription logins, no API keys; refreshed by logging in on the host
+      - ${HOST_HOME:-/home/eric}/.claude:/root/.claude
+      - ${HOST_HOME:-/home/eric}/.codex:/root/.codex
+      # keys and config for any repos kept on other hosts (ssh sources)
+      - ${HOST_HOME:-/home/eric}/.ssh:/root/.ssh:ro
+    command:
+      - bun
+      - bin/canopy.ts
+      - ui
+      - ${DEV_ROOT:-/home/eric/dev}
+      - --port
+      - "7850"
+      - --no-open
+    restart: unless-stopped
+
+volumes:
+  ts-state:
+  canopy-config:

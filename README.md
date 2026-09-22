@@ -10,6 +10,7 @@ The write-capable, many-repo complement to [diffscope](../diffscope) (single-rep
 - **How:** a Bun server scans for `.git` dirs, shells out to `git`, watches the root recursively, and streams updates to a React SPA over SSE. Commit messages come from the `claude` CLI (heuristic fallback). Whole jobs (commit, push, deploy, anything you type) drive the same CLI over stdio, with permission prompts and questions relayed to the browser.
 - **Stack:** Bun + TypeScript (strict) server, React 19 + Vite + Zustand SPA, zero CSS frameworks. `bun test`, `tsc --noEmit`, `oxlint`.
 - **Run:** `bun install && bun run build && bun link`, then `canopy ui ~/dev`.
+- **Shared backend:** canopy can also run headless in a container as one always-on backend for every device on your tailnet, using your `claude` and `codex` subscriptions. The in-browser core (shells, Claude, git, search) is the same from any device; the macOS desktop openers and the launcher are hidden there, and VS Code becomes a client-side Remote-SSH link. See `docs/deploy.md` and `docs/prd-shared-backend.md`.
 
 ## Project library and dev servers
 

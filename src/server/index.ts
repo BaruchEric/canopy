@@ -39,7 +39,7 @@ import { hasGatewayKey, jev } from "../core/jev";
 import { normalizeAgent } from "../core/agent";
 import { normalizeLaunch } from "../core/launch";
 import { Launcher, LauncherError } from "../core/launcher";
-import { isOpenerId, openFile, openGroup, openIn } from "../core/openers";
+import { backendCaps, hostOpeners, isOpenerId, openFile, openGroup, openIn } from "../core/openers";
 import { mapPool, searchRepo } from "../core/search";
 import { findWorkflow, loadWorkflows } from "../core/workflows";
 import {
@@ -478,6 +478,11 @@ const WATCH_GIT_HINTS = ["HEAD", "index", "ORIG_HEAD", "refs"];
  *  watcher on another host, and a scan of a whole tree is too much to repeat. */
 const REMOTE_REFRESH = 5 * 60_000;
 
+/** what a headless backend answers when asked to run a desktop opener or the
+ *  launcher: they are macOS GUI commands, so a container cannot do them, and
+ *  the client's own machine is where such a thing belongs */
+const NO_DESKTOP = "this canopy backend has no desktop; openers run on your own machine";
+
 /** How long after start the first fetch and pull request pass runs. */
 const ACTIVITY_DELAY = 3_000;
 
@@ -495,6 +500,7 @@ function rebuildResult(state: ServerState, repos: Repo[]): void {
     // request counts ride along from the last activity pass.
     repos: linkPulls(linkForgeClones([...repos].sort(bySource(order))), state.pulls),
     scannedAt: Date.now(),
+    backend: backendCaps(),
   };
 }
 
@@ -1096,6 +1102,7 @@ async function handleApi(
   if (path === "/api/workspaces/open" && method === "POST") {
     const b = (await req.json()) as { name: string; app: string };
     if (!isOpenerId(b.app)) return json({ error: "unknown app" }, 400);
+    if (!hostOpeners()) return json({ error: NO_DESKTOP }, 400);
     const cfg = await loadConfig();
     const ws = cfg.workspaces.find((w) => w.name === b.name);
     if (!ws) return json({ error: "unknown workspace" }, 404);
@@ -1156,6 +1163,7 @@ async function handleApi(
         return json({ error: "file must be a path in the repo" }, 400);
       }
       const line = typeof b.line === "number" && Number.isInteger(b.line) && b.line > 0 ? b.line : 1;
+      if (!hostOpeners()) return json({ error: NO_DESKTOP }, 400);
       await openFile(repo.path, b.file, line);
       return json({ ok: true });
     }
@@ -1237,6 +1245,7 @@ async function handleApi(
     if (method === "POST" && action === "open") {
       const b = (await req.json()) as { app: string; tab?: unknown };
       if (!isOpenerId(b.app)) return json({ error: "unknown app" }, 400);
+      if (!hostOpeners()) return json({ error: NO_DESKTOP }, 400);
       await openIn(b.app, repo.path, agentFor(await loadConfig(), repo.path), {
         tab: b.tab === true,
       });
@@ -1268,6 +1277,7 @@ async function handleApi(
       return json(await state.launcher.builds(repo, launchFor(await loadConfig(), repo.path)));
     }
     if (method === "POST" && action === "install") {
+      if (!hostOpeners()) return json({ error: NO_DESKTOP }, 400);
       const b = (await req.json()) as { tag?: unknown; asset?: unknown };
       if (typeof b.tag !== "string" || !b.tag) return json({ error: "missing tag" }, 400);
       const asset = typeof b.asset === "string" && b.asset ? b.asset : null;
@@ -1275,6 +1285,7 @@ async function handleApi(
       return json(job, 201);
     }
     if (method === "POST" && action === "build") {
+      if (!hostOpeners()) return json({ error: NO_DESKTOP }, 400);
       const b = (await req.json()) as { pr?: unknown };
       const ref =
         b.pr === undefined || b.pr === null
@@ -1286,6 +1297,7 @@ async function handleApi(
       return json(await state.launcher.build(repo, ref, launchFor(await loadConfig(), repo.path)), 201);
     }
     if (method === "POST" && action === "launch") {
+      if (!hostOpeners()) return json({ error: NO_DESKTOP }, 400);
       const b = (await req.json()) as { build?: unknown };
       if (typeof b.build !== "string") return json({ error: "missing build" }, 400);
       return json(await state.launcher.launch(repo, b.build, launchFor(await loadConfig(), repo.path)));
@@ -1436,7 +1448,7 @@ export async function startServer(opts: {
   const state: ServerState = {
     root,
     sources: [runtime(launchSource(root)), ...extras.map((s) => runtime({ ...s, launch: false }))],
-    result: { root, sources: [], repos: [], scannedAt: 0 },
+    result: { root, sources: [], repos: [], scannedAt: 0, backend: backendCaps() },
     ignore: [...DEFAULT_IGNORE, ...cfg.ignore],
     access: new Map(),
     clients: new Set(),

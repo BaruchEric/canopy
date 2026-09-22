@@ -5,7 +5,7 @@ import { exec } from "./exec";
 import { openHerdr } from "./herdr";
 import { parseLocator, shellLine, shellQuote } from "./host";
 import { configDir } from "./store";
-import { DEFAULT_AGENT, OPENER_IDS, type AgentSettings, type OpenerId } from "./types";
+import { DEFAULT_AGENT, OPENER_IDS, type AgentSettings, type Backend, type OpenerId } from "./types";
 
 export { OPENER_IDS, type OpenerId };
 
@@ -452,3 +452,20 @@ export async function openGroup(
 export function isOpenerId(v: string): v is OpenerId {
   return (OPENER_IDS as readonly string[]).includes(v);
 }
+
+/** Whether this backend host can run the desktop openers and the launcher.
+ *  They are macOS `open`/`osascript` commands, so only a mac desktop can; a
+ *  Linux container (the shared backend) cannot, and both the UI and the open
+ *  routes hide or refuse them there. VS Code becomes a client-side Remote-SSH
+ *  link instead, which the browser opens wherever it runs. `CANOPY_NO_DESKTOP=1`
+ *  forces the headless behaviour on a mac, to try the shared-backend UI. */
+export const hostOpeners = (): boolean =>
+  process.env["CANOPY_NO_DESKTOP"] !== "1" && process.platform === "darwin";
+
+/** What this backend advertises to its clients: whether the desktop openers
+ *  work here, and the ssh alias a client reaches it at for VS Code
+ *  Remote-SSH (`CANOPY_SSH_HOST`, unset means no VS Code link). */
+export const backendCaps = (): Backend => ({
+  openers: hostOpeners(),
+  sshHost: process.env.CANOPY_SSH_HOST || null,
+});
