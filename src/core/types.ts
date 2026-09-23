@@ -155,6 +155,7 @@ export interface Repo {
   pulls?: PullCount;
   /** set only on a repo that lives on a forge and nowhere here */
   forge?: ForgeRepo;
+  peers?: PeerState;
   error?: string;
 }
 
@@ -259,6 +260,59 @@ export interface Workspace {
   repos: string[];
 }
 
+export type PeerRole = "git" | "mirror";
+export type PeerSync = "off" | "dry" | "on";
+
+/** A machine this one pulls from. `alias` is an ssh_config alias; null is a
+ *  folder on this machine (tests, and a peer mounted locally). `root` is the
+ *  peer's workspace root: home-relative unless absolute. */
+export interface Peer {
+  name: string;
+  alias: string | null;
+  root: string;
+  role: PeerRole;
+  /** globs over repo ids; absent means every repo */
+  repos?: string[];
+}
+
+export interface PeerSeen {
+  name: string;
+  ok: boolean;
+  at: number;
+  error?: string;
+}
+
+/** One branch where this repo and a peer disagree. */
+export interface PeerBranch {
+  branch: string;
+  peer: string;
+  ahead: number;
+  behind: number;
+}
+
+export interface PeerWip {
+  peer: string;
+  branch: string;
+  at: number;
+  parent: string;
+  hash: string;
+  files: number;
+}
+
+export interface PeerState {
+  moved: { branch: string; from: string; to: string; peer: string }[];
+  diverged: PeerBranch[];
+  wip: PeerWip[];
+  ownWip?: { branch: string; at: number };
+  peerOnly: { peer: string; branch: string }[];
+  /** no git peer has this repo */
+  onlyHere: boolean;
+  /** what dry mode would have moved, instead of `moved` */
+  would?: { branch: string; to: string; peer: string }[];
+  error?: string;
+  at: number;
+}
+
 export interface CanopyConfig {
   port: number;
   maxDepth: number;
@@ -283,6 +337,14 @@ export interface CanopyConfig {
    *  shell printed is whatever it printed, secrets included, and this keeps
    *  it in a file that outlives the process. */
   keepShells: boolean;
+  /** this machine's name among its peers; null until set */
+  self: string | null;
+  /** the machines this one pulls from (see docs/superpowers/specs/2026-09-23-peer-sync-design.md) */
+  peers: Peer[];
+  /** whether the peer pass runs: off, dry (report only) or on */
+  peerSync: PeerSync;
+  /** ignored files copied from a peer when a repo lacks them (names or simple globs) */
+  seed: string[];
 }
 
 /* ---------- the launcher: release builds and pull requests, run here ---------- */
@@ -631,7 +693,8 @@ export type ServerEvent =
   | { type: "devices"; devices: Device[] }
   /** the shells left behind by a backend that went down, whenever the list
    *  changes: one is kept, restored or forgotten */
-  | { type: "kept"; kept: KeptShell[] };
+  | { type: "kept"; kept: KeptShell[] }
+  | { type: "peers"; seen: PeerSeen[] };
 
 export type BuildChange = "installed" | "built" | "launched" | "exited" | "removed";
 

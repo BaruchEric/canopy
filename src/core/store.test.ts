@@ -175,4 +175,22 @@ describe("config store", () => {
     const cfg = await loadConfig();
     expect(cfg.recentRoots.slice(0, 2)).toEqual(["/a", "/b"]);
   });
+
+  test("peer fields default and repair", async () => {
+    const path = join(dir, "config.json");
+    await writeFile(
+      path,
+      JSON.stringify({
+        self: "mac",
+        peers: [{ name: "mini", alias: "mini-peer", root: "dev" }],
+        peerSync: "loud",
+        seed: "x",
+      }),
+    );
+    const cfg = await loadConfig();
+    expect(cfg.self).toBe("mac");
+    expect(cfg.peers).toEqual([{ name: "mini", alias: "mini-peer", root: "dev", role: "git" }]);
+    expect(cfg.peerSync).toBe("off");
+    expect(cfg.seed).toEqual([".env", ".env.local"]);
+  });
 });

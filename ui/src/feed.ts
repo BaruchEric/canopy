@@ -440,6 +440,8 @@ export function describeEvent(
       }
       return lines;
     }
+    case "peers":
+      return [];
   }
 }
 

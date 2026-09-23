@@ -3,6 +3,7 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 import { isDefaultAgent, normalizeAgent } from "./agent";
 import { isDefaultLaunch, normalizeLaunch } from "./launch";
+import { DEFAULT_SEED, PEER_SYNC, isPeerName, normalizePeers, normalizeSeed } from "./peers";
 import {
   DEFAULT_AGENT,
   DEFAULT_LAUNCH,
@@ -31,6 +32,10 @@ const defaults = (): CanopyConfig => ({
   launchers: {},
   fetch: true,
   keepShells: false,
+  self: null,
+  peers: [],
+  peerSync: "off",
+  seed: [...DEFAULT_SEED],
 });
 
 /** Every stored entry re-validated; one left at the defaults is dropped, so
@@ -103,6 +108,10 @@ function normalize(parsed: Partial<CanopyConfig>): CanopyConfig {
     launchers: normalizeLaunchers(cfg.launchers),
     fetch: typeof cfg.fetch === "boolean" ? cfg.fetch : base.fetch,
     keepShells: typeof cfg.keepShells === "boolean" ? cfg.keepShells : base.keepShells,
+    self: typeof cfg.self === "string" && isPeerName(cfg.self) ? cfg.self : null,
+    peers: normalizePeers(cfg.peers),
+    peerSync: PEER_SYNC.includes(cfg.peerSync) ? cfg.peerSync : "off",
+    seed: normalizeSeed(cfg.seed),
   };
 }
 
