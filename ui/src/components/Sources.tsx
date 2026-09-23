@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import type { FormEvent } from "react";
 import { api } from "../api";
 import { useStore } from "../store";
+import { useFitPop } from "../pop";
 import type { Listing, SourceState } from "../../../src/core/types";
 import { Seg } from "./Seg";
 
@@ -414,6 +415,7 @@ export function SourcesMenu() {
   const setSetting = useStore((s) => s.setSetting);
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
+  useFitPop(ref, open);
 
   useEffect(() => {
     if (!open) return;

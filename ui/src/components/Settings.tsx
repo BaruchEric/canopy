@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { useShallow } from "zustand/react/shallow";
 import { capsFor, useStore } from "../store";
+import { useFitPop } from "../pop";
 import { deviceName } from "../../../src/core/presence";
 import { Seg } from "./Seg";
 
@@ -58,6 +59,7 @@ export function SettingsMenu() {
   const setKeeping = useStore((s) => s.setKeeping);
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
+  useFitPop(ref, open);
 
   useEffect(() => {
     if (!open) return;
@@ -191,7 +193,7 @@ export function SettingsMenu() {
             <p className="settings-hint">
               A backend setting, not this browser's. Off, the shells go with the machine. On, the backend writes every shell's screen and last 2000
               lines to disk each minute, which is whatever the shell printed, secrets included, and forgets a record a week later. What comes back is a
-              new shell at the same repo with the old history ahead of it: the processes are gone, so a shell that had Claude in it is offered a
+              new shell at the same repo with the old history ahead of it: the processes are gone, so a shell that had Claude in it is offered a{" "}
               <code>claude --continue</code> instead.
             </p>
           </section>

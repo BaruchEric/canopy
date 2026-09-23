@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { api } from "../api";
 import { clientId } from "../client";
 import { useStore } from "../store";
+import { useFitPop } from "../pop";
 import type { ClaudeSession } from "../../../src/core/types";
 
 /** "now", "5m", "3h", "2d": how long ago */
@@ -39,6 +40,7 @@ export function ShellsChip() {
   const [busy, setBusy] = useState("");
   const [error, setError] = useState("");
   const ref = useRef<HTMLDivElement>(null);
+  useFitPop(ref, open);
 
   // Claude Code only keeps conversations for folders on the backend itself
   const local = useMemo(

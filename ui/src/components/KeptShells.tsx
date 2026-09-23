@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { useStore } from "../store";
+import { useFitPop } from "../pop";
 
 /** "2m", "3h", "2d": how long ago a kept shell was last written out */
 function ago(at: number, now: number): string {
@@ -29,6 +30,7 @@ export function KeptShells() {
   const [error, setError] = useState("");
   const [now, setNow] = useState(() => Date.now());
   const ref = useRef<HTMLDivElement>(null);
+  useFitPop(ref, open);
 
   useEffect(() => {
     if (!open) return;

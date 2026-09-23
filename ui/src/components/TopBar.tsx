@@ -194,64 +194,68 @@ export function TopBar() {
 
       <span className="spacer" />
 
-      <button
-        type="button"
-        className={feedOpen ? "icon-btn on" : "icon-btn"}
-        aria-pressed={feedOpen}
-        title={feedOpen ? "Hide the event feed (e)" : "Show the event feed: every source's events as they happen (e)"}
-        aria-label="Event feed"
-        onClick={toggleFeed}
-      >
-        <svg
-          width="15"
-          height="15"
-          viewBox="0 0 24 24"
-          fill="none"
-          stroke="currentColor"
-          strokeWidth="2"
-          strokeLinecap="round"
-          strokeLinejoin="round"
-          aria-hidden="true"
+      {/* feed, search and select wrap as one, so a narrow bar never splits them */}
+      <span className="topbar-group">
+        <button
+          type="button"
+          className={feedOpen ? "icon-btn on" : "icon-btn"}
+          aria-pressed={feedOpen}
+          title={feedOpen ? "Hide the event feed (e)" : "Show the event feed: every source's events as they happen (e)"}
+          aria-label="Event feed"
+          onClick={toggleFeed}
         >
-          <path d="M4 6h16" />
-          <path d="M4 12h10" />
-          <path d="M4 18h13" />
-          <circle cx="19" cy="17" r="2" fill="currentColor" stroke="none" />
-        </svg>
-      </button>
+          <svg
+            width="15"
+            height="15"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="2"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+            aria-hidden="true"
+          >
+            <path d="M4 6h16" />
+            <path d="M4 12h10" />
+            <path d="M4 18h13" />
+            <circle cx="19" cy="17" r="2" fill="currentColor" stroke="none" />
+          </svg>
+        </button>
 
-      <button
-        type="button"
-        className="icon-btn"
-        title="Search file contents across the repos in view (⌘⇧F)"
-        aria-label="Search file contents"
-        onClick={openSearch}
-      >
-        <svg
-          width="15"
-          height="15"
-          viewBox="0 0 24 24"
-          fill="none"
-          stroke="currentColor"
-          strokeWidth="2"
-          strokeLinecap="round"
-          strokeLinejoin="round"
-          aria-hidden="true"
+        <button
+          type="button"
+          className="icon-btn"
+          title="Search file contents across the repos in view (⌘⇧F)"
+          aria-label="Search file contents"
+          onClick={openSearch}
         >
-          <circle cx="11" cy="11" r="7" />
-          <path d="m20 20-3.5-3.5" />
-        </svg>
-      </button>
+          <svg
+            width="15"
+            height="15"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="2"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+            aria-hidden="true"
+          >
+            <circle cx="11" cy="11" r="7" />
+            <path d="m20 20-3.5-3.5" />
+          </svg>
+        </button>
 
-      <button
-        type="button"
-        className={selecting ? "pill on" : "pill"}
-        aria-pressed={selecting}
-        title="Pick repos to run one workflow on all of them (x)"
-        onClick={() => setSelecting(!selecting)}
-      >
-        {selecting ? `${picked} picked` : "select"}
-      </button>
+        <button
+          type="button"
+          className={selecting ? "pill on" : "pill"}
+          aria-pressed={selecting}
+          title="Pick repos to run one workflow on all of them (x)"
+          onClick={() => setSelecting(!selecting)}
+        >
+          {selecting ? `${picked} picked` : "select"}
+        </button>
+      </span>
+      <span className="topbar-break" aria-hidden="true" />
 
       <Seg
         className="seg-sort"
@@ -307,19 +311,22 @@ export function TopBar() {
         <kbd aria-hidden="true">/</kbd>
       </label>
 
-      <button
-        type="button"
-        className="mini"
-        onClick={() => void doRescan()}
-        disabled={scanning}
-      >
-        {scanning ? "scanning…" : "rescan"}
-      </button>
+      {/* rescan and the chips keep to the right end of whichever row they land on */}
+      <span className="topbar-group topbar-tail">
+        <button
+          type="button"
+          className="mini"
+          onClick={() => void doRescan()}
+          disabled={scanning}
+        >
+          {scanning ? "scanning…" : "rescan"}
+        </button>
 
-      <KeptShells />
-      <ShellsChip />
-      <DevicesChip />
-      <SettingsMenu />
+        <KeptShells />
+        <ShellsChip />
+        <DevicesChip />
+        <SettingsMenu />
+      </span>
     </header>
   );
 }

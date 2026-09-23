@@ -184,16 +184,35 @@ body.resizing {
 }
 
 /* ---------- top bar ---------- */
+/* rows are spaced by each item's own margin rather than a row gap, so the
+   zero-height break between the two rows adds no space of its own */
 .topbar {
   display: flex;
   align-items: center;
   flex-wrap: wrap;
-  gap: 8px 12px;
+  gap: 0 12px;
   min-height: 46px;
-  padding: 6px 14px;
+  padding: 2px 14px;
   border-bottom: 1px solid var(--hair);
   background: var(--bark1);
   box-shadow: inset 0 1px 0 var(--sheen);
+}
+/* controls that wrap as one unit; the tail sits at the right of its row */
+.topbar-group {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px 12px;
+}
+.topbar-tail {
+  margin-left: auto;
+}
+.topbar > :not(.topbar-break) {
+  margin-block: 4px;
+}
+/* the second row starts here at every width */
+.topbar-break {
+  flex-basis: 100%;
+  height: 0;
 }
 .wordmark {
   display: inline-flex;
@@ -236,11 +255,17 @@ body.resizing {
 .tab-count.rust {
   color: var(--rust);
 }
+/* A zero basis lets the tabs give way (and scroll) rather than push the
+   feed, search and select down a row; max-content keeps them from taking
+   more than they need, so the spacer still has the rest. */
 .ws-tabs {
   display: flex;
   align-items: center;
   gap: 4px;
   overflow-x: auto;
+  flex: 1000 1 0;
+  min-width: 120px;
+  max-width: max-content;
 }
 .ws-tab-wrap {
   display: inline-flex;
@@ -403,6 +428,7 @@ body.resizing {
   right: 0;
   z-index: 20;
   width: 340px;
+  max-width: calc(100vw - 16px);
   padding: 4px 0 8px;
   background: var(--float);
   border: 1px solid var(--float-edge);
@@ -421,6 +447,12 @@ body.resizing {
 }
 .settings-row + .settings-row {
   border-top: 1px solid var(--hair);
+}
+/* a choice with more options than the popover is wide wraps inside it */
+.settings-pop .seg {
+  flex-wrap: wrap;
+  max-width: 100%;
+  border-radius: 14px;
 }
 .settings-row .panel-label {
   margin: 0;
@@ -632,6 +664,7 @@ body.resizing {
 }
 .src-fields {
   display: flex;
+  flex-wrap: wrap;
   gap: 6px;
   align-items: center;
 }

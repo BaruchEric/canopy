@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { useShallow } from "zustand/react/shallow";
 import { countFacets, FILTER_INFO, REPO_FILTERS } from "../filters";
 import { activeFilterCount, scopedRepos, useStore } from "../store";
+import { useFitPop } from "../pop";
 
 /** Toggleable facet chips behind one pill. The pill counts what is lit so a
  *  narrowed grove never looks like a small one. */
@@ -15,6 +16,7 @@ export function FilterMenu() {
   const active = useStore(activeFilterCount);
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
+  useFitPop(ref, open);
   const facets = useMemo(() => countFacets(repos), [repos]);
 
   useEffect(() => {

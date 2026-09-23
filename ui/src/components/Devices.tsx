@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { clientId } from "../client";
 import { useStore } from "../store";
+import { useFitPop } from "../pop";
 import type { Device, TermInfo } from "../../../src/core/types";
 
 /** what a device's platform word reads as in the list */
@@ -43,6 +44,7 @@ export function DevicesChip() {
   const [open, setOpen] = useState(false);
   const [now, setNow] = useState(() => Date.now());
   const ref = useRef<HTMLDivElement>(null);
+  useFitPop(ref, open);
   const me = clientId();
 
   useEffect(() => {
