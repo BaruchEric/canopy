@@ -1,5 +1,6 @@
 import type {
   AgentSettings,
+  ClaudeSession,
   Device,
   HelperInfo,
   ClientInfo,
@@ -28,6 +29,7 @@ import type {
   RunAction,
   RunAnswer,
   ScanResult,
+  ShellPlace,
   ServerEvent,
   SourceInput,
   SourceState,
@@ -183,6 +185,15 @@ export const api = {
     req<TermInfo>("/api/terms/restore", { method: "POST", body: JSON.stringify({ term: id, cols, rows, resume }) }),
   /** drops what a kept shell left, history and all */
   forgetShell: (id: string) => req<{ ok: true }>(`/api/terms/kept?term=${encodeURIComponent(id)}`, { method: "DELETE" }),
+  /** the Claude Code conversations started at a repo on the backend, newest first */
+  claudeSessions: (repoId: string) => req<ClaudeSession[]>(`/api/repos/resumable?${rq(repoId)}`),
+  /** a new shell at the repo under `term`, with that conversation picked
+   *  back up in it */
+  resumeClaude: (repoId: string, term: string, place: ShellPlace, session: string, cols = 80, rows = 24) =>
+    req<TermInfo>(`/api/repos/resume?${rq(repoId)}`, {
+      method: "POST",
+      body: JSON.stringify({ term, place, session, cols, rows }),
+    }),
   /** turns the recording on or off for this backend */
   setKeeping: (on: boolean) => req<{ keeping: boolean }>("/api/keep", { method: "POST", body: JSON.stringify({ on }) }),
   runs: () => req<Run[]>("/api/runs"),

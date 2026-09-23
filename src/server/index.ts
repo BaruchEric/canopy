@@ -44,6 +44,7 @@ import { backendCaps, hostOpeners, isOpenerId, openFile, openGroup, openIn } fro
 import { clientKey, HELPER_PING, HELPER_TIMEOUT, isLoopback, isLoopbackHost, parseDefaultGateway, parseHelperQuery, parseHelperReply, reachFrom, staleHelpers, type HelperIntent } from "../core/helper";
 import { devicesOf, parseStream, type Stream } from "../core/presence";
 import { mapPool, searchRepo } from "../core/search";
+import { claudeSessions, hasClaudeSession, isSessionId, resumeLine } from "../core/sessions";
 import { findWorkflow, loadWorkflows } from "../core/workflows";
 import {
   launchSource,
@@ -501,6 +502,46 @@ async function restoreTerm(state: ServerState, id: string, size: TermSize, resum
   }
   tellTerms(state);
   await refreshKept(state);
+  return termInfo(state, live);
+}
+
+/** A new shell at a repo under the browser's name, with a Claude Code
+ *  conversation from that repo picked back up in it: `claude --resume`
+ *  with the repo's agent settings, typed in once the shell is up, so
+ *  quitting Claude leaves the shell at the repo. The browser's tab then
+ *  joins it like any held shell, and so does every other device's. */
+async function resumeTerm(
+  state: ServerState,
+  repo: Repo,
+  id: string,
+  place: ShellPlace,
+  session: string,
+  size: TermSize,
+): Promise<TermInfo> {
+  if (repo.host) throw new HttpError(400, "Claude conversations are read off this machine; a repo on another host has none here");
+  if (!(await hasClaudeSession(repo.path, session))) throw new HttpError(404, "no Claude conversation under that id at this repo");
+  if (state.terms.has(id) || state.kept.some((k) => k.id === id)) throw new HttpError(409, "that shell name is taken");
+  const line = resumeLine(session, agentFor(await loadConfig(), repo.path));
+  const tmux = state.tmux;
+  let live: LiveTerm;
+  if (tmux) {
+    if (await hasSession(tmux, id)) throw new HttpError(409, "that shell name is taken");
+    await newSession(tmux, { id, repoId: repo.id, path: repo.path, place }, size);
+    live = {
+      info: { id, repoId: repo.id, path: repo.path, place, attached: false, viewers: [], startedAt: Date.now() },
+      pty: null,
+      sockets: new Set(),
+    };
+    state.terms.set(id, live);
+    tellTerms(state);
+    // the shell has to be up to read it; send-keys is input, not a command
+    await Bun.sleep(400);
+    await sendLine(tmux, id, line);
+  } else {
+    live = openPtyTerm(state, { repo, id, place, attach: false, device: null, ...size }, size);
+    await Bun.sleep(400);
+    live.pty?.session.write(`${line}\r`);
+  }
   return termInfo(state, live);
 }
 
@@ -1548,6 +1589,17 @@ async function handleApi(
           permission: state.access,
         }),
       });
+    }
+    if (method === "GET" && action === "resumable") {
+      // Claude Code conversations started at the repo on this machine, read
+      // straight off ~/.claude, so it answers without claude-history
+      return json(repo.host ? [] : await claudeSessions(repo.path));
+    }
+    if (method === "POST" && action === "resume") {
+      const b = (await req.json()) as { term?: unknown; place?: unknown; session?: unknown; cols?: unknown; rows?: unknown };
+      if (!isTermId(b.term)) return json({ error: "a shell is named by 32 hex digits in term" }, 400);
+      if (!isSessionId(b.session)) return json({ error: "session must be a Claude Code session id" }, 400);
+      return json(await resumeTerm(state, repo, b.term, termPlace(b.place), b.session, termSize(b.cols, b.rows)), 201);
     }
     if (method === "GET" && action === "sessions") {
       const { bin, project } = await historyContext(state, repo);

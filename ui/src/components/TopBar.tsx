@@ -9,6 +9,7 @@ import { Seg } from "./Seg";
 import { SettingsMenu } from "./Settings";
 import { DevicesChip } from "./Devices";
 import { KeptShells } from "./KeptShells";
+import { ShellsChip } from "./Shells";
 import { SourcesMenu } from "./Sources";
 
 /** The three crowns and a trunk. `live` makes them breathe (loading screen). */
@@ -316,6 +317,7 @@ export function TopBar() {
       </button>
 
       <KeptShells />
+      <ShellsChip />
       <DevicesChip />
       <SettingsMenu />
     </header>

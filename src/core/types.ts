@@ -984,6 +984,23 @@ export interface TermInfo {
   restoredAt?: number;
 }
 
+/** One Claude Code conversation started at a repo on the backend, which a
+ *  shell on any device can pick back up with `claude --resume`. */
+export interface ClaudeSession {
+  /** Claude Code's session id, a uuid */
+  id: string;
+  /** when its file was last written, ms */
+  at: number;
+  /** the file's size in bytes, a rough sense of how long it ran */
+  size: number;
+  /** the first thing typed into it, clipped */
+  prompt: string | null;
+  /** the summary Claude Code wrote for it, when it wrote one */
+  summary: string | null;
+  /** the branch it started on */
+  branch: string | null;
+}
+
 /** the agent canopy can tell was running in a shell */
 export type AgentKind = "claude" | "codex";
 

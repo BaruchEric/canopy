@@ -61,15 +61,21 @@ export function loadTermTabs(v: unknown): TermTab[] {
  * tab where it was opened, so no live shell is ever out of sight. A saved
  * tab whose shell is gone is dropped: it exited, or the server restarted
  * and took every shell with it. A shell at a repo the scan no longer has
- * cannot be shown (its socket names the repo) and is left alone.
+ * cannot be shown (its socket names the repo) and is left alone, and so is
+ * one this browser hid (`hidden`): it runs on, and the shells picker has it.
  */
-export function reconcileTerms(saved: TermTab[], live: TermInfo[], repos: Repo[]): TermTab[] {
+export function reconcileTerms(
+  saved: TermTab[],
+  live: TermInfo[],
+  repos: Repo[],
+  hidden: ReadonlySet<string> = new Set(),
+): TermTab[] {
   const held = new Set(live.map((t) => t.id));
   const repoOf = (id: string) => repos.find((r) => r.id === id);
   const out = saved.filter((t) => held.has(t.id) && repoOf(t.repoId));
   const seen = new Set(out.map((t) => t.id));
   for (const t of live) {
-    if (seen.has(t.id)) continue;
+    if (seen.has(t.id) || hidden.has(t.id)) continue;
     const repo = repoOf(t.repoId);
     if (!repo) continue;
     out.push({ id: t.id, repoId: repo.id, name: repo.name, path: repo.path, place: t.place });
@@ -105,6 +111,26 @@ export function adoptTerms(
     out.push({ id: t.id, repoId: repo.id, name: repo.name, path: repo.path, place: t.place });
   }
   return out;
+}
+
+/** The shells this browser hid that are still running: a hidden name whose
+ *  shell ended has nothing left to hide. The same array when none went, so
+ *  a list that changes nothing here is not a layout change. */
+export function pruneHidden(hidden: string[], live: TermInfo[]): string[] {
+  const held = new Set(live.map((t) => t.id));
+  const kept = hidden.filter((id) => held.has(id));
+  return kept.length === hidden.length ? hidden : kept;
+}
+
+/** The strip tab that shows once `id` leaves it: the one after it, else the
+ *  one before, the way a browser's tab strip does; `active` when that was
+ *  not the one showing. */
+export function nextStripTab(tabs: TermTab[], id: string, active: string | null): string | null {
+  if (active !== id) return active;
+  const i = tabs.findIndex((t) => t.id === id);
+  const rest = tabs.filter((t) => t.id !== id && t.place === "strip");
+  const j = tabs.slice(0, Math.max(0, i)).filter((t) => t.place === "strip").length;
+  return (rest[j] ?? rest[j - 1])?.id ?? null;
 }
 
 export const TERM_FONT = {

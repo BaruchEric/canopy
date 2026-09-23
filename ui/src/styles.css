@@ -3600,3 +3600,53 @@ a.build-label:hover {
 .dot.rust {
   background: var(--rust);
 }
+
+/* ---------- the shells picker ---------- */
+.shells-pop {
+  width: 360px;
+  max-height: min(80vh, 640px);
+  overflow-y: auto;
+}
+.shells-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: grid;
+  gap: 10px;
+  align-self: stretch;
+}
+.shell-row {
+  display: grid;
+  gap: 4px;
+  font-size: 12px;
+}
+.shell-row.here .kept-where {
+  color: var(--moss);
+}
+.claude-prompt {
+  overflow-wrap: anywhere;
+}
+.shells .mini {
+  position: relative;
+}
+.shells-dot {
+  position: absolute;
+  top: 2px;
+  right: 2px;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--lichen);
+}
+.shells-pop select.settings-input {
+  align-self: stretch;
+}
+@media (max-width: 760px) {
+  .shells-pop {
+    position: fixed;
+    top: 54px;
+    left: 16px;
+    right: 16px;
+    width: auto;
+  }
+}

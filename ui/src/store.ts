@@ -2,9 +2,9 @@ import { create } from "zustand";
 import { api, subscribe } from "./api";
 import { applyQuery, type RepoFilter } from "./filters";
 import { focusPanel, nextActive } from "./dock";
-import { openElsewhere, openShellElsewhere, parseRoute } from "./routes";
+import { openElsewhere, openShellElsewhere, parseRoute, shellUrl } from "./routes";
 import { loadSettings, saveSettings, shellPlace, type Settings, type ShellPlace } from "./settings";
-import { PANEL_TERM_ROWS, adoptTerms, loadTermTabs, reconcileTerms, rowsPx, termId, type TermTab } from "./term";
+import { PANEL_TERM_ROWS, adoptTerms, loadTermTabs, nextStripTab, pruneHidden, reconcileTerms, rowsPx, termId, type TermTab } from "./term";
 import { clientId, identity } from "./client";
 export type { TermTab } from "./term";
 import { clamp, needsAttention } from "./util";
@@ -138,6 +138,9 @@ interface Layout {
    *  showing in the strip: a reload comes back to the shells still there */
   terms: TermTab[];
   activeTerm: string | null;
+  /** the running shells this browser put down without ending, which it
+   *  does not take up as tabs again until picked from the shells list */
+  hiddenTerms: string[];
   /** the default-folded sections this layout has decided about, so a
    *  section added later starts folded instead of open everywhere */
   knownSections: string[];
@@ -177,6 +180,7 @@ function loadLayout(): Layout {
     activePanel: null,
     terms: [],
     activeTerm: null,
+    hiddenTerms: [],
   };
   try {
     const raw = localStorage.getItem(LAYOUT_KEY);
@@ -198,6 +202,7 @@ function loadLayout(): Layout {
       activePanel?: unknown;
       terms?: unknown;
       activeTerm?: unknown;
+      hiddenTerms?: unknown;
     };
     // Anything hand-edited or written by an older build gets clamped rather
     // than trusted — a bad number here would render an unusable panel.
@@ -258,6 +263,7 @@ function loadLayout(): Layout {
       activePanel: typeof saved.activePanel === "string" ? saved.activePanel : null,
       terms: loadTermTabs(saved.terms),
       activeTerm: typeof saved.activeTerm === "string" ? saved.activeTerm : null,
+      hiddenTerms: strings(saved.hiddenTerms),
     };
   } catch {
     return fallback;
@@ -299,6 +305,7 @@ const layoutOf = (s: CanopyState): Omit<Layout, "knownSections"> => ({
   activePanel: s.activePanel,
   terms: s.terms,
   activeTerm: s.activeTerm,
+  hiddenTerms: s.hiddenTerms,
 });
 
 /** drops entries for repos that no longer exist in the scan; the same
@@ -388,6 +395,8 @@ interface CanopyState {
   terms: TermTab[];
   /** the shell showing in the strip; null when the strip is empty */
   activeTerm: string | null;
+  /** running shells this browser hid rather than ended, by name */
+  hiddenTerms: string[];
   /** px height of the strip, dragged by its top edge */
   termHeight: number;
   /** px height of the shell in each repo's panel, by repo id, dragged by its
@@ -472,6 +481,15 @@ interface CanopyState {
    *  strip, or a tab or window of its own; `place` overrides the setting */
   openTerm: (repoId: string, place?: ShellPlace) => void;
   closeTerm: (id: string) => void;
+  /** puts a shell's tab down here and leaves the shell running for the
+   *  other devices, and for picking back up from the shells list */
+  hideTerm: (id: string) => void;
+  /** shows a running shell here, whichever device started it: its tab
+   *  when this window has one, else a new tab onto it */
+  joinTerm: (id: string) => void;
+  /** a new shell at the repo with a Claude Code conversation from it
+   *  picked back up in it */
+  resumeClaude: (repoId: string, session: string) => Promise<void>;
   showTerm: (id: string) => void;
   /** starts a kept shell again where it was, with what it had; `resume`
    *  also runs the line that picks its agent's conversation back up */
@@ -574,6 +592,17 @@ const layout = loadLayout();
  *  restored, so none of them comes back legitimately. */
 const endedShells = new Set<string>();
 
+/** the shells `adoptTerms` passes over: the ones this window ended and the
+ *  ones this browser hid */
+const skipped = (hidden: string[]): ReadonlySet<string> => new Set([...endedShells, ...hidden]);
+
+/** a shell window's url onto one named shell */
+function shellUrlFor(repoId: string, term: string): string {
+  const u = new URL(shellUrl(repoId));
+  u.searchParams.set("term", term);
+  return u.toString();
+}
+
 /** The state a fresh tree implies: the repos and sources themselves, and
  *  the panels, widths and folds that still have a repo to belong to. */
 function treeState(
@@ -663,6 +692,7 @@ export const useStore = create<CanopyState>((set, get) => ({
   buildsAt: {},
   terms: [],
   activeTerm: null,
+  hiddenTerms: layout.hiddenTerms,
   termHeight: layout.termHeight,
   panelTermHeights: layout.panelTermHeights,
   flows: {},
@@ -711,7 +741,8 @@ export const useStore = create<CanopyState>((set, get) => ({
       // a tab shown sooner would open its socket and start a shell of its
       // own under the old name. A solo or shell window keeps none: what it
       // saved is the grove's, and the grove is what shows them.
-      const terms = dockless() ? [] : reconcileTerms(layout.terms, held, tree.repos);
+      const hiddenTerms = pruneHidden(get().hiddenTerms, held);
+      const terms = dockless() ? [] : reconcileTerms(layout.terms, held, tree.repos, new Set(hiddenTerms));
       const strip = terms.filter((t) => t.place === "strip");
       // A panel shell shows only inside its repo's panel, and a shell adopted
       // from another window may have none here: open it, shell unfolded, the
@@ -733,6 +764,7 @@ export const useStore = create<CanopyState>((set, get) => ({
         helpers,
         devices,
         shells: held,
+        hiddenTerms,
         kept: kept.kept,
         keeping: kept.keeping,
         workspaces,
@@ -866,7 +898,7 @@ export const useStore = create<CanopyState>((set, get) => ({
     set((s) => {
       const next = focusPanel(s.panels, id);
       // a panel shell another device opened here waits for its panel
-      return { ...next, terms: dockless() ? s.terms : adoptTerms(s.terms, s.shells, s.repos, next.panels, endedShells) };
+      return { ...next, terms: dockless() ? s.terms : adoptTerms(s.terms, s.shells, s.repos, next.panels, skipped(s.hiddenTerms)) };
     }),
   showPanel: (id) =>
     set((s) => (s.panels.includes(id) ? { activePanel: id } : {})),
@@ -973,10 +1005,14 @@ export const useStore = create<CanopyState>((set, get) => ({
     } else if (ev.type === "terms") {
       // a shell opened on another device shows up here too; a dockless
       // window (solo, shell) keeps no tabs of its own
-      set((s) => ({
-        shells: ev.terms,
-        terms: dockless() ? s.terms : adoptTerms(s.terms, ev.terms, s.repos, s.panels, endedShells),
-      }));
+      set((s) => {
+        const hiddenTerms = pruneHidden(s.hiddenTerms, ev.terms);
+        return {
+          shells: ev.terms,
+          hiddenTerms,
+          terms: dockless() ? s.terms : adoptTerms(s.terms, ev.terms, s.repos, s.panels, skipped(hiddenTerms)),
+        };
+      });
     }
   },
 
@@ -1062,16 +1098,72 @@ export const useStore = create<CanopyState>((set, get) => ({
   },
   closeTerm: (id) => {
     const s = get();
-    const i = s.terms.findIndex((t) => t.id === id);
-    if (i === -1) return;
-    endShells([s.terms[i]!]);
-    const terms = s.terms.filter((t) => t.id !== id);
-    // the neighbour in the strip takes over, the way a browser's tab strip does
-    const strip = terms.filter((t) => t.place === "strip");
-    const j = s.terms.slice(0, i).filter((t) => t.place === "strip").length;
-    const activeTerm =
-      s.activeTerm !== id ? s.activeTerm : (strip[j] ?? strip[j - 1])?.id ?? null;
-    set({ terms, activeTerm });
+    const tab = s.terms.find((t) => t.id === id);
+    if (!tab) return;
+    endShells([tab]);
+    set({ terms: s.terms.filter((t) => t.id !== id), activeTerm: nextStripTab(s.terms, id, s.activeTerm) });
+  },
+  hideTerm: (id) => {
+    const s = get();
+    if (!s.terms.some((t) => t.id === id)) return;
+    set({
+      terms: s.terms.filter((t) => t.id !== id),
+      activeTerm: nextStripTab(s.terms, id, s.activeTerm),
+      hiddenTerms: s.hiddenTerms.includes(id) ? s.hiddenTerms : [...s.hiddenTerms, id],
+    });
+  },
+  joinTerm: (id) => {
+    const s = get();
+    const info = s.shells.find((t) => t.id === id);
+    const repo = info && s.repos.find((r) => r.id === info.repoId);
+    if (!info || !repo) return;
+    // a solo or shell window has no strip or dock of its own to put a tab
+    // in: it becomes the shell's own window instead
+    if (dockless()) {
+      window.location.assign(shellUrlFor(repo.id, id));
+      return;
+    }
+    const tab: TermTab = s.terms.find((t) => t.id === id) ?? {
+      id,
+      repoId: repo.id,
+      name: repo.name,
+      path: repo.path,
+      place: info.place,
+    };
+    set({
+      terms: s.terms.some((t) => t.id === id) ? s.terms : [...s.terms, tab],
+      hiddenTerms: s.hiddenTerms.filter((h) => h !== id),
+      activeTerm: tab.place === "strip" ? id : s.activeTerm,
+      ...(tab.place === "panel"
+        ? { ...focusPanel(s.panels, repo.id), closedSections: unfoldIn(s.closedSections, repo.id, "shell") }
+        : {}),
+    });
+  },
+  resumeClaude: async (repoId, session) => {
+    const s = get();
+    const repo = s.repos.find((r) => r.id === repoId);
+    if (!repo || repo.forge) return;
+    // the shell setting picks panel or strip; a tab or window of its own is
+    // the strip here, since the shell is started before any window opens
+    const where = shellPlace(s.settings.shell, {
+      panelOpen: s.panels.includes(repoId),
+      solo: parseRoute(window.location.search).solo,
+    });
+    const place = where === "panel" ? "panel" : "strip";
+    const id = termId();
+    await api.resumeClaude(repoId, id, place, session);
+    if (dockless()) {
+      window.location.assign(shellUrlFor(repoId, id));
+      return;
+    }
+    const tab: TermTab = { id, repoId, name: repo.name, path: repo.path, place };
+    set((now) => ({
+      terms: now.terms.some((t) => t.id === id) ? now.terms : [...now.terms, tab],
+      activeTerm: place === "strip" ? id : now.activeTerm,
+      ...(place === "panel"
+        ? { ...focusPanel(now.panels, repoId), closedSections: unfoldIn(now.closedSections, repoId, "shell") }
+        : {}),
+    }));
   },
   showTerm: (id) => set((s) => (s.terms.some((t) => t.id === id) ? { activeTerm: id } : {})),
   endTerm: (id, code) =>

@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { PANEL_TERM_ROWS, adoptTerms, cellHeight, loadTermTabs, reconcileTerms, rowsPx, termId, viewKey, type TermTab } from "./term";
+import { PANEL_TERM_ROWS, adoptTerms, cellHeight, loadTermTabs, nextStripTab, pruneHidden, reconcileTerms, rowsPx, termId, viewKey, type TermTab } from "./term";
 import type { Repo, TermInfo } from "../../src/core/types";
 
 describe("rowsPx", () => {
@@ -108,6 +108,36 @@ describe("adoptTerms", () => {
   test("a shell at a repo not in the scan is left alone, and nothing new returns the same array", () => {
     const tabs = [tab("a", "app")];
     expect(adoptTerms(tabs, [info("a", "app"), info("z", "gone")], repos, [])).toBe(tabs);
+  });
+});
+
+describe("hidden shells", () => {
+  const repos = [repo("app"), repo("lib")];
+
+  test("a load does not make a tab of a shell this browser hid", () => {
+    const out = reconcileTerms([], [info("a", "app"), info("h", "lib")], repos, new Set(["h"]));
+    expect(out.map((t) => t.id)).toEqual(["a"]);
+  });
+
+  test("a hidden name goes once its shell does, and nothing gone keeps the array", () => {
+    const hidden = ["h", "x"];
+    expect(pruneHidden(hidden, [info("h", "app")])).toEqual(["h"]);
+    const same = ["h"];
+    expect(pruneHidden(same, [info("h", "app")])).toBe(same);
+  });
+});
+
+describe("nextStripTab", () => {
+  const tabs = [tab("a", "app"), tab("p", "app", "panel"), tab("b", "lib"), tab("c", "lib")];
+
+  test("the showing tab going hands over to the one after it, else the one before", () => {
+    expect(nextStripTab(tabs, "b", "b")).toBe("c");
+    expect(nextStripTab(tabs, "c", "c")).toBe("b");
+    expect(nextStripTab([tab("a", "app")], "a", "a")).toBeNull();
+  });
+
+  test("another tab going leaves the showing one", () => {
+    expect(nextStripTab(tabs, "a", "c")).toBe("c");
   });
 });
 
