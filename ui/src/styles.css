@@ -2150,6 +2150,13 @@ body.resizing {
 }
 
 /* ---------- responsive ---------- */
+/* the second row of the top bar needs about 1135px with the filter box at
+   full width; a narrower box keeps the chips on that row down to 1100 */
+@media (max-width: 1180px) {
+  .filter {
+    width: 150px;
+  }
+}
 @media (max-width: 1100px) {
   .body {
     grid-template-columns: minmax(0, 1fr) auto;
