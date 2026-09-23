@@ -4,6 +4,8 @@
 # http://<host>:7850. Settings come from a .env next to this file; see
 # docs/deploy.md for the first run. For a host that is NOT on the tailnet,
 # add docker-compose.sidecar.yml, which joins canopy to a tailscale sidecar.
+# The `tunnel` service (profile `tunnel`, off unless .env turns it on) also
+# puts canopy on a public name through a Cloudflare Tunnel.
 services:
   # The tmux server that holds every shell, in a container of its own so a
   # canopy redeploy (which recreates the canopy container) leaves the shells
@@ -72,6 +74,10 @@ services:
       # from .env and both are optional
       - GH_TOKEN=${GH_TOKEN:-}
       - VERCEL_AI_GATEWAY_API_KEY=${VERCEL_AI_GATEWAY_API_KEY:-}
+      # the https origin the tunnel serves canopy at (https://canopy.beric.ca);
+      # requests for that host with X-Forwarded-Proto: https pass the origin
+      # gate. Empty when there is no tunnel
+      - CANOPY_PUBLIC_ORIGIN=${CANOPY_PUBLIC_ORIGIN:-}
     volumes:
       # the repos to scan, mounted at the SAME path they have on the host so
       # git in the container and VS Code Remote-SSH on the host agree
@@ -95,6 +101,27 @@ services:
       - --port
       - "7850"
       - --no-open
+    restart: unless-stopped
+
+  # A Cloudflare Tunnel to canopy for a public name (canopy.beric.ca), for
+  # a device off the tailnet. Only under the `tunnel` profile, which .env
+  # turns on with COMPOSE_PROFILES=tunnel, so a host without a token never
+  # starts it. The tunnel is managed in the Zero Trust dashboard: its token
+  # is TUNNEL_TOKEN in .env, and its public hostname's service is
+  # http://canopy:7850, canopy by its name on this compose network.
+  # canopy has no login of its own: Cloudflare Access on that hostname is
+  # the only thing between the internet and every shell here. Nothing is
+  # published on the host; cloudflared dials out.
+  tunnel:
+    image: cloudflare/cloudflared:latest
+    profiles: [tunnel]
+    command: ["tunnel", "--no-autoupdate", "run"]
+    environment:
+      # not ${TUNNEL_TOKEN:?}: compose interpolates every service, profile or
+      # not, so a required variable would break `up` on every host without one
+      - TUNNEL_TOKEN=${TUNNEL_TOKEN:-}
+    depends_on:
+      - canopy
     restart: unless-stopped
 
 volumes:

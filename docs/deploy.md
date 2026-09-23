@@ -80,6 +80,9 @@ GH_TOKEN=...                    # optional: gh auth token, for PR counts and rel
 VERCEL_AI_GATEWAY_API_KEY=...   # optional: lets verdict gates evaluate
 # HOST_UID=1000                 # id -u and id -g of that user, when not 1000
 # HOST_GID=1000
+# COMPOSE_PROFILES=tunnel       # optional: the public name, see "A public name" below
+# TUNNEL_TOKEN=eyJ...
+# CANOPY_PUBLIC_ORIGIN=https://canopy.beric.ca
 ```
 
 `CANOPY_LISTEN` is where docker publishes the port. Leave it unset and canopy
@@ -137,6 +140,61 @@ host. Put a `TS_AUTHKEY=tskey-auth-…` from the tailscale admin console in
 ```
 docker compose -f docker-compose.yml -f docker-compose.sidecar.yml up -d --build
 ```
+
+## A public name: Cloudflare Tunnel
+
+For a device off the tailnet, the `tunnel` service puts canopy on a public
+name (`canopy.beric.ca`) through a Cloudflare Tunnel. cloudflared dials out
+to Cloudflare, so nothing new is published on the mini. It sits under the
+compose profile `tunnel` and runs only where `.env` turns that on.
+
+**canopy has no login of its own.** Anyone who reaches that hostname gets
+every shell, run and git action on the mini. Keep a Cloudflare Access
+application on the hostname (Zero Trust → Access → Applications, allowing
+only your own email) before the tunnel goes up, and leave it on.
+
+1. In Zero Trust → Networks → Tunnels, create a tunnel (type cloudflared) and
+   copy its token. Give it a public hostname, `canopy.beric.ca`, with the
+   service `http://canopy:7850`: canopy by its service name on the compose
+   network. The ingress lives in the dashboard, not in this repo.
+2. Add to `.env`:
+
+   ```
+   COMPOSE_PROFILES=tunnel
+   TUNNEL_TOKEN=eyJ...
+   CANOPY_PUBLIC_ORIGIN=https://canopy.beric.ca
+   ```
+
+   `CANOPY_PUBLIC_ORIGIN` is exact: `https://`, the host, no trailing slash.
+   canopy only answers `/api` requests for a host other than a local or
+   tailnet name when they match it and carry `X-Forwarded-Proto: https`,
+   which Cloudflare adds. Without it, the page loads but every API call is
+   refused with `Foreign origin`.
+3. `docker compose up -d --build`. `docker compose logs tunnel` should show
+   four "Registered tunnel connection" lines.
+
+The tunnel publishes no port, so it does not wait for the tailnet the way
+canopy does. Its `restart: unless-stopped` brings it back after a reboot, and
+`canopy-backend.service` leaves it alone. A redeploy of canopy does not touch
+it either. It gets 502s for the moment canopy is being replaced, and that is
+all. Error 1033 on the hostname means no cloudflared is connected for the
+tunnel: `docker compose ps tunnel` and its logs say why (an empty or revoked
+token is the usual one).
+
+If the hostname was served before by a cloudflared on another machine (the
+Mac, as `ca.beric.canopy-server`), point the hostname at this tunnel and
+stop that one. Two connectors on one tunnel share its traffic, and the
+dashboard ingress (`http://canopy:7850`) means nothing on the Mac.
+
+With the sidecar override, canopy shares the `ts` container's network and
+has no name of its own on the compose network: use `http://ts:7850` as the
+hostname's service there.
+
+Every browser that comes in through the tunnel reaches canopy from the
+cloudflared container's address. Presence tells them apart anyway (it goes
+by browser, not by address). The helper auto-pick, which goes by address,
+cannot. Pick a helper by name in settings on a device that uses the public
+name.
 
 ## The desktop openers: canopy helper
 

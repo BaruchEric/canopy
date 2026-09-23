@@ -70,8 +70,10 @@ exact origin (for example `https://canopy.beric.ca`) in the server environment.
 Library requests then accept that host with `X-Forwarded-Proto: https`, while
 retaining same-origin checks. Bun still binds only to loopback. Authentication
 must remain enabled on the proxy; this setting does not provide authentication.
-The existing macOS deployment runs as `ca.beric.canopy-server`, with
-Cloudflare Access protecting `canopy.beric.ca`.
+The shared backend on the mini serves `canopy.beric.ca` through the compose
+`tunnel` service (a Cloudflare Tunnel under the `tunnel` profile, with
+Cloudflare Access protecting the hostname); see "A public name" in
+`docs/deploy.md`. The older macOS deployment ran as `ca.beric.canopy-server`.
 
 ## CLI
 
