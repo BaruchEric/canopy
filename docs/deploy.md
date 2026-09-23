@@ -51,7 +51,15 @@ mini.
    no `--delete`), which also asks the backend to rescan afterwards. That run
    carries canopy's own checkout too, working tree and `.git` alike, so the
    mini's copy is whatever the Mac had at the last sync and
-   `docker compose up -d --build` here builds exactly that.
+   `docker compose up -d --build` here builds exactly that. A repo that a
+   shell on the mini changed is left out of the push until the Mac has
+   caught up: one with a commit the Mac lacks, or with a file edited there
+   since its last push at a path the Mac also has. The run logs it as
+   `HOLD`, and `ctl notify` announces it once. Push from the mini and pull on
+   the Mac, and the next run includes it again. Each file a run replaces is
+   kept for a week under `~/.cache/sync-dev-to-mini/backup/` on the mini. A
+   held canopy checkout means a redeploy builds the mini's code, not the
+   Mac's.
 3. `claude` and `codex` logged in on the mini so `~/.claude` and `~/.codex`
    exist. The container mounts those logins; it uses your subscriptions, never
    an API key. If a token expires, log in again on the mini and the container
