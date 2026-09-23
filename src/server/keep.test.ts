@@ -71,7 +71,7 @@ async function shellWith(id: string, marker: string): Promise<void> {
 /** what the pane of a session holds right now */
 async function pane(id: string): Promise<string> {
   const base = tmuxBase();
-  return base ? await snapshot(base, id) : "";
+  return base ? ((await snapshot(base, id)) ?? "") : "";
 }
 
 /** the machine going down under a shell: the session goes, its record stays */
@@ -192,6 +192,24 @@ describe("keeping shells", () => {
     expect((await fetch(api(`/api/terms/kept?term=${id}`), { method: "DELETE" })).status).toBe(404);
   }, 30_000);
 
+  test.if(tmux)("a window that still names a lost shell does not start a new one under its name", async () => {
+    const id = "ddddddddddddddddddddddddddddddd1";
+    await post("/api/keep", { on: true });
+    await shellWith(id, "marker-still-named");
+    await post("/api/keep", { on: true });
+    await crash(id);
+    await until(async () => (await keptList()).kept.some((k) => k.id === id), "the lost shell to be offered");
+
+    // a reloaded ?view=shell&term= window: its first socket does not ask to rejoin
+    const client = connect(id);
+    const code = await new Promise<number>((resolve) => client.ws.addEventListener("close", (e) => resolve(e.code)));
+    expect(code).toBe(4404);
+    await post("/api/keep", { on: true });
+    const kept = (await keptList()).kept.find((k) => k.id === id);
+    expect(kept?.lines).toBeGreaterThan(0);
+    expect(await pane(id)).toBe("");
+  }, 30_000);
+
   // last in the file: it takes the tmux server down with it
   test.if(tmux)("the tmux server going out from under canopy is not a shell exiting, so the records stay", async () => {
     const id = "ccccccccccccccccccccccccccccccc1";
@@ -211,5 +229,46 @@ describe("keeping shells", () => {
     await Bun.sleep(1_000);
     await until(async () => (await keptList()).kept.some((k) => k.id === id), "the record to still be offered");
     client.ws.close();
+  }, 30_000);
+
+  // after the server went: this shell is the only one on a fresh one
+  test.if(tmux)("exiting the last shell on the server forgets it, though the server exits with it", async () => {
+    const id = "ccccccccccccccccccccccccccccccc2";
+    await post("/api/keep", { on: true });
+    const client = connect(id);
+    const frames: string[] = [];
+    client.ws.addEventListener("message", (e: MessageEvent<ArrayBuffer | string>) => {
+      if (typeof e.data === "string") frames.push(e.data);
+    });
+    const closed = new Promise<void>((resolve) => client.ws.addEventListener("close", () => resolve()));
+    await client.opened;
+    await Bun.sleep(700);
+    client.ws.send(new TextEncoder().encode("echo marker-last-shell\n"));
+    await until(() => client.text().includes("marker-last-shell"), "the shell to print");
+    await post("/api/keep", { on: true });
+    client.ws.send(new TextEncoder().encode("exit\n"));
+    await closed;
+    expect(frames).toContain(JSON.stringify({ exit: 0 }));
+    await until(async () => !(await keptList()).kept.some((k) => k.id === id), "the exited shell to be forgotten");
+    // and it stays forgotten through the next pass
+    await post("/api/keep", { on: true });
+    expect((await keptList()).kept.some((k) => k.id === id)).toBe(false);
+  }, 30_000);
+
+  // last in the file: it takes the tmux server down again
+  test.if(tmux)("a pass that cannot reach tmux leaves the last good record alone", async () => {
+    const id = "ccccccccccccccccccccccccccccccc3";
+    await post("/api/keep", { on: true });
+    // no socket stays on it, so nothing hears the server go
+    await shellWith(id, "marker-good-record");
+    await post("/api/keep", { on: true });
+    const base = tmuxBase();
+    if (base) await killServer(base);
+    // the shells container restarting under a canopy that stays up, then
+    // the next pass
+    await post("/api/keep", { on: true });
+    await until(async () => (await keptList()).kept.some((k) => k.id === id), "the lost shell to be offered");
+    const kept = (await keptList()).kept.find((k) => k.id === id)!;
+    expect(kept.lines).toBeGreaterThan(0);
   }, 30_000);
 });

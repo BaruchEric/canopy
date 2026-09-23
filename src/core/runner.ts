@@ -47,6 +47,14 @@ export interface RunnerHooks {
   status?: (repoId: string) => Promise<RepoStatus | null>;
 }
 
+/** a prompt the CLI is waiting on, and how to answer it */
+interface Pending {
+  /** the control request it answers, to honour a cancel from the CLI */
+  requestId: string;
+  prompt: RunPrompt;
+  settle: (a: RunAnswer) => void;
+}
+
 interface Live {
   run: Run;
   /** the repo as it was when the run started; also what a continuation
@@ -68,10 +76,12 @@ interface Live {
   ending: boolean;
   /** "allow all for this run" was chosen: later permissions pass silently */
   allowAll: boolean;
-  /** settles the prompt the run is blocked on */
-  answer: ((a: RunAnswer) => void) | null;
-  /** control request id of that prompt, to honour a cancel from the CLI */
-  pendingRequest: string | null;
+  /** The prompts the CLI is waiting on, oldest first; the first is the one
+   *  the run shows. More than one when Claude calls tools in parallel: each
+   *  call asks on its own and every one needs its own answer. */
+  pending: Pending[];
+  /** numbers the prompts, so no two share an id */
+  prompts: number;
   /** tool_use id → step id, to attach results to their call */
   tools: Map<string, string>;
   seq: number;
@@ -239,8 +249,8 @@ export class Runner {
       stopping: false,
       ending: false,
       allowAll: false,
-      answer: null,
-      pendingRequest: null,
+      pending: [],
+      prompts: 0,
       tools: new Map(),
       seq: 0,
     };
@@ -287,10 +297,9 @@ export class Runner {
   answer(id: string, promptId: string, answer: RunAnswer): Run {
     const live = this.live.get(id);
     if (!live) throw new Error(`unknown run: ${id}`);
-    if (!live.answer || live.run.prompt?.id !== promptId) {
-      throw new Error("that prompt is no longer waiting");
-    }
-    live.answer(answer);
+    const waiting = live.pending.find((p) => p.prompt.id === promptId);
+    if (!waiting) throw new Error("that prompt is no longer waiting");
+    waiting.settle(answer);
     return live.run;
   }
 
@@ -311,7 +320,8 @@ export class Runner {
       return live.run;
     }
     live.stopping = true;
-    live.answer?.({ kind: "deny" });
+    // settling takes an entry off the queue, so walk a copy
+    for (const p of live.pending.slice()) p.settle({ kind: "deny" });
     live.proc?.kill();
     return live.run;
   }
@@ -422,7 +432,7 @@ export class Runner {
         if (m["type"] === "control_request") {
           void this.control(live, m);
         } else if (m["type"] === "control_cancel_request") {
-          if (live.pendingRequest === str(m, "request_id")) live.answer?.({ kind: "deny" });
+          live.pending.find((p) => p.requestId === str(m, "request_id"))?.settle({ kind: "deny" });
         } else {
           this.apply(live, m);
           // Stdin stays open while the turn runs, for the control replies.
@@ -505,7 +515,7 @@ export class Runner {
         return { behavior: "deny", message: "The question could not be shown." };
       }
       const a = await this.ask(live, requestId, {
-        id: `p${live.seq + 1}`,
+        id: `p${++live.prompts}`,
         kind: "question",
         questions,
       });
@@ -530,13 +540,17 @@ export class Runner {
       return { behavior: "allow", updatedInput: input };
     }
     const a = await this.ask(live, requestId, {
-      id: `p${live.seq + 1}`,
+      id: `p${++live.prompts}`,
       kind: "permission",
       tool,
       title,
       detail: toolDetail(tool, input, live.root),
     });
-    if (a.kind === "allow-all") live.allowAll = true;
+    if (a.kind === "allow-all") {
+      live.allowAll = true;
+      // the ones already queued behind it are "later" too
+      for (const p of live.pending.slice()) if (p.prompt.kind === "permission") p.settle({ kind: "allow" });
+    }
     if (a.kind === "allow" || a.kind === "allow-all") {
       this.step(live, {
         kind: "note",
@@ -554,22 +568,30 @@ export class Runner {
     };
   }
 
-  /** Parks the run on a prompt until the browser answers or the run stops. */
+  /** Parks the run on a prompt until the browser answers, the CLI cancels
+   *  it or the run stops. Prompts queue: the run shows the oldest, and the
+   *  next one shows once it is settled. */
   private ask(live: Live, requestId: string, prompt: RunPrompt): Promise<RunAnswer> {
     return new Promise((resolve) => {
-      const settle = (a: RunAnswer) => {
-        if (live.answer !== settle) return;
-        live.answer = null;
-        live.pendingRequest = null;
-        live.run.status = "working";
-        live.run.prompt = null;
-        resolve(a);
+      const entry: Pending = {
+        requestId,
+        prompt,
+        settle: (a) => {
+          const i = live.pending.indexOf(entry);
+          if (i === -1) return;
+          live.pending.splice(i, 1);
+          const next = live.pending[0];
+          live.run.status = next ? "waiting" : "working";
+          live.run.prompt = next?.prompt ?? null;
+          resolve(a);
+        },
       };
-      live.answer = settle;
-      live.pendingRequest = requestId;
-      live.run.status = "waiting";
-      live.run.prompt = prompt;
-      this.emit(live);
+      live.pending.push(entry);
+      if (live.pending.length === 1) {
+        live.run.status = "waiting";
+        live.run.prompt = prompt;
+        this.emit(live);
+      }
     });
   }
 

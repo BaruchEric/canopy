@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, readdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -10,7 +10,9 @@ import {
   rememberRoot,
   removeSource,
   removeWorkspace,
+  saveConfig,
   setAgent,
+  setKeepShells,
   slugify,
   uniqueId,
   upsertWorkspace,
@@ -138,6 +140,32 @@ describe("config store", () => {
     expect(Object.keys(agents)).toEqual(["ssh://wsl/home/me/z"]);
     cfg = await loadConfig();
     expect(cfg.agents["/Users/me/dev/x"]).toBeUndefined();
+  });
+
+  test("the keep switch waits its turn with every other setting", async () => {
+    const opus = { model: "opus", effort: "high", yolo: true, extra: "" } as const;
+    await Promise.all([setKeepShells(true), setAgent("/Users/me/dev/k", opus), setKeepShells(true)]);
+    let cfg = await loadConfig();
+    expect(cfg.keepShells).toBe(true);
+    expect(agentFor(cfg, "/Users/me/dev/k")).toEqual(opus);
+    await Promise.all([setAgent("/Users/me/dev/k", DEFAULT_AGENT), setKeepShells(false)]);
+    cfg = await loadConfig();
+    expect(cfg.keepShells).toBe(false);
+    expect(cfg.agents["/Users/me/dev/k"]).toBeUndefined();
+  });
+
+  test("two saves at once each land whole, and neither loses its file", async () => {
+    const base = await loadConfig();
+    const long = { ...base, workspaces: [{ name: "long", repos: Array.from({ length: 200 }, (_, i) => `repo-${i}`) }] };
+    for (let i = 0; i < 20; i++) {
+      await Promise.all([saveConfig(long), saveConfig({ ...base, keepShells: true })]);
+      const cfg = await loadConfig();
+      expect(cfg.keepShells === true || cfg.workspaces.length === 1).toBe(true);
+    }
+    // nothing was quarantined as unreadable, and no temporary file is left
+    const left = await readdir(dir);
+    expect(left.filter((f) => f.includes(".corrupt-") || f.includes(".tmp-"))).toEqual([]);
+    await saveConfig(base);
   });
 
   test("recent roots stay unique and capped", async () => {

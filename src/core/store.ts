@@ -125,11 +125,16 @@ export async function loadConfig(): Promise<CanopyConfig> {
   }
 }
 
+/** tells one write's temporary file from another's in the same process */
+let saves = 0;
+
 export async function saveConfig(cfg: CanopyConfig): Promise<void> {
   await mkdir(configDir(), { recursive: true });
   // Write-then-rename: a crash mid-write leaves the old config intact rather
-  // than a truncated file that loadConfig would have to quarantine.
-  const tmp = `${configPath()}.tmp-${process.pid}`;
+  // than a truncated file that loadConfig would have to quarantine. A file
+  // of its own per write: two writes sharing one interleaved their bytes,
+  // and the first rename took the file out from under the second.
+  const tmp = `${configPath()}.tmp-${process.pid}-${++saves}`;
   await writeFile(tmp, JSON.stringify(cfg, null, 2) + "\n");
   await rename(tmp, configPath());
 }
@@ -204,6 +209,13 @@ export async function setAgent(
     if (isDefaultAgent(a)) delete cfg.agents[path];
     else cfg.agents[path] = a;
     return cfg.agents;
+  });
+}
+
+/** Turns keeping shells across a reboot on or off. */
+export async function setKeepShells(on: boolean): Promise<void> {
+  await withConfig((cfg) => {
+    cfg.keepShells = on;
   });
 }
 

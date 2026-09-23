@@ -5,7 +5,7 @@ import { FitAddon } from "@xterm/addon-fit";
 import "@xterm/xterm/css/xterm.css";
 import { groveUrl, nameShellHere, parseRoute } from "../routes";
 import { PANEL_TERM, TERM, closedIn, panelTermHeightFor, useStore, type TermTab } from "../store";
-import { TERM_FONT, termId } from "../term";
+import { TERM_FONT, termId, viewKey } from "../term";
 import { clamp } from "../util";
 import { clientId } from "../client";
 import { Wordmark } from "./TopBar";
@@ -450,7 +450,7 @@ export function TermDock() {
       <TermTabs terms={strip} active={activeTerm} onShow={showTerm} caption="shells" />
       <div className="term-body">
         {strip.map((t) => (
-          <TermView key={t.id} tab={t} active={t.id === activeTerm} />
+          <TermView key={viewKey(t)} tab={t} active={t.id === activeTerm} />
         ))}
       </div>
     </section>
@@ -530,7 +530,7 @@ export function PanelShells({ repo }: { repo: Repo }) {
         />
         <div className="term-body">
           {mine.map((t) => (
-            <TermView key={t.id} tab={t} active={t.id === active && !closed} />
+            <TermView key={viewKey(t)} tab={t} active={t.id === active && !closed} />
           ))}
         </div>
       </div>

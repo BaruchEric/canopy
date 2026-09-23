@@ -1,7 +1,12 @@
 import { describe, expect, test } from "bun:test";
+import { mkdtemp, readFile, rm, utimes, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { exec } from "./exec";
 import {
   commitFiles,
   getDiff,
+  getStatus,
   isAccessDenied,
   isHash,
   parseNameStatusZ,
@@ -10,6 +15,7 @@ import {
   parsePorcelainV2,
   parseRemoteTip,
   parseUserConfig,
+  stageFile,
 } from "./git";
 import { heuristicMessage } from "./suggest";
 import type { RepoFile } from "./types";
@@ -281,5 +287,58 @@ describe("parseMtimes", () => {
       undefined,
     ]);
     expect(parseMtimes("", 0)).toEqual([]);
+  });
+});
+
+describe("getStatus in the background", () => {
+  test("leaves the index alone, so it never holds index.lock against the user", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "canopy-locks-"));
+    try {
+      const run = (...args: string[]) => exec(["git", "-C", dir, ...args]);
+      await run("init", "-q");
+      await writeFile(join(dir, "f.txt"), "one\n");
+      await run("add", "f.txt");
+      await run("-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "-m", "one");
+      // the same content with a new mtime: a status that may write refreshes
+      // the index's stat data and writes it back
+      const later = new Date(Date.now() + 60_000);
+      await utimes(join(dir, "f.txt"), later, later);
+      const before = await readFile(join(dir, ".git", "index"));
+      const status = await getStatus(dir, { tipRemotes: [] });
+      expect(status.files).toEqual([]);
+      expect(Buffer.compare(await readFile(join(dir, ".git", "index")), before)).toBe(0);
+      // the control: plain git status does write it, so the check above can fail
+      await run("status", "--porcelain");
+      expect(Buffer.compare(await readFile(join(dir, ".git", "index")), before)).not.toBe(0);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("stageFile", () => {
+  test("a rename goes on or off the index as both of its paths", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "canopy-rename-"));
+    try {
+      const run = (...args: string[]) => exec(["git", "-C", dir, ...args]);
+      await run("init", "-q");
+      await writeFile(join(dir, "old.txt"), "hello\nworld\n");
+      await run("add", "old.txt");
+      await run("-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "-m", "one");
+      await run("mv", "old.txt", "new.txt");
+      const row = (await getStatus(dir, { tipRemotes: [] })).files;
+      expect(row.map((f) => [f.index, f.path, f.orig])).toEqual([["R", "new.txt", "old.txt"]]);
+      // unticking the one row takes the whole rename off: nothing is left
+      // staged, where unstaging the new path alone kept "D old.txt" staged
+      await stageFile(dir, "new.txt", true, "old.txt");
+      expect((await run("diff", "--cached", "--name-status")).stdout).toBe("");
+      // and ticking it again puts the rename back
+      await stageFile(dir, "new.txt", false, "old.txt");
+      const again = (await getStatus(dir, { tipRemotes: [] })).files;
+      expect(again.map((f) => [f.index, f.worktree, f.path, f.orig])).toEqual([["R", ".", "new.txt", "old.txt"]]);
+      await expect(stageFile(dir, "new.txt", true, "../outside.txt")).rejects.toThrow("escapes");
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
   });
 });

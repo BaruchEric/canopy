@@ -567,6 +567,13 @@ export interface ClickModifiers {
 
 const layout = loadLayout();
 
+/** The shells this window hung up, for the page's life: the tab's socket
+ *  closing tells the server before the end request may, and the list it
+ *  sends back still has the shell in it, which `adoptTerms` must not turn
+ *  back into a tab. Names are random and a shell ended here cannot be
+ *  restored, so none of them comes back legitimately. */
+const endedShells = new Set<string>();
+
 /** The state a fresh tree implies: the repos and sources themselves, and
  *  the panels, widths and folds that still have a repo to belong to. */
 function treeState(
@@ -763,6 +770,16 @@ export const useStore = create<CanopyState>((set, get) => ({
         // the server may still be coming back up — a failed resync just
         // leaves the current tree in place until the next event
         void get().rescan().catch(() => {});
+        // What a restarted server says only when it changes: the shells it
+        // holds, the ones a reboot left to restore (worked out before it
+        // listened, so never broadcast to this stream), and the helpers
+        // that dialled back in before this stream did.
+        void Promise.all([api.terms(), api.kept(), api.helpers()])
+          .then(([terms, kept, helpers]) => {
+            get().applyEvent({ type: "terms", terms });
+            set({ kept: kept.kept, keeping: kept.keeping, helpers });
+          })
+          .catch(() => {});
       },
       identity(get().settings.device),
     );
@@ -849,7 +866,7 @@ export const useStore = create<CanopyState>((set, get) => ({
     set((s) => {
       const next = focusPanel(s.panels, id);
       // a panel shell another device opened here waits for its panel
-      return { ...next, terms: dockless() ? s.terms : adoptTerms(s.terms, s.shells, s.repos, next.panels) };
+      return { ...next, terms: dockless() ? s.terms : adoptTerms(s.terms, s.shells, s.repos, next.panels, endedShells) };
     }),
   showPanel: (id) =>
     set((s) => (s.panels.includes(id) ? { activePanel: id } : {})),
@@ -958,7 +975,7 @@ export const useStore = create<CanopyState>((set, get) => ({
       // window (solo, shell) keeps no tabs of its own
       set((s) => ({
         shells: ev.terms,
-        terms: dockless() ? s.terms : adoptTerms(s.terms, ev.terms, s.repos, s.panels),
+        terms: dockless() ? s.terms : adoptTerms(s.terms, ev.terms, s.repos, s.panels, endedShells),
       }));
     }
   },
@@ -1018,11 +1035,17 @@ export const useStore = create<CanopyState>((set, get) => ({
     const repo = s.repos.find((r) => r.id === rec.repoId);
     if (!repo) return;
     await api.restoreShell(id, resume);
-    // the same tab the lost shell had, since it comes back under its name
+    // the same tab the lost shell had, since it comes back under its name;
+    // a tab still showing the shell that went (its socket was told the
+    // shell exited) is replaced, with a new generation so its view starts
+    // over instead of staying ended
     const tab: TermTab = { id, repoId: repo.id, name: repo.name, path: repo.path, place: rec.place };
+    endedShells.delete(id);
     set((now) => ({
       kept: now.kept.filter((k) => k.id !== id),
-      terms: now.terms.some((t) => t.id === id) ? now.terms : [...now.terms, tab],
+      terms: now.terms.some((t) => t.id === id)
+        ? now.terms.map((t) => (t.id === id ? { ...tab, gen: (t.gen ?? 0) + 1 } : t))
+        : [...now.terms, tab],
       activeTerm: rec.place === "strip" ? id : now.activeTerm,
       ...(rec.place === "panel"
         ? { ...focusPanel(now.panels, repo.id), closedSections: unfoldIn(now.closedSections, repo.id, "shell") }
@@ -1226,7 +1249,11 @@ export const useStore = create<CanopyState>((set, get) => ({
  *  detaches, so this is the one way a tab's × or a closing panel hangs a
  *  shell up. One that already exited needs nothing. */
 function endShells(tabs: TermTab[]) {
-  for (const t of tabs) if (t.exit === undefined) void api.endTerm(t.id).catch(() => {});
+  for (const t of tabs) {
+    if (t.exit !== undefined) continue;
+    endedShells.add(t.id);
+    void api.endTerm(t.id).catch(() => {});
+  }
 }
 
 /** whether this window is a solo panel or a lone shell rather than the grove:

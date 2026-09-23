@@ -30,23 +30,29 @@ export interface ActionSpec {
   mode: "job" | "ask" | "chat";
 }
 
-const RULES = `Ground rules:
-- Work only inside this repository (submodules under it included).
+const SAFETY = `- Work only inside this repository (submodules under it included).
 - Never rewrite published history, never force-push, never discard uncommitted work, never run destructive git commands (reset --hard, clean, checkout -- on tracked files).
 - Do not add a Co-Authored-By trailer or any mention of Claude to commit messages.
-- No backticks in commit messages.
-- canopy shows this repo as "changed" for as long as git status lists anything at all: untracked files, and submodules with new commits, modified content, or untracked content inside them. The job is done when the list is empty and the branch is not ahead, or when the user has decided to leave something.
-- When you cannot finish the task as stated (nothing you would commit on your own, a decision only the user can make, a conflict), do not end the run by explaining. Ask with AskUserQuestion, giving the concrete options, then do what the user picks. Explaining is for the summary after the work.
-- Finish with a short plain-prose summary of what you did (commit hashes, remote, URL) and anything you left alone and why. No headings, no bullet lists.`;
+- No backticks in commit messages.`;
+
+const DONE = `- canopy shows this repo as "changed" for as long as git status lists anything at all: untracked files, and submodules with new commits, modified content, or untracked content inside them. The job is done when the list is empty and the branch is not ahead, or when the user has decided to leave something.`;
+
+const STUCK = `- When you cannot finish the task as stated (nothing you would commit on your own, a decision only the user can make, a conflict), do not end the run by explaining. Ask with AskUserQuestion, giving the concrete options, then do what the user picks. Explaining is for the summary after the work.`;
+
+const SUMMARY = `- Finish with a short plain-prose summary of what you did (commit hashes, remote, URL) and anything you left alone and why. No headings, no bullet lists.`;
+
+const RULES = ["Ground rules:", SAFETY, DONE, STUCK, SUMMARY].join("\n");
+
+/** An ask is the note's task and no more, so it goes without the line that
+ *  makes a job done only once the repo is clean and pushed: with it, "explain
+ *  this" or "pull main" ended by offering to commit whatever else was lying
+ *  around and to push. */
+const ASK_RULES = ["Ground rules:", SAFETY, STUCK, SUMMARY].join("\n");
 
 /** The chat keeps the safety rules and drops the ones about how a job ends:
  *  a conversation has no closing summary, and it is not done until the user
  *  says so. */
-const CHAT_RULES = `Ground rules:
-- Work only inside this repository (submodules under it included).
-- Never rewrite published history, never force-push, never discard uncommitted work, never run destructive git commands (reset --hard, clean, checkout -- on tracked files).
-- Do not add a Co-Authored-By trailer or any mention of Claude to commit messages.
-- No backticks in commit messages.`;
+const CHAT_RULES = ["Ground rules:", SAFETY].join("\n");
 
 const GIT_READ = [
   "Bash(git status:*)",
@@ -161,7 +167,7 @@ export function buildPrompt(repo: Repo, spec: ActionSpec, note: string): string 
   const parts =
     spec.mode === "chat"
       ? [head, spec.task, CHAT_RULES, noteBlock]
-      : [head, spec.task, noteBlock, RULES];
+      : [head, spec.task, noteBlock, spec.mode === "ask" ? ASK_RULES : RULES];
   return parts.filter(Boolean).join("\n\n");
 }
 

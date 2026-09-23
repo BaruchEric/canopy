@@ -1,4 +1,4 @@
-import { describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, test } from "bun:test";
 import {
   PANEL_TERM,
   changed,
@@ -9,8 +9,9 @@ import {
   sectionsFor,
   toggleIn,
   unfoldIn,
+  useStore,
 } from "./store";
-import type { Repo } from "../../src/core/types";
+import type { KeptShell, Repo, TermInfo } from "../../src/core/types";
 
 describe("closedSectionsOf", () => {
   test("a layout from before the launch section folds it", () => {
@@ -75,5 +76,46 @@ describe("panelTermHeightFor", () => {
   test("a repo's own height, else the default", () => {
     expect(panelTermHeightFor({ panelTermHeights: { a: 240 } }, "a")).toBe(240);
     expect(panelTermHeightFor({ panelTermHeights: { a: 240 } }, "b")).toBe(PANEL_TERM.initial);
+  });
+});
+
+describe("shells this window ends or restores", () => {
+  const app = { id: "app", name: "app", path: "/dev/app", group: "", source: "launch", status: null } as unknown as Repo;
+  const tab = (id: string, exit?: number | null) => ({ id, repoId: "app", name: "app", path: "/dev/app", place: "strip" as const, ...(exit === undefined ? {} : { exit }) });
+  const info = (id: string): TermInfo => ({ id, repoId: "app", path: "/dev/app", place: "strip", attached: false, viewers: [], startedAt: 1 });
+  const realFetch = globalThis.fetch;
+  const calls: string[] = [];
+  const answer = (body: unknown) =>
+    (async (url: string | URL | Request, init?: RequestInit) => {
+      calls.push(`${init?.method ?? "GET"} ${String(url)}`);
+      return new Response(JSON.stringify(body), { status: 200 });
+    }) as unknown as typeof fetch;
+  afterEach(() => {
+    globalThis.fetch = realFetch;
+    calls.length = 0;
+  });
+
+  test("a closed tab is not taken back from a list that still names its shell", () => {
+    globalThis.fetch = answer({ ok: true });
+    const closing = "c".repeat(32);
+    const other = "d".repeat(32);
+    useStore.setState({ repos: [app], panels: [], terms: [tab(closing)], activeTerm: closing });
+    useStore.getState().closeTerm(closing);
+    expect(calls).toEqual([`DELETE /api/terms?term=${closing}`]);
+    // the list the closing socket set off, which the server sent before the end landed
+    useStore.getState().applyEvent({ type: "terms", terms: [info(closing), info(other)] });
+    expect(useStore.getState().terms.map((t) => t.id)).toEqual([other]);
+  });
+
+  test("restoring over a tab whose shell went starts that tab's view over", async () => {
+    const id = "e".repeat(32);
+    const kept: KeptShell = { id, repoId: "app", path: "/dev/app", place: "strip", startedAt: 1, savedAt: 2, lines: 3, agent: null };
+    globalThis.fetch = answer({ ...info(id), restoredAt: 3 });
+    useStore.setState({ repos: [app], panels: [], terms: [tab(id, 1)], kept: [kept], activeTerm: id });
+    await useStore.getState().restoreShell(id);
+    const after = useStore.getState().terms.find((t) => t.id === id);
+    expect(after?.exit).toBeUndefined();
+    expect(after?.gen).toBe(1);
+    expect(useStore.getState().kept).toEqual([]);
   });
 });

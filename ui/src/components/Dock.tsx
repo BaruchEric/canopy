@@ -9,6 +9,7 @@ import {
   markOf,
   moveCol,
   sortFiles,
+  stagingOf,
   type FileCol,
   type FileView,
 } from "../files";
@@ -61,7 +62,7 @@ function FileRow({
 }) {
   const [diff, setDiff] = useState<string | null>(null);
   const [open, setOpen] = useState(false);
-  const staged = file.index !== "." && !file.untracked;
+  const { staged, split } = stagingOf(file);
   const marker = markOf(file);
 
   // Re-fetch on every open: the cached text goes stale as soon as the file is
@@ -72,8 +73,11 @@ function FileRow({
       return;
     }
     try {
-      const r = await api.diff(repo.id, file.path, staged, file.untracked);
-      setDiff(r.diff);
+      const [r, rest] = await Promise.all([
+        api.diff(repo.id, file.path, staged, file.untracked),
+        split ? api.diff(repo.id, file.path, false, false) : null,
+      ]);
+      setDiff(rest ? [r.diff, rest.diff].filter((d) => d.trim()).join("\n") : r.diff);
       setOpen(true);
     } catch (err) {
       onError(String(err instanceof Error ? err.message : err));
@@ -82,7 +86,10 @@ function FileRow({
 
   const toggleStage = async () => {
     try {
-      await api.stage(repo.id, file.path, staged);
+      // a rename's old path goes on or off the index with it; a copy's
+      // source is a file of its own and stays as it is
+      const renamed = file.index === "R" || file.worktree === "R";
+      await api.stage(repo.id, file.path, staged, renamed ? file.orig : undefined);
     } catch (err) {
       onError(String(err instanceof Error ? err.message : err));
     }

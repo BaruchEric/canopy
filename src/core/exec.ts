@@ -15,7 +15,67 @@ export interface ExecOptions {
   env?: Record<string, string>;
 }
 
-/** Run a command, capture output. Never throws — errors land in code/stderr. */
+/** How long a timed-out command gets after SIGTERM before SIGKILL, and
+ *  after that before its pipes stop being waited on. */
+export const KILL_GRACE = 2_000;
+
+/** A pipe read to the end, keeping what arrived if it is given up on. */
+function collect(stream: ReadableStream<Uint8Array>) {
+  const chunks: Uint8Array[] = [];
+  const reader = stream.getReader();
+  const done = (async () => {
+    try {
+      for (;;) {
+        const { done: end, value } = await reader.read();
+        if (end) return;
+        chunks.push(value);
+      }
+    } catch {
+      // cancelled or broken: what arrived before stands
+    }
+  })();
+  return {
+    done,
+    text: () => Buffer.concat(chunks).toString("utf8"),
+    cancel: () => void reader.cancel().catch(() => {}),
+  };
+}
+
+/** whether `p` settles within `ms` */
+async function settles(p: Promise<unknown>, ms: number): Promise<boolean> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const expired = new Promise<false>((resolve) => {
+    timer = setTimeout(() => resolve(false), ms);
+  });
+  try {
+    return await Promise.race([p.then(() => true), expired]);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+/** a signal to the command's whole process group, or to the command alone
+ *  when the group is gone */
+function signal(proc: { pid: number; kill: (sig?: NodeJS.Signals) => void }, sig: NodeJS.Signals): void {
+  try {
+    process.kill(-proc.pid, sig);
+  } catch {
+    try {
+      proc.kill(sig);
+    } catch {
+      // already gone
+    }
+  }
+}
+
+/** Run a command, capture output. Never throws — errors land in code/stderr.
+ *
+ *  With a timeout the command runs in a process group of its own and the
+ *  timeout ends the whole group: killing only the command left whatever it
+ *  started (git fetch's per-remote child, its transport helper, the test
+ *  runner a check line ran) holding the pipes, and the call waiting on them
+ *  for as long as those lived. A process that leaves the group and keeps a
+ *  pipe (a daemon) is stopped being waited on after `KILL_GRACE`. */
 export async function exec(
   cmd: string[],
   opts: ExecOptions = {},
@@ -27,18 +87,23 @@ export async function exec(
       stdout: "pipe",
       stderr: "pipe",
       stdin: "ignore",
+      detached: !!opts.timeoutMs,
     });
-    let timer: ReturnType<typeof setTimeout> | undefined;
-    if (opts.timeoutMs) {
-      timer = setTimeout(() => proc.kill(), opts.timeoutMs);
+    const out = collect(proc.stdout);
+    const err = collect(proc.stderr);
+    const all = Promise.all([out.done, err.done, proc.exited]);
+    if (opts.timeoutMs && !(await settles(all, opts.timeoutMs))) {
+      signal(proc, "SIGTERM");
+      if (!(await settles(all, KILL_GRACE))) {
+        signal(proc, "SIGKILL");
+        if (!(await settles(all, KILL_GRACE))) {
+          out.cancel();
+          err.cancel();
+        }
+      }
     }
-    const [stdout, stderr, code] = await Promise.all([
-      new Response(proc.stdout).text(),
-      new Response(proc.stderr).text(),
-      proc.exited,
-    ]);
-    if (timer) clearTimeout(timer);
-    return { code, stdout, stderr };
+    const [, , code] = await all;
+    return { code, stdout: out.text(), stderr: err.text() };
   } catch (err) {
     return { code: 127, stdout: "", stderr: String(err) };
   }
@@ -70,7 +135,13 @@ export async function onHost(
   return exec([...sshArgs(host, sshControlDir()), remoteCommand(cmd)], { timeoutMs: opts.timeoutMs });
 }
 
-/** git in a repo, wherever the repo's locator says it is. */
+/** git in a repo, wherever the repo's locator says it is.
+ *
+ *  `GIT_OPTIONAL_LOCKS=0`: canopy reads while the user works, and a status
+ *  that refreshes the index holds index.lock while it does, so the user's
+ *  own `git add` or commit landing in that moment failed. Commands that
+ *  change the index still take the lock; only the opportunistic write goes.
+ *  (The variable does not travel over ssh; a remote repo is read as before.) */
 export async function git(
   repoPath: string,
   args: string[],
@@ -78,5 +149,5 @@ export async function git(
   env?: Record<string, string>,
 ): Promise<ExecResult> {
   const { host, path } = parseLocator(repoPath);
-  return onHost(host, ["git", "-C", path, ...args], { timeoutMs, env });
+  return onHost(host, ["git", "-C", path, ...args], { timeoutMs, env: { GIT_OPTIONAL_LOCKS: "0", ...env } });
 }

@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { PANEL_TERM_ROWS, adoptTerms, cellHeight, loadTermTabs, reconcileTerms, rowsPx, termId, type TermTab } from "./term";
+import { PANEL_TERM_ROWS, adoptTerms, cellHeight, loadTermTabs, reconcileTerms, rowsPx, termId, viewKey, type TermTab } from "./term";
 import type { Repo, TermInfo } from "../../src/core/types";
 
 describe("rowsPx", () => {
@@ -98,8 +98,24 @@ describe("adoptTerms", () => {
     expect(adoptTerms([], [info("p", "app", "panel")], repos, ["app"]).map((t) => t.place)).toEqual(["panel"]);
   });
 
+  test("a shell this window ended is not taken back, even while the server still lists it", () => {
+    const tabs = [tab("a", "app")];
+    const out = adoptTerms(tabs, [info("a", "app"), info("closed", "app"), info("b", "lib")], repos, [], new Set(["closed"]));
+    expect(out.map((t) => t.id)).toEqual(["a", "b"]);
+    expect(adoptTerms([], [info("closed", "app")], repos, [], new Set(["closed"]))).toEqual([]);
+  });
+
   test("a shell at a repo not in the scan is left alone, and nothing new returns the same array", () => {
     const tabs = [tab("a", "app")];
     expect(adoptTerms(tabs, [info("a", "app"), info("z", "gone")], repos, [])).toBe(tabs);
+  });
+});
+
+describe("viewKey", () => {
+  test("the name alone until a restore gives the tab a new generation", () => {
+    const t = tab("a", "app");
+    expect(viewKey(t)).toBe("a");
+    expect(viewKey({ ...t, gen: 1 })).toBe("a:1");
+    expect(viewKey({ ...t, gen: 2 })).not.toBe(viewKey({ ...t, gen: 1 }));
   });
 });

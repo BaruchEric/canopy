@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { clientCaps, clientKey, isLoopback } from "./client";
+import { clientCaps, clientKey, isLoopback, isLoopbackHost } from "./client";
 
 describe("isLoopback and clientKey", () => {
   test("loopback in both families", () => {
@@ -9,6 +9,15 @@ describe("isLoopback and clientKey", () => {
     expect(isLoopback("::ffff:127.0.0.1")).toBe(true);
     expect(isLoopback("100.68.139.95")).toBe(false);
     expect(isLoopback("fd7a::1")).toBe(false);
+  });
+
+  test("a loopback name for the host, which a tunnel's public name is not", () => {
+    expect(isLoopbackHost("localhost")).toBe(true);
+    expect(isLoopbackHost("127.0.0.1")).toBe(true);
+    expect(isLoopbackHost("[::1]")).toBe(true);
+    expect(isLoopbackHost("canopy.beric.ca")).toBe(false);
+    expect(isLoopbackHost("macmini-2018")).toBe(false);
+    expect(isLoopbackHost("127.0.0.1.evil.example")).toBe(false);
   });
 
   test("a mapped IPv4 keys the same as the plain one", () => {

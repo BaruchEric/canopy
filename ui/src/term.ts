@@ -19,7 +19,14 @@ export interface TermTab {
   place: ShellPlace;
   /** set once the shell has exited, with its code */
   exit?: number | null;
+  /** bumped when a shell is started again under the tab's name (a restore
+   *  over a tab whose shell had gone), so the view starts over rather than
+   *  keeping the ended one, which never reconnects */
+  gen?: number;
 }
+
+/** what a tab's view is keyed by: its name, and its generation once it has one */
+export const viewKey = (t: TermTab): string => (t.gen ? `${t.id}:${t.gen}` : t.id);
 
 /** A name for a new shell: 32 hex digits of this window's randomness. The
  *  server files the pty under it, and the layout keeps the tab under it, so
@@ -76,12 +83,21 @@ export function reconcileTerms(saved: TermTab[], live: TermInfo[], repos: Repo[]
  *  one: in the strip, or in its repo's panel when that panel is open here.
  *  A panel shell whose panel is closed waits for the panel to open or the
  *  next load, so a shell opened on another device does not pop panels
- *  open on this one. */
-export function adoptTerms(tabs: TermTab[], live: TermInfo[], repos: Repo[], panels: string[]): TermTab[] {
+ *  open on this one. A shell this window ended (`ended`) is never taken
+ *  back: the list that follows a closed tab's socket can reach here before
+ *  the server has heard the end, and adopting it would open a socket that
+ *  starts a new shell under the closed name. */
+export function adoptTerms(
+  tabs: TermTab[],
+  live: TermInfo[],
+  repos: Repo[],
+  panels: string[],
+  ended: ReadonlySet<string> = new Set(),
+): TermTab[] {
   const seen = new Set(tabs.map((t) => t.id));
   let out = tabs;
   for (const t of live) {
-    if (seen.has(t.id)) continue;
+    if (seen.has(t.id) || ended.has(t.id)) continue;
     if (t.place === "panel" && !panels.includes(t.repoId)) continue;
     const repo = repos.find((r) => r.id === t.repoId);
     if (!repo) continue;

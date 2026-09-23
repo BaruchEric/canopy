@@ -8,6 +8,7 @@ import {
   markOf,
   moveCol,
   sortFiles,
+  stagingOf,
 } from "./files";
 
 const file = (over: Partial<RepoFile>): RepoFile => ({
@@ -119,5 +120,29 @@ describe("column order", () => {
     expect(colOrder(["time", "file"])).toEqual(["time", "file", "mark"]);
     expect(colOrder(["time", "desc", "time", 3])).toEqual(["time", "mark", "file"]);
     expect(colOrder(undefined)).toEqual(["mark", "file", "time"]);
+  });
+});
+
+describe("stagingOf", () => {
+  const f = (index: string, worktree: string, extra: Partial<RepoFile> = {}): RepoFile => ({
+    path: "a.ts",
+    index,
+    worktree,
+    untracked: false,
+    conflicted: false,
+    ...extra,
+  });
+  test("staged, unstaged, and partly staged", () => {
+    expect(stagingOf(f("M", "."))).toEqual({ staged: true, split: false });
+    expect(stagingOf(f(".", "M"))).toEqual({ staged: false, split: false });
+    expect(stagingOf(f("M", "M"))).toEqual({ staged: true, split: true });
+    expect(stagingOf(f("A", "D"))).toEqual({ staged: true, split: true });
+  });
+  test("a conflict shows its worktree diff and is never ticked", () => {
+    expect(stagingOf(f("U", "U", { conflicted: true }))).toEqual({ staged: false, split: false });
+    expect(stagingOf(f("A", "A", { conflicted: true }))).toEqual({ staged: false, split: false });
+  });
+  test("an untracked file is not staged", () => {
+    expect(stagingOf(f("?", "?", { untracked: true }))).toEqual({ staged: false, split: false });
   });
 });

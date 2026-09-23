@@ -36,6 +36,16 @@ export function markOf(f: RepoFile): string {
   return f.index !== "." ? f.index : f.worktree;
 }
 
+/** What a row's checkbox and diff go by. A conflict is not staged whatever
+ *  its index letter says, and its conflict markers are in the worktree
+ *  diff (the cached one only says "Unmerged path"). A partly staged file
+ *  (`split`) has two diffs, the change in the index and the one on top of
+ *  it, and both are shown. */
+export function stagingOf(f: RepoFile): { staged: boolean; split: boolean } {
+  const staged = f.index !== "." && !f.untracked && !f.conflicted;
+  return { staged, split: staged && f.worktree !== "." };
+}
+
 function keyOf(f: RepoFile, col: FileCol): string | number {
   switch (col) {
     case "file":

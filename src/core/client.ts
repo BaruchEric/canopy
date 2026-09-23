@@ -38,6 +38,15 @@ export function isLoopback(address: string): boolean {
   return address === "127.0.0.1" || address === "::1" || address === "::ffff:127.0.0.1" || address.startsWith("127.");
 }
 
+/** Whether a request's host is this machine by a loopback name. A browser
+ *  on the backend's Mac asks for localhost or 127.0.0.1; a reverse proxy or
+ *  tunnel on the same Mac also connects from loopback, but for a browser
+ *  that asked for the proxy's name somewhere else, so the peer address alone
+ *  cannot say the browser is here. */
+export function isLoopbackHost(hostname: string): boolean {
+  return hostname === "localhost" || hostname === "[::1]" || /^127\.\d+\.\d+\.\d+$/.test(hostname);
+}
+
 /** one address as the helper map keys it: an IPv4-mapped IPv6 address
  *  becomes the IPv4 it carries, so a helper over one family matches a
  *  browser over the other */

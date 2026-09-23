@@ -13,7 +13,7 @@ import { OPENER_IDS, type AgentSettings, type HelperInfo, type OpenerId } from "
 import { normalizeAgent } from "./agent";
 import { parseLocator } from "./host";
 
-export { clientCaps, clientKey, isLoopback } from "./client";
+export { clientCaps, clientKey, isLoopback, isLoopbackHost } from "./client";
 
 /** what the backend asks of a helper: one opener at one repo, a file in
  *  VS Code, or a workspace of repos as one unit; `id` pairs the reply */

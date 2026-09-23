@@ -104,10 +104,11 @@ export const api = {
         untracked: untracked ? "1" : "0",
       })}`,
     ),
-  stage: (id: string, file: string, unstage: boolean) =>
+  /** `orig` is a rename's old path, which goes on or off the index with it */
+  stage: (id: string, file: string, unstage: boolean, orig?: string) =>
     req<Repo>(`/api/repos/stage?${rq(id)}`, {
       method: "POST",
-      body: JSON.stringify({ file, unstage }),
+      body: JSON.stringify({ file, unstage, orig }),
     }),
   commit: (id: string, message: string, stageAll: boolean) =>
     req<{ ok: true; out: string }>(`/api/repos/commit?${rq(id)}`, {

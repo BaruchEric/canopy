@@ -7,3 +7,7 @@ ui/node_modules
 # local scratch that must never enter the image
 *.log
 .DS_Store
+# compose reads these on the host (GH_TOKEN, the gateway key, TS_AUTHKEY);
+# in the image they would sit in a layer, and bun loads a .env from /app
+.env
+.env.*

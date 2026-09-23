@@ -288,18 +288,20 @@ export async function history(base: string[], id: string, rows: number, lines = 
   return r.code === 0 ? primeText(r.stdout, rows) : "";
 }
 
-/** the pane's command and title, both empty when tmux will not say */
-export async function paneInfo(base: string[], id: string): Promise<{ command: string; title: string }> {
+/** the pane's command and title, null when tmux will not say (the session
+ *  or its server is gone) */
+export async function paneInfo(base: string[], id: string): Promise<{ command: string; title: string } | null> {
   const r = await exec(paneArgs(base, id), { timeoutMs: 10_000 });
-  if (r.code !== 0) return { command: "", title: "" };
+  if (r.code !== 0) return null;
   const [command = "", title = ""] = r.stdout.replace(/\n$/, "").split("\t");
   return { command, title };
 }
 
-/** the session's history and screen as they stand, for the record on disk */
-export async function snapshot(base: string[], id: string, lines = HISTORY_LINES): Promise<string> {
+/** the session's history and screen as they stand, for the record on disk;
+ *  null when tmux will not say, which is not the same as an empty screen */
+export async function snapshot(base: string[], id: string, lines = HISTORY_LINES): Promise<string | null> {
   const r = await exec(snapshotArgs(base, id, lines), { timeoutMs: 10_000 });
-  return r.code === 0 ? r.stdout : "";
+  return r.code === 0 ? r.stdout : null;
 }
 
 /** types a line into a shell, as though the user had */

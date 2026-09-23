@@ -1,5 +1,5 @@
 import { ACTIONS } from "../core/actions";
-import { Library } from "../core/library";
+import { Library, libraryOriginAllowed, openBind } from "../core/library";
 import { watch, type FSWatcher } from "node:fs";
 import { readFile, realpath, stat } from "node:fs/promises";
 import { homedir } from "node:os";
@@ -41,7 +41,7 @@ import { normalizeAgent } from "../core/agent";
 import { normalizeLaunch } from "../core/launch";
 import { Launcher, LauncherError } from "../core/launcher";
 import { backendCaps, hostOpeners, isOpenerId, openFile, openGroup, openIn } from "../core/openers";
-import { clientKey, HELPER_PING, HELPER_TIMEOUT, isLoopback, parseDefaultGateway, parseHelperQuery, parseHelperReply, reachFrom, staleHelpers, type HelperIntent } from "../core/helper";
+import { clientKey, HELPER_PING, HELPER_TIMEOUT, isLoopback, isLoopbackHost, parseDefaultGateway, parseHelperQuery, parseHelperReply, reachFrom, staleHelpers, type HelperIntent } from "../core/helper";
 import { devicesOf, parseStream, type Stream } from "../core/presence";
 import { mapPool, searchRepo } from "../core/search";
 import { findWorkflow, loadWorkflows } from "../core/workflows";
@@ -60,8 +60,8 @@ import {
   rememberRoot,
   removeSource,
   removeWorkspace,
-  saveConfig,
   setAgent,
+  setKeepShells,
   setLaunch,
   upsertWorkspace,
 } from "../core/store";
@@ -117,7 +117,8 @@ interface ServerState {
   result: ScanResult;
   /** directory names the scan and the watcher both skip */
   ignore: string[];
-  /** GitHub identity, resolved once: undefined = not asked yet, null = no gh */
+  /** GitHub identity: undefined = not asked yet, null = gh gave none (asked
+   *  again every activity pass, see `retryLogin`) */
   login?: string | null;
   /** push permission memo, keyed "owner/name" — see core/access */
   access: Map<string, boolean | null>;
@@ -223,11 +224,18 @@ const NO_DESKTOP = "this canopy backend has no desktop; openers run on your own 
 const NO_HELPER = "no canopy helper is attached for this browser; run `canopy helper` on your machine and pick it in settings";
 
 /** What the backend knows about a browser at `key`: its address, whether
- *  that is this machine with a desktop of its own, and whether it is the
- *  address docker's proxy hands a container for every client. */
-function clientInfo(state: ServerState, key: string): ClientInfo {
-  return { address: key, local: isLoopback(key) && hostOpeners(), shared: key === state.gateway };
+ *  it is on this machine (`here`, see `onThisMachine`) with a desktop of its
+ *  own, and whether it is the address docker's proxy hands a container for
+ *  every client. */
+function clientInfo(state: ServerState, key: string, here: boolean): ClientInfo {
+  return { address: key, local: here && hostOpeners(), shared: key === state.gateway };
 }
+
+/** Whether a request comes from a browser on this machine: from loopback,
+ *  for a loopback name. A tunnel or reverse proxy on this Mac connects from
+ *  loopback too, but for a browser that asked for its public name from
+ *  somewhere else, and an opener clicked there must not open here. */
+const onThisMachine = (key: string, url: URL): boolean => isLoopback(key) && isLoopbackHost(url.hostname);
 
 /** The container's default gateway on Linux, null elsewhere or when the
  *  route table cannot be read: a published-port connection through docker's
@@ -318,12 +326,12 @@ function sweepHelpers(state: ServerState): void {
  *  way; a repo already elsewhere keeps its own. */
 type OpenVia = { via: "backend" } | { via: "helper"; name: string };
 
-function openVia(state: ServerState, key: string, helper: unknown): OpenVia {
+function openVia(state: ServerState, here: boolean, helper: unknown): OpenVia {
   if (typeof helper === "string" && helper !== "") {
     if (state.helpers.has(helper)) return { via: "helper", name: helper };
     throw new HttpError(400, `the helper ${helper} is not attached; ${NO_HELPER}`);
   }
-  if (isLoopback(key) && hostOpeners()) return { via: "backend" };
+  if (here && hostOpeners()) return { via: "backend" };
   throw new HttpError(400, hostOpeners() ? NO_HELPER : `${NO_DESKTOP}; ${NO_HELPER}`);
 }
 
@@ -380,6 +388,9 @@ async function endTerm(state: ServerState, id: string): Promise<boolean> {
   if (live) live.ending = true;
   await killSession(state.tmux, id);
   state.terms.delete(id);
+  // a snapshot pass that had this shell in hand may still be writing its
+  // record; forgetting after it is done is what makes the forget stick
+  await state.keeping;
   await forgetKept(id);
   tellTerms(state);
   return true;
@@ -397,6 +408,13 @@ async function snapshotShells(state: ServerState): Promise<void> {
     const { id, repoId, path, place, startedAt } = live.info;
     try {
       const [text, pane] = await Promise.all([snapshot(tmux, id), paneInfo(tmux, id)]);
+      // tmux would not say: the session or its whole server is gone (the
+      // shells container restarted under this server), and the record the
+      // last good pass wrote is exactly what a restore wants, so it stays
+      if (text === null || pane === null) continue;
+      // ended while this pass was on it: the end forgets the record, and
+      // writing it now would put it back on offer
+      if (live.ending || state.terms.get(id) !== live) continue;
       const history = clip(text);
       const rec: KeptShell = { id, repoId, path, place, startedAt, savedAt: Date.now(), lines: countLines(history), agent: agentIn(pane.command, pane.title) };
       await writeKept(rec, history);
@@ -569,8 +587,16 @@ async function joinTmuxTerm(state: ServerState, tmux: string[], ws: ServerWebSoc
             // A shell that exited leaves nothing worth restoring, but the
             // session can also be gone because the tmux server went with its
             // container or its machine, which is the one case where what it
-            // left is the whole point. Only the first forgets.
-            void serverUp(tmux).then((up) => (up ? forgetKept(id) : undefined));
+            // left is the whole point. Only the first forgets. The client
+            // exits 0 when its session ended under a live server, which
+            // includes the last shell on a Mac's tmux server, where the
+            // server then exits with it (`exit-empty on`) and asking it
+            // afterwards finds nothing; it exits 1 when the server went.
+            void (code === 0 ? Promise.resolve(true) : serverUp(tmux)).then(async (exited) => {
+              if (!exited) return;
+              await state.keeping;
+              await forgetKept(id);
+            });
             ws.send(JSON.stringify({ exit: code }));
             ws.close(1000, "the shell exited");
           }
@@ -766,9 +792,11 @@ function termInfo(state: ServerState, t: LiveTerm): TermInfo {
 
 /** the shells to every stream: after a start, an end, a join or a leave.
  *  Off the map alone, no tmux reconcile (that shells out) behind it; the
- *  GET does that. */
+ *  GET does that. One being ended is left out, so no window adopts it in
+ *  the moment before it goes. */
 function tellTerms(state: ServerState): void {
-  broadcast(state, { type: "terms", terms: [...state.terms.values()].map((t) => termInfo(state, t)) });
+  const terms = [...state.terms.values()].filter((t) => !t.ending).map((t) => termInfo(state, t));
+  broadcast(state, { type: "terms", terms });
 }
 
 function repoById(state: ServerState, id: string): Repo {
@@ -1015,12 +1043,27 @@ async function refreshPulls(state: ServerState): Promise<void> {
   });
 }
 
+/** A GitHub login that did not resolve (gh offline when the server started,
+ *  a DNS hiccup) is asked for again on every pass until it answers. Every
+ *  repo judged while it was missing had its GitHub remotes counted as not
+ *  the user's, so no background fetch and no remote tip; those judgements,
+ *  and the push lookups that failed with it, are made again. */
+async function retryLogin(state: ServerState): Promise<void> {
+  if (state.login !== null) return;
+  const login = await githubLogin();
+  if (!login) return;
+  state.login = login;
+  state.own.clear();
+  for (const [slug, perm] of state.access) if (perm === null) state.access.delete(slug);
+}
+
 /** The activity pass: fetch the user's own repos, then count their pull
  *  requests, each on the remote refresh timer and once soon after start. */
 function refreshActivity(state: ServerState): Promise<void> {
   if (state.activity) return state.activity;
   state.activity = (async () => {
     try {
+      await retryLogin(state);
       const cfg = await loadConfig();
       if (cfg.fetch) await fetchLocal(state);
       await refreshPulls(state);
@@ -1155,10 +1198,11 @@ async function handleApi(
 ): Promise<Response> {
   const path = url.pathname;
   const method = req.method;
+  const here = onThisMachine(key, url);
 
   if (path === "/api/tree" && method === "GET") return json(state.result);
   // what the backend knows of this browser, and the helpers dialled in
-  if (path === "/api/client" && method === "GET") return json(clientInfo(state, key));
+  if (path === "/api/client" && method === "GET") return json(clientInfo(state, key, here));
   if (path === "/api/helpers" && method === "GET") return json(helperList(state));
   if (path === "/api/devices" && method === "GET") return json(deviceList(state));
 
@@ -1297,10 +1341,16 @@ async function handleApi(
   if (path === "/api/keep" && method === "POST") {
     const b = (await req.json()) as { on?: unknown };
     if (typeof b.on !== "boolean") return json({ error: "on must be true or false" }, 400);
-    const cfg = await loadConfig();
-    await saveConfig({ ...cfg, keepShells: b.on });
-    // awaited, so the answer means the shells held right now are written
-    if (b.on) await keepPass(state);
+    // through the config queue: a write of its own raced every other
+    // setting's and could lose one or leave the file unreadable
+    await setKeepShells(b.on);
+    // awaited, so the answer means the shells held right now are written;
+    // a pass already running read the switch before it was set, so it is
+    // waited out and a fresh one taken
+    if (b.on) {
+      await state.keeping;
+      await keepPass(state);
+    }
     return json({ keeping: b.on });
   }
   if (path === "/api/terms" && method === "DELETE") {
@@ -1448,7 +1498,7 @@ async function handleApi(
   if (path === "/api/workspaces/open" && method === "POST") {
     const b = (await req.json()) as { name: string; app: string; helper?: unknown };
     if (!isOpenerId(b.app)) return json({ error: "unknown app" }, 400);
-    const via = openVia(state, key, b.helper);
+    const via = openVia(state, here, b.helper);
     const cfg = await loadConfig();
     const ws = cfg.workspaces.find((w) => w.name === b.name);
     if (!ws) return json({ error: "unknown workspace" }, 404);
@@ -1519,7 +1569,7 @@ async function handleApi(
         return json({ error: "file must be a path in the repo" }, 400);
       }
       const line = typeof b.line === "number" && Number.isInteger(b.line) && b.line > 0 ? b.line : 1;
-      const via = openVia(state, key, b.helper);
+      const via = openVia(state, here, b.helper);
       if (via.via === "backend") await openFile(repo.path, b.file, line);
       else await askHelper(state, via.name, { file: { path: helperPath(repo.path), file: b.file, line } });
       return json({ ok: true });
@@ -1572,8 +1622,8 @@ async function handleApi(
       return json({ diff });
     }
     if (method === "POST" && action === "stage") {
-      const b = (await req.json()) as { file: string; unstage?: boolean };
-      await stageFile(repo.path, b.file, b.unstage ?? false);
+      const b = (await req.json()) as { file: string; unstage?: boolean; orig?: unknown };
+      await stageFile(repo.path, b.file, b.unstage ?? false, typeof b.orig === "string" ? b.orig : undefined);
       return json(await refreshAndBroadcast(state, repo.id));
     }
     if (method === "POST" && action === "commit") {
@@ -1602,7 +1652,7 @@ async function handleApi(
     if (method === "POST" && action === "open") {
       const b = (await req.json()) as { app: string; tab?: unknown; helper?: unknown };
       if (!isOpenerId(b.app)) return json({ error: "unknown app" }, 400);
-      const via = openVia(state, key, b.helper);
+      const via = openVia(state, here, b.helper);
       const agent = agentFor(await loadConfig(), repo.path);
       const tab = b.tab === true;
       if (via.via === "backend") await openIn(b.app, repo.path, agent, { tab });
@@ -1861,6 +1911,13 @@ export async function startServer(opts: {
   // container's interfaces; its published port is bound to the tailnet
   // address alone, so the tailnet is the trust edge (see docs/deploy.md).
   const bindHost = process.env["CANOPY_BIND"] || "127.0.0.1";
+  // No auth does not mean any web page may drive the API: a page on another
+  // origin could otherwise post a run or open a shell over a websocket
+  // (neither needs a CORS preflight), and a domain rebound to this address
+  // could read everything. The same gate as the Library's: a local or
+  // tailnet host by its own name, or the configured public origin.
+  const publicOrigin = process.env["CANOPY_PUBLIC_ORIGIN"];
+  const beyondLoopback = openBind();
   const server = bind(port, () =>
     Bun.serve<Socket>({
       port,
@@ -1869,6 +1926,9 @@ export async function startServer(opts: {
       fetch: async (req, srv) => {
         const url = new URL(req.url);
         if (url.pathname === "/api/library" || url.pathname === "/library" || url.pathname.startsWith("/library/")) return library.handle(req);
+        if (url.pathname.startsWith("/api/") && !libraryOriginAllowed(req, publicOrigin, beyondLoopback)) {
+          return json({ error: "Foreign origin" }, 403);
+        }
         const key = clientKey(srv.requestIP(req)?.address ?? "127.0.0.1");
         if (url.pathname === "/api/events") return sse(state, parseStream(url.searchParams, key));
         if (url.pathname === "/api/helper") {
@@ -1949,7 +2009,11 @@ export async function startServer(opts: {
           const term = ws as ServerWebSocket<TermSocket>;
           const { id, attach, cols, rows } = term.data;
           const held = state.terms.get(id);
-          if (!held && attach) {
+          // A name a lost shell was kept under is not a new shell's to take:
+          // a window reloaded after a reboot still names it, and starting a
+          // shell there would hide the record from the restore offer and
+          // write over it at the next pass. It comes back through a restore.
+          if (!held && (attach || state.kept.some((k) => k.id === id))) {
             term.close(TERM_GONE, "that shell is gone");
             return;
           }

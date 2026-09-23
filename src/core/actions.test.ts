@@ -68,6 +68,16 @@ describe("buildPrompt", () => {
     expect(p).toContain("Task: see the note below.");
     expect(p).toContain("Note from the user:\nrename foo to bar");
   });
+  test("an ask is done when the note is, not when the repo is clean and pushed", () => {
+    const ask = buildPrompt(repo({ files: [file], ahead: 1 }), ACTIONS.ask, "explain the build script");
+    expect(ask).toContain("Never rewrite published history");
+    expect(ask).toContain("Ask with AskUserQuestion");
+    expect(ask).not.toContain("The job is done when the list is empty");
+    expect(ask.trim().endsWith("No headings, no bullet lists.")).toBe(true);
+    // a job keeps it
+    const job = buildPrompt(repo(), { ...ACTIONS.ask, mode: "job" as const, task: "Task: x" }, "");
+    expect(job).toContain("The job is done when the list is empty and the branch is not ahead");
+  });
   test("every action has a spec and a prompt", () => {
     for (const a of RUN_ACTIONS) {
       expect(ACTIONS[a].label.length).toBeGreaterThan(0);

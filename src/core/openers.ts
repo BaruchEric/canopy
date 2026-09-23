@@ -457,8 +457,11 @@ export function kittySessionLines(
         const { host, path } = parseLocator(p);
         const name = path.split("/").pop();
         const agent = agentFor(p);
+        // kitty splits a launch line like a shell, so the claude line has to
+        // stay one quoted word, or `-c` gets `claude` and every flag after it
+        // becomes the shell's own arguments
         const launch =
-          app === "agent" ? `launch --hold ${agentShellCommand(shell, agent).join(" ")}` : "launch";
+          app === "agent" ? `launch --hold ${shellLine(agentShellCommand(shell, agent))}` : "launch";
         if (host === null) return `new_tab ${name}\ncd ${path}\n${launch}`;
         // kitty splits launch lines like a shell, so the ssh line's quoting
         // survives; the tab opens an ssh session in place of a cd.

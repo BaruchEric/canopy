@@ -539,22 +539,28 @@ export async function getDiff(
   }
 }
 
+/** Stage or unstage one row of the changes list. A rename's row is both of
+ *  its paths: unstaging the new one alone left the old one's deletion staged,
+ *  so the next commit deleted it without adding the new one. */
 export async function stageFile(
   repoPath: string,
   file: string,
   unstage: boolean,
+  orig?: string,
 ): Promise<void> {
   repoRelative(repoPath, file);
+  if (orig !== undefined) repoRelative(repoPath, orig);
+  const paths = orig === undefined ? [file] : [file, orig];
   if (!unstage) {
-    const r = await git(repoPath, ["add", "--", file]);
+    const r = await git(repoPath, ["add", "--", ...paths]);
     if (r.code !== 0) throw new Error(r.stderr.trim() || "git stage failed");
     return;
   }
-  let r = await git(repoPath, ["restore", "--staged", "--", file]);
+  let r = await git(repoPath, ["restore", "--staged", "--", ...paths]);
   // Before the first commit there is no HEAD to restore from; dropping the
   // file from the index is the equivalent operation on an unborn branch.
   if (r.code !== 0 && /resolve 'HEAD'|unknown revision/i.test(r.stderr)) {
-    r = await git(repoPath, ["rm", "--cached", "--", file]);
+    r = await git(repoPath, ["rm", "--cached", "--", ...paths]);
   }
   if (r.code !== 0) throw new Error(r.stderr.trim() || "git unstage failed");
 }

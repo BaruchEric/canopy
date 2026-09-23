@@ -17,6 +17,7 @@ import {
   terminalLineArgs,
   userShell,
 } from "./openers";
+import { shellQuote } from "./host";
 import { DEFAULT_AGENT } from "./types";
 
 const opusYolo = { model: "opus", effort: "high", yolo: true, extra: "--add-dir '../my lib'" } as const;
@@ -42,7 +43,7 @@ describe("agent launch", () => {
       `cd '/home/me/x' && ${claudeLine(opusYolo)}`,
     );
     expect(kittySessionLines(["/a/x"], "agent", "/bin/zsh", () => opusYolo)).toContain(
-      `launch --hold /bin/zsh -l -i -c ${claudeLine(opusYolo)}\n`,
+      `launch --hold /bin/zsh -l -i -c ${shellQuote(claudeLine(opusYolo))}\n`,
     );
   });
 
