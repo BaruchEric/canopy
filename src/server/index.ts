@@ -1357,10 +1357,17 @@ export async function withPeering<T>(state: { peering: Promise<void> | null }, f
 
 /** The divergences in a repo's new peer state not reported yet. `seen`
  *  keeps exactly the pairs diverged now, so one that settles and later
- *  diverges again is reported again. Exported for a direct unit test. */
-export function newDivergences(seen: Map<string, Set<string>>, id: string, diverged: PeerBranch[]): PeerBranch[] {
+ *  diverges again is reported again. A state that carries an error may
+ *  have stopped before it compared anything, so its short list forgets
+ *  nothing. Exported for a direct unit test. */
+export function newDivergences(
+  seen: Map<string, Set<string>>,
+  id: string,
+  diverged: PeerBranch[],
+  opts: { errored?: boolean } = {},
+): PeerBranch[] {
   const had = seen.get(id);
-  const now = new Set<string>();
+  const now = new Set<string>(opts.errored ? had : []);
   const fresh: PeerBranch[] = [];
   for (const d of diverged) {
     const key = `${d.branch} ${d.peer}`;
@@ -1384,7 +1391,7 @@ function applyPeerState(state: ServerState, id: string, st: PeerState): void {
   const changed = !before || JSON.stringify({ ...before, at: 0 }) !== JSON.stringify({ ...st, at: 0 });
   state.peerStates.set(id, st);
   if (!changed) return;
-  for (const d of newDivergences(state.divergedSeen, id, st.diverged)) notifyDiverged(id, d);
+  for (const d of newDivergences(state.divergedSeen, id, st.diverged, { errored: !!st.error })) notifyDiverged(id, d);
   if (st.moved.length > 0) scheduleRefresh(state, id);
   const repo = state.result.repos[idx]!;
   const next = { ...repo, peers: st };

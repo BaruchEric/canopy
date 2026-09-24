@@ -366,6 +366,12 @@ describe("newDivergences", () => {
     expect(newDivergences(seen, "app", [])).toEqual([]);
     expect(newDivergences(seen, "app", [main, feat])).toEqual([main, feat]);
   });
+  test("a state that errored before it could compare keeps what was seen, so the next pass does not notify again", () => {
+    const seen = new Map<string, Set<string>>();
+    expect(newDivergences(seen, "app", [main])).toEqual([main]);
+    expect(newDivergences(seen, "app", [], { errored: true })).toEqual([]);
+    expect(newDivergences(seen, "app", [main])).toEqual([]);
+  });
   test("one repo's divergences never speak for another's, even with a space in the id", () => {
     const seen = new Map<string, Set<string>>();
     expect(newDivergences(seen, "a", [main])).toEqual([main]);
