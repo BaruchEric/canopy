@@ -1,10 +1,22 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
-import { mkdtemp, readFile, rm, writeFile, mkdir } from "node:fs/promises";
+import { mkdtemp, readFile, rm, writeFile, mkdir, symlink } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { exec } from "./exec";
 import { NO_PUSH } from "./peers";
-import { fastForward, fetchPeer, initRepo, isBusy, peerWips, snapshotWip } from "./peersync";
+import {
+  fastForward,
+  fetchPeer,
+  gateCommand,
+  initRepo,
+  isBusy,
+  peerWips,
+  safeId,
+  serveList,
+  serveSeed,
+  serveSeeds,
+  snapshotWip,
+} from "./peersync";
 import type { Peer } from "./types";
 
 let root = "";
@@ -365,5 +377,92 @@ describe("fetch and fast-forward", () => {
     await snapshotWip(mini, "mini", false);
     await fetchPeer(mac, miniId, toMini, {});
     expect(await peerWips(mac, ["mini"])).toEqual([]);
+  });
+});
+
+describe("gateCommand", () => {
+  const home = "/home/eric";
+  const rootAbs = "/home/eric/dev";
+  test("git-upload-pack under the root, home-relative or absolute", () => {
+    expect(gateCommand("git-upload-pack 'dev/São Paulo'", rootAbs, home)).toEqual({ kind: "upload-pack", path: "/home/eric/dev/São Paulo" });
+    expect(gateCommand("git-upload-pack '/home/eric/dev/a'", rootAbs, home)).toEqual({ kind: "upload-pack", path: "/home/eric/dev/a" });
+  });
+  test("refuses paths outside the root and other git commands", () => {
+    expect(gateCommand("git-upload-pack 'dev/../.ssh'", rootAbs, home)).toHaveProperty("error");
+    expect(gateCommand("git-upload-pack '/etc'", rootAbs, home)).toHaveProperty("error");
+    expect(gateCommand("git-receive-pack 'dev/a'", rootAbs, home)).toHaveProperty("error");
+    expect(gateCommand("sh -c id", rootAbs, home)).toHaveProperty("error");
+    expect(gateCommand("git-upload-pack 'dev/a'; id", rootAbs, home)).toHaveProperty("error");
+  });
+  test("the three queries", () => {
+    expect(gateCommand("'canopy-peer' 'list'", rootAbs, home)).toEqual({ kind: "list" });
+    expect(gateCommand("'canopy-peer' 'seeds' 'a/b'", rootAbs, home)).toEqual({ kind: "seeds", id: "a/b" });
+    expect(gateCommand("'canopy-peer' 'seed' 'a/b' '.env'", rootAbs, home)).toEqual({ kind: "seed", id: "a/b", file: ".env" });
+    expect(gateCommand("'canopy-peer' 'seed' 'a/b'", rootAbs, home)).toHaveProperty("error");
+  });
+  test("a symlink under the root that points outside it is refused, even though it exists", async () => {
+    const ws = join(root, "gate-escape-ws");
+    await mkdir(ws, { recursive: true });
+    const outside = join(root, "gate-escape-outside");
+    await exec(["git", "init", "-q", outside]);
+    const link = join(ws, "link");
+    await symlink(outside, link);
+    expect(gateCommand(`git-upload-pack '${link}'`, ws, home)).toHaveProperty("error");
+  });
+  test("a path that doesn't exist but whose .git-suffixed sibling is a symlink outside the root is refused (enter_repo's own suffix probing)", async () => {
+    const ws = join(root, "gate-escape-ws2");
+    await mkdir(ws, { recursive: true });
+    const outside = join(root, "gate-escape-outside2");
+    await exec(["git", "init", "-q", outside]);
+    const path = join(ws, "x"); // never created
+    await symlink(outside, `${path}.git`);
+    expect(gateCommand(`git-upload-pack '${path}'`, ws, home)).toHaveProperty("error");
+  });
+  test("accepts a real repo directly under the root, checked by real path", async () => {
+    const ws = join(root, "gate-accept-ws");
+    const a = join(ws, "a");
+    await exec(["git", "init", "-q", "-b", "main", a]);
+    expect(gateCommand(`git-upload-pack '${a}'`, ws, home)).toEqual({ kind: "upload-pack", path: a });
+  });
+});
+
+describe("serve", () => {
+  test("list finds repos with their origin, not below a repo", async () => {
+    const ws = join(root, "ws");
+    await mkdir(join(ws, "group"), { recursive: true });
+    const a = join(ws, "group", "a");
+    await exec(["git", "init", "-q", "-b", "main", a]);
+    await sh(a, "config", "user.email", "t@t");
+    await sh(a, "config", "user.name", "t");
+    await commit(a, "r.txt", "r\n"); // the gate test in Task 10 clones this repo
+    await exec(["git", "remote", "add", "origin", "git@github.com:x/a.git"], { cwd: a });
+    await exec(["git", "init", "-q", join(a, "vendor", "inner")]);
+    await exec(["git", "init", "-q", join(ws, "b")]);
+    expect(await serveList(ws)).toEqual([
+      { id: "b", origin: null },
+      { id: "group/a", origin: "git@github.com:x/a.git" },
+    ]);
+  });
+  test("seeds lists only ignored, allowlisted files; seed refuses anything else", async () => {
+    const ws = join(root, "ws");
+    const a = join(ws, "group", "a");
+    await writeFile(join(a, ".gitignore"), ".env\nsecret.key\n");
+    await writeFile(join(a, ".env"), "A=1\n");
+    await writeFile(join(a, "secret.key"), "k\n");
+    await writeFile(join(a, "tracked.env"), "t\n");
+    expect(await serveSeeds(ws, "group/a", [".env"])).toEqual([".env"]);
+    expect(new TextDecoder().decode(await serveSeed(ws, "group/a", ".env", [".env"]))).toBe("A=1\n");
+    await expect(serveSeed(ws, "group/a", "secret.key", [".env"])).rejects.toThrow();
+    await expect(serveSeed(ws, "group/a", "../../../etc/passwd", [".env"])).rejects.toThrow();
+    await expect(serveSeed(ws, "../..", ".env", [".env"])).rejects.toThrow();
+  });
+  test("a symlinked repo inside the root that points outside it is refused by safeId", async () => {
+    const ws = join(root, "safeid-escape-ws");
+    await mkdir(ws, { recursive: true });
+    const outside = join(root, "safeid-escape-outside");
+    await exec(["git", "init", "-q", outside]);
+    await symlink(outside, join(ws, "link"));
+    expect(safeId(ws, "link")).toBeNull();
+    await expect(serveSeeds(ws, "link", [".env"])).rejects.toThrow();
   });
 });

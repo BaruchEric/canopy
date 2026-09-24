@@ -1,11 +1,11 @@
 /** Peer sync, the Bun half: snapshots, fetches, fast-forwards, clones and
  *  seeds, every git call through `git()`. The decisions are in peers.ts. */
-import { copyFile, mkdir, mkdtemp, rm } from "node:fs/promises";
-import { existsSync } from "node:fs";
+import { copyFile, lstat, mkdir, mkdtemp, readdir, readFile, rm } from "node:fs/promises";
+import { existsSync, realpathSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { isAbsolute, join } from "node:path";
+import { isAbsolute, join, normalize, relative, resolve, sep } from "node:path";
 import { git } from "./exec";
-import { BUSY_MARKERS, ffTarget, NO_PUSH, parseRefLines, parseWipLines, peerMissing, peerRefspecs, peerUnreachable, peerUrl } from "./peers";
+import { BUSY_MARKERS, ffTarget, NO_PUSH, parseQuotedWords, parseRefLines, parseWipLines, peerMissing, peerRefspecs, peerUnreachable, peerUrl, seedWanted } from "./peers";
 import type { Peer, PeerState, PeerWip } from "./types";
 
 export async function currentBranch(repo: string): Promise<string | null> {
@@ -235,4 +235,129 @@ export async function peerWips(repo: string, peers: string[]): Promise<PeerWip[]
     }
   }
   return out;
+}
+
+/** What a forced peer key may reach: git-upload-pack under the workspace
+ *  root, and three read-only queries. This is the security boundary between
+ *  a peer's ssh key and the rest of the machine, so every check here refuses
+ *  on doubt rather than best-guessing. */
+
+export interface PeerListing { id: string; origin: string | null }
+
+/** Whether `to` lies outside `from`, once both are resolved to real paths.
+ *  A symlink inside the root can point anywhere; this is what keeps it from
+ *  taking a peer key with it. */
+const escapes = (from: string, to: string): boolean => {
+  const rel = relative(from, to);
+  return rel === ".." || rel.startsWith(`..${sep}`) || isAbsolute(rel);
+};
+
+/** Absolute repo dir for an id, or null when the id leaves the root, is not
+ *  a repo there, or reaches outside the root through a symlink. */
+export function safeId(root: string, id: string): string | null {
+  if (id === "" || id.startsWith("/") || id.split("/").some((s) => s === ".." || s === "." || s === "")) return null;
+  const dir = resolve(root, id);
+  if (relative(root, dir).startsWith("..")) return null;
+  if (!existsSync(join(dir, ".git"))) return null;
+  let realRoot: string;
+  let realDir: string;
+  try {
+    realRoot = realpathSync(root);
+    realDir = realpathSync(dir);
+  } catch {
+    return null; // gone between the existsSync check and here: not a repo
+  }
+  if (escapes(realRoot, realDir)) return null;
+  return dir;
+}
+
+export async function serveList(root: string, maxDepth = 4): Promise<PeerListing[]> {
+  const out: PeerListing[] = [];
+  const walk = async (dir: string, depth: number): Promise<void> => {
+    if (existsSync(join(dir, ".git")) && dir !== root) {
+      const id = relative(root, dir);
+      const o = await git(dir, ["remote", "get-url", "origin"]);
+      out.push({ id, origin: o.code === 0 ? o.stdout.trim() : null });
+      return; // never below a repo
+    }
+    if (depth >= maxDepth) return;
+    let names: string[] = [];
+    try { names = await readdir(dir); } catch { return; }
+    for (const n of names.sort()) {
+      if (n.startsWith(".") || n === "node_modules") continue;
+      const p = join(dir, n);
+      if ((await lstat(p).catch(() => null))?.isDirectory()) await walk(p, depth + 1);
+    }
+  };
+  await walk(root, 0);
+  return out.sort((a, b) => a.id.localeCompare(b.id));
+}
+
+export async function serveSeeds(root: string, id: string, allow: string[]): Promise<string[]> {
+  const dir = safeId(root, id);
+  if (!dir) throw new Error(`not a repo: ${id}`);
+  const r = await git(dir, ["ls-files", "-z", "--others", "--ignored", "--exclude-standard", "--directory"]);
+  return r.stdout.split("\0").filter((f) => f && !f.endsWith("/") && seedWanted(allow, f)).sort();
+}
+
+export async function serveSeed(root: string, id: string, file: string, allow: string[]): Promise<Uint8Array> {
+  const dir = safeId(root, id);
+  if (!dir) throw new Error(`not a repo: ${id}`);
+  const norm = normalize(file);
+  if (norm.startsWith("..") || norm.startsWith("/") || !seedWanted(allow, norm)) throw new Error(`not seedable: ${file}`);
+  if (!(await serveSeeds(root, id, allow)).includes(norm)) throw new Error(`not seedable: ${file}`);
+  const st = await lstat(join(dir, norm));
+  if (!st.isFile()) throw new Error(`not a file: ${file}`);
+  return new Uint8Array(await readFile(join(dir, norm)));
+}
+
+export type GateCommand =
+  | { kind: "upload-pack"; path: string }
+  | { kind: "list" }
+  | { kind: "seeds"; id: string }
+  | { kind: "seed"; id: string; file: string };
+
+/** Without --strict, git's own enter_repo() does not stop at the literal
+ *  path: it tries these suffixes in order and chdirs into the first one
+ *  that is a directory. A path that doesn't exist can still resolve this
+ *  way (a bare `<path>.git` symlink needs no `<path>` at all), so the gate
+ *  has to check what upload-pack would actually open, not just the literal
+ *  argument. */
+const ENTER_REPO_SUFFIXES = ["/.git", "", ".git/.git", ".git"];
+
+/** What the forced command may run. `root` is the absolute workspace root.
+ *  git-upload-pack under the root is checked lexically first, then every
+ *  path enter_repo's suffix probing could resolve it to is checked by real
+ *  path too, so a symlink anywhere in that probe cannot serve something
+ *  outside the root. A resolved path with no existing candidate at all is
+ *  left to the lexical check alone: upload-pack itself will fail on it. */
+export function gateCommand(line: string, root: string, home: string): GateCommand | { error: string } {
+  const w = parseQuotedWords(line);
+  if (!w || w.length === 0) return { error: "refused" };
+  if (w[0] === "git-upload-pack" && w.length === 2) {
+    const raw = w[1]!.replace(/^~\//, "");
+    const path = resolve(raw.startsWith("/") ? raw : join(home, raw));
+    const rel = relative(root, path);
+    if (rel === "" || rel.startsWith("..") || isAbsolute(rel)) return { error: "outside the workspace" };
+    let realRoot: string | null = null;
+    for (const suffix of ENTER_REPO_SUFFIXES) {
+      const candidate = path + suffix;
+      let st;
+      try { st = statSync(candidate); } catch { continue; }
+      if (!st.isDirectory()) continue;
+      if (realRoot === null) {
+        try { realRoot = realpathSync(root); } catch { return { error: "outside the workspace" }; } // root itself is gone
+      }
+      let realCandidate: string;
+      try { realCandidate = realpathSync(candidate); } catch { continue; } // gone between the stat and here
+      if (escapes(realRoot, realCandidate)) return { error: "outside the workspace" };
+    }
+    return { kind: "upload-pack", path };
+  }
+  if (w[0] === "canopy-peer") {
+    if (w[1] === "list" && w.length === 2) return { kind: "list" };
+    if (w[1] === "seeds" && w.length === 3) return { kind: "seeds", id: w[2]! };
+    if (w[1] === "seed" && w.length === 4) return { kind: "seed", id: w[2]!, file: w[3]! };
+  }
+  return { error: "refused" };
 }
