@@ -3,6 +3,7 @@ import type { CSSProperties, KeyboardEvent, PointerEvent } from "react";
 import { Terminal, type ITheme } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import "@xterm/xterm/css/xterm.css";
+import { api } from "../api";
 import { groveUrl, nameShellHere, parseRoute } from "../routes";
 import { PANEL_TERM, TERM, closedIn, panelTermHeightFor, useStore, type TermTab } from "../store";
 import { TERM_FONT, termId, viewKey } from "../term";
@@ -227,6 +228,45 @@ export function TermView({
       term.onBinary((data) => send(Uint8Array.from(data, (ch) => ch.charCodeAt(0) & 0xff))),
       term.onResize(({ cols, rows }) => send(JSON.stringify({ resize: { cols, rows } }))),
     ];
+    // An image cannot go down a terminal, and the backend has no clipboard
+    // for claude to read it from: a pasted or dropped image is uploaded,
+    // and its saved path is pasted in instead, which Claude Code attaches.
+    const images = (list: DataTransfer | null): File[] =>
+      [...(list?.files ?? [])].filter((f) => f.type.startsWith("image/"));
+    const upload = (files: File[]) => {
+      void (async () => {
+        const texts: string[] = [];
+        for (const f of files) {
+          try {
+            texts.push((await api.pasteImage(tab.id, f)).text);
+          } catch (err) {
+            note(`[the image did not paste: ${err instanceof Error ? err.message : String(err)}]`);
+          }
+        }
+        if (texts.length > 0) term.paste(texts.join(" "));
+        term.focus();
+      })();
+    };
+    const onPaste = (e: ClipboardEvent) => {
+      const files = images(e.clipboardData);
+      if (files.length === 0) return;
+      e.preventDefault();
+      e.stopImmediatePropagation();
+      upload(files);
+    };
+    const onDragOver = (e: DragEvent) => {
+      if (e.dataTransfer?.types.includes("Files")) e.preventDefault();
+    };
+    const onDrop = (e: DragEvent) => {
+      const files = images(e.dataTransfer);
+      if (files.length === 0) return;
+      e.preventDefault();
+      upload(files);
+    };
+    // capture, so it runs before xterm's own paste handler on its textarea
+    el.addEventListener("paste", onPaste, true);
+    el.addEventListener("dragover", onDragOver);
+    el.addEventListener("drop", onDrop);
     // Any change of size refits: the strip dragged taller, the window
     // resized, the tab shown again after being hidden.
     const ro = new ResizeObserver(() => {
@@ -237,6 +277,9 @@ export function TermView({
       gone = true;
       if (retry) clearTimeout(retry);
       ro.disconnect();
+      el.removeEventListener("paste", onPaste, true);
+      el.removeEventListener("dragover", onDragOver);
+      el.removeEventListener("drop", onDrop);
       for (const s of subs) s.dispose();
       // closing the socket leaves the shell running for the next view of it
       if (ws) {

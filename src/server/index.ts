@@ -34,6 +34,7 @@ import { Flows, type CheckResult } from "../core/flow";
 import { isTermId, parseTermMessage, Scrollback, shellArgs, startTerm, termPlace, termSize, type TermSession, type TermSize } from "../core/term";
 import { attachTmuxTerm, hasSession, history, killSession, listSessions, newSession, paneInfo, sendLine, serverUp, snapshot, tmuxBase } from "../core/tmux";
 import { agentIn, clip, continueLine, countLines, expiredShells, forgetKept, KEEP_EVERY, listKept, lostShells, readKeptHistory, replayCommand, replayFile, restoredBanner, writeKept } from "../core/keep";
+import { PASTE_MAX, pasteName, pasteText, savePaste } from "../core/paste";
 import { apiBase, ForgeAuthError, linkForgeClones, listForgeRepos } from "../core/forge";
 import { isSshHost, parseLocator, parseSshHosts, shellQuote, tildeQuote } from "../core/host";
 import { hasGatewayKey, jev } from "../core/jev";
@@ -1691,6 +1692,22 @@ async function handleApi(
       await keepPass(state);
     }
     return json({ keeping: b.on });
+  }
+  if (path === "/api/terms/paste" && method === "POST") {
+    // an image the browser could not paste through the terminal, saved
+    // where the shell can read it; the browser types the path in
+    const live = state.terms.get(url.searchParams.get("term") ?? "");
+    if (!live) return json({ error: "no such shell" }, 404);
+    const host = parseLocator(live.info.path).host;
+    if (host) return json({ error: `this shell runs on ${host}, where a pasted image cannot be saved` }, 400);
+    const name = pasteName(live.info.id, req.headers.get("content-type") ?? "", Date.now());
+    if (!name) return json({ error: "only a png, jpeg, gif or webp image can be pasted" }, 415);
+    if (Number(req.headers.get("content-length") ?? 0) > PASTE_MAX) return json({ error: "the image is over 20 MB" }, 413);
+    const bytes = await req.arrayBuffer();
+    if (bytes.byteLength === 0) return json({ error: "the image is empty" }, 400);
+    if (bytes.byteLength > PASTE_MAX) return json({ error: "the image is over 20 MB" }, 413);
+    const saved = await savePaste(name, bytes);
+    return json({ path: saved, text: pasteText(saved) }, 201);
   }
   if (path === "/api/terms" && method === "DELETE") {
     if (!(await endTerm(state, url.searchParams.get("term") ?? ""))) return json({ error: "no such shell" }, 404);

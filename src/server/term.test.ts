@@ -161,6 +161,33 @@ describe("a shell behind the socket", () => {
     expect(res.status).toBe(404);
   });
 
+  test("a pasted image lands under the config dir and comes back as a path to type", async () => {
+    const id = "3333333333333333cccccccccccccccc";
+    const c = connect({ term: id });
+    await c.opened;
+    const paste = (type: string, body: Uint8Array, term = id) =>
+      fetch(`http://127.0.0.1:${server.port}/api/terms/paste?term=${term}`, { method: "POST", headers: { "content-type": type }, body });
+    const png = new Uint8Array([0x89, 0x50, 0x4e, 0x47]);
+    // the shell is held once it has drawn, not when the socket opens
+    c.ws.send(new TextEncoder().encode("printf 'pas%s\\n' te\n"));
+    await until(() => c.text().includes("paste"), "the shell's first line");
+
+    const res = await paste("image/png", png);
+    expect(res.status).toBe(201);
+    const { path, text } = (await res.json()) as { path: string; text: string };
+    expect(path.startsWith(join(scratch, "config", "pastes", "33333333-"))).toBe(true);
+    expect(path.endsWith(".png")).toBe(true);
+    expect(text).toBe(path);
+    expect([...new Uint8Array(await Bun.file(path).arrayBuffer())]).toEqual([...png]);
+
+    expect((await paste("text/plain", png)).status).toBe(415);
+    expect((await paste("image/png", new Uint8Array())).status).toBe(400);
+    expect((await paste("image/png", png, "4444444444444444dddddddddddddddd")).status).toBe(404);
+
+    await fetch(`http://127.0.0.1:${server.port}/api/terms?term=${id}`, { method: "DELETE" });
+    await c.closed;
+  });
+
   test.if(tmux)("draws on the normal screen and hands a new socket what scrolled off", async () => {
     const id = "1111111111111111aaaaaaaaaaaaaaaa";
     const first = connect({ term: id });

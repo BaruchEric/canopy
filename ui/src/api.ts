@@ -175,6 +175,14 @@ export const api = {
       method: "POST",
       body: JSON.stringify({ session }),
     }),
+  /** saves an image for shell `id` on the backend; `text` is its path as
+   *  the shell should see it typed */
+  pasteImage: (id: string, image: Blob) =>
+    req<{ path: string; text: string }>(`/api/terms/paste?term=${encodeURIComponent(id)}`, {
+      method: "POST",
+      headers: { "Content-Type": image.type },
+      body: image,
+    }),
   /** the shells the server holds, attached or waiting for a browser */
   terms: () => req<TermInfo[]>("/api/terms"),
   /** ends one shell; closing its socket alone leaves it running */
