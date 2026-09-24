@@ -38,6 +38,8 @@ import { apiBase, ForgeAuthError, linkForgeClones, listForgeRepos } from "../cor
 import { isSshHost, parseLocator, parseSshHosts, shellQuote, tildeQuote } from "../core/host";
 import { hasGatewayKey, jev } from "../core/jev";
 import { normalizeAgent } from "../core/agent";
+import { linkPeers } from "../core/peers";
+import { initRepo, PassSeen, seedRepo, syncAll, syncRepo, takeWip, trackBranch } from "../core/peersync";
 import { normalizeLaunch } from "../core/launch";
 import { Launcher, LauncherError } from "../core/launcher";
 import { backendCaps, hostOpeners, isOpenerId, openFile, openGroup, openIn } from "../core/openers";
@@ -70,6 +72,7 @@ import { Runner } from "../core/runner";
 import { suggestMessage } from "../core/suggest";
 import {
   HISTORY_WINDOWS,
+  LAUNCH_SOURCE,
   RUN_ACTIONS,
   type AgentSettings,
   type CanopyConfig,
@@ -81,6 +84,9 @@ import {
   type HistoryOverview,
   type HistoryWindow,
   type KeptShell,
+  type PeerBranch,
+  type PeerSeen,
+  type PeerState,
   type PullCount,
   type Repo,
   type RunAction,
@@ -155,6 +161,19 @@ interface ServerState {
   /** the names of each repo's own remotes, by path, settled once per repo:
    *  what the background fetch pulls and where a tip may come from */
   own: Map<string, string[]>;
+  /** peer sync outcomes by repo id, from the last whole-tree pass or a
+   *  per-repo action; what `linkPeers` attaches to each repo as `.peers` */
+  peerStates: Map<string, PeerState>;
+  /** each peer's reachability from the last whole-tree pass */
+  peerSeen: PeerSeen[];
+  /** branch+peer pairs already reported diverged, so the notice fires once */
+  divergedSeen: Set<string>;
+  /** repo paths whose peer remotes were set up (a non-dry initRepo) this
+   *  process, so a restart or a dry-to-on flip sets them up again */
+  inited: Set<string>;
+  /** a peer pass under way, so a timer pass and a manual /api/peers/sync
+   *  share the one run instead of racing each other's initRepo calls */
+  peering: Promise<void> | null;
   /** an activity pass under way, so the timer never stacks a second one */
   activity: Promise<void> | null;
   /** the shells a machine going down left behind, the ones no live session
@@ -758,6 +777,26 @@ function scanOpts(state: ServerState, cfg: CanopyConfig): Required<ScanOptions> 
   };
 }
 
+type PeerSettings = Pick<CanopyConfig, "self" | "peers" | "peerSync" | "seed">;
+
+/** The test hook behind `peerSettings`: CANOPY_PEERS_JSON, read only under
+ *  NODE_ENV=test (bun test sets it), so a local folder named as a peer
+ *  (alias null) — which config validation would refuse — never reaches a
+ *  real run. Pure, so the gate itself can be tested without a server. */
+export function peerSettingsFromEnv(env: Record<string, string | undefined>): PeerSettings | null {
+  if (env["NODE_ENV"] !== "test") return null;
+  const raw = env["CANOPY_PEERS_JSON"];
+  return raw ? (JSON.parse(raw) as PeerSettings) : null;
+}
+
+/** The peer settings: the config's, or CANOPY_PEERS_JSON in tests. */
+async function peerSettings(): Promise<PeerSettings> {
+  const fromEnv = peerSettingsFromEnv(process.env);
+  if (fromEnv) return fromEnv;
+  const cfg = await loadConfig();
+  return { self: cfg.self, peers: cfg.peers, peerSync: cfg.peerSync, seed: cfg.seed };
+}
+
 const enc = new TextEncoder();
 
 /** An error carrying the status the client should see. */
@@ -881,8 +920,9 @@ function rebuildResult(state: ServerState, repos: Repo[]): void {
     sources: state.sources.map((rt) => ({ ...rt.src })),
     // Which forge repos are already cloned here can only be told once every
     // source is in the same list, so it is settled on the way out; the pull
-    // request counts ride along from the last activity pass.
-    repos: linkPulls(linkForgeClones([...repos].sort(bySource(order))), state.pulls),
+    // request counts and the peer states ride along from the last activity
+    // pass and the last peer pass.
+    repos: linkPeers(linkPulls(linkForgeClones([...repos].sort(bySource(order))), state.pulls), state.peerStates),
     scannedAt: Date.now(),
     backend: backendCaps(),
   };
@@ -1034,7 +1074,11 @@ async function ownRemotesOf(state: ServerState, repo: Repo): Promise<{ names: st
   const known = state.own.get(repo.path);
   if (known !== undefined) return { names: known, learned: false };
   if (state.login === undefined) state.login = await githubLogin();
-  const names = await ownRemotes(await listRemotes(repo.path), { login: state.login, permission: state.access });
+  let names = await ownRemotes(await listRemotes(repo.path), { login: state.login, permission: state.access });
+  // Peer remotes are pulled by the peer pass, not the origin fetch, and kept
+  // out of status.tip too: the tip reads only the names settled here.
+  const peerNames = (await peerSettings()).peers.map((p) => p.name);
+  names = names.filter((n) => !peerNames.includes(n));
   state.own.set(repo.path, names);
   return { names, learned: true };
 }
@@ -1107,6 +1151,7 @@ function refreshActivity(state: ServerState): Promise<void> {
       await retryLogin(state);
       const cfg = await loadConfig();
       if (cfg.fetch) await fetchLocal(state);
+      await refreshPeers(state).catch((err) => console.error("canopy: peer pass", err));
       await refreshPulls(state);
     } catch (err) {
       console.error("activity refresh failed:", err);
@@ -1115,6 +1160,83 @@ function refreshActivity(state: ServerState): Promise<void> {
     state.activity = null;
   });
   return state.activity;
+}
+
+/** A repo peer sync covers: a local repo under the launch root, with no
+ *  ongoing scan error. */
+const peerable = (r: Repo): boolean => r.source === LAUNCH_SOURCE && !r.host && !r.forge && !r.error;
+
+/** Pulls from every peer: snapshot, fetch, fast-forward, clone what is
+ *  missing. Repos with a run under way are skipped, like the fetch. A timer
+ *  pass and a manual /api/peers/sync share the one run: `syncAll`'s own lock
+ *  only covers the syncAll call, and the initRepo loop ahead of it is not
+ *  safe to run twice at once over the same repo. */
+function refreshPeers(state: ServerState): Promise<void> {
+  if (state.peering) return state.peering;
+  state.peering = peerPass(state).finally(() => {
+    state.peering = null;
+  });
+  return state.peering;
+}
+
+async function peerPass(state: ServerState): Promise<void> {
+  const s = await peerSettings();
+  if (s.peerSync === "off" || !s.self) return;
+  if (s.peers.length === 0) return;
+  const repos = state.result.repos.filter((r) => peerable(r) && !state.runner.activeFor(r.id));
+  for (const r of repos) {
+    if (state.inited.has(r.path)) continue;
+    const dry = s.peerSync === "dry";
+    await initRepo(r.path, r.id, s.peers, dry);
+    // Only a non-dry setup counts as inited: a dry pass wrote no remotes, so
+    // flipping to "on" without a restart must still set them up.
+    if (!dry) state.inited.add(r.path);
+  }
+  const { states, seen, cloned, failed } = await syncAll(
+    repos.map((r) => r.id),
+    { self: s.self, peers: s.peers, seed: s.seed, dry: s.peerSync === "dry", root: state.root },
+    FETCH_CONCURRENCY,
+  );
+  state.peerSeen = seen;
+  broadcast(state, { type: "peers", seen });
+  for (const [id, st] of states) applyPeerState(state, id, st);
+  for (const f of failed) console.error(`canopy: peer clone failed: ${f.id}: ${f.error}`);
+  if (cloned.length > 0) {
+    const launch = state.sources.find((rt) => rt.src.id === LAUNCH_SOURCE);
+    if (launch) await scanOne(state, launch, scanOpts(state, await loadConfig()));
+    broadcast(state, { type: "scan", result: state.result });
+  }
+}
+
+/** Records one repo's peer state, notifies on a divergence the first time it
+ *  is seen, schedules a status re-read when something moved, and broadcasts
+ *  the repo only when its peer state actually changed (broadcasting every
+ *  repo each pass would pulse the whole board). */
+function applyPeerState(state: ServerState, id: string, st: PeerState): void {
+  const before = state.peerStates.get(id);
+  const changed = !before || JSON.stringify({ ...before, at: 0 }) !== JSON.stringify({ ...st, at: 0 });
+  state.peerStates.set(id, st);
+  if (!changed) return;
+  for (const d of st.diverged) {
+    const key = `${id} ${d.branch} ${d.peer}`;
+    if (state.divergedSeen.has(key)) continue;
+    state.divergedSeen.add(key);
+    notifyDiverged(id, d);
+  }
+  if (st.moved.length > 0) scheduleRefresh(state, id);
+  const idx = state.result.repos.findIndex((r) => r.id === id);
+  const repo = state.result.repos[idx];
+  if (!repo) return;
+  const next = { ...repo, peers: st };
+  state.result.repos[idx] = next;
+  broadcast(state, { type: "repo", repo: next });
+}
+
+/** Best effort: `ctl` exists only where _control is installed. */
+function notifyDiverged(id: string, d: PeerBranch): void {
+  const ctl = Bun.which("ctl");
+  if (!ctl) return;
+  void exec([ctl, "notify", "soft", `${id}: ${d.branch} diverged from ${d.peer} (${d.behind} here, ${d.ahead} there)`], { timeoutMs: 10_000 });
 }
 
 /* ---------- adding a source: check the folder before storing it ---------- */
@@ -1504,6 +1626,15 @@ async function handleApi(
     return json((await loadConfig()).agents);
   }
 
+  if (path === "/api/peers" && method === "GET") {
+    const s = await peerSettings();
+    return json({ self: s.self, peers: s.peers, seen: state.peerSeen, sync: s.peerSync });
+  }
+  if (path === "/api/peers/sync" && method === "POST") {
+    void refreshPeers(state).catch((err) => console.error("canopy: peer pass", err));
+    return json({}, 202);
+  }
+
   if (path === "/api/workspaces" && method === "GET") {
     return json((await loadConfig()).workspaces);
   }
@@ -1811,6 +1942,36 @@ async function handleApi(
       const by = deviceNameOf(state, typeof b.client === "string" ? b.client : null) ?? undefined;
       return json(state.runner.start(repo, b.action, ACTIONS[b.action], note, agent, by), 201);
     }
+    if (method === "POST" && action === "peer") {
+      if (!peerable(repo)) throw new HttpError(400, "peer sync covers local repos under the launch root");
+      const body = (await req.json().catch(() => ({}))) as { action?: string; peer?: string; branch?: string };
+      const s = await peerSettings();
+      if (!s.self) throw new HttpError(400, "peers are not set up: no self in the config");
+      const needPeer = body.action === "take" || body.action === "track";
+      const peer = s.peers.find((p) => p.name === body.peer);
+      if (needPeer && !peer) throw new HttpError(404, `unknown peer: ${body.peer}`);
+      const dry = s.peerSync === "dry";
+      let take: unknown;
+      try {
+        if (body.action === "sync") {
+          await initRepo(repo.path, repo.id, s.peers, dry);
+          applyPeerState(state, repo.id, await syncRepo(repo.id, { self: s.self, peers: s.peers, seed: s.seed, dry, root: state.root }, new PassSeen()));
+        } else if (body.action === "take") {
+          take = await takeWip(repo.path, peer!.name, body.branch ?? "");
+        } else if (body.action === "track") {
+          await trackBranch(repo.path, peer!.name, body.branch ?? "");
+        } else if (body.action === "seed") {
+          await seedRepo(repo.path, repo.id, s.peers, s.seed, dry);
+        } else {
+          throw new HttpError(400, `unknown action: ${body.action}`);
+        }
+      } catch (err) {
+        if (err instanceof HttpError) throw err;
+        throw new HttpError(409, String(err instanceof Error ? err.message : err));
+      }
+      const fresh = await refreshAndBroadcast(state, repo.id);
+      return json(take ? { ...fresh, take } : fresh);
+    }
   }
   return json({ error: "not found" }, 404);
 }
@@ -1932,6 +2093,11 @@ export async function startServer(opts: {
     launcher,
     pulls: new Map(),
     own: new Map(),
+    peerStates: new Map(),
+    peerSeen: [],
+    divergedSeen: new Set(),
+    inited: new Set(),
+    peering: null,
     activity: null,
     kept: [],
     keeping: null,
