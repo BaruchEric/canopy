@@ -95,9 +95,10 @@ export function ffTarget(branch: string, tips: Tip[], contains: (a: string, b: s
 }
 
 export function parseRefLines(out: string): { ref: string; hash: string }[] {
-  return out.split("\n").filter(Boolean).map((l) => {
+  return out.split("\n").filter(Boolean).flatMap((l) => {
     const sp = l.indexOf(" ");
-    return { hash: l.slice(0, sp), ref: l.slice(sp + 1) };
+    if (sp === -1) return [];
+    return [{ hash: l.slice(0, sp), ref: l.slice(sp + 1) }];
   });
 }
 
@@ -143,8 +144,11 @@ export function parseQuotedWords(line: string): string[] | null {
       if (/[$`\\]/.test(body)) return null;
       cur += body;
       i = end;
-    } else if (c === "\\" && line[i + 1] === "'") {
-      cur += "'";
+    } else if (c === "\\") {
+      if (i + 1 >= line.length) return null;
+      const next = line[i + 1]!;
+      if (next === "\n") return null;
+      cur += next;
       i++;
     } else if (/[A-Za-z0-9_@%+=:,./-]/.test(c)) {
       cur += c;

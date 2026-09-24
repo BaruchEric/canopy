@@ -118,6 +118,12 @@ describe("parsers", () => {
       { ref: "refs/heads/feat/x", hash: "bbb" },
     ]);
   });
+  test("ref lines skips lines with no space", () => {
+    expect(parseRefLines("aaa refs/heads/main\nmalformed\nccc refs/heads/other\n")).toEqual([
+      { ref: "refs/heads/main", hash: "aaa" },
+      { ref: "refs/heads/other", hash: "ccc" },
+    ]);
+  });
   test("wip lines strip the peer namespace and keep slashes in the branch", () => {
     expect(parseWipLines("h1 1790000000 p1 refs/peer-wip/mini/feat/x\n", "mini")).toEqual([
       { peer: "mini", branch: "feat/x", at: 1790000000000, parent: "p1", hash: "h1" },
@@ -142,10 +148,18 @@ describe("parseQuotedWords", () => {
     expect(parseQuotedWords("'canopy-peer' 'seed' 'a b' '.env'")).toEqual(["canopy-peer", "seed", "a b", ".env"]);
     expect(parseQuotedWords("'it'\\''s'")).toEqual(["it's"]);
   });
+  test("handles backslash escaping for any character, like git sq_quote", () => {
+    expect(parseQuotedWords("git-upload-pack 'dev/a'\\!'b'")).toEqual(["git-upload-pack", "dev/a!b"]);
+    expect(parseQuotedWords("a\\;b")).toEqual(["a;b"]);
+  });
   test("refuses anything a shell would expand or chain", () => {
     for (const bad of ["a; rm -rf ~", "a | b", "$(x)", "`x`", "a && b", "\"$HOME\"", "a > f", "'unterminated"]) {
       expect(parseQuotedWords(bad)).toBeNull();
     }
+  });
+  test("refuses a trailing lone backslash or backslash-newline", () => {
+    expect(parseQuotedWords("a\\")).toBeNull();
+    expect(parseQuotedWords("a\\\n")).toBeNull();
   });
 });
 
