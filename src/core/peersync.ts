@@ -1,11 +1,11 @@
 /** Peer sync, the Bun half: snapshots, fetches, fast-forwards, clones and
  *  seeds, every git call through `git()`. The decisions are in peers.ts. */
-import { copyFile, lstat, mkdir, mkdtemp, readdir, readFile, rm } from "node:fs/promises";
+import { chmod, copyFile, link, lstat, mkdir, mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises";
 import { existsSync, readFileSync, realpathSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, isAbsolute, join, normalize, relative, resolve, sep } from "node:path";
-import { git } from "./exec";
-import { BUSY_MARKERS, ffTarget, NO_PUSH, parseQuotedWords, parseRefLines, parseWipLines, peerMissing, peerRefspecs, peerUnreachable, peerUrl, seedWanted } from "./peers";
+import { git, onHost } from "./exec";
+import { BUSY_MARKERS, ffTarget, isSafeRel, NO_PUSH, parseQuotedWords, parseRefLines, parseWipLines, peerMissing, peerRefspecs, peerUnreachable, peerUrl, repoWanted, seedWanted } from "./peers";
 import type { Peer, PeerState, PeerWip } from "./types";
 
 export async function currentBranch(repo: string): Promise<string | null> {
@@ -423,4 +423,123 @@ export function gateCommand(line: string, root: string, home: string): GateComma
     if (w[1] === "seed" && w.length === 4) return { kind: "seed", id: w[2]!, file: w[3]! };
   }
   return { error: "refused" };
+}
+
+/** A peer query: in-process for a local peer (alias null), else over ssh to
+ *  the gate, which answers `canopy-peer …`. */
+export async function askPeer(peer: Peer, words: string[], seedAllow: string[]) {
+  if (peer.alias === null) {
+    try {
+      const [cmd, a, b] = words;
+      if (cmd === "list") return { ok: true as const, out: JSON.stringify(await serveList(peer.root)) };
+      if (cmd === "seeds" && a) return { ok: true as const, out: JSON.stringify(await serveSeeds(peer.root, a, seedAllow)) };
+      if (cmd === "seed" && a && b) return { ok: true as const, out: Buffer.from(await serveSeed(peer.root, a, b, seedAllow)).toString("base64") };
+      return { ok: false as const, unreachable: false, error: "refused" };
+    } catch (err) {
+      return { ok: false as const, unreachable: false, error: String(err instanceof Error ? err.message : err) };
+    }
+  }
+  const r = await onHost(peer.alias, ["canopy-peer", ...words], { timeoutMs: 60_000 });
+  if (r.code === 0) return { ok: true as const, out: r.stdout };
+  return { ok: false as const, unreachable: peerUnreachable(r.stderr), error: r.stderr.trim() || `exit ${r.code}` };
+}
+
+/** A listing entry with a string id, kept whatever else is wrong with it;
+ *  a peer's answer is untrusted, so nothing here assumes the shape holds. */
+function asListing(v: unknown): PeerListing[] | null {
+  if (!Array.isArray(v)) return null;
+  const out: PeerListing[] = [];
+  for (const entry of v) {
+    if (!entry || typeof entry !== "object") continue;
+    const { id, origin } = entry as Record<string, unknown>;
+    if (typeof id !== "string") continue;
+    out.push({ id, origin: typeof origin === "string" ? origin : null });
+  }
+  return out;
+}
+
+export async function listPeer(peer: Peer, seedAllow: string[]) {
+  const r = await askPeer(peer, ["list"], seedAllow);
+  if (!r.ok) return { unreachable: r.unreachable, error: r.error };
+  try {
+    const listing = asListing(JSON.parse(r.out));
+    return listing ?? { unreachable: false, error: "unreadable listing" };
+  } catch {
+    return { unreachable: false, error: "unreadable listing" };
+  }
+}
+
+/** Copies each allowlisted ignored file a peer has and this repo lacks.
+ *  Written beside the target and linked into place, so a file that appeared
+ *  meanwhile is never replaced. A peer's answer is untrusted: a file name
+ *  that fails isSafeRel (path traversal, an absolute path, a leading dash)
+ *  is skipped rather than joined onto the repo path. */
+export async function seedRepo(repo: string, id: string, peers: Peer[], allow: string[], dry: boolean): Promise<string[]> {
+  const wrote: string[] = [];
+  for (const p of peers.filter((x) => x.role === "git")) {
+    const list = await askPeer(p, ["seeds", id], allow);
+    if (!list.ok) continue;
+    let files: string[] = [];
+    try {
+      const v: unknown = JSON.parse(list.out);
+      if (!Array.isArray(v)) continue;
+      files = v.filter((f): f is string => typeof f === "string");
+    } catch { continue; }
+    for (const f of files) {
+      const dest = join(repo, f);
+      if (!isSafeRel(f) || !seedWanted(allow, f) || existsSync(dest) || wrote.includes(f)) continue;
+      if (dry) { wrote.push(f); continue; }
+      const got = await askPeer(p, ["seed", id, f], allow);
+      if (!got.ok) continue;
+      await mkdir(dirname(dest), { recursive: true });
+      const tmp = `${dest}.canopy-seed-${process.pid}`;
+      await writeFile(tmp, Buffer.from(got.out.trim(), "base64"), { mode: 0o600 });
+      await chmod(tmp, 0o600);
+      try {
+        await link(tmp, dest); // fails if dest now exists: never overwrite
+        wrote.push(f);
+      } catch {
+        // someone made it meanwhile; theirs stands
+      } finally {
+        await rm(tmp, { force: true });
+      }
+    }
+  }
+  return wrote;
+}
+
+/** Clones every repo a peer has and this workspace lacks. A peer's listing
+ *  is untrusted: an id that fails isSafeRel is skipped before it ever
+ *  becomes a join(root, id), and an origin url that starts with "-" or
+ *  holds "::" is never handed to `git remote add` (a leading dash could be
+ *  read as an option, "::" opens a remote helper). The clone itself takes
+ *  "--" ahead of the url and destination for the same reason. */
+export async function cloneMissing(root: string, peers: Peer[], allow: string[], dry: boolean, env: Record<string, string>) {
+  const cloned: string[] = [];
+  const failed: { id: string; error: string }[] = [];
+  const gitPeers = peers.filter((p) => p.role === "git");
+  for (const p of gitPeers) {
+    const listing = await listPeer(p, allow);
+    if (!Array.isArray(listing)) continue;
+    for (const { id, origin } of listing) {
+      if (!isSafeRel(id)) continue;
+      const dest = join(root, id);
+      if (!repoWanted(p, id) || existsSync(dest) || cloned.includes(id)) continue;
+      if (dry) { cloned.push(id); continue; }
+      const r = await onHost(null, ["git", "clone", "--quiet", "--origin", p.name, "--", peerUrl(p, id), dest], {
+        timeoutMs: 600_000, env: { GIT_TERMINAL_PROMPT: "0", ...env },
+      });
+      if (r.code !== 0) {
+        await rm(dest, { recursive: true, force: true });
+        failed.push({ id, error: r.stderr.trim().split("\n").pop() ?? "clone failed" });
+        continue;
+      }
+      const safeOrigin = origin && !origin.startsWith("-") && !origin.includes("::") ? origin : null;
+      if (safeOrigin) await git(dest, ["remote", "add", "origin", safeOrigin]);
+      await initRepo(dest, id, gitPeers, false);
+      await seedRepo(dest, id, gitPeers, allow, false);
+      cloned.push(id);
+    }
+  }
+  return { cloned, failed };
 }

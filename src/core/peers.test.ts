@@ -1,7 +1,8 @@
 import { describe, expect, test } from "bun:test";
 import {
-  BUSY_MARKERS, DEFAULT_SEED, ffTarget, globMatch, linkPeers, normalizePeers, normalizeSeed, parseQuotedWords,
-  parseRefLines, parseWipLines, peerMissing, peerRefspecs, peerUnreachable, peerUrl, repoWanted, seedWanted,
+  BUSY_MARKERS, DEFAULT_SEED, ffTarget, globMatch, isSafeRel, linkPeers, normalizePeers, normalizeSeed,
+  parseQuotedWords, parseRefLines, parseWipLines, peerMissing, peerRefspecs, peerUnreachable, peerUrl, repoWanted,
+  seedWanted,
 } from "./peers";
 import type { PeerState, Repo } from "./types";
 
@@ -160,6 +161,35 @@ describe("parseQuotedWords", () => {
   test("refuses a trailing lone backslash or backslash-newline", () => {
     expect(parseQuotedWords("a\\")).toBeNull();
     expect(parseQuotedWords("a\\\n")).toBeNull();
+  });
+});
+
+describe("isSafeRel", () => {
+  test("accepts a plain relative id or file name, nested paths included", () => {
+    expect(isSafeRel("proj")).toBe(true);
+    expect(isSafeRel("dev-tools/canopy")).toBe(true);
+    expect(isSafeRel(".env")).toBe(true);
+    expect(isSafeRel("a/b/c")).toBe(true);
+  });
+  test("rejects traversal, empty segments, and absolute paths", () => {
+    expect(isSafeRel("../evil")).toBe(false);
+    expect(isSafeRel("../../x")).toBe(false);
+    expect(isSafeRel("a/../b")).toBe(false);
+    expect(isSafeRel("a/./b")).toBe(false);
+    expect(isSafeRel("a//b")).toBe(false);
+    expect(isSafeRel("a/")).toBe(false);
+    expect(isSafeRel("")).toBe(false);
+    expect(isSafeRel(".")).toBe(false);
+    expect(isSafeRel("..")).toBe(false);
+    expect(isSafeRel("/etc/passwd")).toBe(false);
+  });
+  test("rejects a leading dash on the whole name and NUL or newline", () => {
+    expect(isSafeRel("-rf")).toBe(false);
+    expect(isSafeRel("--upload-pack=x")).toBe(false);
+    expect(isSafeRel("a\0b")).toBe(false);
+    expect(isSafeRel("a\nb")).toBe(false);
+    // a dash mid-path is not a leading dash on the whole name
+    expect(isSafeRel("web-apps/-foo")).toBe(true);
   });
 });
 

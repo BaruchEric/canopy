@@ -1,10 +1,12 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
-import { mkdtemp, readFile, rm, writeFile, mkdir, symlink } from "node:fs/promises";
+import { mkdtemp, readFile, rm, writeFile, mkdir, symlink, lstat } from "node:fs/promises";
+import { existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { exec } from "./exec";
 import { NO_PUSH } from "./peers";
 import {
+  cloneMissing,
   fastForward,
   fetchPeer,
   gateCommand,
@@ -12,6 +14,7 @@ import {
   isBusy,
   peerWips,
   safeId,
+  seedRepo,
   serveList,
   serveSeed,
   serveSeeds,
@@ -517,5 +520,74 @@ describe("serve", () => {
     await writeFile(join(x, ".git"), `gitdir: ${outsideGitDir}\n`);
     expect(safeId(ws, "x")).toBeNull();
     await expect(serveSeeds(ws, "x", [".env"])).rejects.toThrow();
+  });
+});
+
+describe("clone and seed", () => {
+  test("a repo only the peer has is cloned, origin copied, other peers added, .env seeded once", async () => {
+    const theirs = join(root, "theirs");
+    const src = join(theirs, "proj");
+    await mkdir(src, { recursive: true });
+    await exec(["git", "init", "-q", "-b", "main", src]);
+    await sh(src, "config", "user.email", "t@t");
+    await sh(src, "config", "user.name", "t");
+    await commit(src, ".gitignore", ".env\n");
+    await sh(src, "remote", "add", "origin", "git@github.com:x/proj.git");
+    await writeFile(join(src, ".env"), "TOKEN=1\n");
+    const ours = join(root, "ours");
+    await mkdir(ours, { recursive: true });
+    const peer: Peer = { name: "mini", alias: null, root: theirs, role: "git" };
+    const other: Peer = { name: "gpd", alias: null, root: join(root, "gpd-none"), role: "git" };
+    const r = await cloneMissing(ours, [peer, other], [".env"], false, {});
+    expect(r).toEqual({ cloned: ["proj"], failed: [] });
+    const here = join(ours, "proj");
+    expect(await sh(here, "remote", "get-url", "origin")).toBe("git@github.com:x/proj.git");
+    expect(await sh(here, "config", "remote.gpd.pushurl")).toBe(NO_PUSH);
+    expect(await readFile(join(here, ".env"), "utf8")).toBe("TOKEN=1\n");
+    expect(((await lstat(join(here, ".env"))).mode & 0o777).toString(8)).toBe("600");
+    // a later seed never overwrites
+    await writeFile(join(here, ".env"), "MINE=1\n");
+    expect(await seedRepo(here, "proj", [peer], [".env"], false)).toEqual([]);
+    expect(await readFile(join(here, ".env"), "utf8")).toBe("MINE=1\n");
+  });
+
+  test("peer repos outside the peer's globs are not cloned; dry clones nothing", async () => {
+    const ours = join(root, "ours2");
+    await mkdir(ours, { recursive: true });
+    const peer: Peer = { name: "mini", alias: null, root: join(root, "theirs"), role: "git", repos: ["other/*"] };
+    expect(await cloneMissing(ours, [peer], [".env"], false, {})).toEqual({ cloned: [], failed: [] });
+    const all: Peer = { ...peer, repos: undefined };
+    expect((await cloneMissing(ours, [all], [".env"], true, {})).cloned).toEqual(["proj"]);
+    expect(existsSync(join(ours, "proj"))).toBe(false);
+  });
+});
+
+describe("a peer's listing is untrusted", () => {
+  test("an origin url starting with a dash or holding :: is not added as a remote, though the clone itself proceeds", async () => {
+    const theirs = join(root, "theirs-danger");
+    const dash = join(theirs, "dash");
+    const ext = join(theirs, "ext");
+    for (const src of [dash, ext]) {
+      await mkdir(src, { recursive: true });
+      await exec(["git", "init", "-q", "-b", "main", src]);
+      await sh(src, "config", "user.email", "t@t");
+      await sh(src, "config", "user.name", "t");
+      await commit(src, "a.txt", "one\n");
+    }
+    // Written straight into .git/config: a value git's own CLI parsing
+    // would refuse to store this way is exactly what a hand-rolled
+    // listing from a compromised or non-conforming peer could still send.
+    await writeFile(join(dash, ".git", "config"), (await readFile(join(dash, ".git", "config"), "utf8")) + '[remote "origin"]\n\turl = --evil\n');
+    await writeFile(join(ext, ".git", "config"), (await readFile(join(ext, ".git", "config"), "utf8")) + '[remote "origin"]\n\turl = ext::sh -c evil\n');
+    const ours = join(root, "ours-danger");
+    await mkdir(ours, { recursive: true });
+    const peer: Peer = { name: "mini", alias: null, root: theirs, role: "git" };
+    const r = await cloneMissing(ours, [peer], [".env"], false, {});
+    expect(r.failed).toEqual([]);
+    expect(r.cloned.sort()).toEqual(["dash", "ext"]);
+    for (const id of ["dash", "ext"]) {
+      const remotes = (await sh(join(ours, id), "remote")).split("\n").filter(Boolean);
+      expect(remotes).toEqual(["mini"]);
+    }
   });
 });

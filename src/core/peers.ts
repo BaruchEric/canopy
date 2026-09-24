@@ -72,6 +72,17 @@ export const seedWanted = (allow: string[], file: string): boolean => {
   return allow.some((g) => globMatch(g, base));
 };
 
+/** Whether a repo id or seed file name from a peer's listing is safe to
+ *  turn into a path here: a relative path with no empty, "." or ".."
+ *  segment, no leading "-" on the whole name (so it is never taken for a
+ *  flag), no leading "/", and no NUL or newline. A peer's listing is
+ *  untrusted input, whatever runs on the far end of it; anything that
+ *  fails this is skipped rather than guessed at. */
+export function isSafeRel(p: string): boolean {
+  if (p === "" || p.startsWith("/") || p.startsWith("-") || /[\0\n]/.test(p)) return false;
+  return p.split("/").every((s) => s !== "" && s !== "." && s !== "..");
+}
+
 export const BUSY_MARKERS = ["MERGE_HEAD", "rebase-merge", "rebase-apply", "CHERRY_PICK_HEAD", "REVERT_HEAD", "BISECT_LOG", "index.lock"] as const;
 
 export interface Tip { peer: string; hash: string; ahead: number; behind: number }
