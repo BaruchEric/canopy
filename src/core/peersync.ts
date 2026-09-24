@@ -1,7 +1,8 @@
 /** Peer sync, the Bun half: snapshots, fetches, fast-forwards, clones and
  *  seeds, every git call through `git()`. The decisions are in peers.ts. */
-import { chmod, copyFile, link, lstat, mkdir, mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises";
+import { chmod, copyFile, link, lstat, mkdir, mkdtemp, readdir, readFile, realpath, rm, writeFile } from "node:fs/promises";
 import { existsSync, readFileSync, realpathSync, statSync } from "node:fs";
+import { randomBytes } from "node:crypto";
 import { tmpdir } from "node:os";
 import { dirname, isAbsolute, join, normalize, relative, resolve, sep } from "node:path";
 import { git, onHost } from "./exec";
@@ -469,13 +470,53 @@ export async function listPeer(peer: Peer, seedAllow: string[]) {
   }
 }
 
+/** The realpath of `p` itself, or of the first ancestor of `p` that
+ *  exists, walking up as far as the filesystem root (which always exists).
+ *  Null only on a race: an ancestor existed at the `existsSync` check and
+ *  was gone by the `realpath` call a moment later. */
+async function deepestRealAncestor(p: string): Promise<string | null> {
+  let cur = p;
+  for (;;) {
+    if (existsSync(cur)) {
+      try { return await realpath(cur); } catch { return null; }
+    }
+    const parent = dirname(cur);
+    if (parent === cur) return null;
+    cur = parent;
+  }
+}
+
+/** Whether `p`'s deepest existing ancestor resolves inside `containerReal`
+ *  (the already-resolved real path of the workspace root or repo it must
+ *  stay under). A symlink anywhere along the way — already there, or
+ *  created in a race between two calls of this — is what this refuses. */
+async function staysInside(p: string, containerReal: string): Promise<boolean> {
+  const real = await deepestRealAncestor(p);
+  return real !== null && (real === containerReal || real.startsWith(containerReal + sep));
+}
+
+/** A strict base64 decode: null for anything that isn't valid base64 once
+ *  trimmed, rather than Buffer.from's lenient best-effort decoding of what
+ *  is, over ssh, a peer's untrusted reply. */
+export function decodeBase64Strict(s: string): Buffer | null {
+  if (s === "") return Buffer.alloc(0);
+  if (!/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/.test(s)) return null;
+  return Buffer.from(s, "base64");
+}
+
 /** Copies each allowlisted ignored file a peer has and this repo lacks.
- *  Written beside the target and linked into place, so a file that appeared
- *  meanwhile is never replaced. A peer's answer is untrusted: a file name
- *  that fails isSafeRel (path traversal, an absolute path, a leading dash)
- *  is skipped rather than joined onto the repo path. */
+ *  Written beside the target under a random name and linked into place, so
+ *  a file that appeared meanwhile is never replaced. A peer's answer is
+ *  untrusted twice over: a file name that fails isSafeRel (path traversal,
+ *  an absolute path, a leading dash) is skipped before it ever becomes a
+ *  path, and even a safe-looking name is checked against the repo's real
+ *  path before and after the directory it lives in is created, since a
+ *  symlink already sitting inside the repo (or one that lands there in a
+ *  race) can point anywhere a lexical check alone would not catch. */
 export async function seedRepo(repo: string, id: string, peers: Peer[], allow: string[], dry: boolean): Promise<string[]> {
   const wrote: string[] = [];
+  let repoReal: string;
+  try { repoReal = await realpath(repo); } catch { return wrote; } // repo is gone: nothing to seed into
   for (const p of peers.filter((x) => x.role === "git")) {
     const list = await askPeer(p, ["seeds", id], allow);
     if (!list.ok) continue;
@@ -488,18 +529,30 @@ export async function seedRepo(repo: string, id: string, peers: Peer[], allow: s
     for (const f of files) {
       const dest = join(repo, f);
       if (!isSafeRel(f) || !seedWanted(allow, f) || existsSync(dest) || wrote.includes(f)) continue;
+      if (!(await staysInside(dest, repoReal))) continue; // before creating anything
       if (dry) { wrote.push(f); continue; }
       const got = await askPeer(p, ["seed", id, f], allow);
       if (!got.ok) continue;
-      await mkdir(dirname(dest), { recursive: true });
-      const tmp = `${dest}.canopy-seed-${process.pid}`;
-      await writeFile(tmp, Buffer.from(got.out.trim(), "base64"), { mode: 0o600 });
-      await chmod(tmp, 0o600);
+      const bytes = decodeBase64Strict(got.out.trim());
+      if (bytes === null) continue;
+      const dir = dirname(dest);
+      const tmp = `${dest}.canopy-seed-${randomBytes(8).toString("hex")}`;
       try {
-        await link(tmp, dest); // fails if dest now exists: never overwrite
-        wrote.push(f);
+        await mkdir(dir, { recursive: true });
+        if (!(await staysInside(dest, repoReal))) continue; // again: mkdir may have followed a symlink made meanwhile
+        await writeFile(tmp, bytes, { flag: "wx", mode: 0o600 }); // wx: refuses to write through anything already at tmp
+        await chmod(tmp, 0o600);
+        try {
+          await link(tmp, dest); // fails if dest now exists: never overwrite
+          wrote.push(f);
+        } catch {
+          // EEXIST (dest now exists, even as a dangling symlink): someone
+          // made it meanwhile, theirs stands. Anything else: a real
+          // failure for this file alone. Either way it is simply not
+          // written, and the loop moves on to the next file.
+        }
       } catch {
-        // someone made it meanwhile; theirs stands
+        // mkdir or writeFile failed for this file: skip it, the loop goes on
       } finally {
         await rm(tmp, { force: true });
       }
@@ -510,14 +563,21 @@ export async function seedRepo(repo: string, id: string, peers: Peer[], allow: s
 
 /** Clones every repo a peer has and this workspace lacks. A peer's listing
  *  is untrusted: an id that fails isSafeRel is skipped before it ever
- *  becomes a join(root, id), and an origin url that starts with "-" or
- *  holds "::" is never handed to `git remote add` (a leading dash could be
- *  read as an option, "::" opens a remote helper). The clone itself takes
- *  "--" ahead of the url and destination for the same reason. */
+ *  becomes a join(root, id); an id that passes that check but still
+ *  resolves outside root once symlinks are followed (an existing local
+ *  folder in its path may hold one) is skipped by the same staysInside
+ *  check seedRepo uses; and an origin url that starts with "-" or holds
+ *  "::" is never handed to `git remote add` (a leading dash could be read
+ *  as an option, "::" opens a remote helper). The clone itself takes "--"
+ *  ahead of the url and destination for the same reason. A failure cloning
+ *  or setting up one repo — including one thrown by initRepo or seedRepo —
+ *  is recorded in `failed` and the loop moves on to the next repo. */
 export async function cloneMissing(root: string, peers: Peer[], allow: string[], dry: boolean, env: Record<string, string>) {
   const cloned: string[] = [];
   const failed: { id: string; error: string }[] = [];
   const gitPeers = peers.filter((p) => p.role === "git");
+  let rootReal: string;
+  try { rootReal = await realpath(root); } catch { return { cloned, failed }; } // root is gone
   for (const p of gitPeers) {
     const listing = await listPeer(p, allow);
     if (!Array.isArray(listing)) continue;
@@ -525,20 +585,26 @@ export async function cloneMissing(root: string, peers: Peer[], allow: string[],
       if (!isSafeRel(id)) continue;
       const dest = join(root, id);
       if (!repoWanted(p, id) || existsSync(dest) || cloned.includes(id)) continue;
+      if (!(await staysInside(dest, rootReal))) continue;
       if (dry) { cloned.push(id); continue; }
-      const r = await onHost(null, ["git", "clone", "--quiet", "--origin", p.name, "--", peerUrl(p, id), dest], {
-        timeoutMs: 600_000, env: { GIT_TERMINAL_PROMPT: "0", ...env },
-      });
-      if (r.code !== 0) {
-        await rm(dest, { recursive: true, force: true });
-        failed.push({ id, error: r.stderr.trim().split("\n").pop() ?? "clone failed" });
-        continue;
+      try {
+        const r = await onHost(null, ["git", "clone", "--quiet", "--origin", p.name, "--", peerUrl(p, id), dest], {
+          timeoutMs: 600_000, env: { GIT_TERMINAL_PROMPT: "0", ...env },
+        });
+        if (r.code !== 0) {
+          await rm(dest, { recursive: true, force: true });
+          failed.push({ id, error: r.stderr.trim().split("\n").pop() || "clone failed" });
+          continue;
+        }
+        const safeOrigin = origin && !origin.startsWith("-") && !origin.includes("::") ? origin : null;
+        if (safeOrigin) await git(dest, ["remote", "add", "origin", safeOrigin]);
+        await initRepo(dest, id, gitPeers, false);
+        await seedRepo(dest, id, gitPeers, allow, false);
+        cloned.push(id);
+      } catch (err) {
+        await rm(dest, { recursive: true, force: true }).catch(() => {});
+        failed.push({ id, error: String(err instanceof Error ? err.message : err) });
       }
-      const safeOrigin = origin && !origin.startsWith("-") && !origin.includes("::") ? origin : null;
-      if (safeOrigin) await git(dest, ["remote", "add", "origin", safeOrigin]);
-      await initRepo(dest, id, gitPeers, false);
-      await seedRepo(dest, id, gitPeers, allow, false);
-      cloned.push(id);
     }
   }
   return { cloned, failed };

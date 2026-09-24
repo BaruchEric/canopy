@@ -2,11 +2,12 @@ import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { mkdtemp, readFile, rm, writeFile, mkdir, symlink, lstat } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { exec } from "./exec";
 import { NO_PUSH } from "./peers";
 import {
   cloneMissing,
+  decodeBase64Strict,
   fastForward,
   fetchPeer,
   gateCommand,
@@ -552,9 +553,16 @@ describe("clone and seed", () => {
   });
 
   test("peer repos outside the peer's globs are not cloned; dry clones nothing", async () => {
+    const theirs2 = join(root, "theirs2");
+    const src2 = join(theirs2, "proj");
+    await mkdir(src2, { recursive: true });
+    await exec(["git", "init", "-q", "-b", "main", src2]);
+    await sh(src2, "config", "user.email", "t@t");
+    await sh(src2, "config", "user.name", "t");
+    await commit(src2, "a.txt", "one\n");
     const ours = join(root, "ours2");
     await mkdir(ours, { recursive: true });
-    const peer: Peer = { name: "mini", alias: null, root: join(root, "theirs"), role: "git", repos: ["other/*"] };
+    const peer: Peer = { name: "mini", alias: null, root: theirs2, role: "git", repos: ["other/*"] };
     expect(await cloneMissing(ours, [peer], [".env"], false, {})).toEqual({ cloned: [], failed: [] });
     const all: Peer = { ...peer, repos: undefined };
     expect((await cloneMissing(ours, [all], [".env"], true, {})).cloned).toEqual(["proj"]);
@@ -621,5 +629,154 @@ describe("a peer's listing is untrusted", () => {
       const remotes = (await sh(join(ours, id), "remote")).split("\n").filter(Boolean);
       expect(remotes).toEqual(["mini"]);
     }
+  });
+});
+
+describe("symlinks inside a repo or root are not followed", () => {
+  test("a symlinked folder inside the repo is not followed when seeding", async () => {
+    const theirsRoot = join(root, "theirs-symlink-seed");
+    const theirs = join(theirsRoot, "proj");
+    await mkdir(theirs, { recursive: true });
+    await exec(["git", "init", "-q", "-b", "main", theirs]);
+    await sh(theirs, "config", "user.email", "t@t");
+    await sh(theirs, "config", "user.name", "t");
+    // A tracked file keeps "config/" from being collapsed into one entry by
+    // "git ls-files --directory"; only then does the ignored file inside it
+    // get reported by name, the way a real seed candidate would be.
+    await commit(theirs, "config/tracked.txt", "keep\n");
+    await commit(theirs, ".gitignore", "config/.env\n");
+    await mkdir(join(theirs, "config"), { recursive: true });
+    await writeFile(join(theirs, "config", ".env"), "SECRET=1\n");
+
+    const here = join(root, "ours-symlink-seed", "proj");
+    await mkdir(here, { recursive: true });
+    const outside = join(root, "outside-symlink-seed");
+    await mkdir(outside, { recursive: true });
+    await symlink(outside, join(here, "config")); // "config" inside the repo points outside it
+
+    const peer: Peer = { name: "mini", alias: null, root: theirsRoot, role: "git" };
+    expect(await seedRepo(here, "proj", [peer], [".env"], false)).toEqual([]);
+    expect(existsSync(join(outside, ".env"))).toBe(false);
+  });
+
+  test("a clone whose id passes through a symlinked folder in root is skipped", async () => {
+    const theirsRoot = join(root, "theirs-symlink-clone");
+    const nested = join(theirsRoot, "a", "b", "x");
+    await mkdir(nested, { recursive: true });
+    await exec(["git", "init", "-q", "-b", "main", nested]);
+    await sh(nested, "config", "user.email", "t@t");
+    await sh(nested, "config", "user.name", "t");
+    await commit(nested, "f.txt", "one\n");
+
+    const ours = join(root, "ours-symlink-clone");
+    await mkdir(join(ours, "a"), { recursive: true });
+    const outside = join(root, "outside-symlink-clone");
+    await mkdir(outside, { recursive: true });
+    await symlink(outside, join(ours, "a", "b")); // "a/b" inside root points outside it
+
+    const peer: Peer = { name: "mini", alias: null, root: theirsRoot, role: "git" };
+    const r = await cloneMissing(ours, [peer], [".env"], false, {});
+    expect(r).toEqual({ cloned: [], failed: [] });
+    expect(existsSync(join(outside, "x"))).toBe(false);
+  });
+});
+
+describe("the seed temp file", () => {
+  test("wx refuses to write through a pre-existing path at the exact temp name", async () => {
+    const p = join(root, "wx-exists", "already-here");
+    await mkdir(dirname(p), { recursive: true });
+    await writeFile(p, "existing\n");
+    await expect(writeFile(p, "new\n", { flag: "wx" })).rejects.toThrow();
+    expect(await readFile(p, "utf8")).toBe("existing\n");
+  });
+
+  test("a dangling symlink at dest is left alone and not counted as written", async () => {
+    const theirsRoot = join(root, "theirs-dangling");
+    const theirs = join(theirsRoot, "proj");
+    await mkdir(theirs, { recursive: true });
+    await exec(["git", "init", "-q", "-b", "main", theirs]);
+    await sh(theirs, "config", "user.email", "t@t");
+    await sh(theirs, "config", "user.name", "t");
+    await commit(theirs, ".gitignore", ".env\n");
+    await writeFile(join(theirs, ".env"), "SECRET=1\n");
+
+    const here = join(root, "ours-dangling", "proj");
+    await mkdir(here, { recursive: true });
+    // existsSync follows symlinks, so a dangling one reads as "doesn't
+    // exist" — link() is what actually refuses it, since the directory
+    // entry is there regardless of what it points to.
+    await symlink(join(here, "does-not-exist"), join(here, ".env"));
+
+    const peer: Peer = { name: "mini", alias: null, root: theirsRoot, role: "git" };
+    expect(await seedRepo(here, "proj", [peer], [".env"], false)).toEqual([]);
+    const st = await lstat(join(here, ".env"));
+    expect(st.isSymbolicLink()).toBe(true);
+  });
+
+  test("a containment failure on one seed file does not stop the next", async () => {
+    const theirsRoot = join(root, "theirs-multi-seed");
+    const theirs = join(theirsRoot, "proj");
+    await mkdir(theirs, { recursive: true });
+    await exec(["git", "init", "-q", "-b", "main", theirs]);
+    await sh(theirs, "config", "user.email", "t@t");
+    await sh(theirs, "config", "user.name", "t");
+    await commit(theirs, "config/tracked.txt", "keep\n");
+    await commit(theirs, ".gitignore", "config/.env\n.env\n");
+    await mkdir(join(theirs, "config"), { recursive: true });
+    await writeFile(join(theirs, "config", ".env"), "BAD=1\n");
+    await writeFile(join(theirs, ".env"), "GOOD=1\n");
+
+    const here = join(root, "ours-multi-seed", "proj");
+    await mkdir(here, { recursive: true });
+    const outside = join(root, "outside-multi-seed");
+    await mkdir(outside, { recursive: true });
+    await symlink(outside, join(here, "config"));
+
+    const peer: Peer = { name: "mini", alias: null, root: theirsRoot, role: "git" };
+    const wrote = await seedRepo(here, "proj", [peer], [".env"], false);
+    expect(wrote).toEqual([".env"]);
+    expect(await readFile(join(here, ".env"), "utf8")).toBe("GOOD=1\n");
+    expect(existsSync(join(outside, ".env"))).toBe(false);
+  });
+});
+
+describe("cloneMissing keeps going after one repo fails", () => {
+  test("a clone failure for one repo doesn't stop another from cloning", async () => {
+    const theirsRoot = join(root, "theirs-mixed");
+    const good = join(theirsRoot, "good");
+    await mkdir(good, { recursive: true });
+    await exec(["git", "init", "-q", "-b", "main", good]);
+    await sh(good, "config", "user.email", "t@t");
+    await sh(good, "config", "user.name", "t");
+    await commit(good, "f.txt", "one\n");
+    // Looks like a repo to serveList (it has a .git entry) but isn't one:
+    // the clone from it will fail.
+    const bad = join(theirsRoot, "bad");
+    await mkdir(join(bad, ".git"), { recursive: true });
+
+    const ours = join(root, "ours-mixed");
+    await mkdir(ours, { recursive: true });
+    const peer: Peer = { name: "mini", alias: null, root: theirsRoot, role: "git" };
+    const r = await cloneMissing(ours, [peer], [".env"], false, {});
+    expect(r.cloned).toEqual(["good"]);
+    expect(r.failed.map((f) => f.id)).toEqual(["bad"]);
+    const [failure] = r.failed;
+    expect(failure?.error).toBeTruthy();
+  });
+});
+
+describe("decodeBase64Strict", () => {
+  test("round-trips real content and treats an empty string as an empty file", () => {
+    const encoded = Buffer.from("SECRET=1\n").toString("base64");
+    expect(decodeBase64Strict(encoded)?.toString("utf8")).toBe("SECRET=1\n");
+    expect(decodeBase64Strict("")).toEqual(Buffer.alloc(0));
+  });
+  test("refuses anything that isn't valid base64, rather than Buffer.from's lenient decode", () => {
+    // A peer's seed reply is untrusted text, over ssh; Buffer.from would
+    // silently drop the bad characters here and return a truncated decode
+    // instead of refusing it.
+    expect(decodeBase64Strict("not base64!!")).toBeNull();
+    expect(decodeBase64Strict("abc")).toBeNull(); // wrong length, no valid padding
+    expect(decodeBase64Strict("ab==c")).toBeNull(); // padding in the middle
   });
 });
