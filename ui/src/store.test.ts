@@ -14,33 +14,34 @@ import {
 import type { KeptShell, Repo, TermInfo } from "../../src/core/types";
 
 describe("closedSectionsOf", () => {
-  test("a layout from before the launch section folds it", () => {
+  test("a layout from before the launch and peers sections folds them", () => {
     expect(closedSectionsOf(["search", "history", "claude"], ["search", "history", "claude"])).toEqual([
       "search",
       "history",
       "claude",
       "launch",
+      "peers",
     ]);
   });
   test("a section the reader unfolded stays unfolded once the layout knows it", () => {
     const saved = ["search", "history", "claude"];
-    expect(closedSectionsOf(saved, ["search", "history", "claude", "launch"])).toBe(saved);
+    expect(closedSectionsOf(saved, ["search", "history", "claude", "launch", "peers"])).toBe(saved);
   });
   test("a stored fold is not doubled", () => {
-    expect(closedSectionsOf(["launch"], [])).toEqual(["launch", "search", "history", "claude"]);
+    expect(closedSectionsOf(["launch"], [])).toEqual(["launch", "search", "history", "claude", "peers"]);
   });
 });
 
 describe("per-repo folds", () => {
   test("a repo nobody has touched folds the defaults", () => {
-    expect(sectionsFor({}, "a")).toEqual(["search", "history", "claude", "launch"]);
+    expect(sectionsFor({}, "a")).toEqual(["search", "history", "claude", "launch", "peers"]);
     expect(closedIn({ closedSections: {} }, "a", "history")).toBe(true);
     expect(closedIn({ closedSections: {} }, "a", "changes")).toBe(false);
   });
   test("a toggle touches one repo and leaves the rest alone", () => {
     const one = toggleIn({}, "a", "history");
-    expect(sectionsFor(one, "a")).toEqual(["search", "claude", "launch"]);
-    expect(sectionsFor(one, "b")).toEqual(["search", "history", "claude", "launch"]);
+    expect(sectionsFor(one, "a")).toEqual(["search", "claude", "launch", "peers"]);
+    expect(sectionsFor(one, "b")).toEqual(["search", "history", "claude", "launch", "peers"]);
     const two = toggleIn(one, "a", "changes");
     expect(closedIn({ closedSections: two }, "a", "changes")).toBe(true);
     expect(closedIn({ closedSections: two }, "b", "changes")).toBe(false);
@@ -49,7 +50,7 @@ describe("per-repo folds", () => {
     const closed = { a: ["search"] };
     expect(unfoldIn(closed, "a", "history")).toBe(closed);
     expect(sectionsFor(unfoldIn(closed, "a", "search"), "a")).toEqual([]);
-    expect(sectionsFor(unfoldIn({}, "b", "launch"), "b")).toEqual(["search", "history", "claude"]);
+    expect(sectionsFor(unfoldIn({}, "b", "launch"), "b")).toEqual(["search", "history", "claude", "peers"]);
   });
 });
 

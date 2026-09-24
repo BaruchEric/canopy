@@ -2,7 +2,7 @@ import { memo, useEffect, useMemo, useRef, useState } from "react";
 import { useShallow } from "zustand/react/shallow";
 import { pickable } from "../flows";
 import { changedAt, groupRepos, newestEdit, sectionKey } from "../grouping";
-import { Pulls, RemoteTipChip, whenTitle } from "./RemoteTip";
+import { PeerChips, Pulls, RemoteTipChip, whenTitle } from "./RemoteTip";
 import { pickCount, pickState } from "../select";
 import { activeFlowFor, flowFor, runFor, useStore, visibleRepos } from "../store";
 import { ago, GLYPH, stateOf } from "../util";
@@ -130,6 +130,7 @@ const RepoCard = memo(function RepoCard({ repo }: { repo: Repo }) {
         {(st?.ahead ?? 0) > 0 && <span className="ahead">↑{st?.ahead}</span>}
         {(st?.behind ?? 0) > 0 && <span className="behind">↓{st?.behind}</span>}
         {st?.tip && <RemoteTipChip tip={st.tip} upstream={st.upstream} />}
+        <PeerChips st={repo.peers} />
         {repo.pulls && <Pulls pulls={repo.pulls} name={repo.name} />}
         {repo.error && <span className="err">not a readable repo</span>}
       </div>

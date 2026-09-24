@@ -4,6 +4,7 @@ import { api } from "../api";
 import { ownRun } from "../flows";
 import { allRuns, attentionCount, capsFor, pickedIds, useStore } from "../store";
 import { isRunActive } from "../../../src/core/types";
+import { seenWord } from "../peers";
 import { FilterMenu } from "./Filters";
 import { Seg } from "./Seg";
 import { SettingsMenu } from "./Settings";
@@ -79,6 +80,22 @@ function RunsPill() {
       <span className={waiting.length > 0 ? "dot lichen" : "dot sky live"} />
       {text}
     </button>
+  );
+}
+
+/** Who this backend last reached in the peer pass, one word per peer, an
+ *  unreachable one in the rust colour. Absent with no peers configured. */
+function PeersChip() {
+  const peerSeen = useStore((s) => s.peerSeen);
+  if (peerSeen.length === 0) return null;
+  return (
+    <span className="peers-chip" title="Peers this backend pulls from">
+      {peerSeen.map((p) => (
+        <span key={p.name} className={p.ok ? "peer-seen" : "peer-seen offline"}>
+          {seenWord(p)}
+        </span>
+      ))}
+    </span>
   );
 }
 
@@ -322,6 +339,7 @@ export function TopBar() {
           {scanning ? "scanning…" : "rescan"}
         </button>
 
+        <PeersChip />
         <KeptShells />
         <ShellsChip />
         <DevicesChip />

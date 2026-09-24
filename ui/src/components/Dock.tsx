@@ -19,7 +19,7 @@ import { ClaudeSection } from "./Claude";
 import { LaunchSection } from "./Launch";
 import { CommitRow } from "./Commit";
 import { DiffView } from "./DiffView";
-import { Pulls, RemoteTipChip } from "./RemoteTip";
+import { PeerChips, Pulls, RemoteTipChip } from "./RemoteTip";
 import { RepoLink } from "./RepoLink";
 import { RepoMenu } from "./RepoMenu";
 import { Resizer } from "./Resizer";
@@ -400,6 +400,160 @@ function WorkspaceMenu({
   );
 }
 
+/**
+ * What this repo's peers know that this checkout does not: a peer's
+ * uncommitted work to take, a branch that diverged, or a branch that
+ * exists only on a peer. Folded by default, and only shown at all when
+ * the backend has peer sync on (dry or live) — off means nothing here is
+ * ever populated. */
+function PeersSection({ repo }: { repo: Repo }) {
+  const peerSync = useStore((s) => s.peerSync);
+  const closed = useStore((s) => closedIn(s, repo.id, "peers"));
+  const toggleSection = useStore((s) => s.toggleSection);
+  const takeWip = useStore((s) => s.takeWip);
+  const trackBranch = useStore((s) => s.trackBranch);
+  const seedRepo = useStore((s) => s.seedRepo);
+  const syncPeers = useStore((s) => s.syncPeers);
+  const openTerm = useStore((s) => s.openTerm);
+  const openChat = useStore((s) => s.openChat);
+  const [busy, setBusy] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  // One WIP's commit drill open at a time, by hash, the way History does.
+  const [drilled, setDrilled] = useState<string | null>(null);
+
+  if (peerSync === "off") return null;
+
+  const st = repo.peers;
+  const wip = st?.wip ?? [];
+  const diverged = st?.diverged ?? [];
+  const peerOnly = st?.peerOnly ?? [];
+  const count = wip.length + diverged.length + peerOnly.length;
+
+  const run = (label: string, fn: () => Promise<void>) => {
+    setBusy(label);
+    setError(null);
+    fn()
+      .catch((err: unknown) => setError(String(err instanceof Error ? err.message : err)))
+      .finally(() => setBusy(null));
+  };
+
+  return (
+    <section className="peers" aria-label="Peers">
+      <button
+        type="button"
+        className={`panel-label fold${closed ? "" : " open"}`}
+        aria-expanded={!closed}
+        onClick={() => toggleSection(repo.id, "peers")}
+        title="What this repo's peers have that this checkout does not"
+      >
+        peers <span>{count}</span>
+      </button>
+      {!closed && (
+        <div className="peers-body">
+          {error && <p className="panel-error">{error}</p>}
+          {count === 0 ? (
+            <p className="panel-clean">In step with every peer.</p>
+          ) : (
+            <>
+              {wip.map((w) => (
+                <Fragment key={`wip:${w.peer}:${w.branch}:${w.hash}`}>
+                  <div className="peers-row">
+                    <span className="peers-text">
+                      WIP on {w.peer} · {w.branch} · {w.files} files
+                    </span>
+                    <button
+                      type="button"
+                      className="mini"
+                      disabled={busy !== null}
+                      onClick={() => run(`take:${w.hash}`, () => takeWip(repo.id, w.peer, w.branch))}
+                    >
+                      {busy === `take:${w.hash}` ? "taking…" : "take"}
+                    </button>
+                    <button
+                      type="button"
+                      className="mini"
+                      onClick={() => setDrilled(drilled === w.hash ? null : w.hash)}
+                    >
+                      {drilled === w.hash ? "hide" : "view"}
+                    </button>
+                  </div>
+                  {drilled === w.hash && (
+                    <ul className="log peers-drill">
+                      <CommitRow
+                        repo={repo}
+                        hash={w.hash}
+                        subject={`WIP on ${w.branch}`}
+                        meta={`${w.peer} · ${ago(w.at / 1000)}`}
+                        open
+                        onToggle={() => setDrilled(null)}
+                      />
+                    </ul>
+                  )}
+                </Fragment>
+              ))}
+              {diverged.map((d) => (
+                <div key={`div:${d.peer}:${d.branch}`} className="peers-row">
+                  <span className="peers-text peer-diverged">
+                    {d.branch} diverged from {d.peer}
+                  </span>
+                  <button type="button" className="mini" onClick={() => openTerm(repo.id)}>
+                    shell
+                  </button>
+                  <button
+                    type="button"
+                    className="mini"
+                    onClick={() =>
+                      void openChat(
+                        repo.id,
+                        `Merge ${d.peer}/${d.branch} into ${d.branch}. It diverged: resolve conflicts, run the tests, and commit the merge. Do not push.`,
+                      )
+                    }
+                  >
+                    merge with claude
+                  </button>
+                </div>
+              ))}
+              {peerOnly.map((po) => (
+                <div key={`only:${po.peer}:${po.branch}`} className="peers-row">
+                  <span className="peers-text">
+                    {po.peer}/{po.branch}
+                  </span>
+                  <button
+                    type="button"
+                    className="mini"
+                    disabled={busy !== null}
+                    onClick={() => run(`track:${po.peer}:${po.branch}`, () => trackBranch(repo.id, po.peer, po.branch))}
+                  >
+                    {busy === `track:${po.peer}:${po.branch}` ? "tracking…" : "track"}
+                  </button>
+                </div>
+              ))}
+            </>
+          )}
+          <div className="peers-foot">
+            <button
+              type="button"
+              className="mini"
+              disabled={busy !== null}
+              onClick={() => run("sync", () => syncPeers(repo.id))}
+            >
+              {busy === "sync" ? "syncing…" : "sync now"}
+            </button>
+            <button
+              type="button"
+              className="mini"
+              disabled={busy !== null}
+              onClick={() => run("seed", () => seedRepo(repo.id))}
+            >
+              {busy === "seed" ? "seeding…" : "seed .env"}
+            </button>
+          </div>
+        </div>
+      )}
+    </section>
+  );
+}
+
 function History({ repo }: { repo: Repo }) {
   // Bumped by the repo SSE event, so a commit made in a terminal refreshes
   // this list too — not just one made from the panel.
@@ -633,6 +787,7 @@ export function RepoPanel({
         {(st?.ahead ?? 0) > 0 && <span className="ahead">↑{st?.ahead}</span>}
         {(st?.behind ?? 0) > 0 && <span className="behind">↓{st?.behind}</span>}
         {st?.tip && <RemoteTipChip tip={st.tip} upstream={st.upstream} />}
+        <PeerChips st={repo.peers} />
         {repo.pulls && <Pulls pulls={repo.pulls} name={repo.name} />}
         <span className="when">{ago(st?.lastCommit?.at)}</span>
         {st?.user && (
@@ -781,6 +936,7 @@ export function RepoPanel({
 
           <SearchSection repo={repo} />
           <History repo={repo} />
+          <PeersSection repo={repo} />
           <LaunchSection repo={repo} />
           <ClaudeSection repo={repo} />
         </>

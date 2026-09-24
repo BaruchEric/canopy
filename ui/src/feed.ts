@@ -17,6 +17,7 @@ import type {
   TermInfo,
   Workspace,
 } from "../../src/core/types";
+import { peerLines } from "./peers";
 
 export type FeedKind =
   | "git"
@@ -148,6 +149,7 @@ function repoLines(ev: Extract<ServerEvent, { type: "repo" }>, prev: FeedSnapsho
   if (before?.error && !repo.error) lines.push(about(repo, "git", at, "error cleared"));
   const diffs = statusLines(before?.status ?? null, repo.status);
   for (const text of diffs) lines.push(about(repo, "git", at, text));
+  for (const text of peerLines(before?.peers, repo.peers)) lines.push(about(repo, "git", at, text));
   // Zero where there was no count is not news; zero where there were some is.
   const open = repo.pulls?.open ?? 0;
   const was = before?.pulls?.open ?? 0;

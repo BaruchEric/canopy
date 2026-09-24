@@ -1,5 +1,6 @@
 import type { SyntheticEvent } from "react";
-import type { PullCount, RemoteTip, RepoStatus } from "../../../src/core/types";
+import type { PeerState, PullCount, RemoteTip, RepoStatus } from "../../../src/core/types";
+import { peerChips } from "../peers";
 import { ago } from "../util";
 
 /** The tooltip on a card's time: which change set it. The commit's subject
@@ -33,6 +34,21 @@ export function RemoteTipChip({ tip, upstream }: { tip: RemoteTip; upstream: str
     <span className="tip" title={`${tip.ref} ${tip.hash} ${ago(tip.at)}: ${tip.subject}`}>
       ⇣ {tip.ref}
     </span>
+  );
+}
+
+/** What a repo's peers have that this checkout does not: divergence, a
+ *  peer's uncommitted work, or nothing else has this repo at all. */
+export function PeerChips({ st }: { st: PeerState | undefined }) {
+  const chips = peerChips(st);
+  return (
+    <>
+      {chips.map((c) => (
+        <span key={c.text} className={`peer peer-${c.kind}`} title={c.title}>
+          {c.text}
+        </span>
+      ))}
+    </>
   );
 }
 

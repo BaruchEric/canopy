@@ -31,6 +31,8 @@ import {
   type KeptShell,
   type LaunchSettings,
   type OpenerId,
+  type PeerSeen,
+  type PeerSync,
   type Repo,
   type TermInfo,
   type Run,
@@ -60,7 +62,7 @@ export const PANEL_TERM = { min: 60, max: 900, initial: rowsPx(PANEL_TERM_ROWS) 
 /** the event feed along the bottom, in px of height */
 export const FEED = { min: 100, max: 900, initial: 220 };
 /** sections that start folded, matching how the panel read before they could fold */
-const DEFAULT_CLOSED = ["search", "history", "claude", "launch"];
+const DEFAULT_CLOSED = ["search", "history", "claude", "launch", "peers"];
 /** the folded-by-default set a layout saved before `knownSections` existed
  *  had decided about; anything added to DEFAULT_CLOSED since folds for it */
 const OLD_KNOWN = ["search", "history", "claude"];
@@ -331,6 +333,10 @@ interface CanopyState {
   helpers: HelperInfo[];
   /** the browsers on the backend's event stream now, this one among them */
   devices: Device[];
+  /** who was last seen reachable in the peer pass, mac/mini/… by name */
+  peerSeen: PeerSeen[];
+  /** whether the backend pulls from peers at all, and whether it writes */
+  peerSync: PeerSync;
   /** every shell the server holds, with who is looking at each; the tabs
    *  here are the ones of those this window shows */
   shells: TermInfo[];
@@ -506,8 +512,9 @@ interface CanopyState {
   /** opens the pre-flight dialog for an action on a repo */
   plan: (repoId: string, action: RunAction) => void;
   /** opens a chat with Claude in a repo: the repo's live run if it has one,
-   *  else a new idle chat whose first message starts Claude */
-  openChat: (repoId: string) => Promise<void>;
+   *  else a new idle chat whose first message starts Claude (the peers
+   *  panel's "merge with claude" passes one; the menu's plain chat does not) */
+  openChat: (repoId: string, note?: string) => Promise<void>;
   /** opens the repo's agent settings */
   editAgent: (repoId: string) => void;
   setAgent: (repoId: string, settings: AgentSettings) => Promise<void>;
@@ -518,6 +525,14 @@ interface CanopyState {
   showLaunch: (repoId: string) => void;
   stopJob: (jobId: string) => Promise<void>;
   dismissJob: (jobId: string) => Promise<void>;
+  /** takes a peer's WIP as a new local branch (or the given one) */
+  takeWip: (repoId: string, peer: string, branch: string) => Promise<void>;
+  /** tracks a branch that exists only on a peer, as a local branch here */
+  trackBranch: (repoId: string, peer: string, branch: string) => Promise<void>;
+  /** seeds the allow-listed files (.env and the like) from a peer that has them */
+  seedRepo: (repoId: string) => Promise<void>;
+  /** runs the peer pass for just this repo, instead of waiting for the timer */
+  syncPeers: (repoId: string) => Promise<void>;
   /** shows a run's console */
   showRun: (runId: string) => void;
   closeSheet: () => void;
@@ -659,6 +674,8 @@ export const useStore = create<CanopyState>((set, get) => ({
   client: { address: "", local: false, shared: false },
   helpers: [],
   devices: [],
+  peerSeen: [],
+  peerSync: "off",
   shells: [],
   kept: [],
   keeping: false,
@@ -793,6 +810,12 @@ export const useStore = create<CanopyState>((set, get) => ({
     // The archive is not in the way of first paint: it lands when it lands,
     // and claude-history only syncs hourly, so a slow refresh is plenty.
     void get().loadHistory();
+    // Likewise peers: a backend with peer sync off just answers "off" and
+    // an empty seen list, so this never blocks a grove with none set up.
+    void api
+      .peers()
+      .then((p) => set({ peerSeen: p.seen, peerSync: p.sync }))
+      .catch(() => {});
     const refresh = setInterval(() => void get().loadHistory(), HISTORY_REFRESH);
     // Handed back so the caller can close the stream — StrictMode mounts
     // effects twice, and an unclosed EventSource leaks a live connection.
@@ -1002,6 +1025,8 @@ export const useStore = create<CanopyState>((set, get) => ({
       set({ devices: ev.devices });
     } else if (ev.type === "kept") {
       set({ kept: ev.kept });
+    } else if (ev.type === "peers") {
+      set({ peerSeen: ev.seen });
     } else if (ev.type === "terms") {
       // a shell opened on another device shows up here too; a dockless
       // window (solo, shell) keeps no tabs of its own
@@ -1179,13 +1204,13 @@ export const useStore = create<CanopyState>((set, get) => ({
     const active = activeRunFor(get(), repoId);
     set({ sheet: active ? { kind: "run", runId: active.id } : { kind: "plan", repoId, action } });
   },
-  openChat: async (repoId) => {
+  openChat: async (repoId, note = "") => {
     const active = activeRunFor(get(), repoId);
     if (active) {
       set({ sheet: { kind: "run", runId: active.id } });
       return;
     }
-    await get().startRun(repoId, "chat", "");
+    await get().startRun(repoId, "chat", note);
   },
   editAgent: (repoId) => set({ sheet: { kind: "agent", repoId } }),
   setAgent: async (repoId, settings) => {
@@ -1212,6 +1237,22 @@ export const useStore = create<CanopyState>((set, get) => ({
       const { [jobId]: _gone, ...jobs } = s.jobs;
       return { jobs };
     });
+  },
+  takeWip: async (repoId, peer, branch) => {
+    const repo = await api.peerAction(repoId, { action: "take", peer, branch });
+    set((s) => ({ repos: s.repos.map((r) => (r.id === repoId ? repo : r)) }));
+  },
+  trackBranch: async (repoId, peer, branch) => {
+    const repo = await api.peerAction(repoId, { action: "track", peer, branch });
+    set((s) => ({ repos: s.repos.map((r) => (r.id === repoId ? repo : r)) }));
+  },
+  seedRepo: async (repoId) => {
+    const repo = await api.peerAction(repoId, { action: "seed" });
+    set((s) => ({ repos: s.repos.map((r) => (r.id === repoId ? repo : r)) }));
+  },
+  syncPeers: async (repoId) => {
+    const repo = await api.peerAction(repoId, { action: "sync" });
+    set((s) => ({ repos: s.repos.map((r) => (r.id === repoId ? repo : r)) }));
   },
   showRun: (runId) => set({ sheet: { kind: "run", runId } }),
   closeSheet: () => set({ sheet: null }),

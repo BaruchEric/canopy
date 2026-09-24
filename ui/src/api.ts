@@ -21,6 +21,9 @@ import type {
   KeptShell,
   LogEntry,
   Build,
+  Peer,
+  PeerSeen,
+  PeerSync,
   Pull,
   PushAccess,
   Release,
@@ -293,6 +296,17 @@ export const api = {
   jobs: () => req<Job[]>("/api/jobs"),
   stopJob: (id: string) => req<Job>("/api/jobs/stop", { method: "POST", body: JSON.stringify({ id }) }),
   dismissJob: (id: string) => req<{ ok: true }>(`/api/jobs?${rq(id)}`, { method: "DELETE" }),
+  /** self, the configured peers, who was last seen reachable, and the mode */
+  peers: () => req<{ self: string | null; peers: Peer[]; seen: PeerSeen[]; sync: PeerSync }>("/api/peers"),
+  /** one repo's peer action: take a peer's WIP, track a peer-only branch,
+   *  sync just this repo, or seed the allow-listed files into it */
+  peerAction: (id: string, body: { action: "take" | "track" | "sync" | "seed"; peer?: string; branch?: string }) =>
+    req<Repo & { take?: { how: string; branch?: string } }>(`/api/repos/peer?${rq(id)}`, {
+      method: "POST",
+      body: JSON.stringify(body),
+    }),
+  /** runs a peer pass over every repo now, instead of waiting for the timer */
+  peersSync: () => req<Record<string, never>>("/api/peers/sync", { method: "POST", body: "{}" }),
   workspaces: () => req<Workspace[]>("/api/workspaces"),
   wsAdd: (name: string, repos: string[]) =>
     req<Workspace[]>("/api/workspaces", {
