@@ -134,6 +134,29 @@ export async function loadConfig(): Promise<CanopyConfig> {
   }
 }
 
+/** Reads the config without ever writing anything: no quarantine rename of
+ *  a corrupt file, no directory created, nothing. A missing file still means
+ *  "this machine never configured anything" (`defaults()`); the file being
+ *  present but unreadable or invalid JSON is a different situation the
+ *  caller must handle itself, so it comes back as `null` rather than
+ *  silently falling back to defaults. Used by the peer gate, which answers a
+ *  peer's ssh key and must never leave a mark on the serving machine just
+ *  because it was asked a question. */
+export async function loadConfigReadOnly(): Promise<CanopyConfig | null> {
+  let raw: string;
+  try {
+    raw = await readFile(configPath(), "utf8");
+  } catch (err) {
+    const code = typeof err === "object" && err !== null && "code" in err ? (err as Record<string, unknown>).code : undefined;
+    return code === "ENOENT" ? defaults() : null;
+  }
+  try {
+    return normalize(JSON.parse(raw) as Partial<CanopyConfig>);
+  } catch {
+    return null;
+  }
+}
+
 /** tells one write's temporary file from another's in the same process */
 let saves = 0;
 

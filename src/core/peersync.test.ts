@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
-import { chmod, mkdtemp, readFile, rm, writeFile, mkdir, symlink, lstat } from "node:fs/promises";
+import { chmod, mkdtemp, readdir, readFile, rm, writeFile, mkdir, symlink, lstat } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
@@ -1297,6 +1297,109 @@ describe("canopy peers gate", () => {
     expect(r.stdout).toBe("");
     expect(r.stderr).toContain("canopy-peer:");
   });
+
+  test("git-upload-pack runs with an explicit, minimal env: GIT_CONFIG_PARAMETERS cannot run a hook", async () => {
+    const ws = join(root, "ws");
+    const marker = join(root, "hook-marker");
+    // GIT_CONFIG_PARAMETERS is git's own env-config channel (what `git -c
+    // k=v` sets for a child git process); a peer who can influence the
+    // gate's environment could use it to set uploadpack.packObjectsHook and
+    // have git-upload-pack itself run an arbitrary command. Passing the
+    // whole environment through would let it; a spawn env limited to
+    // PATH/HOME/GIT_PROTOCOL/LANG/LC_ALL never carries it.
+    const fake = join(root, "fake-ssh-hook");
+    await writeFile(
+      fake,
+      `#!/bin/sh\nshift\nSSH_ORIGINAL_COMMAND="$*" HOME=${root} GIT_CONFIG_PARAMETERS="'uploadpack.packObjectsHook=touch ${marker}'" exec ${process.execPath} ${bin} peers gate --root ${ws}\n`,
+    );
+    await exec(["chmod", "+x", fake]);
+    const dest = join(root, "via-gate-hook");
+    const r = await exec(["git", "clone", "-q", `peerhost:ws/group/a`, dest], { env: { GIT_SSH_COMMAND: fake, GIT_SSH_VARIANT: "simple" } });
+    expect(r.code).toBe(0); // the clone itself still works
+    expect(existsSync(marker)).toBe(false); // but the injected hook never ran
+  });
+
+  test("answers list even when peerSync is off: the gate is not this machine's sync mode", async () => {
+    const cfgDir = await mkdtemp(join(tmpdir(), "canopy-peers-gateoff-"));
+    try {
+      await writeFile(join(cfgDir, "config.json"), JSON.stringify({ peerSync: "off" }));
+      const ws = join(root, "ws");
+      const r = await exec([process.execPath, bin, "peers", "gate", "--root", ws], {
+        env: { SSH_ORIGINAL_COMMAND: "'canopy-peer' 'list'", HOME: root, CANOPY_CONFIG_DIR: cfgDir },
+      });
+      expect(r.code).toBe(0);
+      expect(JSON.parse(r.stdout).map((x: { id: string }) => x.id)).toContain("group/a");
+    } finally {
+      await rm(cfgDir, { recursive: true, force: true });
+    }
+  });
+
+  test("a config file that is present but unreadable refuses every query, quietly, and is left untouched", async () => {
+    const cfgDir = await mkdtemp(join(tmpdir(), "canopy-peers-badcfg-"));
+    try {
+      const cfgPath = join(cfgDir, "config.json");
+      await writeFile(cfgPath, "{ not json");
+      const before = await readFile(cfgPath, "utf8");
+      const ws = join(root, "ws");
+      const r = await exec([process.execPath, bin, "peers", "gate", "--root", ws], {
+        env: { SSH_ORIGINAL_COMMAND: "'canopy-peer' 'list'", HOME: root, CANOPY_CONFIG_DIR: cfgDir },
+      });
+      expect(r.code).toBe(1);
+      expect(r.stdout).toBe("");
+      expect(r.stderr).toContain("canopy-peer: config unreadable");
+      expect(await readFile(cfgPath, "utf8")).toBe(before); // never rewritten
+      expect((await readdir(cfgDir)).sort()).toEqual(["config.json"]); // no .corrupt-* quarantine file
+    } finally {
+      await rm(cfgDir, { recursive: true, force: true });
+    }
+  });
+
+  test("a refused command never reads the config at all: still refused with a broken one, and it stays untouched", async () => {
+    const cfgDir = await mkdtemp(join(tmpdir(), "canopy-peers-badcfg2-"));
+    try {
+      const cfgPath = join(cfgDir, "config.json");
+      await writeFile(cfgPath, "{ not json");
+      const before = await readFile(cfgPath, "utf8");
+      const ws = join(root, "ws");
+      const r = await exec([process.execPath, bin, "peers", "gate", "--root", ws], {
+        env: { SSH_ORIGINAL_COMMAND: "sh -c id", HOME: root, CANOPY_CONFIG_DIR: cfgDir },
+      });
+      expect(r.code).toBe(1);
+      expect(r.stderr).toContain("canopy-peer: refused");
+      expect(r.stderr).not.toContain("config unreadable"); // gateCommand refused before the config was ever read
+      expect(await readFile(cfgPath, "utf8")).toBe(before);
+    } finally {
+      await rm(cfgDir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("peers CLI dry mode: init and seed write nothing", () => {
+  test("initRepo under dry adds no remote", async () => {
+    const mac = await repo("clidry-init-mac");
+    const peer: Peer = { name: "mini", alias: null, root, role: "git" };
+    await initRepo(mac, "clidry-init-mini", [peer], true);
+    expect((await exec(["git", "config", "--get", "remote.mini.pushurl"], { cwd: mac })).code).not.toBe(0);
+    expect((await exec(["git", "remote"], { cwd: mac })).stdout.trim()).toBe("");
+  });
+
+  test("seedRepo under dry reports what it would seed, and writes nothing", async () => {
+    const theirsRoot = join(root, "clidry-seed-theirs");
+    const theirs = join(theirsRoot, "proj");
+    await mkdir(theirs, { recursive: true });
+    await exec(["git", "init", "-q", "-b", "main", theirs]);
+    await sh(theirs, "config", "user.email", "t@t");
+    await sh(theirs, "config", "user.name", "t");
+    await commit(theirs, ".gitignore", ".env\n");
+    await writeFile(join(theirs, ".env"), "DRY=1\n");
+
+    const here = join(root, "clidry-seed-here", "proj");
+    await mkdir(here, { recursive: true });
+    const peer: Peer = { name: "mini", alias: null, root: theirsRoot, role: "git" };
+    const wrote = await seedRepo(here, "proj", [peer], [".env"], true);
+    expect(wrote).toEqual([".env"]);
+    expect(existsSync(join(here, ".env"))).toBe(false);
+  });
 });
 
 describe("canopy peers CLI honours peerSync", () => {
@@ -1319,6 +1422,36 @@ describe("canopy peers CLI honours peerSync", () => {
       const status = await exec([process.execPath, bin, "peers", "status"], { env: { CANOPY_CONFIG_DIR: cfgDir } });
       expect(status.code).toBe(0);
       expect(status.stdout).toContain("self: mac");
+    } finally {
+      await rm(cfgDir, { recursive: true, force: true });
+    }
+  });
+
+  test("take with a detached HEAD and no branch argument refuses instead of guessing main", async () => {
+    const mac = await repo("clidetached-mac");
+    await sh(mac, "checkout", "-q", "--detach");
+    // Stands in for a WIP that arrived from an earlier fetch, without
+    // needing a live peer: takeWip only reads this ref and the peer name,
+    // never cfg.peers itself.
+    const wipHash = await sh(mac, "rev-parse", "HEAD");
+    await sh(mac, "update-ref", "refs/peer-wip/mini/main", wipHash);
+
+    const cfgDir = await mkdtemp(join(tmpdir(), "canopy-peers-detached-"));
+    try {
+      await writeFile(
+        join(cfgDir, "config.json"),
+        JSON.stringify({
+          self: "mac",
+          peers: [{ name: "mini", alias: "mini", root: "/tmp/nowhere", role: "git" }],
+          peerSync: "on",
+        }),
+      );
+      const r = await exec([process.execPath, bin, "peers", "take", "clidetached-mac", "mini"], {
+        cwd: root,
+        env: { CANOPY_CONFIG_DIR: cfgDir },
+      });
+      expect(r.code).toBe(1);
+      expect(r.stderr).toContain("HEAD is detached; name a branch");
     } finally {
       await rm(cfgDir, { recursive: true, force: true });
     }

@@ -1,5 +1,6 @@
 import { libraryCommand } from "../core/library";
 import { realpath } from "node:fs/promises";
+import { constants as osConstants } from "node:os";
 import { join, resolve } from "node:path";
 import { exec } from "../core/exec";
 import { commit, getStatus, pull, push } from "../core/git";
@@ -25,6 +26,7 @@ import {
   agentFor,
   launchFor,
   loadConfig,
+  loadConfigReadOnly,
   removeSource,
   removeWorkspace,
   setLaunch,
@@ -475,13 +477,38 @@ export async function main(argv: string[]): Promise<void> {
         const rootArg = rootFlag ?? "dev";
         const home = process.env["HOME"] ?? "";
         const rootAbs = resolve(rootArg.startsWith("/") ? rootArg : join(home, rootArg));
-        const cfg = await loadConfig();
+        // Validate the command before anything else touches the config: a
+        // refused command (a shell, a path outside the root) must stay
+        // refused even when this machine's config is broken, not surface a
+        // different failure depending on what it tried to read first.
         const cmd = gateCommand(process.env["SSH_ORIGINAL_COMMAND"] ?? "", rootAbs, home);
         if ("error" in cmd) return fail(`canopy-peer: ${cmd.error}`);
+        // Read-only: a peer's request must never write this machine's own
+        // files, and loadConfig()'s quarantine-and-rename on bad JSON is
+        // exactly such a write. A config that is present but unreadable or
+        // invalid refuses every command rather than silently falling back to
+        // defaults, which would serve peers nobody configured.
+        const cfg = await loadConfigReadOnly();
+        if (cfg === null) return fail("canopy-peer: config unreadable");
         try {
           if (cmd.kind === "upload-pack") {
-            const p = Bun.spawn(["git-upload-pack", cmd.path], { stdin: "inherit", stdout: "inherit", stderr: "inherit" });
-            process.exit(await p.exited);
+            // Only what git-upload-pack itself needs, explicitly: passing
+            // the whole environment through would also pass GIT_CONFIG_*
+            // (git's own env-config channel), letting a peer who can
+            // influence this process's environment set
+            // uploadpack.packObjectsHook and have git-upload-pack run it.
+            const env: Record<string, string> = {
+              PATH: process.env["PATH"] ?? "",
+              HOME: process.env["HOME"] ?? "",
+            };
+            for (const name of ["GIT_PROTOCOL", "LANG", "LC_ALL"] as const) {
+              const v = process.env[name];
+              if (v !== undefined) env[name] = v;
+            }
+            const p = Bun.spawn(["git-upload-pack", cmd.path], { env, stdin: "inherit", stdout: "inherit", stderr: "inherit" });
+            const code = await p.exited;
+            const n = p.signalCode ? osConstants.signals[p.signalCode] : undefined;
+            process.exit(n !== undefined ? 128 + n : code);
           }
           if (cmd.kind === "list") console.log(JSON.stringify(await serveList(rootAbs, cfg.maxDepth)));
           if (cmd.kind === "seeds") console.log(JSON.stringify(await serveSeeds(rootAbs, cmd.id, cfg.seed)));
@@ -540,7 +567,9 @@ export async function main(argv: string[]): Promise<void> {
           const [, id, peer, branch] = args;
           if (!id || !peer) return fail("usage: canopy peers take <id> <peer> [branch]");
           const repo = join(rootDir, id);
-          const r = await takeWip(repo, peer, branch ?? (await currentBranch(repo)) ?? "main");
+          const resolvedBranch = branch ?? (await currentBranch(repo));
+          if (!resolvedBranch) return fail("HEAD is detached; name a branch");
+          const r = await takeWip(repo, peer, resolvedBranch);
           console.log(r.how === "files" ? "WIP checked out as uncommitted files" : `WIP is on branch ${r.branch}`);
           return;
         }
