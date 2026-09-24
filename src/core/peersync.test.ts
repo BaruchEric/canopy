@@ -384,6 +384,23 @@ describe("fetch and fast-forward", () => {
     expect(await sh(mac, "rev-parse", "feat/x")).toBe(tip);
   });
 
+  test("a branch checked out in a linked worktree stays put, and dry does not offer it either", async () => {
+    const { mac, mini, toMini, miniId } = await pair("linked");
+    await sh(mac, "branch", "feat/wt");
+    await sh(mac, "worktree", "add", "-q", join(root, "linked-wt"), "feat/wt");
+    const mine = await sh(mac, "rev-parse", "feat/wt");
+    await sh(mini, "fetch", "-q", "mac");
+    await sh(mini, "checkout", "-q", "-b", "feat/wt", "refs/remotes/mac/feat/wt");
+    await commit(mini, "wt.txt", "wt\n");
+    await fetchPeer(mac, miniId, toMini, {});
+    const dry = await fastForward(mac, ["mini"], true);
+    expect(dry.would).toEqual([]);
+    const r = await fastForward(mac, ["mini"], false);
+    expect(r.moved).toEqual([]);
+    expect(r.diverged).toEqual([]);
+    expect(await sh(mac, "rev-parse", "feat/wt")).toBe(mine);
+  });
+
   test("a branch only the peer has is listed, not created", async () => {
     const { mac, mini, toMini, miniId } = await pair("only");
     await sh(mini, "checkout", "-q", "-b", "peer-only");

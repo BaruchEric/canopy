@@ -245,8 +245,11 @@ export async function fastForward(repo: string, peers: string[], dry: boolean) {
     // every branch, checked out or not: a detached-HEAD rebase reports no
     // current branch at all, so the branch it is rewriting would otherwise
     // slip through the checked-out-only guard below. Dirty only ever
-    // threatens the branch actually checked out.
+    // threatens the branch actually checked out. A branch checked out in a
+    // linked worktree is left alone like a dirty one: update-ref would move
+    // it under that worktree, whose next commit would then undo the peer's.
     if (busy || (branch === head && dirty)) continue;
+    if (branch !== head && (await branchInUse(repo, branch))) continue;
     if (dry) { out.would!.push({ branch, to: d.to.hash, peer: d.to.peer }); continue; }
     const r = branch === head
       ? await git(repo, ["merge", "--ff-only", "--quiet", d.to.hash])
@@ -742,8 +745,8 @@ async function createBranch(repo: string, name: string, hash: string): Promise<s
 /** Whether `name` is the branch some worktree here — the main one or a
  *  linked one made with `git worktree add` — currently has checked out.
  *  update-ref, unlike checkout, does not refuse to move a branch out from
- *  under whoever has it checked out, so this is what landWip checks
- *  instead before treating it as free to replace. A worktree listing git
+ *  under whoever has it checked out, so this is what landWip and
+ *  fastForward check instead before treating it as free to move. A worktree listing git
  *  itself can't produce is treated as "in use": refusing to replace is the
  *  safe side of not being able to tell. */
 async function branchInUse(repo: string, name: string): Promise<boolean> {
