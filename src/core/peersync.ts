@@ -7,7 +7,8 @@ import { tmpdir } from "node:os";
 import { dirname, isAbsolute, join, normalize, relative, resolve, sep } from "node:path";
 import { git, onHost } from "./exec";
 import { BUSY_MARKERS, ffTarget, isPeerName, isSafeRel, NO_PUSH, parseQuotedWords, parseRefLines, parseWipLines, peerMissing, peerRefspecs, peerUnreachable, peerUrl, repoWanted, seedWanted } from "./peers";
-import type { Peer, PeerState, PeerWip } from "./types";
+import { configDir } from "./store";
+import type { Peer, PeerSeen, PeerState, PeerWip } from "./types";
 
 export async function currentBranch(repo: string): Promise<string | null> {
   const r = await git(repo, ["symbolic-ref", "-q", "--short", "HEAD"]);
@@ -769,4 +770,79 @@ export async function trackBranch(repo: string, peer: string, branch: string): P
   if (tip.code !== 0) throw new Error(`${peer} has no branch ${branch}`);
   const r = await git(repo, ["branch", "--no-track", branch, tip.stdout.trim()]);
   if (r.code !== 0) throw new Error(r.stderr.trim());
+}
+
+export interface PassOptions { self: string; peers: Peer[]; seed: string[]; dry: boolean; root: string }
+
+/** Peers that failed to connect this pass; shared by syncRepo calls so an
+ *  asleep peer costs one timeout per pass. */
+export class PassSeen {
+  seen = new Map<string, PeerSeen>();
+  offline(name: string): boolean { return this.seen.get(name)?.ok === false; }
+  mark(name: string, ok: boolean, error?: string): void {
+    const prev = this.seen.get(name);
+    if (prev?.ok === false) return; // one failure holds for the pass
+    this.seen.set(name, { name, ok, at: Date.now(), ...(error ? { error } : {}) });
+  }
+  list(): PeerSeen[] { return [...this.seen.values()]; }
+}
+
+const running = new Map<string, Promise<PeerState>>();
+
+/** A per-repo lock: a second call for the same repo while one runs returns
+ *  the running promise instead of starting a second pass over it. */
+export function syncRepo(id: string, opts: PassOptions, seen: PassSeen): Promise<PeerState> {
+  const key = join(opts.root, id);
+  const busy = running.get(key);
+  if (busy) return busy;
+  const run = passOne(id, opts, seen).finally(() => running.delete(key));
+  running.set(key, run);
+  return run;
+}
+
+async function passOne(id: string, opts: PassOptions, seen: PassSeen): Promise<PeerState> {
+  const repo = join(opts.root, id);
+  const state: PeerState = { moved: [], diverged: [], wip: [], peerOnly: [], onlyHere: false, at: Date.now() };
+  try {
+    const own = await snapshotWip(repo, opts.self, opts.dry);
+    if (own) state.ownWip = { branch: own.branch, at: own.at };
+    const env = { GIT_SSH_COMMAND: gitSshCommand(configDir()) };
+    const gitPeers = opts.peers.filter((p) => p.role === "git" && repoWanted(p, id));
+    let absent = 0;
+    const errors: string[] = [];
+    for (const p of gitPeers) {
+      if (seen.offline(p.name)) continue;
+      const got = await fetchPeer(repo, id, p, env);
+      if (got === "ok") seen.mark(p.name, true);
+      else if (got === "unreachable") seen.mark(p.name, false, "unreachable");
+      else if (got === "missing") { seen.mark(p.name, true); absent++; }
+      else errors.push(`${p.name}: ${got.error}`);
+    }
+    if (errors.length > 0) state.error = errors.join("; ");
+    state.onlyHere = gitPeers.length > 0 && absent === gitPeers.length;
+    // Refs already fetched from a peer that is offline now still count.
+    const names = gitPeers.map((p) => p.name);
+    Object.assign(state, await fastForward(repo, names, opts.dry));
+    state.wip = await peerWips(repo, names);
+  } catch (err) {
+    state.error = String(err instanceof Error ? err.message : err);
+  }
+  return state;
+}
+
+export async function syncAll(ids: string[], opts: PassOptions, concurrency: number) {
+  const seen = new PassSeen();
+  const { cloned, failed } = await cloneMissing(opts.root, opts.peers, opts.seed, opts.dry, { GIT_SSH_COMMAND: gitSshCommand(configDir()) });
+  const states = new Map<string, PeerState>();
+  const all = [...ids, ...cloned.filter((c) => !ids.includes(c))];
+  let next = 0;
+  const worker = async (): Promise<void> => {
+    while (next < all.length) {
+      const id = all[next++]!;
+      states.set(id, await syncRepo(id, opts, seen));
+    }
+  };
+  const workers = Math.max(1, Math.min(concurrency, all.length));
+  await Promise.all(Array.from({ length: workers }, worker));
+  return { states, seen: seen.list(), cloned, failed };
 }

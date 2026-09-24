@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
-import { mkdtemp, readFile, rm, writeFile, mkdir, symlink, lstat } from "node:fs/promises";
+import { chmod, mkdtemp, readFile, rm, writeFile, mkdir, symlink, lstat } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
@@ -14,6 +14,7 @@ import {
   initRepo,
   isBusy,
   isDirty,
+  PassSeen,
   peerWips,
   safeId,
   seedRepo,
@@ -21,6 +22,8 @@ import {
   serveSeed,
   serveSeeds,
   snapshotWip,
+  syncAll,
+  syncRepo,
   takeWip,
   trackBranch,
 } from "./peersync";
@@ -60,8 +63,30 @@ const repo = async (name: string): Promise<string> => {
   return dir;
 };
 
-beforeAll(async () => { root = await mkdtemp(join(tmpdir(), "canopy-peers-")); });
-afterAll(async () => { await rm(root, { recursive: true, force: true }); });
+// ssh's ControlPath (built from CANOPY_CONFIG_DIR by gitSshCommand, used by
+// syncRepo/syncAll below) has to fit in a unix socket path (about 104 bytes
+// on macOS). os.tmpdir() alone is already close to that once "/ssh-<40 hex
+// chars>" is added, and other test files that run in the same process (e.g.
+// launcher.test.ts) set CANOPY_CONFIG_DIR globally without restoring it, so
+// a config dir under tmpdir() here would push some runs over the limit and
+// turn ssh's "could not resolve" into a plain "ControlPath too long" that
+// isn't recognized as unreachable. A short, fixed prefix under /tmp keeps
+// every run well under the limit regardless of what else is running.
+let prevConfigDir: string | undefined;
+let configScratch = "";
+
+beforeAll(async () => {
+  root = await mkdtemp(join(tmpdir(), "canopy-peers-"));
+  prevConfigDir = process.env["CANOPY_CONFIG_DIR"];
+  configScratch = await mkdtemp("/tmp/cpy-");
+  process.env["CANOPY_CONFIG_DIR"] = configScratch;
+});
+afterAll(async () => {
+  await rm(root, { recursive: true, force: true });
+  if (prevConfigDir === undefined) delete process.env["CANOPY_CONFIG_DIR"];
+  else process.env["CANOPY_CONFIG_DIR"] = prevConfigDir;
+  await rm(configScratch, { recursive: true, force: true });
+});
 
 describe("snapshotWip", () => {
   test("a clean tree writes nothing", async () => {
@@ -993,5 +1018,146 @@ describe("take and track", () => {
     await sh(mac, "checkout", "-q", "main");
     await expect(trackBranch(mac, "mini", "@{-1}")).rejects.toThrow(/not a branch name/);
     await expect(takeWip(mac, "mini", "@{-1}")).rejects.toThrow(/not a branch name/);
+  });
+});
+
+describe("syncRepo", () => {
+  const layout = async (name: string) => {
+    const wsMac = join(root, `${name}-wsmac`);
+    const wsMini = join(root, `${name}-wsmini`);
+    await mkdir(wsMac, { recursive: true });
+    const mac = join(wsMac, "proj");
+    await exec(["git", "init", "-q", "-b", "main", mac]);
+    await sh(mac, "config", "user.email", "t@t");
+    await sh(mac, "config", "user.name", "t");
+    await commit(mac, "a.txt", "one\n");
+    await mkdir(wsMini, { recursive: true });
+    const mini = join(wsMini, "proj");
+    await exec(["git", "clone", "-q", mac, mini]);
+    await sh(mini, "config", "user.email", "t@t");
+    await sh(mini, "config", "user.name", "t");
+    const peersOfMac: Peer[] = [{ name: "mini", alias: null, root: wsMini, role: "git" }];
+    await initRepo(mac, "proj", peersOfMac, false);
+    return { wsMac, mac, mini, peersOfMac };
+  };
+
+  test("fast-forwards, lists WIP and says the peer was seen", async () => {
+    const { wsMac, mac, mini, peersOfMac } = await layout("pass");
+    const tip = await commit(mini, "b.txt", "b\n");
+    await writeFile(join(mini, "a.txt"), "wip\n");
+    await snapshotWip(mini, "mini", false);
+    const seen = new PassSeen();
+    const st = await syncRepo("proj", { self: "mac", peers: peersOfMac, seed: [".env"], dry: false, root: wsMac }, seen);
+    expect(st.moved.map((m) => m.to)).toEqual([tip]);
+    expect(st.wip.map((w) => w.branch)).toEqual(["main"]);
+    expect(st.onlyHere).toBe(false);
+    expect(seen.list()).toMatchObject([{ name: "mini", ok: true }]);
+    expect(await sh(mac, "rev-parse", "HEAD")).toBe(tip);
+  });
+
+  test("an unreachable peer is skipped for the rest of the pass", async () => {
+    const { wsMac, peersOfMac } = await layout("asleep");
+    const seen = new PassSeen();
+    seen.mark("mini", false, "timed out");
+    const st = await syncRepo("proj", { self: "mac", peers: peersOfMac, seed: [], dry: false, root: wsMac }, seen);
+    expect(st.moved).toEqual([]);
+    expect(st.error).toBeUndefined();
+  });
+
+  test("a repo no peer has is only here", async () => {
+    const { wsMac, peersOfMac } = await layout("solo");
+    await rm(join(root, "solo-wsmini", "proj"), { recursive: true, force: true });
+    const st = await syncRepo("proj", { self: "mac", peers: peersOfMac, seed: [], dry: false, root: wsMac }, new PassSeen());
+    expect(st.onlyHere).toBe(true);
+  });
+
+  test("two calls at once share one run", async () => {
+    const { wsMac, peersOfMac } = await layout("lock");
+    const opts = { self: "mac", peers: peersOfMac, seed: [], dry: false, root: wsMac };
+    const seen = new PassSeen();
+    const [a, b] = [syncRepo("proj", opts, seen), syncRepo("proj", opts, seen)];
+    expect(a).toBe(b);
+    await a;
+  });
+
+  test("the first connection failure marks the peer offline", async () => {
+    const { wsMac, mac } = await layout("dead");
+    const dead: Peer = { name: "gone", alias: "canopy-peer-test-nowhere.invalid", root: "dev", role: "git" };
+    await initRepo(mac, "proj", [dead], false);
+    const seen = new PassSeen();
+    await syncRepo("proj", { self: "mac", peers: [dead], seed: [], dry: false, root: wsMac }, seen);
+    expect(seen.offline("gone")).toBe(true);
+  });
+});
+
+describe("syncAll", () => {
+  test("concurrency 0 still syncs every repo", async () => {
+    const wsMac = join(root, "concurrency0-wsmac");
+    const wsMini = join(root, "concurrency0-wsmini");
+    await mkdir(wsMac, { recursive: true });
+    const mac = join(wsMac, "proj");
+    await exec(["git", "init", "-q", "-b", "main", mac]);
+    await sh(mac, "config", "user.email", "t@t");
+    await sh(mac, "config", "user.name", "t");
+    await commit(mac, "a.txt", "one\n");
+    await mkdir(wsMini, { recursive: true });
+    const mini = join(wsMini, "proj");
+    await exec(["git", "clone", "-q", mac, mini]);
+    await sh(mini, "config", "user.email", "t@t");
+    await sh(mini, "config", "user.name", "t");
+    const peers: Peer[] = [{ name: "mini", alias: null, root: wsMini, role: "git" }];
+    await initRepo(mac, "proj", peers, false);
+    const tip = await commit(mini, "b.txt", "b\n");
+
+    const r = await syncAll(["proj"], { self: "mac", peers, seed: [], dry: false, root: wsMac }, 0);
+    expect(r.states.get("proj")?.moved.map((m) => m.to)).toEqual([tip]);
+    expect(r.failed).toEqual([]);
+  });
+
+  test("two peers failing with a non-connection error are both reported in state.error", async () => {
+    const wsMac = join(root, "joinerr-wsmac");
+    await mkdir(wsMac, { recursive: true });
+    const mac = join(wsMac, "proj");
+    await exec(["git", "init", "-q", "-b", "main", mac]);
+    await sh(mac, "config", "user.email", "t@t");
+    await sh(mac, "config", "user.name", "t");
+    await commit(mac, "a.txt", "one\n");
+
+    // A peer with a commit mac hasn't seen yet, whose object is corrupted:
+    // mac already has every object the two share (dest was cloned from mac),
+    // so fetching would otherwise transfer nothing and never touch the
+    // corrupt object — only a genuinely new commit forces pack-objects on
+    // the peer's side to serve it, surfacing a generic protocol error
+    // instead of "missing" or "unreachable" (the case the join-with-"; "
+    // ruling is for). --no-hardlinks keeps the corruption from reaching back
+    // into mac's own objects (a plain local clone hard-links its files).
+    const corruptPeer = async (peerName: string): Promise<string> => {
+      const ws = join(root, `joinerr-ws-${peerName}`);
+      await mkdir(ws, { recursive: true });
+      const dest = join(ws, "proj");
+      await exec(["git", "clone", "-q", "--no-hardlinks", mac, dest]);
+      await sh(dest, "config", "user.email", "t@t");
+      await sh(dest, "config", "user.name", "t");
+      await writeFile(join(dest, "b.txt"), "b\n");
+      await sh(dest, "add", "-A");
+      await sh(dest, "commit", "-q", "-m", "b");
+      const newHash = await sh(dest, "rev-parse", "HEAD");
+      const objPath = join(dest, ".git", "objects", newHash.slice(0, 2), newHash.slice(2));
+      await chmod(objPath, 0o644);
+      await writeFile(objPath, "garbage");
+      return ws;
+    };
+    const wsA = await corruptPeer("a");
+    const wsB = await corruptPeer("b");
+    const peers: Peer[] = [
+      { name: "a", alias: null, root: wsA, role: "git" },
+      { name: "b", alias: null, root: wsB, role: "git" },
+    ];
+    await initRepo(mac, "proj", peers, false);
+    const seen = new PassSeen();
+    const st = await syncRepo("proj", { self: "mac", peers, seed: [], dry: false, root: wsMac }, seen);
+    // Joined with "; " per the ruling, not concatenated or left to overwrite:
+    // both peers' messages must survive as two "; "-separated segments.
+    expect(st.error?.split("; ").map((s) => s.slice(0, 2))).toEqual(["a:", "b:"]);
   });
 });
