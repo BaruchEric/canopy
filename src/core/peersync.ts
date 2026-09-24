@@ -618,12 +618,24 @@ export async function seedRepo(repo: string, id: string, peers: Peer[], allow: s
   return wrote;
 }
 
+/** Whether a folder between root and root/id (not root itself, not the
+ *  destination) is a repo here, a .git folder or gitfile either way. A
+ *  clone there would land inside that repo's own tree. */
+function underRepo(root: string, id: string): boolean {
+  const parts = id.split("/");
+  for (let i = 1; i < parts.length; i++) {
+    if (existsSync(join(root, ...parts.slice(0, i), ".git"))) return true;
+  }
+  return false;
+}
+
 /** Clones every repo a peer has and this workspace lacks. A peer's listing
  *  is untrusted: an id that fails isSafeRel is skipped before it ever
  *  becomes a join(root, id); an id that passes that check but still
  *  resolves outside root once symlinks are followed (an existing local
  *  folder in its path may hold one) is skipped by the same staysInside
- *  check seedRepo uses; and an origin is added only when networkOrigin
+ *  check seedRepo uses; an id whose path passes through a repo here is
+ *  skipped too; and an origin is added only when networkOrigin
  *  says it names a network remote, which also keeps out a url that starts
  *  with "-" or holds "::" (a leading dash could be read as an option, "::"
  *  opens a remote helper). The clone itself takes "--"
@@ -643,6 +655,7 @@ export async function cloneMissing(root: string, peers: Peer[], allow: string[],
       if (!isSafeRel(id)) continue;
       const dest = join(root, id);
       if (!repoWanted(p, id) || existsSync(dest) || cloned.includes(id)) continue;
+      if (underRepo(root, id)) continue;
       if (!(await staysInside(dest, rootReal))) continue;
       if (dry) { cloned.push(id); continue; }
       try {

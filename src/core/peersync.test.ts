@@ -763,6 +763,21 @@ describe("a peer's origin is kept only when it names a network remote", () => {
   });
 });
 
+describe("cloneMissing never clones inside a repo here", () => {
+  test("a listed a/b is refused when a is a repo here, in dry and for real", async () => {
+    const theirs = join(root, "theirs-nested");
+    await mkdir(join(theirs, "a"), { recursive: true });
+    await listed(theirs, "a/b", null);
+    const ours = join(root, "ours-nested");
+    await mkdir(ours, { recursive: true });
+    await exec(["git", "init", "-q", "-b", "main", join(ours, "a")]);
+    const peer: Peer = { name: "mini", alias: null, root: theirs, role: "git" };
+    expect(await cloneMissing(ours, [peer], [".env"], true, {})).toEqual({ cloned: [], failed: [] });
+    expect(await cloneMissing(ours, [peer], [".env"], false, {})).toEqual({ cloned: [], failed: [] });
+    expect(existsSync(join(ours, "a", "b"))).toBe(false);
+  });
+});
+
 describe("symlinks inside a repo or root are not followed", () => {
   test("a symlinked folder inside the repo is not followed when seeding", async () => {
     const theirsRoot = join(root, "theirs-symlink-seed");
