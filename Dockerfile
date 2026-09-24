@@ -25,9 +25,13 @@ FROM oven/bun:1 AS shells
 # restart; python3 for the bundled Library; openssh for ssh sources and for
 # VS Code Remote-SSH from a client; curl to fetch the claude installer;
 # nodejs because the codex npm wrapper's launcher runs on node (bun does not
-# satisfy its `#!/usr/bin/env node` shebang).
+# satisfy its `#!/usr/bin/env node` shebang). The rest is for the shell a
+# person types in: bash-completion; gawk, procps and xz-utils for ble.sh
+# (inline suggestions and highlighting, which refuses to load without `ps`);
+# jq for the Claude Code status line script.
 RUN apt-get update && apt-get install -y --no-install-recommends \
       git tmux python3 openssh-client ca-certificates curl nodejs \
+      bash-completion gawk procps xz-utils jq \
     && rm -rf /var/lib/apt/lists/*
 
 # The server, the shells and claude all run as the image's `bun` user, remapped
@@ -62,6 +66,8 @@ ENV PATH="/home/bun/.local/bin:/home/bun/.bun/bin:${PATH}"
 # the image points global installs at /usr/local/bin, which the bun user
 # cannot write; keep them under its own home, where PATH already looks
 ENV BUN_INSTALL_BIN=/home/bun/.bun/bin
+# ble.sh warns on every shell without a UTF-8 locale; C.UTF-8 needs no package
+ENV LANG=C.UTF-8
 
 # Claude Code, Anthropic's official native install (subscription login, no
 # API key; the login itself is a mounted ~/.claude, see deploy.md).
@@ -71,6 +77,17 @@ RUN curl -fsSL https://claude.ai/install.sh | bash
 # name is wrong for your setup, install it your own way (see deploy.md); it
 # is not required for canopy to start.
 RUN bun add -g @openai/codex || echo "codex not installed at build; see docs/deploy.md"
+
+# ble.sh from its nightly tarball, which runs in place (its --install step
+# fails under Debian's bash 5.2). ~/.bashrc then sources shell/bashrc off the
+# mounted ~/.claude when the host keeps one there (the dotclaude layout: the
+# prompt, aliases and completion the host's own shells use), and changes
+# nothing when it does not.
+RUN mkdir -p /home/bun/.local/share \
+    && curl -fsSL https://github.com/akinomyoga/ble.sh/releases/download/nightly/ble-nightly.tar.xz \
+       | tar xJf - -C /home/bun/.local/share \
+    && mv /home/bun/.local/share/ble-nightly /home/bun/.local/share/blesh \
+    && printf '\n[ -r ~/.claude/shell/bashrc ] && . ~/.claude/shell/bashrc\n' >> /home/bun/.bashrc
 
 # the tmux server's config, at the path canopy's own tmux client names;
 # tmux-server.conf sources it and keeps the server up with no session

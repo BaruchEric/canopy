@@ -31,6 +31,8 @@ services:
       - ${HOST_HOME:-/home/eric}/.claude.json:/home/bun/.claude.json
       - ${HOST_HOME:-/home/eric}/.codex:/home/bun/.codex
       - ${HOST_HOME:-/home/eric}/.ssh:/home/bun/.ssh:ro
+      # the host's time zone, so a shell prompt's clock is the host's
+      - /etc/localtime:/etc/localtime:ro
     # up once the socket answers, so canopy's first new-session never starts
     # a server of its own (one inside the canopy container, gone with it)
     healthcheck:
