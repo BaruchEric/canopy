@@ -4,8 +4,8 @@ import { mkdir, mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { peerUrl } from "../core/peers";
-import type { Peer, Repo } from "../core/types";
-import { isPeerRemote, notePeerList, ownRemotesOf, peerSettingsFromEnv, queuePass, runPeerAction, startServer, withPeering } from "./index";
+import type { Peer, PeerBranch, Repo } from "../core/types";
+import { isPeerRemote, newDivergences, notePeerList, ownRemotesOf, peerSettingsFromEnv, queuePass, runPeerAction, startServer, withPeering } from "./index";
 
 let scratch: string;
 let root: string;
@@ -352,6 +352,27 @@ describe("a diverged branch is notified once", () => {
     },
     20_000,
   );
+});
+
+describe("newDivergences", () => {
+  const main: PeerBranch = { branch: "main", peer: "mini", ahead: 1, behind: 1 };
+  const feat: PeerBranch = { branch: "feat", peer: "mini", ahead: 2, behind: 1 };
+  test("a divergence is new once; one that settled and comes back is new again", () => {
+    const seen = new Map<string, Set<string>>();
+    expect(newDivergences(seen, "app", [main])).toEqual([main]);
+    expect(newDivergences(seen, "app", [main])).toEqual([]);
+    // main settled (a merge, a fast-forward), feat diverged
+    expect(newDivergences(seen, "app", [feat])).toEqual([feat]);
+    expect(newDivergences(seen, "app", [])).toEqual([]);
+    expect(newDivergences(seen, "app", [main, feat])).toEqual([main, feat]);
+  });
+  test("one repo's divergences never speak for another's, even with a space in the id", () => {
+    const seen = new Map<string, Set<string>>();
+    expect(newDivergences(seen, "a", [main])).toEqual([main]);
+    expect(newDivergences(seen, "a b", [main])).toEqual([main]);
+    expect(newDivergences(seen, "a b", [])).toEqual([]);
+    expect(newDivergences(seen, "a", [main])).toEqual([]);
+  });
 });
 
 describe("dry mode and a repo only the peer has", () => {

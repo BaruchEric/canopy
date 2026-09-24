@@ -175,8 +175,9 @@ interface ServerState {
   peerStates: Map<string, PeerState>;
   /** each peer's reachability from the last whole-tree pass */
   peerSeen: PeerSeen[];
-  /** branch+peer pairs already reported diverged, so the notice fires once */
-  divergedSeen: Set<string>;
+  /** per repo id, the branch+peer pairs already reported diverged, so the
+   *  notice fires once for each divergence */
+  divergedSeen: Map<string, Set<string>>;
   /** repo paths whose peer remotes were set up (a non-dry initRepo) this
    *  process, so a restart or a dry-to-on flip sets them up again */
   inited: Set<string>;
@@ -1354,6 +1355,23 @@ export async function withPeering<T>(state: { peering: Promise<void> | null }, f
   return run;
 }
 
+/** The divergences in a repo's new peer state not reported yet. `seen`
+ *  keeps exactly the pairs diverged now, so one that settles and later
+ *  diverges again is reported again. Exported for a direct unit test. */
+export function newDivergences(seen: Map<string, Set<string>>, id: string, diverged: PeerBranch[]): PeerBranch[] {
+  const had = seen.get(id);
+  const now = new Set<string>();
+  const fresh: PeerBranch[] = [];
+  for (const d of diverged) {
+    const key = `${d.branch} ${d.peer}`;
+    now.add(key);
+    if (!had?.has(key)) fresh.push(d);
+  }
+  if (now.size > 0) seen.set(id, now);
+  else seen.delete(id);
+  return fresh;
+}
+
 /** Records one repo's peer state, notifies on a divergence the first time it
  *  is seen, schedules a status re-read when something moved, and broadcasts
  *  the repo only when its peer state actually changed (broadcasting every
@@ -1366,12 +1384,7 @@ function applyPeerState(state: ServerState, id: string, st: PeerState): void {
   const changed = !before || JSON.stringify({ ...before, at: 0 }) !== JSON.stringify({ ...st, at: 0 });
   state.peerStates.set(id, st);
   if (!changed) return;
-  for (const d of st.diverged) {
-    const key = `${id} ${d.branch} ${d.peer}`;
-    if (state.divergedSeen.has(key)) continue;
-    state.divergedSeen.add(key);
-    notifyDiverged(id, d);
-  }
+  for (const d of newDivergences(state.divergedSeen, id, st.diverged)) notifyDiverged(id, d);
   if (st.moved.length > 0) scheduleRefresh(state, id);
   const repo = state.result.repos[idx]!;
   const next = { ...repo, peers: st };
@@ -2270,7 +2283,7 @@ export async function startServer(opts: {
     peerNamesSeen: (await peerSettings()).peers,
     peerStates: new Map(),
     peerSeen: [],
-    divergedSeen: new Set(),
+    divergedSeen: new Map(),
     inited: new Set(),
     peering: null,
     pendingPass: null,
