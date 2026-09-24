@@ -143,8 +143,16 @@ export async function initRepo(repo: string, id: string, peers: Peer[], dry: boo
   if (dry) return;
   for (const p of peers) {
     if (p.role !== "git") continue;
-    const url = peerUrl(p, id);
     const has = (await git(repo, ["remote", "get-url", p.name])).code === 0;
+    if (has) {
+      // A remote already named for this peer that canopy did not set up
+      // (no no-push marker) is the user's own; leave it alone entirely and
+      // skip this peer for this repo. fetchPeer fetches by URL and explicit
+      // refspecs, not by remote name, so the pass still reaches this peer.
+      const pushurl = await git(repo, ["config", "--get", `remote.${p.name}.pushurl`]);
+      if (pushurl.code !== 0 || pushurl.stdout.trim() !== NO_PUSH) continue;
+    }
+    const url = peerUrl(p, id);
     await git(repo, has ? ["remote", "set-url", p.name, url] : ["remote", "add", p.name, url]);
     const [heads, wip] = peerRefspecs(p.name);
     await git(repo, ["config", "--replace-all", `remote.${p.name}.fetch`, heads]);
@@ -864,7 +872,10 @@ async function syncAllOnce(ids: string[], opts: PassOptions, concurrency: number
   const seen = new PassSeen();
   const { cloned, failed } = await cloneMissing(opts.root, opts.peers, opts.seed, opts.dry, { GIT_SSH_COMMAND: gitSshCommand(configDir()) });
   const states = new Map<string, PeerState>();
-  const all = [...ids, ...cloned.filter((c) => !ids.includes(c))];
+  // In dry mode, cloneMissing lists what it would clone without making the
+  // folder; syncing one of those ids would run git against a path that does
+  // not exist. Only a real clone joins the worker list.
+  const all = opts.dry ? ids : [...ids, ...cloned.filter((c) => !ids.includes(c))];
   let next = 0;
   const worker = async (): Promise<void> => {
     while (next < all.length) {

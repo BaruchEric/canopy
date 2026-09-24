@@ -38,7 +38,7 @@ import { apiBase, ForgeAuthError, linkForgeClones, listForgeRepos } from "../cor
 import { isSshHost, parseLocator, parseSshHosts, shellQuote, tildeQuote } from "../core/host";
 import { hasGatewayKey, jev } from "../core/jev";
 import { normalizeAgent } from "../core/agent";
-import { linkPeers } from "../core/peers";
+import { linkPeers, NO_PUSH } from "../core/peers";
 import { initRepo, PassSeen, seedRepo, syncAll, syncRepo, takeWip, trackBranch } from "../core/peersync";
 import { normalizeLaunch } from "../core/launch";
 import { Launcher, LauncherError } from "../core/launcher";
@@ -161,6 +161,10 @@ interface ServerState {
   /** the names of each repo's own remotes, by path, settled once per repo:
    *  what the background fetch pulls and where a tip may come from */
   own: Map<string, string[]>;
+  /** the peer names `own` was last filtered against, sorted and joined; a
+   *  change (a peer added, removed or renamed) clears `own` so a same-named
+   *  remote is judged again */
+  peerNamesSeen: string | null;
   /** peer sync outcomes by repo id, from the last whole-tree pass or a
    *  per-repo action; what `linkPeers` attaches to each repo as `.peers` */
   peerStates: Map<string, PeerState>;
@@ -1070,15 +1074,33 @@ const FETCH_CONCURRENCY = 4;
 /** A repo's own remotes, remembered by path. `learned` says this was the
  *  first look, so the caller can re-read a status taken before it. The
  *  GitHub lookups behind it are memoized in `access`. */
+/** Whether `name` on this repo is a true peer remote: canopy set it up (its
+ *  pushurl is the no-push marker). A same-named remote without that marker
+ *  is the user's own; initRepo leaves it alone, and this keeps it in `own`
+ *  too, since it is exactly the kind of remote the origin fetch is for. */
+async function isPeerRemote(repoPath: string, name: string): Promise<boolean> {
+  const r = await exec(["git", "-C", repoPath, "config", "--get", `remote.${name}.pushurl`]);
+  return r.code === 0 && r.stdout.trim() === NO_PUSH;
+}
+
 async function ownRemotesOf(state: ServerState, repo: Repo): Promise<{ names: string[]; learned: boolean }> {
+  const peerNames = (await peerSettings()).peers.map((p) => p.name);
+  const peerNamesKey = [...peerNames].sort().join(",");
+  if (state.peerNamesSeen !== peerNamesKey) {
+    // A peer was added, removed or renamed since the memo was filled: every
+    // repo's own-remotes judgement may now be wrong (a name that used to be
+    // a peer's, or wasn't, no longer means the same thing).
+    state.own.clear();
+    state.peerNamesSeen = peerNamesKey;
+  }
   const known = state.own.get(repo.path);
   if (known !== undefined) return { names: known, learned: false };
   if (state.login === undefined) state.login = await githubLogin();
   let names = await ownRemotes(await listRemotes(repo.path), { login: state.login, permission: state.access });
   // Peer remotes are pulled by the peer pass, not the origin fetch, and kept
   // out of status.tip too: the tip reads only the names settled here.
-  const peerNames = (await peerSettings()).peers.map((p) => p.name);
-  names = names.filter((n) => !peerNames.includes(n));
+  const drop = await Promise.all(names.map((n) => (peerNames.includes(n) ? isPeerRemote(repo.path, n) : Promise.resolve(false))));
+  names = names.filter((_, i) => !drop[i]);
   state.own.set(repo.path, names);
   return { names, learned: true };
 }
@@ -1183,10 +1205,10 @@ async function peerPass(state: ServerState): Promise<void> {
   const s = await peerSettings();
   if (s.peerSync === "off" || !s.self) return;
   if (s.peers.length === 0) return;
+  const dry = s.peerSync === "dry";
   const repos = state.result.repos.filter((r) => peerable(r) && !state.runner.activeFor(r.id));
   for (const r of repos) {
     if (state.inited.has(r.path)) continue;
-    const dry = s.peerSync === "dry";
     await initRepo(r.path, r.id, s.peers, dry);
     // Only a non-dry setup counts as inited: a dry pass wrote no remotes, so
     // flipping to "on" without a restart must still set them up.
@@ -1194,25 +1216,59 @@ async function peerPass(state: ServerState): Promise<void> {
   }
   const { states, seen, cloned, failed } = await syncAll(
     repos.map((r) => r.id),
-    { self: s.self, peers: s.peers, seed: s.seed, dry: s.peerSync === "dry", root: state.root },
+    { self: s.self, peers: s.peers, seed: s.seed, dry, root: state.root },
     FETCH_CONCURRENCY,
   );
+  if (seenChanged(state.peerSeen, seen)) broadcast(state, { type: "peers", seen });
   state.peerSeen = seen;
-  broadcast(state, { type: "peers", seen });
   for (const [id, st] of states) applyPeerState(state, id, st);
   for (const f of failed) console.error(`canopy: peer clone failed: ${f.id}: ${f.error}`);
-  if (cloned.length > 0) {
+  // In dry mode cloneMissing only lists what it would clone, without making
+  // the folder, so `cloned` here is not real: nothing to rescan or announce.
+  if (!dry && cloned.length > 0) {
     const launch = state.sources.find((rt) => rt.src.id === LAUNCH_SOURCE);
     if (launch) await scanOne(state, launch, scanOpts(state, await loadConfig()));
     broadcast(state, { type: "scan", result: state.result });
   }
+  // Drop peer state for anything no longer in the tree: a repo removed since
+  // the last pass, or (defensively) an id that never belonged there.
+  const treeIds = new Set(state.result.repos.map((r) => r.id));
+  for (const id of state.peerStates.keys()) if (!treeIds.has(id)) state.peerStates.delete(id);
+}
+
+/** Whether `after` differs from `before`, ignoring `at` and ignoring order:
+ *  syncAll's workers race, so which peer gets marked first varies pass to
+ *  pass even when reachability itself hasn't changed. */
+function seenChanged(before: PeerSeen[], after: PeerSeen[]): boolean {
+  const key = (list: PeerSeen[]) =>
+    JSON.stringify([...list].map((s) => ({ ...s, at: 0 })).sort((a, b) => a.name.localeCompare(b.name)));
+  return key(before) !== key(after);
+}
+
+/** Waits for anything already using `state.peering` (the whole-tree pass, or
+ *  another call here) to finish, then holds it for `fn`'s duration: a route
+ *  action's initRepo and syncRepo must never touch the same repo's
+ *  .git/config as the pass's own initRepo loop at the same time. */
+async function withPeering<T>(state: ServerState, fn: () => Promise<T>): Promise<T> {
+  if (state.peering) await state.peering.catch(() => {});
+  const run = fn();
+  state.peering = run.then(
+    () => undefined,
+    () => undefined,
+  ).finally(() => {
+    state.peering = null;
+  });
+  return run;
 }
 
 /** Records one repo's peer state, notifies on a divergence the first time it
  *  is seen, schedules a status re-read when something moved, and broadcasts
  *  the repo only when its peer state actually changed (broadcasting every
- *  repo each pass would pulse the whole board). */
+ *  repo each pass would pulse the whole board). Ignores an id not in the
+ *  tree: a dry pass's would-be clone, or a repo removed mid-pass. */
 function applyPeerState(state: ServerState, id: string, st: PeerState): void {
+  const idx = state.result.repos.findIndex((r) => r.id === id);
+  if (idx === -1) return;
   const before = state.peerStates.get(id);
   const changed = !before || JSON.stringify({ ...before, at: 0 }) !== JSON.stringify({ ...st, at: 0 });
   state.peerStates.set(id, st);
@@ -1224,17 +1280,18 @@ function applyPeerState(state: ServerState, id: string, st: PeerState): void {
     notifyDiverged(id, d);
   }
   if (st.moved.length > 0) scheduleRefresh(state, id);
-  const idx = state.result.repos.findIndex((r) => r.id === id);
-  const repo = state.result.repos[idx];
-  if (!repo) return;
+  const repo = state.result.repos[idx]!;
   const next = { ...repo, peers: st };
   state.result.repos[idx] = next;
   broadcast(state, { type: "repo", repo: next });
 }
 
-/** Best effort: `ctl` exists only where _control is installed. */
+/** Best effort: `ctl` exists only where _control is installed. The PATH is
+ *  passed explicitly: `Bun.which` with no options resolves against the PATH
+ *  the process started with, not a later `process.env["PATH"]`, which would
+ *  otherwise make this unstubbable in a test. */
 function notifyDiverged(id: string, d: PeerBranch): void {
-  const ctl = Bun.which("ctl");
+  const ctl = Bun.which("ctl", { PATH: process.env["PATH"] ?? "" });
   if (!ctl) return;
   void exec([ctl, "notify", "soft", `${id}: ${d.branch} diverged from ${d.peer} (${d.behind} here, ${d.ahead} there)`], { timeoutMs: 10_000 });
 }
@@ -1944,26 +2001,50 @@ async function handleApi(
     }
     if (method === "POST" && action === "peer") {
       if (!peerable(repo)) throw new HttpError(400, "peer sync covers local repos under the launch root");
-      const body = (await req.json().catch(() => ({}))) as { action?: string; peer?: string; branch?: string };
+      const raw: unknown = await req.json().catch(() => null);
+      if (!raw || typeof raw !== "object" || Array.isArray(raw)) throw new HttpError(400, "malformed body");
+      const body = raw as { action?: unknown; peer?: unknown; branch?: unknown };
+      const peerActions = ["sync", "take", "track", "seed"] as const;
+      const bodyAction = typeof body.action === "string" ? body.action : "";
+      if (!(peerActions as readonly string[]).includes(bodyAction)) {
+        throw new HttpError(400, `unknown action: ${String(body.action)}`);
+      }
       const s = await peerSettings();
       if (!s.self) throw new HttpError(400, "peers are not set up: no self in the config");
-      const needPeer = body.action === "take" || body.action === "track";
+      const self = s.self;
+      // Off blocks every action; dry (below) governs only the background
+      // pass and this route's own "sync" — take and track are explicit user
+      // actions and always run for real.
+      if (s.peerSync === "off") throw new HttpError(409, "peer sync is off");
+      const needPeer = bodyAction === "take" || bodyAction === "track";
+      if (needPeer) {
+        if (typeof body.peer !== "string" || body.peer === "") throw new HttpError(400, "peer is required");
+        if (typeof body.branch !== "string" || body.branch === "") throw new HttpError(400, "branch is required");
+      }
       const peer = s.peers.find((p) => p.name === body.peer);
-      if (needPeer && !peer) throw new HttpError(404, `unknown peer: ${body.peer}`);
+      if (needPeer && !peer) throw new HttpError(404, `unknown peer: ${String(body.peer)}`);
+      // The same conflicts the run action refuses on: a Claude run or a
+      // workflow already has this repo, and initRepo/syncRepo/takeWip could
+      // step on files or refs either of those is using.
+      const activeRun = state.runner.activeFor(repo.id);
+      if (activeRun) throw new HttpError(409, `${repo.name} already has a ${activeRun.verb} run going`);
+      if (state.flows.activeFor(repo.id)) throw new HttpError(409, "a workflow is running here");
       const dry = s.peerSync === "dry";
       let take: unknown;
       try {
-        if (body.action === "sync") {
-          await initRepo(repo.path, repo.id, s.peers, dry);
-          applyPeerState(state, repo.id, await syncRepo(repo.id, { self: s.self, peers: s.peers, seed: s.seed, dry, root: state.root }, new PassSeen()));
-        } else if (body.action === "take") {
-          take = await takeWip(repo.path, peer!.name, body.branch ?? "");
-        } else if (body.action === "track") {
-          await trackBranch(repo.path, peer!.name, body.branch ?? "");
-        } else if (body.action === "seed") {
-          await seedRepo(repo.path, repo.id, s.peers, s.seed, dry);
+        if (bodyAction === "sync") {
+          // Holds state.peering so this repo's initRepo/syncRepo never runs
+          // at the same time as the whole-tree pass's own initRepo loop.
+          await withPeering(state, async () => {
+            await initRepo(repo.path, repo.id, s.peers, dry);
+            applyPeerState(state, repo.id, await syncRepo(repo.id, { self, peers: s.peers, seed: s.seed, dry, root: state.root }, new PassSeen()));
+          });
+        } else if (bodyAction === "take") {
+          take = await takeWip(repo.path, peer!.name, body.branch as string);
+        } else if (bodyAction === "track") {
+          await trackBranch(repo.path, peer!.name, body.branch as string);
         } else {
-          throw new HttpError(400, `unknown action: ${body.action}`);
+          await seedRepo(repo.path, repo.id, s.peers, s.seed, dry);
         }
       } catch (err) {
         if (err instanceof HttpError) throw err;
@@ -2093,6 +2174,7 @@ export async function startServer(opts: {
     launcher,
     pulls: new Map(),
     own: new Map(),
+    peerNamesSeen: null,
     peerStates: new Map(),
     peerSeen: [],
     divergedSeen: new Set(),

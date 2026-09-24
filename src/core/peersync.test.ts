@@ -270,6 +270,17 @@ describe("initRepo", () => {
     await initRepo(mac, "init-mini", [{ name: "mini", alias: null, root, role: "git" }], false);
     expect((await sh(mac, "config", "--get-all", "remote.mini.fetch")).split("\n")).toHaveLength(2);
   });
+  test("leaves a same-named remote alone when it is not the no-push marker: it is the user's own", async () => {
+    const mac = await repo("init-userowned-mac");
+    await sh(mac, "remote", "add", "mini", "https://example.invalid/mine.git");
+    await initRepo(mac, "init-userowned-mini", [{ name: "mini", alias: null, root, role: "git" }], false);
+    expect(await sh(mac, "remote", "get-url", "mini")).toBe("https://example.invalid/mine.git");
+    // No no-push marker: initRepo never touched this remote's config at all,
+    // so it keeps only the default fetch refspec "remote add" gave it, not
+    // the wip refspec initRepo appends for a peer it owns.
+    expect((await exec(["git", "config", "--get", "remote.mini.pushurl"], { cwd: mac })).code).not.toBe(0);
+    expect(await sh(mac, "config", "--get-all", "remote.mini.fetch")).toBe("+refs/heads/*:refs/remotes/mini/*");
+  });
 });
 
 describe("fetch and fast-forward", () => {
@@ -1160,6 +1171,24 @@ describe("syncAll", () => {
     // Joined with "; " per the ruling, not concatenated or left to overwrite:
     // both peers' messages must survive as two "; "-separated segments.
     expect(st.error?.split("; ").map((s) => s.slice(0, 2))).toEqual(["a:", "b:"]);
+  });
+
+  test("dry mode never syncs a would-be clone: syncRepo does not run against a folder that was never made", async () => {
+    const wsMac = join(root, "drynoclone-wsmac");
+    const wsMini = join(root, "drynoclone-wsmini");
+    await mkdir(wsMac, { recursive: true });
+    await mkdir(wsMini, { recursive: true });
+    const mini = join(wsMini, "proj");
+    await exec(["git", "init", "-q", "-b", "main", mini]);
+    await sh(mini, "config", "user.email", "t@t");
+    await sh(mini, "config", "user.name", "t");
+    await commit(mini, "a.txt", "one\n");
+    const peers: Peer[] = [{ name: "mini", alias: null, root: wsMini, role: "git" }];
+
+    const r = await syncAll([], { self: "mac", peers, seed: [], dry: true, root: wsMac }, 4);
+    expect(r.cloned).toEqual(["proj"]);
+    expect(r.states.has("proj")).toBe(false);
+    expect(existsSync(join(wsMac, "proj"))).toBe(false);
   });
 
   test("two calls at once share one run", async () => {
