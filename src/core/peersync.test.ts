@@ -563,7 +563,32 @@ describe("clone and seed", () => {
 });
 
 describe("a peer's listing is untrusted", () => {
-  test("an origin url starting with a dash or holding :: is not added as a remote, though the clone itself proceeds", async () => {
+  test("a listed repo named like a flag is skipped, never reaching join(root, id)", async () => {
+    const theirs = join(root, "theirs-flag");
+    const ok = join(theirs, "ok");
+    const evil = join(theirs, "-evil");
+    for (const src of [ok, evil]) {
+      await mkdir(src, { recursive: true });
+      await exec(["git", "init", "-q", "-b", "main", src]);
+      await sh(src, "config", "user.email", "t@t");
+      await sh(src, "config", "user.name", "t");
+      await commit(src, "a.txt", "one\n");
+    }
+    // "-evil" is a perfectly real directory name (git init took it with no
+    // trouble, since it's an absolute path and never reaches a CLI parser
+    // as a bare argument); serveList reports it as an id exactly like any
+    // other. isSafeRel is what stops cloneMissing from ever handing that
+    // id to join(root, id) or to a "git clone" positional argument.
+    const ours = join(root, "ours-flag");
+    await mkdir(ours, { recursive: true });
+    const peer: Peer = { name: "mini", alias: null, root: theirs, role: "git" };
+    const r = await cloneMissing(ours, [peer], [".env"], false, {});
+    expect(r.failed).toEqual([]);
+    expect(r.cloned).toEqual(["ok"]);
+    expect(existsSync(join(ours, "-evil"))).toBe(false);
+  });
+
+  test("an origin url holding :: is not added as a remote, though the clone itself proceeds", async () => {
     const theirs = join(root, "theirs-danger");
     const dash = join(theirs, "dash");
     const ext = join(theirs, "ext");
@@ -577,6 +602,13 @@ describe("a peer's listing is untrusted", () => {
     // Written straight into .git/config: a value git's own CLI parsing
     // would refuse to store this way is exactly what a hand-rolled
     // listing from a compromised or non-conforming peer could still send.
+    // The "dash" repo's origin (a bare leading-dash value) is here too, but
+    // only as a regression check: git's own "remote add" option parsing
+    // already refuses that value before cloneMissing's own filter ever
+    // runs, so it does not by itself prove the filter's effect (see the
+    // report's mutation-testing note). The "ext" repo's "::" value is what
+    // actually discriminates: git accepts it as a remote-helper url just
+    // fine, so only cloneMissing's own check keeps it out.
     await writeFile(join(dash, ".git", "config"), (await readFile(join(dash, ".git", "config"), "utf8")) + '[remote "origin"]\n\turl = --evil\n');
     await writeFile(join(ext, ".git", "config"), (await readFile(join(ext, ".git", "config"), "utf8")) + '[remote "origin"]\n\turl = ext::sh -c evil\n');
     const ours = join(root, "ours-danger");
