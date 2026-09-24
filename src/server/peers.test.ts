@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { peerUrl } from "../core/peers";
 import type { Peer, Repo } from "../core/types";
-import { isPeerRemote, notePeerList, ownRemotesOf, peerSettingsFromEnv, queuePass, startServer, withPeering } from "./index";
+import { isPeerRemote, notePeerList, ownRemotesOf, peerSettingsFromEnv, queuePass, runPeerAction, startServer, withPeering } from "./index";
 
 let scratch: string;
 let root: string;
@@ -544,6 +544,36 @@ describe("queuePass", () => {
     await Promise.all([route, pass2]);
 
     expect(order).toEqual(["pass1 enter", "pass1 exit", "route enter", "route exit", "pass2 enter", "pass2 exit"]);
+  });
+});
+
+describe("runPeerAction", () => {
+  test("take, track and seed each wait behind a running pass, like sync", async () => {
+    for (const action of ["sync", "take", "track", "seed"] as const) {
+      const state: { peering: Promise<void> | null; pendingPass: Promise<void> | null } = { peering: null, pendingPass: null };
+      const order: string[] = [];
+      let releasePass!: () => void;
+      const passGate = new Promise<void>((r) => {
+        releasePass = r;
+      });
+      const pass = queuePass(state, async () => {
+        order.push("pass enter");
+        await passGate;
+        order.push("pass exit");
+      });
+      const op = (name: string) => async () => {
+        order.push(`${name} enter`);
+        return name;
+      };
+      const act = runPeerAction(state, action, { sync: op("sync"), take: op("take"), track: op("track"), seed: op("seed") });
+      // give a wrongly-unqueued action time to run early; it should not have
+      await Bun.sleep(20);
+      expect(order).toEqual(["pass enter"]);
+      releasePass();
+      expect(await act).toBe(action);
+      await pass;
+      expect(order).toEqual(["pass enter", "pass exit", `${action} enter`]);
+    }
   });
 });
 

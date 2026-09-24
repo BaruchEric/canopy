@@ -1231,8 +1231,8 @@ export function queuePass(state: { peering: Promise<void> | null; pendingPass: P
 
 /** Pulls from every peer: snapshot, fetch, fast-forward, clone what is
  *  missing. Repos with a run under way are skipped, like the fetch. A timer
- *  pass, a manual /api/peers/sync, and a route action's own initRepo and
- *  syncRepo all go through the one peering queue (withPeering), so none of
+ *  pass, a manual /api/peers/sync, and every route action (sync, take,
+ *  track, seed) all go through the one peering queue (withPeering), so none of
  *  them ever runs at the same time as another; a pass specifically also
  *  coalesces through queuePass, since a second timer tick or sync request
  *  while one is already pending should join it, not queue a duplicate pass
@@ -1308,6 +1308,19 @@ export function notePeerList(state: { own: Map<string, string[]>; peerNamesSeen:
   state.peerNamesSeen = peers;
 }
 
+const PEER_ACTIONS = ["sync", "take", "track", "seed"] as const;
+export type PeerAction = (typeof PEER_ACTIONS)[number];
+const isPeerAction = (v: unknown): v is PeerAction => (PEER_ACTIONS as readonly unknown[]).includes(v);
+
+/** Runs one /api/repos/peer action through the peering queue, every
+ *  action and not only sync: a pass running alongside a take could
+ *  fast-forward the branch between takeWip's HEAD check and its read-tree,
+ *  and a track or seed writes to the same repo the pass is working in.
+ *  Exported for a direct unit test of the queue ordering. */
+export function runPeerAction<T>(state: { peering: Promise<void> | null }, action: PeerAction, ops: Record<PeerAction, () => Promise<T>>): Promise<T> {
+  return withPeering(state, ops[action]);
+}
+
 /** A true FIFO queue over `state.peering`, not just a wait-then-run: every
  *  writer of `state.peering` goes through here, the whole-tree pass
  *  (queuePass, wrapping this) included, so it is the one and only queue,
@@ -1317,9 +1330,9 @@ export function notePeerList(state: { own: Map<string, string[]>; peerNamesSeen:
  *  awaiting the one it replaced. Two callers arriving back to back
  *  therefore never both see the same holder and race to run `fn`
  *  together: the second always sees the first's tail, not the original
- *  holder. A route action's initRepo and syncRepo must never touch the
- *  same repo's .git/config as the pass's own initRepo loop, or another
- *  queued action, at the same time. Exported for a direct unit test of
+ *  holder. A route action (sync's initRepo and syncRepo, a take, a track,
+ *  a seed) must never touch the same repo's config, refs or files as the
+ *  pass, or another queued action, at the same time. Exported for a direct unit test of
  *  the queue ordering: takes just the slice of ServerState it needs, so a
  *  test can drive it against a bare `{ peering: null }`. */
 export async function withPeering<T>(state: { peering: Promise<void> | null }, fn: () => Promise<T>): Promise<T> {
@@ -2084,11 +2097,8 @@ async function handleApi(
       const raw: unknown = await req.json().catch(() => null);
       if (!raw || typeof raw !== "object" || Array.isArray(raw)) throw new HttpError(400, "malformed body");
       const body = raw as { action?: unknown; peer?: unknown; branch?: unknown };
-      const peerActions = ["sync", "take", "track", "seed"] as const;
-      const bodyAction = typeof body.action === "string" ? body.action : "";
-      if (!(peerActions as readonly string[]).includes(bodyAction)) {
-        throw new HttpError(400, `unknown action: ${String(body.action)}`);
-      }
+      const bodyAction = body.action;
+      if (!isPeerAction(bodyAction)) throw new HttpError(400, `unknown action: ${String(body.action)}`);
       const s = await peerSettings();
       if (!s.self) throw new HttpError(400, "peers are not set up: no self in the config");
       const self = s.self;
@@ -2112,20 +2122,18 @@ async function handleApi(
       const dry = s.peerSync === "dry";
       let take: unknown;
       try {
-        if (bodyAction === "sync") {
-          // Holds state.peering so this repo's initRepo/syncRepo never runs
-          // at the same time as the whole-tree pass's own initRepo loop.
-          await withPeering(state, async () => {
+        // Only take answers with something; the rest answer the repo alone.
+        take = await runPeerAction<unknown>(state, bodyAction, {
+          sync: async () => {
             await initRepo(repo.path, repo.id, s.peers, dry);
             applyPeerState(state, repo.id, await syncRepo(repo.id, { self, peers: s.peers, seed: s.seed, dry, root: state.root }, new PassSeen()));
-          });
-        } else if (bodyAction === "take") {
-          take = await takeWip(repo.path, peer!.name, body.branch as string);
-        } else if (bodyAction === "track") {
-          await trackBranch(repo.path, peer!.name, body.branch as string);
-        } else {
-          await seedRepo(repo.path, repo.id, s.peers, s.seed, dry);
-        }
+          },
+          take: () => takeWip(repo.path, peer!.name, body.branch as string),
+          track: () => trackBranch(repo.path, peer!.name, body.branch as string),
+          seed: async () => {
+            await seedRepo(repo.path, repo.id, s.peers, s.seed, dry);
+          },
+        });
       } catch (err) {
         if (err instanceof HttpError) throw err;
         throw new HttpError(409, String(err instanceof Error ? err.message : err));
