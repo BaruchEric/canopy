@@ -221,6 +221,8 @@ canopy peers seed <id>                    copy allowlisted ignored files from a 
 canopy peers gate --root dir              what a peer key's authorized_keys entry runs
 ```
 
+The CLI's peers commands are not serialized with a running server, so while the server runs prefer the UI's actions, which queue behind its own pass.
+
 A peer reaches this machine through a dedicated ssh key whose `authorized_keys` entry forces the gate and nothing else:
 
 ```
