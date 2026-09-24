@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { peerUrl } from "../core/peers";
 import type { Peer, Repo } from "../core/types";
-import { isPeerRemote, peerSettingsFromEnv, startServer, withPeering } from "./index";
+import { isPeerRemote, notePeerList, ownRemotesOf, peerSettingsFromEnv, queuePass, startServer, withPeering } from "./index";
 
 let scratch: string;
 let root: string;
@@ -444,6 +444,164 @@ describe("withPeering", () => {
     await expect(failing).rejects.toThrow("boom");
     await after;
     expect(order).toEqual(["failing enter", "after enter"]);
+  });
+});
+
+describe("queuePass", () => {
+  test("a route queued behind a pass, plus a second pass request, never overlap; the second request joins the first", async () => {
+    const state: { peering: Promise<void> | null; pendingPass: Promise<void> | null } = { peering: null, pendingPass: null };
+    const order: string[] = [];
+    let releasePass!: () => void;
+    const passGate = new Promise<void>((r) => {
+      releasePass = r;
+    });
+
+    const pass1 = queuePass(state, async () => {
+      order.push("pass enter");
+      await passGate;
+      order.push("pass exit");
+    });
+
+    // a route action queues behind the running pass, the same as it would
+    // through the real /api/repos/peer route
+    const route = withPeering(state, async () => {
+      order.push("route enter");
+      await Bun.sleep(5);
+      order.push("route exit");
+    });
+
+    // a second pass request (a timer tick, or another /api/peers/sync)
+    // while the first is still pending must join it, not queue a
+    // duplicate pass behind the route
+    const pass2 = queuePass(state, async () => {
+      order.push("a second pass ran, which should not happen");
+    });
+    expect(pass2).toBe(pass1);
+
+    // give a wrongly-woken route, or a wrongly-queued second pass, time to
+    // start early; neither should have
+    await Bun.sleep(30);
+    expect(order).toEqual(["pass enter"]);
+
+    releasePass();
+    await Promise.all([pass1, pass2, route]);
+
+    expect(order).toEqual(["pass enter", "pass exit", "route enter", "route exit"]);
+  });
+
+  test("a pass requested while a route is already running (a prior pass since finished) waits for it", async () => {
+    const state: { peering: Promise<void> | null; pendingPass: Promise<void> | null } = { peering: null, pendingPass: null };
+    const order: string[] = [];
+    const waitUntil = async (pred: () => boolean, ms = 2000): Promise<void> => {
+      const start = Date.now();
+      while (!pred()) {
+        if (Date.now() - start > ms) throw new Error("timed out waiting");
+        await Bun.sleep(2);
+      }
+    };
+
+    let releasePass1!: () => void;
+    const pass1Gate = new Promise<void>((r) => {
+      releasePass1 = r;
+    });
+    const pass1 = queuePass(state, async () => {
+      order.push("pass1 enter");
+      await pass1Gate;
+      order.push("pass1 exit");
+    });
+
+    let releaseRoute!: () => void;
+    const routeGate = new Promise<void>((r) => {
+      releaseRoute = r;
+    });
+    const route = withPeering(state, async () => {
+      order.push("route enter");
+      await routeGate;
+      order.push("route exit");
+    });
+
+    releasePass1();
+    await pass1;
+    // The route is now the sole occupant of the queue, mid-run: this is
+    // exactly the moment the old refreshPeers's own unconditional
+    // `.finally(() => state.peering = null)` cleared the field out from
+    // under it, since that finally belonged to pass1, not the route.
+    await waitUntil(() => order.includes("route enter"));
+
+    const pass2 = queuePass(state, async () => {
+      order.push("pass2 enter");
+      await Bun.sleep(5);
+      order.push("pass2 exit");
+    });
+    expect(pass2).not.toBe(pass1);
+
+    // give a wrongly-woken pass2 time to start early; it should not have,
+    // since the route is still running
+    await Bun.sleep(20);
+    expect(order).toEqual(["pass1 enter", "pass1 exit", "route enter"]);
+
+    releaseRoute();
+    await Promise.all([route, pass2]);
+
+    expect(order).toEqual(["pass1 enter", "pass1 exit", "route enter", "route exit", "pass2 enter", "pass2 exit"]);
+  });
+});
+
+describe("notePeerList and ownRemotesOf", () => {
+  // ownRemotesOf now reads only state.peerNamesSeen, never the disk; the
+  // whole-tree pass is what keeps that field current (notePeerList, called
+  // from peerPass). This drives both directly rather than through the real
+  // server, since only the timer-driven fetchLocal ever reads state.own,
+  // and there is no HTTP-observable effect of it changing to test against.
+  test("a warm repo's own remotes reflect a peer list change made between two passes", async () => {
+    const houseRepo = join(root, "warmhouse");
+    await mkdir(houseRepo, { recursive: true });
+    await git(houseRepo, "init", "-q", "-b", "main");
+    await git(houseRepo, "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-q", "--allow-empty", "-m", "one");
+
+    const house: Peer = { name: "house", alias: null, root: other, role: "git" };
+    // A local path is self-hosted by ownRemote's own rule, so it is a
+    // candidate "own" remote from the start, before any peer classifying;
+    // it also means this test never touches the real gh CLI.
+    await git(houseRepo, "remote", "add", "house", peerUrl(house, "warmhouse"));
+
+    const state = {
+      own: new Map<string, string[]>(),
+      peerNamesSeen: [] as Peer[],
+      login: null as string | null,
+      access: new Map<string, boolean | null>(),
+    };
+    const repo = { path: houseRepo, id: "warmhouse" };
+    const peersJson = (peers: Peer[]) =>
+      JSON.stringify({ self: "mac", peerSync: "on", seed: [], peers });
+
+    // pass 1: "house" is not yet a recognized peer name
+    const settings1 = peerSettingsFromEnv({
+      NODE_ENV: "test",
+      CANOPY_PEERS_JSON: peersJson([{ name: "mini", alias: null, root: other, role: "git" }]),
+    });
+    expect(settings1).not.toBeNull();
+    notePeerList(state, settings1?.peers ?? []);
+    const warm = await ownRemotesOf(state, repo);
+    expect(warm.learned).toBe(true);
+    expect(warm.names).toContain("house");
+
+    // a repeat pass over the same list must not clear the memo
+    notePeerList(state, settings1?.peers ?? []);
+    const stillWarm = await ownRemotesOf(state, repo);
+    expect(stillWarm.learned).toBe(false);
+    expect(stillWarm.names).toContain("house");
+
+    // pass 2: "house" is added to the peer list between passes
+    const settings2 = peerSettingsFromEnv({
+      NODE_ENV: "test",
+      CANOPY_PEERS_JSON: peersJson([{ name: "mini", alias: null, root: other, role: "git" }, house]),
+    });
+    expect(settings2).not.toBeNull();
+    notePeerList(state, settings2?.peers ?? []);
+    const afterChange = await ownRemotesOf(state, repo);
+    expect(afterChange.learned).toBe(true);
+    expect(afterChange.names).not.toContain("house");
   });
 });
 

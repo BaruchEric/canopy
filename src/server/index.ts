@@ -162,10 +162,14 @@ interface ServerState {
   /** the names of each repo's own remotes, by path, settled once per repo:
    *  what the background fetch pulls and where a tip may come from */
   own: Map<string, string[]>;
-  /** the peer names `own` was last filtered against, sorted and joined; a
-   *  change (a peer added, removed or renamed) clears `own` so a same-named
-   *  remote is judged again */
-  peerNamesSeen: string | null;
+  /** the peer list `own` was last filtered against, from the last
+   *  whole-tree pass's own settings read; a change (a peer added, removed
+   *  or renamed) clears `own` so a same-named remote is judged again.
+   *  ownRemotesOf reads only this, never the disk, so a peer change is
+   *  noticed the next time a pass runs rather than the next time a repo's
+   *  own-remotes memo happens to miss (which, once every repo is warm,
+   *  might be never). */
+  peerNamesSeen: Peer[];
   /** peer sync outcomes by repo id, from the last whole-tree pass or a
    *  per-repo action; what `linkPeers` attaches to each repo as `.peers` */
   peerStates: Map<string, PeerState>;
@@ -176,9 +180,13 @@ interface ServerState {
   /** repo paths whose peer remotes were set up (a non-dry initRepo) this
    *  process, so a restart or a dry-to-on flip sets them up again */
   inited: Set<string>;
-  /** a peer pass under way, so a timer pass and a manual /api/peers/sync
-   *  share the one run instead of racing each other's initRepo calls */
+  /** the current occupant of the peering queue (a whole-tree pass, or a
+   *  route action), whichever is running or next in line; see withPeering */
   peering: Promise<void> | null;
+  /** the whole-tree pass currently pending (queued or running), if any: a
+   *  second refreshPeers call while this is set joins it instead of
+   *  queueing a duplicate pass behind it */
+  pendingPass: Promise<void> | null;
   /** an activity pass under way, so the timer never stacks a second one */
   activity: Promise<void> | null;
   /** the shells a machine going down left behind, the ones no live session
@@ -1091,18 +1099,20 @@ export async function isPeerRemote(repoPath: string, repoId: string, peer: Peer)
   return pushurl.code === 0 && pushurl.stdout.trim() === NO_PUSH;
 }
 
-async function ownRemotesOf(state: ServerState, repo: Repo): Promise<{ names: string[]; learned: boolean }> {
+/** Exported for a direct unit test: narrowed to the slice of ServerState
+ *  and Repo it actually needs, so a test can drive it against a bare fake
+ *  (a `login` of `null` skips the real `gh api user` call below). */
+export async function ownRemotesOf(
+  state: { own: Map<string, string[]>; peerNamesSeen: Peer[]; login?: string | null; access: Map<string, boolean | null> },
+  repo: { path: string; id: string },
+): Promise<{ names: string[]; learned: boolean }> {
   const known = state.own.get(repo.path);
   if (known !== undefined) return { names: known, learned: false };
-  // The peer list is read only here, on a memo miss: a hit above never
-  // needs it, and this repo already missed, so a peer rename's clear below
-  // (invalidating every other repo's now-stale entry) costs nothing extra.
-  const peers = (await peerSettings()).peers;
-  const peerNamesKey = peers.map((p) => p.name).sort().join(",");
-  if (state.peerNamesSeen !== peerNamesKey) {
-    state.own.clear();
-    state.peerNamesSeen = peerNamesKey;
-  }
+  // No disk read here: state.peerNamesSeen is the peer list as of the last
+  // whole-tree pass (peerPass keeps it current and clears `own` itself when
+  // it changes), so a memo miss costs one status read and some git config
+  // reads, never a fresh peerSettings() call.
+  const peers = state.peerNamesSeen;
   if (state.login === undefined) state.login = await githubLogin();
   let names = await ownRemotes(await listRemotes(repo.path), { login: state.login, permission: state.access });
   // Peer remotes are pulled by the peer pass, not the origin fetch, and kept
@@ -1201,21 +1211,39 @@ function refreshActivity(state: ServerState): Promise<void> {
  *  ongoing scan error. */
 const peerable = (r: Repo): boolean => r.source === LAUNCH_SOURCE && !r.host && !r.forge && !r.error;
 
+/** Runs `job` through the peering queue (withPeering), but coalesces
+ *  repeat calls: while a job started this way is still pending (queued
+ *  behind something else, or running), a second call returns that same
+ *  promise instead of enqueueing job() again behind it. `pending` is a
+ *  separate field from the queue itself (state.peering), since the queue
+ *  alone cannot tell "a pass is next in line" from "a pass is one of
+ *  several things next in line" - only this call site knows which of its
+ *  own requests are for the same job. Exported for a direct unit test of
+ *  the coalescing, alongside withPeering. */
+export function queuePass(state: { peering: Promise<void> | null; pendingPass: Promise<void> | null }, job: () => Promise<void>): Promise<void> {
+  if (state.pendingPass) return state.pendingPass;
+  const run = withPeering(state, job);
+  state.pendingPass = run.finally(() => {
+    state.pendingPass = null;
+  });
+  return state.pendingPass;
+}
+
 /** Pulls from every peer: snapshot, fetch, fast-forward, clone what is
  *  missing. Repos with a run under way are skipped, like the fetch. A timer
- *  pass and a manual /api/peers/sync share the one run: `syncAll`'s own lock
- *  only covers the syncAll call, and the initRepo loop ahead of it is not
- *  safe to run twice at once over the same repo. */
+ *  pass, a manual /api/peers/sync, and a route action's own initRepo and
+ *  syncRepo all go through the one peering queue (withPeering), so none of
+ *  them ever runs at the same time as another; a pass specifically also
+ *  coalesces through queuePass, since a second timer tick or sync request
+ *  while one is already pending should join it, not queue a duplicate pass
+ *  behind it. */
 function refreshPeers(state: ServerState): Promise<void> {
-  if (state.peering) return state.peering;
-  state.peering = peerPass(state).finally(() => {
-    state.peering = null;
-  });
-  return state.peering;
+  return queuePass(state, () => peerPass(state));
 }
 
 async function peerPass(state: ServerState): Promise<void> {
   const s = await peerSettings();
+  notePeerList(state, s.peers);
   if (s.peerSync === "off" || !s.self) return;
   if (s.peers.length === 0) return;
   const dry = s.peerSync === "dry";
@@ -1258,17 +1286,42 @@ function seenChanged(before: PeerSeen[], after: PeerSeen[]): boolean {
   return key(before) !== key(after);
 }
 
-/** A true FIFO queue over `state.peering`, not just a wait-then-run: each
- *  caller chains itself onto whatever the field currently holds (the
- *  whole-tree pass, or an earlier queued caller here) and replaces it with
- *  its own tail *synchronously*, before awaiting the one it replaced. Two
- *  callers arriving back to back therefore never both see the same holder
- *  and race to run `fn` together: the second always sees the first's tail,
- *  not the original holder. A route action's initRepo and syncRepo must
- *  never touch the same repo's .git/config as the pass's own initRepo loop,
- *  or another queued action, at the same time. Exported for a direct unit
- *  test of the queue ordering: takes just the slice of ServerState it
- *  needs, so a test can drive it against a bare `{ peering: null }`. */
+/** Whether two peer lists are the same, ignoring order: what ownRemotesOf's
+ *  classification actually depends on (name, alias and root all feed
+ *  peerUrl; a change to any of them, not just a name added or removed,
+ *  means a repo's remotes need judging again). */
+function samePeerList(a: Peer[], b: Peer[]): boolean {
+  const key = (list: Peer[]) => JSON.stringify([...list].sort((x, y) => x.name.localeCompare(y.name)));
+  return key(a) === key(b);
+}
+
+/** Keeps `peerNamesSeen` (what ownRemotesOf reads, never the disk) in step
+ *  with the peer list: called once per pass, off or on, dry or not, so a
+ *  repo's remotes are classified against whatever the peer list actually
+ *  is right now rather than whatever it was on the last own-remotes memo
+ *  miss (which, once every repo is warm, might be never). Clears `own`
+ *  only when the list actually changed, so a same-list call costs nothing.
+ *  Exported for a direct unit test of this bookkeeping on its own. */
+export function notePeerList(state: { own: Map<string, string[]>; peerNamesSeen: Peer[] }, peers: Peer[]): void {
+  if (samePeerList(state.peerNamesSeen, peers)) return;
+  state.own.clear();
+  state.peerNamesSeen = peers;
+}
+
+/** A true FIFO queue over `state.peering`, not just a wait-then-run: every
+ *  writer of `state.peering` goes through here, the whole-tree pass
+ *  (queuePass, wrapping this) included, so it is the one and only queue,
+ *  never bypassed by a direct write. Each caller chains itself onto
+ *  whatever the field currently holds (the pass, or an earlier queued
+ *  caller here) and replaces it with its own tail *synchronously*, before
+ *  awaiting the one it replaced. Two callers arriving back to back
+ *  therefore never both see the same holder and race to run `fn`
+ *  together: the second always sees the first's tail, not the original
+ *  holder. A route action's initRepo and syncRepo must never touch the
+ *  same repo's .git/config as the pass's own initRepo loop, or another
+ *  queued action, at the same time. Exported for a direct unit test of
+ *  the queue ordering: takes just the slice of ServerState it needs, so a
+ *  test can drive it against a bare `{ peering: null }`. */
 export async function withPeering<T>(state: { peering: Promise<void> | null }, fn: () => Promise<T>): Promise<T> {
   const prev = state.peering;
   const run = (async () => {
@@ -2201,12 +2254,18 @@ export async function startServer(opts: {
     launcher,
     pulls: new Map(),
     own: new Map(),
-    peerNamesSeen: null,
+    // Seeded from settings at startup, not []: fetchLocal can run before
+    // the first peer pass does (refreshActivity fetches, then peers), and
+    // an empty seed would have it treat every existing peer remote as the
+    // user's own for that one pass, fetching and reading tips off it,
+    // before the pass corrects it and clears own again.
+    peerNamesSeen: (await peerSettings()).peers,
     peerStates: new Map(),
     peerSeen: [],
     divergedSeen: new Set(),
     inited: new Set(),
     peering: null,
+    pendingPass: null,
     activity: null,
     kept: [],
     keeping: null,
