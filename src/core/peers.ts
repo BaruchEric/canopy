@@ -1,7 +1,7 @@
 /** Peer sync, the pure half: every machine keeps its own clone of each repo
  *  and pulls the others' branches and WIP snapshots. Browser-safe: no Bun or
  *  node imports, since the UI reads the types and words from here. */
-import type { Peer, PeerRole, PeerSync } from "./types";
+import type { Peer, PeerBranch, PeerRole, PeerState, PeerSync, PeerWip, Repo } from "./types";
 
 export const PEER_SYNC: readonly PeerSync[] = ["off", "dry", "on"];
 export const DEFAULT_SEED = [".env", ".env.local"];
@@ -39,3 +39,125 @@ export function normalizeSeed(v: unknown): string[] {
   if (!Array.isArray(v)) return [...DEFAULT_SEED];
   return v.filter((s): s is string => typeof s === "string" && s !== "" && !s.includes("/"));
 }
+
+export const NO_PUSH = "canopy-peer-no-push";
+
+export function peerUrl(peer: Peer, id: string): string {
+  const path = `${peer.root.replace(/\/+$/, "")}/${id}`;
+  return peer.alias === null ? path : `${peer.alias}:${path}`;
+}
+
+export const peerRefspecs = (name: string): [string, string] => [
+  `+refs/heads/*:refs/remotes/${name}/*`,
+  `+refs/wip/*:refs/peer-wip/${name}/*`,
+];
+
+export function globMatch(glob: string, s: string): boolean {
+  let re = "";
+  for (let i = 0; i < glob.length; i++) {
+    const c = glob[i]!;
+    if (c === "*" && glob[i + 1] === "*") { re += ".*"; i++; }
+    else if (c === "*") re += "[^/]*";
+    else if (c === "?") re += "[^/]";
+    else re += c.replace(/[.+^${}()|[\]\\]/g, "\\$&");
+  }
+  return new RegExp(`^${re}$`).test(s);
+}
+
+export const repoWanted = (peer: Peer, id: string): boolean =>
+  !peer.repos || peer.repos.some((g) => globMatch(g, id));
+
+export const seedWanted = (allow: string[], file: string): boolean => {
+  const base = file.split("/").pop() ?? file;
+  return allow.some((g) => globMatch(g, base));
+};
+
+export const BUSY_MARKERS = ["MERGE_HEAD", "rebase-merge", "rebase-apply", "CHERRY_PICK_HEAD", "REVERT_HEAD", "BISECT_LOG", "index.lock"] as const;
+
+export interface Tip { peer: string; hash: string; ahead: number; behind: number }
+export type FfDecision = { to?: { peer: string; hash: string }; diverged: PeerBranch[] };
+
+/** Where a branch may fast-forward to. A tip strictly ahead of ours is a
+ *  candidate; one that also lacks some of ours has diverged from us. Of the
+ *  candidates, the one that contains every other wins; when none does, the
+ *  peers disagree with each other and nothing moves. */
+export function ffTarget(branch: string, tips: Tip[], contains: (a: string, b: string) => boolean): FfDecision {
+  const diverged: PeerBranch[] = tips
+    .filter((t) => t.ahead > 0 && t.behind > 0)
+    .map((t) => ({ branch, peer: t.peer, ahead: t.ahead, behind: t.behind }));
+  const ahead = tips.filter((t) => t.ahead > 0 && t.behind === 0);
+  if (ahead.length === 0) return { diverged };
+  const top = ahead.find((t) => ahead.every((o) => contains(t.hash, o.hash)));
+  if (top) return { to: { peer: top.peer, hash: top.hash }, diverged };
+  return {
+    diverged: [...diverged, ...ahead.map((t) => ({ branch, peer: t.peer, ahead: t.ahead, behind: t.behind }))],
+  };
+}
+
+export function parseRefLines(out: string): { ref: string; hash: string }[] {
+  return out.split("\n").filter(Boolean).map((l) => {
+    const sp = l.indexOf(" ");
+    return { hash: l.slice(0, sp), ref: l.slice(sp + 1) };
+  });
+}
+
+export function parseWipLines(out: string, peer: string): Omit<PeerWip, "files">[] {
+  const prefix = `refs/peer-wip/${peer}/`;
+  return out.split("\n").filter(Boolean).flatMap((l) => {
+    const [hash, unix, parent, ref] = l.split(" ");
+    if (!hash || !unix || !parent || !ref?.startsWith(prefix)) return [];
+    return [{ peer, branch: ref.slice(prefix.length), at: Number(unix) * 1000, parent, hash }];
+  });
+}
+
+export const peerMissing = (stderr: string): boolean =>
+  /does not appear to be a git repository|not a repo:|repository .* not found|No such file or directory/i.test(stderr);
+
+export const peerUnreachable = (stderr: string): boolean =>
+  /ssh: (connect to host|Could not resolve)|Connection (closed|refused|timed out|reset)|Operation timed out|Host is down|No route to host|Permission denied \(publickey/i.test(stderr);
+
+/** POSIX words as ssh hands them over: bare words, single quotes (with the
+ *  '\'' idiom), double quotes holding no `$`, backtick or backslash. Anything
+ *  a shell would expand, redirect or chain is refused, so the gate never
+ *  needs a shell. */
+export function parseQuotedWords(line: string): string[] | null {
+  const words: string[] = [];
+  let cur = "";
+  let inWord = false;
+  for (let i = 0; i < line.length; i++) {
+    const c = line[i]!;
+    if (c === " " || c === "\t") {
+      if (inWord) { words.push(cur); cur = ""; inWord = false; }
+      continue;
+    }
+    inWord = true;
+    if (c === "'") {
+      const end = line.indexOf("'", i + 1);
+      if (end === -1) return null;
+      cur += line.slice(i + 1, end);
+      i = end;
+    } else if (c === '"') {
+      const end = line.indexOf('"', i + 1);
+      if (end === -1) return null;
+      const body = line.slice(i + 1, end);
+      if (/[$`\\]/.test(body)) return null;
+      cur += body;
+      i = end;
+    } else if (c === "\\" && line[i + 1] === "'") {
+      cur += "'";
+      i++;
+    } else if (/[A-Za-z0-9_@%+=:,./-]/.test(c)) {
+      cur += c;
+    } else {
+      return null;
+    }
+  }
+  if (inWord) words.push(cur);
+  return words;
+}
+
+export const linkPeers = (repos: Repo[], states: Map<string, PeerState>): Repo[] =>
+  repos.map((r) => {
+    const p = states.get(r.id);
+    return p && r.peers !== p ? { ...r, peers: p } : r;
+  });
