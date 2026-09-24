@@ -5,6 +5,7 @@ import { existsSync, readFileSync, realpathSync, statSync } from "node:fs";
 import { randomBytes } from "node:crypto";
 import { tmpdir } from "node:os";
 import { dirname, isAbsolute, join, normalize, relative, resolve, sep } from "node:path";
+import { parseRemote } from "./access";
 import { git, onHost } from "./exec";
 import { shellQuote } from "./host";
 import { BUSY_MARKERS, ffTarget, isPeerName, isSafeRel, NO_PUSH, parseQuotedWords, parseRefLines, parseWipLines, peerMissing, peerRefspecs, peerUnreachable, peerUrl, repoWanted, seedWanted } from "./peers";
@@ -363,13 +364,36 @@ export function safeId(root: string, id: string): string | null {
   return dir;
 }
 
+/** An http(s) url without its userinfo: a token in "https://user:token@host"
+ *  stays on the machine it was typed on and never reaches a peer. An ssh
+ *  url's user is a login name, not a secret, and is left alone. */
+export function withoutUserinfo(url: string): string {
+  return url.replace(/^(https?:\/\/)[^@/]+@/i, "$1");
+}
+
+const NETWORK_SCHEMES = /^(?:ssh|git|https?|git\+ssh|ssh\+git):\/\//i;
+
+/** Whether a peer-listed origin names a remote on the network (a forge, a
+ *  server), which is all cloneMissing will add. A path on the peer's disk,
+ *  a file url or a bare alias:path is not: the background fetch treats a
+ *  remote like that as self-hosted and fetches it, and the peer would then
+ *  read those refs back through the gate. A "/" ahead of the first ":" is a
+ *  local path to git whatever follows, and a scheme outside the list runs a
+ *  git-remote-<scheme> helper. */
+export function networkOrigin(url: string): boolean {
+  if (url.startsWith("-") || url.includes("::")) return false;
+  if (!parseRemote(url)) return false;
+  if (url.includes("://")) return NETWORK_SCHEMES.test(url);
+  return !url.slice(0, url.indexOf(":")).includes("/");
+}
+
 export async function serveList(root: string, maxDepth = 4): Promise<PeerListing[]> {
   const out: PeerListing[] = [];
   const walk = async (dir: string, depth: number): Promise<void> => {
     if (existsSync(join(dir, ".git")) && dir !== root) {
       const id = relative(root, dir);
       const o = await git(dir, ["remote", "get-url", "origin"]);
-      out.push({ id, origin: o.code === 0 ? o.stdout.trim() : null });
+      out.push({ id, origin: o.code === 0 ? withoutUserinfo(o.stdout.trim()) : null });
       return; // never below a repo
     }
     if (depth >= maxDepth) return;
@@ -596,9 +620,10 @@ export async function seedRepo(repo: string, id: string, peers: Peer[], allow: s
  *  becomes a join(root, id); an id that passes that check but still
  *  resolves outside root once symlinks are followed (an existing local
  *  folder in its path may hold one) is skipped by the same staysInside
- *  check seedRepo uses; and an origin url that starts with "-" or holds
- *  "::" is never handed to `git remote add` (a leading dash could be read
- *  as an option, "::" opens a remote helper). The clone itself takes "--"
+ *  check seedRepo uses; and an origin is added only when networkOrigin
+ *  says it names a network remote, which also keeps out a url that starts
+ *  with "-" or holds "::" (a leading dash could be read as an option, "::"
+ *  opens a remote helper). The clone itself takes "--"
  *  ahead of the url and destination for the same reason. A failure cloning
  *  or setting up one repo — including one thrown by initRepo or seedRepo —
  *  is recorded in `failed` and the loop moves on to the next repo. */
@@ -626,8 +651,7 @@ export async function cloneMissing(root: string, peers: Peer[], allow: string[],
           failed.push({ id, error: r.stderr.trim().split("\n").pop() || "clone failed" });
           continue;
         }
-        const safeOrigin = origin && !origin.startsWith("-") && !origin.includes("::") ? origin : null;
-        if (safeOrigin) await git(dest, ["remote", "add", "origin", safeOrigin]);
+        if (origin && networkOrigin(origin)) await git(dest, ["remote", "add", "origin", origin]);
         await initRepo(dest, id, gitPeers, false);
         await seedRepo(dest, id, gitPeers, allow, false);
         cloned.push(id);

@@ -695,6 +695,57 @@ describe("a peer's listing is untrusted", () => {
   });
 });
 
+/** A repo under `theirs` with one commit and, when given, that origin. */
+const listed = async (theirs: string, id: string, origin: string | null): Promise<void> => {
+  const src = join(theirs, id);
+  await mkdir(src, { recursive: true });
+  await exec(["git", "init", "-q", "-b", "main", src]);
+  await sh(src, "config", "user.email", "t@t");
+  await sh(src, "config", "user.name", "t");
+  await commit(src, "a.txt", "one\n");
+  if (origin) await sh(src, "remote", "add", "origin", origin);
+};
+
+describe("a peer's origin is kept only when it names a network remote", () => {
+  test("a local path, a bare alias:path or a file url clones with no origin; a forge url keeps it", async () => {
+    const theirs = join(root, "theirs-origin");
+    await listed(theirs, "local", "/Users/ericbaruch/.claude");
+    await listed(theirs, "alias", "qnap:/share/x");
+    await listed(theirs, "fileurl", "file:///srv/x.git");
+    await listed(theirs, "filehost", "file://localhost/srv/x.git");
+    await listed(theirs, "helper", "fancy://host/o/n.git");
+    await listed(theirs, "gh", "git@github.com:x/gh.git");
+    await listed(theirs, "https", "https://github.com/x/h.git");
+    await listed(theirs, "ssh", "ssh://git@forge.lan:2222/o/n.git");
+    const ours = join(root, "ours-origin");
+    await mkdir(ours, { recursive: true });
+    const peer: Peer = { name: "mini", alias: null, root: theirs, role: "git" };
+    const r = await cloneMissing(ours, [peer], [".env"], false, {});
+    expect(r.failed).toEqual([]);
+    expect(r.cloned.sort()).toEqual(["alias", "filehost", "fileurl", "gh", "helper", "https", "local", "ssh"]);
+    for (const id of ["local", "alias", "fileurl", "filehost", "helper"]) {
+      expect((await sh(join(ours, id), "remote")).split("\n").filter(Boolean)).toEqual(["mini"]);
+    }
+    expect(await sh(join(ours, "gh"), "remote", "get-url", "origin")).toBe("git@github.com:x/gh.git");
+    expect(await sh(join(ours, "https"), "remote", "get-url", "origin")).toBe("https://github.com/x/h.git");
+    expect(await sh(join(ours, "ssh"), "remote", "get-url", "origin")).toBe("ssh://git@forge.lan:2222/o/n.git");
+  });
+
+  test("serveList strips the userinfo off an http(s) origin, and leaves an ssh user alone", async () => {
+    const ws = join(root, "ws-userinfo");
+    await listed(ws, "tok", "https://eric:ghp_secret@github.com/x/tok.git");
+    await listed(ws, "bare", "https://ghp_secret@github.com/x/bare.git");
+    await listed(ws, "upper", "HTTP://u:p@forge.lan/o/upper.git");
+    await listed(ws, "ssh", "ssh://git@forge.lan/o/ssh.git");
+    expect(await serveList(ws)).toEqual([
+      { id: "bare", origin: "https://github.com/x/bare.git" },
+      { id: "ssh", origin: "ssh://git@forge.lan/o/ssh.git" },
+      { id: "tok", origin: "https://github.com/x/tok.git" },
+      { id: "upper", origin: "HTTP://forge.lan/o/upper.git" },
+    ]);
+  });
+});
+
 describe("symlinks inside a repo or root are not followed", () => {
   test("a symlinked folder inside the repo is not followed when seeding", async () => {
     const theirsRoot = join(root, "theirs-symlink-seed");
