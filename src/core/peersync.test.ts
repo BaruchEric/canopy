@@ -13,6 +13,7 @@ import {
   gateCommand,
   initRepo,
   isBusy,
+  isDirty,
   peerWips,
   safeId,
   seedRepo,
@@ -202,6 +203,12 @@ describe("snapshotWip", () => {
     }
     expect(w?.wrote).toBe(true);
     expect(await sh(r, "log", "-1", "--format=%an <%ae>", "refs/wip/main")).toBe("canopy <canopy@mac>");
+  });
+});
+
+describe("isDirty fails closed", () => {
+  test("a path git can't read as a repo counts as dirty", async () => {
+    expect(await isDirty(join(root, "does-not-exist-at-all"))).toBe(true);
   });
 });
 
@@ -807,6 +814,114 @@ describe("take and track", () => {
     await sh(mac, "rev-parse", "wip/mini/main");
   });
 
+  test("an untouched earlier WIP branch is replaced by a later take", async () => {
+    const { mac, mini, toMini, miniId } = await pair("replace");
+    await writeFile(join(mini, "a.txt"), "from mini 1\n");
+    await snapshotWip(mini, "mini", false);
+    await fetchPeer(mac, miniId, toMini, {});
+    await writeFile(join(mac, "a.txt"), "mine\n"); // keeps mac dirty so every take lands on a branch
+    expect(await takeWip(mac, "mini", "main")).toEqual({ how: "branch", branch: "wip/mini/main" });
+    const first = await sh(mac, "rev-parse", "wip/mini/main");
+
+    await writeFile(join(mini, "a.txt"), "from mini 2\n");
+    await snapshotWip(mini, "mini", false);
+    await fetchPeer(mac, miniId, toMini, {});
+    const secondWip = await sh(mac, "rev-parse", "refs/peer-wip/mini/main");
+    expect(secondWip).not.toBe(first);
+
+    expect(await takeWip(mac, "mini", "main")).toEqual({ how: "branch", branch: "wip/mini/main" });
+    expect(await sh(mac, "rev-parse", "wip/mini/main")).toBe(secondWip);
+  });
+
+  test("the replace path never moves a scratch branch checked out somewhere else", async () => {
+    const { mac, mini, toMini, miniId } = await pair("inuse");
+    await writeFile(join(mini, "a.txt"), "from mini 1\n");
+    await snapshotWip(mini, "mini", false);
+    await fetchPeer(mac, miniId, toMini, {});
+    await writeFile(join(mac, "a.txt"), "mine\n"); // keeps mac dirty so every take lands on a branch
+    expect(await takeWip(mac, "mini", "main")).toEqual({ how: "branch", branch: "wip/mini/main" });
+    const first = await sh(mac, "rev-parse", "wip/mini/main");
+
+    // The user checks the scratch branch out into a second worktree to
+    // keep working on it there; update-ref, unlike checkout, would not
+    // refuse to move it out from under that.
+    await sh(mac, "worktree", "add", "-q", join(root, "inuse-wt"), "wip/mini/main");
+
+    await writeFile(join(mini, "a.txt"), "from mini 2\n");
+    await snapshotWip(mini, "mini", false);
+    await fetchPeer(mac, miniId, toMini, {});
+
+    expect(await takeWip(mac, "mini", "main")).toEqual({ how: "branch", branch: "wip/mini/main-2" });
+    expect(await sh(mac, "rev-parse", "wip/mini/main")).toBe(first); // untouched while checked out
+  });
+
+  test("a create failure other than the name already being taken throws instead of looping forever", async () => {
+    const { mac, mini, toMini, miniId } = await pair("createfail");
+    // "wip/mini/feat" as a leaf ref conflicts with every nested candidate
+    // under it (wip/mini/feat/y, wip/mini/feat/y-2, ...), so a loop that
+    // only checks "does this name already exist" before retrying would
+    // never find a name git can create and never stop.
+    await sh(mac, "branch", "wip/mini/feat");
+    await sh(mini, "checkout", "-q", "-b", "feat/y");
+    await writeFile(join(mini, "a.txt"), "from mini\n");
+    await snapshotWip(mini, "mini", false);
+    await fetchPeer(mac, miniId, toMini, {});
+    await writeFile(join(mac, "a.txt"), "mine\n"); // keeps mac dirty so the take goes to a branch
+    await expect(takeWip(mac, "mini", "feat/y")).rejects.toThrow();
+  });
+
+  test("a user commit on wip/mini/main survives a second take, which lands on the next free name", async () => {
+    const { mac, mini, toMini, miniId } = await pair("usertouch");
+    await writeFile(join(mini, "a.txt"), "from mini 1\n");
+    await snapshotWip(mini, "mini", false);
+    await fetchPeer(mac, miniId, toMini, {});
+    await writeFile(join(mac, "a.txt"), "mine\n"); // keeps mac dirty so every take lands on a branch
+    expect(await takeWip(mac, "mini", "main")).toEqual({ how: "branch", branch: "wip/mini/main" });
+
+    // The user builds on the scratch branch themselves, without touching
+    // mac's own working tree (which is mid-edit and must stay that way).
+    const branchTip = await sh(mac, "rev-parse", "wip/mini/main");
+    const tree = await sh(mac, "rev-parse", `${branchTip}^{tree}`);
+    const userCommit = await sh(mac, "commit-tree", tree, "-p", branchTip, "-m", "user edit");
+    await sh(mac, "update-ref", "refs/heads/wip/mini/main", userCommit);
+
+    await writeFile(join(mini, "a.txt"), "from mini 2\n");
+    await snapshotWip(mini, "mini", false);
+    await fetchPeer(mac, miniId, toMini, {});
+
+    expect(await takeWip(mac, "mini", "main")).toEqual({ how: "branch", branch: "wip/mini/main-2" });
+    expect(await sh(mac, "rev-parse", "wip/mini/main")).toBe(userCommit); // untouched
+  });
+
+  test("an ignored file at a path the WIP adds sends the take to a branch and the ignored file is unchanged", async () => {
+    const { mac, mini, toMini, miniId } = await pair("wipoccupied");
+    await writeFile(join(mac, ".git", "info", "exclude"), "new.txt\n");
+    await writeFile(join(mac, "new.txt"), "mac had this already\n");
+    expect(await isDirty(mac)).toBe(false); // ignored, so the tree still reads clean
+
+    await writeFile(join(mini, "new.txt"), "from mini\n");
+    await snapshotWip(mini, "mini", false);
+    await fetchPeer(mac, miniId, toMini, {});
+
+    expect(await takeWip(mac, "mini", "main")).toEqual({ how: "branch", branch: "wip/mini/main" });
+    expect(await readFile(join(mac, "new.txt"), "utf8")).toBe("mac had this already\n");
+    await sh(mac, "rev-parse", "wip/mini/main");
+  });
+
+  test("a directory the WIP needs, blocked by an ignored file of the same name, also sends the take to a branch", async () => {
+    const { mac, mini, toMini, miniId } = await pair("wipoccupieddir");
+    await writeFile(join(mac, ".git", "info", "exclude"), "sub\n");
+    await writeFile(join(mac, "sub"), "mac had this already\n"); // a file, not the directory the WIP needs
+
+    await mkdir(join(mini, "sub"), { recursive: true });
+    await writeFile(join(mini, "sub", "file.txt"), "from mini\n");
+    await snapshotWip(mini, "mini", false);
+    await fetchPeer(mac, miniId, toMini, {});
+
+    expect(await takeWip(mac, "mini", "main")).toEqual({ how: "branch", branch: "wip/mini/main" });
+    expect(await readFile(join(mac, "sub"), "utf8")).toBe("mac had this already\n");
+  });
+
   test("track makes a local branch at the peer's tip; unknown is an error", async () => {
     const { mac, mini, toMini, miniId } = await pair("track");
     await sh(mini, "checkout", "-q", "-b", "feat/y");
@@ -832,5 +947,16 @@ describe("take and track", () => {
     await expect(trackBranch(mac, "mini", "a..b")).rejects.toThrow(/not a branch name/);
     await expect(takeWip(mac, "mini", "-D")).rejects.toThrow(/not a branch name/);
     await expect(takeWip(mac, "mini", "a..b")).rejects.toThrow(/not a branch name/);
+  });
+
+  test("a branch name containing @{ is refused even when check-ref-format would resolve it", async () => {
+    const { mac } = await pair("atref");
+    // With a previous checkout in the reflog, "git check-ref-format --branch
+    // @{-1}" resolves to "other" rather than failing, so the refusal has to
+    // be explicit rather than left to check-ref-format alone.
+    await sh(mac, "checkout", "-q", "-b", "other");
+    await sh(mac, "checkout", "-q", "main");
+    await expect(trackBranch(mac, "mini", "@{-1}")).rejects.toThrow(/not a branch name/);
+    await expect(takeWip(mac, "mini", "@{-1}")).rejects.toThrow(/not a branch name/);
   });
 });

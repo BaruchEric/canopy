@@ -16,9 +16,12 @@ export async function currentBranch(repo: string): Promise<string | null> {
   return head.code === 0 ? r.stdout.trim() : null;
 }
 
+/** Fails closed: a repo git can't read status for is treated as dirty,
+ *  since "clean" is what lets a take write straight into the working
+ *  tree, and a status git can't answer is not a promise of a clean one. */
 export async function isDirty(repo: string): Promise<boolean> {
   const r = await git(repo, ["status", "--porcelain", "-z", "--untracked-files=normal"]);
-  return r.code === 0 && r.stdout.length > 0;
+  return r.code !== 0 || r.stdout.length > 0;
 }
 
 async function gitPath(repo: string, name: string): Promise<string> {
@@ -612,21 +615,110 @@ export async function cloneMissing(root: string, peers: Peer[], allow: string[],
 
 /** Peer and branch names below arrive from a request (a server route, the
  *  CLI), so both are checked before anything touches git. The leading-"-"
- *  check on the branch is explicit rather than left to check-ref-format,
- *  since the point is to keep a request-supplied name from ever reaching a
- *  later git call (branch, update-ref, ...) looking like a flag. */
+ *  and "@{" checks on the branch are explicit rather than left to
+ *  check-ref-format, since the point of both is to keep a request-supplied
+ *  name from ever reaching a later git call (branch, update-ref, ...)
+ *  looking like a flag or a shorthand git resolves against the repo's own
+ *  reflog (check-ref-format --branch accepts "@{-1}", the previous branch,
+ *  and expands it to whatever that happens to be here) instead of the
+ *  literal name asked for. */
 function assertPeerName(peer: string): void {
   if (!isPeerName(peer)) throw new Error(`not a peer name: ${peer}`);
 }
 
 async function assertBranchName(repo: string, branch: string): Promise<void> {
-  if (branch.startsWith("-")) throw new Error(`not a branch name: ${branch}`);
+  if (branch.startsWith("-") || branch.includes("@{")) throw new Error(`not a branch name: ${branch}`);
   const r = await git(repo, ["check-ref-format", "--branch", branch]);
   if (r.code !== 0) throw new Error(`not a branch name: ${branch}`);
 }
 
-/** Lands a peer's WIP here: as uncommitted files when the tree is clean and
- *  HEAD is the WIP's parent, else as branch wip/<peer>/<branch>. */
+/** Whether landing `wip` as files here (a read-tree onto the worktree)
+ *  would silently drop part of it: true when a path the WIP adds relative
+ *  to HEAD already exists on disk, lstat'd rather than looked up in git so
+ *  an ignored file or a symlink counts too. read-tree skips a path
+ *  something already occupies rather than failing, which would otherwise
+ *  report the take as clean while quietly leaving that file out of it. */
+async function wipOccupiesPath(repo: string, wip: string): Promise<boolean> {
+  const d = await git(repo, ["diff-tree", "-r", "-z", "--name-only", "--diff-filter=A", "HEAD", wip]);
+  for (const p of d.stdout.split("\0").filter(Boolean)) {
+    try {
+      await lstat(join(repo, p));
+      return true;
+    } catch (err) {
+      // Only "genuinely not there" (ENOENT) clears a path: anything else (a
+      // parent component that exists but isn't a directory, a permissions
+      // error) can't be told apart from occupied, so it counts as one.
+      const code = typeof err === "object" && err !== null && "code" in err ? (err as Record<string, unknown>).code : undefined;
+      if (code !== "ENOENT") return true;
+    }
+  }
+  return false;
+}
+
+/** Creates branch `name` at `hash`. Returns the name on success; returns
+ *  null only when someone else created that exact name in the meantime (a
+ *  race a caller can retry under the next candidate name); any other
+ *  failure throws, since nothing about retrying would make it succeed (a
+ *  full disk, a locked ref, a name git itself refuses for some other
+ *  reason) and a caller that only re-checked "does this name exist yet"
+ *  before retrying would loop on it forever. */
+async function createBranch(repo: string, name: string, hash: string): Promise<string | null> {
+  const c = await git(repo, ["branch", name, hash]);
+  if (c.code === 0) return name;
+  const now = await git(repo, ["rev-parse", "-q", "--verify", `refs/heads/${name}`]);
+  if (now.code === 0) return null; // someone else landed here first: try the next name
+  throw new Error(c.stderr.trim());
+}
+
+/** Whether `name` is the branch some worktree here — the main one or a
+ *  linked one made with `git worktree add` — currently has checked out.
+ *  update-ref, unlike checkout, does not refuse to move a branch out from
+ *  under whoever has it checked out, so this is what landWip checks
+ *  instead before treating it as free to replace. A worktree listing git
+ *  itself can't produce is treated as "in use": refusing to replace is the
+ *  safe side of not being able to tell. */
+async function branchInUse(repo: string, name: string): Promise<boolean> {
+  const r = await git(repo, ["worktree", "list", "--porcelain"]);
+  if (r.code !== 0) return true;
+  return r.stdout.split("\n").includes(`branch refs/heads/${name}`);
+}
+
+/** Lands a WIP hash on a scratch branch. wip/<peer>/<branch> is used when
+ *  it is free, or replaced in place (a compare-and-swap on its current
+ *  tip) when it already exists, is not checked out anywhere, and is
+ *  untouched since canopy last put a WIP there (its tip's committer is
+ *  "canopy", the identity snapshotWip commits with). A branch the user has
+ *  since committed onto, or is still looking at in another worktree, is
+ *  never moved: local branches only ever move forward, so the take lands
+ *  on the first free numbered name instead, wip/<peer>/<branch>-2 and up. */
+async function landWip(repo: string, peer: string, branch: string, hash: string): Promise<string> {
+  const base = `wip/${peer}/${branch}`;
+  const cur = await git(repo, ["rev-parse", "-q", "--verify", `refs/heads/${base}`]);
+  if (cur.code !== 0) {
+    const made = await createBranch(repo, base, hash);
+    if (made !== null) return made;
+  } else {
+    const old = cur.stdout.trim();
+    if (old === hash) return base; // already exactly this WIP
+    const committer = await git(repo, ["log", "-1", "--format=%cn", `refs/heads/${base}`]);
+    if (committer.code === 0 && committer.stdout.trim() === "canopy" && !(await branchInUse(repo, base))) {
+      const r = await git(repo, ["update-ref", `refs/heads/${base}`, hash, old]);
+      if (r.code === 0) return base;
+    }
+  }
+  for (let n = 2; ; n++) {
+    const name = `${base}-${n}`;
+    const exists = await git(repo, ["rev-parse", "-q", "--verify", `refs/heads/${name}`]);
+    if (exists.code !== 0) {
+      const made = await createBranch(repo, name, hash);
+      if (made !== null) return made;
+    }
+  }
+}
+
+/** Lands a peer's WIP here: as uncommitted files when the tree is clean,
+ *  HEAD is the WIP's parent, and nothing on disk already occupies a path
+ *  it adds; otherwise as a scratch branch (see landWip). */
 export async function takeWip(repo: string, peer: string, branch: string): Promise<{ how: "files" | "branch"; branch?: string }> {
   assertPeerName(peer);
   await assertBranchName(repo, branch);
@@ -634,19 +726,18 @@ export async function takeWip(repo: string, peer: string, branch: string): Promi
   const wip = await git(repo, ["rev-parse", "-q", "--verify", ref]);
   if (wip.code !== 0) throw new Error(`no WIP from ${peer} on ${branch}`);
   const hash = wip.stdout.trim();
-  const parent = (await git(repo, ["rev-parse", `${hash}^`])).stdout.trim();
+  const parent = await git(repo, ["rev-parse", "-q", "--verify", `${hash}^`]);
   const head = await git(repo, ["rev-parse", "-q", "--verify", "HEAD"]);
-  if (head.code === 0 && head.stdout.trim() === parent && !(await isDirty(repo)) && !(await isBusy(repo))) {
+  const onParent = parent.code === 0 && head.code === 0 && head.stdout.trim() === parent.stdout.trim();
+  const clear = onParent && !(await isDirty(repo)) && !(await isBusy(repo)) && !(await wipOccupiesPath(repo, hash));
+  if (clear) {
     const r = await git(repo, ["read-tree", "-u", "-m", "HEAD", hash]);
     if (r.code !== 0) throw new Error(r.stderr.trim());
-    await git(repo, ["reset", "--quiet"]);
+    const done = await git(repo, ["reset", "--quiet"]);
+    if (done.code !== 0) throw new Error(done.stderr.trim());
     return { how: "files" as const };
   }
-  const name = `wip/${peer}/${branch}`;
-  // Our own scratch namespace: a later take of the same WIP replaces it.
-  const r = await git(repo, ["branch", "--force", name, hash]);
-  if (r.code !== 0) throw new Error(r.stderr.trim());
-  return { how: "branch" as const, branch: name };
+  return { how: "branch" as const, branch: await landWip(repo, peer, branch, hash) };
 }
 
 export async function trackBranch(repo: string, peer: string, branch: string): Promise<void> {
