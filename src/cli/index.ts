@@ -474,6 +474,20 @@ export async function main(argv: string[]): Promise<void> {
       const rootFlag = opt(args, "--root");
       const sub = args[0];
       if (sub === "gate") {
+        // GIT_* is git's own env-config channel (GIT_CONFIG_PARAMETERS,
+        // GIT_CONFIG_COUNT/KEY_n/VALUE_n, ...), never meant for this
+        // process. Cleared before anything else runs: serveList/serveSeeds
+        // call git() in-process (not through the explicit env the
+        // upload-pack spawn gets below), so left in place they would
+        // inherit whatever GIT_ vars this process had and let a peer who
+        // can influence them set something like core.fsmonitor and have
+        // git run it the moment ls-files touches the working tree.
+        // GIT_PROTOCOL is kept aside first, since the upload-pack env below
+        // still wants it.
+        const gitProtocol = process.env["GIT_PROTOCOL"];
+        for (const key of Object.keys(process.env)) {
+          if (key.startsWith("GIT_")) delete process.env[key];
+        }
         const rootArg = rootFlag ?? "dev";
         const home = process.env["HOME"] ?? "";
         const rootAbs = resolve(rootArg.startsWith("/") ? rootArg : join(home, rootArg));
@@ -501,7 +515,8 @@ export async function main(argv: string[]): Promise<void> {
               PATH: process.env["PATH"] ?? "",
               HOME: process.env["HOME"] ?? "",
             };
-            for (const name of ["GIT_PROTOCOL", "LANG", "LC_ALL"] as const) {
+            if (gitProtocol !== undefined) env["GIT_PROTOCOL"] = gitProtocol;
+            for (const name of ["LANG", "LC_ALL"] as const) {
               const v = process.env[name];
               if (v !== undefined) env[name] = v;
             }

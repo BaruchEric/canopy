@@ -151,7 +151,14 @@ export async function loadConfigReadOnly(): Promise<CanopyConfig | null> {
     return code === "ENOENT" ? defaults() : null;
   }
   try {
-    return normalize(JSON.parse(raw) as Partial<CanopyConfig>);
+    const parsed: unknown = JSON.parse(raw);
+    // valid JSON that isn't a plain object (null, an array, a number, a
+    // string) is just as unusable a config as bad JSON: normalize()'s
+    // `{...base, ...parsed}` spread would silently tolerate it (an array
+    // spreads as numeric-keyed junk) rather than throwing, so this has to be
+    // checked explicitly rather than left to the try/catch.
+    if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) return null;
+    return normalize(parsed as Partial<CanopyConfig>);
   } catch {
     return null;
   }

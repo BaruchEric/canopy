@@ -1372,6 +1372,40 @@ describe("canopy peers gate", () => {
       await rm(cfgDir, { recursive: true, force: true });
     }
   });
+
+  test("a canopy-peer seeds query runs its in-process git calls with no GIT_ vars: GIT_CONFIG_PARAMETERS cannot set a hook", async () => {
+    // serveSeeds runs git() in-process (ls-files), which — unlike the
+    // upload-pack spawn — never went through an explicit env, so it
+    // inherited whatever GIT_ vars this process had. core.fsmonitor is
+    // git's own working-tree-status hook; ls-files consults it.
+    const ws = join(root, "ws");
+    const marker = join(root, "fsmonitor-marker");
+    const r = await exec([process.execPath, bin, "peers", "gate", "--root", ws], {
+      env: {
+        SSH_ORIGINAL_COMMAND: "'canopy-peer' 'seeds' 'group/a'",
+        HOME: root,
+        GIT_CONFIG_PARAMETERS: `'core.fsmonitor=touch ${marker}'`,
+      },
+    });
+    expect(r.code).toBe(0);
+    expect(existsSync(marker)).toBe(false);
+  });
+
+  test("a config that parses but is not a plain object (an array) is refused, like an unreadable one", async () => {
+    const cfgDir = await mkdtemp(join(tmpdir(), "canopy-peers-badcfg3-"));
+    try {
+      await writeFile(join(cfgDir, "config.json"), "[1]");
+      const ws = join(root, "ws");
+      const r = await exec([process.execPath, bin, "peers", "gate", "--root", ws], {
+        env: { SSH_ORIGINAL_COMMAND: "'canopy-peer' 'list'", HOME: root, CANOPY_CONFIG_DIR: cfgDir },
+      });
+      expect(r.code).toBe(1);
+      expect(r.stdout).toBe("");
+      expect(r.stderr).toContain("canopy-peer: config unreadable");
+    } finally {
+      await rm(cfgDir, { recursive: true, force: true });
+    }
+  });
 });
 
 describe("peers CLI dry mode: init and seed write nothing", () => {
