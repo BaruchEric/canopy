@@ -11,6 +11,12 @@ const sh = async (cwd: string, ...args: string[]): Promise<string> => {
   if (r.code !== 0) throw new Error(`git ${args.join(" ")}: ${r.stderr}`);
   return r.stdout.trim();
 };
+/** Loose objects in the repo's real store (git count-objects, not packs). */
+const looseObjects = async (cwd: string): Promise<number> => {
+  const out = await sh(cwd, "count-objects");
+  return Number(out.split(" ")[0]);
+};
+
 let clock = 1_790_000_000;
 const commit = async (cwd: string, name: string, body: string): Promise<string> => {
   await mkdir(join(cwd, name, ".."), { recursive: true });
@@ -57,11 +63,42 @@ describe("snapshotWip", () => {
     expect(await sh(r, "log", "-1", "--format=%s", "refs/wip/main")).toMatch(/^wip mac /);
   });
 
-  test("the same tree again writes no new commit", async () => {
+  test("the same tree again writes no new commit, and reports the snapshot's own time", async () => {
     const r = join(root, "dirty");
     const first = await sh(r, "rev-parse", "refs/wip/main");
-    expect((await snapshotWip(r, "mac", false))?.wrote).toBe(false);
+    const committedAt = Number(await sh(r, "log", "-1", "--format=%ct", "refs/wip/main")) * 1000;
+    const w = await snapshotWip(r, "mac", false);
+    expect(w).toMatchObject({ wrote: false, at: committedAt });
     expect(await sh(r, "rev-parse", "refs/wip/main")).toBe(first);
+  });
+
+  test("HEAD moving past the snapshot's parent forces a new one, even with the same tree", async () => {
+    // The trick: "unrelated.txt" starts as part of the dirty overlay, so the
+    // first snapshot's tree already contains it. Committing just that file
+    // moves HEAD forward by exactly what the overlay already had, so the
+    // total tree (HEAD content plus what's still dirty) comes out identical.
+    // The only thing that changed is which commit the ref's parent is.
+    const r = await repo("headmove");
+    await writeFile(join(r, "a.txt"), "changed\n");
+    await writeFile(join(r, "new.txt"), "untracked\n");
+    await writeFile(join(r, "unrelated.txt"), "keep\n");
+    expect((await snapshotWip(r, "mac", false))?.wrote).toBe(true);
+    const staleWip = await sh(r, "rev-parse", "refs/wip/main");
+    const oldHead = await sh(r, "rev-parse", "HEAD");
+
+    await sh(r, "add", "unrelated.txt");
+    clock += 60;
+    const cr = await exec(["git", "commit", "-q", "-m", "c unrelated"], {
+      cwd: r, env: { GIT_AUTHOR_DATE: `${clock} +0000`, GIT_COMMITTER_DATE: `${clock} +0000` },
+    });
+    if (cr.code !== 0) throw new Error(cr.stderr);
+    const newHead = await sh(r, "rev-parse", "HEAD");
+    expect(newHead).not.toBe(oldHead);
+
+    const w = await snapshotWip(r, "mac", false);
+    expect(w?.wrote).toBe(true);
+    expect(await sh(r, "rev-parse", "refs/wip/main")).not.toBe(staleWip);
+    expect(await sh(r, "rev-parse", "refs/wip/main^")).toBe(newHead);
   });
 
   test("ignored files stay out", async () => {
@@ -100,10 +137,50 @@ describe("snapshotWip", () => {
     expect(await snapshotWip(empty, "mac", false)).toBeNull();
   });
 
-  test("dry writes nothing", async () => {
+  test("dry writes nothing, not even loose objects in the real store", async () => {
     const r = await repo("dry");
     await writeFile(join(r, "a.txt"), "dry\n");
+    const before = await looseObjects(r);
     expect((await snapshotWip(r, "mac", true))?.wrote).toBe(true);
     expect((await exec(["git", "rev-parse", "-q", "--verify", "refs/wip/main"], { cwd: r })).code).not.toBe(0);
+    expect(await looseObjects(r)).toBe(before);
+  });
+
+  test("a ref namespace collision returns null instead of a false wrote", async () => {
+    const r = await repo("collision");
+    // A plain ref at refs/wip/feat, unrelated to any branch (a branch named
+    // "feat" would itself collide with "feat/x" at refs/heads/, which is a
+    // different conflict than the one under test).
+    await sh(r, "update-ref", "refs/wip/feat", await sh(r, "rev-parse", "HEAD"));
+    await sh(r, "checkout", "-q", "-b", "feat/x");
+    await writeFile(join(r, "a.txt"), "feat/x change\n");
+    // refs/wip/feat/x can't be created while refs/wip/feat exists as a
+    // plain ref (a git ref D/F conflict).
+    expect(await snapshotWip(r, "mac", false)).toBeNull();
+  });
+
+  test("commit-tree gets an identity even without any git config", async () => {
+    const r = await repo("noidentity");
+    await sh(r, "config", "--unset", "user.email");
+    await sh(r, "config", "--unset", "user.name");
+    await writeFile(join(r, "a.txt"), "no identity\n");
+
+    const home = await mkdtemp(join(tmpdir(), "canopy-nohome-"));
+    const globalConfig = join(home, "gitconfig-empty");
+    await writeFile(globalConfig, "");
+    const prevHome = process.env["HOME"];
+    const prevGlobal = process.env["GIT_CONFIG_GLOBAL"];
+    process.env["HOME"] = home;
+    process.env["GIT_CONFIG_GLOBAL"] = globalConfig;
+    let w: Awaited<ReturnType<typeof snapshotWip>>;
+    try {
+      w = await snapshotWip(r, "mac", false);
+    } finally {
+      if (prevHome === undefined) delete process.env["HOME"]; else process.env["HOME"] = prevHome;
+      if (prevGlobal === undefined) delete process.env["GIT_CONFIG_GLOBAL"]; else process.env["GIT_CONFIG_GLOBAL"] = prevGlobal;
+      await rm(home, { recursive: true, force: true });
+    }
+    expect(w?.wrote).toBe(true);
+    expect(await sh(r, "log", "-1", "--format=%an <%ae>", "refs/wip/main")).toBe("canopy <canopy@mac>");
   });
 });
