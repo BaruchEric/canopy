@@ -6,7 +6,7 @@ import { randomBytes } from "node:crypto";
 import { tmpdir } from "node:os";
 import { dirname, isAbsolute, join, normalize, relative, resolve, sep } from "node:path";
 import { git, onHost } from "./exec";
-import { BUSY_MARKERS, ffTarget, isSafeRel, NO_PUSH, parseQuotedWords, parseRefLines, parseWipLines, peerMissing, peerRefspecs, peerUnreachable, peerUrl, repoWanted, seedWanted } from "./peers";
+import { BUSY_MARKERS, ffTarget, isPeerName, isSafeRel, NO_PUSH, parseQuotedWords, parseRefLines, parseWipLines, peerMissing, peerRefspecs, peerUnreachable, peerUrl, repoWanted, seedWanted } from "./peers";
 import type { Peer, PeerState, PeerWip } from "./types";
 
 export async function currentBranch(repo: string): Promise<string | null> {
@@ -608,4 +608,52 @@ export async function cloneMissing(root: string, peers: Peer[], allow: string[],
     }
   }
   return { cloned, failed };
+}
+
+/** Peer and branch names below arrive from a request (a server route, the
+ *  CLI), so both are checked before anything touches git. The leading-"-"
+ *  check on the branch is explicit rather than left to check-ref-format,
+ *  since the point is to keep a request-supplied name from ever reaching a
+ *  later git call (branch, update-ref, ...) looking like a flag. */
+function assertPeerName(peer: string): void {
+  if (!isPeerName(peer)) throw new Error(`not a peer name: ${peer}`);
+}
+
+async function assertBranchName(repo: string, branch: string): Promise<void> {
+  if (branch.startsWith("-")) throw new Error(`not a branch name: ${branch}`);
+  const r = await git(repo, ["check-ref-format", "--branch", branch]);
+  if (r.code !== 0) throw new Error(`not a branch name: ${branch}`);
+}
+
+/** Lands a peer's WIP here: as uncommitted files when the tree is clean and
+ *  HEAD is the WIP's parent, else as branch wip/<peer>/<branch>. */
+export async function takeWip(repo: string, peer: string, branch: string): Promise<{ how: "files" | "branch"; branch?: string }> {
+  assertPeerName(peer);
+  await assertBranchName(repo, branch);
+  const ref = `refs/peer-wip/${peer}/${branch}`;
+  const wip = await git(repo, ["rev-parse", "-q", "--verify", ref]);
+  if (wip.code !== 0) throw new Error(`no WIP from ${peer} on ${branch}`);
+  const hash = wip.stdout.trim();
+  const parent = (await git(repo, ["rev-parse", `${hash}^`])).stdout.trim();
+  const head = await git(repo, ["rev-parse", "-q", "--verify", "HEAD"]);
+  if (head.code === 0 && head.stdout.trim() === parent && !(await isDirty(repo)) && !(await isBusy(repo))) {
+    const r = await git(repo, ["read-tree", "-u", "-m", "HEAD", hash]);
+    if (r.code !== 0) throw new Error(r.stderr.trim());
+    await git(repo, ["reset", "--quiet"]);
+    return { how: "files" as const };
+  }
+  const name = `wip/${peer}/${branch}`;
+  // Our own scratch namespace: a later take of the same WIP replaces it.
+  const r = await git(repo, ["branch", "--force", name, hash]);
+  if (r.code !== 0) throw new Error(r.stderr.trim());
+  return { how: "branch" as const, branch: name };
+}
+
+export async function trackBranch(repo: string, peer: string, branch: string): Promise<void> {
+  assertPeerName(peer);
+  await assertBranchName(repo, branch);
+  const tip = await git(repo, ["rev-parse", "-q", "--verify", `refs/remotes/${peer}/${branch}`]);
+  if (tip.code !== 0) throw new Error(`${peer} has no branch ${branch}`);
+  const r = await git(repo, ["branch", "--no-track", branch, tip.stdout.trim()]);
+  if (r.code !== 0) throw new Error(r.stderr.trim());
 }

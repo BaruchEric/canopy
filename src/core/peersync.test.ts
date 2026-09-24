@@ -20,6 +20,8 @@ import {
   serveSeed,
   serveSeeds,
   snapshotWip,
+  takeWip,
+  trackBranch,
 } from "./peersync";
 import type { Peer } from "./types";
 
@@ -778,5 +780,57 @@ describe("decodeBase64Strict", () => {
     expect(decodeBase64Strict("not base64!!")).toBeNull();
     expect(decodeBase64Strict("abc")).toBeNull(); // wrong length, no valid padding
     expect(decodeBase64Strict("ab==c")).toBeNull(); // padding in the middle
+  });
+});
+
+describe("take and track", () => {
+  test("clean tree on the WIP's parent: the files arrive uncommitted", async () => {
+    const { mac, mini, toMini, miniId } = await pair("take");
+    await writeFile(join(mini, "a.txt"), "from mini\n");
+    await writeFile(join(mini, "n.txt"), "new\n");
+    await snapshotWip(mini, "mini", false);
+    await fetchPeer(mac, miniId, toMini, {});
+    expect(await takeWip(mac, "mini", "main")).toEqual({ how: "files" });
+    expect(await readFile(join(mac, "a.txt"), "utf8")).toBe("from mini\n");
+    expect(await readFile(join(mac, "n.txt"), "utf8")).toBe("new\n");
+    expect(await sh(mac, "diff", "--cached", "--name-only")).toBe(""); // nothing staged
+  });
+
+  test("otherwise it becomes a branch", async () => {
+    const { mac, mini, toMini, miniId } = await pair("take2");
+    await writeFile(join(mini, "a.txt"), "from mini\n");
+    await snapshotWip(mini, "mini", false);
+    await fetchPeer(mac, miniId, toMini, {});
+    await writeFile(join(mac, "a.txt"), "mine\n");
+    expect(await takeWip(mac, "mini", "main")).toEqual({ how: "branch", branch: "wip/mini/main" });
+    expect(await readFile(join(mac, "a.txt"), "utf8")).toBe("mine\n");
+    await sh(mac, "rev-parse", "wip/mini/main");
+  });
+
+  test("track makes a local branch at the peer's tip; unknown is an error", async () => {
+    const { mac, mini, toMini, miniId } = await pair("track");
+    await sh(mini, "checkout", "-q", "-b", "feat/y");
+    const tip = await commit(mini, "y.txt", "y\n");
+    await fetchPeer(mac, miniId, toMini, {});
+    await trackBranch(mac, "mini", "feat/y");
+    expect(await sh(mac, "rev-parse", "feat/y")).toBe(tip);
+    await expect(trackBranch(mac, "mini", "nope")).rejects.toThrow();
+    await expect(takeWip(mac, "mini", "nope")).rejects.toThrow();
+  });
+
+  test("a bad peer name is refused", async () => {
+    const { mac } = await pair("badpeer");
+    await expect(trackBranch(mac, "../x", "main")).rejects.toThrow(/not a peer name/);
+    await expect(trackBranch(mac, "Origin", "main")).rejects.toThrow(/not a peer name/);
+    await expect(takeWip(mac, "../x", "main")).rejects.toThrow(/not a peer name/);
+    await expect(takeWip(mac, "Origin", "main")).rejects.toThrow(/not a peer name/);
+  });
+
+  test("a bad branch name is refused", async () => {
+    const { mac } = await pair("badbranch");
+    await expect(trackBranch(mac, "mini", "-D")).rejects.toThrow(/not a branch name/);
+    await expect(trackBranch(mac, "mini", "a..b")).rejects.toThrow(/not a branch name/);
+    await expect(takeWip(mac, "mini", "-D")).rejects.toThrow(/not a branch name/);
+    await expect(takeWip(mac, "mini", "a..b")).rejects.toThrow(/not a branch name/);
   });
 });
