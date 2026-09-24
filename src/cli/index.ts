@@ -1,12 +1,25 @@
 import { libraryCommand } from "../core/library";
-import { resolve } from "node:path";
+import { realpath } from "node:fs/promises";
+import { join, resolve } from "node:path";
 import { exec } from "../core/exec";
 import { commit, getStatus, pull, push } from "../core/git";
 import { isOpenerId, openGroup, openIn, type OpenerId } from "../core/openers";
 import { isSshHost } from "../core/host";
 import { buildKey, isSafeTag } from "../core/launch";
 import { Launcher, LauncherError, type LaunchRepo } from "../core/launcher";
-import { DEFAULT_IGNORE, scan } from "../core/scan";
+import {
+  currentBranch,
+  gateCommand,
+  initRepo,
+  seedRepo,
+  serveList,
+  serveSeed,
+  serveSeeds,
+  syncAll,
+  takeWip,
+  trackBranch,
+} from "../core/peersync";
+import { DEFAULT_IGNORE, launchSource, scan, scanSource } from "../core/scan";
 import {
   addSource,
   agentFor,
@@ -56,6 +69,13 @@ usage:
   canopy source add <dir> [--host h] [--label l]   scan another folder; --host for one over ssh
   canopy source add --forgejo <url> [--token f]    list a self-hosted Forgejo's repos
   canopy source rm <id>              stop scanning it
+  canopy peers status                this machine's name, sync mode, and its peers
+  canopy peers init                  set up each peer's git remote in every repo
+  canopy peers sync [id]             fetch every peer once, fast-forward, list WIP
+  canopy peers take <id> <peer> [branch]    land a peer's WIP here
+  canopy peers track <id> <peer> <branch>   a local branch at a peer's tip
+  canopy peers seed <id>             copy allowlisted ignored files from a peer
+  canopy peers gate --root dir       what a peer key's authorized_keys entry runs
 `;
 
 function flag(args: string[], name: string): boolean {
@@ -107,6 +127,7 @@ const COMMANDS = new Set([
   "ws",
   "source",
   "sources",
+  "peers",
   "help",
   "--help",
   "-h",
@@ -446,6 +467,101 @@ export async function main(argv: string[]): Promise<void> {
         return;
       }
       return fail(`unknown source command: ${sub}`);
+    }
+    case "peers": {
+      const rootFlag = opt(args, "--root");
+      const sub = args[0];
+      if (sub === "gate") {
+        const rootArg = rootFlag ?? "dev";
+        const home = process.env["HOME"] ?? "";
+        const rootAbs = resolve(rootArg.startsWith("/") ? rootArg : join(home, rootArg));
+        const cfg = await loadConfig();
+        const cmd = gateCommand(process.env["SSH_ORIGINAL_COMMAND"] ?? "", rootAbs, home);
+        if ("error" in cmd) return fail(`canopy-peer: ${cmd.error}`);
+        try {
+          if (cmd.kind === "upload-pack") {
+            const p = Bun.spawn(["git-upload-pack", cmd.path], { stdin: "inherit", stdout: "inherit", stderr: "inherit" });
+            process.exit(await p.exited);
+          }
+          if (cmd.kind === "list") console.log(JSON.stringify(await serveList(rootAbs, cfg.maxDepth)));
+          if (cmd.kind === "seeds") console.log(JSON.stringify(await serveSeeds(rootAbs, cmd.id, cfg.seed)));
+          if (cmd.kind === "seed") console.log(Buffer.from(await serveSeed(rootAbs, cmd.id, cmd.file, cfg.seed)).toString("base64"));
+        } catch (err) {
+          return fail(`canopy-peer: ${err instanceof Error ? err.message : String(err)}`);
+        }
+        return;
+      }
+      const cfg = await loadConfig();
+      // Every subcommand but status and the gate itself needs the feature on
+      // (or dry): status is a diagnostic ("is this configured at all?") and
+      // the gate is what a peer's ssh key runs, unrelated to this machine's
+      // own sync mode.
+      if (cfg.peerSync === "off" && sub !== "status") {
+        return fail("canopy: peer sync is off");
+      }
+      if (!cfg.self || cfg.peers.length === 0) {
+        return fail("canopy: set self and peers in the config first (see docs/superpowers/specs/2026-09-23-peer-sync-design.md)");
+      }
+      const rootDir = await realpath(resolve(rootFlag ?? process.cwd()));
+      const opts = { self: cfg.self, peers: cfg.peers, seed: cfg.seed, dry: cfg.peerSync !== "on", root: rootDir };
+      // Repo ids under the launch root, read the same way the `tree` case
+      // scans it. Only `init` and a bare `sync` need every id; the others
+      // work on one repo the caller already named.
+      const launchIds = async (): Promise<string[]> =>
+        (await scanSource(launchSource(rootDir), { maxDepth: cfg.maxDepth, ignore: [...DEFAULT_IGNORE, ...cfg.ignore] })).map((r) => r.id);
+      switch (sub) {
+        case "init": {
+          const ids = await launchIds();
+          for (const id of ids) await initRepo(join(rootDir, id), id, cfg.peers, opts.dry);
+          console.log(`${opts.dry ? "would set" : "set"} peer remotes in ${ids.length} repos`);
+          return;
+        }
+        case "sync": {
+          const only = args[1] && !args[1].startsWith("--") ? [args[1]] : await launchIds();
+          const { states, seen, cloned, failed } = await syncAll(only, opts, 4);
+          for (const s of seen) console.log(`${s.name}: ${s.ok ? "ok" : `offline (${s.error ?? ""})`}`);
+          for (const c of cloned) console.log(`cloned ${c}`);
+          for (const f of failed) console.log(`failed to clone ${f.id}: ${f.error}`);
+          for (const [id, st] of states) {
+            for (const m of st.moved) console.log(`${id}: ${m.branch} → ${m.to.slice(0, 8)} from ${m.peer}`);
+            for (const w of st.would ?? []) console.log(`${id}: would move ${w.branch} → ${w.to.slice(0, 8)} from ${w.peer}`);
+            for (const d of st.diverged) console.log(`${id}: ${d.branch} diverged from ${d.peer} (↑${d.behind} ↓${d.ahead})`);
+            if (st.error) console.log(`${id}: ${st.error}`);
+          }
+          if (opts.dry) console.log(`peerSync is ${cfg.peerSync}: nothing was written`);
+          return;
+        }
+        case "status": {
+          console.log(`self: ${cfg.self}  sync: ${cfg.peerSync}`);
+          for (const p of cfg.peers) console.log(`  ${p.name}  ${p.role}  ${p.alias}:${p.root}${p.repos ? `  (${p.repos.join(", ")})` : ""}`);
+          return;
+        }
+        case "take": {
+          const [, id, peer, branch] = args;
+          if (!id || !peer) return fail("usage: canopy peers take <id> <peer> [branch]");
+          const repo = join(rootDir, id);
+          const r = await takeWip(repo, peer, branch ?? (await currentBranch(repo)) ?? "main");
+          console.log(r.how === "files" ? "WIP checked out as uncommitted files" : `WIP is on branch ${r.branch}`);
+          return;
+        }
+        case "track": {
+          const [, id, peer, branch] = args;
+          if (!id || !peer || !branch) return fail("usage: canopy peers track <id> <peer> <branch>");
+          await trackBranch(join(rootDir, id), peer, branch);
+          console.log(`${branch} now points at ${peer}/${branch}`);
+          return;
+        }
+        case "seed": {
+          const id = args[1];
+          if (!id) return fail("usage: canopy peers seed <id>");
+          const wrote = await seedRepo(join(rootDir, id), id, cfg.peers, cfg.seed, opts.dry);
+          if (wrote.length === 0) console.log("nothing to seed");
+          else console.log(`${opts.dry ? "would seed" : "seeded"} ${wrote.join(", ")}`);
+          return;
+        }
+        default:
+          return fail(`unknown peers command: ${sub}\n\nusage: canopy peers status|sync [id]|init|take|track|seed|gate`);
+      }
     }
     case "help":
     case "--help":

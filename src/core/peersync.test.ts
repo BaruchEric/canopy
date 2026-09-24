@@ -1251,3 +1251,76 @@ describe("gitSshCommand", () => {
     ]);
   });
 });
+
+describe("canopy peers gate", () => {
+  const bin = join(import.meta.dir, "..", "..", "bin", "canopy.ts");
+  const gate = (cmd: string, rootDir: string) =>
+    exec([process.execPath, bin, "peers", "gate", "--root", rootDir], { env: { SSH_ORIGINAL_COMMAND: cmd, HOME: root } });
+
+  test("answers list and refuses a shell", async () => {
+    const ws = join(root, "ws");
+    const ok = await gate("'canopy-peer' 'list'", ws);
+    expect(ok.code).toBe(0);
+    expect(JSON.parse(ok.stdout).map((r: { id: string }) => r.id)).toContain("group/a");
+    const no = await gate("sh -c id", ws);
+    expect(no.code).toBe(1);
+    expect(no.stderr).toContain("canopy-peer: refused");
+  });
+
+  test("serves git-upload-pack so a clone works through it", async () => {
+    const ws = join(root, "ws");
+    // GIT_SSH_COMMAND pointing at a script that runs the gate stands in for sshd.
+    const fake = join(root, "fake-ssh");
+    await writeFile(fake, `#!/bin/sh\nshift\nSSH_ORIGINAL_COMMAND="$*" HOME=${root} exec ${process.execPath} ${bin} peers gate --root ${ws}\n`);
+    await exec(["chmod", "+x", fake]);
+    const dest = join(root, "via-gate");
+    const r = await exec(["git", "clone", "-q", `peerhost:ws/group/a`, dest], { env: { GIT_SSH_COMMAND: fake, GIT_SSH_VARIANT: "simple" } });
+    expect(r.code).toBe(0);
+    const push = await exec(["git", "push", "origin", "HEAD:refs/heads/evil"], { cwd: dest, env: { GIT_SSH_COMMAND: fake, GIT_SSH_VARIANT: "simple" } });
+    expect(push.code).not.toBe(0);
+  });
+
+  test("a seed query answers one unwrapped base64 line that decodes to the file's bytes", async () => {
+    // group/a's .env ("A=1\n") is written by the "serve" describe above.
+    const ws = join(root, "ws");
+    const r = await gate("'canopy-peer' 'seed' 'group/a' '.env'", ws);
+    expect(r.code).toBe(0);
+    const line = r.stdout.endsWith("\n") ? r.stdout.slice(0, -1) : r.stdout;
+    expect(line.includes("\n")).toBe(false);
+    expect(Buffer.from(line, "base64").toString("utf8")).toBe("A=1\n");
+  });
+
+  test("a path outside the root is refused: exit 1, canopy-peer: on stderr, nothing on stdout", async () => {
+    const ws = join(root, "ws");
+    const r = await gate("git-upload-pack '/etc'", ws);
+    expect(r.code).toBe(1);
+    expect(r.stdout).toBe("");
+    expect(r.stderr).toContain("canopy-peer:");
+  });
+});
+
+describe("canopy peers CLI honours peerSync", () => {
+  const bin = join(import.meta.dir, "..", "..", "bin", "canopy.ts");
+
+  test("off refuses every subcommand but status and gate", async () => {
+    const cfgDir = await mkdtemp(join(tmpdir(), "canopy-peers-off-"));
+    try {
+      await writeFile(
+        join(cfgDir, "config.json"),
+        JSON.stringify({
+          self: "mac",
+          peers: [{ name: "mini", alias: "mini", root: "/tmp/nowhere", role: "git" }],
+          peerSync: "off",
+        }),
+      );
+      const sync = await exec([process.execPath, bin, "peers", "sync"], { env: { CANOPY_CONFIG_DIR: cfgDir } });
+      expect(sync.code).toBe(1);
+      expect(sync.stderr).toContain("canopy: peer sync is off");
+      const status = await exec([process.execPath, bin, "peers", "status"], { env: { CANOPY_CONFIG_DIR: cfgDir } });
+      expect(status.code).toBe(0);
+      expect(status.stdout).toContain("self: mac");
+    } finally {
+      await rm(cfgDir, { recursive: true, force: true });
+    }
+  });
+});
