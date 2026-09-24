@@ -146,12 +146,17 @@ export async function initRepo(repo: string, id: string, peers: Peer[], dry: boo
 
 export type FetchOutcome = "ok" | "missing" | "unreachable" | { error: string };
 
-export async function fetchPeer(repo: string, peer: Peer, env: Record<string, string>): Promise<FetchOutcome> {
-  const r = await git(repo, ["fetch", "--prune", "--quiet", peer.name], 60_000, { GIT_TERMINAL_PROMPT: "0", ...env });
+/** Fetches a peer by URL and explicit refspecs rather than by remote name,
+ *  so it works whether or not `initRepo` has ever run: dry mode skips
+ *  `initRepo`, and a named-remote fetch would then read every repo as
+ *  "missing" for having no such remote. */
+export async function fetchPeer(repo: string, id: string, peer: Peer, env: Record<string, string>): Promise<FetchOutcome> {
+  const [heads, wip] = peerRefspecs(peer.name);
+  const r = await git(repo, ["fetch", "--prune", "--no-tags", "--quiet", peerUrl(peer, id), heads, wip], 60_000, { GIT_TERMINAL_PROMPT: "0", ...env });
   if (r.code === 0) return "ok";
   if (peerUnreachable(r.stderr)) return "unreachable";
   if (peerMissing(r.stderr)) return "missing";
-  return { error: r.stderr.trim().split("\n").pop() ?? `git fetch exited ${r.code}` };
+  return { error: r.stderr.trim().split("\n").pop() || `git fetch exited ${r.code}` };
 }
 
 export async function peerTips(repo: string, peers: string[]) {
@@ -171,6 +176,8 @@ export async function peerTips(repo: string, peers: string[]) {
   return { local, byPeer };
 }
 
+/** ahead/behind as seen from the peer tip's side: ahead is commits the peer
+ *  has that we don't, behind is commits we have that the peer doesn't. */
 async function counts(repo: string, local: string, tip: string): Promise<{ ahead: number; behind: number }> {
   const r = await git(repo, ["rev-list", "--left-right", "--count", `${local}...${tip}`]);
   const [behind, ahead] = r.stdout.trim().split(/\s+/).map(Number);

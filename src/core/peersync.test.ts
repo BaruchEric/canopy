@@ -197,9 +197,11 @@ const pair = async (name: string) => {
   // Each names the other's parent folder as its peer root; the id is the folder name.
   const toMini: Peer = { name: "mini", alias: null, root, role: "git" };
   const toMac: Peer = { name: "mac", alias: null, root, role: "git" };
-  await initRepo(mac, `${name}-mini`, [toMini], false);
-  await initRepo(mini, `${name}-mac`, [toMac], false);
-  return { mac, mini, toMini, toMac };
+  const miniId = `${name}-mini`;
+  const macId = `${name}-mac`;
+  await initRepo(mac, miniId, [toMini], false);
+  await initRepo(mini, macId, [toMac], false);
+  return { mac, mini, toMini, toMac, miniId, macId };
 };
 
 describe("initRepo", () => {
@@ -221,29 +223,29 @@ describe("initRepo", () => {
 
 describe("fetch and fast-forward", () => {
   test("a clean branch behind its peer fast-forwards", async () => {
-    const { mac, mini, toMini } = await pair("ff");
+    const { mac, mini, toMini, miniId } = await pair("ff");
     const before = await sh(mac, "rev-parse", "HEAD");
     const tip = await commit(mini, "b.txt", "b\n");
-    expect(await fetchPeer(mac, toMini, {})).toBe("ok");
+    expect(await fetchPeer(mac, miniId, toMini, {})).toBe("ok");
     const r = await fastForward(mac, ["mini"], false);
     expect(r.moved).toEqual([{ branch: "main", from: before, to: tip, peer: "mini" }]);
     expect(await sh(mac, "rev-parse", "HEAD")).toBe(tip);
   });
 
   test("a dirty tree keeps its branch where it is", async () => {
-    const { mac, mini, toMini } = await pair("dirty-ff");
+    const { mac, mini, toMini, miniId } = await pair("dirty-ff");
     const before = await sh(mac, "rev-parse", "HEAD");
     await commit(mini, "b.txt", "b\n");
     await writeFile(join(mac, "a.txt"), "local edit\n");
-    await fetchPeer(mac, toMini, {});
+    await fetchPeer(mac, miniId, toMini, {});
     expect((await fastForward(mac, ["mini"], false)).moved).toEqual([]);
     expect(await sh(mac, "rev-parse", "HEAD")).toBe(before);
   });
 
   test("mid-rebase nothing moves", async () => {
-    const { mac, mini, toMini } = await pair("busy");
+    const { mac, mini, toMini, miniId } = await pair("busy");
     await commit(mini, "b.txt", "b\n");
-    await fetchPeer(mac, toMini, {});
+    await fetchPeer(mac, miniId, toMini, {});
     await writeFile(join(mac, ".git", "MERGE_HEAD"), "0000000000000000000000000000000000000000\n");
     expect((await fastForward(mac, ["mini"], false)).moved).toEqual([]);
     await rm(join(mac, ".git", "MERGE_HEAD"));
@@ -271,7 +273,7 @@ describe("fetch and fast-forward", () => {
     expect(await isBusy(mac)).toBe(true); // .git/rebase-merge present
     expect(await sh(mac, "rev-parse", "main")).toBe(preRebase); // the branch ref itself hasn't moved yet
 
-    await fetchPeer(mac, toMini, {});
+    await fetchPeer(mac, "realrebase-mini", toMini, {});
     const r = await fastForward(mac, ["mini"], false);
     expect(r.moved).toEqual([]);
     expect(await sh(mac, "rev-parse", "main")).toBe(preRebase);
@@ -280,10 +282,10 @@ describe("fetch and fast-forward", () => {
   });
 
   test("diverged is reported and nothing moves", async () => {
-    const { mac, mini, toMini } = await pair("div");
+    const { mac, mini, toMini, miniId } = await pair("div");
     await commit(mini, "b.txt", "b\n");
     const mine = await commit(mac, "c.txt", "c\n");
-    await fetchPeer(mac, toMini, {});
+    await fetchPeer(mac, miniId, toMini, {});
     const r = await fastForward(mac, ["mini"], false);
     expect(r.moved).toEqual([]);
     expect(r.diverged).toEqual([{ branch: "main", peer: "mini", ahead: 1, behind: 1 }]);
@@ -291,33 +293,33 @@ describe("fetch and fast-forward", () => {
   });
 
   test("a branch that is not checked out moves by compare-and-swap, even with a dirty tree", async () => {
-    const { mac, mini, toMini } = await pair("side");
+    const { mac, mini, toMini, miniId } = await pair("side");
     await sh(mac, "branch", "feat/x");
     await sh(mini, "fetch", "-q", "mac");
     await sh(mini, "checkout", "-q", "-b", "feat/x", "refs/remotes/mac/feat/x");
     const tip = await commit(mini, "x.txt", "x\n");
     await writeFile(join(mac, "a.txt"), "dirty\n");
-    await fetchPeer(mac, toMini, {});
+    await fetchPeer(mac, miniId, toMini, {});
     const r = await fastForward(mac, ["mini"], false);
     expect(r.moved.map((m) => m.branch)).toEqual(["feat/x"]);
     expect(await sh(mac, "rev-parse", "feat/x")).toBe(tip);
   });
 
   test("a branch only the peer has is listed, not created", async () => {
-    const { mac, mini, toMini } = await pair("only");
+    const { mac, mini, toMini, miniId } = await pair("only");
     await sh(mini, "checkout", "-q", "-b", "peer-only");
     await commit(mini, "p.txt", "p\n");
-    await fetchPeer(mac, toMini, {});
+    await fetchPeer(mac, miniId, toMini, {});
     const r = await fastForward(mac, ["mini"], false);
     expect(r.peerOnly).toEqual([{ peer: "mini", branch: "peer-only" }]);
     expect((await exec(["git", "rev-parse", "-q", "--verify", "refs/heads/peer-only"], { cwd: mac })).code).not.toBe(0);
   });
 
   test("dry reports what would move and moves nothing", async () => {
-    const { mac, mini, toMini } = await pair("dryff");
+    const { mac, mini, toMini, miniId } = await pair("dryff");
     const before = await sh(mac, "rev-parse", "HEAD");
     const tip = await commit(mini, "b.txt", "b\n");
-    await fetchPeer(mac, toMini, {});
+    await fetchPeer(mac, miniId, toMini, {});
     const r = await fastForward(mac, ["mini"], true);
     expect(r.moved).toEqual([]);
     expect(r.would).toEqual([{ branch: "main", to: tip, peer: "mini" }]);
@@ -328,19 +330,40 @@ describe("fetch and fast-forward", () => {
     const mac = await repo("lonely");
     const ghost: Peer = { name: "gpd", alias: null, root: join(root, "nowhere"), role: "git" };
     await initRepo(mac, "lonely", [ghost], false);
-    expect(await fetchPeer(mac, ghost, {})).toBe("missing");
+    expect(await fetchPeer(mac, "lonely", ghost, {})).toBe("missing");
+  });
+
+  test("a repo with no peer remote configured still fetches by URL, and adds no remote", async () => {
+    const mac = await repo("nopeer-mac");
+    const mini = join(root, "nopeer-mini");
+    await exec(["git", "clone", "-q", mac, mini]);
+    await sh(mini, "config", "user.email", "t@t");
+    await sh(mini, "config", "user.name", "t");
+    const tip = await commit(mini, "b.txt", "b\n");
+
+    // initRepo deliberately skipped: dry mode never runs it, and fetchPeer
+    // must still work with no remote configured at all.
+    const before = await exec(["git", "config", "--get-regexp", "remote\\."], { cwd: mac });
+    expect(before.code).not.toBe(0); // no matches: no remotes yet
+
+    const toMini: Peer = { name: "mini", alias: null, root, role: "git" };
+    expect(await fetchPeer(mac, "nopeer-mini", toMini, {})).toBe("ok");
+    expect(await sh(mac, "rev-parse", "refs/remotes/mini/main")).toBe(tip);
+
+    const after = await exec(["git", "config", "--get-regexp", "remote\\."], { cwd: mac });
+    expect(after.code).not.toBe(0); // still no matches: fetchPeer added no remote
   });
 
   test("the peer's WIP arrives and is pruned once the peer is clean", async () => {
-    const { mac, mini, toMini } = await pair("wipx");
+    const { mac, mini, toMini, miniId } = await pair("wipx");
     await writeFile(join(mini, "a.txt"), "half done\n");
     await snapshotWip(mini, "mini", false);
-    await fetchPeer(mac, toMini, {});
+    await fetchPeer(mac, miniId, toMini, {});
     const w = await peerWips(mac, ["mini"]);
     expect(w).toMatchObject([{ peer: "mini", branch: "main", files: 1 }]);
     await sh(mini, "checkout", "--", "a.txt");
     await snapshotWip(mini, "mini", false);
-    await fetchPeer(mac, toMini, {});
+    await fetchPeer(mac, miniId, toMini, {});
     expect(await peerWips(mac, ["mini"])).toEqual([]);
   });
 });
