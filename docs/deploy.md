@@ -45,21 +45,27 @@ mini.
 
 1. Docker and the compose plugin.
 2. The repos you want to scan live on the mini, under one root (the default is
-   `/home/eric/dev`). This is the mounted, live-watched tree. Eric's is a
-   mirror of the Mac's `~/dev`, pushed every two hours by
-   `_control/scripts/sync-dev-to-mini.sh` (rsync over the tailnet, additive,
-   no `--delete`), which also asks the backend to rescan afterwards. That run
-   carries canopy's own checkout too, working tree and `.git` alike, so the
-   mini's copy is whatever the Mac had at the last sync and
-   `docker compose up -d --build` here builds exactly that. A repo that a
-   shell on the mini changed is left out of the push until the Mac has
-   caught up: one with a commit the Mac lacks, or with a file edited there
-   since its last push at a path the Mac also has. The run logs it as
-   `HOLD`, and `ctl notify` announces it once. Push from the mini and pull on
-   the Mac, and the next run includes it again. Each file a run replaces is
-   kept for a week under `~/.cache/sync-dev-to-mini/backup/` on the mini. A
-   held canopy checkout means a redeploy builds the mini's code, not the
-   Mac's.
+   `/home/eric/dev`). This is the mounted, live-watched tree. Since
+   2026-09-24 git moves the repos between the Mac and the mini through
+   canopy's own peer sync (`peers` and `peerSync: "on"` in each machine's
+   config, see the README): each side pulls the other's commits over ssh,
+   fast-forwards what it can, and shows the other's uncommitted work as a
+   "WIP on mac" chip to take. `_control/scripts/sync-dev-to-mini.sh` still
+   runs every two hours, but it now carries only what is not in a repo: every
+   repo on either machine is excluded from it, and it deletes on the mini
+   what the Mac dropped (each deleted file kept for a week under
+   `~/.cache/sync-dev-to-mini/backup/`). It asks the backend to rescan
+   afterwards. Peer sync needs, on each machine, a `canopy_peer` key whose
+   public half sits in the other machine's `authorized_keys` behind
+   `restrict,command="<bun> <canopy>/bin/canopy.ts peers gate --root dev"`,
+   and an ssh alias for the other (`mini-peer` on the Mac, `mac-peer` on the
+   mini) using that key. The gate runs from the host checkout, not the
+   container, so the mini's `~/dev/dev-tools/canopy` needs `bun install`
+   after a dependency change. The container mounts the host's
+   `~/.config/git` so a wip snapshot ignores what host git ignores, and
+   `git-lfs` must be installed on the host for any repo that uses it, or its
+   files read as modified. To stop peer sync, set `peerSync` to `"off"` in
+   both configs; nothing else needs undoing.
 3. `claude` and `codex` logged in on the mini so `~/.claude` and `~/.codex`
    exist. The container mounts those logins; it uses your subscriptions, never
    an API key. If a token expires, log in again on the mini and the container
@@ -110,8 +116,12 @@ Reach it from any device on the tailnet at `http://macmini-2018:7850`. The
 first load lists your repos; open a shell, start a Claude chat, read a diff. On
 a phone the desktop openers are simply absent.
 
-To pick up new canopy code, pull the repo on the mini and run the same
-command; the canopy image rebuilds and its container is replaced. Config in
+To pick up new canopy code, commit it on the Mac, wait for the mini's next
+peer pass (five minutes, or "sync now" in any repo's peers section) to
+fast-forward the mini's checkout, then run the same command there; the
+canopy image rebuilds and its container is replaced. The rsync no longer
+carries canopy's checkout, so an uncommitted change on the Mac never reaches
+the mini's build, and a dirty checkout on the mini is not fast-forwarded. Config in
 the `canopy-config` volume survives, and so do the shells: they are held by
 the `shells` container, whose image (the `shells` stage of the Dockerfile,
 everything but canopy's code) does not change when canopy's code does, so
@@ -297,13 +307,12 @@ Claude still work locally.
   a copy of the archive on the mini plus a path map, or a CLI run over ssh on
   the Mac. Until then the overview answers `available: false` and the section
   stays empty.
-- The background fetch of your own remotes. `gh` is in the image, but it is
-  deliberately not git's credential helper: the mini's tree is an rsync
-  mirror of the Mac's, and a fetch here would write refs the next sync
-  overwrites. A GitHub remote over https fetches nothing
-  (`GIT_TERMINAL_PROMPT=0` keeps it quiet). Cards show what the mirror knows:
-  branch, ahead/behind against the refs the Mac last fetched, changes, and
-  the `⇄ n` pull request count, which is a read through `gh` and works.
+- The background fetch of your own remotes over https. `gh` is in the
+  image, but it is deliberately not git's credential helper, so a GitHub
+  remote over https fetches nothing (`GIT_TERMINAL_PROMPT=0` keeps it
+  quiet). Commits reach the mini from the Mac through peer sync instead, and
+  cards show ahead/behind against the refs that came with them, plus the
+  `⇄ n` pull request count, which is a read through `gh` and works.
 - Without a helper, VS Code is the one opener kept, as a
   `vscode-remote://ssh-remote+<host>` link built from `CANOPY_SSH_HOST`, and a
   search hit's file open answers 400. With a helper picked, both go through it.

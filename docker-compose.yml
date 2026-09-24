@@ -93,6 +93,10 @@ services:
       - ${HOST_HOME:-/home/eric}/.codex:/home/bun/.codex
       # keys and config for any repos kept on other hosts (ssh sources)
       - ${HOST_HOME:-/home/eric}/.ssh:/home/bun/.ssh:ro
+      # the host's global git ignore, so a peer wip snapshot leaves out what
+      # git on the host leaves out (.claude/settings.local.json and the like);
+      # the folder must exist on the host first or docker makes it as root
+      - ${HOST_HOME:-/home/eric}/.config/git:/home/bun/.config/git:ro
     command:
       - bun
       - bin/canopy.ts
