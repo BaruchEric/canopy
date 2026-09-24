@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { exec } from "./exec";
 import { NO_PUSH } from "./peers";
-import { fastForward, fetchPeer, initRepo, peerWips, snapshotWip } from "./peersync";
+import { fastForward, fetchPeer, initRepo, isBusy, peerWips, snapshotWip } from "./peersync";
 import type { Peer } from "./types";
 
 let root = "";
@@ -247,6 +247,36 @@ describe("fetch and fast-forward", () => {
     await writeFile(join(mac, ".git", "MERGE_HEAD"), "0000000000000000000000000000000000000000\n");
     expect((await fastForward(mac, ["mini"], false)).moved).toEqual([]);
     await rm(join(mac, ".git", "MERGE_HEAD"));
+  });
+
+  test("a real rebase stopped on a conflict blocks the move, even by compare-and-swap", async () => {
+    const mac = await repo("realrebase-mac");
+    await sh(mac, "checkout", "-q", "-b", "other");
+    await commit(mac, "a.txt", "other-change\n");
+    await sh(mac, "checkout", "-q", "main");
+    const preRebase = await commit(mac, "a.txt", "main-change\n");
+
+    const mini = join(root, "realrebase-mini");
+    await exec(["git", "clone", "-q", mac, mini]);
+    await sh(mini, "config", "user.email", "t@t");
+    await sh(mini, "config", "user.name", "t");
+    await commit(mini, "b.txt", "b\n"); // peer's main strictly ahead of mac's main: ff-eligible
+
+    const toMini: Peer = { name: "mini", alias: null, root, role: "git" };
+    await initRepo(mac, "realrebase-mini", [toMini], false);
+
+    const rebaseResult = await exec(["git", "rebase", "other"], { cwd: mac });
+    expect(rebaseResult.code).not.toBe(0); // stopped on the a.txt conflict
+    expect((await exec(["git", "symbolic-ref", "-q", "--short", "HEAD"], { cwd: mac })).code).not.toBe(0); // detached
+    expect(await isBusy(mac)).toBe(true); // .git/rebase-merge present
+    expect(await sh(mac, "rev-parse", "main")).toBe(preRebase); // the branch ref itself hasn't moved yet
+
+    await fetchPeer(mac, toMini, {});
+    const r = await fastForward(mac, ["mini"], false);
+    expect(r.moved).toEqual([]);
+    expect(await sh(mac, "rev-parse", "main")).toBe(preRebase);
+
+    await exec(["git", "rebase", "--abort"], { cwd: mac });
   });
 
   test("diverged is reported and nothing moves", async () => {

@@ -202,7 +202,12 @@ export async function fastForward(repo: string, peers: string[], dry: boolean) {
     const d = ffTarget(branch, tips, (a, b) => a === b || known.get(`${a}>${b}`) === true);
     out.diverged.push(...d.diverged);
     if (!d.to) continue;
-    if (branch === head && (busy || dirty)) continue;
+    // Busy (a rebase, merge, cherry-pick... anywhere in the repo) blocks
+    // every branch, checked out or not: a detached-HEAD rebase reports no
+    // current branch at all, so the branch it is rewriting would otherwise
+    // slip through the checked-out-only guard below. Dirty only ever
+    // threatens the branch actually checked out.
+    if (busy || (branch === head && dirty)) continue;
     if (dry) { out.would!.push({ branch, to: d.to.hash, peer: d.to.peer }); continue; }
     const r = branch === head
       ? await git(repo, ["merge", "--ff-only", "--quiet", d.to.hash])
