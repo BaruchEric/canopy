@@ -11,6 +11,7 @@ import {
   fastForward,
   fetchPeer,
   gateCommand,
+  gitSshCommand,
   initRepo,
   isBusy,
   isDirty,
@@ -1159,5 +1160,48 @@ describe("syncAll", () => {
     // Joined with "; " per the ruling, not concatenated or left to overwrite:
     // both peers' messages must survive as two "; "-separated segments.
     expect(st.error?.split("; ").map((s) => s.slice(0, 2))).toEqual(["a:", "b:"]);
+  });
+
+  test("two calls at once share one run", async () => {
+    const wsMac = join(root, "synclock-wsmac");
+    const wsMini = join(root, "synclock-wsmini");
+    await mkdir(wsMac, { recursive: true });
+    const mac = join(wsMac, "proj");
+    await exec(["git", "init", "-q", "-b", "main", mac]);
+    await sh(mac, "config", "user.email", "t@t");
+    await sh(mac, "config", "user.name", "t");
+    await commit(mac, "a.txt", "one\n");
+    await mkdir(wsMini, { recursive: true });
+    const mini = join(wsMini, "proj");
+    await exec(["git", "clone", "-q", mac, mini]);
+    await sh(mini, "config", "user.email", "t@t");
+    await sh(mini, "config", "user.name", "t");
+    const peers: Peer[] = [{ name: "mini", alias: null, root: wsMini, role: "git" }];
+    await initRepo(mac, "proj", peers, false);
+    const opts = { self: "mac", peers, seed: [], dry: false, root: wsMac };
+    const [a, b] = [syncAll(["proj"], opts, 1), syncAll(["proj"], opts, 1)];
+    expect(a).toBe(b);
+    await a;
+  });
+});
+
+describe("gitSshCommand", () => {
+  test("quotes a ControlPath holding a space and a dollar sign as one shell word, keeping %C literal for ssh to expand", async () => {
+    const cmd = gitSshCommand("/tmp/weird dir/$HOME");
+    // Stand in for ssh with something that just echoes each word it was
+    // handed, one per line, so a real /bin/sh's own word-splitting (not our
+    // guess at it) is what proves the ControlPath survived as one argument
+    // and "$HOME" was never expanded.
+    const probe = cmd.replace(/^ssh /, "printf '%s\\n' ");
+    const r = await exec(["sh", "-c", probe]);
+    if (r.code !== 0) throw new Error(r.stderr);
+    const words = r.stdout.split("\n").filter(Boolean);
+    expect(words).toEqual([
+      "-o", "BatchMode=yes",
+      "-o", "ConnectTimeout=10",
+      "-o", "ControlMaster=auto",
+      "-o", "ControlPath=/tmp/weird dir/$HOME/ssh-%C",
+      "-o", "ControlPersist=120",
+    ]);
   });
 });

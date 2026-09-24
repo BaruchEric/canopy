@@ -6,6 +6,7 @@ import { randomBytes } from "node:crypto";
 import { tmpdir } from "node:os";
 import { dirname, isAbsolute, join, normalize, relative, resolve, sep } from "node:path";
 import { git, onHost } from "./exec";
+import { shellQuote } from "./host";
 import { BUSY_MARKERS, ffTarget, isPeerName, isSafeRel, NO_PUSH, parseQuotedWords, parseRefLines, parseWipLines, peerMissing, peerRefspecs, peerUnreachable, peerUrl, repoWanted, seedWanted } from "./peers";
 import { configDir } from "./store";
 import type { Peer, PeerSeen, PeerState, PeerWip } from "./types";
@@ -129,9 +130,13 @@ export async function snapshotWip(
   return { branch, at, wrote: true };
 }
 
-/** ssh for git's own fetches, sharing canopy's per-host connection. */
+/** ssh for git's own fetches, sharing canopy's per-host connection. git runs
+ *  GIT_SSH_COMMAND through a shell, so the ControlPath is quoted as one word:
+ *  unquoted, a controlDir with a space or a shell metacharacter would split
+ *  or expand into something else. Single quotes also keep "%C" literal text
+ *  for ssh itself to expand, since nothing inside them is shell-expanded. */
 export const gitSshCommand = (controlDir: string): string =>
-  `ssh -o BatchMode=yes -o ConnectTimeout=10 -o ControlMaster=auto -o ControlPath=${join(controlDir, "ssh-%C")} -o ControlPersist=120`;
+  `ssh -o BatchMode=yes -o ConnectTimeout=10 -o ControlMaster=auto -o ${shellQuote(`ControlPath=${join(controlDir, "ssh-%C")}`)} -o ControlPersist=120`;
 
 /** Adds or repairs each git peer's remote. Safe to repeat. */
 export async function initRepo(repo: string, id: string, peers: Peer[], dry: boolean): Promise<void> {
@@ -825,12 +830,37 @@ async function passOne(id: string, opts: PassOptions, seen: PassSeen): Promise<P
     Object.assign(state, await fastForward(repo, names, opts.dry));
     state.wip = await peerWips(repo, names);
   } catch (err) {
-    state.error = String(err instanceof Error ? err.message : err);
+    // Appended, not overwritten: a fetch error already recorded above (from
+    // a peer that answered but failed) is still worth keeping alongside
+    // whatever broke afterward (fastForward, peerWips).
+    const msg = String(err instanceof Error ? err.message : err);
+    state.error = state.error ? `${state.error}; ${msg}` : msg;
   }
   return state;
 }
 
-export async function syncAll(ids: string[], opts: PassOptions, concurrency: number) {
+export interface SyncAllResult {
+  states: Map<string, PeerState>;
+  seen: PeerSeen[];
+  cloned: string[];
+  failed: { id: string; error: string }[];
+}
+
+const runningAll = new Map<string, Promise<SyncAllResult>>();
+
+/** A whole-pass lock keyed by the workspace root: a second call while one is
+ *  running returns the running promise instead of starting a second
+ *  cloneMissing over the same root (which could clone the same repo twice). */
+export function syncAll(ids: string[], opts: PassOptions, concurrency: number): Promise<SyncAllResult> {
+  const key = opts.root;
+  const busy = runningAll.get(key);
+  if (busy) return busy;
+  const run = syncAllOnce(ids, opts, concurrency).finally(() => runningAll.delete(key));
+  runningAll.set(key, run);
+  return run;
+}
+
+async function syncAllOnce(ids: string[], opts: PassOptions, concurrency: number): Promise<SyncAllResult> {
   const seen = new PassSeen();
   const { cloned, failed } = await cloneMissing(opts.root, opts.peers, opts.seed, opts.dry, { GIT_SSH_COMMAND: gitSshCommand(configDir()) });
   const states = new Map<string, PeerState>();
