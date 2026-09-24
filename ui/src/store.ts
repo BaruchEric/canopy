@@ -677,6 +677,22 @@ function applyPeerRepo(get: () => CanopyState, result: Repo & { take?: { how: st
   get().applyEvent({ type: "repo", repo });
 }
 
+/** Which /api/peers read is the newest: two quick peers events can bring
+ *  their answers back in either order, and only the last one asked lands. */
+let peersRead = 0;
+
+/** Reads the peer mode and who was seen off the server into the store. The
+ *  mode lives in the config, so this is how the page follows a change to it. */
+function readPeers(set: (p: Pick<CanopyState, "peerSeen" | "peerSync">) => void): void {
+  const mine = ++peersRead;
+  void api
+    .peers()
+    .then((p) => {
+      if (mine === peersRead) set({ peerSeen: p.seen, peerSync: p.sync });
+    })
+    .catch(() => {});
+}
+
 export const useStore = create<CanopyState>((set, get) => ({
   root: "",
   sources: [],
@@ -823,10 +839,7 @@ export const useStore = create<CanopyState>((set, get) => ({
     void get().loadHistory();
     // Likewise peers: a backend with peer sync off just answers "off" and
     // an empty seen list, so this never blocks a grove with none set up.
-    void api
-      .peers()
-      .then((p) => set({ peerSeen: p.seen, peerSync: p.sync }))
-      .catch(() => {});
+    readPeers(set);
     const refresh = setInterval(() => void get().loadHistory(), HISTORY_REFRESH);
     // Handed back so the caller can close the stream — StrictMode mounts
     // effects twice, and an unclosed EventSource leaks a live connection.
@@ -1038,6 +1051,7 @@ export const useStore = create<CanopyState>((set, get) => ({
       set({ kept: ev.kept });
     } else if (ev.type === "peers") {
       set({ peerSeen: ev.seen });
+      readPeers(set);
     } else if (ev.type === "terms") {
       // a shell opened on another device shows up here too; a dockless
       // window (solo, shell) keeps no tabs of its own

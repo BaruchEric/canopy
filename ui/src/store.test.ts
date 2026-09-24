@@ -11,7 +11,7 @@ import {
   unfoldIn,
   useStore,
 } from "./store";
-import type { KeptShell, Repo, TermInfo } from "../../src/core/types";
+import type { KeptShell, PeerSeen, Repo, TermInfo } from "../../src/core/types";
 
 describe("closedSectionsOf", () => {
   test("a layout from before the launch and peers sections folds them", () => {
@@ -118,5 +118,42 @@ describe("shells this window ends or restores", () => {
     expect(after?.exit).toBeUndefined();
     expect(after?.gen).toBe(1);
     expect(useStore.getState().kept).toEqual([]);
+  });
+});
+
+describe("a peers event re-reads the mode", () => {
+  const realFetch = globalThis.fetch;
+  afterEach(() => {
+    globalThis.fetch = realFetch;
+  });
+  const seen = (at: number): PeerSeen[] => [{ name: "mini", ok: true, at }];
+  const settle = () => new Promise((r) => setTimeout(r, 10));
+
+  test("the mode follows the config, and the event's seen list lands at once", async () => {
+    globalThis.fetch = (async () =>
+      new Response(JSON.stringify({ self: "mac", peers: [], seen: seen(2), sync: "on" }), { status: 200 })) as unknown as typeof fetch;
+    useStore.setState({ peerSync: "off", peerSeen: [] });
+    useStore.getState().applyEvent({ type: "peers", seen: seen(1) });
+    expect(useStore.getState().peerSeen).toEqual(seen(1));
+    await settle();
+    expect(useStore.getState().peerSync).toBe("on");
+    expect(useStore.getState().peerSeen).toEqual(seen(2));
+  });
+
+  test("an answer that comes back late never overwrites a newer one", async () => {
+    const answers: Array<(sync: string, at: number) => void> = [];
+    globalThis.fetch = (() =>
+      new Promise<Response>((resolve) => {
+        answers.push((sync, at) => resolve(new Response(JSON.stringify({ self: "mac", peers: [], seen: seen(at), sync }), { status: 200 })));
+      })) as unknown as typeof fetch;
+    useStore.setState({ peerSync: "off", peerSeen: [] });
+    useStore.getState().applyEvent({ type: "peers", seen: seen(1) });
+    useStore.getState().applyEvent({ type: "peers", seen: seen(2) });
+    answers[1]?.("dry", 2);
+    await settle();
+    answers[0]?.("on", 1);
+    await settle();
+    expect(useStore.getState().peerSync).toBe("dry");
+    expect(useStore.getState().peerSeen).toEqual(seen(2));
   });
 });
