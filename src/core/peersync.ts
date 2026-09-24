@@ -1,9 +1,9 @@
 /** Peer sync, the Bun half: snapshots, fetches, fast-forwards, clones and
  *  seeds, every git call through `git()`. The decisions are in peers.ts. */
 import { copyFile, lstat, mkdir, mkdtemp, readdir, readFile, rm } from "node:fs/promises";
-import { existsSync, realpathSync, statSync } from "node:fs";
+import { existsSync, readFileSync, realpathSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { isAbsolute, join, normalize, relative, resolve, sep } from "node:path";
+import { dirname, isAbsolute, join, normalize, relative, resolve, sep } from "node:path";
 import { git } from "./exec";
 import { BUSY_MARKERS, ffTarget, NO_PUSH, parseQuotedWords, parseRefLines, parseWipLines, peerMissing, peerRefspecs, peerUnreachable, peerUrl, seedWanted } from "./peers";
 import type { Peer, PeerState, PeerWip } from "./types";
@@ -252,8 +252,68 @@ const escapes = (from: string, to: string): boolean => {
   return rel === ".." || rel.startsWith(`..${sep}`) || isAbsolute(rel);
 };
 
+/** The target of a gitfile (a regular file holding `gitdir: <path>`, the
+ *  form a worktree checkout or a submodule leaves in place of a real `.git`
+ *  directory), resolved against the file's own folder. Null when the file
+ *  can't be read or doesn't look like a gitfile. */
+function gitfileTarget(file: string): string | null {
+  let content: string;
+  try { content = readFileSync(file, "utf8"); } catch { return null; }
+  const firstLine = (content.split(/\r?\n/, 1)[0] ?? "").trim();
+  const m = /^gitdir:\s*(.+)$/.exec(firstLine);
+  const raw = m?.[1]?.trim();
+  if (!raw) return null;
+  return isAbsolute(raw) ? raw : resolve(dirname(file), raw);
+}
+
+/** Whether `gitDir`'s own `commondir` file (present on a linked worktree's
+ *  gitdir, pointing back at the main repo's real one) resolves outside
+ *  `realRoot`. No commondir file is not an escape; an unreadable or
+ *  unresolvable one is. */
+function commondirEscapes(gitDir: string, realRoot: string): boolean {
+  const commonFile = join(gitDir, "commondir");
+  if (!existsSync(commonFile)) return false;
+  let content: string;
+  try { content = readFileSync(commonFile, "utf8"); } catch { return true; }
+  const rel = content.trim();
+  if (!rel) return true;
+  const target = isAbsolute(rel) ? rel : resolve(gitDir, rel);
+  let real: string;
+  try { real = realpathSync(target); } catch { return true; }
+  return escapes(realRoot, real);
+}
+
+/** Whether a candidate repo directory (already known to be under
+ *  `realRoot` itself) reaches outside it once gitfiles and commondirs are
+ *  followed: `dir` may itself be a gitdir with a commondir, and `dir/.git`
+ *  may be a gitfile pointing anywhere, whose own gitdir may in turn have a
+ *  commondir. A worktree checkout or a checked-out submodule under the
+ *  root is exactly this shape and must still be accepted, so this follows
+ *  rather than refusing gitfiles outright; anything missing or unreadable
+ *  along the way refuses instead of guessing. */
+function candidateEscapes(dir: string, realRoot: string): boolean {
+  if (commondirEscapes(dir, realRoot)) return true;
+  const gitEntry = join(dir, ".git");
+  let st;
+  try { st = statSync(gitEntry); } catch { return false; } // no .git entry here: nothing further to follow
+  if (st.isFile()) {
+    const target = gitfileTarget(gitEntry);
+    if (target === null) return true; // unreadable or malformed: refuse
+    let realTarget: string;
+    try { realTarget = realpathSync(target); } catch { return true; } // missing target: refuse
+    return escapes(realRoot, realTarget) || commondirEscapes(realTarget, realRoot);
+  }
+  if (st.isDirectory()) {
+    let realGitEntry: string;
+    try { realGitEntry = realpathSync(gitEntry); } catch { return true; }
+    return escapes(realRoot, realGitEntry) || commondirEscapes(realGitEntry, realRoot);
+  }
+  return false;
+}
+
 /** Absolute repo dir for an id, or null when the id leaves the root, is not
- *  a repo there, or reaches outside the root through a symlink. */
+ *  a repo there, or reaches outside the root through a symlink, a gitfile,
+ *  or a commondir. */
 export function safeId(root: string, id: string): string | null {
   if (id === "" || id.startsWith("/") || id.split("/").some((s) => s === ".." || s === "." || s === "")) return null;
   const dir = resolve(root, id);
@@ -268,6 +328,7 @@ export function safeId(root: string, id: string): string | null {
     return null; // gone between the existsSync check and here: not a repo
   }
   if (escapes(realRoot, realDir)) return null;
+  if (candidateEscapes(realDir, realRoot)) return null;
   return dir;
 }
 
@@ -328,9 +389,11 @@ const ENTER_REPO_SUFFIXES = ["/.git", "", ".git/.git", ".git"];
 /** What the forced command may run. `root` is the absolute workspace root.
  *  git-upload-pack under the root is checked lexically first, then every
  *  path enter_repo's suffix probing could resolve it to is checked by real
- *  path too, so a symlink anywhere in that probe cannot serve something
- *  outside the root. A resolved path with no existing candidate at all is
- *  left to the lexical check alone: upload-pack itself will fail on it. */
+ *  path too, and by candidateEscapes for a gitfile or commondir it leads to,
+ *  so nothing under the root can hand a symlink, a worktree's gitfile or a
+ *  commondir off to something outside it. A resolved path with no existing
+ *  candidate at all is left to the lexical check alone: upload-pack itself
+ *  will fail on it. */
 export function gateCommand(line: string, root: string, home: string): GateCommand | { error: string } {
   const w = parseQuotedWords(line);
   if (!w || w.length === 0) return { error: "refused" };
@@ -350,7 +413,7 @@ export function gateCommand(line: string, root: string, home: string): GateComma
       }
       let realCandidate: string;
       try { realCandidate = realpathSync(candidate); } catch { continue; } // gone between the stat and here
-      if (escapes(realRoot, realCandidate)) return { error: "outside the workspace" };
+      if (escapes(realRoot, realCandidate) || candidateEscapes(realCandidate, realRoot)) return { error: "outside the workspace" };
     }
     return { kind: "upload-pack", path };
   }

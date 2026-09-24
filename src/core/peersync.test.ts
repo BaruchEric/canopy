@@ -424,6 +424,49 @@ describe("gateCommand", () => {
     await exec(["git", "init", "-q", "-b", "main", a]);
     expect(gateCommand(`git-upload-pack '${a}'`, ws, home)).toEqual({ kind: "upload-pack", path: a });
   });
+  test("a directory under the root whose .git is a gitfile pointing outside it is refused", async () => {
+    const ws = join(root, "gate-gitfile-ws");
+    const outsideGitDir = join(root, "gate-gitfile-outside", ".git");
+    await mkdir(outsideGitDir, { recursive: true });
+    const x = join(ws, "x");
+    await mkdir(x, { recursive: true });
+    await writeFile(join(x, ".git"), `gitdir: ${outsideGitDir}\n`);
+    expect(gateCommand(`git-upload-pack '${x}'`, ws, home)).toHaveProperty("error");
+  });
+  test("a directory under the root whose gitfile points at a repo inside it is accepted", async () => {
+    const ws = join(root, "gate-gitfile-ws2");
+    const realGitDir = join(ws, "real", ".git");
+    await mkdir(realGitDir, { recursive: true });
+    const x = join(ws, "x");
+    await mkdir(x, { recursive: true });
+    await writeFile(join(x, ".git"), `gitdir: ${realGitDir}\n`);
+    expect(gateCommand(`git-upload-pack '${x}'`, ws, home)).toEqual({ kind: "upload-pack", path: x });
+  });
+  test("a gitdir under the root whose commondir points outside it is refused", async () => {
+    const ws = join(root, "gate-commondir-ws");
+    const wtGitDir = join(ws, "main", ".git", "worktrees", "wt");
+    await mkdir(wtGitDir, { recursive: true });
+    const outside = join(root, "gate-commondir-outside");
+    await mkdir(outside, { recursive: true });
+    await writeFile(join(wtGitDir, "commondir"), `${outside}\n`);
+    const checkout = join(ws, "checkout");
+    await mkdir(checkout, { recursive: true });
+    await writeFile(join(checkout, ".git"), `gitdir: ${wtGitDir}\n`);
+    expect(gateCommand(`git-upload-pack '${checkout}'`, ws, home)).toHaveProperty("error");
+  });
+  test("a real git worktree add under the root is accepted", async () => {
+    const ws = join(root, "gate-worktree-ws");
+    await mkdir(ws, { recursive: true });
+    const main = join(ws, "main");
+    await exec(["git", "init", "-q", "-b", "main", main]);
+    await sh(main, "config", "user.email", "t@t");
+    await sh(main, "config", "user.name", "t");
+    await commit(main, "a.txt", "one\n");
+    const wt = join(ws, "wt");
+    const wr = await exec(["git", "worktree", "add", "-q", "-b", "feat", wt], { cwd: main });
+    if (wr.code !== 0) throw new Error(wr.stderr);
+    expect(gateCommand(`git-upload-pack '${wt}'`, ws, home)).toEqual({ kind: "upload-pack", path: wt });
+  });
 });
 
 describe("serve", () => {
@@ -464,5 +507,15 @@ describe("serve", () => {
     await symlink(outside, join(ws, "link"));
     expect(safeId(ws, "link")).toBeNull();
     await expect(serveSeeds(ws, "link", [".env"])).rejects.toThrow();
+  });
+  test("a repo id whose .git is a gitfile pointing outside the root is refused by safeId", async () => {
+    const ws = join(root, "safeid-gitfile-ws");
+    const outsideGitDir = join(root, "safeid-gitfile-outside", ".git");
+    await mkdir(outsideGitDir, { recursive: true });
+    const x = join(ws, "x");
+    await mkdir(x, { recursive: true });
+    await writeFile(join(x, ".git"), `gitdir: ${outsideGitDir}\n`);
+    expect(safeId(ws, "x")).toBeNull();
+    await expect(serveSeeds(ws, "x", [".env"])).rejects.toThrow();
   });
 });
