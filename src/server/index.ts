@@ -366,7 +366,13 @@ function openVia(state: ServerState, here: boolean, helper: unknown): OpenVia {
     throw new HttpError(400, `the helper ${helper} is not attached; ${NO_HELPER}`);
   }
   if (here && hostOpeners()) return { via: "backend" };
-  throw new HttpError(400, hostOpeners() ? NO_HELPER : `${NO_DESKTOP}; ${NO_HELPER}`);
+  // Attached helpers are not picked for a browser automatically when the
+  // proxy hides its address, so name them: the fix is one pick in settings.
+  const names = [...state.helpers.keys()];
+  const missing = names.length > 0
+    ? `this browser has not picked a helper; pick ${names.join(" or ")} under desktop openers in settings`
+    : NO_HELPER;
+  throw new HttpError(400, hostOpeners() ? missing : `${NO_DESKTOP}; ${missing}`);
 }
 
 function helperPath(path: string): string {

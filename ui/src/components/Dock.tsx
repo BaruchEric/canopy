@@ -14,7 +14,8 @@ import {
   type FileView,
 } from "../files";
 import { peerable } from "../peers";
-import { DOCK, PANEL, activeFlowFor, closedIn, flowFor, runFor, useStore } from "../store";
+import { useShallow } from "zustand/react/shallow";
+import { DOCK, PANEL, activeFlowFor, capsFor, closedIn, flowFor, runFor, useStore } from "../store";
 import { ago, GLYPH, stateOf } from "../util";
 import { ClaudeSection } from "./Claude";
 import { LaunchSection } from "./Launch";
@@ -645,6 +646,11 @@ export function RepoPanel({
   const repoActiveFlow = useStore((s) => activeFlowFor(s, id));
   const unpin = useStore((s) => s.closePanel);
   const openApp = useStore((s) => s.openApp);
+  // Only the openers this browser can reach, as in RepoMenu: a headless
+  // backend with no helper picked has none, and VS Code falls back to the
+  // Remote-SSH link.
+  const backend = useStore((s) => s.backend);
+  const openers = useStore(useShallow(capsFor)).openers;
   const changesClosed = useStore((s) => closedIn(s, id, "changes"));
   const toggleSection = useStore((s) => s.toggleSection);
   const closePanel = onClose ? (_id: string) => onClose() : unpin;
@@ -819,7 +825,7 @@ export function RepoPanel({
       )}
 
       <div className="panel-actions">
-        {OPENER_IDS.map((app) => (
+        {OPENER_IDS.filter((app) => openers.includes(app)).map((app) => (
           <button
             key={app}
             type="button"
@@ -840,6 +846,15 @@ export function RepoPanel({
             {app}
           </button>
         ))}
+        {!openers.includes("code") && !repo.host && !repo.forge && backend.sshHost && (
+          <a
+            className="mini"
+            href={`vscode-remote://ssh-remote+${backend.sshHost}${repo.path}`}
+            title="Open this repo in VS Code over Remote-SSH on your own machine"
+          >
+            code ↗
+          </a>
+        )}
         <span className="spacer" />
         <button
           type="button"
