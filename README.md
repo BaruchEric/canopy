@@ -190,6 +190,45 @@ The panel's **claude** section shows the all-time session count and API-equivale
 
 canopy finds the CLI at `historyBin` in its config, else `claude-history` on PATH, else `~/dev/dev-tools/claude-history/bin/claude-history`. Without it the rings stay off and the section says why. The overview (every repo's totals and days) is two CLI calls, cached for five minutes and rebuilt after a rescan; the archive itself is refreshed by claude-history's own hourly sync, so a session shows up here within the hour after it ends. Dollar figures are list-price API equivalents of the tokens, as claude-history counts them, not a bill.
 
+## Peers
+
+Peers keeps a full clone of every repo under the launch root in sync across your machines over ssh, pull-only: each one fetches every other peer's branches and its uncommitted work as a WIP snapshot, fast-forwards what it safely can, and leaves a real divergence or a branch that only exists on a peer for you to look at. Nothing ever writes into another machine's working tree — a peer's ssh key runs only `git-upload-pack` and three read-only queries behind a forced command, never a shell. It replaces a one-way rsync mirror with the model coworkers use: every machine keeps its own clone and resolves its own conflicts, and work moves between clones only through git.
+
+In canopy's config (`~/.config/canopy/config.json`, or `$CANOPY_CONFIG_DIR/config.json`):
+
+```json
+{
+  "self": "mac",
+  "peers": [
+    { "name": "mini", "alias": "macmini-ts", "root": "dev", "role": "git" },
+    { "name": "gpd", "alias": "gpd", "root": "dev", "role": "git", "repos": ["dev-tools/*", "web-apps/keel"] },
+    { "name": "qnap", "alias": "nas", "root": "/share/Arik/dev-mirror", "role": "mirror" }
+  ],
+  "peerSync": "dry",
+  "seed": [".env", ".env.local", ".env.*.local"]
+}
+```
+
+`self` is this machine's own name; `peers` is who it pulls from, each an ssh_config `alias` (never `user@host`) and a workspace `root` (home-relative unless absolute). `role: "git"` is a full coworker; `role: "mirror"` only ever receives the rsync mirror and is never pulled from. `repos` is an optional list of globs over repo ids — a peer with it clones and fetches only matching repos. `peerSync` is `off`, `dry` (compute and report everything, write nothing but the fetched refs) or `on`. `seed` is the allowlist of ignored files (`.env` and the like) copied once from a peer when a repo lacks them, never overwritten.
+
+```bash
+canopy peers status                       this machine's name, sync mode, and its peers
+canopy peers init                         set up each peer's git remote in every repo
+canopy peers sync [id]                    fetch every peer once, fast-forward, list WIP
+canopy peers take <id> <peer> [branch]    land a peer's WIP here
+canopy peers track <id> <peer> <branch>   a local branch at a peer's tip
+canopy peers seed <id>                    copy allowlisted ignored files from a peer
+canopy peers gate --root dir              what a peer key's authorized_keys entry runs
+```
+
+A peer reaches this machine through a dedicated ssh key whose `authorized_keys` entry forces the gate and nothing else:
+
+```
+restrict,command="<path to bun> <path to canopy>/bin/canopy.ts peers gate --root dev" ssh-ed25519 AAAA... canopy-peer@<machine>
+```
+
+`sshd` must not `AcceptEnv` `GIT_*` or `BUN_*` for that key — the default config accepts only `LANG` and `LC_*` — since either one reaching the gate's environment could run code before it does anything.
+
 ## State
 
 - Config + workspaces: `~/.config/canopy/config.json` (override dir with `$CANOPY_CONFIG_DIR`). `historyBin` there points at the claude-history CLI when it is not on PATH; `fetch: false` turns the background fetch of your own repos off.
