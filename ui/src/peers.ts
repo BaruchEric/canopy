@@ -4,8 +4,16 @@
  *  every timestamp here (PeerState.at, PeerWip.at, PeerSeen.at) rides in as
  *  milliseconds and is turned to ago()'s seconds at the call site. */
 
-import type { PeerBranch, PeerSeen, PeerState } from "../../src/core/types";
+import { LAUNCH_SOURCE, type PeerBranch, type PeerSeen, type PeerState, type Repo } from "../../src/core/types";
 import { ago } from "./util";
+
+/** Whether peer sync covers this repo at all: a local checkout under the
+ *  launch root, not remote, not on a forge, and readable. Matches the
+ *  server's own `peerable` in src/server/index.ts — a repo either side
+ *  rejects never has anything worth showing here. */
+export function peerable(repo: Repo): boolean {
+  return repo.source === LAUNCH_SOURCE && !repo.host && !repo.forge && !repo.error;
+}
 
 export interface PeerChip {
   kind: "diverged" | "wip" | "only";

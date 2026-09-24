@@ -666,6 +666,16 @@ function flowRunsOf(flows: Flow[]): Record<string, string> {
   return flowRuns;
 }
 
+/** A peer action answers the repo, with a `take` field only "take" fills
+ *  in; that field is not part of Repo and does not belong in state. Routed
+ *  through applyEvent the way rescan/addSource/removeSource apply a fresh
+ *  scan, so this window's own action reaches the feed and the update pulse
+ *  too, and the SSE broadcast that follows finds nothing new to say. */
+function applyPeerRepo(get: () => CanopyState, result: Repo & { take?: { how: string; branch?: string } }): void {
+  const { take: _take, ...repo } = result;
+  get().applyEvent({ type: "repo", repo });
+}
+
 export const useStore = create<CanopyState>((set, get) => ({
   root: "",
   sources: [],
@@ -1239,20 +1249,16 @@ export const useStore = create<CanopyState>((set, get) => ({
     });
   },
   takeWip: async (repoId, peer, branch) => {
-    const repo = await api.peerAction(repoId, { action: "take", peer, branch });
-    set((s) => ({ repos: s.repos.map((r) => (r.id === repoId ? repo : r)) }));
+    applyPeerRepo(get, await api.peerAction(repoId, { action: "take", peer, branch }));
   },
   trackBranch: async (repoId, peer, branch) => {
-    const repo = await api.peerAction(repoId, { action: "track", peer, branch });
-    set((s) => ({ repos: s.repos.map((r) => (r.id === repoId ? repo : r)) }));
+    applyPeerRepo(get, await api.peerAction(repoId, { action: "track", peer, branch }));
   },
   seedRepo: async (repoId) => {
-    const repo = await api.peerAction(repoId, { action: "seed" });
-    set((s) => ({ repos: s.repos.map((r) => (r.id === repoId ? repo : r)) }));
+    applyPeerRepo(get, await api.peerAction(repoId, { action: "seed" }));
   },
   syncPeers: async (repoId) => {
-    const repo = await api.peerAction(repoId, { action: "sync" });
-    set((s) => ({ repos: s.repos.map((r) => (r.id === repoId ? repo : r)) }));
+    applyPeerRepo(get, await api.peerAction(repoId, { action: "sync" }));
   },
   showRun: (runId) => set({ sheet: { kind: "run", runId } }),
   closeSheet: () => set({ sheet: null }),

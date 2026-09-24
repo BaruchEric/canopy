@@ -44,7 +44,9 @@ export function PeerChips({ st }: { st: PeerState | undefined }) {
   return (
     <>
       {chips.map((c) => (
-        <span key={c.text} className={`peer peer-${c.kind}`} title={c.title}>
+        // title, not text: two branches diverged from the same peer by the
+        // same counts, or two WIPs from one peer the same age, share text.
+        <span key={`${c.kind}:${c.title}`} className={`peer peer-${c.kind}`} title={c.title}>
           {c.text}
         </span>
       ))}

@@ -1,6 +1,16 @@
 import { afterEach, beforeEach, describe, expect, setSystemTime, test } from "bun:test";
-import type { PeerState } from "../../src/core/types";
-import { peerChips, peerLines, seenWord } from "./peers";
+import { LAUNCH_SOURCE, type PeerState, type Repo } from "../../src/core/types";
+import { peerable, peerChips, peerLines, seenWord } from "./peers";
+
+const repo = (over: Partial<Repo> = {}): Repo => ({
+  id: "app",
+  name: "app",
+  path: "/root/app",
+  group: "app",
+  source: LAUNCH_SOURCE,
+  status: null,
+  ...over,
+});
 
 // ago() reads Date.now() itself, so every "ago" word here needs the system
 // clock pinned to the same instant the fixtures' "at" fields are measured
@@ -10,6 +20,18 @@ const base: PeerState = { moved: [], diverged: [], wip: [], peerOnly: [], onlyHe
 
 beforeEach(() => setSystemTime(now));
 afterEach(() => setSystemTime());
+
+describe("peerable", () => {
+  test("a local checkout under the launch root, readable and not on a forge", () => {
+    expect(peerable(repo())).toBe(true);
+  });
+  test("everything else stays out", () => {
+    expect(peerable(repo({ source: "extra" }))).toBe(false);
+    expect(peerable(repo({ host: "gpd" }))).toBe(false);
+    expect(peerable(repo({ forge: { kind: "forgejo", slug: "a/b", clone: "x", branch: "main", updated: 0, private: false, empty: false } }))).toBe(false);
+    expect(peerable(repo({ error: "not a repo" }))).toBe(false);
+  });
+});
 
 describe("peerChips", () => {
   test("nothing to say, no chips", () => {

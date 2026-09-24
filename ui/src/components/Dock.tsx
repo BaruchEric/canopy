@@ -13,6 +13,7 @@ import {
   type FileCol,
   type FileView,
 } from "../files";
+import { peerable } from "../peers";
 import { DOCK, PANEL, activeFlowFor, closedIn, flowFor, runFor, useStore } from "../store";
 import { ago, GLYPH, stateOf } from "../util";
 import { ClaudeSection } from "./Claude";
@@ -421,7 +422,7 @@ function PeersSection({ repo }: { repo: Repo }) {
   // One WIP's commit drill open at a time, by hash, the way History does.
   const [drilled, setDrilled] = useState<string | null>(null);
 
-  if (peerSync === "off") return null;
+  if (peerSync === "off" || !peerable(repo)) return null;
 
   const st = repo.peers;
   const wip = st?.wip ?? [];
@@ -451,7 +452,9 @@ function PeersSection({ repo }: { repo: Repo }) {
       {!closed && (
         <div className="peers-body">
           {error && <p className="panel-error">{error}</p>}
-          {count === 0 ? (
+          {st === undefined ? (
+            <p className="panel-clean">Not synced yet.</p>
+          ) : count === 0 ? (
             <p className="panel-clean">In step with every peer.</p>
           ) : (
             <>
@@ -502,14 +505,17 @@ function PeersSection({ repo }: { repo: Repo }) {
                   <button
                     type="button"
                     className="mini"
+                    disabled={busy !== null}
                     onClick={() =>
-                      void openChat(
-                        repo.id,
-                        `Merge ${d.peer}/${d.branch} into ${d.branch}. It diverged: resolve conflicts, run the tests, and commit the merge. Do not push.`,
+                      run(`merge:${d.peer}:${d.branch}`, () =>
+                        openChat(
+                          repo.id,
+                          `Merge ${d.peer}/${d.branch} into ${d.branch}. It diverged: resolve conflicts, run the tests, and commit the merge. Do not push.`,
+                        ),
                       )
                     }
                   >
-                    merge with claude
+                    {busy === `merge:${d.peer}:${d.branch}` ? "starting…" : "merge with claude"}
                   </button>
                 </div>
               ))}
