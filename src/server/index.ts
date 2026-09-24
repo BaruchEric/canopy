@@ -38,7 +38,7 @@ import { apiBase, ForgeAuthError, linkForgeClones, listForgeRepos } from "../cor
 import { isSshHost, parseLocator, parseSshHosts, shellQuote, tildeQuote } from "../core/host";
 import { hasGatewayKey, jev } from "../core/jev";
 import { normalizeAgent } from "../core/agent";
-import { linkPeers, NO_PUSH } from "../core/peers";
+import { linkPeers, NO_PUSH, peerUrl } from "../core/peers";
 import { initRepo, PassSeen, seedRepo, syncAll, syncRepo, takeWip, trackBranch } from "../core/peersync";
 import { normalizeLaunch } from "../core/launch";
 import { Launcher, LauncherError } from "../core/launcher";
@@ -84,6 +84,7 @@ import {
   type HistoryOverview,
   type HistoryWindow,
   type KeptShell,
+  type Peer,
   type PeerBranch,
   type PeerSeen,
   type PeerState,
@@ -1074,32 +1075,44 @@ const FETCH_CONCURRENCY = 4;
 /** A repo's own remotes, remembered by path. `learned` says this was the
  *  first look, so the caller can re-read a status taken before it. The
  *  GitHub lookups behind it are memoized in `access`. */
-/** Whether `name` on this repo is a true peer remote: canopy set it up (its
- *  pushurl is the no-push marker). A same-named remote without that marker
- *  is the user's own; initRepo leaves it alone, and this keeps it in `own`
- *  too, since it is exactly the kind of remote the origin fetch is for. */
-async function isPeerRemote(repoPath: string, name: string): Promise<boolean> {
-  const r = await exec(["git", "-C", repoPath, "config", "--get", `remote.${name}.pushurl`]);
-  return r.code === 0 && r.stdout.trim() === NO_PUSH;
+/** Whether `peer`'s remote on this repo is canopy's own: either the
+ *  no-push marker is set, or the url is exactly what canopy would have
+ *  written (peerUrl(peer, id)). The url check is what lets a half-made
+ *  remote a crash left between `remote add` and the marker (url set,
+ *  nothing else yet) be recognized as canopy's own and repaired rather
+ *  than mistaken for a stranger's forever. A same-named remote matching
+ *  neither is the user's own; initRepo leaves it alone, and this keeps it
+ *  in `own` too, since it is exactly the kind of remote the origin fetch
+ *  is for. Exported for a direct unit test of the url-match repair case. */
+export async function isPeerRemote(repoPath: string, repoId: string, peer: Peer): Promise<boolean> {
+  const url = await exec(["git", "-C", repoPath, "remote", "get-url", peer.name]);
+  if (url.code === 0 && url.stdout.trim() === peerUrl(peer, repoId)) return true;
+  const pushurl = await exec(["git", "-C", repoPath, "config", "--get", `remote.${peer.name}.pushurl`]);
+  return pushurl.code === 0 && pushurl.stdout.trim() === NO_PUSH;
 }
 
 async function ownRemotesOf(state: ServerState, repo: Repo): Promise<{ names: string[]; learned: boolean }> {
-  const peerNames = (await peerSettings()).peers.map((p) => p.name);
-  const peerNamesKey = [...peerNames].sort().join(",");
+  const known = state.own.get(repo.path);
+  if (known !== undefined) return { names: known, learned: false };
+  // The peer list is read only here, on a memo miss: a hit above never
+  // needs it, and this repo already missed, so a peer rename's clear below
+  // (invalidating every other repo's now-stale entry) costs nothing extra.
+  const peers = (await peerSettings()).peers;
+  const peerNamesKey = peers.map((p) => p.name).sort().join(",");
   if (state.peerNamesSeen !== peerNamesKey) {
-    // A peer was added, removed or renamed since the memo was filled: every
-    // repo's own-remotes judgement may now be wrong (a name that used to be
-    // a peer's, or wasn't, no longer means the same thing).
     state.own.clear();
     state.peerNamesSeen = peerNamesKey;
   }
-  const known = state.own.get(repo.path);
-  if (known !== undefined) return { names: known, learned: false };
   if (state.login === undefined) state.login = await githubLogin();
   let names = await ownRemotes(await listRemotes(repo.path), { login: state.login, permission: state.access });
   // Peer remotes are pulled by the peer pass, not the origin fetch, and kept
   // out of status.tip too: the tip reads only the names settled here.
-  const drop = await Promise.all(names.map((n) => (peerNames.includes(n) ? isPeerRemote(repo.path, n) : Promise.resolve(false))));
+  const drop = await Promise.all(
+    names.map((n) => {
+      const peer = peers.find((p) => p.name === n);
+      return peer ? isPeerRemote(repo.path, repo.id, peer) : Promise.resolve(false);
+    }),
+  );
   names = names.filter((_, i) => !drop[i]);
   state.own.set(repo.path, names);
   return { names, learned: true };
@@ -1245,18 +1258,32 @@ function seenChanged(before: PeerSeen[], after: PeerSeen[]): boolean {
   return key(before) !== key(after);
 }
 
-/** Waits for anything already using `state.peering` (the whole-tree pass, or
- *  another call here) to finish, then holds it for `fn`'s duration: a route
- *  action's initRepo and syncRepo must never touch the same repo's
- *  .git/config as the pass's own initRepo loop at the same time. */
-async function withPeering<T>(state: ServerState, fn: () => Promise<T>): Promise<T> {
-  if (state.peering) await state.peering.catch(() => {});
-  const run = fn();
-  state.peering = run.then(
+/** A true FIFO queue over `state.peering`, not just a wait-then-run: each
+ *  caller chains itself onto whatever the field currently holds (the
+ *  whole-tree pass, or an earlier queued caller here) and replaces it with
+ *  its own tail *synchronously*, before awaiting the one it replaced. Two
+ *  callers arriving back to back therefore never both see the same holder
+ *  and race to run `fn` together: the second always sees the first's tail,
+ *  not the original holder. A route action's initRepo and syncRepo must
+ *  never touch the same repo's .git/config as the pass's own initRepo loop,
+ *  or another queued action, at the same time. Exported for a direct unit
+ *  test of the queue ordering: takes just the slice of ServerState it
+ *  needs, so a test can drive it against a bare `{ peering: null }`. */
+export async function withPeering<T>(state: { peering: Promise<void> | null }, fn: () => Promise<T>): Promise<T> {
+  const prev = state.peering;
+  const run = (async () => {
+    if (prev) await prev.catch(() => {});
+    return fn();
+  })();
+  const tail: Promise<void> = run.then(
     () => undefined,
     () => undefined,
-  ).finally(() => {
-    state.peering = null;
+  );
+  state.peering = tail;
+  void tail.finally(() => {
+    // Only clear the field if nothing has queued behind us since: a later
+    // caller's own tail is what state.peering must still point to.
+    if (state.peering === tail) state.peering = null;
   });
   return run;
 }

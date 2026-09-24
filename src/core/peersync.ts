@@ -143,22 +143,35 @@ export async function initRepo(repo: string, id: string, peers: Peer[], dry: boo
   if (dry) return;
   for (const p of peers) {
     if (p.role !== "git") continue;
-    const has = (await git(repo, ["remote", "get-url", p.name])).code === 0;
-    if (has) {
-      // A remote already named for this peer that canopy did not set up
-      // (no no-push marker) is the user's own; leave it alone entirely and
-      // skip this peer for this repo. fetchPeer fetches by URL and explicit
-      // refspecs, not by remote name, so the pass still reaches this peer.
-      const pushurl = await git(repo, ["config", "--get", `remote.${p.name}.pushurl`]);
-      if (pushurl.code !== 0 || pushurl.stdout.trim() !== NO_PUSH) continue;
-    }
     const url = peerUrl(p, id);
+    const got = await git(repo, ["remote", "get-url", p.name]);
+    const has = got.code === 0;
+    if (has) {
+      // A remote already named for this peer counts as canopy's own when
+      // either its pushurl is the no-push marker, or its url is exactly
+      // what canopy would have written here: the second case is what a
+      // crash between `remote add` and the marker (below) looks like, and
+      // is repaired rather than mistaken for a stranger's forever. Neither
+      // match means the user's own remote; leave it alone entirely and
+      // skip this peer for this repo (fetchPeer fetches by URL and
+      // explicit refspecs, not by remote name, so the pass still reaches
+      // this peer).
+      const currentUrl = got.stdout.trim();
+      if (currentUrl !== url) {
+        const pushurl = await git(repo, ["config", "--get", `remote.${p.name}.pushurl`]);
+        if (pushurl.code !== 0 || pushurl.stdout.trim() !== NO_PUSH) continue;
+      }
+    }
     await git(repo, has ? ["remote", "set-url", p.name, url] : ["remote", "add", p.name, url]);
+    // Written right after the add/set-url, before the refspecs and tagOpt:
+    // a crash here leaves a remote whose url alone already marks it as
+    // canopy's own (the check above), so the next initRepo repairs it
+    // rather than finding a half-made remote it does not recognize.
+    await git(repo, ["config", `remote.${p.name}.pushurl`, NO_PUSH]);
     const [heads, wip] = peerRefspecs(p.name);
     await git(repo, ["config", "--replace-all", `remote.${p.name}.fetch`, heads]);
     await git(repo, ["config", "--add", `remote.${p.name}.fetch`, wip]);
     await git(repo, ["config", `remote.${p.name}.tagOpt`, "--no-tags"]);
-    await git(repo, ["config", `remote.${p.name}.pushurl`, NO_PUSH]);
   }
 }
 

@@ -4,7 +4,7 @@ import { existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { exec } from "./exec";
-import { NO_PUSH } from "./peers";
+import { NO_PUSH, peerUrl } from "./peers";
 import {
   cloneMissing,
   decodeBase64Strict,
@@ -280,6 +280,23 @@ describe("initRepo", () => {
     // the wip refspec initRepo appends for a peer it owns.
     expect((await exec(["git", "config", "--get", "remote.mini.pushurl"], { cwd: mac })).code).not.toBe(0);
     expect(await sh(mac, "config", "--get-all", "remote.mini.fetch")).toBe("+refs/heads/*:refs/remotes/mini/*");
+  });
+  test("repairs a remote a crash left half-made: the url is canopy's, but nothing else was written yet", async () => {
+    const mac = await repo("init-crash-mac");
+    const peer: Peer = { name: "mini", alias: null, root, role: "git" };
+    const id = "init-crash-mini";
+    // simulates initRepo crashing right after `remote add`, before the
+    // marker or the refspecs
+    await sh(mac, "remote", "add", "mini", peerUrl(peer, id));
+    expect((await exec(["git", "config", "--get", "remote.mini.pushurl"], { cwd: mac })).code).not.toBe(0);
+
+    await initRepo(mac, id, [peer], false);
+
+    expect(await sh(mac, "config", "remote.mini.pushurl")).toBe(NO_PUSH);
+    expect(await sh(mac, "config", "--get-all", "remote.mini.fetch")).toBe(
+      "+refs/heads/*:refs/remotes/mini/*\n+refs/wip/*:refs/peer-wip/mini/*",
+    );
+    expect(await sh(mac, "config", "remote.mini.tagOpt")).toBe("--no-tags");
   });
 });
 

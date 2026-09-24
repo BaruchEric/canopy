@@ -3,8 +3,9 @@ import { existsSync } from "node:fs";
 import { mkdir, mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { Repo } from "../core/types";
-import { peerSettingsFromEnv, startServer } from "./index";
+import { peerUrl } from "../core/peers";
+import type { Peer, Repo } from "../core/types";
+import { isPeerRemote, peerSettingsFromEnv, startServer, withPeering } from "./index";
 
 let scratch: string;
 let root: string;
@@ -222,6 +223,37 @@ describe("initRepo and ownRemotesOf leave a user's own same-named remote alone",
     expect((await git(userRepo, "remote", "get-url", "mini")).stdout.toString().trim()).toBe("https://example.invalid/mine.git");
     expect((await Bun.$`git -C ${userRepo} config --get remote.mini.pushurl`.quiet().nothrow()).exitCode).not.toBe(0);
   });
+
+  test("a remote a crash left with the peer's url but no marker is repaired, not mistaken for the user's own", async () => {
+    const crashRepo = join(root, "crashed");
+    await mkdir(crashRepo, { recursive: true });
+    await git(crashRepo, "init", "-q", "-b", "main");
+    await git(crashRepo, "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-q", "--allow-empty", "-m", "one");
+    const peer: Peer = { name: "mini", alias: null, root: other, role: "git" };
+    // simulates initRepo crashing right after `remote add`: the url is
+    // already canopy's, but the marker was never written
+    await git(crashRepo, "remote", "add", "mini", peerUrl(peer, "crashed"));
+    await fetch(url("/api/rescan"), { method: "POST" });
+
+    expect(await isPeerRemote(crashRepo, "crashed", peer)).toBe(true);
+
+    const r = await fetch(url("/api/repos/peer?id=crashed"), { method: "POST", body: JSON.stringify({ action: "sync" }) });
+    expect(r.status).toBe(200);
+    expect((await Bun.$`git -C ${crashRepo} config --get remote.mini.pushurl`.quiet().nothrow()).stdout.toString().trim()).toBe(
+      "canopy-peer-no-push",
+    );
+    expect(await isPeerRemote(crashRepo, "crashed", peer)).toBe(true);
+  });
+
+  test("isPeerRemote: only the no-push marker or an exact peer-url match count as canopy's own", async () => {
+    const userRepo2 = join(root, "userowned2");
+    await mkdir(userRepo2, { recursive: true });
+    await git(userRepo2, "init", "-q", "-b", "main");
+    await git(userRepo2, "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-q", "--allow-empty", "-m", "one");
+    const peer: Peer = { name: "mini", alias: null, root: other, role: "git" };
+    await git(userRepo2, "remote", "add", "mini", "https://example.invalid/definitely-not-mine.git");
+    expect(await isPeerRemote(userRepo2, "userowned2", peer)).toBe(false);
+  });
 });
 
 describe("applyPeerState broadcasts only on a real change", () => {
@@ -347,6 +379,71 @@ describe("dry mode and a repo only the peer has", () => {
     const tree = (await (await fetch(url("/api/tree"))).json()) as { repos: Repo[] };
     expect(tree.repos.some((r) => r.id === "houseonly")).toBe(false);
     expect(logged.some((args) => args.some((a) => String(a).includes("houseonly")))).toBe(false);
+  });
+});
+
+describe("withPeering", () => {
+  test("three callers queued behind a holder never overlap", async () => {
+    const state: { peering: Promise<void> | null } = { peering: null };
+    const order: string[] = [];
+    let releaseHolder!: () => void;
+    const holderGate = new Promise<void>((r) => {
+      releaseHolder = r;
+    });
+
+    const holder = withPeering(state, async () => {
+      order.push("holder enter");
+      await holderGate;
+      order.push("holder exit");
+    });
+
+    // Three more callers "arrive" while the holder is still running, back
+    // to back with no await between them: exactly the case that used to
+    // wake every waiter together once the holder finished.
+    const turn = (name: string) =>
+      withPeering(state, async () => {
+        order.push(`${name} enter`);
+        await Bun.sleep(5);
+        order.push(`${name} exit`);
+      });
+    const a = turn("a");
+    const b = turn("b");
+    const c = turn("c");
+
+    // Give a wrongly-woken waiter time to start early; none should have.
+    await Bun.sleep(30);
+    expect(order).toEqual(["holder enter"]);
+
+    releaseHolder();
+    await Promise.all([holder, a, b, c]);
+
+    expect(order).toEqual([
+      "holder enter",
+      "holder exit",
+      "a enter",
+      "a exit",
+      "b enter",
+      "b exit",
+      "c enter",
+      "c exit",
+    ]);
+  });
+
+  test("one link rejecting does not break the chain for the next", async () => {
+    const state: { peering: Promise<void> | null } = { peering: null };
+    const order: string[] = [];
+
+    const failing = withPeering(state, async () => {
+      order.push("failing enter");
+      throw new Error("boom");
+    });
+    const after = withPeering(state, async () => {
+      order.push("after enter");
+    });
+
+    await expect(failing).rejects.toThrow("boom");
+    await after;
+    expect(order).toEqual(["failing enter", "after enter"]);
   });
 });
 
