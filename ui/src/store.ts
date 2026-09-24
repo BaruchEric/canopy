@@ -11,6 +11,7 @@ import { clamp, needsAttention } from "./util";
 import { ownRun, pickable, selectable } from "./flows";
 import { boardOrder, invertPick, pickWhere, rangeIds, setPick, togglePick } from "./select";
 import { appendFeed, describeEvent, type FeedEntry } from "./feed";
+import { mergeAction } from "./peers";
 import { clientCaps } from "../../src/core/client";
 import {
   DEFAULT_AGENT,
@@ -1216,11 +1217,28 @@ export const useStore = create<CanopyState>((set, get) => ({
   },
   openChat: async (repoId, note = "") => {
     const active = activeRunFor(get(), repoId);
-    if (active) {
-      set({ sheet: { kind: "run", runId: active.id } });
+    const trimmed = note.trim();
+    // The plain "chat" menu item passes no note: show whatever is already
+    // going, or start a fresh idle chat with nothing to say yet. Unaffected
+    // by mergeAction, which is about a caller with something to send.
+    if (!trimmed) {
+      if (active) {
+        set({ sheet: { kind: "run", runId: active.id } });
+        return;
+      }
+      await get().startRun(repoId, "chat", "");
       return;
     }
-    await get().startRun(repoId, "chat", note);
+    if (!active) {
+      await get().startRun(repoId, "chat", note);
+      return;
+    }
+    if (mergeAction(active) === "busy") {
+      throw new Error("a run is already going on this repo");
+    }
+    // An idle chat: the note is the next turn, not a fresh start.
+    await get().sayRun(active.id, trimmed);
+    set({ sheet: { kind: "run", runId: active.id } });
   },
   editAgent: (repoId) => set({ sheet: { kind: "agent", repoId } }),
   setAgent: async (repoId, settings) => {

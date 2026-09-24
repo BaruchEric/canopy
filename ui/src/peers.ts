@@ -4,7 +4,7 @@
  *  every timestamp here (PeerState.at, PeerWip.at, PeerSeen.at) rides in as
  *  milliseconds and is turned to ago()'s seconds at the call site. */
 
-import { LAUNCH_SOURCE, type PeerBranch, type PeerSeen, type PeerState, type Repo } from "../../src/core/types";
+import { LAUNCH_SOURCE, type PeerBranch, type PeerSeen, type PeerState, type Repo, type Run } from "../../src/core/types";
 import { ago } from "./util";
 
 /** Whether peer sync covers this repo at all: a local checkout under the
@@ -40,7 +40,7 @@ export function peerChips(st: PeerState | undefined): PeerChip[] {
     const when = ago(w.at / 1000);
     out.push({
       kind: "wip",
-      text: `WIP on ${w.peer} ${when}`,
+      text: `WIP on ${w.peer}/${w.branch} ${when}`,
       title: `${w.peer} has ${w.files} uncommitted files on ${w.branch}, ${when}`,
     });
   }
@@ -48,8 +48,10 @@ export function peerChips(st: PeerState | undefined): PeerChip[] {
   return out;
 }
 
+// An offline peer's `at` stamps the failed attempt, not the last time it
+// was actually reached, so there is no "ago" worth reporting for it.
 export const seenWord = (s: PeerSeen): string =>
-  s.ok ? `${s.name} · ${ago(s.at / 1000)}` : `${s.name} · offline ${ago(s.at / 1000)}`;
+  s.ok ? `${s.name} · ${ago(s.at / 1000)}` : `${s.name} · offline`;
 
 /** What changed between two readings of a repo's PeerState, for the feed:
  *  a branch moving forward, a divergence or a WIP not seen before. Nothing
@@ -70,4 +72,16 @@ export function peerLines(prev: PeerState | undefined, next: PeerState | undefin
     if (!wips.has(`${w.peer} ${w.branch} ${w.hash}`)) out.push(`WIP from ${w.peer} on ${w.branch} (${w.files} files)`);
   }
   return out;
+}
+
+/** What "merge with claude" should do about a repo's active run, if any:
+ *  start a fresh chat when there is none, send into an idle chat's next
+ *  turn (a chat between turns is the only run status that means "waiting
+ *  for a message", never a run actually busy), or refuse when one is
+ *  genuinely in progress. */
+export type MergeAction = "new" | "say" | "busy";
+
+export function mergeAction(active: Run | undefined): MergeAction {
+  if (!active) return "new";
+  return active.status === "idle" ? "say" : "busy";
 }

@@ -305,8 +305,6 @@ export const api = {
       method: "POST",
       body: JSON.stringify(body),
     }),
-  /** runs a peer pass over every repo now, instead of waiting for the timer */
-  peersSync: () => req<Record<string, never>>("/api/peers/sync", { method: "POST", body: "{}" }),
   workspaces: () => req<Workspace[]>("/api/workspaces"),
   wsAdd: (name: string, repos: string[]) =>
     req<Workspace[]>("/api/workspaces", {

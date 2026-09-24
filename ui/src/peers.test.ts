@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, setSystemTime, test } from "bun:test";
-import { LAUNCH_SOURCE, type PeerState, type Repo } from "../../src/core/types";
-import { peerable, peerChips, peerLines, seenWord } from "./peers";
+import { LAUNCH_SOURCE, type PeerState, type Repo, type Run } from "../../src/core/types";
+import { mergeAction, peerable, peerChips, peerLines, seenWord } from "./peers";
 
 const repo = (over: Partial<Repo> = {}): Repo => ({
   id: "app",
@@ -47,7 +47,7 @@ describe("peerChips", () => {
     };
     expect(peerChips(st)).toEqual([
       { kind: "diverged", text: "⇅ mini ↑2 ↓3", title: "main diverged from mini: 2 commits here, 3 there" },
-      { kind: "wip", text: "WIP on mac 12m ago", title: "mac has 4 uncommitted files on main, 12m ago" },
+      { kind: "wip", text: "WIP on mac/main 12m ago", title: "mac has 4 uncommitted files on main, 12m ago" },
     ]);
     expect(peerChips({ ...base, onlyHere: true })).toEqual([
       { kind: "only", text: "only here", title: "no peer has this repo" },
@@ -56,9 +56,37 @@ describe("peerChips", () => {
 });
 
 describe("seenWord", () => {
-  test("ok and offline", () => {
+  test("ok carries an age; offline does not, since its `at` is the failed attempt", () => {
     expect(seenWord({ name: "mini", ok: true, at: now - 3 * 60_000 })).toBe("mini · 3m ago");
-    expect(seenWord({ name: "gpd", ok: false, at: now - 6 * 86_400_000 })).toBe("gpd · offline 6d ago");
+    expect(seenWord({ name: "gpd", ok: false, at: now - 6 * 86_400_000 })).toBe("gpd · offline");
+  });
+});
+
+const run = (status: Run["status"]): Run => ({
+  id: "r1",
+  repoId: "app",
+  action: "chat",
+  verb: "chat",
+  progress: "chatting",
+  expectsChange: false,
+  chat: true,
+  note: "",
+  status,
+  startedAt: now,
+  steps: [],
+  prompt: null,
+});
+
+describe("mergeAction", () => {
+  test("no active run: start fresh", () => {
+    expect(mergeAction(undefined)).toBe("new");
+  });
+  test("an idle chat between turns: say into it", () => {
+    expect(mergeAction(run("idle"))).toBe("say");
+  });
+  test("a run genuinely in progress: refuse", () => {
+    expect(mergeAction(run("working"))).toBe("busy");
+    expect(mergeAction(run("waiting"))).toBe("busy");
   });
 });
 
