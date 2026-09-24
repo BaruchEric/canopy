@@ -893,6 +893,19 @@ describe("take and track", () => {
     expect(await sh(mac, "rev-parse", "wip/mini/main")).toBe(userCommit); // untouched
   });
 
+  test("two takes of the same WIP while the base is blocked reuse the same numbered name", async () => {
+    const { mac, mini, toMini, miniId } = await pair("samewip");
+    await sh(mac, "branch", "wip/mini/main"); // occupies the base with a branch that isn't canopy's
+    await writeFile(join(mini, "a.txt"), "from mini\n");
+    await snapshotWip(mini, "mini", false);
+    await fetchPeer(mac, miniId, toMini, {});
+    await writeFile(join(mac, "a.txt"), "mine\n"); // keeps mac dirty so every take lands on a branch
+
+    expect(await takeWip(mac, "mini", "main")).toEqual({ how: "branch", branch: "wip/mini/main-2" });
+    expect(await takeWip(mac, "mini", "main")).toEqual({ how: "branch", branch: "wip/mini/main-2" });
+    expect(await sh(mac, "rev-parse", "wip/mini/main-2")).toBe(await sh(mac, "rev-parse", "refs/peer-wip/mini/main"));
+  });
+
   test("an ignored file at a path the WIP adds sends the take to a branch and the ignored file is unchanged", async () => {
     const { mac, mini, toMini, miniId } = await pair("wipoccupied");
     await writeFile(join(mac, ".git", "info", "exclude"), "new.txt\n");
@@ -920,6 +933,28 @@ describe("take and track", () => {
 
     expect(await takeWip(mac, "mini", "main")).toEqual({ how: "branch", branch: "wip/mini/main" });
     expect(await readFile(join(mac, "sub"), "utf8")).toBe("mac had this already\n");
+  });
+
+  test("a symlinked folder where the WIP needs a real one also sends the take to a branch, and leaves the symlink and its target alone", async () => {
+    const { mac, mini, toMini, miniId } = await pair("wipoccupiedsymlink");
+    const target = join(root, "wipoccupiedsymlink-target");
+    await mkdir(target, { recursive: true });
+    await writeFile(join(target, "existing.txt"), "target content\n");
+    await writeFile(join(mac, ".git", "info", "exclude"), "sub\n");
+    await symlink(target, join(mac, "sub")); // "sub" looks like a folder but is a symlink elsewhere
+
+    await mkdir(join(mini, "sub"), { recursive: true });
+    await writeFile(join(mini, "sub", "file.txt"), "from mini\n");
+    await snapshotWip(mini, "mini", false);
+    await fetchPeer(mac, miniId, toMini, {});
+
+    // A leaf lstat alone would traverse through the symlink looking for
+    // "file.txt" under its target, not find it (ENOENT), and read the path
+    // as free — this is the case that has to be caught at "sub" itself.
+    expect(await takeWip(mac, "mini", "main")).toEqual({ how: "branch", branch: "wip/mini/main" });
+    const st = await lstat(join(mac, "sub"));
+    expect(st.isSymbolicLink()).toBe(true);
+    expect(await readFile(join(target, "existing.txt"), "utf8")).toBe("target content\n");
   });
 
   test("track makes a local branch at the peer's tip; unknown is an error", async () => {

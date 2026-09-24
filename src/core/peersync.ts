@@ -633,23 +633,41 @@ async function assertBranchName(repo: string, branch: string): Promise<void> {
 }
 
 /** Whether landing `wip` as files here (a read-tree onto the worktree)
- *  would silently drop part of it: true when a path the WIP adds relative
- *  to HEAD already exists on disk, lstat'd rather than looked up in git so
- *  an ignored file or a symlink counts too. read-tree skips a path
- *  something already occupies rather than failing, which would otherwise
- *  report the take as clean while quietly leaving that file out of it. */
+ *  would silently drop or corrupt part of it: true when any path the WIP
+ *  adds relative to HEAD is blocked on disk, checked component by
+ *  component from the repo root down rather than by lstat'ing the leaf
+ *  alone. The leaf existing at all is occupied, the same as before; a
+ *  parent component that exists but isn't a real directory — an ignored
+ *  file, or an ignored symlink to one elsewhere — is occupied too, since
+ *  read-tree would have to remove it to make room for the real directory
+ *  the WIP needs, and does that silently rather than failing. Every check
+ *  is an lstat, which never follows a symlink, so a symlinked folder in
+ *  the way counts as occupied in its own right rather than as whatever it
+ *  happens to point at (a leaf lstat on the full path would instead
+ *  traverse through it, often landing on ENOENT past the symlink and
+ *  reading the path as free). */
 async function wipOccupiesPath(repo: string, wip: string): Promise<boolean> {
   const d = await git(repo, ["diff-tree", "-r", "-z", "--name-only", "--diff-filter=A", "HEAD", wip]);
   for (const p of d.stdout.split("\0").filter(Boolean)) {
-    try {
-      await lstat(join(repo, p));
-      return true;
-    } catch (err) {
-      // Only "genuinely not there" (ENOENT) clears a path: anything else (a
-      // parent component that exists but isn't a directory, a permissions
-      // error) can't be told apart from occupied, so it counts as one.
-      const code = typeof err === "object" && err !== null && "code" in err ? (err as Record<string, unknown>).code : undefined;
-      if (code !== "ENOENT") return true;
+    const segments = p.split("/").filter(Boolean);
+    let prefix = "";
+    for (let i = 0; i < segments.length; i++) {
+      prefix = prefix === "" ? segments[i]! : `${prefix}/${segments[i]}`;
+      let st;
+      try {
+        st = await lstat(join(repo, prefix));
+      } catch (err) {
+        // Only "genuinely not there" (ENOENT) clears it, and clears
+        // everything below it too, since a filesystem path can't exist
+        // under a parent that doesn't: move on to the next added path.
+        // Anything else (a permissions error, and so on) can't be told
+        // apart from occupied, so it counts as one.
+        const code = typeof err === "object" && err !== null && "code" in err ? (err as Record<string, unknown>).code : undefined;
+        if (code === "ENOENT") break;
+        return true;
+      }
+      const isLeaf = i === segments.length - 1;
+      if (isLeaf || !st.isDirectory()) return true;
     }
   }
   return false;
@@ -690,7 +708,9 @@ async function branchInUse(repo: string, name: string): Promise<boolean> {
  *  "canopy", the identity snapshotWip commits with). A branch the user has
  *  since committed onto, or is still looking at in another worktree, is
  *  never moved: local branches only ever move forward, so the take lands
- *  on the first free numbered name instead, wip/<peer>/<branch>-2 and up. */
+ *  on wip/<peer>/<branch>-2 and up instead — reusing one already at this
+ *  exact hash (a repeat take of the same WIP while the base stays
+ *  blocked), otherwise the first free one. */
 async function landWip(repo: string, peer: string, branch: string, hash: string): Promise<string> {
   const base = `wip/${peer}/${branch}`;
   const cur = await git(repo, ["rev-parse", "-q", "--verify", `refs/heads/${base}`]);
@@ -709,10 +729,12 @@ async function landWip(repo: string, peer: string, branch: string, hash: string)
   for (let n = 2; ; n++) {
     const name = `${base}-${n}`;
     const exists = await git(repo, ["rev-parse", "-q", "--verify", `refs/heads/${name}`]);
-    if (exists.code !== 0) {
-      const made = await createBranch(repo, name, hash);
-      if (made !== null) return made;
+    if (exists.code === 0) {
+      if (exists.stdout.trim() === hash) return name; // already exactly this WIP
+      continue;
     }
+    const made = await createBranch(repo, name, hash);
+    if (made !== null) return made;
   }
 }
 
