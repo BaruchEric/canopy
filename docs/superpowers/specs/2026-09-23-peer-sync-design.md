@@ -92,7 +92,7 @@ A repo id is its path relative to the scan root, the same id canopy already uses
 
 ```ts
 type PeerRole = "git" | "mirror";
-interface Peer { name: string; alias: string; root: string; role: PeerRole; repos?: string[] }
+interface Peer { name: string; alias: string | null; root: string; role: PeerRole; repos?: string[] }
 interface PeerSeen { name: string; ok: boolean; at: number; error?: string }
 interface PeerBranch { branch: string; peer: string; ahead: number; behind: number }
 interface PeerWip { peer: string; branch: string; at: number; parent: string; files: number }
@@ -126,7 +126,7 @@ interface PeerState {
 
 - `ui/src/peers.ts` (pure, tested): chip words and tooltips.
 - Card and panel head: `⇅ mini ↑2 ↓3` for a diverged branch, `WIP on mac/main 12m ago` for a pending peer WIP, `only here` when no git peer has the repo.
-- Panel: a peers section listing each peer's branches against yours, pending WIPs with "take" and "view" (opens the WIP's own commit), divergences with "open shell" and "merge with claude" (starts or continues the repo's own chat with a fixed first message — no new run type, amendment 5), branches only a peer has with "track", and a "sync now" button.
+- Panel: a peers section listing each peer's branches against yours, pending WIPs with "take" and "view" (opens the WIP's own commit), divergences with "open shell" and "merge with claude" (starts or continues the repo's own chat with a fixed first message, no new run type, amendment 5), branches only a peer has with "track", and a "sync now" button.
 - Top bar: a peers line from `seen`, one word per peer (`mini · 3m ago`, or `gpd · offline` with no age, since a failed attempt's timestamp is not the last time it actually answered).
 
 ### Trimmed rsync (`_control/scripts/sync-dev-to-mini.sh`)
@@ -135,7 +135,7 @@ Excludes every directory that holds `.git`, keeps the delete pass and backups fo
 
 ## The sync pass
 
-Per repo, in order. `peerSync: "dry"` computes every step and records what it would do; it still fetches — a dry pass needs the peer's own tips to know what it would move, so step 2 writes `refs/remotes/<peer>/*` and `refs/peer-wip/<peer>/*` the same as a live pass — but touches no local branch, the index, the working tree, or any file.
+Per repo, in order. `peerSync: "dry"` computes every step and records what it would do. It still fetches, since a dry pass needs the peer's own tips to know what it would move, so step 2 writes `refs/remotes/<peer>/*` and `refs/peer-wip/<peer>/*` the same as a live pass, but touches no local branch, the index, the working tree, or any file.
 
 1. **Snapshot own WIP.** Skipped on a detached HEAD. If the tree is dirty:
    - Copy `.git/index` to a temp file, then with `GIT_INDEX_FILE` pointed at it run `git add -A` and `git write-tree`. The real index and working tree are untouched, and untracked files that are not ignored are included.
@@ -148,7 +148,7 @@ Per repo, in order. `peerSync: "dry"` computes every step and records what it wo
    - Other local branches: the same containment rule, applied with `git update-ref refs/heads/<b> <new> <old>`. The working tree does not matter for these.
    - A branch that exists only on a peer is never created locally; it shows as `mini/feat-x` with a "track" action (`PeerState.peerOnly`, amendment 4).
    - Diverged: nothing moves; the divergence is recorded.
-4. **Seed ignored files, on clone and on demand — not every pass** (amendment 3: asking every peer for every repo's ignored files every five minutes costs a lot and buys nothing once a repo has its `.env`). Seeding runs once when step 5 clones a repo from a peer, and otherwise only when asked for directly (`canopy peers seed`, the panel's **seed** button). For each allowlisted file this repo lacks and a peer has, the file is asked for over the gate (or in-process for a peer mounted as a local path) as base64, written beside the target under a random name at mode 0600, then hard-linked into place, which fails rather than overwrites if the target exists by then.
+4. **Seed ignored files, on clone and on demand, not every pass** (amendment 3: asking every peer for every repo's ignored files every five minutes costs a lot and buys nothing once a repo has its `.env`). Seeding runs once when step 5 clones a repo from a peer, and otherwise only when asked for directly (`canopy peers seed`, the panel's **seed** button). For each allowlisted file this repo lacks and a peer has, the file is asked for over the gate (or in-process for a peer mounted as a local path) as base64, written beside the target under a random name at mode 0600, then hard-linked into place, which fails rather than overwrites if the target exists by then.
 5. **Clone missing repos** (once per pass, before the per-repo steps). A repo a git peer has, that this machine lacks and whose id matches the peer's `repos` globs (if any), is cloned from that peer. Then `origin` is set to the peer's `origin` URL, the other peers are added as remotes, and step 4 runs for the new clone. A failed clone removes its partial directory. A repo present here and on no git peer is marked `onlyHere` and left alone.
 
 **Taking a WIP** is always a manual action (`canopy peers take` or the panel):
@@ -159,9 +159,9 @@ Per repo, in order. `peerSync: "dry"` computes every step and records what it wo
 ## Integrity rules
 
 1. **Nobody pushes to a peer.** `init` sets each peer remote's push URL to a disabled value, so `git push mini` fails. Repos keep git's default `receive.denyCurrentBranch`.
-2. **ssh keys can fetch and do nothing else.** Each peer's key sits in `authorized_keys` behind `restrict,command="<bun> <canopy>/bin/canopy.ts peers gate --root <workspace>"` (`restrict` covers `no-pty,no-port-forwarding,no-agent-forwarding,no-X11-forwarding`; a bare `command=` without it would still let the key open a full session if some other restriction were ever dropped). The gate is a canopy subcommand, not raw `find`/`cat` (amendment 1): it parses `SSH_ORIGINAL_COMMAND` and allows exactly `git-upload-pack '<path under root>'`, `canopy-peer list`, `canopy-peer seeds '<id>'` and `canopy-peer seed '<id>' '<file>'`. It realpath-checks every candidate path — the literal one, and every suffix git's own `enter_repo()` would try without `--strict` — following a worktree's gitfile and its `commondir` where one leads, so nothing under the root can hand a symlink or a linked worktree off to somewhere outside it. Before reading anything it deletes every `GIT_*` variable from its own process environment, so the in-process listing and seed calls inherit none of it, and it reads the serving machine's config read-only, refusing every command on one it cannot read or parse rather than falling back to defaults. Every peer needs bun and a canopy checkout on the serving host. `sshd` must not `AcceptEnv` `GIT_*` or `BUN_*` for that key (the default accepts only `LANG`/`LC_*`); either one reaching the gate's environment could run code before the gate does anything (amendment 2 names the dedicated key and alias each machine uses for this).
+2. **ssh keys can fetch and do nothing else.** Each peer's key sits in `authorized_keys` behind `restrict,command="<bun> <canopy>/bin/canopy.ts peers gate --root <workspace>"` (`restrict` covers every forwarding, the pty, and `~/.ssh/rc`; a bare `command=` without it would still let the key open a full session if some other restriction were ever dropped). The gate is a canopy subcommand, not raw `find`/`cat` (amendment 1): it parses `SSH_ORIGINAL_COMMAND` and allows exactly `git-upload-pack '<path under root>'`, `canopy-peer list`, `canopy-peer seeds '<id>'` and `canopy-peer seed '<id>' '<file>'`. It realpath-checks every candidate path, the literal one, and every suffix git's own `enter_repo()` would try without `--strict`, following a worktree's gitfile and its `commondir` where one leads, so nothing under the root can hand a symlink or a linked worktree off to somewhere outside it. Before reading anything it deletes every `GIT_*` variable from its own process environment, so the in-process listing and seed calls inherit none of it, and it reads the serving machine's config read-only, refusing every command on one it cannot read or parse rather than falling back to defaults. Every peer needs bun and a canopy checkout on the serving host. `sshd` must not `AcceptEnv` `GIT_*` or `BUN_*` for that key (the default accepts only `LANG`/`LC_*`); either one reaching the gate's environment could run code before the gate does anything (amendment 2 names the dedicated key and alias each machine uses for this).
 3. **Peers write only their own namespaces.** Forced fetches land only in `refs/remotes/<peer>/*` and `refs/peer-wip/<peer>/*`. Local branches move only by compare-and-swap (`update-ref <new> <old>`), only forward.
-4. **Nothing moves during a git operation.** A busy marker skips step 3 (fast-forward) for every branch in the repo, not only the one checked out — a rebase detaches HEAD, and a checked-out-only guard would let the branch it is rewriting move anyway. Step 1 (the WIP snapshot) is not gated by a busy marker; it snapshots the dirty tree as it stands, mid-operation or not.
+4. **Nothing moves during a git operation.** A busy marker skips step 3 (fast-forward) for every branch in the repo, not only the one checked out. A rebase detaches HEAD, and a checked-out-only guard would let the branch it is rewriting move anyway. Step 1 (the WIP snapshot) is not gated by a busy marker; it snapshots the dirty tree as it stands, mid-operation or not.
 5. **One pass per repo at a time** inside canopy, so the timer and a manual sync never overlap on a repo.
 6. **rsync never enters a repo.** A mirror peer is never pulled from.
 7. **Seeding is atomic and never overwrites.**
@@ -199,7 +199,7 @@ Rollback: `peerSync: "off"` and the old rsync flags. The remotes are harmless if
   - Seeding copies once and never overwrites.
   - Clone of a missing repo sets `origin` from the peer and adds the other peers.
   - `git push <peer>` fails after `init`.
-  - `dry` writes no local branch, index, working tree or file — it still fetches into the peer's own ref namespaces, since a dry pass needs the peer's tips to report what it would do.
+  - `dry` writes no local branch, index, working tree or file. It still fetches into the peer's own ref namespaces, since a dry pass needs the peer's tips to report what it would do.
 - `src/server/peers.test.ts`: `/api/peers`, the `peer` route's 400/404 cases, the `peers` event.
 - `ui/src/peers.test.ts`: chip words.
 - Manual: a dry day on the Mac and the mini, then a Mac-off test from the phone.

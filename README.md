@@ -192,7 +192,7 @@ canopy finds the CLI at `historyBin` in its config, else `claude-history` on PAT
 
 ## Peers
 
-Peers keeps a full clone of every repo under the launch root in sync across your machines over ssh, pull-only: each one fetches every other peer's branches and its uncommitted work as a WIP snapshot, fast-forwards what it safely can, and leaves a real divergence or a branch that only exists on a peer for you to look at. Nothing ever writes into another machine's working tree — a peer's ssh key runs only `git-upload-pack` and three read-only queries behind a forced command, never a shell. It replaces a one-way rsync mirror with the model coworkers use: every machine keeps its own clone and resolves its own conflicts, and work moves between clones only through git.
+Peers keeps a full clone of every repo under the launch root in sync across your machines over ssh, pull-only: each one fetches every other peer's branches and its uncommitted work as a WIP snapshot, fast-forwards what it safely can, and leaves a real divergence or a branch that only exists on a peer for you to look at. Nothing ever writes into another machine's working tree. A peer's ssh key runs only `git-upload-pack` and three read-only queries behind a forced command, never a shell. It replaces a one-way rsync mirror with the model coworkers use: every machine keeps its own clone and resolves its own conflicts, and work moves between clones only through git.
 
 In canopy's config (`~/.config/canopy/config.json`, or `$CANOPY_CONFIG_DIR/config.json`):
 
@@ -209,7 +209,7 @@ In canopy's config (`~/.config/canopy/config.json`, or `$CANOPY_CONFIG_DIR/confi
 }
 ```
 
-`self` is this machine's own name; `peers` is who it pulls from, each an ssh_config `alias` (never `user@host`) and a workspace `root` (home-relative unless absolute). `role: "git"` is a full coworker; `role: "mirror"` only ever receives the rsync mirror and is never pulled from. `repos` is an optional list of globs over repo ids — a peer with it clones and fetches only matching repos. `peerSync` is `off`, `dry` (compute and report everything, write nothing but the fetched refs) or `on`. `seed` is the allowlist of ignored files (`.env` and the like) copied once from a peer when a repo lacks them, never overwritten.
+`self` is this machine's own name; `peers` is who it pulls from, each an ssh_config `alias` (never `user@host`) and a workspace `root` (home-relative unless absolute). `role: "git"` is a full coworker; `role: "mirror"` only ever receives the rsync mirror and is never pulled from. `repos` is an optional list of globs over repo ids, a peer with it clones and fetches only matching repos. `peerSync` is `off`, `dry` (compute and report everything, write nothing but the fetched refs) or `on`. `seed` is the allowlist of ignored files (`.env` and the like) copied once from a peer when a repo lacks them, never overwritten.
 
 ```bash
 canopy peers status                       this machine's name, sync mode, and its peers
@@ -227,7 +227,7 @@ A peer reaches this machine through a dedicated ssh key whose `authorized_keys` 
 restrict,command="<path to bun> <path to canopy>/bin/canopy.ts peers gate --root dev" ssh-ed25519 AAAA... canopy-peer@<machine>
 ```
 
-`sshd` must not `AcceptEnv` `GIT_*` or `BUN_*` for that key — the default config accepts only `LANG` and `LC_*` — since either one reaching the gate's environment could run code before it does anything.
+`sshd` must not `AcceptEnv` `GIT_*` or `BUN_*` for that key. The default config accepts only `LANG` and `LC_*`, and either one reaching the gate's environment could run code before it does anything.
 
 ## State
 
