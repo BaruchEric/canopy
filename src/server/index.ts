@@ -2525,10 +2525,13 @@ export async function startServer(opts: {
   // is on, so a machine going down does not take them with the tmux server.
   const keepTimer = setInterval(() => void keepPass(state), KEEP_EVERY);
 
+  // A named event rather than an SSE comment, so the page sees it: a phone
+  // behind Cloudflare can hold a stream the browser thinks is open while
+  // nothing arrives, and only a missing ping tells the page to open another.
   const heartbeat = setInterval(() => {
     for (const c of state.clients) {
       try {
-        c.enqueue(enc.encode(`: ping\n\n`));
+        c.enqueue(enc.encode(`event: ping\ndata: \n\n`));
       } catch {
         state.clients.delete(c);
         if (state.streams.delete(c)) tellDevices(state);

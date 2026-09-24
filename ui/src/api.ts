@@ -323,6 +323,38 @@ export const api = {
     }),
 };
 
+/** How long an open stream may go without a frame before the page takes it
+ *  for dead. The server pings every 25s, so this is two missed pings and
+ *  some slack. */
+export const STREAM_STALE = 70_000;
+const STREAM_CHECK = 15_000;
+const RETRY_FIRST = 1_000;
+const RETRY_MAX = 30_000;
+
+/** EventSource's readyState values, spelled out since the class may not
+ *  exist where this module is imported (tests). */
+const CONNECTING = 0;
+const OPEN = 1;
+
+/** What to do about the stream on a watchdog tick or when the tab shows
+ *  again. An open stream that has gone quiet is half-open (a phone asleep,
+ *  a proxy that dropped it without a close), and the browser will never
+ *  notice on its own: `recycle` closes it and opens another. A closed one
+ *  is a stream the browser gave up on (a reconnect answered by something
+ *  other than the stream, like a login page), which it will not retry:
+ *  `reopen`, unless a retry is already waiting. A connecting one is the
+ *  browser's own retry at work. Pure, for the test. */
+export function streamAction(
+  readyState: number,
+  lastSeen: number,
+  now: number,
+  retryPending: boolean,
+): "keep" | "recycle" | "reopen" {
+  if (readyState === CONNECTING) return "keep";
+  if (readyState === OPEN) return now - lastSeen > STREAM_STALE ? "recycle" : "keep";
+  return retryPending ? "keep" : "reopen";
+}
+
 export function subscribe(
   onEvent: (ev: ServerEvent) => void,
   /** called when the stream comes back after a drop — the server replays
@@ -332,18 +364,78 @@ export function subscribe(
   who: Record<string, string> = {},
 ): () => void {
   const q = new URLSearchParams(who).toString();
-  const es = new EventSource(q ? `/api/events?${q}` : "/api/events");
+  const url = q ? `/api/events?${q}` : "/api/events";
   let everOpened = false;
-  es.onopen = () => {
-    if (everOpened) onReconnect?.();
-    everOpened = true;
+  let stopped = false;
+  let lastSeen = Date.now();
+  let retry: ReturnType<typeof setTimeout> | null = null;
+  let wait = RETRY_FIRST;
+  let es = open();
+
+  function open(): EventSource {
+    const s = new EventSource(url);
+    lastSeen = Date.now();
+    s.onopen = () => {
+      lastSeen = Date.now();
+      wait = RETRY_FIRST;
+      if (everOpened) onReconnect?.();
+      everOpened = true;
+    };
+    s.onmessage = (m) => {
+      lastSeen = Date.now();
+      try {
+        onEvent(JSON.parse(m.data as string) as ServerEvent);
+      } catch {
+        // ignore malformed frames
+      }
+    };
+    s.addEventListener("ping", () => {
+      lastSeen = Date.now();
+    });
+    // The browser retries a dropped stream by itself and only gives up
+    // (readyState CLOSED) on an answer that is not one; from there on the
+    // retries are ours, at doubling waits.
+    s.onerror = () => {
+      if (s.readyState !== CONNECTING && s === es) schedule();
+    };
+    return s;
+  }
+
+  function schedule(): void {
+    if (stopped || retry) return;
+    retry = setTimeout(() => {
+      retry = null;
+      replace();
+    }, wait);
+    wait = Math.min(wait * 2, RETRY_MAX);
+  }
+
+  function replace(): void {
+    if (stopped) return;
+    es.close();
+    es = open();
+  }
+
+  function check(): void {
+    if (stopped) return;
+    const act = streamAction(es.readyState, lastSeen, Date.now(), retry !== null);
+    if (act === "recycle") replace();
+    else if (act === "reopen") schedule();
+  }
+
+  const watchdog = setInterval(check, STREAM_CHECK);
+  // A backgrounded tab's timers are throttled or frozen, so the watchdog may
+  // not have run for hours when the page shows again; look at once.
+  const onVisible = () => {
+    if (document.visibilityState === "visible") check();
   };
-  es.onmessage = (m) => {
-    try {
-      onEvent(JSON.parse(m.data as string) as ServerEvent);
-    } catch {
-      // ignore malformed frames
-    }
+  if (typeof document !== "undefined") document.addEventListener("visibilitychange", onVisible);
+
+  return () => {
+    stopped = true;
+    clearInterval(watchdog);
+    if (retry) clearTimeout(retry);
+    if (typeof document !== "undefined") document.removeEventListener("visibilitychange", onVisible);
+    es.close();
   };
-  return () => es.close();
 }
