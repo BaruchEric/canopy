@@ -3069,10 +3069,54 @@ body.resizing {
 .term-view {
   position: absolute;
   inset: 0;
+  display: flex;
+  flex-direction: column;
+}
+.term-view[hidden] {
+  display: none;
+}
+.term-screen {
+  flex: 1;
+  min-height: 0;
   padding: 6px 4px 4px 10px;
 }
-.term-view .xterm {
+.term-screen .xterm {
   height: 100%;
+}
+/* the touch key bar under a shell: one row that scrolls sideways */
+.term-keys {
+  flex: none;
+  display: flex;
+  gap: 4px;
+  padding: 4px 6px;
+  overflow-x: auto;
+  scrollbar-width: none;
+  border-top: 1px solid var(--hair);
+  background: var(--bark1);
+  touch-action: pan-x;
+  -webkit-user-select: none;
+  user-select: none;
+}
+.term-key {
+  flex: none;
+  min-width: 40px;
+  height: 34px;
+  padding: 0 10px;
+  border-radius: var(--r);
+  border: 1px solid var(--hair2);
+  background: var(--bark2);
+  color: var(--ink);
+  font-family: var(--mono);
+  font-size: 13px;
+  -webkit-tap-highlight-color: transparent;
+}
+.term-key:active {
+  background: var(--bark3);
+}
+.term-key.mod.on {
+  color: var(--bark0);
+  background: var(--moss);
+  border-color: var(--moss);
 }
 /* xterm's own scrollbar sits inside the padded box; its viewport paints the
    token background so the padding does not show as a frame */

@@ -142,7 +142,7 @@ export const TERM_FONT = {
 /** the lines a panel shell opens at */
 export const PANEL_TERM_ROWS = 5;
 
-/** the `.term-view` box's vertical padding (styles.css), plus slack so the
+/** the `.term-screen` box's vertical padding (styles.css), plus slack so the
  *  fit addon's floor never rounds the last row away */
 const TERM_PAD = 10 + 3;
 

@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import type { CSSProperties, KeyboardEvent, PointerEvent } from "react";
+import type { CSSProperties, KeyboardEvent, MouseEvent, PointerEvent } from "react";
 import { Terminal, type ITheme } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import "@xterm/xterm/css/xterm.css";
@@ -9,6 +9,7 @@ import { PANEL_TERM, TERM, closedIn, panelTermHeightFor, useStore, type TermTab 
 import { TERM_FONT, termId, viewKey } from "../term";
 import { clamp } from "../util";
 import { clientId } from "../client";
+import { BAR_KEYS, NO_MODS, keyBytes, withMods, type BarKey, type Mods } from "../keys";
 import { Wordmark } from "./TopBar";
 import { TERM_GONE, type Repo } from "../../../src/core/types";
 
@@ -130,6 +131,18 @@ export function TermView({
   const endTerm = useStore((s) => s.endTerm);
   const exitRef = useRef(onExit);
   exitRef.current = onExit;
+  // the touch key bar's sticky Ctrl/Alt, read by the phone keyboard's input
+  // inside the effect below, so a ref beside the state the bar renders
+  const [mods, setModsState] = useState<Mods>(NO_MODS);
+  const modsRef = useRef<Mods>(NO_MODS);
+  const setMods = (m: Mods) => {
+    modsRef.current = m;
+    setModsState(m);
+  };
+  const setModsRef = useRef(setMods);
+  setModsRef.current = setMods;
+  const sendRef = useRef<(data: string) => void>(() => {});
+  const touch = useCoarsePointer();
 
   useEffect(() => {
     const el = host.current;
@@ -222,8 +235,16 @@ export function TermView({
     };
     connect();
 
+    // what the key bar sends goes the same way as a typed key
+    sendRef.current = (data) => send(enc.encode(data));
     const subs = [
-      term.onData((data) => send(enc.encode(data))),
+      term.onData((data) => {
+        const m = modsRef.current;
+        if (m.ctrl || m.alt) {
+          setModsRef.current(NO_MODS);
+          send(enc.encode(withMods(data, m)));
+        } else send(enc.encode(data));
+      }),
       // mouse reports and the like arrive as raw bytes in a string
       term.onBinary((data) => send(Uint8Array.from(data, (ch) => ch.charCodeAt(0) & 0xff))),
       term.onResize(({ cols, rows }) => send(JSON.stringify({ resize: { cols, rows } }))),
@@ -310,7 +331,137 @@ export function TermView({
     return () => mq.removeEventListener("change", paint);
   }, [theme]);
 
-  return <div ref={host} className="term-view" hidden={!active} />;
+  const tapKey = (key: BarKey) => {
+    const term = termRef.current;
+    sendRef.current(keyBytes(key, modsRef.current, term?.modes.applicationCursorKeysMode ?? false));
+    if (modsRef.current.ctrl || modsRef.current.alt) setMods(NO_MODS);
+  };
+
+  return (
+    <div className="term-view" hidden={!active}>
+      <div ref={host} className="term-screen" />
+      {touch && (
+        <KeyBar
+          mods={mods}
+          onMods={setMods}
+          onKey={tapKey}
+          onKeyboard={() => termRef.current?.focus()}
+        />
+      )}
+    </div>
+  );
+}
+
+/** whether the main pointer is a finger: a phone or a tablet, where the
+ *  key bar shows */
+function useCoarsePointer(): boolean {
+  const query = "(pointer: coarse)";
+  const [coarse, setCoarse] = useState(() => matchMedia(query).matches);
+  useEffect(() => {
+    const mq = matchMedia(query);
+    const on = () => setCoarse(mq.matches);
+    mq.addEventListener("change", on);
+    return () => mq.removeEventListener("change", on);
+  }, []);
+  return coarse;
+}
+
+/** keys that repeat while held */
+const REPEATS: readonly BarKey[] = ["up", "down", "left", "right", "pgup", "pgdn"];
+
+/**
+ * The keys a phone keyboard lacks, in a strip under the shell. Each acts on
+ * pointer down with the default prevented, so the terminal keeps focus and
+ * the phone's keyboard stays up; the arrows repeat while held. Ctrl and Alt
+ * stay lit until the next key, from here or the keyboard.
+ */
+function KeyBar({
+  mods,
+  onMods,
+  onKey,
+  onKeyboard,
+}: {
+  mods: Mods;
+  onMods: (m: Mods) => void;
+  onKey: (key: BarKey) => void;
+  onKeyboard: () => void;
+}) {
+  const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const stop = () => {
+    if (timer.current) clearTimeout(timer.current);
+    timer.current = null;
+  };
+  useEffect(() => stop, []);
+  const press = (key: BarKey) => (e: PointerEvent) => {
+    e.preventDefault();
+    stop();
+    onKey(key);
+    if (!REPEATS.includes(key)) return;
+    const again = () => {
+      onKey(key);
+      timer.current = setTimeout(again, 70);
+    };
+    timer.current = setTimeout(again, 400);
+  };
+  // a keyboard (Enter or Space on a focused button) arrives as a click with
+  // no pointer behind it
+  const byKeyboard = (fn: () => void) => (e: MouseEvent) => {
+    if (e.detail === 0) fn();
+  };
+  const toggle = (which: keyof Mods) => (e: PointerEvent) => {
+    e.preventDefault();
+    onMods({ ...mods, [which]: !mods[which] });
+  };
+  return (
+    <div className="term-keys" role="toolbar" aria-label="Terminal keys">
+      <button
+        type="button"
+        className="term-key"
+        tabIndex={-1}
+        title="Show the keyboard"
+        aria-label="Show the keyboard"
+        onPointerDown={(e) => {
+          e.preventDefault();
+          onKeyboard();
+        }}
+        onClick={byKeyboard(onKeyboard)}
+      >
+        ⌨
+      </button>
+      {(["ctrl", "alt"] as const).map((m) => (
+        <button
+          key={m}
+          type="button"
+          className={`term-key mod${mods[m] ? " on" : ""}`}
+          tabIndex={-1}
+          aria-pressed={mods[m]}
+          title={`${m === "ctrl" ? "Ctrl" : "Alt"} for the next key`}
+          onPointerDown={toggle(m)}
+          onClick={byKeyboard(() => onMods({ ...mods, [m]: !mods[m] }))}
+        >
+          {m}
+        </button>
+      ))}
+      {BAR_KEYS.map((k) => (
+        <button
+          key={k.key}
+          type="button"
+          className="term-key"
+          tabIndex={-1}
+          title={k.title}
+          aria-label={k.title}
+          onPointerDown={press(k.key)}
+          onPointerUp={stop}
+          onPointerLeave={stop}
+          onPointerCancel={stop}
+          onContextMenu={(e) => e.preventDefault()}
+          onClick={byKeyboard(() => onKey(k.key))}
+        >
+          {k.label}
+        </button>
+      ))}
+    </div>
+  );
 }
 
 /** A shell area's top edge: dragged to size it, arrowed by the keyboard,
