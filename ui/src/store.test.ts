@@ -21,27 +21,28 @@ describe("closedSectionsOf", () => {
       "claude",
       "launch",
       "peers",
+      "preview",
     ]);
   });
   test("a section the reader unfolded stays unfolded once the layout knows it", () => {
     const saved = ["search", "history", "claude"];
-    expect(closedSectionsOf(saved, ["search", "history", "claude", "launch", "peers"])).toBe(saved);
+    expect(closedSectionsOf(saved, ["search", "history", "claude", "launch", "peers", "preview"])).toBe(saved);
   });
   test("a stored fold is not doubled", () => {
-    expect(closedSectionsOf(["launch"], [])).toEqual(["launch", "search", "history", "claude", "peers"]);
+    expect(closedSectionsOf(["launch"], [])).toEqual(["launch", "search", "history", "claude", "peers", "preview"]);
   });
 });
 
 describe("per-repo folds", () => {
   test("a repo nobody has touched folds the defaults", () => {
-    expect(sectionsFor({}, "a")).toEqual(["search", "history", "claude", "launch", "peers"]);
+    expect(sectionsFor({}, "a")).toEqual(["search", "history", "claude", "launch", "peers", "preview"]);
     expect(closedIn({ closedSections: {} }, "a", "history")).toBe(true);
     expect(closedIn({ closedSections: {} }, "a", "changes")).toBe(false);
   });
   test("a toggle touches one repo and leaves the rest alone", () => {
     const one = toggleIn({}, "a", "history");
-    expect(sectionsFor(one, "a")).toEqual(["search", "claude", "launch", "peers"]);
-    expect(sectionsFor(one, "b")).toEqual(["search", "history", "claude", "launch", "peers"]);
+    expect(sectionsFor(one, "a")).toEqual(["search", "claude", "launch", "peers", "preview"]);
+    expect(sectionsFor(one, "b")).toEqual(["search", "history", "claude", "launch", "peers", "preview"]);
     const two = toggleIn(one, "a", "changes");
     expect(closedIn({ closedSections: two }, "a", "changes")).toBe(true);
     expect(closedIn({ closedSections: two }, "b", "changes")).toBe(false);
@@ -50,7 +51,7 @@ describe("per-repo folds", () => {
     const closed = { a: ["search"] };
     expect(unfoldIn(closed, "a", "history")).toBe(closed);
     expect(sectionsFor(unfoldIn(closed, "a", "search"), "a")).toEqual([]);
-    expect(sectionsFor(unfoldIn({}, "b", "launch"), "b")).toEqual(["search", "history", "claude", "peers"]);
+    expect(sectionsFor(unfoldIn({}, "b", "launch"), "b")).toEqual(["search", "history", "claude", "peers", "preview"]);
   });
 });
 

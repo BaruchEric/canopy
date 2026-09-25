@@ -1,5 +1,7 @@
 import { ACTIONS } from "../core/actions";
-import { Library, libraryOriginAllowed, openBind } from "../core/library";
+import { Library, libraryOriginAllowed, openBind, tailnetHost } from "../core/library";
+import { PreviewProxy, parsePortRange, previewHostOk, previewable } from "../core/preview";
+import { listeningPorts, repoOfCwd } from "../core/ports";
 import { watch, type FSWatcher } from "node:fs";
 import { readFile, realpath, stat } from "node:fs/promises";
 import { homedir } from "node:os";
@@ -85,6 +87,9 @@ import {
   type HistoryOverview,
   type HistoryWindow,
   type KeptShell,
+  type ListeningPort,
+  type PortsResult,
+  type PreviewSlot,
   type Peer,
   type PeerBranch,
   type PeerSeen,
@@ -196,6 +201,8 @@ interface ServerState {
   kept: KeptShell[];
   /** a snapshot pass under way, so the timer never stacks a second one */
   keeping: Promise<void> | null;
+  /** the in-app browser's preview ports; null when previews are off */
+  preview: PreviewProxy | null;
 }
 
 /** One shell the server holds and the sockets on it. On a plain pty the
@@ -1546,6 +1553,29 @@ async function handleApi(
   if (path === "/api/helpers" && method === "GET") return json(helperList(state));
   if (path === "/api/devices" && method === "GET") return json(deviceList(state));
 
+  // The in-app browser: what listens on the backend's loopback, each port
+  // with the repo its process runs in when that can be seen, and a preview
+  // port for one of them.
+  if (path === "/api/ports" && method === "GET") {
+    const reserved = state.preview?.reserved ?? [];
+    const local = state.result.repos.filter((r) => !r.host && !r.forge);
+    const ports: ListeningPort[] = (await listeningPorts())
+      .filter((l) => !reserved.includes(l.port))
+      .map((l) => {
+        const repo = repoOfCwd(l.cwd, local);
+        return { port: l.port, ...(l.command ? { command: l.command } : {}), ...(repo ? { repo } : {}) };
+      });
+    return json({ ports, slots: state.preview?.slots ?? [] } satisfies PortsResult);
+  }
+  if (path === "/api/preview" && method === "POST") {
+    if (!state.preview) throw new HttpError(503, "previews are off (CANOPY_PREVIEW_PORTS)");
+    const b = (await req.json()) as { port?: unknown };
+    if (!previewable(b.port, state.preview.reserved)) throw new HttpError(400, "a port to preview is needed (not canopy's own)");
+    const slot = await state.preview.serve(b.port);
+    if (slot === null) throw new HttpError(503, "no preview port could be opened");
+    return json({ slot, port: b.port } satisfies PreviewSlot);
+  }
+
   if (path === "/api/rescan" && method === "POST") {
     await scanAll(state);
     broadcast(state, { type: "scan", result: state.result });
@@ -2320,6 +2350,7 @@ export async function startServer(opts: {
     activity: null,
     kept: [],
     keeping: null,
+    preview: null,
   };
   await rememberRoot(root);
   await Promise.all(state.sources.map((rt) => scanOne(state, rt, scanOpts(state, cfg))));
@@ -2355,6 +2386,20 @@ export async function startServer(opts: {
   // tailnet host by its own name, or the configured public origin.
   const publicOrigin = process.env["CANOPY_PUBLIC_ORIGIN"];
   const beyondLoopback = openBind();
+  // The in-app browser's ports, each listener started on first use. A
+  // preview dials the backend's loopback, which in the container is the
+  // shells container's too (compose puts canopy in its network namespace),
+  // so a dev server started in a canopy shell is reachable.
+  const slots = parsePortRange(process.env["CANOPY_PREVIEW_PORTS"]);
+  let boundPort = port;
+  state.preview = slots.length
+    ? new PreviewProxy(slots, {
+        bind: bindHost,
+        own: () => boundPort,
+        hostOk: (h) => previewHostOk(h, beyondLoopback, tailnetHost),
+        hostFor: async (p) => (await listeningPorts()).find((l) => l.port === p)?.host,
+      })
+    : null;
   const server = bind(port, () =>
     Bun.serve<Socket>({
       port,
@@ -2532,6 +2577,7 @@ export async function startServer(opts: {
       },
     }),
   );
+  boundPort = server.port ?? port;
   // Only after the bind succeeds: a watcher started earlier would outlive a
   // failed listen and hold the process open.
   for (const rt of state.sources) startWatcher(state, rt);
@@ -2587,6 +2633,7 @@ export async function startServer(opts: {
         dropHelper(state, name, h.ws);
       }
       library.stop();
+      state.preview?.stop();
       process.off("exit", stopLibrary);
       for (const rt of state.sources) rt.watcher?.close();
       server.stop(true);

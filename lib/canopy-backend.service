@@ -1,7 +1,8 @@
 # Bring the shared backend up once the host has its tailnet address.
 #
-# Why this exists: compose publishes canopy's port on the tailnet address
-# alone, and at boot docker starts its containers before tailscaled has
+# Why this exists: compose publishes canopy's ports on the tailnet address
+# alone (on the shells service, whose network canopy shares), and at boot
+# docker starts its containers before tailscaled has
 # assigned that address, so the bind fails with "cannot assign requested
 # address" and the container exits 255. Docker's restart policy does not
 # retry a networking failure, so without this unit the backend simply does
@@ -11,8 +12,9 @@
 #   sudo cp lib/canopy-backend.service /etc/systemd/system/
 #   sudo systemctl daemon-reload && sudo systemctl enable --now canopy-backend
 #
-# It recreates only the canopy container, never the shells one, so running it
-# by hand on a live system does not end anyone's shells.
+# It starts the shells container only when it is not running (the one that
+# failed that bind at boot) and recreates only the canopy container, so
+# running it by hand on a live system does not end anyone's shells.
 
 [Unit]
 Description=canopy shared backend, once the tailnet address exists

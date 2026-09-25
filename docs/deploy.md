@@ -26,7 +26,8 @@ mini.
 - **Backend:** one container on the mini. The mini is already a tailnet node,
   so canopy's port is published on the mini's tailnet address only and every
   device reaches it as `http://macmini-2018:7850` (MagicDNS) or the tailnet
-  IP. Nothing listens on the LAN.
+  IP. Nothing listens on the LAN. The in-app browser's preview ports,
+  7860-7869, are published the same way (see "Previews" below).
 - **Clients:** any browser on the tailnet. Same cockpit everywhere. VS Code
   opens on the client over Remote-SSH into the mini.
 - **Helpers:** `canopy helper` on each desktop you want the openers on (the
@@ -139,10 +140,35 @@ canopy alone. Plan either for a moment when nothing is running in a shell.
 `docker compose up -d --force-recreate --no-deps canopy` is the crash
 rehearsal: canopy alone comes back and the shells stay.
 
+## Previews (the in-app browser)
+
+A repo panel's **preview** section frames the repo's dev server. The dev
+server runs in a canopy shell, so it listens on the `shells` container's
+loopback; canopy runs in that container's network namespace
+(`network_mode: service:shells`), and its process namespace too (`pid:
+service:shells`) so it can read which repo each listening process runs in.
+Both containers' ports are therefore published on the `shells` service:
+7850 for canopy, 7860-7869 for the previews. Each preview gets one of those
+ports to itself and canopy proxies it to the dev server's port, websockets
+(HMR) included, so a preview is its own origin and the app's absolute paths
+work unchanged.
+
+- The first `docker compose up -d` after this layout arrived recreates the
+  `shells` container (its ports and network changed), which ends every
+  shell once. Pick a quiet moment.
+- A preview is plain http on the backend's own port, so it works at the
+  tailnet address, not through the Cloudflare tunnel (which carries only
+  canopy's port, over https). The section says so there.
+- `CANOPY_PREVIEW_PORTS` (default `7860-7869`, `0` for off) sets the pool.
+  Change the published range in compose to match.
+- The tunnel's `http://canopy:7850` still resolves: `shells` carries the
+  network alias `canopy`.
+
 ## A host that is not on the tailnet
 
 Add the sidecar override, which makes a `tailscale/tailscale` container the
-tailnet node and joins canopy to its network. canopy is then reachable as
+tailnet node and joins the shells container (and with it canopy) to its
+network. canopy is then reachable as
 `http://canopy:7850` (the sidecar's hostname) with no port published on the
 host. Put a `TS_AUTHKEY=tskey-auth-…` from the tailscale admin console in
 `.env` and run:
@@ -196,8 +222,8 @@ Mac, as `ca.beric.canopy-server`), point the hostname at this tunnel and
 stop that one. Two connectors on one tunnel share its traffic, and the
 dashboard ingress (`http://canopy:7850`) means nothing on the Mac.
 
-With the sidecar override, canopy shares the `ts` container's network and
-has no name of its own on the compose network: use `http://ts:7850` as the
+With the sidecar override, canopy shares the `ts` container's network (by way
+of the shells container's) and has no name of its own on the compose network: use `http://ts:7850` as the
 hostname's service there.
 
 Every browser that comes in through the tunnel reaches canopy from the

@@ -33,6 +33,20 @@ services:
       - ${HOST_HOME:-/home/eric}/.ssh:/home/bun/.ssh:ro
       # the host's time zone, so a shell prompt's clock is the host's
       - /etc/localtime:/etc/localtime:ro
+    # canopy shares this container's network (and process) namespace, so
+    # its ports are published here: canopy's own, and the preview ports the
+    # in-app browser proxies a dev server through. A dev server started in a
+    # shell listens on this loopback, which is canopy's loopback too.
+    # CANOPY_LISTEN is the host's tailnet IP (tailscale ip -4); loopback
+    # when unset, so a missing .env cannot put canopy on the LAN
+    ports:
+      - "${CANOPY_LISTEN:-127.0.0.1}:7850:7850"
+      - "${CANOPY_LISTEN:-127.0.0.1}:7860-7869:7860-7869"
+    # the name the tunnel's ingress (http://canopy:7850) dials, which is
+    # canopy's port in this namespace
+    networks:
+      default:
+        aliases: [canopy]
     # up once the socket answers, so canopy's first new-session never starts
     # a server of its own (one inside the canopy container, gone with it)
     healthcheck:
@@ -56,10 +70,15 @@ services:
     depends_on:
       shells:
         condition: service_healthy
-    ports:
-      # CANOPY_LISTEN is the host's tailnet IP (tailscale ip -4); loopback
-      # when unset, so a missing .env cannot put canopy on the LAN
-      - "${CANOPY_LISTEN:-127.0.0.1}:7850:7850"
+        # a container on another's network loses it when that one restarts;
+        # compose restarts canopy along with shells
+        restart: true
+    # In the shells container's network and process namespaces: the in-app
+    # browser dials a dev server on the loopback the shells listen on, and
+    # reads /proc to tell which repo each listening process runs in. The
+    # ports are published on the shells service above.
+    network_mode: "service:shells"
+    pid: "service:shells"
     environment:
       - CANOPY_CONFIG_DIR=/config
       # how a client reaches THIS host over ssh for VS Code Remote-SSH; the

@@ -19,6 +19,8 @@ import type {
   LaunchSettings,
   Listing,
   KeptShell,
+  PortsResult,
+  PreviewSlot,
   LogEntry,
   Build,
   Peer,
@@ -262,6 +264,13 @@ export const api = {
       body: JSON.stringify({ id }),
     }),
   dismissFleet: (id: string) => req<{ ok: true }>(`/api/fleet?${rq(id)}`, { method: "DELETE" }),
+  /* the in-app browser: what listens on the backend, and a preview port for one */
+  ports: () => req<PortsResult>("/api/ports"),
+  preview: (port: number) =>
+    req<PreviewSlot>("/api/preview", {
+      method: "POST",
+      body: JSON.stringify({ port }),
+    }),
   /* the launcher: releases, pull requests and builds of one repo */
   releases: (id: string) => req<Release[]>(`/api/repos/releases?${rq(id)}`),
   pulls: (id: string) => req<Pull[]>(`/api/repos/pulls?${rq(id)}`),

@@ -19,6 +19,7 @@ import { DOCK, PANEL, activeFlowFor, capsFor, closedIn, flowFor, runFor, useStor
 import { ago, GLYPH, stateOf } from "../util";
 import { ClaudeSection } from "./Claude";
 import { LaunchSection } from "./Launch";
+import { PreviewSection } from "./Preview";
 import { CommitRow } from "./Commit";
 import { DiffView } from "./DiffView";
 import { PeerChips, Pulls, RemoteTipChip } from "./RemoteTip";
@@ -1046,6 +1047,7 @@ export function RepoPanel({
           <SearchSection repo={repo} />
           <History repo={repo} />
           <PeersSection repo={repo} />
+          {!repo.host && <PreviewSection repo={repo} />}
           <LaunchSection repo={repo} />
           <ClaudeSection repo={repo} />
         </>

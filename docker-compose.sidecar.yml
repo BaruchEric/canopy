@@ -1,7 +1,9 @@
 # Override for a host that is not itself on the tailnet: a tailscale sidecar
-# becomes the tailnet node and canopy shares its network, so canopy is
-# reachable as http://canopy:7850 (the sidecar's hostname) with no port
-# published on the host at all. Needs TS_AUTHKEY in .env.
+# becomes the tailnet node and the shells container shares its network (and
+# canopy the shells container's, as in the base file), so canopy is
+# reachable as http://canopy:7850 (the sidecar's hostname), its previews at
+# :7860-7869, with no port published on the host at all. Needs TS_AUTHKEY
+# in .env.
 #
 #   docker compose -f docker-compose.yml -f docker-compose.sidecar.yml up -d --build
 services:
@@ -21,14 +23,15 @@ services:
       - sys_module
     restart: unless-stopped
 
-  canopy:
-    # the map form, so it merges with the base file's dependency on shells
+  shells:
     depends_on:
       ts:
         condition: service_started
     network_mode: service:ts
-    # the sidecar's network is the only way in; nothing is published on the host
+    # the sidecar's network is the only way in; nothing is published on the
+    # host, and a container on another's network takes no aliases
     ports: !reset []
+    networks: !reset {}
 
 volumes:
   ts-state:

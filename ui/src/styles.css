@@ -3585,6 +3585,67 @@ body.resizing {
   margin: 4px 14px 2px;
 }
 
+/* ---------- the preview: the repo's dev server framed in the panel ---------- */
+
+.preview {
+  padding-bottom: 8px;
+}
+.preview-body {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.preview-ports,
+.preview-bar {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin: 0 14px;
+}
+.preview-bar {
+  flex-wrap: nowrap;
+}
+.preview-select,
+.preview-port,
+.preview-path {
+  font: inherit;
+  font-size: 12px;
+  padding: 2px 8px;
+  border-radius: var(--r);
+  border: 1px solid var(--hair2);
+  background: var(--bark1);
+  color: var(--ink);
+}
+.preview-port {
+  width: 6ch;
+}
+.preview-path {
+  flex: 1 1 auto;
+  min-width: 0;
+  font-family: var(--mono);
+}
+.preview-frame-wrap {
+  margin: 0 14px;
+  height: 420px;
+  min-height: 160px;
+  resize: vertical;
+  overflow: hidden;
+  border: 1px solid var(--hair2);
+  border-radius: var(--r);
+  /* the app's own background, not canopy's, shows through a page that sets none */
+  background: #fff;
+}
+.preview-frame-wrap > .panel-clean {
+  margin: 14px;
+}
+.preview-frame {
+  display: block;
+  width: 100%;
+  height: 100%;
+  border: 0;
+}
+
 /* ---------- the launcher: builds, releases and pull requests in the panel ---------- */
 
 .launch {

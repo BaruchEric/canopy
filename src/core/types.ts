@@ -1088,3 +1088,27 @@ export interface KeptShell {
   /** what was running in it when it was last looked at, when canopy could tell */
   agent: AgentKind | null;
 }
+
+/** A port something listens on at the backend's loopback, as the preview
+ *  section offers it: the process behind it and the repo its working folder
+ *  lies in, when the backend can see that process. */
+export interface ListeningPort {
+  port: number;
+  /** the process's name (`node`, `bun`, `vite`), when it could be read */
+  command?: string;
+  /** the id of the repo the process runs in, when its cwd is inside one */
+  repo?: string;
+}
+
+/** `GET /api/ports`: what listens, and whether previews can be served at all */
+export interface PortsResult {
+  ports: ListeningPort[];
+  /** the preview ports canopy proxies through; empty when previews are off */
+  slots: number[];
+}
+
+/** `POST /api/preview`: the preview port a backend port is proxied on */
+export interface PreviewSlot {
+  slot: number;
+  port: number;
+}
