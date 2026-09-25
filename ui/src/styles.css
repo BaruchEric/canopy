@@ -1816,6 +1816,13 @@ body.resizing {
   white-space: nowrap;
   text-overflow: ellipsis;
 }
+.unpushed-list > .panel-label > span {
+  margin-left: auto;
+  color: var(--sky);
+}
+.unpushed-list .log-hash {
+  color: var(--sky);
+}
 .log-unpushed {
   flex: none;
   font-size: 11px;

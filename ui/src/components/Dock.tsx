@@ -564,6 +564,63 @@ function PeersSection({ repo }: { repo: Repo }) {
 const unpushedIn = (log: LogEntry[]): number =>
   log.filter((c) => c.unpushed).length;
 
+/** The commits a push would send, under the changes: what is waiting to
+ *  leave this machine, committed or not, in one place. Read off the same log
+ *  history shows, so a branch more than a log's length ahead says how many
+ *  more there are rather than listing them. */
+function Unpushed({ repo }: { repo: Repo }) {
+  const updatedAt = useStore((s) => s.updatedAt[repo.id]);
+  const st = repo.status;
+  // with no upstream, ahead is 0 but every commit may still be unpushed
+  const worth = (st?.ahead ?? 0) > 0 || (!!st && !st.upstream);
+  const [log, setLog] = useState<LogEntry[] | null>(null);
+  const [drilled, setDrilled] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!worth) {
+      setLog(null);
+      return;
+    }
+    let live = true;
+    api
+      .log(repo.id)
+      .then((entries) => {
+        if (live) setLog(entries.filter((c) => c.unpushed));
+      })
+      .catch(() => {});
+    return () => {
+      live = false;
+    };
+  }, [worth, repo.id, updatedAt]);
+
+  if (!worth || !log || log.length === 0) return null;
+  const more = (st?.ahead ?? 0) - log.length;
+  return (
+    <div className="unpushed-list">
+      <p className="panel-label">
+        not pushed{" "}
+        <span title={st?.upstream ? `past ${st.upstream}` : "on no remote branch yet"}>
+          ↑{Math.max(st?.ahead ?? 0, log.length)}
+        </span>
+      </p>
+      <ul className="log">
+        {log.map((c) => (
+          <CommitRow
+            key={c.hash}
+            repo={repo}
+            hash={c.hash}
+            subject={c.subject}
+            meta={`${c.author} · ${c.when}`}
+            open={drilled === c.hash}
+            onToggle={() => setDrilled(drilled === c.hash ? null : c.hash)}
+          />
+        ))}
+      </ul>
+      {more > 0 && <p className="panel-clean">and {more} more</p>}
+    </div>
+  );
+}
+
 function History({ repo }: { repo: Repo }) {
   // Bumped by the repo SSE event, so a commit made in a terminal refreshes
   // this list too — not just one made from the panel.
@@ -913,7 +970,11 @@ export function RepoPanel({
             aria-expanded={!changesClosed}
             onClick={() => toggleSection(id, "changes")}
           >
-            changes <span>{files.length}</span>
+            changes{" "}
+            <span>
+              {files.length}
+              {(st?.ahead ?? 0) > 0 && ` · ↑${st?.ahead} not pushed`}
+            </span>
           </button>
           {!changesClosed &&
             (files.length === 0 ? (
@@ -968,6 +1029,8 @@ export function RepoPanel({
               </div>
             </div>
           )}
+
+          {!changesClosed && <Unpushed repo={repo} />}
 
           <SearchSection repo={repo} />
           <History repo={repo} />
