@@ -6,9 +6,11 @@ import { exec } from "./exec";
 import {
   commitFiles,
   getDiff,
+  getLog,
   getStatus,
   isAccessDenied,
   isHash,
+  parseLog,
   parseNameStatusZ,
   parseNumstatZ,
   parseMtimes,
@@ -339,6 +341,48 @@ describe("stageFile", () => {
       await expect(stageFile(dir, "new.txt", true, "../outside.txt")).rejects.toThrow("escapes");
     } finally {
       await rm(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("parseLog", () => {
+  test("flags a row by its full hash and keeps the short one", () => {
+    const line = (h: string, full: string) => [h, "subject: with, words", "t", "2 hours ago", full].join("\0");
+    expect(parseLog(`${line("aaaaaaa", "a".repeat(40))}\n${line("bbbbbbb", "b".repeat(40))}\n`, new Set(["a".repeat(40)]))).toEqual([
+      { hash: "aaaaaaa", subject: "subject: with, words", author: "t", when: "2 hours ago", unpushed: true },
+      { hash: "bbbbbbb", subject: "subject: with, words", author: "t", when: "2 hours ago" },
+    ]);
+    expect(parseLog("", new Set())).toEqual([]);
+  });
+});
+
+describe("getLog unpushed", () => {
+  test("past the upstream, past every remote without one, nothing without a remote", async () => {
+    const root = await mkdtemp(join(tmpdir(), "canopy-unpushed-"));
+    const dir = join(root, "work");
+    const bare = join(root, "origin.git");
+    try {
+      const run = (...args: string[]) => exec(["git", "-C", dir, ...args]);
+      const commit = async (m: string) => {
+        await writeFile(join(dir, "f.txt"), `${m}\n`);
+        await run("add", "f.txt");
+        await run("-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "-m", m);
+      };
+      await exec(["git", "init", "-q", dir]);
+      await commit("one");
+      const flags = async () => (await getLog(dir)).map((c) => [c.subject, !!c.unpushed]);
+      // no remote: nowhere to push, so nothing is marked
+      expect(await flags()).toEqual([["one", false]]);
+      await exec(["git", "init", "-q", "--bare", bare]);
+      await run("remote", "add", "origin", bare);
+      // a remote but no upstream: every commit no remote branch has
+      expect(await flags()).toEqual([["one", true]]);
+      await run("push", "-q", "-u", "origin", "HEAD");
+      await commit("two");
+      await commit("three");
+      expect(await flags()).toEqual([["three", true], ["two", true], ["one", false]]);
+    } finally {
+      await rm(root, { recursive: true, force: true });
     }
   });
 });

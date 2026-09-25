@@ -317,19 +317,39 @@ export async function fetchRepo(repoPath: string, remotes?: string[]): Promise<{
 }
 
 export async function getLog(repoPath: string, n = 20): Promise<LogEntry[]> {
-  const r = await git(repoPath, [
-    "log",
-    `-${n}`,
-    "--pretty=%h%x00%s%x00%an%x00%ar",
+  const [r, out] = await Promise.all([
+    git(repoPath, ["log", `-${n}`, "--pretty=%h%x00%s%x00%an%x00%ar%x00%H"]),
+    unpushedHashes(repoPath, n),
   ]);
   if (r.code !== 0) return [];
-  return r.stdout
+  return parseLog(r.stdout, out);
+}
+
+/** The full hashes of the newest `n` commits a push would send: past the
+ *  upstream, or, with no upstream, on no remote-tracking branch. A repo with
+ *  no remote at all has nowhere to push, so nothing is unpushed. `rev-list`
+ *  walks in the same order as `log`, so its first `n` cover the log's. */
+async function unpushedHashes(repoPath: string, n: number): Promise<Set<string>> {
+  const up = await git(repoPath, ["rev-list", `--max-count=${n}`, "@{upstream}..HEAD"]);
+  if (up.code === 0) return new Set(up.stdout.split("\n").filter(Boolean));
+  const remotes = await git(repoPath, ["remote"]);
+  if (remotes.code !== 0 || remotes.stdout.trim() === "") return new Set();
+  const all = await git(repoPath, ["rev-list", `--max-count=${n}`, "HEAD", "--not", "--remotes"]);
+  return all.code === 0 ? new Set(all.stdout.split("\n").filter(Boolean)) : new Set();
+}
+
+/** `git log --pretty=%h%x00%s%x00%an%x00%ar%x00%H` lines, each flagged when
+ *  its full hash is among `unpushed`. */
+export function parseLog(stdout: string, unpushed: Set<string>): LogEntry[] {
+  return stdout
     .split("\n")
     .filter(Boolean)
     .map((line) => {
-      const [hash = "", subject = "", author = "", when = ""] =
+      const [hash = "", subject = "", author = "", when = "", full = ""] =
         line.split("\0");
-      return { hash, subject, author, when };
+      const entry: LogEntry = { hash, subject, author, when };
+      if (unpushed.has(full)) entry.unpushed = true;
+      return entry;
     });
 }
 

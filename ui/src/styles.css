@@ -1816,6 +1816,15 @@ body.resizing {
   white-space: nowrap;
   text-overflow: ellipsis;
 }
+.log-unpushed {
+  flex: none;
+  font-size: 11px;
+  white-space: nowrap;
+  color: var(--sky);
+}
+.rev.unpushed > .log-row {
+  box-shadow: inset 2px 0 0 var(--sky);
+}
 .log-meta {
   flex: none;
   font-size: 11px;

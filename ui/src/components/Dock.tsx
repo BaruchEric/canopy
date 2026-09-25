@@ -561,6 +561,9 @@ function PeersSection({ repo }: { repo: Repo }) {
   );
 }
 
+const unpushedIn = (log: LogEntry[]): number =>
+  log.filter((c) => c.unpushed).length;
+
 function History({ repo }: { repo: Repo }) {
   // Bumped by the repo SSE event, so a commit made in a terminal refreshes
   // this list too — not just one made from the panel.
@@ -599,7 +602,12 @@ function History({ repo }: { repo: Repo }) {
       }}
     >
       <summary className="panel-label">
-        history <span>{log ? log.length : "…"}</span>
+        history{" "}
+        <span>
+          {log
+            ? `${unpushedIn(log) ? `↑${unpushedIn(log)} not pushed · ` : ""}${log.length}`
+            : "…"}
+        </span>
       </summary>
       {error ? (
         <p className="panel-error">Could not read the log: {error}</p>
@@ -618,6 +626,7 @@ function History({ repo }: { repo: Repo }) {
               meta={`${c.author} · ${c.when}`}
               open={drilled === c.hash}
               onToggle={() => setDrilled(drilled === c.hash ? null : c.hash)}
+              unpushed={c.unpushed}
             />
           ))}
         </ul>
@@ -870,6 +879,11 @@ export function RepoPanel({
           // A branch with no upstream reports ahead: 0 but still needs its
           // first push, so only a tracked-and-level branch disables this.
           disabled={busy !== null || ((st?.ahead ?? 0) === 0 && !!st?.upstream)}
+          title={
+            st?.ahead
+              ? `send ${st.ahead} commit${st.ahead === 1 ? "" : "s"} to ${st.upstream ?? "the remote"}; history marks them ↑ not pushed`
+              : undefined
+          }
           onClick={() => void run("push", async () => (await api.push(id)).out)}
         >
           {busy === "push"

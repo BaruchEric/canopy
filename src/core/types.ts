@@ -494,6 +494,9 @@ export interface LogEntry {
   subject: string;
   author: string;
   when: string;
+  /** on no remote yet: past the upstream, or on no remote-tracking branch at
+   *  all when the branch has no upstream; the commits a push would send */
+  unpushed?: true;
 }
 
 /** One path a commit touched, with the line counts git's numstat gives it. */

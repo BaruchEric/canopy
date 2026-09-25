@@ -16,6 +16,7 @@ export function CommitRow({
   meta,
   open,
   onToggle,
+  unpushed,
 }: {
   repo: Repo;
   hash: string;
@@ -24,9 +25,11 @@ export function CommitRow({
   meta: string;
   open: boolean;
   onToggle: () => void;
+  /** a commit a push would send, marked so the ↑n has names */
+  unpushed?: boolean;
 }) {
   return (
-    <li className={`rev${open ? " open" : ""}`}>
+    <li className={`rev${open ? " open" : ""}${unpushed ? " unpushed" : ""}`}>
       <button
         type="button"
         className="log-row"
@@ -36,6 +39,11 @@ export function CommitRow({
       >
         <code className="log-hash">{hash.slice(0, 7)}</code>
         <span className="log-subject">{subject}</span>
+        {unpushed && (
+          <span className="log-unpushed" title="not pushed yet: the next push sends it">
+            ↑ not pushed
+          </span>
+        )}
         <span className="log-meta">{meta}</span>
       </button>
       {open && <Detail repo={repo} hash={hash} />}
