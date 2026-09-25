@@ -296,8 +296,12 @@ Claude still work locally.
   on one machine. The server refuses it with a clear message and the UI hides
   it. Release and pull request listings read through `gh`, which the image
   carries (the final stage, so installing it did not touch the shells image),
-  logged in by `GH_TOKEN` from `.env`. The desktop openers are not off, they
-  moved: see the helper section above.
+  logged in by `GH_TOKEN` from `.env`. That login is also git's credential
+  helper for github.com in the canopy container (`GIT_CONFIG_*` in
+  `docker-compose.yml`), so the panel's push and the background fetch of a
+  private https remote work. Not in the shells container, which has no `gh`:
+  a `git push` typed into a shell there still has no login. The desktop
+  openers are not off, they moved: see the helper section above.
 - The history section (the rings, sessions, the Claude panel). It reads
   through the claude-history CLI, and the archive it reads lives in the vault
   on the Mac alone. The archive's projects are keyed by Mac paths
@@ -307,12 +311,6 @@ Claude still work locally.
   a copy of the archive on the mini plus a path map, or a CLI run over ssh on
   the Mac. Until then the overview answers `available: false` and the section
   stays empty.
-- The background fetch of your own remotes over https. `gh` is in the
-  image, but it is deliberately not git's credential helper, so a GitHub
-  remote over https fetches nothing (`GIT_TERMINAL_PROMPT=0` keeps it
-  quiet). Commits reach the mini from the Mac through peer sync instead, and
-  cards show ahead/behind against the refs that came with them, plus the
-  `⇄ n` pull request count, which is a read through `gh` and works.
 - Without a helper, VS Code is the one opener kept, as a
   `vscode-remote://ssh-remote+<host>` link built from `CANOPY_SSH_HOST`, and a
   search hit's file open answers 400. With a helper picked, both go through it.

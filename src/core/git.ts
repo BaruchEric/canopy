@@ -680,7 +680,21 @@ export async function push(repoPath: string): Promise<string> {
         `Fork the repo, then add your copy as a remote to push this branch.`,
     );
   }
+  if (isNoLogin(lastErr)) {
+    throw new Error(
+      `${lastErr}\n\nThis machine has no login for that remote, so git could ` +
+        `not ask for one. Push from a machine that has one, or give git a ` +
+        `credential helper here.`,
+    );
+  }
   throw new Error(lastErr);
+}
+
+/** git wanted a username or password and had no terminal to ask on
+ *  (`GIT_TERMINAL_PROMPT=0`, or no tty at all): no credentials here, which
+ *  is not the remote refusing us. */
+export function isNoLogin(stderr: string): boolean {
+  return /could not read (?:username|password)/i.test(stderr);
 }
 
 export async function pull(repoPath: string): Promise<string> {

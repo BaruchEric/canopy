@@ -725,9 +725,15 @@ export function RepoPanel({
   // the per-file checkboxes were used to exclude.
   const [stageAll, setStageAll] = useState(false);
   const [busy, setBusy] = useState<string | null>(null);
-  const [note, setNote] = useState<{ kind: "ok" | "err"; text: string } | null>(
-    null,
-  );
+  // A result shows where it was asked for: under the commit box for a commit
+  // or a suggestion, under the pull/push row for the rest. One spot at the
+  // panel's foot sat below every section, and behind a tall shell a failed
+  // push looked like a button that did nothing.
+  const [note, setNote] = useState<{
+    kind: "ok" | "err";
+    text: string;
+    at: "head" | "commit";
+  } | null>(null);
 
   const [access, setAccess] = useState<PushAccess>("unknown");
 
@@ -754,17 +760,20 @@ export function RepoPanel({
   const files = st?.files ?? [];
   const hasStaged = files.some((f) => f.index !== "." && !f.untracked);
 
-  const showError = (text: string) => setNote({ kind: "err", text });
+  const showError = (text: string) => setNote({ kind: "err", text, at: "head" });
+  const noteAt = (label: string): "head" | "commit" =>
+    label === "commit" || label === "commit+push" || label === "suggest" ? "commit" : "head";
 
   const run = async (label: string, fn: () => Promise<string | void>) => {
     setBusy(label);
     setNote(null);
     try {
       const out = await fn();
-      if (typeof out === "string" && out) setNote({ kind: "ok", text: out });
+      if (typeof out === "string" && out) setNote({ kind: "ok", text: out, at: noteAt(label) });
     } catch (err) {
       setNote({
         kind: "err",
+        at: noteAt(label),
         text: String(err instanceof Error ? err.message : err),
       });
     } finally {
@@ -948,6 +957,7 @@ export function RepoPanel({
             : `push${st?.ahead ? ` ↑${st.ahead}` : ""}`}
         </button>
       </div>
+      {note?.at === "head" && <p className={`note ${note.kind}`}>{note.text}</p>}
 
       {access === "denied" && (
         <p className="panel-hint">
@@ -1029,6 +1039,7 @@ export function RepoPanel({
               </div>
             </div>
           )}
+          {note?.at === "commit" && <p className={`note ${note.kind}`}>{note.text}</p>}
 
           {!changesClosed && <Unpushed repo={repo} />}
 
@@ -1039,7 +1050,6 @@ export function RepoPanel({
           <ClaudeSection repo={repo} />
         </>
       )}
-      {note && <p className={`note ${note.kind}`}>{note.text}</p>}
       </div>
       {!repo.error && <PanelShells repo={repo} />}
     </section>

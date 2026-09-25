@@ -9,6 +9,7 @@ import {
   getLog,
   getStatus,
   isAccessDenied,
+  isNoLogin,
   isHash,
   parseLog,
   parseNameStatusZ,
@@ -384,5 +385,16 @@ describe("getLog unpushed", () => {
     } finally {
       await rm(root, { recursive: true, force: true });
     }
+  });
+});
+
+describe("isNoLogin", () => {
+  test("git asking for a login it has no terminal for", () => {
+    expect(isNoLogin("fatal: could not read Username for 'https://github.com': terminal prompts disabled")).toBe(true);
+    expect(isNoLogin("fatal: could not read Password for 'https://x@github.com': No such device or address")).toBe(true);
+  });
+  test("a refusal or a rejected ref is something else", () => {
+    expect(isNoLogin("remote: Permission to a/b.git denied to c.")).toBe(false);
+    expect(isNoLogin("! [rejected] main -> main (fetch first)")).toBe(false);
   });
 });

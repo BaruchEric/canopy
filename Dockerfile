@@ -104,9 +104,9 @@ FROM shells
 # gh for the pull request counts and the release and pull listings, which the
 # server reads through `gh api`. It goes in this stage, not `shells`, so adding
 # it does not recreate the shells container. GitHub's own apt repo, since
-# Debian's gh predates `gh api --slurp`. The login is GH_TOKEN from compose.
-# No git credential helper on purpose: the mini's tree is an rsync mirror of
-# the Mac's, and a fetch here would fight the next sync over the same refs.
+# Debian's gh predates `gh api --slurp`. The login is GH_TOKEN from compose,
+# which also makes gh git's credential helper for github.com (GIT_CONFIG_* in
+# docker-compose.yml), so a push from the panel works here.
 USER root
 RUN mkdir -p -m 755 /etc/apt/keyrings \
     && curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg \

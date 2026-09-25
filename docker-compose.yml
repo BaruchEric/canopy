@@ -75,6 +75,13 @@ services:
       # the AI gateway key the verdict gates are evaluated with; both come
       # from .env and both are optional
       - GH_TOKEN=${GH_TOKEN:-}
+      # the same login is git's for github.com over https, through gh, so a
+      # push from the panel and the background fetch of a private repo work
+      # here; with GH_TOKEN empty gh has nothing to hand over and git fails
+      # the way it did without the helper
+      - GIT_CONFIG_COUNT=1
+      - GIT_CONFIG_KEY_0=credential.https://github.com.helper
+      - GIT_CONFIG_VALUE_0=!gh auth git-credential
       - VERCEL_AI_GATEWAY_API_KEY=${VERCEL_AI_GATEWAY_API_KEY:-}
       # the https origin the tunnel serves canopy at (https://canopy.beric.ca);
       # requests for that host with X-Forwarded-Proto: https pass the origin
