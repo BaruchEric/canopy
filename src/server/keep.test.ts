@@ -68,10 +68,11 @@ async function shellWith(id: string, marker: string): Promise<void> {
   await Bun.sleep(200);
 }
 
-/** what the pane of a session holds right now */
+/** what the pane of a session holds right now, as plain text: a shell that
+ * highlights what is typed (ble.sh) puts colours between the words */
 async function pane(id: string): Promise<string> {
   const base = tmuxBase();
-  return base ? ((await snapshot(base, id)) ?? "") : "";
+  return base ? Bun.stripANSI((await snapshot(base, id)) ?? "") : "";
 }
 
 /** the machine going down under a shell: the session goes, its record stays */
