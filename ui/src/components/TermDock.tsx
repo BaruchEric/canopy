@@ -10,6 +10,7 @@ import { TERM_FONT, termId, viewKey } from "../term";
 import { clamp } from "../util";
 import { clientId } from "../client";
 import { BAR_KEYS, NO_MODS, keyBytes, withMods, type BarKey, type Mods } from "../keys";
+import { GLIDE_MIN, TAP_SLOP, dragLines, gapOf, glide, pinchFont, speedOf } from "../touch";
 import { Wordmark } from "./TopBar";
 import { TERM_GONE, type Repo } from "../../../src/core/types";
 
@@ -129,6 +130,14 @@ export function TermView({
   const fitRef = useRef<FitAddon | null>(null);
   const theme = useStore((s) => s.settings.theme);
   const endTerm = useStore((s) => s.endTerm);
+  const fontSize = useStore((s) => s.settings.termFont);
+  const setSetting = useStore((s) => s.setSetting);
+  // read when the terminal is made and when a pinch ends, neither of which
+  // should remake the terminal
+  const fontRef = useRef(fontSize);
+  fontRef.current = fontSize;
+  const saveFont = useRef((px: number) => setSetting("termFont", px));
+  saveFont.current = (px: number) => setSetting("termFont", px);
   const exitRef = useRef(onExit);
   exitRef.current = onExit;
   // the touch key bar's sticky Ctrl/Alt, read by the phone keyboard's input
@@ -150,7 +159,7 @@ export function TermView({
     const term = new Terminal({
       cursorBlink: true,
       fontFamily: TERM_FONT.family,
-      fontSize: TERM_FONT.size,
+      fontSize: fontRef.current,
       lineHeight: TERM_FONT.lineHeight,
       scrollback: 5000,
       macOptionIsMeta: true,
@@ -288,6 +297,128 @@ export function TermView({
     el.addEventListener("paste", onPaste, true);
     el.addEventListener("dragover", onDragOver);
     el.addEventListener("drop", onDrop);
+    // A finger on the shell. xterm 6 has no touch handling of its own, so a
+    // drag scrolls (the scrollback, or for a program that owns the screen
+    // the arrows or wheel reports it would get from a mouse), a flick glides
+    // on, and two fingers pinch the text size. A touch that stays within
+    // TAP_SLOP is left alone and arrives at xterm as a click, which is what
+    // focuses it and raises the phone's keyboard.
+    let drag: { start: number; y: number; carry: number; moved: boolean; samples: { y: number; t: number }[] } | null =
+      null;
+    let pinch: { gap: number; font: number } | null = null;
+    let at = { x: 0, y: 0 };
+    let gliding = 0;
+    let fitting = 0;
+    const stopGlide = () => {
+      if (gliding) cancelAnimationFrame(gliding);
+      gliding = 0;
+    };
+    const fitSoon = () => {
+      if (!fitting)
+        fitting = requestAnimationFrame(() => {
+          fitting = 0;
+          fit.fit();
+        });
+    };
+    const screen = () => term.element?.querySelector<HTMLElement>(".xterm-screen") ?? null;
+    const rowPx = () => {
+      const s = screen();
+      return s && term.rows > 0 ? s.clientHeight / term.rows : 0;
+    };
+    const scrollBy = (lines: number) => {
+      if (lines === 0) return;
+      const n = Math.min(Math.abs(lines), 30);
+      if (term.modes.mouseTrackingMode !== "none") {
+        // the program asked for the mouse: a wheel turn per line, at the finger
+        const target = screen();
+        for (let i = 0; i < n; i++)
+          target?.dispatchEvent(
+            new WheelEvent("wheel", {
+              deltaY: Math.sign(lines),
+              deltaMode: WheelEvent.DOM_DELTA_LINE,
+              clientX: at.x,
+              clientY: at.y,
+              bubbles: true,
+              cancelable: true,
+            }),
+          );
+      } else if (term.buffer.active.type === "alternate") {
+        // a full-screen program with no scrollback: arrows, as a wheel sends
+        const arrow = keyBytes(lines > 0 ? "down" : "up", NO_MODS, term.modes.applicationCursorKeysMode);
+        send(enc.encode(arrow.repeat(n)));
+      } else term.scrollLines(lines);
+    };
+    const onTouchStart = (e: TouchEvent) => {
+      stopGlide();
+      const [a, b] = [e.touches[0], e.touches[1]];
+      if (a && b) {
+        drag = null;
+        pinch = { gap: gapOf(a, b), font: term.options.fontSize ?? fontRef.current };
+      } else if (a && e.touches.length === 1) {
+        pinch = null;
+        at = { x: a.clientX, y: a.clientY };
+        drag = { start: a.clientY, y: a.clientY, carry: 0, moved: false, samples: [{ y: a.clientY, t: e.timeStamp }] };
+      }
+    };
+    const onTouchMove = (e: TouchEvent) => {
+      const [a, b] = [e.touches[0], e.touches[1]];
+      if (pinch && a && b) {
+        e.preventDefault();
+        const px = pinchFont(pinch.font, pinch.gap, gapOf(a, b));
+        if (px !== term.options.fontSize) {
+          term.options.fontSize = px;
+          fitSoon();
+        }
+        return;
+      }
+      if (!drag || !a || e.touches.length !== 1) return;
+      if (!drag.moved && Math.abs(a.clientY - drag.start) < TAP_SLOP) return;
+      drag.moved = true;
+      e.preventDefault();
+      at = { x: a.clientX, y: a.clientY };
+      const r = dragLines(drag.carry, a.clientY - drag.y, rowPx());
+      drag.carry = r.carry;
+      drag.y = a.clientY;
+      drag.samples.push({ y: a.clientY, t: e.timeStamp });
+      if (drag.samples.length > 8) drag.samples.shift();
+      scrollBy(r.lines);
+    };
+    const onTouchEnd = (e: TouchEvent) => {
+      if (pinch) {
+        if (e.touches.length < 2) {
+          pinch = null;
+          saveFont.current(term.options.fontSize ?? fontRef.current);
+        }
+        return;
+      }
+      const d = drag;
+      drag = null;
+      if (!d?.moved) return;
+      // a drag is not a click
+      if (e.cancelable) e.preventDefault();
+      let v = speedOf(d.samples);
+      if (Math.abs(v) <= GLIDE_MIN) return;
+      let carry = d.carry;
+      let last = performance.now();
+      const step = (now: number) => {
+        const dt = now - last;
+        last = now;
+        v = glide(v, dt);
+        if (v === 0) {
+          gliding = 0;
+          return;
+        }
+        const r = dragLines(carry, v * dt, rowPx());
+        carry = r.carry;
+        scrollBy(r.lines);
+        gliding = requestAnimationFrame(step);
+      };
+      gliding = requestAnimationFrame(step);
+    };
+    el.addEventListener("touchstart", onTouchStart, { passive: true });
+    el.addEventListener("touchmove", onTouchMove, { passive: false });
+    el.addEventListener("touchend", onTouchEnd, { passive: false });
+    el.addEventListener("touchcancel", onTouchEnd, { passive: false });
     // Any change of size refits: the strip dragged taller, the window
     // resized, the tab shown again after being hidden.
     const ro = new ResizeObserver(() => {
@@ -298,6 +429,12 @@ export function TermView({
       gone = true;
       if (retry) clearTimeout(retry);
       ro.disconnect();
+      stopGlide();
+      if (fitting) cancelAnimationFrame(fitting);
+      el.removeEventListener("touchstart", onTouchStart);
+      el.removeEventListener("touchmove", onTouchMove);
+      el.removeEventListener("touchend", onTouchEnd);
+      el.removeEventListener("touchcancel", onTouchEnd);
       el.removeEventListener("paste", onPaste, true);
       el.removeEventListener("dragover", onDragOver);
       el.removeEventListener("drop", onDrop);
@@ -318,6 +455,15 @@ export function TermView({
     fitRef.current?.fit();
     termRef.current?.focus();
   }, [active]);
+
+  // A pinch in any shell sizes them all; one hidden now refits when shown,
+  // since showing it changes its box.
+  useEffect(() => {
+    const term = termRef.current;
+    if (!term || term.options.fontSize === fontSize) return;
+    term.options.fontSize = fontSize;
+    if (host.current?.offsetParent) fitRef.current?.fit();
+  }, [fontSize]);
 
   // The theme setting and the OS scheme both repaint the terminal.
   useEffect(() => {
@@ -346,6 +492,20 @@ export function TermView({
           onMods={setMods}
           onKey={tapKey}
           onKeyboard={() => termRef.current?.focus()}
+          onPaste={
+            canPaste()
+              ? () => {
+                  navigator.clipboard.readText().then(
+                    (text) => {
+                      if (text) termRef.current?.paste(text);
+                    },
+                    () => {
+                      // refused, or nothing readable there
+                    },
+                  );
+                }
+              : undefined
+          }
         />
       )}
     </div>
@@ -366,6 +526,10 @@ function useCoarsePointer(): boolean {
   return coarse;
 }
 
+/** Whether a key can paste the clipboard: reading it needs a secure page
+ *  (the tunnel, or localhost), not the tailnet's plain http. */
+const canPaste = (): boolean => isSecureContext && typeof navigator.clipboard?.readText === "function";
+
 /** keys that repeat while held */
 const REPEATS: readonly BarKey[] = ["up", "down", "left", "right", "pgup", "pgdn"];
 
@@ -380,11 +544,14 @@ function KeyBar({
   onMods,
   onKey,
   onKeyboard,
+  onPaste,
 }: {
   mods: Mods;
   onMods: (m: Mods) => void;
   onKey: (key: BarKey) => void;
   onKeyboard: () => void;
+  /** reads the clipboard into the shell; absent where the page cannot */
+  onPaste?: () => void;
 }) {
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const stop = () => {
@@ -428,6 +595,21 @@ function KeyBar({
       >
         ⌨
       </button>
+      {onPaste && (
+        // on click rather than pointer down: a touch grants the page the
+        // right to read the clipboard only once the finger lifts
+        <button
+          type="button"
+          className="term-key"
+          tabIndex={-1}
+          title="Paste the clipboard"
+          aria-label="Paste the clipboard"
+          onPointerDown={(e) => e.preventDefault()}
+          onClick={onPaste}
+        >
+          paste
+        </button>
+      )}
       {(["ctrl", "alt"] as const).map((m) => (
         <button
           key={m}

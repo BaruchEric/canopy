@@ -10,6 +10,8 @@ import {
   type FileSort,
   type FileView,
 } from "./files";
+import { TERM_FONT } from "./term";
+import { termFontSize } from "./touch";
 
 export const SORT_MODES = [
   "recent",
@@ -90,6 +92,8 @@ export interface Settings {
   /** what this browser calls itself in the devices list; empty for the
    *  guess off the user agent */
   device: string;
+  /** the shells' font size in px, what a pinch on a shell sets */
+  termFont: number;
 }
 
 export const DEFAULT_SETTINGS: Settings = {
@@ -105,6 +109,7 @@ export const DEFAULT_SETTINGS: Settings = {
   fileView: "list",
   helper: null,
   device: "",
+  termFont: TERM_FONT.size,
 };
 
 const KEY = "canopy.settings";
@@ -150,6 +155,7 @@ export function loadSettings(): Settings {
       fileView: pick(FILE_VIEWS, saved.fileView, DEFAULT_SETTINGS.fileView),
       helper: typeof saved.helper === "string" && /^[\w.-]{1,64}$/.test(saved.helper) ? saved.helper : null,
       device: typeof saved.device === "string" ? saved.device.slice(0, 40) : "",
+      termFont: termFontSize(saved.termFont, DEFAULT_SETTINGS.termFont),
     };
   } catch {
     return DEFAULT_SETTINGS;

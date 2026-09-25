@@ -129,6 +129,8 @@ kbd {
   display: flex;
   flex-direction: column;
   height: 100vh;
+  /* the visible height, which a phone's toolbars and keyboard move */
+  height: 100dvh;
 }
 .app > .topbar {
   flex: none;
@@ -2956,6 +2958,7 @@ body.resizing {
   flex-direction: column;
   height: var(--term-h, 300px);
   max-height: 80vh;
+  max-height: 80dvh;
   border-top: 1px solid var(--hair2);
   background: var(--bark0);
 }
@@ -3088,7 +3091,7 @@ body.resizing {
   flex: none;
   display: flex;
   gap: 4px;
-  padding: 4px 6px;
+  padding: 4px 6px max(4px, env(safe-area-inset-bottom));
   overflow-x: auto;
   scrollbar-width: none;
   border-top: 1px solid var(--hair);
@@ -3146,6 +3149,7 @@ body.resizing {
   flex-direction: column;
   min-height: 0;
   max-height: 60vh;
+  max-height: 60dvh;
   border-top: 1px solid var(--hair);
 }
 .panel-shells-body > .term-body {
@@ -3204,11 +3208,75 @@ body.resizing {
   max-height: none;
   border-top: 0;
 }
+/* A finger for a pointer: the shell's own drag, flick and pinch (TermView)
+   instead of the page's, and tab row controls and grips a finger can hit. */
+@media (pointer: coarse) {
+  .term-screen {
+    touch-action: none;
+  }
+  /* iOS zooms the page onto any focused field under 16px, and xterm's input
+     is an invisible one; the text it shows is drawn elsewhere */
+  .xterm .xterm-helper-textarea {
+    font-size: 16px;
+  }
+  .term-tabs {
+    gap: 4px;
+    padding-top: 6px;
+  }
+  .term-tab {
+    min-height: 36px;
+    padding: 2px 4px 2px 12px;
+    font-size: 13px;
+  }
+  .term-x {
+    width: 30px;
+    height: 30px;
+    font-size: 16px;
+  }
+  .term-new {
+    width: 36px;
+    height: 36px;
+    margin-bottom: 2px;
+    font-size: 18px;
+  }
+  /* the grip becomes a row of its own with a handle on it, rather than a
+     hairline that would sit over the tabs' buttons */
+  .term-grip,
+  .term-grip.top,
+  .term-grip.bottom {
+    position: relative;
+    top: auto;
+    bottom: auto;
+    flex: none;
+    height: 18px;
+  }
+  .term-grip::after,
+  .term-grip.bottom::after {
+    left: 50%;
+    right: auto;
+    top: 7px;
+    bottom: auto;
+    width: 40px;
+    height: 4px;
+    margin-left: -20px;
+    border-radius: 2px;
+    background: var(--hair2);
+  }
+  .panel-shells > .fold {
+    margin-top: 2px;
+  }
+}
+@media (max-width: 760px) {
+  .termdock .term-caption {
+    display: none;
+  }
+}
 /* a shell of its own: what a new tab or window shows */
 .shell-solo {
   display: flex;
   flex-direction: column;
   height: 100vh;
+  height: 100dvh;
   background: var(--bark0);
 }
 .shell-solo .topbar {
