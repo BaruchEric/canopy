@@ -3172,6 +3172,38 @@ body.resizing {
   color: var(--moss);
   background: var(--bark2);
 }
+/* the maximize switch at the right end of a shells tab row */
+.term-full {
+  margin-left: auto;
+}
+.term-full.on {
+  color: var(--moss);
+}
+/* maximized in a panel: the shells take the panel, the scrolling part goes */
+.panel:has(> .panel-shells.full) > .panel-body {
+  display: none;
+}
+.panel-shells.full {
+  flex: 1 1 auto;
+  border-top: 0;
+}
+.panel-shells.full > .panel-shells-body {
+  flex: 1;
+  max-height: none;
+}
+.panel-shells.full > .panel-shells-body > .term-body {
+  flex: 1;
+  height: auto;
+}
+/* maximized strip: the whole window */
+.termdock.full {
+  position: fixed;
+  inset: 0;
+  z-index: 15;
+  height: auto;
+  max-height: none;
+  border-top: 0;
+}
 /* a shell of its own: what a new tab or window shows */
 .shell-solo {
   display: flex;

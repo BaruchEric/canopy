@@ -551,19 +551,21 @@ function tabLabels(terms: TermTab[]): string[] {
 }
 
 /** The row of tabs over a set of shells, with what comes before and after
- *  them (a caption, a "new" button) passed in. */
+ *  them (a caption, a "new" button) passed in, and `end` at the far right. */
 function TermTabs({
   terms,
   active,
   onShow,
   caption,
   extra,
+  end,
 }: {
   terms: TermTab[];
   active: string | null;
   onShow: (id: string) => void;
   caption: string;
   extra?: React.ReactNode;
+  end?: React.ReactNode;
 }) {
   const closeTerm = useStore((s) => s.closeTerm);
   const labels = tabLabels(terms);
@@ -607,7 +609,32 @@ function TermTabs({
         );
       })}
       {extra}
+      {end}
     </div>
+  );
+}
+
+/** The tab row's maximize switch: the shells take the whole of what holds
+ *  them (the panel, or the window for the strip), and again gives it back. */
+function FullToggle({ full, onToggle, what }: { full: boolean; onToggle: () => void; what: string }) {
+  return (
+    <button
+      type="button"
+      className={`term-new term-full${full ? " on" : ""}`}
+      title={full ? `Give the ${what} back` : `Shells take the whole ${what}`}
+      aria-label={full ? "Restore shell size" : "Maximize shell"}
+      aria-pressed={full}
+      onClick={(e) => {
+        onToggle();
+        // back to the shell showing, so typing carries on where it was
+        const box = e.currentTarget.closest("section");
+        requestAnimationFrame(() =>
+          box?.querySelector<HTMLElement>(".term-view:not([hidden]) textarea")?.focus(),
+        );
+      }}
+    >
+      {full ? "⤡" : "⤢"}
+    </button>
   );
 }
 
@@ -623,25 +650,34 @@ export function TermDock() {
   const setTermHeight = useStore((s) => s.setTermHeight);
   const showTerm = useStore((s) => s.showTerm);
   const dock = useRef<HTMLElement>(null);
+  const [full, setFull] = useState(false);
   const strip = terms.filter((t) => t.place === "strip");
 
   if (strip.length === 0) return null;
   return (
     <section
       ref={dock}
-      className="termdock"
+      className={`termdock${full ? " full" : ""}`}
       aria-label="Shells"
       style={{ "--term-h": `${termHeight}px` } as CSSProperties}
     >
-      <TermGrip
-        box={dock}
-        cssVar="--term-h"
-        label="Terminal strip height"
-        height={termHeight}
-        setHeight={setTermHeight}
-        bounds={TERM}
+      {!full && (
+        <TermGrip
+          box={dock}
+          cssVar="--term-h"
+          label="Terminal strip height"
+          height={termHeight}
+          setHeight={setTermHeight}
+          bounds={TERM}
+        />
+      )}
+      <TermTabs
+        terms={strip}
+        active={activeTerm}
+        onShow={showTerm}
+        caption="shells"
+        end={<FullToggle full={full} onToggle={() => setFull(!full)} what="window" />}
       />
-      <TermTabs terms={strip} active={activeTerm} onShow={showTerm} caption="shells" />
       <div className="term-body">
         {strip.map((t) => (
           <TermView key={viewKey(t)} tab={t} active={t.id === activeTerm} />
@@ -665,6 +701,7 @@ export function PanelShells({ repo }: { repo: Repo }) {
   const panelTermHeight = useStore((s) => panelTermHeightFor(s, repo.id));
   const setPanelTermHeight = useStore((s) => s.setPanelTermHeight);
   const box = useRef<HTMLElement>(null);
+  const [full, setFull] = useState(false);
   const mine = terms.filter((t) => t.place === "panel" && t.repoId === repo.id);
   const [chosen, setChosen] = useState<string | null>(null);
   // the newest shell shows until another tab is picked
@@ -680,11 +717,11 @@ export function PanelShells({ repo }: { repo: Repo }) {
   return (
     <section
       ref={box}
-      className="panel-shells"
+      className={`panel-shells${full && !closed ? " full" : ""}`}
       aria-label={`Shells at ${repo.name}`}
       style={{ "--panel-term-h": `${panelTermHeight}px` } as CSSProperties}
     >
-      {!closed && (
+      {!closed && !full && (
         <TermGrip
           box={box}
           cssVar="--panel-term-h"
@@ -721,6 +758,7 @@ export function PanelShells({ repo }: { repo: Repo }) {
               +
             </button>
           }
+          end={<FullToggle full={full} onToggle={() => setFull(!full)} what="panel" />}
         />
         <div className="term-body">
           {mine.map((t) => (
