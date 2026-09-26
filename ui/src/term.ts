@@ -122,6 +122,55 @@ export function pruneHidden(hidden: string[], live: TermInfo[]): string[] {
   return kept.length === hidden.length ? hidden : kept;
 }
 
+/** Which set of shells a tab sits in: the strip, or one repo's panel. The
+ *  key of the set brought to the front. */
+export const shellSet = (t: { place: ShellPlace; repoId: string }): string =>
+  t.place === "strip" ? "strip" : `panel:${t.repoId}`;
+
+/** `front` while a tab still sits in that set, else null, so a set that
+ *  empties does not come back to the front with its next shell. */
+export const keepFront = (front: string | null, tabs: TermTab[]): string | null =>
+  front !== null && tabs.some((t) => shellSet(t) === front) ? front : null;
+
+/** A running shell outside the set in front, which the front box lists so
+ *  it can be brought there instead. */
+export interface OtherShell {
+  id: string;
+  repoId: string;
+  /** the repo's name, numbered when the repo has more than one */
+  label: string;
+  /** whether this window has a tab on it; the rest run for other devices */
+  tabbed: boolean;
+  /** the devices with a socket on it, from the backend's list */
+  viewers: string[];
+}
+
+/** Every running shell but the ones in `set`: this window's tabs first, in
+ *  the order opened, then the shells the backend holds that no tab here
+ *  names, for repos in the scan. An exited tab has nothing to bring. */
+export function otherShells(set: string, tabs: TermTab[], live: TermInfo[], repos: Repo[]): OtherShell[] {
+  const viewers = new Map(live.map((t) => [t.id, t.viewers]));
+  const out: Omit<OtherShell, "label">[] = [];
+  for (const t of tabs) {
+    if (t.exit !== undefined || shellSet(t) === set) continue;
+    out.push({ id: t.id, repoId: t.repoId, tabbed: true, viewers: viewers.get(t.id) ?? [] });
+  }
+  const tabbed = new Set(tabs.map((t) => t.id));
+  for (const t of live) {
+    if (tabbed.has(t.id) || shellSet(t) === set || !repos.some((r) => r.id === t.repoId)) continue;
+    out.push({ id: t.id, repoId: t.repoId, tabbed: false, viewers: t.viewers });
+  }
+  const count = new Map<string, number>();
+  for (const o of out) count.set(o.repoId, (count.get(o.repoId) ?? 0) + 1);
+  const seen = new Map<string, number>();
+  return out.map((o) => {
+    const name = repos.find((r) => r.id === o.repoId)?.name ?? o.repoId;
+    const n = (seen.get(o.repoId) ?? 0) + 1;
+    seen.set(o.repoId, n);
+    return { ...o, label: (count.get(o.repoId) ?? 0) > 1 ? `${name} ${n}` : name };
+  });
+}
+
 /** The strip tab that shows once `id` leaves it: the one after it, else the
  *  one before, the way a browser's tab strip does; `active` when that was
  *  not the one showing. */

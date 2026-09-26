@@ -4,7 +4,7 @@ import { applyQuery, type RepoFilter } from "./filters";
 import { focusPanel, nextActive } from "./dock";
 import { heldShellUrl, openElsewhere, openShellElsewhere, parseRoute } from "./routes";
 import { loadSettings, saveSettings, shellPlace, type Settings, type ShellPlace } from "./settings";
-import { PANEL_TERM_ROWS, adoptTerms, loadFocusSize, loadTermTabs, nextStripTab, pruneHidden, reconcileTerms, rowsPx, termId, type FocusSize, type TermTab } from "./term";
+import { PANEL_TERM_ROWS, adoptTerms, keepFront, loadFocusSize, loadTermTabs, nextStripTab, pruneHidden, reconcileTerms, rowsPx, shellSet, termId, type FocusSize, type TermTab } from "./term";
 import { clientId, identity } from "./client";
 export type { TermTab } from "./term";
 import { clamp, needsAttention } from "./util";
@@ -418,6 +418,12 @@ interface CanopyState {
   /** px size of a shell brought to the front, dragged by its corner; null
    *  is the default, which follows the window */
   focusSize: FocusSize | null;
+  /** the set of shells brought to the front (`shellSet`: the strip or a
+   *  repo's panel), null when none is; one at a time, for this page only */
+  frontShells: string | null;
+  /** the shell the front set should show, asked for from another set's
+   *  list; its set picks it up */
+  frontPick: string | null;
   /** flows by id, live and recently finished */
   flows: Record<string, Flow>;
   /** fleets by id, live and recently finished */
@@ -519,6 +525,11 @@ interface CanopyState {
   setTermHeight: (px: number) => void;
   setPanelTermHeight: (repoId: string, px: number) => void;
   setFocusSize: (size: FocusSize | null) => void;
+  /** brings a set of shells to the front, or none with null */
+  setFrontShells: (set: string | null) => void;
+  /** brings a running shell to the front in its own set instead of the
+   *  one there now: its tab here, or a new tab onto it */
+  bringTerm: (id: string) => void;
 
   /** opens the pre-flight dialog for an action on a repo */
   plan: (repoId: string, action: RunAction) => void;
@@ -746,6 +757,8 @@ export const useStore = create<CanopyState>((set, get) => ({
   termHeight: layout.termHeight,
   panelTermHeights: layout.panelTermHeights,
   focusSize: layout.focusSize,
+  frontShells: null,
+  frontPick: null,
   flows: {},
   fleets: {},
   workflows: {},
@@ -985,6 +998,7 @@ export const useStore = create<CanopyState>((set, get) => ({
       panels: s.panels.filter((p) => p !== id),
       activePanel: nextActive(s.panels, id, s.activePanel),
       terms: s.terms.filter((t) => !mine(t)),
+      frontShells: keepFront(s.frontShells, s.terms.filter((t) => !mine(t))),
     });
   },
 
@@ -1158,14 +1172,17 @@ export const useStore = create<CanopyState>((set, get) => ({
     const tab = s.terms.find((t) => t.id === id);
     if (!tab) return;
     endShells([tab]);
-    set({ terms: s.terms.filter((t) => t.id !== id), activeTerm: nextStripTab(s.terms, id, s.activeTerm) });
+    const terms = s.terms.filter((t) => t.id !== id);
+    set({ terms, activeTerm: nextStripTab(s.terms, id, s.activeTerm), frontShells: keepFront(s.frontShells, terms) });
   },
   hideTerm: (id) => {
     const s = get();
     if (!s.terms.some((t) => t.id === id)) return;
+    const terms = s.terms.filter((t) => t.id !== id);
     set({
-      terms: s.terms.filter((t) => t.id !== id),
+      terms,
       activeTerm: nextStripTab(s.terms, id, s.activeTerm),
+      frontShells: keepFront(s.frontShells, terms),
       hiddenTerms: s.hiddenTerms.includes(id) ? s.hiddenTerms : [...s.hiddenTerms, id],
     });
   },
@@ -1227,6 +1244,22 @@ export const useStore = create<CanopyState>((set, get) => ({
     set((s) => ({ terms: s.terms.map((t) => (t.id === id ? { ...t, exit: code } : t)) })),
   setTermHeight: (px) => set({ termHeight: clamp(px, TERM.min, TERM.max) }),
   setFocusSize: (size) => set({ focusSize: size }),
+  setFrontShells: (front) => set({ frontShells: front, frontPick: null }),
+  bringTerm: (id) => {
+    // joining gives a shell with no tab here one, and opens and unfolds a
+    // panel shell's panel; a tab already here keeps its place
+    get().joinTerm(id);
+    const s = get();
+    const tab = s.terms.find((t) => t.id === id);
+    if (!tab) return;
+    set({
+      frontShells: shellSet(tab),
+      frontPick: id,
+      ...(tab.place === "strip"
+        ? { activeTerm: id }
+        : { ...focusPanel(s.panels, tab.repoId), closedSections: unfoldIn(s.closedSections, tab.repoId, "shell") }),
+    });
+  },
   setPanelTermHeight: (repoId, px) =>
     set((s) => ({
       panelTermHeights: { ...s.panelTermHeights, [repoId]: clamp(px, PANEL_TERM.min, PANEL_TERM.max) },

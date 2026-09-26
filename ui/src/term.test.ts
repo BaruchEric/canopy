@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { FOCUS_GAP, FOCUS_MIN, PANEL_TERM_ROWS, adoptTerms, cellHeight, focusResize, loadFocusSize, loadTermTabs, nextStripTab, pruneHidden, reconcileTerms, rowsPx, termId, viewKey, type TermTab } from "./term";
+import { FOCUS_GAP, FOCUS_MIN, PANEL_TERM_ROWS, adoptTerms, keepFront, otherShells, shellSet, cellHeight, focusResize, loadFocusSize, loadTermTabs, nextStripTab, pruneHidden, reconcileTerms, rowsPx, termId, viewKey, type TermTab } from "./term";
 import type { Repo, TermInfo } from "../../src/core/types";
 
 describe("rowsPx", () => {
@@ -177,5 +177,50 @@ describe("loadFocusSize", () => {
     for (const v of [null, undefined, 3, "x", {}, { w: 900 }, { w: "900", h: 600 }, { w: NaN, h: 600 }, { w: Infinity, h: 1 }]) {
       expect(loadFocusSize(v)).toBeNull();
     }
+  });
+});
+
+describe("otherShells", () => {
+  const repo = (id: string): Repo => ({ id, name: id.toUpperCase(), path: `/w/${id}` }) as Repo;
+  const repos = [repo("a"), repo("b"), repo("c")];
+  const tab = (id: string, repoId: string, place: "strip" | "panel", exit?: number): TermTab => ({
+    id,
+    repoId,
+    name: repoId.toUpperCase(),
+    path: `/w/${repoId}`,
+    place,
+    ...(exit === undefined ? {} : { exit }),
+  });
+  const held = (id: string, repoId: string, place: "strip" | "panel", viewers: string[] = []): TermInfo => ({
+    id,
+    repoId,
+    path: `/w/${repoId}`,
+    place,
+    attached: viewers.length > 0,
+    viewers,
+    startedAt: 0,
+  });
+
+  test("leaves out the set in front and exited tabs, tabs first", () => {
+    const tabs = [tab("1", "a", "panel"), tab("2", "b", "panel"), tab("3", "c", "strip"), tab("4", "c", "panel", 0)];
+    const live = [held("1", "a", "panel"), held("2", "b", "panel", ["phone"]), held("3", "c", "strip"), held("5", "c", "panel", ["mac"])];
+    expect(otherShells("panel:a", tabs, live, repos)).toEqual([
+      { id: "2", repoId: "b", label: "B", tabbed: true, viewers: ["phone"] },
+      { id: "3", repoId: "c", label: "C 1", tabbed: true, viewers: [] },
+      { id: "5", repoId: "c", label: "C 2", tabbed: false, viewers: ["mac"] },
+    ]);
+  });
+  test("the strip set leaves out every strip shell, whatever its repo", () => {
+    const tabs = [tab("1", "a", "strip"), tab("2", "b", "strip"), tab("3", "a", "panel")];
+    expect(otherShells("strip", tabs, [], repos).map((o) => o.id)).toEqual(["3"]);
+  });
+  test("a held shell for a repo gone from the scan is left out", () => {
+    expect(otherShells("strip", [], [held("9", "gone", "panel")], repos)).toEqual([]);
+  });
+  test("shellSet and keepFront", () => {
+    expect(shellSet(tab("1", "strip", "panel"))).toBe("panel:strip");
+    expect(keepFront("panel:a", [tab("1", "a", "panel")])).toBe("panel:a");
+    expect(keepFront("panel:a", [tab("1", "a", "strip")])).toBeNull();
+    expect(keepFront(null, [tab("1", "a", "panel")])).toBeNull();
   });
 });

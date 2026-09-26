@@ -6,7 +6,7 @@ import "@xterm/xterm/css/xterm.css";
 import { api } from "../api";
 import { groveUrl, nameShellHere, parseRoute, popShell } from "../routes";
 import { PANEL_TERM, TERM, closedIn, panelTermHeightFor, useStore, type TermTab } from "../store";
-import { TERM_FONT, termId, viewKey } from "../term";
+import { TERM_FONT, otherShells, termId, viewKey } from "../term";
 import { flipMode, tidyLines, type SurfaceMode } from "../surface";
 import { SHELL_TARGETS, type ShellTarget } from "../settings";
 import { Gear, type GearEntry } from "./Gear";
@@ -877,6 +877,61 @@ function ModeButtons({ mode, setMode, what }: { mode: SurfaceMode; setMode: (m: 
   );
 }
 
+/** How a set of shells sits: in place or filling its panel or window is the
+ *  set's own, while in front is the store's, since one set at a time has
+ *  the front and another set's list can hand it over. */
+function useShellMode(set: string): [SurfaceMode, (m: SurfaceMode) => void] {
+  const front = useStore((s) => s.frontShells === set);
+  const setFront = useStore((s) => s.setFrontShells);
+  const [placed, setPlaced] = useState<"normal" | "full">("normal");
+  const setMode = (m: SurfaceMode) => {
+    if (m === "focus") {
+      setFront(set);
+      return;
+    }
+    if (front) setFront(null);
+    setPlaced(m);
+  };
+  return [front ? "focus" : placed, setMode];
+}
+
+/** The running shells outside a set brought to the front, other repos' and
+ *  other devices' included: a click brings that one to the front instead,
+ *  in its own strip or panel, where its tab lives. */
+function FrontOthers({ set }: { set: string }) {
+  const terms = useStore((s) => s.terms);
+  const shells = useStore((s) => s.shells);
+  const repos = useStore((s) => s.repos);
+  const bringTerm = useStore((s) => s.bringTerm);
+  const others = otherShells(set, terms, shells, repos);
+  if (others.length === 0) return null;
+  return (
+    <nav className="term-others" aria-label="Other running shells">
+      <span className="term-caption">also running</span>
+      {others.map((o) => (
+        <button
+          key={o.id}
+          type="button"
+          className={`term-other${o.tabbed ? "" : " away"}`}
+          title={
+            o.tabbed
+              ? `Bring the shell at ${o.label} to the front`
+              : `Join the shell at ${o.label}${o.viewers.length ? `, open on ${o.viewers.join(", ")}` : ""}`
+          }
+          onClick={() => {
+            bringTerm(o.id);
+            // the set it lives in mounts or rises on the next frames
+            requestAnimationFrame(() => refocus(document.querySelector(".termdock.focus, .panel-shells.focus")));
+          }}
+        >
+          <span className={`dot ${o.tabbed ? "moss" : "faint"}`} aria-hidden="true" />
+          {o.label}
+        </button>
+      ))}
+    </nav>
+  );
+}
+
 const SHELL_WORD: Record<ShellTarget, string> = {
   auto: "the panel when open, else the strip",
   panel: "the panel",
@@ -954,7 +1009,7 @@ export function TermDock() {
   const showTerm = useStore((s) => s.showTerm);
   const focusSize = useStore((s) => s.focusSize);
   const dock = useRef<HTMLElement>(null);
-  const [mode, setMode] = useState<SurfaceMode>("normal");
+  const [mode, setMode] = useShellMode("strip");
   const strip = terms.filter((t) => t.place === "strip");
   useLeaveOnEscape(mode, setMode);
 
@@ -1001,6 +1056,7 @@ export function TermDock() {
             </>
           }
         />
+        {mode === "focus" && <FrontOthers set="strip" />}
         <div className="term-body">
           {strip.map((t) => (
             <TermView key={viewKey(t)} tab={t} active={t.id === activeTerm} />
@@ -1027,7 +1083,8 @@ export function PanelShells({ repo }: { repo: Repo }) {
   const setPanelTermHeight = useStore((s) => s.setPanelTermHeight);
   const focusSize = useStore((s) => s.focusSize);
   const box = useRef<HTMLElement>(null);
-  const [chosenMode, setMode] = useState<SurfaceMode>("normal");
+  const [chosenMode, setMode] = useShellMode(`panel:${repo.id}`);
+  const frontPick = useStore((s) => s.frontPick);
   const mine = terms.filter((t) => t.place === "panel" && t.repoId === repo.id);
   const [chosen, setChosen] = useState<string | null>(null);
   // the newest shell shows until another tab is picked
@@ -1036,6 +1093,12 @@ export function PanelShells({ repo }: { repo: Repo }) {
   if (latest !== seenLatest) {
     setSeenLatest(latest);
     setChosen(latest);
+  }
+  // a shell brought here from another set's list shows, once
+  const [seenPick, setSeenPick] = useState(frontPick);
+  if (frontPick !== seenPick) {
+    setSeenPick(frontPick);
+    if (mine.some((t) => t.id === frontPick)) setChosen(frontPick);
   }
   const active = mine.some((t) => t.id === chosen) ? chosen : latest;
   // folded, the shells are neither maximized nor in front
@@ -1107,6 +1170,7 @@ export function PanelShells({ repo }: { repo: Repo }) {
               </>
             }
           />
+          {mode === "focus" && <FrontOthers set={`panel:${repo.id}`} />}
           <div className="term-body">
             {mine.map((t) => (
               <TermView key={viewKey(t)} tab={t} active={t.id === active && !closed} />

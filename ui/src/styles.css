@@ -3352,6 +3352,40 @@ body.resizing {
     0 2px 6px -2px var(--float-shadow),
     0 22px 48px -16px var(--float-shadow);
 }
+/* in front, the other running shells: one row under the tabs, a click
+   brings that one to the front instead */
+.term-others {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 3px 8px;
+  border-bottom: 1px solid var(--hair);
+  background: var(--bark1);
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+.term-others .term-caption {
+  margin-bottom: 0;
+}
+.term-other {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 2px 8px;
+  border-radius: var(--r);
+  font-size: 12px;
+  color: var(--ink-dim);
+  white-space: nowrap;
+}
+.term-other:hover,
+.term-other:focus-visible {
+  color: var(--ink);
+  background: var(--bark2);
+}
+.term-other.away {
+  color: var(--ink-faint);
+}
 .panel-shells.focus > .fold {
   display: none;
 }
