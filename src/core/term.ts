@@ -187,7 +187,12 @@ export function spawnOnPty(what: PtyProcess, size: TermSize, hooks: TermHooks): 
       if (!done && !terminal.closed) terminal.write(data);
     },
     resize: ({ cols, rows }) => {
-      if (!done && !terminal.closed) terminal.resize(cols, rows);
+      if (done || terminal.closed) return;
+      terminal.resize(cols, rows);
+      // The kernel signals a new size only to the pty's foreground group,
+      // which the process here is not (a tmux client never took the pty
+      // as its terminal), so it is told directly or it keeps its old size.
+      proc.kill("SIGWINCH");
     },
     close: () => {
       if (done) return;

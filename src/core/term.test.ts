@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { isTermId, parseTermMessage, Scrollback, shellArgs, termEnv, termPlace, termSize, TERM_SIZE } from "./term";
+import { isTermId, parseTermMessage, Scrollback, shellArgs, spawnOnPty, termEnv, termPlace, termSize, TERM_SIZE } from "./term";
 
 describe("termSize", () => {
   test("defaults when nothing is given", () => {
@@ -102,5 +102,30 @@ describe("Scrollback", () => {
     sb.push(new Uint8Array(0));
     expect(sb.size).toBe(0);
     expect(sb.bytes()).toEqual(new Uint8Array(0));
+  });
+});
+
+describe("spawnOnPty", () => {
+  // The process on the pty is not its session's foreground group (a tmux
+  // client is not), so the kernel's SIGWINCH on a resize never reaches it
+  // and it keeps drawing at the size it started with.
+  test("a resize reaches the process on the pty", async () => {
+    let out = "";
+    const session = spawnOnPty(
+      { argv: ["sh", "-c", 'trap "stty size" WINCH; echo ready; while :; do sleep 0.05; done'] },
+      { cols: 80, rows: 24 },
+      { data: (chunk) => (out += new TextDecoder().decode(chunk)), exit: () => {} },
+    );
+    try {
+      const until = async (s: string) => {
+        for (let i = 0; i < 100 && !out.includes(s); i++) await Bun.sleep(20);
+        return out.includes(s);
+      };
+      expect(await until("ready")).toBe(true);
+      session.resize({ cols: 132, rows: 41 });
+      expect(await until("41 132")).toBe(true);
+    } finally {
+      session.close();
+    }
   });
 });
