@@ -1602,13 +1602,6 @@ body.resizing {
   grid-column: 1 / -1;
   margin: 4px 0;
 }
-.changes-view {
-  flex: none;
-}
-.changes-view button {
-  font-size: 11px;
-  padding: 2px 8px;
-}
 .file-folder {
   grid-column: 1 / -1;
   display: flex;
@@ -1774,25 +1767,6 @@ body.resizing {
 }
 
 /* commit history */
-.history > summary {
-  cursor: pointer;
-  list-style: none;
-  justify-content: flex-start;
-  gap: 6px;
-}
-.history > summary::-webkit-details-marker {
-  display: none;
-}
-.history > summary::before {
-  content: "▸";
-  color: var(--ink-faint);
-}
-.history[open] > summary::before {
-  content: "▾";
-}
-.history > summary > span {
-  margin-left: auto;
-}
 .log {
   list-style: none;
   margin: 0 0 14px;
@@ -2015,6 +1989,143 @@ body.resizing {
 .rings.tall i:hover {
   outline: 1px solid var(--sky);
   outline-offset: 1px;
+}
+
+/* a section's head: the fold, and the gear at its right */
+.section-head {
+  display: flex;
+  align-items: center;
+}
+.section-head > .fold {
+  flex: 1;
+  width: auto;
+  min-width: 0;
+  margin-right: 4px;
+}
+.section-head > .gear {
+  margin: 8px 10px 0 0;
+}
+/* a section alone in its window is always open */
+.fold:disabled {
+  cursor: default;
+}
+.section-head > .fold:disabled::before {
+  content: none;
+}
+
+/* ---------- the gear on a panel, a section, the shells and the feed ---------- */
+.gear {
+  flex: none;
+  display: inline-grid;
+  place-items: center;
+  width: 20px;
+  height: 20px;
+  border-radius: var(--r);
+  color: var(--ink-faint);
+  opacity: 0.55;
+}
+.gear:hover,
+.gear:focus-visible,
+.gear.on,
+.surface:hover > .section-head > .gear,
+.panel-head:hover > .gear {
+  opacity: 1;
+}
+.gear:hover,
+.gear.on {
+  color: var(--moss);
+  background: var(--bark2);
+}
+.term-tabs > .gear {
+  align-self: center;
+  margin: 0 4px 4px 2px;
+}
+@media (pointer: coarse) {
+  .gear {
+    width: 32px;
+    height: 32px;
+    opacity: 1;
+  }
+}
+.gear-pop {
+  max-height: calc(100vh - 16px);
+  max-height: calc(100dvh - 16px);
+  overflow-y: auto;
+}
+.gear-group + .gear-group {
+  margin-top: 6px;
+  border-top: 1px solid var(--hair);
+}
+.gear-group + .gear-group > .menu-label {
+  margin-top: 8px;
+}
+.gear-item.on {
+  color: var(--ink);
+}
+.gear-mark {
+  flex: none;
+  width: 1em;
+  color: var(--moss);
+  font-size: 10px;
+  text-align: center;
+}
+.menu-text.off {
+  color: var(--ink-faint);
+  text-decoration: line-through;
+}
+.gear-zoom {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 12px;
+}
+.gear-zoom-label {
+  flex: 1;
+  color: var(--ink-dim);
+}
+.gear-zoom > button,
+.gear-move {
+  min-width: 26px;
+  height: 24px;
+  padding: 0 6px;
+  border-radius: var(--r);
+  color: var(--ink-dim);
+  font-variant-numeric: tabular-nums;
+}
+.gear-zoom > .gear-zoom-value {
+  min-width: 52px;
+}
+.gear-zoom > button:hover:not(:disabled),
+.gear-zoom > button:focus-visible,
+.gear-move:hover:not(:disabled),
+.gear-move:focus-visible {
+  background: color-mix(in srgb, var(--ink) 9%, var(--float));
+  color: var(--ink);
+  outline: none;
+}
+.gear-zoom > button:disabled,
+.gear-move:disabled {
+  opacity: 0.35;
+  cursor: default;
+}
+.gear-row {
+  display: flex;
+  align-items: center;
+  padding-right: 8px;
+}
+.gear-row > .gear-item {
+  flex: 1;
+  min-width: 0;
+}
+.gear-note {
+  margin: 6px 12px 0;
+  padding-top: 6px;
+  border-top: 1px solid var(--hair);
+  font-size: 12px;
+  color: var(--moss);
+}
+.gear-note.err {
+  color: var(--rust);
 }
 
 /* ---------- claude sessions, from the claude-history archive ---------- */
@@ -3220,7 +3331,8 @@ body.resizing {
   backdrop-filter: blur(2px);
 }
 .termdock.focus,
-.panel-shells.focus {
+.panel-shells.focus,
+.surface-focus {
   position: fixed;
   inset: 0;
   z-index: 26;
@@ -3256,7 +3368,8 @@ body.resizing {
    since a box to size would only lose rows there, and the grips go */
 @media (max-width: 640px), (max-height: 480px) {
   .termdock.focus,
-  .panel-shells.focus {
+  .panel-shells.focus,
+  .surface-focus {
     inset: 8px;
     margin: 0;
     width: auto;
@@ -3265,7 +3378,8 @@ body.resizing {
     max-height: none;
   }
   .termdock.focus .focus-grip,
-  .panel-shells.focus .focus-grip {
+  .panel-shells.focus .focus-grip,
+  .surface-focus .focus-grip {
     display: none;
   }
 }
@@ -3275,7 +3389,8 @@ body.resizing {
     animation: focus-dim 160ms ease-out;
   }
   .termdock.focus,
-  .panel-shells.focus {
+  .panel-shells.focus,
+  .surface-focus {
     animation: focus-rise 180ms cubic-bezier(0.2, 0.8, 0.2, 1);
   }
   @keyframes focus-dim {
@@ -3290,6 +3405,34 @@ body.resizing {
     }
   }
 }
+/* a panel over the whole window, or in front: fixed boxes beat the dock's
+   grid cell and the panel's own width */
+.panel.surface-full {
+  position: fixed;
+  inset: 0;
+  z-index: 15;
+  width: auto;
+  max-width: none;
+  border: 0;
+}
+.panel.surface-focus {
+  width: var(--focus-w, min(1100px, calc(100vw - 48px)));
+  border: 1px solid var(--float-edge);
+}
+/* a section in front scrolls inside its box; a panel scrolls its body */
+.surface-focus:not(.panel) {
+  overflow-y: auto;
+  padding-bottom: 12px;
+  background: var(--bark1);
+}
+/* a section filling its panel: every other part of the scrolling body goes */
+.panel-body:has(> .section-full) > :not(.section-full) {
+  display: none;
+}
+.section-full {
+  flex: 1 0 auto;
+}
+
 /* the focused box's edges and corners, each dragged to size it; the bottom
    right corner carries the hatch that says so */
 .focus-grip {
@@ -4164,4 +4307,18 @@ a.build-label:hover {
     right: 16px;
     width: auto;
   }
+}
+
+/* the feed over the whole window, or in front of it */
+.feed.surface-full {
+  position: fixed;
+  inset: 0;
+  z-index: 15;
+  height: auto;
+  max-height: none;
+  border-top: 0;
+}
+.feed.surface-focus {
+  height: var(--focus-h, min(720px, calc(100dvh - 48px)));
+  max-height: calc(100dvh - 16px);
 }

@@ -1,13 +1,18 @@
+import { isSectionKey, type SectionKey } from "./surface";
+
 /** What the URL asked this window to show. `/?repo=<id>` pins that repo on
  *  load; add `view=solo` and the window shows only that repo's panel,
  *  `view=shell` and it shows only a shell at that repo, named by `term=`
- *  once it has one so a reload comes back to the same shell. */
+ *  once it has one so a reload comes back to the same shell, and
+ *  `view=section&section=<key>` one section of that repo's panel. */
 export interface Route {
   repo: string | null;
   solo: boolean;
   shell: boolean;
   /** the shell window's shell, once it has named one */
   term: string | null;
+  /** the one section a section window shows */
+  section: SectionKey | null;
 }
 
 const TERM_ID = /^[0-9a-f]{32}$/;
@@ -17,11 +22,13 @@ export function parseRoute(search: string): Route {
   const repo = q.get("repo");
   const view = repo ? q.get("view") : null;
   const term = q.get("term");
+  const section = q.get("section");
   return {
     repo: repo || null,
     solo: view === "solo",
     shell: view === "shell",
     term: view === "shell" && term && TERM_ID.test(term) ? term : null,
+    section: view === "section" && isSectionKey(section) ? section : null,
   };
 }
 
@@ -32,7 +39,7 @@ export function nameShellHere(term: string) {
   window.history.replaceState(null, "", u.toString());
 }
 
-function viewUrl(id: string, view: "solo" | "shell"): string {
+function viewUrl(id: string, view: "solo" | "shell" | "section"): string {
   const u = new URL(window.location.href);
   u.search = "";
   u.hash = "";
@@ -43,6 +50,20 @@ function viewUrl(id: string, view: "solo" | "shell"): string {
 
 export const soloUrl = (id: string): string => viewUrl(id, "solo");
 export const shellUrl = (id: string): string => viewUrl(id, "shell");
+
+/** one section of a repo's panel, in a window of its own */
+export function sectionUrl(id: string, section: SectionKey): string {
+  const u = new URL(viewUrl(id, "section"));
+  u.searchParams.set("section", section);
+  return u.toString();
+}
+
+/** an existing shell, joined from a window of its own */
+export function heldShellUrl(id: string, term: string): string {
+  const u = new URL(shellUrl(id));
+  u.searchParams.set("term", term);
+  return u.toString();
+}
 
 /** The whole grove, whatever this window is showing. */
 export function groveUrl(): string {
@@ -79,6 +100,18 @@ export function openElsewhere(id: string, target: "tab" | "window") {
  *  shell, so the window is named after the moment rather than the repo. */
 export function openShellElsewhere(id: string, target: "tab" | "window") {
   openNamed(`canopy:shell:${id}:${Date.now()}`, shellUrl(id), target);
+}
+
+/** One section of a repo's panel in a tab or window of its own, reused on
+ *  a second click like a solo panel's. */
+export function openSectionElsewhere(id: string, section: SectionKey, target: "tab" | "window") {
+  openNamed(`canopy:${id}:${section}`, sectionUrl(id, section), target);
+}
+
+/** A shell that is already running, in a tab or window of its own: the new
+ *  window joins it rather than starting another. */
+export function popShell(id: string, term: string, target: "tab" | "window") {
+  openNamed(`canopy:shell:${term}`, heldShellUrl(id, term), target);
 }
 
 function openNamed(name: string, url: string, target: "tab" | "window") {

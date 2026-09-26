@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { api } from "../api";
-import { closedIn, useStore } from "../store";
+import { Section, useSectionClosed } from "./Surface";
 import {
   loadChoice,
   portsFor,
@@ -28,8 +28,7 @@ const portLabel = (p: ListeningPort) => (p.command ? `${p.port} · ${p.command}`
  * What each repo previews (port and path) is kept per browser.
  */
 export function PreviewSection({ repo }: { repo: Repo }) {
-  const closed = useStore((s) => closedIn(s, repo.id, "preview"));
-  const toggleSection = useStore((s) => s.toggleSection);
+  const closed = useSectionClosed(repo.id, "preview");
   const [choice, setChoice] = useState<PreviewChoice | null>(() => loadChoice(repo.id));
   const [ports, setPorts] = useState<ListeningPort[] | null>(null);
   const [slots, setSlots] = useState<number[] | null>(null);
@@ -124,128 +123,125 @@ export function PreviewSection({ repo }: { repo: Repo }) {
   };
 
   return (
-    <section className="preview" aria-label="Preview">
-      <button
-        type="button"
-        className={`panel-label fold${closed ? "" : " open"}`}
-        aria-expanded={!closed}
-        onClick={() => toggleSection(repo.id, "preview")}
-        title="The repo's dev server, running on the backend, shown here"
-      >
-        preview <span>{summary}</span>
-      </button>
-      {!closed && (
-        <div className="preview-body">
-          {blocked ? (
-            <p className="panel-clean">{blocked}</p>
-          ) : off ? (
-            <p className="panel-clean">Previews are off on this backend (CANOPY_PREVIEW_PORTS).</p>
-          ) : (
-            <>
-              <div className="preview-ports">
-                {mine.map((p) => (
-                  <button
-                    key={p.port}
-                    type="button"
-                    className={`mini${choice?.port === p.port ? " on" : ""}`}
-                    onClick={() => pick({ port: p.port, path: choice?.port === p.port ? choice.path : "/" })}
-                    title={`Listening in ${repo.name}`}
-                  >
-                    {portLabel(p)}
-                  </button>
-                ))}
-                {loose.length > 0 && (
-                  <select
-                    className="preview-select"
-                    aria-label="Another port on the backend"
-                    value={choice && !mine.some((p) => p.port === choice.port) ? String(choice.port) : ""}
-                    onChange={(e) => {
-                      const n = Number(e.target.value);
-                      if (n) pick({ port: n, path: "/" });
-                    }}
-                  >
-                    <option value="">{mine.length ? "other…" : "a port…"}</option>
-                    {loose.map((p) => (
-                      <option key={p.port} value={p.port}>
-                        {portLabel(p)}
-                      </option>
-                    ))}
-                  </select>
-                )}
-                <input
-                  className="preview-port"
-                  inputMode="numeric"
-                  placeholder="port"
-                  aria-label="Port to preview"
-                  value={portDraft}
-                  onChange={(e) => setPortDraft(e.target.value)}
-                  onKeyDown={(e) => {
-                    if (e.key === "Enter") typed();
+    <Section
+      repo={repo}
+      k="preview"
+      className="preview"
+      label="Preview"
+      head={summary}
+      title="The repo's dev server, running on the backend, shown here"
+      noCapture={url ? "The page in the preview is another origin, which a capture cannot see into" : undefined}
+    >
+      <div className="preview-body">
+        {blocked ? (
+          <p className="panel-clean">{blocked}</p>
+        ) : off ? (
+          <p className="panel-clean">Previews are off on this backend (CANOPY_PREVIEW_PORTS).</p>
+        ) : (
+          <>
+            <div className="preview-ports">
+              {mine.map((p) => (
+                <button
+                  key={p.port}
+                  type="button"
+                  className={`mini${choice?.port === p.port ? " on" : ""}`}
+                  onClick={() => pick({ port: p.port, path: choice?.port === p.port ? choice.path : "/" })}
+                  title={`Listening in ${repo.name}`}
+                >
+                  {portLabel(p)}
+                </button>
+              ))}
+              {loose.length > 0 && (
+                <select
+                  className="preview-select"
+                  aria-label="Another port on the backend"
+                  value={choice && !mine.some((p) => p.port === choice.port) ? String(choice.port) : ""}
+                  onChange={(e) => {
+                    const n = Number(e.target.value);
+                    if (n) pick({ port: n, path: "/" });
                   }}
-                />
-                {choice && (
-                  <button type="button" className="mini" onClick={() => pick(null)} title="Stop previewing here">
-                    ✕
-                  </button>
-                )}
-              </div>
-              {error && <p className="panel-error">{error}</p>}
-              {!choice ? (
-                <p className="panel-clean">
-                  {ports === null
-                    ? "Looking for dev servers…"
-                    : mine.length === 0
-                      ? "Nothing listens in this repo yet. Start its dev server in a shell and it turns up here, or pick a port."
-                      : "Pick a port."}
-                </p>
-              ) : (
-                <>
-                  <div className="preview-bar">
-                    <button
-                      type="button"
-                      className="mini"
-                      onClick={() => setNonce((n) => n + 1)}
-                      title="Reload"
-                      aria-label="Reload"
-                    >
-                      ⟳
-                    </button>
-                    <input
-                      className="preview-path"
-                      aria-label="Path on the dev server"
-                      spellCheck={false}
-                      value={pathDraft}
-                      onChange={(e) => setPathDraft(e.target.value)}
-                      onKeyDown={(e) => {
-                        if (e.key === "Enter") go();
-                      }}
-                    />
-                    {url && (
-                      <a className="mini" href={url} target="_blank" rel="noreferrer" title="Open in a browser tab">
-                        ↗
-                      </a>
-                    )}
-                  </div>
-                  <div className="preview-frame-wrap">
-                    {url ? (
-                      <iframe
-                        key={`${url}#${nonce}`}
-                        className="preview-frame"
-                        src={url}
-                        title={`${repo.name} on port ${choice.port}`}
-                        // its own origin already (another port); no top navigation
-                        sandbox="allow-scripts allow-same-origin allow-forms allow-popups allow-modals allow-downloads"
-                      />
-                    ) : (
-                      <p className="panel-clean">Opening a preview port…</p>
-                    )}
-                  </div>
-                </>
+                >
+                  <option value="">{mine.length ? "other…" : "a port…"}</option>
+                  {loose.map((p) => (
+                    <option key={p.port} value={p.port}>
+                      {portLabel(p)}
+                    </option>
+                  ))}
+                </select>
               )}
-            </>
-          )}
-        </div>
-      )}
-    </section>
+              <input
+                className="preview-port"
+                inputMode="numeric"
+                placeholder="port"
+                aria-label="Port to preview"
+                value={portDraft}
+                onChange={(e) => setPortDraft(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") typed();
+                }}
+              />
+              {choice && (
+                <button type="button" className="mini" onClick={() => pick(null)} title="Stop previewing here">
+                  ✕
+                </button>
+              )}
+            </div>
+            {error && <p className="panel-error">{error}</p>}
+            {!choice ? (
+              <p className="panel-clean">
+                {ports === null
+                  ? "Looking for dev servers…"
+                  : mine.length === 0
+                    ? "Nothing listens in this repo yet. Start its dev server in a shell and it turns up here, or pick a port."
+                    : "Pick a port."}
+              </p>
+            ) : (
+              <>
+                <div className="preview-bar">
+                  <button
+                    type="button"
+                    className="mini"
+                    onClick={() => setNonce((n) => n + 1)}
+                    title="Reload"
+                    aria-label="Reload"
+                  >
+                    ⟳
+                  </button>
+                  <input
+                    className="preview-path"
+                    aria-label="Path on the dev server"
+                    spellCheck={false}
+                    value={pathDraft}
+                    onChange={(e) => setPathDraft(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter") go();
+                    }}
+                  />
+                  {url && (
+                    <a className="mini" href={url} target="_blank" rel="noreferrer" title="Open in a browser tab">
+                      ↗
+                    </a>
+                  )}
+                </div>
+                <div className="preview-frame-wrap">
+                  {url ? (
+                    <iframe
+                      key={`${url}#${nonce}`}
+                      className="preview-frame"
+                      src={url}
+                      title={`${repo.name} on port ${choice.port}`}
+                      // its own origin already (another port); no top navigation
+                      sandbox="allow-scripts allow-same-origin allow-forms allow-popups allow-modals allow-downloads"
+                    />
+                  ) : (
+                    <p className="panel-clean">Opening a preview port…</p>
+                  )}
+                </div>
+              </>
+            )}
+          </>
+        )}
+      </div>
+    </Section>
   );
 }

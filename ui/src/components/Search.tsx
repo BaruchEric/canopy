@@ -2,7 +2,8 @@ import { useEffect, useRef, useState } from "react";
 import { useShallow } from "zustand/react/shallow";
 import { api } from "../api";
 import { groupHits, markHit } from "../hits";
-import { closedIn, helperFor, useStore, visibleRepos } from "../store";
+import { helperFor, useStore, visibleRepos } from "../store";
+import { Section } from "./Surface";
 import type { GrepHit, GrepRepoResult, GrepResult, Repo } from "../../../src/core/types";
 
 const errText = (err: unknown) => String(err instanceof Error ? err.message : err);
@@ -122,8 +123,6 @@ function SearchBox({
 /* ---------- the panel section: one repo ---------- */
 
 export function SearchSection({ repo }: { repo: Repo }) {
-  const closed = useStore((s) => closedIn(s, repo.id, "search"));
-  const toggleSection = useStore((s) => s.toggleSection);
   const pending = useStore((s) => s.pendingSearch);
   const takePending = useStore((s) => s.takePendingSearch);
   const [query, setQuery] = useState("");
@@ -163,41 +162,42 @@ export function SearchSection({ repo }: { repo: Repo }) {
   };
 
   const count = found ? found.result.hits.length : null;
+  // a pasted term is searched at once; grep takes one line
+  const paste = (text: string) => {
+    const q = (text.split("\n")[0] ?? "").trim();
+    setQuery(q);
+    void run(q);
+  };
+
   return (
-    <section className="grep" aria-label="Search this repo's files">
-      <button
-        type="button"
-        className={`panel-label fold${closed ? "" : " open"}`}
-        aria-expanded={!closed}
-        onClick={() => toggleSection(repo.id, "search")}
-      >
-        search{" "}
-        <span>{count === null ? "" : `${count}${found?.result.truncated ? "+" : ""}`}</span>
-      </button>
-      {!closed && (
-        <>
-          <SearchBox
-            value={query}
-            placeholder="search this repo's files"
-            label="Search this repo's files"
-            busy={busy}
-            onChange={(v) => {
-              setQuery(v);
-              if (!v.trim()) setFound(null);
-            }}
-            onSearch={() => void run(query)}
-            onClear={clear}
-          />
-          {error && <p className="panel-error">{error}</p>}
-          {found &&
-            (found.result.hits.length === 0 ? (
-              <p className="panel-clean">No matches for “{found.q}”.</p>
-            ) : (
-              <RepoHits repo={repo} result={found.result} len={found.q.length} onError={setError} />
-            ))}
-        </>
-      )}
-    </section>
+    <Section
+      repo={repo}
+      k="search"
+      className="grep"
+      label="Search this repo's files"
+      head={count === null ? "" : `${count}${found?.result.truncated ? "+" : ""}`}
+      paste={paste}
+    >
+      <SearchBox
+        value={query}
+        placeholder="search this repo's files"
+        label="Search this repo's files"
+        busy={busy}
+        onChange={(v) => {
+          setQuery(v);
+          if (!v.trim()) setFound(null);
+        }}
+        onSearch={() => void run(query)}
+        onClear={clear}
+      />
+      {error && <p className="panel-error">{error}</p>}
+      {found &&
+        (found.result.hits.length === 0 ? (
+          <p className="panel-clean">No matches for “{found.q}”.</p>
+        ) : (
+          <RepoHits repo={repo} result={found.result} len={found.q.length} onError={setError} />
+        ))}
+    </Section>
   );
 }
 

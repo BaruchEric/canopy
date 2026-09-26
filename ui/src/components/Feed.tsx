@@ -4,6 +4,18 @@ import { useShallow } from "zustand/react/shallow";
 import { clock, filterFeed, type FeedEntry, type FeedKind } from "../feed";
 import { FEED, useStore } from "../store";
 import { TermGrip } from "./TermDock";
+import { Gear } from "./Gear";
+import {
+  FocusBackdrop,
+  FocusGrips,
+  focusVars,
+  useLeaveOnEscape,
+  modeEntries,
+  shareEntries,
+  useZoom,
+  zoomStyle,
+} from "./Surface";
+import type { SurfaceMode } from "../surface";
 
 /** how far from the bottom still counts as following the stream, in px */
 const FOLLOW_SLACK = 24;
@@ -56,6 +68,10 @@ export function FeedDock() {
   const list = useRef<HTMLOListElement>(null);
   const [following, setFollowing] = useState(true);
   const [seen, setSeen] = useState(0);
+  const [mode, setMode] = useState<SurfaceMode>("normal");
+  const focusSize = useStore((s) => s.focusSize);
+  const { zoom, entry: zoomEntry } = useZoom("feed");
+  useLeaveOnEscape(mode, setMode);
 
   // A source that has gone (removed while the feed was narrowed to it)
   // widens the view back out rather than showing nothing forever.
@@ -93,21 +109,26 @@ export function FeedDock() {
   };
   const labelOf = (id: string) => sources.find((s) => s.id === id)?.label ?? id;
 
+  const modeClass = mode === "full" ? " surface-full" : mode === "focus" ? " surface-focus" : "";
   return (
+    <>
+    {mode === "focus" && <FocusBackdrop onLeave={() => setMode("normal")} />}
     <section
       ref={box}
-      className="feed"
+      className={`feed${modeClass}`}
       aria-label="Event feed"
-      style={{ "--feed-h": `${height}px` } as CSSProperties}
+      style={{ "--feed-h": `${height}px`, ...(mode === "focus" ? focusVars(focusSize) : {}) } as CSSProperties}
     >
-      <TermGrip
-        box={box}
-        cssVar="--feed-h"
-        label="Event feed height"
-        height={height}
-        setHeight={setFeedHeight}
-        bounds={FEED}
-      />
+      {mode === "normal" && (
+        <TermGrip
+          box={box}
+          cssVar="--feed-h"
+          label="Event feed height"
+          height={height}
+          setHeight={setFeedHeight}
+          bounds={FEED}
+        />
+      )}
       <div className="feed-head">
         <span className="term-caption">events</span>
         <div className="feed-chips" role="group" aria-label="Narrow the feed to one source">
@@ -143,11 +164,29 @@ export function FeedDock() {
         <button type="button" className="mini" onClick={clearFeed} disabled={feed.length === 0}>
           clear
         </button>
+        <Gear
+          label="the event feed"
+          groups={[
+            { label: "feed", entries: [zoomEntry] },
+            { label: "layout", entries: modeEntries(mode, setMode, "window") },
+            {
+              label: "share",
+              entries: shareEntries({
+                el: () => box.current,
+                label: "events",
+                copy: () =>
+                  shown
+                    .map((e) => [clock(e.at), KIND_WORD[e.kind], e.source ? labelOf(e.source) : "", e.repo ?? "", e.text].filter(Boolean).join("  "))
+                    .join("\n"),
+              }),
+            },
+          ]}
+        />
         <button type="button" className="term-x feed-x" aria-label="Hide the event feed" title="hide (e)" onClick={toggleFeed}>
           ×
         </button>
       </div>
-      <ol ref={list} className="feed-list" onScroll={onScroll}>
+      <ol ref={list} className="feed-list" onScroll={onScroll} style={zoomStyle(zoom)}>
         {shown.length === 0 && (
           <li className="feed-empty">
             {feed.length === 0 ? "nothing yet. events land here as the server sends them." : "nothing from this source yet."}
@@ -162,7 +201,9 @@ export function FeedDock() {
           ↓ {unseen} new
         </button>
       )}
+      {mode === "focus" && <FocusGrips box={box} />}
     </section>
+    </>
   );
 }
 

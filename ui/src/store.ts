@@ -2,7 +2,7 @@ import { create } from "zustand";
 import { api, subscribe } from "./api";
 import { applyQuery, type RepoFilter } from "./filters";
 import { focusPanel, nextActive } from "./dock";
-import { openElsewhere, openShellElsewhere, parseRoute, shellUrl } from "./routes";
+import { heldShellUrl, openElsewhere, openShellElsewhere, parseRoute } from "./routes";
 import { loadSettings, saveSettings, shellPlace, type Settings, type ShellPlace } from "./settings";
 import { PANEL_TERM_ROWS, adoptTerms, loadFocusSize, loadTermTabs, nextStripTab, pruneHidden, reconcileTerms, rowsPx, termId, type FocusSize, type TermTab } from "./term";
 import { clientId, identity } from "./client";
@@ -623,11 +623,7 @@ const endedShells = new Set<string>();
 const skipped = (hidden: string[]): ReadonlySet<string> => new Set([...endedShells, ...hidden]);
 
 /** a shell window's url onto one named shell */
-function shellUrlFor(repoId: string, term: string): string {
-  const u = new URL(shellUrl(repoId));
-  u.searchParams.set("term", term);
-  return u.toString();
-}
+const shellUrlFor = heldShellUrl;
 
 /** The state a fresh tree implies: the repos and sources themselves, and
  *  the panels, widths and folds that still have a repo to belong to. */
@@ -1107,7 +1103,7 @@ export const useStore = create<CanopyState>((set, get) => ({
       place ??
       shellPlace(s.settings.shell, {
         panelOpen: s.panels.includes(repoId),
-        solo: parseRoute(window.location.search).solo,
+        solo: loneWindow(),
       });
     if (where === "tab" || where === "window") {
       openShellElsewhere(repoId, where);
@@ -1208,7 +1204,7 @@ export const useStore = create<CanopyState>((set, get) => ({
     // the strip here, since the shell is started before any window opens
     const where = shellPlace(s.settings.shell, {
       panelOpen: s.panels.includes(repoId),
-      solo: parseRoute(window.location.search).solo,
+      solo: loneWindow(),
     });
     const place = where === "panel" ? "panel" : "strip";
     const id = termId();
@@ -1442,10 +1438,16 @@ function endShells(tabs: TermTab[]) {
 /** whether this window is a solo panel or a lone shell rather than the grove:
  *  it has no dock, so what it holds in `panels` is a copy of the grove's
  *  (plus any panel a shell opened here) and must not be written back */
+/** a window that shows one panel or one section, which has no shells strip */
+function loneWindow(): boolean {
+  const route = parseRoute(window.location.search);
+  return route.solo || route.section !== null;
+}
+
 function dockless(): boolean {
   if (typeof window === "undefined") return false;
   const route = parseRoute(window.location.search);
-  return route.solo || route.shell;
+  return route.solo || route.shell || route.section !== null;
 }
 
 // Whatever part of the layout a change touched is written as it happens, so

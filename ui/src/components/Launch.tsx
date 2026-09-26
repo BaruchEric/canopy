@@ -1,7 +1,8 @@
 import { useEffect, useRef, useState } from "react";
 import { useShallow } from "zustand/react/shallow";
 import { api } from "../api";
-import { closedIn, jobsFor, launchFor, useStore } from "../store";
+import { jobsFor, launchFor, useStore } from "../store";
+import { Section, useSectionClosed } from "./Surface";
 import { ago } from "../util";
 import { Seg } from "./Seg";
 import { fmtBytes } from "../../../src/core/launch";
@@ -30,8 +31,7 @@ const TAIL = 14;
  * opens and on the refresh button.
  */
 export function LaunchSection({ repo }: { repo: Repo }) {
-  const closed = useStore((s) => closedIn(s, repo.id, "launch"));
-  const toggleSection = useStore((s) => s.toggleSection);
+  const closed = useSectionClosed(repo.id, "launch");
   const editLaunch = useStore((s) => s.editLaunch);
   const buildsAt = useStore((s) => s.buildsAt[repo.id]);
   const jobs = useStore(useShallow((s) => jobsFor(s, repo.id)));
@@ -63,44 +63,40 @@ export function LaunchSection({ repo }: { repo: Repo }) {
   const summary = active ? `${active} going` : builds ? String(builds.length) : "…";
 
   return (
-    <section className="launch" aria-label="Launcher">
-      <button
-        type="button"
-        className={`panel-label fold${closed ? "" : " open"}`}
-        aria-expanded={!closed}
-        onClick={() => toggleSection(repo.id, "launch")}
-        title="Released builds, pull requests and this checkout, launched from here"
-      >
-        launch <span>{summary}</span>
-      </button>
-      {!closed && (
-        <div className="launch-body">
-          <div className="launch-bar">
-            <Seg label="What to show" value={tab} options={TABS} onChange={setTab} className="seg-window" />
-            <span className="spacer" />
-            <button
-              type="button"
-              className="mini"
-              title="Build and run lines, and which release asset is for this machine"
-              onClick={() => editLaunch(repo.id)}
-            >
-              settings…
-            </button>
-          </div>
-          {error && <p className="panel-error">{error}</p>}
-          {jobs.length > 0 && (
-            <ul className="job-list">
-              {jobs.slice(0, 3).map((j) => (
-                <JobBlock key={j.id} job={j} />
-              ))}
-            </ul>
-          )}
-          {tab === "builds" && <Builds repo={repo} builds={builds} onError={setError} />}
-          {tab === "releases" && <Releases repo={repo} builds={builds} onError={setError} />}
-          {tab === "pulls" && <Pulls repo={repo} builds={builds} onError={setError} />}
+    <Section
+      repo={repo}
+      k="launch"
+      className="launch"
+      label="Launcher"
+      head={summary}
+      title="Released builds, pull requests and this checkout, launched from here"
+    >
+      <div className="launch-body">
+        <div className="launch-bar">
+          <Seg label="What to show" value={tab} options={TABS} onChange={setTab} className="seg-window" />
+          <span className="spacer" />
+          <button
+            type="button"
+            className="mini"
+            title="Build and run lines, and which release asset is for this machine"
+            onClick={() => editLaunch(repo.id)}
+          >
+            settings…
+          </button>
         </div>
-      )}
-    </section>
+        {error && <p className="panel-error">{error}</p>}
+        {jobs.length > 0 && (
+          <ul className="job-list">
+            {jobs.slice(0, 3).map((j) => (
+              <JobBlock key={j.id} job={j} />
+            ))}
+          </ul>
+        )}
+        {tab === "builds" && <Builds repo={repo} builds={builds} onError={setError} />}
+        {tab === "releases" && <Releases repo={repo} builds={builds} onError={setError} />}
+        {tab === "pulls" && <Pulls repo={repo} builds={builds} onError={setError} />}
+      </div>
+    </Section>
   );
 }
 

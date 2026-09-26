@@ -1,6 +1,7 @@
 import { Fragment, useEffect, useState } from "react";
 import { api } from "../api";
-import { closedIn, useStore } from "../store";
+import { useStore } from "../store";
+import { Section } from "./Surface";
 import { duration, fmtTokens, toolLine, usd, when } from "../util";
 import { CommitRow } from "./Commit";
 import { Rings } from "./Rings";
@@ -36,8 +37,6 @@ const REPLY_CLAMP = 480;
 export function ClaudeSection({ repo }: { repo: Repo }) {
   const overview = useStore((s) => s.history);
   const history = historyFor(overview, repo.id);
-  const closed = useStore((s) => closedIn(s, repo.id, "claude"));
-  const toggleSection = useStore((s) => s.toggleSection);
 
   const summary =
     overview === null
@@ -49,25 +48,24 @@ export function ClaudeSection({ repo }: { repo: Repo }) {
           : "none";
 
   return (
-    <section className="claude" aria-label="Claude sessions">
-      <button
-        type="button"
-        className={`panel-label fold${closed ? "" : " open"}`}
-        aria-expanded={!closed}
-        onClick={() => toggleSection(repo.id, "claude")}
-        title={
-          history
-            ? `${history.sessions} sessions in the archive, ${usd(history.costUsd)} API-equivalent all time`
-            : undefined
-        }
-      >
-        claude <span>{summary}</span>
-      </button>
-      {history && overview?.available && (
-        <Rings tall history={history} days={overview.days} maxDay={overview.maxDay} />
-      )}
-      {!closed && <Body repo={repo} overview={overview} history={history} />}
-    </section>
+    <Section
+      repo={repo}
+      k="claude"
+      className="claude"
+      label="Claude sessions"
+      head={summary}
+      title={
+        history
+          ? `${history.sessions} sessions in the archive, ${usd(history.costUsd)} API-equivalent all time`
+          : undefined
+      }
+      after={
+        history &&
+        overview?.available && <Rings tall history={history} days={overview.days} maxDay={overview.maxDay} />
+      }
+    >
+      <Body repo={repo} overview={overview} history={history} />
+    </Section>
   );
 }
 

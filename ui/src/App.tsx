@@ -9,7 +9,7 @@ import { Resizer } from "./components/Resizer";
 import { RunSheet } from "./components/RunSheet";
 import { SelectBar } from "./components/SelectBar";
 import { Sidebar } from "./components/Sidebar";
-import { Solo } from "./components/Solo";
+import { SectionSolo, Solo } from "./components/Solo";
 import { ShellSolo, TermDock } from "./components/TermDock";
 import { Crowns, TopBar } from "./components/TopBar";
 import { parseRoute } from "./routes";
@@ -84,7 +84,7 @@ export function App() {
   // A `?repo=` link pins that repo once the tree is in. Only once: a rescan
   // that drops the repo should not bring the panel back.
   useEffect(() => {
-    if (!loaded || route.solo || route.shell || !route.repo || pinned.current) return;
+    if (!loaded || route.solo || route.shell || route.section || !route.repo || pinned.current) return;
     pinned.current = true;
     if (useStore.getState().repos.some((r) => r.id === route.repo)) {
       openPanel(route.repo);
@@ -107,7 +107,8 @@ export function App() {
       // Select mode's two keys. A sheet, a menu or a popover owns Escape
       // while it is up, and a select box owns ⌘A, so neither reaches here then.
       if (st.selecting && !st.sheet && !document.querySelector('[role="dialog"], [role="menu"]')) {
-        if (e.key === "Escape") {
+        // a surface over the page or its panel takes Escape first
+        if (e.key === "Escape" && !document.querySelector(".surface-focus, .surface-full, .section-full")) {
           st.setSelecting(false);
           return;
         }
@@ -167,6 +168,7 @@ export function App() {
   }
   if (route.solo && route.repo) return <Solo id={route.repo} />;
   if (route.shell && route.repo) return <ShellSolo id={route.repo} />;
+  if (route.section && route.repo) return <SectionSolo id={route.repo} section={route.section} />;
   return (
     <div className="app">
       <nav className="app-nav" aria-label="Canopy views">

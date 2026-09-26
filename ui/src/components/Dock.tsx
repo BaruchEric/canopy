@@ -15,7 +15,7 @@ import {
 } from "../files";
 import { peerable } from "../peers";
 import { useShallow } from "zustand/react/shallow";
-import { DOCK, PANEL, activeFlowFor, capsFor, closedIn, flowFor, runFor, useStore } from "../store";
+import { DOCK, PANEL, activeFlowFor, capsFor, flowFor, runFor, useStore } from "../store";
 import { ago, GLYPH, stateOf } from "../util";
 import { ClaudeSection } from "./Claude";
 import { LaunchSection } from "./Launch";
@@ -28,8 +28,23 @@ import { RepoMenu } from "./RepoMenu";
 import { Resizer } from "./Resizer";
 import { FlowChip, RunChip } from "./RunChip";
 import { SearchSection } from "./Search";
-import { Seg, type SegOption } from "./Seg";
 import { PanelShells } from "./TermDock";
+import { Gear, type GearEntry } from "./Gear";
+import {
+  FocusBackdrop,
+  FocusGrips,
+  Section,
+  focusVars,
+  useLeaveOnEscape,
+  modeEntries,
+  shareEntries,
+  useSectionClosed,
+  useZoom,
+  zoomStyle,
+} from "./Surface";
+import { SECTION_WORD, moveSection, toggleHidden, type SectionKey, type SurfaceMode } from "../surface";
+import { openElsewhere, soloUrl } from "../routes";
+import { copyText } from "../share";
 import {
   OPENER_IDS,
   type LogEntry,
@@ -150,13 +165,9 @@ function FileRow({
   );
 }
 
-const VIEWS: readonly SegOption<FileView>[] = [
-  { value: "list", label: "list", title: "Every file in one list" },
-  {
-    value: "folders",
-    label: "folders",
-    title: "Files under a heading per folder",
-  },
+const VIEWS: readonly { value: FileView; label: string }[] = [
+  { value: "list", label: "every file in one list" },
+  { value: "folders", label: "files under their folders" },
 ];
 
 /** The changes list: a filter box, a header row whose buttons sort (click)
@@ -237,13 +248,6 @@ function ChangesList({
             {shown.length} of {files.length}
           </span>
         )}
-        <Seg
-          label="Changes view"
-          className="changes-view"
-          value={view}
-          options={VIEWS}
-          onChange={(v) => setSetting("fileView", v)}
-        />
       </div>
       <div className="file-table">
         <div className="file-head" role="row">
@@ -411,8 +415,6 @@ function WorkspaceMenu({
  * ever populated. */
 function PeersSection({ repo }: { repo: Repo }) {
   const peerSync = useStore((s) => s.peerSync);
-  const closed = useStore((s) => closedIn(s, repo.id, "peers"));
-  const toggleSection = useStore((s) => s.toggleSection);
   const takeWip = useStore((s) => s.takeWip);
   const trackBranch = useStore((s) => s.trackBranch);
   const seedRepo = useStore((s) => s.seedRepo);
@@ -441,124 +443,120 @@ function PeersSection({ repo }: { repo: Repo }) {
   };
 
   return (
-    <section className="peers" aria-label="Peers">
-      <button
-        type="button"
-        className={`panel-label fold${closed ? "" : " open"}`}
-        aria-expanded={!closed}
-        onClick={() => toggleSection(repo.id, "peers")}
-        title="What this repo's peers have that this checkout does not"
-      >
-        peers <span>{count}</span>
-      </button>
-      {!closed && (
-        <div className="peers-body">
-          {error && <p className="panel-error">{error}</p>}
-          {st === undefined ? (
-            <p className="panel-clean">Not synced yet.</p>
-          ) : count === 0 ? (
-            <p className="panel-clean">In step with every peer.</p>
-          ) : (
-            <>
-              {wip.map((w) => (
-                <Fragment key={`wip:${w.peer}:${w.branch}:${w.hash}`}>
-                  <div className="peers-row">
-                    <span className="peers-text">
-                      WIP on {w.peer} · {w.branch} · {w.files} files
-                    </span>
-                    <button
-                      type="button"
-                      className="mini"
-                      disabled={busy !== null}
-                      onClick={() => run(`take:${w.hash}`, () => takeWip(repo.id, w.peer, w.branch))}
-                    >
-                      {busy === `take:${w.hash}` ? "taking…" : "take"}
-                    </button>
-                    <button
-                      type="button"
-                      className="mini"
-                      onClick={() => setDrilled(drilled === w.hash ? null : w.hash)}
-                    >
-                      {drilled === w.hash ? "hide" : "view"}
-                    </button>
-                  </div>
-                  {drilled === w.hash && (
-                    <ul className="log peers-drill">
-                      <CommitRow
-                        repo={repo}
-                        hash={w.hash}
-                        subject={`WIP on ${w.branch}`}
-                        meta={`${w.peer} · ${ago(w.at / 1000)}`}
-                        open
-                        onToggle={() => setDrilled(null)}
-                      />
-                    </ul>
-                  )}
-                </Fragment>
-              ))}
-              {diverged.map((d) => (
-                <div key={`div:${d.peer}:${d.branch}`} className="peers-row">
-                  <span className="peers-text peer-diverged">
-                    {d.branch} diverged from {d.peer}
-                  </span>
-                  <button type="button" className="mini" onClick={() => openTerm(repo.id)}>
-                    shell
-                  </button>
-                  <button
-                    type="button"
-                    className="mini"
-                    disabled={busy !== null}
-                    onClick={() =>
-                      run(`merge:${d.peer}:${d.branch}`, () =>
-                        openChat(
-                          repo.id,
-                          `Merge ${d.peer}/${d.branch} into ${d.branch}. It diverged: resolve conflicts, run the tests, and commit the merge. Do not push.`,
-                        ),
-                      )
-                    }
-                  >
-                    {busy === `merge:${d.peer}:${d.branch}` ? "starting…" : "merge with claude"}
-                  </button>
-                </div>
-              ))}
-              {peerOnly.map((po) => (
-                <div key={`only:${po.peer}:${po.branch}`} className="peers-row">
+    <Section
+      repo={repo}
+      k="peers"
+      className="peers"
+      label="Peers"
+      head={count}
+      title="What this repo's peers have that this checkout does not"
+    >
+      <div className="peers-body">
+        {error && <p className="panel-error">{error}</p>}
+        {st === undefined ? (
+          <p className="panel-clean">Not synced yet.</p>
+        ) : count === 0 ? (
+          <p className="panel-clean">In step with every peer.</p>
+        ) : (
+          <>
+            {wip.map((w) => (
+              <Fragment key={`wip:${w.peer}:${w.branch}:${w.hash}`}>
+                <div className="peers-row">
                   <span className="peers-text">
-                    {po.peer}/{po.branch}
+                    WIP on {w.peer} · {w.branch} · {w.files} files
                   </span>
                   <button
                     type="button"
                     className="mini"
                     disabled={busy !== null}
-                    onClick={() => run(`track:${po.peer}:${po.branch}`, () => trackBranch(repo.id, po.peer, po.branch))}
+                    onClick={() => run(`take:${w.hash}`, () => takeWip(repo.id, w.peer, w.branch))}
                   >
-                    {busy === `track:${po.peer}:${po.branch}` ? "tracking…" : "track"}
+                    {busy === `take:${w.hash}` ? "taking…" : "take"}
+                  </button>
+                  <button
+                    type="button"
+                    className="mini"
+                    onClick={() => setDrilled(drilled === w.hash ? null : w.hash)}
+                  >
+                    {drilled === w.hash ? "hide" : "view"}
                   </button>
                 </div>
-              ))}
-            </>
-          )}
-          <div className="peers-foot">
-            <button
-              type="button"
-              className="mini"
-              disabled={busy !== null}
-              onClick={() => run("sync", () => syncPeers(repo.id))}
-            >
-              {busy === "sync" ? "syncing…" : "sync now"}
-            </button>
-            <button
-              type="button"
-              className="mini"
-              disabled={busy !== null}
-              onClick={() => run("seed", () => seedRepo(repo.id))}
-            >
-              {busy === "seed" ? "seeding…" : "seed .env"}
-            </button>
-          </div>
+                {drilled === w.hash && (
+                  <ul className="log peers-drill">
+                    <CommitRow
+                      repo={repo}
+                      hash={w.hash}
+                      subject={`WIP on ${w.branch}`}
+                      meta={`${w.peer} · ${ago(w.at / 1000)}`}
+                      open
+                      onToggle={() => setDrilled(null)}
+                    />
+                  </ul>
+                )}
+              </Fragment>
+            ))}
+            {diverged.map((d) => (
+              <div key={`div:${d.peer}:${d.branch}`} className="peers-row">
+                <span className="peers-text peer-diverged">
+                  {d.branch} diverged from {d.peer}
+                </span>
+                <button type="button" className="mini" onClick={() => openTerm(repo.id)}>
+                  shell
+                </button>
+                <button
+                  type="button"
+                  className="mini"
+                  disabled={busy !== null}
+                  onClick={() =>
+                    run(`merge:${d.peer}:${d.branch}`, () =>
+                      openChat(
+                        repo.id,
+                        `Merge ${d.peer}/${d.branch} into ${d.branch}. It diverged: resolve conflicts, run the tests, and commit the merge. Do not push.`,
+                      ),
+                    )
+                  }
+                >
+                  {busy === `merge:${d.peer}:${d.branch}` ? "starting…" : "merge with claude"}
+                </button>
+              </div>
+            ))}
+            {peerOnly.map((po) => (
+              <div key={`only:${po.peer}:${po.branch}`} className="peers-row">
+                <span className="peers-text">
+                  {po.peer}/{po.branch}
+                </span>
+                <button
+                  type="button"
+                  className="mini"
+                  disabled={busy !== null}
+                  onClick={() => run(`track:${po.peer}:${po.branch}`, () => trackBranch(repo.id, po.peer, po.branch))}
+                >
+                  {busy === `track:${po.peer}:${po.branch}` ? "tracking…" : "track"}
+                </button>
+              </div>
+            ))}
+          </>
+        )}
+        <div className="peers-foot">
+          <button
+            type="button"
+            className="mini"
+            disabled={busy !== null}
+            onClick={() => run("sync", () => syncPeers(repo.id))}
+          >
+            {busy === "sync" ? "syncing…" : "sync now"}
+          </button>
+          <button
+            type="button"
+            className="mini"
+            disabled={busy !== null}
+            onClick={() => run("seed", () => seedRepo(repo.id))}
+          >
+            {busy === "seed" ? "seeding…" : "seed .env"}
+          </button>
         </div>
-      )}
-    </section>
+      </div>
+    </Section>
   );
 }
 
@@ -626,8 +624,7 @@ function History({ repo }: { repo: Repo }) {
   // Bumped by the repo SSE event, so a commit made in a terminal refreshes
   // this list too — not just one made from the panel.
   const updatedAt = useStore((s) => s.updatedAt[repo.id]);
-  const closed = useStore((s) => closedIn(s, repo.id, "history"));
-  const toggleSection = useStore((s) => s.toggleSection);
+  const closed = useSectionClosed(repo.id, "history");
   const [log, setLog] = useState<LogEntry[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   // One commit open at a time, by hash, so it survives the log refreshing
@@ -652,21 +649,13 @@ function History({ repo }: { repo: Repo }) {
   }, [closed, repo.id, updatedAt]);
 
   return (
-    <details
+    <Section
+      repo={repo}
+      k="history"
       className="history"
-      open={!closed}
-      onToggle={(e) => {
-        if (!e.currentTarget.open !== closed) toggleSection(repo.id, "history");
-      }}
+      label="History"
+      head={log ? `${unpushedIn(log) ? `↑${unpushedIn(log)} not pushed · ` : ""}${log.length}` : "…"}
     >
-      <summary className="panel-label">
-        history{" "}
-        <span>
-          {log
-            ? `${unpushedIn(log) ? `↑${unpushedIn(log)} not pushed · ` : ""}${log.length}`
-            : "…"}
-        </span>
-      </summary>
       {error ? (
         <p className="panel-error">Could not read the log: {error}</p>
       ) : log === null ? (
@@ -689,94 +678,41 @@ function History({ repo }: { repo: Repo }) {
           ))}
         </ul>
       )}
-    </details>
+    </Section>
   );
 }
 
-export function RepoPanel({
-  id,
-  width,
-  onClose,
-  hidden,
-}: {
-  id: string;
-  width: number;
-  /** replaces "unpin from the dock", for a panel that owns its window */
-  onClose?: () => void;
-  /** a tab that is not showing: the panel stays mounted (its shell keeps
-   *  its pty, its commit box its draft) but takes no room */
-  hidden?: boolean;
-}) {
-  const repo = useStore((s) => s.repos.find((r) => r.id === id));
-  const repoRun = useStore((s) => runFor(s, id));
-  const repoFlow = useStore((s) => flowFor(s, id));
-  const repoActiveFlow = useStore((s) => activeFlowFor(s, id));
-  const unpin = useStore((s) => s.closePanel);
-  const openApp = useStore((s) => s.openApp);
-  // Only the openers this browser can reach, as in RepoMenu: a headless
-  // backend with no helper picked has none, and VS Code falls back to the
-  // Remote-SSH link.
-  const backend = useStore((s) => s.backend);
-  const openers = useStore(useShallow(capsFor)).openers;
-  const changesClosed = useStore((s) => closedIn(s, id, "changes"));
-  const toggleSection = useStore((s) => s.toggleSection);
-  const closePanel = onClose ? (_id: string) => onClose() : unpin;
+/**
+ * The changes section: the changed files, the commit box under them and
+ * the commits not pushed yet. Its commit draft and its notes are its own,
+ * so the section can move anywhere in the panel, or into a window.
+ */
+function ChangesSection({ repo }: { repo: Repo }) {
+  const id = repo.id;
+  const view = useStore((s) => s.settings.fileView);
+  const setSetting = useStore((s) => s.setSetting);
+  const st = repo.status;
+  const files = st?.files ?? [];
+  const hasStaged = files.some((f) => f.index !== "." && !f.untracked);
   const [message, setMessage] = useState("");
   // Off by default: on, it runs `git add -A` and silently commits everything
   // the per-file checkboxes were used to exclude.
   const [stageAll, setStageAll] = useState(false);
   const [busy, setBusy] = useState<string | null>(null);
-  // A result shows where it was asked for: under the commit box for a commit
-  // or a suggestion, under the pull/push row for the rest. One spot at the
-  // panel's foot sat below every section, and behind a tall shell a failed
-  // push looked like a button that did nothing.
-  const [note, setNote] = useState<{
-    kind: "ok" | "err";
-    text: string;
-    at: "head" | "commit";
-  } | null>(null);
-
-  const [access, setAccess] = useState<PushAccess>("unknown");
+  const [note, setNote] = useState<{ kind: "ok" | "err"; text: string } | null>(null);
 
   useEffect(() => setNote(null), [id]);
 
-  // Answered from remote URLs alone for repos you own, so this costs nothing
-  // for almost every panel. Failures stay "unknown" and render nothing.
-  useEffect(() => {
-    let live = true;
-    setAccess("unknown");
-    api
-      .access(id)
-      .then((r) => {
-        if (live) setAccess(r.access);
-      })
-      .catch(() => {});
-    return () => {
-      live = false;
-    };
-  }, [id]);
-
-  if (!repo) return null;
-  const st = repo.status;
-  const files = st?.files ?? [];
-  const hasStaged = files.some((f) => f.index !== "." && !f.untracked);
-
-  const showError = (text: string) => setNote({ kind: "err", text, at: "head" });
-  const noteAt = (label: string): "head" | "commit" =>
-    label === "commit" || label === "commit+push" || label === "suggest" ? "commit" : "head";
+  const showError = (text: string) => setNote({ kind: "err", text });
 
   const run = async (label: string, fn: () => Promise<string | void>) => {
     setBusy(label);
     setNote(null);
     try {
       const out = await fn();
-      if (typeof out === "string" && out) setNote({ kind: "ok", text: out, at: noteAt(label) });
+      if (typeof out === "string" && out) setNote({ kind: "ok", text: out });
     } catch (err) {
-      setNote({
-        kind: "err",
-        at: noteAt(label),
-        text: String(err instanceof Error ? err.message : err),
-      });
+      showError(String(err instanceof Error ? err.message : err));
     } finally {
       setBusy(null);
     }
@@ -827,16 +763,264 @@ export function RepoPanel({
       return extras.length ? `${done} (${extras.join("; ")})` : done;
     });
 
+  const views: GearEntry[] = VIEWS.map((v) => ({
+    type: "item",
+    label: v.label,
+    on: view === v.value,
+    run: () => setSetting("fileView", v.value),
+  }));
+
   return (
+    <Section
+      repo={repo}
+      k="changes"
+      className="changes-section"
+      label="Changes"
+      head={`${files.length}${(st?.ahead ?? 0) > 0 ? ` · ↑${st?.ahead} not pushed` : ""}`}
+      layout={views}
+      copy={() => files.map((f) => `${markOf(f)} ${f.orig ? `${f.orig} → ${f.path}` : f.path}`).join("\n")}
+      // a paste lands in the commit message, after what is there
+      paste={files.length > 0 ? (text) => setMessage((m) => (m ? `${m}\n${text}` : text)) : null}
+    >
+      {files.length === 0 ? (
+        <p className="panel-clean">Working tree clean.</p>
+      ) : (
+        <ChangesList repo={repo} files={files} onError={showError} />
+      )}
+
+      {files.length > 0 && (
+        <div className="commit-box">
+          <textarea
+            placeholder="commit message"
+            value={message}
+            rows={3}
+            onChange={(e) => setMessage(e.target.value)}
+          />
+          <div className="commit-row">
+            <button
+              type="button"
+              className="mini"
+              disabled={busy !== null}
+              onClick={() => void suggest()}
+            >
+              {busy === "suggest" ? "thinking…" : "suggest"}
+            </button>
+            <label className="toggle">
+              <input
+                type="checkbox"
+                checked={stageAll}
+                onChange={(e) => setStageAll(e.target.checked)}
+              />
+              stage everything
+            </label>
+            <span className="spacer" />
+            <button
+              type="button"
+              className="mini strong"
+              disabled={busy !== null}
+              onClick={() => void doCommit(false)}
+            >
+              {busy === "commit" ? "committing…" : "commit"}
+            </button>
+            <button
+              type="button"
+              className="mini strong"
+              disabled={busy !== null}
+              title="Suggests a message and stages everything if you left either blank"
+              onClick={() => void doCommit(true)}
+            >
+              {busy === "commit+push" ? "working…" : "commit + push"}
+            </button>
+          </div>
+        </div>
+      )}
+      {note && <p className={`note ${note.kind}`}>{note.text}</p>}
+
+      <Unpushed repo={repo} />
+    </Section>
+  );
+}
+
+/** One section of a repo's panel by its key, or nothing where it does not
+ *  apply (a preview for a repo on another host). */
+export function PanelSection({ k, repo }: { k: SectionKey; repo: Repo }) {
+  switch (k) {
+    case "changes":
+      return <ChangesSection repo={repo} />;
+    case "search":
+      return <SearchSection repo={repo} />;
+    case "history":
+      return <History repo={repo} />;
+    case "peers":
+      return <PeersSection repo={repo} />;
+    case "preview":
+      return repo.host ? null : <PreviewSection repo={repo} />;
+    case "launch":
+      return <LaunchSection repo={repo} />;
+    case "claude":
+      return <ClaudeSection repo={repo} />;
+  }
+}
+
+/** The panel's gear: its zoom, how it sits, the dock's layout, its
+ *  sections' order and which show, and sharing it. */
+function PanelGear({
+  repo,
+  mode,
+  setMode,
+  body,
+  solo,
+}: {
+  repo: Repo;
+  mode: SurfaceMode;
+  setMode: (m: SurfaceMode) => void;
+  body: () => HTMLElement | null;
+  solo: boolean;
+}) {
+  const { entry: zoom } = useZoom("panel");
+  const openIn = useStore((s) => s.settings.openIn);
+  const order = useStore((s) => s.settings.sectionOrder);
+  const hidden = useStore((s) => s.settings.sectionsHidden);
+  const setSetting = useStore((s) => s.setSetting);
+  const layout: GearEntry[] = solo
+    ? []
+    : [
+        ...modeEntries(mode, setMode, "window"),
+        { type: "item", label: "panels side by side", on: openIn === "dock", run: () => setSetting("openIn", "dock") },
+        { type: "item", label: "panels as tabs", on: openIn === "tabs", run: () => setSetting("openIn", "tabs") },
+        { type: "item", label: "open in a new tab", run: () => openElsewhere(repo.id, "tab") },
+        { type: "item", label: "open in a new window", run: () => openElsewhere(repo.id, "window") },
+      ];
+  const rows: GearEntry[] = order.map((k, i) => ({
+    type: "row",
+    label: SECTION_WORD[k],
+    on: !hidden.includes(k),
+    toggle: () => setSetting("sectionsHidden", toggleHidden(hidden, k)),
+    up: i > 0 ? () => setSetting("sectionOrder", moveSection(order, k, -1)) : null,
+    down: i < order.length - 1 ? () => setSetting("sectionOrder", moveSection(order, k, 1)) : null,
+  }));
+  return (
+    <Gear
+      label={repo.name}
+      groups={[
+        { label: "panel · every one", entries: [zoom] },
+        { label: "layout", entries: layout },
+        { label: "sections · every panel", entries: rows },
+        {
+          label: "share",
+          entries: [
+            ...shareEntries({ el: body, label: `panel ${repo.id}` }),
+            {
+              type: "item",
+              label: "copy link",
+              title: "A link that opens this panel on its own",
+              stay: true,
+              run: async () => {
+                await copyText(soloUrl(repo.id));
+                return "link copied";
+              },
+            },
+          ],
+        },
+      ]}
+    />
+  );
+}
+
+export function RepoPanel({
+  id,
+  width,
+  onClose,
+  hidden,
+}: {
+  id: string;
+  width: number;
+  /** replaces "unpin from the dock", for a panel that owns its window */
+  onClose?: () => void;
+  /** a tab that is not showing: the panel stays mounted (its shell keeps
+   *  its pty, its commit box its draft) but takes no room */
+  hidden?: boolean;
+}) {
+  const repo = useStore((s) => s.repos.find((r) => r.id === id));
+  const repoRun = useStore((s) => runFor(s, id));
+  const repoFlow = useStore((s) => flowFor(s, id));
+  const repoActiveFlow = useStore((s) => activeFlowFor(s, id));
+  const unpin = useStore((s) => s.closePanel);
+  const openApp = useStore((s) => s.openApp);
+  // Only the openers this browser can reach, as in RepoMenu: a headless
+  // backend with no helper picked has none, and VS Code falls back to the
+  // Remote-SSH link.
+  const backend = useStore((s) => s.backend);
+  const openers = useStore(useShallow(capsFor)).openers;
+  const order = useStore((s) => s.settings.sectionOrder);
+  const hiddenSections = useStore((s) => s.settings.sectionsHidden);
+  const focusSize = useStore((s) => s.focusSize);
+  const { zoom } = useZoom("panel");
+  const closePanel = onClose ? (_id: string) => onClose() : unpin;
+  const [busy, setBusy] = useState<string | null>(null);
+  // A pull or push says how it went under its own row; a commit's result
+  // shows under the commit box, in the changes section.
+  const [note, setNote] = useState<{ kind: "ok" | "err"; text: string } | null>(null);
+  const [chosenMode, setMode] = useState<SurfaceMode>("normal");
+  const box = useRef<HTMLElement>(null);
+  const bodyRef = useRef<HTMLDivElement>(null);
+  // a tab that is not showing is neither over the window nor in front
+  const mode: SurfaceMode = hidden ? "normal" : chosenMode;
+  useLeaveOnEscape(mode, setMode);
+
+  const [access, setAccess] = useState<PushAccess>("unknown");
+
+  useEffect(() => setNote(null), [id]);
+
+  // Answered from remote URLs alone for repos you own, so this costs nothing
+  // for almost every panel. Failures stay "unknown" and render nothing.
+  useEffect(() => {
+    let live = true;
+    setAccess("unknown");
+    api
+      .access(id)
+      .then((r) => {
+        if (live) setAccess(r.access);
+      })
+      .catch(() => {});
+    return () => {
+      live = false;
+    };
+  }, [id]);
+
+  if (!repo) return null;
+  const st = repo.status;
+  const solo = onClose !== undefined;
+
+  const showError = (text: string) => setNote({ kind: "err", text });
+
+  const run = async (label: string, fn: () => Promise<string | void>) => {
+    setBusy(label);
+    setNote(null);
+    try {
+      const out = await fn();
+      if (typeof out === "string" && out) setNote({ kind: "ok", text: out });
+    } catch (err) {
+      showError(String(err instanceof Error ? err.message : err));
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  const modeClass = mode === "full" ? " surface-full" : mode === "focus" ? " surface-focus" : "";
+  return (
+    <>
+      {mode === "focus" && <FocusBackdrop onLeave={() => setMode("normal")} />}
     <section
-      className={`panel s-${stateOf(repo)}`}
+      ref={box}
+      className={`panel s-${stateOf(repo)}${modeClass}`}
       aria-label={repo.name}
       hidden={hidden}
-      style={{ "--panel-w": `${width}px` } as CSSProperties}
+      style={{ "--panel-w": `${width}px`, ...(mode === "focus" ? focusVars(focusSize) : {}) } as CSSProperties}
     >
       {/* Everything but the shells scrolls in here; the shells sit below it,
           along the panel's bottom edge, whatever the scroll position. */}
-      <div className="panel-body">
+      <div className="panel-body" ref={bodyRef} style={zoomStyle(zoom)}>
       <header className="panel-head">
         <span className="glyph">{GLYPH[stateOf(repo)]}</span>
         <span className="panel-name" title={repo.path}>
@@ -844,6 +1028,7 @@ export function RepoPanel({
         </span>
         {repo.link && <RepoLink url={repo.link} name={repo.name} labeled />}
         <span className="spacer" />
+        <PanelGear repo={repo} mode={mode} setMode={setMode} body={() => bodyRef.current} solo={solo} />
         <RepoMenu repo={repo} onError={showError} />
         <button
           type="button"
@@ -958,7 +1143,7 @@ export function RepoPanel({
             : `push${st?.ahead ? ` ↑${st.ahead}` : ""}`}
         </button>
       </div>
-      {note?.at === "head" && <p className={`note ${note.kind}`}>{note.text}</p>}
+      {note && <p className={`note ${note.kind}`}>{note.text}</p>}
 
       {access === "denied" && (
         <p className="panel-hint">
@@ -974,87 +1159,15 @@ export function RepoPanel({
       {repo.error ? (
         <p className="panel-error">Could not read this repo: {repo.error}</p>
       ) : (
-        <>
-          <button
-            type="button"
-            className={`panel-label fold${changesClosed ? "" : " open"}`}
-            aria-expanded={!changesClosed}
-            onClick={() => toggleSection(id, "changes")}
-          >
-            changes{" "}
-            <span>
-              {files.length}
-              {(st?.ahead ?? 0) > 0 && ` · ↑${st?.ahead} not pushed`}
-            </span>
-          </button>
-          {!changesClosed &&
-            (files.length === 0 ? (
-              <p className="panel-clean">Working tree clean.</p>
-            ) : (
-              <ChangesList repo={repo} files={files} onError={showError} />
-            ))}
-
-          {!changesClosed && files.length > 0 && (
-            <div className="commit-box">
-              <textarea
-                placeholder="commit message"
-                value={message}
-                rows={3}
-                onChange={(e) => setMessage(e.target.value)}
-              />
-              <div className="commit-row">
-                <button
-                  type="button"
-                  className="mini"
-                  disabled={busy !== null}
-                  onClick={() => void suggest()}
-                >
-                  {busy === "suggest" ? "thinking…" : "suggest"}
-                </button>
-                <label className="toggle">
-                  <input
-                    type="checkbox"
-                    checked={stageAll}
-                    onChange={(e) => setStageAll(e.target.checked)}
-                  />
-                  stage everything
-                </label>
-                <span className="spacer" />
-                <button
-                  type="button"
-                  className="mini strong"
-                  disabled={busy !== null}
-                  onClick={() => void doCommit(false)}
-                >
-                  {busy === "commit" ? "committing…" : "commit"}
-                </button>
-                <button
-                  type="button"
-                  className="mini strong"
-                  disabled={busy !== null}
-                  title="Suggests a message and stages everything if you left either blank"
-                  onClick={() => void doCommit(true)}
-                >
-                  {busy === "commit+push" ? "working…" : "commit + push"}
-                </button>
-              </div>
-            </div>
-          )}
-          {note?.at === "commit" && <p className={`note ${note.kind}`}>{note.text}</p>}
-
-          {!changesClosed && <Unpushed repo={repo} />}
-
-          <SearchSection repo={repo} />
-          <History repo={repo} />
-          <PeersSection repo={repo} />
-          {!repo.host && <PreviewSection repo={repo} />}
-          <LaunchSection repo={repo} />
-          <ClaudeSection repo={repo} />
-        </>
+        order
+          .filter((k) => !hiddenSections.includes(k))
+          .map((k) => <PanelSection key={k} k={k} repo={repo} />)
       )}
       </div>
       {!repo.error && <PanelShells repo={repo} />}
+      {mode === "focus" && <FocusGrips box={box} />}
     </section>
+    </>
   );
 }
 

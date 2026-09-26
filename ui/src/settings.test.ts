@@ -44,4 +44,27 @@ describe("loadSettings", () => {
     expect(loadSettings().fileView).toBe("list");
     delete (globalThis as { localStorage?: unknown }).localStorage;
   });
+  test("zoom, section order and hidden sections survive a reload, repaired", () => {
+    const store = new Map<string, string>();
+    (globalThis as { localStorage?: unknown }).localStorage = {
+      getItem: (k: string) => store.get(k) ?? null,
+      setItem: (k: string, v: string) => void store.set(k, v),
+    };
+    store.set(
+      "canopy.settings",
+      JSON.stringify({
+        zoom: { panel: 1.25, feed: 40, nope: 2 },
+        sectionOrder: ["claude", "changes"],
+        sectionsHidden: ["peers", "bogus"],
+      }),
+    );
+    const s = loadSettings();
+    expect(s.zoom).toEqual({ panel: 1.25, feed: 2 });
+    expect(s.sectionOrder).toEqual(["claude", "changes", "search", "history", "peers", "preview", "launch"]);
+    expect(s.sectionsHidden).toEqual(["peers"]);
+    store.set("canopy.settings", JSON.stringify({ zoom: "big", sectionOrder: 4 }));
+    expect(loadSettings().zoom).toEqual({});
+    expect(loadSettings().sectionOrder[0]).toBe("changes");
+    delete (globalThis as { localStorage?: unknown }).localStorage;
+  });
 });

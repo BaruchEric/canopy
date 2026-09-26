@@ -12,6 +12,7 @@ import {
 } from "./files";
 import { TERM_FONT } from "./term";
 import { termFontSize } from "./touch";
+import { SECTION_KEYS, normalizeZooms, sectionOrder, sectionsHidden, type SectionKey, type Zooms } from "./surface";
 
 export const SORT_MODES = [
   "recent",
@@ -94,6 +95,12 @@ export interface Settings {
   device: string;
   /** the shells' font size in px, what a pinch on a shell sets */
   termFont: number;
+  /** each kind of surface's zoom, off its gear; a kind with none is at 1 */
+  zoom: Zooms;
+  /** a panel's sections, top to bottom */
+  sectionOrder: SectionKey[];
+  /** the sections every panel leaves out */
+  sectionsHidden: SectionKey[];
 }
 
 export const DEFAULT_SETTINGS: Settings = {
@@ -110,6 +117,9 @@ export const DEFAULT_SETTINGS: Settings = {
   helper: null,
   device: "",
   termFont: TERM_FONT.size,
+  zoom: {},
+  sectionOrder: [...SECTION_KEYS],
+  sectionsHidden: [],
 };
 
 const KEY = "canopy.settings";
@@ -156,6 +166,9 @@ export function loadSettings(): Settings {
       helper: typeof saved.helper === "string" && /^[\w.-]{1,64}$/.test(saved.helper) ? saved.helper : null,
       device: typeof saved.device === "string" ? saved.device.slice(0, 40) : "",
       termFont: termFontSize(saved.termFont, DEFAULT_SETTINGS.termFont),
+      zoom: normalizeZooms(saved.zoom),
+      sectionOrder: sectionOrder(saved.sectionOrder),
+      sectionsHidden: sectionsHidden(saved.sectionsHidden),
     };
   } catch {
     return DEFAULT_SETTINGS;

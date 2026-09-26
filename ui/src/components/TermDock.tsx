@@ -4,9 +4,21 @@ import { Terminal, type ITheme } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import "@xterm/xterm/css/xterm.css";
 import { api } from "../api";
-import { groveUrl, nameShellHere, parseRoute } from "../routes";
+import { groveUrl, nameShellHere, parseRoute, popShell } from "../routes";
 import { PANEL_TERM, TERM, closedIn, panelTermHeightFor, useStore, type TermTab } from "../store";
-import { TERM_FONT, focusResize, termId, viewKey, type FocusSize } from "../term";
+import { TERM_FONT, termId, viewKey } from "../term";
+import { flipMode, tidyLines, type SurfaceMode } from "../surface";
+import { SHELL_TARGETS, type ShellTarget } from "../settings";
+import { Gear, type GearEntry } from "./Gear";
+import {
+  FocusBackdrop,
+  FocusGrips,
+  focusVars,
+  useLeaveOnEscape,
+  modeEntries,
+  shareEntries,
+  useShellZoom,
+} from "./Surface";
 import { clamp } from "../util";
 import { clientId } from "../client";
 import { BAR_KEYS, NO_MODS, keyBytes, withMods, type BarKey, type Mods } from "../keys";
@@ -18,6 +30,19 @@ import { TERM_GONE, type Repo } from "../../../src/core/types";
  *  element so `light-dark()` collapses to the scheme in force. */
 /** ms a shell's size has to hold before the pty is told it */
 const RESIZE_SETTLE = 120;
+
+/** every terminal on this page by its shell's name, for a gear to copy
+ *  from or paste into */
+const LIVE = new Map<string, Terminal>();
+
+/** what a shell holds, scrollback and screen, as text */
+function shellText(id: string): string {
+  const buf = LIVE.get(id)?.buffer.active;
+  if (!buf) return "";
+  const lines: string[] = [];
+  for (let i = 0; i < buf.length; i++) lines.push(buf.getLine(i)?.translateToString(true) ?? "");
+  return tidyLines(lines);
+}
 
 const TOKENS = [
   "--bark0",
@@ -174,6 +199,7 @@ export function TermView({
     fit.fit();
     termRef.current = term;
     fitRef.current = fit;
+    LIVE.set(tab.id, term);
 
     const enc = new TextEncoder();
     let ws: WebSocket | null = null;
@@ -458,6 +484,7 @@ export function TermView({
         ws.onclose = null;
         ws.close();
       }
+      if (LIVE.get(tab.id) === term) LIVE.delete(tab.id);
       term.dispose();
       termRef.current = null;
       fitRef.current = null;
@@ -810,11 +837,6 @@ function TermTabs({
   );
 }
 
-/** How a set of shells sits: where it lives, taking the whole of what holds
- *  it (the panel, or the window for the strip), or brought to the front over
- *  the page, dimmed behind it. */
-type ShellMode = "normal" | "full" | "focus";
-
 /** the textarea of the shell showing in `box`, once the layout has settled */
 const refocus = (box: Element | null) =>
   requestAnimationFrame(() => box?.querySelector<HTMLElement>(".term-view:not([hidden]) textarea")?.focus());
@@ -822,9 +844,9 @@ const refocus = (box: Element | null) =>
 /** The tab row's switches at its right end: bring to front, and maximize.
  *  Either again gives the place back; either way focus returns to the shell
  *  showing so typing carries on where it was. */
-function ModeButtons({ mode, setMode, what }: { mode: ShellMode; setMode: (m: ShellMode) => void; what: string }) {
-  const flip = (m: ShellMode) => (e: MouseEvent<HTMLButtonElement>) => {
-    setMode(mode === m ? "normal" : m);
+function ModeButtons({ mode, setMode, what }: { mode: SurfaceMode; setMode: (m: SurfaceMode) => void; what: string }) {
+  const flip = (m: SurfaceMode) => (e: MouseEvent<HTMLButtonElement>) => {
+    setMode(flipMode(mode, m));
     refocus(e.currentTarget.closest("section"));
   };
   const focus = mode === "focus";
@@ -855,109 +877,66 @@ function ModeButtons({ mode, setMode, what }: { mode: ShellMode; setMode: (m: Sh
   );
 }
 
-/** What sits behind a shell brought to the front: the page, dimmed. A click
- *  on it puts the shell back. */
-function FocusBackdrop({ onLeave }: { onLeave: () => void }) {
-  return <div className="term-focus-back" aria-hidden="true" onClick={onLeave} />;
-}
-
-/** Escape leaves focus mode from anywhere in the box but the terminal
- *  itself, where Escape belongs to the program in it. */
-const leaveOnEscape = (mode: ShellMode, setMode: (m: ShellMode) => void) => (e: KeyboardEvent<HTMLElement>) => {
-  if (mode !== "focus" || e.key !== "Escape") return;
-  if (e.target instanceof Element && e.target.closest(".term-screen")) return;
-  e.preventDefault();
-  setMode("normal");
+const SHELL_WORD: Record<ShellTarget, string> = {
+  auto: "the panel when open, else the strip",
+  panel: "the panel",
+  strip: "the strip",
+  tab: "a new tab",
+  window: "a new window",
 };
 
-/** The focused shell's size as css vars, or nothing for the default size. */
-const focusVars = (size: FocusSize | null): CSSProperties =>
-  size ? ({ "--focus-w": `${size.w}px`, "--focus-h": `${size.h}px` } as CSSProperties) : {};
-
-/** The edges and corners of a focused shell's box, by compass point. */
-const FOCUS_EDGES = ["n", "e", "s", "w", "ne", "se", "sw", "nw"] as const;
-type FocusEdge = (typeof FOCUS_EDGES)[number];
-
-/** Every edge and corner of a focused shell's box, each dragged to size it. */
-function FocusGrips({ box }: { box: React.RefObject<HTMLElement | null> }) {
+/** A set of shells' gear: the text size every shell shares, how the set
+ *  sits, where new shells land, the showing shell in a window of its own,
+ *  and its text copied, captured or pasted into. */
+function ShellGear({
+  label,
+  what,
+  mode,
+  setMode,
+  showing,
+  box,
+}: {
+  label: string;
+  what: string;
+  mode: SurfaceMode;
+  setMode: (m: SurfaceMode) => void;
+  showing: TermTab | null;
+  box: React.RefObject<HTMLElement | null>;
+}) {
+  const zoom = useShellZoom();
+  const place = useStore((s) => s.settings.shell);
+  const setSetting = useStore((s) => s.setSetting);
+  const landing: GearEntry[] = SHELL_TARGETS.map((t) => ({
+    type: "item",
+    label: SHELL_WORD[t],
+    on: place === t,
+    run: () => setSetting("shell", t),
+  }));
+  const pop: GearEntry[] = showing
+    ? [
+        { type: "item", label: "this shell in a new tab", run: () => popShell(showing.repoId, showing.id, "tab") },
+        { type: "item", label: "this shell in a new window", run: () => popShell(showing.repoId, showing.id, "window") },
+      ]
+    : [];
   return (
-    <>
-      {FOCUS_EDGES.map((edge) => (
-        <FocusGrip key={edge} box={box} edge={edge} />
-      ))}
-    </>
-  );
-}
-
-/** One edge or corner of a focused shell: dragged to size the box, which
- *  stays centred, so pulling any side out grows it on both. Double-clicked
- *  for the default. The bottom right corner is the one keyboard stop, sized
- *  by the arrows. It writes the size live to `box` while dragging and
- *  commits on release. */
-function FocusGrip({ box, edge }: { box: React.RefObject<HTMLElement | null>; edge: FocusEdge }) {
-  // which way a drag grows the box: out past a right or bottom edge is +,
-  // out past a left or top edge is -
-  const sx = edge.includes("e") ? 1 : edge.includes("w") ? -1 : 0;
-  const sy = edge.includes("s") ? 1 : edge.includes("n") ? -1 : 0;
-  const setFocusSize = useStore((s) => s.setFocusSize);
-  const [dragging, setDragging] = useState(false);
-  const start = useRef<{ x: number; y: number; size: FocusSize } | null>(null);
-  const view = (): FocusSize => ({ w: window.innerWidth, h: window.innerHeight });
-  const current = (): FocusSize => {
-    const r = box.current?.getBoundingClientRect();
-    return { w: r?.width ?? 0, h: r?.height ?? 0 };
-  };
-  const sized = (e: PointerEvent<HTMLDivElement>) => {
-    const from = start.current;
-    return from ? focusResize(from.size, sx * (e.clientX - from.x), sy * (e.clientY - from.y), view()) : current();
-  };
-  const apply = (size: FocusSize) => {
-    box.current?.style.setProperty("--focus-w", `${size.w}px`);
-    box.current?.style.setProperty("--focus-h", `${size.h}px`);
-  };
-  const onDown = (e: PointerEvent<HTMLDivElement>) => {
-    if (e.button !== 0) return;
-    e.preventDefault();
-    e.currentTarget.setPointerCapture(e.pointerId);
-    start.current = { x: e.clientX, y: e.clientY, size: current() };
-    setDragging(true);
-  };
-  const onMove = (e: PointerEvent<HTMLDivElement>) => {
-    if (start.current) apply(sized(e));
-  };
-  const onUp = (e: PointerEvent<HTMLDivElement>) => {
-    if (!start.current) return;
-    const size = sized(e);
-    start.current = null;
-    setDragging(false);
-    setFocusSize(size);
-  };
-  const onKey = (e: KeyboardEvent<HTMLDivElement>) => {
-    if (edge !== "se") return;
-    const step = e.shiftKey ? 32 : 8;
-    const d = { ArrowRight: [step, 0], ArrowLeft: [-step, 0], ArrowDown: [0, step], ArrowUp: [0, -step] }[e.key];
-    if (!d) return;
-    e.preventDefault();
-    setFocusSize(focusResize(current(), d[0] ?? 0, d[1] ?? 0, view()));
-  };
-  return (
-    <div
-      className={`focus-grip ${edge}${dragging ? " dragging" : ""}`}
-      role="separator"
-      aria-label="Focused shell size"
-      aria-hidden={edge === "se" ? undefined : true}
-      tabIndex={edge === "se" ? 0 : -1}
-      title="Drag to resize, double-click to reset"
-      onPointerDown={onDown}
-      onPointerMove={onMove}
-      onPointerUp={onUp}
-      onPointerCancel={onUp}
-      onDoubleClick={() => {
-        box.current?.style.removeProperty("--focus-w");
-        box.current?.style.removeProperty("--focus-h");
-        setFocusSize(null);
-      }}
-      onKeyDown={onKey}
+    <Gear
+      label={label}
+      groups={[
+        { label: "shells · every one", entries: [zoom] },
+        { label: "layout", entries: [...modeEntries(mode, setMode, what), ...pop] },
+        { label: "new shells open in", entries: landing },
+        {
+          label: "share",
+          entries: showing
+            ? shareEntries({
+                el: () => box.current?.querySelector<HTMLElement>(".term-view:not([hidden])") ?? null,
+                label: `shell ${showing.name}`,
+                copy: () => shellText(showing.id),
+                paste: (text) => LIVE.get(showing.id)?.paste(text),
+              })
+            : [],
+        },
+      ]}
     />
   );
 }
@@ -975,8 +954,9 @@ export function TermDock() {
   const showTerm = useStore((s) => s.showTerm);
   const focusSize = useStore((s) => s.focusSize);
   const dock = useRef<HTMLElement>(null);
-  const [mode, setMode] = useState<ShellMode>("normal");
+  const [mode, setMode] = useState<SurfaceMode>("normal");
   const strip = terms.filter((t) => t.place === "strip");
+  useLeaveOnEscape(mode, setMode);
 
   if (strip.length === 0) return null;
   const leave = () => {
@@ -991,7 +971,6 @@ export function TermDock() {
         className={`termdock${mode === "normal" ? "" : ` ${mode}`}`}
         aria-label="Shells"
         style={{ "--term-h": `${termHeight}px`, ...focusVars(focusSize) } as CSSProperties}
-        onKeyDown={leaveOnEscape(mode, setMode)}
       >
         {mode === "normal" && (
           <TermGrip
@@ -1008,7 +987,19 @@ export function TermDock() {
           active={activeTerm}
           onShow={showTerm}
           caption="shells"
-          end={<ModeButtons mode={mode} setMode={setMode} what="window" />}
+          end={
+            <>
+              <ModeButtons mode={mode} setMode={setMode} what="window" />
+              <ShellGear
+                label="the shells strip"
+                what="window"
+                mode={mode}
+                setMode={setMode}
+                showing={strip.find((t) => t.id === activeTerm) ?? null}
+                box={dock}
+              />
+            </>
+          }
         />
         <div className="term-body">
           {strip.map((t) => (
@@ -1036,7 +1027,7 @@ export function PanelShells({ repo }: { repo: Repo }) {
   const setPanelTermHeight = useStore((s) => s.setPanelTermHeight);
   const focusSize = useStore((s) => s.focusSize);
   const box = useRef<HTMLElement>(null);
-  const [chosenMode, setMode] = useState<ShellMode>("normal");
+  const [chosenMode, setMode] = useState<SurfaceMode>("normal");
   const mine = terms.filter((t) => t.place === "panel" && t.repoId === repo.id);
   const [chosen, setChosen] = useState<string | null>(null);
   // the newest shell shows until another tab is picked
@@ -1047,10 +1038,11 @@ export function PanelShells({ repo }: { repo: Repo }) {
     setChosen(latest);
   }
   const active = mine.some((t) => t.id === chosen) ? chosen : latest;
+  // folded, the shells are neither maximized nor in front
+  const mode: SurfaceMode = closed ? "normal" : chosenMode;
+  useLeaveOnEscape(mode, setMode);
 
   if (mine.length === 0) return null;
-  // folded, the shells are neither maximized nor in front
-  const mode: ShellMode = closed ? "normal" : chosenMode;
   const leave = () => {
     setMode("normal");
     refocus(box.current);
@@ -1063,7 +1055,6 @@ export function PanelShells({ repo }: { repo: Repo }) {
         className={`panel-shells${mode === "normal" ? "" : ` ${mode}`}`}
         aria-label={`Shells at ${repo.name}`}
         style={{ "--panel-term-h": `${panelTermHeight}px`, ...focusVars(focusSize) } as CSSProperties}
-        onKeyDown={leaveOnEscape(mode, setMode)}
       >
         {mode === "normal" && !closed && (
           <TermGrip
@@ -1102,7 +1093,19 @@ export function PanelShells({ repo }: { repo: Repo }) {
                 +
               </button>
             }
-            end={<ModeButtons mode={mode} setMode={setMode} what="panel" />}
+            end={
+              <>
+                <ModeButtons mode={mode} setMode={setMode} what="panel" />
+                <ShellGear
+                  label={`shells at ${repo.name}`}
+                  what="panel"
+                  mode={mode}
+                  setMode={setMode}
+                  showing={mine.find((t) => t.id === active) ?? null}
+                  box={box}
+                />
+              </>
+            }
           />
           <div className="term-body">
             {mine.map((t) => (
@@ -1135,6 +1138,8 @@ export function ShellSolo({ id }: { id: string }) {
       : null,
   );
   const [exited, setExited] = useState(false);
+  const zoom = useShellZoom();
+  const body = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     if (tab) nameShellHere(tab.id);
@@ -1157,12 +1162,29 @@ export function ShellSolo({ id }: { id: string }) {
         <span className="solo-id">{id}</span>
         {exited && <span className="shell-exited">exited</span>}
         <span className="spacer" />
+        {tab && (
+          <Gear
+            label={`the shell at ${name ?? id}`}
+            groups={[
+              { label: "shells · every one", entries: [zoom] },
+              {
+                label: "share",
+                entries: shareEntries({
+                  el: () => body.current,
+                  label: `shell ${name ?? id}`,
+                  copy: () => shellText(tab.id),
+                  paste: (text) => LIVE.get(tab.id)?.paste(text),
+                }),
+              },
+            ]}
+          />
+        )}
         <a className="mini" href={groveUrl()} target="_blank">
           whole grove ↗
         </a>
       </header>
       {tab ? (
-        <div className="term-body">
+        <div className="term-body" ref={body}>
           <TermView tab={tab} active onExit={() => setExited(true)} />
         </div>
       ) : (

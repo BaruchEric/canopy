@@ -1,8 +1,11 @@
 import { useEffect, useState } from "react";
 import type { CSSProperties } from "react";
-import { groveUrl } from "../routes";
+import { groveUrl, soloUrl } from "../routes";
 import { SOLO, useStore } from "../store";
-import { RepoPanel } from "./Dock";
+import { SECTION_WORD, type SectionKey } from "../surface";
+import { PanelSection, RepoPanel } from "./Dock";
+import { SectionWindow } from "./Surface";
+import { PanelShells } from "./TermDock";
 import { Resizer } from "./Resizer";
 import { RunSheet } from "./RunSheet";
 import { Wordmark } from "./TopBar";
@@ -71,6 +74,72 @@ export function Solo({ id }: { id: string }) {
           <p className="empty">
             No repo called {id} under {root}.{" "}
             <a href={groveUrl()}>Open the whole grove</a> instead.
+          </p>
+        )}
+      </div>
+      <RunSheet />
+    </div>
+  );
+}
+
+/** One section of a repo's panel, alone in its window: what a section's
+ *  "open in a new tab" or "new window" shows. Always open, whatever the
+ *  grove has folded, and it writes no layout back. */
+export function SectionSolo({ id, section }: { id: string; section: SectionKey }) {
+  const root = useStore((s) => s.root);
+  const repo = useStore((s) => s.repos.find((r) => r.id === id));
+  const soloWidth = useStore((s) => s.soloWidth);
+  const setSoloWidth = useStore((s) => s.setSoloWidth);
+  const windowWidth = useWindowWidth();
+  const max = Math.max(SOLO.min, Math.min(SOLO.max, windowWidth));
+  const word = SECTION_WORD[section];
+  const name = repo?.name;
+
+  useEffect(() => {
+    document.title = name ? `${name} · ${word} · canopy` : "canopy";
+    return () => {
+      document.title = "canopy";
+    };
+  }, [name, word]);
+
+  return (
+    <div className="solo">
+      <header className="topbar">
+        <Wordmark />
+        <span className="root-path" title={root}>
+          {root}
+        </span>
+        <span className="solo-id">
+          {id} · {word}
+        </span>
+        <span className="spacer" />
+        {repo && (
+          <a className="mini" href={soloUrl(id)}>
+            whole panel
+          </a>
+        )}
+        <a className="mini" href={groveUrl()} target="_blank">
+          whole grove ↗
+        </a>
+      </header>
+      <div className="solo-main" style={{ "--solo-w": `${soloWidth}px` } as CSSProperties}>
+        {repo && !repo.error ? (
+          <>
+            <SoloResizer dir={-1} value={soloWidth} max={max} onCommit={setSoloWidth} />
+            <section className="panel section-solo" aria-label={`${word} at ${repo.name}`}>
+              <div className="panel-body">
+                <SectionWindow.Provider value={true}>
+                  <PanelSection k={section} repo={repo} />
+                </SectionWindow.Provider>
+              </div>
+              {/* a shell a section opens (peers' "shell") lands here */}
+              <PanelShells repo={repo} />
+            </section>
+            <SoloResizer dir={1} value={soloWidth} max={max} onCommit={setSoloWidth} />
+          </>
+        ) : (
+          <p className="empty">
+            No readable repo called {id} under {root}. <a href={groveUrl()}>Open the whole grove</a> instead.
           </p>
         )}
       </div>

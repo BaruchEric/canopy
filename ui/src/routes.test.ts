@@ -11,13 +11,21 @@ const features = (w: number, h: number): Record<string, number> => {
 };
 
 describe("parseRoute", () => {
-  const none = { repo: null, solo: false, shell: false, term: null };
+  test("reads a section window's section, when it is one", () => {
+    expect(parseRoute("?repo=web-apps/ripe&view=section&section=history").section).toBe("history");
+    expect(parseRoute("?repo=web-apps/ripe&view=section&section=shell").section).toBeNull();
+    // only a section window names a section
+    expect(parseRoute("?repo=web-apps/ripe&view=solo&section=history").section).toBeNull();
+    expect(parseRoute("?view=section&section=history").section).toBeNull();
+  });
+  const none = { repo: null, solo: false, shell: false, term: null, section: null };
   test("reads the repo and the shell view", () => {
     expect(parseRoute("?repo=web-apps/ripe&view=shell")).toEqual({
       repo: "web-apps/ripe",
       solo: false,
       shell: true,
       term: null,
+      section: null,
     });
     expect(parseRoute("?view=shell")).toEqual(none);
   });
@@ -34,12 +42,14 @@ describe("parseRoute", () => {
       solo: true,
       shell: false,
       term: null,
+      section: null,
     });
     expect(parseRoute("?repo=web-apps/ripe")).toEqual({
       repo: "web-apps/ripe",
       solo: false,
       shell: false,
       term: null,
+      section: null,
     });
     // solo needs a repo to be solo about
     expect(parseRoute("?view=solo")).toEqual(none);
