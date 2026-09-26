@@ -527,6 +527,118 @@ body.resizing {
 .kept-pop {
   width: 340px;
 }
+/* ---------- tailchan: conversations, messages, the clipboard, who is around ---------- */
+.chan-pop {
+  width: 420px;
+}
+.mini.chan-unread {
+  color: var(--sky);
+  border-color: var(--sky);
+}
+.chan-convs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-self: stretch;
+}
+.chan-to {
+  width: auto;
+  flex: 1 1 9em;
+  min-width: 9em;
+}
+.chan-msgs {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: grid;
+  gap: 8px;
+  align-self: stretch;
+  max-height: min(320px, 45vh);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+.chan-msg {
+  display: grid;
+  gap: 2px;
+  font-size: 12px;
+}
+.chan-who {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  font-size: 11px;
+  color: var(--sky);
+}
+.chan-msg.mine .chan-who {
+  color: var(--moss);
+}
+.chan-when {
+  font-size: 10px;
+  color: var(--ink-faint);
+}
+.chan-text {
+  color: var(--ink);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+a.chan-text {
+  color: var(--sky);
+}
+.chan-clip {
+  justify-self: start;
+  padding: 0;
+  font: inherit;
+  color: var(--lichen);
+  background: none;
+  border: 0;
+  cursor: pointer;
+  text-align: left;
+}
+.chan-draft {
+  resize: vertical;
+  min-height: 3em;
+  font-family: inherit;
+}
+.chan-who-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: grid;
+  gap: 2px;
+  align-self: stretch;
+  max-height: 160px;
+  overflow-y: auto;
+}
+.chan-who-row {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  width: 100%;
+  padding: 3px 4px;
+  font: inherit;
+  font-size: 12px;
+  color: var(--ink);
+  text-align: left;
+  background: none;
+  border: 0;
+  border-radius: var(--r);
+  cursor: pointer;
+}
+.chan-who-row:hover {
+  background: var(--bark2);
+}
+.chan-dot {
+  flex: none;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  border: 1px solid var(--ink-faint);
+  align-self: center;
+}
+.chan-dot.live {
+  background: var(--moss);
+  border-color: var(--moss);
+}
 .kept-list {
   margin: 0;
   padding: 0;

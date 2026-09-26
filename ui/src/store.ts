@@ -12,6 +12,8 @@ import { ownRun, pickable, selectable } from "./flows";
 import { boardOrder, invertPick, pickWhere, rangeIds, setPick, togglePick } from "./select";
 import { appendFeed, describeEvent, type FeedEntry } from "./feed";
 import { mergeAction } from "./peers";
+import { convOf, isUnread, mergeMessages } from "./chan";
+import type { ChanMessage, TailchanInfo } from "../../src/core/types";
 import { clientCaps } from "../../src/core/client";
 import {
   DEFAULT_AGENT,
@@ -351,6 +353,19 @@ interface CanopyState {
   kept: KeptShell[];
   /** whether the backend is writing shell history out at all */
   keeping: boolean;
+  /** tailchan as the backend sees it: null until asked, `ready: false`
+   *  with why when the backend knows no broker */
+  chan: TailchanInfo | null;
+  /** the handle the UI speaks tailchan as, "" until known; the feed reads
+   *  it to call the UI's own posts "you" */
+  chanAs: string;
+  /** messages by conversation (channel name, `dm.a+b` for a DM) */
+  chanMsgs: Record<string, ChanMessage[]>;
+  /** messages heard since the popover was last looked at */
+  chanUnread: number;
+  /** whether the tailchan popover is up, and which conversation it shows */
+  chanOpen: boolean;
+  chanConv: string | null;
   workspaces: Workspace[];
   loaded: boolean;
   /** why the initial load failed, if it did */
@@ -520,6 +535,16 @@ interface CanopyState {
   forgetShell: (id: string) => Promise<void>;
   /** turns the backend's shell recording on or off */
   setKeeping: (on: boolean) => Promise<void>;
+  /** reads the broker's view (who, channels, the notify switch) */
+  loadChan: () => Promise<void>;
+  /** opens the popover, on a conversation or target ("#x", "@h") when given */
+  openChan: (target?: string) => void;
+  closeChan: () => void;
+  /** shows a conversation and reads its history */
+  showConv: (conv: string) => Promise<void>;
+  sendChan: (target: string, body: string, kind?: "text" | "clip") => Promise<void>;
+  putChan: (target: string, file: File, note?: string) => Promise<void>;
+  setChanNotify: (on: boolean) => Promise<void>;
   /** marks a shell whose process has ended; its tab stays until closed */
   endTerm: (id: string, code: number | null) => void;
   setTermHeight: (px: number) => void;
@@ -723,6 +748,12 @@ export const useStore = create<CanopyState>((set, get) => ({
   shells: [],
   kept: [],
   keeping: false,
+  chan: null,
+  chanAs: "",
+  chanMsgs: {},
+  chanUnread: 0,
+  chanOpen: false,
+  chanConv: null,
   workspaces: [],
   loaded: false,
   loadError: null,
@@ -860,6 +891,8 @@ export const useStore = create<CanopyState>((set, get) => ({
     // Likewise peers: a backend with peer sync off just answers "off" and
     // an empty seen list, so this never blocks a grove with none set up.
     readPeers(set);
+    // tailchan too: a backend without a broker answers ready: false
+    void get().loadChan();
     const refresh = setInterval(() => void get().loadHistory(), HISTORY_REFRESH);
     // Handed back so the caller can close the stream — StrictMode mounts
     // effects twice, and an unclosed EventSource leaks a live connection.
@@ -1005,12 +1038,26 @@ export const useStore = create<CanopyState>((set, get) => ({
   applyEvent: (ev) => {
     // The feed says what changed, so the lines come from the event against
     // the state before it is applied.
+    // a message already held (a reconnect's replay, a post heard twice) is
+    // neither a feed line nor unread
+    if (ev.type === "chan" && get().chanMsgs[ev.message.channel]?.some((m) => m.id === ev.message.id)) return;
     const lines = describeEvent(ev, get(), Date.now(), get().agents);
     if (lines.length) {
       set((s) => {
         const { feed, seq } = appendFeed(s.feed, lines, s.feedSeq);
         return { feed, feedSeq: seq };
       });
+    }
+    if (ev.type === "chan") {
+      const m = ev.message;
+      set((s) => {
+        const looking = s.chanOpen && s.chanConv === m.channel && document.visibilityState === "visible";
+        return {
+          chanMsgs: { ...s.chanMsgs, [m.channel]: mergeMessages(s.chanMsgs[m.channel], [m]) },
+          chanUnread: !looking && isUnread(m, s.chanAs) ? s.chanUnread + 1 : s.chanUnread,
+        };
+      });
+      return;
     }
     if (ev.type === "repo") {
       set((s) => ({
@@ -1166,6 +1213,40 @@ export const useStore = create<CanopyState>((set, get) => ({
   setKeeping: async (on) => {
     const { keeping } = await api.setKeeping(on);
     set({ keeping });
+  },
+  loadChan: async () => {
+    const chan = await api.tailchan().catch((e: unknown): TailchanInfo => ({ ready: false, reason: String(e instanceof Error ? e.message : e) }));
+    set({ chan, chanAs: chan.ready ? chan.as : get().chanAs });
+  },
+  openChan: (target) => {
+    const s = get();
+    const conv = target ? convOf(target, s.chanAs) : s.chanConv;
+    set({ chanOpen: true, chanUnread: 0, chanConv: conv });
+    void get().loadChan();
+    if (conv) void get().showConv(conv);
+    // the latest clips, for "copy the latest", whether or not this handle
+    // follows the clipboard channel
+    void api
+      .chanRead("#clipboard", 5)
+      .then((msgs) => set((st) => ({ chanMsgs: { ...st.chanMsgs, clipboard: mergeMessages(st.chanMsgs["clipboard"], msgs) } })))
+      .catch(() => {});
+  },
+  closeChan: () => set({ chanOpen: false }),
+  showConv: async (conv) => {
+    set({ chanConv: conv });
+    const msgs = await api.chanRead(conv, 50).catch((): ChanMessage[] => []);
+    set((s) => ({ chanMsgs: { ...s.chanMsgs, [conv]: mergeMessages(s.chanMsgs[conv], msgs) } }));
+  },
+  // what is sent comes back as a chan event, which is what files it
+  sendChan: async (target, body, kind = "text") => {
+    await api.chanSend(target, body, kind);
+  },
+  putChan: async (target, file, note = "") => {
+    await api.chanPut(target, file, note);
+  },
+  setChanNotify: async (on) => {
+    const { notify } = await api.chanNotify(on);
+    set((s) => ({ chan: s.chan?.ready ? { ...s.chan, notify } : s.chan }));
   },
   closeTerm: (id) => {
     const s = get();

@@ -33,6 +33,9 @@ export function ShellsChip() {
   const hideTerm = useStore((s) => s.hideTerm);
   const closeTerm = useStore((s) => s.closeTerm);
   const resumeClaude = useStore((s) => s.resumeClaude);
+  const chan = useStore((s) => s.chan);
+  const openChan = useStore((s) => s.openChan);
+  const loadChan = useStore((s) => s.loadChan);
   const [open, setOpen] = useState(false);
   const [now, setNow] = useState(() => Date.now());
   const [repoId, setRepoId] = useState("");
@@ -70,6 +73,11 @@ export function ShellsChip() {
     };
     // the repo default is taken once per opening, not on every scan
   }, [open]);
+
+  // who is listening, for the dots by each shell's handle
+  useEffect(() => {
+    if (open) void loadChan();
+  }, [open, loadChan]);
 
   useEffect(() => {
     if (!open || !repoId) {
@@ -147,11 +155,29 @@ export function ShellsChip() {
                           {others.length > 0 && ` · on ${others.join(", ")}`}
                           {t.viewers.length === 0 && " · nobody watching"}
                         </span>
+                        {t.handle && chan?.ready && (
+                          <span className="kept-fact" title="The tailchan handle this shell runs under (TAILCHAN_AS)">
+                            <span className={chan.who.some((w) => w.handle === t.handle && w.live) ? "chan-dot live" : "chan-dot"} /> @{t.handle}
+                          </span>
+                        )}
                       </span>
                       <span className="kept-acts">
                         <button type="button" className="mini" disabled={busy !== ""} onClick={() => void run(t.id, () => joinTerm(t.id))}>
                           {shown ? "show" : "join"}
                         </button>
+                        {t.handle && chan?.ready && (
+                          <button
+                            type="button"
+                            className="mini"
+                            title={`A tailchan DM to @${t.handle}, whoever runs in the shell`}
+                            onClick={() => {
+                              setOpen(false);
+                              openChan(`@${t.handle}`);
+                            }}
+                          >
+                            message
+                          </button>
+                        )}
                         {shown && (
                           <button
                             type="button"

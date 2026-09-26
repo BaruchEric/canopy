@@ -108,6 +108,9 @@ import {
   TERM_GONE,
 } from "../core/types";
 import { DEFAULT_IGNORE } from "../core/scan";
+import { ChanHub } from "./tailchan";
+import { shellHandle } from "../core/tailchan";
+import { loadChanConfig, type ChanConfig } from "../core/chan";
 import type { ServerWebSocket } from "bun";
 
 /** One scanned folder as the server runs it: the source, its watcher when
@@ -163,6 +166,8 @@ interface ServerState {
   tmux: string[] | null;
   /** installed releases, pull request builds and launched processes */
   launcher: Launcher;
+  /** tailchan: the routes, the stream as the UI's handle, canopy's posts */
+  chan: ChanHub;
   /** open pull request counts by GitHub slug, from the last activity pass */
   pulls: Map<string, PullCount>;
   /** the names of each repo's own remotes, by path, settled once per repo:
@@ -412,7 +417,7 @@ async function listTerms(state: ServerState): Promise<TermInfo[]> {
       seen.add(s.id);
       if (state.terms.has(s.id)) continue;
       state.terms.set(s.id, {
-        info: { id: s.id, repoId: s.repoId, path: s.path, place: s.place, attached: false, viewers: [], startedAt: s.createdAt },
+        info: { id: s.id, repoId: s.repoId, path: s.path, place: s.place, attached: false, viewers: [], startedAt: s.createdAt, ...(s.handle ? { handle: s.handle } : {}) },
         pty: null,
         sockets: new Set(),
       });
@@ -527,7 +532,7 @@ async function restoreTerm(state: ServerState, id: string, size: TermSize, resum
   const shell = shellArgs(rec.path);
   const command = file ? replayCommand(file, restoredBanner(new Date(rec.savedAt).toLocaleString()), shell) : shell;
   try {
-    await newSession(tmux, { id, repoId: rec.repoId, path: rec.path, place: rec.place }, size, command);
+    await newSession(tmux, { id, repoId: rec.repoId, path: rec.path, place: rec.place, ...handleOf(state, rec.repoId, rec.path, id) }, size, command);
   } catch (e) {
     // nothing will read the replay now, and the retention sweep only knows
     // about records
@@ -536,7 +541,7 @@ async function restoreTerm(state: ServerState, id: string, size: TermSize, resum
   }
   const at = Date.now();
   const live: LiveTerm = {
-    info: { id, repoId: rec.repoId, path: rec.path, place: rec.place, attached: false, viewers: [], startedAt: at, restoredAt: at },
+    info: { id, repoId: rec.repoId, path: rec.path, place: rec.place, attached: false, viewers: [], startedAt: at, restoredAt: at, ...handleOf(state, rec.repoId, rec.path, id) },
     pty: null,
     sockets: new Set(),
   };
@@ -573,9 +578,9 @@ async function resumeTerm(
   let live: LiveTerm;
   if (tmux) {
     if (await hasSession(tmux, id)) throw new HttpError(409, "that shell name is taken");
-    await newSession(tmux, { id, repoId: repo.id, path: repo.path, place }, size);
+    await newSession(tmux, { id, repoId: repo.id, path: repo.path, place, ...handleOf(state, repo.id, repo.path, id) }, size);
     live = {
-      info: { id, repoId: repo.id, path: repo.path, place, attached: false, viewers: [], startedAt: Date.now() },
+      info: { id, repoId: repo.id, path: repo.path, place, attached: false, viewers: [], startedAt: Date.now(), ...handleOf(state, repo.id, repo.path, id) },
       pty: null,
       sockets: new Set(),
     };
@@ -592,6 +597,15 @@ async function resumeTerm(
   return termInfo(state, live);
 }
 
+/** The tailchan handle a new shell runs under, as a spread: none when the
+ *  backend knows no broker (the variable would mean nothing) or the shell
+ *  is an ssh line (it would stay on this side of the connection). */
+function handleOf(state: ServerState, repoId: string, path: string, id: string): { handle?: string } {
+  if (!state.chan.cfg || parseLocator(path).host !== null) return {};
+  const name = state.result.repos.find((r) => r.id === repoId)?.name ?? repoId;
+  return { handle: shellHandle(name, id) };
+}
+
 /** A shell on a plain pty under the browser's name: the one session every
  *  socket on it shares, its output kept for the next socket, its exit told
  *  to them all. Throws when the spawn fails (a folder that is gone, a shell
@@ -600,6 +614,7 @@ function openPtyTerm(state: ServerState, data: TermSocket, size: TermSize): Live
   const { repo, id, place } = data;
   const scrollback = new Scrollback();
   const sockets = new Set<ServerWebSocket<TermSocket>>();
+  const handle = handleOf(state, repo.id, repo.path, id).handle;
   const session = startTerm(repo.path, size, {
     data: (chunk) => {
       scrollback.push(chunk);
@@ -618,9 +633,9 @@ function openPtyTerm(state: ServerState, data: TermSocket, size: TermSize): Live
       sockets.clear();
       tellTerms(state);
     },
-  });
+  }, handle ? { TAILCHAN_AS: handle } : undefined);
   const live: LiveTerm = {
-    info: { id, repoId: repo.id, path: repo.path, place, attached: false, viewers: [], startedAt: Date.now() },
+    info: { id, repoId: repo.id, path: repo.path, place, attached: false, viewers: [], startedAt: Date.now(), ...handleOf(state, repo.id, repo.path, id) },
     pty: { session, scrollback },
     sockets,
   };
@@ -639,9 +654,9 @@ async function joinTmuxTerm(state: ServerState, tmux: string[], ws: ServerWebSoc
   const size = { cols, rows };
   let live = state.terms.get(id);
   if (!live) {
-    await newSession(tmux, { id, repoId: repo.id, path: repo.path, place }, size);
+    await newSession(tmux, { id, repoId: repo.id, path: repo.path, place, ...handleOf(state, repo.id, repo.path, id) }, size);
     live = {
-      info: { id, repoId: repo.id, path: repo.path, place, attached: false, viewers: [], startedAt: Date.now() },
+      info: { id, repoId: repo.id, path: repo.path, place, attached: false, viewers: [], startedAt: Date.now(), ...handleOf(state, repo.id, repo.path, id) },
       pty: null,
       sockets: new Set(),
     };
@@ -1552,6 +1567,8 @@ async function handleApi(
   if (path === "/api/client" && method === "GET") return json(clientInfo(state, key, here));
   if (path === "/api/helpers" && method === "GET") return json(helperList(state));
   if (path === "/api/devices" && method === "GET") return json(deviceList(state));
+  const chanRes = await state.chan.handle(req, url);
+  if (chanRes) return chanRes;
 
   // The in-app browser: what listens on the backend's loopback, each port
   // with the repo its process runs in when that can be seen, and a preview
@@ -2272,6 +2289,9 @@ function bind<T>(port: number, listen: () => T): T {
 export async function startServer(opts: {
   root: string;
   port?: number;
+  /** tailchan's address and handles; absent reads them off the env and the
+   *  CLI's config, null turns tailchan off */
+  chan?: ChanConfig | null;
 }): Promise<{ port: number; stop: () => void }> {
   const cfg = await loadConfig();
   const root = await realpath(opts.root);
@@ -2289,8 +2309,12 @@ export async function startServer(opts: {
     onChange: (run) => {
       broadcast(state, { type: "run", run });
       state.flows.onRun(run);
+      state.chan.onRun(run);
     },
-    onGone: (id) => broadcast(state, { type: "run-gone", id }),
+    onGone: (id) => {
+      broadcast(state, { type: "run-gone", id });
+      state.chan.forget(id);
+    },
     // Re-read status directly rather than waiting on the watcher's
     // debounce: the card and the run's outcome should agree at once.
     status: (repoId) =>
@@ -2299,10 +2323,22 @@ export async function startServer(opts: {
         .catch(() => null),
   });
   const flows = new Flows(runner, {
-    onChange: (flow) => broadcast(state, { type: "flow", flow }),
-    onGone: (id) => broadcast(state, { type: "flow-gone", id }),
-    onFleet: (fleet) => broadcast(state, { type: "fleet", fleet }),
-    onFleetGone: (id) => broadcast(state, { type: "fleet-gone", id }),
+    onChange: (flow) => {
+      broadcast(state, { type: "flow", flow });
+      state.chan.onFlow(flow);
+    },
+    onGone: (id) => {
+      broadcast(state, { type: "flow-gone", id });
+      state.chan.forget(id);
+    },
+    onFleet: (fleet) => {
+      broadcast(state, { type: "fleet", fleet });
+      state.chan.onFleet(fleet);
+    },
+    onFleetGone: (id) => {
+      broadcast(state, { type: "fleet-gone", id });
+      state.chan.forget(id);
+    },
     check: runCheck,
     evaluator: hasGatewayKey() ? jev : null,
     status: (repoId) =>
@@ -2333,6 +2369,11 @@ export async function startServer(opts: {
     runner,
     flows,
     launcher,
+    chan: new ChanHub(opts.chan === undefined ? loadChanConfig() : opts.chan, {
+      broadcast: (ev) => broadcast(state, ev),
+      repoName: (id) => state.result.repos.find((r) => r.id === id)?.name ?? id,
+      isFlowRun: (runId) => state.flows.list().some((f) => f.steps.some((st) => st.runId === runId)),
+    }),
     pulls: new Map(),
     own: new Map(),
     // Seeded from settings at startup, not []: fetchLocal can run before
@@ -2592,6 +2633,7 @@ export async function startServer(opts: {
 
   // What the shells have on their screens, written out while `keepShells`
   // is on, so a machine going down does not take them with the tmux server.
+  void state.chan.start();
   const keepTimer = setInterval(() => void keepPass(state), KEEP_EVERY);
 
   // A named event rather than an SSE comment, so the page sees it: a phone
@@ -2622,6 +2664,7 @@ export async function startServer(opts: {
       state.flows.stopAll();
       state.runner.stopAll();
       state.launcher.shutdown();
+      state.chan.close();
       // the ptys go with the server; a shell on tmux stays for the next one
       for (const t of state.terms.values()) {
         t.pty?.session.detach();

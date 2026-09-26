@@ -90,6 +90,8 @@ VERCEL_AI_GATEWAY_API_KEY=...   # optional: lets verdict gates evaluate
 # COMPOSE_PROFILES=tunnel       # optional: the public name, see "A public name" below
 # TUNNEL_TOKEN=eyJ...
 # CANOPY_PUBLIC_ORIGIN=https://canopy.beric.ca
+# TAILCHAN_URL=http://100.68.139.95:7855   # optional: the tailchan broker, see "tailchan" below
+# TAILCHAN_HUMAN=eric                       # the handle the UI speaks tailchan as
 ```
 
 `CANOPY_LISTEN` is where docker publishes the port. Leave it unset and canopy
@@ -299,6 +301,39 @@ strip, or in the repo's panel when it was opened there (the panel opens to
 show it). Presence labels; it never authorizes. The id and the name are what
 the browser sends, which is fine among one person's devices on a tailnet and
 is one more reason nothing here is exposed past it.
+
+## tailchan
+
+[tailchan](../../../homelab/services/tailchan) is the tailnet-only message
+broker on the mini (port 7855): channels, DMs, a clipboard channel and a file
+drop, with a bash CLI and the homelab `tailchan` skill. canopy uses it in two
+ways.
+
+**From a shell.** An agent in a canopy shell runs `tailchan` like one on the
+Mac. The CLI is the repo copy under the mounted dev tree, put on PATH by
+`~/.claude/shell/bashrc`, and the skill is `~/.claude/skills/tailchan` on the
+mini, a symlink into the same tree. Every shell started while canopy knows a
+broker runs with `TAILCHAN_AS=<repo>-<4 hex of the shell id>`, so its agent
+answers to a name that says where it is; the shells picker shows that handle,
+whether it is listening, and a "message" button. The container has no clipboard
+tool, so `clip push -` and `clip show` work there and `clip push`/`clip pull`
+do not.
+
+**From the UI.** With `TAILCHAN_URL` in `.env` the server keeps a stream open as
+`TAILCHAN_HUMAN` and the top bar gets `✉`: conversations, a composer, files,
+the clipboard both ways, and who has been around. Messages land in the feed
+too. The checkbox at the bottom has canopy post its runs, flows and fleets to
+`#canopy` and DM you (a Telegram ping) when a prompt or a gate waits on you.
+On a Mac canopy reads the CLI's own `~/.config/tailchan/env`, so it needs
+nothing new.
+
+The broker and canopy share the mini, which takes two things on the host,
+both done on 2026-09-25: a ufw rule allowing tcp 7855 from canopy's compose
+network (192.168.48.0/20; ufw's default only lets 172.16.0.0/12 in), and
+`TRUST_NETS=192.168.48.0/20=macmini-2018` in the broker's `.env`, since a
+request from the bridge address is not a tailnet address and WhoIs cannot name
+it. If the compose network is ever recreated on another subnet, both follow it
+(`docker network inspect canopy_default`).
 
 ## Codex
 

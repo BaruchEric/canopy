@@ -1,5 +1,7 @@
 import type {
   AgentSettings,
+  ChanMessage,
+  TailchanInfo,
   ClaudeSession,
   Device,
   HelperInfo,
@@ -209,6 +211,19 @@ export const api = {
     }),
   /** turns the recording on or off for this backend */
   setKeeping: (on: boolean) => req<{ keeping: boolean }>("/api/keep", { method: "POST", body: JSON.stringify({ on }) }),
+  /** tailchan: the broker's view as the UI's handle, or why it is off */
+  tailchan: () => req<TailchanInfo>("/api/tailchan"),
+  chanRead: (target: string, n = 50) =>
+    req<ChanMessage[]>(`/api/tailchan/read?target=${encodeURIComponent(target)}&n=${n}`),
+  chanSend: (target: string, body: string, kind: "text" | "clip" = "text") =>
+    req<ChanMessage>("/api/tailchan/send", { method: "POST", body: JSON.stringify({ target, body, kind }) }),
+  chanPut: (target: string, file: File, note = "") =>
+    req<ChanMessage>(`/api/tailchan/put?target=${encodeURIComponent(target)}&name=${encodeURIComponent(file.name)}&note=${encodeURIComponent(note)}`, {
+      method: "POST",
+      headers: { "Content-Type": file.type || "application/octet-stream" },
+      body: file,
+    }),
+  chanNotify: (on: boolean) => req<{ notify: boolean }>("/api/tailchan/notify", { method: "POST", body: JSON.stringify({ on }) }),
   runs: () => req<Run[]>("/api/runs"),
   /** `client` is this browser's id, so the run says which device started it */
   run: (id: string, action: RunAction, note: string, client?: string) =>
@@ -456,3 +471,6 @@ export function subscribe(
     es.close();
   };
 }
+
+/** where a tailchan file downloads from, through the backend */
+export const chanBlobUrl = (id: string): string => `/api/tailchan/blob?id=${encodeURIComponent(id)}`;

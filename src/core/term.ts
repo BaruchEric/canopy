@@ -146,6 +146,8 @@ export interface TermHooks {
 export interface PtyProcess {
   argv: string[];
   cwd?: string;
+  /** added to the pty's environment */
+  env?: Record<string, string>;
   /** ends the shell itself; the process on the pty follows */
   end?: () => Promise<void>;
 }
@@ -165,7 +167,7 @@ export function spawnOnPty(what: PtyProcess, size: TermSize, hooks: TermHooks): 
   });
   let proc: ReturnType<typeof Bun.spawn>;
   try {
-    proc = Bun.spawn(what.argv, { cwd: what.cwd, env: termEnv(), terminal });
+    proc = Bun.spawn(what.argv, { cwd: what.cwd, env: { ...termEnv(), ...what.env }, terminal });
   } catch (err) {
     terminal.close();
     throw err;
@@ -205,7 +207,7 @@ export function spawnOnPty(what: PtyProcess, size: TermSize, hooks: TermHooks): 
 
 /** Spawns the shell for a repo on a pty of the given size, straight on it:
  *  the shell lives and dies with the pty. */
-export function startTerm(locator: string, size: TermSize, hooks: TermHooks): TermSession {
+export function startTerm(locator: string, size: TermSize, hooks: TermHooks, env?: Record<string, string>): TermSession {
   const { host, path } = parseLocator(locator);
-  return spawnOnPty({ argv: shellArgs(locator), cwd: host === null ? path : undefined }, size, hooks);
+  return spawnOnPty({ argv: shellArgs(locator), cwd: host === null ? path : undefined, env }, size, hooks);
 }

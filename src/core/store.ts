@@ -32,6 +32,7 @@ const defaults = (): CanopyConfig => ({
   launchers: {},
   fetch: true,
   keepShells: false,
+  tailchanNotify: false,
   self: null,
   peers: [],
   peerSync: "off",
@@ -108,6 +109,7 @@ function normalize(parsed: Partial<CanopyConfig>): CanopyConfig {
     launchers: normalizeLaunchers(cfg.launchers),
     fetch: typeof cfg.fetch === "boolean" ? cfg.fetch : base.fetch,
     keepShells: typeof cfg.keepShells === "boolean" ? cfg.keepShells : base.keepShells,
+    tailchanNotify: typeof cfg.tailchanNotify === "boolean" ? cfg.tailchanNotify : base.tailchanNotify,
     self: typeof cfg.self === "string" && isPeerName(cfg.self) ? cfg.self : null,
     peers: normalizePeers(cfg.peers),
     peerSync: PEER_SYNC.includes(cfg.peerSync) ? cfg.peerSync : "off",
@@ -255,6 +257,13 @@ export async function setAgent(
 export async function setKeepShells(on: boolean): Promise<void> {
   await withConfig((cfg) => {
     cfg.keepShells = on;
+  });
+}
+
+/** Turns canopy's tailchan posts on or off. */
+export async function setTailchanNotify(on: boolean): Promise<void> {
+  await withConfig((cfg) => {
+    cfg.tailchanNotify = on;
   });
 }
 

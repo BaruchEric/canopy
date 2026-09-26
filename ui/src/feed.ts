@@ -17,6 +17,7 @@ import type {
   TermInfo,
   Workspace,
 } from "../../src/core/types";
+import { chanLine } from "./chan";
 import { peerLines } from "./peers";
 
 export type FeedKind =
@@ -29,7 +30,8 @@ export type FeedKind =
   | "agent"
   | "launch"
   | "client"
-  | "shell";
+  | "shell"
+  | "chan";
 
 export interface FeedEntry {
   id: number;
@@ -69,6 +71,8 @@ export interface FeedSnapshot {
   /** the shells kept from before, so one being offered can be told from one
    *  being restored or forgotten */
   kept?: KeptShell[];
+  /** the handle the UI speaks tailchan as, so its own posts read "you" */
+  chanAs?: string;
 }
 
 /** how many entries the feed keeps; older ones fall off the top */
@@ -444,6 +448,9 @@ export function describeEvent(
     }
     case "peers":
       return [];
+    case "chan":
+      // a channel line canopy marked silent is a quiet one
+      return [{ at, kind: "chan", source: "", text: chanLine(ev.message, prev.chanAs ?? ""), quiet: ev.message.meta["silent"] === true }];
   }
 }
 

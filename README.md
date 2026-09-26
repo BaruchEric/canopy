@@ -191,6 +191,10 @@ The panel's **claude** section shows the all-time session count and API-equivale
 
 canopy finds the CLI at `historyBin` in its config, else `claude-history` on PATH, else `~/dev/dev-tools/claude-history/bin/claude-history`. Without it the rings stay off and the section says why. The overview (every repo's totals and days) is two CLI calls, cached for five minutes and rebuilt after a rescan; the archive itself is refreshed by claude-history's own hourly sync, so a session shows up here within the hour after it ends. Dollar figures are list-price API equivalents of the tokens, as claude-history counts them, not a bill.
 
+## tailchan
+
+When the backend knows a [tailchan](../../homelab/services/tailchan) broker (`CANOPY_TAILCHAN_URL`, `TAILCHAN_URL`, or the CLI's own `~/.config/tailchan/env`), the top bar gets **✉**: the channels and DMs the UI's handle (`CANOPY_TAILCHAN_AS`, else `TAILCHAN_HUMAN`) is in, a composer, file drops, the clipboard both ways, and who has been around. Messages also land in the event feed. Every shell started then runs with `TAILCHAN_AS=<repo>-<4 hex of its id>`, so a Claude session inside it answers to that name, and the shells picker has a **message** button for it. A checkbox in the popover has canopy post its runs, flows and fleets to `#canopy`, and DM you when a prompt or a gate waits on you. Without a broker none of this shows. See `docs/deploy.md` for the container on the mini.
+
 ## Peers
 
 Peers keeps a full clone of every repo under the launch root in sync across your machines over ssh, pull-only: each one fetches every other peer's branches and its uncommitted work as a WIP snapshot, fast-forwards what it safely can, and leaves a real divergence or a branch that only exists on a peer for you to look at. Nothing ever writes into another machine's working tree. A peer's ssh key runs only `git-upload-pack` and three read-only queries behind a forced command, never a shell. It replaces a one-way rsync mirror with the model coworkers use: every machine keeps its own clone and resolves its own conflicts, and work moves between clones only through git.

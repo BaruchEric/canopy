@@ -29,6 +29,8 @@ export interface TmuxMeta {
   /** the repo's locator, where the shell landed */
   path: string;
   place: ShellPlace;
+  /** the tailchan handle the shell runs under (`TAILCHAN_AS`), when it has one */
+  handle?: string;
 }
 
 const PREFIX = "canopy-";
@@ -54,6 +56,8 @@ export const tmuxArgv = (bin: string, socket: string, conf: string): string[] =>
  * running what the pty would have run directly (`shellArgs`), then the
  * repo, place and path set on it in the same call. A local folder is the
  * session's start directory; a remote shell is an ssh line and starts here.
+ * A handle goes into the session's environment as `TAILCHAN_AS` and onto
+ * it as an option, so a later list reads it back.
  */
 export function newSessionArgs(base: string[], meta: TmuxMeta, size: TermSize, command: string[]): string[] {
   const name = sessionName(meta.id);
@@ -65,6 +69,7 @@ export function newSessionArgs(base: string[], meta: TmuxMeta, size: TermSize, c
     "-s",
     name,
     ...(host === null ? ["-c", path] : []),
+    ...(meta.handle ? ["-e", `TAILCHAN_AS=${meta.handle}`] : []),
     "-x",
     String(size.cols),
     "-y",
@@ -88,6 +93,7 @@ export function newSessionArgs(base: string[], meta: TmuxMeta, size: TermSize, c
     name,
     "@canopy_path",
     meta.path,
+    ...(meta.handle ? [";", "set-option", "-t", name, "@canopy_handle", meta.handle] : []),
   ];
 }
 
@@ -164,7 +170,7 @@ export function primeText(captured: string, rows: number): string {
 }
 
 /** one line per session: name, repo, place, created (unix seconds), path */
-export const LIST_FORMAT = "#{session_name}\t#{@canopy_repo}\t#{@canopy_place}\t#{session_created}\t#{@canopy_path}";
+export const LIST_FORMAT = "#{session_name}\t#{@canopy_repo}\t#{@canopy_place}\t#{session_created}\t#{@canopy_path}\t#{@canopy_handle}";
 
 export const listArgs = (base: string[]): string[] => [...base, "list-sessions", "-F", LIST_FORMAT];
 
@@ -180,7 +186,7 @@ export function parseSessions(out: string): TmuxSession[] {
   const sessions: TmuxSession[] = [];
   for (const line of out.split("\n")) {
     if (!line) continue;
-    const [name = "", repoId = "", place, created = "", path = ""] = line.split("\t");
+    const [name = "", repoId = "", place, created = "", path = "", handle = ""] = line.split("\t");
     const id = sessionId(name);
     if (!id || !repoId || !path) continue;
     const secs = Number(created);
@@ -190,6 +196,7 @@ export function parseSessions(out: string): TmuxSession[] {
       path,
       place: termPlace(place),
       createdAt: Number.isFinite(secs) && secs > 0 ? secs * 1000 : Date.now(),
+      ...(handle ? { handle } : {}),
     });
   }
   return sessions;

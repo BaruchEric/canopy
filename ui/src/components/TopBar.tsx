@@ -8,6 +8,7 @@ import { seenWord } from "../peers";
 import { FilterMenu } from "./Filters";
 import { Seg } from "./Seg";
 import { SettingsMenu } from "./Settings";
+import { ChanChip } from "./Chan";
 import { DevicesChip } from "./Devices";
 import { KeptShells } from "./KeptShells";
 import { ShellsChip } from "./Shells";
@@ -343,6 +344,7 @@ export function TopBar() {
         <KeptShells />
         <ShellsChip />
         <DevicesChip />
+        <ChanChip />
         <SettingsMenu />
       </span>
     </header>

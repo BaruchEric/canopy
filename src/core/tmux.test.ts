@@ -122,6 +122,24 @@ describe("parseSessions", () => {
   test("nothing from nothing", () => {
     expect(parseSessions("")).toEqual([]);
   });
+  test("a handle reads back when the session has one", () => {
+    const [s] = parseSessions(`canopy-${ID}\tapp\tstrip\t1790000000\t/app\tapp-0123`);
+    expect(s?.handle).toBe("app-0123");
+  });
+});
+
+describe("a shell's tailchan handle", () => {
+  test("rides the session's environment and an option", () => {
+    const meta = { id: ID, repoId: "app", path: "/app", place: "strip" as const, handle: "app-0123" };
+    const rest = newSessionArgs([], meta, { cols: 80, rows: 24 }, ["/bin/bash"]);
+    expect(rest.slice(0, 8)).toEqual(["new-session", "-d", "-s", `canopy-${ID}`, "-c", "/app", "-e", "TAILCHAN_AS=app-0123"]);
+    expect(rest.slice(-6)).toEqual([";", "set-option", "-t", `canopy-${ID}`, "@canopy_handle", "app-0123"]);
+  });
+  test("none, no -e and no option", () => {
+    const rest = newSessionArgs([], { id: ID, repoId: "app", path: "/app", place: "strip" }, { cols: 80, rows: 24 }, ["/bin/bash"]);
+    expect(rest).not.toContain("-e");
+    expect(rest).not.toContain("@canopy_handle");
+  });
 });
 
 describe("what tmux said", () => {

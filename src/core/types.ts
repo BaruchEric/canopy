@@ -337,6 +337,9 @@ export interface CanopyConfig {
    *  shell printed is whatever it printed, secrets included, and this keeps
    *  it in a file that outlives the process. */
   keepShells: boolean;
+  /** whether canopy posts its runs, flows and fleets to tailchan: an end to
+   *  its channel, a prompt or a gate waiting on you as a DM (which pings) */
+  tailchanNotify: boolean;
   /** this machine's name among its peers; null until set */
   self: string | null;
   /** the machines this one pulls from (see docs/superpowers/specs/2026-09-23-peer-sync-design.md) */
@@ -697,7 +700,9 @@ export type ServerEvent =
   /** the shells left behind by a backend that went down, whenever the list
    *  changes: one is kept, restored or forgotten */
   | { type: "kept"; kept: KeptShell[] }
-  | { type: "peers"; seen: PeerSeen[] };
+  | { type: "peers"; seen: PeerSeen[] }
+  /** a tailchan message the UI's handle heard, or one the UI just sent */
+  | { type: "chan"; message: ChanMessage };
 
 export type BuildChange = "installed" | "built" | "launched" | "exited" | "removed";
 
@@ -1048,6 +1053,9 @@ export interface TermInfo {
   /** when this shell was restored from what a lost one left behind; absent
    *  for a shell that has been running all along */
   restoredAt?: number;
+  /** the tailchan handle the shell runs under, for one started while the
+   *  backend knew a broker */
+  handle?: string;
 }
 
 /** One Claude Code conversation started at a repo on the backend, which a
@@ -1112,3 +1120,55 @@ export interface PreviewSlot {
   slot: number;
   port: number;
 }
+
+/* ---------- tailchan: the tailnet message broker ---------- */
+
+/** One message as the broker sends it. `handle` is the sender's declared
+ *  name, `node` the tailnet machine it came from, `ts` unix ms. */
+export interface ChanMessage {
+  id: number;
+  channel: string;
+  handle: string;
+  node: string;
+  /** text, json, clip, object or event */
+  kind: string;
+  body: string;
+  meta: Record<string, unknown>;
+  ts: number;
+}
+
+/** A handle seen in the last day, `live` while it has a stream open. */
+export interface ChanWho {
+  handle: string;
+  node: string;
+  last_seen: number;
+  live: boolean;
+}
+
+/** A channel the UI's handle can see; a DM is `dm.<a>+<b>`. */
+export interface ChanChannel {
+  name: string;
+  topic: string;
+  private: boolean;
+  members: string[];
+  count: number;
+  last_ts: number | null;
+  expires_at: number | null;
+  subscribed: boolean;
+}
+
+/** What GET /api/tailchan answers: off, with why, or the broker's view. */
+export type TailchanInfo =
+  | { ready: false; reason: string }
+  | {
+      ready: true;
+      /** the handle the UI speaks as */
+      as: string;
+      /** canopy's own handle and channel for what it posts */
+      bot: string;
+      channel: string;
+      /** whether canopy posts its runs, flows and fleets */
+      notify: boolean;
+      who: ChanWho[];
+      channels: ChanChannel[];
+    };
