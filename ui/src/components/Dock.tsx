@@ -37,6 +37,7 @@ import {
   focusVars,
   useLeaveOnEscape,
   modeEntries,
+  PanelZoom,
   shareEntries,
   useSectionClosed,
   useZoom,
@@ -877,7 +878,7 @@ function PanelGear({
   body: () => HTMLElement | null;
   solo: boolean;
 }) {
-  const { entry: zoom } = useZoom("panel");
+  const { entry: zoom } = useZoom("panel", mode === "focus");
   const openIn = useStore((s) => s.settings.openIn);
   const order = useStore((s) => s.settings.sectionOrder);
   const hidden = useStore((s) => s.settings.sectionsHidden);
@@ -955,7 +956,6 @@ export function RepoPanel({
   const order = useStore((s) => s.settings.sectionOrder);
   const hiddenSections = useStore((s) => s.settings.sectionsHidden);
   const focusSize = useStore((s) => s.focusSize);
-  const { zoom } = useZoom("panel");
   const closePanel = onClose ? (_id: string) => onClose() : unpin;
   const [busy, setBusy] = useState<string | null>(null);
   // A pull or push says how it went under its own row; a commit's result
@@ -967,6 +967,7 @@ export function RepoPanel({
   // a tab that is not showing is neither over the window nor in front
   const mode: SurfaceMode = hidden ? "normal" : chosenMode;
   useLeaveOnEscape(mode, setMode);
+  const { zoom } = useZoom("panel", mode === "focus");
 
   const [access, setAccess] = useState<PushAccess>("unknown");
 
@@ -1159,9 +1160,11 @@ export function RepoPanel({
       {repo.error ? (
         <p className="panel-error">Could not read this repo: {repo.error}</p>
       ) : (
-        order
-          .filter((k) => !hiddenSections.includes(k))
-          .map((k) => <PanelSection key={k} k={k} repo={repo} />)
+        <PanelZoom.Provider value={zoom}>
+          {order
+            .filter((k) => !hiddenSections.includes(k))
+            .map((k) => <PanelSection key={k} k={k} repo={repo} />)}
+        </PanelZoom.Provider>
       )}
       </div>
       {!repo.error && <PanelShells repo={repo} />}

@@ -97,6 +97,9 @@ export interface Settings {
   termFont: number;
   /** each kind of surface's zoom, off its gear; a kind with none is at 1 */
   zoom: Zooms;
+  /** each kind's zoom while brought to the front, where it differs from
+   *  its zoom in place; a kind with none uses that one */
+  frontZoom: Zooms;
   /** a panel's sections, top to bottom */
   sectionOrder: SectionKey[];
   /** the sections every panel leaves out */
@@ -118,6 +121,7 @@ export const DEFAULT_SETTINGS: Settings = {
   device: "",
   termFont: TERM_FONT.size,
   zoom: {},
+  frontZoom: {},
   sectionOrder: [...SECTION_KEYS],
   sectionsHidden: [],
 };
@@ -167,6 +171,7 @@ export function loadSettings(): Settings {
       device: typeof saved.device === "string" ? saved.device.slice(0, 40) : "",
       termFont: termFontSize(saved.termFont, DEFAULT_SETTINGS.termFont),
       zoom: normalizeZooms(saved.zoom),
+      frontZoom: normalizeZooms(saved.frontZoom, true),
       sectionOrder: sectionOrder(saved.sectionOrder),
       sectionsHidden: sectionsHidden(saved.sectionsHidden),
     };

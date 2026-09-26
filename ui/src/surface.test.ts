@@ -4,11 +4,13 @@ import {
   captureName,
   flipMode,
   moveSection,
+  frontZoomOf,
   normalizeZooms,
   sectionOrder,
   sectionsHidden,
   tidyLines,
   toggleHidden,
+  withFrontZoom,
   withZoom,
   zoomOf,
   zoomStep,
@@ -50,6 +52,23 @@ describe("normalizeZooms", () => {
     expect(zoomOf(z, "history")).toBe(1.5);
     expect(zoomOf(z, "panel")).toBe(1);
     expect(withZoom(z, "history", 1)).toEqual({});
+  });
+  test("keepOne keeps a front zoom of 1", () => {
+    expect(normalizeZooms({ panel: 1, feed: 1.5 }, true)).toEqual({ panel: 1, feed: 1.5 });
+  });
+});
+
+describe("front zoom", () => {
+  test("follows the in-place zoom until set", () => {
+    expect(frontZoomOf({}, { panel: 1.25 }, "panel")).toBe(1.25);
+    expect(frontZoomOf({}, {}, "feed")).toBe(1);
+    expect(frontZoomOf({ panel: 1 }, { panel: 1.25 }, "panel")).toBe(1);
+  });
+  test("withFrontZoom sets a differing zoom and clears one back at the in-place zoom", () => {
+    const f = withFrontZoom({}, { panel: 1.25 }, "panel", 1);
+    expect(f).toEqual({ panel: 1 });
+    expect(withFrontZoom(f, { panel: 1.25 }, "panel", 1.25)).toEqual({});
+    expect(withFrontZoom({}, {}, "changes", 1.5)).toEqual({ changes: 1.5 });
   });
 });
 

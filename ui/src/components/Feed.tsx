@@ -71,7 +71,7 @@ export function FeedDock() {
   const [seen, setSeen] = useState(0);
   const [mode, setMode] = useState<SurfaceMode>("normal");
   const focusSize = useStore((s) => s.focusSize);
-  const { zoom, entry: zoomEntry } = useZoom("feed");
+  const { zoom, entry: zoomEntry } = useZoom("feed", mode === "focus");
   useLeaveOnEscape(mode, setMode);
 
   // A source that has gone (removed while the feed was narrowed to it)

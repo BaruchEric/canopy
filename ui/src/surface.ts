@@ -42,15 +42,16 @@ export function zoomStep(z: number, dir: 1 | -1): number {
 export const zoomWord = (z: number): string => `${Math.round(z * 100)}%`;
 
 /** a saved zoom map with anything unknown or out of range dropped, and a
- *  zoom of 1 left out, since that is what no entry means */
-export function normalizeZooms(v: unknown): Zooms {
+ *  zoom of 1 left out, since that is what no entry means; `keepOne` keeps
+ *  it, for the front zooms, where no entry means the in-place zoom */
+export function normalizeZooms(v: unknown, keepOne = false): Zooms {
   if (!v || typeof v !== "object" || Array.isArray(v)) return {};
   const out: Zooms = {};
   for (const [k, z] of Object.entries(v)) {
     if (!(ZOOM_KINDS as readonly string[]).includes(k)) continue;
     if (typeof z !== "number" || !Number.isFinite(z)) continue;
     const clamped = Math.min(ZOOM_MAX, Math.max(ZOOM_MIN, z));
-    if (Math.abs(clamped - 1) > 0.001) out[k as ZoomKind] = clamped;
+    if (keepOne || Math.abs(clamped - 1) > 0.001) out[k as ZoomKind] = clamped;
   }
   return out;
 }
@@ -61,6 +62,20 @@ export const zoomOf = (zooms: Zooms, kind: ZoomKind): number => zooms[kind] ?? 1
 export function withZoom(zooms: Zooms, kind: ZoomKind, z: number): Zooms {
   const next = { ...zooms };
   if (Math.abs(z - 1) < 0.001) delete next[kind];
+  else next[kind] = z;
+  return next;
+}
+
+/** A kind's zoom while brought to the front: its own when one was set
+ *  there, else the zoom it has in place. */
+export const frontZoomOf = (front: Zooms, zooms: Zooms, kind: ZoomKind): number =>
+  front[kind] ?? zoomOf(zooms, kind);
+
+/** `front` with `kind` at `z`; back at the in-place zoom the entry goes,
+ *  so the front follows the in-place zoom again */
+export function withFrontZoom(front: Zooms, zooms: Zooms, kind: ZoomKind, z: number): Zooms {
+  const next = { ...front };
+  if (Math.abs(z - zoomOf(zooms, kind)) < 0.001) delete next[kind];
   else next[kind] = z;
   return next;
 }

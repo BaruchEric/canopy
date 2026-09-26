@@ -54,12 +54,14 @@ describe("loadSettings", () => {
       "canopy.settings",
       JSON.stringify({
         zoom: { panel: 1.25, feed: 40, nope: 2 },
+        frontZoom: { panel: 1, feed: "x" },
         sectionOrder: ["claude", "changes"],
         sectionsHidden: ["peers", "bogus"],
       }),
     );
     const s = loadSettings();
     expect(s.zoom).toEqual({ panel: 1.25, feed: 2 });
+    expect(s.frontZoom).toEqual({ panel: 1 });
     expect(s.sectionOrder).toEqual(["claude", "changes", "search", "history", "peers", "preview", "launch"]);
     expect(s.sectionsHidden).toEqual(["peers"]);
     store.set("canopy.settings", JSON.stringify({ zoom: "big", sectionOrder: 4 }));

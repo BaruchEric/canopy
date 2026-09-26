@@ -5,8 +5,10 @@ import { closedIn, useStore } from "../store";
 import {
   SECTION_WORD,
   flipMode,
+  frontZoomOf,
   moveSection,
   toggleHidden,
+  withFrontZoom,
   withZoom,
   zoomOf,
   zoomStep,
@@ -39,23 +41,35 @@ export function useSectionClosed(repoId: string, key: string): boolean {
 
 /* ---------- zoom ---------- */
 
-/** the gear line for one kind of surface's zoom, and the css it applies */
-export function useZoom(kind: ZoomKind): { zoom: number; entry: GearEntry } {
-  const zoom = useStore((s) => zoomOf(s.settings.zoom, kind));
+/** The gear line for one kind of surface's zoom, and the css it applies.
+ *  In front (`front`) a surface has a zoom of its own, which follows the
+ *  in-place one until it is set; its reset goes back to following. */
+export function useZoom(kind: ZoomKind, front = false): { zoom: number; entry: GearEntry } {
+  const inPlace = useStore((s) => zoomOf(s.settings.zoom, kind));
+  const zoom = useStore((s) => (front ? frontZoomOf(s.settings.frontZoom, s.settings.zoom, kind) : inPlace));
   const setSetting = useStore((s) => s.setSetting);
-  const set = (z: number) => setSetting("zoom", withZoom(useStore.getState().settings.zoom, kind, z));
+  const set = (z: number) => {
+    const { settings } = useStore.getState();
+    if (front) setSetting("frontZoom", withFrontZoom(settings.frontZoom, settings.zoom, kind, z));
+    else setSetting("zoom", withZoom(settings.zoom, kind, z));
+  };
+  const home = front ? inPlace : 1;
   return {
     zoom,
     entry: {
       type: "zoom",
-      label: "zoom",
+      label: front ? "zoom in front" : "zoom",
       value: zoomWord(zoom),
       less: zoom > ZOOM_MIN ? () => set(zoomStep(zoom, -1)) : null,
       more: zoom < ZOOM_MAX ? () => set(zoomStep(zoom, 1)) : null,
-      reset: zoom !== 1 ? () => set(1) : null,
+      reset: zoom !== home ? () => set(home) : null,
     },
   };
 }
+
+/** The zoom a panel's body is at, in place or in front, which a section in
+ *  front undoes on its own fixed box; 1 outside a panel. */
+export const PanelZoom = createContext(1);
 
 /** css `zoom` for a surface, or nothing at 1 */
 export const zoomStyle = (z: number): CSSProperties => (z === 1 ? {} : { zoom: z });
@@ -346,11 +360,11 @@ export function Section({
   const [chosenMode, setMode] = useState<SurfaceMode>("normal");
   // folded, a section is neither over the panel nor in front
   const mode: SurfaceMode = closed ? "normal" : chosenMode;
-  const { zoom, entry: zoomEntry } = useZoom(k);
+  const { zoom, entry: zoomEntry } = useZoom(k, mode === "focus");
   // A box in front is fixed to the window, but css zoom on the panel body
   // around it would scale its size and place too: it undoes that zoom on
   // itself and carries it into its contents instead.
-  const panelZoom = useStore((s) => (lone ? 1 : zoomOf(s.settings.zoom, "panel")));
+  const panelZoom = useContext(PanelZoom);
   const common = useSectionLayout(repo, k, mode, setMode);
   useLeaveOnEscape(mode, setMode);
   const word = SECTION_WORD[k];
