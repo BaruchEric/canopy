@@ -4,7 +4,7 @@ import { applyQuery, type RepoFilter } from "./filters";
 import { focusPanel, nextActive } from "./dock";
 import { openElsewhere, openShellElsewhere, parseRoute, shellUrl } from "./routes";
 import { loadSettings, saveSettings, shellPlace, type Settings, type ShellPlace } from "./settings";
-import { PANEL_TERM_ROWS, adoptTerms, loadTermTabs, nextStripTab, pruneHidden, reconcileTerms, rowsPx, termId, type TermTab } from "./term";
+import { PANEL_TERM_ROWS, adoptTerms, loadFocusSize, loadTermTabs, nextStripTab, pruneHidden, reconcileTerms, rowsPx, termId, type FocusSize, type TermTab } from "./term";
 import { clientId, identity } from "./client";
 export type { TermTab } from "./term";
 import { clamp, needsAttention } from "./util";
@@ -152,6 +152,8 @@ interface Layout {
   /** px height of the shell in each repo's panel, by repo id; a repo with
    *  no entry gets the default */
   panelTermHeights: Record<string, number>;
+  /** px size of a shell brought to the front; null follows the window */
+  focusSize: FocusSize | null;
   /** whether the event feed is showing along the bottom */
   feedOpen: boolean;
   /** px height of the event feed */
@@ -177,6 +179,7 @@ function loadLayout(): Layout {
     knownSections: [...DEFAULT_CLOSED],
     termHeight: TERM.initial,
     panelTermHeights: {},
+    focusSize: null,
     feedOpen: false,
     feedHeight: FEED.initial,
     panels: [],
@@ -199,6 +202,7 @@ function loadLayout(): Layout {
       knownSections?: unknown;
       termHeight?: unknown;
       panelTermHeights?: Record<string, unknown>;
+      focusSize?: unknown;
       feedOpen?: unknown;
       feedHeight?: unknown;
       panels?: unknown;
@@ -257,6 +261,7 @@ function loadLayout(): Layout {
           ? clamp(th, TERM.min, TERM.max)
           : TERM.initial,
       panelTermHeights,
+      focusSize: loadFocusSize(saved.focusSize),
       feedOpen: saved.feedOpen === true,
       feedHeight:
         typeof fh === "number" && Number.isFinite(fh)
@@ -302,6 +307,7 @@ const layoutOf = (s: CanopyState): Omit<Layout, "knownSections"> => ({
   closedSections: s.closedSections,
   termHeight: s.termHeight,
   panelTermHeights: s.panelTermHeights,
+  focusSize: s.focusSize,
   feedOpen: s.feedOpen,
   feedHeight: s.feedHeight,
   panels: s.panels,
@@ -409,6 +415,9 @@ interface CanopyState {
   /** px height of the shell in each repo's panel, by repo id, dragged by its
    *  top edge; `panelTermHeightFor` reads one */
   panelTermHeights: Record<string, number>;
+  /** px size of a shell brought to the front, dragged by its corner; null
+   *  is the default, which follows the window */
+  focusSize: FocusSize | null;
   /** flows by id, live and recently finished */
   flows: Record<string, Flow>;
   /** fleets by id, live and recently finished */
@@ -509,6 +518,7 @@ interface CanopyState {
   endTerm: (id: string, code: number | null) => void;
   setTermHeight: (px: number) => void;
   setPanelTermHeight: (repoId: string, px: number) => void;
+  setFocusSize: (size: FocusSize | null) => void;
 
   /** opens the pre-flight dialog for an action on a repo */
   plan: (repoId: string, action: RunAction) => void;
@@ -739,6 +749,7 @@ export const useStore = create<CanopyState>((set, get) => ({
   hiddenTerms: layout.hiddenTerms,
   termHeight: layout.termHeight,
   panelTermHeights: layout.panelTermHeights,
+  focusSize: layout.focusSize,
   flows: {},
   fleets: {},
   workflows: {},
@@ -1219,6 +1230,7 @@ export const useStore = create<CanopyState>((set, get) => ({
   endTerm: (id, code) =>
     set((s) => ({ terms: s.terms.map((t) => (t.id === id ? { ...t, exit: code } : t)) })),
   setTermHeight: (px) => set({ termHeight: clamp(px, TERM.min, TERM.max) }),
+  setFocusSize: (size) => set({ focusSize: size }),
   setPanelTermHeight: (repoId, px) =>
     set((s) => ({
       panelTermHeights: { ...s.panelTermHeights, [repoId]: clamp(px, PANEL_TERM.min, PANEL_TERM.max) },

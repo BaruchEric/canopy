@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { PANEL_TERM_ROWS, adoptTerms, cellHeight, loadTermTabs, nextStripTab, pruneHidden, reconcileTerms, rowsPx, termId, viewKey, type TermTab } from "./term";
+import { FOCUS_GAP, FOCUS_MIN, PANEL_TERM_ROWS, adoptTerms, cellHeight, focusResize, loadFocusSize, loadTermTabs, nextStripTab, pruneHidden, reconcileTerms, rowsPx, termId, viewKey, type TermTab } from "./term";
 import type { Repo, TermInfo } from "../../src/core/types";
 
 describe("rowsPx", () => {
@@ -147,5 +147,35 @@ describe("viewKey", () => {
     expect(viewKey(t)).toBe("a");
     expect(viewKey({ ...t, gen: 1 })).toBe("a:1");
     expect(viewKey({ ...t, gen: 2 })).not.toBe(viewKey({ ...t, gen: 1 }));
+  });
+});
+
+describe("focusResize", () => {
+  const view = { w: 1400, h: 900 };
+  test("grows by twice the drag, since the box stays centred", () => {
+    expect(focusResize({ w: 800, h: 500 }, 50, 20, view)).toEqual({ w: 900, h: 540 });
+    expect(focusResize({ w: 800, h: 500 }, -100, -50, view)).toEqual({ w: 600, h: 400 });
+  });
+  test("stops at the least usable size and at the window less a gap each side", () => {
+    expect(focusResize({ w: 800, h: 500 }, -1000, -1000, view)).toEqual(FOCUS_MIN);
+    expect(focusResize({ w: 800, h: 500 }, 1000, 1000, view)).toEqual({
+      w: view.w - 2 * FOCUS_GAP,
+      h: view.h - 2 * FOCUS_GAP,
+    });
+  });
+  test("a window smaller than the least gets the least", () => {
+    expect(focusResize({ w: 400, h: 300 }, 10, 10, { w: 300, h: 150 })).toEqual(FOCUS_MIN);
+  });
+});
+
+describe("loadFocusSize", () => {
+  test("two finite numbers, raised to the least", () => {
+    expect(loadFocusSize({ w: 900, h: 600 })).toEqual({ w: 900, h: 600 });
+    expect(loadFocusSize({ w: 10, h: 10 })).toEqual(FOCUS_MIN);
+  });
+  test("anything else is the default", () => {
+    for (const v of [null, undefined, 3, "x", {}, { w: 900 }, { w: "900", h: 600 }, { w: NaN, h: 600 }, { w: Infinity, h: 1 }]) {
+      expect(loadFocusSize(v)).toBeNull();
+    }
   });
 });

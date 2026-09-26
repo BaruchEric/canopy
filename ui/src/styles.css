@@ -3176,10 +3176,11 @@ body.resizing {
   color: var(--moss);
   background: var(--bark2);
 }
-/* the maximize switch at the right end of a shells tab row */
-.term-full {
+/* the focus and maximize switches at the right end of a shells tab row */
+.term-focus {
   margin-left: auto;
 }
+.term-focus.on,
 .term-full.on {
   color: var(--moss);
 }
@@ -3207,6 +3208,179 @@ body.resizing {
   height: auto;
   max-height: none;
   border-top: 0;
+}
+/* focus mode: the shells float centred over the page, dimmed behind them,
+   under the menus (30) and sheets (40). Centred by margin rather than a
+   transform, which would blur the terminal's text on a half pixel. */
+.term-focus-back {
+  position: fixed;
+  inset: 0;
+  z-index: 25;
+  background: color-mix(in srgb, var(--bark0) 72%, transparent);
+  backdrop-filter: blur(2px);
+}
+.termdock.focus,
+.panel-shells.focus {
+  position: fixed;
+  inset: 0;
+  z-index: 26;
+  margin: auto;
+  width: var(--focus-w, min(1100px, calc(100vw - 48px)));
+  height: var(--focus-h, min(720px, calc(100vh - 48px)));
+  height: var(--focus-h, min(720px, calc(100dvh - 48px)));
+  max-width: calc(100vw - 16px);
+  max-height: calc(100vh - 16px);
+  max-height: calc(100dvh - 16px);
+  border: 1px solid var(--float-edge);
+  border-radius: 10px;
+  overflow: hidden;
+  background: var(--bark0);
+  box-shadow:
+    inset 0 1px 0 var(--sheen),
+    0 2px 6px -2px var(--float-shadow),
+    0 22px 48px -16px var(--float-shadow);
+}
+.panel-shells.focus > .fold {
+  display: none;
+}
+.panel-shells.focus > .panel-shells-body {
+  flex: 1;
+  max-height: none;
+  border-top: 0;
+}
+.panel-shells.focus > .panel-shells-body > .term-body {
+  flex: 1;
+  height: auto;
+}
+/* a small or short window: the focused shell takes it all but a margin,
+   since a box to size would only lose rows there, and the grips go */
+@media (max-width: 640px), (max-height: 480px) {
+  .termdock.focus,
+  .panel-shells.focus {
+    inset: 8px;
+    margin: 0;
+    width: auto;
+    height: auto;
+    max-width: none;
+    max-height: none;
+  }
+  .termdock.focus .focus-grip,
+  .panel-shells.focus .focus-grip {
+    display: none;
+  }
+}
+/* coming to the front: the page dims and the box rises into place */
+@media (prefers-reduced-motion: no-preference) {
+  .term-focus-back {
+    animation: focus-dim 160ms ease-out;
+  }
+  .termdock.focus,
+  .panel-shells.focus {
+    animation: focus-rise 180ms cubic-bezier(0.2, 0.8, 0.2, 1);
+  }
+  @keyframes focus-dim {
+    from {
+      opacity: 0;
+    }
+  }
+  @keyframes focus-rise {
+    from {
+      opacity: 0;
+      transform: translateY(8px) scale(0.985);
+    }
+  }
+}
+/* the focused box's edges and corners, each dragged to size it; the bottom
+   right corner carries the hatch that says so */
+.focus-grip {
+  position: absolute;
+  z-index: 3;
+  touch-action: none;
+  --grip: 6px;
+  --corner: 14px;
+}
+.focus-grip.n,
+.focus-grip.s {
+  left: var(--corner);
+  right: var(--corner);
+  height: var(--grip);
+  cursor: ns-resize;
+}
+.focus-grip.e,
+.focus-grip.w {
+  top: var(--corner);
+  bottom: var(--corner);
+  width: var(--grip);
+  cursor: ew-resize;
+}
+.focus-grip.n {
+  top: 0;
+}
+.focus-grip.s {
+  bottom: 0;
+}
+.focus-grip.e {
+  right: 0;
+}
+.focus-grip.w {
+  left: 0;
+}
+.focus-grip.ne,
+.focus-grip.se,
+.focus-grip.sw,
+.focus-grip.nw {
+  width: var(--corner);
+  height: var(--corner);
+}
+.focus-grip.ne {
+  top: 0;
+  right: 0;
+  cursor: nesw-resize;
+}
+.focus-grip.sw {
+  bottom: 0;
+  left: 0;
+  cursor: nesw-resize;
+}
+.focus-grip.nw {
+  top: 0;
+  left: 0;
+  cursor: nwse-resize;
+}
+.focus-grip.se {
+  right: 0;
+  bottom: 0;
+  cursor: nwse-resize;
+  background: linear-gradient(135deg, transparent 55%, var(--hair2) 55%, var(--hair2) 65%, transparent 65%, transparent 75%, var(--hair2) 75%, var(--hair2) 85%, transparent 85%);
+}
+.focus-grip.se:hover,
+.focus-grip.se:focus-visible,
+.focus-grip.se.dragging {
+  background: linear-gradient(135deg, transparent 55%, var(--moss) 55%, var(--moss) 65%, transparent 65%, transparent 75%, var(--moss) 75%, var(--moss) 85%, transparent 85%);
+}
+/* an edge lights up along its length while it is the one held */
+.focus-grip:not(.se):hover,
+.focus-grip:not(.se).dragging {
+  background: color-mix(in srgb, var(--moss) 35%, transparent);
+}
+body:has(.focus-grip.dragging) {
+  user-select: none;
+}
+body:has(.focus-grip.n.dragging),
+body:has(.focus-grip.s.dragging) {
+  cursor: ns-resize;
+}
+body:has(.focus-grip.e.dragging),
+body:has(.focus-grip.w.dragging) {
+  cursor: ew-resize;
+}
+body:has(.focus-grip.ne.dragging),
+body:has(.focus-grip.sw.dragging) {
+  cursor: nesw-resize;
+}
+body:has(.focus-grip.nw.dragging),
+body:has(.focus-grip.se.dragging) {
+  cursor: nwse-resize;
 }
 /* A finger for a pointer: the shell's own drag, flick and pinch (TermView)
    instead of the page's, and tab row controls and grips a finger can hit. */
@@ -3264,6 +3438,10 @@ body.resizing {
   }
   .panel-shells > .fold {
     margin-top: 2px;
+  }
+  .focus-grip {
+    --grip: 14px;
+    --corner: 28px;
   }
 }
 @media (max-width: 760px) {

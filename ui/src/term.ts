@@ -177,3 +177,41 @@ export function cellHeight(): number {
 export function rowsPx(rows: number, cellPx = cellHeight()): number {
   return Math.ceil(rows * cellPx + TERM_PAD);
 }
+
+/** A shell brought to the front: its floating box's size in css px. */
+export interface FocusSize {
+  w: number;
+  h: number;
+}
+
+/** the smallest a focused shell's box goes */
+export const FOCUS_MIN: FocusSize = { w: 360, h: 200 };
+
+/** the room a focused shell leaves at each edge of the window at its biggest */
+export const FOCUS_GAP = 8;
+
+/** One side held between the least usable size and the window less a gap
+ *  each side; a window smaller than the least gets the least. */
+const fitSide = (px: number, min: number, view: number): number =>
+  Math.round(Math.max(min, Math.min(px, view - 2 * FOCUS_GAP)));
+
+/** A focused shell's size after its corner is dragged `dx`, `dy` from where
+ *  it started at `start`. The box stays centred, so the corner moving by the
+ *  drag means both sides do and the box grows by twice it. */
+export function focusResize(start: FocusSize, dx: number, dy: number, view: FocusSize): FocusSize {
+  return {
+    w: fitSide(start.w + 2 * dx, FOCUS_MIN.w, view.w),
+    h: fitSide(start.h + 2 * dy, FOCUS_MIN.h, view.h),
+  };
+}
+
+/** A focused size off a saved layout: null (the default, which follows the
+ *  window) for anything that is not two finite numbers, else at least the
+ *  least. The window's own cap is the stylesheet's, since it moves. */
+export function loadFocusSize(v: unknown): FocusSize | null {
+  if (!v || typeof v !== "object") return null;
+  const { w, h } = v as Record<string, unknown>;
+  if (typeof w !== "number" || typeof h !== "number") return null;
+  if (!Number.isFinite(w) || !Number.isFinite(h)) return null;
+  return { w: Math.round(Math.max(FOCUS_MIN.w, w)), h: Math.round(Math.max(FOCUS_MIN.h, h)) };
+}

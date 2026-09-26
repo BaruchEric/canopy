@@ -6,7 +6,7 @@ import "@xterm/xterm/css/xterm.css";
 import { api } from "../api";
 import { groveUrl, nameShellHere, parseRoute } from "../routes";
 import { PANEL_TERM, TERM, closedIn, panelTermHeightFor, useStore, type TermTab } from "../store";
-import { TERM_FONT, termId, viewKey } from "../term";
+import { TERM_FONT, focusResize, termId, viewKey, type FocusSize } from "../term";
 import { clamp } from "../util";
 import { clientId } from "../client";
 import { BAR_KEYS, NO_MODS, keyBytes, withMods, type BarKey, type Mods } from "../keys";
@@ -16,6 +16,9 @@ import { TERM_GONE, type Repo } from "../../../src/core/types";
 
 /** The design tokens the terminal paints with, resolved through a probe
  *  element so `light-dark()` collapses to the scheme in force. */
+/** ms a shell's size has to hold before the pty is told it */
+const RESIZE_SETTLE = 120;
+
 const TOKENS = [
   "--bark0",
   "--bark3",
@@ -178,6 +181,7 @@ export function TermView({
     let gone = false;
     let tries = 0;
     let retry: ReturnType<typeof setTimeout> | null = null;
+    let sizing: ReturnType<typeof setTimeout> | null = null;
     const note = (text: string) => term.write(`\r\n\x1b[2m${text}\x1b[0m`);
     const end = (code: number | null, text: string) => {
       if (ended) return;
@@ -256,7 +260,16 @@ export function TermView({
       }),
       // mouse reports and the like arrive as raw bytes in a string
       term.onBinary((data) => send(Uint8Array.from(data, (ch) => ch.charCodeAt(0) & 0xff))),
-      term.onResize(({ cols, rows }) => send(JSON.stringify({ resize: { cols, rows } }))),
+      // A drag sizes the xterm every frame; the pty hears only where it
+      // settled, so a full-screen program is not made to repaint at every
+      // size in between.
+      term.onResize(({ cols, rows }) => {
+        if (sizing) clearTimeout(sizing);
+        sizing = setTimeout(() => {
+          sizing = null;
+          send(JSON.stringify({ resize: { cols, rows } }));
+        }, RESIZE_SETTLE);
+      }),
     ];
     // An image cannot go down a terminal, and the backend has no clipboard
     // for claude to read it from: a pasted or dropped image is uploaded,
@@ -422,12 +435,13 @@ export function TermView({
     // Any change of size refits: the strip dragged taller, the window
     // resized, the tab shown again after being hidden.
     const ro = new ResizeObserver(() => {
-      if (el.offsetParent !== null) fit.fit();
+      if (el.offsetParent !== null) fitSoon();
     });
     ro.observe(el);
     return () => {
       gone = true;
       if (retry) clearTimeout(retry);
+      if (sizing) clearTimeout(sizing);
       ro.disconnect();
       stopGlide();
       if (fitting) cancelAnimationFrame(fitting);
@@ -796,27 +810,155 @@ function TermTabs({
   );
 }
 
-/** The tab row's maximize switch: the shells take the whole of what holds
- *  them (the panel, or the window for the strip), and again gives it back. */
-function FullToggle({ full, onToggle, what }: { full: boolean; onToggle: () => void; what: string }) {
+/** How a set of shells sits: where it lives, taking the whole of what holds
+ *  it (the panel, or the window for the strip), or brought to the front over
+ *  the page, dimmed behind it. */
+type ShellMode = "normal" | "full" | "focus";
+
+/** the textarea of the shell showing in `box`, once the layout has settled */
+const refocus = (box: Element | null) =>
+  requestAnimationFrame(() => box?.querySelector<HTMLElement>(".term-view:not([hidden]) textarea")?.focus());
+
+/** The tab row's switches at its right end: bring to front, and maximize.
+ *  Either again gives the place back; either way focus returns to the shell
+ *  showing so typing carries on where it was. */
+function ModeButtons({ mode, setMode, what }: { mode: ShellMode; setMode: (m: ShellMode) => void; what: string }) {
+  const flip = (m: ShellMode) => (e: MouseEvent<HTMLButtonElement>) => {
+    setMode(mode === m ? "normal" : m);
+    refocus(e.currentTarget.closest("section"));
+  };
+  const focus = mode === "focus";
+  const full = mode === "full";
   return (
-    <button
-      type="button"
-      className={`term-new term-full${full ? " on" : ""}`}
-      title={full ? `Give the ${what} back` : `Shells take the whole ${what}`}
-      aria-label={full ? "Restore shell size" : "Maximize shell"}
-      aria-pressed={full}
-      onClick={(e) => {
-        onToggle();
-        // back to the shell showing, so typing carries on where it was
-        const box = e.currentTarget.closest("section");
-        requestAnimationFrame(() =>
-          box?.querySelector<HTMLElement>(".term-view:not([hidden]) textarea")?.focus(),
-        );
+    <>
+      <button
+        type="button"
+        className={`term-new term-focus${focus ? " on" : ""}`}
+        title={focus ? "Put the shell back" : "Bring the shell to the front"}
+        aria-label={focus ? "Leave focus mode" : "Focus the shell"}
+        aria-pressed={focus}
+        onClick={flip("focus")}
+      >
+        ⧉
+      </button>
+      <button
+        type="button"
+        className={`term-new term-full${full ? " on" : ""}`}
+        title={full ? `Give the ${what} back` : `Shells take the whole ${what}`}
+        aria-label={full ? "Restore shell size" : "Maximize shell"}
+        aria-pressed={full}
+        onClick={flip("full")}
+      >
+        {full ? "⤡" : "⤢"}
+      </button>
+    </>
+  );
+}
+
+/** What sits behind a shell brought to the front: the page, dimmed. A click
+ *  on it puts the shell back. */
+function FocusBackdrop({ onLeave }: { onLeave: () => void }) {
+  return <div className="term-focus-back" aria-hidden="true" onClick={onLeave} />;
+}
+
+/** Escape leaves focus mode from anywhere in the box but the terminal
+ *  itself, where Escape belongs to the program in it. */
+const leaveOnEscape = (mode: ShellMode, setMode: (m: ShellMode) => void) => (e: KeyboardEvent<HTMLElement>) => {
+  if (mode !== "focus" || e.key !== "Escape") return;
+  if (e.target instanceof Element && e.target.closest(".term-screen")) return;
+  e.preventDefault();
+  setMode("normal");
+};
+
+/** The focused shell's size as css vars, or nothing for the default size. */
+const focusVars = (size: FocusSize | null): CSSProperties =>
+  size ? ({ "--focus-w": `${size.w}px`, "--focus-h": `${size.h}px` } as CSSProperties) : {};
+
+/** The edges and corners of a focused shell's box, by compass point. */
+const FOCUS_EDGES = ["n", "e", "s", "w", "ne", "se", "sw", "nw"] as const;
+type FocusEdge = (typeof FOCUS_EDGES)[number];
+
+/** Every edge and corner of a focused shell's box, each dragged to size it. */
+function FocusGrips({ box }: { box: React.RefObject<HTMLElement | null> }) {
+  return (
+    <>
+      {FOCUS_EDGES.map((edge) => (
+        <FocusGrip key={edge} box={box} edge={edge} />
+      ))}
+    </>
+  );
+}
+
+/** One edge or corner of a focused shell: dragged to size the box, which
+ *  stays centred, so pulling any side out grows it on both. Double-clicked
+ *  for the default. The bottom right corner is the one keyboard stop, sized
+ *  by the arrows. It writes the size live to `box` while dragging and
+ *  commits on release. */
+function FocusGrip({ box, edge }: { box: React.RefObject<HTMLElement | null>; edge: FocusEdge }) {
+  // which way a drag grows the box: out past a right or bottom edge is +,
+  // out past a left or top edge is -
+  const sx = edge.includes("e") ? 1 : edge.includes("w") ? -1 : 0;
+  const sy = edge.includes("s") ? 1 : edge.includes("n") ? -1 : 0;
+  const setFocusSize = useStore((s) => s.setFocusSize);
+  const [dragging, setDragging] = useState(false);
+  const start = useRef<{ x: number; y: number; size: FocusSize } | null>(null);
+  const view = (): FocusSize => ({ w: window.innerWidth, h: window.innerHeight });
+  const current = (): FocusSize => {
+    const r = box.current?.getBoundingClientRect();
+    return { w: r?.width ?? 0, h: r?.height ?? 0 };
+  };
+  const sized = (e: PointerEvent<HTMLDivElement>) => {
+    const from = start.current;
+    return from ? focusResize(from.size, sx * (e.clientX - from.x), sy * (e.clientY - from.y), view()) : current();
+  };
+  const apply = (size: FocusSize) => {
+    box.current?.style.setProperty("--focus-w", `${size.w}px`);
+    box.current?.style.setProperty("--focus-h", `${size.h}px`);
+  };
+  const onDown = (e: PointerEvent<HTMLDivElement>) => {
+    if (e.button !== 0) return;
+    e.preventDefault();
+    e.currentTarget.setPointerCapture(e.pointerId);
+    start.current = { x: e.clientX, y: e.clientY, size: current() };
+    setDragging(true);
+  };
+  const onMove = (e: PointerEvent<HTMLDivElement>) => {
+    if (start.current) apply(sized(e));
+  };
+  const onUp = (e: PointerEvent<HTMLDivElement>) => {
+    if (!start.current) return;
+    const size = sized(e);
+    start.current = null;
+    setDragging(false);
+    setFocusSize(size);
+  };
+  const onKey = (e: KeyboardEvent<HTMLDivElement>) => {
+    if (edge !== "se") return;
+    const step = e.shiftKey ? 32 : 8;
+    const d = { ArrowRight: [step, 0], ArrowLeft: [-step, 0], ArrowDown: [0, step], ArrowUp: [0, -step] }[e.key];
+    if (!d) return;
+    e.preventDefault();
+    setFocusSize(focusResize(current(), d[0] ?? 0, d[1] ?? 0, view()));
+  };
+  return (
+    <div
+      className={`focus-grip ${edge}${dragging ? " dragging" : ""}`}
+      role="separator"
+      aria-label="Focused shell size"
+      aria-hidden={edge === "se" ? undefined : true}
+      tabIndex={edge === "se" ? 0 : -1}
+      title="Drag to resize, double-click to reset"
+      onPointerDown={onDown}
+      onPointerMove={onMove}
+      onPointerUp={onUp}
+      onPointerCancel={onUp}
+      onDoubleClick={() => {
+        box.current?.style.removeProperty("--focus-w");
+        box.current?.style.removeProperty("--focus-h");
+        setFocusSize(null);
       }}
-    >
-      {full ? "⤡" : "⤢"}
-    </button>
+      onKeyDown={onKey}
+    />
   );
 }
 
@@ -831,41 +973,51 @@ export function TermDock() {
   const termHeight = useStore((s) => s.termHeight);
   const setTermHeight = useStore((s) => s.setTermHeight);
   const showTerm = useStore((s) => s.showTerm);
+  const focusSize = useStore((s) => s.focusSize);
   const dock = useRef<HTMLElement>(null);
-  const [full, setFull] = useState(false);
+  const [mode, setMode] = useState<ShellMode>("normal");
   const strip = terms.filter((t) => t.place === "strip");
 
   if (strip.length === 0) return null;
+  const leave = () => {
+    setMode("normal");
+    refocus(dock.current);
+  };
   return (
-    <section
-      ref={dock}
-      className={`termdock${full ? " full" : ""}`}
-      aria-label="Shells"
-      style={{ "--term-h": `${termHeight}px` } as CSSProperties}
-    >
-      {!full && (
-        <TermGrip
-          box={dock}
-          cssVar="--term-h"
-          label="Terminal strip height"
-          height={termHeight}
-          setHeight={setTermHeight}
-          bounds={TERM}
+    <>
+      {mode === "focus" && <FocusBackdrop onLeave={leave} />}
+      <section
+        ref={dock}
+        className={`termdock${mode === "normal" ? "" : ` ${mode}`}`}
+        aria-label="Shells"
+        style={{ "--term-h": `${termHeight}px`, ...focusVars(focusSize) } as CSSProperties}
+        onKeyDown={leaveOnEscape(mode, setMode)}
+      >
+        {mode === "normal" && (
+          <TermGrip
+            box={dock}
+            cssVar="--term-h"
+            label="Terminal strip height"
+            height={termHeight}
+            setHeight={setTermHeight}
+            bounds={TERM}
+          />
+        )}
+        <TermTabs
+          terms={strip}
+          active={activeTerm}
+          onShow={showTerm}
+          caption="shells"
+          end={<ModeButtons mode={mode} setMode={setMode} what="window" />}
         />
-      )}
-      <TermTabs
-        terms={strip}
-        active={activeTerm}
-        onShow={showTerm}
-        caption="shells"
-        end={<FullToggle full={full} onToggle={() => setFull(!full)} what="window" />}
-      />
-      <div className="term-body">
-        {strip.map((t) => (
-          <TermView key={viewKey(t)} tab={t} active={t.id === activeTerm} />
-        ))}
-      </div>
-    </section>
+        <div className="term-body">
+          {strip.map((t) => (
+            <TermView key={viewKey(t)} tab={t} active={t.id === activeTerm} />
+          ))}
+        </div>
+        {mode === "focus" && <FocusGrips box={dock} />}
+      </section>
+    </>
   );
 }
 
@@ -882,8 +1034,9 @@ export function PanelShells({ repo }: { repo: Repo }) {
   const toggleSection = useStore((s) => s.toggleSection);
   const panelTermHeight = useStore((s) => panelTermHeightFor(s, repo.id));
   const setPanelTermHeight = useStore((s) => s.setPanelTermHeight);
+  const focusSize = useStore((s) => s.focusSize);
   const box = useRef<HTMLElement>(null);
-  const [full, setFull] = useState(false);
+  const [chosenMode, setMode] = useState<ShellMode>("normal");
   const mine = terms.filter((t) => t.place === "panel" && t.repoId === repo.id);
   const [chosen, setChosen] = useState<string | null>(null);
   // the newest shell shows until another tab is picked
@@ -896,59 +1049,70 @@ export function PanelShells({ repo }: { repo: Repo }) {
   const active = mine.some((t) => t.id === chosen) ? chosen : latest;
 
   if (mine.length === 0) return null;
+  // folded, the shells are neither maximized nor in front
+  const mode: ShellMode = closed ? "normal" : chosenMode;
+  const leave = () => {
+    setMode("normal");
+    refocus(box.current);
+  };
   return (
-    <section
-      ref={box}
-      className={`panel-shells${full && !closed ? " full" : ""}`}
-      aria-label={`Shells at ${repo.name}`}
-      style={{ "--panel-term-h": `${panelTermHeight}px` } as CSSProperties}
-    >
-      {!closed && !full && (
-        <TermGrip
-          box={box}
-          cssVar="--panel-term-h"
-          label={`Shell height at ${repo.name}`}
-          height={panelTermHeight}
-          setHeight={(px) => setPanelTermHeight(repo.id, px)}
-          bounds={PANEL_TERM}
-        />
-      )}
-      <button
-        type="button"
-        className={`panel-label fold${closed ? "" : " open"}`}
-        aria-expanded={!closed}
-        onClick={() => toggleSection(repo.id, "shell")}
+    <>
+      {mode === "focus" && <FocusBackdrop onLeave={leave} />}
+      <section
+        ref={box}
+        className={`panel-shells${mode === "normal" ? "" : ` ${mode}`}`}
+        aria-label={`Shells at ${repo.name}`}
+        style={{ "--panel-term-h": `${panelTermHeight}px`, ...focusVars(focusSize) } as CSSProperties}
+        onKeyDown={leaveOnEscape(mode, setMode)}
       >
-        shell <span>{mine.length}</span>
-      </button>
-      {/* Kept mounted while folded (display:none via `hidden`) so the shells
+        {mode === "normal" && !closed && (
+          <TermGrip
+            box={box}
+            cssVar="--panel-term-h"
+            label={`Shell height at ${repo.name}`}
+            height={panelTermHeight}
+            setHeight={(px) => setPanelTermHeight(repo.id, px)}
+            bounds={PANEL_TERM}
+          />
+        )}
+        <button
+          type="button"
+          className={`panel-label fold${closed ? "" : " open"}`}
+          aria-expanded={!closed}
+          onClick={() => toggleSection(repo.id, "shell")}
+        >
+          shell <span>{mine.length}</span>
+        </button>
+        {/* Kept mounted while folded (display:none via `hidden`) so the shells
           keep running: unmounting a TermView hangs up its pty. */}
-      <div className="panel-shells-body" hidden={closed}>
-        <TermTabs
-          terms={mine}
-          active={active}
-          onShow={setChosen}
-          caption=""
-          extra={
-            <button
-              type="button"
-              className="term-new"
-              title="Another shell at this repo, here"
-              aria-label="New shell"
-              onClick={() => openTerm(repo.id, "panel")}
-            >
-              +
-            </button>
-          }
-          end={<FullToggle full={full} onToggle={() => setFull(!full)} what="panel" />}
-        />
-        <div className="term-body">
-          {mine.map((t) => (
-            <TermView key={viewKey(t)} tab={t} active={t.id === active && !closed} />
-          ))}
+        <div className="panel-shells-body" hidden={closed}>
+          <TermTabs
+            terms={mine}
+            active={active}
+            onShow={setChosen}
+            caption={mode === "focus" ? repo.name : ""}
+            extra={
+              <button
+                type="button"
+                className="term-new"
+                title="Another shell at this repo, here"
+                aria-label="New shell"
+                onClick={() => openTerm(repo.id, "panel")}
+              >
+                +
+              </button>
+            }
+            end={<ModeButtons mode={mode} setMode={setMode} what="panel" />}
+          />
+          <div className="term-body">
+            {mine.map((t) => (
+              <TermView key={viewKey(t)} tab={t} active={t.id === active && !closed} />
+            ))}
+          </div>
         </div>
-      </div>
-    </section>
+        {mode === "focus" && <FocusGrips box={box} />}
+      </section>
+    </>
   );
 }
 
