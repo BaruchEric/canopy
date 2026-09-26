@@ -12,7 +12,8 @@
     "build": "vite build ui",
     "typecheck": "tsc --noEmit -p tsconfig.json && tsc --noEmit -p ui/tsconfig.json",
     "lint": "oxlint src ui/src bin",
-    "test": "bun test"
+    "test": "bun test",
+    "redeploy": "bash scripts/redeploy.sh"
   },
   "dependencies": {
     "@ai-sdk/gateway": "^4.0.85",

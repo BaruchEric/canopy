@@ -117,9 +117,16 @@ Reach it from any device on the tailnet at `http://macmini-2018:7850`. The
 first load lists your repos; open a shell, start a Claude chat, read a diff. On
 a phone the desktop openers are simply absent.
 
-To pick up new canopy code, commit it on the Mac, wait for the mini's next
-peer pass (five minutes, or "sync now" in any repo's peers section) to
-fast-forward the mini's checkout, then run the same command there; the
+To pick up new canopy code, run `bun run redeploy` in the checkout. On the
+Mac it fast-forwards the mini's checkout to the Mac's committed `main` through
+the `mac` peer remote and deploys there. In a canopy shell on the mini it
+deploys the mini's own checkout (`--pull` takes the Mac's first) over ssh to
+the host, with a key whose `authorized_keys` line runs only
+`scripts/redeploy.sh --gate`; `scripts/redeploy-setup.sh` on the mini makes
+that key once. The compose run is detached and logged under
+`~/.cache/canopy-deploy/` (`bun run redeploy log`), `bun run redeploy status`
+says what is running, and a deploy that would recreate the shells container
+stops unless given `--shells`. By hand it is the same command as above; the
 canopy image rebuilds and its container is replaced. The rsync no longer
 carries canopy's checkout, so an uncommitted change on the Mac never reaches
 the mini's build, and a dirty checkout on the mini is not fast-forwarded. Config in
