@@ -1,7 +1,7 @@
 import { createContext, useContext, useEffect, useRef, useState } from "react";
 import type { CSSProperties, KeyboardEvent, PointerEvent, ReactNode, RefObject } from "react";
 import { openSectionElsewhere } from "../routes";
-import { closedIn, useStore } from "../store";
+import { closedIn, idText, useStore } from "../store";
 import {
   SECTION_WORD,
   flipMode,
@@ -373,7 +373,7 @@ export function Section({
     { label: "layout", entries: [...layout, ...common] },
     {
       label: "share",
-      entries: shareEntries({ el: () => box.current, label: `${word} ${repo.id}`, copy, paste, noCapture }),
+      entries: shareEntries({ el: () => box.current, label: `${word} ${idText(repo.id)}`, copy, paste, noCapture }),
     },
   ];
   const leave = () => setMode("normal");

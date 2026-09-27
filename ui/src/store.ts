@@ -1,9 +1,11 @@
 import { create } from "zustand";
 import { api, onBackendSignal, resolveBase, subscribe } from "./api";
-import { backendOf, homeName, qual, registry, setBase, setRegistry } from "./registry";
+import { backendOf, homeName, isHome, plainOf, qual, registry, setBase, setRegistry } from "./registry";
 import { backendState, sliceIn, split, type BackendStatus, type Reg } from "./backends";
 import { mergeHistory } from "./qualify";
 import { applyQuery, type RepoFilter } from "./filters";
+import { cardChangedAt, joinRepos, leadOf, type RepoCard } from "./checkouts";
+import { changedAt } from "./grouping";
 import { focusPanel, nextActive } from "./dock";
 import { heldShellUrl, openElsewhere, openShellElsewhere, parseRoute } from "./routes";
 import { loadSettings, saveSettings, shellPlace, type Settings, type ShellPlace } from "./settings";
@@ -420,10 +422,27 @@ const isShown = (s: Pick<CanopyState, "home" | "backendOrder">, name: string): b
  *  instead of dropping, and a home scan leaves its panels alone. */
 let known: Reg = { home: "", names: [""] };
 
-/** the backend an id belongs to, hidden backends included */
-function ownerOf(id: string): string {
+/** the backend an id belongs to and the id it knows, hidden backends
+ *  included, so a hidden backend's panel is never named by its page id */
+export function idParts(id: string): [string, string] {
   const reg = registry();
-  return split(known.home === reg.home ? known : reg, id)[0];
+  return split(known.home === reg.home ? known : reg, id);
+}
+
+/** the backend an id belongs to, hidden backends included */
+const ownerOf = (id: string): string => idParts(id)[0];
+
+/** What a page prints for an id: the id its backend knows, and the
+ *  backend's name when that is not home. Never the page's own prefix. */
+export function idLabel(id: string): { plain: string; backend: string | null } {
+  const [b, plain] = idParts(id);
+  return { plain, backend: b === registry().home ? null : b };
+}
+
+/** `idLabel` as one line of text, for a title or an aria label */
+export function idText(id: string): string {
+  const { plain, backend } = idLabel(id);
+  return backend ? `${plain} on ${backend}` : plain;
 }
 
 /** whether an id is one backend's */
@@ -625,6 +644,9 @@ interface CanopyState {
   hideBackend: (name: string, hidden: boolean) => void;
   /** which backend's checkout a card stands for */
   setCheckoutPref: (key: string, backend: string) => void;
+  /** a panel shows a sibling checkout of its repo instead: the id is
+   *  replaced where it sits in the dock, and the card leads with it */
+  switchCheckout: (fromId: string, toId: string) => void;
   /** re-reads one backend's tree and its runs, flows, fleets and jobs */
   rescan: (backend?: string) => Promise<void>;
   /** adds a folder on a backend's machine or over ssh from it; resolves
@@ -1409,6 +1431,28 @@ export const useStore = create<CanopyState>((set, get) => ({
   },
 
   setCheckoutPref: (key, backend) => set((s) => ({ checkoutPref: { ...s.checkoutPref, [key]: backend } })),
+  switchCheckout: (fromId, toId) =>
+    set((s) => {
+      if (fromId === toId) return {};
+      const card = cardOf(s, fromId);
+      // the sibling's panel may be open already; it keeps its place then
+      const panels = s.panels.includes(toId)
+        ? s.panels.filter((p) => p !== fromId)
+        : s.panels.map((p) => (p === fromId ? toId : p));
+      const activePanel = s.activePanel === fromId ? toId : s.activePanel;
+      // like a close: the old panel's shell tabs go, the shells stay held
+      const kept = s.terms.filter((t) => !(t.repoId === fromId && t.place === "panel"));
+      const terms = dockless() ? kept : adoptTerms(kept, s.shells, s.repos, panels, skipped(s.hiddenTerms));
+      const width = s.panelWidths[fromId];
+      return {
+        panels,
+        activePanel,
+        terms,
+        frontShells: keepFront(s.frontShells, terms),
+        ...(width !== undefined && s.panelWidths[toId] === undefined ? { panelWidths: { ...s.panelWidths, [toId]: width } } : {}),
+        ...(card ? { checkoutPref: { ...s.checkoutPref, [card.key]: backendOf(toId) } } : {}),
+      };
+    }),
 
   loadHistory: async (refresh = false, backend) => {
     const b = backend ?? get().home;
@@ -1999,7 +2043,8 @@ export const useStore = create<CanopyState>((set, get) => ({
       if (extend && s.selectAnchor && s.selectAnchor !== repoId) {
         // the range takes the anchor's state, so a shift-click after an
         // unpick clears the stretch and one after a pick fills it
-        const ids = rangeIds(boardOrder(visibleRepos(s), s.settings.sort, s.collapsed), s.selectAnchor, repoId);
+        const at = multi(s) ? boardChangedAt(s) : undefined;
+        const ids = rangeIds(boardOrder(visibleRepos(s), s.settings.sort, s.collapsed, at), s.selectAnchor, repoId);
         return { selected: setPick(s.selected, ids, s.selected.includes(s.selectAnchor)) };
       }
       return { selected: togglePick(s.selected, [repoId]), selectAnchor: repoId };
@@ -2164,7 +2209,8 @@ export function jobsFor(s: CanopyState, repoId: string): Job[] {
 
 /** repos in the active workspace, before any filter. A forge repo that is
  *  already cloned here is the same repo as the card next to it, so unless
- *  the setting says otherwise only the ones missing locally get one. */
+ *  the setting says otherwise only the ones missing locally get one. A
+ *  workspace is the home backend's, so it holds only home's checkouts. */
 export function scopedRepos(s: CanopyState): Repo[] {
   const all =
     s.settings.forge === "all"
@@ -2172,7 +2218,94 @@ export function scopedRepos(s: CanopyState): Repo[] {
       : s.repos.filter((r) => r.forge?.clonedAs === undefined);
   if (!s.activeWs) return all;
   const ws = s.workspaces.find((w) => w.name === s.activeWs);
-  return ws ? all.filter((r) => ws.repos.includes(r.path)) : all;
+  return ws ? all.filter((r) => isHome(r.id) && ws.repos.includes(r.path)) : all;
+}
+
+/** `next` itself, or `prev` when it holds the same things in the same
+ *  order, so a selector over it settles */
+function same<T>(prev: readonly T[] | null, next: T[]): T[] {
+  return prev !== null && prev.length === next.length && prev.every((x, i) => x === next[i]) ? (prev as T[]) : next;
+}
+
+/* The board's cards, memoized on what they are made of. One store per page,
+   so one slot per selector; a card whose checkouts did not move is the same
+   object as before, so a repo event re-renders one card, not all of them. */
+let cardsIn: { repos: Repo[]; forge: unknown; ws: string | null; wss: unknown; order: string[] } | null = null;
+let cardsOut: RepoCard[] = [];
+let cardsByKey = new Map<string, RepoCard>();
+let cardIndex = new Map<string, RepoCard>();
+
+/** Every repo in scope as a card: one per repo, with its checkouts on every
+ *  backend. With one backend, one card per repo in scan order. */
+export function allCards(s: CanopyState): RepoCard[] {
+  const c = cardsIn;
+  if (c && c.repos === s.repos && c.forge === s.settings.forge && c.ws === s.activeWs && c.wss === s.workspaces && c.order === s.backendOrder)
+    return cardsOut;
+  const reg = registry();
+  const fresh = joinRepos(scopedRepos(s), s.backendOrder, (id) => split(reg, id));
+  const byKey = new Map<string, RepoCard>();
+  const out = fresh.map((card) => {
+    const old = cardsByKey.get(card.key);
+    const keep = old && old.name === card.name && old.checkouts.length === card.checkouts.length && old.checkouts.every((x, i) => x === card.checkouts[i]);
+    const it = keep ? old : card;
+    byKey.set(it.key, it);
+    return it;
+  });
+  cardsIn = { repos: s.repos, forge: s.settings.forge, ws: s.activeWs, wss: s.workspaces, order: s.backendOrder };
+  cardsOut = same(cardsOut, out);
+  cardsByKey = byKey;
+  cardIndex = new Map(cardsOut.flatMap((card) => card.checkouts.map((r) => [r.id, card] as const)));
+  return cardsOut;
+}
+
+/** The card a checkout is on, whichever checkout of it. */
+export function cardOf(s: CanopyState, repoId: string): RepoCard | undefined {
+  allCards(s);
+  return cardIndex.get(repoId);
+}
+
+let viewIn: { cards: RepoCard[]; filters: unknown; users: unknown; attention: boolean; text: string } | null = null;
+let viewOut: RepoCard[] = [];
+
+/** The cards the filters leave: a card is in view when any of its
+ *  checkouts passes. Callers select through useShallow. */
+export function visibleCards(s: CanopyState): RepoCard[] {
+  const cards = allCards(s);
+  const v = viewIn;
+  if (v && v.cards === cards && v.filters === s.filters && v.users === s.users && v.attention === s.dirtyOnly && v.text === s.filter)
+    return viewOut;
+  const q = { filters: s.filters, users: s.users, attention: s.dirtyOnly, text: s.filter };
+  viewIn = { cards, filters: s.filters, users: s.users, attention: s.dirtyOnly, text: s.filter };
+  viewOut = same(viewOut, cards.filter((card) => applyQuery(card.checkouts, q, plainOf).length > 0));
+  return viewOut;
+}
+
+let leadIn: { cards: RepoCard[]; pref: Record<string, string>; online: string } | null = null;
+let leadOut: Repo[] = [];
+
+/** The checkout each card in view shows and opens: see `leadOf`. With one
+ *  backend, the repos the filters leave, as they always were. Callers
+ *  select through useShallow. */
+export function visibleRepos(s: CanopyState): Repo[] {
+  const cards = visibleCards(s);
+  const online = s.backendOrder.map((b) => (isOnline(s, b) ? "1" : "0")).join("");
+  const l = leadIn;
+  if (l && l.cards === cards && l.pref === s.checkoutPref && l.online === online) return leadOut;
+  leadIn = { cards, pref: s.checkoutPref, online };
+  leadOut = same(
+    leadOut,
+    cards.map((card) => leadOf(card, s.checkoutPref[card.key], (b) => isOnline(s, b), backendOf)),
+  );
+  return leadOut;
+}
+
+/** When a repo last changed, for the board's grouping: its card's newest
+ *  checkout's change, which is its own with one backend. */
+export function boardChangedAt(s: CanopyState): (r: Repo) => number {
+  return (r) => {
+    const card = cardOf(s, r.id);
+    return card ? cardChangedAt(card) : changedAt(r);
+  };
 }
 
 /** how many repos the "needs attention" toggle would keep */
@@ -2185,14 +2318,6 @@ export function activeFilterCount(s: CanopyState): number {
   return s.filters.length + s.users.length;
 }
 
-export function visibleRepos(s: CanopyState): Repo[] {
-  return applyQuery(scopedRepos(s), {
-    filters: s.filters,
-    users: s.users,
-    attention: s.dirtyOnly,
-    text: s.filter,
-  });
-}
 
 /** The ids a fleet could be pointed at right now: pickable and in view.
  *  Callers select through useShallow. */

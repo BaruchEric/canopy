@@ -9,6 +9,8 @@ import { PanelShells } from "./TermDock";
 import { Resizer } from "./Resizer";
 import { RunSheet } from "./RunSheet";
 import { Wordmark } from "./TopBar";
+import { IdLabel, WaitingFor, useWaitingFor } from "./IdLabel";
+import { idText } from "../store";
 
 /** the window's inner width, kept current across resizes */
 function useWindowWidth(): number {
@@ -28,6 +30,7 @@ export function Solo({ id }: { id: string }) {
   const soloWidth = useStore((s) => s.soloWidth);
   const setSoloWidth = useStore((s) => s.setSoloWidth);
   const name = repo?.name;
+  const waiting = useWaitingFor(id, repo !== undefined);
   // The drag stops at the window's edge, so a stored width wider than this
   // window does not leave the handle stuck for the first few px of a pull.
   const windowWidth = useWindowWidth();
@@ -54,7 +57,9 @@ export function Solo({ id }: { id: string }) {
         <span className="root-path" title={root}>
           {root}
         </span>
-        <span className="solo-id">{id}</span>
+        <span className="solo-id">
+          <IdLabel id={id} />
+        </span>
         <span className="spacer" />
         <a className="mini" href={groveUrl()} target="_blank">
           whole grove ↗
@@ -70,9 +75,11 @@ export function Solo({ id }: { id: string }) {
             <RepoPanel id={id} width={0} onClose={close} />
             <SoloResizer dir={1} value={soloWidth} max={max} onCommit={setSoloWidth} />
           </>
+        ) : waiting ? (
+          <WaitingFor name={waiting} />
         ) : (
           <p className="empty">
-            No repo called {id} under {root}.{" "}
+            No repo called {idText(id)} under {root}.{" "}
             <a href={groveUrl()}>Open the whole grove</a> instead.
           </p>
         )}
@@ -94,6 +101,7 @@ export function SectionSolo({ id, section }: { id: string; section: SectionKey }
   const max = Math.max(SOLO.min, Math.min(SOLO.max, windowWidth));
   const word = SECTION_WORD[section];
   const name = repo?.name;
+  const waiting = useWaitingFor(id, repo !== undefined);
 
   useEffect(() => {
     document.title = name ? `${name} · ${word} · canopy` : "canopy";
@@ -110,7 +118,7 @@ export function SectionSolo({ id, section }: { id: string; section: SectionKey }
           {root}
         </span>
         <span className="solo-id">
-          {id} · {word}
+          <IdLabel id={id} /> · {word}
         </span>
         <span className="spacer" />
         {repo && (
@@ -137,9 +145,11 @@ export function SectionSolo({ id, section }: { id: string; section: SectionKey }
             </section>
             <SoloResizer dir={1} value={soloWidth} max={max} onCommit={setSoloWidth} />
           </>
+        ) : waiting ? (
+          <WaitingFor name={waiting} />
         ) : (
           <p className="empty">
-            No readable repo called {id} under {root}. <a href={groveUrl()}>Open the whole grove</a> instead.
+            No readable repo called {idText(id)} under {root}. <a href={groveUrl()}>Open the whole grove</a> instead.
           </p>
         )}
       </div>

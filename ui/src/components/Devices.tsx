@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { clientId } from "../client";
-import { useStore } from "../store";
+import { idText, useStore } from "../store";
 import { useFitPop } from "../pop";
 import type { Device, TermInfo } from "../../../src/core/types";
 
@@ -66,7 +66,7 @@ export function DevicesChip() {
     };
   }, [open]);
 
-  const repoName = (id: string) => repos.find((r) => r.id === id)?.name ?? id;
+  const repoName = (id: string) => repos.find((r) => r.id === id)?.name ?? idText(id);
   const others = devices.filter((d) => d.id !== me).length;
 
   return (

@@ -88,6 +88,14 @@ describe("applyQuery", () => {
   test("text matches the id, not just the name, ignoring case", () => {
     expect(names(applyQuery(grove, { ...none, text: "G/DI" }))).toEqual(["dirty"]);
   });
+
+  test("text matches the id the backend knows, never another backend's prefix", () => {
+    const list = [repo("mac|dev/one", null), repo("dev/mac-tools", null)];
+    const plain = (id: string) => id.replace(/^mac\|/, "");
+    expect(names(applyQuery(list, { ...none, text: "mac" }, plain))).toEqual(["mac-tools"]);
+    expect(names(applyQuery(list, { ...none, text: "dev/one" }, plain))).toEqual(["one"]);
+    expect(names(applyQuery(list, { ...none, text: "c|d" }, plain))).toEqual([]);
+  });
 });
 
 describe("countFacets", () => {

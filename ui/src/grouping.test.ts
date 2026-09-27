@@ -77,6 +77,22 @@ describe("groupRepos", () => {
     ]);
   });
 
+  test("recent buckets and orders by the time it is handed", () => {
+    const old = repo("web/old", "web", { lastCommit: at(200) });
+    const fresh = repo("web/fresh", "web", { lastCommit: at(2) });
+    // a card whose other checkout changed today
+    const card = (r: Repo) => (r === old ? NOW - 60 : changedAt(r));
+    expect(ids(groupRepos([fresh, old], "recent", NOW))).toEqual([
+      ["this week", ["fresh"]],
+      ["dormant", ["old"]],
+    ]);
+    expect(ids(groupRepos([fresh, old], "recent", NOW, card))).toEqual([
+      ["today", ["old"]],
+      ["this week", ["fresh"]],
+    ]);
+    expect(ids(groupRepos([fresh, old], "activity", NOW, card))).toEqual([["quiet", ["old", "fresh"]]]);
+  });
+
   test("recent goes by the last commit or edit, whichever is newer", () => {
     const hour = 3600;
     const edited = (daysAgo: number, at: number) => ({ ...file, mtime: NOW - daysAgo * DAY + at });

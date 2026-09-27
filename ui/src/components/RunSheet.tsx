@@ -2,7 +2,7 @@ import { useEffect, useRef, useState, type ReactNode } from "react";
 import { ACTIONS, repoFacts } from "../../../src/core/actions";
 import { describeAgent, isDefaultAgent } from "../../../src/core/agent";
 import { describeLaunch, isDefaultLaunch } from "../../../src/core/launch";
-import { agentFor, launchFor, useStore, type Sheet } from "../store";
+import { agentFor, idText, launchFor, useStore, type Sheet } from "../store";
 import { FleetPlan, FleetSheet, FlowConsole, FlowPlan } from "./FlowSheet";
 import { SearchSheet } from "./Search";
 import {
@@ -168,7 +168,7 @@ function Plan({ repo, action }: { repo: Repo; action: RunAction }) {
         <div>
           <div className="eyebrow">with claude</div>
           <h2 className="sheet-title">
-            {spec.verb} <span className="sheet-repo">{repo.id}</span>
+            {spec.verb} <span className="sheet-repo">{idText(repo.id)}</span>
           </h2>
         </div>
         <button type="button" className="mini close" onClick={close} aria-label="Close">
@@ -370,7 +370,7 @@ function Console({ run, repo }: { run: Run; repo: Repo | undefined }) {
         <div>
           <div className="eyebrow">with claude{run.by && <span className="run-by" title="the device that started it"> · from {run.by}</span>}</div>
           <h2 className="sheet-title">
-            {run.verb} <span className="sheet-repo">{run.repoId}</span>
+            {run.verb} <span className="sheet-repo">{idText(run.repoId)}</span>
           </h2>
         </div>
         <span className={`status st-${run.status}${noChange ? " no-change" : ""}`}>
@@ -588,7 +588,7 @@ function AgentForm({ repo }: { repo: Repo }) {
         <div>
           <div className="eyebrow">with claude</div>
           <h2 className="sheet-title">
-            agent settings <span className="sheet-repo">{repo.id}</span>
+            agent settings <span className="sheet-repo">{idText(repo.id)}</span>
           </h2>
         </div>
         <button type="button" className="mini close" onClick={close} aria-label="Close">
@@ -722,7 +722,7 @@ function LaunchForm({ repo }: { repo: Repo }) {
         <div>
           <div className="eyebrow">launch</div>
           <h2 className="sheet-title">
-            launch settings <span className="sheet-repo">{repo.id}</span>
+            launch settings <span className="sheet-repo">{idText(repo.id)}</span>
           </h2>
         </div>
         <button type="button" className="mini close" onClick={close} aria-label="Close">

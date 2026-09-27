@@ -15,7 +15,9 @@ export interface Route {
   section: SectionKey | null;
 }
 
-const TERM_ID = /^[0-9a-f]{32}$/;
+/** a shell's name: 32 hex digits, after another backend's name for one of
+ *  its shells */
+const TERM_ID = /^(?:[a-z0-9-]+\|)?[0-9a-f]{32}$/;
 
 export function parseRoute(search: string): Route {
   const q = new URLSearchParams(search);

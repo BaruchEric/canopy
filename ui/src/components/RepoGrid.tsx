@@ -2,9 +2,23 @@ import { memo, useEffect, useMemo, useRef, useState } from "react";
 import { useShallow } from "zustand/react/shallow";
 import { pickable } from "../flows";
 import { changedAt, groupRepos, newestEdit, sectionKey } from "../grouping";
+import { cardChangedAt } from "../checkouts";
 import { PeerChips, Pulls, RemoteTipChip, whenTitle } from "./RemoteTip";
 import { pickCount, pickState } from "../select";
-import { activeFlowFor, flowFor, runFor, useStore, visibleRepos } from "../store";
+import {
+  activeFlowFor,
+  boardChangedAt,
+  cardOf,
+  flowFor,
+  isOnline,
+  multi,
+  runFor,
+  useStore,
+  visibleCards,
+  visibleRepos,
+} from "../store";
+import { backendOf } from "../registry";
+import type { RepoCard as Card } from "../checkouts";
 import { ago, GLYPH, stateOf } from "../util";
 import { GroupHead } from "./GroupHead";
 import { Tick } from "./SelectBar";
@@ -14,8 +28,88 @@ import { Rings } from "./Rings";
 import { FlowChip, RunChip } from "./RunChip";
 import { historyFor, type Repo } from "../../../src/core/types";
 
+/** What a machine chip's tooltip says about its backend. */
+function machineTitle(backend: string, state: string, reason: string | undefined, repo: Repo): string {
+  switch (state) {
+    case "online":
+      return `${repo.name} on ${backend}${repo.status ? `, on ${repo.status.branch}` : ""}`;
+    case "signin":
+      return `sign in to ${backend}; showing what it last said`;
+    case "connecting":
+      return `waiting for ${backend}`;
+    default:
+      return `${backend} is offline${reason ? `: ${reason}` : ""}; showing what it last said`;
+  }
+}
+
+/** One chip per machine that has the repo checked out, in the registry's
+ *  order: its name, its changed count, how far it is ahead or behind. The
+ *  lead is lit; a click opens that machine's checkout and makes it the
+ *  card's lead. In select mode the chips only say, since a click picks. */
+function MachineStrip({ card, lead, selecting }: { card: Card; lead: string; selecting: boolean }) {
+  const conns = useStore((s) => s.conns);
+  const openRepo = useStore((s) => s.openRepo);
+  const setPref = useStore((s) => s.setCheckoutPref);
+  return (
+    <div className="machines" role="group" aria-label={`${card.name} on each machine`}>
+      {card.checkouts.map((c) => {
+        const b = backendOf(c.id);
+        const status = conns[b]?.status;
+        const state = status?.state ?? "connecting";
+        const on = c.id === lead;
+        const dirty = c.status?.files.length ?? 0;
+        const ahead = c.status?.ahead ?? 0;
+        const behind = c.status?.behind ?? 0;
+        const inner = (
+          <>
+            <span className="machine-name">{b}</span>
+            {dirty > 0 && <span className="machine-dirty">{dirty}●</span>}
+            {ahead > 0 && <span className="ahead">↑{ahead}</span>}
+            {behind > 0 && <span className="behind">↓{behind}</span>}
+          </>
+        );
+        const cls = `machine${on ? " on" : ""}${state === "online" ? "" : " away"}`;
+        const title = machineTitle(b, state, status?.reason, c);
+        if (selecting) {
+          return (
+            <span key={c.id} className={cls} title={title}>
+              {inner}
+            </span>
+          );
+        }
+        return (
+          <button
+            key={c.id}
+            type="button"
+            className={cls}
+            title={title}
+            aria-pressed={on}
+            onClick={(e) => {
+              e.stopPropagation();
+              setPref(card.key, b);
+              openRepo(c.id, e);
+            }}
+            onAuxClick={(e) => {
+              e.stopPropagation();
+              if (e.button === 1) openRepo(c.id, { metaKey: true });
+            }}
+            // the card opens its lead on Enter; this chip opens its own
+            onKeyDown={(e) => e.stopPropagation()}
+          >
+            {inner}
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
 const RepoCard = memo(function RepoCard({ repo }: { repo: Repo }) {
   const openRepo = useStore((s) => s.openRepo);
+  const many = useStore(multi);
+  const card = useStore((s) => (multi(s) ? cardOf(s, repo.id) : undefined));
+  // a card none of whose machines answers is shown as it last was, dimmed
+  const away = useStore((s) => card !== undefined && !card.checkouts.some((c) => isOnline(s, backendOf(c.id))));
   const updatedAt = useStore((s) => s.updatedAt[repo.id]);
   const run = useStore((s) => runFor(s, repo.id));
   const flow = useStore((s) => flowFor(s, repo.id));
@@ -55,7 +149,7 @@ const RepoCard = memo(function RepoCard({ repo }: { repo: Repo }) {
       : "";
   return (
     <article
-      className={`card s-${state}${pulse ? " pulse" : ""}${live}${selecting && picked ? " picked" : ""}${selecting && !canPick ? " unpickable" : ""}`}
+      className={`card s-${state}${pulse ? " pulse" : ""}${live}${selecting && picked ? " picked" : ""}${selecting && !canPick ? " unpickable" : ""}${away ? " away" : ""}`}
       onClick={(e) => {
         if (selecting) {
           toggleSelected(repo.id, e.shiftKey);
@@ -118,6 +212,7 @@ const RepoCard = memo(function RepoCard({ repo }: { repo: Repo }) {
           <RepoMenu repo={repo} />
         </span>
       </div>
+      {many && card && <MachineStrip card={card} lead={repo.id} selecting={selecting} />}
       {repo.description && (
         <p className="card-desc" title={repo.description}>
           {repo.description}
@@ -154,7 +249,7 @@ const RepoCard = memo(function RepoCard({ repo }: { repo: Repo }) {
           </span>
         )}
         <span className="when" title={title}>
-          {ago(changedAt(repo))}
+          {ago(card ? cardChangedAt(card) : changedAt(repo))}
         </span>
       </div>
       {history && overview?.available && (
@@ -188,11 +283,17 @@ function GroupPick({ label, ids, total }: { label: string; ids: string[]; total:
 
 export function RepoGrid() {
   const repos = useStore(useShallow(visibleRepos));
+  // a card moves in time when any of its checkouts changes, not only its lead
+  const cards = useStore(useShallow(visibleCards));
+  const many = useStore(multi);
   const sort = useStore((s) => s.settings.sort);
   const collapsed = useStore((s) => s.collapsed);
   const toggleGroup = useStore((s) => s.toggleGroup);
   const selecting = useStore((s) => s.selecting);
-  const groups = useMemo(() => groupRepos(repos, sort), [repos, sort]);
+  const groups = useMemo(
+    () => groupRepos(repos, sort, undefined, many && cards.length > 0 ? boardChangedAt(useStore.getState()) : undefined),
+    [repos, cards, many, sort],
+  );
 
   if (repos.length === 0) {
     return (

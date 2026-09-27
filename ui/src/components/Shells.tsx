@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { api } from "../api";
 import { clientId } from "../client";
-import { useStore } from "../store";
+import { idText, useStore } from "../store";
 import { useFitPop } from "../pop";
 import type { ClaudeSession } from "../../../src/core/types";
 
@@ -99,7 +99,7 @@ export function ShellsChip() {
     };
   }, [open, repoId]);
 
-  const repoName = (id: string) => repos.find((r) => r.id === id)?.name ?? id;
+  const repoName = (id: string) => repos.find((r) => r.id === id)?.name ?? idText(id);
   const here = new Set(terms.map((t) => t.id));
   const list = [...shells].sort((a, b) => b.startedAt - a.startedAt);
   const elsewhere = list.filter((t) => !here.has(t.id)).length;

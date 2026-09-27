@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { homeConn, useStore } from "../store";
+import { homeConn, idText, useStore } from "../store";
 import { useFitPop } from "../pop";
 
 /** "2m", "3h", "2d": how long ago a kept shell was last written out */
@@ -53,7 +53,7 @@ export function KeptShells() {
 
   if (kept.length === 0 && !open) return null;
 
-  const repoName = (id: string) => repos.find((r) => r.id === id)?.name ?? id;
+  const repoName = (id: string) => repos.find((r) => r.id === id)?.name ?? idText(id);
   const run = async (id: string, what: () => Promise<void>) => {
     setBusy(id);
     setError("");

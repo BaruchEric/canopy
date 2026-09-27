@@ -4,7 +4,8 @@ import { pickable } from "../flows";
 import { peerWipCounts } from "../peers";
 import { groupRepos, sectionKey } from "../grouping";
 import { pickCount, pickState } from "../select";
-import { useStore, visibleRepos } from "../store";
+import { boardChangedAt, cardOf, idText, multi, useStore, visibleCards, visibleRepos } from "../store";
+import { backendOf } from "../registry";
 import { GLYPH, stateOf } from "../util";
 import { GroupHead } from "./GroupHead";
 import { Tick } from "./SelectBar";
@@ -17,6 +18,7 @@ const TreeItem = memo(function TreeItem({ repo }: { repo: Repo }) {
   const selecting = useStore((s) => s.selecting);
   const picked = useStore((s) => s.selected.includes(repo.id));
   const toggleSelected = useStore((s) => s.toggleSelected);
+  const card = useStore((s) => (multi(s) ? cardOf(s, repo.id) : undefined));
   const canPick = pickable(repo);
   const state = stateOf(repo);
   return (
@@ -33,7 +35,7 @@ const TreeItem = memo(function TreeItem({ repo }: { repo: Repo }) {
       onAuxClick={(e) => {
         if (!selecting && e.button === 1) openRepo(repo.id, { metaKey: true });
       }}
-      title={selecting && !canPick ? `${repo.name} cannot join a fleet` : repo.id}
+      title={selecting && !canPick ? `${repo.name} cannot join a fleet` : idText(repo.id)}
     >
       {selecting && (
         <span className={`tick${picked ? " on" : ""}`} aria-hidden="true">
@@ -53,6 +55,11 @@ const TreeItem = memo(function TreeItem({ repo }: { repo: Repo }) {
       ))}
       {(repo.status?.ahead ?? 0) > 0 && (
         <span className="tree-ahead">↑{repo.status?.ahead}</span>
+      )}
+      {card && (
+        <span className="tree-machines" title={`checked out on ${card.checkouts.map((c) => backendOf(c.id)).join(", ")}`}>
+          {card.checkouts.map((c) => backendOf(c.id)).join(" ")}
+        </span>
       )}
     </button>
   );
@@ -82,12 +89,18 @@ function TreePick({ label, ids, total }: { label: string; ids: string[]; total: 
 
 export function Sidebar() {
   const repos = useStore(useShallow(visibleRepos));
+  const cards = useStore(useShallow(visibleCards));
+  const many = useStore(multi);
   const sort = useStore((s) => s.settings.sort);
   const collapsed = useStore((s) => s.collapsed);
   const toggleGroup = useStore((s) => s.toggleGroup);
   const selecting = useStore((s) => s.selecting);
 
-  const groups = useMemo(() => groupRepos(repos, sort), [repos, sort]);
+  // the same `at` the grid groups by, so a heading means the same in both
+  const groups = useMemo(
+    () => groupRepos(repos, sort, undefined, many && cards.length > 0 ? boardChangedAt(useStore.getState()) : undefined),
+    [repos, cards, many, sort],
+  );
 
   return (
     <aside id="sidebar" className={selecting ? "sidebar selecting" : "sidebar"} aria-label="Repository tree">

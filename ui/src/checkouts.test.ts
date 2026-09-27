@@ -41,6 +41,19 @@ describe("joinRepos", () => {
     const cards = joinRepos([repo("a", ["https://github.com/o/n"]), repo("b", ["https://github.com/o/n"])], names, sp);
     expect(cards.map((c) => c.key)).toEqual(["github.com/o/n", "github.com/o/n#b"]);
   });
+  test("another backend's checkout joins the card that holds its plain id", () => {
+    const o = ["https://github.com/o/n"];
+    const cards = joinRepos([repo("a", o), repo("b", o), repo("mac|b", o), repo("mac|a", o)], names, sp);
+    expect(cards.map((c) => [c.key, c.checkouts.map((x) => x.id)])).toEqual([
+      ["github.com/o/n", ["a", "mac|a"]],
+      ["github.com/o/n#b", ["b", "mac|b"]],
+    ]);
+  });
+  test("with no checkout of the same plain id it takes the base card", () => {
+    const o = ["https://github.com/o/n"];
+    const cards = joinRepos([repo("a", o), repo("b", o), repo("mac|c", o)], names, sp);
+    expect(cards.map((c) => c.checkouts.map((x) => x.id))).toEqual([["a", "mac|c"], ["b"]]);
+  });
   test("a single backend's repos come out one card each, in order", () => {
     const list = [repo("b"), repo("a", ["https://github.com/o/a"]), repo("c")];
     expect(joinRepos(list, ["mini"], (id) => ["mini", id]).map((c) => c.checkouts[0])).toEqual(list);

@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import {
   PANEL_TERM,
   agentFor,
+  cardOf,
   changed,
   closedIn,
   closedSectionsOf,
@@ -11,11 +12,15 @@ import {
   multi,
   panelTermHeightFor,
   pruneByRepo,
+  scopedRepos,
   sectionsFor,
   toggleIn,
   unfoldIn,
   useStore,
+  visibleCards,
+  visibleRepos,
 } from "./store";
+import { applyQuery } from "./filters";
 import { onBackendSignal } from "./api";
 import { setBase, setRegistry } from "./registry";
 import {
@@ -595,5 +600,92 @@ describe("several backends", () => {
     expect(s.home).toBe("home");
     expect(s.backendOrder).toEqual(["home"]);
     expect(s.loaded).toBe(true);
+  });
+});
+
+/* ---------- cards ---------- */
+
+describe("cards over several backends", () => {
+  const pristine = useStore.getState();
+  const conn = (name: string, state: "online" | "offline") => ({ ...connOf(pristine, "none"), name, status: { state } });
+  const two = (bState: "online" | "offline" = "online") => {
+    setRegistry("a", ["a", "b"]);
+    useStore.setState({
+      home: "a",
+      backendOrder: ["a", "b"],
+      conns: { a: conn("a", "online"), b: conn("b", bState) },
+      repos: [repo("proj"), repo("other"), repo("b|proj")],
+    });
+  };
+  afterEach(() => {
+    setRegistry("", []);
+    useStore.setState(pristine, true);
+  });
+
+  test("one lead per card: home's, b's once preferred, home's again when b goes offline", () => {
+    two();
+    const ids = () => visibleRepos(useStore.getState()).map((r) => r.id);
+    expect(ids()).toEqual(["proj", "other"]);
+    expect(visibleCards(useStore.getState()).map((c) => c.checkouts.map((r) => r.id))).toEqual([["proj", "b|proj"], ["other"]]);
+    useStore.getState().setCheckoutPref("rel:proj", "b");
+    expect(ids()).toEqual(["b|proj", "other"]);
+    useStore.setState({ conns: { ...useStore.getState().conns, b: conn("b", "offline") } });
+    expect(ids()).toEqual(["proj", "other"]);
+  });
+
+  test("the same state gives the same arrays and the same cards", () => {
+    two();
+    const s = useStore.getState();
+    const repos = visibleRepos(s);
+    const cards = visibleCards(s);
+    expect(visibleRepos(s)).toBe(repos);
+    expect(visibleCards(s)).toBe(cards);
+    useStore.setState({ filter: s.filter });
+    expect(visibleRepos(useStore.getState())).toBe(repos);
+    expect(visibleCards(useStore.getState())).toBe(cards);
+    // a change to one repo leaves the other cards as they were
+    const other = s.repos.find((r) => r.id === "other") as Repo;
+    useStore.setState({ repos: s.repos.map((r) => (r.id === "other" ? { ...other, name: "renamed" } : r)) });
+    const next = visibleCards(useStore.getState());
+    expect(next).not.toBe(cards);
+    expect(next[0]).toBe(cards[0]);
+    expect(next[1]).not.toBe(cards[1]);
+    expect(cardOf(useStore.getState(), "b|proj")).toBe(cards[0]);
+  });
+
+  test("a text filter matches the plain id, never the prefix", () => {
+    two();
+    useStore.setState({ filter: "b|" });
+    expect(visibleRepos(useStore.getState())).toEqual([]);
+    useStore.setState({ filter: "proj" });
+    expect(visibleRepos(useStore.getState()).map((r) => r.id)).toEqual(["proj"]);
+  });
+
+  test("with one backend the board is the filtered repos, element for element", () => {
+    const repos = [repo("x"), repo("y", { status: { branch: "dev", files: [], ahead: 1, behind: 0, upstream: null } as unknown as Repo["status"] }), repo("xy")];
+    useStore.setState({ repos, filter: "x" });
+    const s = useStore.getState();
+    const old = applyQuery(scopedRepos(s), { filters: s.filters, users: s.users, attention: s.dirtyOnly, text: s.filter });
+    const now = visibleRepos(s);
+    expect(now).toHaveLength(old.length);
+    now.forEach((r, i) => expect(r).toBe(old[i] as Repo));
+    useStore.setState({ filter: "", filters: ["unpushed"] });
+    expect(visibleRepos(useStore.getState()).map((r) => r.id)).toEqual(["y"]);
+  });
+
+  test("switchCheckout swaps the panel in place and leads the card with it", () => {
+    two();
+    useStore.setState({ panels: ["other", "proj"], activePanel: "proj" });
+    useStore.getState().switchCheckout("proj", "b|proj");
+    let s = useStore.getState();
+    expect(s.panels).toEqual(["other", "b|proj"]);
+    expect(s.activePanel).toBe("b|proj");
+    expect(s.checkoutPref["rel:proj"]).toBe("b");
+    // a sibling already open keeps its place
+    useStore.setState({ panels: ["proj", "other", "b|proj"], activePanel: "other" });
+    useStore.getState().switchCheckout("proj", "b|proj");
+    s = useStore.getState();
+    expect(s.panels).toEqual(["other", "b|proj"]);
+    expect(s.activePanel).toBe("other");
   });
 });

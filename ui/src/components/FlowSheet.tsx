@@ -5,7 +5,7 @@ import { repoFacts } from "../../../src/core/actions";
 import { fleetSkipReason } from "../../../src/core/flow";
 import { isFlowActive, type Fleet, type Flow, type FlowStep, type Repo, type Verdict } from "../../../src/core/types";
 import { fleetCounts, flowWord, oldestParked, stepWord } from "../flows";
-import { agentFor, pickedIds, useStore } from "../store";
+import { agentFor, idText, pickedIds, useStore } from "../store";
 import { Timeline } from "./RunSheet";
 
 const errText = (err: unknown) => String(err instanceof Error ? err.message : err);
@@ -52,7 +52,7 @@ export function FlowPlan({ repo, workflow }: { repo: Repo; workflow: string }) {
       <header className="sheet-head">
         <div>
           <div className="eyebrow">with claude · {w.source === "bundled" ? "built in" : w.source === "user" ? "your workflow" : "this repo's workflow"}</div>
-          <h2 className="sheet-title">{w.verb} <span className="sheet-repo">{repo.id}</span></h2>
+          <h2 className="sheet-title">{w.verb} <span className="sheet-repo">{idText(repo.id)}</span></h2>
         </div>
         <button type="button" className="mini close" onClick={close} aria-label="Close">✕</button>
       </header>
@@ -211,7 +211,7 @@ export function FlowConsole({ flowId }: { flowId: string }) {
       <header className="sheet-head">
         <div>
           <div className="eyebrow">with claude · workflow</div>
-          <h2 className="sheet-title">{flow.verb} <span className="sheet-repo">{flow.repoId}</span></h2>
+          <h2 className="sheet-title">{flow.verb} <span className="sheet-repo">{idText(flow.repoId)}</span></h2>
         </div>
         <span className={`status st-${flow.status === "gated" ? "waiting" : flow.status}`}>
           <span className="dot" />
@@ -360,7 +360,7 @@ export function FleetSheet({ fleetId }: { fleetId: string }) {
       setError(errText(err));
     }
   };
-  const name = (id: string) => repos.find((r) => r.id === id)?.name ?? id;
+  const name = (id: string) => repos.find((r) => r.id === id)?.name ?? idText(id);
   const word = (r: Fleet["repos"][number]): string => {
     if (r.skipped) return `skipped, ${r.skipped}`;
     const f = r.flowId ? flows[r.flowId] : undefined;

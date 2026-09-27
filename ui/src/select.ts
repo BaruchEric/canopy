@@ -58,8 +58,13 @@ export function rangeIds(order: readonly string[], anchor: string | null, target
  *  so a range reads top to bottom the way the eye does. A folded group is
  *  left out: a range drawn between two cards should not take what sits
  *  hidden between them. */
-export function boardOrder(repos: Repo[], sort: SortMode, collapsed: readonly string[] = []): string[] {
-  return groupRepos(repos, sort)
+export function boardOrder(
+  repos: Repo[],
+  sort: SortMode,
+  collapsed: readonly string[] = [],
+  at?: (r: Repo) => number,
+): string[] {
+  return groupRepos(repos, sort, undefined, at)
     .filter((g) => !collapsed.includes(sectionKey(sort, g.key)))
     .flatMap((g) => g.repos.filter(pickable).map((r) => r.id));
 }

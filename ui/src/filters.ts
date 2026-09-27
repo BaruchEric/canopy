@@ -82,15 +82,17 @@ export interface RepoQuery {
   text: string;
 }
 
-/** Filters within one dimension add up; the dimensions all have to agree. */
-export function applyQuery(repos: Repo[], q: RepoQuery): Repo[] {
+/** Filters within one dimension add up; the dimensions all have to agree.
+ *  The text matches the id a backend knows (`plain`), never the page's
+ *  prefix for another backend. */
+export function applyQuery(repos: readonly Repo[], q: RepoQuery, plain: (id: string) => string = (id) => id): Repo[] {
   const text = q.text.trim().toLowerCase();
   return repos.filter(
     (r) =>
       (!q.attention || needsAttention(r)) &&
       (q.filters.length === 0 || q.filters.some((f) => matchesFilter(r, f))) &&
       (q.users.length === 0 || q.users.includes(userKey(r) ?? NOBODY)) &&
-      (!text || r.id.toLowerCase().includes(text)),
+      (!text || plain(r.id).toLowerCase().includes(text)),
   );
 }
 

@@ -3,10 +3,11 @@ import type { CSSProperties, KeyboardEvent, MouseEvent, PointerEvent } from "rea
 import { Terminal, type ITheme } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import "@xterm/xterm/css/xterm.css";
-import { api } from "../api";
-import { backendOf, qual } from "../registry";
+import { api, reachable, socketUrl as backendSocket } from "../api";
+import { backendOf, plainOf, qual } from "../registry";
 import { groveUrl, nameShellHere, parseRoute, popShell } from "../routes";
-import { PANEL_TERM, TERM, closedIn, panelTermHeightFor, useStore, type TermTab } from "../store";
+import { PANEL_TERM, TERM, closedIn, idText, isOnline, multi, panelTermHeightFor, useStore, type TermTab } from "../store";
+import { IdLabel, WaitingFor, useWaitingFor } from "./IdLabel";
 import { TERM_FONT, otherShells, termId, viewKey } from "../term";
 import { flipMode, tidyLines, type SurfaceMode } from "../surface";
 import { SHELL_TARGETS, type ShellTarget } from "../settings";
@@ -106,12 +107,12 @@ function xtermTheme(): ITheme {
  *  server holds shells by the tab's id: the first socket joins the shell of
  *  that name or starts one; a socket after a dropped connection (`rejoin`)
  *  only joins, since a shell that is gone should say so rather than start
- *  over under the same name. */
+ *  over under the same name. The socket goes to the shell's own backend,
+ *  with the ids that backend knows. */
 function socketUrl(tab: TermTab, cols: number, rows: number, rejoin: boolean): string {
-  const scheme = location.protocol === "https:" ? "wss" : "ws";
   const q = new URLSearchParams({
-    id: tab.repoId,
-    term: tab.id,
+    id: plainOf(tab.repoId),
+    term: plainOf(tab.id),
     place: tab.place,
     cols: String(cols),
     rows: String(rows),
@@ -119,7 +120,7 @@ function socketUrl(tab: TermTab, cols: number, rows: number, rejoin: boolean): s
     client: clientId(),
   });
   if (rejoin) q.set("attach", "1");
-  return `${scheme}://${location.host}/api/term?${q}`;
+  return backendSocket(backendOf(tab.id), `/api/term?${q}`);
 }
 
 /** how long to wait before the n-th try at rejoining a dropped shell */
@@ -228,8 +229,25 @@ export function TermView({
     // holds with TERM_GONE, which ends the tab; one that never opened (the
     // server was away) may still start the shell.
     let opened = false;
+    // said once per spell away, when the shell's machine is what went
+    let saidAway = false;
+    const sayAway = () => {
+      const s = useStore.getState();
+      if (!saidAway && multi(s) && !isOnline(s, backendOf(tab.id))) {
+        saidAway = true;
+        note("[backend offline]");
+      }
+    };
     const connect = () => {
       if (gone || ended) return;
+      // a machine the page has no URL for yet is waited on, not dialled
+      // at the page's own origin
+      if (!reachable(backendOf(tab.id))) {
+        sayAway();
+        retry = setTimeout(connect, rejoinWait(tries));
+        tries += 1;
+        return;
+      }
       const rejoin = opened;
       const sock = new WebSocket(socketUrl(tab, term.cols, term.rows, rejoin));
       sock.binaryType = "arraybuffer";
@@ -242,6 +260,7 @@ export function TermView({
       sock.onopen = () => {
         opened = true;
         tries = 0;
+        saidAway = false;
         term.focus();
       };
       sock.onmessage = (e: MessageEvent<ArrayBuffer | string>) => {
@@ -268,6 +287,7 @@ export function TermView({
           end(null, e.reason ? `[${e.reason}]` : "[the shell could not start]");
           return;
         }
+        sayAway();
         if (tries === 0) note(opened ? "[the connection dropped; rejoining]" : "[could not reach the canopy server; retrying]");
         retry = setTimeout(connect, rejoinWait(tries));
         tries += 1;
@@ -1184,24 +1204,33 @@ export function PanelShells({ repo }: { repo: Repo }) {
   );
 }
 
+/** The tab a shell window shows for its repo: the shell the url names, else
+ *  a new one on the repo's own backend. None for a forge repo. */
+function shellTab(repo: Repo | undefined): TermTab | null {
+  if (!repo || repo.forge) return null;
+  return {
+    id: parseRoute(window.location.search).term ?? qual(backendOf(repo.id), termId()),
+    repoId: repo.id,
+    name: repo.name,
+    path: repo.path,
+    place: "strip",
+  };
+}
+
 /** One shell, edge to edge: what a "new tab" or "new window" shell shows. */
 export function ShellSolo({ id }: { id: string }) {
   const root = useStore((s) => s.root);
   const repo = useStore((s) => s.repos.find((r) => r.id === id));
   const name = repo?.name;
+  const waiting = useWaitingFor(id, repo !== undefined);
   // The shell's name goes into the url, so a reload of this window comes
-  // back to the same shell rather than opening another.
-  const [tab] = useState<TermTab | null>(() =>
-    repo && !repo.forge
-      ? {
-          id: parseRoute(window.location.search).term ?? qual(backendOf(repo.id), termId()),
-          repoId: repo.id,
-          name: repo.name,
-          path: repo.path,
-          place: "strip",
-        }
-      : null,
-  );
+  // back to the same shell rather than opening another. Another machine's
+  // repo may arrive after the page has loaded, so the tab is made when the
+  // repo is first there, and never again.
+  const [tab, setTab] = useState<TermTab | null>(() => shellTab(repo));
+  useEffect(() => {
+    if (!tab && repo) setTab(shellTab(repo));
+  }, [tab, repo]);
   const [exited, setExited] = useState(false);
   const zoom = useShellZoom();
   const body = useRef<HTMLDivElement>(null);
@@ -1224,19 +1253,21 @@ export function ShellSolo({ id }: { id: string }) {
         <span className="root-path" title={root}>
           {root}
         </span>
-        <span className="solo-id">{id}</span>
+        <span className="solo-id">
+          <IdLabel id={id} />
+        </span>
         {exited && <span className="shell-exited">exited</span>}
         <span className="spacer" />
         {tab && (
           <Gear
-            label={`the shell at ${name ?? id}`}
+            label={`the shell at ${name ?? idText(id)}`}
             groups={[
               { label: "shells · every one", entries: [zoom] },
               {
                 label: "share",
                 entries: shareEntries({
                   el: () => body.current,
-                  label: `shell ${name ?? id}`,
+                  label: `shell ${name ?? idText(id)}`,
                   copy: () => shellText(tab.id),
                   paste: (text) => LIVE.get(tab.id)?.paste(text),
                 }),
@@ -1252,9 +1283,11 @@ export function ShellSolo({ id }: { id: string }) {
         <div className="term-body" ref={body}>
           <TermView tab={tab} active onExit={() => setExited(true)} />
         </div>
-      ) : (
+      ) : waiting ? (
+        <WaitingFor name={waiting} />
+      ) : repo && !repo.forge ? null : (
         <p className="empty">
-          No repo called {id} under {root}, or none with a folder to open a shell in.{" "}
+          No repo called {idText(id)} under {root}, or none with a folder to open a shell in.{" "}
           <a href={groveUrl()}>Open the whole grove</a> instead.
         </p>
       )}

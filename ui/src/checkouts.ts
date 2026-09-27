@@ -43,8 +43,19 @@ export function joinRepos(
   const out: RepoCard[] = [];
   for (const r of [...repos].sort((a, b) => rank(a) - rank(b))) {
     const [backend, plain] = split(r.id);
-    let key = r.forge ? `forge:${r.id}` : (remoteKey(r) ?? `rel:${plain}`);
-    if (byKey.get(key)?.checkouts.some((c) => split(c.id)[0] === backend)) key = `${key}#${plain}`;
+    const base = r.forge ? `forge:${r.id}` : (remoteKey(r) ?? `rel:${plain}`);
+    // Two checkouts of one remote on one backend are two cards. Another
+    // backend's checkout goes to the card that already holds its plain id,
+    // else to the base card, as long as the card has none on that backend.
+    const free = (c: RepoCard | undefined): c is RepoCard =>
+      c !== undefined && !c.checkouts.some((x) => split(x.id)[0] === backend);
+    const twin = out.find(
+      (c) =>
+        (c.key === base || c.key.startsWith(`${base}#`)) &&
+        free(c) &&
+        c.checkouts.some((x) => split(x.id)[1] === plain),
+    );
+    const key = twin?.key ?? (free(byKey.get(base)) || !byKey.has(base) ? base : `${base}#${plain}`);
     let card = byKey.get(key);
     if (!card) {
       card = { key, name: r.name, checkouts: [] };

@@ -4535,3 +4535,98 @@ a.build-label:hover {
   height: var(--focus-h, min(720px, calc(100dvh - 48px)));
   max-height: calc(100dvh - 16px);
 }
+
+/* ---------- several machines ---------- */
+
+/* the machine a repo id belongs to, after the id, when it is not this
+   page's own */
+.backend-word {
+  margin-left: 6px;
+  font-size: 10px;
+  font-weight: 400;
+  color: var(--sky);
+}
+
+/* a card's machines: one chip per checkout, the lead lit */
+.machines {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-top: 5px;
+}
+.machine {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 10.5px;
+  line-height: 16px;
+  padding: 0 7px;
+  border-radius: 999px;
+  border: 1px solid var(--hair);
+  color: var(--ink-dim);
+  background: var(--bark1);
+}
+button.machine:hover {
+  color: var(--ink);
+  border-color: var(--hair2);
+}
+.machine.on {
+  color: var(--ink);
+  background: var(--bark3);
+  border-color: color-mix(in srgb, var(--sky) 45%, var(--hair2));
+}
+.machine.away {
+  color: var(--ink-faint);
+  border-style: dashed;
+}
+.machine-name {
+  font-weight: 600;
+}
+.machine-dirty {
+  color: var(--lichen);
+}
+/* a card none of whose machines answers: shown as it last was */
+.card.away {
+  opacity: 0.6;
+}
+
+/* the tree row's machines, after everything else */
+.tree-machines {
+  margin-left: auto;
+  padding-left: 6px;
+  font-size: 10px;
+  color: var(--ink-faint);
+  white-space: nowrap;
+}
+
+/* the panel's machine switcher, beside the remote link */
+.panel-machines {
+  flex: none;
+  font-size: 11px;
+}
+.panel-machines button {
+  padding: 0 8px;
+}
+.panel-machines button.away {
+  color: var(--ink-faint);
+}
+
+/* a panel whose machine is not answering says so under its head */
+.panel-away {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin: 8px 14px;
+  padding: 6px 10px;
+  border: 1px dashed var(--hair2);
+  border-radius: var(--r);
+  font-size: 12px;
+  color: var(--ink-dim);
+}
+.panel-away a {
+  color: var(--sky);
+}
+.dock-tab.waiting {
+  color: var(--ink-faint);
+}

@@ -35,8 +35,11 @@ export const tipAt = (r: Repo): number => r.status?.tip?.at ?? 0;
 export const changedAt = (r: Repo): number => Math.max(commitAt(r), newestEdit(r)?.at ?? 0, tipAt(r));
 const byName = (a: Repo, b: Repo): number =>
   a.name.localeCompare(b.name) || a.id.localeCompare(b.id);
-const byChange = (a: Repo, b: Repo): number =>
-  changedAt(b) - changedAt(a) || byName(a, b);
+/** newest change first by `at`, then by name */
+const byChangeAt =
+  (at: (r: Repo) => number) =>
+  (a: Repo, b: Repo): number =>
+    at(b) - at(a) || byName(a, b);
 
 interface Bucket {
   key: string;
@@ -121,13 +124,17 @@ export const sectionKey = (mode: SortMode, key: string): string =>
 /**
  * Groups already-filtered repos for the tree and the grid. Both views call
  * this with the same mode, so a heading in one is the same heading in the
- * other. `now` is unix seconds; it only matters for "recent".
+ * other. `now` is unix seconds; it only matters for "recent". `at` is when
+ * a repo changed, for "recent" and the newest-first order: a card with
+ * several checkouts passes its newest one's.
  */
 export function groupRepos(
   repos: Repo[],
   mode: SortMode,
   now: number = Date.now() / 1000,
+  at: (r: Repo) => number = changedAt,
 ): RepoGroup[] {
+  const byChange = byChangeAt(at);
   switch (mode) {
     case "folder": {
       const folders = [...new Set(repos.map((r) => r.group || "."))]
@@ -140,7 +147,7 @@ export function groupRepos(
       // hand is most likely still in
       return bucket(repos, ACTIVITY, activityKey, byChange);
     case "recent":
-      return bucket(repos, RECENT, (r) => ageKey(changedAt(r), now), byChange);
+      return bucket(repos, RECENT, (r) => ageKey(at(r), now), byChange);
     case "name":
       return bucket(
         repos,

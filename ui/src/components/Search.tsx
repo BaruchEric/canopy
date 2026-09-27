@@ -2,7 +2,8 @@ import { useEffect, useRef, useState } from "react";
 import { useShallow } from "zustand/react/shallow";
 import { api } from "../api";
 import { groupHits, markHit } from "../hits";
-import { helperFor, useStore, visibleRepos } from "../store";
+import { helperFor, idText, useStore, visibleRepos } from "../store";
+import { backendOf } from "../registry";
 import { Section } from "./Surface";
 import type { GrepHit, GrepRepoResult, GrepResult, Repo } from "../../../src/core/types";
 
@@ -30,7 +31,7 @@ function HitRow({
         type="button"
         className="grep-hit"
         title={`Open ${hit.file}:${hit.line} in VS Code`}
-        onClick={() => api.openFile(repo.id, hit.file, hit.line, helperFor(useStore.getState())).catch((e: unknown) => onError(errText(e)))}
+        onClick={() => api.openFile(repo.id, hit.file, hit.line, helperFor(useStore.getState(), backendOf(repo.id))).catch((e: unknown) => onError(errText(e)))}
       >
         <span className="grep-line">{hit.line}</span>
         <span className="grep-text">
@@ -290,7 +291,7 @@ export function SearchSheet() {
                         aria-expanded={isOpen}
                         onClick={() => setOpen(isOpen ? null : row.repo)}
                       >
-                        {row.repo}
+                        {idText(row.repo)}
                         <span>{row.error ? "—" : `${row.hits.length}${row.truncated ? "+" : ""}`}</span>
                       </button>
                       {!row.error && (

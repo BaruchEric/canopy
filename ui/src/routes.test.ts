@@ -33,6 +33,10 @@ describe("parseRoute", () => {
     const id = "0123456789abcdef0123456789abcdef";
     expect(parseRoute(`?repo=web-apps/ripe&view=shell&term=${id}`).term).toBe(id);
     expect(parseRoute("?repo=web-apps/ripe&view=shell&term=t1").term).toBeNull();
+    // another backend's shell carries its name
+    expect(parseRoute(`?repo=mini|web-apps/ripe&view=shell&term=mini|${id}`).term).toBe(`mini|${id}`);
+    expect(parseRoute(`?repo=x&view=shell&term=Mini|${id}`).term).toBeNull();
+    expect(parseRoute(`?repo=x&view=shell&term=a|b|${id}`).term).toBeNull();
     // only a shell window has one shell to name
     expect(parseRoute(`?repo=web-apps/ripe&view=solo&term=${id}`).term).toBeNull();
   });

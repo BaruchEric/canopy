@@ -15,7 +15,22 @@ import {
 } from "../files";
 import { peerable, peerWipCounts } from "../peers";
 import { useShallow } from "zustand/react/shallow";
-import { DOCK, PANEL, activeFlowFor, capsFor, flowFor, homeConn, runFor, useStore } from "../store";
+import {
+  DOCK,
+  PANEL,
+  activeFlowFor,
+  capsFor,
+  cardOf,
+  connOf,
+  flowFor,
+  idParts,
+  idText,
+  multi,
+  runFor,
+  useStore,
+} from "../store";
+import { backendOf, homeName, isHome } from "../registry";
+import { IdLabel } from "./IdLabel";
 import { ago, GLYPH, stateOf } from "../util";
 import { ClaudeSection } from "./Claude";
 import { LaunchSection } from "./Launch";
@@ -904,7 +919,8 @@ export function PanelSection({ k, repo }: { k: SectionKey; repo: Repo }) {
     case "peers":
       return <PeersSection repo={repo} />;
     case "preview":
-      return repo.host ? null : <PreviewSection repo={repo} />;
+      // the preview proxies the page's own backend's ports
+      return repo.host || !isHome(repo.id) ? null : <PreviewSection repo={repo} />;
     case "launch":
       return <LaunchSection repo={repo} />;
     case "claude":
@@ -959,7 +975,7 @@ function PanelGear({
         {
           label: "share",
           entries: [
-            ...shareEntries({ el: body, label: `panel ${repo.id}` }),
+            ...shareEntries({ el: body, label: `panel ${idText(repo.id)}` }),
             {
               type: "item",
               label: "copy link",
@@ -974,6 +990,137 @@ function PanelGear({
         },
       ]}
     />
+  );
+}
+
+/** The machines a panel's repo is checked out on, when more than one: the
+ *  one showing is lit, and choosing another shows that checkout here. */
+function PanelMachines({ id }: { id: string }) {
+  const card = useStore((s) => cardOf(s, id));
+  const conns = useStore((s) => s.conns);
+  const switchCheckout = useStore((s) => s.switchCheckout);
+  if (!card || card.checkouts.length < 2) return null;
+  return (
+    <div className="seg panel-machines" role="radiogroup" aria-label={`${card.name} on which machine`}>
+      {card.checkouts.map((c) => {
+        const b = backendOf(c.id);
+        const state = conns[b]?.status.state ?? "connecting";
+        return (
+          <button
+            key={c.id}
+            type="button"
+            role="radio"
+            aria-checked={c.id === id}
+            className={state === "online" ? undefined : "away"}
+            title={state === "online" ? `show the checkout on ${b}` : `${b} is ${state === "signin" ? "asking for a sign-in" : state}`}
+            onClick={() => switchCheckout(id, c.id)}
+          >
+            {b}
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
+/** Under the head of a panel whose machine is not answering: what is wrong,
+ *  and the machines that do have the repo and answer. */
+function PanelAway({ id }: { id: string }) {
+  const b = backendOf(id);
+  const status = useStore((s) => connOf(s, b).status);
+  const card = useStore((s) => cardOf(s, id));
+  const conns = useStore((s) => s.conns);
+  const switchCheckout = useStore((s) => s.switchCheckout);
+  const retry = useStore((s) => s.retryBackend);
+  if (status.state === "online") return null;
+  const others = (card?.checkouts ?? []).filter((c) => c.id !== id && conns[backendOf(c.id)]?.status.state === "online");
+  return (
+    <p className="panel-away" role="status">
+      <AwayWords name={b} state={status.state} reason={status.reason} login={status.login} onRetry={() => void retry(b)} />
+      {others.map((c) => (
+        <button key={c.id} type="button" className="mini" onClick={() => switchCheckout(id, c.id)}>
+          show {backendOf(c.id)}
+        </button>
+      ))}
+    </p>
+  );
+}
+
+/** What a panel says of a machine that is not answering. */
+function AwayWords({
+  name,
+  state,
+  reason,
+  login,
+  onRetry,
+}: {
+  name: string;
+  state: string;
+  reason?: string;
+  login?: string;
+  onRetry?: () => void;
+}) {
+  if (state === "signin")
+    return login ? (
+      <a href={login} target="_blank" rel="noreferrer">
+        sign in to {name}
+      </a>
+    ) : (
+      <span>sign in to {name}</span>
+    );
+  if (state === "connecting") return <span>waiting for {name}…</span>;
+  return (
+    <>
+      <span title={reason}>{name} is offline</span>
+      {onRetry && (
+        <button type="button" className="mini" onClick={onRetry}>
+          try again
+        </button>
+      )}
+    </>
+  );
+}
+
+/** A panel whose repo is on a machine that has not answered, or no longer
+ *  has it: its name, where it lives, and why it is empty. It keeps the
+ *  panel's place in the dock until the machine comes back. */
+function PanelWaiting({ id, width, hidden, onClose }: { id: string; width: number; hidden?: boolean; onClose: () => void }) {
+  const [b, plain] = idParts(id);
+  const status = useStore((s) => connOf(s, b).status);
+  const shown = useStore((s) => s.backendOrder.includes(b));
+  const retry = useStore((s) => s.retryBackend);
+  return (
+    <section
+      className="panel panel-waiting"
+      aria-label={`${plain} on ${b}`}
+      hidden={hidden}
+      style={{ "--panel-w": `${width}px` } as CSSProperties}
+    >
+      <div className="panel-body">
+        <header className="panel-head">
+          <span className="glyph">○</span>
+          <span className="panel-name" title={`${plain} on ${b}`}>
+            {plain}
+            <span className="backend-word">{b}</span>
+          </span>
+          <span className="spacer" />
+          <button type="button" className="mini close" onClick={onClose} aria-label={`Close ${plain}`}>
+            ✕
+          </button>
+        </header>
+        <p className="panel-away" role="status">
+          {!shown ? (
+            <span>{b} is hidden on this page</span>
+          ) : status.state === "online" ? (
+            <span>
+              {b} has no repo called {plain} now
+            </span>
+          ) : (
+            <AwayWords name={b} state={status.state} reason={status.reason} login={status.login} onRetry={() => void retry(b)} />
+          )}
+        </p>
+      </div>
+    </section>
   );
 }
 
@@ -1000,8 +1147,9 @@ export function RepoPanel({
   // Only the openers this browser can reach, as in RepoMenu: a headless
   // backend with no helper picked has none, and VS Code falls back to the
   // Remote-SSH link.
-  const backend = useStore((s) => homeConn(s).backend);
-  const openers = useStore(useShallow(capsFor)).openers;
+  const backend = useStore((s) => connOf(s, backendOf(id)).backend);
+  const openers = useStore(useShallow((s) => capsFor(s, backendOf(id)))).openers;
+  const many = useStore(multi);
   const order = useStore((s) => s.settings.sectionOrder);
   const hiddenSections = useStore((s) => s.settings.sectionsHidden);
   const focusSize = useStore((s) => s.focusSize);
@@ -1038,7 +1186,12 @@ export function RepoPanel({
     };
   }, [id]);
 
-  if (!repo) return null;
+  if (!repo) {
+    // a home repo gone from the scan is pruned with it; another machine's
+    // keeps its place until that machine says
+    if (idParts(id)[0] === homeName()) return null;
+    return <PanelWaiting id={id} width={width} hidden={hidden} onClose={() => closePanel(id)} />;
+  }
   const st = repo.status;
   const solo = onClose !== undefined;
 
@@ -1074,9 +1227,10 @@ export function RepoPanel({
       <header className="panel-head">
         <span className="glyph">{GLYPH[stateOf(repo)]}</span>
         <span className="panel-name" title={repo.path}>
-          {repo.id}
+          <IdLabel id={repo.id} />
         </span>
         {repo.link && <RepoLink url={repo.link} name={repo.name} labeled />}
+        {many && <PanelMachines id={id} />}
         <span className="spacer" />
         <PanelGear repo={repo} mode={mode} setMode={setMode} body={() => bodyRef.current} solo={solo} />
         <RepoMenu repo={repo} onError={showError} />
@@ -1090,7 +1244,8 @@ export function RepoPanel({
         </button>
       </header>
 
-      {!repo.host && !repo.forge && (
+      {many && <PanelAway id={id} />}
+      {!repo.host && !repo.forge && isHome(repo.id) && (
         <a
           className="panel-library"
           href={`?view=library&project=${encodeURIComponent(repo.path)}`}
@@ -1254,9 +1409,10 @@ function DockTabs({ panels, active }: { panels: string[]; active: string | null 
     <div className="dock-tabs" role="tablist" aria-label="Open repos" ref={strip}>
       {panels.map((id) => {
         const repo = repos.find((r) => r.id === id);
-        if (!repo) return null;
+        // another machine's panel that is waiting for it keeps its tab
+        if (!repo && idParts(id)[0] === homeName()) return null;
         const on = id === active;
-        const state = stateOf(repo);
+        const state = repo ? stateOf(repo) : "clean";
         return (
           <div
             key={id}
@@ -1264,8 +1420,8 @@ function DockTabs({ panels, active }: { panels: string[]; active: string | null 
             tabIndex={on ? 0 : -1}
             aria-selected={on}
             data-id={id}
-            className={`dock-tab s-${state}${on ? " on" : ""}`}
-            title={repo.path}
+            className={`dock-tab s-${state}${on ? " on" : ""}${repo ? "" : " waiting"}`}
+            title={repo?.path ?? idText(id)}
             onClick={() => showPanel(id)}
             // middle click closes, as browser tabs do
             onAuxClick={(e) => {
@@ -1287,11 +1443,13 @@ function DockTabs({ panels, active }: { panels: string[]; active: string | null 
             <span className="glyph" aria-hidden="true">
               {GLYPH[state]}
             </span>
-            <span className="dock-tab-name">{repo.id}</span>
+            <span className="dock-tab-name">
+              <IdLabel id={id} />
+            </span>
             <button
               type="button"
               className="term-x"
-              aria-label={`Close the ${repo.name} tab`}
+              aria-label={`Close the ${repo?.name ?? idText(id)} tab`}
               title="close"
               onClick={(e) => {
                 e.stopPropagation();
@@ -1364,7 +1522,7 @@ export function Dock() {
           <Resizer
             key={`edge:${id}`}
             className="panel-resizer"
-            label={`Width of the ${id} panel`}
+            label={`Width of the ${idText(id)} panel`}
             value={width}
             min={PANEL.min}
             max={PANEL.max}
