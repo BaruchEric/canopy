@@ -929,7 +929,7 @@ function FrontOthers({ set }: { set: string }) {
   const shells = useStore((s) => s.shells);
   const repos = useStore((s) => s.repos);
   const bringTerm = useStore((s) => s.bringTerm);
-  const others = otherShells(set, terms, shells, repos, (id) => idLabel(id).backend ?? "");
+  const others = otherShells(set, terms, shells, repos, (id) => idLabel(id).backend ?? "", idText);
   if (others.length === 0) return null;
   return (
     <nav className="term-others" aria-label="Other running shells">

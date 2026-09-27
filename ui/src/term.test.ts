@@ -244,6 +244,16 @@ describe("otherShells", () => {
     const live = [held("2", "b", "strip")];
     expect(otherShells("panel:a", [], live, repos)[0]?.label).toBe("B");
   });
+  test("a tabbed shell whose repo is off this window's list prints through idOf, not the raw id", () => {
+    const tabs = [tab("1", "a", "panel"), tab("2", "mini|gone", "panel")];
+    const out = otherShells("panel:a", tabs, [], repos, undefined, (id) => `${id} (away)`);
+    expect(out).toEqual([{ id: "2", repoId: "mini|gone", label: "mini|gone (away)", tabbed: true, viewers: [] }]);
+  });
+  test("with no idOf function the fallback is the raw id", () => {
+    const tabs = [tab("1", "a", "panel"), tab("2", "mini|gone", "panel")];
+    const out = otherShells("panel:a", tabs, [], repos);
+    expect(out.find((o) => o.id === "2")?.label).toBe("mini|gone");
+  });
   test("shellSet and keepFront", () => {
     expect(shellSet(tab("1", "strip", "panel"))).toBe("panel:strip");
     expect(keepFront("panel:a", [tab("1", "a", "panel")])).toBe("panel:a");

@@ -166,6 +166,10 @@ export function otherShells(
   live: TermInfo[],
   repos: Repo[],
   word: (id: string) => string = () => "",
+  /** how to print a repo id this window has no card for (a qualified id
+   *  reads as plain text, never the wire form); identity for a caller with
+   *  no backend registry, i.e. a single-backend page */
+  idOf: (id: string) => string = (id) => id,
 ): OtherShell[] {
   const viewers = new Map(live.map((t) => [t.id, t.viewers]));
   const out: Omit<OtherShell, "label">[] = [];
@@ -182,7 +186,7 @@ export function otherShells(
   for (const o of out) count.set(o.repoId, (count.get(o.repoId) ?? 0) + 1);
   const seen = new Map<string, number>();
   return out.map((o) => {
-    const name = repos.find((r) => r.id === o.repoId)?.name ?? o.repoId;
+    const name = repos.find((r) => r.id === o.repoId)?.name ?? idOf(o.repoId);
     const n = (seen.get(o.repoId) ?? 0) + 1;
     seen.set(o.repoId, n);
     const base = (count.get(o.repoId) ?? 0) > 1 ? `${name} ${n}` : name;

@@ -288,7 +288,7 @@ export function Timeline({
         {run.status === "working" && run.steps.length === 0 && (
           <li className="step k-note">
             <span className="node" />
-            <span className="step-text">starting Claude Code in {repo?.path ?? run.repoId}…</span>
+            <span className="step-text">starting Claude Code in {repo?.path ?? idText(run.repoId)}…</span>
           </li>
         )}
         {run.status === "working" && run.steps.length > 0 && (
@@ -301,7 +301,7 @@ export function Timeline({
           <li className="step k-note">
             <span className="node" />
             <span className="step-text">
-              Your first message starts Claude Code in {repo?.path ?? run.repoId}.
+              Your first message starts Claude Code in {repo?.path ?? idText(run.repoId)}.
             </span>
           </li>
         )}
