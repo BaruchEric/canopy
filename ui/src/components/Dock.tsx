@@ -30,6 +30,7 @@ import {
   useStore,
 } from "../store";
 import { backendOf, homeName, isHome } from "../registry";
+import { signinUrl } from "../backends";
 import { IdLabel } from "./IdLabel";
 import { ago, GLYPH, stateOf } from "../util";
 import { ClaudeSection } from "./Claude";
@@ -1027,7 +1028,8 @@ function PanelMachines({ id }: { id: string }) {
  *  and the machines that do have the repo and answer. */
 function PanelAway({ id }: { id: string }) {
   const b = backendOf(id);
-  const status = useStore((s) => connOf(s, b).status);
+  const conn = useStore((s) => connOf(s, b));
+  const status = conn.status;
   const card = useStore((s) => cardOf(s, id));
   const conns = useStore((s) => s.conns);
   const switchCheckout = useStore((s) => s.switchCheckout);
@@ -1036,7 +1038,7 @@ function PanelAway({ id }: { id: string }) {
   const others = (card?.checkouts ?? []).filter((c) => c.id !== id && conns[backendOf(c.id)]?.status.state === "online");
   return (
     <p className="panel-away" role="status">
-      <AwayWords name={b} state={status.state} reason={status.reason} login={status.login} onRetry={() => void retry(b)} />
+      <AwayWords name={b} state={status.state} reason={status.reason} login={status.login} base={conn.base} onRetry={() => void retry(b)} />
       {others.map((c) => (
         <button key={c.id} type="button" className="mini" onClick={() => switchCheckout(id, c.id)}>
           show {backendOf(c.id)}
@@ -1052,21 +1054,32 @@ function AwayWords({
   state,
   reason,
   login,
+  base,
   onRetry,
 }: {
   name: string;
   state: string;
   reason?: string;
   login?: string;
+  base: string;
   onRetry?: () => void;
 }) {
   if (state === "signin")
-    return login ? (
-      <a href={login} target="_blank" rel="noreferrer">
-        sign in to {name}
-      </a>
-    ) : (
-      <span>sign in to {name}</span>
+    return (
+      <>
+        {login ? (
+          <a href={signinUrl(login, base)} target="_blank" rel="noreferrer">
+            sign in to {name}
+          </a>
+        ) : (
+          <span>sign in to {name}</span>
+        )}
+        {onRetry && (
+          <button type="button" className="mini" onClick={onRetry}>
+            try again
+          </button>
+        )}
+      </>
     );
   if (state === "connecting") return <span>waiting for {name}…</span>;
   return (
@@ -1086,7 +1099,8 @@ function AwayWords({
  *  panel's place in the dock until the machine comes back. */
 function PanelWaiting({ id, width, hidden, onClose }: { id: string; width: number; hidden?: boolean; onClose: () => void }) {
   const [b, plain] = idParts(id);
-  const status = useStore((s) => connOf(s, b).status);
+  const conn = useStore((s) => connOf(s, b));
+  const status = conn.status;
   const shown = useStore((s) => s.backendOrder.includes(b));
   const retry = useStore((s) => s.retryBackend);
   return (
@@ -1116,7 +1130,14 @@ function PanelWaiting({ id, width, hidden, onClose }: { id: string; width: numbe
               {b} has no repo called {plain} now
             </span>
           ) : (
-            <AwayWords name={b} state={status.state} reason={status.reason} login={status.login} onRetry={() => void retry(b)} />
+            <AwayWords
+              name={b}
+              state={status.state}
+              reason={status.reason}
+              login={status.login}
+              base={conn.base}
+              onRetry={() => void retry(b)}
+            />
           )}
         </p>
       </div>
