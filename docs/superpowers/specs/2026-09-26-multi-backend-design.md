@@ -289,3 +289,35 @@ With the client reaching every backend by URL, the SPA is static files any
 backend or a static host can serve. Moving `canopy.beric.ca` to a static host
 means the mini's backend takes a name of its own (`mini.canopy.beric.ca`) and
 the page starts from the cached registry. That is a follow-up, not this spec.
+
+## Amendments (2026-09-26, found while planning)
+
+1. **Host names are one level deep.** Cloudflare's Universal SSL covers
+   `*.beric.ca` and not `*.canopy.beric.ca`, so the Mac's public name is
+   `canopy-mac.beric.ca`, not `mac.canopy.beric.ca` (later `canopy-wsl`).
+   Everywhere above that says `mac.canopy.beric.ca` means `canopy-mac.beric.ca`.
+2. **Every tailnet URL is https on a ts.net name.** A tailnet page on a ts.net
+   origin calling `canopy.beric.ca` is cross-site, and `beric_gate` is
+   `SameSite=Lax`, so the cookie would not go; and an https page cannot call
+   an http tailnet URL. So the mini also gets `tailscale serve`, on
+   `https://macmini-2018.tail2d2c60.ts.net:7849` (port checked free; the mini's
+   serve already holds 443, 8443 and 9443) proxying `http://100.68.139.95:7850`.
+   Tailnet URLs are then all https, `pickUrl` never meets mixed content, and a
+   tailnet page never needs the cookie.
+3. **A listed origin's own page passes without an Origin header.** Behind
+   `tailscale serve` a backend sees its ts.net name as Host and the request as
+   http, and a browser's same-origin GET sends no Origin at all. So the gate
+   also accepts a request with no Origin, not marked `cross-site`, whose Host
+   is the host of a listed origin. A rebound domain cannot send that Host.
+4. **The Worker answers a canopy host's denials with CORS.** A credentialed
+   cross-origin fetch whose answer lacks `Access-Control-Allow-Origin` is a
+   network error to the page, so without this the client could never tell
+   `signin` from `offline`. For a canopy host (`canopy.beric.ca`,
+   `canopy-<name>.beric.ca`) and an `Origin` that is itself an https canopy
+   host, the gate's non-2xx answer carries `Access-Control-Allow-Origin: <origin>`,
+   `Access-Control-Allow-Credentials: true` and `Vary: Origin`. It reveals only
+   the login URL the answer already holds.
+5. **Two plans.** The first makes every backend reachable from another origin
+   and ships section 0 (shells, server, Worker, tunnels, config). The second
+   is the client (registry, qualified ids, connections, join, machine strip,
+   switcher, chip), written against the code the first one lands.
