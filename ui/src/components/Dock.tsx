@@ -1360,9 +1360,11 @@ export function RepoPanel({
         </p>
       )}
 
-      <div className="panel-ws">
-        <WorkspaceMenu repo={repo} onError={showError} />
-      </div>
+      {isHome(repo.id) && (
+        <div className="panel-ws">
+          <WorkspaceMenu repo={repo} onError={showError} />
+        </div>
+      )}
 
       {repo.error ? (
         <p className="panel-error">Could not read this repo: {repo.error}</p>
