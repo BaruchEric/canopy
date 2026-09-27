@@ -2,7 +2,7 @@ import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import type { CSSProperties, UIEvent } from "react";
 import { useShallow } from "zustand/react/shallow";
 import { clock, filterFeed, type FeedEntry, type FeedKind } from "../feed";
-import { FEED, useStore } from "../store";
+import { FEED, idLabel, idText, useStore } from "../store";
 import { TermGrip } from "./TermDock";
 import { Gear } from "./Gear";
 import {
@@ -108,7 +108,14 @@ export function FeedDock() {
     const el = list.current;
     if (el) el.scrollTop = el.scrollHeight;
   };
-  const labelOf = (id: string) => sources.find((s) => s.id === id)?.label ?? id;
+  // A foreign source reads "<label> · <name>"; a source no longer known
+  // never prints its (possibly qualified) id.
+  const labelOf = (id: string): string => {
+    const src = sources.find((s) => s.id === id);
+    if (!src) return idText(id);
+    const { backend } = idLabel(id);
+    return backend ? `${src.label} · ${backend}` : src.label;
+  };
 
   const modeClass = mode === "full" ? " surface-full" : mode === "focus" ? " surface-focus" : "";
   return (
@@ -147,10 +154,10 @@ export function FeedDock() {
               type="button"
               className={`feed-chip${feedSource === s.id ? " on" : ""}${s.error ? " err" : ""}`}
               aria-pressed={feedSource === s.id}
-              title={s.error ? `${s.label}: ${s.error}` : s.label}
+              title={s.error ? `${labelOf(s.id)}: ${s.error}` : labelOf(s.id)}
               onClick={() => setFeedSource(feedSource === s.id ? null : s.id)}
             >
-              {s.label}
+              {labelOf(s.id)}
             </button>
           ))}
         </div>

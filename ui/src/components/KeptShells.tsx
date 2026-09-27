@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { homeConn, idText, useStore } from "../store";
 import { useFitPop } from "../pop";
+import { BackendWord } from "./IdLabel";
 
 /** "2m", "3h", "2d": how long ago a kept shell was last written out */
 function ago(at: number, now: number): string {
@@ -90,6 +91,7 @@ export function KeptShells() {
                   <li key={k.id} className="kept-shell">
                     <span className="kept-where">
                       {repoName(k.repoId)}
+                      {repos.some((r) => r.id === k.repoId) && <BackendWord id={k.repoId} />}
                       <span className="kept-fact">
                         {ago(k.savedAt, now)} · {k.lines} line{k.lines === 1 ? "" : "s"}
                         {k.agent && ` · ${k.agent} was running`}

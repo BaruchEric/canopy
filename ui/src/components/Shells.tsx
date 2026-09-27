@@ -3,6 +3,7 @@ import { api } from "../api";
 import { clientId } from "../client";
 import { idText, useStore } from "../store";
 import { useFitPop } from "../pop";
+import { BackendWord } from "./IdLabel";
 import type { ClaudeSession } from "../../../src/core/types";
 
 /** "now", "5m", "3h", "2d": how long ago */
@@ -149,6 +150,7 @@ export function ShellsChip() {
                     <li key={t.id} className={shown ? "shell-row here" : "shell-row"}>
                       <span className="kept-where">
                         {repoName(t.repoId)}
+                        {repos.some((r) => r.id === t.repoId) && <BackendWord id={t.repoId} />}
                         <span className="kept-fact">
                           {t.place === "panel" ? "panel" : "strip"} · {ago(t.startedAt, now)}
                           {shown ? " · open here" : hidden.includes(t.id) ? " · hidden here" : ""}

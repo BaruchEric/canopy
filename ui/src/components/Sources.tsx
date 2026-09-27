@@ -1,7 +1,8 @@
 import { useEffect, useRef, useState } from "react";
 import type { FormEvent } from "react";
 import { api } from "../api";
-import { useStore } from "../store";
+import { backendOf } from "../registry";
+import { multi, useStore } from "../store";
 import { useFitPop } from "../pop";
 import type { Listing, SourceState } from "../../../src/core/types";
 import { Seg } from "./Seg";
@@ -122,12 +123,15 @@ function crumbs(path: string): { label: string; path: string }[] {
 /** Walk folders here or on a host, one level at a time, and pick one. */
 function FolderBrowser({
   host,
+  backend,
   start,
   onPick,
   onClose,
 }: {
   /** the ssh host, or undefined for this machine */
   host: string | undefined;
+  /** which backend browses: its own folders, its own ssh hosts */
+  backend: string;
   /** where to open: what the path box holds, else home */
   start: string;
   onPick: (path: string) => void;
@@ -141,7 +145,7 @@ function FolderBrowser({
     setLoading(path);
     setError(null);
     try {
-      setListing(await api.browse(path, host));
+      setListing(await api.browse(path, host, backend));
     } catch (err) {
       setError(errorText(err));
     } finally {
@@ -153,7 +157,7 @@ function FolderBrowser({
   useEffect(() => {
     void go(start || "~");
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [host]);
+  }, [host, backend]);
 
   const repos = listing?.dirs.filter((d) => d.repo).length ?? 0;
   return (
@@ -238,9 +242,10 @@ function FolderBrowser({
   );
 }
 
-function AddSourceForm({ onAdded }: { onAdded: () => void }) {
+function AddSourceForm({ onAdded, backendOrder, isMulti }: { onAdded: () => void; backendOrder: string[]; isMulti: boolean }) {
   const addSource = useStore((s) => s.addSource);
   const [kind, setKind] = useState<"local" | "ssh" | "forgejo">("local");
+  const [backend, setBackend] = useState(backendOrder[0] ?? "");
   const [host, setHost] = useState("");
   const [path, setPath] = useState("");
   const [token, setToken] = useState("");
@@ -250,12 +255,12 @@ function AddSourceForm({ onAdded }: { onAdded: () => void }) {
   const [error, setError] = useState<string | null>(null);
   const [browsing, setBrowsing] = useState(false);
 
-  // The host list is read once, when the form first needs it.
+  // The host list is read once per backend, when the form first needs it.
   useEffect(() => {
     if (kind !== "ssh" || hosts !== null) return;
     let live = true;
     api
-      .hosts()
+      .hosts(backend)
       .then((h) => {
         if (live) setHosts(h);
       })
@@ -265,7 +270,14 @@ function AddSourceForm({ onAdded }: { onAdded: () => void }) {
     return () => {
       live = false;
     };
-  }, [kind, hosts]);
+  }, [kind, hosts, backend]);
+
+  // Switching backends browses and lists ssh hosts fresh: a stale answer
+  // from the old one would be read as the new one's.
+  useEffect(() => {
+    setHosts(null);
+    setBrowsing(false);
+  }, [backend]);
 
   const submit = async (e: FormEvent) => {
     e.preventDefault();
@@ -285,6 +297,7 @@ function AddSourceForm({ onAdded }: { onAdded: () => void }) {
                 ...named,
               }
             : { kind, path: path.trim(), ...named },
+        backend,
       );
       setPath("");
       setToken("");
@@ -301,6 +314,14 @@ function AddSourceForm({ onAdded }: { onAdded: () => void }) {
   const canBrowse = kind === "local" || (kind === "ssh" && host.trim() !== "");
   return (
     <form className="src-form" onSubmit={(e) => void submit(e)}>
+      {isMulti && (
+        <Seg
+          label="Which backend the folder is added to"
+          value={backend}
+          options={backendOrder.map((n) => ({ value: n, label: n }))}
+          onChange={setBackend}
+        />
+      )}
       <Seg
         label="Where the folder is"
         value={kind}
@@ -381,6 +402,7 @@ function AddSourceForm({ onAdded }: { onAdded: () => void }) {
       {browsing && kind !== "forgejo" && (
         <FolderBrowser
           host={kind === "ssh" ? host.trim() : undefined}
+          backend={backend}
           start={path.trim()}
           onPick={(p) => {
             setPath(p);
@@ -413,6 +435,8 @@ export function SourcesMenu() {
   const sources = useStore((s) => s.sources);
   const forgeView = useStore((s) => s.settings.forge);
   const setSetting = useStore((s) => s.setSetting);
+  const isMulti = useStore(multi);
+  const backendOrder = useStore((s) => s.backendOrder);
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
   useFitPop(ref, open);
@@ -433,8 +457,16 @@ export function SourcesMenu() {
     };
   }, [open]);
 
-  const extra = sources.length - 1;
+  // Each backend has its own launch root, so what a source count past the
+  // root path badges is every source that is not one, on any backend: with
+  // one backend that is the same as sources.length - 1.
+  const extra = sources.filter((s) => !s.launch).length;
   const broken = sources.filter((s) => s.error).length;
+  const groups = isMulti
+    ? backendOrder
+        .map((name) => ({ name, list: sources.filter((s) => backendOf(s.id) === name) }))
+        .filter((g) => g.list.length > 0)
+    : null;
   return (
     <div className="settings sources" ref={ref}>
       <button
@@ -483,15 +515,28 @@ export function SourcesMenu() {
                 </button>
               )}
             </div>
-            <ul className="src-list">
-              {sources.map((s) => (
-                <SourceRow key={s.id} src={s} />
-              ))}
-            </ul>
+            {groups ? (
+              groups.map((g) => (
+                <div key={g.name} className="src-group">
+                  <h4 className="panel-label">{g.name}</h4>
+                  <ul className="src-list">
+                    {g.list.map((s) => (
+                      <SourceRow key={s.id} src={s} />
+                    ))}
+                  </ul>
+                </div>
+              ))
+            ) : (
+              <ul className="src-list">
+                {sources.map((s) => (
+                  <SourceRow key={s.id} src={s} />
+                ))}
+              </ul>
+            )}
           </section>
           <section className="settings-row">
             <h3 className="panel-label">add a folder</h3>
-            <AddSourceForm onAdded={() => {}} />
+            <AddSourceForm onAdded={() => {}} backendOrder={backendOrder} isMulti={isMulti} />
           </section>
         </div>
       )}

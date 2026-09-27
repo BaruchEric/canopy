@@ -6,7 +6,7 @@ import "@xterm/xterm/css/xterm.css";
 import { api, reachable, socketUrl as backendSocket } from "../api";
 import { backendOf, plainOf, qual } from "../registry";
 import { groveUrl, nameShellHere, parseRoute, popShell } from "../routes";
-import { PANEL_TERM, TERM, closedIn, connOf, idText, multi, panelTermHeightFor, useStore, type TermTab } from "../store";
+import { PANEL_TERM, TERM, closedIn, connOf, idLabel, idText, multi, panelTermHeightFor, useStore, type TermTab } from "../store";
 import { IdLabel, WaitingFor, useWaitingFor } from "./IdLabel";
 import { TERM_FONT, otherShells, termId, viewKey } from "../term";
 import { flipMode, tidyLines, type SurfaceMode } from "../surface";
@@ -929,7 +929,7 @@ function FrontOthers({ set }: { set: string }) {
   const shells = useStore((s) => s.shells);
   const repos = useStore((s) => s.repos);
   const bringTerm = useStore((s) => s.bringTerm);
-  const others = otherShells(set, terms, shells, repos);
+  const others = otherShells(set, terms, shells, repos, (id) => idLabel(id).backend ?? "");
   if (others.length === 0) return null;
   return (
     <nav className="term-others" aria-label="Other running shells">

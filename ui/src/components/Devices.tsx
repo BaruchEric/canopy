@@ -1,7 +1,9 @@
 import { useEffect, useRef, useState } from "react";
 import { clientId } from "../client";
+import { backendOf, plainOf } from "../registry";
 import { idText, useStore } from "../store";
 import { useFitPop } from "../pop";
+import { BackendWord } from "./IdLabel";
 import type { Device, TermInfo } from "../../../src/core/types";
 
 /** what a device's platform word reads as in the list */
@@ -23,9 +25,12 @@ function ago(since: number, now: number): string {
   return `${Math.round(s / 86400)}d`;
 }
 
-/** the shells a device has a socket on, by their repo's name */
-function shellsOf(d: Device, shells: TermInfo[], repoName: (id: string) => string): string[] {
-  return shells.filter((t) => t.viewers.includes(d.name)).map((t) => repoName(t.repoId));
+/** the repos a device has a socket on a shell at, on the device's own
+ *  backend: two backends' devices can share a display name, so the match
+ *  never crosses backends. */
+function shellsOf(d: Device, shells: TermInfo[]): string[] {
+  const b = backendOf(d.id);
+  return shells.filter((t) => backendOf(t.id) === b && t.viewers.includes(d.name)).map((t) => t.repoId);
 }
 
 /**
@@ -67,7 +72,7 @@ export function DevicesChip() {
   }, [open]);
 
   const repoName = (id: string) => repos.find((r) => r.id === id)?.name ?? idText(id);
-  const others = devices.filter((d) => d.id !== me).length;
+  const others = devices.filter((d) => plainOf(d.id) !== me).length;
 
   return (
     <div className="settings devices" ref={ref}>
@@ -90,18 +95,37 @@ export function DevicesChip() {
             ) : (
               <ul className="devices-list">
                 {devices.map((d) => {
-                  const on = shellsOf(d, shells, repoName);
+                  const on = shellsOf(d, shells);
+                  const mine = plainOf(d.id) === me;
                   return (
-                    <li key={d.id} className={d.id === me ? "device me" : "device"}>
+                    <li key={d.id} className={mine ? "device me" : "device"}>
                       <span className="device-name">
                         {d.name}
-                        {d.id === me && <span className="device-tag">this browser</span>}
+                        <BackendWord id={d.id} />
+                        {mine && <span className="device-tag">this browser</span>}
                       </span>
                       <span className="device-fact">
                         {PLATFORM[d.platform] ?? d.platform} · {ago(d.since, now)}
                         {d.streams > 1 && ` · ${d.streams} windows`}
                       </span>
-                      {on.length > 0 && <span className="device-fact">in a shell at {on.join(", ")}</span>}
+                      {on.length > 0 && (
+                        <span className="device-fact">
+                          in a shell at{" "}
+                          {on.map((id, i) => (
+                            <span key={id}>
+                              {i > 0 && ", "}
+                              {repos.some((r) => r.id === id) ? (
+                                <>
+                                  {repoName(id)}
+                                  <BackendWord id={id} />
+                                </>
+                              ) : (
+                                idText(id)
+                              )}
+                            </span>
+                          ))}
+                        </span>
+                      )}
                     </li>
                   );
                 })}

@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { useShallow } from "zustand/react/shallow";
-import { capsFor, homeConn, useStore } from "../store";
+import { capsFor, connOf, multi, useStore } from "../store";
 import { useFitPop } from "../pop";
 import { deviceName } from "../../../src/core/presence";
 import { sameBuild, shortCommit, versionLine } from "../../../src/core/version";
@@ -57,10 +57,18 @@ const KEYS = [
 export function SettingsMenu() {
   const settings = useStore((s) => s.settings);
   const setSetting = useStore((s) => s.setSetting);
-  const client = useStore((s) => homeConn(s).client);
-  const helpers = useStore((s) => homeConn(s).helpers);
-  const caps = useStore(useShallow(capsFor));
-  const keeping = useStore((s) => homeConn(s).keeping);
+  const home = useStore((s) => s.home);
+  const backendOrder = useStore((s) => s.backendOrder);
+  const isMulti = useStore(multi);
+  // which backend the rows below scope to; falls back to home when the
+  // picked one is hidden or gone, or when nothing has been picked yet
+  const [picked, setPicked] = useState<string | null>(null);
+  const scope = picked && backendOrder.includes(picked) ? picked : home;
+  const client = useStore((s) => connOf(s, scope).client);
+  const helpers = useStore((s) => connOf(s, scope).helpers);
+  const base = useStore((s) => connOf(s, scope).base);
+  const caps = useStore(useShallow((s) => capsFor(s, scope)));
+  const keeping = useStore((s) => connOf(s, scope).keeping);
   const setKeeping = useStore((s) => s.setKeeping);
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
@@ -109,6 +117,17 @@ export function SettingsMenu() {
       </button>
       {open && (
         <div className="settings-pop" role="dialog" aria-label="Settings">
+          {isMulti && (
+            <section className="settings-row">
+              <h3 className="panel-label">backend</h3>
+              <Seg
+                label="Which backend the rows below show"
+                value={scope}
+                options={backendOrder.map((n) => ({ value: n, label: n }))}
+                onChange={setPicked}
+              />
+            </section>
+          )}
           <section className="settings-row">
             <h3 className="panel-label">open a repo</h3>
             <Seg
@@ -165,12 +184,14 @@ export function SettingsMenu() {
             )}
             <p className="settings-hint">
               {caps.via === "backend"
-                ? "Through this Mac, which runs the backend."
+                ? scope === home
+                  ? "Through this Mac, which runs the backend."
+                  : `Through ${scope}'s own desktop, which runs its backend.`
                 : caps.helper
                   ? `Through the helper ${caps.helper.name} on ${caps.helper.platform}: ${caps.helper.openers.join(", ") || "no openers"}.`
                   : helpers.length > 0
                     ? "None picked. The helpers above are attached to the backend now, one per machine; pick the one that is this machine. Picking another sends this browser's clicks to that machine's desktop."
-                    : "None. Run canopy helper --backend <this url> on this machine to open kitty, VS Code and the rest here."}
+                    : `None. Run canopy helper --backend ${scope === home ? "<this url>" : base || scope} on that machine to open kitty, VS Code and the rest there.`}
               {client.address && ` This browser is seen as ${client.address}.`}
             </p>
           </section>
@@ -192,7 +213,7 @@ export function SettingsMenu() {
           <section className="settings-row">
             <h3 className="panel-label">keep shell history</h3>
             <label className="settings-line">
-              <input type="checkbox" checked={keeping} onChange={(e) => void setKeeping(e.target.checked)} />
+              <input type="checkbox" checked={keeping} onChange={(e) => void setKeeping(e.target.checked, scope)} />
               write each shell out, so a reboot does not take it
             </label>
             <p className="settings-hint">
@@ -233,7 +254,7 @@ export function SettingsMenu() {
               ))}
             </dl>
           </section>
-          <AboutRow />
+          <AboutRow name={scope} isHome={scope === home} />
         </div>
       )}
     </div>
@@ -242,14 +263,29 @@ export function SettingsMenu() {
 
 /** Which canopy this is: the server's version and commit, where and since
  *  when it runs, and whether this page was bundled from the same build (a
- *  page left open across a redeploy, or a dist/web older than the server). */
-function AboutRow() {
+ *  page left open across a redeploy, or a dist/web older than the server).
+ *  `isHome` is whether `name` is the backend that actually served this page:
+ *  only there does a stale build mean reloading fixes it. */
+function AboutRow({ name, isHome }: { name: string; isHome: boolean }) {
   const [about, setAbout] = useState<About | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    api.about().then(setAbout, (e: unknown) => setError(String(e instanceof Error ? e.message : e)));
-  }, []);
+    let live = true;
+    setAbout(null);
+    setError(null);
+    api.about(name).then(
+      (a) => {
+        if (live) setAbout(a);
+      },
+      (e: unknown) => {
+        if (live) setError(String(e instanceof Error ? e.message : e));
+      },
+    );
+    return () => {
+      live = false;
+    };
+  }, [name]);
 
   const committed = about?.committedAt ? Date.parse(about.committedAt) / 1000 : undefined;
   const commitUrl = about?.homepage && about.commit ? `${about.homepage}/commit/${about.commit}` : null;
@@ -315,14 +351,17 @@ function AboutRow() {
           )}
         </dl>
       )}
-      {stale && (
-        <p className="settings-hint warn">
-          This page is from another build than the server.{" "}
-          <button type="button" className="mini" onClick={() => location.reload()}>
-            reload
-          </button>
-        </p>
-      )}
+      {stale &&
+        (isHome ? (
+          <p className="settings-hint warn">
+            This page is from another build than the server.{" "}
+            <button type="button" className="mini" onClick={() => location.reload()}>
+              reload
+            </button>
+          </p>
+        ) : (
+          <p className="settings-hint warn">{name} runs another build than this page.</p>
+        ))}
     </section>
   );
 }

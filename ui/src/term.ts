@@ -156,8 +156,17 @@ export interface OtherShell {
 
 /** Every running shell but the ones in `set`: this window's tabs first, in
  *  the order opened, then the shells the backend holds that no tab here
- *  names, for repos in the scan. An exited tab has nothing to bring. */
-export function otherShells(set: string, tabs: TermTab[], live: TermInfo[], repos: Repo[]): OtherShell[] {
+ *  names, for repos in the scan. An exited tab has nothing to bring. `word`
+ *  names the machine a repo is on, appended to the label so two repos with
+ *  the same name on different backends still read apart; the default names
+ *  none, which is what a single-backend page passes. */
+export function otherShells(
+  set: string,
+  tabs: TermTab[],
+  live: TermInfo[],
+  repos: Repo[],
+  word: (id: string) => string = () => "",
+): OtherShell[] {
   const viewers = new Map(live.map((t) => [t.id, t.viewers]));
   const out: Omit<OtherShell, "label">[] = [];
   for (const t of tabs) {
@@ -176,7 +185,9 @@ export function otherShells(set: string, tabs: TermTab[], live: TermInfo[], repo
     const name = repos.find((r) => r.id === o.repoId)?.name ?? o.repoId;
     const n = (seen.get(o.repoId) ?? 0) + 1;
     seen.set(o.repoId, n);
-    return { ...o, label: (count.get(o.repoId) ?? 0) > 1 ? `${name} ${n}` : name };
+    const base = (count.get(o.repoId) ?? 0) > 1 ? `${name} ${n}` : name;
+    const w = word(o.repoId);
+    return { ...o, label: w ? `${base} · ${w}` : base };
   });
 }
 

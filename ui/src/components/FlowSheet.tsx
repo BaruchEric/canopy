@@ -6,6 +6,7 @@ import { fleetSkipReason } from "../../../src/core/flow";
 import { isFlowActive, type Fleet, type Flow, type FlowStep, type Repo, type Verdict } from "../../../src/core/types";
 import { fleetCounts, flowWord, oldestParked, stepWord } from "../flows";
 import { agentFor, idText, pickedIds, useStore } from "../store";
+import { BackendWord } from "./IdLabel";
 import { Timeline } from "./RunSheet";
 
 const errText = (err: unknown) => String(err instanceof Error ? err.message : err);
@@ -403,6 +404,7 @@ export function FleetSheet({ fleetId }: { fleetId: string }) {
                 <button type="button" className="fleet-name" disabled={!f} onClick={() => f && showFlow(f.id)}>
                   <span className="dot" />
                   {name(r.repoId)}
+                  {repos.some((rp) => rp.id === r.repoId) && <BackendWord id={r.repoId} />}
                 </button>
                 <span className="fleet-word">{word(r)}</span>
                 {summary && <span className="fleet-summary">{summary}</span>}

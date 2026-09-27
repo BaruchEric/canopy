@@ -14,6 +14,15 @@ export function IdLabel({ id }: { id: string }) {
   );
 }
 
+/** The small word after a name a list already shows, when its id is not
+ *  home's: for a row that has its own way of falling back when the id is
+ *  unknown (`idText`, which already says "on b") and only needs the word
+ *  added once it knows the name. */
+export function BackendWord({ id }: { id: string }) {
+  const { backend } = idLabel(id);
+  return backend ? <span className="backend-word">{backend}</span> : null;
+}
+
 /** The machine a window's repo is on while that machine has not answered
  *  yet, else null: a repo not found there is not missing until it has. */
 export function useWaitingFor(id: string, found: boolean): string | null {

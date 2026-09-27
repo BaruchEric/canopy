@@ -234,6 +234,16 @@ describe("otherShells", () => {
   test("a held shell for a repo gone from the scan is left out", () => {
     expect(otherShells("strip", [], [held("9", "gone", "panel")], repos)).toEqual([]);
   });
+  test("a machine word is appended to the label when the caller gives one", () => {
+    const tabs = [tab("1", "a", "panel")];
+    const live = [held("2", "b", "strip")];
+    const out = otherShells("panel:a", tabs, live, repos, (id) => (id === "b" ? "mini" : ""));
+    expect(out).toEqual([{ id: "2", repoId: "b", label: "B · mini", tabbed: false, viewers: [] }]);
+  });
+  test("with no word function the label is unchanged", () => {
+    const live = [held("2", "b", "strip")];
+    expect(otherShells("panel:a", [], live, repos)[0]?.label).toBe("B");
+  });
   test("shellSet and keepFront", () => {
     expect(shellSet(tab("1", "strip", "panel"))).toBe("panel:strip");
     expect(keepFront("panel:a", [tab("1", "a", "panel")])).toBe("panel:a");

@@ -5,6 +5,7 @@ import {
   onPublicSide,
   pickUrl,
   qualify,
+  signinUrl,
   sliceIn,
   split,
   wsUrl,
@@ -151,6 +152,19 @@ describe("wsUrl", () => {
   test("another backend is its own base", () => {
     expect(wsUrl("https://canopy-mac.beric.ca", { protocol: "http:", host: "x" }, "/api/term")).toBe("wss://canopy-mac.beric.ca/api/term");
     expect(wsUrl("http://notebook:7850", { protocol: "http:", host: "x" }, "/api/term")).toBe("ws://notebook:7850/api/term");
+  });
+});
+
+describe("signinUrl", () => {
+  test("adds next to a login url with no query", () => {
+    expect(signinUrl("https://beric.ca/login", "https://canopy-mac.beric.ca")).toBe(
+      "https://beric.ca/login?next=https%3A%2F%2Fcanopy-mac.beric.ca",
+    );
+  });
+  test("adds next alongside an existing query, with &", () => {
+    expect(signinUrl("https://beric.ca/login?a=1", "https://canopy-mac.beric.ca")).toBe(
+      "https://beric.ca/login?a=1&next=https%3A%2F%2Fcanopy-mac.beric.ca",
+    );
   });
 });
 

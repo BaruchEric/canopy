@@ -144,3 +144,11 @@ export function wsUrl(base: string, page: { protocol: string; host: string }, pa
 /** Whether a source id is a backend's launch root, whichever backend. */
 export const isLaunchSource = (source: string): boolean =>
   source === LAUNCH_SOURCE || source.endsWith(`${SEP}${LAUNCH_SOURCE}`);
+
+/** The gate's login URL with `next` set to a backend's own base, so it sends
+ *  the browser back to that backend once it signs in: one shared cookie
+ *  covers every backend, but the redirect target is not the page's own. */
+export function signinUrl(login: string, next: string): string {
+  const sep = login.includes("?") ? "&" : "?";
+  return `${login}${sep}next=${encodeURIComponent(next)}`;
+}

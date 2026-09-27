@@ -10,6 +10,7 @@ import { versionLine } from "../../../src/core/version";
 import { FilterMenu } from "./Filters";
 import { Seg } from "./Seg";
 import { SettingsMenu } from "./Settings";
+import { BackendsChip } from "./Backends";
 import { ChanChip } from "./Chan";
 import { DevicesChip } from "./Devices";
 import { KeptShells } from "./KeptShells";
@@ -350,6 +351,7 @@ export function TopBar() {
         </button>
 
         <PeersChip />
+        <BackendsChip />
         <KeptShells />
         <ShellsChip />
         <DevicesChip />
