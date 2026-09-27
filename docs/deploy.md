@@ -446,9 +446,69 @@ shell into them is an ssh session, so that host needs its own git, `claude`, and
 ## Other canopy pages (multi-backend)
 
 A backend answers another canopy page only when that page's origin is in
-`CANOPY_ORIGINS`, comma separated, exact origins. The mini's `.env` and the
-Mac's launchd plist each list the other machine's public and tailnet origins
-plus their own ts.net origin. See the multi-backend spec for the values.
-Prefer an https origin in `CANOPY_ORIGINS` where the page allows it: a plain
-http page sends no `Sec-Fetch-Site` header, which the origin gate otherwise
-uses to tell a same-origin request apart from a cross-site one.
+`CANOPY_ORIGINS`, comma separated, exact origins. This is a separate list
+from each machine's own `backends` config (what `GET /api/backends` answers,
+which URLs to dial): `CANOPY_ORIGINS` says who may call *this* machine,
+`backends` says which *other* machines this page should call. The mini's
+`.env` and the Mac's launchd plist each list the other machine's public and
+tailnet origins plus their own ts.net origin. Prefer an https origin in
+`CANOPY_ORIGINS` where the page allows it: a plain http page sends no
+`Sec-Fetch-Site` header, which the origin gate otherwise uses to tell a
+same-origin request apart from a cross-site one.
+
+What each machine's `CANOPY_ORIGINS` should hold, once the rollout below has
+added the mini's two loopback entries:
+
+```
+# the mini's .env
+CANOPY_ORIGINS=https://canopy-mac.beric.ca,https://erics-macbook-pro.tail2d2c60.ts.net:7850,https://macmini-2018.tail2d2c60.ts.net:7849,http://127.0.0.1:7850,http://localhost:7850
+
+# the Mac's launchd plist (ca.beric.canopy-server)
+CANOPY_ORIGINS=https://canopy.beric.ca,https://macmini-2018.tail2d2c60.ts.net:7849,https://erics-macbook-pro.tail2d2c60.ts.net:7850,http://macmini-2018:7850,http://100.68.139.95:7850
+```
+
+Both machines list both tailnet https origins (each `tailscale serve` name,
+amendment 2), since a page opened from either tailnet address may reach
+either backend, and each other's public `beric.ca` origin, since a page
+opened from one public name is home to that machine and needs the other's
+permission to call it as a foreign backend. The mini also lists the Mac's own
+page, `http://127.0.0.1:7850` and `http://localhost:7850`: the Mac's canopy
+binds loopback only, so its own page is home there at that address, and it
+needs the mini's permission the same way (amendment 7). The Mac lists the
+mini's plain http tailnet addresses, `http://macmini-2018:7850` and
+`http://100.68.139.95:7850`, for the matching case when the mini's own page
+is open off `tailscale serve`, at the plain port canopy publishes directly.
+Add a machine's origins on both sides before its client code ships, so a page
+never sends a foreign origin nobody has listed yet.
+
+**After a deploy**, check the multi-backend page actually reaches every
+backend:
+
+1. Run `~/.claude/skills/verify-build/clean-rebuild.sh verify checkoutPref`
+   on the Mac and inside the mini's container, so a stale `dist/web` is not
+   what you are about to check.
+2. `GET /api/backends` on each machine and confirm its `backends` array
+   names the other one with the right public and tailnet URLs (this is that
+   machine's own config, not `CANOPY_ORIGINS`).
+3. Open the page in a browser, both at a public name
+   (`https://canopy.beric.ca` or `https://canopy-mac.beric.ca`) and at the
+   Mac's own `http://127.0.0.1:7850`, the amendment 7 case the mini's
+   loopback origins exist for. Look for the backends chip in the top bar:
+   it shows as soon as this machine's own `backends` config names another
+   one, whether or not that other one currently answers, so a missing chip
+   means the config (or `GET /api/backends`) is wrong, not that the other
+   backend is unreachable.
+4. Open the chip's popover: both backends should read "online", each with the
+   URL this page is actually using (`this page` for home, an origin for the
+   other). Tell the reasons apart before touching `CANOPY_ORIGINS`: "*did not
+   answer*" is a fetch that got no response at all (check the URL is right
+   and reachable, e.g. `curl <url>/api/about`, before suspecting the origin
+   gate); "*the event stream dropped*" can mean the backend is down just as
+   easily as a CORS refusal on the stream, so confirm a plain fetch to that
+   backend works before chasing `CANOPY_ORIGINS`; "*no URL this page can
+   use*" means the `backends` entry itself has no public or tailnet URL this
+   page's protocol can reach, which is a config problem on this machine, not
+   the other one.
+5. Find a repo checked out on both machines: its card should carry two
+   machine chips, and clicking the non-home one should open that checkout's
+   panel and, from there, a shell on the other machine.
