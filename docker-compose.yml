@@ -116,6 +116,10 @@ services:
       # requests for that host with X-Forwarded-Proto: https pass the origin
       # gate. Empty when there is no tunnel
       - CANOPY_PUBLIC_ORIGIN=${CANOPY_PUBLIC_ORIGIN:-}
+      # other canopy pages (another backend's, or this one's own behind
+      # tailscale serve) allowed to drive this backend; see the
+      # multi-backend spec. Empty when there are none.
+      - CANOPY_ORIGINS=${CANOPY_ORIGINS:-}
     volumes:
       # the repos to scan, mounted at the SAME path they have on the host so
       # git in the container and VS Code Remote-SSH on the host agree

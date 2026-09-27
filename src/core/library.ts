@@ -1,6 +1,7 @@
 import { createHash, randomBytes } from "node:crypto";
 import { realpath } from "node:fs/promises";
 import { join } from "node:path";
+import { parseOrigins } from "./cors";
 import { configDir } from "./store";
 
 const adapter = join(import.meta.dir, "../../lib/devhub/canopy.py");
@@ -93,6 +94,7 @@ export class Library {
     private root: string,
     private publicOrigin = process.env["CANOPY_PUBLIC_ORIGIN"],
     private open = openBind(),
+    private origins: readonly string[] = parseOrigins(process.env["CANOPY_ORIGINS"]),
   ) {}
 
   stop(): void {
@@ -159,7 +161,7 @@ export class Library {
 
   async handle(req: Request): Promise<Response> {
     const url = new URL(req.url);
-    if (!libraryOriginAllowed(req, this.publicOrigin, this.open)) {
+    if (!libraryOriginAllowed(req, this.publicOrigin, this.open, this.origins)) {
       return Response.json({ error: "Foreign origin" }, { status: 403 });
     }
     if (!["GET", "POST"].includes(req.method)) {

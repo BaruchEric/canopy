@@ -837,16 +837,22 @@ export const useStore = create<CanopyState>((set, get) => ({
       // own under the old name. A solo or shell window keeps none: what it
       // saved is the grove's, and the grove is what shows them.
       const hiddenTerms = pruneHidden(get().hiddenTerms, held);
-      const terms = dockless() ? [] : reconcileTerms(layout.terms, held, tree.repos, new Set(hiddenTerms));
+      const terms = dockless() ? [] : reconcileTerms(layout.terms, held, tree.repos, layout.panels, new Set(hiddenTerms));
       const strip = terms.filter((t) => t.place === "strip");
-      // A panel shell shows only inside its repo's panel, and a shell adopted
-      // from another window may have none here: open it, shell unfolded, the
-      // way openTerm does, so the shell is somewhere you can see.
+      // A panel shell whose panel is not open here waits for the panel to
+      // open (reconcileTerms already leaves an untabbed one out); only a
+      // saved tab can still name a panel that is not yet in `panels` (an
+      // older layout, or one saved between the two fields), so the
+      // opening-and-unfolding here is scoped to saved tabs alone. It must
+      // not run for a shell reconcileTerms adopted, or every closed panel
+      // with a shell in it would reopen on the very load meant to keep it
+      // closed.
+      const savedIds = new Set(layout.terms.map((t) => t.id));
       const s = get();
       let panels = s.panels;
       let closedSections = s.closedSections;
       for (const t of terms) {
-        if (t.place !== "panel" || panels.includes(t.repoId)) continue;
+        if (t.place !== "panel" || panels.includes(t.repoId) || !savedIds.has(t.id)) continue;
         panels = [...panels, t.repoId];
         closedSections = unfoldIn(closedSections, t.repoId, "shell");
       }

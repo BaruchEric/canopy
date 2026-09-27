@@ -63,11 +63,18 @@ export function loadTermTabs(v: unknown): TermTab[] {
  * and took every shell with it. A shell at a repo the scan no longer has
  * cannot be shown (its socket names the repo) and is left alone, and so is
  * one this browser hid (`hidden`): it runs on, and the shells picker has it.
+ * An untabbed panel shell whose repo's panel is not in `panels` (the loaded
+ * layout's, not adopted here either) is left alone too: closing a panel
+ * with a shell in it must not reopen that panel on the next load, on this
+ * device or any other. A strip shell has no such gate. Saved tabs are
+ * unaffected either way: a saved panel tab is kept even where the panel is
+ * not (yet) in `panels`.
  */
 export function reconcileTerms(
   saved: TermTab[],
   live: TermInfo[],
   repos: Repo[],
+  panels: readonly string[] = [],
   hidden: ReadonlySet<string> = new Set(),
 ): TermTab[] {
   const held = new Set(live.map((t) => t.id));
@@ -76,6 +83,7 @@ export function reconcileTerms(
   const seen = new Set(out.map((t) => t.id));
   for (const t of live) {
     if (seen.has(t.id) || hidden.has(t.id)) continue;
+    if (t.place === "panel" && !panels.includes(t.repoId)) continue;
     const repo = repoOf(t.repoId);
     if (!repo) continue;
     out.push({ id: t.id, repoId: repo.id, name: repo.name, path: repo.path, place: t.place });
@@ -87,11 +95,12 @@ export function reconcileTerms(
  *  has stays (one whose shell ended is marked by its own socket's exit
  *  frame and closed by hand, as before), and a held shell no tab names gets
  *  one: in the strip, or in its repo's panel when that panel is open here.
- *  A panel shell whose panel is closed waits for the panel to open or the
- *  next load, so a shell opened on another device does not pop panels
- *  open on this one. A shell this window ended (`ended`) is never taken
- *  back: the list that follows a closed tab's socket can reach here before
- *  the server has heard the end, and adopting it would open a socket that
+ *  A panel shell whose panel is closed waits for the panel to open, so a
+ *  shell opened on another device does not pop panels open on this one
+ *  (nor does a reload: see `reconcileTerms`, which applies the same rule
+ *  at load). A shell this window ended (`ended`) is never taken back: the
+ *  list that follows a closed tab's socket can reach here before the
+ *  server has heard the end, and adopting it would open a socket that
  *  starts a new shell under the closed name. */
 export function adoptTerms(
   tabs: TermTab[],

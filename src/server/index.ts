@@ -2434,7 +2434,6 @@ export async function startServer(opts: {
       : "shells on plain ptys (no tmux found; they end with the server)",
   );
 
-  const library = new Library(root);
   const webDir = join(import.meta.dir, "../../dist/web");
   // Loopback by default: every mutating git route here is unauthenticated,
   // so on a Mac the server is reachable only from the same machine. A shared
@@ -2450,6 +2449,7 @@ export async function startServer(opts: {
   const publicOrigin = process.env["CANOPY_PUBLIC_ORIGIN"];
   // Other canopy pages (another machine's, or this one's own behind
   // tailscale serve) that may drive this backend; see the multi-backend spec.
+  // Parsed before the Library is constructed so it gets the same list.
   const origins = parseOrigins(process.env["CANOPY_ORIGINS"]);
   {
     const raw = process.env["CANOPY_ORIGINS"];
@@ -2464,6 +2464,7 @@ export async function startServer(opts: {
     }
   }
   const beyondLoopback = openBind();
+  const library = new Library(root, publicOrigin, beyondLoopback, origins);
   // The in-app browser's ports, each listener started on first use. A
   // preview dials the backend's loopback, which in the container is the
   // shells container's too (compose puts canopy in its network namespace),
@@ -2552,6 +2553,11 @@ export async function startServer(opts: {
             ? new Response(null, { status: 204, headers: { ...cors, ...PREFLIGHT_HEADERS } })
             : json({ error: "Foreign origin" }, 403);
         }
+        // A preflight-shaped OPTIONS outside /api is not a real preflight (no
+        // route here answers one), and the static file serving below has no
+        // method check of its own. Refuse it here, before route runs, rather
+        // than letting it fall through to a 200 with the SPA or an asset.
+        if (!api && req.method === "OPTIONS") return new Response(null, { status: 405 });
         const res = await route(req, srv, url);
         if (!res || !cors) return res;
         // a proxied or streamed answer may hold immutable headers; rewrap it

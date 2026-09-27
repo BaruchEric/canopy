@@ -111,6 +111,15 @@ describe("who may call the API", () => {
   test("the static page is not gated", async () => {
     expect((await fetch(api("/"), { headers: { origin: EVIL } })).status).not.toBe(403);
   });
+
+  test("a preflight-shaped OPTIONS outside /api is refused, not served", async () => {
+    const res = await fetch(api("/"), {
+      method: "OPTIONS",
+      headers: { origin: LISTED, "access-control-request-method": "GET" },
+    });
+    expect(res.status).toBe(405);
+    expect(res.headers.get("access-control-allow-origin")).toBeNull();
+  });
 });
 
 describe("another canopy page", () => {

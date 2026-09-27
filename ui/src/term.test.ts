@@ -63,9 +63,9 @@ describe("reconcileTerms", () => {
     const live = [info("c", "app"), info("a", "app")];
     expect(reconcileTerms([a, tab("b", "lib", "panel"), c], live, repos)).toEqual([a, c]);
   });
-  test("a shell nobody saved gets a tab where it was opened", () => {
+  test("a shell nobody saved gets a tab where it was opened, a panel shell only where its panel is open", () => {
     const live = [info("z", "lib", "panel")];
-    expect(reconcileTerms([], live, repos)).toEqual([
+    expect(reconcileTerms([], live, repos, ["lib"])).toEqual([
       { id: "z", repoId: "lib", name: "lib", path: "/dev/lib", place: "panel" },
     ]);
   });
@@ -75,6 +75,23 @@ describe("reconcileTerms", () => {
   });
   test("nothing live means no tabs", () => {
     expect(reconcileTerms([tab("a", "app")], [], repos)).toEqual([]);
+  });
+  test("an untabbed panel shell waits for its panel to be open, at load same as live", () => {
+    const live = [info("p", "app", "panel")];
+    expect(reconcileTerms([], live, repos, [])).toEqual([]);
+    expect(reconcileTerms([], live, repos, ["app"])).toEqual([
+      { id: "p", repoId: "app", name: "app", path: "/dev/app", place: "panel" },
+    ]);
+  });
+  test("an untabbed strip shell still becomes a tab regardless of panels", () => {
+    const live = [info("s", "app", "strip")];
+    expect(reconcileTerms([], live, repos, [])).toEqual([
+      { id: "s", repoId: "app", name: "app", path: "/dev/app", place: "strip" },
+    ]);
+  });
+  test("a saved panel tab is kept whether or not its panel is in the passed list", () => {
+    const saved = tab("a", "app", "panel");
+    expect(reconcileTerms([saved], [info("a", "app", "panel")], repos, [])).toEqual([saved]);
   });
 });
 
@@ -115,7 +132,7 @@ describe("hidden shells", () => {
   const repos = [repo("app"), repo("lib")];
 
   test("a load does not make a tab of a shell this browser hid", () => {
-    const out = reconcileTerms([], [info("a", "app"), info("h", "lib")], repos, new Set(["h"]));
+    const out = reconcileTerms([], [info("a", "app"), info("h", "lib")], repos, [], new Set(["h"]));
     expect(out.map((t) => t.id)).toEqual(["a"]);
   });
 

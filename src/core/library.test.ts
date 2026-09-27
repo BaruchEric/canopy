@@ -103,6 +103,23 @@ describe("workspace library integration", () => {
     // no list, no change from before
     expect(libraryOriginAllowed(req("127.0.0.1:7850", { origin: "https://canopy.beric.ca" }))).toBe(false);
   });
+  test("a Library given origins lets its own listed ts.net page through the gate", async () => {
+    const served = "https://box.tail0000.ts.net:7850";
+    const scoped = new Library(root, undefined, false, [served]);
+    try {
+      // DELETE is neither GET nor POST: if the gate lets it through it fails
+      // on the method check next, proving the gate passed without needing
+      // the Python worker to start at all.
+      const res = await scoped.handle(new Request("http://box.tail0000.ts.net:7850/api/library", {
+        method: "DELETE",
+        headers: { "sec-fetch-site": "same-origin" },
+      }));
+      expect(res.status).not.toBe(403);
+      expect(res.status).toBe(405);
+    } finally {
+      scoped.stop();
+    }
+  });
   test("tailnetHost and openBind", () => {
     expect(tailnetHost("100.64.0.1")).toBe(true);
     expect(tailnetHost("100.127.255.254")).toBe(true);
