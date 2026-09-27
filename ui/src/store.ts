@@ -1,5 +1,6 @@
 import { create } from "zustand";
 import { api, subscribe } from "./api";
+import { homeName } from "./registry";
 import { applyQuery, type RepoFilter } from "./filters";
 import { focusPanel, nextActive } from "./dock";
 import { heldShellUrl, openElsewhere, openShellElsewhere, parseRoute } from "./routes";
@@ -903,6 +904,7 @@ export const useStore = create<CanopyState>((set, get) => ({
     // Handed back so the caller can close the stream — StrictMode mounts
     // effects twice, and an unclosed EventSource leaks a live connection.
     const unsubscribe = subscribe(
+      homeName(),
       (ev) => get().applyEvent(ev),
       () => {
         // the server may still be coming back up — a failed resync just
@@ -1521,7 +1523,8 @@ export const useStore = create<CanopyState>((set, get) => ({
   pickFacet: (facet) => set((s) => ({ selected: pickWhere(visibleRepos(s), facet) })),
   planFleet: (workflow) => set({ sheet: { kind: "fleet-plan", workflow } }),
   startFleet: async (workflow, note) => {
-    const fleet = await api.startFleet(workflow, pickedIds(get()), note);
+    const [fleet] = await api.startFleet(workflow, pickedIds(get()), note);
+    if (!fleet) return;
     set((s) => ({
       fleets: { ...s.fleets, [fleet.id]: fleet },
       sheet: { kind: "fleet", fleetId: fleet.id },
