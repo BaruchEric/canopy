@@ -42,6 +42,7 @@ import { apiBase, ForgeAuthError, linkForgeClones, listForgeRepos } from "../cor
 import { isSshHost, parseLocator, parseSshHosts, shellQuote, tildeQuote } from "../core/host";
 import { hasGatewayKey, jev } from "../core/jev";
 import { normalizeAgent } from "../core/agent";
+import { selfName } from "../core/backends";
 import { linkPeers, NO_PUSH, peerUrl } from "../core/peers";
 import { initRepo, PassSeen, seedRepo, syncAll, syncRepo, takeWip, trackBranch } from "../core/peersync";
 import { normalizeLaunch } from "../core/launch";
@@ -1869,6 +1870,11 @@ async function handleApi(
   }
   if (path === "/api/agents" && method === "GET") {
     return json((await loadConfig()).agents);
+  }
+
+  if (path === "/api/backends" && method === "GET") {
+    const cfg = await loadConfig();
+    return json({ self: selfName(cfg.self, hostname()), backends: cfg.backends });
   }
 
   if (path === "/api/peers" && method === "GET") {

@@ -350,6 +350,15 @@ export interface PeerState {
   at: number;
 }
 
+/** Another canopy server this page may connect to: its name (a peer name,
+ *  so `|` can never appear in it) and where it answers. `public` is an
+ *  https origin behind the edge gate; `tailnet` an origin on the tailnet. */
+export interface BackendEntry {
+  name: string;
+  public?: string;
+  tailnet?: string;
+}
+
 export interface CanopyConfig {
   port: number;
   maxDepth: number;
@@ -385,6 +394,9 @@ export interface CanopyConfig {
   peerSync: PeerSync;
   /** ignored files copied from a peer when a repo lacks them (names or simple globs) */
   seed: string[];
+  /** the canopy backends a page served from here may connect to, in the
+   *  order a client falls back through (see the multi-backend spec) */
+  backends: BackendEntry[];
 }
 
 /* ---------- the launcher: release builds and pull requests, run here ---------- */
