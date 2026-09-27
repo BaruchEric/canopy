@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import type { Repo, Run } from "../../src/core/types";
-import { api, onBackendSignal, readFrame, socketUrl, STREAM_STALE, streamAction } from "./api";
+import { api, onBackendSignal, PartialFleetError, readFrame, socketUrl, STREAM_STALE, streamAction } from "./api";
 import type { BackendSignal } from "./backends";
 import { setBase, setRegistry } from "./registry";
 
@@ -146,6 +146,35 @@ describe("a page with two backends", () => {
       ["f1", ["x"]],
       ["b|f1", ["b|y"]],
     ]);
+  });
+
+  test("a fleet start that reaches one backend and not the other keeps what did start", async () => {
+    reply = (c) => {
+      if (c.url.startsWith("http://b.test")) throw new TypeError("Failed to fetch");
+      const { ids } = JSON.parse(String(c.init?.body)) as { ids: string[] };
+      return json({ id: "f1", workflow: "w", repos: ids.map((repoId) => ({ repoId, status: "pending" })) });
+    };
+    let err: unknown;
+    try {
+      await api.startFleet("w", ["x", "b|y"], "");
+    } catch (e) {
+      err = e;
+    }
+    if (!(err instanceof PartialFleetError)) throw new Error(`expected a PartialFleetError, got ${String(err)}`);
+    expect(err.message).toContain("b");
+    expect(err.started.map((f) => [f.id, f.repos.map((r) => r.repoId)])).toEqual([["f1", ["x"]]]);
+  });
+
+  test("a fleet start that only touches one backend answers or fails as it always did, unwrapped", async () => {
+    reply = () => json({ error: "no such workflow" }, 400);
+    await expect(api.startFleet("w", ["x"], "")).rejects.toThrow("no such workflow");
+    let err: unknown;
+    try {
+      await api.startFleet("w", ["x"], "");
+    } catch (e) {
+      err = e;
+    }
+    expect(err).not.toBeInstanceOf(PartialFleetError);
   });
 
   test("what came back, or did not, is signalled for the backend it came from", async () => {

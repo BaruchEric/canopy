@@ -83,6 +83,20 @@ export function onBackendSignal(fn: (backend: string, sig: BackendSignal) => voi
  *  id that is not its own. */
 export const reachable = (b: string): boolean => b === homeName() || baseOf(b) !== "";
 
+/** A fleet start that reached some backends and not others: `started` is
+ *  every fleet that did start, kept so the caller can fold them in and drop
+ *  their repos from a selection, rather than losing them because one more
+ *  backend never answered. */
+export class PartialFleetError extends Error {
+  constructor(
+    message: string,
+    public readonly started: Fleet[],
+  ) {
+    super(message);
+    this.name = "PartialFleetError";
+  }
+}
+
 async function req<T>(b: string, path: string, init: RequestInit = {}): Promise<T> {
   if (!reachable(b)) throw new Error(`${b} has not answered yet`);
   const base = baseOf(b);
@@ -459,20 +473,49 @@ export const api = {
   /** the browsers on the event stream now */
   devices: async (b: string = homeName()) => fromAll(b, await req<Device[]>(b, "/api/devices"), qDevice),
   fleets: async (b: string = homeName()) => fromAll(b, await req<Fleet[]>(b, "/api/fleets"), qFleet),
-  /** one fleet per backend the repos are on, in registry order */
-  startFleet: (workflow: string, ids: string[], note: string): Promise<Fleet[]> =>
-    Promise.all(
-      byBackend(ids).map(async ([b, plain]) =>
-        from(
-          b,
-          await req<Fleet>(b, "/api/fleet", {
-            method: "POST",
-            body: JSON.stringify({ workflow, ids: plain, note }),
-          }),
-          qFleet,
-        ),
-      ),
-    ),
+  /** one fleet per backend the repos are on, in registry order. One backend
+   *  (always true with a single-backend registry): its answer, or its error,
+   *  as it always was. Several: every request goes regardless of the
+   *  others' outcome (`allSettled`, not `all`), so one backend failing does
+   *  not cost what the others started; a failure is thrown as a
+   *  `PartialFleetError` naming each failed backend and carrying the fleets
+   *  that did start, once every backend has been heard from. */
+  startFleet: async (workflow: string, ids: string[], note: string): Promise<Fleet[]> => {
+    const groups = byBackend(ids);
+    const one = groups.length === 1 ? groups[0] : undefined;
+    if (one) {
+      const [b, plain] = one;
+      const fleet = await req<Fleet>(b, "/api/fleet", {
+        method: "POST",
+        body: JSON.stringify({ workflow, ids: plain, note }),
+      });
+      return [from(b, fleet, qFleet)];
+    }
+    const results = await Promise.allSettled(
+      groups.map(async ([b, plain]) => {
+        try {
+          return from(
+            b,
+            await req<Fleet>(b, "/api/fleet", {
+              method: "POST",
+              body: JSON.stringify({ workflow, ids: plain, note }),
+            }),
+            qFleet,
+          );
+        } catch (err) {
+          throw new Error(`${b}: ${err instanceof Error ? err.message : String(err)}`);
+        }
+      }),
+    );
+    const started: Fleet[] = [];
+    const failed: string[] = [];
+    for (const r of results) {
+      if (r.status === "fulfilled") started.push(r.value);
+      else failed.push(r.reason instanceof Error ? r.reason.message : String(r.reason));
+    }
+    if (failed.length > 0) throw new PartialFleetError(`no fleet started: ${failed.join("; ")}`, started);
+    return started;
+  },
   stopFleet: async (id: string) => {
     const [b, plain] = on(id);
     return from(

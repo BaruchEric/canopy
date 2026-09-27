@@ -614,6 +614,31 @@ describe("several backends", () => {
     expect(s.backendOrder).toEqual(["home"]);
     expect(s.loaded).toBe(true);
   });
+
+  test("a fleet that starts on a and fails on b keeps a's fleet and drops only a's repo from the pick", async () => {
+    // two unrelated repos, one per backend (not two checkouts of one card),
+    // so both are their own visible, pickable repo
+    const bFleet: Answer = (path) => {
+      if ((path.split("?")[0] ?? "") === "/api/fleet") throw new Error("b did not answer");
+      return backendAnswers(scanOf("/b", [repo("other")]), [])(path);
+    };
+    await start(
+      backendAnswers(scanOf("/a", [repo("proj")]), [], {
+        "/api/backends": twoBackends,
+        "/api/fleet": { id: "f1", workflow: "w", verb: "w", note: "", repos: [{ repoId: "proj" }], status: "working", startedAt: 1 },
+      }),
+      bFleet,
+    );
+    await settle();
+    useStore.setState({ selecting: true, selected: ["proj", "b|other"] });
+    await expect(useStore.getState().startFleet("w", "")).rejects.toThrow();
+    const s = useStore.getState();
+    expect(s.fleets["f1"]?.repos.map((r) => r.repoId)).toEqual(["proj"]);
+    expect(s.selected).toEqual(["b|other"]);
+    // the failed backend left selecting on, so the plan can retry just what
+    // did not start
+    expect(s.selecting).toBe(true);
+  });
 });
 
 /* ---------- cards ---------- */

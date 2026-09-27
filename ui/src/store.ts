@@ -1,5 +1,5 @@
 import { create } from "zustand";
-import { api, onBackendSignal, resolveBase, subscribe } from "./api";
+import { api, onBackendSignal, PartialFleetError, resolveBase, subscribe } from "./api";
 import { backendOf, homeName, isHome, plainOf, qual, registry, setBase, setRegistry } from "./registry";
 import { backendState, sliceIn, split, type BackendStatus, type Reg } from "./backends";
 import { mergeHistory } from "./qualify";
@@ -2068,8 +2068,20 @@ export const useStore = create<CanopyState>((set, get) => ({
   pickFacet: (facet) => set((s) => ({ selected: pickWhere(visibleRepos(s), facet) })),
   planFleet: (workflow) => set({ sheet: { kind: "fleet-plan", workflow } }),
   startFleet: async (workflow, note) => {
-    // one fleet per backend the picked repos are on; the sheet shows the first
-    const started = await api.startFleet(workflow, pickedIds(get()), note);
+    // one fleet per backend the picked repos are on; the sheet shows the
+    // first. api.startFleet keeps asking every backend even once one has
+    // failed, so a partial failure still hands back the fleets that did
+    // start (as a PartialFleetError): fold those in and drop their repos
+    // from the selection before the error reaches the caller, or a second
+    // click would start a second fleet on repos already running one. A
+    // full start clears the whole pick, as it always did.
+    let started: Fleet[];
+    try {
+      started = await api.startFleet(workflow, pickedIds(get()), note);
+    } catch (err) {
+      if (err instanceof PartialFleetError) set((s) => foldStartedFleets(s, err.started));
+      throw err;
+    }
     const first = started[0];
     if (!first) return;
     set((s) => ({
@@ -2342,4 +2354,21 @@ export function pickableIds(s: CanopyState): string[] {
 export function pickedIds(s: CanopyState): string[] {
   const have = new Set(s.selected);
   return pickableIds(s).filter((id) => have.has(id));
+}
+
+/** Fold newly started fleets into the store: their entries added, and their
+ *  repos dropped from the selection. Used on a full start and, through a
+ *  `PartialFleetError`, on one that reached some backends and not others,
+ *  so a second click after a partial failure only asks the backends that
+ *  still have not started one. */
+export function foldStartedFleets(
+  s: Pick<CanopyState, "fleets" | "selected">,
+  started: readonly Fleet[],
+): Pick<CanopyState, "fleets" | "selected"> {
+  if (started.length === 0) return s;
+  const ids = new Set(started.flatMap((f) => f.repos.map((r) => r.repoId)));
+  return {
+    fleets: { ...s.fleets, ...Object.fromEntries(started.map((f) => [f.id, f])) },
+    selected: s.selected.filter((id) => !ids.has(id)),
+  };
 }
