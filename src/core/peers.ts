@@ -1,7 +1,7 @@
 /** Peer sync, the pure half: every machine keeps its own clone of each repo
  *  and pulls the others' branches and WIP snapshots. Browser-safe: no Bun or
  *  node imports, since the UI reads the types and words from here. */
-import type { Peer, PeerBranch, PeerRole, PeerState, PeerSync, PeerWip, Repo } from "./types";
+import type { Peer, PeerBranch, PeerRole, PeerState, PeerSync, PeerWip, PeerWipPath, Repo } from "./types";
 
 export const PEER_SYNC: readonly PeerSync[] = ["off", "dry", "on"];
 export const DEFAULT_SEED = [".env", ".env.local"];
@@ -120,6 +120,28 @@ export function parseWipLines(out: string, peer: string): Omit<PeerWip, "files">
     if (!hash || !unix || !parent || !ref?.startsWith(prefix)) return [];
     return [{ peer, branch: ref.slice(prefix.length), at: Number(unix) * 1000, parent, hash }];
   });
+}
+
+/** How many of a WIP's paths ride along in PeerState. It goes out over SSE
+ *  on every change, so a WIP of thousands of files sends its count, not
+ *  its whole list. */
+export const WIP_PATHS = 50;
+
+/** `git diff --name-status -z --no-renames` output: a status word and a
+ *  path per entry, NUL-separated. --no-renames keeps every entry at two
+ *  fields; a rename reads as a D and an A. */
+export function parseNameStatus(out: string, cap = WIP_PATHS): { files: number; paths: PeerWipPath[] } {
+  const words = out.split("\0");
+  const paths: PeerWipPath[] = [];
+  let files = 0;
+  for (let i = 0; i + 1 < words.length; i += 2) {
+    const status = words[i]?.charAt(0);
+    const path = words[i + 1];
+    if (!status || !path) continue;
+    files++;
+    if (paths.length < cap) paths.push({ status, path });
+  }
+  return { files, paths };
 }
 
 export const peerMissing = (stderr: string): boolean =>

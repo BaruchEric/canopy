@@ -1,6 +1,7 @@
 import { memo, useMemo } from "react";
 import { useShallow } from "zustand/react/shallow";
 import { pickable } from "../flows";
+import { peerWipCounts } from "../peers";
 import { groupRepos, sectionKey } from "../grouping";
 import { pickCount, pickState } from "../select";
 import { useStore, visibleRepos } from "../store";
@@ -45,6 +46,11 @@ const TreeItem = memo(function TreeItem({ repo }: { repo: Repo }) {
       {(repo.status?.files.length ?? 0) > 0 && (
         <span className="tree-n">{repo.status?.files.length}</span>
       )}
+      {peerWipCounts(repo.peers).map((c) => (
+        <span key={c.peer} className="tree-peer" title={c.title}>
+          {c.text}
+        </span>
+      ))}
       {(repo.status?.ahead ?? 0) > 0 && (
         <span className="tree-ahead">↑{repo.status?.ahead}</span>
       )}

@@ -48,6 +48,24 @@ export function peerChips(st: PeerState | undefined): PeerChip[] {
   return out;
 }
 
+/** Each peer's uncommitted files, summed across its WIP branches: what the
+ *  sidebar and the changes head say beside this checkout's own count.
+ *  "mac 1" reads as the peer's, never as a file on this disk. */
+export function peerWipCounts(st: PeerState | undefined): { peer: string; text: string; title: string }[] {
+  const by = new Map<string, { files: number; branches: string[] }>();
+  for (const w of st?.wip ?? []) {
+    const e = by.get(w.peer) ?? { files: 0, branches: [] };
+    e.files += w.files;
+    e.branches.push(w.branch);
+    by.set(w.peer, e);
+  }
+  return [...by].map(([peer, e]) => ({
+    peer,
+    text: `${peer} ${e.files}`,
+    title: `${peer} has ${plural(e.files, "uncommitted file")} on ${e.branches.join(", ")}`,
+  }));
+}
+
 // An offline peer's `at` stamps the failed attempt, not the last time it
 // was actually reached, so there is no "ago" worth reporting for it.
 export const seenWord = (s: PeerSeen): string =>

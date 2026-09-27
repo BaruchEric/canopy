@@ -453,11 +453,15 @@ describe("fetch and fast-forward", () => {
   test("the peer's WIP arrives and is pruned once the peer is clean", async () => {
     const { mac, mini, toMini, miniId } = await pair("wipx");
     await writeFile(join(mini, "a.txt"), "half done\n");
+    await writeFile(join(mini, "new.txt"), "untracked\n");
     await snapshotWip(mini, "mini", false);
     await fetchPeer(mac, miniId, toMini, {});
     const w = await peerWips(mac, ["mini"]);
-    expect(w).toMatchObject([{ peer: "mini", branch: "main", files: 1 }]);
+    expect(w).toMatchObject([
+      { peer: "mini", branch: "main", files: 2, paths: [{ status: "M", path: "a.txt" }, { status: "A", path: "new.txt" }] },
+    ]);
     await sh(mini, "checkout", "--", "a.txt");
+    await rm(join(mini, "new.txt"));
     await snapshotWip(mini, "mini", false);
     await fetchPeer(mac, miniId, toMini, {});
     expect(await peerWips(mac, ["mini"])).toEqual([]);

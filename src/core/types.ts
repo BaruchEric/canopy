@@ -290,13 +290,24 @@ export interface PeerBranch {
   behind: number;
 }
 
+/** One path a peer's WIP touches, as `git diff --name-status` names it
+ *  against the WIP's parent. An untracked file shows as "A": the snapshot
+ *  tree is built with `git add -A`, which erases that difference. */
+export interface PeerWipPath {
+  status: string;
+  path: string;
+}
+
 export interface PeerWip {
   peer: string;
   branch: string;
   at: number;
   parent: string;
   hash: string;
+  /** every path the WIP touches, however many `paths` lists */
   files: number;
+  /** the first WIP_PATHS of them; absent from a backend older than this */
+  paths?: PeerWipPath[];
 }
 
 export interface PeerState {

@@ -1113,6 +1113,13 @@ a.chan-text {
   color: var(--sky);
   font-size: 11px;
 }
+/* a peer's uncommitted count, beside this checkout's own */
+.tree-peer {
+  color: var(--sky);
+  font-size: 11px;
+  opacity: 0.8;
+  white-space: nowrap;
+}
 
 /* ---------- repo grid ---------- */
 .main {
@@ -4188,6 +4195,29 @@ body:has(.focus-grip.se.dragging) {
 }
 .peers-drill {
   margin: 0 14px 4px;
+}
+/* a peer's WIP paths under the changes: read-only, nothing here is on disk */
+.peer-paths {
+  list-style: none;
+  margin: 0 0 4px;
+  padding: 0 14px 0 28px;
+  font-size: 12px;
+  color: var(--ink-faint);
+}
+.peer-paths li {
+  display: flex;
+  gap: 8px;
+  min-width: 0;
+}
+.peer-path-mark {
+  width: 1ch;
+  flex: none;
+  color: var(--sky);
+}
+.peer-path-name {
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
 }
 .peers-foot {
   display: flex;

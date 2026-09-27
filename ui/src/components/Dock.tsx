@@ -13,7 +13,7 @@ import {
   type FileCol,
   type FileView,
 } from "../files";
-import { peerable } from "../peers";
+import { peerable, peerWipCounts } from "../peers";
 import { useShallow } from "zustand/react/shallow";
 import { DOCK, PANEL, activeFlowFor, capsFor, flowFor, runFor, useStore } from "../store";
 import { ago, GLYPH, stateOf } from "../util";
@@ -409,6 +409,88 @@ function WorkspaceMenu({
 }
 
 /**
+ * Each peer's uncommitted work on this repo, a row per WIP with take and
+ * view. The peers section lists it among what the peers have; the changes
+ * section lists it under this checkout's own files, with the paths shown,
+ * so a clean tree here still says what is waiting on another machine.
+ */
+function PeerWipList({ repo, paths = false }: { repo: Repo; paths?: boolean }) {
+  const takeWip = useStore((s) => s.takeWip);
+  const [busy, setBusy] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  // One WIP's commit drill open at a time, by hash, the way History does.
+  const [drilled, setDrilled] = useState<string | null>(null);
+  const wip = repo.peers?.wip ?? [];
+  if (wip.length === 0) return null;
+
+  const take = (peer: string, branch: string, hash: string) => {
+    setBusy(hash);
+    setError(null);
+    takeWip(repo.id, peer, branch)
+      .catch((err: unknown) => setError(String(err instanceof Error ? err.message : err)))
+      .finally(() => setBusy(null));
+  };
+
+  return (
+    <>
+      {error && <p className="panel-error">{error}</p>}
+      {wip.map((w) => {
+        const listed = w.paths ?? [];
+        return (
+          <Fragment key={`wip:${w.peer}:${w.branch}:${w.hash}`}>
+            <div className="peers-row">
+              <span className="peers-text peer-wip" title={`uncommitted on ${w.peer}, snapshot ${ago(w.at / 1000)}`}>
+                {paths
+                  ? `on ${w.peer} · ${w.branch} · ${w.files} file${w.files === 1 ? "" : "s"} · ${ago(w.at / 1000)}`
+                  : `WIP on ${w.peer} · ${w.branch} · ${w.files} files`}
+              </span>
+              <button
+                type="button"
+                className="mini"
+                disabled={busy !== null}
+                onClick={() => take(w.peer, w.branch, w.hash)}
+              >
+                {busy === w.hash ? "taking…" : "take"}
+              </button>
+              <button
+                type="button"
+                className="mini"
+                onClick={() => setDrilled(drilled === w.hash ? null : w.hash)}
+              >
+                {drilled === w.hash ? "hide" : "view"}
+              </button>
+            </div>
+            {paths && listed.length > 0 && drilled !== w.hash && (
+              <ul className="peer-paths">
+                {listed.map((f) => (
+                  <li key={f.path} title={f.path}>
+                    <span className="peer-path-mark">{f.status}</span>
+                    <span className="peer-path-name">{f.path}</span>
+                  </li>
+                ))}
+                {w.files > listed.length && <li className="peer-path-more">and {w.files - listed.length} more</li>}
+              </ul>
+            )}
+            {drilled === w.hash && (
+              <ul className="log peers-drill">
+                <CommitRow
+                  repo={repo}
+                  hash={w.hash}
+                  subject={`WIP on ${w.branch}`}
+                  meta={`${w.peer} · ${ago(w.at / 1000)}`}
+                  open
+                  onToggle={() => setDrilled(null)}
+                />
+              </ul>
+            )}
+          </Fragment>
+        );
+      })}
+    </>
+  );
+}
+
+/**
  * What this repo's peers know that this checkout does not: a peer's
  * uncommitted work to take, a branch that diverged, or a branch that
  * exists only on a peer. Folded by default, and only shown at all when
@@ -416,7 +498,6 @@ function WorkspaceMenu({
  * ever populated. */
 function PeersSection({ repo }: { repo: Repo }) {
   const peerSync = useStore((s) => s.peerSync);
-  const takeWip = useStore((s) => s.takeWip);
   const trackBranch = useStore((s) => s.trackBranch);
   const seedRepo = useStore((s) => s.seedRepo);
   const syncPeers = useStore((s) => s.syncPeers);
@@ -424,8 +505,6 @@ function PeersSection({ repo }: { repo: Repo }) {
   const openChat = useStore((s) => s.openChat);
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
-  // One WIP's commit drill open at a time, by hash, the way History does.
-  const [drilled, setDrilled] = useState<string | null>(null);
 
   if (peerSync === "off" || !peerable(repo)) return null;
 
@@ -460,42 +539,7 @@ function PeersSection({ repo }: { repo: Repo }) {
           <p className="panel-clean">In step with every peer.</p>
         ) : (
           <>
-            {wip.map((w) => (
-              <Fragment key={`wip:${w.peer}:${w.branch}:${w.hash}`}>
-                <div className="peers-row">
-                  <span className="peers-text">
-                    WIP on {w.peer} · {w.branch} · {w.files} files
-                  </span>
-                  <button
-                    type="button"
-                    className="mini"
-                    disabled={busy !== null}
-                    onClick={() => run(`take:${w.hash}`, () => takeWip(repo.id, w.peer, w.branch))}
-                  >
-                    {busy === `take:${w.hash}` ? "taking…" : "take"}
-                  </button>
-                  <button
-                    type="button"
-                    className="mini"
-                    onClick={() => setDrilled(drilled === w.hash ? null : w.hash)}
-                  >
-                    {drilled === w.hash ? "hide" : "view"}
-                  </button>
-                </div>
-                {drilled === w.hash && (
-                  <ul className="log peers-drill">
-                    <CommitRow
-                      repo={repo}
-                      hash={w.hash}
-                      subject={`WIP on ${w.branch}`}
-                      meta={`${w.peer} · ${ago(w.at / 1000)}`}
-                      open
-                      onToggle={() => setDrilled(null)}
-                    />
-                  </ul>
-                )}
-              </Fragment>
-            ))}
+            <PeerWipList repo={repo} />
             {diverged.map((d) => (
               <div key={`div:${d.peer}:${d.branch}`} className="peers-row">
                 <span className="peers-text peer-diverged">
@@ -777,7 +821,11 @@ function ChangesSection({ repo }: { repo: Repo }) {
       k="changes"
       className="changes-section"
       label="Changes"
-      head={`${files.length}${(st?.ahead ?? 0) > 0 ? ` · ↑${st?.ahead} not pushed` : ""}`}
+      head={[
+        String(files.length),
+        ...peerWipCounts(repo.peers).map((c) => c.text),
+        ...((st?.ahead ?? 0) > 0 ? [`↑${st?.ahead} not pushed`] : []),
+      ].join(" · ")}
       layout={views}
       copy={() => files.map((f) => `${markOf(f)} ${f.orig ? `${f.orig} → ${f.path}` : f.path}`).join("\n")}
       // a paste lands in the commit message, after what is there
@@ -788,6 +836,7 @@ function ChangesSection({ repo }: { repo: Repo }) {
       ) : (
         <ChangesList repo={repo} files={files} onError={showError} />
       )}
+      <PeerWipList repo={repo} paths />
 
       {files.length > 0 && (
         <div className="commit-box">

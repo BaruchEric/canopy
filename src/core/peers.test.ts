@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import {
   BUSY_MARKERS, DEFAULT_SEED, ffTarget, globMatch, isSafeRel, linkPeers, normalizePeers, normalizeSeed,
-  parseQuotedWords, parseRefLines, parseWipLines, peerMissing, peerRefspecs, peerUnreachable, peerUrl, repoWanted,
+  parseNameStatus, parseQuotedWords, parseRefLines, parseWipLines, peerMissing, peerRefspecs, peerUnreachable, peerUrl, repoWanted,
   seedWanted,
 } from "./peers";
 import type { PeerState, Repo } from "./types";
@@ -129,6 +129,19 @@ describe("parsers", () => {
     expect(parseWipLines("h1 1790000000 p1 refs/peer-wip/mini/feat/x\n", "mini")).toEqual([
       { peer: "mini", branch: "feat/x", at: 1790000000000, parent: "p1", hash: "h1" },
     ]);
+  });
+  test("name-status pairs, with the list capped and the count kept", () => {
+    const out = "M\0a.txt\0A\0dir/with space.md\0D\0gone\0";
+    expect(parseNameStatus(out)).toEqual({
+      files: 3,
+      paths: [
+        { status: "M", path: "a.txt" },
+        { status: "A", path: "dir/with space.md" },
+        { status: "D", path: "gone" },
+      ],
+    });
+    expect(parseNameStatus(out, 1)).toEqual({ files: 3, paths: [{ status: "M", path: "a.txt" }] });
+    expect(parseNameStatus("")).toEqual({ files: 0, paths: [] });
   });
   test("missing vs unreachable", () => {
     expect(peerMissing("fatal: '/x' does not appear to be a git repository")).toBe(true);

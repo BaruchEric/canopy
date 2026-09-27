@@ -8,7 +8,7 @@ import { dirname, isAbsolute, join, normalize, relative, resolve, sep } from "no
 import { parseRemote } from "./access";
 import { git, onHost } from "./exec";
 import { shellQuote } from "./host";
-import { BUSY_MARKERS, ffTarget, isPeerName, isSafeRel, NO_PUSH, parseQuotedWords, parseRefLines, parseWipLines, peerMissing, peerRefspecs, peerUnreachable, peerUrl, repoWanted, seedWanted } from "./peers";
+import { BUSY_MARKERS, ffTarget, isPeerName, isSafeRel, NO_PUSH, parseNameStatus, parseQuotedWords, parseRefLines, parseWipLines, peerMissing, peerRefspecs, peerUnreachable, peerUrl, repoWanted, seedWanted } from "./peers";
 import { configDir } from "./store";
 import type { Peer, PeerSeen, PeerState, PeerWip } from "./types";
 
@@ -265,8 +265,8 @@ export async function peerWips(repo: string, peers: string[]): Promise<PeerWip[]
   for (const p of peers) {
     const r = await git(repo, ["for-each-ref", "--format=%(objectname) %(committerdate:unix) %(parent) %(refname)", `refs/peer-wip/${p}/`]);
     for (const w of parseWipLines(r.stdout, p)) {
-      const d = await git(repo, ["diff", "--name-only", "-z", w.parent, w.hash]);
-      out.push({ ...w, files: d.stdout.split("\0").filter(Boolean).length });
+      const d = await git(repo, ["diff", "--name-status", "-z", "--no-renames", w.parent, w.hash]);
+      out.push({ ...w, ...parseNameStatus(d.stdout) });
     }
   }
   return out;

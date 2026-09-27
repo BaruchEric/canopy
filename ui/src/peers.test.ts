@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, setSystemTime, test } from "bun:test";
 import { LAUNCH_SOURCE, type PeerState, type Repo, type Run } from "../../src/core/types";
-import { mergeAction, peerable, peerChips, peerLines, seenWord } from "./peers";
+import { mergeAction, peerable, peerChips, peerLines, peerWipCounts, seenWord } from "./peers";
 
 const repo = (over: Partial<Repo> = {}): Repo => ({
   id: "app",
@@ -51,6 +51,27 @@ describe("peerChips", () => {
     ]);
     expect(peerChips({ ...base, onlyHere: true })).toEqual([
       { kind: "only", text: "only here", title: "no peer has this repo" },
+    ]);
+  });
+});
+
+describe("peerWipCounts", () => {
+  test("nothing without a WIP", () => {
+    expect(peerWipCounts(undefined)).toEqual([]);
+    expect(peerWipCounts(base)).toEqual([]);
+  });
+  test("one entry per peer, files summed across its branches", () => {
+    const st: PeerState = {
+      ...base,
+      wip: [
+        { peer: "mac", branch: "main", at: now, parent: "p", hash: "h1", files: 1 },
+        { peer: "mac", branch: "feat", at: now, parent: "p", hash: "h2", files: 3 },
+        { peer: "nb", branch: "main", at: now, parent: "p", hash: "h3", files: 1 },
+      ],
+    };
+    expect(peerWipCounts(st)).toEqual([
+      { peer: "mac", text: "mac 4", title: "mac has 4 uncommitted files on main, feat" },
+      { peer: "nb", text: "nb 1", title: "nb has 1 uncommitted file on main" },
     ]);
   });
 });
