@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { signinUrl } from "../backends";
 import { sameBuild } from "../../../src/core/version";
 import { PAGE_BUILD } from "../build";
-import { connOf, multi, useStore } from "../store";
+import { connOf, useStore } from "../store";
 import { useFitPop } from "../pop";
 
 /** what a backend's state reads as in the popover */
@@ -20,11 +20,12 @@ const STATE_WORD: Record<string, string> = {
  * included: its state, why it is offline, the URL this page uses for it, a
  * version note when it runs another build, a retry for a non-home backend
  * that is not online, a sign-in link when the gate asked for one, and the
- * "show here" checkbox that hides it or brings it back. Absent with one
- * backend.
+ * "show here" checkbox that hides it or brings it back. Gated on the
+ * registry (home named at least one other backend), not on how many are
+ * currently shown, so hiding the last other backend cannot also hide the
+ * one control that un-hides it. Absent with one backend.
  */
 export function BackendsChip() {
-  const isMulti = useStore(multi);
   const home = useStore((s) => s.home);
   const backendOrder = useStore((s) => s.backendOrder);
   const entries = useStore((s) => s.settings.backends);
@@ -51,7 +52,10 @@ export function BackendsChip() {
     };
   }, [open]);
 
-  if (!isMulti) return null;
+  // gated on the registry, not on backendOrder (how many are shown): hiding
+  // the only other backend must not also hide the one control that can
+  // bring it back, so the chip stays up as long as home named one
+  if (entries.length === 0) return null;
 
   // every backend the home one named, home first, hidden ones included:
   // a hidden one has no entry in conns (hideBackend drops it) or in
