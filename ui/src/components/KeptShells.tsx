@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { useStore } from "../store";
+import { homeConn, useStore } from "../store";
 import { useFitPop } from "../pop";
 
 /** "2m", "3h", "2d": how long ago a kept shell was last written out */
@@ -21,7 +21,7 @@ function ago(at: number, now: number): string {
  */
 export function KeptShells() {
   const kept = useStore((s) => s.kept);
-  const keeping = useStore((s) => s.keeping);
+  const keeping = useStore((s) => homeConn(s).keeping);
   const repos = useStore((s) => s.repos);
   const restoreShell = useStore((s) => s.restoreShell);
   const forgetShell = useStore((s) => s.forgetShell);

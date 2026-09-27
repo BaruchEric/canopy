@@ -25,6 +25,9 @@ describe("peerable", () => {
   test("a local checkout under the launch root, readable and not on a forge", () => {
     expect(peerable(repo())).toBe(true);
   });
+  test("another backend's launch root counts too", () => {
+    expect(peerable(repo({ id: "mac|app", source: `mac|${LAUNCH_SOURCE}` }))).toBe(true);
+  });
   test("everything else stays out", () => {
     expect(peerable(repo({ source: "extra" }))).toBe(false);
     expect(peerable(repo({ host: "gpd" }))).toBe(false);

@@ -70,3 +70,39 @@ describe("loadSettings", () => {
     delete (globalThis as { localStorage?: unknown }).localStorage;
   });
 });
+
+describe("the backends a page remembers", () => {
+  test("the cached registry and the hidden names survive a reload, repaired", () => {
+    const store = new Map<string, string>();
+    (globalThis as { localStorage?: unknown }).localStorage = {
+      getItem: (k: string) => store.get(k) ?? null,
+      setItem: (k: string, v: string) => void store.set(k, v),
+    };
+    store.set(
+      "canopy.settings",
+      JSON.stringify({
+        backends: [
+          { name: "mac", tailnet: "http://mac.test:7850" },
+          { name: "mini", public: "https://canopy.example.com" },
+          { name: "gpd", tailnet: "not a url" },
+          { name: "old", public: "http://not-https.test" },
+          { name: "Bad Name", tailnet: "http://x.test" },
+          { name: "mac", tailnet: "http://again.test" },
+          { name: "bare" },
+          "junk",
+        ],
+        hiddenBackends: ["mini", 3, "mini"],
+      }),
+    );
+    const s = loadSettings();
+    expect(s.backends).toEqual([
+      { name: "mac", tailnet: "http://mac.test:7850" },
+      { name: "mini", public: "https://canopy.example.com" },
+    ]);
+    expect(s.hiddenBackends).toEqual(["mini"]);
+    store.set("canopy.settings", "{}");
+    expect(loadSettings().backends).toEqual([]);
+    expect(loadSettings().hiddenBackends).toEqual([]);
+    delete (globalThis as { localStorage?: unknown }).localStorage;
+  });
+});

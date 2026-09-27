@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { useShallow } from "zustand/react/shallow";
-import { capsFor, useStore } from "../store";
+import { capsFor, homeConn, useStore } from "../store";
 import { useFitPop } from "../pop";
 import { deviceName } from "../../../src/core/presence";
 import { sameBuild, shortCommit, versionLine } from "../../../src/core/version";
@@ -57,10 +57,10 @@ const KEYS = [
 export function SettingsMenu() {
   const settings = useStore((s) => s.settings);
   const setSetting = useStore((s) => s.setSetting);
-  const client = useStore((s) => s.client);
-  const helpers = useStore((s) => s.helpers);
+  const client = useStore((s) => homeConn(s).client);
+  const helpers = useStore((s) => homeConn(s).helpers);
   const caps = useStore(useShallow(capsFor));
-  const keeping = useStore((s) => s.keeping);
+  const keeping = useStore((s) => homeConn(s).keeping);
   const setKeeping = useStore((s) => s.setKeeping);
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);

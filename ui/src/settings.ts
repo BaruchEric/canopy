@@ -42,7 +42,7 @@ export type ShellTarget = (typeof SHELL_TARGETS)[number];
 /** The two places a shell can live inside a window; the server keeps it
  *  with the shell, so a shell nobody saved comes back where it was. */
 export type { ShellPlace } from "../../src/core/types";
-import type { ShellPlace } from "../../src/core/types";
+import type { BackendEntry, ShellPlace } from "../../src/core/types";
 
 /** Resolves the setting for one click. A solo window has no strip, so
  *  everything that would go there goes to the panel instead. */
@@ -104,6 +104,11 @@ export interface Settings {
   sectionOrder: SectionKey[];
   /** the sections every panel leaves out */
   sectionsHidden: SectionKey[];
+  /** the backends the home backend named last time, so the page can say
+   *  which ones it knows before the answer comes */
+  backends: BackendEntry[];
+  /** the backends this browser leaves out; never the home one */
+  hiddenBackends: string[];
 }
 
 export const DEFAULT_SETTINGS: Settings = {
@@ -124,6 +129,8 @@ export const DEFAULT_SETTINGS: Settings = {
   frontZoom: {},
   sectionOrder: [...SECTION_KEYS],
   sectionsHidden: [],
+  backends: [],
+  hiddenBackends: [],
 };
 
 const KEY = "canopy.settings";
@@ -148,6 +155,51 @@ function fileSort(value: unknown): FileSort {
     dir: pick(SORT_DIRS, v.dir, DEFAULT_SETTINGS.fileSort.dir),
   };
 }
+
+/** a backend's name: a peer name, as the server's config requires */
+const isBackendName = (v: unknown): v is string =>
+  typeof v === "string" && /^[a-z][a-z0-9-]{0,31}$/.test(v) && v !== "origin";
+
+/** whether `v` is exactly an origin with one of the protocols given */
+function isOrigin(v: unknown, protocols: readonly string[]): v is string {
+  if (typeof v !== "string") return false;
+  try {
+    const u = new URL(v);
+    return protocols.includes(u.protocol) && u.origin === v;
+  } catch {
+    return false;
+  }
+}
+
+/** The cached registry, held to the server's own rules for its config: a
+ *  peer name, `public` https, `tailnet` http or https, at least one of
+ *  them, names unique with the first kept. */
+function backendEntries(v: unknown): BackendEntry[] {
+  if (!Array.isArray(v)) return [];
+  const out: BackendEntry[] = [];
+  for (const raw of v) {
+    if (!raw || typeof raw !== "object") continue;
+    const r = raw as Record<string, unknown>;
+    const name = r["name"];
+    if (!isBackendName(name) || out.some((b) => b.name === name)) continue;
+    const entry: BackendEntry = { name };
+    if (r["public"] !== undefined) {
+      if (!isOrigin(r["public"], ["https:"])) continue;
+      entry.public = r["public"];
+    }
+    if (r["tailnet"] !== undefined) {
+      if (!isOrigin(r["tailnet"], ["http:", "https:"])) continue;
+      entry.tailnet = r["tailnet"];
+    }
+    if (!entry.public && !entry.tailnet) continue;
+    out.push(entry);
+  }
+  return out;
+}
+
+/** backend names, each once */
+const backendNamesOf = (v: unknown): string[] =>
+  Array.isArray(v) ? v.filter(isBackendName).filter((n, i, all) => all.indexOf(n) === i) : [];
 
 export function loadSettings(): Settings {
   try {
@@ -174,6 +226,8 @@ export function loadSettings(): Settings {
       frontZoom: normalizeZooms(saved.frontZoom, true),
       sectionOrder: sectionOrder(saved.sectionOrder),
       sectionsHidden: sectionsHidden(saved.sectionsHidden),
+      backends: backendEntries(saved.backends),
+      hiddenBackends: backendNamesOf(saved.hiddenBackends),
     };
   } catch {
     return DEFAULT_SETTINGS;

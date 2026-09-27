@@ -1,17 +1,19 @@
 import { create } from "zustand";
-import { api, subscribe } from "./api";
-import { homeName } from "./registry";
+import { api, onBackendSignal, resolveBase, subscribe } from "./api";
+import { backendOf, homeName, qual, registry, setBase, setRegistry } from "./registry";
+import { backendState, sliceIn, split, type BackendStatus, type Reg } from "./backends";
+import { mergeHistory } from "./qualify";
 import { applyQuery, type RepoFilter } from "./filters";
 import { focusPanel, nextActive } from "./dock";
 import { heldShellUrl, openElsewhere, openShellElsewhere, parseRoute } from "./routes";
 import { loadSettings, saveSettings, shellPlace, type Settings, type ShellPlace } from "./settings";
-import { PANEL_TERM_ROWS, adoptTerms, keepFront, loadFocusSize, loadTermTabs, nextStripTab, pruneHidden, reconcileTerms, rowsPx, shellSet, termId, type FocusSize, type TermTab } from "./term";
+import { PANEL_TERM_ROWS, adoptTerms, keepFront, loadFocusSize, loadTermTabs, nextStripTab, reconcileTerms, rowsPx, shellSet, termId, type FocusSize, type TermTab } from "./term";
 import { clientId, identity } from "./client";
 export type { TermTab } from "./term";
 import { clamp, needsAttention } from "./util";
 import { ownRun, pickable, selectable } from "./flows";
 import { boardOrder, invertPick, pickWhere, rangeIds, setPick, togglePick } from "./select";
-import { appendFeed, describeEvent, type FeedEntry } from "./feed";
+import { appendFeed, describeEvent, type FeedEntry, type FeedSnapshot } from "./feed";
 import { mergeAction } from "./peers";
 import { convOf, isUnread, mergeMessages } from "./chan";
 import type { ChanMessage, TailchanInfo } from "../../src/core/types";
@@ -21,8 +23,10 @@ import {
   DEFAULT_LAUNCH,
   isFlowActive,
   isRunActive,
+  type About,
   type AgentSettings,
   type Backend,
+  type BackendEntry,
   type ClientCaps,
   type ClientInfo,
   type Device,
@@ -165,6 +169,8 @@ interface Layout {
   panels: string[];
   /** the dock's showing tab */
   activePanel: string | null;
+  /** which backend's checkout a card that has several stands for, by card key */
+  checkoutPref: Record<string, string>;
 }
 
 const strings = (v: unknown): string[] =>
@@ -190,6 +196,7 @@ function loadLayout(): Layout {
     terms: [],
     activeTerm: null,
     hiddenTerms: [],
+    checkoutPref: {},
   };
   try {
     const raw = localStorage.getItem(LAYOUT_KEY);
@@ -213,6 +220,7 @@ function loadLayout(): Layout {
       terms?: unknown;
       activeTerm?: unknown;
       hiddenTerms?: unknown;
+      checkoutPref?: unknown;
     };
     // Anything hand-edited or written by an older build gets clamped rather
     // than trusted — a bad number here would render an unusable panel.
@@ -275,10 +283,17 @@ function loadLayout(): Layout {
       terms: loadTermTabs(saved.terms),
       activeTerm: typeof saved.activeTerm === "string" ? saved.activeTerm : null,
       hiddenTerms: strings(saved.hiddenTerms),
+      checkoutPref: stringMap(saved.checkoutPref),
     };
   } catch {
     return fallback;
   }
+}
+
+/** a record of strings to strings, anything else in it left out */
+function stringMap(v: unknown): Record<string, string> {
+  if (!v || typeof v !== "object" || Array.isArray(v)) return {};
+  return Object.fromEntries(Object.entries(v).filter((e): e is [string, string] => typeof e[1] === "string"));
 }
 
 /** Writes the fields in `patch` over what is stored, leaving the rest as the
@@ -299,8 +314,22 @@ function saveLayout(patch: Partial<Layout>) {
   }
 }
 
+/** The tabs a layout saves: this window's, then the ones parked for a
+ *  backend that has not answered, so they outlive the load. The tabs
+ *  themselves when none is parked, and the same array for the same two, so
+ *  the layout subscription does not see a change on every state change. */
+let savedTermsMemo: { terms: TermTab[]; parked: TermTab[]; out: TermTab[] } | null = null;
+function savedTerms(s: Pick<CanopyState, "terms" | "parkedTerms">): TermTab[] {
+  if (s.parkedTerms.length === 0) return s.terms;
+  const m = savedTermsMemo;
+  if (m && m.terms === s.terms && m.parked === s.parkedTerms) return m.out;
+  const out = [...s.terms, ...s.parkedTerms];
+  savedTermsMemo = { terms: s.terms, parked: s.parkedTerms, out };
+  return out;
+}
+
 /** the persisted part of the state, minus `knownSections`, which is a constant */
-const layoutOf = (s: CanopyState): Omit<Layout, "knownSections"> => ({
+export const layoutOf = (s: CanopyState): Omit<Layout, "knownSections"> => ({
   sidebarWidth: s.sidebarWidth,
   panelWidths: s.panelWidths,
   soloWidth: s.soloWidth,
@@ -315,25 +344,30 @@ const layoutOf = (s: CanopyState): Omit<Layout, "knownSections"> => ({
   feedHeight: s.feedHeight,
   panels: s.panels,
   activePanel: s.activePanel,
-  terms: s.terms,
+  terms: savedTerms(s),
   activeTerm: s.activeTerm,
   hiddenTerms: s.hiddenTerms,
+  checkoutPref: s.checkoutPref,
 });
 
 /** drops entries for repos that no longer exist in the scan; the same
- *  object when every one still does */
-export function pruneByRepo<T>(map: Record<string, T>, repos: Repo[]): Record<string, T> {
+ *  object when every one still does. With `mine`, only the keys it names
+ *  are judged (one backend's scan), and every other key stays. */
+export function pruneByRepo<T>(map: Record<string, T>, repos: Repo[], mine?: (id: string) => boolean): Record<string, T> {
   const ids = new Set(repos.map((r) => r.id));
-  const kept = Object.entries(map).filter(([id]) => ids.has(id));
+  const kept = Object.entries(map).filter(([id]) => ids.has(id) || (mine !== undefined && !mine(id)));
   if (kept.length === Object.keys(map).length) return map;
   return Object.fromEntries(kept);
 }
 
-interface CanopyState {
-  root: string;
-  /** every scanned folder, the launch root first */
-  sources: SourceState[];
-  repos: Repo[];
+/** One backend as this page sees it: where it is, whether it answers, and
+ *  what it said about itself and this browser. */
+export interface Conn {
+  name: string;
+  /** its base URL, "" for the page's own origin */
+  base: string;
+  status: BackendStatus;
+  about: About | null;
   /** what this backend can do for its clients (desktop openers, ssh alias) */
   backend: Backend;
   /** what the backend knows of this browser: its address, and whether it is
@@ -341,19 +375,103 @@ interface CanopyState {
   client: ClientInfo;
   /** the `canopy helper`s dialled in to the backend, by name */
   helpers: HelperInfo[];
-  /** the browsers on the backend's event stream now, this one among them */
-  devices: Device[];
-  /** who was last seen reachable in the peer pass, mac/mini/… by name */
-  peerSeen: PeerSeen[];
+  /** whether the backend is writing shell history out at all */
+  keeping: boolean;
   /** whether the backend pulls from peers at all, and whether it writes */
+  peerSync: PeerSync;
+}
+
+/** What a backend is before it has said anything. One frozen object, so a
+ *  selector reading a backend not yet known gets the same thing every time. */
+const NO_CONN: Conn = Object.freeze({
+  name: "",
+  base: "",
+  status: Object.freeze({ state: "connecting" as const }),
+  about: null,
+  backend: Object.freeze({ openers: true, sshHost: null }),
+  client: Object.freeze({ address: "", local: false, shared: false }),
+  helpers: Object.freeze([]) as unknown as HelperInfo[],
+  keeping: false,
+  peerSync: "off" as const,
+});
+
+const newConn = (name: string, status: BackendStatus = { state: "connecting" }): Conn => ({ ...NO_CONN, name, status });
+
+/** `conns` with one backend's fields changed, made when it had none */
+function withConn(s: Pick<CanopyState, "conns">, name: string, patch: Partial<Conn>): Record<string, Conn> {
+  return { ...s.conns, [name]: { ...(s.conns[name] ?? newConn(name)), ...patch } };
+}
+
+/** Every backend the home one named, hidden ones among them, so an id of a
+ *  hidden backend is still told apart from a home id: its saved tabs park
+ *  instead of dropping, and a home scan leaves its panels alone. */
+let known: Reg = { home: "", names: [""] };
+
+/** the backend an id belongs to, hidden backends included */
+function ownerOf(id: string): string {
+  const reg = registry();
+  return split(known.home === reg.home ? known : reg, id)[0];
+}
+
+/** whether an id is one backend's */
+const mineOf =
+  (from: string) =>
+  (id: string): boolean =>
+    ownerOf(id) === from;
+
+/** a record by id with one backend's entries replaced by `list` */
+function recordIn<T extends { id: string }>(rec: Record<string, T>, from: string, list: readonly T[]): Record<string, T> {
+  const mine = mineOf(from);
+  const out: Record<string, T> = {};
+  for (const [id, v] of Object.entries(rec)) if (!mine(id)) out[id] = v;
+  for (const v of list) out[v.id] = v;
+  return out;
+}
+
+/** a record by id with one backend's entries left out; the same object
+ *  when it had none */
+function recordOut<T>(rec: Record<string, T>, from: string): Record<string, T> {
+  const mine = mineOf(from);
+  const kept = Object.entries(rec).filter(([id]) => !mine(id));
+  return kept.length === Object.keys(rec).length ? rec : Object.fromEntries(kept);
+}
+
+/** the archive overviews as one, in the page's backend order */
+const historyOf = (histories: Record<string, HistoryOverview>, order: readonly string[]): HistoryOverview | null =>
+  mergeHistory(order.flatMap((n) => (histories[n] ? [histories[n]] : [])));
+
+/** The hidden names `live` (one backend's shells) still runs, the other
+ *  backends' left as they are: `pruneHidden` for one backend's list. */
+function pruneHiddenOf(hidden: string[], from: string, live: TermInfo[]): string[] {
+  const mine = mineOf(from);
+  const held = new Set(live.map((t) => t.id));
+  const kept = hidden.filter((id) => !mine(id) || held.has(id));
+  return kept.length === hidden.length ? hidden : kept;
+}
+
+interface CanopyState {
+  root: string;
+  /** every scanned folder, the launch root first */
+  sources: SourceState[];
+  repos: Repo[];
+  /** every backend in the registry by name, home among them */
+  conns: Record<string, Conn>;
+  /** the backend that served this page */
+  home: string;
+  /** the registry's names in order, home first, hidden ones left out */
+  backendOrder: string[];
+  /** the browsers on each backend's event stream now, this one among them */
+  devices: Device[];
+  /** who the home backend last saw reachable in the peer pass, by name */
+  peerSeen: PeerSeen[];
+  /** whether the home backend pulls from peers at all, and whether it
+   *  writes; each backend's own is on its `Conn` */
   peerSync: PeerSync;
   /** every shell the server holds, with who is looking at each; the tabs
    *  here are the ones of those this window shows */
   shells: TermInfo[];
   /** the shells a machine going down left behind, offered to restore */
   kept: KeptShell[];
-  /** whether the backend is writing shell history out at all */
-  keeping: boolean;
   /** tailchan as the backend sees it: null until asked, `ready: false`
    *  with why when the backend knows no broker */
   chan: TailchanInfo | null;
@@ -410,18 +528,26 @@ interface CanopyState {
   /** a term carried from the search sheet into one repo's search section,
    *  taken by that section when it mounts or sees it */
   pendingSearch: { repoId: string; q: string } | null;
-  /** the claude-history archive, per repo; null until the first fetch lands */
+  /** the claude-history archive, per repo, every backend's as one; null
+   *  until the first fetch lands */
   history: HistoryOverview | null;
-  /** how Claude starts per repo, keyed by repo path; absent means defaults */
-  agents: Record<string, AgentSettings>;
-  /** how a repo's builds are made and run, keyed by repo path */
-  launchers: Record<string, LaunchSettings>;
+  /** each backend's archive overview, by backend */
+  histories: Record<string, HistoryOverview>;
+  /** how Claude starts per repo, by backend then repo path; absent means defaults */
+  agents: Record<string, Record<string, AgentSettings>>;
+  /** how a repo's builds are made and run, by backend then repo path */
+  launchers: Record<string, Record<string, LaunchSettings>>;
   /** downloads and builds by id, live and recently finished */
   jobs: Record<string, Job>;
   /** repo id → bumped whenever its builds changed, so the launch section re-reads */
   buildsAt: Record<string, number>;
   /** every shell open in this window, in the order opened */
   terms: TermTab[];
+  /** saved tabs of a backend that has not answered yet (or is hidden),
+   *  kept in the saved layout until it does */
+  parkedTerms: TermTab[];
+  /** which backend's checkout a card that has several stands for, by card key */
+  checkoutPref: Record<string, string>;
   /** the shell showing in the strip; null when the strip is empty */
   activeTerm: string | null;
   /** running shells this browser hid rather than ended, by name */
@@ -475,15 +601,26 @@ interface CanopyState {
   setFeedSource: (id: string | null) => void;
   setFeedQuiet: (on: boolean) => void;
 
-  /** loads the tree and opens the SSE stream; returns its unsubscribe */
+  /** loads the tree and opens the SSE stream, for every backend; returns
+   *  what closes them */
   init: () => Promise<() => void>;
-  rescan: () => Promise<void>;
-  /** adds a folder on this machine or over ssh; resolves once it is scanned */
-  addSource: (input: SourceInput) => Promise<void>;
+  /** loads one non-home backend and subscribes to its stream */
+  connect: (name: string) => Promise<void>;
+  /** tries a backend that did not answer again */
+  retryBackend: (name: string) => Promise<void>;
+  /** leaves a backend out of this page, or brings it back; never home */
+  hideBackend: (name: string, hidden: boolean) => void;
+  /** which backend's checkout a card stands for */
+  setCheckoutPref: (key: string, backend: string) => void;
+  /** re-reads one backend's tree and its runs, flows, fleets and jobs */
+  rescan: (backend?: string) => Promise<void>;
+  /** adds a folder on a backend's machine or over ssh from it; resolves
+   *  once it is scanned */
+  addSource: (input: SourceInput, backend?: string) => Promise<void>;
   removeSource: (id: string) => Promise<void>;
   rescanSource: (id: string) => Promise<void>;
-  /** refetches the archive overview; a failure becomes an unavailable one */
-  loadHistory: (refresh?: boolean) => Promise<void>;
+  /** refetches a backend's archive overview; a failure becomes an unavailable one */
+  loadHistory: (refresh?: boolean, backend?: string) => Promise<void>;
   setFilter: (f: string) => void;
   setDirtyOnly: (v: boolean) => void;
   toggleFilter: (f: RepoFilter) => void;
@@ -503,7 +640,8 @@ interface CanopyState {
    *  say so; rejects with the server's reason */
   openApp: (id: string, app: OpenerId) => Promise<void>;
   closePanel: (id: string) => void;
-  applyEvent: (ev: ServerEvent) => void;
+  /** what one backend's stream said, `from` home unless named */
+  applyEvent: (ev: ServerEvent, from?: string) => void;
   setWorkspaces: (ws: Workspace[]) => void;
   setSidebarWidth: (px: number) => void;
   toggleSidebar: () => void;
@@ -534,8 +672,8 @@ interface CanopyState {
   restoreShell: (id: string, resume?: boolean) => Promise<void>;
   /** drops a kept shell's record and history without restoring it */
   forgetShell: (id: string) => Promise<void>;
-  /** turns the backend's shell recording on or off */
-  setKeeping: (on: boolean) => Promise<void>;
+  /** turns a backend's shell recording on or off */
+  setKeeping: (on: boolean, backend?: string) => Promise<void>;
   /** reads the broker's view (who, channels, the notify switch) */
   loadChan: () => Promise<void>;
   /** opens the popover, on a conversation or target ("#x", "@h") when given */
@@ -662,42 +800,86 @@ const skipped = (hidden: string[]): ReadonlySet<string> => new Set([...endedShel
 /** a shell window's url onto one named shell */
 const shellUrlFor = heldShellUrl;
 
-/** The state a fresh tree implies: the repos and sources themselves, and
- *  the panels, widths and folds that still have a repo to belong to. */
+/** The state a fresh tree from one backend implies: its repos and sources
+ *  in place of that backend's old ones, and the panels, widths and folds
+ *  that still have a repo to belong to. Only that backend's are judged: a
+ *  panel of a backend that has not answered stays until that one says. */
 function treeState(
   s: CanopyState,
   tree: ScanResult,
+  from: string,
 ): Pick<
   CanopyState,
   | "root"
   | "sources"
   | "repos"
-  | "backend"
+  | "conns"
   | "panels"
   | "activePanel"
   | "panelWidths"
   | "panelTermHeights"
   | "closedSections"
 > {
+  const reg = registry();
+  const mine = mineOf(from);
   // drop panels whose repo no longer exists — a panel with no repo
   // renders nothing, including its own close button. The same array when
   // none goes, so a scan that changes nothing does not count as a change.
-  const kept = s.panels.filter((id) => tree.repos.some((r) => r.id === id));
+  const kept = s.panels.filter((id) => !mine(id) || tree.repos.some((r) => r.id === id));
   const panels = kept.length === s.panels.length ? s.panels : kept;
   return {
-    root: tree.root,
-    sources: tree.sources,
-    repos: tree.repos,
-    backend: tree.backend,
+    root: from === s.home ? tree.root : s.root,
+    sources: sliceIn(reg, s.sources, from, tree.sources, (x) => x.id),
+    repos: sliceIn(reg, s.repos, from, tree.repos, (r) => r.id),
+    conns: withConn(s, from, { backend: tree.backend }),
     panels,
     // the showing tab may be among the dropped; then its neighbour shows
     activePanel:
       s.activePanel !== null && panels.includes(s.activePanel)
         ? s.activePanel
         : (panels[0] ?? null),
-    panelWidths: pruneByRepo(s.panelWidths, tree.repos),
-    panelTermHeights: pruneByRepo(s.panelTermHeights, tree.repos),
-    closedSections: pruneByRepo(s.closedSections, tree.repos),
+    panelWidths: pruneByRepo(s.panelWidths, tree.repos, mine),
+    panelTermHeights: pruneByRepo(s.panelTermHeights, tree.repos, mine),
+    closedSections: pruneByRepo(s.closedSections, tree.repos, mine),
+  };
+}
+
+/** runs, flows, fleets and jobs with one backend's replaced by what it
+ *  answers now, and the flow runs worked out again */
+function recordsState(
+  s: CanopyState,
+  from: string,
+  got: { runs: Run[]; flows: Flow[]; fleets: Fleet[]; jobs: Job[] },
+): Pick<CanopyState, "runs" | "flows" | "fleets" | "jobs" | "flowRuns"> {
+  const flows = recordIn(s.flows, from, got.flows);
+  return {
+    runs: recordIn(s.runs, from, got.runs),
+    flows,
+    fleets: recordIn(s.fleets, from, got.fleets),
+    jobs: recordIn(s.jobs, from, got.jobs),
+    flowRuns: flowRunsOf(Object.values(flows)),
+  };
+}
+
+/** The feed's view of the state as one backend saw it: its repos, sources,
+ *  shells, devices and kept shells alone, its helpers and launchers, so an
+ *  event from it does not read another backend's as gone. */
+function feedView(s: CanopyState, from: string): FeedSnapshot {
+  const mine = mineOf(from);
+  return {
+    repos: s.repos.filter((r) => mine(r.id)),
+    sources: s.sources.filter((x) => mine(x.id)),
+    runs: s.runs,
+    flows: s.flows,
+    fleets: s.fleets,
+    workspaces: s.workspaces,
+    jobs: s.jobs,
+    launchers: s.launchers[from] ?? {},
+    helpers: connOf(s, from).helpers,
+    devices: s.devices.filter((d) => mine(d.id)),
+    shells: s.shells.filter((t) => mine(t.id)),
+    kept: s.kept.filter((k) => mine(k.id)),
+    chanAs: s.chanAs,
   };
 }
 
@@ -720,18 +902,96 @@ function applyPeerRepo(get: () => CanopyState, result: Repo & { take?: { how: st
   get().applyEvent({ type: "repo", repo });
 }
 
-/** Which /api/peers read is the newest: two quick peers events can bring
- *  their answers back in either order, and only the last one asked lands. */
-let peersRead = 0;
+/** Which /api/peers read is the newest, per backend: two quick peers
+ *  events can bring their answers back in either order, and only the last
+ *  one asked lands. */
+const peersRead = new Map<string, number>();
 
-/** Reads the peer mode and who was seen off the server into the store. The
- *  mode lives in the config, so this is how the page follows a change to it. */
-function readPeers(set: (p: Pick<CanopyState, "peerSeen" | "peerSync">) => void): void {
-  const mine = ++peersRead;
+/** Reads a backend's peer mode (and, for home, who was seen) into the
+ *  store. The mode lives in the config, so this is how the page follows a
+ *  change to it. */
+function readPeers(get: () => CanopyState, set: (p: Partial<CanopyState>) => void, b: string): void {
+  const mine = (peersRead.get(b) ?? 0) + 1;
+  peersRead.set(b, mine);
   void api
-    .peers()
+    .peers(b)
     .then((p) => {
-      if (mine === peersRead) set({ peerSeen: p.seen, peerSync: p.sync });
+      if (mine !== peersRead.get(b)) return;
+      const s = get();
+      const conns = withConn(s, b, { peerSync: p.sync });
+      set(b === s.home ? { conns, peerSeen: p.seen, peerSync: p.sync } : { conns });
+    })
+    .catch(() => {});
+}
+
+/** Which init is the page's: each one's cleanup closes only what it
+ *  opened, since StrictMode runs a second before the first has let go. */
+let epoch = 0;
+/** the inits whose cleanup has run; a connect they started lands nothing */
+const dead = new Set<number>();
+
+/** The event streams open to backends other than home, by name, with the
+ *  init that opened them, so hiding one or the page's cleanup closes it. */
+const streams = new Map<string, { epoch: number; off: () => void }>();
+
+/** Each backend's current connect attempt: an older one that finishes
+ *  late (after a retry, a hide, or the page's cleanup) lands nothing. */
+const connecting = new Map<string, number>();
+
+/** the saved tabs and showing strip tab the page loaded with, so a backend
+ *  answering later brings its own back where they were */
+let loadedTabs: { terms: TermTab[]; activeTerm: string | null } = { terms: [], activeTerm: null };
+
+/** the page's own origin, which picks a backend's URL; none under a test */
+const pageOrigin = (): string => (globalThis as { location?: { origin?: string } }).location?.origin ?? "http://localhost";
+
+/** The registry, the page's backend order and the names every id is told
+ *  apart by, from the home backend's list less the hidden ones. */
+function applyRegistry(home: string, entries: readonly BackendEntry[], hidden: readonly string[]): string[] {
+  const all = [home, ...entries.map((e) => e.name).filter((n) => n !== home)];
+  known = { home, names: all };
+  const order = all.filter((n) => n === home || !hidden.includes(n));
+  setRegistry(home, order);
+  return order;
+}
+
+/** the home backend's list of backends, kept for connecting and unhiding */
+let registryEntries: BackendEntry[] = [];
+
+/** Opens the panel of each saved panel shell among `tabs` whose panel is
+ *  not open, with its shell section unfolded. Saved tabs alone: a shell
+ *  adopted from the backend's list must not reopen a panel that was closed
+ *  on purpose. */
+function openSavedPanels(
+  panels: string[],
+  closedSections: ClosedSections,
+  tabs: readonly TermTab[],
+): { panels: string[]; closedSections: ClosedSections } {
+  const savedIds = new Set(loadedTabs.terms.map((t) => t.id));
+  for (const t of tabs) {
+    if (t.place !== "panel" || panels.includes(t.repoId) || !savedIds.has(t.id)) continue;
+    panels = [...panels, t.repoId];
+    closedSections = unfoldIn(closedSections, t.repoId, "shell");
+  }
+  return { panels, closedSections };
+}
+
+/** What a backend's stream coming back after a drop re-reads: the server
+ *  replays nothing. Its tree and records, the shells it holds, the ones a
+ *  reboot left to restore (worked out before it listened, so never
+ *  broadcast to this stream), and the helpers that dialled back in before
+ *  this stream did. A failure leaves what is here until the next event. */
+function resync(get: () => CanopyState, set: (fn: (s: CanopyState) => Partial<CanopyState>) => void, b: string): void {
+  void get()
+    .rescan(b)
+    .catch(() => {});
+  void Promise.all([api.terms(b), api.kept(b), api.helpers(b)])
+    .then(([terms, kept, helpers]) => {
+      get().applyEvent({ type: "terms", terms }, b);
+      set((s) => ({
+        kept: sliceIn(registry(), s.kept, b, kept.kept, (k) => k.id),
+        conns: withConn(s, b, { keeping: kept.keeping, helpers }),
+      }));
     })
     .catch(() => {});
 }
@@ -740,15 +1000,14 @@ export const useStore = create<CanopyState>((set, get) => ({
   root: "",
   sources: [],
   repos: [],
-  backend: { openers: true, sshHost: null },
-  client: { address: "", local: false, shared: false },
-  helpers: [],
+  conns: {},
+  home: homeName(),
+  backendOrder: [homeName()],
   devices: [],
   peerSeen: [],
   peerSync: "off",
   shells: [],
   kept: [],
-  keeping: false,
   chan: null,
   chanAs: "",
   chanMsgs: {},
@@ -779,11 +1038,14 @@ export const useStore = create<CanopyState>((set, get) => ({
   searchQuery: "",
   pendingSearch: null,
   history: null,
+  histories: {},
   agents: {},
   launchers: {},
   jobs: {},
   buildsAt: {},
   terms: [],
+  parkedTerms: [],
+  checkoutPref: layout.checkoutPref,
   activeTerm: null,
   hiddenTerms: layout.hiddenTerms,
   termHeight: layout.termHeight,
@@ -813,6 +1075,27 @@ export const useStore = create<CanopyState>((set, get) => ({
   setFeedQuiet: (feedQuiet) => set({ feedQuiet }),
 
   init: async () => {
+    // Which backends there are comes first: every id and URL hangs off it.
+    // A server from before there were several has no list, and is home alone.
+    const reply = await api.backends().catch(() => null);
+    const home = reply?.self ?? "home";
+    const entries = reply?.backends ?? [];
+    registryEntries = entries;
+    const before = get().settings;
+    const order = applyRegistry(home, entries, before.hiddenBackends.filter((n) => n !== home));
+    const settings =
+      reply && JSON.stringify(reply.backends) !== JSON.stringify(before.backends) ? { ...before, backends: reply.backends } : before;
+    if (settings !== before) saveSettings(settings);
+    set({ home, backendOrder: order, settings, conns: Object.fromEntries(order.map((n) => [n, newConn(n)])) });
+    // What every request and stream sees of its backend becomes that
+    // backend's state; the same status object when nothing changed.
+    onBackendSignal((name, sig) => {
+      const c = get().conns[name];
+      if (!c) return;
+      const status = backendState(c.status, sig);
+      if (status !== c.status) set((s) => ({ conns: withConn(s, name, { status }) }));
+    });
+    const e = ++epoch;
     try {
       const [tree, workspaces, runs, agents, flows, fleets, verdict, launchers, jobs, held, client, helpers, devices, kept] = await Promise.all([
         api.tree(),
@@ -836,9 +1119,18 @@ export const useStore = create<CanopyState>((set, get) => ({
       // The shells come back only now, against what the server still holds:
       // a tab shown sooner would open its socket and start a shell of its
       // own under the old name. A solo or shell window keeps none: what it
-      // saved is the grove's, and the grove is what shows them.
-      const hiddenTerms = pruneHidden(get().hiddenTerms, held);
-      const terms = dockless() ? [] : reconcileTerms(layout.terms, held, tree.repos, layout.panels, new Set(hiddenTerms));
+      // saved is the grove's, and the grove is what shows them. Only home's
+      // saved tabs are judged here; another backend's wait, parked (and
+      // still saved), until that backend answers.
+      const saved = loadLayout();
+      loadedTabs = { terms: saved.terms, activeTerm: saved.activeTerm };
+      const mine = mineOf(home);
+      const s = get();
+      const hiddenTerms = pruneHiddenOf(s.hiddenTerms, home, held);
+      const terms = dockless()
+        ? []
+        : reconcileTerms(saved.terms.filter((t) => mine(t.id)), held, tree.repos, s.panels, new Set(hiddenTerms));
+      const parkedTerms = dockless() ? [] : saved.terms.filter((t) => !mine(t.id));
       const strip = terms.filter((t) => t.place === "strip");
       // A panel shell whose panel is not open here waits for the panel to
       // open (reconcileTerms already leaves an untabbed one out); only a
@@ -848,38 +1140,31 @@ export const useStore = create<CanopyState>((set, get) => ({
       // not run for a shell reconcileTerms adopted, or every closed panel
       // with a shell in it would reopen on the very load meant to keep it
       // closed.
-      const savedIds = new Set(layout.terms.map((t) => t.id));
-      const s = get();
-      let panels = s.panels;
-      let closedSections = s.closedSections;
-      for (const t of terms) {
-        if (t.place !== "panel" || panels.includes(t.repoId) || !savedIds.has(t.id)) continue;
-        panels = [...panels, t.repoId];
-        closedSections = unfoldIn(closedSections, t.repoId, "shell");
-      }
+      const { panels, closedSections } = openSavedPanels(s.panels, s.closedSections, terms);
+      const reg = registry();
       set({
         root: tree.root,
-        sources: tree.sources,
-        repos: tree.repos,
-        backend: tree.backend,
-        client,
-        helpers,
-        devices,
-        shells: held,
+        sources: sliceIn(reg, s.sources, home, tree.sources, (x) => x.id),
+        repos: sliceIn(reg, s.repos, home, tree.repos, (r) => r.id),
+        conns: withConn(s, home, {
+          backend: tree.backend,
+          client,
+          helpers,
+          keeping: kept.keeping,
+          status: { state: "online" },
+        }),
+        devices: sliceIn(reg, s.devices, home, devices, (d) => d.id),
+        shells: sliceIn(reg, s.shells, home, held, (t) => t.id),
         hiddenTerms,
-        kept: kept.kept,
-        keeping: kept.keeping,
+        kept: sliceIn(reg, s.kept, home, kept.kept, (k) => k.id),
         workspaces,
-        runs: Object.fromEntries(runs.map((r) => [r.id, r])),
-        agents,
-        launchers,
-        jobs: Object.fromEntries(jobs.map((j) => [j.id, j])),
-        flows: Object.fromEntries(flows.map((f) => [f.id, f])),
-        fleets: Object.fromEntries(fleets.map((f) => [f.id, f])),
-        flowRuns: flowRunsOf(flows),
+        ...recordsState(s, home, { runs, flows, fleets, jobs }),
+        agents: { ...s.agents, [home]: agents },
+        launchers: { ...s.launchers, [home]: launchers },
         verdictReady: verdict.ready,
         terms,
-        activeTerm: strip.some((t) => t.id === layout.activeTerm) ? layout.activeTerm : (strip.at(-1)?.id ?? null),
+        parkedTerms,
+        activeTerm: strip.some((t) => t.id === saved.activeTerm) ? saved.activeTerm : (strip.at(-1)?.id ?? null),
         panels,
         activePanel: s.activePanel ?? panels[0] ?? null,
         closedSections,
@@ -897,92 +1182,256 @@ export const useStore = create<CanopyState>((set, get) => ({
     void get().loadHistory();
     // Likewise peers: a backend with peer sync off just answers "off" and
     // an empty seen list, so this never blocks a grove with none set up.
-    readPeers(set);
+    readPeers(get, set, home);
     // tailchan too: a backend without a broker answers ready: false
     void get().loadChan();
-    const refresh = setInterval(() => void get().loadHistory(), HISTORY_REFRESH);
+    void api
+      .about()
+      .then((about) => set((s) => ({ conns: withConn(s, home, { about }) })))
+      .catch(() => {});
+    const refresh = setInterval(() => {
+      for (const n of get().backendOrder) if (n === get().home || streams.has(n)) void get().loadHistory(false, n);
+    }, HISTORY_REFRESH);
     // Handed back so the caller can close the stream — StrictMode mounts
     // effects twice, and an unclosed EventSource leaks a live connection.
     const unsubscribe = subscribe(
-      homeName(),
-      (ev) => get().applyEvent(ev),
-      () => {
-        // the server may still be coming back up — a failed resync just
-        // leaves the current tree in place until the next event
-        void get().rescan().catch(() => {});
-        // What a restarted server says only when it changes: the shells it
-        // holds, the ones a reboot left to restore (worked out before it
-        // listened, so never broadcast to this stream), and the helpers
-        // that dialled back in before this stream did.
-        void Promise.all([api.terms(), api.kept(), api.helpers()])
-          .then(([terms, kept, helpers]) => {
-            get().applyEvent({ type: "terms", terms });
-            set({ kept: kept.kept, keeping: kept.keeping, helpers });
-          })
-          .catch(() => {});
-      },
+      home,
+      (ev) => get().applyEvent(ev, home),
+      () => resync(get, set, home),
       identity(get().settings.device),
     );
     // A helper attaching between the first read and the stream opening
     // sent a `helpers` event no one heard; one more read closes that gap.
-    void api.helpers().then((helpers) => set({ helpers })).catch(() => {});
+    void api
+      .helpers()
+      .then((helpers) => set((s) => ({ conns: withConn(s, home, { helpers }) })))
+      .catch(() => {});
+    // Every other backend after home, each on its own: one that is slow or
+    // down never holds up the page or the others.
+    for (const n of order) if (n !== home) void get().connect(n);
     return () => {
       clearInterval(refresh);
       unsubscribe();
+      dead.add(e);
+      for (const [n, st] of streams) {
+        if (st.epoch !== e) continue;
+        st.off();
+        streams.delete(n);
+      }
     };
   },
 
-  loadHistory: async (refresh = false) => {
-    try {
-      set({ history: await api.history(refresh) });
-    } catch (err) {
-      set({
-        history: {
-          available: false,
-          reason: String(err instanceof Error ? err.message : err),
-          fetchedAt: Date.now(),
-        },
-      });
+  connect: async (name) => {
+    if (name === get().home) return;
+    const entry = registryEntries.find((x) => x.name === name);
+    if (!entry) return;
+    const e = epoch;
+    const attempt = (connecting.get(name) ?? 0) + 1;
+    connecting.set(name, attempt);
+    // an attempt the page has moved past (a retry, a hide, its cleanup)
+    // lands nothing and opens no stream
+    const live = () => !dead.has(e) && connecting.get(name) === attempt && get().backendOrder.includes(name);
+    const base = await resolveBase(entry, pageOrigin(), registryEntries);
+    if (!live()) return;
+    if (base === null) {
+      set((s) => ({ conns: withConn(s, name, { status: { state: "offline", reason: "no URL this page can use" } }) }));
+      return;
     }
+    setBase(name, base);
+    set((s) => ({ conns: withConn(s, name, { base }) }));
+    let got;
+    try {
+      got = await Promise.all([
+        api.tree(name),
+        api.runs(name),
+        api.flows(name),
+        api.fleets(name),
+        api.jobs(name),
+        api.agents(name),
+        api.launchers(name),
+        api.terms(name).catch((): TermInfo[] => []),
+        api.kept(name).catch(() => ({ keeping: false, kept: [] as KeptShell[] })),
+        api.client(name),
+        api.helpers(name),
+        api.devices(name).catch((): Device[] => []),
+      ]);
+    } catch (err) {
+      // the signal hook has said offline or sign-in already; an answer that
+      // was an error still leaves the backend unloaded, which says so too
+      const reason = String(err instanceof Error ? err.message : err);
+      if (live()) set((s) => ({ conns: withConn(s, name, { status: backendState(connOf(s, name).status, { kind: "unreachable", reason }) }) }));
+      return;
+    }
+    if (!live()) return;
+    const [tree, runs, flows, fleets, jobs, agents, launchers, held, kept, client, helpers, devices] = got;
+    set((s) => {
+      const reg = registry();
+      const t = treeState(s, tree, name);
+      const mine = mineOf(name);
+      const hiddenTerms = pruneHiddenOf(s.hiddenTerms, name, held);
+      // this backend's parked tabs come back against what it holds, the
+      // way home's did at load
+      const back = dockless()
+        ? []
+        : reconcileTerms(s.parkedTerms.filter((x) => mine(x.id)), held, tree.repos, t.panels, new Set(hiddenTerms)).filter(
+            (x) => !s.terms.some((have) => have.id === x.id),
+          );
+      const { panels, closedSections } = openSavedPanels(t.panels, t.closedSections, back);
+      const strip = back.filter((x) => x.place === "strip");
+      const want = loadedTabs.activeTerm;
+      return {
+        ...t,
+        conns: withConn(t, name, { client, helpers, keeping: kept.keeping }),
+        shells: sliceIn(reg, s.shells, name, held, (x) => x.id),
+        hiddenTerms,
+        kept: sliceIn(reg, s.kept, name, kept.kept, (k) => k.id),
+        devices: sliceIn(reg, s.devices, name, devices, (d) => d.id),
+        ...recordsState(s, name, { runs, flows, fleets, jobs }),
+        agents: { ...s.agents, [name]: agents },
+        launchers: { ...s.launchers, [name]: launchers },
+        terms: back.length ? [...s.terms, ...back] : s.terms,
+        parkedTerms: s.parkedTerms.some((x) => mine(x.id)) ? s.parkedTerms.filter((x) => !mine(x.id)) : s.parkedTerms,
+        activeTerm: want !== null && strip.some((x) => x.id === want) ? want : (s.activeTerm ?? strip.at(-1)?.id ?? null),
+        panels,
+        activePanel: t.activePanel ?? panels[0] ?? null,
+        closedSections,
+      };
+    });
+    streams.get(name)?.off();
+    const off = subscribe(
+      name,
+      (ev) => get().applyEvent(ev, name),
+      () => resync(get, set, name),
+      identity(get().settings.device),
+    );
+    streams.set(name, { epoch: e, off });
+    void get().loadHistory(false, name);
+    readPeers(get, set, name);
+    void api
+      .about(name)
+      .then((about) => set((s) => ({ conns: withConn(s, name, { about }) })))
+      .catch(() => {});
+    void api
+      .helpers(name)
+      .then((helpers) => set((s) => ({ conns: withConn(s, name, { helpers }) })))
+      .catch(() => {});
   },
 
-  rescan: async () => {
-    const [tree, runs, flows, fleets, jobs] = await Promise.all([
-      api.rescan(),
-      api.runs(),
-      api.flows(),
-      api.fleets(),
-      api.jobs(),
-    ]);
-    // a rescan can bring new repos; the server rebuilds the repo→project map
-    void get().loadHistory(true);
-    // Through applyEvent so the feed sees the scan even when this window
-    // asked for it: the broadcast that follows finds nothing new to say.
-    get().applyEvent({ type: "scan", result: tree });
+  retryBackend: async (name) => {
+    const s = get();
+    if (name === s.home || !s.backendOrder.includes(name)) return;
+    set((now) => ({ conns: withConn(now, name, { status: backendState(connOf(now, name).status, { kind: "retry" }) }) }));
+    await get().connect(name);
+  },
+
+  hideBackend: (name, hidden) => {
+    const s = get();
+    if (name === s.home || !known.names.includes(name)) return;
+    const was = s.settings.hiddenBackends;
+    const hiddenBackends = hidden ? (was.includes(name) ? was : [...was, name]) : was.filter((n) => n !== name);
+    const settings = hiddenBackends === was ? s.settings : { ...s.settings, hiddenBackends };
+    if (settings !== s.settings) saveSettings(settings);
+    if (!hidden) {
+      if (s.backendOrder.includes(name)) return;
+      const backendOrder = applyRegistry(s.home, registryEntries, hiddenBackends);
+      set({ settings, backendOrder, conns: { ...s.conns, [name]: newConn(name) } });
+      void get().connect(name);
+      return;
+    }
+    streams.get(name)?.off();
+    streams.delete(name);
+    // a load still on its way for it lands nothing
+    connecting.set(name, (connecting.get(name) ?? 0) + 1);
+    const mine = mineOf(name);
+    const not = <T>(idOf: (t: T) => string) => (t: T) => !mine(idOf(t));
+    const terms = s.terms.filter(not((t: TermTab) => t.id));
+    const gone = s.terms.filter((t) => mine(t.id));
+    const flows = recordOut(s.flows, name);
+    const { [name]: _conn, ...conns } = s.conns;
+    const { [name]: _agents, ...agents } = s.agents;
+    const { [name]: _launchers, ...launchers } = s.launchers;
+    const { [name]: _history, ...histories } = s.histories;
+    const backendOrder = applyRegistry(s.home, registryEntries, hiddenBackends);
     set({
-      // runs are server state too: a stream gap may have hidden a finish
-      runs: Object.fromEntries(runs.map((r) => [r.id, r])),
-      flows: Object.fromEntries(flows.map((f) => [f.id, f])),
-      fleets: Object.fromEntries(fleets.map((f) => [f.id, f])),
-      flowRuns: flowRunsOf(flows),
-      jobs: Object.fromEntries(jobs.map((j) => [j.id, j])),
+      settings,
+      backendOrder,
+      conns,
+      repos: s.repos.filter(not((r: Repo) => r.id)),
+      sources: s.sources.filter(not((x: SourceState) => x.id)),
+      shells: s.shells.filter(not((t: TermInfo) => t.id)),
+      kept: s.kept.filter(not((k: KeptShell) => k.id)),
+      devices: s.devices.filter(not((d: Device) => d.id)),
+      runs: recordOut(s.runs, name),
+      flows,
+      flowRuns: flowRunsOf(Object.values(flows)),
+      fleets: recordOut(s.fleets, name),
+      jobs: recordOut(s.jobs, name),
+      agents,
+      launchers,
+      histories,
+      history: historyOf(histories, backendOrder),
+      // its tabs leave this window but not the saved layout
+      terms,
+      parkedTerms: gone.length ? [...s.parkedTerms, ...gone] : s.parkedTerms,
+      activeTerm: s.activeTerm !== null && terms.some((t) => t.id === s.activeTerm) ? s.activeTerm : (terms.filter((t) => t.place === "strip").at(-1)?.id ?? null),
+      frontShells: keepFront(s.frontShells, terms),
+      selected: s.selected.filter((id) => !mine(id)),
     });
   },
 
-  addSource: async (input) => {
-    const tree = await api.addSource(input);
-    void get().loadHistory(true);
-    get().applyEvent({ type: "scan", result: tree });
+  setCheckoutPref: (key, backend) => set((s) => ({ checkoutPref: { ...s.checkoutPref, [key]: backend } })),
+
+  loadHistory: async (refresh = false, backend) => {
+    const b = backend ?? get().home;
+    let h: HistoryOverview;
+    try {
+      h = await api.history(refresh, b);
+    } catch (err) {
+      h = {
+        available: false,
+        reason: String(err instanceof Error ? err.message : err),
+        fetchedAt: Date.now(),
+      };
+    }
+    set((s) => {
+      const histories = { ...s.histories, [b]: h };
+      return { histories, history: historyOf(histories, s.backendOrder.includes(b) ? s.backendOrder : [...s.backendOrder, b]) };
+    });
+  },
+
+  rescan: async (backend) => {
+    const b = backend ?? get().home;
+    const [tree, runs, flows, fleets, jobs] = await Promise.all([
+      api.rescan(b),
+      api.runs(b),
+      api.flows(b),
+      api.fleets(b),
+      api.jobs(b),
+    ]);
+    // a rescan can bring new repos; the server rebuilds the repo→project map
+    void get().loadHistory(true, b);
+    // Through applyEvent so the feed sees the scan even when this window
+    // asked for it: the broadcast that follows finds nothing new to say.
+    get().applyEvent({ type: "scan", result: tree }, b);
+    // runs are server state too: a stream gap may have hidden a finish
+    set((s) => recordsState(s, b, { runs, flows, fleets, jobs }));
+  },
+
+  addSource: async (input, backend) => {
+    const b = backend ?? get().home;
+    const tree = await api.addSource(input, b);
+    void get().loadHistory(true, b);
+    get().applyEvent({ type: "scan", result: tree }, b);
   },
   removeSource: async (id) => {
     const tree = await api.removeSource(id);
-    void get().loadHistory(true);
-    get().applyEvent({ type: "scan", result: tree });
+    void get().loadHistory(true, backendOf(id));
+    get().applyEvent({ type: "scan", result: tree }, backendOf(id));
   },
   rescanSource: async (id) => {
     const tree = await api.rescanSource(id);
-    void get().loadHistory(true);
-    get().applyEvent({ type: "scan", result: tree });
+    void get().loadHistory(true, backendOf(id));
+    get().applyEvent({ type: "scan", result: tree }, backendOf(id));
   },
 
   setFilter: (filter) => set({ filter }),
@@ -1027,7 +1476,7 @@ export const useStore = create<CanopyState>((set, get) => ({
     else openElsewhere(id, target);
   },
   openApp: async (id, app) => {
-    await api.open(id, app, get().settings.terminal === "tab", helperFor(get()));
+    await api.open(id, app, get().settings.terminal === "tab", helperFor(get(), backendOf(id)));
   },
   closePanel: (id) => {
     const s = get();
@@ -1044,13 +1493,17 @@ export const useStore = create<CanopyState>((set, get) => ({
     });
   },
 
-  applyEvent: (ev) => {
+  applyEvent: (ev, from) => {
+    const before = get();
+    const b = from ?? before.home;
+    // workspaces and tailchan are the home backend's alone
+    if ((ev.type === "chan" || ev.type === "workspaces") && b !== before.home) return;
     // The feed says what changed, so the lines come from the event against
-    // the state before it is applied.
+    // the state before it is applied, as the backend that sent it saw it.
     // a message already held (a reconnect's replay, a post heard twice) is
     // neither a feed line nor unread
-    if (ev.type === "chan" && get().chanMsgs[ev.message.channel]?.some((m) => m.id === ev.message.id)) return;
-    const lines = describeEvent(ev, get(), Date.now(), get().agents);
+    if (ev.type === "chan" && before.chanMsgs[ev.message.channel]?.some((m) => m.id === ev.message.id)) return;
+    const lines = describeEvent(ev, feedView(before, b), Date.now(), before.agents[b] ?? {});
     if (lines.length) {
       set((s) => {
         const { feed, seq } = appendFeed(s.feed, lines, s.feedSeq);
@@ -1074,11 +1527,11 @@ export const useStore = create<CanopyState>((set, get) => ({
         updatedAt: { ...s.updatedAt, [ev.repo.id]: Date.now() },
       }));
     } else if (ev.type === "scan") {
-      set((s) => treeState(s, ev.result));
+      set((s) => treeState(s, ev.result, b));
     } else if (ev.type === "workspaces") {
       set({ workspaces: ev.workspaces });
     } else if (ev.type === "agents") {
-      set({ agents: ev.agents });
+      set((s) => ({ agents: { ...s.agents, [b]: ev.agents } }));
     } else if (ev.type === "run") {
       set((s) => ({ runs: { ...s.runs, [ev.run.id]: ev.run } }));
     } else if (ev.type === "run-gone") {
@@ -1119,25 +1572,26 @@ export const useStore = create<CanopyState>((set, get) => ({
     } else if (ev.type === "builds") {
       set((s) => ({ buildsAt: { ...s.buildsAt, [ev.repoId]: Date.now() } }));
     } else if (ev.type === "launchers") {
-      set({ launchers: ev.launchers });
+      set((s) => ({ launchers: { ...s.launchers, [b]: ev.launchers } }));
     } else if (ev.type === "helpers") {
-      set({ helpers: ev.helpers });
+      set((s) => ({ conns: withConn(s, b, { helpers: ev.helpers }) }));
     } else if (ev.type === "devices") {
-      set({ devices: ev.devices });
+      set((s) => ({ devices: sliceIn(registry(), s.devices, b, ev.devices, (d) => d.id) }));
     } else if (ev.type === "kept") {
-      set({ kept: ev.kept });
+      set((s) => ({ kept: sliceIn(registry(), s.kept, b, ev.kept, (k) => k.id) }));
     } else if (ev.type === "peers") {
-      set({ peerSeen: ev.seen });
-      readPeers(set);
+      if (b === before.home) set({ peerSeen: ev.seen });
+      readPeers(get, set, b);
     } else if (ev.type === "terms") {
       // a shell opened on another device shows up here too; a dockless
       // window (solo, shell) keeps no tabs of its own
       set((s) => {
-        const hiddenTerms = pruneHidden(s.hiddenTerms, ev.terms);
+        const shells = sliceIn(registry(), s.shells, b, ev.terms, (t) => t.id);
+        const hiddenTerms = pruneHiddenOf(s.hiddenTerms, b, ev.terms);
         return {
-          shells: ev.terms,
+          shells,
           hiddenTerms,
-          terms: dockless() ? s.terms : adoptTerms(s.terms, ev.terms, s.repos, s.panels, skipped(hiddenTerms)),
+          terms: dockless() ? s.terms : adoptTerms(s.terms, shells, s.repos, s.panels, skipped(hiddenTerms)),
         };
       });
     }
@@ -1179,7 +1633,7 @@ export const useStore = create<CanopyState>((set, get) => ({
       openShellElsewhere(repoId, where);
       return;
     }
-    const tab: TermTab = { id: termId(), repoId, name: repo.name, path: repo.path, place: where };
+    const tab: TermTab = { id: qual(backendOf(repoId), termId()), repoId, name: repo.name, path: repo.path, place: where };
     // A panel shell shows only inside its repo's panel and only while that
     // section is unfolded, so open both. Otherwise the click does nothing you
     // can see.
@@ -1219,9 +1673,10 @@ export const useStore = create<CanopyState>((set, get) => ({
     await api.forgetShell(id);
     set((s) => ({ kept: s.kept.filter((k) => k.id !== id) }));
   },
-  setKeeping: async (on) => {
-    const { keeping } = await api.setKeeping(on);
-    set({ keeping });
+  setKeeping: async (on, backend) => {
+    const b = backend ?? get().home;
+    const { keeping } = await api.setKeeping(on, b);
+    set((s) => ({ conns: withConn(s, b, { keeping }) }));
   },
   loadChan: async () => {
     const chan = await api.tailchan().catch((e: unknown): TailchanInfo => ({ ready: false, reason: String(e instanceof Error ? e.message : e) }));
@@ -1314,7 +1769,7 @@ export const useStore = create<CanopyState>((set, get) => ({
       solo: loneWindow(),
     });
     const place = where === "panel" ? "panel" : "strip";
-    const id = termId();
+    const id = qual(backendOf(repoId), termId());
     await api.resumeClaude(repoId, id, place, session);
     if (dockless()) {
       window.location.assign(shellUrlFor(repoId, id));
@@ -1388,12 +1843,12 @@ export const useStore = create<CanopyState>((set, get) => ({
   editAgent: (repoId) => set({ sheet: { kind: "agent", repoId } }),
   setAgent: async (repoId, settings) => {
     const agents = await api.setAgent(repoId, settings);
-    set({ agents });
+    set((s) => ({ agents: { ...s.agents, [backendOf(repoId)]: agents } }));
   },
   editLaunch: (repoId) => set({ sheet: { kind: "launch", repoId } }),
   setLaunch: async (repoId, settings) => {
     const launchers = await api.setLaunch(repoId, settings);
-    set({ launchers });
+    set((s) => ({ launchers: { ...s.launchers, [backendOf(repoId)]: launchers } }));
   },
   showLaunch: (repoId) =>
     set((s) => ({
@@ -1523,11 +1978,13 @@ export const useStore = create<CanopyState>((set, get) => ({
   pickFacet: (facet) => set((s) => ({ selected: pickWhere(visibleRepos(s), facet) })),
   planFleet: (workflow) => set({ sheet: { kind: "fleet-plan", workflow } }),
   startFleet: async (workflow, note) => {
-    const [fleet] = await api.startFleet(workflow, pickedIds(get()), note);
-    if (!fleet) return;
+    // one fleet per backend the picked repos are on; the sheet shows the first
+    const started = await api.startFleet(workflow, pickedIds(get()), note);
+    const first = started[0];
+    if (!first) return;
     set((s) => ({
-      fleets: { ...s.fleets, [fleet.id]: fleet },
-      sheet: { kind: "fleet", fleetId: fleet.id },
+      fleets: { ...s.fleets, ...Object.fromEntries(started.map((f) => [f.id, f])) },
+      sheet: { kind: "fleet", fleetId: first.id },
       selecting: false,
       selected: [],
       selectAnchor: null,
@@ -1630,21 +2087,39 @@ export function allRuns(s: CanopyState): Run[] {
   return Object.values(s.runs).sort((a, b) => b.startedAt - a.startedAt);
 }
 
-/** What this browser can open and through what: its chosen helper, the one
- *  at its address, the backend's own Mac, or nothing. */
-export const capsFor = (s: CanopyState): ClientCaps => clientCaps(s.client, s.helpers, s.settings.helper);
+/** One backend's connection, home's unless named; a fixed stand-in for one
+ *  not known yet, so a selector over it is stable. */
+export const connOf = (s: Pick<CanopyState, "conns" | "home">, name: string = s.home): Conn => s.conns[name] ?? NO_CONN;
 
-/** The helper name an open request carries: the one `capsFor` settled on,
- *  or none when the backend's own desktop (or nothing) is what opens. */
-export const helperFor = (s: CanopyState): string | undefined => capsFor(s).helper?.name;
+/** The home backend's connection. */
+export const homeConn = (s: Pick<CanopyState, "conns" | "home">): Conn => connOf(s, s.home);
 
-/** The repo's agent settings, the defaults when it has none. */
+/** Whether a backend answers now. */
+export const isOnline = (s: Pick<CanopyState, "conns" | "home">, name: string): boolean =>
+  connOf(s, name).status.state === "online";
+
+/** Whether this page shows more than one backend. */
+export const multi = (s: Pick<CanopyState, "backendOrder">): boolean => s.backendOrder.length > 1;
+
+/** What this browser can open on a backend and through what: its chosen
+ *  helper, the one at its address, the backend's own Mac, or nothing. */
+export const capsFor = (s: CanopyState, name: string = s.home): ClientCaps => {
+  const c = connOf(s, name);
+  return clientCaps(c.client, c.helpers, s.settings.helper);
+};
+
+/** The helper name an open request to a backend carries: the one `capsFor`
+ *  settled on, or none when the backend's own desktop (or nothing) is what
+ *  opens. */
+export const helperFor = (s: CanopyState, name: string = s.home): string | undefined => capsFor(s, name).helper?.name;
+
+/** The repo's agent settings on its own backend, the defaults when it has none. */
 export const agentFor = (s: CanopyState, repo: Repo): AgentSettings =>
-  s.agents[repo.path] ?? DEFAULT_AGENT;
+  s.agents[backendOf(repo.id)]?.[repo.path] ?? DEFAULT_AGENT;
 
-/** The repo's launch settings, the defaults when it has none. */
+/** The repo's launch settings on its own backend, the defaults when it has none. */
 export const launchFor = (s: CanopyState, repo: Repo): LaunchSettings =>
-  s.launchers[repo.path] ?? DEFAULT_LAUNCH;
+  s.launchers[backendOf(repo.id)]?.[repo.path] ?? DEFAULT_LAUNCH;
 
 /** The repo's jobs, newest first. Callers select through useShallow. */
 export function jobsFor(s: CanopyState, repoId: string): Job[] {

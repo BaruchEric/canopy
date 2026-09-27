@@ -1,9 +1,14 @@
-import { afterEach, describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import {
   PANEL_TERM,
+  agentFor,
   changed,
   closedIn,
   closedSectionsOf,
+  connOf,
+  isOnline,
+  layoutOf,
+  multi,
   panelTermHeightFor,
   pruneByRepo,
   sectionsFor,
@@ -11,7 +16,18 @@ import {
   unfoldIn,
   useStore,
 } from "./store";
-import type { KeptShell, PeerSeen, Repo, TermInfo } from "../../src/core/types";
+import { onBackendSignal } from "./api";
+import { setBase, setRegistry } from "./registry";
+import {
+  DEFAULT_AGENT,
+  type AgentSettings,
+  type KeptShell,
+  type PeerSeen,
+  type Repo,
+  type ScanResult,
+  type SourceState,
+  type TermInfo,
+} from "../../src/core/types";
 
 describe("closedSectionsOf", () => {
   test("a layout from before the launch and peers sections folds them", () => {
@@ -172,5 +188,335 @@ describe("a peers event re-reads the mode", () => {
     await settle();
     expect(useStore.getState().peerSync).toBe("dry");
     expect(useStore.getState().peerSeen).toEqual(seen(2));
+  });
+});
+
+/* ---------- several backends ---------- */
+
+type Answer = (path: string, init?: RequestInit) => unknown;
+
+/** A fetch stub by URL: relative urls are the home backend `a`, and
+ *  `http://b.test/...` is `b`. A route either answers JSON, or throws, or
+ *  returns a Response of its own. */
+function stubFetch(home: Answer, b: Answer, calls: string[]): typeof fetch {
+  return (async (url: string | URL | Request, init?: RequestInit) => {
+    const u = String(url);
+    calls.push(u);
+    const onB = u.startsWith("http://b.test");
+    const path = onB ? u.slice("http://b.test".length) : u;
+    if (!onB && /^https?:/.test(u)) throw new Error(`unexpected ${u}`);
+    const body = (onB ? b : home)(path, init);
+    if (body instanceof Response) return body;
+    if (body instanceof Promise) return body as Promise<Response>;
+    return new Response(JSON.stringify(body), { status: 200 });
+  }) as unknown as typeof fetch;
+}
+
+class FakeEventSource {
+  static opened: FakeEventSource[] = [];
+  readyState = 0;
+  onopen: (() => void) | null = null;
+  onmessage: ((m: { data: string }) => void) | null = null;
+  onerror: (() => void) | null = null;
+  closed = false;
+  constructor(
+    public url: string,
+    public opts?: { withCredentials?: boolean },
+  ) {
+    FakeEventSource.opened.push(this);
+  }
+  addEventListener(): void {}
+  close(): void {
+    this.closed = true;
+  }
+}
+
+const source = (id: string, label: string): SourceState => ({ id, label, kind: "local", path: `/${label}`, launch: true, repos: 1, scannedAt: 1 });
+const repo = (id: string, extra: Partial<Repo> = {}) =>
+  ({ id, name: id, path: `/dev/${id}`, group: "", source: "launch", status: null, ...extra }) as unknown as Repo;
+const scanOf = (root: string, repos: Repo[]): ScanResult => ({ root, sources: [source("launch", "launch")], repos, scannedAt: 1, backend: { openers: true, sshHost: null } });
+const runOf = (id: string, repoId: string) => ({ id, repoId, action: "chat", status: "done", startedAt: 1 });
+const settle = (ms = 20) => new Promise((r) => setTimeout(r, ms));
+
+/** What every backend answers at load, for a tree and a run of its own. */
+function backendAnswers(tree: unknown, runs: unknown[], extra: Record<string, unknown> = {}): Answer {
+  return (path) => {
+    const p = path.split("?")[0] ?? "";
+    if (p in extra) return extra[p];
+    switch (p) {
+      case "/api/tree":
+        return tree;
+      case "/api/runs":
+        return runs;
+      case "/api/workspaces":
+      case "/api/flows":
+      case "/api/fleets":
+      case "/api/jobs":
+      case "/api/terms":
+      case "/api/helpers":
+      case "/api/devices":
+        return [];
+      case "/api/agents":
+      case "/api/launchers":
+        return {};
+      case "/api/verdict":
+        return { ready: false };
+      case "/api/client":
+        return { address: "", local: false, shared: false };
+      case "/api/terms/kept":
+        return { keeping: false, kept: [] };
+      case "/api/history":
+        return { available: false, reason: "none", fetchedAt: 1 };
+      case "/api/peers":
+        return { self: null, peers: [], seen: [], sync: "off" };
+      case "/api/tailchan":
+        return { ready: false, reason: "none" };
+      case "/api/about":
+        return { version: "0", startedAt: 1 };
+      default:
+        return { ok: true };
+    }
+  };
+}
+
+const twoBackends = { self: "a", backends: [{ name: "a", tailnet: "http://a.test" }, { name: "b", tailnet: "http://b.test" }] };
+
+describe("several backends", () => {
+  const pristine = useStore.getState();
+  const realFetch = globalThis.fetch;
+  const g = globalThis as unknown as { EventSource?: unknown; localStorage?: unknown };
+  const realES = g.EventSource;
+  const calls: string[] = [];
+  let cleanup: (() => void) | null = null;
+
+  beforeEach(() => {
+    FakeEventSource.opened = [];
+    g.EventSource = FakeEventSource;
+    useStore.setState(pristine, true);
+  });
+  afterEach(() => {
+    cleanup?.();
+    cleanup = null;
+    globalThis.fetch = realFetch;
+    g.EventSource = realES;
+    delete g.localStorage;
+    calls.length = 0;
+    setRegistry("", []);
+    setBase("b", "");
+    onBackendSignal(() => {});
+    useStore.setState(pristine, true);
+  });
+
+  async function start(home: Answer, b: Answer): Promise<void> {
+    globalThis.fetch = stubFetch(home, b, calls);
+    cleanup = await useStore.getState().init();
+  }
+
+  test("a registry of one talks to nothing but the page's own origin", async () => {
+    await start(backendAnswers(scanOf("/a", [repo("proj")]), [], { "/api/backends": { self: "a", backends: [] } }), () => {
+      throw new Error("b asked");
+    });
+    await settle();
+    expect(calls.filter((u) => /^https?:/.test(u))).toEqual([]);
+    const s = useStore.getState();
+    expect(Object.keys(s.conns)).toEqual(["a"]);
+    expect(multi(s)).toBe(false);
+    expect(FakeEventSource.opened.length).toBe(1);
+    expect(FakeEventSource.opened[0]?.url.startsWith("/api/events")).toBe(true);
+    expect(FakeEventSource.opened[0]?.opts?.withCredentials).toBeFalsy();
+    expect(connOf(s).status.state).toBe("online");
+  });
+
+  test("two backends: each one's repos and runs, and a stream to each", async () => {
+    await start(
+      backendAnswers(scanOf("/a", [repo("proj")]), [runOf("r1", "proj")], { "/api/backends": twoBackends }),
+      backendAnswers(scanOf("/b", [repo("proj")]), [runOf("r1", "proj")]),
+    );
+    await settle();
+    const s = useStore.getState();
+    expect(s.repos.map((r) => r.id)).toEqual(["proj", "b|proj"]);
+    expect(Object.keys(s.runs).sort()).toEqual(["b|r1", "r1"]);
+    expect(s.runs["b|r1"]?.repoId).toBe("b|proj");
+    expect(multi(s)).toBe(true);
+    expect(s.backendOrder).toEqual(["a", "b"]);
+    expect(FakeEventSource.opened.length).toBe(2);
+    const bs = FakeEventSource.opened.find((e) => e.url.startsWith("http://b.test"));
+    expect(bs?.url.startsWith("http://b.test/api/events")).toBe(true);
+    expect(bs?.opts?.withCredentials).toBe(true);
+    expect(connOf(s, "b").status.state).toBe("online");
+  });
+
+  test("an event from b changes b's checkout and leaves home's alone", async () => {
+    await start(
+      backendAnswers(scanOf("/a", [repo("proj")]), [], { "/api/backends": twoBackends }),
+      backendAnswers(scanOf("/b", [repo("proj")]), []),
+    );
+    await settle();
+    const home = useStore.getState().repos.find((r) => r.id === "proj");
+    useStore.getState().applyEvent({ type: "repo", repo: repo("b|proj", { name: "changed", source: "b|launch" }) }, "b");
+    const after = useStore.getState().repos;
+    expect(after.find((r) => r.id === "proj")).toBe(home);
+    expect(after.find((r) => r.id === "b|proj")?.name).toBe("changed");
+  });
+
+  test("a scan from b prunes only b's panels", async () => {
+    await start(
+      backendAnswers(scanOf("/a", [repo("proj")]), [], { "/api/backends": twoBackends }),
+      backendAnswers(scanOf("/b", [repo("proj")]), []),
+    );
+    await settle();
+    useStore.setState({ panels: ["proj", "b|proj"], activePanel: "b|proj" });
+    const bScan = { ...scanOf("/b", []), sources: [source("b|launch", "launch")] };
+    useStore.getState().applyEvent({ type: "scan", result: bScan }, "b");
+    const s = useStore.getState();
+    expect(s.panels).toEqual(["proj"]);
+    expect(s.activePanel).toBe("proj");
+    expect(s.repos.map((r) => r.id)).toEqual(["proj"]);
+    expect(s.root).toBe("/a");
+  });
+
+  test("a backend that has not answered keeps its panels and its saved shell tabs", async () => {
+    const store = new Map<string, string>();
+    g.localStorage = {
+      getItem: (k: string) => store.get(k) ?? null,
+      setItem: (k: string, v: string) => void store.set(k, v),
+      removeItem: (k: string) => void store.delete(k),
+    };
+    const bTab = { id: `b|${"a".repeat(32)}`, repoId: "b|x", name: "x", path: "/dev/x", place: "strip" };
+    store.set("canopy.layout", JSON.stringify({ panels: ["proj", "b|x"], terms: [bTab] }));
+    useStore.setState({ panels: ["proj", "b|x"] });
+    // b's answers never come
+    await start(backendAnswers(scanOf("/a", [repo("proj")]), [], { "/api/backends": twoBackends }), () => new Promise(() => {}));
+    await settle();
+    useStore.getState().applyEvent({ type: "scan", result: { ...scanOf("/a", [repo("proj")]), scannedAt: 2 } });
+    const s = useStore.getState();
+    expect(s.panels).toEqual(["proj", "b|x"]);
+    expect(s.terms).toEqual([]);
+    expect(s.parkedTerms.map((t) => t.id)).toEqual([bTab.id]);
+    expect(layoutOf(s).terms.map((t) => t.id)).toEqual([bTab.id]);
+    const saved = JSON.parse(store.get("canopy.layout") ?? "{}") as { terms?: { id: string }[]; panels?: string[] };
+    expect(saved.terms?.map((t) => t.id)).toEqual([bTab.id]);
+    expect(saved.panels).toEqual(["proj", "b|x"]);
+  });
+
+  test("b's parked tab comes in once b answers with its shell", async () => {
+    const store = new Map<string, string>();
+    g.localStorage = {
+      getItem: (k: string) => store.get(k) ?? null,
+      setItem: (k: string, v: string) => void store.set(k, v),
+      removeItem: (k: string) => void store.delete(k),
+    };
+    const plain = "a".repeat(32);
+    const bTab = { id: `b|${plain}`, repoId: "b|x", name: "x", path: "/dev/x", place: "strip" };
+    store.set("canopy.layout", JSON.stringify({ terms: [bTab] }));
+    const held = { id: plain, repoId: "x", path: "/dev/x", place: "strip", attached: false, viewers: [], startedAt: 1 };
+    await start(
+      backendAnswers(scanOf("/a", [repo("proj")]), [], { "/api/backends": twoBackends }),
+      backendAnswers(scanOf("/b", [repo("x")]), [], { "/api/terms": [held] }),
+    );
+    await settle();
+    const s = useStore.getState();
+    expect(s.terms.map((t) => t.id)).toEqual([bTab.id]);
+    expect(s.parkedTerms).toEqual([]);
+    expect(s.shells.map((t) => t.id)).toEqual([bTab.id]);
+  });
+
+  test("b not answering marks it offline, a sign-in page marks it signin, home stays online", async () => {
+    await start(backendAnswers(scanOf("/a", [repo("proj")]), [], { "/api/backends": twoBackends }), () => {
+      throw new Error("down");
+    });
+    await settle();
+    expect(connOf(useStore.getState(), "b").status.state).toBe("offline");
+    expect(connOf(useStore.getState(), "a").status.state).toBe("online");
+    expect(isOnline(useStore.getState(), "a")).toBe(true);
+    expect(isOnline(useStore.getState(), "b")).toBe(false);
+
+    globalThis.fetch = stubFetch(
+      backendAnswers(scanOf("/a", [repo("proj")]), []),
+      () => new Response(JSON.stringify({ error: "sign in", login: "https://gate.test/login" }), { status: 401 }),
+      calls,
+    );
+    await useStore.getState().retryBackend("b");
+    await settle();
+    const b = connOf(useStore.getState(), "b").status;
+    expect(b.state).toBe("signin");
+    expect(b.login).toBe("https://gate.test/login");
+    expect(connOf(useStore.getState(), "a").status.state).toBe("online");
+  });
+
+  test("agentFor reads the repo's own backend's settings", async () => {
+    const quick = { ...DEFAULT_AGENT, model: "haiku" } as AgentSettings;
+    const slow = { ...DEFAULT_AGENT, model: "opus" } as AgentSettings;
+    await start(
+      backendAnswers(scanOf("/a", [repo("proj")]), [], { "/api/backends": twoBackends, "/api/agents": { "/dev/proj": quick } }),
+      backendAnswers(scanOf("/b", [repo("proj")]), [], { "/api/agents": { "/dev/proj": slow } }),
+    );
+    await settle();
+    const s = useStore.getState();
+    const home = s.repos.find((r) => r.id === "proj");
+    const there = s.repos.find((r) => r.id === "b|proj");
+    if (!home || !there) throw new Error("repos missing");
+    expect(agentFor(s, home)).toEqual(quick);
+    expect(agentFor(s, there)).toEqual(slow);
+  });
+
+  test("a shell opened at b's repo is b's", async () => {
+    await start(
+      backendAnswers(scanOf("/a", [repo("proj")]), [], { "/api/backends": twoBackends }),
+      backendAnswers(scanOf("/b", [repo("proj")]), []),
+    );
+    await settle();
+    useStore.getState().openTerm("b|proj", "strip");
+    const tab = useStore.getState().terms.at(-1);
+    expect(tab?.id.startsWith("b|")).toBe(true);
+    expect(tab?.id.length).toBe(34);
+    expect(tab?.repoId).toBe("b|proj");
+  });
+
+  test("hiding b drops its slice and parks its tabs; showing it connects again", async () => {
+    await start(
+      backendAnswers(scanOf("/a", [repo("proj")]), [], { "/api/backends": twoBackends }),
+      backendAnswers(scanOf("/b", [repo("proj")]), [runOf("r1", "proj")]),
+    );
+    await settle();
+    useStore.getState().openTerm("b|proj", "strip");
+    const tab = useStore.getState().terms.at(-1);
+    useStore.getState().hideBackend("b", true);
+    let s = useStore.getState();
+    expect(s.repos.map((r) => r.id)).toEqual(["proj"]);
+    expect(Object.keys(s.runs)).toEqual([]);
+    expect(s.terms).toEqual([]);
+    expect(s.parkedTerms.map((t) => t.id)).toEqual([tab?.id ?? ""]);
+    expect(s.backendOrder).toEqual(["a"]);
+    expect(s.settings.hiddenBackends).toEqual(["b"]);
+    expect(FakeEventSource.opened.find((e) => e.url.startsWith("http://b.test"))?.closed).toBe(true);
+    useStore.getState().hideBackend("b", false);
+    await settle();
+    s = useStore.getState();
+    expect(s.backendOrder).toEqual(["a", "b"]);
+    expect(s.repos.map((r) => r.id)).toEqual(["proj", "b|proj"]);
+    expect(s.settings.hiddenBackends).toEqual([]);
+  });
+
+  test("home cannot be hidden", async () => {
+    await start(backendAnswers(scanOf("/a", [repo("proj")]), [], { "/api/backends": twoBackends }), backendAnswers(scanOf("/b", []), []));
+    await settle();
+    useStore.getState().hideBackend("a", true);
+    expect(useStore.getState().backendOrder).toEqual(["a", "b"]);
+  });
+
+  test("a server with no backends route is home alone", async () => {
+    await start(
+      backendAnswers(scanOf("/a", [repo("proj")]), [], {
+        "/api/backends": new Response(JSON.stringify({ error: "not found" }), { status: 404 }),
+      }),
+      () => {
+        throw new Error("b asked");
+      },
+    );
+    const s = useStore.getState();
+    expect(s.home).toBe("home");
+    expect(s.backendOrder).toEqual(["home"]);
+    expect(s.loaded).toBe(true);
   });
 });

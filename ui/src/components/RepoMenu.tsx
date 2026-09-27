@@ -7,7 +7,7 @@ import { describeAgent } from "../../../src/core/agent";
 import { describeLaunch } from "../../../src/core/launch";
 import { flowWord } from "../flows";
 import { useShallow } from "zustand/react/shallow";
-import { activeFlowFor, activeRunFor, agentFor, capsFor, launchFor, useStore } from "../store";
+import { activeFlowFor, activeRunFor, agentFor, capsFor, homeConn, launchFor, useStore } from "../store";
 import {
   CLAUDE_OPENERS,
   OPENER_IDS,
@@ -57,7 +57,7 @@ export function RepoMenu({
   // can open: the backend's own desktop when it is a Mac this browser runs
   // on, else a helper on this machine, else none. Without a `code` opener
   // VS Code is kept as a client-side Remote-SSH link the browser opens itself.
-  const backend = useStore((s) => s.backend);
+  const backend = useStore((s) => homeConn(s).backend);
   const client = useStore(useShallow(capsFor));
   const can = (app: OpenerId) => client.openers.includes(app);
   const apps = OPENERS.filter(can);

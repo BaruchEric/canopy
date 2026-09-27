@@ -15,7 +15,7 @@ import {
 } from "../files";
 import { peerable, peerWipCounts } from "../peers";
 import { useShallow } from "zustand/react/shallow";
-import { DOCK, PANEL, activeFlowFor, capsFor, flowFor, runFor, useStore } from "../store";
+import { DOCK, PANEL, activeFlowFor, capsFor, flowFor, homeConn, runFor, useStore } from "../store";
 import { ago, GLYPH, stateOf } from "../util";
 import { ClaudeSection } from "./Claude";
 import { LaunchSection } from "./Launch";
@@ -1000,7 +1000,7 @@ export function RepoPanel({
   // Only the openers this browser can reach, as in RepoMenu: a headless
   // backend with no helper picked has none, and VS Code falls back to the
   // Remote-SSH link.
-  const backend = useStore((s) => s.backend);
+  const backend = useStore((s) => homeConn(s).backend);
   const openers = useStore(useShallow(capsFor)).openers;
   const order = useStore((s) => s.settings.sectionOrder);
   const hiddenSections = useStore((s) => s.settings.sectionsHidden);

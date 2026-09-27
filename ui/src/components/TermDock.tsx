@@ -4,6 +4,7 @@ import { Terminal, type ITheme } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import "@xterm/xterm/css/xterm.css";
 import { api } from "../api";
+import { backendOf, qual } from "../registry";
 import { groveUrl, nameShellHere, parseRoute, popShell } from "../routes";
 import { PANEL_TERM, TERM, closedIn, panelTermHeightFor, useStore, type TermTab } from "../store";
 import { TERM_FONT, otherShells, termId, viewKey } from "../term";
@@ -1193,7 +1194,7 @@ export function ShellSolo({ id }: { id: string }) {
   const [tab] = useState<TermTab | null>(() =>
     repo && !repo.forge
       ? {
-          id: parseRoute(window.location.search).term ?? termId(),
+          id: parseRoute(window.location.search).term ?? qual(backendOf(repo.id), termId()),
           repoId: repo.id,
           name: repo.name,
           path: repo.path,
