@@ -42,12 +42,25 @@ export function tailnetHost(hostname: string): boolean {
  * proxy. Forwarded protocol is trusted only because Bun binds to loopback.
  * `open` is the shared-backend case: the server was told to listen beyond
  * loopback (`CANOPY_BIND`) because the tailnet is the trust edge, so a
- * same-origin request by a tailnet name is as good as one by localhost. */
-export function libraryOriginAllowed(req: Request, publicOrigin?: string, open = false): boolean {
+ * same-origin request by a tailnet name is as good as one by localhost.
+ *  `origins` are the other canopy pages allowed to drive this backend
+ *  (`CANOPY_ORIGINS`). A listed Origin passes even cross-site, which two
+ *  tailnet names are to a browser; a request with no Origin passes when its
+ *  Host is a listed origin's host and it is not marked cross-site, which is
+ *  a listed page's own same-origin GET behind `tailscale serve`. */
+export function libraryOriginAllowed(
+  req: Request,
+  publicOrigin?: string,
+  open = false,
+  origins: readonly string[] = [],
+): boolean {
   const url = new URL(req.url);
   const origin = req.headers.get("origin");
+  const site = req.headers.get("sec-fetch-site");
+  if (origin && origins.includes(origin)) return true;
+  if (!origin && site !== "cross-site" && origins.some((o) => new URL(o).host === url.host)) return true;
   const local = ["localhost", "127.0.0.1", "[::1]"].includes(url.hostname);
-  if (req.headers.get("sec-fetch-site") === "cross-site") return false;
+  if (site === "cross-site") return false;
   if (local && (!origin || origin === url.origin)) return true;
   if (open && tailnetHost(url.hostname) && (!origin || origin === url.origin)) return true;
   if (!publicOrigin) return false;

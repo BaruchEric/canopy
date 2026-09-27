@@ -87,6 +87,22 @@ describe("workspace library integration", () => {
     expect(libraryOriginAllowed(req("100.68.139.95:7850"))).toBe(false);
     expect(libraryOriginAllowed(req("macmini-2018:7850"), undefined, false)).toBe(false);
   });
+  test("a listed origin may call from another site, and its own page may by host", () => {
+    const listed = ["https://canopy.beric.ca", "https://erics-macbook-pro.tail2d2c60.ts.net:7850"];
+    const req = (host: string, headers: Record<string, string> = {}) =>
+      new Request(`http://${host}/api/tree`, { headers });
+    // another canopy page, cross-site to the browser
+    expect(libraryOriginAllowed(req("127.0.0.1:7850", { origin: "https://canopy.beric.ca", "sec-fetch-site": "cross-site" }), undefined, false, listed)).toBe(true);
+    // the page tailscale serve hands out: https to the browser, http here, no Origin on a GET
+    expect(libraryOriginAllowed(req("erics-macbook-pro.tail2d2c60.ts.net:7850", { "sec-fetch-site": "same-origin" }), undefined, false, listed)).toBe(true);
+    // the same page's POST carries its https Origin
+    expect(libraryOriginAllowed(req("erics-macbook-pro.tail2d2c60.ts.net:7850", { origin: "https://erics-macbook-pro.tail2d2c60.ts.net:7850" }), undefined, false, listed)).toBe(true);
+    // unlisted stays out, and so does a cross-site request with no Origin to a listed host
+    expect(libraryOriginAllowed(req("127.0.0.1:7850", { origin: "https://evil.example" }), undefined, false, listed)).toBe(false);
+    expect(libraryOriginAllowed(req("erics-macbook-pro.tail2d2c60.ts.net:7850", { "sec-fetch-site": "cross-site" }), undefined, false, listed)).toBe(false);
+    // no list, no change from before
+    expect(libraryOriginAllowed(req("127.0.0.1:7850", { origin: "https://canopy.beric.ca" }))).toBe(false);
+  });
   test("tailnetHost and openBind", () => {
     expect(tailnetHost("100.64.0.1")).toBe(true);
     expect(tailnetHost("100.127.255.254")).toBe(true);
