@@ -1023,15 +1023,16 @@ export const useStore = create<CanopyState>((set, get) => ({
   },
   closePanel: (id) => {
     const s = get();
-    // A shell lived in the panel, so it ends with it. A shell you want to
-    // keep outliving a panel belongs in the strip.
+    // A panel's shells outlive it: closing only drops the tabs, and the
+    // shells stay held on the backend, in the shells picker, until their
+    // own × or "end". Reopening the panel adopts them back as tabs.
     const mine = (t: TermTab) => t.repoId === id && t.place === "panel";
-    endShells(s.terms.filter(mine));
+    const terms = s.terms.filter((t) => !mine(t));
     set({
       panels: s.panels.filter((p) => p !== id),
       activePanel: nextActive(s.panels, id, s.activePanel),
-      terms: s.terms.filter((t) => !mine(t)),
-      frontShells: keepFront(s.frontShells, s.terms.filter((t) => !mine(t))),
+      terms,
+      frontShells: keepFront(s.frontShells, terms),
     });
   },
 
@@ -1539,8 +1540,8 @@ export const useStore = create<CanopyState>((set, get) => ({
 }));
 
 /** Ends the shells behind some tabs on the server. Closing a socket only
- *  detaches, so this is the one way a tab's × or a closing panel hangs a
- *  shell up. One that already exited needs nothing. */
+ *  detaches, so this is the one way a tab's × hangs a shell up. One that
+ *  already exited needs nothing. */
 function endShells(tabs: TermTab[]) {
   for (const t of tabs) {
     if (t.exit !== undefined) continue;

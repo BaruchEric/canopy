@@ -120,6 +120,22 @@ describe("shells this window ends or restores", () => {
     expect(after?.gen).toBe(1);
     expect(useStore.getState().kept).toEqual([]);
   });
+
+  test("closing a panel leaves its shells running and its reopening brings them back", () => {
+    globalThis.fetch = answer({ ok: true });
+    const shell = "f".repeat(32);
+    const panelTab = { id: shell, repoId: "app", name: "app", path: "/dev/app", place: "panel" as const };
+    const held: TermInfo = { ...info(shell), place: "panel" };
+    useStore.setState({ repos: [app], panels: ["app"], activePanel: "app", terms: [panelTab], shells: [held], hiddenTerms: [] });
+    useStore.getState().closePanel("app");
+    expect(calls).toEqual([]);
+    expect(useStore.getState().terms).toEqual([]);
+    // the server still lists it; with its panel closed it waits
+    useStore.getState().applyEvent({ type: "terms", terms: [held] });
+    expect(useStore.getState().terms).toEqual([]);
+    useStore.getState().openPanel("app");
+    expect(useStore.getState().terms.map((t) => t.id)).toEqual([shell]);
+  });
 });
 
 describe("a peers event re-reads the mode", () => {
