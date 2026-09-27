@@ -321,3 +321,33 @@ the page starts from the cached registry. That is a follow-up, not this spec.
    and ships section 0 (shells, server, Worker, tunnels, config). The second
    is the client (registry, qualified ids, connections, join, machine strip,
    switcher, chip), written against the code the first one lands.
+6. **The home backend's ids stay bare.** Only another backend's ids carry
+   `<name>|`. A page with one backend then holds exactly the ids, layout and
+   URLs it held before, so no saved layout needs migrating and old `?repo=`
+   links keep working; layouts are per origin and an origin always has the
+   same home, so a stored id never changes meaning. `split` counts a prefix
+   only when it names a backend in the registry other than home, so a home
+   repo whose folder name holds a `|` stays home. The one id that reads
+   wrong is a home repo id beginning with another backend's name and `|`,
+   which no real folder has. Everything section 2 says about qualified ids
+   holds for the other backends' ids.
+7. **Which URL, restated.** A page is on the public side when its host, or
+   its parent domain, is a public URL's host or parent domain (`canopy.beric.ca`
+   and `canopy-mac.beric.ca` share `beric.ca`); such a page uses `public`
+   URLs. Every other page (a ts.net name, a tailnet address, loopback) uses
+   `tailnet` URLs and falls back to `public`. From a page off the public
+   side the gate's cookie never goes (cross-site), so a public fallback
+   there that fails is `offline`, not `signin`; the Worker only answers
+   https canopy origins with CORS, so this falls out without a special
+   case. The Mac's own page is `http://127.0.0.1:7850`, so the mini lists
+   that origin (and `http://localhost:7850`) in `CANOPY_ORIGINS`. A
+   registry entry whose URL is the page's own origin is skipped.
+8. **Scope of the client, per backend.** Workspaces, tailchan, the Library
+   and Ports views, and the preview section are the home backend's only;
+   the preview section and the Library link do not show on another
+   backend's checkout. A card holds at most one checkout per backend: a
+   second checkout of the same remote on one backend gets a card of its
+   own, so a single backend's board is unchanged. A forge-only repo never
+   joins. A fleet over repos on several backends starts one fleet per
+   backend. `settings.helper` names a machine, so it applies on every
+   backend. A workspace filter keeps only home checkouts.
