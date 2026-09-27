@@ -245,6 +245,14 @@ export function TermView({
     };
     const connect = () => {
       if (gone || ended) return;
+      // a tab's shell and its repo must be the same backend's; a mismatch
+      // (a stale tab, a bug elsewhere) must never open a socket that sends
+      // one backend's plain id to another's shell, so this shows as gone
+      // rather than guess which backend was meant
+      if (backendOf(tab.repoId) !== backendOf(tab.id)) {
+        end(null, "[this tab names another backend's repo; not opening its shell]");
+        return;
+      }
       // a machine the page has no URL for yet is waited on, not dialled
       // at the page's own origin; the waits are not tries, so the first
       // real dial and its notes go as they would have
