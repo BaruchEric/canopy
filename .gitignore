@@ -8,3 +8,7 @@ __pycache__/
 
 # the compose settings for a shared-backend deploy (docs/deploy.md)
 .env
+# and any copy of it: peer sync snapshots untracked files, so a backup
+# left here would ride to the other machine
+.env.*
+!.env.example
