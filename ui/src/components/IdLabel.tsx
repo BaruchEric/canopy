@@ -18,7 +18,8 @@ export function IdLabel({ id }: { id: string }) {
  *  yet, else null: a repo not found there is not missing until it has. */
 export function useWaitingFor(id: string, found: boolean): string | null {
   const b = idParts(id)[0];
-  const connecting = useStore((s) => connOf(s, b).status.state === "connecting");
+  // a hidden backend has no connection at all, so it is not waited on
+  const connecting = useStore((s) => s.backendOrder.includes(b) && connOf(s, b).status.state === "connecting");
   return !found && b !== homeName() && connecting ? b : null;
 }
 
