@@ -4,6 +4,7 @@ import { Terminal, type ITheme } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import "@xterm/xterm/css/xterm.css";
 import { api, reachable, socketUrl as backendSocket } from "../api";
+import { copyText } from "../share";
 import { backendOf, plainOf, qual } from "../registry";
 import { groveUrl, nameShellHere, parseRoute, popShell } from "../routes";
 import { PANEL_TERM, TERM, closedIn, connOf, idLabel, idText, multi, panelTermHeightFor, useStore, type TermTab } from "../store";
@@ -22,8 +23,9 @@ import {
   useShellZoom,
 } from "./Surface";
 import { clamp } from "../util";
-import { clientId } from "../client";
-import { BAR_KEYS, NO_MODS, keyBytes, withMods, type BarKey, type Mods } from "../keys";
+import { clientId, myPlatform } from "../client";
+import { BAR_KEYS, NO_MODS, keyBytes, shortcutOf, withMods, type BarKey, type Mods } from "../keys";
+import { osc52Text } from "../osc52";
 import { GLIDE_MIN, TAP_SLOP, dragLines, gapOf, glide, pinchFont, speedOf } from "../touch";
 import { Wordmark } from "./TopBar";
 import { TERM_GONE, type Repo } from "../../../src/core/types";
@@ -196,6 +198,9 @@ export function TermView({
       lineHeight: TERM_FONT.lineHeight,
       scrollback: 5000,
       macOptionIsMeta: true,
+      // Option-drag selects even while a program has the mouse (Claude Code
+      // does); Shift-drag is the same off a Mac, built in
+      macOptionClickForcesSelection: true,
       theme: xtermTheme(),
     });
     const fit = new FitAddon();
@@ -310,7 +315,45 @@ export function TermView({
 
     // what the key bar sends goes the same way as a typed key
     sendRef.current = (data) => send(enc.encode(data));
+    // The clipboard. A program copies through OSC 52 (Claude Code copies its
+    // own mouse selection so), which xterm drops unless told where it goes.
+    // ⌘C, or Ctrl+Shift+C off a Mac, copies xterm's own selection. A copy
+    // the browser refused (the page without focus, or the gesture's moment
+    // gone) waits for the next ⌘C with nothing selected. ⌘V needs nothing
+    // here: the browser's paste event reaches xterm without any permission.
+    let unsent: string | null = null;
+    const toClipboard = (text: string) => {
+      copyText(text).then(
+        () => {
+          unsent = null;
+        },
+        () => {
+          unsent = text;
+        },
+      );
+    };
+    const apple = ["mac", "ios"].includes(myPlatform());
+    term.attachCustomKeyEventHandler((e) => {
+      const cut = shortcutOf(e, apple);
+      if (!cut) return true;
+      e.preventDefault();
+      if (cut.kind === "send") term.input(cut.bytes);
+      else {
+        const text = term.hasSelection() ? term.getSelection() : unsent;
+        if (text) toClipboard(text);
+      }
+      return false;
+    });
     const subs = [
+      term.parser.registerOscHandler(52, (body) => {
+        const text = osc52Text(body);
+        if (text !== null) {
+          // every window on this shell hears it; only the one in use copies
+          if (document.hasFocus()) toClipboard(text);
+          else unsent = text;
+        }
+        return true;
+      }),
       term.onData((data) => {
         const m = modsRef.current;
         if (m.ctrl || m.alt) {

@@ -7,14 +7,44 @@ import { captureName } from "./surface";
 export const canReadClipboard = (): boolean =>
   typeof window !== "undefined" && window.isSecureContext && typeof navigator.clipboard?.readText === "function";
 
+/** The old copy command with `text` handed to its copy event, which needs
+ *  no selection and moves no focus (a shell keeps its keyboard); false
+ *  where the browser would not run it, outside a click or a key. Capture on
+ *  the window, so xterm's own copy handler never sees the event. */
+function copyByCommand(text: string): boolean {
+  let put = false;
+  const onCopy = (e: ClipboardEvent) => {
+    if (!e.clipboardData) return;
+    e.clipboardData.setData("text/plain", text);
+    e.preventDefault();
+    e.stopImmediatePropagation();
+    put = true;
+  };
+  window.addEventListener("copy", onCopy, true);
+  try {
+    document.execCommand("copy");
+  } finally {
+    window.removeEventListener("copy", onCopy, true);
+  }
+  return put;
+}
+
 /** Puts `text` on the clipboard: through the clipboard API where the page
- *  may, else through a hidden textarea and the old copy command, which any
- *  page may run inside a click. */
+ *  may, else through the old copy command, which any page may run inside a
+ *  click or a key, and a hidden textarea as the last way round. */
 export async function copyText(text: string): Promise<void> {
   if (window.isSecureContext && navigator.clipboard?.writeText) {
-    await navigator.clipboard.writeText(text);
-    return;
+    try {
+      await navigator.clipboard.writeText(text);
+      return;
+    } catch (err) {
+      // refused (a page without focus, Firefox outside a click): the old
+      // command may still be allowed
+      if (copyByCommand(text)) return;
+      throw err;
+    }
   }
+  if (copyByCommand(text)) return;
   const area = document.createElement("textarea");
   area.value = text;
   area.setAttribute("readonly", "");

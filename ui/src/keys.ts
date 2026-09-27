@@ -2,7 +2,8 @@
  * The touch key bar under a shell: the keys a phone keyboard does not have
  * (Esc, Tab, the arrows, Ctrl and Alt) as the bytes a terminal sends for
  * them. Ctrl and Alt are sticky: tapped, they apply to the next key, from
- * the bar or from the phone's own keyboard. Pure and tested (keys.test.ts).
+ * the bar or from the phone's own keyboard. And the desktop shortcuts a
+ * shell answers itself (`shortcutOf`). Pure and tested (keys.test.ts).
  */
 
 export interface Mods {
@@ -111,4 +112,47 @@ export function keyBytes(key: BarKey, m: Mods, appCursor: boolean): string {
     case "ctrl-d":
       return alt("\x04");
   }
+}
+
+/** a desktop shortcut the shell answers itself, ahead of xterm */
+export type Shortcut = { kind: "copy" } | { kind: "send"; bytes: string };
+
+/** the parts of a KeyboardEvent a shortcut is read from */
+export interface KeyPress {
+  type: string;
+  key: string;
+  metaKey: boolean;
+  ctrlKey: boolean;
+  altKey: boolean;
+  shiftKey: boolean;
+}
+
+/** ⌘ with a key on an Apple keyboard, as a Mac terminal takes it: line
+ *  start, line end and delete to line start, in the readline bytes a shell
+ *  and Claude Code both know */
+const MAC_LINE: Record<string, string> = {
+  ArrowLeft: "\x01",
+  ArrowRight: "\x05",
+  Backspace: "\x15",
+};
+
+/**
+ * What a key press means to the shell before xterm sees it, or null to
+ * leave it to xterm and the browser. On an Apple keyboard ⌘C copies and ⌘←
+ * ⌘→ ⌘⌫ edit the line; elsewhere Ctrl+Shift+C copies, since Ctrl+C is the
+ * interrupt and the browser's own Ctrl+Shift+C opens its inspector. Paste
+ * is not here: ⌘V and Ctrl+Shift+V already reach xterm as a paste event,
+ * which needs no clipboard permission, and ⌘A is xterm's own select all.
+ */
+export function shortcutOf(e: KeyPress, apple: boolean): Shortcut | null {
+  if (e.type !== "keydown") return null;
+  const key = e.key.length === 1 ? e.key.toLowerCase() : e.key;
+  if (apple) {
+    if (!e.metaKey || e.ctrlKey || e.altKey || e.shiftKey) return null;
+    if (key === "c") return { kind: "copy" };
+    const bytes = MAC_LINE[key];
+    return bytes === undefined ? null : { kind: "send", bytes };
+  }
+  if (e.ctrlKey && e.shiftKey && !e.altKey && !e.metaKey && key === "c") return { kind: "copy" };
+  return null;
 }
