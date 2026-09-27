@@ -1,4 +1,5 @@
 import { ACTIONS } from "../core/actions";
+import { PREFLIGHT_HEADERS, corsHeaders, parseOrigins } from "../core/cors";
 import { Library, libraryOriginAllowed, openBind, tailnetHost } from "../core/library";
 import { PreviewProxy, parsePortRange, previewHostOk, previewable } from "../core/preview";
 import { listeningPorts, repoOfCwd } from "../core/ports";
@@ -2447,6 +2448,21 @@ export async function startServer(opts: {
   // could read everything. The same gate as the Library's: a local or
   // tailnet host by its own name, or the configured public origin.
   const publicOrigin = process.env["CANOPY_PUBLIC_ORIGIN"];
+  // Other canopy pages (another machine's, or this one's own behind
+  // tailscale serve) that may drive this backend; see the multi-backend spec.
+  const origins = parseOrigins(process.env["CANOPY_ORIGINS"]);
+  {
+    const raw = process.env["CANOPY_ORIGINS"];
+    if (raw) {
+      const dropped = raw
+        .split(",")
+        .map((part) => part.trim())
+        .filter((part) => part && !origins.includes(part));
+      for (const bad of dropped) {
+        console.warn(`canopy: CANOPY_ORIGINS ignores "${bad}" (not an exact http(s) origin)`);
+      }
+    }
+  }
   const beyondLoopback = openBind();
   // The in-app browser's ports, each listener started on first use. A
   // preview dials the backend's loopback, which in the container is the
@@ -2462,6 +2478,64 @@ export async function startServer(opts: {
         hostFor: async (p) => (await listeningPorts()).find((l) => l.port === p)?.host,
       })
     : null;
+  const route = async (req: Request, srv: Bun.Server<Socket>, url: URL): Promise<Response | undefined> => {
+    if (url.pathname === "/api/library" || url.pathname === "/library" || url.pathname.startsWith("/library/")) return library.handle(req);
+    if (url.pathname.startsWith("/api/") && !libraryOriginAllowed(req, publicOrigin, beyondLoopback, origins)) {
+      return json({ error: "Foreign origin" }, 403);
+    }
+    const key = clientKey(srv.requestIP(req)?.address ?? "127.0.0.1");
+    if (url.pathname === "/api/events") return sse(state, parseStream(url.searchParams, key));
+    if (url.pathname === "/api/helper") {
+      // a helper dialling in from a client machine: its registration
+      // rides in the query, one helper per name (a newer one wins)
+      const info = parseHelperQuery(url.searchParams, key);
+      if ("error" in info) return json({ error: info.error }, 400);
+      const data: HelperSocket = { kind: "helper", info };
+      if (srv.upgrade(req, { data })) return undefined;
+      return json({ error: "a websocket is expected here" }, 426);
+    }
+    if (url.pathname === "/api/term") {
+      // A shell in the browser: the socket carries the repo it lands in.
+      // The same rules as the openers: a forge repo has no folder to be in.
+      let repo: Repo;
+      try {
+        repo = repoById(state, url.searchParams.get("id") ?? "");
+      } catch (err) {
+        const status = err instanceof HttpError ? err.status : 500;
+        return json({ error: String(err instanceof Error ? err.message : err) }, status);
+      }
+      if (repo.forge) return json({ error: `${repo.name} is on the forge; there is no folder to open a shell in` }, 400);
+      const id = url.searchParams.get("term");
+      if (!isTermId(id)) return json({ error: "a shell is named by 32 hex digits in term=" }, 400);
+      const place = termPlace(url.searchParams.get("place"));
+      const attach = url.searchParams.get("attach") === "1";
+      const size = termSize(url.searchParams.get("cols"), url.searchParams.get("rows"));
+      const dev = url.searchParams.get("client") ?? "";
+      const device = /^[0-9a-f]{16}$/.test(dev) ? dev : null;
+      const data: Socket = { kind: "term", repo, id, place, attach, device, ...size };
+      if (srv.upgrade(req, { data })) return undefined;
+      return json({ error: "a websocket is expected here" }, 426);
+    }
+    if (url.pathname.startsWith("/api/")) {
+      try {
+        return await handleApi(state, req, url, clientKey(srv.requestIP(req)?.address ?? "127.0.0.1"));
+      } catch (err) {
+        const status =
+          err instanceof HttpError || err instanceof HistoryError || err instanceof LauncherError
+            ? err.status
+            : 500;
+        return json(
+          { error: String(err instanceof Error ? err.message : err) },
+          status,
+        );
+      }
+    }
+    const filePath =
+      url.pathname === "/" ? "index.html" : url.pathname.slice(1);
+    const file = Bun.file(join(webDir, filePath));
+    if (await file.exists()) return new Response(file);
+    return new Response(Bun.file(join(webDir, "index.html")));
+  };
   const server = bind(port, () =>
     Bun.serve<Socket>({
       port,
@@ -2469,62 +2543,21 @@ export async function startServer(opts: {
       idleTimeout: 0,
       fetch: async (req, srv) => {
         const url = new URL(req.url);
-        if (url.pathname === "/api/library" || url.pathname === "/library" || url.pathname.startsWith("/library/")) return library.handle(req);
-        if (url.pathname.startsWith("/api/") && !libraryOriginAllowed(req, publicOrigin, beyondLoopback)) {
-          return json({ error: "Foreign origin" }, 403);
+        const api = url.pathname.startsWith("/api/");
+        const cors = api ? corsHeaders(req.headers.get("origin"), origins) : null;
+        // A preflight runs nothing: answer it before any route, and only for
+        // a listed origin.
+        if (api && req.method === "OPTIONS") {
+          return cors
+            ? new Response(null, { status: 204, headers: { ...cors, ...PREFLIGHT_HEADERS } })
+            : json({ error: "Foreign origin" }, 403);
         }
-        const key = clientKey(srv.requestIP(req)?.address ?? "127.0.0.1");
-        if (url.pathname === "/api/events") return sse(state, parseStream(url.searchParams, key));
-        if (url.pathname === "/api/helper") {
-          // a helper dialling in from a client machine: its registration
-          // rides in the query, one helper per name (a newer one wins)
-          const info = parseHelperQuery(url.searchParams, key);
-          if ("error" in info) return json({ error: info.error }, 400);
-          const data: HelperSocket = { kind: "helper", info };
-          if (srv.upgrade(req, { data })) return undefined;
-          return json({ error: "a websocket is expected here" }, 426);
-        }
-        if (url.pathname === "/api/term") {
-          // A shell in the browser: the socket carries the repo it lands in.
-          // The same rules as the openers: a forge repo has no folder to be in.
-          let repo: Repo;
-          try {
-            repo = repoById(state, url.searchParams.get("id") ?? "");
-          } catch (err) {
-            const status = err instanceof HttpError ? err.status : 500;
-            return json({ error: String(err instanceof Error ? err.message : err) }, status);
-          }
-          if (repo.forge) return json({ error: `${repo.name} is on the forge; there is no folder to open a shell in` }, 400);
-          const id = url.searchParams.get("term");
-          if (!isTermId(id)) return json({ error: "a shell is named by 32 hex digits in term=" }, 400);
-          const place = termPlace(url.searchParams.get("place"));
-          const attach = url.searchParams.get("attach") === "1";
-          const size = termSize(url.searchParams.get("cols"), url.searchParams.get("rows"));
-          const dev = url.searchParams.get("client") ?? "";
-          const device = /^[0-9a-f]{16}$/.test(dev) ? dev : null;
-          const data: Socket = { kind: "term", repo, id, place, attach, device, ...size };
-          if (srv.upgrade(req, { data })) return undefined;
-          return json({ error: "a websocket is expected here" }, 426);
-        }
-        if (url.pathname.startsWith("/api/")) {
-          try {
-            return await handleApi(state, req, url, clientKey(srv.requestIP(req)?.address ?? "127.0.0.1"));
-          } catch (err) {
-            const status =
-              err instanceof HttpError || err instanceof HistoryError || err instanceof LauncherError
-                ? err.status
-                : 500;
-            return json(
-              { error: String(err instanceof Error ? err.message : err) },
-              status,
-            );
-          }
-        }
-        const filePath =
-          url.pathname === "/" ? "index.html" : url.pathname.slice(1);
-        const file = Bun.file(join(webDir, filePath));
-        if (await file.exists()) return new Response(file);
-        return new Response(Bun.file(join(webDir, "index.html")));
+        const res = await route(req, srv, url);
+        if (!res || !cors) return res;
+        // a proxied or streamed answer may hold immutable headers; rewrap it
+        const out = new Response(res.body, res);
+        for (const [k, v] of Object.entries(cors)) out.headers.set(k, v);
+        return out;
       },
       websocket: {
         // Keystrokes go down as binary frames and the pty's output comes

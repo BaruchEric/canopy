@@ -442,3 +442,13 @@ shell into them is an ssh session, so that host needs its own git, `claude`, and
   `.ts.net` name, or a bare machine name); a dotted public name is still
   refused, since a domain someone else controls could resolve to the same
   address.
+
+## Other canopy pages (multi-backend)
+
+A backend answers another canopy page only when that page's origin is in
+`CANOPY_ORIGINS`, comma separated, exact origins. The mini's `.env` and the
+Mac's launchd plist each list the other machine's public and tailnet origins
+plus their own ts.net origin. See the multi-backend spec for the values.
+Prefer an https origin in `CANOPY_ORIGINS` where the page allows it: a plain
+http page sends no `Sec-Fetch-Site` header, which the origin gate otherwise
+uses to tell a same-origin request apart from a cross-site one.
