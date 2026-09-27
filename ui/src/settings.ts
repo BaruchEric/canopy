@@ -156,6 +156,10 @@ function fileSort(value: unknown): FileSort {
   };
 }
 
+/* The cached registry is held to the same rules as the server's config.
+   Keep these in step with normalizeBackends in src/core/backends.ts, which
+   the UI cannot import. */
+
 /** a backend's name: a peer name, as the server's config requires */
 const isBackendName = (v: unknown): v is string =>
   typeof v === "string" && /^[a-z][a-z0-9-]{0,31}$/.test(v) && v !== "origin";

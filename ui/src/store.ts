@@ -402,6 +402,19 @@ function withConn(s: Pick<CanopyState, "conns">, name: string, patch: Partial<Co
   return { ...s.conns, [name]: { ...(s.conns[name] ?? newConn(name)), ...patch } };
 }
 
+/** `conns` with one backend's fields changed, or as it is when that backend
+ *  has no entry: for an answer that lands after the backend was hidden,
+ *  which must not bring it back. */
+function connsIf(s: Pick<CanopyState, "conns">, name: string, patch: Partial<Conn>): Record<string, Conn> {
+  const c = s.conns[name];
+  return c ? { ...s.conns, [name]: { ...c, ...patch } } : s.conns;
+}
+
+/** whether a backend is on this page now: home, or one in the order (not
+ *  hidden); an answer from any other is dropped */
+const isShown = (s: Pick<CanopyState, "home" | "backendOrder">, name: string): boolean =>
+  name === s.home || s.backendOrder.includes(name);
+
 /** Every backend the home one named, hidden ones among them, so an id of a
  *  hidden backend is still told apart from a home id: its saved tabs park
  *  instead of dropping, and a home scan leaves its panels alone. */
@@ -918,7 +931,7 @@ function readPeers(get: () => CanopyState, set: (p: Partial<CanopyState>) => voi
     .then((p) => {
       if (mine !== peersRead.get(b)) return;
       const s = get();
-      const conns = withConn(s, b, { peerSync: p.sync });
+      const conns = connsIf(s, b, { peerSync: p.sync });
       set(b === s.home ? { conns, peerSeen: p.seen, peerSync: p.sync } : { conns });
     })
     .catch(() => {});
@@ -946,7 +959,8 @@ let loadedTabs: { terms: TermTab[]; activeTerm: string | null } = { terms: [], a
 const pageOrigin = (): string => (globalThis as { location?: { origin?: string } }).location?.origin ?? "http://localhost";
 
 /** The registry, the page's backend order and the names every id is told
- *  apart by, from the home backend's list less the hidden ones. `also`
+ *  apart by, from the home backend's list less the hidden ones. Home is
+ *  always first: it is the page's own machine. `also`
  *  names more backends to tell ids apart by without connecting to them:
  *  the cached list, when the home backend's could not be read, so its
  *  saved tabs and panels are parked and kept rather than read as home's. */
@@ -995,10 +1009,11 @@ function resync(get: () => CanopyState, set: (fn: (s: CanopyState) => Partial<Ca
     .catch(() => {});
   void Promise.all([api.terms(b), api.kept(b), api.helpers(b)])
     .then(([terms, kept, helpers]) => {
+      if (!isShown(get(), b)) return;
       get().applyEvent({ type: "terms", terms }, b);
       set((s) => ({
         kept: sliceIn(registry(), s.kept, b, kept.kept, (k) => k.id),
-        conns: withConn(s, b, { keeping: kept.keeping, helpers }),
+        conns: connsIf(s, b, { keeping: kept.keeping, helpers }),
       }));
     })
     .catch(() => {});
@@ -1193,10 +1208,14 @@ export const useStore = create<CanopyState>((set, get) => ({
     readPeers(get, set, home);
     // tailchan too: a backend without a broker answers ready: false
     void get().loadChan();
-    void api
-      .about()
-      .then((about) => set((s) => ({ conns: withConn(s, home, { about }) })))
-      .catch(() => {});
+    // what home runs, for naming the machines; a page with one backend
+    // names none, so it does not ask
+    if (order.length > 1) {
+      void api
+        .about()
+        .then((about) => set((s) => ({ conns: connsIf(s, home, { about }) })))
+        .catch(() => {});
+    }
     const refresh = setInterval(() => {
       for (const n of get().backendOrder) if (n === get().home || streams.has(n)) void get().loadHistory(false, n);
     }, HISTORY_REFRESH);
@@ -1212,7 +1231,7 @@ export const useStore = create<CanopyState>((set, get) => ({
     // sent a `helpers` event no one heard; one more read closes that gap.
     void api
       .helpers()
-      .then((helpers) => set((s) => ({ conns: withConn(s, home, { helpers }) })))
+      .then((helpers) => set((s) => ({ conns: connsIf(s, home, { helpers }) })))
       .catch(() => {});
     // Every other backend after home, each on its own: one that is slow or
     // down never holds up the page or the others.
@@ -1220,6 +1239,8 @@ export const useStore = create<CanopyState>((set, get) => ({
     return () => {
       clearInterval(refresh);
       unsubscribe();
+      // a newer init has put its own hook in; leave that one
+      if (epoch === e) onBackendSignal(() => {});
       dead.add(e);
       for (const [n, st] of streams) {
         if (st.epoch !== e) continue;
@@ -1317,11 +1338,11 @@ export const useStore = create<CanopyState>((set, get) => ({
     readPeers(get, set, name);
     void api
       .about(name)
-      .then((about) => set((s) => ({ conns: withConn(s, name, { about }) })))
+      .then((about) => set((s) => ({ conns: connsIf(s, name, { about }) })))
       .catch(() => {});
     void api
       .helpers(name)
-      .then((helpers) => set((s) => ({ conns: withConn(s, name, { helpers }) })))
+      .then((helpers) => set((s) => ({ conns: connsIf(s, name, { helpers }) })))
       .catch(() => {});
   },
 
@@ -1402,8 +1423,10 @@ export const useStore = create<CanopyState>((set, get) => ({
       };
     }
     set((s) => {
+      // a backend hidden while this was on its way has no place for it
+      if (!isShown(s, b)) return {};
       const histories = { ...s.histories, [b]: h };
-      return { histories, history: historyOf(histories, s.backendOrder.includes(b) ? s.backendOrder : [...s.backendOrder, b]) };
+      return { histories, history: historyOf(histories, s.backendOrder) };
     });
   },
 
@@ -1420,6 +1443,7 @@ export const useStore = create<CanopyState>((set, get) => ({
     void get().loadHistory(true, b);
     // Through applyEvent so the feed sees the scan even when this window
     // asked for it: the broadcast that follows finds nothing new to say.
+    if (!isShown(get(), b)) return;
     get().applyEvent({ type: "scan", result: tree }, b);
     // runs are server state too: a stream gap may have hidden a finish
     set((s) => recordsState(s, b, { runs, flows, fleets, jobs }));
@@ -1504,6 +1528,8 @@ export const useStore = create<CanopyState>((set, get) => ({
   applyEvent: (ev, from) => {
     const before = get();
     const b = from ?? before.home;
+    // a backend hidden since this was sent is not on the page any more
+    if (!isShown(before, b)) return;
     // workspaces and tailchan are the home backend's alone
     if ((ev.type === "chan" || ev.type === "workspaces") && b !== before.home) return;
     // The feed says what changed, so the lines come from the event against
@@ -1684,7 +1710,7 @@ export const useStore = create<CanopyState>((set, get) => ({
   setKeeping: async (on, backend) => {
     const b = backend ?? get().home;
     const { keeping } = await api.setKeeping(on, b);
-    set((s) => ({ conns: withConn(s, b, { keeping }) }));
+    set((s) => ({ conns: connsIf(s, b, { keeping }) }));
   },
   loadChan: async () => {
     const chan = await api.tailchan().catch((e: unknown): TailchanInfo => ({ ready: false, reason: String(e instanceof Error ? e.message : e) }));

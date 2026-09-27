@@ -318,6 +318,29 @@ describe("several backends", () => {
     });
     await settle();
     expect(calls.filter((u) => /^https?:/.test(u))).toEqual([]);
+    // what a page asked before there were several backends, plus the list
+    expect([...new Set(calls.map((u) => u.split("?")[0]))].sort()).toEqual(
+      [
+        "/api/backends",
+        "/api/tree",
+        "/api/workspaces",
+        "/api/runs",
+        "/api/agents",
+        "/api/flows",
+        "/api/fleets",
+        "/api/verdict",
+        "/api/launchers",
+        "/api/jobs",
+        "/api/terms",
+        "/api/client",
+        "/api/helpers",
+        "/api/devices",
+        "/api/terms/kept",
+        "/api/history",
+        "/api/peers",
+        "/api/tailchan",
+      ].sort(),
+    );
     const s = useStore.getState();
     expect(Object.keys(s.conns)).toEqual(["a"]);
     expect(multi(s)).toBe(false);
@@ -496,6 +519,33 @@ describe("several backends", () => {
     expect(s.backendOrder).toEqual(["a", "b"]);
     expect(s.repos.map((r) => r.id)).toEqual(["proj", "b|proj"]);
     expect(s.settings.hiddenBackends).toEqual([]);
+  });
+
+  test("an answer that lands after b is hidden does not bring b back", async () => {
+    const pending: Array<(body: unknown) => void> = [];
+    const later = () =>
+      new Promise<Response>((resolve) => {
+        pending.push((body) => resolve(new Response(JSON.stringify(body), { status: 200 })));
+      });
+    const b = backendAnswers(scanOf("/b", [repo("proj")]), [runOf("r1", "proj")]);
+    await start(backendAnswers(scanOf("/a", [repo("proj")]), [], { "/api/backends": twoBackends }), (path, init) => {
+      const p = path.split("?")[0] ?? "";
+      if (p === "/api/about" || p === "/api/history" || p === "/api/peers") return later();
+      return b(path, init);
+    });
+    await settle();
+    expect(useStore.getState().repos.map((r) => r.id)).toEqual(["proj", "b|proj"]);
+    expect(pending.length).toBe(3);
+    useStore.getState().hideBackend("b", true);
+    for (const answer of pending) answer({ available: false, reason: "late", fetchedAt: 1, version: "0", startedAt: 1, self: null, peers: [], seen: [], sync: "on" });
+    await settle();
+    // the stream's last word, sent before the hide
+    useStore.getState().applyEvent({ type: "scan", result: { ...scanOf("/b", [repo("b|proj", { source: "b|launch" })]), scannedAt: 2 } }, "b");
+    const s = useStore.getState();
+    expect(s.conns["b"]).toBeUndefined();
+    expect(s.histories["b"]).toBeUndefined();
+    expect(s.repos.map((r) => r.id)).toEqual(["proj"]);
+    expect(s.backendOrder).toEqual(["a"]);
   });
 
   test("home cannot be hidden", async () => {
