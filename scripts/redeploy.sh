@@ -113,6 +113,7 @@ if [ "$cmd" = status ]; then
     docker inspect -f "$c  {{.State.Status}} since {{.State.StartedAt}}" "$c" 2>/dev/null || echo "$c  missing"
   done
   echo "port      $(docker port canopy-shells-1 7850 2>/dev/null | head -1 || true)"
+  echo "running   $(docker exec canopy-canopy-1 bun bin/canopy.ts version 2>/dev/null || echo unknown)"
   docker compose logs canopy --tail 3 --no-log-prefix 2>/dev/null | sed 's/^/log       /'
   exit 0
 fi
@@ -138,6 +139,9 @@ fi
 log="$LOGS/$(date +%Y%m%d-%H%M%S).log"
 rc="$log.rc"
 sha=$(git log -1 --format='%h %s' HEAD)
+# the image has no .git; these stamp /api/about and the UI with the commit
+CANOPY_COMMIT=$(git rev-parse HEAD)
+CANOPY_COMMITTED=$(git log -1 --format=%cI HEAD)
 echo "redeploy: $sha (log $log)"
 
 # the whole deploy, detached from this session
@@ -169,7 +173,7 @@ job() {
   echo "== deployed $sha on $port"
 }
 export -f job
-export sha shells LOGS
+export sha shells LOGS CANOPY_COMMIT CANOPY_COMMITTED
 setsid nohup bash -c 'job; echo $? > "$0"' "$rc" >"$log" 2>&1 </dev/null &
 
 # follow along; if this session goes, the deploy carries on

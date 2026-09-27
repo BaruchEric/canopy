@@ -5,6 +5,8 @@ import { ownRun } from "../flows";
 import { allRuns, attentionCount, capsFor, pickedIds, useStore } from "../store";
 import { isRunActive } from "../../../src/core/types";
 import { seenWord } from "../peers";
+import { PAGE_BUILD } from "../build";
+import { versionLine } from "../../../src/core/version";
 import { FilterMenu } from "./Filters";
 import { Seg } from "./Seg";
 import { SettingsMenu } from "./Settings";
@@ -32,11 +34,18 @@ export function Crowns({ size = 18, live = false }: { size?: number; live?: bool
   );
 }
 
-export function Wordmark() {
+/** The crowns and the name; `version` adds the page's build after it, the
+ *  whole line (commit and day) in its tooltip, Settings' about for the rest. */
+export function Wordmark({ version = false }: { version?: boolean }) {
   return (
     <span className="wordmark" aria-label="canopy">
       <Crowns />
       canopy
+      {version && PAGE_BUILD && (
+        <span className="wordmark-ver" title={`canopy ${versionLine(PAGE_BUILD)}`}>
+          v{PAGE_BUILD.version}
+        </span>
+      )}
     </span>
   );
 }
@@ -161,7 +170,7 @@ export function TopBar() {
           <path d="M9.5 4v16" />
         </svg>
       </button>
-      <Wordmark />
+      <Wordmark version />
       <SourcesMenu />
 
       <nav className="ws-tabs" aria-label="Workspaces">

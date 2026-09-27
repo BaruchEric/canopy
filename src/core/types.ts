@@ -198,6 +198,32 @@ export interface HelperInfo {
   address: string;
 }
 
+/** Which canopy this is: the package version and the commit it was built
+ *  from. `commit` is null when neither git nor the build said (a tarball
+ *  without `.git` and no CANOPY_COMMIT); `dirty` is a checkout with
+ *  uncommitted changes to tracked files, which the commit alone does not
+ *  describe. */
+export interface BuildInfo {
+  version: string;
+  commit: string | null;
+  /** the commit's committer date, ISO 8601 */
+  committedAt: string | null;
+  dirty: boolean;
+}
+
+/** `GET /api/about`: the server's build and where and since when it runs. */
+export interface About extends BuildInfo {
+  /** ms since the epoch */
+  startedAt: number;
+  bun: string;
+  platform: string;
+  arch: string;
+  hostname: string;
+  /** the scan root the server was started on */
+  root: string;
+  homepage: string | null;
+}
+
 /** What the backend knows about one browser: the address it sees it at, and
  *  whether that is the backend's own machine with a desktop (a Mac running
  *  canopy), in which case the openers run there with no helper. */

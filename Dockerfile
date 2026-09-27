@@ -18,7 +18,11 @@ WORKDIR /app
 COPY package.json bun.lock* ./
 RUN bun install --frozen-lockfile || bun install
 COPY . .
-RUN bun run build
+# the commit the image is built from, which .dockerignore keeps .git out of;
+# scripts/redeploy.sh passes it through compose. Here it stamps the UI bundle.
+ARG CANOPY_COMMIT=""
+ARG CANOPY_COMMITTED=""
+RUN CANOPY_COMMIT="$CANOPY_COMMIT" CANOPY_COMMITTED="$CANOPY_COMMITTED" bun run build
 
 FROM oven/bun:1 AS shells
 # git for the scan and every mutation; tmux so a shell outlives a canopy
@@ -119,6 +123,12 @@ RUN mkdir -p -m 755 /etc/apt/keyrings \
 USER bun
 
 COPY --from=build --chown=bun:bun /app /app
+
+# and here the server's /api/about; declared after everything slow, since a
+# new value misses the cache from this line on
+ARG CANOPY_COMMIT=""
+ARG CANOPY_COMMITTED=""
+ENV CANOPY_COMMIT=$CANOPY_COMMIT CANOPY_COMMITTED=$CANOPY_COMMITTED
 
 ENV NODE_ENV=production
 EXPOSE 7850

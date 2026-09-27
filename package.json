@@ -1,7 +1,12 @@
 {
   "name": "canopy",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Multi-repo git cockpit: point it at a directory, see every repo as a live tree, drill into changes, commit/push with AI-suggested messages, open repos in kitty/VS Code, group them into workspaces.",
+  "homepage": "https://github.com/BaruchEric/canopy",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/BaruchEric/canopy.git"
+  },
   "type": "module",
   "bin": {
     "canopy": "bin/canopy.ts"

@@ -4,7 +4,8 @@ import { PreviewProxy, parsePortRange, previewHostOk, previewable } from "../cor
 import { listeningPorts, repoOfCwd } from "../core/ports";
 import { watch, type FSWatcher } from "node:fs";
 import { readFile, realpath, stat } from "node:fs/promises";
-import { homedir } from "node:os";
+import { arch, homedir, hostname } from "node:os";
+import { readBuild, readPkg } from "../core/build";
 import { join, resolve } from "node:path";
 import {
   commit,
@@ -107,6 +108,7 @@ import {
   type TermInfo,
   TERM_GONE,
 } from "../core/types";
+import type { About } from "../core/types";
 import { DEFAULT_IGNORE } from "../core/scan";
 import { ChanHub } from "./tailchan";
 import { shellHandle } from "../core/tailchan";
@@ -128,6 +130,8 @@ interface SourceRuntime {
 interface ServerState {
   /** the launch root */
   root: string;
+  /** which canopy this is, read once at start */
+  about: About;
   /** every source, the launch root first */
   sources: SourceRuntime[];
   /** all sources' repos in one tree, rebuilt after any source scan */
@@ -1563,6 +1567,7 @@ async function handleApi(
   const here = onThisMachine(key, url);
 
   if (path === "/api/tree" && method === "GET") return json(state.result);
+  if (path === "/api/about" && method === "GET") return json(state.about);
   // what the backend knows of this browser, and the helpers dialled in
   if (path === "/api/client" && method === "GET") return json(clientInfo(state, key, here));
   if (path === "/api/helpers" && method === "GET") return json(helperList(state));
@@ -2353,6 +2358,16 @@ export async function startServer(opts: {
   });
   const state: ServerState = {
     root,
+    about: {
+      ...readBuild(),
+      startedAt: Date.now(),
+      bun: Bun.version,
+      platform: process.platform,
+      arch: arch(),
+      hostname: hostname(),
+      root,
+      homepage: readPkg().homepage ?? null,
+    },
     sources: [runtime(launchSource(root)), ...extras.map((s) => runtime({ ...s, launch: false }))],
     result: { root, sources: [], repos: [], scannedAt: 0, backend: backendCaps() },
     ignore: [...DEFAULT_IGNORE, ...cfg.ignore],

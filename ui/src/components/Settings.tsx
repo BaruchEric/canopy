@@ -3,6 +3,11 @@ import { useShallow } from "zustand/react/shallow";
 import { capsFor, useStore } from "../store";
 import { useFitPop } from "../pop";
 import { deviceName } from "../../../src/core/presence";
+import { sameBuild, shortCommit, versionLine } from "../../../src/core/version";
+import type { About } from "../../../src/core/types";
+import { api } from "../api";
+import { PAGE_BUILD } from "../build";
+import { ago } from "../util";
 import { Seg } from "./Seg";
 
 const OPEN_IN = [
@@ -228,8 +233,96 @@ export function SettingsMenu() {
               ))}
             </dl>
           </section>
+          <AboutRow />
         </div>
       )}
     </div>
+  );
+}
+
+/** Which canopy this is: the server's version and commit, where and since
+ *  when it runs, and whether this page was bundled from the same build (a
+ *  page left open across a redeploy, or a dist/web older than the server). */
+function AboutRow() {
+  const [about, setAbout] = useState<About | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    api.about().then(setAbout, (e: unknown) => setError(String(e instanceof Error ? e.message : e)));
+  }, []);
+
+  const committed = about?.committedAt ? Date.parse(about.committedAt) / 1000 : undefined;
+  const commitUrl = about?.homepage && about.commit ? `${about.homepage}/commit/${about.commit}` : null;
+  const stale = about && PAGE_BUILD && !sameBuild(PAGE_BUILD, about);
+
+  return (
+    <section className="settings-row">
+      <h3 className="panel-label">about</h3>
+      {error && <p className="settings-hint error">{error}</p>}
+      {about && (
+        <dl className="about">
+          <div>
+            <dt>canopy</dt>
+            <dd>
+              {about.version}
+              {about.commit && (
+                <>
+                  {" · "}
+                  {commitUrl ? (
+                    <a href={commitUrl} target="_blank" rel="noreferrer">
+                      {shortCommit(about.commit)}
+                    </a>
+                  ) : (
+                    shortCommit(about.commit)
+                  )}
+                  {about.dirty && "+dirty"}
+                  {committed !== undefined && ` · ${ago(committed)}`}
+                </>
+              )}
+            </dd>
+          </div>
+          <div>
+            <dt>server</dt>
+            <dd>
+              {about.hostname}, started {ago(about.startedAt / 1000)}
+            </dd>
+          </div>
+          <div>
+            <dt>runtime</dt>
+            <dd>
+              bun {about.bun} · {about.platform} {about.arch}
+            </dd>
+          </div>
+          <div>
+            <dt>root</dt>
+            <dd className="about-path">{about.root}</dd>
+          </div>
+          {PAGE_BUILD && (
+            <div>
+              <dt>page</dt>
+              <dd>{versionLine(PAGE_BUILD)}</dd>
+            </div>
+          )}
+          {about.homepage && (
+            <div>
+              <dt>source</dt>
+              <dd>
+                <a href={about.homepage} target="_blank" rel="noreferrer">
+                  {about.homepage.replace(/^https:\/\//, "")}
+                </a>
+              </dd>
+            </div>
+          )}
+        </dl>
+      )}
+      {stale && (
+        <p className="settings-hint warn">
+          This page is from another build than the server.{" "}
+          <button type="button" className="mini" onClick={() => location.reload()}>
+            reload
+          </button>
+        </p>
+      )}
+    </section>
   );
 }

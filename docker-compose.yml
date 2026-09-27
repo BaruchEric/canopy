@@ -66,6 +66,10 @@ services:
       args:
         UID: ${HOST_UID:-1000}
         GID: ${HOST_GID:-1000}
+        # the commit being built, for /api/about and the UI's stamp (the
+        # image has no .git); scripts/redeploy.sh exports both
+        CANOPY_COMMIT: ${CANOPY_COMMIT:-}
+        CANOPY_COMMITTED: ${CANOPY_COMMITTED:-}
     image: canopy-backend:latest
     depends_on:
       shells:

@@ -1,4 +1,5 @@
 import type {
+  About,
   AgentSettings,
   ChanMessage,
   TailchanInfo,
@@ -262,6 +263,8 @@ export const api = {
     }),
   dismissFlow: (id: string) => req<{ ok: true }>(`/api/flows?${rq(id)}`, { method: "DELETE" }),
   verdict: () => req<{ ready: boolean }>("/api/verdict"),
+  /** which canopy the server is, and where and since when it runs */
+  about: () => req<About>("/api/about"),
   /** what the backend knows of this browser, and the helpers dialled in */
   client: () => req<ClientInfo>("/api/client"),
   helpers: () => req<HelperInfo[]>("/api/helpers"),

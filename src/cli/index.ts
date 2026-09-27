@@ -36,6 +36,8 @@ import type { Job, LaunchSettings, SourceInput } from "../core/types";
 import { suggestMessage } from "../core/suggest";
 import { PortUnavailableError, startServer } from "../server/index";
 import { helperName, localOpeners, runHelper } from "../core/helperd";
+import { readBuild } from "../core/build";
+import { versionLine } from "../core/version";
 import { bold, dim, lichen, moss, renderTree, sky } from "./render";
 
 const HELP = `${bold("canopy")} — multi-repo git cockpit
@@ -78,6 +80,7 @@ usage:
   canopy peers track <id> <peer> <branch>   a local branch at a peer's tip
   canopy peers seed <id>             copy allowlisted ignored files from a peer
   canopy peers gate --root dir       what a peer key's authorized_keys entry runs
+  canopy version                     the version and the commit this canopy was built from
 `;
 
 function flag(args: string[], name: string): boolean {
@@ -133,6 +136,9 @@ const COMMANDS = new Set([
   "help",
   "--help",
   "-h",
+  "version",
+  "--version",
+  "-V",
 ]);
 
 export async function main(argv: string[]): Promise<void> {
@@ -198,7 +204,7 @@ export async function main(argv: string[]): Promise<void> {
         );
       }
       const url = `http://127.0.0.1:${server.port}`;
-      console.log(`${moss("canopy")} ${dim("→")} ${sky(url)} ${dim(`(root: ${root})`)}`);
+      console.log(`${moss("canopy")} ${dim("→")} ${sky(url)} ${dim(`(root: ${root}, ${versionLine(readBuild())})`)}`);
       if (!noOpen) await exec(["open", url]);
       return; // keeps running — Bun.serve holds the process open
     }
@@ -611,6 +617,11 @@ export async function main(argv: string[]): Promise<void> {
     case "--help":
     case "-h":
       console.log(HELP);
+      return;
+    case "version":
+    case "--version":
+    case "-V":
+      console.log(`canopy ${versionLine(readBuild())}`);
       return;
     default:
       return fail(`unknown command: ${cmd}\n\n${HELP}`);

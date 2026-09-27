@@ -236,6 +236,14 @@ body.resizing {
   letter-spacing: 0.04em;
   color: var(--moss);
 }
+.wordmark-ver {
+  margin-left: -3px;
+  font-size: 10px;
+  font-weight: 400;
+  letter-spacing: 0;
+  color: var(--ink-faint);
+  cursor: default;
+}
 .root-path {
   color: var(--ink-faint);
   overflow: hidden;
@@ -694,6 +702,35 @@ a.chan-text {
 .keys dd {
   margin: 0;
   color: var(--ink-dim);
+}
+.about {
+  margin: 0;
+  display: grid;
+  gap: 4px;
+  font-size: 12px;
+  align-self: stretch;
+}
+.about > div {
+  display: grid;
+  grid-template-columns: 4.5em 1fr;
+  gap: 10px;
+  align-items: baseline;
+}
+.about dt {
+  color: var(--ink-faint);
+  text-align: right;
+}
+.about dd {
+  margin: 0;
+  color: var(--ink);
+  overflow-wrap: anywhere;
+}
+.about a {
+  color: var(--sky);
+}
+.about-path {
+  font-family: var(--mono);
+  font-size: 11px;
 }
 
 /* ---------- the folder list: every source, and a form for one more ---------- */
@@ -2963,7 +3000,7 @@ a.chan-text {
 .agent-extra {
   width: 100%;
   padding: 4px 8px;
-  font-family: var(--mono, ui-monospace, monospace);
+  font-family: var(--mono);
   font-size: 12px;
 }
 .agent-extra::placeholder {
