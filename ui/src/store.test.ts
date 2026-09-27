@@ -505,6 +505,33 @@ describe("several backends", () => {
     expect(useStore.getState().backendOrder).toEqual(["a", "b"]);
   });
 
+  test("a failed registry read still parks the tabs and keeps the panels of a backend it had named", async () => {
+    const store = new Map<string, string>();
+    g.localStorage = {
+      getItem: (k: string) => store.get(k) ?? null,
+      setItem: (k: string, v: string) => void store.set(k, v),
+      removeItem: (k: string) => void store.delete(k),
+    };
+    const bTab = { id: `b|${"c".repeat(32)}`, repoId: "b|x", name: "x", path: "/dev/x", place: "strip" };
+    store.set("canopy.layout", JSON.stringify({ terms: [bTab] }));
+    useStore.setState({ panels: ["proj", "b|x"], settings: { ...pristine.settings, backends: twoBackends.backends } });
+    await start(
+      backendAnswers(scanOf("/home", [repo("proj")]), [], {
+        "/api/backends": new Response("{}", { status: 500 }),
+      }),
+      () => {
+        throw new Error("b asked");
+      },
+    );
+    useStore.getState().applyEvent({ type: "scan", result: { ...scanOf("/home", [repo("proj")]), scannedAt: 2 } });
+    const s = useStore.getState();
+    expect(s.backendOrder).toEqual(["home"]);
+    expect(s.panels).toEqual(["proj", "b|x"]);
+    expect(s.parkedTerms.map((t) => t.id)).toEqual([bTab.id]);
+    const saved = JSON.parse(store.get("canopy.layout") ?? "{}") as { terms?: { id: string }[] };
+    expect(saved.terms?.map((t) => t.id)).toEqual([bTab.id]);
+  });
+
   test("a server with no backends route is home alone", async () => {
     await start(
       backendAnswers(scanOf("/a", [repo("proj")]), [], {

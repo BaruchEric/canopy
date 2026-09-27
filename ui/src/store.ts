@@ -946,10 +946,18 @@ let loadedTabs: { terms: TermTab[]; activeTerm: string | null } = { terms: [], a
 const pageOrigin = (): string => (globalThis as { location?: { origin?: string } }).location?.origin ?? "http://localhost";
 
 /** The registry, the page's backend order and the names every id is told
- *  apart by, from the home backend's list less the hidden ones. */
-function applyRegistry(home: string, entries: readonly BackendEntry[], hidden: readonly string[]): string[] {
+ *  apart by, from the home backend's list less the hidden ones. `also`
+ *  names more backends to tell ids apart by without connecting to them:
+ *  the cached list, when the home backend's could not be read, so its
+ *  saved tabs and panels are parked and kept rather than read as home's. */
+function applyRegistry(
+  home: string,
+  entries: readonly BackendEntry[],
+  hidden: readonly string[],
+  also: readonly BackendEntry[] = [],
+): string[] {
   const all = [home, ...entries.map((e) => e.name).filter((n) => n !== home)];
-  known = { home, names: all };
+  known = { home, names: [...all, ...also.map((e) => e.name).filter((n) => !all.includes(n))] };
   const order = all.filter((n) => n === home || !hidden.includes(n));
   setRegistry(home, order);
   return order;
@@ -1082,7 +1090,7 @@ export const useStore = create<CanopyState>((set, get) => ({
     const entries = reply?.backends ?? [];
     registryEntries = entries;
     const before = get().settings;
-    const order = applyRegistry(home, entries, before.hiddenBackends.filter((n) => n !== home));
+    const order = applyRegistry(home, entries, before.hiddenBackends.filter((n) => n !== home), reply ? [] : before.backends);
     const settings =
       reply && JSON.stringify(reply.backends) !== JSON.stringify(before.backends) ? { ...before, backends: reply.backends } : before;
     if (settings !== before) saveSettings(settings);
@@ -1326,7 +1334,7 @@ export const useStore = create<CanopyState>((set, get) => ({
 
   hideBackend: (name, hidden) => {
     const s = get();
-    if (name === s.home || !known.names.includes(name)) return;
+    if (name === s.home || !registryEntries.some((e) => e.name === name)) return;
     const was = s.settings.hiddenBackends;
     const hiddenBackends = hidden ? (was.includes(name) ? was : [...was, name]) : was.filter((n) => n !== name);
     const settings = hiddenBackends === was ? s.settings : { ...s.settings, hiddenBackends };
