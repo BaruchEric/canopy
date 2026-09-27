@@ -7,7 +7,7 @@ import { applyQuery, type RepoFilter } from "./filters";
 import { cardChangedAt, joinRepos, leadOf, type RepoCard } from "./checkouts";
 import { changedAt } from "./grouping";
 import { focusPanel, nextActive } from "./dock";
-import { heldShellUrl, openElsewhere, openShellElsewhere, parseRoute } from "./routes";
+import { heldShellUrl, openElsewhere, openShellElsewhere, parseRoute, soloUrl } from "./routes";
 import { loadSettings, saveSettings, shellPlace, type Settings, type ShellPlace } from "./settings";
 import { PANEL_TERM_ROWS, adoptTerms, keepFront, loadFocusSize, loadTermTabs, nextStripTab, reconcileTerms, rowsPx, shellSet, termId, type FocusSize, type TermTab } from "./term";
 import { clientId, identity } from "./client";
@@ -1431,9 +1431,19 @@ export const useStore = create<CanopyState>((set, get) => ({
   },
 
   setCheckoutPref: (key, backend) => set((s) => ({ checkoutPref: { ...s.checkoutPref, [key]: backend } })),
-  switchCheckout: (fromId, toId) =>
+  switchCheckout: (fromId, toId) => {
+    if (fromId === toId) return;
+    // A solo window is its url's one panel and saves no dock, so the switch
+    // is that window going to the sibling's; the card leads with it as it
+    // would from the grove.
+    if (dockless()) {
+      const s = get();
+      const card = cardOf(s, fromId);
+      if (card) set({ checkoutPref: { ...s.checkoutPref, [card.key]: backendOf(toId) } });
+      window.location.assign(soloUrl(toId));
+      return;
+    }
     set((s) => {
-      if (fromId === toId) return {};
       const card = cardOf(s, fromId);
       // the sibling's panel may be open already; it keeps its place then
       const panels = s.panels.includes(toId)
@@ -1452,7 +1462,8 @@ export const useStore = create<CanopyState>((set, get) => ({
         ...(width !== undefined && s.panelWidths[toId] === undefined ? { panelWidths: { ...s.panelWidths, [toId]: width } } : {}),
         ...(card ? { checkoutPref: { ...s.checkoutPref, [card.key]: backendOf(toId) } } : {}),
       };
-    }),
+    });
+  },
 
   loadHistory: async (refresh = false, backend) => {
     const b = backend ?? get().home;

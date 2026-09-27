@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import type { CSSProperties } from "react";
 import { groveUrl, soloUrl } from "../routes";
-import { SOLO, useStore } from "../store";
+import { SOLO, idText, useStore } from "../store";
 import { SECTION_WORD, type SectionKey } from "../surface";
 import { PanelSection, RepoPanel } from "./Dock";
 import { SectionWindow } from "./Surface";
@@ -10,7 +10,6 @@ import { Resizer } from "./Resizer";
 import { RunSheet } from "./RunSheet";
 import { Wordmark } from "./TopBar";
 import { IdLabel, WaitingFor, useWaitingFor } from "./IdLabel";
-import { idText } from "../store";
 
 /** the window's inner width, kept current across resizes */
 function useWindowWidth(): number {

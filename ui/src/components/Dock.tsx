@@ -1172,6 +1172,9 @@ export function RepoPanel({
 
   // Answered from remote URLs alone for repos you own, so this costs nothing
   // for almost every panel. Failures stay "unknown" and render nothing.
+  // Asked again when the repo turns up: another machine's panel mounts
+  // before that machine has answered.
+  const present = repo !== undefined;
   useEffect(() => {
     let live = true;
     setAccess("unknown");
@@ -1184,7 +1187,7 @@ export function RepoPanel({
     return () => {
       live = false;
     };
-  }, [id]);
+  }, [id, present]);
 
   if (!repo) {
     // a home repo gone from the scan is pruned with it; another machine's

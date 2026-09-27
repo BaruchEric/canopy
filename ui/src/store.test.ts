@@ -688,4 +688,26 @@ describe("cards over several backends", () => {
     expect(s.panels).toEqual(["other", "b|proj"]);
     expect(s.activePanel).toBe("other");
   });
+
+  test("in a solo window the switch goes to the sibling's own solo window", () => {
+    two();
+    const g = globalThis as unknown as { window?: unknown };
+    const went: string[] = [];
+    const href = "http://a.test/?repo=proj&view=solo";
+    g.window = { location: { search: "?repo=proj&view=solo", href, assign: (u: string) => went.push(u) } };
+    try {
+      useStore.setState({ panels: ["other"], activePanel: "other" });
+      useStore.getState().switchCheckout("proj", "b|proj");
+      const s = useStore.getState();
+      expect(went).toHaveLength(1);
+      const u = new URL(went[0] as string);
+      expect([u.searchParams.get("repo"), u.searchParams.get("view")]).toEqual(["b|proj", "solo"]);
+      // the grove's dock is not this window's to change
+      expect(s.panels).toEqual(["other"]);
+      expect(s.activePanel).toBe("other");
+      expect(s.checkoutPref["rel:proj"]).toBe("b");
+    } finally {
+      delete g.window;
+    }
+  });
 });

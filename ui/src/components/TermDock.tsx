@@ -6,7 +6,7 @@ import "@xterm/xterm/css/xterm.css";
 import { api, reachable, socketUrl as backendSocket } from "../api";
 import { backendOf, plainOf, qual } from "../registry";
 import { groveUrl, nameShellHere, parseRoute, popShell } from "../routes";
-import { PANEL_TERM, TERM, closedIn, idText, isOnline, multi, panelTermHeightFor, useStore, type TermTab } from "../store";
+import { PANEL_TERM, TERM, closedIn, connOf, idText, multi, panelTermHeightFor, useStore, type TermTab } from "../store";
 import { IdLabel, WaitingFor, useWaitingFor } from "./IdLabel";
 import { TERM_FONT, otherShells, termId, viewKey } from "../term";
 import { flipMode, tidyLines, type SurfaceMode } from "../surface";
@@ -123,6 +123,9 @@ function socketUrl(tab: TermTab, cols: number, rows: number, rejoin: boolean): s
   return backendSocket(backendOf(tab.id), `/api/term?${q}`);
 }
 
+/** how often a shell whose machine has no URL yet looks again */
+const UNREACHABLE_WAIT = 1000;
+
 /** how long to wait before the n-th try at rejoining a dropped shell */
 const rejoinWait = (n: number): number => Math.min(30_000, 1000 * 2 ** Math.min(n, 5));
 
@@ -231,9 +234,11 @@ export function TermView({
     let opened = false;
     // said once per spell away, when the shell's machine is what went
     let saidAway = false;
+    // only for a machine known to be away, not one still being reached
     const sayAway = () => {
       const s = useStore.getState();
-      if (!saidAway && multi(s) && !isOnline(s, backendOf(tab.id))) {
+      const state = connOf(s, backendOf(tab.id)).status.state;
+      if (!saidAway && multi(s) && (state === "offline" || state === "signin")) {
         saidAway = true;
         note("[backend offline]");
       }
@@ -241,11 +246,11 @@ export function TermView({
     const connect = () => {
       if (gone || ended) return;
       // a machine the page has no URL for yet is waited on, not dialled
-      // at the page's own origin
+      // at the page's own origin; the waits are not tries, so the first
+      // real dial and its notes go as they would have
       if (!reachable(backendOf(tab.id))) {
         sayAway();
-        retry = setTimeout(connect, rejoinWait(tries));
-        tries += 1;
+        retry = setTimeout(connect, UNREACHABLE_WAIT);
         return;
       }
       const rejoin = opened;
