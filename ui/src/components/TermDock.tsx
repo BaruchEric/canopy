@@ -937,7 +937,9 @@ function FrontOthers({ set }: { set: string }) {
   const shells = useStore((s) => s.shells);
   const repos = useStore((s) => s.repos);
   const bringTerm = useStore((s) => s.bringTerm);
-  const others = otherShells(set, terms, shells, repos, (id) => idLabel(id).backend ?? "", idText);
+  // the machine already rides in `word`'s " · b" suffix below, so the
+  // id fallback here is the plain id alone, never idText's own "on b"
+  const others = otherShells(set, terms, shells, repos, (id) => idLabel(id).backend ?? "", (id) => idLabel(id).plain);
   if (others.length === 0) return null;
   return (
     <nav className="term-others" aria-label="Other running shells">

@@ -254,6 +254,18 @@ describe("otherShells", () => {
     const out = otherShells("panel:a", tabs, [], repos);
     expect(out.find((o) => o.id === "2")?.label).toBe("mini|gone");
   });
+  test("word and idOf together do not double the machine name", () => {
+    const tabs = [tab("1", "a", "panel"), tab("2", "mini|gone", "panel")];
+    const out = otherShells(
+      "panel:a",
+      tabs,
+      [],
+      repos,
+      (id) => (id === "mini|gone" ? "mini" : ""),
+      (id) => id.split("|")[1] ?? id,
+    );
+    expect(out.find((o) => o.id === "2")?.label).toBe("gone · mini");
+  });
   test("shellSet and keepFront", () => {
     expect(shellSet(tab("1", "strip", "panel"))).toBe("panel:strip");
     expect(keepFront("panel:a", [tab("1", "a", "panel")])).toBe("panel:a");
