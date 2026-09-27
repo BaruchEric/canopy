@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { signinUrl } from "../backends";
+import { hasOtherBackend, signinUrl } from "../backends";
 import { sameBuild } from "../../../src/core/version";
 import { PAGE_BUILD } from "../build";
 import { connOf, useStore } from "../store";
@@ -54,8 +54,9 @@ export function BackendsChip() {
 
   // gated on the registry, not on backendOrder (how many are shown): hiding
   // the only other backend must not also hide the one control that can
-  // bring it back, so the chip stays up as long as home named one
-  if (entries.length === 0) return null;
+  // bring it back, so the chip stays up as long as home named one other
+  // than itself
+  if (!hasOtherBackend(entries, home)) return null;
 
   // every backend the home one named, home first, hidden ones included:
   // a hidden one has no entry in conns (hideBackend drops it) or in

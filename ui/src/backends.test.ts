@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import {
   backendState,
+  hasOtherBackend,
   isLaunchSource,
   onPublicSide,
   pickUrl,
@@ -165,6 +166,17 @@ describe("signinUrl", () => {
     expect(signinUrl("https://beric.ca/login?a=1", "https://canopy-mac.beric.ca")).toBe(
       "https://beric.ca/login?a=1&next=https%3A%2F%2Fcanopy-mac.beric.ca",
     );
+  });
+});
+
+describe("hasOtherBackend", () => {
+  test("a registry that lists only self has nothing to show", () => {
+    expect(hasOtherBackend([{ name: "mini" }], "mini")).toBe(false);
+    expect(hasOtherBackend([], "mini")).toBe(false);
+  });
+  test("any entry besides home is another backend", () => {
+    expect(hasOtherBackend([{ name: "mini" }, { name: "mac" }], "mini")).toBe(true);
+    expect(hasOtherBackend([{ name: "mac" }], "mini")).toBe(true);
   });
 });
 

@@ -23,6 +23,7 @@ import {
 import { applyQuery } from "./filters";
 import { onBackendSignal } from "./api";
 import { setBase, setRegistry } from "./registry";
+import { hasOtherBackend } from "./backends";
 import {
   DEFAULT_AGENT,
   type AgentSettings,
@@ -353,6 +354,18 @@ describe("several backends", () => {
     expect(FakeEventSource.opened[0]?.url.startsWith("/api/events")).toBe(true);
     expect(FakeEventSource.opened[0]?.opts?.withCredentials).toBeFalsy();
     expect(connOf(s).status.state).toBe("online");
+  });
+
+  test("a registry that lists only self is the same as no registry: no backends chip either", async () => {
+    await start(backendAnswers(scanOf("/a", [repo("proj")]), [], { "/api/backends": { self: "a", backends: [{ name: "a", tailnet: "http://a.test" }] } }), () => {
+      throw new Error("b asked");
+    });
+    await settle();
+    expect(calls.filter((u) => /^https?:/.test(u))).toEqual([]);
+    const s = useStore.getState();
+    expect(s.backendOrder).toEqual(["a"]);
+    expect(multi(s)).toBe(false);
+    expect(hasOtherBackend(s.settings.backends, s.home)).toBe(false);
   });
 
   test("two backends: each one's repos and runs, and a stream to each", async () => {

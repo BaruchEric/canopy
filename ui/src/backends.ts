@@ -77,6 +77,13 @@ export function pickUrl(pageOrigin: string, entry: BackendEntry, entries: readon
   return tail ? { first: tail, fallback: pub } : { first: pub, fallback: null };
 }
 
+/** Whether the registry named any backend besides home: the chip that shows
+ *  and controls every backend stays hidden while there is nothing else to
+ *  show, even when the config lists home itself as one of its own entries. */
+export function hasOtherBackend(entries: readonly BackendEntry[], home: string): boolean {
+  return entries.some((e) => e.name !== home);
+}
+
 export type BackendState = "connecting" | "online" | "offline" | "signin";
 
 export interface BackendStatus {
