@@ -1,7 +1,7 @@
 import { create } from "zustand";
 import { api, onBackendSignal, PartialFleetError, resolveBase, subscribe } from "./api";
 import { backendOf, homeName, isHome, plainOf, qual, registry, setBase, setRegistry } from "./registry";
-import { backendState, sliceIn, split, type BackendStatus, type Reg } from "./backends";
+import { backendState, RETRY_FIRST, retryWait, sliceIn, split, type BackendStatus, type Reg } from "./backends";
 import { mergeHistory } from "./qualify";
 import { applyQuery, type RepoFilter } from "./filters";
 import { cardChangedAt, joinRepos, leadOf, type RepoCard } from "./checkouts";
@@ -973,6 +973,29 @@ const streams = new Map<string, { epoch: number; off: () => void }>();
  *  late (after a retry, a hide, or the page's cleanup) lands nothing. */
 const connecting = new Map<string, number>();
 
+/** Each backend's automatic reconnect after a failed connect: the timer
+ *  waiting to try again (null while a try is under way), how many tries
+ *  have failed in a row, and the init that owns it, so a cleanup clears
+ *  only its own. A backend that answers, is hidden, or whose init is gone
+ *  has none. */
+const retries = new Map<string, { timer: ReturnType<typeof setTimeout> | null; tries: number; epoch: number }>();
+
+/** the first automatic wait; tests shorten it */
+let retryFirst = RETRY_FIRST;
+export const setRetryFirst = (ms: number): void => {
+  retryFirst = ms;
+};
+
+/** Cancel a backend's waiting retry; `forget` also drops its count of
+ *  failures, for a backend that answered or left the page. */
+function stopRetry(name: string, forget: boolean): void {
+  const r = retries.get(name);
+  if (!r) return;
+  if (r.timer) clearTimeout(r.timer);
+  if (forget) retries.delete(name);
+  else r.timer = null;
+}
+
 /** the saved tabs and showing strip tab the page loaded with, so a backend
  *  answering later brings its own back where they were */
 let loadedTabs: { terms: TermTab[]; activeTerm: string | null } = { terms: [], activeTerm: null };
@@ -1264,6 +1287,7 @@ export const useStore = create<CanopyState>((set, get) => ({
       // a newer init has put its own hook in; leave that one
       if (epoch === e) onBackendSignal(() => {});
       dead.add(e);
+      for (const [n, r] of retries) if (r.epoch === e) stopRetry(n, true);
       for (const [n, st] of streams) {
         if (st.epoch !== e) continue;
         st.off();
@@ -1279,6 +1303,22 @@ export const useStore = create<CanopyState>((set, get) => ({
     const e = epoch;
     const attempt = (connecting.get(name) ?? 0) + 1;
     connecting.set(name, attempt);
+    // this try replaces any that was waiting; the count of failures stays
+    stopRetry(name, false);
+    // A backend that did not answer is tried again by itself, at doubling
+    // waits up to a minute, for as long as it is shown: a machine asleep
+    // when the page loaded comes in when it wakes, with no tap on retry. A
+    // stream that drops later is the stream's own backoff, not this.
+    const again = () => {
+      const tries = retries.get(name)?.tries ?? 0;
+      const timer = setTimeout(() => {
+        const r = retries.get(name);
+        if (r) r.timer = null;
+        if (dead.has(e) || !get().backendOrder.includes(name)) return;
+        void get().connect(name);
+      }, retryWait(tries, retryFirst));
+      retries.set(name, { timer, tries: tries + 1, epoch: e });
+    };
     // an attempt the page has moved past (a retry, a hide, its cleanup)
     // lands nothing and opens no stream
     const live = () => !dead.has(e) && connecting.get(name) === attempt && get().backendOrder.includes(name);
@@ -1286,6 +1326,7 @@ export const useStore = create<CanopyState>((set, get) => ({
     if (!live()) return;
     if (base === null) {
       set((s) => ({ conns: withConn(s, name, { status: { state: "offline", reason: "no URL this page can use" } }) }));
+      again();
       return;
     }
     setBase(name, base);
@@ -1310,10 +1351,13 @@ export const useStore = create<CanopyState>((set, get) => ({
       // the signal hook has said offline or sign-in already; an answer that
       // was an error still leaves the backend unloaded, which says so too
       const reason = String(err instanceof Error ? err.message : err);
-      if (live()) set((s) => ({ conns: withConn(s, name, { status: backendState(connOf(s, name).status, { kind: "unreachable", reason }) }) }));
+      if (!live()) return;
+      set((s) => ({ conns: withConn(s, name, { status: backendState(connOf(s, name).status, { kind: "unreachable", reason }) }) }));
+      again();
       return;
     }
     if (!live()) return;
+    stopRetry(name, true);
     const [tree, runs, flows, fleets, jobs, agents, launchers, held, kept, client, helpers, devices] = got;
     set((s) => {
       const reg = registry();
@@ -1391,6 +1435,7 @@ export const useStore = create<CanopyState>((set, get) => ({
     }
     streams.get(name)?.off();
     streams.delete(name);
+    stopRetry(name, true);
     // a load still on its way for it lands nothing
     connecting.set(name, (connecting.get(name) ?? 0) + 1);
     const mine = mineOf(name);

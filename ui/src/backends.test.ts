@@ -6,6 +6,8 @@ import {
   onPublicSide,
   pickUrl,
   qualify,
+  RETRY_MAX,
+  retryWait,
   signinUrl,
   sliceIn,
   split,
@@ -185,4 +187,13 @@ test("isLaunchSource", () => {
   expect(isLaunchSource("mac|launch")).toBe(true);
   expect(isLaunchSource("work")).toBe(false);
   expect(isLaunchSource("mac|work")).toBe(false);
+});
+
+describe("retryWait", () => {
+  test("doubles from the first wait per failure in a row, up to the cap", () => {
+    expect([0, 1, 2, 3].map((n) => retryWait(n))).toEqual([2_000, 4_000, 8_000, 16_000]);
+    expect(retryWait(5)).toBe(RETRY_MAX);
+    expect(retryWait(1000)).toBe(RETRY_MAX);
+    expect(retryWait(2, 10, 1_000)).toBe(40);
+  });
 });

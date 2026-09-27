@@ -128,6 +128,17 @@ export function backendState(prev: BackendStatus, sig: BackendSignal): BackendSt
   }
 }
 
+/** The first wait before the page tries a backend again by itself after a
+ *  failed connect, and the longest: the wait doubles per failure in a row. */
+export const RETRY_FIRST = 2_000;
+export const RETRY_MAX = 60_000;
+
+/** How long to wait before the next automatic try, after `tries` failed
+ *  ones in a row (0 for the first). */
+export function retryWait(tries: number, first = RETRY_FIRST, max = RETRY_MAX): number {
+  return Math.min(max, first * 2 ** Math.max(0, Math.min(tries, 30)));
+}
+
 /** A merged list with one backend's part replaced by `next`, in registry
  *  order and, within a backend, in the order each came. With one backend
  *  it is `next` itself. */

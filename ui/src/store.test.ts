@@ -14,6 +14,7 @@ import {
   pruneByRepo,
   scopedRepos,
   sectionsFor,
+  setRetryFirst,
   toggleIn,
   unfoldIn,
   useStore,
@@ -23,7 +24,7 @@ import {
 import { applyQuery } from "./filters";
 import { onBackendSignal } from "./api";
 import { setBase, setRegistry } from "./registry";
-import { hasOtherBackend } from "./backends";
+import { hasOtherBackend, RETRY_FIRST } from "./backends";
 import {
   DEFAULT_AGENT,
   type AgentSettings,
@@ -309,6 +310,7 @@ describe("several backends", () => {
     calls.length = 0;
     setRegistry("", []);
     setBase("b", "");
+    setRetryFirst(RETRY_FIRST);
     onBackendSignal(() => {});
     useStore.setState(pristine, true);
   });
@@ -483,6 +485,41 @@ describe("several backends", () => {
     expect(b.state).toBe("signin");
     expect(b.login).toBe("https://gate.test/login");
     expect(connOf(useStore.getState(), "a").status.state).toBe("online");
+  });
+
+  test("a backend down at load comes in by itself once it answers", async () => {
+    setRetryFirst(15);
+    let up = false;
+    const bAnswers = backendAnswers(scanOf("/b", [repo("proj")]), []);
+    await start(backendAnswers(scanOf("/a", [repo("proj")]), [], { "/api/backends": twoBackends }), (path) => {
+      if (!up) throw new Error("down");
+      return bAnswers(path);
+    });
+    await settle();
+    expect(connOf(useStore.getState(), "b").status.state).toBe("offline");
+    up = true;
+    // tries so far waited 15, 30, 60ms; the next lands within 120ms
+    await settle(300);
+    const s = useStore.getState();
+    expect(connOf(s, "b").status.state).toBe("online");
+    expect(s.repos.map((r) => r.id)).toEqual(["proj", "b|proj"]);
+    // online, it stops trying: no more tree reads at b
+    const reads = calls.filter((u) => u.startsWith("http://b.test/api/tree")).length;
+    await settle(200);
+    expect(calls.filter((u) => u.startsWith("http://b.test/api/tree")).length).toBe(reads);
+  });
+
+  test("a hidden backend is not tried again", async () => {
+    setRetryFirst(15);
+    await start(backendAnswers(scanOf("/a", [repo("proj")]), [], { "/api/backends": twoBackends }), () => {
+      throw new Error("down");
+    });
+    await settle();
+    useStore.getState().hideBackend("b", true);
+    const asked = calls.filter((u) => u.startsWith("http://b.test")).length;
+    expect(asked).toBeGreaterThan(0);
+    await settle(200);
+    expect(calls.filter((u) => u.startsWith("http://b.test")).length).toBe(asked);
   });
 
   test("agentFor reads the repo's own backend's settings", async () => {
