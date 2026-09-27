@@ -66,6 +66,16 @@ describe("a page with two backends", () => {
   const run = (id: string, repoId: string) => ({ id, repoId, action: "chat", status: "done" }) as unknown as Run;
   const repo = (id: string) => ({ id, name: id, path: `/x/${id}`, group: "", source: "launch", status: null }) as unknown as Repo;
 
+  test("a backend with no URL yet is never asked at the page's own origin", async () => {
+    setBase("b", "");
+    reply = () => json({ access: "unknown" });
+    await expect(api.access("b|proj")).rejects.toThrow("b has not answered yet");
+    expect(calls).toEqual([]);
+    expect(signals).toEqual([]);
+    await api.access("proj");
+    expect(calls[0]?.url).toBe("/api/repos/access?id=proj");
+  });
+
   test("a foreign repo's call goes to its backend with the plain id, a home one stays relative", async () => {
     reply = () => json([]);
     await api.log("b|x/y");

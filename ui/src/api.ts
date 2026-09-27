@@ -77,7 +77,14 @@ export function onBackendSignal(fn: (backend: string, sig: BackendSignal) => voi
   signal = fn;
 }
 
+/** Whether a backend has a URL to reach yet: home always, another once the
+ *  store has settled which of its URLs this page uses. Until then a call to
+ *  it must not fall back to the page's own origin, which would hand home an
+ *  id that is not its own. */
+export const reachable = (b: string): boolean => b === homeName() || baseOf(b) !== "";
+
 async function req<T>(b: string, path: string, init: RequestInit = {}): Promise<T> {
+  if (!reachable(b)) throw new Error(`${b} has not answered yet`);
   const base = baseOf(b);
   const opts: RequestInit = { ...init };
   // a GET with no Content-Type is a simple request: no preflight to another origin
