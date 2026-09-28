@@ -37,7 +37,12 @@
     "Berkeley Mono", "JetBrains Mono", ui-monospace, "SF Mono", Menlo,
     monospace;
   --r: 6px;
-  --r-card: 8px;
+  --r-card: 10px;
+  /* the one curve things settle on: quick out, soft landing */
+  --ease: cubic-bezier(0.2, 0.8, 0.2, 1);
+  /* light through the crowns: the faint glow the page sits under */
+  --glow-moss: color-mix(in srgb, var(--moss) 7%, transparent);
+  --glow-sky: color-mix(in srgb, var(--sky) 5%, transparent);
 }
 :root[data-theme="dark"] {
   color-scheme: dark;
@@ -58,10 +63,18 @@ body,
   margin: 0;
 }
 body {
-  background: var(--bark0);
+  background:
+    radial-gradient(1100px 520px at 8% -12%, var(--glow-moss), transparent 70%),
+    radial-gradient(900px 460px at 100% -8%, var(--glow-sky), transparent 70%),
+    var(--bark0);
+  background-attachment: fixed;
   color: var(--ink);
   font: 13px/1.45 var(--mono);
   -webkit-font-smoothing: antialiased;
+  -webkit-tap-highlight-color: transparent;
+}
+::selection {
+  background: color-mix(in srgb, var(--moss) 30%, transparent);
 }
 button {
   font: inherit;
@@ -196,8 +209,13 @@ body.resizing {
   min-height: 46px;
   padding: 2px 14px;
   border-bottom: 1px solid var(--hair);
-  background: var(--bark1);
-  box-shadow: inset 0 1px 0 var(--sheen);
+  background: color-mix(in srgb, var(--bark1) 94%, transparent);
+  box-shadow:
+    inset 0 1px 0 var(--sheen),
+    0 6px 18px -14px var(--shadow);
+  /* positioned so its shadow paints over the tree and the cards below it;
+     no z-index, which would trap the popovers inside its layer */
+  position: relative;
 }
 /* controls that wrap as one unit; the tail sits at the right of its row */
 .topbar-group {
@@ -1190,9 +1208,16 @@ a.chan-text {
   background: color-mix(in srgb, var(--state) 3%, var(--bark1));
   border: 1px solid color-mix(in srgb, var(--state) 14%, var(--hair));
   border-radius: var(--r-card);
-  padding: 9px 12px 9px 14px;
+  padding: 10px 12px 10px 14px;
   cursor: pointer;
-  box-shadow: inset 0 1px 0 var(--sheen);
+  box-shadow:
+    inset 0 1px 0 var(--sheen),
+    0 1px 2px -1px var(--shadow);
+}
+/* a card with something in it wears its colour a shade stronger */
+.card:is(.s-dirty, .s-conflict, .s-error) {
+  background: color-mix(in srgb, var(--state) 6%, var(--bark1));
+  border-color: color-mix(in srgb, var(--state) 26%, var(--hair));
 }
 /* the leaf edge: only repos that are not simply clean carry one, so a calm
    grove reads flat and anything alive stands out */
@@ -1217,17 +1242,29 @@ a.chan-text {
   color: var(--ink-dim);
 }
 .card:hover {
-  background: color-mix(in srgb, var(--state) 5%, var(--bark2));
-  border-color: color-mix(in srgb, var(--state) 30%, var(--hair2));
+  background: color-mix(in srgb, var(--state) 6%, var(--bark2));
+  border-color: color-mix(in srgb, var(--state) 34%, var(--hair2));
   box-shadow:
     inset 0 1px 0 var(--sheen),
-    0 10px 22px -12px var(--shadow);
-  transform: translateY(-1px);
+    0 12px 26px -14px var(--shadow),
+    0 0 0 1px color-mix(in srgb, var(--state) 8%, transparent);
+  transform: translateY(-2px);
+}
+.card:active {
+  transform: translateY(0) scale(0.995);
+  box-shadow: inset 0 1px 0 var(--sheen);
 }
 .card-top {
   display: flex;
   align-items: center;
   gap: 8px;
+}
+/* the state glyph, one width whatever the glyph, so every name lines up */
+.glyph {
+  flex: none;
+  display: inline-block;
+  width: 1.1em;
+  text-align: center;
 }
 .card-name {
   font-weight: 700;
@@ -1276,14 +1313,22 @@ a.chan-text {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.card-mid,
-.card-bot {
+/* where the checkout stands, then (pushed right) what it holds and when */
+.card-meta {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
-  gap: 8px;
-  margin-top: 5px;
+  gap: 4px 8px;
+  margin-top: 8px;
   font-size: 12px;
   min-width: 0;
+}
+.card-state {
+  margin-left: auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  white-space: nowrap;
 }
 .branch {
   color: var(--ink-dim);
@@ -1379,10 +1424,9 @@ a.chan-text {
 :root[data-density="compact"] .card {
   padding: 6px 10px 6px 12px;
 }
-:root[data-density="compact"] .card-mid,
-:root[data-density="compact"] .card-bot,
+:root[data-density="compact"] .card-meta,
 :root[data-density="compact"] .card-desc {
-  margin-top: 2px;
+  margin-top: 3px;
 }
 :root[data-density="compact"] .card .rings {
   margin-top: 5px;
@@ -1413,15 +1457,43 @@ a.chan-text {
       box-shadow 160ms ease,
       transform 160ms ease;
   }
-  .card.pulse {
-    animation: pulse 1.1s ease-out 1;
+  /* a card rises in when it lands on the board (a load, a group
+     unfolding, a repo moving to "today"), each a beat after the one
+     before it, up to a cap so a long group never makes you wait */
+  .grid > .card {
+    animation-name: card-in;
+    animation-duration: 280ms;
+    animation-timing-function: var(--ease);
+    animation-delay: min(calc(var(--i, 0) * 14ms), 240ms);
+    animation-fill-mode: backwards;
+  }
+  @keyframes card-in {
+    from {
+      opacity: 0;
+      transform: translateY(6px);
+    }
+  }
+  /* the stream just said something about this repo: a ring spreads out
+     in its state colour and the card warms for a moment. card-in stays
+     first in the list so adding the pulse does not replay it. */
+  .grid > .card.pulse {
+    animation-name: card-in, pulse;
+    animation-duration: 280ms, 1.2s;
+    animation-timing-function: var(--ease), ease-out;
+    animation-delay: min(calc(var(--i, 0) * 14ms), 240ms), 0s;
+    animation-fill-mode: backwards, none;
   }
   @keyframes pulse {
     0% {
-      box-shadow: 0 0 0 0 color-mix(in srgb, var(--state) 55%, transparent);
+      box-shadow:
+        0 0 0 0 color-mix(in srgb, var(--state) 55%, transparent),
+        inset 0 0 0 1px color-mix(in srgb, var(--state) 70%, transparent);
+      background-color: color-mix(in srgb, var(--state) 16%, var(--bark1));
     }
     100% {
-      box-shadow: 0 0 0 14px transparent;
+      box-shadow:
+        0 0 0 16px transparent,
+        inset 0 0 0 1px transparent;
     }
   }
   .settings-pop {
@@ -2302,10 +2374,11 @@ a.chan-text {
 }
 .fold::before {
   content: "▸";
+  display: inline-block;
   color: var(--ink-faint);
 }
 .fold.open::before {
-  content: "▾";
+  rotate: 90deg;
 }
 .fold > span {
   margin-left: auto;
@@ -2500,19 +2573,27 @@ a.chan-text {
   }
 }
 @media (max-width: 760px) {
+  /* the dock covers the cards, not the bars around them, so the top bar's
+     views and the shells along the bottom stay in reach, and the cards
+     keep their scroll for when the panel closes */
   .body {
+    position: relative;
     grid-template-columns: minmax(0, 1fr);
   }
   .dock {
-    position: fixed;
-    inset: 46px 0 0 0;
+    position: absolute;
+    inset: 0;
     z-index: 10;
+    border-left: 0;
+    scroll-snap-type: x mandatory;
+    overscroll-behavior-x: contain;
   }
   .panel {
-    width: 100vw;
+    width: 100%;
+    scroll-snap-align: start;
   }
   .dock.tabbed {
-    grid-template-columns: 0 100vw;
+    grid-template-columns: 0 minmax(0, 1fr);
   }
   .panel-resizer,
   .solo-resizer {
@@ -3210,10 +3291,19 @@ a.chan-text {
 }
 
 /* Workspace library shares the app shell and preserves the cockpit's layout. */
-.app-nav{display:flex;align-items:center;gap:8px;padding:7px 14px;border-bottom:1px solid var(--hair);background:var(--bark1);flex-shrink:0}
-.app-nav .wordmark{margin-right:18px}
-.app-nav button{padding:5px 12px;border-radius:var(--r);color:var(--ink-dim)}
-.app-nav button:hover,.app-nav button.on{background:var(--bark3);color:var(--moss)}
+/* the library and ports views' own bar: the name and the three views */
+.app-nav {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  min-height: 46px;
+  padding: 6px 14px;
+  padding-top: max(6px, env(safe-area-inset-top));
+  border-bottom: 1px solid var(--hair);
+  background: var(--bark1);
+  box-shadow: inset 0 1px 0 var(--sheen);
+}
 .library-view{display:flex;flex:1;min-height:0;flex-direction:column}
 .library-toolbar{display:flex;gap:18px;align-items:center;padding:10px 16px;border-bottom:1px solid var(--hair);color:var(--ink-dim);flex-wrap:wrap}
 .library-toolbar>span:first-child{max-width:50vw;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
@@ -3222,7 +3312,14 @@ a.chan-text {
 .library-message{padding:16px;color:var(--rust)}
 .library-message button{margin-left:12px}
 .panel-library{display:block;padding:8px 14px;color:var(--moss);font-size:11px;border-bottom:1px solid var(--hair)}
-@media(max-width:650px){.library-hint{display:none}.app-nav{gap:2px}.app-nav .wordmark{margin-right:4px}.app-nav button{padding:5px 8px}}
+@media (max-width: 650px) {
+  .library-hint {
+    display: none;
+  }
+  .app-nav {
+    gap: 10px;
+  }
+}
 
 /* ---------- the terminal strip: shells along the bottom ---------- */
 .termdock {
@@ -4519,15 +4616,6 @@ a.build-label:hover {
 .shells-pop select.settings-input {
   align-self: stretch;
 }
-@media (max-width: 760px) {
-  .shells-pop {
-    position: fixed;
-    top: 54px;
-    left: 16px;
-    right: 16px;
-    width: auto;
-  }
-}
 
 /* the feed over the whole window, or in front of it */
 .feed.surface-full {
@@ -4703,4 +4791,408 @@ button.machine:hover {
   align-items: center;
   gap: 8px;
   margin-left: auto;
+}
+
+/* ---------- the views: git, library, ports ---------- */
+/* a segmented row like the grouping's, beside the name */
+.view-nav {
+  flex: none;
+  display: inline-flex;
+  gap: 2px;
+  padding: 2px;
+  border: 1px solid var(--hair2);
+  border-radius: 999px;
+  background: var(--bark0);
+}
+.view-nav button {
+  padding: 1px 11px;
+  border-radius: 999px;
+  color: var(--ink-dim);
+  white-space: nowrap;
+}
+.view-nav button:hover {
+  color: var(--ink);
+}
+.view-nav button.on {
+  color: var(--moss);
+  background: var(--bark3);
+  box-shadow: inset 0 1px 0 var(--sheen);
+}
+
+/* ---------- the live light ---------- */
+/* the home backend's stream: moss and still while it is up, a flash on each
+   event, lichen while it connects, rust while it is down */
+.live-dot {
+  flex: none;
+  display: inline-grid;
+  place-items: center;
+  width: 16px;
+  height: 28px;
+  cursor: default;
+}
+.live-dot i {
+  display: block;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--ink-faint);
+}
+.live-dot.online i {
+  background: var(--moss);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--moss) 18%, transparent);
+}
+.live-dot.connecting i {
+  background: var(--lichen);
+}
+.live-dot.offline i,
+.live-dot.signin i {
+  background: var(--rust);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--rust) 22%, transparent);
+}
+
+/* ---------- top bar details ---------- */
+.rescan {
+  gap: 6px;
+}
+.rescan svg {
+  flex: none;
+  opacity: 0.8;
+}
+.pill-n {
+  font-variant-numeric: tabular-nums;
+}
+/* one height for every control on the bar, so a row reads as one line */
+.topbar .pill,
+.topbar .mini,
+.topbar .seg,
+.topbar .view-nav {
+  min-height: 28px;
+}
+.topbar .seg button,
+.topbar .view-nav button {
+  display: inline-flex;
+  align-items: center;
+}
+.filter {
+  min-height: 28px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--bark0) 70%, var(--bark1));
+}
+.filter:focus {
+  outline: none;
+  border-color: var(--moss);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--moss) 20%, transparent);
+}
+
+/* a laptop-narrow bar: the attention pill keeps its count and the rescan
+   its glyph, so the second row keeps to one line */
+@media (max-width: 1100px) {
+  .attention .pill-words,
+  .topbar .rescan-word {
+    display: none;
+  }
+  .filter {
+    width: 128px;
+  }
+  .attention {
+    padding-right: 10px;
+  }
+}
+/* a folded section is its head alone: the room some sections keep below
+   their body goes with the body, so the folded heads sit evenly */
+.surface:has(> .section-head > .fold[aria-expanded="false"]) {
+  padding-bottom: 0;
+}
+
+/* ---------- the tree as a drawer ---------- */
+/* below the width with room for the tree beside the cards, the same tree
+   slides over the page from the left, the page dimmed behind it */
+.drawer-back {
+  position: fixed;
+  inset: 0;
+  z-index: 33;
+  background: color-mix(in srgb, var(--bark0) 62%, transparent);
+  backdrop-filter: blur(2px);
+}
+.sidebar.drawer {
+  display: block;
+  position: fixed;
+  top: 0;
+  bottom: 0;
+  left: 0;
+  z-index: 34;
+  width: min(320px, 86vw);
+  padding: 0 0 max(24px, env(safe-area-inset-bottom));
+  border-right: 1px solid var(--float-edge);
+  box-shadow: 18px 0 48px -18px var(--float-shadow);
+}
+.drawer-head {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: max(8px, env(safe-area-inset-top)) 8px 8px 14px;
+  margin-bottom: 4px;
+  background: var(--bark1);
+  border-bottom: 1px solid var(--hair);
+}
+@media (pointer: coarse) {
+  .sidebar.drawer .tree-item {
+    padding-block: 7px;
+  }
+}
+
+/* ---------- touch ---------- */
+@media (pointer: coarse) {
+  /* iOS zooms the page onto any focused field under 16px */
+  input,
+  textarea,
+  select {
+    font-size: 16px;
+  }
+  .icon-btn {
+    width: 34px;
+    height: 34px;
+  }
+  .more {
+    width: 30px;
+    height: 30px;
+    opacity: 0.85;
+  }
+}
+
+/* ---------- a phone ---------- */
+@media (max-width: 760px) {
+  /* three short rows: the views and a few buttons, the filter box, and the
+     rest in one row that scrolls sideways */
+  .topbar.phone {
+    display: flex;
+    flex-direction: column;
+    flex-wrap: nowrap;
+    align-items: stretch;
+    gap: 6px;
+    min-height: 0;
+    padding: max(6px, env(safe-area-inset-top)) 10px 8px;
+  }
+  .topbar.phone > * {
+    margin-block: 0;
+  }
+  .tb-line {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    min-width: 0;
+  }
+  .tb-line > * {
+    flex: none;
+  }
+  .tb-line .spacer {
+    flex: 1;
+  }
+  /* the crowns say canopy; the words would crowd the views off the row */
+  .topbar.phone .wordmark {
+    font-size: 0;
+    gap: 0;
+  }
+  .topbar.phone .view-nav button {
+    padding: 1px 9px;
+  }
+  .tb-line .search {
+    flex: 1 1 auto;
+    min-width: 0;
+  }
+  .tb-line .filter {
+    width: 100%;
+  }
+  .tb-scroll {
+    overflow-x: auto;
+    scrollbar-width: none;
+    margin-inline: -10px;
+    padding-inline: 10px;
+    mask-image: linear-gradient(to right, transparent, #000 10px, #000 calc(100% - 18px), transparent);
+  }
+  .tb-scroll::-webkit-scrollbar {
+    display: none;
+  }
+  .tb-scroll .ws-tabs {
+    flex: none;
+    max-width: none;
+    overflow: visible;
+  }
+  .topbar.phone .seg-sort {
+    display: inline-flex;
+  }
+  .attention .pill-words {
+    display: none;
+  }
+  /* a repo open on a phone has the page: the filter rows go with the cards */
+  .app:has(> .body > .dock) .topbar.phone .tb-tools {
+    display: none;
+  }
+
+  /* the popovers come up from the bottom edge as sheets, where a thumb is */
+  .settings-pop,
+  .shells-pop {
+    position: fixed;
+    top: auto;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    z-index: 36;
+    width: auto;
+    max-width: none;
+    max-height: min(82dvh, 760px);
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    translate: none !important;
+    padding-bottom: max(12px, env(safe-area-inset-bottom));
+    border-bottom: 0;
+    border-radius: 16px 16px 0 0;
+    box-shadow:
+      inset 0 1px 0 var(--sheen),
+      0 -18px 48px -12px var(--float-shadow);
+  }
+  /* the grabber that says it is a sheet */
+  .settings-pop::before {
+    content: "";
+    display: block;
+    width: 36px;
+    height: 4px;
+    margin: 4px auto 2px;
+    border-radius: 2px;
+    background: var(--hair2);
+  }
+
+  .main {
+    padding: 12px 10px calc(40px + env(safe-area-inset-bottom));
+  }
+  .grid {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 8px;
+  }
+  .card {
+    padding: 11px 12px 11px 14px;
+  }
+  .panel-head {
+    padding-block: 12px;
+  }
+}
+
+/* ---------- motion ---------- */
+@media (prefers-reduced-motion: no-preference) {
+  /* the live light flashes on every event the stream brings */
+  .live-dot.beat i {
+    animation: live-beat 700ms ease-out;
+  }
+  @keyframes live-beat {
+    0% {
+      background: var(--moss-pale);
+      box-shadow: 0 0 0 0 color-mix(in srgb, var(--moss) 70%, transparent);
+    }
+    100% {
+      box-shadow: 0 0 0 9px transparent;
+    }
+  }
+  .live-dot.connecting i {
+    animation: needs 0.8s ease-in-out infinite alternate;
+  }
+  .rescan.busy svg {
+    animation: spin 0.9s linear infinite;
+  }
+  @keyframes spin {
+    to {
+      rotate: 360deg;
+    }
+  }
+  .view-nav button,
+  .filter,
+  .fold::before,
+  .live-dot i {
+    transition:
+      background 140ms ease,
+      color 140ms ease,
+      border-color 140ms ease,
+      box-shadow 160ms ease,
+      rotate 160ms var(--ease);
+  }
+  /* a press gives: buttons sink a hair under the finger or the click */
+  .mini:active:not(:disabled),
+  .pill:active,
+  .chip:active:not(:disabled),
+  .icon-btn:active,
+  .seg button:active,
+  .view-nav button:active,
+  .tab:active,
+  .option:active {
+    transform: translateY(1px) scale(0.97);
+  }
+  .tree-item:active {
+    background: var(--bark3);
+  }
+  /* a panel fades in where it opens; a side-by-side one slides a little
+     from the edge it grows from. A tab switch fades, and no transform
+     there, since a section brought to the front inside it is fixed. */
+  .dock:not(.tabbed) > .panel {
+    animation: panel-in 240ms var(--ease);
+  }
+  .dock.tabbed > .panel {
+    animation: fade-in 160ms ease-out;
+  }
+  @keyframes panel-in {
+    from {
+      opacity: 0;
+      transform: translateX(14px);
+    }
+  }
+  @keyframes fade-in {
+    from {
+      opacity: 0;
+    }
+  }
+  /* a section's body fades up as it unfolds */
+  .section-main > * {
+    animation: fade-in 180ms ease-out;
+  }
+  .grid-group > .grid {
+    animation: fade-in 200ms ease-out;
+  }
+  .drawer-back {
+    animation: fade-in 180ms ease-out;
+  }
+  .sidebar.drawer {
+    animation: drawer-in 260ms var(--ease);
+  }
+  @keyframes drawer-in {
+    from {
+      transform: translateX(-100%);
+    }
+  }
+}
+@media (prefers-reduced-motion: no-preference) and (max-width: 760px) {
+  /* on a phone the whole dock slides in over the cards, like a page */
+  .dock {
+    animation: dock-in 280ms var(--ease);
+  }
+  @keyframes dock-in {
+    from {
+      transform: translateX(28px);
+      opacity: 0;
+    }
+  }
+  .dock:not(.tabbed) > .panel {
+    animation: none;
+  }
+  .settings-pop,
+  .shells-pop {
+    animation: sheet-up 240ms var(--ease);
+  }
+  @keyframes sheet-up {
+    from {
+      transform: translateY(24px);
+      opacity: 0;
+    }
+  }
 }

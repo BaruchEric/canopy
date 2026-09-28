@@ -1,8 +1,10 @@
-import { useState } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import { useShallow } from "zustand/react/shallow";
 import { api } from "../api";
 import { ownRun } from "../flows";
-import { allRuns, attentionCount, capsFor, pickedIds, useStore } from "../store";
+import { allRuns, attentionCount, capsFor, homeConn, pickedIds, useStore } from "../store";
+import { onBeat } from "../live";
+import { NARROW, PHONE, useMedia } from "../media";
 import { isRunActive } from "../../../src/core/types";
 import { seenWord } from "../peers";
 import { PAGE_BUILD } from "../build";
@@ -110,33 +112,291 @@ function PeersChip() {
   );
 }
 
-export function TopBar() {
-  const filter = useStore((s) => s.filter);
-  const setFilter = useStore((s) => s.setFilter);
+/** The home backend's stream, as one light: moss while it is live, and a
+ *  flash on every event it sends, so a change that lands off screen still
+ *  shows that the page heard it. Rust when the stream is down. */
+function LiveDot() {
+  const state = useStore((s) => homeConn(s).status.state);
+  const reason = useStore((s) => homeConn(s).status.reason);
+  const ref = useRef<HTMLSpanElement>(null);
+  useEffect(
+    () =>
+      onBeat(() => {
+        const el = ref.current;
+        if (!el) return;
+        // restart the flash: drop the class, let a frame see it gone, add it
+        el.classList.remove("beat");
+        void el.offsetWidth;
+        el.classList.add("beat");
+      }),
+    [],
+  );
+  const word =
+    state === "online"
+      ? "live: changes show as they happen"
+      : state === "connecting"
+        ? "connecting to the backend…"
+        : state === "signin"
+          ? "sign in to the backend"
+          : `offline${reason ? `: ${reason}` : ""}; showing what it last said`;
+  return (
+    <span ref={ref} className={`live-dot ${state}`} role="status" title={word} aria-label={word}>
+      <i aria-hidden="true" />
+    </span>
+  );
+}
+
+function SideToggle() {
+  const narrow = useMedia(NARROW);
+  const sidebarOpen = useStore((s) => s.sidebarOpen);
+  const toggleSidebar = useStore((s) => s.toggleSidebar);
+  const drawerOpen = useStore((s) => s.drawerOpen);
+  const setDrawer = useStore((s) => s.setDrawer);
+  // beside the cards on a wide window, a drawer over them on a narrow one;
+  // lit when the column is folded away, or while the drawer is out
+  const open = narrow ? drawerOpen : sidebarOpen;
+  const lit = narrow ? drawerOpen : !sidebarOpen;
+  return (
+    <button
+      type="button"
+      className={lit ? "icon-btn side-toggle on" : "icon-btn side-toggle"}
+      aria-expanded={open}
+      aria-controls="sidebar"
+      title={open ? "Hide the repo tree ([)" : "Show the repo tree ([)"}
+      onClick={() => (narrow ? setDrawer(!drawerOpen) : toggleSidebar())}
+    >
+      <svg
+        width="15"
+        height="15"
+        viewBox="0 0 24 24"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="2"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        aria-hidden="true"
+      >
+        <rect x="3" y="4" width="18" height="16" rx="2.5" />
+        <path d="M9.5 4v16" />
+      </svg>
+    </button>
+  );
+}
+
+function WsTabs() {
   // the workspace openers go where this browser can open: nothing on a
   // phone, the helper on a laptop next to a headless backend
   const caps = useStore(useShallow(capsFor));
   const canOpen = caps.openers;
   const helper = caps.helper?.name;
-  const dirtyOnly = useStore((s) => s.dirtyOnly);
-  const setDirtyOnly = useStore((s) => s.setDirtyOnly);
-  const attention = useStore(attentionCount);
   const workspaces = useStore((s) => s.workspaces);
   const activeWs = useStore((s) => s.activeWs);
   const setActiveWs = useStore((s) => s.setActiveWs);
-  const sort = useStore((s) => s.settings.sort);
-  const setSetting = useStore((s) => s.setSetting);
-  const rescan = useStore((s) => s.rescan);
-  const sidebarOpen = useStore((s) => s.sidebarOpen);
-  const toggleSidebar = useStore((s) => s.toggleSidebar);
-  const openSearch = useStore((s) => s.openSearch);
+  return (
+    <nav className="ws-tabs" aria-label="Workspaces">
+      <button
+        type="button"
+        className={activeWs === null ? "tab active" : "tab"}
+        onClick={() => setActiveWs(null)}
+      >
+        all
+      </button>
+      {workspaces.map((w) => (
+        <span key={w.name} className="ws-tab-wrap">
+          <button
+            type="button"
+            className={activeWs === w.name ? "tab active" : "tab"}
+            onClick={() => setActiveWs(activeWs === w.name ? null : w.name)}
+          >
+            {w.name}
+            <span className="tab-count">{w.repos.length}</span>
+          </button>
+          {activeWs === w.name && (canOpen.includes("code") || canOpen.includes("kitty")) && (
+            <span className="ws-actions">
+              {canOpen.includes("code") && (
+                <button
+                  type="button"
+                  className="mini"
+                  title="Open all repos in one VS Code window"
+                  onClick={() => void api.wsOpen(w.name, "code", helper)}
+                >
+                  code
+                </button>
+              )}
+              {canOpen.includes("kitty") && (
+                <button
+                  type="button"
+                  className="mini"
+                  title="Open a kitty tab per repo"
+                  onClick={() => void api.wsOpen(w.name, "kitty", helper)}
+                >
+                  kitty
+                </button>
+              )}
+            </span>
+          )}
+        </span>
+      ))}
+    </nav>
+  );
+}
+
+function FeedButton() {
   const feedOpen = useStore((s) => s.feedOpen);
   const toggleFeed = useStore((s) => s.toggleFeed);
+  return (
+    <button
+      type="button"
+      className={feedOpen ? "icon-btn on" : "icon-btn"}
+      aria-pressed={feedOpen}
+      title={feedOpen ? "Hide the event feed (e)" : "Show the event feed: every source's events as they happen (e)"}
+      aria-label="Event feed"
+      onClick={toggleFeed}
+    >
+      <svg
+        width="15"
+        height="15"
+        viewBox="0 0 24 24"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="2"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        aria-hidden="true"
+      >
+        <path d="M4 6h16" />
+        <path d="M4 12h10" />
+        <path d="M4 18h13" />
+        <circle cx="19" cy="17" r="2" fill="currentColor" stroke="none" />
+      </svg>
+    </button>
+  );
+}
+
+function SearchButton() {
+  const openSearch = useStore((s) => s.openSearch);
+  return (
+    <button
+      type="button"
+      className="icon-btn"
+      title="Search file contents across the repos in view (⌘⇧F)"
+      aria-label="Search file contents"
+      onClick={openSearch}
+    >
+      <svg
+        width="15"
+        height="15"
+        viewBox="0 0 24 24"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="2"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        aria-hidden="true"
+      >
+        <circle cx="11" cy="11" r="7" />
+        <path d="m20 20-3.5-3.5" />
+      </svg>
+    </button>
+  );
+}
+
+function SelectPill() {
   const selecting = useStore((s) => s.selecting);
   const picked = useStore((s) => pickedIds(s).length);
   const setSelecting = useStore((s) => s.setSelecting);
-  const [scanning, setScanning] = useState(false);
+  return (
+    <button
+      type="button"
+      className={selecting ? "pill on" : "pill"}
+      aria-pressed={selecting}
+      title="Pick repos to run one workflow on all of them (x)"
+      onClick={() => setSelecting(!selecting)}
+    >
+      {selecting ? `${picked} picked` : "select"}
+    </button>
+  );
+}
 
+function SortSeg() {
+  const sort = useStore((s) => s.settings.sort);
+  const setSetting = useStore((s) => s.setSetting);
+  return (
+    <Seg
+      className="seg-sort"
+      label="Group repos by"
+      value={sort}
+      options={SORT}
+      onChange={(v) => setSetting("sort", v)}
+    />
+  );
+}
+
+/** "13 need attention", the needs-a-hand filter's switch; on a phone the
+ *  words go and the count stays. */
+function AttentionPill() {
+  const dirtyOnly = useStore((s) => s.dirtyOnly);
+  const setDirtyOnly = useStore((s) => s.setDirtyOnly);
+  const attention = useStore(attentionCount);
+  return (
+    <button
+      type="button"
+      className={dirtyOnly ? "pill attention on" : "pill attention"}
+      aria-pressed={dirtyOnly}
+      title="Only repos with changes, unpushed commits, or errors (d)"
+      onClick={() => setDirtyOnly(!dirtyOnly)}
+    >
+      <span className={attention > 0 ? "dot lichen" : "dot moss"} />
+      {attention === 0 ? (
+        "all quiet"
+      ) : (
+        <>
+          <span className="pill-n">{attention}</span>
+          <span className="pill-words"> need{attention === 1 ? "s" : ""} attention</span>
+        </>
+      )}
+    </button>
+  );
+}
+
+function FilterBox() {
+  const filter = useStore((s) => s.filter);
+  const setFilter = useStore((s) => s.setFilter);
+  return (
+    <label className="search">
+      <svg
+        width="13"
+        height="13"
+        viewBox="0 0 24 24"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="2.2"
+        strokeLinecap="round"
+        aria-hidden="true"
+      >
+        <circle cx="11" cy="11" r="7" />
+        <path d="m20 20-3.8-3.8" />
+      </svg>
+      <input
+        id="filter-input"
+        className="filter"
+        type="search"
+        placeholder="filter repos"
+        aria-label="Filter repos"
+        value={filter}
+        onChange={(e) => setFilter(e.target.value)}
+        onKeyDown={(e) => {
+          if (e.key === "Escape") setFilter("");
+        }}
+      />
+      <kbd aria-hidden="true">/</kbd>
+    </label>
+  );
+}
+
+function RescanButton() {
+  const rescan = useStore((s) => s.rescan);
+  const [scanning, setScanning] = useState(false);
   const doRescan = async () => {
     setScanning(true);
     try {
@@ -145,217 +405,117 @@ export function TopBar() {
       setScanning(false);
     }
   };
+  return (
+    <button
+      type="button"
+      className={scanning ? "mini rescan busy" : "mini rescan"}
+      title="Walk every folder again for repos"
+      aria-label={scanning ? "scanning" : "rescan"}
+      onClick={() => void doRescan()}
+      disabled={scanning}
+    >
+      <svg
+        width="12"
+        height="12"
+        viewBox="0 0 24 24"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="2.4"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        aria-hidden="true"
+      >
+        <path d="M20 11a8 8 0 1 0-2.3 5.7" />
+        <path d="M20 4v7h-7" />
+      </svg>
+      <span className="rescan-word">{scanning ? "scanning…" : "rescan"}</span>
+    </button>
+  );
+}
+
+/** Who else is here and what is running: each chip is absent when it has
+ *  nothing to say. */
+function Chips() {
+  return (
+    <>
+      <PeersChip />
+      <BackendsChip />
+      <KeptShells />
+      <ShellsChip />
+      <DevicesChip />
+      <ChanChip />
+    </>
+  );
+}
+
+/** The top bar: `nav` is the view switcher, which sits beside the name. A
+ *  window as wide as a laptop's gets two rows, the views and the scope
+ *  above the grouping and the filters; a phone gets three short ones, the
+ *  views and the few buttons a thumb reaches for first, then the filter
+ *  box, then everything else in one row that scrolls sideways. */
+export function TopBar({ nav }: { nav?: ReactNode }) {
+  const phone = useMedia(PHONE);
+
+  if (phone) {
+    return (
+      <header className="topbar phone">
+        <div className="tb-line">
+          <SideToggle />
+          <Wordmark />
+          {nav}
+          <span className="spacer" />
+          <LiveDot />
+          <SearchButton />
+          <SettingsMenu />
+        </div>
+        <div className="tb-line tb-tools">
+          <FilterBox />
+          <AttentionPill />
+          <FilterMenu />
+        </div>
+        <div className="tb-line tb-tools tb-scroll">
+          <SortSeg />
+          <SelectPill />
+          <RunsPill />
+          <FeedButton />
+          <RescanButton />
+          <SourcesMenu />
+          <WsTabs />
+          <Chips />
+        </div>
+      </header>
+    );
+  }
 
   return (
     <header className="topbar">
-      <button
-        type="button"
-        className={sidebarOpen ? "icon-btn side-toggle" : "icon-btn side-toggle on"}
-        aria-expanded={sidebarOpen}
-        aria-controls="sidebar"
-        title={sidebarOpen ? "Hide the repo tree ([)" : "Show the repo tree ([)"}
-        onClick={toggleSidebar}
-      >
-        <svg
-          width="15"
-          height="15"
-          viewBox="0 0 24 24"
-          fill="none"
-          stroke="currentColor"
-          strokeWidth="2"
-          strokeLinecap="round"
-          strokeLinejoin="round"
-          aria-hidden="true"
-        >
-          <rect x="3" y="4" width="18" height="16" rx="2.5" />
-          <path d="M9.5 4v16" />
-        </svg>
-      </button>
+      <SideToggle />
       <Wordmark version />
+      {nav}
       <SourcesMenu />
-
-      <nav className="ws-tabs" aria-label="Workspaces">
-        <button
-          type="button"
-          className={activeWs === null ? "tab active" : "tab"}
-          onClick={() => setActiveWs(null)}
-        >
-          all
-        </button>
-        {workspaces.map((w) => (
-          <span key={w.name} className="ws-tab-wrap">
-            <button
-              type="button"
-              className={activeWs === w.name ? "tab active" : "tab"}
-              onClick={() => setActiveWs(activeWs === w.name ? null : w.name)}
-            >
-              {w.name}
-              <span className="tab-count">{w.repos.length}</span>
-            </button>
-            {activeWs === w.name && (canOpen.includes("code") || canOpen.includes("kitty")) && (
-              <span className="ws-actions">
-                {canOpen.includes("code") && (
-                  <button
-                    type="button"
-                    className="mini"
-                    title="Open all repos in one VS Code window"
-                    onClick={() => void api.wsOpen(w.name, "code", helper)}
-                  >
-                    code
-                  </button>
-                )}
-                {canOpen.includes("kitty") && (
-                  <button
-                    type="button"
-                    className="mini"
-                    title="Open a kitty tab per repo"
-                    onClick={() => void api.wsOpen(w.name, "kitty", helper)}
-                  >
-                    kitty
-                  </button>
-                )}
-              </span>
-            )}
-          </span>
-        ))}
-      </nav>
+      <WsTabs />
 
       <span className="spacer" />
 
       {/* feed, search and select wrap as one, so a narrow bar never splits them */}
       <span className="topbar-group">
-        <button
-          type="button"
-          className={feedOpen ? "icon-btn on" : "icon-btn"}
-          aria-pressed={feedOpen}
-          title={feedOpen ? "Hide the event feed (e)" : "Show the event feed: every source's events as they happen (e)"}
-          aria-label="Event feed"
-          onClick={toggleFeed}
-        >
-          <svg
-            width="15"
-            height="15"
-            viewBox="0 0 24 24"
-            fill="none"
-            stroke="currentColor"
-            strokeWidth="2"
-            strokeLinecap="round"
-            strokeLinejoin="round"
-            aria-hidden="true"
-          >
-            <path d="M4 6h16" />
-            <path d="M4 12h10" />
-            <path d="M4 18h13" />
-            <circle cx="19" cy="17" r="2" fill="currentColor" stroke="none" />
-          </svg>
-        </button>
-
-        <button
-          type="button"
-          className="icon-btn"
-          title="Search file contents across the repos in view (⌘⇧F)"
-          aria-label="Search file contents"
-          onClick={openSearch}
-        >
-          <svg
-            width="15"
-            height="15"
-            viewBox="0 0 24 24"
-            fill="none"
-            stroke="currentColor"
-            strokeWidth="2"
-            strokeLinecap="round"
-            strokeLinejoin="round"
-            aria-hidden="true"
-          >
-            <circle cx="11" cy="11" r="7" />
-            <path d="m20 20-3.5-3.5" />
-          </svg>
-        </button>
-
-        <button
-          type="button"
-          className={selecting ? "pill on" : "pill"}
-          aria-pressed={selecting}
-          title="Pick repos to run one workflow on all of them (x)"
-          onClick={() => setSelecting(!selecting)}
-        >
-          {selecting ? `${picked} picked` : "select"}
-        </button>
+        <LiveDot />
+        <FeedButton />
+        <SearchButton />
+        <SelectPill />
       </span>
       <span className="topbar-break" aria-hidden="true" />
 
-      <Seg
-        className="seg-sort"
-        label="Group repos by"
-        value={sort}
-        options={SORT}
-        onChange={(v) => setSetting("sort", v)}
-      />
-
+      <SortSeg />
       <RunsPill />
-
-      <button
-        type="button"
-        className={dirtyOnly ? "pill on" : "pill"}
-        aria-pressed={dirtyOnly}
-        title="Only repos with changes, unpushed commits, or errors (d)"
-        onClick={() => setDirtyOnly(!dirtyOnly)}
-      >
-        <span className={attention > 0 ? "dot lichen" : "dot moss"} />
-        {attention === 0
-          ? "all quiet"
-          : `${attention} need${attention === 1 ? "s" : ""} attention`}
-      </button>
-
+      <AttentionPill />
       <FilterMenu />
-
-      <label className="search">
-        <svg
-          width="13"
-          height="13"
-          viewBox="0 0 24 24"
-          fill="none"
-          stroke="currentColor"
-          strokeWidth="2.2"
-          strokeLinecap="round"
-          aria-hidden="true"
-        >
-          <circle cx="11" cy="11" r="7" />
-          <path d="m20 20-3.8-3.8" />
-        </svg>
-        <input
-          id="filter-input"
-          className="filter"
-          type="search"
-          placeholder="filter repos"
-          aria-label="Filter repos"
-          value={filter}
-          onChange={(e) => setFilter(e.target.value)}
-          onKeyDown={(e) => {
-            if (e.key === "Escape") setFilter("");
-          }}
-        />
-        <kbd aria-hidden="true">/</kbd>
-      </label>
+      <FilterBox />
 
       {/* rescan and the chips keep to the right end of whichever row they land on */}
       <span className="topbar-group topbar-tail">
-        <button
-          type="button"
-          className="mini"
-          onClick={() => void doRescan()}
-          disabled={scanning}
-        >
-          {scanning ? "scanning…" : "rescan"}
-        </button>
-
-        <PeersChip />
-        <BackendsChip />
-        <KeptShells />
-        <ShellsChip />
-        <DevicesChip />
-        <ChanChip />
+        <RescanButton />
+        <Chips />
         <SettingsMenu />
       </span>
     </header>

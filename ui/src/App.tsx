@@ -12,11 +12,39 @@ import { Sidebar } from "./components/Sidebar";
 import { SectionSolo, Solo } from "./components/Solo";
 import { ShellSolo, TermDock } from "./components/TermDock";
 import { Crowns, TopBar } from "./components/TopBar";
+import { NARROW, useMedia } from "./media";
 import { parseRoute } from "./routes";
 import { SORT_MODES } from "./settings";
 import { SIDEBAR, useStore } from "./store";
 
 const route = parseRoute(window.location.search);
+
+const VIEWS = [
+  { key: "git", label: "git", title: "Git cockpit: every repo, live" },
+  { key: "library", label: "library", title: "Library: tags, notes, links and dev servers" },
+  { key: "ports", label: "ports", title: "Ports: what is listening, and the dev servers" },
+] as const;
+
+/** The three views, one segmented row: in the top bar on the git view, the
+ *  whole of the bar on the other two. */
+function ViewNav({ view, navigate }: { view: string; navigate: (next: string) => void }) {
+  return (
+    <nav className="view-nav" aria-label="Canopy views">
+      {VIEWS.map(({ key, label, title }) => (
+        <button
+          type="button"
+          key={key}
+          title={title}
+          aria-current={view === key ? "page" : undefined}
+          className={view === key ? "on" : ""}
+          onClick={() => navigate(key)}
+        >
+          {label}
+        </button>
+      ))}
+    </nav>
+  );
+}
 
 export function App() {
   const [view, setView] = useState(() => new URLSearchParams(location.search).get("view") || "git");
@@ -55,6 +83,9 @@ export function App() {
   const setSidebarWidth = useStore((s) => s.setSidebarWidth);
   const sidebarOpen = useStore((s) => s.sidebarOpen);
   const toggleSidebar = useStore((s) => s.toggleSidebar);
+  const drawerOpen = useStore((s) => s.drawerOpen);
+  const setDrawer = useStore((s) => s.setDrawer);
+  const narrow = useMedia(NARROW);
   const openPanel = useStore((s) => s.openPanel);
   const [attempt, setAttempt] = useState(0);
   const pinned = useRef(false);
@@ -104,6 +135,11 @@ export function App() {
       if (t.tagName === "INPUT" || t.tagName === "TEXTAREA") return;
       if (view === "library" || view === "ports") return;
       const st = useStore.getState();
+      // the drawer is the top layer while it is out
+      if (st.drawerOpen && e.key === "Escape" && !document.querySelector('[role="dialog"], [role="menu"]')) {
+        st.setDrawer(false);
+        return;
+      }
       // Select mode's two keys. A sheet, a menu or a popover owns Escape
       // while it is up, and a select box owns ⌘A, so neither reaches here then.
       if (st.selecting && !st.sheet && !document.querySelector('[role="dialog"], [role="menu"]')) {
@@ -125,7 +161,8 @@ export function App() {
       } else if (e.key === "f") {
         document.getElementById("filters-btn")?.click();
       } else if (e.key === "[") {
-        toggleSidebar();
+        if (narrow) st.setDrawer(!st.drawerOpen);
+        else toggleSidebar();
       } else if (e.key === "e") {
         useStore.getState().toggleFeed();
       } else if (e.key === "d") {
@@ -141,7 +178,12 @@ export function App() {
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [setDirtyOnly, setSetting, toggleSidebar, view]);
+  }, [setDirtyOnly, setSetting, toggleSidebar, view, narrow]);
+
+  // a window grown past the narrow width has the tree beside the cards again
+  useEffect(() => {
+    if (!narrow && useStore.getState().drawerOpen) setDrawer(false);
+  }, [narrow, setDrawer]);
 
   if (!loaded) {
     if (loadError) {
@@ -169,21 +211,28 @@ export function App() {
   if (route.solo && route.repo) return <Solo id={route.repo} />;
   if (route.shell && route.repo) return <ShellSolo id={route.repo} />;
   if (route.section && route.repo) return <SectionSolo id={route.repo} section={route.section} />;
+  const nav = <ViewNav view={view} navigate={navigate} />;
   return (
     <div className="app">
-      <nav className="app-nav" aria-label="Canopy views">
+      {view === "library" || view === "ports" ? <>
+      <header className="app-nav">
         <Wordmark />
-        {([['git', 'Git cockpit'], ['library', 'Library'], ['ports', 'Ports']] as const).map(([key, label]) =>
-          <button type="button" key={key} aria-current={view === key ? "page" : undefined}
-            className={view === key ? "on" : ""} onClick={() => navigate(key)}>{label}</button>)}
-      </nav>
-      {view === "library" || view === "ports" ? <Library ports={view === "ports"} project={project} onRepo={showRepo} onPorts={() => navigate("ports")} /> : <>
-      <TopBar />
+        {nav}
+      </header>
+      <Library ports={view === "ports"} project={project} onRepo={showRepo} onPorts={() => navigate("ports")} />
+      </> : <>
+      <TopBar nav={nav} />
       <div
         className={sidebarOpen ? "body" : "body no-side"}
         style={{ "--sidebar-w": `${sidebarWidth}px` } as CSSProperties}
       >
-        {sidebarOpen && (
+        {narrow && drawerOpen && (
+          <>
+            <div className="drawer-back" aria-hidden="true" onClick={() => setDrawer(false)} />
+            <Sidebar drawer />
+          </>
+        )}
+        {!narrow && sidebarOpen && (
           <>
             <Sidebar />
             <Resizer

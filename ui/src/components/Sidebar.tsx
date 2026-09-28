@@ -92,8 +92,11 @@ function TreePick({ label, ids, total }: { label: string; ids: string[]; total: 
   );
 }
 
-export function Sidebar() {
+/** The repo tree: a column beside the cards, or with `drawer` the same tree
+ *  sliding over the page where there is no room for the column. */
+export function Sidebar({ drawer = false }: { drawer?: boolean }) {
   const repos = useStore(useShallow(visibleRepos));
+  const setDrawer = useStore((s) => s.setDrawer);
   const cards = useStore(useShallow(visibleCards));
   const many = useStore(multi);
   const sort = useStore((s) => s.settings.sort);
@@ -108,7 +111,21 @@ export function Sidebar() {
   );
 
   return (
-    <aside id="sidebar" className={selecting ? "sidebar selecting" : "sidebar"} aria-label="Repository tree">
+    <aside
+      id="sidebar"
+      className={`sidebar${drawer ? " drawer" : ""}${selecting ? " selecting" : ""}`}
+      aria-label="Repository tree"
+    >
+      {drawer && (
+        <div className="drawer-head">
+          <span className="eyebrow">repos · {repos.length}</span>
+          <button type="button" className="icon-btn" aria-label="Close the repo tree" title="Close (Esc)" onClick={() => setDrawer(false)}>
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" aria-hidden="true">
+              <path d="M6 6l12 12M18 6 6 18" />
+            </svg>
+          </button>
+        </div>
+      )}
       {groups.map(({ key, label, hint, repos: members }) => {
         const dirty = members.filter(
           (r) => (r.status?.files.length ?? 0) > 0,

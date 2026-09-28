@@ -1,4 +1,4 @@
-import { memo, useEffect, useMemo, useRef, useState } from "react";
+import { memo, useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import { useShallow } from "zustand/react/shallow";
 import { pickable } from "../flows";
 import { changedAt, groupRepos, newestEdit, sectionKey } from "../grouping";
@@ -104,7 +104,7 @@ function MachineStrip({ card, lead, selecting }: { card: Card; lead: string; sel
   );
 }
 
-const RepoCard = memo(function RepoCard({ repo }: { repo: Repo }) {
+const RepoCard = memo(function RepoCard({ repo, i }: { repo: Repo; i: number }) {
   const openRepo = useStore((s) => s.openRepo);
   const many = useStore(multi);
   const card = useStore((s) => (multi(s) ? cardOf(s, repo.id) : undefined));
@@ -181,6 +181,8 @@ const RepoCard = memo(function RepoCard({ repo }: { repo: Repo }) {
         }
       }}
       tabIndex={0}
+      // its place in the group, which sets how late it rises in
+      style={{ "--i": i } as CSSProperties}
       role={selecting ? "checkbox" : "button"}
       aria-checked={selecting ? picked : undefined}
       aria-disabled={selecting && !canPick ? true : undefined}
@@ -238,7 +240,10 @@ const RepoCard = memo(function RepoCard({ repo }: { repo: Repo }) {
           {repo.description}
         </p>
       )}
-      <div className="card-mid">
+      {/* one line: where the checkout stands on the left, what it holds
+          and when it last moved on the right; it wraps when a card carries
+          more chips than fit */}
+      <div className="card-meta">
         <span className="branch" title={st?.branch ?? forge?.branch}>
           {st?.branch ?? forge?.branch ?? "—"}
         </span>
@@ -253,28 +258,24 @@ const RepoCard = memo(function RepoCard({ repo }: { repo: Repo }) {
             {menuErr}
           </span>
         )}
-      </div>
-      <div className="card-bot">
-        {activeFlow ? <FlowChip flow={activeFlow} /> : run ? <RunChip run={run} /> : flow && <FlowChip flow={flow} />}
-        {forge ? (
-          <span className="clean" title={forge.clone}>
-            {forge.empty
-              ? "empty on the forge"
-              : forge.clonedAs
-                ? "cloned here"
-                : "not cloned here"}
+        <span className="card-state">
+          {activeFlow ? <FlowChip flow={activeFlow} /> : run ? <RunChip run={run} /> : flow && <FlowChip flow={flow} />}
+          {forge ? (
+            <span className="clean" title={forge.clone}>
+              {forge.empty
+                ? "empty on the forge"
+                : forge.clonedAs
+                  ? "cloned here"
+                  : "not cloned here"}
+            </span>
+          ) : st?.files.length ? (
+            <span className="changes">{st.files.length} changed</span>
+          ) : (
+            !repo.error && <span className="clean">clean</span>
+          )}
+          <span className="when" title={title}>
+            {ago(card ? cardChangedAt(card) : changedAt(repo))}
           </span>
-        ) : (
-          <span className={st?.files.length ? "changes" : "clean"}>
-            {st?.files.length
-              ? `${st.files.length} changed`
-              : repo.error
-                ? ""
-                : "clean"}
-          </span>
-        )}
-        <span className="when" title={title}>
-          {ago(card ? cardChangedAt(card) : changedAt(repo))}
         </span>
       </div>
       {history && overview?.available && (
@@ -352,8 +353,8 @@ export function RepoGrid() {
             </GroupHead>
             {open && (
               <div className="grid">
-                {members.map((r) => (
-                  <RepoCard key={r.id} repo={r} />
+                {members.map((r, i) => (
+                  <RepoCard key={r.id} repo={r} i={i} />
                 ))}
               </div>
             )}

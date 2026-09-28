@@ -13,6 +13,7 @@ import { PANEL_TERM_ROWS, adoptTerms, keepFront, loadFocusSize, loadTermTabs, ne
 import { clientId, identity } from "./client";
 export type { TermTab } from "./term";
 import { clamp, needsAttention } from "./util";
+import { beat } from "./live";
 import { ownRun, pickable, selectable } from "./flows";
 import { boardOrder, invertPick, pickWhere, rangeIds, setPick, togglePick } from "./select";
 import { appendFeed, describeEvent, type FeedEntry, type FeedSnapshot } from "./feed";
@@ -539,6 +540,9 @@ interface CanopyState {
   /** px width of the repo tree, dragged by the sidebar resizer */
   sidebarWidth: number;
   sidebarOpen: boolean;
+  /** the tree as a drawer over the page, below the width that has no room
+   *  for it beside the cards; this window's alone, never saved */
+  drawerOpen: boolean;
   /** folded sections in the tree and the grid, as sectionKey strings */
   collapsed: string[];
   /** folded panel sections (changes, shell, history, claude…) by repo id */
@@ -680,6 +684,7 @@ interface CanopyState {
   setWorkspaces: (ws: Workspace[]) => void;
   setSidebarWidth: (px: number) => void;
   toggleSidebar: () => void;
+  setDrawer: (open: boolean) => void;
   /** folds or unfolds one section; the tree and the grid fold together */
   toggleGroup: (key: string) => void;
   /** folds or unfolds one section (changes, shell, history, claude…) of one repo's panel */
@@ -1100,6 +1105,7 @@ export const useStore = create<CanopyState>((set, get) => ({
   soloWidth: layout.soloWidth,
   dockWidth: layout.dockWidth,
   sidebarOpen: layout.sidebarOpen,
+  drawerOpen: false,
   collapsed: layout.collapsed,
   closedSections: layout.closedSections,
   settings: loadSettings(),
@@ -1594,6 +1600,8 @@ export const useStore = create<CanopyState>((set, get) => ({
   showPanel: (id) =>
     set((s) => (s.panels.includes(id) ? { activePanel: id } : {})),
   openRepo: (id, mods) => {
+    // a repo picked from the drawer is where the eye goes next
+    if (get().drawerOpen) set({ drawerOpen: false });
     // A forge repo has no panel worth opening: there is no working tree, no
     // log to read here, nothing to run. Its page is the whole of it.
     const repo = get().repos.find((r) => r.id === id);
@@ -1632,6 +1640,7 @@ export const useStore = create<CanopyState>((set, get) => ({
     const b = from ?? before.home;
     // a backend hidden since this was sent is not on the page any more
     if (!isShown(before, b)) return;
+    beat();
     // workspaces and tailchan are the home backend's alone
     if ((ev.type === "chan" || ev.type === "workspaces") && b !== before.home) return;
     // The feed says what changed, so the lines come from the event against
@@ -1737,6 +1746,7 @@ export const useStore = create<CanopyState>((set, get) => ({
 
   setSidebarWidth: (px) => set({ sidebarWidth: clamp(px, SIDEBAR.min, SIDEBAR.max) }),
   toggleSidebar: () => set((s) => ({ sidebarOpen: !s.sidebarOpen })),
+  setDrawer: (drawerOpen) => set({ drawerOpen }),
   toggleGroup: (key) =>
     set((s) => ({
       collapsed: s.collapsed.includes(key)
