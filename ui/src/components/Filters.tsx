@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useShallow } from "zustand/react/shallow";
 import { countFacets, FILTER_INFO, REPO_FILTERS } from "../filters";
-import { activeFilterCount, scopedRepos, useStore } from "../store";
+import { activeFilterCount, archivedCount, scopedRepos, useStore } from "../store";
 import { useFitPop } from "../pop";
 
 /** Toggleable facet chips behind one pill. The pill counts what is lit so a
@@ -14,6 +14,9 @@ export function FilterMenu() {
   const toggleUser = useStore((s) => s.toggleUser);
   const clearFilters = useStore((s) => s.clearFilters);
   const active = useStore(activeFilterCount);
+  const archived = useStore(archivedCount);
+  const hideArchived = useStore((s) => s.settings.hideArchived);
+  const setSetting = useStore((s) => s.setSetting);
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
   useFitPop(ref, open);
@@ -95,6 +98,21 @@ export function FilterMenu() {
             <p className="settings-hint">
               Lit chips add up: a repo shows when it matches any of them.
             </p>
+          </section>
+          <section className="settings-row">
+            <h3 className="panel-label">archived</h3>
+            <div className="chips" role="group" aria-label="Archived repos">
+              <button
+                type="button"
+                className={hideArchived ? "chip on" : "chip"}
+                aria-pressed={hideArchived}
+                title="Leave the repos archived from a card's menu off the board"
+                onClick={() => setSetting("hideArchived", !hideArchived)}
+              >
+                hide archived
+                <span className="chip-n">{archived}</span>
+              </button>
+            </div>
           </section>
           {facets.users.length > 1 && (
             <section className="settings-row">

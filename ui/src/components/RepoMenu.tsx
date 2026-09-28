@@ -70,6 +70,8 @@ export function RepoMenu({
   const planFlow = useStore((s) => s.planFlow);
   const activeFlow = useStore((s) => activeFlowFor(s, repo.id));
   const showFlow = useStore((s) => s.showFlow);
+  const archiveRepo = useStore((s) => s.archiveRepo);
+  const hideArchived = useStore((s) => s.settings.hideArchived);
   const [open, setOpen] = useState(false);
   const [copied, setCopied] = useState(false);
   const [pos, setPos] = useState<{ top: number; left: number } | null>(null);
@@ -172,6 +174,17 @@ export function RepoMenu({
   };
 
   const forge = repo.forge;
+
+  const archive = async () => {
+    setOpen(false);
+    try {
+      await archiveRepo(repo.id, !repo.archived);
+    } catch (err) {
+      const msg = String(err instanceof Error ? err.message : err);
+      if (onError) onError(msg);
+      else console.error(msg);
+    }
+  };
 
   const copyClone = async () => {
     if (!forge || forge.empty) return;
@@ -517,6 +530,21 @@ export function RepoMenu({
               )}
               </>
             )}
+            <div className="menu-label">in canopy</div>
+            <button
+              type="button"
+              role="menuitem"
+              className="menu-item"
+              title={
+                repo.archived
+                  ? "Put this repo back on the board"
+                  : "Keep scanning this repo but leave it off the board; the filters menu can show archived repos again"
+              }
+              onClick={() => void archive()}
+            >
+              <span className="menu-text">{repo.archived ? "unarchive" : "archive"}</span>
+              <span className="menu-fact">{repo.archived ? "archived" : hideArchived ? "hides it" : "marks it"}</span>
+            </button>
           </div>,
           document.body,
         )}

@@ -156,6 +156,9 @@ export interface Repo {
   /** set only on a repo that lives on a forge and nowhere here */
   forge?: ForgeRepo;
   peers?: PeerState;
+  /** set on a repo the user archived in canopy: still scanned, but off the
+   *  board unless a browser asks to see archived repos */
+  archived?: true;
   error?: string;
 }
 
@@ -375,6 +378,8 @@ export interface CanopyConfig {
   agents: Record<string, AgentSettings>;
   /** how a repo's builds are made and run, keyed like agents */
   launchers: Record<string, LaunchSettings>;
+  /** the repos archived in canopy, by path like agents */
+  archived: string[];
   /** whether the server fetches the user's own local repos in the background
    *  (every REMOTE_REFRESH), so behind counts and remote tips stay current */
   fetch: boolean;

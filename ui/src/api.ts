@@ -605,6 +605,15 @@ export const api = {
     });
     return from(b, got, (q, r) => ({ ...qRepo(q, r), ...(r.take === undefined ? {} : { take: r.take }) }));
   },
+  /** archives a repo in canopy, or takes the mark off; answers the repo */
+  archive: async (id: string, archived: boolean) => {
+    const [b, plain] = on(id);
+    const got = await req<Repo>(b, `/api/repos/archive?${rq(plain)}`, {
+      method: "POST",
+      body: JSON.stringify({ archived }),
+    });
+    return from(b, got, qRepo);
+  },
   /** the backends this page may talk to, as its home backend's config names them */
   backends: () => req<{ self: string | null; backends: BackendEntry[] }>(homeName(), "/api/backends"),
   workspaces: () => req<Workspace[]>(homeName(), "/api/workspaces"),

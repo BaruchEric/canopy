@@ -12,6 +12,7 @@ import {
   removeWorkspace,
   saveConfig,
   setAgent,
+  setArchived,
   setKeepShells,
   slugify,
   uniqueId,
@@ -140,6 +141,16 @@ describe("config store", () => {
     expect(Object.keys(agents)).toEqual(["ssh://wsl/home/me/z"]);
     cfg = await loadConfig();
     expect(cfg.agents["/Users/me/dev/x"]).toBeUndefined();
+  });
+
+  test("archived repos persist by path, each once", async () => {
+    expect((await loadConfig()).archived).toEqual([]);
+    expect(await setArchived("/Users/me/dev/x", true)).toEqual(["/Users/me/dev/x"]);
+    expect(await setArchived("/Users/me/dev/x", true)).toEqual(["/Users/me/dev/x"]);
+    expect(await setArchived("ssh://wsl/home/me/z", true)).toEqual(["/Users/me/dev/x", "ssh://wsl/home/me/z"]);
+    expect(await setArchived("/Users/me/dev/x", false)).toEqual(["ssh://wsl/home/me/z"]);
+    expect((await loadConfig()).archived).toEqual(["ssh://wsl/home/me/z"]);
+    await setArchived("ssh://wsl/home/me/z", false);
   });
 
   test("the keep switch waits its turn with every other setting", async () => {

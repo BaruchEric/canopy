@@ -149,7 +149,7 @@ const RepoCard = memo(function RepoCard({ repo }: { repo: Repo }) {
       : "";
   return (
     <article
-      className={`card s-${state}${pulse ? " pulse" : ""}${live}${selecting && picked ? " picked" : ""}${selecting && !canPick ? " unpickable" : ""}${away ? " away" : ""}`}
+      className={`card s-${state}${pulse ? " pulse" : ""}${live}${selecting && picked ? " picked" : ""}${selecting && !canPick ? " unpickable" : ""}${away ? " away" : ""}${repo.archived ? " archived" : ""}`}
       onClick={(e) => {
         if (selecting) {
           toggleSelected(repo.id, e.shiftKey);
@@ -205,6 +205,11 @@ const RepoCard = memo(function RepoCard({ repo }: { repo: Repo }) {
             title={`${forge.slug} on the forge${forge.private ? ", private" : ""}`}
           >
             forgejo
+          </span>
+        )}
+        {repo.archived && (
+          <span className="host-tag archived" title="Archived in canopy; unarchive it from the ⋯ menu">
+            archived
           </span>
         )}
         {repo.link && <RepoLink url={repo.link} name={repo.name} />}

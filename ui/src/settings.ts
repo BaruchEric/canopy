@@ -90,6 +90,8 @@ export interface Settings {
   density: Density;
   /** which of a forge's repos are worth a card */
   forge: ForgeView;
+  /** leaves the repos archived in canopy off the board */
+  hideArchived: boolean;
   /** the columns of a panel's changes list, left to right */
   fileCols: FileCol[];
   /** how that list is ordered */
@@ -131,6 +133,7 @@ export const DEFAULT_SETTINGS: Settings = {
   theme: "system",
   density: "cozy",
   forge: "missing",
+  hideArchived: true,
   fileCols: [...FILE_COLS],
   fileSort: { col: "time", dir: "desc" },
   fileView: "list",
@@ -233,6 +236,7 @@ export function loadSettings(): Settings {
       theme: pick(THEMES, saved.theme, DEFAULT_SETTINGS.theme),
       density: pick(DENSITIES, saved.density, DEFAULT_SETTINGS.density),
       forge: pick(FORGE_VIEWS, saved.forge, DEFAULT_SETTINGS.forge),
+      hideArchived: typeof saved.hideArchived === "boolean" ? saved.hideArchived : DEFAULT_SETTINGS.hideArchived,
       fileCols: colOrder(saved.fileCols),
       fileSort: fileSort(saved.fileSort),
       fileView: pick(FILE_VIEWS, saved.fileView, DEFAULT_SETTINGS.fileView),

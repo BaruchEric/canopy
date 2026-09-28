@@ -4597,6 +4597,15 @@ button.machine:hover {
   opacity: 0.6;
 }
 
+/* an archived repo, on the board only while the filters show archived ones */
+.card.archived {
+  opacity: 0.6;
+}
+.host-tag.archived {
+  border-style: dashed;
+  color: var(--ink-dim);
+}
+
 /* the tree row's machines, after everything else */
 .tree-machines {
   margin-left: auto;

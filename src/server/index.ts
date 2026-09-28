@@ -22,6 +22,7 @@ import {
   type DiffTarget,
 } from "../core/git";
 import { githubLogin, listRemotes, ownRemotes, pushAccess } from "../core/access";
+import { linkArchived } from "../core/archive";
 import { linkPulls, parsePullCounts, PULLS_QUERY } from "../core/github";
 import {
   HistoryError,
@@ -70,6 +71,7 @@ import {
   removeSource,
   removeWorkspace,
   setAgent,
+  setArchived,
   setKeepShells,
   setLaunch,
   upsertWorkspace,
@@ -176,6 +178,9 @@ interface ServerState {
   chan: ChanHub;
   /** open pull request counts by GitHub slug, from the last activity pass */
   pulls: Map<string, PullCount>;
+  /** the paths of the repos archived in canopy, kept in step with the
+   *  config so a rebuild, which cannot wait on a read, can mark them */
+  archived: Set<string>;
   /** the names of each repo's own remotes, by path, settled once per repo:
    *  what the background fetch pulls and where a tip may come from */
   own: Map<string, string[]>;
@@ -971,7 +976,10 @@ function rebuildResult(state: ServerState, repos: Repo[]): void {
     // source is in the same list, so it is settled on the way out; the pull
     // request counts and the peer states ride along from the last activity
     // pass and the last peer pass.
-    repos: linkPeers(linkPulls(linkForgeClones([...repos].sort(bySource(order))), state.pulls), state.peerStates),
+    repos: linkArchived(
+      linkPeers(linkPulls(linkForgeClones([...repos].sort(bySource(order))), state.pulls), state.peerStates),
+      state.archived,
+    ),
     scannedAt: Date.now(),
     backend: backendCaps(),
   };
@@ -1947,6 +1955,21 @@ async function handleApi(
   if (m) {
     const repo = repoById(state, url.searchParams.get("id") ?? "");
     const action = m[1];
+    // Archiving is canopy's own mark, not git's, so a forge-only card can
+    // take it too; it comes ahead of the forge refusal below.
+    if (method === "POST" && action === "archive") {
+      const body = (await req.json().catch(() => null)) as { archived?: unknown } | null;
+      if (typeof body?.archived !== "boolean") throw new HttpError(400, "archived must be true or false");
+      state.archived = new Set(await setArchived(repo.path, body.archived));
+      // Re-found after the write: a rescan may have replaced the array.
+      const idx = state.result.repos.findIndex((r) => r.id === repo.id);
+      const now = state.result.repos[idx];
+      if (!now) throw new HttpError(404, `unknown repo: ${repo.id}`);
+      const [marked] = linkArchived([now], state.archived);
+      state.result.repos[idx] = marked!;
+      broadcast(state, { type: "repo", repo: marked! });
+      return json(marked);
+    }
     // A forge repo is a listing, not a checkout: git has nothing to run
     // against and no folder to open. Where the clone is known, say so — the
     // card next to it is the one that answers.
@@ -2397,6 +2420,7 @@ export async function startServer(opts: {
       isFlowRun: (runId) => state.flows.list().some((f) => f.steps.some((st) => st.runId === runId)),
     }),
     pulls: new Map(),
+    archived: new Set(cfg.archived),
     own: new Map(),
     // Seeded from settings at startup, not []: fetchLocal can run before
     // the first peer pass does (refreshActivity fetches, then peers), and

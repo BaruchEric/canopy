@@ -31,6 +31,7 @@ const defaults = (): CanopyConfig => ({
   historyBin: null,
   agents: {},
   launchers: {},
+  archived: [],
   fetch: true,
   keepShells: false,
   tailchanNotify: false,
@@ -109,6 +110,9 @@ function normalize(parsed: Partial<CanopyConfig>): CanopyConfig {
     ),
     agents: normalizeAgents(cfg.agents),
     launchers: normalizeLaunchers(cfg.launchers),
+    archived: Array.isArray(cfg.archived)
+      ? cfg.archived.filter((p, i, all): p is string => typeof p === "string" && p !== "" && all.indexOf(p) === i)
+      : [],
     fetch: typeof cfg.fetch === "boolean" ? cfg.fetch : base.fetch,
     keepShells: typeof cfg.keepShells === "boolean" ? cfg.keepShells : base.keepShells,
     tailchanNotify: typeof cfg.tailchanNotify === "boolean" ? cfg.tailchanNotify : base.tailchanNotify,
@@ -253,6 +257,17 @@ export async function setAgent(
     if (isDefaultAgent(a)) delete cfg.agents[path];
     else cfg.agents[path] = a;
     return cfg.agents;
+  });
+}
+
+/* ---------- archived repos ---------- */
+
+/** Archives or restores a repo by path. Returns every archived path. */
+export async function setArchived(path: string, on: boolean): Promise<string[]> {
+  return withConfig((cfg) => {
+    const rest = cfg.archived.filter((p) => p !== path);
+    cfg.archived = on ? [...rest, path] : rest;
+    return cfg.archived;
   });
 }
 

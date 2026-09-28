@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import {
   PANEL_TERM,
   agentFor,
+  archivedCount,
   cardOf,
   changed,
   closedIn,
@@ -746,6 +747,18 @@ describe("cards over several backends", () => {
     now.forEach((r, i) => expect(r).toBe(old[i] as Repo));
     useStore.setState({ filter: "", filters: ["unpushed"] });
     expect(visibleRepos(useStore.getState()).map((r) => r.id)).toEqual(["y"]);
+  });
+
+  test("archived repos stay off the board until the setting shows them", () => {
+    const repos = [repo("x"), repo("old", { archived: true })];
+    useStore.setState({ repos });
+    const ids = () => visibleRepos(useStore.getState()).map((r) => r.id);
+    expect(useStore.getState().settings.hideArchived).toBe(true);
+    expect(ids()).toEqual(["x"]);
+    expect(archivedCount(useStore.getState())).toBe(1);
+    useStore.setState((s) => ({ settings: { ...s.settings, hideArchived: false } }));
+    expect(ids()).toEqual(["x", "old"]);
+    expect(archivedCount(useStore.getState())).toBe(1);
   });
 
   test("switchCheckout swaps the panel in place and leads the card with it", () => {

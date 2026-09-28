@@ -739,6 +739,8 @@ interface CanopyState {
   /** opens the repo's agent settings */
   editAgent: (repoId: string) => void;
   setAgent: (repoId: string, settings: AgentSettings) => Promise<void>;
+  /** archives a repo in canopy, or brings it back */
+  archiveRepo: (repoId: string, archived: boolean) => Promise<void>;
   /** opens the repo's launch settings */
   editLaunch: (repoId: string) => void;
   setLaunch: (repoId: string, settings: LaunchSettings) => Promise<void>;
@@ -1979,6 +1981,10 @@ export const useStore = create<CanopyState>((set, get) => ({
     const agents = await api.setAgent(repoId, settings);
     set((s) => ({ agents: { ...s.agents, [backendOf(repoId)]: agents } }));
   },
+  archiveRepo: async (repoId, archived) => {
+    const repo = await api.archive(repoId, archived);
+    get().applyEvent({ type: "repo", repo }, backendOf(repoId));
+  },
   editLaunch: (repoId) => set({ sheet: { kind: "launch", repoId } }),
   setLaunch: async (repoId, settings) => {
     const launchers = await api.setLaunch(repoId, settings);
@@ -2275,11 +2281,11 @@ export function jobsFor(s: CanopyState, repoId: string): Job[] {
     .sort((a, b) => b.startedAt - a.startedAt);
 }
 
-/** repos in the active workspace, before any filter. A forge repo that is
- *  already cloned here is the same repo as the card next to it, so unless
- *  the setting says otherwise only the ones missing locally get one. A
- *  workspace is the home backend's, so it holds only home's checkouts. */
-export function scopedRepos(s: CanopyState): Repo[] {
+/** repos in the active workspace, archived ones included. A forge repo
+ *  that is already cloned here is the same repo as the card next to it, so
+ *  unless the setting says otherwise only the ones missing locally get one.
+ *  A workspace is the home backend's, so it holds only home's checkouts. */
+function inScope(s: CanopyState): Repo[] {
   const all =
     s.settings.forge === "all"
       ? s.repos
@@ -2287,6 +2293,18 @@ export function scopedRepos(s: CanopyState): Repo[] {
   if (!s.activeWs) return all;
   const ws = s.workspaces.find((w) => w.name === s.activeWs);
   return ws ? all.filter((r) => isHome(r.id) && ws.repos.includes(r.path)) : all;
+}
+
+/** repos in the active workspace, before any filter, less the archived
+ *  ones unless the setting shows them */
+export function scopedRepos(s: CanopyState): Repo[] {
+  const all = inScope(s);
+  return s.settings.hideArchived ? all.filter((r) => !r.archived) : all;
+}
+
+/** how many repos in the workspace are archived, shown or not */
+export function archivedCount(s: CanopyState): number {
+  return inScope(s).filter((r) => r.archived).length;
 }
 
 /** `next` itself, or `prev` when it holds the same things in the same
@@ -2298,7 +2316,7 @@ function same<T>(prev: readonly T[] | null, next: T[]): T[] {
 /* The board's cards, memoized on what they are made of. One store per page,
    so one slot per selector; a card whose checkouts did not move is the same
    object as before, so a repo event re-renders one card, not all of them. */
-let cardsIn: { repos: Repo[]; forge: unknown; ws: string | null; wss: unknown; order: string[] } | null = null;
+let cardsIn: { repos: Repo[]; forge: unknown; archived: boolean; ws: string | null; wss: unknown; order: string[] } | null = null;
 let cardsOut: RepoCard[] = [];
 let cardsByKey = new Map<string, RepoCard>();
 let cardIndex = new Map<string, RepoCard>();
@@ -2307,7 +2325,15 @@ let cardIndex = new Map<string, RepoCard>();
  *  backend. With one backend, one card per repo in scan order. */
 export function allCards(s: CanopyState): RepoCard[] {
   const c = cardsIn;
-  if (c && c.repos === s.repos && c.forge === s.settings.forge && c.ws === s.activeWs && c.wss === s.workspaces && c.order === s.backendOrder)
+  if (
+    c &&
+    c.repos === s.repos &&
+    c.forge === s.settings.forge &&
+    c.archived === s.settings.hideArchived &&
+    c.ws === s.activeWs &&
+    c.wss === s.workspaces &&
+    c.order === s.backendOrder
+  )
     return cardsOut;
   const reg = registry();
   const fresh = joinRepos(scopedRepos(s), s.backendOrder, (id) => split(reg, id));
@@ -2319,7 +2345,7 @@ export function allCards(s: CanopyState): RepoCard[] {
     byKey.set(it.key, it);
     return it;
   });
-  cardsIn = { repos: s.repos, forge: s.settings.forge, ws: s.activeWs, wss: s.workspaces, order: s.backendOrder };
+  cardsIn = { repos: s.repos, forge: s.settings.forge, archived: s.settings.hideArchived, ws: s.activeWs, wss: s.workspaces, order: s.backendOrder };
   cardsOut = same(cardsOut, out);
   cardsByKey = byKey;
   cardIndex = new Map(cardsOut.flatMap((card) => card.checkouts.map((r) => [r.id, card] as const)));

@@ -42,6 +42,10 @@ describe("loadSettings", () => {
     store.set("canopy.settings", "{}");
     expect(loadSettings().fileSort).toEqual({ col: "time", dir: "desc" });
     expect(loadSettings().fileView).toBe("list");
+    // a blob saved before the setting existed hides archived repos
+    expect(loadSettings().hideArchived).toBe(true);
+    store.set("canopy.settings", JSON.stringify({ hideArchived: false }));
+    expect(loadSettings().hideArchived).toBe(false);
     delete (globalThis as { localStorage?: unknown }).localStorage;
   });
   test("zoom, section order and hidden sections survive a reload, repaired", () => {
