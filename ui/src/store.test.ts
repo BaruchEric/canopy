@@ -750,15 +750,15 @@ describe("cards over several backends", () => {
   });
 
   test("archived repos stay off the board until the setting shows them", () => {
-    const repos = [repo("x"), repo("old", { archived: true })];
+    const repos = [repo("x"), repo("old", { archived: "canopy" }), repo("gh", { archived: "github" })];
     useStore.setState({ repos });
     const ids = () => visibleRepos(useStore.getState()).map((r) => r.id);
     expect(useStore.getState().settings.hideArchived).toBe(true);
     expect(ids()).toEqual(["x"]);
-    expect(archivedCount(useStore.getState())).toBe(1);
+    expect(archivedCount(useStore.getState())).toBe(2);
     useStore.setState((s) => ({ settings: { ...s.settings, hideArchived: false } }));
-    expect(ids()).toEqual(["x", "old"]);
-    expect(archivedCount(useStore.getState())).toBe(1);
+    expect(ids()).toEqual(["x", "old", "gh"]);
+    expect(archivedCount(useStore.getState())).toBe(2);
   });
 
   test("switchCheckout swaps the panel in place and leads the card with it", () => {

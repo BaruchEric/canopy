@@ -44,12 +44,12 @@ describe("archiving a repo", () => {
     const res = await archive("old", { archived: true });
     expect(res.status).toBe(200);
     const marked = (await res.json()) as Repo;
-    expect(marked.archived).toBe(true);
+    expect(marked.archived).toBe("canopy");
     expect((await loadConfig()).archived).toEqual([marked.path]);
 
     await fetch(url("/api/rescan"), { method: "POST" });
     const after = await tree();
-    expect(after.find((r) => r.id === "old")?.archived).toBe(true);
+    expect(after.find((r) => r.id === "old")?.archived).toBe("canopy");
     expect(after.find((r) => r.id === "app")?.archived).toBeUndefined();
 
     const back = (await (await archive("old", { archived: false })).json()) as Repo;

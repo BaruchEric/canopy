@@ -1207,13 +1207,14 @@ async function refreshPulls(state: ServerState): Promise<void> {
   }
   state.pulls = parsePullCounts(body);
   const before = state.result.repos;
-  const after = linkPulls(before, state.pulls);
+  const after = linkArchived(linkPulls(before, state.pulls), state.archived);
   state.result.repos = after;
   after.forEach((repo, i) => {
     // A count first arriving as zero is what the browser already assumes;
     // announcing it would pulse most of the board on every start.
     const was = before[i]?.pulls?.open ?? 0;
-    if (repo !== before[i] && (was > 0 || (repo.pulls?.open ?? 0) > 0)) broadcast(state, { type: "repo", repo });
+    const counted = was > 0 || (repo.pulls?.open ?? 0) > 0;
+    if (repo !== before[i] && (counted || repo.archived !== before[i]?.archived)) broadcast(state, { type: "repo", repo });
   });
 }
 

@@ -60,6 +60,8 @@ export interface PullCount {
   open: number;
   /** the pull request list on GitHub */
   url: string;
+  /** GitHub has the repo archived (read-only) */
+  archived?: true;
 }
 
 /* ---------- sources: the folders canopy scans ---------- */
@@ -156,9 +158,10 @@ export interface Repo {
   /** set only on a repo that lives on a forge and nowhere here */
   forge?: ForgeRepo;
   peers?: PeerState;
-  /** set on a repo the user archived in canopy: still scanned, but off the
-   *  board unless a browser asks to see archived repos */
-  archived?: true;
+  /** who archived the repo: the user in canopy, or its owner on GitHub,
+   *  canopy's mark winning when both did. Still scanned, but off the board
+   *  unless a browser asks to see archived repos. */
+  archived?: "canopy" | "github";
   error?: string;
 }
 

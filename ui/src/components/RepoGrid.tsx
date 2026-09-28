@@ -121,7 +121,15 @@ const RepoCard = memo(function RepoCard({ repo }: { repo: Repo }) {
   const toggleSelected = useStore((s) => s.toggleSelected);
   const canPick = pickable(repo);
   const [pulse, setPulse] = useState(false);
+  // what the ⋯ menu last failed at, shown on the card for a few seconds
+  const [menuErr, setMenuErr] = useState<string | null>(null);
   const first = useRef(true);
+
+  useEffect(() => {
+    if (!menuErr) return;
+    const t = setTimeout(() => setMenuErr(null), 8000);
+    return () => clearTimeout(t);
+  }, [menuErr]);
 
   useEffect(() => {
     if (first.current) {
@@ -208,13 +216,20 @@ const RepoCard = memo(function RepoCard({ repo }: { repo: Repo }) {
           </span>
         )}
         {repo.archived && (
-          <span className="host-tag archived" title="Archived in canopy; unarchive it from the ⋯ menu">
+          <span
+            className="host-tag archived"
+            title={
+              repo.archived === "github"
+                ? "Archived on GitHub, read-only there"
+                : "Archived in canopy; unarchive it from the ⋯ menu"
+            }
+          >
             archived
           </span>
         )}
         {repo.link && <RepoLink url={repo.link} name={repo.name} />}
         <span className="card-more">
-          <RepoMenu repo={repo} />
+          <RepoMenu repo={repo} onError={setMenuErr} />
         </span>
       </div>
       {many && card && <MachineStrip card={card} lead={repo.id} selecting={selecting} />}
@@ -233,6 +248,11 @@ const RepoCard = memo(function RepoCard({ repo }: { repo: Repo }) {
         <PeerChips st={repo.peers} />
         {repo.pulls && <Pulls pulls={repo.pulls} name={repo.name} />}
         {repo.error && <span className="err">not a readable repo</span>}
+        {menuErr && (
+          <span className="err" role="alert" title={menuErr}>
+            {menuErr}
+          </span>
+        )}
       </div>
       <div className="card-bot">
         {activeFlow ? <FlowChip flow={activeFlow} /> : run ? <RunChip run={run} /> : flow && <FlowChip flow={flow} />}

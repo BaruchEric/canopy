@@ -178,7 +178,7 @@ export function RepoMenu({
   const archive = async () => {
     setOpen(false);
     try {
-      await archiveRepo(repo.id, !repo.archived);
+      await archiveRepo(repo.id, repo.archived !== "canopy");
     } catch (err) {
       const msg = String(err instanceof Error ? err.message : err);
       if (onError) onError(msg);
@@ -536,14 +536,24 @@ export function RepoMenu({
               role="menuitem"
               className="menu-item"
               title={
-                repo.archived
+                repo.archived === "canopy"
                   ? "Put this repo back on the board"
-                  : "Keep scanning this repo but leave it off the board; the filters menu can show archived repos again"
+                  : repo.archived === "github"
+                    ? "GitHub has this repo archived, which already hides it; this marks it in canopy as well"
+                    : "Keep scanning this repo but leave it off the board; the filters menu can show archived repos again"
               }
               onClick={() => void archive()}
             >
-              <span className="menu-text">{repo.archived ? "unarchive" : "archive"}</span>
-              <span className="menu-fact">{repo.archived ? "archived" : hideArchived ? "hides it" : "marks it"}</span>
+              <span className="menu-text">{repo.archived === "canopy" ? "unarchive" : "archive"}</span>
+              <span className="menu-fact">
+                {repo.archived === "canopy"
+                  ? "archived"
+                  : repo.archived === "github"
+                    ? "archived on GitHub"
+                    : hideArchived
+                      ? "hides it"
+                      : "marks it"}
+              </span>
             </button>
           </div>,
           document.body,

@@ -45,7 +45,11 @@ const TreeItem = memo(function TreeItem({ repo }: { repo: Repo }) {
       <span className="glyph">{GLYPH[state]}</span>
       <span className="tree-name">{repo.name}</span>
       {repo.host && <span className="host-tag">{repo.host}</span>}
-      {repo.archived && <span className="host-tag archived">archived</span>}
+      {repo.archived && (
+        <span className="host-tag archived" title={repo.archived === "github" ? "archived on GitHub" : "archived in canopy"}>
+          archived
+        </span>
+      )}
       {(repo.status?.files.length ?? 0) > 0 && (
         <span className="tree-n">{repo.status?.files.length}</span>
       )}

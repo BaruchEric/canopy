@@ -2,7 +2,8 @@ import { isGitHub, parseRemote } from "./access";
 import type { PullCount, Repo } from "./types";
 
 /** Every repo the gh login owns, collaborates on or reaches through an org,
- *  with its open pull request count: one query, paged by gh. Repos the login
+ *  with its open pull request count and whether it is archived: one query,
+ *  paged by gh. Repos the login
  *  cannot see are not asked about, so a third-party clone gets no count. */
 export const PULLS_QUERY = `query($endCursor: String) {
   viewer {
@@ -10,7 +11,7 @@ export const PULLS_QUERY = `query($endCursor: String) {
       affiliations: [OWNER, COLLABORATOR, ORGANIZATION_MEMBER],
       ownerAffiliations: [OWNER, COLLABORATOR, ORGANIZATION_MEMBER]) {
       pageInfo { hasNextPage endCursor }
-      nodes { nameWithOwner url pullRequests(states: OPEN) { totalCount } }
+      nodes { nameWithOwner url isArchived pullRequests(states: OPEN) { totalCount } }
     }
   }
 }`;
@@ -33,10 +34,10 @@ export function parsePullCounts(body: unknown): Map<string, PullCount> {
     if (!Array.isArray(nodes)) continue;
     for (const node of nodes) {
       if (!node || typeof node !== "object") continue;
-      const n = node as { nameWithOwner?: unknown; url?: unknown; pullRequests?: { totalCount?: unknown } };
+      const n = node as { nameWithOwner?: unknown; url?: unknown; isArchived?: unknown; pullRequests?: { totalCount?: unknown } };
       const open = n.pullRequests?.totalCount;
       if (typeof n.nameWithOwner !== "string" || typeof n.url !== "string" || typeof open !== "number") continue;
-      out.set(n.nameWithOwner.toLowerCase(), { open, url: `${n.url}/pulls` });
+      out.set(n.nameWithOwner.toLowerCase(), { open, url: `${n.url}/pulls`, ...(n.isArchived === true ? { archived: true as const } : {}) });
     }
   }
   return out;
@@ -58,7 +59,7 @@ export function pullsFor(repo: Pick<Repo, "remotes">, counts: Map<string, PullCo
 export function linkPulls(repos: Repo[], counts: Map<string, PullCount>): Repo[] {
   return repos.map((r) => {
     const pulls = r.forge ? undefined : pullsFor(r, counts);
-    if (pulls?.open === r.pulls?.open && pulls?.url === r.pulls?.url) return r;
+    if (pulls?.open === r.pulls?.open && pulls?.url === r.pulls?.url && pulls?.archived === r.pulls?.archived) return r;
     if (!pulls) {
       const { pulls: _gone, ...rest } = r;
       return rest;

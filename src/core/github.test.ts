@@ -19,6 +19,11 @@ describe("parsePullCounts", () => {
       ["org/thing", { open: 0, url: "https://github.com/Org/Thing/pulls" }],
     ]);
   });
+  test("an archived repo carries the flag; a live one does not", () => {
+    const counts = parsePullCounts(page([{ ...node("a/old", 0), isArchived: true }, { ...node("a/live", 1), isArchived: false }]));
+    expect(counts.get("a/old")).toEqual({ open: 0, url: "https://github.com/a/old/pulls", archived: true });
+    expect(counts.get("a/live")).toEqual({ open: 1, url: "https://github.com/a/live/pulls" });
+  });
   test("one page comes as one object; junk nodes and junk bodies are skipped", () => {
     expect(parsePullCounts(page([node("a/b", 2), null, { nameWithOwner: "x/y" }])).size).toBe(1);
     expect(parsePullCounts({ errors: [{ message: "bad" }] }).size).toBe(0);
