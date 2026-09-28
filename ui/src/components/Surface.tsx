@@ -15,7 +15,10 @@ import {
   zoomWord,
   ZOOM_MAX,
   ZOOM_MIN,
+  termFontIn,
+  withTermFont,
   type SectionKey,
+  type ShellSpot,
   type SurfaceMode,
   type ZoomKind,
 } from "../surface";
@@ -63,6 +66,7 @@ export function useZoom(kind: ZoomKind, front = false): { zoom: number; entry: G
       less: zoom > ZOOM_MIN ? () => set(zoomStep(zoom, -1)) : null,
       more: zoom < ZOOM_MAX ? () => set(zoomStep(zoom, 1)) : null,
       reset: zoom !== home ? () => set(home) : null,
+      home: zoomWord(home),
     },
   };
 }
@@ -74,19 +78,33 @@ export const PanelZoom = createContext(1);
 /** css `zoom` for a surface, or nothing at 1 */
 export const zoomStyle = (z: number): CSSProperties => (z === 1 ? {} : { zoom: z });
 
-/** The shells' zoom, which is the terminal's font size: css zoom on an
- *  xterm puts its mouse and selection off. It is the size a pinch sets. */
-export function useShellZoom(): GearEntry {
-  const font = useStore((s) => s.settings.termFont);
-  const setSetting = useStore((s) => s.setSetting);
-  const set = (px: number) => setSetting("termFont", Math.min(TERM_FONT_MAX, Math.max(TERM_FONT_MIN, px)));
+/** Where the shells under it show, for their text size; in place outside any set. */
+export const ShellSpotHere = createContext<ShellSpot>("place");
+
+/** Sets the shells' text size at `spot`. Away from in place, the in-place
+ *  size clears the spot's own, so it follows in place again. */
+export function saveTermFont(spot: ShellSpot, px: number): void {
+  const { settings, setSetting } = useStore.getState();
+  const size = Math.min(TERM_FONT_MAX, Math.max(TERM_FONT_MIN, px));
+  if (spot === "place") setSetting("termFont", size);
+  else setSetting("termFonts", withTermFont(settings.termFonts, settings.termFont, spot, size));
+}
+
+/** The shells' zoom at `spot`, which is the terminal's font size: css zoom
+ *  on an xterm puts its mouse and selection off. It is the size a pinch
+ *  sets. Away from in place, reset goes back to following that size. */
+export function useShellZoom(spot: ShellSpot): GearEntry {
+  const font = useStore((s) => termFontIn(s.settings.termFont, s.settings.termFonts, spot));
+  const home = useStore((s) => (spot === "place" ? TERM_FONT.size : s.settings.termFont));
+  const set = (px: number) => saveTermFont(spot, px);
   return {
     type: "zoom",
     label: "text",
     value: `${font}px`,
     less: font > TERM_FONT_MIN ? () => set(Math.ceil(font) - 1) : null,
     more: font < TERM_FONT_MAX ? () => set(Math.floor(font) + 1) : null,
-    reset: font !== TERM_FONT.size ? () => set(TERM_FONT.size) : null,
+    reset: font !== home ? () => set(home) : null,
+    home: spot === "place" ? `${home}px` : `${home}px, the size in place`,
   };
 }
 

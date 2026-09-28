@@ -4,7 +4,7 @@ import { createPortal } from "react-dom";
 
 /** One line of a gear's menu. */
 export type GearEntry =
-  /** a zoom: less, the level, more, and back to 100% */
+  /** a zoom: less, the level, more, and back to `home` (100% when none) */
   | {
       type: "zoom";
       label: string;
@@ -12,6 +12,7 @@ export type GearEntry =
       less: (() => void) | null;
       more: (() => void) | null;
       reset: (() => void) | null;
+      home?: string;
     }
   /** something to do. `on` marks the current choice of a set; `stay` keeps
    *  the menu open, and whatever `run` resolves to shows at its foot, which
@@ -229,7 +230,7 @@ function Entry({ entry, act }: { entry: GearEntry; act: (fn: () => unknown, stay
             role="menuitem"
             className="gear-zoom-value"
             title="Back to 100%"
-            aria-label={`Zoom ${entry.value}, back to 100%`}
+            aria-label={`Zoom ${entry.value}, back to ${entry.home ?? "100%"}`}
             disabled={!entry.reset}
             onClick={() => entry.reset && act(entry.reset, true)}
           >

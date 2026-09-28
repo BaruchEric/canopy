@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useContext, useEffect, useRef, useState } from "react";
 import type { CSSProperties, KeyboardEvent, MouseEvent, PointerEvent } from "react";
 import { Terminal, type ITheme } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
@@ -7,10 +7,22 @@ import { api, reachable, socketUrl as backendSocket } from "../api";
 import { copyText } from "../share";
 import { backendOf, plainOf, qual } from "../registry";
 import { groveUrl, nameShellHere, parseRoute, popShell } from "../routes";
-import { PANEL_TERM, TERM, closedIn, connOf, idLabel, idText, multi, panelTermHeightFor, useStore, type TermTab } from "../store";
+import {
+  PANEL_TERM,
+  TERM,
+  closedIn,
+  connOf,
+  dockless,
+  idLabel,
+  idText,
+  multi,
+  panelTermHeightFor,
+  useStore,
+  type TermTab,
+} from "../store";
 import { IdLabel, WaitingFor, useWaitingFor } from "./IdLabel";
 import { TERM_FONT, otherShells, termId, viewKey } from "../term";
-import { flipMode, tidyLines, type SurfaceMode } from "../surface";
+import { SPOT_WORD, flipMode, shellSpot, termFontIn, tidyLines, type ShellSpot, type SurfaceMode } from "../surface";
 import { SHELL_TARGETS, type ShellTarget } from "../settings";
 import { Gear, type GearEntry } from "./Gear";
 import {
@@ -19,7 +31,9 @@ import {
   focusVars,
   useLeaveOnEscape,
   modeEntries,
+  saveTermFont,
   shareEntries,
+  ShellSpotHere,
   useShellZoom,
 } from "./Surface";
 import { clamp } from "../util";
@@ -165,14 +179,16 @@ export function TermView({
   const fitRef = useRef<FitAddon | null>(null);
   const theme = useStore((s) => s.settings.theme);
   const endTerm = useStore((s) => s.endTerm);
-  const fontSize = useStore((s) => s.settings.termFont);
-  const setSetting = useStore((s) => s.setSetting);
+  // the text size is where the shell shows: in place, filling, in front
+  // or in a window of its own each keep theirs
+  const spot = useContext(ShellSpotHere);
+  const fontSize = useStore((s) => termFontIn(s.settings.termFont, s.settings.termFonts, spot));
   // read when the terminal is made and when a pinch ends, neither of which
   // should remake the terminal
   const fontRef = useRef(fontSize);
   fontRef.current = fontSize;
-  const saveFont = useRef((px: number) => setSetting("termFont", px));
-  saveFont.current = (px: number) => setSetting("termFont", px);
+  const saveFont = useRef((px: number) => saveTermFont(spot, px));
+  saveFont.current = (px: number) => saveTermFont(spot, px);
   const exitRef = useRef(onExit);
   exitRef.current = onExit;
   // the touch key bar's sticky Ctrl/Alt, read by the phone keyboard's input
@@ -574,8 +590,9 @@ export function TermView({
     termRef.current?.focus();
   }, [active]);
 
-  // A pinch in any shell sizes them all; one hidden now refits when shown,
-  // since showing it changes its box.
+  // A pinch in any shell sizes every shell in the same spot, and moving the
+  // shell to another spot takes that one's size; one hidden now refits when
+  // shown, since showing it changes its box.
   useEffect(() => {
     const term = termRef.current;
     if (!term || term.options.fontSize === fontSize) return;
@@ -1011,6 +1028,10 @@ function FrontOthers({ set }: { set: string }) {
   );
 }
 
+/** the gear's words for where a set's shells show */
+const spotWord = (spot: ShellSpot, what: string): string =>
+  spot === "full" ? `filling the ${what}` : SPOT_WORD[spot];
+
 const SHELL_WORD: Record<ShellTarget, string> = {
   auto: "the panel when open, else the strip",
   panel: "the panel",
@@ -1019,7 +1040,8 @@ const SHELL_WORD: Record<ShellTarget, string> = {
   window: "a new window",
 };
 
-/** A set of shells' gear: the text size every shell shares, how the set
+/** A set of shells' gear: the text size every shell shares where this set
+ *  shows now (in place, filling, in front, or a window of its own), how the set
  *  sits, where new shells land, the showing shell in a window of its own,
  *  and its text copied, captured or pasted into. */
 function ShellGear({
@@ -1037,7 +1059,8 @@ function ShellGear({
   showing: TermTab | null;
   box: React.RefObject<HTMLElement | null>;
 }) {
-  const zoom = useShellZoom();
+  const spot = useContext(ShellSpotHere);
+  const zoom = useShellZoom(spot);
   const place = useStore((s) => s.settings.shell);
   const setSetting = useStore((s) => s.setSetting);
   const landing: GearEntry[] = SHELL_TARGETS.map((t) => ({
@@ -1056,7 +1079,7 @@ function ShellGear({
     <Gear
       label={label}
       groups={[
-        { label: "shells · every one", entries: [zoom] },
+        { label: `shells · ${spotWord(spot, what)}`, entries: [zoom] },
         { label: "layout", entries: [...modeEntries(mode, setMode, what), ...pop] },
         { label: "new shells open in", entries: landing },
         {
@@ -1089,6 +1112,7 @@ export function TermDock() {
   const focusSize = useStore((s) => s.focusSize);
   const dock = useRef<HTMLElement>(null);
   const [mode, setMode] = useShellMode("strip");
+  const spot = shellSpot(mode, false);
   const strip = terms.filter((t) => t.place === "strip");
   useLeaveOnEscape(mode, setMode);
 
@@ -1098,7 +1122,7 @@ export function TermDock() {
     refocus(dock.current);
   };
   return (
-    <>
+    <ShellSpotHere.Provider value={spot}>
       {mode === "focus" && <FocusBackdrop onLeave={leave} />}
       <section
         ref={dock}
@@ -1143,7 +1167,7 @@ export function TermDock() {
         </div>
         {mode === "focus" && <FocusGrips box={dock} />}
       </section>
-    </>
+    </ShellSpotHere.Provider>
   );
 }
 
@@ -1182,6 +1206,7 @@ export function PanelShells({ repo }: { repo: Repo }) {
   const active = mine.some((t) => t.id === chosen) ? chosen : latest;
   // folded, the shells are neither maximized nor in front
   const mode: SurfaceMode = closed ? "normal" : chosenMode;
+  const spot = shellSpot(mode, dockless());
   useLeaveOnEscape(mode, setMode);
 
   if (mine.length === 0) return null;
@@ -1190,7 +1215,7 @@ export function PanelShells({ repo }: { repo: Repo }) {
     refocus(box.current);
   };
   return (
-    <>
+    <ShellSpotHere.Provider value={spot}>
       {mode === "focus" && <FocusBackdrop onLeave={leave} />}
       <section
         ref={box}
@@ -1258,7 +1283,7 @@ export function PanelShells({ repo }: { repo: Repo }) {
         </div>
         {mode === "focus" && <FocusGrips box={box} />}
       </section>
-    </>
+    </ShellSpotHere.Provider>
   );
 }
 
@@ -1290,7 +1315,7 @@ export function ShellSolo({ id }: { id: string }) {
     if (!tab && repo) setTab(shellTab(repo));
   }, [tab, repo]);
   const [exited, setExited] = useState(false);
-  const zoom = useShellZoom();
+  const zoom = useShellZoom("window");
   const body = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -1320,7 +1345,7 @@ export function ShellSolo({ id }: { id: string }) {
           <Gear
             label={`the shell at ${name ?? idText(id)}`}
             groups={[
-              { label: "shells · every one", entries: [zoom] },
+              { label: `shells · ${SPOT_WORD.window}`, entries: [zoom] },
               {
                 label: "share",
                 entries: shareEntries({
@@ -1339,7 +1364,9 @@ export function ShellSolo({ id }: { id: string }) {
       </header>
       {tab ? (
         <div className="term-body" ref={body}>
-          <TermView tab={tab} active onExit={() => setExited(true)} />
+          <ShellSpotHere.Provider value="window">
+            <TermView tab={tab} active onExit={() => setExited(true)} />
+          </ShellSpotHere.Provider>
         </div>
       ) : waiting ? (
         <WaitingFor name={waiting} />

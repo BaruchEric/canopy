@@ -12,7 +12,16 @@ import {
 } from "./files";
 import { TERM_FONT } from "./term";
 import { termFontSize } from "./touch";
-import { SECTION_KEYS, normalizeZooms, sectionOrder, sectionsHidden, type SectionKey, type Zooms } from "./surface";
+import {
+  SECTION_KEYS,
+  normalizeTermFonts,
+  normalizeZooms,
+  sectionOrder,
+  sectionsHidden,
+  type SectionKey,
+  type TermFonts,
+  type Zooms,
+} from "./surface";
 
 export const SORT_MODES = [
   "recent",
@@ -93,8 +102,11 @@ export interface Settings {
   /** what this browser calls itself in the devices list; empty for the
    *  guess off the user agent */
   device: string;
-  /** the shells' font size in px, what a pinch on a shell sets */
+  /** the shells' font size in px in place, what a pinch on a shell sets */
   termFont: number;
+  /** the size filling a panel or window, in front, or in a window of its
+   *  own, where it differs from in place; a spot with none uses that one */
+  termFonts: TermFonts;
   /** each kind of surface's zoom, off its gear; a kind with none is at 1 */
   zoom: Zooms;
   /** each kind's zoom while brought to the front, where it differs from
@@ -125,6 +137,7 @@ export const DEFAULT_SETTINGS: Settings = {
   helper: null,
   device: "",
   termFont: TERM_FONT.size,
+  termFonts: {},
   zoom: {},
   frontZoom: {},
   sectionOrder: [...SECTION_KEYS],
@@ -226,6 +239,7 @@ export function loadSettings(): Settings {
       helper: typeof saved.helper === "string" && /^[\w.-]{1,64}$/.test(saved.helper) ? saved.helper : null,
       device: typeof saved.device === "string" ? saved.device.slice(0, 40) : "",
       termFont: termFontSize(saved.termFont, DEFAULT_SETTINGS.termFont),
+      termFonts: normalizeTermFonts(saved.termFonts),
       zoom: normalizeZooms(saved.zoom),
       frontZoom: normalizeZooms(saved.frontZoom, true),
       sectionOrder: sectionOrder(saved.sectionOrder),

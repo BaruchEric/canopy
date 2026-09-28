@@ -2,6 +2,8 @@
  *  panel's sections are ordered and which are hidden, and how a surface
  *  sits. Pure, so the settings loader and the tests share it. */
 
+import { termFontSize } from "./touch";
+
 /** a panel's sections, in the order a panel shows them by default; the
  *  shells are not here, since they are the panel's footer */
 export const SECTION_KEYS = ["changes", "search", "history", "peers", "preview", "launch", "claude"] as const;
@@ -123,6 +125,54 @@ export type SurfaceMode = "normal" | "full" | "focus";
 
 /** the mode after picking `m`: the same one again puts the surface back */
 export const flipMode = (mode: SurfaceMode, m: SurfaceMode): SurfaceMode => (mode === m ? "normal" : m);
+
+/** Where a shell shows, each with a text size of its own: in place, filling
+ *  its panel or window, in front, or in a window (tab or popup) of its own. */
+export const SHELL_SPOTS = ["place", "full", "front", "window"] as const;
+export type ShellSpot = (typeof SHELL_SPOTS)[number];
+
+/** the sizes set away from in place; a spot with none uses that one */
+export type TermFonts = Partial<Record<Exclude<ShellSpot, "place">, number>>;
+
+export const SPOT_WORD: Record<ShellSpot, string> = {
+  place: "in place",
+  full: "filling",
+  front: "in front",
+  window: "this window",
+};
+
+/** the spot a set of shells in `mode` is in; `lone` for a window that
+ *  shows one panel, section or shell */
+export function shellSpot(mode: SurfaceMode, lone: boolean): ShellSpot {
+  if (mode === "full") return "full";
+  if (mode === "focus") return "front";
+  return lone ? "window" : "place";
+}
+
+/** the text size at `spot`: its own when one was set, else the in-place `base` */
+export const termFontIn = (base: number, fonts: TermFonts, spot: ShellSpot): number =>
+  spot === "place" ? base : (fonts[spot] ?? base);
+
+/** `fonts` with `spot` (not in place) at `px`; back at `base` the entry
+ *  goes, so the spot follows the in-place size again */
+export function withTermFont(fonts: TermFonts, base: number, spot: Exclude<ShellSpot, "place">, px: number): TermFonts {
+  const next = { ...fonts };
+  if (px === base) delete next[spot];
+  else next[spot] = px;
+  return next;
+}
+
+/** a saved map of sizes with unknown spots and junk dropped */
+export function normalizeTermFonts(v: unknown): TermFonts {
+  if (!v || typeof v !== "object" || Array.isArray(v)) return {};
+  const out: TermFonts = {};
+  for (const [k, px] of Object.entries(v)) {
+    if (k === "place" || !(SHELL_SPOTS as readonly string[]).includes(k)) continue;
+    if (typeof px !== "number" || !Number.isFinite(px)) continue;
+    out[k as Exclude<ShellSpot, "place">] = termFontSize(px, px);
+  }
+  return out;
+}
 
 /** A file name for a capture: the surface's words slugged, then the local
  *  date and time, so a folder of them sorts by when. */

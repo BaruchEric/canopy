@@ -2172,7 +2172,7 @@ function loneWindow(): boolean {
   return route.solo || route.section !== null;
 }
 
-function dockless(): boolean {
+export function dockless(): boolean {
   if (typeof window === "undefined") return false;
   const route = parseRoute(window.location.search);
   return route.solo || route.shell || route.section !== null;

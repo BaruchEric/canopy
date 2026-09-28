@@ -5,12 +5,16 @@ import {
   flipMode,
   moveSection,
   frontZoomOf,
+  normalizeTermFonts,
   normalizeZooms,
   sectionOrder,
   sectionsHidden,
+  shellSpot,
+  termFontIn,
   tidyLines,
   toggleHidden,
   withFrontZoom,
+  withTermFont,
   withZoom,
   zoomOf,
   zoomStep,
@@ -127,5 +131,30 @@ describe("the rest", () => {
   test("tidyLines trims the ends", () => {
     expect(tidyLines(["$ ls  ", "a b", "", "  ", ""])).toBe("$ ls\na b");
     expect(tidyLines([])).toBe("");
+  });
+});
+
+describe("shell text size by spot", () => {
+  test("shellSpot reads the mode, and a lone window in place", () => {
+    expect(shellSpot("normal", false)).toBe("place");
+    expect(shellSpot("normal", true)).toBe("window");
+    expect(shellSpot("full", true)).toBe("full");
+    expect(shellSpot("focus", false)).toBe("front");
+  });
+  test("termFontIn follows the in-place size until a spot has its own", () => {
+    expect(termFontIn(13, {}, "front")).toBe(13);
+    expect(termFontIn(13, { front: 18 }, "front")).toBe(18);
+    expect(termFontIn(13, { front: 18 }, "place")).toBe(13);
+    expect(termFontIn(13, { front: 18 }, "window")).toBe(13);
+  });
+  test("withTermFont sets a differing size and clears one back at the in-place size", () => {
+    const f = withTermFont({}, 13, "window", 20);
+    expect(f).toEqual({ window: 20 });
+    expect(withTermFont(f, 13, "window", 13)).toEqual({});
+  });
+  test("normalizeTermFonts drops unknown spots, in place and junk, and clamps", () => {
+    expect(normalizeTermFonts({ front: 18, place: 20, side: 12, full: "x", window: 99 })).toEqual({ front: 18, window: 24 });
+    expect(normalizeTermFonts([12])).toEqual({});
+    expect(normalizeTermFonts(null)).toEqual({});
   });
 });
