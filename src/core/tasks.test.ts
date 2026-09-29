@@ -3,6 +3,7 @@ import {
   cwdError,
   detectTasks,
   expiredTaskLogs,
+  definedFrom,
   isTaskName,
   logPage,
   mergeTasks,
@@ -206,5 +207,16 @@ describe("state and the sweep", () => {
       c: { repoId: "r", path: "/p", name: "c", want: "stopped" as const },
     };
     expect(staleWants(st, new Set(["a"]), (id) => (id === "b" ? true : false))).toEqual(["c"]);
+  });
+});
+
+describe("definedFrom", () => {
+  test("null stays null, so a host repo's logs and records survive; unknown ids are gone", () => {
+    const defined = definedFrom(new Map<string, boolean | null>([["host", null], ["yes", true]]));
+    expect([defined("host"), defined("yes"), defined("nobody")]).toEqual([null, true, false]);
+    const logs = [{ termId: "host", mtime: 0 }];
+    expect(expiredTaskLogs(logs, new Set(), defined, 99 * 86_400_000, 7 * 86_400_000)).toEqual([]);
+    const rec = { path: "/r", name: "n", want: "stopped" } as never;
+    expect(staleWants({ host: rec }, new Set(), defined)).toEqual([]);
   });
 });

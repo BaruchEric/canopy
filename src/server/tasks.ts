@@ -8,7 +8,7 @@
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { interruptTask, listTaskPanes, logPath, readLog, readTaskFiles, readTaskState, startTaskSession, taskTermId, writeTaskState, appendMark, rotateIfBig, repipe, listLogs, removeLog } from "../core/taskrun";
-import { detectTasks, logPage, mergeTasks, nextDelay, normalizeTaskPatch, parseTaskFile, expiredTaskLogs, reapable, staleWants, TASK_TIMINGS, taskStatus, isTaskName, type MergedTask, type TaskTimings } from "../core/tasks";
+import { detectTasks, logPage, mergeTasks, nextDelay, normalizeTaskPatch, parseTaskFile, expiredTaskLogs, definedFrom, reapable, staleWants, TASK_TIMINGS, taskStatus, isTaskName, type MergedTask, type TaskTimings } from "../core/tasks";
 import { killSession, type TaskPane } from "../core/tmux";
 import { loadConfig, setTask, tasksFor } from "../core/store";
 import type { Repo, ServerEvent, TaskAction, TaskPatch, TaskInfo, TaskRecord, TasksResult, TermInfo } from "../core/types";
@@ -315,30 +315,50 @@ export class TaskHub {
   private async sweep(): Promise<void> {
     const tmux = this.deps.tmux;
     if (!tmux || this.stopped) return;
-    const now = Date.now();
-    for (const p of this.panes.values()) {
-      const rec = this.state[p.termId];
-      if (reapable({ dead: p.dead, ...(rec?.exitedAt !== undefined ? { exitedAt: rec.exitedAt } : {}), viewers: this.deps.viewers(p.termId).length }, now, this.t.reap)) {
-        await killSession(tmux, p.termId);
-      }
-    }
-    await this.tick();
+    // the guarded path: never beside the interval's own tick
+    await this.ticking;
+    await this.poke();
     if (this.stopped) return;
-    const live = new Set(this.panes.keys());
-    const logs = await listLogs();
+    const now = Date.now();
+    for (const id of Array.from(this.panes.keys())) {
+      await this.lock(id, async () => {
+        // re-read under the lock: a start may have reused the pane since
+        const p = this.panes.get(id);
+        if (this.stopped || !p) return;
+        const rec = this.state[id];
+        if (reapable({ dead: p.dead, ...(rec?.exitedAt !== undefined ? { exitedAt: rec.exitedAt } : {}), viewers: this.deps.viewers(id).length }, Date.now(), this.t.reap)) {
+          await killSession(tmux, id);
+        }
+      }).catch(() => {});
+    }
+    await this.poke();
+    if (this.stopped) return;
     const known = new Map<string, boolean | null>();
-    for (const id of new Set([...logs.map((l) => l.termId), ...Object.keys(this.state)])) {
+    const lookup = async (id: string) => {
       const rec = this.state[id];
       const repo = rec ? this.deps.repos().find((r) => r.path === rec.path) : undefined;
       if (!rec || !repo) known.set(id, false);
       else if (repo.host) known.set(id, null);
       else known.set(id, (await this.defsOf(repo, true)).merged.some((m) => m.name === rec.name));
+    };
+    const logs = await listLogs();
+    for (const id of new Set([...logs.map((l) => l.termId), ...Object.keys(this.state)])) await lookup(id);
+    const defined = definedFrom(known);
+    const candidates = new Set([...expiredTaskLogs(logs, new Set(this.panes.keys()), defined, now, this.t.logAge), ...staleWants(this.state, new Set(this.panes.keys()), defined)]);
+    for (const id of candidates) {
+      await this.lock(id, async () => {
+        if (this.stopped || this.panes.has(id)) return;
+        // look again inside the lock: a start may have brought it back
+        await lookup(id);
+        const again = definedFrom(known);
+        const fresh = await listLogs();
+        for (const gone of expiredTaskLogs(fresh, new Set(this.panes.keys()), again, Date.now(), this.t.logAge)) if (gone === id) await removeLog(id);
+        if (staleWants(this.state, new Set(this.panes.keys()), again).includes(id)) {
+          delete this.state[id];
+          await this.save();
+        }
+      }).catch(() => {});
     }
-    const defined = (id: string) => known.get(id) ?? false;
-    for (const id of expiredTaskLogs(logs, live, defined, now, this.t.logAge)) await removeLog(id);
-    const stale = staleWants(this.state, live, defined);
-    for (const id of stale) delete this.state[id];
-    if (stale.length) await this.save();
   }
 
   /** one look at tmux: records deaths, holds new sessions, tells what changed */
@@ -386,7 +406,7 @@ export class TaskHub {
     }
     this.panes = next;
     for (const p of next.values()) {
-      if (this.stopped) return;
+      if (this.stopped) break;
       if (!p.dead && (await rotateIfBig(p.termId, this.t.logCap))) await repipe(tmux, p.termId);
     }
     for (const [id, rt] of this.rt) {

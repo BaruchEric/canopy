@@ -384,6 +384,9 @@ export interface LogFile {
 /** whether a task still has a definition: null when that cannot be told (a repo on another host) */
 export type Defined = (termId: string) => boolean | null;
 
+/** a `Defined` over what was looked up: an id nobody looked up is gone, and null (cannot tell) stays null */
+export const definedFrom = (known: ReadonlyMap<string, boolean | null>): Defined => (id) => (known.has(id) ? known.get(id)! : false);
+
 /** logs of tasks with no session and no definition, untouched for `age` */
 export function expiredTaskLogs(logs: readonly LogFile[], live: ReadonlySet<string>, defined: Defined, now: number, age: number): string[] {
   return logs.filter((l) => !live.has(l.termId) && defined(l.termId) === false && now - l.mtime > age).map((l) => l.termId);
