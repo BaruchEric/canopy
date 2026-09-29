@@ -99,6 +99,7 @@ survives a canopy restart and a reaped session (see Cleanup).
 
 **Logs.** `tasks/logs/<termId>.log` under the config dir (the termId already hashes the repo path and task name), the volume the
 shells container already shares. Raw bytes as the pty wrote them, ANSI and all.
+The files are not created 0600: the pane's `cat` runs in the shells container and may be another uid than the one that created the file.
 At 2 MB the log rotates to `.log.1`, one old file kept. Search strips ANSI.
 
 ## Server and supervisor
@@ -128,7 +129,7 @@ reconnects, touch scrolling and paste carry over.
    ssh line for a remote repo.
 
 The pipe is attached before the real command runs, which is the only way the log
-gets the command's first output. Running the command directly, not typed into a
+gets the command's first output. On a restart, `startTaskSession` respawns a placeholder before piping a dead pane, for the same reason. Running the command directly, not typed into a
 shell, makes the pane's exit status the task's. Restart repeats steps 2 and 3 on
 the same pane, so viewers stay attached and watch it restart in place. The first
 integration test checks that a pipe survives `respawn-pane`; if it does not,
@@ -148,7 +149,7 @@ diffs against the last reading and broadcasts a `tasks` event,
   such a stretch make it `gave-up`, with a feed line and, when `tailchanNotify`
   is on, a tailchan DM. A clean exit 0 is not restarted.
 - **Reboot recovery.** After the first scan, every task with `keep` and
-  `want: running` that has no session is started.
+  `want: running` that has no session is started, unless its last exit was 0.
 - **Start with panel.** The browser posts `start` with `reason: "panel"` when a
   panel opens. The server starts each `withPanel` task that is not already
   running and not `gave-up`. A task stopped by hand does start again on the
@@ -178,7 +179,7 @@ stay, as `agents` and `launchers` do, so a repo that comes back keeps them.
 
 **Shells stay clean.** `listTerms`, `adoptTerms`, the shells chip, keep's
 snapshots and `KeptShells` pass over any session with `@canopy_task`.
-`endTerm` refuses a task's id; only the task routes stop a task.
+`endTerm` refuses a task's id; only the task routes stop a task. The server also refuses a non-attach shell socket on a task id, so a stale tab can never start a shell under it.
 
 **Routes.** Every repo route answers 400 for a forge repo, like the rest of
 `/api/repos/*`.
@@ -240,7 +241,7 @@ window cannot start a stray shell under a task's id.
   when one failed or gave up.
 - Top bar: a `▶ n` chip whose popover lists every non-idle task across repos,
   each with open (the panel, tasks unfolded, that task selected), restart and
-  stop. A task whose repo left the scan shows "not in scan" with stop only.
+  stop. A task whose repo left the scan shows "not in scan" with stop only; the UI re-reads the running-task list after a scan so this shows without waiting for an event. A task tab that ended is revived with a new generation on the next click.
 - Feed: a `task` source with lines for started, exited with a code,
   restarting in n seconds, gave up and stopped, built by the pure `taskLines`
   in `ui/src/tasks.ts`. Supervisor ticks with no change make no line.
