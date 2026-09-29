@@ -26,7 +26,7 @@ import {
 } from "../surface";
 import { capture, copyText, readText, surfaceText } from "../share";
 import { TERM_FONT, focusResize, type FocusSize } from "../term";
-import { benchHolds, benchIs } from "../front";
+import { benchHolds, benchIs, benchSolo, paneOf } from "../front";
 import { TERM_FONT_MAX, TERM_FONT_MIN } from "../touch";
 import type { Repo } from "../../../src/core/types";
 import { Gear, type GearEntry, type GearGroup } from "./Gear";
@@ -121,6 +121,15 @@ export function modeEntries(mode: SurfaceMode, setMode: (m: SurfaceMode) => void
     { type: "item", label: "in place", on: mode === "normal", run: () => setMode("normal") },
     { type: "item", label: `fill the ${what}`, on: mode === "full", run: () => setMode(flipMode(mode, "full")) },
     { type: "item", label: "bring to the front", on: mode === "focus", run: () => setMode(flipMode(mode, "focus")) },
+  ];
+}
+
+/** A gear's layout choices for a part of a project's bench: beside the
+ *  rest, or filling the bench */
+export function benchEntries(mode: SurfaceMode, setMode: (m: SurfaceMode) => void): GearEntry[] {
+  return [
+    { type: "item", label: "beside the rest", on: mode === "normal", run: () => setMode("normal") },
+    { type: "item", label: "take the bench", on: mode === "focus", run: () => setMode(flipMode(mode, "focus")) },
   ];
 }
 
@@ -311,7 +320,7 @@ export function shareEntries({
 
 /** The layout lines every section's gear has: where it sits, its place in
  *  the panel, and a window of its own. */
-function useSectionLayout(repo: Repo, k: SectionKey, mode: SurfaceMode, setMode: (m: SurfaceMode) => void): GearEntry[] {
+function useSectionLayout(repo: Repo, k: SectionKey, mode: SurfaceMode, setMode: (m: SurfaceMode) => void, bench: boolean): GearEntry[] {
   const lone = useContext(SectionWindow);
   const order = useStore((s) => s.settings.sectionOrder);
   const hidden = useStore((s) => s.settings.sectionsHidden);
@@ -319,7 +328,7 @@ function useSectionLayout(repo: Repo, k: SectionKey, mode: SurfaceMode, setMode:
   if (lone) return [];
   const i = order.indexOf(k);
   return [
-    ...modeEntries(mode, setMode, "panel"),
+    ...(bench ? benchEntries(mode, setMode) : modeEntries(mode, setMode, "panel")),
     ...(i > 0
       ? [{ type: "item" as const, label: "move up", stay: true, run: () => setSetting("sectionOrder", moveSection(order, k, -1)) }]
       : []),
@@ -389,23 +398,24 @@ export function Section({
   const box = useRef<HTMLElement>(null);
   const [ownMode, setOwnMode] = useState<SurfaceMode>("normal");
   // In a panel, in front is the project's bench, which this section is one
-  // part of: it lays out in place there, and its gear's "in front" is the
-  // bench's. A section in a window of its own still comes forward alone.
+  // part of: it lays out in place there, and its "in front" is its part
+  // taking the whole bench. A section in a window of its own still comes
+  // forward alone.
   const bench = useStore((s) => benchIs(s.front, repo.id)) && !lone;
+  const soloed = useStore((s) => benchSolo(s.front, repo.id) === paneOf(k)) && bench;
   const held = useBenchHeld(repo.id, k) && !lone;
   const bringProject = useStore((s) => s.bringProject);
+  const soloBench = useStore((s) => s.soloBench);
   const setMode = (m: SurfaceMode) => {
-    if (!lone && m === "focus") bringProject(repo.id);
-    else {
-      if (bench) bringProject(null);
-      setOwnMode(m);
-    }
+    if (bench) soloBench(repo.id, m === "normal" ? null : paneOf(k));
+    else if (!lone && m === "focus") bringProject(repo.id);
+    else setOwnMode(m);
   };
   // folded, a section is neither over the panel nor in front
   const mode: SurfaceMode = closed || bench ? "normal" : ownMode;
-  const shown: SurfaceMode = bench ? "focus" : mode;
+  const shown: SurfaceMode = bench ? (soloed ? "focus" : "normal") : mode;
   const { zoom, entry: zoomEntry } = useZoom(k);
-  const common = useSectionLayout(repo, k, shown, setMode);
+  const common = useSectionLayout(repo, k, shown, setMode, bench);
   useLeaveOnEscape(mode, setMode);
   const word = SECTION_WORD[k];
   const groups: GearGroup[] = [

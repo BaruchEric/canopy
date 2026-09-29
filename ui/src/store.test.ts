@@ -294,6 +294,26 @@ describe("a project's bench in front", () => {
     expect(useStore.getState().front).toBeNull();
   });
 
+  test("a part fills the bench and gives it back; another project's bench starts whole", () => {
+    useStore.getState().bringProject("f-a");
+    useStore.getState().soloBench("f-a", "shell");
+    expect(useStore.getState().front).toEqual(projectFront("f-a", null, null, "shell"));
+    // a task asked for in the same bench takes the room for its log
+    useStore.getState().bringTask("f-a", "dev");
+    expect(useStore.getState().front).toEqual(projectFront("f-a", "dev", null, "log"));
+    // another project's part asks nothing of this bench
+    useStore.getState().soloBench("f-b", "app");
+    expect(useStore.getState().front).toEqual(projectFront("f-a", "dev", null, "log"));
+    useStore.getState().soloBench("f-a", null);
+    expect(useStore.getState().front).toEqual(projectFront("f-a", "dev"));
+    useStore.getState().soloBench("f-a", "app");
+    useStore.getState().bringProject("f-b");
+    expect(useStore.getState().front).toEqual(projectFront("f-b"));
+    useStore.getState().bringProject(null);
+    useStore.getState().soloBench("f-a", "app");
+    expect(useStore.getState().front).toBeNull();
+  });
+
   test("closing the panel ends its bench; another panel's close leaves it", () => {
     useStore.getState().openPanel("f-b");
     useStore.getState().bringProject("f-a");

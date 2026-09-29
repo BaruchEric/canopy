@@ -5,7 +5,7 @@ import { useFitPop } from "../pop";
 import { taskShellUrl } from "../routes";
 import { tasksOf, useStore } from "../store";
 import { frontTask, markTime, STATUS_WORD, taskChip, taskWhen } from "../tasks";
-import { benchTask } from "../front";
+import { benchSolo, benchTask } from "../front";
 import type { TermTab } from "../term";
 import type { Repo, TaskInfo, TaskLogLine } from "../../../src/core/types";
 import { Seg } from "./Seg";
@@ -45,7 +45,8 @@ export function TasksSection({ repo }: { repo: Repo }) {
   const asked = useStore((s) => benchTask(s.front, repo.id));
   const bringTask = useStore((s) => s.bringTask);
   const dropBenchTask = useStore((s) => s.dropBenchTask);
-  const bringProject = useStore((s) => s.bringProject);
+  const soloBench = useStore((s) => s.soloBench);
+  const soloed = useStore((s) => benchSolo(s.front, repo.id) === "log");
   const [open, setOpen] = useState<string | null>(null);
   const [showHidden, setShowHidden] = useState(false);
   const [busy, setBusy] = useState("");
@@ -84,6 +85,7 @@ export function TasksSection({ repo }: { repo: Repo }) {
   const running = tasks.filter((t) => t.status === "running").length;
   const picked = inFront ? frontTask(shown, asked, open) : (shown.find((t) => t.name === open) ?? null);
 
+  // in the bench, the ⧉ has the log take the whole bench, or give it back
   const flipBench = () => {
     if (!inFront) {
       bringTask(repo.id, open);
@@ -91,8 +93,9 @@ export function TasksSection({ repo }: { repo: Repo }) {
     }
     // what showed in the bench stays open in place
     if (picked) setOpen(picked.name);
-    bringProject(null);
+    soloBench(repo.id, soloed ? null : "log");
   };
+  const benchWord = soloed ? "Give the bench back" : "The log takes the bench";
 
   const pick = (t: TaskInfo) => {
     if (inFront) {
@@ -152,10 +155,10 @@ export function TasksSection({ repo }: { repo: Repo }) {
         !lone && (
           <button
             type="button"
-            className={`term-new term-focus task-front-btn${inFront ? " on" : ""}`}
-            title={inFront ? "Put the project back" : "Bring the project to the front"}
-            aria-label={inFront ? "Put the project back" : "Bring the project to the front"}
-            aria-pressed={inFront}
+            className={`term-new term-focus task-front-btn${soloed ? " on" : ""}`}
+            title={inFront ? benchWord : "Bring the project to the front"}
+            aria-label={inFront ? benchWord : "Bring the project to the front"}
+            aria-pressed={soloed}
             onClick={flipBench}
           >
             ⧉

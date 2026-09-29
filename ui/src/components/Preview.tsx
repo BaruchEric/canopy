@@ -7,7 +7,7 @@ import { devTask } from "../tasks";
 import { Section, useSectionClosed } from "./Surface";
 import { TermGrip } from "./TermDock";
 import { flipMode, type SurfaceMode } from "../surface";
-import { benchIs } from "../front";
+import { benchIs, benchSolo } from "../front";
 import {
   PREVIEW_H,
   loadChoice,
@@ -32,23 +32,27 @@ const portLabel = (p: ListeningPort) => (p.command ? `${p.port} · ${p.command}`
 
 /** The head's switches, the same pair a shell row has: bring the project to
  *  the front with the preview as its main pane, and have the preview fill
- *  the panel. Either again puts it back; in front, filling has no place. */
-function ModeButtons({ mode, setMode }: { mode: SurfaceMode; setMode: (m: SurfaceMode) => void }) {
+ *  the panel. Either again puts it back. In the bench there is one: the
+ *  preview takes the whole bench, or gives it back. */
+function ModeButtons({ mode, setMode, inBench }: { mode: SurfaceMode; setMode: (m: SurfaceMode) => void; inBench: boolean }) {
   const focus = mode === "focus";
   const full = mode === "full";
+  const word = inBench
+    ? focus ? "Give the bench back" : "The preview takes the bench"
+    : focus ? "Put the project back" : "Bring the project to the front";
   return (
     <>
       <button
         type="button"
         className={`term-new term-focus preview-mode-btn${focus ? " on" : ""}`}
-        title={focus ? "Put the project back" : "Bring the project to the front"}
-        aria-label={focus ? "Put the project back" : "Bring the project to the front"}
+        title={word}
+        aria-label={word}
         aria-pressed={focus}
         onClick={() => setMode(flipMode(mode, "focus"))}
       >
         ⧉
       </button>
-      {!focus && <button
+      {!focus && !inBench && <button
         type="button"
         className={`term-new term-full preview-mode-btn${full ? " on" : ""}`}
         title={full ? "Give the panel back" : "The preview takes the whole panel"}
@@ -100,6 +104,8 @@ export function PreviewSection({ repo }: { repo: Repo }) {
   const frameBox = useRef<HTMLDivElement>(null);
   // in the bench the frame takes the main pane, and its grip has no place
   const inBench = useStore((s) => benchIs(s.front, repo.id));
+  const soloed = useStore((s) => benchSolo(s.front, repo.id) === "app");
+  const soloBench = useStore((s) => s.soloBench);
   useEffect(() => {
     if (!closed && !known) loadTasks(repo.id).catch(() => {});
   }, [closed, known, repo.id, loadTasks]);
@@ -196,7 +202,7 @@ export function PreviewSection({ repo }: { repo: Repo }) {
       head={summary}
       title="The repo's dev server, running on the backend, shown here"
       noCapture={url ? "The page in the preview is another origin, which a capture cannot see into" : undefined}
-      tools={(mode, setMode) => <ModeButtons mode={mode} setMode={setMode} />}
+      tools={(mode, setMode) => <ModeButtons mode={mode} setMode={setMode} inBench={inBench} />}
     >
       <div className="preview-body">
         {blocked ? (
@@ -355,6 +361,16 @@ export function PreviewSection({ repo }: { repo: Repo }) {
                       <a className="mini" href={url} target="_blank" rel="noreferrer" title="Open in a browser tab" aria-label="Open in a browser tab">
                         ↗
                       </a>
+                      <button
+                        type="button"
+                        className={`mini${soloed ? " on" : ""}`}
+                        onClick={() => soloBench(repo.id, soloed ? null : "app")}
+                        title={soloed ? "Give the bench back" : "The app takes the bench"}
+                        aria-label={soloed ? "Give the bench back" : "The app takes the bench"}
+                        aria-pressed={soloed}
+                      >
+                        {soloed ? "⤡" : "⤢"}
+                      </button>
                     </div>
                   )}
                 </div>

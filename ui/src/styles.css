@@ -5808,20 +5808,56 @@ button.machine:hover {
   }
 }
 
-/* a phone: one part of the bench at a time, picked in the bar's second
-   row. The others stay laid out but invisible, so the app keeps its page
-   and a shell its size. */
+/* one part filling the bench: picked with its own ⧉ or the bar's switch,
+   and always one on a phone. The others stay laid out but invisible, so
+   the app keeps its page and a shell its size. */
+.panel.panel-bench[data-pane] {
+  grid-template-columns: minmax(0, 1fr);
+  grid-template-rows: var(--bench-bar) minmax(0, 1fr);
+  grid-template-areas:
+    "bar"
+    "pane";
+}
+.panel-bench[data-pane] > .panel-body,
+.panel-bench[data-pane] > .panel-shells {
+  grid-area: pane;
+  margin-right: 0;
+  border-right: 0;
+  border-top: 0;
+}
+.panel-bench[data-pane] section.preview,
+.panel-bench[data-pane] .task-front {
+  left: 0;
+  right: 0;
+  bottom: 0;
+  top: var(--bench-bar);
+  height: auto;
+  border-left: 0;
+}
+.panel-bench[data-pane]:not([data-pane="files"]) > .panel-body,
+.panel-bench[data-pane]:not([data-pane="shell"]) > .panel-shells,
+.panel-bench[data-pane]:not([data-pane="app"]) section.preview,
+.panel-bench[data-pane]:not([data-pane="log"]) .task-front {
+  visibility: hidden;
+}
+.panel-bench[data-pane="app"] section.preview,
+.panel-bench[data-pane="log"] .task-front {
+  visibility: visible;
+}
+.panel-bench[data-pane="shell"] > .panel-shells {
+  z-index: 1;
+}
+.bench-bar > .bench-panes {
+  flex: none;
+}
+
+/* a phone: the part picked in the bar's second row */
 @media (max-width: 760px), (max-height: 480px) {
   .panel.panel-bench {
     --bench-bar: 84px;
     inset: 0;
     border: 0;
     border-radius: 0;
-    grid-template-columns: minmax(0, 1fr);
-    grid-template-rows: var(--bench-bar) minmax(0, 1fr);
-    grid-template-areas:
-      "bar"
-      "pane";
   }
   .bench-bar {
     display: grid;
@@ -5848,35 +5884,6 @@ button.machine:hover {
   }
   .bench-bar > .bench-panes > button {
     flex: 1;
-  }
-  .panel-bench > .panel-body,
-  .panel-bench > .panel-shells {
-    grid-area: pane;
-    margin-right: 0;
-    border-right: 0;
-    border-top: 0;
-  }
-  .panel-bench section.preview,
-  .panel-bench .task-front {
-    left: 0;
-    right: 0;
-    bottom: 0;
-    top: var(--bench-bar);
-    height: auto;
-    border-left: 0;
-  }
-  .panel-bench:not([data-pane="files"]) > .panel-body,
-  .panel-bench:not([data-pane="shell"]) > .panel-shells,
-  .panel-bench:not([data-pane="app"]) section.preview,
-  .panel-bench:not([data-pane="log"]) .task-front {
-    visibility: hidden;
-  }
-  .panel-bench[data-pane="app"] section.preview,
-  .panel-bench[data-pane="log"] .task-front {
-    visibility: visible;
-  }
-  .panel-bench[data-pane="shell"] > .panel-shells {
-    z-index: 1;
   }
 }
 .panel-head > .panel-bench-btn {

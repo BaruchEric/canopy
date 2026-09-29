@@ -1,6 +1,6 @@
 import { useMemo } from "react";
 import { idLabel, multi, useStore } from "../store";
-import { benchProjects } from "../front";
+import { benchProjects, type BenchPane } from "../front";
 import { useMedia } from "../media";
 import { Seg } from "./Seg";
 
@@ -8,9 +8,7 @@ import { Seg } from "./Seg";
  *  way up; styles.css turns at the same widths and heights. */
 export const BENCH_ONE = "(max-width: 760px), (max-height: 480px)";
 
-/** The parts of the bench a phone shows one at a time: the panel's own
- *  column (changes, tasks and the rest), the app, the shells, the task log. */
-export type BenchPane = "files" | "app" | "shell" | "log";
+export type { BenchPane };
 
 const PANES: readonly { value: BenchPane; label: string; title: string }[] = [
   { value: "files", label: "changes", title: "The panel: changes, tasks and the rest" },
@@ -19,11 +17,14 @@ const PANES: readonly { value: BenchPane; label: string; title: string }[] = [
   { value: "log", label: "log", title: "The picked task's terminal or log" },
 ];
 
+/** the bar's choice for every part side by side, which a phone has no room for */
+const ALL = { value: "all", label: "all", title: "Every part side by side" } as const;
+
 /**
  * The bar along the top of a project's bench: every project it can switch
  * to (the open panels, then whatever else has a shell or a task running),
  * each with what it has running, and the button that puts the project back.
- * On a phone it also picks the one pane the bench shows.
+ * It also picks the one part that fills the bench, which a phone always has.
  */
 export function BenchBar({
   repoId,
@@ -32,8 +33,9 @@ export function BenchBar({
   has,
 }: {
   repoId: string;
-  pane: BenchPane;
-  setPane: (p: BenchPane) => void;
+  /** the part filling the bench, null while every part shows */
+  pane: BenchPane | null;
+  setPane: (p: BenchPane | null) => void;
   /** which panes this project has */
   has: Record<BenchPane, boolean>;
 }) {
@@ -47,7 +49,8 @@ export function BenchBar({
   // with several machines shown, the same project on two reads apart
   const many = useStore(multi);
   const projects = useMemo(() => benchProjects(panels, terms, shells, taskAll, repos), [panels, terms, shells, taskAll, repos]);
-  const options = PANES.filter((p) => has[p.value]);
+  const parts = PANES.filter((p) => has[p.value]);
+  const options = phone ? parts : [ALL, ...parts];
   return (
     <div className="bench-bar">
       <nav className="bench-projects" aria-label="Projects">
@@ -80,8 +83,14 @@ export function BenchBar({
           );
         })}
       </nav>
-      {phone && options.length > 1 && (
-        <Seg label="Show" value={has[pane] ? pane : (options[0]?.value ?? "files")} options={options} onChange={setPane} className="bench-panes" />
+      {parts.length > 1 && (
+        <Seg
+          label="Show"
+          value={pane ?? (phone ? (parts[0]?.value ?? "files") : "all")}
+          options={options}
+          onChange={(v) => setPane(v === "all" ? null : v)}
+          className="bench-panes"
+        />
       )}
       <button
         type="button"

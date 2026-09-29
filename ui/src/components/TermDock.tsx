@@ -21,7 +21,7 @@ import {
 } from "../store";
 import { IdLabel, WaitingFor, useWaitingFor } from "./IdLabel";
 import { TERM_FONT, joinsOnly, otherShells, termId, viewKey } from "../term";
-import { benchIs } from "../front";
+import { benchIs, benchSolo } from "../front";
 import { SPOT_WORD, flipMode, shellCopyOf, shellSpot, termFontIn, tidyLines, type CopyOut, type ShellSpot, type SurfaceMode } from "../surface";
 import { SHELL_TARGETS, type ShellTarget } from "../settings";
 import { Gear, type GearEntry } from "./Gear";
@@ -31,6 +31,7 @@ import {
   focusVars,
   useLeaveOnEscape,
   modeEntries,
+  benchEntries,
   saveTermFont,
   shareEntries,
   ShellSpotHere,
@@ -964,13 +965,14 @@ function ModeButtons({
   mode,
   setMode,
   what,
-  noFull = false,
+  bench = false,
 }: {
   mode: SurfaceMode;
   setMode: (m: SurfaceMode) => void;
   what: string;
-  /** leave out maximize, which has no place inside a project's bench */
-  noFull?: boolean;
+  /** inside a project's bench: one switch, the shells taking the whole
+   *  bench or giving it back, and no maximize */
+  bench?: boolean;
 }) {
   const flip = (m: SurfaceMode) => (e: MouseEvent<HTMLButtonElement>) => {
     setMode(flipMode(mode, m));
@@ -984,17 +986,23 @@ function ModeButtons({
         type="button"
         className={`term-new term-focus${focus ? " on" : ""}`}
         title={
-          what === "panel"
-            ? focus ? "Put the project back" : "Bring the project to the front"
-            : focus ? "Put the shell back" : "Bring the shell to the front"
+          bench
+            ? focus ? "Give the bench back" : "The shells take the bench"
+            : what === "panel"
+              ? focus ? "Put the project back" : "Bring the project to the front"
+              : focus ? "Put the shell back" : "Bring the shell to the front"
         }
-        aria-label={what === "panel" ? (focus ? "Put the project back" : "Bring the project to the front") : focus ? "Leave focus mode" : "Focus the shell"}
+        aria-label={
+          bench
+            ? focus ? "Give the bench back" : "The shells take the bench"
+            : what === "panel" ? (focus ? "Put the project back" : "Bring the project to the front") : focus ? "Leave focus mode" : "Focus the shell"
+        }
         aria-pressed={focus}
         onClick={flip("focus")}
       >
         ⧉
       </button>
-      {!noFull && <button
+      {!bench && <button
         type="button"
         className={`term-new term-full${full ? " on" : ""}`}
         title={full ? `Give the ${what} back` : `Shells take the whole ${what}`}
@@ -1028,21 +1036,26 @@ function useStripMode(): [SurfaceMode, (m: SurfaceMode) => void] {
 
 /** How a panel's shells sit: filling the panel is theirs, while in front is
  *  the project's bench, which they are one pane of. `mode` is what their
- *  buttons show (focus while the bench is up), `placed` how the box itself
- *  lays out, which inside the bench is in place. */
-function usePanelShellMode(repoId: string): { mode: SurfaceMode; placed: SurfaceMode; setMode: (m: SurfaceMode) => void } {
+ *  buttons show (in the bench, focus while they fill it), `placed` how the
+ *  box itself lays out, which inside the bench is in place, and `bench`
+ *  whether the bench is up. */
+function usePanelShellMode(repoId: string): {
+  mode: SurfaceMode;
+  placed: SurfaceMode;
+  setMode: (m: SurfaceMode) => void;
+  bench: boolean;
+} {
   const bench = useStore((s) => benchIs(s.front, repoId));
+  const soloed = useStore((s) => benchSolo(s.front, repoId) === "shell");
   const bringProject = useStore((s) => s.bringProject);
+  const soloBench = useStore((s) => s.soloBench);
   const [placed, setPlaced] = useState<"normal" | "full">("normal");
   const setMode = (m: SurfaceMode) => {
-    if (m === "focus") {
-      bringProject(repoId);
-      return;
-    }
-    if (bench) bringProject(null);
-    setPlaced(m);
+    if (bench) soloBench(repoId, m === "normal" ? null : "shell");
+    else if (m === "focus") bringProject(repoId);
+    else setPlaced(m);
   };
-  return { mode: bench ? "focus" : placed, placed: bench ? "normal" : placed, setMode };
+  return { mode: bench ? (soloed ? "focus" : "normal") : placed, placed: bench ? "normal" : placed, setMode, bench };
 }
 
 /** The running shells outside a set brought to the front, other repos' and
@@ -1107,6 +1120,7 @@ function ShellGear({
   setMode,
   showing,
   box,
+  bench = false,
 }: {
   label: string;
   what: string;
@@ -1114,6 +1128,9 @@ function ShellGear({
   setMode: (m: SurfaceMode) => void;
   showing: TermTab | null;
   box: React.RefObject<HTMLElement | null>;
+  /** a pane of a project's bench, whose layout is beside the rest or
+   *  filling the bench */
+  bench?: boolean;
 }) {
   const spot = useContext(ShellSpotHere);
   const zoom = useShellZoom(spot);
@@ -1136,7 +1153,7 @@ function ShellGear({
       label={label}
       groups={[
         { label: `shells · ${spotWord(spot, what)}`, entries: [zoom] },
-        { label: "layout", entries: [...modeEntries(mode, setMode, what), ...pop] },
+        { label: "layout", entries: [...(bench ? benchEntries(mode, setMode) : modeEntries(mode, setMode, what)), ...pop] },
         { label: "new shells open in", entries: landing },
         {
           label: "share",
@@ -1242,9 +1259,8 @@ export function PanelShells({ repo }: { repo: Repo }) {
   const panelTermHeight = useStore((s) => panelTermHeightFor(s, repo.id));
   const setPanelTermHeight = useStore((s) => s.setPanelTermHeight);
   const box = useRef<HTMLElement>(null);
-  const { mode: chosenMode, placed: chosenPlace, setMode } = usePanelShellMode(repo.id);
+  const { mode: chosenMode, placed: chosenPlace, setMode, bench } = usePanelShellMode(repo.id);
   const frontPick = useStore((s) => (s.front?.kind === "project" && s.front.repoId === repo.id ? s.front.pick : null));
-  const bench = chosenMode === "focus";
   const mine = terms.filter((t) => t.place === "panel" && t.repoId === repo.id);
   const [chosen, setChosen] = useState<string | null>(null);
   // the newest shell shows until another tab is picked
@@ -1328,7 +1344,7 @@ export function PanelShells({ repo }: { repo: Repo }) {
             }
             end={
               <>
-                <ModeButtons mode={closed ? "normal" : chosenMode} setMode={setMode} what="panel" noFull={bench} />
+                <ModeButtons mode={closed ? "normal" : chosenMode} setMode={setMode} what="panel" bench={bench} />
                 <ShellGear
                   label={`shells at ${repo.name}`}
                   what="panel"
@@ -1336,6 +1352,7 @@ export function PanelShells({ repo }: { repo: Repo }) {
                   setMode={setMode}
                   showing={mine.find((t) => t.id === active) ?? null}
                   box={box}
+                  bench={bench}
                 />
               </>
             }

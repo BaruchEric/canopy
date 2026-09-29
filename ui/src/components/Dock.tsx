@@ -31,10 +31,11 @@ import {
   useStore,
   dockless,
 } from "../store";
-import { benchIs } from "../front";
+import { benchIs, benchSolo } from "../front";
 import { devTask } from "../tasks";
 import { devState } from "../guided";
-import { BenchBar, type BenchPane } from "./Bench";
+import { BENCH_ONE, BenchBar, type BenchPane } from "./Bench";
+import { useMedia } from "../media";
 import { backendOf, homeName, isHome } from "../registry";
 import { signinUrl } from "../backends";
 import { IdLabel } from "./IdLabel";
@@ -1215,7 +1216,10 @@ export function RepoPanel({
   // the preview, the shells and the task log beside it, in one box.
   const inBench = useStore((s) => benchIs(s.front, id));
   const bringProject = useStore((s) => s.bringProject);
-  const [pane, setPane] = useState<BenchPane>("app");
+  // the part filling the bench, which the part's own ⧉ or the bar picks
+  const benchPart = useStore((s) => benchSolo(s.front, id));
+  const soloBench = useStore((s) => s.soloBench);
+  const phone = useMedia(BENCH_ONE);
   const hasTasks = useStore((s) => tasksOf(s, id).length > 0);
   // a guided panel shows the preview only while the app runs
   const devUp = useStore((s) => devState(devTask(tasksOf(s, id))) === "running");
@@ -1230,7 +1234,12 @@ export function RepoPanel({
   // a tab that is not showing is neither over the window nor in front
   const mode: SurfaceMode = hidden ? "normal" : inBench ? "focus" : placed;
   const bench = mode === "focus";
-  useLeaveOnEscape(mode, setMode);
+  // Escape steps back one level: a part filling the bench gives it back
+  // first, the bench goes the next time
+  useLeaveOnEscape(mode, (m) => {
+    if (bench && m === "normal" && benchPart !== null) soloBench(id, null);
+    else setMode(m);
+  });
   const { zoom: panelZoom } = useZoom("panel");
   // the bench's panes sit outside the column's scroll, where a zoom on it
   // would scale their size and place too
@@ -1286,14 +1295,17 @@ export function RepoPanel({
   };
 
   const modeClass = mode === "full" ? " surface-full" : bench ? " panel-bench" : "";
-  // what the bench has for a phone to show one at a time
+  // what the bench has to show one part at a time
   const has: Record<BenchPane, boolean> = {
     files: true,
     app: !repo.host && !hiddenSections.includes("preview") && (!guided || devUp),
     shell: true,
     log: !guided && hasTasks && !hiddenSections.includes("tasks"),
   };
-  const shownPane: BenchPane = has[pane] ? pane : has.app ? "app" : "shell";
+  // a part picked that has gone (its section hidden, the app stopped)
+  // leaves every part showing, and a phone its first
+  const picked: BenchPane | null = benchPart && has[benchPart] ? benchPart : null;
+  const shownPane: BenchPane | null = picked ?? (phone ? (has.app ? "app" : "shell") : null);
   return (
     <>
       {bench && <FocusBackdrop onLeave={() => setMode("normal")} />}
@@ -1302,10 +1314,10 @@ export function RepoPanel({
       className={`panel s-${stateOf(repo)}${guided ? " guided-panel" : ""}${modeClass}`}
       aria-label={repo.name}
       hidden={hidden}
-      data-pane={bench ? shownPane : undefined}
+      data-pane={bench ? (shownPane ?? undefined) : undefined}
       style={{ "--panel-w": `${width}px` } as CSSProperties}
     >
-      {bench && <BenchBar repoId={id} pane={shownPane} setPane={setPane} has={has} />}
+      {bench && <BenchBar repoId={id} pane={shownPane} setPane={(p) => soloBench(id, p)} has={has} />}
       {/* Everything but the shells scrolls in here; the shells sit below it,
           along the panel's bottom edge, whatever the scroll position. */}
       <div className="panel-body" ref={bodyRef} style={zoomStyle(zoom)}>

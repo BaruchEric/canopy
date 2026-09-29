@@ -10,7 +10,7 @@ import { focusPanel, nextActive } from "./dock";
 import { heldShellUrl, openElsewhere, openShellElsewhere, parseRoute, soloUrl } from "./routes";
 import { loadSettings, saveSettings, shellPlace, type Settings, type ShellPlace } from "./settings";
 import { PANEL_TERM_ROWS, adoptTerms, loadFocusSize, loadTermTabs, needsPanelShell, nextStripTab, reconcileTerms, rowsPx, termId, type FocusSize, type TermTab } from "./term";
-import { clearTask, frontForTab, keepFront, projectFront, type Front } from "./front";
+import { clearTask, frontForTab, frontForTask, keepFront, projectFront, withSolo, type BenchPane, type Front } from "./front";
 import { clientId, identity } from "./client";
 export type { TermTab } from "./term";
 import { clamp, needsAttention } from "./util";
@@ -751,6 +751,9 @@ interface CanopyState {
   /** brings a project's bench to the front, opening its panel; null puts
    *  it back */
   bringProject: (repoId: string | null) => void;
+  /** one part fills `repoId`'s bench while it is in front, or with null
+   *  every part shows side by side again */
+  soloBench: (repoId: string, pane: BenchPane | null) => void;
   /** brings a running shell to the front in its own place instead of what
    *  is there now: the strip, or its project's bench; its tab here, or a
    *  new tab onto it */
@@ -2045,6 +2048,11 @@ export const useStore = create<CanopyState>((set, get) => ({
   setFront: (front) => set({ front }),
   bringProject: (repoId) =>
     set((s) => (repoId === null ? { front: null } : { ...focusPanel(s.panels, repoId), front: projectFront(repoId) })),
+  soloBench: (repoId, pane) =>
+    set((s) => {
+      const front = withSolo(s.front, repoId, pane);
+      return front === s.front ? {} : { front };
+    }),
   bringTerm: (id) => {
     // joining gives a shell with no tab here one, and opens and unfolds a
     // panel shell's panel; a tab already here keeps its place
@@ -2120,7 +2128,7 @@ export const useStore = create<CanopyState>((set, get) => ({
       closedSections: unfoldIn(s.closedSections, repoId, "tasks"),
     })),
   bringTask: (repoId, task = null) =>
-    set((s) => ({ ...focusPanel(s.panels, repoId), front: projectFront(repoId, task) })),
+    set((s) => ({ ...focusPanel(s.panels, repoId), front: frontForTask(s.front, repoId, task) })),
   dropBenchTask: (repoId) =>
     set((s) => {
       const front = clearTask(s.front, repoId);
