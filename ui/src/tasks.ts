@@ -108,3 +108,19 @@ export const devTask = (tasks: readonly TaskInfo[]): TaskInfo | undefined => tas
 /** a start marker's time as the local clock shows it */
 export const markTime = (at: number): string =>
   new Date(at).toLocaleString(undefined, { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit", second: "2-digit" });
+
+/** The task a repo's tasks in front show: the one asked for while it is
+ *  listed, else the one picked there, else the first running, else the first. */
+export function frontTask(tasks: readonly TaskInfo[], asked: string | null, picked: string | null): TaskInfo | null {
+  const named = (n: string | null) => (n === null ? undefined : tasks.find((t) => t.name === n));
+  return named(asked) ?? named(picked) ?? tasks.find((t) => t.status === "running") ?? tasks[0] ?? null;
+}
+
+/** The tasks in front's "also running": every other repo's task that is
+ *  running or waiting to restart, repo by repo, a repo that left the scan
+ *  left out since there is no panel to bring it to. */
+export function otherTasks(all: readonly TaskInfo[], repoId: string, name: (repoId: string) => string): TaskInfo[] {
+  return all
+    .filter((t) => t.repoId !== repoId && !t.gone && (t.status === "running" || t.status === "backoff"))
+    .sort((a, b) => name(a.repoId).localeCompare(name(b.repoId)) || a.name.localeCompare(b.name));
+}

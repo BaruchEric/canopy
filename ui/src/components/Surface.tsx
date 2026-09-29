@@ -350,6 +350,9 @@ export function Section({
   paste,
   copy,
   noCapture,
+  front,
+  tools,
+  below,
   children,
 }: {
   repo: Repo;
@@ -368,6 +371,14 @@ export function Section({
   /** the section's text for a copy, when its own words read badly as text */
   copy?: () => string;
   noCapture?: string;
+  /** how it sits when the store keeps that rather than the section, so a
+   *  control elsewhere can bring it to the front */
+  front?: [SurfaceMode, (m: SurfaceMode) => void];
+  /** buttons in the header ahead of the gear */
+  tools?: ReactNode;
+  /** shown under the zoomed body, outside its zoom: an xterm there keeps
+   *  its mouse and selection */
+  below?: ReactNode;
   children: ReactNode;
 }) {
   const lone = useContext(SectionWindow);
@@ -375,7 +386,8 @@ export function Section({
   const toggleSection = useStore((s) => s.toggleSection);
   const focusSize = useStore((s) => s.focusSize);
   const box = useRef<HTMLElement>(null);
-  const [chosenMode, setMode] = useState<SurfaceMode>("normal");
+  const [ownMode, setOwnMode] = useState<SurfaceMode>("normal");
+  const [chosenMode, setMode] = front ?? [ownMode, setOwnMode];
   // folded, a section is neither over the panel nor in front
   const mode: SurfaceMode = closed ? "normal" : chosenMode;
   const { zoom, entry: zoomEntry } = useZoom(k, mode === "focus");
@@ -416,12 +428,14 @@ export function Section({
           >
             {mode === "focus" ? `${word} · ${repo.name}` : word} <span>{head}</span>
           </button>
+          {!closed && tools}
           <Gear label={`${word} at ${repo.name}`} groups={groups} />
         </div>
         <div className="section-main" style={zoomStyle(mode === "focus" ? zoom * panelZoom : zoom)}>
           {after}
           {!closed && children}
         </div>
+        {!closed && below}
         {mode === "focus" && <FocusGrips box={box} />}
       </section>
     </>

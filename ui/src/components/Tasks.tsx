@@ -1,12 +1,16 @@
-import { useEffect, useRef, useState } from "react";
+import { useContext, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { useShallow } from "zustand/react/shallow";
 import { api } from "../api";
 import { useFitPop } from "../pop";
 import { taskShellUrl } from "../routes";
 import { tasksOf, useStore } from "../store";
-import { markTime, STATUS_WORD, taskChip, taskWhen } from "../tasks";
+import { frontTask, markTime, otherTasks, STATUS_WORD, taskChip, taskWhen } from "../tasks";
+import type { SurfaceMode } from "../surface";
+import type { TermTab } from "../term";
 import type { Repo, TaskInfo, TaskLogLine } from "../../../src/core/types";
-import { Section, useSectionClosed } from "./Surface";
+import { Seg } from "./Seg";
+import { Section, SectionWindow, ShellSpotHere, useSectionClosed } from "./Surface";
+import { TermView } from "./TermDock";
 
 const errText = (err: unknown) => String(err instanceof Error ? err.message : err);
 
@@ -26,8 +30,11 @@ function Flags({ t }: { t: TaskInfo }) {
 
 /** A repo's tasks: one line each with start, stop and restart. A click on a
  *  running task opens its terminal among the panel's shells; the picked
- *  task's log shows under the list, searchable. */
+ *  task's log shows under the list, searchable. Brought to the front (⧉, or
+ *  a task picked in the top bar's list) the tasks float over the page like
+ *  the shells do, the picked task's live terminal or its log filling them. */
 export function TasksSection({ repo }: { repo: Repo }) {
+  const lone = useContext(SectionWindow);
   const closed = useSectionClosed(repo.id, "tasks");
   const tasks = useStore(useShallow((s) => tasksOf(s, repo.id)));
   const errors = useStore((s) => s.taskErrors[repo.id]);
@@ -35,11 +42,15 @@ export function TasksSection({ repo }: { repo: Repo }) {
   const taskAct = useStore((s) => s.taskAct);
   const editTask = useStore((s) => s.editTask);
   const openTaskTab = useStore((s) => s.openTaskTab);
+  const asked = useStore((s) => (s.frontTasks?.repoId === repo.id ? s.frontTasks.task : undefined));
+  const bringTask = useStore((s) => s.bringTask);
   const [open, setOpen] = useState<string | null>(null);
+  const [placed, setPlaced] = useState<"normal" | "full">("normal");
   const [showHidden, setShowHidden] = useState(false);
   const [busy, setBusy] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [now, setNow] = useState(() => Date.now());
+  const inFront = asked !== undefined;
 
   useEffect(() => {
     if (closed) return;
@@ -47,6 +58,18 @@ export function TasksSection({ repo }: { repo: Repo }) {
     const tick = setInterval(() => setNow(Date.now()), 1000);
     return () => clearInterval(tick);
   }, [closed, repo.id, loadTasks]);
+
+  // folded or gone, the tasks give the front back, so they do not jump to
+  // it the next time they show
+  useEffect(() => {
+    if (closed && inFront) bringTask(null);
+  }, [closed, inFront, bringTask]);
+  useEffect(
+    () => () => {
+      if (useStore.getState().frontTasks?.repoId === repo.id) useStore.getState().bringTask(null);
+    },
+    [repo.id],
+  );
 
   const act = async (action: "start" | "stop" | "restart", name: string) => {
     setBusy(`${action}:${name}`);
@@ -60,15 +83,69 @@ export function TasksSection({ repo }: { repo: Repo }) {
     }
   };
 
+  const shown = tasks.filter((t) => showHidden || !t.hidden);
+  const hidden = tasks.filter((t) => t.hidden).length;
+  const running = tasks.filter((t) => t.status === "running").length;
+  const picked = inFront ? frontTask(shown, asked, open) : (shown.find((t) => t.name === open) ?? null);
+
+  const setMode = (m: SurfaceMode) => {
+    if (m === "focus") {
+      bringTask(repo.id, open);
+      return;
+    }
+    if (inFront) {
+      // what showed in front stays open in place
+      if (picked) setOpen(picked.name);
+      bringTask(null);
+    }
+    setPlaced(m);
+  };
+  const mode: SurfaceMode = inFront ? "focus" : placed;
+
   const pick = (t: TaskInfo) => {
+    if (inFront) {
+      bringTask(repo.id, t.name);
+      setOpen(t.name);
+      return;
+    }
     setOpen(open === t.name ? null : t.name);
     if (t.live && open !== t.name) openTaskTab(repo.id, t, "panel");
   };
 
-  const shown = tasks.filter((t) => showHidden || !t.hidden);
-  const hidden = tasks.filter((t) => t.hidden).length;
-  const running = tasks.filter((t) => t.status === "running").length;
-  const picked = shown.find((t) => t.name === open) ?? null;
+  const actions = (t: TaskInfo) => (
+    <span className="task-actions">
+      {t.status === "running" ? (
+        <>
+          <button type="button" className="mini" disabled={!!busy} onClick={() => void act("restart", t.name)} title="Restart">
+            ↻
+          </button>
+          <button type="button" className="mini" disabled={!!busy} onClick={() => void act("stop", t.name)} title="Stop">
+            ■
+          </button>
+        </>
+      ) : t.status === "backoff" ? (
+        <button type="button" className="mini" disabled={!!busy} onClick={() => void act("stop", t.name)} title="Stop restarting">
+          ■
+        </button>
+      ) : (
+        !t.gone && (
+          <button type="button" className="mini" disabled={!!busy} onClick={() => void act("start", t.name)} title="Start">
+            ▶
+          </button>
+        )
+      )}
+      {t.live && (
+        <button type="button" className="mini" title="Open in a window" onClick={() => window.open(taskShellUrl(repo.id, t.termId, t.name), "_blank", "noopener")}>
+          ↗
+        </button>
+      )}
+      {!t.gone && (
+        <button type="button" className="mini" onClick={() => editTask(repo.id, t.name)} title="Edit">
+          ⋯
+        </button>
+      )}
+    </span>
+  );
 
   return (
     <Section
@@ -79,6 +156,22 @@ export function TasksSection({ repo }: { repo: Repo }) {
       head={running ? `${running} running` : tasks.length ? String(tasks.length) : ""}
       title="The repo's dev server, tests and builds, run and watched by canopy"
       copy={() => shown.map((t) => `${t.name}  ${STATUS_WORD[t.status]}  ${t.cmd}`).join("\n")}
+      front={[mode, setMode]}
+      tools={
+        !lone && (
+          <button
+            type="button"
+            className={`term-new term-focus task-front-btn${inFront ? " on" : ""}`}
+            title={inFront ? "Put the tasks back" : "Bring the tasks to the front"}
+            aria-label={inFront ? "Put the tasks back" : "Bring the tasks to the front"}
+            aria-pressed={inFront}
+            onClick={() => setMode(inFront ? "normal" : "focus")}
+          >
+            ⧉
+          </button>
+        )
+      }
+      below={inFront && picked && <TaskOutput key={picked.name} repo={repo} task={picked} />}
     >
       {errors?.map((e) => (
         <p key={e} className="note err">
@@ -88,6 +181,36 @@ export function TasksSection({ repo }: { repo: Repo }) {
       {error && <p className="note err">{error}</p>}
       {shown.length === 0 ? (
         <p className="panel-clean">No tasks yet. Add one, or give the repo a package.json, Cargo.toml or Makefile.</p>
+      ) : inFront ? (
+        <>
+          <nav className="task-tabs" aria-label={`Tasks at ${repo.name}`}>
+            {shown.map((t) => (
+              <button
+                key={t.name}
+                type="button"
+                className={`task-tab${t.name === picked?.name ? " on" : ""}`}
+                aria-current={t.name === picked?.name}
+                title={t.cmd}
+                onClick={() => pick(t)}
+              >
+                <span className={`task-dot ${t.status}`} aria-label={STATUS_WORD[t.status]} />
+                {t.name}
+              </button>
+            ))}
+          </nav>
+          {picked && (
+            <div className={`task-row open ${picked.status}`}>
+              <span className="task-main">
+                <span className="task-cmd" title={picked.cmd}>
+                  {picked.cmd}
+                </span>
+                <span className="task-when">{taskWhen(picked, now)}</span>
+              </span>
+              {actions(picked)}
+            </div>
+          )}
+          <AlsoRunning repoId={repo.id} />
+        </>
       ) : (
         <ul className="task-list">
           {shown.map((t) => (
@@ -103,54 +226,76 @@ export function TasksSection({ repo }: { repo: Repo }) {
                 {t.gone && <span className="task-source">not defined</span>}
                 <span className="task-when">{taskWhen(t, now)}</span>
               </button>
-              <span className="task-actions">
-                {t.status === "running" ? (
-                  <>
-                    <button type="button" className="mini" disabled={!!busy} onClick={() => void act("restart", t.name)} title="Restart">
-                      ↻
-                    </button>
-                    <button type="button" className="mini" disabled={!!busy} onClick={() => void act("stop", t.name)} title="Stop">
-                      ■
-                    </button>
-                  </>
-                ) : t.status === "backoff" ? (
-                  <button type="button" className="mini" disabled={!!busy} onClick={() => void act("stop", t.name)} title="Stop restarting">
-                    ■
-                  </button>
-                ) : (
-                  !t.gone && (
-                    <button type="button" className="mini" disabled={!!busy} onClick={() => void act("start", t.name)} title="Start">
-                      ▶
-                    </button>
-                  )
-                )}
-                {t.live && (
-                  <button type="button" className="mini" title="Open in a window" onClick={() => window.open(taskShellUrl(repo.id, t.termId, t.name), "_blank", "noopener")}>
-                    ↗
-                  </button>
-                )}
-                {!t.gone && (
-                  <button type="button" className="mini" onClick={() => editTask(repo.id, t.name)} title="Edit">
-                    ⋯
-                  </button>
-                )}
-              </span>
+              {actions(t)}
             </li>
           ))}
         </ul>
       )}
-      <div className="task-foot">
-        <button type="button" className="mini" onClick={() => editTask(repo.id, null)}>
-          add task
-        </button>
-        {hidden > 0 && (
-          <button type="button" className="mini" onClick={() => setShowHidden(!showHidden)}>
-            {showHidden ? "leave hidden out" : `${hidden} hidden`}
+      {!inFront && (
+        <div className="task-foot">
+          <button type="button" className="mini" onClick={() => editTask(repo.id, null)}>
+            add task
           </button>
-        )}
-      </div>
-      {picked && <TaskLog key={picked.name} repo={repo} task={picked} />}
+          {hidden > 0 && (
+            <button type="button" className="mini" onClick={() => setShowHidden(!showHidden)}>
+              {showHidden ? "leave hidden out" : `${hidden} hidden`}
+            </button>
+          )}
+        </div>
+      )}
+      {!inFront && picked && <TaskLog key={picked.name} repo={repo} task={picked} />}
     </Section>
+  );
+}
+
+/** In front, every other repo's running task: a click brings that repo's
+ *  tasks to the front instead, showing that task. */
+function AlsoRunning({ repoId }: { repoId: string }) {
+  const all = useStore((s) => s.taskAll);
+  const repos = useStore((s) => s.repos);
+  const bringTask = useStore((s) => s.bringTask);
+  const name = (id: string) => repos.find((r) => r.id === id)?.name ?? id;
+  const others = otherTasks(all, repoId, name);
+  if (others.length === 0) return null;
+  return (
+    <nav className="term-others task-others" aria-label="Other running tasks">
+      <span className="term-caption">also running</span>
+      {others.map((t) => (
+        <button key={t.termId} type="button" className="term-other" title={`Bring ${t.name} at ${name(t.repoId)} to the front`} onClick={() => bringTask(t.repoId, t.name)}>
+          <span className={`task-dot ${t.status}`} aria-hidden="true" />
+          {name(t.repoId)} · {t.name}
+        </button>
+      ))}
+    </nav>
+  );
+}
+
+const VIEWS = [
+  { value: "term", label: "terminal", title: "The task's live terminal, where it can be typed into" },
+  { value: "log", label: "log", title: "The task's log, searchable, every run marked" },
+] as const satisfies readonly { value: "term" | "log"; label: string; title: string }[];
+
+/** A task's output in front, filling the box: its live terminal while it
+ *  runs (joined, never started or ended from here), else its log, with a
+ *  switch between the two while both are there. */
+function TaskOutput({ repo, task }: { repo: Repo; task: TaskInfo }) {
+  const [view, setView] = useState<"term" | "log">("term");
+  const showTerm = task.live && view === "term";
+  const tab: TermTab = { id: task.termId, repoId: repo.id, name: `${repo.name} · ${task.name}`, path: repo.path, place: "panel", task: task.name };
+  return (
+    <div className="task-front">
+      {task.live && <Seg label="Show" value={showTerm ? "term" : "log"} options={VIEWS} onChange={setView} className="task-view" />}
+      {showTerm ? (
+        <ShellSpotHere.Provider value="front">
+          <div className="term-body">
+            {/* a restart is a new view on the new process */}
+            <TermView key={`${task.termId}:${task.startedAt ?? 0}`} tab={tab} active />
+          </div>
+        </ShellSpotHere.Provider>
+      ) : (
+        <TaskLog repo={repo} task={task} />
+      )}
+    </div>
   );
 }
 
@@ -160,6 +305,13 @@ function TaskLog({ repo, task }: { repo: Repo; task: TaskInfo }) {
   const [lines, setLines] = useState<TaskLogLine[] | null>(null);
   const [more, setMore] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // the tail stays in view as lines arrive, until the reader scrolls up
+  const pre = useRef<HTMLPreElement>(null);
+  const stick = useRef(true);
+  useLayoutEffect(() => {
+    const el = pre.current;
+    if (el && stick.current && !q) el.scrollTop = el.scrollHeight;
+  }, [lines, q]);
 
   useEffect(() => {
     let live = true;
@@ -188,7 +340,14 @@ function TaskLog({ repo, task }: { repo: Repo; task: TaskInfo }) {
     <div className="task-open">
       {error && <p className="note err">{error}</p>}
       <input className="task-search" type="search" placeholder={`search ${task.name}'s log`} value={q} onChange={(e) => setQ(e.target.value)} />
-      <pre className="task-log">
+      <pre
+        className="task-log"
+        ref={pre}
+        onScroll={(e) => {
+          const el = e.currentTarget;
+          stick.current = el.scrollHeight - el.scrollTop - el.clientHeight < 24;
+        }}
+      >
         {more && <span className="task-more">{q ? "earlier lines match too" : "earlier lines are in the log"}{"\n"}</span>}
         {lines?.map((l) => (
           <span key={l.n} className={l.mark ? "task-mark" : undefined}>
@@ -230,7 +389,7 @@ export function TaskChip({ repoId }: { repoId: string }) {
 export function TasksChip() {
   const all = useStore((s) => s.taskAll);
   const repos = useStore((s) => s.repos);
-  const showTasks = useStore((s) => s.showTasks);
+  const bringTask = useStore((s) => s.bringTask);
   const taskAct = useStore((s) => s.taskAct);
   const [open, setOpen] = useState(false);
   const [error, setError] = useState("");
@@ -288,8 +447,9 @@ export function TasksChip() {
                   type="button"
                   className="task-main"
                   disabled={t.gone === "repo"}
+                  title={`Bring ${t.name} to the front`}
                   onClick={() => {
-                    showTasks(t.repoId);
+                    bringTask(t.repoId, t.name);
                     setOpen(false);
                   }}
                 >

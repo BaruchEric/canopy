@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import type { TaskInfo } from "../../src/core/types";
-import { devTask, renameOld, taskChip, taskLines, taskWhen, withChange } from "./tasks";
+import { devTask, frontTask, otherTasks, renameOld, taskChip, taskLines, taskWhen, withChange } from "./tasks";
 
 const t = (over: Partial<TaskInfo>): TaskInfo => ({ name: "dev", cmd: "x", repoId: "r", source: "detected", termId: "0".repeat(32), status: "idle", live: false, restarts: 0, viewers: [], ...over });
 
@@ -50,5 +50,27 @@ describe("task words", () => {
   test("the dev task", () => {
     expect(devTask([t({ name: "a" }), t({ name: "b", dev: true })])?.name).toBe("b");
     expect(devTask([t({ dev: true, hidden: true })])).toBeUndefined();
+  });
+});
+
+describe("tasks in front", () => {
+  const list = [t({ name: "build" }), t({ name: "dev", status: "running" }), t({ name: "test" })];
+  test("shows the task asked for, else the one picked, else the first running, else the first", () => {
+    expect(frontTask(list, "test", "build")?.name).toBe("test");
+    expect(frontTask(list, "gone", "build")?.name).toBe("build");
+    expect(frontTask(list, null, null)?.name).toBe("dev");
+    expect(frontTask([t({ name: "a" }), t({ name: "b" })], null, null)?.name).toBe("a");
+    expect(frontTask([], "dev", null)).toBeNull();
+  });
+  test("also running: other repos' live tasks, by repo then name", () => {
+    const all = [
+      t({ repoId: "r", name: "dev", status: "running" }),
+      t({ repoId: "z", name: "web", status: "running" }),
+      t({ repoId: "a", name: "test", status: "backoff" }),
+      t({ repoId: "a", name: "dev", status: "running" }),
+      t({ repoId: "a", name: "lint", status: "failed" }),
+      t({ repoId: "q", name: "dev", status: "running", gone: "repo" }),
+    ];
+    expect(otherTasks(all, "r", (id) => id).map((x) => `${x.repoId}/${x.name}`)).toEqual(["a/dev", "a/test", "z/web"]);
   });
 });

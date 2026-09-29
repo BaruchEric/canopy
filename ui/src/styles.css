@@ -5358,3 +5358,87 @@ button.machine:hover {
     min-width: 20rem;
   }
 }
+
+/* the tasks in front: the tabs, the picked task's line and the others at
+   the top, its terminal or log filling the rest of the box */
+.tasks.surface-focus {
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  padding-bottom: 0;
+}
+.tasks.surface-focus > .section-main {
+  flex: none;
+  padding: 0 10px 4px;
+}
+.section-head > .task-front-btn {
+  margin: 8px 4px 0 0;
+}
+.task-tabs {
+  display: flex;
+  gap: 4px;
+  overflow-x: auto;
+  scrollbar-width: none;
+  padding-bottom: 4px;
+}
+.task-tab {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 10px;
+  border-radius: var(--r);
+  color: var(--ink-dim);
+  white-space: nowrap;
+}
+.task-tab:hover,
+.task-tab:focus-visible {
+  color: var(--ink);
+  background: var(--bark2);
+}
+.task-tab.on {
+  color: var(--ink);
+  background: var(--bark3);
+  font-weight: 600;
+}
+.tasks.surface-focus .task-row.open .task-main {
+  background: none;
+  cursor: default;
+}
+.task-others {
+  margin: 4px -10px 0;
+}
+.task-front {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  border-top: 1px solid var(--hair);
+  background: var(--bark0);
+}
+.task-front > .task-view {
+  align-self: flex-start;
+  margin: 6px 10px 0;
+}
+.task-front > .term-body {
+  flex: 1;
+  min-height: 0;
+}
+.task-front > .task-open {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  margin: 0;
+  padding: 6px 10px 8px;
+}
+.task-front .task-log {
+  flex: 1;
+  max-height: none;
+}
+@media (pointer: coarse) {
+  .task-tab {
+    min-height: 36px;
+    padding: 4px 12px;
+  }
+}

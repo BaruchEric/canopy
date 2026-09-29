@@ -436,15 +436,15 @@ function RescanButton() {
 }
 
 /** Who else is here and what is running: each chip is absent when it has
- *  nothing to say. */
-function Chips() {
+ *  nothing to say. A phone keeps the tasks' chip on its first row instead. */
+function Chips({ tasks = true }: { tasks?: boolean }) {
   return (
     <>
       <PeersChip />
       <BackendsChip />
       <KeptShells />
       <ShellsChip />
-      <TasksChip />
+      {tasks && <TasksChip />}
       <DevicesChip />
       <ChanChip />
     </>
@@ -467,6 +467,9 @@ export function TopBar({ nav }: { nav?: ReactNode }) {
           <Wordmark />
           {nav}
           <span className="spacer" />
+          {/* the tasks' chip stays in reach with a repo open, when the rows
+              under this one go: it brings a task to the front from anywhere */}
+          <TasksChip />
           <LiveDot />
           <SearchButton />
           <SettingsMenu />
@@ -484,7 +487,7 @@ export function TopBar({ nav }: { nav?: ReactNode }) {
           <RescanButton />
           <SourcesMenu />
           <WsTabs />
-          <Chips />
+          <Chips tasks={false} />
         </div>
       </header>
     );
