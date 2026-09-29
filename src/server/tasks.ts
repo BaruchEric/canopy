@@ -7,8 +7,8 @@
  */
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
-import { interruptTask, listTaskPanes, logPath, readLog, readTaskFiles, readTaskState, startTaskSession, taskTermId, writeTaskState, appendMark } from "../core/taskrun";
-import { detectTasks, logPage, mergeTasks, nextDelay, normalizeTaskPatch, parseTaskFile, TASK_TIMINGS, taskStatus, isTaskName, type MergedTask, type TaskTimings } from "../core/tasks";
+import { interruptTask, listTaskPanes, logPath, readLog, readTaskFiles, readTaskState, startTaskSession, taskTermId, writeTaskState, appendMark, rotateIfBig, repipe, listLogs, removeLog } from "../core/taskrun";
+import { detectTasks, logPage, mergeTasks, nextDelay, normalizeTaskPatch, parseTaskFile, expiredTaskLogs, reapable, staleWants, TASK_TIMINGS, taskStatus, isTaskName, type MergedTask, type TaskTimings } from "../core/tasks";
 import { killSession, type TaskPane } from "../core/tmux";
 import { loadConfig, setTask, tasksFor } from "../core/store";
 import type { Repo, ServerEvent, TaskAction, TaskPatch, TaskInfo, TaskRecord, TasksResult, TermInfo } from "../core/types";
@@ -89,6 +89,7 @@ export class TaskHub {
       await this.lock(id, () => this.launch(repo, def)).catch((err) => console.error(`task ${def.name}: ${err instanceof Error ? err.message : err}`));
     }
     this.timers.push(setInterval(() => void this.poke(), this.t.tick));
+    this.timers.push(setInterval(() => void this.sweep().catch(() => {}), this.t.sweep));
   }
 
   stop(): void {
@@ -309,6 +310,37 @@ export class TaskHub {
 
   /* ---------- the supervisor ---------- */
 
+  /** Clears what gone tasks left: dead panes nobody watches, then logs and
+   *  records of tasks with no definition and no session. Never a live process. */
+  private async sweep(): Promise<void> {
+    const tmux = this.deps.tmux;
+    if (!tmux || this.stopped) return;
+    const now = Date.now();
+    for (const p of this.panes.values()) {
+      const rec = this.state[p.termId];
+      if (reapable({ dead: p.dead, ...(rec?.exitedAt !== undefined ? { exitedAt: rec.exitedAt } : {}), viewers: this.deps.viewers(p.termId).length }, now, this.t.reap)) {
+        await killSession(tmux, p.termId);
+      }
+    }
+    await this.tick();
+    if (this.stopped) return;
+    const live = new Set(this.panes.keys());
+    const logs = await listLogs();
+    const known = new Map<string, boolean | null>();
+    for (const id of new Set([...logs.map((l) => l.termId), ...Object.keys(this.state)])) {
+      const rec = this.state[id];
+      const repo = rec ? this.deps.repos().find((r) => r.path === rec.path) : undefined;
+      if (!rec || !repo) known.set(id, false);
+      else if (repo.host) known.set(id, null);
+      else known.set(id, (await this.defsOf(repo, true)).merged.some((m) => m.name === rec.name));
+    }
+    const defined = (id: string) => known.get(id) ?? false;
+    for (const id of expiredTaskLogs(logs, live, defined, now, this.t.logAge)) await removeLog(id);
+    const stale = staleWants(this.state, live, defined);
+    for (const id of stale) delete this.state[id];
+    if (stale.length) await this.save();
+  }
+
   /** one look at tmux: records deaths, holds new sessions, tells what changed */
   private async tick(): Promise<void> {
     const tmux = this.deps.tmux;
@@ -353,6 +385,10 @@ export class TaskHub {
       if (!before.dead) died(before, null);
     }
     this.panes = next;
+    for (const p of next.values()) {
+      if (this.stopped) return;
+      if (!p.dead && (await rotateIfBig(p.termId, this.t.logCap))) await repipe(tmux, p.termId);
+    }
     for (const [id, rt] of this.rt) {
       const p = next.get(id);
       if (p && !p.dead && rt.lastStart !== undefined && now - rt.lastStart > this.t.uptime) rt.fails = 0;
