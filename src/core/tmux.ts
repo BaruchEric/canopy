@@ -158,6 +158,119 @@ export const paneArgs = (base: string[], id: string): string[] => [...base, "dis
 /** a line typed into a shell, Enter and all */
 export const sendLineArgs = (base: string[], id: string, line: string): string[] => [...base, "send-keys", "-t", sessionName(id), line, "Enter"];
 
+/* ---------- tasks: a session that runs one command and keeps its pane when it ends ---------- */
+
+export interface TaskMeta {
+  id: string;
+  repoId: string;
+  path: string;
+  task: string;
+}
+
+/**
+ * A task's session: a placeholder `sleep` until `respawnArgs` swaps the real
+ * command in, so the log's pipe can be attached first and catch the
+ * command's first line. Tagged like a shell plus `@canopy_task`, which is
+ * what keeps it out of every shell list, and set to keep its pane when the
+ * command exits, so the exit code can be read.
+ */
+export function taskSessionArgs(base: string[], meta: TaskMeta, size: TermSize): string[] {
+  const name = sessionName(meta.id);
+  const { host, path } = parseLocator(meta.path);
+  const opt = (key: string, value: string) => [";", "set-option", "-t", name, key, value];
+  return [
+    ...base,
+    "new-session",
+    "-d",
+    "-s",
+    name,
+    ...(host === null ? ["-c", path] : []),
+    "-x",
+    String(size.cols),
+    "-y",
+    String(size.rows),
+    ["sleep", "2147483647"].map(shellQuote).join(" "),
+    ...opt("@canopy_repo", meta.repoId),
+    ...opt("@canopy_place", "strip"),
+    ...opt("@canopy_path", meta.path),
+    ...opt("@canopy_task", meta.task),
+    ";",
+    "set-option",
+    "-w",
+    "-t",
+    name,
+    "remain-on-exit",
+    "on",
+  ];
+}
+
+/** everything the pane writes, appended to the log; given again it replaces the pipe */
+export const pipeArgs = (base: string[], id: string, log: string): string[] => [...base, "pipe-pane", "-t", sessionName(id), `cat >> ${shellQuote(log)}`];
+
+/** the pane's process swapped for `command`, killing whatever ran there */
+export const respawnArgs = (base: string[], id: string, command: string[], dir: string | null): string[] => [
+  ...base,
+  "respawn-pane",
+  "-k",
+  "-t",
+  sessionName(id),
+  ...(dir === null ? [] : ["-c", dir]),
+  command.map(shellQuote).join(" "),
+];
+
+/** ^C to the pane, the polite first half of a stop */
+export const interruptArgs = (base: string[], id: string): string[] => [...base, "send-keys", "-t", sessionName(id), "C-c"];
+
+/** one line per pane on the server: session, task, repo, path, dead, exit status, created */
+export const TASK_PANE_FORMAT = "#{session_name}\t#{@canopy_task}\t#{@canopy_repo}\t#{@canopy_path}\t#{pane_dead}\t#{pane_dead_status}\t#{session_created}";
+
+export const taskPanesArgs = (base: string[]): string[] => [...base, "list-panes", "-a", "-F", TASK_PANE_FORMAT];
+
+export interface TaskPane {
+  termId: string;
+  task: string;
+  repoId: string;
+  path: string;
+  dead: boolean;
+  /** the exit status once dead; null while alive or when tmux did not say */
+  code: number | null;
+  /** ms */
+  createdAt: number;
+}
+
+/** reads `taskPanesArgs`, keeping the panes of task sessions canopy made */
+export function parseTaskPanes(out: string): TaskPane[] {
+  const panes: TaskPane[] = [];
+  for (const line of out.split("\n")) {
+    if (!line) continue;
+    const [name = "", task = "", repoId = "", path = "", dead = "", status = "", created = ""] = line.split("\t");
+    const termId = sessionId(name);
+    if (!termId || !task || !repoId || !path) continue;
+    const code = Number(status);
+    const secs = Number(created);
+    panes.push({
+      termId,
+      task,
+      repoId,
+      path,
+      dead: dead === "1",
+      code: dead === "1" && status !== "" && Number.isFinite(code) ? code : null,
+      createdAt: Number.isFinite(secs) && secs > 0 ? secs * 1000 : Date.now(),
+    });
+  }
+  return panes;
+}
+
+/** What a task's pane runs: `sh -lc` in its folder here, or an ssh line
+ *  that cds there and runs the same on the other host, so the pane's exit
+ *  status is the command's own either way. */
+export function taskCommand(locator: string, cmd: string, cwd?: string): { command: string[]; dir: string | null } {
+  const { host, path } = parseLocator(locator);
+  const dir = cwd ? join(path, cwd) : path;
+  if (host === null) return { command: ["sh", "-lc", cmd], dir };
+  return { command: ["ssh", "-t", "--", host, `cd ${shellQuote(dir)} && exec sh -lc ${shellQuote(cmd)}`], dir: null };
+}
+
 /** What a client is sent before tmux draws for it: the captured history as
  *  terminal lines, then enough newlines to push them off a screen of
  *  `rows`, since tmux's first draw clears the screen and what is on it then
@@ -169,8 +282,8 @@ export function primeText(captured: string, rows: number): string {
   return lines.split("\n").join("\r\n") + "\x1b[0m" + "\r\n".repeat(Math.max(1, rows));
 }
 
-/** one line per session: name, repo, place, created (unix seconds), path */
-export const LIST_FORMAT = "#{session_name}\t#{@canopy_repo}\t#{@canopy_place}\t#{session_created}\t#{@canopy_path}\t#{@canopy_handle}";
+/** one line per session: name, repo, place, created (unix seconds), path, handle, task */
+export const LIST_FORMAT = "#{session_name}\t#{@canopy_repo}\t#{@canopy_place}\t#{session_created}\t#{@canopy_path}\t#{@canopy_handle}\t#{@canopy_task}";
 
 export const listArgs = (base: string[]): string[] => [...base, "list-sessions", "-F", LIST_FORMAT];
 
@@ -178,6 +291,8 @@ export const listArgs = (base: string[]): string[] => [...base, "list-sessions",
 export interface TmuxSession extends TmuxMeta {
   /** ms since the epoch */
   createdAt: number;
+  /** the task a task's session runs; absent for a shell */
+  task?: string;
 }
 
 /** Reads `list-sessions -F LIST_FORMAT`. Sessions canopy did not make, or
@@ -186,7 +301,7 @@ export function parseSessions(out: string): TmuxSession[] {
   const sessions: TmuxSession[] = [];
   for (const line of out.split("\n")) {
     if (!line) continue;
-    const [name = "", repoId = "", place, created = "", path = "", handle = ""] = line.split("\t");
+    const [name = "", repoId = "", place, created = "", path = "", handle = "", task = ""] = line.split("\t");
     const id = sessionId(name);
     if (!id || !repoId || !path) continue;
     const secs = Number(created);
@@ -197,6 +312,7 @@ export function parseSessions(out: string): TmuxSession[] {
       place: termPlace(place),
       createdAt: Number.isFinite(secs) && secs > 0 ? secs * 1000 : Date.now(),
       ...(handle ? { handle } : {}),
+      ...(task ? { task } : {}),
     });
   }
   return sessions;
