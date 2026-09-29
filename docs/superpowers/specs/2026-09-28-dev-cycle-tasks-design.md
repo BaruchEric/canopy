@@ -97,7 +97,7 @@ up come back. The same record keeps each task's last `exitCode` and `exitedAt`,
 written when the supervisor first sees the task die, so "exit 1 · 3m ago"
 survives a canopy restart and a reaped session (see Cleanup).
 
-**Logs.** `tasks/<repo hash>/<name>.log` under the config dir, the volume the
+**Logs.** `tasks/logs/<termId>.log` under the config dir (the termId already hashes the repo path and task name), the volume the
 shells container already shares. Raw bytes as the pty wrote them, ANSI and all.
 At 2 MB the log rotates to `.log.1`, one old file kept. Search strips ANSI.
 
@@ -122,7 +122,7 @@ reconnects, touch scrolling and paste carry over.
 **Start** is three calls, in this order:
 
 1. `new-session -d` with `sleep 2147483647` as its command and the tags above.
-2. Append `--- started <local time> · <cmd> ---` to the log, then
+2. Append `--- started <epoch ms> · <cmd> ---` to the log (the UI shows it in local time), then
    `pipe-pane -o 'cat >> <log>'`.
 3. `respawn-pane -k` with `sh -lc '<cmd>'` from the repo root (or `cwd`), or the
    ssh line for a remote repo.
@@ -164,8 +164,7 @@ files, with the decisions in pure functions in `core/tasks.ts`:
 
 - `expiredTaskLogs`: a task's `.log` and `.log.1` go once the task has no
   definition and no session and the log has not been written for
-  `TASK_LOG_DAYS` (7, matching `KEEP_DAYS`). A repo's log folder goes once it is
-  empty.
+  `TASK_LOG_DAYS` (7, matching `KEEP_DAYS`).
 - `reapable`: a dead task session (`remain-on-exit` holds it) is killed once it
   has been dead for `TASK_REAP` (1 hour) with no viewers. Its exit is already in
   `state.json`, and the section shows a dead task's log tail rather than its
@@ -193,8 +192,9 @@ snapshots and `KeptShells` pass over any session with `@canopy_task`.
   `.canopy/tasks.json`, local repos only (400 for a `host` repo). A rename is a
   `null` for the old name and a def for the new.
 - `GET /api/repos/tasks/log?id=&name=&q=&before=`: a page of log lines,
-  newest last, each with the local time of the start marker it falls under;
-  ANSI stripped when `q` is set, which filters case-insensitively.
+  newest last, each with the time of the start marker it falls under, ANSI
+  stripped and carriage-return rewrites collapsed; `q` filters
+  case-insensitively.
 - `GET /api/tasks`: every non-idle task across repos, for the top bar.
 
 ## UI
