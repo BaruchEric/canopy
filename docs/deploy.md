@@ -71,7 +71,12 @@ mini.
 3. `claude` and `codex` logged in on the mini so `~/.claude` and `~/.codex`
    exist. The container mounts those logins; it uses your subscriptions, never
    an API key. If a token expires, log in again on the mini and the container
-   picks it up.
+   picks it up. The shells container also mounts `~/.convex`, which
+   `bun run redeploy` creates on the host. Log in once with
+   `bunx convex login --no-open` in a canopy shell (or on the host) and the
+   login stays in that folder across rebuilds. Without it `convex dev` asks
+   to log in, and under `bun run --filter` (no TTY) that exits 1 with
+   "Cannot prompt for input in non-interactive terminals".
 4. An ssh host on each client that reaches the mini, named to match
    `CANOPY_SSH_HOST` (`macmini-2018` on the mini), for VS Code Remote-SSH.
 

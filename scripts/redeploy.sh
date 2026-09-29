@@ -149,6 +149,9 @@ job() {
   set -o pipefail
   echo "== $(date) deploying $sha"
   docker compose build || { echo "build failed"; return 1; }
+  # a bind mount's missing host folder is made by docker, as root, and the
+  # shells container's user could never write a login into it
+  mkdir -p "$HOME/.convex"
   if docker compose --dry-run up -d 2>&1 | grep -q 'canopy-shells-1.*Recreate'; then
     if [ "$shells" != 1 ]; then
       echo "this deploy recreates the shells container, which ends every shell."

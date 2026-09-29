@@ -31,12 +31,22 @@ services:
       - GIT_CONFIG_COUNT=1
       - GIT_CONFIG_KEY_0=credential.https://github.com.helper
       - GIT_CONFIG_VALUE_0=!gh auth git-credential
+      # the container has no browser (no xdg-open), so a dev server started
+      # with an open flag (`vite --open`) skips it instead of logging an
+      # ENOENT stack trace
+      - BROWSER=none
     volumes:
       - ${DEV_ROOT:-/home/eric/dev}:${DEV_ROOT:-/home/eric/dev}
       - canopy-config:/config
       - ${HOST_HOME:-/home/eric}/.claude:/home/bun/.claude
       - ${HOST_HOME:-/home/eric}/.claude.json:/home/bun/.claude.json
       - ${HOST_HOME:-/home/eric}/.codex:/home/bun/.codex
+      # the convex CLI's login (config.json), so `convex dev` in a shell
+      # reaches its cloud deployment; without it the CLI asks to log in,
+      # which fails under `bun run --filter` (no TTY). scripts/redeploy.sh
+      # makes the folder on the host first, since docker would make it as
+      # root; a login in a shell lands there and outlives the container
+      - ${HOST_HOME:-/home/eric}/.convex:/home/bun/.convex
       - ${HOST_HOME:-/home/eric}/.ssh:/home/bun/.ssh:ro
       # the host's git identity and global ignore, so a commit in a shell has
       # an author; the folder must exist on the host first or docker makes it
