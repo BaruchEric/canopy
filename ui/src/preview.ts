@@ -58,6 +58,13 @@ export function portsFor(ports: ListeningPort[], repoId: string): { mine: Listen
   };
 }
 
+/** the port a repo previews before anyone picks one: its lowest, which is
+ *  the app when a kiosk or a second server runs beside it (5173 before
+ *  5178); null when nothing listens in it */
+export function defaultPort(mine: ListeningPort[]): number | null {
+  return mine.length ? Math.min(...mine.map((p) => p.port)) : null;
+}
+
 /** a stored choice read back, anything malformed dropped */
 export function readChoices(raw: string | null): Record<string, PreviewChoice> {
   const out: Record<string, PreviewChoice> = {};

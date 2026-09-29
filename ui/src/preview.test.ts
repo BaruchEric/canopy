@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { portsFor, previewBlocked, previewPath, previewUrl, readChoices } from "./preview";
+import { defaultPort, portsFor, previewBlocked, previewPath, previewUrl, readChoices } from "./preview";
 
 test("previewBlocked", () => {
   expect(previewBlocked({ protocol: "http:", hostname: "mini" })).toBeNull();
@@ -43,4 +43,10 @@ test("readChoices", () => {
     a: { port: 5173, path: "/x" },
     c: { port: 3000, path: "/" },
   });
+});
+
+test("defaultPort takes the repo's lowest port, so an app with a kiosk beside it opens the app", () => {
+  expect(defaultPort([{ port: 5178, repo: "a" }, { port: 5173, repo: "a" }])).toBe(5173);
+  expect(defaultPort([{ port: 3000, repo: "a" }])).toBe(3000);
+  expect(defaultPort([])).toBeNull();
 });

@@ -7,6 +7,7 @@ import { Section, useSectionClosed } from "./Surface";
 import {
   loadChoice,
   portsFor,
+  defaultPort,
   previewBlocked,
   previewPath,
   previewUrl,
@@ -41,6 +42,9 @@ export function PreviewSection({ repo }: { repo: Repo }) {
   const [portDraft, setPortDraft] = useState("");
   // bumped by reload: a new key remounts the frame at the same address
   const [nonce, setNonce] = useState(0);
+  // which frame (url and nonce) has finished loading: a dev server's first
+  // page is hundreds of module requests, blank until they land
+  const [loadedAt, setLoadedAt] = useState<string | null>(null);
   // the backend's public preview names, read with the ports: undefined
   // until then, so an https page is not called blocked before it knows
   const [pub, setPub] = useState<string | null | undefined>(undefined);
@@ -84,11 +88,11 @@ export function PreviewSection({ repo }: { repo: Repo }) {
     };
   }, [closed, blocked, slot]);
 
-  // Nothing chosen yet and exactly one port runs in this repo: that one.
+  // Nothing chosen yet and a port runs in this repo: its lowest.
   useEffect(() => {
     if (choice || !ports) return;
-    const mine = portsFor(ports, repo.id).mine;
-    if (mine.length === 1 && mine[0]) pick({ port: mine[0].port, path: "/" });
+    const first = defaultPort(portsFor(ports, repo.id).mine);
+    if (first !== null) pick({ port: first, path: "/" });
     // pick closes over nothing but repo.id, which is a dependency here
   }, [choice, ports, repo.id]);
 
@@ -251,11 +255,17 @@ export function PreviewSection({ repo }: { repo: Repo }) {
                   )}
                 </div>
                 <div className="preview-frame-wrap">
+                  {url && loadedAt !== `${url}#${nonce}` && (
+                    <p className="preview-loading" role="status">
+                      Loading the app… the first load can take a while from outside the tailnet.
+                    </p>
+                  )}
                   {url ? (
                     <iframe
                       key={`${url}#${nonce}`}
                       className="preview-frame"
                       src={url}
+                      onLoad={() => setLoadedAt(`${url}#${nonce}`)}
                       title={`${repo.name} on port ${choice.port}`}
                       // its own origin already (another port); no top navigation
                       sandbox="allow-scripts allow-same-origin allow-forms allow-popups allow-modals allow-downloads"

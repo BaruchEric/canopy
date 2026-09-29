@@ -4492,6 +4492,19 @@ body:has(.focus-grip.se.dragging) {
 .preview-frame-wrap > .panel-clean {
   margin: 14px;
 }
+.preview-frame-wrap {
+  position: relative;
+}
+.preview-loading {
+  position: absolute;
+  inset: 0;
+  margin: 0;
+  padding: 14px;
+  color: #555;
+  background: #fff;
+  font-size: 13px;
+  pointer-events: none;
+}
 .preview-frame {
   display: block;
   width: 100%;
