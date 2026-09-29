@@ -4444,9 +4444,16 @@ body:has(.focus-grip.se.dragging) {
   padding-bottom: 8px;
 }
 .preview-body {
+  position: relative;
   display: flex;
   flex-direction: column;
   gap: 6px;
+}
+.section-head > .preview-mode-btn {
+  margin: 8px 0 0;
+}
+.section-head > .preview-mode-btn + .preview-mode-btn {
+  margin-right: 4px;
 }
 .preview-ports,
 .preview-bar {
@@ -4480,9 +4487,10 @@ body:has(.focus-grip.se.dragging) {
 }
 .preview-frame-wrap {
   margin: 0 14px;
-  height: 420px;
+  height: var(--preview-h, 600px);
   min-height: 160px;
-  resize: vertical;
+  max-height: 85vh;
+  max-height: 85dvh;
   overflow: hidden;
   border: 1px solid var(--hair2);
   border-radius: var(--r);
@@ -4510,6 +4518,38 @@ body:has(.focus-grip.se.dragging) {
   width: 100%;
   height: 100%;
   border: 0;
+}
+/* the grip dragging the frame's bottom edge; the body is its box */
+.preview-body > .term-grip {
+  left: 14px;
+  right: 14px;
+}
+/* in front or filling the panel, the frame takes whatever the box has */
+.preview.surface-focus,
+.preview.section-full {
+  display: flex;
+  flex-direction: column;
+}
+.preview.surface-focus {
+  overflow: hidden;
+}
+.preview.surface-focus > .section-main,
+.preview.section-full > .section-main {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+.preview.surface-focus .preview-body,
+.preview.section-full .preview-body {
+  flex: 1;
+  min-height: 0;
+}
+.preview.surface-focus .preview-frame-wrap,
+.preview.section-full .preview-frame-wrap {
+  flex: 1;
+  height: auto;
+  max-height: none;
 }
 
 /* ---------- the launcher: builds, releases and pull requests in the panel ---------- */

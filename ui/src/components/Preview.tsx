@@ -1,15 +1,19 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState, type CSSProperties } from "react";
 import { useShallow } from "zustand/react/shallow";
 import { api } from "../api";
 import { backendOf, isHome } from "../registry";
 import { tasksOf, useStore } from "../store";
 import { devTask } from "../tasks";
 import { Section, useSectionClosed } from "./Surface";
+import { TermGrip } from "./TermDock";
+import { flipMode, type SurfaceMode } from "../surface";
 import {
+  PREVIEW_H,
   loadChoice,
   portsFor,
   defaultPort,
   previewBlocked,
+  previewHeightOf,
   previewPath,
   previewUrl,
   saveChoice,
@@ -24,6 +28,37 @@ const errText = (err: unknown) => String(err instanceof Error ? err.message : er
 const PORTS_EVERY = 4000;
 
 const portLabel = (p: ListeningPort) => (p.command ? `${p.port} · ${p.command}` : String(p.port));
+
+/** The head's switches, the same pair a shell row has: bring the preview to
+ *  the front, and have it fill the panel. Either again puts it back. */
+function ModeButtons({ mode, setMode }: { mode: SurfaceMode; setMode: (m: SurfaceMode) => void }) {
+  const focus = mode === "focus";
+  const full = mode === "full";
+  return (
+    <>
+      <button
+        type="button"
+        className={`term-new term-focus preview-mode-btn${focus ? " on" : ""}`}
+        title={focus ? "Put the preview back" : "Bring the preview to the front"}
+        aria-label={focus ? "Put the preview back" : "Bring the preview to the front"}
+        aria-pressed={focus}
+        onClick={() => setMode(flipMode(mode, "focus"))}
+      >
+        ⧉
+      </button>
+      <button
+        type="button"
+        className={`term-new term-full preview-mode-btn${full ? " on" : ""}`}
+        title={full ? "Give the panel back" : "The preview takes the whole panel"}
+        aria-label={full ? "Restore the preview's size" : "Maximize the preview"}
+        aria-pressed={full}
+        onClick={() => setMode(flipMode(mode, "full"))}
+      >
+        {full ? "⤡" : "⤢"}
+      </button>
+    </>
+  );
+}
 
 /**
  * The in-app browser: the repo's dev server on the backend, framed in the
@@ -58,6 +93,10 @@ export function PreviewSection({ repo }: { repo: Repo }) {
   const known = useStore((s) => repo.id in s.tasks);
   const loadTasks = useStore((s) => s.loadTasks);
   const taskAct = useStore((s) => s.taskAct);
+  const height = useStore((s) => s.settings.previewHeight);
+  const setSetting = useStore((s) => s.setSetting);
+  const [mode, setMode] = useState<SurfaceMode>("normal");
+  const frameBox = useRef<HTMLDivElement>(null);
   useEffect(() => {
     if (!closed && !known) loadTasks(repo.id).catch(() => {});
   }, [closed, known, repo.id, loadTasks]);
@@ -154,6 +193,8 @@ export function PreviewSection({ repo }: { repo: Repo }) {
       head={summary}
       title="The repo's dev server, running on the backend, shown here"
       noCapture={url ? "The page in the preview is another origin, which a capture cannot see into" : undefined}
+      front={[mode, setMode]}
+      tools={<ModeButtons mode={mode} setMode={setMode} />}
     >
       <div className="preview-body">
         {blocked ? (
@@ -259,7 +300,11 @@ export function PreviewSection({ repo }: { repo: Repo }) {
                     </a>
                   )}
                 </div>
-                <div className="preview-frame-wrap">
+                <div
+                  ref={frameBox}
+                  className="preview-frame-wrap"
+                  style={{ "--preview-h": `${height}px` } as CSSProperties}
+                >
                   {url && loadedAt !== `${url}#${nonce}` && (
                     <p className="preview-loading" role="status">
                       Loading the app… the first load can take a while from outside the tailnet.
@@ -279,6 +324,17 @@ export function PreviewSection({ repo }: { repo: Repo }) {
                     <p className="panel-clean">Opening a preview port…</p>
                   )}
                 </div>
+                {mode === "normal" && (
+                  <TermGrip
+                    box={frameBox}
+                    cssVar="--preview-h"
+                    label="Preview height"
+                    height={height}
+                    setHeight={(px) => setSetting("previewHeight", previewHeightOf(px))}
+                    bounds={PREVIEW_H}
+                    edge="bottom"
+                  />
+                )}
               </>
             )}
           </>

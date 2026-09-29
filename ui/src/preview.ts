@@ -5,9 +5,17 @@
  */
 import type { ListeningPort } from "../../src/core/types";
 import { publicPreviewOrigin } from "../../src/core/previewPublic";
+import { clamp } from "./util";
 
 /** where each repo's preview was left, by repo id (localStorage) */
 export const PREVIEWS_KEY = "canopy.previews";
+
+/** the framed app's height in place, in px, which its grip drags */
+export const PREVIEW_H = { min: 160, max: 2400, initial: 600 };
+
+/** a saved preview height, clamped, or the default for anything else */
+export const previewHeightOf = (v: unknown): number =>
+  typeof v === "number" && Number.isFinite(v) ? Math.round(clamp(v, PREVIEW_H.min, PREVIEW_H.max)) : PREVIEW_H.initial;
 
 export interface PreviewChoice {
   port: number;

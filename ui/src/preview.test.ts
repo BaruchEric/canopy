@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { defaultPort, portsFor, previewBlocked, previewPath, previewUrl, readChoices } from "./preview";
+import { PREVIEW_H, defaultPort, portsFor, previewBlocked, previewHeightOf, previewPath, previewUrl, readChoices } from "./preview";
 
 test("previewBlocked", () => {
   expect(previewBlocked({ protocol: "http:", hostname: "mini" })).toBeNull();
@@ -57,4 +57,13 @@ test("another machine's app previews through its public names, on any page", () 
   expect(previewBlocked({ protocol: "http:", hostname: "mini" }, pub, false)).toBeNull();
   // without them nothing of it is reachable: its ports are its own loopback
   expect(previewBlocked({ protocol: "http:", hostname: "mini" }, null, false)).toContain("public preview names");
+});
+
+test("a saved preview height is clamped, and anything else is the default", () => {
+  expect(previewHeightOf(800)).toBe(800);
+  expect(previewHeightOf(40)).toBe(PREVIEW_H.min);
+  expect(previewHeightOf(1e6)).toBe(PREVIEW_H.max);
+  expect(previewHeightOf(612.4)).toBe(612);
+  expect(previewHeightOf("800")).toBe(PREVIEW_H.initial);
+  expect(previewHeightOf(Number.NaN)).toBe(PREVIEW_H.initial);
 });
