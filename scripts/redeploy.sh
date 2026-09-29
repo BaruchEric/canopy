@@ -122,6 +122,7 @@ exec 9>"$LOGS/lock"
 flock -n 9 || die "another deploy is running; redeploy.sh log shows it"
 
 if [ $pull = 1 ]; then
+  self=$(git hash-object "$HERE/scripts/redeploy.sh")
   git fetch -q mac main || die "could not fetch from the Mac (the mac peer remote)"
   if git merge-base --is-ancestor mac/main HEAD; then
     :
@@ -129,6 +130,15 @@ if [ $pull = 1 ]; then
     git merge -q --ff-only mac/main || die "could not fast-forward: the checkout has changes in the way"
   else
     die "the mini's main and the Mac's have both moved; merge them first"
+  fi
+  # the pull brought a new copy of this script: run that one, or the deploy
+  # it describes waits for the next run
+  if [ "$(git hash-object "$HERE/scripts/redeploy.sh")" != "$self" ]; then
+    again=()
+    [ "$shells" = 1 ] && again+=(--shells)
+    [ -n "$expect" ] && again+=(--expect "$expect")
+    exec 9>&-
+    exec bash "$HERE/scripts/redeploy.sh" "${again[@]}"
   fi
 fi
 if [ -n "$expect" ]; then
