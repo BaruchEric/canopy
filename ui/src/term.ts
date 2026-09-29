@@ -23,6 +23,9 @@ export interface TermTab {
    *  over a tab whose shell had gone), so the view starts over rather than
    *  keeping the ended one, which never reconnects */
   gen?: number;
+  /** the task this tab shows; closing the tab never stops it, and its
+   *  socket only ever joins, never starts a shell under the task's id */
+  task?: string;
 }
 
 /** what a tab's view is keyed by: its name, and its generation once it has one */
@@ -53,6 +56,11 @@ export function loadTermTabs(v: unknown): TermTab[] {
   }
   return out;
 }
+
+/** Whether a tab's socket only joins a shell and never starts one: after a
+ *  dropped connection, and always for a task's tab, since a task's session
+ *  belongs to the task hub and a plain shell must never start under its id. */
+export const joinsOnly = (tab: TermTab, rejoin: boolean): boolean => rejoin || tab.task !== undefined;
 
 /**
  * The tabs a window shows once it knows what the server holds: the saved

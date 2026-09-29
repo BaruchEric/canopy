@@ -21,7 +21,7 @@ import {
   type TermTab,
 } from "../store";
 import { IdLabel, WaitingFor, useWaitingFor } from "./IdLabel";
-import { TERM_FONT, otherShells, termId, viewKey } from "../term";
+import { TERM_FONT, joinsOnly, otherShells, termId, viewKey } from "../term";
 import { SPOT_WORD, flipMode, shellSpot, termFontIn, tidyLines, type ShellSpot, type SurfaceMode } from "../surface";
 import { SHELL_TARGETS, type ShellTarget } from "../settings";
 import { Gear, type GearEntry } from "./Gear";
@@ -135,7 +135,7 @@ function socketUrl(tab: TermTab, cols: number, rows: number, rejoin: boolean): s
     // which device is looking, for the shell's viewers
     client: clientId(),
   });
-  if (rejoin) q.set("attach", "1");
+  if (joinsOnly(tab, rejoin)) q.set("attach", "1");
   return backendSocket(backendOf(tab.id), `/api/term?${q}`);
 }
 
@@ -1069,7 +1069,7 @@ function ShellGear({
     on: place === t,
     run: () => setSetting("shell", t),
   }));
-  const pop: GearEntry[] = showing
+  const pop: GearEntry[] = showing && !showing.task
     ? [
         { type: "item", label: "this shell in a new tab", run: () => popShell(showing.repoId, showing.id, "tab") },
         { type: "item", label: "this shell in a new window", run: () => popShell(showing.repoId, showing.id, "window") },
@@ -1291,12 +1291,14 @@ export function PanelShells({ repo }: { repo: Repo }) {
  *  a new one on the repo's own backend. None for a forge repo. */
 function shellTab(repo: Repo | undefined): TermTab | null {
   if (!repo || repo.forge) return null;
+  const route = parseRoute(window.location.search);
   return {
-    id: parseRoute(window.location.search).term ?? qual(backendOf(repo.id), termId()),
+    id: route.term ?? qual(backendOf(repo.id), termId()),
     repoId: repo.id,
     name: repo.name,
     path: repo.path,
     place: "strip",
+    ...(route.task ? { task: route.task } : {}),
   };
 }
 

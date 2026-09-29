@@ -21,6 +21,7 @@ import { mergeAction } from "./peers";
 import { convOf, isUnread, mergeMessages } from "./chan";
 import type { ChanMessage, TailchanInfo } from "../../src/core/types";
 import { clientCaps } from "../../src/core/client";
+import { listedTask } from "../../src/core/tasks";
 import {
   DEFAULT_AGENT,
   DEFAULT_LAUNCH,
@@ -45,6 +46,9 @@ import {
   type PeerSeen,
   type PeerSync,
   type Repo,
+  type TaskAction,
+  type TaskInfo,
+  type TaskPatch,
   type TermInfo,
   type Run,
   type RunAction,
@@ -577,6 +581,11 @@ interface CanopyState {
   launchers: Record<string, Record<string, LaunchSettings>>;
   /** downloads and builds by id, live and recently finished */
   jobs: Record<string, Job>;
+  /** each repo's tasks as last read or told, by repo id */
+  tasks: Record<string, TaskInfo[]>;
+  taskErrors: Record<string, string[]>;
+  /** every task not idle across the repos of every backend, for the top bar */
+  taskAll: TaskInfo[];
   /** repo id → bumped whenever its builds changed, so the launch section re-reads */
   buildsAt: Record<string, number>;
   /** every shell open in this window, in the order opened */
@@ -671,6 +680,12 @@ interface CanopyState {
    *  and the attention toggle have their own ways back */
   clearFilters: () => void;
   setActiveWs: (name: string | null) => void;
+  /** reads a repo's tasks from its backend */
+  loadTasks: (repoId: string) => Promise<void>;
+  taskAct: (repoId: string, action: TaskAction, name?: string) => Promise<void>;
+  saveTaskDef: (repoId: string, name: string, def: TaskPatch | null, target: "canopy" | "repo") => Promise<void>;
+  /** opening a panel starts its tasks flagged to start with it */
+  startPanelTasks: (repoId: string) => void;
   /** opens a repo's panel in the dock, or brings its tab forward */
   openPanel: (id: string) => void;
   /** brings an open panel's tab forward without opening anything */
@@ -757,6 +772,12 @@ interface CanopyState {
   setLaunch: (repoId: string, settings: LaunchSettings) => Promise<void>;
   /** opens the repo's panel with its launch section unfolded */
   showLaunch: (repoId: string) => void;
+  /** the add or edit sheet for a repo's task; null adds one */
+  editTask: (repoId: string, name: string | null) => void;
+  /** opens a repo's panel with its tasks unfolded */
+  showTasks: (repoId: string) => void;
+  /** a task's terminal as a tab among the panel's shells or the strip's; closing it leaves the task running */
+  openTaskTab: (repoId: string, task: TaskInfo, place: ShellPlace) => void;
   stopJob: (jobId: string) => Promise<void>;
   dismissJob: (jobId: string) => Promise<void>;
   /** takes a peer's WIP as a new local branch (or the given one) */
@@ -820,6 +841,7 @@ export type Sheet =
   | { kind: "run"; runId: string }
   | { kind: "agent"; repoId: string }
   | { kind: "launch"; repoId: string }
+  | { kind: "task"; repoId: string; name: string | null }
   | { kind: "search" }
   | { kind: "flow-plan"; repoId: string; workflow: string }
   | { kind: "flow"; flowId: string }
@@ -867,6 +889,8 @@ function treeState(
   | "panelWidths"
   | "panelTermHeights"
   | "closedSections"
+  | "tasks"
+  | "taskErrors"
 > {
   const reg = registry();
   const mine = mineOf(from);
@@ -889,6 +913,8 @@ function treeState(
     panelWidths: pruneByRepo(s.panelWidths, tree.repos, mine),
     panelTermHeights: pruneByRepo(s.panelTermHeights, tree.repos, mine),
     closedSections: pruneByRepo(s.closedSections, tree.repos, mine),
+    tasks: pruneByRepo(s.tasks, tree.repos, mine),
+    taskErrors: pruneByRepo(s.taskErrors, tree.repos, mine),
   };
 }
 
@@ -922,6 +948,8 @@ function feedView(s: CanopyState, from: string): FeedSnapshot {
     fleets: s.fleets,
     workspaces: s.workspaces,
     jobs: s.jobs,
+    tasks: s.tasks,
+    taskAll: s.taskAll,
     launchers: s.launchers[from] ?? {},
     helpers: connOf(s, from).helpers,
     devices: s.devices.filter((d) => mine(d.id)),
@@ -1065,6 +1093,9 @@ function resync(get: () => CanopyState, set: (fn: (s: CanopyState) => Partial<Ca
   void get()
     .rescan(b)
     .catch(() => {});
+  readTasks(get, set, b);
+  // the tasks a panel loaded may have moved while the stream was down
+  for (const id of Object.keys(get().tasks)) if (backendOf(id) === b) void get().loadTasks(id).catch(() => {});
   void Promise.all([api.terms(b), api.kept(b), api.helpers(b)])
     .then(([terms, kept, helpers]) => {
       if (!isShown(get(), b)) return;
@@ -1073,6 +1104,19 @@ function resync(get: () => CanopyState, set: (fn: (s: CanopyState) => Partial<Ca
         kept: sliceIn(registry(), s.kept, b, kept.kept, (k) => k.id),
         conns: connsIf(s, b, { keeping: kept.keeping, helpers }),
       }));
+    })
+    .catch(() => {});
+}
+
+/** what a backend has running, for the top bar; a backend without tmux
+ *  answers 503 and simply has none */
+function readTasks(get: () => CanopyState, set: (fn: (s: CanopyState) => Partial<CanopyState>) => void, b: string): void {
+  api
+    .allTasks(b)
+    .then((list) => {
+      if (!isShown(get(), b)) return;
+      const live = list.filter(listedTask);
+      set((s) => ({ taskAll: [...s.taskAll.filter((t) => backendOf(t.repoId) !== b), ...live] }));
     })
     .catch(() => {});
 }
@@ -1125,6 +1169,9 @@ export const useStore = create<CanopyState>((set, get) => ({
   agents: {},
   launchers: {},
   jobs: {},
+  tasks: {},
+  taskErrors: {},
+  taskAll: [],
   buildsAt: {},
   terms: [],
   parkedTerms: [],
@@ -1263,6 +1310,7 @@ export const useStore = create<CanopyState>((set, get) => ({
     // The archive is not in the way of first paint: it lands when it lands,
     // and claude-history only syncs hourly, so a slow refresh is plenty.
     void get().loadHistory();
+    readTasks(get, set, home);
     // Likewise peers: a backend with peer sync off just answers "off" and
     // an empty seen list, so this never blocks a grove with none set up.
     readPeers(get, set, home);
@@ -1416,6 +1464,7 @@ export const useStore = create<CanopyState>((set, get) => ({
     );
     streams.set(name, { epoch: e, off });
     void get().loadHistory(false, name);
+    readTasks(get, set, name);
     readPeers(get, set, name);
     void api
       .about(name)
@@ -1477,6 +1526,9 @@ export const useStore = create<CanopyState>((set, get) => ({
       flowRuns: flowRunsOf(Object.values(flows)),
       fleets: recordOut(s.fleets, name),
       jobs: recordOut(s.jobs, name),
+      tasks: recordOut(s.tasks, name),
+      taskErrors: recordOut(s.taskErrors, name),
+      taskAll: s.taskAll.filter((t) => backendOf(t.repoId) !== name),
       agents,
       launchers,
       histories,
@@ -1599,6 +1651,27 @@ export const useStore = create<CanopyState>((set, get) => ({
   clearFilters: () => set({ filters: [], users: [], favoritesOnly: false }),
   setActiveWs: (activeWs) => set({ activeWs }),
 
+  loadTasks: async (repoId) => {
+    const r = await api.tasks(repoId);
+    set((s) => ({ tasks: { ...s.tasks, [repoId]: r.tasks }, taskErrors: { ...s.taskErrors, [repoId]: r.errors } }));
+  },
+  taskAct: async (repoId, action, name) => {
+    const r = await api.taskAct(repoId, action, name);
+    set((s) => ({ tasks: { ...s.tasks, [repoId]: r.tasks } }));
+  },
+  saveTaskDef: async (repoId, name, def, target) => {
+    const r = await api.taskDef(repoId, name, def, target);
+    set((s) => ({ tasks: { ...s.tasks, [repoId]: r.tasks }, taskErrors: { ...s.taskErrors, [repoId]: r.errors } }));
+  },
+  startPanelTasks: (repoId) => {
+    const repo = get().repos.find((r) => r.id === repoId);
+    if (!repo || repo.forge) return;
+    // nothing flagged is the common case, and the answer is the list anyway
+    api
+      .taskAct(repoId, "start", undefined, "panel")
+      .then((r) => set((s) => ({ tasks: { ...s.tasks, [repoId]: r.tasks } })))
+      .catch(() => {});
+  },
   openPanel: (id) =>
     set((s) => {
       const next = focusPanel(s.panels, id);
@@ -1681,6 +1754,8 @@ export const useStore = create<CanopyState>((set, get) => ({
       }));
     } else if (ev.type === "scan") {
       set((s) => treeState(s, ev.result, b));
+      // a task whose repo left the scan stays, marked by the server
+      readTasks(get, set, b);
     } else if (ev.type === "workspaces") {
       set({ workspaces: ev.workspaces });
     } else if (ev.type === "agents") {
@@ -1714,6 +1789,11 @@ export const useStore = create<CanopyState>((set, get) => ({
         const { [ev.id]: _gone, ...fleets } = s.fleets;
         const sheet = s.sheet?.kind === "fleet" && s.sheet.fleetId === ev.id ? null : s.sheet;
         return { fleets, sheet };
+      });
+    } else if (ev.type === "tasks") {
+      set((s) => {
+        const others = s.taskAll.filter((t) => t.repoId !== ev.repoId);
+        return { tasks: { ...s.tasks, [ev.repoId]: ev.tasks }, taskAll: [...others, ...ev.tasks.filter(listedTask)] };
       });
     } else if (ev.type === "job") {
       set((s) => ({ jobs: { ...s.jobs, [ev.job.id]: ev.job } }));
@@ -1870,7 +1950,7 @@ export const useStore = create<CanopyState>((set, get) => ({
     const s = get();
     const tab = s.terms.find((t) => t.id === id);
     if (!tab) return;
-    endShells([tab]);
+    if (!tab.task) endShells([tab]);
     const terms = s.terms.filter((t) => t.id !== id);
     set({ terms, activeTerm: nextStripTab(s.terms, id, s.activeTerm), frontShells: keepFront(s.frontShells, terms) });
   },
@@ -2013,6 +2093,36 @@ export const useStore = create<CanopyState>((set, get) => ({
     }
   },
   editLaunch: (repoId) => set({ sheet: { kind: "launch", repoId } }),
+  editTask: (repoId, name) => set({ sheet: { kind: "task", repoId, name } }),
+  showTasks: (repoId) =>
+    set((s) => ({
+      ...focusPanel(s.panels, repoId),
+      closedSections: unfoldIn(s.closedSections, repoId, "tasks"),
+    })),
+  openTaskTab: (repoId, task, place) => {
+    const s = get();
+    const repo = s.repos.find((r) => r.id === repoId);
+    if (!repo) return;
+    const old = s.terms.find((t) => t.id === task.termId);
+    if (!old || old.exit !== undefined) {
+      // A tab whose task ended is replaced with a new generation, so its
+      // view starts over on the restarted task instead of staying ended.
+      const tab: TermTab = { id: task.termId, repoId, name: `${repo.name} · ${task.name}`, path: repo.path, place: old?.place ?? place, task: task.name };
+      set({
+        terms: old ? s.terms.map((t) => (t.id === task.termId ? { ...tab, gen: (old.gen ?? 0) + 1 } : t)) : [...s.terms, tab],
+        hiddenTerms: s.hiddenTerms.filter((h) => h !== task.termId),
+      });
+    }
+    const now = get();
+    const tab = now.terms.find((t) => t.id === task.termId);
+    if (!tab) return;
+    set({
+      activeTerm: tab.place === "strip" ? tab.id : now.activeTerm,
+      ...(tab.place === "panel"
+        ? { ...focusPanel(now.panels, repoId), closedSections: unfoldIn(now.closedSections, repoId, "shell") }
+        : {}),
+    });
+  },
   setLaunch: async (repoId, settings) => {
     const launchers = await api.setLaunch(repoId, settings);
     set((s) => ({ launchers: { ...s.launchers, [backendOf(repoId)]: launchers } }));
@@ -2229,6 +2339,25 @@ useStore.subscribe((s, prev) => {
     delete patch.activeTerm;
   }
   if (Object.keys(patch).length > 0) saveLayout(patch);
+});
+
+/** The panels whose tasks this page has asked to start, so each open of a
+ *  panel asks once: by any path that adds it to the dock (a click, the top
+ *  bar's open, a shell or search landing there) and once per page load for
+ *  the panels a reload brings back, once their repo is known. Closing a
+ *  panel forgets it, so the next open asks again. */
+const panelsStarted = new Set<string>();
+
+useStore.subscribe((s, prev) => {
+  if (s.panels === prev.panels && s.repos === prev.repos) return;
+  // a solo or shell window holds the grove's panels, not panels of its own
+  if (dockless()) return;
+  for (const id of panelsStarted) if (!s.panels.includes(id)) panelsStarted.delete(id);
+  for (const id of s.panels) {
+    if (panelsStarted.has(id) || !s.repos.some((r) => r.id === id)) continue;
+    panelsStarted.add(id);
+    s.startPanelTasks(id);
+  }
 });
 
 /** The run a repo's card should talk about: a live one first, else the most
@@ -2507,3 +2636,7 @@ export function foldStartedFleets(
     selected: s.selected.filter((id) => !ids.has(id)),
   };
 }
+
+const NO_TASKS: TaskInfo[] = [];
+/** a repo's tasks as last read or told; a stable empty list when none */
+export const tasksOf = (s: CanopyState, repoId: string): TaskInfo[] => s.tasks[repoId] ?? NO_TASKS;

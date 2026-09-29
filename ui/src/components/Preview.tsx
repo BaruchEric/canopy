@@ -1,5 +1,8 @@
 import { useEffect, useState } from "react";
+import { useShallow } from "zustand/react/shallow";
 import { api } from "../api";
+import { tasksOf, useStore } from "../store";
+import { devTask } from "../tasks";
 import { Section, useSectionClosed } from "./Surface";
 import {
   loadChoice,
@@ -39,6 +42,13 @@ export function PreviewSection({ repo }: { repo: Repo }) {
   // bumped by reload: a new key remounts the frame at the same address
   const [nonce, setNonce] = useState(0);
   const blocked = previewBlocked(window.location);
+  const dev = useStore(useShallow((s) => devTask(tasksOf(s, repo.id))));
+  const known = useStore((s) => repo.id in s.tasks);
+  const loadTasks = useStore((s) => s.loadTasks);
+  const taskAct = useStore((s) => s.taskAct);
+  useEffect(() => {
+    if (!closed && !known) loadTasks(repo.id).catch(() => {});
+  }, [closed, known, repo.id, loadTasks]);
 
   const pick = (next: PreviewChoice | null) => {
     setChoice(next);
@@ -192,7 +202,20 @@ export function PreviewSection({ repo }: { repo: Repo }) {
                 {ports === null
                   ? "Looking for dev servers…"
                   : mine.length === 0
-                    ? "Nothing listens in this repo yet. Start its dev server in a shell and it turns up here, or pick a port."
+                    ? dev && dev.status !== "running" && dev.status !== "backoff"
+                      ? (
+                        <>
+                          Nothing listens in this repo yet.{" "}
+                          <button
+                            type="button"
+                            className="mini"
+                            onClick={() => void taskAct(repo.id, "start", dev.name).catch((e: unknown) => setError(errText(e)))}
+                          >
+                            start {dev.name}
+                          </button>
+                        </>
+                      )
+                      : "Nothing listens in this repo yet. Start its dev server in a shell and it turns up here, or pick a port."
                     : "Pick a port."}
               </p>
             ) : (

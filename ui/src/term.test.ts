@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { FOCUS_GAP, FOCUS_MIN, PANEL_TERM_ROWS, adoptTerms, keepFront, otherShells, shellSet, cellHeight, focusResize, loadFocusSize, loadTermTabs, nextStripTab, pruneHidden, reconcileTerms, rowsPx, termId, viewKey, type TermTab } from "./term";
+import { FOCUS_GAP, FOCUS_MIN, PANEL_TERM_ROWS, adoptTerms, keepFront, otherShells, shellSet, cellHeight, focusResize, loadFocusSize, loadTermTabs, nextStripTab, pruneHidden, joinsOnly, reconcileTerms, rowsPx, termId, viewKey, type TermTab } from "./term";
 import type { Repo, TermInfo } from "../../src/core/types";
 
 describe("rowsPx", () => {
@@ -271,5 +271,13 @@ describe("otherShells", () => {
     expect(keepFront("panel:a", [tab("1", "a", "panel")])).toBe("panel:a");
     expect(keepFront("panel:a", [tab("1", "a", "strip")])).toBeNull();
     expect(keepFront(null, [tab("1", "a", "panel")])).toBeNull();
+  });
+});
+
+describe("joinsOnly", () => {
+  test("a task's tab only joins, a plain first socket may start a shell", () => {
+    expect(joinsOnly({ ...tab("t", "app"), task: "dev" }, false)).toBe(true);
+    expect(joinsOnly(tab("a", "app"), false)).toBe(false);
+    expect(joinsOnly(tab("a", "app"), true)).toBe(true);
   });
 });

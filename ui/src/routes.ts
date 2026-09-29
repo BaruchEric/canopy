@@ -13,6 +13,8 @@ export interface Route {
   term: string | null;
   /** the one section a section window shows */
   section: SectionKey | null;
+  /** the task a shell window shows, which it only ever joins */
+  task: string | null;
 }
 
 /** a shell's name: 32 hex digits, after another backend's name for one of
@@ -25,12 +27,14 @@ export function parseRoute(search: string): Route {
   const view = repo ? q.get("view") : null;
   const term = q.get("term");
   const section = q.get("section");
+  const task = q.get("task");
   return {
     repo: repo || null,
     solo: view === "solo",
     shell: view === "shell",
     term: view === "shell" && term && TERM_ID.test(term) ? term : null,
     section: view === "section" && isSectionKey(section) ? section : null,
+    task: view === "shell" && task && /^[a-z0-9][a-z0-9._-]{0,39}$/.test(task) ? task : null,
   };
 }
 
@@ -64,6 +68,13 @@ export function sectionUrl(id: string, section: SectionKey): string {
 export function heldShellUrl(id: string, term: string): string {
   const u = new URL(shellUrl(id));
   u.searchParams.set("term", term);
+  return u.toString();
+}
+
+/** a task's terminal in a window of its own */
+export function taskShellUrl(id: string, term: string, task: string): string {
+  const u = new URL(heldShellUrl(id, term));
+  u.searchParams.set("task", task);
   return u.toString();
 }
 

@@ -35,6 +35,7 @@ import { IdLabel } from "./IdLabel";
 import { ago, GLYPH, stateOf } from "../util";
 import { ClaudeSection } from "./Claude";
 import { LaunchSection } from "./Launch";
+import { TasksSection } from "./Tasks";
 import { PreviewSection } from "./Preview";
 import { CommitRow } from "./Commit";
 import { DiffView } from "./DiffView";
@@ -44,6 +45,7 @@ import { Star } from "./Star";
 import { RepoMenu } from "./RepoMenu";
 import { Resizer } from "./Resizer";
 import { FlowChip, RunChip } from "./RunChip";
+import { TaskChip } from "./Tasks";
 import { SearchSection } from "./Search";
 import { PanelShells } from "./TermDock";
 import { Gear, type GearEntry } from "./Gear";
@@ -923,6 +925,8 @@ export function PanelSection({ k, repo }: { k: SectionKey; repo: Repo }) {
     case "preview":
       // the preview proxies the page's own backend's ports
       return repo.host || !isHome(repo.id) ? null : <PreviewSection repo={repo} />;
+    case "tasks":
+      return repo.forge ? null : <TasksSection repo={repo} />;
     case "launch":
       return <LaunchSection repo={repo} />;
     case "claude":
@@ -1315,6 +1319,7 @@ export function RepoPanel({
           )}
         </div>
       )}
+      <TaskChip repoId={repo.id} />
 
       <div className="panel-actions">
         {OPENER_IDS.filter((app) => openers.includes(app)).map((app) => (

@@ -21,7 +21,7 @@ import {
   UnknownCommitError,
   type DiffTarget,
 } from "../core/git";
-import { githubLogin, listRemotes, ownRemotes, pushAccess } from "../core/access";
+import { accessFromUrls, githubLogin, listRemotes, ownRemotes, pushAccess } from "../core/access";
 import { linkArchived } from "../core/archive";
 import { linkFavorites } from "../core/favorite";
 import { linkPulls, parsePullCounts, PULLS_QUERY } from "../core/github";
@@ -117,6 +117,8 @@ import {
 import type { About } from "../core/types";
 import { DEFAULT_IGNORE } from "../core/scan";
 import { ChanHub } from "./tailchan";
+import { TaskHub } from "./tasks";
+import type { TaskTimings } from "../core/tasks";
 import { shellHandle } from "../core/tailchan";
 import { loadChanConfig, type ChanConfig } from "../core/chan";
 import type { ServerWebSocket } from "bun";
@@ -178,6 +180,8 @@ interface ServerState {
   launcher: Launcher;
   /** tailchan: the routes, the stream as the UI's handle, canopy's posts */
   chan: ChanHub;
+  /** a repo's named processes on tmux (server/tasks) */
+  tasks: TaskHub;
   /** open pull request counts by GitHub slug, from the last activity pass */
   pulls: Map<string, PullCount>;
   /** the paths of the repos archived in canopy, kept in step with the
@@ -432,7 +436,7 @@ async function listTerms(state: ServerState): Promise<TermInfo[]> {
       seen.add(s.id);
       if (state.terms.has(s.id)) continue;
       state.terms.set(s.id, {
-        info: { id: s.id, repoId: s.repoId, path: s.path, place: s.place, attached: false, viewers: [], startedAt: s.createdAt, ...(s.handle ? { handle: s.handle } : {}) },
+        info: { id: s.id, repoId: s.repoId, path: s.path, place: s.place, attached: false, viewers: [], startedAt: s.createdAt, ...(s.handle ? { handle: s.handle } : {}), ...(s.task ? { task: s.task } : {}) },
         pty: null,
         sockets: new Set(),
       });
@@ -440,7 +444,7 @@ async function listTerms(state: ServerState): Promise<TermInfo[]> {
     // deleting the current entry while iterating a Map is defined behaviour
     for (const id of state.terms.keys()) if (!seen.has(id)) state.terms.delete(id);
   }
-  return [...state.terms.values()].map((t) => termInfo(state, t));
+  return [...state.terms.values()].filter((t) => !t.info.task).map((t) => termInfo(state, t));
 }
 
 /** Ends a shell by id; false when there is none. On a pty the exit hook
@@ -473,6 +477,7 @@ async function snapshotShells(state: ServerState): Promise<void> {
   const tmux = state.tmux;
   if (!tmux) return;
   for (const live of state.terms.values()) {
+    if (live.info.task) continue;
     const { id, repoId, path, place, startedAt } = live.info;
     try {
       const [text, pane] = await Promise.all([snapshot(tmux, id), paneInfo(tmux, id)]);
@@ -933,8 +938,9 @@ function termInfo(state: ServerState, t: LiveTerm): TermInfo {
  *  GET does that. One being ended is left out, so no window adopts it in
  *  the moment before it goes. */
 function tellTerms(state: ServerState): void {
-  const terms = [...state.terms.values()].filter((t) => !t.ending).map((t) => termInfo(state, t));
+  const terms = [...state.terms.values()].filter((t) => !t.ending && !t.info.task).map((t) => termInfo(state, t));
   broadcast(state, { type: "terms", terms });
+  state.tasks.refresh();
 }
 
 function repoById(state: ServerState, id: string): Repo {
@@ -1592,6 +1598,8 @@ async function handleApi(
   if (path === "/api/devices" && method === "GET") return json(deviceList(state));
   const chanRes = await state.chan.handle(req, url);
   if (chanRes) return chanRes;
+  const taskRes = await state.tasks.handle(req, url, (id) => state.result.repos.find((r) => r.id === id));
+  if (taskRes) return taskRes;
 
   // The in-app browser: what listens on the backend's loopback, each port
   // with the repo its process runs in when that can be seen, and a preview
@@ -1780,7 +1788,10 @@ async function handleApi(
     return json({ path: saved, text: pasteText(saved) }, 201);
   }
   if (path === "/api/terms" && method === "DELETE") {
-    if (!(await endTerm(state, url.searchParams.get("term") ?? ""))) return json({ error: "no such shell" }, 404);
+    const term = url.searchParams.get("term") ?? "";
+    // a task's session, held or only on record, is stopped by the task routes alone
+    if (state.terms.get(term)?.info.task || state.tasks.knows(term)) return json({ error: "that is a task; stop it from its repo's tasks" }, 400);
+    if (!(await endTerm(state, term))) return json({ error: "no such shell" }, 404);
     return json({ ok: true });
   }
   if (path === "/api/runs/answer" && method === "POST") {
@@ -2348,6 +2359,8 @@ export async function startServer(opts: {
   /** tailchan's address and handles; absent reads them off the env and the
    *  CLI's config, null turns tailchan off */
   chan?: ChanConfig | null;
+  /** task timings, shrunk by tests */
+  tasks?: Partial<TaskTimings>;
 }): Promise<{ port: number; stop: () => void }> {
   const cfg = await loadConfig();
   const root = await realpath(opts.root);
@@ -2440,6 +2453,26 @@ export async function startServer(opts: {
       repoName: (id) => state.result.repos.find((r) => r.id === id)?.name ?? id,
       isFlowRun: (runId) => state.flows.list().some((f) => f.steps.some((st) => st.runId === runId)),
     }),
+    tasks: new TaskHub({
+      tmux: tmuxBase(),
+      repos: () => state.result.repos,
+      own: async (repo) => {
+        // no remote is never the user's by this test, and asking gh costs a process
+        if (!repo.remotes?.length) return false;
+        if (state.login === undefined) state.login = await githubLogin();
+        return (await accessFromUrls(repo.remotes ?? [], { login: state.login, permission: state.access })) === "ok";
+      },
+      viewers: (id) => {
+        const t = state.terms.get(id);
+        return t ? termInfo(state, t).viewers : [];
+      },
+      hold: (info) => {
+        if (!state.terms.has(info.id)) state.terms.set(info.id, { info, pty: null, sockets: new Set() });
+      },
+      broadcast: (ev) => broadcast(state, ev),
+      gaveUp: (repo, task) => state.chan.onTaskGaveUp(repo, task),
+      ...(opts.tasks ? { timings: opts.tasks } : {}),
+    }),
     pulls: new Map(),
     archived: new Set(cfg.archived),
     favorites: new Set(cfg.favorites),
@@ -2474,6 +2507,7 @@ export async function startServer(opts: {
   // and the ones a machine going down left behind, which are offered to
   // restore rather than held
   const kept = await refreshKept(state);
+  await state.tasks.start();
   console.error(
     state.tmux
       ? `shells on tmux (${state.tmux[0]}), ${state.terms.size} held from before${kept.length ? `, ${kept.length} to restore` : ""}`
@@ -2642,6 +2676,12 @@ export async function startServer(opts: {
           // a window reloaded after a reboot still names it, and starting a
           // shell there would hide the record from the restore offer and
           // write over it at the next pass. It comes back through a restore.
+          // A task's session belongs to the task hub: only an attach-only socket
+          // (a task tab) may reach it, and never one that would start a shell.
+          if (!attach && state.tasks.knows(id)) {
+            term.close(TERM_GONE, "that is a task, not a shell");
+            return;
+          }
           if (!held && (attach || state.kept.some((k) => k.id === id))) {
             term.close(TERM_GONE, "that shell is gone");
             return;
@@ -2761,6 +2801,7 @@ export async function startServer(opts: {
   return {
     port: server.port ?? port,
     stop: () => {
+      state.tasks.stop();
       clearInterval(heartbeat);
       clearInterval(helperTimer);
       clearInterval(keepTimer);

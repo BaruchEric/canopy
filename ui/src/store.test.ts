@@ -37,6 +37,7 @@ import {
   type Repo,
   type ScanResult,
   type SourceState,
+  type TaskInfo,
   type TermInfo,
 } from "../../src/core/types";
 
@@ -148,6 +149,23 @@ describe("shells this window ends or restores", () => {
     expect(useStore.getState().kept).toEqual([]);
   });
 
+  test("closing a task tab sends no DELETE, and a click revives an ended one", () => {
+    globalThis.fetch = answer({ ok: true });
+    const id = "a".repeat(32);
+    const def = { name: "dev", termId: id, live: true } as unknown as TaskInfo;
+    useStore.setState({ repos: [app], panels: [], terms: [], hiddenTerms: [], activeTerm: null });
+    useStore.getState().openTaskTab("app", def, "strip");
+    expect(useStore.getState().terms[0]).toMatchObject({ id, task: "dev" });
+    useStore.getState().endTerm(id, null);
+    useStore.getState().openTaskTab("app", def, "strip");
+    const revived = useStore.getState().terms.find((t) => t.id === id);
+    expect(revived?.exit).toBeUndefined();
+    expect(revived?.gen).toBe(1);
+    useStore.getState().closeTerm(id);
+    expect(calls).toEqual([]);
+    expect(useStore.getState().terms).toEqual([]);
+  });
+
   test("closing a panel leaves its shells running and its reopening brings them back", () => {
     globalThis.fetch = answer({ ok: true });
     const shell = "f".repeat(32);
@@ -155,13 +173,55 @@ describe("shells this window ends or restores", () => {
     const held: TermInfo = { ...info(shell), place: "panel" };
     useStore.setState({ repos: [app], panels: ["app"], activePanel: "app", terms: [panelTab], shells: [held], hiddenTerms: [] });
     useStore.getState().closePanel("app");
-    expect(calls).toEqual([]);
+    // opening the panel may ask to start its tasks; closing it ends nothing
+    expect(calls.filter((c) => c.startsWith("DELETE"))).toEqual([]);
     expect(useStore.getState().terms).toEqual([]);
     // the server still lists it; with its panel closed it waits
     useStore.getState().applyEvent({ type: "terms", terms: [held] });
     expect(useStore.getState().terms).toEqual([]);
     useStore.getState().openPanel("app");
     expect(useStore.getState().terms.map((t) => t.id)).toEqual([shell]);
+  });
+});
+
+describe("a panel's tasks start once per open, by any path", () => {
+  const realFetch = globalThis.fetch;
+  const started: string[] = [];
+  const repo = (id: string) => ({ id, name: id, path: `/dev/${id}`, group: "", source: "launch", status: null }) as unknown as Repo;
+  const settle = () => new Promise((r) => setTimeout(r, 10));
+  afterEach(() => {
+    globalThis.fetch = realFetch;
+    started.length = 0;
+  });
+
+  test("a click, the top bar, the launch section and a restored panel each start it once", async () => {
+    globalThis.fetch = (async (url: string | URL | Request, init?: RequestInit) => {
+      const u = new URL(String(url), "http://x");
+      if (init?.method === "POST" && u.pathname === "/api/repos/tasks" && String(init.body).includes('"panel"')) started.push(u.searchParams.get("id") ?? "");
+      return new Response(JSON.stringify({ tasks: [], errors: [] }), { status: 200 });
+    }) as unknown as typeof fetch;
+    // a reload brings a panel back before the scan says what its repo is
+    useStore.setState({ repos: [], panels: ["p-a"], activePanel: "p-a" });
+    await settle();
+    expect(started).toEqual([]);
+    useStore.setState({ repos: ["p-a", "p-b", "p-c", "p-d"].map(repo) });
+    await settle();
+    expect(started).toEqual(["p-a"]);
+    useStore.getState().showTasks("p-b");
+    useStore.getState().showLaunch("p-c");
+    useStore.getState().openPanel("p-d");
+    await settle();
+    expect(started).toEqual(["p-a", "p-b", "p-c", "p-d"]);
+    // a rescan, or a panel opened again while open, asks nothing more
+    useStore.setState({ repos: ["p-a", "p-b", "p-c", "p-d"].map(repo) });
+    useStore.getState().openPanel("p-b");
+    await settle();
+    expect(started).toEqual(["p-a", "p-b", "p-c", "p-d"]);
+    // closed and opened again is a new open
+    useStore.getState().closePanel("p-b");
+    useStore.getState().showTasks("p-b");
+    await settle();
+    expect(started).toEqual(["p-a", "p-b", "p-c", "p-d", "p-b"]);
   });
 });
 
@@ -351,6 +411,7 @@ describe("several backends", () => {
         "/api/history",
         "/api/peers",
         "/api/tailchan",
+        "/api/tasks",
       ].sort(),
     );
     const s = useStore.getState();
@@ -420,6 +481,26 @@ describe("several backends", () => {
     expect(s.activePanel).toBe("proj");
     expect(s.repos.map((r) => r.id)).toEqual(["proj"]);
     expect(s.root).toBe("/a");
+  });
+
+  test("a repo leaving the scan drops its loaded tasks and the server answers for the top bar list", async () => {
+    const t = (repoId: string) => ({ name: "dev", cmd: "x", repoId, source: "detected" as const, termId: "0".repeat(32), status: "running" as const, live: true, restarts: 0, viewers: [] });
+    await start(
+      backendAnswers(scanOf("/a", [repo("proj")]), [], { "/api/backends": twoBackends }),
+      backendAnswers(scanOf("/b", [repo("proj")]), [], {
+        "/api/tasks": [{ ...t("proj"), gone: "repo" }],
+      }),
+    );
+    await settle();
+    useStore.setState({ tasks: { proj: [t("proj")], "b|proj": [t("b|proj")] }, taskErrors: { "b|proj": ["x"] }, taskAll: [t("proj"), t("b|proj")] });
+    useStore.getState().applyEvent({ type: "scan", result: { ...scanOf("/b", []), sources: [source("b|launch", "launch")] } }, "b");
+    const s = useStore.getState();
+    expect(Object.keys(s.tasks)).toEqual(["proj"]);
+    expect(s.taskErrors).toEqual({});
+    await settle();
+    // the server still lists b's task, marked gone, and it stays for the popover
+    const all = useStore.getState().taskAll.filter((x) => x.repoId === "b|proj");
+    expect(all.map((x) => x.gone)).toEqual(["repo"]);
   });
 
   test("a backend that has not answered keeps its panels and its saved shell tabs", async () => {

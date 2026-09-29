@@ -18,7 +18,7 @@ describe("parseRoute", () => {
     expect(parseRoute("?repo=web-apps/ripe&view=solo&section=history").section).toBeNull();
     expect(parseRoute("?view=section&section=history").section).toBeNull();
   });
-  const none = { repo: null, solo: false, shell: false, term: null, section: null };
+  const none = { repo: null, solo: false, shell: false, term: null, section: null, task: null };
   test("reads the repo and the shell view", () => {
     expect(parseRoute("?repo=web-apps/ripe&view=shell")).toEqual({
       repo: "web-apps/ripe",
@@ -26,6 +26,7 @@ describe("parseRoute", () => {
       shell: true,
       term: null,
       section: null,
+      task: null,
     });
     expect(parseRoute("?view=shell")).toEqual(none);
   });
@@ -47,6 +48,7 @@ describe("parseRoute", () => {
       shell: false,
       term: null,
       section: null,
+      task: null,
     });
     expect(parseRoute("?repo=web-apps/ripe")).toEqual({
       repo: "web-apps/ripe",
@@ -54,6 +56,7 @@ describe("parseRoute", () => {
       shell: false,
       term: null,
       section: null,
+      task: null,
     });
     // solo needs a repo to be solo about
     expect(parseRoute("?view=solo")).toEqual(none);
@@ -89,4 +92,12 @@ describe("popupFeatures", () => {
       expect(f.top).toBeGreaterThanOrEqual(0);
     }
   });
+});
+
+test("a task window names its task", () => {
+  const r = parseRoute(`?repo=app&view=shell&term=${"a".repeat(32)}&task=dev`);
+  expect(r.term).toBe("a".repeat(32));
+  expect(r.task).toBe("dev");
+  expect(parseRoute("?repo=app&view=shell&task=Bad").task).toBeNull();
+  expect(parseRoute("?repo=app").task).toBeNull();
 });

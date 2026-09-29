@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import type { Fleet, Flow, HelperInfo, Job, Repo, RepoStatus, Run, SourceState } from "../../src/core/types";
+import type { Fleet, Flow, HelperInfo, Job, Repo, RepoStatus, Run, ServerEvent, SourceState, TaskInfo } from "../../src/core/types";
 import {
   appendFeed,
   clip,
@@ -118,6 +118,15 @@ describe("statusLines", () => {
     expect(statusLines(status({ tip }), status({ tip }))).toEqual([]);
     // a fetch that pruned the branch says nothing: the checkout did not change
     expect(statusLines(status({ tip }), status())).toEqual([]);
+  });
+});
+
+describe("task lines", () => {
+  const info: TaskInfo = { name: "dev", cmd: "x", repoId: "a", source: "detected", termId: "0".repeat(32), status: "running", live: true, restarts: 0, viewers: [] };
+  test("a running task known from taskAll is not announced as started", () => {
+    const ev: ServerEvent = { type: "tasks", repoId: "a", tasks: [info] };
+    expect(describeEvent(ev, snap({ taskAll: [info] }), 5)).toEqual([]);
+    expect(describeEvent(ev, snap(), 5).map((l) => l.text)).toEqual(["dev started"]);
   });
 });
 
