@@ -717,7 +717,7 @@ interface CanopyState {
   setSetting: <K extends keyof Settings>(key: K, value: Settings[K]) => void;
   /** opens a new shell at a repo where the settings say: its panel, the
    *  strip, or a tab or window of its own; `place` overrides the setting */
-  openTerm: (repoId: string, place?: ShellPlace, start?: "claude") => void;
+  openTerm: (repoId: string, place?: ShellPlace, start?: "claude", prompt?: string) => void;
   closeTerm: (id: string) => void;
   /** puts a shell's tab down here and leaves the shell running for the
    *  other devices, and for picking back up from the shells list */
@@ -1862,7 +1862,7 @@ export const useStore = create<CanopyState>((set, get) => ({
       saveSettings(settings);
       return { settings };
     }),
-  openTerm: (repoId, place, start) => {
+  openTerm: (repoId, place, start, prompt) => {
     const s = get();
     const repo = s.repos.find((r) => r.id === repoId);
     if (!repo || repo.forge) return;
@@ -1882,7 +1882,7 @@ export const useStore = create<CanopyState>((set, get) => ({
       name: repo.name,
       path: repo.path,
       place: where,
-      ...(start ? { start } : {}),
+      ...(start ? { start, ...(prompt ? { prompt } : {}) } : {}),
     };
     // A panel shell shows only inside its repo's panel and only while that
     // section is unfolded, so open both. Otherwise the click does nothing you

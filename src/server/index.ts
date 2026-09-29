@@ -241,9 +241,6 @@ interface LiveTerm {
   sockets: Set<ServerWebSocket<TermSocket>>;
   /** set once DELETE has asked tmux to end it, so a client's exit is told apart from the shell's own */
   ending?: boolean;
-  /** canopy typed the agent's line into it at the start (start=claude);
-   *  what a plain pty, with no tmux to ask, says it is running */
-  agent?: "claude";
 }
 
 /** what a terminal websocket carries from the upgrade to its handlers */
@@ -256,6 +253,8 @@ interface TermSocket {
   attach: boolean;
   /** type the agent's line in once, if this socket starts the shell */
   start: "claude" | null;
+  /** the first message for the agent, its argument on that line; empty for none */
+  prompt: string;
   cols: number;
   rows: number;
   /** the device this socket belongs to, by its stream's id, for `viewers` */
@@ -617,19 +616,25 @@ async function resumeTerm(
     await Bun.sleep(400);
     await sendLine(tmux, id, line);
   } else {
-    live = openPtyTerm(state, { repo, id, place, attach: false, start: null, device: null, ...size }, size);
+    live = openPtyTerm(state, { repo, id, place, attach: false, start: null, prompt: "", device: null, ...size }, size);
     await Bun.sleep(400);
     live.pty?.session.write(`${line}\r`);
   }
   return termInfo(state, live);
 }
 
-/** the agent's line into a shell this socket just started, after the same
- *  beat resume waits for the shell to read input */
-async function typeAgent(state: ServerState, live: LiveTerm, repo: Repo): Promise<void> {
-  const line = await state.agentLine(repo);
+/** the longest first message a new agent shell takes off its socket's url */
+const PROMPT_MAX = 6000;
+
+/** The agent's line into a shell this socket just started, after the same
+ *  beat resume waits for the shell to read input, with the first message as
+ *  its argument: Claude Code takes it as the conversation's first turn once
+ *  its own start-up (the folder trust question among it) is through, which
+ *  typing it in later cannot be sure of. */
+async function typeAgent(state: ServerState, live: LiveTerm, repo: Repo, prompt: string): Promise<void> {
+  const base = await state.agentLine(repo);
+  const line = prompt ? `${base} ${shellQuote(prompt)}` : base;
   await Bun.sleep(400);
-  live.agent = "claude";
   if (state.tmux) await sendLine(state.tmux, live.info.id, line);
   else live.pty?.session.write(`${line}\r`);
 }
@@ -699,7 +704,7 @@ async function joinTmuxTerm(state: ServerState, tmux: string[], ws: ServerWebSoc
     };
     state.terms.set(id, live);
     tellTerms(state);
-    if (ws.data.start === "claude") void typeAgent(state, live, repo).catch(() => {});
+    if (ws.data.start === "claude") void typeAgent(state, live, repo, ws.data.prompt).catch(() => {});
   } else if (!(await hasSession(tmux, id))) {
     state.terms.delete(id);
     tellTerms(state);
@@ -1810,7 +1815,9 @@ async function handleApi(
     const live = state.terms.get(term);
     if (live?.info.task || state.tasks.knows(term)) return json({ error: "that is a task, not a shell" }, 400);
     if (!live || live.ending) return json({ error: "no such shell" }, 404);
-    if (!state.tmux) return json({ agent: live.agent ?? null });
+    // a plain pty has no one to ask: what canopy started there may have
+    // exited back to the shell, so it never counts as an agent
+    if (!state.tmux) return json({ agent: null });
     const pane = await paneInfo(state.tmux, term);
     return json({ agent: pane ? agentIn(pane.command, pane.title) : null });
   }
@@ -2621,10 +2628,11 @@ export async function startServer(opts: {
       const place = termPlace(url.searchParams.get("place"));
       const attach = url.searchParams.get("attach") === "1";
       const start = url.searchParams.get("start") === "claude" && !attach ? "claude" : null;
+      const prompt = start ? (url.searchParams.get("prompt") ?? "").slice(0, PROMPT_MAX) : "";
       const size = termSize(url.searchParams.get("cols"), url.searchParams.get("rows"));
       const dev = url.searchParams.get("client") ?? "";
       const device = /^[0-9a-f]{16}$/.test(dev) ? dev : null;
-      const data: Socket = { kind: "term", repo, id, place, attach, start, device, ...size };
+      const data: Socket = { kind: "term", repo, id, place, attach, start, prompt, device, ...size };
       if (srv.upgrade(req, { data })) return undefined;
       return json({ error: "a websocket is expected here" }, 426);
     }
@@ -2750,7 +2758,7 @@ export async function startServer(opts: {
           }
           try {
             const live = openPtyTerm(state, term.data, { cols, rows });
-            if (term.data.start === "claude") void typeAgent(state, live, term.data.repo).catch(() => {});
+            if (term.data.start === "claude") void typeAgent(state, live, term.data.repo, term.data.prompt).catch(() => {});
             settle(() => {
               term.data.live = live;
               live.sockets.add(term);

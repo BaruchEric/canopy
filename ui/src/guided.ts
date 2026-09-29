@@ -65,6 +65,17 @@ export function claudeCandidates(showing: TermTab | null, tabs: readonly TermTab
   return out;
 }
 
+/** The shell of this repo canopy last started with claude, still open: one
+ *  that may not have come up yet, so a prompt waits for it rather than
+ *  opening another. */
+export function pendingClaude(tabs: readonly TermTab[], repoId: string): string | null {
+  for (let i = tabs.length - 1; i >= 0; i--) {
+    const t = tabs[i];
+    if (t && t.repoId === repoId && t.start === "claude" && t.exit === undefined && t.task === undefined) return t.id;
+  }
+  return null;
+}
+
 export type TourStep = 0 | 1 | 2 | "done";
 
 export const TOUR_TEXT = [

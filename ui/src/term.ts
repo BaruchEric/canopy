@@ -29,6 +29,8 @@ export interface TermTab {
   /** what the socket that starts this shell asks the backend to type in;
    *  never saved, since a shell that already exists ignores it */
   start?: "claude";
+  /** the first message for the agent `start` names, on the same socket */
+  prompt?: string;
 }
 
 /** Whether a repo's panel has no shell of its own yet: no panel tab here and

@@ -4,13 +4,13 @@ import type { Terminal } from "@xterm/xterm";
 
 export const LIVE = new Map<string, Terminal>();
 
-/** Types text into a shell as one paste, then Enter, the way a person
- *  pasting a message into Claude Code would. False when no view of that
- *  shell is mounted here. */
+/** Pastes text into a shell and puts the focus there, leaving Enter to the
+ *  user, who sees what it landed on first. False when no view of that shell
+ *  is mounted here. */
 export function typeInto(termId: string, text: string): boolean {
   const term = LIVE.get(termId);
   if (!term) return false;
   term.paste(text);
-  term.input("\r");
+  term.focus();
   return true;
 }

@@ -2,34 +2,53 @@ import { useEffect } from "react";
 import { useStore } from "../store";
 import { api } from "../api";
 import { devTask } from "../tasks";
-import { canSave, claudeCandidates, debugPrompt, devState, SAVE_PROMPT, SETUP_PROMPT } from "../guided";
+import { canSave, claudeCandidates, debugPrompt, devState, pendingClaude, SAVE_PROMPT, SETUP_PROMPT } from "../guided";
 import { LIVE, typeInto } from "../liveTerms";
 import type { TermTab } from "../term";
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
-/** Types a prompt into a shell of this repo that is running Claude: the
- *  showing one, else the repo's others, else a new panel shell started with
- *  claude, typed into once the backend says claude is up. */
+/** how long a prompt waits for a Claude shell canopy just started */
+const PENDING_WAIT = 20_000;
+
+/** the repos a prompt is on its way to, so a second click does not open a
+ *  second shell while the first is still being found or started */
+const asking = new Set<string>();
+
+const runsClaude = async (id: string): Promise<boolean> =>
+  (await api.termAgent(id).catch(() => ({ agent: null }))).agent === "claude";
+
+/** Hands a prompt to Claude at this repo. A shell already running Claude
+ *  gets it pasted in, not sent: Claude may be on a question of its own (the
+ *  folder trust, a tool permission) where Enter would pick an answer, so the
+ *  user reads it and presses Enter. A shell canopy just started with claude
+ *  is waited for rather than doubled. With neither, a new panel shell starts
+ *  claude with the prompt as its first message. */
 export async function askClaude(repoId: string, text: string, showing: TermTab | null): Promise<void> {
-  const { terms, openTerm } = useStore.getState();
-  for (const id of claudeCandidates(showing, terms, repoId)) {
-    const { agent } = await api.termAgent(id).catch(() => ({ agent: null }));
-    if (agent === "claude" && typeInto(id, text)) return;
-  }
-  const before = new Set(useStore.getState().terms.map((t) => t.id));
-  openTerm(repoId, "panel", "claude");
-  const fresh = useStore.getState().terms.find((t) => !before.has(t.id));
-  if (!fresh) return;
-  for (let waited = 0; waited < 20_000; waited += 500) {
-    await sleep(500);
-    if (!LIVE.has(fresh.id)) continue;
-    const { agent } = await api.termAgent(fresh.id).catch(() => ({ agent: null }));
-    if (agent !== "claude") continue;
-    // claude names its pane before its prompt reads input
-    await sleep(1500);
-    typeInto(fresh.id, text);
-    return;
+  if (asking.has(repoId)) return;
+  asking.add(repoId);
+  try {
+    const { terms, openTerm } = useStore.getState();
+    for (const id of claudeCandidates(showing, terms, repoId)) {
+      if ((await runsClaude(id)) && typeInto(id, text)) return;
+    }
+    const pending = pendingClaude(terms, repoId);
+    if (pending) {
+      for (let waited = 0; waited < PENDING_WAIT; waited += 500) {
+        await sleep(500);
+        if (!useStore.getState().terms.some((t) => t.id === pending)) break;
+        if (LIVE.has(pending) && (await runsClaude(pending))) {
+          // claude names its pane before its prompt reads input
+          await sleep(1500);
+          typeInto(pending, text);
+          return;
+        }
+      }
+      return;
+    }
+    openTerm(repoId, "panel", "claude", text);
+  } finally {
+    asking.delete(repoId);
   }
 }
 

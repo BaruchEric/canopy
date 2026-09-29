@@ -134,3 +134,16 @@ describe("a fresh browser", () => {
     expect(s.onboarded).toBe(false);
   });
 });
+
+describe("a browser from before levels that never saved a setting", () => {
+  test("keeps the advanced panel when it has a saved layout", () => {
+    const store = new Map<string, string>([["canopy.layout", "{}"]]);
+    (globalThis as { localStorage?: unknown }).localStorage = {
+      getItem: (k: string) => store.get(k) ?? null,
+      setItem: () => {},
+    };
+    const s = loadSettings();
+    expect(s.level).toBe("advanced");
+    expect(s.onboarded).toBe(true);
+  });
+});

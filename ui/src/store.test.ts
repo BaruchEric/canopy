@@ -246,6 +246,12 @@ describe("a panel opens its own shell", () => {
     expect(useStore.getState().terms).toHaveLength(1);
   });
 
+  test("a shell opened to take a prompt carries it for its first socket", () => {
+    useStore.setState({ terms: [], conns: online(), repos: [repo("e")], panels: ["e"], shells: [held("e".repeat(32), "e")] });
+    useStore.getState().openTerm("e", "panel", "claude", "fix it");
+    expect(useStore.getState().terms.map((t) => [t.start, t.prompt])).toEqual([["claude", "fix it"]]);
+  });
+
   test("a plain shell at advanced, and none for a backend not online", () => {
     useStore.setState({ terms: [], settings: { ...pristine.settings, level: "advanced" }, repos: [repo("c")], panels: ["c"] });
     expect(useStore.getState().terms).toEqual([]);

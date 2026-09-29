@@ -60,7 +60,8 @@ beforeAll(async () => {
     agentLine: async () => {
       typed++;
       // a pane titled like Claude Code's, which agentIn reads, over a sleep
-      return `printf 'agent-%s\\n' up; printf '\\033]2;claude-code\\033\\\\'; sleep 60`;
+      // a function, so a prompt the server adds lands as its argument
+      return `f() { printf 'agent-%s\\n' "\${1:-up}"; printf '\\033]2;claude-code\\033\\\\'; sleep 60; }; f`;
     },
   });
 });
@@ -100,6 +101,14 @@ describe("start=claude", () => {
     expect((await agentOf(B)).body.agent).toBeNull();
     plain.ws.close();
     await plain.closed;
+  });
+
+  test("a prompt rides in as the agent line's argument, quoted", async () => {
+    const c = connect({ term: "d0000000000000000000000000000004", place: "panel", start: "claude", prompt: "it's here" });
+    await c.opened;
+    await until(() => c.text().includes("agent-it's here"), "the prompt as the argument");
+    c.ws.close();
+    await c.closed;
   });
 
   test("the agent route refuses a shell it does not hold", async () => {

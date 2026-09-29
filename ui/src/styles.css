@@ -3611,6 +3611,9 @@ a.chan-text {
   padding-left: 6px;
   border-left: 1px solid var(--hair);
 }
+.agent-buttons > button {
+  white-space: nowrap;
+}
 .term-new:hover {
   color: var(--moss);
   background: var(--bark2);

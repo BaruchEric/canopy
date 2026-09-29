@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import type { Repo, RepoStatus, TaskInfo } from "../../src/core/types";
 import type { TermTab } from "./term";
-import { canSave, claudeCandidates, debugPrompt, devState, plainStatus, tourStep } from "./guided";
+import { canSave, claudeCandidates, debugPrompt, devState, pendingClaude, plainStatus, tourStep } from "./guided";
 
 const status = (over: Partial<RepoStatus> = {}): RepoStatus => ({
   branch: "main",
@@ -97,5 +97,16 @@ describe("tourStep", () => {
     expect(tourStep(2, "next")).toBe("done");
     expect(tourStep(1, "skip")).toBe("done");
     expect(tourStep("done", "next")).toBe("done");
+  });
+});
+
+describe("pendingClaude", () => {
+  test("the newest live tab of the repo started with claude", () => {
+    const a = { ...tab("a", "app", "panel"), start: "claude" as const };
+    const b = { ...tab("b", "app", "strip"), start: "claude" as const };
+    const ended = { ...tab("c", "app", "panel"), start: "claude" as const, exit: 0 };
+    expect(pendingClaude([a, b, ended, tab("d", "app", "panel")], "app")).toBe("b");
+    expect(pendingClaude([a], "other")).toBeNull();
+    expect(pendingClaude([tab("d", "app", "panel")], "app")).toBeNull();
   });
 });

@@ -246,7 +246,9 @@ const backendNamesOf = (v: unknown): string[] =>
 export function loadSettings(): Settings {
   try {
     const raw = localStorage.getItem(KEY);
-    if (!raw) return DEFAULT_SETTINGS;
+    // A browser that kept a layout but never changed a setting is one from
+    // before levels, not a new one: it keeps the panel it had.
+    if (!raw) return localStorage.getItem("canopy.layout") ? { ...DEFAULT_SETTINGS, ...levelOf({}) } : DEFAULT_SETTINGS;
     const saved = JSON.parse(raw) as Partial<Record<keyof Settings, unknown>>;
     // Every field is validated against its list: a value written by an older
     // build or edited by hand must not put the UI in a state it cannot render.
