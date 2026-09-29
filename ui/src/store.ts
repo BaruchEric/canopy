@@ -45,6 +45,9 @@ import {
   type PeerSeen,
   type PeerSync,
   type Repo,
+  type TaskAction,
+  type TaskInfo,
+  type TaskPatch,
   type TermInfo,
   type Run,
   type RunAction,
@@ -575,6 +578,11 @@ interface CanopyState {
   launchers: Record<string, Record<string, LaunchSettings>>;
   /** downloads and builds by id, live and recently finished */
   jobs: Record<string, Job>;
+  /** each repo's tasks as last read or told, by repo id */
+  tasks: Record<string, TaskInfo[]>;
+  taskErrors: Record<string, string[]>;
+  /** every task not idle across the repos of every backend, for the top bar */
+  taskAll: TaskInfo[];
   /** repo id → bumped whenever its builds changed, so the launch section re-reads */
   buildsAt: Record<string, number>;
   /** every shell open in this window, in the order opened */
@@ -669,6 +677,12 @@ interface CanopyState {
   clearFilters: () => void;
   setActiveWs: (name: string | null) => void;
   /** opens a repo's panel in the dock, or brings its tab forward */
+  /** reads a repo's tasks from its backend */
+  loadTasks: (repoId: string) => Promise<void>;
+  taskAct: (repoId: string, action: TaskAction, name?: string) => Promise<void>;
+  saveTaskDef: (repoId: string, name: string, def: TaskPatch | null, target: "canopy" | "repo") => Promise<void>;
+  /** opening a panel starts its tasks flagged to start with it */
+  startPanelTasks: (repoId: string) => void;
   openPanel: (id: string) => void;
   /** brings an open panel's tab forward without opening anything */
   showPanel: (id: string) => void;
@@ -916,6 +930,7 @@ function feedView(s: CanopyState, from: string): FeedSnapshot {
     fleets: s.fleets,
     workspaces: s.workspaces,
     jobs: s.jobs,
+    tasks: s.tasks,
     launchers: s.launchers[from] ?? {},
     helpers: connOf(s, from).helpers,
     devices: s.devices.filter((d) => mine(d.id)),
@@ -1071,6 +1086,15 @@ function resync(get: () => CanopyState, set: (fn: (s: CanopyState) => Partial<Ca
     .catch(() => {});
 }
 
+/** what a backend has running, for the top bar; a backend without tmux
+ *  answers 503 and simply has none */
+function readTasks(set: (fn: (s: CanopyState) => Partial<CanopyState>) => void, b: string): void {
+  api
+    .allTasks(b)
+    .then((list) => set((s) => ({ taskAll: [...s.taskAll.filter((t) => backendOf(t.repoId) !== b), ...list] })))
+    .catch(() => {});
+}
+
 export const useStore = create<CanopyState>((set, get) => ({
   root: "",
   sources: [],
@@ -1118,6 +1142,9 @@ export const useStore = create<CanopyState>((set, get) => ({
   agents: {},
   launchers: {},
   jobs: {},
+  tasks: {},
+  taskErrors: {},
+  taskAll: [],
   buildsAt: {},
   terms: [],
   parkedTerms: [],
@@ -1256,6 +1283,7 @@ export const useStore = create<CanopyState>((set, get) => ({
     // The archive is not in the way of first paint: it lands when it lands,
     // and claude-history only syncs hourly, so a slow refresh is plenty.
     void get().loadHistory();
+    readTasks(set, home);
     // Likewise peers: a backend with peer sync off just answers "off" and
     // an empty seen list, so this never blocks a grove with none set up.
     readPeers(get, set, home);
@@ -1409,6 +1437,7 @@ export const useStore = create<CanopyState>((set, get) => ({
     );
     streams.set(name, { epoch: e, off });
     void get().loadHistory(false, name);
+    readTasks(set, name);
     readPeers(get, set, name);
     void api
       .about(name)
@@ -1470,6 +1499,9 @@ export const useStore = create<CanopyState>((set, get) => ({
       flowRuns: flowRunsOf(Object.values(flows)),
       fleets: recordOut(s.fleets, name),
       jobs: recordOut(s.jobs, name),
+      tasks: recordOut(s.tasks, name),
+      taskErrors: recordOut(s.taskErrors, name),
+      taskAll: s.taskAll.filter((t) => backendOf(t.repoId) !== name),
       agents,
       launchers,
       histories,
@@ -1591,12 +1623,36 @@ export const useStore = create<CanopyState>((set, get) => ({
   clearFilters: () => set({ filters: [], users: [] }),
   setActiveWs: (activeWs) => set({ activeWs }),
 
-  openPanel: (id) =>
+  loadTasks: async (repoId) => {
+    const r = await api.tasks(repoId);
+    set((s) => ({ tasks: { ...s.tasks, [repoId]: r.tasks }, taskErrors: { ...s.taskErrors, [repoId]: r.errors } }));
+  },
+  taskAct: async (repoId, action, name) => {
+    const r = await api.taskAct(repoId, action, name);
+    set((s) => ({ tasks: { ...s.tasks, [repoId]: r.tasks } }));
+  },
+  saveTaskDef: async (repoId, name, def, target) => {
+    const r = await api.taskDef(repoId, name, def, target);
+    set((s) => ({ tasks: { ...s.tasks, [repoId]: r.tasks }, taskErrors: { ...s.taskErrors, [repoId]: r.errors } }));
+  },
+  startPanelTasks: (repoId) => {
+    const repo = get().repos.find((r) => r.id === repoId);
+    if (!repo || repo.forge) return;
+    // nothing flagged is the common case, and the answer is the list anyway
+    api
+      .taskAct(repoId, "start", undefined, "panel")
+      .then((r) => set((s) => ({ tasks: { ...s.tasks, [repoId]: r.tasks } })))
+      .catch(() => {});
+  },
+  openPanel: (id) => {
+    const fresh = !get().panels.includes(id);
     set((s) => {
       const next = focusPanel(s.panels, id);
       // a panel shell another device opened here waits for its panel
       return { ...next, terms: dockless() ? s.terms : adoptTerms(s.terms, s.shells, s.repos, next.panels, skipped(s.hiddenTerms)) };
-    }),
+    });
+    if (fresh) get().startPanelTasks(id);
+  },
   showPanel: (id) =>
     set((s) => (s.panels.includes(id) ? { activePanel: id } : {})),
   openRepo: (id, mods) => {
@@ -1706,6 +1762,11 @@ export const useStore = create<CanopyState>((set, get) => ({
         const { [ev.id]: _gone, ...fleets } = s.fleets;
         const sheet = s.sheet?.kind === "fleet" && s.sheet.fleetId === ev.id ? null : s.sheet;
         return { fleets, sheet };
+      });
+    } else if (ev.type === "tasks") {
+      set((s) => {
+        const others = s.taskAll.filter((t) => t.repoId !== ev.repoId);
+        return { tasks: { ...s.tasks, [ev.repoId]: ev.tasks }, taskAll: [...others, ...ev.tasks.filter((t) => t.status !== "idle")] };
       });
     } else if (ev.type === "job") {
       set((s) => ({ jobs: { ...s.jobs, [ev.job.id]: ev.job } }));
@@ -2453,3 +2514,7 @@ export function foldStartedFleets(
     selected: s.selected.filter((id) => !ids.has(id)),
   };
 }
+
+const NO_TASKS: TaskInfo[] = [];
+/** a repo's tasks as last read or told; a stable empty list when none */
+export const tasksOf = (s: CanopyState, repoId: string): TaskInfo[] => s.tasks[repoId] ?? NO_TASKS;

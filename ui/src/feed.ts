@@ -14,11 +14,13 @@ import type {
   Run,
   ServerEvent,
   SourceState,
+  TaskInfo,
   TermInfo,
   Workspace,
 } from "../../src/core/types";
 import { chanLine } from "./chan";
 import { peerLines } from "./peers";
+import { taskLines } from "./tasks";
 
 export type FeedKind =
   | "git"
@@ -31,7 +33,8 @@ export type FeedKind =
   | "launch"
   | "client"
   | "shell"
-  | "chan";
+  | "chan"
+  | "task";
 
 export interface FeedEntry {
   id: number;
@@ -60,6 +63,8 @@ export interface FeedSnapshot {
   workspaces: Workspace[];
   /** downloads and builds; absent in a snapshot from before there were any */
   jobs?: Record<string, Job>;
+  /** tasks by repo id, so a change can be told from a no-op */
+  tasks?: Record<string, TaskInfo[]>;
   /** launch settings by repo path, so a change can be told from a no-op */
   launchers?: Record<string, unknown>;
   /** the helpers attached, so an attach can be told from a detach */
@@ -448,8 +453,10 @@ export function describeEvent(
     }
     case "peers":
       return [];
-    case "tasks":
-      return [];
+    case "tasks": {
+      const repo = prev.repos.find((r) => r.id === ev.repoId);
+      return taskLines(prev.tasks?.[ev.repoId], ev.tasks, at).map((text) => about(repo, "task", at, text));
+    }
     case "chan":
       // a channel line canopy marked silent is a quiet one
       return [{ at, kind: "chan", source: "", text: chanLine(ev.message, prev.chanAs ?? ""), quiet: ev.message.meta["silent"] === true }];

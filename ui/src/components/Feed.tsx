@@ -32,6 +32,7 @@ const KIND_WORD: Record<FeedKind, string> = {
   client: "device",
   shell: "shell",
   chan: "chan",
+  task: "task",
 };
 
 /**

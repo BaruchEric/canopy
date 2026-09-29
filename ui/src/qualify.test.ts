@@ -13,11 +13,13 @@ import {
   qRepo,
   qRun,
   qScan,
+  qTask,
   qTerm,
 } from "./qualify";
 import type {
   Device,
   Fleet,
+  TaskInfo,
   Flow,
   HistoryOverview,
   Job,
@@ -155,4 +157,11 @@ describe("mergeHistory", () => {
     expect(mergeHistory([off])).toBe(off);
     expect(mergeHistory([off, mac])?.available).toBe(true);
   });
+});
+
+test("a task's repo and session ids are qualified", () => {
+  const q = (id: string) => `mini|${id}`;
+  const info: TaskInfo = { name: "dev", cmd: "x", repoId: "app", source: "detected", termId: "a".repeat(32), status: "idle", live: false, restarts: 0, viewers: [] };
+  expect(qTask(q, info)).toMatchObject({ repoId: "mini|app", termId: `mini|${"a".repeat(32)}` });
+  expect(qEvent(q, { type: "tasks", repoId: "app", tasks: [info] })).toMatchObject({ repoId: "mini|app", tasks: [{ repoId: "mini|app" }] });
 });

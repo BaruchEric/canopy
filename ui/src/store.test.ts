@@ -348,6 +348,7 @@ describe("several backends", () => {
         "/api/history",
         "/api/peers",
         "/api/tailchan",
+        "/api/tasks",
       ].sort(),
     );
     const s = useStore.getState();

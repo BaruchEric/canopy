@@ -42,6 +42,11 @@ import type {
   ServerEvent,
   SourceInput,
   SourceState,
+  TaskAction,
+  TaskInfo,
+  TaskLogPage,
+  TaskPatch,
+  TasksResult,
   TermInfo,
   WorkflowEntry,
   Workspace,
@@ -60,6 +65,7 @@ import {
   qRun,
   qScan,
   qSource,
+  qTask,
   qTerm,
   type Q,
 } from "./qualify";
@@ -586,6 +592,27 @@ export const api = {
       method: "POST",
       body: JSON.stringify(settings),
     }),
+  tasks: async (id: string) => {
+    const [b, plain] = on(id);
+    const r = await req<TasksResult>(b, `/api/repos/tasks?${rq(plain)}`);
+    return { ...r, tasks: fromAll(b, r.tasks, qTask) };
+  },
+  taskAct: async (id: string, action: TaskAction, name?: string, reason?: string) => {
+    const [b, plain] = on(id);
+    const r = await req<TasksResult>(b, `/api/repos/tasks?${rq(plain)}`, {
+      method: "POST",
+      body: JSON.stringify({ action, ...(name ? { name } : {}), ...(reason ? { reason } : {}) }),
+    });
+    return { ...r, tasks: fromAll(b, r.tasks, qTask) };
+  },
+  taskDef: async (id: string, name: string, def: TaskPatch | null, target: "canopy" | "repo") => {
+    const [b, plain] = on(id);
+    const r = await req<TasksResult>(b, `/api/repos/tasks/def?${rq(plain)}`, { method: "POST", body: JSON.stringify({ name, def, target }) });
+    return { ...r, tasks: fromAll(b, r.tasks, qTask) };
+  },
+  taskLog: (id: string, name: string, q = "", before?: number) =>
+    repoReq<TaskLogPage>(id, (p) => `/api/repos/tasks/log?${rq(p, { name, q, ...(before ? { before: String(before) } : {}) })}`),
+  allTasks: async (b: string = homeName()) => fromAll(b, await req<TaskInfo[]>(b, "/api/tasks"), qTask),
   jobs: async (b: string = homeName()) => fromAll(b, await req<Job[]>(b, "/api/jobs"), qJob),
   stopJob: async (id: string) => {
     const [b, plain] = on(id);
