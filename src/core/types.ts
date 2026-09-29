@@ -1278,6 +1278,9 @@ export interface PortsResult {
   ports: ListeningPort[];
   /** the preview ports canopy proxies through; empty when previews are off */
   slots: number[];
+  /** `CANOPY_PREVIEW_PUBLIC`: each slot's public https name, `{slot}` for
+   *  its number, for a page on canopy's public address */
+  public?: string;
 }
 
 /** `POST /api/preview`: the preview port a backend port is proxied on */

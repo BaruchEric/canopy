@@ -41,7 +41,10 @@ export function PreviewSection({ repo }: { repo: Repo }) {
   const [portDraft, setPortDraft] = useState("");
   // bumped by reload: a new key remounts the frame at the same address
   const [nonce, setNonce] = useState(0);
-  const blocked = previewBlocked(window.location);
+  // the backend's public preview names, read with the ports: undefined
+  // until then, so an https page is not called blocked before it knows
+  const [pub, setPub] = useState<string | null | undefined>(undefined);
+  const blocked = pub === undefined ? null : previewBlocked(window.location, pub);
   const dev = useStore(useShallow((s) => devTask(tasksOf(s, repo.id))));
   const known = useStore((s) => repo.id in s.tasks);
   const loadTasks = useStore((s) => s.loadTasks);
@@ -68,6 +71,7 @@ export function PreviewSection({ repo }: { repo: Repo }) {
           if (!live) return;
           setPorts(r.ports);
           setSlots(r.slots);
+          setPub(r.public ?? null);
         })
         .catch((e: unknown) => {
           if (live) setError(errText(e));
@@ -111,7 +115,7 @@ export function PreviewSection({ repo }: { repo: Repo }) {
     };
   }, [closed, blocked, port]);
 
-  const url = slot !== null && choice ? previewUrl(window.location, slot, choice.path) : null;
+  const url = slot !== null && choice ? previewUrl(window.location, slot, choice.path, pub) : null;
   const off = slots !== null && slots.length === 0;
   const { mine, loose } = ports ? portsFor(ports, repo.id) : { mine: [], loose: [] };
   const summary = choice ? `:${choice.port}` : mine.length ? String(mine.length) : "";

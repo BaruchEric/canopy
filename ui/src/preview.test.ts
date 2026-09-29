@@ -5,6 +5,8 @@ test("previewBlocked", () => {
   expect(previewBlocked({ protocol: "http:", hostname: "mini" })).toBeNull();
   expect(previewBlocked({ protocol: "https:", hostname: "localhost" })).toBeNull();
   expect(previewBlocked({ protocol: "https:", hostname: "canopy.example.com" })).toContain("tailnet");
+  // a backend with public preview names serves an https page too
+  expect(previewBlocked({ protocol: "https:", hostname: "canopy.example.com" }, "https://p{slot}.example.com")).toBeNull();
 });
 
 test("previewPath", () => {
@@ -18,6 +20,11 @@ test("previewPath", () => {
 test("previewUrl", () => {
   expect(previewUrl({ hostname: "mini" }, 7860, "about")).toBe("http://mini:7860/about");
   expect(previewUrl({ hostname: "100.64.0.2" }, 7861, "/")).toBe("http://100.64.0.2:7861/");
+  const pub = "https://p{slot}.example.com";
+  // an https page off this machine goes to the slot's public name
+  expect(previewUrl({ protocol: "https:", hostname: "canopy.example.com" }, 7860, "a", pub)).toBe("https://p7860.example.com/a");
+  // a tailnet page keeps the slot's own port, public names or not
+  expect(previewUrl({ protocol: "http:", hostname: "mini" }, 7860, "a", pub)).toBe("http://mini:7860/a");
 });
 
 test("portsFor", () => {

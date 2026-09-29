@@ -96,6 +96,7 @@ VERCEL_AI_GATEWAY_API_KEY=...   # optional: lets verdict gates evaluate
 # COMPOSE_PROFILES=tunnel       # optional: the public name, see "A public name" below
 # TUNNEL_TOKEN=eyJ...
 # CANOPY_PUBLIC_ORIGIN=https://canopy.beric.ca
+# CANOPY_PREVIEW_PUBLIC=https://canopy-p{slot}.beric.ca   # optional: previews on the public page, see "A public name"
 # TAILCHAN_URL=http://100.68.139.95:7855   # optional: the tailchan broker, see "tailchan" below
 # TAILCHAN_HUMAN=eric                       # the handle the UI speaks tailchan as
 ```
@@ -223,6 +224,16 @@ only your own email) before the tunnel goes up, and leave it on.
    refused with `Foreign origin`.
 3. `docker compose up -d --build`. `docker compose logs tunnel` should show
    four "Registered tunnel connection" lines.
+4. Optional, previews on the public page. That page is https, so it cannot
+   frame the preview ports' plain http, and each preview port needs a public
+   name of its own: one ingress rule per port, `canopy-p7860.beric.ca` to
+   `http://canopy:7860` through `canopy-p7869.beric.ca` to
+   `http://canopy:7869`, each with a proxied CNAME to the tunnel, then
+   `CANOPY_PREVIEW_PUBLIC=https://canopy-p{slot}.beric.ca` in `.env`. Check
+   that the gate covers the new names before a preview runs on them: an
+   anonymous `curl https://canopy-p7860.beric.ca/` must answer 401. On
+   beric.ca the `*.beric.ca/*` gate route does that, and its `.beric.ca`
+   cookie also signs in the framed preview.
 
 The tunnel publishes no port, so it does not wait for the tailnet the way
 canopy does. Its `restart: unless-stopped` brings it back after a reboot, and

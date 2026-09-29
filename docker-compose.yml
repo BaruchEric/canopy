@@ -137,6 +137,11 @@ services:
       # requests for that host with X-Forwarded-Proto: https pass the origin
       # gate. Empty when there is no tunnel
       - CANOPY_PUBLIC_ORIGIN=${CANOPY_PUBLIC_ORIGIN:-}
+      # each preview port's own public name on the same tunnel, {slot} for
+      # the port (https://canopy-p{slot}.beric.ca), so the public page can
+      # frame a preview; every name needs a DNS record and an ingress rule
+      # to http://canopy:<slot>. Empty keeps previews tailnet-only
+      - CANOPY_PREVIEW_PUBLIC=${CANOPY_PREVIEW_PUBLIC:-}
       # other canopy pages (another backend's, or this one's own behind
       # tailscale serve) allowed to drive this backend; see the
       # multi-backend spec. Empty when there are none.

@@ -4,6 +4,7 @@
  * per-browser memory of what each repo previews. Tested in preview.test.ts.
  */
 import type { ListeningPort } from "../../src/core/types";
+import { publicPreviewOrigin } from "../../src/core/previewPublic";
 
 /** where each repo's preview was left, by repo id (localStorage) */
 export const PREVIEWS_KEY = "canopy.previews";
@@ -19,9 +20,8 @@ export interface PreviewChoice {
  * https from somewhere that is not this machine (the public tunnel) can
  * neither reach that port nor frame http inside https.
  */
-export function previewBlocked(loc: { protocol: string; hostname: string }): string | null {
-  if (loc.protocol !== "https:") return null;
-  if (["localhost", "127.0.0.1", "[::1]"].includes(loc.hostname)) return null;
+export function previewBlocked(loc: { protocol: string; hostname: string }, publicTemplate?: string | null): string | null {
+  if (!onPublicPage(loc) || publicTemplate) return null;
   return "Previews are served on the backend's own ports over http, which this https address does not reach. Open canopy at its tailnet address to preview.";
 }
 
@@ -36,8 +36,16 @@ export function previewPath(input: string): string {
   return rest.startsWith("/") ? rest : `/${rest}`;
 }
 
-/** the address a preview port shows a path at, on the host this page came from */
-export function previewUrl(loc: { hostname: string }, slot: number, path: string): string {
+/** an https page off this machine, which cannot frame an http port */
+function onPublicPage(loc: { protocol?: string; hostname: string }): boolean {
+  return loc.protocol === "https:" && !["localhost", "127.0.0.1", "[::1]"].includes(loc.hostname);
+}
+
+/** the address a preview port shows a path at: the slot's public name for
+ *  an https page when the backend has them, else the slot's port on the
+ *  host this page came from */
+export function previewUrl(loc: { protocol?: string; hostname: string }, slot: number, path: string, publicTemplate?: string | null): string {
+  if (publicTemplate && onPublicPage(loc)) return `${publicPreviewOrigin(publicTemplate, slot)}${previewPath(path)}`;
   return `http://${loc.hostname}:${slot}${previewPath(path)}`;
 }
 

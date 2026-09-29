@@ -138,7 +138,12 @@ describe("PreviewProxy against a dev server", () => {
   });
   const devPort = dev.port as number;
   const slotPort = 20000 + Math.floor(Math.random() * 20000);
-  const proxy = new PreviewProxy([slotPort], { bind: "127.0.0.1", own: () => 1, hostOk: (h) => h === "127.0.0.1" });
+  const proxy = new PreviewProxy([slotPort], {
+    bind: "127.0.0.1",
+    own: () => 1,
+    hostOk: (h) => h === "127.0.0.1",
+    publicTemplate: "https://p{slot}.example.com",
+  });
   afterAll(() => {
     proxy.stop();
     dev.stop(true);
@@ -158,6 +163,16 @@ describe("PreviewProxy against a dev server", () => {
     expect(go.headers.get("location")).toBe(`${base}/landed`);
     const echo = await fetch(`${base}/echo`, { method: "POST", body: "hello" });
     expect(await echo.text()).toBe("hello");
+  });
+
+  test("the slot's public name is let in, and a redirect lands on its https origin", async () => {
+    const pub = `https://p${slotPort}.example.com`;
+    const go = await fetch(`${base}/go`, { redirect: "manual", headers: { host: `p${slotPort}.example.com` } });
+    expect(go.status).toBe(302);
+    expect(go.headers.get("location")).toBe(`${pub}/landed`);
+    // another slot's public name is not this one's
+    const other = await fetch(`${base}/`, { headers: { host: `p${slotPort + 1}.example.com` } });
+    expect(other.status).toBe(403);
   });
 
   test("a foreign Host is refused", async () => {

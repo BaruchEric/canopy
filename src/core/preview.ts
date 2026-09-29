@@ -11,6 +11,7 @@
  * The header rewriting, the port range and the slot pool are pure and
  * tested; `PreviewProxy` is Bun.
  */
+import { publicPreviewOrigin } from "./previewPublic";
 import type { Server, ServerWebSocket } from "bun";
 
 /** the preview ports when `CANOPY_PREVIEW_PORTS` is unset */
@@ -170,11 +171,19 @@ export class PreviewProxy {
       /** canopy's own port, never a target (read late: it is known once bound) */
       own: () => number;
       hostOk: (hostname: string) => boolean;
+      /** `CANOPY_PREVIEW_PUBLIC`: each slot's public https name, which the
+       *  tunnel hands this slot under */
+      publicTemplate?: string | null;
       /** the loopback a port is known to listen on, when the caller knows it */
       hostFor?: (port: number) => Promise<string | undefined>;
     },
   ) {
     this.slots = slots;
+  }
+
+  /** each slot's public name, when the backend has them */
+  get publicTemplate(): string | null {
+    return this.opts.publicTemplate ?? null;
   }
 
   /** the ports a preview may not dial */
@@ -236,10 +245,14 @@ export class PreviewProxy {
 
   private async handle(slot: number, req: Request, srv: Server<WsData>): Promise<Response | undefined> {
     const url = new URL(req.url);
-    if (!this.opts.hostOk(url.hostname)) return new Response("Foreign host", { status: 403 });
+    // under its public name the request came through the tunnel, as plain
+    // http from the tunnel's side, so the origin the browser sees is https
+    const pub = this.opts.publicTemplate ? publicPreviewOrigin(this.opts.publicTemplate, slot) : null;
+    const onPublic = pub !== null && url.hostname.toLowerCase() === new URL(pub).hostname;
+    if (!onPublic && !this.opts.hostOk(url.hostname)) return new Response("Foreign host", { status: 403 });
     const port = this.map.get(slot);
     if (port === undefined) return new Response("Nothing is previewed on this port; pick a port in canopy's panel.", { status: 404 });
-    const previewOrigin = url.origin;
+    const previewOrigin = onPublic && pub ? pub : url.origin;
     const host = await this.hostOf(port);
     const target = `http://${host}:${port}`;
 
