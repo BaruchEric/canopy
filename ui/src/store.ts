@@ -676,13 +676,13 @@ interface CanopyState {
    *  toggle have their own ways back */
   clearFilters: () => void;
   setActiveWs: (name: string | null) => void;
-  /** opens a repo's panel in the dock, or brings its tab forward */
   /** reads a repo's tasks from its backend */
   loadTasks: (repoId: string) => Promise<void>;
   taskAct: (repoId: string, action: TaskAction, name?: string) => Promise<void>;
   saveTaskDef: (repoId: string, name: string, def: TaskPatch | null, target: "canopy" | "repo") => Promise<void>;
   /** opening a panel starts its tasks flagged to start with it */
   startPanelTasks: (repoId: string) => void;
+  /** opens a repo's panel in the dock, or brings its tab forward */
   openPanel: (id: string) => void;
   /** brings an open panel's tab forward without opening anything */
   showPanel: (id: string) => void;
@@ -875,6 +875,9 @@ function treeState(
   | "panelWidths"
   | "panelTermHeights"
   | "closedSections"
+  | "tasks"
+  | "taskErrors"
+  | "taskAll"
 > {
   const reg = registry();
   const mine = mineOf(from);
@@ -897,6 +900,9 @@ function treeState(
     panelWidths: pruneByRepo(s.panelWidths, tree.repos, mine),
     panelTermHeights: pruneByRepo(s.panelTermHeights, tree.repos, mine),
     closedSections: pruneByRepo(s.closedSections, tree.repos, mine),
+    tasks: pruneByRepo(s.tasks, tree.repos, mine),
+    taskErrors: pruneByRepo(s.taskErrors, tree.repos, mine),
+    taskAll: s.taskAll.filter((t) => !mine(t.repoId) || tree.repos.some((r) => r.id === t.repoId)),
   };
 }
 
@@ -931,6 +937,7 @@ function feedView(s: CanopyState, from: string): FeedSnapshot {
     workspaces: s.workspaces,
     jobs: s.jobs,
     tasks: s.tasks,
+    taskAll: s.taskAll,
     launchers: s.launchers[from] ?? {},
     helpers: connOf(s, from).helpers,
     devices: s.devices.filter((d) => mine(d.id)),
@@ -1074,6 +1081,9 @@ function resync(get: () => CanopyState, set: (fn: (s: CanopyState) => Partial<Ca
   void get()
     .rescan(b)
     .catch(() => {});
+  readTasks(get, set, b);
+  // the tasks a panel loaded may have moved while the stream was down
+  for (const id of Object.keys(get().tasks)) if (backendOf(id) === b) void get().loadTasks(id).catch(() => {});
   void Promise.all([api.terms(b), api.kept(b), api.helpers(b)])
     .then(([terms, kept, helpers]) => {
       if (!isShown(get(), b)) return;
@@ -1088,10 +1098,14 @@ function resync(get: () => CanopyState, set: (fn: (s: CanopyState) => Partial<Ca
 
 /** what a backend has running, for the top bar; a backend without tmux
  *  answers 503 and simply has none */
-function readTasks(set: (fn: (s: CanopyState) => Partial<CanopyState>) => void, b: string): void {
+function readTasks(get: () => CanopyState, set: (fn: (s: CanopyState) => Partial<CanopyState>) => void, b: string): void {
   api
     .allTasks(b)
-    .then((list) => set((s) => ({ taskAll: [...s.taskAll.filter((t) => backendOf(t.repoId) !== b), ...list] })))
+    .then((list) => {
+      if (!isShown(get(), b)) return;
+      const live = list.filter((t) => t.status !== "idle");
+      set((s) => ({ taskAll: [...s.taskAll.filter((t) => backendOf(t.repoId) !== b), ...live] }));
+    })
     .catch(() => {});
 }
 
@@ -1283,7 +1297,7 @@ export const useStore = create<CanopyState>((set, get) => ({
     // The archive is not in the way of first paint: it lands when it lands,
     // and claude-history only syncs hourly, so a slow refresh is plenty.
     void get().loadHistory();
-    readTasks(set, home);
+    readTasks(get, set, home);
     // Likewise peers: a backend with peer sync off just answers "off" and
     // an empty seen list, so this never blocks a grove with none set up.
     readPeers(get, set, home);
@@ -1437,7 +1451,7 @@ export const useStore = create<CanopyState>((set, get) => ({
     );
     streams.set(name, { epoch: e, off });
     void get().loadHistory(false, name);
-    readTasks(set, name);
+    readTasks(get, set, name);
     readPeers(get, set, name);
     void api
       .about(name)

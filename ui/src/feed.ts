@@ -65,6 +65,8 @@ export interface FeedSnapshot {
   jobs?: Record<string, Job>;
   /** tasks by repo id, so a change can be told from a no-op */
   tasks?: Record<string, TaskInfo[]>;
+  /** the tasks known to be running, for a repo whose list was never loaded */
+  taskAll?: TaskInfo[];
   /** launch settings by repo path, so a change can be told from a no-op */
   launchers?: Record<string, unknown>;
   /** the helpers attached, so an attach can be told from a detach */
@@ -455,7 +457,7 @@ export function describeEvent(
       return [];
     case "tasks": {
       const repo = prev.repos.find((r) => r.id === ev.repoId);
-      return taskLines(prev.tasks?.[ev.repoId], ev.tasks, at).map((text) => about(repo, "task", at, text));
+      return taskLines(prev.tasks?.[ev.repoId] ?? prev.taskAll?.filter((t) => t.repoId === ev.repoId), ev.tasks, at).map((text) => about(repo, "task", at, text));
     }
     case "chan":
       // a channel line canopy marked silent is a quiet one
