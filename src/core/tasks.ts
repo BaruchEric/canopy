@@ -190,6 +190,8 @@ type Acc = TaskPatch & { source: TaskSource; suggested?: { keep?: true; withPane
 
 const AUTO = ["keep", "withPanel"] as const;
 
+const RANK: Record<TaskSource, number> = { detected: 0, repo: 1, canopy: 2 };
+
 /**
  * Detected tasks, then the repo file, then canopy's per-machine overrides,
  * merged by name and field by field; each task says the highest layer that
@@ -200,8 +202,12 @@ const AUTO = ["keep", "withPanel"] as const;
 export function mergeTasks(detected: TaskDef[], repo: TaskPatch[], canopy: TaskPatch[], own: boolean): { tasks: MergedTask[]; errors: string[] } {
   const order: string[] = [];
   const acc = new Map<string, Acc>();
+  /** the layer (0 detected, 1 repo, 2 canopy) that last said dev for each task */
+  const devRank = new Map<string, number>();
   const layer = (list: readonly TaskPatch[], source: TaskSource) => {
+    const rank = RANK[source];
     for (const p of list) {
+      if (p.dev !== undefined) devRank.set(p.name, rank);
       const prev = acc.get(p.name);
       if (!prev) order.push(p.name);
       const patch: TaskPatch = { ...p };
@@ -222,6 +228,10 @@ export function mergeTasks(detected: TaskDef[], repo: TaskPatch[], canopy: TaskP
 
   const tasks: MergedTask[] = [];
   const errors: string[] = [];
+  // The dev task is the one the highest layer names, so canopy's layer can
+  // move it; a lower layer's claim yields quietly, two in one layer are an error.
+  let top = -1;
+  for (const name of order) if (acc.get(name)?.dev && acc.get(name)?.cmd) top = Math.max(top, devRank.get(name) ?? 0);
   let dev: string | null = null;
   for (const name of order) {
     const { cmd, suggested, ...rest } = acc.get(name)!;
@@ -233,7 +243,8 @@ export function mergeTasks(detected: TaskDef[], repo: TaskPatch[], canopy: TaskP
     const left = suggested ? AUTO.filter((f) => suggested[f] && t[f] === undefined) : [];
     if (left.length) t.suggested = Object.fromEntries(left.map((f) => [f, true]));
     if (t.dev) {
-      if (dev) {
+      if ((devRank.get(name) ?? 0) < top) delete t.dev;
+      else if (dev) {
         errors.push(`${name}: only one dev task; ${dev} is it`);
         delete t.dev;
       } else dev = name;
@@ -241,6 +252,23 @@ export function mergeTasks(detected: TaskDef[], repo: TaskPatch[], canopy: TaskP
     tasks.push(t);
   }
   return { tasks, errors };
+}
+
+/**
+ * What canopy's layer keeps for `want` over `below`, the task as the layers
+ * under it merge it: only the fields that differ, so a later change in the
+ * repo file still shows through the rest. A flag left out below reads as
+ * false. A field `want` does not name is not overridden.
+ */
+export function overrideOf(want: TaskPatch, below: TaskDef | undefined): TaskPatch {
+  const out: TaskPatch = { name: want.name };
+  if (want.cmd !== undefined && want.cmd !== below?.cmd) out.cmd = want.cmd;
+  if (want.cwd !== undefined && want.cwd !== below?.cwd) out.cwd = want.cwd;
+  for (const f of FLAGS) {
+    const v = want[f];
+    if (v !== undefined && v !== (below?.[f] ?? false)) out[f] = v;
+  }
+  return out;
 }
 
 /* ---------- timing ---------- */
@@ -265,6 +293,8 @@ export interface TaskTimings {
   logCap: number;
   /** how long an unused log of a gone task is kept */
   logAge: number;
+  /** how long "no server" is doubted after live panes were seen: the shells container restarting */
+  noServerGrace: number;
 }
 
 export const TASK_TIMINGS: TaskTimings = {
@@ -278,6 +308,7 @@ export const TASK_TIMINGS: TaskTimings = {
   giveUp: 5,
   logCap: 2 * 1024 * 1024,
   logAge: 7 * 86_400_000,
+  noServerGrace: 30_000,
 };
 
 /** the wait before the n-th restart in a row (n from 1) */
@@ -297,14 +328,34 @@ export interface StatusInput {
 }
 
 /** One word for what a task is doing. A task stopped by hand reads as
- *  exited whatever ^C made its code, since that is not a failure. */
+ *  stopped whatever ^C made its code, since that is not a failure. */
 export function taskStatus(o: StatusInput): TaskStatus {
   if (o.live && !o.dead) return "running";
   if (o.gaveUp) return "gave-up";
   if (o.retryAt !== undefined) return "backoff";
   if (o.exitedAt === undefined) return "idle";
-  if (o.want === "stopped" || o.exitCode === 0) return "exited";
+  if (o.want === "stopped") return "stopped";
+  if (o.exitCode === 0) return "exited";
   return "failed";
+}
+
+/** what the top bar lists, on the server and in the browser alike: every task that is not idle */
+export const listedTask = (t: { status: TaskStatus }): boolean => t.status !== "idle";
+
+/**
+ * What one pane listing means to the supervisor. `got` is the panes, "no-server"
+ * when tmux said no server runs, or null when it did not answer. No server
+ * right after live panes were seen is doubted for `grace` (the shells container
+ * restarting looks the same), so the tick is skipped rather than every task
+ * marked dead; after that, or with nothing live seen, it is an empty list.
+ * `panes` null means skip the tick; `since` is when the doubt began.
+ */
+export function paneReading<P>(got: P[] | "no-server" | null, hadLive: boolean, since: number | undefined, now: number, grace: number): { panes: P[] | null; since: number | undefined } {
+  if (got === null) return { panes: null, since };
+  if (got !== "no-server") return { panes: got, since: undefined };
+  if (!hadLive) return { panes: [], since: undefined };
+  const from = since ?? now;
+  return now - from >= grace ? { panes: [], since: undefined } : { panes: null, since: from };
 }
 
 /* ---------- log text ---------- */
@@ -370,6 +421,8 @@ export function parseTaskState(text: string): Record<string, TaskRecord> {
     if (typeof r["startedAt"] === "number") rec.startedAt = r["startedAt"];
     if (typeof r["exitedAt"] === "number") rec.exitedAt = r["exitedAt"];
     if (typeof r["exitCode"] === "number" || r["exitCode"] === null) rec.exitCode = r["exitCode"] as number | null;
+    if (typeof r["fails"] === "number" && Number.isInteger(r["fails"]) && r["fails"] > 0) rec.fails = r["fails"];
+    if (r["gaveUp"] === true) rec.gaveUp = true;
     out[id] = rec;
   }
   return out;

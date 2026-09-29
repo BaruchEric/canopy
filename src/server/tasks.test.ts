@@ -139,9 +139,16 @@ describe.skipIf(!tmux)("tasks", () => {
     await until(async () => (await get<{ lines: { text: string }[] }>("/api/repos/tasks/log?id=app&name=stubborn")).lines.some((l) => l.text === "stubborn"), "stubborn's output");
     expect((await post("/api/repos/tasks?id=app", { action: "stop", name: "stubborn" })).status).toBe(200);
     const s = await task("stubborn");
-    expect(s.status).toBe("exited");
+    expect(s.status).toBe("stopped");
     expect(s.live).toBe(false);
     expect((await post("/api/repos/tasks?id=app", { action: "stop", name: "stubborn" })).status).toBe(200);
+  });
+
+  test("the shell route refuses a task's id with no session left", async () => {
+    const s = await task("stubborn");
+    // a list reconciles the held sessions, so nothing is held under that id any more
+    await get<TermInfo[]>("/api/terms");
+    expect((await fetch(url(`/api/terms?term=${s.termId}`), { method: "DELETE" })).status).toBe(400);
   });
 
   test("bad requests", async () => {

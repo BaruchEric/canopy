@@ -5,13 +5,13 @@
  * named like a shell, so the terminal socket joins it with `attach=1`;
  * the shell lists pass over it by its `task` tag.
  */
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { lstat, mkdir, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { interruptTask, listTaskPanes, logPath, readLog, readTaskFiles, readTaskState, startTaskSession, taskTermId, writeTaskState, appendMark, rotateIfBig, repipe, listLogs, removeLog } from "../core/taskrun";
-import { detectTasks, logPage, mergeTasks, nextDelay, normalizeTaskPatch, parseTaskFile, expiredTaskLogs, definedFrom, reapable, staleWants, TASK_TIMINGS, taskStatus, isTaskName, type MergedTask, type TaskTimings } from "../core/tasks";
+import { detectTasks, logPage, mergeTasks, nextDelay, normalizeTaskPatch, parseTaskFile, expiredTaskLogs, definedFrom, reapable, staleWants, TASK_TIMINGS, taskStatus, isTaskName, listedTask, overrideOf, paneReading, type MergedTask, type TaskTimings } from "../core/tasks";
 import { killSession, type TaskPane } from "../core/tmux";
 import { loadConfig, setTask, tasksFor } from "../core/store";
-import type { Repo, ServerEvent, TaskAction, TaskPatch, TaskInfo, TaskRecord, TasksResult, TermInfo } from "../core/types";
+import type { Repo, ServerEvent, TaskAction, TaskDef, TaskPatch, TaskInfo, TaskRecord, TasksResult, TermInfo } from "../core/types";
 
 export interface TaskHubDeps {
   /** canopy's tmux argv front; null means no tasks on this backend */
@@ -38,14 +38,15 @@ export class TaskError extends Error {
   }
 }
 
+/** what a task has in this process only; its failures and giving up are on its record */
 interface Runtime {
-  fails: number;
   restarts: number;
   retryAt?: number;
   timer?: ReturnType<typeof setTimeout>;
-  gaveUp: boolean;
   lastStart?: number;
 }
+
+const say = (what: string) => (err: unknown) => console.error(`${what}: ${err instanceof Error ? err.message : err}`);
 
 const json = (body: unknown, status = 200): Response =>
   new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } });
@@ -67,6 +68,13 @@ export class TaskHub {
   private ticking: Promise<void> | null = null;
   /** set by stop(): nothing armed after it may launch */
   private stopped = false;
+  /** whether the last listing answered: undefined before the first, false while tmux does not */
+  private answering: boolean | undefined;
+  /** since when "no server" has been doubted (see paneReading) */
+  private noServerSince: number | undefined;
+  /** when this hub started: a death on record from before it was seen by the last canopy */
+  private bootAt = Date.now();
+  private recovered = false;
 
   constructor(private readonly deps: TaskHubDeps) {
     this.t = { ...TASK_TIMINGS, ...deps.timings };
@@ -78,24 +86,37 @@ export class TaskHub {
     return this.panes.has(termId) || termId in this.state;
   }
 
+  /** Reads the records and starts the supervisor. Nothing here waits on
+   *  tmux, gh or ssh: recovery and the first sweep run once a listing has
+   *  answered, after the server is listening. */
   async start(): Promise<void> {
     if (!this.deps.tmux) return;
+    this.bootAt = Date.now();
     this.state = await readTaskState();
-    await this.tick();
-    // A keep task that was meant to run and has no session (the machine
-    // went down, or tmux did) starts again. One that died while canopy was
-    // down was caught by the tick above, through onDeath.
+    this.timers.push(setInterval(() => void this.poke(), this.t.tick));
+    this.timers.push(setInterval(() => void this.sweep().catch(say("task sweep")), this.t.sweep));
+    void this.poke();
+  }
+
+  /** A keep task that was meant to run comes back: one with no session at
+   *  all (the machine or tmux went down) starts now, one whose death is on
+   *  record from before this canopy goes back to its backoff, dead pane or
+   *  not. A clean exit and a task keep running gave up on stay down. */
+  private async recover(): Promise<void> {
     for (const [id, rec] of Object.entries(this.state)) {
-      // a clean exit stays down, as it does while canopy is up
-      if (rec.want !== "running" || rec.exitCode === 0 || this.panes.has(id)) continue;
+      if (this.stopped) return;
+      if (rec.want !== "running" || rec.exitCode === 0 || rec.gaveUp || this.running(id)) continue;
+      // a death this process saw is onDeath's, already armed or about to be
+      if (rec.exitedAt !== undefined && rec.exitedAt >= this.bootAt) continue;
       const repo = this.deps.repos().find((r) => r.path === rec.path);
       if (!repo) continue;
       const def = (await this.defsOf(repo, true)).merged.find((m) => m.name === rec.name);
-      if (!def?.keep || def.hidden) continue;
-      await this.lock(id, () => this.launch(repo, def)).catch((err) => console.error(`task ${def.name}: ${err instanceof Error ? err.message : err}`));
+      if (!def?.keep || def.hidden || this.state[id] !== rec) continue;
+      if (rec.exitedAt !== undefined) {
+        this.arm(id, repo, def);
+        void this.tell(repo.id);
+      } else await this.lock(id, () => this.launch(repo, def, false)).catch(say(`task ${def.name}`));
     }
-    this.timers.push(setInterval(() => void this.poke(), this.t.tick));
-    this.timers.push(setInterval(() => void this.sweep().catch(() => {}), this.t.sweep));
   }
 
   stop(): void {
@@ -107,7 +128,7 @@ export class TaskHub {
 
   /** one tick at a time, never stacked */
   private poke(): Promise<void> {
-    if (!this.ticking) this.ticking = this.tick().catch(() => {}).finally(() => (this.ticking = null));
+    if (!this.ticking) this.ticking = this.tick().catch(say("task supervisor")).finally(() => (this.ticking = null));
     return this.ticking;
   }
 
@@ -127,7 +148,7 @@ export class TaskHub {
 
   private runtime(id: string): Runtime {
     let r = this.rt.get(id);
-    if (!r) this.rt.set(id, (r = { fails: 0, restarts: 0, gaveUp: false }));
+    if (!r) this.rt.set(id, (r = { restarts: 0 }));
     return r;
   }
 
@@ -149,6 +170,13 @@ export class TaskHub {
     return out;
   }
 
+  /** a task as the layers under canopy's merge it: what an override is a diff against */
+  private async below(repo: Repo, name: string): Promise<TaskDef | undefined> {
+    const files = await readTaskFiles(repo.path);
+    const file = files.repoFile !== undefined ? parseTaskFile(files.repoFile) : { patches: [], errors: [] };
+    return mergeTasks(detectTasks(files), file.patches, [], await this.deps.own(repo)).tasks.find((t) => t.name === name);
+  }
+
   private info(repo: Repo, d: MergedTask, gone?: TaskInfo["gone"]): TaskInfo {
     const id = taskTermId(repo.path, d.name);
     const p = this.panes.get(id);
@@ -158,7 +186,7 @@ export class TaskHub {
       ...d,
       repoId: repo.id,
       termId: id,
-      status: taskStatus({ live: p !== undefined, dead: p?.dead ?? false, want: rec?.want, exitedAt: rec?.exitedAt, exitCode: rec?.exitCode, retryAt: rt?.retryAt, gaveUp: rt?.gaveUp ?? false }),
+      status: taskStatus({ live: p !== undefined, dead: p?.dead ?? false, want: rec?.want, exitedAt: rec?.exitedAt, exitCode: rec?.exitCode, retryAt: rt?.retryAt, gaveUp: rec?.gaveUp ?? false }),
       live: p !== undefined,
       ...(rec?.startedAt !== undefined ? { startedAt: rec.startedAt } : {}),
       ...(rec?.exitedAt !== undefined ? { exitedAt: rec.exitedAt } : {}),
@@ -181,20 +209,33 @@ export class TaskHub {
     return { tasks, errors: d.errors };
   }
 
-  /** every task that is not idle, across repos, and the ones whose repo left the scan */
+  /** Every task the top bar lists (`listedTask`, the same test the browser
+   *  applies to a `tasks` event), across repos, and the sessions whose repo
+   *  left the scan. Only a repo with a session or a record can have one. */
   async all(): Promise<TaskInfo[]> {
     const out: TaskInfo[] = [];
     const repos = this.deps.repos();
     for (const repo of repos) {
       if (repo.forge) continue;
-      const has = [...this.panes.values()].some((p) => p.path === repo.path) || Object.values(this.state).some((r) => r.path === repo.path && this.rt.get(taskTermId(r.path, r.name))?.retryAt !== undefined);
+      const has = [...this.panes.values()].some((p) => p.path === repo.path) || Object.values(this.state).some((r) => r.path === repo.path);
       if (!has) continue;
-      out.push(...(await this.tasksOf(repo, false)).tasks.filter((t) => t.status !== "idle"));
+      out.push(...(await this.tasksOf(repo, false)).tasks.filter(listedTask));
     }
+    out.push(...this.ghosts());
+    return out;
+  }
+
+  /** a task session whose repo left the scan, as a repo that only has an id and a path */
+  private ghostRepo(repoId: string, path: string): Repo {
+    return { id: repoId, name: repoId, path } as Repo;
+  }
+
+  private ghosts(repoId?: string): TaskInfo[] {
+    const repos = this.deps.repos();
+    const out: TaskInfo[] = [];
     for (const p of this.panes.values()) {
-      if (repos.some((r) => r.path === p.path)) continue;
-      const ghost = { id: p.repoId, name: p.repoId, path: p.path } as Repo;
-      out.push(this.info(ghost, { name: p.task, cmd: "", source: "detected" }, "repo"));
+      if (repos.some((r) => r.path === p.path) || (repoId !== undefined && p.repoId !== repoId)) continue;
+      out.push(this.info(this.ghostRepo(p.repoId, p.path), { name: p.task, cmd: "", source: "detected" }, "repo"));
     }
     return out;
   }
@@ -223,8 +264,13 @@ export class TaskHub {
     return this.deps.tmux;
   }
 
-  private async launch(repo: Repo, def: MergedTask): Promise<void> {
+  /** Runs a task. `fresh` is a start by hand: it forgets the failures in a
+   *  row and a gave-up; a retry or a recovery carries them on. */
+  private async launch(repo: Repo, def: MergedTask, fresh: boolean): Promise<void> {
     const tmux = this.need();
+    // tmux not answering may be its container restarting: a start now could
+    // make a second server, or land on one about to go
+    if (this.answering === false) throw new TaskError(503, "tmux is not answering; try again in a moment");
     const id = taskTermId(repo.path, def.name);
     const at = Date.now();
     // set before anything touches tmux, so a tick listing meanwhile knows this run is newer
@@ -235,7 +281,8 @@ export class TaskHub {
       throw new TaskError(500, `cannot write the log at ${logPath(id)}: ${err instanceof Error ? err.message : err}`);
     }
     await startTaskSession(tmux, { id, repoId: repo.id, path: repo.path, task: def.name }, repo.path, def.cmd, def.cwd);
-    this.state[id] = { repoId: repo.id, path: repo.path, name: def.name, want: "running", startedAt: at };
+    const fails = fresh ? 0 : (this.state[id]?.fails ?? 0);
+    this.state[id] = { repoId: repo.id, path: repo.path, name: def.name, want: "running", startedAt: at, ...(fails ? { fails } : {}) };
     await this.save();
     this.panes.set(id, { termId: id, task: def.name, repoId: repo.id, path: repo.path, dead: false, code: null, createdAt: at });
     this.deps.hold({ id, repoId: repo.id, path: repo.path, place: "strip", attached: false, viewers: [], startedAt: at, task: def.name });
@@ -265,6 +312,10 @@ export class TaskHub {
       await Bun.sleep(100);
     }
     await killSession(tmux, id);
+    // Known gone: the next listing need not say so. Killing the last session
+    // ends the tmux server, and a pane still held as live here would have
+    // the listing doubt that as tmux restarting and show the task running.
+    this.panes.delete(id);
     // a tick already listing began before the kill, so let it finish and look again
     await this.ticking;
     await this.poke();
@@ -276,6 +327,21 @@ export class TaskHub {
     }
   }
 
+  /** Stops a task whose repo left the scan, the top bar's one action on it.
+   *  Its definition is not read: the folder may be gone. Tells the browsers
+   *  what is left under that repo id, since no repo event will. */
+  private async stopGhost(repoId: string, name: string): Promise<TasksResult | null> {
+    const pane = [...this.panes.values()].find((p) => p.repoId === repoId && p.task === name);
+    const rec = Object.values(this.state).find((r) => r.repoId === repoId && r.name === name);
+    const path = pane?.path ?? rec?.path;
+    if (path === undefined) return null;
+    const ghost = this.ghostRepo(repoId, path);
+    await this.lock(taskTermId(path, name), () => this.stopTask(ghost, name));
+    const tasks = this.ghosts(repoId);
+    this.deps.broadcast({ type: "tasks", repoId, tasks });
+    return { tasks, errors: [] };
+  }
+
   async act(repo: Repo, action: TaskAction, name: string | undefined, reason?: string): Promise<TasksResult> {
     this.need();
     if (action === "start" && reason === "panel" && name === undefined) {
@@ -283,13 +349,13 @@ export class TaskHub {
       for (const def of merged.filter((m) => m.withPanel && !m.hidden)) {
         const id = taskTermId(repo.path, def.name);
         await this.lock(id, async () => {
-          if (this.running(id) || this.rt.get(id)?.gaveUp) return;
+          if (this.running(id) || this.state[id]?.gaveUp) return;
           const rt = this.runtime(id);
           if (rt.timer) clearTimeout(rt.timer);
           rt.retryAt = undefined;
           rt.timer = undefined;
-          await this.launch(repo, def);
-        }).catch((err) => console.error(`task ${def.name}: ${err instanceof Error ? err.message : err}`));
+          await this.launch(repo, def, false);
+        }).catch(say(`task ${def.name}`));
       }
     } else {
       if (!isTaskName(name)) throw new TaskError(400, "name the task");
@@ -305,8 +371,8 @@ export class TaskHub {
           if (action === "start" && this.running(id)) throw new TaskError(409, `${name} is already running`);
           const rt = this.runtime(id);
           if (rt.timer) clearTimeout(rt.timer);
-          Object.assign(rt, { fails: 0, restarts: 0, gaveUp: false, retryAt: undefined, timer: undefined });
-          await this.launch(repo, def);
+          Object.assign(rt, { restarts: 0, retryAt: undefined, timer: undefined });
+          await this.launch(repo, def, true);
         });
       }
     }
@@ -334,8 +400,10 @@ export class TaskHub {
         const rec = this.state[id];
         if (reapable({ dead: p.dead, ...(rec?.exitedAt !== undefined ? { exitedAt: rec.exitedAt } : {}), viewers: this.deps.viewers(id).length }, Date.now(), this.t.reap)) {
           await killSession(tmux, id);
+          // known gone; see stopTask
+          this.panes.delete(id);
         }
-      }).catch(() => {});
+      }).catch(say("task sweep"));
     }
     await this.poke();
     if (this.stopped) return;
@@ -363,7 +431,7 @@ export class TaskHub {
           delete this.state[id];
           await this.save();
         }
-      }).catch(() => {});
+      }).catch(say("task sweep"));
     }
   }
 
@@ -376,9 +444,25 @@ export class TaskHub {
     // Those tasks keep what `launch` set rather than what the list says.
     const listedAt = Date.now();
     const newer = (id: string): boolean => (this.rt.get(id)?.lastStart ?? -1) >= listedAt;
-    const list = await listTaskPanes(tmux);
-    // tmux did not answer (its container restarting): say nothing, mark nothing dead
+    const got = await listTaskPanes(tmux);
+    const hadLive = [...this.panes.values()].some((p) => !p.dead);
+    const reading = paneReading(got, hadLive, this.noServerSince, Date.now(), this.t.noServerGrace);
+    this.noServerSince = reading.since;
+    this.answering = reading.panes !== null;
+    // tmux did not answer, or said no server right after live panes (its
+    // container restarting): say nothing, mark nothing dead
+    const list = reading.panes;
     if (list === null) return;
+    if (!this.recovered) {
+      // the first answer: bring back what was meant to run, then clear what
+      // gone tasks left, both after this tick rather than inside it
+      this.recovered = true;
+      void Promise.resolve()
+        .then(() => this.recover())
+        .catch(say("task recovery"))
+        .then(() => this.sweep())
+        .catch(say("task sweep"));
+    }
     const now = Date.now();
     const next = new Map(list.map((p) => [p.termId, p]));
     const changed = new Set<string>();
@@ -395,10 +479,10 @@ export class TaskHub {
     for (const p of next.values()) {
       if (newer(p.termId)) continue;
       const before = this.panes.get(p.termId);
-      if (!before) {
-        this.deps.hold({ id: p.termId, repoId: p.repoId, path: p.path, place: "strip", attached: false, viewers: [], startedAt: p.createdAt, task: p.task });
-        changed.add(p.path);
-      }
+      // every tick, not only a new pane's first: holding is idempotent, and a
+      // shell list read before a launch could otherwise drop what it held
+      this.deps.hold({ id: p.termId, repoId: p.repoId, path: p.path, place: "strip", attached: false, viewers: [], startedAt: p.createdAt, task: p.task });
+      if (!before) changed.add(p.path);
       if (p.dead && (!before || !before.dead)) {
         died(p, p.code);
         changed.add(p.path);
@@ -415,9 +499,13 @@ export class TaskHub {
       if (this.stopped) break;
       if (!p.dead && (await rotateIfBig(p.termId, this.t.logCap))) await repipe(tmux, p.termId);
     }
-    for (const [id, rt] of this.rt) {
+    // a good stretch up forgets the failures in a row; read off the record,
+    // so a task running since before a canopy restart counts too
+    for (const [id, rec] of Object.entries(this.state)) {
       const p = next.get(id);
-      if (p && !p.dead && rt.lastStart !== undefined && now - rt.lastStart > this.t.uptime) rt.fails = 0;
+      if (!rec.fails || !p || p.dead || rec.startedAt === undefined || now - rec.startedAt <= this.t.uptime) continue;
+      delete rec.fails;
+      dirty = true;
     }
     if (dirty) await this.save();
     for (const path of changed) {
@@ -431,48 +519,68 @@ export class TaskHub {
    *  no keep flag stay down. A pane killed by a signal has no code and counts
    *  as a failure. */
   private onDeath(id: string, rec: TaskRecord, code: number | null): void {
-    if (rec.want !== "running" || code === 0) return;
+    if (rec.want !== "running" || code === 0 || rec.gaveUp) return;
     const repo = this.deps.repos().find((r) => r.path === rec.path);
     if (!repo) return;
     void this.defsOf(repo, false)
-      .then(({ merged }) => {
-      if (this.stopped) return;
-      const def = merged.find((m) => m.name === rec.name);
-      if (!def?.keep || def.hidden) return;
-      const rt = this.runtime(id);
-      if (rt.timer) clearTimeout(rt.timer);
-      rt.fails += 1;
-      if (rt.fails >= this.t.giveUp) {
-        rt.gaveUp = true;
-        this.deps.gaveUp(repo.name, def.name);
+      .then(async ({ merged }) => {
+        // a stop or a new start in the meantime has the last word
+        if (this.stopped || this.state[id] !== rec || rec.want !== "running") return;
+        const def = merged.find((m) => m.name === rec.name);
+        if (!def?.keep || def.hidden) return;
+        // everything decided before the save's await, so nothing can land in between
+        rec.fails = (rec.fails ?? 0) + 1;
+        if (rec.fails >= this.t.giveUp) {
+          rec.gaveUp = true;
+          this.deps.gaveUp(repo.name, def.name);
+        } else this.arm(id, repo, def);
         void this.tell(repo.id);
-        return;
-      }
-      const wait = nextDelay(rt.fails, this.t.backoff, this.t.backoffCap);
-      rt.retryAt = Date.now() + wait;
-      rt.timer = setTimeout(() => {
-        void this.lock(id, async () => {
-          rt.retryAt = undefined;
-          rt.timer = undefined;
-          if (this.stopped || this.state[id]?.want !== "running" || this.running(id)) return;
-          await this.launch(repo, def);
-          rt.restarts += 1;
-        })
-          .catch((err) => console.error(`task ${def.name}: ${err instanceof Error ? err.message : err}`))
-          .finally(() => void this.tell(repo.id));
-      }, wait);
-      void this.tell(repo.id);
+        await this.save();
       })
-      .catch((err) => console.error(`task ${rec.name}: ${err instanceof Error ? err.message : err}`));
+      .catch(say(`task ${rec.name}`));
+  }
+
+  /** Starts a keep task again after the backoff its record's failures call
+   *  for. While tmux does not answer the retry waits a tick at a time, so
+   *  nothing starts a session on a server that is not there. */
+  private arm(id: string, repo: Repo, def: MergedTask): void {
+    const rt = this.runtime(id);
+    if (rt.timer) clearTimeout(rt.timer);
+    const wait = nextDelay(this.state[id]?.fails ?? 1, this.t.backoff, this.t.backoffCap);
+    const fire = () =>
+      void this.lock(id, async () => {
+        rt.retryAt = undefined;
+        rt.timer = undefined;
+        if (this.stopped || this.state[id]?.want !== "running" || this.state[id]?.gaveUp || this.running(id)) return;
+        if (this.answering === false) {
+          rt.retryAt = Date.now() + this.t.tick;
+          rt.timer = setTimeout(fire, this.t.tick);
+          return;
+        }
+        await this.launch(repo, def, false);
+        rt.restarts += 1;
+      })
+        .catch(say(`task ${def.name}`))
+        .finally(() => void this.tell(repo.id));
+    rt.retryAt = Date.now() + wait;
+    rt.timer = setTimeout(fire, wait);
   }
 
   /** stores one task's definition in canopy's layer or rewrites it in the repo file */
   private async setDef(repo: Repo, name: string, patch: TaskPatch | null, target: "canopy" | "repo"): Promise<void> {
     if (target === "canopy") {
-      await setTask(repo.path, name, patch);
+      // only what differs from the layers under it, so a later change there shows through
+      await setTask(repo.path, name, patch ? overrideOf(patch, await this.below(repo, name)) : null);
     } else {
       if (repo.host) throw new TaskError(400, "the repo file can only be written for a repo on this machine");
-      const file = join(repo.path, ".canopy", "tasks.json");
+      const dir = join(repo.path, ".canopy");
+      const file = join(dir, "tasks.json");
+      // never written through a link: a checked-in link could point the write anywhere
+      for (const p of [dir, file]) {
+        const st = await lstat(p).catch(() => null);
+        if (st?.isSymbolicLink()) throw new TaskError(409, `${p === dir ? ".canopy" : ".canopy/tasks.json"} is a symbolic link; canopy will not write through it`);
+        if (st && p === file && !st.isFile()) throw new TaskError(409, ".canopy/tasks.json is not a file");
+      }
       let list: TaskPatch[] = [];
       try {
         const parsed = parseTaskFile(await readFile(file, "utf8"));
@@ -484,7 +592,7 @@ export class TaskHub {
       }
       list = list.filter((t) => t.name !== name);
       if (patch) list.push(patch);
-      await mkdir(join(repo.path, ".canopy"), { recursive: true });
+      await mkdir(dir, { recursive: true });
       await writeFile(file, JSON.stringify(list, null, 2) + "\n");
     }
     this.defs.delete(repo.path);
@@ -500,7 +608,14 @@ export class TaskHub {
     try {
       this.need();
       if (path === "/api/tasks" && method === "GET") return json(await this.all());
-      const repo = repoOf(url.searchParams.get("id") ?? "");
+      const repoId = url.searchParams.get("id") ?? "";
+      const repo = repoOf(repoId);
+      if (!repo && path === "/api/repos/tasks" && method === "POST") {
+        // a task whose repo left the scan can still be stopped from the top bar
+        const body = (await req.json().catch(() => null)) as { action?: unknown; name?: unknown } | null;
+        const done = body?.action === "stop" && isTaskName(body.name) ? await this.stopGhost(repoId, body.name) : null;
+        return done ? json(done) : json({ error: "unknown repo" }, 404);
+      }
       if (!repo) return json({ error: "unknown repo" }, 404);
       if (repo.forge) return json({ error: `${repo.name} is on the forge; there is nothing to run` }, 400);
       if (path === "/api/repos/tasks" && method === "GET") return json(await this.tasksOf(repo, true));

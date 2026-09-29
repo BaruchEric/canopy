@@ -126,6 +126,27 @@ describe.skipIf(!tmux)("keep running", () => {
     await until(async () => (await task("clean")).restarts >= 1, "clean to be restarted");
   });
 
+  test("canopy's layer keeps only what differs from the repo file", async () => {
+    const stored = async () => {
+      const cfg = JSON.parse(await readFile(join(scratch, "config/config.json"), "utf8")) as { tasks?: Record<string, { name: string; cmd?: string }[]> };
+      // keyed by the repo's real path, which a temp dir's symlink makes differ from `repo`
+      return Object.values(cfg.tasks ?? {}).flat().filter((t) => t.name === "extra");
+    };
+    // what the sheet sends: the whole task, flags off and all
+    const sheet = (cmd: string) => post("/api/repos/tasks/def?id=app", { name: "extra", def: { name: "extra", cmd, dev: false, keep: false, withPanel: false }, target: "canopy" });
+    expect((await sheet("echo extra")).status).toBe(200);
+    expect(await stored()).toEqual([]);
+    expect((await sheet("echo other")).status).toBe(200);
+    expect(await stored()).toEqual([{ name: "extra", cmd: "echo other" }]);
+    // the repo file's later word on another field still shows through
+    const file = join(repo, ".canopy/tasks.json");
+    const list = JSON.parse(await readFile(file, "utf8")) as { name: string; dev?: boolean }[];
+    await writeFile(file, JSON.stringify(list.map((t) => (t.name === "extra" ? { ...t, dev: true } : t))));
+    const t = await task("extra");
+    expect(t.cmd).toBe("echo other");
+    expect(t.dev).toBe(true);
+  });
+
   test("a keep task that exited 0 stays down after tmux and canopy restart", async () => {
     await def("clean", { cmd: "echo done; exit 0", keep: true });
     await post("/api/repos/tasks?id=app", { action: "stop", name: "clean" });

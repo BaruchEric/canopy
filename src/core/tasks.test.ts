@@ -5,10 +5,13 @@ import {
   expiredTaskLogs,
   definedFrom,
   isTaskName,
+  listedTask,
   logPage,
   mergeTasks,
   nextDelay,
   normalizeTaskPatch,
+  overrideOf,
+  paneReading,
   parseCargo,
   parseMakeTargets,
   parseScripts,
@@ -118,10 +121,32 @@ describe("merge", () => {
     const r = mergeTasks(detected, [{ name: "dev", keep: true }], [], true);
     expect(r.tasks[0]?.keep).toBe(true);
   });
-  test("only one dev task", () => {
+  test("only one dev task: the highest layer that names one wins it", () => {
     const r = mergeTasks(detected, [{ name: "web", cmd: "x", dev: true }], [], true);
-    expect(r.tasks.filter((t) => t.dev).map((t) => t.name)).toEqual(["dev"]);
-    expect(r.errors).toEqual(["web: only one dev task; dev is it"]);
+    expect(r.tasks.filter((t) => t.dev).map((t) => t.name)).toEqual(["web"]);
+    expect(r.errors).toEqual([]);
+    const moved = mergeTasks(detected, [], [{ name: "test", dev: true }], true);
+    expect(moved.tasks.filter((t) => t.dev).map((t) => t.name)).toEqual(["test"]);
+    expect(moved.errors).toEqual([]);
+  });
+  test("two dev tasks in one layer: the first keeps it, the other is an error", () => {
+    const r = mergeTasks(detected, [{ name: "web", cmd: "x", dev: true }, { name: "api", cmd: "y", dev: true }], [], true);
+    expect(r.tasks.filter((t) => t.dev).map((t) => t.name)).toEqual(["web"]);
+    expect(r.errors).toEqual(["api: only one dev task; web is it"]);
+  });
+});
+
+describe("canopy's layer as a diff", () => {
+  const below = { name: "dev", cmd: "bun run dev", dev: true };
+  test("an edit equal to the layer under it stores nothing but the name", () => {
+    expect(overrideOf({ name: "dev", cmd: "bun run dev", dev: true, keep: false, withPanel: false }, below)).toEqual({ name: "dev" });
+  });
+  test("only the fields that differ are kept", () => {
+    expect(overrideOf({ name: "dev", cmd: "vite", dev: true, keep: false }, below)).toEqual({ name: "dev", cmd: "vite" });
+    expect(overrideOf({ name: "dev", cmd: "bun run dev", dev: false, keep: true, cwd: "ui" }, below)).toEqual({ name: "dev", dev: false, keep: true, cwd: "ui" });
+  });
+  test("a task no lower layer has keeps what it says, less the flags left off", () => {
+    expect(overrideOf({ name: "x", cmd: "a", dev: false, hidden: false }, undefined)).toEqual({ name: "x", cmd: "a" });
   });
 });
 
@@ -135,10 +160,35 @@ describe("backoff and status", () => {
     expect(taskStatus({ ...base, live: true })).toBe("running");
     expect(taskStatus({ ...base, live: true, dead: true, want: "running", exitedAt: 1, exitCode: 2 })).toBe("failed");
     expect(taskStatus({ ...base, want: "running", exitedAt: 1, exitCode: 0 })).toBe("exited");
-    expect(taskStatus({ ...base, want: "stopped", exitedAt: 1, exitCode: 130 })).toBe("exited");
+    expect(taskStatus({ ...base, want: "stopped", exitedAt: 1, exitCode: 130 })).toBe("stopped");
+    expect(taskStatus({ ...base, want: "stopped", exitedAt: 1, exitCode: 0 })).toBe("stopped");
+    expect(taskStatus({ ...base, want: "stopped" })).toBe("idle");
     expect(taskStatus({ ...base, want: "running", exitedAt: 1, exitCode: 1, retryAt: 5 })).toBe("backoff");
     expect(taskStatus({ ...base, want: "running", exitedAt: 1, exitCode: 1, gaveUp: true })).toBe("gave-up");
     expect(taskStatus(base)).toBe("idle");
+  });
+  test("the top bar lists every task that is not idle, a stopped one too", () => {
+    expect(listedTask({ status: "idle" })).toBe(false);
+    expect(listedTask({ status: "stopped" })).toBe(true);
+    expect(listedTask({ status: "failed" })).toBe(true);
+  });
+});
+
+describe("reading the pane list", () => {
+  const live = [{ dead: false }];
+  test("a listing is believed and ends any wait", () => {
+    expect(paneReading(live, true, 5, 10, 30)).toEqual({ panes: live, since: undefined });
+  });
+  test("tmux not answering skips the tick", () => {
+    expect(paneReading(null, true, undefined, 10, 30)).toEqual({ panes: null, since: undefined });
+  });
+  test("no server while live panes were seen: skipped for the grace, then believed", () => {
+    expect(paneReading("no-server", true, undefined, 10, 30)).toEqual({ panes: null, since: 10 });
+    expect(paneReading("no-server", true, 10, 39, 30)).toEqual({ panes: null, since: 10 });
+    expect(paneReading("no-server", true, 10, 40, 30)).toEqual({ panes: [], since: undefined });
+  });
+  test("no server with nothing live seen is an empty list at once", () => {
+    expect(paneReading("no-server", false, undefined, 10, 30)).toEqual({ panes: [], since: undefined });
   });
 });
 
@@ -174,12 +224,14 @@ describe("state and the sweep", () => {
     const b: string = "b".repeat(32);
     const c: string = "c".repeat(32);
     const text = JSON.stringify({
-      [a]: { repoId: "r", path: "/p", name: "dev", want: "running", exitCode: 1, exitedAt: 5 },
+      [a]: { repoId: "r", path: "/p", name: "dev", want: "running", exitCode: 1, exitedAt: 5, fails: 2, gaveUp: true },
       [b]: { repoId: "r", path: "/p", name: "Bad", want: "running" },
       [c]: "nope",
       short: { repoId: "r", path: "/p", name: "dev", want: "running" },
     });
-    expect(parseTaskState(text)).toEqual({ [a]: { repoId: "r", path: "/p", name: "dev", want: "running", exitCode: 1, exitedAt: 5 } });
+    expect(parseTaskState(text)).toEqual({ [a]: { repoId: "r", path: "/p", name: "dev", want: "running", exitCode: 1, exitedAt: 5, fails: 2, gaveUp: true } });
+    const odd = JSON.stringify({ [a]: { repoId: "r", path: "/p", name: "dev", want: "running", fails: -1, gaveUp: "yes" } });
+    expect(parseTaskState(odd)).toEqual({ [a]: { repoId: "r", path: "/p", name: "dev", want: "running" } });
     expect(parseTaskState("not json")).toEqual({});
   });
   const DAY = 86_400_000;

@@ -1126,7 +1126,8 @@ export interface TermInfo {
 /** which layer last said something about a task */
 export type TaskSource = "detected" | "repo" | "canopy";
 
-export type TaskStatus = "idle" | "running" | "exited" | "failed" | "backoff" | "gave-up";
+/** `stopped` is a task stopped by hand with its exit on record; `exited` is a clean exit 0 */
+export type TaskStatus = "idle" | "running" | "exited" | "stopped" | "failed" | "backoff" | "gave-up";
 
 export interface TaskFlags {
   /** the task the preview pairs with; one per repo */
@@ -1196,6 +1197,10 @@ export interface TaskRecord {
   startedAt?: number;
   exitedAt?: number;
   exitCode?: number | null;
+  /** failures in a row under keep running, so a backoff survives a canopy restart */
+  fails?: number;
+  /** keep running gave up on it; only a start by hand clears this */
+  gaveUp?: boolean;
 }
 
 export interface TaskLogLine {

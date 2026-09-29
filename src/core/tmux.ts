@@ -261,13 +261,15 @@ export function parseTaskPanes(out: string): TaskPane[] {
   return panes;
 }
 
-/** What a task's pane runs: `sh -lc` in its folder here, or an ssh line
- *  that cds there and runs the same on the other host, so the pane's exit
- *  status is the command's own either way. */
+/** What a task's pane runs: a cd to its folder, then `sh -lc` there, or an
+ *  ssh line that does the same on the other host, so the pane's exit status
+ *  is the command's own either way. The cd is in the command rather than
+ *  left to `respawn-pane -c`, since tmux quietly starts in the home folder
+ *  when that one is missing; this way a missing folder fails the task. */
 export function taskCommand(locator: string, cmd: string, cwd?: string): { command: string[]; dir: string | null } {
   const { host, path } = parseLocator(locator);
   const dir = cwd ? join(path, cwd) : path;
-  if (host === null) return { command: ["sh", "-lc", cmd], dir };
+  if (host === null) return { command: ["sh", "-c", `cd -- ${shellQuote(dir)} && exec sh -lc ${shellQuote(cmd)}`], dir };
   return { command: ["ssh", "-t", "--", host, `cd ${shellQuote(dir)} && exec sh -lc ${shellQuote(cmd)}`], dir: null };
 }
 

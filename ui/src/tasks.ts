@@ -1,11 +1,12 @@
 /** The words tasks are shown with: a status, a chip, a line of when, and the
  *  feed's lines for a change. Pure, and tested. */
-import type { TaskInfo, TaskStatus } from "../../src/core/types";
+import type { TaskDef, TaskFlags, TaskInfo, TaskPatch, TaskSource, TaskStatus } from "../../src/core/types";
 
 export const STATUS_WORD: Record<TaskStatus, string> = {
   idle: "idle",
   running: "running",
   exited: "exited",
+  stopped: "stopped",
   failed: "failed",
   backoff: "restarting",
   "gave-up": "gave up",
@@ -30,16 +31,17 @@ const span = (ms: number): string => {
   return `${Math.floor(s / 86400)}d`;
 };
 
-/** "up 2m", "exit 1 · 3m ago", "retry in 4s", "gave up", or nothing for an idle task */
+/** "up 2m", "exit 1 · 3m ago", "stopped · 3m ago", "retry in 4s", "gave up", or nothing for an idle task */
 export function taskWhen(t: TaskInfo, now: number): string {
+  const ago = t.exitedAt === undefined ? "" : now - t.exitedAt < 60_000 ? " · now" : ` · ${span(now - t.exitedAt)} ago`;
   switch (t.status) {
     case "running":
       return t.startedAt !== undefined ? `up ${span(now - t.startedAt)}` : "running";
     case "exited":
-    case "failed": {
-      const ago = t.exitedAt === undefined ? "" : now - t.exitedAt < 60_000 ? " · now" : ` · ${span(now - t.exitedAt)} ago`;
+    case "failed":
       return `exit ${t.exitCode ?? "?"}${ago}`;
-    }
+    case "stopped":
+      return `stopped${ago}`;
     case "backoff":
       return t.retryAt !== undefined ? `retry in ${span(t.retryAt - now)}` : "restarting";
     case "gave-up":
@@ -63,7 +65,10 @@ export function taskLines(prev: readonly TaskInfo[] | undefined, next: readonly 
         lines.push(`${t.name} exited ${t.exitCode ?? "?"}`);
         break;
       case "exited":
-        lines.push(t.exitCode === 0 ? `${t.name} finished` : `${t.name} stopped`);
+        lines.push(`${t.name} finished`);
+        break;
+      case "stopped":
+        lines.push(`${t.name} stopped`);
         break;
       case "backoff":
         lines.push(`${t.name} restarting in ${span((t.retryAt ?? now) - now)}`);
@@ -76,6 +81,26 @@ export function taskLines(prev: readonly TaskInfo[] | undefined, next: readonly 
     }
   }
   return lines;
+}
+
+const FLAG_KEYS = ["dev", "keep", "withPanel", "hidden"] as const satisfies readonly (keyof TaskFlags)[];
+
+/** A task as the sheet sends it: the whole merged definition plus one
+ *  change. Canopy's layer keeps only what differs from the layers under it,
+ *  so sending less would drop an override the task already has. */
+export function withChange(t: TaskDef, change: TaskFlags): TaskPatch {
+  const out: TaskPatch = { name: t.name, cmd: t.cmd, ...(t.cwd ? { cwd: t.cwd } : {}) };
+  for (const f of FLAG_KEYS) if (t[f] !== undefined) out[f] = t[f];
+  return { ...out, ...change };
+}
+
+/** What a rename does with the old name, so it does not stay behind: a
+ *  task a lower layer defines is hidden in canopy's layer (a null there
+ *  would clear nothing), one that lives where it is saved is removed. */
+export function renameOld(t: TaskDef & { source: TaskSource }, target: "canopy" | "repo"): { def: TaskPatch | null; target: "canopy" | "repo" } {
+  if (t.source === "canopy") return { def: null, target: "canopy" };
+  if (t.source === "repo" && target === "repo") return { def: null, target: "repo" };
+  return { def: withChange(t, { hidden: true }), target: "canopy" };
 }
 
 export const devTask = (tasks: readonly TaskInfo[]): TaskInfo | undefined => tasks.find((t) => t.dev && !t.hidden);

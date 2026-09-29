@@ -27,6 +27,12 @@ let scratch = "";
 const prev = process.env["CANOPY_CONFIG_DIR"];
 const tmux = Bun.which("tmux") !== null;
 
+/** the panes, or none when there is no server or no answer */
+const panes = async (base: string[]) => {
+  const r = await listTaskPanes(base);
+  return Array.isArray(r) ? r : [];
+};
+
 async function until(pred: () => Promise<boolean>, what: string, ms = 10_000) {
   const start = Date.now();
   while (!(await pred())) {
@@ -91,8 +97,8 @@ describe.skipIf(!tmux)("a task session", () => {
     const meta = { id, repoId: "repo", path: repo, task: "quick" };
     // Review focus 1: quotes, && and $ survive both shells
     await startTaskSession(base, meta, repo, `echo 'first line' && echo "home=$HOME" && exit 3`);
-    await until(async () => (await listTaskPanes(base))?.some((p) => p.termId === id && p.dead) ?? false, "the task to exit");
-    const pane = (await listTaskPanes(base))!.find((p) => p.termId === id)!;
+    await until(async () => (await panes(base)).some((p) => p.termId === id && p.dead), "the task to exit");
+    const pane = (await panes(base)).find((p) => p.termId === id)!;
     expect(pane.code).toBe(3);
     expect(pane.task).toBe("quick");
     const log = await readLog(id);
@@ -102,11 +108,24 @@ describe.skipIf(!tmux)("a task session", () => {
     await startTaskSession(base, meta, repo, "echo second run; sleep 30");
     await until(async () => (await readLog(id)).includes("second run"), "the respawned output");
     await interruptTask(base, id);
-    await until(async () => (await listTaskPanes(base))?.some((p) => p.termId === id && p.dead) ?? false, "^C to end it");
+    await until(async () => (await panes(base)).some((p) => p.termId === id && p.dead), "^C to end it");
   });
-  test("no server is an empty list, not a failure", async () => {
+  test("a folder that is not there fails the task instead of running it at home", async () => {
+    const base = tmuxBase()!;
+    const repo = join(scratch, "repo");
+    const id = taskTermId(repo, "lost");
+    await startTaskSession(base, { id, repoId: "repo", path: repo, task: "lost" }, repo, "pwd; echo ran-anyway", "missing");
+    await until(async () => (await panes(base)).some((p) => p.termId === id && p.dead), "the task to exit");
+    const pane = (await panes(base)).find((p) => p.termId === id)!;
+    expect(pane.code).not.toBe(0);
+    const log = await readLog(id);
+    expect(log).not.toContain("ran-anyway");
+    expect(log.split(/\r?\n/)).not.toContain(process.env["HOME"]);
+    expect(log).toContain("missing");
+  });
+  test("no server is said as such, not a failure", async () => {
     const base = tmuxBase()!;
     await killServer(base);
-    expect(await listTaskPanes(base)).toEqual([]);
+    expect(await listTaskPanes(base)).toBe("no-server");
   });
 });

@@ -203,9 +203,9 @@ describe("tasks on tmux", () => {
       { termId: meta.id, task: "dev", repoId: "app", path: "/r/app", dead: true, code: 3, createdAt: 100_000 },
     ]);
   });
-  test("a task command here runs in its folder, elsewhere over ssh", () => {
-    expect(taskCommand("/r/app", "bun run dev")).toEqual({ command: ["sh", "-lc", "bun run dev"], dir: "/r/app" });
-    expect(taskCommand("/r/app", "x", "ui")).toEqual({ command: ["sh", "-lc", "x"], dir: "/r/app/ui" });
+  test("a task command here cds to its folder first, elsewhere over ssh", () => {
+    expect(taskCommand("/r/app", "bun run dev")).toEqual({ command: ["sh", "-c", "cd -- '/r/app' && exec sh -lc 'bun run dev'"], dir: "/r/app" });
+    expect(taskCommand("/r/app", "x", "ui")).toEqual({ command: ["sh", "-c", "cd -- '/r/app/ui' && exec sh -lc 'x'"], dir: "/r/app/ui" });
     expect(taskCommand("ssh://mini/r/app", "x", "ui")).toEqual({
       command: ["ssh", "-t", "--", "mini", "cd '/r/app/ui' && exec sh -lc 'x'"],
       dir: null,

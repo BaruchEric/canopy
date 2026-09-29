@@ -1781,8 +1781,10 @@ async function handleApi(
     return json({ path: saved, text: pasteText(saved) }, 201);
   }
   if (path === "/api/terms" && method === "DELETE") {
-    if (state.terms.get(url.searchParams.get("term") ?? "")?.info.task) return json({ error: "that is a task; stop it from its repo's tasks" }, 400);
-    if (!(await endTerm(state, url.searchParams.get("term") ?? ""))) return json({ error: "no such shell" }, 404);
+    const term = url.searchParams.get("term") ?? "";
+    // a task's session, held or only on record, is stopped by the task routes alone
+    if (state.terms.get(term)?.info.task || state.tasks.knows(term)) return json({ error: "that is a task; stop it from its repo's tasks" }, 400);
+    if (!(await endTerm(state, term))) return json({ error: "no such shell" }, 404);
     return json({ ok: true });
   }
   if (path === "/api/runs/answer" && method === "POST") {

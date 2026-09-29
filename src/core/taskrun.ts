@@ -154,9 +154,9 @@ export async function interruptTask(base: string[], id: string): Promise<void> {
   await exec(interruptArgs(base, id), { timeoutMs: 10_000 });
 }
 
-/** every task pane; [] with no server, null when tmux did not answer */
-export async function listTaskPanes(base: string[]): Promise<TaskPane[] | null> {
+/** every task pane; "no-server" when tmux says none runs, null when it did not answer */
+export async function listTaskPanes(base: string[]): Promise<TaskPane[] | "no-server" | null> {
   const r = await exec(taskPanesArgs(base), { timeoutMs: 10_000 });
   if (r.code === 0) return parseTaskPanes(r.stdout);
-  return noServer(r.stderr) ? [] : null;
+  return noServer(r.stderr) ? "no-server" : null;
 }
