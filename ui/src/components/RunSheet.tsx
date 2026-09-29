@@ -712,7 +712,7 @@ function TaskForm({ repo, name }: { repo: Repo; name: string | null }) {
     keep: task?.keep ?? false,
     withPanel: task?.withPanel ?? false,
   });
-  const [target, setTarget] = useState<"canopy" | "repo">("canopy");
+  const [target, setTarget] = useState<"canopy" | "repo">(task?.source === "repo" && !repo.host ? "repo" : "canopy");
   const [error, setError] = useState<string | null>(null);
 
   const run = async (what: () => Promise<void>) => {
@@ -726,13 +726,13 @@ function TaskForm({ repo, name }: { repo: Repo; name: string | null }) {
   };
   const save = () =>
     run(async () => {
-      if (name && name !== draft.name) await saveTaskDef(repo.id, name, null, target);
       await saveTaskDef(
         repo.id,
         draft.name,
         { name: draft.name, cmd: draft.cmd, ...(draft.cwd ? { cwd: draft.cwd } : {}), dev: draft.dev, keep: draft.keep, withPanel: draft.withPanel },
         target,
       );
+      if (name && name !== draft.name) await saveTaskDef(repo.id, name, null, target);
     });
   const check = (key: "dev" | "keep" | "withPanel", label: string) => (
     <label className="settings-row">
