@@ -136,6 +136,7 @@ function socketUrl(tab: TermTab, cols: number, rows: number, rejoin: boolean): s
     client: clientId(),
   });
   if (joinsOnly(tab, rejoin)) q.set("attach", "1");
+  else if (tab.start) q.set("start", tab.start);
   return backendSocket(backendOf(tab.id), `/api/term?${q}`);
 }
 

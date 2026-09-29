@@ -1,4 +1,5 @@
 import type {
+  AgentKind,
   About,
   AgentSettings,
   BackendEntry,
@@ -345,6 +346,9 @@ export const api = {
     }),
   /** the shells the server holds, attached or waiting for a browser */
   terms: async (b: string = homeName()) => fromAll(b, await req<TermInfo[]>(b, "/api/terms"), qTerm),
+  /** what a shell is running, asked of tmux: claude, codex or neither */
+  termAgent: (id: string) =>
+    repoReq<{ agent: AgentKind | null }>(id, (p) => `/api/terms/agent?term=${encodeURIComponent(p)}`),
   /** ends one shell; closing its socket alone leaves it running */
   endTerm: (id: string) =>
     repoReq<{ ok: true }>(id, (p) => `/api/terms?term=${encodeURIComponent(p)}`, { method: "DELETE" }),

@@ -26,6 +26,18 @@ export interface TermTab {
   /** the task this tab shows; closing the tab never stops it, and its
    *  socket only ever joins, never starts a shell under the task's id */
   task?: string;
+  /** what the socket that starts this shell asks the backend to type in;
+   *  never saved, since a shell that already exists ignores it */
+  start?: "claude";
+}
+
+/** Whether a repo's panel has no shell of its own yet: no panel tab here and
+ *  no panel shell held on the backend. A held one with no tab (hidden here,
+ *  or waiting to be adopted) counts, so opening the panel never adds a
+ *  second shell beside one the user put away. */
+export function needsPanelShell(tabs: readonly TermTab[], held: readonly TermInfo[], repoId: string): boolean {
+  if (tabs.some((t) => t.repoId === repoId && t.place === "panel" && t.task === undefined)) return false;
+  return !held.some((t) => t.repoId === repoId && t.place === "panel" && t.task === undefined);
 }
 
 /** what a tab's view is keyed by: its name, and its generation once it has one */
