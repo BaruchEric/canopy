@@ -21,6 +21,7 @@ import { mergeAction } from "./peers";
 import { convOf, isUnread, mergeMessages } from "./chan";
 import type { ChanMessage, TailchanInfo } from "../../src/core/types";
 import { clientCaps } from "../../src/core/client";
+import { listedTask } from "../../src/core/tasks";
 import {
   DEFAULT_AGENT,
   DEFAULT_LAUNCH,
@@ -1108,7 +1109,7 @@ function readTasks(get: () => CanopyState, set: (fn: (s: CanopyState) => Partial
     .allTasks(b)
     .then((list) => {
       if (!isShown(get(), b)) return;
-      const live = list.filter((t) => t.status !== "idle");
+      const live = list.filter(listedTask);
       set((s) => ({ taskAll: [...s.taskAll.filter((t) => backendOf(t.repoId) !== b), ...live] }));
     })
     .catch(() => {});
@@ -1663,15 +1664,12 @@ export const useStore = create<CanopyState>((set, get) => ({
       .then((r) => set((s) => ({ tasks: { ...s.tasks, [repoId]: r.tasks } })))
       .catch(() => {});
   },
-  openPanel: (id) => {
-    const fresh = !get().panels.includes(id);
+  openPanel: (id) =>
     set((s) => {
       const next = focusPanel(s.panels, id);
       // a panel shell another device opened here waits for its panel
       return { ...next, terms: dockless() ? s.terms : adoptTerms(s.terms, s.shells, s.repos, next.panels, skipped(s.hiddenTerms)) };
-    });
-    if (fresh) get().startPanelTasks(id);
-  },
+    }),
   showPanel: (id) =>
     set((s) => (s.panels.includes(id) ? { activePanel: id } : {})),
   openRepo: (id, mods) => {
@@ -1787,7 +1785,7 @@ export const useStore = create<CanopyState>((set, get) => ({
     } else if (ev.type === "tasks") {
       set((s) => {
         const others = s.taskAll.filter((t) => t.repoId !== ev.repoId);
-        return { tasks: { ...s.tasks, [ev.repoId]: ev.tasks }, taskAll: [...others, ...ev.tasks.filter((t) => t.status !== "idle")] };
+        return { tasks: { ...s.tasks, [ev.repoId]: ev.tasks }, taskAll: [...others, ...ev.tasks.filter(listedTask)] };
       });
     } else if (ev.type === "job") {
       set((s) => ({ jobs: { ...s.jobs, [ev.job.id]: ev.job } }));
@@ -2317,6 +2315,25 @@ useStore.subscribe((s, prev) => {
     delete patch.activeTerm;
   }
   if (Object.keys(patch).length > 0) saveLayout(patch);
+});
+
+/** The panels whose tasks this page has asked to start, so each open of a
+ *  panel asks once: by any path that adds it to the dock (a click, the top
+ *  bar's open, a shell or search landing there) and once per page load for
+ *  the panels a reload brings back, once their repo is known. Closing a
+ *  panel forgets it, so the next open asks again. */
+const panelsStarted = new Set<string>();
+
+useStore.subscribe((s, prev) => {
+  if (s.panels === prev.panels && s.repos === prev.repos) return;
+  // a solo or shell window holds the grove's panels, not panels of its own
+  if (dockless()) return;
+  for (const id of panelsStarted) if (!s.panels.includes(id)) panelsStarted.delete(id);
+  for (const id of s.panels) {
+    if (panelsStarted.has(id) || !s.repos.some((r) => r.id === id)) continue;
+    panelsStarted.add(id);
+    s.startPanelTasks(id);
+  }
 });
 
 /** The run a repo's card should talk about: a live one first, else the most

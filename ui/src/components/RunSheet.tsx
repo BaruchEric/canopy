@@ -22,6 +22,7 @@ import {
   type RunStep,
 } from "../../../src/core/types";
 import { Seg } from "./Seg";
+import { renameOld, withChange } from "../tasks";
 
 const STATUS_WORD: Record<Run["status"], string> = {
   working: "working",
@@ -732,7 +733,10 @@ function TaskForm({ repo, name }: { repo: Repo; name: string | null }) {
         { name: draft.name, cmd: draft.cmd, ...(draft.cwd ? { cwd: draft.cwd } : {}), dev: draft.dev, keep: draft.keep, withPanel: draft.withPanel },
         target,
       );
-      if (name && name !== draft.name) await saveTaskDef(repo.id, name, null, target);
+      if (task && task.name !== draft.name) {
+        const old = renameOld(task, target);
+        await saveTaskDef(repo.id, task.name, old.def, old.target);
+      }
     });
   const check = (key: "dev" | "keep" | "withPanel", label: string) => (
     <label className="settings-row">
@@ -786,7 +790,7 @@ function TaskForm({ repo, name }: { repo: Repo; name: string | null }) {
         {task?.suggested && (
           <p className="settings-hint">
             The repo file asks for {Object.keys(task.suggested).join(" and ")}, which runs things without a click, so it waits for you.{" "}
-            <button type="button" className="mini" onClick={() => void run(() => saveTaskDef(repo.id, task.name, { name: task.name, ...task.suggested }, "canopy"))}>
+            <button type="button" className="mini" onClick={() => void run(() => saveTaskDef(repo.id, task.name, withChange(task, { ...task.suggested }), "canopy"))}>
               accept
             </button>
           </p>
@@ -795,7 +799,7 @@ function TaskForm({ repo, name }: { repo: Repo; name: string | null }) {
       </div>
       <footer className="sheet-foot">
         {task?.source === "detected" && (
-          <button type="button" className="mini" onClick={() => void run(() => saveTaskDef(repo.id, task.name, { name: task.name, hidden: true }, "canopy"))}>
+          <button type="button" className="mini" onClick={() => void run(() => saveTaskDef(repo.id, task.name, withChange(task, { hidden: true }), "canopy"))}>
             hide
           </button>
         )}
