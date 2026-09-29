@@ -221,10 +221,15 @@ export const respawnArgs = (base: string[], id: string, command: string[], dir: 
 /** ^C to the pane, the polite first half of a stop */
 export const interruptArgs = (base: string[], id: string): string[] => [...base, "send-keys", "-t", sessionName(id), "C-c"];
 
-/** one line per pane on the server: session, task, repo, path, dead, exit status, created */
+/** one line per session on the server, its pane's fields off its active pane
+ *  (a task's session has only the one): session, task, repo, path, dead,
+ *  exit status, created */
 export const TASK_PANE_FORMAT = "#{session_name}\t#{@canopy_task}\t#{@canopy_repo}\t#{@canopy_path}\t#{pane_dead}\t#{pane_dead_status}\t#{session_created}";
 
-export const taskPanesArgs = (base: string[]): string[] => [...base, "list-panes", "-a", "-F", TASK_PANE_FORMAT];
+/** `list-sessions` rather than `list-panes -a`: the shells container's server
+ *  outlives its last session, and `list-panes` there fails ("no current
+ *  target") where this answers an empty list */
+export const taskPanesArgs = (base: string[]): string[] => [...base, "list-sessions", "-F", TASK_PANE_FORMAT];
 
 export interface TaskPane {
   termId: string;

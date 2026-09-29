@@ -123,6 +123,15 @@ describe.skipIf(!tmux)("a task session", () => {
     expect(log.split(/\r?\n/)).not.toContain(process.env["HOME"]);
     expect(log).toContain("missing");
   });
+  test("a server with no session left is an empty list, not a failure", async () => {
+    // the shells container's server: exit-empty off, so it outlives its last session
+    const base = tmuxBase()!;
+    const run = async (...args: string[]) => expect(await Bun.spawn([...base, ...args]).exited).toBe(0);
+    await killServer(base);
+    await run("new-session", "-d", "-s", "canopy-empty", ";", "set-option", "-g", "exit-empty", "off");
+    await run("kill-session", "-t", "canopy-empty");
+    expect(await listTaskPanes(base)).toEqual([]);
+  });
   test("no server is said as such, not a failure", async () => {
     const base = tmuxBase()!;
     await killServer(base);
