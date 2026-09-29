@@ -438,19 +438,24 @@ describe("several backends", () => {
     expect(s.root).toBe("/a");
   });
 
-  test("a repo leaving the scan drops its tasks", async () => {
+  test("a repo leaving the scan drops its loaded tasks and the server answers for the top bar list", async () => {
+    const t = (repoId: string) => ({ name: "dev", cmd: "x", repoId, source: "detected" as const, termId: "0".repeat(32), status: "running" as const, live: true, restarts: 0, viewers: [] });
     await start(
       backendAnswers(scanOf("/a", [repo("proj")]), [], { "/api/backends": twoBackends }),
-      backendAnswers(scanOf("/b", [repo("proj")]), []),
+      backendAnswers(scanOf("/b", [repo("proj")]), [], {
+        "/api/tasks": [{ ...t("proj"), gone: "repo" }],
+      }),
     );
     await settle();
-    const t = (repoId: string) => ({ name: "dev", cmd: "x", repoId, source: "detected" as const, termId: "0".repeat(32), status: "running" as const, live: true, restarts: 0, viewers: [] });
     useStore.setState({ tasks: { proj: [t("proj")], "b|proj": [t("b|proj")] }, taskErrors: { "b|proj": ["x"] }, taskAll: [t("proj"), t("b|proj")] });
     useStore.getState().applyEvent({ type: "scan", result: { ...scanOf("/b", []), sources: [source("b|launch", "launch")] } }, "b");
     const s = useStore.getState();
     expect(Object.keys(s.tasks)).toEqual(["proj"]);
     expect(s.taskErrors).toEqual({});
-    expect(s.taskAll.map((x) => x.repoId)).toEqual(["proj"]);
+    await settle();
+    // the server still lists b's task, marked gone, and it stays for the popover
+    const all = useStore.getState().taskAll.filter((x) => x.repoId === "b|proj");
+    expect(all.map((x) => x.gone)).toEqual(["repo"]);
   });
 
   test("a backend that has not answered keeps its panels and its saved shell tabs", async () => {

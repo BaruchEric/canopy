@@ -884,7 +884,6 @@ function treeState(
   | "closedSections"
   | "tasks"
   | "taskErrors"
-  | "taskAll"
 > {
   const reg = registry();
   const mine = mineOf(from);
@@ -909,7 +908,6 @@ function treeState(
     closedSections: pruneByRepo(s.closedSections, tree.repos, mine),
     tasks: pruneByRepo(s.tasks, tree.repos, mine),
     taskErrors: pruneByRepo(s.taskErrors, tree.repos, mine),
-    taskAll: s.taskAll.filter((t) => !mine(t.repoId) || tree.repos.some((r) => r.id === t.repoId)),
   };
 }
 
@@ -1750,6 +1748,8 @@ export const useStore = create<CanopyState>((set, get) => ({
       }));
     } else if (ev.type === "scan") {
       set((s) => treeState(s, ev.result, b));
+      // a task whose repo left the scan stays, marked by the server
+      readTasks(get, set, b);
     } else if (ev.type === "workspaces") {
       set({ workspaces: ev.workspaces });
     } else if (ev.type === "agents") {

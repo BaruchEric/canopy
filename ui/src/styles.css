@@ -5307,6 +5307,8 @@ button.machine:hover {
   border-color: var(--rust);
 }
 
-.tasks-pop {
-  min-width: 20rem;
+@media (min-width: 761px) {
+  .tasks-pop {
+    min-width: 20rem;
+  }
 }

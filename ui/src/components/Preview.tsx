@@ -202,7 +202,7 @@ export function PreviewSection({ repo }: { repo: Repo }) {
                 {ports === null
                   ? "Looking for dev servers…"
                   : mine.length === 0
-                    ? dev && dev.status !== "running"
+                    ? dev && dev.status !== "running" && dev.status !== "backoff"
                       ? (
                         <>
                           Nothing listens in this repo yet.{" "}

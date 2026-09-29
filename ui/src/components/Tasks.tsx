@@ -217,6 +217,8 @@ export function TaskChip({ repoId }: { repoId: string }) {
         e.stopPropagation();
         showTasks(repoId);
       }}
+      onAuxClick={(e) => e.stopPropagation()}
+      onKeyDown={(e) => e.stopPropagation()}
     >
       {chip.text}
     </button>
@@ -270,7 +272,7 @@ export function TasksChip() {
       <button
         type="button"
         className={`mini${open ? " on" : ""}${chip?.bad ? " bad" : ""}`}
-        aria-label="Tasks on this backend"
+        aria-label="Tasks"
         aria-expanded={open}
         title={chip?.title ?? "Tasks"}
         onClick={() => setOpen(!open)}
