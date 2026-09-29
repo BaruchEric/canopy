@@ -9,7 +9,7 @@ import { changedAt } from "./grouping";
 import { focusPanel, nextActive } from "./dock";
 import { heldShellUrl, openElsewhere, openShellElsewhere, parseRoute, soloUrl } from "./routes";
 import { loadSettings, saveSettings, shellPlace, type Settings, type ShellPlace } from "./settings";
-import { PANEL_TERM_ROWS, adoptTerms, keepFront, loadFocusSize, loadTermTabs, nextStripTab, reconcileTerms, rowsPx, shellSet, termId, type FocusSize, type TermTab } from "./term";
+import { PANEL_TERM_ROWS, adoptTerms, keepFront, loadFocusSize, loadTermTabs, needsPanelShell, nextStripTab, reconcileTerms, rowsPx, shellSet, termId, type FocusSize, type TermTab } from "./term";
 import { clientId, identity } from "./client";
 export type { TermTab } from "./term";
 import { clamp, needsAttention } from "./util";
@@ -717,7 +717,7 @@ interface CanopyState {
   setSetting: <K extends keyof Settings>(key: K, value: Settings[K]) => void;
   /** opens a new shell at a repo where the settings say: its panel, the
    *  strip, or a tab or window of its own; `place` overrides the setting */
-  openTerm: (repoId: string, place?: ShellPlace) => void;
+  openTerm: (repoId: string, place?: ShellPlace, start?: "claude", prompt?: string) => void;
   closeTerm: (id: string) => void;
   /** puts a shell's tab down here and leaves the shell running for the
    *  other devices, and for picking back up from the shells list */
@@ -1862,7 +1862,7 @@ export const useStore = create<CanopyState>((set, get) => ({
       saveSettings(settings);
       return { settings };
     }),
-  openTerm: (repoId, place) => {
+  openTerm: (repoId, place, start, prompt) => {
     const s = get();
     const repo = s.repos.find((r) => r.id === repoId);
     if (!repo || repo.forge) return;
@@ -1876,7 +1876,14 @@ export const useStore = create<CanopyState>((set, get) => ({
       openShellElsewhere(repoId, where);
       return;
     }
-    const tab: TermTab = { id: qual(backendOf(repoId), termId()), repoId, name: repo.name, path: repo.path, place: where };
+    const tab: TermTab = {
+      id: qual(backendOf(repoId), termId()),
+      repoId,
+      name: repo.name,
+      path: repo.path,
+      place: where,
+      ...(start ? { start, ...(prompt ? { prompt } : {}) } : {}),
+    };
     // A panel shell shows only inside its repo's panel and only while that
     // section is unfolded, so open both. Otherwise the click does nothing you
     // can see.
@@ -2379,6 +2386,38 @@ useStore.subscribe((s, prev) => {
     if (panelsStarted.has(id) || !s.repos.some((r) => r.id === id)) continue;
     panelsStarted.add(id);
     s.startPanelTasks(id);
+  }
+});
+
+/** The panels that have had their shell opened on their own since they
+ *  last opened: closing a panel forgets it, so the next open looks again,
+ *  and closing the shell's tab leaves the open panel without one. */
+const panelsShelled = new Set<string>();
+
+useStore.subscribe((s, prev) => {
+  if (s.panels === prev.panels && s.repos === prev.repos && s.shells === prev.shells) return;
+  if (dockless()) return;
+  for (const id of panelsShelled) if (!s.panels.includes(id)) panelsShelled.delete(id);
+  for (const id of s.panels) {
+    if (panelsShelled.has(id)) continue;
+    // the repo lands in the same set as its backend's shell list, so a
+    // known repo means held shells are already adopted or listed
+    const repo = s.repos.find((r) => r.id === id);
+    if (!repo || repo.forge || repo.host || repo.error) continue;
+    if (!isOnline(s, backendOf(id))) continue;
+    panelsShelled.add(id);
+    if (!needsPanelShell(s.terms, s.shells, id)) continue;
+    // Not through openTerm: that focuses the panel, and a reload that brings
+    // back three panels would end on whichever was shelled last.
+    const tab: TermTab = {
+      id: qual(backendOf(id), termId()),
+      repoId: id,
+      name: repo.name,
+      path: repo.path,
+      place: "panel",
+      ...(s.settings.level === "intermediate" ? { start: "claude" as const } : {}),
+    };
+    useStore.setState((t) => ({ terms: [...t.terms, tab], closedSections: unfoldIn(t.closedSections, id, "shell") }));
   }
 });
 

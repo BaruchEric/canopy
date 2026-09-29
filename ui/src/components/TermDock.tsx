@@ -42,6 +42,8 @@ import { BAR_KEYS, NO_MODS, keyBytes, shortcutOf, withMods, type BarKey, type Mo
 import { osc52Text } from "../osc52";
 import { GLIDE_MIN, TAP_SLOP, dragLines, gapOf, glide, pinchFont, speedOf } from "../touch";
 import { Wordmark } from "./TopBar";
+import { AgentButtons } from "./AgentButtons";
+import { LIVE } from "../liveTerms";
 import { TERM_GONE, type Repo } from "../../../src/core/types";
 
 /** The design tokens the terminal paints with, resolved through a probe
@@ -49,9 +51,6 @@ import { TERM_GONE, type Repo } from "../../../src/core/types";
 /** ms a shell's size has to hold before the pty is told it */
 const RESIZE_SETTLE = 120;
 
-/** every terminal on this page by its shell's name, for a gear to copy
- *  from or paste into */
-const LIVE = new Map<string, Terminal>();
 
 /** what a shell holds, scrollback and screen, as text */
 function shellText(id: string): string {
@@ -136,6 +135,10 @@ function socketUrl(tab: TermTab, cols: number, rows: number, rejoin: boolean): s
     client: clientId(),
   });
   if (joinsOnly(tab, rejoin)) q.set("attach", "1");
+  else if (tab.start) {
+    q.set("start", tab.start);
+    if (tab.prompt) q.set("prompt", tab.prompt);
+  }
   return backendSocket(backendOf(tab.id), `/api/term?${q}`);
 }
 
@@ -925,6 +928,10 @@ function TermTabs({
           </div>
         );
       })}
+      {(() => {
+        const showing = terms.find((t) => t.id === active);
+        return showing && showing.task === undefined && showing.exit === undefined ? <AgentButtons tab={showing} /> : null;
+      })()}
       {extra}
       {end}
     </div>

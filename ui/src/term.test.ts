@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { FOCUS_GAP, FOCUS_MIN, PANEL_TERM_ROWS, adoptTerms, keepFront, otherShells, shellSet, cellHeight, focusResize, loadFocusSize, loadTermTabs, nextStripTab, pruneHidden, joinsOnly, reconcileTerms, rowsPx, termId, viewKey, type TermTab } from "./term";
+import { FOCUS_GAP, FOCUS_MIN, PANEL_TERM_ROWS, adoptTerms, keepFront, otherShells, shellSet, cellHeight, focusResize, loadFocusSize, loadTermTabs, nextStripTab, pruneHidden, joinsOnly, needsPanelShell, reconcileTerms, rowsPx, termId, viewKey, type TermTab } from "./term";
 import type { Repo, TermInfo } from "../../src/core/types";
 
 describe("rowsPx", () => {
@@ -279,5 +279,25 @@ describe("joinsOnly", () => {
     expect(joinsOnly({ ...tab("t", "app"), task: "dev" }, false)).toBe(true);
     expect(joinsOnly(tab("a", "app"), false)).toBe(false);
     expect(joinsOnly(tab("a", "app"), true)).toBe(true);
+  });
+});
+
+describe("needsPanelShell", () => {
+  const tab = (id: string, repoId: string, place: "panel" | "strip", task?: string) =>
+    ({ id, repoId, name: repoId, path: `/r/${repoId}`, place, ...(task ? { task } : {}) }) as TermTab;
+  const held = (id: string, repoId: string, place: "panel" | "strip") =>
+    ({ id, repoId, path: `/r/${repoId}`, place, attached: false, viewers: [], startedAt: 0 }) as TermInfo;
+
+  test("a panel with no shell of its own needs one", () => {
+    expect(needsPanelShell([], [], "app")).toBe(true);
+    expect(needsPanelShell([tab("s", "app", "strip")], [held("s", "app", "strip")], "app")).toBe(true);
+  });
+  test("a panel tab, or a held panel shell with no tab here (hidden, or not adopted yet), is enough", () => {
+    expect(needsPanelShell([tab("p", "app", "panel")], [], "app")).toBe(false);
+    expect(needsPanelShell([], [held("p", "app", "panel")], "app")).toBe(false);
+  });
+  test("a task's tab does not count, and another repo's shell does not either", () => {
+    expect(needsPanelShell([tab("t", "app", "panel", "dev")], [], "app")).toBe(true);
+    expect(needsPanelShell([tab("p", "other", "panel")], [held("q", "other", "panel")], "app")).toBe(true);
   });
 });

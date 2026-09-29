@@ -193,3 +193,14 @@ and a reload adopts it instead of opening a second, ▶/■ drive the dev task,
 
 Undo or discard. Changing the grid's repo cards. A beginner-worded changes
 list (the advanced changes section is one "show more" away). Per-repo levels.
+
+## Amendments
+
+Made while planning and building, each smaller than what the sections above say:
+
+1. `levelOf` lives in `ui/src/settings.ts` beside the other field repairs, not in `guided.ts`.
+2. No `TermInfo.agent` on every list. `GET /api/terms/agent?term=` answers on demand, only when a button needs it: `agentIn` over `paneInfo` on tmux, and on a plain pty whether canopy started it with `start=claude`.
+3. The auto-open skips dockless windows (solo, shell and section windows), the same rule `panelsStarted` follows.
+4. At intermediate the shell fills the panel and has no height grip.
+5. The auto-open adds its tab without focusing the panel, so a reload that brings back several panels keeps the one that was showing.
+6. The tour looks for a target that is not mounted yet for a few seconds before passing over its step; the panel's shell mounts after the panel.

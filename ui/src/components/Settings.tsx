@@ -10,6 +10,11 @@ import { PAGE_BUILD } from "../build";
 import { ago } from "../util";
 import { Seg } from "./Seg";
 
+const LEVEL = [
+  { value: "intermediate", label: "intermediate", title: "Claude first: run your app, save your work, and the rest one click away" },
+  { value: "advanced", label: "advanced", title: "Every section: changes, tasks, history, peers, launch and more" },
+] as const;
+
 const OPEN_IN = [
   { value: "dock", label: "in the dock", title: "Pins a panel on the right, beside the others" },
   { value: "tabs", label: "dock tabs", title: "One panel on the right, the open repos as tabs across it" },
@@ -128,6 +133,13 @@ export function SettingsMenu() {
               />
             </section>
           )}
+          <section className="settings-row">
+            <h3 className="panel-label">repo panel</h3>
+            <Seg label="How much a repo's panel shows" value={settings.level} options={LEVEL} onChange={(v) => setSetting("level", v)} />
+            <button type="button" className="mini" onClick={() => setSetting("onboarded", false)}>
+              show the tour again
+            </button>
+          </section>
           <section className="settings-row">
             <h3 className="panel-label">open a repo</h3>
             <Seg

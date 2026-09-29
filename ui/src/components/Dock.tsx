@@ -1,4 +1,4 @@
-import { Fragment, useEffect, useMemo, useRef, useState } from "react";
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { CSSProperties, DragEvent, KeyboardEvent } from "react";
 import { api } from "../api";
 import {
@@ -28,6 +28,7 @@ import {
   multi,
   runFor,
   useStore,
+  dockless,
 } from "../store";
 import { backendOf, homeName, isHome } from "../registry";
 import { signinUrl } from "../backends";
@@ -37,6 +38,8 @@ import { ClaudeSection } from "./Claude";
 import { LaunchSection } from "./Launch";
 import { TasksSection } from "./Tasks";
 import { PreviewSection } from "./Preview";
+import { GuidedPanel } from "./Guided";
+import { Tour } from "./Tour";
 import { CommitRow } from "./Commit";
 import { DiffView } from "./DiffView";
 import { PeerChips, Pulls, RemoteTipChip } from "./RemoteTip";
@@ -954,7 +957,9 @@ function PanelGear({
   const order = useStore((s) => s.settings.sectionOrder);
   const hidden = useStore((s) => s.settings.sectionsHidden);
   const setSetting = useStore((s) => s.setSetting);
-  const layout: GearEntry[] = solo
+  const level = useStore((s) => s.settings.level);
+  const layout: GearEntry[] = [
+    ...(solo
     ? []
     : [
         ...modeEntries(mode, setMode, "window"),
@@ -962,7 +967,10 @@ function PanelGear({
         { type: "item", label: "panels as tabs", on: openIn === "tabs", run: () => setSetting("openIn", "tabs") },
         { type: "item", label: "open in a new tab", run: () => openElsewhere(repo.id, "tab") },
         { type: "item", label: "open in a new window", run: () => openElsewhere(repo.id, "window") },
-      ];
+      ] satisfies GearEntry[]),
+    { type: "item", label: "intermediate panel", on: level === "intermediate", run: () => setSetting("level", "intermediate") },
+    { type: "item", label: "advanced panel", on: level === "advanced", run: () => setSetting("level", "advanced") },
+  ];
   const rows: GearEntry[] = order.map((k, i) => ({
     type: "row",
     label: SECTION_WORD[k],
@@ -1179,6 +1187,20 @@ export function RepoPanel({
   const order = useStore((s) => s.settings.sectionOrder);
   const hiddenSections = useStore((s) => s.settings.sectionsHidden);
   const focusSize = useStore((s) => s.focusSize);
+  const level = useStore((s) => s.settings.level);
+  // "show more" on a guided panel, until the panel closes or shows another repo
+  const [more, setMore] = useState(false);
+  const runRef = useRef<HTMLButtonElement>(null);
+  const saveRef = useRef<HTMLButtonElement>(null);
+  const onboarded = useStore((s) => s.settings.onboarded);
+  const setSetting = useStore((s) => s.setSetting);
+  // one tour at a time: the showing panel's, or the only one
+  const isActive = useStore((s) => s.activePanel === id || s.panels.length === 1);
+  const finishTour = useCallback(() => setSetting("onboarded", true), [setSetting]);
+  const tourTargets = useMemo(
+    () => [() => box.current?.querySelector(".panel-shells") ?? null, () => runRef.current, () => saveRef.current],
+    [],
+  );
   const closePanel = onClose ? (_id: string) => onClose() : unpin;
   const [busy, setBusy] = useState<string | null>(null);
   // A pull or push says how it went under its own row; a commit's result
@@ -1195,6 +1217,7 @@ export function RepoPanel({
   const [access, setAccess] = useState<PushAccess>("unknown");
 
   useEffect(() => setNote(null), [id]);
+  useEffect(() => setMore(false), [id]);
 
   // Answered from remote URLs alone for repos you own, so this costs nothing
   // for almost every panel. Failures stay "unknown" and render nothing.
@@ -1223,6 +1246,7 @@ export function RepoPanel({
   }
   const st = repo.status;
   const solo = onClose !== undefined;
+  const guided = level === "intermediate" && !more;
 
   const showError = (text: string) => setNote({ kind: "err", text });
 
@@ -1245,7 +1269,7 @@ export function RepoPanel({
       {mode === "focus" && <FocusBackdrop onLeave={() => setMode("normal")} />}
     <section
       ref={box}
-      className={`panel s-${stateOf(repo)}${modeClass}`}
+      className={`panel s-${stateOf(repo)}${guided ? " guided-panel" : ""}${modeClass}`}
       aria-label={repo.name}
       hidden={hidden}
       style={{ "--panel-w": `${width}px`, ...(mode === "focus" ? focusVars(focusSize) : {}) } as CSSProperties}
@@ -1259,11 +1283,11 @@ export function RepoPanel({
           <IdLabel id={repo.id} />
         </span>
         <Star repoId={repo.id} name={repo.name} onError={showError} />
-        {repo.link && <RepoLink url={repo.link} name={repo.name} labeled />}
-        {many && <PanelMachines id={id} />}
+        {!guided && repo.link && <RepoLink url={repo.link} name={repo.name} labeled />}
+        {!guided && many && <PanelMachines id={id} />}
         <span className="spacer" />
         <PanelGear repo={repo} mode={mode} setMode={setMode} body={() => bodyRef.current} solo={solo} />
-        <RepoMenu repo={repo} onError={showError} />
+        {!guided && <RepoMenu repo={repo} onError={showError} />}
         <button
           type="button"
           className="mini close"
@@ -1274,137 +1298,154 @@ export function RepoPanel({
         </button>
       </header>
 
-      {many && <PanelAway id={id} />}
-      {!repo.host && !repo.forge && isHome(repo.id) && (
-        <a
-          className="panel-library"
-          href={`?view=library&project=${encodeURIComponent(repo.path)}`}
-        >
-          Library · tags, notes, links & dev server →
-        </a>
-      )}
-      {repo.description && (
-        <p className="panel-desc" title={repo.description}>
-          {repo.description}
-        </p>
-      )}
-
-      <div className="panel-sub">
-        <span className="branch">{st?.branch ?? "—"}</span>
-        {st?.upstream && <span className="upstream">⇢ {st.upstream}</span>}
-        {(st?.ahead ?? 0) > 0 && <span className="ahead">↑{st?.ahead}</span>}
-        {(st?.behind ?? 0) > 0 && <span className="behind">↓{st?.behind}</span>}
-        {st?.tip && <RemoteTipChip tip={st.tip} upstream={st.upstream} />}
-        <PeerChips st={repo.peers} />
-        {repo.pulls && <Pulls pulls={repo.pulls} name={repo.name} />}
-        <span className="when">{ago(st?.lastCommit?.at)}</span>
-        {st?.user && (
-          <span
-            className="who"
-            title={`commits as ${st.user.name} <${st.user.email}>`}
-          >
-            {st.user.name || st.user.email}
-          </span>
-        )}
-      </div>
-
-      {(repoFlow || repoRun) && (
-        <div className="panel-run">
-          {repoActiveFlow ? (
-            <FlowChip flow={repoActiveFlow} long />
-          ) : repoRun ? (
-            <RunChip run={repoRun} long />
-          ) : (
-            repoFlow && <FlowChip flow={repoFlow} long />
-          )}
-        </div>
-      )}
-      <TaskChip repoId={repo.id} />
-
-      <div className="panel-actions">
-        {OPENER_IDS.filter((app) => openers.includes(app)).map((app) => (
-          <button
-            key={app}
-            type="button"
-            className="mini"
-            title={
-              app === "agent"
-                ? "Start an interactive Claude Code session in a terminal here"
-                : app === "herdr"
-                  ? "Open this repo as a herdr workspace with Claude Code running in it"
-                  : undefined
-            }
-            onClick={() =>
-              void run(`open-${app}`, async () => {
-                await openApp(id, app);
-              })
-            }
-          >
-            {app}
-          </button>
-        ))}
-        {!openers.includes("code") && !repo.host && !repo.forge && backend.sshHost && (
-          <a
-            className="mini"
-            href={`vscode-remote://ssh-remote+${backend.sshHost}${repo.path}`}
-            title="Open this repo in VS Code over Remote-SSH on your own machine"
-          >
-            code ↗
-          </a>
-        )}
-        <span className="spacer" />
-        <button
-          type="button"
-          className="mini"
-          disabled={busy !== null}
-          onClick={() => void run("pull", async () => (await api.pull(id)).out)}
-        >
-          pull
-        </button>
-        <button
-          type="button"
-          className="mini"
-          // A branch with no upstream reports ahead: 0 but still needs its
-          // first push, so only a tracked-and-level branch disables this.
-          disabled={busy !== null || ((st?.ahead ?? 0) === 0 && !!st?.upstream)}
-          title={
-            st?.ahead
-              ? `send ${st.ahead} commit${st.ahead === 1 ? "" : "s"} to ${st.upstream ?? "the remote"}; history marks them ↑ not pushed`
-              : undefined
-          }
-          onClick={() => void run("push", async () => (await api.push(id)).out)}
-        >
-          {busy === "push"
-            ? "pushing…"
-            : `push${st?.ahead ? ` ↑${st.ahead}` : ""}`}
-        </button>
-      </div>
-      {note && <p className={`note ${note.kind}`}>{note.text}</p>}
-
-      {access === "denied" && (
-        <p className="panel-hint">
-          No remote accepts your pushes. Fork the repo, then add your copy as a
-          remote to push this branch.
-        </p>
-      )}
-
-      {isHome(repo.id) && (
-        <div className="panel-ws">
-          <WorkspaceMenu repo={repo} onError={showError} />
-        </div>
-      )}
-
-      {repo.error ? (
-        <p className="panel-error">Could not read this repo: {repo.error}</p>
+      {guided ? (
+        <>
+          {many && <PanelAway id={id} />}
+          <GuidedPanel repo={repo} onMore={() => setMore(true)} targets={{ run: runRef, save: saveRef }} />
+        </>
       ) : (
-        <PanelZoom.Provider value={zoom}>
-          {order
-            .filter((k) => !hiddenSections.includes(k))
-            .map((k) => <PanelSection key={k} k={k} repo={repo} />)}
-        </PanelZoom.Provider>
+        <>
+          {level === "intermediate" && (
+            <div className="guided-less">
+              <button type="button" className="mini" onClick={() => setMore(false)}>
+                show less
+              </button>
+            </div>
+          )}
+          {many && <PanelAway id={id} />}
+          {!repo.host && !repo.forge && isHome(repo.id) && (
+            <a
+              className="panel-library"
+              href={`?view=library&project=${encodeURIComponent(repo.path)}`}
+            >
+              Library · tags, notes, links & dev server →
+            </a>
+          )}
+          {repo.description && (
+            <p className="panel-desc" title={repo.description}>
+              {repo.description}
+            </p>
+          )}
+
+          <div className="panel-sub">
+            <span className="branch">{st?.branch ?? "—"}</span>
+            {st?.upstream && <span className="upstream">⇢ {st.upstream}</span>}
+            {(st?.ahead ?? 0) > 0 && <span className="ahead">↑{st?.ahead}</span>}
+            {(st?.behind ?? 0) > 0 && <span className="behind">↓{st?.behind}</span>}
+            {st?.tip && <RemoteTipChip tip={st.tip} upstream={st.upstream} />}
+            <PeerChips st={repo.peers} />
+            {repo.pulls && <Pulls pulls={repo.pulls} name={repo.name} />}
+            <span className="when">{ago(st?.lastCommit?.at)}</span>
+            {st?.user && (
+              <span
+                className="who"
+                title={`commits as ${st.user.name} <${st.user.email}>`}
+              >
+                {st.user.name || st.user.email}
+              </span>
+            )}
+          </div>
+
+          {(repoFlow || repoRun) && (
+            <div className="panel-run">
+              {repoActiveFlow ? (
+                <FlowChip flow={repoActiveFlow} long />
+              ) : repoRun ? (
+                <RunChip run={repoRun} long />
+              ) : (
+                repoFlow && <FlowChip flow={repoFlow} long />
+              )}
+            </div>
+          )}
+          <TaskChip repoId={repo.id} />
+
+          <div className="panel-actions">
+            {OPENER_IDS.filter((app) => openers.includes(app)).map((app) => (
+              <button
+                key={app}
+                type="button"
+                className="mini"
+                title={
+                  app === "agent"
+                    ? "Start an interactive Claude Code session in a terminal here"
+                    : app === "herdr"
+                      ? "Open this repo as a herdr workspace with Claude Code running in it"
+                      : undefined
+                }
+                onClick={() =>
+                  void run(`open-${app}`, async () => {
+                    await openApp(id, app);
+                  })
+                }
+              >
+                {app}
+              </button>
+            ))}
+            {!openers.includes("code") && !repo.host && !repo.forge && backend.sshHost && (
+              <a
+                className="mini"
+                href={`vscode-remote://ssh-remote+${backend.sshHost}${repo.path}`}
+                title="Open this repo in VS Code over Remote-SSH on your own machine"
+              >
+                code ↗
+              </a>
+            )}
+            <span className="spacer" />
+            <button
+              type="button"
+              className="mini"
+              disabled={busy !== null}
+              onClick={() => void run("pull", async () => (await api.pull(id)).out)}
+            >
+              pull
+            </button>
+            <button
+              type="button"
+              className="mini"
+              // A branch with no upstream reports ahead: 0 but still needs its
+              // first push, so only a tracked-and-level branch disables this.
+              disabled={busy !== null || ((st?.ahead ?? 0) === 0 && !!st?.upstream)}
+              title={
+                st?.ahead
+                  ? `send ${st.ahead} commit${st.ahead === 1 ? "" : "s"} to ${st.upstream ?? "the remote"}; history marks them ↑ not pushed`
+                  : undefined
+              }
+              onClick={() => void run("push", async () => (await api.push(id)).out)}
+            >
+              {busy === "push"
+                ? "pushing…"
+                : `push${st?.ahead ? ` ↑${st.ahead}` : ""}`}
+            </button>
+          </div>
+          {note && <p className={`note ${note.kind}`}>{note.text}</p>}
+
+          {access === "denied" && (
+            <p className="panel-hint">
+              No remote accepts your pushes. Fork the repo, then add your copy as a
+              remote to push this branch.
+            </p>
+          )}
+
+          {isHome(repo.id) && (
+            <div className="panel-ws">
+              <WorkspaceMenu repo={repo} onError={showError} />
+            </div>
+          )}
+
+          {repo.error ? (
+            <p className="panel-error">Could not read this repo: {repo.error}</p>
+          ) : (
+            <PanelZoom.Provider value={zoom}>
+              {order
+                .filter((k) => !hiddenSections.includes(k))
+                .map((k) => <PanelSection key={k} k={k} repo={repo} />)}
+            </PanelZoom.Provider>
+          )}
+        </>
       )}
       </div>
       {!repo.error && <PanelShells repo={repo} />}
+      {guided && isActive && !onboarded && !hidden && !dockless() && <Tour targets={tourTargets} onDone={finishTour} />}
       {mode === "focus" && <FocusGrips box={box} />}
     </section>
     </>

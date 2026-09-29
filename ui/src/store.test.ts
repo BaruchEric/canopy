@@ -225,6 +225,41 @@ describe("a panel's tasks start once per open, by any path", () => {
   });
 });
 
+describe("a panel opens its own shell", () => {
+  const pristine = useStore.getState();
+  const repo = (id: string) => ({ id, name: id, path: `/dev/${id}`, group: "", source: "launch", status: null }) as unknown as Repo;
+  const held = (id: string, repoId: string) =>
+    ({ id, repoId, path: `/dev/${repoId}`, place: "panel", attached: false, viewers: [], startedAt: 0 }) as TermInfo;
+  const online = () => {
+    const s = useStore.getState();
+    return { ...s.conns, [s.home]: { ...connOf(s), status: { state: "online" as const } } };
+  };
+  afterEach(() => useStore.setState(pristine, true));
+
+  test("once per open, running claude at intermediate, and never beside a shell the backend holds", () => {
+    const settings = { ...pristine.settings, level: "intermediate" as const };
+    useStore.setState({ terms: [], settings, conns: online(), repos: ["a", "b"].map(repo), shells: [held("h".repeat(32), "b")], panels: ["a", "b"] });
+    const s = useStore.getState();
+    expect(s.terms.map((t) => [t.repoId, t.place, t.start])).toEqual([["a", "panel", "claude"]]);
+    // a rescan asks nothing more
+    useStore.setState({ repos: ["a", "b"].map(repo) });
+    expect(useStore.getState().terms).toHaveLength(1);
+  });
+
+  test("a shell opened to take a prompt carries it for its first socket", () => {
+    useStore.setState({ terms: [], conns: online(), repos: [repo("e")], panels: ["e"], shells: [held("e".repeat(32), "e")] });
+    useStore.getState().openTerm("e", "panel", "claude", "fix it");
+    expect(useStore.getState().terms.map((t) => [t.start, t.prompt])).toEqual([["claude", "fix it"]]);
+  });
+
+  test("a plain shell at advanced, and none for a backend not online", () => {
+    useStore.setState({ terms: [], settings: { ...pristine.settings, level: "advanced" }, repos: [repo("c")], panels: ["c"] });
+    expect(useStore.getState().terms).toEqual([]);
+    useStore.setState({ conns: online(), repos: [repo("c")] });
+    expect(useStore.getState().terms.map((t) => [t.repoId, t.start])).toEqual([["c", undefined]]);
+  });
+});
+
 describe("tasks in front", () => {
   const realFetch = globalThis.fetch;
   const repo = (id: string) => ({ id, name: id, path: `/dev/${id}`, group: "", source: "launch", status: null }) as unknown as Repo;
@@ -563,11 +598,13 @@ describe("several backends", () => {
     useStore.getState().applyEvent({ type: "scan", result: { ...scanOf("/a", [repo("proj")]), scannedAt: 2 } });
     const s = useStore.getState();
     expect(s.panels).toEqual(["proj", "b|x"]);
-    expect(s.terms).toEqual([]);
+    // home's panel opens a shell of its own; the other backend's tab stays parked
+    expect(s.terms.map((t) => t.repoId)).toEqual(["proj"]);
     expect(s.parkedTerms.map((t) => t.id)).toEqual([bTab.id]);
-    expect(layoutOf(s).terms.map((t) => t.id)).toEqual([bTab.id]);
+    expect(layoutOf(s).terms.map((t) => t.id).filter((id) => id.includes("|"))).toEqual([bTab.id]);
     const saved = JSON.parse(store.get("canopy.layout") ?? "{}") as { terms?: { id: string }[]; panels?: string[] };
-    expect(saved.terms?.map((t) => t.id)).toEqual([bTab.id]);
+    // besides the shell home's open panel starts for itself
+    expect(saved.terms?.map((t) => t.id).filter((id) => id.includes("|"))).toEqual([bTab.id]);
     expect(saved.panels).toEqual(["proj", "b|x"]);
   });
 
@@ -763,7 +800,8 @@ describe("several backends", () => {
     expect(s.panels).toEqual(["proj", "b|x"]);
     expect(s.parkedTerms.map((t) => t.id)).toEqual([bTab.id]);
     const saved = JSON.parse(store.get("canopy.layout") ?? "{}") as { terms?: { id: string }[] };
-    expect(saved.terms?.map((t) => t.id)).toEqual([bTab.id]);
+    // besides the shell home's open panel starts for itself
+    expect(saved.terms?.map((t) => t.id).filter((id) => id.includes("|"))).toEqual([bTab.id]);
   });
 
   test("a server with no backends route is home alone", async () => {
