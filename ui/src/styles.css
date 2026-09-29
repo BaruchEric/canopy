@@ -3533,6 +3533,66 @@ a.chan-text {
 .panel-shells-body[hidden] {
   display: none;
 }
+/* ---------- the guided (intermediate) panel ---------- */
+/* the body takes what it needs, up to half the panel (a preview can be
+   tall), and the Claude shell takes the rest */
+.panel.guided-panel > .panel-body {
+  flex: 0 1 auto;
+  max-height: 50%;
+  padding-bottom: 8px;
+}
+.panel.guided-panel > .panel-shells {
+  flex: 1 1 auto;
+}
+.panel.guided-panel > .panel-shells > .panel-shells-body {
+  flex: 1 1 auto;
+  max-height: none;
+}
+.panel.guided-panel > .panel-shells > .panel-shells-body > .term-body {
+  flex: 1 1 auto;
+  height: auto;
+}
+.panel.guided-panel > .panel-shells > .term-grip {
+  display: none;
+}
+.guided {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 4px 14px 0;
+}
+.guided-status {
+  margin: 0;
+  color: var(--ink-dim);
+}
+.guided-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+.guided-btn {
+  font: inherit;
+  padding: 6px 12px;
+  border: 1px solid var(--hair);
+  border-radius: var(--r);
+  background: var(--bark2);
+  color: inherit;
+  cursor: pointer;
+}
+.guided-btn.primary {
+  border-color: var(--moss);
+  color: var(--moss);
+}
+.guided-btn:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+.guided-less {
+  display: flex;
+  justify-content: flex-end;
+  padding: 0 14px;
+}
 .term-new {
   align-self: center;
   margin: 0 0 4px 4px;
