@@ -3543,6 +3543,14 @@ a.chan-text {
   line-height: 1;
   color: var(--ink-faint);
 }
+/* the agent's buttons on a shell's tab row, set off from the tabs */
+.agent-buttons {
+  display: inline-flex;
+  gap: 2px;
+  margin-left: 6px;
+  padding-left: 6px;
+  border-left: 1px solid var(--hair);
+}
 .term-new:hover {
   color: var(--moss);
   background: var(--bark2);
