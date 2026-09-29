@@ -124,6 +124,11 @@ export interface Settings {
   backends: BackendEntry[];
   /** the backends this browser leaves out; never the home one */
   hiddenBackends: string[];
+  /** how much the repo panel shows: intermediate is the guided, Claude-first
+   *  panel, advanced is every section */
+  level: Level;
+  /** the guided panel's tour has been seen or skipped */
+  onboarded: boolean;
 }
 
 export const DEFAULT_SETTINGS: Settings = {
@@ -148,9 +153,25 @@ export const DEFAULT_SETTINGS: Settings = {
   sectionsHidden: [],
   backends: [],
   hiddenBackends: [],
+  level: "intermediate",
+  onboarded: false,
 };
 
 const KEY = "canopy.settings";
+
+export const LEVELS = ["intermediate", "advanced"] as const;
+export type Level = (typeof LEVELS)[number];
+
+/** A browser's level and tour flag off what it saved. Saved settings with
+ *  no level are from before levels existed: that browser keeps the panel it
+ *  had, advanced, and is not shown the tour. */
+export function levelOf(saved: Partial<Record<string, unknown>>): { level: Level; onboarded: boolean } {
+  const known = typeof saved["level"] === "string";
+  return {
+    level: pick(LEVELS, saved["level"], "advanced"),
+    onboarded: known && typeof saved["onboarded"] === "boolean" ? saved["onboarded"] : true,
+  };
+}
 
 function pick<T extends string>(
   allowed: readonly T[],
@@ -251,6 +272,7 @@ export function loadSettings(): Settings {
       sectionsHidden: sectionsHidden(saved.sectionsHidden),
       backends: backendEntries(saved.backends),
       hiddenBackends: backendNamesOf(saved.hiddenBackends),
+      ...levelOf(saved),
     };
   } catch {
     return DEFAULT_SETTINGS;

@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { loadSettings, shellPlace } from "./settings";
+import { levelOf, loadSettings, shellPlace } from "./settings";
 
 describe("shellPlace", () => {
   test("auto follows the panel", () => {
@@ -108,5 +108,29 @@ describe("the backends a page remembers", () => {
     expect(loadSettings().backends).toEqual([]);
     expect(loadSettings().hiddenBackends).toEqual([]);
     delete (globalThis as { localStorage?: unknown }).localStorage;
+  });
+});
+
+describe("levelOf", () => {
+  test("a browser with saved settings from before levels stays on advanced, tour done", () => {
+    expect(levelOf({ sort: "recent" })).toEqual({ level: "advanced", onboarded: true });
+  });
+  test("a saved level and tour flag are kept", () => {
+    expect(levelOf({ level: "intermediate", onboarded: false })).toEqual({ level: "intermediate", onboarded: false });
+  });
+  test("a bad level falls back to advanced, a bad flag to done", () => {
+    expect(levelOf({ level: "expert", onboarded: "yes" })).toEqual({ level: "advanced", onboarded: true });
+  });
+});
+
+describe("a fresh browser", () => {
+  test("starts on intermediate with the tour to come", () => {
+    (globalThis as { localStorage?: unknown }).localStorage = {
+      getItem: () => null,
+      setItem: () => {},
+    };
+    const s = loadSettings();
+    expect(s.level).toBe("intermediate");
+    expect(s.onboarded).toBe(false);
   });
 });
