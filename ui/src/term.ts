@@ -23,6 +23,9 @@ export interface TermTab {
    *  over a tab whose shell had gone), so the view starts over rather than
    *  keeping the ended one, which never reconnects */
   gen?: number;
+  /** the task this tab shows; closing the tab never stops it, and its
+   *  socket only ever joins, never starts a shell under the task's id */
+  task?: string;
 }
 
 /** what a tab's view is keyed by: its name, and its generation once it has one */
@@ -46,12 +49,23 @@ export function loadTermTabs(v: unknown): TermTab[] {
   const out: TermTab[] = [];
   for (const t of v) {
     if (!t || typeof t !== "object") continue;
-    const { id, repoId, name, path, place, exit } = t as Record<string, unknown>;
+    const { id, repoId, name, path, place, exit, task } = t as Record<string, unknown>;
     if (typeof id !== "string" || typeof repoId !== "string" || typeof name !== "string") continue;
     if (typeof path !== "string" || !isPlace(place) || exit !== undefined) continue;
-    out.push({ id, repoId, name, path, place });
+    out.push(typeof task === "string" ? { id, repoId, name, path, place, task } : { id, repoId, name, path, place });
   }
   return out;
+}
+
+/** The tab for a held session: a task's session keeps its task, so its socket
+ *  only joins and its × never ends it. */
+export function tabFor(info: TermInfo, repo: Repo): TermTab {
+  const tab: TermTab = { id: info.id, repoId: repo.id, name: repo.name, path: repo.path, place: info.place };
+  if (info.task) {
+    tab.task = info.task;
+    tab.name = `${repo.name} · ${info.task}`;
+  }
+  return tab;
 }
 
 /**
@@ -86,7 +100,7 @@ export function reconcileTerms(
     if (t.place === "panel" && !panels.includes(t.repoId)) continue;
     const repo = repoOf(t.repoId);
     if (!repo) continue;
-    out.push({ id: t.id, repoId: repo.id, name: repo.name, path: repo.path, place: t.place });
+    out.push(tabFor(t, repo));
   }
   return out;
 }
@@ -117,7 +131,7 @@ export function adoptTerms(
     const repo = repos.find((r) => r.id === t.repoId);
     if (!repo) continue;
     if (out === tabs) out = [...tabs];
-    out.push({ id: t.id, repoId: repo.id, name: repo.name, path: repo.path, place: t.place });
+    out.push(tabFor(t, repo));
   }
   return out;
 }

@@ -135,7 +135,7 @@ function socketUrl(tab: TermTab, cols: number, rows: number, rejoin: boolean): s
     // which device is looking, for the shell's viewers
     client: clientId(),
   });
-  if (rejoin) q.set("attach", "1");
+  if (rejoin || tab.task) q.set("attach", "1");
   return backendSocket(backendOf(tab.id), `/api/term?${q}`);
 }
 
@@ -1069,7 +1069,7 @@ function ShellGear({
     on: place === t,
     run: () => setSetting("shell", t),
   }));
-  const pop: GearEntry[] = showing
+  const pop: GearEntry[] = showing && !showing.task
     ? [
         { type: "item", label: "this shell in a new tab", run: () => popShell(showing.repoId, showing.id, "tab") },
         { type: "item", label: "this shell in a new window", run: () => popShell(showing.repoId, showing.id, "window") },
@@ -1291,13 +1291,10 @@ export function PanelShells({ repo }: { repo: Repo }) {
  *  a new one on the repo's own backend. None for a forge repo. */
 function shellTab(repo: Repo | undefined): TermTab | null {
   if (!repo || repo.forge) return null;
-  return {
-    id: parseRoute(window.location.search).term ?? qual(backendOf(repo.id), termId()),
-    repoId: repo.id,
-    name: repo.name,
-    path: repo.path,
-    place: "strip",
-  };
+  const id = parseRoute(window.location.search).term ?? qual(backendOf(repo.id), termId());
+  // a task's session only ever joins: a reload after it ended must not start a shell under its name
+  const task = useStore.getState().shells.find((t) => t.id === id)?.task;
+  return { id, repoId: repo.id, name: repo.name, path: repo.path, place: "strip", ...(task ? { task } : {}) };
 }
 
 /** One shell, edge to edge: what a "new tab" or "new window" shell shows. */

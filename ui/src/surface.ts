@@ -6,11 +6,12 @@ import { termFontSize } from "./touch";
 
 /** a panel's sections, in the order a panel shows them by default; the
  *  shells are not here, since they are the panel's footer */
-export const SECTION_KEYS = ["changes", "search", "history", "peers", "preview", "launch", "claude"] as const;
+export const SECTION_KEYS = ["changes", "tasks", "search", "history", "peers", "preview", "launch", "claude"] as const;
 export type SectionKey = (typeof SECTION_KEYS)[number];
 
 export const SECTION_WORD: Record<SectionKey, string> = {
   changes: "changes",
+  tasks: "tasks",
   search: "search",
   history: "history",
   peers: "peers",

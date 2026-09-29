@@ -91,7 +91,7 @@ export function RunSheet() {
 const sheetRepoId = (sheet: Sheet, runs: Record<string, Run>): string | undefined =>
   sheet.kind === "run"
     ? runs[sheet.runId]?.repoId
-    : sheet.kind === "plan" || sheet.kind === "agent" || sheet.kind === "launch" || sheet.kind === "flow-plan"
+    : sheet.kind === "plan" || sheet.kind === "agent" || sheet.kind === "launch" || sheet.kind === "task" || sheet.kind === "flow-plan"
       ? sheet.repoId
       : undefined;
 
@@ -109,6 +109,7 @@ function Body({ sheet }: { sheet: Sheet }) {
     if (!repo) return <Missing what="That repo is no longer in the tree." onClose={close} />;
     return <AgentForm repo={repo} />;
   }
+  if (sheet.kind === "task") return null;
   if (sheet.kind === "launch") {
     if (!repo) return <Missing what="That repo is no longer in the tree." onClose={close} />;
     return <LaunchForm repo={repo} />;

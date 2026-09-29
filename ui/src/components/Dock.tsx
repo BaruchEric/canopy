@@ -35,6 +35,7 @@ import { IdLabel } from "./IdLabel";
 import { ago, GLYPH, stateOf } from "../util";
 import { ClaudeSection } from "./Claude";
 import { LaunchSection } from "./Launch";
+import { TasksSection } from "./Tasks";
 import { PreviewSection } from "./Preview";
 import { CommitRow } from "./Commit";
 import { DiffView } from "./DiffView";
@@ -922,6 +923,8 @@ export function PanelSection({ k, repo }: { k: SectionKey; repo: Repo }) {
     case "preview":
       // the preview proxies the page's own backend's ports
       return repo.host || !isHome(repo.id) ? null : <PreviewSection repo={repo} />;
+    case "tasks":
+      return repo.forge ? null : <TasksSection repo={repo} />;
     case "launch":
       return <LaunchSection repo={repo} />;
     case "claude":

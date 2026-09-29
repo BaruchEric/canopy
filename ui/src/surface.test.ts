@@ -83,7 +83,7 @@ describe("sectionOrder", () => {
   });
   test("keeps a saved order, dropping unknown and repeated keys", () => {
     const saved = ["claude", "changes", "claude", "wat", "search", "history", "peers", "preview", "launch"];
-    expect(sectionOrder(saved)).toEqual(["claude", "changes", "search", "history", "peers", "preview", "launch"]);
+    expect(sectionOrder(saved)).toEqual(["claude", "changes", "tasks", "search", "history", "peers", "preview", "launch"]);
   });
   test("a key the saved order lacks lands after its default predecessor", () => {
     expect(sectionOrder(["history", "changes", "search", "claude"])).toEqual([
@@ -92,6 +92,7 @@ describe("sectionOrder", () => {
       "preview",
       "launch",
       "changes",
+      "tasks",
       "search",
       "claude",
     ]);
@@ -100,7 +101,7 @@ describe("sectionOrder", () => {
   });
   test("moveSection swaps with a neighbour and holds at the ends", () => {
     const order = [...SECTION_KEYS];
-    expect(moveSection(order, "search", -1).slice(0, 2)).toEqual(["search", "changes"]);
+    expect(moveSection(order, "tasks", -1).slice(0, 2)).toEqual(["tasks", "changes"]);
     expect(moveSection(order, "changes", -1)).toBe(order);
     expect(moveSection(order, "claude", 1)).toBe(order);
   });
@@ -157,4 +158,8 @@ describe("shell text size by spot", () => {
     expect(normalizeTermFonts([12])).toEqual({});
     expect(normalizeTermFonts(null)).toEqual({});
   });
+});
+
+test("a saved order from before tasks gets them after changes", () => {
+  expect(sectionOrder(["changes", "search", "history", "peers", "preview", "launch", "claude"])).toEqual([...SECTION_KEYS]);
 });

@@ -9,7 +9,7 @@ import { changedAt } from "./grouping";
 import { focusPanel, nextActive } from "./dock";
 import { heldShellUrl, openElsewhere, openShellElsewhere, parseRoute, soloUrl } from "./routes";
 import { loadSettings, saveSettings, shellPlace, type Settings, type ShellPlace } from "./settings";
-import { PANEL_TERM_ROWS, adoptTerms, keepFront, loadFocusSize, loadTermTabs, nextStripTab, reconcileTerms, rowsPx, shellSet, termId, type FocusSize, type TermTab } from "./term";
+import { PANEL_TERM_ROWS, adoptTerms, keepFront, loadFocusSize, loadTermTabs, nextStripTab, reconcileTerms, rowsPx, shellSet, tabFor, termId, type FocusSize, type TermTab } from "./term";
 import { clientId, identity } from "./client";
 export type { TermTab } from "./term";
 import { clamp, needsAttention } from "./util";
@@ -765,6 +765,12 @@ interface CanopyState {
   setLaunch: (repoId: string, settings: LaunchSettings) => Promise<void>;
   /** opens the repo's panel with its launch section unfolded */
   showLaunch: (repoId: string) => void;
+  /** the add or edit sheet for a repo's task; null adds one */
+  editTask: (repoId: string, name: string | null) => void;
+  /** opens a repo's panel with its tasks unfolded */
+  showTasks: (repoId: string) => void;
+  /** a task's terminal as a tab among the panel's shells or the strip's; closing it leaves the task running */
+  openTaskTab: (repoId: string, task: TaskInfo, place: ShellPlace) => void;
   stopJob: (jobId: string) => Promise<void>;
   dismissJob: (jobId: string) => Promise<void>;
   /** takes a peer's WIP as a new local branch (or the given one) */
@@ -828,6 +834,7 @@ export type Sheet =
   | { kind: "run"; runId: string }
   | { kind: "agent"; repoId: string }
   | { kind: "launch"; repoId: string }
+  | { kind: "task"; repoId: string; name: string | null }
   | { kind: "search" }
   | { kind: "flow-plan"; repoId: string; workflow: string }
   | { kind: "flow"; flowId: string }
@@ -1937,7 +1944,7 @@ export const useStore = create<CanopyState>((set, get) => ({
     const s = get();
     const tab = s.terms.find((t) => t.id === id);
     if (!tab) return;
-    endShells([tab]);
+    if (!tab.task) endShells([tab]);
     const terms = s.terms.filter((t) => t.id !== id);
     set({ terms, activeTerm: nextStripTab(s.terms, id, s.activeTerm), frontShells: keepFront(s.frontShells, terms) });
   },
@@ -1963,13 +1970,7 @@ export const useStore = create<CanopyState>((set, get) => ({
       window.location.assign(shellUrlFor(repo.id, id));
       return;
     }
-    const tab: TermTab = s.terms.find((t) => t.id === id) ?? {
-      id,
-      repoId: repo.id,
-      name: repo.name,
-      path: repo.path,
-      place: info.place,
-    };
+    const tab: TermTab = s.terms.find((t) => t.id === id) ?? tabFor(info, repo);
     set({
       terms: s.terms.some((t) => t.id === id) ? s.terms : [...s.terms, tab],
       hiddenTerms: s.hiddenTerms.filter((h) => h !== id),
@@ -2071,6 +2072,30 @@ export const useStore = create<CanopyState>((set, get) => ({
     get().applyEvent({ type: "repo", repo }, backendOf(repoId));
   },
   editLaunch: (repoId) => set({ sheet: { kind: "launch", repoId } }),
+  editTask: (repoId, name) => set({ sheet: { kind: "task", repoId, name } }),
+  showTasks: (repoId) =>
+    set((s) => ({
+      ...focusPanel(s.panels, repoId),
+      closedSections: unfoldIn(s.closedSections, repoId, "tasks"),
+    })),
+  openTaskTab: (repoId, task, place) => {
+    const s = get();
+    const repo = s.repos.find((r) => r.id === repoId);
+    if (!repo) return;
+    if (!s.terms.some((t) => t.id === task.termId)) {
+      const tab: TermTab = { id: task.termId, repoId, name: `${repo.name} · ${task.name}`, path: repo.path, place, task: task.name };
+      set({ terms: [...s.terms, tab], hiddenTerms: s.hiddenTerms.filter((h) => h !== task.termId) });
+    }
+    const now = get();
+    const tab = now.terms.find((t) => t.id === task.termId);
+    if (!tab) return;
+    set({
+      activeTerm: tab.place === "strip" ? tab.id : now.activeTerm,
+      ...(tab.place === "panel"
+        ? { ...focusPanel(now.panels, repoId), closedSections: unfoldIn(now.closedSections, repoId, "shell") }
+        : {}),
+    });
+  },
   setLaunch: async (repoId, settings) => {
     const launchers = await api.setLaunch(repoId, settings);
     set((s) => ({ launchers: { ...s.launchers, [backendOf(repoId)]: launchers } }));

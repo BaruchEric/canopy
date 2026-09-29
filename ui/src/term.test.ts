@@ -105,6 +105,16 @@ describe("adoptTerms", () => {
     expect(out[1]).toEqual({ id: "b", repoId: "lib", name: "lib", path: "/dev/lib", place: "strip" });
   });
 
+  test("a task's session becomes a task tab, so its socket only joins", () => {
+    const out = adoptTerms([], [{ ...info("t", "app"), task: "dev" }], repos, []);
+    expect(out).toEqual([{ id: "t", repoId: "app", name: "app · dev", path: "/dev/app", place: "strip", task: "dev" }]);
+    expect(reconcileTerms([], [{ ...info("t", "app"), task: "dev" }], repos)[0]?.task).toBe("dev");
+  });
+
+  test("a saved task tab keeps its task", () => {
+    expect(loadTermTabs([{ ...tab("t", "app"), task: "dev" }])[0]?.task).toBe("dev");
+  });
+
   test("a tab whose shell is gone stays (its socket's exit frame marks it)", () => {
     const tabs = [tab("a", "app")];
     expect(adoptTerms(tabs, [], repos, [])).toBe(tabs);
