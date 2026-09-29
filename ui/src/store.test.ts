@@ -34,6 +34,7 @@ import {
   type Repo,
   type ScanResult,
   type SourceState,
+  type TaskInfo,
   type TermInfo,
 } from "../../src/core/types";
 
@@ -143,6 +144,23 @@ describe("shells this window ends or restores", () => {
     expect(after?.exit).toBeUndefined();
     expect(after?.gen).toBe(1);
     expect(useStore.getState().kept).toEqual([]);
+  });
+
+  test("closing a task tab sends no DELETE, and a click revives an ended one", () => {
+    globalThis.fetch = answer({ ok: true });
+    const id = "a".repeat(32);
+    const def = { name: "dev", termId: id, live: true } as unknown as TaskInfo;
+    useStore.setState({ repos: [app], panels: [], terms: [], hiddenTerms: [], activeTerm: null });
+    useStore.getState().openTaskTab("app", def, "strip");
+    expect(useStore.getState().terms[0]).toMatchObject({ id, task: "dev" });
+    useStore.getState().endTerm(id, null);
+    useStore.getState().openTaskTab("app", def, "strip");
+    const revived = useStore.getState().terms.find((t) => t.id === id);
+    expect(revived?.exit).toBeUndefined();
+    expect(revived?.gen).toBe(1);
+    useStore.getState().closeTerm(id);
+    expect(calls).toEqual([]);
+    expect(useStore.getState().terms).toEqual([]);
   });
 
   test("closing a panel leaves its shells running and its reopening brings them back", () => {

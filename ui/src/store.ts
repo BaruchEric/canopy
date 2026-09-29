@@ -9,7 +9,7 @@ import { changedAt } from "./grouping";
 import { focusPanel, nextActive } from "./dock";
 import { heldShellUrl, openElsewhere, openShellElsewhere, parseRoute, soloUrl } from "./routes";
 import { loadSettings, saveSettings, shellPlace, type Settings, type ShellPlace } from "./settings";
-import { PANEL_TERM_ROWS, adoptTerms, keepFront, loadFocusSize, loadTermTabs, nextStripTab, reconcileTerms, rowsPx, shellSet, tabFor, termId, type FocusSize, type TermTab } from "./term";
+import { PANEL_TERM_ROWS, adoptTerms, keepFront, loadFocusSize, loadTermTabs, nextStripTab, reconcileTerms, rowsPx, shellSet, termId, type FocusSize, type TermTab } from "./term";
 import { clientId, identity } from "./client";
 export type { TermTab } from "./term";
 import { clamp, needsAttention } from "./util";
@@ -1970,7 +1970,13 @@ export const useStore = create<CanopyState>((set, get) => ({
       window.location.assign(shellUrlFor(repo.id, id));
       return;
     }
-    const tab: TermTab = s.terms.find((t) => t.id === id) ?? tabFor(info, repo);
+    const tab: TermTab = s.terms.find((t) => t.id === id) ?? {
+      id,
+      repoId: repo.id,
+      name: repo.name,
+      path: repo.path,
+      place: info.place,
+    };
     set({
       terms: s.terms.some((t) => t.id === id) ? s.terms : [...s.terms, tab],
       hiddenTerms: s.hiddenTerms.filter((h) => h !== id),
@@ -2082,9 +2088,15 @@ export const useStore = create<CanopyState>((set, get) => ({
     const s = get();
     const repo = s.repos.find((r) => r.id === repoId);
     if (!repo) return;
-    if (!s.terms.some((t) => t.id === task.termId)) {
-      const tab: TermTab = { id: task.termId, repoId, name: `${repo.name} · ${task.name}`, path: repo.path, place, task: task.name };
-      set({ terms: [...s.terms, tab], hiddenTerms: s.hiddenTerms.filter((h) => h !== task.termId) });
+    const old = s.terms.find((t) => t.id === task.termId);
+    if (!old || old.exit !== undefined) {
+      // A tab whose task ended is replaced with a new generation, so its
+      // view starts over on the restarted task instead of staying ended.
+      const tab: TermTab = { id: task.termId, repoId, name: `${repo.name} · ${task.name}`, path: repo.path, place: old?.place ?? place, task: task.name };
+      set({
+        terms: old ? s.terms.map((t) => (t.id === task.termId ? { ...tab, gen: (old.gen ?? 0) + 1 } : t)) : [...s.terms, tab],
+        hiddenTerms: s.hiddenTerms.filter((h) => h !== task.termId),
+      });
     }
     const now = get();
     const tab = now.terms.find((t) => t.id === task.termId);

@@ -107,6 +107,17 @@ describe.skipIf(!tmux)("tasks", () => {
     ws.close();
   });
 
+  test("a socket without attach=1 is refused on a task's id", async () => {
+    const t = await task("hello");
+    const ws = new WebSocket(`ws://127.0.0.1:${server.port}/api/term?id=app&term=${t.termId}&cols=80&rows=24`);
+    const code = await new Promise<number>((resolve) => {
+      ws.onclose = (e) => resolve(e.code);
+    });
+    expect(code).toBe(4404);
+    expect((await get<TermInfo[]>("/api/terms")).some((s) => s.id === t.termId)).toBe(false);
+    expect((await task("hello")).status).toBe("running");
+  });
+
   test("a command that exits at once keeps its output and code", async () => {
     // Review focus 3
     expect((await post("/api/repos/tasks?id=app", { action: "start", name: "quick" })).status).toBe(200);

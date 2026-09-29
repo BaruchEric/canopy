@@ -21,7 +21,7 @@ import {
   type TermTab,
 } from "../store";
 import { IdLabel, WaitingFor, useWaitingFor } from "./IdLabel";
-import { TERM_FONT, otherShells, termId, viewKey } from "../term";
+import { TERM_FONT, joinsOnly, otherShells, termId, viewKey } from "../term";
 import { SPOT_WORD, flipMode, shellSpot, termFontIn, tidyLines, type ShellSpot, type SurfaceMode } from "../surface";
 import { SHELL_TARGETS, type ShellTarget } from "../settings";
 import { Gear, type GearEntry } from "./Gear";
@@ -135,7 +135,7 @@ function socketUrl(tab: TermTab, cols: number, rows: number, rejoin: boolean): s
     // which device is looking, for the shell's viewers
     client: clientId(),
   });
-  if (rejoin || tab.task) q.set("attach", "1");
+  if (joinsOnly(tab, rejoin)) q.set("attach", "1");
   return backendSocket(backendOf(tab.id), `/api/term?${q}`);
 }
 
@@ -1291,10 +1291,13 @@ export function PanelShells({ repo }: { repo: Repo }) {
  *  a new one on the repo's own backend. None for a forge repo. */
 function shellTab(repo: Repo | undefined): TermTab | null {
   if (!repo || repo.forge) return null;
-  const id = parseRoute(window.location.search).term ?? qual(backendOf(repo.id), termId());
-  // a task's session only ever joins: a reload after it ended must not start a shell under its name
-  const task = useStore.getState().shells.find((t) => t.id === id)?.task;
-  return { id, repoId: repo.id, name: repo.name, path: repo.path, place: "strip", ...(task ? { task } : {}) };
+  return {
+    id: parseRoute(window.location.search).term ?? qual(backendOf(repo.id), termId()),
+    repoId: repo.id,
+    name: repo.name,
+    path: repo.path,
+    place: "strip",
+  };
 }
 
 /** One shell, edge to edge: what a "new tab" or "new window" shell shows. */

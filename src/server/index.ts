@@ -2653,6 +2653,12 @@ export async function startServer(opts: {
           // a window reloaded after a reboot still names it, and starting a
           // shell there would hide the record from the restore offer and
           // write over it at the next pass. It comes back through a restore.
+          // A task's session belongs to the task hub: only an attach-only socket
+          // (a task tab) may reach it, and never one that would start a shell.
+          if (!attach && state.tasks.knows(id)) {
+            term.close(TERM_GONE, "that is a task, not a shell");
+            return;
+          }
           if (!held && (attach || state.kept.some((k) => k.id === id))) {
             term.close(TERM_GONE, "that shell is gone");
             return;

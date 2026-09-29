@@ -142,7 +142,7 @@ export function TasksSection({ repo }: { repo: Repo }) {
           </button>
         )}
       </div>
-      {picked && <TaskLog repo={repo} task={picked} />}
+      {picked && <TaskLog key={picked.name} repo={repo} task={picked} />}
     </Section>
   );
 }
@@ -152,6 +152,7 @@ function TaskLog({ repo, task }: { repo: Repo; task: TaskInfo }) {
   const [q, setQ] = useState("");
   const [lines, setLines] = useState<TaskLogLine[] | null>(null);
   const [more, setMore] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     let live = true;
@@ -162,10 +163,13 @@ function TaskLog({ repo, task }: { repo: Repo; task: TaskInfo }) {
           if (!live) return;
           setLines(p.lines);
           setMore(p.more);
+          setError(null);
         })
-        .catch(() => {});
+        .catch((e: unknown) => {
+          if (live) setError(errText(e));
+        });
     const first = setTimeout(read, q ? 250 : 0);
-    const again = task.status === "running" && !q ? setInterval(read, TAIL_EVERY) : null;
+    const again = (task.status === "running" || task.status === "backoff") && !q ? setInterval(read, TAIL_EVERY) : null;
     return () => {
       live = false;
       clearTimeout(first);
@@ -175,6 +179,7 @@ function TaskLog({ repo, task }: { repo: Repo; task: TaskInfo }) {
 
   return (
     <div className="task-open">
+      {error && <p className="note err">{error}</p>}
       <input className="task-search" type="search" placeholder={`search ${task.name}'s log`} value={q} onChange={(e) => setQ(e.target.value)} />
       <pre className="task-log">
         {more && <span className="task-more">{q ? "earlier lines match too" : "earlier lines are in the log"}{"\n"}</span>}

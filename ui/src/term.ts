@@ -49,24 +49,18 @@ export function loadTermTabs(v: unknown): TermTab[] {
   const out: TermTab[] = [];
   for (const t of v) {
     if (!t || typeof t !== "object") continue;
-    const { id, repoId, name, path, place, exit, task } = t as Record<string, unknown>;
+    const { id, repoId, name, path, place, exit } = t as Record<string, unknown>;
     if (typeof id !== "string" || typeof repoId !== "string" || typeof name !== "string") continue;
     if (typeof path !== "string" || !isPlace(place) || exit !== undefined) continue;
-    out.push(typeof task === "string" ? { id, repoId, name, path, place, task } : { id, repoId, name, path, place });
+    out.push({ id, repoId, name, path, place });
   }
   return out;
 }
 
-/** The tab for a held session: a task's session keeps its task, so its socket
- *  only joins and its × never ends it. */
-export function tabFor(info: TermInfo, repo: Repo): TermTab {
-  const tab: TermTab = { id: info.id, repoId: repo.id, name: repo.name, path: repo.path, place: info.place };
-  if (info.task) {
-    tab.task = info.task;
-    tab.name = `${repo.name} · ${info.task}`;
-  }
-  return tab;
-}
+/** Whether a tab's socket only joins a shell and never starts one: after a
+ *  dropped connection, and always for a task's tab, since a task's session
+ *  belongs to the task hub and a plain shell must never start under its id. */
+export const joinsOnly = (tab: TermTab, rejoin: boolean): boolean => rejoin || tab.task !== undefined;
 
 /**
  * The tabs a window shows once it knows what the server holds: the saved
@@ -100,7 +94,7 @@ export function reconcileTerms(
     if (t.place === "panel" && !panels.includes(t.repoId)) continue;
     const repo = repoOf(t.repoId);
     if (!repo) continue;
-    out.push(tabFor(t, repo));
+    out.push({ id: t.id, repoId: repo.id, name: repo.name, path: repo.path, place: t.place });
   }
   return out;
 }
@@ -131,7 +125,7 @@ export function adoptTerms(
     const repo = repos.find((r) => r.id === t.repoId);
     if (!repo) continue;
     if (out === tabs) out = [...tabs];
-    out.push(tabFor(t, repo));
+    out.push({ id: t.id, repoId: repo.id, name: repo.name, path: repo.path, place: t.place });
   }
   return out;
 }

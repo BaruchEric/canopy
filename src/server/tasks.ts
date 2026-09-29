@@ -72,6 +72,12 @@ export class TaskHub {
     this.t = { ...TASK_TIMINGS, ...deps.timings };
   }
 
+  /** whether an id is a task's session, live or remembered: a plain shell
+   *  socket must never start or join a session under it */
+  knows(termId: string): boolean {
+    return this.panes.has(termId) || termId in this.state;
+  }
+
   async start(): Promise<void> {
     if (!this.deps.tmux) return;
     this.state = await readTaskState();
