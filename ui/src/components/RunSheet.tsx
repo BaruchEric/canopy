@@ -2,7 +2,7 @@ import { useEffect, useRef, useState, type ReactNode } from "react";
 import { ACTIONS, repoFacts } from "../../../src/core/actions";
 import { describeAgent, isDefaultAgent } from "../../../src/core/agent";
 import { describeLaunch, isDefaultLaunch } from "../../../src/core/launch";
-import { agentFor, idText, launchFor, useStore, type Sheet } from "../store";
+import { agentFor, idText, launchFor, tasksOf, useStore, type Sheet } from "../store";
 import { FleetPlan, FleetSheet, FlowConsole, FlowPlan } from "./FlowSheet";
 import { SearchSheet } from "./Search";
 import {
@@ -109,7 +109,10 @@ function Body({ sheet }: { sheet: Sheet }) {
     if (!repo) return <Missing what="That repo is no longer in the tree." onClose={close} />;
     return <AgentForm repo={repo} />;
   }
-  if (sheet.kind === "task") return null;
+  if (sheet.kind === "task") {
+    if (!repo) return <Missing what="That repo is no longer in the tree." onClose={close} />;
+    return <TaskForm repo={repo} name={sheet.name} />;
+  }
   if (sheet.kind === "launch") {
     if (!repo) return <Missing what="That repo is no longer in the tree." onClose={close} />;
     return <LaunchForm repo={repo} />;
@@ -694,6 +697,123 @@ const LAUNCH_FIELDS: { key: keyof LaunchSettings; label: string; placeholder: st
     hint: "How an installed release starts; {file} is the app or binary the download unpacked. Blank opens it the way its kind says.",
   },
 ];
+
+/** Adds or edits a task: saved to this machine's overrides, or to the repo's
+ *  own `.canopy/tasks.json` for a repo on this machine. */
+function TaskForm({ repo, name }: { repo: Repo; name: string | null }) {
+  const close = useStore((s) => s.closeSheet);
+  const task = useStore((s) => (name ? tasksOf(s, repo.id).find((t) => t.name === name) : undefined));
+  const saveTaskDef = useStore((s) => s.saveTaskDef);
+  const [draft, setDraft] = useState({
+    name: task?.name ?? "",
+    cmd: task?.cmd ?? "",
+    cwd: task?.cwd ?? "",
+    dev: task?.dev ?? false,
+    keep: task?.keep ?? false,
+    withPanel: task?.withPanel ?? false,
+  });
+  const [target, setTarget] = useState<"canopy" | "repo">("canopy");
+  const [error, setError] = useState<string | null>(null);
+
+  const run = async (what: () => Promise<void>) => {
+    setError(null);
+    try {
+      await what();
+      close();
+    } catch (err) {
+      setError(errText(err));
+    }
+  };
+  const save = () =>
+    run(async () => {
+      if (name && name !== draft.name) await saveTaskDef(repo.id, name, null, target);
+      await saveTaskDef(
+        repo.id,
+        draft.name,
+        { name: draft.name, cmd: draft.cmd, ...(draft.cwd ? { cwd: draft.cwd } : {}), dev: draft.dev, keep: draft.keep, withPanel: draft.withPanel },
+        target,
+      );
+    });
+  const check = (key: "dev" | "keep" | "withPanel", label: string) => (
+    <label className="settings-row">
+      <input type="checkbox" checked={draft[key]} onChange={(e) => setDraft({ ...draft, [key]: e.target.checked })} /> {label}
+    </label>
+  );
+  const text = (key: "name" | "cmd" | "cwd", label: string, placeholder: string, hint: string) => (
+    <section className="settings-row">
+      <h3 className="panel-label">{label}</h3>
+      <input
+        type="text"
+        className="agent-extra"
+        placeholder={placeholder}
+        value={draft[key]}
+        onChange={(e) => setDraft({ ...draft, [key]: e.target.value })}
+        aria-label={label}
+      />
+      <p className="settings-hint">{hint}</p>
+    </section>
+  );
+
+  return (
+    <>
+      <header className="sheet-head">
+        <div>
+          <div className="eyebrow">task</div>
+          <h2 className="sheet-title">
+            {name ? `edit ${name}` : "add a task"} <span className="sheet-repo">{idText(repo.id)}</span>
+          </h2>
+        </div>
+        <button type="button" className="mini close" onClick={close} aria-label="Close">
+          ✕
+        </button>
+      </header>
+      <div className="sheet-body agent-form">
+        {text("name", "name", "dev", "lowercase letters, digits, dot, dash and underscore")}
+        {text("cmd", "command", "bun run dev", "one line, run through a login shell")}
+        {text("cwd", "folder", "the repo root", "relative to the repo root")}
+        {check("dev", "the dev task, the one the preview pairs with")}
+        {check("keep", "keep running: restart when it fails and after a restart")}
+        {check("withPanel", "start when the repo's panel opens")}
+        <section className="settings-row">
+          <h3 className="panel-label">save to</h3>
+          <label>
+            <input type="radio" checked={target === "canopy"} onChange={() => setTarget("canopy")} /> this machine
+          </label>{" "}
+          <label title={repo.host ? "only for a repo on this machine" : undefined}>
+            <input type="radio" disabled={!!repo.host} checked={target === "repo"} onChange={() => setTarget("repo")} /> the repo, .canopy/tasks.json
+          </label>
+        </section>
+        {task?.suggested && (
+          <p className="settings-hint">
+            The repo file asks for {Object.keys(task.suggested).join(" and ")}, which runs things without a click, so it waits for you.{" "}
+            <button type="button" className="mini" onClick={() => void run(() => saveTaskDef(repo.id, task.name, { name: task.name, ...task.suggested }, "canopy"))}>
+              accept
+            </button>
+          </p>
+        )}
+        {error && <p className="note err">{error}</p>}
+      </div>
+      <footer className="sheet-foot">
+        {task?.source === "detected" && (
+          <button type="button" className="mini" onClick={() => void run(() => saveTaskDef(repo.id, task.name, { name: task.name, hidden: true }, "canopy"))}>
+            hide
+          </button>
+        )}
+        {task && task.source !== "detected" && (
+          <button type="button" className="mini" onClick={() => void run(() => saveTaskDef(repo.id, task.name, null, target))}>
+            delete
+          </button>
+        )}
+        <button type="button" className="mini" onClick={close}>
+          cancel
+        </button>
+        <button type="button" className="mini strong" disabled={!draft.name || !draft.cmd} onClick={() => void save()}>
+          save
+        </button>
+      </footer>
+    </>
+  );
+}
 
 function LaunchForm({ repo }: { repo: Repo }) {
   const close = useStore((s) => s.closeSheet);

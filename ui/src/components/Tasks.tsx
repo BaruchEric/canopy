@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { useShallow } from "zustand/react/shallow";
 import { api } from "../api";
+import { taskShellUrl } from "../routes";
 import { tasksOf, useStore } from "../store";
 import { markTime, STATUS_WORD, taskWhen } from "../tasks";
 import type { Repo, TaskInfo, TaskLogLine } from "../../../src/core/types";
@@ -121,6 +122,11 @@ export function TasksSection({ repo }: { repo: Repo }) {
                       ▶
                     </button>
                   )
+                )}
+                {t.live && (
+                  <button type="button" className="mini" title="Open in a window" onClick={() => window.open(taskShellUrl(repo.id, t.termId, t.name), "_blank", "noopener")}>
+                    ↗
+                  </button>
                 )}
                 {!t.gone && (
                   <button type="button" className="mini" onClick={() => editTask(repo.id, t.name)} title="Edit">

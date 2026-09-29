@@ -1291,12 +1291,14 @@ export function PanelShells({ repo }: { repo: Repo }) {
  *  a new one on the repo's own backend. None for a forge repo. */
 function shellTab(repo: Repo | undefined): TermTab | null {
   if (!repo || repo.forge) return null;
+  const route = parseRoute(window.location.search);
   return {
-    id: parseRoute(window.location.search).term ?? qual(backendOf(repo.id), termId()),
+    id: route.term ?? qual(backendOf(repo.id), termId()),
     repoId: repo.id,
     name: repo.name,
     path: repo.path,
     place: "strip",
+    ...(route.task ? { task: route.task } : {}),
   };
 }
 
