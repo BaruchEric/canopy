@@ -14,7 +14,9 @@ import {
   setAgent,
   setArchived,
   setKeepShells,
+  setTask,
   slugify,
+  tasksFor,
   uniqueId,
   upsertWorkspace,
 } from "./store";
@@ -203,5 +205,20 @@ describe("config store", () => {
     expect(cfg.peers).toEqual([{ name: "mini", alias: "mini-peer", root: "dev", role: "git" }]);
     expect(cfg.peerSync).toBe("off");
     expect(cfg.seed).toEqual([".env", ".env.local"]);
+  });
+});
+
+describe("task overrides", () => {
+  test("set, replace, clear, and bad entries dropped on load", async () => {
+    expect(await setTask("/r", "dev", { name: "dev", keep: true })).toEqual([{ name: "dev", keep: true }]);
+    expect(await setTask("/r", "dev", { name: "dev", keep: false, cmd: "x" })).toEqual([{ name: "dev", keep: false, cmd: "x" }]);
+    await setTask("/r", "web", { name: "web", cmd: "y" });
+    expect(tasksFor(await loadConfig(), "/r").map((t) => t.name)).toEqual(["dev", "web"]);
+    expect(await setTask("/r", "dev", { name: "dev" })).toEqual([{ name: "web", cmd: "y" }]);
+    expect(await setTask("/r", "web", null)).toEqual([]);
+    expect((await loadConfig()).tasks["/r"]).toBeUndefined();
+    const cfg = await loadConfig();
+    await saveConfig({ ...cfg, tasks: { "/s": [{ name: "ok", cmd: "a" }, { name: "Bad" } as never] } });
+    expect(tasksFor(await loadConfig(), "/s")).toEqual([{ name: "ok", cmd: "a" }]);
   });
 });

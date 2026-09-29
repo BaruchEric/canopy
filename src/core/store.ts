@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { isDefaultAgent, normalizeAgent } from "./agent";
 import { isDefaultLaunch, normalizeLaunch } from "./launch";
 import { normalizeBackends } from "./backends";
+import { normalizeTaskPatch } from "./tasks";
 import { DEFAULT_SEED, PEER_SYNC, isPeerName, normalizePeers, normalizeSeed } from "./peers";
 import {
   DEFAULT_AGENT,
@@ -14,6 +15,7 @@ import {
   type LaunchSettings,
   type SourceInput,
   type StoredSource,
+  type TaskPatch,
   type Workspace,
 } from "./types";
 
@@ -66,6 +68,19 @@ function normalizeLaunchers(v: unknown): Record<string, LaunchSettings> {
   return out;
 }
 
+/** Task overrides by repo path: each entry checked like a repo file's, and a
+ *  repo with none left out. */
+function normalizeTasks(v: unknown): Record<string, TaskPatch[]> {
+  if (!v || typeof v !== "object" || Array.isArray(v)) return {};
+  const out: Record<string, TaskPatch[]> = {};
+  for (const [path, list] of Object.entries(v as Record<string, unknown>)) {
+    if (!Array.isArray(list)) continue;
+    const kept = list.map(normalizeTaskPatch).filter((p): p is TaskPatch => typeof p !== "string" && Object.keys(p).length > 1);
+    if (kept.length) out[path] = kept;
+  }
+  return out;
+}
+
 /** A hand-edited source survives only when every field it needs is there;
  *  a half entry would later become a repo id nothing can resolve. */
 function isStoredSource(v: unknown): v is StoredSource {
@@ -111,7 +126,7 @@ function normalize(parsed: Partial<CanopyConfig>): CanopyConfig {
     ),
     agents: normalizeAgents(cfg.agents),
     launchers: normalizeLaunchers(cfg.launchers),
-    tasks: {},
+    tasks: normalizeTasks(cfg.tasks),
     archived: Array.isArray(cfg.archived)
       ? cfg.archived.filter((p, i, all): p is string => typeof p === "string" && p !== "" && all.indexOf(p) === i)
       : [],
@@ -303,6 +318,22 @@ export async function setLaunch(
     if (isDefaultLaunch(l)) delete cfg.launchers[path];
     else cfg.launchers[path] = l;
     return cfg.launchers;
+  });
+}
+
+/* ---------- task overrides ---------- */
+
+export const tasksFor = (cfg: CanopyConfig, path: string): TaskPatch[] => cfg.tasks[path] ?? [];
+
+/** Stores, replaces or (with null, or a patch that says nothing but its
+ *  name) removes one task's override. Returns the repo's list. */
+export async function setTask(path: string, name: string, patch: TaskPatch | null): Promise<TaskPatch[]> {
+  return withConfig((cfg) => {
+    const list = (cfg.tasks[path] ?? []).filter((t) => t.name !== name);
+    if (patch && Object.keys(patch).length > 1) list.push({ ...patch, name });
+    if (list.length) cfg.tasks[path] = list;
+    else delete cfg.tasks[path];
+    return list;
   });
 }
 
