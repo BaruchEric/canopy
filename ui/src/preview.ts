@@ -20,8 +20,12 @@ export interface PreviewChoice {
  * https from somewhere that is not this machine (the public tunnel) can
  * neither reach that port nor frame http inside https.
  */
-export function previewBlocked(loc: { protocol: string; hostname: string }, publicTemplate?: string | null): string | null {
-  if (!onPublicPage(loc) || publicTemplate) return null;
+export function previewBlocked(loc: { protocol: string; hostname: string }, publicTemplate?: string | null, home = true): string | null {
+  if (publicTemplate) return null;
+  if (!home) {
+    return "This checkout is on another machine, whose preview ports are its own. Its public preview names (CANOPY_PREVIEW_PUBLIC on that backend) would show it here.";
+  }
+  if (!onPublicPage(loc)) return null;
   return "Previews are served on the backend's own ports over http, which this https address does not reach. Open canopy at its tailnet address to preview.";
 }
 
@@ -42,10 +46,16 @@ function onPublicPage(loc: { protocol?: string; hostname: string }): boolean {
 }
 
 /** the address a preview port shows a path at: the slot's public name for
- *  an https page when the backend has them, else the slot's port on the
- *  host this page came from */
-export function previewUrl(loc: { protocol?: string; hostname: string }, slot: number, path: string, publicTemplate?: string | null): string {
-  if (publicTemplate && onPublicPage(loc)) return `${publicPreviewOrigin(publicTemplate, slot)}${previewPath(path)}`;
+ *  an https page, or for a checkout on another backend, when the backend
+ *  has them, else the slot's port on the host this page came from */
+export function previewUrl(
+  loc: { protocol?: string; hostname: string },
+  slot: number,
+  path: string,
+  publicTemplate?: string | null,
+  home = true,
+): string {
+  if (publicTemplate && (!home || onPublicPage(loc))) return `${publicPreviewOrigin(publicTemplate, slot)}${previewPath(path)}`;
   return `http://${loc.hostname}:${slot}${previewPath(path)}`;
 }
 

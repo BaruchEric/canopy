@@ -926,8 +926,8 @@ export function PanelSection({ k, repo }: { k: SectionKey; repo: Repo }) {
     case "peers":
       return <PeersSection repo={repo} />;
     case "preview":
-      // the preview proxies the page's own backend's ports
-      return repo.host || !isHome(repo.id) ? null : <PreviewSection repo={repo} />;
+      // the preview proxies the checkout's own backend's ports
+      return repo.host ? null : <PreviewSection repo={repo} />;
     case "tasks":
       return repo.forge ? null : <TasksSection repo={repo} />;
     case "launch":

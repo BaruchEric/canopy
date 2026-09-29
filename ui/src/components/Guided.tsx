@@ -5,7 +5,6 @@ import { devTask } from "../tasks";
 import { canSave, devState, plainStatus, SAVE_PROMPT, SETUP_PROMPT } from "../guided";
 import { askClaude } from "./AgentButtons";
 import { PreviewSection } from "./Preview";
-import { isHome } from "../registry";
 
 export interface GuidedTargets {
   run: RefObject<HTMLButtonElement | null>;
@@ -74,7 +73,7 @@ export function GuidedPanel({ repo, onMore, targets }: { repo: Repo; onMore: () 
           show more
         </button>
       </div>
-      {state === "running" && isHome(repo.id) && <PreviewSection repo={repo} />}
+      {state === "running" && <PreviewSection repo={repo} />}
     </div>
   );
 }

@@ -220,10 +220,10 @@ describe("tasks on tmux", () => {
     ]);
   });
   test("a task command here cds to its folder first, elsewhere over ssh", () => {
-    expect(taskCommand("/r/app", "bun run dev")).toEqual({ command: ["sh", "-c", "cd -- '/r/app' && exec sh -lc 'bun run dev'"], dir: "/r/app" });
-    expect(taskCommand("/r/app", "x", "ui")).toEqual({ command: ["sh", "-c", "cd -- '/r/app/ui' && exec sh -lc 'x'"], dir: "/r/app/ui" });
+    expect(taskCommand("/r/app", "bun run dev")).toEqual({ command: ["sh", "-c", "cd -- '/r/app' && BROWSER=none exec sh -lc 'bun run dev'"], dir: "/r/app" });
+    expect(taskCommand("/r/app", "x", "ui")).toEqual({ command: ["sh", "-c", "cd -- '/r/app/ui' && BROWSER=none exec sh -lc 'x'"], dir: "/r/app/ui" });
     expect(taskCommand("ssh://mini/r/app", "x", "ui")).toEqual({
-      command: ["ssh", "-t", "--", "mini", "cd '/r/app/ui' && exec sh -lc 'x'"],
+      command: ["ssh", "-t", "--", "mini", "cd '/r/app/ui' && BROWSER=none exec sh -lc 'x'"],
       dir: null,
     });
   });

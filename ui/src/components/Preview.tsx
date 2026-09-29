@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { useShallow } from "zustand/react/shallow";
 import { api } from "../api";
+import { backendOf, isHome } from "../registry";
 import { tasksOf, useStore } from "../store";
 import { devTask } from "../tasks";
 import { Section, useSectionClosed } from "./Surface";
@@ -48,7 +49,11 @@ export function PreviewSection({ repo }: { repo: Repo }) {
   // the backend's public preview names, read with the ports: undefined
   // until then, so an https page is not called blocked before it knows
   const [pub, setPub] = useState<string | null | undefined>(undefined);
-  const blocked = pub === undefined ? null : previewBlocked(window.location, pub);
+  // the checkout's own backend proxies its ports, on its own public names
+  // when it is not the backend that served this page
+  const backend = backendOf(repo.id);
+  const home = isHome(repo.id);
+  const blocked = pub === undefined ? null : previewBlocked(window.location, pub, home);
   const dev = useStore(useShallow((s) => devTask(tasksOf(s, repo.id))));
   const known = useStore((s) => repo.id in s.tasks);
   const loadTasks = useStore((s) => s.loadTasks);
@@ -70,7 +75,7 @@ export function PreviewSection({ repo }: { repo: Repo }) {
     let live = true;
     const read = () =>
       api
-        .ports()
+        .ports(backend)
         .then((r) => {
           if (!live) return;
           setPorts(r.ports);
@@ -86,7 +91,7 @@ export function PreviewSection({ repo }: { repo: Repo }) {
       live = false;
       if (timer) clearInterval(timer);
     };
-  }, [closed, blocked, slot]);
+  }, [closed, blocked, slot, backend]);
 
   // Nothing chosen yet and a port runs in this repo: its lowest.
   useEffect(() => {
@@ -105,7 +110,7 @@ export function PreviewSection({ repo }: { repo: Repo }) {
     }
     let live = true;
     api
-      .preview(port)
+      .preview(port, backend)
       .then((r) => {
         if (live) setSlot(r.slot);
       })
@@ -117,9 +122,9 @@ export function PreviewSection({ repo }: { repo: Repo }) {
     return () => {
       live = false;
     };
-  }, [closed, blocked, port]);
+  }, [closed, blocked, port, backend]);
 
-  const url = slot !== null && choice ? previewUrl(window.location, slot, choice.path, pub) : null;
+  const url = slot !== null && choice ? previewUrl(window.location, slot, choice.path, pub, home) : null;
   const off = slots !== null && slots.length === 0;
   const { mine, loose } = ports ? portsFor(ports, repo.id) : { mine: [], loose: [] };
   const summary = choice ? `:${choice.port}` : mine.length ? String(mine.length) : "";

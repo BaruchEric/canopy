@@ -50,3 +50,11 @@ test("defaultPort takes the repo's lowest port, so an app with a kiosk beside it
   expect(defaultPort([{ port: 3000, repo: "a" }])).toBe(3000);
   expect(defaultPort([])).toBeNull();
 });
+
+test("another machine's app previews through its public names, on any page", () => {
+  const pub = "https://canopy-mac-p{slot}.example.com";
+  expect(previewUrl({ protocol: "http:", hostname: "mini" }, 7860, "/", pub, false)).toBe("https://canopy-mac-p7860.example.com/");
+  expect(previewBlocked({ protocol: "http:", hostname: "mini" }, pub, false)).toBeNull();
+  // without them nothing of it is reachable: its ports are its own loopback
+  expect(previewBlocked({ protocol: "http:", hostname: "mini" }, null, false)).toContain("public preview names");
+});

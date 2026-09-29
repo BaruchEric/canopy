@@ -274,8 +274,12 @@ export function parseTaskPanes(out: string): TaskPane[] {
 export function taskCommand(locator: string, cmd: string, cwd?: string): { command: string[]; dir: string | null } {
   const { host, path } = parseLocator(locator);
   const dir = cwd ? join(path, cwd) : path;
-  if (host === null) return { command: ["sh", "-c", `cd -- ${shellQuote(dir)} && exec sh -lc ${shellQuote(cmd)}`], dir };
-  return { command: ["ssh", "-t", "--", host, `cd ${shellQuote(dir)} && exec sh -lc ${shellQuote(cmd)}`], dir: null };
+  // BROWSER=none: a task is started from any device, often a phone, and a
+  // dev server's own open flag (vite --open) would put a window on the
+  // backend's desktop; canopy's preview is where the app shows
+  const run = `BROWSER=none exec sh -lc ${shellQuote(cmd)}`;
+  if (host === null) return { command: ["sh", "-c", `cd -- ${shellQuote(dir)} && ${run}`], dir };
+  return { command: ["ssh", "-t", "--", host, `cd ${shellQuote(dir)} && ${run}`], dir: null };
 }
 
 /** What a client is sent before tmux draws for it: the captured history as

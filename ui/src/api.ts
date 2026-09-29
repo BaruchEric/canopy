@@ -542,9 +542,12 @@ export const api = {
   },
   dismissFleet: (id: string) => repoReq<{ ok: true }>(id, (p) => `/api/fleet?${rq(p)}`, { method: "DELETE" }),
   /* the in-app browser: what listens on the backend, and a preview port for one */
-  ports: () => req<PortsResult>(homeName(), "/api/ports"),
-  preview: (port: number) =>
-    req<PreviewSlot>(homeName(), "/api/preview", {
+  ports: async (b: string = homeName()): Promise<PortsResult> => {
+    const r = await req<PortsResult>(b, "/api/ports");
+    return { ...r, ports: r.ports.map((p) => (p.repo === undefined ? p : { ...p, repo: qual(b, p.repo) })) };
+  },
+  preview: (port: number, b: string = homeName()) =>
+    req<PreviewSlot>(b, "/api/preview", {
       method: "POST",
       body: JSON.stringify({ port }),
     }),
