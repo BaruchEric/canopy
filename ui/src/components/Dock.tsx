@@ -1,4 +1,4 @@
-import { Fragment, useEffect, useMemo, useRef, useState } from "react";
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { CSSProperties, DragEvent, KeyboardEvent } from "react";
 import { api } from "../api";
 import {
@@ -28,6 +28,7 @@ import {
   multi,
   runFor,
   useStore,
+  dockless,
 } from "../store";
 import { backendOf, homeName, isHome } from "../registry";
 import { signinUrl } from "../backends";
@@ -38,6 +39,7 @@ import { LaunchSection } from "./Launch";
 import { TasksSection } from "./Tasks";
 import { PreviewSection } from "./Preview";
 import { GuidedPanel } from "./Guided";
+import { Tour } from "./Tour";
 import { CommitRow } from "./Commit";
 import { DiffView } from "./DiffView";
 import { PeerChips, Pulls, RemoteTipChip } from "./RemoteTip";
@@ -1190,6 +1192,15 @@ export function RepoPanel({
   const [more, setMore] = useState(false);
   const runRef = useRef<HTMLButtonElement>(null);
   const saveRef = useRef<HTMLButtonElement>(null);
+  const onboarded = useStore((s) => s.settings.onboarded);
+  const setSetting = useStore((s) => s.setSetting);
+  // one tour at a time: the showing panel's, or the only one
+  const isActive = useStore((s) => s.activePanel === id || s.panels.length === 1);
+  const finishTour = useCallback(() => setSetting("onboarded", true), [setSetting]);
+  const tourTargets = useMemo(
+    () => [() => box.current?.querySelector(".panel-shells") ?? null, () => runRef.current, () => saveRef.current],
+    [],
+  );
   const closePanel = onClose ? (_id: string) => onClose() : unpin;
   const [busy, setBusy] = useState<string | null>(null);
   // A pull or push says how it went under its own row; a commit's result
@@ -1434,6 +1445,7 @@ export function RepoPanel({
       )}
       </div>
       {!repo.error && <PanelShells repo={repo} />}
+      {guided && isActive && !onboarded && !hidden && !dockless() && <Tour targets={tourTargets} onDone={finishTour} />}
       {mode === "focus" && <FocusGrips box={box} />}
     </section>
     </>

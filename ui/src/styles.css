@@ -5510,3 +5510,27 @@ button.machine:hover {
     padding: 4px 12px;
   }
 }
+
+/* the guided panel's coach marks */
+.tour {
+  position: fixed;
+  z-index: 35;
+  width: 280px;
+  padding: 10px 12px;
+  border: 1px solid var(--moss);
+  border-radius: var(--r-card);
+  background: var(--float);
+  box-shadow: 0 8px 28px var(--float-shadow);
+}
+.tour p {
+  margin: 0 0 8px;
+}
+.tour-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.tour-count {
+  color: var(--ink-faint);
+  font-size: 0.85em;
+}
