@@ -5668,6 +5668,58 @@ button.machine:hover {
   height: auto;
   max-height: none;
 }
+/* with an app showing, the bench's preview has no frame of its own: no
+   head, no port or path bars, the page edge to edge, a few controls over
+   its bottom right corner */
+.panel-bench section.preview:has(.preview-frame) {
+  padding-bottom: 0;
+  background: #fff;
+}
+.panel-bench section.preview:has(.preview-frame) > .section-head,
+.panel-bench section.preview:has(.preview-frame) .preview-ports,
+.panel-bench section.preview:has(.preview-frame) .preview-bar {
+  display: none;
+}
+.panel-bench section.preview:has(.preview-frame) .preview-body {
+  gap: 0;
+}
+.panel-bench section.preview:has(.preview-frame) .preview-frame-wrap {
+  margin: 0;
+  border: 0;
+  border-radius: 0;
+}
+.preview-float {
+  position: absolute;
+  right: 10px;
+  bottom: 10px;
+  z-index: 2;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px;
+  border: 1px solid var(--float-edge);
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--bark1) 88%, transparent);
+  box-shadow: 0 6px 18px -8px var(--float-shadow);
+  opacity: 0.55;
+  transition: opacity 140ms ease;
+}
+.preview-float:hover,
+.preview-float:focus-within {
+  opacity: 1;
+}
+.preview-float > .mini {
+  border-radius: 999px;
+}
+.preview-float > .preview-select {
+  max-width: 11rem;
+  border-radius: 999px;
+}
+@media (pointer: coarse) {
+  .preview-float {
+    opacity: 0.85;
+  }
+}
 .panel-bench .task-front {
   position: absolute;
   z-index: 1;

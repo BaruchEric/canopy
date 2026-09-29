@@ -325,6 +325,38 @@ export function PreviewSection({ repo }: { repo: Repo }) {
                   ) : (
                     <p className="panel-clean">Opening a preview port…</p>
                   )}
+                  {/* in the bench the frame goes edge to edge, and these few
+                      controls float over its corner instead of a bar above */}
+                  {inBench && url && (
+                    <div className="preview-float" role="toolbar" aria-label={`Preview of ${repo.name}`}>
+                      <button type="button" className="mini" onClick={() => setNonce((n) => n + 1)} title="Reload" aria-label="Reload">
+                        ⟳
+                      </button>
+                      {[...mine, ...loose].length > 1 && (
+                        <select
+                          className="preview-select"
+                          aria-label="Port to preview"
+                          value={String(choice.port)}
+                          onChange={(e) => {
+                            const n = Number(e.target.value);
+                            if (n) pick({ port: n, path: "/" });
+                          }}
+                        >
+                          {!mine.some((p) => p.port === choice.port) && !loose.some((p) => p.port === choice.port) && (
+                            <option value={choice.port}>{choice.port}</option>
+                          )}
+                          {[...mine, ...loose].map((p) => (
+                            <option key={p.port} value={p.port}>
+                              {portLabel(p)}
+                            </option>
+                          ))}
+                        </select>
+                      )}
+                      <a className="mini" href={url} target="_blank" rel="noreferrer" title="Open in a browser tab" aria-label="Open in a browser tab">
+                        ↗
+                      </a>
+                    </div>
+                  )}
                 </div>
                 {!inBench && (
                   <TermGrip
