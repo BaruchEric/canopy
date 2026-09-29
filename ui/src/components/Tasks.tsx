@@ -4,8 +4,8 @@ import { api } from "../api";
 import { useFitPop } from "../pop";
 import { taskShellUrl } from "../routes";
 import { tasksOf, useStore } from "../store";
-import { frontTask, markTime, otherTasks, STATUS_WORD, taskChip, taskWhen } from "../tasks";
-import type { SurfaceMode } from "../surface";
+import { frontTask, markTime, STATUS_WORD, taskChip, taskWhen } from "../tasks";
+import { benchTask } from "../front";
 import type { TermTab } from "../term";
 import type { Repo, TaskInfo, TaskLogLine } from "../../../src/core/types";
 import { Seg } from "./Seg";
@@ -30,9 +30,9 @@ function Flags({ t }: { t: TaskInfo }) {
 
 /** A repo's tasks: one line each with start, stop and restart. A click on a
  *  running task opens its terminal among the panel's shells; the picked
- *  task's log shows under the list, searchable. Brought to the front (⧉, or
- *  a task picked in the top bar's list) the tasks float over the page like
- *  the shells do, the picked task's live terminal or its log filling them. */
+ *  task's log shows under the list, searchable. In the project's bench (⧉,
+ *  or a task picked in the top bar's list) they are tabs along its side,
+ *  and the picked task's live terminal or its log is the bench's log pane. */
 export function TasksSection({ repo }: { repo: Repo }) {
   const lone = useContext(SectionWindow);
   const closed = useSectionClosed(repo.id, "tasks");
@@ -42,10 +42,11 @@ export function TasksSection({ repo }: { repo: Repo }) {
   const taskAct = useStore((s) => s.taskAct);
   const editTask = useStore((s) => s.editTask);
   const openTaskTab = useStore((s) => s.openTaskTab);
-  const asked = useStore((s) => (s.frontTasks?.repoId === repo.id ? s.frontTasks.task : undefined));
+  const asked = useStore((s) => benchTask(s.front, repo.id));
   const bringTask = useStore((s) => s.bringTask);
+  const dropBenchTask = useStore((s) => s.dropBenchTask);
+  const bringProject = useStore((s) => s.bringProject);
   const [open, setOpen] = useState<string | null>(null);
-  const [placed, setPlaced] = useState<"normal" | "full">("normal");
   const [showHidden, setShowHidden] = useState(false);
   const [busy, setBusy] = useState("");
   const [error, setError] = useState<string | null>(null);
@@ -59,17 +60,12 @@ export function TasksSection({ repo }: { repo: Repo }) {
     return () => clearInterval(tick);
   }, [closed, repo.id, loadTasks]);
 
-  // folded or gone, the tasks give the front back, so they do not jump to
-  // it the next time they show
+  // gone (hidden, or the panel's level switched), the tasks give back the
+  // task they asked the bench for; the bench itself stays
+  useEffect(() => () => useStore.getState().dropBenchTask(repo.id), [repo.id]);
   useEffect(() => {
-    if (closed && inFront) bringTask(null);
-  }, [closed, inFront, bringTask]);
-  useEffect(
-    () => () => {
-      if (useStore.getState().frontTasks?.repoId === repo.id) useStore.getState().bringTask(null);
-    },
-    [repo.id],
-  );
+    if (closed && inFront) dropBenchTask(repo.id);
+  }, [closed, inFront, dropBenchTask, repo.id]);
 
   const act = async (action: "start" | "stop" | "restart", name: string) => {
     setBusy(`${action}:${name}`);
@@ -88,19 +84,15 @@ export function TasksSection({ repo }: { repo: Repo }) {
   const running = tasks.filter((t) => t.status === "running").length;
   const picked = inFront ? frontTask(shown, asked, open) : (shown.find((t) => t.name === open) ?? null);
 
-  const setMode = (m: SurfaceMode) => {
-    if (m === "focus") {
+  const flipBench = () => {
+    if (!inFront) {
       bringTask(repo.id, open);
       return;
     }
-    if (inFront) {
-      // what showed in front stays open in place
-      if (picked) setOpen(picked.name);
-      bringTask(null);
-    }
-    setPlaced(m);
+    // what showed in the bench stays open in place
+    if (picked) setOpen(picked.name);
+    bringProject(null);
   };
-  const mode: SurfaceMode = inFront ? "focus" : placed;
 
   const pick = (t: TaskInfo) => {
     if (inFront) {
@@ -156,16 +148,15 @@ export function TasksSection({ repo }: { repo: Repo }) {
       head={running ? `${running} running` : tasks.length ? String(tasks.length) : ""}
       title="The repo's dev server, tests and builds, run and watched by canopy"
       copy={() => shown.map((t) => `${t.name}  ${STATUS_WORD[t.status]}  ${t.cmd}`).join("\n")}
-      front={[mode, setMode]}
       tools={
         !lone && (
           <button
             type="button"
             className={`term-new term-focus task-front-btn${inFront ? " on" : ""}`}
-            title={inFront ? "Put the tasks back" : "Bring the tasks to the front"}
-            aria-label={inFront ? "Put the tasks back" : "Bring the tasks to the front"}
+            title={inFront ? "Put the project back" : "Bring the project to the front"}
+            aria-label={inFront ? "Put the project back" : "Bring the project to the front"}
             aria-pressed={inFront}
-            onClick={() => setMode(inFront ? "normal" : "focus")}
+            onClick={flipBench}
           >
             ⧉
           </button>
@@ -209,7 +200,6 @@ export function TasksSection({ repo }: { repo: Repo }) {
               {actions(picked)}
             </div>
           )}
-          <AlsoRunning repoId={repo.id} />
         </>
       ) : (
         <ul className="task-list">
@@ -248,28 +238,6 @@ export function TasksSection({ repo }: { repo: Repo }) {
   );
 }
 
-/** In front, every other repo's running task: a click brings that repo's
- *  tasks to the front instead, showing that task. */
-function AlsoRunning({ repoId }: { repoId: string }) {
-  const all = useStore((s) => s.taskAll);
-  const repos = useStore((s) => s.repos);
-  const bringTask = useStore((s) => s.bringTask);
-  const name = (id: string) => repos.find((r) => r.id === id)?.name ?? id;
-  const others = otherTasks(all, repoId, name);
-  if (others.length === 0) return null;
-  return (
-    <nav className="term-others task-others" aria-label="Other running tasks">
-      <span className="term-caption">also running</span>
-      {others.map((t) => (
-        <button key={t.termId} type="button" className="term-other" title={`Bring ${t.name} at ${name(t.repoId)} to the front`} onClick={() => bringTask(t.repoId, t.name)}>
-          <span className={`task-dot ${t.status}`} aria-hidden="true" />
-          {name(t.repoId)} · {t.name}
-        </button>
-      ))}
-    </nav>
-  );
-}
-
 const VIEWS = [
   { value: "term", label: "terminal", title: "The task's live terminal, where it can be typed into" },
   { value: "log", label: "log", title: "The task's log, searchable, every run marked" },
@@ -286,7 +254,7 @@ function TaskOutput({ repo, task }: { repo: Repo; task: TaskInfo }) {
     <div className="task-front">
       {task.live && <Seg label="Show" value={showTerm ? "term" : "log"} options={VIEWS} onChange={setView} className="task-view" />}
       {showTerm ? (
-        <ShellSpotHere.Provider value="front">
+        <ShellSpotHere.Provider value="place">
           <div className="term-body">
             {/* a restart is a new view on the new process */}
             <TermView key={`${task.termId}:${task.startedAt ?? 0}`} tab={tab} active />

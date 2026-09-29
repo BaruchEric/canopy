@@ -158,10 +158,6 @@ export function pruneHidden(hidden: string[], live: TermInfo[]): string[] {
 export const shellSet = (t: { place: ShellPlace; repoId: string }): string =>
   t.place === "strip" ? "strip" : `panel:${t.repoId}`;
 
-/** `front` while a tab still sits in that set, else null, so a set that
- *  empties does not come back to the front with its next shell. */
-export const keepFront = (front: string | null, tabs: TermTab[]): string | null =>
-  front !== null && tabs.some((t) => shellSet(t) === front) ? front : null;
 
 /** A running shell outside the set in front, which the front box lists so
  *  it can be brought there instead. */

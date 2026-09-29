@@ -10,7 +10,6 @@ import { groveUrl, nameShellHere, parseRoute, popShell } from "../routes";
 import {
   PANEL_TERM,
   TERM,
-  closedIn,
   connOf,
   dockless,
   idLabel,
@@ -22,6 +21,7 @@ import {
 } from "../store";
 import { IdLabel, WaitingFor, useWaitingFor } from "./IdLabel";
 import { TERM_FONT, joinsOnly, otherShells, termId, viewKey } from "../term";
+import { benchIs } from "../front";
 import { SPOT_WORD, flipMode, shellCopyOf, shellSpot, termFontIn, tidyLines, type CopyOut, type ShellSpot, type SurfaceMode } from "../surface";
 import { SHELL_TARGETS, type ShellTarget } from "../settings";
 import { Gear, type GearEntry } from "./Gear";
@@ -34,6 +34,7 @@ import {
   saveTermFont,
   shareEntries,
   ShellSpotHere,
+  useSectionClosed,
   useShellZoom,
 } from "./Surface";
 import { clamp } from "../util";
@@ -959,7 +960,18 @@ const refocus = (box: Element | null) =>
 /** The tab row's switches at its right end: bring to front, and maximize.
  *  Either again gives the place back; either way focus returns to the shell
  *  showing so typing carries on where it was. */
-function ModeButtons({ mode, setMode, what }: { mode: SurfaceMode; setMode: (m: SurfaceMode) => void; what: string }) {
+function ModeButtons({
+  mode,
+  setMode,
+  what,
+  noFull = false,
+}: {
+  mode: SurfaceMode;
+  setMode: (m: SurfaceMode) => void;
+  what: string;
+  /** leave out maximize, which has no place inside a project's bench */
+  noFull?: boolean;
+}) {
   const flip = (m: SurfaceMode) => (e: MouseEvent<HTMLButtonElement>) => {
     setMode(flipMode(mode, m));
     refocus(e.currentTarget.closest("section"));
@@ -971,14 +983,18 @@ function ModeButtons({ mode, setMode, what }: { mode: SurfaceMode; setMode: (m: 
       <button
         type="button"
         className={`term-new term-focus${focus ? " on" : ""}`}
-        title={focus ? "Put the shell back" : "Bring the shell to the front"}
-        aria-label={focus ? "Leave focus mode" : "Focus the shell"}
+        title={
+          what === "panel"
+            ? focus ? "Put the project back" : "Bring the project to the front"
+            : focus ? "Put the shell back" : "Bring the shell to the front"
+        }
+        aria-label={what === "panel" ? (focus ? "Put the project back" : "Bring the project to the front") : focus ? "Leave focus mode" : "Focus the shell"}
         aria-pressed={focus}
         onClick={flip("focus")}
       >
         ⧉
       </button>
-      <button
+      {!noFull && <button
         type="button"
         className={`term-new term-full${full ? " on" : ""}`}
         title={full ? `Give the ${what} back` : `Shells take the whole ${what}`}
@@ -987,27 +1003,46 @@ function ModeButtons({ mode, setMode, what }: { mode: SurfaceMode; setMode: (m: 
         onClick={flip("full")}
       >
         {full ? "⤡" : "⤢"}
-      </button>
+      </button>}
     </>
   );
 }
 
-/** How a set of shells sits: in place or filling its panel or window is the
- *  set's own, while in front is the store's, since one set at a time has
- *  the front and another set's list can hand it over. */
-function useShellMode(set: string): [SurfaceMode, (m: SurfaceMode) => void] {
-  const front = useStore((s) => s.frontShells === set);
-  const setFront = useStore((s) => s.setFrontShells);
+/** How the strip's shells sit: in place or filling the window is the
+ *  strip's own, while in front is the store's, since one thing at a time
+ *  has the front and a project's bench can take it. */
+function useStripMode(): [SurfaceMode, (m: SurfaceMode) => void] {
+  const front = useStore((s) => s.front?.kind === "strip");
+  const setFront = useStore((s) => s.setFront);
   const [placed, setPlaced] = useState<"normal" | "full">("normal");
   const setMode = (m: SurfaceMode) => {
     if (m === "focus") {
-      setFront(set);
+      setFront({ kind: "strip" });
       return;
     }
     if (front) setFront(null);
     setPlaced(m);
   };
   return [front ? "focus" : placed, setMode];
+}
+
+/** How a panel's shells sit: filling the panel is theirs, while in front is
+ *  the project's bench, which they are one pane of. `mode` is what their
+ *  buttons show (focus while the bench is up), `placed` how the box itself
+ *  lays out, which inside the bench is in place. */
+function usePanelShellMode(repoId: string): { mode: SurfaceMode; placed: SurfaceMode; setMode: (m: SurfaceMode) => void } {
+  const bench = useStore((s) => benchIs(s.front, repoId));
+  const bringProject = useStore((s) => s.bringProject);
+  const [placed, setPlaced] = useState<"normal" | "full">("normal");
+  const setMode = (m: SurfaceMode) => {
+    if (m === "focus") {
+      bringProject(repoId);
+      return;
+    }
+    if (bench) bringProject(null);
+    setPlaced(m);
+  };
+  return { mode: bench ? "focus" : placed, placed: bench ? "normal" : placed, setMode };
 }
 
 /** The running shells outside a set brought to the front, other repos' and
@@ -1132,7 +1167,7 @@ export function TermDock() {
   const showTerm = useStore((s) => s.showTerm);
   const focusSize = useStore((s) => s.focusSize);
   const dock = useRef<HTMLElement>(null);
-  const [mode, setMode] = useShellMode("strip");
+  const [mode, setMode] = useStripMode();
   const spot = shellSpot(mode, false);
   const strip = terms.filter((t) => t.place === "strip");
   useLeaveOnEscape(mode, setMode);
@@ -1201,14 +1236,15 @@ export function TermDock() {
 export function PanelShells({ repo }: { repo: Repo }) {
   const terms = useStore((s) => s.terms);
   const openTerm = useStore((s) => s.openTerm);
-  const closed = useStore((s) => closedIn(s, repo.id, "shell"));
+  // the bench holds the shells open without touching the fold
+  const closed = useSectionClosed(repo.id, "shell");
   const toggleSection = useStore((s) => s.toggleSection);
   const panelTermHeight = useStore((s) => panelTermHeightFor(s, repo.id));
   const setPanelTermHeight = useStore((s) => s.setPanelTermHeight);
-  const focusSize = useStore((s) => s.focusSize);
   const box = useRef<HTMLElement>(null);
-  const [chosenMode, setMode] = useShellMode(`panel:${repo.id}`);
-  const frontPick = useStore((s) => s.frontPick);
+  const { mode: chosenMode, placed: chosenPlace, setMode } = usePanelShellMode(repo.id);
+  const frontPick = useStore((s) => (s.front?.kind === "project" && s.front.repoId === repo.id ? s.front.pick : null));
+  const bench = chosenMode === "focus";
   const mine = terms.filter((t) => t.place === "panel" && t.repoId === repo.id);
   const [chosen, setChosen] = useState<string | null>(null);
   // the newest shell shows until another tab is picked
@@ -1225,26 +1261,34 @@ export function PanelShells({ repo }: { repo: Repo }) {
     if (mine.some((t) => t.id === frontPick)) setChosen(frontPick);
   }
   const active = mine.some((t) => t.id === chosen) ? chosen : latest;
-  // folded, the shells are neither maximized nor in front
-  const mode: SurfaceMode = closed ? "normal" : chosenMode;
+  // folded, the shells are neither maximized nor in front; in the bench
+  // their box lays out in place, as one of its panes
+  const mode: SurfaceMode = closed ? "normal" : chosenPlace;
+  // a pane of the bench is about the size of the shells in place, so it
+  // takes their text size, not the one for a box filling the window
   const spot = shellSpot(mode, dockless());
   useLeaveOnEscape(mode, setMode);
 
-  if (mine.length === 0) return null;
-  const leave = () => {
-    setMode("normal");
-    refocus(box.current);
-  };
+  if (mine.length === 0)
+    return bench ? (
+      <section className="panel-shells bench-empty" aria-label={`Shells at ${repo.name}`}>
+        <p className="panel-clean">
+          No shell here yet.{" "}
+          <button type="button" className="mini" onClick={() => openTerm(repo.id, "panel")}>
+            open a shell
+          </button>
+        </p>
+      </section>
+    ) : null;
   return (
     <ShellSpotHere.Provider value={spot}>
-      {mode === "focus" && <FocusBackdrop onLeave={leave} />}
       <section
         ref={box}
         className={`panel-shells${mode === "normal" ? "" : ` ${mode}`}`}
         aria-label={`Shells at ${repo.name}`}
-        style={{ "--panel-term-h": `${panelTermHeight}px`, ...focusVars(focusSize) } as CSSProperties}
+        style={{ "--panel-term-h": `${panelTermHeight}px` } as CSSProperties}
       >
-        {mode === "normal" && !closed && (
+        {mode === "normal" && !closed && !bench && (
           <TermGrip
             box={box}
             cssVar="--panel-term-h"
@@ -1258,6 +1302,7 @@ export function PanelShells({ repo }: { repo: Repo }) {
           type="button"
           className={`panel-label fold${closed ? "" : " open"}`}
           aria-expanded={!closed}
+          disabled={bench}
           onClick={() => toggleSection(repo.id, "shell")}
         >
           shell <span>{mine.length}</span>
@@ -1269,7 +1314,7 @@ export function PanelShells({ repo }: { repo: Repo }) {
             terms={mine}
             active={active}
             onShow={setChosen}
-            caption={mode === "focus" ? repo.name : ""}
+            caption=""
             extra={
               <button
                 type="button"
@@ -1283,11 +1328,11 @@ export function PanelShells({ repo }: { repo: Repo }) {
             }
             end={
               <>
-                <ModeButtons mode={mode} setMode={setMode} what="panel" />
+                <ModeButtons mode={closed ? "normal" : chosenMode} setMode={setMode} what="panel" noFull={bench} />
                 <ShellGear
                   label={`shells at ${repo.name}`}
                   what="panel"
-                  mode={mode}
+                  mode={closed ? "normal" : chosenMode}
                   setMode={setMode}
                   showing={mine.find((t) => t.id === active) ?? null}
                   box={box}
@@ -1295,7 +1340,6 @@ export function PanelShells({ repo }: { repo: Repo }) {
               </>
             }
           />
-          {mode === "focus" && <FrontOthers set={`panel:${repo.id}`} />}
           <div className="term-body">
             {mine.map((t) => (
               <TermView key={viewKey(t)} tab={t} active={t.id === active && !closed} />

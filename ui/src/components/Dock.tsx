@@ -27,9 +27,14 @@ import {
   idText,
   multi,
   runFor,
+  tasksOf,
   useStore,
   dockless,
 } from "../store";
+import { benchIs } from "../front";
+import { devTask } from "../tasks";
+import { devState } from "../guided";
+import { BenchBar, type BenchPane } from "./Bench";
 import { backendOf, homeName, isHome } from "../registry";
 import { signinUrl } from "../backends";
 import { IdLabel } from "./IdLabel";
@@ -54,12 +59,9 @@ import { PanelShells } from "./TermDock";
 import { Gear, type GearEntry } from "./Gear";
 import {
   FocusBackdrop,
-  FocusGrips,
   Section,
-  focusVars,
   useLeaveOnEscape,
   modeEntries,
-  PanelZoom,
   shareEntries,
   useSectionClosed,
   useZoom,
@@ -952,7 +954,8 @@ function PanelGear({
   body: () => HTMLElement | null;
   solo: boolean;
 }) {
-  const { entry: zoom } = useZoom("panel", mode === "focus");
+  // the bench applies no zoom of its own: the line is always the one in place
+  const { entry: zoom } = useZoom("panel");
   const openIn = useStore((s) => s.settings.openIn);
   const order = useStore((s) => s.settings.sectionOrder);
   const hidden = useStore((s) => s.settings.sectionsHidden);
@@ -960,7 +963,7 @@ function PanelGear({
   const level = useStore((s) => s.settings.level);
   const layout: GearEntry[] = [
     ...(solo
-    ? []
+    ? modeEntries(mode, setMode, "window").slice(2)
     : [
         ...modeEntries(mode, setMode, "window"),
         { type: "item", label: "panels side by side", on: openIn === "dock", run: () => setSetting("openIn", "dock") },
@@ -1186,7 +1189,6 @@ export function RepoPanel({
   const many = useStore(multi);
   const order = useStore((s) => s.settings.sectionOrder);
   const hiddenSections = useStore((s) => s.settings.sectionsHidden);
-  const focusSize = useStore((s) => s.focusSize);
   const level = useStore((s) => s.settings.level);
   // "show more" on a guided panel, until the panel closes or shows another repo
   const [more, setMore] = useState(false);
@@ -1206,13 +1208,33 @@ export function RepoPanel({
   // A pull or push says how it went under its own row; a commit's result
   // shows under the commit box, in the changes section.
   const [note, setNote] = useState<{ kind: "ok" | "err"; text: string } | null>(null);
-  const [chosenMode, setMode] = useState<SurfaceMode>("normal");
+  const [placed, setPlaced] = useState<"normal" | "full">("normal");
   const box = useRef<HTMLElement>(null);
   const bodyRef = useRef<HTMLDivElement>(null);
+  // In front, a panel is its project's bench: its column along the side,
+  // the preview, the shells and the task log beside it, in one box.
+  const inBench = useStore((s) => benchIs(s.front, id));
+  const bringProject = useStore((s) => s.bringProject);
+  const [pane, setPane] = useState<BenchPane>("app");
+  const hasTasks = useStore((s) => tasksOf(s, id).length > 0);
+  // a guided panel shows the preview only while the app runs
+  const devUp = useStore((s) => devState(devTask(tasksOf(s, id))) === "running");
+  const setMode = (m: SurfaceMode) => {
+    if (m === "focus") {
+      bringProject(id);
+      return;
+    }
+    if (inBench) bringProject(null);
+    setPlaced(m);
+  };
   // a tab that is not showing is neither over the window nor in front
-  const mode: SurfaceMode = hidden ? "normal" : chosenMode;
+  const mode: SurfaceMode = hidden ? "normal" : inBench ? "focus" : placed;
+  const bench = mode === "focus";
   useLeaveOnEscape(mode, setMode);
-  const { zoom } = useZoom("panel", mode === "focus");
+  const { zoom: panelZoom } = useZoom("panel");
+  // the bench's panes sit outside the column's scroll, where a zoom on it
+  // would scale their size and place too
+  const zoom = bench ? 1 : panelZoom;
 
   const [access, setAccess] = useState<PushAccess>("unknown");
 
@@ -1263,17 +1285,27 @@ export function RepoPanel({
     }
   };
 
-  const modeClass = mode === "full" ? " surface-full" : mode === "focus" ? " surface-focus" : "";
+  const modeClass = mode === "full" ? " surface-full" : bench ? " panel-bench" : "";
+  // what the bench has for a phone to show one at a time
+  const has: Record<BenchPane, boolean> = {
+    files: true,
+    app: !repo.host && !hiddenSections.includes("preview") && (!guided || devUp),
+    shell: true,
+    log: !guided && hasTasks && !hiddenSections.includes("tasks"),
+  };
+  const shownPane: BenchPane = has[pane] ? pane : has.app ? "app" : "shell";
   return (
     <>
-      {mode === "focus" && <FocusBackdrop onLeave={() => setMode("normal")} />}
+      {bench && <FocusBackdrop onLeave={() => setMode("normal")} />}
     <section
       ref={box}
       className={`panel s-${stateOf(repo)}${guided ? " guided-panel" : ""}${modeClass}`}
       aria-label={repo.name}
       hidden={hidden}
-      style={{ "--panel-w": `${width}px`, ...(mode === "focus" ? focusVars(focusSize) : {}) } as CSSProperties}
+      data-pane={bench ? shownPane : undefined}
+      style={{ "--panel-w": `${width}px` } as CSSProperties}
     >
+      {bench && <BenchBar repoId={id} pane={shownPane} setPane={setPane} has={has} />}
       {/* Everything but the shells scrolls in here; the shells sit below it,
           along the panel's bottom edge, whatever the scroll position. */}
       <div className="panel-body" ref={bodyRef} style={zoomStyle(zoom)}>
@@ -1286,6 +1318,18 @@ export function RepoPanel({
         {!guided && repo.link && <RepoLink url={repo.link} name={repo.name} labeled />}
         {!guided && many && <PanelMachines id={id} />}
         <span className="spacer" />
+        {!repo.forge && (
+          <button
+            type="button"
+            className={`term-new term-focus panel-bench-btn${bench ? " on" : ""}`}
+            title={bench ? "Put the project back (Esc)" : "Bring the project to the front: its changes, shells, app and log in one box"}
+            aria-label={bench ? "Put the project back" : "Bring the project to the front"}
+            aria-pressed={bench}
+            onClick={() => setMode(bench ? "normal" : "focus")}
+          >
+            ⧉
+          </button>
+        )}
         <PanelGear repo={repo} mode={mode} setMode={setMode} body={() => bodyRef.current} solo={solo} />
         {!guided && <RepoMenu repo={repo} onError={showError} />}
         <button
@@ -1435,18 +1479,15 @@ export function RepoPanel({
           {repo.error ? (
             <p className="panel-error">Could not read this repo: {repo.error}</p>
           ) : (
-            <PanelZoom.Provider value={zoom}>
-              {order
-                .filter((k) => !hiddenSections.includes(k))
-                .map((k) => <PanelSection key={k} k={k} repo={repo} />)}
-            </PanelZoom.Provider>
+            order
+              .filter((k) => !hiddenSections.includes(k))
+              .map((k) => <PanelSection key={k} k={k} repo={repo} />)
           )}
         </>
       )}
       </div>
       {!repo.error && <PanelShells repo={repo} />}
       {guided && isActive && !onboarded && !hidden && !dockless() && <Tour targets={tourTargets} onDone={finishTour} />}
-      {mode === "focus" && <FocusGrips box={box} />}
     </section>
     </>
   );

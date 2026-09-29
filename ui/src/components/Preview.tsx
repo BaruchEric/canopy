@@ -7,6 +7,7 @@ import { devTask } from "../tasks";
 import { Section, useSectionClosed } from "./Surface";
 import { TermGrip } from "./TermDock";
 import { flipMode, type SurfaceMode } from "../surface";
+import { benchIs } from "../front";
 import {
   PREVIEW_H,
   loadChoice,
@@ -29,8 +30,9 @@ const PORTS_EVERY = 4000;
 
 const portLabel = (p: ListeningPort) => (p.command ? `${p.port} · ${p.command}` : String(p.port));
 
-/** The head's switches, the same pair a shell row has: bring the preview to
- *  the front, and have it fill the panel. Either again puts it back. */
+/** The head's switches, the same pair a shell row has: bring the project to
+ *  the front with the preview as its main pane, and have the preview fill
+ *  the panel. Either again puts it back; in front, filling has no place. */
 function ModeButtons({ mode, setMode }: { mode: SurfaceMode; setMode: (m: SurfaceMode) => void }) {
   const focus = mode === "focus";
   const full = mode === "full";
@@ -39,14 +41,14 @@ function ModeButtons({ mode, setMode }: { mode: SurfaceMode; setMode: (m: Surfac
       <button
         type="button"
         className={`term-new term-focus preview-mode-btn${focus ? " on" : ""}`}
-        title={focus ? "Put the preview back" : "Bring the preview to the front"}
-        aria-label={focus ? "Put the preview back" : "Bring the preview to the front"}
+        title={focus ? "Put the project back" : "Bring the project to the front"}
+        aria-label={focus ? "Put the project back" : "Bring the project to the front"}
         aria-pressed={focus}
         onClick={() => setMode(flipMode(mode, "focus"))}
       >
         ⧉
       </button>
-      <button
+      {!focus && <button
         type="button"
         className={`term-new term-full preview-mode-btn${full ? " on" : ""}`}
         title={full ? "Give the panel back" : "The preview takes the whole panel"}
@@ -55,7 +57,7 @@ function ModeButtons({ mode, setMode }: { mode: SurfaceMode; setMode: (m: Surfac
         onClick={() => setMode(flipMode(mode, "full"))}
       >
         {full ? "⤡" : "⤢"}
-      </button>
+      </button>}
     </>
   );
 }
@@ -95,8 +97,9 @@ export function PreviewSection({ repo }: { repo: Repo }) {
   const taskAct = useStore((s) => s.taskAct);
   const height = useStore((s) => s.settings.previewHeight);
   const setSetting = useStore((s) => s.setSetting);
-  const [mode, setMode] = useState<SurfaceMode>("normal");
   const frameBox = useRef<HTMLDivElement>(null);
+  // in the bench the frame takes the main pane, and its grip has no place
+  const inBench = useStore((s) => benchIs(s.front, repo.id));
   useEffect(() => {
     if (!closed && !known) loadTasks(repo.id).catch(() => {});
   }, [closed, known, repo.id, loadTasks]);
@@ -193,8 +196,7 @@ export function PreviewSection({ repo }: { repo: Repo }) {
       head={summary}
       title="The repo's dev server, running on the backend, shown here"
       noCapture={url ? "The page in the preview is another origin, which a capture cannot see into" : undefined}
-      front={[mode, setMode]}
-      tools={<ModeButtons mode={mode} setMode={setMode} />}
+      tools={(mode, setMode) => <ModeButtons mode={mode} setMode={setMode} />}
     >
       <div className="preview-body">
         {blocked ? (
@@ -324,7 +326,7 @@ export function PreviewSection({ repo }: { repo: Repo }) {
                     <p className="panel-clean">Opening a preview port…</p>
                   )}
                 </div>
-                {mode === "normal" && (
+                {!inBench && (
                   <TermGrip
                     box={frameBox}
                     cssVar="--preview-h"

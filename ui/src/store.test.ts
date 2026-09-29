@@ -26,6 +26,7 @@ import {
   visibleRepos,
 } from "./store";
 import { applyQuery } from "./filters";
+import { projectFront } from "./front";
 import { onBackendSignal } from "./api";
 import { setBase, setRegistry } from "./registry";
 import { hasOtherBackend, RETRY_FIRST } from "./backends";
@@ -260,49 +261,49 @@ describe("a panel opens its own shell", () => {
   });
 });
 
-describe("tasks in front", () => {
+describe("a project's bench in front", () => {
   const realFetch = globalThis.fetch;
   const repo = (id: string) => ({ id, name: id, path: `/dev/${id}`, group: "", source: "launch", status: null }) as unknown as Repo;
   beforeEach(() => {
     globalThis.fetch = (async () => new Response(JSON.stringify({ tasks: [], errors: [] }), { status: 200 })) as unknown as typeof fetch;
-    useStore.setState({ repos: [repo("f-a"), repo("f-b")], panels: [], activePanel: null, frontShells: "strip", frontPick: null, frontTasks: null });
+    useStore.setState({ repos: [repo("f-a"), repo("f-b")], panels: [], activePanel: null, terms: [], front: { kind: "strip" } });
   });
   afterEach(() => {
     globalThis.fetch = realFetch;
   });
 
-  test("a task brought to the front opens its panel with the tasks unfolded, and takes the front from the shells", () => {
+  test("a task brought to the front opens its panel's bench and takes the front from the strip, leaving the folds alone", () => {
     useStore.setState({ closedSections: { "f-a": ["tasks"] } });
     useStore.getState().bringTask("f-a", "dev");
     const s = useStore.getState();
     expect(s.panels).toContain("f-a");
     expect(s.activePanel).toBe("f-a");
-    expect(closedIn(s, "f-a", "tasks")).toBe(false);
-    expect(s.frontTasks).toEqual({ repoId: "f-a", task: "dev" });
-    expect(s.frontShells).toBeNull();
+    expect(closedIn(s, "f-a", "tasks")).toBe(true);
+    expect(s.front).toEqual(projectFront("f-a", "dev"));
   });
 
-  test("shells brought to the front take it back, and null puts the tasks back", () => {
+  test("the strip takes the front back, and a tasks section going keeps the bench", () => {
     useStore.getState().bringTask("f-a");
-    expect(useStore.getState().frontTasks).toEqual({ repoId: "f-a", task: null });
-    useStore.getState().setFrontShells("strip");
-    expect(useStore.getState().frontTasks).toBeNull();
+    expect(useStore.getState().front).toEqual(projectFront("f-a"));
+    useStore.getState().setFront({ kind: "strip" });
+    expect(useStore.getState().front).toEqual({ kind: "strip" });
     useStore.getState().bringTask("f-b", "test");
-    useStore.getState().setFrontShells(null);
-    expect(useStore.getState().frontTasks).toEqual({ repoId: "f-b", task: "test" });
-    useStore.getState().bringTask(null);
-    expect(useStore.getState().frontTasks).toBeNull();
+    useStore.getState().dropBenchTask("f-b");
+    expect(useStore.getState().front).toEqual(projectFront("f-b"));
+    useStore.getState().bringProject(null);
+    expect(useStore.getState().front).toBeNull();
   });
 
-  test("closing the panel puts its tasks back; another panel's close leaves them", () => {
+  test("closing the panel ends its bench; another panel's close leaves it", () => {
     useStore.getState().openPanel("f-b");
-    useStore.getState().bringTask("f-a", "dev");
+    useStore.getState().bringProject("f-a");
     useStore.getState().closePanel("f-b");
-    expect(useStore.getState().frontTasks).toEqual({ repoId: "f-a", task: "dev" });
+    expect(useStore.getState().front).toEqual(projectFront("f-a"));
     useStore.getState().closePanel("f-a");
-    expect(useStore.getState().frontTasks).toBeNull();
+    expect(useStore.getState().front).toBeNull();
   });
 });
+
 
 describe("a peers event re-reads the mode", () => {
   const realFetch = globalThis.fetch;

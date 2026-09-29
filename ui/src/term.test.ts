@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { FOCUS_GAP, FOCUS_MIN, PANEL_TERM_ROWS, adoptTerms, keepFront, otherShells, shellSet, cellHeight, focusResize, loadFocusSize, loadTermTabs, nextStripTab, pruneHidden, joinsOnly, needsPanelShell, reconcileTerms, rowsPx, termId, viewKey, type TermTab } from "./term";
+import { FOCUS_GAP, FOCUS_MIN, PANEL_TERM_ROWS, adoptTerms, otherShells, shellSet, cellHeight, focusResize, loadFocusSize, loadTermTabs, nextStripTab, pruneHidden, joinsOnly, needsPanelShell, reconcileTerms, rowsPx, termId, viewKey, type TermTab } from "./term";
 import type { Repo, TermInfo } from "../../src/core/types";
 
 describe("rowsPx", () => {
@@ -266,11 +266,8 @@ describe("otherShells", () => {
     );
     expect(out.find((o) => o.id === "2")?.label).toBe("gone · mini");
   });
-  test("shellSet and keepFront", () => {
+  test("shellSet", () => {
     expect(shellSet(tab("1", "strip", "panel"))).toBe("panel:strip");
-    expect(keepFront("panel:a", [tab("1", "a", "panel")])).toBe("panel:a");
-    expect(keepFront("panel:a", [tab("1", "a", "strip")])).toBeNull();
-    expect(keepFront(null, [tab("1", "a", "panel")])).toBeNull();
   });
 });
 

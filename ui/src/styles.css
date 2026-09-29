@@ -3770,8 +3770,8 @@ a.chan-text {
     }
   }
 }
-/* a panel over the whole window, or in front: fixed boxes beat the dock's
-   grid cell and the panel's own width */
+/* a panel over the whole window: a fixed box beats the dock's grid cell
+   and the panel's own width */
 .panel.surface-full {
   position: fixed;
   inset: 0;
@@ -3779,10 +3779,6 @@ a.chan-text {
   width: auto;
   max-width: none;
   border: 0;
-}
-.panel.surface-focus {
-  width: var(--focus-w, min(1100px, calc(100vw - 48px)));
-  border: 1px solid var(--float-edge);
 }
 /* a section in front scrolls inside its box; a panel scrolls its body */
 .surface-focus:not(.panel) {
@@ -5483,18 +5479,8 @@ button.machine:hover {
   }
 }
 
-/* the tasks in front: the tabs, the picked task's line and the others at
-   the top, its terminal or log filling the rest of the box */
-.tasks.surface-focus {
-  display: flex;
-  flex-direction: column;
-  overflow: hidden;
-  padding-bottom: 0;
-}
-.tasks.surface-focus > .section-main {
-  flex: none;
-  padding: 0 10px 4px;
-}
+/* the tasks in a project's bench: tabs and the picked task's line along
+   its side, the task's terminal or log in the bench's log pane */
 .section-head > .task-front-btn {
   margin: 8px 4px 0 0;
 }
@@ -5525,12 +5511,9 @@ button.machine:hover {
   background: var(--bark3);
   font-weight: 600;
 }
-.tasks.surface-focus .task-row.open .task-main {
+.panel-bench .tasks .task-row.open .task-main {
   background: none;
   cursor: default;
-}
-.task-others {
-  margin: 4px -10px 0;
 }
 .task-front {
   flex: 1;
@@ -5589,4 +5572,264 @@ button.machine:hover {
 .tour-count {
   color: var(--ink-faint);
   font-size: 0.85em;
+}
+
+/* ---------- a project's bench: its panel in front, the parts side by side ----------
+   The panel's own column runs down the left; the preview fills the main part,
+   the shells sit under it and the picked task's log beside them. The preview
+   and the log live inside the column's markup and are placed out of its
+   scroll here, since moving them in the tree would reload the app and hang
+   up the terminal. Nothing between them and the panel may be positioned. */
+.panel.panel-bench {
+  --bench-bar: 40px;
+  --bench-rail: clamp(300px, 27vw, 440px);
+  --bench-dock: 40%;
+  /* the log's share of the main column, beside the shells */
+  --bench-log: 0%;
+  position: fixed;
+  inset: 12px;
+  z-index: 26;
+  width: auto;
+  max-width: none;
+  height: auto;
+  max-height: none;
+  display: grid;
+  grid-template-columns: var(--bench-rail) minmax(0, 1fr);
+  grid-template-rows: var(--bench-bar) minmax(0, 1fr) var(--bench-dock);
+  grid-template-areas:
+    "bar bar"
+    "rail main"
+    "rail dock";
+  border: 1px solid var(--float-edge);
+  border-radius: 10px;
+  overflow: hidden;
+  background: var(--bark0);
+  box-shadow:
+    inset 0 1px 0 var(--sheen),
+    0 2px 6px -2px var(--float-shadow),
+    0 22px 48px -16px var(--float-shadow);
+}
+.panel-bench:has(.task-front) {
+  --bench-log: 45%;
+}
+/* no preview (hidden, or a repo elsewhere): the shells take its room */
+.panel-bench:not(:has(section.preview)) {
+  --bench-dock: calc(100% - var(--bench-bar));
+}
+.panel-bench > .panel-body {
+  grid-area: rail;
+  border-right: 1px solid var(--hair);
+  padding-bottom: 12px;
+}
+.panel-bench > .panel-shells {
+  grid-area: dock;
+  margin-right: var(--bench-log);
+  border-top: 1px solid var(--hair);
+}
+.panel-bench > .panel-shells > .fold,
+.panel-bench > .panel-shells > .term-grip {
+  display: none;
+}
+.panel-bench > .panel-shells > .panel-shells-body {
+  flex: 1;
+  min-height: 0;
+  max-height: none;
+  border-top: 0;
+}
+.panel-bench > .panel-shells > .panel-shells-body > .term-body {
+  flex: 1;
+  height: auto;
+}
+.panel-bench > .panel-shells.bench-empty {
+  justify-content: center;
+}
+.panel-bench section.preview {
+  position: absolute;
+  z-index: 1;
+  top: var(--bench-bar);
+  left: var(--bench-rail);
+  right: 0;
+  bottom: var(--bench-dock);
+  display: flex;
+  flex-direction: column;
+  padding-bottom: 10px;
+  overflow: hidden;
+  background: var(--bark1);
+}
+.panel-bench section.preview > .section-main,
+.panel-bench section.preview .preview-body {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+.panel-bench section.preview .preview-frame-wrap {
+  flex: 1;
+  height: auto;
+  max-height: none;
+}
+.panel-bench .task-front {
+  position: absolute;
+  z-index: 1;
+  right: 0;
+  bottom: 0;
+  left: calc(var(--bench-rail) + (100% - var(--bench-rail)) * 0.55);
+  height: var(--bench-dock);
+  border-left: 1px solid var(--hair);
+}
+.preview.section-full .term-grip {
+  display: none;
+}
+
+/* the bench's top bar: the projects it can switch to, and the way back */
+.bench-bar {
+  grid-area: bar;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  padding: 0 8px 0 10px;
+  border-bottom: 1px solid var(--hair);
+  background: var(--bark1);
+}
+.bench-projects {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: stretch;
+  align-self: stretch;
+  gap: 2px;
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+.bench-project {
+  flex: none;
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0 10px;
+  font-size: 12px;
+  color: var(--ink-dim);
+  white-space: nowrap;
+}
+.bench-project:hover,
+.bench-project:focus-visible {
+  color: var(--ink);
+  background: var(--bark2);
+}
+/* the project in front stands on a moss root along the bar's floor */
+.bench-project.on {
+  color: var(--ink);
+  font-weight: 600;
+}
+.bench-project.on::after {
+  content: "";
+  position: absolute;
+  left: 8px;
+  right: 8px;
+  bottom: 0;
+  height: 2px;
+  border-radius: 2px 2px 0 0;
+  background: var(--moss);
+}
+.bench-machine {
+  font-size: 11px;
+  font-weight: 400;
+  color: var(--ink-faint);
+}
+.bench-vital {
+  font-family: var(--mono);
+  font-size: 11px;
+  font-weight: 400;
+  color: var(--ink-faint);
+}
+.bench-vital.run {
+  color: var(--moss);
+}
+.bench-bar > .bench-leave {
+  flex: none;
+}
+@media (prefers-reduced-motion: no-preference) {
+  .panel.panel-bench {
+    animation: focus-rise 180ms cubic-bezier(0.2, 0.8, 0.2, 1);
+  }
+}
+
+/* a phone: one part of the bench at a time, picked in the bar's second
+   row. The others stay laid out but invisible, so the app keeps its page
+   and a shell its size. */
+@media (max-width: 760px), (max-height: 480px) {
+  .panel.panel-bench {
+    --bench-bar: 84px;
+    inset: 0;
+    border: 0;
+    border-radius: 0;
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: var(--bench-bar) minmax(0, 1fr);
+    grid-template-areas:
+      "bar"
+      "pane";
+  }
+  .bench-bar {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    grid-template-rows: 40px 44px;
+    padding: 0 8px 0 4px;
+    padding-top: env(safe-area-inset-top);
+  }
+  .bench-bar > .bench-projects {
+    grid-row: 1;
+    grid-column: 1;
+  }
+  .bench-bar > .bench-leave {
+    grid-row: 1;
+    grid-column: 2;
+    align-self: center;
+  }
+  .bench-bar > .bench-panes {
+    grid-row: 2;
+    grid-column: 1 / -1;
+    align-self: center;
+    justify-self: stretch;
+    display: flex;
+  }
+  .bench-bar > .bench-panes > button {
+    flex: 1;
+  }
+  .panel-bench > .panel-body,
+  .panel-bench > .panel-shells {
+    grid-area: pane;
+    margin-right: 0;
+    border-right: 0;
+    border-top: 0;
+  }
+  .panel-bench section.preview,
+  .panel-bench .task-front {
+    left: 0;
+    right: 0;
+    bottom: 0;
+    top: var(--bench-bar);
+    height: auto;
+    border-left: 0;
+  }
+  .panel-bench:not([data-pane="files"]) > .panel-body,
+  .panel-bench:not([data-pane="shell"]) > .panel-shells,
+  .panel-bench:not([data-pane="app"]) section.preview,
+  .panel-bench:not([data-pane="log"]) .task-front {
+    visibility: hidden;
+  }
+  .panel-bench[data-pane="app"] section.preview,
+  .panel-bench[data-pane="log"] .task-front {
+    visibility: visible;
+  }
+  .panel-bench[data-pane="shell"] > .panel-shells {
+    z-index: 1;
+  }
+}
+.panel-head > .panel-bench-btn {
+  flex: none;
+}
+.panel-bench .panel-head > .panel-bench-btn {
+  display: none;
 }

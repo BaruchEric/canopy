@@ -26,6 +26,7 @@ import {
 } from "../surface";
 import { capture, copyText, readText, surfaceText } from "../share";
 import { TERM_FONT, focusResize, type FocusSize } from "../term";
+import { benchHolds, benchIs } from "../front";
 import { TERM_FONT_MAX, TERM_FONT_MIN } from "../touch";
 import type { Repo } from "../../../src/core/types";
 import { Gear, type GearEntry, type GearGroup } from "./Gear";
@@ -37,12 +38,17 @@ import { Gear, type GearEntry, type GearGroup } from "./Gear";
 export const SectionWindow = createContext(false);
 
 /** whether `key` is folded in `repoId`'s panel; never in a section window,
- *  which reads the grove's folds but must not write them */
+ *  which reads the grove's folds but must not write them, nor for a pane
+ *  of the project's bench while it is in front */
 export function useSectionClosed(repoId: string, key: string): boolean {
   const lone = useContext(SectionWindow);
+  const held = useStore((s) => benchHolds(s.front, repoId, key));
   const closed = useStore((s) => closedIn(s, repoId, key));
-  return lone ? false : closed;
+  return lone || held ? false : closed;
 }
+
+/** true while the project's bench holds `key` open, so its fold does nothing */
+export const useBenchHeld = (repoId: string, key: string): boolean => useStore((s) => benchHolds(s.front, repoId, key));
 
 /* ---------- zoom ---------- */
 
@@ -72,10 +78,6 @@ export function useZoom(kind: ZoomKind, front = false): { zoom: number; entry: G
     },
   };
 }
-
-/** The zoom a panel's body is at, in place or in front, which a section in
- *  front undoes on its own fixed box; 1 outside a panel. */
-export const PanelZoom = createContext(1);
 
 /** css `zoom` for a surface, or nothing at 1 */
 export const zoomStyle = (z: number): CSSProperties => (z === 1 ? {} : { zoom: z });
@@ -353,7 +355,6 @@ export function Section({
   paste,
   copy,
   noCapture,
-  front,
   tools,
   below,
   children,
@@ -374,11 +375,9 @@ export function Section({
   /** the section's text for a copy, when its own words read badly as text */
   copy?: () => string;
   noCapture?: string;
-  /** how it sits when the store keeps that rather than the section, so a
-   *  control elsewhere can bring it to the front */
-  front?: [SurfaceMode, (m: SurfaceMode) => void];
-  /** buttons in the header ahead of the gear */
-  tools?: ReactNode;
+  /** buttons in the header ahead of the gear, or a function of how the
+   *  section sits (focus while its project's bench is up) and the setter */
+  tools?: ReactNode | ((mode: SurfaceMode, setMode: (m: SurfaceMode) => void) => ReactNode);
   /** shown under the zoomed body, outside its zoom: an xterm there keeps
    *  its mouse and selection */
   below?: ReactNode;
@@ -387,18 +386,26 @@ export function Section({
   const lone = useContext(SectionWindow);
   const closed = useSectionClosed(repo.id, k);
   const toggleSection = useStore((s) => s.toggleSection);
-  const focusSize = useStore((s) => s.focusSize);
   const box = useRef<HTMLElement>(null);
   const [ownMode, setOwnMode] = useState<SurfaceMode>("normal");
-  const [chosenMode, setMode] = front ?? [ownMode, setOwnMode];
+  // In a panel, in front is the project's bench, which this section is one
+  // part of: it lays out in place there, and its gear's "in front" is the
+  // bench's. A section in a window of its own still comes forward alone.
+  const bench = useStore((s) => benchIs(s.front, repo.id)) && !lone;
+  const held = useBenchHeld(repo.id, k) && !lone;
+  const bringProject = useStore((s) => s.bringProject);
+  const setMode = (m: SurfaceMode) => {
+    if (!lone && m === "focus") bringProject(repo.id);
+    else {
+      if (bench) bringProject(null);
+      setOwnMode(m);
+    }
+  };
   // folded, a section is neither over the panel nor in front
-  const mode: SurfaceMode = closed ? "normal" : chosenMode;
-  const { zoom, entry: zoomEntry } = useZoom(k, mode === "focus");
-  // A box in front is fixed to the window, but css zoom on the panel body
-  // around it would scale its size and place too: it undoes that zoom on
-  // itself and carries it into its contents instead.
-  const panelZoom = useContext(PanelZoom);
-  const common = useSectionLayout(repo, k, mode, setMode);
+  const mode: SurfaceMode = closed || bench ? "normal" : ownMode;
+  const shown: SurfaceMode = bench ? "focus" : mode;
+  const { zoom, entry: zoomEntry } = useZoom(k);
+  const common = useSectionLayout(repo, k, shown, setMode);
   useLeaveOnEscape(mode, setMode);
   const word = SECTION_WORD[k];
   const groups: GearGroup[] = [
@@ -409,38 +416,32 @@ export function Section({
       entries: shareEntries({ el: () => box.current, label: `${word} ${idText(repo.id)}`, copy, paste, noCapture }),
     },
   ];
-  const leave = () => setMode("normal");
   return (
-    <>
-      {mode === "focus" && <FocusBackdrop onLeave={leave} />}
-      <section
+    <section
         ref={box}
-        className={`${className} surface${mode === "full" ? " section-full" : ""}${mode === "focus" ? " surface-focus" : ""}`}
+        className={`${className} surface${mode === "full" ? " section-full" : ""}`}
         aria-label={label}
         data-section={k}
-        style={mode === "focus" ? { ...zoomStyle(1 / panelZoom), ...focusVars(focusSize) } : undefined}
       >
         <div className="section-head">
           <button
             type="button"
             className={`panel-label fold${closed ? "" : " open"}`}
             aria-expanded={!closed}
-            disabled={lone}
+            disabled={lone || held}
             onClick={() => toggleSection(repo.id, k)}
             title={title}
           >
-            {mode === "focus" ? `${word} · ${repo.name}` : word} <span>{head}</span>
+            {word} <span>{head}</span>
           </button>
-          {!closed && tools}
+          {!closed && (typeof tools === "function" ? tools(shown, setMode) : tools)}
           <Gear label={`${word} at ${repo.name}`} groups={groups} />
         </div>
-        <div className="section-main" style={zoomStyle(mode === "focus" ? zoom * panelZoom : zoom)}>
+        <div className="section-main" style={zoomStyle(zoom)}>
           {after}
           {!closed && children}
         </div>
         {!closed && below}
-        {mode === "focus" && <FocusGrips box={box} />}
-      </section>
-    </>
+    </section>
   );
 }

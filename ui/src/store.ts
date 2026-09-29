@@ -9,7 +9,8 @@ import { changedAt } from "./grouping";
 import { focusPanel, nextActive } from "./dock";
 import { heldShellUrl, openElsewhere, openShellElsewhere, parseRoute, soloUrl } from "./routes";
 import { loadSettings, saveSettings, shellPlace, type Settings, type ShellPlace } from "./settings";
-import { PANEL_TERM_ROWS, adoptTerms, keepFront, loadFocusSize, loadTermTabs, needsPanelShell, nextStripTab, reconcileTerms, rowsPx, shellSet, termId, type FocusSize, type TermTab } from "./term";
+import { PANEL_TERM_ROWS, adoptTerms, loadFocusSize, loadTermTabs, needsPanelShell, nextStripTab, reconcileTerms, rowsPx, termId, type FocusSize, type TermTab } from "./term";
+import { clearTask, frontForTab, keepFront, projectFront, type Front } from "./front";
 import { clientId, identity } from "./client";
 export type { TermTab } from "./term";
 import { clamp, needsAttention } from "./util";
@@ -607,16 +608,10 @@ interface CanopyState {
   /** px size of a shell brought to the front, dragged by its corner; null
    *  is the default, which follows the window */
   focusSize: FocusSize | null;
-  /** the set of shells brought to the front (`shellSet`: the strip or a
-   *  repo's panel), null when none is; one at a time, for this page only */
-  frontShells: string | null;
-  /** the shell the front set should show, asked for from another set's
-   *  list; its set picks it up */
-  frontPick: string | null;
-  /** a repo's tasks brought to the front, with the task they show (null
-   *  for the one picked there), null when none are; like the shells, one
-   *  thing in front at a time, for this page only */
-  frontTasks: { repoId: string; task: string | null } | null;
+  /** what is in front of the page: the strip's shells, or one project's
+   *  bench (its changes, shells, preview and task log in one box), null
+   *  when nothing is; one at a time, for this page only */
+  front: Front | null;
   /** flows by id, live and recently finished */
   flows: Record<string, Flow>;
   /** fleets by id, live and recently finished */
@@ -751,10 +746,14 @@ interface CanopyState {
   setTermHeight: (px: number) => void;
   setPanelTermHeight: (repoId: string, px: number) => void;
   setFocusSize: (size: FocusSize | null) => void;
-  /** brings a set of shells to the front, or none with null */
-  setFrontShells: (set: string | null) => void;
-  /** brings a running shell to the front in its own set instead of the
-   *  one there now: its tab here, or a new tab onto it */
+  /** puts `front` in front, or nothing with null */
+  setFront: (front: Front | null) => void;
+  /** brings a project's bench to the front, opening its panel; null puts
+   *  it back */
+  bringProject: (repoId: string | null) => void;
+  /** brings a running shell to the front in its own place instead of what
+   *  is there now: the strip, or its project's bench; its tab here, or a
+   *  new tab onto it */
   bringTerm: (id: string) => void;
 
   /** opens the pre-flight dialog for an action on a repo */
@@ -780,9 +779,12 @@ interface CanopyState {
   editTask: (repoId: string, name: string | null) => void;
   /** opens a repo's panel with its tasks unfolded */
   showTasks: (repoId: string) => void;
-  /** brings a repo's tasks to the front, showing `task`, and puts any
-   *  shells in front back; null for `repoId` puts the tasks back */
-  bringTask: (repoId: string | null, task?: string | null) => void;
+  /** brings a repo's bench to the front with `task`'s log in it (null for
+   *  the one the bench picks) */
+  bringTask: (repoId: string, task?: string | null) => void;
+  /** the bench of `repoId` goes back to picking its own task, as a tasks
+   *  section that folds or goes asks; the bench stays */
+  dropBenchTask: (repoId: string) => void;
   /** a task's terminal as a tab among the panel's shells or the strip's; closing it leaves the task running */
   openTaskTab: (repoId: string, task: TaskInfo, place: ShellPlace) => void;
   stopJob: (jobId: string) => Promise<void>;
@@ -898,6 +900,7 @@ function treeState(
   | "closedSections"
   | "tasks"
   | "taskErrors"
+  | "front"
 > {
   const reg = registry();
   const mine = mineOf(from);
@@ -912,6 +915,8 @@ function treeState(
     repos: sliceIn(reg, s.repos, from, tree.repos, (r) => r.id),
     conns: withConn(s, from, { backend: tree.backend }),
     panels,
+    // a bench whose repo left the scan goes with its panel
+    front: panels === s.panels ? s.front : keepFront(s.front, s.terms, panels),
     // the showing tab may be among the dropped; then its neighbour shows
     activePanel:
       s.activePanel !== null && panels.includes(s.activePanel)
@@ -1188,9 +1193,7 @@ export const useStore = create<CanopyState>((set, get) => ({
   termHeight: layout.termHeight,
   panelTermHeights: layout.panelTermHeights,
   focusSize: layout.focusSize,
-  frontShells: null,
-  frontPick: null,
-  frontTasks: null,
+  front: null,
   flows: {},
   fleets: {},
   workflows: {},
@@ -1545,7 +1548,7 @@ export const useStore = create<CanopyState>((set, get) => ({
       terms,
       parkedTerms: gone.length ? [...s.parkedTerms, ...gone] : s.parkedTerms,
       activeTerm: s.activeTerm !== null && terms.some((t) => t.id === s.activeTerm) ? s.activeTerm : (terms.filter((t) => t.place === "strip").at(-1)?.id ?? null),
-      frontShells: keepFront(s.frontShells, terms),
+      front: keepFront(s.front, terms, s.panels.filter((p) => !mine(p))),
       selected: s.selected.filter((id) => !mine(id)),
     });
   },
@@ -1578,7 +1581,7 @@ export const useStore = create<CanopyState>((set, get) => ({
         panels,
         activePanel,
         terms,
-        frontShells: keepFront(s.frontShells, terms),
+        front: keepFront(s.front, terms, panels),
         ...(width !== undefined && s.panelWidths[toId] === undefined ? { panelWidths: { ...s.panelWidths, [toId]: width } } : {}),
         ...(card ? { checkoutPref: { ...s.checkoutPref, [card.key]: backendOf(toId) } } : {}),
       };
@@ -1716,12 +1719,12 @@ export const useStore = create<CanopyState>((set, get) => ({
     // own × or "end". Reopening the panel adopts them back as tabs.
     const mine = (t: TermTab) => t.repoId === id && t.place === "panel";
     const terms = s.terms.filter((t) => !mine(t));
+    const panels = s.panels.filter((p) => p !== id);
     set({
-      panels: s.panels.filter((p) => p !== id),
+      panels,
       activePanel: nextActive(s.panels, id, s.activePanel),
       terms,
-      frontShells: keepFront(s.frontShells, terms),
-      frontTasks: s.frontTasks?.repoId === id ? null : s.frontTasks,
+      front: keepFront(s.front, terms, panels),
     });
   },
 
@@ -1968,7 +1971,7 @@ export const useStore = create<CanopyState>((set, get) => ({
     if (!tab) return;
     if (!tab.task) endShells([tab]);
     const terms = s.terms.filter((t) => t.id !== id);
-    set({ terms, activeTerm: nextStripTab(s.terms, id, s.activeTerm), frontShells: keepFront(s.frontShells, terms) });
+    set({ terms, activeTerm: nextStripTab(s.terms, id, s.activeTerm), front: keepFront(s.front, terms, s.panels) });
   },
   hideTerm: (id) => {
     const s = get();
@@ -1977,7 +1980,7 @@ export const useStore = create<CanopyState>((set, get) => ({
     set({
       terms,
       activeTerm: nextStripTab(s.terms, id, s.activeTerm),
-      frontShells: keepFront(s.frontShells, terms),
+      front: keepFront(s.front, terms, s.panels),
       hiddenTerms: s.hiddenTerms.includes(id) ? s.hiddenTerms : [...s.hiddenTerms, id],
     });
   },
@@ -2039,7 +2042,9 @@ export const useStore = create<CanopyState>((set, get) => ({
     set((s) => ({ terms: s.terms.map((t) => (t.id === id ? { ...t, exit: code } : t)) })),
   setTermHeight: (px) => set({ termHeight: clamp(px, TERM.min, TERM.max) }),
   setFocusSize: (size) => set({ focusSize: size }),
-  setFrontShells: (front) => set((s) => ({ frontShells: front, frontPick: null, frontTasks: front ? null : s.frontTasks })),
+  setFront: (front) => set({ front }),
+  bringProject: (repoId) =>
+    set((s) => (repoId === null ? { front: null } : { ...focusPanel(s.panels, repoId), front: projectFront(repoId) })),
   bringTerm: (id) => {
     // joining gives a shell with no tab here one, and opens and unfolds a
     // panel shell's panel; a tab already here keeps its place
@@ -2048,9 +2053,7 @@ export const useStore = create<CanopyState>((set, get) => ({
     const tab = s.terms.find((t) => t.id === id);
     if (!tab) return;
     set({
-      frontShells: shellSet(tab),
-      frontPick: id,
-      frontTasks: null,
+      front: frontForTab(s.front, tab),
       ...(tab.place === "strip"
         ? { activeTerm: id }
         : { ...focusPanel(s.panels, tab.repoId), closedSections: unfoldIn(s.closedSections, tab.repoId, "shell") }),
@@ -2117,17 +2120,12 @@ export const useStore = create<CanopyState>((set, get) => ({
       closedSections: unfoldIn(s.closedSections, repoId, "tasks"),
     })),
   bringTask: (repoId, task = null) =>
-    set((s) =>
-      repoId === null
-        ? { frontTasks: null }
-        : {
-            ...focusPanel(s.panels, repoId),
-            closedSections: unfoldIn(s.closedSections, repoId, "tasks"),
-            frontTasks: { repoId, task },
-            frontShells: null,
-            frontPick: null,
-          },
-    ),
+    set((s) => ({ ...focusPanel(s.panels, repoId), front: projectFront(repoId, task) })),
+  dropBenchTask: (repoId) =>
+    set((s) => {
+      const front = clearTask(s.front, repoId);
+      return front === s.front ? {} : { front };
+    }),
   openTaskTab: (repoId, task, place) => {
     const s = get();
     const repo = s.repos.find((r) => r.id === repoId);
