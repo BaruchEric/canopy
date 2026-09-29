@@ -95,6 +95,11 @@ function activityKey(r: Repo): string {
   }
 }
 
+const FAVORITES: readonly Bucket[] = [
+  { key: "starred", label: "favorites", hint: "Starred from a card; newest change first" },
+  { key: "rest", label: "everything else" },
+];
+
 /** Age buckets for the last change, commit or edit; the last one holds what
  *  has neither. */
 const RECENT: readonly (Bucket & { within?: number })[] = [
@@ -126,13 +131,15 @@ export const sectionKey = (mode: SortMode, key: string): string =>
  * this with the same mode, so a heading in one is the same heading in the
  * other. `now` is unix seconds; it only matters for "recent". `at` is when
  * a repo changed, for "recent" and the newest-first order: a card with
- * several checkouts passes its newest one's.
+ * several checkouts passes its newest one's. `fav` says whether a repo is
+ * starred, for "favorites": a card passes whether any checkout is.
  */
 export function groupRepos(
   repos: Repo[],
   mode: SortMode,
   now: number = Date.now() / 1000,
   at: (r: Repo) => number = changedAt,
+  fav: (r: Repo) => boolean = (r) => r.favorite === true,
 ): RepoGroup[] {
   const byChange = byChangeAt(at);
   switch (mode) {
@@ -148,6 +155,8 @@ export function groupRepos(
       return bucket(repos, ACTIVITY, activityKey, byChange);
     case "recent":
       return bucket(repos, RECENT, (r) => ageKey(at(r), now), byChange);
+    case "favorites":
+      return bucket(repos, FAVORITES, (r) => (fav(r) ? "starred" : "rest"), byChange);
     case "name":
       return bucket(
         repos,

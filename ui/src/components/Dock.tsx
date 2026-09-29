@@ -40,6 +40,7 @@ import { CommitRow } from "./Commit";
 import { DiffView } from "./DiffView";
 import { PeerChips, Pulls, RemoteTipChip } from "./RemoteTip";
 import { RepoLink } from "./RepoLink";
+import { Star } from "./Star";
 import { RepoMenu } from "./RepoMenu";
 import { Resizer } from "./Resizer";
 import { FlowChip, RunChip } from "./RunChip";
@@ -1253,6 +1254,7 @@ export function RepoPanel({
         <span className="panel-name" title={repo.path}>
           <IdLabel id={repo.id} />
         </span>
+        <Star repoId={repo.id} name={repo.name} onError={showError} />
         {repo.link && <RepoLink url={repo.link} name={repo.name} labeled />}
         {many && <PanelMachines id={id} />}
         <span className="spacer" />

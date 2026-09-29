@@ -23,6 +23,7 @@ import {
 } from "../core/git";
 import { githubLogin, listRemotes, ownRemotes, pushAccess } from "../core/access";
 import { linkArchived } from "../core/archive";
+import { linkFavorites } from "../core/favorite";
 import { linkPulls, parsePullCounts, PULLS_QUERY } from "../core/github";
 import {
   HistoryError,
@@ -72,6 +73,7 @@ import {
   removeWorkspace,
   setAgent,
   setArchived,
+  setFavorite,
   setKeepShells,
   setLaunch,
   upsertWorkspace,
@@ -181,6 +183,8 @@ interface ServerState {
   /** the paths of the repos archived in canopy, kept in step with the
    *  config so a rebuild, which cannot wait on a read, can mark them */
   archived: Set<string>;
+  /** the paths of the repos starred in canopy, kept the same way */
+  favorites: Set<string>;
   /** the names of each repo's own remotes, by path, settled once per repo:
    *  what the background fetch pulls and where a tip may come from */
   own: Map<string, string[]>;
@@ -976,9 +980,12 @@ function rebuildResult(state: ServerState, repos: Repo[]): void {
     // source is in the same list, so it is settled on the way out; the pull
     // request counts and the peer states ride along from the last activity
     // pass and the last peer pass.
-    repos: linkArchived(
-      linkPeers(linkPulls(linkForgeClones([...repos].sort(bySource(order))), state.pulls), state.peerStates),
-      state.archived,
+    repos: linkFavorites(
+      linkArchived(
+        linkPeers(linkPulls(linkForgeClones([...repos].sort(bySource(order))), state.pulls), state.peerStates),
+        state.archived,
+      ),
+      state.favorites,
     ),
     scannedAt: Date.now(),
     backend: backendCaps(),
@@ -1971,6 +1978,19 @@ async function handleApi(
       broadcast(state, { type: "repo", repo: marked! });
       return json(marked);
     }
+    // The star is canopy's own mark too, so it sits here for the same reason.
+    if (method === "POST" && action === "favorite") {
+      const body = (await req.json().catch(() => null)) as { favorite?: unknown } | null;
+      if (typeof body?.favorite !== "boolean") throw new HttpError(400, "favorite must be true or false");
+      state.favorites = new Set(await setFavorite(repo.path, body.favorite));
+      const idx = state.result.repos.findIndex((r) => r.id === repo.id);
+      const now = state.result.repos[idx];
+      if (!now) throw new HttpError(404, `unknown repo: ${repo.id}`);
+      const [starred] = linkFavorites([now], state.favorites);
+      state.result.repos[idx] = starred!;
+      broadcast(state, { type: "repo", repo: starred! });
+      return json(starred);
+    }
     // A forge repo is a listing, not a checkout: git has nothing to run
     // against and no folder to open. Where the clone is known, say so — the
     // card next to it is the one that answers.
@@ -2422,6 +2442,7 @@ export async function startServer(opts: {
     }),
     pulls: new Map(),
     archived: new Set(cfg.archived),
+    favorites: new Set(cfg.favorites),
     own: new Map(),
     // Seeded from settings at startup, not []: fetchLocal can run before
     // the first peer pass does (refreshActivity fetches, then peers), and

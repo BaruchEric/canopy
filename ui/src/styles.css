@@ -5196,3 +5196,47 @@ button.machine:hover {
     }
   }
 }
+
+/* the star on a card and a panel head: lit when a favorite, else only on
+   hover or focus */
+.star {
+  flex: none;
+  display: inline-grid;
+  place-items: center;
+  width: 18px;
+  height: 18px;
+  padding: 0;
+  border: 0;
+  border-radius: var(--r);
+  background: none;
+  color: var(--ink-faint);
+  font-size: 13px;
+  line-height: 1;
+  cursor: pointer;
+  opacity: 0;
+}
+.card:hover .star,
+.card:focus-within .star,
+.panel-head .star,
+.star:focus-visible {
+  opacity: 0.6;
+}
+.star:hover {
+  opacity: 1;
+  background: var(--bark2);
+}
+.star.on,
+.card .star.on {
+  color: var(--lichen);
+  opacity: 1;
+}
+.tree-star {
+  flex: none;
+  color: var(--lichen);
+  font-size: 11px;
+}
+@media (hover: none) {
+  .star {
+    opacity: 0.6;
+  }
+}

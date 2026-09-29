@@ -78,6 +78,8 @@ export interface RepoQuery {
   users: readonly string[];
   /** the "needs attention" toggle */
   attention: boolean;
+  /** the "favorites only" toggle */
+  favorites?: boolean;
   /** substring of the repo id, case-insensitive */
   text: string;
 }
@@ -90,6 +92,7 @@ export function applyQuery(repos: readonly Repo[], q: RepoQuery, plain: (id: str
   return repos.filter(
     (r) =>
       (!q.attention || needsAttention(r)) &&
+      (!q.favorites || r.favorite === true) &&
       (q.filters.length === 0 || q.filters.some((f) => matchesFilter(r, f))) &&
       (q.users.length === 0 || q.users.includes(userKey(r) ?? NOBODY)) &&
       (!text || plain(r.id).toLowerCase().includes(text)),

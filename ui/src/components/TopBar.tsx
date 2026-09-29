@@ -67,6 +67,7 @@ const SORT = [
   },
   { value: "name", label: "name", title: "One flat list, a to z" },
   { value: "user", label: "user", title: "By the git identity each repo commits as" },
+  { value: "favorites", label: "★", title: "Favorites first, then everything else, each newest change first" },
 ] as const;
 
 /** Live runs across the grove. Absent when nothing is going; a click opens

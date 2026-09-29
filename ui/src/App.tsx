@@ -167,6 +167,8 @@ export function App() {
         useStore.getState().toggleFeed();
       } else if (e.key === "d") {
         setDirtyOnly(!useStore.getState().dirtyOnly);
+      } else if (e.key === "*") {
+        st.setFavoritesOnly(!st.favoritesOnly);
       } else if (e.key === "x") {
         st.setSelecting(!st.selecting);
       } else if (e.key === "s") {

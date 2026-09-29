@@ -162,6 +162,8 @@ export interface Repo {
    *  canopy's mark winning when both did. Still scanned, but off the board
    *  unless a browser asks to see archived repos. */
   archived?: "canopy" | "github";
+  /** set on a repo the user starred in canopy */
+  favorite?: true;
   error?: string;
 }
 
@@ -383,6 +385,8 @@ export interface CanopyConfig {
   launchers: Record<string, LaunchSettings>;
   /** the repos archived in canopy, by path like agents */
   archived: string[];
+  /** the repos starred in canopy, by path like agents */
+  favorites: string[];
   /** whether the server fetches the user's own local repos in the background
    *  (every REMOTE_REFRESH), so behind counts and remote tips stay current */
   fetch: boolean;

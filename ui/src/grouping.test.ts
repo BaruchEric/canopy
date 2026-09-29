@@ -180,8 +180,25 @@ describe("groupRepos", () => {
     expect(g.map((x) => x.label)).toEqual(["Eric"]);
   });
 
+  test("favorites puts the starred first, newest change first in each group", () => {
+    const starred = new Set(["tools/delta", "web/zeta"]);
+    const marked = grove.map((r) => (starred.has(r.id) ? { ...r, favorite: true as const } : r));
+    expect(ids(groupRepos(marked, "favorites", NOW))).toEqual([
+      ["favorites", ["zeta", "delta"]],
+      ["everything else", ["beta", "alpha", "gamma", "fresh", "omega"]],
+    ]);
+  });
+
+  test("favorites asks the fav hook when one is given, as a card with several checkouts does", () => {
+    const g = groupRepos(grove, "favorites", NOW, undefined, (r) => r.id === "tools/beta");
+    expect(g.map((x) => [x.key, x.repos.length])).toEqual([
+      ["starred", 1],
+      ["rest", grove.length - 1],
+    ]);
+  });
+
   test("empty input yields no groups in every mode", () => {
-    for (const mode of ["recent", "folder", "activity", "name", "user"] as const) {
+    for (const mode of ["recent", "folder", "activity", "name", "user", "favorites"] as const) {
       expect(groupRepos([], mode, NOW)).toEqual([]);
     }
   });

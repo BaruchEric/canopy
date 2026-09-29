@@ -63,8 +63,9 @@ export function boardOrder(
   sort: SortMode,
   collapsed: readonly string[] = [],
   at?: (r: Repo) => number,
+  fav?: (r: Repo) => boolean,
 ): string[] {
-  return groupRepos(repos, sort, undefined, at)
+  return groupRepos(repos, sort, undefined, at, fav)
     .filter((g) => !collapsed.includes(sectionKey(sort, g.key)))
     .flatMap((g) => g.repos.filter(pickable).map((r) => r.id));
 }

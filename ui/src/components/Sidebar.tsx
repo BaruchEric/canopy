@@ -4,7 +4,7 @@ import { pickable } from "../flows";
 import { peerWipCounts } from "../peers";
 import { groupRepos, sectionKey } from "../grouping";
 import { pickCount, pickState } from "../select";
-import { boardChangedAt, cardOf, idText, multi, useStore, visibleCards, visibleRepos } from "../store";
+import { boardChangedAt, boardFavorite, cardOf, isFavorite, idText, multi, useStore, visibleCards, visibleRepos } from "../store";
 import { backendOf } from "../registry";
 import { GLYPH, stateOf } from "../util";
 import { GroupHead } from "./GroupHead";
@@ -19,6 +19,7 @@ const TreeItem = memo(function TreeItem({ repo }: { repo: Repo }) {
   const picked = useStore((s) => s.selected.includes(repo.id));
   const toggleSelected = useStore((s) => s.toggleSelected);
   const card = useStore((s) => (multi(s) ? cardOf(s, repo.id) : undefined));
+  const favorite = useStore((s) => isFavorite(s, repo.id));
   const canPick = pickable(repo);
   const state = stateOf(repo);
   return (
@@ -44,6 +45,11 @@ const TreeItem = memo(function TreeItem({ repo }: { repo: Repo }) {
       )}
       <span className="glyph">{GLYPH[state]}</span>
       <span className="tree-name">{repo.name}</span>
+      {favorite && (
+        <span className="tree-star" title="A favorite">
+          ★
+        </span>
+      )}
       {repo.host && <span className="host-tag">{repo.host}</span>}
       {repo.archived && (
         <span className="host-tag archived" title={repo.archived === "github" ? "archived on GitHub" : "archived in canopy"}>
@@ -106,7 +112,13 @@ export function Sidebar({ drawer = false }: { drawer?: boolean }) {
 
   // the same `at` the grid groups by, so a heading means the same in both
   const groups = useMemo(
-    () => groupRepos(repos, sort, undefined, many && cards.length > 0 ? boardChangedAt(useStore.getState()) : undefined),
+    () => groupRepos(
+        repos,
+        sort,
+        undefined,
+        many && cards.length > 0 ? boardChangedAt(useStore.getState()) : undefined,
+        many && cards.length > 0 ? boardFavorite(useStore.getState()) : undefined,
+      ),
     [repos, cards, many, sort],
   );
 

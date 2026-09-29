@@ -2,12 +2,15 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import {
   PANEL_TERM,
   agentFor,
+  activeFilterCount,
   archivedCount,
   cardOf,
   changed,
   closedIn,
   closedSectionsOf,
   connOf,
+  favoriteCount,
+  isFavorite,
   isOnline,
   layoutOf,
   multi,
@@ -759,6 +762,29 @@ describe("cards over several backends", () => {
     useStore.setState((s) => ({ settings: { ...s.settings, hideArchived: false } }));
     expect(ids()).toEqual(["x", "old", "gh"]);
     expect(archivedCount(useStore.getState())).toBe(2);
+  });
+
+  test("favorites only leaves the starred cards, counts as a filter, and clears with the rest", () => {
+    useStore.setState({ repos: [repo("x"), repo("fav", { favorite: true })] });
+    const ids = () => visibleRepos(useStore.getState()).map((r) => r.id);
+    expect(favoriteCount(useStore.getState())).toBe(1);
+    useStore.getState().setFavoritesOnly(true);
+    expect(ids()).toEqual(["fav"]);
+    expect(activeFilterCount(useStore.getState())).toBe(1);
+    useStore.getState().clearFilters();
+    expect(useStore.getState().favoritesOnly).toBe(false);
+    expect(ids()).toEqual(["x", "fav"]);
+  });
+
+  test("a card is a favorite when any of its checkouts is starred", () => {
+    two();
+    useStore.setState((s) => ({ repos: s.repos.map((r) => (r.id === "b|proj" ? { ...r, favorite: true as const } : r)) }));
+    const s = useStore.getState();
+    expect(isFavorite(s, "proj")).toBe(true);
+    expect(isFavorite(s, "other")).toBe(false);
+    expect(favoriteCount(s)).toBe(1);
+    useStore.getState().setFavoritesOnly(true);
+    expect(visibleCards(useStore.getState()).map((c) => c.checkouts.map((r) => r.id))).toEqual([["proj", "b|proj"]]);
   });
 
   test("switchCheckout swaps the panel in place and leads the card with it", () => {

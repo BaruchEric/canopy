@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useShallow } from "zustand/react/shallow";
 import { countFacets, FILTER_INFO, REPO_FILTERS } from "../filters";
-import { activeFilterCount, archivedCount, scopedRepos, useStore } from "../store";
+import { activeFilterCount, archivedCount, favoriteCount, scopedRepos, useStore } from "../store";
 import { useFitPop } from "../pop";
 
 /** Toggleable facet chips behind one pill. The pill counts what is lit so a
@@ -15,6 +15,9 @@ export function FilterMenu() {
   const clearFilters = useStore((s) => s.clearFilters);
   const active = useStore(activeFilterCount);
   const archived = useStore(archivedCount);
+  const favorites = useStore(favoriteCount);
+  const favoritesOnly = useStore((s) => s.favoritesOnly);
+  const setFavoritesOnly = useStore((s) => s.setFavoritesOnly);
   const hideArchived = useStore((s) => s.settings.hideArchived);
   const setSetting = useStore((s) => s.setSetting);
   const [open, setOpen] = useState(false);
@@ -98,6 +101,21 @@ export function FilterMenu() {
             <p className="settings-hint">
               Lit chips add up: a repo shows when it matches any of them.
             </p>
+          </section>
+          <section className="settings-row">
+            <h3 className="panel-label">favorites</h3>
+            <div className="chips" role="group" aria-label="Favorite repos">
+              <button
+                type="button"
+                className={favoritesOnly ? "chip on" : "chip"}
+                aria-pressed={favoritesOnly}
+                title="Only the repos starred from a card (*)"
+                onClick={() => setFavoritesOnly(!favoritesOnly)}
+              >
+                ★ favorites only
+                <span className="chip-n">{favorites}</span>
+              </button>
+            </div>
           </section>
           <section className="settings-row">
             <h3 className="panel-label">archived</h3>

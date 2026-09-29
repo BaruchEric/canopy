@@ -32,6 +32,7 @@ const defaults = (): CanopyConfig => ({
   agents: {},
   launchers: {},
   archived: [],
+  favorites: [],
   fetch: true,
   keepShells: false,
   tailchanNotify: false,
@@ -92,6 +93,10 @@ const configPath = (): string => join(configDir(), "config.json");
 
 /** Merge over defaults, repairing fields whose type is wrong — a hand-edited
  *  `"workspaces": null` survives a plain spread and throws on every read. */
+/** A list of repo paths as saved: strings only, none empty, each once. */
+const paths = (v: unknown): string[] =>
+  Array.isArray(v) ? v.filter((p, i, all): p is string => typeof p === "string" && p !== "" && all.indexOf(p) === i) : [];
+
 function normalize(parsed: Partial<CanopyConfig>): CanopyConfig {
   const base = defaults();
   const cfg = { ...base, ...parsed };
@@ -110,9 +115,8 @@ function normalize(parsed: Partial<CanopyConfig>): CanopyConfig {
     ),
     agents: normalizeAgents(cfg.agents),
     launchers: normalizeLaunchers(cfg.launchers),
-    archived: Array.isArray(cfg.archived)
-      ? cfg.archived.filter((p, i, all): p is string => typeof p === "string" && p !== "" && all.indexOf(p) === i)
-      : [],
+    archived: paths(cfg.archived),
+    favorites: paths(cfg.favorites),
     fetch: typeof cfg.fetch === "boolean" ? cfg.fetch : base.fetch,
     keepShells: typeof cfg.keepShells === "boolean" ? cfg.keepShells : base.keepShells,
     tailchanNotify: typeof cfg.tailchanNotify === "boolean" ? cfg.tailchanNotify : base.tailchanNotify,
@@ -260,7 +264,7 @@ export async function setAgent(
   });
 }
 
-/* ---------- archived repos ---------- */
+/* ---------- archived and favorite repos ---------- */
 
 /** Archives or restores a repo by path. Returns every archived path. */
 export async function setArchived(path: string, on: boolean): Promise<string[]> {
@@ -268,6 +272,15 @@ export async function setArchived(path: string, on: boolean): Promise<string[]> 
     const rest = cfg.archived.filter((p) => p !== path);
     cfg.archived = on ? [...rest, path] : rest;
     return cfg.archived;
+  });
+}
+
+/** Stars or unstars a repo by path. Returns every favorite path. */
+export async function setFavorite(path: string, on: boolean): Promise<string[]> {
+  return withConfig((cfg) => {
+    const rest = cfg.favorites.filter((p) => p !== path);
+    cfg.favorites = on ? [...rest, path] : rest;
+    return cfg.favorites;
   });
 }
 

@@ -4,7 +4,7 @@ import { backendOf, homeName, isHome, plainOf, qual, registry, setBase, setRegis
 import { backendState, RETRY_FIRST, retryWait, sliceIn, split, type BackendStatus, type Reg } from "./backends";
 import { mergeHistory } from "./qualify";
 import { applyQuery, type RepoFilter } from "./filters";
-import { cardChangedAt, joinRepos, leadOf, type RepoCard } from "./checkouts";
+import { cardChangedAt, cardFavorite, joinRepos, leadOf, type RepoCard } from "./checkouts";
 import { changedAt } from "./grouping";
 import { focusPanel, nextActive } from "./dock";
 import { heldShellUrl, openElsewhere, openShellElsewhere, parseRoute, soloUrl } from "./routes";
@@ -524,6 +524,8 @@ interface CanopyState {
   loadError: string | null;
   filter: string;
   dirtyOnly: boolean;
+  /** leaves only the starred repos on the board */
+  favoritesOnly: boolean;
   /** lit status facets; a repo shows when it matches any of them */
   filters: RepoFilter[];
   /** lit git identities, as userKey strings (NOBODY for repos with none) */
@@ -662,10 +664,11 @@ interface CanopyState {
   loadHistory: (refresh?: boolean, backend?: string) => Promise<void>;
   setFilter: (f: string) => void;
   setDirtyOnly: (v: boolean) => void;
+  setFavoritesOnly: (v: boolean) => void;
   toggleFilter: (f: RepoFilter) => void;
   toggleUser: (key: string) => void;
-  /** turns every facet and identity chip off; the text and the attention
-   *  toggle have their own ways back */
+  /** turns every facet and identity chip off, and favorites only; the text
+   *  and the attention toggle have their own ways back */
   clearFilters: () => void;
   setActiveWs: (name: string | null) => void;
   /** opens a repo's panel in the dock, or brings its tab forward */
@@ -746,6 +749,9 @@ interface CanopyState {
   setAgent: (repoId: string, settings: AgentSettings) => Promise<void>;
   /** archives a repo in canopy, or brings it back */
   archiveRepo: (repoId: string, archived: boolean) => Promise<void>;
+  /** stars a repo in canopy; unstarring takes the star off every checkout
+   *  of its card, since the card shows one star for them all */
+  favoriteRepo: (repoId: string, favorite: boolean) => Promise<void>;
   /** opens the repo's launch settings */
   editLaunch: (repoId: string) => void;
   setLaunch: (repoId: string, settings: LaunchSettings) => Promise<void>;
@@ -1094,6 +1100,7 @@ export const useStore = create<CanopyState>((set, get) => ({
   loadError: null,
   filter: "",
   dirtyOnly: false,
+  favoritesOnly: false,
   filters: [],
   users: [],
   activeWs: null,
@@ -1576,6 +1583,7 @@ export const useStore = create<CanopyState>((set, get) => ({
 
   setFilter: (filter) => set({ filter }),
   setDirtyOnly: (dirtyOnly) => set({ dirtyOnly }),
+  setFavoritesOnly: (favoritesOnly) => set({ favoritesOnly }),
   toggleFilter: (f) =>
     set((s) => ({
       filters: s.filters.includes(f)
@@ -1588,7 +1596,7 @@ export const useStore = create<CanopyState>((set, get) => ({
         ? s.users.filter((x) => x !== key)
         : [...s.users, key],
     })),
-  clearFilters: () => set({ filters: [], users: [] }),
+  clearFilters: () => set({ filters: [], users: [], favoritesOnly: false }),
   setActiveWs: (activeWs) => set({ activeWs }),
 
   openPanel: (id) =>
@@ -1995,6 +2003,15 @@ export const useStore = create<CanopyState>((set, get) => ({
     const repo = await api.archive(repoId, archived);
     get().applyEvent({ type: "repo", repo }, backendOf(repoId));
   },
+  favoriteRepo: async (repoId, favorite) => {
+    const ids = favorite
+      ? [repoId]
+      : (cardOf(get(), repoId)?.checkouts.filter((r) => r.favorite).map((r) => r.id) ?? [repoId]);
+    for (const id of ids) {
+      const repo = await api.favorite(id, favorite);
+      get().applyEvent({ type: "repo", repo }, backendOf(id));
+    }
+  },
   editLaunch: (repoId) => set({ sheet: { kind: "launch", repoId } }),
   setLaunch: async (repoId, settings) => {
     const launchers = await api.setLaunch(repoId, settings);
@@ -2115,8 +2132,15 @@ export const useStore = create<CanopyState>((set, get) => ({
       if (extend && s.selectAnchor && s.selectAnchor !== repoId) {
         // the range takes the anchor's state, so a shift-click after an
         // unpick clears the stretch and one after a pick fills it
-        const at = multi(s) ? boardChangedAt(s) : undefined;
-        const ids = rangeIds(boardOrder(visibleRepos(s), s.settings.sort, s.collapsed, at), s.selectAnchor, repoId);
+        const many = multi(s);
+        const order = boardOrder(
+          visibleRepos(s),
+          s.settings.sort,
+          s.collapsed,
+          many ? boardChangedAt(s) : undefined,
+          many ? boardFavorite(s) : undefined,
+        );
+        const ids = rangeIds(order, s.selectAnchor, repoId);
         return { selected: setPick(s.selected, ids, s.selected.includes(s.selectAnchor)) };
       }
       return { selected: togglePick(s.selected, [repoId]), selectAnchor: repoId };
@@ -2368,7 +2392,8 @@ export function cardOf(s: CanopyState, repoId: string): RepoCard | undefined {
   return cardIndex.get(repoId);
 }
 
-let viewIn: { cards: RepoCard[]; filters: unknown; users: unknown; attention: boolean; text: string } | null = null;
+let viewIn: { cards: RepoCard[]; filters: unknown; users: unknown; attention: boolean; favorites: boolean; text: string } | null =
+  null;
 let viewOut: RepoCard[] = [];
 
 /** The cards the filters leave: a card is in view when any of its
@@ -2376,10 +2401,18 @@ let viewOut: RepoCard[] = [];
 export function visibleCards(s: CanopyState): RepoCard[] {
   const cards = allCards(s);
   const v = viewIn;
-  if (v && v.cards === cards && v.filters === s.filters && v.users === s.users && v.attention === s.dirtyOnly && v.text === s.filter)
+  if (
+    v &&
+    v.cards === cards &&
+    v.filters === s.filters &&
+    v.users === s.users &&
+    v.attention === s.dirtyOnly &&
+    v.favorites === s.favoritesOnly &&
+    v.text === s.filter
+  )
     return viewOut;
-  const q = { filters: s.filters, users: s.users, attention: s.dirtyOnly, text: s.filter };
-  viewIn = { cards, filters: s.filters, users: s.users, attention: s.dirtyOnly, text: s.filter };
+  const q = { filters: s.filters, users: s.users, attention: s.dirtyOnly, favorites: s.favoritesOnly, text: s.filter };
+  viewIn = { cards, filters: s.filters, users: s.users, attention: s.dirtyOnly, favorites: s.favoritesOnly, text: s.filter };
   viewOut = same(viewOut, cards.filter((card) => applyQuery(card.checkouts, q, plainOf).length > 0));
   return viewOut;
 }
@@ -2412,6 +2445,27 @@ export function boardChangedAt(s: CanopyState): (r: Repo) => number {
   };
 }
 
+/** Whether a repo is starred, for the board's grouping: whether any
+ *  checkout on its card is, which is its own star with one backend. */
+export function boardFavorite(s: CanopyState): (r: Repo) => boolean {
+  return (r) => {
+    const card = cardOf(s, r.id);
+    return card ? cardFavorite(card) : r.favorite === true;
+  };
+}
+
+/** Whether the card a repo is on is starred; a boolean, so a selector over
+ *  it settles. */
+export function isFavorite(s: CanopyState, repoId: string): boolean {
+  const card = cardOf(s, repoId);
+  return card ? cardFavorite(card) : s.repos.some((r) => r.id === repoId && r.favorite === true);
+}
+
+/** how many cards in the workspace are starred */
+export function favoriteCount(s: CanopyState): number {
+  return allCards(s).filter(cardFavorite).length;
+}
+
 /** how many repos the "needs attention" toggle would keep */
 export function attentionCount(s: CanopyState): number {
   return scopedRepos(s).filter(needsAttention).length;
@@ -2419,7 +2473,7 @@ export function attentionCount(s: CanopyState): number {
 
 /** how many chips the filter menu has lit */
 export function activeFilterCount(s: CanopyState): number {
-  return s.filters.length + s.users.length;
+  return s.filters.length + s.users.length + (s.favoritesOnly ? 1 : 0);
 }
 
 

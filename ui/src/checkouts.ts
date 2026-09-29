@@ -87,4 +87,6 @@ export function leadOf(
 }
 
 /** When anything on the card last changed: its newest checkout's change. */
+/** A card is a favorite when any of its checkouts is starred. */
+export const cardFavorite = (card: RepoCard): boolean => card.checkouts.some((r) => r.favorite === true);
 export const cardChangedAt = (card: RepoCard): number => Math.max(0, ...card.checkouts.map(changedAt));

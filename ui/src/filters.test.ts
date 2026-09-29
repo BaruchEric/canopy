@@ -72,6 +72,13 @@ describe("applyQuery", () => {
       .toEqual(["detached", "broken"]);
   });
 
+  test("favorites only keeps the starred repos and narrows the other dimensions", () => {
+    const starred = grove.map((r, i) => (i < 2 ? { ...r, favorite: true as const } : r));
+    const kept = applyQuery(starred, { ...none, favorites: true });
+    expect(names(kept)).toEqual(names(grove.slice(0, 2)));
+    expect(applyQuery(starred, { ...none, favorites: false })).toHaveLength(grove.length);
+  });
+
   test("dimensions narrow each other", () => {
     expect(
       names(

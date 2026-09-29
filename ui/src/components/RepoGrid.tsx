@@ -8,6 +8,7 @@ import { pickCount, pickState } from "../select";
 import {
   activeFlowFor,
   boardChangedAt,
+  boardFavorite,
   cardOf,
   flowFor,
   isOnline,
@@ -23,6 +24,7 @@ import { ago, GLYPH, stateOf } from "../util";
 import { GroupHead } from "./GroupHead";
 import { Tick } from "./SelectBar";
 import { RepoLink } from "./RepoLink";
+import { Star } from "./Star";
 import { RepoMenu } from "./RepoMenu";
 import { Rings } from "./Rings";
 import { FlowChip, RunChip } from "./RunChip";
@@ -204,6 +206,7 @@ const RepoCard = memo(function RepoCard({ repo, i }: { repo: Repo; i: number }) 
         )}
         <span className="glyph">{GLYPH[state]}</span>
         <span className="card-name">{repo.name}</span>
+        <Star repoId={repo.id} name={repo.name} onError={setMenuErr} />
         {repo.host && (
           <span className="host-tag" title={`on ${repo.host}, over ssh`}>
             {repo.host}
@@ -317,7 +320,13 @@ export function RepoGrid() {
   const toggleGroup = useStore((s) => s.toggleGroup);
   const selecting = useStore((s) => s.selecting);
   const groups = useMemo(
-    () => groupRepos(repos, sort, undefined, many && cards.length > 0 ? boardChangedAt(useStore.getState()) : undefined),
+    () => groupRepos(
+        repos,
+        sort,
+        undefined,
+        many && cards.length > 0 ? boardChangedAt(useStore.getState()) : undefined,
+        many && cards.length > 0 ? boardFavorite(useStore.getState()) : undefined,
+      ),
     [repos, cards, many, sort],
   );
 

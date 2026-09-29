@@ -29,6 +29,7 @@ export const SORT_MODES = [
   "activity",
   "name",
   "user",
+  "favorites",
 ] as const;
 export type SortMode = (typeof SORT_MODES)[number];
 

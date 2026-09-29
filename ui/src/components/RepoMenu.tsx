@@ -7,7 +7,7 @@ import { describeAgent } from "../../../src/core/agent";
 import { describeLaunch } from "../../../src/core/launch";
 import { flowWord } from "../flows";
 import { useShallow } from "zustand/react/shallow";
-import { activeFlowFor, activeRunFor, agentFor, capsFor, connOf, launchFor, useStore } from "../store";
+import { activeFlowFor, activeRunFor, agentFor, capsFor, connOf, isFavorite, launchFor, useStore } from "../store";
 import { backendOf } from "../registry";
 import {
   CLAUDE_OPENERS,
@@ -71,6 +71,8 @@ export function RepoMenu({
   const activeFlow = useStore((s) => activeFlowFor(s, repo.id));
   const showFlow = useStore((s) => s.showFlow);
   const archiveRepo = useStore((s) => s.archiveRepo);
+  const favoriteRepo = useStore((s) => s.favoriteRepo);
+  const favorite = useStore((s) => isFavorite(s, repo.id));
   const hideArchived = useStore((s) => s.settings.hideArchived);
   const [open, setOpen] = useState(false);
   const [copied, setCopied] = useState(false);
@@ -179,6 +181,17 @@ export function RepoMenu({
     setOpen(false);
     try {
       await archiveRepo(repo.id, repo.archived !== "canopy");
+    } catch (err) {
+      const msg = String(err instanceof Error ? err.message : err);
+      if (onError) onError(msg);
+      else console.error(msg);
+    }
+  };
+
+  const star = async () => {
+    setOpen(false);
+    try {
+      await favoriteRepo(repo.id, !favorite);
     } catch (err) {
       const msg = String(err instanceof Error ? err.message : err);
       if (onError) onError(msg);
@@ -531,6 +544,20 @@ export function RepoMenu({
               </>
             )}
             <div className="menu-label">in canopy</div>
+            <button
+              type="button"
+              role="menuitem"
+              className="menu-item"
+              title={
+                favorite
+                  ? "Take the star off; the favorites filter and grouping leave it out again"
+                  : "Star this repo; the filters menu can show favorites only, and the ★ grouping puts them first"
+              }
+              onClick={() => void star()}
+            >
+              <span className="menu-text">{favorite ? "unstar" : "star"}</span>
+              <span className="menu-fact">{favorite ? "★ favorite" : "☆"}</span>
+            </button>
             <button
               type="button"
               role="menuitem"

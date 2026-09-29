@@ -614,6 +614,15 @@ export const api = {
     });
     return from(b, got, qRepo);
   },
+  /** stars a repo in canopy, or takes the star off; answers the repo */
+  favorite: async (id: string, favorite: boolean) => {
+    const [b, plain] = on(id);
+    const got = await req<Repo>(b, `/api/repos/favorite?${rq(plain)}`, {
+      method: "POST",
+      body: JSON.stringify({ favorite }),
+    });
+    return from(b, got, qRepo);
+  },
   /** the backends this page may talk to, as its home backend's config names them */
   backends: () => req<{ self: string | null; backends: BackendEntry[] }>(homeName(), "/api/backends"),
   workspaces: () => req<Workspace[]>(homeName(), "/api/workspaces"),
