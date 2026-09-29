@@ -104,6 +104,8 @@ describe.skipIf(!tmux)("keep running", () => {
     const file = JSON.parse(await readFile(join(repo, ".canopy/tasks.json"), "utf8")) as { name: string }[];
     expect(file.map((t) => t.name)).toContain("extra");
     expect((await post("/api/repos/tasks/def?id=app", { name: "x", def: { name: "x", cmd: "a", cwd: "../out" }, target: "canopy" })).status).toBe(400);
+    expect((await post("/api/repos/tasks/def?id=app", { name: "x", def: ["a"], target: "canopy" })).status).toBe(400);
+    expect((await post("/api/repos/tasks/def?id=app", { name: "x", def: "a", target: "canopy" })).status).toBe(400);
   });
 
   test("after a restart, a keep task that was meant to run comes back", async () => {
@@ -122,5 +124,19 @@ describe.skipIf(!tmux)("keep running", () => {
     await Bun.sleep(600);
     server = await again();
     await until(async () => (await task("clean")).restarts >= 1, "clean to be restarted");
+  });
+
+  test("a keep task that exited 0 stays down after tmux and canopy restart", async () => {
+    await def("clean", { cmd: "echo done; exit 0", keep: true });
+    await post("/api/repos/tasks?id=app", { action: "stop", name: "clean" });
+    expect((await post("/api/repos/tasks?id=app", { action: "start", name: "clean" })).status).toBe(200);
+    await until(async () => (await task("clean")).status === "exited", "clean to finish");
+    server.stop();
+    await killServer(tmuxBase()!);
+    server = await again();
+    await Bun.sleep(600);
+    const t = await task("clean");
+    expect(t.status).toBe("exited");
+    expect(t.live).toBe(false);
   });
 });

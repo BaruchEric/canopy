@@ -65,6 +65,8 @@ export class TaskHub {
   private locks = new Map<string, Promise<unknown>>();
   private timers: ReturnType<typeof setInterval>[] = [];
   private ticking: Promise<void> | null = null;
+  /** set by stop(): nothing armed after it may launch */
+  private stopped = false;
 
   constructor(private readonly deps: TaskHubDeps) {
     this.t = { ...TASK_TIMINGS, ...deps.timings };
@@ -93,6 +95,7 @@ export class TaskHub {
     for (const t of this.timers) clearInterval(t);
     for (const r of this.rt.values()) if (r.timer) clearTimeout(r.timer);
     this.timers = [];
+    this.stopped = true;
   }
 
   /** one tick at a time, never stacked */
@@ -274,6 +277,10 @@ export class TaskHub {
         const id = taskTermId(repo.path, def.name);
         await this.lock(id, async () => {
           if (this.running(id) || this.rt.get(id)?.gaveUp) return;
+          const rt = this.runtime(id);
+          if (rt.timer) clearTimeout(rt.timer);
+          rt.retryAt = undefined;
+          rt.timer = undefined;
           await this.launch(repo, def);
         }).catch((err) => console.error(`task ${def.name}: ${err instanceof Error ? err.message : err}`));
       }
@@ -365,10 +372,13 @@ export class TaskHub {
     if (rec.want !== "running" || code === 0) return;
     const repo = this.deps.repos().find((r) => r.path === rec.path);
     if (!repo) return;
-    void this.defsOf(repo, false).then(({ merged }) => {
+    void this.defsOf(repo, false)
+      .then(({ merged }) => {
+      if (this.stopped) return;
       const def = merged.find((m) => m.name === rec.name);
       if (!def?.keep || def.hidden) return;
       const rt = this.runtime(id);
+      if (rt.timer) clearTimeout(rt.timer);
       rt.fails += 1;
       if (rt.fails >= this.t.giveUp) {
         rt.gaveUp = true;
@@ -382,7 +392,7 @@ export class TaskHub {
         void this.lock(id, async () => {
           rt.retryAt = undefined;
           rt.timer = undefined;
-          if (this.state[id]?.want !== "running" || this.running(id)) return;
+          if (this.stopped || this.state[id]?.want !== "running" || this.running(id)) return;
           await this.launch(repo, def);
           rt.restarts += 1;
         })
@@ -390,7 +400,8 @@ export class TaskHub {
           .finally(() => void this.tell(repo.id));
       }, wait);
       void this.tell(repo.id);
-    });
+      })
+      .catch((err) => console.error(`task ${rec.name}: ${err instanceof Error ? err.message : err}`));
   }
 
   /** stores one task's definition in canopy's layer or rewrites it in the repo file */
@@ -460,6 +471,7 @@ export class TaskHub {
         if (target !== "canopy" && target !== "repo") return json({ error: "target is canopy or repo" }, 400);
         let patch: TaskPatch | null = null;
         if (body?.def !== null && body?.def !== undefined) {
+          if (typeof body.def !== "object" || Array.isArray(body.def)) return json({ error: "def is an object or null" }, 400);
           const p = normalizeTaskPatch({ ...(body.def as object), name: body.name });
           if (typeof p === "string") return json({ error: p }, 400);
           patch = p;
