@@ -448,6 +448,8 @@ export function describeEvent(
     }
     case "peers":
       return [];
+    case "tasks":
+      return [];
     case "chan":
       // a channel line canopy marked silent is a quiet one
       return [{ at, kind: "chan", source: "", text: chanLine(ev.message, prev.chanAs ?? ""), quiet: ev.message.meta["silent"] === true }];

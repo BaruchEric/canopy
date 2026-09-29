@@ -10,6 +10,7 @@ import type {
   RepoHistory,
   Run,
   ScanResult,
+  TaskInfo,
   ServerEvent,
   SourceState,
   TermInfo,
@@ -59,6 +60,7 @@ export const qFleet = (q: Q, f: Fleet): Fleet => ({
   })),
 });
 
+export const qTask = (q: Q, t: TaskInfo): TaskInfo => ({ ...t, repoId: q(t.repoId), termId: q(t.termId) });
 export const qJob = (q: Q, j: Job): Job => ({ ...j, id: q(j.id), repoId: q(j.repoId) });
 
 export const qTerm = (q: Q, t: TermInfo): TermInfo => ({ ...t, id: q(t.id), repoId: q(t.repoId) });
@@ -101,6 +103,8 @@ export function qEvent(q: Q, ev: ServerEvent): ServerEvent {
       return { ...ev, devices: ev.devices.map((d) => qDevice(q, d)) };
     case "kept":
       return { ...ev, kept: ev.kept.map((k) => qKept(q, k)) };
+    case "tasks":
+      return { ...ev, repoId: q(ev.repoId), tasks: ev.tasks.map((t) => qTask(q, t)) };
     case "workspaces":
     case "agents":
     case "launchers":

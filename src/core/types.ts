@@ -381,6 +381,8 @@ export interface CanopyConfig {
   agents: Record<string, AgentSettings>;
   /** how a repo's builds are made and run, keyed like agents */
   launchers: Record<string, LaunchSettings>;
+  /** per-machine task overrides by repo path (core/tasks) */
+  tasks: Record<string, TaskPatch[]>;
   /** the repos archived in canopy, by path like agents */
   archived: string[];
   /** whether the server fetches the user's own local repos in the background
@@ -758,6 +760,8 @@ export type ServerEvent =
    *  changes: one is kept, restored or forgotten */
   | { type: "kept"; kept: KeptShell[] }
   | { type: "peers"; seen: PeerSeen[] }
+  /** a repo's tasks, whenever one starts, stops, dies, is edited or a viewer comes or goes */
+  | { type: "tasks"; repoId: string; tasks: TaskInfo[] }
   /** a tailchan message the UI's handle heard, or one the UI just sent */
   | { type: "chan"; message: ChanMessage };
 
@@ -1113,6 +1117,101 @@ export interface TermInfo {
   /** the tailchan handle the shell runs under, for one started while the
    *  backend knew a broker */
   handle?: string;
+  /** the task this session runs, for a task's session; never set on a shell */
+  task?: string;
+}
+
+/* ---------- tasks: a repo's named processes (core/tasks, server/tasks) ---------- */
+
+/** which layer last said something about a task */
+export type TaskSource = "detected" | "repo" | "canopy";
+
+export type TaskStatus = "idle" | "running" | "exited" | "failed" | "backoff" | "gave-up";
+
+export interface TaskFlags {
+  /** the task the preview pairs with; one per repo */
+  dev?: boolean;
+  /** restarted when it fails and after the backend comes back */
+  keep?: boolean;
+  /** started when the repo's panel opens */
+  withPanel?: boolean;
+  /** left out of the list (a detected task you do not want) */
+  hidden?: boolean;
+}
+
+/** a whole task, as detection or a merge produces it */
+export interface TaskDef extends TaskFlags {
+  name: string;
+  /** one shell line, run from the repo root or `cwd` */
+  cmd: string;
+  /** relative to the repo root, never outside it */
+  cwd?: string;
+}
+
+/** what one layer says about a task: a repo file or canopy's config may set
+ *  only some fields of a task another layer defined */
+export interface TaskPatch extends TaskFlags {
+  name: string;
+  cmd?: string;
+  cwd?: string;
+}
+
+/** one task as the browser reads it: its merged definition and what it is doing */
+export interface TaskInfo extends TaskDef {
+  repoId: string;
+  source: TaskSource;
+  /** auto flags a repo file asked for that were not applied, since the repo is not the user's */
+  suggested?: { keep?: true; withPanel?: true };
+  /** the tmux session's id, 32 hex digits; the shell socket joins it */
+  termId: string;
+  status: TaskStatus;
+  /** a session is there to join (running, or a dead pane not yet reaped) */
+  live: boolean;
+  startedAt?: number;
+  exitedAt?: number;
+  exitCode?: number | null;
+  /** when a keep task is due to be started again */
+  retryAt?: number;
+  /** restarts by keep running since the last manual start */
+  restarts: number;
+  viewers: string[];
+  /** a task still running whose definition or repo is gone */
+  gone?: "definition" | "repo";
+}
+
+export interface TasksResult {
+  tasks: TaskInfo[];
+  /** what was wrong with `.canopy/tasks.json` or the merge */
+  errors: string[];
+}
+
+export type TaskAction = "start" | "stop" | "restart";
+
+/** what `tasks/state.json` keeps per task, by termId */
+export interface TaskRecord {
+  repoId: string;
+  path: string;
+  name: string;
+  want: "running" | "stopped";
+  startedAt?: number;
+  exitedAt?: number;
+  exitCode?: number | null;
+}
+
+export interface TaskLogLine {
+  /** the line's number across the old and current log, from 1 */
+  n: number;
+  text: string;
+  /** when the run this line belongs to started, ms; null before any marker */
+  at: number | null;
+  /** a start marker line */
+  mark?: true;
+}
+
+export interface TaskLogPage {
+  lines: TaskLogLine[];
+  /** earlier lines match too */
+  more: boolean;
 }
 
 /** One Claude Code conversation started at a repo on the backend, which a

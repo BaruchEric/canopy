@@ -31,6 +31,7 @@ const defaults = (): CanopyConfig => ({
   historyBin: null,
   agents: {},
   launchers: {},
+  tasks: {},
   archived: [],
   fetch: true,
   keepShells: false,
@@ -110,6 +111,7 @@ function normalize(parsed: Partial<CanopyConfig>): CanopyConfig {
     ),
     agents: normalizeAgents(cfg.agents),
     launchers: normalizeLaunchers(cfg.launchers),
+    tasks: {},
     archived: Array.isArray(cfg.archived)
       ? cfg.archived.filter((p, i, all): p is string => typeof p === "string" && p !== "" && all.indexOf(p) === i)
       : [],
