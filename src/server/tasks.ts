@@ -5,11 +5,13 @@
  * named like a shell, so the terminal socket joins it with `attach=1`;
  * the shell lists pass over it by its `task` tag.
  */
+import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { join } from "node:path";
 import { interruptTask, listTaskPanes, logPath, readLog, readTaskFiles, readTaskState, startTaskSession, taskTermId, writeTaskState, appendMark } from "../core/taskrun";
-import { detectTasks, logPage, mergeTasks, parseTaskFile, TASK_TIMINGS, taskStatus, isTaskName, type MergedTask, type TaskTimings } from "../core/tasks";
+import { detectTasks, logPage, mergeTasks, nextDelay, normalizeTaskPatch, parseTaskFile, TASK_TIMINGS, taskStatus, isTaskName, type MergedTask, type TaskTimings } from "../core/tasks";
 import { killSession, type TaskPane } from "../core/tmux";
-import { loadConfig, tasksFor } from "../core/store";
-import type { Repo, ServerEvent, TaskAction, TaskInfo, TaskRecord, TasksResult, TermInfo } from "../core/types";
+import { loadConfig, setTask, tasksFor } from "../core/store";
+import type { Repo, ServerEvent, TaskAction, TaskPatch, TaskInfo, TaskRecord, TasksResult, TermInfo } from "../core/types";
 
 export interface TaskHubDeps {
   /** canopy's tmux argv front; null means no tasks on this backend */
@@ -72,6 +74,18 @@ export class TaskHub {
     if (!this.deps.tmux) return;
     this.state = await readTaskState();
     await this.tick();
+    // A keep task that was meant to run and has no session (the machine
+    // went down, or tmux did) starts again. One that died while canopy was
+    // down was caught by the tick above, through onDeath.
+    for (const [id, rec] of Object.entries(this.state)) {
+      // a clean exit stays down, as it does while canopy is up
+      if (rec.want !== "running" || rec.exitCode === 0 || this.panes.has(id)) continue;
+      const repo = this.deps.repos().find((r) => r.path === rec.path);
+      if (!repo) continue;
+      const def = (await this.defsOf(repo, true)).merged.find((m) => m.name === rec.name);
+      if (!def?.keep || def.hidden) continue;
+      await this.lock(id, () => this.launch(repo, def)).catch((err) => console.error(`task ${def.name}: ${err instanceof Error ? err.message : err}`));
+    }
     this.timers.push(setInterval(() => void this.poke(), this.t.tick));
   }
 
@@ -343,8 +357,66 @@ export class TaskHub {
     }
   }
 
-  /** what a death means for keep running; Task 7 fills this in */
-  private onDeath(_id: string, _rec: TaskRecord, _code: number | null): void {}
+  /** A death under keep running: a restart after the backoff, or giving up
+   *  after too many in a row. A clean exit, a stopped task and a task with
+   *  no keep flag stay down. A pane killed by a signal has no code and counts
+   *  as a failure. */
+  private onDeath(id: string, rec: TaskRecord, code: number | null): void {
+    if (rec.want !== "running" || code === 0) return;
+    const repo = this.deps.repos().find((r) => r.path === rec.path);
+    if (!repo) return;
+    void this.defsOf(repo, false).then(({ merged }) => {
+      const def = merged.find((m) => m.name === rec.name);
+      if (!def?.keep || def.hidden) return;
+      const rt = this.runtime(id);
+      rt.fails += 1;
+      if (rt.fails >= this.t.giveUp) {
+        rt.gaveUp = true;
+        this.deps.gaveUp(repo.name, def.name);
+        void this.tell(repo.id);
+        return;
+      }
+      const wait = nextDelay(rt.fails, this.t.backoff, this.t.backoffCap);
+      rt.retryAt = Date.now() + wait;
+      rt.timer = setTimeout(() => {
+        void this.lock(id, async () => {
+          rt.retryAt = undefined;
+          rt.timer = undefined;
+          if (this.state[id]?.want !== "running" || this.running(id)) return;
+          await this.launch(repo, def);
+          rt.restarts += 1;
+        })
+          .catch((err) => console.error(`task ${def.name}: ${err instanceof Error ? err.message : err}`))
+          .finally(() => void this.tell(repo.id));
+      }, wait);
+      void this.tell(repo.id);
+    });
+  }
+
+  /** stores one task's definition in canopy's layer or rewrites it in the repo file */
+  private async setDef(repo: Repo, name: string, patch: TaskPatch | null, target: "canopy" | "repo"): Promise<void> {
+    if (target === "canopy") {
+      await setTask(repo.path, name, patch);
+    } else {
+      if (repo.host) throw new TaskError(400, "the repo file can only be written for a repo on this machine");
+      const file = join(repo.path, ".canopy", "tasks.json");
+      let list: TaskPatch[] = [];
+      try {
+        const parsed = parseTaskFile(await readFile(file, "utf8"));
+        if (parsed.errors.length) throw new TaskError(409, `fix .canopy/tasks.json first: ${parsed.errors[0]}`);
+        list = parsed.patches;
+      } catch (err) {
+        if (err instanceof TaskError) throw err;
+        // no file yet
+      }
+      list = list.filter((t) => t.name !== name);
+      if (patch) list.push(patch);
+      await mkdir(join(repo.path, ".canopy"), { recursive: true });
+      await writeFile(file, JSON.stringify(list, null, 2) + "\n");
+    }
+    this.defs.delete(repo.path);
+    await this.tell(repo.id);
+  }
 
   /* ---------- routes ---------- */
 
@@ -380,6 +452,20 @@ export class TaskHub {
             ...(Number.isFinite(limit) && limit > 0 ? { limit: Math.min(limit, 2000) } : {}),
           }),
         );
+      }
+      if (path === "/api/repos/tasks/def" && method === "POST") {
+        const body = (await req.json().catch(() => null)) as { name?: unknown; def?: unknown; target?: unknown } | null;
+        if (!isTaskName(body?.name)) return json({ error: "name the task" }, 400);
+        const target = body?.target;
+        if (target !== "canopy" && target !== "repo") return json({ error: "target is canopy or repo" }, 400);
+        let patch: TaskPatch | null = null;
+        if (body?.def !== null && body?.def !== undefined) {
+          const p = normalizeTaskPatch({ ...(body.def as object), name: body.name });
+          if (typeof p === "string") return json({ error: p }, 400);
+          patch = p;
+        }
+        await this.setDef(repo, body.name, patch, target);
+        return json(await this.tasksOf(repo, true));
       }
       return json({ error: "not found" }, 404);
     } catch (err) {

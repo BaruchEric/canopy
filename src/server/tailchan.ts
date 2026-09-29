@@ -84,6 +84,11 @@ export class ChanHub {
     this.say(fleetNotice(fleet, prev));
   }
 
+  /** keep running gave up on a task: a DM, since someone has to look */
+  onTaskGaveUp(repo: string, task: string): void {
+    this.say({ to: "human", text: `${repo}: task ${task} keeps failing; canopy stopped restarting it` });
+  }
+
   /** a dismissed run, flow or fleet leaves the maps */
   forget(id: string): void {
     this.runs.delete(id);

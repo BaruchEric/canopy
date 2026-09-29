@@ -2448,7 +2448,7 @@ export async function startServer(opts: {
         if (!state.terms.has(info.id)) state.terms.set(info.id, { info, pty: null, sockets: new Set() });
       },
       broadcast: (ev) => broadcast(state, ev),
-      gaveUp: () => {},
+      gaveUp: (repo, task) => state.chan.onTaskGaveUp(repo, task),
       ...(opts.tasks ? { timings: opts.tasks } : {}),
     }),
     pulls: new Map(),
