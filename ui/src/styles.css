@@ -5203,6 +5203,8 @@ button.machine:hover {
   margin: 0;
   padding: 0;
   display: grid;
+  /* a long command must ellipsize, not widen the panel */
+  grid-template-columns: minmax(0, 1fr);
   gap: 2px;
 }
 .task-row {
