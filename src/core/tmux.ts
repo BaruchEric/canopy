@@ -151,7 +151,7 @@ export const snapshotArgs = (base: string[], id: string, lines = HISTORY_LINES):
 
 /** what tmux can say about the pane: the command it is running and its
  *  title, which is what `agentIn` reads to tell an agent shell apart */
-export const PANE_FORMAT = "#{pane_current_command}\t#{pane_title}";
+export const PANE_FORMAT = "#{pane_current_command}\t#{pane_title}\t#{alternate_on}";
 
 export const paneArgs = (base: string[], id: string): string[] => [...base, "display-message", "-p", "-t", sessionName(id), PANE_FORMAT];
 
@@ -418,13 +418,46 @@ export async function history(base: string[], id: string, rows: number, lines = 
   return r.code === 0 ? primeText(r.stdout, rows) : "";
 }
 
+/** what tmux says about a pane: its command, its title, and whether a
+ *  full-screen program has it on the alternate screen */
+export interface PaneInfo {
+  command: string;
+  title: string;
+  fullscreen: boolean;
+}
+
+/** reads one `PANE_FORMAT` line */
+export function parsePane(line: string): PaneInfo {
+  const [command = "", title = "", alt = ""] = line.replace(/\n$/, "").split("\t");
+  return { command, title, fullscreen: alt === "1" };
+}
+
 /** the pane's command and title, null when tmux will not say (the session
  *  or its server is gone) */
-export async function paneInfo(base: string[], id: string): Promise<{ command: string; title: string } | null> {
+export async function paneInfo(base: string[], id: string): Promise<PaneInfo | null> {
   const r = await exec(paneArgs(base, id), { timeoutMs: 10_000 });
-  if (r.code !== 0) return null;
-  const [command = "", title = ""] = r.stdout.replace(/\n$/, "").split("\t");
-  return { command, title };
+  return r.code === 0 ? parsePane(r.stdout) : null;
+}
+
+/** the pane as plain text, for a copy: the history and screen, or the
+ *  screen alone while a full-screen program is up, since what sits above
+ *  its screen then is the shell's from before it started */
+export const textArgs = (base: string[], id: string, fullscreen: boolean, lines = HISTORY_LINES): string[] => [
+  ...base,
+  "capture-pane",
+  "-p",
+  "-J",
+  "-t",
+  sessionName(id),
+  ...(fullscreen ? [] : ["-S", `-${lines}`, "-E", "-"]),
+];
+
+/** the pane's text for a copy, null when tmux will not say */
+export async function paneText(base: string[], id: string): Promise<{ text: string; fullscreen: boolean } | null> {
+  const pane = await paneInfo(base, id);
+  if (!pane) return null;
+  const r = await exec(textArgs(base, id, pane.fullscreen), { timeoutMs: 10_000 });
+  return r.code === 0 ? { text: r.stdout, fullscreen: pane.fullscreen } : null;
 }
 
 /** the session's history and screen as they stand, for the record on disk;

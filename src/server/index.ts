@@ -38,7 +38,7 @@ import { browseLocal, browseRemote, expandHome, SshError } from "../core/browse"
 import { exec, onHost } from "../core/exec";
 import { Flows, type CheckResult } from "../core/flow";
 import { isTermId, parseTermMessage, Scrollback, shellArgs, startTerm, termPlace, termSize, type TermSession, type TermSize } from "../core/term";
-import { attachTmuxTerm, hasSession, history, killSession, listSessions, newSession, paneInfo, sendLine, serverUp, snapshot, tmuxBase } from "../core/tmux";
+import { attachTmuxTerm, hasSession, history, killSession, listSessions, newSession, paneInfo, paneText, sendLine, serverUp, snapshot, tmuxBase } from "../core/tmux";
 import { agentIn, clip, continueLine, countLines, expiredShells, forgetKept, KEEP_EVERY, listKept, lostShells, readKeptHistory, replayCommand, replayFile, restoredBanner, writeKept } from "../core/keep";
 import { PASTE_MAX, pasteName, pasteText, savePaste } from "../core/paste";
 import { apiBase, ForgeAuthError, linkForgeClones, listForgeRepos } from "../core/forge";
@@ -1820,6 +1820,16 @@ async function handleApi(
     if (!state.tmux) return json({ agent: null });
     const pane = await paneInfo(state.tmux, term);
     return json({ agent: pane ? agentIn(pane.command, pane.title) : null });
+  }
+  if (path === "/api/terms/text" && method === "GET") {
+    const term = url.searchParams.get("term") ?? "";
+    const live = state.terms.get(term);
+    if (!live || live.ending) return json({ error: "no such shell" }, 404);
+    // a plain pty's text is the browser terminal's own buffer, which has no
+    // stale frames in it since nothing strips the alternate screen there
+    if (!state.tmux) return json({ text: null, fullscreen: false });
+    const got = await paneText(state.tmux, term);
+    return got ? json(got) : json({ error: "tmux did not answer" }, 502);
   }
   if (path === "/api/terms" && method === "DELETE") {
     const term = url.searchParams.get("term") ?? "";

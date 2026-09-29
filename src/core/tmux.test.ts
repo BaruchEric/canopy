@@ -21,6 +21,8 @@ import {
   interruptArgs,
   parseTaskPanes,
   taskCommand,
+  parsePane,
+  textArgs,
 } from "./tmux";
 
 const ID = "0123456789abcdef0123456789abcdef";
@@ -145,6 +147,20 @@ describe("a shell's tailchan handle", () => {
     const rest = newSessionArgs([], { id: ID, repoId: "app", path: "/app", place: "strip" }, { cols: 80, rows: 24 }, ["/bin/bash"]);
     expect(rest).not.toContain("-e");
     expect(rest).not.toContain("@canopy_handle");
+  });
+});
+
+describe("a pane's text for a copy", () => {
+  test("the pane line says when a full-screen program is up", () => {
+    expect(parsePane("2.1.285\t✳ fixing\t1\n")).toEqual({ command: "2.1.285", title: "✳ fixing", fullscreen: true });
+    expect(parsePane("zsh\thost\t0")).toEqual({ command: "zsh", title: "host", fullscreen: false });
+    expect(parsePane("zsh\thost")).toEqual({ command: "zsh", title: "host", fullscreen: false });
+  });
+  test("a plain shell copies its history, a full-screen one its screen alone", () => {
+    expect(textArgs(base, ID, false, 50).slice(base.length)).toEqual([
+      "capture-pane", "-p", "-J", "-t", sessionName(ID), "-S", "-50", "-E", "-",
+    ]);
+    expect(textArgs(base, ID, true).slice(base.length)).toEqual(["capture-pane", "-p", "-J", "-t", sessionName(ID)]);
   });
 });
 

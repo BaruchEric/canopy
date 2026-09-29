@@ -197,3 +197,29 @@ export function tidyLines(lines: string[]): string {
   while (out.length > 0 && out[out.length - 1] === "") out.pop();
   return out.join("\n");
 }
+
+/** what a copy hands the clipboard: the text, and a word on what it left
+ *  out when that is worth saying */
+export type CopyOut = string | { text: string; note: string };
+
+/** said when a shell's copy is only its screen */
+export const FULLSCREEN_NOTE = "the screen only: /copy in Claude copies its reply";
+
+/** A shell's copy from what the server's tmux says of it. tmux's own text
+ *  is clean where the browser's buffer is not: tmux draws a full-screen
+ *  program on the browser terminal's normal screen, so every redraw pushes
+ *  a stale frame into its scrollback. Null text (a plain pty, or no answer)
+ *  falls back to the buffer, which is right there. */
+export function shellCopyOf(got: { text: string | null; fullscreen: boolean } | null, buffer: () => string): CopyOut {
+  if (!got || got.text === null) return buffer();
+  const text = tidyLines(got.text.split("\n"));
+  return got.fullscreen ? { text, note: FULLSCREEN_NOTE } : text;
+}
+
+/** the gear's word after a copy */
+export function copiedWord(out: CopyOut): string {
+  const text = typeof out === "string" ? out : out.text;
+  const n = text.split("\n").length;
+  const said = `copied ${n} line${n === 1 ? "" : "s"}`;
+  return typeof out === "string" ? said : `${said} · ${out.note}`;
+}

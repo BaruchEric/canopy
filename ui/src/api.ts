@@ -349,6 +349,9 @@ export const api = {
   /** what a shell is running, asked of tmux: claude, codex or neither */
   termAgent: (id: string) =>
     repoReq<{ agent: AgentKind | null }>(id, (p) => `/api/terms/agent?term=${encodeURIComponent(p)}`),
+  /** a shell's text as tmux holds it, for a copy; null text on a plain pty */
+  termText: (id: string) =>
+    repoReq<{ text: string | null; fullscreen: boolean }>(id, (p) => `/api/terms/text?term=${encodeURIComponent(p)}`),
   /** ends one shell; closing its socket alone leaves it running */
   endTerm: (id: string) =>
     repoReq<{ ok: true }>(id, (p) => `/api/terms?term=${encodeURIComponent(p)}`, { method: "DELETE" }),

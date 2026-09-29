@@ -22,7 +22,7 @@ import {
 } from "../store";
 import { IdLabel, WaitingFor, useWaitingFor } from "./IdLabel";
 import { TERM_FONT, joinsOnly, otherShells, termId, viewKey } from "../term";
-import { SPOT_WORD, flipMode, shellSpot, termFontIn, tidyLines, type ShellSpot, type SurfaceMode } from "../surface";
+import { SPOT_WORD, flipMode, shellCopyOf, shellSpot, termFontIn, tidyLines, type CopyOut, type ShellSpot, type SurfaceMode } from "../surface";
 import { SHELL_TARGETS, type ShellTarget } from "../settings";
 import { Gear, type GearEntry } from "./Gear";
 import {
@@ -59,6 +59,20 @@ function shellText(id: string): string {
   const lines: string[] = [];
   for (let i = 0; i < buf.length; i++) lines.push(buf.getLine(i)?.translateToString(true) ?? "");
   return tidyLines(lines);
+}
+
+/** how long a copy waits on the server for tmux's text before it takes the
+ *  buffer: a copy off a page that is not a secure one needs the click's
+ *  own moment, which does not last */
+const COPY_WAIT = 1500;
+
+/** a shell's copy: tmux's clean text when the server answers in time */
+async function shellCopy(id: string): Promise<CopyOut> {
+  const got = await Promise.race([
+    api.termText(id).catch(() => null),
+    new Promise<null>((resolve) => setTimeout(() => resolve(null), COPY_WAIT)),
+  ]);
+  return shellCopyOf(got, () => shellText(id));
 }
 
 const TOKENS = [
@@ -1095,7 +1109,7 @@ function ShellGear({
             ? shareEntries({
                 el: () => box.current?.querySelector<HTMLElement>(".term-view:not([hidden])") ?? null,
                 label: `shell ${showing.name}`,
-                copy: () => shellText(showing.id),
+                copy: () => shellCopy(showing.id),
                 paste: (text) => LIVE.get(showing.id)?.paste(text),
               })
             : [],
@@ -1360,7 +1374,7 @@ export function ShellSolo({ id }: { id: string }) {
                 entries: shareEntries({
                   el: () => body.current,
                   label: `shell ${name ?? idText(id)}`,
-                  copy: () => shellText(tab.id),
+                  copy: () => shellCopy(tab.id),
                   paste: (text) => LIVE.get(tab.id)?.paste(text),
                 }),
               },

@@ -17,6 +17,8 @@ import {
   ZOOM_MIN,
   termFontIn,
   withTermFont,
+  copiedWord,
+  type CopyOut,
   type SectionKey,
   type ShellSpot,
   type SurfaceMode,
@@ -254,7 +256,7 @@ export function shareEntries({
 }: {
   el: () => HTMLElement | null;
   label: string;
-  copy?: () => string;
+  copy?: () => CopyOut | Promise<CopyOut>;
   paste?: ((text: string) => void) | null;
   /** why a capture cannot show this surface, when it cannot */
   noCapture?: string;
@@ -266,10 +268,11 @@ export function shareEntries({
       stay: true,
       run: async () => {
         const box = el();
-        const text = copy ? copy() : box ? surfaceText(box) : "";
+        const out = copy ? await copy() : box ? surfaceText(box) : "";
+        const text = typeof out === "string" ? out : out.text;
         if (!text) return "nothing to copy";
         await copyText(text);
-        return `copied ${text.split("\n").length} lines`;
+        return copiedWord(out);
       },
     },
     {

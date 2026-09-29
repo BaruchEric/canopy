@@ -12,6 +12,9 @@ import {
   shellSpot,
   termFontIn,
   tidyLines,
+  copiedWord,
+  FULLSCREEN_NOTE,
+  shellCopyOf,
   toggleHidden,
   withFrontZoom,
   withTermFont,
@@ -128,6 +131,18 @@ describe("the rest", () => {
     const at = new Date(2026, 8, 5, 7, 3, 9);
     expect(captureName("Changes · web-apps/ripe", at)).toBe("canopy-changes-web-apps-ripe-20260905-070309.png");
     expect(captureName("···", at)).toBe("canopy-surface-20260905-070309.png");
+  });
+  test("a shell's copy takes tmux's text, and says when it is the screen alone", () => {
+    const buffer = () => "stale frames";
+    expect(shellCopyOf({ text: "$ ls  \na\n\n", fullscreen: false }, buffer)).toBe("$ ls\na");
+    expect(shellCopyOf({ text: "claude\n", fullscreen: true }, buffer)).toEqual({ text: "claude", note: FULLSCREEN_NOTE });
+    // a plain pty, or tmux not answering in time: the browser's own buffer
+    expect(shellCopyOf({ text: null, fullscreen: false }, buffer)).toBe("stale frames");
+    expect(shellCopyOf(null, buffer)).toBe("stale frames");
+  });
+  test("a copy says how much it took", () => {
+    expect(copiedWord("a\nb")).toBe("copied 2 lines");
+    expect(copiedWord({ text: "a", note: "the screen only" })).toBe("copied 1 line · the screen only");
   });
   test("tidyLines trims the ends", () => {
     expect(tidyLines(["$ ls  ", "a b", "", "  ", ""])).toBe("$ ls\na b");
