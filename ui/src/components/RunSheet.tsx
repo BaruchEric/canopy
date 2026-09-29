@@ -730,7 +730,8 @@ function TaskForm({ repo, name }: { repo: Repo; name: string | null }) {
       await saveTaskDef(
         repo.id,
         draft.name,
-        { name: draft.name, cmd: draft.cmd, ...(draft.cwd ? { cwd: draft.cwd } : {}), dev: draft.dev, keep: draft.keep, withPanel: draft.withPanel },
+        // a hidden task stays hidden through an edit; the sheet has no box for it
+        { name: draft.name, cmd: draft.cmd, ...(draft.cwd ? { cwd: draft.cwd } : {}), dev: draft.dev, keep: draft.keep, withPanel: draft.withPanel, ...(task?.hidden ? { hidden: true } : {}) },
         target,
       );
       if (task && task.name !== draft.name) {
