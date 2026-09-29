@@ -7,7 +7,7 @@
  * lands here in later steps. The Bun side is `taskrun.ts` and the server's
  * `tasks.ts`.
  */
-import type { TaskDef, TaskFlags, TaskPatch, TaskSource } from "./types";
+import type { TaskDef, TaskFlags, TaskLogLine, TaskLogPage, TaskPatch, TaskRecord, TaskSource, TaskStatus } from "./types";
 
 const TASK_NAME = /^[a-z0-9][a-z0-9._-]{0,39}$/;
 
@@ -241,4 +241,159 @@ export function mergeTasks(detected: TaskDef[], repo: TaskPatch[], canopy: TaskP
     tasks.push(t);
   }
   return { tasks, errors };
+}
+
+/* ---------- timing ---------- */
+
+export interface TaskTimings {
+  /** how often the supervisor looks at tmux */
+  tick: number;
+  /** how long a stop waits after ^C before it kills the session */
+  grace: number;
+  /** how long a dead pane with nobody watching is kept */
+  reap: number;
+  /** how long up counts as a good run, resetting the failure count */
+  uptime: number;
+  /** how often the sweep runs */
+  sweep: number;
+  /** the first restart delay, doubled per failure */
+  backoff: number;
+  backoffCap: number;
+  /** failures in a row before keep running gives up */
+  giveUp: number;
+  /** bytes a log reaches before it rotates */
+  logCap: number;
+  /** how long an unused log of a gone task is kept */
+  logAge: number;
+}
+
+export const TASK_TIMINGS: TaskTimings = {
+  tick: 2_000,
+  grace: 5_000,
+  reap: 60 * 60_000,
+  uptime: 60_000,
+  sweep: 60 * 60_000,
+  backoff: 1_000,
+  backoffCap: 60_000,
+  giveUp: 5,
+  logCap: 2 * 1024 * 1024,
+  logAge: 7 * 86_400_000,
+};
+
+/** the wait before the n-th restart in a row (n from 1) */
+export const nextDelay = (fails: number, base = TASK_TIMINGS.backoff, cap = TASK_TIMINGS.backoffCap): number =>
+  Math.min(cap, base * 2 ** Math.max(0, fails - 1));
+
+export interface StatusInput {
+  /** a session is there */
+  live: boolean;
+  /** its pane has exited */
+  dead: boolean;
+  want: "running" | "stopped" | undefined;
+  exitedAt?: number;
+  exitCode?: number | null;
+  retryAt?: number;
+  gaveUp: boolean;
+}
+
+/** One word for what a task is doing. A task stopped by hand reads as
+ *  exited whatever ^C made its code, since that is not a failure. */
+export function taskStatus(o: StatusInput): TaskStatus {
+  if (o.live && !o.dead) return "running";
+  if (o.gaveUp) return "gave-up";
+  if (o.retryAt !== undefined) return "backoff";
+  if (o.exitedAt === undefined) return "idle";
+  if (o.want === "stopped" || o.exitCode === 0) return "exited";
+  return "failed";
+}
+
+/* ---------- log text ---------- */
+
+/** the line canopy writes into a log ahead of each run */
+export const startMark = (at: number, cmd: string): string => `--- started ${at} · ${cmd} ---`;
+const MARK = /^--- started (\d+) · .* ---$/;
+
+// CSI, OSC (ended by BEL or ST), and two-byte escapes
+// eslint-disable-next-line no-control-regex
+const ANSI = /\x1b\[[0-?]*[ -/]*[@-~]|\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)|\x1b[@-Z\\-_]/g;
+// eslint-disable-next-line no-control-regex
+const CONTROL = /[\x00-\x08\x0b-\x1f\x7f]/g;
+
+/** A pty's bytes as the lines a person saw: escapes gone, and a line a
+ *  progress bar rewrote with carriage returns reduced to its last state. */
+export function plainLines(raw: string): string[] {
+  const text = raw.replace(ANSI, "");
+  const lines = text.split("\n").map((line) => {
+    const cut = line.replace(/\r+$/, "");
+    const last = cut.lastIndexOf("\r");
+    return (last === -1 ? cut : cut.slice(last + 1)).replace(CONTROL, "");
+  });
+  if (lines.at(-1) === "") lines.pop();
+  return lines;
+}
+
+/** The last `limit` lines (of the matches, with `q`) before line `before`,
+ *  each with the start of the run it belongs to. */
+export function logPage(raw: string, opts: { q?: string; before?: number; limit?: number }): TaskLogPage {
+  const q = opts.q?.trim().toLowerCase() ?? "";
+  const limit = opts.limit ?? 500;
+  let at: number | null = null;
+  const all: TaskLogLine[] = [];
+  plainLines(raw).forEach((text, i) => {
+    const m = MARK.exec(text);
+    if (m) at = Number(m[1]);
+    const line: TaskLogLine = { n: i + 1, text, at, ...(m ? { mark: true as const } : {}) };
+    if ((opts.before === undefined || line.n < opts.before) && (!q || text.toLowerCase().includes(q))) all.push(line);
+  });
+  return { lines: all.slice(-limit), more: all.length > limit };
+}
+
+/* ---------- desired state and the sweep ---------- */
+
+/** `tasks/state.json`, with anything malformed left out */
+export function parseTaskState(text: string): Record<string, TaskRecord> {
+  let raw: unknown;
+  try {
+    raw = JSON.parse(text);
+  } catch {
+    return {};
+  }
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return {};
+  const out: Record<string, TaskRecord> = {};
+  for (const [id, v] of Object.entries(raw)) {
+    if (!/^[0-9a-f]{32}$/.test(id)) continue;
+    if (!v || typeof v !== "object") continue;
+    const r = v as Record<string, unknown>;
+    if (typeof r["repoId"] !== "string" || typeof r["path"] !== "string" || !isTaskName(r["name"])) continue;
+    if (r["want"] !== "running" && r["want"] !== "stopped") continue;
+    const rec: TaskRecord = { repoId: r["repoId"], path: r["path"], name: r["name"], want: r["want"] };
+    if (typeof r["startedAt"] === "number") rec.startedAt = r["startedAt"];
+    if (typeof r["exitedAt"] === "number") rec.exitedAt = r["exitedAt"];
+    if (typeof r["exitCode"] === "number" || r["exitCode"] === null) rec.exitCode = r["exitCode"] as number | null;
+    out[id] = rec;
+  }
+  return out;
+}
+
+export interface LogFile {
+  termId: string;
+  /** ms */
+  mtime: number;
+}
+
+/** whether a task still has a definition: null when that cannot be told (a repo on another host) */
+export type Defined = (termId: string) => boolean | null;
+
+/** logs of tasks with no session and no definition, untouched for `age` */
+export function expiredTaskLogs(logs: readonly LogFile[], live: ReadonlySet<string>, defined: Defined, now: number, age: number): string[] {
+  return logs.filter((l) => !live.has(l.termId) && defined(l.termId) === false && now - l.mtime > age).map((l) => l.termId);
+}
+
+/** a dead pane whose exit is on record, with nobody watching, dead longer than `reapMs` */
+export const reapable = (p: { dead: boolean; exitedAt?: number; viewers: number }, now: number, reapMs: number): boolean =>
+  p.dead && p.exitedAt !== undefined && p.viewers === 0 && now - p.exitedAt > reapMs;
+
+/** records for tasks that are gone and have no session */
+export function staleWants(state: Readonly<Record<string, TaskRecord>>, live: ReadonlySet<string>, defined: Defined): string[] {
+  return Object.keys(state).filter((id) => !live.has(id) && defined(id) === false);
 }
