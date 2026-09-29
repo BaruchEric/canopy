@@ -57,6 +57,9 @@ interface TaskDef {
 Three layers, merged by name and field by field through the pure
 `mergeTasks(detected, repoFile, override)`. Each merged task records its
 `source` (`detected`, `repo` or `canopy`, the highest layer that set anything).
+One task per repo is `dev`: the one the highest layer names, so canopy's layer
+can move it; a lower layer's claim yields quietly, and two claims in one layer
+keep the first and report the other.
 
 1. **Detected.** `detectTasks` reads `package.json` scripts, each as
    `bun run <script>` whatever lockfile the repo has (the user's always-bun
@@ -72,7 +75,13 @@ Three layers, merged by name and field by field through the pure
    still apply, and the errors show in the section.
 3. **Canopy config.** `tasks` in the config, keyed by repo path like `agents`,
    written through `setTasks`. An override equal to the layer under it is
-   dropped, as `setAgent` drops an entry set back to defaults.
+   dropped, as `setAgent` drops an entry set back to defaults: the def route
+   merges the detected and repo-file layers for that name and stores only the
+   fields of the requested definition that differ (`overrideOf`; a flag missing
+   below reads as false), so a later change in the repo file to any other field
+   still shows through. The edit sheet, accept and hide therefore send the whole
+   merged task with their one change. Renaming a task a lower layer defines
+   hides the old name in canopy's layer, since a null there would clear nothing.
 
 **The own-repo rule for auto flags.** A repo file's commands only run on a
 click, but `keep` and `withPanel` would run them with none. So those two flags
@@ -85,7 +94,9 @@ with the merge.
 
 **Runtime state.** The server hands the browser a `TaskInfo` per task: the
 merged definition and its `source`, any `suggested` flags, `termId`, `status`
-(`idle | running | exited | failed | backoff | gave-up`), `startedAt`,
+(`idle | running | exited | stopped | failed | backoff | gave-up`; `stopped` is a
+task stopped by hand with its exit on record, shown grey as "stopped · 3m ago",
+`exited` a clean exit 0), `startedAt`,
 `exitedAt`, `exitCode`, `restarts`, `viewers`. `termId` is the first 32 hex
 digits of sha256(repo path, a NUL, task name), stable across restarts and
 reboots, computed on the server.
@@ -95,7 +106,9 @@ reboots, computed on the server.
 `stopped`. Reboot recovery reads it, so only flagged tasks that were meant to be
 up come back. The same record keeps each task's last `exitCode` and `exitedAt`,
 written when the supervisor first sees the task die, so "exit 1 · 3m ago"
-survives a canopy restart and a reaped session (see Cleanup).
+survives a canopy restart and a reaped session (see Cleanup), and keep
+running's `fails` in a row and `gaveUp`, so a backoff and a gave-up survive it
+too. A start or restart by hand clears both.
 
 **Logs.** `tasks/logs/<termId>.log` under the config dir (the termId already hashes the repo path and task name), the volume the
 shells container already shares. Raw bytes as the pty wrote them, ANSI and all.
@@ -125,8 +138,10 @@ reconnects, touch scrolling and paste carry over.
 1. `new-session -d` with `sleep 2147483647` as its command and the tags above.
 2. Append `--- started <epoch ms> · <cmd> ---` to the log (the UI shows it in local time), then
    `pipe-pane -o 'cat >> <log>'`.
-3. `respawn-pane -k` with `sh -lc '<cmd>'` from the repo root (or `cwd`), or the
-   ssh line for a remote repo.
+3. `respawn-pane -k` with `sh -c 'cd -- <dir> && exec sh -lc <cmd>'` for the
+   repo root (or `cwd`), or the ssh line for a remote repo. The cd is in the
+   command because tmux quietly starts a pane in the home folder when its `-c`
+   folder is missing; this way a missing folder fails the task.
 
 The pipe is attached before the real command runs, which is the only way the log
 gets the command's first output. On a restart, `startTaskSession` respawns a placeholder before piping a dead pane, for the same reason. Running the command directly, not typed into a
@@ -148,10 +163,14 @@ diffs against the last reading and broadcasts a `tasks` event,
   seconds. The failure count resets after 60 seconds up. Five failures without
   such a stretch make it `gave-up`, with a feed line and, when `tailchanNotify`
   is on, a tailchan DM. A clean exit 0 is not restarted.
-- **Reboot recovery.** After the first scan, every task with `keep` and
-  `want: running` that has no session is started, unless its last exit was 0.
+- **Reboot recovery.** Once the first listing has answered (after the server
+  listens, so nothing on startup waits on tmux, gh or ssh), every task with
+  `keep` and `want: running` comes back, unless its last exit was 0 or keep
+  running gave up on it: one with no session is started, one whose death is on
+  record from before this canopy goes back to its backoff, dead pane or not.
 - **Start with panel.** The browser posts `start` with `reason: "panel"` when a
-  panel opens. The server starts each `withPanel` task that is not already
+  panel opens, by any path that adds it to the dock, and once per page load for
+  a panel a reload restores. The server starts each `withPanel` task that is not already
   running and not `gave-up`. A task stopped by hand does start again on the
   next panel open; that is what the flag means.
 - **Rotation.** Each tick checks log sizes. Past 2 MB it renames the log and
@@ -179,7 +198,7 @@ stay, as `agents` and `launchers` do, so a repo that comes back keeps them.
 
 **Shells stay clean.** `listTerms`, `adoptTerms`, the shells chip, keep's
 snapshots and `KeptShells` pass over any session with `@canopy_task`.
-`endTerm` refuses a task's id; only the task routes stop a task. The server also refuses a non-attach shell socket on a task id, so a stale tab can never start a shell under it.
+`endTerm` refuses a task's id, held or only on record; only the task routes stop a task. The server also refuses a non-attach shell socket on a task id, so a stale tab can never start a shell under it.
 
 **Routes.** Every repo route answers 400 for a forge repo, like the rest of
 `/api/repos/*`.
@@ -196,7 +215,9 @@ snapshots and `KeptShells` pass over any session with `@canopy_task`.
   newest last, each with the time of the start marker it falls under, ANSI
   stripped and carriage-return rewrites collapsed; `q` filters
   case-insensitively.
-- `GET /api/tasks`: every non-idle task across repos, for the top bar.
+- `GET /api/tasks`: every non-idle task across repos, for the top bar, a
+  stopped one included (`listedTask`, the same test the browser applies to a
+  `tasks` event, so the list does not change on a re-read).
 
 ## UI
 
@@ -266,12 +287,17 @@ shows.
   starts nothing.
 - The tmux server does not answer (the shells container restarting): the
   supervisor skips the tick and marks nothing dead, the `serverUp` lesson the
-  shell code already learned. A session that is gone while the server answers
+  shell code already learned. "No server running" right after a listing with
+  live panes is doubted the same way for `noServerGrace` (30 s), then believed
+  (`paneReading`); with nothing live seen it is believed at once. While tmux
+  does not answer no session is started: a start by hand answers 503 and a
+  retry waits a tick at a time. A session that is gone while the server answers
   counts as a failure with no exit code, so keep running applies.
 - A task's definition disappears while it runs: it becomes an orphan, left
   running, stop only.
 - The repo leaves the scan: its tasks keep running and show in the top bar
-  chip, stop only.
+  chip, stop only. The stop route finds such a task by its repo id and stops it
+  without reading its definition, then sends a `tasks` event for that repo id.
 - A remote host that does not answer: ssh exits 255, backoff applies, it gives
   up after five.
 - A `cwd` that resolves outside the repo root: 400 on save, dropped with an
