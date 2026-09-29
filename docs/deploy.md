@@ -62,8 +62,9 @@ mini.
    and an ssh alias for the other (`mini-peer` on the Mac, `mac-peer` on the
    mini) using that key. The gate runs from the host checkout, not the
    container, so the mini's `~/dev/dev-tools/canopy` needs `bun install`
-   after a dependency change. The container mounts the host's
-   `~/.config/git` so a wip snapshot ignores what host git ignores, and
+   after a dependency change. Both containers mount the host's
+   `~/.config/git`, so a wip snapshot ignores what host git ignores and a
+   commit typed into a shell has the host's identity, and
    `git-lfs` must be installed on the host for any repo that uses it, or its
    files read as modified. To stop peer sync, set `peerSync` to `"off"` in
    both configs; nothing else needs undoing.
@@ -363,13 +364,12 @@ Claude still work locally.
 - The launcher (install, build, launch): it needs the checkout and a desktop
   on one machine. The server refuses it with a clear message and the UI hides
   it. Release and pull request listings read through `gh`, which the image
-  carries (the final stage, so installing it did not touch the shells image),
-  logged in by `GH_TOKEN` from `.env`. That login is also git's credential
-  helper for github.com in the canopy container (`GIT_CONFIG_*` in
-  `docker-compose.yml`), so the panel's push and the background fetch of a
-  private https remote work. Not in the shells container, which has no `gh`:
-  a `git push` typed into a shell there still has no login. The desktop
-  openers are not off, they moved: see the helper section above.
+  carries (the shells stage, so the shells have it too), logged in by
+  `GH_TOKEN` from `.env`. That login is also git's credential helper for
+  github.com in both containers (`GIT_CONFIG_*` in `docker-compose.yml`), so
+  the panel's push, the background fetch of a private https remote and a
+  `git push` typed into a shell all work. The desktop openers are not off,
+  they moved: see the helper section above.
 - The history section (the rings, sessions, the Claude panel). It reads
   through the claude-history CLI, and the archive it reads lives in the vault
   on the Mac alone. The archive's projects are keyed by Mac paths

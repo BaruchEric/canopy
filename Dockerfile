@@ -61,6 +61,21 @@ RUN printf 'export PATH="$HOME/.local/bin:$HOME/.bun/bin:$PATH"\n' > /etc/profil
 # ownership.
 RUN mkdir -p /config && chown bun:bun /config
 
+# gh for the pull request counts and the release and pull listings, which the
+# server reads through `gh api`, and for the shells, where it is git's
+# credential helper for github.com (GH_TOKEN and GIT_CONFIG_* in
+# docker-compose.yml, on both services) so a push works from the panel and
+# from a shell alike. GitHub's own apt repo, since Debian's gh predates
+# `gh api --slurp`.
+RUN mkdir -p -m 755 /etc/apt/keyrings \
+    && curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg \
+       -o /etc/apt/keyrings/githubcli-archive-keyring.gpg \
+    && chmod go+r /etc/apt/keyrings/githubcli-archive-keyring.gpg \
+    && echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" \
+       > /etc/apt/sources.list.d/github-cli.list \
+    && apt-get update && apt-get install -y --no-install-recommends gh \
+    && rm -rf /var/lib/apt/lists/*
+
 USER bun
 ENV HOME=/home/bun
 # the shell the in-browser terminal runs: bash is what the image has, and a
@@ -105,23 +120,8 @@ ENV CANOPY_CONFIG_DIR=/config
 CMD ["tmux", "-S", "/config/tmux.sock", "-f", "/app/lib/tmux-server.conf", "-D"]
 
 FROM shells
-# gh for the pull request counts and the release and pull listings, which the
-# server reads through `gh api`. It goes in this stage, not `shells`, so adding
-# it does not recreate the shells container. GitHub's own apt repo, since
-# Debian's gh predates `gh api --slurp`. The login is GH_TOKEN from compose,
-# which also makes gh git's credential helper for github.com (GIT_CONFIG_* in
-# docker-compose.yml), so a push from the panel works here.
-USER root
-RUN mkdir -p -m 755 /etc/apt/keyrings \
-    && curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg \
-       -o /etc/apt/keyrings/githubcli-archive-keyring.gpg \
-    && chmod go+r /etc/apt/keyrings/githubcli-archive-keyring.gpg \
-    && echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" \
-       > /etc/apt/sources.list.d/github-cli.list \
-    && apt-get update && apt-get install -y --no-install-recommends gh \
-    && rm -rf /var/lib/apt/lists/*
-USER bun
-
+# gh comes from the shells stage above, so the server and the shells run the
+# same one
 COPY --from=build --chown=bun:bun /app /app
 
 # and here the server's /api/about; declared after everything slow, since a

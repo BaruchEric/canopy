@@ -24,6 +24,13 @@ services:
     image: canopy-shells:latest
     environment:
       - CANOPY_CONFIG_DIR=/config
+      # gh's login from .env, and gh as git's credential helper for
+      # github.com, the same as canopy's below, so gh and a push or fetch of
+      # a private repo work in a shell
+      - GH_TOKEN=${GH_TOKEN:-}
+      - GIT_CONFIG_COUNT=1
+      - GIT_CONFIG_KEY_0=credential.https://github.com.helper
+      - GIT_CONFIG_VALUE_0=!gh auth git-credential
     volumes:
       - ${DEV_ROOT:-/home/eric/dev}:${DEV_ROOT:-/home/eric/dev}
       - canopy-config:/config
@@ -31,6 +38,10 @@ services:
       - ${HOST_HOME:-/home/eric}/.claude.json:/home/bun/.claude.json
       - ${HOST_HOME:-/home/eric}/.codex:/home/bun/.codex
       - ${HOST_HOME:-/home/eric}/.ssh:/home/bun/.ssh:ro
+      # the host's git identity and global ignore, so a commit in a shell has
+      # an author; the folder must exist on the host first or docker makes it
+      # as root
+      - ${HOST_HOME:-/home/eric}/.config/git:/home/bun/.config/git:ro
       # the host's time zone, so a shell prompt's clock is the host's
       - /etc/localtime:/etc/localtime:ro
     # canopy shares this container's network (and process) namespace, so
