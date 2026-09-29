@@ -207,11 +207,15 @@ changes, open by default, through `Section` so it gets the fold and the gear
   gave-up, grey idle), the name with glyphs for keep, start-with-panel and dev,
   the command muted and clipped, the source tag, then uptime or
   `exit 1 · 3m ago`, and start, stop and restart.
-- A click opens the task under the list. A running task is a `TermView` joined
-  with `attach=1` on its `termId`, so keys work and every device watching sees
-  the same screen. An idle or dead one shows its log's tail read-only. The
-  height is dragged through `TermGrip` and kept per repo like
-  `panelTermHeights`.
+- A click picks the task. A running task's terminal opens as a tab among the
+  panel's shells, joined with `attach=1` on its `termId`, so keys work, every
+  device watching sees the same screen, and its height is the shells' own
+  drag. It is not drawn inside the section because css zoom sits on the panel
+  body and the section, and an xterm under zoom gets its mouse and selection
+  off. The section shows the picked task's log under the list: the tail, read
+  again every 2 seconds while it runs.
+- A task's tab is not restored after a reload, since it is not a held shell;
+  one click brings it back.
 - A search box over the open task's log lists hits (time, line, context) from
   the log route. The terminal cannot scroll to a log line, so hits are their
   own list.

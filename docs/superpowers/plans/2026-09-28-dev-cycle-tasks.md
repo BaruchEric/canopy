@@ -49,7 +49,7 @@
 | `ui/src/tasks.ts` (create) | Pure UI words: status, chip, when, feed lines |
 | `ui/src/api.ts`, `ui/src/qualify.ts`, `ui/src/store.ts`, `ui/src/feed.ts` (modify) | Data flow for tasks |
 | `ui/src/surface.ts`, `ui/src/term.ts`, `ui/src/routes.ts` (modify) | `tasks` section key, `TermTab.task`, `task=` route |
-| `ui/src/components/Tasks.tsx` (create) | The section, `TaskChip`, `TasksChip` |
+| `ui/src/components/Tasks.tsx` (create) | The section and log view, `TaskChip`, `TasksChip`; a task's terminal opens as a panel shells tab |
 | `ui/src/components/Dock.tsx`, `RunSheet.tsx`, `TermDock.tsx`, `RepoGrid.tsx`, `TopBar.tsx`, `Preview.tsx`, `Feed.tsx` (modify) | Placement |
 | `ui/src/styles.css` (modify) | Section and chip styles |
 | `CLAUDE.md` (modify) | Architecture notes for tasks |
@@ -664,12 +664,14 @@ describe("log text", () => {
 
 describe("state and the sweep", () => {
   test("state.json drops what it cannot use", () => {
+    const [a, b, c] = ["a", "b", "c"].map((x) => x.repeat(32));
     const text = JSON.stringify({
-      aaaa: { repoId: "r", path: "/p", name: "dev", want: "running", exitCode: 1, exitedAt: 5 },
-      bbbb: { repoId: "r", path: "/p", name: "Bad", want: "running" },
-      cccc: "nope",
+      [a]: { repoId: "r", path: "/p", name: "dev", want: "running", exitCode: 1, exitedAt: 5 },
+      [b]: { repoId: "r", path: "/p", name: "Bad", want: "running" },
+      [c]: "nope",
+      short: { repoId: "r", path: "/p", name: "dev", want: "running" },
     });
-    expect(parseTaskState(text)).toEqual({ aaaa: { repoId: "r", path: "/p", name: "dev", want: "running", exitCode: 1, exitedAt: 5 } });
+    expect(parseTaskState(text)).toEqual({ [a]: { repoId: "r", path: "/p", name: "dev", want: "running", exitCode: 1, exitedAt: 5 } });
     expect(parseTaskState("not json")).toEqual({});
   });
   const DAY = 86_400_000;
@@ -828,7 +830,7 @@ export function parseTaskState(text: string): Record<string, TaskRecord> {
   if (!raw || typeof raw !== "object" || Array.isArray(raw)) return {};
   const out: Record<string, TaskRecord> = {};
   for (const [id, v] of Object.entries(raw)) {
-    if (!/^[0-9a-f]{32}$/.test(id) && !/^[a-z]+$/.test(id)) continue;
+    if (!/^[0-9a-f]{32}$/.test(id)) continue;
     if (!v || typeof v !== "object") continue;
     const r = v as Record<string, unknown>;
     if (typeof r["repoId"] !== "string" || typeof r["path"] !== "string" || !isTaskName(r["name"])) continue;
@@ -865,8 +867,6 @@ export function staleWants(state: Readonly<Record<string, TaskRecord>>, live: Re
   return Object.keys(state).filter((id) => !live.has(id) && defined(id) === false);
 }
 ```
-
-The `parseTaskState` key check accepts 32 hex ids; the `^[a-z]+$` branch exists only so the unit test's short ids (`aaaa`) pass. Remove that branch and switch the test to real 32-hex ids if the reviewer prefers; either is fine as long as test and code agree.
 
 - [ ] **Step 4: Run to see them pass**
 
@@ -1412,10 +1412,13 @@ export async function writeTaskState(state: Record<string, TaskRecord>): Promise
   await rename(tmp, statePath());
 }
 
-/** the line ahead of a run, written by canopy rather than the pane */
+/** The line ahead of a run, written by canopy rather than the pane. No
+ *  0600 here: in the container the pane's `cat >>` runs in the shells
+ *  container's tmux server, which may be another uid than canopy, and a
+ *  file only canopy could write would lose every line after the marker. */
 export async function appendMark(termId: string, at: number, cmd: string): Promise<void> {
   await mkdir(logDir(), { recursive: true });
-  await appendFile(logPath(termId), `${startMark(at, cmd)}\n`, { mode: 0o600 });
+  await appendFile(logPath(termId), `${startMark(at, cmd)}\n`);
 }
 
 /** moves a log past `cap` to `.log.1`, dropping the older one; true when it did */
@@ -1908,6 +1911,8 @@ export class TaskHub {
     const tmux = this.need();
     const id = taskTermId(repo.path, def.name);
     const at = Date.now();
+    // set before anything touches tmux, so a tick listing meanwhile knows this run is newer
+    this.runtime(id).lastStart = at;
     try {
       await appendMark(id, at, def.cmd);
     } catch (err) {
@@ -1917,7 +1922,6 @@ export class TaskHub {
     this.state[id] = { repoId: repo.id, path: repo.path, name: def.name, want: "running", startedAt: at };
     await this.save();
     this.panes.set(id, { termId: id, task: def.name, repoId: repo.id, path: repo.path, dead: false, code: null, createdAt: at });
-    this.runtime(id).lastStart = at;
     this.deps.hold({ id, repoId: repo.id, path: repo.path, place: "strip", attached: false, viewers: [], startedAt: at, task: def.name });
   }
 
@@ -1994,6 +1998,11 @@ export class TaskHub {
   private async tick(): Promise<void> {
     const tmux = this.deps.tmux;
     if (!tmux) return;
+    // A start that lands while the list is being read is newer than the
+    // list: its pane is either missing from it or still the old dead one.
+    // Those tasks keep what `launch` set rather than what the list says.
+    const listedAt = Date.now();
+    const newer = (id: string): boolean => (this.rt.get(id)?.lastStart ?? -1) >= listedAt;
     const list = await listTaskPanes(tmux);
     // tmux did not answer (its container restarting): say nothing, mark nothing dead
     if (list === null) return;
@@ -2009,7 +2018,9 @@ export class TaskHub {
       dirty = true;
       this.onDeath(p.termId, rec, code);
     };
+    for (const [id, p] of this.panes) if (newer(id)) next.set(id, p);
     for (const p of next.values()) {
+      if (newer(p.termId)) continue;
       const before = this.panes.get(p.termId);
       if (!before) {
         this.deps.hold({ id: p.termId, repoId: p.repoId, path: p.path, place: "strip", attached: false, viewers: [], startedAt: p.createdAt, task: p.task });
@@ -2021,7 +2032,7 @@ export class TaskHub {
       }
     }
     for (const [id, before] of this.panes) {
-      if (next.has(id)) continue;
+      if (next.has(id) || newer(id)) continue;
       changed.add(before.path);
       // gone while it ran: killed from outside, which counts as a failure
       if (!before.dead) died(before, null);
@@ -2099,6 +2110,8 @@ Unused imports (`rotateIfBig`, `repipe`, `normalizeTaskPatch`, `parseTaskFile` b
       tmux: tmuxBase(),
       repos: () => state.result.repos,
       own: async (repo) => {
+        // no remote is never the user's by this test, and asking gh costs a process
+        if (!repo.remotes?.length) return false;
         if (state.login === undefined) state.login = await githubLogin();
         return (await accessFromUrls(repo.remotes ?? [], { login: state.login, permission: state.access })) === "ok";
       },
@@ -2421,13 +2434,15 @@ describe.skipIf(!tmux)("rotation and the sweep", () => {
   test("a flood crosses the cap and keeps logging after the rotation", async () => {
     // Review focus 4
     await post("/api/repos/tasks?id=app", { action: "start", name: "flood" });
-    await until(async () => (await get<{ lines: { text: string }[] }>("/api/repos/tasks/log?id=app&name=flood&q=flood-done")).lines.length === 1, "the end of the flood");
     const t = await task("flood");
     const dir = join(scratch, "config/tasks/logs");
-    expect(await Bun.file(join(dir, `${t.termId}.log.1`)).exists()).toBe(true);
-    // the flood ran for seconds, so its last line came after at least one
-    // rotation: it must be in the current file, not lost to the old one
-    expect(await Bun.file(join(dir, `${t.termId}.log`)).text()).toContain("flood-done");
+    const old = Bun.file(join(dir, `${t.termId}.log.1`));
+    const cur = () => Bun.file(join(dir, `${t.termId}.log`));
+    await until(async () => old.exists(), "a rotation");
+    // the flood runs for seconds, so lines keep coming after a rotation: they
+    // must land in a new current file, which only a re-attached pipe writes
+    await until(async () => (await cur().exists()) && cur().size > 0, "output after the rotation");
+    await until(async () => (await get<{ lines: { text: string }[] }>("/api/repos/tasks/log?id=app&name=flood&q=flood-done")).lines.length === 1, "the end of the flood");
   });
 
   test("a dead pane nobody watches is reaped, and its exit line stays", async () => {
@@ -2810,21 +2825,31 @@ git commit -m "feat(tasks): the ui's task data, words and feed lines"
 
 ---
 
-### Task 10: The tasks panel section
+### Task 10: The tasks panel section, and a task's terminal as a panel tab
 
 **Files:**
 - Create: `ui/src/components/Tasks.tsx`
-- Modify: `ui/src/surface.ts`, `ui/src/components/Dock.tsx`, `ui/src/term.ts`, `ui/src/components/TermDock.tsx`, `ui/src/store.ts`, `ui/src/styles.css`
+- Modify: `ui/src/surface.ts`, `ui/src/surface.test.ts`, `ui/src/components/Dock.tsx`, `ui/src/term.ts`, `ui/src/components/TermDock.tsx`, `ui/src/store.ts`, `ui/src/styles.css`
 
 **Interfaces:**
-- Consumes: store `tasksOf`, `loadTasks`, `taskAct`, `taskErrors`; `api.taskLog`; `TermView`; `Section`; `useSectionClosed`; `TermGrip`.
-- Produces: `TasksSection({ repo })`; `TermTab.task?: string`; section key `tasks`; `taskTermHeights: Record<string, number>` in the persisted layout.
+- Consumes: store `tasksOf`, `loadTasks`, `taskAct`, `taskErrors`, `joinTerm`; `api.taskLog`; `Section`, `useSectionClosed`; `markTime`, `STATUS_WORD`, `taskWhen`.
+- Produces: `TasksSection({ repo })`; section key `tasks`; `TermTab.task?: string`; store `openTaskTab(repoId, task: TaskInfo, place: ShellPlace)`, `editTask(repoId, name: string | null)`, `showTasks(repoId)`; `Sheet` kind `{ kind: "task"; repoId: string; name: string | null }`.
+
+**Why the terminal is not inline.** css `zoom` sits on `.panel-body` and on a section's `.section-main`, and an xterm under a zoomed ancestor gets its mouse and selection off by the factor (CLAUDE.md). The panel's shells footer is outside both and already has a drag-resizable height. So clicking a running task opens its terminal as a tab in that footer (`openTaskTab`), and the section itself shows the task's log. This refines the spec's "terminal under the list". A task tab is not restored after a reload (it is not a held shell, so `reconcileTerms` drops it); one click brings it back.
 
 - [ ] **Step 1: Section key**
 
-In `ui/src/surface.ts`: `SECTION_KEYS = ["changes", "tasks", "search", "history", "peers", "preview", "launch", "claude"]` and `SECTION_WORD.tasks = "tasks"`. `sectionOrder` already inserts a key a saved order lacks after its nearest earlier neighbour, so saved layouts get `tasks` right after `changes`. Add to `ui/src/surface.test.ts`: `expect(sectionOrder(["changes", "search", "history", "peers", "preview", "launch", "claude"])).toEqual([...SECTION_KEYS]);` and update any test that pins the old key list. Run `bun test ui/src/surface.test.ts`; expected PASS.
+In `ui/src/surface.ts`: `SECTION_KEYS = ["changes", "tasks", "search", "history", "peers", "preview", "launch", "claude"]` and `SECTION_WORD.tasks = "tasks"`. `sectionOrder` already inserts a key a saved order lacks after its nearest earlier neighbour, so saved layouts get `tasks` right after `changes`. Add to `ui/src/surface.test.ts`:
 
-- [ ] **Step 2: `TermTab.task` and attach-only sockets**
+```ts
+test("a saved order from before tasks gets them after changes", () => {
+  expect(sectionOrder(["changes", "search", "history", "peers", "preview", "launch", "claude"])).toEqual([...SECTION_KEYS]);
+});
+```
+
+Update any test that pins the old key list. Run `bun test ui/src/surface.test.ts`; expected PASS.
+
+- [ ] **Step 2: `TermTab.task`, attach-only sockets, and tabs that never end a task**
 
 In `ui/src/term.ts` `TermTab`, add:
 
@@ -2836,9 +2861,43 @@ In `ui/src/term.ts` `TermTab`, add:
 
 In `ui/src/components/TermDock.tsx` `socketUrl`: `if (rejoin || tab.task) q.set("attach", "1");`.
 
-In `ui/src/store.ts` `closeTerm`: replace `endShells([tab]);` with `if (!tab.task) endShells([tab]);`.
+In `ui/src/store.ts` `closeTerm`: replace `endShells([tab]);` with `if (!tab.task) endShells([tab]);`. Check `closePanel` and any other caller of `endShells` the same way (a task tab must never reach `DELETE /api/terms`; the server refuses it with 400 anyway).
 
-- [ ] **Step 3: The section**
+- [ ] **Step 3: Store actions**
+
+In `ui/src/store.ts`, add to `Sheet`: `| { kind: "task"; repoId: string; name: string | null }`. Add to the interface and implementation, next to `editLaunch` and `showLaunch`:
+
+```ts
+  /** the add or edit sheet for a repo's task; null adds one */
+  editTask: (repoId: string, name: string | null) => void;
+  /** opens a repo's panel with its tasks unfolded */
+  showTasks: (repoId: string) => void;
+  /** a task's terminal as a tab among the panel's shells or the strip's; closing it leaves the task running */
+  openTaskTab: (repoId: string, task: TaskInfo, place: ShellPlace) => void;
+```
+
+```ts
+  editTask: (repoId, name) => set({ sheet: { kind: "task", repoId, name } }),
+  showTasks: (repoId) =>
+    set((s) => ({
+      ...focusPanel(s.panels, repoId),
+      closedSections: unfoldIn(s.closedSections, repoId, "tasks"),
+    })),
+  openTaskTab: (repoId, task, place) => {
+    const s = get();
+    const repo = s.repos.find((r) => r.id === repoId);
+    if (!repo) return;
+    if (!s.terms.some((t) => t.id === task.termId)) {
+      const tab: TermTab = { id: task.termId, repoId, name: `${repo.name} · ${task.name}`, path: repo.path, place, task: task.name };
+      set({ terms: [...s.terms, tab] });
+    }
+    get().joinTerm(task.termId);
+  },
+```
+
+`joinTerm` shows an existing tab (opening its panel and unfolding the shell section for a panel tab). Read it first; if it only handles ids in `shells`, add a branch at its top: a tab already in `terms` is focused the way `openTerm` focuses a new one. In `RunSheet.tsx`'s `Body`, add `if (sheet.kind === "task") return null;` for now (Task 11 fills it) and include `"task"` in `sheetRepoId`'s list of kinds with a `repoId`.
+
+- [ ] **Step 4: The section**
 
 Create `ui/src/components/Tasks.tsx`:
 
@@ -2850,9 +2909,11 @@ import { tasksOf, useStore } from "../store";
 import { markTime, STATUS_WORD, taskWhen } from "../tasks";
 import type { Repo, TaskInfo, TaskLogLine } from "../../../src/core/types";
 import { Section, useSectionClosed } from "./Surface";
-import { TermView } from "./TermDock";
 
 const errText = (err: unknown) => String(err instanceof Error ? err.message : err);
+
+/** how often a running task's log tail is read again while it shows */
+const TAIL_EVERY = 2000;
 
 /** the glyphs after a task's name for the flags it has */
 function Flags({ t }: { t: TaskInfo }) {
@@ -2865,8 +2926,9 @@ function Flags({ t }: { t: TaskInfo }) {
   );
 }
 
-/** A repo's tasks: one line each with start, stop and restart, and the one
- *  picked open underneath as its live terminal or, with no session, its log. */
+/** A repo's tasks: one line each with start, stop and restart. A click on a
+ *  running task opens its terminal among the panel's shells; the picked
+ *  task's log shows under the list, searchable. */
 export function TasksSection({ repo }: { repo: Repo }) {
   const closed = useSectionClosed(repo.id, "tasks");
   const tasks = useStore(useShallow((s) => tasksOf(s, repo.id)));
@@ -2874,6 +2936,7 @@ export function TasksSection({ repo }: { repo: Repo }) {
   const loadTasks = useStore((s) => s.loadTasks);
   const taskAct = useStore((s) => s.taskAct);
   const editTask = useStore((s) => s.editTask);
+  const openTaskTab = useStore((s) => s.openTaskTab);
   const [open, setOpen] = useState<string | null>(null);
   const [showHidden, setShowHidden] = useState(false);
   const [busy, setBusy] = useState("");
@@ -2899,8 +2962,13 @@ export function TasksSection({ repo }: { repo: Repo }) {
     }
   };
 
+  const pick = (t: TaskInfo) => {
+    setOpen(open === t.name ? null : t.name);
+    if (t.live && open !== t.name) openTaskTab(repo.id, t, "panel");
+  };
+
   const shown = tasks.filter((t) => showHidden || !t.hidden);
-  const hidden = tasks.length - tasks.filter((t) => !t.hidden).length;
+  const hidden = tasks.filter((t) => t.hidden).length;
   const running = tasks.filter((t) => t.status === "running").length;
   const picked = shown.find((t) => t.name === open) ?? null;
 
@@ -2910,22 +2978,23 @@ export function TasksSection({ repo }: { repo: Repo }) {
       k="tasks"
       className="tasks"
       label="Tasks"
-      head={running ? `${running} running` : tasks.length ? `${tasks.length}` : ""}
+      head={running ? `${running} running` : tasks.length ? String(tasks.length) : ""}
+      title="The repo's dev server, tests and builds, run and watched by canopy"
       copy={() => shown.map((t) => `${t.name}  ${STATUS_WORD[t.status]}  ${t.cmd}`).join("\n")}
     >
       {errors?.map((e) => (
-        <p key={e} className="note error">
+        <p key={e} className="note err">
           {e}
         </p>
       ))}
-      {error && <p className="note error">{error}</p>}
+      {error && <p className="note err">{error}</p>}
       {shown.length === 0 ? (
-        <p className="empty">No tasks found. Add one, or give the repo a package.json, Cargo.toml or Makefile.</p>
+        <p className="panel-clean">No tasks yet. Add one, or give the repo a package.json, Cargo.toml or Makefile.</p>
       ) : (
         <ul className="task-list">
           {shown.map((t) => (
             <li key={t.name} className={`task-row ${t.status}${open === t.name ? " open" : ""}`}>
-              <button type="button" className="task-main" onClick={() => setOpen(open === t.name ? null : t.name)} aria-expanded={open === t.name}>
+              <button type="button" className="task-main" onClick={() => pick(t)} aria-expanded={open === t.name}>
                 <span className={`task-dot ${t.status}`} aria-label={STATUS_WORD[t.status]} />
                 <span className="task-name">{t.name}</span>
                 <Flags t={t} />
@@ -2973,27 +3042,22 @@ export function TasksSection({ repo }: { repo: Repo }) {
         </button>
         {hidden > 0 && (
           <button type="button" className="mini" onClick={() => setShowHidden(!showHidden)}>
-            {showHidden ? "hide hidden" : `${hidden} hidden`}
+            {showHidden ? "leave hidden out" : `${hidden} hidden`}
           </button>
         )}
       </div>
-      {picked && <TaskOpen repo={repo} task={picked} />}
+      {picked && <TaskLog repo={repo} task={picked} />}
     </Section>
   );
 }
 
-/** The picked task: its terminal while a session is there, its log either way below a search box. */
-function TaskOpen({ repo, task }: { repo: Repo; task: TaskInfo }) {
+/** The picked task's log: its tail, read again while it runs, or the lines matching a search. */
+function TaskLog({ repo, task }: { repo: Repo; task: TaskInfo }) {
   const [q, setQ] = useState("");
   const [lines, setLines] = useState<TaskLogLine[] | null>(null);
   const [more, setMore] = useState(false);
 
-  // the log: searched when there is a query, else its tail when no terminal shows
   useEffect(() => {
-    if (task.live && !q) {
-      setLines(null);
-      return;
-    }
     let live = true;
     const read = () =>
       api
@@ -3004,103 +3068,88 @@ function TaskOpen({ repo, task }: { repo: Repo; task: TaskInfo }) {
           setMore(p.more);
         })
         .catch(() => {});
-    const wait = setTimeout(read, q ? 250 : 0);
+    const first = setTimeout(read, q ? 250 : 0);
+    const again = task.status === "running" && !q ? setInterval(read, TAIL_EVERY) : null;
     return () => {
       live = false;
-      clearTimeout(wait);
+      clearTimeout(first);
+      if (again) clearInterval(again);
     };
-  }, [repo.id, task.name, task.live, task.status, q]);
+  }, [repo.id, task.name, task.status, q]);
 
   return (
     <div className="task-open">
       <input className="task-search" type="search" placeholder={`search ${task.name}'s log`} value={q} onChange={(e) => setQ(e.target.value)} />
-      {task.live && !q && (
-        <div className="task-term">
-          <TermView
-            key={`${task.termId}:${task.startedAt ?? 0}`}
-            tab={{ id: task.termId, repoId: repo.id, name: `${repo.name} · ${task.name}`, path: repo.path, place: "panel", task: task.name }}
-            active
-          />
-        </div>
-      )}
-      {lines && (
-        <pre className="task-log">
-          {more && <span className="task-more">earlier lines match too{"\n"}</span>}
-          {lines.map((l) => (
-            <span key={l.n} className={l.mark ? "task-mark" : undefined}>
-              {l.mark && l.at !== null ? `── started ${markTime(l.at)} ──` : l.text}
-              {"\n"}
-            </span>
-          ))}
-          {lines.length === 0 && (q ? "no match" : "nothing logged yet")}
-        </pre>
-      )}
+      <pre className="task-log">
+        {more && <span className="task-more">{q ? "earlier lines match too" : "earlier lines are in the log"}{"\n"}</span>}
+        {lines?.map((l) => (
+          <span key={l.n} className={l.mark ? "task-mark" : undefined}>
+            {l.mark && l.at !== null ? `── started ${markTime(l.at)} ──` : l.text}
+            {"\n"}
+          </span>
+        ))}
+        {lines?.length === 0 && (q ? "no match" : "nothing logged yet")}
+      </pre>
     </div>
   );
 }
 ```
 
-The terminal box gets a fixed height from CSS for now (`.task-term { height: 16rem }`); if the reviewer wants it draggable, wrap it with the existing `TermGrip` and a `taskTermHeights` layout field the way `panelTermHeights` works. Keep that as a follow-up unless the grip drops in without new plumbing.
+`useShallow` import path: use whichever path `Shells.tsx` or `Dock.tsx` already imports it from.
 
-- [ ] **Step 4: Place it and the sheet kind**
+- [ ] **Step 5: Place it**
 
 In `ui/src/components/Dock.tsx` `PanelSection`: `case "tasks": return repo.forge ? null : <TasksSection repo={repo} />;` (import it).
 
-In `ui/src/store.ts`, add to `Sheet`: `| { kind: "task"; repoId: string; name: string | null }`, and an action next to `editLaunch`: `editTask: (repoId: string, name: string | null) => void` implemented as `editTask: (repoId, name) => set({ sheet: { kind: "task", repoId, name } }),`. Task 11 renders it; until then `RunSheet` must not crash on the new kind: if its render is a `switch` over `sheet.kind` with an exhaustive check, add `case "task": return null;` now.
+- [ ] **Step 6: Styles**
 
-- [ ] **Step 5: Styles**
-
-Add to `ui/src/styles.css`, using existing tokens only:
+Add to `ui/src/styles.css`. Before pasting, look up the stylesheet's monospace font variable and the hover background the file table uses, and use those in place of `var(--mono)` and the `color-mix` line:
 
 ```css
 .task-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 2px; }
 .task-row { display: flex; align-items: center; gap: 6px; }
 .task-main { flex: 1; min-width: 0; display: flex; align-items: center; gap: 8px; background: none; border: 0; padding: 3px 4px; color: inherit; font: inherit; text-align: left; cursor: pointer; border-radius: 4px; }
-.task-main:hover, .task-row.open .task-main { background: var(--hover, color-mix(in srgb, var(--ink) 6%, transparent)); }
+.task-main:hover, .task-row.open .task-main { background: color-mix(in srgb, var(--ink) 6%, transparent); }
 .task-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--ink-faint); flex: none; }
 .task-dot.running { background: var(--moss); }
 .task-dot.backoff { background: var(--sky); }
 .task-dot.failed, .task-dot.gave-up { background: var(--rust); }
 .task-name { font-weight: 600; }
 .task-flags { color: var(--ink-dim); font-size: 0.85em; display: inline-flex; gap: 2px; }
-.task-cmd { color: var(--ink-dim); font-family: var(--mono, ui-monospace, monospace); font-size: 0.85em; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; flex: 1; }
+.task-cmd { color: var(--ink-dim); font-family: var(--mono); font-size: 0.85em; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; flex: 1; }
 .task-source { font-size: 0.75em; color: var(--ink-dim); border: 1px solid currentColor; border-radius: 3px; padding: 0 3px; }
 .task-when { color: var(--ink-dim); font-size: 0.85em; white-space: nowrap; }
 .task-actions { display: inline-flex; gap: 2px; }
 .task-foot { display: flex; gap: 6px; margin-top: 6px; }
 .task-open { margin-top: 6px; display: grid; gap: 4px; }
-.task-term { height: 16rem; }
-.task-log { max-height: 16rem; overflow: auto; margin: 0; font-size: 0.85em; white-space: pre-wrap; }
-.task-mark { color: var(--ink-dim); }
-.task-more { color: var(--ink-faint); }
+.task-log { max-height: 16rem; overflow: auto; margin: 0; font-family: var(--mono); font-size: 0.85em; white-space: pre-wrap; }
+.task-mark, .task-more { color: var(--ink-dim); }
 ```
 
-Replace `--hover` and `--mono` with the stylesheet's real token names if they differ (search `styles.css` for the monospace font and the hover background the file list uses).
-
-- [ ] **Step 6: Gates**
+- [ ] **Step 7: Gates**
 
 Run: `bun test && bun run typecheck && bun run lint && bun run build`
 Expected: PASS.
 
-- [ ] **Step 7: Commit**
+- [ ] **Step 8: Commit**
 
 ```bash
-git add ui/src/components/Tasks.tsx ui/src/surface.ts ui/src/components/Dock.tsx ui/src/term.ts ui/src/components/TermDock.tsx ui/src/store.ts ui/src/styles.css ui/src/surface.test.ts
-git commit -m "feat(tasks): the tasks section in a repo's panel"
+git add ui/src
+git commit -m "feat(tasks): the tasks section in a repo's panel, a task's terminal as a panel tab"
 ```
 
 ---
 
-### Task 11: The edit sheet, open as tab and pop out
+### Task 11: The edit sheet and a task in its own window
 
 **Files:**
-- Modify: `ui/src/components/RunSheet.tsx`, `ui/src/components/Tasks.tsx`, `ui/src/routes.ts`, `ui/src/routes.test.ts`, `ui/src/components/TermDock.tsx`, `ui/src/store.ts`
+- Modify: `ui/src/components/RunSheet.tsx`, `ui/src/components/Tasks.tsx`, `ui/src/routes.ts`, `ui/src/routes.test.ts`, `ui/src/components/TermDock.tsx`
 
 **Interfaces:**
-- Consumes: `saveTaskDef`, `Sheet` kind `task` (Task 10).
-- Produces: `TaskForm({ repoId, name })`; `Route.task: string | null`; `taskShellUrl(repoId, termId, task): string`; store `openTaskTab(repoId, task: TaskInfo, place: ShellPlace)`.
+- Consumes: `saveTaskDef`, `closeSheet`, `tasksOf`, the `task` sheet kind (Task 10).
+- Produces: `TaskForm({ repo, name })`; `Route.task: string | null`; `taskShellUrl(repoId, termId, task): string`.
 
-- [ ] **Step 1: Route test**
+- [ ] **Step 1: Route test, then the route**
 
 Add to `ui/src/routes.test.ts`:
 
@@ -3110,13 +3159,14 @@ test("a task window names its task", () => {
   expect(r.term).toBe("a".repeat(32));
   expect(r.task).toBe("dev");
   expect(parseRoute("?repo=app&view=shell&task=Bad").task).toBeNull();
+  expect(parseRoute("?repo=app").task).toBeNull();
 });
 ```
 
-Run `bun test ui/src/routes.test.ts`; expected FAIL. Then in `ui/src/routes.ts` add `task: string | null` to `Route`, parse it as `task: view === "shell" && task && /^[a-z0-9][a-z0-9._-]{0,39}$/.test(task) ? task : null` (read `q.get("task")`), and:
+Run `bun test ui/src/routes.test.ts`; expected FAIL. In `ui/src/routes.ts`: add `/** the task a shell window shows, which it only ever joins */ task: string | null;` to `Route`; in `parseRoute` read `const task = q.get("task");` and return `task: view === "shell" && task && /^[a-z0-9][a-z0-9._-]{0,39}$/.test(task) ? task : null`. Add:
 
 ```ts
-/** a task's terminal in a window of its own; it only ever joins */
+/** a task's terminal in a window of its own */
 export function taskShellUrl(id: string, term: string, task: string): string {
   const u = new URL(heldShellUrl(id, term));
   u.searchParams.set("task", task);
@@ -3124,58 +3174,42 @@ export function taskShellUrl(id: string, term: string, task: string): string {
 }
 ```
 
-In `TermDock.tsx` `shellTab`, add `...(route.task ? { task: route.task } : {})` to the tab it builds (read the route once into `route`). Run the test; expected PASS.
+In `TermDock.tsx` `shellTab`, read the route once (`const route = parseRoute(window.location.search);`), use `route.term` where it read `.term` before, and add `...(route.task ? { task: route.task } : {})` to the tab. Run the test; expected PASS.
 
-- [ ] **Step 2: Open as tab**
+- [ ] **Step 2: The window button**
 
-In `ui/src/store.ts` add an action:
-
-```ts
-  /** a task's terminal as a tab among the panel's shells or the strip's; closing it leaves the task running */
-  openTaskTab: (repoId: string, task: TaskInfo, place: ShellPlace) => void;
-```
-
-```ts
-  openTaskTab: (repoId, task, place) => {
-    const s = get();
-    const repo = s.repos.find((r) => r.id === repoId);
-    if (!repo) return;
-    if (!s.terms.some((t) => t.id === task.termId)) {
-      const tab: TermTab = { id: task.termId, repoId, name: `${repo.name} · ${task.name}`, path: repo.path, place, task: task.name };
-      set({ terms: [...s.terms, tab] });
-    }
-    get().joinTerm(task.termId);
-  },
-```
-
-Saved task tabs: in `init`, where `reconcileTerms` drops saved tabs whose shell is not held, keep a saved tab with `task` set when its `id` is in the `taskAll` list just loaded, and drop it otherwise. If `reconcileTerms` is pure and tested, add a `keep?: (t: TermTab) => boolean` parameter with a test (`reconcileTerms` keeps a task tab when `keep` says so) rather than special-casing it in the store.
-
-- [ ] **Step 3: The task menu entries**
-
-In `Tasks.tsx`, beside the ⋯ edit button for a live task, add two small buttons:
+In `Tasks.tsx`, in a running task's actions, before the edit button:
 
 ```tsx
 {t.live && (
-  <>
-    <button type="button" className="mini" title="Open as a tab" onClick={() => openTaskTab(repo.id, t, "panel")}>⧉</button>
-    <button type="button" className="mini" title="Open in a window" onClick={() => window.open(taskShellUrl(repo.id, t.termId, t.name), "_blank", "noopener")}>↗</button>
-  </>
+  <button type="button" className="mini" title="Open in a window" onClick={() => window.open(taskShellUrl(repo.id, t.termId, t.name), "_blank", "noopener")}>
+    ↗
+  </button>
 )}
 ```
 
-(`openTaskTab` from the store; `taskShellUrl` from routes.)
+(import `taskShellUrl` from `../routes`).
 
-- [ ] **Step 4: The edit sheet**
+- [ ] **Step 3: The sheet**
 
-In `ui/src/components/RunSheet.tsx`, render `TaskForm` for `sheet.kind === "task"` (replacing the `null` placeholder):
+In `RunSheet.tsx`'s `Body`, replace the Task 10 placeholder with:
 
 ```tsx
-/** add or edit a task: saved to this machine's overrides or to the repo's own file */
-function TaskForm({ repoId, name }: { repoId: string; name: string | null }) {
-  const repo = useStore((s) => s.repos.find((r) => r.id === repoId));
-  const task = useStore((s) => tasksOf(s, repoId).find((t) => t.name === name));
+  if (sheet.kind === "task") {
+    if (!repo) return <Missing what="That repo is no longer in the tree." onClose={close} />;
+    return <TaskForm repo={repo} name={sheet.name} />;
+  }
+```
+
+and add the form, in the same shape as `LaunchForm`:
+
+```tsx
+/** Adds or edits a task: saved to this machine's overrides, or to the repo's
+ *  own `.canopy/tasks.json` for a repo on this machine. */
+function TaskForm({ repo, name }: { repo: Repo; name: string | null }) {
+  const close = useStore((s) => s.closeSheet);
+  const task = useStore((s) => (name ? tasksOf(s, repo.id).find((t) => t.name === name) : undefined));
   const saveTaskDef = useStore((s) => s.saveTaskDef);
-  const closeSheet = useStore((s) => s.closeSheet);
   const [draft, setDraft] = useState({
     name: task?.name ?? "",
     cmd: task?.cmd ?? "",
@@ -3186,82 +3220,119 @@ function TaskForm({ repoId, name }: { repoId: string; name: string | null }) {
   });
   const [target, setTarget] = useState<"canopy" | "repo">("canopy");
   const [error, setError] = useState<string | null>(null);
-  if (!repo) return null;
 
-  const def = (): TaskPatch => ({
-    name: draft.name,
-    cmd: draft.cmd,
-    ...(draft.cwd ? { cwd: draft.cwd } : {}),
-    dev: draft.dev,
-    keep: draft.keep,
-    withPanel: draft.withPanel,
-  });
-  const save = async () => {
+  const run = async (what: () => Promise<void>) => {
     setError(null);
     try {
-      if (name && name !== draft.name) await saveTaskDef(repoId, name, null, target);
-      await saveTaskDef(repoId, draft.name, def(), target);
-      closeSheet();
-    } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
+      await what();
+      close();
+    } catch (err) {
+      setError(errText(err));
     }
   };
-  const hide = async () => {
-    await saveTaskDef(repoId, draft.name, { name: draft.name, hidden: true }, "canopy");
-    closeSheet();
-  };
-  const accept = async () => {
-    await saveTaskDef(repoId, draft.name, { name: draft.name, ...task?.suggested }, "canopy");
-    closeSheet();
-  };
+  const save = () =>
+    run(async () => {
+      if (name && name !== draft.name) await saveTaskDef(repo.id, name, null, target);
+      await saveTaskDef(
+        repo.id,
+        draft.name,
+        { name: draft.name, cmd: draft.cmd, ...(draft.cwd ? { cwd: draft.cwd } : {}), dev: draft.dev, keep: draft.keep, withPanel: draft.withPanel },
+        target,
+      );
+    });
+  const check = (key: "dev" | "keep" | "withPanel", label: string) => (
+    <label className="settings-row">
+      <input type="checkbox" checked={draft[key]} onChange={(e) => setDraft({ ...draft, [key]: e.target.checked })} /> {label}
+    </label>
+  );
+  const text = (key: "name" | "cmd" | "cwd", label: string, placeholder: string, hint: string) => (
+    <section className="settings-row">
+      <h3 className="panel-label">{label}</h3>
+      <input
+        type="text"
+        className="agent-extra"
+        placeholder={placeholder}
+        value={draft[key]}
+        onChange={(e) => setDraft({ ...draft, [key]: e.target.value })}
+        aria-label={label}
+      />
+      <p className="settings-hint">{hint}</p>
+    </section>
+  );
 
   return (
-    <form className="sheet-form" onSubmit={(e) => { e.preventDefault(); void save(); }}>
-      <h2>{name ? `Edit ${name}` : "Add a task"}</h2>
-      <label>name <input value={draft.name} onChange={(e) => setDraft({ ...draft, name: e.target.value })} pattern="[a-z0-9][a-z0-9._-]{0,39}" required /></label>
-      <label>command <input value={draft.cmd} onChange={(e) => setDraft({ ...draft, cmd: e.target.value })} required /></label>
-      <label>folder <input value={draft.cwd} placeholder="the repo root" onChange={(e) => setDraft({ ...draft, cwd: e.target.value })} /></label>
-      <label><input type="checkbox" checked={draft.dev} onChange={(e) => setDraft({ ...draft, dev: e.target.checked })} /> dev task (the preview pairs with it)</label>
-      <label><input type="checkbox" checked={draft.keep} onChange={(e) => setDraft({ ...draft, keep: e.target.checked })} /> keep running</label>
-      <label><input type="checkbox" checked={draft.withPanel} onChange={(e) => setDraft({ ...draft, withPanel: e.target.checked })} /> start when the panel opens</label>
-      <fieldset>
-        <legend>save to</legend>
-        <label><input type="radio" checked={target === "canopy"} onChange={() => setTarget("canopy")} /> this machine</label>
-        <label title={repo.host ? "only a repo on this machine" : undefined}>
-          <input type="radio" disabled={!!repo.host} checked={target === "repo"} onChange={() => setTarget("repo")} /> the repo (.canopy/tasks.json)
-        </label>
-      </fieldset>
-      {task?.suggested && (
-        <p className="note">
-          The repo file suggests {Object.keys(task.suggested).join(" and ")}.{" "}
-          <button type="button" className="mini" onClick={() => void accept()}>accept</button>
-        </p>
-      )}
-      {error && <p className="note error">{error}</p>}
-      <div className="sheet-actions">
-        {task?.source === "detected" && <button type="button" onClick={() => void hide()}>hide</button>}
-        {task && task.source !== "detected" && (
-          <button type="button" onClick={() => void saveTaskDef(repoId, task.name, null, target).then(closeSheet)}>delete</button>
+    <>
+      <header className="sheet-head">
+        <div>
+          <div className="eyebrow">task</div>
+          <h2 className="sheet-title">
+            {name ? `edit ${name}` : "add a task"} <span className="sheet-repo">{idText(repo.id)}</span>
+          </h2>
+        </div>
+        <button type="button" className="mini close" onClick={close} aria-label="Close">
+          ✕
+        </button>
+      </header>
+      <div className="sheet-body agent-form">
+        {text("name", "name", "dev", "lowercase letters, digits, dot, dash and underscore")}
+        {text("cmd", "command", "bun run dev", "one line, run through a login shell")}
+        {text("cwd", "folder", "the repo root", "relative to the repo root")}
+        {check("dev", "the dev task, the one the preview pairs with")}
+        {check("keep", "keep running: restart when it fails and after a restart")}
+        {check("withPanel", "start when the repo's panel opens")}
+        <section className="settings-row">
+          <h3 className="panel-label">save to</h3>
+          <label>
+            <input type="radio" checked={target === "canopy"} onChange={() => setTarget("canopy")} /> this machine
+          </label>{" "}
+          <label title={repo.host ? "only for a repo on this machine" : undefined}>
+            <input type="radio" disabled={!!repo.host} checked={target === "repo"} onChange={() => setTarget("repo")} /> the repo, .canopy/tasks.json
+          </label>
+        </section>
+        {task?.suggested && (
+          <p className="settings-hint">
+            The repo file asks for {Object.keys(task.suggested).join(" and ")}, which runs things without a click, so it waits for you.{" "}
+            <button type="button" className="mini" onClick={() => void run(() => saveTaskDef(repo.id, task.name, { name: task.name, ...task.suggested }, "canopy"))}>
+              accept
+            </button>
+          </p>
         )}
-        <button type="button" onClick={closeSheet}>cancel</button>
-        <button type="submit">save</button>
+        {error && <p className="note err">{error}</p>}
       </div>
-    </form>
+      <footer className="sheet-foot">
+        {task?.source === "detected" && (
+          <button type="button" className="mini" onClick={() => void run(() => saveTaskDef(repo.id, task.name, { name: task.name, hidden: true }, "canopy"))}>
+            hide
+          </button>
+        )}
+        {task && task.source !== "detected" && (
+          <button type="button" className="mini" onClick={() => void run(() => saveTaskDef(repo.id, task.name, null, target))}>
+            delete
+          </button>
+        )}
+        <button type="button" className="mini" onClick={close}>
+          cancel
+        </button>
+        <button type="button" className="mini strong" disabled={!draft.name || !draft.cmd} onClick={() => void save()}>
+          save
+        </button>
+      </footer>
+    </>
   );
 }
 ```
 
-Match the class names the existing `LaunchForm` uses for its form, actions and notes (read it first and use the same ones); the names above are placeholders for those. `closeSheet` is the store's existing close action; use its real name.
+Import `tasksOf` from the store. `idText` and `errText` already exist in this file.
 
-- [ ] **Step 5: Gates**
+- [ ] **Step 4: Gates**
 
 Run: `bun test && bun run typecheck && bun run lint && bun run build`
 
-- [ ] **Step 6: Commit**
+- [ ] **Step 5: Commit**
 
 ```bash
 git add ui/src
-git commit -m "feat(tasks): the task edit sheet, a task as a tab, and a task in its own window"
+git commit -m "feat(tasks): the task edit sheet and a task in a window of its own"
 ```
 
 ---
@@ -3272,7 +3343,7 @@ git commit -m "feat(tasks): the task edit sheet, a task as a tab, and a task in 
 - Modify: `ui/src/components/Tasks.tsx`, `ui/src/components/RepoGrid.tsx`, `ui/src/components/Dock.tsx`, `ui/src/components/TopBar.tsx`, `ui/src/components/Preview.tsx`, `ui/src/styles.css`
 
 **Interfaces:**
-- Consumes: `taskChip`, `devTask`, store `taskAll`, `tasks`, `openPanel`, `toggleSection`, `taskAct`.
+- Consumes: `taskChip`, `devTask`, `taskWhen`, `STATUS_WORD`; store `taskAll`, `tasksOf`, `loadTasks`, `showTasks`, `taskAct`; `useFitPop` from `../pop`.
 - Produces: `TaskChip({ repoId })`, `TasksChip()`.
 
 - [ ] **Step 1: The card and panel chip**
@@ -3287,43 +3358,166 @@ export function TaskChip({ repoId }: { repoId: string }) {
   const chip = taskChip(tasks);
   if (!chip) return null;
   return (
-    <button type="button" className={chip.bad ? "chip task-chip bad" : "chip task-chip"} title={chip.title} onClick={(e) => { e.stopPropagation(); showTasks(repoId); }}>
+    <button
+      type="button"
+      className={`run-chip task-chip${chip.bad ? " bad" : ""}`}
+      title={chip.title}
+      onClick={(e) => {
+        e.stopPropagation();
+        showTasks(repoId);
+      }}
+    >
       {chip.text}
     </button>
   );
 }
 ```
 
-Add a store action `showTasks(repoId)` that opens the repo's panel and unfolds its `tasks` section, modelled on `showLaunch` (read it and copy its shape, swapping the section key).
-
-In `RepoGrid.tsx` render `<TaskChip repoId={repo.id} />` right after the run/flow chip expression; in `Dock.tsx` next to `<RunChip run={repoRun} long />` in the panel head.
+In `RepoGrid.tsx`, render `<TaskChip repoId={repo.id} />` right after the `{activeFlow ? <FlowChip … : …}` expression. In `Dock.tsx`, render it right after `<RunChip run={repoRun} long />` in the panel head (outside that conditional, so it shows without a run).
 
 - [ ] **Step 2: The top bar chip**
 
-Add to `Tasks.tsx` a `TasksChip`, shaped like `ShellsChip` in `Shells.tsx` (same `settings` wrapper, `mini` button, `useFitPop`, outside-click and Escape handling; copy those parts from it):
+Add to `Tasks.tsx` (imports: `useRef`, `useFitPop` from `../pop`, `taskChip`, `taskWhen`):
 
-- Button text `▶ {running}`; rust (`className` gains `bad`) when any task is failed or gave up; render nothing when `taskAll` is empty.
-- Popover rows, one per task in `taskAll`, sorted by repo name then task name: repo name, task name, `STATUS_WORD`, `taskWhen(t, now)`, and buttons: open (`showTasks(t.repoId)`, closing the popover), restart (`taskAct(t.repoId, "restart", t.name)`), stop (`taskAct(t.repoId, "stop", t.name)`). A task with `gone === "repo"` shows "not in scan" and only stop. Errors show in a `note error` line like `ShellsChip` does.
+```tsx
+/** The top bar's ▶ n: every task that is not idle, on every shown backend,
+ *  each with open, restart and stop. Nothing when none is. */
+export function TasksChip() {
+  const all = useStore((s) => s.taskAll);
+  const repos = useStore((s) => s.repos);
+  const showTasks = useStore((s) => s.showTasks);
+  const taskAct = useStore((s) => s.taskAct);
+  const [open, setOpen] = useState(false);
+  const [error, setError] = useState("");
+  const [now, setNow] = useState(() => Date.now());
+  const ref = useRef<HTMLDivElement>(null);
+  useFitPop(ref, open);
 
-Render `<TasksChip />` in `TopBar.tsx` next to `<ShellsChip />` in both the desktop and phone layouts.
+  useEffect(() => {
+    if (!open) return;
+    setNow(Date.now());
+    const tick = setInterval(() => setNow(Date.now()), 1000);
+    const onDown = (e: PointerEvent) => {
+      if (!ref.current?.contains(e.target as Node)) setOpen(false);
+    };
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setOpen(false);
+    };
+    document.addEventListener("pointerdown", onDown);
+    window.addEventListener("keydown", onKey);
+    return () => {
+      clearInterval(tick);
+      document.removeEventListener("pointerdown", onDown);
+      window.removeEventListener("keydown", onKey);
+    };
+  }, [open]);
+
+  if (all.length === 0) return null;
+  const repoName = (id: string) => repos.find((r) => r.id === id)?.name ?? id;
+  const list = [...all].sort((a, b) => repoName(a.repoId).localeCompare(repoName(b.repoId)) || a.name.localeCompare(b.name));
+  const chip = taskChip(all);
+  const running = all.filter((t) => t.status === "running").length;
+  const act = (t: TaskInfo, action: "restart" | "stop") => {
+    setError("");
+    taskAct(t.repoId, action, t.name).catch((e: unknown) => setError(errText(e)));
+  };
+
+  return (
+    <div className="settings tasks-chip" ref={ref}>
+      <button
+        type="button"
+        className={`mini${open ? " on" : ""}${chip?.bad ? " bad" : ""}`}
+        aria-label="Tasks on this backend"
+        aria-expanded={open}
+        title={chip?.title ?? "Tasks"}
+        onClick={() => setOpen(!open)}
+      >
+        <span aria-hidden="true">▶</span> {running}
+      </button>
+      {open && (
+        <div className="settings-pop tasks-pop" role="dialog" aria-label="Tasks">
+          <ul className="task-list">
+            {list.map((t) => (
+              <li key={t.termId} className={`task-row ${t.status}`}>
+                <button
+                  type="button"
+                  className="task-main"
+                  disabled={t.gone === "repo"}
+                  onClick={() => {
+                    showTasks(t.repoId);
+                    setOpen(false);
+                  }}
+                >
+                  <span className={`task-dot ${t.status}`} aria-label={STATUS_WORD[t.status]} />
+                  <span className="task-name">{repoName(t.repoId)}</span>
+                  <span>{t.name}</span>
+                  <span className="task-when">{t.gone === "repo" ? "not in scan" : taskWhen(t, now)}</span>
+                </button>
+                <span className="task-actions">
+                  {t.status === "running" && !t.gone && (
+                    <button type="button" className="mini" title="Restart" onClick={() => act(t, "restart")}>
+                      ↻
+                    </button>
+                  )}
+                  {(t.status === "running" || t.status === "backoff") && (
+                    <button type="button" className="mini" title="Stop" onClick={() => act(t, "stop")}>
+                      ■
+                    </button>
+                  )}
+                </span>
+              </li>
+            ))}
+          </ul>
+          {error && <p className="note err">{error}</p>}
+        </div>
+      )}
+    </div>
+  );
+}
+```
+
+A task whose repo left the scan has no repo id to post to (`taskAct` needs one); its stop goes through the same route with the `repoId` the session carried, which the server finds only if the repo is in the scan. That case is rare; if the stop answers 404, the error line says so and the task can be stopped from a shell with `tmux kill-session`. Do not build more for it.
+
+Render `<TasksChip />` in `TopBar.tsx` right next to each `<ShellsChip />` (desktop and phone layouts).
 
 - [ ] **Step 3: The preview**
 
-In `ui/src/components/Preview.tsx` `PreviewSection`:
+`PreviewSection` already picks the one port that listens in the repo when nothing is chosen, so a running dev task's port is picked with no change. Add only the way to start it. In `ui/src/components/Preview.tsx`:
 
-- Read `const dev = useStore(useShallow((s) => devTask(tasksOf(s, repo.id))));` and call `loadTasks(repo.id)` once when the section opens if the repo has no entry in `s.tasks`.
-- When `choice` is null, `dev?.status === "running"`, and `portsFor(...)` yields exactly the ports tied to this repo, pick the first of them: `pick({ port, path: "/" })` inside an effect that runs when `ports` or `dev?.status` changes and `choice` is still null.
-- In the empty state (no choice and no repo port), when `dev` exists and is not running, show `<button type="button" className="mini" onClick={() => void taskAct(repo.id, "start", dev.name)}>start {dev.name}</button>`.
+```tsx
+  const dev = useStore(useShallow((s) => devTask(tasksOf(s, repo.id))));
+  const known = useStore((s) => repo.id in s.tasks);
+  const loadTasks = useStore((s) => s.loadTasks);
+  const taskAct = useStore((s) => s.taskAct);
+  useEffect(() => {
+    if (!closed && !known) loadTasks(repo.id).catch(() => {});
+  }, [closed, known, repo.id, loadTasks]);
+```
 
-Read `portsFor`'s signature in `ui/src/preview.ts` before writing the call; it already splits the repo's own ports from the unclaimed ones.
+and in the `!choice` empty-state paragraph, the `mine.length === 0` branch becomes:
+
+```tsx
+                  : mine.length === 0
+                    ? dev && dev.status !== "running"
+                      ? (
+                        <>
+                          Nothing listens in this repo yet.{" "}
+                          <button type="button" className="mini" onClick={() => void taskAct(repo.id, "start", dev.name).catch((e: unknown) => setError(errText(e)))}>
+                            start {dev.name}
+                          </button>
+                        </>
+                      )
+                      : "Nothing listens in this repo yet. Start its dev server in a shell and it turns up here, or pick a port."
+```
+
+(imports: `useShallow`, `useStore`, `tasksOf` from the store, `devTask` from `../tasks`).
 
 - [ ] **Step 4: Styles**
 
 ```css
-.task-chip.bad { color: var(--rust); border-color: var(--rust); }
+.task-chip.bad, .tasks-chip .mini.bad { color: var(--rust); border-color: var(--rust); }
+.tasks-pop { min-width: 20rem; }
 ```
-
-(Reuse whatever class the run chip's button uses for its base look; add only the `bad` variant.)
 
 - [ ] **Step 5: Gates**
 
@@ -3333,7 +3527,7 @@ Run: `bun test && bun run typecheck && bun run lint && bun run build`
 
 ```bash
 git add ui/src
-git commit -m "feat(tasks): task chips on cards and in the top bar, and the preview pairs with the dev task"
+git commit -m "feat(tasks): task chips on cards and in the top bar, and start dev from the preview"
 ```
 
 ---
@@ -3369,7 +3563,7 @@ CANOPY_CONFIG_DIR=$(mktemp -d) bun bin/canopy.ts ui --no-open --port 7890 ~/dev/
 
 (Check `canopy ui --help` for the real flag names first.) With the playwright-cli skill, open `http://127.0.0.1:7890`, open canopy's own card, and in the tasks section:
 
-1. Start `dev`: the dot goes moss, `▶ 1` shows on the card and in the top bar, and the terminal shows Vite's output.
+1. Start `dev`: the dot goes moss and `▶ 1` shows on the card and in the top bar. Click the task: its terminal opens as a tab among the panel's shells and shows Vite's output, and its log shows under the list.
 2. Type `h` + Enter into the task terminal (Vite's help): keys reach it.
 3. Restart: the terminal stays and shows a new start.
 4. Search the log for `ready`: hits list with the start marker's local time.
@@ -3379,7 +3573,11 @@ CANOPY_CONFIG_DIR=$(mktemp -d) bun bin/canopy.ts ui --no-open --port 7890 ~/dev/
 
 Kill the scratch server afterwards.
 
-- [ ] **Step 4: Commit**
+- [ ] **Step 4: On the mini, after the user redeploys**
+
+Only when the user asks for a redeploy (`bun run redeploy`; never push or deploy unasked). Then, from a canopy page on the mini, start a task that prints a line and confirm the line shows in its log (`GET /api/repos/tasks/log`). The log is created by the canopy container and appended to by the shells container's tmux server; if the two run as different uids and the line is missing, make `appendMark` create the file group-writable or have the shells side create it. Record the outcome in the handoff.
+
+- [ ] **Step 5: Commit**
 
 ```bash
 git add CLAUDE.md docs/superpowers/specs/2026-09-28-dev-cycle-tasks-design.md
