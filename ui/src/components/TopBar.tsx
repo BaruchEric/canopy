@@ -17,6 +17,7 @@ import { ChanChip } from "./Chan";
 import { DevicesChip } from "./Devices";
 import { KeptShells } from "./KeptShells";
 import { ShellsChip } from "./Shells";
+import { TasksChip } from "./Tasks";
 import { SourcesMenu } from "./Sources";
 
 /** The three crowns and a trunk. `live` makes them breathe (loading screen). */
@@ -442,6 +443,7 @@ function Chips() {
       <BackendsChip />
       <KeptShells />
       <ShellsChip />
+      <TasksChip />
       <DevicesChip />
       <ChanChip />
     </>

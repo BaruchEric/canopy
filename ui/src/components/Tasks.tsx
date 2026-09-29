@@ -1,9 +1,10 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useShallow } from "zustand/react/shallow";
 import { api } from "../api";
+import { useFitPop } from "../pop";
 import { taskShellUrl } from "../routes";
 import { tasksOf, useStore } from "../store";
-import { markTime, STATUS_WORD, taskWhen } from "../tasks";
+import { markTime, STATUS_WORD, taskChip, taskWhen } from "../tasks";
 import type { Repo, TaskInfo, TaskLogLine } from "../../../src/core/types";
 import { Section, useSectionClosed } from "./Surface";
 
@@ -197,6 +198,122 @@ function TaskLog({ repo, task }: { repo: Repo; task: TaskInfo }) {
         ))}
         {lines?.length === 0 && (q ? "no match" : "nothing logged yet")}
       </pre>
+    </div>
+  );
+}
+
+/** a card's word on its tasks: ▶ n running, or ✕ name in rust for one in trouble */
+export function TaskChip({ repoId }: { repoId: string }) {
+  const tasks = useStore(useShallow((s) => s.taskAll.filter((t) => t.repoId === repoId)));
+  const showTasks = useStore((s) => s.showTasks);
+  const chip = taskChip(tasks);
+  if (!chip) return null;
+  return (
+    <button
+      type="button"
+      className={`run-chip task-chip${chip.bad ? " bad" : ""}`}
+      title={chip.title}
+      onClick={(e) => {
+        e.stopPropagation();
+        showTasks(repoId);
+      }}
+    >
+      {chip.text}
+    </button>
+  );
+}
+
+/** The top bar's ▶ n: every task that is not idle, on every shown backend,
+ *  each with open, restart and stop. Nothing when none is. */
+export function TasksChip() {
+  const all = useStore((s) => s.taskAll);
+  const repos = useStore((s) => s.repos);
+  const showTasks = useStore((s) => s.showTasks);
+  const taskAct = useStore((s) => s.taskAct);
+  const [open, setOpen] = useState(false);
+  const [error, setError] = useState("");
+  const [now, setNow] = useState(() => Date.now());
+  const ref = useRef<HTMLDivElement>(null);
+  useFitPop(ref, open);
+
+  useEffect(() => {
+    if (!open) return;
+    setNow(Date.now());
+    const tick = setInterval(() => setNow(Date.now()), 1000);
+    const onDown = (e: PointerEvent) => {
+      if (!ref.current?.contains(e.target as Node)) setOpen(false);
+    };
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setOpen(false);
+    };
+    document.addEventListener("pointerdown", onDown);
+    window.addEventListener("keydown", onKey);
+    return () => {
+      clearInterval(tick);
+      document.removeEventListener("pointerdown", onDown);
+      window.removeEventListener("keydown", onKey);
+    };
+  }, [open]);
+
+  if (all.length === 0) return null;
+  const repoName = (id: string) => repos.find((r) => r.id === id)?.name ?? id;
+  const list = [...all].sort((a, b) => repoName(a.repoId).localeCompare(repoName(b.repoId)) || a.name.localeCompare(b.name));
+  const chip = taskChip(all);
+  const running = all.filter((t) => t.status === "running").length;
+  const act = (t: TaskInfo, action: "restart" | "stop") => {
+    setError("");
+    taskAct(t.repoId, action, t.name).catch((e: unknown) => setError(errText(e)));
+  };
+
+  return (
+    <div className="settings tasks-chip" ref={ref}>
+      <button
+        type="button"
+        className={`mini${open ? " on" : ""}${chip?.bad ? " bad" : ""}`}
+        aria-label="Tasks on this backend"
+        aria-expanded={open}
+        title={chip?.title ?? "Tasks"}
+        onClick={() => setOpen(!open)}
+      >
+        <span aria-hidden="true">▶</span> {running}
+      </button>
+      {open && (
+        <div className="settings-pop tasks-pop" role="dialog" aria-label="Tasks">
+          <ul className="task-list">
+            {list.map((t) => (
+              <li key={t.termId} className={`task-row ${t.status}`}>
+                <button
+                  type="button"
+                  className="task-main"
+                  disabled={t.gone === "repo"}
+                  onClick={() => {
+                    showTasks(t.repoId);
+                    setOpen(false);
+                  }}
+                >
+                  <span className={`task-dot ${t.status}`} aria-label={STATUS_WORD[t.status]} />
+                  <span className="task-name">{repoName(t.repoId)}</span>
+                  <span>{t.name}</span>
+                  <span className="task-when">{t.gone === "repo" ? "not in scan" : taskWhen(t, now)}</span>
+                </button>
+                <span className="task-actions">
+                  {t.status === "running" && !t.gone && (
+                    <button type="button" className="mini" title="Restart" onClick={() => act(t, "restart")}>
+                      ↻
+                    </button>
+                  )}
+                  {(t.status === "running" || t.status === "backoff") && (
+                    <button type="button" className="mini" title="Stop" onClick={() => act(t, "stop")}>
+                      ■
+                    </button>
+                  )}
+                </span>
+              </li>
+            ))}
+          </ul>
+          {error && <p className="note err">{error}</p>}
+        </div>
+      )}
     </div>
   );
 }
