@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { asChanMessage, chanTarget, dmPeer, fleetNotice, flowNotice, parseSse, readQuery, runNotice, shellHandle } from "./tailchan";
+import { asAgentCard, asChanMessage, chanTarget, dmPeer, fleetNotice, flowNotice, parseSse, readQuery, registryCard, runNotice, shellHandle } from "./tailchan";
 import type { Fleet, Flow, Run } from "./types";
 
 describe("chanTarget", () => {
@@ -133,4 +133,72 @@ test("fleetNotice counts what ran and what was skipped", () => {
   expect(fleetNotice(fleet, "working")).toEqual({ to: "channel", text: "fleet ship done: 2 repos, 1 skipped" });
   expect(fleetNotice(fleet, "done")).toBeNull();
   expect(fleetNotice({ ...fleet, status: "working" }, undefined)).toBeNull();
+});
+
+describe("the registry's cards", () => {
+  const card = {
+    id: "claude:abc",
+    handle: "app-0123",
+    node: "macmini-2018",
+    harness: "claude",
+    session: "abc",
+    origin: "canopy-shell",
+    cwd: "/dev/app",
+    repo: "https://github.com/me/app",
+    branch: "main",
+    model: "opus",
+    mode: "default",
+    state: "waiting",
+    waiting: "your turn",
+    caps: ["os:linux", "container"],
+    offers: [],
+    notifyIdle: false,
+    where: { os: "linux", container: true, pid: 41, term: null, canopy: { backend: "mini", term: "0123" } },
+    transcript: "/home/bun/.claude/projects/-dev-app/abc.jsonl",
+    startedAt: 1,
+    seenAt: 2,
+    endedAt: null,
+  };
+
+  test("a broker card reads back field for field", () => {
+    expect(asAgentCard(card)).toEqual(card as never);
+  });
+
+  test("the keys are checked and the rest defaulted", () => {
+    expect(asAgentCard({ ...card, state: "gone" })).toBeNull();
+    expect(asAgentCard({ ...card, id: "" })).toBeNull();
+    expect(asAgentCard({ ...card, seenAt: "2" })).toBeNull();
+    expect(asAgentCard({ id: "scan:mini:c:9", node: "mini", state: "idle", seenAt: 5, harness: "gemini", origin: "?" })).toEqual({
+      id: "scan:mini:c:9",
+      handle: "",
+      node: "mini",
+      harness: "other",
+      session: null,
+      origin: "elsewhere",
+      cwd: "",
+      repo: null,
+      branch: null,
+      model: null,
+      mode: null,
+      state: "idle",
+      waiting: null,
+      caps: [],
+      offers: [],
+      notifyIdle: false,
+      where: { os: "", container: false, pid: null, term: null, canopy: null },
+      transcript: null,
+      startedAt: 5,
+      seenAt: 5,
+      endedAt: null,
+    });
+  });
+
+  test("an #agents event carries one; anything else carries none", () => {
+    const m = { id: 9, channel: "agents", handle: "tailchan", node: "tailchan", kind: "event", body: JSON.stringify({ type: "agent", card }), meta: { silent: true }, ts: 3 };
+    expect(registryCard(m)?.id).toBe("claude:abc");
+    expect(registryCard({ ...m, channel: "asks" })).toBeNull();
+    expect(registryCard({ ...m, kind: "text" })).toBeNull();
+    expect(registryCard({ ...m, body: "{" })).toBeNull();
+    expect(registryCard({ ...m, body: JSON.stringify({ type: "ask", ask: {} }) })).toBeNull();
+  });
 });

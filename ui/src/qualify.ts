@@ -111,6 +111,9 @@ export function qEvent(q: Q, ev: ServerEvent): ServerEvent {
     case "helpers":
     case "peers":
     case "chan":
+    // the registry's cards are the broker's, named by the broker's own ids;
+    // only home's are read (the store drops any other backend's)
+    case "registry":
       return ev;
   }
 }

@@ -2,7 +2,9 @@
  *  feed panel shows. Pure, so it is tested; the store hands it the event and
  *  what it knew before the event, and the difference is what the line says. */
 
+import { isLiveAgent } from "../../src/core/types";
 import type {
+  AgentCard,
   AgentRoutes,
   Fleet,
   Flow,
@@ -19,6 +21,7 @@ import type {
   TermInfo,
   Workspace,
 } from "../../src/core/types";
+import { cardName, repoOfCard, repoWord, whereWord } from "./agentcards";
 import { chanLine } from "./chan";
 import { peerLines } from "./peers";
 import { taskLines } from "./tasks";
@@ -35,7 +38,8 @@ export type FeedKind =
   | "client"
   | "shell"
   | "chan"
-  | "task";
+  | "task"
+  | "registry";
 
 export interface FeedEntry {
   id: number;
@@ -81,6 +85,9 @@ export interface FeedSnapshot {
   kept?: KeptShell[];
   /** the handle the UI speaks tailchan as, so its own posts read "you" */
   chanAs?: string;
+  /** the agent registry's cards by id, so a change of state can be told
+   *  from a beat */
+  registry?: Record<string, AgentCard>;
 }
 
 /** how many entries the feed keeps; older ones fall off the top */
@@ -478,7 +485,39 @@ export function describeEvent(
     case "chan":
       // a channel line canopy marked silent is a quiet one
       return [{ at, kind: "chan", source: "", text: chanLine(ev.message, prev.chanAs ?? ""), quiet: ev.message.meta["silent"] === true }];
+    case "registry":
+      return registryLines(ev, prev, at);
   }
+}
+
+/** What the registry says: an agent started, is waiting, ended or was
+ *  lost, one line each; a turn starting or ending is a quiet line, and a
+ *  card the broker swept after a week says nothing. */
+export function registryLines(ev: Extract<ServerEvent, { type: "registry" }>, prev: FeedSnapshot, at: number): FeedLine[] {
+  const held = prev.registry ?? {};
+  const lines: FeedLine[] = [];
+  for (const c of ev.cards) {
+    const before = held[c.id];
+    const repo = repoOfCard(c, prev.repos);
+    // a line about a repo shows its name in its own column; else it says which
+    const name = repo ? cardName(c) : [cardName(c), repoWord(c) ? `in ${repoWord(c)}` : ""].filter(Boolean).join(" ");
+    const say = (text: string, quiet = false) => lines.push(about(repo, "registry", at, text, quiet));
+    const waiting = `${name} is waiting${c.waiting ? `: ${clip(c.waiting, 80)}` : ""}`;
+    if (!before || (before.state === "ended" && isLiveAgent(c))) {
+      if (c.state === "waiting") say(waiting);
+      else if (isLiveAgent(c)) say(`${name} started, ${whereWord(c)}`);
+      else say(`${name} ${c.state}`, true);
+    } else if (before.state !== c.state) {
+      if (c.state === "waiting") say(waiting);
+      else if (c.state === "ended") say(`${name} ended`);
+      else if (c.state === "lost") say(`${name} lost: no word from it for minutes`);
+      else if (before.state === "lost") say(`${name} is back, ${c.state}`);
+      else say(`${name} ${c.state}`, true);
+    } else if (c.state === "waiting" && c.waiting !== before.waiting) {
+      say(waiting);
+    }
+  }
+  return lines;
 }
 
 /** `release:v1.0` as "v1.0", `pr:12` as "PR #12", `local` as "this checkout". */

@@ -856,7 +856,10 @@ export type ServerEvent =
   /** a repo's tasks, whenever one starts, stops, dies, is edited or a viewer comes or goes */
   | { type: "tasks"; repoId: string; tasks: TaskInfo[] }
   /** a tailchan message the UI's handle heard, or one the UI just sent */
-  | { type: "chan"; message: ChanMessage };
+  | { type: "chan"; message: ChanMessage }
+  /** agent cards the broker changed, whole, and the ids of any it dropped
+   *  (swept after a week); the home backend's alone, like `chan` */
+  | { type: "registry"; cards: AgentCard[]; gone?: string[] };
 
 export type BuildChange = "installed" | "built" | "launched" | "exited" | "removed";
 
@@ -1434,3 +1437,91 @@ export type TailchanInfo =
       who: ChanWho[];
       channels: ChanChannel[];
     };
+
+/* ---------- the agent registry: every agent on the tailnet, as the broker keeps it ---------- */
+
+export const AGENT_STATES = ["working", "idle", "waiting", "ended", "lost"] as const;
+export type AgentState = (typeof AGENT_STATES)[number];
+
+/** the states an agent is still running in */
+export const LIVE_AGENT_STATES: readonly AgentState[] = ["working", "idle", "waiting"];
+
+export const isLiveAgent = (c: Pick<AgentCard, "state">): boolean => LIVE_AGENT_STATES.includes(c.state);
+
+/** Where an agent card came from: a canopy shell or run (its hook saw
+ *  `CANOPY_TERM` or `CANOPY_RUN`), a hooked agent anywhere else, or a
+ *  backend's process scan (no hooks, so no session, handle or state). */
+export type AgentOrigin = "canopy-shell" | "canopy-run" | "elsewhere" | "scan";
+
+/**
+ * One agent as tailchan's broker keeps it, field for field (the broker's
+ * `AgentCard` in homelab/services/tailchan/server.ts). `node` is the
+ * tailnet machine that wrote it, from WhoIs; the rest is what its hook or a
+ * scan said. `repo` is the remote as a web url, the key cards join repo
+ * cards on. A scan card has an empty `handle`, since nothing reads a DM for
+ * it. Times are unix ms.
+ */
+export interface AgentCard {
+  /** `${harness}:${session}` from a hook, `scan:${node}:${c|h}:${pid}` from a scan */
+  id: string;
+  /** what a DM goes to; "" on a scan card */
+  handle: string;
+  node: string;
+  harness: Harness | "other";
+  session: string | null;
+  origin: AgentOrigin;
+  cwd: string;
+  repo: string | null;
+  branch: string | null;
+  model: string | null;
+  /** the permission mode as the harness reports it */
+  mode: string | null;
+  state: AgentState;
+  /** one line: what it waits on */
+  waiting: string | null;
+  caps: string[];
+  offers: string[];
+  /** page the human when this agent starts waiting while they are away */
+  notifyIdle: boolean;
+  where: {
+    os: string;
+    container: boolean;
+    pid: number | null;
+    /** TERM_PROGRAM: kitty, vscode, … */
+    term: string | null;
+    canopy: { backend: string; term?: string; run?: string } | null;
+  };
+  transcript: string | null;
+  startedAt: number;
+  seenAt: number;
+  endedAt: number | null;
+}
+
+/** `GET /api/registry` (a 503 without a broker): every card the broker
+ *  holds, live and the week's ended and lost ones */
+export interface RegistryInfo {
+  ready: true;
+  cards: AgentCard[];
+}
+
+/** One agent process a backend's scan found, as `POST /v1/agents/scan`
+ *  takes it: the repo (as a web url) and branch when its folder is in a
+ *  scanned repo. */
+export interface ScanProc {
+  pid: number;
+  harness: Harness;
+  cwd: string;
+  startedAt: number;
+  repo?: string;
+  branch?: string;
+}
+
+/** The scan's whole post: every agent in this pid namespace, which the
+ *  broker makes this node's scan cards there. */
+export interface ScanBody {
+  /** whether the scan ran in a container, the pid namespace it names */
+  container: boolean;
+  procs: ScanProc[];
+  /** darwin or linux */
+  os?: string;
+}

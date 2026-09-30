@@ -120,6 +120,7 @@ describe("qEvent", () => {
       { type: "workspaces", workspaces: [] },
       { type: "helpers", helpers: [] },
       { type: "peers", seen: [] },
+      { type: "registry", cards: [], gone: ["claude:s1"] },
     ] as ServerEvent[]) {
       expect(qEvent(q, ev)).toBe(ev);
     }

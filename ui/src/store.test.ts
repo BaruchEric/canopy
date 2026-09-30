@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import {
   PANEL_TERM,
   agentFor,
+  agentsOn,
   activeFilterCount,
   archivedCount,
   cardOf,
@@ -32,6 +33,7 @@ import { setBase, setRegistry } from "./registry";
 import { hasOtherBackend, RETRY_FIRST } from "./backends";
 import {
   DEFAULT_AGENT,
+  type AgentCard,
   type AgentSettings,
   type KeptShell,
   type PeerSeen,
@@ -51,27 +53,28 @@ describe("closedSectionsOf", () => {
       "launch",
       "peers",
       "preview",
+      "agents",
     ]);
   });
   test("a section the reader unfolded stays unfolded once the layout knows it", () => {
     const saved = ["search", "history", "claude"];
-    expect(closedSectionsOf(saved, ["search", "history", "claude", "launch", "peers", "preview"])).toBe(saved);
+    expect(closedSectionsOf(saved, ["search", "history", "claude", "launch", "peers", "preview", "agents"])).toBe(saved);
   });
   test("a stored fold is not doubled", () => {
-    expect(closedSectionsOf(["launch"], [])).toEqual(["launch", "search", "history", "claude", "peers", "preview"]);
+    expect(closedSectionsOf(["launch"], [])).toEqual(["launch", "search", "history", "claude", "peers", "preview", "agents"]);
   });
 });
 
 describe("per-repo folds", () => {
   test("a repo nobody has touched folds the defaults", () => {
-    expect(sectionsFor({}, "a")).toEqual(["search", "history", "claude", "launch", "peers", "preview"]);
+    expect(sectionsFor({}, "a")).toEqual(["search", "history", "claude", "launch", "peers", "preview", "agents"]);
     expect(closedIn({ closedSections: {} }, "a", "history")).toBe(true);
     expect(closedIn({ closedSections: {} }, "a", "changes")).toBe(false);
   });
   test("a toggle touches one repo and leaves the rest alone", () => {
     const one = toggleIn({}, "a", "history");
-    expect(sectionsFor(one, "a")).toEqual(["search", "claude", "launch", "peers", "preview"]);
-    expect(sectionsFor(one, "b")).toEqual(["search", "history", "claude", "launch", "peers", "preview"]);
+    expect(sectionsFor(one, "a")).toEqual(["search", "claude", "launch", "peers", "preview", "agents"]);
+    expect(sectionsFor(one, "b")).toEqual(["search", "history", "claude", "launch", "peers", "preview", "agents"]);
     const two = toggleIn(one, "a", "changes");
     expect(closedIn({ closedSections: two }, "a", "changes")).toBe(true);
     expect(closedIn({ closedSections: two }, "b", "changes")).toBe(false);
@@ -80,7 +83,7 @@ describe("per-repo folds", () => {
     const closed = { a: ["search"] };
     expect(unfoldIn(closed, "a", "history")).toBe(closed);
     expect(sectionsFor(unfoldIn(closed, "a", "search"), "a")).toEqual([]);
-    expect(sectionsFor(unfoldIn({}, "b", "launch"), "b")).toEqual(["search", "history", "claude", "peers", "preview"]);
+    expect(sectionsFor(unfoldIn({}, "b", "launch"), "b")).toEqual(["search", "history", "claude", "peers", "preview", "agents"]);
   });
 });
 
@@ -521,6 +524,7 @@ describe("several backends", () => {
         "/api/history",
         "/api/peers",
         "/api/tailchan",
+        "/api/registry",
         "/api/tasks",
       ].sort(),
     );
@@ -575,6 +579,55 @@ describe("several backends", () => {
     const after = useStore.getState().repos;
     expect(after.find((r) => r.id === "proj")).toBe(home);
     expect(after.find((r) => r.id === "b|proj")?.name).toBe("changed");
+  });
+
+  test("the agent registry is home's alone, and a card joins the repo card by its remote", async () => {
+    const card = (id: string, over: Partial<AgentCard> = {}): AgentCard => ({
+      id,
+      handle: "proj-0123",
+      node: "a",
+      harness: "claude",
+      session: "s",
+      origin: "canopy-shell",
+      cwd: "/a/proj",
+      repo: "https://github.com/me/proj",
+      branch: "main",
+      model: null,
+      mode: null,
+      state: "working",
+      waiting: null,
+      caps: [],
+      offers: [],
+      notifyIdle: false,
+      where: { os: "linux", container: false, pid: 1, term: null, canopy: null },
+      transcript: null,
+      startedAt: 1,
+      seenAt: 2,
+      endedAt: null,
+      ...over,
+    });
+    const proj = repo("proj", { remotes: ["git@github.com:me/proj.git"], link: "https://github.com/me/proj" });
+    await start(
+      backendAnswers(scanOf("/a", [proj]), [], { "/api/backends": twoBackends, "/api/registry": { ready: true, cards: [card("claude:one")] } }),
+      backendAnswers(scanOf("/b", []), []),
+    );
+    await settle();
+    let s = useStore.getState();
+    expect(s.registryReady).toBe(true);
+    expect(agentsOn(s, "proj").map((c) => c.id)).toEqual(["claude:one"]);
+    // b's broker is not this page's registry
+    useStore.getState().applyEvent({ type: "registry", cards: [card("claude:two")] }, "b");
+    expect(Object.keys(useStore.getState().registry)).toEqual(["claude:one"]);
+    // home's is: a new card lands, a lagging reading of one held does not
+    useStore.getState().applyEvent({ type: "registry", cards: [card("claude:two", { state: "waiting" }), card("claude:one", { state: "idle", seenAt: 1 })] }, "a");
+    s = useStore.getState();
+    expect(s.registry["claude:one"]?.state).toBe("working");
+    expect(agentsOn(s, "proj").map((c) => [c.id, c.state])).toEqual([
+      ["claude:two", "waiting"],
+      ["claude:one", "working"],
+    ]);
+    useStore.getState().applyEvent({ type: "registry", cards: [], gone: ["claude:two"] }, "a");
+    expect(Object.keys(useStore.getState().registry)).toEqual(["claude:one"]);
   });
 
   test("a scan from b prunes only b's panels", async () => {

@@ -10,6 +10,7 @@ import type {
   RepoAgent,
   BackendEntry,
   ChanMessage,
+  RegistryInfo,
   TailchanInfo,
   Device,
   HelperInfo,
@@ -416,6 +417,8 @@ export const api = {
     req<{ keeping: boolean }>(b, "/api/keep", { method: "POST", body: JSON.stringify({ on }) }),
   /** tailchan: the broker's view as the UI's handle, or why it is off */
   tailchan: () => req<TailchanInfo>(homeName(), "/api/tailchan"),
+  /** the agent registry, the home backend's alone; a 503 without a broker */
+  registry: () => req<RegistryInfo>(homeName(), "/api/registry"),
   chanRead: (target: string, n = 50) =>
     req<ChanMessage[]>(homeName(), `/api/tailchan/read?target=${encodeURIComponent(target)}&n=${n}`),
   chanSend: (target: string, body: string, kind: "text" | "clip" = "text") =>

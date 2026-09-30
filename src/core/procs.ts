@@ -7,7 +7,7 @@
  * asks `ps`. The parsers and the walk are pure and tested; the reads are
  * best effort and come back empty rather than throw.
  */
-import { readdir, readFile } from "node:fs/promises";
+import { readdir, readFile, readlink } from "node:fs/promises";
 import { exec } from "./exec";
 import { agentIn, isShellCommand } from "./keep";
 import type { PaneInfo } from "./tmux";
@@ -17,6 +17,13 @@ export interface Proc {
   pid: number;
   ppid: number;
   argv: string[];
+  /** the kernel's name for it (`/proc/<pid>/stat`'s, or `ps -o comm`'s,
+   *  which on a Mac is the executable's path), when it was read */
+  comm?: string;
+  /** the one-letter state (`Z` for a zombie), on Linux */
+  state?: string;
+  /** when it started, unix ms, when it could be told */
+  startedAt?: number;
 }
 
 /** how many processes under a pane are looked at, at most */
@@ -31,6 +38,36 @@ export function parseStatPpid(stat: string): number | null {
   const ppid = Number(stat.slice(close + 2).split(" ")[1]);
   return Number.isInteger(ppid) && ppid >= 0 ? ppid : null;
 }
+
+/** The `/proc/<pid>/stat` fields the process table keeps: the command
+ *  (in parens, and it may hold spaces and parens itself), the state letter
+ *  after it, the ppid, and the start time in clock ticks after boot (field
+ *  22). Null for a line that is not one. */
+export function parseStat(stat: string): { comm: string; state: string; ppid: number; start: number | null } | null {
+  const open = stat.indexOf("(");
+  const close = stat.lastIndexOf(")");
+  if (open < 0 || close < open) return null;
+  const rest = stat.slice(close + 2).split(" ");
+  const ppid = Number(rest[1]);
+  if (!Number.isInteger(ppid) || ppid < 0) return null;
+  const start = Number(rest[19]);
+  return { comm: stat.slice(open + 1, close), state: rest[0] ?? "", ppid, start: Number.isFinite(start) && rest[19] !== undefined ? start : null };
+}
+
+/** The boot time out of `/proc/stat`, unix seconds: its `btime` line. A
+ *  container reads the host's, which is what its processes' start ticks
+ *  count from. */
+export function parseBootTime(text: string): number | null {
+  const m = /^btime\s+(\d+)\s*$/m.exec(text);
+  return m ? Number(m[1]) : null;
+}
+
+/** clock ticks a second in `/proc/<pid>/stat` (USER_HZ, 100 on every
+ *  Linux canopy runs on) */
+export const CLOCK_TICKS = 100;
+
+/** a stat start time as unix ms, off the boot time */
+export const tickTime = (bootSecs: number, ticks: number, hz = CLOCK_TICKS): number => Math.round(bootSecs * 1000 + (ticks * 1000) / hz);
 
 /** `/proc/<pid>/cmdline`: NUL-separated words, empty for a kernel thread. */
 export const parseCmdline = (raw: string): string[] => raw.split("\0").filter((w) => w !== "");
@@ -70,20 +107,43 @@ export function descendants(procs: readonly Proc[], root: number, cap = TREE_CAP
   return out;
 }
 
-async function linuxProcs(): Promise<Proc[]> {
-  const pids = (await readdir("/proc").catch(() => [] as string[])).filter((d) => /^\d+$/.test(d));
+/** Every process `/proc` shows: pid, ppid, argv, and off the same stat
+ *  read its comm, state and start (as unix ms when the boot time reads). */
+export async function linuxProcs(): Promise<Proc[]> {
+  const [pids, boot] = await Promise.all([
+    readdir("/proc").then((ds) => ds.filter((d) => /^\d+$/.test(d))).catch(() => [] as string[]),
+    readFile("/proc/stat", "utf8").then(parseBootTime).catch(() => null),
+  ]);
   const read = await Promise.all(
-    pids.map(async (pid) => {
+    pids.map(async (pid): Promise<Proc | null> => {
       const [stat, cmd] = await Promise.all([
         readFile(`/proc/${pid}/stat`, "utf8").catch(() => ""),
         readFile(`/proc/${pid}/cmdline`, "utf8").catch(() => ""),
       ]);
-      const ppid = parseStatPpid(stat);
-      return ppid === null ? null : { pid: Number(pid), ppid, argv: parseCmdline(cmd) };
+      const f = parseStat(stat);
+      if (!f) return null;
+      return {
+        pid: Number(pid),
+        ppid: f.ppid,
+        argv: parseCmdline(cmd),
+        comm: f.comm,
+        state: f.state,
+        ...(boot !== null && f.start !== null ? { startedAt: tickTime(boot, f.start) } : {}),
+      };
     }),
   );
   return read.filter((p): p is Proc => p !== null);
 }
+
+/** A process's working folder off `/proc`, undefined when it cannot be
+ *  read (another user's, or gone). Shared by the ports list and the scan. */
+export const procCwd = (pid: number | string): Promise<string | undefined> => readlink(`/proc/${pid}/cwd`).catch(() => undefined);
+
+/** a process's comm off `/proc`, trimmed */
+export const procComm = (pid: number | string): Promise<string | undefined> =>
+  readFile(`/proc/${pid}/comm`, "utf8")
+    .then((s) => s.trim())
+    .catch(() => undefined);
 
 async function psProcs(): Promise<Proc[]> {
   const r = await exec(["ps", "-axo", "pid=,ppid=,args="], { timeoutMs: 5_000 });

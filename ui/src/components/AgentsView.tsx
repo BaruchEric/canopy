@@ -18,20 +18,29 @@ import {
 import { backendOf } from "../registry";
 import { connOf, multi, routesOf, useStore } from "../store";
 import { AgentSettingsForm, EffectiveTable, PickEditor } from "./AgentForm";
+import { ChanChip } from "./Chan";
+import { RegistryTab } from "./Registry";
 import { Seg } from "./Seg";
 
 const errText = (err: unknown) => String(err instanceof Error ? err.message : err);
 
-const TABS = [{ value: "routing", label: "routing", title: "Which agent starts for what: profiles, roles and repo overrides" }] as const;
+type Tab = "registry" | "routing";
+
+const TABS = [
+  { value: "registry", label: "registry", title: "Every agent on the tailnet: running, waiting, and the day's ended ones" },
+  { value: "routing", label: "routing", title: "Which agent starts for what: profiles, roles and repo overrides" },
+] as const;
 
 /**
- * The agents view: a fourth view beside git, library and ports. Its one tab
- * for now is routing (the registry of every running agent comes later):
- * the profiles a route can name, the route per role, the repos that
- * override them, and any repo's effective table. Routes are the backend's
- * own; on a board with several, the picker at the top says whose are shown.
+ * The agents view: a fourth view beside git, library and ports. The
+ * registry tab is every agent tailchan's broker knows of, on any machine
+ * (only when the home backend has a broker). Routing is the profiles a
+ * route can name, the route per role, the repos that override them, and any
+ * repo's effective table. Routes are the backend's own; on a board with
+ * several, the picker at the top says whose are shown. `onGit` takes the
+ * page to the git view, where a joined panel shell shows.
  */
-export function AgentsView() {
+export function AgentsView({ onGit }: { onGit?: () => void } = {}) {
   const home = useStore((s) => s.home);
   const order = useStore((s) => s.backendOrder);
   const isMulti = useStore(multi);
@@ -39,13 +48,16 @@ export function AgentsView() {
   const scope = picked && order.includes(picked) ? picked : home;
   const routes = useStore((s) => routesOf(s, scope));
   const has = useStore((s) => harnessesOf(connOf(s, scope).backend));
-  const [tab, setTab] = useState<"routing">("routing");
+  const ready = useStore((s) => s.registryReady);
+  // the registry first when there is one: the broker's pages link here
+  const [chosen, setTab] = useState<Tab | null>(null);
+  const tab: Tab = ready ? (chosen ?? "registry") : "routing";
 
   return (
     <section className="agents-view" aria-label="Agents">
       <div className="agents-bar">
-        <Seg label="Agents view" value={tab} options={TABS} onChange={setTab} />
-        {isMulti && (
+        {ready && <Seg label="Agents view" value={tab} options={TABS} onChange={setTab} />}
+        {tab === "routing" && isMulti && (
           <Seg
             label="Backend"
             value={scope}
@@ -53,17 +65,22 @@ export function AgentsView() {
             onChange={setPicked}
           />
         )}
-        <span className="agents-has" title="The harnesses this backend has installed">
+        {tab === "registry" && (
+          <span className="agents-has">
+            <ChanChip />
+          </span>
+        )}
+        {tab === "routing" && <span className="agents-has" title="The harnesses this backend has installed">
           {HARNESSES.map((h) => (
             <span key={h} className={has.includes(h) ? `harness-chip h-${h}` : "harness-chip off"}>
               {HARNESS[h].glyph} {HARNESS[h].label}
               {has.includes(h) ? "" : " · not installed"}
             </span>
           ))}
-        </span>
+        </span>}
       </div>
       <div className="agents-body">
-        <Routing scope={scope} routes={routes} has={has} />
+        {tab === "registry" ? <RegistryTab onGit={onGit} /> : <Routing scope={scope} routes={routes} has={has} />}
       </div>
     </section>
   );

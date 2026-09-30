@@ -6144,6 +6144,96 @@ span.effective-flag:not(:first-child) {
   font-size: 11px;
   color: var(--ink-faint);
 }
+
+/* the registry: every agent the broker knows, a row each */
+.reg-bar {
+  margin: 0 0 4px;
+}
+.reg-row.reg-gone {
+  opacity: 0.7;
+}
+.reg-state {
+  font-size: 12px;
+  color: var(--ink-dim);
+  white-space: nowrap;
+  max-width: 28ch;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.reg-state.rs-working {
+  color: var(--sky);
+}
+.reg-state.rs-idle {
+  color: var(--moss);
+}
+.reg-state.rs-waiting,
+.reg-head-waiting {
+  color: var(--rust);
+  font-weight: 700;
+}
+.reg-state.rs-lost {
+  color: var(--ink-faint);
+  font-style: italic;
+}
+.reg-state.rs-ended {
+  color: var(--ink-faint);
+}
+.reg-actions {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-left: auto;
+}
+.reg-more {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 6px;
+  padding-left: calc(1ch + 10px);
+}
+.reg-cap {
+  padding: 0 6px;
+  border: 1px solid var(--hair2);
+  border-radius: 999px;
+  font-size: 10.5px;
+  color: var(--ink-dim);
+}
+.reg-offer {
+  flex-basis: 100%;
+  font-size: 12px;
+  color: var(--ink);
+}
+.reg-offer::before {
+  content: "offers: ";
+  color: var(--ink-faint);
+}
+.reg-past {
+  padding: 10px 0;
+  border-top: 1px solid var(--hair);
+}
+.reg-past > summary {
+  cursor: pointer;
+  font-size: 12px;
+  color: var(--ink-dim);
+}
+.reg-body {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 4px 0 8px;
+}
+.reg-body .reg-past {
+  padding: 6px 0 0;
+}
+/* the repo card's ✦ n: moss while its agents work, rust while one waits */
+.agent-chip {
+  --tone: var(--moss);
+  cursor: pointer;
+  font: inherit;
+  font-size: 11px;
+}
+.agent-chip.waiting {
+  --tone: var(--rust);
+}
 @media (max-width: 760px) {
   .agents-bar,
   .agents-body {

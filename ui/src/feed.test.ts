@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { DEFAULT_AGENT } from "../../src/core/types";
-import type { Fleet, Flow, HelperInfo, Job, Repo, RepoStatus, Run, ServerEvent, SourceState, TaskInfo } from "../../src/core/types";
+import type { AgentCard, Fleet, Flow, HelperInfo, Job, Repo, RepoStatus, Run, ServerEvent, SourceState, TaskInfo } from "../../src/core/types";
 import {
   appendFeed,
   clip,
@@ -328,6 +328,51 @@ describe("describeEvent", () => {
     const back = describeEvent({ type: "helpers", helpers: [h({ since: 2 })] }, snap({ helpers: [h()] }), 5);
     expect(back.map((l) => [l.text, l.quiet])).toEqual([["helper mbp reattached", true]]);
     expect(describeEvent({ type: "helpers", helpers: [h()] }, snap({ helpers: [h()] }), 5)).toEqual([]);
+  });
+});
+
+describe("the registry", () => {
+  const agent = (over: Partial<AgentCard> = {}): AgentCard => ({
+    id: "claude:s1",
+    handle: "alpha-0123",
+    node: "macmini-2018",
+    harness: "claude",
+    session: "s1",
+    origin: "canopy-shell",
+    cwd: "/r/alpha",
+    repo: null,
+    branch: "main",
+    model: null,
+    mode: null,
+    state: "idle",
+    waiting: null,
+    caps: [],
+    offers: [],
+    notifyIdle: false,
+    where: { os: "linux", container: true, pid: 41, term: null, canopy: { backend: "mini", term: "0123" } },
+    transcript: null,
+    startedAt: 1,
+    seenAt: 2,
+    endedAt: null,
+    ...over,
+  });
+  const lines = (after: AgentCard, before?: AgentCard) =>
+    describeEvent({ type: "registry", cards: [after] }, snap({ registry: before ? { [before.id]: before } : {} }), 5).map((l) => [l.kind, l.repo ?? "", l.text, l.quiet]);
+
+  test("started, waiting, ended and lost are lines; a turn is a quiet one", () => {
+    expect(lines(agent())).toEqual([["registry", "alpha", "alpha-0123 started, canopy shell on mini", false]]);
+    expect(lines(agent({ state: "waiting", waiting: "your turn" }), agent())).toEqual([["registry", "alpha", "alpha-0123 is waiting: your turn", false]]);
+    expect(lines(agent({ state: "working" }), agent())).toEqual([["registry", "alpha", "alpha-0123 working", true]]);
+    expect(lines(agent({ state: "ended" }), agent())).toEqual([["registry", "alpha", "alpha-0123 ended", false]]);
+    expect(lines(agent({ state: "lost" }), agent())).toEqual([["registry", "alpha", "alpha-0123 lost: no word from it for minutes", false]]);
+    expect(lines(agent({ state: "idle" }), agent({ state: "lost" }))).toEqual([["registry", "alpha", "alpha-0123 is back, idle", false]]);
+    // a beat's worth of change says nothing
+    expect(lines(agent({ model: "opus" }), agent())).toEqual([]);
+  });
+
+  test("a card about no repo in the scan says where it is; a scan card is named by its pid", () => {
+    const far = agent({ id: "scan:mini:c:77", handle: "", origin: "scan", cwd: "/elsewhere", repo: "https://github.com/me/other", where: { os: "linux", container: true, pid: 77, term: null, canopy: null } });
+    expect(lines(far)).toEqual([["registry", "", "claude pid 77 in me/other · main started, scan on macmini-2018", false]]);
   });
 });
 

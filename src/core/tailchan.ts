@@ -4,7 +4,7 @@
  * canopy says about its own runs, flows and fleets. Browser-safe and pure;
  * the client that talks to the broker is chan.ts.
  */
-import type { ChanMessage, Fleet, Flow, Run, RunStatus } from "./types";
+import { AGENT_STATES, isHarness, type AgentCard, type AgentOrigin, type AgentState, type ChanMessage, type Fleet, type Flow, type Run, type RunStatus } from "./types";
 
 export const HANDLE_RE = /^[a-z0-9][a-z0-9._-]{0,39}$/;
 export const CHANNEL_RE = /^[a-z0-9][a-z0-9._-]{0,63}$/;
@@ -104,6 +104,76 @@ export function asChanMessage(v: unknown): ChanMessage | null {
   if (typeof m.node !== "string" || typeof m.kind !== "string" || typeof m.body !== "string" || typeof m.ts !== "number") return null;
   const meta = m.meta && typeof m.meta === "object" ? (m.meta as Record<string, unknown>) : {};
   return { id: m.id, channel: m.channel, handle: m.handle, node: m.node, kind: m.kind, body: m.body, meta, ts: m.ts };
+}
+
+/* ---------- the agent registry, as the broker posts it ---------- */
+
+/** the channel the broker posts every card change on */
+export const AGENTS_CHANNEL = "agents";
+
+const ORIGINS: readonly AgentOrigin[] = ["canopy-shell", "canopy-run", "elsewhere", "scan"];
+const str = (v: unknown): string | null => (typeof v === "string" ? v : null);
+const num = (v: unknown): number | null => (typeof v === "number" && Number.isFinite(v) ? v : null);
+const strs = (v: unknown): string[] => (Array.isArray(v) ? v.filter((x): x is string => typeof x === "string") : []);
+
+/** A card as the broker sends it: what canopy keys and orders on (id,
+ *  node, state, seenAt) checked, the rest defaulted field by field, so a
+ *  broker a version ahead or behind never breaks the page. */
+export function asAgentCard(v: unknown): AgentCard | null {
+  if (!v || typeof v !== "object") return null;
+  const c = v as Record<string, unknown>;
+  const state = c.state;
+  const seenAt = num(c.seenAt);
+  if (typeof c.id !== "string" || !c.id || typeof c.node !== "string" || seenAt === null) return null;
+  if (typeof state !== "string" || !(AGENT_STATES as readonly string[]).includes(state)) return null;
+  const w = c.where && typeof c.where === "object" ? (c.where as Record<string, unknown>) : {};
+  const cw = w.canopy && typeof w.canopy === "object" ? (w.canopy as Record<string, unknown>) : null;
+  const cterm = str(cw?.term);
+  const crun = str(cw?.run);
+  return {
+    id: c.id,
+    handle: str(c.handle) ?? "",
+    node: c.node,
+    harness: isHarness(c.harness) ? c.harness : "other",
+    session: str(c.session),
+    origin: (ORIGINS as readonly unknown[]).includes(c.origin) ? (c.origin as AgentOrigin) : "elsewhere",
+    cwd: str(c.cwd) ?? "",
+    repo: str(c.repo),
+    branch: str(c.branch),
+    model: str(c.model),
+    mode: str(c.mode),
+    state: state as AgentState,
+    waiting: str(c.waiting),
+    caps: strs(c.caps),
+    offers: strs(c.offers),
+    notifyIdle: c.notifyIdle === true,
+    where: {
+      os: str(w.os) ?? "",
+      container: w.container === true,
+      pid: num(w.pid),
+      term: str(w.term),
+      canopy: cw ? { backend: str(cw.backend) ?? "", ...(cterm ? { term: cterm } : {}), ...(crun ? { run: crun } : {}) } : null,
+    },
+    transcript: str(c.transcript),
+    startedAt: num(c.startedAt) ?? seenAt,
+    seenAt,
+    endedAt: num(c.endedAt),
+  };
+}
+
+/** The card one of the broker's `#agents` events carries
+ *  (`{"type":"agent","card":…}` as a silent `event` message), or null for
+ *  any other message. */
+export function registryCard(m: ChanMessage): AgentCard | null {
+  if (m.channel !== AGENTS_CHANNEL || m.kind !== "event") return null;
+  let data: unknown;
+  try {
+    data = JSON.parse(m.body);
+  } catch {
+    return null;
+  }
+  if (!data || typeof data !== "object" || (data as { type?: unknown }).type !== "agent") return null;
+  return asAgentCard((data as { card?: unknown }).card);
 }
 
 /* ---------- what canopy says about its own work ---------- */

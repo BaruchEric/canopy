@@ -10,6 +10,7 @@
  */
 import { readFile, readdir, readlink } from "node:fs/promises";
 import { exec } from "./exec";
+import { procComm, procCwd } from "./procs";
 
 /** one listening socket as it is read, before the ports are merged */
 export interface Listener {
@@ -182,10 +183,7 @@ async function procListeners(): Promise<Listener[]> {
         }
       }
       if (mine.length === 0) return;
-      const [cwd, comm] = await Promise.all([
-        readlink(`/proc/${pid}/cwd`).catch(() => undefined),
-        readFile(`/proc/${pid}/comm`, "utf8").then((s) => s.trim()).catch(() => undefined),
-      ]);
+      const [cwd, comm] = await Promise.all([procCwd(pid), procComm(pid)]);
       for (const l of mine) {
         l.pid = Number(pid);
         if (comm) l.command = comm;

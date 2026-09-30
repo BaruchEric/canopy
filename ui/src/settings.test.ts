@@ -66,7 +66,7 @@ describe("loadSettings", () => {
     const s = loadSettings();
     expect(s.zoom).toEqual({ panel: 1.25, feed: 2 });
     expect(s.frontZoom).toEqual({ panel: 1 });
-    expect(s.sectionOrder).toEqual(["claude", "changes", "tasks", "search", "history", "peers", "preview", "launch"]);
+    expect(s.sectionOrder).toEqual(["claude", "agents", "changes", "tasks", "search", "history", "peers", "preview", "launch"]);
     expect(s.sectionsHidden).toEqual(["peers"]);
     store.set("canopy.settings", JSON.stringify({ zoom: "big", sectionOrder: 4 }));
     expect(loadSettings().zoom).toEqual({});

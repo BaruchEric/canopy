@@ -44,7 +44,7 @@ export const isShellCommand = (command: string): boolean => {
  *  script: a bun- or npm-installed codex runs as `node …/@openai/codex/bin/
  *  codex.js`, a claude as `claude` or its package's `cli.js`. Only the first
  *  two words count, so an editor opened on `/tmp/codex/notes` is no agent. */
-function argvAgent(argv: readonly string[]): AgentKind | null {
+export function argvAgent(argv: readonly string[]): AgentKind | null {
   for (const w of argv.slice(0, 2)) {
     if (/\/@openai\/codex\//.test(w) || /(^|\/)codex(\.js)?$/.test(w)) return "codex";
     if (/\/@anthropic-ai\/claude-code\//.test(w) || /(^|\/)claude$/.test(w)) return "claude";
