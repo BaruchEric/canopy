@@ -10,7 +10,7 @@ import { createHash } from "node:crypto";
 import { tmpdir } from "node:os";
 import { basename, extname, join } from "node:path";
 import { isGitHub, listRemotes, parseRemote } from "./access";
-import { exec, git } from "./exec";
+import { exec, git, KILL_GRACE } from "./exec";
 import { parseLocator } from "./host";
 import {
   buildKey,
@@ -206,6 +206,8 @@ export class Launcher {
   private jobs = new Map<string, LiveJob>();
   /** processes started from a build, by `<repo path>|<build key>` */
   private running = new Map<string, Launched>();
+  /** launches awaiting the bounded SIGKILL after their TERM grace period */
+  private terminating = new Set<Bun.Subprocess>();
 
   constructor(private hooks: LauncherHooks) {}
 
@@ -303,19 +305,58 @@ export class Launcher {
       );
     }
     if (!isSafeAssetName(chosen.name)) throw new LauncherError(`odd asset name: ${chosen.name}`, 400);
-    const dir = join(await repoDir(repo), "release", tag);
+    const base = await repoDir(repo);
+    const releaseRoot = join(base, "release");
+    const dir = join(releaseRoot, tag);
     const live = this.open(repo, "install", key, `install ${tag}`);
     void this.guard(live, async () => {
-      await rm(dir, { recursive: true, force: true });
-      await mkdir(dir, { recursive: true });
-      this.say(live, `downloading ${chosen.name}${chosen.size ? ` (${fmtBytes(chosen.size)})` : ""}`);
-      const file = join(dir, chosen.name);
-      await this.download(live, chosen.url, chosen.apiUrl, file, chosen.size);
-      const target = await unpack(dir, chosen.name, (l) => this.say(live, l), live.abort.signal);
-      this.say(live, target ? `ready: ${target.name}` : "unpacked, but nothing in it looks launchable");
-      await withState(await repoDir(repo), (s) => {
-        s.builds[key] = { at: Date.now(), asset: chosen.name, ...(target ? { target } : {}) };
-      });
+      const stage = join(releaseRoot, `.${tag}.install-${live.job.id}`);
+      const backup = join(releaseRoot, `.${tag}.previous-${live.job.id}`);
+      let hadPrevious = false;
+      let swapped = false;
+      try {
+        await mkdir(releaseRoot, { recursive: true });
+        await rm(stage, { recursive: true, force: true });
+        await mkdir(stage, { recursive: true });
+        this.say(live, `downloading ${chosen.name}${chosen.size ? ` (${fmtBytes(chosen.size)})` : ""}`);
+        const file = join(stage, chosen.name);
+        await this.download(live, chosen.url, chosen.apiUrl, file, chosen.size);
+        const target = await unpack(stage, chosen.name, (l) => this.say(live, l), live.abort.signal);
+        this.say(live, target ? `ready: ${target.name}` : "unpacked, but nothing in it looks launchable");
+        live.abort.signal.throwIfAborted();
+
+        if (await exists(dir)) {
+          await rm(backup, { recursive: true, force: true });
+          await rename(dir, backup);
+          hadPrevious = true;
+        }
+        try {
+          await rename(stage, dir);
+          swapped = true;
+        } catch (err) {
+          if (hadPrevious) await rename(backup, dir).catch(() => {});
+          throw err;
+        }
+
+        try {
+          live.abort.signal.throwIfAborted();
+          await withState(base, (s) => {
+            s.builds[key] = { at: Date.now(), asset: chosen.name, ...(target ? { target } : {}) };
+          });
+        } catch (err) {
+          await rm(dir, { recursive: true, force: true });
+          if (hadPrevious) await rename(backup, dir).catch(() => {});
+          throw err;
+        }
+        if (hadPrevious) await rm(backup, { recursive: true, force: true }).catch(() => {});
+      } finally {
+        await rm(stage, { recursive: true, force: true });
+        // If a failure happened after the swap and rollback above could not
+        // run, leave the prior directory available for recovery.
+        if (!swapped && hadPrevious && (await exists(backup)) && !(await exists(dir))) {
+          await rename(backup, dir).catch(() => {});
+        }
+      }
     });
     return live.job;
   }
@@ -422,6 +463,7 @@ export class Launcher {
     const spawn = (cmd: string[], cwd: string) => {
       const proc = Bun.spawn(cmd, {
         cwd,
+        detached: true,
         stdin: "ignore",
         stdout: Bun.file(log),
         stderr: Bun.file(log),
@@ -475,7 +517,7 @@ export class Launcher {
         if (r.code !== 0 && this.running.get(runKey(repo, key)) === live) live.proc.kill();
       });
     } else {
-      live.proc.kill();
+      this.stopProcessGroup(live.proc);
     }
     return true;
   }
@@ -506,7 +548,13 @@ export class Launcher {
   /** Ends every launched process; the server calls this on stop. */
   shutdown(): void {
     for (const l of this.jobs.values()) if (l.job.status === "working") this.stop(l.job.id);
-    for (const r of this.running.values()) r.proc.kill();
+    for (const r of this.running.values()) {
+      // `open -W` waits on an app launched by Launch Services; killing its
+      // waiter is the existing shutdown behavior, while shell launches own
+      // their children through a process group.
+      if (r.app) r.proc.kill();
+      else this.stopProcessGroup(r.proc);
+    }
     this.running.clear();
   }
 
@@ -518,6 +566,21 @@ export class Launcher {
         throw new LauncherError(`${l.job.title} is already going`, 409);
       }
     }
+  }
+
+  /** Stop a shell's group, then escalate if a child ignores TERM. The
+   * subprocess object remains the owner of the delayed kill even after the
+   * shell itself exits; a different tracked process with a reused pid cancels
+   * the escalation. */
+  private stopProcessGroup(proc: Bun.Subprocess): void {
+    if (this.terminating.has(proc)) return;
+    this.terminating.add(proc);
+    signalProcessGroup(proc, "SIGTERM");
+    setTimeout(() => {
+      if (!this.terminating.delete(proc)) return;
+      const reused = [...this.running.values()].some((r) => r.proc !== proc && r.proc.pid === proc.pid);
+      if (!reused) signalProcessGroup(proc, "SIGKILL");
+    }, KILL_GRACE);
   }
 
   private open(repo: LaunchRepo, kind: JobKind, build: string, title: string): LiveJob {
@@ -655,6 +718,24 @@ export class Launcher {
 }
 
 const runKey = (repo: LaunchRepo, key: string): string => `${repo.path}|${key}`;
+
+/** Signal a launch and everything its shell started. Detached POSIX children
+ *  are session leaders, so their pid is also the process-group id. */
+function signalProcessGroup(proc: Bun.Subprocess, signal: "SIGTERM" | "SIGKILL"): void {
+  if (process.platform !== "win32") {
+    try {
+      process.kill(-proc.pid, signal);
+      return;
+    } catch {
+      // The group may have exited between the lookup and the signal.
+    }
+  }
+  try {
+    proc.kill(signal);
+  } catch {
+    // already gone
+  }
+}
 
 /** What launching a release runs, as one line for the list. */
 function releaseLine(dir: string, rec: BuildRecord, settings: LaunchSettings): string | null {

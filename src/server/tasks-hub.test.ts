@@ -65,6 +65,11 @@ const panes = async () => {
 const record = async (id: string) =>
   (JSON.parse(await readFile(join(process.env["CANOPY_CONFIG_DIR"]!, "tasks/state.json"), "utf8")) as Record<string, { fails?: number; gaveUp?: boolean }>)[id];
 
+const post = (h: TaskHub, path: string, body: unknown, repoOf: (id: string) => Repo | undefined) => {
+  const url = new URL(`http://x${path}`);
+  return h.handle(new Request(url.href, { method: "POST", body: JSON.stringify(body) }), url, repoOf);
+};
+
 beforeAll(async () => {
   scratch = await mkdtemp(join(tmpdir(), "canopy-tasks-hub-"));
   app = await makeRepo("app", [
@@ -75,10 +80,18 @@ beforeAll(async () => {
   solo = await makeRepo("solo", [{ name: "lonely", cmd: "trap '' INT; echo lonely; sleep 30" }]);
 });
 
-beforeEach(() => {
+beforeEach(async () => {
   process.env["CANOPY_CONFIG_DIR"] = join(scratch, `config-${++n}`);
   repos = [app, solo];
   hubs = [];
+  await writeFile(
+    join(app.path, ".canopy/tasks.json"),
+    JSON.stringify([
+      { name: "crash", cmd: "echo crash; exit 1", keep: true },
+      { name: "runner", cmd: "echo up; sleep 30", keep: true },
+      { name: "late", cmd: "sleep 0.4; exit 1", keep: true },
+    ]),
+  );
 });
 
 afterEach(async () => {
@@ -160,6 +173,61 @@ describe.skipIf(!tmux)("keep running across a canopy restart", () => {
     const t = await info(h, "crash");
     expect(t.status).toBe("stopped");
     expect(t.restarts).toBe(0);
+  });
+
+  test("a pending retry reloads the public definition and stops when keep is turned off", async () => {
+    const h = hub({ timings: { backoff: 1500, backoffCap: 1500 } });
+    await h.start();
+    await h.act(app, "start", "crash");
+    await until(async () => (await info(h, "crash")).status === "backoff", "the backoff");
+    const res = (await post(h, "/api/repos/tasks/def?id=app", { name: "crash", def: { name: "crash", cmd: "echo crash; exit 1", keep: false }, target: "repo" }, () => app))!;
+    expect(res.status).toBe(200);
+    await until(async () => (await info(h, "crash")).status === "failed", "the retry to give way");
+    // "failed" also shows while the retry reads the definition, so let it land
+    await Bun.sleep(300);
+    expect((await info(h, "crash")).status).toBe("failed");
+    expect((await info(h, "crash")).restarts).toBe(0);
+  });
+
+  test("a pending retry uses an edited command", async () => {
+    const h = hub({ timings: { backoff: 1500, backoffCap: 1500 } });
+    await h.start();
+    await h.act(app, "start", "crash");
+    await until(async () => (await info(h, "crash")).status === "backoff", "the backoff");
+    const res = (await post(h, "/api/repos/tasks/def?id=app", { name: "crash", def: { name: "crash", cmd: "echo changed; sleep 30", keep: true }, target: "repo" }, () => app))!;
+    expect(res.status).toBe(200);
+    const id = taskTermId(app.path, "crash");
+    await until(async () => (await Bun.file(join(process.env["CANOPY_CONFIG_DIR"]!, `tasks/logs/${id}.log`)).text()).includes("changed"), "the edited command output");
+    await until(async () => (await info(h, "crash")).status === "running", "the edited task running");
+    // the retry that was pending already ran the edit, not one more crash first
+    expect((await info(h, "crash")).restarts).toBe(1);
+    await h.act(app, "stop", "crash");
+  });
+
+  test("a pending retry stays down when its repo leaves the scan", async () => {
+    const h = hub({ timings: { backoff: 1500, backoffCap: 1500 } });
+    await h.start();
+    await h.act(app, "start", "crash");
+    await until(async () => (await info(h, "crash")).status === "backoff", "the backoff");
+    repos = [solo];
+    await until(async () => (await info(h, "crash")).status === "failed", "the retry to give way");
+    // "failed" also shows while the retry reads the definition, so let it land
+    await Bun.sleep(300);
+    expect((await info(h, "crash")).status).toBe("failed");
+    expect((await info(h, "crash")).restarts).toBe(0);
+  });
+
+  test("a pending retry stays down when the current definition is hidden", async () => {
+    const h = hub({ timings: { backoff: 1500, backoffCap: 1500 } });
+    await h.start();
+    await h.act(app, "start", "crash");
+    await until(async () => (await info(h, "crash")).status === "backoff", "the backoff");
+    await writeFile(join(app.path, ".canopy/tasks.json"), JSON.stringify([{ name: "crash", cmd: "echo crash; exit 1", keep: true, hidden: true }]));
+    await until(async () => (await info(h, "crash")).status === "failed", "the retry to give way");
+    // "failed" also shows while the retry reads the definition, so let it land
+    await Bun.sleep(300);
+    expect((await info(h, "crash")).status).toBe("failed");
+    expect((await info(h, "crash")).restarts).toBe(0);
   });
 
   test("a stop while a death is being looked at leaves it stopped, not restarting", async () => {
@@ -247,11 +315,6 @@ describe.skipIf(!tmux)("the supervisor", () => {
 });
 
 describe.skipIf(!tmux)("routes", () => {
-  const post = (h: TaskHub, path: string, body: unknown, repoOf: (id: string) => Repo | undefined) => {
-    const url = new URL(`http://x${path}`);
-    return h.handle(new Request(url.href, { method: "POST", body: JSON.stringify(body) }), url, repoOf);
-  };
-
   test("a task whose repo left the scan can still be stopped", async () => {
     const events: ServerEvent[] = [];
     const h = hub({ broadcast: (ev) => void events.push(ev) });

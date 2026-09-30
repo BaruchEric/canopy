@@ -1138,7 +1138,9 @@ def git_action(target: Path, action: str) -> dict:
         return done(ok, "done" if ok else "failed",
                     "fetched" if ok else (_last_err(msg) or "fetch failed"))
     if action == "sync":
-        git_run(["fetch", "--quiet", "--prune"], target)
+        ok, msg = git_run(["fetch", "--quiet", "--prune"], target)
+        if not ok:
+            return done(False, "failed", _last_err(msg) or "fetch failed")
         g = _git_fields(target)
         if g["dirty"] or g["no_upstream"] or g["detached"]:
             return done(True, "done", "fetched (pull skipped: dirty / no upstream)")
@@ -3592,20 +3594,32 @@ def cmd_serve(args):
                         return
                     repos = [(nm, _resolve_repo(nm)) for nm in _all_git_projects(cfg)]
                     repos = [(nm, t) for nm, t in repos if t]
-                    fetch_repos([str(t) for _, t in repos])   # always parallel-fetch first
+                    fetched = fetch_repos([str(t) for _, t in repos])   # always parallel-fetch first
+
+                    def failed_fetch(nm, t):
+                        ok, msg = fetched.get(str(t), (False, ""))
+                        if ok:
+                            return None
+                        return {"project": nm, "ok": False, "status": "failed",
+                                "message": _last_err(msg) or "fetch failed",
+                                "git": _git_fields(t)}
+
+                    def bulk_one(it):
+                        nm, t = it
+                        bad = failed_fetch(nm, t)
+                        if bad is not None:
+                            return bad
+                        if action == "fetch":
+                            return {"project": nm, "ok": True, "status": "done",
+                                    "message": "fetched", "git": _git_fields(t)}
+                        # sync: ff-only pull each (already fetched above)
+                        return {**git_action(t, "pull"), "project": nm}
+
                     # Post-fetch per-repo work is independent — run it with the
                     # same worker count as fetch_repos instead of serially.
                     from concurrent.futures import ThreadPoolExecutor
                     with ThreadPoolExecutor(max_workers=8) as ex:
-                        if action == "fetch":
-                            results = list(ex.map(
-                                lambda it: {"project": it[0], "ok": True,
-                                            "status": "done",
-                                            "git": _git_fields(it[1])}, repos))
-                        else:  # sync: ff-only pull each (already fetched above)
-                            results = list(ex.map(
-                                lambda it: {**git_action(it[1], "pull"),
-                                            "project": it[0]}, repos))
+                        results = list(ex.map(bulk_one, repos))
                     self._send(200, {"ok": True, "action": action,
                                      "all": True, "results": results})
                     return
@@ -6068,7 +6082,8 @@ function gitActionAll(action, btn){
       if(btn) btn.disabled = false;
       const res = (j && j.results) || [];
       res.forEach(r=>{ if(r.git) patchProjectGit(r.project, r.git); });
-      gitToast((action==='fetch'?'Fetched ':'Synced ')+res.length+' repo(s)', !!(j&&j.ok));
+      const bad = res.filter(r=>!r.ok).length;
+      gitToast((action==='fetch'?'Fetched ':'Synced ')+(res.length-bad)+' repo(s)'+(bad?', '+bad+' failed':''), !!(j&&j.ok) && !bad);
       render();
     }).catch(()=>{ if(btn) btn.disabled=false; gitToast('helper offline — run: devhub serve', false); });
 }

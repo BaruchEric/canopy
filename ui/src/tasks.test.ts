@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import type { TaskInfo } from "../../src/core/types";
-import { devTask, frontTask, otherTasks, renameOld, taskChip, taskLines, taskWhen, withChange } from "./tasks";
+import { devTask, frontTask, otherTasks, renameOld, taskChip, taskDraftCwd, taskDraftPatch, taskLines, taskWhen, withChange } from "./tasks";
 
 const t = (over: Partial<TaskInfo>): TaskInfo => ({ name: "dev", cmd: "x", repoId: "r", source: "detected", termId: "0".repeat(32), status: "idle", live: false, restarts: 0, viewers: [], ...over });
 
@@ -37,6 +37,21 @@ describe("task words", () => {
     const task = t({ name: "web", cmd: "vite", cwd: "ui", keep: true, status: "running", suggested: { withPanel: true } });
     expect(withChange(task, { hidden: true })).toEqual({ name: "web", cmd: "vite", cwd: "ui", keep: true, hidden: true });
     expect(withChange(task, { withPanel: true })).toEqual({ name: "web", cmd: "vite", cwd: "ui", keep: true, withPanel: true });
+  });
+  test("a blank task folder is sent as the repo root", () => {
+    expect(taskDraftPatch({ name: "web", cmd: "vite", cwd: " ", dev: false, keep: true, withPanel: false })).toEqual({
+      name: "web",
+      cmd: "vite",
+      cwd: ".",
+      dev: false,
+      keep: true,
+      withPanel: false,
+    });
+  });
+  test("the repo root renders as a blank task folder", () => {
+    expect(taskDraftCwd(".")).toBe("");
+    expect(taskDraftCwd("ui")).toBe("ui");
+    expect(taskDraftCwd(undefined)).toBe("");
   });
   test("renaming leaves no old task behind", () => {
     const det = t({ name: "dev", cmd: "bun run dev", source: "detected" });

@@ -149,8 +149,11 @@ export async function loadConfig(): Promise<CanopyConfig> {
   let raw: string;
   try {
     raw = await readFile(configPath(), "utf8");
-  } catch {
-    return defaults(); // no config yet — first run
+  } catch (err) {
+    if (typeof err === "object" && err !== null && "code" in err && err.code === "ENOENT") {
+      return defaults(); // no config yet, first run
+    }
+    throw err;
   }
   try {
     return normalize(JSON.parse(raw) as Partial<CanopyConfig>);

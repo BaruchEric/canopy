@@ -2830,7 +2830,9 @@ export async function startServer(opts: {
   // failed listen and hold the process open.
   for (const rt of state.sources) startWatcher(state, rt);
   const remoteTimer = setInterval(() => {
-    void refreshRemote(state).then(() => refreshActivity(state));
+    void refreshRemote(state)
+      .catch((err) => console.error("canopy: remote refresh", err))
+      .then(() => refreshActivity(state));
   }, REMOTE_REFRESH);
   // The first activity pass soon after the tree is up, not five minutes in:
   // the cards should not claim "in sync" on the strength of last week's fetch.
@@ -2840,7 +2842,7 @@ export async function startServer(opts: {
 
   // What the shells have on their screens, written out while `keepShells`
   // is on, so a machine going down does not take them with the tmux server.
-  void state.chan.start();
+  void state.chan.start().catch((err) => console.error("canopy: tailchan", err));
   const keepTimer = setInterval(() => void keepPass(state), KEEP_EVERY);
 
   // A named event rather than an SSE comment, so the page sees it: a phone

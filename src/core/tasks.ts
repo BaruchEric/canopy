@@ -37,8 +37,11 @@ export function normalizeTaskPatch(v: unknown): TaskPatch | string {
   const cwd = o["cwd"];
   if (cwd !== undefined) {
     if (typeof cwd !== "string") return `${name}: cwd is a folder name`;
-    const dir = cwd.trim().replace(/^\.\/+/, "").replace(/\/+$/, "");
-    if (dir && dir !== ".") {
+    const raw = cwd.trim();
+    if (raw.startsWith("/")) return `${name}: ${cwdError(raw)}`;
+    const dir = raw.replace(/^\.\/+/, "").replace(/\/+$/, "");
+    if (!dir || dir === ".") out.cwd = ".";
+    else {
       const err = cwdError(dir);
       if (err) return `${name}: ${err}`;
       out.cwd = dir;
@@ -263,7 +266,8 @@ export function mergeTasks(detected: TaskDef[], repo: TaskPatch[], canopy: TaskP
 export function overrideOf(want: TaskPatch, below: TaskDef | undefined): TaskPatch {
   const out: TaskPatch = { name: want.name };
   if (want.cmd !== undefined && want.cmd !== below?.cmd) out.cmd = want.cmd;
-  if (want.cwd !== undefined && want.cwd !== below?.cwd) out.cwd = want.cwd;
+  // no cwd below is the repo root, which the sheet sends back as "."
+  if (want.cwd !== undefined && want.cwd !== (below?.cwd ?? ".")) out.cwd = want.cwd;
   for (const f of FLAGS) {
     const v = want[f];
     if (v !== undefined && v !== (below?.[f] ?? false)) out[f] = v;

@@ -100,9 +100,11 @@ describe.skipIf(!tmux)("keep running", () => {
   test("clearing an override and a repo-file edit", async () => {
     expect((await post("/api/repos/tasks/def?id=app", { name: "panel", def: null, target: "canopy" })).status).toBe(200);
     expect((await task("panel")).withPanel).toBeUndefined();
-    expect((await post("/api/repos/tasks/def?id=app", { name: "extra", def: { name: "extra", cmd: "echo extra" }, target: "repo" })).status).toBe(200);
-    const file = JSON.parse(await readFile(join(repo, ".canopy/tasks.json"), "utf8")) as { name: string }[];
+    expect((await post("/api/repos/tasks/def?id=app", { name: "extra", def: { name: "extra", cmd: "echo extra", cwd: "." }, target: "repo" })).status).toBe(200);
+    const file = JSON.parse(await readFile(join(repo, ".canopy/tasks.json"), "utf8")) as { name: string; cwd?: string }[];
     expect(file.map((t) => t.name)).toContain("extra");
+    // the sheet sends "." for a blank folder; the checked-in file need not say it
+    expect(file.find((t) => t.name === "extra")?.cwd).toBeUndefined();
     expect((await post("/api/repos/tasks/def?id=app", { name: "x", def: { name: "x", cmd: "a", cwd: "../out" }, target: "canopy" })).status).toBe(400);
     expect((await post("/api/repos/tasks/def?id=app", { name: "x", def: ["a"], target: "canopy" })).status).toBe(400);
     expect((await post("/api/repos/tasks/def?id=app", { name: "x", def: "a", target: "canopy" })).status).toBe(400);
@@ -128,7 +130,7 @@ describe.skipIf(!tmux)("keep running", () => {
 
   test("canopy's layer keeps only what differs from the repo file", async () => {
     const stored = async () => {
-      const cfg = JSON.parse(await readFile(join(scratch, "config/config.json"), "utf8")) as { tasks?: Record<string, { name: string; cmd?: string }[]> };
+      const cfg = JSON.parse(await readFile(join(scratch, "config/config.json"), "utf8")) as { tasks?: Record<string, { name: string; cmd?: string; cwd?: string }[]> };
       // keyed by the repo's real path, which a temp dir's symlink makes differ from `repo`
       return Object.values(cfg.tasks ?? {}).flat().filter((t) => t.name === "extra");
     };
@@ -145,6 +147,13 @@ describe.skipIf(!tmux)("keep running", () => {
     const t = await task("extra");
     expect(t.cmd).toBe("echo other");
     expect(t.dev).toBe(true);
+    // An explicit empty root folder clears the repo file's subfolder in the canopy layer.
+    const withSubfolder = JSON.parse(await readFile(file, "utf8")) as { name: string; cwd?: string }[];
+    await writeFile(file, JSON.stringify(withSubfolder.map((x) => (x.name === "extra" ? { ...x, cwd: "ui" } : x))));
+    expect((await task("extra")).cwd).toBe("ui");
+    expect((await def("extra", { cwd: "" })).status).toBe(200);
+    expect((await task("extra")).cwd).toBe(".");
+    expect(await stored()).toEqual([{ name: "extra", cwd: "." }]);
   });
 
   test("a keep task that exited 0 stays down after tmux and canopy restart", async () => {

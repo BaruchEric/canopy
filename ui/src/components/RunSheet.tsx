@@ -22,7 +22,7 @@ import {
   type RunStep,
 } from "../../../src/core/types";
 import { Seg } from "./Seg";
-import { renameOld, withChange } from "../tasks";
+import { renameOld, taskDraftCwd, taskDraftPatch, withChange } from "../tasks";
 
 const STATUS_WORD: Record<Run["status"], string> = {
   working: "working",
@@ -34,6 +34,17 @@ const STATUS_WORD: Record<Run["status"], string> = {
 };
 
 const errText = (err: unknown) => String(err instanceof Error ? err.message : err);
+
+/** Runs a console action, showing failures. A chat send rethrows so its
+ * composer can restore the draft; buttons intentionally consume failures. */
+export async function runConsoleAction(fn: () => Promise<void>, showError: (message: string) => void, propagate = false): Promise<void> {
+  try {
+    await fn();
+  } catch (err) {
+    showError(errText(err));
+    if (propagate) throw err;
+  }
+}
 
 function mmss(ms: number): string {
   const s = Math.max(0, Math.floor(ms / 1000));
@@ -360,13 +371,9 @@ function Console({ run, repo }: { run: Run; repo: Repo | undefined }) {
   const elapsed = (run.endedAt ?? now) - run.startedAt;
   const [error, setError] = useState<string | null>(null);
 
-  const act = async (fn: () => Promise<void>) => {
+  const act = (fn: () => Promise<void>, propagate = false) => {
     setError(null);
-    try {
-      await fn();
-    } catch (err) {
-      setError(errText(err));
-    }
+    return runConsoleAction(fn, setError, propagate);
   };
 
   return (
@@ -400,7 +407,7 @@ function Console({ run, repo }: { run: Run; repo: Repo | undefined }) {
       {chat && active && (
         <Composer
           ready={run.status === "idle"}
-          onSend={(text) => act(() => sayRun(run.id, text))}
+          onSend={(text) => act(() => sayRun(run.id, text), true)}
         />
       )}
 
@@ -460,7 +467,8 @@ function Composer({
     try {
       await onSend(message);
     } catch {
-      setText(message);
+      // the box stays live while a send is out, so keep what was typed since
+      setText((now) => (now.trim() ? `${message}\n${now}` : message));
     } finally {
       setBusy(false);
     }
@@ -708,7 +716,7 @@ function TaskForm({ repo, name }: { repo: Repo; name: string | null }) {
   const [draft, setDraft] = useState({
     name: task?.name ?? "",
     cmd: task?.cmd ?? "",
-    cwd: task?.cwd ?? "",
+    cwd: taskDraftCwd(task?.cwd),
     dev: task?.dev ?? false,
     keep: task?.keep ?? false,
     withPanel: task?.withPanel ?? false,
@@ -731,7 +739,7 @@ function TaskForm({ repo, name }: { repo: Repo; name: string | null }) {
         repo.id,
         draft.name,
         // a hidden task stays hidden through an edit; the sheet has no box for it
-        { name: draft.name, cmd: draft.cmd, ...(draft.cwd ? { cwd: draft.cwd } : {}), dev: draft.dev, keep: draft.keep, withPanel: draft.withPanel, ...(task?.hidden ? { hidden: true } : {}) },
+        taskDraftPatch(draft, task?.hidden === true),
         target,
       );
       if (task && task.name !== draft.name) {

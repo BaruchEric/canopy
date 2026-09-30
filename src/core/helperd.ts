@@ -95,8 +95,8 @@ export function runHelper(opts: HelperOptions): { stop: () => void; readonly con
   let heart: ReturnType<typeof setInterval> | null = null;
   let connected = false;
 
-  const reply = (r: HelperReply) => {
-    if (ws && ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify(r));
+  const reply = (sock: WebSocket, r: HelperReply) => {
+    if (ws === sock && sock.readyState === WebSocket.OPEN) sock.send(JSON.stringify(r));
   };
 
   const stopHeart = () => {
@@ -164,12 +164,12 @@ export function runHelper(opts: HelperOptions): { stop: () => void; readonly con
       run(intent).then(
         () => {
           log(`opened ${what}`);
-          reply({ id: intent.id, ok: true });
+          reply(sock, { id: intent.id, ok: true });
         },
         (e: unknown) => {
           const error = e instanceof Error ? e.message : String(e);
           log(`could not open ${what}: ${error}`);
-          reply({ id: intent.id, error });
+          reply(sock, { id: intent.id, error });
         },
       );
     };

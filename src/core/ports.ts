@@ -9,6 +9,7 @@
  * tested; `listeningPorts` is fs and processes.
  */
 import { readFile, readdir, readlink } from "node:fs/promises";
+import { exec } from "./exec";
 
 /** one listening socket as it is read, before the ports are merged */
 export interface Listener {
@@ -197,10 +198,11 @@ async function procListeners(): Promise<Listener[]> {
 
 async function lsofListeners(): Promise<Listener[]> {
   const run = async (args: string[]) => {
-    const p = Bun.spawn(["lsof", ...args], { stdout: "pipe", stderr: "ignore" });
-    const text = await new Response(p.stdout).text();
-    await p.exited;
-    return text;
+    // A host tool may block on an unrelated filesystem. Keep the API
+    // responsive and retain whatever listener data arrived before timeout.
+    const result = await exec(["lsof", ...args], { timeoutMs: 2_000 });
+    // a line cut off by the timeout would read as a different port or folder
+    return result.stdout.slice(0, result.stdout.lastIndexOf("\n") + 1);
   };
   let ls: Listener[];
   try {

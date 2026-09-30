@@ -175,10 +175,24 @@ job() {
     ss -ltnp 2>/dev/null | grep ':7850 ' || true
     return 1
   }
+  ready=0
   for _ in $(seq 1 30); do
-    if docker compose logs canopy --since 2m 2>/dev/null | grep -q 'canopy →'; then break; fi
+    # Probe inside the container's network namespace and require this build:
+    # an old startup log or a published port does not prove it is serving.
+    if docker compose exec -T canopy bun -e '
+      try {
+        const res = await fetch("http://127.0.0.1:7850/api/about", { signal: AbortSignal.timeout(1000) });
+        const about = await res.json();
+        process.exit(res.ok && about.commit === process.argv[1] ? 0 : 1);
+      } catch { process.exit(1); }
+    ' "$CANOPY_COMMIT" >/dev/null 2>&1; then ready=1; break; fi
     sleep 1
   done
+  if [ "$ready" != 1 ]; then
+    echo "backend did not become ready at $CANOPY_COMMIT"
+    docker compose logs canopy --tail 20 --no-log-prefix
+    return 1
+  fi
   port=$(docker port canopy-shells-1 7850 2>/dev/null | head -1 || true)
   [ -n "$port" ] || { echo "the shells container has no published port; free 7850 and run: docker compose up -d --force-recreate shells canopy"; return 1; }
   docker compose logs canopy --tail 4 --no-log-prefix

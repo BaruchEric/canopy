@@ -61,7 +61,7 @@ beforeAll(async () => {
     // starts
     agentLine: async () =>
       `f() { i=0; while [ $i -lt 60 ]; do echo hist-$i; i=$((i+1)); done; ` +
-      `if [ "$1" = full ]; then printf '\\033[?1049h\\033[HFULLSCREEN\\n'; else echo plain-done; fi; sleep 60; }; f`,
+      `if [ "$1" = full ]; then printf '\\033[?1049h\\033[HFULLSCREEN\\n'; else printf 'plain-%s\\n' done; fi; sleep 60; }; f`,
   });
 });
 

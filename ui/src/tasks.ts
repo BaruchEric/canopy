@@ -85,6 +85,33 @@ export function taskLines(prev: readonly TaskInfo[] | undefined, next: readonly 
 
 const FLAG_KEYS = ["dev", "keep", "withPanel", "hidden"] as const satisfies readonly (keyof TaskFlags)[];
 
+export interface TaskDraft {
+  name: string;
+  cmd: string;
+  cwd: string;
+  dev: boolean;
+  keep: boolean;
+  withPanel: boolean;
+}
+
+/** The form leaves the root marker out of the folder box so its placeholder
+ * still says that the task runs from the repo root. */
+export const taskDraftCwd = (cwd: string | undefined): string => (cwd === undefined || cwd === "." ? "" : cwd);
+
+/** The task sheet sends an explicit root marker when its folder box is blank,
+ * so a canopy override can clear a lower layer's subfolder. */
+export function taskDraftPatch(draft: TaskDraft, hidden = false): TaskPatch {
+  return {
+    name: draft.name,
+    cmd: draft.cmd,
+    cwd: draft.cwd.trim() || ".",
+    dev: draft.dev,
+    keep: draft.keep,
+    withPanel: draft.withPanel,
+    ...(hidden ? { hidden: true } : {}),
+  };
+}
+
 /** A task as the sheet sends it: the whole merged definition plus one
  *  change. Canopy's layer keeps only what differs from the layers under it,
  *  so sending less would drop an override the task already has. */

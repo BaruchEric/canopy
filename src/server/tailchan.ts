@@ -48,7 +48,14 @@ export class ChanHub {
   async start(): Promise<void> {
     if (!this.cfg || !this.chan) return;
     const { cfg, chan } = this;
-    this.notify = (await loadConfig()).tailchanNotify;
+    // an unreadable config only costs the notify switch, never the stream
+    this.notify = await loadConfig().then(
+      (c) => c.tailchanNotify,
+      (err) => {
+        console.error("canopy: tailchan notify:", err instanceof Error ? err.message : err);
+        return false;
+      },
+    );
     if (this.notify) this.subscribe();
     this.stop = chan.follow(cfg.as, (message) => this.deps.broadcast({ type: "chan", message }));
   }

@@ -167,6 +167,40 @@ describe("workspace library integration", () => {
     expect(JSON.parse(await readFile(join(root, "_devhub/categories.json"), "utf8"))).toEqual(original);
     expect(JSON.parse(await readFile(join(root, "_devhub/tags.json"), "utf8"))).toEqual({alpha: ["imported"]});
   }, 30_000);
+  test("sync reports a failed fetch even when dirty files prevent pulling", async () => {
+    const repo = join(root, "apps/alpha");
+    const added = Bun.spawn(["git", "-C", repo, "remote", "add", "origin", join(base, "missing-remote.git")]);
+    expect(await added.exited).toBe(0);
+    try {
+      const res = await request("/library/api/git", { project: "alpha", action: "sync" });
+      expect(res.status).toBe(200);
+      const result = await res.json() as { ok: boolean; status: string; message: string; git: { dirty: boolean } };
+      expect(result.git.dirty).toBe(true);
+      expect(result.ok).toBe(false);
+      expect(result.status).toBe("failed");
+      expect(result.message).not.toContain("fetched");
+    } finally {
+      const removed = Bun.spawn(["git", "-C", repo, "remote", "remove", "origin"]);
+      expect(await removed.exited).toBe(0);
+    }
+  }, 30_000);
+  test("bulk fetch and sync report each repo's own fetch", async () => {
+    const repo = join(root, "apps/alpha");
+    const added = Bun.spawn(["git", "-C", repo, "remote", "add", "origin", join(base, "missing-remote.git")]);
+    expect(await added.exited).toBe(0);
+    try {
+      for (const action of ["fetch", "sync"]) {
+        const res = await request("/library/api/git", { action, all: true });
+        expect(res.status).toBe(200);
+        const { results } = await res.json() as { results: Array<{ project: string; ok: boolean; status: string }> };
+        expect(results.find((r) => r.project === "alpha")).toMatchObject({ ok: false, status: "failed" });
+        expect(results.find((r) => r.project === "beta")?.ok).toBe(true);
+      }
+    } finally {
+      const removed = Bun.spawn(["git", "-C", repo, "remote", "remove", "origin"]);
+      expect(await removed.exited).toBe(0);
+    }
+  }, 30_000);
   test("ports carry absolute launch paths, enforce collisions, and read edited settings", async () => {
     expect((await request("/library/api/ports/set", {project: "alpha", dev_port: 16410})).status).toBe(200);
     const conflict = await request("/library/api/ports/set", {project: "beta", dev_port: 16410});

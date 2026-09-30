@@ -40,7 +40,8 @@ describe("names and patches", () => {
   });
   test("a patch is validated field by field", () => {
     expect(normalizeTaskPatch({ name: "dev", cmd: " bun run dev ", keep: true })).toEqual({ name: "dev", cmd: "bun run dev", keep: true });
-    expect(normalizeTaskPatch({ name: "dev", cwd: "./" })).toEqual({ name: "dev" });
+    expect(normalizeTaskPatch({ name: "dev", cwd: "./" })).toEqual({ name: "dev", cwd: "." });
+    expect(normalizeTaskPatch({ name: "dev", cwd: "" })).toEqual({ name: "dev", cwd: "." });
     expect(typeof normalizeTaskPatch({ name: "dev", cmd: "a\nb" })).toBe("string");
     expect(typeof normalizeTaskPatch({ name: "dev", keep: "yes" })).toBe("string");
     expect(typeof normalizeTaskPatch({ name: "Bad" })).toBe("string");
@@ -144,6 +145,17 @@ describe("canopy's layer as a diff", () => {
   test("only the fields that differ are kept", () => {
     expect(overrideOf({ name: "dev", cmd: "vite", dev: true, keep: false }, below)).toEqual({ name: "dev", cmd: "vite" });
     expect(overrideOf({ name: "dev", cmd: "bun run dev", dev: false, keep: true, cwd: "ui" }, below)).toEqual({ name: "dev", dev: false, keep: true, cwd: "ui" });
+  });
+  test("a root cwd override survives normalization and merge over a subfolder", () => {
+    const root = normalizeTaskPatch({ name: "dev", cmd: "bun run dev", cwd: "" });
+    if (typeof root === "string") throw new Error(root);
+    expect(root).toEqual({ name: "dev", cmd: "bun run dev", cwd: "." });
+    expect(mergeTasks([{ name: "dev", cmd: "bun run dev", cwd: "ui" }], [], [root], true).tasks[0]?.cwd).toBe(".");
+    expect(overrideOf(root, { name: "dev", cmd: "bun run dev", cwd: "ui" })).toEqual({ name: "dev", cwd: "." });
+  });
+  test("a root cwd over a task with no cwd below is not an override", () => {
+    expect(overrideOf({ name: "dev", cmd: "bun run dev", dev: true, cwd: "." }, below)).toEqual({ name: "dev" });
+    expect(overrideOf({ name: "x", cmd: "a", cwd: "." }, undefined)).toEqual({ name: "x", cmd: "a" });
   });
   test("a task no lower layer has keeps what it says, less the flags left off", () => {
     expect(overrideOf({ name: "x", cmd: "a", dev: false, hidden: false }, undefined)).toEqual({ name: "x", cmd: "a" });

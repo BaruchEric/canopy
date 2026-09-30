@@ -6,7 +6,7 @@
  * outlives the server itself. The tmux server lives on a socket under the
  * scratch config dir, so nothing here touches the real one.
  */
-import { afterAll, beforeAll, describe, expect, test } from "bun:test";
+import { afterAll, beforeAll, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -20,6 +20,9 @@ let server: { port: number; stop: () => void };
 let root: string;
 
 const tmux = Bun.which("tmux") !== null;
+
+// Shell startup and redraw wait up to fifteen seconds on a busy host.
+setDefaultTimeout(30_000);
 
 const dec = new TextDecoder();
 

@@ -114,7 +114,7 @@ export class TaskHub {
       if (!def?.keep || def.hidden || this.state[id] !== rec) continue;
       if (rec.exitedAt !== undefined) {
         this.arm(id, repo, def);
-        void this.tell(repo.id);
+        void this.tell(repo.id).catch(say("tasks"));
       } else await this.lock(id, () => this.launch(repo, def, false)).catch(say(`task ${def.name}`));
     }
   }
@@ -254,7 +254,7 @@ export class TaskHub {
   /** a viewer came or went: re-tell every repo with a task session */
   refresh(): void {
     const ids = new Set([...this.panes.values()].map((p) => this.deps.repos().find((r) => r.path === p.path)?.id).filter((x): x is string => !!x));
-    for (const id of ids) void this.tell(id);
+    for (const id of ids) void this.tell(id).catch(say("tasks"));
   }
 
   /* ---------- actions ---------- */
@@ -534,7 +534,7 @@ export class TaskHub {
           rec.gaveUp = true;
           this.deps.gaveUp(repo.name, def.name);
         } else this.arm(id, repo, def);
-        void this.tell(repo.id);
+        void this.tell(repo.id).catch(say("tasks"));
         await this.save();
       })
       .catch(say(`task ${rec.name}`));
@@ -557,11 +557,18 @@ export class TaskHub {
           rt.timer = setTimeout(fire, this.t.tick);
           return;
         }
-        await this.launch(repo, def, false);
+        const rec = this.state[id];
+        const currentRepo = rec ? this.deps.repos().find((r) => r.path === rec.path) : undefined;
+        if (!currentRepo) return;
+        const current = (await this.defsOf(currentRepo, true)).merged.find((m) => m.name === rec.name);
+        // a stop can land while the definition is read
+        if (this.stopped || this.state[id] !== rec || rec.want !== "running" || rec.gaveUp || this.running(id)) return;
+        if (!current?.keep || current.hidden) return;
+        await this.launch(currentRepo, current, false);
         rt.restarts += 1;
       })
         .catch(say(`task ${def.name}`))
-        .finally(() => void this.tell(repo.id));
+        .finally(() => void this.tell(repo.id).catch(say("tasks")));
     rt.retryAt = Date.now() + wait;
     rt.timer = setTimeout(fire, wait);
   }
@@ -591,7 +598,11 @@ export class TaskHub {
         // no file yet
       }
       list = list.filter((t) => t.name !== name);
-      if (patch) list.push(patch);
+      if (patch) {
+        // nothing under the repo file names a folder, so "." there is the root it already means
+        const { cwd, ...rest } = patch;
+        list.push(cwd === "." ? rest : patch);
+      }
       await mkdir(dir, { recursive: true });
       await writeFile(file, JSON.stringify(list, null, 2) + "\n");
     }

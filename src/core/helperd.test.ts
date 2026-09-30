@@ -90,6 +90,47 @@ describe("a helper on a backend that answers", () => {
 });
 
 describe("a helper on a backend that went with its host", () => {
+  test("a request completed after reconnect cannot acknowledge the new socket's request", async () => {
+    let connections = 0;
+    let first: { close: (code?: number, reason?: string) => unknown } | undefined;
+    const replies: Array<{ connection: number; body: unknown }> = [];
+    const pending: Array<() => void> = [];
+    const logs: string[] = [];
+    const server = Bun.serve<{ connection: number }>({
+      port: 0,
+      hostname: "127.0.0.1",
+      fetch(req, srv) {
+        return srv.upgrade(req, { data: { connection: ++connections } }) ? undefined : new Response("no");
+      },
+      websocket: {
+        open(sock) {
+          if (sock.data.connection === 1) first = sock;
+          sock.send(JSON.stringify({ id: 1, open: { app: "finder", path: "/tmp" } }));
+        },
+        message(sock, body) {
+          replies.push({ connection: sock.data.connection, body: JSON.parse(String(body)) });
+        },
+      },
+    });
+    stops.push(() => server.stop(true));
+    const helper = runHelper({
+      backend: `http://127.0.0.1:${server.port}`, name: "test", openers: ["finder"],
+      log: (line) => logs.push(line),
+      run: () => new Promise<void>((resolve) => pending.push(resolve)),
+    });
+    stops.push(helper.stop);
+    await until(() => pending.length === 1, "the first request");
+    first!.close(1001, "reconnect");
+    await until(() => pending.length === 2, "the new request with the reused id");
+    pending[0]!();
+    await until(() => logs.some((line) => line.startsWith("opened ")), "the old action to complete");
+    await Bun.sleep(30);
+    expect(replies).toEqual([]);
+    pending[1]!();
+    await until(() => replies.length > 0, "the current request's reply");
+    expect(replies).toEqual([{ connection: 2, body: { id: 1, ok: true } }]);
+  });
+
   test("gives up on the silent socket and dials again", async () => {
     const peer = silentPeer();
     stops.push(peer.stop);

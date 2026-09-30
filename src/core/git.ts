@@ -2,6 +2,7 @@ import { stat } from "node:fs/promises";
 import { isAbsolute, join, resolve, sep } from "node:path";
 import { git, onHost } from "./exec";
 import { parseLocator } from "./host";
+import { NO_PUSH } from "./peers";
 import type {
   CommitDetail,
   CommitFile,
@@ -614,12 +615,13 @@ export function isAccessDenied(stderr: string): boolean {
 }
 
 /** Push targets, most-preferred first: whatever the branch tracks, then every
- *  other remote. Forks commonly track a read-only upstream while the writable
+ *  other pushable remote. Peer remotes are deliberately fetch-only. Forks
+ *  commonly track a read-only upstream while the writable
  *  copy sits on a differently named remote. */
 async function pushTargets(
   repoPath: string,
   branch: string,
-): Promise<{ tracked: string; ordered: string[] }> {
+): Promise<{ tracked: string; ordered: string[]; fetchOnly: number }> {
   const listed = await git(repoPath, ["remote"]);
   const remotes =
     listed.code === 0
@@ -634,10 +636,20 @@ async function pushTargets(
     `branch.${branch}.remote`,
   ]);
   const tracked = cfg.code === 0 ? cfg.stdout.trim() : "";
-  const ordered = remotes.includes(tracked)
-    ? [tracked, ...remotes.filter((r) => r !== tracked)]
-    : remotes;
-  return { tracked, ordered };
+  const [pushRemote, pushDefault, pushable] = await Promise.all([
+    git(repoPath, ["config", "--get", `branch.${branch}.pushRemote`]),
+    git(repoPath, ["config", "--get", "remote.pushDefault"]),
+    Promise.all(remotes.map(async (remote) => {
+      const urls = await git(repoPath, ["remote", "get-url", "--push", "--all", remote]);
+      return urls.code === 0 && urls.stdout.split("\n").some((url) => url.trim() === NO_PUSH) ? null : remote;
+    })).then((rs) => rs.filter((remote): remote is string => remote !== null)),
+  ]);
+  // A plain `git push` to the tracked remote already honors pushRemote and
+  // pushDefault; when the tracked one is a peer, they still pick the first try.
+  const configured = tracked && !pushable.includes(tracked) ? [pushRemote, pushDefault].map((r) => (r.code === 0 ? r.stdout.trim() : "")) : [];
+  const first = [tracked, ...configured].find((r) => r && pushable.includes(r));
+  const ordered = first ? [first, ...pushable.filter((r) => r !== first)] : pushable;
+  return { tracked, ordered, fetchOnly: remotes.length - pushable.length };
 }
 
 export async function push(repoPath: string): Promise<string> {
@@ -646,8 +658,10 @@ export async function push(repoPath: string): Promise<string> {
   if (!branch || branch === "HEAD") {
     throw new Error("detached HEAD — check out a branch first");
   }
-  const { tracked, ordered } = await pushTargets(repoPath, branch);
-  if (ordered.length === 0) throw new Error("no remote configured");
+  const { tracked, ordered, fetchOnly } = await pushTargets(repoPath, branch);
+  if (ordered.length === 0) {
+    throw new Error(fetchOnly > 0 ? "no remote to push to: peer remotes are fetch-only" : "no remote configured");
+  }
 
   let lastErr = "";
   for (const remote of ordered) {

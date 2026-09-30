@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
-import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { exec } from "./exec";
@@ -24,6 +24,30 @@ afterAll(async () => {
 });
 
 const settle = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+async function processAlive(pid: number): Promise<boolean> {
+  const r = await exec(["ps", "-o", "stat=", "-p", String(pid)]);
+  const state = r.stdout.trim();
+  return r.code === 0 && state !== "" && !state.startsWith("Z");
+}
+
+function killProcess(pid: number): void {
+  if (pid <= 0) return;
+  try {
+    process.kill(pid, "SIGKILL");
+  } catch {
+    // already gone
+  }
+}
+
+async function readPid(path: string): Promise<number> {
+  for (let i = 0; i < 50; i++) {
+    const pid = Number((await readFile(path, "utf8").catch(() => "")).trim());
+    if (pid > 0) return pid;
+    await settle(20);
+  }
+  return 0;
+}
 
 const LSREGISTER =
   "/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister";
@@ -124,6 +148,152 @@ describe("builds and the local checkout", () => {
     const after = await launcher.builds(repo, settings);
     expect(after.find((x) => x.key === "local")?.running).toBe(false);
     expect(launcher.stopLaunch(repo, "local")).toBe(false);
+  });
+
+  test.skipIf(process.platform === "win32")("stopping a shell launch also stops its background child", async () => {
+    const { launcher } = harness();
+    const pidFile = join(scratch, "launch-child-stop.pid");
+    const settings = { ...DEFAULT_LAUNCH, run: `sleep 30 & echo $! > ${pidFile}; wait` };
+    let child = 0;
+    try {
+      await launcher.launch(repo, "local", settings);
+      child = await readPid(pidFile);
+      expect(child).toBeGreaterThan(0);
+      expect(await processAlive(child)).toBe(true);
+      expect(launcher.stopLaunch(repo, "local")).toBe(true);
+      for (let i = 0; i < 50 && (await processAlive(child)); i++) await settle(20);
+      expect(await processAlive(child)).toBe(false);
+    } finally {
+      killProcess(child);
+      launcher.shutdown();
+    }
+  });
+
+  test.skipIf(process.platform === "win32")("shutdown also stops background children of shell launches", async () => {
+    const { launcher } = harness();
+    const pidFile = join(scratch, "launch-child-shutdown.pid");
+    const settings = { ...DEFAULT_LAUNCH, run: `sleep 30 & echo $! > ${pidFile}; wait` };
+    let child = 0;
+    try {
+      await launcher.launch(repo, "local", settings);
+      child = await readPid(pidFile);
+      expect(child).toBeGreaterThan(0);
+      expect(await processAlive(child)).toBe(true);
+      launcher.shutdown();
+      for (let i = 0; i < 50 && (await processAlive(child)); i++) await settle(20);
+      expect(await processAlive(child)).toBe(false);
+    } finally {
+      killProcess(child);
+      launcher.shutdown();
+    }
+  });
+
+  test.skipIf(process.platform === "win32")("a TERM-resistant child is killed after its launch shell exits", async () => {
+    const { launcher } = harness();
+    const pidFile = join(scratch, "launch-child-term-resistant.pid");
+    const settings = { ...DEFAULT_LAUNCH, run: `sh -c 'trap "" TERM; echo $$ > ${pidFile}; exec sleep 30' & sleep 1` };
+    let child = 0;
+    try {
+      await launcher.launch(repo, "local", settings);
+      child = await readPid(pidFile);
+      expect(child).toBeGreaterThan(0);
+      expect(await processAlive(child)).toBe(true);
+      expect(launcher.stopLaunch(repo, "local")).toBe(true);
+      for (let i = 0; i < 150 && (await processAlive(child)); i++) await settle(20);
+      expect(await processAlive(child)).toBe(false);
+    } finally {
+      killProcess(child);
+      launcher.shutdown();
+    }
+  });
+
+  test("a failed reinstall keeps the previous release, and success replaces it with new state", async () => {
+    const base = join(buildsRoot(), "someone", "thing");
+    const release = join(base, "release", "v1");
+    const oldFile = join(release, "old-tool");
+    const oldState = {
+      builds: { "release:v1": { at: 1, asset: "old-tool", target: { kind: "bin", name: "old-tool" } } },
+      launches: { "release:v1": { count: 4, last: 5 } },
+    };
+    await mkdir(release, { recursive: true });
+    await writeFile(oldFile, "old release\n");
+    await writeFile(join(base, "state.json"), JSON.stringify(oldState));
+
+    let downloadOkay = false;
+    const assetServer = Bun.serve({
+      port: 0,
+      fetch: () => (downloadOkay ? new Response("#!/bin/sh\necho new release\n") : new Response("download failed", { status: 503 })),
+    });
+    const ghDir = join(scratch, "fake-gh");
+    await mkdir(ghDir, { recursive: true });
+    const releaseJson = JSON.stringify({
+      tag_name: "v1",
+      name: "One",
+      prerelease: false,
+      draft: false,
+      published_at: "2026-09-29T00:00:00Z",
+      html_url: "https://example.test/v1",
+      assets: [
+        {
+          name: "new-tool",
+          size: 1,
+          browser_download_url: `http://127.0.0.1:${assetServer.port}/new-tool`,
+          url: "",
+        },
+      ],
+    });
+    await writeFile(
+      join(ghDir, "gh"),
+      `#!/bin/sh
+if [ "$1" = auth ] && [ "$2" = token ]; then exit 1; fi
+if [ "$1" = api ]; then printf '%s' '${releaseJson}'; exit 0; fi
+exit 1
+`,
+    );
+    await chmod(join(ghDir, "gh"), 0o755);
+    try {
+      const launcherPath = join(process.cwd(), "src/core/launcher.ts");
+      const runInstall = async () => {
+        const probe = Bun.spawn(
+          [
+            process.execPath,
+            "-e",
+            `import { Launcher } from ${JSON.stringify(launcherPath)};
+const final = await new Promise((resolve) => {
+  const launcher = new Launcher({
+    onJob: (job) => { if (job.status !== "working") resolve(job); },
+    onJobGone: () => {},
+    onBuilds: () => {},
+  });
+  launcher.install(${JSON.stringify(repo)}, "v1", "new-tool", ${JSON.stringify(DEFAULT_LAUNCH)}).catch((error) => resolve({ status: "thrown", error: String(error) }));
+});
+console.log(JSON.stringify(final));`,
+          ],
+          {
+            cwd: process.cwd(),
+            env: { ...process.env, PATH: `${ghDir}:${process.env.PATH ?? ""}`, CANOPY_CONFIG_DIR: join(scratch, "config") },
+            stdin: "ignore",
+            stdout: "pipe",
+            stderr: "pipe",
+          },
+        );
+        const [stdout, stderr, code] = await Promise.all([probe.stdout.text(), probe.stderr.text(), probe.exited]);
+        expect(code).toBe(0);
+        expect(stderr).toBe("");
+        return JSON.parse(stdout.trim()) as { status: string };
+      };
+      expect((await runInstall()).status).toBe("failed");
+      expect(await readFile(oldFile, "utf8")).toBe("old release\n");
+      expect(JSON.parse(await readFile(join(base, "state.json"), "utf8"))).toEqual(oldState);
+      downloadOkay = true;
+      expect((await runInstall()).status).toBe("done");
+      expect(await readFile(join(release, "new-tool"), "utf8")).toBe("#!/bin/sh\necho new release\n");
+      const state = JSON.parse(await readFile(join(base, "state.json"), "utf8")) as typeof oldState;
+      expect(state.builds["release:v1"]).toMatchObject({ asset: "new-tool", target: { kind: "bin", name: "new-tool" } });
+      expect(state.launches["release:v1"]).toEqual(oldState.launches["release:v1"]);
+    } finally {
+      assetServer.stop(true);
+    }
   });
 
   test.skipIf(process.platform !== "darwin")("an app bundle is watched through open -W and quit by path", async () => {

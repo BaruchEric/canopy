@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
-import { mkdtemp, readdir, rm, writeFile } from "node:fs/promises";
+import { chmod, mkdtemp, readFile, readlink, readdir, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -52,6 +52,31 @@ describe("config store", () => {
     await writeFile(path, JSON.stringify({ fetch: "no" }));
     expect((await loadConfig()).fetch).toBe(true);
     await rm(path);
+  });
+
+  test.skipIf(process.getuid?.() === 0)("a failed config read rejects edits without erasing settings", async () => {
+    const path = join(dir, "config.json");
+    const original = JSON.stringify({ favorites: ["/original"], recentRoots: ["/original"] });
+    await writeFile(path, original);
+    await chmod(path, 0);
+    try {
+      await expect(rememberRoot("/new")).rejects.toThrow();
+    } finally {
+      await chmod(path, 0o600);
+    }
+    expect(await readFile(path, "utf8")).toBe(original);
+    await rm(path);
+  });
+
+  test("an unreadable config link rejects edits without replacing the link", async () => {
+    const path = join(dir, "config.json");
+    await symlink("config.json", path);
+    try {
+      await expect(rememberRoot("/new")).rejects.toThrow();
+      expect(await readlink(path)).toBe("config.json");
+    } finally {
+      await rm(path);
+    }
   });
 
   test("workspace upsert dedupes and appends", async () => {
