@@ -3,7 +3,7 @@
  *  of lines of it. Both the xterm in TermDock.tsx and the store's default
  *  shell height read from here, so they agree on what a row is. */
 
-import type { Repo, ShellPlace, TermInfo } from "../../src/core/types";
+import type { Harness, Repo, ShellPlace, TermInfo } from "../../src/core/types";
 
 /** One shell tab, in the strip along the bottom or in its repo's panel. */
 export interface TermTab {
@@ -26,11 +26,17 @@ export interface TermTab {
   /** the task this tab shows; closing the tab never stops it, and its
    *  socket only ever joins, never starts a shell under the task's id */
   task?: string;
-  /** what the socket that starts this shell asks the backend to type in;
-   *  never saved, since a shell that already exists ignores it */
-  start?: "claude";
+  /** what the socket that starts this shell asks the backend to type in:
+   *  the agent its shell route resolves to; never saved, since a shell that
+   *  already exists ignores it */
+  start?: "agent";
   /** the first message for the agent `start` names, on the same socket */
   prompt?: string;
+  /** the harness this tab's agent was picked as at launch ("new codex
+   *  shell"), beating the route; also what a resumed shell runs */
+  harness?: Harness;
+  /** or the profile picked at launch */
+  profile?: string;
 }
 
 /** Whether a repo's panel has no shell of its own yet: no panel tab here and

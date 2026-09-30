@@ -3,6 +3,8 @@ export interface SegOption<T extends string> {
   label: string;
   /** tooltip; say what the option does, in one line */
   title?: string;
+  /** shown but not choosable: a harness the backend lacks */
+  disabled?: boolean;
 }
 
 /** A row of mutually exclusive choices, used for grouping and every setting. */
@@ -32,6 +34,7 @@ export function Seg<T extends string>({
           role="radio"
           aria-checked={o.value === value}
           title={o.title}
+          disabled={o.disabled}
           onClick={() => onChange(o.value)}
         >
           {o.label}

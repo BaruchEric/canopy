@@ -3,6 +3,7 @@
  *  what it knew before the event, and the difference is what the line says. */
 
 import type {
+  AgentRoutes,
   Fleet,
   Flow,
   Device,
@@ -218,16 +219,30 @@ function workspaceLines(ev: Extract<ServerEvent, { type: "workspaces" }>, prev: 
   return lines;
 }
 
-function agentLines(ev: Extract<ServerEvent, { type: "agents" }>, prev: FeedSnapshot, at: number, prevAgents: Record<string, unknown>): FeedLine[] {
+/** what changed in a record keyed by name: added, changed and removed keys */
+function keyed(before: Record<string, unknown>, after: Record<string, unknown>): { key: string; change: "added" | "changed" | "removed" }[] {
+  const out: { key: string; change: "added" | "changed" | "removed" }[] = [];
+  for (const key of new Set([...Object.keys(before), ...Object.keys(after)])) {
+    if (JSON.stringify(before[key] ?? null) === JSON.stringify(after[key] ?? null)) continue;
+    out.push({ key, change: !(key in before) ? "added" : !(key in after) ? "removed" : "changed" });
+  }
+  return out;
+}
+
+/** The routing's changes: a repo's override, a profile, a role's route. */
+function agentLines(ev: Extract<ServerEvent, { type: "agents" }>, prev: FeedSnapshot, at: number, prevAgents: AgentRoutes): FeedLine[] {
   const lines: FeedLine[] = [];
-  const paths = new Set([...Object.keys(prevAgents), ...Object.keys(ev.agents)]);
-  for (const path of paths) {
-    const before = JSON.stringify(prevAgents[path] ?? null);
-    const after = JSON.stringify(ev.agents[path] ?? null);
-    if (before === after) continue;
+  const plain = (text: string): FeedLine => ({ at, kind: "agent", source: "", text, quiet: false });
+  for (const { key: path, change } of keyed(prevAgents.repos, ev.agents.repos)) {
     const repo = prev.repos.find((r) => r.path === path);
-    const text = path in ev.agents ? "agent settings changed" : "agent settings reset";
-    lines.push(repo ? about(repo, "agent", at, text) : { at, kind: "agent", source: "", text: `${text} for ${path}`, quiet: false });
+    const text = change === "removed" ? "agent override reset" : "agent override changed";
+    lines.push(repo ? about(repo, "agent", at, text) : plain(`${text} for ${path}`));
+  }
+  for (const { key, change } of keyed(prevAgents.profiles, ev.agents.profiles)) {
+    lines.push(plain(`agent profile ${key} ${change === "removed" ? "deleted" : change}`));
+  }
+  for (const { key, change } of keyed(prevAgents.roles, ev.agents.roles)) {
+    lines.push(plain(`${key} route ${change === "removed" ? "back to the default" : "changed"}`));
   }
   return lines;
 }
@@ -325,14 +340,15 @@ function fleetLines(ev: Extract<ServerEvent, { type: "fleet" }>, prev: FeedSnaps
 
 /**
  * The lines one event adds to the feed, given what the store held before it
- * was applied. `prevAgents` is the agents map, kept separate because the
- * snapshot's other fields are what every event needs and this one is not.
+ * was applied. `prevAgents` is the backend's agent routing, kept separate
+ * because the snapshot's other fields are what every event needs and this
+ * one is not.
  */
 export function describeEvent(
   ev: ServerEvent,
   prev: FeedSnapshot,
   at: number,
-  prevAgents: Record<string, unknown> = {},
+  prevAgents: AgentRoutes = { profiles: {}, roles: {}, repos: {} },
 ): FeedLine[] {
   switch (ev.type) {
     case "repo":

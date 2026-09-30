@@ -5117,8 +5117,15 @@ button.machine:hover {
     font-size: 0;
     gap: 0;
   }
+  /* four views: tighter, and able to scroll rather than push the row wide */
+  .topbar.phone .view-nav {
+    flex: 0 1 auto;
+    min-width: 0;
+    overflow-x: auto;
+    scrollbar-width: none;
+  }
   .topbar.phone .view-nav button {
-    padding: 1px 9px;
+    padding: 1px 7px;
   }
   .tb-line .search {
     flex: 1 1 auto;
@@ -5891,4 +5898,263 @@ button.machine:hover {
 }
 .panel-bench .panel-head > .panel-bench-btn {
   display: none;
+}
+
+/* ---------- agents: harnesses, routing, the agents view ---------- */
+/* one glyph per harness, in the palette: claude moss, codex sky */
+.harness-glyph {
+  display: inline-block;
+  min-width: 1ch;
+  text-align: center;
+}
+.h-claude,
+.harness-glyph.h-claude {
+  color: var(--moss);
+}
+.h-codex,
+.harness-glyph.h-codex {
+  color: var(--sky);
+}
+.seg button:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+.seg button:disabled:hover {
+  color: var(--ink-dim);
+}
+.menu-item:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+.menu-item:disabled:hover {
+  background: none;
+  color: var(--ink-dim);
+}
+
+/* the shells row's + and its menu of agent shells */
+.new-shell {
+  display: inline-flex;
+}
+.new-shell-menu {
+  max-width: calc(100vw - 16px);
+}
+
+/* one agent's settings, in a sheet, a profile row or an override */
+.agent-settings {
+  align-self: stretch;
+  display: flex;
+  flex-direction: column;
+  margin-top: 4px;
+  border: 1px solid var(--hair);
+  border-radius: var(--r);
+  background: color-mix(in srgb, var(--bark0) 45%, var(--float));
+}
+.agent-settings .settings-row {
+  padding: 6px 10px;
+}
+.agent-form .agent-settings .settings-row {
+  padding-left: 10px;
+  padding-right: 10px;
+}
+.agent-settings .seg {
+  flex-wrap: wrap;
+  max-width: 100%;
+  border-radius: 14px;
+}
+.pick-editor {
+  align-self: stretch;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+.pick-select {
+  max-width: 100%;
+}
+.pick-own {
+  font-size: 11px;
+  color: var(--ink-dim);
+}
+
+/* each role's resolved harness and settings, and where they came from */
+.effective-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12px;
+}
+.effective-table th,
+.effective-table td {
+  padding: 4px 8px 4px 0;
+  text-align: left;
+  vertical-align: top;
+  border-bottom: 1px solid var(--hair);
+}
+.effective-table thead th {
+  font-size: 11px;
+  font-weight: 400;
+  color: var(--ink-faint);
+}
+.effective-table tbody th {
+  font-weight: 400;
+  color: var(--ink);
+  white-space: nowrap;
+}
+.effective-from {
+  color: var(--ink-dim);
+}
+.effective-flag {
+  display: block;
+  font-size: 11px;
+  color: var(--rust);
+}
+span.effective-flag:not(:first-child) {
+  margin-top: 2px;
+}
+.agents-line .effective-flag {
+  display: inline;
+}
+
+/* the agents view: a column of sections that scrolls under its bar */
+.agents-view {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+.agents-bar {
+  flex: none;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px 14px;
+  padding: 10px 16px;
+  border-bottom: 1px solid var(--hair);
+}
+.agents-has {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-left: auto;
+}
+.harness-chip {
+  padding: 1px 8px;
+  border: 1px solid var(--hair2);
+  border-radius: 999px;
+  font-size: 11px;
+}
+.harness-chip.off {
+  color: var(--ink-faint);
+  border-style: dashed;
+}
+.agents-body {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 12px 16px 32px;
+}
+.agents-body > * {
+  max-width: 920px;
+}
+.agents-blurb {
+  margin-bottom: 10px;
+}
+.agents-warn {
+  margin-bottom: 10px;
+}
+.agents-section {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 14px 0;
+  border-top: 1px solid var(--hair);
+}
+.agents-section .panel-label {
+  margin: 0;
+}
+.agents-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin: 4px 0 0;
+  padding: 0;
+  list-style: none;
+}
+.agents-row {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 6px 10px;
+  border: 1px solid var(--hair);
+  border-radius: var(--r);
+  background: var(--bark1);
+}
+.agents-row.open {
+  border-color: var(--hair2);
+}
+.agents-row-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 10px;
+  min-width: 0;
+}
+.agents-name {
+  font-weight: 700;
+  min-width: 9ch;
+}
+.agents-line {
+  flex: 1;
+  min-width: 12ch;
+  color: var(--ink-dim);
+  font-size: 12px;
+}
+.agents-fact {
+  font-size: 11px;
+  color: var(--ink-faint);
+}
+.agents-row-head .pick-select {
+  flex: 1;
+  min-width: 14ch;
+  width: auto;
+}
+.agents-add {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin-top: 4px;
+}
+.agents-add .settings-input {
+  flex: 1;
+  min-width: 16ch;
+  width: auto;
+}
+.override-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(190px, 1fr));
+  gap: 6px 10px;
+}
+.override-slot {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+.override-label {
+  font-size: 11px;
+  color: var(--ink-faint);
+}
+@media (max-width: 760px) {
+  .agents-bar,
+  .agents-body {
+    padding-left: 12px;
+    padding-right: 12px;
+  }
+  .agents-has {
+    margin-left: 0;
+  }
+  .effective-table th,
+  .effective-table td {
+    padding-right: 6px;
+  }
 }

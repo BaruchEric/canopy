@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import { DEFAULT_AGENT } from "../../src/core/types";
 import type { Fleet, Flow, HelperInfo, Job, Repo, RepoStatus, Run, ServerEvent, SourceState, TaskInfo } from "../../src/core/types";
 import {
   appendFeed,
@@ -253,10 +254,17 @@ describe("describeEvent", () => {
   test("workspaces and agents diff by name and path", () => {
     const ws = describeEvent({ type: "workspaces", workspaces: [{ name: "w", repos: ["/r/alpha"] }] }, snap(), 5);
     expect(ws.map((l) => l.text)).toEqual(["workspace w created with 1 repo"]);
-    const ag = describeEvent({ type: "agents", agents: { "/r/alpha": { model: "opus" } as never } }, snap(), 5, {});
-    expect(ag.map((l) => [l.repo, l.text])).toEqual([["alpha", "agent settings changed"]]);
-    const reset = describeEvent({ type: "agents", agents: {} }, snap(), 5, { "/r/alpha": { model: "opus" } });
-    expect(reset.map((l) => l.text)).toEqual(["agent settings reset"]);
+    const none = { profiles: {}, roles: {}, repos: {} };
+    const opus = { ...DEFAULT_AGENT, model: "opus" };
+    const withRepo = { ...none, repos: { "/r/alpha": { all: opus } } };
+    const ag = describeEvent({ type: "agents", agents: withRepo }, snap(), 5, none);
+    expect(ag.map((l) => [l.repo, l.text])).toEqual([["alpha", "agent override changed"]]);
+    const reset = describeEvent({ type: "agents", agents: none }, snap(), 5, withRepo);
+    expect(reset.map((l) => l.text)).toEqual(["agent override reset"]);
+    const routed = describeEvent({ type: "agents", agents: { ...none, profiles: { deep: opus }, roles: { chat: { profile: "deep" } } } }, snap(), 5, none);
+    expect(routed.map((l) => l.text)).toEqual(["agent profile deep added", "chat route changed"]);
+    const back = describeEvent({ type: "agents", agents: none }, snap(), 5, { ...none, profiles: { deep: opus }, roles: { chat: { profile: "deep" } } });
+    expect(back.map((l) => l.text)).toEqual(["agent profile deep deleted", "chat route back to the default"]);
   });
 
   test("jobs: start, end, dismissal; builds and launch settings", () => {

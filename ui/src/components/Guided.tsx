@@ -3,7 +3,7 @@ import type { Repo } from "../../../src/core/types";
 import { closedIn, useStore } from "../store";
 import { devTask } from "../tasks";
 import { canSave, devState, plainStatus, SAVE_PROMPT, SETUP_PROMPT } from "../guided";
-import { askClaude } from "./AgentButtons";
+import { askAgent } from "./AgentButtons";
 import { PreviewSection } from "./Preview";
 
 export interface GuidedTargets {
@@ -12,7 +12,7 @@ export interface GuidedTargets {
 }
 
 /** The intermediate panel's body: one status line in words, the app's run
- *  and stop, save, and the way to every section. The Claude shell under it
+ *  and stop, save, and the way to every section. The agent's shell under it
  *  is the panel's own footer, the same element the advanced body has. */
 export function GuidedPanel({ repo, onMore, targets }: { repo: Repo; onMore: () => void; targets: GuidedTargets }) {
   const tasks = useStore((s) => s.tasks[repo.id]);
@@ -46,7 +46,7 @@ export function GuidedPanel({ repo, onMore, targets }: { repo: Repo; onMore: () 
       <p className="guided-status">{plainStatus(repo, state)}</p>
       <div className="guided-actions">
         {state === "none" ? (
-          <button ref={targets.run} type="button" className="guided-btn" onClick={() => void askClaude(repo.id, SETUP_PROMPT, null)}>
+          <button ref={targets.run} type="button" className="guided-btn" onClick={() => void askAgent(repo.id, SETUP_PROMPT, null)}>
             Set up run
           </button>
         ) : state === "running" ? (
@@ -63,8 +63,8 @@ export function GuidedPanel({ repo, onMore, targets }: { repo: Repo; onMore: () 
           type="button"
           className="guided-btn"
           disabled={!canSave(repo)}
-          title={canSave(repo) ? "Claude commits and pushes your work" : "nothing to save"}
-          onClick={() => void askClaude(repo.id, SAVE_PROMPT, null)}
+          title={canSave(repo) ? "Your agent commits and pushes your work" : "nothing to save"}
+          onClick={() => void askAgent(repo.id, SAVE_PROMPT, null)}
         >
           Save my work
         </button>

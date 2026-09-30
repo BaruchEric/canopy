@@ -15,9 +15,9 @@ function ago(at: number, now: number): string {
 /**
  * The shells a machine going down left behind. The chip is there only when
  * there are some; each one restores into a new shell at the same repo, under
- * the same name, with what it printed ahead of it. A shell that had Claude in it can be
- * restored with `claude --continue` typed into it, which picks the
- * conversation back up. The processes themselves are gone; this restores
+ * the same name, with what it printed ahead of it. A shell that had an agent in it
+ * can be restored with the agent's continue typed into it (`claude
+ * --continue`, `codex resume --last`), which picks the conversation back up. The processes themselves are gone; this restores
  * the terminal, not what was running in it.
  */
 export function KeptShells() {
@@ -101,12 +101,12 @@ export function KeptShells() {
                       <button type="button" className="mini" disabled={busy === k.id} onClick={() => void run(k.id, () => restoreShell(k.id))}>
                         restore
                       </button>
-                      {k.agent === "claude" && (
+                      {k.agent && (
                         <button
                           type="button"
                           className="mini"
                           disabled={busy === k.id}
-                          title="Restores the shell and runs claude --continue in it"
+                          title={`Restores the shell and runs ${k.agent === "codex" ? "codex resume --last" : "claude --continue"} in it`}
                           onClick={() => void run(k.id, () => restoreShell(k.id, true))}
                         >
                           restore + continue
@@ -123,7 +123,8 @@ export function KeptShells() {
             {error && <p className="settings-hint error">{error}</p>}
             <p className="settings-hint">
               A restored shell is a new shell at the same repo, under the same name, with what the old one printed ahead of it. The processes that were
-              in it are gone: a shell that had Claude in it is offered a <code>claude --continue</code>, which picks the conversation back up.
+              in it are gone: a shell that had an agent in it is offered its continue (<code>claude --continue</code>, <code>codex resume --last</code>),
+              which picks the conversation back up.
               {!keeping && " Recording is off, so nothing new is being kept; settings has the switch."}
             </p>
           </section>

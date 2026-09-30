@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import type { Repo, RepoStatus, TaskInfo } from "../../src/core/types";
 import type { TermTab } from "./term";
-import { canSave, claudeCandidates, debugPrompt, devState, pendingClaude, plainStatus, tourStep } from "./guided";
+import { canSave, agentCandidates, debugPrompt, devState, pendingAgent, plainStatus, tourStep } from "./guided";
 
 const status = (over: Partial<RepoStatus> = {}): RepoStatus => ({
   branch: "main",
@@ -78,15 +78,15 @@ describe("debugPrompt", () => {
   });
 });
 
-describe("claudeCandidates", () => {
+describe("agentCandidates", () => {
   test("the showing shell first, then the repo's panel shells newest first, then its strip shells", () => {
     const tabs = [tab("p1", "app", "panel"), tab("s1", "app", "strip"), tab("p2", "app", "panel"), tab("x", "other", "panel")];
-    expect(claudeCandidates(tabs[1] ?? null, tabs, "app")).toEqual(["s1", "p2", "p1"]);
-    expect(claudeCandidates(null, tabs, "app")).toEqual(["p2", "p1", "s1"]);
+    expect(agentCandidates(tabs[1] ?? null, tabs, "app")).toEqual(["s1", "p2", "p1"]);
+    expect(agentCandidates(null, tabs, "app")).toEqual(["p2", "p1", "s1"]);
   });
   test("a task's tab and another repo's showing tab are never candidates", () => {
     const tabs = [tab("t", "app", "panel", "dev"), tab("x", "other", "strip")];
-    expect(claudeCandidates(tabs[1] ?? null, tabs, "app")).toEqual([]);
+    expect(agentCandidates(tabs[1] ?? null, tabs, "app")).toEqual([]);
   });
 });
 
@@ -100,13 +100,13 @@ describe("tourStep", () => {
   });
 });
 
-describe("pendingClaude", () => {
-  test("the newest live tab of the repo started with claude", () => {
-    const a = { ...tab("a", "app", "panel"), start: "claude" as const };
-    const b = { ...tab("b", "app", "strip"), start: "claude" as const };
-    const ended = { ...tab("c", "app", "panel"), start: "claude" as const, exit: 0 };
-    expect(pendingClaude([a, b, ended, tab("d", "app", "panel")], "app")).toBe("b");
-    expect(pendingClaude([a], "other")).toBeNull();
-    expect(pendingClaude([tab("d", "app", "panel")], "app")).toBeNull();
+describe("pendingAgent", () => {
+  test("the newest live tab of the repo started with its agent", () => {
+    const a = { ...tab("a", "app", "panel"), start: "agent" as const };
+    const b = { ...tab("b", "app", "strip"), start: "agent" as const };
+    const ended = { ...tab("c", "app", "panel"), start: "agent" as const, exit: 0 };
+    expect(pendingAgent([a, b, ended, tab("d", "app", "panel")], "app")).toBe("b");
+    expect(pendingAgent([a], "other")).toBeNull();
+    expect(pendingAgent([tab("d", "app", "panel")], "app")).toBeNull();
   });
 });

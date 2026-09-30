@@ -1,11 +1,16 @@
 import type {
   AgentKind,
   About,
+  AgentPick,
+  AgentRole,
+  AgentSession,
   AgentSettings,
+  AgentTable,
+  Harness,
+  RepoAgent,
   BackendEntry,
   ChanMessage,
   TailchanInfo,
-  ClaudeSession,
   Device,
   HelperInfo,
   ClientInfo,
@@ -53,6 +58,7 @@ import type {
   Workspace,
 } from "../../src/core/types";
 import { pickUrl, split, wsUrl, type BackendSignal } from "./backends";
+import { normalizeRoutes } from "../../src/core/route";
 import {
   qDevice,
   qEvent,
@@ -282,13 +288,26 @@ export const api = {
       method: "POST",
       body: JSON.stringify({ app, tab, helper }),
     }),
-  /** every repo's agent settings, keyed by repo path */
-  agents: (b: string = homeName()) => req<Record<string, AgentSettings>>(b, "/api/agents"),
-  setAgent: (id: string, settings: AgentSettings) =>
-    repoReq<Record<string, AgentSettings>>(id, (p) => `/api/repos/agent?${rq(p)}`, {
-      method: "POST",
-      body: JSON.stringify(settings),
-    }),
+  /** a backend's agent routing: profiles, the route per role, and the repo
+   *  overrides by path; an older backend's plain map of settings reads as
+   *  those repos' whole-repo picks */
+  agents: async (b: string = homeName()) => normalizeRoutes(await req<unknown>(b, "/api/agents")),
+  /** a repo's override, whole; an empty one removes it */
+  setRepoAgent: async (id: string, agent: RepoAgent) =>
+    normalizeRoutes(
+      await repoReq<unknown>(id, (p) => `/api/repos/agent?${rq(p)}`, {
+        method: "POST",
+        body: JSON.stringify(agent),
+      }),
+    ),
+  /** writes a profile on a backend, or deletes it with null */
+  setProfile: async (name: string, settings: AgentSettings | null, b: string = homeName()) =>
+    normalizeRoutes(await req<unknown>(b, "/api/agents/profile", { method: "POST", body: JSON.stringify({ name, settings }) })),
+  /** points a role at a pick on a backend, or back at the default with null */
+  setRole: async (role: AgentRole, pick: AgentPick | null, b: string = homeName()) =>
+    normalizeRoutes(await req<unknown>(b, "/api/agents/role", { method: "POST", body: JSON.stringify({ role, pick }) })),
+  /** one repo's effective table, as its backend resolves it */
+  resolveAgents: (id: string) => repoReq<AgentTable>(id, (p) => `/api/agents/resolve?${rq(p)}`),
   history: async (refresh = false, b: string = homeName()) =>
     from(b, await req<HistoryOverview>(b, refresh ? "/api/history?refresh=1" : "/api/history"), qHistory),
   sessions: (id: string, since: HistoryWindow) =>
@@ -374,17 +393,20 @@ export const api = {
   /** drops what a kept shell left, history and all */
   forgetShell: (id: string) =>
     repoReq<{ ok: true }>(id, (p) => `/api/terms/kept?term=${encodeURIComponent(p)}`, { method: "DELETE" }),
-  /** the Claude Code conversations started at a repo on the backend, newest first */
-  claudeSessions: (repoId: string) => repoReq<ClaudeSession[]>(repoId, (p) => `/api/repos/resumable?${rq(p)}`),
+  /** the agent conversations started at a repo on the backend, both
+   *  harnesses', newest first; an older backend's have no harness and are
+   *  claude's */
+  agentSessions: async (repoId: string) =>
+    (await repoReq<AgentSession[]>(repoId, (p) => `/api/repos/resumable?${rq(p)}`)).map((x) => ({ ...x, harness: x.harness ?? "claude" })),
   /** a new shell at the repo under `term`, with that conversation picked
-   *  back up in it */
-  resumeClaude: async (repoId: string, term: string, place: ShellPlace, session: string, cols = 80, rows = 24) => {
+   *  back up in it by its own harness */
+  resumeAgent: async (repoId: string, term: string, place: ShellPlace, session: string, harness: Harness, cols = 80, rows = 24) => {
     const [b, plain] = on(repoId);
     return from(
       b,
       await req<TermInfo>(b, `/api/repos/resume?${rq(plain)}`, {
         method: "POST",
-        body: JSON.stringify({ term: plainOf(term), place, session, cols, rows }),
+        body: JSON.stringify({ term: plainOf(term), place, session, harness, cols, rows }),
       }),
       qTerm,
     );

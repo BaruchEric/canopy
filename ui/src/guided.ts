@@ -1,7 +1,8 @@
 /* The guided (intermediate) panel's words and decisions, pure so they are
    tested: what the repo's state is in plain words, what the dev task is
-   doing, the prompts the buttons type into Claude, which shell they type
-   into, and the tour's steps. */
+   doing, the prompts the buttons type into the repo's agent (Claude Code
+   or Codex, whichever its shell route says), which shell they type into,
+   and the tour's steps. */
 import type { Repo, TaskInfo } from "../../src/core/types";
 import type { TermTab } from "./term";
 
@@ -56,7 +57,7 @@ export function debugPrompt(lines: readonly string[]): string {
 /** The shells a prompt may go to, best first: the showing one when it is a
  *  shell of this repo, then the repo's panel shells newest first, then its
  *  strip shells. A task's tab is never one. */
-export function claudeCandidates(showing: TermTab | null, tabs: readonly TermTab[], repoId: string): string[] {
+export function agentCandidates(showing: TermTab | null, tabs: readonly TermTab[], repoId: string): string[] {
   const mine = tabs.filter((t) => t.repoId === repoId && t.task === undefined && t.exit === undefined);
   const out: string[] = [];
   if (showing && mine.some((t) => t.id === showing.id)) out.push(showing.id);
@@ -65,13 +66,13 @@ export function claudeCandidates(showing: TermTab | null, tabs: readonly TermTab
   return out;
 }
 
-/** The shell of this repo canopy last started with claude, still open: one
- *  that may not have come up yet, so a prompt waits for it rather than
+/** The shell of this repo canopy last started with its agent, still open:
+ *  one that may not have come up yet, so a prompt waits for it rather than
  *  opening another. */
-export function pendingClaude(tabs: readonly TermTab[], repoId: string): string | null {
+export function pendingAgent(tabs: readonly TermTab[], repoId: string): string | null {
   for (let i = tabs.length - 1; i >= 0; i--) {
     const t = tabs[i];
-    if (t && t.repoId === repoId && t.start === "claude" && t.exit === undefined && t.task === undefined) return t.id;
+    if (t && t.repoId === repoId && t.start === "agent" && t.exit === undefined && t.task === undefined) return t.id;
   }
   return null;
 }
@@ -79,9 +80,9 @@ export function pendingClaude(tabs: readonly TermTab[], repoId: string): string 
 export type TourStep = 0 | 1 | 2 | "done";
 
 export const TOUR_TEXT = [
-  "Tell Claude what you want to build, in your own words.",
+  "Tell your agent what you want to build, in your own words.",
   "See your app running here.",
-  "Keep your changes. Claude saves and backs them up.",
+  "Keep your changes. Your agent saves and backs them up.",
 ] as const;
 
 export function tourStep(step: TourStep, action: "next" | "skip"): TourStep {

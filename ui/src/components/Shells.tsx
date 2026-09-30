@@ -4,7 +4,8 @@ import { clientId } from "../client";
 import { idText, useStore } from "../store";
 import { useFitPop } from "../pop";
 import { BackendWord } from "./IdLabel";
-import type { ClaudeSession } from "../../../src/core/types";
+import { HARNESS } from "../../../src/core/harness";
+import type { AgentSession } from "../../../src/core/types";
 
 /** "now", "5m", "3h", "2d": how long ago */
 function ago(at: number, now: number): string {
@@ -17,8 +18,9 @@ function ago(at: number, now: number): string {
 
 /**
  * The shells chip in the top bar: every shell the backend holds, whichever
- * device started it, to pick up here, and the Claude Code conversations
- * started at a repo on the backend, to pick back up in a new shell. A
+ * device started it, to pick up here, and the Claude Code and Codex
+ * conversations started at a repo on the backend, to pick back up in a new
+ * shell by their own harness. A
  * shell's tab can be hidden here without ending it, which leaves it running
  * for the other devices and in this list.
  */
@@ -33,20 +35,20 @@ export function ShellsChip() {
   const joinTerm = useStore((s) => s.joinTerm);
   const hideTerm = useStore((s) => s.hideTerm);
   const closeTerm = useStore((s) => s.closeTerm);
-  const resumeClaude = useStore((s) => s.resumeClaude);
+  const resumeAgent = useStore((s) => s.resumeAgent);
   const chan = useStore((s) => s.chan);
   const openChan = useStore((s) => s.openChan);
   const loadChan = useStore((s) => s.loadChan);
   const [open, setOpen] = useState(false);
   const [now, setNow] = useState(() => Date.now());
   const [repoId, setRepoId] = useState("");
-  const [sessions, setSessions] = useState<ClaudeSession[] | null>(null);
+  const [sessions, setSessions] = useState<AgentSession[] | null>(null);
   const [busy, setBusy] = useState("");
   const [error, setError] = useState("");
   const ref = useRef<HTMLDivElement>(null);
   useFitPop(ref, open);
 
-  // Claude Code only keeps conversations for folders on the backend itself
+  // both harnesses only keep conversations for folders on the backend itself
   const local = useMemo(
     () => repos.filter((r) => !r.forge && !r.host).sort((a, b) => a.name.localeCompare(b.name)),
     [repos],
@@ -88,7 +90,7 @@ export function ShellsChip() {
     let live = true;
     setSessions(null);
     api
-      .claudeSessions(repoId)
+      .agentSessions(repoId)
       .then((list) => live && setSessions(list))
       .catch((e: unknown) => {
         if (!live) return;
@@ -128,7 +130,7 @@ export function ShellsChip() {
         title={
           elsewhere
             ? `${list.length} shell${list.length === 1 ? "" : "s"} running, ${elsewhere} not open here`
-            : "Shells on this backend, and Claude conversations to pick back up"
+            : "Shells on this backend, and agent conversations to pick back up"
         }
         onClick={() => setOpen(!open)}
       >
@@ -214,7 +216,7 @@ export function ShellsChip() {
             )}
           </section>
           <section className="settings-row">
-            <h3 className="panel-label">claude conversations</h3>
+            <h3 className="panel-label">agent conversations</h3>
             {local.length === 0 ? (
               <p className="settings-hint">No repo on the backend itself to look in.</p>
             ) : (
@@ -229,13 +231,18 @@ export function ShellsChip() {
                 {sessions === null ? (
                   <p className="settings-hint">reading…</p>
                 ) : sessions.length === 0 ? (
-                  <p className="settings-hint">No Claude conversation was started at {repoName(repoId)} on the backend.</p>
+                  <p className="settings-hint">No agent conversation was started at {repoName(repoId)} on the backend.</p>
                 ) : (
                   <ul className="shells-list">
                     {sessions.map((c) => (
-                      <li key={c.id} className="shell-row">
+                      <li key={`${c.harness}:${c.id}`} className="shell-row">
                         <span className="kept-where">
-                          <span className="claude-prompt">{c.summary ?? c.prompt}</span>
+                          <span className="claude-prompt">
+                            <span className={`harness-glyph h-${c.harness}`} title={HARNESS[c.harness].label} aria-label={HARNESS[c.harness].label}>
+                              {HARNESS[c.harness].glyph}
+                            </span>{" "}
+                            {c.summary ?? c.prompt ?? "(nothing typed in its first part)"}
+                          </span>
                           <span className="kept-fact">
                             {ago(c.at, now)}
                             {c.branch && ` · ${c.branch}`}
@@ -247,8 +254,8 @@ export function ShellsChip() {
                             type="button"
                             className="mini"
                             disabled={busy !== ""}
-                            title={`A new shell at ${repoName(repoId)} running claude --resume ${c.id}`}
-                            onClick={() => void run(c.id, () => resumeClaude(repoId, c.id))}
+                            title={`A new shell at ${repoName(repoId)} running ${c.harness === "codex" ? "codex resume" : "claude --resume"} ${c.id}`}
+                            onClick={() => void run(c.id, () => resumeAgent(repoId, c.id, c.harness))}
                           >
                             {busy === c.id ? "starting…" : "resume"}
                           </button>
@@ -262,7 +269,8 @@ export function ShellsChip() {
             {error && <p className="settings-hint error">{error}</p>}
             <p className="settings-hint">
               Every shell runs on the backend, so any device can join one; ending it ends it everywhere, hiding it only takes it away here. A
-              conversation resumes in a new shell with the repo's agent settings. Conversations started on another machine live there, not here.
+              conversation resumes in a new shell by its own harness, with the repo's settings for it. Conversations started on another machine
+              live there, not here.
             </p>
           </section>
         </div>

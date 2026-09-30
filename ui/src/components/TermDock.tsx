@@ -47,6 +47,7 @@ import { Wordmark } from "./TopBar";
 import { AgentButtons } from "./AgentButtons";
 import { LIVE } from "../liveTerms";
 import { TERM_GONE, type Repo } from "../../../src/core/types";
+import { NewShellButton } from "./NewShell";
 
 /** The design tokens the terminal paints with, resolved through a probe
  *  element so `light-dark()` collapses to the scheme in force. */
@@ -152,7 +153,11 @@ function socketUrl(tab: TermTab, cols: number, rows: number, rejoin: boolean): s
   });
   if (joinsOnly(tab, rejoin)) q.set("attach", "1");
   else if (tab.start) {
-    q.set("start", tab.start);
+    // a backend older than harnesses reports none and knows only start=claude
+    const legacy = !connOf(useStore.getState(), backendOf(tab.id)).backend.harnesses;
+    q.set("start", legacy ? "claude" : tab.start);
+    if (tab.profile) q.set("profile", tab.profile);
+    else if (tab.harness) q.set("harness", tab.harness);
     if (tab.prompt) q.set("prompt", tab.prompt);
   }
   return backendSocket(backendOf(tab.id), `/api/term?${q}`);
@@ -1331,17 +1336,7 @@ export function PanelShells({ repo }: { repo: Repo }) {
             active={active}
             onShow={setChosen}
             caption=""
-            extra={
-              <button
-                type="button"
-                className="term-new"
-                title="Another shell at this repo, here"
-                aria-label="New shell"
-                onClick={() => openTerm(repo.id, "panel")}
-              >
-                +
-              </button>
-            }
+            extra={<NewShellButton repoId={repo.id} />}
             end={
               <>
                 <ModeButtons mode={closed ? "normal" : chosenMode} setMode={setMode} what="panel" bench={bench} />

@@ -4,21 +4,24 @@ import { createPortal } from "react-dom";
 import { linkLabel } from "../util";
 import { ACTIONS, checkWhen } from "../../../src/core/actions";
 import { describeAgent } from "../../../src/core/agent";
+import { HARNESS } from "../../../src/core/harness";
+import { harnessesOf, profileNames } from "../agents";
 import { describeLaunch } from "../../../src/core/launch";
 import { flowWord } from "../flows";
 import { useShallow } from "zustand/react/shallow";
-import { activeFlowFor, activeRunFor, agentFor, capsFor, connOf, isFavorite, launchFor, useStore } from "../store";
+import { activeFlowFor, activeRunFor, agentFor, capsFor, connOf, isFavorite, launchFor, routesOf, useStore } from "../store";
 import { backendOf } from "../registry";
 import {
-  CLAUDE_OPENERS,
+  AGENT_OPENERS,
+  HARNESSES,
   OPENER_IDS,
   type OpenerId,
   type Repo,
   type RunAction,
 } from "../../../src/core/types";
 
-/** The "open in" row. The openers that start Claude live under "with claude". */
-const OPENERS = OPENER_IDS.filter((app) => !CLAUDE_OPENERS.includes(app));
+/** The "open in" row. The openers that start an agent live under "with an agent". */
+const OPENERS = OPENER_IDS.filter((app) => !AGENT_OPENERS.includes(app));
 
 /** The jobs; the built-in commit/push/commit-push/deploy have workflow twins
  *  now, so only the free-form ask remains here. Chat has its own entry since
@@ -28,8 +31,9 @@ const JOBS = ["ask"] as const;
 const MENU_W = 296;
 
 /**
- * The card's ⋯ menu. Two groups: jobs handed to Claude, which open a
- * pre-flight dialog, and openers, which launch at once. Rendered through a
+ * The card's ⋯ menu. Two groups: work handed to an agent (jobs open a
+ * pre-flight dialog; a new claude or codex shell starts at once, beating
+ * the repo's route for that one start), and openers, which launch at once. Rendered through a
  * portal so a card's hover transform cannot trap it, and closed by anything
  * that would leave it floating in the wrong place: outside clicks, Escape,
  * scrolling, a resize.
@@ -52,6 +56,9 @@ export function RepoMenu({
   const showLaunch = useStore((s) => s.showLaunch);
   const openTerm = useStore((s) => s.openTerm);
   const agent = useStore((s) => agentFor(s, repo));
+  const has = useStore((s) => harnessesOf(connOf(s, backendOf(repo.id)).backend));
+  const routes = useStore((s) => routesOf(s, backendOf(repo.id)));
+  const extraProfiles = profileNames(routes).filter((n) => n !== "default");
   const launch = useStore((s) => launchFor(s, repo));
   // The launcher runs on the backend host; a headless backend (a container)
   // cannot, so it is hidden there. The desktop openers are what this browser
@@ -157,6 +164,11 @@ export function RepoMenu({
       if (onError) onError(msg);
       else console.error(msg);
     }
+  };
+
+  const agentShell = (pick: { harness: (typeof HARNESSES)[number] } | { profile: string }) => {
+    setOpen(false);
+    openTerm(repo.id, undefined, "agent", undefined, pick);
   };
 
   const choose = (action: RunAction) => {
@@ -306,7 +318,7 @@ export function RepoMenu({
               </>
             ) : (
               <>
-              <div className="menu-label">with claude</div>
+              <div className="menu-label">with an agent</div>
               {active && (
                 <button
                   type="button"
@@ -350,7 +362,7 @@ export function RepoMenu({
                   className="menu-item"
                   aria-disabled={!!activeFlow}
                   tabIndex={activeFlow ? -1 : 0}
-                  title={activeFlow ? "workflow running" : "Talk with Claude Code about this repo, here in canopy"}
+                  title={activeFlow ? "workflow running" : "Talk with Claude Code about this repo, here in canopy (chats run on claude)"}
                   onClick={() => {
                     if (!activeFlow) void chat();
                   }}
@@ -418,12 +430,63 @@ export function RepoMenu({
                   </button>
                 );
               })}
+              {HARNESSES.map((h) => {
+                const here = has.includes(h);
+                const routed = agent.harness === h;
+                return (
+                  <button
+                    key={`shell-${h}`}
+                    type="button"
+                    role="menuitem"
+                    className="menu-item"
+                    aria-disabled={!here}
+                    tabIndex={here ? 0 : -1}
+                    title={
+                      here
+                        ? `A shell at this repo with ${HARNESS[h].label} started in it${routed ? ", the way its route says" : ", in place of its route for this one start"}`
+                        : `${HARNESS[h].label} is not installed on ${backendOf(repo.id)}`
+                    }
+                    onClick={() => {
+                      if (here) agentShell({ harness: h });
+                    }}
+                  >
+                    <span className="menu-text">
+                      <span className={`harness-glyph h-${h}`} aria-hidden="true">
+                        {HARNESS[h].glyph}
+                      </span>{" "}
+                      new {HARNESS[h].label} shell
+                    </span>
+                    <span className="menu-fact">{here ? (routed ? describeAgent(agent, false) : "") : "not installed"}</span>
+                  </button>
+                );
+              })}
+              {extraProfiles.length > 0 && (
+                <div className="menu-row" aria-label="A shell with a profile">
+                  {extraProfiles.map((name) => {
+                    const p = routes.profiles[name]!;
+                    const here = has.includes(p.harness);
+                    return (
+                      <button
+                        key={`profile-${name}`}
+                        type="button"
+                        role="menuitem"
+                        className="mini"
+                        disabled={!here}
+                        title={here ? `A shell with profile ${name}: ${HARNESS[p.harness].label} · ${describeAgent(p, false)}` : `${HARNESS[p.harness].label} is not installed here`}
+                        onClick={() => agentShell({ profile: name })}
+                      >
+                        {HARNESS[p.harness].glyph} {name}
+                      </button>
+                    );
+                  })}
+                </div>
+              )}
               {can("agent") && (
                 <button
                   type="button"
                   role="menuitem"
                   className="menu-item"
-                  title="Start an interactive Claude Code session in a terminal at this repo"
+                  title="Start the repo's agent in a terminal at this repo"
                   onClick={() => void openIn("agent")}
                 >
                   <span className="menu-text">agent</span>
@@ -435,7 +498,7 @@ export function RepoMenu({
                   type="button"
                   role="menuitem"
                   className="menu-item"
-                  title="Open this repo as a herdr workspace with Claude Code running in it"
+                  title="Open this repo as a herdr workspace with its agent running in it"
                   onClick={() => void openIn("herdr")}
                 >
                   <span className="menu-text">herdr</span>
@@ -446,14 +509,16 @@ export function RepoMenu({
                 type="button"
                 role="menuitem"
                 className="menu-item"
-                title="Model, effort and permissions for every Claude this repo starts"
+                title="Which agent this repo starts, whole or per role, and how"
                 onClick={() => {
                   setOpen(false);
                   editAgent(repo.id);
                 }}
               >
-                <span className="menu-text">agent settings…</span>
-                <span className="menu-fact">{describeAgent(agent)}</span>
+                <span className="menu-text">agent routing…</span>
+                <span className="menu-fact">
+                  {HARNESS[agent.harness].glyph} {describeAgent(agent, false)}
+                </span>
               </button>
               {backend.openers && (
                 <>

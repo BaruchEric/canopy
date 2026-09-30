@@ -1423,9 +1423,9 @@ export function RepoPanel({
                 className="mini"
                 title={
                   app === "agent"
-                    ? "Start an interactive Claude Code session in a terminal here"
+                    ? "Start the repo's agent (its shell route: Claude Code or Codex) in a terminal here"
                     : app === "herdr"
-                      ? "Open this repo as a herdr workspace with Claude Code running in it"
+                      ? "Open this repo as a herdr workspace with the repo's agent running in it"
                       : undefined
                 }
                 onClick={() =>

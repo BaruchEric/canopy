@@ -22,14 +22,21 @@ import { mergeAction } from "./peers";
 import { convOf, isUnread, mergeMessages } from "./chan";
 import type { ChanMessage, TailchanInfo } from "../../src/core/types";
 import { clientCaps } from "../../src/core/client";
+import { normalizeRoutes, resolveAgent } from "../../src/core/route";
+import { NO_ROUTES } from "./agents";
 import { listedTask } from "../../src/core/tasks";
 import {
-  DEFAULT_AGENT,
   DEFAULT_LAUNCH,
   isFlowActive,
   isRunActive,
   type About,
+  type AgentPick,
+  type AgentRole,
+  type AgentRoutes,
   type AgentSettings,
+  type Harness,
+  type LaunchPick,
+  type RepoAgent,
   type Backend,
   type BackendEntry,
   type ClientCaps,
@@ -576,8 +583,9 @@ interface CanopyState {
   history: HistoryOverview | null;
   /** each backend's archive overview, by backend */
   histories: Record<string, HistoryOverview>;
-  /** how Claude starts per repo, by backend then repo path; absent means defaults */
-  agents: Record<string, Record<string, AgentSettings>>;
+  /** each backend's agent routing (profiles, role routes, repo overrides),
+   *  by backend; resolved per repo and role through `agentFor` */
+  agents: Record<string, AgentRoutes>;
   /** how a repo's builds are made and run, by backend then repo path */
   launchers: Record<string, Record<string, LaunchSettings>>;
   /** downloads and builds by id, live and recently finished */
@@ -712,7 +720,7 @@ interface CanopyState {
   setSetting: <K extends keyof Settings>(key: K, value: Settings[K]) => void;
   /** opens a new shell at a repo where the settings say: its panel, the
    *  strip, or a tab or window of its own; `place` overrides the setting */
-  openTerm: (repoId: string, place?: ShellPlace, start?: "claude", prompt?: string) => void;
+  openTerm: (repoId: string, place?: ShellPlace, start?: "agent", prompt?: string, pick?: LaunchPick) => void;
   closeTerm: (id: string) => void;
   /** puts a shell's tab down here and leaves the shell running for the
    *  other devices, and for picking back up from the shells list */
@@ -720,9 +728,9 @@ interface CanopyState {
   /** shows a running shell here, whichever device started it: its tab
    *  when this window has one, else a new tab onto it */
   joinTerm: (id: string) => void;
-  /** a new shell at the repo with a Claude Code conversation from it
-   *  picked back up in it */
-  resumeClaude: (repoId: string, session: string) => Promise<void>;
+  /** a new shell at the repo with an agent conversation from it picked
+   *  back up in it by its own harness */
+  resumeAgent: (repoId: string, session: string, harness: Harness) => Promise<void>;
   showTerm: (id: string) => void;
   /** starts a kept shell again where it was, with what it had; `resume`
    *  also runs the line that picks its agent's conversation back up */
@@ -765,9 +773,14 @@ interface CanopyState {
    *  else a new idle chat whose first message starts Claude (the peers
    *  panel's "merge with claude" passes one; the menu's plain chat does not) */
   openChat: (repoId: string, note?: string) => Promise<void>;
-  /** opens the repo's agent settings */
+  /** opens the repo's agent override */
   editAgent: (repoId: string) => void;
-  setAgent: (repoId: string, settings: AgentSettings) => Promise<void>;
+  /** stores a repo's override on its backend; an empty one removes it */
+  setAgent: (repoId: string, agent: RepoAgent) => Promise<void>;
+  /** writes or (null) deletes a profile on a backend */
+  setProfile: (backend: string, name: string, settings: AgentSettings | null) => Promise<void>;
+  /** points a role at a pick on a backend, or (null) back at the default */
+  setRole: (backend: string, role: AgentRole, pick: AgentPick | null) => Promise<void>;
   /** archives a repo in canopy, or brings it back */
   archiveRepo: (repoId: string, archived: boolean) => Promise<void>;
   /** stars a repo in canopy; unstarring takes the star off every checkout
@@ -1731,7 +1744,9 @@ export const useStore = create<CanopyState>((set, get) => ({
     });
   },
 
-  applyEvent: (ev, from) => {
+  applyEvent: (sent, from) => {
+    // an older backend's agents event is its plain map of settings by path
+    const ev: ServerEvent = sent.type === "agents" ? { type: "agents", agents: normalizeRoutes(sent.agents) } : sent;
     const before = get();
     const b = from ?? before.home;
     // a backend hidden since this was sent is not on the page any more
@@ -1744,7 +1759,7 @@ export const useStore = create<CanopyState>((set, get) => ({
     // a message already held (a reconnect's replay, a post heard twice) is
     // neither a feed line nor unread
     if (ev.type === "chan" && before.chanMsgs[ev.message.channel]?.some((m) => m.id === ev.message.id)) return;
-    const lines = describeEvent(ev, feedView(before, b), Date.now(), before.agents[b] ?? {});
+    const lines = describeEvent(ev, feedView(before, b), Date.now(), before.agents[b] ?? NO_ROUTES);
     if (lines.length) {
       set((s) => {
         const { feed, seq } = appendFeed(s.feed, lines, s.feedSeq);
@@ -1868,7 +1883,7 @@ export const useStore = create<CanopyState>((set, get) => ({
       saveSettings(settings);
       return { settings };
     }),
-  openTerm: (repoId, place, start, prompt) => {
+  openTerm: (repoId, place, start, prompt, pick) => {
     const s = get();
     const repo = s.repos.find((r) => r.id === repoId);
     if (!repo || repo.forge) return;
@@ -1888,7 +1903,7 @@ export const useStore = create<CanopyState>((set, get) => ({
       name: repo.name,
       path: repo.path,
       place: where,
-      ...(start ? { start, ...(prompt ? { prompt } : {}) } : {}),
+      ...(start ? { start, ...(prompt ? { prompt } : {}), ...pickFields(pick) } : {}),
     };
     // A panel shell shows only inside its repo's panel and only while that
     // section is unfolded, so open both. Otherwise the click does nothing you
@@ -2014,7 +2029,7 @@ export const useStore = create<CanopyState>((set, get) => ({
         : {}),
     });
   },
-  resumeClaude: async (repoId, session) => {
+  resumeAgent: async (repoId, session, harness) => {
     const s = get();
     const repo = s.repos.find((r) => r.id === repoId);
     if (!repo || repo.forge) return;
@@ -2026,12 +2041,12 @@ export const useStore = create<CanopyState>((set, get) => ({
     });
     const place = where === "panel" ? "panel" : "strip";
     const id = qual(backendOf(repoId), termId());
-    await api.resumeClaude(repoId, id, place, session);
+    await api.resumeAgent(repoId, id, place, session, harness);
     if (dockless()) {
       window.location.assign(shellUrlFor(repoId, id));
       return;
     }
-    const tab: TermTab = { id, repoId, name: repo.name, path: repo.path, place };
+    const tab: TermTab = { id, repoId, name: repo.name, path: repo.path, place, harness };
     set((now) => ({
       terms: now.terms.some((t) => t.id === id) ? now.terms : [...now.terms, tab],
       activeTerm: place === "strip" ? id : now.activeTerm,
@@ -2103,9 +2118,17 @@ export const useStore = create<CanopyState>((set, get) => ({
     set({ sheet: { kind: "run", runId: active.id } });
   },
   editAgent: (repoId) => set({ sheet: { kind: "agent", repoId } }),
-  setAgent: async (repoId, settings) => {
-    const agents = await api.setAgent(repoId, settings);
+  setAgent: async (repoId, agent) => {
+    const agents = await api.setRepoAgent(repoId, agent);
     set((s) => ({ agents: { ...s.agents, [backendOf(repoId)]: agents } }));
+  },
+  setProfile: async (backend, name, settings) => {
+    const agents = await api.setProfile(name, settings, backend);
+    set((s) => ({ agents: { ...s.agents, [backend]: agents } }));
+  },
+  setRole: async (backend, role, pick) => {
+    const agents = await api.setRole(role, pick, backend);
+    set((s) => ({ agents: { ...s.agents, [backend]: agents } }));
   },
   archiveRepo: async (repoId, archived) => {
     const repo = await api.archive(repoId, archived);
@@ -2421,7 +2444,7 @@ useStore.subscribe((s, prev) => {
       name: repo.name,
       path: repo.path,
       place: "panel",
-      ...(s.settings.level === "intermediate" ? { start: "claude" as const } : {}),
+      ...(s.settings.level === "intermediate" ? { start: "agent" as const } : {}),
     };
     useStore.setState((t) => ({ terms: [...t.terms, tab], closedSections: unfoldIn(t.closedSections, id, "shell") }));
   }
@@ -2496,9 +2519,21 @@ export const capsFor = (s: CanopyState, name: string = s.home): ClientCaps => {
  *  opens. */
 export const helperFor = (s: CanopyState, name: string = s.home): string | undefined => capsFor(s, name).helper?.name;
 
-/** The repo's agent settings on its own backend, the defaults when it has none. */
-export const agentFor = (s: CanopyState, repo: Repo): AgentSettings =>
-  s.agents[backendOf(repo.id)]?.[repo.path] ?? DEFAULT_AGENT;
+/** A backend's agent routing, an empty one until it has loaded. */
+export const routesOf = (s: CanopyState, backend: string): AgentRoutes => s.agents[backend] ?? NO_ROUTES;
+
+/** The settings a repo gets for a role on its own backend (an interactive
+ *  shell unless said), through every layer of core/route. The object is
+ *  the routing's own, so a selector over it settles. */
+export const agentFor = (s: CanopyState, repo: Repo, role: AgentRole = "shell"): AgentSettings =>
+  resolveAgent(routesOf(s, backendOf(repo.id)), repo.path, role).settings;
+
+/** What a launch pick puts on a tab: the harness it names, or the
+ *  profile. */
+function pickFields(pick: LaunchPick | undefined): Pick<TermTab, "harness" | "profile"> {
+  if (!pick) return {};
+  return "profile" in pick ? { profile: pick.profile } : { harness: pick.harness };
+}
 
 /** The repo's launch settings on its own backend, the defaults when it has none. */
 export const launchFor = (s: CanopyState, repo: Repo): LaunchSettings =>

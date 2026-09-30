@@ -1,18 +1,21 @@
-import { useEffect, useRef, useState, type ReactNode } from "react";
+import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { ACTIONS, repoFacts } from "../../../src/core/actions";
 import { describeAgent, isDefaultAgent } from "../../../src/core/agent";
 import { describeLaunch, isDefaultLaunch } from "../../../src/core/launch";
-import { agentFor, idText, launchFor, tasksOf, useStore, type Sheet } from "../store";
+import { agentFor, connOf, idText, launchFor, routesOf, tasksOf, useStore, type Sheet } from "../store";
+import { backendOf } from "../registry";
+import { resolveAgent } from "../../../src/core/route";
+import { effectiveRows, harnessesOf, ROLE_LABEL, ROLE_TITLE, withPick } from "../agents";
+import { EffectiveTable, PickEditor } from "./AgentForm";
 import { FleetPlan, FleetSheet, FlowConsole, FlowPlan } from "./FlowSheet";
 import { SearchSheet } from "./Search";
 import {
-  DEFAULT_AGENT,
+  AGENT_ROLES,
   DEFAULT_LAUNCH,
   isRunActive,
-  type AgentEffort,
-  type AgentModel,
-  type AgentSettings,
+  type AgentRole,
   type LaunchSettings,
+  type RepoAgent,
   type Repo,
   type Run,
   type RunAction,
@@ -21,7 +24,6 @@ import {
   type RunQuestion,
   type RunStep,
 } from "../../../src/core/types";
-import { Seg } from "./Seg";
 import { renameOld, taskDraftCwd, taskDraftPatch, withChange } from "../tasks";
 
 const STATUS_WORD: Record<Run["status"], string> = {
@@ -119,7 +121,7 @@ function Body({ sheet }: { sheet: Sheet }) {
   if (sheet.kind === "search") return <SearchSheet />;
   if (sheet.kind === "agent") {
     if (!repo) return <Missing what="That repo is no longer in the tree." onClose={close} />;
-    return <AgentForm repo={repo} />;
+    return <RepoAgentSheet repo={repo} />;
   }
   if (sheet.kind === "task") {
     if (!repo) return <Missing what="That repo is no longer in the tree." onClose={close} />;
@@ -159,8 +161,8 @@ function Missing({ what, onClose }: { what: string; onClose: () => void }) {
 function Plan({ repo, action }: { repo: Repo; action: RunAction }) {
   const close = useStore((s) => s.closeSheet);
   const startRun = useStore((s) => s.startRun);
-  const agent = useStore((s) => agentFor(s, repo));
   const spec = ACTIONS[action];
+  const agent = useStore((s) => agentFor(s, repo, spec.mode === "chat" ? "chat" : "job"));
   const [note, setNote] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -199,7 +201,7 @@ function Plan({ repo, action }: { repo: Repo; action: RunAction }) {
             </span>
           ))}
           {!isDefaultAgent(agent) && (
-            <span className="branch" title="This repo's agent settings">
+            <span className="branch" title="The agent this repo's jobs start with">
               {describeAgent(agent)}
             </span>
           )}
@@ -541,47 +543,23 @@ function Step({ step }: { step: RunStep }) {
   );
 }
 
-/* ---------- agent settings, per repo ---------- */
+/* ---------- the agent override, per repo ---------- */
 
-const MODELS: { value: AgentModel; label: string; title?: string }[] = [
-  { value: "default", label: "default", title: "Whatever your claude picks" },
-  { value: "fable", label: "fable" },
-  { value: "opus", label: "opus" },
-  { value: "sonnet", label: "sonnet" },
-  { value: "haiku", label: "haiku" },
-];
-
-const EFFORTS: { value: AgentEffort; label: string; title?: string }[] = [
-  { value: "default", label: "default", title: "Whatever your claude picks" },
-  { value: "low", label: "low" },
-  { value: "medium", label: "medium" },
-  { value: "high", label: "high" },
-  { value: "xhigh", label: "xhigh" },
-  { value: "max", label: "max" },
-];
-
-const YOLO = [
-  { value: "ask", label: "ask", title: "Claude asks before anything the rules do not allow" },
-  {
-    value: "yolo",
-    label: "yolo",
-    title: "Skip every permission prompt (--dangerously-skip-permissions)",
-  },
-] as const;
-
-/** How Claude starts for this repo. Every change saves at once, like the
- *  settings popover; the extra-flags box saves when it loses focus or on
- *  enter, since a half-typed flag is not worth sending. */
-function AgentForm({ repo }: { repo: Repo }) {
+/** Which agent this repo starts: its row of the agents view's overrides.
+ *  The whole-repo pick, a pick per role that beats it, and each role's
+ *  effective harness and settings with where they came from. Every choice
+ *  saves at once, on the repo's own backend. */
+function RepoAgentSheet({ repo }: { repo: Repo }) {
   const close = useStore((s) => s.closeSheet);
-  const saved = useStore((s) => agentFor(s, repo));
+  const backend = backendOf(repo.id);
+  const routes = useStore((s) => routesOf(s, backend));
+  const has = useStore((s) => harnessesOf(connOf(s, backend).backend));
   const setAgent = useStore((s) => s.setAgent);
-  const [extra, setExtra] = useState(saved.extra);
   const [error, setError] = useState<string | null>(null);
+  const current = routes.repos[repo.path] ?? {};
+  const rows = useMemo(() => effectiveRows(routes, repo.path, has), [routes, repo.path, has]);
 
-  useEffect(() => setExtra(saved.extra), [saved.extra]);
-
-  const save = async (next: AgentSettings) => {
+  const save = async (next: RepoAgent) => {
     setError(null);
     try {
       await setAgent(repo.id, next);
@@ -589,19 +567,16 @@ function AgentForm({ repo }: { repo: Repo }) {
       setError(errText(err));
     }
   };
-  const set = <K extends keyof AgentSettings>(key: K, value: AgentSettings[K]) =>
-    void save({ ...saved, [key]: value });
-  const saveExtra = () => {
-    if (extra.trim() !== saved.extra) set("extra", extra.trim());
-  };
+  const seedFor = (slot: AgentRole | "all") => resolveAgent(routes, repo.path, slot === "all" ? "shell" : slot).settings;
+  const shell = rows.find((r) => r.role === "shell");
 
   return (
     <>
       <header className="sheet-head">
         <div>
-          <div className="eyebrow">with claude</div>
+          <div className="eyebrow">with an agent</div>
           <h2 className="sheet-title">
-            agent settings <span className="sheet-repo">{idText(repo.id)}</span>
+            agent routing <span className="sheet-repo">{idText(repo.id)}</span>
           </h2>
         </div>
         <button type="button" className="mini close" onClick={close} aria-label="Close">
@@ -610,64 +585,48 @@ function AgentForm({ repo }: { repo: Repo }) {
       </header>
       <div className="sheet-body agent-form">
         <p className="blurb">
-          How Claude Code starts for this repo: the agent and herdr openers, and every run and
-          chat here. Saved on the server, so it holds from any browser.
+          Which agent this repo starts, and how: for every role at once, or per role. A pick left to inherit follows the role's route and then
+          the default profile, which the agents view edits. Saved on {backend}, so it holds from any browser.
         </p>
         <section className="settings-row">
-          <h3 className="panel-label">model</h3>
-          <Seg label="Model" value={saved.model} options={MODELS} onChange={(v) => set("model", v)} />
-        </section>
-        <section className="settings-row">
-          <h3 className="panel-label">effort</h3>
-          <Seg
-            label="Effort"
-            value={saved.effort}
-            options={EFFORTS}
-            onChange={(v) => set("effort", v)}
+          <h3 className="panel-label">whole repo</h3>
+          <PickEditor
+            slot="all"
+            pick={current.all}
+            routes={routes}
+            has={has}
+            machine={backend}
+            inherit="inherit: the role routes"
+            seed={seedFor("all")}
+            onChange={(p) => void save(withPick(current, "all", p))}
           />
         </section>
+        {AGENT_ROLES.map((role) => (
+          <section key={role} className="settings-row">
+            <h3 className="panel-label" title={ROLE_TITLE[role]}>
+              {ROLE_LABEL[role]}
+            </h3>
+            <PickEditor
+              slot={role}
+              pick={current.roles?.[role]}
+              routes={routes}
+              has={has}
+              machine={backend}
+              inherit={current.all ? "inherit: the whole repo's pick" : "inherit: the role route"}
+              seed={seedFor(role)}
+              onChange={(p) => void save(withPick(current, role, p))}
+            />
+          </section>
+        ))}
         <section className="settings-row">
-          <h3 className="panel-label">permissions</h3>
-          <Seg
-            label="Permissions"
-            value={saved.yolo ? "yolo" : "ask"}
-            options={YOLO}
-            onChange={(v) => set("yolo", v === "yolo")}
-          />
-          {saved.yolo && (
-            <p className="settings-hint warn">
-              Every command runs without asking, in the terminal and in canopy's runs alike.
-            </p>
-          )}
-        </section>
-        <section className="settings-row">
-          <h3 className="panel-label">extra flags</h3>
-          <input
-            type="text"
-            className="agent-extra"
-            placeholder="--add-dir ../shared --name work"
-            value={extra}
-            onChange={(e) => setExtra(e.target.value)}
-            onBlur={saveExtra}
-            onKeyDown={(e) => {
-              if (e.key === "Enter") saveExtra();
-            }}
-            aria-label="Extra flags for the claude command line"
-          />
-          <p className="settings-hint">
-            Appended to the claude command line as typed; quotes hold a word together.
-          </p>
+          <h3 className="panel-label">effective</h3>
+          <EffectiveTable rows={rows} />
         </section>
         {error && <p className="note err">{error}</p>}
       </div>
       <footer className="sheet-foot">
-        <span className="sheet-hint">{describeAgent(saved)}</span>
-        <button
-          type="button"
-          className="mini"
-          disabled={isDefaultAgent(saved)}
-          onClick={() => void save(DEFAULT_AGENT)}
-        >
+        <span className="sheet-hint">{shell ? `shells: ${shell.harness} · ${shell.line}` : ""}</span>
+        <button type="button" className="mini" disabled={!routes.repos[repo.path]} onClick={() => void save({})}>
           reset
         </button>
         <button type="button" className="mini strong" onClick={close}>

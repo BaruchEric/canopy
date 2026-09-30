@@ -237,11 +237,11 @@ describe("a panel opens its own shell", () => {
   };
   afterEach(() => useStore.setState(pristine, true));
 
-  test("once per open, running claude at intermediate, and never beside a shell the backend holds", () => {
+  test("once per open, starting the agent at intermediate, and never beside a shell the backend holds", () => {
     const settings = { ...pristine.settings, level: "intermediate" as const };
     useStore.setState({ terms: [], settings, conns: online(), repos: ["a", "b"].map(repo), shells: [held("h".repeat(32), "b")], panels: ["a", "b"] });
     const s = useStore.getState();
-    expect(s.terms.map((t) => [t.repoId, t.place, t.start])).toEqual([["a", "panel", "claude"]]);
+    expect(s.terms.map((t) => [t.repoId, t.place, t.start])).toEqual([["a", "panel", "agent"]]);
     // a rescan asks nothing more
     useStore.setState({ repos: ["a", "b"].map(repo) });
     expect(useStore.getState().terms).toHaveLength(1);
@@ -249,8 +249,18 @@ describe("a panel opens its own shell", () => {
 
   test("a shell opened to take a prompt carries it for its first socket", () => {
     useStore.setState({ terms: [], conns: online(), repos: [repo("e")], panels: ["e"], shells: [held("e".repeat(32), "e")] });
-    useStore.getState().openTerm("e", "panel", "claude", "fix it");
-    expect(useStore.getState().terms.map((t) => [t.start, t.prompt])).toEqual([["claude", "fix it"]]);
+    useStore.getState().openTerm("e", "panel", "agent", "fix it");
+    expect(useStore.getState().terms.map((t) => [t.start, t.prompt])).toEqual([["agent", "fix it"]]);
+  });
+
+  test("a harness or a profile picked at launch rides on the tab", () => {
+    useStore.setState({ terms: [], conns: online(), repos: [repo("e")], panels: ["e"], shells: [held("e".repeat(32), "e")] });
+    useStore.getState().openTerm("e", "panel", "agent", undefined, { harness: "codex" });
+    useStore.getState().openTerm("e", "panel", "agent", undefined, { profile: "deep" });
+    expect(useStore.getState().terms.map((t) => [t.start, t.harness, t.profile])).toEqual([
+      ["agent", "codex", undefined],
+      ["agent", undefined, "deep"],
+    ]);
   });
 
   test("a plain shell at advanced, and none for a backend not online", () => {
@@ -709,7 +719,31 @@ describe("several backends", () => {
     expect(calls.filter((u) => u.startsWith("http://b.test")).length).toBe(asked);
   });
 
-  test("agentFor reads the repo's own backend's settings", async () => {
+  test("agentFor resolves through the repo's own backend's routing", async () => {
+    const deep = { ...DEFAULT_AGENT, model: "opus" } as AgentSettings;
+    const review = { ...DEFAULT_AGENT, harness: "codex", model: "gpt-5.5" } as AgentSettings;
+    await start(
+      backendAnswers(scanOf("/a", [repo("proj")]), [], {
+        "/api/backends": twoBackends,
+        "/api/agents": { profiles: { deep }, roles: { chat: { profile: "deep" } }, repos: {} },
+      }),
+      backendAnswers(scanOf("/b", [repo("proj")]), [], {
+        "/api/agents": { profiles: { review }, roles: {}, repos: { "/dev/proj": { all: { profile: "review" } } } },
+      }),
+    );
+    await settle();
+    const s = useStore.getState();
+    const home = s.repos.find((r) => r.id === "proj");
+    const there = s.repos.find((r) => r.id === "b|proj");
+    if (!home || !there) throw new Error("repos missing");
+    expect(agentFor(s, home)).toEqual(DEFAULT_AGENT);
+    expect(agentFor(s, home, "chat")).toEqual(deep);
+    expect(agentFor(s, there)).toEqual(review);
+    // chats cannot be codex yet, so b's repo pick is passed over for one
+    expect(agentFor(s, there, "chat")).toEqual(DEFAULT_AGENT);
+  });
+
+  test("agentFor reads an older backend's plain settings as the repo's pick", async () => {
     const quick = { ...DEFAULT_AGENT, model: "haiku" } as AgentSettings;
     const slow = { ...DEFAULT_AGENT, model: "opus" } as AgentSettings;
     await start(

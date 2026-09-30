@@ -11,7 +11,7 @@ import { ago } from "../util";
 import { Seg } from "./Seg";
 
 const LEVEL = [
-  { value: "intermediate", label: "intermediate", title: "Claude first: run your app, save your work, and the rest one click away" },
+  { value: "intermediate", label: "intermediate", title: "Agent first: run your app, save your work, and the rest one click away" },
   { value: "advanced", label: "advanced", title: "Every section: changes, tasks, history, peers, launch and more" },
 ] as const;
 
@@ -231,8 +231,8 @@ export function SettingsMenu() {
             <p className="settings-hint">
               A backend setting, not this browser's. Off, the shells go with the machine. On, the backend writes every shell's screen and last 2000
               lines to disk each minute, which is whatever the shell printed, secrets included, and forgets a record a week later. What comes back is a
-              new shell at the same repo with the old history ahead of it: the processes are gone, so a shell that had Claude in it is offered a{" "}
-              <code>claude --continue</code> instead.
+              new shell at the same repo with the old history ahead of it: the processes are gone, so a shell that had an agent in it is offered
+              its continue (<code>claude --continue</code>, <code>codex resume --last</code>) instead.
             </p>
           </section>
           <section className="settings-row">

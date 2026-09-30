@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { CSSProperties } from "react";
 import { Library } from "./components/Library";
+import { AgentsView } from "./components/AgentsView";
 import { Wordmark } from "./components/TopBar";
 import { Dock } from "./components/Dock";
 import { FeedDock } from "./components/Feed";
@@ -23,10 +24,14 @@ const VIEWS = [
   { key: "git", label: "git", title: "Git cockpit: every repo, live" },
   { key: "library", label: "library", title: "Library: tags, notes, links and dev servers" },
   { key: "ports", label: "ports", title: "Ports: what is listening, and the dev servers" },
+  { key: "agents", label: "agents", title: "Agents: which harness starts for what, per repo and role" },
 ] as const;
 
-/** The three views, one segmented row: in the top bar on the git view, the
- *  whole of the bar on the other two. */
+/** the views that are not the git cockpit: their own bar, no board keys */
+const OTHER_VIEWS = ["library", "ports", "agents"];
+
+/** The four views, one segmented row: in the top bar on the git view, the
+ *  whole of the bar on the others. */
 function ViewNav({ view, navigate }: { view: string; navigate: (next: string) => void }) {
   return (
     <nav className="view-nav" aria-label="Canopy views">
@@ -127,13 +132,13 @@ export function App() {
       const t = e.target as HTMLElement;
       // The one chord: it works from inside a box too, like an editor's.
       if ((e.metaKey || e.ctrlKey) && e.shiftKey && !e.altKey && e.key.toLowerCase() === "f") {
-        if (view === "library" || view === "ports") return;
+        if (OTHER_VIEWS.includes(view)) return;
         e.preventDefault();
         useStore.getState().openSearch();
         return;
       }
       if (t.tagName === "INPUT" || t.tagName === "TEXTAREA") return;
-      if (view === "library" || view === "ports") return;
+      if (OTHER_VIEWS.includes(view)) return;
       const st = useStore.getState();
       // the drawer is the top layer while it is out
       if (st.drawerOpen && e.key === "Escape" && !document.querySelector('[role="dialog"], [role="menu"]')) {
@@ -216,12 +221,16 @@ export function App() {
   const nav = <ViewNav view={view} navigate={navigate} />;
   return (
     <div className="app">
-      {view === "library" || view === "ports" ? <>
+      {OTHER_VIEWS.includes(view) ? <>
       <header className="app-nav">
         <Wordmark />
         {nav}
       </header>
-      <Library ports={view === "ports"} project={project} onRepo={showRepo} onPorts={() => navigate("ports")} />
+      {view === "agents" ? (
+        <AgentsView />
+      ) : (
+        <Library ports={view === "ports"} project={project} onRepo={showRepo} onPorts={() => navigate("ports")} />
+      )}
       </> : <>
       <TopBar nav={nav} />
       <div

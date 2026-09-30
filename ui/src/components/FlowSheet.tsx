@@ -21,7 +21,7 @@ function mmss(ms: number): string {
 export function FlowPlan({ repo, workflow }: { repo: Repo; workflow: string }) {
   const close = useStore((s) => s.closeSheet);
   const startFlow = useStore((s) => s.startFlow);
-  const agent = useStore((s) => agentFor(s, repo));
+  const agent = useStore((s) => agentFor(s, repo, "flow"));
   const verdictReady = useStore((s) => s.verdictReady);
   const entry = useStore((s) => s.workflows[repo.id]?.find((e) => e.ok && e.workflow.name === workflow));
   const [note, setNote] = useState("");
