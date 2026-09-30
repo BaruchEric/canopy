@@ -2,7 +2,7 @@ import { existsSync } from "node:fs";
 import { lstat, mkdir, readdir, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join } from "node:path";
-import { agentArgv, HARNESS, presentHarnesses, type AgentEnv } from "./harness";
+import { agentArgv, HARNESS, HARNESSES, presentHarnesses, type AgentEnv } from "./harness";
 import { exec } from "./exec";
 import { openHerdr } from "./herdr";
 import { parseLocator, shellLine, shellQuote } from "./host";
@@ -556,8 +556,134 @@ export function hasBinary(binary: string): boolean {
   return [...HARNESS_DIRS.map((d) => join(home, d)), ...SYSTEM_DIRS].some((d) => existsSync(join(d, binary)));
 }
 
-/** The harnesses this backend can start. */
+/** The harnesses this backend can start, by what this process can see. */
 export const availableHarnesses = (): Harness[] => presentHarnesses(hasBinary);
+
+/* ---------- the login shell's own answer ---------- */
+
+/** How long the login shell gets to say which harnesses it has: an
+ *  interactive login shell runs every rc file (nvm, a prompt theme), which
+ *  can take a second or two. */
+export const PROBE_TIMEOUT = 10_000;
+/** How long its answer holds before it is asked again. */
+export const PROBE_EVERY = 10 * 60_000;
+/** How soon a start refused for a missing harness may ask again, so a
+ *  harness installed since the last answer is found at once. */
+export const PROBE_AGAIN = 30_000;
+
+const PROBE_MARK = "canopy-has:";
+
+/** The script the probe runs in the login shell: one marker line per
+ *  harness the shell can run, as a binary, a function or an alias. Markers,
+ *  since an interactive shell's rc files may print anything else. */
+export const probeScript = (binaries: readonly string[] = HARNESSES.map((h) => HARNESS[h].binary)): string =>
+  [...binaries.map((b) => `command -v ${shellQuote(b)} >/dev/null 2>&1 && printf '${PROBE_MARK}%s\\n' ${shellQuote(b)}`), "true"].join("; ");
+
+/** The harnesses a probe's output names. */
+export function parseProbe(out: string): Harness[] {
+  const found = new Set(
+    out
+      .split("\n")
+      .map((l) => l.trim())
+      .filter((l) => l.startsWith(PROBE_MARK))
+      .map((l) => l.slice(PROBE_MARK.length)),
+  );
+  return HARNESSES.filter((h) => found.has(HARNESS[h].binary));
+}
+
+/** One answer from the login shell: the harnesses it found, or null with
+ *  why when the probe itself failed (the shell hung, died or is missing). */
+export interface LoginProbe {
+  at: number;
+  found: Harness[] | null;
+  why?: string;
+}
+
+/** Asks the user's login interactive shell, the one a canopy shell and the
+ *  agent opener type into, which harnesses it has: an rc file's PATH, an
+ *  nvm install, an alias or a wrapper function all count there, while this
+ *  process sees only its own PATH. */
+export async function probeLoginShell(shell = userShell(), timeoutMs = PROBE_TIMEOUT, now = Date.now): Promise<LoginProbe> {
+  const r = await exec([shell, "-l", "-i", "-c", probeScript()], { timeoutMs });
+  const found = parseProbe(r.stdout);
+  // A shell that printed markers answered, whatever its rc files did to the
+  // exit code; one that printed none and failed did not answer at all.
+  if (r.code !== 0 && found.length === 0) {
+    return { at: now(), found: null, why: r.stderr.trim().split("\n").pop() || `${shell} exited with ${r.code}` };
+  }
+  return { at: now(), found };
+}
+
+/** What a backend offers: a harness this process finds, or one the login
+ *  shell found; every harness while the shell has not answered (or could
+ *  not), since a missing one is then only a guess, and a warning beats a
+ *  start refused for a harness that is there. */
+export function harnessesFrom(has: (binary: string) => boolean, probe: LoginProbe | null): Harness[] {
+  return HARNESSES.filter((h) => has(HARNESS[h].binary) || probe?.found == null || probe.found.includes(h));
+}
+
+/** The harnesses this backend offers, kept fresh: `list()` answers at once
+ *  from the last probe (asking again in the background once it is
+ *  `PROBE_EVERY` old), and `missing()` asks again first when the last
+ *  answer says a harness is not there, so one installed since is found. */
+export class LoginHarnesses {
+  private last: LoginProbe | null = null;
+  private pending: Promise<LoginProbe> | null = null;
+  private warned = false;
+
+  constructor(
+    private readonly deps: {
+      probe?: () => Promise<LoginProbe>;
+      has?: (binary: string) => boolean;
+      now?: () => number;
+      warn?: (line: string) => void;
+    } = {},
+  ) {}
+
+  private now(): number {
+    return (this.deps.now ?? Date.now)();
+  }
+
+  /** the harnesses offered now */
+  list(): Harness[] {
+    if (!this.pending && (!this.last || this.now() - this.last.at >= PROBE_EVERY)) void this.refresh();
+    return harnessesFrom(this.deps.has ?? hasBinary, this.last);
+  }
+
+  /** asks the login shell again; concurrent callers share one probe */
+  refresh(): Promise<LoginProbe> {
+    if (this.pending) return this.pending;
+    const probe = this.deps.probe ?? (() => probeLoginShell());
+    const pass = probe()
+      .catch((e: unknown): LoginProbe => ({ at: this.now(), found: null, why: e instanceof Error ? e.message : String(e) }))
+      .then((p) => {
+        this.last = p;
+        if (p.found === null && !this.warned) {
+          this.warned = true;
+          (this.deps.warn ?? console.warn)(
+            `canopy: could not ask the login shell which agents it has (${p.why ?? "no answer"}); no start is refused for a missing one`,
+          );
+        }
+        if (p.found !== null) this.warned = false;
+        return p;
+      })
+      .finally(() => {
+        this.pending = null;
+      });
+    this.pending = pass;
+    return pass;
+  }
+
+  /** Whether `h` is known to be missing here: not on this process's PATH,
+   *  and the login shell answered without it, asked again first when its
+   *  answer is older than `PROBE_AGAIN`. */
+  async missing(h: Harness): Promise<boolean> {
+    if (this.list().includes(h)) return false;
+    if (this.pending) await this.pending;
+    else if (!this.last || this.now() - this.last.at >= PROBE_AGAIN) await this.refresh();
+    return !this.list().includes(h);
+  }
+}
 
 /** The refusal for a start on a harness a machine lacks, in the words the
  *  UI shows: "codex is not installed on mini". */

@@ -5,7 +5,7 @@ import { linkLabel } from "../util";
 import { ACTIONS, checkWhen } from "../../../src/core/actions";
 import { describeAgent } from "../../../src/core/agent";
 import { HARNESS } from "../../../src/core/harness";
-import { harnessesOf, profileNames } from "../agents";
+import { harnessesOf, profileNames, startHarnesses } from "../agents";
 import { AGENT_NAME } from "../runs";
 import { describeLaunch } from "../../../src/core/launch";
 import { flowWord } from "../flows";
@@ -61,6 +61,8 @@ export function RepoMenu({
   const chatAgent = useStore((s) => agentFor(s, repo, "chat"));
   const jobAgent = useStore((s) => agentFor(s, repo, "job"));
   const has = useStore((s) => harnessesOf(connOf(s, backendOf(repo.id)).backend));
+  // a shell's agent: on another host for a repo there
+  const shellHas = useStore((s) => startHarnesses(connOf(s, backendOf(repo.id)).backend, repo.host));
   const routes = useStore((s) => routesOf(s, backendOf(repo.id)));
   const extraProfiles = profileNames(routes).filter((n) => n !== "default");
   const launch = useStore((s) => launchFor(s, repo));
@@ -459,7 +461,7 @@ export function RepoMenu({
                 );
               })}
               {HARNESSES.map((h) => {
-                const here = has.includes(h);
+                const here = shellHas.includes(h);
                 const routed = agent.harness === h;
                 return (
                   <button
@@ -492,7 +494,7 @@ export function RepoMenu({
                 <div className="menu-row" aria-label="A shell with a profile">
                   {extraProfiles.map((name) => {
                     const p = routes.profiles[name]!;
-                    const here = has.includes(p.harness);
+                    const here = shellHas.includes(p.harness);
                     return (
                       <button
                         key={`profile-${name}`}

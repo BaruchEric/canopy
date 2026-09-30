@@ -54,7 +54,18 @@ import { linkPeers, NO_PUSH, peerUrl } from "../core/peers";
 import { initRepo, PassSeen, seedRepo, syncAll, syncRepo, takeWip, trackBranch } from "../core/peersync";
 import { normalizeLaunch } from "../core/launch";
 import { Launcher, LauncherError } from "../core/launcher";
-import { agentLine, availableHarnesses, backendCaps, hostOpeners, isOpenerId, missingHarness, openFile, openGroup, openIn } from "../core/openers";
+import {
+  agentLine,
+  availableHarnesses,
+  backendCaps,
+  hostOpeners,
+  isOpenerId,
+  LoginHarnesses,
+  missingHarness,
+  openFile,
+  openGroup,
+  openIn,
+} from "../core/openers";
 import { clientKey, HELPER_PING, HELPER_TIMEOUT, isLoopback, isLoopbackHost, parseDefaultGateway, parseHelperQuery, parseHelperReply, reachFrom, staleHelpers, type HelperIntent } from "../core/helper";
 import { devicesOf, parseStream, type Stream } from "../core/presence";
 import { mapPool, searchRepo } from "../core/search";
@@ -157,9 +168,14 @@ interface ServerState {
   /** the line start=agent types into a new shell, for the settings its
    *  route resolved to and what its commands are to see */
   agentLine: (repo: Repo, agent: AgentSettings, env: AgentEnv) => Promise<string>;
-  /** the agent harnesses this backend has, looked up on each call so one
-   *  installed while canopy runs is seen at the next scan */
+  /** the agent harnesses this backend offers, looked up on each call so one
+   *  installed while canopy runs is seen at the next scan: on this
+   *  process's PATH, or found by the user's login shell */
   harnesses: () => Harness[];
+  /** whether a harness is known to be missing here, the login shell asked
+   *  again first when its last answer said so; false while that shell has
+   *  not answered, so a start is refused only on an answer */
+  harnessMissing: (h: Harness) => Promise<boolean>;
   /** which canopy this is, read once at start */
   about: About;
   /** every source, the launch root first */
@@ -586,11 +602,19 @@ async function machineName(): Promise<string> {
   return selfName((await loadConfig()).self, hostname());
 }
 
-/** A start on a harness this backend lacks is refused before any shell
- *  starts, in words the UI shows as they are: "codex is not installed on
- *  mini", not a shell that dies at once. */
-async function needHarness(state: ServerState, h: Harness): Promise<void> {
-  if (!state.harnesses().includes(h)) throw new HttpError(400, missingHarness(h, await machineName()));
+/** Why a start on a harness at `path` is refused, or null: a harness this
+ *  backend lacks is refused before any shell starts, in words the UI shows
+ *  as they are ("codex is not installed on mini"), not a shell that dies at
+ *  once. A repo on another host runs its agent there, over ssh, so what is
+ *  installed here says nothing about it. */
+async function harnessRefusal(state: ServerState, h: Harness, path: string): Promise<string | null> {
+  if (parseLocator(path).host !== null) return null;
+  return (await state.harnessMissing(h)) ? missingHarness(h, await machineName()) : null;
+}
+
+async function needHarness(state: ServerState, h: Harness, path: string): Promise<void> {
+  const why = await harnessRefusal(state, h, path);
+  if (why) throw new HttpError(400, why);
 }
 
 /** A workflow whose steps name an agent profile this backend has not got
@@ -610,9 +634,9 @@ const stepAgentFor = (cfg: CanopyConfig, path: string, profile: string | undefin
 /** Every harness a workflow's steps would start on for these repos is
  *  installed here, checked before the first step starts. */
 async function needStepHarnesses(state: ServerState, cfg: CanopyConfig, wf: Workflow, paths: string[]): Promise<void> {
-  const needed = new Set<Harness>();
-  for (const path of paths) for (const s of wf.steps) if (s.body) needed.add(stepAgentFor(cfg, path, s.agent).harness);
-  for (const h of needed) await needHarness(state, h);
+  const needed = new Map<Harness, string>();
+  for (const path of paths) for (const s of wf.steps) if (s.body) needed.set(stepAgentFor(cfg, path, s.agent).harness, path);
+  for (const [h, path] of needed) await needHarness(state, h, path);
 }
 
 /** A shell running again under the name it had, at the same repo, with what
@@ -630,7 +654,7 @@ async function restoreTerm(state: ServerState, id: string, size: TermSize, resum
   // shell route is that harness; checked before anything is undone
   let line: string | null = null;
   if (resume && rec.agent) {
-    await needHarness(state, rec.agent);
+    await needHarness(state, rec.agent, rec.path);
     const env = shellEnv(state, rec.repoId, rec.path, id);
     line = continueLine(rec.agent, agentFor(await loadConfig(), rec.path, "shell", { harness: rec.agent }), env);
   }
@@ -692,7 +716,7 @@ async function resumeTerm(
   if (repo.host) throw new HttpError(400, "conversations are read off this machine; a repo on another host has none here");
   if (!(await hasAgentSession(harness, repo.path, session))) throw new HttpError(404, `no ${harness} conversation under that id at this repo`);
   if (state.terms.has(id) || state.kept.some((k) => k.id === id)) throw new HttpError(409, "that shell name is taken");
-  await needHarness(state, harness);
+  await needHarness(state, harness, repo.path);
   const env = shellEnv(state, repo.id, repo.path, id);
   const line = resumeLine(session, agentFor(await loadConfig(), repo.path, "shell", { harness }), env);
   const tmux = state.tmux;
@@ -2392,7 +2416,7 @@ async function handleApi(
       const tab = b.tab === true;
       // the backend's own desktop runs the agent here, so its harness has to
       // be here; a helper's machine answers for itself
-      if (via.via === "backend" && (b.app === "agent" || b.app === "herdr")) await needHarness(state, agent.harness);
+      if (via.via === "backend" && (b.app === "agent" || b.app === "herdr")) await needHarness(state, agent.harness, repo.path);
       if (via.via === "backend") await openIn(b.app, repo.path, agent, { tab });
       else await askHelper(state, via.name, { open: { app: b.app, path: helperPath(repo.path), agent, tab } });
       return json({ ok: true });
@@ -2512,7 +2536,7 @@ async function handleApi(
       if (!isRunAction(b.action)) return json({ error: "unknown action" }, 400);
       const note = typeof b.note === "string" ? b.note : "";
       const agent = agentFor(await loadConfig(), repo.path, b.action === "chat" ? "chat" : "job");
-      await needHarness(state, agent.harness);
+      await needHarness(state, agent.harness, repo.path);
       // the device it was started from, when the browser said and is on the stream
       const by = deviceNameOf(state, typeof b.client === "string" ? b.client : null) ?? undefined;
       return json(state.runner.start(repo, b.action, ACTIONS[b.action], note, agent, by), 201);
@@ -2659,7 +2683,18 @@ export async function startServer(opts: {
   // from here inherits it (`exec` and `termEnv` pass the live env).
   delete process.env["CANOPY_TAILCHAN_ANSWER_TOKEN"];
   const scanOff = process.env["CANOPY_AGENT_SCAN"] === "0" || process.env["NODE_ENV"] === "test";
-  const harnesses = fixed ? () => [...fixed] : availableHarnesses;
+  // Which harnesses a start may use: fixed by a test, else this process's
+  // PATH together with what the user's login shell finds (an rc file's
+  // PATH, an nvm install, an alias), which is where a canopy shell and the
+  // agent opener type the agent in. Under `bun test` the login shell is
+  // left alone: a test's backend is the PATH it runs with.
+  const login = fixed || process.env["NODE_ENV"] === "test" ? null : new LoginHarnesses();
+  const harnesses = fixed ? () => [...fixed] : login ? () => login.list() : availableHarnesses;
+  const harnessMissing = fixed
+    ? async (h: Harness) => !fixed.includes(h)
+    : login
+      ? (h: Harness) => login.missing(h)
+      : async (h: Harness) => !availableHarnesses().includes(h);
   // every run is told which backend started it (CANOPY_BACKEND), and codex
   // hears canopy's version in its handshake
   const runnerOpts = { backend: selfName(cfg.self, hostname()), version: readPkg().version ?? "0" };
@@ -2713,6 +2748,7 @@ export async function startServer(opts: {
     root,
     agentLine: opts.agentLine ?? (async (_repo, agent, env) => agentLine(agent, undefined, env)),
     harnesses,
+    harnessMissing,
     about: {
       ...readBuild(),
       startedAt: Date.now(),
@@ -2801,6 +2837,15 @@ export async function startServer(opts: {
     apiUrl: null,
   };
   await rememberRoot(root);
+  // The login shell's first answer lands whenever it lands; a list that
+  // differs from what the tree offered goes out to the browsers with it.
+  void login?.refresh().then(() => {
+    const was = state.result.backend.harnesses ?? [];
+    const now = state.harnesses();
+    if (state.result.scannedAt === 0 || (now.length === was.length && now.every((h, i) => h === was[i]))) return;
+    rebuildResult(state, state.result.repos);
+    broadcast(state, { type: "scan", result: state.result });
+  });
   await Promise.all(state.sources.map((rt) => scanOne(state, rt, scanOpts(state, cfg))));
   // The launch root failing to scan is fatal, as it always was: there is
   // nothing to show. An extra source failing is a note on that source.
@@ -2906,7 +2951,7 @@ export async function startServer(opts: {
       const start = wants
         ? agentFor(await loadConfig(), repo.path, "shell", launchPick(url.searchParams.get("profile"), url.searchParams.get("harness")))
         : null;
-      const refused = start && !state.harnesses().includes(start.harness) ? missingHarness(start.harness, await machineName()) : null;
+      const refused = start ? await harnessRefusal(state, start.harness, repo.path) : null;
       const prompt = start ? (url.searchParams.get("prompt") ?? "").slice(0, PROMPT_MAX) : "";
       const size = termSize(url.searchParams.get("cols"), url.searchParams.get("rows"));
       const dev = url.searchParams.get("client") ?? "";

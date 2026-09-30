@@ -55,6 +55,10 @@ export const hasRouting = (b: Backend): boolean => b.harnesses !== undefined;
 export const flatAgent = (agent: RepoAgent): AgentSettings =>
   agent.all && !isProfilePick(agent.all) ? agent.all : { ...DEFAULT_AGENT };
 
+/** The harnesses a shell at a repo may start: any for a repo on another
+ *  host, whose agent runs there over ssh, else what its backend has. */
+export const startHarnesses = (b: Backend, host: string | null | undefined): readonly Harness[] => (host ? HARNESSES : harnessesOf(b));
+
 /** a harness's glyph and word, "✳ claude" */
 export const harnessWord = (h: Harness): string => `${HARNESS[h].glyph} ${HARNESS[h].label}`;
 

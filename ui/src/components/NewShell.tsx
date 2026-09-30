@@ -2,7 +2,7 @@ import { useEffect, useRef, useState, type CSSProperties } from "react";
 import { describeAgent } from "../../../src/core/agent";
 import { HARNESS } from "../../../src/core/harness";
 import { HARNESSES, type LaunchPick } from "../../../src/core/types";
-import { harnessesOf, profileNames } from "../agents";
+import { profileNames, startHarnesses } from "../agents";
 import { backendOf } from "../registry";
 import { connOf, routesOf, useStore } from "../store";
 
@@ -30,7 +30,9 @@ function menuPlace(el: HTMLElement | null): CSSProperties {
 export function NewShellButton({ repoId }: { repoId: string }) {
   const openTerm = useStore((s) => s.openTerm);
   const backend = backendOf(repoId);
-  const has = useStore((s) => harnessesOf(connOf(s, backend).backend));
+  // a repo on another host starts its agent there, whatever this backend has
+  const host = useStore((s) => s.repos.find((r) => r.id === repoId)?.host ?? null);
+  const has = useStore((s) => startHarnesses(connOf(s, backend).backend, host));
   const routes = useStore((s) => routesOf(s, backend));
   const [menu, setMenu] = useState(false);
   const [place, setPlace] = useState<CSSProperties>({});

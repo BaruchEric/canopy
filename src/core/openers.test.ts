@@ -1,10 +1,14 @@
 import { describe, expect, test } from "bun:test";
+import { chmod, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import {
   agentShellCommand,
   agentLine,
   backendCaps,
   missingHarness,
   fileOpenArgs,
+  harnessesFrom,
   isOpenerId,
   kittyAgentArgs,
   kittyInstanceArgs,
@@ -13,6 +17,12 @@ import {
   linuxAgentArgs,
   linuxCommandFor,
   linuxRemoteCommandFor,
+  LoginHarnesses,
+  parseProbe,
+  PROBE_AGAIN,
+  PROBE_EVERY,
+  probeLoginShell,
+  probeScript,
   remoteFolderUri,
   sshSessionArgs,
   terminalAgentArgs,
@@ -20,7 +30,7 @@ import {
   userShell,
 } from "./openers";
 import { shellQuote } from "./host";
-import { DEFAULT_AGENT } from "./types";
+import { DEFAULT_AGENT, type Harness } from "./types";
 
 const opusYolo = { harness: "claude", model: "opus", effort: "high", yolo: true, extra: "--add-dir '../my lib'" } as const;
 const codexAsk = { ...DEFAULT_AGENT, harness: "codex", model: "gpt-5.5", yolo: false } as const;
@@ -281,5 +291,88 @@ describe("the openers on a Linux desktop", () => {
     expect(linuxAgentArgs("ssh://mini/r", opusYolo, "/bin/bash", inst)).toEqual([
       "kitty", "--detach", ...inst, "--hold", "ssh", "-t", "--", "mini", `cd '/r' && ${agentLine(opusYolo)}`,
     ]);
+  });
+});
+
+describe("which harnesses the login shell has", () => {
+  test("the probe prints a marker per harness the shell can run, whatever else its rc files print", () => {
+    expect(probeScript(["claude", "codex"])).toBe(
+      "command -v 'claude' >/dev/null 2>&1 && printf 'canopy-has:%s\\n' 'claude'; command -v 'codex' >/dev/null 2>&1 && printf 'canopy-has:%s\\n' 'codex'; true",
+    );
+    expect(parseProbe("welcome back!\ncanopy-has:codex\n  canopy-has:claude \ncanopy-has:gemini\n")).toEqual(["claude", "codex"]);
+    expect(parseProbe("claude\n/usr/bin/codex\n")).toEqual([]);
+  });
+
+  test("a harness on this PATH or in the shell's answer is offered, and every one while the shell has not answered", () => {
+    const none = () => false;
+    expect(harnessesFrom(none, { at: 0, found: ["codex"] })).toEqual(["codex"]);
+    expect(harnessesFrom((b) => b === "claude", { at: 0, found: [] })).toEqual(["claude"]);
+    expect(harnessesFrom(none, { at: 0, found: null, why: "timed out" })).toEqual(["claude", "codex"]);
+    expect(harnessesFrom(none, null)).toEqual(["claude", "codex"]);
+  });
+
+  test("a real shell: markers are read, a shell that fails without any is no answer", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "canopy-probe-"));
+    try {
+      const shell = async (name: string, body: string) => {
+        const f = join(dir, name);
+        await writeFile(f, `#!/bin/sh\n${body}\n`);
+        await chmod(f, 0o755);
+        return f;
+      };
+      // an rc file that talks and a wrapper function the PATH knows nothing of
+      const rc = await shell("rc", `echo "motd"; printf 'canopy-has:codex\\n'; exit 1`);
+      expect((await probeLoginShell(rc, 5_000)).found).toEqual(["codex"]);
+      const broken = await shell("broken", `echo "no such file" >&2; exit 127`);
+      expect(await probeLoginShell(broken, 5_000)).toMatchObject({ found: null, why: "no such file" });
+      const hung = await shell("hung", "sleep 30");
+      expect((await probeLoginShell(hung, 200)).found).toBeNull();
+      // and a POSIX login shell, the way the server asks one
+      expect((await probeLoginShell("/bin/sh", 5_000)).found).not.toBeNull();
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  }, 20_000);
+
+  test("the list answers at once, asks again when old, and a missing one is asked about once more first", async () => {
+    let now = 1_000_000;
+    let answer: Harness[] | null = ["claude"];
+    let asked = 0;
+    const warned: string[] = [];
+    const h = new LoginHarnesses({
+      probe: async () => {
+        asked++;
+        return answer === null ? { at: now, found: null, why: "hung" } : { at: now, found: answer };
+      },
+      has: () => false,
+      now: () => now,
+      warn: (l) => warned.push(l),
+    });
+    // before the shell answers, nothing is refused
+    expect(h.list()).toEqual(["claude", "codex"]);
+    await h.refresh();
+    expect(asked).toBe(1);
+    expect(h.list()).toEqual(["claude"]);
+    expect(await h.missing("claude")).toBe(false);
+    // codex is missing, and a fresh answer is not asked again at once
+    expect(await h.missing("codex")).toBe(true);
+    expect(asked).toBe(1);
+    // installed since: a refused start asks again once the answer is old
+    answer = ["claude", "codex"];
+    now += PROBE_AGAIN;
+    expect(await h.missing("codex")).toBe(false);
+    expect(asked).toBe(2);
+    // an answer PROBE_EVERY old is asked again in the background
+    now += PROBE_EVERY;
+    h.list();
+    await h.refresh();
+    expect(asked).toBeGreaterThanOrEqual(3);
+    // a shell that stops answering refuses nothing, and says so once
+    answer = null;
+    await h.refresh();
+    await h.refresh();
+    expect(await h.missing("codex")).toBe(false);
+    expect(warned).toHaveLength(1);
+    expect(warned[0]).toContain("no start is refused");
   });
 });

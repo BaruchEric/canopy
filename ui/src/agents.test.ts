@@ -13,6 +13,7 @@ import {
   profileNames,
   profileUses,
   slotHarnesses,
+  startHarnesses,
   withPick,
 } from "./agents";
 import { withDefaultProfile } from "../../src/core/route";
@@ -89,6 +90,11 @@ describe("the effective table", () => {
     expect(flatAgent({ all: claude({ model: "opus" }), roles: { job: { profile: "deep" } } })).toEqual(claude({ model: "opus" }));
     expect(flatAgent({ all: { profile: "deep" } })).toEqual(DEFAULT_AGENT);
     expect(flatAgent({})).toEqual(DEFAULT_AGENT);
+  });
+
+  test("a shell at a repo on another host may start any harness: it runs there", () => {
+    expect(startHarnesses({ openers: false, sshHost: null, harnesses: ["claude"] }, "qnap")).toEqual(["claude", "codex"]);
+    expect(startHarnesses({ openers: false, sshHost: null, harnesses: ["claude"] }, null)).toEqual(["claude"]);
   });
 
   test("a backend older than harnesses had claude alone, the same array each time", () => {
