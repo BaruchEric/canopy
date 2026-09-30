@@ -11,10 +11,12 @@ import {
   removeSource,
   removeWorkspace,
   saveConfig,
-  setAgent,
   setArchived,
   setFavorite,
   setKeepShells,
+  setProfile,
+  setRepoAgent,
+  setRole,
   setTask,
   slugify,
   tasksFor,
@@ -151,24 +153,59 @@ describe("config store", () => {
     await removeSource("git-beric-ca-2");
   });
 
-  test("agent settings persist per repo path and vanish at the defaults", async () => {
-    const opus = { model: "opus", effort: "high", yolo: true, extra: "" } as const;
-    let agents = await setAgent("/Users/me/dev/x", opus);
-    expect(agents).toEqual({ "/Users/me/dev/x": opus });
+  test("a repo's override persists by path and vanishes when emptied", async () => {
+    const opus = { harness: "claude", model: "opus", effort: "high", yolo: true, extra: "" } as const;
+    let routes = await setRepoAgent("/Users/me/dev/x", { all: opus });
+    expect(routes.repos).toEqual({ "/Users/me/dev/x": { all: opus } });
+    expect(routes.profiles["default"]).toEqual(DEFAULT_AGENT);
     let cfg = await loadConfig();
     expect(agentFor(cfg, "/Users/me/dev/x")).toEqual(opus);
+    expect(agentFor(cfg, "/Users/me/dev/x", "chat")).toEqual(opus);
     expect(agentFor(cfg, "/Users/me/dev/y")).toEqual(DEFAULT_AGENT);
     // a stray value from a request is repaired, not stored
-    agents = await setAgent("ssh://wsl/home/me/z", {
-      ...DEFAULT_AGENT,
-      model: "gpt" as unknown as "opus",
-      extra: " --x ",
+    routes = await setRepoAgent("ssh://wsl/home/me/z", {
+      all: { ...DEFAULT_AGENT, model: "gpt" as unknown as "opus", extra: " --x " },
     });
-    expect(agents["ssh://wsl/home/me/z"]).toEqual({ ...DEFAULT_AGENT, extra: "--x" });
-    agents = await setAgent("/Users/me/dev/x", DEFAULT_AGENT);
-    expect(Object.keys(agents)).toEqual(["ssh://wsl/home/me/z"]);
+    expect(routes.repos["ssh://wsl/home/me/z"]).toEqual({ all: { ...DEFAULT_AGENT, extra: "--x" } });
+    routes = await setRepoAgent("/Users/me/dev/x", {});
+    expect(Object.keys(routes.repos)).toEqual(["ssh://wsl/home/me/z"]);
     cfg = await loadConfig();
     expect(cfg.agents["/Users/me/dev/x"]).toBeUndefined();
+    await setRepoAgent("ssh://wsl/home/me/z", {});
+  });
+
+  test("an entry written before roles reads as the repo's whole pick", async () => {
+    const path = join(dir, "config.json");
+    const before = JSON.parse(await readFile(path, "utf8")) as Record<string, unknown>;
+    await writeFile(path, JSON.stringify({ ...before, agents: { "/old": { model: "sonnet", effort: "low", yolo: false, extra: "" } } }));
+    const cfg = await loadConfig();
+    expect(cfg.agents["/old"]).toEqual({ all: { harness: "claude", model: "sonnet", effort: "low", yolo: false, extra: "" } });
+    expect(agentFor(cfg, "/old", "job").model).toBe("sonnet");
+    await setRepoAgent("/old", {});
+  });
+
+  test("profiles and roles route every repo without an override", async () => {
+    const review = { harness: "codex", model: "gpt-5.5", effort: "high", yolo: false, extra: "" } as const;
+    let routes = await setProfile("review", review);
+    expect(routes.profiles["review"]).toEqual(review);
+    routes = await setRole("shell", { profile: "review" });
+    expect(routes.roles).toEqual({ shell: { profile: "review" } });
+    let cfg = await loadConfig();
+    expect(agentFor(cfg, "/any")).toEqual(review);
+    // the other roles stay on claude: codex runs only shells for now
+    expect(agentFor(cfg, "/any", "chat")).toEqual(DEFAULT_AGENT);
+    // default can be changed and put back, never deleted
+    routes = await setProfile("default", { ...DEFAULT_AGENT, model: "opus" });
+    expect(routes.profiles["default"]?.model).toBe("opus");
+    routes = await setProfile("default", null);
+    expect(routes.profiles["default"]).toEqual(DEFAULT_AGENT);
+    // a deleted profile leaves its routes naming nothing, and they fall through
+    routes = await setProfile("review", null);
+    expect(routes.profiles["review"]).toBeUndefined();
+    cfg = await loadConfig();
+    expect(agentFor(cfg, "/any")).toEqual(DEFAULT_AGENT);
+    routes = await setRole("shell", null);
+    expect(routes.roles).toEqual({});
   });
 
   test("archived repos persist by path, each once", async () => {
@@ -192,12 +229,12 @@ describe("config store", () => {
   });
 
   test("the keep switch waits its turn with every other setting", async () => {
-    const opus = { model: "opus", effort: "high", yolo: true, extra: "" } as const;
-    await Promise.all([setKeepShells(true), setAgent("/Users/me/dev/k", opus), setKeepShells(true)]);
+    const opus = { harness: "claude", model: "opus", effort: "high", yolo: true, extra: "" } as const;
+    await Promise.all([setKeepShells(true), setRepoAgent("/Users/me/dev/k", { all: opus }), setKeepShells(true)]);
     let cfg = await loadConfig();
     expect(cfg.keepShells).toBe(true);
     expect(agentFor(cfg, "/Users/me/dev/k")).toEqual(opus);
-    await Promise.all([setAgent("/Users/me/dev/k", DEFAULT_AGENT), setKeepShells(false)]);
+    await Promise.all([setRepoAgent("/Users/me/dev/k", {}), setKeepShells(false)]);
     cfg = await loadConfig();
     expect(cfg.keepShells).toBe(false);
     expect(cfg.agents["/Users/me/dev/k"]).toBeUndefined();

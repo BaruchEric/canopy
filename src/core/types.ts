@@ -185,6 +185,10 @@ export interface Backend {
   /** the ssh alias a client uses to reach this backend for VS Code
    *  Remote-SSH (from `CANOPY_SSH_HOST`), or null when unset */
   sshHost: string | null;
+  /** the agent harnesses whose binary this backend finds, so the UI greys
+   *  out one a machine lacks; absent from a backend older than harnesses,
+   *  which only ever started claude */
+  harnesses?: Harness[];
 }
 
 /** A helper: `canopy helper` running on a client machine, dialled in to the
@@ -378,9 +382,17 @@ export interface CanopyConfig {
   sources: StoredSource[];
   /** the claude-history CLI; null looks on PATH, then in ~/dev/dev-tools */
   historyBin: string | null;
-  /** how Claude Code starts per repo, keyed by the repo's absolute path (or
-   *  ssh locator) like workspaces are; a repo with no entry uses the defaults */
-  agents: Record<string, AgentSettings>;
+  /** which agent a repo starts, whole or per role, keyed by the repo's
+   *  absolute path (or ssh locator) like workspaces are; an entry written
+   *  before roles existed is plain `AgentSettings` on disk and reads as
+   *  `{ all: entry }`. A repo with no entry follows the role and default
+   *  routes (core/route). */
+  agents: Record<string, RepoAgent>;
+  /** named agent settings a route can point at; `default` is the backend
+   *  default, and the builtin `DEFAULT_AGENT` when unset */
+  profiles: Record<string, AgentSettings>;
+  /** the route per role: a profile or settings of its own */
+  agentRoles: Partial<Record<AgentRole, AgentPick>>;
   /** how a repo's builds are made and run, keyed like agents */
   launchers: Record<string, LaunchSettings>;
   /** per-machine task overrides by repo path (core/tasks) */
@@ -519,34 +531,111 @@ export const JOB_TAIL = 400;
 
 export const isJobActive = (j: Job): boolean => j.status === "working";
 
-/* ---------- agent settings: how Claude Code starts for a repo ---------- */
+/* ---------- agent settings: which harness starts, and how, for a repo ---------- */
 
-/** Model aliases the claude CLI takes; "default" leaves the choice to it. */
+/** The agent harnesses canopy starts: Claude Code and Codex. What differs
+ *  between them (flags, resume, sessions) is a table in core/harness. */
+export const HARNESSES = ["claude", "codex"] as const;
+export type Harness = (typeof HARNESSES)[number];
+
+export const isHarness = (v: unknown): v is Harness => typeof v === "string" && (HARNESSES as readonly string[]).includes(v);
+
+/** Model aliases the claude CLI takes; "default" leaves the choice to it.
+ *  Codex takes any model name (core/harness has the rule). */
 export const AGENT_MODELS = ["default", "fable", "opus", "sonnet", "haiku"] as const;
 export type AgentModel = (typeof AGENT_MODELS)[number];
 
-export const AGENT_EFFORTS = ["default", "low", "medium", "high", "xhigh", "max"] as const;
+/** Every effort some harness takes; which harness takes which is in
+ *  core/harness ("ultra" is codex's alone). */
+export const AGENT_EFFORTS = ["default", "low", "medium", "high", "xhigh", "max", "ultra"] as const;
 export type AgentEffort = (typeof AGENT_EFFORTS)[number];
 
-/** Applied wherever canopy starts Claude for the repo: the agent opener, a
- *  herdr workspace, and the runs and chats in the browser. */
+/** Applied wherever canopy starts an agent for the repo: a shell's agent,
+ *  the agent opener, a herdr workspace, and the runs and chats in the
+ *  browser. An entry saved before harnesses has no `harness` and reads as
+ *  claude. */
 export interface AgentSettings {
-  model: AgentModel;
+  harness: Harness;
+  /** claude: one of AGENT_MODELS; codex: "default" or a model name */
+  model: string;
   effort: AgentEffort;
-  /** skip every permission prompt (the CLI's --dangerously-skip-permissions;
-   *  bypassPermissions mode for a run). On by default: canopy is a cockpit
-   *  for one's own repos, and a prompt nobody is watching just stalls. */
+  /** skip every permission prompt (claude's --dangerously-skip-permissions,
+   *  bypassPermissions mode for a run; codex's
+   *  --dangerously-bypass-approvals-and-sandbox). On by default: canopy is a
+   *  cockpit for one's own repos, and a prompt nobody is watching just stalls. */
   yolo: boolean;
-  /** anything else for the claude command line, split like a shell would */
+  /** anything else for the command line, split like a shell would */
   extra: string;
 }
 
 export const DEFAULT_AGENT: AgentSettings = {
+  harness: "claude",
   model: "default",
   effort: "default",
   yolo: true,
   extra: "",
 };
+
+/** The kinds of work canopy starts an agent for: an interactive shell (the
+ *  panel's own, a new agent shell, resume, the agent and herdr openers, the
+ *  guided panel's asks), a chat and a job (the runner's two modes), a
+ *  workflow step, and a commit-message suggestion. */
+export const AGENT_ROLES = ["shell", "chat", "job", "flow", "suggest"] as const;
+export type AgentRole = (typeof AGENT_ROLES)[number];
+
+export const isAgentRole = (v: unknown): v is AgentRole => typeof v === "string" && (AGENT_ROLES as readonly string[]).includes(v);
+
+/** What a route points at: a named profile, or settings of its own. */
+export type AgentPick = { profile: string } | AgentSettings;
+
+/** One repo's override: a pick for every role, and picks per role that
+ *  beat it. */
+export interface RepoAgent {
+  all?: AgentPick;
+  roles?: Partial<Record<AgentRole, AgentPick>>;
+}
+
+/** A one-off choice at launch that beats every route: a profile by name, or
+ *  a harness ("new codex shell"), which takes the route's own settings when
+ *  they are that harness's and the first profile of that harness otherwise. */
+export type LaunchPick = { profile: string } | { harness: Harness };
+
+/** `GET /api/agents` and the `agents` event: the backend's whole routing. */
+export interface AgentRoutes {
+  /** every profile, `default` always among them */
+  profiles: Record<string, AgentSettings>;
+  roles: Partial<Record<AgentRole, AgentPick>>;
+  /** the repo overrides by path */
+  repos: Record<string, RepoAgent>;
+}
+
+/** Where resolved settings came from, first layer that answered winning. */
+export const AGENT_LAYERS = ["explicit", "repo-role", "repo", "role", "default", "builtin"] as const;
+export type AgentLayer = (typeof AGENT_LAYERS)[number];
+
+/** A layer that named something but was passed over, and why: a profile
+ *  that is gone, or a harness the role cannot run yet. */
+export interface AgentSkip {
+  from: AgentLayer;
+  profile?: string;
+  why: string;
+}
+
+export interface ResolvedAgent {
+  settings: AgentSettings;
+  from: AgentLayer;
+  /** the profile the settings came from, when a profile pick answered */
+  profile?: string;
+  /** the layers above `from` that were passed over */
+  skipped?: AgentSkip[];
+}
+
+/** `GET /api/agents/resolve?id=`: each role's resolved settings for one
+ *  repo, and the harnesses the backend has. */
+export interface AgentTable {
+  roles: Record<AgentRole, ResolvedAgent>;
+  harnesses: Harness[];
+}
 
 /** A source as config holds it: everything but the launch flag. */
 export type StoredSource = SourcePlace & { id: string; label: string };
@@ -595,16 +684,16 @@ export interface CommitDetail {
 
 /* ---------- openers: where a repo opens ---------- */
 
-/** Apps a repo opens in. `agent` is Claude Code itself: an interactive
- *  session in a terminal window at the repo, kitty when it is installed and
- *  Terminal otherwise. `herdr` is the same session inside a herdr workspace
- *  (herdr.dev, the terminal workspace manager for coding agents). Both start
- *  Claude with the repo's agent settings. */
+/** Apps a repo opens in. `agent` is the repo's agent itself (the shell
+ *  role's harness): an interactive session in a terminal window at the repo,
+ *  kitty when it is installed and Terminal otherwise. `herdr` is the same
+ *  session inside a herdr workspace (herdr.dev, the terminal workspace
+ *  manager for coding agents). Both start it with the repo's agent settings. */
 export const OPENER_IDS = ["kitty", "terminal", "code", "finder", "agent", "herdr"] as const;
 export type OpenerId = (typeof OPENER_IDS)[number];
 
-/** The openers that start Claude rather than a plain app. */
-export const CLAUDE_OPENERS: readonly OpenerId[] = ["agent", "herdr"];
+/** The openers that start an agent rather than a plain app. */
+export const AGENT_OPENERS: readonly OpenerId[] = ["agent", "herdr"];
 
 /* ---------- runs: a job handed to Claude Code for one repo ---------- */
 
@@ -739,7 +828,7 @@ export type ServerEvent =
   | { type: "repo"; repo: Repo }
   | { type: "scan"; result: ScanResult }
   | { type: "workspaces"; workspaces: Workspace[] }
-  | { type: "agents"; agents: Record<string, AgentSettings> }
+  | { type: "agents"; agents: AgentRoutes }
   | { type: "run"; run: Run }
   | { type: "run-gone"; id: string }
   | { type: "flow"; flow: Flow }
@@ -1223,10 +1312,12 @@ export interface TaskLogPage {
   more: boolean;
 }
 
-/** One Claude Code conversation started at a repo on the backend, which a
- *  shell on any device can pick back up with `claude --resume`. */
-export interface ClaudeSession {
-  /** Claude Code's session id, a uuid */
+/** One agent conversation started at a repo on the backend, which a shell on
+ *  any device can pick back up: `claude --resume` or `codex resume`. */
+export interface AgentSession {
+  /** which harness it belongs to */
+  harness: Harness;
+  /** the harness's session id, a uuid */
   id: string;
   /** when its file was last written, ms */
   at: number;
@@ -1241,7 +1332,7 @@ export interface ClaudeSession {
 }
 
 /** the agent canopy can tell was running in a shell */
-export type AgentKind = "claude" | "codex";
+export type AgentKind = Harness;
 
 /** What a shell left on disk for after the machine it ran on goes down.
  *  Written only while `keepShells` is on, one record per shell, with its

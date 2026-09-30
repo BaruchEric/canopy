@@ -155,6 +155,9 @@ describe("a pane's text for a copy", () => {
     expect(parsePane("2.1.285\t✳ fixing\t1\n")).toEqual({ command: "2.1.285", title: "✳ fixing", fullscreen: true });
     expect(parsePane("zsh\thost\t0")).toEqual({ command: "zsh", title: "host", fullscreen: false });
     expect(parsePane("zsh\thost")).toEqual({ command: "zsh", title: "host", fullscreen: false });
+    // the pane's own pid, for the processes under it
+    expect(parsePane("node\tapp\t0\t4242\n")).toEqual({ command: "node", title: "app", fullscreen: false, pid: 4242 });
+    expect(parsePane("node\tapp\t0\tx")).toEqual({ command: "node", title: "app", fullscreen: false });
   });
   test("a plain shell copies its history, a full-screen one its screen alone", () => {
     expect(textArgs(base, ID, false, 50).slice(base.length)).toEqual([

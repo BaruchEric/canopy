@@ -54,7 +54,8 @@ usage:
   canopy suggest <repo>              print an AI-suggested commit message
   canopy push <repo> | pull <repo>
   canopy open <repo> [--app kitty|terminal|code|finder|agent|herdr]
-                                     agent: interactive Claude Code in a terminal
+                                     agent: the repo's agent (claude or codex, as
+                                     its shell route says) in a terminal
                                      herdr: the same, in a herdr workspace
   canopy ws                          list workspaces
   canopy ws create <name> <dirs...>  group repos into a workspace
@@ -282,8 +283,8 @@ export async function main(argv: string[]): Promise<void> {
     case "open": {
       const app = appOpt(args, "kitty");
       const repo = resolve(args[0] ?? fail("usage: canopy open <repo>"));
-      // the repo's agent settings from the UI apply here too
-      await openIn(app, repo, agentFor(await loadConfig(), repo));
+      // the repo's shell route from the UI applies here too
+      await openIn(app, repo, agentFor(await loadConfig(), repo, "shell"));
       return;
     }
     case "launch": {

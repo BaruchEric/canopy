@@ -56,6 +56,7 @@ beforeAll(async () => {
   server = await startServer({
     root,
     port: 0,
+    harnesses: ["claude"],
     // sixty lines that scroll into history, then, for "full", the
     // alternate screen with one line on it, the way a full-screen program
     // starts
@@ -79,7 +80,7 @@ const FULL = "f0000000000000000000000000000006";
 
 describe("/api/terms/text", () => {
   test("a plain shell's text is its history and screen", async () => {
-    const c = connect({ term: PLAIN, place: "panel", start: "claude", prompt: "plain" });
+    const c = connect({ term: PLAIN, place: "panel", start: "agent", prompt: "plain" });
     await c.opened;
     await until(async () => ((await textOf(PLAIN)).body.text ?? "").includes("plain-done"), "the shell's last line");
     const { body } = await textOf(PLAIN);
@@ -90,7 +91,7 @@ describe("/api/terms/text", () => {
   }, 30_000);
 
   test("a full-screen program's text is its screen alone", async () => {
-    const c = connect({ term: FULL, place: "panel", start: "claude", prompt: "full" });
+    const c = connect({ term: FULL, place: "panel", start: "agent", prompt: "full" });
     await c.opened;
     await until(async () => (await textOf(FULL)).body.fullscreen === true, "the alternate screen");
     await until(async () => ((await textOf(FULL)).body.text ?? "").includes("FULLSCREEN"), "the program's screen");

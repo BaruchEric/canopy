@@ -88,7 +88,7 @@ beforeAll(async () => {
   root = join(scratch, "root");
   const repo = join(root, "app");
   await Bun.$`mkdir -p ${repo} && git -C ${repo} init -q`.quiet();
-  server = await startServer({ root, port: 0 });
+  server = await startServer({ root, port: 0, harnesses: ["claude", "codex"] });
 });
 
 afterAll(async () => {
@@ -175,7 +175,8 @@ describe("keeping shells", () => {
     const res = await post("/api/terms/restore", { term: id, cols: 80, rows: 24, resume: true });
     expect(res.status).toBe(200);
     // the line is typed into the shell; whether claude then starts is claude's
-    await until(async () => (await pane(id)).includes("claude --continue"), "the continue line in the pane");
+    // with the repo's shell route for claude (the builtin: yolo) on it
+    await until(async () => (await pane(id)).includes("claude --dangerously-skip-permissions --continue"), "the continue line in the pane");
     expect(await pane(id)).toContain("what the agent had said");
   }, 30_000);
 

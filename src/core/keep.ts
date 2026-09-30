@@ -17,10 +17,11 @@
  */
 import { mkdir, readdir, readFile, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
-import { shellQuote } from "./host";
+import { continueArgv, type AgentEnv } from "./harness";
+import { shellLine, shellQuote } from "./host";
 import { configDir } from "./store";
 import { isTermId, termPlace } from "./term";
-import type { AgentKind, KeptShell } from "./types";
+import type { AgentKind, AgentSettings, KeptShell } from "./types";
 
 /** how often a held shell's history is written out */
 export const KEEP_EVERY = 60_000;
@@ -33,32 +34,59 @@ export const KEEP_DAYS = 7;
 
 const SHELL_COMMANDS = ["sh", "bash", "zsh", "fish", "dash", "ksh", "tcsh", "csh", "login"];
 
+/** whether a pane's command is a shell at its prompt, which runs no agent */
+export const isShellCommand = (command: string): boolean => {
+  const name = command.trim().toLowerCase().replace(/^-/, "");
+  return name === "" || SHELL_COMMANDS.includes(name);
+};
+
+/** The harness an argv is, off its program and, for an interpreter, its
+ *  script: a bun- or npm-installed codex runs as `node …/@openai/codex/bin/
+ *  codex.js`, a claude as `claude` or its package's `cli.js`. Only the first
+ *  two words count, so an editor opened on `/tmp/codex/notes` is no agent. */
+function argvAgent(argv: readonly string[]): AgentKind | null {
+  for (const w of argv.slice(0, 2)) {
+    if (/\/@openai\/codex\//.test(w) || /(^|\/)codex(\.js)?$/.test(w)) return "codex";
+    if (/\/@anthropic-ai\/claude-code\//.test(w) || /(^|\/)claude$/.test(w)) return "claude";
+  }
+  return null;
+}
+
 /**
- * The agent running in a pane, off what tmux says about it. Neither field is
- * dependable alone, and both were measured rather than assumed: Claude Code
- * sets its process title to its own version, so `pane_current_command` reads
- * `2.1.278` and the pane title reads `claude agents`; codex reports `codex`
- * as the command and titles the pane after the folder. A plain shell reports
- * its own name, which is what rules out a shell sitting in a folder called
- * `claude-history` from looking like an agent.
+ * The agent running in a pane, off what tmux says about it and, when that
+ * is not enough, the argv of the processes under the pane. No one field is
+ * dependable alone, and each was measured rather than assumed: Claude Code
+ * sets its process title to its own version on a Mac, so
+ * `pane_current_command` reads `2.1.278` and the pane title `claude agents`,
+ * and reads `claude` with the title `✳ Claude Code` on Linux; a bun-installed
+ * codex reports `node` and titles the pane after the folder, so only its
+ * argv tells. A plain shell reports its own name, which is what rules out a
+ * shell sitting in a folder called `claude-history` from looking like an
+ * agent.
  */
-export function agentIn(command: string, title: string): AgentKind | null {
-  const cmd = command.trim().toLowerCase();
-  const name = cmd.replace(/^-/, "");
-  if (name === "" || SHELL_COMMANDS.includes(name)) return null;
-  const head = title.trim().toLowerCase();
+export function agentIn(command: string, title: string, argvs: readonly (readonly string[])[] = []): AgentKind | null {
+  if (isShellCommand(command)) return null;
+  const name = command.trim().toLowerCase().replace(/^-/, "");
+  const head = title.trim().toLowerCase().replace(/^✳\s*/, "");
   if (name.startsWith("claude") || head.startsWith("claude")) return "claude";
   if (name.startsWith("codex") || head.startsWith("codex")) return "codex";
   // Claude Code's process title is its version, and nothing else canopy
   // starts in a shell looks like one
   if (/^\d+\.\d+\.\d+/.test(name)) return "claude";
+  for (const argv of argvs) {
+    const found = argvAgent(argv);
+    if (found) return found;
+  }
   return null;
 }
 
-/** What canopy offers to run in a restored shell to pick the work back up.
- *  Claude Code alone: `codex` has no continue this is sure of, so a codex
- *  shell is restored as a terminal and left at its prompt. */
-export const continueLine = (agent: AgentKind | null): string | null => (agent === "claude" ? "claude --continue" : null);
+/** What canopy offers to run in a restored shell to pick the work back up:
+ *  `claude --continue` or `codex resume --last`, both of which take the
+ *  folder's most recent conversation. With `settings` of the same harness
+ *  (the repo's route) their flags ride along, else only what the harness
+ *  always takes; null for a shell that had no agent in it. */
+export const continueLine = (agent: AgentKind | null, settings?: AgentSettings, env: AgentEnv = {}): string | null =>
+  agent ? shellLine(continueArgv(agent, settings, env)) : null;
 
 /** the line that opens a restored shell's history, so nobody mistakes it for
  *  a shell that never stopped */

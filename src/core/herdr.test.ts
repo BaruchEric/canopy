@@ -32,7 +32,7 @@ describe("herdr names and argv", () => {
       "wF:p1",
     ]);
     expect(
-      herdrStartArgs("canopy", "wF:p1", { model: "opus", effort: "default", yolo: true, extra: "" }),
+      herdrStartArgs("canopy", "wF:p1", { harness: "claude", model: "opus", effort: "default", yolo: true, extra: "" }),
     ).toEqual([
       "agent",
       "start",
@@ -46,6 +46,27 @@ describe("herdr names and argv", () => {
       "opus",
       "--dangerously-skip-permissions",
     ]);
+  });
+
+  test("codex is a herdr kind of its own, its flags after -- the same way", () => {
+    expect(herdrStartArgs("canopy", "wF:p1", { ...DEFAULT_AGENT, harness: "codex", model: "gpt-5.5" })).toEqual([
+      "agent",
+      "start",
+      "canopy",
+      "--kind",
+      "codex",
+      "--pane",
+      "wF:p1",
+      "--",
+      "-m",
+      "gpt-5.5",
+      "--dangerously-bypass-approvals-and-sandbox",
+      "--no-daemon",
+    ]);
+    expect(herdrRemoteLine("wsl", "/r", { ...DEFAULT_AGENT, harness: "codex" })).toBe(
+      `ssh -t -- wsl 'cd '\\''/r'\\'' && codex --dangerously-bypass-approvals-and-sandbox --no-daemon'`,
+    );
+    expect(herdrAgentName("123", [], "codex")).toBe("codex");
   });
 
   test("a remote repo's pane runs an ssh session that starts claude there", () => {

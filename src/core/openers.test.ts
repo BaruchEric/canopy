@@ -1,7 +1,9 @@
 import { describe, expect, test } from "bun:test";
 import {
   agentShellCommand,
-  claudeLine,
+  agentLine,
+  backendCaps,
+  missingHarness,
   fileOpenArgs,
   isOpenerId,
   kittyAgentArgs,
@@ -20,7 +22,8 @@ import {
 import { shellQuote } from "./host";
 import { DEFAULT_AGENT } from "./types";
 
-const opusYolo = { model: "opus", effort: "high", yolo: true, extra: "--add-dir '../my lib'" } as const;
+const opusYolo = { harness: "claude", model: "opus", effort: "high", yolo: true, extra: "--add-dir '../my lib'" } as const;
+const codexAsk = { ...DEFAULT_AGENT, harness: "codex", model: "gpt-5.5", yolo: false } as const;
 /** the defaults with yolo off, for the tests about a bare `claude` line */
 const ask = { ...DEFAULT_AGENT, yolo: false };
 
@@ -34,17 +37,36 @@ describe("agent launch", () => {
   });
 
   test("the repo's agent settings become flags on that one line", () => {
-    expect(claudeLine(opusYolo)).toBe(
+    expect(agentLine(opusYolo)).toBe(
       "claude --model opus --effort high --dangerously-skip-permissions --add-dir '../my lib'",
     );
-    expect(agentShellCommand("/bin/zsh", opusYolo).at(-1)).toBe(claudeLine(opusYolo));
-    expect(kittyAgentArgs("/a/x", "/bin/zsh", opusYolo).at(-1)).toBe(claudeLine(opusYolo));
+    expect(agentShellCommand("/bin/zsh", opusYolo).at(-1)).toBe(agentLine(opusYolo));
+    expect(kittyAgentArgs("/a/x", "/bin/zsh", opusYolo).at(-1)).toBe(agentLine(opusYolo));
     expect(sshSessionArgs("wsl", "/home/me/x", "agent", opusYolo).at(-1)).toBe(
-      `cd '/home/me/x' && ${claudeLine(opusYolo)}`,
+      `cd '/home/me/x' && ${agentLine(opusYolo)}`,
     );
     expect(kittySessionLines(["/a/x"], "agent", "/bin/zsh", () => opusYolo)).toContain(
-      `launch --hold /bin/zsh -l -i -c ${shellQuote(claudeLine(opusYolo))}\n`,
+      `launch --hold /bin/zsh -l -i -c ${shellQuote(agentLine(opusYolo))}\n`,
     );
+  });
+
+  test("codex rides the same builders, --no-daemon on every line", () => {
+    const line = "codex -m gpt-5.5 -a on-request -s workspace-write --no-daemon";
+    expect(agentLine(codexAsk)).toBe(line);
+    expect(agentShellCommand("/bin/zsh", codexAsk).at(-1)).toBe(line);
+    expect(sshSessionArgs("wsl", "/home/me/x", "agent", codexAsk).at(-1)).toBe(`cd '/home/me/x' && ${line}`);
+    expect(terminalAgentArgs("/a/x", codexAsk).join(" ")).toContain(line);
+    expect(linuxAgentArgs("/a/x", codexAsk, "/bin/bash", []).at(-1)).toBe(line);
+  });
+
+  test("a first message rides after the flags, quoted", () => {
+    expect(agentLine(ask, "it's here")).toBe(`claude 'it'\\''s here'`);
+    expect(agentLine({ ...codexAsk, yolo: true }, "go")).toBe("codex -m gpt-5.5 --dangerously-bypass-approvals-and-sandbox --no-daemon go");
+  });
+
+  test("the caps name the harnesses, and a missing one is refused in plain words", () => {
+    expect(backendCaps(["codex"]).harnesses).toEqual(["codex"]);
+    expect(missingHarness("codex", "mini")).toBe("codex is not installed on mini");
   });
 
   test("kitty gets a held window at the repo running that shell", () => {
@@ -257,7 +279,7 @@ describe("the openers on a Linux desktop", () => {
       "kitty", "--detach", ...inst, "--hold", "--directory", "/r", "/bin/bash", "-l", "-i", "-c", "claude",
     ]);
     expect(linuxAgentArgs("ssh://mini/r", opusYolo, "/bin/bash", inst)).toEqual([
-      "kitty", "--detach", ...inst, "--hold", "ssh", "-t", "--", "mini", `cd '/r' && ${claudeLine(opusYolo)}`,
+      "kitty", "--detach", ...inst, "--hold", "ssh", "-t", "--", "mini", `cd '/r' && ${agentLine(opusYolo)}`,
     ]);
   });
 });

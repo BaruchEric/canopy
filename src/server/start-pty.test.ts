@@ -1,5 +1,5 @@
 /**
- * On a backend without tmux, start=claude still types the agent line, but
+ * On a backend without tmux, start=agent still types the agent line, but
  * the agent route never says a plain pty runs claude: with no tmux to ask
  * what the shell is running, a user who quit Claude would get a prompt
  * typed into bash.
@@ -25,7 +25,7 @@ beforeAll(async () => {
   process.env["CANOPY_TMUX"] = "0";
   const root = join(scratch, "root");
   await Bun.$`mkdir -p ${join(root, "app")} && git -C ${join(root, "app")} init -q`.quiet();
-  server = await startServer({ root, port: 0, agentLine: async () => "printf 'agent-%s\\n' up" });
+  server = await startServer({ root, port: 0, harnesses: ["claude"], agentLine: async () => "printf 'agent-%s\\n' up" });
 });
 
 afterAll(async () => {
@@ -38,7 +38,7 @@ afterAll(async () => {
 });
 
 test("the line is typed, and the route answers null all the same", async () => {
-  const q = new URLSearchParams({ id: "app", cols: "80", rows: "24", term: ID, place: "panel", start: "claude" });
+  const q = new URLSearchParams({ id: "app", cols: "80", rows: "24", term: ID, place: "panel", start: "agent" });
   const ws = new WebSocket(`ws://127.0.0.1:${server.port}/api/term?${q}`);
   ws.binaryType = "arraybuffer";
   let out = "";

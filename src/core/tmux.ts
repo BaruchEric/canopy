@@ -150,8 +150,9 @@ export const snapshotArgs = (base: string[], id: string, lines = HISTORY_LINES):
 ];
 
 /** what tmux can say about the pane: the command it is running and its
- *  title, which is what `agentIn` reads to tell an agent shell apart */
-export const PANE_FORMAT = "#{pane_current_command}\t#{pane_title}\t#{alternate_on}";
+ *  title, which is what `agentIn` reads to tell an agent shell apart, and
+ *  the pane's own pid, whose processes it reads when those two do not tell */
+export const PANE_FORMAT = "#{pane_current_command}\t#{pane_title}\t#{alternate_on}\t#{pane_pid}";
 
 export const paneArgs = (base: string[], id: string): string[] => [...base, "display-message", "-p", "-t", sessionName(id), PANE_FORMAT];
 
@@ -422,18 +423,21 @@ export async function history(base: string[], id: string, rows: number, lines = 
   return r.code === 0 ? primeText(r.stdout, rows) : "";
 }
 
-/** what tmux says about a pane: its command, its title, and whether a
- *  full-screen program has it on the alternate screen */
+/** what tmux says about a pane: its command, its title, whether a
+ *  full-screen program has it on the alternate screen, and the pid of the
+ *  process it started (the shell), when tmux said */
 export interface PaneInfo {
   command: string;
   title: string;
   fullscreen: boolean;
+  pid?: number;
 }
 
 /** reads one `PANE_FORMAT` line */
 export function parsePane(line: string): PaneInfo {
-  const [command = "", title = "", alt = ""] = line.replace(/\n$/, "").split("\t");
-  return { command, title, fullscreen: alt === "1" };
+  const [command = "", title = "", alt = "", pid = ""] = line.replace(/\n$/, "").split("\t");
+  const n = Number(pid);
+  return { command, title, fullscreen: alt === "1", ...(pid && Number.isInteger(n) && n > 0 ? { pid: n } : {}) };
 }
 
 /** the pane's command and title, null when tmux will not say (the session

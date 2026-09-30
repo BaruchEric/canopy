@@ -3,7 +3,7 @@ import { chmod, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { ACTIONS } from "./actions";
-import { cliArgs } from "./runner";
+import { cliArgs, Runner } from "./runner";
 import { DEFAULT_AGENT } from "./types";
 
 describe("the print-mode command line", () => {
@@ -21,7 +21,7 @@ describe("the print-mode command line", () => {
   });
 
   test("the repo's settings ride along; yolo becomes the bypass mode", () => {
-    const args = cliArgs(ACTIONS.chat, { model: "opus", effort: "high", yolo: true, extra: "--name x" });
+    const args = cliArgs(ACTIONS.chat, { harness: "claude", model: "opus", effort: "high", yolo: true, extra: "--name x" });
     expect(args.slice(-6)).toEqual(["--model", "opus", "--effort", "high", "--name", "x"]);
     expect(args).toContain("bypassPermissions");
     // print mode takes the mode, not the interactive flag
@@ -95,6 +95,17 @@ if (end.status === "working" || end.status === "waiting") runner.stop(run.id);
 console.log(JSON.stringify({ ids, status: end.status }));
 process.exit(0);
 `;
+
+describe("the harness a run speaks", () => {
+  test("a run is Claude's stream-json alone, so codex settings are refused in words", () => {
+    const runner = new Runner({ onChange: () => {}, onGone: () => {} });
+    const repo = { id: "x", name: "x", path: "/nowhere", status: null } as unknown as Parameters<Runner["start"]>[0];
+    expect(() => runner.start(repo, "ask", ACTIONS.ask, "hi", { ...DEFAULT_AGENT, harness: "codex" })).toThrow(
+      "codex does not run jobs yet",
+    );
+    expect(() => runner.start(repo, "chat", ACTIONS.chat, "", { ...DEFAULT_AGENT, harness: "codex" })).toThrow("codex does not run chats yet");
+  });
+});
 
 describe("a run asked two things at once", () => {
   test("shows each prompt under its own id and answers both requests", async () => {

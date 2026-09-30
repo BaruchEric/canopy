@@ -1,20 +1,21 @@
 /** herdr (herdr.dev): a terminal workspace manager for coding agents, driven
  *  over its socket API through the `herdr` CLI. A repo opens as a herdr
- *  workspace at its folder with Claude started in the workspace's pane, the
- *  way the agent opener starts it in a kitty window; opening a repo that
- *  already has a workspace focuses that one. The argv builders and the JSON
- *  readers are pure and tested; `openHerdr` is the Bun side. */
+ *  workspace at its folder with the repo's agent (claude or codex, both
+ *  herdr kinds) started in the workspace's pane, the way the agent opener
+ *  starts it in a kitty window; opening a repo that already has a workspace
+ *  focuses that one. The argv builders and the JSON readers are pure and
+ *  tested; `openHerdr` is the Bun side. */
 
 import { existsSync } from "node:fs";
 import { realpath } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join } from "node:path";
-import { claudeArgs } from "./agent";
 import { exec, type ExecResult } from "./exec";
+import { agentArgs, agentArgv, HARNESS } from "./harness";
 import { parseLocator, shellLine, shellQuote } from "./host";
 import { DEFAULT_AGENT, type AgentSettings } from "./types";
 
-/** `herdr agent start` waits for Claude to come up; its own default is 30s. */
+/** `herdr agent start` waits for the agent to come up; its own default is 30s. */
 const START_TIMEOUT = 45_000;
 const CALL_TIMEOUT = 15_000;
 /** how long a fresh herdr gets to bring its server up */
@@ -31,15 +32,16 @@ export function herdrBinary(): string | null {
 /* ---------- pure: names, argv, and herdr's JSON ---------- */
 
 /** A herdr agent name for a repo: `[a-z][a-z0-9_-]{0,31}`, unique among the
- *  live agents (herdr refuses a duplicate). */
-export function herdrAgentName(repoName: string, taken: Iterable<string>): string {
+ *  live agents (herdr refuses a duplicate). A repo name with no letter in
+ *  it falls back to the harness's own name. */
+export function herdrAgentName(repoName: string, taken: Iterable<string>, fallback: string = "claude"): string {
   const base =
     repoName
       .toLowerCase()
       .replace(/[^a-z0-9_-]+/g, "-")
       .replace(/^[^a-z]+/, "")
       .replace(/-+$/, "")
-      .slice(0, 32) || "claude";
+      .slice(0, 32) || fallback;
   const used = new Set(taken);
   if (!used.has(base)) return base;
   for (let n = 2; ; n++) {
@@ -49,16 +51,18 @@ export function herdrAgentName(repoName: string, taken: Iterable<string>): strin
   }
 }
 
-/** `herdr agent start`: Claude, by name, in an existing pane at a shell
- *  prompt, with the settings' flags after `--` where herdr passes them on. */
+/** `herdr agent start`: the settings' harness, by name, in an existing pane
+ *  at a shell prompt, with the flags after `--` where herdr passes them on.
+ *  herdr knows both harnesses as kinds of its own (`--kind claude`, `--kind
+ *  codex`) and runs the kind's binary with those flags. */
 export function herdrStartArgs(name: string, paneId: string, agent: AgentSettings): string[] {
-  const flags = claudeArgs(agent);
+  const flags = agentArgs(agent);
   return [
     "agent",
     "start",
     name,
     "--kind",
-    "claude",
+    agent.harness,
     "--pane",
     paneId,
     ...(flags.length ? ["--", ...flags] : []),
@@ -66,10 +70,10 @@ export function herdrStartArgs(name: string, paneId: string, agent: AgentSetting
 }
 
 /** What a herdr pane runs for a repo on another host: an ssh session that
- *  lands at the repo and starts Claude there. */
+ *  lands at the repo and starts the agent there. */
 export function herdrRemoteLine(host: string, path: string, agent: AgentSettings): string {
-  const claude = shellLine(["claude", ...claudeArgs(agent)]);
-  return shellLine(["ssh", "-t", "--", host, `cd ${shellQuote(path)} && ${claude}`]);
+  const line = shellLine(agentArgv(agent));
+  return shellLine(["ssh", "-t", "--", host, `cd ${shellQuote(path)} && ${line}`]);
 }
 
 export interface HerdrPane {
@@ -178,11 +182,11 @@ async function ensureServer(bin: string): Promise<void> {
   throw new Error("herdr did not come up in time");
 }
 
-/** Starts Claude in a pane. A pane that is not at a shell prompt (herdr
+/** Starts the agent in a pane. A pane that is not at a shell prompt (herdr
  *  checks) is left alone when `tolerate` is set: the workspace was already
- *  there, and whatever runs in it is the user's. herdr's own answer for a
- *  Claude that came up but stopped on a startup dialog is `agent_not_ready`,
- *  which is a running Claude, not a failure. */
+ *  there, and whatever runs in it is the user's. herdr's own answer for an
+ *  agent that came up but stopped on a startup dialog is `agent_not_ready`,
+ *  which is a running agent, not a failure. */
 async function startAgent(
   bin: string,
   repoName: string,
@@ -191,12 +195,12 @@ async function startAgent(
   tolerate = false,
 ): Promise<void> {
   const names = parseAgentNames((await exec([bin, "agent", "list"], { timeoutMs: CALL_TIMEOUT })).stdout);
-  const name = herdrAgentName(repoName, names);
+  const name = herdrAgentName(repoName, names, agent.harness);
   const r = await exec([bin, ...herdrStartArgs(name, paneId, agent)], { timeoutMs: START_TIMEOUT });
   if (r.code === 0 || tolerate) return;
   const text = `${r.stdout}\n${r.stderr}`;
   if (text.includes("agent_not_ready")) return;
-  throw new Error(`herdr could not start claude: ${tail(r) || `exit ${r.code}`}`);
+  throw new Error(`herdr could not start ${HARNESS[agent.harness].label}: ${tail(r) || `exit ${r.code}`}`);
 }
 
 async function sameFolder(a: string, b: string): Promise<boolean> {
@@ -209,9 +213,9 @@ async function sameFolder(a: string, b: string): Promise<boolean> {
 }
 
 /** Opens the repo in herdr: focuses its workspace when one exists (starting
- *  Claude there if nothing runs in it), else creates one at the repo and
- *  starts Claude in it. A repo on another host gets a workspace whose pane
- *  runs the ssh session. */
+ *  the agent there if nothing runs in it), else creates one at the repo and
+ *  starts the agent in it. A repo on another host gets a workspace whose
+ *  pane runs the ssh session. */
 export async function openHerdr(path: string, agent: AgentSettings = DEFAULT_AGENT): Promise<void> {
   const bin = herdrBinary();
   if (!bin) throw new Error("herdr is not installed (herdr.dev)");

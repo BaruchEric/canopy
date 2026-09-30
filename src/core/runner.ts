@@ -14,7 +14,8 @@ import {
   toolDetail,
   type ActionSpec,
 } from "./actions";
-import { claudeArgs } from "./agent";
+import { agentArgs } from "./harness";
+import { roleRefusal } from "./route";
 import {
   DEFAULT_AGENT,
   isRunActive,
@@ -153,7 +154,7 @@ export function claudeBinary(): string | null {
  *  bypass permission mode: the interactive flag and the prompt tool are two
  *  ways of answering the same question, and print mode takes the mode. */
 export function cliArgs(spec: ActionSpec, agent: AgentSettings = DEFAULT_AGENT): string[] {
-  const flags = claudeArgs({ ...agent, yolo: false });
+  const flags = agentArgs({ ...agent, yolo: false });
   return [
     "-p",
     "--output-format",
@@ -216,6 +217,10 @@ export class Runner {
     if (spec.noteRequired && !note.trim()) {
       throw new Error("write what Claude should do first");
     }
+    // The wire below is Claude's stream-json; the routes only ever hand a
+    // run claude settings (core/route's ROLE_HARNESSES), and this says so
+    // plainly if something ever does not.
+    if (agent.harness !== "claude") throw new Error(roleRefusal(spec.mode === "chat" ? "chat" : "job", agent.harness));
     const bin = claudeBinary();
     if (!bin) {
       throw new Error("the claude CLI is not on PATH; install Claude Code and sign in first");

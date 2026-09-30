@@ -4,6 +4,7 @@
  * record back, and which records are still worth offering.
  */
 import { describe, expect, test } from "bun:test";
+import { DEFAULT_AGENT } from "./types";
 import { agentIn, clip, continueLine, countLines, expiredShells, KEEP_DAYS, lostShells, parseKept, replayCommand, restoredBanner } from "./keep";
 import type { KeptShell } from "./types";
 
@@ -48,11 +49,45 @@ describe("agentIn", () => {
   });
 });
 
+describe("agentIn off the processes under the pane", () => {
+  test("a bun-installed codex runs as node, which only its argv tells", () => {
+    expect(agentIn("node", "app")).toBeNull();
+    expect(agentIn("node", "fix the scan | app", [["-bash"], ["node", "/home/bun/.bun/install/global/node_modules/@openai/codex/bin/codex.js", "--no-daemon"]])).toBe("codex");
+    expect(agentIn("node", "app", [["/home/bun/.bun/bin/codex", "resume"]])).toBe("codex");
+    expect(agentIn("node", "app", [["node", "/usr/lib/node_modules/@anthropic-ai/claude-code/cli.js"]])).toBe("claude");
+  });
+
+  test("Claude Code on Linux: its own name and its asterisk title", () => {
+    expect(agentIn("claude", "✳ Claude Code")).toBe("claude");
+    expect(agentIn("node", "✳ Claude Code")).toBe("claude");
+  });
+
+  test("an argument that only mentions an agent is not one, and a shell is never one", () => {
+    expect(agentIn("vim", "notes", [["vim", "/tmp/codex/notes.md"]])).toBeNull();
+    expect(agentIn("node", "app", [["node", "server.js", "/srv/codex/x"]])).toBeNull();
+    expect(agentIn("bash", "app", [["node", "/x/@openai/codex/bin/codex.js"]])).toBeNull();
+  });
+});
+
 describe("continueLine", () => {
-  test("Claude Code alone is offered a continue", () => {
+  test("either harness is offered a continue, a shell with no agent none", () => {
     expect(continueLine("claude")).toBe("claude --continue");
-    expect(continueLine("codex")).toBeNull();
+    expect(continueLine("codex")).toBe("codex resume --last --no-daemon");
     expect(continueLine(null)).toBeNull();
+  });
+
+  test("a codex continue hands its commands the shell's handle", () => {
+    expect(continueLine("codex", undefined, { TAILCHAN_AS: "app-1a2b" })).toBe(
+      `codex resume --last --no-daemon -c 'shell_environment_policy.set.TAILCHAN_AS="app-1a2b"'`,
+    );
+  });
+
+  test("the repo's settings ride along when they are the same harness's", () => {
+    expect(continueLine("claude", DEFAULT_AGENT)).toBe("claude --dangerously-skip-permissions --continue");
+    expect(continueLine("codex", { ...DEFAULT_AGENT, harness: "codex", effort: "high", yolo: false })).toBe(
+      "codex resume --last -c model_reasoning_effort=high -a on-request -s workspace-write --no-daemon",
+    );
+    expect(continueLine("codex", DEFAULT_AGENT)).toBe("codex resume --last --no-daemon");
   });
 });
 

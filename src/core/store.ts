@@ -1,17 +1,31 @@
 import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join } from "node:path";
-import { isDefaultAgent, normalizeAgent } from "./agent";
+import {
+  DEFAULT_PROFILE,
+  isEmptyRepoAgent,
+  normalizePick,
+  normalizeProfiles,
+  normalizeRepoAgent,
+  normalizeRepoAgents,
+  normalizeRoles,
+  resolveAgent,
+  withDefaultProfile,
+} from "./route";
 import { isDefaultLaunch, normalizeLaunch } from "./launch";
 import { normalizeBackends } from "./backends";
 import { normalizeTaskPatch } from "./tasks";
 import { DEFAULT_SEED, PEER_SYNC, isPeerName, normalizePeers, normalizeSeed } from "./peers";
 import {
-  DEFAULT_AGENT,
   DEFAULT_LAUNCH,
   LAUNCH_SOURCE,
+  type AgentPick,
+  type AgentRole,
+  type AgentRoutes,
   type AgentSettings,
   type CanopyConfig,
+  type LaunchPick,
+  type RepoAgent,
   type LaunchSettings,
   type SourceInput,
   type StoredSource,
@@ -32,6 +46,8 @@ const defaults = (): CanopyConfig => ({
   sources: [],
   historyBin: null,
   agents: {},
+  profiles: {},
+  agentRoles: {},
   launchers: {},
   tasks: {},
   archived: [],
@@ -45,18 +61,6 @@ const defaults = (): CanopyConfig => ({
   seed: [...DEFAULT_SEED],
   backends: [],
 });
-
-/** Every stored entry re-validated; one left at the defaults is dropped, so
- *  the file only holds repos that differ from them. */
-function normalizeAgents(v: unknown): Record<string, AgentSettings> {
-  if (!v || typeof v !== "object" || Array.isArray(v)) return {};
-  const out: Record<string, AgentSettings> = {};
-  for (const [path, raw] of Object.entries(v as Record<string, unknown>)) {
-    const a = normalizeAgent(raw);
-    if (!isDefaultAgent(a)) out[path] = a;
-  }
-  return out;
-}
 
 /** The launch settings the same way: only repos that differ from the defaults. */
 function normalizeLaunchers(v: unknown): Record<string, LaunchSettings> {
@@ -129,7 +133,11 @@ function normalize(parsed: Partial<CanopyConfig>): CanopyConfig {
       (w): w is Workspace =>
         Boolean(w) && typeof w.name === "string" && Array.isArray(w.repos),
     ),
-    agents: normalizeAgents(cfg.agents),
+    // an entry from before roles (plain settings) reads as the repo's
+    // whole-repo pick; core/route has the rules
+    agents: normalizeRepoAgents(cfg.agents),
+    profiles: normalizeProfiles(cfg.profiles),
+    agentRoles: normalizeRoles(cfg.agentRoles),
     launchers: normalizeLaunchers(cfg.launchers),
     tasks: normalizeTasks(cfg.tasks),
     archived: paths(cfg.archived),
@@ -264,25 +272,57 @@ export async function removeWorkspace(
   });
 }
 
-/* ---------- agent settings, per repo ---------- */
+/* ---------- agent routing: profiles, roles and repo overrides ---------- */
 
-/** The settings for a repo path, the defaults when it has none. */
-export const agentFor = (cfg: CanopyConfig, path: string): AgentSettings =>
-  cfg.agents[path] ?? DEFAULT_AGENT;
+/** The config's routing as the API and the resolver see it, `default`
+ *  always among the profiles. */
+export const agentRoutes = (cfg: CanopyConfig): AgentRoutes => ({
+  profiles: withDefaultProfile(cfg.profiles),
+  roles: cfg.agentRoles,
+  repos: cfg.agents,
+});
 
-/** Stores a repo's settings; setting everything back to the defaults removes
- *  the entry. Returns the whole map, which is what the browsers hold. */
-export async function setAgent(
-  path: string,
-  settings: AgentSettings,
-): Promise<Record<string, AgentSettings>> {
+/** The settings a repo path gets for a role (an interactive shell unless
+ *  said), through every layer of core/route. */
+export const agentFor = (cfg: CanopyConfig, path: string, role: AgentRole = "shell", explicit?: LaunchPick): AgentSettings =>
+  resolveAgent(agentRoutes(cfg), path, role, explicit).settings;
+
+/** Stores a repo's override; an empty one removes the entry. Returns the
+ *  whole routing, which is what the browsers hold. */
+export async function setRepoAgent(path: string, agent: RepoAgent): Promise<AgentRoutes> {
   return withConfig((cfg) => {
-    const a = normalizeAgent(settings);
-    if (isDefaultAgent(a)) delete cfg.agents[path];
+    const a = normalizeRepoAgent(agent);
+    if (isEmptyRepoAgent(a)) delete cfg.agents[path];
     else cfg.agents[path] = a;
-    return cfg.agents;
+    return agentRoutes(cfg);
   });
 }
+
+/** Stores or (with null) deletes a profile. `default` cannot be deleted:
+ *  null puts it back to the builtin settings. */
+export async function setProfile(name: string, settings: AgentSettings | null): Promise<AgentRoutes> {
+  return withConfig((cfg) => {
+    const next = { ...cfg.profiles };
+    if (settings) next[name] = settings;
+    else delete next[name];
+    cfg.profiles = normalizeProfiles(next);
+    return agentRoutes(cfg);
+  });
+}
+
+/** Points a role at a pick, or (with null) back at the default profile. */
+export async function setRole(role: AgentRole, pick: AgentPick | null): Promise<AgentRoutes> {
+  return withConfig((cfg) => {
+    const next = { ...cfg.agentRoles };
+    const p = pick ? normalizePick(pick) : null;
+    if (p) next[role] = p;
+    else delete next[role];
+    cfg.agentRoles = next;
+    return agentRoutes(cfg);
+  });
+}
+
+export { DEFAULT_PROFILE };
 
 /* ---------- archived and favorite repos ---------- */
 

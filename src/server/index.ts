@@ -40,22 +40,25 @@ import { exec, onHost } from "../core/exec";
 import { Flows, type CheckResult } from "../core/flow";
 import { isTermId, parseTermMessage, Scrollback, shellArgs, startTerm, termPlace, termSize, type TermSession, type TermSize } from "../core/term";
 import { attachTmuxTerm, hasSession, history, killSession, listSessions, newSession, paneInfo, paneText, sendLine, serverUp, snapshot, tmuxBase } from "../core/tmux";
-import { agentIn, clip, continueLine, countLines, expiredShells, forgetKept, KEEP_EVERY, listKept, lostShells, readKeptHistory, replayCommand, replayFile, restoredBanner, writeKept } from "../core/keep";
+import { clip, continueLine, countLines, expiredShells, forgetKept, KEEP_EVERY, listKept, lostShells, readKeptHistory, replayCommand, replayFile, restoredBanner, writeKept } from "../core/keep";
 import { PASTE_MAX, pasteName, pasteText, savePaste } from "../core/paste";
 import { apiBase, ForgeAuthError, linkForgeClones, listForgeRepos } from "../core/forge";
 import { isSshHost, parseLocator, parseSshHosts, shellQuote, tildeQuote } from "../core/host";
 import { hasGatewayKey, jev } from "../core/jev";
-import { normalizeAgent } from "../core/agent";
+import { isDefaultAgent, normalizeAgent } from "../core/agent";
+import type { AgentEnv } from "../core/harness";
+import { paneAgent } from "../core/procs";
+import { effectiveAgents, isProfileName, launchPick, normalizePick, normalizeRepoAgent, pickRefusal, repoAgentRefusal } from "../core/route";
 import { selfName } from "../core/backends";
 import { linkPeers, NO_PUSH, peerUrl } from "../core/peers";
 import { initRepo, PassSeen, seedRepo, syncAll, syncRepo, takeWip, trackBranch } from "../core/peersync";
 import { normalizeLaunch } from "../core/launch";
 import { Launcher, LauncherError } from "../core/launcher";
-import { backendCaps, claudeLine, hostOpeners, isOpenerId, openFile, openGroup, openIn } from "../core/openers";
+import { agentLine, availableHarnesses, backendCaps, hostOpeners, isOpenerId, missingHarness, openFile, openGroup, openIn } from "../core/openers";
 import { clientKey, HELPER_PING, HELPER_TIMEOUT, isLoopback, isLoopbackHost, parseDefaultGateway, parseHelperQuery, parseHelperReply, reachFrom, staleHelpers, type HelperIntent } from "../core/helper";
 import { devicesOf, parseStream, type Stream } from "../core/presence";
 import { mapPool, searchRepo } from "../core/search";
-import { claudeSessions, hasClaudeSession, isSessionId, resumeLine } from "../core/sessions";
+import { agentSessions, hasAgentSession, isSessionId, resumeLine } from "../core/sessions";
 import { findWorkflow, loadWorkflows } from "../core/workflows";
 import {
   launchSource,
@@ -67,16 +70,19 @@ import {
 import {
   addSource,
   agentFor,
+  agentRoutes,
   launchFor,
   loadConfig,
   rememberRoot,
   removeSource,
   removeWorkspace,
-  setAgent,
   setArchived,
   setFavorite,
   setKeepShells,
   setLaunch,
+  setProfile,
+  setRepoAgent,
+  setRole,
   upsertWorkspace,
 } from "../core/store";
 import { Runner } from "../core/runner";
@@ -85,8 +91,12 @@ import {
   HISTORY_WINDOWS,
   LAUNCH_SOURCE,
   RUN_ACTIONS,
+  isAgentRole,
+  isHarness,
   type AgentSettings,
+  type AgentTable,
   type CanopyConfig,
+  type Harness,
   type ClientInfo,
   type Device,
   type FlowChoice,
@@ -139,8 +149,12 @@ interface SourceRuntime {
 interface ServerState {
   /** the launch root */
   root: string;
-  /** the line start=claude types into a new shell */
-  agentLine: (repo: Repo) => Promise<string>;
+  /** the line start=agent types into a new shell, for the settings its
+   *  route resolved to and what its commands are to see */
+  agentLine: (repo: Repo, agent: AgentSettings, env: AgentEnv) => Promise<string>;
+  /** the agent harnesses this backend has, looked up on each call so one
+   *  installed while canopy runs is seen at the next scan */
+  harnesses: () => Harness[];
   /** which canopy this is, read once at start */
   about: About;
   /** every source, the launch root first */
@@ -252,8 +266,12 @@ interface TermSocket {
   place: ShellPlace;
   /** only rejoin a held shell; a name the server does not hold is gone */
   attach: boolean;
-  /** type the agent's line in once, if this socket starts the shell */
-  start: "claude" | null;
+  /** type the agent's line in once, if this socket starts the shell: the
+   *  settings the shell route resolved to, with the launch pick applied */
+  start: AgentSettings | null;
+  /** why a start cannot go ahead (its harness is not here), said by
+   *  closing the socket before any shell starts */
+  refused: string | null;
   /** the first message for the agent, its argument on that line; empty for none */
   prompt: string;
   cols: number;
@@ -496,7 +514,8 @@ async function snapshotShells(state: ServerState): Promise<void> {
       // writing it now would put it back on offer
       if (live.ending || state.terms.get(id) !== live) continue;
       const history = clip(text);
-      const rec: KeptShell = { id, repoId, path, place, startedAt, savedAt: Date.now(), lines: countLines(history), agent: agentIn(pane.command, pane.title) };
+      const agent = await paneAgent(pane);
+      const rec: KeptShell = { id, repoId, path, place, startedAt, savedAt: Date.now(), lines: countLines(history), agent };
       await writeKept(rec, history);
     } catch {
       // a shell that ended while the pass was running; the next one is right
@@ -537,6 +556,19 @@ function keepPass(state: ServerState): Promise<void> {
   return pass;
 }
 
+/** The name this backend goes by in a refusal: its peer name, else its
+ *  host's, the same one the multi-backend registry uses. */
+async function machineName(): Promise<string> {
+  return selfName((await loadConfig()).self, hostname());
+}
+
+/** A start on a harness this backend lacks is refused before any shell
+ *  starts, in words the UI shows as they are: "codex is not installed on
+ *  mini", not a shell that dies at once. */
+async function needHarness(state: ServerState, h: Harness): Promise<void> {
+  if (!state.harnesses().includes(h)) throw new HttpError(400, missingHarness(h, await machineName()));
+}
+
 /** A shell running again under the name it had, at the same repo, with what
  *  it printed before the machine went down ahead of it and a banner saying
  *  where that came from. The processes that were in it are gone: the agent
@@ -548,6 +580,14 @@ async function restoreTerm(state: ServerState, id: string, size: TermSize, resum
   if (!rec) throw new HttpError(404, "no shell kept under that name");
   if (state.terms.has(id) || (await hasSession(tmux, id))) throw new HttpError(409, "that shell is running already");
   if (!state.result.repos.some((r) => r.id === rec.repoId)) throw new HttpError(400, `the repo that shell was in is not in the scan: ${rec.repoId}`);
+  // the harness that was running, with the repo's own flags for it when its
+  // shell route is that harness; checked before anything is undone
+  let line: string | null = null;
+  if (resume && rec.agent) {
+    await needHarness(state, rec.agent);
+    const env = shellEnv(handleOf(state, rec.repoId, rec.path, id).handle);
+    line = continueLine(rec.agent, agentFor(await loadConfig(), rec.path, "shell", { harness: rec.agent }), env);
+  }
   // The replay runs in the pane, ahead of the shell, so what the lost shell
   // had becomes this session's own tmux history: every client that attaches,
   // now or tomorrow, gets it the way it gets any other history. The record
@@ -573,7 +613,6 @@ async function restoreTerm(state: ServerState, id: string, size: TermSize, resum
     sockets: new Set(),
   };
   state.terms.set(id, live);
-  const line = resume ? continueLine(rec.agent) : null;
   if (line) {
     // the shell has to be up to read it; send-keys is input, not a command
     await Bun.sleep(400);
@@ -584,23 +623,27 @@ async function restoreTerm(state: ServerState, id: string, size: TermSize, resum
   return termInfo(state, live);
 }
 
-/** A new shell at a repo under the browser's name, with a Claude Code
- *  conversation from that repo picked back up in it: `claude --resume`
- *  with the repo's agent settings, typed in once the shell is up, so
- *  quitting Claude leaves the shell at the repo. The browser's tab then
- *  joins it like any held shell, and so does every other device's. */
+/** A new shell at a repo under the browser's name, with an agent
+ *  conversation from that repo picked back up in it: `claude --resume` or
+ *  `codex resume`, with the repo's settings for that harness, typed in once
+ *  the shell is up, so quitting the agent leaves the shell at the repo. The
+ *  browser's tab then joins it like any held shell, and so does every other
+ *  device's. */
 async function resumeTerm(
   state: ServerState,
   repo: Repo,
   id: string,
   place: ShellPlace,
   session: string,
+  harness: Harness,
   size: TermSize,
 ): Promise<TermInfo> {
-  if (repo.host) throw new HttpError(400, "Claude conversations are read off this machine; a repo on another host has none here");
-  if (!(await hasClaudeSession(repo.path, session))) throw new HttpError(404, "no Claude conversation under that id at this repo");
+  if (repo.host) throw new HttpError(400, "conversations are read off this machine; a repo on another host has none here");
+  if (!(await hasAgentSession(harness, repo.path, session))) throw new HttpError(404, `no ${harness} conversation under that id at this repo`);
   if (state.terms.has(id) || state.kept.some((k) => k.id === id)) throw new HttpError(409, "that shell name is taken");
-  const line = resumeLine(session, agentFor(await loadConfig(), repo.path));
+  await needHarness(state, harness);
+  const env = shellEnv(handleOf(state, repo.id, repo.path, id).handle);
+  const line = resumeLine(session, agentFor(await loadConfig(), repo.path, "shell", { harness }), env);
   const tmux = state.tmux;
   let live: LiveTerm;
   if (tmux) {
@@ -617,7 +660,7 @@ async function resumeTerm(
     await Bun.sleep(400);
     await sendLine(tmux, id, line);
   } else {
-    live = openPtyTerm(state, { repo, id, place, attach: false, start: null, prompt: "", device: null, ...size }, size);
+    live = openPtyTerm(state, { repo, id, place, attach: false, start: null, refused: null, prompt: "", device: null, ...size }, size);
     await Bun.sleep(400);
     live.pty?.session.write(`${line}\r`);
   }
@@ -629,16 +672,22 @@ const PROMPT_MAX = 6000;
 
 /** The agent's line into a shell this socket just started, after the same
  *  beat resume waits for the shell to read input, with the first message as
- *  its argument: Claude Code takes it as the conversation's first turn once
- *  its own start-up (the folder trust question among it) is through, which
- *  typing it in later cannot be sure of. */
-async function typeAgent(state: ServerState, live: LiveTerm, repo: Repo, prompt: string): Promise<void> {
-  const base = await state.agentLine(repo);
+ *  its argument: either harness takes it as the conversation's first turn
+ *  once its own start-up (the folder trust question among it) is through,
+ *  which typing it in later cannot be sure of. */
+async function typeAgent(state: ServerState, live: LiveTerm, repo: Repo, agent: AgentSettings, prompt: string): Promise<void> {
+  const base = await state.agentLine(repo, agent, shellEnv(live.info.handle));
   const line = prompt ? `${base} ${shellQuote(prompt)}` : base;
   await Bun.sleep(400);
   if (state.tmux) await sendLine(state.tmux, live.info.id, line);
   else live.pty?.session.write(`${line}\r`);
 }
+
+/** What the agent in a canopy shell hands its own commands, beside what the
+ *  shell already has: its tailchan handle, which a harness that filters its
+ *  commands' environment (codex) would otherwise drop. Later phases add
+ *  CANOPY_* here the same way. */
+const shellEnv = (handle: string | undefined): AgentEnv => (handle ? { TAILCHAN_AS: handle } : {});
 
 /** The tailchan handle a new shell runs under, as a spread: none when the
  *  backend knows no broker (the variable would mean nothing) or the shell
@@ -705,7 +754,8 @@ async function joinTmuxTerm(state: ServerState, tmux: string[], ws: ServerWebSoc
     };
     state.terms.set(id, live);
     tellTerms(state);
-    if (ws.data.start === "claude") void typeAgent(state, live, repo, ws.data.prompt).catch(() => {});
+    const start = ws.data.start;
+    if (start) void typeAgent(state, live, repo, start, ws.data.prompt).catch(() => {});
   } else if (!(await hasSession(tmux, id))) {
     state.terms.delete(id);
     tellTerms(state);
@@ -1018,7 +1068,7 @@ function rebuildResult(state: ServerState, repos: Repo[]): void {
       state.favorites,
     ),
     scannedAt: Date.now(),
-    backend: backendCaps(),
+    backend: backendCaps(state.harnesses()),
   };
 }
 
@@ -1827,7 +1877,7 @@ async function handleApi(
     // exited back to the shell, so it never counts as an agent
     if (!state.tmux) return json({ agent: null });
     const pane = await paneInfo(state.tmux, term);
-    return json({ agent: pane ? agentIn(pane.command, pane.title) : null });
+    return json({ agent: pane ? await paneAgent(pane) : null });
   }
   if (path === "/api/terms/text" && method === "GET") {
     const term = url.searchParams.get("term") ?? "";
@@ -1914,7 +1964,7 @@ async function handleApi(
     const note = typeof b.note === "string" ? b.note : "";
     if (wf.noteRequired && !note.trim()) return json({ error: "this workflow needs a note" }, 400);
     const cfg = await loadConfig();
-    return json(state.flows.startFleet(repos, wf, note, (r) => agentFor(cfg, r.path)), 201);
+    return json(state.flows.startFleet(repos, wf, note, (r) => agentFor(cfg, r.path, "flow")), 201);
   }
   if (path === "/api/fleet/stop" && method === "POST") {
     const b = (await req.json()) as { id?: unknown };
@@ -1948,8 +1998,36 @@ async function handleApi(
     if (typeof b.id !== "string") return json({ error: "missing id" }, 400);
     return json(state.launcher.stop(b.id));
   }
+  // agent routing: the profiles, the route per role and the repo overrides
+  // (core/route); every write is normalized here and broadcast whole
   if (path === "/api/agents" && method === "GET") {
-    return json((await loadConfig()).agents);
+    return json(agentRoutes(await loadConfig()));
+  }
+  if (path === "/api/agents/profile" && method === "POST") {
+    const b = (await req.json().catch(() => null)) as { name?: unknown; settings?: unknown } | null;
+    if (!b || !isProfileName(b.name)) return json({ error: "a profile is named by lowercase letters, digits, - and _, up to 32" }, 400);
+    if (b.settings !== null && (typeof b.settings !== "object" || Array.isArray(b.settings))) {
+      return json({ error: "settings, or null to delete the profile" }, 400);
+    }
+    const agents = await setProfile(b.name, b.settings === null ? null : normalizeAgent(b.settings));
+    broadcast(state, { type: "agents", agents });
+    return json(agents);
+  }
+  if (path === "/api/agents/role" && method === "POST") {
+    const b = (await req.json().catch(() => null)) as { role?: unknown; pick?: unknown } | null;
+    if (!b || !isAgentRole(b.role)) return json({ error: "unknown role" }, 400);
+    const pick = b.pick === null || b.pick === undefined ? null : normalizePick(b.pick);
+    if (b.pick !== null && b.pick !== undefined && !pick) return json({ error: "a pick is a profile by name or settings of its own" }, 400);
+    const why = pick ? pickRefusal(b.role, pick) : null;
+    if (why) return json({ error: why }, 400);
+    const agents = await setRole(b.role, pick);
+    broadcast(state, { type: "agents", agents });
+    return json(agents);
+  }
+  if (path === "/api/agents/resolve" && method === "GET") {
+    const repo = repoById(state, url.searchParams.get("id") ?? "");
+    const table: AgentTable = { roles: effectiveAgents(agentRoutes(await loadConfig()), repo.path), harnesses: state.harnesses() };
+    return json(table);
   }
 
   if (path === "/api/backends" && method === "GET") {
@@ -2081,15 +2159,19 @@ async function handleApi(
       });
     }
     if (method === "GET" && action === "resumable") {
-      // Claude Code conversations started at the repo on this machine, read
-      // straight off ~/.claude, so it answers without claude-history
-      return json(repo.host ? [] : await claudeSessions(repo.path));
+      // Claude Code and Codex conversations started at the repo on this
+      // machine, read straight off ~/.claude and ~/.codex, so it answers
+      // without claude-history
+      return json(repo.host ? [] : await agentSessions(repo.path));
     }
     if (method === "POST" && action === "resume") {
-      const b = (await req.json()) as { term?: unknown; place?: unknown; session?: unknown; cols?: unknown; rows?: unknown };
+      const b = (await req.json()) as { term?: unknown; place?: unknown; session?: unknown; harness?: unknown; cols?: unknown; rows?: unknown };
       if (!isTermId(b.term)) return json({ error: "a shell is named by 32 hex digits in term" }, 400);
-      if (!isSessionId(b.session)) return json({ error: "session must be a Claude Code session id" }, 400);
-      return json(await resumeTerm(state, repo, b.term, termPlace(b.place), b.session, termSize(b.cols, b.rows)), 201);
+      if (!isSessionId(b.session)) return json({ error: "session must be a session id" }, 400);
+      // a page from before harnesses resumes claude, all it ever listed
+      const harness = b.harness === undefined ? "claude" : b.harness;
+      if (!isHarness(harness)) return json({ error: "unknown harness" }, 400);
+      return json(await resumeTerm(state, repo, b.term, termPlace(b.place), b.session, harness, termSize(b.cols, b.rows)), 201);
     }
     if (method === "GET" && action === "sessions") {
       const { bin, project } = await historyContext(state, repo);
@@ -2197,13 +2279,25 @@ async function handleApi(
       const via = openVia(state, here, b.helper);
       const agent = agentFor(await loadConfig(), repo.path);
       const tab = b.tab === true;
+      // the backend's own desktop runs the agent here, so its harness has to
+      // be here; a helper's machine answers for itself
+      if (via.via === "backend" && (b.app === "agent" || b.app === "herdr")) await needHarness(state, agent.harness);
       if (via.via === "backend") await openIn(b.app, repo.path, agent, { tab });
       else await askHelper(state, via.name, { open: { app: b.app, path: helperPath(repo.path), agent, tab } });
       return json({ ok: true });
     }
     if (method === "POST" && action === "agent") {
-      // Validated field by field: a stray value must not reach a command line.
-      const agents = await setAgent(repo.path, normalizeAgent(await req.json()));
+      // Validated field by field: a stray value must not reach a command
+      // line. A body of plain settings is a page from before roles: the
+      // repo's whole-repo pick, and at the builtin defaults its reset, the
+      // way that page meant them.
+      const raw: unknown = await req.json().catch(() => null);
+      const legacy = typeof raw === "object" && raw !== null && !Array.isArray(raw) && !("all" in raw) && !("roles" in raw);
+      let next = normalizeRepoAgent(raw);
+      if (legacy && next.all && !("profile" in next.all) && isDefaultAgent(next.all)) next = {};
+      const why = repoAgentRefusal(next);
+      if (why) return json({ error: why }, 400);
+      const agents = await setRepoAgent(repo.path, next);
       broadcast(state, { type: "agents", agents });
       return json(agents);
     }
@@ -2279,7 +2373,7 @@ async function handleApi(
         return json({ error: broken && !broken.ok ? broken.error : `unknown workflow: ${b.workflow}` }, 400);
       }
       const note = typeof b.note === "string" ? b.note : "";
-      const agent = agentFor(await loadConfig(), repo.path);
+      const agent = agentFor(await loadConfig(), repo.path, "flow");
       try {
         return json(state.flows.start(repo, wf, note, agent), 201);
       } catch (err) {
@@ -2296,7 +2390,7 @@ async function handleApi(
       const b = (await req.json()) as { action?: unknown; note?: unknown; client?: unknown };
       if (!isRunAction(b.action)) return json({ error: "unknown action" }, 400);
       const note = typeof b.note === "string" ? b.note : "";
-      const agent = agentFor(await loadConfig(), repo.path);
+      const agent = agentFor(await loadConfig(), repo.path, b.action === "chat" ? "chat" : "job");
       // the device it was started from, when the browser said and is on the stream
       const by = deviceNameOf(state, typeof b.client === "string" ? b.client : null) ?? undefined;
       return json(state.runner.start(repo, b.action, ACTIONS[b.action], note, agent, by), 201);
@@ -2413,8 +2507,10 @@ export async function startServer(opts: {
   chan?: ChanConfig | null;
   /** task timings, shrunk by tests */
   tasks?: Partial<TaskTimings>;
-  /** the line start=claude types into a new shell; tests swap in a stand-in */
-  agentLine?: (repo: Repo) => Promise<string>;
+  /** the line start=agent types into a new shell; tests swap in a stand-in */
+  agentLine?: (repo: Repo, agent: AgentSettings, env: AgentEnv) => Promise<string>;
+  /** the harnesses the backend has, in place of looking on PATH; tests */
+  harnesses?: Harness[];
 }): Promise<{ port: number; stop: () => void }> {
   const cfg = await loadConfig();
   const root = await realpath(opts.root);
@@ -2428,6 +2524,8 @@ export async function startServer(opts: {
   // A stored source that is the launch root again would list every repo
   // twice; the launch root wins and keeps its bare ids.
   const extras = cfg.sources.filter((s) => s.kind !== "local" || s.path !== root);
+  const fixed = opts.harnesses;
+  const harnesses = fixed ? () => [...fixed] : availableHarnesses;
   const runner = new Runner({
     onChange: (run) => {
       broadcast(state, { type: "run", run });
@@ -2476,7 +2574,8 @@ export async function startServer(opts: {
   });
   const state: ServerState = {
     root,
-    agentLine: opts.agentLine ?? (async (repo) => claudeLine(agentFor(await loadConfig(), repo.path))),
+    agentLine: opts.agentLine ?? (async (_repo, agent, env) => agentLine(agent, undefined, env)),
+    harnesses,
     about: {
       ...readBuild(),
       startedAt: Date.now(),
@@ -2488,7 +2587,7 @@ export async function startServer(opts: {
       homepage: readPkg().homepage ?? null,
     },
     sources: [runtime(launchSource(root)), ...extras.map((s) => runtime({ ...s, launch: false }))],
-    result: { root, sources: [], repos: [], scannedAt: 0, backend: backendCaps() },
+    result: { root, sources: [], repos: [], scannedAt: 0, backend: backendCaps(harnesses()) },
     ignore: [...DEFAULT_IGNORE, ...cfg.ignore],
     access: new Map(),
     clients: new Set(),
@@ -2648,12 +2747,19 @@ export async function startServer(opts: {
       if (!isTermId(id)) return json({ error: "a shell is named by 32 hex digits in term=" }, 400);
       const place = termPlace(url.searchParams.get("place"));
       const attach = url.searchParams.get("attach") === "1";
-      const start = url.searchParams.get("start") === "claude" && !attach ? "claude" : null;
+      // start=agent types the shell route's agent in, a launch pick
+      // (profile= or harness=) beating the route; start=claude is the same
+      // from a page older than harnesses
+      const wants = !attach && ["agent", "claude"].includes(url.searchParams.get("start") ?? "");
+      const start = wants
+        ? agentFor(await loadConfig(), repo.path, "shell", launchPick(url.searchParams.get("profile"), url.searchParams.get("harness")))
+        : null;
+      const refused = start && !state.harnesses().includes(start.harness) ? missingHarness(start.harness, await machineName()) : null;
       const prompt = start ? (url.searchParams.get("prompt") ?? "").slice(0, PROMPT_MAX) : "";
       const size = termSize(url.searchParams.get("cols"), url.searchParams.get("rows"));
       const dev = url.searchParams.get("client") ?? "";
       const device = /^[0-9a-f]{16}$/.test(dev) ? dev : null;
-      const data: Socket = { kind: "term", repo, id, place, attach, start, prompt, device, ...size };
+      const data: Socket = { kind: "term", repo, id, place, attach, start, refused, prompt, device, ...size };
       if (srv.upgrade(req, { data })) return undefined;
       return json({ error: "a websocket is expected here" }, 426);
     }
@@ -2746,6 +2852,13 @@ export async function startServer(opts: {
             term.close(TERM_GONE, "that shell is gone");
             return;
           }
+          // a start on a harness this backend lacks ends here, before any
+          // shell starts, with the reason as the tab's last line; a join
+          // onto a held shell starts nothing and goes ahead
+          if (!held && term.data.refused) {
+            term.close(1011, term.data.refused.slice(0, 120));
+            return;
+          }
           // Starting takes a moment; what the browser sends before then
           // waits in `pending` and goes down once the shell is up.
           term.data.pending = [];
@@ -2779,7 +2892,8 @@ export async function startServer(opts: {
           }
           try {
             const live = openPtyTerm(state, term.data, { cols, rows });
-            if (term.data.start === "claude") void typeAgent(state, live, term.data.repo, term.data.prompt).catch(() => {});
+            const start = term.data.start;
+            if (start) void typeAgent(state, live, term.data.repo, start, term.data.prompt).catch(() => {});
             settle(() => {
               term.data.live = live;
               live.sockets.add(term);
