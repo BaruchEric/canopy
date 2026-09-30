@@ -1,5 +1,6 @@
 import { useStore } from "../store";
 import { flowWord } from "../flows";
+import { AGENT_NAME, agentWord, harnessOf } from "../runs";
 import type { Flow, Run } from "../../../src/core/types";
 
 /** One word about a repo's run, on the card and in the panel. Clicking it
@@ -7,6 +8,8 @@ import type { Flow, Run } from "../../../src/core/types";
 export function RunChip({ run, long = false }: { run: Run; long?: boolean }) {
   const showRun = useStore((s) => s.showRun);
   const verb = run.verb;
+  const harness = harnessOf(run);
+  const who = agentWord(harness);
   // A commit or push that left git status exactly as it was is not a
   // success the card can show, so the chip says so instead of "done".
   const noChange = run.status === "done" && run.outcome === "unchanged" && run.expectsChange;
@@ -17,11 +20,11 @@ export function RunChip({ run, long = false }: { run: Run; long?: boolean }) {
     :
     run.status === "working"
       ? long
-        ? `claude is ${run.progress}`
+        ? `${who} is ${run.progress}`
         : `${run.progress}…`
       : run.status === "waiting"
         ? long
-          ? `${verb}: claude needs you`
+          ? `${verb}: ${who} needs you`
           : "needs you"
         : run.status === "idle"
           ? long
@@ -42,7 +45,7 @@ export function RunChip({ run, long = false }: { run: Run; long?: boolean }) {
     <button
       type="button"
       className={`run-chip st-${run.status}${noChange ? " no-change" : ""}`}
-      title="Show the run"
+      title={`Show the run (${AGENT_NAME[harness]})`}
       onClick={(e) => {
         e.stopPropagation();
         showRun(run.id);

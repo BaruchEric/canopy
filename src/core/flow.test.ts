@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { Flows, stepSpec, summaryOf, type CheckResult, type FlowRunner } from "./flow";
 import { parseWorkflow } from "./workflow";
-import { DEFAULT_AGENT, type Fleet, type Flow, type Repo, type Run, type VerdictAnswers, type Workflow } from "./types";
+import { DEFAULT_AGENT, type AgentSettings, type Fleet, type Flow, type Repo, type Run, type VerdictAnswers, type Workflow } from "./types";
 import type { ActionSpec } from "./actions";
 
 const flush = () => new Promise<void>((r) => setTimeout(r, 0));
@@ -43,15 +43,17 @@ class FakeRunner implements FlowRunner {
   runs = new Map<string, Run>();
   specs: ActionSpec[] = [];
   notes: string[] = [];
+  agents: AgentSettings[] = [];
   stopped: string[] = [];
   dismissed: string[] = [];
   onChange: (run: Run) => void = () => {};
   private n = 0;
-  start(r: Repo, action: string, spec: ActionSpec, note: string): Run {
+  start(r: Repo, action: string, spec: ActionSpec, note: string, agent: AgentSettings = DEFAULT_AGENT): Run {
+    this.agents.push(agent);
     this.n += 1;
     const run: Run = {
       id: `run${this.n}`, repoId: r.id, action, verb: spec.verb, progress: spec.progress,
-      expectsChange: spec.expectsChange, chat: false, note, status: "working",
+      expectsChange: spec.expectsChange, chat: false, harness: "claude", note, status: "working",
       startedAt: 0, steps: [], prompt: null,
     };
     this.runs.set(run.id, run);
@@ -127,7 +129,7 @@ describe("stepSpec", () => {
 
 describe("summaryOf", () => {
   test("prefers the result, then the last text step", () => {
-    const base: Run = { id: "x", repoId: "r", action: "a", verb: "v", progress: "p", expectsChange: false, chat: false, note: "", status: "done", startedAt: 0, steps: [], prompt: null };
+    const base: Run = { id: "x", repoId: "r", action: "a", verb: "v", progress: "p", expectsChange: false, chat: false, harness: "claude", note: "", status: "done", startedAt: 0, steps: [], prompt: null };
     expect(summaryOf({ ...base, result: { text: "closing", costUsd: 0, durationMs: 0, turns: 1 } })).toBe("closing");
     expect(summaryOf({ ...base, steps: [{ id: "1", at: 0, kind: "tool" }, { id: "2", at: 0, kind: "text", text: "words" }] })).toBe("words");
     expect(summaryOf(base)).toBe("");
@@ -331,6 +333,48 @@ describe("Flows", () => {
   });
 });
 
+describe("a step's own agent", () => {
+  const codex: AgentSettings = { ...DEFAULT_AGENT, harness: "codex", model: "gpt-5.5" };
+  const PROFILED = wf(`---\nblurb: b\n---\n\n## Plan\n\nThink.\n\n## Review\nagent: review\n\nLook.\n`);
+
+  test("a step naming a profile starts on it; the rest follow the repo's route", async () => {
+    const { runner, flows } = setup();
+    const asked: (string | undefined)[] = [];
+    const flow = flows.start(repo(), PROFILED, "", (profile) => {
+      asked.push(profile);
+      return profile === "review" ? codex : DEFAULT_AGENT;
+    });
+    expect(flow.steps.map((s) => s.profile)).toEqual([undefined, "review"]);
+    runner.end("run1", "done", "planned");
+    await flush();
+    expect(asked).toEqual([undefined, "review"]);
+    expect(runner.agents.map((a) => a.harness)).toEqual(["claude", "codex"]);
+  });
+
+  test("settings handed over whole still serve every step", async () => {
+    const { runner, flows } = setup();
+    flows.start(repo(), PROFILED, "", codex);
+    runner.end("run1", "done", "planned");
+    await flush();
+    expect(runner.agents).toEqual([codex, codex]);
+  });
+
+  test("a fleet asks per repo, with the step's profile", async () => {
+    const { runner, flows } = setup();
+    const asked: string[] = [];
+    const repos = [{ ...repo(), id: "a", name: "a" }, { ...repo(), id: "b", name: "b" }];
+    flows.startFleet(repos, PROFILED, "", (r, profile) => {
+      asked.push(`${r.id}:${profile ?? "-"}`);
+      return profile ? codex : DEFAULT_AGENT;
+    });
+    runner.end("run1", "done", "x");
+    runner.end("run2", "done", "x");
+    await flush();
+    expect(asked.sort()).toEqual(["a:-", "a:review", "b:-", "b:review"]);
+    expect(runner.agents.filter((a) => a.harness === "codex").length).toBe(2);
+  });
+});
+
 describe("fleets", () => {
   const dirty = (id: string): Repo => ({
     ...repo(),
@@ -345,7 +389,7 @@ describe("fleets", () => {
     const { runner, flows, fleets } = setup();
     const repos = [dirty("a"), dirty("b"), dirty("c"), dirty("d"), { ...repo(), id: "clean", name: "clean" }, { ...dirty("far"), host: "box" }, { ...dirty("forge"), forge: "x" } as unknown as Repo, { ...dirty("bad"), error: "nope" }];
     const fleet = flows.startFleet(repos, DIRTY_WF, "n", () => DEFAULT_AGENT);
-    expect(fleet.repos.map((r) => r.skipped ?? "run")).toEqual(["run", "run", "run", "run", "nothing to commit", "Claude runs only work on this machine", "a forge repo has no checkout", "not a readable repo"]);
+    expect(fleet.repos.map((r) => r.skipped ?? "run")).toEqual(["run", "run", "run", "run", "nothing to commit", "agent runs only work on this machine", "a forge repo has no checkout", "not a readable repo"]);
     expect(runner.specs.length).toBe(3);
     expect(flows.list().filter((f) => f.fleetId === fleet.id).length).toBe(3);
     runner.end("run1", "done", "ok");

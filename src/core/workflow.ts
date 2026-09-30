@@ -1,8 +1,14 @@
 /** A workflow file: frontmatter for the identity, one `##` heading per step
  *  with a short key block under it and the prompt after. Browser-safe and
- *  pure; the loader in workflows.ts reads the files. */
+ *  pure; the loader in workflows.ts reads the files.
+ *
+ *  `agent: <profile>` names the agent profile a step's run starts with, in
+ *  the step's key block, or in the frontmatter for every step that names
+ *  none of its own. It beats the repo's routes the way a launch pick does;
+ *  without one a step follows the repo's `flow` route. */
 
 import { TOOL_SETS } from "./actions";
+import { isProfileName } from "./route";
 import {
   GATE_KINDS,
   WORKFLOW_WHENS,
@@ -68,7 +74,14 @@ function tools(v: string | undefined): string[] {
   return [...new Set(out)];
 }
 
-function step(name: string, lines: string[]): WorkflowStep {
+/** An `agent:` line's profile name, or undefined when there is none. */
+function agentKey(v: string | undefined, what: string): string | undefined {
+  if (v === undefined || v === "") return undefined;
+  if (!isProfileName(v)) throw new Bad(`${what} must name a profile (lowercase letters, digits, - and _), not ${v}`);
+  return v;
+}
+
+function step(name: string, lines: string[], agent: string | undefined): WorkflowStep {
   const { keys, rest } = keyBlock(lines);
   const turnsRaw = keys.get("turns");
   const turns = turnsRaw === undefined || turnsRaw === "" ? DEFAULT_TURNS : Number(turnsRaw);
@@ -77,10 +90,11 @@ function step(name: string, lines: string[]): WorkflowStep {
   const check = keys.get("check") || null;
   const body = rest.join("\n").trim();
   if (!body && !check) throw new Bad(`step ${name} has neither a prompt nor a check`);
-  return { name, tools: tools(keys.get("tools")), turns, check, gate, body };
+  const profile = agentKey(keys.get("agent"), `step ${name}: agent`) ?? agent;
+  return { name, tools: tools(keys.get("tools")), turns, check, gate, body, ...(profile ? { agent: profile } : {}) };
 }
 
-function steps(body: string): WorkflowStep[] {
+function steps(body: string, agent: string | undefined): WorkflowStep[] {
   const lines = body.split("\n");
   const out: WorkflowStep[] = [];
   let name: string | null = null;
@@ -88,7 +102,7 @@ function steps(body: string): WorkflowStep[] {
   const flush = () => {
     if (name === null) return;
     if (out.some((s) => s.name === name)) throw new Bad(`step ${name} appears twice`);
-    out.push(step(name, buf));
+    out.push(step(name, buf, agent));
   };
   for (const line of lines) {
     const m = /^##\s+(.+?)\s*$/.exec(line);
@@ -125,9 +139,9 @@ export function parseWorkflow(
       blurb,
       when,
       expectsChange: bool(keys.get("expects-change"), "expects-change"),
-      notePlaceholder: keys.get("note") || "anything Claude should know (optional)",
+      notePlaceholder: keys.get("note") || "anything the agent should know (optional)",
       noteRequired: bool(keys.get("note-required"), "note-required"),
-      steps: steps(body),
+      steps: steps(body, agentKey(keys.get("agent"), "agent")),
       source: meta.source,
       file: meta.file,
     };

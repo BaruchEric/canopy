@@ -2,7 +2,7 @@
 name: push
 label: push
 verb: push
-blurb: Claude pushes the current branch. A branch with no upstream gets one. If the remote is ahead, Claude rebases only when that is clearly safe, and otherwise stops and explains. Never a force push.
+blurb: The agent pushes the current branch. A branch with no upstream gets one. If the remote is ahead, it rebases only when that is clearly safe, and otherwise stops and explains. Never a force push.
 when: unpushed
 expects-change: true
 ---

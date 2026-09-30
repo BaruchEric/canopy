@@ -6,8 +6,8 @@
  * same resolution, `from` and all, so the order never surprises.
  *
  * The first layer that is present wins:
- *   1. explicit: the launch picker ("new codex shell"), or later a
- *      workflow step's own profile
+ *   1. explicit: the launch picker ("new codex shell"), or a workflow
+ *      step's own `agent:` profile
  *   2. repo × role: `agents[path].roles[role]`
  *   3. repo: `agents[path].all`
  *   4. role: `agentRoles[role]`
@@ -46,17 +46,19 @@ export const isProfileName = (v: unknown): v is string => typeof v === "string" 
 export const DEFAULT_PROFILE = "default";
 
 /**
- * Which harnesses each role can run. Only an interactive shell can be codex
- * for now: the runner speaks Claude's stream-json alone, and the commit
- * message suggestion shells out to `claude -p`. A later phase widens this
- * table and nothing else here changes.
+ * Which harnesses each role can run. Every role runs both: a shell starts
+ * either CLI, the runner drives Claude Code's stream-json or Codex's
+ * app-server (chats, jobs and workflow steps), and the commit message comes
+ * from `claude -p` or `codex exec`. A harness added later that some role
+ * cannot run yet is left out of that role here, and the refusals below say
+ * so; a harness a backend lacks is a separate check (`Backend.harnesses`).
  */
 export const ROLE_HARNESSES: Record<AgentRole, readonly Harness[]> = {
   shell: ["claude", "codex"],
-  chat: ["claude"],
-  job: ["claude"],
-  flow: ["claude"],
-  suggest: ["claude"],
+  chat: ["claude", "codex"],
+  job: ["claude", "codex"],
+  flow: ["claude", "codex"],
+  suggest: ["claude", "codex"],
 };
 
 export const roleTakes = (role: AgentRole, h: Harness): boolean => ROLE_HARNESSES[role].includes(h);

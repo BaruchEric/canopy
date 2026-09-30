@@ -241,7 +241,7 @@ describe("notices", () => {
       isFlowRun: (id) => id === "flowstep",
     });
     await hub.start();
-    const base: Run = { id: "r1", repoId: "app", action: "commit", verb: "commit", progress: "", expectsChange: true, chat: false, note: "", status: "working", startedAt: 0, steps: [], prompt: null };
+    const base: Run = { id: "r1", repoId: "app", action: "commit", verb: "commit", progress: "", expectsChange: true, chat: false, harness: "claude", note: "", status: "working", startedAt: 0, steps: [], prompt: null };
     const before = posts.length;
     hub.onRun(base);
     hub.onRun({ ...base, status: "waiting", prompt: { id: "p", kind: "question", questions: [] } });

@@ -11,9 +11,22 @@ import {
   pickRefusal,
   repoAgentRefusal,
   resolveAgent,
+  ROLE_HARNESSES,
   withDefaultProfile,
 } from "./route";
-import { DEFAULT_AGENT, type AgentRoutes, type AgentSettings } from "./types";
+import { AGENT_ROLES, DEFAULT_AGENT, type AgentRole, type AgentRoutes, type AgentSettings, type Harness } from "./types";
+
+/** Runs `fn` with a role narrowed to claude, the way a harness added later
+ *  would be missing from some role's list, and puts the table back. */
+function narrowed(role: AgentRole, fn: () => void): void {
+  const was: readonly Harness[] = ROLE_HARNESSES[role];
+  ROLE_HARNESSES[role] = ["claude"];
+  try {
+    fn();
+  } finally {
+    ROLE_HARNESSES[role] = was;
+  }
+}
 
 const claude = (over: Partial<AgentSettings> = {}): AgentSettings => ({ ...DEFAULT_AGENT, ...over });
 const codex = (over: Partial<AgentSettings> = {}): AgentSettings => ({ ...DEFAULT_AGENT, harness: "codex", ...over });
@@ -65,18 +78,29 @@ describe("resolving a role", () => {
     expect(resolveAgent(r, P, "shell", { profile: "nope" }).skipped?.[0]).toMatchObject({ from: "explicit", profile: "nope" });
   });
 
-  test("only a shell may be codex for now: other roles pass a codex pick over", () => {
+  test("every role may be codex", () => {
+    for (const role of AGENT_ROLES) expect(ROLE_HARNESSES[role]).toEqual(["claude", "codex"]);
     const r = full();
     r.repos[P] = { all: { profile: "review" } };
     expect(resolveAgent(r, P, "shell")).toMatchObject({ settings: review, from: "repo" });
-    const chat = resolveAgent(r, P, "chat");
-    expect(chat).toMatchObject({ settings: deep, from: "role", profile: "deep" });
-    expect(chat.skipped?.[0]).toMatchObject({ from: "repo", profile: "review" });
-    expect(chat.skipped?.[0]?.why).toContain("codex does not run chats yet");
-    // a codex default profile leaves the others on the builtin
+    expect(resolveAgent(r, P, "chat")).toMatchObject({ settings: review, from: "repo", profile: "review" });
     const flow = resolveAgent({ profiles: { default: codex() }, roles: {}, repos: {} }, P, "flow");
-    expect(flow.settings).toEqual(DEFAULT_AGENT);
-    expect(flow.from).toBe("builtin");
+    expect(flow).toMatchObject({ settings: codex(), from: "default" });
+  });
+
+  test("a role that cannot run a harness passes a pick of it over", () => {
+    narrowed("chat", () => {
+      const r = full();
+      r.repos[P] = { all: { profile: "review" } };
+      const chat = resolveAgent(r, P, "chat");
+      expect(chat).toMatchObject({ settings: deep, from: "role", profile: "deep" });
+      expect(chat.skipped?.[0]).toMatchObject({ from: "repo", profile: "review" });
+      expect(chat.skipped?.[0]?.why).toContain("codex does not run chats yet");
+      // a codex default profile leaves it on the builtin
+      const alone = resolveAgent({ profiles: { default: codex() }, roles: {}, repos: {} }, P, "chat");
+      expect(alone.settings).toEqual(DEFAULT_AGENT);
+      expect(alone.from).toBe("builtin");
+    });
   });
 
   test("every role at once, for the effective table", () => {
@@ -111,10 +135,19 @@ describe("a harness picked at launch", () => {
     expect(resolveAgent(normalizeRoutes({}), P, "shell", { harness: "claude" })).toEqual({ settings: DEFAULT_AGENT, from: "explicit", profile: "default" });
   });
 
+  test("a chat, a job or a step picked as codex runs on codex", () => {
+    for (const role of ["chat", "job", "flow", "suggest"] as const) {
+      expect(resolveAgent(normalizeRoutes({}), P, role, { harness: "codex" })).toEqual({ settings: codex(), from: "explicit" });
+    }
+    expect(resolveAgent(full(), P, "flow", { profile: "review" })).toEqual({ settings: review, from: "explicit", profile: "review" });
+  });
+
   test("a harness the role cannot run is ignored with a note", () => {
-    const got = resolveAgent(normalizeRoutes({}), P, "chat", { harness: "codex" });
-    expect(got.settings.harness).toBe("claude");
-    expect(got.skipped?.[0]?.from).toBe("explicit");
+    narrowed("chat", () => {
+      const got = resolveAgent(normalizeRoutes({}), P, "chat", { harness: "codex" });
+      expect(got.settings.harness).toBe("claude");
+      expect(got.skipped?.[0]?.from).toBe("explicit");
+    });
   });
 
   test("off a query string: a profile wins over a harness, junk is nothing", () => {
@@ -168,11 +201,17 @@ describe("what is stored", () => {
     expect(now.roles).toEqual({ chat: { profile: "deep" } });
   });
 
-  test("codex settings of their own are refused for a role that cannot run them; a profile pick is let through", () => {
-    expect(pickRefusal("chat", codex())).toContain("codex does not run chats yet");
-    expect(pickRefusal("shell", codex())).toBeNull();
-    expect(pickRefusal("job", { profile: "review" })).toBeNull();
-    expect(repoAgentRefusal({ all: codex(), roles: { shell: codex() } })).toBeNull();
-    expect(repoAgentRefusal({ roles: { flow: codex() } })).toContain("workflow steps");
+  test("codex settings of their own are taken for every role", () => {
+    for (const role of AGENT_ROLES) expect(pickRefusal(role, codex())).toBeNull();
+    expect(repoAgentRefusal({ all: codex(), roles: { shell: codex(), chat: codex(), job: codex(), flow: codex(), suggest: codex() } })).toBeNull();
+  });
+
+  test("settings of their own are refused for a role that cannot run them; a profile pick is let through", () => {
+    narrowed("flow", () => {
+      expect(pickRefusal("flow", codex())).toContain("codex does not run workflow steps yet");
+      expect(pickRefusal("shell", codex())).toBeNull();
+      expect(pickRefusal("flow", { profile: "review" })).toBeNull();
+      expect(repoAgentRefusal({ roles: { flow: codex() } })).toContain("workflow steps");
+    });
   });
 });

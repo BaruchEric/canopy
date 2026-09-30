@@ -2,7 +2,7 @@
 name: ship
 label: ship
 verb: ship
-blurb: Claude runs the project's gates, commits the changes the way the commit workflow does, then pushes the branch the way push does. A failing gate stops it before anything is committed.
+blurb: The agent runs the project's gates, commits the changes the way the commit workflow does, then pushes the branch the way push does. A failing gate stops it before anything is committed.
 when: dirty-or-unpushed
 expects-change: true
 ---

@@ -13,7 +13,7 @@ describe("flowWord", () => {
     expect(flowWord(flow(), false)).toBe("ship: Commit…");
     expect(flowWord(flow(), true)).toBe("ship, step 2 of 3: Commit");
     expect(flowWord(flow({ status: "gated" }), false)).toBe("needs you");
-    expect(flowWord(flow({ status: "waiting" }), true)).toBe("ship: claude needs you");
+    expect(flowWord(flow({ status: "waiting" }), true)).toBe("ship: the agent needs you");
     expect(flowWord(flow({ status: "done" }), false)).toBe("done");
     expect(flowWord(flow({ status: "done", outcome: "unchanged" }), true)).toBe("ship: no change");
     expect(flowWord(flow({ status: "failed" }), true)).toBe("ship failed");
@@ -23,7 +23,7 @@ describe("flowWord", () => {
 
 describe("stepWord", () => {
   test.each<[FlowStep["status"], string]>([
-    ["pending", "waiting its turn"], ["running", "claude is working"], ["checking", "running the check"],
+    ["pending", "waiting its turn"], ["running", "the agent is working"], ["checking", "running the check"],
     ["gated", "waiting for you"], ["passed", "passed"], ["failed", "failed"], ["skipped", "skipped"],
   ])("%s", (status, word) => {
     expect(stepWord({ name: "x", status })).toBe(word);

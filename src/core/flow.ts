@@ -26,12 +26,18 @@ export const FLEET_CONCURRENCY = 3;
 export function fleetSkipReason(repo: Repo, workflow: Workflow): string | null {
   if (repo.forge) return "a forge repo has no checkout";
   if (repo.error) return "not a readable repo";
-  if (repo.host) return "Claude runs only work on this machine";
+  if (repo.host) return "agent runs only work on this machine";
   const c = checkWhen(repo, workflow.when);
   return c.ok ? null : c.why;
 }
 
 const KEEP_FINISHED = 60;
+
+/** The settings a step's run starts with, given the agent profile the step
+ *  names (its `agent:` line), or undefined for the repo's own flow route. */
+export type StepAgent = (profile: string | undefined) => AgentSettings;
+
+const stepAgent = (agent: AgentSettings | StepAgent): StepAgent => (typeof agent === "function" ? agent : () => agent);
 
 export interface CheckResult {
   exit: number;
@@ -64,13 +70,14 @@ interface LiveFlow {
   flow: Flow;
   repo: Repo;
   workflow: Workflow;
-  agent: AgentSettings;
+  /** each step's settings, by the profile it names */
+  agent: StepAgent;
   before: string;
   /** the gate's reason a retry carries into the next prompt */
   retry?: string;
 }
 
-/** Claude's closing words: the result, else the last text step. */
+/** The agent's closing words: the result, else the last text step. */
 export function summaryOf(run: Run): string {
   if (run.result?.text) return run.result.text;
   for (let i = run.steps.length - 1; i >= 0; i--) {
@@ -118,7 +125,10 @@ export class Flows {
   private live = new Map<string, LiveFlow>();
   /** run id to flow id, for onRun */
   private byRun = new Map<string, string>();
-  private fleetsLive = new Map<string, { fleet: Fleet; workflow: Workflow; note: string; pending: Repo[]; agentFor: (repo: Repo) => AgentSettings }>();
+  private fleetsLive = new Map<
+    string,
+    { fleet: Fleet; workflow: Workflow; note: string; pending: Repo[]; agentFor: (repo: Repo, profile?: string) => AgentSettings }
+  >();
   /** fleet ids whose pump() is on the call stack right now, to keep a flow that
    *  ends inside start() from re-entering and finishing the fleet early */
   private pumping = new Set<string>();
@@ -151,12 +161,14 @@ export class Flows {
     return undefined;
   }
 
-  start(repo: Repo, workflow: Workflow, note: string, agent: AgentSettings, fleetId?: string): Flow {
+  /** Starts a workflow on a repo. `agent` is every step's settings, or how
+   *  to pick them by the profile a step names. */
+  start(repo: Repo, workflow: Workflow, note: string, agent: AgentSettings | StepAgent, fleetId?: string): Flow {
     const busyFlow = this.activeFor(repo.id);
     if (busyFlow) throw new Error(`${repo.name} already has ${busyFlow.verb} going`);
     const busyRun = this.runner.activeFor(repo.id);
     if (busyRun) throw new Error(`${repo.name} already has a ${busyRun.verb} run going`);
-    if (workflow.noteRequired && !note.trim()) throw new Error("write what Claude should do first");
+    if (workflow.noteRequired && !note.trim()) throw new Error("write what the agent should do first");
     const flow: Flow = {
       id: crypto.randomUUID().slice(0, 8),
       repoId: repo.id,
@@ -165,7 +177,7 @@ export class Flows {
       ...(fleetId ? { fleetId } : {}),
       note: note.trim(),
       status: "working",
-      steps: workflow.steps.map((s) => ({ name: s.name, status: "pending" })),
+      steps: workflow.steps.map((s) => ({ name: s.name, status: "pending", ...(s.agent ? { profile: s.agent } : {}) })),
       current: 0,
       startedAt: Date.now(),
     };
@@ -173,7 +185,7 @@ export class Flows {
       flow,
       repo,
       workflow,
-      agent,
+      agent: stepAgent(agent),
       before: statusFingerprint(repo.status),
     };
     this.live.set(flow.id, live);
@@ -300,7 +312,9 @@ export class Flows {
     return this.fleetsLive.get(id)?.fleet;
   }
 
-  startFleet(repos: Repo[], workflow: Workflow, note: string, agentFor: (repo: Repo) => AgentSettings): Fleet {
+  /** Starts a workflow over many repos. `agentFor` gives each repo's
+   *  settings for a step, by the profile the step names, if any. */
+  startFleet(repos: Repo[], workflow: Workflow, note: string, agentFor: (repo: Repo, profile?: string) => AgentSettings): Fleet {
     const fleet: Fleet = {
       id: crypto.randomUUID().slice(0, 8),
       workflow: workflow.name,
@@ -400,7 +414,7 @@ export class Flows {
       if (!repo) break;
       const entry = lf.fleet.repos.find((x) => x.repoId === repo.id);
       try {
-        const flow = this.start(repo, lf.workflow, lf.note, lf.agentFor(repo), fleetId);
+        const flow = this.start(repo, lf.workflow, lf.note, (profile) => lf.agentFor(repo, profile), fleetId);
         if (entry) entry.flowId = flow.id;
       } catch (err) {
         if (entry) entry.skipped = String(err instanceof Error ? err.message : err);
@@ -444,7 +458,7 @@ export class Flows {
     const step = flow.steps[flow.current];
     if (!def || !step) return;
     if (!def.body) {
-      // check-only: no Claude, straight to the command
+      // check-only: no agent, straight to the command
       flow.status = "working";
       await this.check(live);
       return;
@@ -453,7 +467,7 @@ export class Flows {
     delete live.retry;
     let run: Run;
     try {
-      run = this.runner.start(live.repo, workflow.name, spec, flow.note, live.agent);
+      run = this.runner.start(live.repo, workflow.name, spec, flow.note, live.agent(def.agent));
     } catch (err) {
       step.status = "failed";
       step.reason = String(err instanceof Error ? err.message : err);

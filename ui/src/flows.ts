@@ -8,7 +8,7 @@ export const ownRun = (flowRuns: Record<string, string>, run: Run): boolean => !
 
 export const STEP_WORD: Record<FlowStep["status"], string> = {
   pending: "waiting its turn",
-  running: "claude is working",
+  running: "the agent is working",
   checking: "running the check",
   gated: "waiting for you",
   passed: "passed",
@@ -26,7 +26,7 @@ export function flowWord(flow: Flow, long: boolean): string {
     case "working":
       return long ? `${flow.verb}, step ${flow.current + 1} of ${flow.steps.length}: ${name}` : `${flow.verb}: ${name}…`;
     case "waiting":
-      return long ? `${flow.verb}: claude needs you` : "needs you";
+      return long ? `${flow.verb}: the agent needs you` : "needs you";
     case "gated":
       return long ? `${flow.verb}: ${name} is waiting for you` : "needs you";
     case "done":

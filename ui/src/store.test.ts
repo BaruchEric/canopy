@@ -739,8 +739,8 @@ describe("several backends", () => {
     expect(agentFor(s, home)).toEqual(DEFAULT_AGENT);
     expect(agentFor(s, home, "chat")).toEqual(deep);
     expect(agentFor(s, there)).toEqual(review);
-    // chats cannot be codex yet, so b's repo pick is passed over for one
-    expect(agentFor(s, there, "chat")).toEqual(DEFAULT_AGENT);
+    // b's repo pick covers its chats too, codex and all
+    expect(agentFor(s, there, "chat")).toEqual(review);
   });
 
   test("agentFor reads an older backend's plain settings as the repo's pick", async () => {

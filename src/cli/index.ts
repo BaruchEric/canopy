@@ -249,7 +249,7 @@ export async function main(argv: string[]): Promise<void> {
       const repo = resolve(args[0] ?? fail("usage: canopy commit <repo>"));
       const st = await getStatus(repo);
       if (ai && !message) {
-        const s = await suggestMessage(repo, st.files);
+        const s = await suggestMessage(repo, st.files, agentFor(await loadConfig(), repo, "suggest"));
         message = s.message;
         console.log(`${dim(`message (${s.source}):`)} ${message}`);
       }
@@ -266,7 +266,7 @@ export async function main(argv: string[]): Promise<void> {
       const repo = resolve(args[0] ?? fail("usage: canopy suggest <repo>"));
       const st = await getStatus(repo);
       if (st.files.length === 0) return fail("no changes to describe");
-      const s = await suggestMessage(repo, st.files);
+      const s = await suggestMessage(repo, st.files, agentFor(await loadConfig(), repo, "suggest"));
       console.log(s.message);
       return;
     }

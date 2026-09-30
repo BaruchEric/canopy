@@ -1,7 +1,7 @@
 /**
  * The agent routing routes: the whole routing on GET, profiles, roles and a
  * repo's override written through their own routes (normalized, and
- * refused where a role cannot run a harness yet), each change broadcast as
+ * refused where a role cannot run a harness), each change broadcast as
  * an `agents` event, and one repo's effective table. A body of plain
  * settings, what a page from before roles sends, still lands as the repo's
  * whole-repo pick.
@@ -87,12 +87,11 @@ describe("the agent routes", () => {
     expect(Object.keys((await routes()).profiles).sort()).toEqual(["deep", "default", "review"]);
   });
 
-  test("a role points at a profile or settings; codex settings of their own only for shells", async () => {
+  test("a role points at a profile or settings, codex among them", async () => {
     expect((await post("/api/agents/role", { role: "nope", pick: { profile: "deep" } })).status).toBe(400);
     expect((await post("/api/agents/role", { role: "chat", pick: { profile: "Bad!" } })).status).toBe(400);
-    const refused = await post("/api/agents/role", { role: "chat", pick: review });
-    expect(refused.status).toBe(400);
-    expect(((await refused.json()) as { error: string }).error).toContain("codex does not run chats yet");
+    expect((await post("/api/agents/role", { role: "chat", pick: review })).status).toBe(200);
+    expect((await routes()).roles).toEqual({ chat: review });
     expect((await post("/api/agents/role", { role: "chat", pick: { profile: "deep" } })).status).toBe(200);
     expect((await post("/api/agents/role", { role: "shell", pick: review })).status).toBe(200);
     expect((await routes()).roles).toEqual({ chat: { profile: "deep" }, shell: review });
@@ -101,8 +100,9 @@ describe("the agent routes", () => {
   });
 
   test("a repo's override: the new shape, a legacy body, and its reset", async () => {
-    const bad = await post("/api/repos/agent?id=app", { roles: { job: review } });
-    expect(bad.status).toBe(400);
+    const job = await post("/api/repos/agent?id=app", { roles: { job: review } });
+    expect(job.status).toBe(200);
+    expect(((await job.json()) as AgentRoutes).repos[appPath]).toEqual({ roles: { job: review } });
     let r = (await (await post("/api/repos/agent?id=app", { all: { profile: "review" }, roles: { job: { profile: "deep" } } })).json()) as AgentRoutes;
     expect(r.repos[appPath]).toEqual({ all: { profile: "review" }, roles: { job: { profile: "deep" } } });
     // a page from before roles sends plain settings: the whole-repo pick
@@ -120,10 +120,13 @@ describe("the agent routes", () => {
     const t = (await (await fetch(url("/api/agents/resolve?id=app"))).json()) as AgentTable;
     expect(t.harnesses).toEqual(["claude"]);
     expect(t.roles.shell).toEqual({ settings: review, from: "repo", profile: "review" });
-    // chats cannot be codex yet: the repo's pick is passed over, and says so
-    expect(t.roles.chat).toMatchObject({ settings: deep, from: "role", profile: "deep" });
-    expect(t.roles.chat.skipped?.[0]).toMatchObject({ from: "repo", profile: "review" });
-    expect(t.roles.job).toMatchObject({ settings: DEFAULT_AGENT, from: "default" });
+    // the repo beats the role, codex or not
+    expect(t.roles.chat).toEqual({ settings: review, from: "repo", profile: "review" });
+    expect(t.roles.job).toEqual({ settings: review, from: "repo", profile: "review" });
+    await post("/api/repos/agent?id=app", { roles: { job: { profile: "deep" } } });
+    const u = (await (await fetch(url("/api/agents/resolve?id=app"))).json()) as AgentTable;
+    expect(u.roles.job).toEqual({ settings: deep, from: "repo-role", profile: "deep" });
+    expect(u.roles.flow).toMatchObject({ settings: DEFAULT_AGENT, from: "default" });
     expect((await fetch(url("/api/agents/resolve?id=nope"))).status).toBe(404);
     await post("/api/repos/agent?id=app", {});
   });

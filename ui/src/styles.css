@@ -4125,6 +4125,15 @@ body:has(.focus-grip.se.dragging) {
 .step-seg.st-gated .dot { background: var(--lichen); }
 .step-seg.st-passed .dot { background: var(--moss); }
 .step-seg.st-failed .dot { background: var(--rust); }
+/* the agent profile a step names, after its name */
+.step-seg .step-profile {
+  margin-left: auto;
+  padding-left: 6px;
+  color: var(--ink-dim);
+  font-size: 11px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
 .plan-steps { margin: 8px 0 0; padding-left: 20px; font-size: 13px; }
 .plan-steps li { margin: 2px 0; }
 .plan-step-meta { color: var(--ink-dim); margin-left: 6px; }

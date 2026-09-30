@@ -586,7 +586,7 @@ function PeersSection({ repo }: { repo: Repo }) {
                     )
                   }
                 >
-                  {busy === `merge:${d.peer}:${d.branch}` ? "starting…" : "merge with claude"}
+                  {busy === `merge:${d.peer}:${d.branch}` ? "starting…" : "merge with the agent"}
                 </button>
               </div>
             ))}
@@ -793,7 +793,7 @@ function ChangesSection({ repo }: { repo: Repo }) {
       const s = await api.suggest(id);
       setMessage(s.message);
       return s.source === "heuristic"
-        ? "claude CLI not reachable — heuristic message used"
+        ? "the agent CLI did not answer — heuristic message used"
         : undefined;
     });
 
@@ -828,7 +828,7 @@ function ChangesSection({ repo }: { repo: Repo }) {
       const done = thenPush ? "committed and pushed" : "committed";
       const extras = [
         autoStage ? "staged everything" : null,
-        heuristic ? "heuristic message — claude CLI unreachable" : null,
+        heuristic ? "heuristic message — the agent CLI did not answer" : null,
       ].filter(Boolean);
       return extras.length ? `${done} (${extras.join("; ")})` : done;
     });

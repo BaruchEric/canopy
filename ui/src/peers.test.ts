@@ -94,6 +94,7 @@ const run = (status: Run["status"]): Run => ({
   progress: "chatting",
   expectsChange: false,
   chat: true,
+  harness: "claude",
   note: "",
   status,
   startedAt: now,

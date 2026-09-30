@@ -56,11 +56,18 @@ describe("the effective table", () => {
     const rows = effectiveRows(routes(), P, ["claude", "codex"]);
     const shell = rows.find((r) => r.role === "shell")!;
     expect(shell).toMatchObject({ harness: "◇ codex", line: "gpt-5.5 · ask", from: "repo · review", flags: [] });
+    // the repo beats the role, for a chat on codex too
     const chat = rows.find((r) => r.role === "chat")!;
-    expect(chat.settings).toEqual(deep);
-    expect(chat.from).toBe("role route · deep");
-    expect(chat.flags).toEqual(["repo (review) passed over: codex does not run chats yet; they stay on claude"]);
-    expect(rows.find((r) => r.role === "job")!.from).toBe("default profile");
+    expect(chat.settings).toEqual(review);
+    expect(chat.from).toBe("repo · review");
+    expect(chat.flags).toEqual([]);
+    expect(rows.find((r) => r.role === "job")!.from).toBe("repo · review");
+    // a layer passed over is flagged
+    const other = effectiveRows(routes(), "/dev/other", ["claude", "codex"]);
+    const job = other.find((r) => r.role === "job")!;
+    expect(job.from).toBe("default profile");
+    expect(job.flags).toEqual(["repo, this role (gone) passed over: no profile named gone"]);
+    expect(other.find((r) => r.role === "chat")!.from).toBe("role route · deep");
   });
 
   test("a harness the backend lacks is flagged, since a start on it is refused", () => {
@@ -115,9 +122,8 @@ describe("editing a repo's override", () => {
     expect(withPick(a, "all", null)).toEqual({});
   });
 
-  test("the whole repo may be either harness; a role only what it runs", () => {
+  test("the whole repo and every role may be either harness", () => {
     expect(slotHarnesses("all")).toEqual(["claude", "codex"]);
-    expect(slotHarnesses("shell")).toEqual(["claude", "codex"]);
-    expect(slotHarnesses("chat")).toEqual(["claude"]);
+    for (const role of ["shell", "chat", "job", "flow", "suggest"] as const) expect(slotHarnesses(role)).toEqual(["claude", "codex"]);
   });
 });

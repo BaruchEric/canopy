@@ -765,12 +765,27 @@ export type RunAnswer =
   | { kind: "deny" }
   | { kind: "answers"; answers: Record<string, string> };
 
+/** Token counts for a run, where the harness reports them (Codex does;
+ *  Claude reports a cost instead). */
+export interface RunTokens {
+  input: number;
+  /** the part of `input` served from the prompt cache */
+  cachedInput: number;
+  output: number;
+  /** the part of `output` spent reasoning */
+  reasoning: number;
+  total: number;
+}
+
 export interface RunResult {
-  /** Claude's closing message */
+  /** the agent's closing message */
   text: string;
-  costUsd: number;
+  /** what the run cost, where the harness reports one (Claude Code) */
+  costUsd?: number;
   durationMs: number;
   turns: number;
+  /** tokens spent, where the harness reports them (Codex) */
+  tokens?: RunTokens;
 }
 
 export interface Run {
@@ -784,6 +799,11 @@ export interface Run {
   expectsChange: boolean;
   /** a chat keeps its process between turns and takes messages */
   chat: boolean;
+  /** the agent doing the work: Claude Code or Codex */
+  harness: Harness;
+  /** Claude's session id or Codex's thread id, once the harness said it:
+   *  what makes the run resumable in a shell later */
+  session?: string;
   /** what the user typed into the note box, if anything */
   note: string;
   /** the device it was started from, when the request said */
@@ -1075,6 +1095,9 @@ export interface WorkflowStep {
   gate: GateKind;
   /** the step's prompt; empty for a check-only step */
   body: string;
+  /** the agent profile the step's run starts with, from its own `agent:`
+   *  line or the workflow's; absent follows the repo's flow route */
+  agent?: string;
 }
 
 export interface Workflow {
@@ -1126,6 +1149,8 @@ export type FlowChoice = "continue" | "retry" | "stop";
 export interface FlowStep {
   name: string;
   status: StepStatus;
+  /** the agent profile the step names, when it names one */
+  profile?: string;
   /** the step's Run, once it has one */
   runId?: string;
   check?: { command: string; exit: number; output: string };

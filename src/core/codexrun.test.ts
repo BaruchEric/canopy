@@ -1,6 +1,6 @@
 import { afterAll, describe, expect, test } from "bun:test";
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import { TOOL_SETS } from "./actions";
 import {
@@ -9,10 +9,12 @@ import {
   approvalPrompt,
   approvalReply,
   autoAnswer,
+  canopyEnv,
   CodexDriver,
   codexVersion,
   commandWords,
   configFlags,
+  escalationNote,
   itemTool,
   parseRule,
   questionPrompt,
@@ -87,6 +89,25 @@ describe("the process and the thread", () => {
     });
     expect(p["approvalPolicy"]).toBe("on-request");
     expect(p["sandbox"]).toBe("danger-full-access");
+  });
+
+  test("canopy's own variables ride in the thread's config for the commands codex runs", () => {
+    expect(canopyEnv({ CANOPY_RUN: "r1", CANOPY_BACKEND: "mini", FAKE_X: "y", "CANOPY_BAD-NAME": "z", CANOPY_NL: "a\nb" })).toEqual({
+      CANOPY_RUN: "r1",
+      CANOPY_BACKEND: "mini",
+    });
+    const p = threadParams("/r", AGENT, { askQuestions: true, env: { CANOPY_RUN: "r1", PATH: "/bin" } });
+    expect(p["config"]).toEqual({
+      "features.default_mode_request_user_input": true,
+      suppress_unstable_features_warning: true,
+      "shell_environment_policy.set.CANOPY_RUN": "r1",
+    });
+    expect(threadParams("/r", AGENT, { askQuestions: false, env: { CANOPY_REPO: "app" } })).toEqual({
+      cwd: "/r",
+      approvalPolicy: "on-request",
+      sandbox: "workspace-write",
+      config: { "shell_environment_policy.set.CANOPY_REPO": "app" },
+    });
   });
 
   test("a turn carries the text and the effort unless it is the default", () => {
@@ -308,6 +329,14 @@ describe("approvals and questions", () => {
     expect(
       approvalPrompt("item/permissions/requestApproval", { permissions: { network: { enabled: true }, fileSystem: { write: ["/r/out"] } } }, null, "/r"),
     ).toMatchObject({ tool: "Permissions", title: "more access: network, write out" });
+  });
+
+  test("a command asking to leave the sandbox gets a note; nothing else does", () => {
+    const m = "item/commandExecution/requestApproval";
+    expect(escalationNote(m, { reason: "command failed; retry without sandbox?" })).toContain("asks to run outside it");
+    expect(escalationNote(m, { reason: "needs the network" })).toBeNull();
+    expect(escalationNote(m, {})).toBeNull();
+    expect(escalationNote("item/fileChange/requestApproval", { reason: "command failed; retry without sandbox?" })).toBeNull();
   });
 
   test("answers as decisions", () => {
@@ -886,9 +915,64 @@ describe("a Codex run", () => {
   });
 });
 
+/** config.toml with every `[projects."<path>"]` table `drop` says yes to
+ *  taken out, and every other line as it was. Codex records a folder it ran
+ *  a thread in as trusted there, and a test's scratch folder must not stay
+ *  behind in the user's own config. */
+function dropProjectTables(toml: string, drop: (path: string) => boolean): string {
+  const out: string[] = [];
+  let skipping = false;
+  let dropped = false;
+  for (const line of toml.split("\n")) {
+    if (/^\s*\[/.test(line)) {
+      const m = /^\s*\[projects\.(["'])(.+)\1\]\s*$/.exec(line);
+      const wasSkipping = skipping;
+      skipping = !!m && drop(m[2] ?? "");
+      if (skipping) {
+        dropped = true;
+        // the blank line that set the dropped table off goes with it
+        while (out.length && out[out.length - 1]?.trim() === "") out.pop();
+        continue;
+      }
+      if (wasSkipping && out.length) out.push("");
+    }
+    if (!skipping) out.push(line);
+  }
+  if (!dropped) return toml;
+  const text = out.join("\n");
+  return toml.endsWith("\n") && !text.endsWith("\n") ? `${text}\n` : text;
+}
+
+describe("a real codex run leaves no trust behind", () => {
+  test("only the scratch folders' project tables come out", () => {
+    const toml = [
+      'model = "x"',
+      "",
+      '[projects."/home/u/Work"]',
+      'trust_level = "trusted"',
+      "",
+      '[projects."/tmp/canopy-codex-it-abc"]',
+      'trust_level = "trusted"',
+      "",
+      "[tui]",
+      "a = 1",
+      "",
+      "[projects.'/tmp/canopy-codex-it-def']",
+      'trust_level = "trusted"',
+      "",
+    ].join("\n");
+    const it = (p: string) => p.includes("canopy-codex-it-");
+    expect(dropProjectTables(toml, it)).toBe(
+      ['model = "x"', "", '[projects."/home/u/Work"]', 'trust_level = "trusted"', "", "[tui]", "a = 1", ""].join("\n"),
+    );
+    expect(dropProjectTables(toml, () => false)).toBe(toml);
+  });
+});
+
 /* One real turn against the installed codex, opt-in: it signs in with the
  * user's own login and spends a few tokens. CANOPY_CODEX_IT=1 bun test
- * src/core/codexrun.test.ts */
+ * src/core/codexrun.test.ts. Codex records the scratch repo as a trusted
+ * project in the user's config.toml; the test takes that table out again. */
 describe.skipIf(!process.env["CANOPY_CODEX_IT"])("a real codex", () => {
   test("answers a one-word turn, with a session and token counts", async () => {
     const dir = await mkdtemp(join(tmpdir(), "canopy-codex-it-"));
@@ -898,6 +982,7 @@ describe.skipIf(!process.env["CANOPY_CODEX_IT"])("a real codex", () => {
       id: "it",
       repoId: "it",
       action: "ask",
+      harness: "codex",
       verb: "ask",
       progress: "working",
       expectsChange: false,
@@ -910,17 +995,29 @@ describe.skipIf(!process.env["CANOPY_CODEX_IT"])("a real codex", () => {
     };
     const ctx = new RunCtx(
       run,
-      { cwd: dir, agent: { ...AGENT, effort: "low" }, spec: { allowedTools: GIT_READ, maxTurns: 5 }, label: "Codex" },
+      // canopy's CANOPY_* go into the thread's config, which a real codex has to take
+      { cwd: dir, agent: { ...AGENT, effort: "low" }, spec: { allowedTools: GIT_READ, maxTurns: 5 }, env: { CANOPY_RUN: "it" }, label: "Codex" },
       { emit: () => {} },
     );
     const driver = new CodexDriver();
     expect(driver.check()).toBeNull();
-    driver.start(ctx, "Reply with the word ok and nothing else. Do not run any commands or tools.");
-    const deadline = Date.now() + 150_000;
-    while (run.status === "working" || run.status === "waiting") {
-      if (run.status === "waiting" && run.prompt) ctx.answer(run.prompt.id, { kind: "deny" });
-      if (Date.now() > deadline) break;
-      await Bun.sleep(100);
+    const config = join(process.env["CODEX_HOME"] || join(homedir(), ".codex"), "config.toml");
+    try {
+      driver.start(ctx, "Reply with the word ok and nothing else. Do not run any commands or tools.");
+      const deadline = Date.now() + 150_000;
+      while (run.status === "working" || run.status === "waiting") {
+        if (run.status === "waiting" && run.prompt) ctx.answer(run.prompt.id, { kind: "deny" });
+        if (Date.now() > deadline) break;
+        await Bun.sleep(100);
+      }
+    } finally {
+      // whatever codex wrote about this scratch folder (or an earlier run's)
+      // comes out; everything else in the file stays as it is
+      const before = await readFile(config, "utf8").catch(() => null);
+      if (before !== null) {
+        const after = dropProjectTables(before, (p) => p.includes("canopy-codex-it-"));
+        if (after !== before) await writeFile(config, after);
+      }
     }
     expect(run.error).toBeUndefined();
     expect(run.status).toBe("done");

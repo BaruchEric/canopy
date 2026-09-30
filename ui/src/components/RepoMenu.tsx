@@ -6,6 +6,7 @@ import { ACTIONS, checkWhen } from "../../../src/core/actions";
 import { describeAgent } from "../../../src/core/agent";
 import { HARNESS } from "../../../src/core/harness";
 import { harnessesOf, profileNames } from "../agents";
+import { AGENT_NAME } from "../runs";
 import { describeLaunch } from "../../../src/core/launch";
 import { flowWord } from "../flows";
 import { useShallow } from "zustand/react/shallow";
@@ -56,6 +57,9 @@ export function RepoMenu({
   const showLaunch = useStore((s) => s.showLaunch);
   const openTerm = useStore((s) => s.openTerm);
   const agent = useStore((s) => agentFor(s, repo));
+  // a chat and a job start on whatever the repo's routes say for them
+  const chatAgent = useStore((s) => agentFor(s, repo, "chat"));
+  const jobAgent = useStore((s) => agentFor(s, repo, "job"));
   const has = useStore((s) => harnessesOf(connOf(s, backendOf(repo.id)).backend));
   const routes = useStore((s) => routesOf(s, backendOf(repo.id)));
   const extraProfiles = profileNames(routes).filter((n) => n !== "default");
@@ -355,30 +359,49 @@ export function RepoMenu({
                   <span className="menu-fact">show</span>
                 </button>
               )}
-              {!repo.host && (
-                <button
-                  type="button"
-                  role="menuitem"
-                  className="menu-item"
-                  aria-disabled={!!activeFlow}
-                  tabIndex={activeFlow ? -1 : 0}
-                  title={activeFlow ? "workflow running" : "Talk with Claude Code about this repo, here in canopy (chats run on claude)"}
-                  onClick={() => {
-                    if (!activeFlow) void chat();
-                  }}
-                >
-                  <span className="menu-text">{ACTIONS.chat.label}</span>
-                  <span className="menu-fact">
-                    {activeFlow ? "workflow running" : active ? "show" : "in canopy"}
-                  </span>
-                </button>
-              )}
+              {!repo.host && (() => {
+                // a live run is shown whatever it runs on; a new chat needs
+                // its harness on the repo's backend
+                const missing = !active && !has.includes(chatAgent.harness);
+                const off = !!activeFlow || missing;
+                return (
+                  <button
+                    type="button"
+                    role="menuitem"
+                    className="menu-item"
+                    aria-disabled={off}
+                    tabIndex={off ? -1 : 0}
+                    title={
+                      activeFlow
+                        ? "workflow running"
+                        : missing
+                          ? `${HARNESS[chatAgent.harness].label} is not installed on ${backendOf(repo.id)}`
+                          : `Talk with ${AGENT_NAME[chatAgent.harness]} about this repo, here in canopy (the repo's chat route)`
+                    }
+                    onClick={() => {
+                      if (!off) void chat();
+                    }}
+                  >
+                    <span className="menu-text">
+                      <span className={`harness-glyph h-${chatAgent.harness}`} aria-hidden="true">
+                        {HARNESS[chatAgent.harness].glyph}
+                      </span>{" "}
+                      {ACTIONS.chat.label}
+                    </span>
+                    <span className="menu-fact">
+                      {activeFlow ? "workflow running" : active ? "show" : missing ? "not installed" : "in canopy"}
+                    </span>
+                  </button>
+                );
+              })()}
               {JOBS.map((action) => {
                 const check = activeFlow
                   ? { ok: false as const, why: "workflow running" }
                   : active
                     ? { ok: false as const, why: "wait for the current run" }
-                    : checkWhen(repo, "any");
+                    : !has.includes(jobAgent.harness)
+                      ? { ok: false as const, why: `${HARNESS[jobAgent.harness].label} not installed` }
+                      : checkWhen(repo, "any");
                 return (
                   <button
                     key={action}
@@ -386,13 +409,18 @@ export function RepoMenu({
                     role="menuitem"
                     className="menu-item"
                     aria-disabled={!check.ok}
-                    title={check.ok ? undefined : check.why}
+                    title={check.ok ? `A job on ${AGENT_NAME[jobAgent.harness]} (the repo's job route)` : check.why}
                     tabIndex={check.ok ? 0 : -1}
                     onClick={() => {
                       if (check.ok) choose(action);
                     }}
                   >
-                    <span className="menu-text">{ACTIONS[action].label}</span>
+                    <span className="menu-text">
+                      <span className={`harness-glyph h-${jobAgent.harness}`} aria-hidden="true">
+                        {HARNESS[jobAgent.harness].glyph}
+                      </span>{" "}
+                      {ACTIONS[action].label}
+                    </span>
                     <span className="menu-fact">{check.ok ? "" : check.why}</span>
                   </button>
                 );

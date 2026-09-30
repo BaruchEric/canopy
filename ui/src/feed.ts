@@ -22,6 +22,7 @@ import type {
 import { chanLine } from "./chan";
 import { peerLines } from "./peers";
 import { taskLines } from "./tasks";
+import { agentWord, harnessOf } from "./runs";
 
 export type FeedKind =
   | "git"
@@ -87,7 +88,7 @@ export interface FeedSnapshot {
 export const FEED_CAP = 500;
 /** how many names a line spells out before it says "+N more" */
 const NAMES = 3;
-/** longest a quoted line of Claude's gets */
+/** longest a quoted line of the agent's gets */
 const CLIP = 120;
 
 export const shortHash = (h: string): string => h.slice(0, 7);
@@ -99,7 +100,7 @@ export function listNames(names: string[]): string {
   return rest > 0 ? `${shown} +${rest} more` : shown;
 }
 
-/** one line of Claude's, clipped */
+/** one line of the agent's, clipped */
 export function clip(text: string, max = CLIP): string {
   const one = text.replace(/\s+/g, " ").trim();
   return one.length > max ? `${one.slice(0, max - 1)}…` : one;
@@ -251,7 +252,7 @@ function stepLine(run: Run, index: number): string | null {
   const st = run.steps[index];
   if (!st) return null;
   if (st.kind === "tool" && st.tool) return `${st.tool.name}: ${clip(st.tool.title, 100)}`;
-  if (st.kind === "text" && st.text) return `claude: ${clip(st.text)}`;
+  if (st.kind === "text" && st.text) return `${agentWord(harnessOf(run))}: ${clip(st.text)}`;
   if (st.kind === "user" && st.text) return `you: ${clip(st.text)}`;
   if (st.kind === "note" && st.text) return clip(st.text);
   return null;
@@ -274,7 +275,7 @@ function runLines(ev: Extract<ServerEvent, { type: "run" }>, prev: FeedSnapshot,
     if (run.status === "waiting" && run.prompt) {
       say(run.prompt.kind === "permission" ? `asks to ${run.prompt.tool}: ${clip(run.prompt.title, 100)}` : "asks a question");
     } else if (run.status === "idle" && before) {
-      say("claude answered, chat idle");
+      say(`${agentWord(harnessOf(run))} answered, chat idle`);
     } else if (run.status === "done") {
       const tail = run.outcome ? `, ${run.outcome}` : "";
       say(`${run.verb} done${tail}${run.result ? ` in ${Math.round(run.result.durationMs / 1000)}s` : ""}`);

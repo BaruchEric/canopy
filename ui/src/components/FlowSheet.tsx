@@ -7,6 +7,7 @@ import { isFlowActive, type Fleet, type Flow, type FlowStep, type Repo, type Ver
 import { fleetCounts, flowWord, oldestParked, stepWord } from "../flows";
 import { agentFor, idText, pickedIds, useStore } from "../store";
 import { BackendWord } from "./IdLabel";
+import { AGENT_NAME, harnessOf } from "../runs";
 import { Timeline } from "./RunSheet";
 
 const errText = (err: unknown) => String(err instanceof Error ? err.message : err);
@@ -22,6 +23,7 @@ export function FlowPlan({ repo, workflow }: { repo: Repo; workflow: string }) {
   const close = useStore((s) => s.closeSheet);
   const startFlow = useStore((s) => s.startFlow);
   const agent = useStore((s) => agentFor(s, repo, "flow"));
+  const name = AGENT_NAME[agent.harness];
   const verdictReady = useStore((s) => s.verdictReady);
   const entry = useStore((s) => s.workflows[repo.id]?.find((e) => e.ok && e.workflow.name === workflow));
   const [note, setNote] = useState("");
@@ -52,7 +54,7 @@ export function FlowPlan({ repo, workflow }: { repo: Repo; workflow: string }) {
     <>
       <header className="sheet-head">
         <div>
-          <div className="eyebrow">with claude · {w.source === "bundled" ? "built in" : w.source === "user" ? "your workflow" : "this repo's workflow"}</div>
+          <div className="eyebrow">with {name} · {w.source === "bundled" ? "built in" : w.source === "user" ? "your workflow" : "this repo's workflow"}</div>
           <h2 className="sheet-title">{w.verb} <span className="sheet-repo">{idText(repo.id)}</span></h2>
         </div>
         <button type="button" className="mini close" onClick={close} aria-label="Close">✕</button>
@@ -60,7 +62,7 @@ export function FlowPlan({ repo, workflow }: { repo: Repo; workflow: string }) {
       <div className="sheet-body plan">
         <div className="facts">
           {repoFacts(repo).map((f) => <span key={f} className="branch">{f}</span>)}
-          {!isDefaultAgent(agent) && <span className="branch" title="This repo's agent settings">{describeAgent(agent)}</span>}
+          {!isDefaultAgent(agent) && <span className="branch" title="The agent this repo's workflow steps start with">{describeAgent(agent)}</span>}
         </div>
         <p className="blurb">{w.blurb}</p>
         <ol className="plan-steps">
@@ -71,6 +73,7 @@ export function FlowPlan({ repo, workflow }: { repo: Repo; workflow: string }) {
                 {s.body ? "" : "check only"}
                 {s.check ? ` · check: ${s.check}` : ""}
                 {s.gate !== "continue" ? ` · gate: ${s.gate}` : ""}
+                {s.agent && s.body ? ` · agent: ${s.agent}` : ""}
               </span>
             </li>
           ))}
@@ -82,7 +85,7 @@ export function FlowPlan({ repo, workflow }: { repo: Repo; workflow: string }) {
           value={note}
           onChange={(e) => setNote(e.target.value)}
           onKeyDown={(e) => { if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) void go(); }}
-          aria-label={w.noteRequired ? "What Claude should do" : "Note for Claude"}
+          aria-label={w.noteRequired ? "What the agent should do" : "Note for the agent"}
         />
         {error && <p className="note err">{error}</p>}
       </div>
@@ -90,9 +93,11 @@ export function FlowPlan({ repo, workflow }: { repo: Repo; workflow: string }) {
         <span className="sheet-hint">
           {w.steps.some((s) => s.gate === "verdict") && !verdictReady
             ? "No gateway key on the server, so verdict gates will ask you instead."
-            : agent.yolo
-              ? "Yolo is on for this repo: Claude runs without asking."
-              : "Claude asks before running anything that is not part of the job."}
+            : w.steps.some((s) => s.agent && s.body)
+              ? "Steps that name a profile start on it; the rest start on this repo's workflow agent."
+              : agent.yolo
+                ? `Yolo is on for this repo: ${name} runs without asking.`
+                : `${name} asks before running anything that is not part of the job.`}
         </span>
         <button type="button" className="mini" onClick={close}>cancel</button>
         <button type="button" className="mini strong" disabled={!ready} title="⌘↩" onClick={() => void go()}>
@@ -113,13 +118,14 @@ export function StepStrip({ flow, shown, onPick }: { flow: Flow; shown: number; 
           <button
             type="button"
             className={`step-seg st-${s.status}${i === shown ? " shown" : ""}`}
-            title={`${s.name}: ${stepWord(s)}`}
+            title={`${s.name}: ${stepWord(s)}${s.profile ? ` · agent profile ${s.profile}` : ""}`}
             aria-current={i === flow.current ? "step" : undefined}
             disabled={!s.runId && !s.check}
             onClick={() => onPick(i)}
           >
             <span className="dot" />
             {s.name}
+            {s.profile && <span className="step-profile">{s.profile}</span>}
           </button>
         </li>
       ))}
@@ -211,7 +217,7 @@ export function FlowConsole({ flowId }: { flowId: string }) {
     <>
       <header className="sheet-head">
         <div>
-          <div className="eyebrow">with claude · workflow</div>
+          <div className="eyebrow">{run ? `with ${AGENT_NAME[harnessOf(run)]} · ` : ""}workflow{step?.profile ? ` · step on ${step.profile}` : ""}</div>
           <h2 className="sheet-title">{flow.verb} <span className="sheet-repo">{idText(flow.repoId)}</span></h2>
         </div>
         <span className={`status st-${flow.status === "gated" ? "waiting" : flow.status}`}>
@@ -305,7 +311,7 @@ export function FleetPlan({ workflow }: { workflow: string }) {
     <>
       <header className="sheet-head">
         <div>
-          <div className="eyebrow">with claude · fleet</div>
+          <div className="eyebrow">fleet</div>
           <h2 className="sheet-title">{w?.verb ?? workflow} <span className="sheet-repo">{running.length} of {repos.length} repos</span></h2>
         </div>
         <button type="button" className="mini close" onClick={close} aria-label="Close">✕</button>
@@ -316,7 +322,7 @@ export function FleetPlan({ workflow }: { workflow: string }) {
         {[...byReason.entries()].map(([why, names]) => (
           <p key={why} className="fleet-skipped"><span className="eyebrow">skipped, {why}</span>{names.join(", ")}</p>
         ))}
-        <textarea className="plan-note" rows={3} placeholder={w?.notePlaceholder ?? "anything Claude should know (optional)"} value={note} onChange={(e) => setNote(e.target.value)} aria-label="Note for Claude" />
+        <textarea className="plan-note" rows={3} placeholder={w?.notePlaceholder ?? "anything the agent should know (optional)"} value={note} onChange={(e) => setNote(e.target.value)} aria-label="Note for the agent" />
         {error && <p className="note err">{error}</p>}
       </div>
       <footer className="sheet-foot">
@@ -372,7 +378,7 @@ export function FleetSheet({ fleetId }: { fleetId: string }) {
     <>
       <header className="sheet-head">
         <div>
-          <div className="eyebrow">with claude · fleet</div>
+          <div className="eyebrow">fleet</div>
           <h2 className="sheet-title">{fleet.verb} <span className="sheet-repo">{fleet.repos.length} repos</span></h2>
         </div>
         <span className={`status st-${counts.needsYou ? "waiting" : working ? "working" : "done"}`}>

@@ -37,7 +37,7 @@ import {
 } from "../core/history";
 import { browseLocal, browseRemote, expandHome, SshError } from "../core/browse";
 import { exec, onHost } from "../core/exec";
-import { Flows, type CheckResult } from "../core/flow";
+import { fleetSkipReason, Flows, type CheckResult } from "../core/flow";
 import { isTermId, parseTermMessage, Scrollback, shellArgs, startTerm, termPlace, termSize, type TermSession, type TermSize } from "../core/term";
 import { attachTmuxTerm, hasSession, history, killSession, listSessions, newSession, paneInfo, paneText, sendLine, serverUp, snapshot, tmuxBase } from "../core/tmux";
 import { clip, continueLine, countLines, expiredShells, forgetKept, KEEP_EVERY, listKept, lostShells, readKeptHistory, replayCommand, replayFile, restoredBanner, writeKept } from "../core/keep";
@@ -121,6 +121,7 @@ import {
   type ShellPlace,
   type Source,
   type SourceInput,
+  type Workflow,
   type SourceState,
   type TermInfo,
   TERM_GONE,
@@ -567,6 +568,28 @@ async function machineName(): Promise<string> {
  *  mini", not a shell that dies at once. */
 async function needHarness(state: ServerState, h: Harness): Promise<void> {
   if (!state.harnesses().includes(h)) throw new HttpError(400, missingHarness(h, await machineName()));
+}
+
+/** A workflow whose steps name an agent profile this backend has not got
+ *  is refused before anything starts, rather than quietly running that step
+ *  on the repo's flow route instead. */
+function stepProfileRefusal(cfg: CanopyConfig, wf: Workflow): string | null {
+  const profiles = agentRoutes(cfg).profiles;
+  const step = wf.steps.find((s) => s.agent && !(s.agent in profiles));
+  return step ? `step ${step.name} of ${wf.name} names agent profile ${step.agent ?? ""}, which this backend does not have` : null;
+}
+
+/** The settings a workflow step's run starts with on a repo: the step's own
+ *  `agent:` profile as the explicit pick, else the repo's flow route. */
+const stepAgentFor = (cfg: CanopyConfig, path: string, profile: string | undefined): AgentSettings =>
+  agentFor(cfg, path, "flow", profile ? { profile } : undefined);
+
+/** Every harness a workflow's steps would start on for these repos is
+ *  installed here, checked before the first step starts. */
+async function needStepHarnesses(state: ServerState, cfg: CanopyConfig, wf: Workflow, paths: string[]): Promise<void> {
+  const needed = new Set<Harness>();
+  for (const path of paths) for (const s of wf.steps) if (s.body) needed.add(stepAgentFor(cfg, path, s.agent).harness);
+  for (const h of needed) await needHarness(state, h);
 }
 
 /** A shell running again under the name it had, at the same repo, with what
@@ -1964,7 +1987,10 @@ async function handleApi(
     const note = typeof b.note === "string" ? b.note : "";
     if (wf.noteRequired && !note.trim()) return json({ error: "this workflow needs a note" }, 400);
     const cfg = await loadConfig();
-    return json(state.flows.startFleet(repos, wf, note, (r) => agentFor(cfg, r.path, "flow")), 201);
+    const refused = stepProfileRefusal(cfg, wf);
+    if (refused) return json({ error: refused }, 400);
+    await needStepHarnesses(state, cfg, wf, repos.filter((r) => !fleetSkipReason(r, wf)).map((r) => r.path));
+    return json(state.flows.startFleet(repos, wf, note, (r, profile) => stepAgentFor(cfg, r.path, profile)), 201);
   }
   if (path === "/api/fleet/stop" && method === "POST") {
     const b = (await req.json()) as { id?: unknown };
@@ -2271,7 +2297,7 @@ async function handleApi(
     }
     if (method === "POST" && action === "suggest") {
       const files = repo.status?.files ?? [];
-      return json(await suggestMessage(repo.path, files));
+      return json(await suggestMessage(repo.path, files, agentFor(await loadConfig(), repo.path, "suggest")));
     }
     if (method === "POST" && action === "open") {
       const b = (await req.json()) as { app: string; tab?: unknown; helper?: unknown };
@@ -2363,7 +2389,7 @@ async function handleApi(
       return json(launchers);
     }
     if (method === "POST" && action === "flow") {
-      if (repo.host) return json({ error: `Claude runs only work on this machine; ${repo.name} is on ${repo.host}` }, 400);
+      if (repo.host) return json({ error: `agent runs only work on this machine; ${repo.name} is on ${repo.host}` }, 400);
       const b = (await req.json()) as { workflow?: unknown; note?: unknown };
       if (typeof b.workflow !== "string") return json({ error: "missing workflow" }, 400);
       const entries = await loadWorkflows(repo);
@@ -2373,24 +2399,28 @@ async function handleApi(
         return json({ error: broken && !broken.ok ? broken.error : `unknown workflow: ${b.workflow}` }, 400);
       }
       const note = typeof b.note === "string" ? b.note : "";
-      const agent = agentFor(await loadConfig(), repo.path, "flow");
+      const cfg = await loadConfig();
+      const refused = stepProfileRefusal(cfg, wf);
+      if (refused) return json({ error: refused }, 400);
+      await needStepHarnesses(state, cfg, wf, [repo.path]);
       try {
-        return json(state.flows.start(repo, wf, note, agent), 201);
+        return json(state.flows.start(repo, wf, note, (profile) => stepAgentFor(cfg, repo.path, profile)), 201);
       } catch (err) {
         throw new HttpError(400, String(err instanceof Error ? err.message : err));
       }
     }
     if (method === "POST" && action === "run") {
-      // The runner spawns claude here, at the repo's path; there is no
-      // claude to spawn at a folder on another host.
-      if (repo.host) return json({ error: `Claude runs only work on this machine; ${repo.name} is on ${repo.host}` }, 400);
+      // The runner spawns the agent here, at the repo's path; there is no
+      // agent to spawn at a folder on another host.
+      if (repo.host) return json({ error: `agent runs only work on this machine; ${repo.name} is on ${repo.host}` }, 400);
       // A workflow owns the repo while it runs, gate included: a second
-      // claude here would make the flow's next step throw and die.
+      // agent here would make the flow's next step throw and die.
       if (state.flows.activeFor(repo.id)) throw new HttpError(409, "a workflow is running here");
       const b = (await req.json()) as { action?: unknown; note?: unknown; client?: unknown };
       if (!isRunAction(b.action)) return json({ error: "unknown action" }, 400);
       const note = typeof b.note === "string" ? b.note : "";
       const agent = agentFor(await loadConfig(), repo.path, b.action === "chat" ? "chat" : "job");
+      await needHarness(state, agent.harness);
       // the device it was started from, when the browser said and is on the stream
       const by = deviceNameOf(state, typeof b.client === "string" ? b.client : null) ?? undefined;
       return json(state.runner.start(repo, b.action, ACTIONS[b.action], note, agent, by), 201);
@@ -2526,6 +2556,9 @@ export async function startServer(opts: {
   const extras = cfg.sources.filter((s) => s.kind !== "local" || s.path !== root);
   const fixed = opts.harnesses;
   const harnesses = fixed ? () => [...fixed] : availableHarnesses;
+  // every run is told which backend started it (CANOPY_BACKEND), and codex
+  // hears canopy's version in its handshake
+  const runnerOpts = { backend: selfName(cfg.self, hostname()), version: readPkg().version ?? "0" };
   const runner = new Runner({
     onChange: (run) => {
       broadcast(state, { type: "run", run });
@@ -2542,7 +2575,7 @@ export async function startServer(opts: {
       refreshAndBroadcast(state, repoId)
         .then((r) => r.status)
         .catch(() => null),
-  });
+  }, runnerOpts);
   const flows = new Flows(runner, {
     onChange: (flow) => {
       broadcast(state, { type: "flow", flow });

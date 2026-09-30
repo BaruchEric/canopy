@@ -2,9 +2,9 @@
 name: deploy
 label: deploy
 verb: deploy
-blurb: Claude works out how this project deploys (Vercel, Firebase, Cloudflare, a Dockerfile, a script...), runs the project's own gates first, and deploys. Uncommitted changes and anything outside the usual pipeline come back to you as a question.
+blurb: The agent works out how this project deploys (Vercel, Firebase, Cloudflare, a Dockerfile, a script...), runs the project's own gates first, and deploys. Uncommitted changes and anything outside the usual pipeline come back to you as a question.
 when: any
-note: target, environment, or anything else Claude should know (optional)
+note: target, environment, or anything else the agent should know (optional)
 ---
 
 ## Deploy

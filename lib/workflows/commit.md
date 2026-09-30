@@ -2,7 +2,7 @@
 name: commit
 label: commit
 verb: commit
-blurb: Claude reads the diff, stages what belongs, writes the message in this repo's style and commits. Unrelated changes become separate commits. Nothing is pushed.
+blurb: The agent reads the diff, stages what belongs, writes the message in this repo's style and commits. Unrelated changes become separate commits. Nothing is pushed.
 when: dirty
 expects-change: true
 ---

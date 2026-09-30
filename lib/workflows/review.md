@@ -2,7 +2,7 @@
 name: review
 label: review
 verb: review
-blurb: Claude reads the uncommitted changes and the recent commits and reports what looks wrong, risky, or unfinished. It changes nothing.
+blurb: The agent reads the uncommitted changes and the recent commits and reports what looks wrong, risky, or unfinished. It changes nothing.
 when: any
 ---
 

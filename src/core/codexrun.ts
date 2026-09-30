@@ -185,32 +185,47 @@ export interface ThreadOptions {
   askQuestions: boolean;
   /** replaces the policy the agent settings imply */
   policy?: Partial<ThreadPolicy>;
+  /** variables the commands Codex runs are to see (canopy's CANOPY_*) */
+  env?: Readonly<Record<string, string>>;
+}
+
+const ENV_NAME = /^[A-Za-z_][A-Za-z0-9_]*$/;
+
+/** The part of a run's environment that is canopy's own (CANOPY_RUN and
+ *  the like), which the commands Codex runs are handed too: Codex filters
+ *  its commands' environment by the user's `shell_environment_policy`, and
+ *  `inherit = "core"` would drop them, though its hooks still see them. */
+export function canopyEnv(env: Readonly<Record<string, string>>): Record<string, string> {
+  return Object.fromEntries(
+    Object.entries(env).filter(([k, v]) => k.startsWith("CANOPY_") && ENV_NAME.test(k) && ![...v].some((c) => c.charCodeAt(0) < 0x20)),
+  );
 }
 
 /** `thread/start` params. `request_user_input` is off outside plan mode
  *  unless its feature is on, and turning it on prints an "under-development
  *  features" warning unless that is suppressed; both ride in the thread's
- *  config, so the user's config.toml is never touched. */
+ *  config, so the user's config.toml is never touched, and so do the
+ *  variables its commands are to see, added to the policy's own `set`
+ *  table beside whatever the user sets there. */
 export function threadParams(cwd: string, agent: DriveAgent, opts: ThreadOptions): Record<string, unknown> {
   const model = codexModel(agent.model);
   // An override left undefined must not blank the policy out: a thread/start
   // without one falls back to the user's config.toml, which may say
   // danger-full-access.
   const override = Object.fromEntries(Object.entries(opts.policy ?? {}).filter(([, v]) => v !== undefined));
+  const config: Record<string, unknown> = {
+    ...(opts.askQuestions
+      ? { "features.default_mode_request_user_input": true, suppress_unstable_features_warning: true }
+      : {}),
+    ...Object.fromEntries(Object.entries(canopyEnv(opts.env ?? {})).map(([k, v]) => [`shell_environment_policy.set.${k}`, v])),
+  };
   return {
     cwd,
     ...(model ? { model } : {}),
     ...threadPolicy(agent),
     ...override,
-    ...(opts.askQuestions
-      ? {
-          config: {
-            "features.default_mode_request_user_input": true,
-            suppress_unstable_features_warning: true,
-          },
-          developerInstructions: DEVELOPER,
-        }
-      : {}),
+    ...(Object.keys(config).length ? { config } : {}),
+    ...(opts.askQuestions ? { developerInstructions: DEVELOPER } : {}),
   };
 }
 
@@ -404,31 +419,9 @@ function fileChanges(item: Record<string, unknown>): FileChange[] {
   });
 }
 
-/** "edit a.ts", "write b.ts", "move c.ts to d.ts", "edit a.ts, b.ts and 2 more" */
-function changeTitle(changes: FileChange[], root: string): string {
-  const one = changes[0];
-  if (!one) return "edit files";
-  if (changes.length === 1) {
-    const path = shorten(one.path, root);
-    if (one.kind === "add") return `write ${path}`;
-    if (one.kind === "delete") return `delete ${path}`;
-    if (one.movePath) return `move ${path} to ${shorten(one.movePath, root)}`;
-    return `edit ${path}`;
-  }
-  const names = changes.slice(0, 2).map((c) => shorten(c.path, root));
-  const more = changes.length - names.length;
-  return `edit ${names.join(", ")}${more > 0 ? ` and ${more} more` : ""}`;
-}
-
-function changeDiff(changes: FileChange[], root: string): string {
-  return changes.map((c) => `${shorten(c.path, root)}\n${c.diff.trim()}`.trim()).join("\n\n");
-}
-
-/** The first string among a tool's arguments, as describeTool shows one. */
-function firstArg(args: unknown): string {
-  const first = isRecord(args) ? Object.values(args).find((v) => typeof v === "string") : undefined;
-  return typeof first === "string" ? first.slice(0, 80) : "";
-}
+/** A file change's files as the shared Edit tool's input: its title and its
+ *  diff are the same words a Claude edit gets. */
+const changesInput = (changes: FileChange[]): Record<string, unknown> => ({ changes });
 
 /** Text out of an MCP result's content blocks. */
 function contentText(content: unknown): string {
@@ -474,40 +467,35 @@ export function itemTool(item: Record<string, unknown>, phase: Phase, root: stri
       );
     }
     case "fileChange": {
-      const changes = fileChanges(item);
+      const input = changesInput(fileChanges(item));
       return withOutput(
-        { name: "Edit", title: changeTitle(changes, root), status },
-        str(item, "status") === "declined" ? "declined" : phase === "completed" ? changeDiff(changes, root) : "",
+        { name: "Edit", title: describeTool("Edit", input, root), status },
+        str(item, "status") === "declined" ? "declined" : phase === "completed" ? toolDetail("Edit", input, root) : "",
       );
     }
     case "mcpToolCall": {
-      const server = str(item, "server");
-      const tool = str(item, "tool");
-      const arg = firstArg(item["arguments"]);
+      const name = `mcp__${str(item, "server")}__${str(item, "tool")}`;
       const error = str(rec(item["error"]), "message");
       return withOutput(
-        { name: `mcp__${server}__${tool}`, title: `${server} ${tool}${arg ? ` ${arg}` : ""}`, status },
+        { name, title: describeTool(name, rec(item["arguments"]), root), status },
         error || contentText(rec(item["result"])["content"]),
       );
     }
-    case "webSearch": {
-      const query = str(item, "query");
-      return { name: "WebSearch", title: query ? `web search ${query}` : "web search", status };
-    }
+    case "webSearch":
+      return { name: "WebSearch", title: describeTool("WebSearch", { query: str(item, "query") }), status };
     case "dynamicToolCall": {
-      const tool = str(item, "tool");
-      const arg = firstArg(item["arguments"]);
+      const tool = str(item, "tool") || "tool";
       const bad = item["success"] === false;
-      return { name: tool || "tool", title: `${tool}${arg ? ` ${arg}` : ""}`, status: bad ? "error" : status };
+      return { name: tool, title: describeTool(tool, rec(item["arguments"])), status: bad ? "error" : status };
     }
     case "collabAgentToolCall": {
       const prompt = str(item, "prompt").split("\n")[0]?.slice(0, 80) ?? "";
-      return { name: "Agent", title: `agent: ${prompt || str(item, "tool") || "subtask"}`, status };
+      return { name: "Agent", title: describeTool("Agent", { description: prompt || str(item, "tool") }), status };
     }
     case "imageView":
       return { name: "Read", title: `view ${shorten(str(item, "path"), root)}`, status };
     case "plan":
-      return withOutput({ name: "Plan", title: "update the plan", status }, str(item, "text"));
+      return withOutput({ name: "Plan", title: describeTool("Plan", {}), status }, str(item, "text"));
     default:
       return null;
   }
@@ -531,11 +519,12 @@ export function approvalPrompt(
     case "execCommandApproval": {
       const net = rec(params["networkApprovalContext"]);
       if (str(net, "host")) {
+        const input = { host: str(net, "host"), protocol: str(net, "protocol") };
         return {
           kind: "permission",
           tool: "Network",
-          title: `network access to ${str(net, "host")}`,
-          detail: tail([`${str(net, "protocol")} ${str(net, "host")}`, reason]),
+          title: describeTool("Network", input),
+          detail: tail([toolDetail("Network", input), reason]),
         };
       }
       const raw = params["command"];
@@ -560,14 +549,16 @@ export function approvalPrompt(
     }
     case "item/fileChange/requestApproval":
     case "applyPatchApproval": {
-      const changes = method === "applyPatchApproval" ? legacyChanges(params["fileChanges"]) : fileChanges(item ?? {});
+      const input = changesInput(
+        method === "applyPatchApproval" ? legacyChanges(params["fileChanges"]) : fileChanges(item ?? {}),
+      );
       const grant = str(params, "grantRoot");
       return {
         kind: "permission",
         tool: "Edit",
-        title: changeTitle(changes, root) + (grant ? `, and write access under ${grant}` : ""),
+        title: describeTool("Edit", input, root) + (grant ? `, and write access under ${grant}` : ""),
         detail: tail([
-          changeDiff(changes, root),
+          toolDetail("Edit", input, root),
           grant ? `also asks to write anywhere under ${grant} for the rest of the run` : "",
           reason,
         ]),
@@ -575,19 +566,11 @@ export function approvalPrompt(
     }
     case "item/permissions/requestApproval": {
       const perms = rec(params["permissions"]);
-      const net = rec(perms["network"]);
-      const fs = rec(perms["fileSystem"]);
-      const paths = (k: string) => (Array.isArray(fs[k]) ? fs[k].filter((p): p is string => typeof p === "string") : []);
-      const parts = [
-        ...(net["enabled"] === true ? ["network"] : []),
-        ...paths("write").map((p) => `write ${shorten(p, root)}`),
-        ...paths("read").map((p) => `read ${shorten(p, root)}`),
-      ];
       return {
         kind: "permission",
         tool: "Permissions",
-        title: `more access: ${parts.join(", ") || "sandbox permissions"}`,
-        detail: tail([JSON.stringify(perms, null, 2), reason]),
+        title: describeTool("Permissions", perms, root),
+        detail: tail([toolDetail("Permissions", perms, root), reason]),
       };
     }
     default:
@@ -633,6 +616,20 @@ export function approvalFacts(
     };
   }
   return { kind: "other" };
+}
+
+/** What Codex says when a command its sandbox refused asks to run again
+ *  outside it (measured against 0.158: "command failed; retry without
+ *  sandbox?"). */
+const ESCALATION = /retry without sandbox/i;
+
+/** The note a run gets the first time a command asks to leave the sandbox,
+ *  else null. Where the sandbox cannot start at all (bwrap cannot make a
+ *  user namespace in canopy's shells container) that is every command, and
+ *  each one is a prompt unless the job's rules cover it. */
+export function escalationNote(method: string, params: Record<string, unknown>): string | null {
+  if (method !== "item/commandExecution/requestApproval" || !ESCALATION.test(str(params, "reason"))) return null;
+  return "a command failed in codex's sandbox and asks to run outside it (in a container without user namespaces, that is every command); the job's rules still answer the ones they cover, and the rest ask you";
 }
 
 /** The reply to an approval request. "allow all" is `acceptForSession` where
@@ -850,6 +847,8 @@ export class CodexDriver implements RunDriver {
   private timer: ReturnType<typeof setTimeout> | null = null;
   /** why canopy killed the process itself, reported with its exit */
   private failure: string | null = null;
+  /** the run has had its note about commands leaving the sandbox */
+  private escalated = false;
 
   constructor(private opts: CodexOptions = {}) {}
 
@@ -931,6 +930,7 @@ export class CodexDriver implements RunDriver {
           threadParams(ctx.cwd, ctx.agent, {
             askQuestions: this.opts.askQuestions ?? true,
             ...(this.opts.policy ? { policy: this.opts.policy } : {}),
+            env: ctx.env,
           }),
         ),
       );
@@ -1138,6 +1138,11 @@ export class CodexDriver implements RunDriver {
       case "execCommandApproval":
       case "applyPatchApproval": {
         const item = this.items.get(str(params, "itemId")) ?? null;
+        const escalation = this.escalated ? null : escalationNote(req.method, params);
+        if (escalation) {
+          this.escalated = true;
+          ctx.note(escalation);
+        }
         if (autoAnswer(ctx.spec.allowedTools, approvalFacts(req.method, params, item), ctx.cwd)) {
           rpc.reply(req.id, approvalReply(req.method, params, { kind: "allow" }, false));
           return;

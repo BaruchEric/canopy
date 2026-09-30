@@ -76,6 +76,7 @@ const run = (over: Partial<Run>): Run => ({
   progress: "",
   expectsChange: true,
   chat: false,
+  harness: "claude",
   note: "",
   status: "working",
   startedAt: 0,

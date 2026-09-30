@@ -13,6 +13,7 @@ function makeCtx(chat = false) {
     progress: "working",
     expectsChange: false,
     chat,
+    harness: "codex",
     note: "",
     status: "working",
     startedAt: 0,

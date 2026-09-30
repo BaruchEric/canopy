@@ -1,6 +1,8 @@
-/** What each Claude-driven action means: the words the UI shows, the rules
- *  for when it makes sense, and the prompt it turns into. Browser-safe: the
- *  UI imports this for labels and preconditions, the runner for prompts. */
+/** What each agent-driven action means: the words the UI shows, the rules
+ *  for when it makes sense, and the prompt it turns into; and how a tool
+ *  call reads in the timeline, in one vocabulary for Claude Code's tools and
+ *  Codex's items. Browser-safe: the UI imports this for labels and
+ *  preconditions, the runner for prompts and titles. */
 
 import type { Repo, RunAction, WorkflowWhen } from "./types";
 
@@ -9,7 +11,7 @@ export interface ActionSpec {
   label: string;
   /** confirm-button verb, also the run's title */
   verb: string;
-  /** one short paragraph for the pre-flight dialog: what Claude will do */
+  /** one short paragraph for the pre-flight dialog: what the agent will do */
   blurb: string;
   /** placeholder for the note box */
   notePlaceholder: string;
@@ -32,7 +34,7 @@ export interface ActionSpec {
 
 const SAFETY = `- Work only inside this repository (submodules under it included).
 - Never rewrite published history, never force-push, never discard uncommitted work, never run destructive git commands (reset --hard, clean, checkout -- on tracked files).
-- Do not add a Co-Authored-By trailer or any mention of Claude to commit messages.
+- Do not add a Co-Authored-By trailer or any mention of Claude, Codex or an AI agent to commit messages.
 - No backticks in commit messages.`;
 
 const DONE = `- canopy shows this repo as "changed" for as long as git status lists anything at all: untracked files, and submodules with new commits, modified content, or untracked content inside them. The job is done when the list is empty and the branch is not ahead, or when the user has decided to leave something.`;
@@ -80,11 +82,11 @@ export const TOOL_SETS: Record<string, readonly string[]> = {
 
 export const ACTIONS: Record<RunAction, ActionSpec> = {
   ask: {
-    label: "ask claude…",
+    label: "ask the agent…",
     verb: "ask",
     blurb:
-      "Claude Code opens in this repo with your note as the task. It asks before running anything beyond reading files and git status.",
-    notePlaceholder: "what should Claude do in this repo?",
+      "The repo's agent opens in this repo with your note as the task. It asks before running anything beyond reading files and git status.",
+    notePlaceholder: "what should the agent do in this repo?",
     noteRequired: true,
     allowedTools: GIT_READ,
     maxTurns: 60,
@@ -97,7 +99,7 @@ export const ACTIONS: Record<RunAction, ActionSpec> = {
     label: "chat…",
     verb: "chat",
     blurb:
-      "A conversation with Claude Code in this repo, turn by turn, in canopy. It asks before running anything beyond reading files and git status.",
+      "A conversation with the repo's agent in this repo, turn by turn, in canopy. It asks before running anything beyond reading files and git status.",
     notePlaceholder: "say something about this repo",
     noteRequired: false,
     allowedTools: GIT_READ,
@@ -146,7 +148,9 @@ export function repoFacts(repo: Repo): string[] {
 }
 
 /** The full prompt for a run. The repo facts come from canopy's own status
- *  read, so Claude starts with the same picture the card shows. */
+ *  read, so the agent starts with the same picture the card shows. The
+ *  ground rules name Claude's AskUserQuestion; a Codex run is told its own
+ *  tool for the same thing (codexrun.ts). */
 export function buildPrompt(repo: Repo, spec: ActionSpec, note: string): string {
   const facts = repoFacts(repo);
   const head = [
@@ -177,8 +181,87 @@ function shorten(path: string, root?: string): string {
   return root && path.startsWith(root + "/") ? path.slice(root.length + 1) : path;
 }
 
+/** One file a change touches, as Codex reports a file change: its kind
+ *  (`add`, `delete`, `update`), where it moves to, and its unified diff. */
+export interface FileChangeInput {
+  path: string;
+  kind: string;
+  movePath?: string | null;
+  diff?: string;
+}
+
+/** A tool input's `changes`, the ones well formed enough to name. */
+function changesOf(input: Record<string, unknown>): FileChangeInput[] {
+  const raw = input["changes"];
+  if (!Array.isArray(raw)) return [];
+  return raw.flatMap((c: unknown) => {
+    if (typeof c !== "object" || c === null) return [];
+    const o = c as Record<string, unknown>;
+    if (typeof o["path"] !== "string" || !o["path"]) return [];
+    return [
+      {
+        path: o["path"],
+        kind: typeof o["kind"] === "string" ? o["kind"] : "update",
+        movePath: typeof o["movePath"] === "string" && o["movePath"] ? o["movePath"] : null,
+        diff: typeof o["diff"] === "string" ? o["diff"] : "",
+      },
+    ];
+  });
+}
+
+/** "edit a.ts", "write b.ts", "move c.ts to d.ts", "edit a.ts, b.ts and 2 more" */
+function changesTitle(changes: FileChangeInput[], root?: string): string {
+  const one = changes[0];
+  if (!one) return "edit files";
+  if (changes.length === 1) {
+    const path = shorten(one.path, root);
+    if (one.kind === "add") return `write ${path}`;
+    if (one.kind === "delete") return `delete ${path}`;
+    if (one.movePath) return `move ${path} to ${shorten(one.movePath, root)}`;
+    return `edit ${path}`;
+  }
+  const names = changes.slice(0, 2).map((c) => shorten(c.path, root));
+  const more = changes.length - names.length;
+  return `edit ${names.join(", ")}${more > 0 ? ` and ${more} more` : ""}`;
+}
+
+/** Each file under its path, its diff after it. */
+const changesDiff = (changes: FileChangeInput[], root?: string): string =>
+  changes.map((c) => `${shorten(c.path, root)}\n${(c.diff ?? "").trim()}`.trim()).join("\n\n");
+
+/** The access a sandbox permission request asks for, as words: "network,
+ *  write out, read /etc". */
+function accessWords(input: Record<string, unknown>, root?: string): string {
+  const rec = (v: unknown): Record<string, unknown> =>
+    typeof v === "object" && v !== null && !Array.isArray(v) ? (v as Record<string, unknown>) : {};
+  const net = rec(input["network"]);
+  const fs = rec(input["fileSystem"]);
+  const paths = (k: string) => (Array.isArray(fs[k]) ? fs[k].filter((p): p is string => typeof p === "string") : []);
+  return [
+    ...(net["enabled"] === true ? ["network"] : []),
+    ...paths("write").map((p) => `write ${shorten(p, root)}`),
+    ...paths("read").map((p) => `read ${shorten(p, root)}`),
+  ].join(", ");
+}
+
+/** An MCP tool's name, `mcp__<server>__<tool>`, as its two parts. */
+const mcpName = (name: string): [string, string] | null => {
+  const m = /^mcp__(.+?)__(.+)$/.exec(name);
+  return m ? [m[1] ?? "", m[2] ?? ""] : null;
+};
+
+/** The first string among a tool's input, clipped, as a title shows one. */
+const firstString = (input: Record<string, unknown>): string => {
+  const first = Object.values(input).find((v) => typeof v === "string");
+  return typeof first === "string" ? first.slice(0, 80) : "";
+};
+
 /** The one line the timeline shows for a tool call. Bash shows the command,
- *  file tools show the path, and anything else shows its name. */
+ *  file tools show the path, and anything else shows its name. Codex's
+ *  items arrive under the same names where one fits (a command is Bash, a
+ *  file change Edit with its `changes`, a sub-agent Agent), plus its own:
+ *  WebSearch, Plan, an MCP call as `mcp__<server>__<tool>`, and the two
+ *  that only ever show as prompts, Network and Permissions. */
 export function describeTool(
   name: string,
   input: Record<string, unknown>,
@@ -195,7 +278,7 @@ export function describeTool(
       return `read ${str("file_path")}`;
     case "Edit":
     case "MultiEdit":
-      return `edit ${str("file_path")}`;
+      return Array.isArray(input["changes"]) ? changesTitle(changesOf(input), root) : `edit ${str("file_path")}`;
     case "Write":
       return `write ${str("file_path")}`;
     case "Glob":
@@ -210,10 +293,21 @@ export function describeTool(
     case "Skill":
       return `skill ${str("skill")}`;
     case "TodoWrite":
+    case "Plan":
       return "update the plan";
+    case "WebSearch": {
+      const q = str("query");
+      return q ? `web search ${q}` : "web search";
+    }
+    case "Network":
+      return `network access to ${str("host") || "the network"}`;
+    case "Permissions":
+      return `more access: ${accessWords(input, root) || "sandbox permissions"}`;
     default: {
-      const first = Object.values(input).find((v) => typeof v === "string");
-      return first ? `${name} ${String(first).slice(0, 80)}` : name;
+      const mcp = mcpName(name);
+      const first = firstString(input);
+      if (mcp) return `${mcp[0]} ${mcp[1]}${first ? ` ${first}` : ""}`;
+      return first ? `${name} ${first}` : name;
     }
   }
 }
@@ -232,6 +326,14 @@ export function toolDetail(
     const v = input[k];
     return typeof v === "string" ? v : "";
   };
+  if (name === "Edit") {
+    // Codex's file change: each file's unified diff under its path
+    if (Array.isArray(input["changes"])) return changesDiff(changesOf(input), root).slice(0, 4000);
+    // one file's unified diff
+    if (typeof file === "string" && typeof input["diff"] === "string") {
+      return `${shorten(file, root)}\n${text("diff").trim()}`.trim().slice(0, 4000);
+    }
+  }
   // An edit is judged by what it changes, so the prompt shows the change
   // the way a diff would, not just the file name.
   if (name === "Edit" && typeof file === "string") {
@@ -252,6 +354,9 @@ export function toolDetail(
   }
   if (name === "MultiEdit" && typeof file === "string") {
     return shorten(file, root);
+  }
+  if (name === "Network" && text("host")) {
+    return `${text("protocol")} ${text("host")}`.trim();
   }
   try {
     return JSON.stringify(input, null, 2).slice(0, 4000);

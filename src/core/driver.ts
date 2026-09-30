@@ -7,51 +7,29 @@
  *  `codex app-server`. A `RunDriver` owns one run's process and its wire, and
  *  reports everything through the `DriveCtx` the Runner hands it.
  *
- *  `RunCtx` is that context as today's runner.ts implements it inline: the
- *  step cap, the prompt queue with its "allow all" sweep, the notes a settled
- *  prompt leaves, and how an exit becomes a status. It lives here so both
- *  drivers are tested against the same code the Runner will run. The Runner
- *  keeps what is not per run: the map of live runs, one-at-a-time per repo,
- *  pruning, and the git status read that sets `outcome`. */
+ *  `RunCtx` is the Runner's half of one run: the step cap, the prompt queue
+ *  with its "allow all" sweep, the notes a settled prompt leaves, and how an
+ *  exit becomes a status. Both drivers (`claudedrive.ts`, `codexrun.ts`) are
+ *  tested against the same code the Runner runs. The Runner keeps what is
+ *  not per run: the map of live runs, one-at-a-time per repo, pruning, which
+ *  driver a harness gets, and the git status read that sets `outcome`. */
 
-import type { RunAnswer, RunPrompt, RunQuestion, RunStatus, RunStep, Run } from "./types";
+import type { Harness, Run, RunAnswer, RunPrompt, RunQuestion, RunResult, RunStatus, RunStep, RunTokens } from "./types";
 
 /** steps kept per run; the oldest fall off with a note */
 export const STEP_CAP = 400;
 
-export type DriveHarness = "claude" | "codex";
+export type DriveHarness = Harness;
 
-/** Token counts for a run, where the harness reports them (Codex does;
- *  Claude reports a cost instead). This is `RunTokens` once types.ts has it. */
-export interface DriveTokens {
-  input: number;
-  /** the part of `input` served from the prompt cache */
-  cachedInput: number;
-  output: number;
-  /** the part of `output` spent reasoning */
-  reasoning: number;
-  total: number;
-}
+/** Token counts for a run, where the harness reports them. */
+export type DriveTokens = RunTokens;
 
-/** `RunResult` as phase 2 shapes it: a cost only where the harness reports
- *  one, tokens where it reports those. */
-export interface DriveResult {
-  text: string;
-  durationMs: number;
-  turns: number;
-  costUsd?: number;
-  tokens?: DriveTokens;
-}
+/** A turn's result: a cost only where the harness reports one, tokens
+ *  where it reports those. */
+export type DriveResult = RunResult;
 
-/** A `Run` with the fields phase 2 adds. Until types.ts has them, the
- *  context works on this; a `Run` is assignable to it. */
-export type DriveRun = Omit<Run, "result"> & {
-  harness?: DriveHarness;
-  /** Claude's session id or Codex's thread id: what makes a run resumable in
-   *  a shell later */
-  session?: string;
-  result?: DriveResult;
-};
+/** The run a context works on. */
+export type DriveRun = Run;
 
 /** The agent settings a driver reads. canopy's `AgentSettings` fits: model
  *  and effort are plain strings here since the harnesses name them

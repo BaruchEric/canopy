@@ -88,6 +88,21 @@ describe("parseWorkflow", () => {
     expect(e.workflow.noteRequired).toBe(true);
   });
 
+  test("agent: a step's own profile, else the workflow's, else none", () => {
+    const text = `---\nblurb: b\nagent: deep\n---\n\n## Plan\n\nThink.\n\n## Review\nagent: review\ntools: git-read\n\nLook.\n\n## Check\ncheck: bun test\n`;
+    const e = parseWorkflow(text, meta);
+    if (!e.ok) throw new Error(e.error);
+    expect(e.workflow.steps.map((s) => s.agent)).toEqual(["deep", "review", "deep"]);
+    expect(e.workflow.steps[1]?.tools).toContain("Bash(git status:*)");
+    const plain = parseWorkflow(`---\nblurb: b\n---\n\n## Do\n\nWork.\n`, meta);
+    if (!plain.ok) throw new Error(plain.error);
+    expect(plain.workflow.steps[0]).not.toHaveProperty("agent");
+    // an empty line is no pick
+    const empty = parseWorkflow(`---\nblurb: b\n---\n\n## Do\nagent:\n\nWork.\n`, meta);
+    if (!empty.ok) throw new Error(empty.error);
+    expect(empty.workflow.steps[0]?.agent).toBeUndefined();
+  });
+
   test("a bare tools: line falls back to git-read", () => {
     const e = parseWorkflow(`---\nblurb: b\n---\n\n## Do\ntools:\n\nWork.\n`, meta);
     if (!e.ok) throw new Error(e.error);
@@ -104,6 +119,8 @@ describe("parseWorkflow", () => {
     ["bad turns", `---\nblurb: b\n---\n\n## Do\nturns: lots\n\nWork.\n`, "turns"],
     ["duplicate step", `---\nblurb: b\n---\n\n## Do\n\nA.\n\n## Do\n\nB.\n`, "twice"],
     ["empty step", `---\nblurb: b\n---\n\n## Do\n\n## Next\n\nB.\n`, "neither a prompt nor a check"],
+    ["bad step agent", `---\nblurb: b\n---\n\n## Do\nagent: Deep One\n\nWork.\n`, "step Do: agent must name a profile"],
+    ["bad workflow agent", `---\nblurb: b\nagent: --yolo\n---\n\n## Do\n\nWork.\n`, "agent must name a profile"],
   ])("rejects %s", (_label, text, word) => {
     const e = parseWorkflow(text, meta);
     expect(e.ok).toBe(false);

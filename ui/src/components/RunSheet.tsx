@@ -25,6 +25,9 @@ import {
   type RunStep,
 } from "../../../src/core/types";
 import { renameOld, taskDraftCwd, taskDraftPatch, withChange } from "../tasks";
+import { AGENT_NAME, agentWord, harnessOf, resultLine, tokenTitle } from "../runs";
+import { HARNESS } from "../../../src/core/harness";
+import type { Harness } from "../../../src/core/types";
 
 const STATUS_WORD: Record<Run["status"], string> = {
   working: "working",
@@ -163,6 +166,7 @@ function Plan({ repo, action }: { repo: Repo; action: RunAction }) {
   const startRun = useStore((s) => s.startRun);
   const spec = ACTIONS[action];
   const agent = useStore((s) => agentFor(s, repo, spec.mode === "chat" ? "chat" : "job"));
+  const name = AGENT_NAME[agent.harness];
   const [note, setNote] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -184,7 +188,7 @@ function Plan({ repo, action }: { repo: Repo; action: RunAction }) {
     <>
       <header className="sheet-head">
         <div>
-          <div className="eyebrow">with claude</div>
+          <div className="eyebrow">with {name}</div>
           <h2 className="sheet-title">
             {spec.verb} <span className="sheet-repo">{idText(repo.id)}</span>
           </h2>
@@ -216,15 +220,15 @@ function Plan({ repo, action }: { repo: Repo; action: RunAction }) {
           onKeyDown={(e) => {
             if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) void go();
           }}
-          aria-label={spec.noteRequired ? "What Claude should do" : "Note for Claude"}
+          aria-label={spec.noteRequired ? `What ${name} should do` : `Note for ${name}`}
         />
         {error && <p className="note err">{error}</p>}
       </div>
       <footer className="sheet-foot">
         <span className="sheet-hint">
           {agent.yolo
-            ? "Yolo is on for this repo: Claude runs without asking."
-            : "Claude asks before running anything that is not part of the job."}
+            ? `Yolo is on for this repo: ${name} runs without asking.`
+            : `${name} asks before running anything that is not part of the job.`}
         </span>
         <button type="button" className="mini" onClick={close}>
           cancel
@@ -264,6 +268,7 @@ export function Timeline({
   const chat = run.chat;
   const active = isRunActive(run);
   const noChange = run.status === "done" && run.outcome === "unchanged" && run.expectsChange;
+  const harness = harnessOf(run);
   const list = useRef<HTMLDivElement>(null);
   const stuck = useRef(true);
 
@@ -275,7 +280,7 @@ export function Timeline({
     el.scrollTop = el.scrollHeight;
   }, [run.steps.length, run.prompt, run.status]);
 
-  // Claude's closing words arrive twice, as the last message and as the
+  // The agent's closing words arrive twice, as the last message and as the
   // result. The outcome box shows them once. A chat has no outcome box: its
   // replies stay in the timeline.
   const last = run.steps[run.steps.length - 1];
@@ -306,7 +311,7 @@ export function Timeline({
         {run.status === "working" && run.steps.length === 0 && (
           <li className="step k-note">
             <span className="node" />
-            <span className="step-text">starting Claude Code in {repo?.path ?? idText(run.repoId)}…</span>
+            <span className="step-text">starting {AGENT_NAME[harness]} in {repo?.path ?? idText(run.repoId)}…</span>
           </li>
         )}
         {run.status === "working" && run.steps.length > 0 && (
@@ -319,12 +324,12 @@ export function Timeline({
           <li className="step k-note">
             <span className="node" />
             <span className="step-text">
-              Your first message starts Claude Code in {repo?.path ?? idText(run.repoId)}.
+              Your first message starts {AGENT_NAME[harness]} in {repo?.path ?? idText(run.repoId)}.
             </span>
           </li>
         )}
       </ol>
-      {run.prompt && <Prompt prompt={run.prompt} onAnswer={onAnswer} />}
+      {run.prompt && <Prompt prompt={run.prompt} harness={harness} onAnswer={onAnswer} />}
       {run.result && run.status === "done" && !chat && (
         <div className={noChange ? "outcome warn" : "outcome ok"}>
           {noChange && (
@@ -346,10 +351,10 @@ export function Timeline({
           {run.result?.text && run.result.text !== run.error && <p>{run.result.text}</p>}
         </div>
       )}
-      {run.status === "stopped" && <div className="outcome dim"><p>Stopped. Whatever Claude had already done stays done.</p></div>}
+      {run.status === "stopped" && <div className="outcome dim"><p>Stopped. Whatever {AGENT_NAME[harness]} had already done stays done.</p></div>}
       {noChange && !active && (
         <p className="sheet-hint followup-hint">
-          Reopen the ⋯ menu to start another run, or ask Claude in a terminal to handle it.
+          Reopen the ⋯ menu to start another run, or ask the agent in a terminal to handle it.
         </p>
       )}
       {extra}
@@ -377,12 +382,20 @@ function Console({ run, repo }: { run: Run; repo: Repo | undefined }) {
     setError(null);
     return runConsoleAction(fn, setError, propagate);
   };
+  const harness = harnessOf(run);
+  const name = AGENT_NAME[harness];
 
   return (
     <>
       <header className="sheet-head">
         <div>
-          <div className="eyebrow">with claude{run.by && <span className="run-by" title="the device that started it"> · from {run.by}</span>}</div>
+          <div className="eyebrow">
+            <span className={`harness-glyph h-${harness}`} aria-hidden="true">
+              {HARNESS[harness].glyph}
+            </span>{" "}
+            with {name}
+            {run.by && <span className="run-by" title="the device that started it"> · from {run.by}</span>}
+          </div>
           <h2 className="sheet-title">
             {run.verb} <span className="sheet-repo">{idText(run.repoId)}</span>
           </h2>
@@ -408,6 +421,7 @@ function Console({ run, repo }: { run: Run; repo: Repo | undefined }) {
 
       {chat && active && (
         <Composer
+          who={name}
           ready={run.status === "idle"}
           onSend={(text) => act(() => sayRun(run.id, text), true)}
         />
@@ -415,9 +429,8 @@ function Console({ run, repo }: { run: Run; repo: Repo | undefined }) {
 
       <footer className="sheet-foot">
         {run.result && (
-          <span className="sheet-hint">
-            {run.result.turns} turn{run.result.turns === 1 ? "" : "s"} ·{" "}
-            {mmss(run.result.durationMs)} · ${run.result.costUsd.toFixed(2)}
+          <span className="sheet-hint" title={tokenTitle(run.result) ?? undefined}>
+            {resultLine(run.result)}
           </span>
         )}
         <span className="spacer" />
@@ -425,7 +438,7 @@ function Console({ run, repo }: { run: Run; repo: Repo | undefined }) {
           <button
             type="button"
             className="mini"
-            title={chat && run.status === "idle" ? "Close the conversation; Claude Code exits" : undefined}
+            title={chat && run.status === "idle" ? `Close the conversation; ${name} exits` : undefined}
             onClick={() => void act(() => stopRun(run.id))}
           >
             {chat && run.status === "idle" ? "end chat" : "stop"}
@@ -445,9 +458,12 @@ function Console({ run, repo }: { run: Run; repo: Repo | undefined }) {
 
 /** The chat's message box. Enter sends, shift-enter breaks a line. */
 function Composer({
+  who,
   ready,
   onSend,
 }: {
+  /** the agent's name, for the box's placeholder while it replies */
+  who: string;
   ready: boolean;
   onSend: (text: string) => Promise<void>;
 }) {
@@ -456,7 +472,7 @@ function Composer({
   const box = useRef<HTMLTextAreaElement>(null);
   const can = ready && !busy && text.trim().length > 0;
 
-  // Back to the box as soon as Claude has answered.
+  // Back to the box as soon as the agent has answered.
   useEffect(() => {
     if (ready) box.current?.focus();
   }, [ready]);
@@ -482,7 +498,7 @@ function Composer({
         ref={box}
         className="composer-box"
         rows={2}
-        placeholder={ready ? "say something…" : "Claude is replying…"}
+        placeholder={ready ? "say something…" : `${who} is replying…`}
         value={text}
         onChange={(e) => setText(e.target.value)}
         onKeyDown={(e) => {
@@ -870,15 +886,18 @@ function LaunchForm({ repo }: { repo: Repo }) {
 
 function Prompt({
   prompt,
+  harness,
   onAnswer,
 }: {
   prompt: RunPrompt;
+  /** whose prompt it is, for its heading */
+  harness: Harness;
   onAnswer: (a: RunAnswer) => void;
 }) {
   if (prompt.kind === "permission") {
     return (
       <div className="ask">
-        <div className="eyebrow">claude wants to run</div>
+        <div className="eyebrow">{agentWord(harness)} wants to run</div>
         <pre className="ask-detail">{prompt.detail}</pre>
         <div className="ask-row">
           <button type="button" className="mini strong" onClick={() => onAnswer({ kind: "allow" })}>
@@ -900,14 +919,17 @@ function Prompt({
       </div>
     );
   }
-  return <Questions questions={prompt.questions} onAnswer={(answers) => onAnswer({ kind: "answers", answers })} />;
+  return <Questions questions={prompt.questions} who={agentWord(harness)} onAnswer={(answers) => onAnswer({ kind: "answers", answers })} />;
 }
 
 function Questions({
   questions,
+  who,
   onAnswer,
 }: {
   questions: RunQuestion[];
+  /** the agent's word, for the heading */
+  who: string;
   onAnswer: (answers: Record<string, string>) => void;
 }) {
   const [picked, setPicked] = useState<Record<string, string[]>>({});
@@ -940,7 +962,7 @@ function Questions({
 
   return (
     <div className="ask">
-      <div className="eyebrow">claude asks</div>
+      <div className="eyebrow">{who} asks</div>
       {questions.map((q) => (
         <div key={q.question} className="question">
           <p className="q-text">

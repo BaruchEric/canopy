@@ -163,6 +163,38 @@ describe("describeTool", () => {
     expect(d).toBe("a.ts\n- x = 1\n+ x = 2");
     expect(toolDetail("Write", { file_path: "/r/n.txt", content: "hi\nthere" }, "/r")).toBe("n.txt\nhi\nthere");
   });
+  test("Codex's vocabulary: searches, MCP calls, the plan, sub-agents, and the prompt-only access requests", () => {
+    expect(describeTool("WebSearch", { query: "bun spawn" })).toBe("web search bun spawn");
+    expect(describeTool("WebSearch", {})).toBe("web search");
+    expect(describeTool("mcp__gh__get_issue", { repo: "o/r", n: 3 })).toBe("gh get_issue o/r");
+    expect(describeTool("mcp__my_server__list", {})).toBe("my_server list");
+    expect(describeTool("Plan", {})).toBe("update the plan");
+    expect(describeTool("Agent", { description: "look at tests" })).toBe("agent: look at tests");
+    expect(describeTool("Network", { host: "npmjs.org", protocol: "https" })).toBe("network access to npmjs.org");
+    expect(toolDetail("Network", { host: "npmjs.org", protocol: "https" })).toBe("https npmjs.org");
+    expect(describeTool("Permissions", { network: { enabled: true }, fileSystem: { write: ["/r/out"], read: ["/etc"] } }, "/r")).toBe(
+      "more access: network, write out, read /etc",
+    );
+    expect(describeTool("Permissions", {})).toBe("more access: sandbox permissions");
+    expect(toolDetail("Permissions", { network: { enabled: true } })).toContain('"enabled": true');
+  });
+
+  test("an edit whose detail is a unified diff, one file or several", () => {
+    expect(toolDetail("Edit", { file_path: "/r/a.ts", diff: "@@\n-a\n+b\n" }, "/r")).toBe("a.ts\n@@\n-a\n+b");
+    const changes = [
+      { path: "/r/a.ts", kind: "update", diff: "-a\n+b" },
+      { path: "/r/n.ts", kind: "add", diff: "+x" },
+    ];
+    expect(describeTool("Edit", { changes }, "/r")).toBe("edit a.ts, n.ts");
+    expect(toolDetail("Edit", { changes }, "/r")).toBe("a.ts\n-a\n+b\n\nn.ts\n+x");
+    expect(describeTool("Edit", { changes: [changes[1]] }, "/r")).toBe("write n.ts");
+    expect(describeTool("Edit", { changes: [{ path: "/r/a", kind: "delete" }] }, "/r")).toBe("delete a");
+    expect(describeTool("Edit", { changes: [{ path: "/r/a", kind: "update", movePath: "/r/b" }] }, "/r")).toBe("move a to b");
+    expect(describeTool("Edit", { changes: [] })).toBe("edit files");
+    // Claude's edit is unchanged
+    expect(describeTool("Edit", { file_path: "/r/a.ts" }, "/r")).toBe("edit a.ts");
+  });
+
   test("toolDetail keeps the whole command and falls back to JSON", () => {
     expect(toolDetail("Bash", { command: "a && b" })).toBe("a && b");
     expect(toolDetail("Grep", { pattern: "x" })).toContain('"pattern": "x"');
