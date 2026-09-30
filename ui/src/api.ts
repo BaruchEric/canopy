@@ -151,7 +151,9 @@ async function req<T>(b: string, path: string, init: RequestInit = {}): Promise<
     throw new Error(body.error ?? `${r.status} ${r.statusText}`);
   }
   signal(b, { kind: "answered" });
-  if (!r.ok) throw new Error(body.error ?? `${r.status} ${r.statusText}`);
+  // the status rides on the error for a caller that tells a refusal apart
+  // (a backend with no broker answers 503) from a failure
+  if (!r.ok) throw Object.assign(new Error(body.error ?? `${r.status} ${r.statusText}`), { status: r.status });
   return body;
 }
 

@@ -1096,6 +1096,17 @@ export const setRetryFirst = (ms: number): void => {
   retryFirst = ms;
 };
 
+/* The registry's own bookkeeping, outside the store since nothing renders
+   it: which event last told of each card, numbered, so a list read while
+   events landed passes over what they said; and the retry of a first load
+   that failed. */
+let registryEvents = 0;
+const registryHeard = new Map<string, number>();
+let registryRetry: ReturnType<typeof setTimeout> | null = null;
+let registryTries = 0;
+const REGISTRY_RETRY_FIRST = 5_000;
+const REGISTRY_RETRY_MAX = 5 * 60_000;
+
 /** Cancel a backend's waiting retry; `forget` also drops its count of
  *  failures, for a backend that answered or left the page. */
 function stopRetry(name: string, forget: boolean): void {
@@ -1825,10 +1836,16 @@ export const useStore = create<CanopyState>((set, get) => ({
       });
     }
     if (ev.type === "registry") {
+      registryEvents += 1;
+      for (const c of ev.cards) registryHeard.set(c.id, registryEvents);
+      for (const id of ev.gone ?? []) registryHeard.set(id, registryEvents);
       set((s) => {
         const registry = mergeCards(s.registry, ev.cards, ev.gone);
         return registry === s.registry ? {} : { registry };
       });
+      // the broker is there after all: a first load that failed reads the
+      // whole list now rather than showing this card alone
+      if (!get().registryReady) void get().loadRegistry();
       return;
     }
     if (ev.type === "asks") {
@@ -2022,12 +2039,25 @@ export const useStore = create<CanopyState>((set, get) => ({
     set((s) => ({ conns: connsIf(s, b, { keeping }) }));
   },
   loadRegistry: async () => {
+    if (registryRetry) clearTimeout(registryRetry);
+    registryRetry = null;
+    // events that land while the list is on its way are newer than it
+    const mark = registryEvents;
     try {
       const info = await api.registry();
       const cards = Array.isArray(info.cards) ? info.cards : [];
-      set((s) => ({ registry: replaceCards(s.registry, cards), registryReady: true }));
-    } catch {
+      registryTries = 0;
+      set((s) => ({ registry: replaceCards(s.registry, cards, (id) => (registryHeard.get(id) ?? 0) > mark), registryReady: true }));
+    } catch (e) {
       set({ registry: {}, registryReady: false });
+      // A backend with no broker says so with a 503 and is asked again only
+      // when its stream comes back; a broker or a backend that did not
+      // answer is asked again at doubling waits, so the view comes back.
+      if ((e as { status?: unknown }).status === 503) return;
+      registryRetry = setTimeout(() => {
+        registryRetry = null;
+        void get().loadRegistry();
+      }, retryWait(registryTries++, REGISTRY_RETRY_FIRST, REGISTRY_RETRY_MAX));
     }
   },
   loadAsks: async () => {
@@ -2752,24 +2782,45 @@ export function allCards(s: CanopyState): RepoCard[] {
   return cardsOut;
 }
 
+/* Every repo as a card, whatever the workspace and the archived filter
+   leave on the board: a panel stays open on a repo the board has scoped
+   out, and its agents are still its own. Memoized like `allCards`. */
+let everyIn: { repos: Repo[]; forge: unknown; order: string[] } | null = null;
+let everyOut: RepoCard[] = [];
+let everyIndex = new Map<string, RepoCard>();
+
+function everyCard(s: CanopyState): RepoCard[] {
+  const c = everyIn;
+  if (c && c.repos === s.repos && c.forge === s.settings.forge && c.order === s.backendOrder) return everyOut;
+  const reg = registry();
+  // a forge repo already cloned here is the card beside it, as on the board
+  const repos = s.settings.forge === "all" ? s.repos : s.repos.filter((r) => r.forge?.clonedAs === undefined);
+  everyOut = joinRepos(repos, s.backendOrder, (id) => split(reg, id));
+  everyIn = { repos: s.repos, forge: s.settings.forge, order: s.backendOrder };
+  everyIndex = new Map(everyOut.flatMap((card) => card.checkouts.map((r) => [r.id, card] as const)));
+  return everyOut;
+}
+
 let agentsIn: { registry: Record<string, AgentCard>; cards: RepoCard[] } | null = null;
 let agentsOut = new Map<string, AgentCard[]>();
 const NO_AGENTS: AgentCard[] = [];
 
 /** Every repo card's agents from the registry, by card key, running first;
- *  worked out once per registry or board change. */
+ *  worked out once per registry or repo change, over every repo rather
+ *  than the board's scoped cards. */
 export function agentsByCard(s: CanopyState): Map<string, AgentCard[]> {
-  const cards = allCards(s);
+  const cards = everyCard(s);
   if (agentsIn && agentsIn.registry === s.registry && agentsIn.cards === cards) return agentsOut;
   agentsIn = { registry: s.registry, cards };
   agentsOut = cardsByRepoCard(cards, Object.values(s.registry), backendOf);
   return agentsOut;
 }
 
-/** the agents on the card a checkout is on, anywhere; a stable array, so a
- *  selector over it settles */
+/** the agents on the card a checkout is on, anywhere, archived or out of
+ *  the workspace or not; a stable array, so a selector over it settles */
 export function agentsOn(s: CanopyState, repoId: string): AgentCard[] {
-  const card = cardOf(s, repoId);
+  everyCard(s);
+  const card = everyIndex.get(repoId);
   return (card && agentsByCard(s).get(card.key)) || NO_AGENTS;
 }
 

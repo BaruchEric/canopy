@@ -197,4 +197,17 @@ describe("merging", () => {
     const newer = { ...a, seenAt: 20 };
     expect(replaceCards({ a: newer, b }, [a])).toEqual({ a: newer });
   });
+
+  test("a card an event told of while the list was on its way keeps what the event said, a tie of beats included", () => {
+    // the broker marks a card lost without a new beat
+    const lost = { ...a, state: "lost" as const };
+    const c = card({ id: "c", seenAt: 10 });
+    const since = (id: string) => id === "a" || id === "c" || id === "gone";
+    // a stays lost, c (started since) stays though the list lacks it, and a
+    // card an event said was gone stays gone
+    const got = replaceCards({ a: lost, b, c }, [{ ...a, state: "idle" }, b, card({ id: "gone" })], since);
+    expect(got).toEqual({ a: lost, b, c });
+    // without an event since, the list is the news
+    expect(replaceCards({ a: lost }, [{ ...a, state: "idle" }])).toEqual({ a: { ...a, state: "idle" } });
+  });
 });

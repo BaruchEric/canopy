@@ -213,6 +213,34 @@ describe("the hub on its own", () => {
     hub.close();
   });
 
+  test("an event heard while a list was on its way wins over it, a tie of beats included", async () => {
+    let answer: (cards: AgentCard[]) => void = () => {};
+    const slow = { listAgents: () => new Promise<unknown>((res) => (answer = res)) } as unknown as Chan;
+    const out: ServerEvent[] = [];
+    const hub = new RegistryHub(CFG, { broadcast: (ev) => out.push(ev), repos: () => [], chan: slow, scanEvery: 0, relistEvery: 0 });
+    const msg = (c: AgentCard) => ({ id: 1, channel: "agents", handle: "tailchan", node: "tailchan", kind: "event", body: JSON.stringify({ type: "agent", card: c }), meta: {}, ts: 0 });
+    const idle = card({ id: "claude:r", state: "idle", seenAt: 5_000 });
+    const fresh = card({ id: "claude:new", state: "working", seenAt: 5_000 });
+    const listing = hub.relist();
+    // the broker marks it lost off its own clock, the last beat unchanged,
+    // and a card starts, both after the list was read
+    hub["onMessage"](msg({ ...idle, state: "lost" }));
+    hub["onMessage"](msg(fresh));
+    answer([idle]);
+    await listing;
+    expect(hub.list().find((c) => c.id === "claude:r")?.state).toBe("lost");
+    expect(hub.list().some((c) => c.id === "claude:new")).toBe(true);
+    // what the list got wrong is never broadcast
+    expect(out.flatMap((e) => (e.type === "registry" ? e.cards.map((c) => `${c.id}:${c.state}`) : []))).toEqual(["claude:r:lost", "claude:new:working"]);
+    expect(out.some((e) => e.type === "registry" && e.gone?.length)).toBe(false);
+    // a list asked for later is the news again
+    const next = hub.relist();
+    answer([{ ...idle, state: "ended", endedAt: 6_000 }]);
+    await next;
+    expect(hub.list().find((c) => c.id === "claude:r")?.state).toBe("ended");
+    hub.close();
+  });
+
   test("no broker: no cards, and the route says why", async () => {
     const other = await startServer({ root, port: 0, chan: null });
     try {

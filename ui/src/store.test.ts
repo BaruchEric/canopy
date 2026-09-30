@@ -631,6 +631,17 @@ describe("several backends", () => {
     ]);
     useStore.getState().applyEvent({ type: "registry", cards: [], gone: ["claude:two"] }, "a");
     expect(Object.keys(useStore.getState().registry)).toEqual(["claude:one"]);
+    // a panel for a repo the board leaves out, archived or outside the
+    // workspace, still shows the agents working in it
+    useStore.setState((st) => ({
+      repos: st.repos.map((r) => (r.id === "proj" ? { ...r, archived: "canopy" as const } : r)),
+      settings: { ...st.settings, hideArchived: true },
+    }));
+    expect(visibleCards(useStore.getState()).some((c) => c.checkouts.some((r) => r.id === "proj"))).toBe(false);
+    expect(agentsOn(useStore.getState(), "proj").map((c) => c.id)).toEqual(["claude:one"]);
+    useStore.setState((st) => ({ settings: { ...st.settings, hideArchived: false }, workspaces: [{ name: "w", repos: [] }], activeWs: "w" }));
+    expect(agentsOn(useStore.getState(), "proj").map((c) => c.id)).toEqual(["claude:one"]);
+    useStore.setState({ activeWs: null, workspaces: [] });
   });
 
   test("asks are home's alone, and an answer goes back the way its item came", async () => {
@@ -1182,5 +1193,61 @@ describe("a repo's agent override on a backend older than routing", () => {
     await useStore.getState().setAgent("app", { all: { profile: "deep" } });
     expect(bodies).toEqual([own, override, DEFAULT_AGENT]);
     useStore.setState({ conns: s.conns });
+  });
+});
+
+describe("the registry after a failed first load", () => {
+  const realFetch = globalThis.fetch;
+  afterEach(() => {
+    globalThis.fetch = realFetch;
+    useStore.setState({ registry: {}, registryReady: false });
+  });
+
+  test("the first card event reads the whole list again, and a backend with no broker is not asked again", async () => {
+    let calls = 0;
+    let answer: { status: number; body: unknown } = { status: 502, body: { error: "the broker did not answer" } };
+    globalThis.fetch = (async (url: string | URL | Request) => {
+      if (new URL(String(url), "http://x").pathname === "/api/registry") calls++;
+      return new Response(JSON.stringify(answer.body), { status: answer.status });
+    }) as unknown as typeof fetch;
+    const full = (id: string): AgentCard => ({
+      id,
+      handle: id,
+      node: "mini",
+      harness: "claude",
+      session: null,
+      origin: "elsewhere",
+      cwd: "/a/proj",
+      repo: null,
+      branch: null,
+      model: null,
+      mode: null,
+      state: "working",
+      waiting: null,
+      caps: [],
+      offers: [],
+      notifyIdle: false,
+      where: { os: "linux", container: false, pid: 1, term: null, canopy: null },
+      transcript: null,
+      startedAt: 1,
+      seenAt: 2,
+      endedAt: null,
+    });
+    const one = full("claude:one");
+    const two = full("claude:two");
+    await useStore.getState().loadRegistry();
+    expect(useStore.getState().registryReady).toBe(false);
+    // the broker is back: its first event brings the list with it
+    answer = { status: 200, body: { ready: true, cards: [one, two] } };
+    useStore.getState().applyEvent({ type: "registry", cards: [two] });
+    await new Promise((r) => setTimeout(r, 20));
+    expect(useStore.getState().registryReady).toBe(true);
+    expect(Object.keys(useStore.getState().registry).sort()).toEqual(["claude:one", "claude:two"]);
+    // no broker at all is a 503, which schedules nothing
+    answer = { status: 503, body: { error: "tailchan is not set up on this backend" } };
+    const before = calls;
+    await useStore.getState().loadRegistry();
+    expect(useStore.getState().registryReady).toBe(false);
+    expect(calls).toBe(before + 1);
   });
 });

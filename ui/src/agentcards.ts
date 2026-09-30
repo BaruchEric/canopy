@@ -216,13 +216,26 @@ export function mergeCards(held: Record<string, AgentCard>, incoming: readonly A
 }
 
 /** A whole list read as the cards held: what it names, each unless the one
- *  held is newer (an event that landed while the list was on its way). */
-export function replaceCards(held: Record<string, AgentCard>, list: readonly AgentCard[]): Record<string, AgentCard> {
+ *  held is newer. `since` names the cards an event told of while the list
+ *  was on its way: what the event said stands, whatever the list says (the
+ *  broker marks a card lost without a new beat, so a tie is no proof), a
+ *  card it brought in is kept though the list lacks it, and one it said
+ *  was gone stays gone. */
+export function replaceCards(
+  held: Record<string, AgentCard>,
+  list: readonly AgentCard[],
+  since: (id: string) => boolean = () => false,
+): Record<string, AgentCard> {
   const out: Record<string, AgentCard> = {};
   for (const c of list) {
-    const had = held[c.id];
+    const had = Object.hasOwn(held, c.id) ? held[c.id] : undefined;
+    if (since(c.id)) {
+      if (had) out[c.id] = had;
+      continue;
+    }
     out[c.id] = had && had.seenAt > c.seenAt ? had : c;
   }
+  for (const [id, had] of Object.entries(held)) if (!Object.hasOwn(out, id) && since(id)) out[id] = had;
   return out;
 }
 

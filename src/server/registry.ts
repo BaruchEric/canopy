@@ -52,6 +52,12 @@ export interface RegistryDeps {
 export class RegistryHub {
   readonly chan: Chan | null;
   private cards = new Map<string, AgentCard>();
+  /** Which event last told of each card, numbered in the order they came.
+   *  A list asked for before then is older news about that card even when
+   *  its beat is the same: the broker marks a card lost without a new
+   *  beat. */
+  private heard = new Map<string, number>();
+  private events = 0;
   /** whether a list has answered since start */
   private listed = false;
   private listing: Promise<void> | null = null;
@@ -119,27 +125,34 @@ export class RegistryHub {
 
   private onMessage(m: ChanMessage): void {
     const card = registryCard(m);
-    if (card && this.absorb(card)) this.deps.broadcast({ type: "registry", cards: [card] });
+    if (!card) return;
+    this.heard.set(card.id, ++this.events);
+    if (this.absorb(card)) this.deps.broadcast({ type: "registry", cards: [card] });
   }
 
   /** The whole list again, what changed broadcast, and a card the broker no
-   *  longer has dropped, as long as it was not heard of while the list was
-   *  on its way. Concurrent callers share one read. */
+   *  longer has dropped. A card an event told of while the list was on its
+   *  way keeps what the event said, whatever the list says of it (a `lost`
+   *  and the `idle` before it carry the same beat). Concurrent callers
+   *  share one read. */
   relist(): Promise<void> {
     if (!this.cfg || !this.chan) return Promise.resolve();
     if (this.listing) return this.listing;
     const { cfg, chan } = this;
     const asked = Date.now();
+    const mark = this.events;
     const pass = chan
       .listAgents(cfg.bot, { state: "all" })
       .then((raw) => {
         const got = (Array.isArray(raw) ? raw : []).map(asAgentCard).filter((c): c is AgentCard => c !== null);
-        const changed = got.filter((c) => this.absorb(c));
+        const since = (id: string): boolean => (this.heard.get(id) ?? 0) > mark;
+        const changed = got.filter((c) => !since(c.id) && this.absorb(c));
         const ids = new Set(got.map((c) => c.id));
         const gone: string[] = [];
         for (const [id, c] of this.cards) {
-          if (!ids.has(id) && c.seenAt < asked) {
+          if (!ids.has(id) && c.seenAt < asked && !since(id)) {
             this.cards.delete(id);
+            this.heard.delete(id);
             gone.push(id);
           }
         }
