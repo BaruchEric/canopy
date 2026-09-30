@@ -5,7 +5,7 @@
 
 import { describeAgent } from "../../src/core/agent";
 import { HARNESS } from "../../src/core/harness";
-import { DEFAULT_PROFILE, isProfilePick, resolveAgent, roleTakes } from "../../src/core/route";
+import { DEFAULT_PROFILE, hasProfile, isProfilePick, resolveAgent, roleTakes } from "../../src/core/route";
 import {
   AGENT_ROLES,
   HARNESSES,
@@ -134,7 +134,7 @@ export function effectiveRows(routes: AgentRoutes, path: string, has: readonly H
 export function missingProfiles(routes: AgentRoutes): string[] {
   const out: string[] = [];
   const check = (where: string, p: AgentPick | undefined) => {
-    if (p && isProfilePick(p) && !(p.profile in routes.profiles)) out.push(`${where}: ${p.profile}`);
+    if (p && isProfilePick(p) && !hasProfile(routes.profiles, p.profile)) out.push(`${where}: ${p.profile}`);
   };
   for (const role of AGENT_ROLES) check(`role ${role}`, routes.roles[role]);
   for (const [path, r] of Object.entries(routes.repos)) {

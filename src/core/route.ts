@@ -38,9 +38,19 @@ import {
   type ResolvedAgent,
 } from "./types";
 
-/** A profile's name: short, lowercase, one path-safe word. */
+/** A profile's name: short, lowercase, one path-safe word, and never one
+ *  every object already has (`constructor`): profiles are kept by name in
+ *  plain objects, where such a name would read the prototype's. */
 export const PROFILE_RE = /^[a-z0-9][a-z0-9_-]{0,31}$/;
-export const isProfileName = (v: unknown): v is string => typeof v === "string" && PROFILE_RE.test(v);
+export const isProfileName = (v: unknown): v is string => typeof v === "string" && PROFILE_RE.test(v) && !(v in Object.prototype);
+
+/** A profile by name, only when the routing holds one under it: never a
+ *  name an object has by inheritance. */
+export const profileOf = (profiles: Readonly<Record<string, AgentSettings>>, name: string): AgentSettings | undefined =>
+  Object.hasOwn(profiles, name) ? profiles[name] : undefined;
+
+/** Whether the routing holds a profile under `name`. */
+export const hasProfile = (profiles: Readonly<Record<string, AgentSettings>>, name: string): boolean => Object.hasOwn(profiles, name);
 
 /** the profile that is always there: the backend's default */
 export const DEFAULT_PROFILE = "default";
@@ -147,7 +157,7 @@ export function normalizeRepoAgents(v: unknown): Record<string, RepoAgent> {
 
 /** Every profile with `default` among them: the builtin when unset. */
 export const withDefaultProfile = (profiles: Record<string, AgentSettings>): Record<string, AgentSettings> =>
-  DEFAULT_PROFILE in profiles ? profiles : { [DEFAULT_PROFILE]: { ...DEFAULT_AGENT }, ...profiles };
+  hasProfile(profiles, DEFAULT_PROFILE) ? profiles : { [DEFAULT_PROFILE]: { ...DEFAULT_AGENT }, ...profiles };
 
 /** What `GET /api/agents` and the `agents` event carry, from anything a
  *  backend sent: this shape, or an older backend's plain map of settings
@@ -190,7 +200,7 @@ function settle(
   pick: AgentPick,
 ): { settings: AgentSettings; profile?: string } | { why: string; profile?: string } {
   if (isProfilePick(pick)) {
-    const s = routes.profiles[pick.profile] ?? (pick.profile === DEFAULT_PROFILE ? DEFAULT_AGENT : undefined);
+    const s = profileOf(routes.profiles, pick.profile) ?? (pick.profile === DEFAULT_PROFILE ? DEFAULT_AGENT : undefined);
     if (!s) return { why: `no profile named ${pick.profile}`, profile: pick.profile };
     if (!roleTakes(role, s.harness)) return { why: roleRefusal(role, s.harness), profile: pick.profile };
     return { settings: s, profile: pick.profile };
@@ -201,14 +211,14 @@ function settle(
 
 /** The routed layers for a repo and role, in order: what each names. */
 function layers(routes: AgentRoutes, path: string, role: AgentRole): [AgentLayer, AgentPick][] {
-  const repo = routes.repos[path];
+  const repo = Object.hasOwn(routes.repos, path) ? routes.repos[path] : undefined;
   const out: [AgentLayer, AgentPick][] = [];
   const rr = repo?.roles?.[role];
   if (rr) out.push(["repo-role", rr]);
   if (repo?.all) out.push(["repo", repo.all]);
   const r = routes.roles[role];
   if (r) out.push(["role", r]);
-  if (DEFAULT_PROFILE in routes.profiles) out.push(["default", { profile: DEFAULT_PROFILE }]);
+  if (hasProfile(routes.profiles, DEFAULT_PROFILE)) out.push(["default", { profile: DEFAULT_PROFILE }]);
   return out;
 }
 

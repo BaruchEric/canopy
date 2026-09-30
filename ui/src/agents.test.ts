@@ -91,6 +91,10 @@ describe("the effective table", () => {
 describe("the routing's bookkeeping", () => {
   test("routes naming a profile that is gone", () => {
     expect(missingProfiles(routes())).toEqual(["/dev/other (job): gone"]);
+    // a name every object has is no profile, and the effective rows still draw
+    const odd: AgentRoutes = { ...routes(), roles: { shell: { profile: "constructor" } } };
+    expect(missingProfiles(odd)).toContain("role shell: constructor");
+    expect(effectiveRows(odd, "/dev/none", ["claude"]).map((r) => r.harness)).toContain("✳ claude");
   });
 
   test("how many routes use a profile", () => {

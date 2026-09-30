@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { describeAgent, normalizeAgent, withHarness } from "../../../src/core/agent";
 import { HARNESS, takesModel } from "../../../src/core/harness";
-import { isProfilePick, roleRefusal, roleTakes } from "../../../src/core/route";
+import { hasProfile, isProfilePick, roleRefusal, roleTakes } from "../../../src/core/route";
 import { HARNESSES, type AgentPick, type AgentRole, type AgentRoutes, type AgentSettings, type Harness } from "../../../src/core/types";
 import { harnessWord, pickOf, pickValue, profileNames, ROLE_LABEL, ROLE_TITLE, slotHarnesses, type EffectiveRow } from "../agents";
 import { Seg } from "./Seg";
@@ -185,7 +185,7 @@ export function PickEditor({
   compact?: boolean;
 }) {
   const value = pickValue(pick);
-  const gone = pick && isProfilePick(pick) && !(pick.profile in routes.profiles) ? pick.profile : null;
+  const gone = pick && isProfilePick(pick) && !hasProfile(routes.profiles, pick.profile) ? pick.profile : null;
   const allowed = slotHarnesses(slot);
   return (
     <div className="pick-editor">

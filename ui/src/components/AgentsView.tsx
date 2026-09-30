@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { describeAgent } from "../../../src/core/agent";
 import { HARNESS } from "../../../src/core/harness";
-import { DEFAULT_PROFILE, isProfileName, isProfilePick, resolveAgent, roleRefusal, roleTakes } from "../../../src/core/route";
+import { DEFAULT_PROFILE, hasProfile, isProfileName, isProfilePick, profileOf, resolveAgent, roleRefusal, roleTakes } from "../../../src/core/route";
 import { AGENT_ROLES, DEFAULT_AGENT, HARNESSES, type AgentRole, type AgentRoutes, type GuardsInfo, type Harness, type RepoAgent } from "../../../src/core/types";
 import { describeGuard, guardHit, normalizeGuards, parseGuardRule } from "../../../src/core/guards";
 import { api } from "../api";
@@ -281,7 +281,7 @@ function Profiles({ scope, routes, has }: { scope: string; routes: AgentRoutes; 
       setError("A profile's name is lowercase letters, digits, - and _, up to 32.");
       return;
     }
-    if (n in routes.profiles) {
+    if (hasProfile(routes.profiles, n)) {
       setEditing(n);
       setName("");
       return;
@@ -381,7 +381,7 @@ function Roles({ scope, routes }: { scope: string; routes: AgentRoutes; has: rea
         {AGENT_ROLES.map((role) => {
           const pick = routes.roles[role];
           const value = !pick ? "" : isProfilePick(pick) ? `profile:${pick.profile}` : "custom";
-          const named = pick && isProfilePick(pick) ? routes.profiles[pick.profile] : undefined;
+          const named = pick && isProfilePick(pick) ? profileOf(routes.profiles, pick.profile) : undefined;
           const passed = named && !roleTakes(role, named.harness) ? roleRefusal(role, named.harness) : null;
           return (
             <li key={role} className="agents-row">
@@ -396,7 +396,7 @@ function Roles({ scope, routes }: { scope: string; routes: AgentRoutes; has: rea
                       {HARNESS[routes.profiles[n]!.harness].glyph} {n}
                     </option>
                   ))}
-                  {pick && isProfilePick(pick) && !(pick.profile in routes.profiles) && (
+                  {pick && isProfilePick(pick) && !hasProfile(routes.profiles, pick.profile) && (
                     <option value={`profile:${pick.profile}`}>{pick.profile} (gone: falls through)</option>
                   )}
                   {pick && !isProfilePick(pick) && <option value="custom">{pickLine(pick)} (its own settings)</option>}

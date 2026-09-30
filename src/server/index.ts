@@ -48,7 +48,7 @@ import { hasGatewayKey, jev } from "../core/jev";
 import { isDefaultAgent, normalizeAgent } from "../core/agent";
 import type { AgentEnv } from "../core/harness";
 import { paneAgent } from "../core/procs";
-import { effectiveAgents, isProfileName, launchPick, normalizePick, normalizeRepoAgent, pickRefusal, repoAgentRefusal } from "../core/route";
+import { effectiveAgents, hasProfile, isProfileName, launchPick, normalizePick, normalizeRepoAgent, pickRefusal, repoAgentRefusal } from "../core/route";
 import { selfName } from "../core/backends";
 import { linkPeers, NO_PUSH, peerUrl } from "../core/peers";
 import { initRepo, PassSeen, seedRepo, syncAll, syncRepo, takeWip, trackBranch } from "../core/peersync";
@@ -597,7 +597,7 @@ async function needHarness(state: ServerState, h: Harness): Promise<void> {
  *  on the repo's flow route instead. */
 function stepProfileRefusal(cfg: CanopyConfig, wf: Workflow): string | null {
   const profiles = agentRoutes(cfg).profiles;
-  const step = wf.steps.find((s) => s.agent && !(s.agent in profiles));
+  const step = wf.steps.find((s) => s.agent && !hasProfile(profiles, s.agent));
   return step ? `step ${step.name} of ${wf.name} names agent profile ${step.agent ?? ""}, which this backend does not have` : null;
 }
 

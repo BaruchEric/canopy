@@ -78,6 +78,28 @@ describe("resolving a role", () => {
     expect(resolveAgent(r, P, "shell", { profile: "nope" }).skipped?.[0]).toMatchObject({ from: "explicit", profile: "nope" });
   });
 
+  test("a name an object has by inheritance is no profile: it falls through rather than crash", () => {
+    const r = full();
+    // a pick that got past normalizing (typed by hand into a routing)
+    r.repos[P] = { roles: { shell: { profile: "constructor" } } };
+    const got = resolveAgent(r, P, "shell", { profile: "tostring" });
+    expect(got.settings).toEqual(quick);
+    expect(got.skipped).toEqual([
+      { from: "explicit", profile: "tostring", why: "no profile named tostring" },
+      { from: "repo-role", profile: "constructor", why: "no profile named constructor" },
+    ]);
+    for (const role of AGENT_ROLES) expect(resolveAgent(r, P, role).settings.harness).toBeDefined();
+    // a routing without a default of its own never reads one off the prototype
+    expect(resolveAgent({ profiles: {}, roles: { shell: { profile: "constructor" } }, repos: {} }, P, "shell").from).toBe("builtin");
+    // and the names themselves are refused wherever one is read
+    for (const name of ["constructor", "__proto__"]) {
+      expect(isProfileName(name)).toBe(false);
+      expect(normalizePick({ profile: name })).toBeNull();
+      expect(launchPick(name, null)).toBeUndefined();
+    }
+    expect(normalizeProfiles(JSON.parse('{"constructor": {"model": "opus"}, "__proto__": {"model": "opus"}, "ok": {}}'))).toEqual({ ok: DEFAULT_AGENT });
+  });
+
   test("every role may be codex", () => {
     for (const role of AGENT_ROLES) expect(ROLE_HARNESSES[role]).toEqual(["claude", "codex"]);
     const r = full();
