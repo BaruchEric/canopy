@@ -9,8 +9,9 @@
  * lands on that helper. Nothing here touches a process; this is the wire
  * shape and the pure decisions, tested in helper.test.ts.
  */
-import { OPENER_IDS, type AgentSettings, type HelperInfo, type OpenerId } from "./types";
+import { HARNESSES, OPENER_IDS, type AgentSettings, type Harness, type HelperInfo, type OpenerId } from "./types";
 import { normalizeAgent } from "./agent";
+import { HARNESS } from "./harness";
 import { parseLocator } from "./host";
 
 export { clientCaps, clientKey, isLoopback, isLoopbackHost } from "./client";
@@ -23,6 +24,9 @@ export type HelperIntent =
   | { id: number; group: { app: OpenerId; name: string; repos: string[]; agents: Record<string, AgentSettings> } };
 
 export type HelperReply = { id: number; ok: true } | { id: number; error: string };
+
+/** an intent before the backend numbers it */
+export type HelperAsk = HelperIntent extends infer T ? (T extends unknown ? Omit<T, "id"> : never) : never;
 
 /** how long the backend waits for a helper to answer an intent */
 export const HELPER_TIMEOUT = 20_000;
@@ -47,8 +51,10 @@ export function staleHelpers<T extends { name: string; seen: number }>(peers: It
 const isOpener = (v: unknown): v is OpenerId => typeof v === "string" && (OPENER_IDS as readonly string[]).includes(v);
 
 /** the registration off the socket's query: a name (up to 64 plain
- *  characters), a platform word, and the openers as a comma list, each one
- *  canopy knows; anything else is refused with a reason */
+ *  characters), a platform word, the openers as a comma list, each one
+ *  canopy knows, and the harnesses it can start (absent from a helper older
+ *  than harnesses; a name this backend does not know is passed over, a
+ *  newer helper's); anything else is refused with a reason */
 export function parseHelperQuery(params: URLSearchParams, address: string, now = Date.now()): HelperInfo | { error: string } {
   const name = (params.get("name") ?? "").trim();
   if (!name || name.length > 64 || !/^[\w.-]+$/.test(name)) return { error: "name= must be 1 to 64 letters, digits, dots or dashes" };
@@ -61,7 +67,31 @@ export function parseHelperQuery(params: URLSearchParams, address: string, now =
     if (!isOpener(v)) return { error: `openers= names an opener canopy does not know: ${v}` };
     if (!openers.includes(v)) openers.push(v);
   }
-  return { name, platform, openers, since: now, address };
+  const listed = params.get("harnesses");
+  const harnesses =
+    listed === null ? null : HARNESSES.filter((h) => listed.split(",").some((raw) => raw.trim() === h));
+  return { name, platform, openers, ...(harnesses ? { harnesses } : {}), since: now, address };
+}
+
+/** The openers that start the agent, and so read an intent's harness. */
+const STARTS_AGENT: readonly OpenerId[] = ["agent", "herdr"];
+
+/** Why a helper must not be sent an intent, or null. A helper older than
+ *  harnesses reads an intent's settings without their harness and keeps
+ *  the rest, so a codex intent would start claude with codex's flags; it
+ *  is refused here, in words that say what to do, rather than sent. */
+export function helperRefusal(info: Pick<HelperInfo, "name" | "harnesses">, intent: HelperAsk): string | null {
+  const needs: Harness[] =
+    "open" in intent
+      ? STARTS_AGENT.includes(intent.open.app) ? [intent.open.agent.harness] : []
+      : "group" in intent && STARTS_AGENT.includes(intent.group.app)
+        ? Object.values(intent.group.agents).map((a) => a.harness)
+        : [];
+  const missing = needs.find((h) => h !== "claude" && !(info.harnesses ?? []).includes(h));
+  if (!missing) return null;
+  return info.harnesses === undefined
+    ? `the helper on ${info.name} is older than ${HARNESS[missing].label} support and would start claude in its place: update canopy there and restart canopy helper`
+    : `the helper on ${info.name} cannot start ${HARNESS[missing].label}`;
 }
 
 /** a reply frame from the helper, or null for anything malformed */

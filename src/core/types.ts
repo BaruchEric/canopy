@@ -204,6 +204,10 @@ export interface HelperInfo {
   platform: string;
   /** the openers it runs there */
   openers: OpenerId[];
+  /** the harnesses an intent may name for it to start; absent from a
+   *  helper older than harnesses, which drops an intent's harness and
+   *  would start claude with another harness's flags */
+  harnesses?: Harness[];
   /** unix ms of the registration */
   since: number;
   /** the address the backend saw the helper dial in from */

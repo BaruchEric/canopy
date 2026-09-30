@@ -66,7 +66,7 @@ import {
   openGroup,
   openIn,
 } from "../core/openers";
-import { clientKey, HELPER_PING, HELPER_TIMEOUT, isLoopback, isLoopbackHost, parseDefaultGateway, parseHelperQuery, parseHelperReply, reachFrom, staleHelpers, type HelperIntent } from "../core/helper";
+import { clientKey, HELPER_PING, HELPER_TIMEOUT, helperRefusal, isLoopback, isLoopbackHost, parseDefaultGateway, parseHelperQuery, parseHelperReply, reachFrom, staleHelpers, type HelperAsk } from "../core/helper";
 import { devicesOf, parseStream, type Stream } from "../core/presence";
 import { mapPool, searchRepo } from "../core/search";
 import { agentSessions, hasAgentSession, isSessionId, newestTranscript, resumeLine } from "../core/sessions";
@@ -388,9 +388,11 @@ function tellHelpers(state: ServerState): void {
 }
 
 /** one intent to the helper `name`, settled by its reply or the timeout */
-function askHelper(state: ServerState, name: string, intent: Omit<HelperIntent, "id">): Promise<void> {
+function askHelper(state: ServerState, name: string, intent: HelperAsk): Promise<void> {
   const helper = state.helpers.get(name);
   if (!helper) return Promise.reject(new HttpError(400, NO_HELPER));
+  const refused = helperRefusal(helper.info, intent);
+  if (refused) return Promise.reject(new HttpError(400, refused));
   const id = helper.next++;
   return new Promise<void>((resolve, reject) => {
     const timer = setTimeout(() => {

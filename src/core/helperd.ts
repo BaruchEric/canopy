@@ -12,7 +12,7 @@
 import { hostname } from "node:os";
 import { HELPER_DEAD, HELPER_PING, helperOpeners, parseHelperIntent, type HelperIntent, type HelperReply } from "./helper";
 import { openFile, openGroup, openIn } from "./openers";
-import { DEFAULT_AGENT, type OpenerId } from "./types";
+import { DEFAULT_AGENT, HARNESSES, type Harness, type OpenerId } from "./types";
 
 export interface HelperOptions {
   /** the backend's http(s) origin, e.g. `http://macmini-2018:7850` */
@@ -31,13 +31,22 @@ export interface HelperOptions {
   dead?: number;
 }
 
-/** the backend origin as the websocket url the helper dials */
-export function helperUrl(backend: string, name: string, platform: string, openers: OpenerId[]): string {
+/** the backend origin as the websocket url the helper dials; `harnesses`
+ *  tells the backend this helper reads an intent's harness (every one this
+ *  version knows), so it may be sent a codex start */
+export function helperUrl(
+  backend: string,
+  name: string,
+  platform: string,
+  openers: OpenerId[],
+  harnesses: readonly Harness[] = HARNESSES,
+): string {
   const u = new URL("/api/helper", backend);
   u.protocol = u.protocol === "https:" ? "wss:" : "ws:";
   u.searchParams.set("name", name);
   u.searchParams.set("platform", platform);
   u.searchParams.set("openers", openers.join(","));
+  u.searchParams.set("harnesses", harnesses.join(","));
   return u.toString();
 }
 

@@ -227,6 +227,43 @@ describe("a helper dialled in", () => {
   });
 });
 
+describe("a codex start through a helper", () => {
+  test("goes to a helper that reads the harness, and is refused in words for one older than harnesses", async () => {
+    const codex = { ...DEFAULT_AGENT, harness: "codex", extra: "--search" };
+    expect((await post("/api/repos/agent?id=app", { all: codex })).status).toBe(200);
+    try {
+      // an old helper registers no harnesses: it would drop codex and keep
+      // its flags, so nothing is sent to it
+      const old = dial({});
+      await old.opened;
+      await until(async () => (await helpers()).length === 1, "the old helper");
+      const refused = await post("/api/repos/open?id=app", { app: "agent", helper: "mbp" });
+      expect(refused.status).toBe(400);
+      expect(((await refused.json()) as { error: string }).error).toContain("update canopy there");
+      expect(old.intents).toEqual([]);
+      // a plain shell reads no harness, so the old helper still gets that
+      const kitty = post("/api/repos/open?id=app", { app: "kitty", helper: "mbp" });
+      await until(() => old.intents.length === 1, "the kitty intent");
+      old.ws.send(JSON.stringify({ id: old.intents[0]!.id, ok: true }));
+      expect((await kitty).status).toBe(200);
+      // a current helper says what it reads, and gets the codex start
+      const now = dial({ harnesses: "claude,codex" });
+      await now.opened;
+      await old.closed;
+      await until(async () => (await helpers())[0]?.harnesses?.length === 2, "the new helper");
+      const sent = post("/api/repos/open?id=app", { app: "agent", helper: "mbp" });
+      await until(() => now.intents.length === 1, "the codex intent");
+      expect((now.intents[0]!.open as { agent: { harness: string } }).agent.harness).toBe("codex");
+      now.ws.send(JSON.stringify({ id: now.intents[0]!.id, ok: true }));
+      expect((await sent).status).toBe(200);
+      now.ws.close();
+      await until(async () => (await helpers()).length === 0, "the helper to go");
+    } finally {
+      await post("/api/repos/agent?id=app", {});
+    }
+  });
+});
+
 describe("the timeout", () => {
   test("is what the protocol says", () => {
     expect(HELPER_TIMEOUT).toBe(20_000);

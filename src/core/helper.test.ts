@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import {
   HELPER_DEAD,
   helperOpeners,
+  helperRefusal,
   parseDefaultGateway,
   parseHelperIntent,
   parseHelperQuery,
@@ -9,7 +10,8 @@ import {
   reachFrom,
   staleHelpers,
 } from "./helper";
-import { DEFAULT_AGENT } from "./types";
+import { helperUrl } from "./helperd";
+import { DEFAULT_AGENT, type AgentSettings } from "./types";
 
 describe("parseHelperQuery", () => {
   test("reads a registration off the query", () => {
@@ -32,6 +34,16 @@ describe("parseHelperQuery", () => {
     const q = new URLSearchParams("name=a&platform=linux&openers=kitty,,kitty, code ");
     const r = parseHelperQuery(q, "a", 0);
     expect("error" in r ? r.error : r.openers).toEqual(["kitty", "code"]);
+  });
+
+  test("the harnesses it can start; a helper older than harnesses says none, and an unknown one is passed over", () => {
+    const q = (extra: string) => new URLSearchParams(`name=a&platform=darwin&openers=agent${extra}`);
+    expect(parseHelperQuery(q("&harnesses=claude,codex"), "x", 1)).toMatchObject({ harnesses: ["claude", "codex"] });
+    expect(parseHelperQuery(q("&harnesses=codex,gemini"), "x", 1)).toMatchObject({ harnesses: ["codex"] });
+    expect(parseHelperQuery(q("&harnesses="), "x", 1)).toMatchObject({ harnesses: [] });
+    expect(parseHelperQuery(q(""), "x", 1)).not.toHaveProperty("harnesses");
+    // this helper says so when it dials
+    expect(new URL(helperUrl("http://mini:7850", "mbp", "darwin", ["agent"])).searchParams.get("harnesses")).toBe("claude,codex");
   });
 
   test("refuses a bad name, platform or opener", () => {
@@ -185,5 +197,29 @@ describe("staleHelpers", () => {
   test("takes its own deadline, and nothing is stale in an empty list", () => {
     expect(staleHelpers(peers, 1_100, 50)).toEqual(["mbp"]);
     expect(staleHelpers([], Date.now())).toEqual([]);
+  });
+});
+
+describe("helperRefusal", () => {
+  const codex: AgentSettings = { ...DEFAULT_AGENT, harness: "codex", extra: "--search" };
+  const open = (app: "agent" | "herdr" | "kitty", agent: AgentSettings = codex) => ({ open: { app, path: "ssh://mini/r", agent, tab: false } });
+
+  test("a helper older than harnesses is not sent a codex start: it would run claude with codex's flags", () => {
+    const old = { name: "mbp" };
+    expect(helperRefusal(old, open("agent"))).toBe(
+      "the helper on mbp is older than codex support and would start claude in its place: update canopy there and restart canopy helper",
+    );
+    expect(helperRefusal(old, open("herdr"))).toContain("older than codex support");
+    expect(helperRefusal(old, { group: { app: "agent", name: "w", repos: ["a", "b"], agents: { a: DEFAULT_AGENT, b: codex } } })).toContain("older");
+    // claude it always ran, and an opener that starts no agent reads no harness
+    expect(helperRefusal(old, open("agent", DEFAULT_AGENT))).toBeNull();
+    expect(helperRefusal(old, open("kitty"))).toBeNull();
+    expect(helperRefusal(old, { group: { app: "kitty", name: "w", repos: ["a"], agents: { a: codex } } })).toBeNull();
+    expect(helperRefusal(old, { file: { path: "/r", file: "a.ts", line: 1 } })).toBeNull();
+  });
+
+  test("a helper that names the harness is sent it", () => {
+    expect(helperRefusal({ name: "mbp", harnesses: ["claude", "codex"] }, open("agent"))).toBeNull();
+    expect(helperRefusal({ name: "mbp", harnesses: ["claude"] }, open("agent"))).toBe("the helper on mbp cannot start codex");
   });
 });
