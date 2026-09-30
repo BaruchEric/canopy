@@ -78,6 +78,23 @@ describe("resolving a role", () => {
     expect(resolveAgent(r, P, "shell", { profile: "nope" }).skipped?.[0]).toMatchObject({ from: "explicit", profile: "nope" });
   });
 
+  test("the commit message takes a model and effort only from a pick made for it; any other layer lends its harness alone", () => {
+    const r: AgentRoutes = { profiles: withDefaultProfile({ deep, review, quick }), roles: {}, repos: { [P]: { all: { profile: "deep" } } } };
+    // the repo's whole pick is opus at max effort, chosen for real work
+    expect(resolveAgent(r, P, "suggest")).toEqual({ settings: claude(), from: "repo", profile: "deep" });
+    expect(resolveAgent(r, P, "shell").settings).toEqual(deep);
+    r.repos[P] = { all: review };
+    expect(resolveAgent(r, P, "suggest").settings).toEqual(codex());
+    // the default profile is not made for it either
+    const d: AgentRoutes = { profiles: { default: deep }, roles: {}, repos: {} };
+    expect(resolveAgent(d, P, "suggest")).toEqual({ settings: claude(), from: "default", profile: "default" });
+    // a pick for suggest itself, on the repo or the role, or at launch, is taken whole
+    r.repos[P] = { all: review, roles: { suggest: { profile: "quick" } } };
+    expect(resolveAgent(r, P, "suggest")).toEqual({ settings: quick, from: "repo-role", profile: "quick" });
+    expect(resolveAgent({ ...r, repos: {}, roles: { suggest: deep } }, P, "suggest")).toEqual({ settings: deep, from: "role" });
+    expect(resolveAgent(r, P, "suggest", { profile: "deep" }).settings).toEqual(deep);
+  });
+
   test("a name an object has by inheritance is no profile: it falls through rather than crash", () => {
     const r = full();
     // a pick that got past normalizing (typed by hand into a routing)

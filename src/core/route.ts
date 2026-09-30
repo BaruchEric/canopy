@@ -253,7 +253,10 @@ function profilesOf(routes: AgentRoutes, h: Harness): [string, AgentSettings][] 
  */
 export function resolveAgent(routes: AgentRoutes, path: string, role: AgentRole, explicit?: LaunchPick): ResolvedAgent {
   const skipped: AgentSkip[] = [];
-  const done = (r: ResolvedAgent): ResolvedAgent => (skipped.length ? { ...r, skipped } : r);
+  const done = (r: ResolvedAgent): ResolvedAgent => {
+    const out = role === "suggest" ? forSuggest(r) : r;
+    return skipped.length ? { ...out, skipped } : out;
+  };
   if (explicit && "profile" in explicit) {
     const got = settle(routes, role, explicit);
     if (!("why" in got)) return done({ settings: got.settings, from: "explicit", profile: explicit.profile });
@@ -275,6 +278,22 @@ export function resolveAgent(routes: AgentRoutes, path: string, role: AgentRole,
     }
   }
   return done(routed(routes, path, role, skipped));
+}
+
+/** The layers that choose settings for the commit message itself. */
+const SUGGEST_LAYERS: readonly AgentLayer[] = ["explicit", "repo-role", "role"];
+
+/**
+ * The commit message runs one short `claude -p` or `codex exec` under a
+ * 90 s timeout. A pick made for it (the repo's suggest pick, the suggest
+ * role's route, a launch pick) is taken whole; any other layer (the repo's
+ * whole pick, the default profile) was chosen for real work, and an opus
+ * repo at max effort would make max-effort suggestions that run out of
+ * time, so it lends its harness alone, at that harness's defaults.
+ */
+function forSuggest(r: ResolvedAgent): ResolvedAgent {
+  if (SUGGEST_LAYERS.includes(r.from)) return r;
+  return { ...r, settings: { ...DEFAULT_AGENT, harness: r.settings.harness } };
 }
 
 /** Every role's resolution for one repo: the effective table. */

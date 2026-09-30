@@ -10,6 +10,7 @@ import { join } from "node:path";
 import { configFlags } from "./codexrun";
 import { exec, git } from "./exec";
 import { HARNESS } from "./harness";
+import { parseLocator } from "./host";
 import { DEFAULT_AGENT, type AgentSettings, type RepoFile } from "./types";
 
 const PROMPT = `Write a git commit message for the changes below.
@@ -68,11 +69,19 @@ export function claudeSuggestArgs(agent: AgentSettings, prompt: string): string[
   return ["-p", prompt, "--output-format", "text", ...h.modelArgs(agent.model), ...h.effortArgs(agent.effort)];
 }
 
+/** Where `codex exec` runs for a suggestion: in the repo, whose AGENTS.md
+ *  may say how its commits are written, when the repo is on this machine;
+ *  in `scratch` for one on another host, whose `ssh://` locator is no
+ *  folder here. The diff is in the prompt either way, and
+ *  `--skip-git-repo-check` lets codex run outside a repo. */
+export const codexSuggestDir = (repoPath: string, scratch: string): string =>
+  parseLocator(repoPath).host === null ? repoPath : scratch;
+
 /** `codex` argv after the binary: `codex exec` in the read-only sandbox (it
  *  forces approvals to never, and a message needs no tools), nothing kept
- *  on disk, run from the repo, the last message into `out`, the route's
- *  model, effort and config flags, and the prompt last. */
-export function codexSuggestArgs(agent: AgentSettings, repoPath: string, out: string, prompt: string): string[] {
+ *  on disk, run from `dir` (`codexSuggestDir`), the last message into
+ *  `out`, the route's model, effort and config flags, and the prompt last. */
+export function codexSuggestArgs(agent: AgentSettings, dir: string, out: string, prompt: string): string[] {
   const h = HARNESS.codex;
   return [
     "exec",
@@ -83,7 +92,7 @@ export function codexSuggestArgs(agent: AgentSettings, repoPath: string, out: st
     "--color",
     "never",
     "-C",
-    repoPath,
+    dir,
     "-o",
     out,
     ...h.modelArgs(agent.model),
@@ -98,8 +107,9 @@ async function askCodex(bin: string, repoPath: string, agent: AgentSettings, con
   const dir = await mkdtemp(join(tmpdir(), "canopy-suggest-"));
   try {
     const out = join(dir, "message.txt");
-    const r = await exec([bin, ...codexSuggestArgs(agent, repoPath, out, `${CODEX_PROMPT}\n\n${context}`)], {
-      cwd: repoPath,
+    const where = codexSuggestDir(repoPath, dir);
+    const r = await exec([bin, ...codexSuggestArgs(agent, where, out, `${CODEX_PROMPT}\n\n${context}`)], {
+      cwd: where,
       timeoutMs: SUGGEST_TIMEOUT,
     });
     if (r.code !== 0) return "";
