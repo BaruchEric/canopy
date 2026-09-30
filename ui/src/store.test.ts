@@ -1151,3 +1151,36 @@ describe("cards over several backends", () => {
     }
   });
 });
+
+describe("a repo's agent override on a backend older than routing", () => {
+  const realFetch = globalThis.fetch;
+  afterEach(() => {
+    globalThis.fetch = realFetch;
+  });
+
+  test("gets the whole-repo settings alone, and one with routing gets the override whole", async () => {
+    const bodies: unknown[] = [];
+    globalThis.fetch = (async (_url: string | URL | Request, init?: RequestInit) => {
+      bodies.push(JSON.parse(String(init?.body)));
+      return new Response(JSON.stringify({}), { status: 200 });
+    }) as unknown as typeof fetch;
+    const s = useStore.getState();
+    const withHarnesses = (harnesses?: ("claude" | "codex")[]) => ({
+      ...s.conns,
+      [s.home]: { ...connOf(s), backend: { openers: false, sshHost: null, ...(harnesses ? { harnesses } : {}) } },
+    });
+    const own: AgentSettings = { ...DEFAULT_AGENT, model: "opus" };
+    const override = { all: own, roles: { job: { profile: "deep" } } };
+    // an older backend reads anything but plain settings as its defaults,
+    // and deletes the entry: it gets the whole-repo pick's settings
+    useStore.setState({ conns: withHarnesses() });
+    await useStore.getState().setAgent("app", override);
+    useStore.setState({ conns: withHarnesses(["claude"]) });
+    await useStore.getState().setAgent("app", override);
+    // no settings of its own there is that backend's reset
+    useStore.setState({ conns: withHarnesses() });
+    await useStore.getState().setAgent("app", { all: { profile: "deep" } });
+    expect(bodies).toEqual([own, override, DEFAULT_AGENT]);
+    useStore.setState({ conns: s.conns });
+  });
+});

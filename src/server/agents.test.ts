@@ -4,7 +4,7 @@
  * refused where a role cannot run a harness), each change broadcast as
  * an `agents` event, and one repo's effective table. A body of plain
  * settings, what a page from before roles sends, still lands as the repo's
- * whole-repo pick.
+ * whole-repo pick, and leaves its per-role picks alone.
  */
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { mkdtemp, rm } from "node:fs/promises";
@@ -105,10 +105,16 @@ describe("the agent routes", () => {
     expect(((await job.json()) as AgentRoutes).repos[appPath]).toEqual({ roles: { job: review } });
     let r = (await (await post("/api/repos/agent?id=app", { all: { profile: "review" }, roles: { job: { profile: "deep" } } })).json()) as AgentRoutes;
     expect(r.repos[appPath]).toEqual({ all: { profile: "review" }, roles: { job: { profile: "deep" } } });
-    // a page from before roles sends plain settings: the whole-repo pick
+    // a page from before roles sends plain settings: the whole-repo pick,
+    // with the per-role picks it knows nothing of kept
     r = (await (await post("/api/repos/agent?id=app", { model: "sonnet", effort: "low", yolo: false, extra: "" })).json()) as AgentRoutes;
-    expect(r.repos[appPath]).toEqual({ all: { ...DEFAULT_AGENT, model: "sonnet", effort: "low", yolo: false } });
-    // and the builtin defaults were its reset
+    expect(r.repos[appPath]).toEqual({ all: { ...DEFAULT_AGENT, model: "sonnet", effort: "low", yolo: false }, roles: { job: { profile: "deep" } } });
+    // and the builtin defaults were its reset of that pick alone
+    r = (await (await post("/api/repos/agent?id=app", DEFAULT_AGENT)).json()) as AgentRoutes;
+    expect(r.repos[appPath]).toEqual({ roles: { job: { profile: "deep" } } });
+    // with nothing else there, the reset takes the entry with it
+    await post("/api/repos/agent?id=app", {});
+    await post("/api/repos/agent?id=app", { model: "sonnet", effort: "low", yolo: false, extra: "" });
     r = (await (await post("/api/repos/agent?id=app", DEFAULT_AGENT)).json()) as AgentRoutes;
     expect(r.repos[appPath]).toBeUndefined();
     expect((await loadConfig()).agents[appPath]).toBeUndefined();

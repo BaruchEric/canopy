@@ -8,6 +8,7 @@ import { api } from "../api";
 import {
   effectiveRows,
   harnessesOf,
+  hasRouting,
   missingProfiles,
   overrideRows,
   pickLine,
@@ -51,6 +52,7 @@ export function AgentsView({ onGit }: { onGit?: () => void } = {}) {
   const scope = picked && order.includes(picked) ? picked : home;
   const routes = useStore((s) => routesOf(s, scope));
   const has = useStore((s) => harnessesOf(connOf(s, scope).backend));
+  const routing = useStore((s) => hasRouting(connOf(s, scope).backend));
   const ready = useStore((s) => s.registryReady);
   // the registry first when there is one: the broker's pages link here
   const [chosen, setTab] = useState<Tab | null>(null);
@@ -85,14 +87,28 @@ export function AgentsView({ onGit }: { onGit?: () => void } = {}) {
         </span>}
       </div>
       <div className="agents-body">
-        {tab === "registry" ? <RegistryTab onGit={onGit} /> : <Routing scope={scope} routes={routes} has={has} />}
+        {tab === "registry" ? <RegistryTab onGit={onGit} /> : <Routing scope={scope} routes={routes} has={has} routing={routing} />}
       </div>
     </section>
   );
 }
 
-function Routing({ scope, routes, has }: { scope: string; routes: AgentRoutes; has: readonly Harness[] }) {
+function Routing({ scope, routes, has, routing }: { scope: string; routes: AgentRoutes; has: readonly Harness[]; routing: boolean }) {
   const missing = missingProfiles(routes);
+  if (!routing) {
+    // an older backend keeps plain settings per repo, and nothing else
+    return (
+      <>
+        <p className="settings-hint warn agents-warn">
+          {scope} runs a canopy older than agent routing: it keeps one set of Claude settings per repo, and has no profiles, roles or per-role
+          picks to edit. Update it for those.
+        </p>
+        <Overrides scope={scope} routes={routes} has={has} legacy />
+        <Effective scope={scope} routes={routes} has={has} />
+        <Guards />
+      </>
+    );
+  }
   return (
     <>
       <p className="blurb agents-blurb">
@@ -414,7 +430,7 @@ function Roles({ scope, routes }: { scope: string; routes: AgentRoutes; has: rea
 
 /* ---------- repo overrides ---------- */
 
-function Overrides({ scope, routes, has }: { scope: string; routes: AgentRoutes; has: readonly Harness[] }) {
+function Overrides({ scope, routes, has, legacy = false }: { scope: string; routes: AgentRoutes; has: readonly Harness[]; legacy?: boolean }) {
   const allRepos = useStore((s) => s.repos);
   const setAgent = useStore((s) => s.setAgent);
   const repos = useMemo(() => allRepos.filter((r) => backendOf(r.id) === scope && !r.forge), [allRepos, scope]);
@@ -471,7 +487,7 @@ function Overrides({ scope, routes, has }: { scope: string; routes: AgentRoutes;
               </div>
               {repo && (
                 <div className="override-grid">
-                  {(["all", ...AGENT_ROLES] as const).map((slot) => (
+                  {(legacy ? (["all"] as const) : (["all", ...AGENT_ROLES] as const)).map((slot) => (
                     <div key={slot} className="override-slot">
                       <span className="override-label" title={slot === "all" ? "Every role at once" : ROLE_TITLE[slot]}>
                         {slot === "all" ? "whole repo" : ROLE_LABEL[slot]}
@@ -486,6 +502,7 @@ function Overrides({ scope, routes, has }: { scope: string; routes: AgentRoutes;
                         seed={resolveAgent(routes, path, slot === "all" ? "shell" : slot).settings}
                         onChange={(p) => void save(repo.id, withPick(current, slot, p))}
                         compact
+                        profiles={!legacy}
                       />
                     </div>
                   ))}

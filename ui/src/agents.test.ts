@@ -1,6 +1,8 @@
 import { describe, expect, test } from "bun:test";
 import {
   effectiveRows,
+  flatAgent,
+  hasRouting,
   fromWord,
   harnessesOf,
   missingProfiles,
@@ -79,6 +81,14 @@ describe("the effective table", () => {
     expect(fromWord({ settings: DEFAULT_AGENT, from: "builtin" })).toBe("builtin");
     expect(fromWord({ settings: DEFAULT_AGENT, from: "default", profile: "default" })).toBe("default profile");
     expect(fromWord({ settings: DEFAULT_AGENT, from: "explicit", profile: "deep" })).toBe("picked at launch · deep");
+  });
+
+  test("a backend older than routing takes the whole-repo settings alone", () => {
+    expect(hasRouting({ openers: false, sshHost: null })).toBe(false);
+    expect(hasRouting({ openers: false, sshHost: null, harnesses: [] })).toBe(true);
+    expect(flatAgent({ all: claude({ model: "opus" }), roles: { job: { profile: "deep" } } })).toEqual(claude({ model: "opus" }));
+    expect(flatAgent({ all: { profile: "deep" } })).toEqual(DEFAULT_AGENT);
+    expect(flatAgent({})).toEqual(DEFAULT_AGENT);
   });
 
   test("a backend older than harnesses had claude alone, the same array each time", () => {

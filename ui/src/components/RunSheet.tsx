@@ -5,7 +5,7 @@ import { describeLaunch, isDefaultLaunch } from "../../../src/core/launch";
 import { agentFor, connOf, idText, launchFor, routesOf, tasksOf, useStore, type Sheet } from "../store";
 import { backendOf } from "../registry";
 import { resolveAgent } from "../../../src/core/route";
-import { effectiveRows, harnessesOf, ROLE_LABEL, ROLE_TITLE, withPick } from "../agents";
+import { effectiveRows, harnessesOf, hasRouting, ROLE_LABEL, ROLE_TITLE, withPick } from "../agents";
 import { EffectiveTable, PickEditor } from "./AgentForm";
 import { FleetPlan, FleetSheet, FlowConsole, FlowPlan } from "./FlowSheet";
 import { SearchSheet } from "./Search";
@@ -568,6 +568,8 @@ function RepoAgentSheet({ repo }: { repo: Repo }) {
   const backend = backendOf(repo.id);
   const routes = useStore((s) => routesOf(s, backend));
   const has = useStore((s) => harnessesOf(connOf(s, backend).backend));
+  // a backend older than routing keeps one set of settings per repo
+  const routing = useStore((s) => hasRouting(connOf(s, backend).backend));
   const setAgent = useStore((s) => s.setAgent);
   const [error, setError] = useState<string | null>(null);
   const current = routes.repos[repo.path] ?? {};
@@ -598,10 +600,17 @@ function RepoAgentSheet({ repo }: { repo: Repo }) {
         </button>
       </header>
       <div className="sheet-body agent-form">
-        <p className="blurb">
-          Which agent this repo starts, and how: for every role at once, or per role. A pick left to inherit follows the role's route and then
-          the default profile, which the agents view edits. Saved on {backend}, so it holds from any browser.
-        </p>
+        {routing ? (
+          <p className="blurb">
+            Which agent this repo starts, and how: for every role at once, or per role. A pick left to inherit follows the role's route and then
+            the default profile, which the agents view edits. Saved on {backend}, so it holds from any browser.
+          </p>
+        ) : (
+          <p className="blurb">
+            {backend} runs a canopy older than agent routing: it keeps one set of Claude settings per repo, with no profiles or per-role picks.
+            Update it for those. Saved on {backend}, so it holds from any browser.
+          </p>
+        )}
         <section className="settings-row">
           <h3 className="panel-label">whole repo</h3>
           <PickEditor
@@ -610,12 +619,13 @@ function RepoAgentSheet({ repo }: { repo: Repo }) {
             routes={routes}
             has={has}
             machine={backend}
-            inherit="inherit: the role routes"
+            inherit={routing ? "inherit: the role routes" : "the defaults"}
             seed={seedFor("all")}
+            profiles={routing}
             onChange={(p) => void save(withPick(current, "all", p))}
           />
         </section>
-        {AGENT_ROLES.map((role) => (
+        {(routing ? AGENT_ROLES : []).map((role) => (
           <section key={role} className="settings-row">
             <h3 className="panel-label" title={ROLE_TITLE[role]}>
               {ROLE_LABEL[role]}

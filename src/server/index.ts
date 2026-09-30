@@ -82,6 +82,7 @@ import {
   setLaunch,
   setProfile,
   setRepoAgent,
+  setRepoAll,
   setRole,
   upsertWorkspace,
 } from "../core/store";
@@ -2400,11 +2401,18 @@ async function handleApi(
       // Validated field by field: a stray value must not reach a command
       // line. A body of plain settings is a page from before roles: the
       // repo's whole-repo pick, and at the builtin defaults its reset, the
-      // way that page meant them.
+      // way that page meant them. That page knows of no roles, so the
+      // repo's per-role picks stay as they are either way.
       const raw: unknown = await req.json().catch(() => null);
-      const legacy = typeof raw === "object" && raw !== null && !Array.isArray(raw) && !("all" in raw) && !("roles" in raw);
-      let next = normalizeRepoAgent(raw);
-      if (legacy && next.all && !("profile" in next.all) && isDefaultAgent(next.all)) next = {};
+      const legacy =
+        typeof raw === "object" && raw !== null && !Array.isArray(raw) && Object.keys(raw).length > 0 && !("all" in raw) && !("roles" in raw);
+      if (legacy) {
+        const all = normalizeAgent(raw);
+        const agents = await setRepoAll(repo.path, isDefaultAgent(all) ? null : all);
+        broadcast(state, { type: "agents", agents });
+        return json(agents);
+      }
+      const next = normalizeRepoAgent(raw);
       const why = repoAgentRefusal(next);
       if (why) return json({ error: why }, 400);
       const agents = await setRepoAgent(repo.path, next);

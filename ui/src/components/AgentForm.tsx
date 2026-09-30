@@ -170,6 +170,7 @@ export function PickEditor({
   seed,
   onChange,
   compact = false,
+  profiles = true,
 }: {
   slot: AgentRole | "all";
   pick: AgentPick | undefined;
@@ -183,6 +184,9 @@ export function PickEditor({
   onChange: (pick: AgentPick | null) => void;
   /** no inline form; settings of their own are shown as one line */
   compact?: boolean;
+  /** offer the profiles; off for a backend older than routing, which keeps
+   *  plain settings only */
+  profiles?: boolean;
 }) {
   const value = pickValue(pick);
   const gone = pick && isProfilePick(pick) && !hasProfile(routes.profiles, pick.profile) ? pick.profile : null;
@@ -196,7 +200,7 @@ export function PickEditor({
         onChange={(e) => onChange(pickOf(e.target.value, pick, seed))}
       >
         <option value="">{inherit}</option>
-        {profileNames(routes).map((name) => {
+        {(profiles ? profileNames(routes) : []).map((name) => {
           const s = routes.profiles[name]!;
           const passed = slot !== "all" && !roleTakes(slot, s.harness);
           return (

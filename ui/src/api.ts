@@ -299,8 +299,9 @@ export const api = {
    *  overrides by path; an older backend's plain map of settings reads as
    *  those repos' whole-repo picks */
   agents: async (b: string = homeName()) => normalizeRoutes(await req<unknown>(b, "/api/agents")),
-  /** a repo's override, whole; an empty one removes it */
-  setRepoAgent: async (id: string, agent: RepoAgent) =>
+  /** a repo's override, whole; an empty one removes it. A backend older
+   *  than routing takes plain settings (`flatAgent`) instead. */
+  setRepoAgent: async (id: string, agent: RepoAgent | AgentSettings) =>
     normalizeRoutes(
       await repoReq<unknown>(id, (p) => `/api/repos/agent?${rq(p)}`, {
         method: "POST",

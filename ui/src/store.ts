@@ -25,7 +25,7 @@ import { mergeAsks, mergeInbox, toAskAnswer, toRunAnswer, type InboxAnswer, type
 import { cardsByRepoCard, mergeCards, replaceCards } from "./agentcards";
 import { clientCaps } from "../../src/core/client";
 import { normalizeRoutes, resolveAgent } from "../../src/core/route";
-import { NO_ROUTES } from "./agents";
+import { flatAgent, hasRouting, NO_ROUTES } from "./agents";
 import { listedTask } from "../../src/core/tasks";
 import {
   DEFAULT_LAUNCH,
@@ -2246,7 +2246,10 @@ export const useStore = create<CanopyState>((set, get) => ({
   },
   editAgent: (repoId) => set({ sheet: { kind: "agent", repoId } }),
   setAgent: async (repoId, agent) => {
-    const agents = await api.setRepoAgent(repoId, agent);
+    // a backend older than routing reads anything but plain settings as its
+    // defaults and deletes the entry, so it gets the whole-repo pick alone
+    const routing = hasRouting(connOf(get(), backendOf(repoId)).backend);
+    const agents = await api.setRepoAgent(repoId, routing ? agent : flatAgent(agent));
     set((s) => ({ agents: { ...s.agents, [backendOf(repoId)]: agents } }));
   },
   setProfile: async (backend, name, settings) => {

@@ -8,6 +8,7 @@ import { HARNESS } from "../../src/core/harness";
 import { DEFAULT_PROFILE, hasProfile, isProfilePick, resolveAgent, roleTakes } from "../../src/core/route";
 import {
   AGENT_ROLES,
+  DEFAULT_AGENT,
   HARNESSES,
   type AgentLayer,
   type AgentPick,
@@ -42,6 +43,17 @@ const CLAUDE_ONLY: readonly Harness[] = Object.freeze(["claude"]);
 /** the harnesses a backend has; one older than harnesses only had claude.
  *  The same array each time for the same backend, so a selector settles. */
 export const harnessesOf = (b: Backend): readonly Harness[] => b.harnesses ?? CLAUDE_ONLY;
+
+/** Whether a backend keeps routes (profiles, roles, per-role picks): one
+ *  that says which harnesses it has does. An older one keeps a repo's
+ *  plain settings alone, and reads any other body as the defaults, which
+ *  it then deletes. */
+export const hasRouting = (b: Backend): boolean => b.harnesses !== undefined;
+
+/** A repo's override as an older backend takes it: the whole-repo pick's
+ *  own settings, or the defaults (its reset) when there are none. */
+export const flatAgent = (agent: RepoAgent): AgentSettings =>
+  agent.all && !isProfilePick(agent.all) ? agent.all : { ...DEFAULT_AGENT };
 
 /** a harness's glyph and word, "✳ claude" */
 export const harnessWord = (h: Harness): string => `${HARNESS[h].glyph} ${HARNESS[h].label}`;

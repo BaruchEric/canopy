@@ -298,6 +298,19 @@ export async function setRepoAgent(path: string, agent: RepoAgent): Promise<Agen
   });
 }
 
+/** Sets (or with null clears) only a repo's whole-repo pick, its per-role
+ *  picks kept: what a page from before roles means by the plain settings
+ *  it sends, since it knows of no roles to keep or drop. */
+export async function setRepoAll(path: string, all: AgentSettings | null): Promise<AgentRoutes> {
+  return withConfig((cfg) => {
+    const { all: _was, ...rest } = normalizeRepoAgent(Object.hasOwn(cfg.agents, path) ? cfg.agents[path] : undefined);
+    const a = normalizeRepoAgent(all ? { ...rest, all } : rest);
+    if (isEmptyRepoAgent(a)) delete cfg.agents[path];
+    else cfg.agents[path] = a;
+    return agentRoutes(cfg);
+  });
+}
+
 /** Stores or (with null) deletes a profile. `default` cannot be deleted:
  *  null puts it back to the builtin settings. */
 export async function setProfile(name: string, settings: AgentSettings | null): Promise<AgentRoutes> {
