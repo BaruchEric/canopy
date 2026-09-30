@@ -11,6 +11,14 @@ const features = (w: number, h: number): Record<string, number> => {
 };
 
 describe("parseRoute", () => {
+  test("the agents view's ask link, the one the broker's away DM carries", () => {
+    expect(parseRoute("?view=agents&ask=6b72e2c4-1f0a-4c1e-9a55-1b8f4f9d2a10").ask).toBe("6b72e2c4-1f0a-4c1e-9a55-1b8f4f9d2a10");
+    // only on the agents view, and only an id the broker could have made
+    expect(parseRoute("?ask=6b72").ask).toBeNull();
+    expect(parseRoute("?view=git&ask=6b72").ask).toBeNull();
+    expect(parseRoute("?view=agents&ask=../x").ask).toBeNull();
+    expect(parseRoute(`?view=agents&ask=${"a".repeat(65)}`).ask).toBeNull();
+  });
   test("reads a section window's section, when it is one", () => {
     expect(parseRoute("?repo=web-apps/ripe&view=section&section=history").section).toBe("history");
     expect(parseRoute("?repo=web-apps/ripe&view=section&section=shell").section).toBeNull();
@@ -18,7 +26,7 @@ describe("parseRoute", () => {
     expect(parseRoute("?repo=web-apps/ripe&view=solo&section=history").section).toBeNull();
     expect(parseRoute("?view=section&section=history").section).toBeNull();
   });
-  const none = { repo: null, solo: false, shell: false, term: null, section: null, task: null };
+  const none = { repo: null, solo: false, shell: false, term: null, section: null, task: null, ask: null };
   test("reads the repo and the shell view", () => {
     expect(parseRoute("?repo=web-apps/ripe&view=shell")).toEqual({
       repo: "web-apps/ripe",
@@ -27,6 +35,7 @@ describe("parseRoute", () => {
       term: null,
       section: null,
       task: null,
+      ask: null,
     });
     expect(parseRoute("?view=shell")).toEqual(none);
   });
@@ -49,6 +58,7 @@ describe("parseRoute", () => {
       term: null,
       section: null,
       task: null,
+      ask: null,
     });
     expect(parseRoute("?repo=web-apps/ripe")).toEqual({
       repo: "web-apps/ripe",
@@ -57,6 +67,7 @@ describe("parseRoute", () => {
       term: null,
       section: null,
       task: null,
+      ask: null,
     });
     // solo needs a repo to be solo about
     expect(parseRoute("?view=solo")).toEqual(none);

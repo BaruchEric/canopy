@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { DEFAULT_AGENT } from "../../src/core/types";
-import type { AgentCard, Fleet, Flow, HelperInfo, Job, Repo, RepoStatus, Run, ServerEvent, SourceState, TaskInfo } from "../../src/core/types";
+import type { AgentCard, Ask, Fleet, Flow, HelperInfo, Job, Repo, RepoStatus, Run, ServerEvent, SourceState, TaskInfo } from "../../src/core/types";
 import {
   appendFeed,
   clip,
@@ -374,6 +374,77 @@ describe("the registry", () => {
   test("a card about no repo in the scan says where it is; a scan card is named by its pid", () => {
     const far = agent({ id: "scan:mini:c:77", handle: "", origin: "scan", cwd: "/elsewhere", repo: "https://github.com/me/other", where: { os: "linux", container: true, pid: 77, term: null, canopy: null } });
     expect(lines(far)).toEqual([["registry", "", "claude pid 77 in me/other · main started, scan on macmini-2018", false]]);
+  });
+});
+
+describe("asks", () => {
+  const card: AgentCard = {
+    id: "claude:s1",
+    handle: "alpha-0123",
+    node: "macmini-2018",
+    harness: "claude",
+    session: "s1",
+    origin: "canopy-shell",
+    cwd: "/r/alpha",
+    repo: null,
+    branch: "main",
+    model: null,
+    mode: null,
+    state: "waiting",
+    waiting: null,
+    caps: [],
+    offers: [],
+    notifyIdle: false,
+    where: { os: "linux", container: true, pid: 41, term: null, canopy: { backend: "mini", term: "0123" } },
+    transcript: null,
+    startedAt: 1,
+    seenAt: 2,
+    endedAt: null,
+  };
+  const ask = (over: Partial<Ask> = {}): Ask => ({
+    id: "a1",
+    agent: "claude:s1",
+    handle: "alpha-0123",
+    node: "macmini-2018",
+    kind: "permission",
+    tool: "Bash",
+    title: "Bash: rm -rf build",
+    detail: "{}",
+    route: "remote",
+    waitUntil: 100,
+    state: "open",
+    createdAt: 1,
+    ...over,
+  });
+  const lines = (after: Ask, before?: Ask, registry: Record<string, AgentCard> = { [card.id]: card }) =>
+    describeEvent({ type: "asks", asks: [after] }, snap({ registry, asks: before ? { [before.id]: before } : {} }), 5).map((l) => [l.kind, l.repo ?? "", l.text, l.quiet]);
+
+  test("raised, then how it ended: by whom, at the terminal, expired, the session gone", () => {
+    expect(lines(ask())).toEqual([["ask", "alpha", "alpha-0123 asks to use Bash: Bash: rm -rf build", false]]);
+    expect(lines(ask({ state: "answered", answer: { behavior: "allow" }, answeredBy: "Erics-Phone@canopy" }), ask())).toEqual([
+      ["ask", "alpha", "alpha-0123 asks to use Bash: allowed by Erics-Phone@canopy", false],
+    ]);
+    expect(lines(ask({ state: "withdrawn", why: "terminal" }), ask())).toEqual([["ask", "alpha", "alpha-0123 asks to use Bash: answered at the terminal", false]]);
+    expect(lines(ask({ state: "withdrawn", why: "ended" }), ask())).toEqual([["ask", "alpha", "alpha-0123 asks to use Bash: session ended", false]]);
+    expect(lines(ask({ state: "expired" }), ask())).toEqual([["ask", "alpha", "alpha-0123 asks to use Bash: expired to the terminal", false]]);
+    expect(lines(ask({ kind: "guard", state: "expired" }), ask({ kind: "guard" }))).toEqual([["ask", "alpha", "alpha-0123 hit a guard on Bash: expired, so the guard held it", false]]);
+    // the same reading again says nothing
+    expect(lines(ask(), ask())).toEqual([]);
+  });
+
+  test("sent to the terminal at once, or first heard of closed, is quiet", () => {
+    expect(lines(ask({ state: "local", route: "local" }))).toEqual([["ask", "alpha", "alpha-0123 asks to use Bash at the terminal, where someone is typing", true]]);
+    expect(lines(ask({ state: "expired" }))).toEqual([["ask", "alpha", "alpha-0123 asks to use Bash: expired to the terminal", true]]);
+  });
+
+  test("an agent the registry does not know is named by its handle", () => {
+    expect(lines(ask({ kind: "question", tool: "AskUserQuestion", title: "question: which?" }), undefined, {})).toEqual([["ask", "", "alpha-0123 has a question: question: which?", false]]);
+  });
+
+  test("presence moving is a quiet line", () => {
+    const got = describeEvent({ type: "asks", asks: [], presence: { state: "away", at: 1, pinned: true } }, snap({ presence: { state: "here", at: 0, pinned: false } }), 5);
+    expect(got.map((l) => [l.text, l.quiet])).toEqual([["you are away (pinned): asks wait half an hour in canopy", true]]);
+    expect(describeEvent({ type: "asks", asks: [], presence: { state: "here", at: 1, pinned: false } }, snap({ presence: { state: "here", at: 0, pinned: false } }), 5)).toEqual([]);
   });
 });
 

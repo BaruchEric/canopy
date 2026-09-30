@@ -553,6 +553,160 @@ body.resizing {
 .kept-pop {
   width: 340px;
 }
+/* ---------- the inbox: everything waiting on you, oldest first ---------- */
+.inbox-pop {
+  width: 460px;
+  max-height: min(80vh, 760px);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+.mini.inbox-waiting {
+  color: var(--rust);
+  border-color: var(--rust);
+  font-weight: 700;
+}
+.inbox-list,
+.inbox-recent {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: grid;
+  gap: 6px;
+  align-self: stretch;
+  min-width: 0;
+}
+.inbox-item {
+  min-width: 0;
+  border: 1px solid var(--hair);
+  border-radius: 8px;
+  background: var(--bark1);
+}
+.inbox-item.open {
+  border-color: color-mix(in srgb, var(--rust) 45%, var(--hair2));
+}
+.inbox-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 2px 8px;
+  width: 100%;
+  padding: 6px 10px;
+  font: inherit;
+  font-size: 12px;
+  text-align: left;
+  color: var(--ink);
+  background: none;
+  border: 0;
+  cursor: pointer;
+}
+.inbox-glyph {
+  color: var(--rust);
+}
+.inbox-glyph.k-question {
+  color: var(--sky);
+}
+.inbox-glyph.k-gate {
+  color: var(--lichen);
+}
+.inbox-who {
+  font-weight: 700;
+}
+.inbox-repo {
+  color: var(--ink-dim);
+}
+.inbox-where {
+  flex: 1 1 8ch;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 11px;
+  color: var(--ink-faint);
+}
+.inbox-left {
+  margin-left: auto;
+  white-space: nowrap;
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  color: var(--rust);
+}
+.inbox-left.dim {
+  color: var(--ink-faint);
+}
+.inbox-item.late .inbox-left {
+  font-style: italic;
+}
+.inbox-title {
+  flex-basis: 100%;
+  overflow-wrap: anywhere;
+  color: var(--ink-dim);
+}
+.inbox-body {
+  display: grid;
+  gap: 6px;
+  padding: 0 10px 10px;
+}
+.inbox-body .ask {
+  margin: 0;
+}
+.inbox-qs {
+  margin: 0;
+  padding-left: 18px;
+  font-size: 12px;
+}
+.inbox-qs .dim {
+  color: var(--ink-faint);
+}
+.inbox-recent li {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--ink-dim);
+}
+/* guards: one rule a row, what it stops beside it */
+.guard-row {
+  display: grid;
+  grid-template-columns: minmax(12ch, 1fr) minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 8px;
+}
+.guard-input {
+  font-family: var(--mono, ui-monospace, monospace);
+}
+@media (max-width: 760px) {
+  .guard-row {
+    grid-template-columns: minmax(0, 1fr) auto;
+  }
+  .guard-row .settings-hint {
+    grid-column: 1 / -1;
+    grid-row: 2;
+  }
+}
+/* a repo group's heading and a panel's agents section carry "message all" */
+.reg-group-head {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+}
+.reg-group-head .reg-message-all {
+  margin-left: auto;
+}
+.reg-tools {
+  display: flex;
+  justify-content: flex-end;
+}
+.reg-tools:empty {
+  display: none;
+}
+/* a waiting agent's ask on its registry row: a way into the inbox */
+.reg-ask {
+  --tone: var(--rust);
+  cursor: pointer;
+  font: inherit;
+  font-size: 11px;
+}
+
 /* ---------- tailchan: conversations, messages, the clipboard, who is around ---------- */
 .chan-pop {
   width: 420px;

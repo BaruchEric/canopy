@@ -1,6 +1,10 @@
-import { useEffect } from "react";
+import { useEffect, useState } from "react";
 import { useStore } from "../store";
 import { api } from "../api";
+import { cardOfShell } from "../handoff";
+import { backendOf, plainOf } from "../registry";
+import type { Harness } from "../../../src/core/types";
+import { HandoffButton } from "./Handoff";
 import { devTask } from "../tasks";
 import { agentCandidates, canSave, debugPrompt, devState, pendingAgent, SAVE_PROMPT, SETUP_PROMPT } from "../guided";
 import { LIVE, typeInto } from "../liveTerms";
@@ -54,12 +58,43 @@ export async function askAgent(repoId: string, text: string, showing: TermTab | 
   }
 }
 
-/** ▶ ■ bug ✓ on a shell's tab row, for the repo of the tab showing. */
+/** how often the showing shell is asked what agent runs in it */
+const AGENT_POLL = 15_000;
+
+/** The agent running in a shell: what its registry card says (its hooks
+ *  registered it), else what tmux says of the pane, asked again now and
+ *  then since an agent starts and quits inside a shell that stays. */
+function useShellAgent(tab: TermTab): { harness: Harness | null; transcript: string | null } {
+  const backend = backendOf(tab.id);
+  const card = useStore((s) => cardOfShell(s.registry, backend, plainOf(tab.id)));
+  const [pane, setPane] = useState<Harness | null>(null);
+  useEffect(() => {
+    if (tab.task !== undefined) return;
+    let live = true;
+    const ask = () =>
+      api
+        .termAgent(tab.id)
+        .then((r) => live && setPane(r.agent))
+        .catch(() => live && setPane(null));
+    void ask();
+    const t = setInterval(() => void ask(), AGENT_POLL);
+    return () => {
+      live = false;
+      clearInterval(t);
+    };
+  }, [tab.id, tab.task]);
+  const fromCard = card && card.harness !== "other" ? card.harness : null;
+  return { harness: fromCard ?? pane, transcript: card?.transcript ?? null };
+}
+
+/** ▶ ■ bug ✓ on a shell's tab row, for the repo of the tab showing, and
+ *  "switch to" the other harness while an agent runs in it. */
 export function AgentButtons({ tab }: { tab: TermTab }) {
   const repo = useStore((s) => s.repos.find((r) => r.id === tab.repoId));
   const tasks = useStore((s) => s.tasks[tab.repoId]);
   const loadTasks = useStore((s) => s.loadTasks);
   const taskAct = useStore((s) => s.taskAct);
+  const agent = useShellAgent(tab);
   useEffect(() => {
     if (tasks === undefined && repo && !repo.forge && !repo.host) loadTasks(tab.repoId).catch(() => {});
   }, [tasks, repo, tab.repoId, loadTasks]);
@@ -95,6 +130,9 @@ export function AgentButtons({ tab }: { tab: TermTab }) {
         <button type="button" className="term-new" title="Ask your agent to commit and push your work" aria-label="Save my work" onClick={() => void askAgent(tab.repoId, SAVE_PROMPT, tab)}>
           ✓
         </button>
+      )}
+      {agent.harness && tab.task === undefined && (
+        <HandoffButton className="term-new" repoId={tab.repoId} backend={backendOf(tab.id)} from={agent.harness} transcript={agent.transcript} term={tab.id} />
       )}
     </span>
   );

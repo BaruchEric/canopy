@@ -879,7 +879,11 @@ export type ServerEvent =
   | { type: "chan"; message: ChanMessage }
   /** agent cards the broker changed, whole, and the ids of any it dropped
    *  (swept after a week); the home backend's alone, like `chan` */
-  | { type: "registry"; cards: AgentCard[]; gone?: string[] };
+  | { type: "registry"; cards: AgentCard[]; gone?: string[] }
+  /** asks the broker changed, whole, the ids that left canopy's list (closed
+   *  long enough ago), and the human's presence when it moved; the home
+   *  backend's alone, like `registry` */
+  | { type: "asks"; asks: Ask[]; gone?: string[]; presence?: Presence };
 
 export type BuildChange = "installed" | "built" | "launched" | "exited" | "removed";
 
@@ -1549,4 +1553,79 @@ export interface ScanBody {
   procs: ScanProc[];
   /** darwin or linux */
   os?: string;
+}
+
+/* ---------- asks: a prompt waiting on the human, as the broker keeps it ---------- */
+
+/** a tool permission, a question, or a guard a yolo agent hit */
+export type AskKind = "permission" | "question" | "guard";
+
+export const ASK_STATES = ["open", "answered", "expired", "withdrawn", "local"] as const;
+/** `local` is an ask the broker routed to the terminal at once (a watched
+ *  shell); `withdrawn` one the hook took back (`why`: the terminal answered,
+ *  or the session ended); `expired` one that fell back to the terminal */
+export type AskState = (typeof ASK_STATES)[number];
+
+/** how the human answered: allow or deny, with a deny's message, a
+ *  question's answers by question text, and "allow always" */
+export interface AskAnswer {
+  behavior: "allow" | "deny";
+  message?: string;
+  answers?: Record<string, string>;
+  always?: boolean;
+}
+
+/**
+ * One ask, field for field as tailchan's broker keeps it (`Ask` in
+ * homelab/services/tailchan/server.ts). `agent` is the asking agent's card
+ * id, `node` its machine (WhoIs), `detail` the tool's input as JSON text.
+ * Times are unix ms; `waitUntil` is when an open ask falls back to the
+ * terminal. `answeredBy` is `<by>@<token name>`, `why` says why a withdrawn
+ * ask went (`terminal` or `ended`).
+ */
+export interface Ask {
+  id: string;
+  agent: string;
+  handle: string;
+  node: string;
+  kind: AskKind;
+  tool: string | null;
+  title: string;
+  detail: string;
+  questions?: RunQuestion[];
+  route: "remote" | "local";
+  waitUntil: number;
+  state: AskState;
+  answer?: AskAnswer;
+  answeredBy?: string;
+  why?: string;
+  createdAt: number;
+  answeredAt?: number;
+}
+
+/** The human's presence as the broker keeps it: `here` decays to `away`
+ *  without a beat, and a pinned away holds until it is cleared. `by` is the
+ *  answer token's name that last set it. */
+export interface Presence {
+  state: "here" | "away";
+  at: number;
+  pinned: boolean;
+  by?: string;
+}
+
+/** `GET /api/asks` (a 503 without a broker): the open asks and the ones
+ *  that closed in the last minutes, whether this backend can answer (it has
+ *  an answer token), and the human's presence when the broker said */
+export interface AsksInfo {
+  ready: true;
+  canAnswer: boolean;
+  asks: Ask[];
+  presence: Presence | null;
+}
+
+/** `GET /api/guards`: the broker's guard rules, in Claude's rule syntax,
+ *  and whether this backend may change them (it has an answer token) */
+export interface GuardsInfo {
+  rules: string[];
+  canEdit: boolean;
 }

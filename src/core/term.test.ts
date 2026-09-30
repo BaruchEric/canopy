@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { isTermId, parseTermMessage, Scrollback, shellArgs, spawnOnPty, termEnv, termPlace, termSize, TERM_SIZE } from "./term";
+import { isKeystroke, isTermId, parseTermMessage, Scrollback, shellArgs, spawnOnPty, termEnv, termPlace, termSize, TERM_SIZE } from "./term";
 
 describe("termSize", () => {
   test("defaults when nothing is given", () => {
@@ -128,4 +128,20 @@ describe("spawnOnPty", () => {
       session.close();
     }
   });
+});
+
+describe("isKeystroke", () => {
+  const enc = (s: string) => new TextEncoder().encode(s);
+  test("typing, keys and the mouse are a person", () => {
+    for (const k of ["a", "ls\r", "\x1b[A", "\x03", "\x1b[<0;10;5M", "\x1b[?1;2cx"]) expect(isKeystroke(enc(k))).toBe(true);
+  });
+  test("a terminal answering a query is not", () => {
+    for (const r of ["\x1b[?1;2c", "\x1b[>0;276;0c", "\x1b[12;40R", "\x1b[?2004;2$y", "\x1b[I", "\x1b[O", "\x1b]11;rgb:1e1e/1e1e/1e1e\x07", "\x1b]10;rgb:ffff/ffff/ffff\x1b\\", "\x1bP>|xterm.js(6.0.0)\x1b\\", "\x1b[?1;2c\x1b[I", ""]) {
+      expect(isKeystroke(enc(r))).toBe(false);
+    }
+  });
+});
+
+test("termEnv keeps canopy's answer token out of a shell", () => {
+  expect(termEnv({ CANOPY_TAILCHAN_ANSWER_TOKEN: "s", HOME: "/h" })).toEqual({ HOME: "/h", TERM: "xterm-256color", COLORTERM: "truecolor" });
 });

@@ -83,7 +83,11 @@ export async function exec(
   try {
     const proc = Bun.spawn(cmd, {
       cwd: opts.cwd,
-      env: opts.env ? { ...process.env, ...opts.env } : undefined,
+      // always the live env: a spawn without one gets the environment the
+      // process started with, secrets canopy took out of it since included
+      // (the answer token, which a tmux server started here would hand every
+      // shell)
+      env: { ...process.env, ...opts.env },
       stdout: "pipe",
       stderr: "pipe",
       stdin: "ignore",

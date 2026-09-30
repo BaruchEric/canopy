@@ -15,6 +15,9 @@ export interface Route {
   section: SectionKey | null;
   /** the task a shell window shows, which it only ever joins */
   task: string | null;
+  /** `?view=agents&ask=<id>`: the inbox opened on that ask, the link the
+   *  broker's away DM carries */
+  ask: string | null;
 }
 
 /** a shell's name: 32 hex digits, after another backend's name for one of
@@ -35,7 +38,23 @@ export function parseRoute(search: string): Route {
     term: view === "shell" && term && TERM_ID.test(term) ? term : null,
     section: view === "section" && isSectionKey(section) ? section : null,
     task: view === "shell" && task && /^[a-z0-9][a-z0-9._-]{0,39}$/.test(task) ? task : null,
+    ask: askOf(q),
   };
+}
+
+/** an ask's id off `?view=agents&ask=`, the broker's id shape, or null */
+function askOf(q: URLSearchParams): string | null {
+  const ask = q.get("ask");
+  return q.get("view") === "agents" && ask && /^[A-Za-z0-9-]{1,64}$/.test(ask) ? ask : null;
+}
+
+/** Takes `ask=` off this window's URL once the inbox has it, so a reload
+ *  does not open the popover on an ask long answered. */
+export function dropAskHere() {
+  const u = new URL(window.location.href);
+  if (!u.searchParams.has("ask")) return;
+  u.searchParams.delete("ask");
+  window.history.replaceState(null, "", u.toString());
 }
 
 /** Writes the shell's name into this window's URL, in place. */

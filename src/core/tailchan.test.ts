@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { asAgentCard, asChanMessage, chanTarget, dmPeer, fleetNotice, flowNotice, parseSse, readQuery, registryCard, runNotice, shellHandle } from "./tailchan";
+import { asAgentCard, asAsk, asChanMessage, askOf, asPresence, chanTarget, repoChannel, dmPeer, fleetNotice, flowNotice, parseSse, readQuery, registryCard, runNotice, shellHandle } from "./tailchan";
 import type { Fleet, Flow, Run } from "./types";
 
 describe("chanTarget", () => {
@@ -201,5 +201,90 @@ describe("the registry's cards", () => {
     expect(registryCard({ ...m, kind: "text" })).toBeNull();
     expect(registryCard({ ...m, body: "{" })).toBeNull();
     expect(registryCard({ ...m, body: JSON.stringify({ type: "ask", ask: {} }) })).toBeNull();
+  });
+});
+
+describe("repoChannel, by the CLI hook's rule (fixtures off its own pipeline)", () => {
+  const cases: [string, string][] = [
+    ["https://github.com/Eric/Demo", "repo.eric-demo"],
+    ["https://github.com/eric/canopy", "repo.eric-canopy"],
+    ["https://gitlab.com/group/sub/Name.With_Dots", "repo.sub-name.with_dots"],
+    ["https://github.com/some-org/a-very-long-repository-name-that-goes-on-and-on-and-on-forever", "repo.some-org-a-very-long-repository-name-that-goes-on-and-on-an"],
+    ["https://github.com/x/foo!", "repo.x-foo-"],
+    ["https://git.example.com:8443/team/app", "repo.team-app"],
+    ["https://github.com/Ünï/cödé", "repo.--n---c--d--"],
+    ["https://github.com/owner/abcdefghijabcdefghijabcdefghijabcdefghijabcdefghij0123456", "repo.owner-abcdefghijabcdefghijabcdefghijabcdefghijabcdefghij012"],
+  ];
+  for (const [url, channel] of cases) test(url, () => expect(repoChannel(url)).toBe(channel));
+  test("nothing for no url", () => {
+    expect(repoChannel(null)).toBeNull();
+    expect(repoChannel("")).toBeNull();
+  });
+  test("every one is a channel the broker takes", () => {
+    for (const [url] of cases) expect(chanTarget(`#${repoChannel(url)}`)).not.toBeNull();
+  });
+});
+
+describe("asks as the broker posts them", () => {
+  const raw = {
+    id: "6b72",
+    agent: "claude:s1",
+    handle: "app-0123",
+    node: "macmini-2018",
+    kind: "question",
+    tool: "AskUserQuestion",
+    title: "question: which?",
+    detail: "{}",
+    questions: [{ question: "Which?", header: "Pick", options: [{ label: "A", description: "the first" }, { nope: 1 }], multiSelect: true }, { bad: true }],
+    route: "remote",
+    waitUntil: 2_000,
+    state: "answered",
+    answer: { behavior: "allow", answers: { "Which?": "A", n: 2 }, always: false },
+    answeredBy: "phone@canopy",
+    createdAt: 1_000,
+    answeredAt: 1_500,
+  };
+
+  test("asAsk reads one field by field", () => {
+    expect(asAsk(raw)).toEqual({
+      id: "6b72",
+      agent: "claude:s1",
+      handle: "app-0123",
+      node: "macmini-2018",
+      kind: "question",
+      tool: "AskUserQuestion",
+      title: "question: which?",
+      detail: "{}",
+      questions: [{ question: "Which?", header: "Pick", options: [{ label: "A", description: "the first" }], multiSelect: true }],
+      route: "remote",
+      waitUntil: 2_000,
+      state: "answered",
+      answer: { behavior: "allow", answers: { "Which?": "A" } },
+      answeredBy: "phone@canopy",
+      createdAt: 1_000,
+      answeredAt: 1_500,
+    });
+  });
+
+  test("asAsk refuses what canopy cannot key or route on", () => {
+    expect(asAsk({ ...raw, id: "" })).toBeNull();
+    expect(asAsk({ ...raw, kind: "vote" })).toBeNull();
+    expect(asAsk({ ...raw, state: "pending" })).toBeNull();
+    expect(asAsk({ ...raw, createdAt: "soon" })).toBeNull();
+    expect(asAsk(null)).toBeNull();
+  });
+
+  test("askOf reads the #asks event and nothing else", () => {
+    const m = { id: 1, channel: "asks", handle: "tailchan", node: "tailchan", kind: "event", body: JSON.stringify({ type: "ask", ask: raw }), meta: { silent: true }, ts: 1 };
+    expect(askOf(m)?.id).toBe("6b72");
+    expect(askOf({ ...m, channel: "agents" })).toBeNull();
+    expect(askOf({ ...m, kind: "text" })).toBeNull();
+    expect(askOf({ ...m, body: JSON.stringify({ type: "agent", card: {} }) })).toBeNull();
+    expect(askOf({ ...m, body: "not json" })).toBeNull();
+  });
+
+  test("asPresence", () => {
+    expect(asPresence({ state: "here", at: 5, pinned: false, by: "canopy" })).toEqual({ state: "here", at: 5, pinned: false, by: "canopy" });
+    expect(asPresence({ state: "gone" })).toBeNull();
   });
 });

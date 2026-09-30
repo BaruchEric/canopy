@@ -38,7 +38,7 @@ import {
 import { browseLocal, browseRemote, expandHome, SshError } from "../core/browse";
 import { exec, onHost } from "../core/exec";
 import { fleetSkipReason, Flows, type CheckResult } from "../core/flow";
-import { isTermId, parseTermMessage, Scrollback, shellArgs, startTerm, termPlace, termSize, type TermSession, type TermSize } from "../core/term";
+import { isKeystroke, isTermId, parseTermMessage, Scrollback, shellArgs, startTerm, termPlace, termSize, type TermSession, type TermSize } from "../core/term";
 import { attachTmuxTerm, hasSession, history, killSession, listSessions, newSession, paneInfo, paneText, sendLine, serverUp, snapshot, tmuxBase } from "../core/tmux";
 import { clip, continueLine, countLines, expiredShells, forgetKept, KEEP_EVERY, listKept, lostShells, readKeptHistory, replayCommand, replayFile, restoredBanner, writeKept } from "../core/keep";
 import { PASTE_MAX, pasteName, pasteText, savePaste } from "../core/paste";
@@ -58,7 +58,7 @@ import { agentLine, availableHarnesses, backendCaps, hostOpeners, isOpenerId, mi
 import { clientKey, HELPER_PING, HELPER_TIMEOUT, isLoopback, isLoopbackHost, parseDefaultGateway, parseHelperQuery, parseHelperReply, reachFrom, staleHelpers, type HelperIntent } from "../core/helper";
 import { devicesOf, parseStream, type Stream } from "../core/presence";
 import { mapPool, searchRepo } from "../core/search";
-import { agentSessions, hasAgentSession, isSessionId, resumeLine } from "../core/sessions";
+import { agentSessions, hasAgentSession, isSessionId, newestTranscript, resumeLine } from "../core/sessions";
 import { findWorkflow, loadWorkflows } from "../core/workflows";
 import {
   launchSource,
@@ -130,6 +130,7 @@ import type { About } from "../core/types";
 import { DEFAULT_IGNORE } from "../core/scan";
 import { ChanHub } from "./tailchan";
 import { RegistryHub } from "./registry";
+import { AskHub } from "./asks";
 import { SCAN_EVERY, type AgentProc } from "../core/agentscan";
 import { TaskHub } from "./tasks";
 import type { TaskTimings } from "../core/tasks";
@@ -250,6 +251,9 @@ interface ServerState {
   /** the agent registry: this machine's scan posted to the broker, and the
    *  broker's cards followed for `/api/registry` */
   registry: RegistryHub;
+  /** asks for a human: the broker's open asks followed for the inbox,
+   *  answers, presence and guards through the answer token */
+  asks: AskHub;
   /** the name this backend goes by (`selfName`), read at start; what a
    *  shell's `CANOPY_BACKEND` says */
   backendName: string;
@@ -268,7 +272,14 @@ interface LiveTerm {
   sockets: Set<ServerWebSocket<TermSocket>>;
   /** set once DELETE has asked tmux to end it, so a client's exit is told apart from the shell's own */
   ending?: boolean;
+  /** when a browser last typed into it (a keystroke frame, not a
+   *  terminal's own reply), for `/api/terms/watched` */
+  lastInput?: number;
 }
+
+/** how long after a keystroke a shell counts as watched: its agent's asks
+ *  stay at the terminal someone is at */
+export const WATCH_SPAN = 2 * 60_000;
 
 /** what a terminal websocket carries from the upgrade to its handlers */
 interface TermSocket {
@@ -1739,6 +1750,8 @@ async function handleApi(
   if (chanRes) return chanRes;
   const registryRes = await state.registry.handle(req, url);
   if (registryRes) return registryRes;
+  const askRes = await state.asks.handle(req, url);
+  if (askRes) return askRes;
   const taskRes = await state.tasks.handle(req, url, (id) => state.result.repos.find((r) => r.id === id));
   if (taskRes) return taskRes;
 
@@ -1945,6 +1958,33 @@ async function handleApi(
     if (!state.tmux) return json({ agent: null });
     const pane = await paneInfo(state.tmux, term);
     return json({ agent: pane ? await paneAgent(pane) : null });
+  }
+  // Whether someone is at this shell: a browser typed into it within
+  // WATCH_SPAN. The tailchan hook asks before it routes an ask, so an
+  // unknown shell (or a task) is simply not watched rather than an error,
+  // and the hook fails safe.
+  if (path === "/api/terms/watched" && method === "GET") {
+    const live = state.terms.get(url.searchParams.get("term") ?? "");
+    const at = live && !live.info.task ? live.lastInput : undefined;
+    return json({ watched: at !== undefined && Date.now() - at < WATCH_SPAN });
+  }
+  // The newest transcript of the agent in a shell, in the shell's repo on
+  // this machine, for a hand-off to the other harness: the pane's own agent
+  // when tmux can say, else the `harness` the page names.
+  if (path === "/api/terms/transcript" && method === "GET") {
+    const term = url.searchParams.get("term") ?? "";
+    const live = state.terms.get(term);
+    if (live?.info.task || state.tasks.knows(term)) return json({ error: "that is a task, not a shell" }, 400);
+    if (!live || live.ending) return json({ error: "no such shell" }, 404);
+    if (parseLocator(live.info.path).host) return json({ error: "that shell runs on another machine" }, 404);
+    const asked = url.searchParams.get("harness");
+    const pane = state.tmux ? await paneInfo(state.tmux, term) : null;
+    const running = pane ? await paneAgent(pane) : null;
+    const harness = running ?? (isHarness(asked) ? asked : null);
+    if (!harness) return json({ error: "no agent runs in that shell" }, 404);
+    const file = await newestTranscript(harness, live.info.path);
+    if (!file) return json({ error: `no ${harness} transcript in ${live.info.path}` }, 404);
+    return json({ harness, path: file });
   }
   if (path === "/api/terms/text" && method === "GET") {
     const term = url.searchParams.get("term") ?? "";
@@ -2588,6 +2628,8 @@ export async function startServer(opts: {
   /** the agent registry's timings and scan; tests turn the scan on with a
    *  stand-in lister (it is off under `bun test` and `CANOPY_AGENT_SCAN=0`) */
   registry?: { scanEvery?: number; relistEvery?: number; lister?: () => Promise<AgentProc[]>; container?: boolean };
+  /** the asks hub's timings, shrunk by tests */
+  asks?: { closedKeep?: number; beatEvery?: number; relistEvery?: number; sweepEvery?: number };
 }): Promise<{ port: number; stop: () => void }> {
   const cfg = await loadConfig();
   const root = await realpath(opts.root);
@@ -2604,6 +2646,10 @@ export async function startServer(opts: {
   const fixed = opts.harnesses;
   // one broker address for tailchan and the registry both
   const chanCfg = opts.chan === undefined ? loadChanConfig() : opts.chan;
+  // The answer token is canopy's alone: read once into the config above,
+  // then out of this process's env, so no shell, run or tmux server started
+  // from here inherits it (`exec` and `termEnv` pass the live env).
+  delete process.env["CANOPY_TAILCHAN_ANSWER_TOKEN"];
   const scanOff = process.env["CANOPY_AGENT_SCAN"] === "0" || process.env["NODE_ENV"] === "test";
   const harnesses = fixed ? () => [...fixed] : availableHarnesses;
   // every run is told which backend started it (CANOPY_BACKEND), and codex
@@ -2737,6 +2783,11 @@ export async function startServer(opts: {
       ...(opts.registry?.relistEvery !== undefined ? { relistEvery: opts.registry.relistEvery } : {}),
       ...(opts.registry?.lister ? { lister: opts.registry.lister } : {}),
       ...(opts.registry?.container !== undefined ? { container: opts.registry.container } : {}),
+    }),
+    asks: new AskHub(chanCfg, {
+      broadcast: (ev) => broadcast(state, ev),
+      deviceName: (client) => deviceNameOf(state, client),
+      ...opts.asks,
     }),
     backendName: selfName(cfg.self, hostname()),
     apiUrl: null,
@@ -3003,6 +3054,13 @@ export async function startServer(opts: {
             return;
           }
           const term = ws as ServerWebSocket<TermSocket>;
+          // a person at the keyboard, not the terminal answering a query:
+          // the shell is watched, and the human is here
+          if (typeof msg !== "string" && isKeystroke(msg)) {
+            const live = state.terms.get(term.data.id);
+            if (live && !live.info.task) live.lastInput = Date.now();
+            void state.asks.beat();
+          }
           const session = sessionOf(term);
           if (session) relay(session, msg);
           else term.data.pending?.push(msg);
@@ -3052,6 +3110,7 @@ export async function startServer(opts: {
   // is on, so a machine going down does not take them with the tmux server.
   void state.chan.start().catch((err) => console.error("canopy: tailchan", err));
   state.registry.start();
+  state.asks.start();
   const keepTimer = setInterval(() => void keepPass(state), KEEP_EVERY);
 
   // A named event rather than an SSE comment, so the page sees it: a phone
@@ -3085,6 +3144,7 @@ export async function startServer(opts: {
       state.launcher.shutdown();
       state.chan.close();
       state.registry.close();
+      state.asks.close();
       // the ptys go with the server; a shell on tmux stays for the next one
       for (const t of state.terms.values()) {
         t.pty?.session.detach();

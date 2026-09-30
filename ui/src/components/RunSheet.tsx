@@ -9,6 +9,7 @@ import { effectiveRows, harnessesOf, ROLE_LABEL, ROLE_TITLE, withPick } from "..
 import { EffectiveTable, PickEditor } from "./AgentForm";
 import { FleetPlan, FleetSheet, FlowConsole, FlowPlan } from "./FlowSheet";
 import { SearchSheet } from "./Search";
+import { RunPromptForm } from "./Prompts";
 import {
   AGENT_ROLES,
   DEFAULT_LAUNCH,
@@ -20,14 +21,11 @@ import {
   type Run,
   type RunAction,
   type RunAnswer,
-  type RunPrompt,
-  type RunQuestion,
   type RunStep,
 } from "../../../src/core/types";
 import { renameOld, taskDraftCwd, taskDraftPatch, withChange } from "../tasks";
-import { AGENT_NAME, agentWord, harnessOf, resultLine, tokenTitle } from "../runs";
+import { AGENT_NAME, harnessOf, resultLine, tokenTitle } from "../runs";
 import { HARNESS } from "../../../src/core/harness";
-import type { Harness } from "../../../src/core/types";
 
 const STATUS_WORD: Record<Run["status"], string> = {
   working: "working",
@@ -329,7 +327,7 @@ export function Timeline({
           </li>
         )}
       </ol>
-      {run.prompt && <Prompt prompt={run.prompt} harness={harness} onAnswer={onAnswer} />}
+      {run.prompt && <RunPromptForm prompt={run.prompt} harness={harness} onAnswer={onAnswer} />}
       {run.result && run.status === "done" && !chat && (
         <div className={noChange ? "outcome warn" : "outcome ok"}>
           {noChange && (
@@ -879,132 +877,5 @@ function LaunchForm({ repo }: { repo: Repo }) {
         </button>
       </footer>
     </>
-  );
-}
-
-/* ---------- prompts: permission and questions ---------- */
-
-function Prompt({
-  prompt,
-  harness,
-  onAnswer,
-}: {
-  prompt: RunPrompt;
-  /** whose prompt it is, for its heading */
-  harness: Harness;
-  onAnswer: (a: RunAnswer) => void;
-}) {
-  if (prompt.kind === "permission") {
-    return (
-      <div className="ask">
-        <div className="eyebrow">{agentWord(harness)} wants to run</div>
-        <pre className="ask-detail">{prompt.detail}</pre>
-        <div className="ask-row">
-          <button type="button" className="mini strong" onClick={() => onAnswer({ kind: "allow" })}>
-            allow
-          </button>
-          <button
-            type="button"
-            className="mini"
-            title="Every later request in this run passes without asking"
-            onClick={() => onAnswer({ kind: "allow-all" })}
-          >
-            allow all for this run
-          </button>
-          <span className="spacer" />
-          <button type="button" className="mini" onClick={() => onAnswer({ kind: "deny" })}>
-            deny
-          </button>
-        </div>
-      </div>
-    );
-  }
-  return <Questions questions={prompt.questions} who={agentWord(harness)} onAnswer={(answers) => onAnswer({ kind: "answers", answers })} />;
-}
-
-function Questions({
-  questions,
-  who,
-  onAnswer,
-}: {
-  questions: RunQuestion[];
-  /** the agent's word, for the heading */
-  who: string;
-  onAnswer: (answers: Record<string, string>) => void;
-}) {
-  const [picked, setPicked] = useState<Record<string, string[]>>({});
-  const [other, setOther] = useState<Record<string, string>>({});
-
-  const answerFor = (q: RunQuestion): string => {
-    const free = other[q.question]?.trim();
-    const chosen = picked[q.question] ?? [];
-    return [...chosen, ...(free ? [free] : [])].join(", ");
-  };
-  const complete = questions.every((q) => answerFor(q).length > 0);
-
-  const toggle = (q: RunQuestion, label: string) =>
-    setPicked((p) => {
-      const cur = p[q.question] ?? [];
-      const next = q.multiSelect
-        ? cur.includes(label)
-          ? cur.filter((l) => l !== label)
-          : [...cur, label]
-        : cur.includes(label)
-          ? []
-          : [label];
-      return { ...p, [q.question]: next };
-    });
-
-  const submit = () => {
-    if (!complete) return;
-    onAnswer(Object.fromEntries(questions.map((q) => [q.question, answerFor(q)])));
-  };
-
-  return (
-    <div className="ask">
-      <div className="eyebrow">{who} asks</div>
-      {questions.map((q) => (
-        <div key={q.question} className="question">
-          <p className="q-text">
-            {q.header && <span className="branch">{q.header}</span>}
-            {q.question}
-          </p>
-          <div className="options" role={q.multiSelect ? "group" : "radiogroup"}>
-            {q.options.map((o) => {
-              const on = (picked[q.question] ?? []).includes(o.label);
-              return (
-                <button
-                  key={o.label}
-                  type="button"
-                  role={q.multiSelect ? "checkbox" : "radio"}
-                  aria-checked={on}
-                  className={on ? "option on" : "option"}
-                  onClick={() => toggle(q, o.label)}
-                >
-                  <span className="opt-label">{o.label}</span>
-                  {o.description && <span className="opt-desc">{o.description}</span>}
-                </button>
-              );
-            })}
-          </div>
-          <input
-            type="text"
-            className="other"
-            placeholder="something else…"
-            value={other[q.question] ?? ""}
-            onChange={(e) => setOther((p) => ({ ...p, [q.question]: e.target.value }))}
-            onKeyDown={(e) => {
-              if (e.key === "Enter") submit();
-            }}
-            aria-label={`Another answer to: ${q.question}`}
-          />
-        </div>
-      ))}
-      <div className="ask-row">
-        <button type="button" className="mini strong" disabled={!complete} onClick={submit}>
-          answer
-        </button>
-      </div>
-    </div>
   );
 }

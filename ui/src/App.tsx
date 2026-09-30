@@ -14,7 +14,7 @@ import { SectionSolo, Solo } from "./components/Solo";
 import { ShellSolo, TermDock } from "./components/TermDock";
 import { Crowns, TopBar } from "./components/TopBar";
 import { NARROW, useMedia } from "./media";
-import { parseRoute } from "./routes";
+import { dropAskHere, parseRoute } from "./routes";
 import { SORT_MODES } from "./settings";
 import { SIDEBAR, useStore } from "./store";
 
@@ -116,6 +116,28 @@ export function App() {
     else el.dataset["theme"] = theme;
     el.dataset["density"] = density;
   }, [theme, density]);
+
+  // `?view=agents&ask=<id>`, the link an away DM carries: the inbox opens on
+  // that ask once the page is up, and the link leaves the URL so a reload
+  // does not open it again.
+  useEffect(() => {
+    if (!loaded || !route.ask) return;
+    useStore.getState().openInbox(`ask:${route.ask}`);
+    dropAskHere();
+  }, [loaded]);
+
+  // Anyone pointing or typing anywhere on the page is here: the broker
+  // hears it (at most once a minute), so an agent's ask waits for them in
+  // canopy rather than half an hour for someone who is gone.
+  useEffect(() => {
+    const here = () => useStore.getState().pagePresence();
+    window.addEventListener("pointerdown", here, true);
+    window.addEventListener("keydown", here, true);
+    return () => {
+      window.removeEventListener("pointerdown", here, true);
+      window.removeEventListener("keydown", here, true);
+    };
+  }, []);
 
   // A `?repo=` link pins that repo once the tree is in. Only once: a rescan
   // that drops the repo should not bring the panel back.

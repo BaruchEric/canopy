@@ -34,6 +34,7 @@ const KIND_WORD: Record<FeedKind, string> = {
   chan: "chan",
   task: "task",
   registry: "agents",
+  ask: "asks",
 };
 
 /**

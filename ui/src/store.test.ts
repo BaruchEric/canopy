@@ -11,6 +11,7 @@ import {
   closedSectionsOf,
   connOf,
   favoriteCount,
+  inboxItems,
   isFavorite,
   isOnline,
   layoutOf,
@@ -35,6 +36,7 @@ import {
   DEFAULT_AGENT,
   type AgentCard,
   type AgentSettings,
+  type Ask,
   type KeptShell,
   type PeerSeen,
   type Repo,
@@ -525,6 +527,7 @@ describe("several backends", () => {
         "/api/peers",
         "/api/tailchan",
         "/api/registry",
+        "/api/asks",
         "/api/tasks",
       ].sort(),
     );
@@ -628,6 +631,58 @@ describe("several backends", () => {
     ]);
     useStore.getState().applyEvent({ type: "registry", cards: [], gone: ["claude:two"] }, "a");
     expect(Object.keys(useStore.getState().registry)).toEqual(["claude:one"]);
+  });
+
+  test("asks are home's alone, and an answer goes back the way its item came", async () => {
+    const open: Ask = {
+      id: "a1",
+      agent: "claude:one",
+      handle: "proj-0123",
+      node: "a",
+      kind: "permission",
+      tool: "Bash",
+      title: "Bash: ls",
+      detail: "{}",
+      route: "remote",
+      waitUntil: Date.now() + 60_000,
+      state: "open",
+      createdAt: 1,
+    };
+    const waiting = { ...runOf("b|r1", "b|proj"), status: "waiting", steps: [], prompt: { id: "p1", kind: "permission", tool: "Bash", title: "ls", detail: "ls" } };
+    const posted: { path: string; body: unknown }[] = [];
+    const record = (path: string, init?: RequestInit) => {
+      if (init?.method === "POST") posted.push({ path, body: JSON.parse(String(init.body ?? "null")) });
+      return undefined;
+    };
+    await start(
+      (path, init) =>
+        record(path, init) ??
+        backendAnswers(scanOf("/a", [repo("proj")]), [], {
+          "/api/backends": twoBackends,
+          "/api/asks": { ready: true, canAnswer: true, asks: [open], presence: { state: "here", at: 1, pinned: false } },
+          "/api/asks/answer": { ...open, state: "answered", answer: { behavior: "allow" }, answeredBy: "x@canopy" },
+        })(path, init),
+      (path, init) => record(`b:${path}`, init) ?? backendAnswers(scanOf("/b", [repo("proj")]), [{ ...waiting, id: "r1", repoId: "proj" }], { "/api/runs/answer": { ...waiting, id: "r1", repoId: "proj", status: "working", prompt: null } })(path, init),
+    );
+    await settle();
+    let s = useStore.getState();
+    expect(s.asksReady).toBe(true);
+    expect(s.canAnswer).toBe(true);
+    expect(inboxItems(s).map((i) => i.key)).toEqual(["ask:a1", "run:b|r1"]);
+    // b's broker is not this page's
+    useStore.getState().applyEvent({ type: "asks", asks: [{ ...open, id: "a2" }] }, "b");
+    expect(Object.keys(useStore.getState().asks)).toEqual(["a1"]);
+    // an answer to b's run goes to b, as a run's answer
+    const run = inboxItems(useStore.getState()).find((i) => i.source === "run")!;
+    await useStore.getState().answerInbox(run, { behavior: "allow", always: true });
+    expect(posted.find((p) => p.path.startsWith("b:/api/runs/answer"))?.body).toEqual({ id: "r1", promptId: "p1", answer: { kind: "allow-all" } });
+    // an answer to an ask goes to home, with this browser's id
+    const a = inboxItems(useStore.getState()).find((i) => i.source === "ask")!;
+    await useStore.getState().answerInbox(a, { behavior: "deny", message: "not now" });
+    expect(posted.find((p) => p.path === "/api/asks/answer")?.body).toMatchObject({ id: "a1", behavior: "deny", message: "not now" });
+    s = useStore.getState();
+    expect(s.asks["a1"]?.state).toBe("answered");
+    expect(inboxItems(s).some((i) => i.key === "ask:a1")).toBe(false);
   });
 
   test("a scan from b prunes only b's panels", async () => {

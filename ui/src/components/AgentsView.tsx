@@ -1,8 +1,10 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { describeAgent } from "../../../src/core/agent";
 import { HARNESS } from "../../../src/core/harness";
 import { DEFAULT_PROFILE, isProfileName, isProfilePick, resolveAgent, roleRefusal, roleTakes } from "../../../src/core/route";
-import { AGENT_ROLES, DEFAULT_AGENT, HARNESSES, type AgentRole, type AgentRoutes, type Harness, type RepoAgent } from "../../../src/core/types";
+import { AGENT_ROLES, DEFAULT_AGENT, HARNESSES, type AgentRole, type AgentRoutes, type GuardsInfo, type Harness, type RepoAgent } from "../../../src/core/types";
+import { describeGuard, guardHit, normalizeGuards, parseGuardRule } from "../../../src/core/guards";
+import { api } from "../api";
 import {
   effectiveRows,
   harnessesOf,
@@ -19,6 +21,7 @@ import { backendOf } from "../registry";
 import { connOf, multi, routesOf, useStore } from "../store";
 import { AgentSettingsForm, EffectiveTable, PickEditor } from "./AgentForm";
 import { ChanChip } from "./Chan";
+import { InboxChip } from "./Inbox";
 import { RegistryTab } from "./Registry";
 import { Seg } from "./Seg";
 
@@ -67,10 +70,12 @@ export function AgentsView({ onGit }: { onGit?: () => void } = {}) {
         )}
         {tab === "registry" && (
           <span className="agents-has">
+            <InboxChip onGit={onGit} />
             <ChanChip />
           </span>
         )}
         {tab === "routing" && <span className="agents-has" title="The harnesses this backend has installed">
+          <InboxChip onGit={onGit} />
           {HARNESSES.map((h) => (
             <span key={h} className={has.includes(h) ? `harness-chip h-${h}` : "harness-chip off"}>
               {HARNESS[h].glyph} {HARNESS[h].label}
@@ -92,8 +97,8 @@ function Routing({ scope, routes, has }: { scope: string; routes: AgentRoutes; h
     <>
       <p className="blurb agents-blurb">
         A start resolves through these, the first that answers winning: a pick at launch, the repo's pick for the role, the repo's whole
-        pick, the role's route, the default profile, then claude as built in. Only shells may be codex for now; a codex pick anywhere else is
-        passed over, and the effective table says so.
+        pick, the role's route, the default profile, then claude as built in. A pick naming a profile that is gone is passed over, and the
+        effective table says so.
       </p>
       {missing.length > 0 && (
         <p className="settings-hint warn agents-warn">
@@ -104,7 +109,154 @@ function Routing({ scope, routes, has }: { scope: string; routes: AgentRoutes; h
       <Roles scope={scope} routes={routes} has={has} />
       <Overrides scope={scope} routes={routes} has={has} />
       <Effective scope={scope} routes={routes} has={has} />
+      <Guards />
     </>
+  );
+}
+
+/* ---------- guards: commands a yolo agent must ask a person before running ---------- */
+
+/**
+ * The broker's guard rules, tailnet-wide (the home backend's broker, not
+ * the backend picked above): a shell command that hits one waits for a
+ * person in the inbox whatever the agent's permission mode, and is denied
+ * when no one answers. Editable only through a home backend with the answer
+ * token; a box tries a command against the rules as the hook would.
+ */
+function Guards() {
+  const ready = useStore((s) => s.asksReady);
+  const [info, setInfo] = useState<GuardsInfo | null>(null);
+  const [draft, setDraft] = useState<string[]>([]);
+  const [add, setAdd] = useState("");
+  const [trial, setTrial] = useState("");
+  const [error, setError] = useState<string | null>(null);
+  const [saving, setSaving] = useState(false);
+  useEffect(() => {
+    if (!ready) return;
+    let live = true;
+    api
+      .guards()
+      .then((g) => {
+        if (!live) return;
+        setInfo(g);
+        setDraft(g.rules);
+      })
+      .catch((err: unknown) => live && setError(errText(err)));
+    return () => {
+      live = false;
+    };
+  }, [ready]);
+  if (!ready) return null;
+  const canEdit = info?.canEdit === true;
+  const dirty = info !== null && JSON.stringify(draft) !== JSON.stringify(info.rules);
+  const valid = draft.filter((r) => parseGuardRule(r).ok);
+  const hit = trial.trim() ? guardHit(valid.map((r) => r.trim()), trial) : null;
+  const addRule = () => {
+    const p = parseGuardRule(add);
+    if (!p.ok) {
+      setError(p.error);
+      return;
+    }
+    setError(null);
+    if (!draft.includes(p.rule.text)) setDraft([...draft, p.rule.text]);
+    setAdd("");
+  };
+  const save = () => {
+    const n = normalizeGuards(draft);
+    if ("error" in n) {
+      setError(n.error);
+      return;
+    }
+    setSaving(true);
+    setError(null);
+    api
+      .setGuards(n.rules)
+      .then((g) => {
+        setInfo(g);
+        setDraft(g.rules);
+      })
+      .catch((err: unknown) => setError(errText(err)))
+      .finally(() => setSaving(false));
+  };
+  return (
+    <section className="agents-section" aria-label="Guards">
+      <h3 className="panel-label">guards</h3>
+      <p className="settings-hint">
+        Shell commands no agent runs without asking you, whatever its permission mode, on every machine with the tailchan hooks. A hit waits in
+        the inbox (? in the top bar) and is denied if nobody answers. Claude's rule syntax: <code>Bash(git push --force:*)</code> for a prefix,{" "}
+        <code>Bash(rm -rf *)</code> for a pattern, <code>Bash(make deploy)</code> for one command.
+      </p>
+      {!info && !error && <p className="settings-hint">Reading the rules…</p>}
+      {info && !canEdit && <p className="settings-hint warn">Read-only here: the home backend has no answer token (CANOPY_TAILCHAN_ANSWER_TOKEN).</p>}
+      {info && draft.length === 0 && <p className="settings-hint">No guards: nothing a yolo agent runs waits for you.</p>}
+      <ul className="agents-list guard-list">
+        {draft.map((rule, i) => {
+          const p = parseGuardRule(rule);
+          return (
+            <li key={i} className="agents-row guard-row">
+              <input
+                className="settings-input guard-input"
+                value={rule}
+                readOnly={!canEdit}
+                aria-label={`Guard rule ${i + 1}`}
+                spellCheck={false}
+                onChange={(e) => setDraft(draft.map((r, j) => (j === i ? e.target.value : r)))}
+              />
+              <span className={p.ok ? (p.rule.inert ? "settings-hint warn" : "settings-hint") : "settings-hint error"}>
+                {p.ok ? describeGuard(p.rule) : p.error}
+              </span>
+              {canEdit && (
+                <button type="button" className="mini" aria-label={`Remove ${rule}`} onClick={() => setDraft(draft.filter((_, j) => j !== i))}>
+                  remove
+                </button>
+              )}
+            </li>
+          );
+        })}
+      </ul>
+      {canEdit && (
+        <div className="agents-add">
+          <input
+            className="settings-input"
+            placeholder="Bash(git push --force:*)"
+            value={add}
+            spellCheck={false}
+            aria-label="A new guard rule"
+            onChange={(e) => setAdd(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") addRule();
+            }}
+          />
+          <button type="button" className="mini" disabled={!add.trim()} onClick={addRule}>
+            add guard
+          </button>
+          {dirty && (
+            <>
+              <button type="button" className="mini strong" disabled={saving} onClick={save}>
+                {saving ? "saving…" : "save guards"}
+              </button>
+              <button type="button" className="mini" disabled={saving} onClick={() => info && setDraft(info.rules)}>
+                revert
+              </button>
+            </>
+          )}
+        </div>
+      )}
+      {info && (
+        <div className="agents-add">
+          <input
+            className="settings-input"
+            placeholder="try a command: git push --force origin main"
+            value={trial}
+            spellCheck={false}
+            aria-label="A command to try against the guards"
+            onChange={(e) => setTrial(e.target.value)}
+          />
+          {trial.trim() && <span className={hit ? "settings-hint warn" : "settings-hint"}>{hit ? `waits for you: ${hit}` : "runs without asking"}</span>}
+        </div>
+      )}
+      {error && <p className="settings-hint error">{error}</p>}
+    </section>
   );
 }
 

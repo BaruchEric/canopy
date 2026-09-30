@@ -4,7 +4,25 @@
  * canopy says about its own runs, flows and fleets. Browser-safe and pure;
  * the client that talks to the broker is chan.ts.
  */
-import { AGENT_STATES, isHarness, type AgentCard, type AgentOrigin, type AgentState, type ChanMessage, type Fleet, type Flow, type Run, type RunStatus } from "./types";
+import {
+  AGENT_STATES,
+  ASK_STATES,
+  isHarness,
+  type AgentCard,
+  type AgentOrigin,
+  type AgentState,
+  type Ask,
+  type AskAnswer,
+  type AskKind,
+  type AskState,
+  type ChanMessage,
+  type Fleet,
+  type Flow,
+  type Presence,
+  type Run,
+  type RunQuestion,
+  type RunStatus,
+} from "./types";
 
 export const HANDLE_RE = /^[a-z0-9][a-z0-9._-]{0,39}$/;
 export const CHANNEL_RE = /^[a-z0-9][a-z0-9._-]{0,63}$/;
@@ -174,6 +192,130 @@ export function registryCard(m: ChanMessage): AgentCard | null {
   }
   if (!data || typeof data !== "object" || (data as { type?: unknown }).type !== "agent") return null;
   return asAgentCard((data as { card?: unknown }).card);
+}
+
+/* ---------- asks for a human, as the broker posts them ---------- */
+
+/** the channel the broker posts every ask change on */
+export const ASKS_CHANNEL = "asks";
+
+const ASK_KINDS: readonly AskKind[] = ["permission", "question", "guard"];
+
+/** one question of an ask, the shape Claude's AskUserQuestion takes;
+ *  null for anything that is not one */
+function asQuestion(v: unknown): RunQuestion | null {
+  if (!v || typeof v !== "object") return null;
+  const q = v as Record<string, unknown>;
+  if (typeof q.question !== "string" || !q.question) return null;
+  const options = Array.isArray(q.options)
+    ? q.options.flatMap((o) => {
+        if (!o || typeof o !== "object") return [];
+        const x = o as Record<string, unknown>;
+        return typeof x.label === "string" && x.label ? [{ label: x.label, description: str(x.description) ?? "" }] : [];
+      })
+    : [];
+  return { question: q.question, header: str(q.header) ?? "", options, multiSelect: q.multiSelect === true };
+}
+
+function asAnswer(v: unknown): AskAnswer | undefined {
+  if (!v || typeof v !== "object") return undefined;
+  const a = v as Record<string, unknown>;
+  if (a.behavior !== "allow" && a.behavior !== "deny") return undefined;
+  const answers =
+    a.answers && typeof a.answers === "object"
+      ? Object.fromEntries(Object.entries(a.answers as Record<string, unknown>).filter((e): e is [string, string] => typeof e[1] === "string"))
+      : null;
+  const message = str(a.message);
+  return {
+    behavior: a.behavior,
+    ...(message ? { message } : {}),
+    ...(answers && Object.keys(answers).length ? { answers } : {}),
+    ...(a.always === true ? { always: true } : {}),
+  };
+}
+
+/** An ask as the broker sends it: what canopy keys, orders and routes on
+ *  (id, kind, state, the times) checked, the rest defaulted field by field,
+ *  the way `asAgentCard` reads a card. */
+export function asAsk(v: unknown): Ask | null {
+  if (!v || typeof v !== "object") return null;
+  const a = v as Record<string, unknown>;
+  const createdAt = num(a.createdAt);
+  if (typeof a.id !== "string" || !a.id || createdAt === null) return null;
+  if (typeof a.kind !== "string" || !(ASK_KINDS as readonly string[]).includes(a.kind)) return null;
+  if (typeof a.state !== "string" || !(ASK_STATES as readonly string[]).includes(a.state)) return null;
+  const questions = Array.isArray(a.questions) ? a.questions.map(asQuestion).filter((q): q is RunQuestion => q !== null) : null;
+  const answer = asAnswer(a.answer);
+  const answeredBy = str(a.answeredBy);
+  const why = str(a.why);
+  const answeredAt = num(a.answeredAt);
+  return {
+    id: a.id,
+    agent: str(a.agent) ?? "",
+    handle: str(a.handle) ?? "",
+    node: str(a.node) ?? "",
+    kind: a.kind as AskKind,
+    tool: str(a.tool),
+    title: str(a.title) ?? a.kind,
+    detail: typeof a.detail === "string" ? a.detail : "",
+    ...(questions ? { questions } : {}),
+    route: a.route === "local" ? "local" : "remote",
+    waitUntil: num(a.waitUntil) ?? createdAt,
+    state: a.state as AskState,
+    ...(answer ? { answer } : {}),
+    ...(answeredBy ? { answeredBy } : {}),
+    ...(why ? { why } : {}),
+    createdAt,
+    ...(answeredAt !== null ? { answeredAt } : {}),
+  };
+}
+
+/** The ask one of the broker's `#asks` events carries
+ *  (`{"type":"ask","ask":…}` as a silent `event` message), or null. */
+export function askOf(m: ChanMessage): Ask | null {
+  if (m.channel !== ASKS_CHANNEL || m.kind !== "event") return null;
+  let data: unknown;
+  try {
+    data = JSON.parse(m.body);
+  } catch {
+    return null;
+  }
+  if (!data || typeof data !== "object" || (data as { type?: unknown }).type !== "ask") return null;
+  return asAsk((data as { ask?: unknown }).ask);
+}
+
+/** presence as the broker answers it, or null for anything else */
+export function asPresence(v: unknown): Presence | null {
+  if (!v || typeof v !== "object") return null;
+  const p = v as Record<string, unknown>;
+  if (p.state !== "here" && p.state !== "away") return null;
+  const by = str(p.by);
+  return { state: p.state, at: num(p.at) ?? 0, pinned: p.pinned === true, ...(by ? { by } : {}) };
+}
+
+/**
+ * The channel every agent in a repo shares, `repo.<owner>-<name>`, off the
+ * repo's web url, by the rule the tailchan CLI's hook subscribes with:
+ * the url's last two path parts joined by `-`, lowercased (ASCII only, as
+ * `tr` does), every byte outside `[a-z0-9._-]` made `-`, then cut to 59
+ * characters with one trailing `-` dropped. (The CLI's pipeline turns the
+ * line's own newline into that `-` before the cut, so a short slug loses it
+ * again and a long one loses a real one.) Null for no url or no slug.
+ */
+export function repoChannel(url: string | null | undefined): string | null {
+  if (!url) return null;
+  const parts = url.split("/");
+  if (parts.length < 2) return null;
+  const pair = `${parts[parts.length - 2]}-${parts[parts.length - 1]}\n`;
+  let slug = "";
+  for (const b of new TextEncoder().encode(pair)) {
+    const c = b >= 65 && b <= 90 ? b + 32 : b;
+    const ok = (c >= 97 && c <= 122) || (c >= 48 && c <= 57) || c === 46 || c === 95 || c === 45;
+    slug += ok ? String.fromCharCode(c) : "-";
+  }
+  slug = slug.slice(0, 59);
+  if (slug.endsWith("-")) slug = slug.slice(0, -1);
+  return slug ? `repo.${slug}` : null;
 }
 
 /* ---------- what canopy says about its own work ---------- */

@@ -14,6 +14,7 @@ import { Seg } from "./Seg";
 import { SettingsMenu } from "./Settings";
 import { BackendsChip } from "./Backends";
 import { ChanChip } from "./Chan";
+import { InboxChip } from "./Inbox";
 import { DevicesChip } from "./Devices";
 import { KeptShells } from "./KeptShells";
 import { ShellsChip } from "./Shells";
@@ -436,16 +437,18 @@ function RescanButton() {
 }
 
 /** Who else is here and what is running: each chip is absent when it has
- *  nothing to say. A phone keeps the tasks' chip on its first row instead. */
-function Chips({ tasks = true }: { tasks?: boolean }) {
+ *  nothing to say. A phone keeps the tasks' chip and the inbox on its first
+ *  row instead, where a thumb finds them without scrolling. */
+function Chips({ phone = false }: { phone?: boolean }) {
   return (
     <>
       <PeersChip />
       <BackendsChip />
       <KeptShells />
       <ShellsChip />
-      {tasks && <TasksChip />}
+      {!phone && <TasksChip />}
       <DevicesChip />
+      {!phone && <InboxChip />}
       <ChanChip />
     </>
   );
@@ -470,6 +473,7 @@ export function TopBar({ nav }: { nav?: ReactNode }) {
           {/* the tasks' chip stays in reach with a repo open, when the rows
               under this one go: it brings a task to the front from anywhere */}
           <TasksChip />
+          <InboxChip />
           <LiveDot />
           <SearchButton />
           <SettingsMenu />
@@ -487,7 +491,7 @@ export function TopBar({ nav }: { nav?: ReactNode }) {
           <RescanButton />
           <SourcesMenu />
           <WsTabs />
-          <Chips tasks={false} />
+          <Chips phone />
         </div>
       </header>
     );

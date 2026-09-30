@@ -7,8 +7,8 @@
 import { readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
-import { asChanMessage, parseSse, readQuery, type ChanTarget } from "./tailchan";
-import type { AgentCard, ChanChannel, ChanMessage, ChanWho, ScanBody } from "./types";
+import { asAsk, asChanMessage, asPresence, parseSse, readQuery, type ChanTarget } from "./tailchan";
+import type { AgentCard, Ask, AskAnswer, ChanChannel, ChanMessage, ChanWho, Presence, ScanBody } from "./types";
 
 export interface ChanConfig {
   url: string;
@@ -17,6 +17,11 @@ export interface ChanConfig {
   /** canopy's own handle and the channel it posts to */
   bot: string;
   channel: string;
+  /** the broker's answer token (`Authorization: Bearer`): what lets canopy
+   *  answer an ask, set presence and edit guards. From
+   *  `CANOPY_TAILCHAN_ANSWER_TOKEN` alone, never the CLI's file, which every
+   *  agent on the machine can read. Absent: asks are read-only here. */
+  token?: string;
 }
 
 /** KEY=value lines, as the CLI's config file has them; quotes stripped */
@@ -40,11 +45,14 @@ export function parseEnvFile(text: string): Record<string, string> {
 export function chanConfig(env: Record<string, string | undefined>, file: Record<string, string>): ChanConfig | null {
   const url = (env.CANOPY_TAILCHAN_URL || env.TAILCHAN_URL || file.TAILCHAN_URL || "").replace(/\/+$/, "");
   if (!/^https?:\/\/\S+$/.test(url)) return null;
+  // the env alone: the file is the CLI's, and an agent's CLI never answers
+  const token = (env.CANOPY_TAILCHAN_ANSWER_TOKEN ?? "").trim();
   return {
     url,
     as: (env.CANOPY_TAILCHAN_AS || env.TAILCHAN_HUMAN || file.TAILCHAN_HUMAN || "canopy-user").toLowerCase(),
     bot: (env.CANOPY_TAILCHAN_BOT || "canopy").toLowerCase(),
     channel: (env.CANOPY_TAILCHAN_CHANNEL || "canopy").replace(/^#/, "").toLowerCase(),
+    ...(/^\S+$/.test(token) ? { token } : {}),
   };
 }
 
@@ -82,8 +90,16 @@ export class Chan {
     private readonly fetcher: Fetch = (i, init) => fetch(i, init),
   ) {}
 
-  private async call<T>(as: string, method: string, path: string, body?: unknown, raw?: { data: Uint8Array; type: string; name: string }): Promise<T> {
+  private async call<T>(
+    as: string,
+    method: string,
+    path: string,
+    body?: unknown,
+    raw?: { data: Uint8Array; type: string; name: string },
+    token?: string,
+  ): Promise<T> {
     const headers: Record<string, string> = { "x-tailchan-as": as };
+    if (token) headers["authorization"] = `Bearer ${token}`;
     let payload: string | Uint8Array | undefined;
     if (raw) {
       headers["content-type"] = raw.type;
@@ -162,6 +178,56 @@ export class Chan {
   /** replaces the caller node's scan cards in the body's pid namespace */
   scanAgents(as: string, body: ScanBody): Promise<{ cards: number; ended: number }> {
     return this.call(as, "POST", "/v1/agents/scan", body);
+  }
+
+  /** asks, oldest first: `open` (the broker's default), `all`, or one state */
+  async listAsks(as: string, state = "open"): Promise<Ask[]> {
+    const rows = await this.call<unknown[]>(as, "GET", `/v1/asks?state=${encodeURIComponent(state)}`);
+    return (Array.isArray(rows) ? rows : []).map(asAsk).filter((a): a is Ask => a !== null);
+  }
+
+  async getAsk(as: string, id: string): Promise<Ask> {
+    const a = asAsk(await this.call(as, "GET", `/v1/asks/${encodeURIComponent(id)}`));
+    if (!a) throw new ChanError(502, "tailchan answered with something that is not an ask");
+    return a;
+  }
+
+  /** answers an open ask; `by` is who, which the broker writes as
+   *  `<by>@<token name>` (a 409 when the ask is no longer open) */
+  async answerAsk(as: string, token: string, id: string, answer: AskAnswer & { by: string }): Promise<Ask> {
+    const a = asAsk(await this.call(as, "POST", `/v1/asks/${encodeURIComponent(id)}/answer`, answer, undefined, token));
+    if (!a) throw new ChanError(502, "tailchan answered with something that is not an ask");
+    return a;
+  }
+
+  async presence(as: string): Promise<Presence> {
+    const p = asPresence(await this.call(as, "GET", "/v1/presence"));
+    if (!p) throw new ChanError(502, "tailchan answered with something that is not a presence");
+    return p;
+  }
+
+  /** sets presence outright; a pinned away holds until it is set again */
+  async setPresence(as: string, token: string, state: Presence["state"], pinned: boolean): Promise<Presence> {
+    const p = asPresence(await this.call(as, "PUT", "/v1/presence", { state, pinned }, undefined, token));
+    if (!p) throw new ChanError(502, "tailchan answered with something that is not a presence");
+    return p;
+  }
+
+  /** here now, unless a pinned away holds */
+  async beatPresence(as: string, token: string): Promise<Presence> {
+    const p = asPresence(await this.call(as, "POST", "/v1/presence/beat", {}, undefined, token));
+    if (!p) throw new ChanError(502, "tailchan answered with something that is not a presence");
+    return p;
+  }
+
+  async guards(as: string): Promise<string[]> {
+    const g = await this.call<{ rules?: unknown }>(as, "GET", "/v1/guards");
+    return Array.isArray(g?.rules) ? g.rules.filter((r): r is string => typeof r === "string") : [];
+  }
+
+  async setGuards(as: string, token: string, rules: string[]): Promise<string[]> {
+    const g = await this.call<{ rules?: unknown }>(as, "PUT", "/v1/guards", { rules }, undefined, token);
+    return Array.isArray(g?.rules) ? g.rules.filter((r): r is string => typeof r === "string") : [];
   }
 
   /** the broker's own response, streamed through as it is */

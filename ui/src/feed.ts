@@ -6,6 +6,8 @@ import { isLiveAgent } from "../../src/core/types";
 import type {
   AgentCard,
   AgentRoutes,
+  Ask,
+  Presence,
   Fleet,
   Flow,
   Device,
@@ -23,6 +25,7 @@ import type {
 } from "../../src/core/types";
 import { cardName, repoOfCard, repoWord, whereWord } from "./agentcards";
 import { chanLine } from "./chan";
+import { askWord, endingWord } from "./inbox";
 import { peerLines } from "./peers";
 import { taskLines } from "./tasks";
 import { agentWord, harnessOf } from "./runs";
@@ -40,7 +43,8 @@ export type FeedKind =
   | "shell"
   | "chan"
   | "task"
-  | "registry";
+  | "registry"
+  | "ask";
 
 export interface FeedEntry {
   id: number;
@@ -89,6 +93,10 @@ export interface FeedSnapshot {
   /** the agent registry's cards by id, so a change of state can be told
    *  from a beat */
   registry?: Record<string, AgentCard>;
+  /** the asks held by id, so an ask closing can be told from a repeat */
+  asks?: Record<string, Ask>;
+  /** the human's presence as last heard */
+  presence?: Presence | null;
 }
 
 /** how many entries the feed keeps; older ones fall off the top */
@@ -488,7 +496,39 @@ export function describeEvent(
       return [{ at, kind: "chan", source: "", text: chanLine(ev.message, prev.chanAs ?? ""), quiet: ev.message.meta["silent"] === true }];
     case "registry":
       return registryLines(ev, prev, at);
+    case "asks":
+      return askLines(ev, prev, at);
   }
+}
+
+/** What the asks say: one raised, and how it ended (allowed or denied by
+ *  whom, answered at the terminal, expired to it, the session ended). One
+ *  first heard of already closed, or sent to the terminal at once because
+ *  someone was typing there, is a quiet line; so is presence. */
+export function askLines(ev: Extract<ServerEvent, { type: "asks" }>, prev: FeedSnapshot, at: number): FeedLine[] {
+  const held = prev.asks ?? {};
+  const lines: FeedLine[] = [];
+  for (const a of ev.asks) {
+    const before = held[a.id];
+    const card = prev.registry?.[a.agent];
+    const repo = card ? repoOfCard(card, prev.repos) : undefined;
+    const who = a.handle || (card ? cardName(card) : a.agent);
+    const name = repo || !card || !repoWord(card) ? who : `${who} in ${repoWord(card)}`;
+    const say = (text: string, quiet = false) => lines.push(about(repo, "ask", at, text, quiet));
+    if (!before) {
+      if (a.state === "open") say(`${name} ${askWord(a)}: ${clip(a.title, 100)}`);
+      else if (a.state === "local") say(`${name} ${askWord(a)} at the terminal, where someone is typing`, true);
+      else say(`${name} ${askWord(a)}: ${endingWord(a)}`, true);
+    } else if (before.state !== a.state) {
+      say(`${name} ${askWord(a)}: ${endingWord(a)}`);
+    }
+  }
+  const p = ev.presence;
+  if (p && (prev.presence?.state !== p.state || prev.presence?.pinned !== p.pinned)) {
+    const text = p.state === "here" ? "you are here: asks wait a minute in canopy, then go to the terminal" : `you are away${p.pinned ? " (pinned)" : ""}: asks wait half an hour in canopy`;
+    lines.push({ at, kind: "ask", source: "", text, quiet: true });
+  }
+  return lines;
 }
 
 /** What the registry says: an agent started, is waiting, ended or was

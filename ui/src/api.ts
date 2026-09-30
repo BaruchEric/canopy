@@ -9,6 +9,11 @@ import type {
   Harness,
   RepoAgent,
   BackendEntry,
+  Ask,
+  AskAnswer,
+  AsksInfo,
+  GuardsInfo,
+  Presence,
   ChanMessage,
   RegistryInfo,
   TailchanInfo,
@@ -78,6 +83,7 @@ import {
   type Q,
 } from "./qualify";
 import { baseOf, homeName, plainOf, qual, registry } from "./registry";
+import { clientId } from "./client";
 
 /* Every call goes to the backend its id names, with the id that backend
    knows, and whatever carries ids comes back under that backend's name. The
@@ -366,6 +372,10 @@ export const api = {
     }),
   /** the shells the server holds, attached or waiting for a browser */
   terms: async (b: string = homeName()) => fromAll(b, await req<TermInfo[]>(b, "/api/terms"), qTerm),
+  /** the newest transcript of the agent in a shell, on the shell's own
+   *  machine: the pane's agent when tmux can say, else `harness` */
+  termTranscript: (id: string, harness?: Harness) =>
+    repoReq<{ harness: Harness; path: string }>(id, (p) => `/api/terms/transcript?term=${encodeURIComponent(p)}${harness ? `&harness=${harness}` : ""}`),
   /** what a shell is running, asked of tmux: claude, codex or neither */
   termAgent: (id: string) =>
     repoReq<{ agent: AgentKind | null }>(id, (p) => `/api/terms/agent?term=${encodeURIComponent(p)}`),
@@ -419,6 +429,22 @@ export const api = {
   tailchan: () => req<TailchanInfo>(homeName(), "/api/tailchan"),
   /** the agent registry, the home backend's alone; a 503 without a broker */
   registry: () => req<RegistryInfo>(homeName(), "/api/registry"),
+  /** the broker's asks as the home backend follows them, whether it can
+   *  answer, and presence; a 503 without a broker */
+  asks: () => req<AsksInfo>(homeName(), "/api/asks"),
+  /** one ask, open or long closed, for a link to it */
+  ask: (id: string) => req<Ask>(homeName(), `/api/asks/one?id=${encodeURIComponent(id)}`),
+  /** answers an ask through the home backend's token; `client` names this
+   *  browser, so the broker can say which device answered */
+  answerAsk: (id: string, answer: AskAnswer) =>
+    req<Ask>(homeName(), "/api/asks/answer", { method: "POST", body: JSON.stringify({ id, ...answer, client: clientId() }) }),
+  /** away pins until cleared; clearing it is being here */
+  setAway: (away: boolean) => req<Presence>(homeName(), "/api/presence", { method: "POST", body: JSON.stringify({ away }) }),
+  /** the page's own "someone is here" */
+  presenceBeat: () => req<{ presence: Presence | null }>(homeName(), "/api/presence/beat", { method: "POST", body: "{}" }),
+  /** the broker's guard rules, and whether the home backend may change them */
+  guards: () => req<GuardsInfo>(homeName(), "/api/guards"),
+  setGuards: (rules: string[]) => req<GuardsInfo>(homeName(), "/api/guards", { method: "PUT", body: JSON.stringify({ rules }) }),
   chanRead: (target: string, n = 50) =>
     req<ChanMessage[]>(homeName(), `/api/tailchan/read?target=${encodeURIComponent(target)}&n=${n}`),
   chanSend: (target: string, body: string, kind: "text" | "clip" = "text") =>

@@ -68,6 +68,8 @@ const broker = Bun.serve({
       const all = [...cards.values()].filter((c) => state === "all" || ["working", "idle", "waiting"].includes(c.state));
       return Response.json(all.sort((a, b) => b.seenAt - a.seenAt));
     }
+    // the open asks, which the asks hub follows (asks.test.ts has the rest)
+    if (p === "/v1/asks") return Response.json([]);
     if (p === "/v1/agents/scan" && req.method === "POST") {
       const body = (await req.json()) as ScanBody;
       scans.push({ as, body });

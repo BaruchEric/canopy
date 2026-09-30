@@ -34,6 +34,8 @@ const broker = Bun.serve({
     if (p === "/v1/who") return Response.json([{ handle: "claude-abc123", node: "macmini-2018", last_seen: 1, live: true }]);
     // the registry's list, which the server reads beside tailchan (registry.test.ts has the rest)
     if (p === "/v1/agents") return Response.json([]);
+    // and the open asks, which the asks hub follows (asks.test.ts has the rest)
+    if (p === "/v1/asks") return Response.json([]);
     if (p === "/v1/channels") return Response.json([{ name: "canopy", topic: "", private: false, members: [], count: 0, last_ts: null, expires_at: null, subscribed: true }]);
     if (p === "/v1/subs" && req.method === "POST") {
       subs.push({ handle: as, channel: ((await req.json()) as { channel: string }).channel });
@@ -152,6 +154,10 @@ describe("config", () => {
     expect(chanConfig({ CANOPY_TAILCHAN_AS: "Me" }, file)?.as).toBe("me");
     expect(chanConfig({}, {})).toBeNull();
     expect(chanConfig({ TAILCHAN_URL: "not a url" }, {})).toBeNull();
+    // the answer token comes from canopy's env alone, never the CLI's file
+    expect(chanConfig({ CANOPY_TAILCHAN_ANSWER_TOKEN: " s3cret " }, file)?.token).toBe("s3cret");
+    expect(chanConfig({}, { ...file, CANOPY_TAILCHAN_ANSWER_TOKEN: "s3cret" })?.token).toBeUndefined();
+    expect(chanConfig({ CANOPY_TAILCHAN_ANSWER_TOKEN: "two words" }, file)?.token).toBeUndefined();
   });
 });
 

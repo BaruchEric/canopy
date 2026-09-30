@@ -17,8 +17,11 @@ import {
   type CardGrouping,
 } from "../agentcards";
 import { api } from "../api";
+import { handoffFrom, handoffRepo } from "../handoff";
 import { backendOf, qual } from "../registry";
 import { agentsOn, helperFor, useStore } from "../store";
+import { repoChannel } from "../../../src/core/tailchan";
+import { HandoffButton } from "./Handoff";
 import { Seg } from "./Seg";
 import { Section } from "./Surface";
 
@@ -52,6 +55,12 @@ export function AgentRow({ card, now, showRepo = true, onGit }: { card: AgentCar
   const held = useStore((s) => (target ? s.shells.find((t) => t.id === target)?.place : undefined));
   const repos = useStore((s) => s.repos);
   const transcript = useMemo(() => transcriptTarget(card, home, repos.filter((r) => backendOf(r.id) === home)), [card, home, repos]);
+  // the ask it waits on, a way into the inbox (an id, so the selector settles)
+  const ask = useStore((s) => Object.values(s.asks).find((a) => a.state === "open" && a.agent === card.id)?.id ?? null);
+  // a canopy shell or run on a backend here can hand its work to the other harness
+  const from = handoffFrom(card, shown);
+  const fromBackend = from?.backend ?? null;
+  const handRepo = useMemo(() => (fromBackend ? handoffRepo(card, repos.filter((r) => backendOf(r.id) === fromBackend)) : undefined), [fromBackend, card, repos]);
   const [err, setErr] = useState<string | null>(null);
 
   const message = () => useStore.getState().openChan(`@${card.handle}`);
@@ -90,6 +99,16 @@ export function AgentRow({ card, now, showRepo = true, onGit }: { card: AgentCar
           {whereWord(card)}
         </span>
         <span className="reg-actions">
+          {ask && (
+            <button
+              type="button"
+              className="run-chip reg-ask"
+              title="It waits on you: answer it in the inbox"
+              onClick={() => useStore.getState().openInbox(`ask:${ask}`)}
+            >
+              ? answer
+            </button>
+          )}
           {card.handle && chanReady && isLiveAgent(card) && (
             <button type="button" className="mini" title={`A DM to @${card.handle}`} onClick={message}>
               message
@@ -104,6 +123,16 @@ export function AgentRow({ card, now, showRepo = true, onGit }: { card: AgentCar
             <button type="button" className="mini" title={card.transcript ?? undefined} onClick={open}>
               transcript
             </button>
+          )}
+          {from && handRepo && (
+            <HandoffButton
+              repoId={handRepo.id}
+              backend={from.backend}
+              from={from.harness}
+              transcript={card.transcript}
+              term={card.where.canopy?.term ? qual(from.backend, card.where.canopy.term) : null}
+              onDone={onGit}
+            />
           )}
         </span>
       </div>
@@ -171,8 +200,9 @@ export function RegistryTab({ onGit }: { onGit?: () => void }) {
       {live.length === 0 && <p className="settings-hint">No agent is running on any machine the broker hears from.</p>}
       {groups.map((g) => (
         <section key={g.key || "none"} className="agents-section" aria-label={g.label}>
-          <h3 className="panel-label">
+          <h3 className="panel-label reg-group-head">
             {g.label} <span className="agents-fact">{g.cards.length}</span>
+            {by === "repo" && <MessageAll url={g.cards.find((c) => c.repo)?.repo ?? null} />}
           </h3>
           <ul className="agents-list">
             {g.cards.map((c) => (
@@ -183,6 +213,25 @@ export function RegistryTab({ onGit }: { onGit?: () => void }) {
       ))}
       <PastCards cards={past} now={now} onGit={onGit} />
     </>
+  );
+}
+
+/** "message all": the repo's own channel, `#repo.<owner>-<name>`, which
+ *  every agent in the repo on any machine joins when it starts (the
+ *  tailchan hook's rule). Nothing without a broker or a web url to name it. */
+export function MessageAll({ url }: { url: string | null }) {
+  const ready = useStore((s) => s.chan?.ready === true);
+  const channel = repoChannel(url);
+  if (!ready || !channel) return null;
+  return (
+    <button
+      type="button"
+      className="mini reg-message-all"
+      title={`Post to #${channel}, which every agent working in this repo hears on its next turn`}
+      onClick={() => useStore.getState().openChan(`#${channel}`)}
+    >
+      message all
+    </button>
   );
 }
 
@@ -232,6 +281,9 @@ export function AgentsSection({ repo }: { repo: Repo }) {
       title="The agents working in this repo, on any machine"
     >
       <div className="reg-body">
+        <div className="reg-tools">
+          <MessageAll url={repo.link ?? null} />
+        </div>
         {live.length === 0 && <p className="panel-clean">No agent is working in this repo.</p>}
         {live.length > 0 && (
           <ul className="agents-list">

@@ -273,17 +273,7 @@ async function codexFile(file: string): Promise<CodexSeen | null> {
  *  `CODEX_DAYS`, newest first, at most `limit`; a subagent's and one with
  *  nothing typed in it are left out. */
 export async function codexSessions(path: string, limit = SESSION_LIMIT, home = codexHome(), now = new Date()): Promise<AgentSession[]> {
-  const root = join(home, "sessions");
-  const files: string[] = [];
-  for (const day of codexDayDirs(now)) {
-    const dir = join(root, day);
-    const names = await readdir(dir).catch(() => [] as string[]);
-    for (const n of names) if (ROLLOUT.test(n)) files.push(join(dir, n));
-  }
-  const seen = await Promise.all(files.map(async (file) => ({ file, s: await codexFile(file) })));
-  const mine = seen
-    .filter((x): x is { file: string; s: CodexSeen & { meta: CodexMeta } } => x.s?.meta?.cwd === path)
-    .sort((a, b) => b.s.mtime - a.s.mtime);
+  const mine = await codexRollouts(path, home, now);
   const out: AgentSession[] = [];
   for (const { file, s } of mine) {
     if (out.length >= limit) break;
@@ -292,6 +282,22 @@ export async function codexSessions(path: string, limit = SESSION_LIMIT, home = 
     out.push({ harness: "codex", id: s.meta.id, at: s.mtime, size: s.size, prompt: s.head.prompt, summary: null, branch: s.meta.branch });
   }
   return out;
+}
+
+/** Every rollout of the last `CODEX_DAYS` whose session started in `path`,
+ *  newest write first. */
+async function codexRollouts(path: string, home: string, now: Date): Promise<{ file: string; s: CodexSeen & { meta: CodexMeta } }[]> {
+  const root = join(home, "sessions");
+  const files: string[] = [];
+  for (const day of codexDayDirs(now)) {
+    const dir = join(root, day);
+    const names = await readdir(dir).catch(() => [] as string[]);
+    for (const n of names) if (ROLLOUT.test(n)) files.push(join(dir, n));
+  }
+  const seen = await Promise.all(files.map(async (file) => ({ file, s: await codexFile(file) })));
+  return seen
+    .filter((x): x is { file: string; s: CodexSeen & { meta: CodexMeta } } => x.s?.meta?.cwd === path)
+    .sort((a, b) => b.s.mtime - a.s.mtime);
 }
 
 /** whether `session` is one of the codex sessions started in `path` */
@@ -309,3 +315,25 @@ export async function agentSessions(path: string, limit = SESSION_LIMIT): Promis
 /** whether `session` is a conversation of `harness` started in `path` */
 export const hasAgentSession = (harness: Harness, path: string, session: string): Promise<boolean> =>
   harness === "codex" ? hasCodexSession(path, session) : hasClaudeSession(path, session);
+
+/**
+ * The file the newest conversation of `harness` in `path` is kept in on
+ * this machine, what a hand-off names for the other harness to read: the
+ * newest `~/.claude/projects/<folder>/*.jsonl` with anything typed in it,
+ * or the newest codex rollout whose session started in `path`. Null when
+ * there is none.
+ */
+export async function newestTranscript(
+  harness: Harness,
+  path: string,
+  homes: { claude?: string; codex?: string } = {},
+  now = new Date(),
+): Promise<string | null> {
+  if (harness === "codex") {
+    const [newest] = await codexRollouts(path, homes.codex ?? codexHome(), now);
+    return newest?.file ?? null;
+  }
+  const home = homes.claude ?? claudeHome();
+  const [newest] = await claudeSessions(path, 1, home);
+  return newest ? join(home, "projects", projectFolder(path), `${newest.id}.jsonl`) : null;
+}

@@ -99,6 +99,22 @@ export class Scrollback {
   }
 }
 
+/** Replies a browser terminal sends on its own, answering a program's
+ *  query rather than a person typing: device attributes (`ESC [ ? … c`,
+ *  `ESC [ > … c`), a cursor position report (`ESC [ r ; c R`), a mode
+ *  report (`ESC [ ? n ; n $ y`), focus in and out (`ESC [ I`, `ESC [ O`),
+ *  and OSC and DCS answers (colours, the terminal's version). */
+// eslint-disable-next-line no-control-regex
+const REPLY = /\x1b\[[?>=]?[\d;]*c|\x1b\[\d+;\d+R|\x1b\[\??[\d;]*\$y|\x1b\[[IO]|\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)|\x1bP[^\x1b]*\x1b\\/g;
+
+/** Whether an input frame from a browser is a person at the keyboard (or
+ *  the mouse) rather than only the terminal answering a query: what makes a
+ *  shell "watched" and the human "here". */
+export function isKeystroke(data: Uint8Array): boolean {
+  if (data.length === 0) return false;
+  return new TextDecoder().decode(data).replace(REPLY, "") !== "";
+}
+
 export type TermMessage = { kind: "resize"; size: TermSize };
 
 /** The one text message the browser sends: `{"resize":{"cols","rows"}}`.
@@ -117,10 +133,14 @@ export function parseTermMessage(text: string): TermMessage | null {
   return { kind: "resize", size: termSize(cols, rows) };
 }
 
-/** The pty's environment: the server's, told it is a color terminal. */
+/** what canopy keeps to itself: never in a shell's environment */
+export const PRIVATE_ENV = ["CANOPY_TAILCHAN_ANSWER_TOKEN"] as const;
+
+/** The pty's environment: the server's, told it is a color terminal, with
+ *  canopy's own secrets left out. */
 export function termEnv(base: Record<string, string | undefined> = process.env): Record<string, string> {
   const env: Record<string, string> = {};
-  for (const [k, v] of Object.entries(base)) if (v !== undefined) env[k] = v;
+  for (const [k, v] of Object.entries(base)) if (v !== undefined && !(PRIVATE_ENV as readonly string[]).includes(k)) env[k] = v;
   env["TERM"] = "xterm-256color";
   env["COLORTERM"] = "truecolor";
   return env;

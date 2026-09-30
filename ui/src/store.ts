@@ -20,7 +20,8 @@ import { boardOrder, invertPick, pickWhere, rangeIds, setPick, togglePick } from
 import { appendFeed, describeEvent, type FeedEntry, type FeedSnapshot } from "./feed";
 import { mergeAction } from "./peers";
 import { convOf, isUnread, mergeMessages } from "./chan";
-import type { AgentCard, ChanMessage, TailchanInfo } from "../../src/core/types";
+import type { AgentCard, Ask, ChanMessage, Presence, TailchanInfo } from "../../src/core/types";
+import { mergeAsks, mergeInbox, toAskAnswer, toRunAnswer, type InboxAnswer, type InboxItem } from "./inbox";
 import { cardsByRepoCard, mergeCards, replaceCards } from "./agentcards";
 import { clientCaps } from "../../src/core/client";
 import { normalizeRoutes, resolveAgent } from "../../src/core/route";
@@ -536,6 +537,18 @@ interface CanopyState {
   /** whether the home backend has a registry to show; false shows nothing
    *  registry-related */
   registryReady: boolean;
+  /** the broker's asks as the home backend follows them, open and lately
+   *  closed, by id */
+  asks: Record<string, Ask>;
+  /** whether the home backend follows asks at all (it has a broker) */
+  asksReady: boolean;
+  /** whether the home backend can answer them (it has an answer token) */
+  canAnswer: boolean;
+  /** the human's presence at the broker, as last heard */
+  presence: Presence | null;
+  /** whether the inbox popover is up, and the item it opened on */
+  inboxOpen: boolean;
+  inboxFocus: string | null;
   workspaces: Workspace[];
   loaded: boolean;
   /** why the initial load failed, if it did */
@@ -750,6 +763,20 @@ interface CanopyState {
   /** reads the agent registry off the home backend; a backend without a
    *  broker leaves it off */
   loadRegistry: () => Promise<void>;
+  /** reads the asks, whether they can be answered, and presence off the
+   *  home backend; a backend without a broker leaves them off */
+  loadAsks: () => Promise<void>;
+  /** opens the inbox, on one item (`ask:<id>`, `run:<id>`, `flow:<id>`) when given */
+  openInbox: (focus?: string) => void;
+  closeInbox: () => void;
+  /** routes an answer to where the item came from: a run's prompt, a
+   *  flow's gate, or the broker's ask through the home backend's token */
+  answerInbox: (item: InboxItem, answer: InboxAnswer) => Promise<void>;
+  /** pins away, or clears it and is here */
+  setAway: (away: boolean) => Promise<void>;
+  /** someone is at this page: the human is here, at most once a minute,
+   *  and only through a home backend that can say so (it has the token) */
+  pagePresence: () => void;
   /** opens the popover, on a conversation or target ("#x", "@h") when given */
   openChan: (target?: string) => void;
   closeChan: () => void;
@@ -996,6 +1023,8 @@ function feedView(s: CanopyState, from: string): FeedSnapshot {
     kept: s.kept.filter((k) => mine(k.id)),
     chanAs: s.chanAs,
     registry: s.registry,
+    asks: s.asks,
+    presence: s.presence,
   };
 }
 
@@ -1134,8 +1163,11 @@ function resync(get: () => CanopyState, set: (fn: (s: CanopyState) => Partial<Ca
     .rescan(b)
     .catch(() => {});
   readTasks(get, set, b);
-  // cards the broker changed while the stream was down
-  if (b === get().home) void get().loadRegistry();
+  // cards and asks the broker changed while the stream was down
+  if (b === get().home) {
+    void get().loadRegistry();
+    void get().loadAsks();
+  }
   // the tasks a panel loaded may have moved while the stream was down
   for (const id of Object.keys(get().tasks)) if (backendOf(id) === b) void get().loadTasks(id).catch(() => {});
   void Promise.all([api.terms(b), api.kept(b), api.helpers(b)])
@@ -1183,6 +1215,12 @@ export const useStore = create<CanopyState>((set, get) => ({
   chanConv: null,
   registry: {},
   registryReady: false,
+  asks: {},
+  asksReady: false,
+  canAnswer: false,
+  presence: null,
+  inboxOpen: false,
+  inboxFocus: null,
   workspaces: [],
   loaded: false,
   loadError: null,
@@ -1361,6 +1399,8 @@ export const useStore = create<CanopyState>((set, get) => ({
     void get().loadChan();
     // and the agent registry, which a backend without a broker refuses
     void get().loadRegistry();
+    // and the asks waiting on the human, the same
+    void get().loadAsks();
     // what home runs, for naming the machines; a page with one backend
     // names none, so it does not ask
     if (order.length > 1) {
@@ -1770,8 +1810,8 @@ export const useStore = create<CanopyState>((set, get) => ({
     // a backend hidden since this was sent is not on the page any more
     if (!isShown(before, b)) return;
     beat();
-    // workspaces, tailchan and the agent registry are the home backend's alone
-    if ((ev.type === "chan" || ev.type === "workspaces" || ev.type === "registry") && b !== before.home) return;
+    // workspaces, tailchan, the agent registry and the asks are the home backend's alone
+    if ((ev.type === "chan" || ev.type === "workspaces" || ev.type === "registry" || ev.type === "asks") && b !== before.home) return;
     // The feed says what changed, so the lines come from the event against
     // the state before it is applied, as the backend that sent it saw it.
     // a message already held (a reconnect's replay, a post heard twice) is
@@ -1788,6 +1828,13 @@ export const useStore = create<CanopyState>((set, get) => ({
       set((s) => {
         const registry = mergeCards(s.registry, ev.cards, ev.gone);
         return registry === s.registry ? {} : { registry };
+      });
+      return;
+    }
+    if (ev.type === "asks") {
+      set((s) => {
+        const asks = mergeAsks(s.asks, ev.asks, ev.gone);
+        return { ...(asks === s.asks ? {} : { asks }), ...(ev.presence ? { presence: ev.presence } : {}) };
       });
       return;
     }
@@ -1982,6 +2029,52 @@ export const useStore = create<CanopyState>((set, get) => ({
     } catch {
       set({ registry: {}, registryReady: false });
     }
+  },
+  loadAsks: async () => {
+    try {
+      const info = await api.asks();
+      const list = Array.isArray(info.asks) ? info.asks : [];
+      set({ asks: Object.fromEntries(list.map((a) => [a.id, a])), asksReady: true, canAnswer: info.canAnswer === true, presence: info.presence ?? null });
+    } catch {
+      set({ asks: {}, asksReady: false, canAnswer: false, presence: null });
+    }
+  },
+  openInbox: (focus) => {
+    set({ inboxOpen: true, inboxFocus: focus ?? null });
+    void get().loadAsks();
+  },
+  closeInbox: () => set({ inboxOpen: false, inboxFocus: null }),
+  answerInbox: async (item, answer) => {
+    if (item.source === "flow") {
+      if (!("choice" in answer)) throw new Error("a gate takes continue, retry or stop");
+      await get().resumeFlow(item.id, answer.choice);
+      return;
+    }
+    if (item.source === "run") {
+      const a = toRunAnswer(answer);
+      if (!a || !item.promptId) throw new Error("that run is not waiting on a prompt");
+      await get().answerRun(item.id, item.promptId, a);
+      return;
+    }
+    const a = toAskAnswer(answer);
+    if (!a) throw new Error("an ask takes allow, deny or answers");
+    const ask = await api.answerAsk(item.id, a);
+    set((s) => ({ asks: mergeAsks(s.asks, [ask]) }));
+  },
+  setAway: async (away) => {
+    const presence = await api.setAway(away);
+    set({ presence });
+  },
+  pagePresence: () => {
+    const now = Date.now();
+    if (!get().canAnswer || now - lastPageBeat < PAGE_BEAT) return;
+    lastPageBeat = now;
+    void api
+      .presenceBeat()
+      .then(({ presence }) => {
+        if (presence) set({ presence });
+      })
+      .catch(() => {});
   },
   loadChan: async () => {
     const chan = await api.tailchan().catch((e: unknown): TailchanInfo => ({ ready: false, reason: String(e instanceof Error ? e.message : e) }));
@@ -2675,6 +2768,31 @@ export function agentsByCard(s: CanopyState): Map<string, AgentCard[]> {
 export function agentsOn(s: CanopyState, repoId: string): AgentCard[] {
   const card = cardOf(s, repoId);
   return (card && agentsByCard(s).get(card.key)) || NO_AGENTS;
+}
+
+/** how often the page's own activity tells the broker the human is here */
+const PAGE_BEAT = 60_000;
+let lastPageBeat = 0;
+
+let inboxIn: { asks: Record<string, Ask>; runs: Record<string, Run>; flows: Record<string, Flow>; repos: Repo[]; registry: Record<string, AgentCard> } | null = null;
+let inboxOut: InboxItem[] = [];
+
+/** Everything waiting on the human, oldest first: the home broker's open
+ *  asks, every backend's runs on a prompt and flows at a gate. Worked out
+ *  once per change of what it reads, so a selector over it settles; a
+ *  countdown keeps its own time off each item's `until`. */
+export function inboxItems(s: CanopyState): InboxItem[] {
+  if (inboxIn && inboxIn.asks === s.asks && inboxIn.runs === s.runs && inboxIn.flows === s.flows && inboxIn.repos === s.repos && inboxIn.registry === s.registry) {
+    return inboxOut;
+  }
+  inboxIn = { asks: s.asks, runs: s.runs, flows: s.flows, repos: s.repos, registry: s.registry };
+  inboxOut = mergeInbox(Object.values(s.asks), s.runs, s.flows, Date.now(), {
+    repos: s.repos,
+    cards: s.registry,
+    backendOf: (id) => (s.backendOrder.length > 1 ? backendOf(id) : ""),
+    askRepos: s.repos.filter((r) => backendOf(r.id) === s.home),
+  });
+  return inboxOut;
 }
 
 /** The card a checkout is on, whichever checkout of it. */
