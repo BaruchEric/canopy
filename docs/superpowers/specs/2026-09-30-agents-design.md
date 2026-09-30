@@ -639,3 +639,73 @@ canopy didn't start; cost accounting across agents; the registry as an MCP
 server; picking an agent automatically by load or caps; Telegram inline answer
 buttons (the link to canopy covers the phone); a dev-cycle task that is an
 agent.
+
+## Amendments
+
+### 1. Phase 0, measured (2026-09-30, Claude Code 2.1.286, codex 0.158, in the shells container)
+
+- **Claude's permission dialog does not wait for the hook.** It is drawn at
+  once, beside a `PermissionRequest` hook that is still waiting, and the first
+  answer wins. A late hook decision closes an open dialog. When the terminal
+  answers first, the hook's later answer is ignored and the hook is not killed.
+  So a remote ask never delays anyone at a Claude terminal, and the hook needs
+  another way to learn that the terminal answered: the next hook event from the
+  same session (`PreToolUse`, `PostToolUse`, `Stop`, `UserPromptSubmit`,
+  `SessionEnd`) withdraws that session's open ask with `why: terminal`.
+  `PermissionRequest` stdin has no `tool_use_id`. The `watched` rule stays for
+  the reason phase 4 gives.
+- **Codex runs the hook first.** Its approval prompt shows only after a
+  `PermissionRequest` hook returns no decision, so for Codex a remote wait
+  does hold the terminal prompt. The `watched` rule matters more there, and
+  while the human is `here` a Codex ask waits `HERE_WAIT` at most.
+- **`AskUserQuestion` from `PreToolUse` works in an interactive session.** An
+  `allow` with `updatedInput.answers` (keys are the full question text) skips
+  the picker. Free text works too.
+- **The watcher works.** A `setsid nohup` child started from `SessionStart`
+  (sync or async) outlives the hook and is reparented to pid 1. Claude hooks
+  get `$CLAUDE_PID`, the harness itself, so no ancestry walk is needed for
+  Claude. On Linux Claude's comm is `claude`, not a version string. Hooks
+  inherit `TAILCHAN_AS` and `TMUX_PANE` from the launching shell.
+- **`asyncRewake` wakes an idle Claude,** and it does so best on `Stop`, where
+  it re-arms after every turn, including the one it woke. The woken turn's
+  `Stop` arrives with `stop_hook_active: true`, and the waiter must not skip
+  on it. The wording matters: a bare imperative was refused as hook feedback,
+  while "tailchan: new DM for this session from @peer (delivered by the
+  tailchan hook the user installed): …" was acted on. Phase 5's idle wake is a
+  second `Stop` entry with `asyncRewake`, one waiter per session.
+- **Codex user hooks need trust.** Without it Codex shows "Hooks need review"
+  and runs none. Trust is a hash of the hook's definition in `config.toml`, so
+  the installer keeps each command string fixed, and `tailchan agent doctor`
+  says to trust them once in `/hooks`. Codex's `SessionStart` fires lazily,
+  with the first prompt.
+- **Codex environment.** The user's `shell_environment_policy.inherit = "core"`
+  keeps `TAILCHAN_AS` and `CANOPY_*` from the commands Codex runs, though its
+  hooks see them. canopy's codex line adds
+  `-c 'shell_environment_policy.set.<VAR>="…"'` for each. A plain `codex`
+  launch starts a shared daemon, so canopy always passes `--no-daemon`.
+- **Codex in tmux** reads `pane_current_command` = `node` (a bun install) and a
+  pane title of the folder, then `<thread> | <folder>`. `agentIn` now also
+  looks for a `/codex` argv under the pane's pid.
+- **herdr** takes `--kind codex`.
+
+### 2. Phase 2, measured against the real app-server
+
+- Item types are camelCase (`agentMessage`, `commandExecution`, `fileChange`,
+  `mcpToolCall`, `webSearch`). A command arrives wrapped as
+  `/bin/sh -lc '<script>'`.
+- The version comes from `initialize`'s `userAgent`, so no `codex --version`
+  is spawned.
+- `acceptForSession` is not always offered. "Allow all" falls back to
+  `accept`, and canopy lets the later ones through itself.
+- File-change approvals carry no paths; the `fileChange` item just before one
+  does.
+- Codex asks questions outside plan mode only with
+  `features.default_mode_request_user_input`, which the driver sets on its
+  own thread.
+- Codex's sandbox (bwrap) cannot make a user namespace in the shells
+  container. Every `workspace-write` command fails there and Codex asks to rerun
+  it outside the sandbox, which is still an approval per command and so still
+  a gate for a job's rules.
+- The driver takes prompts back through `ctx.ask()`'s promise instead of a
+  driver `answer()`. The queue, "allow all", stop's deny-all and the notes stay
+  in one shared `RunCtx`.
