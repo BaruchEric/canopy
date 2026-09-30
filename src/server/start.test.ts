@@ -9,6 +9,7 @@ import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { INHERITED_ENV } from "../core/term";
 import { killServer, tmuxBase } from "../core/tmux";
 import type { AgentSettings } from "../core/types";
 import { startServer } from "./index";
@@ -20,6 +21,8 @@ let server: { port: number; stop: () => void };
 let typed = 0;
 /** the settings each ask was for */
 const asked: AgentSettings[] = [];
+/** the outer shell's names, as a canopy started in a canopy shell has them */
+const outer: Record<string, string | undefined> = {};
 const dec = new TextDecoder();
 
 function connect(query: Record<string, string>) {
@@ -63,6 +66,10 @@ beforeAll(async () => {
   process.env["CANOPY_CONFIG_DIR"] = join(scratch, "config");
   const root = join(scratch, "root");
   await Bun.$`mkdir -p ${join(root, "app")} && git -C ${join(root, "app")} init -q`.quiet();
+  for (const k of INHERITED_ENV) {
+    outer[k] = process.env[k];
+    process.env[k] = `outer-${k}`;
+  }
   server = await startServer({
     root,
     port: 0,
@@ -79,6 +86,7 @@ beforeAll(async () => {
 });
 
 afterAll(async () => {
+  for (const [k, v] of Object.entries(outer)) if (v !== undefined) process.env[k] = v;
   server.stop();
   const base = tmuxBase();
   if (base) await killServer(base);
@@ -89,6 +97,23 @@ afterAll(async () => {
 
 const A = "a0000000000000000000000000000001";
 const B = "b0000000000000000000000000000002";
+
+describe("a canopy started in a canopy shell", () => {
+  test("hands none of the outer shell's names on to its own shells and runs", async () => {
+    for (const k of INHERITED_ENV) expect(process.env[k]).toBeUndefined();
+    // a plain shell here, on this backend's names alone
+    const D = "d0000000000000000000000000000004";
+    const s = connect({ term: D, place: "panel" });
+    await s.opened;
+    s.ws.send(new TextEncoder().encode('echo "term=[$CANOPY_TERM] as=[${TAILCHAN_AS:-none}] run=[${CANOPY_RUN:-none}]"\r'));
+    await until(() => s.text().includes(`term=[${D}]`), "the shell's own names");
+    await until(() => s.text().includes("run=[none]"), "the rest of the line");
+    expect(s.text()).not.toContain("outer-");
+    s.ws.close();
+    await s.closed;
+    await fetch(`http://127.0.0.1:${server.port}/api/terms?term=${D}`, { method: "DELETE" });
+  }, 30_000);
+});
 
 describe("start=agent", () => {
   test("types the agent line into a new shell once, and a join does not type it again", async () => {

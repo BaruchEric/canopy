@@ -38,7 +38,7 @@ import {
 import { browseLocal, browseRemote, expandHome, SshError } from "../core/browse";
 import { exec, onHost } from "../core/exec";
 import { fleetSkipReason, Flows, type CheckResult } from "../core/flow";
-import { isKeystroke, isTermId, parseTermMessage, Scrollback, shellArgs, startTerm, termPlace, termSize, type TermSession, type TermSize } from "../core/term";
+import { INHERITED_ENV, isKeystroke, isTermId, parseTermMessage, Scrollback, shellArgs, startTerm, termPlace, termSize, type TermSession, type TermSize } from "../core/term";
 import { attachTmuxTerm, hasSession, history, killSession, listSessions, newSession, paneInfo, paneText, sendLine, serverUp, snapshot, tmuxBase } from "../core/tmux";
 import { clip, continueLine, countLines, expiredShells, forgetKept, KEEP_EVERY, listKept, lostShells, readKeptHistory, replayCommand, replayFile, restoredBanner, writeKept } from "../core/keep";
 import { PASTE_MAX, pasteName, pasteText, savePaste } from "../core/paste";
@@ -2682,6 +2682,10 @@ export async function startServer(opts: {
   // then out of this process's env, so no shell, run or tmux server started
   // from here inherits it (`exec` and `termEnv` pass the live env).
   delete process.env["CANOPY_TAILCHAN_ANSWER_TOKEN"];
+  // A canopy started from a canopy shell carries that shell's own names
+  // (CANOPY_TERM, TAILCHAN_AS and the rest), which every child would
+  // otherwise inherit through `{...process.env}`.
+  for (const k of INHERITED_ENV) delete process.env[k];
   const scanOff = process.env["CANOPY_AGENT_SCAN"] === "0" || process.env["NODE_ENV"] === "test";
   // Which harnesses a start may use: fixed by a test, else this process's
   // PATH together with what the user's login shell finds (an rc file's

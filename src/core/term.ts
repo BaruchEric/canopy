@@ -136,6 +136,13 @@ export function parseTermMessage(text: string): TermMessage | null {
 /** what canopy keeps to itself: never in a shell's environment */
 export const PRIVATE_ENV = ["CANOPY_TAILCHAN_ANSWER_TOKEN"] as const;
 
+/** What canopy tells each shell and run about itself (which shell, run,
+ *  repo and backend it is, the API to call back, its tailchan handle). A
+ *  canopy started inside one of its own shells finds the outer shell's
+ *  already set, and must not hand them on to every shell, run and opener
+ *  it starts: each gets its own, or none. */
+export const INHERITED_ENV = ["CANOPY_TERM", "CANOPY_API", "CANOPY_REPO", "CANOPY_BACKEND", "CANOPY_RUN", "TAILCHAN_AS"] as const;
+
 /** The pty's environment: the server's, told it is a color terminal, with
  *  canopy's own secrets left out. */
 export function termEnv(base: Record<string, string | undefined> = process.env): Record<string, string> {
