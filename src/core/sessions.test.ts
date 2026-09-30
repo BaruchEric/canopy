@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
-import { mkdir, mkdtemp, rm, utimes, writeFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, rm, utimes, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -213,6 +213,22 @@ describe("codex sessions off disk", () => {
   test("the limit takes the newest, and a second read answers the same off the memo", async () => {
     expect((await codexSessions(repo, 1, home, now)).map((s) => s.id)).toEqual([Y]);
     expect((await codexSessions(repo, 20, home, now)).map((s) => s.id)).toEqual([Y, X]);
+  });
+
+  test("a rollout that cannot be read right now is read again next time, not remembered as no session", async () => {
+    const W = "01a0939c-0000-7000-8000-00000000000a";
+    const f = join(home, "sessions", "2026/09/30", `rollout-2026-09-30T11-00-00-${W}.jsonl`);
+    await writeFile(f, [meta(W, repo), typedItem("locked one")].join("\n") + "\n");
+    await utimes(f, new Date(2_000_000), new Date(2_000_000));
+    // unreadable (as with EACCES, or EMFILE with too many open), same mtime and size after
+    await chmod(f, 0o000);
+    try {
+      if (process.getuid?.() !== 0) expect((await codexSessions(repo, 20, home, now)).map((s) => s.id)).toEqual([Y, X]);
+    } finally {
+      await chmod(f, 0o644);
+    }
+    expect((await codexSessions(repo, 20, home, now)).map((s) => s.id)).toEqual([Y, W, X]);
+    await rm(f);
   });
 
   test("a folder codex never ran in has none, and a missing home is no error", async () => {

@@ -3,6 +3,7 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 import { resumeArgv, type AgentEnv } from "./harness";
 import { shellLine } from "./host";
+import { mapPool } from "./search";
 import { DEFAULT_AGENT, type AgentSession, type AgentSettings, type Harness } from "./types";
 
 /*
@@ -162,6 +163,10 @@ const CODEX_HEAD_BYTES = 256 * 1024;
 
 const ROLLOUT = /^rollout-.+\.jsonl$/;
 
+/** rollouts read at once: a month of them can run to hundreds, and one
+ *  open file each at a time would run into the process's limit (EMFILE) */
+const CODEX_READS = 16;
+
 /** What a rollout's first line (`session_meta`) says, or null for a file
  *  that is not a session canopy offers: unreadable, not a session, or a
  *  subagent's (codex's own reviewer runs), which nobody resumes. */
@@ -246,7 +251,9 @@ export function codexDayDirs(now: Date, days = CODEX_DAYS): string[] {
 }
 
 /** What each rollout said, kept by path and trusted while its mtime holds:
- *  a session's first line never changes, and the prompt is read once. */
+ *  a session's first line never changes, and the prompt is read once. A
+ *  read that failed (EACCES, EMFILE) is not kept: it says nothing about the
+ *  file, which is read again next time. */
 interface CodexSeen {
   mtime: number;
   size: number;
@@ -261,9 +268,14 @@ async function codexFile(file: string): Promise<CodexSeen | null> {
   if (!s?.isFile()) return null;
   const was = codexSeen.get(file);
   if (was && was.mtime === s.mtimeMs && was.size === s.size) return was;
-  let chunk = await head(file, CODEX_META_BYTES).catch(() => "");
-  // a first line past the small read gets one bigger read, then is given up on
-  if (chunk && !chunk.includes("\n")) chunk = await head(file, CODEX_HEAD_BYTES).catch(() => "");
+  let chunk: string;
+  try {
+    chunk = await head(file, CODEX_META_BYTES);
+    // a first line past the small read gets one bigger read, then is given up on
+    if (chunk && !chunk.includes("\n")) chunk = await head(file, CODEX_HEAD_BYTES);
+  } catch {
+    return null;
+  }
   const seen: CodexSeen = { mtime: s.mtimeMs, size: s.size, meta: parseCodexMeta(chunk.split("\n")[0] ?? "") };
   codexSeen.set(file, seen);
   return seen;
@@ -277,7 +289,12 @@ export async function codexSessions(path: string, limit = SESSION_LIMIT, home = 
   const out: AgentSession[] = [];
   for (const { file, s } of mine) {
     if (out.length >= limit) break;
-    if (!s.head) s.head = parseCodexHead(await head(file, CODEX_HEAD_BYTES).catch(() => ""));
+    if (!s.head) {
+      const text = await head(file, CODEX_HEAD_BYTES).catch(() => null);
+      // unreadable now: left out this time and read again the next
+      if (text === null) continue;
+      s.head = parseCodexHead(text);
+    }
     if (!s.head.prompt && !s.head.turns) continue;
     out.push({ harness: "codex", id: s.meta.id, at: s.mtime, size: s.size, prompt: s.head.prompt, summary: null, branch: s.meta.branch });
   }
@@ -294,7 +311,7 @@ async function codexRollouts(path: string, home: string, now: Date): Promise<{ f
     const names = await readdir(dir).catch(() => [] as string[]);
     for (const n of names) if (ROLLOUT.test(n)) files.push(join(dir, n));
   }
-  const seen = await Promise.all(files.map(async (file) => ({ file, s: await codexFile(file) })));
+  const seen = await mapPool(files, CODEX_READS, async (file) => ({ file, s: await codexFile(file) }));
   return seen
     .filter((x): x is { file: string; s: CodexSeen & { meta: CodexMeta } } => x.s?.meta?.cwd === path)
     .sort((a, b) => b.s.mtime - a.s.mtime);
