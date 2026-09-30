@@ -263,8 +263,10 @@ export class RunCtx implements DriveCtx {
           if (i === -1) return;
           this.pending.splice(i, 1);
           const next = this.pending[0];
-          // a prompt settled after the run ended must not bring it back
-          if (activeStatus(this.run.status)) {
+          // A prompt settled after the run ended must not bring it back, and
+          // one settled on a chat between turns must not wake it: only a
+          // turn that is running waits on prompts.
+          if (this.run.status === "working" || this.run.status === "waiting") {
             this.run.status = next ? "waiting" : "working";
             this.run.prompt = next?.prompt ?? null;
           }
@@ -308,8 +310,12 @@ export class RunCtx implements DriveCtx {
     this.run.result = result;
     if (this.run.chat) {
       // A chat's result ends one reply, not the conversation: the process
-      // stays, and the next message continues it.
+      // stays, and the next message continues it. A prompt still waiting
+      // belonged to the turn that just ended (a sub-agent's the harness
+      // never cleared), so it is denied and dropped rather than left for
+      // the browser to answer into the next turn.
       if (problem) this.step({ kind: "note", text: problem });
+      this.denyAll();
       if (activeStatus(this.run.status)) {
         this.run.status = "idle";
         this.run.prompt = null;

@@ -34,6 +34,7 @@
  *  - `turn/interrupt {threadId, turnId}` ends a running turn, which then
  *    completes as interrupted. The server exits on its own at stdin EOF. */
 
+import { realpath } from "node:fs/promises";
 import { resolve } from "node:path";
 import { describeTool, toolDetail } from "./actions";
 import { splitArgs } from "./agent";
@@ -138,12 +139,25 @@ export interface ThreadPolicy {
 }
 
 /** Yolo is the pair `--dangerously-bypass-approvals-and-sandbox` sets: no
- *  approvals, no sandbox. Otherwise commands run in the workspace-write
- *  sandbox and Codex asks, through canopy, for anything beyond it. */
-export function threadPolicy(agent: Pick<DriveAgent, "yolo">): ThreadPolicy {
-  return agent.yolo
-    ? { approvalPolicy: "never", sandbox: "danger-full-access" }
-    : { approvalPolicy: "on-request", sandbox: "workspace-write" };
+ *  approvals, no sandbox.
+ *
+ *  Otherwise canopy's rules have to see every command and every edit, the
+ *  way a Claude run's permission rules do. `on-request` would not do that:
+ *  where the sandbox works, Codex runs any command inside it and applies
+ *  patches under the workspace without asking, so the job's rules would
+ *  only ever judge the escalations. Of the protocol's `AskForApproval`
+ *  values, `untrusted` is the one that asks for every command Codex does
+ *  not itself know to be read-only (`ls`, `cat`, `git status`, `rg` and
+ *  their kin, which still run inside the sandbox) and for every patch;
+ *  `granular` only chooses which kinds of prompt may reach the client, and
+ *  `on-request` leaves asking to the model. The sandbox is `read-only`
+ *  unless the rules allow editing (`Edit`, `Write` or `MultiEdit`), so a
+ *  run that may not edit cannot, even through a command Codex thinks safe;
+ *  with an edit rule it is `workspace-write`, and the patches still come
+ *  to canopy, which accepts the ones inside the repo. */
+export function threadPolicy(agent: Pick<DriveAgent, "yolo">, rules: readonly string[] = []): ThreadPolicy {
+  if (agent.yolo) return { approvalPolicy: "never", sandbox: "danger-full-access" };
+  return { approvalPolicy: "untrusted", sandbox: allowsEdits(rules) ? "workspace-write" : "read-only" };
 }
 
 /** The extra-flags box, cut down to what `codex app-server` takes: `-c
@@ -183,6 +197,8 @@ const codexEffort = (effort: string): string | null => (effort && effort !== "de
 export interface ThreadOptions {
   /** let Codex ask questions (request_user_input) outside plan mode */
   askQuestions: boolean;
+  /** the job's allowed-tools rules, which pick the sandbox (`threadPolicy`) */
+  rules?: readonly string[];
   /** replaces the policy the agent settings imply */
   policy?: Partial<ThreadPolicy>;
   /** variables the commands Codex runs are to see (canopy's CANOPY_*) */
@@ -222,7 +238,7 @@ export function threadParams(cwd: string, agent: DriveAgent, opts: ThreadOptions
   return {
     cwd,
     ...(model ? { model } : {}),
-    ...threadPolicy(agent),
+    ...threadPolicy(agent, opts.rules),
     ...override,
     ...(Object.keys(config).length ? { config } : {}),
     ...(opts.askQuestions ? { developerInstructions: DEVELOPER } : {}),
@@ -371,23 +387,43 @@ export function parseRule(rule: string): ToolRule | null {
 }
 
 /** What canopy knows about an approval when it decides whether a rule
- *  covers it. */
+ *  covers it. A command's `cwd` is where it would run, null when the
+ *  request does not say (the thread's own folder, the repo). */
 export type ApprovalFacts =
-  | { kind: "command"; command: string | null }
+  | { kind: "command"; command: string | null; cwd: string | null }
   | { kind: "fileChange"; paths: string[] | null; grantRoot: string | null }
   | { kind: "other" };
 
 const EDIT_TOOLS = new Set(["Edit", "Write", "MultiEdit"]);
 
+/** Whether the rules let a run edit files at all: a bare `Edit`, `Write` or
+ *  `MultiEdit`. */
+export function allowsEdits(rules: readonly string[]): boolean {
+  return rules.some((r) => {
+    const p = parseRule(r);
+    return p?.kind === "tool" && EDIT_TOOLS.has(p.name);
+  });
+}
+
+/** `path` is `root` or under it, by the words of both: no `..` left, no
+ *  trailing slash. */
+export function within(path: string, root: string): boolean {
+  const r = resolve(root);
+  const p = resolve(r, path);
+  return p === r || p.startsWith(r === "/" ? "/" : `${r}/`);
+}
+
 /** Whether a job's rules answer this approval without asking. A command is
- *  accepted when it is one simple command whose words start with a `Bash(x:*)`
- *  rule's words, or equal a `Bash(x)` rule's. A file change is accepted when
- *  the rules allow editing and every path it touches is inside the repo; one
- *  that also asks for write access under another root never is. Anything
- *  else goes to the human, as it would for Claude. */
+ *  accepted when it runs in the repo (its folder, when it names one, is
+ *  inside `cwd`) and is one simple command whose words start with a
+ *  `Bash(x:*)` rule's words, or equal a `Bash(x)` rule's. A file change is
+ *  accepted when the rules allow editing and every path it touches is
+ *  inside the repo; one that also asks for write access under another root
+ *  never is. Anything else goes to the human, as it would for Claude. */
 export function autoAnswer(rules: readonly string[], facts: ApprovalFacts, cwd: string): boolean {
   const parsed = rules.map(parseRule).filter((r): r is ToolRule => r !== null);
   if (facts.kind === "command") {
+    if (facts.cwd !== null && !within(facts.cwd, cwd)) return false;
     const words = facts.command === null ? null : commandWords(facts.command);
     if (!words) return false;
     return parsed.some(
@@ -400,7 +436,7 @@ export function autoAnswer(rules: readonly string[], facts: ApprovalFacts, cwd: 
   if (facts.kind === "fileChange") {
     if (facts.grantRoot || !facts.paths || facts.paths.length === 0) return false;
     if (!parsed.some((r) => r.kind === "tool" && EDIT_TOOLS.has(r.name))) return false;
-    return facts.paths.every((p) => resolve(cwd, p).startsWith(cwd.replace(/\/+$/, "") + "/"));
+    return facts.paths.every((p) => resolve(cwd, p) !== resolve(cwd) && within(p, cwd));
   }
   return false;
 }
@@ -606,7 +642,7 @@ export function approvalFacts(
     // a network prompt carries no command, and input for a running program
     // is not the command it runs
     if (isRecord(params["networkApprovalContext"]) || str(params, "kind") === "writeStdin") return { kind: "other" };
-    return { kind: "command", command: str(params, "command") || null };
+    return { kind: "command", command: str(params, "command") || null, cwd: str(params, "cwd") || null };
   }
   if (method === "item/fileChange/requestApproval") {
     return {
@@ -616,6 +652,18 @@ export function approvalFacts(
     };
   }
   return { kind: "other" };
+}
+
+/** A command's folder is inside the repo on disk too, not only by its
+ *  words: `repo/link` may be a symlink out of it. Both are resolved where
+ *  they exist; a folder that does not exist yet is judged by its words,
+ *  which `autoAnswer` has already done. */
+export async function runsInside(facts: ApprovalFacts, root: string): Promise<boolean> {
+  if (facts.kind !== "command" || facts.cwd === null) return true;
+  const abs = resolve(root, facts.cwd);
+  const [realCwd, realRoot] = await Promise.all([realpath(abs).catch(() => null), realpath(root).catch(() => null)]);
+  if (realCwd === null || realRoot === null) return within(abs, root);
+  return within(realCwd, realRoot);
 }
 
 /** What Codex says when a command its sandbox refused asks to run again
@@ -722,6 +770,12 @@ export function questionReply(questions: RunQuestion[], ids: string[], a: RunAns
 
 /* ---------- the result ---------- */
 
+/** Codex reports no cost, but a page from before harnesses reads a run's
+ *  `costUsd` as always there (`costUsd.toFixed`) and would fail to render a
+ *  Codex result without one. A zero keeps it drawing; the current page
+ *  shows the tokens wherever a result has them (`resultLine`). */
+export const NO_COST = { costUsd: 0 } as const;
+
 export function tokensOf(breakdown: unknown): DriveTokens | undefined {
   if (!isRecord(breakdown)) return undefined;
   const n = (k: string) => num(breakdown, k) ?? 0;
@@ -770,6 +824,7 @@ export function turnResult(
   return {
     result: {
       text: closingText(texts.final, texts.last, turn),
+      ...NO_COST,
       durationMs: num(turn, "durationMs") ?? elapsedMs,
       turns,
       ...(tokens ? { tokens } : {}),
@@ -777,6 +832,7 @@ export function turnResult(
     problem,
   };
 }
+
 
 /* ---------- the driver ---------- */
 
@@ -849,6 +905,12 @@ export class CodexDriver implements RunDriver {
   private failure: string | null = null;
   /** the run has had its note about commands leaving the sandbox */
   private escalated = false;
+  /** the running turn's finished commands and file changes, against the
+   *  job's `maxTurns` */
+  private toolCalls = 0;
+  /** why canopy interrupted the running turn itself, which is its result's
+   *  problem */
+  private capped: string | null = null;
 
   constructor(private opts: CodexOptions = {}) {}
 
@@ -929,6 +991,7 @@ export class CodexDriver implements RunDriver {
           "thread/start",
           threadParams(ctx.cwd, ctx.agent, {
             askQuestions: this.opts.askQuestions ?? true,
+            rules: ctx.spec.allowedTools,
             ...(this.opts.policy ? { policy: this.opts.policy } : {}),
             env: ctx.env,
           }),
@@ -959,6 +1022,8 @@ export class CodexDriver implements RunDriver {
     this.turnAt = Date.now();
     this.finalText = "";
     this.lastText = "";
+    this.toolCalls = 0;
+    this.capped = null;
     try {
       const r = rec(await rpc.request("turn/start", turnParams(this.thread, text, ctx.agent)));
       // turn/started may have said so already, and turn/completed may have
@@ -976,7 +1041,7 @@ export class CodexDriver implements RunDriver {
         this.fail(err, "codex refused the message");
         return;
       }
-      ctx.result({ text: "", durationMs: 0, turns: this.turns }, `codex refused the message: ${errText(err)}`);
+      ctx.result({ text: "", ...NO_COST, durationMs: 0, turns: this.turns }, `codex refused the message: ${errText(err)}`);
     }
   }
 
@@ -1028,7 +1093,19 @@ export class CodexDriver implements RunDriver {
 
   private notified(method: string, params: Record<string, unknown>): void {
     const ctx = this.ctx;
-    if (!ctx || !this.ours(params)) return;
+    if (!ctx) return;
+    // A request is parked whichever thread sent it (a sub-agent's approval
+    // is this run's to answer too), so its clearing is heard from any
+    // thread: request ids are the connection's, not the thread's.
+    if (method === "serverRequest/resolved") {
+      const key = String(params["requestId"]);
+      if (this.asking.has(key)) {
+        this.resolved.add(key);
+        ctx.withdraw(key);
+      }
+      return;
+    }
+    if (!this.ours(params)) return;
     switch (method) {
       case "item/started":
       case "item/completed":
@@ -1043,14 +1120,6 @@ export class CodexDriver implements RunDriver {
       case "turn/completed":
         this.completed(rec(params["turn"]));
         return;
-      case "serverRequest/resolved": {
-        const key = String(params["requestId"]);
-        if (this.asking.has(key)) {
-          this.resolved.add(key);
-          ctx.withdraw(key);
-        }
-        return;
-      }
       case "error":
         if (params["willRetry"] === true) {
           ctx.note(`codex hit an error and is retrying: ${str(rec(params["error"]), "message") || "unknown error"}`);
@@ -1097,8 +1166,29 @@ export class CodexDriver implements RunDriver {
     } else {
       this.steps.set(id, ctx.step({ kind: "tool", tool }));
     }
-    if (phase === "completed") this.items.delete(id);
     ctx.changed();
+    if (phase === "completed") {
+      this.items.delete(id);
+      if (type === "commandExecution" || type === "fileChange") this.counted();
+    }
+  }
+
+  /** Codex has no turn limit of its own. A Claude job's `maxTurns` caps the
+   *  model calls in one reply (`--max-turns`), and the nearest thing Codex
+   *  reports is the work those calls do: so each finished command or file
+   *  change counts as one, and a turn that finishes more than `maxTurns` of
+   *  them is interrupted, its result failing the way a Claude job's
+   *  `error_max_turns` does. A chat counts per message, as Claude does. */
+  private counted(): void {
+    const ctx = this.ctx;
+    const max = ctx?.spec.maxTurns ?? 0;
+    this.toolCalls += 1;
+    if (!ctx || max <= 0 || this.toolCalls <= max || this.capped !== null || this.interrupting) return;
+    this.capped = `stopped after ${this.toolCalls} commands and file changes without finishing (the limit is ${max})`;
+    ctx.note(`reached the limit of ${max} commands and file changes for one turn; interrupting codex`);
+    if (this.rpc && this.thread !== null && this.turn !== null) {
+      this.rpc.request("turn/interrupt", { threadId: this.thread, turnId: this.turn }).catch(() => {});
+    }
   }
 
   private completed(turn: Record<string, unknown>): void {
@@ -1120,7 +1210,8 @@ export class CodexDriver implements RunDriver {
       this.tokens,
       Date.now() - this.turnAt,
     );
-    ctx.result(result, problem);
+    // canopy's own interrupt at the limit says why, rather than "interrupted"
+    ctx.result(result, problem && this.capped ? this.capped : problem);
     // a job is one turn; a chat keeps the thread for the next message
     if (!ctx.chat) this.close();
   }
@@ -1143,7 +1234,8 @@ export class CodexDriver implements RunDriver {
           this.escalated = true;
           ctx.note(escalation);
         }
-        if (autoAnswer(ctx.spec.allowedTools, approvalFacts(req.method, params, item), ctx.cwd)) {
+        const facts = approvalFacts(req.method, params, item);
+        if (autoAnswer(ctx.spec.allowedTools, facts, ctx.cwd) && (await runsInside(facts, ctx.cwd))) {
           rpc.reply(req.id, approvalReply(req.method, params, { kind: "allow" }, false));
           return;
         }

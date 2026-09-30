@@ -1,5 +1,5 @@
 import { afterAll, describe, expect, test } from "bun:test";
-import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import { TOOL_SETS } from "./actions";
@@ -7,6 +7,7 @@ import {
   appServerArgs,
   approvalFacts,
   approvalPrompt,
+  allowsEdits,
   approvalReply,
   autoAnswer,
   canopyEnv,
@@ -19,13 +20,16 @@ import {
   parseRule,
   questionPrompt,
   questionReply,
+  runsInside,
   shellWords,
   threadParams,
+  threadPolicy,
   tokensOf,
   turnParams,
   turnResult,
   unwrapShell,
   versionNote,
+  within,
 } from "./codexrun";
 import { RunCtx, type DriveAgent, type DriveRun } from "./driver";
 
@@ -65,11 +69,30 @@ describe("the process and the thread", () => {
     expect(appServerArgs({ extra: "-c 'k=\"v w\"'" })).toEqual(["app-server", "--listen", "stdio://", "-c", 'k="v w"']);
   });
 
-  test("ask mode sandboxes and asks; yolo is the bypass pair", () => {
+  test("ask mode asks for every command and edit canopy's rules have to judge; yolo is the bypass pair", () => {
+    // untrusted: codex asks for everything but its own known-safe reads, and
+    // for every patch, so the job's rules see each one (on-request would let
+    // the sandbox run anything and never ask)
     const ask = threadParams("/r", AGENT, { askQuestions: false });
-    expect(ask).toEqual({ cwd: "/r", approvalPolicy: "on-request", sandbox: "workspace-write" });
-    const yolo = threadParams("/r", { ...AGENT, yolo: true, model: "gpt-x" }, { askQuestions: false });
+    expect(ask).toEqual({ cwd: "/r", approvalPolicy: "untrusted", sandbox: "read-only" });
+    // rules that let the job edit let the sandbox write the workspace
+    expect(threadParams("/r", AGENT, { askQuestions: false, rules: [...GIT_READ, "Edit"] })).toEqual({
+      cwd: "/r",
+      approvalPolicy: "untrusted",
+      sandbox: "workspace-write",
+    });
+    const yolo = threadParams("/r", { ...AGENT, yolo: true, model: "gpt-x" }, { askQuestions: false, rules: ["Edit"] });
     expect(yolo).toEqual({ cwd: "/r", model: "gpt-x", approvalPolicy: "never", sandbox: "danger-full-access" });
+  });
+
+  test("only a bare Edit, Write or MultiEdit rule opens the sandbox for writing", () => {
+    expect(allowsEdits(GIT_READ)).toBe(false);
+    expect(allowsEdits(["Write"])).toBe(true);
+    expect(allowsEdits(["MultiEdit"])).toBe(true);
+    // a rule scoped to paths is one canopy cannot honour, so it opens nothing
+    expect(allowsEdits(["Edit(src/**)"])).toBe(false);
+    expect(threadPolicy({ yolo: false }, ["Bash(bun test:*)"])).toEqual({ approvalPolicy: "untrusted", sandbox: "read-only" });
+    expect(threadPolicy({ yolo: false })).toEqual({ approvalPolicy: "untrusted", sandbox: "read-only" });
   });
 
   test("questions ride in the thread's own config; a Claude model alias is left out", () => {
@@ -87,7 +110,7 @@ describe("the process and the thread", () => {
       askQuestions: false,
       policy: { sandbox: "danger-full-access", approvalPolicy: undefined },
     });
-    expect(p["approvalPolicy"]).toBe("on-request");
+    expect(p["approvalPolicy"]).toBe("untrusted");
     expect(p["sandbox"]).toBe("danger-full-access");
   });
 
@@ -104,8 +127,8 @@ describe("the process and the thread", () => {
     });
     expect(threadParams("/r", AGENT, { askQuestions: false, env: { CANOPY_REPO: "app" } })).toEqual({
       cwd: "/r",
-      approvalPolicy: "on-request",
-      sandbox: "workspace-write",
+      approvalPolicy: "untrusted",
+      sandbox: "read-only",
       config: { "shell_environment_policy.set.CANOPY_REPO": "app" },
     });
   });
@@ -173,25 +196,60 @@ describe("allowed tools, enforced by canopy", () => {
     expect(parseRule("Bash($(x):*)")).toBeNull();
   });
 
-  const cmd = (script: string) => ({ kind: "command" as const, command: `/bin/sh -lc '${script}'` });
+  const cmd = (script: string, cwd: string | null = null) => ({ kind: "command" as const, command: `/bin/sh -lc '${script}'`, cwd });
 
   test("one simple command matching a rule's words is accepted", () => {
     expect(autoAnswer(GIT_READ, cmd("git status --short"), "/r")).toBe(true);
     expect(autoAnswer(GIT_READ, cmd("git log -3 --oneline"), "/r")).toBe(true);
-    expect(autoAnswer(GIT_READ, { kind: "command", command: "git diff" }, "/r")).toBe(true);
+    expect(autoAnswer(GIT_READ, { kind: "command", command: "git diff", cwd: null }, "/r")).toBe(true);
     expect(autoAnswer(["Bash(bun install)"], cmd("bun install"), "/r")).toBe(true);
+    // in the repo or a folder under it
+    expect(autoAnswer(GIT_READ, cmd("git status", "/r"), "/r")).toBe(true);
+    expect(autoAnswer(GIT_READ, cmd("git status", "/r/sub/"), "/r/")).toBe(true);
+    expect(autoAnswer(GIT_READ, cmd("git status", "sub"), "/r")).toBe(true);
+  });
+
+  test("a covered command that would run outside the repo goes to the human", () => {
+    expect(autoAnswer(GIT_READ, cmd("git status", "/elsewhere"), "/r")).toBe(false);
+    expect(autoAnswer(GIT_READ, cmd("git status", "/r/../etc"), "/r")).toBe(false);
+    expect(autoAnswer(GIT_READ, cmd("git status", "/rx"), "/r")).toBe(false);
+    expect(autoAnswer(GIT_READ, cmd("git status", ".."), "/r")).toBe(false);
+    expect(within("/r/a", "/r")).toBe(true);
+    expect(within("/r", "/r/")).toBe(true);
+    expect(within("/r2", "/r")).toBe(false);
+    expect(within("/anything", "/")).toBe(true);
+  });
+
+  test("a command's folder is judged on disk too: a symlink out of the repo is outside", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "canopy-codex-cwd-"));
+    try {
+      const repo = join(dir, "repo");
+      await mkdir(join(repo, "sub"), { recursive: true });
+      await mkdir(join(dir, "out"));
+      await symlink(join(dir, "out"), join(repo, "link"));
+      const at = (cwd: string | null) => ({ kind: "command" as const, command: "git status", cwd });
+      expect(await runsInside(at(null), repo)).toBe(true);
+      expect(await runsInside(at(join(repo, "sub")), repo)).toBe(true);
+      expect(await runsInside(at(join(repo, "link")), repo)).toBe(false);
+      // a folder that is not there yet is judged by its words
+      expect(await runsInside(at(join(repo, "new")), repo)).toBe(true);
+      expect(await runsInside(at(join(dir, "gone")), repo)).toBe(false);
+      expect(await runsInside({ kind: "other" }, repo)).toBe(true);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
   });
 
   test("anything chained, substituted or piped, or off the rules, goes to the human", () => {
     expect(autoAnswer(GIT_READ, cmd("git status; rm -rf x"), "/r")).toBe(false);
     expect(autoAnswer(GIT_READ, cmd("git status && rm -rf x"), "/r")).toBe(false);
-    expect(autoAnswer(GIT_READ, { kind: "command", command: "/bin/sh -lc 'git log $(rm -rf /)'" }, "/r")).toBe(false);
+    expect(autoAnswer(GIT_READ, { kind: "command", command: "/bin/sh -lc 'git log $(rm -rf /)'", cwd: null }, "/r")).toBe(false);
     expect(autoAnswer(GIT_READ, cmd("git status | sh"), "/r")).toBe(false);
     expect(autoAnswer(GIT_READ, cmd("git push"), "/r")).toBe(false);
     expect(autoAnswer(GIT_READ, cmd("git statusx"), "/r")).toBe(false);
     expect(autoAnswer(GIT_READ, cmd("FOO=1 git status"), "/r")).toBe(false);
     expect(autoAnswer(["Bash(bun install)"], cmd("bun install left-pad"), "/r")).toBe(false);
-    expect(autoAnswer(GIT_READ, { kind: "command", command: null }, "/r")).toBe(false);
+    expect(autoAnswer(GIT_READ, { kind: "command", command: null, cwd: null }, "/r")).toBe(false);
     expect(autoAnswer(GIT_READ, { kind: "other" }, "/r")).toBe(false);
   });
 
@@ -215,6 +273,12 @@ describe("allowed tools, enforced by canopy", () => {
     expect(approvalFacts("item/commandExecution/requestApproval", { command: "git status" }, null)).toEqual({
       kind: "command",
       command: "git status",
+      cwd: null,
+    });
+    expect(approvalFacts("item/commandExecution/requestApproval", { command: "git status", cwd: "/r/sub" }, null)).toEqual({
+      kind: "command",
+      command: "git status",
+      cwd: "/r/sub",
     });
     expect(
       approvalFacts("item/commandExecution/requestApproval", { networkApprovalContext: { host: "x" } }, null).kind,
@@ -389,7 +453,11 @@ describe("the result", () => {
     const tokens = tokensOf({ totalTokens: 9, inputTokens: 7, cachedInputTokens: 3, cacheWriteInputTokens: 0, outputTokens: 2, reasoningOutputTokens: 1 });
     expect(tokens).toEqual({ input: 7, cachedInput: 3, output: 2, reasoning: 1, total: 9 });
     const ok = turnResult({ status: "completed", durationMs: 42 }, { final: "done", last: "x" }, 1, tokens, 5);
-    expect(ok).toEqual({ result: { text: "done", durationMs: 42, turns: 1, tokens: { input: 7, cachedInput: 3, output: 2, reasoning: 1, total: 9 } }, problem: null });
+    // a zero cost rides along for pages older than harnesses (costUsd.toFixed)
+    expect(ok).toEqual({
+      result: { text: "done", costUsd: 0, durationMs: 42, turns: 1, tokens: { input: 7, cachedInput: 3, output: 2, reasoning: 1, total: 9 } },
+      problem: null,
+    });
     const failed = turnResult(
       { status: "failed", durationMs: null, error: { message: "usage limit reached", additionalDetails: "try later" } },
       { final: "", last: "" },
@@ -434,6 +502,7 @@ interface DriveOpts {
   allowedTools?: string[];
   message?: string;
   graceMs?: number;
+  maxTurns?: number;
 }
 
 /** A run on a CodexDriver whose "codex" is the stand-in, with the Runner's
@@ -468,7 +537,7 @@ async function drive(scenario: (repo: string) => Scenario, opts: DriveOpts = {})
     {
       cwd: repo,
       agent: { ...AGENT, ...opts.agent },
-      spec: { allowedTools: opts.allowedTools ?? [], maxTurns: 10 },
+      spec: { allowedTools: opts.allowedTools ?? [], maxTurns: opts.maxTurns ?? 10 },
       env: { FAKE_CODEX_SCENARIO: scenarioPath, FAKE_CODEX_LOG: logPath },
       label: "Codex",
     },
@@ -595,6 +664,7 @@ describe("a Codex run", () => {
     expect(run.session).toBe("thr-1");
     expect(run.result).toEqual({
       text: "Done: edited a.ts.",
+      costUsd: 0,
       durationMs: 1234,
       turns: 1,
       tokens: { input: 100, cachedInput: 40, output: 20, reasoning: 5, total: 120 },
@@ -622,7 +692,7 @@ describe("a Codex run", () => {
     expect(init.params.capabilities.optOutNotificationMethods).toContain("item/agentMessage/delta");
     expect(requests(log, "initialized")).toHaveLength(1);
     const thread = requests(log, "thread/start")[0]?.["params"] as Record<string, unknown>;
-    expect(thread).toMatchObject({ cwd: d.repo, model: "gpt-x", approvalPolicy: "on-request", sandbox: "workspace-write" });
+    expect(thread).toMatchObject({ cwd: d.repo, model: "gpt-x", approvalPolicy: "untrusted", sandbox: "read-only" });
     const turn = requests(log, "turn/start")[0]?.["params"] as Record<string, unknown>;
     expect(turn).toEqual({ threadId: "thr-1", input: [{ type: "text", text: "edit a.ts", text_elements: [] }], effort: "high" });
     // the tested version says nothing
@@ -717,6 +787,110 @@ describe("a Codex run", () => {
     const log = await d.sent();
     expect(replyTo(log, 0)?.result).toEqual({ decision: "accept" });
     expect(replyTo(log, 1)?.result).toEqual({ decision: "decline" });
+  });
+
+  test("a command the rules cover still asks when it would run outside the repo", async () => {
+    const d = await drive(
+      (repo) => ({
+        turns: [
+          [
+            approval("c1", "git status", { cwd: repo }),
+            approval("c2", "git status", { cwd: "/" }),
+            agentMessage("m", "ok"),
+            { complete: "completed" },
+          ],
+        ],
+      }),
+      { allowedTools: GIT_READ },
+    );
+    const run = await d.until((r) => r.status === "waiting", "the prompt");
+    // the first ran in the repo and never showed; the one waiting is outside it
+    expect(run.prompt).toMatchObject({ id: "p1", title: "git status", detail: "git status\n\nin /" });
+    d.ctx.answer("p1", { kind: "deny" });
+    await d.until(d.ended, "the end");
+    const log = await d.sent();
+    expect(replyTo(log, 0)?.result).toEqual({ decision: "accept" });
+    expect(replyTo(log, 1)?.result).toEqual({ decision: "decline" });
+  });
+
+  test("a sub-agent's prompt cleared on its own thread is withdrawn", async () => {
+    const d = await drive(() => ({
+      turns: [
+        [
+          { ...approval("c1", "git push", { threadId: "thr-sub" }), wait: false },
+          { sleep: 150 },
+          // the clearing names the sub-agent's thread, not the run's
+          { notify: "serverRequest/resolved", params: { threadId: "thr-sub", requestId: "$REQ" } },
+          { sleep: 150 },
+          agentMessage("m", "moved on"),
+          { complete: "completed" },
+        ],
+      ],
+    }));
+    await d.until((r) => r.status === "waiting", "the prompt");
+    await d.until((r) => r.status === "working", "the withdrawal");
+    const run = await d.until(d.ended, "the end");
+    expect(run.status).toBe("done");
+    expect(run.steps.some((s) => s.text === "denied: git push")).toBe(true);
+    await Bun.sleep(50);
+    expect(replyTo(await d.sent(), 0)).toBeUndefined();
+  });
+
+  test("a chat that goes idle drops a prompt its turn left waiting, and a late answer cannot wake it", async () => {
+    const d = await drive(
+      () => ({
+        turns: [
+          [
+            // a sub-agent's request the server never clears
+            { ...approval("c1", "git push", { threadId: "thr-sub" }), wait: false },
+            { sleep: 150 },
+            agentMessage("m", "done here"),
+            { complete: "completed" },
+          ],
+        ],
+      }),
+      { chat: true, message: "hi" },
+    );
+    await d.until((r) => r.status === "waiting", "the prompt");
+    const run = await d.until((r) => r.status === "idle", "the reply");
+    expect(run.prompt).toBeNull();
+    expect(run.steps.some((s) => s.text === "denied: git push")).toBe(true);
+    expect(() => d.ctx.answer("p1", { kind: "allow" })).toThrow("no longer waiting");
+    expect(run.status).toBe("idle");
+    d.stop();
+    expect((await d.until(d.ended, "the end")).status).toBe("done");
+  });
+
+  test("a turn that runs past the job's maxTurns in commands and edits is interrupted and fails in words", async () => {
+    const d = await drive(
+      () => ({
+        turns: [
+          [
+            commandItem("item/completed", "c1", "ls"),
+            commandItem("item/completed", "c2", "ls -a"),
+            commandItem("item/completed", "c3", "ls -la"),
+            { waitInterrupt: true },
+            { complete: "interrupted" },
+          ],
+        ],
+      }),
+      { maxTurns: 2 },
+    );
+    const run = await d.until(d.ended, "the end");
+    expect(run.status).toBe("failed");
+    expect(run.error).toBe("stopped after 3 commands and file changes without finishing (the limit is 2)");
+    expect(run.steps.some((s) => s.kind === "note" && s.text?.includes("reached the limit of 2"))).toBe(true);
+    expect(requests(await d.sent(), "turn/interrupt")[0]?.["params"]).toEqual({ threadId: "thr-1", turnId: "turn-1" });
+  });
+
+  test("a turn within maxTurns is never interrupted", async () => {
+    const d = await drive(
+      () => ({ turns: [[commandItem("item/completed", "c1", "ls"), commandItem("item/completed", "c2", "ls -a"), agentMessage("m", "ok"), { complete: "completed" }]] }),
+      { maxTurns: 2 },
+    );
+    const run = await d.until(d.ended, "the end");
+    expect(run.status).toBe("done");
+    expect(requests(await d.sent(), "turn/interrupt")).toEqual([]);
   });
 
   test("a question from request_user_input is answered under its ids", async () => {

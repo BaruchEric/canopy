@@ -1,7 +1,7 @@
 /* Words for a run in the UI, whichever agent does the work: its name in a
-   heading, its word in a chip, and the footer's line, which says what the
-   run cost where the harness reports a cost (Claude Code) and the tokens it
-   spent where it reports those (Codex). Pure; tested in runs.test.ts. */
+   heading, its word in a chip, and the footer's line, which says the
+   tokens a run spent where the harness reports those (Codex) and what it
+   cost where it reports a cost (Claude Code). Pure; tested in runs.test.ts. */
 
 import { HARNESS } from "../../src/core/harness";
 import type { Harness, RunResult } from "../../src/core/types";
@@ -30,12 +30,14 @@ export function tokenCount(n: number): string {
   return `${(n / 1_000_000).toFixed(1).replace(/\.0$/, "")}M`;
 }
 
-/** The console footer's line: turns and time, then the cost where the
- *  harness reports one, else the tokens where it reports those. */
+/** The console footer's line: turns and time, then the tokens where the
+ *  harness reports those (Codex), else the cost where it reports one
+ *  (Claude Code). A Codex result also carries a zero cost for pages older
+ *  than harnesses, which the tokens win over. */
 export function resultLine(r: RunResult): string {
   const parts = [`${r.turns} turn${r.turns === 1 ? "" : "s"}`, clock(r.durationMs)];
-  if (r.costUsd !== undefined) parts.push(`$${r.costUsd.toFixed(2)}`);
-  else if (r.tokens) parts.push(`${tokenCount(r.tokens.total)} tokens`);
+  if (r.tokens) parts.push(`${tokenCount(r.tokens.total)} tokens`);
+  else if (r.costUsd !== undefined) parts.push(`$${r.costUsd.toFixed(2)}`);
   return parts.join(" · ");
 }
 

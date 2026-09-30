@@ -10,11 +10,15 @@ describe("a run's words", () => {
     expect(agentWord("claude")).toBe("claude");
   });
 
-  test("the footer: the cost where there is one, else the tokens", () => {
+  test("the footer: the tokens where there are some, else the cost", () => {
     expect(resultLine({ text: "", turns: 3, durationMs: 187_000, costUsd: 0.042 })).toBe("3 turns · 3:07 · $0.04");
     expect(resultLine({ text: "", turns: 1, durationMs: 5_000, tokens: { input: 900, cachedInput: 100, output: 300, reasoning: 50, total: 1200 } })).toBe(
       "1 turn · 0:05 · 1.2k tokens",
     );
+    // a codex result's zero cost is for older pages; this one shows its tokens
+    expect(
+      resultLine({ text: "", turns: 1, durationMs: 5_000, costUsd: 0, tokens: { input: 900, cachedInput: 100, output: 300, reasoning: 50, total: 1200 } }),
+    ).toBe("1 turn · 0:05 · 1.2k tokens");
     expect(resultLine({ text: "", turns: 2, durationMs: 0 })).toBe("2 turns · 0:00");
     expect(tokenTitle({ text: "", turns: 1, durationMs: 0 })).toBeNull();
     expect(tokenTitle({ text: "", turns: 1, durationMs: 0, tokens: { input: 9, cachedInput: 3, output: 2, reasoning: 1, total: 11 } })).toBe(

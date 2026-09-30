@@ -276,6 +276,7 @@ describe("a Codex job through the Runner", () => {
     expect(run.session).toBe("thr-1");
     expect(run.result).toEqual({
       text: "Status read; push declined.",
+      costUsd: 0,
       durationMs: 42,
       turns: 1,
       tokens: { input: 20, cachedInput: 5, output: 10, reasoning: 2, total: 30 },
@@ -296,6 +297,9 @@ describe("a Codex job through the Runner", () => {
     expect(thread.config?.["shell_environment_policy.set.CANOPY_RUN"]).toBe(run.id);
     expect(thread.config?.["shell_environment_policy.set.CANOPY_BACKEND"]).toBe("mini");
     expect(thread.config?.["shell_environment_policy.set.CANOPY_REPO"]).toBe("app");
+    // every command and edit comes to canopy's rules, and a job that may not
+    // edit runs in the read-only sandbox
+    expect(log.find((m) => m["method"] === "thread/start")?.["params"]).toMatchObject({ approvalPolicy: "untrusted", sandbox: "read-only" });
     const init = log.find((m) => m["method"] === "initialize")?.["params"] as { clientInfo: { name: string } };
     expect(init.clientInfo.name).toBe("canopy");
   }, 20_000);

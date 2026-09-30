@@ -164,6 +164,20 @@ describe("results and exits", () => {
     expect(run.status).toBe("done");
   });
 
+  test("a chat going idle denies and drops the prompts its turn left, and nothing settled then wakes it", async () => {
+    const { run, ctx } = makeCtx(true);
+    const left = ctx.ask(perm("git push"), "7");
+    expect(run.status).toBe("waiting");
+    ctx.result({ text: "done", durationMs: 5, turns: 1 }, null);
+    expect(await left).toEqual({ kind: "deny" });
+    expect(run.status).toBe("idle");
+    expect(run.prompt).toBeNull();
+    expect(notes(run)).toEqual(["denied: git push"]);
+    expect(() => ctx.answer("p1", { kind: "allow" })).toThrow("no longer waiting");
+    ctx.withdraw("7");
+    expect(run.status).toBe("idle");
+  });
+
   test("a stop's exit is a stop, and the session is kept", () => {
     const { run, ctx } = makeCtx();
     ctx.session("thr-1");
