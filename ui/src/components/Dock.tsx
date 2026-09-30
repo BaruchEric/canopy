@@ -43,6 +43,7 @@ import { ago, GLYPH, stateOf } from "../util";
 import { ClaudeSection } from "./Claude";
 import { LaunchSection } from "./Launch";
 import { TasksSection } from "./Tasks";
+import { AgentsSection } from "./Registry";
 import { PreviewSection } from "./Preview";
 import { GuidedPanel } from "./Guided";
 import { Tour } from "./Tour";
@@ -937,6 +938,8 @@ export function PanelSection({ k, repo }: { k: SectionKey; repo: Repo }) {
       return <LaunchSection repo={repo} />;
     case "claude":
       return <ClaudeSection repo={repo} />;
+    case "agents":
+      return repo.forge ? null : <AgentsSection repo={repo} />;
   }
 }
 

@@ -8,8 +8,9 @@
  */
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { chmod, mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import { hostname, tmpdir } from "node:os";
 import { join } from "node:path";
+import { selfName } from "../core/backends";
 import { codexDayDirs, projectFolder } from "../core/sessions";
 import { killServer, tmuxBase } from "../core/tmux";
 import type { AgentSession, Repo, TermInfo } from "../core/types";
@@ -137,7 +138,17 @@ describe("resuming a conversation", () => {
     ws.onmessage = (e: MessageEvent<ArrayBuffer | string>) => {
       if (typeof e.data !== "string") out += new TextDecoder().decode(new Uint8Array(e.data));
     };
-    const typed = `stub-codex resume --dangerously-bypass-approvals-and-sandbox --no-daemon ${CODEX}`;
+    // codex keeps its commands' environment to what policy sets, so where
+    // the shell runs rides as its -c flags
+    const env = Object.entries({
+      CANOPY_TERM: TERM2,
+      CANOPY_BACKEND: selfName(null, hostname()),
+      CANOPY_REPO: "app",
+      CANOPY_API: `http://127.0.0.1:${server.port}`,
+    })
+      .map(([k, v]) => `-c shell_environment_policy.set.${k}="${v}"`)
+      .join(" ");
+    const typed = `stub-codex resume --dangerously-bypass-approvals-and-sandbox --no-daemon ${env} ${CODEX}`;
     const start = Date.now();
     while (!out.includes(typed) && Date.now() - start < 15_000) await Bun.sleep(50);
     ws.close();

@@ -31,6 +31,9 @@ export interface TmuxMeta {
   place: ShellPlace;
   /** the tailchan handle the shell runs under (`TAILCHAN_AS`), when it has one */
   handle?: string;
+  /** more of the session's environment: the `CANOPY_*` a shell's agent
+   *  reads to say where it runs */
+  env?: Record<string, string>;
 }
 
 const PREFIX = "canopy-";
@@ -57,7 +60,7 @@ export const tmuxArgv = (bin: string, socket: string, conf: string): string[] =>
  * repo, place and path set on it in the same call. A local folder is the
  * session's start directory; a remote shell is an ssh line and starts here.
  * A handle goes into the session's environment as `TAILCHAN_AS` and onto
- * it as an option, so a later list reads it back.
+ * it as an option, so a later list reads it back; `env` goes in beside it.
  */
 export function newSessionArgs(base: string[], meta: TmuxMeta, size: TermSize, command: string[]): string[] {
   const name = sessionName(meta.id);
@@ -70,6 +73,7 @@ export function newSessionArgs(base: string[], meta: TmuxMeta, size: TermSize, c
     name,
     ...(host === null ? ["-c", path] : []),
     ...(meta.handle ? ["-e", `TAILCHAN_AS=${meta.handle}`] : []),
+    ...Object.entries(meta.env ?? {}).flatMap(([k, v]) => ["-e", `${k}=${v}`]),
     "-x",
     String(size.cols),
     "-y",

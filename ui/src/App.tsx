@@ -227,7 +227,7 @@ export function App() {
         {nav}
       </header>
       {view === "agents" ? (
-        <AgentsView />
+        <AgentsView onGit={() => navigate("git")} />
       ) : (
         <Library ports={view === "ports"} project={project} onRepo={showRepo} onPorts={() => navigate("ports")} />
       )}

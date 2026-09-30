@@ -20,7 +20,8 @@ import { boardOrder, invertPick, pickWhere, rangeIds, setPick, togglePick } from
 import { appendFeed, describeEvent, type FeedEntry, type FeedSnapshot } from "./feed";
 import { mergeAction } from "./peers";
 import { convOf, isUnread, mergeMessages } from "./chan";
-import type { ChanMessage, TailchanInfo } from "../../src/core/types";
+import type { AgentCard, ChanMessage, TailchanInfo } from "../../src/core/types";
+import { cardsByRepoCard, mergeCards, replaceCards } from "./agentcards";
 import { clientCaps } from "../../src/core/client";
 import { normalizeRoutes, resolveAgent } from "../../src/core/route";
 import { NO_ROUTES } from "./agents";
@@ -85,7 +86,7 @@ export const PANEL_TERM = { min: 60, max: 900, initial: rowsPx(PANEL_TERM_ROWS) 
 /** the event feed along the bottom, in px of height */
 export const FEED = { min: 100, max: 900, initial: 220 };
 /** sections that start folded, matching how the panel read before they could fold */
-const DEFAULT_CLOSED = ["search", "history", "claude", "launch", "peers", "preview"];
+const DEFAULT_CLOSED = ["search", "history", "claude", "launch", "peers", "preview", "agents"];
 /** the folded-by-default set a layout saved before `knownSections` existed
  *  had decided about; anything added to DEFAULT_CLOSED since folds for it */
 const OLD_KNOWN = ["search", "history", "claude"];
@@ -530,6 +531,11 @@ interface CanopyState {
   /** whether the tailchan popover is up, and which conversation it shows */
   chanOpen: boolean;
   chanConv: string | null;
+  /** the agent registry, the home backend's broker's cards by id */
+  registry: Record<string, AgentCard>;
+  /** whether the home backend has a registry to show; false shows nothing
+   *  registry-related */
+  registryReady: boolean;
   workspaces: Workspace[];
   loaded: boolean;
   /** why the initial load failed, if it did */
@@ -741,6 +747,9 @@ interface CanopyState {
   setKeeping: (on: boolean, backend?: string) => Promise<void>;
   /** reads the broker's view (who, channels, the notify switch) */
   loadChan: () => Promise<void>;
+  /** reads the agent registry off the home backend; a backend without a
+   *  broker leaves it off */
+  loadRegistry: () => Promise<void>;
   /** opens the popover, on a conversation or target ("#x", "@h") when given */
   openChan: (target?: string) => void;
   closeChan: () => void;
@@ -795,6 +804,8 @@ interface CanopyState {
   editTask: (repoId: string, name: string | null) => void;
   /** opens a repo's panel with its tasks unfolded */
   showTasks: (repoId: string) => void;
+  /** opens a repo's panel with its agents section unfolded */
+  showAgents: (repoId: string) => void;
   /** brings a repo's bench to the front with `task`'s log in it (null for
    *  the one the bench picks) */
   bringTask: (repoId: string, task?: string | null) => void;
@@ -984,6 +995,7 @@ function feedView(s: CanopyState, from: string): FeedSnapshot {
     shells: s.shells.filter((t) => mine(t.id)),
     kept: s.kept.filter((k) => mine(k.id)),
     chanAs: s.chanAs,
+    registry: s.registry,
   };
 }
 
@@ -1122,6 +1134,8 @@ function resync(get: () => CanopyState, set: (fn: (s: CanopyState) => Partial<Ca
     .rescan(b)
     .catch(() => {});
   readTasks(get, set, b);
+  // cards the broker changed while the stream was down
+  if (b === get().home) void get().loadRegistry();
   // the tasks a panel loaded may have moved while the stream was down
   for (const id of Object.keys(get().tasks)) if (backendOf(id) === b) void get().loadTasks(id).catch(() => {});
   void Promise.all([api.terms(b), api.kept(b), api.helpers(b)])
@@ -1167,6 +1181,8 @@ export const useStore = create<CanopyState>((set, get) => ({
   chanUnread: 0,
   chanOpen: false,
   chanConv: null,
+  registry: {},
+  registryReady: false,
   workspaces: [],
   loaded: false,
   loadError: null,
@@ -1343,6 +1359,8 @@ export const useStore = create<CanopyState>((set, get) => ({
     readPeers(get, set, home);
     // tailchan too: a backend without a broker answers ready: false
     void get().loadChan();
+    // and the agent registry, which a backend without a broker refuses
+    void get().loadRegistry();
     // what home runs, for naming the machines; a page with one backend
     // names none, so it does not ask
     if (order.length > 1) {
@@ -1752,8 +1770,8 @@ export const useStore = create<CanopyState>((set, get) => ({
     // a backend hidden since this was sent is not on the page any more
     if (!isShown(before, b)) return;
     beat();
-    // workspaces and tailchan are the home backend's alone
-    if ((ev.type === "chan" || ev.type === "workspaces") && b !== before.home) return;
+    // workspaces, tailchan and the agent registry are the home backend's alone
+    if ((ev.type === "chan" || ev.type === "workspaces" || ev.type === "registry") && b !== before.home) return;
     // The feed says what changed, so the lines come from the event against
     // the state before it is applied, as the backend that sent it saw it.
     // a message already held (a reconnect's replay, a post heard twice) is
@@ -1765,6 +1783,13 @@ export const useStore = create<CanopyState>((set, get) => ({
         const { feed, seq } = appendFeed(s.feed, lines, s.feedSeq);
         return { feed, feedSeq: seq };
       });
+    }
+    if (ev.type === "registry") {
+      set((s) => {
+        const registry = mergeCards(s.registry, ev.cards, ev.gone);
+        return registry === s.registry ? {} : { registry };
+      });
+      return;
     }
     if (ev.type === "chan") {
       const m = ev.message;
@@ -1948,6 +1973,15 @@ export const useStore = create<CanopyState>((set, get) => ({
     const b = backend ?? get().home;
     const { keeping } = await api.setKeeping(on, b);
     set((s) => ({ conns: connsIf(s, b, { keeping }) }));
+  },
+  loadRegistry: async () => {
+    try {
+      const info = await api.registry();
+      const cards = Array.isArray(info.cards) ? info.cards : [];
+      set((s) => ({ registry: replaceCards(s.registry, cards), registryReady: true }));
+    } catch {
+      set({ registry: {}, registryReady: false });
+    }
   },
   loadChan: async () => {
     const chan = await api.tailchan().catch((e: unknown): TailchanInfo => ({ ready: false, reason: String(e instanceof Error ? e.message : e) }));
@@ -2149,6 +2183,11 @@ export const useStore = create<CanopyState>((set, get) => ({
     set((s) => ({
       ...focusPanel(s.panels, repoId),
       closedSections: unfoldIn(s.closedSections, repoId, "tasks"),
+    })),
+  showAgents: (repoId) =>
+    set((s) => ({
+      ...focusPanel(s.panels, repoId),
+      closedSections: unfoldIn(s.closedSections, repoId, "agents"),
     })),
   bringTask: (repoId, task = null) =>
     set((s) => ({ ...focusPanel(s.panels, repoId), front: frontForTask(s.front, repoId, task) })),
@@ -2615,6 +2654,27 @@ export function allCards(s: CanopyState): RepoCard[] {
   cardsByKey = byKey;
   cardIndex = new Map(cardsOut.flatMap((card) => card.checkouts.map((r) => [r.id, card] as const)));
   return cardsOut;
+}
+
+let agentsIn: { registry: Record<string, AgentCard>; cards: RepoCard[] } | null = null;
+let agentsOut = new Map<string, AgentCard[]>();
+const NO_AGENTS: AgentCard[] = [];
+
+/** Every repo card's agents from the registry, by card key, running first;
+ *  worked out once per registry or board change. */
+export function agentsByCard(s: CanopyState): Map<string, AgentCard[]> {
+  const cards = allCards(s);
+  if (agentsIn && agentsIn.registry === s.registry && agentsIn.cards === cards) return agentsOut;
+  agentsIn = { registry: s.registry, cards };
+  agentsOut = cardsByRepoCard(cards, Object.values(s.registry), backendOf);
+  return agentsOut;
+}
+
+/** the agents on the card a checkout is on, anywhere; a stable array, so a
+ *  selector over it settles */
+export function agentsOn(s: CanopyState, repoId: string): AgentCard[] {
+  const card = cardOf(s, repoId);
+  return (card && agentsByCard(s).get(card.key)) || NO_AGENTS;
 }
 
 /** The card a checkout is on, whichever checkout of it. */

@@ -101,6 +101,20 @@ describe("argv", () => {
       "/Users/me/dev/web-apps/ripe",
     ]);
   });
+  test("a handle and the env go into the session's environment", () => {
+    const meta = {
+      id: ID,
+      repoId: "app",
+      path: "/dev/app",
+      place: "strip" as const,
+      handle: "app-0123",
+      env: { CANOPY_TERM: ID, CANOPY_BACKEND: "mini" },
+    };
+    const argv = newSessionArgs(base, meta, { cols: 80, rows: 24 }, ["/bin/bash"]);
+    const at = argv.indexOf("-e");
+    expect(argv.slice(at, at + 6)).toEqual(["-e", "TAILCHAN_AS=app-0123", "-e", `CANOPY_TERM=${ID}`, "-e", "CANOPY_BACKEND=mini"]);
+    expect(argv[at + 6]).toBe("-x");
+  });
   test("a remote shell's session is the ssh line, started here", () => {
     const meta = { id: ID, repoId: "wsl:app", path: "ssh://wsl/home/me/app", place: "strip" as const };
     const argv = newSessionArgs(base, meta, { cols: 80, rows: 24 }, ["ssh", "-t", "--", "wsl", "cd '/home/me/app' && exec \"$SHELL\" -l"]);

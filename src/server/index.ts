@@ -129,6 +129,8 @@ import {
 import type { About } from "../core/types";
 import { DEFAULT_IGNORE } from "../core/scan";
 import { ChanHub } from "./tailchan";
+import { RegistryHub } from "./registry";
+import { SCAN_EVERY, type AgentProc } from "../core/agentscan";
 import { TaskHub } from "./tasks";
 import type { TaskTimings } from "../core/tasks";
 import { shellHandle } from "../core/tailchan";
@@ -245,6 +247,15 @@ interface ServerState {
   keeping: Promise<void> | null;
   /** the in-app browser's preview ports; null when previews are off */
   preview: PreviewProxy | null;
+  /** the agent registry: this machine's scan posted to the broker, and the
+   *  broker's cards followed for `/api/registry` */
+  registry: RegistryHub;
+  /** the name this backend goes by (`selfName`), read at start; what a
+   *  shell's `CANOPY_BACKEND` says */
+  backendName: string;
+  /** where a shell on this machine reaches this server, `CANOPY_API`; null
+   *  until the server listens */
+  apiUrl: string | null;
 }
 
 /** One shell the server holds and the sockets on it. On a plain pty the
@@ -608,7 +619,7 @@ async function restoreTerm(state: ServerState, id: string, size: TermSize, resum
   let line: string | null = null;
   if (resume && rec.agent) {
     await needHarness(state, rec.agent);
-    const env = shellEnv(handleOf(state, rec.repoId, rec.path, id).handle);
+    const env = shellEnv(state, rec.repoId, rec.path, id);
     line = continueLine(rec.agent, agentFor(await loadConfig(), rec.path, "shell", { harness: rec.agent }), env);
   }
   // The replay runs in the pane, ahead of the shell, so what the lost shell
@@ -622,7 +633,12 @@ async function restoreTerm(state: ServerState, id: string, size: TermSize, resum
   const shell = shellArgs(rec.path);
   const command = file ? replayCommand(file, restoredBanner(new Date(rec.savedAt).toLocaleString()), shell) : shell;
   try {
-    await newSession(tmux, { id, repoId: rec.repoId, path: rec.path, place: rec.place, ...handleOf(state, rec.repoId, rec.path, id) }, size, command);
+    await newSession(
+      tmux,
+      { id, repoId: rec.repoId, path: rec.path, place: rec.place, ...handleOf(state, rec.repoId, rec.path, id), env: canopyEnv(state, rec.repoId, rec.path, id) },
+      size,
+      command,
+    );
   } catch (e) {
     // nothing will read the replay now, and the retention sweep only knows
     // about records
@@ -665,13 +681,13 @@ async function resumeTerm(
   if (!(await hasAgentSession(harness, repo.path, session))) throw new HttpError(404, `no ${harness} conversation under that id at this repo`);
   if (state.terms.has(id) || state.kept.some((k) => k.id === id)) throw new HttpError(409, "that shell name is taken");
   await needHarness(state, harness);
-  const env = shellEnv(handleOf(state, repo.id, repo.path, id).handle);
+  const env = shellEnv(state, repo.id, repo.path, id);
   const line = resumeLine(session, agentFor(await loadConfig(), repo.path, "shell", { harness }), env);
   const tmux = state.tmux;
   let live: LiveTerm;
   if (tmux) {
     if (await hasSession(tmux, id)) throw new HttpError(409, "that shell name is taken");
-    await newSession(tmux, { id, repoId: repo.id, path: repo.path, place, ...handleOf(state, repo.id, repo.path, id) }, size);
+    await newSession(tmux, { id, repoId: repo.id, path: repo.path, place, ...handleOf(state, repo.id, repo.path, id), env: canopyEnv(state, repo.id, repo.path, id) }, size);
     live = {
       info: { id, repoId: repo.id, path: repo.path, place, attached: false, viewers: [], startedAt: Date.now(), ...handleOf(state, repo.id, repo.path, id) },
       pty: null,
@@ -699,7 +715,7 @@ const PROMPT_MAX = 6000;
  *  once its own start-up (the folder trust question among it) is through,
  *  which typing it in later cannot be sure of. */
 async function typeAgent(state: ServerState, live: LiveTerm, repo: Repo, agent: AgentSettings, prompt: string): Promise<void> {
-  const base = await state.agentLine(repo, agent, shellEnv(live.info.handle));
+  const base = await state.agentLine(repo, agent, shellEnv(state, live.info.repoId, live.info.path, live.info.id));
   const line = prompt ? `${base} ${shellQuote(prompt)}` : base;
   await Bun.sleep(400);
   if (state.tmux) await sendLine(state.tmux, live.info.id, line);
@@ -707,10 +723,36 @@ async function typeAgent(state: ServerState, live: LiveTerm, repo: Repo, agent: 
 }
 
 /** What the agent in a canopy shell hands its own commands, beside what the
- *  shell already has: its tailchan handle, which a harness that filters its
- *  commands' environment (codex) would otherwise drop. Later phases add
- *  CANOPY_* here the same way. */
-const shellEnv = (handle: string | undefined): AgentEnv => (handle ? { TAILCHAN_AS: handle } : {});
+ *  shell already has: its tailchan handle and where it runs (`canopyEnv`),
+ *  which a harness that filters its commands' environment (codex) would
+ *  otherwise drop. */
+function shellEnv(state: ServerState, repoId: string, path: string, id: string): AgentEnv {
+  const handle = handleOf(state, repoId, path, id).handle;
+  return { ...(handle ? { TAILCHAN_AS: handle } : {}), ...canopyEnv(state, repoId, path, id) };
+}
+
+/** Where a new shell runs, in its environment, so an agent's hook can put
+ *  it on the registry card (`where.canopy`) and call back: the shell's id,
+ *  this backend's name, the repo's id here, and this server's address on
+ *  the machine's loopback. None for an ssh line, which would leave them on
+ *  this side of the connection. */
+function canopyEnv(state: ServerState, repoId: string, path: string, id: string): Record<string, string> {
+  if (parseLocator(path).host !== null) return {};
+  return {
+    CANOPY_TERM: id,
+    CANOPY_BACKEND: state.backendName,
+    CANOPY_REPO: repoId,
+    ...(state.apiUrl ? { CANOPY_API: state.apiUrl } : {}),
+  };
+}
+
+/** `CANOPY_API` off the address the server binds: loopback for a loopback
+ *  or wildcard bind, else that address itself */
+function apiUrlFor(bind: string, port: number): string {
+  const any = bind === "0.0.0.0" || bind === "::" || bind === "[::]" || bind === "localhost" || bind.startsWith("127.") || bind === "::1";
+  const host = any ? "127.0.0.1" : bind.includes(":") && !bind.startsWith("[") ? `[${bind}]` : bind;
+  return `http://${host}:${port}`;
+}
 
 /** The tailchan handle a new shell runs under, as a spread: none when the
  *  backend knows no broker (the variable would mean nothing) or the shell
@@ -729,7 +771,7 @@ function openPtyTerm(state: ServerState, data: TermSocket, size: TermSize): Live
   const { repo, id, place } = data;
   const scrollback = new Scrollback();
   const sockets = new Set<ServerWebSocket<TermSocket>>();
-  const handle = handleOf(state, repo.id, repo.path, id).handle;
+  const env = shellEnv(state, repo.id, repo.path, id);
   const session = startTerm(repo.path, size, {
     data: (chunk) => {
       scrollback.push(chunk);
@@ -748,7 +790,7 @@ function openPtyTerm(state: ServerState, data: TermSocket, size: TermSize): Live
       sockets.clear();
       tellTerms(state);
     },
-  }, handle ? { TAILCHAN_AS: handle } : undefined);
+  }, Object.keys(env).length ? env : undefined);
   const live: LiveTerm = {
     info: { id, repoId: repo.id, path: repo.path, place, attached: false, viewers: [], startedAt: Date.now(), ...handleOf(state, repo.id, repo.path, id) },
     pty: { session, scrollback },
@@ -769,7 +811,7 @@ async function joinTmuxTerm(state: ServerState, tmux: string[], ws: ServerWebSoc
   const size = { cols, rows };
   let live = state.terms.get(id);
   if (!live) {
-    await newSession(tmux, { id, repoId: repo.id, path: repo.path, place, ...handleOf(state, repo.id, repo.path, id) }, size);
+    await newSession(tmux, { id, repoId: repo.id, path: repo.path, place, ...handleOf(state, repo.id, repo.path, id), env: canopyEnv(state, repo.id, repo.path, id) }, size);
     live = {
       info: { id, repoId: repo.id, path: repo.path, place, attached: false, viewers: [], startedAt: Date.now(), ...handleOf(state, repo.id, repo.path, id) },
       pty: null,
@@ -1695,6 +1737,8 @@ async function handleApi(
   if (path === "/api/devices" && method === "GET") return json(deviceList(state));
   const chanRes = await state.chan.handle(req, url);
   if (chanRes) return chanRes;
+  const registryRes = await state.registry.handle(req, url);
+  if (registryRes) return registryRes;
   const taskRes = await state.tasks.handle(req, url, (id) => state.result.repos.find((r) => r.id === id));
   if (taskRes) return taskRes;
 
@@ -2541,6 +2585,9 @@ export async function startServer(opts: {
   agentLine?: (repo: Repo, agent: AgentSettings, env: AgentEnv) => Promise<string>;
   /** the harnesses the backend has, in place of looking on PATH; tests */
   harnesses?: Harness[];
+  /** the agent registry's timings and scan; tests turn the scan on with a
+   *  stand-in lister (it is off under `bun test` and `CANOPY_AGENT_SCAN=0`) */
+  registry?: { scanEvery?: number; relistEvery?: number; lister?: () => Promise<AgentProc[]>; container?: boolean };
 }): Promise<{ port: number; stop: () => void }> {
   const cfg = await loadConfig();
   const root = await realpath(opts.root);
@@ -2555,6 +2602,9 @@ export async function startServer(opts: {
   // twice; the launch root wins and keeps its bare ids.
   const extras = cfg.sources.filter((s) => s.kind !== "local" || s.path !== root);
   const fixed = opts.harnesses;
+  // one broker address for tailchan and the registry both
+  const chanCfg = opts.chan === undefined ? loadChanConfig() : opts.chan;
+  const scanOff = process.env["CANOPY_AGENT_SCAN"] === "0" || process.env["NODE_ENV"] === "test";
   const harnesses = fixed ? () => [...fixed] : availableHarnesses;
   // every run is told which backend started it (CANOPY_BACKEND), and codex
   // hears canopy's version in its handshake
@@ -2635,7 +2685,7 @@ export async function startServer(opts: {
     runner,
     flows,
     launcher,
-    chan: new ChanHub(opts.chan === undefined ? loadChanConfig() : opts.chan, {
+    chan: new ChanHub(chanCfg, {
       broadcast: (ev) => broadcast(state, ev),
       repoName: (id) => state.result.repos.find((r) => r.id === id)?.name ?? id,
       isFlowRun: (runId) => state.flows.list().some((f) => f.steps.some((st) => st.runId === runId)),
@@ -2680,6 +2730,16 @@ export async function startServer(opts: {
     kept: [],
     keeping: null,
     preview: null,
+    registry: new RegistryHub(chanCfg, {
+      broadcast: (ev) => broadcast(state, ev),
+      repos: () => state.result.repos,
+      scanEvery: opts.registry?.scanEvery ?? (scanOff ? 0 : SCAN_EVERY),
+      ...(opts.registry?.relistEvery !== undefined ? { relistEvery: opts.registry.relistEvery } : {}),
+      ...(opts.registry?.lister ? { lister: opts.registry.lister } : {}),
+      ...(opts.registry?.container !== undefined ? { container: opts.registry.container } : {}),
+    }),
+    backendName: selfName(cfg.self, hostname()),
+    apiUrl: null,
   };
   await rememberRoot(root);
   await Promise.all(state.sources.map((rt) => scanOne(state, rt, scanOpts(state, cfg))));
@@ -2973,6 +3033,7 @@ export async function startServer(opts: {
     }),
   );
   boundPort = server.port ?? port;
+  state.apiUrl = apiUrlFor(bindHost, boundPort);
   // Only after the bind succeeds: a watcher started earlier would outlive a
   // failed listen and hold the process open.
   for (const rt of state.sources) startWatcher(state, rt);
@@ -2990,6 +3051,7 @@ export async function startServer(opts: {
   // What the shells have on their screens, written out while `keepShells`
   // is on, so a machine going down does not take them with the tmux server.
   void state.chan.start().catch((err) => console.error("canopy: tailchan", err));
+  state.registry.start();
   const keepTimer = setInterval(() => void keepPass(state), KEEP_EVERY);
 
   // A named event rather than an SSE comment, so the page sees it: a phone
@@ -3022,6 +3084,7 @@ export async function startServer(opts: {
       state.runner.stopAll();
       state.launcher.shutdown();
       state.chan.close();
+      state.registry.close();
       // the ptys go with the server; a shell on tmux stays for the next one
       for (const t of state.terms.values()) {
         t.pty?.session.detach();

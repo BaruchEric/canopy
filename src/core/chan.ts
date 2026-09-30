@@ -8,7 +8,7 @@ import { readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { asChanMessage, parseSse, readQuery, type ChanTarget } from "./tailchan";
-import type { ChanChannel, ChanMessage, ChanWho } from "./types";
+import type { AgentCard, ChanChannel, ChanMessage, ChanWho, ScanBody } from "./types";
 
 export interface ChanConfig {
   url: string;
@@ -142,6 +142,28 @@ export class Chan {
     return this.call(as, "PUT", "/v1/blobs", undefined, { data, type, name });
   }
 
+  /** the registry's cards: `state` is `live` (the broker's default),
+   *  `all`, or one state; newest beat first */
+  listAgents(as: string, query: { state?: string; node?: string; repo?: string; harness?: string; cap?: string[] } = {}): Promise<AgentCard[]> {
+    const q = new URLSearchParams();
+    for (const k of ["state", "node", "repo", "harness"] as const) {
+      const v = query[k];
+      if (v) q.set(k, v);
+    }
+    for (const c of query.cap ?? []) q.append("cap", c);
+    const qs = q.toString();
+    return this.call(as, "GET", `/v1/agents${qs ? `?${qs}` : ""}`);
+  }
+
+  getAgent(as: string, id: string): Promise<AgentCard> {
+    return this.call(as, "GET", `/v1/agents/${encodeURIComponent(id)}`);
+  }
+
+  /** replaces the caller node's scan cards in the body's pid namespace */
+  scanAgents(as: string, body: ScanBody): Promise<{ cards: number; ended: number }> {
+    return this.call(as, "POST", "/v1/agents/scan", body);
+  }
+
   /** the broker's own response, streamed through as it is */
   async getBlob(as: string, id: string): Promise<Response> {
     const res = await this.fetcher(`${this.url}/v1/blobs/${encodeURIComponent(id)}`, { headers: { "x-tailchan-as": as } });
@@ -150,13 +172,14 @@ export class Chan {
   }
 
   /**
-   * Follows what `as` hears (its subscriptions and DMs), calling `onMessage`
-   * for each post, until the returned stop is called. A dropped stream is
+   * Follows what `as` hears (its subscriptions and DMs, or only `channels`
+   * when given, which pins the stream to them), calling `onMessage` for
+   * each post, until the returned stop is called. A dropped stream is
    * dialed again at doubling waits up to 30s and resumes after the last id
    * it saw, so a broker restart loses nothing. `onState` says whether it is
    * connected, for the UI's word on it.
    */
-  follow(as: string, onMessage: (m: ChanMessage) => void, onState: (up: boolean) => void = () => {}): () => void {
+  follow(as: string, onMessage: (m: ChanMessage) => void, onState: (up: boolean) => void = () => {}, channels?: readonly string[]): () => void {
     let stopped = false;
     let last = 0;
     let wait = 1000;
@@ -166,7 +189,11 @@ export class Chan {
       if (stopped) return;
       ctrl = new AbortController();
       try {
-        const q = last ? `?since=${last}` : "";
+        const params = new URLSearchParams();
+        if (channels?.length) params.set("channels", channels.join(","));
+        if (last) params.set("since", String(last));
+        const qs = params.toString();
+        const q = qs ? `?${qs}` : "";
         const res = await this.fetcher(`${this.url}/v1/stream${q}`, { headers: { "x-tailchan-as": as, accept: "text/event-stream" }, signal: ctrl.signal });
         if (!res.ok || !res.body) throw new Error(`HTTP ${res.status}`);
         onState(true);

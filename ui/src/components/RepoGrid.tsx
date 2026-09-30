@@ -29,6 +29,7 @@ import { RepoMenu } from "./RepoMenu";
 import { Rings } from "./Rings";
 import { FlowChip, RunChip } from "./RunChip";
 import { TaskChip } from "./Tasks";
+import { AgentChip } from "./Registry";
 import { historyFor, type Repo } from "../../../src/core/types";
 
 /** What a machine chip's tooltip says about its backend. */
@@ -265,6 +266,7 @@ const RepoCard = memo(function RepoCard({ repo, i }: { repo: Repo; i: number }) 
         <span className="card-state">
           {activeFlow ? <FlowChip flow={activeFlow} /> : run ? <RunChip run={run} /> : flow && <FlowChip flow={flow} />}
           <TaskChip repoId={repo.id} />
+          <AgentChip repoId={repo.id} />
           {forge ? (
             <span className="clean" title={forge.clone}>
               {forge.empty

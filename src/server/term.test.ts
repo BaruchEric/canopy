@@ -235,6 +235,17 @@ describe("a shell behind the socket", () => {
     await second.closed;
   });
 
+  test.if(tmux)("a new session knows where it runs, for an agent's hook to say", async () => {
+    const id = "abcdefabcdefabcdefabcdefabcdef01";
+    const c = connect({ term: id, place: "strip", cols: "200" });
+    await c.opened;
+    c.ws.send(new TextEncoder().encode('echo "at=$CANOPY_TERM|$CANOPY_REPO|$CANOPY_API"\n'));
+    await until(() => c.text().includes(`at=${id}|app|http://127.0.0.1:${server.port}`), "the env in the session");
+    const res = await fetch(`http://127.0.0.1:${server.port}/api/terms?term=${id}`, { method: "DELETE" });
+    expect(res.status).toBe(200);
+    await c.closed;
+  });
+
   test.if(tmux)("outlives the server: the next one finds it and a socket rejoins", async () => {
     const id = "fedcbafedcbafedcbafedcbafedcbafe";
     const first = connect({ term: id, place: "strip" });

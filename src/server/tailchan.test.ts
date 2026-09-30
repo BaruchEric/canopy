@@ -32,6 +32,8 @@ const broker = Bun.serve({
     const as = req.headers.get("x-tailchan-as") ?? "anon";
     const p = url.pathname;
     if (p === "/v1/who") return Response.json([{ handle: "claude-abc123", node: "macmini-2018", last_seen: 1, live: true }]);
+    // the registry's list, which the server reads beside tailchan (registry.test.ts has the rest)
+    if (p === "/v1/agents") return Response.json([]);
     if (p === "/v1/channels") return Response.json([{ name: "canopy", topic: "", private: false, members: [], count: 0, last_ts: null, expires_at: null, subscribed: true }]);
     if (p === "/v1/subs" && req.method === "POST") {
       subs.push({ handle: as, channel: ((await req.json()) as { channel: string }).channel });

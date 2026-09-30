@@ -33,6 +33,7 @@ const KIND_WORD: Record<FeedKind, string> = {
   shell: "shell",
   chan: "chan",
   task: "task",
+  registry: "agents",
 };
 
 /**
