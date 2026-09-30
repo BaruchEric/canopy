@@ -51,12 +51,36 @@ test("defaultPort takes the repo's lowest port, so an app with a kiosk beside it
   expect(defaultPort([])).toBeNull();
 });
 
-test("another machine's app previews through its public names, on any page", () => {
+test("another machine's app previews through its public names only on a page of their own site", () => {
   const pub = "https://canopy-mac-p{slot}.example.com";
-  expect(previewUrl({ protocol: "http:", hostname: "mini" }, 7860, "/", pub, false)).toBe("https://canopy-mac-p7860.example.com/");
-  expect(previewBlocked({ protocol: "http:", hostname: "mini" }, pub, false)).toBeNull();
-  // without them nothing of it is reachable: its ports are its own loopback
+  const site = { protocol: "https:", hostname: "canopy.example.com" };
+  expect(previewUrl(site, 7860, "/", pub, false)).toBe("https://canopy-mac-p7860.example.com/");
+  expect(previewBlocked(site, pub, false)).toBeNull();
+  // an http page is another site: the gate's Lax cookie stays out of the frame
+  expect(previewUrl({ protocol: "http:", hostname: "127.0.0.1" }, 7860, "/", pub, false)).toBeNull();
+  expect(previewBlocked({ protocol: "http:", hostname: "127.0.0.1" }, pub, false)).toContain("only open inside a page on that site");
+  // without names or an address nothing of it is reachable
   expect(previewBlocked({ protocol: "http:", hostname: "mini" }, null, false)).toContain("public preview names");
+});
+
+test("an http page frames another machine's app at its tailnet IP", () => {
+  const pub = "https://canopy-p{slot}.example.com";
+  const loop = { protocol: "http:", hostname: "127.0.0.1" };
+  expect(previewUrl(loop, 7861, "a", pub, false, "100.68.139.95")).toBe("http://100.68.139.95:7861/a");
+  expect(previewBlocked(loop, pub, false, "100.68.139.95")).toBeNull();
+  // this backend's own app stays on the page's host
+  expect(previewUrl(loop, 7861, "a", pub, true, "100.68.139.95")).toBe("http://127.0.0.1:7861/a");
+});
+
+test("an https page off the public names' site frames nothing", () => {
+  const pub = "https://canopy-p{slot}.example.com";
+  const tail = { protocol: "https:", hostname: "macmini.tail1.ts.net" };
+  // http is mixed content there, and the names' gate turns a cross-site frame away
+  expect(previewUrl(tail, 7860, "/", pub, true, "100.68.139.95")).toBeNull();
+  expect(previewBlocked(tail, pub, false, "100.68.139.95")).toContain("gate");
+  expect(previewBlocked(tail, pub, true)).toContain("gate");
+  // an https loopback page still frames its own backend's http ports
+  expect(previewUrl({ protocol: "https:", hostname: "localhost" }, 7860, "/", pub)).toBe("http://localhost:7860/");
 });
 
 test("a saved preview height is clamped, and anything else is the default", () => {

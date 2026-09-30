@@ -177,6 +177,13 @@ work unchanged.
   canopy's port, over https). The section says so there.
 - `CANOPY_PREVIEW_PORTS` (default `7860-7869`, `0` for off) sets the pool.
   Change the published range in compose to match.
+- Another machine's plain http canopy page (the Mac's loopback one, with
+  this backend in its backends list) frames a checkout here at
+  `CANOPY_PREVIEW_HOST`, which compose fills from `CANOPY_LISTEN`, the
+  tailnet IP the slots are published on. It has to be the IP: `*.ts.net` is
+  on the HSTS preload list, so a browser upgrades an http frame on a
+  MagicDNS name to https, which the slots do not speak. `/api/ports` hands it
+  out as `host`.
 - The tunnel's `http://canopy:7850` still resolves: `shells` carries the
   network alias `canopy`.
 
@@ -233,7 +240,11 @@ only your own email) before the tunnel goes up, and leave it on.
    that the gate covers the new names before a preview runs on them: an
    anonymous `curl https://canopy-p7860.beric.ca/` must answer 401. On
    beric.ca the `*.beric.ca/*` gate route does that, and its `.beric.ca`
-   cookie also signs in the framed preview.
+   cookie also signs in the framed preview, but only inside a page on
+   beric.ca itself: the cookie is `SameSite=Lax`, so a frame under any other
+   site (the Mac's `http://127.0.0.1:7850`, a `*.ts.net` address) gets the
+   gate's sign-in, and a sign-in there never sticks. The panel uses the
+   public names only on such a page.
 
 The tunnel publishes no port, so it does not wait for the tailnet the way
 canopy does. Its `restart: unless-stopped` brings it back after a reboot, and

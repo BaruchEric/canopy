@@ -19,3 +19,16 @@ export function parsePreviewPublic(raw: string | undefined): string | null {
 export function publicPreviewOrigin(template: string, slot: number): string {
   return template.replace("{slot}", String(slot));
 }
+
+/** `CANOPY_PREVIEW_HOST`: the address another machine's plain http page
+ *  reaches this backend's preview ports at, its tailnet IP. An IP rather
+ *  than a MagicDNS name, since `*.ts.net` is on the HSTS preload list and a
+ *  browser upgrades every http frame on it to https, which the slots do not
+ *  speak. Null for anything else, and for loopback or the unspecified
+ *  address, which name no other machine's way in. */
+export function parsePreviewHost(raw: string | undefined): string | null {
+  const s = (raw ?? "").trim();
+  if (!/^(\d{1,3}(\.\d{1,3}){3}|\[[0-9a-f:]+\])$/i.test(s)) return null;
+  if (s.startsWith("127.") || s === "0.0.0.0" || s === "[::1]" || s === "[::]") return null;
+  return s;
+}

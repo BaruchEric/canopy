@@ -174,6 +174,9 @@ export class PreviewProxy {
       /** `CANOPY_PREVIEW_PUBLIC`: each slot's public https name, which the
        *  tunnel hands this slot under */
       publicTemplate?: string | null;
+      /** `CANOPY_PREVIEW_HOST`: the tailnet IP another machine's http page
+       *  frames the slots at */
+      host?: string | null;
       /** the loopback a port is known to listen on, when the caller knows it */
       hostFor?: (port: number) => Promise<string | undefined>;
     },
@@ -184,6 +187,11 @@ export class PreviewProxy {
   /** each slot's public name, when the backend has them */
   get publicTemplate(): string | null {
     return this.opts.publicTemplate ?? null;
+  }
+
+  /** the address another machine's http page frames the slots at */
+  get host(): string | null {
+    return this.opts.host ?? null;
   }
 
   /** the ports a preview may not dial */

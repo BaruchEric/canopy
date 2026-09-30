@@ -90,11 +90,13 @@ export function PreviewSection({ repo }: { repo: Repo }) {
   // the backend's public preview names, read with the ports: undefined
   // until then, so an https page is not called blocked before it knows
   const [pub, setPub] = useState<string | null | undefined>(undefined);
+  // the backend's tailnet IP, for an http page framing another machine's slots
+  const [host, setHost] = useState<string | null>(null);
   // the checkout's own backend proxies its ports, on its own public names
   // when it is not the backend that served this page
   const backend = backendOf(repo.id);
   const home = isHome(repo.id);
-  const blocked = pub === undefined ? null : previewBlocked(window.location, pub, home);
+  const blocked = pub === undefined ? null : previewBlocked(window.location, pub, home, host);
   const dev = useStore(useShallow((s) => devTask(tasksOf(s, repo.id))));
   const known = useStore((s) => repo.id in s.tasks);
   const loadTasks = useStore((s) => s.loadTasks);
@@ -128,6 +130,7 @@ export function PreviewSection({ repo }: { repo: Repo }) {
           if (!live) return;
           setPorts(r.ports);
           setSlots(r.slots);
+          setHost(r.host ?? null);
           setPub(r.public ?? null);
         })
         .catch((e: unknown) => {
@@ -172,7 +175,7 @@ export function PreviewSection({ repo }: { repo: Repo }) {
     };
   }, [closed, blocked, port, backend]);
 
-  const url = slot !== null && choice ? previewUrl(window.location, slot, choice.path, pub, home) : null;
+  const url = slot !== null && choice ? previewUrl(window.location, slot, choice.path, pub, home, host) : null;
   const off = slots !== null && slots.length === 0;
   const { mine, loose } = ports ? portsFor(ports, repo.id) : { mine: [], loose: [] };
   const summary = choice ? `:${choice.port}` : mine.length ? String(mine.length) : "";

@@ -1281,6 +1281,9 @@ export interface PortsResult {
   /** `CANOPY_PREVIEW_PUBLIC`: each slot's public https name, `{slot}` for
    *  its number, for a page on canopy's public address */
   public?: string;
+  /** `CANOPY_PREVIEW_HOST`: the tailnet IP another machine's plain http
+   *  page frames this backend's slots at */
+  host?: string;
 }
 
 /** `POST /api/preview`: the preview port a backend port is proxied on */

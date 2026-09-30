@@ -2,7 +2,7 @@ import { ACTIONS } from "../core/actions";
 import { PREFLIGHT_HEADERS, corsHeaders, parseOrigins } from "../core/cors";
 import { Library, libraryOriginAllowed, openBind, tailnetHost } from "../core/library";
 import { PreviewProxy, parsePortRange, previewHostOk, previewable } from "../core/preview";
-import { parsePreviewPublic } from "../core/previewPublic";
+import { parsePreviewHost, parsePreviewPublic } from "../core/previewPublic";
 import { listeningPorts, repoOfCwd } from "../core/ports";
 import { watch, type FSWatcher } from "node:fs";
 import { readFile, realpath, stat } from "node:fs/promises";
@@ -1638,7 +1638,13 @@ async function handleApi(
         return { port: l.port, ...(l.command ? { command: l.command } : {}), ...(repo ? { repo } : {}) };
       });
     const pub = state.preview?.publicTemplate;
-    return json({ ports, slots: state.preview?.slots ?? [], ...(pub ? { public: pub } : {}) } satisfies PortsResult);
+    const host = state.preview?.host;
+    return json({
+      ports,
+      slots: state.preview?.slots ?? [],
+      ...(pub ? { public: pub } : {}),
+      ...(host ? { host } : {}),
+    } satisfies PortsResult);
   }
   if (path === "/api/preview" && method === "POST") {
     if (!state.preview) throw new HttpError(503, "previews are off (CANOPY_PREVIEW_PORTS)");
@@ -2607,6 +2613,7 @@ export async function startServer(opts: {
         own: () => boundPort,
         hostOk: (h) => previewHostOk(h, beyondLoopback, tailnetHost),
         publicTemplate: previewPublic,
+        host: parsePreviewHost(process.env["CANOPY_PREVIEW_HOST"]),
         hostFor: async (p) => (await listeningPorts()).find((l) => l.port === p)?.host,
       })
     : null;

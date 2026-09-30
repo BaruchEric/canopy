@@ -142,6 +142,10 @@ services:
       # frame a preview; every name needs a DNS record and an ingress rule
       # to http://canopy:<slot>. Empty keeps previews tailnet-only
       - CANOPY_PREVIEW_PUBLIC=${CANOPY_PREVIEW_PUBLIC:-}
+      # the tailnet address the preview ports are published on, which
+      # another machine's plain http canopy page frames them at (its gated
+      # public names only work inside a beric.ca page). Loopback is dropped
+      - CANOPY_PREVIEW_HOST=${CANOPY_LISTEN:-}
       # other canopy pages (another backend's, or this one's own behind
       # tailscale serve) allowed to drive this backend; see the
       # multi-backend spec. Empty when there are none.
