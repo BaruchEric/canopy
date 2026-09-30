@@ -731,3 +731,63 @@ agent.
 - The transcript action opens a file only for a card from a canopy shell or
   run on the home backend, through a home checkout, since canopy's openers
   take a repo and a path in it.
+
+### 4. Phases 4 and 5, canopy's side, as built
+
+- **The inbox merges in the browser, not in `AskHub`.** Runs and flows are
+  already per backend in the store, and a server-side merge would only see
+  its own backend's. So `mergeInbox(asks, runs, flows, now, ctx)` is pure in
+  `ui/src/inbox.ts`, there is no `inbox` event and no `POST /api/inbox/answer`:
+  a run's answer goes through the existing `/api/runs/answer` on the run's own
+  backend, a flow's through `/api/flows/resume`, and an ask's through the new
+  `POST /api/asks/answer` on the home backend. `AskHub` broadcasts an `asks`
+  event: the asks that changed, the ids that left, and presence when it moved.
+- **Every gated flow is in the inbox**, a `verdict` gate that parked as well
+  as an `ask` gate: both wait on the human.
+- **Closed asks stay ten minutes** (`CLOSED_KEEP`), so the inbox can say how
+  each ended, and `GET /api/asks/one?id=` reads one for a link to an ask that
+  has closed since the DM went out.
+- **Watched means typed into.** `lastInput` is stamped only by a frame
+  `isKeystroke` accepts: a terminal's own replies (device attributes, cursor
+  and mode reports, focus events, OSC and DCS answers) are not a person, so
+  opening or rejoining a shell does not make it watched. An unknown shell or
+  a task answers `watched: false`, never 404, so the hook fails safe.
+- **Presence.** `POST /api/presence {away}` is the broker's `PUT`: `true`
+  pins away, `false` is `here`, unpinned, now. Each backend with a token
+  beats (`POST /v1/presence/beat`) at most once a minute on a keystroke in one
+  of its shells, and the page beats through home the same way on any
+  pointerdown or keydown. `GET /api/asks` reads presence fresh, since `here`
+  decays at the broker without an event.
+- **Who answered** is the answering browser's device name, found by the
+  `client` id its event stream registered, slugged to the broker's charset,
+  else `canopy`; the broker writes `<name>@<token name>`.
+- **The token is kept out of every child process.** `Bun.spawn` without an
+  `env` hands the child the environment the process *started* with, so
+  deleting the variable was not enough: `exec` now always passes the live
+  env, `termEnv` drops it, and `startServer` deletes it once read. Without
+  this, a tmux server started by canopy on the Mac would have handed the
+  token to every shell. On the mini the compose file gives it to the
+  `canopy` service only.
+- **Forms.** "allow always" is offered on permission asks only; the hook
+  ignores `always` on a guard, and Codex's hook ignores it altogether (the
+  button says so). A question ask can be declined (a deny, which the hook
+  turns into "the user declined"). Without the token the inbox shows the asks
+  read-only and says why.
+- **Guards** are the broker's, tailnet-wide, so the routing tab edits them
+  through home whatever backend its picker shows. `core/guards.ts` validates
+  with the broker's own `RULE_RE` and mirrors the hook's `guard_jq` matcher
+  for a "try a command" box, checked case by case against the jq. A rule for
+  a tool other than `Bash` is kept (the broker takes it) but marked as
+  matching nothing, since the hook guards shell commands only.
+- **Hand-off opens on the same backend**, so the transcript is always on the
+  machine the new agent runs on, and the blob fallback for another machine is
+  not needed. The path is the registry card's `transcript`, else
+  `GET /api/terms/transcript?term=&harness=` (the newest session file for the
+  pane's agent in that repo). With neither, the switch starts the other
+  harness with no first message. A registry row offers it for a live canopy
+  shell *or run* on a shown backend, in the deepest checkout there holding the
+  card's folder.
+- **The repo channel's slug** follows the CLI's pipeline byte for byte as GNU
+  `tr` runs it (each byte of a non-ASCII character becomes `-`), the
+  machine the shells run on; a Mac's `tr` in a UTF-8 locale may differ for
+  such a name.

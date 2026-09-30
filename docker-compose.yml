@@ -121,6 +121,13 @@ services:
       # this compose network in its TRUST_NETS and a firewall allow to it.
       - CANOPY_TAILCHAN_URL=${TAILCHAN_URL:-}
       - CANOPY_TAILCHAN_AS=${TAILCHAN_HUMAN:-}
+      # the secret half of one name:secret pair in the broker's
+      # ANSWER_TOKENS: what lets canopy answer an agent's ask, set presence
+      # and edit guards. canopy's ALONE: never put it on the shells service
+      # above, where every agent runs and could read it. canopy takes it out
+      # of its own env at start, so no run or shell it starts inherits it.
+      # Empty leaves the asks read-only in the UI.
+      - CANOPY_TAILCHAN_ANSWER_TOKEN=${TAILCHAN_ANSWER_TOKEN:-}
       # gh's login for the pull request counts and the release listings, and
       # the AI gateway key the verdict gates are evaluated with; both come
       # from .env and both are optional
