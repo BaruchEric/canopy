@@ -709,3 +709,25 @@ agent.
 - The driver takes prompts back through `ctx.ask()`'s promise instead of a
   driver `answer()`. The queue, "allow all", stop's deny-all and the notes stay
   in one shared `RunCtx`.
+
+### 3. Phase 3, canopy's side, as built
+
+- `ui/src/registry.ts` was already the multi-backend registry, so the pure
+  card module is `ui/src/agentcards.ts`; the components are
+  `components/Registry.tsx`.
+- A Mac's `comm` is the executable's path and may hold spaces, and only the
+  last `ps` column can, so the scan asks `ps` twice: `pid=,ppid=,lstart=,args=`
+  (with `-ww`, in the C locale) and `pid=,comm=`.
+- A card joins a repo card on any of a checkout's remotes and its link, not
+  only the first remote that maps, since a hook takes origin first.
+- The broker posts its own `lost` transitions off its tick, so the follow
+  re-lists only on each (re)connect and every 5 minutes, which is what
+  catches a card the week's sweep deleted (sent as `gone`).
+- Every backend with a broker both scans and follows; the page reads only
+  its home backend's registry, as it does tailchan.
+- `CANOPY_API` is the server on the machine's loopback
+  (`http://127.0.0.1:<port>`), set on every new local shell with
+  `CANOPY_TERM`, `CANOPY_BACKEND` and `CANOPY_REPO`.
+- The transcript action opens a file only for a card from a canopy shell or
+  run on the home backend, through a home checkout, since canopy's openers
+  take a repo and a path in it.
