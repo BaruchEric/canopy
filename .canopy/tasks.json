@@ -1,6 +1,6 @@
 [
   {
     "name": "dev",
-    "cmd": "env -u TMUX CANOPY_CONFIG_DIR=\"$HOME/.config/canopy-dev\" CANOPY_PREVIEW_PORTS=0 CANOPY_NO_DESKTOP=1 CANOPY_AGENT_SCAN=0 CANOPY_TAILCHAN_URL=off bun --watch bin/canopy.ts ui . --port 7870 --no-open"
+    "cmd": "env -u TMUX CANOPY_CONFIG_DIR=\"$HOME/.local/state/canopy-dev\" CANOPY_PREVIEW_PORTS=0 CANOPY_NO_DESKTOP=1 CANOPY_AGENT_SCAN=0 CANOPY_TAILCHAN_URL=off bun --watch bin/canopy.ts ui . --port 7870 --no-open"
   }
 ]
