@@ -174,8 +174,9 @@ export class AskHub {
 
   /** The open list again. An ask held open that the list no longer names
    *  closed while no one was listening: it is read on its own to learn how,
-   *  and dropped when the broker has forgotten it. Concurrent callers share
-   *  one read. */
+   *  and dropped when the broker says it has forgotten it (a 404). A read
+   *  that fails any other way says nothing about the ask, which stays as it
+   *  was until the next pass. Concurrent callers share one read. */
   relist(): Promise<void> {
     if (!this.cfg || !this.chan) return Promise.resolve();
     if (this.listing) return this.listing;
@@ -187,7 +188,15 @@ export class AskHub {
       const missing = [...this.asks.values()].filter((a) => a.state === "open" && !open.has(a.id));
       const gone: string[] = [];
       for (const [i, a] of missing.entries()) {
-        const read = i < LOOKUP_MAX ? await chan.getAsk(cfg.bot, a.id).catch(() => null) : null;
+        // past the lookups a pass makes, a missing ask just leaves
+        let read: Ask | null = null;
+        if (i < LOOKUP_MAX) {
+          try {
+            read = await chan.getAsk(cfg.bot, a.id);
+          } catch (e) {
+            if (!(e instanceof ChanError && e.status === 404)) continue;
+          }
+        }
         // still open by its own reading: an ask that opened as the list was read
         if (read?.state === "open") continue;
         if (read && this.absorb(read)) changed.push(read);

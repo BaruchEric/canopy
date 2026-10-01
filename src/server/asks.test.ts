@@ -13,7 +13,7 @@ import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { mkdir, mkdtemp, realpath, rm, utimes, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { Chan } from "../core/chan";
+import { Chan, ChanError } from "../core/chan";
 import { projectFolder } from "../core/sessions";
 import type { Ask, AsksInfo, GuardsInfo, Presence, ServerEvent } from "../core/types";
 import { ANSWER_KEY_HEADER, AskHub, answerKeyOf, answerer, parseAskAnswer } from "./asks";
@@ -343,6 +343,32 @@ describe("asks through canopy", () => {
     const last = seen.at(-1) as Extract<ServerEvent, { type: "asks" }>;
     expect(last.asks.map((a) => a.id)).toEqual(["r1"]);
     expect(last.gone).toEqual(["r2"]);
+  });
+
+  test("an open ask whose read fails is kept; only the broker's 404 drops it", async () => {
+    let list: Ask[] = [ask({ id: "k1" })];
+    let failure: ChanError = new ChanError(502, "tailchan unreachable");
+    const stub = {
+      listAsks: async () => list,
+      getAsk: async () => {
+        throw failure;
+      },
+    } as unknown as Chan;
+    const seen: ServerEvent[] = [];
+    const hub = new AskHub(CFG, { broadcast: (e) => seen.push(e), deviceName: () => null, chan: stub, relistEvery: 0, sweepEvery: 0 });
+    await hub.relist();
+    expect(hub.list().map((a) => a.id)).toEqual(["k1"]);
+    // missing from the list, and the broker did not answer its read: it may
+    // still be open, so it stays rather than vanish from the inbox
+    list = [];
+    await hub.relist();
+    expect(hub.list().map((a) => [a.id, a.state])).toEqual([["k1", "open"]]);
+    expect(seen.some((e) => e.type === "asks" && e.gone?.includes("k1"))).toBe(false);
+    // the broker says it has no such ask: gone
+    failure = new ChanError(404, "tailchan: no such ask");
+    await hub.relist();
+    expect(hub.list()).toEqual([]);
+    expect(seen.at(-1)).toEqual({ type: "asks", asks: [], gone: ["k1"] });
   });
 
   test("without a broker every route is a 503", async () => {
