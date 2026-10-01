@@ -101,11 +101,13 @@ export class Scrollback {
 
 /** Replies a browser terminal sends on its own, answering a program's
  *  query rather than a person typing: device attributes (`ESC [ ? … c`,
- *  `ESC [ > … c`), a cursor position report (`ESC [ r ; c R`), a mode
- *  report (`ESC [ ? n ; n $ y`), focus in and out (`ESC [ I`, `ESC [ O`),
- *  and OSC and DCS answers (colours, the terminal's version). */
+ *  `ESC [ > … c`), a cursor position report (`ESC [ r ; c R`) and its DEC
+ *  form (`ESC [ ? r ; c R`, xterm 6's answer to `CSI ? 6 n`), the status
+ *  report (`ESC [ 0 n`), a mode report (`ESC [ ? n ; n $ y`), focus in and
+ *  out (`ESC [ I`, `ESC [ O`), and OSC and DCS answers (colours, the
+ *  terminal's version). */
 // eslint-disable-next-line no-control-regex
-const REPLY = /\x1b\[[?>=]?[\d;]*c|\x1b\[\d+;\d+R|\x1b\[\??[\d;]*\$y|\x1b\[[IO]|\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)|\x1bP[^\x1b]*\x1b\\/g;
+const REPLY = /\x1b\[[?>=]?[\d;]*c|\x1b\[\d+;\d+R|\x1b\[\?\d+;\d+(?:;\d+)?R|\x1b\[0n|\x1b\[\??[\d;]*\$y|\x1b\[[IO]|\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)|\x1bP[^\x1b]*\x1b\\/g;
 
 /** Whether an input frame from a browser is a person at the keyboard (or
  *  the mouse) rather than only the terminal answering a query: what makes a

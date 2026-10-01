@@ -140,6 +140,12 @@ describe("isKeystroke", () => {
       expect(isKeystroke(enc(r))).toBe(false);
     }
   });
+  test("xterm 6's status report and its DEC cursor report are the terminal too", () => {
+    // DSR 5 ("terminal OK") and DECXCPR (CSI ? 6 n answered with the page)
+    for (const r of ["\x1b[0n", "\x1b[?12;40R", "\x1b[?12;40;1R", "\x1b[0n\x1b[?3;1R\x1b[I"]) {
+      expect(isKeystroke(enc(r))).toBe(false);
+    }
+  });
 });
 
 test("termEnv keeps canopy's answer token out of a shell", () => {
