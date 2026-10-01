@@ -866,3 +866,44 @@ casual prompt-injected tries, not that.
 - **A helper registers the harnesses it reads** (`harnesses=`); one that does
   not is never sent a non-Claude agent start, which it would run as Claude
   with the other harness's flags.
+
+### 7. End to end, measured (2026-10-01, Claude Code 2.1.286 on haiku)
+
+The new broker and canopy ran from their branches on scratch ports, with the
+hooks installed into a scratch Claude config. canopy was driven through its HTTP
+API, since no browser was at hand. All eight checks held:
+
+- **The card.** It appears at the broker and in `/api/registry`, and goes idle,
+  working, idle with a prompt.
+- **A remote answer.** One answered through canopy with a key allows the tool,
+  and the pane says "Allowed by PermissionRequest hook".
+- **Refusals.** A write with no key, a wrong key, or a cross-site or same-site
+  `Sec-Fetch-Site` is refused.
+- **A terminal answer.** It withdraws the ask in 0.34 s.
+- **A canopy shell.** `watched` turns true only after a real keystroke. The
+  shell carries the `CANOPY_*` vars, and its agent registers as
+  `canopy-shell` with its asks kept local.
+- **A guard.** It raises an ask, and a deny comes back to the agent naming who
+  denied it.
+- **Delivery.** A DM wakes an idle session in under a second, a repo-channel
+  line rides in on the next prompt, and a DM that arrives mid-turn blocks the
+  stop. Haiku does not always act on what it is handed.
+- **The end.** `/exit` ends the card.
+
+The run found four CLI gaps, now fixed:
+
+- A turn that ends on an API error, such as a usage limit, runs `StopFailure`
+  rather than `Stop`, so the installer now hooks it and idles the card.
+- A guard denied without a message now tells the agent who denied it, since
+  "held for Eric; ask again later" invited a retry. Only an unanswered guard is
+  "held".
+- Claude's `SessionStart` carries no permission mode, so state updates send it.
+- A session woken by a DM may skip `SessionEnd`, so the watcher ends its card
+  and tidies its files.
+
+`tailchan` must be on the login shell's PATH inside canopy shells, or the hooks
+silently do nothing.
+
+Not measured here: Codex end to end, the browser UI, Telegram, identity across
+real tailnet nodes, the mini's compose deployment, a `canopy-run` card, and
+hand-off.
