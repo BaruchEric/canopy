@@ -1266,3 +1266,41 @@ describe("the registry after a failed first load", () => {
     expect(calls).toBe(before + 1);
   });
 });
+
+describe("the asks list read while events land", () => {
+  const realFetch = globalThis.fetch;
+  afterEach(() => {
+    globalThis.fetch = realFetch;
+    useStore.setState({ asks: {}, asksReady: false, presence: null });
+  });
+
+  test("an ask an event closed meanwhile is not reopened by the list", async () => {
+    const open: Ask = {
+      id: "q1",
+      agent: "claude:one",
+      handle: "proj-0123",
+      node: "mini",
+      kind: "permission",
+      tool: "Bash",
+      title: "Bash: ls",
+      detail: "ls",
+      route: "remote",
+      waitUntil: 9e15,
+      state: "open",
+      createdAt: 1,
+    };
+    let release: () => void = () => {};
+    const gate = new Promise<void>((r) => (release = r));
+    globalThis.fetch = (async () => {
+      await gate;
+      // the list as the backend read it, before the answer
+      return new Response(JSON.stringify({ ready: true, canAnswer: true, asks: [open], presence: null }), { status: 200 });
+    }) as unknown as typeof fetch;
+    useStore.setState({ asks: { q1: open } });
+    const loading = useStore.getState().loadAsks();
+    useStore.getState().applyEvent({ type: "asks", asks: [{ ...open, state: "answered", answeredBy: "phone@canopy", answeredAt: 2 }] });
+    release();
+    await loading;
+    expect(useStore.getState().asks["q1"]?.state).toBe("answered");
+  });
+});

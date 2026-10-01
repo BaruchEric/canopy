@@ -252,6 +252,29 @@ export function mergeAsks(held: Readonly<Record<string, Ask>>, incoming: readonl
   return (next ?? held) as Record<string, Ask>;
 }
 
+/** A whole list read as the asks held: what it names, except that an ask
+ *  held closed never reopens on an open reading, and that `since` names the
+ *  asks an event told of while the list was on its way, whose event stands
+ *  (an ask it brought is kept though the list lacks it, one it said was
+ *  gone stays gone). An ask the list lacks that no event touched has gone. */
+export function replaceAsks(
+  held: Readonly<Record<string, Ask>>,
+  list: readonly Ask[],
+  since: (id: string) => boolean = () => false,
+): Record<string, Ask> {
+  const out: Record<string, Ask> = {};
+  for (const a of list) {
+    const had = Object.hasOwn(held, a.id) ? held[a.id] : undefined;
+    if (since(a.id)) {
+      if (had) out[a.id] = had;
+      continue;
+    }
+    out[a.id] = had && had.state !== "open" && a.state === "open" ? had : a;
+  }
+  for (const [id, had] of Object.entries(held)) if (!Object.hasOwn(out, id) && since(id)) out[id] = had;
+  return out;
+}
+
 /** A tool's input as the details view shows it: a shell command as it is,
  *  a file's path and what goes in it, anything else as indented JSON; text
  *  that is not JSON as it came. */

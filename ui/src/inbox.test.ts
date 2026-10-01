@@ -10,6 +10,7 @@ import {
   mergeAsks,
   mergeInbox,
   recentAsks,
+  replaceAsks,
   toAskAnswer,
   toRunAnswer,
 } from "./inbox";
@@ -190,6 +191,20 @@ describe("holding asks", () => {
     const next = mergeAsks(held, [ask({ id: "a2" })], ["a1"]);
     expect(Object.keys(next)).toEqual(["a2"]);
     expect(mergeAsks(held, [], ["nope"])).toBe(held);
+  });
+
+  test("a whole list read never reopens a close an event brought, nor drops what an event brought while it was on its way", () => {
+    const held = { a1: ask({ state: "answered" }), a3: ask({ id: "a3" }), a4: ask({ id: "a4" }) };
+    // a1 closed and a3 opened by events while the list (read before both) was on its way
+    const since = (id: string) => id === "a1" || id === "a3";
+    const got = replaceAsks(held, [ask(), ask({ id: "a5" })], since);
+    expect(got).toEqual({ a1: ask({ state: "answered" }), a5: ask({ id: "a5" }), a3: ask({ id: "a3" }) });
+    // a4, which no event touched and the list lacks, is gone
+    expect("a4" in got).toBe(false);
+    // and with no events since, an open reading still never undoes a close
+    expect(replaceAsks({ a1: ask({ state: "expired" }) }, [ask()])).toEqual({ a1: ask({ state: "expired" }) });
+    // an ask an event said was gone stays gone
+    expect(replaceAsks({}, [ask({ id: "g" })], (id) => id === "g")).toEqual({});
   });
 
   test("recentAsks is the closed ones, newest first, without the ones sent to the terminal at once", () => {

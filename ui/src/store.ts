@@ -21,7 +21,7 @@ import { appendFeed, describeEvent, type FeedEntry, type FeedSnapshot } from "./
 import { mergeAction } from "./peers";
 import { convOf, isUnread, mergeMessages } from "./chan";
 import type { AgentCard, Ask, ChanMessage, Presence, TailchanInfo } from "../../src/core/types";
-import { mergeAsks, mergeInbox, toAskAnswer, toRunAnswer, type InboxAnswer, type InboxItem } from "./inbox";
+import { mergeAsks, mergeInbox, replaceAsks, toAskAnswer, toRunAnswer, type InboxAnswer, type InboxItem } from "./inbox";
 import { cardsByRepoCard, mergeCards, replaceCards } from "./agentcards";
 import { clientCaps } from "../../src/core/client";
 import { normalizeRoutes, resolveAgent } from "../../src/core/route";
@@ -1114,6 +1114,10 @@ let registryRetry: ReturnType<typeof setTimeout> | null = null;
 let registryTries = 0;
 const REGISTRY_RETRY_FIRST = 5_000;
 const REGISTRY_RETRY_MAX = 5 * 60_000;
+/* the same numbering for the asks, so a list never reopens what an event
+   closed while it was on its way */
+let asksEvents = 0;
+const asksHeard = new Map<string, number>();
 
 /** Cancel a backend's waiting retry; `forget` also drops its count of
  *  failures, for a backend that answered or left the page. */
@@ -1857,6 +1861,9 @@ export const useStore = create<CanopyState>((set, get) => ({
       return;
     }
     if (ev.type === "asks") {
+      asksEvents += 1;
+      for (const a of ev.asks) asksHeard.set(a.id, asksEvents);
+      for (const id of ev.gone ?? []) asksHeard.set(id, asksEvents);
       set((s) => {
         const asks = mergeAsks(s.asks, ev.asks, ev.gone);
         return { ...(asks === s.asks ? {} : { asks }), ...(ev.presence ? { presence: ev.presence } : {}) };
@@ -2069,10 +2076,16 @@ export const useStore = create<CanopyState>((set, get) => ({
     }
   },
   loadAsks: async () => {
+    // events that land while the list is on its way are newer than it
+    const mark = asksEvents;
     try {
       const info = await api.asks();
       const list = Array.isArray(info.asks) ? info.asks : [];
-      set({ asks: Object.fromEntries(list.map((a) => [a.id, a])), asksReady: true, presence: info.presence ?? null });
+      set((s) => ({
+        asks: replaceAsks(s.asks, list, (id) => (asksHeard.get(id) ?? 0) > mark),
+        asksReady: true,
+        presence: info.presence ?? null,
+      }));
     } catch {
       set({ asks: {}, asksReady: false, presence: null });
     }
