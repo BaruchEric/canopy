@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import type { TaskInfo } from "../../src/core/types";
-import { devTask, frontTask, otherTasks, renameOld, taskChip, taskDraftCwd, taskDraftPatch, taskLines, taskWhen, withChange } from "./tasks";
+import { devTask, frontTask, quietPreview, startsDev, otherTasks, renameOld, taskChip, taskDraftCwd, taskDraftPatch, taskLines, taskWhen, withChange } from "./tasks";
 
 const t = (over: Partial<TaskInfo>): TaskInfo => ({ name: "dev", cmd: "x", repoId: "r", source: "detected", termId: "0".repeat(32), status: "idle", live: false, restarts: 0, viewers: [], ...over });
 
@@ -87,5 +87,34 @@ describe("tasks in front", () => {
       t({ repoId: "q", name: "dev", status: "running", gone: "repo" }),
     ];
     expect(otherTasks(all, "r", (id) => id).map((x) => `${x.repoId}/${x.name}`)).toEqual(["a/dev", "a/test", "z/web"]);
+  });
+});
+
+describe("the preview with nothing listening", () => {
+  test("no dev task: start one in a shell", () => {
+    expect(quietPreview(undefined).action).toBeNull();
+  });
+  test("a stopped or failed dev task: start it", () => {
+    for (const status of ["idle", "exited", "stopped", "failed", "gave-up"] as const) expect(quietPreview(t({ dev: true, status })).action).toBe("start");
+  });
+  test("a running dev task that listens nowhere points at its log", () => {
+    const q = quietPreview(t({ dev: true, status: "running" }));
+    expect(q.action).toBe("log");
+    expect(q.text).toContain("dev is running");
+    expect(quietPreview(t({ dev: true, status: "backoff" })).text).toContain("dev is restarting");
+  });
+});
+
+describe("starting the dev task", () => {
+  const tasks = [t({ dev: true }), t({ name: "test" })];
+  test("a start or restart of the dev task", () => {
+    expect(startsDev("start", "dev", tasks)).toBe(true);
+    expect(startsDev("restart", "dev", tasks)).toBe(true);
+  });
+  test("not a stop, another task, or no name", () => {
+    expect(startsDev("stop", "dev", tasks)).toBe(false);
+    expect(startsDev("start", "test", tasks)).toBe(false);
+    expect(startsDev("start", undefined, tasks)).toBe(false);
+    expect(startsDev("start", "dev", [t({ dev: true, hidden: true })])).toBe(false);
   });
 });

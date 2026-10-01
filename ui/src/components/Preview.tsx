@@ -3,7 +3,7 @@ import { useShallow } from "zustand/react/shallow";
 import { api } from "../api";
 import { backendOf, isHome } from "../registry";
 import { tasksOf, useStore } from "../store";
-import { devTask } from "../tasks";
+import { devTask, quietPreview } from "../tasks";
 import { Section, useSectionClosed } from "./Surface";
 import { TermGrip } from "./TermDock";
 import { flipMode, type SurfaceMode } from "../surface";
@@ -101,6 +101,7 @@ export function PreviewSection({ repo }: { repo: Repo }) {
   const known = useStore((s) => repo.id in s.tasks);
   const loadTasks = useStore((s) => s.loadTasks);
   const taskAct = useStore((s) => s.taskAct);
+  const bringTask = useStore((s) => s.bringTask);
   const height = useStore((s) => s.settings.previewHeight);
   const setSetting = useStore((s) => s.setSetting);
   const frameBox = useRef<HTMLDivElement>(null);
@@ -178,6 +179,7 @@ export function PreviewSection({ repo }: { repo: Repo }) {
   const url = slot !== null && choice ? previewUrl(window.location, slot, choice.path, pub, home, host) : null;
   const off = slots !== null && slots.length === 0;
   const { mine, loose } = ports ? portsFor(ports, repo.id) : { mine: [], loose: [] };
+  const quiet = quietPreview(dev);
   const summary = choice ? `:${choice.port}` : mine.length ? String(mine.length) : "";
 
   const go = () => {
@@ -267,20 +269,31 @@ export function PreviewSection({ repo }: { repo: Repo }) {
                 {ports === null
                   ? "Looking for dev servers…"
                   : mine.length === 0
-                    ? dev && dev.status !== "running" && dev.status !== "backoff"
-                      ? (
-                        <>
-                          Nothing listens in this repo yet.{" "}
-                          <button
-                            type="button"
-                            className="mini"
-                            onClick={() => void taskAct(repo.id, "start", dev.name).catch((e: unknown) => setError(errText(e)))}
-                          >
-                            start {dev.name}
-                          </button>
-                        </>
-                      )
-                      : "Nothing listens in this repo yet. Start its dev server in a shell and it turns up here, or pick a port."
+                    ? (
+                      <>
+                        {quiet.text}
+                        {dev && quiet.action === "start" && (
+                          <>
+                            {" "}
+                            <button
+                              type="button"
+                              className="mini"
+                              onClick={() => void taskAct(repo.id, "start", dev.name).catch((e: unknown) => setError(errText(e)))}
+                            >
+                              start {dev.name}
+                            </button>
+                          </>
+                        )}
+                        {dev && quiet.action === "log" && (
+                          <>
+                            {" "}
+                            <button type="button" className="mini" onClick={() => bringTask(repo.id, dev.name)}>
+                              {dev.name} log
+                            </button>
+                          </>
+                        )}
+                      </>
+                    )
                     : "Pick a port."}
               </p>
             ) : (

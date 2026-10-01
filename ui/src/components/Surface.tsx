@@ -417,6 +417,17 @@ export function Section({
   const { zoom, entry: zoomEntry } = useZoom(k);
   const common = useSectionLayout(repo, k, shown, setMode, bench);
   useLeaveOnEscape(mode, setMode);
+  // unfolded for the user (the preview, when the dev task starts): it comes
+  // into view, unless the bench already places it
+  const reveal = useStore((s) => (s.reveal?.repoId === repo.id && s.reveal.key === k ? s.reveal.at : 0));
+  useEffect(() => {
+    // a remount long after the start is not a new reveal
+    if (!reveal || Date.now() - reveal > 2000 || closed || bench) return;
+    const frame = requestAnimationFrame(() => box.current?.scrollIntoView({ block: "nearest" }));
+    return () => cancelAnimationFrame(frame);
+    // only a new reveal scrolls; folding or the bench changing does not
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [reveal]);
   const word = SECTION_WORD[k];
   const groups: GearGroup[] = [
     { label: `${word} · every panel`, entries: [zoomEntry] },

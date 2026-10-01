@@ -1793,6 +1793,10 @@ a.chan-text {
 .dock-tab.on .dock-tab-name {
   font-weight: 700;
 }
+/* a section scrolled into view stops below the sticky panel head */
+.panel-body [data-section] {
+  scroll-margin-top: 52px;
+}
 .panel-head {
   position: sticky;
   top: 0;

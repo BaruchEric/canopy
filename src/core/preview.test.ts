@@ -1,6 +1,8 @@
 import { afterAll, describe, expect, test } from "bun:test";
 import {
+  DOWN_RETRY,
   PreviewProxy,
+  down,
   downstreamHeaders,
   dropFrameAncestors,
   parsePortRange,
@@ -18,6 +20,14 @@ test("parsePortRange", () => {
   expect(parsePortRange("off")).toEqual([]);
   expect(parsePortRange("")).toEqual([]);
   expect(parsePortRange("junk, 70000, 5")).toEqual([5]);
+});
+
+test("a down port's page tries again on its own", async () => {
+  const r = down(5173);
+  expect(r.status).toBe(502);
+  const html = await r.text();
+  expect(html).toContain(`<meta http-equiv="refresh" content="${DOWN_RETRY}">`);
+  expect(html).toContain("port 5173");
 });
 
 test("previewable", () => {

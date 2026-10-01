@@ -28,6 +28,7 @@ import { normalizeRoutes, resolveAgent } from "../../src/core/route";
 import { flatAgent, hasRouting, NO_ROUTES } from "./agents";
 import { cleanKey, keyTestOf, readAnswerKey, writeAnswerKey, type KeyTest } from "./answerKey";
 import { listedTask } from "../../src/core/tasks";
+import { startsDev } from "./tasks";
 import {
   DEFAULT_LAUNCH,
   isFlowActive,
@@ -600,6 +601,9 @@ interface CanopyState {
   /** a term carried from the search sheet into one repo's search section,
    *  taken by that section when it mounts or sees it */
   pendingSearch: { repoId: string; q: string } | null;
+  /** a section just unfolded for the user (the preview, by a start of the
+   *  dev task), which scrolls itself into view once */
+  reveal: { repoId: string; key: string; at: number } | null;
   /** the claude-history archive, per repo, every backend's as one; null
    *  until the first fetch lands */
   history: HistoryOverview | null;
@@ -1269,6 +1273,7 @@ export const useStore = create<CanopyState>((set, get) => ({
   sheet: null,
   searchQuery: "",
   pendingSearch: null,
+  reveal: null,
   history: null,
   histories: {},
   agents: {},
@@ -1765,7 +1770,14 @@ export const useStore = create<CanopyState>((set, get) => ({
   },
   taskAct: async (repoId, action, name) => {
     const r = await api.taskAct(repoId, action, name);
-    set((s) => ({ tasks: { ...s.tasks, [repoId]: r.tasks } }));
+    // Starting the dev task from any button shows what it serves: the
+    // preview unfolds and comes into view, as "Run my app" does.
+    const repo = get().repos.find((x) => x.id === repoId);
+    const show = startsDev(action, name, r.tasks) && repo !== undefined && !repo.host && !repo.forge;
+    set((s) => ({
+      tasks: { ...s.tasks, [repoId]: r.tasks },
+      ...(show ? { closedSections: unfoldIn(s.closedSections, repoId, "preview"), reveal: { repoId, key: "preview", at: Date.now() } } : {}),
+    }));
   },
   saveTaskDef: async (repoId, name, def, target) => {
     const r = await api.taskDef(repoId, name, def, target);

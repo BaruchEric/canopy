@@ -349,11 +349,17 @@ function safeCode(code: number): number {
   return code === 1000 || (code >= 3000 && code < 5000) ? code : 1000;
 }
 
-function down(port: number): Response {
+/** seconds between a down page's tries */
+export const DOWN_RETRY = 2;
+
+/** what a slot answers while its port is down: a page that loads itself
+ *  again, so a dev server still starting or restarting under a watcher
+ *  shows up on its own */
+export function down(port: number): Response {
   return new Response(
-    `<!doctype html><meta charset="utf-8"><title>Nothing on ${port}</title>` +
-      `<body style="font:14px system-ui;padding:2rem;color:#888">Nothing answers on port ${port} on the backend. ` +
-      `Start the dev server in a canopy shell, then reload.</body>`,
+    `<!doctype html><meta charset="utf-8"><meta http-equiv="refresh" content="${DOWN_RETRY}"><title>Nothing on ${port}</title>` +
+      `<body style="font:14px system-ui;padding:2rem;color:#888">Nothing answers on port ${port} on the backend yet. ` +
+      `This page tries again every ${DOWN_RETRY} seconds; start the dev server if it is not running.</body>`,
     { status: 502, headers: { "content-type": "text/html; charset=utf-8" } },
   );
 }

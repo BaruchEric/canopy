@@ -1,6 +1,6 @@
 /** The words tasks are shown with: a status, a chip, a line of when, and the
  *  feed's lines for a change. Pure, and tested. */
-import type { TaskDef, TaskFlags, TaskInfo, TaskPatch, TaskSource, TaskStatus } from "../../src/core/types";
+import type { TaskAction, TaskDef, TaskFlags, TaskInfo, TaskPatch, TaskSource, TaskStatus } from "../../src/core/types";
 
 export const STATUS_WORD: Record<TaskStatus, string> = {
   idle: "idle",
@@ -131,6 +131,23 @@ export function renameOld(t: TaskDef & { source: TaskSource }, target: "canopy" 
 }
 
 export const devTask = (tasks: readonly TaskInfo[]): TaskInfo | undefined => tasks.find((t) => t.dev && !t.hidden);
+
+/** whether an action, answered with the repo's tasks, started its dev
+ *  task: what unfolds the preview, from whichever button it was */
+export function startsDev(action: TaskAction, name: string | undefined, tasks: readonly TaskInfo[]): boolean {
+  return action !== "stop" && name !== undefined && devTask(tasks)?.name === name;
+}
+
+/** What the preview says while nothing in the repo listens, and what its
+ *  button does. A dev task that runs and still listens nowhere is either
+ *  starting or dead under a watcher (`bun --watch` keeps the process up
+ *  after a crash), so it points at the log rather than at starting it. */
+export function quietPreview(dev: TaskInfo | undefined): { text: string; action: "start" | "log" | null } {
+  if (!dev) return { text: "Nothing listens in this repo yet. Start its dev server in a shell and it turns up here, or pick a port.", action: null };
+  if (dev.status === "running" || dev.status === "backoff")
+    return { text: `${dev.name} is ${STATUS_WORD[dev.status]}, but nothing in this repo listens yet. If it does not turn up here, its log says why.`, action: "log" };
+  return { text: "Nothing listens in this repo yet.", action: "start" };
+}
 
 /** a start marker's time as the local clock shows it */
 export const markTime = (at: number): string =>
