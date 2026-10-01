@@ -2112,7 +2112,10 @@ export const useStore = create<CanopyState>((set, get) => ({
     const key = get().answerKey;
     if (!key) throw new Error(NO_KEY);
     const ask = await api.answerAsk(item.id, a, key);
-    set((s) => ({ asks: mergeAsks(s.asks, [ask]) }));
+    // through the event path, so the feed says how it ended now: the
+    // broker's own event may come after this answer, and would then find
+    // the ask closed already and say nothing
+    get().applyEvent({ type: "asks", asks: [ask] });
   },
   setAway: async (away) => {
     const key = get().answerKey;

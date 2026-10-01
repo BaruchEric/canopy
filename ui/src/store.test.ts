@@ -704,6 +704,12 @@ describe("several backends", () => {
     await useStore.getState().answerInbox(a, { behavior: "deny", message: "not now" });
     expect(posted.find((p) => p.path === "/api/asks/answer")?.body).toMatchObject({ id: "a1", behavior: "deny", message: "not now" });
     expect(posted.find((p) => p.path === "/api/asks/answer")?.key).toBe("phone-secret");
+    // the feed says how it ended at once, even when the answer beats the event
+    expect(useStore.getState().feed.some((l) => l.kind === "ask" && l.text.includes("allowed by x@canopy"))).toBe(true);
+    const lines = useStore.getState().feed.length;
+    // and the event that follows says nothing twice
+    useStore.getState().applyEvent({ type: "asks", asks: [{ ...open, state: "answered", answer: { behavior: "allow" }, answeredBy: "x@canopy" }] });
+    expect(useStore.getState().feed.length).toBe(lines);
     useStore.getState().setAnswerKey(null);
     expect(useStore.getState().answerKey).toBeNull();
     s = useStore.getState();
