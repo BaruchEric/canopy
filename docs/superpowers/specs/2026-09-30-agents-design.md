@@ -835,3 +835,34 @@ What is left: where the browser and the agents run as the same user (the
 Mac), a determined agent can still read the key out of the browser's
 storage. As phase 4 said of the old token, the key stops accidents and
 casual prompt-injected tries, not that.
+
+### 6. Review fixes to phases 1 to 3 (2026-10-01)
+
+- **A Codex run asks canopy for every command and edit.** Phase 2's
+  `thread/start` with `on-request` and `workspace-write` let Codex run any
+  command in its sandbox and apply patches under the workspace without
+  asking, so a job's rules only ever judged escalations. A run with yolo off
+  is `untrusted` (Codex asks for everything but its own known-safe reads, and
+  for every patch), in the `read-only` sandbox unless the job's rules hold a
+  bare `Edit`, `Write` or `MultiEdit`. A covered command is accepted only
+  when its folder is inside the repo, by its words and on disk. The
+  interactive codex line (`-a on-request -s workspace-write`) is unchanged:
+  a person is at that terminal.
+- **`maxTurns` on Codex** counts a turn's finished commands and file changes,
+  the nearest thing to Claude's model calls Codex reports, and interrupts the
+  turn past it.
+- **A Codex result carries `costUsd: 0`**, so a page older than harnesses
+  renders it; the current page shows its tokens.
+- **Where a harness is installed** is also the user's login interactive
+  shell's answer (`$SHELL -l -i -c`), since that is where a shell and the
+  agent opener type it, and nothing is refused while that shell has not
+  answered, nor for a repo on another host.
+- **The commit message** takes a model and effort only from a pick made for
+  it (the repo's `suggest` pick, the role, a launch pick); the repo's whole
+  pick or the default profile lends its harness alone.
+- **Version skew**: a backend without `harnesses` is sent only the whole-repo
+  pick's own settings, and a plain-settings body from an old page sets only
+  the whole-repo pick, keeping the per-role ones.
+- **A helper registers the harnesses it reads** (`harnesses=`); one that does
+  not is never sent a non-Claude agent start, which it would run as Claude
+  with the other harness's flags.
