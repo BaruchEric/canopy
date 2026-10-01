@@ -6,6 +6,7 @@
  */
 import type { TaskInfo, TermInfo } from "../../src/core/types";
 import type { TermTab } from "./term";
+import { clamp } from "./util";
 
 /** The parts of a bench: the panel's own column (changes, tasks and the
  *  rest), the app, the shells, the task log. */
@@ -142,3 +143,40 @@ export function benchProjects(
     .filter((id) => name.has(id))
     .map((repoId) => ({ repoId, name: name.get(repoId) ?? repoId, shells: shells.get(repoId)?.size ?? 0, running: running.get(repoId) ?? 0 }));
 }
+
+/* ---------- the bench's seams ----------
+   Three edges between the parts drag: the rail's width, the height the
+   shells and the log take under the app, and how much of that row the log
+   takes beside the shells. The rail is px; the other two are shares of the
+   bench, so a window that changes size keeps the proportions. */
+
+/** the rail's width in px; null keeps the width styles.css picks */
+export const BENCH_RAIL = { min: 240, max: 1600 };
+/** what the parts right of the rail keep, however far the rail is dragged */
+export const BENCH_MAIN_MIN = 320;
+/** the shells' and the log's share of the bench's height, under the app */
+export const BENCH_DOCK = { min: 0.15, max: 0.85, initial: 0.4 };
+/** the log's share of the row it shares with the shells */
+export const BENCH_SPLIT = { min: 0.15, max: 0.85, initial: 0.45 };
+
+type Share = { min: number; max: number; initial: number };
+
+/** a saved rail width, repaired; anything but a number is the default */
+export const benchRailOf = (v: unknown): number | null =>
+  typeof v === "number" && Number.isFinite(v) ? Math.round(clamp(v, BENCH_RAIL.min, BENCH_RAIL.max)) : null;
+
+/** a saved share, repaired to its bounds and three places */
+export const shareOf = (v: unknown, bounds: Share): number =>
+  typeof v === "number" && Number.isFinite(v) ? Math.round(clamp(v, bounds.min, bounds.max) * 1000) / 1000 : bounds.initial;
+
+/** the rail's width for a pointer at `x` over a bench from `left`, `width` wide */
+export const railAt = (x: number, left: number, width: number): number =>
+  Math.round(clamp(x - left, BENCH_RAIL.min, Math.max(BENCH_RAIL.min, Math.min(BENCH_RAIL.max, width - BENCH_MAIN_MIN))));
+
+/** the shells' share for a pointer at `y` over a bench whose box ends at `bottom`, `height` tall */
+export const dockAt = (y: number, bottom: number, height: number): number =>
+  height > 0 ? shareOf((bottom - y) / height, BENCH_DOCK) : BENCH_DOCK.initial;
+
+/** the log's share for a pointer at `x` over the row from `left` to `right` */
+export const splitAt = (x: number, left: number, right: number): number =>
+  right > left ? shareOf((right - x) / (right - left), BENCH_SPLIT) : BENCH_SPLIT.initial;

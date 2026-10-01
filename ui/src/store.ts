@@ -8,7 +8,7 @@ import { cardChangedAt, cardFavorite, joinRepos, leadOf, type RepoCard } from ".
 import { changedAt } from "./grouping";
 import { focusPanel, nextActive } from "./dock";
 import { heldShellUrl, openElsewhere, openShellElsewhere, parseRoute, soloUrl } from "./routes";
-import { loadSettings, saveSettings, shellPlace, type Settings, type ShellPlace } from "./settings";
+import { loadSettings, saveSettings, SCREEN_SETTINGS, shellPlace, type Settings, type ShellPlace } from "./settings";
 import { PANEL_TERM_ROWS, adoptTerms, loadFocusSize, loadTermTabs, needsPanelShell, nextStripTab, reconcileTerms, rowsPx, termId, type FocusSize, type TermTab } from "./term";
 import { clearTask, frontForTab, frontForTask, keepFront, projectFront, withSolo, type BenchPane, type Front } from "./front";
 import { clientId, identity } from "./client";
@@ -29,6 +29,7 @@ import { flatAgent, hasRouting, NO_ROUTES } from "./agents";
 import { cleanKey, keyTestOf, readAnswerKey, writeAnswerKey, type KeyTest } from "./answerKey";
 import { listedTask } from "../../src/core/tasks";
 import { startsDev } from "./tasks";
+import { putScreen, screenNow, withScreen } from "./screens";
 import {
   DEFAULT_LAUNCH,
   isFlowActive,
@@ -85,7 +86,7 @@ export const SOLO = { min: 420, max: 2400, initial: 980 };
 export const TERM = { min: 120, max: 1200, initial: 300 };
 /** a shell living in a repo's panel: the bounds of its body's height, and the
  *  default, which is PANEL_TERM_ROWS lines of the terminal's font */
-export const PANEL_TERM = { min: 60, max: 900, initial: rowsPx(PANEL_TERM_ROWS) };
+export const PANEL_TERM = { min: 60, max: 2400, initial: rowsPx(PANEL_TERM_ROWS) };
 /** the event feed along the bottom, in px of height */
 export const FEED = { min: 100, max: 900, initial: 220 };
 /** sections that start folded, matching how the panel read before they could fold */
@@ -146,6 +147,20 @@ export function changed<T extends object>(next: T, before: T): Partial<T> {
 }
 
 const LAYOUT_KEY = "canopy.layout";
+
+/** the layout kept per kind of screen (screens.ts): its sizes, and the
+ *  feed being up, which the feed's gear puts away */
+export const SCREEN_LAYOUT = [
+  "feedOpen",
+  "sidebarWidth",
+  "panelWidths",
+  "soloWidth",
+  "dockWidth",
+  "termHeight",
+  "panelTermHeights",
+  "focusSize",
+  "feedHeight",
+] as const satisfies readonly (keyof Layout)[];
 
 /** how often a window re-reads the archive overview on its own */
 const HISTORY_REFRESH = 10 * 60_000;
@@ -220,7 +235,9 @@ function loadLayout(): Layout {
   try {
     const raw = localStorage.getItem(LAYOUT_KEY);
     if (!raw) return fallback;
-    const saved = JSON.parse(raw) as {
+    const stored: unknown = JSON.parse(raw);
+    if (!stored || typeof stored !== "object" || Array.isArray(stored)) return fallback;
+    const saved = withScreen(stored as Record<string, unknown>, screenNow()?.cls ?? null, SCREEN_LAYOUT) as {
       sidebarWidth?: unknown;
       panelWidths?: Record<string, unknown>;
       soloWidth?: unknown;
@@ -323,10 +340,11 @@ function saveLayout(patch: Partial<Layout>) {
   try {
     const raw = localStorage.getItem(LAYOUT_KEY);
     const stored: unknown = raw ? JSON.parse(raw) : {};
-    const base = stored && typeof stored === "object" && !Array.isArray(stored) ? stored : {};
+    const base: Record<string, unknown> =
+      stored && typeof stored === "object" && !Array.isArray(stored) ? (stored as Record<string, unknown>) : {};
     localStorage.setItem(
       LAYOUT_KEY,
-      JSON.stringify({ ...base, ...patch, knownSections: DEFAULT_CLOSED }),
+      JSON.stringify(putScreen(base, { ...patch, knownSections: DEFAULT_CLOSED }, screenNow()?.cls ?? null, SCREEN_LAYOUT)),
     );
   } catch {
     // storage can be disabled outright; the layout just won't survive a reload
@@ -2621,6 +2639,28 @@ useStore.subscribe((s, prev) => {
   }
   if (Object.keys(patch).length > 0) saveLayout(patch);
 });
+
+// A window moved to another screen takes up the sizes and gear choices kept
+// for that kind of screen (screens.ts). Chrome fires resize when a window crosses to a screen
+// of another size, and the screen's own change event where it has one.
+let screenSeen = screenNow()?.cls ?? null;
+if (typeof window !== "undefined" && typeof window.screen !== "undefined") {
+  const onScreen = () => {
+    const now = screenNow()?.cls ?? null;
+    if (now === screenSeen) return;
+    screenSeen = now;
+    const layout = loadLayout();
+    const fresh = loadSettings();
+    const sizes: Partial<Layout> = {};
+    for (const k of SCREEN_LAYOUT) Object.assign(sizes, { [k]: layout[k] });
+    const sized: Partial<Settings> = {};
+    for (const k of SCREEN_SETTINGS) Object.assign(sized, { [k]: fresh[k] });
+    useStore.setState((s) => ({ ...sizes, settings: { ...s.settings, ...sized } }));
+  };
+  window.addEventListener("resize", onScreen);
+  // not in this TS's DOM types yet: Chrome's Window Management API
+  (window.screen as Partial<EventTarget>).addEventListener?.("change", onScreen);
+}
 
 /** The panels whose tasks this page has asked to start, so each open of a
  *  panel asks once: by any path that adds it to the dock (a click, the top

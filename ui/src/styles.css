@@ -196,6 +196,13 @@ body.resizing {
   cursor: col-resize;
   user-select: none;
 }
+body.resizing-rows {
+  cursor: row-resize;
+}
+/* a drag across the preview's page must stay the page's own */
+body.resizing iframe {
+  pointer-events: none;
+}
 .spacer {
   flex: 1;
 }
@@ -3698,18 +3705,24 @@ a.chan-text {
   margin: 8px 14px 6px;
 }
 /* the tabs at their own height over the shell, whose height is the dragged
-   one; the cap keeps a tall shell from squeezing the panel above it flat */
+   one. The grip stops where the panel's scrolling part reaches its floor
+   (`PANEL_BODY_MIN` in TermDock.tsx, the 120px below); a window made
+   shorter after a drag shrinks the shell rather than squeezing that part
+   flat */
 .panel-shells-body {
   display: flex;
   flex-direction: column;
   min-height: 0;
-  max-height: 60vh;
-  max-height: 60dvh;
   border-top: 1px solid var(--hair);
 }
 .panel-shells-body > .term-body {
   flex: 0 1 auto;
+  min-height: 0;
   height: var(--panel-term-h, 100px);
+}
+/* the panel's own height less the scrolling part's floor */
+.panel:not(.guided-panel):not(.panel-bench) > .panel-shells:not(.full):not(.focus) {
+  max-height: calc(100% - 120px);
 }
 /* folded: really gone, so the shell's ResizeObserver stops fitting to a zero
    box (which would send garbage rows to the pty). `display: flex` above beats
@@ -5782,10 +5795,13 @@ button.machine:hover {
    up the terminal. Nothing between them and the panel may be positioned. */
 .panel.panel-bench {
   --bench-bar: 40px;
-  --bench-rail: clamp(300px, 27vw, 440px);
-  --bench-dock: 40%;
+  /* the seams' saved sizes ride in as --bench-rail-user (px),
+     --bench-dock-f and --bench-split-user (shares), set on the panel */
+  --bench-rail: min(var(--bench-rail-user, clamp(300px, 27vw, 440px)), calc(100% - 320px));
+  --bench-dock: calc(var(--bench-dock-f, 0.4) * 100%);
   /* the log's share of the main column, beside the shells */
-  --bench-log: 0%;
+  --bench-split: 0;
+  --bench-log: calc(var(--bench-split) * 100%);
   position: fixed;
   inset: 12px;
   z-index: 26;
@@ -5810,7 +5826,7 @@ button.machine:hover {
     0 22px 48px -16px var(--float-shadow);
 }
 .panel-bench:has(.task-front) {
-  --bench-log: 45%;
+  --bench-split: var(--bench-split-user, 0.45);
 }
 /* no preview (hidden, or a repo elsewhere): the shells take its room */
 .panel-bench:not(:has(section.preview)) {
@@ -5925,9 +5941,81 @@ button.machine:hover {
   z-index: 1;
   right: 0;
   bottom: 0;
-  left: calc(var(--bench-rail) + (100% - var(--bench-rail)) * 0.55);
+  left: calc(var(--bench-rail) + (100% - var(--bench-rail)) * (1 - var(--bench-split)));
   height: var(--bench-dock);
   border-left: 1px solid var(--hair);
+}
+/* the seams between the parts, laid over them from the panel itself */
+.bench-seam {
+  position: absolute;
+  z-index: 3;
+  touch-action: none;
+}
+.bench-seam.seam-rail,
+.bench-seam.seam-split {
+  width: 8px;
+  cursor: col-resize;
+}
+.bench-seam.seam-rail {
+  top: var(--bench-bar);
+  bottom: 0;
+  left: calc(var(--bench-rail) - 4px);
+}
+.bench-seam.seam-dock {
+  left: var(--bench-rail);
+  right: 0;
+  bottom: calc(var(--bench-dock) - 4px);
+  height: 8px;
+  cursor: row-resize;
+}
+.bench-seam.seam-split {
+  bottom: 0;
+  height: var(--bench-dock);
+  left: calc(var(--bench-rail) + (100% - var(--bench-rail)) * (1 - var(--bench-split)) - 4px);
+}
+/* a hairline of moss down the middle while it is grabbed or hovered */
+.bench-seam::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  margin: auto;
+  background: var(--moss);
+  opacity: 0;
+  transition: opacity 120ms ease;
+}
+.bench-seam.seam-rail::after,
+.bench-seam.seam-split::after {
+  width: 2px;
+}
+.bench-seam.seam-dock::after {
+  height: 2px;
+}
+.bench-seam:hover::after,
+.bench-seam:focus-visible::after,
+.bench-seam.dragging::after {
+  opacity: 0.8;
+}
+.bench-seam:focus-visible {
+  outline: none;
+}
+/* a finger needs more than the 8px a pointer gets */
+@media (pointer: coarse) {
+  .bench-seam.seam-rail,
+  .bench-seam.seam-split {
+    width: 20px;
+    margin-left: -6px;
+  }
+  .bench-seam.seam-dock {
+    height: 20px;
+    margin-bottom: -6px;
+  }
+}
+/* no seam where there is no edge: one part filling the bench, no app over
+   the shells, no log beside them */
+.panel-bench[data-pane] > .bench-seam,
+.panel-bench:not(:has(section.preview)) > .bench-seam.seam-dock,
+.panel-bench:not(:has(.task-front)) > .bench-seam.seam-split {
+  display: none;
 }
 .preview.section-full .term-grip {
   display: none;

@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { levelOf, loadSettings, shellPlace } from "./settings";
+import { DEFAULT_SETTINGS, levelOf, loadSettings, saveSettings, shellPlace } from "./settings";
 
 describe("shellPlace", () => {
   test("auto follows the panel", () => {
@@ -72,6 +72,61 @@ describe("loadSettings", () => {
     expect(loadSettings().zoom).toEqual({});
     expect(loadSettings().sectionOrder[0]).toBe("changes");
     delete (globalThis as { localStorage?: unknown }).localStorage;
+  });
+});
+
+describe("the bench's seams", () => {
+  test("survive a reload, repaired", () => {
+    const store = new Map<string, string>();
+    (globalThis as { localStorage?: unknown }).localStorage = {
+      getItem: (k: string) => store.get(k) ?? null,
+      setItem: (k: string, v: string) => void store.set(k, v),
+    };
+    store.set("canopy.settings", JSON.stringify({ benchRail: 520, benchDock: 0.6, benchSplit: 9 }));
+    const s = loadSettings();
+    expect(s.benchRail).toBe(520);
+    expect(s.benchDock).toBe(0.6);
+    expect(s.benchSplit).toBe(0.85);
+    store.set("canopy.settings", JSON.stringify({ benchRail: "wide" }));
+    const d = loadSettings();
+    expect(d.benchRail).toBeNull();
+    expect(d.benchDock).toBe(0.4);
+    expect(d.benchSplit).toBe(0.45);
+  });
+});
+
+describe("sizes per screen", () => {
+  test("each kind of screen keeps its own, and a new one starts from the last", () => {
+    const store = new Map<string, string>();
+    const g = globalThis as { localStorage?: unknown; window?: unknown };
+    g.localStorage = {
+      getItem: (k: string) => store.get(k) ?? null,
+      setItem: (k: string, v: string) => void store.set(k, v),
+    };
+    const on = (width: number, height: number) => (g.window = { screen: { width, height } });
+    try {
+      on(1728, 1117);
+      saveSettings({ ...DEFAULT_SETTINGS, previewHeight: 500, theme: "dark" });
+      on(7680, 2160);
+      // never sized here: the last size set anywhere
+      expect(loadSettings().previewHeight).toBe(500);
+      saveSettings({ ...loadSettings(), previewHeight: 1400 });
+      on(1728, 1117);
+      expect(loadSettings().previewHeight).toBe(500);
+      expect(loadSettings().theme).toBe("dark");
+      on(7680, 2160);
+      expect(loadSettings().previewHeight).toBe(1400);
+      // a gear's choices go the same way, a setting of the whole page does not
+      saveSettings({ ...loadSettings(), zoom: { changes: 1.5 }, openIn: "tabs", sectionsHidden: ["peers"], theme: "light" });
+      on(390, 844);
+      saveSettings({ ...loadSettings(), zoom: { changes: 0.8 }, openIn: "dock" });
+      on(7680, 2160);
+      expect(loadSettings()).toMatchObject({ zoom: { changes: 1.5 }, openIn: "tabs", sectionsHidden: ["peers"], theme: "light" });
+      on(844, 390);
+      expect(loadSettings()).toMatchObject({ zoom: { changes: 0.8 }, openIn: "dock", theme: "light" });
+    } finally {
+      delete g.window;
+    }
   });
 });
 

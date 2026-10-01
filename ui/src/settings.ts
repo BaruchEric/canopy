@@ -13,6 +13,8 @@ import {
 import { TERM_FONT } from "./term";
 import { termFontSize } from "./touch";
 import { PREVIEW_H, previewHeightOf } from "./preview";
+import { BENCH_DOCK, BENCH_SPLIT, benchRailOf, shareOf } from "./front";
+import { putScreen, screenNow, withScreen } from "./screens";
 import {
   SECTION_KEYS,
   normalizeTermFonts,
@@ -113,6 +115,12 @@ export interface Settings {
   termFonts: TermFonts;
   /** the preview's height in place, in px */
   previewHeight: number;
+  /** the bench's rail in px, null for the width the stylesheet picks */
+  benchRail: number | null;
+  /** the shells' and the log's share of the bench's height */
+  benchDock: number;
+  /** the log's share of the row beside the shells */
+  benchSplit: number;
   /** each kind of surface's zoom, off its gear; a kind with none is at 1 */
   zoom: Zooms;
   /** each kind's zoom while brought to the front, where it differs from
@@ -151,6 +159,9 @@ export const DEFAULT_SETTINGS: Settings = {
   termFont: TERM_FONT.size,
   termFonts: {},
   previewHeight: PREVIEW_H.initial,
+  benchRail: null,
+  benchDock: BENCH_DOCK.initial,
+  benchSplit: BENCH_SPLIT.initial,
   zoom: {},
   frontZoom: {},
   sectionOrder: [...SECTION_KEYS],
@@ -247,13 +258,41 @@ function backendEntries(v: unknown): BackendEntry[] {
 const backendNamesOf = (v: unknown): string[] =>
   Array.isArray(v) ? v.filter(isBackendName).filter((n, i, all) => all.indexOf(n) === i) : [];
 
+/** the settings kept per kind of screen (screens.ts): every size, and
+ *  everything a panel's, section's, shell's or the feed's gear saves */
+export const SCREEN_SETTINGS = [
+  "termFont",
+  "termFonts",
+  "previewHeight",
+  "benchRail",
+  "benchDock",
+  "benchSplit",
+  "zoom",
+  "frontZoom",
+  "openIn",
+  "level",
+  "shell",
+  "fileView",
+  "fileCols",
+  "fileSort",
+  "sectionOrder",
+  "sectionsHidden",
+] as const satisfies readonly (keyof Settings)[];
+
+/** what is stored under the key, an empty object for anything else */
+function storedSettings(): Record<string, unknown> {
+  const raw = localStorage.getItem(KEY);
+  const v: unknown = raw ? JSON.parse(raw) : {};
+  return v && typeof v === "object" && !Array.isArray(v) ? (v as Record<string, unknown>) : {};
+}
+
 export function loadSettings(): Settings {
   try {
     const raw = localStorage.getItem(KEY);
     // A browser that kept a layout but never changed a setting is one from
     // before levels, not a new one: it keeps the panel it had.
     if (!raw) return localStorage.getItem("canopy.layout") ? { ...DEFAULT_SETTINGS, ...levelOf({}) } : DEFAULT_SETTINGS;
-    const saved = JSON.parse(raw) as Partial<Record<keyof Settings, unknown>>;
+    const saved: Partial<Record<keyof Settings, unknown>> = withScreen(storedSettings(), screenNow()?.cls ?? null, SCREEN_SETTINGS);
     // Every field is validated against its list: a value written by an older
     // build or edited by hand must not put the UI in a state it cannot render.
     return {
@@ -273,6 +312,9 @@ export function loadSettings(): Settings {
       termFont: termFontSize(saved.termFont, DEFAULT_SETTINGS.termFont),
       termFonts: normalizeTermFonts(saved.termFonts),
       previewHeight: previewHeightOf(saved.previewHeight),
+      benchRail: benchRailOf(saved.benchRail),
+      benchDock: shareOf(saved.benchDock, BENCH_DOCK),
+      benchSplit: shareOf(saved.benchSplit, BENCH_SPLIT),
       zoom: normalizeZooms(saved.zoom),
       frontZoom: normalizeZooms(saved.frontZoom, true),
       sectionOrder: sectionOrder(saved.sectionOrder),
@@ -288,7 +330,10 @@ export function loadSettings(): Settings {
 
 export function saveSettings(s: Settings): void {
   try {
-    localStorage.setItem(KEY, JSON.stringify(s));
+    // the other screens' sizes stay; this one's are written into its slot
+    const { screens } = storedSettings();
+    const base = screens === undefined ? {} : { screens };
+    localStorage.setItem(KEY, JSON.stringify(putScreen(base, { ...s }, screenNow()?.cls ?? null, SCREEN_SETTINGS)));
   } catch {
     // storage can be disabled outright; the choice just won't survive a reload
   }

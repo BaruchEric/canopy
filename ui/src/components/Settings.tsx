@@ -10,6 +10,7 @@ import { maskKey } from "../answerKey";
 import { PAGE_BUILD } from "../build";
 import { ago } from "../util";
 import { Seg } from "./Seg";
+import { screenNow, screenWord } from "../screens";
 
 const LEVEL = [
   { value: "intermediate", label: "intermediate", title: "Agent first: run your app, save your work, and the rest one click away" },
@@ -77,6 +78,8 @@ export function SettingsMenu() {
   const keeping = useStore((s) => connOf(s, scope).keeping);
   const setKeeping = useStore((s) => s.setKeeping);
   const [open, setOpen] = useState(false);
+  // read as the menu renders: it opens on the screen the window is on now
+  const screen = open ? screenNow() : null;
   const ref = useRef<HTMLDivElement>(null);
   useFitPop(ref, open);
 
@@ -140,6 +143,12 @@ export function SettingsMenu() {
             <button type="button" className="mini" onClick={() => setSetting("onboarded", false)}>
               show the tour again
             </button>
+            {screen && (
+              <p className="settings-hint">
+                Widths, heights, zoom, font sizes and what each gear sets are kept for each kind of screen. This one counts as a{" "}
+                {screenWord(screen.cls)} ({screen.w}×{screen.h}).
+              </p>
+            )}
           </section>
           <section className="settings-row">
             <h3 className="panel-label">open a repo</h3>

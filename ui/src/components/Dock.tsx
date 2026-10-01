@@ -34,7 +34,7 @@ import {
 import { benchIs, benchSolo } from "../front";
 import { devTask } from "../tasks";
 import { devState } from "../guided";
-import { BENCH_ONE, BenchBar, type BenchPane } from "./Bench";
+import { BENCH_ONE, BenchBar, BenchSeams, type BenchPane } from "./Bench";
 import { useMedia } from "../media";
 import { backendOf, homeName, isHome } from "../registry";
 import { signinUrl } from "../backends";
@@ -1237,6 +1237,9 @@ export function RepoPanel({
   // a tab that is not showing is neither over the window nor in front
   const mode: SurfaceMode = hidden ? "normal" : inBench ? "focus" : placed;
   const bench = mode === "focus";
+  const benchRail = useStore((s) => s.settings.benchRail);
+  const benchDock = useStore((s) => s.settings.benchDock);
+  const benchSplit = useStore((s) => s.settings.benchSplit);
   // Escape steps back one level: a part filling the bench gives it back
   // first, the bench goes the next time
   useLeaveOnEscape(mode, (m) => {
@@ -1318,9 +1321,20 @@ export function RepoPanel({
       aria-label={repo.name}
       hidden={hidden}
       data-pane={bench ? (shownPane ?? undefined) : undefined}
-      style={{ "--panel-w": `${width}px` } as CSSProperties}
+      style={
+        {
+          "--panel-w": `${width}px`,
+          // the bench's seams, which styles.css reads as the parts' sizes
+          ...(bench && {
+            ...(benchRail !== null && { "--bench-rail-user": `${benchRail}px` }),
+            "--bench-dock-f": String(benchDock),
+            "--bench-split-user": String(benchSplit),
+          }),
+        } as CSSProperties
+      }
     >
       {bench && <BenchBar repoId={id} pane={shownPane} setPane={(p) => soloBench(id, p)} has={has} />}
+      {bench && <BenchSeams />}
       {/* Everything but the shells scrolls in here; the shells sit below it,
           along the panel's bottom edge, whatever the scroll position. */}
       <div className="panel-body" ref={bodyRef} style={zoomStyle(zoom)}>

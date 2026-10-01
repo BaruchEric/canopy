@@ -808,6 +808,10 @@ function KeyBar({
 /** A shell area's top edge: dragged to size it, arrowed by the keyboard,
  *  double-clicked to reset. It writes the height live to `cssVar` on `box`
  *  while dragging, then commits it on release. */
+/** the least a panel's scrolling part keeps under a tall shell; styles.css
+ *  gives `.panel-body` the same floor */
+const PANEL_BODY_MIN = 120;
+
 export function TermGrip({
   box,
   cssVar,
@@ -816,6 +820,7 @@ export function TermGrip({
   setHeight,
   bounds,
   edge = "top",
+  fit,
 }: {
   box: React.RefObject<HTMLElement | null>;
   cssVar: string;
@@ -825,21 +830,29 @@ export function TermGrip({
   bounds: { min: number; max: number; initial: number };
   /** which edge the grip sits on: "top" grows upward, "bottom" downward */
   edge?: "top" | "bottom";
+  /** the most the box can take right now, read as a drag starts; below
+   *  `bounds.max` when the room around it is what limits it, so the drag
+   *  never runs into height nobody can see */
+  fit?: () => number;
 }) {
   const [dragging, setDragging] = useState(false);
-  const start = useRef<{ y: number; h: number } | null>(null);
+  const start = useRef<{ y: number; h: number; top: number } | null>(null);
 
+  const ceiling = () => {
+    const room = fit?.();
+    return room !== undefined && Number.isFinite(room) ? clamp(room, bounds.min, bounds.max) : bounds.max;
+  };
   const apply = (h: number) => box.current?.style.setProperty(cssVar, `${h}px`);
-  const clamped = (raw: number) => clamp(raw, bounds.min, bounds.max);
   // a top grip grows as the pointer rises, a bottom grip as it falls
   const sized = (e: PointerEvent<HTMLDivElement>) => {
     const dy = start.current ? e.clientY - start.current.y : 0;
-    return clamped((start.current?.h ?? height) + (edge === "top" ? -dy : dy));
+    return clamp((start.current?.h ?? height) + (edge === "top" ? -dy : dy), bounds.min, start.current?.top ?? bounds.max);
   };
   const onDown = (e: PointerEvent<HTMLDivElement>) => {
     if (e.button !== 0) return;
     e.currentTarget.setPointerCapture(e.pointerId);
-    start.current = { y: e.clientY, h: height };
+    const top = ceiling();
+    start.current = { y: e.clientY, h: Math.min(height, top), top };
     setDragging(true);
   };
   const onMove = (e: PointerEvent<HTMLDivElement>) => {
@@ -855,8 +868,9 @@ export function TermGrip({
   };
   const onKey = (e: KeyboardEvent<HTMLDivElement>) => {
     const step = e.shiftKey ? 64 : 16;
-    if (e.key === "ArrowUp") setHeight(height + step);
-    else if (e.key === "ArrowDown") setHeight(height - step);
+    const top = ceiling();
+    if (e.key === "ArrowUp") setHeight(clamp(Math.min(height, top) + step, bounds.min, top));
+    else if (e.key === "ArrowDown") setHeight(clamp(Math.min(height, top) - step, bounds.min, top));
     else return;
     e.preventDefault();
   };
@@ -879,6 +893,16 @@ export function TermGrip({
       onKeyDown={onKey}
     />
   );
+}
+
+/** what a panel shell may grow to: its height now plus whatever the
+ *  panel's scrolling part has above its floor (`PANEL_BODY_MIN`, styles.css),
+ *  which is where the room comes from */
+function shellRoom(shells: HTMLElement | null): number {
+  const term = shells?.querySelector(":scope > .panel-shells-body > .term-body");
+  const body = shells?.parentElement?.querySelector(":scope > .panel-body");
+  if (!(term instanceof HTMLElement) || !(body instanceof HTMLElement)) return Infinity;
+  return term.offsetHeight + Math.max(0, body.offsetHeight - PANEL_BODY_MIN);
 }
 
 /** Two shells at one repo get numbered so their tabs can be told apart. */
@@ -1317,6 +1341,7 @@ export function PanelShells({ repo }: { repo: Repo }) {
             height={panelTermHeight}
             setHeight={(px) => setPanelTermHeight(repo.id, px)}
             bounds={PANEL_TERM}
+            fit={() => shellRoom(box.current)}
           />
         )}
         <button

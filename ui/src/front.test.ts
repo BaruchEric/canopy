@@ -1,5 +1,12 @@
 import { describe, expect, test } from "bun:test";
 import {
+  BENCH_DOCK,
+  BENCH_SPLIT,
+  benchRailOf,
+  dockAt,
+  railAt,
+  shareOf,
+  splitAt,
   benchHolds,
   benchProjects,
   benchIs,
@@ -134,4 +141,41 @@ test("the bench offers the open panels, then every project with something runnin
     { repoId: "d", name: "delta", shells: 0, running: 1 },
     { repoId: "c", name: "gamma", shells: 1, running: 0 },
   ]);
+});
+
+describe("the bench's seams", () => {
+  test("a saved rail is clamped and rounded, anything else the default", () => {
+    expect(benchRailOf(512.6)).toBe(513);
+    expect(benchRailOf(10)).toBe(240);
+    expect(benchRailOf(1e6)).toBe(1600);
+    expect(benchRailOf("400")).toBeNull();
+    expect(benchRailOf(null)).toBeNull();
+    expect(benchRailOf(Number.NaN)).toBeNull();
+  });
+  test("a saved share is clamped to its bounds", () => {
+    expect(shareOf(0.5, BENCH_DOCK)).toBe(0.5);
+    expect(shareOf(0.01, BENCH_DOCK)).toBe(BENCH_DOCK.min);
+    expect(shareOf(2, BENCH_SPLIT)).toBe(BENCH_SPLIT.max);
+    expect(shareOf(0.33333, BENCH_SPLIT)).toBe(0.333);
+    expect(shareOf(undefined, BENCH_SPLIT)).toBe(BENCH_SPLIT.initial);
+  });
+  test("the rail follows the pointer and leaves the main part its room", () => {
+    expect(railAt(512, 12, 1600)).toBe(500);
+    expect(railAt(0, 12, 1600)).toBe(240);
+    expect(railAt(1590, 12, 1600)).toBe(1280);
+    // a bench too narrow for both still gives the rail its floor
+    expect(railAt(400, 0, 400)).toBe(240);
+  });
+  test("the shells' share is what lies below the pointer", () => {
+    expect(dockAt(600, 1000, 1000)).toBe(0.4);
+    expect(dockAt(990, 1000, 1000)).toBe(BENCH_DOCK.min);
+    expect(dockAt(0, 1000, 1000)).toBe(BENCH_DOCK.max);
+    expect(dockAt(10, 10, 0)).toBe(BENCH_DOCK.initial);
+  });
+  test("the log's share is what lies right of the pointer", () => {
+    expect(splitAt(700, 400, 1400)).toBe(0.7);
+    expect(splitAt(1390, 400, 1400)).toBe(BENCH_SPLIT.min);
+    expect(splitAt(10, 400, 1400)).toBe(BENCH_SPLIT.max);
+    expect(splitAt(5, 400, 400)).toBe(BENCH_SPLIT.initial);
+  });
 });
