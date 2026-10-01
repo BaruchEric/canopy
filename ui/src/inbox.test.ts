@@ -9,6 +9,7 @@ import {
   leftWord,
   mergeAsks,
   mergeInbox,
+  inboxTick,
   recentAsks,
   replaceAsks,
   toAskAnswer,
@@ -181,6 +182,14 @@ describe("answers go back the way the item came", () => {
     expect(toAskAnswer({ behavior: "deny", message: "  " })).toEqual({ behavior: "deny" });
     expect(toAskAnswer({ answers: { q: "a" } })).toEqual({ behavior: "allow", answers: { q: "a" } });
     expect(toAskAnswer({ choice: "stop" })).toBeNull();
+  });
+});
+
+describe("the open inbox's clock", () => {
+  test("by the second while an ask counts down, else slower, but never still", () => {
+    expect(inboxTick([{ until: 5 }, { until: null }])).toBe(1_000);
+    expect(inboxTick([{ until: null }])).toBe(15_000);
+    expect(inboxTick([])).toBe(15_000);
   });
 });
 

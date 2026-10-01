@@ -226,6 +226,11 @@ export function toAskAnswer(a: InboxAnswer): AskAnswer | null {
   return { behavior: "allow", ...(a.always ? { always: true } : {}) };
 }
 
+/** How often the open inbox redraws its clocks: every second while an
+ *  ask counts down to its terminal, else often enough for a run's or a
+ *  gate's "how long ago" to move on (it reads in minutes). */
+export const inboxTick = (items: readonly Pick<InboxItem, "until">[]): number => (items.some((i) => i.until !== null) ? 1_000 : 15_000);
+
 /** what the chip says on the tooltip: "2 waiting on you: …" */
 export function inboxTitle(items: readonly InboxItem[]): string {
   if (items.length === 0) return "Nothing is waiting on you";

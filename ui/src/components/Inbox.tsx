@@ -3,7 +3,7 @@ import { useShallow } from "zustand/react/shallow";
 import type { Ask } from "../../../src/core/types";
 import { joinTarget } from "../agentcards";
 import { api } from "../api";
-import { askWord, detailText, endingWord, inboxTitle, leftWord, recentAsks, type InboxAnswer, type InboxItem } from "../inbox";
+import { askWord, detailText, endingWord, inboxTick, inboxTitle, leftWord, recentAsks, type InboxAnswer, type InboxItem } from "../inbox";
 import { useFitPop } from "../pop";
 import { qual } from "../registry";
 import { canAnswer as canAnswerHere, inboxItems, useStore } from "../store";
@@ -239,8 +239,9 @@ export function InboxChip({ onGit }: { onGit?: () => void } = {}) {
   const [picked, setPicked] = useState<string | null>(null);
   const [err, setErr] = useState<string | null>(null);
   const ref = useRef<HTMLDivElement>(null);
-  const anyClock = items.some((i) => i.until !== null);
-  const now = useNow(open && anyClock);
+  // the clocks move whenever the inbox is open: a countdown by the second,
+  // a waiting run's or gate's age more slowly
+  const now = useNow(open, inboxTick(items));
   useFitPop(ref, open);
 
   useEffect(() => {
