@@ -482,7 +482,11 @@ export class Launcher {
         // `open -W` stays until the app quits, which is what makes the app
         // show as running; the app itself is a child of launchd, not of
         // this process, so stopping it goes by its executable's path
-        const proc = Bun.spawn(["open", "-n", "-W", file], { stdin: "ignore", stdout: Bun.file(log), stderr: Bun.file(log) });
+        // the live env, as every spawn here: without one Bun hands the
+        // child the env this process started with, whatever canopy has
+        // taken out of it since (an old deploy's answer token, an outer
+        // canopy shell's names)
+        const proc = Bun.spawn(["open", "-n", "-W", file], { stdin: "ignore", stdout: Bun.file(log), stderr: Bun.file(log), env: { ...process.env } });
         track(proc, file);
       } else {
         // something only `open` knows what to do with: a package, a jar
