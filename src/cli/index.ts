@@ -213,7 +213,12 @@ export async function main(argv: string[]): Promise<void> {
       // The other half of a headless backend: this process dials it and runs
       // the desktop openers here for the browser on this machine. It keeps
       // running until stopped; a launchd or systemd user unit is the usual way.
-      const backend = opt(args, "--backend") ?? process.env["CANOPY_BACKEND"] ?? "http://127.0.0.1:7850";
+      // Inside a canopy shell CANOPY_BACKEND is the backend's name (what the
+      // agent hooks report), not an origin, so only an origin stands in for
+      // --backend.
+      const fromEnv = process.env["CANOPY_BACKEND"];
+      const envOrigin = fromEnv && /^https?:\/\//.test(fromEnv) ? fromEnv : undefined;
+      const backend = opt(args, "--backend") ?? envOrigin ?? "http://127.0.0.1:7850";
       if (!/^https?:\/\//.test(backend)) return fail(`--backend must be an http(s) origin, got ${backend}`);
       const name = opt(args, "--name") ?? helperName();
       const listed = opt(args, "--openers");

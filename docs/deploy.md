@@ -300,7 +300,8 @@ the one helper at its own address. The settings popover shows the address the
 browser is seen as.
 
 `--name` and `--openers kitty,code` override what it registers as and offers;
-`CANOPY_BACKEND` stands in for `--backend`. On Linux the openers are kitty
+`CANOPY_BACKEND` stands in for `--backend` when it is an http(s) origin (a
+canopy shell sets it to the backend's name, which the helper ignores). On Linux the openers are kitty
 (`--detach`, also for the agent, held open), `code`, and `xdg-open` for the
 folder; there is no Terminal.app there. Keep it running as a user service: on
 a Mac a launchd agent with `bun /path/to/canopy/bin/canopy.ts helper --backend
