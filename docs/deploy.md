@@ -99,7 +99,6 @@ VERCEL_AI_GATEWAY_API_KEY=...   # optional: lets verdict gates evaluate
 # CANOPY_PREVIEW_PUBLIC=https://canopy-p{slot}.beric.ca   # optional: previews on the public page, see "A public name"
 # TAILCHAN_URL=http://100.68.139.95:7855   # optional: the tailchan broker, see "tailchan" below
 # TAILCHAN_HUMAN=eric                       # the handle the UI speaks tailchan as
-# TAILCHAN_ANSWER_TOKEN=...                 # optional: answers asks, see "Asks, presence and guards"
 ```
 
 `CANOPY_LISTEN` is where docker publishes the port. Leave it unset and canopy
@@ -370,33 +369,43 @@ An agent's permission prompt, question or guard hit is an *ask* at the
 broker, and canopy's `?` chip (top bar, and the agents view's bar) is the
 inbox that answers it, beside canopy's own runs on a prompt and workflows at
 a gate. Reading asks needs only `TAILCHAN_URL`; answering them, the away
-switch, the presence beat and editing guards take an **answer token**:
+switch, the presence beat and editing guards take an **answer key**, which
+each browser holds for itself:
 
-1. Pick a secret and add it to the broker's `.env` on the mini as
-   `ANSWER_TOKENS=canopy:<secret>` (comma-separated `name:secret` pairs, one
-   per canopy that answers; the name is what an answer is logged under,
-   `phone@canopy`). Recreate the broker.
-2. Give canopy the secret, and nothing else: `TAILCHAN_ANSWER_TOKEN=<secret>`
-   in this `.env`, which `docker-compose.yml` passes to the `canopy` service
-   as `CANOPY_TAILCHAN_ANSWER_TOKEN`. It is deliberately **not** on the
-   `shells` service, where the agents run, and canopy drops it from its own
-   environment at start so no run, shell or tmux server it starts inherits
-   it. On the Mac, put `CANOPY_TAILCHAN_ANSWER_TOKEN` in the launchd plist
-   (`ca.beric.canopy-server`), never in `~/.config/tailchan/env`, which every
-   agent's CLI reads. There canopy and the agents run as the same user, so
-   the token stops accidents and casual prompt-injected tries, not a
-   determined agent with the user's own rights (the agents spec says so).
-3. On every machine an agent runs on, `tailchan agent install` puts the
+1. Give every device you answer from a secret of its own, in the broker's
+   `.env` on the mini: `ANSWER_TOKENS=phone:<secret>,macbook:<secret>`
+   (comma-separated `name:secret` pairs). The name is what an answer is
+   logged under (`Erics-Phone@phone`), and dropping one pair revokes that
+   device alone. Recreate the broker.
+2. On each device, open canopy's Settings, paste that device's secret into
+   **answer key**, save, and **test key** (one presence beat: "ok" or
+   "refused"). The key stays in that browser's storage
+   (`canopy.answerKey`); the page sends it to its own backend, as
+   `X-Canopy-Answer-Key`, on those four writes only, and canopy passes it to
+   the broker as its Bearer token without keeping or logging it.
+3. Neither canopy holds a secret: no `TAILCHAN_ANSWER_TOKEN` in this `.env`,
+   nothing in the Mac's launchd plist, and never one in
+   `~/.config/tailchan/env`, which every agent's CLI reads. A secret in the
+   server would answer for anything that can reach it: canopy's API on the
+   loopback answers every shell on the machine (each has `CANOPY_API`), and
+   on the mini canopy shares the shells' pid namespace as the same user, so
+   any agent can read its environment from `/proc`. A deploy that still sets
+   `TAILCHAN_ANSWER_TOKEN` should drop it; canopy no longer reads it. Where
+   the browser and the agents share a user (the Mac), a determined agent can
+   still dig a key out of the browser's storage: the key stops accidents and
+   casual prompt-injected tries, not that.
+4. On every machine an agent runs on, `tailchan agent install` puts the
    hooks in `~/.claude/settings.json` and `~/.codex/hooks.json`. Codex runs no
    user hook until it is trusted once per machine: open `/hooks` in a codex
    session and trust them (`tailchan agent doctor` checks, and says so).
 
-Without the token the inbox still lists the asks and says why it cannot
-answer them. How long an ask waits for you depends on presence: typing in
-canopy (a shell, or anywhere on the page) keeps you `here`, and an ask waits
-a minute in canopy before it goes back to the agent's terminal; a quarter hour
-without makes you `away`, and an ask then waits half an hour and DMs you
-(Telegram) a link to `?view=agents&ask=<id>`. The away switch in the inbox
+Without a key the inbox still lists the asks and says to add one in
+Settings. How long an ask waits for you depends on presence: typing or
+pointing anywhere on a canopy page that holds a key (its shells included)
+keeps you `here`, and an ask waits a minute in canopy before it goes back to
+the agent's terminal; a quarter hour without makes you `away`, and an ask
+then waits half an hour and DMs you (Telegram) a link to
+`?view=agents&ask=<id>`. The away switch in the inbox
 pins it. An agent in a canopy shell someone typed into within two minutes
 keeps its prompt at that terminal (`GET /api/terms/watched`, which the hook
 asks). Guards are edited in the agents view's routing tab.

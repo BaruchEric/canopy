@@ -154,10 +154,8 @@ describe("config", () => {
     expect(chanConfig({ CANOPY_TAILCHAN_AS: "Me" }, file)?.as).toBe("me");
     expect(chanConfig({}, {})).toBeNull();
     expect(chanConfig({ TAILCHAN_URL: "not a url" }, {})).toBeNull();
-    // the answer token comes from canopy's env alone, never the CLI's file
-    expect(chanConfig({ CANOPY_TAILCHAN_ANSWER_TOKEN: " s3cret " }, file)?.token).toBe("s3cret");
-    expect(chanConfig({}, { ...file, CANOPY_TAILCHAN_ANSWER_TOKEN: "s3cret" })?.token).toBeUndefined();
-    expect(chanConfig({ CANOPY_TAILCHAN_ANSWER_TOKEN: "two words" }, file)?.token).toBeUndefined();
+    // canopy holds no answer token: one left in an old deploy's env is not read
+    expect(chanConfig({ CANOPY_TAILCHAN_ANSWER_TOKEN: "s3cret" }, file)).toEqual({ url: "http://100.1.2.3:7855", as: "eric", bot: "canopy", channel: "canopy" });
   });
 });
 

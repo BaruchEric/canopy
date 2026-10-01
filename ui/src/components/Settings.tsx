@@ -6,6 +6,7 @@ import { deviceName } from "../../../src/core/presence";
 import { sameBuild, shortCommit, versionLine } from "../../../src/core/version";
 import type { About } from "../../../src/core/types";
 import { api } from "../api";
+import { maskKey } from "../answerKey";
 import { PAGE_BUILD } from "../build";
 import { ago } from "../util";
 import { Seg } from "./Seg";
@@ -222,6 +223,7 @@ export function SettingsMenu() {
               How this browser appears to your other devices, and who a shell says is looking at it. Takes effect on the next reload.
             </p>
           </section>
+          <AnswerKeyRow />
           <section className="settings-row">
             <h3 className="panel-label">keep shell history</h3>
             <label className="settings-line">
@@ -270,6 +272,82 @@ export function SettingsMenu() {
         </div>
       )}
     </div>
+  );
+}
+
+/**
+ * This device's answer key: the secret half of one `name:secret` pair in
+ * the tailchan broker's ANSWER_TOKENS, one pair per device. Kept in this
+ * browser alone and sent to the home backend only on the writes that need
+ * it (answering an ask, presence, guards), which passes it to the broker
+ * and keeps nothing. Typed into a masked box; "test key" makes one presence
+ * beat with it, the harmless write, and says whether the broker took it.
+ */
+function AnswerKeyRow() {
+  const key = useStore((s) => s.answerKey);
+  const ready = useStore((s) => s.asksReady);
+  const home = useStore((s) => s.home);
+  const [draft, setDraft] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [note, setNote] = useState<{ ok: boolean; text: string } | null>(null);
+  const save = () => {
+    try {
+      useStore.getState().setAnswerKey(draft);
+      setDraft("");
+      setNote({ ok: true, text: "kept in this browser" });
+    } catch (e) {
+      setNote({ ok: false, text: e instanceof Error ? e.message : String(e) });
+    }
+  };
+  const test = async () => {
+    setBusy(true);
+    const r = await useStore.getState().testAnswerKey(draft.trim() || key || "");
+    setBusy(false);
+    setNote(r.ok ? { ok: true, text: "ok: the broker took it" } : { ok: false, text: `${r.refused ? "refused" : "could not tell"}: ${r.why}` });
+  };
+  return (
+    <section className="settings-row">
+      <h3 className="panel-label">answer key</h3>
+      <div className="key-row">
+        <input
+          className="settings-input"
+          type="password"
+          autoComplete="off"
+          spellCheck={false}
+          placeholder={key ? maskKey(key) : "this device's secret"}
+          value={draft}
+          aria-label="This device's answer key"
+          onChange={(e) => setDraft(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === "Enter" && draft.trim()) save();
+          }}
+        />
+        <button type="button" className="mini" disabled={!draft.trim()} onClick={save}>
+          save
+        </button>
+        <button type="button" className="mini" disabled={busy || !ready || (!draft.trim() && !key)} onClick={() => void test()}>
+          {busy ? "testing…" : "test key"}
+        </button>
+        {key && (
+          <button
+            type="button"
+            className="mini"
+            onClick={() => {
+              useStore.getState().setAnswerKey(null);
+              setNote(null);
+            }}
+          >
+            forget
+          </button>
+        )}
+      </div>
+      <p className="settings-hint">
+        What lets this device answer an agent's ask, set presence and edit guards: the secret of this device's own name:secret pair in the
+        tailchan broker's ANSWER_TOKENS. Kept in this browser only; {home} passes it to the broker on each answer and keeps nothing.
+        {!ready && " This page's backend has no broker, so there is nothing to answer here."}
+      </p>
+      {note && <p className={note.ok ? "settings-hint" : "settings-hint error"}>{note.text}</p>}
+    </section>
   );
 }
 

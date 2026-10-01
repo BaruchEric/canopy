@@ -136,11 +136,12 @@ function Routing({ scope, routes, has, routing }: { scope: string; routes: Agent
  * The broker's guard rules, tailnet-wide (the home backend's broker, not
  * the backend picked above): a shell command that hits one waits for a
  * person in the inbox whatever the agent's permission mode, and is denied
- * when no one answers. Editable only through a home backend with the answer
- * token; a box tries a command against the rules as the hook would.
+ * when no one answers. Editable with this device's answer key; a box tries
+ * a command against the rules as the hook would.
  */
 function Guards() {
   const ready = useStore((s) => s.asksReady);
+  const key = useStore((s) => s.answerKey);
   const [info, setInfo] = useState<GuardsInfo | null>(null);
   const [draft, setDraft] = useState<string[]>([]);
   const [add, setAdd] = useState("");
@@ -163,7 +164,7 @@ function Guards() {
     };
   }, [ready]);
   if (!ready) return null;
-  const canEdit = info?.canEdit === true;
+  const canEdit = info?.canEdit === true && key !== null;
   const dirty = info !== null && JSON.stringify(draft) !== JSON.stringify(info.rules);
   const valid = draft.filter((r) => parseGuardRule(r).ok);
   const hit = trial.trim() ? guardHit(valid.map((r) => r.trim()), trial) : null;
@@ -186,7 +187,7 @@ function Guards() {
     setSaving(true);
     setError(null);
     api
-      .setGuards(n.rules)
+      .setGuards(n.rules, key ?? "")
       .then((g) => {
         setInfo(g);
         setDraft(g.rules);
@@ -203,7 +204,7 @@ function Guards() {
         <code>Bash(rm -rf *)</code> for a pattern, <code>Bash(make deploy)</code> for one command.
       </p>
       {!info && !error && <p className="settings-hint">Reading the rules…</p>}
-      {info && !canEdit && <p className="settings-hint warn">Read-only here: the home backend has no answer token (CANOPY_TAILCHAN_ANSWER_TOKEN).</p>}
+      {info && !canEdit && <p className="settings-hint warn">Read-only on this device: add your answer key in Settings to edit them.</p>}
       {info && draft.length === 0 && <p className="settings-hint">No guards: nothing a yolo agent runs waits for you.</p>}
       <ul className="agents-list guard-list">
         {draft.map((rule, i) => {

@@ -1,11 +1,13 @@
 /**
  * Asks for a human through canopy, against a stand-in broker: the open
  * asks listed and followed on the `asks` channel, an answer carrying the
- * answering browser's device name and the token, the same answer refused
- * (403) by a backend with no token, presence set and beaten, the guards
- * proxied and validated, a closed ask swept after its keep, a shell counted
- * watched only after a keystroke (not a terminal's own reply), and the
- * transcript route over fixture session files. Plain ptys (`CANOPY_TMUX=0`).
+ * answering browser's device name and its own answer key (forwarded as the
+ * broker's Bearer token, never kept), every write refused (403) without a
+ * key or from another site, presence set and beaten, the guards proxied and
+ * validated, a closed ask swept after its keep, a shell counted watched
+ * only after a keystroke (not a terminal's own reply) and never beating
+ * presence itself, and the transcript route over fixture session files.
+ * Plain ptys (`CANOPY_TMUX=0`).
  */
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { mkdir, mkdtemp, realpath, rm, utimes, writeFile } from "node:fs/promises";
@@ -14,7 +16,7 @@ import { join } from "node:path";
 import { Chan } from "../core/chan";
 import { projectFolder } from "../core/sessions";
 import type { Ask, AsksInfo, GuardsInfo, Presence, ServerEvent } from "../core/types";
-import { AskHub, answerer, parseAskAnswer } from "./asks";
+import { ANSWER_KEY_HEADER, AskHub, answerKeyOf, answerer, parseAskAnswer } from "./asks";
 import { startServer } from "./index";
 
 /* ---------- the stand-in broker: asks, presence and guards, in memory ---------- */
@@ -135,21 +137,26 @@ const broker = Bun.serve({
 const BROKER = `http://127.0.0.1:${broker.port}`;
 const CFG = { url: BROKER, as: "eric", bot: "canopy", channel: "canopy" };
 
-/* ---------- canopy against it: one backend with the token, one without ---------- */
+/* ---------- canopy against it, holding no secret of its own ---------- */
 
 let scratch: string;
 let root: string;
 let appPath: string;
-let withToken: { port: number; stop: () => void };
-let readOnly: { port: number; stop: () => void };
+let server: { port: number; stop: () => void };
 const saved: Record<string, string | undefined> = {};
 const events: ServerEvent[] = [];
 const listening = new AbortController();
 const CLIENT = "0123456789abcdef";
 
-const api = (path: string, port = withToken.port) => `http://127.0.0.1:${port}${path}`;
-const post$ = (path: string, body: unknown, port = withToken.port, method: "POST" | "PUT" = "POST") =>
-  fetch(api(path, port), { method, headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
+const api = (path: string) => `http://127.0.0.1:${server.port}${path}`;
+/** a write as the page sends it, with this browser's answer key (null for
+ *  none) and whatever else a caller adds */
+const post$ = (path: string, body: unknown, key: string | null = TOKEN, method: "POST" | "PUT" = "POST", extra: Record<string, string> = {}) =>
+  fetch(api(path), {
+    method,
+    headers: { "content-type": "application/json", ...(key === null ? {} : { [ANSWER_KEY_HEADER]: key }), ...extra },
+    body: JSON.stringify(body),
+  });
 
 async function until(pred: () => boolean | Promise<boolean>, what: string, ms = 10_000): Promise<void> {
   const start = Date.now();
@@ -172,8 +179,7 @@ beforeAll(async () => {
   appPath = join(root, "app");
   await Bun.$`mkdir -p ${appPath} && git -C ${appPath} init -q`.quiet();
   asks.set("a1", ask({}));
-  withToken = await startServer({ root, port: 0, chan: { ...CFG, token: TOKEN }, asks: { closedKeep: 400, sweepEvery: 100, beatEvery: 1_500 } });
-  readOnly = await startServer({ root, port: 0, chan: CFG });
+  server = await startServer({ root, port: 0, chan: CFG, asks: { closedKeep: 400, sweepEvery: 100 } });
   // a browser on the event stream, so an answer can say which device it came from
   void (async () => {
     const q = new URLSearchParams({ client: CLIENT, name: "Eric's Phone", platform: "ios" });
@@ -197,14 +203,13 @@ beforeAll(async () => {
       // aborted
     }
   })();
-  // both backends' followers are on the stream before the tests post
-  await until(() => [...streams].filter((s) => s.channels === "asks").length >= 2, "both followers");
+  // the follower is on the stream before the tests post
+  await until(() => [...streams].some((s) => s.channels === "asks"), "the follower");
 });
 
 afterAll(async () => {
   listening.abort();
-  withToken.stop();
-  readOnly.stop();
+  server.stop();
   broker.stop(true);
   for (const [k, v] of Object.entries(saved)) {
     if (v === undefined) delete process.env[k];
@@ -214,14 +219,13 @@ afterAll(async () => {
 });
 
 describe("asks through canopy", () => {
-  test("the open asks, whether this backend can answer, and presence", async () => {
+  test("the open asks, that an answer can go through, and presence", async () => {
     const info = (await (await fetch(api("/api/asks"))).json()) as AsksInfo;
     expect(info.ready).toBe(true);
+    // the broker answers; whether a page can answer is whether it has a key
     expect(info.canAnswer).toBe(true);
     expect(info.asks.map((a) => a.id)).toEqual(["a1"]);
     expect(info.presence?.state).toBe("away");
-    const ro = (await (await fetch(api("/api/asks", readOnly.port))).json()) as AsksInfo;
-    expect(ro.canAnswer).toBe(false);
   });
 
   test("a new ask on the channel arrives as an asks event", async () => {
@@ -231,7 +235,7 @@ describe("asks through canopy", () => {
     expect(got?.questions?.[0]?.options[0]?.label).toBe("A");
   });
 
-  test("an answer carries the answering device's name and the token", async () => {
+  test("an answer carries the answering device's name and its answer key", async () => {
     // the device list is debounced; wait for the stream's device to be known
     await until(async () => ((await (await fetch(api("/api/devices"))).json()) as { id: string }[]).some((d) => d.id === CLIENT), "the device");
     const res = await post$("/api/asks/answer", { id: "a1", behavior: "allow", always: true, client: CLIENT });
@@ -244,15 +248,53 @@ describe("asks through canopy", () => {
     expect((await post$("/api/asks/answer", { id: "a1", behavior: "deny" })).status).toBe(409);
   });
 
-  test("a backend without a token cannot answer, set presence or edit guards", async () => {
-    const n = answers.length;
-    expect((await post$("/api/asks/answer", { id: "a2", behavior: "allow" }, readOnly.port)).status).toBe(403);
-    expect((await post$("/api/presence", { away: true }, readOnly.port)).status).toBe(403);
-    expect((await post$("/api/guards", { rules: [] }, readOnly.port, "PUT")).status).toBe(403);
-    expect(((await (await fetch(api("/api/guards", readOnly.port))).json()) as GuardsInfo).canEdit).toBe(false);
-    expect(answers.length).toBe(n);
-    // a malformed answer is refused before the token is looked at
-    expect((await post$("/api/asks/answer", { id: "a2", behavior: "maybe" }, readOnly.port)).status).toBe(400);
+  test("no write goes to the broker without an answer key, or from another site", async () => {
+    const n = { answers: answers.length, puts: presencePuts.length, beats, guards: [...guards] };
+    const writes = (key: string | null, extra: Record<string, string> = {}) => [
+      post$("/api/asks/answer", { id: "a2", behavior: "allow" }, key, "POST", extra),
+      post$("/api/presence", { away: true }, key, "POST", extra),
+      post$("/api/presence/beat", {}, key, "POST", extra),
+      post$("/api/guards", { rules: [] }, key, "PUT", extra),
+    ];
+    // a shell's call on the loopback, no Origin and no key: what an agent
+    // with CANOPY_API would send to approve its own ask
+    for (const res of await Promise.all(writes(null))) {
+      expect(res.status).toBe(403);
+      expect(((await res.json()) as { error: string }).error).toContain("answer key");
+    }
+    // a browser saying the fetch came from another site, key or not
+    for (const res of await Promise.all(writes(TOKEN, { "sec-fetch-site": "cross-site" }))) expect(res.status).toBe(403);
+    for (const res of await Promise.all(writes(TOKEN, { "sec-fetch-site": "same-site" }))) expect(res.status).toBe(403);
+    // a key the broker refuses is a 403 too, its words passed on
+    const bad = await post$("/api/presence/beat", {}, "not-the-key");
+    expect(bad.status).toBe(403);
+    expect(((await bad.json()) as { error: string }).error).toContain("bad answer token");
+    expect({ answers: answers.length, puts: presencePuts.length, beats, guards }).toEqual(n);
+    // the page's own fetch says same-origin, and goes through with its key
+    expect((await post$("/api/presence/beat", {}, TOKEN, "POST", { "sec-fetch-site": "same-origin" })).status).toBe(200);
+    expect(beats).toBe(n.beats + 1);
+    // reading needs no key
+    expect(((await (await fetch(api("/api/guards"))).json()) as GuardsInfo).canEdit).toBe(true);
+    // a malformed answer is refused, key or not
+    expect((await post$("/api/asks/answer", { id: "a2", behavior: "maybe" })).status).toBe(400);
+  });
+
+  test("the server keeps no key: each write brings its own, and none is ever logged", async () => {
+    const said: string[] = [];
+    const was = { log: console.log, error: console.error, warn: console.warn };
+    const tap = (...a: unknown[]) => void said.push(a.map(String).join(" "));
+    console.log = tap;
+    console.error = tap;
+    console.warn = tap;
+    try {
+      expect((await post$("/api/presence/beat", {})).status).toBe(200);
+      // the key of the write before is not the next one's
+      expect((await post$("/api/presence/beat", {}, null)).status).toBe(403);
+      expect((await post$("/api/presence/beat", {}, "wrong-secret")).status).toBe(403);
+    } finally {
+      Object.assign(console, was);
+    }
+    expect(said.some((l) => l.includes(TOKEN) || l.includes("wrong-secret"))).toBe(false);
   });
 
   test("a closed ask stays a while to say how it ended, then leaves", async () => {
@@ -279,8 +321,8 @@ describe("asks through canopy", () => {
   test("guards are the broker's, checked before they go", async () => {
     const got = (await (await fetch(api("/api/guards"))).json()) as GuardsInfo;
     expect(got).toEqual({ rules: ["Bash(git push --force:*)"], canEdit: true });
-    expect((await post$("/api/guards", { rules: ["Bash(rm -rf *)", "not a rule!"] }, withToken.port, "PUT")).status).toBe(400);
-    const put = await post$("/api/guards", { rules: [" Bash(rm -rf *) ", "Bash(rm -rf *)", "", "Bash(bun run redeploy:*)"] }, withToken.port, "PUT");
+    expect((await post$("/api/guards", { rules: ["Bash(rm -rf *)", "not a rule!"] }, TOKEN, "PUT")).status).toBe(400);
+    const put = await post$("/api/guards", { rules: [" Bash(rm -rf *) ", "Bash(rm -rf *)", "", "Bash(bun run redeploy:*)"] }, TOKEN, "PUT");
     expect(put.status).toBe(200);
     expect(guards).toEqual(["Bash(rm -rf *)", "Bash(bun run redeploy:*)"]);
   });
@@ -312,6 +354,16 @@ describe("asks through canopy", () => {
 });
 
 describe("the pure parts", () => {
+  test("a write's answer key: the header, from the page's own origin or no browser at all", () => {
+    const req = (h: Record<string, string>) => new Request("http://x/api/asks/answer", { method: "POST", headers: h });
+    expect(answerKeyOf(req({ [ANSWER_KEY_HEADER]: " k-1 " }))).toEqual({ key: "k-1" });
+    expect(answerKeyOf(req({ [ANSWER_KEY_HEADER]: "k", "sec-fetch-site": "same-origin" }))).toEqual({ key: "k" });
+    expect(answerKeyOf(req({ [ANSWER_KEY_HEADER]: "k", "sec-fetch-site": "cross-site" }))).toHaveProperty("error");
+    expect(answerKeyOf(req({ [ANSWER_KEY_HEADER]: "k", "sec-fetch-site": "none" }))).toHaveProperty("error");
+    expect(answerKeyOf(req({}))).toHaveProperty("error");
+    expect(answerKeyOf(req({ [ANSWER_KEY_HEADER]: "two words" }))).toHaveProperty("error");
+  });
+
   test("who answered, as the broker keeps it", () => {
     expect(answerer("Eric's Phone")).toBe("Erics-Phone");
     expect(answerer(null)).toBe("canopy");
@@ -347,12 +399,12 @@ function shell(port: number, term: string): { ws: WebSocket; opened: Promise<voi
   return { ws, opened, text: () => out.join("") };
 }
 
-const watched = async (term: string, port = withToken.port) =>
-  ((await (await fetch(api(`/api/terms/watched?term=${term}`, port))).json()) as { watched: boolean }).watched;
+const watched = async (term: string) => ((await (await fetch(api(`/api/terms/watched?term=${term}`))).json()) as { watched: boolean }).watched;
 
 describe("a shell someone is at", () => {
-  test("is watched only after a keystroke, not a terminal's own reply", async () => {
-    const s = shell(withToken.port, TERM);
+  test("is watched only after a keystroke, not a terminal's own reply, and beats nothing itself", async () => {
+    const before = beats;
+    const s = shell(server.port, TERM);
     await s.opened;
     expect(await watched(TERM)).toBe(false);
     // a device-attributes reply and a focus event are the terminal, not a person
@@ -362,16 +414,9 @@ describe("a shell someone is at", () => {
     s.ws.send(new TextEncoder().encode("echo watched-here\n"));
     await until(() => s.text().includes("watched-here"), "the echo");
     expect(await watched(TERM)).toBe(true);
-    // Presence: a keystroke a beat's interval after the last beat (clearing
-    // away above was one, the echo may have been another) beats, and a
-    // second keystroke right after it does not.
-    await Bun.sleep(1_600);
-    const before = beats;
-    s.ws.send(new TextEncoder().encode(" "));
-    await until(() => beats === before + 1, "a presence beat");
-    s.ws.send(new TextEncoder().encode("true\n"));
+    // presence is the page's to beat, with its own key: canopy holds none
     await Bun.sleep(150);
-    expect(beats).toBe(before + 1);
+    expect(beats).toBe(before);
     // an unknown shell is not watched, and not an error
     expect(await watched("0".repeat(32))).toBe(false);
     s.ws.close();
@@ -398,7 +443,7 @@ describe("a shell someone is at", () => {
       `${JSON.stringify({ type: "session_meta", payload: { id: "33333333-3333-4333-8333-333333333333", cwd: appPath, source: "cli" } })}\n${JSON.stringify({ type: "event_msg", payload: { type: "user_message", message: "hello" } })}\n`,
     );
 
-    const s = shell(withToken.port, TERM);
+    const s = shell(server.port, TERM);
     await s.opened;
     const read = async (q: string) => {
       const res = await fetch(api(`/api/terms/transcript?${q}`));

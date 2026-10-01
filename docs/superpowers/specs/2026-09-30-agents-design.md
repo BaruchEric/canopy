@@ -791,3 +791,47 @@ agent.
   `tr` runs it (each byte of a non-ASCII character becomes `-`), the
   machine the shells run on; a Mac's `tr` in a UTF-8 locale may differ for
   such a name.
+
+### 5. The answer key lives in the browser, not in canopy (review, 2026-10-01)
+
+Phase 4 gave canopy's server the answer token
+(`CANOPY_TAILCHAN_ANSWER_TOKEN`). A review found that it protected nothing,
+in two ways:
+
+- **canopy's own API answered for it.** Every canopy shell has `CANOPY_API`
+  (`http://127.0.0.1:<port>`), and the origin gate lets a loopback request
+  with no `Origin` through, as it must for the hook's `watched` call. Any
+  process on the machine could `POST /api/asks/answer`, `/api/presence`,
+  `/api/presence/beat` or `PUT /api/guards`, and `AskHub` added the token
+  itself: an agent could approve its own ask, or another's.
+- **Its environment was readable.** On the mini canopy runs with
+  `pid: service:shells` as the same uid as the agents, so any agent could read
+  `/proc/<canopy pid>/environ`; deleting the variable from `process.env`
+  does not change what the kernel shows there.
+
+So no canopy holds a secret. The broker's `ANSWER_TOKENS` already takes
+`name:secret` pairs, so each device gets its own: the secret is pasted into
+that browser's Settings ("answer key", localStorage `canopy.answerKey`,
+apart from `canopy.settings`), and the page sends it as `X-Canopy-Answer-Key`
+to its home backend on those four writes only. canopy forwards it as the
+broker's Bearer token and neither keeps nor logs it. A write without a key
+is refused (403), as is one whose `Sec-Fetch-Site` is present and not
+`same-origin`; a browser always sends that header on a fetch, while curl can
+forge it, so it is a cheap extra check and the key is the gate. The broker
+names the device in `answeredBy` (`<device>@<key name>`), and one device's
+key is revoked by dropping its pair. A "test key" button makes one presence
+beat, the write that changes nothing a person set, and says whether the
+broker took the key.
+
+`GET /api/asks`'s `canAnswer` (and `GET /api/guards`'s `canEdit`) now only
+say the broker answers; the page decides whether it can answer by whether it
+holds a key, and without one shows the asks read-only with "add your answer
+key in Settings". The server's own presence beat on a shell keystroke is
+gone, since it needed the server's token; the page's beat on any pointer or
+key (a capture listener on the window, which sees an xterm's keys) covers it.
+`watched` stays a server-side stamp, which needs no secret.
+
+What is left: where the browser and the agents run as the same user (the
+Mac), a determined agent can still read the key out of the browser's
+storage. As phase 4 said of the old token, the key stops accidents and
+casual prompt-injected tries, not that.

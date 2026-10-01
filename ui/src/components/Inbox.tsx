@@ -6,7 +6,7 @@ import { api } from "../api";
 import { askWord, detailText, endingWord, inboxTitle, leftWord, recentAsks, type InboxAnswer, type InboxItem } from "../inbox";
 import { useFitPop } from "../pop";
 import { qual } from "../registry";
-import { inboxItems, useStore } from "../store";
+import { canAnswer as canAnswerHere, inboxItems, useStore } from "../store";
 import { PermissionForm, Questions } from "./Prompts";
 
 const errText = (err: unknown) => String(err instanceof Error ? err.message : err);
@@ -37,7 +37,7 @@ const SOURCE_WORD: Record<InboxItem["source"], string> = { ask: "agent", run: "r
 
 /** One thing waiting: who, where and the countdown, then the form that
  *  answers it, folded until picked. An ask that cannot be answered here (no
- *  token) shows what it asks and says so. */
+ *  answer key on this device) shows what it asks and says so. */
 function InboxRow({
   item,
   now,
@@ -124,7 +124,7 @@ function InboxRow({
               ) : (
                 detail && <pre className="ask-detail">{detail}</pre>
               )}
-              <p className="settings-hint">canopy has no answer token here, so this ask waits for its terminal. See the note below.</p>
+              <p className="settings-hint">This device has no answer key, so this ask waits for its terminal: add yours in Settings to answer it here.</p>
             </div>
           ) : item.kind === "gate" ? (
             <div className="ask">
@@ -231,7 +231,7 @@ export function InboxChip({ onGit }: { onGit?: () => void } = {}) {
   const open = useStore((s) => s.inboxOpen);
   const focus = useStore((s) => s.inboxFocus);
   const ready = useStore((s) => s.asksReady);
-  const canAnswer = useStore((s) => s.canAnswer);
+  const canAnswer = useStore(canAnswerHere);
   const presence = useStore((s) => s.presence);
   const home = useStore((s) => s.home);
   const asks = useStore((s) => s.asks);
@@ -344,8 +344,8 @@ export function InboxChip({ onGit }: { onGit?: () => void } = {}) {
                 </>
               ) : (
                 <p className="settings-hint">
-                  canopy cannot answer asks or set presence here: {home} has no answer token (CANOPY_TAILCHAN_ANSWER_TOKEN, see docs/deploy.md). Runs and
-                  workflows still take their answers.
+                  This device cannot answer asks or set presence: add your answer key in Settings (this device's secret from the broker's
+                  ANSWER_TOKENS, see docs/deploy.md); {home} passes it on and keeps nothing. Runs and workflows still take their answers.
                 </p>
               )}
               {err && <p className="settings-hint error">{err}</p>}

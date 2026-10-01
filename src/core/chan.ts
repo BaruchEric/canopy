@@ -17,11 +17,6 @@ export interface ChanConfig {
   /** canopy's own handle and the channel it posts to */
   bot: string;
   channel: string;
-  /** the broker's answer token (`Authorization: Bearer`): what lets canopy
-   *  answer an ask, set presence and edit guards. From
-   *  `CANOPY_TAILCHAN_ANSWER_TOKEN` alone, never the CLI's file, which every
-   *  agent on the machine can read. Absent: asks are read-only here. */
-  token?: string;
 }
 
 /** KEY=value lines, as the CLI's config file has them; quotes stripped */
@@ -45,14 +40,13 @@ export function parseEnvFile(text: string): Record<string, string> {
 export function chanConfig(env: Record<string, string | undefined>, file: Record<string, string>): ChanConfig | null {
   const url = (env.CANOPY_TAILCHAN_URL || env.TAILCHAN_URL || file.TAILCHAN_URL || "").replace(/\/+$/, "");
   if (!/^https?:\/\/\S+$/.test(url)) return null;
-  // the env alone: the file is the CLI's, and an agent's CLI never answers
-  const token = (env.CANOPY_TAILCHAN_ANSWER_TOKEN ?? "").trim();
+  // No answer token here: answering takes the answering browser's own key,
+  // which canopy forwards and never holds (server/asks.ts says why).
   return {
     url,
     as: (env.CANOPY_TAILCHAN_AS || env.TAILCHAN_HUMAN || file.TAILCHAN_HUMAN || "canopy-user").toLowerCase(),
     bot: (env.CANOPY_TAILCHAN_BOT || "canopy").toLowerCase(),
     channel: (env.CANOPY_TAILCHAN_CHANNEL || "canopy").replace(/^#/, "").toLowerCase(),
-    ...(/^\S+$/.test(token) ? { token } : {}),
   };
 }
 
@@ -192,8 +186,9 @@ export class Chan {
     return a;
   }
 
-  /** answers an open ask; `by` is who, which the broker writes as
-   *  `<by>@<token name>` (a 409 when the ask is no longer open) */
+  /** answers an open ask with the answering browser's key; `by` is who,
+   *  which the broker writes as `<by>@<key name>` (a 409 when the ask is no
+   *  longer open) */
   async answerAsk(as: string, token: string, id: string, answer: AskAnswer & { by: string }): Promise<Ask> {
     const a = asAsk(await this.call(as, "POST", `/v1/asks/${encodeURIComponent(id)}/answer`, answer, undefined, token));
     if (!a) throw new ChanError(502, "tailchan answered with something that is not an ask");

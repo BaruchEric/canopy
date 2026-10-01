@@ -2663,7 +2663,7 @@ export async function startServer(opts: {
    *  stand-in lister (it is off under `bun test` and `CANOPY_AGENT_SCAN=0`) */
   registry?: { scanEvery?: number; relistEvery?: number; lister?: () => Promise<AgentProc[]>; container?: boolean };
   /** the asks hub's timings, shrunk by tests */
-  asks?: { closedKeep?: number; beatEvery?: number; relistEvery?: number; sweepEvery?: number };
+  asks?: { closedKeep?: number; relistEvery?: number; sweepEvery?: number };
 }): Promise<{ port: number; stop: () => void }> {
   const cfg = await loadConfig();
   const root = await realpath(opts.root);
@@ -2680,9 +2680,10 @@ export async function startServer(opts: {
   const fixed = opts.harnesses;
   // one broker address for tailchan and the registry both
   const chanCfg = opts.chan === undefined ? loadChanConfig() : opts.chan;
-  // The answer token is canopy's alone: read once into the config above,
-  // then out of this process's env, so no shell, run or tmux server started
-  // from here inherits it (`exec` and `termEnv` pass the live env).
+  // canopy holds no answer token (each browser keeps its own key, which
+  // server/asks.ts forwards), but a deploy from before may still set one:
+  // it is never read, and kept out of every shell, run and tmux server
+  // started from here all the same (`exec` and `termEnv` pass the live env).
   delete process.env["CANOPY_TAILCHAN_ANSWER_TOKEN"];
   // A canopy started from a canopy shell carries that shell's own names
   // (CANOPY_TERM, TAILCHAN_AS and the rest), which every child would
@@ -3114,11 +3115,10 @@ export async function startServer(opts: {
           }
           const term = ws as ServerWebSocket<TermSocket>;
           // a person at the keyboard, not the terminal answering a query:
-          // the shell is watched, and the human is here
+          // the shell is watched (the page's own beat says the human is here)
           if (typeof msg !== "string" && isKeystroke(msg)) {
             const live = state.terms.get(term.data.id);
             if (live && !live.info.task) live.lastInput = Date.now();
-            void state.asks.beat();
           }
           const session = sessionOf(term);
           if (session) relay(session, msg);

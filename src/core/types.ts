@@ -1618,8 +1618,9 @@ export interface Presence {
 }
 
 /** `GET /api/asks` (a 503 without a broker): the open asks and the ones
- *  that closed in the last minutes, whether this backend can answer (it has
- *  an answer token), and the human's presence when the broker said */
+ *  that closed in the last minutes, whether this backend can pass an answer
+ *  on (its broker answers; whether this page can send one is whether it
+ *  holds an answer key), and the human's presence when the broker said */
 export interface AsksInfo {
   ready: true;
   canAnswer: boolean;
@@ -1628,7 +1629,8 @@ export interface AsksInfo {
 }
 
 /** `GET /api/guards`: the broker's guard rules, in Claude's rule syntax,
- *  and whether this backend may change them (it has an answer token) */
+ *  and whether this backend can pass a change on (a page changes them with
+ *  its answer key) */
 export interface GuardsInfo {
   rules: string[];
   canEdit: boolean;

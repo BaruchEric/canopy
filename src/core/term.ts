@@ -133,7 +133,8 @@ export function parseTermMessage(text: string): TermMessage | null {
   return { kind: "resize", size: termSize(cols, rows) };
 }
 
-/** what canopy keeps to itself: never in a shell's environment */
+/** never in a shell's environment: the answer token a deploy from before
+ *  browser-held answer keys may still set (canopy no longer reads it) */
 export const PRIVATE_ENV = ["CANOPY_TAILCHAN_ANSWER_TOKEN"] as const;
 
 /** What canopy tells each shell and run about itself (which shell, run,

@@ -26,6 +26,7 @@ import { cardsByRepoCard, mergeCards, replaceCards } from "./agentcards";
 import { clientCaps } from "../../src/core/client";
 import { normalizeRoutes, resolveAgent } from "../../src/core/route";
 import { flatAgent, hasRouting, NO_ROUTES } from "./agents";
+import { cleanKey, keyTestOf, readAnswerKey, writeAnswerKey, type KeyTest } from "./answerKey";
 import { listedTask } from "../../src/core/tasks";
 import {
   DEFAULT_LAUNCH,
@@ -542,8 +543,10 @@ interface CanopyState {
   asks: Record<string, Ask>;
   /** whether the home backend follows asks at all (it has a broker) */
   asksReady: boolean;
-  /** whether the home backend can answer them (it has an answer token) */
-  canAnswer: boolean;
+  /** This browser's answer key (`ui/src/answerKey.ts`), which answering an
+   *  ask, presence and guards take: sent to the home backend on those
+   *  writes and nowhere else. Null: the asks are shown read-only. */
+  answerKey: string | null;
   /** the human's presence at the broker, as last heard */
   presence: Presence | null;
   /** whether the inbox popover is up, and the item it opened on */
@@ -770,13 +773,18 @@ interface CanopyState {
   openInbox: (focus?: string) => void;
   closeInbox: () => void;
   /** routes an answer to where the item came from: a run's prompt, a
-   *  flow's gate, or the broker's ask through the home backend's token */
+   *  flow's gate, or the broker's ask with this browser's answer key */
   answerInbox: (item: InboxItem, answer: InboxAnswer) => Promise<void>;
   /** pins away, or clears it and is here */
   setAway: (away: boolean) => Promise<void>;
   /** someone is at this page: the human is here, at most once a minute,
-   *  and only through a home backend that can say so (it has the token) */
+   *  and only with an answer key to say so with */
   pagePresence: () => void;
+  /** keeps this browser's answer key, or forgets it with null */
+  setAnswerKey: (key: string | null) => void;
+  /** tries a key with a presence beat, the one write that changes nothing
+   *  a person set: ok, or refused by the broker, or no answer */
+  testAnswerKey: (key: string) => Promise<KeyTest>;
   /** opens the popover, on a conversation or target ("#x", "@h") when given */
   openChan: (target?: string) => void;
   closeChan: () => void;
@@ -1228,7 +1236,7 @@ export const useStore = create<CanopyState>((set, get) => ({
   registryReady: false,
   asks: {},
   asksReady: false,
-  canAnswer: false,
+  answerKey: readAnswerKey(),
   presence: null,
   inboxOpen: false,
   inboxFocus: null,
@@ -2064,9 +2072,9 @@ export const useStore = create<CanopyState>((set, get) => ({
     try {
       const info = await api.asks();
       const list = Array.isArray(info.asks) ? info.asks : [];
-      set({ asks: Object.fromEntries(list.map((a) => [a.id, a])), asksReady: true, canAnswer: info.canAnswer === true, presence: info.presence ?? null });
+      set({ asks: Object.fromEntries(list.map((a) => [a.id, a])), asksReady: true, presence: info.presence ?? null });
     } catch {
-      set({ asks: {}, asksReady: false, canAnswer: false, presence: null });
+      set({ asks: {}, asksReady: false, presence: null });
     }
   },
   openInbox: (focus) => {
@@ -2088,23 +2096,45 @@ export const useStore = create<CanopyState>((set, get) => ({
     }
     const a = toAskAnswer(answer);
     if (!a) throw new Error("an ask takes allow, deny or answers");
-    const ask = await api.answerAsk(item.id, a);
+    const key = get().answerKey;
+    if (!key) throw new Error(NO_KEY);
+    const ask = await api.answerAsk(item.id, a, key);
     set((s) => ({ asks: mergeAsks(s.asks, [ask]) }));
   },
   setAway: async (away) => {
-    const presence = await api.setAway(away);
+    const key = get().answerKey;
+    if (!key) throw new Error(NO_KEY);
+    const presence = await api.setAway(away, key);
     set({ presence });
   },
   pagePresence: () => {
     const now = Date.now();
-    if (!get().canAnswer || now - lastPageBeat < PAGE_BEAT) return;
+    const { answerKey: key, asksReady } = get();
+    if (!key || !asksReady || now - lastPageBeat < PAGE_BEAT) return;
     lastPageBeat = now;
     void api
-      .presenceBeat()
+      .presenceBeat(key)
       .then(({ presence }) => {
         if (presence) set({ presence });
       })
       .catch(() => {});
+  },
+  setAnswerKey: (raw) => {
+    const key = raw === null ? null : cleanKey(raw);
+    if (raw !== null && key === null) throw new Error("an answer key is one word: the secret half of a name:secret pair in the broker's ANSWER_TOKENS");
+    writeAnswerKey(key);
+    set({ answerKey: key });
+  },
+  testAnswerKey: async (raw) => {
+    const key = cleanKey(raw);
+    if (!key) return { ok: false, refused: true, why: "an answer key is one word" };
+    try {
+      const { presence } = await api.presenceBeat(key);
+      if (presence) set({ presence });
+      return keyTestOf(null);
+    } catch (e) {
+      return keyTestOf(e);
+    }
   },
   loadChan: async () => {
     const chan = await api.tailchan().catch((e: unknown): TailchanInfo => ({ ready: false, reason: String(e instanceof Error ? e.message : e) }));
@@ -2823,6 +2853,13 @@ export function agentsOn(s: CanopyState, repoId: string): AgentCard[] {
   const card = everyIndex.get(repoId);
   return (card && agentsByCard(s).get(card.key)) || NO_AGENTS;
 }
+
+/** what a write that needs an answer key says without one */
+const NO_KEY = "no answer key on this device: add yours in Settings";
+
+/** whether this page can answer an ask: the home backend follows asks and
+ *  this browser holds an answer key */
+export const canAnswer = (s: Pick<CanopyState, "asksReady" | "answerKey">): boolean => s.asksReady && s.answerKey !== null;
 
 /** how often the page's own activity tells the broker the human is here */
 const PAGE_BEAT = 60_000;

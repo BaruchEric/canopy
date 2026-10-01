@@ -65,6 +65,7 @@ import type {
 } from "../../src/core/types";
 import { pickUrl, split, wsUrl, type BackendSignal } from "./backends";
 import { normalizeRoutes } from "../../src/core/route";
+import { keyHeaders } from "./answerKey";
 import {
   qDevice,
   qEvent,
@@ -432,22 +433,26 @@ export const api = {
   tailchan: () => req<TailchanInfo>(homeName(), "/api/tailchan"),
   /** the agent registry, the home backend's alone; a 503 without a broker */
   registry: () => req<RegistryInfo>(homeName(), "/api/registry"),
-  /** the broker's asks as the home backend follows them, whether it can
-   *  answer, and presence; a 503 without a broker */
+  /** the broker's asks as the home backend follows them, and presence; a
+   *  503 without a broker */
   asks: () => req<AsksInfo>(homeName(), "/api/asks"),
   /** one ask, open or long closed, for a link to it */
   ask: (id: string) => req<Ask>(homeName(), `/api/asks/one?id=${encodeURIComponent(id)}`),
-  /** answers an ask through the home backend's token; `client` names this
-   *  browser, so the broker can say which device answered */
-  answerAsk: (id: string, answer: AskAnswer) =>
-    req<Ask>(homeName(), "/api/asks/answer", { method: "POST", body: JSON.stringify({ id, ...answer, client: clientId() }) }),
+  /** Answers an ask with this browser's answer key, which the home backend
+   *  (and it alone) forwards to the broker; `client` names this browser, so
+   *  the broker can say which device answered. */
+  answerAsk: (id: string, answer: AskAnswer, key: string) =>
+    req<Ask>(homeName(), "/api/asks/answer", { method: "POST", headers: keyHeaders(key), body: JSON.stringify({ id, ...answer, client: clientId() }) }),
   /** away pins until cleared; clearing it is being here */
-  setAway: (away: boolean) => req<Presence>(homeName(), "/api/presence", { method: "POST", body: JSON.stringify({ away }) }),
-  /** the page's own "someone is here" */
-  presenceBeat: () => req<{ presence: Presence | null }>(homeName(), "/api/presence/beat", { method: "POST", body: "{}" }),
-  /** the broker's guard rules, and whether the home backend may change them */
+  setAway: (away: boolean, key: string) =>
+    req<Presence>(homeName(), "/api/presence", { method: "POST", headers: keyHeaders(key), body: JSON.stringify({ away }) }),
+  /** the page's own "someone is here", which is also how a key is tested */
+  presenceBeat: (key: string) =>
+    req<{ presence: Presence | null }>(homeName(), "/api/presence/beat", { method: "POST", headers: keyHeaders(key), body: "{}" }),
+  /** the broker's guard rules */
   guards: () => req<GuardsInfo>(homeName(), "/api/guards"),
-  setGuards: (rules: string[]) => req<GuardsInfo>(homeName(), "/api/guards", { method: "PUT", body: JSON.stringify({ rules }) }),
+  setGuards: (rules: string[], key: string) =>
+    req<GuardsInfo>(homeName(), "/api/guards", { method: "PUT", headers: keyHeaders(key), body: JSON.stringify({ rules }) }),
   chanRead: (target: string, n = 50) =>
     req<ChanMessage[]>(homeName(), `/api/tailchan/read?target=${encodeURIComponent(target)}&n=${n}`),
   chanSend: (target: string, body: string, kind: "text" | "clip" = "text") =>

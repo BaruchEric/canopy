@@ -8,11 +8,19 @@
  *   change, then kept by id and broadcast as `asks` events. A closed ask
  *   (answered, expired, withdrawn, or routed to the terminal at once) stays
  *   `CLOSED_KEEP` so the page can say how it ended, then leaves as `gone`.
- * - Answers, presence and guards go to the broker with the answer token
- *   (`CANOPY_TAILCHAN_ANSWER_TOKEN`); without it every write answers 403 and
- *   the page shows the asks read-only.
- * - Presence: a keystroke in one of this backend's shells, or the page's own
- *   beat, makes the human `here` at most once a `BEAT_EVERY`.
+ * - Answers, presence and guards go to the broker with the answering
+ *   browser's own answer key: one device's named secret out of the broker's
+ *   `ANSWER_TOKENS`, which the page keeps (Settings, "answer key") and sends
+ *   as `X-Canopy-Answer-Key` on each of the four writes. canopy forwards it
+ *   as the broker's Bearer token and never keeps or logs it. A write without
+ *   one is refused (403), and so is one a browser says came from another
+ *   site (`Sec-Fetch-Site`). The server holds no secret on purpose: its
+ *   loopback API answers every shell on the machine (`CANOPY_API`), and on
+ *   the mini any agent running as the same user can read canopy's
+ *   environment through the shared pid namespace, so a key held here would
+ *   let an agent approve its own ask.
+ * - Presence: the page's own beat, on a pointer or key anywhere in it
+ *   (xterm's keystrokes included), makes the human `here`.
  *
  * Every backend with a broker follows; the page reads only its home
  * backend's, as it does the registry (amendment 8).
@@ -24,8 +32,6 @@ import type { Ask, AskAnswer, AsksInfo, ChanMessage, GuardsInfo, Presence, Serve
 
 /** how long a closed ask stays in the list, for the page to say how it went */
 export const CLOSED_KEEP = 10 * 60_000;
-/** the most often a keystroke makes the human `here` at the broker */
-export const BEAT_EVERY = 60_000;
 /** how often the open list is read again, a net under the stream */
 const RELIST_EVERY = 5 * 60_000;
 /** how often closed asks past `CLOSED_KEEP` are dropped */
@@ -38,7 +44,22 @@ const json = (data: unknown, status = 200) =>
   new Response(JSON.stringify(data), { status, headers: { "content-type": "application/json" } });
 
 const NO_BROKER = "tailchan is not set up on this backend: set CANOPY_TAILCHAN_URL or TAILCHAN_URL";
-const NO_TOKEN = "canopy has no answer token here: set CANOPY_TAILCHAN_ANSWER_TOKEN for this backend";
+
+/** the header a browser's answer key rides in, to this backend alone */
+export const ANSWER_KEY_HEADER = "x-canopy-answer-key";
+
+/** The answer key a write carries, or why it is refused. A browser always
+ *  says where a fetch came from (`Sec-Fetch-Site`), so anything but the
+ *  page's own origin is refused; a request with no such header (curl, an
+ *  agent) can claim anything, which is why the key, not this, is the gate. */
+export function answerKeyOf(req: Request): { key: string } | { error: string } {
+  const site = req.headers.get("sec-fetch-site");
+  if (site !== null && site !== "same-origin") return { error: "answers, presence and guards are written from canopy's own page only" };
+  const key = (req.headers.get(ANSWER_KEY_HEADER) ?? "").trim();
+  if (!key) return { error: "no answer key: add this device's in canopy's Settings (a name:secret pair in the broker's ANSWER_TOKENS)" };
+  if (!/^\S{1,512}$/.test(key)) return { error: "an answer key is one word, as the broker's ANSWER_TOKENS has it" };
+  return { key };
+}
 
 /** what a follower cares about in an ask: everything, compared whole */
 const sig = (a: Ask): string => JSON.stringify(a);
@@ -80,8 +101,6 @@ export interface AskHubDeps {
   chan?: Chan;
   /** ms a closed ask is kept */
   closedKeep?: number;
-  /** ms between presence beats at most */
-  beatEvery?: number;
   /** ms between whole re-reads of the open list, 0 for none */
   relistEvery?: number;
   /** ms between sweeps of closed asks, 0 for none */
@@ -97,8 +116,6 @@ export class AskHub {
   private listed = false;
   private listing: Promise<void> | null = null;
   private listFailing = false;
-  private lastBeat = 0;
-  private beatFailing = false;
   private stopFollow: (() => void) | null = null;
   private timers: ReturnType<typeof setInterval>[] = [];
 
@@ -107,11 +124,6 @@ export class AskHub {
     private readonly deps: AskHubDeps,
   ) {
     this.chan = cfg ? (deps.chan ?? new Chan(cfg.url)) : null;
-  }
-
-  /** whether this backend can answer, set presence and edit guards */
-  get canAnswer(): boolean {
-    return !!(this.cfg && this.chan && this.cfg.token);
   }
 
   start(): void {
@@ -220,25 +232,6 @@ export class AskHub {
     return p;
   }
 
-  /** The human is here: a keystroke in a shell, or the page's own beat. At
-   *  most once a `BEAT_EVERY`, only with a token, never waited on. */
-  beat(now = Date.now()): Promise<Presence | null> {
-    if (!this.canAnswer || !this.cfg?.token || !this.chan) return Promise.resolve(this.presence);
-    if (now - this.lastBeat < (this.deps.beatEvery ?? BEAT_EVERY)) return Promise.resolve(this.presence);
-    this.lastBeat = now;
-    return this.chan
-      .beatPresence(this.cfg.bot, this.cfg.token)
-      .then((p) => {
-        this.beatFailing = false;
-        return this.tell(p);
-      })
-      .catch((e: unknown) => {
-        if (!this.beatFailing) console.error(`canopy: presence beat: ${e instanceof Error ? e.message : e}`);
-        this.beatFailing = true;
-        return this.presence;
-      });
-  }
-
   /** the routes under /api/asks, /api/presence and /api/guards, or null */
   async handle(req: Request, url: URL): Promise<Response | null> {
     const path = url.pathname;
@@ -247,7 +240,14 @@ export class AskHub {
     if (!ours) return null;
     if (!this.cfg || !this.chan) return json({ error: NO_BROKER }, 503);
     const { cfg, chan } = this;
-    const token = cfg.token ?? null;
+    // the four writes take the browser's answer key, and only for this call
+    const write =
+      (path === "/api/asks/answer" && method === "POST") ||
+      ((path === "/api/presence" || path === "/api/presence/beat") && method === "POST") ||
+      (path === "/api/guards" && method === "PUT");
+    const auth = write ? answerKeyOf(req) : null;
+    if (auth && "error" in auth) return json({ error: auth.error }, 403);
+    const key = auth?.key ?? "";
     try {
       if (path === "/api/asks" && method === "GET") {
         if (!this.listed) {
@@ -262,7 +262,9 @@ export class AskHub {
           (p) => this.tell(p),
           () => this.presence,
         );
-        return json({ ready: true, canAnswer: this.canAnswer, asks: this.list(), presence } satisfies AsksInfo);
+        // the broker answers, so an answer can go through; whether this page
+        // can send one is whether it holds a key
+        return json({ ready: true, canAnswer: true, asks: this.list(), presence } satisfies AsksInfo);
       }
       if (path === "/api/asks/one" && method === "GET") {
         const id = url.searchParams.get("id") ?? "";
@@ -274,10 +276,9 @@ export class AskHub {
       if (path === "/api/asks/answer" && method === "POST") {
         const b = parseAskAnswer(await req.json().catch(() => null));
         if (!b) return json({ error: "an answer is {id, behavior: allow|deny, message?, answers?, always?}" }, 400);
-        if (!token) return json({ error: NO_TOKEN }, 403);
         const { id, client, ...answer } = b;
         const by = answerer(this.deps.deviceName(client));
-        const ask = await chan.answerAsk(cfg.bot, token, id, { ...answer, by });
+        const ask = await chan.answerAsk(cfg.bot, key, id, { ...answer, by });
         if (this.absorb(ask)) this.deps.broadcast({ type: "asks", asks: [ask] });
         return json(ask);
       }
@@ -287,29 +288,29 @@ export class AskHub {
       if (path === "/api/presence" && method === "POST") {
         const b = (await req.json().catch(() => null)) as { away?: unknown } | null;
         if (typeof b?.away !== "boolean") return json({ error: "away must be true or false" }, 400);
-        if (!token) return json({ error: NO_TOKEN }, 403);
         // away pins until cleared; clearing it is being here now
-        const p = await chan.setPresence(cfg.bot, token, b.away ? "away" : "here", b.away);
-        this.lastBeat = Date.now();
+        const p = await chan.setPresence(cfg.bot, key, b.away ? "away" : "here", b.away);
         return json(this.tell(p));
       }
       if (path === "/api/presence/beat" && method === "POST") {
-        if (!token) return json({ error: NO_TOKEN }, 403);
-        return json({ presence: await this.beat() });
+        // the page throttles its own beats; a key's test is one, and must
+        // reach the broker to say whether the key is good
+        return json({ presence: this.tell(await chan.beatPresence(cfg.bot, key)) });
       }
       if (path === "/api/guards" && method === "GET") {
-        return json({ rules: await chan.guards(cfg.bot), canEdit: this.canAnswer } satisfies GuardsInfo);
+        return json({ rules: await chan.guards(cfg.bot), canEdit: true } satisfies GuardsInfo);
       }
       if (path === "/api/guards" && method === "PUT") {
         const b = (await req.json().catch(() => null)) as { rules?: unknown } | null;
         if (!Array.isArray(b?.rules) || !b.rules.every((r) => typeof r === "string")) return json({ error: "rules must be a list of strings" }, 400);
         const n = normalizeGuards(b.rules as string[]);
         if ("error" in n) return json({ error: n.error }, 400);
-        if (!token) return json({ error: NO_TOKEN }, 403);
-        return json({ rules: await chan.setGuards(cfg.bot, token, n.rules), canEdit: true } satisfies GuardsInfo);
+        return json({ rules: await chan.setGuards(cfg.bot, key, n.rules), canEdit: true } satisfies GuardsInfo);
       }
     } catch (e) {
-      if (e instanceof ChanError) return json({ error: e.message }, e.status >= 500 ? 502 : e.status);
+      // a key the broker refuses is this page's to fix, not a sign-in (the
+      // gate's 401), so it goes back as a 403
+      if (e instanceof ChanError) return json({ error: e.message }, e.status >= 500 ? 502 : e.status === 401 ? 403 : e.status);
       throw e;
     }
     return json({ error: `no route: ${method} ${path}` }, 404);

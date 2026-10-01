@@ -517,6 +517,17 @@ body.resizing {
   outline: none;
   border-color: var(--moss);
 }
+/* the answer key: a masked box with its buttons beside it */
+.key-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
+.key-row .settings-input {
+  flex: 1 1 160px;
+  width: auto;
+}
 .devices-pop {
   width: 300px;
 }

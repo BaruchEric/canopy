@@ -4,6 +4,7 @@ import {
   agentFor,
   agentsOn,
   activeFilterCount,
+  canAnswer,
   archivedCount,
   cardOf,
   changed,
@@ -660,9 +661,12 @@ describe("several backends", () => {
       createdAt: 1,
     };
     const waiting = { ...runOf("b|r1", "b|proj"), status: "waiting", steps: [], prompt: { id: "p1", kind: "permission", tool: "Bash", title: "ls", detail: "ls" } };
-    const posted: { path: string; body: unknown }[] = [];
+    const posted: { path: string; body: unknown; key: string | null }[] = [];
     const record = (path: string, init?: RequestInit) => {
-      if (init?.method === "POST") posted.push({ path, body: JSON.parse(String(init.body ?? "null")) });
+      if (init?.method === "POST") {
+        const key = new Headers(init.headers).get("x-canopy-answer-key");
+        posted.push({ path, body: JSON.parse(String(init.body ?? "null")), key });
+      }
       return undefined;
     };
     await start(
@@ -678,7 +682,13 @@ describe("several backends", () => {
     await settle();
     let s = useStore.getState();
     expect(s.asksReady).toBe(true);
-    expect(s.canAnswer).toBe(true);
+    // without a key of its own this page shows the asks read-only
+    expect(canAnswer(s)).toBe(false);
+    useStore.getState().setAnswerKey("  phone-secret ");
+    s = useStore.getState();
+    expect(s.answerKey).toBe("phone-secret");
+    expect(canAnswer(s)).toBe(true);
+    expect(() => useStore.getState().setAnswerKey("two words")).toThrow("one word");
     expect(inboxItems(s).map((i) => i.key)).toEqual(["ask:a1", "run:b|r1"]);
     // b's broker is not this page's
     useStore.getState().applyEvent({ type: "asks", asks: [{ ...open, id: "a2" }] }, "b");
@@ -687,10 +697,15 @@ describe("several backends", () => {
     const run = inboxItems(useStore.getState()).find((i) => i.source === "run")!;
     await useStore.getState().answerInbox(run, { behavior: "allow", always: true });
     expect(posted.find((p) => p.path.startsWith("b:/api/runs/answer"))?.body).toEqual({ id: "r1", promptId: "p1", answer: { kind: "allow-all" } });
-    // an answer to an ask goes to home, with this browser's id
+    // a run's answer carries no key, to any backend
+    expect(posted.find((p) => p.path.startsWith("b:/api/runs/answer"))?.key).toBeNull();
+    // an answer to an ask goes to home, with this browser's id and key
     const a = inboxItems(useStore.getState()).find((i) => i.source === "ask")!;
     await useStore.getState().answerInbox(a, { behavior: "deny", message: "not now" });
     expect(posted.find((p) => p.path === "/api/asks/answer")?.body).toMatchObject({ id: "a1", behavior: "deny", message: "not now" });
+    expect(posted.find((p) => p.path === "/api/asks/answer")?.key).toBe("phone-secret");
+    useStore.getState().setAnswerKey(null);
+    expect(useStore.getState().answerKey).toBeNull();
     s = useStore.getState();
     expect(s.asks["a1"]?.state).toBe("answered");
     expect(inboxItems(s).some((i) => i.key === "ask:a1")).toBe(false);
