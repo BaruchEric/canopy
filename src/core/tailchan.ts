@@ -129,6 +129,17 @@ export function asChanMessage(v: unknown): ChanMessage | null {
 /** the channel the broker posts every card change on */
 export const AGENTS_CHANNEL = "agents";
 
+/** The handle (and node) the broker posts its own events as. The broker
+ *  refuses a client's post to `#agents` or `#asks`, and canopy still reads
+ *  an event there only from this sender: a card or an ask another handle
+ *  managed to post would otherwise be shown, and an ask answered, as the
+ *  broker's. */
+export const BROKER_HANDLE = "tailchan";
+
+/** whether a message is the broker's own event on `channel` */
+const brokerEvent = (m: ChanMessage, channel: string): boolean =>
+  m.channel === channel && m.kind === "event" && m.handle === BROKER_HANDLE && m.node === BROKER_HANDLE;
+
 const ORIGINS: readonly AgentOrigin[] = ["canopy-shell", "canopy-run", "elsewhere", "scan"];
 const str = (v: unknown): string | null => (typeof v === "string" ? v : null);
 const num = (v: unknown): number | null => (typeof v === "number" && Number.isFinite(v) ? v : null);
@@ -183,7 +194,7 @@ export function asAgentCard(v: unknown): AgentCard | null {
  *  (`{"type":"agent","card":…}` as a silent `event` message), or null for
  *  any other message. */
 export function registryCard(m: ChanMessage): AgentCard | null {
-  if (m.channel !== AGENTS_CHANNEL || m.kind !== "event") return null;
+  if (!brokerEvent(m, AGENTS_CHANNEL)) return null;
   let data: unknown;
   try {
     data = JSON.parse(m.body);
@@ -273,7 +284,7 @@ export function asAsk(v: unknown): Ask | null {
 /** The ask one of the broker's `#asks` events carries
  *  (`{"type":"ask","ask":…}` as a silent `event` message), or null. */
 export function askOf(m: ChanMessage): Ask | null {
-  if (m.channel !== ASKS_CHANNEL || m.kind !== "event") return null;
+  if (!brokerEvent(m, ASKS_CHANNEL)) return null;
   let data: unknown;
   try {
     data = JSON.parse(m.body);

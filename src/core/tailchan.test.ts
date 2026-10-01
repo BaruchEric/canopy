@@ -201,6 +201,9 @@ describe("the registry's cards", () => {
     expect(registryCard({ ...m, kind: "text" })).toBeNull();
     expect(registryCard({ ...m, body: "{" })).toBeNull();
     expect(registryCard({ ...m, body: JSON.stringify({ type: "ask", ask: {} }) })).toBeNull();
+    // only the broker's own: a card another handle got onto #agents is none
+    expect(registryCard({ ...m, handle: "app-0123", node: "macmini-2018" })).toBeNull();
+    expect(registryCard({ ...m, handle: "tailchan", node: "macmini-2018" })).toBeNull();
   });
 });
 
@@ -281,6 +284,10 @@ describe("asks as the broker posts them", () => {
     expect(askOf({ ...m, kind: "text" })).toBeNull();
     expect(askOf({ ...m, body: JSON.stringify({ type: "agent", card: {} }) })).toBeNull();
     expect(askOf({ ...m, body: "not json" })).toBeNull();
+    // an ask an agent posted itself is no ask: it would sit in the inbox as
+    // the broker's, and an answer to it would go to the broker
+    expect(askOf({ ...m, handle: "claude-4f763a", node: "macmini-2018" })).toBeNull();
+    expect(askOf({ ...m, node: "ericmac" })).toBeNull();
   });
 
   test("asPresence", () => {
