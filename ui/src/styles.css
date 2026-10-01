@@ -149,14 +149,16 @@ kbd {
   flex: none;
 }
 .body {
+  /* the narrowest the cards get, however wide the dock is dragged */
+  --cards-min: 320px;
   flex: 1;
   display: grid;
-  grid-template-columns: var(--sidebar-w, 264px) 6px minmax(360px, 1fr) auto;
+  grid-template-columns: var(--sidebar-w, 264px) 6px minmax(var(--cards-min), 1fr) auto;
   min-height: 0;
 }
 /* the tree folded away: the grid takes its columns */
 .body.no-side {
-  grid-template-columns: minmax(360px, 1fr) auto;
+  grid-template-columns: minmax(var(--cards-min), 1fr) auto;
 }
 .side-toggle {
   margin-right: -4px;
@@ -1693,8 +1695,14 @@ a.chan-text {
 .dock {
   display: flex;
   overflow-x: auto;
+  /* the room the tree and the cards leave; past it the panels scroll inside
+     the dock rather than push the grid off the window */
+  max-width: calc(100vw - var(--sidebar-w, 264px) - 6px - var(--cards-min, 320px));
   border-left: 1px solid var(--hair);
   background: var(--bark0);
+}
+.body.no-side > .dock {
+  max-width: calc(100vw - var(--cards-min, 320px));
 }
 .panel {
   width: var(--panel-w, 440px);
@@ -1728,7 +1736,7 @@ a.chan-text {
    the hidden ones taking no room */
 .dock.tabbed {
   display: grid;
-  grid-template-columns: 6px var(--panel-w, 440px);
+  grid-template-columns: 6px minmax(0, var(--panel-w, 440px));
   grid-template-rows: auto minmax(0, 1fr);
   overflow: hidden;
 }
@@ -2733,6 +2741,9 @@ a.chan-text {
   .body {
     grid-template-columns: minmax(0, 1fr) auto;
   }
+  .body > .dock {
+    max-width: calc(100vw - var(--cards-min, 320px));
+  }
   .sidebar,
   .sidebar-resizer {
     display: none;
@@ -2748,6 +2759,10 @@ a.chan-text {
   .body {
     position: relative;
     grid-template-columns: minmax(0, 1fr);
+  }
+  .body > .dock,
+  .body.no-side > .dock {
+    max-width: none;
   }
   .dock {
     position: absolute;

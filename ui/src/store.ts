@@ -75,10 +75,10 @@ import {
 
 /** drag limits for the two resizable panes, in px */
 export const SIDEBAR = { min: 180, max: 560, initial: 264 };
-export const PANEL = { min: 300, max: 900, initial: 440 };
-/** the dock when it is one tabbed panel: wider than a row's panel may be,
- *  since it is the only one */
-export const DOCK = { min: 300, max: 1400, initial: 440 };
+/** a dock panel; the room the cards leave caps it before max does (`dockRoom`) */
+export const PANEL = { min: 240, max: 2400, initial: 440 };
+/** the dock when it is one tabbed panel, capped the same way */
+export const DOCK = { min: 240, max: 2400, initial: 440 };
 /** the solo view's centered panel; the window caps it before max does */
 export const SOLO = { min: 420, max: 2400, initial: 980 };
 /** the terminal strip along the bottom, in px of height */

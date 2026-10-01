@@ -20,6 +20,10 @@ interface ResizerProps {
   cssVar: string;
   /** element that property lives on, resolved from the handle itself */
   target: (handle: HTMLElement) => HTMLElement | null;
+  /** the most the pane can take right now, read off the page as a drag starts;
+   *  below `max` when the window is what limits it, so the drag never runs
+   *  into width nobody can see */
+  fit?: (handle: HTMLElement) => number;
   onCommit: (px: number) => void;
 }
 
@@ -39,6 +43,7 @@ export function Resizer({
   factor = 1,
   cssVar,
   target,
+  fit,
   onCommit,
 }: ResizerProps) {
   const [dragging, setDragging] = useState(false);
@@ -49,12 +54,18 @@ export function Resizer({
   // unselectable with a col-resize cursor until reload.
   useEffect(() => () => document.body.classList.remove("resizing"), []);
 
+  const ceiling = (handle: HTMLElement) => {
+    const room = fit?.(handle);
+    return room !== undefined && Number.isFinite(room) ? clamp(room, min, max) : max;
+  };
+
   const onPointerDown = (e: PointerEvent<HTMLDivElement>) => {
     if (e.button !== 0) return;
     e.preventDefault();
     const handle = e.currentTarget;
     const startX = e.clientX;
-    const startValue = value;
+    const top = ceiling(handle);
+    const startValue = Math.min(value, top);
     live.current = startValue;
     // Capture keeps the moves coming once the cursor outruns a 6px strip.
     handle.setPointerCapture(e.pointerId);
@@ -65,7 +76,7 @@ export function Resizer({
       const next = clamp(
         startValue + (ev.clientX - startX) * dir * factor,
         min,
-        max,
+        top,
       );
       live.current = next;
       target(handle)?.style.setProperty(cssVar, `${next}px`);
@@ -87,7 +98,8 @@ export function Resizer({
     if (e.key !== "ArrowLeft" && e.key !== "ArrowRight") return;
     e.preventDefault();
     const step = (e.shiftKey ? 48 : 12) * (e.key === "ArrowRight" ? 1 : -1);
-    onCommit(clamp(value + step * dir, min, max));
+    const top = ceiling(e.currentTarget);
+    onCommit(clamp(Math.min(value, top) + step * dir, min, top));
   };
 
   return (

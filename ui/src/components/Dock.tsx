@@ -1603,6 +1603,15 @@ function DockTabs({ panels, active }: { panels: string[]; active: string | null 
  * so flipping the setting moves them rather than remounting them: a shell in
  * a panel keeps its pty across the switch.
  */
+/** what one panel may take: the dock's own max-width (the window less the
+ *  tree and the cards' floor, styles.css) less its 6px handle; Infinity where
+ *  nothing caps it */
+function dockRoom(dock: HTMLElement | null): number {
+  if (!dock) return Infinity;
+  const cap = Number.parseFloat(getComputedStyle(dock).maxWidth);
+  return Number.isFinite(cap) ? cap - 6 : Infinity;
+}
+
 export function Dock() {
   const panels = useStore((s) => s.panels);
   const panelWidths = useStore((s) => s.panelWidths);
@@ -1638,6 +1647,7 @@ export function Dock() {
             dir={-1}
             cssVar="--panel-w"
             target={(h) => h.parentElement}
+            fit={(h) => dockRoom(h.parentElement)}
             onCommit={setDockWidth}
           />
           <DockTabs panels={panels} active={showing} />
@@ -1661,6 +1671,7 @@ export function Dock() {
             dir={-1}
             cssVar="--panel-w"
             target={(h) => h.nextElementSibling as HTMLElement | null}
+            fit={(h) => dockRoom(h.parentElement)}
             onCommit={(px) => setPanelWidth(id, px)}
           />,
           <RepoPanel key={id} id={id} width={width} />,
