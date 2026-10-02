@@ -7,8 +7,8 @@
  */
 import { Chan, ChanError, type ChanConfig } from "../core/chan";
 import { loadConfig, setTailchanNotify } from "../core/store";
-import { chanTarget, fleetNotice, flowNotice, runNotice, type Notice } from "../core/tailchan";
-import type { ChanMessage, Fleet, Flow, Run, ServerEvent, TailchanInfo } from "../core/types";
+import { chanTarget, fleetNotice, flowNotice, runNotice, sproutNotice, type Notice } from "../core/tailchan";
+import type { ChanMessage, Fleet, Flow, Run, ServerEvent, Sprout, SproutStatus, TailchanInfo } from "../core/types";
 
 /** a posted file's cap, the broker's own default */
 const PUT_MAX = 100 * 1024 * 1024;
@@ -22,6 +22,8 @@ export interface ChanHubDeps {
   repoName: (id: string) => string;
   /** whether a run is one of a flow's steps, which the flow speaks for */
   isFlowRun: (runId: string) => boolean;
+  /** whether a flow is one of the incubator's stages, which the sprout speaks for */
+  isSproutFlow?: (flowId: string) => boolean;
   /** the client; tests pass one over a stand-in broker */
   chan?: Chan;
 }
@@ -35,6 +37,7 @@ export class ChanHub {
   private runs = new Map<string, Run["status"]>();
   private flows = new Map<string, Flow["status"]>();
   private fleets = new Map<string, Fleet["status"]>();
+  private sprouts = new Map<string, { status: SproutStatus; asking: boolean }>();
 
   constructor(
     readonly cfg: ChanConfig | null,
@@ -82,6 +85,7 @@ export class ChanHub {
   onFlow(flow: Flow): void {
     const prev = this.flows.get(flow.id);
     this.flows.set(flow.id, flow.status);
+    if (this.deps.isSproutFlow?.(flow.id)) return;
     this.say(flowNotice(flow, prev, this.deps.repoName(flow.repoId)));
   }
 
@@ -89,6 +93,12 @@ export class ChanHub {
     const prev = this.fleets.get(fleet.id);
     this.fleets.set(fleet.id, fleet.status);
     this.say(fleetNotice(fleet, prev));
+  }
+
+  onSprout(s: Sprout): void {
+    const prev = this.sprouts.get(s.id);
+    this.sprouts.set(s.id, { status: s.status, asking: (s.questions?.length ?? 0) > 0 });
+    this.say(sproutNotice(s, prev));
   }
 
   /** keep running gave up on a task: a DM, since someone has to look */
@@ -101,6 +111,7 @@ export class ChanHub {
     this.runs.delete(id);
     this.flows.delete(id);
     this.fleets.delete(id);
+    this.sprouts.delete(id);
   }
 
   private say(n: Notice | null): void {

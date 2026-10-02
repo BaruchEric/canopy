@@ -22,6 +22,8 @@ import {
   type Run,
   type RunQuestion,
   type RunStatus,
+  type Sprout,
+  type SproutStatus,
 } from "./types";
 
 export const HANDLE_RE = /^[a-z0-9][a-z0-9._-]{0,39}$/;
@@ -385,4 +387,19 @@ export function fleetNotice(fleet: Fleet, prev: Fleet["status"] | undefined): No
     to: "channel",
     text: `fleet ${fleet.workflow} ${fleet.status}: ${ran} ${ran === 1 ? "repo" : "repos"}${skipped ? `, ${skipped} skipped` : ""}`,
   };
+}
+
+/** A sprout's questions or park is a DM, since someone has to look; going
+ *  live or being turned down is a channel line. Once per transition. */
+export function sproutNotice(s: Sprout, prev: { status: SproutStatus; asking: boolean } | undefined): Notice | null {
+  const asking = (s.questions?.length ?? 0) > 0;
+  if (asking && !prev?.asking) {
+    const n = s.questions?.length ?? 0;
+    return { to: "human", text: `${s.title}: ${n} ${n === 1 ? "question" : "questions"} before research, in canopy's inbox` };
+  }
+  if (s.status === prev?.status) return null;
+  if (s.status === "parked") return { to: "human", text: `${s.title} is parked: ${s.parked ?? "no reason given"}` };
+  if (s.status === "live") return { to: "channel", text: `${s.title} is live` };
+  if (s.status === "rejected") return { to: "channel", text: `${s.title} was turned down at eval` };
+  return null;
 }

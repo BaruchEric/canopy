@@ -52,6 +52,11 @@ import type { AgentEnv } from "../core/harness";
 import { paneAgent } from "../core/procs";
 import { effectiveAgents, hasProfile, isProfileName, launchPick, normalizePick, normalizeRepoAgent, pickRefusal, repoAgentRefusal } from "../core/route";
 import { selfName } from "../core/backends";
+import { Incubator, incubatorWorkflow, type NoteSink, type Transcriber } from "../core/incubator";
+import { seedOps } from "../core/seed";
+import { SproutFiles } from "../core/sproutstore";
+import { transcribeConfig, transcriber } from "../core/transcribe";
+import { vaultConfig, vaultNotes } from "../core/vault";
 import { linkPeers, NO_PUSH, peerUrl } from "../core/peers";
 import { initRepo, PassSeen, seedRepo, syncAll, syncRepo, takeWip, trackBranch } from "../core/peersync";
 import { normalizeLaunch } from "../core/launch";
@@ -145,6 +150,7 @@ import { DEFAULT_IGNORE } from "../core/scan";
 import { ChanHub } from "./tailchan";
 import { RegistryHub } from "./registry";
 import { AskHub } from "./asks";
+import { IncubatorHub } from "./incubator";
 import { SCAN_EVERY, type AgentProc } from "../core/agentscan";
 import { TaskHub } from "./tasks";
 import type { TaskTimings } from "../core/tasks";
@@ -273,6 +279,8 @@ interface ServerState {
   /** asks for a human: the broker's open asks followed for the inbox,
    *  answers, presence and guards through the answer token */
   asks: AskHub;
+  /** new projects carried from an idea through clarify and on (core/incubator.ts) */
+  incubator: IncubatorHub;
   /** the name this backend goes by (`selfName`), read at start; what a
    *  shell's `CANOPY_BACKEND` says */
   backendName: string;
@@ -1781,6 +1789,8 @@ async function handleApi(
   if (registryRes) return registryRes;
   const askRes = await state.asks.handle(req, url);
   if (askRes) return askRes;
+  const incubatorRes = await state.incubator.handle(req, url);
+  if (incubatorRes) return incubatorRes;
   const taskRes = await state.tasks.handle(req, url, (id) => state.result.repos.find((r) => r.id === id));
   if (taskRes) return taskRes;
 
@@ -2669,6 +2679,8 @@ export async function startServer(opts: {
   registry?: { scanEvery?: number; relistEvery?: number; lister?: () => Promise<AgentProc[]>; container?: boolean };
   /** the asks hub's timings, shrunk by tests */
   asks?: { closedKeep?: number; relistEvery?: number; sweepEvery?: number };
+  /** the incubator: tests turn autostart off and pass a speech model and vault of their own */
+  incubator?: { autostart?: boolean; transcribe?: Transcriber | null; notes?: NoteSink | null };
 }): Promise<{ port: number; stop: () => void }> {
   const cfg = await loadConfig();
   const root = await realpath(opts.root);
@@ -2734,6 +2746,7 @@ export async function startServer(opts: {
     onChange: (flow) => {
       broadcast(state, { type: "flow", flow });
       state.chan.onFlow(flow);
+      state.incubator.onFlow(flow);
     },
     onGone: (id) => {
       broadcast(state, { type: "flow-gone", id });
@@ -2763,6 +2776,15 @@ export async function startServer(opts: {
     onJobGone: (id) => broadcast(state, { type: "job-gone", id }),
     onBuilds: (repoId, what, build) => broadcast(state, { type: "builds", repoId, what, build }),
   });
+  const vault = vaultConfig();
+  const speech = transcribeConfig();
+  if (process.env["NODE_ENV"] !== "test") {
+    if (!vault) console.error("incubator: no CANOPY_VAULT_TOKEN, so no vault notes");
+    if (!speech) console.error("incubator: no CANOPY_TRANSCRIBE_URL, so voice memos stay untranscribed");
+  }
+  // one store, stamped with the realpath'd root, for the incubator and for
+  // what a server without the flows lock lists
+  const sprouts = new SproutFiles(root);
   const state: ServerState = {
     root,
     agentLine: opts.agentLine ?? (async (_repo, agent, env) => agentLine(agent, undefined, env)),
@@ -2798,6 +2820,7 @@ export async function startServer(opts: {
       broadcast: (ev) => broadcast(state, ev),
       repoName: (id) => state.result.repos.find((r) => r.id === id)?.name ?? id,
       isFlowRun: (runId) => state.flows.list().some((f) => f.steps.some((st) => st.runId === runId)),
+      isSproutFlow: (flowId) => state.incubator.ownsFlow(flowId),
     }),
     tasks: new TaskHub({
       tmux: tmuxBase(),
@@ -2852,6 +2875,51 @@ export async function startServer(opts: {
       deviceName: (client) => deviceNameOf(state, client),
       ...opts.asks,
     }),
+    incubator: new IncubatorHub(
+      new Incubator({
+        root,
+        store: sprouts,
+        seeds: seedOps(runnerOpts.backend),
+        flows: {
+          // the same checks a flow started from a repo's menu passes
+          start: async (repo, wf, note) => {
+            const c = await loadConfig();
+            const refused = stepProfileRefusal(c, wf);
+            if (refused) throw new Error(refused);
+            await needStepHarnesses(state, c, wf, [repo.path]);
+            return state.flows.start(repo, wf, note, (profile) => stepAgentFor(c, repo.path, profile));
+          },
+          get: (id) => state.flows.get(id),
+          resume: (id, choice) => state.flows.resume(id, choice),
+          stop: (id) => state.flows.stop(id),
+        },
+        // the bundled and the user's own only: a seed's .canopy/workflows never replaces a stage
+        workflow: incubatorWorkflow,
+        rescan: async () => {
+          const rt = state.sources.find((s) => s.src.id === LAUNCH_SOURCE);
+          if (!rt) return;
+          // a scan already under way may have walked past the new seed
+          if (rt.scanning) await rt.scanning;
+          await scanOne(state, rt, scanOpts(state, await loadConfig()));
+          broadcast(state, { type: "scan", result: state.result });
+        },
+        repo: (id) => state.result.repos.find((r) => r.id === id),
+        transcribe: opts.incubator?.transcribe !== undefined ? opts.incubator.transcribe : transcriber(speech),
+        notes: opts.incubator?.notes !== undefined ? opts.incubator.notes : vaultNotes(vault),
+        onChange: (sprout) => {
+          broadcast(state, { type: "incubator", sprout });
+          state.chan.onSprout(sprout);
+        },
+        onGone: (id) => {
+          broadcast(state, { type: "incubator-gone", id });
+          state.chan.forget(id);
+        },
+        // CANOPY_INCUBATOR_AUTOSTART=0 holds every sprout queued: a scratch
+        // server for a UI check, or a pause while something is wrong
+        autostart: opts.incubator?.autostart ?? process.env["CANOPY_INCUBATOR_AUTOSTART"] !== "0",
+      }),
+      () => sprouts.list(),
+    ),
     backendName: selfName(cfg.self, hostname()),
     apiUrl: null,
   };
@@ -3181,6 +3249,9 @@ export async function startServer(opts: {
       (path) => state.result.repos.find((r) => r.path === path),
       (repo) => (profile) => stepAgentFor(cfg, repo.path, profile),
     );
+    // the sprouts the last server left, once their flows are back; a server
+    // without the lock lists them and takes nothing in (server/incubator.ts)
+    await state.incubator.restore();
   } else if (flowsLock.holder) {
     console.error(`flows: canopy pid ${flowsLock.holder} keeps the records in ${flowsDir()}; flows started here are not kept across a restart`);
   }
@@ -3228,6 +3299,8 @@ export async function startServer(opts: {
       clearInterval(remoteTimer);
       clearTimeout(firstActivity);
       for (const t of state.timers.values()) clearTimeout(t);
+      // before the flows stop, so their ends park no sprout
+      state.incubator.detach();
       state.flows.detach();
       flowFiles = null;
       if (flowsLock.owner) flowsLock.release();

@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
-import { asAgentCard, asAsk, asChanMessage, askOf, asPresence, chanTarget, repoChannel, dmPeer, fleetNotice, flowNotice, parseSse, readQuery, registryCard, runNotice, shellHandle } from "./tailchan";
-import type { Fleet, Flow, Run } from "./types";
+import { asAgentCard, asAsk, asChanMessage, askOf, asPresence, chanTarget, repoChannel, dmPeer, fleetNotice, flowNotice, parseSse, readQuery, registryCard, runNotice, shellHandle, sproutNotice } from "./tailchan";
+import type { Fleet, Flow, Run, Sprout } from "./types";
 
 describe("chanTarget", () => {
   test("a channel with or without #, a handle with @", () => {
@@ -293,5 +293,42 @@ describe("asks as the broker posts them", () => {
   test("asPresence", () => {
     expect(asPresence({ state: "here", at: 5, pinned: false, by: "canopy" })).toEqual({ state: "here", at: 5, pinned: false, by: "canopy" });
     expect(asPresence({ state: "gone" })).toBeNull();
+  });
+});
+
+describe("sproutNotice", () => {
+  const base: Sprout = {
+    id: "sp_000000000001",
+    slug: "coins",
+    title: "Coin counter",
+    status: "clarifying",
+    repoId: "_incubator/coins",
+    seedPath: "/root/_incubator/coins",
+    prepared: true,
+    inputs: [],
+    clarified: true,
+    reclarify: false,
+    flows: [],
+    spent: { runs: 0, workMs: 0 },
+    createdAt: 0,
+    updatedAt: 0,
+  };
+  test("questions are a DM once, while they wait", () => {
+    const q = (question: string) => ({ question, header: "", options: [], multiSelect: false });
+    const asking = { ...base, questions: [q("Who?"), q("Where?")] };
+    expect(sproutNotice(asking, { status: "clarifying", asking: false })).toEqual({ to: "human", text: "Coin counter: 2 questions before research, in canopy's inbox" });
+    expect(sproutNotice(asking, { status: "clarifying", asking: true })).toBeNull();
+  });
+  test("a park is a DM with why; going live or being turned down goes to the channel", () => {
+    expect(sproutNotice({ ...base, status: "parked", parked: "the scout workflow is not installed" }, { status: "clarifying", asking: false })).toEqual({
+      to: "human",
+      text: "Coin counter is parked: the scout workflow is not installed",
+    });
+    expect(sproutNotice({ ...base, status: "live" }, { status: "deploying", asking: false })?.to).toBe("channel");
+    expect(sproutNotice({ ...base, status: "rejected" }, { status: "researching", asking: false })?.text).toBe("Coin counter was turned down at eval");
+  });
+  test("every other move is quiet", () => {
+    expect(sproutNotice({ ...base, status: "researching" }, { status: "queued", asking: false })).toBeNull();
+    expect(sproutNotice({ ...base, status: "parked", parked: "x" }, { status: "parked", asking: false })).toBeNull();
   });
 });
