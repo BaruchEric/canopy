@@ -20,7 +20,7 @@ import { boardOrder, invertPick, pickWhere, rangeIds, setPick, togglePick } from
 import { appendFeed, describeEvent, type FeedEntry, type FeedSnapshot } from "./feed";
 import { mergeAction } from "./peers";
 import { convOf, isUnread, mergeMessages } from "./chan";
-import type { AgentCard, Ask, ChanMessage, Presence, TailchanInfo } from "../../src/core/types";
+import type { AgentCard, Ask, ChanMessage, Presence, Sprout, TailchanInfo } from "../../src/core/types";
 import { mergeAsks, mergeInbox, replaceAsks, toAskAnswer, toRunAnswer, type InboxAnswer, type InboxItem } from "./inbox";
 import { cardsByRepoCard, mergeCards, replaceCards } from "./agentcards";
 import { clientCaps } from "../../src/core/client";
@@ -568,6 +568,10 @@ interface CanopyState {
   answerKey: string | null;
   /** the human's presence at the broker, as last heard */
   presence: Presence | null;
+  /** the incubator's sprouts by id, the home backend's alone */
+  sprouts: Record<string, Sprout>;
+  /** whether home answered the incubator's list */
+  sproutsReady: boolean;
   /** whether the inbox popover is up, and the item it opened on */
   inboxOpen: boolean;
   inboxFocus: string | null;
@@ -797,6 +801,18 @@ interface CanopyState {
   /** routes an answer to where the item came from: a run's prompt, a
    *  flow's gate, or the broker's ask with this browser's answer key */
   answerInbox: (item: InboxItem, answer: InboxAnswer) => Promise<void>;
+  /** reads the incubator's list off the home backend */
+  loadSprouts: () => Promise<void>;
+  /** a new project from the + project sheet or n; answers before the seed is made */
+  createSprout: (form: FormData) => Promise<Sprout>;
+  addSproutInputs: (id: string, form: FormData) => Promise<Sprout>;
+  /** clarify's questions answered, or null to go on assumptions */
+  answerSprout: (id: string, answers: Record<string, string> | null) => Promise<void>;
+  stopSprout: (id: string) => Promise<void>;
+  resumeSprout: (id: string, choice: "continue" | "retry") => Promise<void>;
+  dismissSprout: (id: string) => Promise<void>;
+  showSprout: (id: string) => void;
+  openNewSprout: () => void;
   /** pins away, or clears it and is here */
   setAway: (away: boolean) => Promise<void>;
   /** someone is at this page: the human is here, at most once a minute,
@@ -933,6 +949,8 @@ export type Sheet =
   | { kind: "plan"; repoId: string; action: RunAction }
   | { kind: "run"; runId: string }
   | { kind: "agent"; repoId: string }
+  | { kind: "new-sprout" }
+  | { kind: "sprout"; id: string }
   | { kind: "launch"; repoId: string }
   | { kind: "task"; repoId: string; name: string | null }
   | { kind: "search" }
@@ -1055,6 +1073,7 @@ function feedView(s: CanopyState, from: string): FeedSnapshot {
     registry: s.registry,
     asks: s.asks,
     presence: s.presence,
+    sprouts: s.sprouts,
   };
 }
 
@@ -1212,6 +1231,7 @@ function resync(get: () => CanopyState, set: (fn: (s: CanopyState) => Partial<Ca
   if (b === get().home) {
     void get().loadRegistry();
     void get().loadAsks();
+    void get().loadSprouts();
   }
   // the tasks a panel loaded may have moved while the stream was down
   for (const id of Object.keys(get().tasks)) if (backendOf(id) === b) void get().loadTasks(id).catch(() => {});
@@ -1264,6 +1284,8 @@ export const useStore = create<CanopyState>((set, get) => ({
   asksReady: false,
   answerKey: readAnswerKey(),
   presence: null,
+  sprouts: {},
+  sproutsReady: false,
   inboxOpen: false,
   inboxFocus: null,
   workspaces: [],
@@ -1447,6 +1469,7 @@ export const useStore = create<CanopyState>((set, get) => ({
     void get().loadRegistry();
     // and the asks waiting on the human, the same
     void get().loadAsks();
+    void get().loadSprouts();
     // what home runs, for naming the machines; a page with one backend
     // names none, so it does not ask
     if (order.length > 1) {
@@ -1863,8 +1886,8 @@ export const useStore = create<CanopyState>((set, get) => ({
     // a backend hidden since this was sent is not on the page any more
     if (!isShown(before, b)) return;
     beat();
-    // workspaces, tailchan, the agent registry and the asks are the home backend's alone
-    if ((ev.type === "chan" || ev.type === "workspaces" || ev.type === "registry" || ev.type === "asks") && b !== before.home) return;
+    // workspaces, tailchan, the agent registry, the asks and the incubator are the home backend's alone
+    if ((ev.type === "chan" || ev.type === "workspaces" || ev.type === "registry" || ev.type === "asks" || ev.type === "incubator" || ev.type === "incubator-gone") && b !== before.home) return;
     // The feed says what changed, so the lines come from the event against
     // the state before it is applied, as the backend that sent it saw it.
     // a message already held (a reconnect's replay, a post heard twice) is
@@ -1897,6 +1920,19 @@ export const useStore = create<CanopyState>((set, get) => ({
       set((s) => {
         const asks = mergeAsks(s.asks, ev.asks, ev.gone);
         return { ...(asks === s.asks ? {} : { asks }), ...(ev.presence ? { presence: ev.presence } : {}) };
+      });
+      return;
+    }
+    if (ev.type === "incubator") {
+      set((st) => ({ sprouts: { ...st.sprouts, [ev.sprout.id]: ev.sprout } }));
+      return;
+    }
+    if (ev.type === "incubator-gone") {
+      set((st) => {
+        if (!(ev.id in st.sprouts)) return {};
+        const sprouts = { ...st.sprouts };
+        delete sprouts[ev.id];
+        return { sprouts };
       });
       return;
     }
@@ -2125,7 +2161,46 @@ export const useStore = create<CanopyState>((set, get) => ({
     void get().loadAsks();
   },
   closeInbox: () => set({ inboxOpen: false, inboxFocus: null }),
+  loadSprouts: async () => {
+    try {
+      const list = await api.sprouts();
+      set({ sprouts: Object.fromEntries((Array.isArray(list) ? list : []).map((x) => [x.id, x])), sproutsReady: true });
+    } catch {
+      set({ sprouts: {}, sproutsReady: false });
+    }
+  },
+  createSprout: async (form) => {
+    const sp = await api.newSprout(form);
+    get().applyEvent({ type: "incubator", sprout: sp });
+    return sp;
+  },
+  addSproutInputs: async (id, form) => {
+    const sp = await api.addSproutInputs(id, form);
+    get().applyEvent({ type: "incubator", sprout: sp });
+    return sp;
+  },
+  answerSprout: async (id, answers) => {
+    const sp = await api.answerSprout(id, answers ? { answers } : { skip: true });
+    get().applyEvent({ type: "incubator", sprout: sp });
+  },
+  stopSprout: async (id) => {
+    get().applyEvent({ type: "incubator", sprout: await api.stopSprout(id) });
+  },
+  resumeSprout: async (id, choice) => {
+    get().applyEvent({ type: "incubator", sprout: await api.resumeSprout(id, choice) });
+  },
+  dismissSprout: async (id) => {
+    await api.dismissSprout(id);
+    get().applyEvent({ type: "incubator-gone", id });
+  },
+  showSprout: (id) => set({ sheet: { kind: "sprout", id } }),
+  openNewSprout: () => set({ sheet: { kind: "new-sprout" } }),
   answerInbox: async (item, answer) => {
+    if (item.source === "sprout") {
+      if ("skip" in answer) return get().answerSprout(item.id, null);
+      if (!("answers" in answer)) throw new Error("clarify's questions take answers, or go on assumptions");
+      return get().answerSprout(item.id, answer.answers);
+    }
     if (item.source === "flow") {
       if (!("choice" in answer)) throw new Error("a gate takes continue, retry or stop");
       await get().resumeFlow(item.id, answer.choice);
@@ -2933,23 +3008,24 @@ export const canAnswer = (s: Pick<CanopyState, "asksReady" | "answerKey">): bool
 const PAGE_BEAT = 60_000;
 let lastPageBeat = 0;
 
-let inboxIn: { asks: Record<string, Ask>; runs: Record<string, Run>; flows: Record<string, Flow>; repos: Repo[]; registry: Record<string, AgentCard> } | null = null;
+let inboxIn: { asks: Record<string, Ask>; runs: Record<string, Run>; flows: Record<string, Flow>; repos: Repo[]; registry: Record<string, AgentCard>; sprouts: Record<string, Sprout> } | null = null;
 let inboxOut: InboxItem[] = [];
 
 /** Everything waiting on the human, oldest first: the home broker's open
- *  asks, every backend's runs on a prompt and flows at a gate. Worked out
+ *  asks, the incubator's questions, every backend's runs on a prompt and flows at a gate. Worked out
  *  once per change of what it reads, so a selector over it settles; a
  *  countdown keeps its own time off each item's `until`. */
 export function inboxItems(s: CanopyState): InboxItem[] {
-  if (inboxIn && inboxIn.asks === s.asks && inboxIn.runs === s.runs && inboxIn.flows === s.flows && inboxIn.repos === s.repos && inboxIn.registry === s.registry) {
+  if (inboxIn && inboxIn.asks === s.asks && inboxIn.runs === s.runs && inboxIn.flows === s.flows && inboxIn.repos === s.repos && inboxIn.registry === s.registry && inboxIn.sprouts === s.sprouts) {
     return inboxOut;
   }
-  inboxIn = { asks: s.asks, runs: s.runs, flows: s.flows, repos: s.repos, registry: s.registry };
+  inboxIn = { asks: s.asks, runs: s.runs, flows: s.flows, repos: s.repos, registry: s.registry, sprouts: s.sprouts };
   inboxOut = mergeInbox(Object.values(s.asks), s.runs, s.flows, Date.now(), {
     repos: s.repos,
     cards: s.registry,
     backendOf: (id) => (s.backendOrder.length > 1 ? backendOf(id) : ""),
     askRepos: s.repos.filter((r) => backendOf(r.id) === s.home),
+    sprouts: Object.values(s.sprouts),
   });
   return inboxOut;
 }

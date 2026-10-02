@@ -62,6 +62,8 @@ import type {
   TermInfo,
   WorkflowEntry,
   Workspace,
+  Sprout,
+  SproutDetail,
 } from "../../src/core/types";
 import { pickUrl, split, wsUrl, type BackendSignal } from "./backends";
 import { normalizeRoutes } from "../../src/core/route";
@@ -443,6 +445,19 @@ export const api = {
    *  the broker can say which device answered. */
   answerAsk: (id: string, answer: AskAnswer, key: string) =>
     req<Ask>(homeName(), "/api/asks/answer", { method: "POST", headers: keyHeaders(key), body: JSON.stringify({ id, ...answer, client: clientId() }) }),
+  /** the incubator, the home backend's alone */
+  sprouts: () => req<Sprout[]>(homeName(), "/api/incubator"),
+  sprout: (id: string) => req<SproutDetail>(homeName(), `/api/incubator/one?id=${encodeURIComponent(id)}`),
+  /** multipart, so a voice memo or an image goes as it is */
+  newSprout: (form: FormData) => req<Sprout>(homeName(), "/api/incubator", { method: "POST", body: form }),
+  addSproutInputs: (id: string, form: FormData) =>
+    req<Sprout>(homeName(), `/api/incubator/input?id=${encodeURIComponent(id)}`, { method: "POST", body: form }),
+  answerSprout: (id: string, body: { answers: Record<string, string> } | { skip: true }) =>
+    req<Sprout>(homeName(), `/api/incubator/answer?id=${encodeURIComponent(id)}`, { method: "POST", body: JSON.stringify(body) }),
+  stopSprout: (id: string) => req<Sprout>(homeName(), `/api/incubator/stop?id=${encodeURIComponent(id)}`, { method: "POST", body: "{}" }),
+  resumeSprout: (id: string, choice: "continue" | "retry") =>
+    req<Sprout>(homeName(), `/api/incubator/resume?id=${encodeURIComponent(id)}`, { method: "POST", body: JSON.stringify({ choice }) }),
+  dismissSprout: (id: string) => req<{ ok: true }>(homeName(), `/api/incubator?id=${encodeURIComponent(id)}`, { method: "DELETE" }),
   /** away pins until cleared; clearing it is being here */
   setAway: (away: boolean, key: string) =>
     req<Presence>(homeName(), "/api/presence", { method: "POST", headers: keyHeaders(key), body: JSON.stringify({ away }) }),

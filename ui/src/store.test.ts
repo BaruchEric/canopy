@@ -43,6 +43,7 @@ import {
   type Repo,
   type ScanResult,
   type SourceState,
+  type Sprout,
   type TaskInfo,
   type TermInfo,
 } from "../../src/core/types";
@@ -529,6 +530,7 @@ describe("several backends", () => {
         "/api/tailchan",
         "/api/registry",
         "/api/asks",
+        "/api/incubator",
         "/api/tasks",
       ].sort(),
     );
@@ -715,6 +717,59 @@ describe("several backends", () => {
     s = useStore.getState();
     expect(s.asks["a1"]?.state).toBe("answered");
     expect(inboxItems(s).some((i) => i.key === "ask:a1")).toBe(false);
+  });
+
+  test("the incubator is home's alone; its questions are in the inbox and answered there", async () => {
+    const asking: Sprout = {
+      id: "sp_000000000001",
+      slug: "coins",
+      title: "Coin counter",
+      status: "clarifying",
+      repoId: "_incubator/coins",
+      seedPath: "/a/_incubator/coins",
+      prepared: true,
+      inputs: [],
+      clarified: true,
+      reclarify: false,
+      questions: [{ question: "Who counts?", header: "", options: [], multiSelect: false }],
+      questionsAt: 5,
+      flows: [],
+      spent: { runs: 0, workMs: 0 },
+      createdAt: 1,
+      updatedAt: 5,
+    };
+    const answered: Sprout = { ...asking, status: "queued", questions: undefined, questionsAt: undefined, updatedAt: 6 };
+    const posted: { path: string; body: unknown }[] = [];
+    await start(
+      (path, init) => {
+        if (init?.method === "POST") posted.push({ path, body: JSON.parse(String(init.body ?? "null")) });
+        return backendAnswers(scanOf("/a", [repo("proj")]), [], {
+          "/api/backends": twoBackends,
+          "/api/incubator": [asking],
+          "/api/incubator/answer": answered,
+        })(path, init);
+      },
+      backendAnswers(scanOf("/b", [repo("proj")]), []),
+    );
+    await settle();
+    let s = useStore.getState();
+    expect(s.sproutsReady).toBe(true);
+    expect(Object.keys(s.sprouts)).toEqual([asking.id]);
+    const item = inboxItems(s).find((i) => i.source === "sprout");
+    if (!item) throw new Error("no sprout item in the inbox");
+    expect(item.key).toBe(`sprout:${asking.id}`);
+    // b's incubator is not this page's
+    useStore.getState().applyEvent({ type: "incubator", sprout: { ...asking, id: "sp_000000000002" } }, "b");
+    expect(Object.keys(useStore.getState().sprouts)).toEqual([asking.id]);
+    // going on assumptions is a skip, to home
+    await useStore.getState().answerInbox(item, { skip: true });
+    expect(posted.find((p) => p.path.startsWith("/api/incubator/answer"))).toEqual({ path: `/api/incubator/answer?id=${asking.id}`, body: { skip: true } });
+    s = useStore.getState();
+    expect(s.sprouts[asking.id]?.status).toBe("queued");
+    expect(inboxItems(s).some((i) => i.source === "sprout")).toBe(false);
+    expect(s.feed.some((l) => l.kind === "incubator" && l.text === "waiting its turn for research")).toBe(true);
+    useStore.getState().applyEvent({ type: "incubator-gone", id: asking.id });
+    expect(useStore.getState().sprouts).toEqual({});
   });
 
   test("a scan from b prunes only b's panels", async () => {
