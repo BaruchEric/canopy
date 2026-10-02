@@ -8,7 +8,10 @@ import {
   inputsIndex,
   localStamp,
   nextWorkflow,
+  parsePick,
   parseQuestions,
+  pickRefusal,
+  phaseRefusal,
   parseSproutRecord,
   parseSummaries,
   safeInputName,
@@ -324,5 +327,60 @@ describe("answersText", () => {
     expect(text).toContain("- constructor\n  (no answer)");
     expect(text).toContain("- toString\n  (no answer)");
     expect(text).toContain("- Who counts?\n  the owner");
+  });
+});
+
+describe("the pick", () => {
+  const pick = (o: Record<string, unknown>): string => JSON.stringify({ kind: "new", host: "vercel", why: "nothing close exists", ...o });
+
+  test("a new pick on vercel reads back with its why clipped to one line", () => {
+    const p = parsePick(pick({ why: `fits\n  the stack ${"x".repeat(600)}`, extra: 1 }));
+    expect(p.ok).toBe(true);
+    if (!p.ok) return;
+    expect(p.pick.kind).toBe("new");
+    expect(p.pick.host).toBe("vercel");
+    expect(p.pick.why.startsWith("fits the stack x")).toBe(true);
+    expect(p.pick.why.length).toBe(500);
+    expect(Object.keys(p.pick).sort()).toEqual(["host", "kind", "why"]);
+  });
+
+  test("not JSON, not an object, a kind or host off the list, and no why are refused with the reason", () => {
+    expect(parsePick("{nope")).toEqual({ ok: false, error: "pick.json is not JSON" });
+    expect(parsePick("[]")).toEqual({ ok: false, error: "pick.json must be an object" });
+    expect(parsePick(pick({ kind: "fork" }))).toEqual({ ok: false, error: "kind must be one of new, renovate, extend" });
+    expect(parsePick(pick({ host: "netlify" }))).toEqual({ ok: false, error: "host must be one of vercel, vercel+firebase, vercel+convex, mini" });
+    expect(parsePick(pick({ why: "  " }))).toEqual({ ok: false, error: "why must say in a sentence why this pick" });
+  });
+
+  test("a renovate pick needs an https target, kept without its secret; a new pick drops any target", () => {
+    expect(parsePick(pick({ kind: "renovate", license: "MIT" }))).toEqual({ ok: false, error: "a renovate pick needs target: the upstream's https url" });
+    expect(parsePick(pick({ kind: "renovate", license: "MIT", target: "/home/eric/dev/x" }))).toEqual({ ok: false, error: "a renovate pick needs target: the upstream's https url" });
+    const r = parsePick(pick({ kind: "renovate", license: "MIT", target: "https://u:tok@github.com/a/b" }));
+    expect(r.ok && r.pick.target).toBe("https://github.com/a/b");
+    const n = parsePick(pick({ target: "https://github.com/a/b" }));
+    expect(n.ok && n.pick.target).toBe(undefined);
+    expect(parsePick(pick({ kind: "extend" }))).toEqual({ ok: false, error: "an extend pick needs target: the repo it extends" });
+  });
+
+  test("pickRefusal holds the license rules, phaseRefusal holds phase 3 to new picks on vercel", () => {
+    const base = { kind: "renovate" as const, host: "vercel" as const, why: "w", target: "https://github.com/a/b" };
+    expect(pickRefusal(base)).toBe("a renovate pick needs the upstream's SPDX license");
+    expect(pickRefusal({ ...base, license: "AGPL-3.0" })).toBe("AGPL-3.0 is not on the allowed license list");
+    expect(pickRefusal({ ...base, license: "MIT" })).toBe(null);
+    expect(pickRefusal({ kind: "new", host: "vercel", why: "w" })).toBe(null);
+    expect(phaseRefusal({ kind: "new", host: "vercel", why: "w" })).toBe(null);
+    expect(phaseRefusal({ ...base, license: "MIT" })).toBe("a renovate pick arrives in phase 4; the research is in .canopy/research.md");
+    expect(phaseRefusal({ kind: "new", host: "vercel+convex", why: "w" })).toBe("deploying to vercel+convex arrives in phase 4; the research is in .canopy/research.md");
+  });
+
+  test("a record with a pick, a repo and a url reads back; a bad pick refuses the record", () => {
+    const rec = {
+      id: "sp_0123456789ab", slug: "s", title: "t", status: "live", repoId: "_incubator/s", seedPath: "/r/_incubator/s",
+      prepared: true, inputs: [], clarified: true, reclarify: false, flows: [], spent: { runs: 0, workMs: 0 }, createdAt: 1, updatedAt: 1,
+      pick: { kind: "new", host: "vercel", why: "w" }, privateRepo: "eric/s", url: "https://s.vercel.app",
+    };
+    expect(parseSproutRecord(JSON.stringify(rec))?.url).toBe("https://s.vercel.app");
+    expect(parseSproutRecord(JSON.stringify({ ...rec, pick: { kind: "new", host: "aws", why: "w" } }))).toBe(null);
+    expect(parseSproutRecord(JSON.stringify({ ...rec, url: 7 }))).toBe(null);
   });
 });

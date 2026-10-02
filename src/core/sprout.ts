@@ -5,7 +5,7 @@
  * as text, and which sprouts hold one of the running slots. Browser-safe:
  * the UI imports it.
  */
-import { SPROUT_STATUSES, type FlowStatus, type InputEntry, type InputKind, type InputVia, type RunQuestion, type RunQuestionOption, type Sprout, type SproutStatus, type Workflow } from "./types";
+import { HOSTS, SPROUT_STATUSES, type FlowStatus, type InputEntry, type InputKind, type InputVia, type RunQuestion, type RunQuestionOption, type HostId, type PickKind, type Sprout, type SproutPick, type SproutStatus, type Workflow } from "./types";
 
 /** how many sprouts run a stage at once; the rest wait their turn */
 export const SPROUT_CONCURRENCY = 2;
@@ -317,6 +317,62 @@ export function withInputsRead(wf: Workflow, dir: string): Workflow {
 const isNum = (v: unknown): v is number => typeof v === "number" && Number.isFinite(v);
 const optStr = (v: unknown): boolean => v === undefined || typeof v === "string";
 const optNum = (v: unknown): boolean => v === undefined || isNum(v);
+
+/** the licenses a renovate pick may carry (SPDX ids) */
+export const ALLOWED_LICENSES = ["MIT", "Apache-2.0", "BSD-2-Clause", "BSD-3-Clause", "ISC", "MPL-2.0", "Unlicense", "0BSD", "GPL-2.0", "GPL-3.0", "LGPL-2.1", "LGPL-3.0"] as const;
+const PICK_KINDS: readonly PickKind[] = ["new", "renovate", "extend"];
+const isPickKind = (v: unknown): v is PickKind => typeof v === "string" && (PICK_KINDS as readonly string[]).includes(v);
+const isHostId = (v: unknown): v is HostId => typeof v === "string" && (HOSTS as readonly string[]).includes(v);
+
+export type ParsedPick = { ok: true; pick: SproutPick } | { ok: false; error: string };
+
+/** scout's `.canopy/pick.json`, read as untrusted: extra keys are dropped,
+ *  `why` is one line of at most 500, a renovate target is an https url
+ *  kept without its secret, and a new pick carries no target */
+export function parsePick(text: string): ParsedPick {
+  let raw: unknown;
+  try {
+    raw = JSON.parse(text);
+  } catch {
+    return { ok: false, error: "pick.json is not JSON" };
+  }
+  if (!isObj(raw)) return { ok: false, error: "pick.json must be an object" };
+  const { kind, host, why, target, license } = raw;
+  if (!isPickKind(kind)) return { ok: false, error: `kind must be one of ${PICK_KINDS.join(", ")}` };
+  if (!isHostId(host)) return { ok: false, error: `host must be one of ${HOSTS.join(", ")}` };
+  if (typeof why !== "string" || !why.trim()) return { ok: false, error: "why must say in a sentence why this pick" };
+  const pick: SproutPick = { kind, host, why: oneLine(why, 500) };
+  if (kind === "renovate") {
+    if (typeof target !== "string" || !/^https:\/\/\S+$/.test(target.trim())) return { ok: false, error: "a renovate pick needs target: the upstream's https url" };
+    pick.target = urlWithoutSecret(target.trim());
+  }
+  if (kind === "extend") {
+    if (typeof target !== "string" || !target.trim()) return { ok: false, error: "an extend pick needs target: the repo it extends" };
+    pick.target = oneLine(target, 300);
+  }
+  if (typeof license === "string" && license.trim()) pick.license = oneLine(license, 40);
+  return { ok: true, pick };
+}
+
+/** the hard limits on a pick, held in code whatever the judge said */
+export function pickRefusal(p: SproutPick): string | null {
+  if (!isHostId(p.host)) return `${p.host} is not one of the hosts canopy deploys to`;
+  if (p.kind === "renovate") {
+    if (!p.license) return "a renovate pick needs the upstream's SPDX license";
+    if (!(ALLOWED_LICENSES as readonly string[]).includes(p.license)) return `${p.license} is not on the allowed license list`;
+  }
+  return null;
+}
+
+/** what this phase can carry out: a new pick deployed to vercel */
+export function phaseRefusal(p: SproutPick): string | null {
+  if (p.kind !== "new") return `a ${p.kind} pick arrives in phase 4; the research is in .canopy/research.md`;
+  if (p.host !== "vercel") return `deploying to ${p.host} arrives in phase 4; the research is in .canopy/research.md`;
+  return null;
+}
+
+export const isPick = (v: unknown): v is SproutPick =>
+  isObj(v) && isPickKind(v["kind"]) && isHostId(v["host"]) && typeof v["why"] === "string" && optStr(v["target"]) && optStr(v["license"]);
 const INPUT_KINDS: Readonly<Record<InputKind, true>> = { text: true, audio: true, image: true, url: true, file: true, transcript: true, answers: true };
 
 function isInputEntry(e: unknown): boolean {
@@ -372,6 +428,9 @@ export function parseSproutRecord(text: string): Sprout | null {
   const { questions, questionsAt, repo, parked, noteRev } = raw;
   if (questions !== undefined && !(Array.isArray(questions) && questions.every(isQuestion))) return null;
   if (!optNum(questionsAt) || !optStr(repo) || !optStr(parked) || !optStr(noteRev)) return null;
+  const { pick, privateRepo, url } = raw;
+  if (pick !== undefined && !isPick(pick)) return null;
+  if (!optStr(privateRepo) || !optStr(url)) return null;
   // canopy's own file: past these checks it is taken as written
   return raw as unknown as Sprout;
 }

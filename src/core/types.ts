@@ -1199,6 +1199,23 @@ export interface EvidenceFile {
 
 /* ---------- the incubator: new projects from an idea, a link or a repo ---------- */
 
+/** where a sprout may deploy; anything else is refused in code */
+export const HOSTS = ["vercel", "vercel+firebase", "vercel+convex", "mini"] as const;
+export type HostId = (typeof HOSTS)[number];
+export type PickKind = "new" | "renovate" | "extend";
+
+/** what scout chose, read from `.canopy/pick.json` by `parsePick` */
+export interface SproutPick {
+  kind: PickKind;
+  /** renovate: the upstream's https url (no secret); extend: the repo it extends */
+  target?: string;
+  host: HostId;
+  /** renovate: the upstream's SPDX license id */
+  license?: string;
+  /** one line */
+  why: string;
+}
+
 export const SPROUT_STATUSES = [
   "queued",
   "clarifying",
@@ -1277,6 +1294,12 @@ export interface Sprout {
   spent: { runs: number; workMs: number };
   /** why it is parked, one line */
   parked?: string;
+  /** scout's pick, once canopy has read and allowed it */
+  pick?: SproutPick;
+  /** the private GitHub repo canopy made for it, "owner/name" */
+  privateRepo?: string;
+  /** the production url once live */
+  url?: string;
   /** the vault note's revision, for the next replace */
   noteRev?: string;
   createdAt: number;
