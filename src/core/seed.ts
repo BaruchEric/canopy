@@ -122,29 +122,44 @@ export async function commitSeed(path: string, rels: string[], message: string, 
 
 /** take the clone's own agent settings out, as canopy's commit, so the
  *  first agent run in the seed never reads them. A `.claude` that is a
- *  symlink or a file goes whole, since its settings cannot be told apart. */
+ *  symlink or a file goes whole, since its settings cannot be told apart.
+ *  Names match in any letter case: a case-insensitive disk (APFS) hands
+ *  Claude a tracked `.Claude/settings.json` as `.claude/settings.json`. */
 async function dropAgentSettings(path: string, self: string): Promise<void> {
-  const doomed: string[] = [];
   const claude = await lstatOrNull(join(path, ".claude"));
-  for (const rel of AGENT_SETTINGS) {
-    if (rel.startsWith(".claude/") && claude && !claude.isDirectory()) continue;
-    if (await lstatOrNull(join(path, rel))) doomed.push(rel);
+  const names = claude && !claude.isDirectory() ? [".claude", ".mcp.json"] : AGENT_SETTINGS;
+  const specs = names.map((n) => `:(icase)${n}`);
+  const listed = await git(path, ["ls-files", "-z", "--", ...specs]);
+  if (listed.code !== 0) throw new Error(`git ls-files: ${firstLine(listed.stderr)}`);
+  const tracked = listed.stdout.split("\0").filter((n) => n !== "");
+  const onDisk: string[] = [];
+  for (const n of names) if (await lstatOrNull(join(path, n))) onDisk.push(n);
+  if (tracked.length === 0 && onDisk.length === 0) return;
+  if (tracked.length > 0) {
+    const r = await git(path, ["rm", "-r", "-q", "--cached", "--ignore-unmatch", "--", ...tracked]);
+    if (r.code !== 0) throw new Error(`git rm: ${firstLine(r.stderr)}`);
   }
-  if (claude && !claude.isDirectory()) doomed.push(".claude");
-  if (doomed.length === 0) return;
-  const r = await git(path, ["rm", "-r", "-f", "-q", "--ignore-unmatch", "--", ...doomed]);
-  if (r.code !== 0) throw new Error(`git rm: ${firstLine(r.stderr)}`);
-  // anything git did not track goes too
-  for (const rel of doomed) await rm(join(path, rel), { recursive: true, force: true });
-  const staged = await git(path, ["diff", "--cached", "--quiet", "--", ...doomed]);
-  if (staged.code === 0) return;
-  const c = await git(
-    path,
-    ["-c", "commit.gpgsign=false", "commit", "-q", "-m", "seed: drop the cloned project's agent settings", "--", ...doomed],
-    30_000,
-    identity(self),
-  );
-  if (c.code !== 0) throw new Error(`git commit: ${firstLine(c.stderr)}`);
+  // the files themselves, tracked under any case or not tracked at all
+  for (const n of [...tracked, ...onDisk]) await rm(join(path, n), { recursive: true, force: true });
+  // committed by the names the index had, since a commit's pathspec must
+  // match something git knows
+  const staged = tracked.length > 0 ? await git(path, ["diff", "--cached", "--quiet", "--", ...tracked]) : null;
+  if (staged && staged.code !== 0) {
+    const c = await git(
+      path,
+      ["-c", "commit.gpgsign=false", "commit", "-q", "-m", "seed: drop the cloned project's agent settings", "--", ...tracked],
+      30_000,
+      identity(self),
+    );
+    if (c.code !== 0) throw new Error(`git commit: ${firstLine(c.stderr)}`);
+  }
+  // nothing of them may be left, in the index or on disk, or makeSeed takes
+  // the seed back rather than leave it for a run
+  const left = await git(path, ["status", "--porcelain", "-z", "--ignored", "--", ...specs]);
+  const still = await git(path, ["ls-files", "-z", "--", ...specs]);
+  if (left.code !== 0 || still.code !== 0 || left.stdout !== "" || still.stdout !== "") {
+    throw new Error("the cloned project's agent settings are still in the seed");
+  }
 }
 
 export async function makeSeed(

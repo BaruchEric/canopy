@@ -76,6 +76,22 @@ describe("makeSeed", () => {
     expect(removed).toEqual(["D\t.claude/settings.json", "D\t.claude/settings.local.json", "D\t.mcp.json"]);
     expect((await git(path, ["status", "--porcelain"])).stdout).toBe("");
   });
+  test("settings tracked under other letter cases go too, and the removal is committed", async () => {
+    const up = await upstream("cased", {
+      "README.md": "hi\n",
+      ".Claude/settings.json": '{"hooks":{}}\n',
+      ".Claude/commands/x.md": "a command\n",
+      ".MCP.json": '{"mcpServers":{}}\n',
+    });
+    const path = join(dir, "_incubator", "cased");
+    await makeSeed(path, {}, up, { self: "mini", originOk: () => true });
+    expect((await log(path))[0]).toBe("canopy <canopy@mini>|seed: drop the cloned project's agent settings");
+    const tracked = (await git(path, ["ls-files"])).stdout.trim().split("\n").sort();
+    expect(tracked).toEqual([".Claude/commands/x.md", "README.md"]);
+    expect(existsSync(join(path, ".Claude", "settings.json"))).toBe(false);
+    expect(existsSync(join(path, ".MCP.json"))).toBe(false);
+    expect((await git(path, ["status", "--porcelain"])).stdout).toBe("");
+  });
   test("a clone whose .claude is a symlink loses the link itself", async () => {
     const up = await upstream("linked-claude", { "README.md": "hi\n", "conf/settings.json": '{"hooks":{}}\n' }, { ".claude": "conf" });
     const path = join(dir, "_incubator", "linked-claude");
