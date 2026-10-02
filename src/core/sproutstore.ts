@@ -1,0 +1,110 @@
+/**
+ * The incubator's files under the config dir: one folder per sprout with
+ * its record, its inputs index and its raw inputs. Raw inputs live here and
+ * never in the seed, which is peer-synced and whose WIP snapshots take
+ * untracked files.
+ *
+ * The config dir is shared by every launch root canopy serves, so each
+ * sprout.json carries the root of the server that wrote it (a property of
+ * the file, not of the Sprout) and a server lists only its own.
+ */
+import { mkdir, readFile, readdir, rename, writeFile } from "node:fs/promises";
+import { join } from "node:path";
+import { isSproutId, parseSproutRecord } from "./sprout";
+import { configDir } from "./store";
+import type { Sprout } from "./types";
+
+export const incubatorDir = (): string => join(configDir(), "incubator");
+
+const NAME = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
+
+/** the root a record was written for, or null when it has none */
+function rootOf(text: string): string | null {
+  try {
+    const v: unknown = JSON.parse(text);
+    if (typeof v !== "object" || v === null) return null;
+    const root = (v as Record<string, unknown>)["root"]; // v is a non-null object here
+    return typeof root === "string" ? root : null;
+  } catch {
+    return null;
+  }
+}
+
+export class SproutFiles {
+  /** `root` is the launch root every record is written for and read back by */
+  constructor(
+    private readonly root: string,
+    private readonly dir: string = incubatorDir(),
+  ) {}
+
+  private home(id: string): string {
+    if (!isSproutId(id)) throw new Error(`not a sprout id: ${id}`);
+    return join(this.dir, id);
+  }
+
+  inputsDir(id: string): string {
+    return join(this.home(id), "inputs");
+  }
+
+  private input(id: string, name: string): string {
+    if (!NAME.test(name)) throw new Error(`not an input name: ${name}`);
+    return join(this.inputsDir(id), name);
+  }
+
+  /** This root's sprouts. A record written for another root, or for none, is
+   *  left on disk as it is. */
+  async list(): Promise<Sprout[]> {
+    let names: string[];
+    try {
+      names = await readdir(this.dir);
+    } catch {
+      return [];
+    }
+    const out: Sprout[] = [];
+    for (const name of names.filter(isSproutId).sort()) {
+      const text = await readFile(join(this.dir, name, "sprout.json"), "utf8").catch(() => null);
+      const s = text === null ? null : parseSproutRecord(text);
+      if (text === null || !s || s.id !== name) {
+        console.error(`incubator: skipped ${name}/sprout.json, which is missing or unreadable`);
+        continue;
+      }
+      if (rootOf(text) !== this.root) continue;
+      // the root belongs to the file, so it does not travel on the Sprout
+      const { root: _root, ...sprout } = s as Sprout & { root?: unknown };
+      out.push(sprout);
+    }
+    return out;
+  }
+
+  /** whole, through a rename, so a crash leaves the old record or the new one */
+  async save(s: Sprout): Promise<void> {
+    const home = this.home(s.id);
+    await mkdir(home, { recursive: true, mode: 0o700 });
+    const tmp = join(home, `.sprout.${process.pid}.${Date.now()}.${Math.random().toString(16).slice(2)}.tmp`);
+    await writeFile(tmp, `${JSON.stringify({ ...s, root: this.root }, null, 2)}\n`, { mode: 0o600 });
+    await rename(tmp, join(home, "sprout.json"));
+  }
+
+  /** once: an input is never overwritten */
+  async writeInput(id: string, name: string, data: Uint8Array | string): Promise<void> {
+    const file = this.input(id, name);
+    await mkdir(this.inputsDir(id), { recursive: true, mode: 0o700 });
+    await writeFile(file, data, { mode: 0o600, flag: "wx" });
+  }
+
+  async readInput(id: string, name: string): Promise<Uint8Array> {
+    return new Uint8Array(await readFile(this.input(id, name)));
+  }
+
+  async writeIndex(id: string, text: string): Promise<void> {
+    const home = this.home(id);
+    await mkdir(home, { recursive: true, mode: 0o700 });
+    await writeFile(join(home, "inputs.md"), text, { mode: 0o600 });
+  }
+
+  async dismiss(id: string): Promise<void> {
+    const away = join(this.dir, ".dismissed");
+    await mkdir(away, { recursive: true, mode: 0o700 });
+    await rename(this.home(id), join(away, id));
+  }
+}
