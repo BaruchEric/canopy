@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { isSeedId, SEED_RUN_NOTE } from "../../../src/core/sprout";
 import { useStore } from "../store";
 import { api } from "../api";
 import { cardOfShell } from "../handoff";
@@ -99,6 +100,8 @@ export function AgentButtons({ tab }: { tab: TermTab }) {
     if (tasks === undefined && repo && !repo.forge && !repo.host) loadTasks(tab.repoId).catch(() => {});
   }, [tasks, repo, tab.repoId, loadTasks]);
   if (!repo || repo.forge || repo.host) return null;
+  // a seed's agents run through the incubator alone: no button here asks one
+  const seed = isSeedId(tab.repoId);
   const dev = devTask(tasks ?? []);
   const state = devState(dev);
   const debug = async () => {
@@ -108,7 +111,7 @@ export function AgentButtons({ tab }: { tab: TermTab }) {
   };
   return (
     <span className="agent-buttons">
-      {state === "none" ? (
+      {state === "none" && seed ? null : state === "none" ? (
         <button type="button" className="term-new" title="Ask your agent to set up a way to run this app" onClick={() => void askAgent(tab.repoId, SETUP_PROMPT, tab)}>
           set up run
         </button>
@@ -117,21 +120,21 @@ export function AgentButtons({ tab }: { tab: TermTab }) {
           ■
         </button>
       ) : (
-        <button type="button" className="term-new" title={`Run ${dev?.name ?? "the app"}`} aria-label="Run the app" onClick={() => void taskAct(tab.repoId, "start", dev?.name)}>
+        <button type="button" className="term-new" title={seed ? `Run ${dev?.name ?? "the app"}: ${SEED_RUN_NOTE}` : `Run ${dev?.name ?? "the app"}`} aria-label="Run the app" onClick={() => void taskAct(tab.repoId, "start", dev?.name)}>
           ▶
         </button>
       )}
-      {(state === "running" || state === "failed") && (
+      {!seed && (state === "running" || state === "failed") && (
         <button type="button" className="term-new" title="Ask your agent to fix the app's error, with its latest output" aria-label="Debug with your agent" onClick={() => void debug()}>
           🐞
         </button>
       )}
-      {canSave(repo) && (
+      {!seed && canSave(repo) && (
         <button type="button" className="term-new" title="Ask your agent to commit and push your work" aria-label="Save my work" onClick={() => void askAgent(tab.repoId, SAVE_PROMPT, tab)}>
           ✓
         </button>
       )}
-      {agent.harness && tab.task === undefined && (
+      {!seed && agent.harness && tab.task === undefined && (
         <HandoffButton className="term-new" repoId={tab.repoId} backend={backendOf(tab.id)} from={agent.harness} transcript={agent.transcript} term={tab.id} />
       )}
     </span>

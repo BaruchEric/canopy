@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState, type CSSProperties } from "react";
+import { isSeedId } from "../../../src/core/sprout";
 import { describeAgent } from "../../../src/core/agent";
 import { HARNESS } from "../../../src/core/harness";
 import { HARNESSES, type LaunchPick } from "../../../src/core/types";
@@ -58,7 +59,10 @@ export function NewShellButton({ repoId }: { repoId: string }) {
     };
   }, [menu]);
 
+  // a seed's agents run through the incubator alone: its + is a plain shell
+  const seed = isSeedId(repoId);
   const show = () => {
+    if (seed) return;
     setPlace(menuPlace(box.current));
     setMenu(true);
   };
@@ -78,7 +82,7 @@ export function NewShellButton({ repoId }: { repoId: string }) {
       <button
         type="button"
         className="term-new"
-        title="Another shell at this repo, here; right click or hold for one with an agent in it"
+        title={seed ? "Another shell at this seed, here" : "Another shell at this repo, here; right click or hold for one with an agent in it"}
         aria-label="New shell"
         aria-haspopup="menu"
         aria-expanded={menu}
@@ -95,7 +99,7 @@ export function NewShellButton({ repoId }: { repoId: string }) {
           show();
         }}
         onPointerDown={(e) => {
-          if (e.button !== 0) return;
+          if (e.button !== 0 || seed) return;
           held.current = false;
           cancel();
           press.current = setTimeout(() => {

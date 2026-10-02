@@ -1,4 +1,5 @@
 import { useEffect, useState, type RefObject } from "react";
+import { isSeedId, SEED_RUN_NOTE } from "../../../src/core/sprout";
 import type { Repo } from "../../../src/core/types";
 import { closedIn, useStore } from "../store";
 import { devTask } from "../tasks";
@@ -41,11 +42,13 @@ export function GuidedPanel({ repo, onMore, targets }: { repo: Repo; onMore: () 
       </div>
     );
   }
+  // a seed's agents run through the incubator alone, so nothing here asks one
+  const seed = isSeedId(repo.id);
   return (
     <div className="guided">
       <p className="guided-status">{plainStatus(repo, state)}</p>
       <div className="guided-actions">
-        {state === "none" ? (
+        {state === "none" && seed ? null : state === "none" ? (
           <button ref={targets.run} type="button" className="guided-btn" onClick={() => void askAgent(repo.id, SETUP_PROMPT, null)}>
             Set up run
           </button>
@@ -58,6 +61,7 @@ export function GuidedPanel({ repo, onMore, targets }: { repo: Repo; onMore: () 
             Run my app
           </button>
         )}
+        {!seed && (
         <button
           ref={targets.save}
           type="button"
@@ -68,11 +72,13 @@ export function GuidedPanel({ repo, onMore, targets }: { repo: Repo; onMore: () 
         >
           Save my work
         </button>
+        )}
         <span className="spacer" />
         <button type="button" className="mini" onClick={onMore}>
           show more
         </button>
       </div>
+      {seed && <p className="panel-hint">{SEED_RUN_NOTE}</p>}
       {state === "running" && <PreviewSection repo={repo} />}
     </div>
   );

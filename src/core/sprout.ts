@@ -20,6 +20,19 @@ export const SEEDS_DIR = "_incubator";
 /** whether a repo id is a sprout's seed in the launch root */
 export const isSeedRepoId = (id: string): boolean => id.startsWith(`${SEEDS_DIR}/`);
 
+/** under a seed's run button: what it starts, and as whom */
+export const SEED_RUN_NOTE = "this runs code the incubator's agents wrote, with your tokens";
+
+export const SEED_AGENT_REFUSAL = "a seed's agents run through the incubator; open a plain shell to work in it yourself";
+
+/** a sprout's seed by repo id: `_incubator/<slug>` on the launch root,
+ *  bare or qualified with another backend's `<name>|`; never a dot folder */
+export function isSeedId(repoId: string): boolean {
+  const plain = repoId.includes("|") ? repoId.slice(repoId.indexOf("|") + 1) : repoId;
+  const m = /^_incubator\/([^/]+)$/.exec(plain);
+  return m !== null && !(m[1] ?? "").startsWith(".");
+}
+
 /** A url with no secret in it, for everything canopy stores or shows: an
  *  http(s) url loses its whole userinfo ("https://x:token@host/r" is
  *  "https://host/r"), any other scheme's keeps its user name, which ssh

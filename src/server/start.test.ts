@@ -66,6 +66,8 @@ beforeAll(async () => {
   process.env["CANOPY_CONFIG_DIR"] = join(scratch, "config");
   const root = join(scratch, "root");
   await Bun.$`mkdir -p ${join(root, "app")} && git -C ${join(root, "app")} init -q`.quiet();
+  // a sprout's seed, where no agent starts but through the incubator
+  await Bun.$`mkdir -p ${join(root, "_incubator", "coin")} && git -C ${join(root, "_incubator", "coin")} init -q`.quiet();
   for (const k of INHERITED_ENV) {
     outer[k] = process.env[k];
     process.env[k] = `outer-${k}`;
@@ -181,6 +183,34 @@ describe("start=agent", () => {
     expect(c.close().reason).toMatch(/^codex is not installed on /);
     expect(typed).toBe(before);
     expect((await agentOf(id)).status).toBe(404);
+  });
+
+  test("in a seed, start=agent is refused before a shell starts, and a plain shell opens", async () => {
+    const before = typed;
+    const id = "f0000000000000000000000000000016";
+    const c = connect({ id: "_incubator/coin", term: id, place: "panel", start: "agent" });
+    await c.closed;
+    expect(c.close().code).toBe(1011);
+    expect(c.close().reason).toContain("a seed's agents run through the incubator");
+    expect(typed).toBe(before);
+    const plain = connect({ id: "_incubator/coin", term: "f0000000000000000000000000000017", place: "panel" });
+    await plain.opened;
+    plain.ws.close();
+    await plain.closed;
+    await fetch(`http://127.0.0.1:${server.port}/api/terms?term=f0000000000000000000000000000017`, { method: "DELETE" });
+  });
+
+  test("in a seed, a resume and a launcher build are refused in words", async () => {
+    const base = `http://127.0.0.1:${server.port}/api/repos`;
+    const resume = await fetch(`${base}/resume?id=${encodeURIComponent("_incubator/coin")}`, {
+      method: "POST",
+      body: JSON.stringify({ term: "f0000000000000000000000000000018", place: "panel", session: "0b9c2f1e-1111-4222-8333-944455556666", cols: 80, rows: 24 }),
+    });
+    expect(resume.status).toBe(400);
+    expect(((await resume.json()) as { error: string }).error).toContain("a seed's agents run through the incubator");
+    const build = await fetch(`${base}/build?id=${encodeURIComponent("_incubator/coin")}`, { method: "POST", body: "{}" });
+    expect(build.status).toBe(400);
+    expect(((await build.json()) as { error: string }).error).toContain("a seed is built by its own stages");
   });
 
   test("a profile picked at launch is what the line is made for", async () => {

@@ -9,7 +9,7 @@ import { changedAt } from "./grouping";
 import { focusPanel, nextActive } from "./dock";
 import { heldShellUrl, openElsewhere, openShellElsewhere, parseRoute, soloUrl } from "./routes";
 import { loadSettings, saveSettings, SCREEN_SETTINGS, shellPlace, type Settings, type ShellPlace } from "./settings";
-import { PANEL_TERM_ROWS, adoptTerms, loadFocusSize, loadTermTabs, needsPanelShell, nextStripTab, reconcileTerms, rowsPx, termId, type FocusSize, type TermTab } from "./term";
+import { PANEL_TERM_ROWS, adoptTerms, loadFocusSize, loadTermTabs, needsPanelShell, nextStripTab, panelShellStart, reconcileTerms, rowsPx, termId, type FocusSize, type TermTab } from "./term";
 import { clearTask, frontForTab, frontForTask, keepFront, projectFront, withSolo, type BenchPane, type Front } from "./front";
 import { clientId, identity } from "./client";
 export type { TermTab } from "./term";
@@ -2805,7 +2805,7 @@ useStore.subscribe((s, prev) => {
       name: repo.name,
       path: repo.path,
       place: "panel",
-      ...(s.settings.level === "intermediate" ? { start: "agent" as const } : {}),
+      ...(panelShellStart(s.settings.level, id) ? { start: "agent" as const } : {}),
     };
     useStore.setState((t) => ({ terms: [...t.terms, tab], closedSections: unfoldIn(t.closedSections, id, "shell") }));
   }

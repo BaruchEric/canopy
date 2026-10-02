@@ -108,7 +108,7 @@ import {
 } from "../core/store";
 import { Runner } from "../core/runner";
 import type { RunDriver } from "../core/driver";
-import { SEEDS_DIR } from "../core/sprout";
+import { SEED_AGENT_REFUSAL, SEEDS_DIR } from "../core/sprout";
 import { sweepCodexTrust } from "../core/codextrust";
 import { seedBusy, seedRootsNow, seedTopOf, setSeedBusy, setSeedRoots } from "../core/seedgit";
 import { suggestMessage } from "../core/suggest";
@@ -684,6 +684,7 @@ async function restoreTerm(state: ServerState, id: string, size: TermSize, resum
   // shell route is that harness; checked before anything is undone
   let line: string | null = null;
   if (resume && rec.agent) {
+    if (isSeedPath(state.root, rec.path)) throw new HttpError(400, SEED_AGENT_REFUSAL);
     await needHarness(state, rec.agent, rec.path);
     const env = shellEnv(state, rec.repoId, rec.path, id);
     line = continueLine(rec.agent, agentFor(await loadConfig(), rec.path, "shell", { harness: rec.agent }), env);
@@ -2326,6 +2327,7 @@ async function handleApi(
       // a page from before harnesses resumes claude, all it ever listed
       const harness = b.harness === undefined ? "claude" : b.harness;
       if (!isHarness(harness)) return json({ error: "unknown harness" }, 400);
+      if (isSeedPath(state.root, repo.path)) return json({ error: SEED_AGENT_REFUSAL }, 400);
       return json(await resumeTerm(state, repo, b.term, termPlace(b.place), b.session, harness, termSize(b.cols, b.rows)), 201);
     }
     if (method === "GET" && action === "sessions") {
@@ -2426,7 +2428,7 @@ async function handleApi(
     }
     if (method === "POST" && action === "suggest") {
       const files = repo.status?.files ?? [];
-      return json(await suggestMessage(repo.path, files, agentFor(await loadConfig(), repo.path, "suggest")));
+      return json(await suggestMessage(repo.path, files, agentFor(await loadConfig(), repo.path, "suggest"), { seed: isSeedPath(state.root, repo.path) }));
     }
     if (method === "POST" && action === "open") {
       const b = (await req.json()) as { app: string; tab?: unknown; helper?: unknown };
@@ -2492,6 +2494,7 @@ async function handleApi(
       return json(job, 201);
     }
     if (method === "POST" && action === "build") {
+      if (isSeedPath(state.root, repo.path)) return json({ error: "a seed is built by its own stages; the launcher builds it once it ships" }, 400);
       if (!hostOpeners()) return json({ error: NO_DESKTOP }, 400);
       const b = (await req.json()) as { pr?: unknown };
       const ref =
@@ -2866,6 +2869,8 @@ export async function startServer(opts: {
       tmux: tmuxBase(),
       repos: () => state.result.repos,
       own: async (repo) => {
+        // a seed's tasks.json is the agents' to write: nothing in it starts on its own
+        if (isSeedPath(root, repo.path)) return false;
         // no remote is never the user's by this test, and asking gh costs a process
         if (!repo.remotes?.length) return false;
         if (state.login === undefined) state.login = await githubLogin();
@@ -3089,7 +3094,8 @@ export async function startServer(opts: {
       const start = wants
         ? agentFor(await loadConfig(), repo.path, "shell", launchPick(url.searchParams.get("profile"), url.searchParams.get("harness")))
         : null;
-      const refused = start ? await harnessRefusal(state, start.harness, repo.path) : null;
+      // a seed's agents start through the incubator alone, with its limits
+      const refused = start && isSeedPath(state.root, repo.path) ? SEED_AGENT_REFUSAL : start ? await harnessRefusal(state, start.harness, repo.path) : null;
       const prompt = start ? (url.searchParams.get("prompt") ?? "").slice(0, PROMPT_MAX) : "";
       const size = termSize(url.searchParams.get("cols"), url.searchParams.get("rows"));
       const dev = url.searchParams.get("client") ?? "";

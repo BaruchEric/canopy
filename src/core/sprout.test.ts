@@ -6,6 +6,7 @@ import {
   inputKindOf,
   inputType,
   inputsIndex,
+  isSeedId,
   lastDone,
   localStamp,
   nextWorkflow,
@@ -434,4 +435,14 @@ describe("the chain", () => {
     expect(statusFor(SHIP, undefined)).toBe("deploying");
     expect(statusFor("clarify", "Clarify")).toBe("clarifying");
   });
+});
+
+test("isSeedId: a sprout's seed on the launch root, not the making folder or a lookalike", () => {
+  expect(isSeedId("_incubator/coin")).toBe(true);
+  expect(isSeedId("_incubator/.coin.abc.making")).toBe(false);
+  expect(isSeedId("_incubator")).toBe(false);
+  expect(isSeedId("_incubator/coin/sub")).toBe(false);
+  expect(isSeedId("_incubatorx/coin")).toBe(false);
+  expect(isSeedId("src2:_incubator/coin")).toBe(false);
+  expect(isSeedId("mini|_incubator/coin")).toBe(true);
 });

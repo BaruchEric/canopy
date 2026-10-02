@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { FOCUS_GAP, FOCUS_MIN, PANEL_TERM_ROWS, adoptTerms, otherShells, shellSet, cellHeight, focusResize, loadFocusSize, loadTermTabs, nextStripTab, pruneHidden, joinsOnly, needsPanelShell, reconcileTerms, rowsPx, termId, viewKey, type TermTab } from "./term";
+import { FOCUS_GAP, FOCUS_MIN, PANEL_TERM_ROWS, adoptTerms, otherShells, shellSet, cellHeight, focusResize, loadFocusSize, loadTermTabs, nextStripTab, pruneHidden, joinsOnly, needsPanelShell, panelShellStart, reconcileTerms, rowsPx, termId, viewKey, type TermTab } from "./term";
 import type { Repo, TermInfo } from "../../src/core/types";
 
 describe("rowsPx", () => {
@@ -296,5 +296,14 @@ describe("needsPanelShell", () => {
   test("a task's tab does not count, and another repo's shell does not either", () => {
     expect(needsPanelShell([tab("t", "app", "panel", "dev")], [], "app")).toBe(true);
     expect(needsPanelShell([tab("p", "other", "panel")], [held("q", "other", "panel")], "app")).toBe(true);
+  });
+});
+
+describe("panelShellStart", () => {
+  test("an agent at intermediate, a plain shell in a seed whatever the level", () => {
+    expect(panelShellStart("intermediate", "app")).toBe("agent");
+    expect(panelShellStart("advanced", "app")).toBeUndefined();
+    expect(panelShellStart("intermediate", "_incubator/coin")).toBeUndefined();
+    expect(panelShellStart("intermediate", "mini|_incubator/coin")).toBeUndefined();
   });
 });

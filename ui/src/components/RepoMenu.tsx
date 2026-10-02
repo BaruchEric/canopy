@@ -1,4 +1,5 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import { isSeedId } from "../../../src/core/sprout";
 import type { KeyboardEvent as ReactKeyboardEvent, SyntheticEvent } from "react";
 import { createPortal } from "react-dom";
 import { linkLabel } from "../util";
@@ -171,6 +172,9 @@ export function RepoMenu({
       else console.error(msg);
     }
   };
+
+  // a seed's agents run through the incubator alone: no shell here starts one
+  const seed = isSeedId(repo.id);
 
   const agentShell = (pick: { harness: (typeof HARNESSES)[number] } | { profile: string }) => {
     setOpen(false);
@@ -460,7 +464,7 @@ export function RepoMenu({
                   </button>
                 );
               })}
-              {HARNESSES.map((h) => {
+              {!seed && HARNESSES.map((h) => {
                 const here = shellHas.includes(h);
                 const routed = agent.harness === h;
                 return (
@@ -490,7 +494,7 @@ export function RepoMenu({
                   </button>
                 );
               })}
-              {extraProfiles.length > 0 && (
+              {!seed && extraProfiles.length > 0 && (
                 <div className="menu-row" aria-label="A shell with a profile">
                   {extraProfiles.map((name) => {
                     const p = routes.profiles[name]!;
@@ -511,7 +515,7 @@ export function RepoMenu({
                   })}
                 </div>
               )}
-              {can("agent") && (
+              {!seed && can("agent") && (
                 <button
                   type="button"
                   role="menuitem"
@@ -523,7 +527,7 @@ export function RepoMenu({
                   <span className="menu-fact">interactive, in a terminal</span>
                 </button>
               )}
-              {can("herdr") && (
+              {!seed && can("herdr") && (
                 <button
                   type="button"
                   role="menuitem"

@@ -8,7 +8,8 @@ import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { configFlags } from "./codexrun";
-import { exec, git } from "./exec";
+import { stageEnv } from "./envnames";
+import { exec, git, type ExecOptions, type ExecResult } from "./exec";
 import { HARNESS } from "./harness";
 import { parseLocator } from "./host";
 import { DEFAULT_AGENT, type AgentSettings, type RepoFile } from "./types";
@@ -102,18 +103,42 @@ export function codexSuggestArgs(agent: AgentSettings, dir: string, out: string,
   ];
 }
 
-/** Codex's last message, or "" when it gave none. */
-async function askCodex(bin: string, repoPath: string, agent: AgentSettings, context: string): Promise<string> {
+/** Codex's last message, or "" when it gave none. A seed's runs from the
+ *  scratch folder too, so none of the seed's own AGENTS.md or .codex/ is read. */
+async function askCodex(bin: string, repoPath: string, agent: AgentSettings, context: string, o: SuggestOpts): Promise<string> {
   const dir = await mkdtemp(join(tmpdir(), "canopy-suggest-"));
   try {
     const out = join(dir, "message.txt");
-    const where = codexSuggestDir(repoPath, dir);
-    const r = await exec([bin, ...codexSuggestArgs(agent, where, out, `${CODEX_PROMPT}\n\n${context}`)], {
+    const where = o.seed ? dir : codexSuggestDir(repoPath, dir);
+    const r = await (o.run ?? exec)([bin, ...codexSuggestArgs(agent, where, out, `${CODEX_PROMPT}\n\n${context}`)], {
       cwd: where,
       timeoutMs: SUGGEST_TIMEOUT,
+      ...(o.seed ? { base: stageEnv(o.env ?? process.env) } : {}),
     });
     if (r.code !== 0) return "";
     return (await readFile(out, "utf8").catch(() => "")).trim();
+  } finally {
+    await rm(dir, { recursive: true, force: true }).catch(() => {});
+  }
+}
+
+/** `seed`: an incubator seed, written by agents, so the harness starts in a
+ *  scratch folder with the stage env (no token, none of the seed's settings).
+ *  `run`, `which` and `env` stand in for exec, Bun.which and the env in tests. */
+export interface SuggestOpts {
+  seed?: boolean;
+  run?: (argv: string[], opts?: ExecOptions) => Promise<ExecResult>;
+  which?: (bin: string) => string | null;
+  env?: Readonly<Record<string, string | undefined>>;
+}
+
+/** Claude's answer; a seed's from a scratch folder with the stage env */
+async function claudeSuggest(bin: string, agent: AgentSettings, context: string, o: SuggestOpts): Promise<ExecResult> {
+  const argv = [bin, ...claudeSuggestArgs(agent, `${PROMPT}\n\n${context}`)];
+  if (!o.seed) return (o.run ?? exec)(argv, { timeoutMs: SUGGEST_TIMEOUT });
+  const dir = await mkdtemp(join(tmpdir(), "canopy-suggest-"));
+  try {
+    return await (o.run ?? exec)(argv, { cwd: dir, timeoutMs: SUGGEST_TIMEOUT, base: stageEnv(o.env ?? process.env) });
   } finally {
     await rm(dir, { recursive: true, force: true }).catch(() => {});
   }
@@ -125,15 +150,16 @@ export async function suggestMessage(
   repoPath: string,
   files: RepoFile[],
   agent: AgentSettings = DEFAULT_AGENT,
+  o: SuggestOpts = {},
 ): Promise<{ message: string; source: "ai" | "heuristic" }> {
-  const bin = Bun.which(HARNESS[agent.harness].binary);
+  const bin = (o.which ?? Bun.which)(HARNESS[agent.harness].binary);
   if (bin) {
     const context = await diffContext(repoPath);
     if (agent.harness === "codex") {
-      const message = await askCodex(bin, repoPath, agent, context);
+      const message = await askCodex(bin, repoPath, agent, context, o);
       if (message) return { message, source: "ai" };
     } else {
-      const r = await exec([bin, ...claudeSuggestArgs(agent, `${PROMPT}\n\n${context}`)], { timeoutMs: SUGGEST_TIMEOUT });
+      const r = await claudeSuggest(bin, agent, context, o);
       const message = r.stdout.trim();
       if (r.code === 0 && message) return { message, source: "ai" };
     }

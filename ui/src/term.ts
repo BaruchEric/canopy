@@ -3,6 +3,7 @@
  *  of lines of it. Both the xterm in TermDock.tsx and the store's default
  *  shell height read from here, so they agree on what a row is. */
 
+import { isSeedId } from "../../src/core/sprout";
 import type { Harness, Repo, ShellPlace, TermInfo } from "../../src/core/types";
 
 /** One shell tab, in the strip along the bottom or in its repo's panel. */
@@ -46,6 +47,12 @@ export interface TermTab {
 export function needsPanelShell(tabs: readonly TermTab[], held: readonly TermInfo[], repoId: string): boolean {
   if (tabs.some((t) => t.repoId === repoId && t.place === "panel" && t.task === undefined)) return false;
   return !held.some((t) => t.repoId === repoId && t.place === "panel" && t.task === undefined);
+}
+
+/** what a panel's own shell starts with: the agent at intermediate, but
+ *  never in a seed, whose agents run through the incubator alone */
+export function panelShellStart(level: "intermediate" | "advanced", repoId: string): "agent" | undefined {
+  return level === "intermediate" && !isSeedId(repoId) ? "agent" : undefined;
 }
 
 /** what a tab's view is keyed by: its name, and its generation once it has one */
