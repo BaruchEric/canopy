@@ -8,6 +8,8 @@
 
 **Tech Stack:** Bun, TypeScript strict, `bun:test`, React 19, the Vercel AI Gateway through `@ai-sdk/gateway` and `ai`'s `experimental_evaluate` (already used by `src/core/jev.ts`).
 
+**Where to run it:** in a worktree or branch made through superpowers:using-git-worktrees, never on `main` in the user's checkout: the user commits there while this runs, and peer sync carries `main` to the mini.
+
 **Spec:** `docs/superpowers/specs/2026-10-01-incubator-design.md`, section "Changes to the flow engine". This is plan 1 of 5; phases 2 to 5 (intake and clarify, scout and build-new, renovate and extend, retro) each get their own plan once the phase before has landed.
 
 ## Global constraints
@@ -22,11 +24,11 @@
 
 ## Review focus
 
-1. A record half-written when the machine died (truncated JSON) must be skipped with a log line, never stop the server from starting. Pinned in Task 8.
-2. A test or redeploy calling `server.stop()` must not save every flow as stopped; a gated flow is still gated on disk afterwards. Pinned in Tasks 7 and 9.
-3. The retry count must survive a restart, so a flow that used one of two retries gets exactly one more. Pinned in Task 7.
-4. A flow parked on its budget must still resume after a restart (the park reason is on the record, not in memory). Pinned in Task 7.
-5. An evidence path that is a symlink out of the repo must read as missing, not as the file it points at. Pinned in Task 8.
+1. A record half-written when the machine died (truncated JSON) must be skipped with a log line, never stop the server from starting. Pinned in Task 7.
+2. A test or redeploy calling `server.stop()` must not save every flow as stopped; a gated flow is still gated on disk afterwards. Pinned in Tasks 6 and 8.
+3. The retry count must survive a restart, so a flow that used one of two retries gets exactly one more. Pinned in Task 6.
+4. A flow parked on its budget must still resume after a restart (the park reason is on the record, not in memory). Pinned in Task 6.
+5. An evidence path that is a symlink out of the repo must read as missing, not as the file it points at. Pinned in Task 7.
 
 ## File map
 
@@ -2275,4 +2277,4 @@ Claude-Session: https://claude.ai/code/session_01DMvREFYoLgpGe2oQNWq1Xu"
 
 ## What comes after this plan
 
-Phases 2 to 5 of the spec each get their own plan, written once this one has landed, since each builds on what this one leaves: the sprout record, intake and clarify (phase 2), scout, build-new and the Vercel deploy (phase 3), renovate and extend (phase 4), the retro and the improvements list (phase 5). Deploying this phase to the mini is the `redeploy` skill's job and is not part of this plan.
+Phases 2 to 5 of the spec each get their own plan, written once this one has landed, since each builds on what this one leaves: the sprout record, intake and clarify (phase 2), scout, build-new and the Vercel deploy (phase 3), renovate and extend (phase 4), the retro and the improvements list (phase 5). Deploying this phase to the mini is the `redeploy` skill's job and is not part of this plan. Left for phase 2: the inbox's gate form (`ui/src/components/Prompts.tsx`) still offers continue, retry and stop on a budget park, where both continue and retry mean one more step.
