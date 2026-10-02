@@ -118,6 +118,10 @@ function Recorder({ onFiles, onRecording }: { onFiles: (files: File[]) => void; 
   // must not leave the microphone on with nothing to stop it
   const alive = useRef(true);
   const pick = useRef<HTMLInputElement>(null);
+  // one start at a time: a second click while the permission prompt is up
+  // would make a second stream the first recorder's stop never reaches
+  const starting = useRef(false);
+  const [pending, setPending] = useState(false);
   const [recording, setRecording] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   useEffect(() => {
@@ -156,6 +160,9 @@ function Recorder({ onFiles, onRecording }: { onFiles: (files: File[]) => void; 
     );
   }
   const start = async () => {
+    if (starting.current || rec.current) return;
+    starting.current = true;
+    setPending(true);
     setErr(null);
     let stream: MediaStream | null = null;
     try {
@@ -181,6 +188,15 @@ function Recorder({ onFiles, onRecording }: { onFiles: (files: File[]) => void; 
         const ext = type === "audio/webm" ? "webm" : "m4a";
         onFiles([new File(chunks, `voice-${Date.now()}.${ext}`, { type: r.mimeType || type })]);
       };
+      r.onerror = () => {
+        // the recorder died: let go of the microphone and say so
+        for (const t of live.getTracks()) t.stop();
+        r.onstop = null;
+        rec.current = null;
+        setRecording(false);
+        onRecording(false);
+        if (alive.current) setErr("the recording failed");
+      };
       r.start();
       rec.current = r;
       setRecording(true);
@@ -190,6 +206,9 @@ function Recorder({ onFiles, onRecording }: { onFiles: (files: File[]) => void; 
       if (stream) for (const t of stream.getTracks()) t.stop();
       rec.current = null;
       if (alive.current) setErr(errText(e));
+    } finally {
+      starting.current = false;
+      if (alive.current) setPending(false);
     }
   };
   return (
@@ -199,7 +218,7 @@ function Recorder({ onFiles, onRecording }: { onFiles: (files: File[]) => void; 
           ■ stop recording
         </button>
       ) : (
-        <button type="button" className="mini" onClick={() => void start()}>
+        <button type="button" className="mini" disabled={pending} onClick={() => void start()}>
           ● record
         </button>
       )}
