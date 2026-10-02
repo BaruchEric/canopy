@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { Flows, stepSpec, summaryOf, type CheckResult, type FlowRunner } from "./flow";
 import { parseWorkflow } from "./workflow";
-import { DEFAULT_AGENT, type AgentSettings, type Fleet, type Flow, type Repo, type Run, type VerdictAnswers, type Workflow } from "./types";
+import { DEFAULT_AGENT, type AgentSettings, type EvidenceFile, type Fleet, type Flow, type JudgeAnswers, type Repo, type Run, type VerdictAnswers, type Workflow } from "./types";
 import type { ActionSpec } from "./actions";
 
 const flush = () => new Promise<void>((r) => setTimeout(r, 0));
@@ -86,6 +86,8 @@ class FakeRunner implements FlowRunner {
 function setup(opts: {
   check?: (cmd: string) => CheckResult;
   evaluator?: ((state: string) => Promise<VerdictAnswers>) | null;
+  judge?: ((state: string) => Promise<JudgeAnswers>) | null;
+  evidence?: (repo: Repo, paths: string[]) => Promise<EvidenceFile[]>;
   status?: () => Promise<Repo["status"]>;
 } = {}) {
   const runner = new FakeRunner();
@@ -104,6 +106,8 @@ function setup(opts: {
       return opts.check ? opts.check(command) : { exit: 0, output: "" };
     },
     evaluator: opts.evaluator ?? null,
+    judge: opts.judge ?? null,
+    evidence: opts.evidence,
     status: opts.status,
   });
   runner.onChange = (run) => flows.onRun(run);
@@ -486,5 +490,104 @@ describe("a flow reports the run ids it owns", () => {
     const after = flows.get(flow.id);
     expect(after?.steps.map((s) => s.runId)).toEqual(["run1", "run2"]);
     expect(runner.get("run2")).toBeDefined();
+  });
+});
+
+const MEETS: JudgeAnswers = { fit: { choice: "meets", probabilities: { meets: 0.9 } }, evidence: { probability: 0.9 }, rules: { probability: 0 } };
+
+const JUDGED = wf(`---
+blurb: b
+---
+
+## Build
+
+Build it.
+
+## Accept
+gate: judge
+evidence: .canopy/intent.md
+
+Does it meet the intent?
+
+## Ship
+
+Ship it.
+`);
+
+describe("the judge gate", () => {
+  test("reads the evidence, asks the judge, and goes on a meets", async () => {
+    const states: string[] = [];
+    const asked: string[][] = [];
+    const { runner, flows } = setup({
+      judge: async (s) => {
+        states.push(s);
+        return MEETS;
+      },
+      evidence: async (_r, paths) => {
+        asked.push(paths);
+        return [{ path: ".canopy/intent.md", text: "be useful" }];
+      },
+    });
+    const flow = flows.start(repo(), JUDGED, "", DEFAULT_AGENT);
+    runner.end("run1", "done", "built");
+    await flush();
+    runner.end("run2", "done", "it does");
+    await flush();
+    const f = flows.get(flow.id);
+    expect(asked).toEqual([[".canopy/intent.md"]]);
+    expect(states[0]).toContain("Task the work was judged against:\nDoes it meet the intent?");
+    expect(states[0]).toContain("Step summary:\nit does");
+    expect(states[0]).toContain("File .canopy/intent.md:\nbe useful");
+    expect(f?.steps[1]?.judgment?.go).toBe(true);
+    expect(f?.current).toBe(2);
+    expect(f?.steps[2]?.status).toBe("running");
+  });
+
+  test("a sure miss parks as a rejection", async () => {
+    const { runner, flows } = setup({ judge: async () => ({ ...MEETS, fit: { choice: "misses", probabilities: { misses: 0.9 } } }) });
+    const flow = flows.start(repo(), JUDGED, "", DEFAULT_AGENT);
+    runner.end("run1", "done", "built");
+    await flush();
+    runner.end("run2", "done", "it does not");
+    await flush();
+    const f = flows.get(flow.id);
+    expect(f?.status).toBe("gated");
+    expect(f?.steps[1]?.judgment?.rejected).toBe(true);
+    expect(f?.steps[1]?.reason).toBe("the judge says the work misses the intent");
+  });
+
+  test("without a judge it asks; a judge that fails parks with the error", async () => {
+    const a = setup({ judge: null });
+    const fa = a.flows.start(repo(), JUDGED, "", DEFAULT_AGENT);
+    a.runner.end("run1", "done", "x");
+    await flush();
+    a.runner.end("run2", "done", "y");
+    await flush();
+    expect(a.flows.get(fa.id)?.steps[1]?.reason).toBe("no gateway key, so the judgment is yours");
+
+    const b = setup({ judge: async () => { throw new Error("gateway down"); } });
+    const fb = b.flows.start(repo(), JUDGED, "", DEFAULT_AGENT);
+    b.runner.end("run1", "done", "x");
+    await flush();
+    b.runner.end("run2", "done", "y");
+    await flush();
+    expect(b.flows.get(fb.id)?.steps[1]?.reason).toBe("judgment unavailable: gateway down");
+  });
+
+  test("evidence that cannot be read reaches the judge as missing", async () => {
+    const states: string[] = [];
+    const { runner, flows } = setup({
+      judge: async (s) => {
+        states.push(s);
+        return MEETS;
+      },
+      evidence: async () => { throw new Error("EACCES"); },
+    });
+    flows.start(repo(), JUDGED, "", DEFAULT_AGENT);
+    runner.end("run1", "done", "x");
+    await flush();
+    runner.end("run2", "done", "y");
+    await flush();
+    expect(states[0]).toContain("File .canopy/intent.md: (missing)");
   });
 });

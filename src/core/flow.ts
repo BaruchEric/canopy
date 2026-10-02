@@ -4,15 +4,17 @@
  *  tests drive it with a fake runner. */
 
 import { checkWhen, type ActionSpec } from "./actions";
-import { decide, verdictState } from "./verdict";
+import { decide, decideJudge, judgeState, verdictState } from "./verdict";
 import {
   isFlowActive,
   isRunActive,
   statusFingerprint,
   type AgentSettings,
+  type EvidenceFile,
   type Fleet,
   type Flow,
   type FlowChoice,
+  type JudgeAnswers,
   type Repo,
   type RepoStatus,
   type Run,
@@ -62,9 +64,15 @@ export interface FlowHooks {
   check: (repo: Repo, command: string) => Promise<CheckResult>;
   /** null when there is no gateway key: verdict gates then ask */
   evaluator: ((state: string) => Promise<VerdictAnswers>) | null;
+  /** null or absent when there is no gateway key: judge gates then ask */
+  judge?: ((state: string) => Promise<JudgeAnswers>) | null;
+  /** reads a judge step's evidence files out of the repo */
+  evidence?: (repo: Repo, paths: string[]) => Promise<EvidenceFile[]>;
   /** a fresh status for the repo, for the outcome; null when unreadable */
   status?: (repoId: string) => Promise<RepoStatus | null>;
 }
+
+const errText = (err: unknown): string => String(err instanceof Error ? err.message : err);
 
 interface LiveFlow {
   flow: Flow;
@@ -549,6 +557,38 @@ export class Flows {
         } catch (err) {
           if (!isFlowActive(live.flow)) return;
           this.park(live, `verdict unavailable: ${String(err instanceof Error ? err.message : err)}`);
+        }
+        return;
+      }
+      case "judge": {
+        const judge = this.hooks.judge;
+        if (!judge) {
+          this.park(live, "no gateway key, so the judgment is yours");
+          return;
+        }
+        let files: EvidenceFile[] = [];
+        if (def.evidence.length > 0 && this.hooks.evidence) {
+          try {
+            files = await this.hooks.evidence(live.repo, def.evidence);
+          } catch {
+            files = def.evidence.map((path) => ({ path, text: null }));
+          }
+        } else {
+          files = def.evidence.map((path) => ({ path, text: null }));
+        }
+        if (!isFlowActive(live.flow)) return;
+        try {
+          const answers = await judge(
+            judgeState({ task: def.body, summary: step.summary ?? "", check: step.check?.output ?? null, files }),
+          );
+          if (!isFlowActive(live.flow)) return;
+          const j = decideJudge(answers);
+          step.judgment = j;
+          if (j.go) await this.pass(live);
+          else this.park(live, j.reason ?? "the judge said no");
+        } catch (err) {
+          if (!isFlowActive(live.flow)) return;
+          this.park(live, `judgment unavailable: ${errText(err)}`);
         }
         return;
       }
