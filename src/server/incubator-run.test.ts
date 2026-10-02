@@ -5,7 +5,7 @@
  * flow), and a server stopping mid-clarify parks nothing.
  */
 import { afterAll, beforeAll, expect, test } from "bun:test";
-import { mkdir, mkdtemp, readFile, realpath, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, realpath, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, sep } from "node:path";
 import type { DriveCtx, RunDriver } from "../core/driver";
@@ -13,7 +13,7 @@ import type { Harness, Sprout } from "../core/types";
 import { startServer } from "./index";
 
 /** what each run's driver was started with */
-const agents: { yolo: boolean; cwd: string }[] = [];
+const agents: { yolo: boolean; extra: string; cwd: string }[] = [];
 
 /** a harness that never finishes on its own; a stop ends it */
 class HoldingDriver implements RunDriver {
@@ -25,7 +25,7 @@ class HoldingDriver implements RunDriver {
   }
   start(ctx: DriveCtx): void {
     this.ctx = ctx;
-    agents.push({ yolo: ctx.agent.yolo, cwd: ctx.cwd });
+    agents.push({ yolo: ctx.agent.yolo, extra: ctx.agent.extra, cwd: ctx.cwd });
   }
   say(): void {}
   stop(): void {
@@ -67,6 +67,12 @@ beforeAll(async () => {
   process.env["CANOPY_CONFIG_DIR"] = join(scratch, "config");
   root = join(scratch, "root");
   await mkdir(root, { recursive: true });
+  // a default profile that would bypass permissions twice over
+  await mkdir(join(scratch, "config"), { recursive: true });
+  await writeFile(
+    join(scratch, "config", "config.json"),
+    JSON.stringify({ profiles: { default: { harness: "claude", model: "default", effort: "default", yolo: true, extra: "--dangerously-skip-permissions" } } }),
+  );
 });
 
 afterAll(async () => {
@@ -75,7 +81,7 @@ afterAll(async () => {
   await rm(scratch, { recursive: true, force: true });
 });
 
-test("clarify runs with yolo off, fresh and after a restart, and a stop parks nothing", async () => {
+test("clarify runs with yolo off and no extra flags, fresh and after a restart, and a stop parks nothing", async () => {
   const first = await server();
   let second: { port: number; stop: () => void } | null = null;
   try {
@@ -86,6 +92,7 @@ test("clarify runs with yolo off, fresh and after a restart, and a stop parks no
     const s = (await res.json()) as Sprout;
     await until(() => agents.length > 0, "clarify's run to start");
     expect(agents[0]?.yolo).toBe(false);
+    expect(agents[0]?.extra).toBe("");
     expect(agents[0]?.cwd).toContain(join("_incubator", s.slug));
     const record = join(process.env["CANOPY_CONFIG_DIR"] ?? "", "incubator", s.id, "sprout.json");
     await until(async () => ((JSON.parse(await readFile(record, "utf8")) as Sprout).status === "clarifying"), "the record to say clarifying");
@@ -101,6 +108,7 @@ test("clarify runs with yolo off, fresh and after a restart, and a stop parks no
     second = await server();
     await until(() => agents.length > 1, "the restored flow's run");
     expect(agents[1]?.yolo).toBe(false);
+    expect(agents[1]?.extra).toBe("");
     expect(agents[1]?.cwd).toContain(join("_incubator", s.slug));
   } finally {
     second?.stop();

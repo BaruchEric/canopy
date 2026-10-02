@@ -196,8 +196,10 @@ export async function makeSeed(
         timeoutMs: opts.cloneTimeoutMs ?? 600_000,
         env: { GIT_TERMINAL_PROMPT: "0" },
       });
-      // git may name the url in its error, token and all
-      if (r.code !== 0) throw new Error(`git clone failed: ${firstLine(r.stderr).split(clone).join(urlWithoutSecret(clone))}`);
+      // git may name the url in its error, token and all, in any form
+      // (rewritten by an insteadOf, say), so every http(s) userinfo goes
+      const said = firstLine(r.stderr).split(clone).join(urlWithoutSecret(clone)).replace(/(https?:\/\/)[^@/\s]+@/gi, "$1");
+      if (r.code !== 0) throw new Error(`git clone failed: ${said}`);
       const mv = await git(work, ["remote", "rename", "origin", "upstream"]);
       if (mv.code !== 0) throw new Error(`git remote rename: ${firstLine(mv.stderr)}`);
       // a token the clone needed stays out of the seed's .git/config

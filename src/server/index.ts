@@ -646,8 +646,11 @@ const stepAgentFor = (cfg: CanopyConfig, path: string, profile: string | undefin
   agentFor(cfg, path, "flow", profile ? { profile } : undefined);
 
 /** No incubator stage runs with permissions bypassed, whatever the routes
- *  say: a seed may be a stranger's clone, and the stage is unattended. */
-const neverYolo = (a: AgentSettings): AgentSettings => ({ ...a, yolo: false });
+ *  say: a seed may be a stranger's clone, and the stage is unattended. Yolo
+ *  is off, and a route's extra flags are dropped, since they could carry a
+ *  bypass of their own (`--dangerously-skip-permissions`, a codex sandbox
+ *  override) that no list of words would surely catch. */
+const stageAgent = (a: AgentSettings): AgentSettings => ({ ...a, yolo: false, extra: "" });
 
 /** whether a repo is a sprout's seed, by its path under the launch root:
  *  true before the incubator has taken its records back, so a flow restored
@@ -2905,7 +2908,7 @@ export async function startServer(opts: {
             const refused = stepProfileRefusal(c, wf);
             if (refused) throw new Error(refused);
             await needStepHarnesses(state, c, wf, [repo.path]);
-            return state.flows.start(repo, wf, note, (profile) => neverYolo(stepAgentFor(c, repo.path, profile)));
+            return state.flows.start(repo, wf, note, (profile) => stageAgent(stepAgentFor(c, repo.path, profile)));
           },
           get: (id) => state.flows.get(id),
           resume: (id, choice) => state.flows.resume(id, choice),
@@ -3268,8 +3271,8 @@ export async function startServer(opts: {
     state.flows.restore(
       await loadFlowRecords(root),
       (path) => state.result.repos.find((r) => r.path === path),
-      // a seed's flow is an incubator stage, held to yolo off like a fresh one
-      (repo) => (profile) => (isSeedPath(root, repo.path) ? neverYolo(stepAgentFor(cfg, repo.path, profile)) : stepAgentFor(cfg, repo.path, profile)),
+      // a seed's flow is an incubator stage, held to the same rule as a fresh one
+      (repo) => (profile) => (isSeedPath(root, repo.path) ? stageAgent(stepAgentFor(cfg, repo.path, profile)) : stepAgentFor(cfg, repo.path, profile)),
     );
     // the sprouts the last server left, once their flows are back; a server
     // without the lock lists them and takes nothing in (server/incubator.ts)

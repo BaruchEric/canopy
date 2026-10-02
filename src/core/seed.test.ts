@@ -175,6 +175,13 @@ describe("a stranger's clone", () => {
     expect(existsSync(marker)).toBe(false);
     expect((await git(path, ["ls-files", ".canopy"])).stdout.trim().split("\n").sort()).toEqual([".canopy/brief.md", ".canopy/intent.md"]);
   });
+  test("a clone that fails names no token in its error", async () => {
+    const path = join(dir, "_incubator", "refused");
+    const err = await makeSeed(path, {}, "https://x:tok3n@127.0.0.1:1/r.git", { self: "mini", originOk: () => true, cloneTimeoutMs: 20_000 }).catch((e: unknown) => e);
+    expect(String(err)).toContain("git clone failed");
+    expect(String(err)).not.toContain("tok3n");
+    expect(existsSync(path)).toBe(false);
+  });
   test("a token in the clone url never lands in the seed's git config", async () => {
     const up = await upstream("private", { "README.md": "hi\n" });
     const withToken = "https://x:tok3n@example.invalid/private.git";
