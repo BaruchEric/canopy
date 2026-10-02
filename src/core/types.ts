@@ -1298,6 +1298,8 @@ export interface Sprout {
   pick?: SproutPick;
   /** the private GitHub repo canopy made for it, "owner/name" */
   privateRepo?: string;
+  /** the Vercel project canopy deploys it as, chosen once */
+  vercelProject?: string;
   /** the production url once live */
   url?: string;
   /** the vault note's revision, for the next replace */

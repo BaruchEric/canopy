@@ -7,7 +7,9 @@
  * wires the real ones (server/incubator.ts, server/index.ts).
  */
 import { join } from "node:path";
+import { isVercelAppUrl } from "./deploy";
 import { networkOrigin } from "./peersync";
+import type { Shipper } from "./shipper";
 import {
   BUILD_FILES,
   INPUT_FILE_MAX,
@@ -128,6 +130,8 @@ export interface IncubatorDeps {
   repo: (id: string) => Repo | undefined;
   transcribe: Transcriber | null;
   notes: NoteSink | null;
+  /** canopy's own deploy; null when this backend has none */
+  ship?: Shipper | null;
   onChange: (s: Sprout) => void;
   onGone: (id: string) => void;
   /** false keeps every sprout queued: the server tests drive the routes with no agent */
@@ -413,6 +417,8 @@ export class Incubator {
   async addInputs(id: string, intake: Intake): Promise<Sprout> {
     const s = this.need(id);
     if (sproutEnded(s)) throw new IncubatorError(409, "this project has ended; start a new one");
+    // a deploy cannot take the new input in, and would go live over it
+    if (s.status === "deploying") throw new IncubatorError(409, "this project is deploying; add to it once the deploy ends");
     const { clean } = this.checkIntake(intake, s.inputs.reduce((t, e) => t + e.bytes, 0), false);
     await this.takeInputs(s, clean);
     // a clarify still under way (running, waiting or parked at a gate) has
@@ -899,9 +905,39 @@ export class Incubator {
     this.pump();
   }
 
-  /** canopy's own deploy; a later task replaces this placeholder */
+  /** canopy's own deploy, after build-new: never an agent's step. Each
+   *  thing made is put on record as soon as it exists, so a resume or a
+   *  restart makes nothing twice. A stop that lands mid-deploy cannot halt
+   *  vercel, but the sprout stays stopped. */
   private async ship(s: Sprout): Promise<void> {
-    await this.park(s, "canopy cannot deploy yet");
+    const ship = this.deps.ship ?? null;
+    if (!s.pick) return this.park(s, "nothing was picked to deploy");
+    if (!ship) return this.park(s, "this backend has no deploy set up");
+    const ready = ship.ready(s.pick.host);
+    if (ready) return this.park(s, ready);
+    try {
+      if (!s.privateRepo) {
+        s.privateRepo = await ship.createRepo(s.slug, s.title);
+        await this.changed(s);
+      }
+      if (!s.vercelProject) {
+        s.vercelProject = await ship.project(s.slug);
+        await this.changed(s);
+      }
+      if (sproutEnded(s)) return;
+      await ship.push(s.seedPath, s.privateRepo);
+      if (sproutEnded(s)) return;
+      const url = await ship.deploy(s.seedPath, s.vercelProject);
+      if (sproutEnded(s)) return;
+      if (!isVercelAppUrl(url)) return this.park(s, `the deploy answered ${url}, which is not a vercel.app address`);
+      s.url = url;
+      s.status = "live";
+      delete s.parked;
+      await this.changed(s, "live");
+      this.pump();
+    } catch (err) {
+      await this.park(s, `deploy: ${msg(err)}`);
+    }
   }
 
   /** new input means clarify reads again, and a pick made before it no longer stands */

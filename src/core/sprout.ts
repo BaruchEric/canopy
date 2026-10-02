@@ -479,9 +479,9 @@ export function parseSproutRecord(text: string): Sprout | null {
   const { questions, questionsAt, repo, parked, noteRev } = raw;
   if (questions !== undefined && !(Array.isArray(questions) && questions.every(isQuestion))) return null;
   if (!optNum(questionsAt) || !optStr(repo) || !optStr(parked) || !optStr(noteRev)) return null;
-  const { pick, privateRepo, url } = raw;
+  const { pick, privateRepo, vercelProject, url } = raw;
   if (pick !== undefined && !isPick(pick)) return null;
-  if (!optStr(privateRepo) || !optStr(url)) return null;
+  if (!optStr(privateRepo) || !optStr(vercelProject) || !optStr(url)) return null;
   // canopy's own file: past these checks it is taken as written
   return raw as unknown as Sprout;
 }

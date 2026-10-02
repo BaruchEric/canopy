@@ -7,6 +7,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Incubator, IncubatorError, incubatorWorkflow, type IncubatorDeps, type IncubatorFlows, type IncubatorSeeds, type IncubatorStore, type Intake, type NoteSink } from "./incubator";
+import type { Shipper } from "./shipper";
 import { BUNDLED_DIR, findWorkflow, loadWorkflows } from "./workflows";
 import type { Flow, FlowChoice, Judgment, Repo, Sprout, Workflow } from "./types";
 
@@ -1292,9 +1293,42 @@ const SCOUT_STAGE = stage("scout", ["Research", "Eval"], "judge");
 const BUILD_STAGE = stage("build-new", ["Scaffold", "Test", "Accept"], "judge");
 const PICK = JSON.stringify({ kind: "new", host: "vercel", why: "nothing close exists" });
 
+class FakeShip implements Shipper {
+  calls: string[] = [];
+  readyAs: string | null = null;
+  failDeploy: string | null = null;
+  /** a deploy waits for release() while this is set */
+  hold = false;
+  private held: (() => void) | null = null;
+  release(): void {
+    this.hold = false;
+    this.held?.();
+  }
+  ready(): string | null {
+    return this.readyAs;
+  }
+  async createRepo(slug: string): Promise<string> {
+    this.calls.push(`create ${slug}`);
+    return `eric/${slug}`;
+  }
+  async project(slug: string): Promise<string> {
+    this.calls.push(`project ${slug}`);
+    return slug;
+  }
+  async push(_seed: string, repo: string): Promise<void> {
+    this.calls.push(`push ${repo}`);
+  }
+  async deploy(_seed: string, project: string): Promise<string> {
+    this.calls.push(`deploy ${project}`);
+    if (this.hold) await new Promise<void>((resolve) => (this.held = resolve));
+    if (this.failDeploy) throw new Error(this.failDeploy);
+    return `https://${project}.vercel.app`;
+  }
+}
+
 describe("scout and build-new", () => {
-  const chain = () => {
-    const w = world();
+  const chain = (ship: Shipper | null = null) => {
+    const w = world({ ship });
     w.workflows.set("scout", SCOUT_STAGE);
     w.workflows.set("build-new", BUILD_STAGE);
     return w;
@@ -1377,10 +1411,99 @@ describe("scout and build-new", () => {
     w.flows.move(flowId, { current: 2, steps: [{ name: "Scaffold", status: "passed" }, { name: "Test", status: "passed" }, { name: "Accept", status: "running" }] });
     await w.inc.idle();
     expect(now(w, s.id).status).toBe("accepting");
-    const after = await end(w, s.id, { ".canopy/smoke.md": "status: 200", ".canopy/accept.md": "met" });
+    await end(w, s.id, { ".canopy/smoke.md": "status: 200", ".canopy/accept.md": "met" });
     expect(w.seeds.commits.at(-1)?.message).toBe("build: coin counter");
-    // the ship stage is a placeholder until canopy's own deploy replaces it
-    expect(after.parked).toBe("canopy cannot deploy yet");
+  });
+
+  /** a sprout through scout and build-new, at canopy's ship */
+  const shipped = async (w: World): Promise<Sprout> => {
+    const s = await scouting(w);
+    await end(w, s.id, { ".canopy/pick.json": PICK });
+    return end(w, s.id, { ".canopy/smoke.md": "status: 200" });
+  };
+
+  test("ship makes the private repo, pushes, deploys and goes live", async () => {
+    const ship = new FakeShip();
+    const w = chain(ship);
+    const s = await shipped(w);
+    expect(ship.calls).toEqual(["create coin-counter", "project coin-counter", "push eric/coin-counter", "deploy coin-counter"]);
+    expect(s.status).toBe("live");
+    expect(s.url).toBe("https://coin-counter.vercel.app");
+    expect(s.privateRepo).toBe("eric/coin-counter");
+    expect(s.vercelProject).toBe("coin-counter");
+  });
+
+  test("a deploy that fails parks with the reason; resume skips the repo and project already made", async () => {
+    const ship = new FakeShip();
+    ship.failDeploy = "vercel deploy: Build failed";
+    const w = chain(ship);
+    const s = await shipped(w);
+    expect(s.status).toBe("parked");
+    expect(s.parked).toBe("deploy: vercel deploy: Build failed");
+    ship.failDeploy = null;
+    ship.calls = [];
+    await w.inc.resume(s.id, "retry");
+    await w.inc.idle();
+    expect(ship.calls).toEqual(["push eric/coin-counter", "deploy coin-counter"]);
+    expect(now(w, s.id).status).toBe("live");
+  });
+
+  test("a host that is not ready parks before anything is made", async () => {
+    const ship = new FakeShip();
+    ship.readyAs = "add VERCEL_TOKEN to mini's .env";
+    const s = await shipped(chain(ship));
+    expect(s.parked).toBe("add VERCEL_TOKEN to mini's .env");
+    expect(ship.calls).toEqual([]);
+  });
+
+  test("no shipper parks with the reason", async () => {
+    const s = await shipped(chain(null));
+    expect(s.parked).toBe("this backend has no deploy set up");
+  });
+
+  /** a sprout whose deploy is under way and held there until `release` */
+  const midDeploy = async (ship: FakeShip, w: World): Promise<Sprout> => {
+    const s = await scouting(w);
+    await end(w, s.id, { ".canopy/pick.json": PICK });
+    const cur = now(w, s.id);
+    await w.seeds.write(cur.seedPath, ".canopy/smoke.md", "status: 200");
+    w.flows.move(cur.flows.at(-1)?.flowId ?? "", { status: "done" });
+    for (let i = 0; i < 200 && !ship.calls.includes("deploy coin-counter"); i++) await Bun.sleep(1);
+    return now(w, s.id);
+  };
+
+  test("new input while the deploy runs is refused, so a stale build never goes live over it", async () => {
+    const ship = new FakeShip();
+    ship.hold = true;
+    const w = chain(ship);
+    const s = await midDeploy(ship, w);
+    expect(s.status).toBe("deploying");
+    await expect(w.inc.addInputs(s.id, intake({ text: "make it blue" }))).rejects.toMatchObject({ status: 409 });
+    ship.release();
+    await w.inc.idle();
+    expect(now(w, s.id).status).toBe("live");
+  });
+
+  test("a restart mid-deploy pushes and deploys again, and makes no second repo or project", async () => {
+    const first = new FakeShip();
+    first.hold = true;
+    const w = chain(first);
+    const s = await midDeploy(first, w);
+    expect(s.privateRepo).toBe("eric/coin-counter");
+    expect(s.vercelProject).toBe("coin-counter");
+    const again = new FakeShip();
+    const r = chain(again);
+    r.store.records = w.store.records;
+    r.store.inputs = w.store.inputs;
+    r.seeds.files = w.seeds.files;
+    r.flows.flows = w.flows.flows;
+    for (const p of w.seeds.files.keys()) r.repos.add(p.replace("/root/", ""));
+    await r.inc.restore();
+    await r.inc.idle();
+    expect(again.calls).toEqual(["push eric/coin-counter", "deploy coin-counter"]);
+    expect(now(r, s.id).status).toBe("live");
+    first.release();
+    await w.inc.idle();
   });
 
   test("input that arrives while scout runs drops the pick, and the chain clarifies again", async () => {
