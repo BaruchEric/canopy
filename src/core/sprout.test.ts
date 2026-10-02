@@ -6,6 +6,7 @@ import {
   inputKindOf,
   inputType,
   inputsIndex,
+  lastDone,
   localStamp,
   nextWorkflow,
   parsePick,
@@ -15,7 +16,9 @@ import {
   parseSproutRecord,
   parseSummaries,
   safeInputName,
+  SHIP,
   sproutEnded,
+  statusFor,
   sproutSlug,
   sproutTitle,
   withInputsRead,
@@ -382,5 +385,39 @@ describe("the pick", () => {
     expect(parseSproutRecord(JSON.stringify(rec))?.url).toBe("https://s.vercel.app");
     expect(parseSproutRecord(JSON.stringify({ ...rec, pick: { kind: "new", host: "aws", why: "w" } }))).toBe(null);
     expect(parseSproutRecord(JSON.stringify({ ...rec, url: 7 }))).toBe(null);
+  });
+});
+
+describe("the chain", () => {
+  const base = (o: Partial<Sprout> = {}): Sprout => ({
+    id: "sp_0123456789ab", slug: "s", title: "t", status: "queued", repoId: "_incubator/s", seedPath: "/r/_incubator/s",
+    prepared: true, inputs: [], clarified: true, reclarify: false, flows: [], spent: { runs: 0, workMs: 0 }, createdAt: 1, updatedAt: 1, ...o,
+  });
+  const done = (workflow: string, n: number) => ({ workflow, flowId: `f${n}`, outcome: "done" });
+  const pick = { kind: "new" as const, host: "vercel" as const, why: "w" };
+
+  test("clarify, then scout, then build-new, then canopy's ship", () => {
+    expect(nextWorkflow(base({ clarified: false }))).toBe("clarify");
+    expect(nextWorkflow(base({ reclarify: true, pick }))).toBe("clarify");
+    expect(nextWorkflow(base({ flows: [done("clarify", 1)] }))).toBe("scout");
+    expect(nextWorkflow(base({ pick, flows: [done("clarify", 1), done("scout", 2)] }))).toBe("build-new");
+    expect(nextWorkflow(base({ pick, flows: [done("clarify", 1), done("scout", 2), done("build-new", 3)] }))).toBe(SHIP);
+  });
+
+  test("a build from before the newest scout does not count", () => {
+    const flows = [done("clarify", 1), done("scout", 2), done("build-new", 3), done("clarify", 4), done("scout", 5)];
+    expect(nextWorkflow(base({ pick, flows }))).toBe("build-new");
+    expect(lastDone(base({ flows }), "scout")).toBe(4);
+    expect(lastDone(base({ flows }), "retro")).toBe(-1);
+  });
+
+  test("a running sprout's status follows the step in progress", () => {
+    expect(statusFor("build-new", "Scaffold")).toBe("building");
+    expect(statusFor("build-new", "Test")).toBe("testing");
+    expect(statusFor("build-new", "Accept")).toBe("accepting");
+    expect(statusFor("build-new", undefined)).toBe("building");
+    expect(statusFor("scout", "Eval")).toBe("researching");
+    expect(statusFor(SHIP, undefined)).toBe("deploying");
+    expect(statusFor("clarify", "Clarify")).toBe("clarifying");
   });
 });

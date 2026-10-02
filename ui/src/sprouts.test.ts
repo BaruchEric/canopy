@@ -124,3 +124,12 @@ describe("staleSprout", () => {
     expect(staleSprout({}, sprout({ id: "constructor" }))).toBe(false);
   });
 });
+
+test("a sprout queued for canopy's ship is at the deploy stage", () => {
+  const s = sprout({ status: "queued", clarified: true, pick: { kind: "new", host: "vercel", why: "w" }, flows: [
+    { workflow: "clarify", flowId: "f1", outcome: "done" },
+    { workflow: "scout", flowId: "f2", outcome: "done" },
+    { workflow: "build-new", flowId: "f3", outcome: "done" },
+  ] });
+  expect(stageAt(s)).toBe("deploy");
+});

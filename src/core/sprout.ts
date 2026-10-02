@@ -295,6 +295,9 @@ export const holdsSlot = (s: Sprout, current?: FlowStatus): boolean =>
 const ENDED: ReadonlySet<SproutStatus> = new Set<SproutStatus>(["live", "rejected", "handed-off", "stopped"]);
 export const sproutEnded = (s: Sprout): boolean => ENDED.has(s.status);
 
+/** not a workflow: the deploy canopy carries out itself after build-new */
+export const SHIP = "ship";
+
 /** the status a sprout shows while a workflow runs for it */
 export const WORKFLOW_STATUS: Readonly<Record<string, SproutStatus>> = {
   clarify: "clarifying",
@@ -302,10 +305,42 @@ export const WORKFLOW_STATUS: Readonly<Record<string, SproutStatus>> = {
   "build-new": "building",
   renovate: "building",
   extend: "building",
+  [SHIP]: "deploying",
 };
 
-/** the workflow a queued sprout runs next; phase 3 adds the builds after scout */
-export const nextWorkflow = (s: Sprout): string => (!s.clarified || s.reclarify ? "clarify" : "scout");
+/** within a workflow, the status each step shows; a step not named here shows the workflow's */
+export const STEP_STATUS: Readonly<Record<string, Readonly<Record<string, SproutStatus>>>> = {
+  "build-new": { Scaffold: "building", Test: "testing", Accept: "accepting" },
+};
+
+export function statusFor(workflow: string, step: string | undefined): SproutStatus {
+  const byStep = Object.hasOwn(STEP_STATUS, workflow) ? STEP_STATUS[workflow] : undefined;
+  const own = step !== undefined && byStep && Object.hasOwn(byStep, step) ? byStep[step] : undefined;
+  const wf = Object.hasOwn(WORKFLOW_STATUS, workflow) ? WORKFLOW_STATUS[workflow] : undefined;
+  return own ?? wf ?? "researching";
+}
+
+/** the index of the last flow of `workflow` that finished done, or -1 */
+export function lastDone(s: Sprout, workflow: string): number {
+  for (let i = s.flows.length - 1; i >= 0; i--) {
+    const f = s.flows[i];
+    if (f && f.workflow === workflow && f.outcome === "done") return i;
+  }
+  return -1;
+}
+
+/** what a queued sprout runs next: clarify until it has clarified what is
+ *  known now, scout until there is a pick, a build after the newest scout,
+ *  then canopy's own ship */
+export function nextWorkflow(s: Sprout): string {
+  if (!s.clarified || s.reclarify) return "clarify";
+  if (!s.pick) return "scout";
+  if (lastDone(s, "build-new") < lastDone(s, "scout")) return "build-new";
+  return SHIP;
+}
+
+/** what canopy commits to the seed after scout, beside SEED_FILES */
+export const SCOUT_FILES = [".canopy/research.md", ".canopy/pick.json", ".canopy/eval.md"];
 
 /** A copy of the workflow whose every step may also read the sprout's raw
  *  inputs: `//` makes the rule an absolute path for Claude Code. */
