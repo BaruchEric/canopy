@@ -11,7 +11,7 @@ import { chanTarget, fleetNotice, flowNotice, runNotice, sproutNotice, type Noti
 import type { ChanMessage, Fleet, Flow, Run, ServerEvent, Sprout, SproutStatus, TailchanInfo } from "../core/types";
 
 /** a posted file's cap, the broker's own default */
-const PUT_MAX = 100 * 1024 * 1024;
+export const PUT_MAX = 100 * 1024 * 1024;
 
 const json = (data: unknown, status = 200) =>
   new Response(JSON.stringify(data), { status, headers: { "content-type": "application/json" } });
@@ -23,7 +23,7 @@ export interface ChanHubDeps {
   /** whether a run is one of a flow's steps, which the flow speaks for */
   isFlowRun: (runId: string) => boolean;
   /** whether a flow is one of the incubator's stages, which the sprout speaks for */
-  isSproutFlow?: (flowId: string) => boolean;
+  isSproutFlow?: (flow: Flow) => boolean;
   /** the client; tests pass one over a stand-in broker */
   chan?: Chan;
 }
@@ -85,7 +85,7 @@ export class ChanHub {
   onFlow(flow: Flow): void {
     const prev = this.flows.get(flow.id);
     this.flows.set(flow.id, flow.status);
-    if (this.deps.isSproutFlow?.(flow.id)) return;
+    if (this.deps.isSproutFlow?.(flow)) return;
     this.say(flowNotice(flow, prev, this.deps.repoName(flow.repoId)));
   }
 

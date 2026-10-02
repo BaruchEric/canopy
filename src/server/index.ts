@@ -149,10 +149,10 @@ import {
 } from "../core/types";
 import type { About } from "../core/types";
 import { DEFAULT_IGNORE } from "../core/scan";
-import { ChanHub } from "./tailchan";
+import { ChanHub, PUT_MAX } from "./tailchan";
 import { RegistryHub } from "./registry";
 import { AskHub } from "./asks";
-import { IncubatorHub } from "./incubator";
+import { BODY_MAX as INTAKE_BODY_MAX, IncubatorHub } from "./incubator";
 import { SCAN_EVERY, type AgentProc } from "../core/agentscan";
 import { TaskHub } from "./tasks";
 import type { TaskTimings } from "../core/tasks";
@@ -2838,7 +2838,7 @@ export async function startServer(opts: {
       broadcast: (ev) => broadcast(state, ev),
       repoName: (id) => state.result.repos.find((r) => r.id === id)?.name ?? id,
       isFlowRun: (runId) => state.flows.list().some((f) => f.steps.some((st) => st.runId === runId)),
-      isSproutFlow: (flowId) => state.incubator.ownsFlow(flowId),
+      isSproutFlow: (flow) => state.incubator.speaksFor(flow),
     }),
     tasks: new TaskHub({
       tmux: tmuxBase(),
@@ -3090,6 +3090,9 @@ export async function startServer(opts: {
       port,
       hostname: bindHost,
       idleTimeout: 0,
+      // just over the largest body a route takes: an intake, a file posted
+      // to tailchan, a pasted image
+      maxRequestBodySize: Math.max(INTAKE_BODY_MAX, PUT_MAX, PASTE_MAX) + 1024 * 1024,
       fetch: async (req, srv) => {
         const url = new URL(req.url);
         const api = url.pathname.startsWith("/api/");
@@ -3271,8 +3274,11 @@ export async function startServer(opts: {
     // the sprouts the last server left, once their flows are back; a server
     // without the lock lists them and takes nothing in (server/incubator.ts)
     await state.incubator.restore();
-  } else if (flowsLock.holder) {
-    console.error(`flows: canopy pid ${flowsLock.holder} keeps the records in ${flowsDir()}; flows started here are not kept across a restart`);
+  } else {
+    state.incubator.notKeeping(flowsLock.holder);
+    if (flowsLock.holder) {
+      console.error(`flows: canopy pid ${flowsLock.holder} keeps the records in ${flowsDir()}; flows started here are not kept across a restart`);
+    }
   }
   const remoteTimer = setInterval(() => {
     void refreshRemote(state)

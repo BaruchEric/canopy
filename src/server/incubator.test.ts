@@ -12,6 +12,7 @@ import { tmpdir } from "node:os";
 import { join, sep } from "node:path";
 import type { ScanResult, ServerEvent, Sprout, SproutDetail, WorkflowEntry } from "../core/types";
 import { startServer } from "./index";
+import { clipLabel, notKeeping, sproutFlow } from "./incubator";
 
 let scratch: string;
 let root: string;
@@ -213,6 +214,15 @@ describe("the rest of the routes", () => {
     const list = (await (await fetch(url("/api/repos/workflows?id=app"))).json()) as WorkflowEntry[];
     expect(list.some((e) => (e.ok ? e.workflow.name : e.name) === "clarify")).toBe(false);
   });
+
+  test("the flow route and the fleet route refuse clarify", async () => {
+    const flow = await postJson("/api/repos/flow?id=app", { workflow: "clarify", note: "x" });
+    expect(flow.status).toBe(400);
+    expect(((await flow.json()) as { error: string }).error).toBe("clarify runs only inside the incubator");
+    const fleet = await postJson("/api/fleet", { workflow: "clarify", ids: ["app"], note: "x" });
+    expect(fleet.status).toBe(400);
+    expect(((await fleet.json()) as { error: string }).error).toBe("clarify runs only inside the incubator");
+  });
 });
 
 describe("a server without the flows lock", () => {
@@ -231,11 +241,55 @@ describe("a server without the flows lock", () => {
       expect(d.sprout.id).toBe(one.id);
       const refused = await fetch(at("/api/incubator"), { method: "POST", body: form({ text: "not here" }) });
       expect(refused.status).toBe(503);
-      expect(((await refused.json()) as { error: string }).error).toBe("another canopy owns the incubator");
+      // the first server is this same process, holding the lock
+      expect(((await refused.json()) as { error: string }).error).toBe(
+        `this canopy is not keeping the incubator right now: canopy pid ${process.pid} keeps it for this config folder`,
+      );
       expect((await fetch(at(`/api/incubator/input?id=${one.id}`), { method: "POST", body: form({ text: "more" }) })).status).toBe(503);
       expect((await fetch(at(`/api/incubator/stop?id=${one.id}`), { method: "POST" })).status).toBe(503);
     } finally {
       second.stop();
     }
+  });
+});
+
+describe("intake limits", () => {
+  test("more than 50 links or 50 files is refused", async () => {
+    const links = new FormData();
+    for (let i = 0; i < 51; i++) links.append(i % 2 ? "url" : "urls[]", `https://example.com/${i}`);
+    const r1 = await post("/api/incubator", links);
+    expect(r1.status).toBe(400);
+    expect(((await r1.json()) as { error: string }).error).toBe("at most 50 links at a time");
+    const files = new FormData();
+    for (let i = 0; i < 51; i++) files.append(i % 2 ? "file" : "files[]", new Blob(["x"], { type: "text/plain" }), `n${i}.txt`);
+    const r2 = await post("/api/incubator", files);
+    expect(r2.status).toBe(400);
+    expect(((await r2.json()) as { error: string }).error).toBe("at most 50 files at a time");
+  });
+
+  test("a long file name is cut to 200 characters with its extension kept", async () => {
+    const name = `${"n".repeat(300)}.md`;
+    const res = await post("/api/incubator", form({ file: [new Blob(["# notes\n"], { type: "" }), name] }));
+    expect(res.status).toBe(201);
+    const s = (await res.json()) as Sprout;
+    expect(s.inputs[0]?.label).toBe(`${"n".repeat(197)}.md`);
+    expect(s.inputs[0]?.type).toBe("text/markdown");
+    expect(clipLabel("short.md")).toBe("short.md");
+    expect(clipLabel("x".repeat(250))).toHaveLength(200);
+  });
+});
+
+describe("who keeps the incubator", () => {
+  test("each refusal says why, in words that hold for it", () => {
+    expect(notKeeping({ kind: "starting" })).toBe("this canopy is not keeping the incubator right now: it is still taking its projects back; try again in a moment");
+    expect(notKeeping({ kind: "elsewhere", pid: 42 })).toBe("this canopy is not keeping the incubator right now: canopy pid 42 keeps it for this config folder");
+    expect(notKeeping({ kind: "unlocked" })).toBe("this canopy is not keeping the incubator right now: it could not lock the flows folder");
+  });
+  test("a flow on a seed is the sprout's to speak for, owned yet or not", () => {
+    const none = () => false;
+    expect(sproutFlow({ id: "f1", repoId: "_incubator/coins" }, none)).toBe(true);
+    expect(sproutFlow({ id: "f2", repoId: "app" }, none)).toBe(false);
+    expect(sproutFlow({ id: "f3", repoId: "app" }, (id) => id === "f3")).toBe(true);
+    expect(sproutFlow({ id: "f4", repoId: "src:_incubator/x" }, none)).toBe(false);
   });
 });

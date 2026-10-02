@@ -360,6 +360,18 @@ describe("intake", () => {
     expect(w.inc.list()).toEqual([]);
   });
 
+  test("a link counts toward the 100 MB a project's inputs may come to", async () => {
+    const w = world();
+    const s = await w.inc.create(intake({ text: "x" }));
+    await w.inc.idle();
+    const first = now(w, s.id).inputs[0];
+    if (!first) throw new Error("no input");
+    // as if the inputs so far came to just under the cap
+    first.bytes = 100 * 1024 * 1024 - 20;
+    await expect(w.inc.addInputs(s.id, intake({ urls: ["https://example.com/a-long-enough-link"] }))).rejects.toMatchObject({ status: 413 });
+    await w.inc.addInputs(s.id, intake({ urls: ["https://a.b"] }));
+  });
+
   test("a seed that cannot be made parks the sprout with why", async () => {
     const w = world();
     w.seeds.failMake = "git clone failed: Repository not found.";

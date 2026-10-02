@@ -10,9 +10,10 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Chan, chanConfig, parseEnvFile } from "../core/chan";
-import type { ChanMessage, Run, ServerEvent, TailchanInfo, TermInfo } from "../core/types";
+import type { ChanMessage, Flow, Run, ServerEvent, TailchanInfo, TermInfo } from "../core/types";
 import { startServer } from "./index";
 import { ChanHub } from "./tailchan";
+import { sproutFlow } from "./incubator";
 
 /* ---------- the stand-in broker: the calls canopy makes, in memory ---------- */
 
@@ -263,6 +264,27 @@ describe("notices", () => {
     // the hub's stream hears each from the broker, and the hub adds no copy
     const ids = out.flatMap((e) => (e.type === "chan" ? [e.message.id] : []));
     expect(ids.sort()).toEqual(posts.slice(before).map((m) => m.id).sort());
+    hub.close();
+    await fetch(api("/api/tailchan/notify"), { method: "POST", body: JSON.stringify({ on: false }) });
+  });
+
+  test("a flow on a seed posts nothing of its own, even before the incubator owns it", async () => {
+    await fetch(api("/api/tailchan/notify"), { method: "POST", body: JSON.stringify({ on: true }) });
+    const hub = new ChanHub({ url: BROKER, as: "eric", bot: "canopy", channel: "canopy" }, {
+      broadcast: () => {},
+      repoName: (id) => id,
+      isFlowRun: () => false,
+      // the incubator owns none yet: a flow that failed inside Flows.start
+      isSproutFlow: (f) => sproutFlow(f, () => false),
+    });
+    await hub.start();
+    const flow: Flow = { id: "fl1", repoId: "_incubator/coins", workflow: "clarify", verb: "clarify", note: "", status: "working", steps: [], current: 0, startedAt: 0 };
+    const before = posts.length;
+    hub.onFlow({ ...flow, status: "failed", error: "no harness" });
+    hub.onFlow({ ...flow, id: "fl2", repoId: "app", workflow: "review", status: "failed", error: "boom" });
+    await until(() => posts.length >= before + 1, "the plain flow's post");
+    await Bun.sleep(100);
+    expect(posts.slice(before).map((m) => m.body)).toEqual(["app: review failed: boom"]);
     hub.close();
     await fetch(api("/api/tailchan/notify"), { method: "POST", body: JSON.stringify({ on: false }) });
   });
