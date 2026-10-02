@@ -21,6 +21,7 @@ import {
   type Run,
   type Workflow,
   type VerdictAnswers,
+  type FlowBudget,
 } from "./types";
 
 export const FLEET_CONCURRENCY = 3;
@@ -41,6 +42,20 @@ const KEEP_FINISHED = 60;
 export type StepAgent = (profile: string | undefined) => AgentSettings;
 
 const stepAgent = (agent: AgentSettings | StepAgent): StepAgent => (typeof agent === "function" ? agent : () => agent);
+
+/**
+ * Which limit a flow has reached, as the park reason, or null. Budgets are
+ * checked before an agent run starts, so one long run can pass the runs or
+ * hours budget; the flow parks before the next run, never in the middle of one.
+ */
+export function overBudget(budget: FlowBudget | null, spent: { runs: number; workMs: number }): string | null {
+  if (!budget) return null;
+  if (spent.runs >= budget.runs) return `budget spent: ${budget.runs} ${budget.runs === 1 ? "run" : "runs"}`;
+  if (spent.workMs >= budget.hours * 3_600_000) return `budget spent: ${budget.hours}h`;
+  return null;
+}
+
+const spentOf = (flow: Flow): { runs: number; workMs: number } => (flow.spent ??= { runs: 0, workMs: 0 });
 
 export interface CheckResult {
   exit: number;
@@ -87,6 +102,8 @@ interface LiveFlow {
   /** each step's settings, by the profile it names */
   agent: StepAgent;
   before: string;
+  /** when the working clock last started; absent while it is stopped */
+  since?: number;
 }
 
 /** The agent's closing words: the result, else the last text step. */
@@ -192,6 +209,8 @@ export class Flows {
       steps: workflow.steps.map((s) => ({ name: s.name, status: "pending", ...(s.agent ? { profile: s.agent } : {}) })),
       current: 0,
       startedAt: Date.now(),
+      ...(workflow.budget ? { budget: workflow.budget } : {}),
+      spent: { runs: 0, workMs: 0 },
     };
     const live: LiveFlow = {
       flow,
@@ -215,6 +234,7 @@ export class Flows {
     if (!step || step.runId !== run.id) return;
     if (run.status === "working" || run.status === "waiting" || run.status === "idle") {
       const status = run.status === "waiting" ? "waiting" : "working";
+      this.clock(live, status === "working");
       if (live.flow.status !== status) {
         live.flow.status = status;
         this.emit(live);
@@ -244,6 +264,15 @@ export class Flows {
     if (live.flow.status !== "gated") throw new Error("the flow is not waiting at a gate");
     const step = live.flow.steps[live.flow.current];
     if (!step) throw new Error("no current step");
+    if (live.flow.parkedFor === "budget" && choice !== "stop") {
+      // continue and retry both mean: allow one more step, and run the one that was waiting
+      delete live.flow.parkedFor;
+      live.flow.grace = (live.flow.grace ?? 0) + 1;
+      this.resetStep(step);
+      void this.runStep(live);
+      return live.flow;
+    }
+    delete live.flow.parkedFor;
     if (choice === "stop") {
       step.status = "failed";
       step.reason = "stopped at the gate";
@@ -450,6 +479,24 @@ export class Flows {
     return this.hooks.now?.() ?? Date.now();
   }
 
+  /** Working time runs while a step's run works or its check and gate run,
+   *  and stops while the run waits on a prompt or the flow is parked. */
+  private clock(live: LiveFlow, on: boolean): void {
+    const now = this.now();
+    if (on) {
+      live.since ??= now;
+      return;
+    }
+    if (live.since === undefined) return;
+    spentOf(live.flow).workMs += now - live.since;
+    delete live.since;
+  }
+
+  private spentNow(live: LiveFlow): { runs: number; workMs: number } {
+    const s = spentOf(live.flow);
+    return { runs: s.runs, workMs: s.workMs + (live.since === undefined ? 0 : this.now() - live.since) };
+  }
+
   /** Back to pending, its run dismissed and everything it said dropped. */
   private resetStep(step: FlowStep | undefined): void {
     if (!step) return;
@@ -506,6 +553,19 @@ export class Flows {
     const def = workflow.steps[flow.current];
     const step = flow.steps[flow.current];
     if (!def || !step) return;
+    if (def.body) {
+      const over = overBudget(workflow.budget ?? null, this.spentNow(live));
+      if (over) {
+        if ((flow.grace ?? 0) > 0) {
+          flow.grace = (flow.grace ?? 0) - 1;
+        } else {
+          flow.parkedFor = "budget";
+          this.park(live, over);
+          return;
+        }
+      }
+    }
+    this.clock(live, true);
     if (!def.body) {
       // check-only: no agent, straight to the command
       flow.status = "working";
@@ -524,6 +584,7 @@ export class Flows {
     }
     step.status = "running";
     step.runId = run.id;
+    spentOf(flow).runs += 1;
     flow.status = "working";
     this.byRun.set(run.id, flow.id);
     this.emit(live);
@@ -652,6 +713,7 @@ export class Flows {
   private park(live: LiveFlow, reason: string): void {
     const step = live.flow.steps[live.flow.current];
     if (!step) return;
+    this.clock(live, false);
     step.status = "gated";
     step.reason = reason;
     live.flow.status = "gated";
@@ -675,6 +737,7 @@ export class Flows {
 
   private end(live: LiveFlow, status: "done" | "failed" | "stopped", error?: string): void {
     if (!isFlowActive(live.flow)) return;
+    this.clock(live, false);
     live.flow.status = status;
     delete live.flow.retryReason;
     live.flow.endedAt = Date.now();

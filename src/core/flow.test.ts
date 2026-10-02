@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { Flows, stepSpec, summaryOf, type CheckResult, type FlowRunner } from "./flow";
+import { Flows, overBudget, stepSpec, summaryOf, type CheckResult, type FlowRunner } from "./flow";
 import { parseWorkflow } from "./workflow";
 import { DEFAULT_AGENT, type AgentSettings, type EvidenceFile, type Fleet, type Flow, type JudgeAnswers, type Repo, type Run, type VerdictAnswers, type Workflow } from "./types";
 import type { ActionSpec } from "./actions";
@@ -78,6 +78,13 @@ class FakeRunner implements FlowRunner {
     if (error) run.error = error;
     this.onChange(run);
     return run;
+  }
+  /** moves a run between working and waiting without ending it */
+  set(id: string, status: Run["status"]): void {
+    const run = this.runs.get(id);
+    if (!run) throw new Error(id);
+    run.status = status;
+    this.onChange(run);
   }
   /** the last started run's id */
   last(): string { return `run${this.n}`; }
@@ -685,5 +692,83 @@ describe("retries", () => {
     await flush();
     expect(b.flows.get(fb.id)?.steps[0]?.reason).toContain("no gateway key");
     expect(b.flows.get(fb.id)?.tries).toBeUndefined();
+  });
+});
+
+describe("overBudget", () => {
+  test("says which limit was reached, runs first", () => {
+    expect(overBudget(null, { runs: 99, workMs: 9e9 })).toBeNull();
+    expect(overBudget({ runs: 3, hours: 1 }, { runs: 2, workMs: 0 })).toBeNull();
+    expect(overBudget({ runs: 3, hours: 1 }, { runs: 3, workMs: 0 })).toBe("budget spent: 3 runs");
+    expect(overBudget({ runs: 1, hours: 1 }, { runs: 1, workMs: 0 })).toBe("budget spent: 1 run");
+    expect(overBudget({ runs: 3, hours: 1 }, { runs: 1, workMs: 3_600_000 })).toBe("budget spent: 1h");
+  });
+});
+
+describe("budgets", () => {
+  const ABC = (budget: string) => wf(`---\nblurb: b\nbudget: ${budget}\n---\n\n## A\n\na\n\n## B\n\nb\n\n## C\n\nc\n`);
+
+  test("parks before the run that would pass the run budget; continue grants one more step", async () => {
+    const { runner, flows } = setup();
+    const flow = flows.start(repo(), ABC("2 runs, 9h"), "", DEFAULT_AGENT);
+    expect(flow.budget).toEqual({ runs: 2, hours: 9 });
+    runner.end("run1", "done", "a");
+    await flush();
+    runner.end("run2", "done", "b");
+    await flush();
+    let f = flows.get(flow.id);
+    expect(f?.status).toBe("gated");
+    expect(f?.parkedFor).toBe("budget");
+    expect(f?.steps[2]?.reason).toBe("budget spent: 2 runs");
+    expect(f?.spent?.runs).toBe(2);
+    flows.resume(flow.id, "continue");
+    await flush();
+    f = flows.get(flow.id);
+    expect(f?.parkedFor).toBeUndefined();
+    expect(f?.steps[2]?.status).toBe("running");
+    runner.end("run3", "done", "c");
+    await flush();
+    expect(flows.get(flow.id)?.status).toBe("done");
+  });
+
+  test("parks on working time", async () => {
+    let t = 0;
+    const { runner, flows } = setup({ now: () => t });
+    const flow = flows.start(repo(), ABC("9 runs, 1h"), "", DEFAULT_AGENT);
+    t = 3_600_000;
+    runner.end("run1", "done", "a");
+    await flush();
+    const f = flows.get(flow.id);
+    expect(f?.steps[1]?.reason).toBe("budget spent: 1h");
+    expect(f?.spent?.workMs).toBe(3_600_000);
+  });
+
+  test("time waiting on a prompt or parked at a gate is not counted", async () => {
+    let t = 0;
+    const W = wf(`---\nblurb: b\nbudget: 9 runs, 1h\n---\n\n## A\ngate: ask\n\na\n\n## B\n\nb\n`);
+    const { runner, flows } = setup({ now: () => t });
+    const flow = flows.start(repo(), W, "", DEFAULT_AGENT);
+    t = 10 * 60_000;
+    runner.set("run1", "waiting");
+    t += 2 * 3_600_000;
+    runner.set("run1", "working");
+    t += 5 * 60_000;
+    runner.end("run1", "done", "a");
+    await flush();
+    t += 5 * 3_600_000;
+    flows.resume(flow.id, "continue");
+    await flush();
+    const f = flows.get(flow.id);
+    expect(f?.spent?.workMs).toBe(15 * 60_000);
+    expect(f?.steps[1]?.status).toBe("running");
+  });
+
+  test("stop at a budget park stops the flow", async () => {
+    const { runner, flows } = setup();
+    const flow = flows.start(repo(), ABC("1 run, 9h"), "", DEFAULT_AGENT);
+    runner.end("run1", "done", "a");
+    await flush();
+    flows.resume(flow.id, "stop");
+    expect(flows.get(flow.id)?.status).toBe("stopped");
   });
 });

@@ -1246,6 +1246,14 @@ export interface Flow {
   tries?: Record<string, number>;
   /** every rewind, oldest first */
   rewinds?: FlowRewind[];
+  /** the workflow's budget, copied at start for the sheet */
+  budget?: FlowBudget;
+  /** agent step runs started and working time so far */
+  spent?: { runs: number; workMs: number };
+  /** set while the flow is parked because its budget is spent */
+  parkedFor?: "budget";
+  /** steps granted past the budget by continuing a budget park */
+  grace?: number;
 }
 
 /** A flow with a live step: running, waiting on a prompt, or parked at a gate. */
