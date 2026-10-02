@@ -8,7 +8,7 @@ const no = (stderr = "nope"): ExecResult => ({ code: 1, stdout: "", stderr });
 
 function fakes(answer: (c: Call) => ExecResult, http: (url: string, method: string) => Response = () => new Response("{}", { status: 200 })) {
   const calls: Call[] = [];
-  const fetched: { url: string; method: string; auth: string | null }[] = [];
+  const fetched: { url: string; method: string; auth: string | null; redirect?: string }[] = [];
   const deps: ShipDeps = {
     exec: async (cmd, opts = {}) => {
       const c = { cmd, opts };
@@ -18,7 +18,7 @@ function fakes(answer: (c: Call) => ExecResult, http: (url: string, method: stri
     fetch: (async (input: string | URL | Request, init?: RequestInit) => {
       const url = String(input);
       const method = init?.method ?? "GET";
-      fetched.push({ url, method, auth: new Headers(init?.headers).get("authorization") });
+      fetched.push({ url, method, auth: new Headers(init?.headers).get("authorization"), redirect: init?.redirect });
       return http(url, method);
     }) as typeof fetch,
     which: (bin) => (bin === "vercel" ? "/usr/bin/vercel" : null),
@@ -110,14 +110,32 @@ describe("deploy", () => {
     await expect(shipper(shipConfig({}, "mini"), none.deps).deploy("/seed", "p")).rejects.toThrow("add VERCEL_TOKEN to mini's .env");
     expect(none.calls).toHaveLength(0);
   });
-  test("a production url that sends visitors to a sign-in page is not live", async () => {
-    const f = fakes(deployed, (url) => {
-      if (url.includes("api.vercel.com")) return new Response("{}", { status: 200 });
-      const res = new Response("<html>sign in", { status: 200 });
-      Object.defineProperty(res, "url", { value: "https://vercel.com/login?next=x" });
-      return res;
-    });
+  const prod = (smoke: (url: string) => Response) => (url: string) => (url.includes("api.vercel.com") ? new Response("{}", { status: 200 }) : smoke(url));
+  const redirect = (status: number, location: string) => new Response(null, { status, headers: { location } });
+  test("a redirect off the production host is refused and never followed", async () => {
+    const f = fakes(deployed, prod(() => redirect(307, "https://vercel.com/login?next=x")));
     await expect(shipper(cfg, f.deps).deploy("/seed", "p")).rejects.toThrow("sends visitors on to vercel.com");
+    expect(f.fetched.some((x) => x.url.includes("//vercel.com"))).toBe(false);
+    expect(f.fetched.at(-1)?.redirect).toBe("manual");
+  });
+  test("a redirect with no usable location is refused", async () => {
+    const f = fakes(deployed, prod(() => new Response(null, { status: 302 })));
+    await expect(shipper(cfg, f.deps).deploy("/seed", "p")).rejects.toThrow("sends visitors on to an address it does not name");
+  });
+  test("a same-host redirect is followed by hand", async () => {
+    const f = fakes(deployed, prod((url) => (url.endsWith("/home") ? new Response("<html>", { status: 200 }) : redirect(308, "/home"))));
+    expect(await shipper(cfg, f.deps).deploy("/seed", "p")).toBe("https://coin-counter-abc-eric.vercel.app");
+    expect(f.fetched.filter((x) => !x.url.includes("api.vercel.com")).every((x) => x.redirect === "manual")).toBe(true);
+  });
+  test("six same-host hops are a loop", async () => {
+    const f = fakes(deployed, prod(() => redirect(307, "/again")));
+    await expect(shipper(cfg, f.deps).deploy("/seed", "p")).rejects.toThrow("redirects in a loop");
+  });
+  test("a failed deploy never echoes the token", async () => {
+    const f = fakes((c) => (c.cmd[1] === "deploy" ? no("auth failed for tok_secret here") : ok()));
+    const err = await shipper(cfg, f.deps).deploy("/seed", "p").catch((e: Error) => e.message);
+    expect(err).toContain("***");
+    expect(err).not.toContain("tok_secret");
   });
   test("ready reads the token and the CLI", () => {
     expect(shipper(cfg, fakes(() => ok()).deps).ready("vercel")).toBe(null);

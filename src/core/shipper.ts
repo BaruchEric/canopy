@@ -41,7 +41,10 @@ export interface ShipDeps {
 }
 
 const NO_HOOKS = ["-c", "core.hooksPath=/dev/null", "-c", "core.fsmonitor=false"];
-const tail = (r: ExecResult): string => (r.stderr || r.stdout).trim().split("\n").slice(-3).join(" ").slice(0, 300);
+const tail = (r: ExecResult, secret: string | null = null): string => {
+  const text = (r.stderr || r.stdout).trim().split("\n").slice(-3).join(" ").slice(0, 300);
+  return secret ? text.split(secret).join("***") : text;
+};
 const isObj = (v: unknown): v is Record<string, unknown> => typeof v === "object" && v !== null && !Array.isArray(v);
 
 export function shipper(cfg: ShipConfig, deps: ShipDeps = { exec: realExec, fetch, which: (b) => Bun.which(b) }): Shipper {
@@ -105,9 +108,9 @@ export function shipper(cfg: ShipConfig, deps: ShipDeps = { exec: realExec, fetc
       const token = needToken();
       const env = { VERCEL_TOKEN: token, VERCEL_TELEMETRY_DISABLED: "1" };
       const link = await deps.exec(vercelArgs("link", project, cfg.vercelScope), { cwd: seedPath, timeoutMs: 120_000, env });
-      if (link.code !== 0) throw new Error(`vercel link: ${tail(link)}`);
+      if (link.code !== 0) throw new Error(`vercel link: ${tail(link, token)}`);
       const out = await deps.exec(vercelArgs("deploy", project, cfg.vercelScope), { cwd: seedPath, timeoutMs: 15 * 60_000, env });
-      if (out.code !== 0) throw new Error(`vercel deploy: ${tail(out)}`);
+      if (out.code !== 0) throw new Error(`vercel deploy: ${tail(out, token)}`);
       const dep = deploymentUrl(out.stdout);
       if (!dep) throw new Error("vercel deploy printed no deployment url");
       const res = await api(`/v13/deployments/${new URL(dep).host}`);
@@ -115,14 +118,29 @@ export function shipper(cfg: ShipConfig, deps: ShipDeps = { exec: realExec, fetc
       const aliases = isObj(body) && Array.isArray(body["alias"]) ? body["alias"].filter((a): a is string => typeof a === "string") : [];
       const url = productionUrl(aliases, dep);
       if (!isVercelAppUrl(url)) throw new Error(`the deploy answered ${url}, which is not a vercel.app address`);
-      const smoke = await deps.fetch(url, { redirect: "follow", signal: AbortSignal.timeout(30_000) });
-      const refused = smokeRefusal(smoke.status, url);
-      if (refused) throw new Error(refused);
-      // protection can answer with a redirect to a sign-in page, which a
-      // followed redirect turns into a 200
-      const landed = smoke.url ? new URL(smoke.url).host : new URL(url).host;
-      if (landed !== new URL(url).host) {
-        throw new Error(`${url} sends visitors on to ${landed}, likely a sign-in page: turn off deployment protection for production, then resume`);
+      // redirects are followed by hand and only within the production host,
+      // so an app cannot make this backend fetch another address
+      const host = new URL(url).host;
+      const away = `${url} sends visitors on to HOST, likely a sign-in page: turn off deployment protection for production, then resume`;
+      let at = url;
+      for (let hop = 0; ; hop++) {
+        const smoke = await deps.fetch(at, { redirect: "manual", signal: AbortSignal.timeout(30_000) });
+        if (smoke.status >= 300 && smoke.status < 400) {
+          const loc = smoke.headers.get("location");
+          let next: URL | null = null;
+          try {
+            next = loc ? new URL(loc, at) : null;
+          } catch {
+            next = null;
+          }
+          if (!next || next.host !== host || next.protocol !== "https:") throw new Error(away.replace("HOST", next?.host ?? "an address it does not name"));
+          if (hop >= 5) throw new Error(`${url} redirects in a loop`);
+          at = next.href;
+          continue;
+        }
+        const refused = smokeRefusal(smoke.status, url);
+        if (refused) throw new Error(refused);
+        break;
       }
       return url;
     },
