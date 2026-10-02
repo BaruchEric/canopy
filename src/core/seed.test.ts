@@ -7,6 +7,8 @@ import { git } from "./exec";
 import { commitSeed, makeSeed, readSeed, seedWorkPath, writeSeed } from "./seed";
 
 let dir: string;
+/** the sprout every seed here is made for */
+const SP = "sp_0123456789ab";
 
 beforeAll(async () => {
   dir = await mkdtemp(join(tmpdir(), "canopy-seed-"));
@@ -34,7 +36,7 @@ async function upstream(name: string, files: Record<string, string>, links: Reco
 describe("makeSeed", () => {
   test("a new idea is a fresh repo on main with the files in one canopy commit", async () => {
     const path = join(dir, "_incubator", "idea");
-    await makeSeed(path, { ".canopy/brief.md": "# Idea\n", ".canopy/inputs.md": "# Inputs\n" }, undefined, { self: "mini" });
+    await makeSeed(path, { ".canopy/brief.md": "# Idea\n", ".canopy/inputs.md": "# Inputs\n" }, undefined, { self: "mini", id: SP });
     expect(await readFile(join(path, ".canopy", "brief.md"), "utf8")).toBe("# Idea\n");
     expect((await git(path, ["branch", "--show-current"])).stdout.trim()).toBe("main");
     expect(await log(path)).toEqual(["canopy <canopy@mini>|seed: a new project from the incubator"]);
@@ -42,15 +44,15 @@ describe("makeSeed", () => {
   test("a folder that is there already is refused", async () => {
     const path = join(dir, "taken");
     await mkdir(path);
-    await expect(makeSeed(path, {}, undefined, { self: "mini" })).rejects.toThrow("is there already");
+    await expect(makeSeed(path, {}, undefined, { self: "mini", id: SP })).rejects.toThrow("is there already");
   });
   test("a local path is never cloned", async () => {
-    await expect(makeSeed(join(dir, "c1"), {}, "/etc", { self: "mini" })).rejects.toThrow("not a network git url");
+    await expect(makeSeed(join(dir, "c1"), {}, "/etc", { self: "mini", id: SP })).rejects.toThrow("not a network git url");
   });
   test("a clone keeps its history, calls its remote upstream, and gets the files on top", async () => {
     const up = await upstream("upstream", { "README.md": "hi\n" });
     const path = join(dir, "_incubator", "cloned");
-    await makeSeed(path, { ".canopy/brief.md": "# C\n" }, up, { self: "mini", originOk: () => true });
+    await makeSeed(path, { ".canopy/brief.md": "# C\n" }, up, { self: "mini", id: SP, originOk: () => true });
     expect((await git(path, ["remote"])).stdout.trim()).toBe("upstream");
     expect(await log(path)).toEqual(["canopy <canopy@mini>|seed: a new project from the incubator", "u <u@x>|first"]);
   });
@@ -63,7 +65,7 @@ describe("makeSeed", () => {
       ".mcp.json": '{"mcpServers":{}}\n',
     });
     const path = join(dir, "_incubator", "risky");
-    await makeSeed(path, { ".canopy/brief.md": "# R\n" }, up, { self: "mini", originOk: () => true });
+    await makeSeed(path, { ".canopy/brief.md": "# R\n" }, up, { self: "mini", id: SP, originOk: () => true });
     expect(existsSync(join(path, ".claude", "settings.json"))).toBe(false);
     expect(existsSync(join(path, ".claude", "settings.local.json"))).toBe(false);
     expect(existsSync(join(path, ".mcp.json"))).toBe(false);
@@ -84,7 +86,7 @@ describe("makeSeed", () => {
       ".MCP.json": '{"mcpServers":{}}\n',
     });
     const path = join(dir, "_incubator", "cased");
-    await makeSeed(path, {}, up, { self: "mini", originOk: () => true });
+    await makeSeed(path, {}, up, { self: "mini", id: SP, originOk: () => true });
     expect((await log(path))[0]).toBe("canopy <canopy@mini>|seed: drop the cloned project's agent settings");
     const tracked = (await git(path, ["ls-files"])).stdout.trim().split("\n").sort();
     expect(tracked).toEqual([".Claude/commands/x.md", "README.md"]);
@@ -95,7 +97,7 @@ describe("makeSeed", () => {
   test("a clone whose .claude is a symlink loses the link itself", async () => {
     const up = await upstream("linked-claude", { "README.md": "hi\n", "conf/settings.json": '{"hooks":{}}\n' }, { ".claude": "conf" });
     const path = join(dir, "_incubator", "linked-claude");
-    await makeSeed(path, {}, up, { self: "mini", originOk: () => true });
+    await makeSeed(path, {}, up, { self: "mini", id: SP, originOk: () => true });
     expect(existsSync(join(path, ".claude"))).toBe(false);
     expect((await log(path))[0]).toBe("canopy <canopy@mini>|seed: drop the cloned project's agent settings");
     expect((await git(path, ["status", "--porcelain"])).stdout).toBe("");
@@ -106,14 +108,14 @@ describe("makeSeed", () => {
     await writeFile(join(outside, "brief.md"), "theirs\n");
     const up = await upstream("canopy-link", { "README.md": "hi\n" }, { ".canopy": outside });
     const path = join(dir, "_incubator", "canopy-link");
-    await expect(makeSeed(path, { ".canopy/brief.md": "# L\n" }, up, { self: "mini", originOk: () => true })).rejects.toThrow("symlink");
+    await expect(makeSeed(path, { ".canopy/brief.md": "# L\n" }, up, { self: "mini", id: SP, originOk: () => true })).rejects.toThrow("symlink");
     expect(existsSync(path)).toBe(false);
     expect(await readdir(outside)).toEqual(["brief.md"]);
     expect(await readFile(join(outside, "brief.md"), "utf8")).toBe("theirs\n");
   });
   test("a clone that fails leaves no folder behind", async () => {
     const path = join(dir, "_incubator", "nothing");
-    await expect(makeSeed(path, {}, join(dir, "no-such-repo"), { self: "mini", originOk: () => true })).rejects.toThrow("git clone failed");
+    await expect(makeSeed(path, {}, join(dir, "no-such-repo"), { self: "mini", id: SP, originOk: () => true })).rejects.toThrow("git clone failed");
     expect(existsSync(path)).toBe(false);
   });
 });
@@ -121,12 +123,12 @@ describe("makeSeed", () => {
 describe("makeSeed builds aside", () => {
   test("a half-made seed an earlier attempt left is cleared, and the seed is made", async () => {
     const path = join(dir, "_incubator", "leftover");
-    const work = seedWorkPath(path);
-    expect(work).toBe(join(dir, "_incubator", ".leftover.making"));
+    const work = seedWorkPath(path, SP);
+    expect(work).toBe(join(dir, "_incubator", `.leftover.${SP}.making`));
     // what a restart in the middle of a clone leaves: a .git and some files, no canopy commit
     await mkdir(join(work, ".git"), { recursive: true });
     await writeFile(join(work, "half.txt"), "half\n");
-    await makeSeed(path, { ".canopy/brief.md": "# L\n" }, undefined, { self: "mini" });
+    await makeSeed(path, { ".canopy/brief.md": "# L\n" }, undefined, { self: "mini", id: SP });
     expect(existsSync(work)).toBe(false);
     expect(existsSync(join(path, "half.txt"))).toBe(false);
     expect(await log(path)).toEqual(["canopy <canopy@mini>|seed: a new project from the incubator"]);
@@ -142,21 +144,38 @@ describe("makeSeed builds aside", () => {
         await Bun.sleep(1);
       }
     })();
-    await makeSeed(path, { ".canopy/brief.md": "# W\n" }, up, { self: "mini", originOk: () => true });
+    await makeSeed(path, { ".canopy/brief.md": "# W\n" }, up, { self: "mini", id: SP, originOk: () => true });
     watching = false;
     await watch;
     expect(seen.every((x) => x === "whole")).toBe(true);
     expect((await log(path))[0]).toBe("canopy <canopy@mini>|seed: drop the cloned project's agent settings");
-    expect(existsSync(seedWorkPath(path))).toBe(false);
+    expect(existsSync(seedWorkPath(path, SP))).toBe(false);
+  });
+  test("an attempt for another sprout on the same slug leaves this one's work folder alone", async () => {
+    const path = join(dir, "_incubator", "shared-slug");
+    const other = "sp_00000000000a";
+    expect(seedWorkPath(path, other)).not.toBe(seedWorkPath(path, SP));
+    // a dismissed sprout's clone still under way, as a new intake on the slug starts
+    const theirs = seedWorkPath(path, other);
+    await mkdir(join(theirs, ".git"), { recursive: true });
+    await writeFile(join(theirs, "cloning.txt"), "mid-clone\n");
+    await makeSeed(path, { ".canopy/brief.md": "# S\n" }, undefined, { self: "mini", id: SP });
+    expect(await readFile(join(theirs, "cloning.txt"), "utf8")).toBe("mid-clone\n");
+    expect(await log(path)).toEqual(["canopy <canopy@mini>|seed: a new project from the incubator"]);
+  });
+  test("an id that is not a sprout's is refused before anything is made", async () => {
+    const path = join(dir, "_incubator", "bad-id");
+    await expect(makeSeed(path, {}, undefined, { self: "mini", id: "../x" })).rejects.toThrow("not a sprout id");
+    expect(existsSync(path)).toBe(false);
   });
   test("a clone refused after it landed leaves neither the seed nor the folder it was built in", async () => {
     const outside = join(dir, "aside-target");
     await mkdir(outside);
     const up = await upstream("aside-link", { "README.md": "hi\n" }, { ".canopy": outside });
     const path = join(dir, "_incubator", "aside-link");
-    await expect(makeSeed(path, { ".canopy/brief.md": "# A\n" }, up, { self: "mini", originOk: () => true })).rejects.toThrow("symlink");
+    await expect(makeSeed(path, { ".canopy/brief.md": "# A\n" }, up, { self: "mini", id: SP, originOk: () => true })).rejects.toThrow("symlink");
     expect(existsSync(path)).toBe(false);
-    expect(existsSync(seedWorkPath(path))).toBe(false);
+    expect(existsSync(seedWorkPath(path, SP))).toBe(false);
   });
 });
 
@@ -164,7 +183,7 @@ describe("a stranger's clone", () => {
   test("canopy's commits pass an ignored .canopy and a hook that would refuse, and run no hook at all", async () => {
     const up = await upstream("hooked", { "README.md": "hi\n", ".gitignore": ".*\n" });
     const path = join(dir, "_incubator", "hooked");
-    await makeSeed(path, { ".canopy/brief.md": "# H\n" }, up, { self: "mini", originOk: () => true });
+    await makeSeed(path, { ".canopy/brief.md": "# H\n" }, up, { self: "mini", id: SP, originOk: () => true });
     // hooks a clone could not carry, planted as the agent could
     const marker = join(dir, "hook-ran");
     await writeFile(join(path, ".git", "hooks", "pre-commit"), "#!/bin/sh\nexit 1\n", { mode: 0o755 });
@@ -175,9 +194,26 @@ describe("a stranger's clone", () => {
     expect(existsSync(marker)).toBe(false);
     expect((await git(path, ["ls-files", ".canopy"])).stdout.trim().split("\n").sort()).toEqual([".canopy/brief.md", ".canopy/intent.md"]);
   });
+  test("canopy's git calls never run an fsmonitor the seed's own config names", async () => {
+    const path = join(dir, "_incubator", "fsmon");
+    await makeSeed(path, { ".canopy/brief.md": "# F\n" }, undefined, { self: "mini", id: SP });
+    // planted as the agent could: a hook script git would run to refresh the index
+    const marker = join(dir, "fsmonitor-ran");
+    const script = join(dir, "fsmonitor.sh");
+    await writeFile(script, `#!/bin/sh\ntouch '${marker}'\nexit 1\n`, { mode: 0o755 });
+    await git(path, ["config", "core.fsmonitor", script]);
+    // proof the planted hook is live for a plain git call
+    await git(path, ["status", "--porcelain"]);
+    expect(existsSync(marker)).toBe(true);
+    await rm(marker);
+    await writeFile(join(path, ".canopy", "intent.md"), "want\n");
+    expect(await commitSeed(path, [".canopy/intent.md"], "clarify: F", "mini")).toBe(true);
+    expect((await log(path))[0]).toBe("canopy <canopy@mini>|clarify: F");
+    expect(existsSync(marker)).toBe(false);
+  });
   test("a clone that fails names no token in its error", async () => {
     const path = join(dir, "_incubator", "refused");
-    const err = await makeSeed(path, {}, "https://x:tok3n@127.0.0.1:1/r.git", { self: "mini", originOk: () => true, cloneTimeoutMs: 20_000 }).catch((e: unknown) => e);
+    const err = await makeSeed(path, {}, "https://x:tok3n@127.0.0.1:1/r.git", { self: "mini", id: SP, originOk: () => true, cloneTimeoutMs: 20_000 }).catch((e: unknown) => e);
     expect(String(err)).toContain("git clone failed");
     expect(String(err)).not.toContain("tok3n");
     expect(existsSync(path)).toBe(false);
@@ -192,7 +228,7 @@ describe("a stranger's clone", () => {
     process.env["GIT_CONFIG_KEY_0"] = `url.${up}.insteadOf`;
     process.env["GIT_CONFIG_VALUE_0"] = withToken;
     try {
-      await makeSeed(path, {}, withToken, { self: "mini", originOk: () => true });
+      await makeSeed(path, {}, withToken, { self: "mini", id: SP, originOk: () => true });
     } finally {
       for (const k of ["GIT_CONFIG_COUNT", "GIT_CONFIG_KEY_0", "GIT_CONFIG_VALUE_0"]) {
         if (before[k] === undefined) delete process.env[k];
@@ -240,7 +276,7 @@ describe("readSeed and writeSeed", () => {
   });
   test("a .canopy folder swapped for a symlink out of the seed is refused both ways, and nothing lands outside", async () => {
     const path = join(dir, "_incubator", "swapped");
-    await makeSeed(path, { ".canopy/intent.md": "mine\n" }, undefined, { self: "mini" });
+    await makeSeed(path, { ".canopy/intent.md": "mine\n" }, undefined, { self: "mini", id: SP });
     const outside = join(dir, "dot-ssh");
     await mkdir(outside);
     await writeFile(join(outside, "intent.md"), "private key\n");

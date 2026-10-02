@@ -73,7 +73,7 @@ class FakeStore implements IncubatorStore {
 
 class FakeSeeds implements IncubatorSeeds {
   files = new Map<string, Map<string, string>>();
-  made: { path: string; clone: string | undefined }[] = [];
+  made: { path: string; clone: string | undefined; id: string }[] = [];
   commits: { path: string; message: string }[] = [];
   failMake: string | null = null;
   /** what seed.ts throws on a planted symlink */
@@ -81,9 +81,9 @@ class FakeSeeds implements IncubatorSeeds {
   failRead = new Set<string>();
   /** a write to one of these throws once, as a full disk would */
   failWriteOnce = new Set<string>();
-  async make(path: string, files: Record<string, string>, cloneUrl: string | undefined): Promise<void> {
+  async make(path: string, files: Record<string, string>, cloneUrl: string | undefined, id: string): Promise<void> {
     if (this.failMake) throw new Error(this.failMake);
-    this.made.push({ path, clone: cloneUrl });
+    this.made.push({ path, clone: cloneUrl, id });
     this.files.set(path, new Map(Object.entries(files)));
   }
   async read(path: string, rel: string): Promise<string | null> {
@@ -260,7 +260,7 @@ describe("intake", () => {
     const after = now(w, s.id);
     expect(after.prepared).toBe(true);
     expect(after.status).toBe("clarifying");
-    expect(w.seeds.made).toEqual([{ path: "/root/_incubator/coin-counter-laundromat-log", clone: undefined }]);
+    expect(w.seeds.made).toEqual([{ path: "/root/_incubator/coin-counter-laundromat-log", clone: undefined, id: s.id }]);
     expect(await w.seeds.read(after.seedPath, ".canopy/brief.md")).toBe("# A coin counter for the laundromat\n\nA coin counter for the laundromat\nwith a log\n");
     expect(await w.seeds.read(after.seedPath, ".canopy/inputs.md")).toContain("- [2] url 002-link.url: not summarized yet");
     expect(w.rescans).toBe(1);
@@ -835,6 +835,28 @@ describe("more input", () => {
     await w.inc.idle();
     expect(after.status).toBe("parked");
     expect(w.flows.started).toHaveLength(1);
+  });
+
+  test("on a first clarify parked at a gate, the flow continues and clarify runs once more on what came in", async () => {
+    const w = world();
+    const s = await w.inc.create(intake({ text: "x" }));
+    await w.inc.idle();
+    const id = now(w, s.id).flows[0]?.flowId ?? "";
+    w.flows.move(id, { status: "gated", steps: [{ name: "Clarify", status: "gated", reason: "budget spent: 2 runs" }] });
+    await w.inc.idle();
+    expect(now(w, s.id).status).toBe("parked");
+    const after = await w.inc.addInputs(s.id, intake({ text: "it is for the Rio laundromat" }));
+    expect(after.reclarify).toBe(true);
+    await w.inc.idle();
+    await w.inc.resume(s.id, "continue");
+    await w.inc.idle();
+    const live = now(w, s.id);
+    await w.seeds.write(live.seedPath, ".canopy/questions.json", JSON.stringify([{ question: "Q?" }]));
+    w.flows.move(id, { status: "done" });
+    await w.inc.idle();
+    expect(now(w, s.id).questions).toBeUndefined();
+    expect(w.flows.started.map((r) => r.workflow.name)).toEqual(["clarify", "clarify"]);
+    expect(now(w, s.id).status).toBe("clarifying");
   });
 
   test("while questions wait, they are dropped and clarify runs again", async () => {

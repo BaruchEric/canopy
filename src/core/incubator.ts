@@ -78,8 +78,9 @@ export interface IncubatorStore {
 }
 
 export interface IncubatorSeeds {
-  /** a new seed repo with these files in its first commit; a repo url clones it */
-  make(path: string, files: Record<string, string>, clone: string | undefined): Promise<void>;
+  /** a new seed repo with these files in its first commit; a repo url
+   *  clones it. `id` is the sprout's, which keys the folder it is built in. */
+  make(path: string, files: Record<string, string>, clone: string | undefined, id: string): Promise<void>;
   /** a plain file the agent wrote, or null; throws on a symlink */
   read(path: string, rel: string): Promise<string | null>;
   write(path: string, rel: string, text: string): Promise<void>;
@@ -402,7 +403,10 @@ export class Incubator {
     if (sproutEnded(s)) throw new IncubatorError(409, "this project has ended; start a new one");
     const { clean } = this.checkIntake(intake, s.inputs.reduce((t, e) => t + e.bytes, 0), false);
     await this.takeInputs(s, clean);
-    if (s.clarified || s.status === "clarifying") s.reclarify = true;
+    // a clarify still under way (running, waiting or parked at a gate) has
+    // not read these, so another follows it whenever it ends
+    const last = s.flows.at(-1);
+    if (s.clarified || s.status === "clarifying" || (last?.workflow === "clarify" && !last.outcome)) s.reclarify = true;
     if (s.status === "clarifying" && s.questions) {
       delete s.questions;
       delete s.questionsAt;
@@ -677,7 +681,7 @@ export class Incubator {
       if (this.deps.seeds.exists(s.seedPath)) return;
       const t = s.inputs.find((e) => e.kind === "text");
       const text = t ? dec.decode(await this.deps.store.readInput(s.id, t.name)) : "";
-      await this.deps.seeds.make(s.seedPath, { ".canopy/brief.md": briefText(s.title, text), ".canopy/inputs.md": index }, this.cloneFrom.get(s.id) ?? s.repo);
+      await this.deps.seeds.make(s.seedPath, { ".canopy/brief.md": briefText(s.title, text), ".canopy/inputs.md": index }, this.cloneFrom.get(s.id) ?? s.repo, s.id);
     });
     if (!made) return;
     // the token, if there was one, is not needed again; a failed clone keeps it for the retry

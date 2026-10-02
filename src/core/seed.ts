@@ -11,7 +11,7 @@ import { lstat, mkdir, open, realpath, rename, rm } from "node:fs/promises";
 import { basename, dirname, isAbsolute, join, relative, sep } from "node:path";
 import { exec, git } from "./exec";
 import { networkOrigin } from "./peersync";
-import { urlWithoutSecret } from "./sprout";
+import { isSproutId, urlWithoutSecret } from "./sprout";
 
 export const SEED_READ_MAX = 256 * 1024;
 
@@ -33,9 +33,14 @@ const firstLine = (s: string): string => s.trim().split("\n")[0] ?? "";
 
 /** Every git call canopy makes in a seed: a seed may be a stranger's
  *  clone, so no hook of anyone's runs (a clone carries none, but the
- *  user's init template or global config could name some), and a path is
- *  only ever the file it names. */
-const QUIET = ["-c", "core.hooksPath=/dev/null", "--literal-pathspecs"];
+ *  user's init template or global config could name some, and the agent
+ *  could plant one in the seed's own config), nor an fsmonitor, which is a
+ *  command too. Filters stay: git has no one switch that turns every clean
+ *  and smudge driver off. */
+const NO_HOOKS = ["-c", "core.hooksPath=/dev/null", "-c", "core.fsmonitor=false"];
+/** and a path is only ever the file it names; the calls that need pathspec
+ *  magic (`:(icase)`) take NO_HOOKS alone */
+const QUIET = [...NO_HOOKS, "--literal-pathspecs"];
 /** canopy's own commits, which nothing may refuse or sign */
 const COMMIT = [...QUIET, "-c", "commit.gpgsign=false", "commit", "-q", "--no-verify"];
 
@@ -139,7 +144,7 @@ async function dropAgentSettings(path: string, self: string): Promise<void> {
   const claude = await lstatOrNull(join(path, ".claude"));
   const names = claude && !claude.isDirectory() ? [".claude", ".mcp.json"] : AGENT_SETTINGS;
   const specs = names.map((n) => `:(icase)${n}`);
-  const listed = await git(path, ["ls-files", "-z", "--", ...specs]);
+  const listed = await git(path, [...NO_HOOKS, "ls-files", "-z", "--", ...specs]);
   if (listed.code !== 0) throw new Error(`git ls-files: ${firstLine(listed.stderr)}`);
   const tracked = listed.stdout.split("\0").filter((n) => n !== "");
   const onDisk: string[] = [];
@@ -160,8 +165,8 @@ async function dropAgentSettings(path: string, self: string): Promise<void> {
   }
   // nothing of them may be left, in the index or on disk, or makeSeed takes
   // the seed back rather than leave it for a run
-  const left = await git(path, ["status", "--porcelain", "-z", "--ignored", "--", ...specs]);
-  const still = await git(path, ["ls-files", "-z", "--", ...specs]);
+  const left = await git(path, [...NO_HOOKS, "status", "--porcelain", "-z", "--ignored", "--", ...specs]);
+  const still = await git(path, [...NO_HOOKS, "ls-files", "-z", "--", ...specs]);
   if (left.code !== 0 || still.code !== 0 || left.stdout !== "" || still.stdout !== "") {
     throw new Error("the cloned project's agent settings are still in the seed");
   }
@@ -171,20 +176,24 @@ async function dropAgentSettings(path: string, self: string): Promise<void> {
  *  it, which the scan never walks into. A seed folder is there only once
  *  it is whole, so a restart in the middle of a clone, or between the clone
  *  and taking its agent settings out, leaves nothing a later prepare would
- *  take as made. */
-export const seedWorkPath = (path: string): string => join(dirname(path), `.${basename(path)}.making`);
+ *  take as made. It is named for the sprout as well as the slug: a sprout
+ *  stopped and dismissed mid-clone frees its slug for a new intake, and the
+ *  two attempts must not clear each other's folder. */
+export const seedWorkPath = (path: string, id: string): string => join(dirname(path), `.${basename(path)}.${id}.making`);
 
 export async function makeSeed(
   path: string,
   files: Record<string, string>,
   clone: string | undefined,
-  opts: { self: string; originOk?: (url: string) => boolean; cloneTimeoutMs?: number },
+  opts: { self: string; id: string; originOk?: (url: string) => boolean; cloneTimeoutMs?: number },
 ): Promise<void> {
+  // it names the work folder, so it is checked like any path component
+  if (!isSproutId(opts.id)) throw new Error(`${opts.id || "(empty)"} is not a sprout id`);
   if (await lstatOrNull(path)) throw new Error(`${path} is there already`);
   if (clone && !(opts.originOk ?? networkOrigin)(clone)) throw new Error(`not a network git url: ${urlWithoutSecret(clone)}`);
   await mkdir(dirname(path), { recursive: true });
-  const work = seedWorkPath(path);
-  // what an attempt a restart cut short left behind
+  const work = seedWorkPath(path, opts.id);
+  // what this sprout's attempt a restart cut short left behind
   await rm(work, { recursive: true, force: true });
   // made here, not by git, so the folder is surely this call's to take back
   await mkdir(work).catch((e: unknown) => {
@@ -200,12 +209,12 @@ export async function makeSeed(
       // (rewritten by an insteadOf, say), so every http(s) userinfo goes
       const said = firstLine(r.stderr).split(clone).join(urlWithoutSecret(clone)).replace(/(https?:\/\/)[^@/\s]+@/gi, "$1");
       if (r.code !== 0) throw new Error(`git clone failed: ${said}`);
-      const mv = await git(work, ["remote", "rename", "origin", "upstream"]);
+      const mv = await git(work, [...NO_HOOKS, "remote", "rename", "origin", "upstream"]);
       if (mv.code !== 0) throw new Error(`git remote rename: ${firstLine(mv.stderr)}`);
       // a token the clone needed stays out of the seed's .git/config
       const clean = urlWithoutSecret(clone);
       if (clean !== clone) {
-        const set = await git(work, ["remote", "set-url", "upstream", clean]);
+        const set = await git(work, [...NO_HOOKS, "remote", "set-url", "upstream", clean]);
         if (set.code !== 0) throw new Error(`git remote set-url: ${firstLine(set.stderr)}`);
       }
     } else {
@@ -278,7 +287,7 @@ export async function writeSeed(path: string, rel: string, text: string): Promis
 /** the seed operations as the Incubator takes them */
 export function seedOps(self: string) {
   return {
-    make: (path: string, files: Record<string, string>, clone: string | undefined) => makeSeed(path, files, clone, { self }),
+    make: (path: string, files: Record<string, string>, clone: string | undefined, id: string) => makeSeed(path, files, clone, { self, id }),
     read: readSeed,
     write: writeSeed,
     commit: async (path: string, rels: string[], message: string): Promise<void> => {
