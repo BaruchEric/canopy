@@ -84,6 +84,17 @@ describe("makeSeed", () => {
     expect((await log(path))[0]).toBe("canopy <canopy@mini>|seed: drop the cloned project's agent settings");
     expect((await git(path, ["status", "--porcelain"])).stdout).toBe("");
   });
+  test("a clone that carries its own .canopy symlink is refused, and the clean-up takes the link, not what it points at", async () => {
+    const outside = join(dir, "clone-target");
+    await mkdir(outside);
+    await writeFile(join(outside, "brief.md"), "theirs\n");
+    const up = await upstream("canopy-link", { "README.md": "hi\n" }, { ".canopy": outside });
+    const path = join(dir, "_incubator", "canopy-link");
+    await expect(makeSeed(path, { ".canopy/brief.md": "# L\n" }, up, { self: "mini", originOk: () => true })).rejects.toThrow("symlink");
+    expect(existsSync(path)).toBe(false);
+    expect(await readdir(outside)).toEqual(["brief.md"]);
+    expect(await readFile(join(outside, "brief.md"), "utf8")).toBe("theirs\n");
+  });
   test("a clone that fails leaves no folder behind", async () => {
     const path = join(dir, "_incubator", "nothing");
     await expect(makeSeed(path, {}, join(dir, "no-such-repo"), { self: "mini", originOk: () => true })).rejects.toThrow("git clone failed");
