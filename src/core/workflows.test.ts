@@ -41,7 +41,7 @@ describe("loadWorkflows", () => {
   test("bundled, then user, then repo, later winning by name; broken files stay listed", async () => {
     const list = await loadWorkflows({ path: repo });
     const names = list.map((e) => (e.ok ? e.workflow.name : e.name));
-    expect(names).toEqual(["commit", "push", "ship", "deploy", "review", "clarify", "scout", "broken", "tidy"]);
+    expect(names).toEqual(["commit", "push", "ship", "deploy", "review", "clarify", "scout", "build-new", "broken", "tidy"]);
     const review = findWorkflow(list, "review");
     expect(review?.source).toBe("user");
     expect(review?.blurb).toBe("my own review");
@@ -140,5 +140,70 @@ describe("the bundled scout", () => {
     expect(tools).toEqual(expect.arrayContaining(["WebSearch", "WebFetch", "Bash(gh search repos:*)", "Bash(gh repo view:*)"]));
     for (const banned of ["Read", "Glob", "Grep", "Bash(gh api:*)", "Bash(git clone:*)", "Bash(git push:*)"]) expect(tools).not.toContain(banned);
     expect(tools.some((t) => /vercel|gh repo create|gh repo fork/.test(t))).toBe(false);
+  });
+});
+
+describe("the bundled build-new", () => {
+  const load = async () => findWorkflow(await loadWorkflows({ path: "", host: "none" }), "build-new");
+
+  test("scaffold, test, then a judged accept that rewinds to scaffold", async () => {
+    const wf = await load();
+    expect(wf?.listed).toBe(false);
+    expect(wf?.budget).toEqual({ runs: 30, hours: 6 });
+    expect(wf?.steps.map((s) => s.name)).toEqual(["Scaffold", "Test", "Accept"]);
+    const accept = wf?.steps[2];
+    expect(accept?.gate).toBe("judge");
+    expect(accept?.back).toBe("Scaffold");
+    expect(accept?.evidence).toEqual([".canopy/intent.md", ".canopy/pick.json", ".canopy/smoke.md", ".canopy/accept.md", "README.md"]);
+  });
+
+  test("no step holds push, gh, vercel or a whole-disk read", async () => {
+    const tools = ((await load())?.steps ?? []).flatMap((s) => s.tools);
+    expect(tools).toEqual(expect.arrayContaining(["Bash(git commit:*)", "Bash(bun run:*)", "Bash(bun add:*)", "Bash(curl:*)"]));
+    for (const banned of ["Read", "Bash(git push:*)", "Bash(gh api:*)"]) expect(tools).not.toContain(banned);
+    expect(tools.some((t) => /vercel|^Bash\(gh /.test(t))).toBe(false);
+  });
+
+  test("scaffold's check refuses a gitignore gap, a missing script, an uncommitted lock and a dirty tree", async () => {
+    const check = (await load())?.steps[0]?.check ?? "";
+    const dir = await mkdtemp(join(tmpdir(), "canopy-build-check-"));
+    const sh = async (cmd: string): Promise<{ code: number; out: string }> => {
+      const p = Bun.spawn(["sh", "-c", cmd], { cwd: dir, stdout: "pipe", stderr: "pipe" });
+      const [o, e] = await Promise.all([new Response(p.stdout).text(), new Response(p.stderr).text()]);
+      return { code: await p.exited, out: o + e };
+    };
+    try {
+      await sh("git init -q && git config user.email t@t && git config user.name t && mkdir .canopy && echo x > .canopy/brief.md");
+      await writeFile(join(dir, ".gitignore"), "node_modules\n");
+      await writeFile(join(dir, "package.json"), JSON.stringify({ name: "x", scripts: { dev: "true", build: "true" } }));
+      expect((await sh(check)).out).toContain(".gitignore must cover .vercel");
+      await writeFile(join(dir, ".gitignore"), "node_modules\ndist\n.vercel\n.env*\n");
+      // bun deletes an empty lockfile, so give it one offline dependency to lock
+      await mkdir(join(dir, "dep"));
+      await writeFile(join(dir, "dep", "package.json"), JSON.stringify({ name: "dep", version: "1.0.0" }));
+      await writeFile(join(dir, "package.json"), JSON.stringify({ name: "x", scripts: { dev: "true", build: "true" }, dependencies: { dep: "file:./dep" } }));
+      await sh("bun install >/dev/null 2>&1");
+      expect((await sh(check)).out).toContain("bun.lock is not committed");
+      await sh("git add -A && git commit -qm init");
+      expect((await sh(check)).code).toBe(0);
+      await writeFile(join(dir, "stray.ts"), "export {};\n");
+      const dirty = await sh(check);
+      expect(dirty.code).toBe(1);
+      expect(dirty.out).toContain("the working tree is not clean");
+      await rm(join(dir, "stray.ts"));
+      // .canopy/ is canopy's: what it holds uncommitted never fails the check
+      await writeFile(join(dir, ".canopy", "questions.json"), "[]");
+      expect((await sh(check)).code).toBe(0);
+      await writeFile(join(dir, "package.json"), JSON.stringify({ name: "x", scripts: { build: "true" } }));
+      await sh("git commit -qam nodev");
+      expect((await sh(check)).out).toContain("package.json needs a dev script");
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  }, 60_000);
+
+  test("test's check wants a 2xx status in smoke.md", async () => {
+    const check = (await load())?.steps[1]?.check ?? "";
+    expect(check).toContain("^status: 2");
   });
 });

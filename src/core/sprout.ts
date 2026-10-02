@@ -342,6 +342,9 @@ export function nextWorkflow(s: Sprout): string {
 /** what canopy commits to the seed after scout, beside SEED_FILES */
 export const SCOUT_FILES = [".canopy/research.md", ".canopy/pick.json", ".canopy/eval.md"];
 
+/** what canopy commits to the seed after build-new: the smoke and accept notes */
+export const BUILD_FILES = [".canopy/smoke.md", ".canopy/accept.md"];
+
 /** A copy of the workflow whose every step may also read the sprout's raw
  *  inputs: `//` makes the rule an absolute path for Claude Code. */
 export function withInputsRead(wf: Workflow, dir: string): Workflow {
