@@ -298,6 +298,8 @@ describe("intake", () => {
       [2, "transcript", "002-voice.txt", 1],
     ]);
     expect(after.inputs[0]?.processed).toBe(true);
+    expect(after.inputs[0]?.summary).toBe("a voice memo; its words are in [2]");
+    expect(w.store.indexes.get(s.id)).toContain("- [1] audio 001-voice.webm: a voice memo; its words are in [2]");
     // the words stay in the inputs folder; the record, the index and the vault say only what it is
     expect(after.inputs[1]?.summary).toBe("");
     expect(w.store.indexes.get(s.id)).toContain("- [2] transcript 002-voice.txt: not summarized yet");
@@ -696,7 +698,7 @@ describe("stage workflows", () => {
       const wf = await incubatorWorkflow("clarify");
       expect(wf?.source).toBe("bundled");
       expect(wf?.file).toBe(join(BUNDLED_DIR, "clarify.md"));
-      expect(wf?.steps.every((st) => st.check === null)).toBe(true);
+      expect(wf?.steps.some((st) => st.check?.includes("planted-ran"))).toBe(false);
 
       // and through the Incubator, onto that very seed
       const w = world({
@@ -711,7 +713,7 @@ describe("stage workflows", () => {
       const started = w.flows.started[0]?.workflow;
       expect(started?.source).toBe("bundled");
       expect(started?.blurb).not.toContain("planted");
-      expect(started?.steps.every((st) => st.check === null)).toBe(true);
+      expect(started?.steps.some((st) => st.check?.includes("planted-ran"))).toBe(false);
     } finally {
       if (was === undefined) delete process.env["CANOPY_CONFIG_DIR"];
       else process.env["CANOPY_CONFIG_DIR"] = was;

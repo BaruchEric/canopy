@@ -80,6 +80,33 @@ describe("the bundled clarify", () => {
     expect(clarify?.steps.map((s) => s.name)).toEqual(["Clarify"]);
     expect(clarify?.steps[0]?.tools).toEqual(expect.arrayContaining(["Edit", "Write", "WebFetch", "Bash(git status:*)"]));
   });
+
+  test("its check passes a readable questions.json or none, refuses the rest, and gets one retry", async () => {
+    const step = findWorkflow(await loadWorkflows({ path: "", host: "none" }), "clarify")?.steps[0];
+    expect(step?.retries).toBe(1);
+    const check = step?.check ?? "";
+    expect(check).not.toBe("");
+    const dir = await mkdtemp(join(tmpdir(), "canopy-clarify-check-"));
+    try {
+      await mkdir(join(dir, ".canopy"));
+      const run = async (body: string | null): Promise<number> => {
+        const file = join(dir, ".canopy", "questions.json");
+        await rm(file, { force: true });
+        if (body !== null) await writeFile(file, body);
+        const p = Bun.spawn(["sh", "-c", check], { cwd: dir, stdout: "ignore", stderr: "ignore" });
+        return await p.exited;
+      };
+      expect(await run(null)).toBe(0);
+      expect(await run("[]")).toBe(0);
+      expect(await run('[{"question":"which?","options":["a","b"]}]')).toBe(0);
+      expect(await run('{"questions":[{"question":"which?"}]}')).toBe(0);
+      expect(await run("not json")).toBe(1);
+      expect(await run('[{"header":"no text"}]')).toBe(1);
+      expect(await run('{"a":1}')).toBe(1);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
 });
 
 describe("the documented example", () => {

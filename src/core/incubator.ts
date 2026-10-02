@@ -647,7 +647,7 @@ export class Incubator {
         continue;
       }
       const base = e.name.replace(/^\d+-/, "").replace(/\.[^.]*$/, "");
-      await this.addEntry(
+      const t = await this.addEntry(
         s,
         // The words stay in the inputs folder: a transcript's words never go
         // to the vault (the spec), so the note and inputs.md say "not
@@ -657,6 +657,9 @@ export class Incubator {
         text,
       );
       e.processed = true;
+      // clarify reads the transcript, never the recording, so the recording's
+      // line says where its words went rather than waiting on a summary
+      e.summary = `a voice memo; its words are in [${t.n}]`;
       added += 1;
     }
     return added;
