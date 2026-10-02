@@ -2616,6 +2616,9 @@ export class Incubator {
   private readonly seen = new Map<string, Flow["status"]>();
   /** each sprout's vault writes, one after another */
   private readonly noteChain = new Map<string, Promise<void>>();
+  /** each sprout's slow work (prepare, more input), one after another, so two
+   *  never transcribe the same memo or write the index over each other */
+  private readonly workChain = new Map<string, Promise<void>>();
   /** background work, for `idle` */
   private readonly pending = new Set<Promise<unknown>>();
   private detached = false;
@@ -2637,6 +2640,12 @@ export class Incubator {
         this.pending.delete(q);
       });
     this.pending.add(q);
+  }
+
+  private serial(s: Sprout, work: () => Promise<void>): void {
+    const next = (this.workChain.get(s.id) ?? Promise.resolve()).then(work).catch((err: unknown) => this.log(`${s.slug}: ${msg(err)}`));
+    this.workChain.set(s.id, next);
+    this.track(next);
   }
 
   /** resolves once the background work started so far has settled; tests */
@@ -2701,9 +2710,15 @@ export class Incubator {
   ): Promise<InputEntry> {
     const n = s.inputs.reduce((m, x) => Math.max(m, x.n), 0) + 1;
     const name = safeInputName(n, file);
-    await this.deps.store.writeInput(s.id, name, data);
     const entry: InputEntry = { ...e, n, name, at: this.now(), bytes: bytesOf(data) };
+    // claimed before the write awaits, so an intake running beside this one takes the next number
     s.inputs.push(entry);
+    try {
+      await this.deps.store.writeInput(s.id, name, data);
+    } catch (err) {
+      s.inputs = s.inputs.filter((x) => x !== entry);
+      throw err;
+    }
     return entry;
   }
 
@@ -2752,7 +2767,7 @@ export class Incubator {
     await this.takeInputs(s, clean);
     this.sprouts.set(id, s);
     await this.changed(s, "started");
-    this.track(this.prepare(s));
+    this.serial(s, () => this.prepare(s));
     return s;
   }
 
@@ -3083,6 +3098,33 @@ describe("more input", () => {
     expect(w.flows.started.map((r) => r.workflow.name)).toEqual(["clarify", "clarify"]);
   });
 
+  test("more input while the first is still being transcribed: unique numbers, one transcript, a whole index", async () => {
+    let release: () => void = () => {};
+    const gate = new Promise<void>((r) => {
+      release = r;
+    });
+    let calls = 0;
+    const w = world({
+      transcribe: async () => {
+        calls += 1;
+        await gate;
+        return "spoken";
+      },
+    });
+    const s = await w.inc.create(intake({ files: [audio()] }));
+    await w.inc.addInputs(s.id, intake({ text: "typed while it listened" }));
+    release();
+    await w.inc.idle();
+    const after = now(w, s.id);
+    const ns = after.inputs.map((e) => e.n);
+    expect(new Set(ns).size).toBe(ns.length);
+    expect(after.inputs.filter((e) => e.kind === "transcript")).toHaveLength(1);
+    expect(calls).toBe(1);
+    const index = w.store.indexes.get(s.id) ?? "";
+    for (const e of after.inputs) expect(index).toContain(`- [${e.n}] ${e.kind} ${e.name}`);
+    expect(await w.seeds.read(after.seedPath, ".canopy/inputs.md")).toBe(index);
+  });
+
   test("a repo is refused after the start, and an ended sprout takes nothing", async () => {
     const w = world();
     const s = await w.inc.create(intake({ text: "x" }));
@@ -3136,7 +3178,7 @@ describe("stop, resume and dismiss", () => {
     await expect(w.inc.dismiss(s.id)).rejects.toMatchObject({ status: 409 });
     await w.inc.stop(s.id);
     await w.inc.dismiss(s.id);
-    await expect(w.inc.list()).toEqual([]);
+    expect(w.inc.list()).toEqual([]);
     expect(w.store.dismissed).toEqual([s.id]);
     expect(w.gone).toEqual([s.id]);
   });
@@ -3295,7 +3337,7 @@ In `src/core/incubator.ts`, add `answersText` and `isSproutId` to the import fro
       s.status = "queued";
     }
     await this.changed(s, "input");
-    this.track(this.afterInputs(s));
+    this.serial(s, () => this.afterInputs(s));
     return s;
   }
 
@@ -3356,7 +3398,7 @@ In `src/core/incubator.ts`, add `answersText` and `isSproutId` to the import fro
     s.status = "queued";
     await this.changed(s);
     if (s.prepared) this.pump();
-    else this.track(this.prepare(s));
+    else this.serial(s, () => this.prepare(s));
     return s;
   }
 
@@ -3377,7 +3419,7 @@ In `src/core/incubator.ts`, add `answersText` and `isSproutId` to the import fro
     for (const s of this.sprouts.values()) {
       if (sproutEnded(s)) continue;
       if (!s.prepared) {
-        if (s.status === "queued") this.track(this.prepare(s));
+        if (s.status === "queued") this.serial(s, () => this.prepare(s));
         continue;
       }
       const cur = s.flows.at(-1);
@@ -3585,8 +3627,9 @@ function form(fields: Record<string, string | Blob | [Blob, string]>): FormData 
   return f;
 }
 
-/** the first event of a type after `act` */
-async function eventAfter(type: ServerEvent["type"], act: () => Promise<unknown>): Promise<ServerEvent> {
+/** the first event `match` takes after `act`; other sprouts' events, which
+ *  earlier tests' background work still sends, are passed over */
+async function eventAfter(match: (ev: ServerEvent) => boolean, act: () => Promise<unknown>): Promise<ServerEvent> {
   const ctl = new AbortController();
   const res = await fetch(url("/api/events"), { signal: ctl.signal });
   const body = res.body;
@@ -3601,7 +3644,7 @@ async function eventAfter(type: ServerEvent["type"], act: () => Promise<unknown>
         const data = chunk.split("\n").find((l) => l.startsWith("data: "));
         if (!data) continue;
         const ev = JSON.parse(data.slice(6)) as ServerEvent;
-        if (ev.type === type) return ev;
+        if (match(ev)) return ev;
       }
       const { value, done } = await reader.read();
       if (done) throw new Error("the stream ended");
@@ -3681,7 +3724,7 @@ describe("intake", () => {
   });
 
   test("a new sprout is broadcast", async () => {
-    const ev = await eventAfter("incubator", () => post("/api/incubator", form({ text: "a broadcast idea" })));
+    const ev = await eventAfter((e) => e.type === "incubator" && e.sprout.title === "a broadcast idea", () => post("/api/incubator", form({ text: "a broadcast idea" })));
     expect(ev.type === "incubator" && ev.sprout.title).toBe("a broadcast idea");
   });
 });
@@ -3708,7 +3751,7 @@ describe("the rest of the routes", () => {
     expect((await postJson(`/api/incubator/resume?id=${s.id}`, { choice: "sideways" })).status).toBe(400);
     const stopped = (await (await postJson(`/api/incubator/stop?id=${s.id}`, {})).json()) as Sprout;
     expect(stopped.status).toBe("stopped");
-    const ev = await eventAfter("incubator-gone", () => fetch(url(`/api/incubator?id=${s.id}`), { method: "DELETE" }));
+    const ev = await eventAfter((e) => e.type === "incubator-gone" && e.id === s.id, () => fetch(url(`/api/incubator?id=${s.id}`), { method: "DELETE" }));
     expect(ev.type === "incubator-gone" && ev.id).toBe(s.id);
     expect(existsSync(join(scratch, "config/incubator/.dismissed", s.id))).toBe(true);
     const list = (await (await fetch(url("/api/incubator"))).json()) as Sprout[];
@@ -5726,7 +5769,8 @@ Each step changes the mini or an outside service, so each waits on Eric's go-ahe
    with any short recording in place of `hello.m4a`. A 404 means the model name is not in LiteLLM's list; a connection refused means the container cannot reach LiteLLM's port (the same ufw rule tailchan needed).
 2. **The vault token.** Mint it with the owner token from `~/.config/vault/token`: `POST https://mem.beric.ca/tokens {"name":"canopy-incubator","scopes":["agent"]}`. The `agent` scope is the narrowest that can write `02 - Dev/` and the daily notes; it can also write most other folders, which is why it is minted for canopy alone. Record its name in the vault's token list so it can be revoked.
 3. **The mini's `.env`.** Add `CANOPY_VAULT_TOKEN`, `CANOPY_TRANSCRIBE_URL`, `CANOPY_TRANSCRIBE_KEY` (and `CANOPY_TRANSCRIBE_MODEL` if not `transcribe`). Never commit it.
-4. **Redeploy** through the `redeploy` skill (`bun run redeploy`), after the branch is merged and the peer pass has carried it to the mini. Then: the log has no "no CANOPY_VAULT_TOKEN" line; `canopy new "a test idea"` from a mini shell gives a link; the vault gets `02 - Dev/incubator/test-idea.md` and a line in today's daily note; clarify runs and ends with questions in the inbox or a park at "the scout workflow is not installed". Stop and dismiss the test sprout; its seed stays at `~/dev/_incubator/test-idea` until removed by hand.
+4. **Seeds and peer sync.** Seeds sit under the launch root, so peer sync treats them like any repo: it adds peer remotes to each, and the Mac's `cloneMissing` clones every seed into `~/dev/_incubator/`. A peer's `repos` is an allowlist of globs (`repoWanted` in `src/core/peers.ts`; absent means every repo), with no way to say "all but `_incubator/*`". Decide before the first real project: leave it (a seed on the Mac is handy, and a seed is small), or keep seeds on the mini by a one-line change to `peerable` in `src/server/index.ts` and `ui/src/peers.ts` that skips ids under `_incubator/`. Leaving it is the recommendation for phase 2; phase 4 moves a live project out of `_incubator/` anyway.
+5. **Redeploy** through the `redeploy` skill (`bun run redeploy`), after the branch is merged and the peer pass has carried it to the mini. Then: the log has no "no CANOPY_VAULT_TOKEN" line; `canopy new "a test idea"` from a mini shell gives a link; the vault gets `02 - Dev/incubator/test-idea.md` and a line in today's daily note; clarify runs and ends with questions in the inbox or a park at "the scout workflow is not installed". Stop and dismiss the test sprout; its seed stays at `~/dev/_incubator/test-idea` until removed by hand.
 
 ## What comes after
 
