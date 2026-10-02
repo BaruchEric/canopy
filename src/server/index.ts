@@ -36,6 +36,7 @@ import {
   openHistoryNote,
 } from "../core/history";
 import { browseLocal, browseRemote, expandHome, SshError } from "../core/browse";
+import { checkEnv } from "../core/cli";
 import { exec, onHost } from "../core/exec";
 import { fleetSkipReason, Flows, type CheckResult } from "../core/flow";
 import { INHERITED_ENV, SECRET_ENV, isKeystroke, isTermId, parseTermMessage, Scrollback, shellArgs, startTerm, termPlace, termSize, type TermSession, type TermSize } from "../core/term";
@@ -1083,7 +1084,7 @@ async function runCheck(repo: Repo, command: string): Promise<CheckResult> {
   const { host, path } = parseLocator(repo.path);
   const r =
     host === null
-      ? await exec(["sh", "-lc", command], { cwd: path, timeoutMs: CHECK_TIMEOUT })
+      ? await exec(["sh", "-lc", command], { cwd: path, timeoutMs: CHECK_TIMEOUT, env: checkEnv() })
       : await onHost(host, ["sh", "-lc", `cd ${shellQuote(path)} && ${command}`], { timeoutMs: CHECK_TIMEOUT });
   const out = `${r.stdout}${r.stderr ? `\n${r.stderr}` : ""}`.trim();
   return { exit: r.code, output: out.length > CHECK_OUTPUT_CAP ? `…${out.slice(-CHECK_OUTPUT_CAP)}` : out };

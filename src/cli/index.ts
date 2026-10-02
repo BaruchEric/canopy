@@ -33,6 +33,7 @@ import {
   upsertWorkspace,
 } from "../core/store";
 import type { Job, LaunchSettings, SourceInput, Sprout, SproutDetail } from "../core/types";
+import { parsePick, pickRefusal } from "../core/sprout";
 import { parseNewArgs, sproutLink } from "./newargs";
 import { suggestMessage } from "../core/suggest";
 import { PortUnavailableError, startServer } from "../server/index";
@@ -694,7 +695,19 @@ export async function main(argv: string[]): Promise<void> {
         console.log(`\n${sky(sproutLink(backend, s.id))}`);
         return;
       }
-      return fail("usage: canopy incubator list | show <id>");
+      if (sub === "pick-check") {
+        // run by scout's check in the seed: what canopy will read after scout, read now
+        const pickFile = Bun.file(".canopy/pick.json");
+        if (!(await pickFile.exists())) return fail(".canopy/pick.json is missing: research ends by writing it");
+        const parsed = parsePick(await pickFile.text());
+        if (!parsed.ok) return fail(`.canopy/pick.json: ${parsed.error}`);
+        const refused = pickRefusal(parsed.pick);
+        if (refused) return fail(`.canopy/pick.json: ${refused}`);
+        if (!(await Bun.file(".canopy/research.md").exists())) return fail(".canopy/research.md is missing: research writes it before the pick");
+        console.log(`pick ok: ${parsed.pick.kind} on ${parsed.pick.host}`);
+        return;
+      }
+      return fail("usage: canopy incubator list | show <id> | pick-check");
     }
     case "version":
     case "--version":
