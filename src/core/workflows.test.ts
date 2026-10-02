@@ -41,7 +41,7 @@ describe("loadWorkflows", () => {
   test("bundled, then user, then repo, later winning by name; broken files stay listed", async () => {
     const list = await loadWorkflows({ path: repo });
     const names = list.map((e) => (e.ok ? e.workflow.name : e.name));
-    expect(names).toEqual(["commit", "push", "ship", "deploy", "review", "broken", "tidy"]);
+    expect(names).toEqual(["commit", "push", "ship", "deploy", "review", "clarify", "broken", "tidy"]);
     const review = findWorkflow(list, "review");
     expect(review?.source).toBe("user");
     expect(review?.blurb).toBe("my own review");
@@ -69,6 +69,16 @@ describe("loadWorkflows", () => {
     expect(findWorkflow(list, "push")?.when).toBe("unpushed");
     expect(findWorkflow(list, "deploy")?.when).toBe("any");
     expect(findWorkflow(list, "review")?.steps[0]?.tools).not.toContain("Bash(git commit:*)");
+  });
+});
+
+describe("the bundled clarify", () => {
+  test("the bundled clarify is the incubator's own: unlisted, budgeted, one step", async () => {
+    const clarify = findWorkflow(await loadWorkflows({ path: "", host: "none" }), "clarify");
+    expect(clarify?.listed).toBe(false);
+    expect(clarify?.budget).toEqual({ runs: 2, hours: 0.34 });
+    expect(clarify?.steps.map((s) => s.name)).toEqual(["Clarify"]);
+    expect(clarify?.steps[0]?.tools).toEqual(expect.arrayContaining(["Edit", "Write", "WebFetch", "Bash(git status:*)"]));
   });
 });
 

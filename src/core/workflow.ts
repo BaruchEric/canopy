@@ -186,6 +186,8 @@ export function parseWorkflow(
     const label = keys.get("label") || name;
     const verb = keys.get("verb") || label;
     const when: WorkflowWhen = oneOf(keys.get("when"), WORKFLOW_WHENS, "when", "any");
+    const listedRaw = keys.get("listed");
+    const listed = listedRaw === undefined || listedRaw === "" ? true : bool(listedRaw, "listed");
     const workflow: Workflow = {
       name,
       label,
@@ -195,6 +197,7 @@ export function parseWorkflow(
       expectsChange: bool(keys.get("expects-change"), "expects-change"),
       notePlaceholder: keys.get("note") || "anything the agent should know (optional)",
       noteRequired: bool(keys.get("note-required"), "note-required"),
+      ...(listed ? {} : { listed: false as const }),
       steps: steps(body, agentKey(keys.get("agent"), "agent")),
       budget: budgetKey(keys.get("budget")),
       source: meta.source,

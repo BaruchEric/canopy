@@ -216,3 +216,20 @@ describe("retries, back, evidence and budget", () => {
     expect(parseWorkflow(checkOnly(""), meta).ok).toBe(true);
   });
 });
+
+describe("listed", () => {
+  const meta = { name: "w", source: "bundled" as const, file: "/w.md" };
+  const text = (line: string) => `---\nblurb: b\n${line}---\n\n## A\n\nDo it.\n`;
+  test("absent or true is listed; false marks it", () => {
+    const plain = parseWorkflow(text(""), meta);
+    expect(plain.ok && plain.workflow.listed).toBeUndefined();
+    const yes = parseWorkflow(text("listed: true\n"), meta);
+    expect(yes.ok && yes.workflow.listed).toBeUndefined();
+    const no = parseWorkflow(text("listed: false\n"), meta);
+    expect(no.ok && no.workflow.listed).toBe(false);
+  });
+  test("anything else is an error", () => {
+    const bad = parseWorkflow(text("listed: maybe\n"), meta);
+    expect(bad.ok).toBe(false);
+  });
+});

@@ -2097,6 +2097,7 @@ async function handleApi(
     // do not apply.
     const wf = findWorkflow(await loadWorkflows({ path: "", host: "none" }), b.workflow);
     if (!wf) return json({ error: `unknown workflow: ${b.workflow}` }, 400);
+    if (wf.listed === false) return json({ error: `${wf.name} runs only inside the incubator` }, 400);
     const note = typeof b.note === "string" ? b.note : "";
     if (wf.noteRequired && !note.trim()) return json({ error: "this workflow needs a note" }, 400);
     const cfg = await loadConfig();
@@ -2451,7 +2452,8 @@ async function handleApi(
       return json(await refreshAndBroadcast(state, repo.id));
     }
     if (method === "GET" && action === "workflows") {
-      return json(await loadWorkflows(repo));
+      // the incubator's stages run only from the incubator
+      return json((await loadWorkflows(repo)).filter((e) => !e.ok || e.workflow.listed !== false));
     }
     // The launcher. Releases are read and installed for any repo with a
     // GitHub remote, wherever its checkout is: the download lands here and
@@ -2514,6 +2516,7 @@ async function handleApi(
       if (typeof b.workflow !== "string") return json({ error: "missing workflow" }, 400);
       const entries = await loadWorkflows(repo);
       const wf = findWorkflow(entries, b.workflow);
+      if (wf?.listed === false) return json({ error: `${wf.name} runs only inside the incubator` }, 400);
       if (!wf) {
         const broken = entries.find((e) => !e.ok && e.name === b.workflow);
         return json({ error: broken && !broken.ok ? broken.error : `unknown workflow: ${b.workflow}` }, 400);

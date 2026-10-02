@@ -1138,6 +1138,9 @@ export interface Workflow {
   expectsChange: boolean;
   notePlaceholder: string;
   noteRequired: boolean;
+  /** false keeps the workflow out of the menus and the fleet picker: the
+   *  incubator's own stages; absent means listed */
+  listed?: false;
   steps: WorkflowStep[];
   /** null when the workflow sets none */
   budget: FlowBudget | null;
