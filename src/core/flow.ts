@@ -6,6 +6,7 @@
 import { checkWhen, type ActionSpec } from "./actions";
 import { decide, decideJudge, judgeState, verdictState } from "./verdict";
 import {
+  DEFAULT_AGENT,
   isFlowActive,
   isRunActive,
   statusFingerprint,
@@ -62,6 +63,19 @@ export interface CheckResult {
   output: string;
 }
 
+/** What a flow leaves on disk: the flow, the workflow it started with (so a
+ *  file edited since does not change a flow in progress), and the status
+ *  fingerprint its outcome is judged against. */
+export interface FlowRecord {
+  v: 1;
+  flow: Flow;
+  workflow: Workflow;
+  before: string;
+  savedAt: number;
+}
+
+export const RESTART_NOTE = "canopy restarted during this step; read the repo's state and finish the step";
+
 /** What Flows needs from the Runner; the real one satisfies it. */
 export interface FlowRunner {
   start(repo: Repo, action: string, spec: ActionSpec, note: string, agent: AgentSettings): Run;
@@ -88,6 +102,11 @@ export interface FlowHooks {
   status?: (repoId: string) => Promise<RepoStatus | null>;
   /** the clock, for tests; Date.now otherwise */
   now?: () => number;
+  /** keeps a flow on disk; called on every change with the live objects, so
+   *  it must serialize at once */
+  save?: (rec: FlowRecord) => void;
+  /** drops a flow's record */
+  forget?: (id: string) => void;
 }
 
 const errText = (err: unknown): string => String(err instanceof Error ? err.message : err);
@@ -123,6 +142,7 @@ export function stepSpec(
   index: number,
   summaries: { name: string; summary: string }[],
   retryReason?: string,
+  restarted = false,
 ): ActionSpec {
   const step = wf.steps[index];
   if (!step) throw new Error(`${wf.name} has no step ${index}`);
@@ -145,12 +165,13 @@ export function stepSpec(
     progress: `${wf.verb}: ${step.name}`,
     // the flow judges the outcome over all its steps
     expectsChange: false,
-    task: [earlier, retry, step.body].filter(Boolean).join("\n\n"),
+    task: [restarted ? RESTART_NOTE : "", earlier, retry, step.body].filter(Boolean).join("\n\n"),
     mode: "job",
   };
 }
 
 export class Flows {
+  private saving = true;
   private live = new Map<string, LiveFlow>();
   /** run id to flow id, for onRun */
   private byRun = new Map<string, string>();
@@ -326,7 +347,46 @@ export class Flows {
       }
     }
     this.live.delete(id);
+    this.hooks.forget?.(id);
     this.hooks.onGone(id);
+  }
+
+  /** Takes back the flows a stopped server left on disk. A gated or finished
+   *  flow comes back as it was, without a change event; one caught mid-step
+   *  reruns that step, its run having gone with the old process. Fleets are
+   *  not kept, so a fleet id is dropped. `resolve` finds a repo by id in the
+   *  current scan. */
+  restore(records: FlowRecord[], resolve: (repoId: string) => Repo | undefined, agentFor: (repo: Repo) => StepAgent): void {
+    for (const rec of records) {
+      const flow = rec.flow;
+      if (this.live.has(flow.id)) continue;
+      delete flow.fleetId;
+      const repo = resolve(flow.repoId);
+      const live: LiveFlow = {
+        flow,
+        repo: repo ?? { id: flow.repoId, name: flow.repoId, path: "", group: "", source: "", status: null },
+        workflow: rec.workflow,
+        agent: repo ? agentFor(repo) : () => DEFAULT_AGENT,
+        before: rec.before,
+      };
+      this.live.set(flow.id, live);
+      if (!isFlowActive(flow)) continue;
+      if (!repo) {
+        const step = flow.steps[flow.current];
+        if (step) {
+          step.status = "failed";
+          step.reason = "the repo is not in the scan any more";
+        }
+        this.end(live, "failed", "the repo is not in the scan any more");
+        continue;
+      }
+      if (flow.status === "gated") continue;
+      this.resetStep(flow.steps[flow.current]);
+      flow.restarted = true;
+      flow.status = "working";
+      void this.runStep(live);
+    }
+    this.prune();
   }
 
   stopAll(): void {
@@ -461,6 +521,24 @@ export class Flows {
 
   private emit(live: LiveFlow): void {
     this.hooks.onChange(live.flow);
+    if (this.saving) this.hooks.save?.(this.record(live));
+  }
+
+  private record(live: LiveFlow): FlowRecord {
+    // a shallow copy with the live working time; the consumer serializes at once
+    return {
+      v: 1,
+      flow: { ...live.flow, spent: this.spentNow(live) },
+      workflow: live.workflow,
+      before: live.before,
+      savedAt: this.now(),
+    };
+  }
+
+  /** Stops saving: the server calls it before stopping every flow on its way
+   *  down, so the records keep what was running for the next server. */
+  detach(): void {
+    this.saving = false;
   }
 
   private prune(): void {
@@ -471,6 +549,7 @@ export class Flows {
       const oldest = finished.shift();
       if (!oldest) break;
       this.live.delete(oldest.flow.id);
+      this.hooks.forget?.(oldest.flow.id);
       this.hooks.onGone(oldest.flow.id);
     }
   }
@@ -566,13 +645,15 @@ export class Flows {
       }
     }
     this.clock(live, true);
+    const restarted = flow.restarted === true;
+    delete flow.restarted;
     if (!def.body) {
       // check-only: no agent, straight to the command
       flow.status = "working";
       await this.check(live);
       return;
     }
-    const spec = stepSpec(workflow, flow.current, this.summaries(live), flow.retryReason);
+    const spec = stepSpec(workflow, flow.current, this.summaries(live), flow.retryReason, restarted);
     let run: Run;
     try {
       run = this.runner.start(live.repo, workflow.name, spec, flow.note, live.agent(def.agent));

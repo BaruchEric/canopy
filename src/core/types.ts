@@ -1254,6 +1254,8 @@ export interface Flow {
   parkedFor?: "budget";
   /** steps granted past the budget by continuing a budget park */
   grace?: number;
+  /** set between a restore and the rerun of the step the restart cut short */
+  restarted?: boolean;
 }
 
 /** A flow with a live step: running, waiting on a prompt, or parked at a gate. */

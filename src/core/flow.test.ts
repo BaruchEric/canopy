@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { Flows, overBudget, stepSpec, summaryOf, type CheckResult, type FlowRunner } from "./flow";
+import { Flows, overBudget, RESTART_NOTE, stepSpec, summaryOf, type CheckResult, type FlowRecord, type FlowRunner } from "./flow";
 import { parseWorkflow } from "./workflow";
 import { DEFAULT_AGENT, type AgentSettings, type EvidenceFile, type Fleet, type Flow, type JudgeAnswers, type Repo, type Run, type VerdictAnswers, type Workflow } from "./types";
 import type { ActionSpec } from "./actions";
@@ -104,6 +104,8 @@ function setup(opts: {
   const checks: string[] = [];
   const fleets: Fleet[] = [];
   const fleetGone: string[] = [];
+  const saved: FlowRecord[] = [];
+  const forgotten: string[] = [];
   const flows = new Flows(runner, {
     onChange: (f) => changes.push(structuredClone(f)),
     onGone: (id) => gone.push(id),
@@ -118,9 +120,11 @@ function setup(opts: {
     evidence: opts.evidence,
     status: opts.status,
     now: opts.now,
+    save: (rec) => saved.push(JSON.parse(JSON.stringify(rec)) as FlowRecord),
+    forget: (id) => forgotten.push(id),
   });
   runner.onChange = (run) => flows.onRun(run);
-  return { runner, flows, changes, gone, checks, fleets, fleetGone };
+  return { runner, flows, changes, gone, checks, fleets, fleetGone, saved, forgotten };
 }
 
 describe("stepSpec", () => {
@@ -770,5 +774,148 @@ describe("budgets", () => {
     await flush();
     flows.resume(flow.id, "stop");
     expect(flows.get(flow.id)?.status).toBe("stopped");
+  });
+});
+
+const lastRecord = (saved: FlowRecord[], id: string): FlowRecord => {
+  const rec = saved.filter((r) => r.flow.id === id).at(-1);
+  if (!rec) throw new Error(`no record for ${id}`);
+  return JSON.parse(JSON.stringify(rec)) as FlowRecord;
+};
+const sameAgent = () => () => DEFAULT_AGENT;
+
+describe("records and restore", () => {
+  test("a gated flow comes back gated and goes on from its snapshot", async () => {
+    const a = setup();
+    const flow = a.flows.start(repo(), TWO, "", DEFAULT_AGENT);
+    a.runner.end("run1", "done", "first done");
+    await flush();
+    const b = setup();
+    b.flows.restore([lastRecord(a.saved, flow.id)], () => repo(), sameAgent);
+    expect(b.flows.get(flow.id)?.status).toBe("gated");
+    expect(b.runner.specs.length).toBe(0);
+    b.flows.resume(flow.id, "continue");
+    await flush();
+    expect(b.runner.specs[0]?.verb).toBe("do two · Second");
+    expect(b.runner.specs[0]?.task).toContain("First: first done");
+  });
+
+  test("a flow caught mid-step reruns that step with the restart note, the rerun counted", async () => {
+    const a = setup();
+    const flow = a.flows.start(repo(), TWO, "", DEFAULT_AGENT);
+    const b = setup();
+    b.flows.restore([lastRecord(a.saved, flow.id)], () => repo(), sameAgent);
+    expect(b.runner.specs[0]?.task.startsWith(RESTART_NOTE)).toBe(true);
+    expect(b.flows.get(flow.id)?.steps[0]).toMatchObject({ status: "running", runId: "run1" });
+    expect(b.flows.get(flow.id)?.spent?.runs).toBe(2);
+    expect(b.flows.get(flow.id)?.restarted).toBeUndefined();
+  });
+
+  test("the retry count survives, so a flow with one retry left gets exactly one", async () => {
+    const fail = () => ({ exit: 1, output: "fail" });
+    const a = setup({ check: fail });
+    const flow = a.flows.start(repo(), CHECKED_RETRY, "", DEFAULT_AGENT);
+    a.runner.end("run1", "done", "x");
+    await flush();
+    const rec = lastRecord(a.saved, flow.id);
+    expect(rec.flow.tries).toEqual({ Test: 1 });
+    const b = setup({ check: fail });
+    b.flows.restore([rec], () => repo(), sameAgent);
+    expect(b.runner.specs[0]?.task).toContain(RESTART_NOTE);
+    expect(b.runner.specs[0]?.task).toContain("the Test step did not accept the work");
+    b.runner.end("run1", "done", "x");
+    await flush();
+    b.runner.end("run2", "done", "x");
+    await flush();
+    expect(b.flows.get(flow.id)?.status).toBe("gated");
+    expect(b.flows.get(flow.id)?.steps[1]?.reason).toBe("check failed with exit 1");
+    expect(b.flows.get(flow.id)?.tries).toEqual({ Test: 2 });
+    expect(b.runner.specs.length).toBe(2);
+  });
+
+  test("a budget park still resumes after a restart", async () => {
+    const W = wf(`---\nblurb: b\nbudget: 1 run, 9h\n---\n\n## A\n\na\n\n## B\n\nb\n`);
+    const a = setup();
+    const flow = a.flows.start(repo(), W, "", DEFAULT_AGENT);
+    a.runner.end("run1", "done", "a");
+    await flush();
+    const b = setup();
+    b.flows.restore([lastRecord(a.saved, flow.id)], () => repo(), sameAgent);
+    expect(b.flows.get(flow.id)?.parkedFor).toBe("budget");
+    b.flows.resume(flow.id, "continue");
+    await flush();
+    expect(b.flows.get(flow.id)?.steps[1]?.status).toBe("running");
+  });
+
+  test("a flow whose repo left the scan fails with the reason; a finished one stays finished; a fleet id is dropped", async () => {
+    const a = setup();
+    const working = a.flows.start(repo(), TWO, "", DEFAULT_AGENT);
+    const rec = lastRecord(a.saved, working.id);
+    rec.flow.fleetId = "gone";
+    const b = setup();
+    b.flows.restore([rec], () => undefined, sameAgent);
+    const f = b.flows.get(working.id);
+    expect(f?.status).toBe("failed");
+    expect(f?.error).toBe("the repo is not in the scan any more");
+    expect(f?.fleetId).toBeUndefined();
+    expect(b.runner.specs.length).toBe(0);
+
+    const c = setup();
+    const done = c.flows.start(repo(), TWO, "", DEFAULT_AGENT);
+    c.flows.stop(done.id);
+    await flush();
+    const d = setup();
+    d.flows.restore([lastRecord(c.saved, done.id)], () => repo(), sameAgent);
+    expect(d.flows.get(done.id)?.status).toBe("stopped");
+    expect(d.runner.specs.length).toBe(0);
+  });
+
+  test("restoring a gated and a finished record emits nothing", async () => {
+    const a = setup();
+    const gated = a.flows.start(repo(), TWO, "", DEFAULT_AGENT);
+    a.runner.end("run1", "done", "x");
+    await flush();
+    const c = setup();
+    const done = c.flows.start(repo(), TWO, "", DEFAULT_AGENT);
+    c.flows.stop(done.id);
+    await flush();
+    const b = setup();
+    b.flows.restore([lastRecord(a.saved, gated.id), lastRecord(c.saved, done.id)], () => repo(), sameAgent);
+    expect(b.flows.get(gated.id)?.status).toBe("gated");
+    expect(b.flows.get(done.id)?.status).toBe("stopped");
+    expect(b.changes.length).toBe(0);
+    expect(b.saved.length).toBe(0);
+  });
+
+  test("a record carries the live working time", async () => {
+    let t = 0;
+    const a = setup({ now: () => t });
+    const flow = a.flows.start(repo(), TWO, "", DEFAULT_AGENT);
+    t = 12_345;
+    a.runner.set("run1", "working");
+    a.flows.stop(flow.id);
+    expect(lastRecord(a.saved, flow.id).flow.spent?.workMs).toBe(12_345);
+  });
+
+  test("detach stops saving, so a server stopping does not save every flow as stopped", async () => {
+    const a = setup();
+    const flow = a.flows.start(repo(), TWO, "", DEFAULT_AGENT);
+    a.runner.end("run1", "done", "x");
+    await flush();
+    const before = a.saved.length;
+    a.flows.detach();
+    a.flows.stopAll();
+    expect(a.flows.get(flow.id)?.status).toBe("stopped");
+    expect(a.saved.length).toBe(before);
+    expect(lastRecord(a.saved, flow.id).flow.status).toBe("gated");
+  });
+
+  test("dismissing forgets the record", async () => {
+    const a = setup();
+    const flow = a.flows.start(repo(), TWO, "", DEFAULT_AGENT);
+    a.flows.stop(flow.id);
+    await flush();
+    a.flows.dismiss(flow.id);
+    expect(a.forgotten).toEqual([flow.id]);
   });
 });
