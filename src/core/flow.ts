@@ -64,11 +64,13 @@ export interface CheckResult {
 }
 
 /** What a flow leaves on disk: the flow, the workflow it started with (so a
- *  file edited since does not change a flow in progress), and the status
- *  fingerprint its outcome is judged against. */
+ *  file edited since does not change a flow in progress), the status
+ *  fingerprint its outcome is judged against, and the repo's absolute path
+ *  (or ssh locator), which names it on any root where a repo id would not. */
 export interface FlowRecord {
   v: 1;
   flow: Flow;
+  repoPath: string;
   workflow: Workflow;
   before: string;
   savedAt: number;
@@ -354,39 +356,53 @@ export class Flows {
   /** Takes back the flows a stopped server left on disk. A gated or finished
    *  flow comes back as it was, without a change event; one caught mid-step
    *  reruns that step, its run having gone with the old process. Fleets are
-   *  not kept, so a fleet id is dropped. `resolve` finds a repo by id in the
-   *  current scan. */
-  restore(records: FlowRecord[], resolve: (repoId: string) => Repo | undefined, agentFor: (repo: Repo) => StepAgent): void {
+   *  not kept, so a fleet id is dropped. `resolve` finds a repo by its path
+   *  in the current scan (ids are relative to a root, a path is not), and the
+   *  flow takes the id the repo has there. A record the engine cannot take
+   *  back is skipped with a line naming it, so one bad file never stops the
+   *  server. */
+  restore(records: FlowRecord[], resolve: (path: string) => Repo | undefined, agentFor: (repo: Repo) => StepAgent): void {
     for (const rec of records) {
-      const flow = rec.flow;
-      if (this.live.has(flow.id)) continue;
-      delete flow.fleetId;
-      const repo = resolve(flow.repoId);
-      const live: LiveFlow = {
-        flow,
-        repo: repo ?? { id: flow.repoId, name: flow.repoId, path: "", group: "", source: "", status: null },
-        workflow: rec.workflow,
-        agent: repo ? agentFor(repo) : () => DEFAULT_AGENT,
-        before: rec.before,
-      };
-      this.live.set(flow.id, live);
-      if (!isFlowActive(flow)) continue;
-      if (!repo) {
-        const step = flow.steps[flow.current];
-        if (step) {
-          step.status = "failed";
-          step.reason = "the repo is not in the scan any more";
-        }
-        this.end(live, "failed", "the repo is not in the scan any more");
-        continue;
+      const id = rec.flow.id;
+      if (this.live.has(id)) continue;
+      try {
+        this.restoreOne(rec, resolve, agentFor);
+      } catch (err) {
+        this.live.delete(id);
+        console.error(`flows: skipping ${id}, its record could not be taken back: ${errText(err)}`);
       }
-      if (flow.status === "gated") continue;
-      this.resetStep(flow.steps[flow.current]);
-      flow.restarted = true;
-      flow.status = "working";
-      void this.runStep(live);
     }
     this.prune();
+  }
+
+  private restoreOne(rec: FlowRecord, resolve: (path: string) => Repo | undefined, agentFor: (repo: Repo) => StepAgent): void {
+    const flow = rec.flow;
+    delete flow.fleetId;
+    const repo = resolve(rec.repoPath);
+    if (repo) flow.repoId = repo.id;
+    const live: LiveFlow = {
+      flow,
+      repo: repo ?? { id: flow.repoId, name: flow.repoId, path: rec.repoPath, group: "", source: "", status: null },
+      workflow: rec.workflow,
+      agent: repo ? agentFor(repo) : () => DEFAULT_AGENT,
+      before: rec.before,
+    };
+    this.live.set(flow.id, live);
+    if (!isFlowActive(flow)) return;
+    if (!repo) {
+      const step = flow.steps[flow.current];
+      if (step) {
+        step.status = "failed";
+        step.reason = "the repo is not in the scan any more";
+      }
+      this.end(live, "failed", "the repo is not in the scan any more");
+      return;
+    }
+    if (flow.status === "gated") return;
+    this.resetStep(flow.steps[flow.current]);
+    flow.restarted = true;
+    flow.status = "working";
+    void this.runStep(live);
   }
 
   stopAll(): void {
@@ -529,6 +545,7 @@ export class Flows {
     return {
       v: 1,
       flow: { ...live.flow, spent: this.spentNow(live) },
+      repoPath: live.repo.path,
       workflow: live.workflow,
       before: live.before,
       savedAt: this.now(),
@@ -842,6 +859,8 @@ export class Flows {
     } catch {
       after = null;
     }
+    // dismissed or pruned while the read was out: saving it would bring it back
+    if (this.live.get(live.flow.id) !== live) return;
     if (after === null || isFlowActive(live.flow)) return;
     live.flow.outcome = after === live.before ? "unchanged" : "changed";
     this.emit(live);

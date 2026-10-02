@@ -35,3 +35,13 @@ test("clips in characters, so a multibyte file is never cut mid-sequence", async
   expect(file?.text?.length).toBe(EVIDENCE_EACH * 2);
   expect(file?.text).not.toContain("�");
 });
+
+test("reads only regular files, so a FIFO named as evidence reads as missing instead of hanging", async () => {
+  Bun.spawnSync(["mkfifo", join(repoDir, "pipe.md")]);
+  await mkdir(join(repoDir, "folder.md"), { recursive: true });
+  const files = await readEvidence(repoDir, ["pipe.md", "folder.md"]);
+  expect(files).toEqual([
+    { path: "pipe.md", text: null },
+    { path: "folder.md", text: null },
+  ]);
+});

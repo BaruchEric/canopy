@@ -1,4 +1,4 @@
-import { describe, expect, test } from "bun:test";
+import { describe, expect, spyOn, test } from "bun:test";
 import { Flows, overBudget, RESTART_NOTE, stepSpec, summaryOf, type CheckResult, type FlowRecord, type FlowRunner } from "./flow";
 import { parseWorkflow } from "./workflow";
 import { DEFAULT_AGENT, type AgentSettings, type EvidenceFile, type Fleet, type Flow, type JudgeAnswers, type Repo, type Run, type VerdictAnswers, type Workflow } from "./types";
@@ -924,6 +924,60 @@ describe("records and restore", () => {
     expect(a.flows.get(flow.id)?.status).toBe("stopped");
     expect(a.saved.length).toBe(before);
     expect(lastRecord(a.saved, flow.id).flow.status).toBe("gated");
+  });
+
+  test("one bad record is skipped with a line naming it, and the rest come back", async () => {
+    const a = setup();
+    const flow = a.flows.start(repo(), TWO, "", DEFAULT_AGENT);
+    a.runner.end("run1", "done", "x");
+    await flush();
+    const good = lastRecord(a.saved, flow.id);
+    const bad = lastRecord(a.saved, flow.id);
+    // steps that are no objects, which the engine cannot reset
+    Object.assign(bad.flow, { id: "badbad01", status: "working", steps: ["x", "y"] });
+    const b = setup();
+    const logged: string[] = [];
+    const log = spyOn(console, "error").mockImplementation((line: string) => {
+      logged.push(line);
+    });
+    try {
+      b.flows.restore([bad, good], () => repo(), sameAgent);
+    } finally {
+      log.mockRestore();
+    }
+    expect(b.flows.get("badbad01")).toBeUndefined();
+    expect(b.flows.get(flow.id)?.status).toBe("gated");
+    expect(logged.length).toBe(1);
+    expect(logged[0]).toContain("badbad01");
+  });
+
+  test("a repo is found by its path, and the flow takes the id it has in this scan", async () => {
+    const a = setup();
+    const flow = a.flows.start(repo(), TWO, "", DEFAULT_AGENT);
+    a.runner.end("run1", "done", "x");
+    await flush();
+    const rec = lastRecord(a.saved, flow.id);
+    expect(rec.repoPath).toBe("/tmp/r");
+    rec.flow.repoId = "an-id-from-another-root";
+    const b = setup();
+    b.flows.restore([rec], (path) => (path === "/tmp/r" ? repo() : undefined), sameAgent);
+    expect(b.flows.get(flow.id)?.status).toBe("gated");
+    expect(b.flows.get(flow.id)?.repoId).toBe("r");
+  });
+
+  test("a status read that lands after the flow was dismissed neither saves nor emits it", async () => {
+    let answer: (st: Repo["status"]) => void = () => {};
+    const a = setup({ status: () => new Promise((r) => (answer = r)) });
+    const flow = a.flows.start(repo(), TWO, "", DEFAULT_AGENT);
+    a.flows.stop(flow.id);
+    a.flows.dismiss(flow.id);
+    const saves = a.saved.length;
+    const changes = a.changes.length;
+    answer({ branch: "main", upstream: null, ahead: 0, behind: 0, files: [], lastCommit: null, user: null });
+    await flush();
+    await flush();
+    expect(a.saved.length).toBe(saves);
+    expect(a.changes.length).toBe(changes);
   });
 
   test("dismissing forgets the record", async () => {

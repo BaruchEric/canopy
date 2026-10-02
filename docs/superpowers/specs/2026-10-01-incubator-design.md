@@ -197,6 +197,15 @@ the file was edited since. At startup it loads them:
 
 Fleets stay in memory. A loaded flow whose `fleetId` names no fleet drops it.
 
+A record also carries the repo's absolute path and the launch root of the
+server that wrote it, since the config dir is shared across roots and repo ids
+are relative to one. A server loads only the records for its own root and
+finds each repo by path; the others stay on disk untouched. One server owns
+the folder: it takes `flows/owner.lock` (a pid file, taken over when that pid
+is dead) once its port is bound, and a server without the lock neither loads
+nor writes records. A record the engine cannot take back is skipped with a
+log line.
+
 ### Retries and rewinds
 
 Two step keys in `workflow.ts`:

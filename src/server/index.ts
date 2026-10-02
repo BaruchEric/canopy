@@ -45,7 +45,7 @@ import { PASTE_MAX, pasteName, pasteText, savePaste } from "../core/paste";
 import { apiBase, ForgeAuthError, linkForgeClones, listForgeRepos } from "../core/forge";
 import { isSshHost, parseLocator, parseSshHosts, shellQuote, tildeQuote } from "../core/host";
 import { readEvidence } from "../core/evidence";
-import { FlowFiles, loadFlowRecords } from "../core/flowstore";
+import { FlowFiles, flowsDir, loadFlowRecords, lockFlows, type FlowsLock } from "../core/flowstore";
 import { hasGatewayKey, jev, jevJudge } from "../core/jev";
 import { isDefaultAgent, normalizeAgent } from "../core/agent";
 import type { AgentEnv } from "../core/harness";
@@ -2724,7 +2724,9 @@ export async function startServer(opts: {
         .then((r) => r.status)
         .catch(() => null),
   }, runnerOpts);
-  const flowFiles = new FlowFiles();
+  // set once this server holds the flows folder (after the bind); without it
+  // no record is written or removed
+  let flowFiles: FlowFiles | null = null;
   const flows = new Flows(runner, {
     onChange: (flow) => {
       broadcast(state, { type: "flow", flow });
@@ -2746,8 +2748,8 @@ export async function startServer(opts: {
     evaluator: hasGatewayKey() ? jev : null,
     judge: hasGatewayKey() ? jevJudge : null,
     evidence: (repo, paths) => readEvidence(repo.path, paths),
-    save: (rec) => flowFiles.save(rec),
-    forget: (id) => flowFiles.forget(id),
+    save: (rec) => flowFiles?.save(rec),
+    forget: (id) => flowFiles?.forget(id),
     status: (repoId) =>
       refreshAndBroadcast(state, repoId)
         .then((r) => r.status)
@@ -2865,12 +2867,6 @@ export async function startServer(opts: {
   // nothing to show. An extra source failing is a note on that source.
   const launch = state.sources[0];
   if (launch?.src.error) throw new Error(launch.src.error);
-  // The flows the last server left, now that the scan can name their repos.
-  state.flows.restore(
-    await loadFlowRecords(),
-    (id) => state.result.repos.find((r) => r.id === id),
-    (repo) => (profile) => stepAgentFor(cfg, repo.path, profile),
-  );
   // The shells the last server left on tmux, before listening, so a
   // browser rejoining finds them held. Said out loud, since a missing
   // tmux falls back to plain ptys and looks the same until a restart.
@@ -3167,6 +3163,24 @@ export async function startServer(opts: {
   // Only after the bind succeeds: a watcher started earlier would outlive a
   // failed listen and hold the process open.
   for (const rt of state.sources) startWatcher(state, rt);
+  // The flows the last server left, only now that the port is ours (a second
+  // canopy that fails to bind must not rerun them), and only by the one
+  // server holding the flows folder: two on one config dir would both rerun
+  // every mid-step flow. Records written for another root stay for it.
+  const flowsLock = await lockFlows().catch((err): FlowsLock => {
+    console.error(`flows: could not lock ${flowsDir()}: ${String(err instanceof Error ? err.message : err)}`);
+    return { owner: false, holder: 0 };
+  });
+  if (flowsLock.owner) {
+    flowFiles = new FlowFiles(root);
+    state.flows.restore(
+      await loadFlowRecords(root),
+      (path) => state.result.repos.find((r) => r.path === path),
+      (repo) => (profile) => stepAgentFor(cfg, repo.path, profile),
+    );
+  } else if (flowsLock.holder) {
+    console.error(`flows: canopy pid ${flowsLock.holder} keeps the records in ${flowsDir()}; flows started here are not kept across a restart`);
+  }
   const remoteTimer = setInterval(() => {
     void refreshRemote(state)
       .catch((err) => console.error("canopy: remote refresh", err))
@@ -3212,6 +3226,8 @@ export async function startServer(opts: {
       clearTimeout(firstActivity);
       for (const t of state.timers.values()) clearTimeout(t);
       state.flows.detach();
+      flowFiles = null;
+      if (flowsLock.owner) flowsLock.release();
       state.flows.stopAll();
       state.runner.stopAll();
       state.launcher.shutdown();
