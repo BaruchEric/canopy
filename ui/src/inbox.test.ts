@@ -251,6 +251,15 @@ describe("the incubator in the inbox", () => {
     expect(items[0]).toMatchObject({ key: "sprout:sp_000000000001", source: "sprout", kind: "clarify", who: "clarify", repo: "Coin counter", where: "canopy incubator", title: "1 question before research", at: 20_000 });
     expect(items[0]?.questions?.[0]?.question).toBe("Who counts?");
   });
+  test("a park with no gated flow behind it is one park item; a gated flow's park stays the flow's", () => {
+    const parked: Sprout = { ...sprout, status: "parked", parked: "add VERCEL_TOKEN to mini's .env", questions: [], updatedAt: 25_000, flows: [{ workflow: "build-new", flowId: "fb", outcome: "done" }] };
+    const items = mergeInbox([], {}, {}, 30_000, { ...ctx, sprouts: [parked] });
+    expect(items).toHaveLength(1);
+    expect(items[0]).toMatchObject({ key: "sprout:sp_000000000001", source: "sprout", kind: "park", who: "incubator", repo: "Coin counter", title: "is parked", detail: "add VERCEL_TOKEN to mini's .env", at: 25_000 });
+    const behind: Sprout = { ...parked, flows: [{ workflow: "scout", flowId: "fs" }] };
+    const gated = mergeInbox([], {}, { fs: flow({ id: "fs", status: "gated" }) }, 30_000, { ...ctx, sprouts: [behind] });
+    expect(gated.map((i) => i.source)).toEqual(["flow"]);
+  });
   test("a gate a budget parked says so", () => {
     const items = mergeInbox([], {}, { f: flow({ id: "f", parkedFor: "budget" }) }, 30_000, ctx);
     expect(items[0]?.budget).toBe(true);

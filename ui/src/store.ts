@@ -2216,6 +2216,10 @@ export const useStore = create<CanopyState>((set, get) => ({
   openNewSprout: () => set({ sheet: { kind: "new-sprout" } }),
   answerInbox: async (item, answer) => {
     if (item.source === "sprout") {
+      if ("choice" in answer) {
+        if (answer.choice === "stop") return get().stopSprout(item.id);
+        return get().resumeSprout(item.id, answer.choice);
+      }
       if ("skip" in answer) return get().answerSprout(item.id, null);
       if (!("answers" in answer)) throw new Error("clarify's questions take answers, or go on assumptions");
       return get().answerSprout(item.id, answer.answers);

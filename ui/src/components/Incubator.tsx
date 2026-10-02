@@ -7,6 +7,7 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { useShallow } from "zustand/react/shallow";
 import { INPUT_FILE_MAX, inputKindOf, inputType, sizeWord } from "../../../src/core/sprout";
+import { isVercelAppUrl } from "../../../src/core/deploy";
 import type { SproutDetail } from "../../../src/core/types";
 import { api } from "../api";
 import { dropSproutHere, sproutHere } from "../routes";
@@ -510,7 +511,40 @@ export function SproutSheet({ id }: { id: string }) {
               <button type="button" className="mini" disabled={busy} onClick={() => act(() => resumeSprout(id, "retry"))}>
                 retry
               </button>
+              <span className="spacer" />
+              <button type="button" className="mini" disabled={busy} onClick={() => act(() => stopSprout(id))}>
+                stop
+              </button>
             </div>
+          </div>
+        )}
+        {(sprout.pick || sprout.privateRepo || sprout.url) && (
+          <div className="ask">
+            <div className="eyebrow">where it lives</div>
+            {sprout.pick && (
+              <p>
+                {sprout.pick.kind}, on {sprout.pick.host}. {sprout.pick.why}
+              </p>
+            )}
+            {sprout.privateRepo && (
+              <p>
+                <a href={`https://github.com/${sprout.privateRepo}`} target="_blank" rel="noopener noreferrer">
+                  {sprout.privateRepo}
+                </a>{" "}
+                (private)
+              </p>
+            )}
+            {sprout.url && (
+              <p>
+                {isVercelAppUrl(sprout.url) ? (
+                  <a href={sprout.url} target="_blank" rel="noopener noreferrer">
+                    {sprout.url}
+                  </a>
+                ) : (
+                  sprout.url
+                )}
+              </p>
+            )}
           </div>
         )}
         {asking && sprout.questions && (

@@ -133,3 +133,8 @@ test("a sprout queued for canopy's ship is at the deploy stage", () => {
   ] });
   expect(stageAt(s)).toBe("deploy");
 });
+
+test("canopy's deploy shows as the deploy stage", () => {
+  const s = sprout({ status: "parked", clarified: true, parked: "deploy: vercel deploy: Build failed", flows: [{ workflow: "scout", flowId: "a", outcome: "done" }, { workflow: "build-new", flowId: "b", outcome: "done" }], pick: { kind: "new", host: "vercel", why: "w" } });
+  expect(stageAt(s)).toBe("deploy");
+});

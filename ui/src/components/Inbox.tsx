@@ -32,7 +32,7 @@ function useNow(on: boolean, ms = 1000): number {
   return now;
 }
 
-const KIND_GLYPH: Record<InboxItem["kind"], string> = { permission: "⚿", question: "?", guard: "⛨", gate: "⏸", clarify: "✎" };
+const KIND_GLYPH: Record<InboxItem["kind"], string> = { permission: "⚿", question: "?", guard: "⛨", gate: "⏸", clarify: "✎", park: "⏸" };
 const SOURCE_WORD: Record<InboxItem["source"], string> = { ask: "agent", run: "run", flow: "workflow", sprout: "incubator" };
 
 /** One thing waiting: who, where and the countdown, then the form that
@@ -127,7 +127,7 @@ function InboxRow({
               )}
               <p className="settings-hint">This device has no answer key, so this ask waits for its terminal: add yours in Settings to answer it here.</p>
             </div>
-          ) : item.kind === "gate" ? (
+          ) : item.kind === "gate" || item.kind === "park" ? (
             <div className="ask">
               <div className="eyebrow">{item.who} {item.title}</div>
               {detail && <pre className="ask-detail">{detail}</pre>}

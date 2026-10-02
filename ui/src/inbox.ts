@@ -20,7 +20,7 @@ export interface InboxItem {
   /** the broker's ask id (the home backend's), or a run's or flow's
    *  qualified id */
   id: string;
-  kind: "permission" | "question" | "guard" | "gate" | "clarify";
+  kind: "permission" | "question" | "guard" | "gate" | "clarify" | "park";
   /** the repo it is about, by the page's id, when the page has it */
   repoId: string | null;
   /** the repo in words: the checkout's name, else what the agent's card says */
@@ -172,24 +172,33 @@ function flowItem(flow: Flow, runs: Readonly<Record<string, Run>>, ctx: InboxCon
   };
 }
 
-function sproutItem(s: Sprout, ctx: InboxContext): InboxItem | null {
+function sproutItem(s: Sprout, flows: Readonly<Record<string, Flow>>, ctx: InboxContext): InboxItem | null {
+  const base = {
+    key: `sprout:${s.id}`,
+    source: "sprout" as const,
+    id: s.id,
+    repoId: ctx.repos.some((r) => r.id === s.repoId) ? s.repoId : null,
+    repo: s.title,
+    where: "canopy incubator",
+    left: null,
+    until: null,
+  };
+  if (s.status === "parked") {
+    // a gate behind the park is in the inbox already, as that flow's
+    const cur = s.flows.at(-1);
+    if (cur && !cur.outcome && flows[cur.flowId]?.status === "gated") return null;
+    return { ...base, kind: "park", who: "incubator", title: "is parked", detail: s.parked ?? "", at: s.updatedAt };
+  }
   const n = s.questions?.length ?? 0;
   if (s.status !== "clarifying" || n === 0) return null;
   return {
-    key: `sprout:${s.id}`,
-    source: "sprout",
-    id: s.id,
+    ...base,
     kind: "clarify",
-    repoId: ctx.repos.some((r) => r.id === s.repoId) ? s.repoId : null,
-    repo: s.title,
     who: "clarify",
-    where: "canopy incubator",
     title: `${n} ${n === 1 ? "question" : "questions"} before research`,
     detail: "",
     ...(s.questions ? { questions: s.questions } : {}),
     at: s.questionsAt ?? s.updatedAt,
-    left: null,
-    until: null,
   };
 }
 
@@ -215,7 +224,7 @@ export function mergeInbox(
     if (it) items.push(it);
   }
   for (const s of ctx.sprouts ?? []) {
-    const it = sproutItem(s, ctx);
+    const it = sproutItem(s, flows, ctx);
     if (it) items.push(it);
   }
   return items.sort((a, b) => a.at - b.at || a.key.localeCompare(b.key));
