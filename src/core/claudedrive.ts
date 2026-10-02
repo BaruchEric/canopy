@@ -84,7 +84,7 @@ export function claudeBinary(): string | null {
  *  way they would on an interactive `claude`, except that yolo becomes the
  *  bypass permission mode: the interactive flag and the prompt tool are two
  *  ways of answering the same question, and print mode takes the mode. */
-export function cliArgs(spec: DriveSpec, agent: AgentSettings = DEFAULT_AGENT): string[] {
+export function cliArgs(spec: DriveSpec, agent: AgentSettings = DEFAULT_AGENT, stage = false): string[] {
   const flags = agentArgs({ ...agent, yolo: false });
   return [
     "-p",
@@ -103,8 +103,10 @@ export function cliArgs(spec: DriveSpec, agent: AgentSettings = DEFAULT_AGENT): 
     // The same CLAUDE.md files and permission rules a terminal session
     // would load, minus MCP servers: a git chore does not need them and
     // their startup would delay every run.
+    // An incubator stage reads the user's alone: an earlier step could have
+    // written the seed a .claude/settings.json with hooks or wider rules.
     "--setting-sources",
-    "user,project,local",
+    stage ? "user" : "user,project,local",
     "--strict-mcp-config",
     ...(spec.allowedTools.length ? ["--allowedTools", spec.allowedTools.join(",")] : []),
     ...flags,
@@ -176,7 +178,7 @@ export class ClaudeDriver implements RunDriver {
       // normalized again as Claude's own, so a stray value never reaches the
       // command line; settings the Runner resolved come through unchanged
       const agent = normalizeAgent({ ...ctx.agent, harness: "claude" });
-      proc = Bun.spawn([...command, ...cliArgs(ctx.spec, agent)], {
+      proc = Bun.spawn([...command, ...cliArgs(ctx.spec, agent, ctx.stage ?? false)], {
         cwd: ctx.cwd,
         env: spawnEnv(ctx),
         stdin: "pipe",

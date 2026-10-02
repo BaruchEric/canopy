@@ -35,9 +35,11 @@
  *    completes as interrupted. The server exits on its own at stdin EOF. */
 
 import { realpath } from "node:fs/promises";
-import { resolve } from "node:path";
+import { homedir } from "node:os";
+import { dirname, join, resolve } from "node:path";
 import { describeTool, toolDetail } from "./actions";
 import { splitArgs } from "./agent";
+import { sweepCodexTrust } from "./codextrust";
 import { bunSpawn, RpcClient, RpcClosed, RpcError, type RpcExit, type RpcRequest, type RpcSpawn } from "./codexrpc";
 import { spawnEnv, type DriveAgent, type DriveCtx, type DriveResult, type DriveTokens, type PromptInput, type RunDriver } from "./driver";
 import type { RunAnswer, RunQuestion, RunStep, RunTool } from "./types";
@@ -955,6 +957,11 @@ export class CodexDriver implements RunDriver {
     const ctx = this.ctx;
     if (!ctx) return;
     const command = this.opts.command?.length ? [...this.opts.command] : [codexBinary() ?? "codex"];
+    // a seed codex trusts would have its own .codex/ config read (codextrust.ts)
+    if (ctx.stage) {
+      const env = spawnEnv(ctx);
+      await sweepCodexTrust(env["CODEX_HOME"] ?? join(homedir(), ".codex"), dirname(ctx.cwd)).catch(() => false);
+    }
     let rpc: RpcClient;
     try {
       const proc = (this.opts.spawn ?? bunSpawn)([...command, ...appServerArgs(ctx.agent)], {

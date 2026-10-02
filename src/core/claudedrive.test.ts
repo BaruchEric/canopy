@@ -2,7 +2,8 @@ import { afterAll, describe, expect, test } from "bun:test";
 import { mkdir, mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { ClaudeDriver, parseQuestions } from "./claudedrive";
+import { ClaudeDriver, cliArgs, parseQuestions } from "./claudedrive";
+import { DEFAULT_AGENT } from "./types";
 import { RunCtx, type DriveRun } from "./driver";
 
 /* The ClaudeDriver against a stand-in `claude` (testdata/fake-claude.ts),
@@ -169,4 +170,11 @@ describe("AskUserQuestion input", () => {
     ).toEqual([{ question: "Which?", header: "Pick", options: [{ label: "a", description: "A" }], multiSelect: true }]);
     expect(parseQuestions({})).toEqual([]);
   });
+});
+
+test("a stage run reads the user's settings only, never the seed's .claude/", () => {
+  const args = cliArgs({ allowedTools: [], maxTurns: 5 }, DEFAULT_AGENT, true);
+  expect(args[args.indexOf("--setting-sources") + 1]).toBe("user");
+  const plain = cliArgs({ allowedTools: [], maxTurns: 5 }, DEFAULT_AGENT);
+  expect(plain[plain.indexOf("--setting-sources") + 1]).toBe("user,project,local");
 });

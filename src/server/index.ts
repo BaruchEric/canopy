@@ -109,6 +109,7 @@ import {
 import { Runner } from "../core/runner";
 import type { RunDriver } from "../core/driver";
 import { SEEDS_DIR } from "../core/sprout";
+import { sweepCodexTrust } from "../core/codextrust";
 import { seedBusy, seedRootsNow, seedTopOf, setSeedBusy, setSeedRoots } from "../core/seedgit";
 import { suggestMessage } from "../core/suggest";
 import {
@@ -2692,6 +2693,10 @@ export async function startServer(opts: {
   const root = await realpath(opts.root);
   // canopy's git in a seed goes through the guard (seedgit.ts)
   setSeedRoots([join(root, SEEDS_DIR)]);
+  // and codex trusts no seed, so none of its own .codex/ config is read (codextrust.ts)
+  void sweepCodexTrust(process.env["CODEX_HOME"] ?? join(homedir(), ".codex"), join(root, SEEDS_DIR))
+    .then((changed) => changed && console.log("canopy: dropped codex's trust in incubator seeds"))
+    .catch(() => {});
   const port = opts.port ?? cfg.port;
   const runtime = (src: Source): SourceRuntime => ({
     src: { ...src, repos: 0, scannedAt: 0 },
