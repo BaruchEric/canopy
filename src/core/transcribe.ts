@@ -59,5 +59,10 @@ export async function transcribe(
   return (body as { text: string }).text.trim();
 }
 
-export const transcriber = (cfg: TranscribeConfig | null): ((data: Uint8Array, name: string, type: string) => Promise<string>) | null =>
-  cfg ? (data, name, type) => transcribe(cfg, data, name, type) : null;
+/** the speech model as the incubator calls it; the config, key and all,
+ *  stays inside the closure, which neither JSON nor a console.log shows */
+export const transcriber = (cfg: TranscribeConfig | null): ((data: Uint8Array, name: string, type: string) => Promise<string>) | null => {
+  if (!cfg) return null;
+  const held: TranscribeConfig = { ...cfg };
+  return (data, name, type) => transcribe(held, data, name, type);
+};

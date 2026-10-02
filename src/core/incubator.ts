@@ -32,6 +32,7 @@ import {
   sproutSlug,
   sproutTitle,
   stageNote,
+  urlWithoutSecret,
   withInputsRead,
   withSummaries,
   type ParsedQuestions,
@@ -157,6 +158,10 @@ export class Incubator {
   private readonly pending = new Set<Promise<unknown>>();
   /** slugs claimed by an intake still writing its inputs, so two at once never share a folder */
   private readonly reserved = new Set<string>();
+  /** a repo url as the user gave it, token and all, kept in memory only
+   *  until the clone: the record, the inputs and the vault get it without
+   *  its userinfo. A restart before the clone clones the clean url. */
+  private readonly cloneFrom = new Map<string, string>();
   private detached = false;
 
   constructor(private readonly deps: IncubatorDeps) {}
@@ -224,13 +229,18 @@ export class Incubator {
 
   /** the intake as canopy takes it: links and the repo url checked, every
    *  file's type normalized, the size caps applied on top of `already` */
-  private checkIntake(intake: Intake, already: number, allowRepo: boolean): Intake {
-    const urls = intake.urls.map((u) => u.trim()).filter(Boolean);
-    for (const u of urls) if (!/^https?:\/\/\S+$/i.test(u)) throw new IncubatorError(400, `not a web link: ${u}`);
-    const repo = intake.repo?.trim() || undefined;
-    if (repo && !allowRepo) throw new IncubatorError(400, "a repo is given when a project starts, not later");
-    if (repo && !networkOrigin(repo)) throw new IncubatorError(400, `not a git url canopy can clone: ${repo}`);
+  private checkIntake(intake: Intake, already: number, allowRepo: boolean): { clean: Intake; cloneFrom: string | undefined } {
+    const given = intake.urls.map((u) => u.trim()).filter(Boolean);
+    for (const u of given) if (!/^https?:\/\/\S+$/i.test(u)) throw new IncubatorError(400, `not a web link: ${urlWithoutSecret(u)}`);
+    // a token in a link is never stored or shown
+    const urls = given.map(urlWithoutSecret);
+    const cloneFrom = intake.repo?.trim() || undefined;
+    if (cloneFrom && !allowRepo) throw new IncubatorError(400, "a repo is given when a project starts, not later");
+    if (cloneFrom && !networkOrigin(cloneFrom)) throw new IncubatorError(400, `not a git url canopy can clone: ${urlWithoutSecret(cloneFrom)}`);
+    const repo = cloneFrom ? urlWithoutSecret(cloneFrom) : undefined;
     let total = already + bytesOf(intake.text);
+    // a link is stored as a file of its own, so it counts like one
+    for (const u of [...urls, ...(repo ? [repo] : [])]) total += bytesOf(`${u}\n`);
     const files: IntakeFile[] = [];
     for (const f of intake.files) {
       const type = inputType(f.type, f.label);
@@ -244,7 +254,7 @@ export class Incubator {
     if (!intake.text.trim() && urls.length === 0 && files.length === 0 && !repo) {
       throw new IncubatorError(400, "give an idea, a link, a file or a repo");
     }
-    return { text: intake.text, urls, files, ...(repo ? { repo } : {}), via: intake.via };
+    return { clean: { text: intake.text, urls, files, ...(repo ? { repo } : {}), via: intake.via }, cloneFrom };
   }
 
   /** one input written under inputs/ and added to the record */
@@ -286,7 +296,7 @@ export class Incubator {
   }
 
   async create(intake: Intake): Promise<Sprout> {
-    const clean = this.checkIntake(intake, 0, true);
+    const { clean, cloneFrom } = this.checkIntake(intake, 0, true);
     const id = (this.deps.newId ?? newSproutId)();
     const repoName = clean.repo?.replace(/\.git$/, "").split(/[/:]/).pop() ?? "";
     const first = clean.text.trim() || repoName || clean.urls[0] || "";
@@ -316,6 +326,7 @@ export class Incubator {
     try {
       await this.takeInputs(s, clean);
       this.sprouts.set(id, s);
+      if (cloneFrom && cloneFrom !== clean.repo) this.cloneFrom.set(id, cloneFrom);
     } finally {
       this.reserved.delete(slug);
     }
@@ -379,7 +390,7 @@ export class Incubator {
   async addInputs(id: string, intake: Intake): Promise<Sprout> {
     const s = this.need(id);
     if (sproutEnded(s)) throw new IncubatorError(409, "this project has ended; start a new one");
-    const clean = this.checkIntake(intake, s.inputs.reduce((t, e) => t + e.bytes, 0), false);
+    const { clean } = this.checkIntake(intake, s.inputs.reduce((t, e) => t + e.bytes, 0), false);
     await this.takeInputs(s, clean);
     if (s.clarified || s.status === "clarifying") s.reclarify = true;
     if (s.status === "clarifying" && s.questions) {
@@ -502,6 +513,7 @@ export class Incubator {
     }
     this.noteChain.delete(id);
     this.workChain.delete(id);
+    this.cloneFrom.delete(id);
     for (const f of s.flows) this.seen.delete(f.flowId);
     this.deps.onGone(id);
   }
@@ -616,9 +628,11 @@ export class Incubator {
       if (this.deps.seeds.exists(s.seedPath)) return;
       const t = s.inputs.find((e) => e.kind === "text");
       const text = t ? dec.decode(await this.deps.store.readInput(s.id, t.name)) : "";
-      await this.deps.seeds.make(s.seedPath, { ".canopy/brief.md": briefText(s.title, text), ".canopy/inputs.md": index }, s.repo);
+      await this.deps.seeds.make(s.seedPath, { ".canopy/brief.md": briefText(s.title, text), ".canopy/inputs.md": index }, this.cloneFrom.get(s.id) ?? s.repo);
     });
     if (!made) return;
+    // the token, if there was one, is not needed again; a failed clone keeps it for the retry
+    this.cloneFrom.delete(s.id);
     if (!(await step("rescan for the seed", () => this.deps.rescan()))) return;
     if (this.detached || s.status !== "queued") return;
     s.prepared = true;

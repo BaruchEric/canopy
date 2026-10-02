@@ -7,10 +7,11 @@
  * with another hard link, never past 256 KB.
  */
 import { constants, lstatSync, type Stats } from "node:fs";
-import { lstat, mkdir, open, realpath, rm } from "node:fs/promises";
-import { dirname, isAbsolute, join, relative, sep } from "node:path";
+import { lstat, mkdir, open, realpath, rename, rm } from "node:fs/promises";
+import { basename, dirname, isAbsolute, join, relative, sep } from "node:path";
 import { exec, git } from "./exec";
 import { networkOrigin } from "./peersync";
+import { urlWithoutSecret } from "./sprout";
 
 export const SEED_READ_MAX = 256 * 1024;
 
@@ -29,6 +30,14 @@ const identity = (self: string): Record<string, string> => ({
 });
 
 const firstLine = (s: string): string => s.trim().split("\n")[0] ?? "";
+
+/** Every git call canopy makes in a seed: a seed may be a stranger's
+ *  clone, so no hook of anyone's runs (a clone carries none, but the
+ *  user's init template or global config could name some), and a path is
+ *  only ever the file it names. */
+const QUIET = ["-c", "core.hooksPath=/dev/null", "--literal-pathspecs"];
+/** canopy's own commits, which nothing may refuse or sign */
+const COMMIT = [...QUIET, "-c", "commit.gpgsign=false", "commit", "-q", "--no-verify"];
 
 const errCode = (e: unknown): string | undefined =>
   e instanceof Error && "code" in e && typeof e.code === "string" ? e.code : undefined;
@@ -111,11 +120,12 @@ export async function commitSeed(path: string, rels: string[], message: string, 
     present.push(rel);
   }
   if (present.length === 0) return false;
-  const add = await git(path, ["add", "--", ...present]);
+  // -f: a clone's .gitignore or the global excludes may well name .canopy/
+  const add = await git(path, [...QUIET, "add", "-f", "--", ...present]);
   if (add.code !== 0) throw new Error(`git add: ${firstLine(add.stderr)}`);
-  const staged = await git(path, ["diff", "--cached", "--quiet", "--", ...present]);
+  const staged = await git(path, [...QUIET, "diff", "--cached", "--quiet", "--", ...present]);
   if (staged.code === 0) return false;
-  const c = await git(path, ["-c", "commit.gpgsign=false", "commit", "-q", "-m", message, "--", ...present], 30_000, identity(self));
+  const c = await git(path, [...COMMIT, "-m", message, "--", ...present], 30_000, identity(self));
   if (c.code !== 0) throw new Error(`git commit: ${firstLine(c.stderr)}`);
   return true;
 }
@@ -136,21 +146,16 @@ async function dropAgentSettings(path: string, self: string): Promise<void> {
   for (const n of names) if (await lstatOrNull(join(path, n))) onDisk.push(n);
   if (tracked.length === 0 && onDisk.length === 0) return;
   if (tracked.length > 0) {
-    const r = await git(path, ["rm", "-r", "-q", "--cached", "--ignore-unmatch", "--", ...tracked]);
+    const r = await git(path, [...QUIET, "rm", "-r", "-q", "--cached", "--ignore-unmatch", "--", ...tracked]);
     if (r.code !== 0) throw new Error(`git rm: ${firstLine(r.stderr)}`);
   }
   // the files themselves, tracked under any case or not tracked at all
   for (const n of [...tracked, ...onDisk]) await rm(join(path, n), { recursive: true, force: true });
   // committed by the names the index had, since a commit's pathspec must
   // match something git knows
-  const staged = tracked.length > 0 ? await git(path, ["diff", "--cached", "--quiet", "--", ...tracked]) : null;
+  const staged = tracked.length > 0 ? await git(path, [...QUIET, "diff", "--cached", "--quiet", "--", ...tracked]) : null;
   if (staged && staged.code !== 0) {
-    const c = await git(
-      path,
-      ["-c", "commit.gpgsign=false", "commit", "-q", "-m", "seed: drop the cloned project's agent settings", "--", ...tracked],
-      30_000,
-      identity(self),
-    );
+    const c = await git(path, [...COMMIT, "-m", "seed: drop the cloned project's agent settings", "--", ...tracked], 30_000, identity(self));
     if (c.code !== 0) throw new Error(`git commit: ${firstLine(c.stderr)}`);
   }
   // nothing of them may be left, in the index or on disk, or makeSeed takes
@@ -162,6 +167,13 @@ async function dropAgentSettings(path: string, self: string): Promise<void> {
   }
 }
 
+/** Where a seed is built before it moves into place: a dot folder beside
+ *  it, which the scan never walks into. A seed folder is there only once
+ *  it is whole, so a restart in the middle of a clone, or between the clone
+ *  and taking its agent settings out, leaves nothing a later prepare would
+ *  take as made. */
+export const seedWorkPath = (path: string): string => join(dirname(path), `.${basename(path)}.making`);
+
 export async function makeSeed(
   path: string,
   files: Record<string, string>,
@@ -169,32 +181,45 @@ export async function makeSeed(
   opts: { self: string; originOk?: (url: string) => boolean; cloneTimeoutMs?: number },
 ): Promise<void> {
   if (await lstatOrNull(path)) throw new Error(`${path} is there already`);
-  if (clone && !(opts.originOk ?? networkOrigin)(clone)) throw new Error(`not a network git url: ${clone}`);
+  if (clone && !(opts.originOk ?? networkOrigin)(clone)) throw new Error(`not a network git url: ${urlWithoutSecret(clone)}`);
   await mkdir(dirname(path), { recursive: true });
+  const work = seedWorkPath(path);
+  // what an attempt a restart cut short left behind
+  await rm(work, { recursive: true, force: true });
   // made here, not by git, so the folder is surely this call's to take back
-  await mkdir(path).catch((e: unknown) => {
-    throw errCode(e) === "EEXIST" ? new Error(`${path} is there already`) : e;
+  await mkdir(work).catch((e: unknown) => {
+    throw errCode(e) === "EEXIST" ? new Error(`${work} is being made already`) : e;
   });
   try {
     if (clone) {
-      const r = await exec(["git", "clone", "--quiet", "--", clone, path], {
+      const r = await exec(["git", ...QUIET, "clone", "--quiet", "--", clone, work], {
         timeoutMs: opts.cloneTimeoutMs ?? 600_000,
         env: { GIT_TERMINAL_PROMPT: "0" },
       });
-      if (r.code !== 0) throw new Error(`git clone failed: ${firstLine(r.stderr)}`);
-      const mv = await git(path, ["remote", "rename", "origin", "upstream"]);
+      // git may name the url in its error, token and all
+      if (r.code !== 0) throw new Error(`git clone failed: ${firstLine(r.stderr).split(clone).join(urlWithoutSecret(clone))}`);
+      const mv = await git(work, ["remote", "rename", "origin", "upstream"]);
       if (mv.code !== 0) throw new Error(`git remote rename: ${firstLine(mv.stderr)}`);
+      // a token the clone needed stays out of the seed's .git/config
+      const clean = urlWithoutSecret(clone);
+      if (clean !== clone) {
+        const set = await git(work, ["remote", "set-url", "upstream", clean]);
+        if (set.code !== 0) throw new Error(`git remote set-url: ${firstLine(set.stderr)}`);
+      }
     } else {
-      const r = await git(path, ["init", "-q", "-b", "main"]);
+      const r = await git(work, [...QUIET, "init", "-q", "-b", "main"]);
       if (r.code !== 0) throw new Error(`git init: ${firstLine(r.stderr)}`);
     }
-    for (const [rel, text] of Object.entries(files)) await writeSeed(path, rel, text);
-    await commitSeed(path, Object.keys(files), "seed: a new project from the incubator", opts.self);
-    if (clone) await dropAgentSettings(path, opts.self);
+    for (const [rel, text] of Object.entries(files)) await writeSeed(work, rel, text);
+    await commitSeed(work, Object.keys(files), "seed: a new project from the incubator", opts.self);
+    if (clone) await dropAgentSettings(work, opts.self);
+    // a rename onto an empty folder made meanwhile would replace it without a word
+    if (await lstatOrNull(path)) throw new Error(`${path} is there already`);
+    await rename(work, path);
   } catch (e) {
     // a half-made seed would block the retry, and a clone that still has
     // its own agent settings must not be left for a run to find
-    await rm(path, { recursive: true, force: true });
+    await rm(work, { recursive: true, force: true });
     throw e;
   }
 }

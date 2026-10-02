@@ -4,7 +4,7 @@ import { link, mkdir, mkdtemp, readFile, readdir, rename, rm, symlink, writeFile
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { git } from "./exec";
-import { commitSeed, makeSeed, readSeed, writeSeed } from "./seed";
+import { commitSeed, makeSeed, readSeed, seedWorkPath, writeSeed } from "./seed";
 
 let dir: string;
 
@@ -115,6 +115,85 @@ describe("makeSeed", () => {
     const path = join(dir, "_incubator", "nothing");
     await expect(makeSeed(path, {}, join(dir, "no-such-repo"), { self: "mini", originOk: () => true })).rejects.toThrow("git clone failed");
     expect(existsSync(path)).toBe(false);
+  });
+});
+
+describe("makeSeed builds aside", () => {
+  test("a half-made seed an earlier attempt left is cleared, and the seed is made", async () => {
+    const path = join(dir, "_incubator", "leftover");
+    const work = seedWorkPath(path);
+    expect(work).toBe(join(dir, "_incubator", ".leftover.making"));
+    // what a restart in the middle of a clone leaves: a .git and some files, no canopy commit
+    await mkdir(join(work, ".git"), { recursive: true });
+    await writeFile(join(work, "half.txt"), "half\n");
+    await makeSeed(path, { ".canopy/brief.md": "# L\n" }, undefined, { self: "mini" });
+    expect(existsSync(work)).toBe(false);
+    expect(existsSync(join(path, "half.txt"))).toBe(false);
+    expect(await log(path)).toEqual(["canopy <canopy@mini>|seed: a new project from the incubator"]);
+  });
+  test("the seed folder appears only once the clone is whole and its settings are gone", async () => {
+    const up = await upstream("whole", { "README.md": "hi\n", ".claude/settings.json": '{"hooks":{}}\n' });
+    const path = join(dir, "_incubator", "whole");
+    const seen: string[] = [];
+    let watching = true;
+    const watch = (async () => {
+      while (watching) {
+        if (existsSync(path)) seen.push(existsSync(join(path, ".claude")) ? "settings" : existsSync(join(path, ".canopy", "brief.md")) ? "whole" : "partial");
+        await Bun.sleep(1);
+      }
+    })();
+    await makeSeed(path, { ".canopy/brief.md": "# W\n" }, up, { self: "mini", originOk: () => true });
+    watching = false;
+    await watch;
+    expect(seen.every((x) => x === "whole")).toBe(true);
+    expect((await log(path))[0]).toBe("canopy <canopy@mini>|seed: drop the cloned project's agent settings");
+    expect(existsSync(seedWorkPath(path))).toBe(false);
+  });
+  test("a clone refused after it landed leaves neither the seed nor the folder it was built in", async () => {
+    const outside = join(dir, "aside-target");
+    await mkdir(outside);
+    const up = await upstream("aside-link", { "README.md": "hi\n" }, { ".canopy": outside });
+    const path = join(dir, "_incubator", "aside-link");
+    await expect(makeSeed(path, { ".canopy/brief.md": "# A\n" }, up, { self: "mini", originOk: () => true })).rejects.toThrow("symlink");
+    expect(existsSync(path)).toBe(false);
+    expect(existsSync(seedWorkPath(path))).toBe(false);
+  });
+});
+
+describe("a stranger's clone", () => {
+  test("canopy's commits pass an ignored .canopy and a hook that would refuse, and run no hook at all", async () => {
+    const up = await upstream("hooked", { "README.md": "hi\n", ".gitignore": ".*\n" });
+    const path = join(dir, "_incubator", "hooked");
+    await makeSeed(path, { ".canopy/brief.md": "# H\n" }, up, { self: "mini", originOk: () => true });
+    // hooks a clone could not carry, planted as the agent could
+    const marker = join(dir, "hook-ran");
+    await writeFile(join(path, ".git", "hooks", "pre-commit"), "#!/bin/sh\nexit 1\n", { mode: 0o755 });
+    await writeFile(join(path, ".git", "hooks", "post-commit"), `#!/bin/sh\ntouch '${marker}'\n`, { mode: 0o755 });
+    await writeFile(join(path, ".canopy", "intent.md"), "want\n");
+    expect(await commitSeed(path, [".canopy/intent.md"], "clarify: H", "mini")).toBe(true);
+    expect((await log(path))[0]).toBe("canopy <canopy@mini>|clarify: H");
+    expect(existsSync(marker)).toBe(false);
+    expect((await git(path, ["ls-files", ".canopy"])).stdout.trim().split("\n").sort()).toEqual([".canopy/brief.md", ".canopy/intent.md"]);
+  });
+  test("a token in the clone url never lands in the seed's git config", async () => {
+    const up = await upstream("private", { "README.md": "hi\n" });
+    const withToken = "https://x:tok3n@example.invalid/private.git";
+    const path = join(dir, "_incubator", "private");
+    const before = { ...process.env };
+    // git fetches the bare path for the url with the token in it
+    process.env["GIT_CONFIG_COUNT"] = "1";
+    process.env["GIT_CONFIG_KEY_0"] = `url.${up}.insteadOf`;
+    process.env["GIT_CONFIG_VALUE_0"] = withToken;
+    try {
+      await makeSeed(path, {}, withToken, { self: "mini", originOk: () => true });
+    } finally {
+      for (const k of ["GIT_CONFIG_COUNT", "GIT_CONFIG_KEY_0", "GIT_CONFIG_VALUE_0"]) {
+        if (before[k] === undefined) delete process.env[k];
+        else process.env[k] = before[k];
+      }
+    }
+    expect((await git(path, ["remote", "get-url", "upstream"])).stdout.trim()).toBe("https://example.invalid/private.git");
+    expect(await readFile(join(path, ".git", "config"), "utf8")).not.toContain("tok3n");
   });
 });
 

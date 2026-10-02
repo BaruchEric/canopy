@@ -34,17 +34,28 @@ const str = (v: unknown): string | undefined => (typeof v === "string" && v !== 
 const TIMEOUT = 20_000;
 
 export class VaultNotes {
-  constructor(
-    private readonly cfg: VaultConfig,
-    private readonly fetcher: typeof fetch = fetch,
-  ) {}
+  /** in private fields, so neither JSON.stringify nor a console.log of
+   *  this object ever shows the token */
+  readonly #url: string;
+  readonly #token: string;
+  readonly #fetcher: typeof fetch;
+
+  constructor(cfg: VaultConfig, fetcher: typeof fetch = fetch) {
+    this.#url = cfg.url;
+    this.#token = cfg.token;
+    this.#fetcher = fetcher;
+  }
+
+  toJSON(): { url: string } {
+    return { url: this.#url };
+  }
 
   private auth(): Record<string, string> {
-    return { authorization: `Bearer ${this.cfg.token}` };
+    return { authorization: `Bearer ${this.#token}` };
   }
 
   private async write(op: "create" | "append" | "replace", path: string, content: string, baseRev?: string): Promise<{ status: number; body: Record<string, unknown> }> {
-    const res = await this.fetcher(`${this.cfg.url}/write`, {
+    const res = await this.#fetcher(`${this.#url}/write`, {
       method: "POST",
       headers: { ...this.auth(), "content-type": "application/json" },
       body: JSON.stringify({ op, path, content, ...(baseRev ? { base_rev: baseRev } : {}) }),
@@ -60,7 +71,7 @@ export class VaultNotes {
 
   /** the note's revision as the gateway has it now; undefined when there is none */
   private async headRev(path: string): Promise<string | undefined> {
-    const res = await this.fetcher(`${this.cfg.url}/file?path=${encodeURIComponent(path)}`, {
+    const res = await this.#fetcher(`${this.#url}/file?path=${encodeURIComponent(path)}`, {
       headers: this.auth(),
       signal: AbortSignal.timeout(TIMEOUT),
     });

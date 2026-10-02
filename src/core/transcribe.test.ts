@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
-import { transcribe, transcribeConfig, type TranscribeConfig } from "./transcribe";
+import { transcribe, transcribeConfig, transcriber, type TranscribeConfig } from "./transcribe";
 
 let server: ReturnType<typeof Bun.serve>;
 let answer: () => Response = () => Response.json({ text: " hello there " });
@@ -58,6 +58,13 @@ describe("transcribe", () => {
     expect(err2).toBeInstanceOf(Error);
     expect(String(err2)).not.toContain(secret);
     answer = () => Response.json({ text: "ok" });
+  });
+  test("the transcriber never shows its key when printed or serialized", () => {
+    const secret = "sk-secret-key-456";
+    const t = transcriber({ ...cfg(), key: secret });
+    expect(t).not.toBeNull();
+    expect(Bun.inspect(t)).not.toContain(secret);
+    expect(String(JSON.stringify({ t }))).not.toContain(secret);
   });
 });
 

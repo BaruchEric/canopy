@@ -135,9 +135,14 @@ export function parseTermMessage(text: string): TermMessage | null {
   return { kind: "resize", size: termSize(cols, rows) };
 }
 
+/** the incubator's secrets: read once at start into its own configs, then
+ *  deleted from canopy's env */
+export const SECRET_ENV = ["CANOPY_VAULT_TOKEN", "CANOPY_TRANSCRIBE_KEY"] as const;
+
 /** never in a shell's environment: the answer token a deploy from before
- *  browser-held answer keys may still set (canopy no longer reads it) */
-export const PRIVATE_ENV = ["CANOPY_TAILCHAN_ANSWER_TOKEN"] as const;
+ *  browser-held answer keys may still set (canopy no longer reads it), and
+ *  the incubator's secrets */
+export const PRIVATE_ENV = ["CANOPY_TAILCHAN_ANSWER_TOKEN", ...SECRET_ENV] as const;
 
 /** What canopy tells each shell and run about itself (which shell, run,
  *  repo and backend it is, the API to call back, its tailchan handle). A

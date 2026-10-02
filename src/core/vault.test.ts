@@ -84,6 +84,14 @@ describe("put", () => {
     const err = await vault("wrong").put("a.md", "x", undefined).catch((e: unknown) => e);
     expect(err).toBeInstanceOf(VaultError);
     expect((err as VaultError).status).toBe(401);
+    expect(String(err)).not.toContain("wrong");
+    expect(JSON.stringify(err)).not.toContain("wrong");
+  });
+  test("the token never shows when the notes object is printed or serialized", () => {
+    const v = new VaultNotes({ url: "http://gw", token: "s3cret-t0ken" });
+    expect(JSON.stringify(v)).not.toContain("s3cret-t0ken");
+    expect(Bun.inspect(v)).not.toContain("s3cret-t0ken");
+    expect(JSON.stringify({ notes: v })).toBe('{"notes":{"url":"http://gw"}}');
   });
 });
 

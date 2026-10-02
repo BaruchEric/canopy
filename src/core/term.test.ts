@@ -150,4 +150,6 @@ describe("isKeystroke", () => {
 
 test("termEnv keeps canopy's answer token out of a shell", () => {
   expect(termEnv({ CANOPY_TAILCHAN_ANSWER_TOKEN: "s", HOME: "/h" })).toEqual({ HOME: "/h", TERM: "xterm-256color", COLORTERM: "truecolor" });
+  // and the incubator's vault token and speech model key
+  expect(termEnv({ CANOPY_VAULT_TOKEN: "v", CANOPY_TRANSCRIBE_KEY: "k", HOME: "/h" })).toEqual({ HOME: "/h", TERM: "xterm-256color", COLORTERM: "truecolor" });
 });

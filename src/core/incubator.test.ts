@@ -315,6 +315,30 @@ describe("intake", () => {
     expect(w.seeds.made[0]?.clone).toBe("https://github.com/someone/coins.git");
   });
 
+  test("a token in a repo url or a link is cloned with but never stored or shown", async () => {
+    const w = world();
+    const s = await w.inc.create(intake({ repo: "https://x:tok3n@github.com/someone/coins.git", urls: ["https://u:pa55@example.com/spec"] }));
+    await w.inc.idle();
+    // the clone may need it
+    expect(w.seeds.made[0]?.clone).toBe("https://x:tok3n@github.com/someone/coins.git");
+    const after = now(w, s.id);
+    expect(after.repo).toBe("https://github.com/someone/coins.git");
+    expect(after.inputs.map((e) => e.label)).toEqual(["https://example.com/spec", "https://github.com/someone/coins.git"]);
+    const files = [...(w.store.inputs.get(s.id)?.values() ?? [])].map((d) => new TextDecoder().decode(d));
+    const stored = [
+      JSON.stringify(w.store.records.get(s.id)),
+      JSON.stringify(after),
+      ...files,
+      w.store.indexes.get(s.id) ?? "",
+      ...(w.seeds.files.get(after.seedPath)?.values() ?? []),
+      ...w.notes.puts.map((p) => p.text),
+      ...w.notes.lines.map((l) => l.line),
+      ...w.flows.started.map((f) => f.note),
+    ].join("\n");
+    expect(stored).not.toContain("tok3n");
+    expect(stored).not.toContain("pa55");
+  });
+
   test("the intake refuses nothing, a bad link, a local repo, a zip and an oversized file", async () => {
     const w = world();
     const status = (p: Promise<unknown>) => p.then(() => 0, (e: unknown) => (e instanceof IncubatorError ? e.status : -1));

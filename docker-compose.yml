@@ -160,8 +160,11 @@ services:
       # server (LiteLLM on the mini), the URL its origin. Every value here is
       # readable by the agents canopy starts: canopy shares the shells
       # container's pid namespace, so /proc/<canopy>/environ is in reach, the
-      # same as GH_TOKEN. Mint the vault token for this alone and revoke it
-      # if it ever leaks. Empty is fine: the backend says so once in its log.
+      # same as GH_TOKEN. canopy deletes the vault token and the transcribe
+      # key from its own env once read, so no shell or run inherits them, but
+      # /proc keeps the values it started with. Mint the vault token for this
+      # alone and revoke it if it ever leaks. Empty is fine: the backend says
+      # so once in its log.
       - CANOPY_VAULT_TOKEN=${CANOPY_VAULT_TOKEN:-}
       - CANOPY_VAULT_URL=${CANOPY_VAULT_URL:-}
       - CANOPY_TRANSCRIBE_URL=${CANOPY_TRANSCRIBE_URL:-}

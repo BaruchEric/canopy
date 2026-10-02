@@ -430,7 +430,11 @@ an intake with 503. Two optional settings in the mini's `.env`:
   `CANOPY_TRANSCRIBE_MODEL` (default `transcribe`). Without a URL a voice
   memo stays raw, marked "not transcribed", and clarify is told.
 
-Both are readable by the agents canopy starts (the shared pid namespace).
+canopy reads the vault token and the transcribe key once at start and then
+deletes both from its own environment, so no shell, run or tmux server it
+starts inherits them. They are still readable by the agents canopy starts
+through `/proc/<canopy>/environ` (the shared pid namespace), which keeps the
+values the process started with.
 `CANOPY_INCUBATOR_AUTOSTART=0` holds every project queued, for a pause.
 
 ## Codex

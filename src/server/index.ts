@@ -8,7 +8,7 @@ import { watch, type FSWatcher } from "node:fs";
 import { readFile, realpath, stat } from "node:fs/promises";
 import { arch, homedir, hostname } from "node:os";
 import { readBuild, readPkg } from "../core/build";
-import { join, resolve } from "node:path";
+import { join, resolve, sep } from "node:path";
 import {
   commit,
   fetchRepo,
@@ -38,7 +38,7 @@ import {
 import { browseLocal, browseRemote, expandHome, SshError } from "../core/browse";
 import { exec, onHost } from "../core/exec";
 import { fleetSkipReason, Flows, type CheckResult } from "../core/flow";
-import { INHERITED_ENV, isKeystroke, isTermId, parseTermMessage, Scrollback, shellArgs, startTerm, termPlace, termSize, type TermSession, type TermSize } from "../core/term";
+import { INHERITED_ENV, SECRET_ENV, isKeystroke, isTermId, parseTermMessage, Scrollback, shellArgs, startTerm, termPlace, termSize, type TermSession, type TermSize } from "../core/term";
 import { attachTmuxTerm, hasSession, history, killSession, listSessions, newSession, paneInfo, paneText, sendLine, serverUp, snapshot, tmuxBase } from "../core/tmux";
 import { clip, continueLine, countLines, expiredShells, forgetKept, KEEP_EVERY, listKept, lostShells, readKeptHistory, replayCommand, replayFile, restoredBanner, writeKept } from "../core/keep";
 import { PASTE_MAX, pasteName, pasteText, savePaste } from "../core/paste";
@@ -105,6 +105,8 @@ import {
   upsertWorkspace,
 } from "../core/store";
 import { Runner } from "../core/runner";
+import type { RunDriver } from "../core/driver";
+import { SEEDS_DIR } from "../core/sprout";
 import { suggestMessage } from "../core/suggest";
 import {
   HISTORY_WINDOWS,
@@ -642,6 +644,15 @@ function stepProfileRefusal(cfg: CanopyConfig, wf: Workflow): string | null {
  *  `agent:` profile as the explicit pick, else the repo's flow route. */
 const stepAgentFor = (cfg: CanopyConfig, path: string, profile: string | undefined): AgentSettings =>
   agentFor(cfg, path, "flow", profile ? { profile } : undefined);
+
+/** No incubator stage runs with permissions bypassed, whatever the routes
+ *  say: a seed may be a stranger's clone, and the stage is unattended. */
+const neverYolo = (a: AgentSettings): AgentSettings => ({ ...a, yolo: false });
+
+/** whether a repo is a sprout's seed, by its path under the launch root:
+ *  true before the incubator has taken its records back, so a flow restored
+ *  first is held to the same rule */
+export const isSeedPath = (root: string, path: string): boolean => path.startsWith(join(root, SEEDS_DIR) + sep);
 
 /** Every harness a workflow's steps would start on for these repos is
  *  installed here, checked before the first step starts. */
@@ -2681,6 +2692,8 @@ export async function startServer(opts: {
   asks?: { closedKeep?: number; relistEvery?: number; sweepEvery?: number };
   /** the incubator: tests turn autostart off and pass a speech model and vault of their own */
   incubator?: { autostart?: boolean; transcribe?: Transcriber | null; notes?: NoteSink | null };
+  /** the runner's driver per harness; tests swap in a stand-in agent */
+  runner?: { driver?: (harness: Harness) => RunDriver };
 }): Promise<{ port: number; stop: () => void }> {
   const cfg = await loadConfig();
   const root = await realpath(opts.root);
@@ -2721,7 +2734,7 @@ export async function startServer(opts: {
       : async (h: Harness) => !availableHarnesses().includes(h);
   // every run is told which backend started it (CANOPY_BACKEND), and codex
   // hears canopy's version in its handshake
-  const runnerOpts = { backend: selfName(cfg.self, hostname()), version: readPkg().version ?? "0" };
+  const runnerOpts = { backend: selfName(cfg.self, hostname()), version: readPkg().version ?? "0", ...(opts.runner?.driver ? { driver: opts.runner.driver } : {}) };
   const runner = new Runner({
     onChange: (run) => {
       broadcast(state, { type: "run", run });
@@ -2778,6 +2791,11 @@ export async function startServer(opts: {
   });
   const vault = vaultConfig();
   const speech = transcribeConfig();
+  // The configs hold what they read; the env keeps neither secret, so no
+  // shell, run or tmux server started from here inherits them (`exec` and
+  // `termEnv` pass the live env). /proc/<pid>/environ still shows the
+  // values canopy was started with, which deletion cannot reach.
+  for (const k of SECRET_ENV) delete process.env[k];
   if (process.env["NODE_ENV"] !== "test") {
     if (!vault) console.error("incubator: no CANOPY_VAULT_TOKEN, so no vault notes");
     if (!speech) console.error("incubator: no CANOPY_TRANSCRIBE_URL, so voice memos stay untranscribed");
@@ -2887,7 +2905,7 @@ export async function startServer(opts: {
             const refused = stepProfileRefusal(c, wf);
             if (refused) throw new Error(refused);
             await needStepHarnesses(state, c, wf, [repo.path]);
-            return state.flows.start(repo, wf, note, (profile) => stepAgentFor(c, repo.path, profile));
+            return state.flows.start(repo, wf, note, (profile) => neverYolo(stepAgentFor(c, repo.path, profile)));
           },
           get: (id) => state.flows.get(id),
           resume: (id, choice) => state.flows.resume(id, choice),
@@ -3247,7 +3265,8 @@ export async function startServer(opts: {
     state.flows.restore(
       await loadFlowRecords(root),
       (path) => state.result.repos.find((r) => r.path === path),
-      (repo) => (profile) => stepAgentFor(cfg, repo.path, profile),
+      // a seed's flow is an incubator stage, held to yolo off like a fresh one
+      (repo) => (profile) => (isSeedPath(root, repo.path) ? neverYolo(stepAgentFor(cfg, repo.path, profile)) : stepAgentFor(cfg, repo.path, profile)),
     );
     // the sprouts the last server left, once their flows are back; a server
     // without the lock lists them and takes nothing in (server/incubator.ts)

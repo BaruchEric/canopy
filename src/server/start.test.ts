@@ -9,7 +9,7 @@ import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { INHERITED_ENV } from "../core/term";
+import { INHERITED_ENV, SECRET_ENV } from "../core/term";
 import { killServer, tmuxBase } from "../core/tmux";
 import type { AgentSettings } from "../core/types";
 import { startServer } from "./index";
@@ -70,6 +70,11 @@ beforeAll(async () => {
     outer[k] = process.env[k];
     process.env[k] = `outer-${k}`;
   }
+  // the incubator's secrets, as a deploy sets them
+  for (const k of SECRET_ENV) {
+    outer[k] = process.env[k];
+    process.env[k] = `secret-${k}`;
+  }
   server = await startServer({
     root,
     port: 0,
@@ -99,6 +104,9 @@ const A = "a0000000000000000000000000000001";
 const B = "b0000000000000000000000000000002";
 
 describe("a canopy started in a canopy shell", () => {
+  test("keeps neither incubator secret in its own env once read", () => {
+    for (const k of SECRET_ENV) expect(process.env[k]).toBeUndefined();
+  });
   test("hands none of the outer shell's names on to its own shells and runs", async () => {
     for (const k of INHERITED_ENV) expect(process.env[k]).toBeUndefined();
     // a plain shell here, on this backend's names alone

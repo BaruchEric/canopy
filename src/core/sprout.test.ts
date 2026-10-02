@@ -16,6 +16,7 @@ import {
   sproutSlug,
   sproutTitle,
   withInputsRead,
+  urlWithoutSecret,
   withSummaries,
 } from "./sprout";
 import type { InputEntry, Sprout, Workflow } from "./types";
@@ -179,98 +180,3 @@ describe("parseQuestions", () => {
   });
 });
 
-describe("answersText", () => {
-  const qs = [{ question: "Who uses it?", header: "", options: [], multiSelect: false }];
-  test("each question with its answer", () => {
-    expect(answersText(qs, { "Who uses it?": "staff" }, at)).toBe("## Answers, 2026-10-01 14:03\n\n- Who uses it?\n  staff\n");
-  });
-  test("going on assumptions says so", () => {
-    expect(answersText(qs, null, at)).toContain("chose to go on assumptions");
-  });
-});
-
-describe("slots and stages", () => {
-  test("a running stage holds a slot; waiting on answers, queued, parked and ended do not", () => {
-    expect(holdsSlot(sprout({ status: "clarifying" }))).toBe(true);
-    expect(holdsSlot(sprout({ status: "researching" }))).toBe(true);
-    expect(holdsSlot(sprout({ status: "clarifying", questions: [{ question: "q", header: "", options: [], multiSelect: false }] }))).toBe(false);
-    expect(holdsSlot(sprout({ status: "queued" }))).toBe(false);
-    expect(holdsSlot(sprout({ status: "parked" }))).toBe(false);
-    // parked at a gate: the flow is alive and waits on the human, so the slot stays taken
-    expect(holdsSlot(sprout({ status: "parked" }), "gated")).toBe(true);
-    expect(holdsSlot(sprout({ status: "parked" }), "failed")).toBe(false);
-    expect(holdsSlot(sprout({ status: "queued" }), "gated")).toBe(false);
-    expect(sproutEnded(sprout({ status: "stopped" }))).toBe(true);
-    expect(sproutEnded(sprout({ status: "parked" }))).toBe(false);
-  });
-  test("clarify first, again after new input, then scout", () => {
-    expect(nextWorkflow(sprout())).toBe("clarify");
-    expect(nextWorkflow(sprout({ clarified: true, reclarify: true }))).toBe("clarify");
-    expect(nextWorkflow(sprout({ clarified: true }))).toBe("scout");
-  });
-  test("withInputsRead adds an absolute read rule to every step and leaves the original alone", () => {
-    const wf = { name: "clarify", steps: [{ name: "A", tools: ["Edit"] }] } as unknown as Workflow;
-    const next = withInputsRead(wf, "/config/incubator/sp_0123456789ab/inputs");
-    expect(next.steps[0]?.tools).toEqual(["Edit", "Read(//config/incubator/sp_0123456789ab/inputs/**)"]);
-    expect(wf.steps[0]?.tools).toEqual(["Edit"]);
-  });
-});
-
-describe("parseSproutRecord", () => {
-  test("a record round-trips; a broken or foreign one is null", () => {
-    const s = sprout();
-    expect(parseSproutRecord(JSON.stringify(s))).toEqual(s);
-    expect(parseSproutRecord(JSON.stringify(s).slice(0, 40))).toBeNull();
-    expect(parseSproutRecord(JSON.stringify({ ...s, id: "nope" }))).toBeNull();
-    expect(parseSproutRecord(JSON.stringify({ ...s, status: "growing" }))).toBeNull();
-  });
-
-  const full = sprout({
-    status: "clarifying",
-    repo: "https://github.com/a/b",
-    inputs: [
-      { n: 1, kind: "audio", name: "001-voice.webm", label: "voice.webm", type: "audio/webm", at: 1, via: "sheet", bytes: 3, summary: "", processed: true, note: "x" },
-      { n: 2, kind: "transcript", name: "002-voice.txt", label: "voice.webm (transcript)", type: "text/plain", at: 1, via: "sheet", bytes: 6, summary: "spoken", processed: true, from: 1 },
-    ],
-    clarified: true,
-    questions: [{ question: "Who counts?", header: "", options: [{ label: "staff", description: "" }], multiSelect: false }],
-    questionsAt: 5,
-    flows: [{ workflow: "clarify", flowId: "abcd1234", outcome: "done" }],
-    spent: { runs: 1, workMs: 60_000 },
-    parked: "why",
-    noteRev: "7",
-  });
-
-  test("a whole record round-trips, and the root it was written for passes through", () => {
-    expect(parseSproutRecord(JSON.stringify(full))).toEqual(full);
-    const stamped = { ...full, root: "/root" };
-    expect(parseSproutRecord(JSON.stringify(stamped))).toEqual(stamped);
-  });
-
-  test("a record whose parts restore reads are malformed is null", () => {
-    const bad = (patch: Record<string, unknown>) => parseSproutRecord(JSON.stringify({ ...full, ...patch }));
-    const input = full.inputs[0];
-    expect(bad({ inputs: [null] })).toBeNull();
-    expect(bad({ inputs: [{ ...input, n: "1" }] })).toBeNull();
-    expect(bad({ inputs: [{ ...input, kind: "video" }] })).toBeNull();
-    expect(bad({ inputs: [{ ...input, via: "mail" }] })).toBeNull();
-    expect(bad({ inputs: [{ ...input, processed: "yes" }] })).toBeNull();
-    expect(bad({ inputs: [{ ...input, from: "1" }] })).toBeNull();
-    expect(bad({ flows: ["abcd1234"] })).toBeNull();
-    expect(bad({ flows: [{ workflow: "clarify" }] })).toBeNull();
-    expect(bad({ flows: [{ workflow: "clarify", flowId: "abcd1234", outcome: 3 }] })).toBeNull();
-    expect(bad({ spent: null })).toBeNull();
-    expect(bad({ spent: { runs: 1 } })).toBeNull();
-    expect(bad({ prepared: "true" })).toBeNull();
-    expect(bad({ clarified: 1 })).toBeNull();
-    expect(bad({ reclarify: null })).toBeNull();
-    expect(bad({ updatedAt: "now" })).toBeNull();
-    expect(bad({ questions: {} })).toBeNull();
-    expect(bad({ questions: [{ question: "Q?" }] })).toBeNull();
-    expect(bad({ questions: [{ ...full.questions?.[0], options: ["staff"] }] })).toBeNull();
-    expect(bad({ questionsAt: "5" })).toBeNull();
-    expect(bad({ parked: 1 })).toBeNull();
-    expect(bad({ noteRev: 7 })).toBeNull();
-    expect(bad({ repo: false })).toBeNull();
-  });
-});

@@ -17,6 +17,27 @@ export const QUESTIONS_MAX = 4;
 /** where seeds live under the launch root */
 export const SEEDS_DIR = "_incubator";
 
+/** whether a repo id is a sprout's seed in the launch root */
+export const isSeedRepoId = (id: string): boolean => id.startsWith(`${SEEDS_DIR}/`);
+
+/** A url with no secret in it, for everything canopy stores or shows: an
+ *  http(s) url loses its whole userinfo ("https://x:token@host/r" is
+ *  "https://host/r"), any other scheme's keeps its user name, which ssh
+ *  needs, and loses a password. A scp-like "git@host:path" has none. */
+export function urlWithoutSecret(url: string): string {
+  const m = /^([a-z][a-z0-9+.-]*:\/\/)([^/?#]*)([\s\S]*)$/i.exec(url);
+  if (!m) return url;
+  const scheme = m[1] ?? "";
+  const authority = m[2] ?? "";
+  const rest = m[3] ?? "";
+  const at = authority.lastIndexOf("@");
+  if (at < 0) return url;
+  const host = authority.slice(at + 1);
+  if (/^https?:\/\/$/i.test(scheme)) return `${scheme}${host}${rest}`;
+  const user = authority.slice(0, at).split(":")[0] ?? "";
+  return `${scheme}${user ? `${user}@` : ""}${host}${rest}`;
+}
+
 const ID = /^sp_[0-9a-f]{12}$/;
 export const isSproutId = (id: string): boolean => ID.test(id);
 
