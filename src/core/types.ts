@@ -1167,6 +1167,30 @@ export interface Verdict {
   reason: string | null;
 }
 
+export type JudgeFit = "meets" | "partly" | "misses";
+
+export interface JudgeAnswers {
+  fit: { choice: JudgeFit; probabilities?: Record<string, number> };
+  evidence: { probability: number };
+  rules: { probability: number };
+}
+
+/** A judge gate's decision: go on, park, or turn the work down. */
+export interface Judgment {
+  answers: JudgeAnswers;
+  go: boolean;
+  /** the judge is sure the work misses; a retry would not help */
+  rejected: boolean;
+  /** why it may not go, one line; null when go */
+  reason: string | null;
+}
+
+/** One file a judge step reads; text null when missing or outside the repo. */
+export interface EvidenceFile {
+  path: string;
+  text: string | null;
+}
+
 /* ---------- flows: one workflow running on one repo ---------- */
 
 export type FlowStatus = "working" | "waiting" | "gated" | "done" | "failed" | "stopped";
@@ -1182,6 +1206,7 @@ export interface FlowStep {
   runId?: string;
   check?: { command: string; exit: number; output: string };
   verdict?: Verdict;
+  judgment?: Judgment;
   /** Claude's closing summary, the last text of the run */
   summary?: string;
   /** why a gate parked or a step failed, for the sheet */
