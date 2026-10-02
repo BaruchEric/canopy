@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { randomBytes } from "node:crypto";
+import { existsSync } from "node:fs";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -72,20 +73,65 @@ describe("project", () => {
 });
 
 describe("push", () => {
-  test("origin added or reset, then HEAD to main, with hooks off and no prompt", async () => {
-    const f = fakes((c) => (c.cmd.includes("get-url") ? no() : ok()));
-    await shipper(cfg, f.deps).push("/seed", "eric/coin-counter");
-    const git = f.calls.map((c) => c.cmd.filter((w) => !w.startsWith("core.") && w !== "-c").slice(1).join(" "));
-    expect(git).toEqual(["remote get-url origin", "remote add origin https://github.com/eric/coin-counter.git", "push -u origin HEAD:refs/heads/main"]);
-    for (const c of f.calls) {
-      expect(c.cmd).toContain("core.hooksPath=/dev/null");
-      expect(c.opts.cwd).toBe("/seed");
-      expect(c.opts.env?.["GIT_TERMINAL_PROMPT"]).toBe("0");
-    }
+  const git = async (cwd: string, ...args: string[]): Promise<string> => {
+    const r = await exec(["git", ...args], { cwd });
+    if (r.code !== 0) throw new Error(`git ${args.join(" ")}: ${r.stderr}`);
+    return r.stdout.trim();
+  };
+  const bareRepo = async (name: string): Promise<string> => {
+    const path = join(await mkdtemp(join(tmpdir(), `canopy-ship-${name}-`)), `${name}.git`);
+    await exec(["git", "init", "-q", "--bare", path]);
+    return path;
+  };
+  /** a seed whose own config sends any push from it to `decoy` instead */
+  const hostileSeed = async (target: string, decoy: string): Promise<{ seed: string; head: string }> => {
+    const seed = await mkdtemp(join(tmpdir(), "canopy-ship-seed-"));
+    await git(seed, "init", "-q", "-b", "main");
+    await writeFile(join(seed, "index.html"), "<p>ok</p>\n");
+    await git(seed, "add", "-A");
+    await git(seed, "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qm", "init");
+    await git(seed, "remote", "add", "origin", target);
+    await git(seed, "config", "remote.origin.pushurl", decoy);
+    await git(seed, "config", `url.${decoy}.pushInsteadOf`, target);
+    return { seed, head: await git(seed, "rev-parse", "HEAD") };
+  };
+  const refs = async (bare: string): Promise<string> => (await exec(["git", "for-each-ref", "--format=%(refname) %(objectname)"], { cwd: bare })).stdout.trim();
+
+  test("the seed's HEAD reaches the target's main, whatever the seed's config says", async () => {
+    const target = await bareRepo("target");
+    const decoy = await bareRepo("decoy");
+    const { seed, head } = await hostileSeed(target, decoy);
+    const cwds: string[] = [];
+    const deps: ShipDeps = {
+      exec: (cmd, opts) => {
+        if (opts?.cwd) cwds.push(opts.cwd);
+        return exec(cmd, opts);
+      },
+      fetch,
+      which: () => null,
+      remote: (repo) => (repo === "eric/coin-counter" ? target : "nowhere"),
+    };
+    await shipper(cfg, deps).push(seed, "eric/coin-counter");
+    expect(await refs(target)).toBe(`refs/heads/main ${head}`);
+    expect(await refs(decoy)).toBe("");
+    // nothing ran in the seed, and the scratch clone is gone
+    expect(cwds.includes(seed)).toBe(false);
+    expect(cwds.length).toBeGreaterThan(0);
+    for (const c of cwds) expect(existsSync(c)).toBe(false);
+    // the seed's own config would have sent a plain push to the decoy
+    await git(seed, "push", "-q", "origin", "HEAD:refs/heads/main");
+    expect(await refs(decoy)).toBe(`refs/heads/main ${head}`);
   });
-  test("a refused push fails with git's words", async () => {
+  test("a refused push fails with git's words, hooks off and no prompt", async () => {
     const f = fakes((c) => (c.cmd.includes("push") ? no("rejected: non-fast-forward") : ok()));
     await expect(shipper(cfg, f.deps).push("/seed", "eric/x")).rejects.toThrow("git push: rejected: non-fast-forward");
+    for (const c of f.calls) {
+      expect(c.cmd).toContain("core.hooksPath=/dev/null");
+      expect(c.cmd).toContain("core.fsmonitor=false");
+      expect(c.opts.env?.["GIT_TERMINAL_PROMPT"]).toBe("0");
+    }
+    const clone = f.calls[0]?.cmd ?? [];
+    expect(clone.slice(clone.indexOf("clone"), -1)).toEqual(["clone", "--bare", "--no-local", "--quiet", "--", "/seed"]);
   });
 });
 

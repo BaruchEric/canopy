@@ -5,6 +5,9 @@
  * call goes through injected deps so the tests drive it with fakes.
  */
 import { deployReady, deploymentUrl, isVercelAppUrl, productionUrl, repoCandidates, smokeRefusal, vercelArgs, vercelProject } from "./deploy";
+import { mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { exec as realExec, type ExecOptions, type ExecResult } from "./exec";
 import type { HostId } from "./types";
 
@@ -15,7 +18,7 @@ export interface Shipper {
   createRepo(slug: string, description: string): Promise<string>;
   /** a Vercel project of its own, made under a name the account did not have */
   project(slug: string): Promise<string>;
-  /** origin set to the repo, HEAD pushed to main, hooks off */
+  /** the seed's HEAD pushed to main from a fresh bare clone of it, hooks off */
   push(seedPath: string, repo: string): Promise<void>;
   /** linked and deployed to production; the public production url */
   deploy(seedPath: string, project: string): Promise<string>;
@@ -38,6 +41,8 @@ export interface ShipDeps {
   exec: (cmd: string[], opts?: ExecOptions) => Promise<ExecResult>;
   fetch: typeof fetch;
   which: (bin: string) => string | null;
+  /** where "owner/name" is pushed; GitHub's https url unless a test says */
+  remote?: (repo: string) => string;
 }
 
 const NO_HOOKS = ["-c", "core.hooksPath=/dev/null", "-c", "core.fsmonitor=false"];
@@ -94,14 +99,25 @@ export function shipper(cfg: ShipConfig, deps: ShipDeps = { exec: realExec, fetc
     },
 
     async push(seedPath, repo) {
-      const url = `https://github.com/${repo}.git`;
-      const git = (args: string[], timeoutMs = 30_000): Promise<ExecResult> =>
-        deps.exec(["git", ...NO_HOOKS, ...args], { cwd: seedPath, timeoutMs, env: { GIT_TERMINAL_PROMPT: "0" } });
-      const has = await git(["remote", "get-url", "origin"]);
-      const set = await git(has.code === 0 ? ["remote", "set-url", "origin", url] : ["remote", "add", "origin", url]);
-      if (set.code !== 0) throw new Error(`git remote: ${tail(set)}`);
-      const pushed = await git(["push", "-u", "origin", "HEAD:refs/heads/main"], 300_000);
-      if (pushed.code !== 0) throw new Error(`git push: ${tail(pushed)}`);
+      // Pushed from a bare clone canopy makes, never from the seed itself:
+      // the seed's .git/config is the agents' to write, and a pushurl, a
+      // pushInsteadOf or a credential helper there would send canopy's push,
+      // or its token, where they chose.
+      const url = deps.remote ? deps.remote(repo) : `https://github.com/${repo}.git`;
+      const tmp = await mkdtemp(join(tmpdir(), "canopy-ship-"));
+      const bare = join(tmp, "seed.git");
+      const git = (args: string[], cwd: string, timeoutMs = 30_000): Promise<ExecResult> =>
+        deps.exec(["git", ...NO_HOOKS, ...args], { cwd, timeoutMs, env: { GIT_TERMINAL_PROMPT: "0" } });
+      try {
+        const cloned = await git(["clone", "--bare", "--no-local", "--quiet", "--", seedPath, bare], tmp, 300_000);
+        if (cloned.code !== 0) throw new Error(`git clone of the seed: ${tail(cloned)}`);
+        const set = await git(["remote", "set-url", "origin", url], bare);
+        if (set.code !== 0) throw new Error(`git remote: ${tail(set)}`);
+        const pushed = await git(["push", "origin", "HEAD:refs/heads/main"], bare, 300_000);
+        if (pushed.code !== 0) throw new Error(`git push: ${tail(pushed)}`);
+      } finally {
+        await rm(tmp, { recursive: true, force: true });
+      }
     },
 
     async deploy(seedPath, project) {
