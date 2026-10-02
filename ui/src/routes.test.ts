@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { parseRoute, popupFeatures } from "./routes";
+import { parseRoute, popupFeatures, sproutHere } from "./routes";
 
 const features = (w: number, h: number): Record<string, number> => {
   const out: Record<string, number> = {};
@@ -111,4 +111,12 @@ test("a task window names its task", () => {
   expect(r.task).toBe("dev");
   expect(parseRoute("?repo=app&view=shell&task=Bad").task).toBeNull();
   expect(parseRoute("?repo=app").task).toBeNull();
+});
+
+describe("sproutHere", () => {
+  test("the incubator view's sprout, and nothing else", () => {
+    expect(sproutHere("?view=incubator&sprout=sp_0123456789ab")).toBe("sp_0123456789ab");
+    expect(sproutHere("?view=git&sprout=sp_0123456789ab")).toBeNull();
+    expect(sproutHere("?view=incubator&sprout=../x")).toBeNull();
+  });
 });

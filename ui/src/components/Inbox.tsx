@@ -32,8 +32,8 @@ function useNow(on: boolean, ms = 1000): number {
   return now;
 }
 
-const KIND_GLYPH: Record<InboxItem["kind"], string> = { permission: "⚿", question: "?", guard: "⛨", gate: "⏸" };
-const SOURCE_WORD: Record<InboxItem["source"], string> = { ask: "agent", run: "run", flow: "workflow" };
+const KIND_GLYPH: Record<InboxItem["kind"], string> = { permission: "⚿", question: "?", guard: "⛨", gate: "⏸", clarify: "✎" };
+const SOURCE_WORD: Record<InboxItem["source"], string> = { ask: "agent", run: "run", flow: "workflow", sprout: "incubator" };
 
 /** One thing waiting: who, where and the countdown, then the form that
  *  answers it, folded until picked. An ask that cannot be answered here (no

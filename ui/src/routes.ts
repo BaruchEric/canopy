@@ -1,3 +1,4 @@
+import { isSproutId } from "../../src/core/sprout";
 import { isSectionKey, type SectionKey } from "./surface";
 
 /** What the URL asked this window to show. `/?repo=<id>` pins that repo on
@@ -54,6 +55,22 @@ export function dropAskHere() {
   const u = new URL(window.location.href);
   if (!u.searchParams.has("ask")) return;
   u.searchParams.delete("ask");
+  window.history.replaceState(null, "", u.toString());
+}
+
+/** `?view=incubator&sprout=<id>`: the incubator with that project open, the
+ *  link `canopy new` prints */
+export function sproutHere(search: string): string | null {
+  const q = new URLSearchParams(search);
+  const id = q.get("sprout");
+  return q.get("view") === "incubator" && id && isSproutId(id) ? id : null;
+}
+
+/** Takes `sprout=` off this window's URL once the sheet has it. */
+export function dropSproutHere() {
+  const u = new URL(window.location.href);
+  if (!u.searchParams.has("sprout")) return;
+  u.searchParams.delete("sprout");
   window.history.replaceState(null, "", u.toString());
 }
 

@@ -35,6 +35,7 @@ const KIND_WORD: Record<FeedKind, string> = {
   task: "task",
   registry: "agents",
   ask: "asks",
+  incubator: "incubator",
 };
 
 /**

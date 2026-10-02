@@ -7,20 +7,20 @@
  * tested; the store feeds it what it holds and routes an answer back to
  * where the item came from.
  */
-import type { AgentCard, Ask, AskAnswer, Flow, FlowChoice, Repo, Run, RunAnswer, RunQuestion } from "../../src/core/types";
+import type { AgentCard, Ask, AskAnswer, Flow, FlowChoice, Repo, Run, RunAnswer, RunQuestion, Sprout } from "../../src/core/types";
 import { repoOfCard, repoWord, whereWord } from "./agentcards";
 import { agentWord, harnessOf } from "./runs";
 
-export type InboxSource = "ask" | "run" | "flow";
+export type InboxSource = "ask" | "run" | "flow" | "sprout";
 
 export interface InboxItem {
-  /** `${source}:${id}`, unique across the three */
+  /** `${source}:${id}`, unique across the four */
   key: string;
   source: InboxSource;
   /** the broker's ask id (the home backend's), or a run's or flow's
    *  qualified id */
   id: string;
-  kind: "permission" | "question" | "guard" | "gate";
+  kind: "permission" | "question" | "guard" | "gate" | "clarify";
   /** the repo it is about, by the page's id, when the page has it */
   repoId: string | null;
   /** the repo in words: the checkout's name, else what the agent's card says */
@@ -43,6 +43,8 @@ export interface InboxItem {
   until: number | null;
   /** a run's prompt, which its answer names */
   promptId?: string;
+  /** a gate the flow's budget parked: continuing grants one more step */
+  budget?: true;
 }
 
 export interface InboxContext {
@@ -55,6 +57,8 @@ export interface InboxContext {
   /** the repos an ask's agent card is matched against, the home backend's
    *  (whose broker the asks are); `repos` when absent */
   askRepos?: readonly Repo[];
+  /** the incubator's sprouts, home's alone; one with open questions is an item */
+  sprouts?: readonly Sprout[];
 }
 
 /** "asks to use Bash", "has a question", "hit a guard on Bash" */
@@ -164,6 +168,28 @@ function flowItem(flow: Flow, runs: Readonly<Record<string, Run>>, ctx: InboxCon
     at: run?.endedAt ?? flow.startedAt,
     left: null,
     until: null,
+    ...(flow.parkedFor === "budget" ? { budget: true as const } : {}),
+  };
+}
+
+function sproutItem(s: Sprout, ctx: InboxContext): InboxItem | null {
+  const n = s.questions?.length ?? 0;
+  if (s.status !== "clarifying" || n === 0) return null;
+  return {
+    key: `sprout:${s.id}`,
+    source: "sprout",
+    id: s.id,
+    kind: "clarify",
+    repoId: ctx.repos.some((r) => r.id === s.repoId) ? s.repoId : null,
+    repo: s.title,
+    who: "clarify",
+    where: "canopy incubator",
+    title: `${n} ${n === 1 ? "question" : "questions"} before research`,
+    detail: "",
+    ...(s.questions ? { questions: s.questions } : {}),
+    at: s.questionsAt ?? s.updatedAt,
+    left: null,
+    until: null,
   };
 }
 
@@ -188,6 +214,10 @@ export function mergeInbox(
     const it = flowItem(f, runs, ctx);
     if (it) items.push(it);
   }
+  for (const s of ctx.sprouts ?? []) {
+    const it = sproutItem(s, ctx);
+    if (it) items.push(it);
+  }
   return items.sort((a, b) => a.at - b.at || a.key.localeCompare(b.key));
 }
 
@@ -207,12 +237,14 @@ export type InboxAnswer =
   | { behavior: "allow"; always?: boolean }
   | { behavior: "deny"; message?: string }
   | { answers: Record<string, string> }
-  | { choice: FlowChoice };
+  | { choice: FlowChoice }
+  /** clarify's questions passed over: go on assumptions */
+  | { skip: true };
 
 /** a run's answer: "allow always" is "allow all" for the rest of the run;
  *  a run's deny carries no message */
 export function toRunAnswer(a: InboxAnswer): RunAnswer | null {
-  if ("choice" in a) return null;
+  if ("choice" in a || "skip" in a) return null;
   if ("answers" in a) return { kind: "answers", answers: a.answers };
   if (a.behavior === "deny") return { kind: "deny" };
   return { kind: a.always ? "allow-all" : "allow" };
@@ -220,7 +252,7 @@ export function toRunAnswer(a: InboxAnswer): RunAnswer | null {
 
 /** the broker's answer: a question's answers go as an allow */
 export function toAskAnswer(a: InboxAnswer): AskAnswer | null {
-  if ("choice" in a) return null;
+  if ("choice" in a || "skip" in a) return null;
   if ("answers" in a) return { behavior: "allow", answers: a.answers };
   if (a.behavior === "deny") return { behavior: "deny", ...(a.message?.trim() ? { message: a.message.trim() } : {}) };
   return { behavior: "allow", ...(a.always ? { always: true } : {}) };

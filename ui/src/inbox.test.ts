@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import type { AgentCard, Ask, Flow, Repo, Run } from "../../src/core/types";
+import type { AgentCard, Ask, Flow, Repo, Run, Sprout } from "../../src/core/types";
 import {
   askWord,
   asksOf,
@@ -223,5 +223,40 @@ describe("holding asks", () => {
 
   test("asksOf is one agent's open asks", () => {
     expect(asksOf([ask(), ask({ id: "b", agent: "codex:z" }), ask({ id: "c", state: "expired" })], "claude:s1").map((a) => a.id)).toEqual(["a1"]);
+  });
+});
+
+describe("the incubator in the inbox", () => {
+  const sprout: Sprout = {
+    id: "sp_000000000001",
+    slug: "coins",
+    title: "Coin counter",
+    status: "clarifying",
+    repoId: "_incubator/coins",
+    seedPath: "/root/_incubator/coins",
+    prepared: true,
+    inputs: [],
+    clarified: true,
+    reclarify: false,
+    questions: [{ question: "Who counts?", header: "", options: [], multiSelect: false }],
+    questionsAt: 20_000,
+    flows: [],
+    spent: { runs: 0, workMs: 0 },
+    createdAt: 0,
+    updatedAt: 0,
+  };
+  test("open questions are one clarify item; a sprout without them is none", () => {
+    const items = mergeInbox([], {}, {}, 30_000, { ...ctx, sprouts: [sprout, { ...sprout, id: "sp_000000000002", questions: [] }] });
+    expect(items).toHaveLength(1);
+    expect(items[0]).toMatchObject({ key: "sprout:sp_000000000001", source: "sprout", kind: "clarify", who: "clarify", repo: "Coin counter", where: "canopy incubator", title: "1 question before research", at: 20_000 });
+    expect(items[0]?.questions?.[0]?.question).toBe("Who counts?");
+  });
+  test("a gate a budget parked says so", () => {
+    const items = mergeInbox([], {}, { f: flow({ id: "f", parkedFor: "budget" }) }, 30_000, ctx);
+    expect(items[0]?.budget).toBe(true);
+  });
+  test("going on assumptions is no answer to a run or an ask", () => {
+    expect(toRunAnswer({ skip: true })).toBeNull();
+    expect(toAskAnswer({ skip: true })).toBeNull();
   });
 });

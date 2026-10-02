@@ -19,6 +19,7 @@ import type {
   Run,
   ServerEvent,
   SourceState,
+  Sprout,
   TaskInfo,
   TermInfo,
   Workspace,
@@ -27,6 +28,7 @@ import { cardName, repoOfCard, repoWord, whereWord } from "./agentcards";
 import { chanLine } from "./chan";
 import { askWord, endingWord } from "./inbox";
 import { peerLines } from "./peers";
+import { sproutLines } from "./sprouts";
 import { taskLines } from "./tasks";
 import { agentWord, harnessOf } from "./runs";
 
@@ -44,7 +46,8 @@ export type FeedKind =
   | "chan"
   | "task"
   | "registry"
-  | "ask";
+  | "ask"
+  | "incubator";
 
 export interface FeedEntry {
   id: number;
@@ -79,6 +82,8 @@ export interface FeedSnapshot {
   taskAll?: TaskInfo[];
   /** launch settings by repo path, so a change can be told from a no-op */
   launchers?: Record<string, unknown>;
+  /** the incubator's sprouts by id, so a status change can be told from a save */
+  sprouts?: Record<string, Sprout>;
   /** the helpers attached, so an attach can be told from a detach */
   helpers?: HelperInfo[];
   /** the devices on the stream, so a join can be told from a leave */
@@ -500,7 +505,7 @@ export function describeEvent(
       return askLines(ev, prev, at);
     case "incubator":
     case "incubator-gone":
-      return [];
+      return sproutLines(ev, prev, at);
   }
 }
 
