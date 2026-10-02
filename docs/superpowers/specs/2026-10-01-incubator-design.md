@@ -161,7 +161,7 @@ In `lib/workflows/`, overridable like the others. Each is a straight line.
   (`gate: judge`, `evidence: .canopy/intent.md .canopy/research.md
   .canopy/pick.json`, `back: research`, `retries: 2`).
 - `build-new.md`: scaffold, test, accept (`gate: judge`, `back: scaffold`),
-  deploy, file.
+  deploy, file (deploy and file replaced by amendment 2, rulings 1 and 3; see amendment 2).
 - `renovate.md`: pull upstream into the seed and add the `upstream` remote,
   renovate, test, accept, deploy, file.
 - `extend.md`: branch `new/<slug>` in the target repo, build, test, accept,
@@ -170,7 +170,7 @@ In `lib/workflows/`, overridable like the others. Each is a straight line.
 
 The last step of `build-new` and `renovate`, file, runs
 `canopy library import <seed path>`, so devhub classifies the project into its
-category. It runs after deploy so no flow's repo path moves under it; the
+category (replaced by amendment 2, rulings 1 and 4; see amendment 2). It runs after deploy so no flow's repo path moves under it; the
 Incubator then updates `repoId` and `seedPath` from the rescan. A rejected
 sprout's seed moves to `_incubator/rejected/` with its research.
 
@@ -348,10 +348,10 @@ cannot.
 | Stage | Tools |
 |---|---|
 | clarify | read, `Read` of the sprout's inputs folder, `WebFetch`, `Edit`/`Write` under `.canopy/` |
-| research | read, `WebSearch`, `WebFetch`, `Bash(gh search:*)`, `Bash(gh repo view:*)`, `Bash(gh api:*)`, `Bash(git clone:*)`, `Write` under `.canopy/` |
+| research | read, `WebSearch`, `WebFetch`, `Bash(gh search:*)`, `Bash(gh repo view:*)`, `Bash(gh api:*)`, `Bash(git clone:*)`, `Write` under `.canopy/` (replaced by amendment 2, ruling 3; see amendment 2) |
 | build, renovate, extend | `Edit`/`Write` in the repo, `bun`, `bunx`, `git-read`, `git-commit`, the project's own scripts |
 | test | `bun`, `bunx`, the project's scripts, `Bash(curl:*)` against the preview |
-| deploy | `git-push`, `Bash(vercel deploy:*)`, `Bash(vercel link:*)`, `Bash(vercel env:*)`, `Bash(firebase deploy:*)`, `Bash(bunx convex deploy:*)` |
+| deploy | `git-push`, `Bash(vercel deploy:*)`, `Bash(vercel link:*)`, `Bash(vercel env:*)`, `Bash(firebase deploy:*)`, `Bash(bunx convex deploy:*)` (`git-push` and `Bash(vercel deploy:*)` replaced by amendment 2, ruling 1; see amendment 2) |
 | retro | read, `Write` under `.canopy/` |
 
 ### Hard limits the Incubator enforces
@@ -517,3 +517,25 @@ Rulings made while building phase 2:
 - Every incubator stage runs with yolo off and without the route's extra flags, whatever the agent routes say: in the incubator's own start, and when a flow on a seed is restored after a restart.
 - The vault token and the transcribe key are read once at start and then deleted from canopy's own environment, so no shell, run or tmux server inherits them; `/proc/<canopy>/environ` still holds the values the process started with.
 - Clarify reads its inputs with the Read tool by full path, never through a shell, and reads a recording's transcript rather than the recording. A transcribed recording's line in the index says "a voice memo; its words are in [n]", so it never waits on a summary. Its step checks `.canopy/questions.json` (JSON, a list, each with its question text) and has `retries: 1`: a bad file sends clarify back once with the reason, and after that the flow parks gated, so the sprout keeps its slot under the ruling above. Before this, the first real sprout (2026-10-02) asked for three Bash permissions, to read the inputs, to inspect the audio and to check the JSON.
+
+### Amendment 2: phase 3, 2026-10-02
+
+Rulings made while building phase 3 (scout, build-new and Vercel):
+
+1. **Deploy is canopy's code, not an agent step.** The spec's `build-new` ends in deploy and file steps whose allowlist holds `git-push` and `vercel deploy`. Here `build-new` stops at Accept, and the Incubator's `ship` does the rest in code. Under the spec's plan, an agent with `Bash(git push:*)` could push to any repo `GH_TOKEN` can write to, and one with `Bash(vercel deploy:*)` holds the Vercel token. With the work in code, both hard limits hold by construction.
+2. **Phase 3 deploys `new` picks to `vercel` alone.** `pickRefusal` still knows all four hosts and the license rules. A new `phaseRefusal` parks a `renovate` or `extend` pick with "a renovate pick arrives in phase 4; the research is in .canopy/research.md", and parks any host but `vercel` the same way.
+3. **Research reads nothing in the workspace beyond devhub's two indexes and READMEs.** That means `Read(//<root>/_devhub/manifest.json)`, `Read(//<root>/_devhub/references.json)` and `Read(//<root>/**/README.md)`, added by `withWorkspaceRead`. There is no bare `Read`, because `<root>/.env` holds shared secrets and `/proc/<pid>/environ` holds canopy's tokens, and WebFetch could carry either out. There is no `gh api`, because `gh api -X POST user/repos` makes a public repo. There is no `git clone`. The spec's research row had all three.
+4. **Filing through devhub and moving a rejected seed wait.** Seeds are peer-synced, and a move on the mini leaves the Mac's copy at the old path. A live or rejected seed stays at `_incubator/<slug>`.
+5. **A park with no gated flow behind it joins the inbox** as a `sprout` item of kind `park`, offering continue, retry and stop through the existing resume and stop routes. A park behind a gated flow is already in the inbox as that flow's gate.
+6. **Seeds stay peer-synced.** Scaffold's check requires `.gitignore` to cover `node_modules`, `.vercel` and `.env.local`, so no WIP snapshot carries a dependency tree or a token.
+7. **Checks reach canopy's CLI as `"$CANOPY_CLI"`.** `runCheck` sets it to canopy's own `bin/canopy.ts`, which is executable and has a bun shebang. That is how scout's check runs `canopy incubator pick-check` in the container, where `canopy` is not on PATH.
+8. **`VERCEL_TOKEN` is read once, into the ship config, and deleted from canopy's env** (`SECRET_ENV`). It goes only into the env of the `vercel` processes `ship` spawns, and never onto an argv, where `ps` would show it to every agent in the shared pid namespace. An optional `VERCEL_SCOPE` names a team. Like the vault token, it stays readable through `/proc/<canopy>/environ` in the shared pid namespace, which deleting it cannot reach, so the docs ask for a token scoped to one team kept for incubator projects.
+9. **The Vercel CLI is installed in the image**, pinned (`vercel@61.1.0`), the same way codex is. A backend without it parks with "the vercel CLI is not installed on <backend>".
+10. **A judge rejection at scout's Eval ends the sprout as `rejected`** with the judge's reason in `parked`, and stops the gated flow. A rejection anywhere else parks, as a gate does now.
+11. **New input after a pick drops the pick**, so the chain clarifies again, scouts again and builds again. `nextWorkflow` reads the flows, so a `build-new` from before the newest scout does not count.
+
+Also in phase 3:
+
+- The Vercel project name: canopy makes the project through `POST /v11/projects` under the first candidate `GET /v9/projects/<name>` answers 404 for, going on to the next on a 409, so it never deploys over a project the account already has.
+- The smoke GET uses redirect "manual". It follows only same-host https redirects, by hand, at most 5. A redirect to another host, or one with no usable Location, is a sign-in page and not live. A sixth hop is a loop.
+- The Shipper replaces `VERCEL_TOKEN` with `***` in any error text built from vercel output.

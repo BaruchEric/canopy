@@ -1,5 +1,9 @@
 import { describe, expect, test } from "bun:test";
-import type { ExecOptions, ExecResult } from "./exec";
+import { randomBytes } from "node:crypto";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { exec, type ExecOptions, type ExecResult } from "./exec";
 import { shipConfig, shipper, type ShipDeps } from "./shipper";
 
 interface Call { cmd: string[]; opts: ExecOptions }
@@ -142,3 +146,32 @@ describe("deploy", () => {
     expect(shipper(shipConfig({}, "mini"), fakes(() => ok()).deps).ready("vercel")).toBe("add VERCEL_TOKEN to mini's .env");
   });
 });
+
+// Live run: makes a real private repo and a real Vercel project, then deletes both.
+// Needs CANOPY_INCUBATOR_IT=1 and VERCEL_TOKEN; `gh repo delete` needs the delete_repo scope.
+const LIVE = process.env["CANOPY_INCUBATOR_IT"] === "1" && Boolean(process.env["VERCEL_TOKEN"]);
+test.skipIf(!LIVE)("a real static site goes live and is cleaned up", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "canopy-it-"));
+  const name = `canopy-it-${randomBytes(3).toString("hex")}`;
+  const ship = shipper(shipConfig(process.env, "it"));
+  let repo: string | null = null;
+  let project: string | null = null;
+  try {
+    await writeFile(join(dir, "index.html"), "<!doctype html><title>canopy it</title><p>ok</p>");
+    for (const args of [["init", "-b", "main"], ["add", "-A"], ["-c", "user.name=canopy", "-c", "user.email=canopy@localhost", "commit", "-m", "it"]]) {
+      expect((await exec(["git", ...args], { cwd: dir })).code).toBe(0);
+    }
+    repo = await ship.createRepo(name, "canopy integration test, deleted at the end");
+    project = await ship.project(name);
+    await ship.push(dir, repo);
+    const url = await ship.deploy(dir, project);
+    expect(url).toMatch(/^https:\/\/.+\.vercel\.app$/);
+  } finally {
+    if (project) {
+      const scope = process.env["VERCEL_SCOPE"] ? `?slug=${encodeURIComponent(process.env["VERCEL_SCOPE"])}` : "";
+      await fetch(`https://api.vercel.com/v9/projects/${project}${scope}`, { method: "DELETE", headers: { authorization: `Bearer ${process.env["VERCEL_TOKEN"] ?? ""}` } });
+    }
+    if (repo) await exec(["gh", "repo", "delete", repo, "--yes"]);
+    await rm(dir, { recursive: true, force: true });
+  }
+}, 20 * 60_000);
