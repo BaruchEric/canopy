@@ -921,7 +921,7 @@ export class Incubator {
         await this.changed(s);
       }
       if (!s.vercelProject) {
-        s.vercelProject = await ship.project(s.slug);
+        s.vercelProject = await ship.project(s.slug, s.seedPath);
         await this.changed(s);
       }
       if (sproutEnded(s)) return;

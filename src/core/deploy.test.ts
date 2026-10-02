@@ -1,5 +1,19 @@
 import { describe, expect, test } from "bun:test";
-import { deployReady, deploymentUrl, isVercelAppUrl, productionUrl, repoCandidates, smokeRefusal, vercelArgs, vercelProject } from "./deploy";
+import {
+  deployReady,
+  deploymentUrl,
+  frameworkOf,
+  isVercelAppUrl,
+  productionUrl,
+  repoCandidates,
+  servesFile,
+  smokeRefusal,
+  strangeAliases,
+  vercelArgs,
+  vercelConfigRefusal,
+  vercelProject,
+  withCanopyIgnored,
+} from "./deploy";
 
 describe("deployReady", () => {
   const env = { vercelToken: true, vercelCli: true, backend: "mini" };
@@ -51,5 +65,33 @@ describe("the deploy's answers", () => {
   test("the vercel argv never carries the token", () => {
     expect(vercelArgs("link", "coin-counter", null)).toEqual(["vercel", "link", "--yes", "--project", "coin-counter"]);
     expect(vercelArgs("deploy", "coin-counter", "team-x")).toEqual(["vercel", "deploy", "--prod", "--yes", "--scope", "team-x"]);
+  });
+});
+
+describe("what a deploy takes from the seed", () => {
+  test("vercelConfigRefusal: alias and unknown keys refused, the list and no file let through", () => {
+    expect(vercelConfigRefusal([], null)).toBe(null);
+    expect(vercelConfigRefusal(["vercel.json"], JSON.stringify({ $schema: "x", buildCommand: "b", cleanUrls: true, headers: [] }))).toBe(null);
+    expect(vercelConfigRefusal(["vercel.json"], JSON.stringify({ alias: "a.example" }))).toContain("sets alias");
+    expect(vercelConfigRefusal(["vercel.json"], JSON.stringify({ github: { enabled: false }, scope: "t" }))).toContain("sets github, scope");
+    expect(vercelConfigRefusal(["vercel.json"], "[]")).toBe("vercel.json is not a JSON object");
+    for (const n of ["now.json", "vercel.toml", "vercel.ts", "vercel.mjs"]) expect(vercelConfigRefusal([n], null)).toContain(`${n} is a Vercel config`);
+  });
+  test("frameworkOf: next over vite, either dependency list, nothing when unclear", () => {
+    expect(frameworkOf(JSON.stringify({ devDependencies: { vite: "7" } }))).toBe("vite");
+    expect(frameworkOf(JSON.stringify({ dependencies: { next: "16" }, devDependencies: { vite: "7" } }))).toBe("nextjs");
+    expect(frameworkOf(JSON.stringify({ dependencies: { react: "19" } }))).toBe(null);
+    expect(frameworkOf("{")).toBe(null);
+    expect(frameworkOf(null)).toBe(null);
+  });
+  test("withCanopyIgnored: one .canopy/ line, last", () => {
+    expect(withCanopyIgnored(null)).toBe(".canopy/\n");
+    expect(withCanopyIgnored(".canopy/\n!.canopy/a.md\n\n")).toBe("!.canopy/a.md\n.canopy/\n");
+  });
+  test("strangeAliases and servesFile", () => {
+    expect(strangeAliases(["a.vercel.app", "https://b.vercel.app", "eric.example.com", "a.vercel.app.evil.com"])).toEqual(["eric.example.com", "a.vercel.app.evil.com"]);
+    expect(servesFile("# Coin\n\nbody", "# Coin\n\nbody\n")).toBe(true);
+    expect(servesFile("<!doctype html>", "# Coin\n")).toBe(false);
+    expect(servesFile("anything", "  ")).toBe(false);
   });
 });

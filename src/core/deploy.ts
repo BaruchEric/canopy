@@ -74,3 +74,84 @@ export function vercelArgs(cmd: "link" | "deploy", project: string, scope: strin
   const s = scope ? ["--scope", scope] : [];
   return cmd === "link" ? ["vercel", "link", "--yes", "--project", project, ...s] : ["vercel", "deploy", "--prod", "--yes", ...s];
 }
+
+/** the vercel.json keys a sprout's deploy may carry: how to build and serve
+ *  it, nothing that names a domain, an alias, a team or a git link */
+export const VERCEL_JSON_KEYS = [
+  "$schema",
+  "buildCommand",
+  "outputDirectory",
+  "installCommand",
+  "framework",
+  "cleanUrls",
+  "trailingSlash",
+  "rewrites",
+  "redirects",
+  "headers",
+] as const;
+
+/** the other config files the vercel CLI reads: the script forms run code
+ *  in a process that holds the token, and none of them is checked here */
+export const VERCEL_OTHER_CONFIGS = ["now.json", "vercel.toml", "vercel.ts", "vercel.mts", "vercel.js", "vercel.mjs", "vercel.cjs"] as const;
+
+const isRecord = (v: unknown): v is Record<string, unknown> => typeof v === "object" && v !== null && !Array.isArray(v);
+
+/** null when the deploy's own config may go to the CLI, else why not.
+ *  `names` are the files at the deploy's root, `vercelJson` its vercel.json. */
+export function vercelConfigRefusal(names: readonly string[], vercelJson: string | null): string | null {
+  const other = VERCEL_OTHER_CONFIGS.find((n) => names.includes(n));
+  if (other) return `${other} is a Vercel config canopy does not read; use vercel.json`;
+  if (vercelJson === null) return null;
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(vercelJson);
+  } catch {
+    return "vercel.json is not JSON";
+  }
+  if (!isRecord(parsed)) return "vercel.json is not a JSON object";
+  if ("alias" in parsed) return "vercel.json sets alias, and a sprout never goes live on a domain of its own";
+  const allowed: readonly string[] = VERCEL_JSON_KEYS;
+  const off = Object.keys(parsed).filter((k) => !allowed.includes(k));
+  if (off.length) return `vercel.json sets ${off.join(", ")}, which canopy does not deploy with; it takes ${VERCEL_JSON_KEYS.join(", ")}`;
+  return null;
+}
+
+/** the Vercel framework preset package.json makes clear: Next, else Vite, else none */
+export function frameworkOf(packageJson: string | null): "nextjs" | "vite" | null {
+  if (packageJson === null) return null;
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(packageJson);
+  } catch {
+    return null;
+  }
+  if (!isRecord(parsed)) return null;
+  const pkg = parsed;
+  const has = (name: string): boolean =>
+    ["dependencies", "devDependencies"].some((k) => {
+      const deps = pkg[k];
+      return isRecord(deps) && name in deps;
+    });
+  if (has("next")) return "nextjs";
+  if (has("vite")) return "vite";
+  return null;
+}
+
+/** a .vercelignore that keeps `.canopy/` out of the upload: canopy's line
+ *  last, so no negation before it brings a note back */
+export function withCanopyIgnored(text: string | null): string {
+  const lines = (text ?? "").split("\n").filter((l) => l.trim() !== ".canopy/");
+  while (lines.length && lines[lines.length - 1]?.trim() === "") lines.pop();
+  return [...lines, ".canopy/", ""].join("\n");
+}
+
+/** the aliases a deployment answered that are not vercel.app addresses */
+export const strangeAliases = (aliases: readonly string[]): string[] =>
+  aliases.filter((a) => !isVercelAppUrl(a.startsWith("https://") ? a : `https://${a}`));
+
+/** whether a page's body is the file itself, served as it is: what a 200
+ *  for a `.canopy/` note means, as against an app's own fallback page */
+export function servesFile(body: string, file: string): boolean {
+  const head = file.trim().slice(0, 200);
+  return head.length > 0 && body.trimStart().startsWith(head);
+}
