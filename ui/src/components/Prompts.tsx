@@ -109,6 +109,8 @@ export function Questions({
   who,
   onAnswer,
   onDecline,
+  declineLabel,
+  declineTitle,
   busy = false,
 }: {
   questions: RunQuestion[];
@@ -116,6 +118,9 @@ export function Questions({
   who: string;
   onAnswer: (answers: Record<string, string>) => void;
   onDecline?: () => void;
+  /** the decline button's word and tooltip; "decline" by default */
+  declineLabel?: string;
+  declineTitle?: string;
   busy?: boolean;
 }) {
   const [picked, setPicked] = useState<Record<string, string[]>>({});
@@ -193,8 +198,8 @@ export function Questions({
         {onDecline && (
           <>
             <span className="spacer" />
-            <button type="button" className="mini" disabled={busy} title="Leave it unanswered: the agent is told you declined" onClick={onDecline}>
-              decline
+            <button type="button" className="mini" disabled={busy} title={declineTitle ?? "Leave it unanswered: the agent is told you declined"} onClick={onDecline}>
+              {declineLabel ?? "decline"}
             </button>
           </>
         )}

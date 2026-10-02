@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import type { CSSProperties } from "react";
 import { Library } from "./components/Library";
 import { AgentsView } from "./components/AgentsView";
+import { IncubatorView } from "./components/Incubator";
 import { Wordmark } from "./components/TopBar";
 import { Dock } from "./components/Dock";
 import { FeedDock } from "./components/Feed";
@@ -25,12 +26,13 @@ const VIEWS = [
   { key: "library", label: "library", title: "Library: tags, notes, links and dev servers" },
   { key: "ports", label: "ports", title: "Ports: what is listening, and the dev servers" },
   { key: "agents", label: "agents", title: "Agents: which harness starts for what, per repo and role" },
+  { key: "incubator", label: "incubator", title: "Incubator: new projects from an idea, clarified and researched before anything is built" },
 ] as const;
 
 /** the views that are not the git cockpit: their own bar, no board keys */
-const OTHER_VIEWS = ["library", "ports", "agents"];
+const OTHER_VIEWS = ["library", "ports", "agents", "incubator"];
 
-/** The four views, one segmented row: in the top bar on the git view, the
+/** The views, one segmented row: in the top bar on the git view, the
  *  whole of the bar on the others. */
 function ViewNav({ view, navigate }: { view: string; navigate: (next: string) => void }) {
   return (
@@ -160,6 +162,16 @@ export function App() {
         return;
       }
       if (t.tagName === "INPUT" || t.tagName === "TEXTAREA") return;
+      // n: a new project, from the board or the incubator (⌘N is the
+      // browser's new window, which a page cannot take)
+      if (e.key === "n" && !e.metaKey && !e.ctrlKey && !e.altKey && (view === "git" || view === "incubator")) {
+        const st = useStore.getState();
+        if (st.sproutsReady && !st.sheet && !document.querySelector('[role="dialog"], [role="menu"]')) {
+          e.preventDefault();
+          st.openNewSprout();
+        }
+        return;
+      }
       if (OTHER_VIEWS.includes(view)) return;
       const st = useStore.getState();
       // the drawer is the top layer while it is out
@@ -250,6 +262,8 @@ export function App() {
       </header>
       {view === "agents" ? (
         <AgentsView onGit={() => navigate("git")} />
+      ) : view === "incubator" ? (
+        <IncubatorView onGit={() => navigate("git")} />
       ) : (
         <Library ports={view === "ports"} project={project} onRepo={showRepo} onPorts={() => navigate("ports")} />
       )}

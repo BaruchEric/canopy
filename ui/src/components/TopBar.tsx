@@ -15,6 +15,7 @@ import { SettingsMenu } from "./Settings";
 import { BackendsChip } from "./Backends";
 import { ChanChip } from "./Chan";
 import { InboxChip } from "./Inbox";
+import { NewProjectButton } from "./Incubator";
 import { DevicesChip } from "./Devices";
 import { KeptShells } from "./KeptShells";
 import { ShellsChip } from "./Shells";
@@ -484,6 +485,7 @@ export function TopBar({ nav }: { nav?: ReactNode }) {
           <FilterMenu />
         </div>
         <div className="tb-line tb-tools tb-scroll">
+          <NewProjectButton />
           <SortSeg />
           <SelectPill />
           <RunsPill />
@@ -512,6 +514,7 @@ export function TopBar({ nav }: { nav?: ReactNode }) {
         <LiveDot />
         <FeedButton />
         <SearchButton />
+        <NewProjectButton />
         <SelectPill />
       </span>
       <span className="topbar-break" aria-hidden="true" />

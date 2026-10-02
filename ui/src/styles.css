@@ -5322,18 +5322,25 @@ button.machine:hover {
     flex: 1;
   }
   /* the crowns say canopy; the words would crowd the views off the row */
+  .app-nav .wordmark,
   .topbar.phone .wordmark {
     font-size: 0;
     gap: 0;
   }
-  /* four views: tighter, and able to scroll rather than push the row wide */
-  .topbar.phone .view-nav {
+  .app-nav {
+    gap: 10px;
+  }
+  /* the views: tighter, and able to scroll rather than push the row wide,
+     in the git view's bar and in the other views' own */
+  .topbar.phone .view-nav,
+  .app-nav .view-nav {
     flex: 0 1 auto;
     min-width: 0;
     overflow-x: auto;
     scrollbar-width: none;
   }
-  .topbar.phone .view-nav button {
+  .topbar.phone .view-nav button,
+  .app-nav .view-nav button {
     padding: 1px 7px;
   }
   .tb-line .search {
@@ -6531,4 +6538,158 @@ span.effective-flag:not(:first-child) {
   .effective-table td {
     padding-right: 6px;
   }
+}
+
+/* ---------- incubator ---------- */
+.incubator-view {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: auto;
+}
+.incubator-empty {
+  margin: 48px auto;
+  max-width: 34rem;
+  padding: 0 16px;
+  color: var(--ink-dim);
+  display: grid;
+  gap: 12px;
+  justify-items: start;
+}
+.sprout-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(min(100%, 320px), 1fr));
+  gap: 12px;
+  padding: 14px 16px;
+}
+.sprout-card {
+  display: grid;
+  /* a long title ellipsizes and the strip wraps, inside the card */
+  grid-template-columns: minmax(0, 1fr);
+  min-width: 0;
+  gap: 8px;
+  text-align: left;
+  background: var(--bark1);
+  border: 1px solid var(--hair);
+  border-radius: var(--r-card);
+  padding: 10px 12px;
+  color: var(--ink);
+  cursor: pointer;
+}
+.sprout-card.needs {
+  border-color: color-mix(in srgb, var(--rust) 50%, var(--hair));
+}
+.sprout-head {
+  display: flex;
+  /* a title too long for the line takes it, and the word goes under */
+  flex-wrap: wrap;
+  gap: 2px 8px;
+  align-items: baseline;
+  justify-content: space-between;
+}
+.sprout-title {
+  min-width: 0;
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.sprout-word {
+  color: var(--ink-dim);
+  font-size: 12px;
+  white-space: nowrap;
+}
+.sprout-word.st-parked,
+.sprout-word.st-rejected {
+  color: var(--rust);
+}
+.sprout-word.st-live {
+  color: var(--moss);
+}
+.sprout-parked {
+  color: var(--rust);
+  font-size: 12px;
+}
+.sprout-meta {
+  color: var(--ink-faint);
+  font-size: 12px;
+}
+.stage-strip {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.stage {
+  font-size: 11px;
+  padding: 1px 6px;
+  border-radius: var(--r);
+  border: 1px solid var(--hair2);
+  color: var(--ink-faint);
+}
+.stage.done {
+  color: var(--moss);
+  border-color: color-mix(in srgb, var(--moss) 40%, var(--hair));
+}
+.stage.now {
+  color: var(--sky);
+  border-color: var(--sky);
+}
+.stage.stuck {
+  color: var(--rust);
+  border-color: var(--rust);
+}
+.drop-zone {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  padding: 12px;
+  border: 1px dashed var(--hair2);
+  border-radius: var(--r);
+}
+.drop-zone.over {
+  border-color: var(--sky);
+  background: color-mix(in srgb, var(--sky) 8%, transparent);
+}
+.intake-files,
+.sprout-inputs,
+.sprout-flows {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: grid;
+  gap: 4px;
+  font-size: 13px;
+}
+.intake-line {
+  width: 100%;
+  padding: 6px 10px;
+}
+/* a short screen scrolls the sheet rather than squashing its parts */
+.intake > *,
+.sprout-sheet > * {
+  flex-shrink: 0;
+}
+/* the sheet's column gap spaces its parts; a heading sits on what it names */
+.sprout-sheet h3,
+.sprout-sheet > p {
+  margin: 0;
+}
+.recording {
+  color: var(--rust);
+}
+.sprout-doc {
+  white-space: pre-wrap;
+  font-family: var(--mono);
+  font-size: 12px;
+  max-height: 16rem;
+  overflow: auto;
+  margin: 0;
+  padding: 8px;
+  background: var(--bark2);
+  border-radius: var(--r);
 }

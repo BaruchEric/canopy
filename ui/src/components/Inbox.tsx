@@ -75,6 +75,7 @@ function InboxRow({
     st.closeInbox();
     if (item.source === "run") st.showRun(item.id);
     else if (item.source === "flow") st.showFlow(item.id);
+    else if (item.source === "sprout") st.showSprout(item.id);
   };
   const join = () => {
     if (!target) return;
@@ -131,12 +132,20 @@ function InboxRow({
               <div className="eyebrow">{item.who} {item.title}</div>
               {detail && <pre className="ask-detail">{detail}</pre>}
               <div className="ask-row">
-                <button type="button" className="mini strong" disabled={busy} onClick={() => answer({ choice: "continue" })}>
-                  continue
+                <button
+                  type="button"
+                  className="mini strong"
+                  disabled={busy}
+                  title={item.budget ? "The budget is spent; this lets one more step run, then it parks again" : undefined}
+                  onClick={() => answer({ choice: "continue" })}
+                >
+                  {item.budget ? "allow one more step" : "continue"}
                 </button>
-                <button type="button" className="mini" disabled={busy} onClick={() => answer({ choice: "retry" })}>
-                  retry the step
-                </button>
+                {!item.budget && (
+                  <button type="button" className="mini" disabled={busy} onClick={() => answer({ choice: "retry" })}>
+                    retry the step
+                  </button>
+                )}
                 <span className="spacer" />
                 <button type="button" className="mini" disabled={busy} onClick={() => answer({ choice: "stop" })}>
                   stop
@@ -149,7 +158,15 @@ function InboxRow({
               who={item.who}
               busy={busy}
               onAnswer={(answers) => answer({ answers })}
-              {...(item.source === "ask" ? { onDecline: () => answer({ behavior: "deny" }) } : {})}
+              {...(item.source === "ask"
+                ? { onDecline: () => answer({ behavior: "deny" }) }
+                : item.source === "sprout"
+                  ? {
+                      onDecline: () => answer({ skip: true }),
+                      declineLabel: "go on assumptions",
+                      declineTitle: "Research goes on with what clarify assumed, and intent.md says you chose that",
+                    }
+                  : {})}
             />
           ) : (
             <PermissionForm
@@ -175,7 +192,7 @@ function InboxRow({
           <div className="kept-acts">
             {item.source !== "ask" && (
               <button type="button" className="mini" onClick={openSheet}>
-                open the {item.source === "run" ? "run" : "workflow"}
+                open the {item.source === "run" ? "run" : item.source === "sprout" ? "project" : "workflow"}
               </button>
             )}
             {held && (

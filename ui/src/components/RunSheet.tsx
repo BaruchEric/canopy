@@ -9,6 +9,7 @@ import { effectiveRows, harnessesOf, hasRouting, ROLE_LABEL, ROLE_TITLE, withPic
 import { EffectiveTable, PickEditor } from "./AgentForm";
 import { FleetPlan, FleetSheet, FlowConsole, FlowPlan } from "./FlowSheet";
 import { SearchSheet } from "./Search";
+import { NewSproutSheet, SproutSheet } from "./Incubator";
 import { RunPromptForm } from "./Prompts";
 import {
   AGENT_ROLES,
@@ -136,6 +137,8 @@ function Body({ sheet }: { sheet: Sheet }) {
     if (!repo) return <Missing what="That repo is no longer in the tree." onClose={close} />;
     return <FlowPlan repo={repo} workflow={sheet.workflow} />;
   }
+  if (sheet.kind === "new-sprout") return <NewSproutSheet />;
+  if (sheet.kind === "sprout") return <SproutSheet id={sheet.id} />;
   if (sheet.kind === "flow") return <FlowConsole flowId={sheet.flowId} />;
   if (sheet.kind === "fleet-plan") return <FleetPlan workflow={sheet.workflow} />;
   if (sheet.kind === "fleet") return <FleetSheet fleetId={sheet.fleetId} />;
