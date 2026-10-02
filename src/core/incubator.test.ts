@@ -1297,12 +1297,17 @@ class FakeShip implements Shipper {
   calls: string[] = [];
   readyAs: string | null = null;
   failDeploy: string | null = null;
+  failProject: string | null = null;
   /** a deploy waits for release() while this is set */
   hold = false;
-  private held: (() => void) | null = null;
+  private held: (() => void)[] = [];
   release(): void {
     this.hold = false;
-    this.held?.();
+    for (const h of this.held.splice(0)) h();
+  }
+  /** lets the oldest held deploy go, keeping the rest held */
+  releaseOne(): void {
+    this.held.shift()?.();
   }
   ready(): string | null {
     return this.readyAs;
@@ -1313,6 +1318,7 @@ class FakeShip implements Shipper {
   }
   async project(slug: string): Promise<string> {
     this.calls.push(`project ${slug}`);
+    if (this.failProject) throw new Error(this.failProject);
     return slug;
   }
   async push(_seed: string, repo: string): Promise<void> {
@@ -1320,7 +1326,7 @@ class FakeShip implements Shipper {
   }
   async deploy(_seed: string, project: string): Promise<string> {
     this.calls.push(`deploy ${project}`);
-    if (this.hold) await new Promise<void>((resolve) => (this.held = resolve));
+    if (this.hold) await new Promise<void>((resolve) => this.held.push(resolve));
     if (this.failDeploy) throw new Error(this.failDeploy);
     return `https://${project}.vercel.app`;
   }
@@ -1504,6 +1510,61 @@ describe("scout and build-new", () => {
     expect(now(r, s.id).status).toBe("live");
     first.release();
     await w.inc.idle();
+  });
+
+  test("a deploy holds its slot: a third sprout waits until one deploy ends", async () => {
+    const ship = new FakeShip();
+    ship.hold = true;
+    const w = chain(ship);
+    // idle() would wait on the held deploy, so this polls instead
+    const settle = () => Bun.sleep(15);
+    const finish = async (id: string, files: Record<string, string>): Promise<void> => {
+      const s = now(w, id);
+      for (const [rel, text] of Object.entries(files)) await w.seeds.write(s.seedPath, rel, text);
+      w.flows.move(s.flows.at(-1)?.flowId ?? "", { status: "done" });
+      await settle();
+    };
+    const deployingAt = async (text: string): Promise<Sprout> => {
+      const s = await w.inc.create(intake({ text }));
+      await settle();
+      await finish(s.id, { ".canopy/questions.json": "[]" });
+      await finish(s.id, { ".canopy/pick.json": PICK });
+      await finish(s.id, { ".canopy/smoke.md": "status: 200" });
+      return now(w, s.id);
+    };
+    const a = await deployingAt("coin counter");
+    const b = await deployingAt("tip splitter");
+    expect(a.status).toBe("deploying");
+    expect(b.status).toBe("deploying");
+    const third = await w.inc.create(intake({ text: "unit converter" }));
+    await settle();
+    expect(now(w, third.id).status).toBe("queued");
+    expect(now(w, third.id).flows).toHaveLength(0);
+    ship.releaseOne();
+    await settle();
+    expect(now(w, a.id).status).toBe("live");
+    expect(now(w, b.id).status).toBe("deploying");
+    expect(now(w, third.id).status).toBe("clarifying");
+    ship.release();
+    await w.inc.idle();
+    expect(now(w, b.id).status).toBe("live");
+  });
+
+  test("a failure between steps keeps the repo on record; resume makes no second repo", async () => {
+    const ship = new FakeShip();
+    ship.failProject = "vercel project: no scope";
+    const w = chain(ship);
+    const s = await shipped(w);
+    expect(s.status).toBe("parked");
+    expect(s.parked).toBe("deploy: vercel project: no scope");
+    expect(s.privateRepo).toBe("eric/coin-counter");
+    expect(s.vercelProject).toBeUndefined();
+    ship.failProject = null;
+    ship.calls = [];
+    await w.inc.resume(s.id, "retry");
+    await w.inc.idle();
+    expect(ship.calls).toEqual(["project coin-counter", "push eric/coin-counter", "deploy coin-counter"]);
+    expect(now(w, s.id).status).toBe("live");
   });
 
   test("input that arrives while scout runs drops the pick, and the chain clarifies again", async () => {
