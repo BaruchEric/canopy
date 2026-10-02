@@ -7,7 +7,7 @@
  */
 import type { Sprout, SproutStatus } from "./types";
 
-export type NoteEvent = "started" | "questions" | "input" | "parked" | "stopped";
+export type NoteEvent = "started" | "questions" | "input" | "parked" | "stopped" | "live" | "rejected";
 
 /** the events that also put a line in the day's note */
 export const DAILY_EVENTS: ReadonlySet<NoteEvent> = new Set<NoteEvent>(["started", "parked"]);

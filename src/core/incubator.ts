@@ -9,9 +9,12 @@
 import { join } from "node:path";
 import { networkOrigin } from "./peersync";
 import {
+  BUILD_FILES,
   INPUT_FILE_MAX,
   INPUT_TOTAL_MAX,
   SEEDS_DIR,
+  SCOUT_FILES,
+  SHIP,
   SPROUT_CONCURRENCY,
   RUNNING_STATUSES,
   WORKFLOW_STATUS,
@@ -25,16 +28,22 @@ import {
   inputsIndex,
   isSproutId,
   nextWorkflow,
+  parsePick,
   parseQuestions,
+  phaseRefusal,
+  pickRefusal,
   parseSummaries,
   safeInputName,
   sproutEnded,
   sproutSlug,
   sproutTitle,
   stageNote,
+  statusFor,
   urlWithoutSecret,
   withInputsRead,
   withSummaries,
+  withWorkspaceRead,
+  workspaceLine,
   type ParsedQuestions,
 } from "./sprout";
 import { DAILY_EVENTS, dailyLine, dailyNoteHead, dailyNotePath, sproutNote, sproutNotePath, type NoteEvent } from "./sproutnote";
@@ -129,6 +138,9 @@ export interface IncubatorDeps {
 }
 
 /** what canopy commits to the seed after clarify and after answers; nothing raw */
+/** a flow moved when its status or its step did: the sprout's status follows the step */
+const seenKey = (f: Flow): string => `${f.status}:${f.current}`;
+
 export const SEED_FILES = [".canopy/brief.md", ".canopy/intent.md", ".canopy/inputs.md"];
 
 /** A stage's workflow by name, from the bundled and the user's own sources
@@ -148,7 +160,7 @@ const bytesOf = (data: Uint8Array | string): number => (typeof data === "string"
 export class Incubator {
   private readonly sprouts = new Map<string, Sprout>();
   /** each owned flow's last status, so a broadcast that changes nothing is no transition */
-  private readonly seen = new Map<string, Flow["status"]>();
+  private readonly seen = new Map<string, string>();
   /** each sprout's vault writes, one after another */
   private readonly noteChain = new Map<string, Promise<void>>();
   /** each sprout's slow work (prepare, more input), one after another, so two
@@ -406,7 +418,7 @@ export class Incubator {
     // a clarify still under way (running, waiting or parked at a gate) has
     // not read these, so another follows it whenever it ends
     const last = s.flows.at(-1);
-    if (s.clarified || s.status === "clarifying" || (last?.workflow === "clarify" && !last.outcome)) s.reclarify = true;
+    if (s.clarified || s.status === "clarifying" || (last?.workflow === "clarify" && !last.outcome)) this.reclarify(s);
     if (s.status === "clarifying" && s.questions) {
       delete s.questions;
       delete s.questionsAt;
@@ -433,7 +445,7 @@ export class Incubator {
 
   private async afterInputs(s: Sprout): Promise<void> {
     // a transcript clarify has not read means it reads again
-    if ((await this.transcribeAll(s)) > 0 && s.clarified) s.reclarify = true;
+    if ((await this.transcribeAll(s)) > 0 && s.clarified) this.reclarify(s);
     const index = inputsIndex(s.inputs);
     await this.deps.store.writeIndex(s.id, index);
     if (s.prepared) {
@@ -464,7 +476,7 @@ export class Incubator {
    *  when it started, and without this the queue would go on to scout with
    *  the new inputs never clarified. */
   private clarifyAgain(s: Sprout, entry: SproutFlow | undefined): void {
-    if (entry?.workflow === "clarify" && s.clarified) s.reclarify = true;
+    if (entry?.workflow === "clarify" && s.clarified) this.reclarify(s);
   }
 
   private stopFlow(f: Flow): void {
@@ -592,7 +604,7 @@ export class Incubator {
         const entry = s.flows.at(-1);
         const flow = entry && !entry.outcome ? this.deps.flows.get(entry.flowId) : undefined;
         if (entry && flow) {
-          this.seen.set(flow.id, flow.status);
+          this.seen.set(flow.id, seenKey(flow));
           const running = flow.status === "working" || flow.status === "waiting";
           // a parked sprout behind a gated flow, or a running one behind a running flow, is as it was
           const settled = s.status === "parked" ? flow.status === "gated" : RUNNING_STATUSES.has(s.status) && running;
@@ -614,7 +626,7 @@ export class Incubator {
     for (const s of requeued) await this.changed(s);
     for (const m of moves) {
       // onFlow already took in a newer status while restore was writing
-      if (this.seen.get(m.flow.id) !== m.status) continue;
+      if (this.seen.get(m.flow.id) !== seenKey(m.flow)) continue;
       await this.flowMoved(m.s, m.entry, m.flow).catch((err: unknown) => this.log(`could not restore ${m.s.id}: ${msg(err)}`));
     }
     this.pump();
@@ -710,9 +722,9 @@ export class Incubator {
       free -= 1;
       const name = nextWorkflow(s);
       // the slot is claimed here, before anything awaits
-      s.status = WORKFLOW_STATUS[name] ?? "researching";
+      s.status = statusFor(name, undefined);
       delete s.parked;
-      this.track(this.startStage(s, name));
+      this.track(name === SHIP ? this.ship(s) : this.startStage(s, name));
     }
   }
 
@@ -738,8 +750,11 @@ export class Incubator {
     let wf = await this.deps.workflow(name);
     if (!wf) return this.park(s, `the ${name} workflow is not installed`);
     if (name === "clarify") wf = withInputsRead(wf, this.deps.store.inputsDir(s.id));
+    if (name === "scout") wf = withWorkspaceRead(wf, this.deps.root);
     if (this.detached || s.status === "stopped") return;
-    const flow = await this.deps.flows.start(repo, wf, stageNote(s, this.deps.store.inputsDir(s.id)));
+    const base = stageNote(s, this.deps.store.inputsDir(s.id));
+    const note = name === "scout" ? `${base} ${workspaceLine(this.deps.root)}` : base;
+    const flow = await this.deps.flows.start(repo, wf, note);
     s.flows.push({ workflow: name, flowId: flow.id });
     if (sproutEnded(s)) {
       // a stop that landed while the flow was starting ends it too
@@ -760,8 +775,9 @@ export class Incubator {
     if (this.detached) return;
     const s = this.ownerOf(flow.id);
     if (!s) return;
-    if (this.seen.get(flow.id) === flow.status) return;
-    this.seen.set(flow.id, flow.status);
+    const key = seenKey(flow);
+    if (this.seen.get(flow.id) === key) return;
+    this.seen.set(flow.id, key);
     const entry = s.flows.at(-1);
     // only the current stage, and only until its outcome is on record: a
     // restart that broadcasts an old, finished flow again changes nothing
@@ -773,14 +789,19 @@ export class Incubator {
   private async flowMoved(s: Sprout, entry: SproutFlow, flow: Flow): Promise<void> {
     // an outcome on record means this flow's end was already taken in
     if (this.detached || s.status === "stopped" || entry.outcome) return;
+    const step = flow.steps[flow.current];
     if (flow.status === "gated") {
-      const step = flow.steps[flow.current];
+      if (entry.workflow === "scout" && step?.judgment?.rejected) {
+        return this.reject(s, entry, flow, step.judgment.reason ?? step.reason ?? "the judge turned the idea down");
+      }
       // the flow lives on, waiting on the human: the sprout keeps its slot, so nothing is pumped
       return this.park(s, `${entry.workflow} waits${step ? ` after ${step.name}` : ""}: ${step?.reason ?? "a gate"}`, false);
     }
     if (flow.status === "working" || flow.status === "waiting") {
-      if (s.status !== "parked") return;
-      s.status = WORKFLOW_STATUS[entry.workflow] ?? "researching";
+      // back from a park, or on to the next step: the status follows the step in progress
+      const want = statusFor(entry.workflow, step?.name);
+      if (s.status !== "parked" && (s.status === want || !RUNNING_STATUSES.has(s.status))) return;
+      s.status = want;
       delete s.parked;
       await this.changed(s);
       return;
@@ -788,11 +809,13 @@ export class Incubator {
     entry.outcome = flow.status;
     s.spent = { runs: s.spent.runs + (flow.spent?.runs ?? 0), workMs: s.spent.workMs + (flow.spent?.workMs ?? 0) };
     if (flow.status !== "done") return this.park(s, `${entry.workflow} ${flow.status}${flow.error ? `: ${flow.error}` : ""}`);
-    if (entry.workflow !== "clarify") return this.park(s, `nothing follows ${entry.workflow} yet`);
     try {
-      await this.clarified(s);
+      if (entry.workflow === "clarify") await this.clarified(s);
+      else if (entry.workflow === "scout") await this.scouted(s);
+      else if (entry.workflow === "build-new") await this.built(s);
+      else await this.park(s, `nothing follows ${entry.workflow} yet`);
     } catch (err) {
-      await this.park(s, `could not read what clarify wrote: ${msg(err)}`);
+      await this.park(s, `could not read what ${entry.workflow} wrote: ${msg(err)}`);
     }
   }
 
@@ -829,6 +852,62 @@ export class Incubator {
       await this.changed(s);
     }
     this.pump();
+  }
+
+  /** scout finished: its pick, read as untrusted and held to the limits in code */
+  private async scouted(s: Sprout): Promise<void> {
+    const raw = await this.deps.seeds.read(s.seedPath, ".canopy/pick.json");
+    if (raw === null) return this.park(s, "scout ended without a .canopy/pick.json");
+    const parsed = parsePick(raw);
+    if (!parsed.ok) return this.park(s, `scout wrote a pick canopy cannot read: ${parsed.error}`);
+    try {
+      await this.deps.seeds.commit(s.seedPath, [...SEED_FILES, ...SCOUT_FILES], `scout: ${s.title}`);
+    } catch (err) {
+      return this.park(s, `could not commit scout's files: ${msg(err)}`);
+    }
+    const refused = pickRefusal(parsed.pick) ?? phaseRefusal(parsed.pick);
+    if (refused) return this.park(s, refused);
+    if (sproutEnded(s)) return;
+    // input that came while scout ran: clarify reads it, and scout picks again
+    if (!s.reclarify) s.pick = parsed.pick;
+    s.status = "queued";
+    await this.changed(s);
+    this.pump();
+  }
+
+  /** build-new finished: its notes committed, then canopy's own ship */
+  private async built(s: Sprout): Promise<void> {
+    try {
+      await this.deps.seeds.commit(s.seedPath, BUILD_FILES, `build: ${s.title}`);
+    } catch (err) {
+      return this.park(s, `could not commit the build's notes: ${msg(err)}`);
+    }
+    if (sproutEnded(s)) return;
+    s.status = "queued";
+    await this.changed(s);
+    this.pump();
+  }
+
+  /** the judge turned the idea down at eval: an end, not a park */
+  private async reject(s: Sprout, entry: SproutFlow, flow: Flow, reason: string): Promise<void> {
+    entry.outcome = "rejected";
+    s.spent = { runs: s.spent.runs + (flow.spent?.runs ?? 0), workMs: s.spent.workMs + (flow.spent?.workMs ?? 0) };
+    s.status = "rejected";
+    s.parked = reason;
+    this.stopFlow(flow);
+    await this.changed(s, "rejected");
+    this.pump();
+  }
+
+  /** canopy's own deploy; a later task replaces this placeholder */
+  private async ship(s: Sprout): Promise<void> {
+    await this.park(s, "canopy cannot deploy yet");
+  }
+
+  /** new input means clarify reads again, and a pick made before it no longer stands */
+  private reclarify(s: Sprout): void {
+    s.reclarify = true;
+    delete s.pick;
   }
 
   /** `pump` false for a gate: its flow still holds the slot */

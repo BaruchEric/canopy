@@ -8,7 +8,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Incubator, IncubatorError, incubatorWorkflow, type IncubatorDeps, type IncubatorFlows, type IncubatorSeeds, type IncubatorStore, type Intake, type NoteSink } from "./incubator";
 import { BUNDLED_DIR, findWorkflow, loadWorkflows } from "./workflows";
-import type { Flow, FlowChoice, Repo, Sprout, Workflow } from "./types";
+import type { Flow, FlowChoice, Judgment, Repo, Sprout, Workflow } from "./types";
 
 const CLARIFY: Workflow = {
   name: "clarify",
@@ -445,8 +445,10 @@ describe("clarify's outcome", () => {
     const after = await finish(w, await clarifying(w), { ".canopy/questions.json": "[]" });
     expect(after.status).toBe("researching");
     expect(w.flows.started.map((r) => r.workflow.name)).toEqual(["clarify", "scout"]);
-    // only clarify reads the raw inputs
-    expect(w.flows.started[1]?.workflow.steps[0]?.tools).toEqual(["Edit"]);
+    // only clarify reads the raw inputs; scout reads the workspace manifest instead
+    const tools = w.flows.started[1]?.workflow.steps[0]?.tools ?? [];
+    expect(tools).toContain("Edit");
+    expect(tools.some((x) => x.includes("inputs"))).toBe(false);
   });
 
   test("a questions.json canopy cannot read parks the sprout", async () => {
@@ -1273,5 +1275,121 @@ describe("a stop is never undone", () => {
       expect(now(w, s.id).questions).toBeUndefined();
       expect(w.flows.started).toHaveLength(1);
     }
+  });
+});
+
+const ONE_STEP = CLARIFY.steps[0];
+if (!ONE_STEP) throw new Error("the CLARIFY fixture has a step");
+const stage = (name: string, steps: string[], gate: "continue" | "judge" = "continue"): Workflow => ({
+  ...CLARIFY,
+  name,
+  label: name,
+  verb: name,
+  file: `/${name}.md`,
+  steps: steps.map((n, i) => ({ ...ONE_STEP, name: n, gate: i === steps.length - 1 ? gate : "continue" })),
+});
+const SCOUT_STAGE = stage("scout", ["Research", "Eval"], "judge");
+const BUILD_STAGE = stage("build-new", ["Scaffold", "Test", "Accept"], "judge");
+const PICK = JSON.stringify({ kind: "new", host: "vercel", why: "nothing close exists" });
+
+describe("scout and build-new", () => {
+  const chain = () => {
+    const w = world();
+    w.workflows.set("scout", SCOUT_STAGE);
+    w.workflows.set("build-new", BUILD_STAGE);
+    return w;
+  };
+  const end = async (w: World, id: string, files: Record<string, string>, patch: Partial<Flow> = { status: "done" }) => {
+    const s = now(w, id);
+    for (const [rel, text] of Object.entries(files)) await w.seeds.write(s.seedPath, rel, text);
+    w.flows.move(s.flows.at(-1)?.flowId ?? "", patch);
+    await w.inc.idle();
+    return now(w, id);
+  };
+  /** a sprout through clarify with no questions, so scout has started */
+  const scouting = async (w: World): Promise<Sprout> => {
+    const s = await w.inc.create(intake({ text: "coin counter" }));
+    await w.inc.idle();
+    return end(w, s.id, { ".canopy/questions.json": "[]" });
+  };
+
+  test("scout starts with the workspace reads and the manifest named in its note", async () => {
+    const w = chain();
+    const s = await scouting(w);
+    expect(s.status).toBe("researching");
+    const started = w.flows.started.at(-1);
+    expect(started?.workflow.name).toBe("scout");
+    expect(started?.workflow.steps[0]?.tools).toContain("Read(//root/_devhub/manifest.json)");
+    expect(started?.note).toContain("/root/_devhub/manifest.json");
+  });
+
+  test("a new pick on vercel is kept, scout's files are committed, and build-new starts", async () => {
+    const w = chain();
+    const s = await scouting(w);
+    const after = await end(w, s.id, { ".canopy/pick.json": PICK, ".canopy/research.md": "# Research" });
+    expect(after.pick).toEqual({ kind: "new", host: "vercel", why: "nothing close exists" });
+    expect(w.seeds.commits.at(-1)?.message).toBe("scout: coin counter");
+    expect(after.status).toBe("building");
+    expect(w.flows.started.at(-1)?.workflow.name).toBe("build-new");
+  });
+
+  test("a renovate pick parks with the phase 4 reason and is not kept; no pick parks too", async () => {
+    const w = chain();
+    const s = await scouting(w);
+    const renovate = JSON.stringify({ kind: "renovate", host: "vercel", why: "w", target: "https://github.com/a/b", license: "MIT" });
+    const after = await end(w, s.id, { ".canopy/pick.json": renovate });
+    expect(after.status).toBe("parked");
+    expect(after.parked).toBe("a renovate pick arrives in phase 4; the research is in .canopy/research.md");
+    expect(after.pick).toBe(undefined);
+    const w2 = chain();
+    const s2 = await scouting(w2);
+    expect((await end(w2, s2.id, {})).parked).toBe("scout ended without a .canopy/pick.json");
+  });
+
+  test("the judge turning the idea down at eval rejects the sprout, stops the flow and frees the slot", async () => {
+    const w = chain();
+    const s = await scouting(w);
+    const judgment: Judgment = {
+      answers: { fit: { choice: "misses" }, evidence: { probability: 0.9 }, rules: { probability: 0 } },
+      go: false,
+      rejected: true,
+      reason: "a coin counter already ships with every phone",
+    };
+    const after = await end(w, s.id, {}, {
+      status: "gated",
+      current: 1,
+      steps: [{ name: "Research", status: "passed" }, { name: "Eval", status: "gated", reason: judgment.reason ?? "", judgment }],
+    });
+    expect(after.status).toBe("rejected");
+    expect(after.parked).toBe("a coin counter already ships with every phone");
+    expect(after.flows.at(-1)?.outcome).toBe("rejected");
+    expect(w.flows.get(after.flows.at(-1)?.flowId ?? "")?.status).toBe("stopped");
+  });
+
+  test("the status follows build-new's step, and its end commits the notes and goes to canopy's ship", async () => {
+    const w = chain();
+    const s = await scouting(w);
+    const building = await end(w, s.id, { ".canopy/pick.json": PICK });
+    const flowId = building.flows.at(-1)?.flowId ?? "";
+    w.flows.move(flowId, { current: 1, steps: [{ name: "Scaffold", status: "passed" }, { name: "Test", status: "running" }, { name: "Accept", status: "pending" }] });
+    await w.inc.idle();
+    expect(now(w, s.id).status).toBe("testing");
+    w.flows.move(flowId, { current: 2, steps: [{ name: "Scaffold", status: "passed" }, { name: "Test", status: "passed" }, { name: "Accept", status: "running" }] });
+    await w.inc.idle();
+    expect(now(w, s.id).status).toBe("accepting");
+    const after = await end(w, s.id, { ".canopy/smoke.md": "status: 200", ".canopy/accept.md": "met" });
+    expect(w.seeds.commits.at(-1)?.message).toBe("build: coin counter");
+    // the ship stage is a placeholder until canopy's own deploy replaces it
+    expect(after.parked).toBe("canopy cannot deploy yet");
+  });
+
+  test("input that arrives while scout runs drops the pick, and the chain clarifies again", async () => {
+    const w = chain();
+    const s = await scouting(w);
+    await w.inc.addInputs(s.id, intake({ text: "and it should count euros" }));
+    await w.inc.idle();
+    const after = await end(w, s.id, { ".canopy/pick.json": PICK });
+    expect(after.pick).toBe(undefined);
+    expect(w.flows.started.at(-1)?.workflow.name).toBe("clarify");
   });
 });
