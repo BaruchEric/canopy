@@ -97,6 +97,11 @@ RUN curl -fsSL https://claude.ai/install.sh | bash
 # is not required for canopy to start.
 RUN bun add -g @openai/codex || echo "codex not installed at build; see docs/deploy.md"
 
+# The Vercel CLI, for the incubator's deploy. canopy runs it itself, with
+# VERCEL_TOKEN in that one process's env; no agent's allowlist names it.
+# Pinned, so a CLI release cannot change what a deploy does unseen.
+RUN bun add -g vercel@61.1.0 || echo "vercel not installed at build; the incubator parks before a deploy"
+
 # ble.sh from its nightly tarball, which runs in place (its --install step
 # fails under Debian's bash 5.2). ~/.bashrc then sources shell/bashrc off the
 # mounted ~/.claude when the host keeps one there (the dotclaude layout: the

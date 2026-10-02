@@ -88,17 +88,23 @@ beforeAll(async () => {
   process.env["CANOPY_CONFIG_DIR"] = join(scratch, "config");
   root = join(scratch, "root");
   await Bun.$`mkdir -p ${join(root, "app")} && git -C ${join(root, "app")} init -q`.quiet();
+  process.env["VERCEL_TOKEN"] = "tok_test";
   server = await scratchServer({
     root,
     port: 0,
     chan: null,
     harnesses: ["claude"],
-    incubator: { autostart: false, transcribe: async () => "count the quarters", notes: null },
+    incubator: { autostart: false, transcribe: async () => "count the quarters", notes: null, ship: null },
   });
+});
+
+test("the Vercel token leaves canopy's env once the server has read it", () => {
+  expect(process.env["VERCEL_TOKEN"]).toBeUndefined();
 });
 
 afterAll(async () => {
   server.stop();
+  delete process.env["VERCEL_TOKEN"];
   if (previous === undefined) delete process.env["CANOPY_CONFIG_DIR"];
   else process.env["CANOPY_CONFIG_DIR"] = previous;
   await rm(scratch, { recursive: true, force: true });

@@ -429,9 +429,19 @@ an intake with 503. Two optional settings in the mini's `.env`:
   `/v1/audio/transcriptions`), `CANOPY_TRANSCRIBE_KEY` and
   `CANOPY_TRANSCRIBE_MODEL` (default `transcribe`). Without a URL a voice
   memo stays raw, marked "not transcribed", and clarify is told.
+- `VERCEL_TOKEN` and, for a team that is not the token's own account,
+  `VERCEL_SCOPE` (the team's slug). With them, a project that passes its
+  accept step gets a private GitHub repo under the `gh` login, a push, a
+  Vercel project of its own name and a production deploy, all from
+  canopy's own code. Without the token the project parks at deploy with
+  "add VERCEL_TOKEN to <backend>'s .env". Make the token at
+  vercel.com/account/tokens, scoped to one team kept for incubator
+  projects. A production url behind Vercel's deployment protection answers
+  401 and parks the project with that reason. Turn protection off for
+  production in that team, or per project, then resume.
 
-canopy reads the vault token and the transcribe key once at start and then
-deletes both from its own environment, so no shell, run or tmux server it
+canopy reads the vault token, the transcribe key and the Vercel token once at
+start and then deletes all three from its own environment, so no shell, run or tmux server it
 starts inherits them. They are still readable by the agents canopy starts
 through `/proc/<canopy>/environ` (the shared pid namespace), which keeps the
 values the process started with.

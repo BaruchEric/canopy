@@ -170,6 +170,12 @@ services:
       - CANOPY_TRANSCRIBE_URL=${CANOPY_TRANSCRIBE_URL:-}
       - CANOPY_TRANSCRIBE_KEY=${CANOPY_TRANSCRIBE_KEY:-}
       - CANOPY_TRANSCRIBE_MODEL=${CANOPY_TRANSCRIBE_MODEL:-}
+      # the incubator's deploy (docs/deploy.md): a Vercel token, scoped to
+      # the one team the incubator's projects go to, and that team's slug
+      # when it is not the token's own account. Readable through
+      # /proc/<canopy>/environ like the two above.
+      - VERCEL_TOKEN=${VERCEL_TOKEN:-}
+      - VERCEL_SCOPE=${VERCEL_SCOPE:-}
       - CANOPY_INCUBATOR_AUTOSTART=${CANOPY_INCUBATOR_AUTOSTART:-}
     volumes:
       # the repos to scan, mounted at the SAME path they have on the host so

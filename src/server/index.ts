@@ -57,6 +57,7 @@ import { Incubator, incubatorWorkflow, type NoteSink, type Transcriber } from ".
 import { seedOps } from "../core/seed";
 import { SproutFiles } from "../core/sproutstore";
 import { transcribeConfig, transcriber } from "../core/transcribe";
+import { shipConfig, shipper, type Shipper } from "../core/shipper";
 import { vaultConfig, vaultNotes } from "../core/vault";
 import { linkPeers, NO_PUSH, peerUrl } from "../core/peers";
 import { initRepo, PassSeen, seedRepo, syncAll, syncRepo, takeWip, trackBranch } from "../core/peersync";
@@ -2695,7 +2696,7 @@ export async function startServer(opts: {
   /** the asks hub's timings, shrunk by tests */
   asks?: { closedKeep?: number; relistEvery?: number; sweepEvery?: number };
   /** the incubator: tests turn autostart off and pass a speech model and vault of their own */
-  incubator?: { autostart?: boolean; transcribe?: Transcriber | null; notes?: NoteSink | null };
+  incubator?: { autostart?: boolean; transcribe?: Transcriber | null; notes?: NoteSink | null; ship?: Shipper | null };
   /** the runner's driver per harness; tests swap in a stand-in agent */
   runner?: { driver?: (harness: Harness) => RunDriver };
 }): Promise<{ port: number; stop: () => void }> {
@@ -2795,6 +2796,7 @@ export async function startServer(opts: {
   });
   const vault = vaultConfig();
   const speech = transcribeConfig();
+  const ship = shipConfig(process.env, runnerOpts.backend);
   // The configs hold what they read; the env keeps neither secret, so no
   // shell, run or tmux server started from here inherits them (`exec` and
   // `termEnv` pass the live env). /proc/<pid>/environ still shows the
@@ -2803,6 +2805,7 @@ export async function startServer(opts: {
   if (process.env["NODE_ENV"] !== "test") {
     if (!vault) console.error("incubator: no CANOPY_VAULT_TOKEN, so no vault notes");
     if (!speech) console.error("incubator: no CANOPY_TRANSCRIBE_URL, so voice memos stay untranscribed");
+    if (!ship.vercelToken) console.error("incubator: no VERCEL_TOKEN, so a built project parks before its deploy");
   }
   // one store, stamped with the realpath'd root, for the incubator and for
   // what a server without the flows lock lists
@@ -2928,6 +2931,7 @@ export async function startServer(opts: {
         repo: (id) => state.result.repos.find((r) => r.id === id),
         transcribe: opts.incubator?.transcribe !== undefined ? opts.incubator.transcribe : transcriber(speech),
         notes: opts.incubator?.notes !== undefined ? opts.incubator.notes : vaultNotes(vault),
+        ship: opts.incubator?.ship !== undefined ? opts.incubator.ship : shipper(ship),
         onChange: (sprout) => {
           broadcast(state, { type: "incubator", sprout });
           state.chan.onSprout(sprout);
