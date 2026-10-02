@@ -97,10 +97,15 @@ export const VERCEL_OTHER_CONFIGS = ["now.json", "vercel.toml", "vercel.ts", "ve
 const isRecord = (v: unknown): v is Record<string, unknown> => typeof v === "object" && v !== null && !Array.isArray(v);
 
 /** null when the deploy's own config may go to the CLI, else why not.
- *  `names` are the files at the deploy's root, `vercelJson` its vercel.json. */
+ *  `names` are the files at the deploy's root, `vercelJson` its vercel.json.
+ *  Names compare lowercased: on a Mac's filesystem a `VERCEL.TS` is the
+ *  `vercel.ts` the CLI loads, and a `Vercel.json` is the file read as
+ *  vercel.json, so a name that only differs by case is refused too. */
 export function vercelConfigRefusal(names: readonly string[], vercelJson: string | null): string | null {
-  const other = VERCEL_OTHER_CONFIGS.find((n) => names.includes(n));
+  const other = names.find((n) => (VERCEL_OTHER_CONFIGS as readonly string[]).includes(n.toLowerCase()));
   if (other) return `${other} is a Vercel config canopy does not read; use vercel.json`;
+  const odd = names.find((n) => n.toLowerCase() === "vercel.json" && n !== "vercel.json");
+  if (odd) return `${odd} differs from vercel.json only by case; name it vercel.json`;
   if (vercelJson === null) return null;
   let parsed: unknown;
   try {

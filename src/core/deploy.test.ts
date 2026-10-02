@@ -77,6 +77,11 @@ describe("what a deploy takes from the seed", () => {
     expect(vercelConfigRefusal(["vercel.json"], "[]")).toBe("vercel.json is not a JSON object");
     for (const n of ["now.json", "vercel.toml", "vercel.ts", "vercel.mjs"]) expect(vercelConfigRefusal([n], null)).toContain(`${n} is a Vercel config`);
   });
+  test("vercelConfigRefusal: a name that differs only by case is refused, since a Mac reads it as the real one", () => {
+    for (const n of ["VERCEL.TS", "Vercel.toml", "Now.JSON", "vercel.MJS"]) expect(vercelConfigRefusal([n], null)).toContain(`${n} is a Vercel config`);
+    expect(vercelConfigRefusal(["Vercel.json"], "{}")).toContain("only by case");
+    expect(vercelConfigRefusal(["vercel.json", "README.md"], "{}")).toBe(null);
+  });
   test("frameworkOf: next over vite, either dependency list, nothing when unclear", () => {
     expect(frameworkOf(JSON.stringify({ devDependencies: { vite: "7" } }))).toBe("vite");
     expect(frameworkOf(JSON.stringify({ dependencies: { next: "16" }, devDependencies: { vite: "7" } }))).toBe("nextjs");

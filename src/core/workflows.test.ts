@@ -137,7 +137,8 @@ describe("the bundled scout", () => {
   test("no step may read the whole disk, call gh api, clone, push or touch vercel", async () => {
     const scout = findWorkflow(await loadWorkflows({ path: "", host: "none" }), "scout");
     const tools = (scout?.steps ?? []).flatMap((s) => s.tools);
-    expect(tools).toEqual(expect.arrayContaining(["WebSearch", "WebFetch", "Bash(gh search repos:*)", "Bash(gh repo view:*)"]));
+    expect(tools).toEqual(expect.arrayContaining(["WebSearch", "WebFetch"]));
+    expect(tools.some((t) => t.startsWith("Bash("))).toBe(false);
     for (const banned of ["Read", "Glob", "Grep", "Bash(gh api:*)", "Bash(git clone:*)", "Bash(git push:*)"]) expect(tools).not.toContain(banned);
     expect(tools.some((t) => /vercel|gh repo create|gh repo fork/.test(t))).toBe(false);
   });

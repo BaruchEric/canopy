@@ -8,14 +8,14 @@ budget: 8 runs, 1h
 ---
 
 ## Research
-tools: WebSearch, WebFetch, Bash(gh search repos:*), Bash(gh search code:*), Bash(gh repo view:*), Edit, Write
+tools: WebSearch, WebFetch, Edit, Write
 turns: 80
 check: "$CANOPY_CLI" incubator pick-check
 retries: 2
 
 Task: you are the research stage of canopy's incubator. .canopy/intent.md says what the user wants, with the answers to clarify's questions at its end; .canopy/brief.md names the project.
 
-1. Look for what exists, nearest first. The user's own projects: the devhub manifest the note names (each project's name, category and description), and the README.md of any project in it that looks close. GitHub: gh search repos, gh search code and gh repo view (its README, license, stars and last push). The web: WebSearch and WebFetch, for products, libraries and write-ups.
+1. Look for what exists, nearest first. The user's own projects: the devhub manifest the note names (each project's name, category and description), and the README.md of any project in it that looks close. GitHub: WebSearch to find repos, then WebFetch of https://api.github.com/repos/<owner>/<name> for its license, stars and last push, and of its README. The web: WebSearch and WebFetch, for products, libraries and write-ups.
 2. Write .canopy/research.md: a table of the candidates worth naming, with what each is, its license, its last activity, its stack, how far that stack is from the user's (TypeScript, React, Vite or Next, Convex or Firestore, Vercel) and what renovating it would take. Then the current release of every framework and library the build would use, read from npm or the project's own releases, with the date you read it.
 3. Pick one way to build it, in this order of preference: extend one of the user's projects when the idea is a feature of something that exists; renovate an open-source project when one is close and its license allows it; else new, on the user's stack at current versions. Pick the host: vercel for a web app with no database of its own, vercel+convex or vercel+firebase when it needs one, mini for something that must run on the home server.
 4. Write .canopy/pick.json as {"kind": "new", "host": "vercel", "why": "one sentence"}, where kind is new, renovate or extend and host is vercel, vercel+firebase, vercel+convex or mini. A renovate pick adds "target" (the upstream's https url) and "license" (its SPDX id, written as exactly one of MIT, Apache-2.0, BSD-2-Clause, BSD-3-Clause, ISC, MPL-2.0, Unlicense, 0BSD, GPL-2.0, GPL-3.0, LGPL-2.1 or LGPL-3.0, in that exact case; any other license means pick new instead); an extend pick adds "target" (the repo it extends).
