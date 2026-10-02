@@ -411,6 +411,28 @@ pins it. An agent in a canopy shell someone typed into within two minutes
 keeps its prompt at that terminal (`GET /api/terms/watched`, which the hook
 asks). Guards are edited in the agents view's routing tab.
 
+## The incubator
+
+New projects run on the backend that holds the launch root: seeds go to
+`<root>/_incubator/<slug>`, the raw inputs and records to
+`$CANOPY_CONFIG_DIR/incubator/` (0700, kept after a dismiss under
+`.dismissed/`). Only the server that holds the flows lock restores or starts
+them; another server on the same config dir lists them read-only and answers
+an intake with 503. Two optional settings in the mini's `.env`:
+
+- `CANOPY_VAULT_TOKEN`: a memory gateway token with the `agent` scope,
+  minted for canopy alone (`POST /tokens {"name":"canopy-incubator","scopes":["agent"]}`
+  with the owner token). Without it there are no vault notes or daily lines.
+  `CANOPY_VAULT_URL` overrides `https://mem.beric.ca`.
+- `CANOPY_TRANSCRIBE_URL` (the origin of an OpenAI-style server, LiteLLM on
+  the mini, for example `http://100.68.139.95:4000`; canopy appends
+  `/v1/audio/transcriptions`), `CANOPY_TRANSCRIBE_KEY` and
+  `CANOPY_TRANSCRIBE_MODEL` (default `transcribe`). Without a URL a voice
+  memo stays raw, marked "not transcribed", and clarify is told.
+
+Both are readable by the agents canopy starts (the shared pid namespace).
+`CANOPY_INCUBATOR_AUTOSTART=0` holds every project queued, for a pause.
+
 ## Codex
 
 The Dockerfile installs `codex` via `bun add -g @openai/codex` and `nodejs`

@@ -155,6 +155,19 @@ services:
       # tailscale serve) allowed to drive this backend; see the
       # multi-backend spec. Empty when there are none.
       - CANOPY_ORIGINS=${CANOPY_ORIGINS:-}
+      # The incubator. The vault token is the memory gateway's, scoped
+      # `agent`; transcription is any OpenAI-style /v1/audio/transcriptions
+      # server (LiteLLM on the mini), the URL its origin. Every value here is
+      # readable by the agents canopy starts: canopy shares the shells
+      # container's pid namespace, so /proc/<canopy>/environ is in reach, the
+      # same as GH_TOKEN. Mint the vault token for this alone and revoke it
+      # if it ever leaks. Empty is fine: the backend says so once in its log.
+      - CANOPY_VAULT_TOKEN=${CANOPY_VAULT_TOKEN:-}
+      - CANOPY_VAULT_URL=${CANOPY_VAULT_URL:-}
+      - CANOPY_TRANSCRIBE_URL=${CANOPY_TRANSCRIBE_URL:-}
+      - CANOPY_TRANSCRIBE_KEY=${CANOPY_TRANSCRIBE_KEY:-}
+      - CANOPY_TRANSCRIBE_MODEL=${CANOPY_TRANSCRIBE_MODEL:-}
+      - CANOPY_INCUBATOR_AUTOSTART=${CANOPY_INCUBATOR_AUTOSTART:-}
     volumes:
       # the repos to scan, mounted at the SAME path they have on the host so
       # git in the container and VS Code Remote-SSH on the host agree

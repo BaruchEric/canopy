@@ -489,3 +489,27 @@ Each phase ships on its own; the UI grows with each.
 - Persisting fleets.
 - Counting tokens or dollars in budgets.
 - Applying retro advice without the user.
+
+## Amendments
+
+### 1. Phase 2 (2026-10-02)
+
+Accepted deviations from the text above:
+
+- **E1.** The slug comes from the idea's first words at intake, not from the intent's title, since it names the folder before any intent exists. Renaming a seed later costs a path change in the vault note and the record.
+- **E2.** Clarify's tools are bare `Edit` and `Write`, not limited to `.canopy/`: codex's `threadPolicy` needs the bare rule for `workspace-write`. The prompt confines the agent and the seed is a fresh repo.
+- **E3.** The shortcut for a new project is a bare `n`, not ⌘N, which the browser takes first.
+- **E4.** Clarify's budget is written `budget: 2 runs, 0.34h` (20.4 minutes), since the parser takes decimal hours only.
+- **E5.** The daily-note line is written when a sprout starts or parks. Going live and rejection do not exist before phase 3.
+- **E6.** The vault note is rewritten on every change, not only on a status change.
+- **E7.** The project sheet has no retro section until phase 5.
+
+Rulings made while building phase 2:
+
+- Sprout records are restored only by the server that holds the flows lock, and only the records stamped with its own launch root. A server without the lock lists them read-only and answers an intake with 503.
+- A seed cloned from a URL has `.claude/settings.json`, `.claude/settings.local.json` and `.mcp.json` removed in a committed change before the first run, so no step runs under the cloned project's own permissions.
+- `readSeed` and `writeSeed` refuse any path whose components under the seed include a symlink.
+- Stages load workflows from the bundled and the user's own sources only, never a seed's own `.canopy/workflows/`.
+- A sprout parked by a live gated flow keeps its concurrency slot.
+- Seeds stay peer-synced in phase 2.
+- `CANOPY_TRANSCRIBE_URL` is an origin; canopy appends `/v1/audio/transcriptions`.

@@ -5765,7 +5765,7 @@ Claude-Session: https://claude.ai/code/session_01DMvREFYoLgpGe2oQNWq1Xu"
 Each step changes the mini or an outside service, so each waits on Eric's go-ahead, and none runs as part of the tasks above.
 
 1. **A speech model on LiteLLM.** Add a `transcribe` model to the mini's LiteLLM config (Groq's `whisper-large-v3-turbo` is the cheap, fast one; OpenAI's `whisper-1` the fallback). From inside the canopy container, check it answers:
-   `docker compose exec canopy sh -c 'curl -s -H "Authorization: Bearer $CANOPY_TRANSCRIBE_KEY" -F model=transcribe -F file=@/app/testdata/hello.m4a "$CANOPY_TRANSCRIBE_URL/audio/transcriptions"'`
+   `docker compose exec canopy sh -c 'curl -s -H "Authorization: Bearer $CANOPY_TRANSCRIBE_KEY" -F model=transcribe -F file=@/app/testdata/hello.m4a "$CANOPY_TRANSCRIBE_URL/v1/audio/transcriptions"'`
    with any short recording in place of `hello.m4a`. A 404 means the model name is not in LiteLLM's list; a connection refused means the container cannot reach LiteLLM's port (the same ufw rule tailchan needed).
 2. **The vault token.** Mint it with the owner token from `~/.config/vault/token`: `POST https://mem.beric.ca/tokens {"name":"canopy-incubator","scopes":["agent"]}`. The `agent` scope is the narrowest that can write `02 - Dev/` and the daily notes; it can also write most other folders, which is why it is minted for canopy alone. Record its name in the vault's token list so it can be revoked.
 3. **The mini's `.env`.** Add `CANOPY_VAULT_TOKEN`, `CANOPY_TRANSCRIBE_URL`, `CANOPY_TRANSCRIBE_KEY` (and `CANOPY_TRANSCRIBE_MODEL` if not `transcribe`). Never commit it.
