@@ -127,3 +127,26 @@ export function sproutLines(ev: Extract<ServerEvent, { type: "incubator" | "incu
   if (lines.length === 0) lines.push(line(s, sproutWord(s), true));
   return lines;
 }
+
+/** A whole list read as the sprouts held: what it names, except that
+ *  `since` names the sprouts an event told of while the list was on its
+ *  way, whose event stands (a sprout it brought is kept though the list
+ *  lacks it, one it said was gone stays gone). A sprout the list lacks that
+ *  no event touched has gone. */
+export function replaceSprouts(
+  held: Readonly<Record<string, Sprout>>,
+  list: readonly Sprout[],
+  since: (id: string) => boolean = () => false,
+): Record<string, Sprout> {
+  const out: Record<string, Sprout> = {};
+  for (const s of list) {
+    if (since(s.id)) {
+      const had = Object.hasOwn(held, s.id) ? held[s.id] : undefined;
+      if (had) out[s.id] = had;
+      continue;
+    }
+    out[s.id] = s;
+  }
+  for (const [id, had] of Object.entries(held)) if (!Object.hasOwn(out, id) && since(id)) out[id] = had;
+  return out;
+}

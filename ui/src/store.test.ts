@@ -719,6 +719,52 @@ describe("several backends", () => {
     expect(inboxItems(s).some((i) => i.key === "ask:a1")).toBe(false);
   });
 
+  const sproutOf = (id: string, updatedAt: number): Sprout => ({
+    id, slug: id, title: id, status: "queued", repoId: `_incubator/${id}`, seedPath: `/a/${id}`, prepared: true, inputs: [],
+    clarified: true, reclarify: false, flows: [], spent: { runs: 0, workMs: 0 }, createdAt: 1, updatedAt,
+  });
+
+  test("a sprout list that lands after a newer event does not undo it", async () => {
+    const old = sproutOf("sp_000000000001", 1);
+    let release: (r: Response) => void = () => {};
+    let mode: "first" | "hold" = "first";
+    await start(
+      (path, init) => {
+        if (path.split("?")[0] === "/api/incubator" && mode === "hold") return new Promise<Response>((r) => (release = r));
+        return backendAnswers(scanOf("/a", [repo("proj")]), [], { "/api/backends": twoBackends, "/api/incubator": [old] })(path, init);
+      },
+      backendAnswers(scanOf("/b", [repo("proj")]), []),
+    );
+    await settle();
+    mode = "hold";
+    const load = useStore.getState().loadSprouts();
+    // events while the list is on its way
+    useStore.getState().applyEvent({ type: "incubator", sprout: { ...old, title: "newer", updatedAt: 9 } });
+    useStore.getState().applyEvent({ type: "incubator", sprout: sproutOf("sp_000000000002", 9) });
+    release(new Response(JSON.stringify([old]), { status: 200 }));
+    await load;
+    const held = useStore.getState().sprouts;
+    expect(held[old.id]?.title).toBe("newer");
+    expect(Object.keys(held).sort()).toEqual([old.id, "sp_000000000002"]);
+  });
+
+  test("a failed sprout reload keeps the sprouts held", async () => {
+    const one = sproutOf("sp_000000000001", 1);
+    let fail = false;
+    await start(
+      (path, init) => {
+        if (fail && path.split("?")[0] === "/api/incubator") return new Response("nope", { status: 500 });
+        return backendAnswers(scanOf("/a", [repo("proj")]), [], { "/api/backends": twoBackends, "/api/incubator": [one] })(path, init);
+      },
+      backendAnswers(scanOf("/b", [repo("proj")]), []),
+    );
+    await settle();
+    fail = true;
+    await useStore.getState().loadSprouts();
+    expect(Object.keys(useStore.getState().sprouts)).toEqual([one.id]);
+    expect(useStore.getState().sproutsReady).toBe(true);
+  });
+
   test("the incubator is home's alone; its questions are in the inbox and answered there", async () => {
     const asking: Sprout = {
       id: "sp_000000000001",

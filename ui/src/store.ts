@@ -22,6 +22,7 @@ import { mergeAction } from "./peers";
 import { convOf, isUnread, mergeMessages } from "./chan";
 import type { AgentCard, Ask, ChanMessage, Presence, Sprout, TailchanInfo } from "../../src/core/types";
 import { mergeAsks, mergeInbox, replaceAsks, toAskAnswer, toRunAnswer, type InboxAnswer, type InboxItem } from "./inbox";
+import { replaceSprouts } from "./sprouts";
 import { cardsByRepoCard, mergeCards, replaceCards } from "./agentcards";
 import { clientCaps } from "../../src/core/client";
 import { normalizeRoutes, resolveAgent } from "../../src/core/route";
@@ -1157,6 +1158,8 @@ const REGISTRY_RETRY_FIRST = 5_000;
 const REGISTRY_RETRY_MAX = 5 * 60_000;
 /* the same numbering for the asks, so a list never reopens what an event
    closed while it was on its way */
+let sproutEvents = 0;
+const sproutHeard = new Map<string, number>();
 let asksEvents = 0;
 const asksHeard = new Map<string, number>();
 
@@ -1924,10 +1927,14 @@ export const useStore = create<CanopyState>((set, get) => ({
       return;
     }
     if (ev.type === "incubator") {
+      sproutEvents += 1;
+      sproutHeard.set(ev.sprout.id, sproutEvents);
       set((st) => ({ sprouts: { ...st.sprouts, [ev.sprout.id]: ev.sprout } }));
       return;
     }
     if (ev.type === "incubator-gone") {
+      sproutEvents += 1;
+      sproutHeard.set(ev.id, sproutEvents);
       set((st) => {
         if (!(ev.id in st.sprouts)) return {};
         const sprouts = { ...st.sprouts };
@@ -2162,11 +2169,16 @@ export const useStore = create<CanopyState>((set, get) => ({
   },
   closeInbox: () => set({ inboxOpen: false, inboxFocus: null }),
   loadSprouts: async () => {
+    // events that land while the list is on its way are newer than it
+    const mark = sproutEvents;
     try {
       const list = await api.sprouts();
-      set({ sprouts: Object.fromEntries((Array.isArray(list) ? list : []).map((x) => [x.id, x])), sproutsReady: true });
+      set((s) => ({
+        sprouts: replaceSprouts(s.sprouts, Array.isArray(list) ? list : [], (id) => (sproutHeard.get(id) ?? 0) > mark),
+        sproutsReady: true,
+      }));
     } catch {
-      set({ sprouts: {}, sproutsReady: false });
+      // a failed reload keeps what is held, so a blip does not drop the inbox's questions
     }
   },
   createSprout: async (form) => {

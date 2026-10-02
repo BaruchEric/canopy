@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import type { Sprout } from "../../src/core/types";
 import type { FeedSnapshot } from "./feed";
-import { needsYou, sortSprouts, sproutLines, sproutWord, stageAt, stageStrip } from "./sprouts";
+import { needsYou, replaceSprouts, sortSprouts, sproutLines, sproutWord, stageAt, stageStrip } from "./sprouts";
 
 const sprout = (over: Partial<Sprout> = {}): Sprout => ({
   id: "sp_000000000001",
@@ -91,5 +91,25 @@ describe("feed lines", () => {
     const s = sprout({ status: "clarifying" });
     const [line] = sproutLines({ type: "incubator", sprout: { ...s, updatedAt: 9 } }, snap({ [s.id]: s }), 5);
     expect(line?.quiet).toBe(true);
+  });
+});
+
+describe("replaceSprouts", () => {
+  const mk = (id: string, updatedAt: number): Sprout => ({
+    id, slug: id, title: id, status: "queued", repoId: `_incubator/${id}`, seedPath: `/a/${id}`, prepared: true, inputs: [],
+    clarified: true, reclarify: false, flows: [], spent: { runs: 0, workMs: 0 }, createdAt: 1, updatedAt,
+  });
+  test("the list wins for a sprout no event touched, and drops one it lacks", () => {
+    const out = replaceSprouts({ a: mk("a", 1), b: mk("b", 1) }, [mk("a", 2)]);
+    expect(Object.keys(out)).toEqual(["a"]);
+    expect(out.a?.updatedAt).toBe(2);
+  });
+  test("an event's sprout stands over an older listed one, and one it added is kept", () => {
+    const out = replaceSprouts({ a: mk("a", 5), c: mk("c", 5) }, [mk("a", 2)], () => true);
+    expect(out.a?.updatedAt).toBe(5);
+    expect(out.c?.updatedAt).toBe(5);
+  });
+  test("a sprout an event dropped stays gone", () => {
+    expect(replaceSprouts({}, [mk("a", 2)], () => true)).toEqual({});
   });
 });
