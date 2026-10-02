@@ -498,6 +498,9 @@ export function describeEvent(
       return registryLines(ev, prev, at);
     case "asks":
       return askLines(ev, prev, at);
+    case "incubator":
+    case "incubator-gone":
+      return [];
   }
 }
 

@@ -116,6 +116,10 @@ export function qEvent(q: Q, ev: ServerEvent): ServerEvent {
     // backend's)
     case "registry":
     case "asks":
+    // the incubator is the home backend's alone, and the store drops any
+    // other backend's
+    case "incubator":
+    case "incubator-gone":
       return ev;
   }
 }

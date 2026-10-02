@@ -859,6 +859,9 @@ export type ServerEvent =
   | { type: "flow-gone"; id: string }
   | { type: "fleet"; fleet: Fleet }
   | { type: "fleet-gone"; id: string }
+  /** a sprout, whole, whenever it changes; home backend only */
+  | { type: "incubator"; sprout: Sprout }
+  | { type: "incubator-gone"; id: string }
   | { type: "job"; job: Job }
   | { type: "job-gone"; id: string }
   /** a repo's builds changed outside a job: launched, exited, removed, or a
@@ -1189,6 +1192,101 @@ export interface Judgment {
 export interface EvidenceFile {
   path: string;
   text: string | null;
+}
+
+/* ---------- the incubator: new projects from an idea, a link or a repo ---------- */
+
+export const SPROUT_STATUSES = [
+  "queued",
+  "clarifying",
+  "researching",
+  "building",
+  "testing",
+  "accepting",
+  "deploying",
+  "live",
+  "parked",
+  "rejected",
+  "handed-off",
+  "stopped",
+] as const;
+export type SproutStatus = (typeof SPROUT_STATUSES)[number];
+
+export type InputKind = "text" | "audio" | "image" | "url" | "file" | "transcript" | "answers";
+export type InputVia = "sheet" | "cli" | "answer";
+
+/** One thing the user gave a sprout. The raw file stays under the sprout's
+ *  inputs/ folder on the backend; only this entry and its summary go further. */
+export interface InputEntry {
+  /** 1-based, in the order the inputs arrived; never reused */
+  n: number;
+  kind: InputKind;
+  /** the file under inputs/, "003-voice.webm" */
+  name: string;
+  /** what the user called it: a file's own name, the link, "text" */
+  label: string;
+  /** MIME type, parameters dropped */
+  type: string;
+  at: number;
+  via: InputVia;
+  bytes: number;
+  /** one line; "" until clarify writes one (text, transcripts and answers carry their own) */
+  summary: string;
+  /** transcribed, or summarized by clarify */
+  processed: boolean;
+  /** a transcript's audio input */
+  from?: number;
+  /** why it was not processed: "not transcribed: …" */
+  note?: string;
+}
+
+export interface SproutFlow {
+  workflow: string;
+  flowId: string;
+  /** how the flow ended, once it has */
+  outcome?: string;
+}
+
+/** One project in the incubator. */
+export interface Sprout {
+  /** "sp_" + 12 hex */
+  id: string;
+  /** the seed's folder name, fixed at intake */
+  slug: string;
+  title: string;
+  status: SproutStatus;
+  /** the seed's repo id, `_incubator/<slug>` */
+  repoId: string;
+  seedPath: string;
+  /** a repo url the intake clones into the seed */
+  repo?: string;
+  /** the seed is made and the inputs intake processes are processed */
+  prepared: boolean;
+  inputs: InputEntry[];
+  /** clarify ran and canopy read what it wrote */
+  clarified: boolean;
+  /** an input arrived after clarify, so clarify runs again before the next stage */
+  reclarify: boolean;
+  /** the open clarify batch, when it waits on the user */
+  questions?: RunQuestion[];
+  questionsAt?: number;
+  flows: SproutFlow[];
+  spent: { runs: number; workMs: number };
+  /** why it is parked, one line */
+  parked?: string;
+  /** the vault note's revision, for the next replace */
+  noteRev?: string;
+  createdAt: number;
+  updatedAt: number;
+}
+
+/** what the sheet shows beyond the record: the seed's own words */
+export interface SproutDetail {
+  sprout: Sprout;
+  brief: string | null;
+  intent: string | null;
+  inputsIndex: string;
+  research: string | null;
 }
 
 /* ---------- flows: one workflow running on one repo ---------- */
