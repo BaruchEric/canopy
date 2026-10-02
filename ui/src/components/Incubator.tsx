@@ -528,9 +528,13 @@ export function SproutSheet({ id }: { id: string }) {
             )}
             {sprout.privateRepo && (
               <p>
-                <a href={`https://github.com/${sprout.privateRepo}`} target="_blank" rel="noopener noreferrer">
-                  {sprout.privateRepo}
-                </a>{" "}
+                {/^[\w.-]+\/[\w.-]+$/.test(sprout.privateRepo) ? (
+                  <a href={`https://github.com/${sprout.privateRepo}`} target="_blank" rel="noopener noreferrer">
+                    {sprout.privateRepo}
+                  </a>
+                ) : (
+                  sprout.privateRepo
+                )}{" "}
                 (private)
               </p>
             )}
@@ -607,12 +611,16 @@ export function SproutSheet({ id }: { id: string }) {
           </button>
         ) : (
           <>
-            <button type="button" className="mini" disabled={busy} onClick={() => setAdding(true)}>
-              add input
-            </button>
-            <button type="button" className="mini" disabled={busy} onClick={() => act(() => stopSprout(id))}>
-              stop
-            </button>
+            {sprout.status !== "deploying" && (
+              <button type="button" className="mini" disabled={busy} onClick={() => setAdding(true)}>
+                add input
+              </button>
+            )}
+            {sprout.status !== "parked" && (
+              <button type="button" className="mini" disabled={busy} onClick={() => act(() => stopSprout(id))}>
+                stop
+              </button>
+            )}
           </>
         )}
         <span className="spacer" />
