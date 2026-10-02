@@ -56,6 +56,18 @@ afterAll(async () => {
 });
 
 describe("findRepoDirs", () => {
+  test("the seeds folder is never a repo, even with a .git an agent wrote; its seeds still are", async () => {
+    const w = await mkdtemp(join(tmpdir(), "canopy-seeds-scan-"));
+    await mkdir(join(w, "_incubator", ".git"), { recursive: true });
+    await mkdir(join(w, "_incubator", "coin", ".git"), { recursive: true });
+    await mkdir(join(w, "x", "_incubator", ".git"), { recursive: true });
+    const dirs = await findRepoDirs(w);
+    expect(dirs).toContain(join(w, "_incubator", "coin"));
+    expect(dirs).not.toContain(join(w, "_incubator"));
+    // only the root's own: a folder of that name deeper down is any other folder
+    expect(dirs).toContain(join(w, "x", "_incubator"));
+    await rm(w, { recursive: true, force: true });
+  });
   test("finds repos, skips ignored dirs, stops at repo roots except for submodules", async () => {
     const dirs = await findRepoDirs(root);
     const rels = dirs.map((d) => repoId(root, d));

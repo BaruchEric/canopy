@@ -1354,6 +1354,19 @@ describe("canopy peers gate", () => {
     expect(no.stderr).toContain("canopy-peer: refused");
   });
 
+  test("refuses to serve a seed whose config canopy will not run, before upload-pack reads it", async () => {
+    const ws = join(root, "ws");
+    const seed = join(ws, "_incubator", "gated");
+    await mkdir(seed, { recursive: true });
+    expect((await exec(["git", "init", "-q", "-b", "main"], { cwd: seed })).code).toBe(0);
+    expect((await exec(["git", "config", "uploadpack.allowAnySHA1InWant", "true"], { cwd: seed })).code).toBe(0);
+    const no = await gate(`git-upload-pack '${seed}'`, ws);
+    expect(no.code).toBe(1);
+    expect(no.stderr).toContain("uploadpack.allowanysha1inwant");
+    const top = await gate(`git-upload-pack '${join(ws, "_incubator")}'`, ws);
+    expect(top.code).toBe(1);
+  });
+
   test("serves git-upload-pack so a clone works through it", async () => {
     const ws = join(root, "ws");
     // GIT_SSH_COMMAND pointing at a script that runs the gate stands in for sshd.

@@ -33,7 +33,8 @@ import {
   upsertWorkspace,
 } from "../core/store";
 import type { Job, LaunchSettings, SourceInput, Sprout, SproutDetail } from "../core/types";
-import { parsePick, pickRefusal } from "../core/sprout";
+import { parsePick, pickRefusal, SEEDS_DIR } from "../core/sprout";
+import { seedGitRefusal, setSeedRoots } from "../core/seedgit";
 import { parseNewArgs, sproutLink } from "./newargs";
 import { suggestMessage } from "../core/suggest";
 import { PortUnavailableError, startServer } from "../server/index";
@@ -517,6 +518,14 @@ export async function main(argv: string[]): Promise<void> {
         // different failure depending on what it tried to read first.
         const cmd = gateCommand(process.env["SSH_ORIGINAL_COMMAND"] ?? "", rootAbs, home);
         if ("error" in cmd) return fail(`canopy-peer: ${cmd.error}`);
+        // A seed's .git is written by agents, and upload-pack reads its
+        // config: the same guard canopy's own git calls go through. Set
+        // here too since serveList and serveSeeds call git() in-process.
+        setSeedRoots([join(rootAbs, SEEDS_DIR)]);
+        if (cmd.kind === "upload-pack") {
+          const refused = await seedGitRefusal(cmd.path);
+          if (refused) return fail(`canopy-peer: ${refused}`);
+        }
         // Read-only: a peer's request must never write this machine's own
         // files, and loadConfig()'s quarantine-and-rename on bad JSON is
         // exactly such a write. A config that is present but unreadable or

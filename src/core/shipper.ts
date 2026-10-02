@@ -24,6 +24,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { exec as realExec, type ExecOptions, type ExecResult } from "./exec";
 import { readSeed, writeSeed } from "./seed";
+import { guardSeed } from "./seedgit";
 import type { HostId } from "./types";
 
 export interface Shipper {
@@ -63,6 +64,13 @@ export interface ShipDeps {
 }
 
 const NO_HOOKS = ["-c", "core.hooksPath=/dev/null", "-c", "core.fsmonitor=false"];
+
+/** a clone runs upload-pack in the seed, which reads the seed's config: the
+ *  same guard as every other git call canopy makes there (seedgit.ts) */
+async function guardOrThrow(seedPath: string): Promise<void> {
+  const refused = await guardSeed(seedPath);
+  if (refused) throw new Error(`the seed: ${refused}`);
+}
 const tail = (r: ExecResult, secret: string | null = null): string => {
   const text = (r.stderr || r.stdout).trim().split("\n").slice(-3).join(" ").slice(0, 300);
   return secret ? text.split(secret).join("***") : text;
@@ -148,6 +156,7 @@ export function shipper(cfg: ShipConfig, deps: ShipDeps = { exec: realExec, fetc
       // the seed's .git/config is the agents' to write, and a pushurl, a
       // pushInsteadOf or a credential helper there would send canopy's push,
       // or its token, where they chose.
+      await guardOrThrow(seedPath);
       const url = deps.remote ? deps.remote(repo) : `https://github.com/${repo}.git`;
       const tmp = await mkdtemp(join(tmpdir(), "canopy-ship-"));
       const bare = join(tmp, "seed.git");
@@ -167,6 +176,7 @@ export function shipper(cfg: ShipConfig, deps: ShipDeps = { exec: realExec, fetc
 
     async deploy(seedPath, project) {
       const token = needToken();
+      await guardOrThrow(seedPath);
       // the project canopy made, by id, so no link file in the seed can
       // point the deploy at another one
       const found = await api(`/v9/projects/${encodeURIComponent(project)}`);

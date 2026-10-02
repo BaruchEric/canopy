@@ -109,6 +109,7 @@ import {
 import { Runner } from "../core/runner";
 import type { RunDriver } from "../core/driver";
 import { SEEDS_DIR } from "../core/sprout";
+import { seedBusy, seedRootsNow, seedTopOf, setSeedBusy, setSeedRoots } from "../core/seedgit";
 import { suggestMessage } from "../core/suggest";
 import {
   HISTORY_WINDOWS,
@@ -1245,6 +1246,9 @@ function scheduleRefresh(state: ServerState, id: string): void {
     id,
     setTimeout(() => {
       state.timers.delete(id);
+      // a busy seed keeps its last status; the run's own end reads it again
+      const repo = state.result.repos.find((r) => r.id === id);
+      if (repo && !repo.host && seedBusy(repo.path)) return;
       refreshAndBroadcast(state, id).catch(() => {});
     }, 400),
   );
@@ -2686,6 +2690,8 @@ export async function startServer(opts: {
 }): Promise<{ port: number; stop: () => void }> {
   const cfg = await loadConfig();
   const root = await realpath(opts.root);
+  // canopy's git in a seed goes through the guard (seedgit.ts)
+  setSeedRoots([join(root, SEEDS_DIR)]);
   const port = opts.port ?? cfg.port;
   const runtime = (src: Source): SourceRuntime => ({
     src: { ...src, repos: 0, scannedAt: 0 },
@@ -2730,6 +2736,8 @@ export async function startServer(opts: {
     stage: (repo: Repo) => isSeedPath(root, repo.path),
     ...(opts.runner?.driver ? { driver: opts.runner.driver } : {}),
   };
+  /** seeds with a check running, by the seed's path */
+  const seedChecks = new Map<string, number>();
   const runner = new Runner({
     onChange: (run) => {
       broadcast(state, { type: "run", run });
@@ -2769,7 +2777,18 @@ export async function startServer(opts: {
       state.chan.forget(id);
     },
     // a seed's check starts without canopy's GitHub login, like its runs
-    check: (repo, command) => runCheck(repo, command, isSeedPath(root, repo.path)),
+    check: async (repo, command) => {
+      if (!isSeedPath(root, repo.path)) return runCheck(repo, command, false);
+      // canopy runs no git in a seed while its check runs there (seedgit.ts)
+      seedChecks.set(repo.path, (seedChecks.get(repo.path) ?? 0) + 1);
+      try {
+        return await runCheck(repo, command, true);
+      } finally {
+        const n = (seedChecks.get(repo.path) ?? 1) - 1;
+        if (n > 0) seedChecks.set(repo.path, n);
+        else seedChecks.delete(repo.path);
+      }
+    },
     evaluator: hasGatewayKey() ? jev : null,
     judge: hasGatewayKey() ? jevJudge : null,
     evidence: (repo, paths) => readEvidence(repo.path, paths),
@@ -2940,6 +2959,16 @@ export async function startServer(opts: {
     backendName: selfName(cfg.self, hostname()),
     apiUrl: null,
   };
+  // Until stages run apart from canopy, a seed is busy while a run of its
+  // or one of its checks is alive: canopy reads its config, then git reads
+  // it again, and a process still running there could swap it in between.
+  setSeedBusy((path) => {
+    const top = seedTopOf(path, seedRootsNow());
+    if (top === null) return false;
+    if (seedChecks.has(top)) return true;
+    const repo = state.result.repos.find((r) => r.path === top && !r.host);
+    return repo !== undefined && state.runner.activeFor(repo.id) !== undefined;
+  });
   await rememberRoot(root);
   // The login shell's first answer lands whenever it lands; a list that
   // differs from what the tree offered goes out to the browsers with it.

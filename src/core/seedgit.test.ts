@@ -1,0 +1,281 @@
+import { afterAll, beforeAll, describe, expect, test } from "bun:test";
+import { appendFile, mkdir, mkdtemp, rm, symlink, utimes, writeFile, stat } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { exec, git } from "./exec";
+import { guardSeed, seedConfigRefusal, seedTopOf, setSeedBusy, setSeedRoots, underSeeds, SEED_GIT_FLAGS } from "./seedgit";
+
+describe("seedConfigRefusal", () => {
+  const ok: [string, string][] = [
+    ["core.repositoryformatversion", "0"],
+    ["core.filemode", "true"],
+    ["core.bare", "false"],
+    ["core.logallrefupdates", "true"],
+    ["remote.upstream.url", "https://github.com/a/b.git"],
+    ["remote.upstream.fetch", "+refs/heads/*:refs/remotes/upstream/*"],
+    ["remote.mini.pushurl", "canopy-peer-no-push"],
+    ["remote.mini.tagopt", "--no-tags"],
+    ["branch.main.remote", "upstream"],
+    ["branch.main.merge", "refs/heads/main"],
+    ["branch.release-1.2.merge", "refs/heads/release-1.2"],
+    ["branch.main.vscode-merge-base", "origin/main"],
+    ["remote.mini.prune", "true"],
+    ["user.name", "canopy"],
+    ["user.email", "canopy@mini"],
+    ["extensions.objectformat", "sha1"],
+  ];
+  test("what canopy and a plain commit write passes", () => {
+    expect(seedConfigRefusal(ok)).toBe(null);
+  });
+  test.each([
+    ["core.fsmonitor", "./x"],
+    ["core.hookspath", "./hooks"],
+    ["core.sshcommand", "sh -c x"],
+    ["core.pager", "sh"],
+    ["filter.lfs.clean", "sh -c x"],
+    ["diff.x.textconv", "sh"],
+    ["include.path", "/tmp/evil"],
+    ["includeif.gitdir:/.path", "/tmp/evil"],
+    ["remote.upstream.uploadpack", "sh"],
+    ["url.ext::sh.insteadof", "https://"],
+    ["extensions.worktreeconfig", "true"],
+    ["alias.st", "!sh"],
+  ])("%s refuses, named", (key, value) => {
+    expect(seedConfigRefusal([...ok, [key, value]])).toContain(key);
+  });
+  test("a url that is a transport command or a flag refuses", () => {
+    expect(seedConfigRefusal([["remote.x.url", "ext::sh -c id"]])).toContain("remote.x.url");
+    expect(seedConfigRefusal([["remote.x.url", "-oProxyCommand=id"]])).toContain("remote.x.url");
+    expect(seedConfigRefusal([["remote.x.pushurl", "fd::3"]])).toContain("remote.x.pushurl");
+  });
+  test("keys compare lowercased, as git stores them", () => {
+    expect(seedConfigRefusal([["Core.FsMonitor", "x"]])).toContain("core.fsmonitor");
+  });
+  test("a refusal names the command that undoes it", () => {
+    expect(seedConfigRefusal([["core.pager", "less"]])).toContain("git config --unset-all core.pager");
+  });
+  test("a dotted subsection cannot smuggle a key past the end anchor", () => {
+    expect(seedConfigRefusal([["branch.a.b.uploadpack", "sh"]])).toContain("branch.a.b.uploadpack");
+    expect(seedConfigRefusal([["remote.x.y.receivepack", "sh"]])).toContain("remote.x.y.receivepack");
+  });
+});
+
+describe("underSeeds", () => {
+  test("a path inside a seeds dir, not the dir itself or a lookalike", () => {
+    expect(underSeeds("/w/_incubator/coin", ["/w/_incubator"])).toBe(true);
+    expect(underSeeds("/w/_incubator/coin/sub", ["/w/_incubator"])).toBe(true);
+    expect(underSeeds("/w/_incubator", ["/w/_incubator"])).toBe(false);
+    expect(underSeeds("/w/_incubatorx/coin", ["/w/_incubator"])).toBe(false);
+    expect(underSeeds("ssh://mini/w/_incubator/coin", ["/w/_incubator"])).toBe(false);
+  });
+});
+
+describe("seedTopOf", () => {
+  test("the seed a path sits in: the first folder under the seeds dir", () => {
+    expect(seedTopOf("/w/_incubator/coin", ["/w/_incubator"])).toBe("/w/_incubator/coin");
+    expect(seedTopOf("/w/_incubator/coin/src/lib", ["/w/_incubator"])).toBe("/w/_incubator/coin");
+    expect(seedTopOf("/w/_incubator", ["/w/_incubator"])).toBe(null);
+    expect(seedTopOf("/w/other/coin", ["/w/_incubator"])).toBe(null);
+  });
+});
+
+describe("the guard on real seeds", () => {
+  let root = "";
+  let seeds = "";
+  const marker = () => join(root, "ran");
+  const ran = async (): Promise<boolean> => {
+    const was = await Bun.file(marker()).exists();
+    await rm(marker(), { force: true });
+    return was;
+  };
+  const filter = () => `sh -c 'touch ${marker()}; cat'`;
+  const commit = async (dir: string): Promise<void> => {
+    expect((await exec(["git", "-c", "user.name=a", "-c", "user.email=a@b", "add", "."], { cwd: dir })).code).toBe(0);
+    expect((await exec(["git", "-c", "user.name=a", "-c", "user.email=a@b", "commit", "-qm", "s"], { cwd: dir })).code).toBe(0);
+  };
+  const seed = async (name: string): Promise<string> => {
+    const dir = join(seeds, name);
+    await mkdir(dir, { recursive: true });
+    expect((await exec(["git", "init", "-q", "-b", "main"], { cwd: dir })).code).toBe(0);
+    await writeFile(join(dir, "a.txt"), "a\n");
+    return dir;
+  };
+  beforeAll(async () => {
+    root = await mkdtemp(join(tmpdir(), "canopy-seedgit-"));
+    seeds = join(root, "_incubator");
+    await mkdir(seeds, { recursive: true });
+    setSeedRoots([seeds]);
+  });
+  afterAll(async () => {
+    setSeedRoots([]);
+    await rm(root, { recursive: true, force: true });
+  });
+
+  test("a clean seed reads as before, with the hardening flags", async () => {
+    const dir = await seed("clean");
+    expect(await guardSeed(dir)).toBe(null);
+    const r = await git(dir, ["status", "--porcelain=v2"]);
+    expect(r.code).toBe(0);
+    expect(r.stdout).toContain("a.txt");
+    expect(SEED_GIT_FLAGS).toEqual([
+      "-c", "core.fsmonitor=false",
+      "-c", "core.hooksPath=/dev/null",
+      "-c", "protocol.ext.allow=never",
+      "-c", "diff.ignoreSubmodules=all",
+      "-c", "submodule.recurse=false",
+      "-c", "fetch.recurseSubmodules=false",
+    ]);
+  });
+
+  test("an fsmonitor the agent wrote never runs, and the reason names it", async () => {
+    const dir = await seed("fsmon");
+    await writeFile(join(root, "mon.sh"), `#!/bin/sh\ntouch ${marker()}\n`, { mode: 0o755 });
+    await appendFile(join(dir, ".git", "config"), `[core]\n\tfsmonitor = ${join(root, "mon.sh")}\n`);
+    const r = await git(dir, ["status", "--porcelain=v2"]);
+    expect(r.code).toBe(128);
+    expect(r.stderr).toContain("core.fsmonitor");
+    expect(await ran()).toBe(false);
+  });
+
+  test("an include is refused without being followed", async () => {
+    const dir = await seed("incl");
+    await writeFile(join(root, "evil.cfg"), `[core]\n\tfsmonitor = ${join(root, "mon.sh")}\n`);
+    await appendFile(join(dir, ".git", "config"), `[include]\n\tpath = ${join(root, "evil.cfg")}\n`);
+    expect(await guardSeed(dir)).toContain("include.path");
+  });
+
+  test("a key added after a clean read is caught on the next call", async () => {
+    const dir = await seed("later");
+    expect(await guardSeed(dir)).toBe(null);
+    await Bun.sleep(5);
+    await appendFile(join(dir, ".git", "config"), `[filter "x"]\n\tclean = sh\n`);
+    expect(await guardSeed(dir)).toContain("filter.x.clean");
+  });
+
+  test("a same-size swap with the old mtime put back is still caught", async () => {
+    const dir = await seed("forged");
+    const file = join(dir, ".git", "config");
+    await appendFile(file, `[user]\n\tname = abcdefgh\n`);
+    // a whole-second mtime, so putting it back is exact
+    const when = new Date(2026, 0, 1);
+    await utimes(file, when, when);
+    expect(await guardSeed(dir)).toBe(null);
+    const text = await Bun.file(file).text();
+    // same length: "[user]\n\tname = abcdefgh\n" becomes "[alias]\n\tst = !sh -c x\n"
+    const swapped = text.replace("[user]\n\tname = abcdefgh\n", "[alias]\n\tzz = !sh -c xy\n");
+    expect(swapped.length).toBe(text.length);
+    await Bun.sleep(20);
+    await writeFile(file, swapped);
+    await utimes(file, when, when);
+    expect((await stat(file)).mtimeMs).toBe(when.getTime());
+    expect(await guardSeed(dir)).toContain("alias.zz");
+  });
+
+  test("a gitfile .git refuses", async () => {
+    const dir = join(seeds, "gitfile");
+    await mkdir(dir, { recursive: true });
+    await writeFile(join(dir, ".git"), "gitdir: /tmp/elsewhere\n");
+    expect(await guardSeed(dir)).toContain("gitfile");
+  });
+
+  test("a symlinked .git refuses", async () => {
+    const real = await seed("linktarget-not-a-seed");
+    const dir = join(seeds, "linked");
+    await mkdir(dir, { recursive: true });
+    await symlink(join(real, ".git"), join(dir, ".git"));
+    expect(await guardSeed(dir)).toContain("symlink");
+  });
+
+  test("a commondir that points git at another config refuses, and its filter never runs", async () => {
+    const dir = await seed("common");
+    await writeFile(join(dir, ".gitattributes"), "* filter=x\n");
+    await commit(dir);
+    const evil = join(root, "evil-common");
+    expect((await exec(["cp", "-R", join(dir, ".git"), evil])).code).toBe(0);
+    await appendFile(join(evil, "config"), `[filter "x"]\n\tclean = ${filter()}\n`);
+    await writeFile(join(dir, ".git", "commondir"), `${evil}\n`);
+    await appendFile(join(dir, "a.txt"), "more\n");
+    expect(await guardSeed(dir)).toContain("commondir");
+    expect((await git(dir, ["status", "--porcelain=v2"])).code).toBe(128);
+    expect(await ran()).toBe(false);
+  });
+
+  test("a config.worktree refuses", async () => {
+    const dir = await seed("wtconfig");
+    await writeFile(join(dir, ".git", "config.worktree"), `[core]\n\tpager = sh\n`);
+    expect(await guardSeed(dir)).toContain("config.worktree");
+  });
+
+  test("a committed gitlink's own .git folder never runs its filter", async () => {
+    const dir = await seed("gitlink");
+    const sub = join(dir, "sub");
+    await mkdir(sub);
+    expect((await exec(["git", "init", "-q"], { cwd: sub })).code).toBe(0);
+    await writeFile(join(sub, ".gitattributes"), "* filter=x\n");
+    await writeFile(join(sub, "f"), "hi\n");
+    await commit(sub);
+    await commit(dir);
+    expect((await exec(["git", "config", "filter.x.clean", filter()], { cwd: sub })).code).toBe(0);
+    await appendFile(join(sub, "f"), "more\n");
+    expect(await guardSeed(dir)).toBe(null);
+    expect((await git(dir, ["status", "--porcelain=v2"])).code).toBe(0);
+    expect(await ran()).toBe(false);
+  });
+
+  test("a folder under a seed is judged by its seed's .git", async () => {
+    const dir = await seed("deep");
+    await mkdir(join(dir, "src", "lib"), { recursive: true });
+    await appendFile(join(dir, ".git", "config"), `[core]\n\tpager = sh\n`);
+    expect(await guardSeed(join(dir, "src", "lib"))).toContain("core.pager");
+  });
+
+  test("git never walks up into a .git the agent wrote in the seeds dir", async () => {
+    const outer = join(root, "walk");
+    const inner = join(outer, "_incubator");
+    await mkdir(join(inner, "coin"), { recursive: true });
+    setSeedRoots([inner]);
+    try {
+      expect((await exec(["git", "init", "-q"], { cwd: inner })).code).toBe(0);
+      await writeFile(join(inner, ".gitattributes"), "* filter=x\n");
+      await writeFile(join(inner, "coin", "f"), "hi\n");
+      await commit(inner);
+      expect((await exec(["git", "config", "filter.x.clean", filter()], { cwd: inner })).code).toBe(0);
+      await rm(marker(), { force: true });
+      await appendFile(join(inner, "coin", "f"), "more\n");
+      const r = await git(join(inner, "coin"), ["status", "--porcelain=v2"]);
+      expect(r.code).not.toBe(0);
+      expect(await ran()).toBe(false);
+      // a new seed still inits under the ceiling
+      await mkdir(join(inner, "fresh"));
+      expect((await git(join(inner, "fresh"), ["init", "-q", "-b", "main"])).code).toBe(0);
+      expect(await Bun.file(join(inner, "fresh", ".git", "HEAD")).exists()).toBe(true);
+    } finally {
+      setSeedRoots([seeds]);
+    }
+  });
+
+  test("canopy runs no git in the seeds dir itself", async () => {
+    const r = await git(seeds, ["status"]);
+    expect(r.code).toBe(128);
+    expect(r.stderr).toContain("seeds folder");
+  });
+
+  test("while a stage process is alive in a seed, canopy runs no git there", async () => {
+    const dir = await seed("busy");
+    setSeedBusy((p) => p === dir);
+    const r = await git(dir, ["status"]);
+    expect(r.code).toBe(128);
+    expect(r.stderr).toContain("waits for the stage");
+    setSeedBusy(() => false);
+    expect((await git(dir, ["status"])).code).toBe(0);
+  });
+
+  test("a repo outside the seeds dir is not read by the guard", async () => {
+    const dir = join(root, "plain");
+    await mkdir(dir, { recursive: true });
+    await exec(["git", "init", "-q"], { cwd: dir });
+    await appendFile(join(dir, ".git", "config"), `[alias]\n\tst = status\n`);
+    expect(await guardSeed(dir)).toBe(null);
+    expect((await git(dir, ["status"])).code).toBe(0);
+  });
+});

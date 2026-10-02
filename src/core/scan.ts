@@ -6,6 +6,7 @@ import { getStatus } from "./git";
 import { parseLocator, toLocator } from "./host";
 import { readMeta } from "./meta";
 import { backendCaps } from "./openers";
+import { SEEDS_DIR } from "./sprout";
 import { LAUNCH_SOURCE, type Repo, type ScanResult, type Source } from "./types";
 
 export const DEFAULT_IGNORE = [
@@ -86,7 +87,11 @@ export async function findRepoDirs(
     } catch {
       return;
     }
-    if (entries.some((e) => e.name === ".git")) {
+    // The incubator's seeds folder is written by agents, so a .git there
+    // is never taken as a repo: that would hide every seed below it, and
+    // canopy would run git under a config nobody vetted (seedgit.ts).
+    const seedsFolder = depth === 1 && basename(dir) === SEEDS_DIR;
+    if (!seedsFolder && entries.some((e) => e.name === ".git")) {
       await foundRepo(dir);
       return;
     }

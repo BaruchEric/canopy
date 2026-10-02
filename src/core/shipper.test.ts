@@ -5,6 +5,7 @@ import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { exec, type ExecOptions, type ExecResult } from "./exec";
+import { setSeedRoots } from "./seedgit";
 import { shipConfig, shipper, type ShipDeps } from "./shipper";
 
 interface Call { cmd: string[]; opts: ExecOptions }
@@ -168,6 +169,25 @@ describe("push", () => {
     }
     const clone = f.calls[0]?.cmd ?? [];
     expect(clone.slice(clone.indexOf("clone"), -1)).toEqual(["clone", "--bare", "--no-local", "--quiet", "--", "/seed"]);
+  });
+});
+
+describe("a seed whose config canopy will not run", () => {
+  test("push and deploy refuse it before any clone, naming the key", async () => {
+    const seeds = join(await mkdtemp(join(tmpdir(), "canopy-ship-guard-")), "_incubator");
+    const dir = join(seeds, "coin");
+    await mkdir(dir, { recursive: true });
+    expect((await exec(["git", "init", "-q", "-b", "main"], { cwd: dir })).code).toBe(0);
+    expect((await exec(["git", "config", "core.fsmonitor", "/bin/true"], { cwd: dir })).code).toBe(0);
+    setSeedRoots([seeds]);
+    try {
+      const f = fakes(() => ok(), () => new Response(JSON.stringify({ id: "prj_1", accountId: "team_1" }), { status: 200 }));
+      await expect(shipper(cfg, f.deps).push(dir, "eric/coin")).rejects.toThrow("core.fsmonitor");
+      await expect(shipper(cfg, f.deps).deploy(dir, "coin")).rejects.toThrow("core.fsmonitor");
+      expect(f.calls.filter((c) => c.cmd.includes("clone"))).toHaveLength(0);
+    } finally {
+      setSeedRoots([]);
+    }
   });
 });
 
