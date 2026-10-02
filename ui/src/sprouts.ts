@@ -128,6 +128,14 @@ export function sproutLines(ev: Extract<ServerEvent, { type: "incubator" | "incu
   return lines;
 }
 
+/** Whether an action's answer about a sprout is older than the one held:
+ *  an event that landed while the request was on its way has moved it on,
+ *  and the answer must not undo that. One as new applies. */
+export function staleSprout(held: Readonly<Record<string, Sprout>>, incoming: Sprout): boolean {
+  const had = Object.hasOwn(held, incoming.id) ? held[incoming.id] : undefined;
+  return had !== undefined && incoming.updatedAt < had.updatedAt;
+}
+
 /** A whole list read as the sprouts held: what it names, except that
  *  `since` names the sprouts an event told of while the list was on its
  *  way, whose event stands (a sprout it brought is kept though the list

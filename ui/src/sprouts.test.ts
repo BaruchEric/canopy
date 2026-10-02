@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import type { Sprout } from "../../src/core/types";
 import type { FeedSnapshot } from "./feed";
-import { needsYou, replaceSprouts, sortSprouts, sproutLines, sproutWord, stageAt, stageStrip } from "./sprouts";
+import { needsYou, replaceSprouts, sortSprouts, sproutLines, sproutWord, stageAt, stageStrip, staleSprout } from "./sprouts";
 
 const sprout = (over: Partial<Sprout> = {}): Sprout => ({
   id: "sp_000000000001",
@@ -111,5 +111,16 @@ describe("replaceSprouts", () => {
   });
   test("a sprout an event dropped stays gone", () => {
     expect(replaceSprouts({}, [mk("a", 2)], () => true)).toEqual({});
+  });
+});
+
+describe("staleSprout", () => {
+  test("an answer older than the sprout held is stale; one as new, or about a sprout not held, is not", () => {
+    const held = { [sprout().id]: sprout({ updatedAt: 5 }) };
+    expect(staleSprout(held, sprout({ updatedAt: 4 }))).toBe(true);
+    expect(staleSprout(held, sprout({ updatedAt: 5 }))).toBe(false);
+    expect(staleSprout(held, sprout({ updatedAt: 6 }))).toBe(false);
+    expect(staleSprout(held, sprout({ id: "sp_000000000002", updatedAt: 1 }))).toBe(false);
+    expect(staleSprout({}, sprout({ id: "constructor" }))).toBe(false);
   });
 });

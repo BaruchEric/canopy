@@ -22,7 +22,7 @@ import { mergeAction } from "./peers";
 import { convOf, isUnread, mergeMessages } from "./chan";
 import type { AgentCard, Ask, ChanMessage, Presence, Sprout, TailchanInfo } from "../../src/core/types";
 import { mergeAsks, mergeInbox, replaceAsks, toAskAnswer, toRunAnswer, type InboxAnswer, type InboxItem } from "./inbox";
-import { replaceSprouts } from "./sprouts";
+import { replaceSprouts, staleSprout } from "./sprouts";
 import { cardsByRepoCard, mergeCards, replaceCards } from "./agentcards";
 import { clientCaps } from "../../src/core/client";
 import { normalizeRoutes, resolveAgent } from "../../src/core/route";
@@ -1160,6 +1160,14 @@ const REGISTRY_RETRY_MAX = 5 * 60_000;
    closed while it was on its way */
 let sproutEvents = 0;
 const sproutHeard = new Map<string, number>();
+
+/** an action's answer about a sprout, applied like its event unless an
+ *  event already moved the sprout on past it (checked first, so a stale
+ *  answer adds no feed line either) */
+function sproutAnswered(get: () => CanopyState, sp: Sprout): void {
+  if (staleSprout(get().sprouts, sp)) return;
+  get().applyEvent({ type: "incubator", sprout: sp });
+}
 let asksEvents = 0;
 const asksHeard = new Map<string, number>();
 
@@ -2183,23 +2191,22 @@ export const useStore = create<CanopyState>((set, get) => ({
   },
   createSprout: async (form) => {
     const sp = await api.newSprout(form);
-    get().applyEvent({ type: "incubator", sprout: sp });
+    sproutAnswered(get, sp);
     return sp;
   },
   addSproutInputs: async (id, form) => {
     const sp = await api.addSproutInputs(id, form);
-    get().applyEvent({ type: "incubator", sprout: sp });
+    sproutAnswered(get, sp);
     return sp;
   },
   answerSprout: async (id, answers) => {
-    const sp = await api.answerSprout(id, answers ? { answers } : { skip: true });
-    get().applyEvent({ type: "incubator", sprout: sp });
+    sproutAnswered(get, await api.answerSprout(id, answers ? { answers } : { skip: true }));
   },
   stopSprout: async (id) => {
-    get().applyEvent({ type: "incubator", sprout: await api.stopSprout(id) });
+    sproutAnswered(get, await api.stopSprout(id));
   },
   resumeSprout: async (id, choice) => {
-    get().applyEvent({ type: "incubator", sprout: await api.resumeSprout(id, choice) });
+    sproutAnswered(get, await api.resumeSprout(id, choice));
   },
   dismissSprout: async (id) => {
     await api.dismissSprout(id);

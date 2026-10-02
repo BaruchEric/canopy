@@ -748,6 +748,29 @@ describe("several backends", () => {
     expect(Object.keys(held).sort()).toEqual([old.id, "sp_000000000002"]);
   });
 
+  test("an action's answer older than an event that came first does not undo it", async () => {
+    const asking: Sprout = { ...sproutOf("sp_000000000001", 5), status: "clarifying", questions: [{ question: "Q?", header: "", options: [], multiSelect: false }], questionsAt: 5 };
+    let release: (r: Response) => void = () => {};
+    await start(
+      (path, init) => {
+        if (path.startsWith("/api/incubator/stop")) return new Promise<Response>((r) => (release = r));
+        return backendAnswers(scanOf("/a", [repo("proj")]), [], { "/api/backends": twoBackends, "/api/incubator": [asking] })(path, init);
+      },
+      backendAnswers(scanOf("/b", [repo("proj")]), []),
+    );
+    await settle();
+    const stopping = useStore.getState().stopSprout(asking.id);
+    // the stop's own event, and then a newer one, land before its answer does
+    useStore.getState().applyEvent({ type: "incubator", sprout: { ...asking, status: "stopped", questions: undefined, updatedAt: 8 } });
+    useStore.getState().applyEvent({ type: "incubator", sprout: { ...asking, status: "stopped", questions: undefined, title: "renamed", updatedAt: 9 } });
+    const feed = useStore.getState().feed.length;
+    release(new Response(JSON.stringify({ ...asking, status: "stopped", questions: undefined, updatedAt: 7 }), { status: 200 }));
+    await stopping;
+    expect(useStore.getState().sprouts[asking.id]?.title).toBe("renamed");
+    expect(useStore.getState().sprouts[asking.id]?.updatedAt).toBe(9);
+    expect(useStore.getState().feed.length).toBe(feed);
+  });
+
   test("a failed sprout reload keeps the sprouts held", async () => {
     const one = sproutOf("sp_000000000001", 1);
     let fail = false;
