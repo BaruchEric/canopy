@@ -513,3 +513,6 @@ Rulings made while building phase 2:
 - A sprout parked by a live gated flow keeps its concurrency slot.
 - Seeds stay peer-synced in phase 2.
 - `CANOPY_TRANSCRIBE_URL` is an origin; canopy appends `/v1/audio/transcriptions`.
+- In phase 2 only clarify's questions reach the inbox. A park is told by a tailchan DM; parks join the inbox in a later phase.
+- Every incubator stage runs with yolo off, whatever the agent routes say: in the incubator's own start, and when a flow on a seed is restored after a restart.
+- The vault token and the transcribe key are read once at start and then deleted from canopy's own environment, so no shell, run or tmux server inherits them; `/proc/<canopy>/environ` still holds the values the process started with.
