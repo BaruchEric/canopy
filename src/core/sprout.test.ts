@@ -289,6 +289,32 @@ describe("urlWithoutSecret", () => {
     expect(urlWithoutSecret("git@github.com:a/b.git")).toBe("git@github.com:a/b.git");
     expect(urlWithoutSecret("https://github.com/a/b")).toBe("https://github.com/a/b");
   });
+  test("a password holding a raw /, ? or # still goes", () => {
+    expect(urlWithoutSecret("https://u:p/q@host/x")).toBe("https://host/x");
+    expect(urlWithoutSecret("https://u:p?q@host/x")).toBe("https://host/x");
+    expect(urlWithoutSecret("https://u:p#q@host/x")).toBe("https://host/x");
+    expect(urlWithoutSecret("https://u:p/q@r@host/x")).toBe("https://host/x");
+    expect(urlWithoutSecret("https://u:p/q@host/x@y")).toBe("https://host/x@y");
+    expect(urlWithoutSecret("https://u:p/q@host")).toBe("https://host");
+    expect(urlWithoutSecret("ssh://git:se/cret@host/r.git")).toBe("ssh://git@host/r.git");
+  });
+  test("an @ in the path, query or after a port is left alone, and so is the scp form", () => {
+    for (const url of [
+      "https://host/x@y",
+      "https://medium.com/@user/post",
+      "https://registry.npmjs.org/@scope/pkg",
+      "https://host/a@b/c",
+      "https://host:8080/a@b",
+      "https://host:8080/r?q=a@b",
+      "https://host?a=b:c@d",
+      "https://host/p:q@r",
+      "https://[::1]:8080/a@b",
+      "https://[::1]/a@b",
+      "git@host:x/y",
+    ]) {
+      expect(urlWithoutSecret(url)).toBe(url);
+    }
+  });
 });
 
 describe("answersText", () => {

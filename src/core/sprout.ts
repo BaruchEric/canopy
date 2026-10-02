@@ -23,19 +23,40 @@ export const isSeedRepoId = (id: string): boolean => id.startsWith(`${SEEDS_DIR}
 /** A url with no secret in it, for everything canopy stores or shows: an
  *  http(s) url loses its whole userinfo ("https://x:token@host/r" is
  *  "https://host/r"), any other scheme's keeps its user name, which ssh
- *  needs, and loses a password. A scp-like "git@host:path" has none. */
+ *  needs, and loses a password. A scp-like "git@host:path" has none.
+ *
+ *  Read by a string scan, not `new URL`: a password pasted with a raw `/`,
+ *  `?` or `#` in it ends the authority early for a url parser, which would
+ *  leave the rest of the password standing. So when the authority by the
+ *  book has no `@` but reads as `user:password` (a colon, and not one before
+ *  a port), the password runs on to the first `@` past it, and the userinfo
+ *  ends at the last `@` before the host's own path. An `@` in a path or a
+ *  query after a plain host, or after a host and port, is left alone. */
 export function urlWithoutSecret(url: string): string {
-  const m = /^([a-z][a-z0-9+.-]*:\/\/)([^/?#]*)([\s\S]*)$/i.exec(url);
+  const m = /^[a-z][a-z0-9+.-]*:\/\//i.exec(url);
   if (!m) return url;
-  const scheme = m[1] ?? "";
-  const authority = m[2] ?? "";
-  const rest = m[3] ?? "";
-  const at = authority.lastIndexOf("@");
-  if (at < 0) return url;
-  const host = authority.slice(at + 1);
-  if (/^https?:\/\/$/i.test(scheme)) return `${scheme}${host}${rest}`;
-  const user = authority.slice(0, at).split(":")[0] ?? "";
-  return `${scheme}${user ? `${user}@` : ""}${host}${rest}`;
+  const scheme = m[0];
+  const after = url.slice(scheme.length);
+  /** the first `/`, `?` or `#` from `from` on, or the end */
+  const stop = (from: number): number => {
+    for (let i = from; i < after.length; i++) if ("/?#".includes(after.charAt(i))) return i;
+    return after.length;
+  };
+  const head = after.slice(0, stop(0));
+  let at = head.lastIndexOf("@");
+  if (at < 0) {
+    // an IPv6 literal is a host, never a user
+    if (head.startsWith("[")) return url;
+    const colon = head.lastIndexOf(":");
+    if (colon < 0 || /^\d*$/.test(head.slice(colon + 1))) return url;
+    const past = after.indexOf("@", head.length);
+    if (past < 0) return url;
+    at = after.lastIndexOf("@", stop(past + 1) - 1);
+  }
+  const rest = after.slice(at + 1);
+  if (/^https?:\/\/$/i.test(scheme)) return `${scheme}${rest}`;
+  const user = after.slice(0, at).split(":")[0] ?? "";
+  return `${scheme}${user ? `${user}@` : ""}${rest}`;
 }
 
 const ID = /^sp_[0-9a-f]{12}$/;
