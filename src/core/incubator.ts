@@ -358,12 +358,17 @@ export class Incubator {
       await this.deps.store.writeIndex(s.id, index);
       await this.deps.seeds.write(s.seedPath, ".canopy/inputs.md", index);
     } catch (err) {
-      s.questions = questions;
-      if (askedAt !== undefined) s.questionsAt = askedAt;
+      // a stop that landed meanwhile keeps the questions dropped
+      if (!sproutEnded(s)) {
+        s.questions = questions;
+        if (askedAt !== undefined) s.questionsAt = askedAt;
+      }
       throw err;
     }
     // a refused commit parks the sprout, which gives its slot back
     if (!(await this.commit(s, `answers: ${s.title}`, "answers"))) return s;
+    // a stop that landed while the answers were written stays a stop
+    if (sproutEnded(s)) return s;
     s.status = "queued";
     await this.changed(s);
     this.pump();
@@ -413,6 +418,14 @@ export class Incubator {
       await this.park(s, `could not commit the ${what}: ${msg(err)}`);
       return false;
     }
+  }
+
+  /** A clarify that was cut short (failed, stopped, or lost in a restart)
+   *  after an earlier one finished runs again: launch cleared `reclarify`
+   *  when it started, and without this the queue would go on to scout with
+   *  the new inputs never clarified. */
+  private clarifyAgain(s: Sprout, entry: SproutFlow | undefined): void {
+    if (entry?.workflow === "clarify" && s.clarified) s.reclarify = true;
   }
 
   private stopFlow(f: Flow): void {
@@ -466,6 +479,7 @@ export class Incubator {
     }
     delete s.parked;
     s.status = "queued";
+    this.clarifyAgain(s, cur);
     await this.changed(s);
     if (s.prepared) this.pump();
     else this.serial(s, () => this.prepare(s));
@@ -532,6 +546,7 @@ export class Incubator {
         if (holdsSlot(s)) {
           s.status = "queued";
           delete s.parked;
+          this.clarifyAgain(s, entry);
           requeued.push(s);
         }
       } catch (err) {
@@ -730,6 +745,8 @@ export class Incubator {
       // a link planted in the seed is refused here: the stage failed, nothing goes on
       return this.park(s, `could not commit clarify's files: ${msg(err)}`);
     }
+    // a stop that landed while clarify's files were read and committed stays a stop
+    if (sproutEnded(s)) return;
     s.clarified = true;
     if (parsed.questions.length > 0 && !s.reclarify) {
       s.questions = parsed.questions;

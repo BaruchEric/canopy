@@ -1039,3 +1039,90 @@ describe("detach", () => {
     expect(w.store.records.get(s.id)).toEqual(saved);
   });
 });
+
+describe("a second clarify cut short", () => {
+  /** a sprout whose second clarify is running: the first asked, more input came */
+  async function secondClarify(w: World): Promise<Sprout> {
+    const s = await w.inc.create(intake({ text: "x" }));
+    await w.inc.idle();
+    const live = now(w, s.id);
+    await w.seeds.write(live.seedPath, ".canopy/questions.json", JSON.stringify([{ question: "Q?" }]));
+    w.flows.move(live.flows[0]?.flowId ?? "", { status: "done" });
+    await w.inc.idle();
+    await w.inc.addInputs(s.id, intake({ text: "more" }));
+    await w.inc.idle();
+    expect(w.flows.started.map((r) => r.workflow.name)).toEqual(["clarify", "clarify"]);
+    return now(w, s.id);
+  }
+
+  test("a restart that lost its flow runs clarify again, not scout", async () => {
+    const w = world();
+    const s = await secondClarify(w);
+    const r = world();
+    r.workflows.set("scout", SCOUT);
+    r.store.records = w.store.records;
+    r.store.inputs = w.store.inputs;
+    r.seeds.files = w.seeds.files;
+    for (const p of w.seeds.files.keys()) r.repos.add(p.replace("/root/", ""));
+    // r.flows starts empty: the second clarify's flow did not come back
+    await r.inc.restore();
+    await r.inc.idle();
+    expect(r.flows.started.map((x) => x.workflow.name)).toEqual(["clarify"]);
+    expect(now(r, s.id).status).toBe("clarifying");
+  });
+
+  test("a resume after it failed runs clarify again, not scout", async () => {
+    const w = world();
+    w.workflows.set("scout", SCOUT);
+    const s = await secondClarify(w);
+    w.flows.move(s.flows[1]?.flowId ?? "", { status: "failed", error: "x" });
+    await w.inc.idle();
+    expect(now(w, s.id).status).toBe("parked");
+    await w.inc.resume(s.id, "retry");
+    await w.inc.idle();
+    expect(w.flows.started.map((x) => x.workflow.name)).toEqual(["clarify", "clarify", "clarify"]);
+  });
+});
+
+describe("a stop is never undone", () => {
+  /** a seed whose commit lets a stop land while it runs */
+  function stopOnCommit(w: World, id: () => string): void {
+    const commit = w.seeds.commit.bind(w.seeds);
+    w.seeds.commit = async (path, rels, message) => {
+      await w.inc.stop(id());
+      return commit(path, rels, message);
+    };
+  }
+
+  test("a stop while the answers are committed", async () => {
+    const w = world();
+    w.workflows.set("scout", SCOUT);
+    const s = await w.inc.create(intake({ text: "x" }));
+    await w.inc.idle();
+    await w.seeds.write(s.seedPath, ".canopy/questions.json", JSON.stringify([{ question: "Q?" }]));
+    w.flows.move(s.flows[0]?.flowId ?? "", { status: "done" });
+    await w.inc.idle();
+    stopOnCommit(w, () => s.id);
+    const after = await w.inc.answer(s.id, { "Q?": "yes" });
+    await w.inc.idle();
+    expect(after.status).toBe("stopped");
+    expect(now(w, s.id).status).toBe("stopped");
+    expect(w.flows.started).toHaveLength(1);
+  });
+
+  test("a stop while clarify's files are committed, with or without questions", async () => {
+    for (const questions of ["[]", JSON.stringify([{ question: "Q?" }])]) {
+      const w = world();
+      w.workflows.set("scout", SCOUT);
+      const s = await w.inc.create(intake({ text: "x" }));
+      await w.inc.idle();
+      await w.seeds.write(s.seedPath, ".canopy/questions.json", questions);
+      stopOnCommit(w, () => s.id);
+      w.flows.move(s.flows[0]?.flowId ?? "", { status: "done" });
+      await w.inc.idle();
+      expect(now(w, s.id).status).toBe("stopped");
+      expect(now(w, s.id).questions).toBeUndefined();
+      expect(w.flows.started).toHaveLength(1);
+    }
+  });
+});
