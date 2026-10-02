@@ -50,6 +50,9 @@ class FakeStore implements IncubatorStore {
     m.set(name, typeof data === "string" ? new TextEncoder().encode(data) : data);
     this.inputs.set(id, m);
   }
+  async removeInput(id: string, name: string): Promise<void> {
+    this.inputs.get(id)?.delete(name);
+  }
   async readInput(id: string, name: string): Promise<Uint8Array> {
     const d = this.inputs.get(id)?.get(name);
     if (!d) throw new Error(`no input ${name}`);
@@ -76,6 +79,8 @@ class FakeSeeds implements IncubatorSeeds {
   /** what seed.ts throws on a planted symlink */
   failCommit: string | null = null;
   failRead = new Set<string>();
+  /** a write to one of these throws once, as a full disk would */
+  failWriteOnce = new Set<string>();
   async make(path: string, files: Record<string, string>, cloneUrl: string | undefined): Promise<void> {
     if (this.failMake) throw new Error(this.failMake);
     this.made.push({ path, clone: cloneUrl });
@@ -86,6 +91,7 @@ class FakeSeeds implements IncubatorSeeds {
     return this.files.get(path)?.get(rel) ?? null;
   }
   async write(path: string, rel: string, text: string): Promise<void> {
+    if (this.failWriteOnce.delete(rel)) throw new Error(`no space left writing ${rel}`);
     const m = this.files.get(path) ?? new Map<string, string>();
     m.set(rel, text);
     this.files.set(path, m);
@@ -292,7 +298,11 @@ describe("intake", () => {
       [2, "transcript", "002-voice.txt", 1],
     ]);
     expect(after.inputs[0]?.processed).toBe(true);
-    expect(after.inputs[1]?.summary).toBe("count the quarters");
+    // the words stay in the inputs folder; the record, the index and the vault say only what it is
+    expect(after.inputs[1]?.summary).toBe("");
+    expect(w.store.indexes.get(s.id)).toContain("- [2] transcript 002-voice.txt: not summarized yet");
+    expect(w.store.indexes.get(s.id)).not.toContain("count the quarters");
+    expect(w.notes.puts.map((p) => p.text).join("\n")).not.toContain("count the quarters");
     expect(new TextDecoder().decode(w.store.inputs.get(s.id)?.get("002-voice.txt"))).toBe("count the quarters\nand the dimes");
   });
 
@@ -735,6 +745,20 @@ describe("answers", () => {
     expect(now(w, s.id).parked).toBe("the scout workflow is not installed");
   });
 
+  test("an answer that fails part way leaves no answers input behind, so the retry adds one", async () => {
+    const w = world();
+    const s = await asking(w);
+    w.seeds.failWriteOnce.add(".canopy/intent.md");
+    await expect(w.inc.answer(s.id, { "Who counts?": "staff" })).rejects.toThrow("no space left");
+    expect(now(w, s.id).questions).toHaveLength(1);
+    expect(now(w, s.id).inputs.filter((e) => e.kind === "answers")).toHaveLength(0);
+    const after = await w.inc.answer(s.id, { "Who counts?": "staff" });
+    expect(after.inputs.filter((e) => e.kind === "answers")).toHaveLength(1);
+    expect([...(w.store.inputs.get(s.id)?.keys() ?? [])].filter((n) => n.endsWith("answers.md"))).toHaveLength(1);
+    const intent = (await w.seeds.read(s.seedPath, ".canopy/intent.md")) ?? "";
+    expect(intent.split("## Answers, ")).toHaveLength(2);
+  });
+
   test("no open questions is a 409, an unknown id a 404", async () => {
     const w = world();
     const s = await w.inc.create(intake({ text: "x" }));
@@ -760,6 +784,47 @@ describe("answers", () => {
 });
 
 describe("more input", () => {
+  test("on a sprout canopy parked, clarify runs again on what came in", async () => {
+    const w = world();
+    const s = await w.inc.create(intake({ text: "x" }));
+    await w.inc.idle();
+    w.flows.move(now(w, s.id).flows[0]?.flowId ?? "", { status: "failed", error: "boom" });
+    await w.inc.idle();
+    expect(now(w, s.id).status).toBe("parked");
+    const after = await w.inc.addInputs(s.id, intake({ text: "for the Rio laundromat" }));
+    expect(after.status).toBe("queued");
+    expect(after.parked).toBeUndefined();
+    await w.inc.idle();
+    expect(w.flows.started.map((r) => r.workflow.name)).toEqual(["clarify", "clarify"]);
+    expect(now(w, s.id).status).toBe("clarifying");
+  });
+
+  test("on a sprout parked before its seed was made, the seed is made and clarify runs", async () => {
+    const w = world();
+    w.seeds.failMake = "disk full";
+    const s = await w.inc.create(intake({ text: "x" }));
+    await w.inc.idle();
+    expect(now(w, s.id).parked).toContain("could not make the seed");
+    w.seeds.failMake = null;
+    await w.inc.addInputs(s.id, intake({ text: "more" }));
+    await w.inc.idle();
+    expect(now(w, s.id).prepared).toBe(true);
+    expect(now(w, s.id).status).toBe("clarifying");
+  });
+
+  test("on a sprout parked at a live gate, it stays parked: the flow waits on the human", async () => {
+    const w = world();
+    const s = await w.inc.create(intake({ text: "x" }));
+    await w.inc.idle();
+    w.flows.move(now(w, s.id).flows[0]?.flowId ?? "", { status: "gated" });
+    await w.inc.idle();
+    expect(now(w, s.id).status).toBe("parked");
+    const after = await w.inc.addInputs(s.id, intake({ text: "more" }));
+    await w.inc.idle();
+    expect(after.status).toBe("parked");
+    expect(w.flows.started).toHaveLength(1);
+  });
+
   test("while questions wait, they are dropped and clarify runs again", async () => {
     const w = world();
     const s = await w.inc.create(intake({ text: "x" }));
@@ -843,7 +908,7 @@ describe("more input", () => {
     release();
     await w.inc.idle();
     expect(w.flows.started.map((r) => r.repoId)).toEqual([a.repoId, "_incubator/two", a.repoId]);
-    expect(await w.seeds.read(a.seedPath, ".canopy/inputs.md")).toContain("transcript 003-voice.txt: spoken later");
+    expect(await w.seeds.read(a.seedPath, ".canopy/inputs.md")).toContain("transcript 003-voice.txt: not summarized yet");
   });
 
   test("a repo is refused after the start, and an ended sprout takes nothing", async () => {
@@ -856,6 +921,30 @@ describe("more input", () => {
 });
 
 describe("stop, resume and dismiss", () => {
+  test("resume tries a memo the speech model failed on again", async () => {
+    let fail = true;
+    const w = world({
+      transcribe: async () => {
+        if (fail) throw new Error("model down");
+        return "count the quarters";
+      },
+    });
+    const s = await w.inc.create(intake({ files: [audio()] }));
+    await w.inc.idle();
+    expect(now(w, s.id).inputs[0]?.note).toBe("not transcribed: model down");
+    w.flows.move(now(w, s.id).flows[0]?.flowId ?? "", { status: "failed", error: "x" });
+    await w.inc.idle();
+    fail = false;
+    await w.inc.resume(s.id, "retry");
+    await w.inc.idle();
+    const after = now(w, s.id);
+    expect(after.inputs.map((e) => e.kind)).toEqual(["audio", "transcript"]);
+    expect(after.inputs[0]?.note).toBeUndefined();
+    expect(after.inputs[0]?.processed).toBe(true);
+    expect(w.store.indexes.get(s.id)).toContain("transcript 002-voice.txt");
+    expect(w.flows.started).toHaveLength(2);
+  });
+
   test("stop ends the flow, frees the slot, and later flow news is ignored", async () => {
     const w = world();
     const a = await w.inc.create(intake({ text: "one" }));

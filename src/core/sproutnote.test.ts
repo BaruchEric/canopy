@@ -64,6 +64,15 @@ describe("sproutNote", () => {
     expect(md).toContain("Parked: budget spent: 2 runs");
     expect(md).toContain("Clarify has not written the intent yet.");
   });
+  test("a park reason with newlines stays one line, in the note and in the daily line", () => {
+    const s = sprout({ status: "parked", parked: "clarify failed: boom\n## not a heading\n- not an item" });
+    const md = sproutNote(s, null);
+    expect(md).toContain("Parked: clarify failed: boom ## not a heading - not an item\n");
+    expect(md).not.toContain("\n## not a heading");
+    const line = dailyLine(s, "parked");
+    expect(line.trim().split("\n")).toHaveLength(1);
+    expect(line).toContain("parked: clarify failed: boom ## not a heading - not an item.");
+  });
   test("open questions are counted", () => {
     const q = { question: "Who?", header: "", options: [], multiSelect: false };
     expect(sproutNote(sprout({ questions: [q, { ...q, question: "Where?" }] }), null)).toContain("2 questions wait for the user.");

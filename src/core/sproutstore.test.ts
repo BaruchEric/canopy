@@ -81,6 +81,31 @@ describe("SproutFiles", () => {
     await expect(files.writeInput("../../etc", "a", "x")).rejects.toThrow("not a sprout id");
     expect((await stat(join(files.inputsDir(id), "001-text.md"))).mode & 0o777).toBe(0o600);
   });
+  test("an input taken back is gone, and taking back one that is not there is fine", async () => {
+    const id = "sp_000000000001";
+    await files.writeInput(id, "009-answers.md", "a");
+    await files.removeInput(id, "009-answers.md");
+    await files.removeInput(id, "009-answers.md");
+    await files.writeInput(id, "009-answers.md", "b");
+    expect(new TextDecoder().decode(await files.readInput(id, "009-answers.md"))).toBe("b");
+    await files.removeInput(id, "009-answers.md");
+    await expect(files.removeInput(id, "../escape")).rejects.toThrow("not an input name");
+  });
+  test("two saves close together land in the order they were made", async () => {
+    const id = "sp_000000000007";
+    // the older one is large, so its write takes longer than the newer one's
+    const older: Sprout = {
+      ...sprout(id),
+      updatedAt: 1,
+      inputs: Array.from({ length: 20_000 }, (_, i) => ({ n: i + 1, kind: "text" as const, name: `${i}.md`, label: "x".repeat(40), type: "text/markdown", at: 1, via: "sheet" as const, bytes: 1, summary: "y".repeat(40), processed: true })),
+    };
+    const newer: Sprout = { ...sprout(id), updatedAt: 2 };
+    // a folder of its own, so the other tests' listings never see it
+    const own = new SproutFiles(ROOT, join(dir, "order"));
+    await Promise.all([own.save(older), own.save(newer)]);
+    const onDisk = JSON.parse(await readFile(join(dir, "order", id, "sprout.json"), "utf8")) as Sprout;
+    expect(onDisk.updatedAt).toBe(2);
+  });
   test("the index is written beside the record", async () => {
     await files.writeIndex("sp_000000000001", "# Inputs\n");
     expect(await readFile(join(dir, "sp_000000000001", "inputs.md"), "utf8")).toBe("# Inputs\n");

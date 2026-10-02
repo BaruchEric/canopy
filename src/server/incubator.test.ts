@@ -130,7 +130,8 @@ describe("intake", () => {
     expect(s.inputs[0]?.type).toBe("audio/webm");
     await until(async () => (await detail(s.id)).sprout.inputs.some((e) => e.kind === "transcript"), "the transcript");
     const t = (await detail(s.id)).sprout.inputs.find((e) => e.kind === "transcript");
-    expect(t?.summary).toBe("count the quarters");
+    // the words stay in the inputs folder, out of the record and the index
+    expect(t?.summary).toBe("");
   });
 
   test("a markdown file sent as octet-stream is taken as markdown", async () => {

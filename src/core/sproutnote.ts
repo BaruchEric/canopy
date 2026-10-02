@@ -39,6 +39,9 @@ export function dailyNoteHead(d: Date): string {
   ].join("\n");
 }
 
+/** one line: a park reason can carry a flow's error, newlines and all */
+const flat = (t: string): string => t.replace(/\s+/g, " ").trim();
+
 const link = (s: Sprout): string => `[[${sproutNotePath(s.slug).replace(/\.md$/, "")}|${s.slug}]]`;
 
 export function dailyLine(s: Sprout, event: NoteEvent): string {
@@ -46,7 +49,7 @@ export function dailyLine(s: Sprout, event: NoteEvent): string {
     event === "started"
       ? `started in canopy's incubator as ${s.repoId}`
       : event === "parked"
-        ? `parked: ${s.parked ?? "no reason given"}`
+        ? `parked: ${flat(s.parked ?? "") || "no reason given"}`
         : event;
   return `\n- **incubator: ${s.title}** - ${what}. Note: ${link(s)}\n`;
 }
@@ -67,7 +70,7 @@ const STATUS_WORD: Record<SproutStatus, string> = {
 };
 
 function statusLine(s: Sprout): string {
-  if (s.status === "parked") return `Parked: ${s.parked ?? "no reason given"}`;
+  if (s.status === "parked") return `Parked: ${flat(s.parked ?? "") || "no reason given"}`;
   const n = s.questions?.length ?? 0;
   return n ? `${STATUS_WORD[s.status]} ${n} ${n === 1 ? "question waits" : "questions wait"} for the user.` : STATUS_WORD[s.status];
 }
@@ -77,8 +80,6 @@ function spentLine(s: Sprout): string {
   const minutes = Math.round(s.spent.workMs / 60_000);
   return `${runs} agent ${runs === 1 ? "run" : "runs"}, ${minutes} ${minutes === 1 ? "minute" : "minutes"} of agent work.`;
 }
-
-const flat = (t: string): string => t.replace(/\s+/g, " ").trim();
 
 /** the whole note; `intent` is the seed's intent.md, null before clarify wrote one */
 export function sproutNote(s: Sprout, intent: string | null): string {

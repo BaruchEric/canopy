@@ -8,7 +8,7 @@
  * sprout.json carries the root of the server that wrote it (a property of
  * the file, not of the Sprout) and a server lists only its own.
  */
-import { mkdir, readFile, readdir, rename, writeFile } from "node:fs/promises";
+import { mkdir, readFile, readdir, rename, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { isSproutId, parseSproutRecord } from "./sprout";
 import { configDir } from "./store";
@@ -76,12 +76,31 @@ export class SproutFiles {
     return out;
   }
 
-  /** whole, through a rename, so a crash leaves the old record or the new one */
-  async save(s: Sprout): Promise<void> {
-    const home = this.home(s.id);
+  /** each sprout's saves, one after another */
+  private readonly saving = new Map<string, Promise<void>>();
+
+  /** Whole, through a rename, so a crash leaves the old record or the new
+   *  one. The record is taken as it is now, and written after the saves
+   *  before it, so two saves close together never land out of order. */
+  save(s: Sprout): Promise<void> {
+    const text = `${JSON.stringify({ ...s, root: this.root }, null, 2)}\n`;
+    const id = s.id;
+    // one that failed does not hold up the next
+    const next = (this.saving.get(id) ?? Promise.resolve()).catch(() => {}).then(() => this.write(id, text));
+    this.saving.set(id, next);
+    next
+      .finally(() => {
+        if (this.saving.get(id) === next) this.saving.delete(id);
+      })
+      .catch(() => {});
+    return next;
+  }
+
+  private async write(id: string, text: string): Promise<void> {
+    const home = this.home(id);
     await mkdir(home, { recursive: true, mode: 0o700 });
     const tmp = join(home, `.sprout.${process.pid}.${Date.now()}.${Math.random().toString(16).slice(2)}.tmp`);
-    await writeFile(tmp, `${JSON.stringify({ ...s, root: this.root }, null, 2)}\n`, { mode: 0o600 });
+    await writeFile(tmp, text, { mode: 0o600 });
     await rename(tmp, join(home, "sprout.json"));
   }
 
@@ -90,6 +109,10 @@ export class SproutFiles {
     const file = this.input(id, name);
     await mkdir(this.inputsDir(id), { recursive: true, mode: 0o700 });
     await writeFile(file, data, { mode: 0o600, flag: "wx" });
+  }
+
+  async removeInput(id: string, name: string): Promise<void> {
+    await rm(this.input(id, name), { force: true });
   }
 
   async readInput(id: string, name: string): Promise<Uint8Array> {

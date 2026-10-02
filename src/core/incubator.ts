@@ -69,6 +69,8 @@ export interface IncubatorStore {
   list(): Promise<Sprout[]>;
   save(s: Sprout): Promise<void>;
   writeInput(id: string, name: string, data: Uint8Array | string): Promise<void>;
+  /** an input taken back, when what it was written for failed */
+  removeInput(id: string, name: string): Promise<void>;
   readInput(id: string, name: string): Promise<Uint8Array>;
   inputsDir(id: string): string;
   writeIndex(id: string, text: string): Promise<void>;
@@ -358,17 +360,25 @@ export class Incubator {
     // taken at once, so a second answer racing this one finds none
     delete s.questions;
     delete s.questionsAt;
+    let entry: InputEntry | null = null;
     try {
       const text = answersText(questions, answers, this.now());
       const n = questions.length;
       const summary = answers ? `answered ${n} ${n === 1 ? "question" : "questions"}` : "went on assumptions";
-      await this.addEntry(s, { kind: "answers", label: "answers", type: "text/markdown", via: "answer", summary, processed: true }, "answers.md", text);
       const intent = (await this.deps.seeds.read(s.seedPath, ".canopy/intent.md")) ?? "";
-      await this.deps.seeds.write(s.seedPath, ".canopy/intent.md", intent.trim() ? `${intent.trimEnd()}\n\n${text}` : text);
+      entry = await this.addEntry(s, { kind: "answers", label: "answers", type: "text/markdown", via: "answer", summary, processed: true }, "answers.md", text);
       const index = inputsIndex(s.inputs);
       await this.deps.store.writeIndex(s.id, index);
       await this.deps.seeds.write(s.seedPath, ".canopy/inputs.md", index);
+      // last, so a retry after any throw above appends the answers once
+      await this.deps.seeds.write(s.seedPath, ".canopy/intent.md", intent.trim() ? `${intent.trimEnd()}\n\n${text}` : text);
     } catch (err) {
+      // the answers input goes with the failed attempt, so a retry adds one, not a second
+      if (entry) {
+        const taken = entry;
+        s.inputs = s.inputs.filter((x) => x !== taken);
+        await this.deps.store.removeInput(s.id, taken.name).catch((e: unknown) => this.log(`${s.slug}: could not take back ${taken.name}: ${msg(e)}`));
+      }
       // a stop that landed meanwhile keeps the questions dropped
       if (!sproutEnded(s)) {
         s.questions = questions;
@@ -398,14 +408,28 @@ export class Incubator {
       delete s.questionsAt;
       s.status = "queued";
     }
+    // A sprout canopy parked, with no flow of it alive, goes back in the
+    // queue so clarify reads what came in. One parked at a live gate stays
+    // parked: its flow waits on the human.
+    let requeued = false;
+    if (s.status === "parked") {
+      const f = this.currentFlow(s);
+      if (!f || !isFlowActive(f)) {
+        delete s.parked;
+        s.status = "queued";
+        requeued = true;
+      }
+    }
     // the sprout is busy from here, so the queue waits for the new inputs to be read
     this.serial(s, () => this.afterInputs(s));
+    if (requeued && !s.prepared) this.serial(s, () => this.prepare(s));
     await this.changed(s, "input");
     return s;
   }
 
   private async afterInputs(s: Sprout): Promise<void> {
-    await this.transcribeAll(s);
+    // a transcript clarify has not read means it reads again
+    if ((await this.transcribeAll(s)) > 0 && s.clarified) s.reclarify = true;
     const index = inputsIndex(s.inputs);
     await this.deps.store.writeIndex(s.id, index);
     if (s.prepared) {
@@ -469,6 +493,8 @@ export class Incubator {
     const s = this.need(id);
     if (s.status !== "parked") throw new IncubatorError(409, "only a parked project resumes");
     const reason = s.parked;
+    // a memo the speech model failed on is tried again
+    const retry = this.untranscribed(s);
     const cur = s.flows.at(-1);
     const f = cur && !cur.outcome ? this.deps.flows.get(cur.flowId) : undefined;
     if (cur && f && isFlowActive(f)) {
@@ -484,6 +510,7 @@ export class Incubator {
           throw new IncubatorError(409, msg(err));
         }
       }
+      if (retry > 0 && s.prepared) this.serial(s, () => this.afterInputs(s));
       // a flow still running is followed again rather than started a second time
       await this.changed(s);
       return s;
@@ -491,10 +518,25 @@ export class Incubator {
     delete s.parked;
     s.status = "queued";
     this.clarifyAgain(s, cur);
+    // the queue waits for a retried memo before the stage starts
+    if (retry > 0 && s.prepared) this.serial(s, () => this.afterInputs(s));
     await this.changed(s);
     if (s.prepared) this.pump();
     else this.serial(s, () => this.prepare(s));
     return s;
+  }
+
+  /** the audio inputs that came out with no transcript, made ready to be
+   *  tried again; how many there were */
+  private untranscribed(s: Sprout): number {
+    let n = 0;
+    for (const e of s.inputs) {
+      if (e.kind === "audio" && !e.processed && e.note?.startsWith("not transcribed")) {
+        delete e.note;
+        n += 1;
+      }
+    }
+    return n;
   }
 
   /** an ended sprout off the list; its seed, inputs and vault note stay */
@@ -579,8 +621,10 @@ export class Incubator {
     this.detached = true;
   }
 
-  /** every audio input not yet tried, into a transcript entry of its own */
-  private async transcribeAll(s: Sprout): Promise<void> {
+  /** every audio input not yet tried, into a transcript entry of its own;
+   *  answers how many transcripts it added */
+  private async transcribeAll(s: Sprout): Promise<number> {
+    let added = 0;
     const todo = s.inputs.filter((e) => e.kind === "audio" && !e.processed && !e.note);
     for (const e of todo) {
       if (!this.deps.transcribe) {
@@ -601,12 +645,17 @@ export class Incubator {
       const base = e.name.replace(/^\d+-/, "").replace(/\.[^.]*$/, "");
       await this.addEntry(
         s,
-        { kind: "transcript", label: `${e.label} (transcript)`, type: "text/plain", via: e.via, summary: firstLine(text), processed: true, from: e.n },
+        // The words stay in the inputs folder: a transcript's words never go
+        // to the vault (the spec), so the note and inputs.md say "not
+        // summarized yet", the line clarify's prompt tells it to fill in
+        { kind: "transcript", label: `${e.label} (transcript)`, type: "text/plain", via: e.via, summary: "", processed: true, from: e.n },
         `${base}.txt`,
         text,
       );
       e.processed = true;
+      added += 1;
     }
+    return added;
   }
 
   /** the slow half of intake, behind the route's answer */
@@ -621,7 +670,7 @@ export class Incubator {
         return false;
       }
     };
-    if (!(await step("transcribe", () => this.transcribeAll(s)))) return;
+    if (!(await step("transcribe", async () => void (await this.transcribeAll(s))))) return;
     const index = inputsIndex(s.inputs);
     if (!(await step("write the inputs index", () => this.deps.store.writeIndex(s.id, index)))) return;
     const made = await step("make the seed", async () => {

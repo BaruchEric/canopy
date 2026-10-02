@@ -182,8 +182,8 @@ export function parseSummaries(md: string): Map<number, string> {
   return out;
 }
 
-/** the kinds whose summary clarify writes; text, transcripts and answers carry their own */
-const SUMMARIZED: ReadonlySet<InputKind> = new Set<InputKind>(["url", "image", "file"]);
+/** the kinds whose summary clarify writes; text and answers carry their own */
+const SUMMARIZED: ReadonlySet<InputKind> = new Set<InputKind>(["url", "image", "file", "transcript"]);
 
 export function withSummaries(entries: readonly InputEntry[], map: ReadonlyMap<number, string>): InputEntry[] {
   return entries.map((e) => {
@@ -232,7 +232,8 @@ export function parseQuestions(text: string): ParsedQuestions {
 export function answersText(questions: readonly RunQuestion[], answers: Readonly<Record<string, string>> | null, at: number): string {
   const head = `## Answers, ${localStamp(at)}`;
   if (!answers) return `${head}\n\nThe user chose to go on assumptions: research goes on with what this file assumes.\n`;
-  const lines = questions.map((q) => `- ${q.question}\n  ${oneLine(answers[q.question] ?? "", 1000) || "(no answer)"}`);
+  // own keys only: a question called "constructor" is not the object's
+  const lines = questions.map((q) => `- ${q.question}\n  ${oneLine(Object.hasOwn(answers, q.question) ? (answers[q.question] ?? "") : "", 1000) || "(no answer)"}`);
   return `${head}\n\n${lines.join("\n")}\n`;
 }
 
