@@ -120,6 +120,7 @@ function setup(opts: {
     evidence: opts.evidence,
     status: opts.status,
     now: opts.now,
+    // the record is the one this hook was just handed; the round trip copies it
     save: (rec) => saved.push(JSON.parse(JSON.stringify(rec)) as FlowRecord),
     forget: (id) => forgotten.push(id),
   });
@@ -780,6 +781,7 @@ describe("budgets", () => {
 const lastRecord = (saved: FlowRecord[], id: string): FlowRecord => {
   const rec = saved.filter((r) => r.flow.id === id).at(-1);
   if (!rec) throw new Error(`no record for ${id}`);
+  // the record is one this test just wrote through the save hook
   return JSON.parse(JSON.stringify(rec)) as FlowRecord;
 };
 const sameAgent = () => () => DEFAULT_AGENT;
@@ -887,14 +889,28 @@ describe("records and restore", () => {
     expect(b.saved.length).toBe(0);
   });
 
-  test("a record carries the live working time", async () => {
+  test("a record carries the live working time, not the banked one", async () => {
     let t = 0;
+    const W = wf(`---\nblurb: b\n---\n\n## A\n\na\n\n## B\n\nb\n`);
     const a = setup({ now: () => t });
+    const flow = a.flows.start(repo(), W, "", DEFAULT_AGENT);
+    t = 5000;
+    a.runner.end("run1", "done", "a");
+    await flush();
+    // step B started with the clock still running, so nothing is banked yet
+    expect(a.flows.get(flow.id)?.spent?.workMs).toBe(0);
+    expect(lastRecord(a.saved, flow.id).flow.spent?.workMs).toBe(5000);
+  });
+
+  test("a gated flow whose repo left the scan fails", async () => {
+    const a = setup();
     const flow = a.flows.start(repo(), TWO, "", DEFAULT_AGENT);
-    t = 12_345;
-    a.runner.set("run1", "working");
-    a.flows.stop(flow.id);
-    expect(lastRecord(a.saved, flow.id).flow.spent?.workMs).toBe(12_345);
+    a.runner.end("run1", "done", "x");
+    await flush();
+    const b = setup();
+    b.flows.restore([lastRecord(a.saved, flow.id)], () => undefined, sameAgent);
+    expect(b.flows.get(flow.id)?.status).toBe("failed");
+    expect(b.flows.get(flow.id)?.error).toBe("the repo is not in the scan any more");
   });
 
   test("detach stops saving, so a server stopping does not save every flow as stopped", async () => {
