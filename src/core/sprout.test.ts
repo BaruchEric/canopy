@@ -22,6 +22,8 @@ import {
   sproutSlug,
   sproutTitle,
   withInputsRead,
+  withWorkspaceRead,
+  workspaceLine,
   urlWithoutSecret,
   withSummaries,
 } from "./sprout";
@@ -223,6 +225,18 @@ describe("slots and stages", () => {
     const next = withInputsRead(wf, "/config/incubator/sp_0123456789ab/inputs");
     expect(next.steps[0]?.tools).toEqual(["Edit", "Read(//config/incubator/sp_0123456789ab/inputs/**)"]);
     expect(wf.steps[0]?.tools).toEqual(["Edit"]);
+  });
+  test("withWorkspaceRead adds devhub's two indexes and READMEs under the root, and nothing wider", () => {
+    const wf = { steps: [{ name: "Research", tools: ["WebFetch"] }] } as unknown as Workflow;
+    const next = withWorkspaceRead(wf, "/work/dev");
+    expect(next.steps[0]?.tools).toEqual([
+      "WebFetch",
+      "Read(//work/dev/_devhub/manifest.json)",
+      "Read(//work/dev/_devhub/references.json)",
+      "Read(//work/dev/**/README.md)",
+    ]);
+    expect(wf.steps[0]?.tools).toEqual(["WebFetch"]);
+    expect(workspaceLine("/work/dev")).toBe("The workspace's devhub manifest is /work/dev/_devhub/manifest.json and its saved references are /work/dev/_devhub/references.json.");
   });
 });
 

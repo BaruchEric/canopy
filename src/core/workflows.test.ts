@@ -41,7 +41,7 @@ describe("loadWorkflows", () => {
   test("bundled, then user, then repo, later winning by name; broken files stay listed", async () => {
     const list = await loadWorkflows({ path: repo });
     const names = list.map((e) => (e.ok ? e.workflow.name : e.name));
-    expect(names).toEqual(["commit", "push", "ship", "deploy", "review", "clarify", "broken", "tidy"]);
+    expect(names).toEqual(["commit", "push", "ship", "deploy", "review", "clarify", "scout", "broken", "tidy"]);
     const review = findWorkflow(list, "review");
     expect(review?.source).toBe("user");
     expect(review?.blurb).toBe("my own review");
@@ -116,5 +116,29 @@ describe("the documented example", () => {
     expect(e.ok ? "" : e.error).toBe("");
     if (!e.ok) return;
     expect(e.workflow.steps.map((s) => s.name)).toEqual(["Update", "Gates", "Commit"]);
+  });
+});
+
+describe("the bundled scout", () => {
+  test("unlisted, budgeted, research then a judged eval that rewinds to research", async () => {
+    const scout = findWorkflow(await loadWorkflows({ path: "", host: "none" }), "scout");
+    expect(scout?.listed).toBe(false);
+    expect(scout?.budget).toEqual({ runs: 8, hours: 1 });
+    expect(scout?.steps.map((s) => s.name)).toEqual(["Research", "Eval"]);
+    const [research, evalStep] = scout?.steps ?? [];
+    expect(research?.check).toBe('"$CANOPY_CLI" incubator pick-check');
+    expect(research?.retries).toBe(2);
+    expect(evalStep?.gate).toBe("judge");
+    expect(evalStep?.back).toBe("Research");
+    expect(evalStep?.retries).toBe(2);
+    expect(evalStep?.evidence).toEqual([".canopy/intent.md", ".canopy/research.md", ".canopy/pick.json", ".canopy/eval.md"]);
+  });
+
+  test("no step may read the whole disk, call gh api, clone, push or touch vercel", async () => {
+    const scout = findWorkflow(await loadWorkflows({ path: "", host: "none" }), "scout");
+    const tools = (scout?.steps ?? []).flatMap((s) => s.tools);
+    expect(tools).toEqual(expect.arrayContaining(["WebSearch", "WebFetch", "Bash(gh search repos:*)", "Bash(gh repo view:*)"]));
+    for (const banned of ["Read", "Glob", "Grep", "Bash(gh api:*)", "Bash(git clone:*)", "Bash(git push:*)"]) expect(tools).not.toContain(banned);
+    expect(tools.some((t) => /vercel|gh repo create|gh repo fork/.test(t))).toBe(false);
   });
 });
