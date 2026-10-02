@@ -12,6 +12,7 @@ import { isProfileName } from "./route";
 import {
   GATE_KINDS,
   WORKFLOW_WHENS,
+  type FlowBudget,
   type GateKind,
   type Workflow,
   type WorkflowEntry,
@@ -81,6 +82,38 @@ function agentKey(v: string | undefined, what: string): string | undefined {
   return v;
 }
 
+const MAX_RETRIES = 10;
+const BUDGET = /^(\d+)\s+runs?\s*,\s*(\d+(?:\.\d+)?)\s*h$/;
+
+function retriesKey(v: string | undefined, name: string): number {
+  if (v === undefined || v === "") return 0;
+  const n = Number(v);
+  if (!Number.isInteger(n) || n < 0 || n > MAX_RETRIES) {
+    throw new Bad(`step ${name}: retries must be a whole number from 0 to ${MAX_RETRIES}, not ${v}`);
+  }
+  return n;
+}
+
+function evidenceKey(v: string | undefined, name: string): string[] {
+  if (v === undefined || v === "") return [];
+  const paths = v.split(/\s+/).filter(Boolean);
+  for (const p of paths) {
+    if (p.startsWith("/") || p.split("/").includes("..")) {
+      throw new Bad(`step ${name}: evidence must be paths inside the repo, not ${p}`);
+    }
+  }
+  return paths;
+}
+
+function budgetKey(v: string | undefined): FlowBudget | null {
+  if (v === undefined || v === "") return null;
+  const m = BUDGET.exec(v);
+  const runs = Number(m?.[1]);
+  const hours = Number(m?.[2]);
+  if (!m || !(runs > 0) || !(hours > 0)) throw new Bad(`budget must read like "30 runs, 6h", not ${v}`);
+  return { runs, hours };
+}
+
 function step(name: string, lines: string[], agent: string | undefined): WorkflowStep {
   const { keys, rest } = keyBlock(lines);
   const turnsRaw = keys.get("turns");
@@ -91,7 +124,20 @@ function step(name: string, lines: string[], agent: string | undefined): Workflo
   const body = rest.join("\n").trim();
   if (!body && !check) throw new Bad(`step ${name} has neither a prompt nor a check`);
   const profile = agentKey(keys.get("agent"), `step ${name}: agent`) ?? agent;
-  return { name, tools: tools(keys.get("tools")), turns, check, gate, body, ...(profile ? { agent: profile } : {}) };
+  const evidence = evidenceKey(keys.get("evidence"), name);
+  if (evidence.length > 0 && gate !== "judge") throw new Bad(`step ${name}: evidence is only read by gate: judge`);
+  return {
+    name,
+    tools: tools(keys.get("tools")),
+    turns,
+    check,
+    gate,
+    body,
+    retries: retriesKey(keys.get("retries"), name),
+    back: keys.get("back") || name,
+    evidence,
+    ...(profile ? { agent: profile } : {}),
+  };
 }
 
 function steps(body: string, agent: string | undefined): WorkflowStep[] {
@@ -116,6 +162,14 @@ function steps(body: string, agent: string | undefined): WorkflowStep[] {
   }
   flush();
   if (out.length === 0) throw new Bad("no steps: a workflow needs at least one ## heading");
+  out.forEach((s, i) => {
+    const to = out.findIndex((t) => t.name === s.back);
+    if (to === -1) throw new Bad(`step ${s.name}: back names no step called ${s.back}`);
+    if (to > i) throw new Bad(`step ${s.name}: back must name this step or an earlier one, not ${s.back}`);
+    if (!s.body && s.retries > 0 && to === i) {
+      throw new Bad(`step ${s.name}: a check-only step's retries need back: an earlier step`);
+    }
+  });
   return out;
 }
 
@@ -142,6 +196,7 @@ export function parseWorkflow(
       notePlaceholder: keys.get("note") || "anything the agent should know (optional)",
       noteRequired: bool(keys.get("note-required"), "note-required"),
       steps: steps(body, agentKey(keys.get("agent"), "agent")),
+      budget: budgetKey(keys.get("budget")),
       source: meta.source,
       file: meta.file,
     };

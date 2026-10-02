@@ -1090,7 +1090,7 @@ export const isDirty = (r: Repo): boolean =>
 export const WORKFLOW_WHENS = ["dirty", "unpushed", "dirty-or-unpushed", "any"] as const;
 export type WorkflowWhen = (typeof WORKFLOW_WHENS)[number];
 
-export const GATE_KINDS = ["continue", "ask", "verdict"] as const;
+export const GATE_KINDS = ["continue", "ask", "verdict", "judge"] as const;
 export type GateKind = (typeof GATE_KINDS)[number];
 
 /** where a workflow file came from; later sources win by name */
@@ -1109,6 +1109,20 @@ export interface WorkflowStep {
   /** the agent profile the step's run starts with, from its own `agent:`
    *  line or the workflow's; absent follows the repo's flow route */
   agent?: string;
+  /** how many times a check or gate that says no sends the flow back before
+   *  it fails or parks as it would without retries; 0 is never */
+  retries: number;
+  /** the step a retry goes back to: this step's own name or an earlier one's */
+  back: string;
+  /** repo-relative files a judge gate reads beside the summary */
+  evidence: string[];
+}
+
+/** What a workflow may spend before it parks: agent step runs and hours of
+ *  working time. */
+export interface FlowBudget {
+  runs: number;
+  hours: number;
 }
 
 export interface Workflow {
@@ -1122,6 +1136,8 @@ export interface Workflow {
   notePlaceholder: string;
   noteRequired: boolean;
   steps: WorkflowStep[];
+  /** null when the workflow sets none */
+  budget: FlowBudget | null;
   source: WorkflowSource;
   /** absolute path of the file */
   file: string;

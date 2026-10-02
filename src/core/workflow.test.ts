@@ -145,3 +145,74 @@ describe("the bundled ship file", () => {
     expect(e.workflow.steps[0]?.check).toBe(CHECK);
   });
 });
+
+describe("retries, back, evidence and budget", () => {
+  const three = (keys: string, front = "") =>
+    `---\nblurb: b\n${front}---\n\n## First\n\nOne.\n\n## Second\n${keys}\n\nTwo.\n\n## Third\n\nThree.\n`;
+
+  test("defaults: no retries, back to itself, no evidence, no budget", () => {
+    const e = parseWorkflow(`---\nblurb: b\n---\n\n## Do\n\nWork.\n`, meta);
+    if (!e.ok) throw new Error(e.error);
+    expect(e.workflow.budget).toBeNull();
+    expect(e.workflow.steps[0]?.retries).toBe(0);
+    expect(e.workflow.steps[0]?.back).toBe("Do");
+    expect(e.workflow.steps[0]?.evidence).toEqual([]);
+  });
+
+  test("reads every key", () => {
+    const e = parseWorkflow(
+      three("gate: judge\nretries: 2\nback: First\nevidence: .canopy/intent.md .canopy/research.md", "budget: 30 runs, 6h\n"),
+      meta,
+    );
+    if (!e.ok) throw new Error(e.error);
+    expect(e.workflow.budget).toEqual({ runs: 30, hours: 6 });
+    const s = e.workflow.steps[1];
+    expect(s?.gate).toBe("judge");
+    expect(s?.retries).toBe(2);
+    expect(s?.back).toBe("First");
+    expect(s?.evidence).toEqual([".canopy/intent.md", ".canopy/research.md"]);
+  });
+
+  test("a single run and fractional hours", () => {
+    const e = parseWorkflow(three("", "budget: 1 run, 0.5h\n"), meta);
+    if (!e.ok) throw new Error(e.error);
+    expect(e.workflow.budget).toEqual({ runs: 1, hours: 0.5 });
+  });
+
+  test.each<[string, string, string]>([
+    ["retries: -1", "", "retries must be a whole number from 0 to 10"],
+    ["retries: 11", "", "retries must be a whole number from 0 to 10"],
+    ["retries: two", "", "retries must be a whole number from 0 to 10"],
+    ["back: Third", "", "back must name this step or an earlier one, not Third"],
+    ["back: Nope", "", "back names no step called Nope"],
+    ["gate: judge\nevidence: /etc/passwd", "", "evidence must be paths inside the repo, not /etc/passwd"],
+    ["gate: judge\nevidence: ../x.md", "", "evidence must be paths inside the repo, not ../x.md"],
+    ["evidence: a.md", "", "evidence is only read by gate: judge"],
+    ["", "budget: lots\n", 'budget must read like "30 runs, 6h", not lots'],
+    ["", "budget: 0 runs, 1h\n", 'budget must read like "30 runs, 6h", not 0 runs, 1h'],
+    ["", "budget: 3 runs, 0h\n", 'budget must read like "30 runs, 6h", not 3 runs, 0h'],
+  ])("refuses %p %p", (keys, front, error) => {
+    const e = parseWorkflow(three(keys, front), meta);
+    expect(e.ok).toBe(false);
+    if (!e.ok) expect(e.error).toContain(error);
+  });
+
+  // a check-only step has no body, so the table's three() helper cannot build it
+  const checkOnly = (keys: string) =>
+    `---\nblurb: b\n---\n\n## First\n\nOne.\n\n## Gate\ncheck: true\n${keys}\n\n## Third\n\nThree.\n`;
+
+  test("refuses retries on a check-only step that goes back to itself", () => {
+    const e = parseWorkflow(checkOnly("retries: 2"), meta);
+    expect(e.ok).toBe(false);
+    if (!e.ok) expect(e.error).toContain("step Gate: a check-only step's retries need back: an earlier step");
+  });
+
+  test("allows retries on a check-only step that goes back to an earlier one", () => {
+    const e = parseWorkflow(checkOnly("retries: 2\nback: First"), meta);
+    expect(e.ok).toBe(true);
+  });
+
+  test("allows a check-only step with no retries", () => {
+    expect(parseWorkflow(checkOnly(""), meta).ok).toBe(true);
+  });
+});
