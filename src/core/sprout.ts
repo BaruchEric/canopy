@@ -271,7 +271,45 @@ export function withInputsRead(wf: Workflow, dir: string): Workflow {
   return { ...wf, steps: wf.steps.map((st) => ({ ...st, tools: [...st.tools, rule] })) };
 }
 
-/** a sprout.json read back; null for a broken or foreign file */
+const isNum = (v: unknown): v is number => typeof v === "number" && Number.isFinite(v);
+const optStr = (v: unknown): boolean => v === undefined || typeof v === "string";
+const optNum = (v: unknown): boolean => v === undefined || isNum(v);
+const INPUT_KINDS: Readonly<Record<InputKind, true>> = { text: true, audio: true, image: true, url: true, file: true, transcript: true, answers: true };
+
+function isInputEntry(e: unknown): boolean {
+  if (!isObj(e)) return false;
+  const { n, kind, name, label, type, at, via, bytes, summary, processed, from, note } = e;
+  return (
+    isNum(n) &&
+    typeof kind === "string" &&
+    Object.hasOwn(INPUT_KINDS, kind) &&
+    typeof name === "string" &&
+    typeof label === "string" &&
+    typeof type === "string" &&
+    isNum(at) &&
+    typeof via === "string" &&
+    Object.hasOwn(VIA_WORD, via) &&
+    isNum(bytes) &&
+    typeof summary === "string" &&
+    typeof processed === "boolean" &&
+    optNum(from) &&
+    optStr(note)
+  );
+}
+
+const isSproutFlow = (f: unknown): boolean => isObj(f) && typeof f["workflow"] === "string" && typeof f["flowId"] === "string" && optStr(f["outcome"]);
+
+const isOption = (o: unknown): boolean => isObj(o) && typeof o["label"] === "string" && typeof o["description"] === "string";
+
+const isQuestion = (q: unknown): boolean => {
+  if (!isObj(q)) return false;
+  const options: unknown = q["options"];
+  return typeof q["question"] === "string" && typeof q["header"] === "string" && Array.isArray(options) && options.every(isOption) && typeof q["multiSelect"] === "boolean";
+};
+
+/** A sprout.json read back; null for a broken or foreign file. Every part
+ *  restore and the page read is checked, down to each input, flow and
+ *  question, so a damaged record is skipped rather than met halfway. */
 export function parseSproutRecord(text: string): Sprout | null {
   let raw: unknown;
   try {
@@ -280,11 +318,17 @@ export function parseSproutRecord(text: string): Sprout | null {
     return null;
   }
   if (!isObj(raw)) return null;
-  const { id, slug, title, status, repoId, seedPath, inputs, flows, createdAt } = raw;
+  const { id, slug, title, status, repoId, seedPath, inputs, flows, createdAt, updatedAt, prepared, clarified, reclarify, spent } = raw;
   if (typeof id !== "string" || !isSproutId(id) || typeof slug !== "string" || typeof title !== "string") return null;
-  if (typeof repoId !== "string" || typeof seedPath !== "string" || typeof createdAt !== "number") return null;
+  if (typeof repoId !== "string" || typeof seedPath !== "string" || !isNum(createdAt) || !isNum(updatedAt)) return null;
   if (typeof status !== "string" || !(SPROUT_STATUSES as readonly string[]).includes(status)) return null;
-  if (!Array.isArray(inputs) || !Array.isArray(flows)) return null;
+  if (typeof prepared !== "boolean" || typeof clarified !== "boolean" || typeof reclarify !== "boolean") return null;
+  if (!isObj(spent) || !isNum(spent["runs"]) || !isNum(spent["workMs"])) return null;
+  if (!Array.isArray(inputs) || !inputs.every(isInputEntry)) return null;
+  if (!Array.isArray(flows) || !flows.every(isSproutFlow)) return null;
+  const { questions, questionsAt, repo, parked, noteRev } = raw;
+  if (questions !== undefined && !(Array.isArray(questions) && questions.every(isQuestion))) return null;
+  if (!optNum(questionsAt) || !optStr(repo) || !optStr(parked) || !optStr(noteRev)) return null;
   // canopy's own file: past these checks it is taken as written
   return raw as unknown as Sprout;
 }

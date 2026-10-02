@@ -673,3 +673,369 @@ describe("stage workflows", () => {
     }
   });
 });
+
+describe("answers", () => {
+  async function asking(w: World): Promise<Sprout> {
+    const s = await w.inc.create(intake({ text: "coin counter" }));
+    await w.inc.idle();
+    const live = now(w, s.id);
+    await w.seeds.write(live.seedPath, ".canopy/questions.json", JSON.stringify([{ question: "Who counts?", options: ["staff"] }]));
+    await w.seeds.write(live.seedPath, ".canopy/intent.md", "## What the user said\n\nCount coins.\n");
+    w.flows.move(live.flows[0]?.flowId ?? "", { status: "done" });
+    await w.inc.idle();
+    return now(w, s.id);
+  }
+
+  test("answers become an input and the end of intent.md, then research", async () => {
+    const w = world();
+    w.workflows.set("scout", SCOUT);
+    const s = await asking(w);
+    const after = await w.inc.answer(s.id, { "Who counts?": "staff" });
+    expect(after.questions).toBeUndefined();
+    const last = after.inputs.at(-1);
+    expect(last?.kind).toBe("answers");
+    expect(last?.via).toBe("answer");
+    expect(new TextDecoder().decode(w.store.inputs.get(s.id)?.get(last?.name ?? ""))).toContain("- Who counts?\n  staff");
+    expect((await w.seeds.read(s.seedPath, ".canopy/intent.md")) ?? "").toContain("Count coins.\n\n## Answers, ");
+    expect(w.seeds.commits.at(-1)?.message).toBe("answers: coin counter");
+    await w.inc.idle();
+    expect(now(w, s.id).status).toBe("researching");
+  });
+
+  test("going on assumptions says so and goes on", async () => {
+    const w = world();
+    const s = await asking(w);
+    await w.inc.answer(s.id, null);
+    expect((await w.seeds.read(s.seedPath, ".canopy/intent.md")) ?? "").toContain("chose to go on assumptions");
+    await w.inc.idle();
+    expect(now(w, s.id).parked).toBe("the scout workflow is not installed");
+  });
+
+  test("no open questions is a 409, an unknown id a 404", async () => {
+    const w = world();
+    const s = await w.inc.create(intake({ text: "x" }));
+    await w.inc.idle();
+    await expect(w.inc.answer(s.id, {})).rejects.toMatchObject({ status: 409 });
+    await expect(w.inc.answer("sp_ffffffffffff", {})).rejects.toMatchObject({ status: 404 });
+  });
+
+  test("a commit the seed refuses parks the answered sprout, which then holds no slot", async () => {
+    const w = world();
+    const s = await asking(w);
+    w.seeds.failCommit = ".canopy/intent.md is a symlink";
+    const after = await w.inc.answer(s.id, { "Who counts?": "staff" });
+    expect(after.status).toBe("parked");
+    expect(after.parked).toBe("could not commit the answers: .canopy/intent.md is a symlink");
+    w.seeds.failCommit = null;
+    const b = await w.inc.create(intake({ text: "two" }));
+    const c = await w.inc.create(intake({ text: "three" }));
+    await w.inc.idle();
+    expect(now(w, b.id).status).toBe("clarifying");
+    expect(now(w, c.id).status).toBe("clarifying");
+  });
+});
+
+describe("more input", () => {
+  test("while questions wait, they are dropped and clarify runs again", async () => {
+    const w = world();
+    const s = await w.inc.create(intake({ text: "x" }));
+    await w.inc.idle();
+    const live = now(w, s.id);
+    await w.seeds.write(live.seedPath, ".canopy/questions.json", JSON.stringify([{ question: "Q?" }]));
+    w.flows.move(live.flows[0]?.flowId ?? "", { status: "done" });
+    await w.inc.idle();
+    const after = await w.inc.addInputs(s.id, intake({ text: "it is for the Rio laundromat" }));
+    expect(after.questions).toBeUndefined();
+    expect(after.reclarify).toBe(true);
+    await w.inc.idle();
+    expect(w.flows.started.map((r) => r.workflow.name)).toEqual(["clarify", "clarify"]);
+    expect(now(w, s.id).reclarify).toBe(false);
+    expect(w.store.indexes.get(s.id)).toContain("- [2] text 002-text.md: it is for the Rio laundromat");
+  });
+
+  test("while clarify runs, its questions are passed over and it runs once more", async () => {
+    const w = world();
+    const s = await w.inc.create(intake({ text: "x" }));
+    await w.inc.idle();
+    await w.inc.addInputs(s.id, intake({ text: "more" }));
+    const live = now(w, s.id);
+    await w.seeds.write(live.seedPath, ".canopy/questions.json", JSON.stringify([{ question: "Q?" }]));
+    w.flows.move(live.flows[0]?.flowId ?? "", { status: "done" });
+    await w.inc.idle();
+    expect(now(w, s.id).questions).toBeUndefined();
+    expect(w.flows.started.map((r) => r.workflow.name)).toEqual(["clarify", "clarify"]);
+  });
+
+  test("more input while the first is still being transcribed: unique numbers, one transcript, a whole index", async () => {
+    let release: () => void = () => {};
+    const gate = new Promise<void>((r) => {
+      release = r;
+    });
+    let calls = 0;
+    const w = world({
+      transcribe: async () => {
+        calls += 1;
+        await gate;
+        return "spoken";
+      },
+    });
+    const s = await w.inc.create(intake({ files: [audio()] }));
+    await w.inc.addInputs(s.id, intake({ text: "typed while it listened" }));
+    release();
+    await w.inc.idle();
+    const after = now(w, s.id);
+    const ns = after.inputs.map((e) => e.n);
+    expect(new Set(ns).size).toBe(ns.length);
+    expect(after.inputs.filter((e) => e.kind === "transcript")).toHaveLength(1);
+    expect(calls).toBe(1);
+    const index = w.store.indexes.get(s.id) ?? "";
+    for (const e of after.inputs) expect(index).toContain(`- [${e.n}] ${e.kind} ${e.name}`);
+    expect(await w.seeds.read(after.seedPath, ".canopy/inputs.md")).toBe(index);
+  });
+
+  test("a queued sprout waits for its new inputs to be read before clarify runs again", async () => {
+    let release: () => void = () => {};
+    const gate = new Promise<void>((r) => {
+      release = r;
+    });
+    const w = world({
+      transcribe: async () => {
+        await gate;
+        return "spoken later";
+      },
+    });
+    const a = await w.inc.create(intake({ text: "x" }));
+    await w.inc.idle();
+    const live = now(w, a.id);
+    await w.seeds.write(live.seedPath, ".canopy/questions.json", JSON.stringify([{ question: "Q?" }]));
+    w.flows.move(live.flows[0]?.flowId ?? "", { status: "done" });
+    await w.inc.idle();
+    await w.inc.addInputs(a.id, intake({ files: [audio()] }));
+    // another sprout's start goes through the queue while the memo is still with the speech model
+    await w.inc.create(intake({ text: "two" }));
+    for (let i = 0; i < 20; i++) await new Promise((r) => setTimeout(r, 0));
+    expect(w.flows.started.map((r) => r.repoId)).toEqual([a.repoId, "_incubator/two"]);
+    expect(now(w, a.id).status).toBe("queued");
+    release();
+    await w.inc.idle();
+    expect(w.flows.started.map((r) => r.repoId)).toEqual([a.repoId, "_incubator/two", a.repoId]);
+    expect(await w.seeds.read(a.seedPath, ".canopy/inputs.md")).toContain("transcript 003-voice.txt: spoken later");
+  });
+
+  test("a repo is refused after the start, and an ended sprout takes nothing", async () => {
+    const w = world();
+    const s = await w.inc.create(intake({ text: "x" }));
+    await expect(w.inc.addInputs(s.id, intake({ repo: "https://github.com/a/b" }))).rejects.toMatchObject({ status: 400 });
+    await w.inc.stop(s.id);
+    await expect(w.inc.addInputs(s.id, intake({ text: "y" }))).rejects.toMatchObject({ status: 409 });
+  });
+});
+
+describe("stop, resume and dismiss", () => {
+  test("stop ends the flow, frees the slot, and later flow news is ignored", async () => {
+    const w = world();
+    const a = await w.inc.create(intake({ text: "one" }));
+    await w.inc.create(intake({ text: "two" }));
+    const c = await w.inc.create(intake({ text: "three" }));
+    await w.inc.idle();
+    const stopped = await w.inc.stop(a.id);
+    expect(stopped.status).toBe("stopped");
+    expect(w.flows.get(stopped.flows[0]?.flowId ?? "")?.status).toBe("stopped");
+    await w.inc.idle();
+    expect(now(w, a.id).status).toBe("stopped");
+    expect(now(w, c.id).status).toBe("clarifying");
+  });
+
+  test("a stop that lands while the stage is starting stops the new flow too", async () => {
+    const w = world();
+    const s = await w.inc.create(intake({ text: "x" }));
+    const start = w.flows.start.bind(w.flows);
+    w.flows.start = async (repo, wf, note) => {
+      await w.inc.stop(s.id);
+      return start(repo, wf, note);
+    };
+    await w.inc.idle();
+    expect(now(w, s.id).status).toBe("stopped");
+    expect(w.flows.get("flow1")?.status).toBe("stopped");
+  });
+
+  test("resume continues a gated flow, or queues a sprout canopy parked itself", async () => {
+    const w = world();
+    const s = await w.inc.create(intake({ text: "x" }));
+    await w.inc.idle();
+    const id = now(w, s.id).flows[0]?.flowId ?? "";
+    w.flows.move(id, { status: "gated", steps: [{ name: "Clarify", status: "gated", reason: "budget spent: 2 runs" }] });
+    await w.inc.idle();
+    const back = await w.inc.resume(s.id, "continue");
+    expect(back.status).toBe("clarifying");
+    expect(w.flows.resumed).toEqual([{ id, choice: "continue" }]);
+    await w.inc.idle();
+    expect(now(w, s.id).status).toBe("clarifying");
+    // a park with no gated flow behind it runs the stage again
+    w.flows.move(id, { status: "failed", error: "x" });
+    await w.inc.idle();
+    expect(now(w, s.id).status).toBe("parked");
+    await w.inc.resume(s.id, "retry");
+    await w.inc.idle();
+    expect(w.flows.started).toHaveLength(2);
+    await expect(w.inc.resume(s.id, "continue")).rejects.toMatchObject({ status: 409 });
+  });
+
+  test("resume follows a flow that is still running rather than starting a second", async () => {
+    const w = world();
+    const s = await w.inc.create(intake({ text: "x" }));
+    await w.inc.idle();
+    // parked by canopy while its flow went on working
+    const live = now(w, s.id);
+    live.status = "parked";
+    live.parked = "a park canopy made";
+    await w.inc.resume(s.id, "continue");
+    await w.inc.idle();
+    expect(now(w, s.id).status).toBe("clarifying");
+    expect(w.flows.started).toHaveLength(1);
+    expect(w.flows.resumed).toEqual([]);
+  });
+
+  test("dismiss is for an ended sprout; it keeps the inputs and tells the page", async () => {
+    const w = world();
+    const s = await w.inc.create(intake({ text: "x" }));
+    await w.inc.idle();
+    await expect(w.inc.dismiss(s.id)).rejects.toMatchObject({ status: 409 });
+    await w.inc.stop(s.id);
+    await w.inc.dismiss(s.id);
+    expect(w.inc.list()).toEqual([]);
+    expect(w.store.dismissed).toEqual([s.id]);
+    expect(w.gone).toEqual([s.id]);
+  });
+
+  test("a vault write still under way never puts a dismissed record back", async () => {
+    const w = world();
+    const s = await w.inc.create(intake({ text: "x" }));
+    await w.inc.idle();
+    await w.inc.stop(s.id);
+    await w.inc.dismiss(s.id);
+    await w.inc.idle();
+    expect(w.store.records.has(s.id)).toBe(false);
+  });
+
+  test("detail reads the seed's own words", async () => {
+    const w = world();
+    const s = await w.inc.create(intake({ text: "x" }));
+    await w.inc.idle();
+    await w.seeds.write(s.seedPath, ".canopy/intent.md", "want");
+    const d = await w.inc.detail(s.id);
+    expect(d.intent).toBe("want");
+    expect(d.brief).toContain("# x");
+    expect(d.research).toBeNull();
+    expect(d.inputsIndex).toContain("- [1] text 001-text.md: x");
+  });
+});
+
+describe("restart", () => {
+  /** a second Incubator over the first one's records, seeds and flows */
+  function restarted(w: World, extra: Partial<IncubatorDeps> = {}): World {
+    const next = world(extra);
+    next.store.records = w.store.records;
+    next.store.inputs = w.store.inputs;
+    next.seeds.files = w.seeds.files;
+    next.flows.flows = w.flows.flows;
+    for (const p of w.seeds.files.keys()) next.repos.add(p.replace("/root/", ""));
+    return next;
+  }
+
+  test("open questions come back as they were", async () => {
+    const w = world();
+    const s = await w.inc.create(intake({ text: "x" }));
+    await w.inc.idle();
+    const live = now(w, s.id);
+    await w.seeds.write(live.seedPath, ".canopy/questions.json", JSON.stringify([{ question: "Q?" }]));
+    w.flows.move(live.flows[0]?.flowId ?? "", { status: "done" });
+    await w.inc.idle();
+    const r = restarted(w);
+    await r.inc.restore();
+    await r.inc.idle();
+    expect(now(r, s.id).questions?.map((q) => q.question)).toEqual(["Q?"]);
+    expect(r.flows.started).toHaveLength(0);
+  });
+
+  test("a stage whose flow is gone runs again; one whose flow came back gated parks", async () => {
+    const w = world();
+    const a = await w.inc.create(intake({ text: "one" }));
+    const b = await w.inc.create(intake({ text: "two" }));
+    await w.inc.idle();
+    const r = restarted(w);
+    r.flows.flows.delete(now(w, a.id).flows[0]?.flowId ?? "");
+    const gated = now(w, b.id).flows[0]?.flowId ?? "";
+    r.flows.flows.set(gated, { ...(r.flows.flows.get(gated) as Flow), status: "gated", steps: [{ name: "Clarify", status: "gated", reason: "canopy restarted" }] });
+    r.flows.listener = (f) => r.inc.onFlow(f);
+    await r.inc.restore();
+    await r.inc.idle();
+    expect(r.flows.started.map((x) => x.workflow.name)).toEqual(["clarify"]);
+    expect(now(r, a.id).status).toBe("clarifying");
+    expect(now(r, b.id).status).toBe("parked");
+  });
+
+  test("a sprout caught before its seed was made is prepared again", async () => {
+    const w = world({ rescan: async () => new Promise<void>(() => {}) });
+    const s = await w.inc.create(intake({ text: "x" }));
+    const r = world();
+    r.store.records = w.store.records;
+    r.store.inputs = w.store.inputs;
+    await r.inc.restore();
+    await r.inc.idle();
+    expect(now(r, s.id).prepared).toBe(true);
+    expect(now(r, s.id).status).toBe("clarifying");
+  });
+
+  test("a parked sprout whose gated flow came back keeps its slot", async () => {
+    const w = world();
+    const a = await w.inc.create(intake({ text: "one" }));
+    await w.inc.create(intake({ text: "two" }));
+    const c = await w.inc.create(intake({ text: "three" }));
+    await w.inc.idle();
+    w.flows.move(now(w, a.id).flows[0]?.flowId ?? "", { status: "gated", steps: [{ name: "Clarify", status: "gated", reason: "budget spent: 2 runs" }] });
+    await w.inc.idle();
+    expect(now(w, a.id).status).toBe("parked");
+    const r = restarted(w);
+    await r.inc.restore();
+    await r.inc.idle();
+    expect(now(r, a.id).status).toBe("parked");
+    expect(now(r, c.id).status).toBe("queued");
+    expect(r.flows.started).toHaveLength(0);
+  });
+
+  test("a flow that moves on while restore is busy is acted on once, from its newest status", async () => {
+    const w = world();
+    const a = await w.inc.create(intake({ text: "one" }));
+    const b = await w.inc.create(intake({ text: "two" }));
+    await w.inc.idle();
+    const gated = now(w, b.id).flows[0]?.flowId ?? "";
+    // the user continues b's gate from the inbox while restore is still writing a's record
+    const r: World = restarted(w, {
+      onChange: (x) => {
+        if (x.id === a.id && x.status === "queued") r.flows.move(gated, { status: "working" });
+      },
+    });
+    r.flows.flows.delete(now(w, a.id).flows[0]?.flowId ?? "");
+    r.flows.flows.set(gated, { ...(r.flows.flows.get(gated) as Flow), status: "gated", steps: [{ name: "Clarify", status: "gated", reason: "canopy restarted" }] });
+    await r.inc.restore();
+    await r.inc.idle();
+    expect(now(r, b.id).status).toBe("clarifying");
+    expect(now(r, b.id).parked).toBeUndefined();
+    expect(r.flows.started.map((x) => x.repoId)).toEqual([a.repoId]);
+  });
+});
+
+describe("detach", () => {
+  test("after detach, a flow stopping under a server shutdown neither parks nor saves", async () => {
+    const w = world();
+    const s = await w.inc.create(intake({ text: "x" }));
+    await w.inc.idle();
+    const saved = structuredClone(w.store.records.get(s.id));
+    w.inc.detach();
+    w.flows.move(now(w, s.id).flows[0]?.flowId ?? "", { status: "stopped" });
+    await w.inc.idle();
+    expect(now(w, s.id).status).toBe("clarifying");
+    expect(w.store.records.get(s.id)).toEqual(saved);
+  });
+});

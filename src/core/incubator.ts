@@ -13,7 +13,9 @@ import {
   INPUT_TOTAL_MAX,
   SEEDS_DIR,
   SPROUT_CONCURRENCY,
+  RUNNING_STATUSES,
   WORKFLOW_STATUS,
+  answersText,
   briefText,
   briefTitle,
   firstLine,
@@ -21,6 +23,7 @@ import {
   inputKindOf,
   inputType,
   inputsIndex,
+  isSproutId,
   nextWorkflow,
   parseQuestions,
   parseSummaries,
@@ -34,7 +37,7 @@ import {
   type ParsedQuestions,
 } from "./sprout";
 import { DAILY_EVENTS, dailyLine, dailyNoteHead, dailyNotePath, sproutNote, sproutNotePath, type NoteEvent } from "./sproutnote";
-import type { Flow, FlowChoice, InputEntry, InputKind, InputVia, Repo, Sprout, SproutFlow, Workflow } from "./types";
+import { isFlowActive, type Flow, type FlowChoice, type InputEntry, type InputKind, type InputVia, type Repo, type Sprout, type SproutDetail, type SproutFlow, type Workflow } from "./types";
 import { findWorkflow, loadWorkflows } from "./workflows";
 
 export class IncubatorError extends Error {
@@ -147,6 +150,9 @@ export class Incubator {
   /** each sprout's slow work (prepare, more input), one after another, so two
    *  never transcribe the same memo or write the index over each other */
   private readonly workChain = new Map<string, Promise<void>>();
+  /** how many pieces of slow work each sprout has waiting, so the queue
+   *  never starts a stage on inputs that are still being read */
+  private readonly busy = new Map<string, number>();
   /** background work, for `idle` */
   private readonly pending = new Set<Promise<unknown>>();
   /** slugs claimed by an intake still writing its inputs, so two at once never share a folder */
@@ -172,8 +178,18 @@ export class Incubator {
     this.pending.add(q);
   }
 
+  /** the sprout's slow work, after what is already waiting; the queue moves once it is done */
   private serial(s: Sprout, work: () => Promise<void>): void {
-    const next = (this.workChain.get(s.id) ?? Promise.resolve()).then(work).catch((err: unknown) => this.log(`${s.slug}: ${msg(err)}`));
+    this.busy.set(s.id, (this.busy.get(s.id) ?? 0) + 1);
+    const next = (this.workChain.get(s.id) ?? Promise.resolve())
+      .then(work)
+      .catch((err: unknown) => this.log(`${s.slug}: ${msg(err)}`))
+      .finally(() => {
+        const left = (this.busy.get(s.id) ?? 1) - 1;
+        if (left > 0) this.busy.set(s.id, left);
+        else this.busy.delete(s.id);
+        this.pump();
+      });
     this.workChain.set(s.id, next);
     this.track(next);
   }
@@ -308,6 +324,234 @@ export class Incubator {
     return s;
   }
 
+  private need(id: string): Sprout {
+    const s = isSproutId(id) ? this.sprouts.get(id) : undefined;
+    if (!s) throw new IncubatorError(404, "no such project");
+    return s;
+  }
+
+  async detail(id: string): Promise<SproutDetail> {
+    const s = this.need(id);
+    // a refused read (a planted link) shows as nothing rather than failing the sheet
+    const read = (rel: string): Promise<string | null> => (s.prepared ? this.deps.seeds.read(s.seedPath, rel).catch(() => null) : Promise.resolve(null));
+    const [brief, intent, research] = await Promise.all([read(".canopy/brief.md"), read(".canopy/intent.md"), read(".canopy/research.md")]);
+    return { sprout: s, brief, intent, inputsIndex: inputsIndex(s.inputs), research };
+  }
+
+  /** the clarify batch answered, or skipped with null ("go on assumptions") */
+  async answer(id: string, answers: Record<string, string> | null): Promise<Sprout> {
+    const s = this.need(id);
+    const questions = s.questions;
+    if (s.status !== "clarifying" || !questions?.length) throw new IncubatorError(409, "this project has no open questions");
+    const askedAt = s.questionsAt;
+    // taken at once, so a second answer racing this one finds none
+    delete s.questions;
+    delete s.questionsAt;
+    try {
+      const text = answersText(questions, answers, this.now());
+      const n = questions.length;
+      const summary = answers ? `answered ${n} ${n === 1 ? "question" : "questions"}` : "went on assumptions";
+      await this.addEntry(s, { kind: "answers", label: "answers", type: "text/markdown", via: "answer", summary, processed: true }, "answers.md", text);
+      const intent = (await this.deps.seeds.read(s.seedPath, ".canopy/intent.md")) ?? "";
+      await this.deps.seeds.write(s.seedPath, ".canopy/intent.md", intent.trim() ? `${intent.trimEnd()}\n\n${text}` : text);
+      const index = inputsIndex(s.inputs);
+      await this.deps.store.writeIndex(s.id, index);
+      await this.deps.seeds.write(s.seedPath, ".canopy/inputs.md", index);
+    } catch (err) {
+      s.questions = questions;
+      if (askedAt !== undefined) s.questionsAt = askedAt;
+      throw err;
+    }
+    // a refused commit parks the sprout, which gives its slot back
+    if (!(await this.commit(s, `answers: ${s.title}`, "answers"))) return s;
+    s.status = "queued";
+    await this.changed(s);
+    this.pump();
+    return s;
+  }
+
+  /** more inputs; after clarify has looked, clarify looks again before the next stage */
+  async addInputs(id: string, intake: Intake): Promise<Sprout> {
+    const s = this.need(id);
+    if (sproutEnded(s)) throw new IncubatorError(409, "this project has ended; start a new one");
+    const clean = this.checkIntake(intake, s.inputs.reduce((t, e) => t + e.bytes, 0), false);
+    await this.takeInputs(s, clean);
+    if (s.clarified || s.status === "clarifying") s.reclarify = true;
+    if (s.status === "clarifying" && s.questions) {
+      delete s.questions;
+      delete s.questionsAt;
+      s.status = "queued";
+    }
+    // the sprout is busy from here, so the queue waits for the new inputs to be read
+    this.serial(s, () => this.afterInputs(s));
+    await this.changed(s, "input");
+    return s;
+  }
+
+  private async afterInputs(s: Sprout): Promise<void> {
+    await this.transcribeAll(s);
+    const index = inputsIndex(s.inputs);
+    await this.deps.store.writeIndex(s.id, index);
+    if (s.prepared) {
+      await this.deps.seeds.write(s.seedPath, ".canopy/inputs.md", index);
+      try {
+        await this.deps.seeds.commit(s.seedPath, SEED_FILES, `inputs: ${s.title}`);
+      } catch (err) {
+        // a stage may be running, so this parks nothing: the next stage's own commit says it
+        this.log(`${s.slug}: could not commit the inputs index: ${msg(err)}`);
+      }
+    }
+    await this.changed(s);
+  }
+
+  /** the seed's files committed as canopy; a refusal (a planted link) parks the sprout */
+  private async commit(s: Sprout, message: string, what: string): Promise<boolean> {
+    try {
+      await this.deps.seeds.commit(s.seedPath, SEED_FILES, message);
+      return true;
+    } catch (err) {
+      await this.park(s, `could not commit the ${what}: ${msg(err)}`);
+      return false;
+    }
+  }
+
+  private stopFlow(f: Flow): void {
+    if (!isFlowActive(f)) return;
+    try {
+      this.deps.flows.stop(f.id);
+    } catch (err) {
+      this.log(`could not stop flow ${f.id}: ${msg(err)}`);
+    }
+  }
+
+  async stop(id: string): Promise<Sprout> {
+    const s = this.need(id);
+    if (sproutEnded(s)) return s;
+    // the status first, so the flow's own broadcast finds the sprout stopped
+    s.status = "stopped";
+    delete s.parked;
+    delete s.questions;
+    delete s.questionsAt;
+    const cur = s.flows.at(-1);
+    const f = cur ? this.deps.flows.get(cur.flowId) : undefined;
+    if (f) this.stopFlow(f);
+    await this.changed(s, "stopped");
+    this.pump();
+    return s;
+  }
+
+  /** a parked sprout goes on: its gated flow resumed, else its stage run again */
+  async resume(id: string, choice: "continue" | "retry"): Promise<Sprout> {
+    const s = this.need(id);
+    if (s.status !== "parked") throw new IncubatorError(409, "only a parked project resumes");
+    const reason = s.parked;
+    const cur = s.flows.at(-1);
+    const f = cur && !cur.outcome ? this.deps.flows.get(cur.flowId) : undefined;
+    if (cur && f && isFlowActive(f)) {
+      // the status first, so the flow's own broadcast finds it running
+      s.status = WORKFLOW_STATUS[cur.workflow] ?? "researching";
+      delete s.parked;
+      if (f.status === "gated") {
+        try {
+          this.deps.flows.resume(f.id, choice);
+        } catch (err) {
+          s.status = "parked";
+          if (reason !== undefined) s.parked = reason;
+          throw new IncubatorError(409, msg(err));
+        }
+      }
+      // a flow still running is followed again rather than started a second time
+      await this.changed(s);
+      return s;
+    }
+    delete s.parked;
+    s.status = "queued";
+    await this.changed(s);
+    if (s.prepared) this.pump();
+    else this.serial(s, () => this.prepare(s));
+    return s;
+  }
+
+  /** an ended sprout off the list; its seed, inputs and vault note stay */
+  async dismiss(id: string): Promise<void> {
+    const s = this.need(id);
+    if (!sproutEnded(s)) throw new IncubatorError(409, "stop the project first");
+    // off the list first, so no write starts; then the writes under way finish
+    // before the record moves, so none of them puts it back
+    this.sprouts.delete(id);
+    await Promise.all([this.noteChain.get(id), this.workChain.get(id)]);
+    try {
+      await this.deps.store.dismiss(id);
+    } catch (err) {
+      this.sprouts.set(id, s);
+      throw err;
+    }
+    this.noteChain.delete(id);
+    this.workChain.delete(id);
+    for (const f of s.flows) this.seen.delete(f.flowId);
+    this.deps.onGone(id);
+  }
+
+  /** The sprouts the last server left, after phase 1 restored its flows (a
+   *  flow keeps its id): a stage whose flow came back is followed again, one
+   *  whose flow is gone runs again, one caught before its seed was made is
+   *  prepared again, and open questions wait as they were. */
+  async restore(): Promise<void> {
+    let records: Sprout[];
+    try {
+      records = await this.deps.store.list();
+    } catch (err) {
+      this.log(`could not read the sprout records: ${msg(err)}`);
+      return;
+    }
+    // Every record and every flow's status is taken in before the first
+    // await, so a flow broadcast that lands while restore writes is a
+    // transition from what restore saw, handled once by onFlow.
+    for (const s of records) this.sprouts.set(s.id, s);
+    const requeued: Sprout[] = [];
+    const moves: { s: Sprout; entry: SproutFlow; flow: Flow; status: Flow["status"] }[] = [];
+    for (const s of records) {
+      try {
+        if (sproutEnded(s)) continue;
+        if (!s.prepared) {
+          if (s.status === "queued") this.serial(s, () => this.prepare(s));
+          continue;
+        }
+        const entry = s.flows.at(-1);
+        const flow = entry && !entry.outcome ? this.deps.flows.get(entry.flowId) : undefined;
+        if (entry && flow) {
+          this.seen.set(flow.id, flow.status);
+          const running = flow.status === "working" || flow.status === "waiting";
+          // a parked sprout behind a gated flow, or a running one behind a running flow, is as it was
+          const settled = s.status === "parked" ? flow.status === "gated" : RUNNING_STATUSES.has(s.status) && running;
+          if (!settled) moves.push({ s, entry, flow, status: flow.status });
+          continue;
+        }
+        // a stage in progress with no flow left to follow (or whose end was
+        // never taken in) runs again
+        if (holdsSlot(s)) {
+          s.status = "queued";
+          delete s.parked;
+          requeued.push(s);
+        }
+      } catch (err) {
+        this.log(`could not restore ${s.id}: ${msg(err)}`);
+      }
+    }
+    for (const s of requeued) await this.changed(s);
+    for (const m of moves) {
+      // onFlow already took in a newer status while restore was writing
+      if (this.seen.get(m.flow.id) !== m.status) continue;
+      await this.flowMoved(m.s, m.entry, m.flow).catch((err: unknown) => this.log(`could not restore ${m.s.id}: ${msg(err)}`));
+    }
+    this.pump();
+  }
+
+  /** before the server stops every flow: nothing after this is saved or acted on */
+  detach(): void {
+    this.detached = true;
+  }
+
   /** every audio input not yet tried, into a transcript entry of its own */
   private async transcribeAll(s: Sprout): Promise<void> {
     const todo = s.inputs.filter((e) => e.kind === "audio" && !e.processed && !e.note);
@@ -363,8 +607,8 @@ export class Incubator {
     if (!(await step("rescan for the seed", () => this.deps.rescan()))) return;
     if (this.detached || s.status !== "queued") return;
     s.prepared = true;
+    // the work chain moves the queue once this is done
     await this.changed(s);
-    this.pump();
   }
 
   /* ---------- stages ---------- */
@@ -374,7 +618,7 @@ export class Incubator {
     if (this.detached || this.deps.autostart === false) return;
     let free = SPROUT_CONCURRENCY - this.list().filter((s) => holdsSlot(s, this.currentFlow(s)?.status)).length;
     const queued = this.list()
-      .filter((s) => s.status === "queued" && s.prepared)
+      .filter((s) => s.status === "queued" && s.prepared && !this.busy.has(s.id))
       .sort((a, b) => a.createdAt - b.createdAt);
     for (const s of queued) {
       if (free <= 0) return;
@@ -411,8 +655,14 @@ export class Incubator {
     if (name === "clarify") wf = withInputsRead(wf, this.deps.store.inputsDir(s.id));
     if (this.detached || s.status === "stopped") return;
     const flow = await this.deps.flows.start(repo, wf, stageNote(s, this.deps.store.inputsDir(s.id)));
-    if (name === "clarify") s.reclarify = false;
     s.flows.push({ workflow: name, flowId: flow.id });
+    if (sproutEnded(s)) {
+      // a stop that landed while the flow was starting ends it too
+      this.stopFlow(flow);
+      await this.changed(s);
+      return;
+    }
+    if (name === "clarify") s.reclarify = false;
     await this.changed(s);
     // Flows may have ended the flow inside start (a runner that throws, a
     // missing harness) and broadcast it before it was ours: read it now as a
@@ -436,7 +686,8 @@ export class Incubator {
   }
 
   private async flowMoved(s: Sprout, entry: SproutFlow, flow: Flow): Promise<void> {
-    if (this.detached || s.status === "stopped") return;
+    // an outcome on record means this flow's end was already taken in
+    if (this.detached || s.status === "stopped" || entry.outcome) return;
     if (flow.status === "gated") {
       const step = flow.steps[flow.current];
       // the flow lives on, waiting on the human: the sprout keeps its slot, so nothing is pumped
@@ -504,9 +755,14 @@ export class Incubator {
 
   /* ---------- every change ---------- */
 
+  /** off the list: dismissed, so nothing writes its record again */
+  private gone(s: Sprout): boolean {
+    return this.sprouts.get(s.id) !== s;
+  }
+
   private async changed(s: Sprout, event?: NoteEvent): Promise<void> {
     s.updatedAt = this.now();
-    if (this.detached) return;
+    if (this.detached || this.gone(s)) return;
     try {
       await this.deps.store.save(s);
     } catch (err) {
@@ -527,7 +783,7 @@ export class Incubator {
       const rev = await notes.put(sproutNotePath(snap.slug), sproutNote(snap, intent), s.noteRev);
       if (rev && rev !== s.noteRev) {
         s.noteRev = rev;
-        if (!this.detached) await this.deps.store.save(s);
+        if (!this.detached && !this.gone(s)) await this.deps.store.save(s);
       }
       if (event && DAILY_EVENTS.has(event)) {
         const day = new Date(this.now());

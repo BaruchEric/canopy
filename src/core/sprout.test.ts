@@ -224,4 +224,53 @@ describe("parseSproutRecord", () => {
     expect(parseSproutRecord(JSON.stringify({ ...s, id: "nope" }))).toBeNull();
     expect(parseSproutRecord(JSON.stringify({ ...s, status: "growing" }))).toBeNull();
   });
+
+  const full = sprout({
+    status: "clarifying",
+    repo: "https://github.com/a/b",
+    inputs: [
+      { n: 1, kind: "audio", name: "001-voice.webm", label: "voice.webm", type: "audio/webm", at: 1, via: "sheet", bytes: 3, summary: "", processed: true, note: "x" },
+      { n: 2, kind: "transcript", name: "002-voice.txt", label: "voice.webm (transcript)", type: "text/plain", at: 1, via: "sheet", bytes: 6, summary: "spoken", processed: true, from: 1 },
+    ],
+    clarified: true,
+    questions: [{ question: "Who counts?", header: "", options: [{ label: "staff", description: "" }], multiSelect: false }],
+    questionsAt: 5,
+    flows: [{ workflow: "clarify", flowId: "abcd1234", outcome: "done" }],
+    spent: { runs: 1, workMs: 60_000 },
+    parked: "why",
+    noteRev: "7",
+  });
+
+  test("a whole record round-trips, and the root it was written for passes through", () => {
+    expect(parseSproutRecord(JSON.stringify(full))).toEqual(full);
+    const stamped = { ...full, root: "/root" };
+    expect(parseSproutRecord(JSON.stringify(stamped))).toEqual(stamped);
+  });
+
+  test("a record whose parts restore reads are malformed is null", () => {
+    const bad = (patch: Record<string, unknown>) => parseSproutRecord(JSON.stringify({ ...full, ...patch }));
+    const input = full.inputs[0];
+    expect(bad({ inputs: [null] })).toBeNull();
+    expect(bad({ inputs: [{ ...input, n: "1" }] })).toBeNull();
+    expect(bad({ inputs: [{ ...input, kind: "video" }] })).toBeNull();
+    expect(bad({ inputs: [{ ...input, via: "mail" }] })).toBeNull();
+    expect(bad({ inputs: [{ ...input, processed: "yes" }] })).toBeNull();
+    expect(bad({ inputs: [{ ...input, from: "1" }] })).toBeNull();
+    expect(bad({ flows: ["abcd1234"] })).toBeNull();
+    expect(bad({ flows: [{ workflow: "clarify" }] })).toBeNull();
+    expect(bad({ flows: [{ workflow: "clarify", flowId: "abcd1234", outcome: 3 }] })).toBeNull();
+    expect(bad({ spent: null })).toBeNull();
+    expect(bad({ spent: { runs: 1 } })).toBeNull();
+    expect(bad({ prepared: "true" })).toBeNull();
+    expect(bad({ clarified: 1 })).toBeNull();
+    expect(bad({ reclarify: null })).toBeNull();
+    expect(bad({ updatedAt: "now" })).toBeNull();
+    expect(bad({ questions: {} })).toBeNull();
+    expect(bad({ questions: [{ question: "Q?" }] })).toBeNull();
+    expect(bad({ questions: [{ ...full.questions?.[0], options: ["staff"] }] })).toBeNull();
+    expect(bad({ questionsAt: "5" })).toBeNull();
+    expect(bad({ parked: 1 })).toBeNull();
+    expect(bad({ noteRev: 7 })).toBeNull();
+    expect(bad({ repo: false })).toBeNull();
+  });
 });
