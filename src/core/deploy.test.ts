@@ -1,0 +1,55 @@
+import { describe, expect, test } from "bun:test";
+import { deployReady, deploymentUrl, isVercelAppUrl, productionUrl, repoCandidates, smokeRefusal, vercelArgs, vercelProject } from "./deploy";
+
+describe("deployReady", () => {
+  const env = { vercelToken: true, vercelCli: true, backend: "mini" };
+  test("vercel with a token and the CLI is ready; each gap says what to add", () => {
+    expect(deployReady("vercel", env)).toBe(null);
+    expect(deployReady("vercel", { ...env, vercelToken: false })).toBe("add VERCEL_TOKEN to mini's .env");
+    expect(deployReady("vercel", { ...env, vercelCli: false })).toBe("the vercel CLI is not installed on mini");
+    expect(deployReady("vercel+convex", env)).toBe("deploying to vercel+convex arrives in phase 4");
+    expect(deployReady("mini", env)).toBe("deploying to mini arrives in phase 4");
+  });
+});
+
+describe("names", () => {
+  test("repo names try the slug, then -2 to -9, always lowercase and safe", () => {
+    expect(repoCandidates("coin-counter").slice(0, 3)).toEqual(["coin-counter", "coin-counter-2", "coin-counter-3"]);
+    expect(repoCandidates("coin-counter")).toHaveLength(9);
+    expect(repoCandidates("Ünsafe name!")[0]).toBe("unsafe-name");
+    expect(repoCandidates("---")[0]).toBe("sprout");
+  });
+  test("a vercel project name keeps to its rules", () => {
+    expect(vercelProject("coin-counter-2")).toBe("coin-counter-2");
+    expect(vercelProject("A----B")).toBe("a--b");
+    expect(vercelProject("x".repeat(120))).toHaveLength(100);
+  });
+});
+
+describe("the deploy's answers", () => {
+  test("only an https vercel.app address counts", () => {
+    expect(isVercelAppUrl("https://coin-counter.vercel.app")).toBe(true);
+    expect(isVercelAppUrl("https://coin-counter-abc123-eric.vercel.app/")).toBe(true);
+    expect(isVercelAppUrl("http://coin-counter.vercel.app")).toBe(false);
+    expect(isVercelAppUrl("https://coins.example.com")).toBe(false);
+    expect(isVercelAppUrl("https://evil.com/.vercel.app")).toBe(false);
+  });
+  test("the deployment url is the last vercel.app line vercel deploy printed", () => {
+    const out = "Vercel CLI 61.1.0\nhttps://coin-counter-abc123-eric.vercel.app\n";
+    expect(deploymentUrl(out)).toBe("https://coin-counter-abc123-eric.vercel.app");
+    expect(deploymentUrl("Error: no\n")).toBe(null);
+  });
+  test("the production url is the shortest vercel.app alias, else the deployment's own", () => {
+    expect(productionUrl(["coin-counter-eric.vercel.app", "coin-counter.vercel.app", "coins.example.com"], "https://d.vercel.app")).toBe("https://coin-counter.vercel.app");
+    expect(productionUrl([], "https://d.vercel.app")).toBe("https://d.vercel.app");
+  });
+  test("a smoke GET goes live on 2xx or 3xx; 401 and 403 name the protection", () => {
+    expect(smokeRefusal(200, "https://x.vercel.app")).toBe(null);
+    expect(smokeRefusal(401, "https://x.vercel.app")).toBe("https://x.vercel.app answers 401: Vercel's deployment protection may cover it; turn it off for production in the project's settings, then resume");
+    expect(smokeRefusal(500, "https://x.vercel.app")).toBe("https://x.vercel.app answers 500");
+  });
+  test("the vercel argv never carries the token", () => {
+    expect(vercelArgs("link", "coin-counter", null)).toEqual(["vercel", "link", "--yes", "--project", "coin-counter"]);
+    expect(vercelArgs("deploy", "coin-counter", "team-x")).toEqual(["vercel", "deploy", "--prod", "--yes", "--scope", "team-x"]);
+  });
+});
