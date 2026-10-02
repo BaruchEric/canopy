@@ -8,7 +8,7 @@
  * that turn the rest off: no submodule's own config, no walk up past the
  * seeds dir. The pure parts are tested in seedgit.test.ts; `guardSeed` is Bun.
  */
-import { lstat } from "node:fs/promises";
+import { lstat, realpath, stat } from "node:fs/promises";
 import { dirname, join, sep } from "node:path";
 
 /** laid on every git call canopy makes in a seed */
@@ -21,6 +21,9 @@ export const SEED_GIT_FLAGS: readonly string[] = [
   "-c", "diff.ignoreSubmodules=all",
   "-c", "submodule.recurse=false",
   "-c", "fetch.recurseSubmodules=false",
+  // a .git git cannot use sends it on to the folder itself as a bare repo,
+  // with a config at the seed's top the guard never read
+  "-c", "safe.bareRepository=explicit",
 ];
 
 const ALLOWED: readonly RegExp[] = [
@@ -130,6 +133,10 @@ export async function guardSeed(path: string): Promise<string | null> {
   if (!st) return null;
   if (st.isSymbolicLink()) return "its .git is a symlink";
   if (!st.isDirectory()) return "its .git is a gitfile pointing elsewhere";
+  // git passes over a .git with no HEAD and walks on, to a .git this guard
+  // never judged
+  const head = await lstatOrNull(join(dotGit, "HEAD"));
+  if (!head?.isFile()) return "its .git is not a whole repository (no HEAD)";
   // either file points git at a config this guard never read
   if (await lstatOrNull(join(dotGit, "commondir"))) return "its .git has a commondir, which points git at another config";
   if (await lstatOrNull(join(dotGit, "config.worktree"))) return "its .git has a config.worktree";
@@ -158,4 +165,29 @@ export async function seedGitRefusal(path: string): Promise<string | null> {
   if (seedsDirOf(path, seedRoots) !== null) return "canopy runs no git in the seeds folder itself; the seeds folder is never a repo";
   const refused = await guardSeed(path);
   return refused ? `canopy will not run git in this seed: ${refused}` : null;
+}
+
+/** why the peer gate must not let upload-pack serve `path`. upload-pack opens
+ *  the first of `path` plus each of `suffixes` (enter_repo's probing) that is
+ *  a repo, through any symlink, so every one that exists is judged by its
+ *  real path: inside a seed it must be the seed's folder or its `.git`, the
+ *  folder must not be a bare repo of its own, and the guard must pass. */
+export async function seedServeRefusal(path: string, suffixes: readonly string[]): Promise<string | null> {
+  const lexical = await seedGitRefusal(path);
+  if (lexical) return lexical;
+  for (const suffix of suffixes) {
+    const candidate = path + suffix;
+    const st = await stat(candidate).catch(() => null);
+    if (!st) continue;
+    const real = await realpath(candidate).catch(() => null);
+    if (real === null) continue;
+    if (seedsDirOf(real, seedRoots) !== null) return "canopy runs no git in the seeds folder itself; the seeds folder is never a repo";
+    const top = seedTopOf(real, seedRoots);
+    if (top === null) continue;
+    if (!st.isDirectory() || (real !== top && real !== join(top, ".git"))) return "canopy will not run git in this seed: a seed is served only as its own folder";
+    if (await lstatOrNull(join(top, "HEAD"))) return "canopy will not run git in this seed: its folder is a bare repository, with a config the guard never read";
+    const refused = await seedGitRefusal(top);
+    if (refused) return refused;
+  }
+  return null;
 }

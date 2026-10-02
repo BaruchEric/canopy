@@ -26,14 +26,14 @@ Every git command canopy runs on a path under `<root>/_incubator/` goes through 
   - `user.name`, `user.email`
   - `extensions.objectformat`
 - Any other key refuses the command with the key named. So does a url holding `::`, or a url or pushurl that starts with `-`.
-- A `.git` that is a file (a gitfile) or a symlink refuses, and so does one holding `commondir` or `config.worktree`, since either points git at a config the guard never read.
+- A `.git` that is a file (a gitfile) or a symlink refuses, and so does one holding `commondir` or `config.worktree`, since either points git at a config the guard never read. So does a `.git` with no `HEAD`, which git passes over on its way to another one.
 - The guard judges the `.git` git itself would use, walking up from the path to the seed's top folder. Every seed git call sets `GIT_CEILING_DIRECTORIES` to the seeds dir, so git never walks past it.
 - Every allowed command also ignores submodules (`diff.ignoreSubmodules=all`, `submodule.recurse=false`, `fetch.recurseSubmodules=false`): a committed gitlink with its own `.git` folder would otherwise run that folder's config.
 - The reading is memoized by the config file's mtime and size.
-- Every allowed command also carries `-c core.fsmonitor=false -c core.hooksPath=/dev/null -c protocol.ext.allow=never`.
-- The guard runs in `git()`, in `seed.ts`'s own git calls, before ship clones a seed, and in the peer gate before it serves one.
+- Every allowed command also carries `-c core.fsmonitor=false -c core.hooksPath=/dev/null -c protocol.ext.allow=never -c safe.bareRepository=explicit`. The last stops git taking a seed folder as a bare repo, with a `config` at its top, when its `.git` is unusable.
+- The guard runs in `git()`, in `seed.ts`'s own git calls, before ship clones a seed, and in the peer gate before it serves one. The gate judges every folder upload-pack could open for the path asked, by its real path: inside a seed it must be the seed's folder or its `.git`, and the seed's folder must not hold a `HEAD` of its own.
 - A refused seed's card shows the reason as its scan error, and the Incubator parks the sprout with it. Normal repos are untouched.
-- The guard reads the config, then git reads it again, so code still running in the seed could swap it in between. Canopy therefore runs no git in a seed while a stage process or check is alive there, and keeps the card's last status meanwhile. Once Part 3 lands, the runner kills each run's tree when it ends, so the seed is quiet between runs.
+- The guard reads the config, then git reads it again, so code still running in the seed could swap it in between. Canopy therefore runs no git in a seed while a stage process or check is alive there, keeps the card's last status meanwhile, and reads it once the seed is quiet. Once Part 3 lands, the runner kills each run's tree when it ends, so the seed is quiet between runs.
 
 ### Part 2: a stage reads no settings of the seed's
 

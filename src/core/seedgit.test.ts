@@ -124,6 +124,7 @@ describe("the guard on real seeds", () => {
       "-c", "diff.ignoreSubmodules=all",
       "-c", "submodule.recurse=false",
       "-c", "fetch.recurseSubmodules=false",
+      "-c", "safe.bareRepository=explicit",
     ]);
   });
 
@@ -252,6 +253,32 @@ describe("the guard on real seeds", () => {
     } finally {
       setSeedRoots([seeds]);
     }
+  });
+
+  test("an empty .git never lets git take the seed folder as a bare repo", async () => {
+    const dir = join(seeds, "bare");
+    await mkdir(dir, { recursive: true });
+    expect((await exec(["git", "init", "-q", "--bare", "."], { cwd: dir })).code).toBe(0);
+    await mkdir(join(dir, ".git"));
+    const cfg = join(dir, "config");
+    for (const kv of [["core.bare", "false"], ["core.worktree", dir], ["filter.x.clean", filter()]]) {
+      expect((await exec(["git", "config", "--file", cfg, kv[0]!, kv[1]!])).code).toBe(0);
+    }
+    await writeFile(join(dir, ".gitattributes"), "* filter=x\n");
+    await writeFile(join(dir, "f"), "hi\n");
+    // tracked, so a status after an edit runs the clean filter
+    expect((await exec(["git", "-C", dir, "add", "f", ".gitattributes"], { env: { ...process.env, GIT_CEILING_DIRECTORIES: seeds } })).code).toBe(0);
+    await rm(marker(), { force: true });
+    await appendFile(join(dir, "f"), "more\n");
+    await git(dir, ["status", "--porcelain=v2"]);
+    expect(await ran()).toBe(false);
+  });
+
+  test("a .git that is not a whole repo refuses, so it cannot hide the seed's own", async () => {
+    const dir = await seed("hollow");
+    await appendFile(join(dir, ".git", "config"), `[core]\n\tpager = sh\n`);
+    await mkdir(join(dir, "src", ".git"), { recursive: true });
+    expect(await guardSeed(join(dir, "src"))).toContain("not a whole repository");
   });
 
   test("canopy runs no git in the seeds dir itself", async () => {

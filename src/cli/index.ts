@@ -10,6 +10,7 @@ import { buildKey, isSafeTag } from "../core/launch";
 import { Launcher, LauncherError, type LaunchRepo } from "../core/launcher";
 import {
   currentBranch,
+  ENTER_REPO_SUFFIXES,
   gateCommand,
   initRepo,
   seedRepo,
@@ -34,7 +35,7 @@ import {
 } from "../core/store";
 import type { Job, LaunchSettings, SourceInput, Sprout, SproutDetail } from "../core/types";
 import { parsePick, pickRefusal, SEEDS_DIR } from "../core/sprout";
-import { seedGitRefusal, setSeedRoots } from "../core/seedgit";
+import { seedServeRefusal, setSeedRoots } from "../core/seedgit";
 import { parseNewArgs, sproutLink } from "./newargs";
 import { suggestMessage } from "../core/suggest";
 import { PortUnavailableError, startServer } from "../server/index";
@@ -521,9 +522,14 @@ export async function main(argv: string[]): Promise<void> {
         // A seed's .git is written by agents, and upload-pack reads its
         // config: the same guard canopy's own git calls go through. Set
         // here too since serveList and serveSeeds call git() in-process.
-        setSeedRoots([join(rootAbs, SEEDS_DIR)]);
+        // The real path too: upload-pack opens what a symlink or a suffix
+        // leads to, and seedServeRefusal judges that by its real path.
+        const seedsAbs = join(rootAbs, SEEDS_DIR);
+        let seedsReal = seedsAbs;
+        try { seedsReal = await realpath(seedsAbs); } catch { /* no seeds yet */ }
+        setSeedRoots(seedsReal === seedsAbs ? [seedsAbs] : [seedsAbs, seedsReal]);
         if (cmd.kind === "upload-pack") {
-          const refused = await seedGitRefusal(cmd.path);
+          const refused = await seedServeRefusal(cmd.path, ENTER_REPO_SUFFIXES);
           if (refused) return fail(`canopy-peer: ${refused}`);
         }
         // Read-only: a peer's request must never write this machine's own

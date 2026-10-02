@@ -1367,6 +1367,31 @@ describe("canopy peers gate", () => {
     expect(top.code).toBe(1);
   });
 
+  test("judges the folder upload-pack would open, not only the path asked for", async () => {
+    const ws = join(root, "ws");
+    const bad = async (dir: string, bare = false): Promise<void> => {
+      await mkdir(dir, { recursive: true });
+      expect((await exec(["git", "init", "-q", ...(bare ? ["--bare"] : []), "-b", "main"], { cwd: dir })).code).toBe(0);
+      expect((await exec(["git", "config", "uploadpack.allowAnySHA1InWant", "true"], { cwd: dir })).code).toBe(0);
+    };
+    // a link outside the seeds folder that leads into a seed
+    await bad(join(ws, "_incubator", "hidden"));
+    await symlink(join(ws, "_incubator", "hidden"), join(ws, "via-link"));
+    const link = await gate(`git-upload-pack '${join(ws, "via-link")}'`, ws);
+    expect(link.code).toBe(1);
+    expect(link.stderr).toContain("allowanysha1inwant");
+    // a name that is not there, whose .git suffix is a seed
+    await bad(join(ws, "_incubator", "coin.git"));
+    const suffix = await gate(`git-upload-pack '${join(ws, "_incubator", "coin")}'`, ws);
+    expect(suffix.code).toBe(1);
+    expect(suffix.stderr).toContain("allowanysha1inwant");
+    // a seed folder that is itself a bare repo, with no .git to judge
+    await bad(join(ws, "_incubator", "barren"), true);
+    const bare = await gate(`git-upload-pack '${join(ws, "_incubator", "barren")}'`, ws);
+    expect(bare.code).toBe(1);
+    expect(bare.stderr).toContain("bare");
+  });
+
   test("serves git-upload-pack so a clone works through it", async () => {
     const ws = join(root, "ws");
     // GIT_SSH_COMMAND pointing at a script that runs the gate stands in for sshd.

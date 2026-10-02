@@ -442,7 +442,7 @@ export type GateCommand =
  *  way (a bare `<path>.git` symlink needs no `<path>` at all), so the gate
  *  has to check what upload-pack would actually open, not just the literal
  *  argument. */
-const ENTER_REPO_SUFFIXES = ["/.git", "", ".git/.git", ".git"];
+export const ENTER_REPO_SUFFIXES = ["/.git", "", ".git/.git", ".git"];
 
 /** What the forced command may run. `root` is the absolute workspace root.
  *  git-upload-pack under the root is checked lexically first, then every

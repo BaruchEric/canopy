@@ -37,7 +37,7 @@ import {
 } from "../core/history";
 import { browseLocal, browseRemote, expandHome, SshError } from "../core/browse";
 import { runCheck } from "../core/check";
-import { exec, onHost } from "../core/exec";
+import { exec, git, onHost } from "../core/exec";
 import { fleetSkipReason, Flows } from "../core/flow";
 import { INHERITED_ENV, SECRET_ENV, isKeystroke, isTermId, parseTermMessage, Scrollback, shellArgs, startTerm, termPlace, termSize, type TermSession, type TermSize } from "../core/term";
 import { attachTmuxTerm, hasSession, history, killSession, listSessions, newSession, paneInfo, paneText, sendLine, serverUp, snapshot, tmuxBase } from "../core/tmux";
@@ -1145,6 +1145,11 @@ async function refreshAndBroadcast(
 ): Promise<Repo> {
   const repo = state.result.repos.find((r) => r.id === id);
   if (!repo) throw new HttpError(404, `unknown repo: ${id}`);
+  // a busy seed keeps its last status, read again once it is quiet
+  if (busySeed(repo)) {
+    scheduleRefresh(state, id, SEED_RETRY);
+    return repo;
+  }
   const fresh = await refreshRepo(repo, state.own.get(repo.path) ?? []);
   // Re-find after the await: a concurrent rescan may have replaced the array,
   // and writing back a pre-await index would land in the wrong slot.
@@ -1194,7 +1199,13 @@ function scanOne(state: ServerState, rt: SourceRuntime, opts: Required<ScanOptio
   if (rt.scanning) return rt.scanning;
   rt.scanning = (async () => {
     try {
-      const fresh = await scanSource(rt.src, opts);
+      const fresh = (await scanSource(rt.src, opts)).map((r) => {
+        if (!busySeed(r)) return r;
+        // the scan's read was refused: keep the last status, read it later
+        scheduleRefresh(state, r.id, SEED_RETRY);
+        const was = state.result.repos.find((p) => p.id === r.id);
+        return was ? { ...r, status: was.status, error: was.error } : r;
+      });
       const kept = state.result.repos.filter((r) => r.source !== rt.src.id);
       rt.src = { ...rt.src, repos: fresh.length, scannedAt: Date.now(), error: undefined };
       rebuildResult(state, [...kept, ...fresh]);
@@ -1242,19 +1253,25 @@ function scheduleRescan(state: ServerState, rt: SourceRuntime): void {
 
 /** A status re-read for one repo, debounced: a burst of file events, or a
  *  fetch and the watcher seeing its refs move, become one read. */
-function scheduleRefresh(state: ServerState, id: string): void {
+function scheduleRefresh(state: ServerState, id: string, wait = 400): void {
   clearTimeout(state.timers.get(id));
   state.timers.set(
     id,
     setTimeout(() => {
       state.timers.delete(id);
-      // a busy seed keeps its last status; the run's own end reads it again
+      // a busy seed keeps its last status and is read once it is quiet
       const repo = state.result.repos.find((r) => r.id === id);
-      if (repo && !repo.host && seedBusy(repo.path)) return;
+      if (repo && busySeed(repo)) return scheduleRefresh(state, id, SEED_RETRY);
       refreshAndBroadcast(state, id).catch(() => {});
-    }, 400),
+    }, wait),
   );
 }
+
+/** how often a status read put off by a busy seed asks again */
+const SEED_RETRY = 1_000;
+
+/** a seed canopy runs no git in for now (seedgit.ts) */
+const busySeed = (repo: Repo): boolean => !repo.host && !repo.forge && seedBusy(repo.path);
 
 function startWatcher(state: ServerState, rt: SourceRuntime): void {
   if (rt.src.kind !== "local" || rt.watcher) return;
@@ -1343,9 +1360,10 @@ const FETCH_CONCURRENCY = 4;
  *  in `own` too, since it is exactly the kind of remote the origin fetch
  *  is for. Exported for a direct unit test of the url-match repair case. */
 export async function isPeerRemote(repoPath: string, repoId: string, peer: Peer): Promise<boolean> {
-  const url = await exec(["git", "-C", repoPath, "remote", "get-url", peer.name]);
+  // through git(), so a seed's remotes are read only past the seed guard
+  const url = await git(repoPath, ["remote", "get-url", peer.name]);
   if (url.code === 0 && url.stdout.trim() === peerUrl(peer, repoId)) return true;
-  const pushurl = await exec(["git", "-C", repoPath, "config", "--get", `remote.${peer.name}.pushurl`]);
+  const pushurl = await git(repoPath, ["config", "--get", `remote.${peer.name}.pushurl`]);
   return pushurl.code === 0 && pushurl.stdout.trim() === NO_PUSH;
 }
 

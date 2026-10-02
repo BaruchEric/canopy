@@ -4,6 +4,7 @@ import { mkdir, mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { peerUrl } from "../core/peers";
+import { seedRootsNow, setSeedRoots } from "../core/seedgit";
 import type { Peer, PeerBranch, Repo } from "../core/types";
 import { isPeerRemote, newDivergences, notePeerList, ownRemotesOf, peerSettingsFromEnv, queuePass, runPeerAction, startServer, withPeering } from "./index";
 
@@ -243,6 +244,24 @@ describe("initRepo and ownRemotesOf leave a user's own same-named remote alone",
       "canopy-peer-no-push",
     );
     expect(await isPeerRemote(crashRepo, "crashed", peer)).toBe(true);
+  });
+
+  test("isPeerRemote reads a seed's remotes only through the seed guard", async () => {
+    const seeds = join(scratch, "peer-remote-seeds", "_incubator");
+    const seed = join(seeds, "guarded");
+    await mkdir(seed, { recursive: true });
+    await git(seed, "init", "-q", "-b", "main");
+    const peer: Peer = { name: "mini", alias: null, root: other, role: "git" };
+    await git(seed, "remote", "add", "mini", peerUrl(peer, "_incubator/guarded"));
+    await git(seed, "config", "remote.mini.pushurl", "canopy-peer-no-push");
+    await git(seed, "config", "core.pager", "sh");
+    const before = seedRootsNow();
+    setSeedRoots([seeds]);
+    try {
+      expect(await isPeerRemote(seed, "_incubator/guarded", peer)).toBe(false);
+    } finally {
+      setSeedRoots(before);
+    }
   });
 
   test("isPeerRemote: only the no-push marker or an exact peer-url match count as canopy's own", async () => {
