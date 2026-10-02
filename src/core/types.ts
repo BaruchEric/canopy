@@ -1213,6 +1213,16 @@ export interface FlowStep {
   reason?: string;
 }
 
+/** A check or gate that said no and sent the flow back. */
+export interface FlowRewind {
+  /** the step that said no */
+  from: string;
+  /** the step the flow went back to */
+  to: string;
+  reason: string;
+  at: number;
+}
+
 export interface Flow {
   id: string;
   repoId: string;
@@ -1230,6 +1240,12 @@ export interface Flow {
   error?: string;
   /** set when the flow ends, for workflows that expect change */
   outcome?: "changed" | "unchanged";
+  /** why the current step is running again, carried into its next prompt */
+  retryReason?: string;
+  /** retries used, by step name */
+  tries?: Record<string, number>;
+  /** every rewind, oldest first */
+  rewinds?: FlowRewind[];
 }
 
 /** A flow with a live step: running, waiting on a prompt, or parked at a gate. */

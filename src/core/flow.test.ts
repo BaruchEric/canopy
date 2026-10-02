@@ -89,6 +89,7 @@ function setup(opts: {
   judge?: ((state: string) => Promise<JudgeAnswers>) | null;
   evidence?: (repo: Repo, paths: string[]) => Promise<EvidenceFile[]>;
   status?: () => Promise<Repo["status"]>;
+  now?: () => number;
 } = {}) {
   const runner = new FakeRunner();
   const changes: Flow[] = [];
@@ -109,6 +110,7 @@ function setup(opts: {
     judge: opts.judge ?? null,
     evidence: opts.evidence,
     status: opts.status,
+    now: opts.now,
   });
   runner.onChange = (run) => flows.onRun(run);
   return { runner, flows, changes, gone, checks, fleets, fleetGone };
@@ -589,5 +591,99 @@ describe("the judge gate", () => {
     runner.end("run2", "done", "y");
     await flush();
     expect(states[0]).toContain("File .canopy/intent.md: (missing)");
+  });
+});
+
+const CHECKED_RETRY = wf(`---
+blurb: b
+---
+
+## Build
+
+Build it.
+
+## Test
+check: bun test
+retries: 2
+back: Build
+`);
+
+describe("retries", () => {
+  test("a failing check goes back to its back step with the reason, and passes once the check does", async () => {
+    let calls = 0;
+    const { runner, flows } = setup({ check: () => (++calls < 3 ? { exit: 1, output: "2 fail" } : { exit: 0, output: "ok" }) });
+    const flow = flows.start(repo(), CHECKED_RETRY, "", DEFAULT_AGENT);
+    runner.end("run1", "done", "built");
+    await flush();
+    expect(flows.get(flow.id)?.current).toBe(0);
+    expect(flows.get(flow.id)?.tries).toEqual({ Test: 1 });
+    expect(flows.get(flow.id)?.rewinds?.[0]).toMatchObject({ from: "Test", to: "Build" });
+    expect(runner.specs[1]?.task).toContain("the Test step did not accept the work: check failed with exit 1:\n2 fail");
+    expect(runner.dismissed).toEqual(["run1"]);
+    runner.end("run2", "done", "built again");
+    await flush();
+    runner.end("run3", "done", "built a third time");
+    await flush();
+    expect(flows.get(flow.id)?.status).toBe("done");
+    expect(flows.get(flow.id)?.tries).toEqual({ Test: 2 });
+  });
+
+  test("out of retries, a failing check parks the flow", async () => {
+    const { runner, flows } = setup({ check: () => ({ exit: 1, output: "fail" }) });
+    const flow = flows.start(repo(), CHECKED_RETRY, "", DEFAULT_AGENT);
+    for (const id of ["run1", "run2", "run3"]) {
+      runner.end(id, "done", "x");
+      await flush();
+    }
+    const f = flows.get(flow.id);
+    expect(f?.status).toBe("gated");
+    expect(f?.steps[1]?.reason).toBe("check failed with exit 1");
+    expect(runner.specs.length).toBe(3);
+  });
+
+  test("the retry reason stays while the rewound-to step runs and goes once it passes", async () => {
+    let calls = 0;
+    const { runner, flows } = setup({ check: () => (++calls < 2 ? { exit: 1, output: "bad" } : { exit: 0, output: "ok" }) });
+    const flow = flows.start(repo(), CHECKED_RETRY, "", DEFAULT_AGENT);
+    runner.end("run1", "done", "built");
+    await flush();
+    expect(flows.get(flow.id)?.retryReason).toContain("the Test step did not accept the work");
+    runner.end("run2", "done", "again");
+    await flush();
+    expect(flows.get(flow.id)?.retryReason).toBeUndefined();
+  });
+
+  test("a judge that says partly sends the work back, then parks once retries run out", async () => {
+    const J = wf(`---\nblurb: b\n---\n\n## Build\n\nBuild.\n\n## Accept\ngate: judge\nretries: 1\nback: Build\n\nJudge.\n`);
+    const partly: JudgeAnswers = { fit: { choice: "partly", probabilities: { partly: 0.9 } }, evidence: { probability: 0.9 }, rules: { probability: 0 } };
+    const { runner, flows } = setup({ judge: async () => partly });
+    const flow = flows.start(repo(), J, "", DEFAULT_AGENT);
+    for (const id of ["run1", "run2", "run3", "run4"]) {
+      runner.end(id, "done", "x");
+      await flush();
+    }
+    const f = flows.get(flow.id);
+    expect(f?.status).toBe("gated");
+    expect(f?.current).toBe(1);
+    expect(f?.steps[1]?.reason).toBe("the judge says it only partly meets the intent");
+    expect(runner.specs.length).toBe(4);
+  });
+
+  test("a rejection and a missing evaluator never retry", async () => {
+    const J = wf(`---\nblurb: b\n---\n\n## Accept\ngate: judge\nretries: 2\n\nJudge.\n`);
+    const a = setup({ judge: async () => ({ fit: { choice: "misses", probabilities: { misses: 0.9 } }, evidence: { probability: 0.9 }, rules: { probability: 0 } }) });
+    const fa = a.flows.start(repo(), J, "", DEFAULT_AGENT);
+    a.runner.end("run1", "done", "x");
+    await flush();
+    expect(a.flows.get(fa.id)?.status).toBe("gated");
+    expect(a.flows.get(fa.id)?.tries).toBeUndefined();
+
+    const V = wf(`---\nblurb: b\n---\n\n## One\ngate: verdict\nretries: 2\n\nx\n`);
+    const b = setup({ evaluator: null });
+    const fb = b.flows.start(repo(), V, "", DEFAULT_AGENT);
+    b.runner.end("run1", "done", "x");
+    await flush();
+    expect(b.flows.get(fb.id)?.steps[0]?.reason).toContain("no gateway key");
+    expect(b.flows.get(fb.id)?.tries).toBeUndefined();
   });
 });

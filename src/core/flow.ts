@@ -14,6 +14,7 @@ import {
   type Fleet,
   type Flow,
   type FlowChoice,
+  type FlowStep,
   type JudgeAnswers,
   type Repo,
   type RepoStatus,
@@ -70,9 +71,14 @@ export interface FlowHooks {
   evidence?: (repo: Repo, paths: string[]) => Promise<EvidenceFile[]>;
   /** a fresh status for the repo, for the outcome; null when unreadable */
   status?: (repoId: string) => Promise<RepoStatus | null>;
+  /** the clock, for tests; Date.now otherwise */
+  now?: () => number;
 }
 
 const errText = (err: unknown): string => String(err instanceof Error ? err.message : err);
+
+/** The end of a check's output, which is where a failure says what failed. */
+const tailOf = (s: string, n = 2000): string => (s.length > n ? s.slice(-n) : s);
 
 interface LiveFlow {
   flow: Flow;
@@ -81,8 +87,6 @@ interface LiveFlow {
   /** each step's settings, by the profile it names */
   agent: StepAgent;
   before: string;
-  /** the gate's reason a retry carries into the next prompt */
-  retry?: string;
 }
 
 /** The agent's closing words: the result, else the last text step. */
@@ -247,19 +251,8 @@ export class Flows {
       return live.flow;
     }
     if (choice === "retry") {
-      live.retry = step.reason;
-      if (step.runId) {
-        try {
-          this.runner.dismiss(step.runId);
-        } catch {
-          // an active run cannot be dismissed; it is not, or we would not be gated
-        }
-      }
-      delete step.runId;
-      delete step.check;
-      delete step.verdict;
-      delete step.summary;
-      delete step.reason;
+      if (step.reason) live.flow.retryReason = step.reason;
+      this.resetStep(step);
       void this.runStep(live);
       return live.flow;
     }
@@ -453,6 +446,54 @@ export class Flows {
     }
   }
 
+  private now(): number {
+    return this.hooks.now?.() ?? Date.now();
+  }
+
+  /** Back to pending, its run dismissed and everything it said dropped. */
+  private resetStep(step: FlowStep | undefined): void {
+    if (!step) return;
+    if (step.runId) {
+      try {
+        this.runner.dismiss(step.runId);
+      } catch {
+        // still active or already gone
+      }
+    }
+    delete step.runId;
+    delete step.check;
+    delete step.verdict;
+    delete step.judgment;
+    delete step.summary;
+    delete step.reason;
+    step.status = "pending";
+  }
+
+  /** A check or gate said no: back to the step's `back` while it has retries
+   *  left, else whatever it would have done without retries. */
+  private refuse(live: LiveFlow, reason: string, otherwise: () => void): void {
+    if (!this.rewind(live, reason)) otherwise();
+  }
+
+  private rewind(live: LiveFlow, reason: string): boolean {
+    const { flow, workflow } = live;
+    const def = workflow.steps[flow.current];
+    if (!def || def.retries <= 0) return false;
+    const tries = (flow.tries ??= {});
+    const used = tries[def.name] ?? 0;
+    if (used >= def.retries) return false;
+    tries[def.name] = used + 1;
+    const found = workflow.steps.findIndex((s) => s.name === def.back);
+    const to = found === -1 || found > flow.current ? flow.current : found;
+    for (let i = to; i <= flow.current; i++) this.resetStep(flow.steps[i]);
+    const toName = workflow.steps[to]?.name ?? def.name;
+    (flow.rewinds ??= []).push({ from: def.name, to: toName, reason, at: this.now() });
+    flow.retryReason = to === flow.current ? reason : `the ${def.name} step did not accept the work: ${reason}`;
+    flow.current = to;
+    void this.runStep(live);
+    return true;
+  }
+
   private summaries(live: LiveFlow): { name: string; summary: string }[] {
     return live.flow.steps
       .slice(0, live.flow.current)
@@ -471,8 +512,7 @@ export class Flows {
       await this.check(live);
       return;
     }
-    const spec = stepSpec(workflow, flow.current, this.summaries(live), live.retry);
-    delete live.retry;
+    const spec = stepSpec(workflow, flow.current, this.summaries(live), flow.retryReason);
     let run: Run;
     try {
       run = this.runner.start(live.repo, workflow.name, spec, flow.note, live.agent(def.agent));
@@ -512,9 +552,16 @@ export class Flows {
     if (!isFlowActive(live.flow)) return;
     step.check = { command: def.check, exit: r.exit, output: r.output };
     if (r.exit !== 0) {
-      step.status = "failed";
-      step.reason = `check failed with exit ${r.exit}`;
-      this.end(live, "failed", step.reason);
+      const reason = `check failed with exit ${r.exit}`;
+      this.refuse(live, `${reason}:\n${tailOf(r.output)}`, () => {
+        // out of retries parks, so the sheet can show the output; no retries fails as it always did
+        if (def.retries > 0) this.park(live, reason);
+        else {
+          step.status = "failed";
+          step.reason = reason;
+          this.end(live, "failed", reason);
+        }
+      });
       return;
     }
     await this.gate(live);
@@ -553,7 +600,10 @@ export class Flows {
           const v = decide(answers);
           step.verdict = v;
           if (v.go) await this.pass(live);
-          else this.park(live, v.reason ?? "the verdict said no");
+          else {
+            const reason = v.reason ?? "the verdict said no";
+            this.refuse(live, reason, () => this.park(live, reason));
+          }
         } catch (err) {
           if (!isFlowActive(live.flow)) return;
           this.park(live, `verdict unavailable: ${String(err instanceof Error ? err.message : err)}`);
@@ -585,7 +635,11 @@ export class Flows {
           const j = decideJudge(answers);
           step.judgment = j;
           if (j.go) await this.pass(live);
-          else this.park(live, j.reason ?? "the judge said no");
+          else if (j.rejected) this.park(live, j.reason ?? "the judge turned the work down");
+          else {
+            const reason = j.reason ?? "the judge said no";
+            this.refuse(live, reason, () => this.park(live, reason));
+          }
         } catch (err) {
           if (!isFlowActive(live.flow)) return;
           this.park(live, `judgment unavailable: ${errText(err)}`);
@@ -609,6 +663,7 @@ export class Flows {
     if (!step) return;
     step.status = "passed";
     delete step.reason;
+    delete live.flow.retryReason;
     if (live.flow.current + 1 >= live.flow.steps.length) {
       this.end(live, "done");
       return;
@@ -621,6 +676,7 @@ export class Flows {
   private end(live: LiveFlow, status: "done" | "failed" | "stopped", error?: string): void {
     if (!isFlowActive(live.flow)) return;
     live.flow.status = status;
+    delete live.flow.retryReason;
     live.flow.endedAt = Date.now();
     if (error) live.flow.error = error;
     for (const s of live.flow.steps) if (s.status === "pending") s.status = "skipped";
