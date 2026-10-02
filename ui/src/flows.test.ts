@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { fleetCounts, flowWord, oldestParked, ownRun, selectable, stepWord } from "./flows";
+import { budgetWord, fleetCounts, flowWord, oldestParked, ownRun, rewindLines, selectable, stepWord } from "./flows";
 import type { Fleet, Flow, FlowStep, Repo, Run } from "../../src/core/types";
 
 const flow = (o: Partial<Flow> = {}): Flow => ({
@@ -68,5 +68,30 @@ describe("ownRun", () => {
     expect(ownRun(flowRuns, run("run-2"))).toBe(true);
     expect(ownRun({}, run("run-1"))).toBe(true);
     expect([run("run-1"), run("run-2")].filter((r) => ownRun(flowRuns, r)).map((r) => r.id)).toEqual(["run-2"]);
+  });
+});
+
+describe("budgetWord", () => {
+  test("runs and hours spent of the budget, or null without one", () => {
+    expect(budgetWord(flow())).toBeNull();
+    expect(budgetWord(flow({ budget: { runs: 30, hours: 6 }, spent: { runs: 4, workMs: 4_320_000 } }))).toBe("4 of 30 runs, 1.2h of 6h");
+    expect(budgetWord(flow({ budget: { runs: 2, hours: 0.5 } }))).toBe("0 of 2 runs, 0h of 0.5h");
+    expect(budgetWord(flow({ budget: { runs: 1, hours: 1 } }))).toBe("0 of 1 run, 0h of 1h");
+  });
+});
+
+describe("rewindLines", () => {
+  test("one line per rewind, saying where the work went back to", () => {
+    expect(rewindLines(flow())).toEqual([]);
+    expect(
+      rewindLines(
+        flow({
+          rewinds: [
+            { from: "Test", to: "Test", reason: "check failed", at: 0 },
+            { from: "Accept", to: "Build", reason: "only partly", at: 1 },
+          ],
+        }),
+      ),
+    ).toEqual(["Test tried again: check failed", "Accept sent it back to Build: only partly"]);
   });
 });

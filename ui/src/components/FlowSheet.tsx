@@ -3,8 +3,8 @@ import { useShallow } from "zustand/react/shallow";
 import { describeAgent, isDefaultAgent } from "../../../src/core/agent";
 import { repoFacts } from "../../../src/core/actions";
 import { fleetSkipReason } from "../../../src/core/flow";
-import { isFlowActive, type Fleet, type Flow, type FlowStep, type Repo, type Verdict } from "../../../src/core/types";
-import { fleetCounts, flowWord, oldestParked, stepWord } from "../flows";
+import { isFlowActive, type Fleet, type Flow, type FlowStep, type Judgment, type Repo, type Verdict } from "../../../src/core/types";
+import { budgetWord, fleetCounts, flowWord, oldestParked, rewindLines, stepWord } from "../flows";
 import { agentFor, idText, pickedIds, useStore } from "../store";
 import { BackendWord } from "./IdLabel";
 import { AGENT_NAME, harnessOf } from "../runs";
@@ -91,8 +91,8 @@ export function FlowPlan({ repo, workflow }: { repo: Repo; workflow: string }) {
       </div>
       <footer className="sheet-foot">
         <span className="sheet-hint">
-          {w.steps.some((s) => s.gate === "verdict") && !verdictReady
-            ? "No gateway key on the server, so verdict gates will ask you instead."
+          {w.steps.some((s) => s.gate === "verdict" || s.gate === "judge") && !verdictReady
+            ? "No gateway key on the server, so verdict and judge gates will ask you instead."
             : w.steps.some((s) => s.agent && s.body)
               ? "Steps that name a profile start on it; the rest start on this repo's workflow agent."
               : agent.yolo
@@ -153,24 +153,55 @@ function VerdictBars({ verdict }: { verdict: Verdict }) {
   );
 }
 
+function JudgeBars({ judgment }: { judgment: Judgment }) {
+  const fit = judgment.answers.fit;
+  const rows: [string, number][] = [
+    ["meets", fit.probabilities?.["meets"] ?? (fit.choice === "meets" ? 1 : 0)],
+    ["enough to go on", judgment.answers.evidence.probability],
+    ["breaks a rule", judgment.answers.rules.probability],
+  ];
+  return (
+    <dl className="verdict-bars">
+      {rows.map(([label, p]) => (
+        <div key={label}>
+          <dt>{label}</dt>
+          <dd><span className="bar" style={{ width: `${Math.round(p * 100)}%` }} /><span className="pct">{Math.round(p * 100)}%</span></dd>
+        </div>
+      ))}
+    </dl>
+  );
+}
+
 function Gate({ flow, step, onChoose }: { flow: Flow; step: FlowStep; onChoose: (c: "continue" | "retry" | "stop") => void }) {
   const last = flow.current + 1 >= flow.steps.length;
+  const budget = budgetWord(flow);
+  const rewinds = rewindLines(flow);
+  const overBudget = flow.parkedFor === "budget";
   return (
     <div className="gate">
       <p className="outcome-lead">{step.reason}</p>
       {step.summary && <p className="gate-summary">{step.summary}</p>}
       {step.check && (
         <details className="gate-check">
-          <summary>check passed: {step.check.command}</summary>
+          <summary>{step.check.exit === 0 ? "check passed" : `check failed (exit ${step.check.exit})`}: {step.check.command}</summary>
           <pre>{step.check.output || "(no output)"}</pre>
         </details>
       )}
       {step.verdict && <VerdictBars verdict={step.verdict} />}
+      {step.judgment && <JudgeBars judgment={step.judgment} />}
+      {budget && <p className="gate-budget">{budget}</p>}
+      {rewinds.length > 0 && (
+        <ul className="gate-rewinds">
+          {rewinds.map((line, i) => <li key={i}>{line}</li>)}
+        </ul>
+      )}
       <div className="gate-buttons">
         <button type="button" className="mini strong" onClick={() => onChoose("continue")}>
-          {last ? "accept and finish" : `continue to ${flow.steps[flow.current + 1]?.name ?? "the next step"}`}
+          {overBudget ? "allow one more step" : last ? "accept and finish" : `continue to ${flow.steps[flow.current + 1]?.name ?? "the next step"}`}
         </button>
-        <button type="button" className="mini" onClick={() => onChoose("retry")}>retry this step</button>
+        {!overBudget && (
+          <button type="button" className="mini" onClick={() => onChoose("retry")}>retry this step</button>
+        )}
         <button type="button" className="mini" onClick={() => onChoose("stop")}>stop here</button>
       </div>
     </div>

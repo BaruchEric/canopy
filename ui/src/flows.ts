@@ -83,3 +83,17 @@ export const pickable = (r: Repo): boolean => !r.forge && !r.error && !r.host;
 
 /** The repos a fleet may be pointed at from this browser. */
 export const selectable = (repos: Repo[]): Repo[] => repos.filter(pickable);
+
+/** "4 of 30 runs, 1.2h of 6h" for a flow with a budget, null without one. */
+export function budgetWord(flow: Flow): string | null {
+  if (!flow.budget) return null;
+  const s = flow.spent ?? { runs: 0, workMs: 0 };
+  const hours = Math.round(s.workMs / 360_000) / 10;
+  return `${s.runs} of ${flow.budget.runs} ${flow.budget.runs === 1 ? "run" : "runs"}, ${hours}h of ${flow.budget.hours}h`;
+}
+
+/** One line per rewind, oldest first. */
+export const rewindLines = (flow: Flow): string[] =>
+  (flow.rewinds ?? []).map((r) =>
+    r.from === r.to ? `${r.from} tried again: ${r.reason}` : `${r.from} sent it back to ${r.to}: ${r.reason}`,
+  );
