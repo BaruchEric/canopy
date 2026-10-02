@@ -1,7 +1,7 @@
 import { libraryCommand } from "../core/library";
 import { realpath } from "node:fs/promises";
 import { constants as osConstants } from "node:os";
-import { join, resolve } from "node:path";
+import { basename, join, resolve } from "node:path";
 import { exec } from "../core/exec";
 import { commit, getStatus, pull, push } from "../core/git";
 import { isOpenerId, openGroup, openIn, type OpenerId } from "../core/openers";
@@ -32,7 +32,8 @@ import {
   setLaunch,
   upsertWorkspace,
 } from "../core/store";
-import type { Job, LaunchSettings, SourceInput } from "../core/types";
+import type { Job, LaunchSettings, SourceInput, Sprout, SproutDetail } from "../core/types";
+import { parseNewArgs, sproutLink } from "./newargs";
 import { suggestMessage } from "../core/suggest";
 import { PortUnavailableError, startServer } from "../server/index";
 import { helperName, localOpeners, runHelper } from "../core/helperd";
@@ -81,6 +82,10 @@ usage:
   canopy peers track <id> <peer> <branch>   a local branch at a peer's tip
   canopy peers seed <id>             copy allowlisted ignored files from a peer
   canopy peers gate --root dir       what a peer key's authorized_keys entry runs
+  canopy new "<idea>" [--file f]... [--url u]... [--repo url]
+                                     start a project in the incubator; prints its link
+  canopy incubator list | show <id>  the incubator's projects, or one project
+    --backend URL                    the backend (default: $CANOPY_API, else 127.0.0.1:7850)
   canopy version                     the version and the commit this canopy was built from
 `;
 
@@ -119,6 +124,8 @@ async function scanOpts(): Promise<{ maxDepth: number; ignore: string[] }> {
 }
 
 const COMMANDS = new Set([
+  "new",
+  "incubator",
   "library",
   "tree",
   "status",
@@ -624,6 +631,71 @@ export async function main(argv: string[]): Promise<void> {
     case "-h":
       console.log(HELP);
       return;
+    case "new": {
+      const parsed = parseNewArgs(args, process.env);
+      if ("error" in parsed) return fail(parsed.error);
+      const form = new FormData();
+      if (parsed.text) form.append("text", parsed.text);
+      for (const u of parsed.urls) form.append("url", u);
+      if (parsed.repo) form.append("repo", parsed.repo);
+      for (const path of parsed.files) {
+        const f = Bun.file(path);
+        if (!(await f.exists())) return fail(`no such file: ${path}`);
+        form.append("file", new File([await f.arrayBuffer()], basename(path), { type: f.type }), basename(path));
+      }
+      form.append("via", "cli");
+      let res: Response;
+      try {
+        res = await fetch(`${parsed.backend}/api/incubator`, { method: "POST", body: form });
+      } catch (err) {
+        return fail(`${parsed.backend} did not answer: ${err instanceof Error ? err.message : String(err)}`);
+      }
+      const body = (await res.json().catch(() => ({}))) as Partial<Sprout> & { error?: string };
+      if (!res.ok || !body.id) return fail(body.error ?? `the backend answered ${res.status}`);
+      console.log(`${moss(body.id)} ${body.title ?? ""}`);
+      console.log(sky(sproutLink(parsed.backend, body.id)));
+      return;
+    }
+    case "incubator": {
+      const backend = (opt(args, "--backend") ?? process.env["CANOPY_API"] ?? "http://127.0.0.1:7850").replace(/\/+$/, "");
+      if (!/^https?:\/\/[^/\s]+$/.test(backend)) return fail(`--backend must be an http(s) origin, got ${backend}`);
+      const get = async <T>(path: string): Promise<T> => {
+        let res: Response;
+        try {
+          res = await fetch(`${backend}${path}`);
+        } catch (err) {
+          return fail(`${backend} did not answer: ${err instanceof Error ? err.message : String(err)}`);
+        }
+        // The body is the server's JSON; an error body carries { error }.
+        const body = (await res.json().catch(() => ({}))) as T & { error?: string };
+        if (!res.ok) return fail(body.error ?? `the backend answered ${res.status}`);
+        return body;
+      };
+      const sub = args[0] ?? "list";
+      if (sub === "list") {
+        const list = await get<Sprout[]>("/api/incubator");
+        if (list.length === 0) console.log(dim("nothing in the incubator"));
+        for (const s of list) {
+          const why = s.parked ? dim(` (${s.parked})`) : s.questions?.length ? dim(` (${s.questions.length} questions waiting)`) : "";
+          console.log(`${moss(s.id)}  ${s.status.padEnd(11)} ${s.title}${why}`);
+        }
+        return;
+      }
+      if (sub === "show") {
+        const id = args[1];
+        if (!id) return fail("usage: canopy incubator show <id>");
+        const d = await get<SproutDetail>(`/api/incubator/one?id=${encodeURIComponent(id)}`);
+        const s = d.sprout;
+        console.log(`${bold(s.title)} ${dim(s.repoId)}`);
+        console.log(`${s.status}${s.parked ? `: ${s.parked}` : ""}`);
+        console.log(dim(`${s.spent.runs} runs, ${Math.round(s.spent.workMs / 60_000)} min of agent work`));
+        if (d.intent) console.log(`\n${d.intent.trim()}`);
+        console.log(`\n${d.inputsIndex.trim()}`);
+        console.log(`\n${sky(sproutLink(backend, s.id))}`);
+        return;
+      }
+      return fail("usage: canopy incubator list | show <id>");
+    }
     case "version":
     case "--version":
     case "-V":
