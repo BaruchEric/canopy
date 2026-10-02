@@ -43,6 +43,16 @@ describe("daily note", () => {
       "parked: the scout workflow is not installed.",
     );
   });
+  test("going live and being turned down each put a line in the day", () => {
+    expect(DAILY_EVENTS.has("live")).toBe(true);
+    expect(DAILY_EVENTS.has("rejected")).toBe(true);
+    expect(dailyLine(sprout({ status: "live", url: "https://change-counter.vercel.app" }), "live")).toContain(
+      "- **incubator: Change counter** - live at https://change-counter.vercel.app. Note:",
+    );
+    expect(dailyLine(sprout({ status: "rejected", parked: "a coin app\nalready exists" }), "rejected")).toContain(
+      "turned down at eval: a coin app already exists.",
+    );
+  });
 });
 
 describe("sproutNote", () => {
@@ -76,5 +86,22 @@ describe("sproutNote", () => {
   test("open questions are counted", () => {
     const q = { question: "Who?", header: "", options: [], multiSelect: false };
     expect(sproutNote(sprout({ questions: [q, { ...q, question: "Where?" }] }), null)).toContain("2 questions wait for the user.");
+  });
+  test("a live sprout's note names the pick, the private repo and the url; a rejected one says why", () => {
+    const live = sproutNote(
+      sprout({
+        status: "live",
+        pick: { kind: "new", host: "vercel", why: "nothing close exists" },
+        privateRepo: "eric/change-counter",
+        url: "https://change-counter.vercel.app",
+      }),
+      "Count coins.",
+    );
+    expect(live).toContain("status: live\n");
+    expect(live).toContain("Live at https://change-counter.vercel.app.");
+    expect(live).toContain("## Where it lives\n\n- Pick: new, on vercel. nothing close exists\n- Repo: https://github.com/eric/change-counter (private)\n- Url: https://change-counter.vercel.app\n");
+    const no = sproutNote(sprout({ status: "rejected", parked: "a coin app already exists" }), null);
+    expect(no).toContain("Turned down at eval: a coin app already exists");
+    expect(no).not.toContain("## Where it lives");
   });
 });

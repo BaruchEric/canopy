@@ -1,8 +1,7 @@
 /**
  * The vault's view of a sprout: one note per project at
  * `02 - Dev/incubator/<slug>.md`, rewritten whole at each change, and a
- * line in that day's daily note when a project starts or parks (later
- * phases add live and rejected). An index and summaries only: no raw input
+ * line in that day's daily note when a project starts or parks or goes live or is turned down. An index and summaries only: no raw input
  * and no transcript ever reaches the vault. Pure, so it is tested.
  */
 import type { Sprout, SproutStatus } from "./types";
@@ -10,7 +9,7 @@ import type { Sprout, SproutStatus } from "./types";
 export type NoteEvent = "started" | "questions" | "input" | "parked" | "stopped" | "live" | "rejected";
 
 /** the events that also put a line in the day's note */
-export const DAILY_EVENTS: ReadonlySet<NoteEvent> = new Set<NoteEvent>(["started", "parked"]);
+export const DAILY_EVENTS: ReadonlySet<NoteEvent> = new Set<NoteEvent>(["started", "parked", "live", "rejected"]);
 
 export const sproutNotePath = (slug: string): string => `02 - Dev/incubator/${slug}.md`;
 
@@ -44,14 +43,23 @@ const flat = (t: string): string => t.replace(/\s+/g, " ").trim();
 
 const link = (s: Sprout): string => `[[${sproutNotePath(s.slug).replace(/\.md$/, "")}|${s.slug}]]`;
 
+const eventWord = (s: Sprout, event: NoteEvent): string => {
+  switch (event) {
+    case "started":
+      return `started in canopy's incubator as ${s.repoId}`;
+    case "parked":
+      return `parked: ${flat(s.parked ?? "") || "no reason given"}`;
+    case "live":
+      return `live at ${s.url ?? "an address canopy did not keep"}`;
+    case "rejected":
+      return `turned down at eval: ${flat(s.parked ?? "") || "no reason given"}`;
+    default:
+      return event;
+  }
+};
+
 export function dailyLine(s: Sprout, event: NoteEvent): string {
-  const what =
-    event === "started"
-      ? `started in canopy's incubator as ${s.repoId}`
-      : event === "parked"
-        ? `parked: ${flat(s.parked ?? "") || "no reason given"}`
-        : event;
-  return `\n- **incubator: ${s.title}** - ${what}. Note: ${link(s)}\n`;
+  return `\n- **incubator: ${s.title}** - ${eventWord(s, event)}. Note: ${link(s)}\n`;
 }
 
 const STATUS_WORD: Record<SproutStatus, string> = {
@@ -70,9 +78,21 @@ const STATUS_WORD: Record<SproutStatus, string> = {
 };
 
 function statusLine(s: Sprout): string {
+  if (s.status === "live" && s.url) return `Live at ${s.url}.`;
+  if (s.status === "rejected") return `Turned down at eval: ${flat(s.parked ?? "") || "no reason given"}`;
   if (s.status === "parked") return `Parked: ${flat(s.parked ?? "") || "no reason given"}`;
   const n = s.questions?.length ?? 0;
   return n ? `${STATUS_WORD[s.status]} ${n} ${n === 1 ? "question waits" : "questions wait"} for the user.` : STATUS_WORD[s.status];
+}
+
+/** the pick, the repo and the address, once there are any */
+function whereLines(s: Sprout): string[] {
+  const lines = [
+    ...(s.pick ? [`- Pick: ${s.pick.kind}, on ${s.pick.host}. ${flat(s.pick.why)}`] : []),
+    ...(s.privateRepo ? [`- Repo: https://github.com/${s.privateRepo} (private)`] : []),
+    ...(s.url ? [`- Url: ${s.url}`] : []),
+  ];
+  return lines.length ? ["## Where it lives", "", ...lines, ""] : [];
 }
 
 function spentLine(s: Sprout): string {
@@ -109,6 +129,7 @@ export function sproutNote(s: Sprout, intent: string | null): string {
     "",
     ...(stages.length ? stages : ["None has run yet."]),
     "",
+    ...whereLines(s),
     "## Spent",
     "",
     spentLine(s),
