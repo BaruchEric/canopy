@@ -138,7 +138,7 @@ function Body({ sheet }: { sheet: Sheet }) {
     return <FlowPlan repo={repo} workflow={sheet.workflow} />;
   }
   if (sheet.kind === "new-sprout") return <NewSproutSheet />;
-  if (sheet.kind === "sprout") return <SproutSheet id={sheet.id} />;
+  if (sheet.kind === "sprout") return <SproutSheet key={sheet.id} id={sheet.id} />;
   if (sheet.kind === "flow") return <FlowConsole flowId={sheet.flowId} />;
   if (sheet.kind === "fleet-plan") return <FleetPlan workflow={sheet.workflow} />;
   if (sheet.kind === "fleet") return <FleetSheet fleetId={sheet.fleetId} />;

@@ -17,6 +17,9 @@ import { InboxChip } from "./Inbox";
 import { Questions } from "./Prompts";
 
 const errText = (err: unknown) => String(err instanceof Error ? err.message : err);
+/** the HTTP status `api` puts on its errors, when there is one */
+const statusOf = (err: unknown): number | undefined =>
+  typeof err === "object" && err !== null && "status" in err && typeof err.status === "number" ? err.status : undefined;
 
 const MARK_WORD: Record<StageMark, string> = { done: "done", now: "in progress", stuck: "stopped here", todo: "not yet" };
 
@@ -106,27 +109,41 @@ export function IncubatorView({ onGit }: { onGit?: () => void }) {
 
 /** Records a voice memo where the page may use the microphone (a secure
  *  page), else offers a file picker for audio, which on a phone opens its
- *  own recorder. */
-function Recorder({ onFiles }: { onFiles: (files: File[]) => void }) {
+ *  own recorder. `onRecording` says when a recording starts and ends, so the
+ *  form can hold its submit until the memo is a file. */
+function Recorder({ onFiles, onRecording }: { onFiles: (files: File[]) => void; onRecording: (on: boolean) => void }) {
   const can = window.isSecureContext && typeof MediaRecorder !== "undefined" && Boolean(navigator.mediaDevices?.getUserMedia);
   const rec = useRef<MediaRecorder | null>(null);
+  // false once the form is gone: a permission prompt answered after that
+  // must not leave the microphone on with nothing to stop it
+  const alive = useRef(true);
+  const pick = useRef<HTMLInputElement>(null);
   const [recording, setRecording] = useState(false);
   const [err, setErr] = useState<string | null>(null);
-  useEffect(
-    () => () => {
+  useEffect(() => {
+    alive.current = true;
+    return () => {
+      alive.current = false;
       const r = rec.current;
       if (!r) return;
       r.onstop = null;
       if (r.state !== "inactive") r.stop();
       for (const t of r.stream.getTracks()) t.stop();
-    },
-    [],
-  );
+    };
+  }, []);
   if (!can) {
     return (
-      <label className="mini" title="The microphone needs an https page; this picks a recording instead, and a phone offers to make one">
-        upload a voice memo
+      <>
+        <button
+          type="button"
+          className="mini"
+          title="The microphone needs an https page; this picks a recording instead, and a phone offers to make one"
+          onClick={() => pick.current?.click()}
+        >
+          upload a voice memo
+        </button>
         <input
+          ref={pick}
           type="file"
           accept="audio/*"
           hidden
@@ -135,33 +152,44 @@ function Recorder({ onFiles }: { onFiles: (files: File[]) => void }) {
             e.target.value = "";
           }}
         />
-      </label>
+      </>
     );
   }
   const start = async () => {
     setErr(null);
+    let stream: MediaStream | null = null;
     try {
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      if (!alive.current) {
+        for (const t of stream.getTracks()) t.stop();
+        return;
+      }
+      const live = stream;
       // Safari records mp4 only
       const type = MediaRecorder.isTypeSupported("audio/webm") ? "audio/webm" : "audio/mp4";
-      const r = new MediaRecorder(stream, { mimeType: type });
+      const r = new MediaRecorder(live, { mimeType: type });
       const chunks: Blob[] = [];
       r.ondataavailable = (e) => {
         if (e.data.size > 0) chunks.push(e.data);
       };
       r.onstop = () => {
-        for (const t of stream.getTracks()) t.stop();
+        for (const t of live.getTracks()) t.stop();
         rec.current = null;
         setRecording(false);
+        onRecording(false);
         if (chunks.length === 0) return;
         const ext = type === "audio/webm" ? "webm" : "m4a";
         onFiles([new File(chunks, `voice-${Date.now()}.${ext}`, { type: r.mimeType || type })]);
       };
-      rec.current = r;
       r.start();
+      rec.current = r;
       setRecording(true);
+      onRecording(true);
     } catch (e) {
-      setErr(errText(e));
+      // a recorder that failed to make or start leaves the microphone on
+      if (stream) for (const t of stream.getTracks()) t.stop();
+      rec.current = null;
+      if (alive.current) setErr(errText(e));
     }
   };
   return (
@@ -175,6 +203,7 @@ function Recorder({ onFiles }: { onFiles: (files: File[]) => void }) {
           ● record
         </button>
       )}
+      {recording && <span className="note recording">recording; stop it to add the memo</span>}
       {err && <span className="note err">{err}</span>}
     </>
   );
@@ -205,19 +234,21 @@ function IntakeForm({
   const [files, setFiles] = useState<File[]>([]);
   const [refused, setRefused] = useState<string | null>(null);
   const [over, setOver] = useState(false);
+  const [recording, setRecording] = useState(false);
+  const picker = useRef<HTMLInputElement>(null);
   const add = (list: File[]) => {
     const ok: File[] = [];
     const bad: string[] = [];
     for (const f of list) {
       if (!inputType(f.type, f.name)) bad.push(`${f.name}: canopy takes audio, images, pdf, text and markdown`);
-      else if (f.size > INPUT_FILE_MAX) bad.push(`${f.name} is over 25 MB`);
+      else if (f.size > INPUT_FILE_MAX) bad.push(`${f.name} is over ${sizeWord(INPUT_FILE_MAX)}`);
       else ok.push(f);
     }
     setFiles((fs) => [...fs, ...ok]);
     setRefused(bad.length ? bad.join("; ") : null);
   };
   const urls = links.split(/\s+/).filter(Boolean);
-  const ready = !busy && (text.trim().length > 0 || urls.length > 0 || files.length > 0 || (allowRepo && repo.trim().length > 0));
+  const ready = !busy && !recording && (text.trim().length > 0 || urls.length > 0 || files.length > 0 || (allowRepo && repo.trim().length > 0));
   const submit = () => {
     if (!ready) return;
     const form = new FormData();
@@ -257,20 +288,21 @@ function IntakeForm({
           }}
         >
           <span className="dim">Drop images, voice memos, pdfs or notes here, or</span>
-          <label className="mini">
+          <button type="button" className="mini" onClick={() => picker.current?.click()}>
             pick files
-            <input
-              type="file"
-              multiple
-              hidden
-              accept="audio/*,image/*,application/pdf,text/plain,text/markdown,.md,.markdown,.txt"
-              onChange={(e) => {
-                if (e.target.files) add(Array.from(e.target.files));
-                e.target.value = "";
-              }}
-            />
-          </label>
-          <Recorder onFiles={add} />
+          </button>
+          <input
+            ref={picker}
+            type="file"
+            multiple
+            hidden
+            accept="audio/*,image/*,application/pdf,text/plain,text/markdown,.md,.markdown,.txt"
+            onChange={(e) => {
+              if (e.target.files) add(Array.from(e.target.files));
+              e.target.value = "";
+            }}
+          />
+          <Recorder onFiles={add} onRecording={setRecording} />
         </div>
         {files.length > 0 && (
           <ul className="intake-files">
@@ -303,7 +335,13 @@ function IntakeForm({
         <button type="button" className="mini" onClick={onCancel}>
           cancel
         </button>
-        <button type="button" className="mini strong" disabled={!ready} onClick={submit}>
+        <button
+          type="button"
+          className="mini strong"
+          disabled={!ready}
+          title={recording ? "Stop the recording first, so the memo goes with it" : undefined}
+          onClick={submit}
+        >
           {busy ? "sending…" : submitLabel}
         </button>
       </footer>
@@ -371,6 +409,7 @@ export function SproutSheet({ id }: { id: string }) {
   const resumeSprout = useStore((s) => s.resumeSprout);
   const dismissSprout = useStore((s) => s.dismissSprout);
   const [detail, setDetail] = useState<SproutDetail | null>(null);
+  const [detailErr, setDetailErr] = useState<string | null>(null);
   const [adding, setAdding] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -382,9 +421,15 @@ export function SproutSheet({ id }: { id: string }) {
     let live = true;
     api.sprout(id).then(
       (d) => {
-        if (live) setDetail(d);
+        if (!live) return;
+        setDetail(d);
+        setDetailErr(null);
       },
-      () => {},
+      (e: unknown) => {
+        // a 404 is a project dismissed under the sheet; anything else is a
+        // read that failed, said so, with the last good words kept
+        if (live && statusOf(e) !== 404) setDetailErr(errText(e));
+      },
     );
     return () => {
       live = false;
@@ -461,7 +506,12 @@ export function SproutSheet({ id }: { id: string }) {
           />
         )}
         <h3 className="eyebrow">intent</h3>
-        {detail?.intent ? <pre className="sprout-doc">{detail.intent}</pre> : <p className="dim">Clarify has not written it yet.</p>}
+        {detailErr && <p className="dim">Could not read the project's files: {detailErr}</p>}
+        {detail?.intent ? (
+          <pre className="sprout-doc">{detail.intent}</pre>
+        ) : (
+          !detailErr && <p className="dim">Clarify has not written it yet.</p>
+        )}
         <h3 className="eyebrow">inputs</h3>
         <ul className="sprout-inputs">
           {sprout.inputs.map((e) => (
