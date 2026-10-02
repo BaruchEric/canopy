@@ -372,7 +372,7 @@ export class Incubator {
   /** starts queued, prepared sprouts, oldest first, while a slot is free */
   private pump(): void {
     if (this.detached || this.deps.autostart === false) return;
-    let free = SPROUT_CONCURRENCY - this.list().filter(holdsSlot).length;
+    let free = SPROUT_CONCURRENCY - this.list().filter((s) => holdsSlot(s, this.currentFlow(s)?.status)).length;
     const queued = this.list()
       .filter((s) => s.status === "queued" && s.prepared)
       .sort((a, b) => a.createdAt - b.createdAt);
@@ -387,23 +387,37 @@ export class Incubator {
     }
   }
 
+  /** the current stage's flow while its outcome is not on record */
+  private currentFlow(s: Sprout): Flow | undefined {
+    const entry = s.flows.at(-1);
+    return entry && !entry.outcome ? this.deps.flows.get(entry.flowId) : undefined;
+  }
+
+  /** pump set the status, so this sprout holds a slot: any throw on the way
+   *  parks it, which gives the slot back */
   private async startStage(s: Sprout, name: string): Promise<void> {
+    try {
+      await this.launch(s, name);
+    } catch (err) {
+      await this.park(s, `${name} did not start: ${msg(err)}`);
+    }
+  }
+
+  private async launch(s: Sprout, name: string): Promise<void> {
     const repo = this.deps.repo(s.repoId);
     if (!repo) return this.park(s, "the seed folder is gone");
     let wf = await this.deps.workflow(name);
     if (!wf) return this.park(s, `the ${name} workflow is not installed`);
     if (name === "clarify") wf = withInputsRead(wf, this.deps.store.inputsDir(s.id));
     if (this.detached || s.status === "stopped") return;
-    let flow: Flow;
-    try {
-      flow = await this.deps.flows.start(repo, wf, stageNote(s, this.deps.store.inputsDir(s.id)));
-    } catch (err) {
-      return this.park(s, `${name} did not start: ${msg(err)}`);
-    }
+    const flow = await this.deps.flows.start(repo, wf, stageNote(s, this.deps.store.inputsDir(s.id)));
     if (name === "clarify") s.reclarify = false;
     s.flows.push({ workflow: name, flowId: flow.id });
-    this.seen.set(flow.id, flow.status);
     await this.changed(s);
+    // Flows may have ended the flow inside start (a runner that throws, a
+    // missing harness) and broadcast it before it was ours: read it now as a
+    // transition, so a flow that never ran parks the sprout and frees the slot
+    this.onFlow(flow);
   }
 
   /** every flow broadcast; only an owned flow whose status moved is acted on */
@@ -425,7 +439,8 @@ export class Incubator {
     if (this.detached || s.status === "stopped") return;
     if (flow.status === "gated") {
       const step = flow.steps[flow.current];
-      return this.park(s, `${entry.workflow} waits${step ? ` after ${step.name}` : ""}: ${step?.reason ?? "a gate"}`);
+      // the flow lives on, waiting on the human: the sprout keeps its slot, so nothing is pumped
+      return this.park(s, `${entry.workflow} waits${step ? ` after ${step.name}` : ""}: ${step?.reason ?? "a gate"}`, false);
     }
     if (flow.status === "working" || flow.status === "waiting") {
       if (s.status !== "parked") return;
@@ -478,12 +493,13 @@ export class Incubator {
     this.pump();
   }
 
-  private async park(s: Sprout, reason: string): Promise<void> {
+  /** `pump` false for a gate: its flow still holds the slot */
+  private async park(s: Sprout, reason: string, pump = true): Promise<void> {
     if (sproutEnded(s)) return;
     s.status = "parked";
     s.parked = reason;
     await this.changed(s, "parked");
-    this.pump();
+    if (pump) this.pump();
   }
 
   /* ---------- every change ---------- */

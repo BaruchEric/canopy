@@ -196,6 +196,10 @@ describe("slots and stages", () => {
     expect(holdsSlot(sprout({ status: "clarifying", questions: [{ question: "q", header: "", options: [], multiSelect: false }] }))).toBe(false);
     expect(holdsSlot(sprout({ status: "queued" }))).toBe(false);
     expect(holdsSlot(sprout({ status: "parked" }))).toBe(false);
+    // parked at a gate: the flow is alive and waits on the human, so the slot stays taken
+    expect(holdsSlot(sprout({ status: "parked" }), "gated")).toBe(true);
+    expect(holdsSlot(sprout({ status: "parked" }), "failed")).toBe(false);
+    expect(holdsSlot(sprout({ status: "queued" }), "gated")).toBe(false);
     expect(sproutEnded(sprout({ status: "stopped" }))).toBe(true);
     expect(sproutEnded(sprout({ status: "parked" }))).toBe(false);
   });

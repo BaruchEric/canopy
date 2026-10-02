@@ -104,6 +104,9 @@ class FakeFlows implements IncubatorFlows {
   started: { repoId: string; workflow: Workflow; note: string }[] = [];
   resumed: { id: string; choice: FlowChoice }[] = [];
   listener: (f: Flow) => void = () => {};
+  /** a flow that ends inside start, as Flows does when the runner throws
+   *  (a missing harness): broadcast, then returned already ended */
+  startAs: Partial<Flow> | null = null;
   private n = 0;
   async start(repo: Repo, workflow: Workflow, note: string): Promise<Flow> {
     this.n += 1;
@@ -121,6 +124,11 @@ class FakeFlows implements IncubatorFlows {
     this.flows.set(f.id, f);
     this.started.push({ repoId: repo.id, workflow, note });
     this.listener(f);
+    if (this.startAs) {
+      // the same object, moved on before start returns
+      Object.assign(f, this.startAs);
+      this.listener(f);
+    }
     return f;
   }
   get(id: string): Flow | undefined {
@@ -473,6 +481,70 @@ describe("the queue", () => {
     expect(w.flows.started).toHaveLength(3);
     expect(now(w, c.id).status).toBe("clarifying");
   });
+  test("a sprout parked at a gate keeps its slot, so resuming it never makes three", async () => {
+    const w = world();
+    const a = await w.inc.create(intake({ text: "one" }));
+    const b = await w.inc.create(intake({ text: "two" }));
+    const c = await w.inc.create(intake({ text: "three" }));
+    await w.inc.idle();
+    const flowA = now(w, a.id).flows[0]?.flowId ?? "";
+    w.flows.move(flowA, { status: "gated", steps: [{ name: "Clarify", status: "gated", reason: "budget spent: 2 runs" }] });
+    await w.inc.idle();
+    expect(now(w, a.id).status).toBe("parked");
+    expect(now(w, c.id).status).toBe("queued");
+    expect(w.flows.started).toHaveLength(2);
+    w.flows.resume(flowA, "continue");
+    await w.inc.idle();
+    const running = [a, b, c].filter((x) => now(w, x.id).status === "clarifying");
+    expect(running.map((x) => x.id)).toEqual([a.id, b.id]);
+    expect(now(w, c.id).status).toBe("queued");
+    // a gated flow that is stopped frees the slot
+    w.flows.move(flowA, { status: "gated", steps: [{ name: "Clarify", status: "gated", reason: "again" }] });
+    await w.inc.idle();
+    w.flows.stop(flowA);
+    await w.inc.idle();
+    expect(now(w, a.id).parked).toBe("clarify stopped");
+    expect(now(w, c.id).status).toBe("clarifying");
+  });
+});
+
+describe("a stage that does not start", () => {
+  test("a flow already failed when start returns parks the sprout and frees its slot", async () => {
+    const w = world();
+    w.flows.startAs = { status: "failed", error: "claude is not installed on mini" };
+    const a = await w.inc.create(intake({ text: "one" }));
+    await w.inc.idle();
+    expect(now(w, a.id).status).toBe("parked");
+    expect(now(w, a.id).parked).toBe("clarify failed: claude is not installed on mini");
+    expect(now(w, a.id).flows[0]?.outcome).toBe("failed");
+    w.flows.startAs = null;
+    const b = await w.inc.create(intake({ text: "two" }));
+    const c = await w.inc.create(intake({ text: "three" }));
+    await w.inc.idle();
+    expect(now(w, b.id).status).toBe("clarifying");
+    expect(now(w, c.id).status).toBe("clarifying");
+  });
+
+  test("a workflow lookup that throws parks the sprout and frees its slot", async () => {
+    let broken = true;
+    const w = world({
+      workflow: async () => {
+        if (broken) throw new Error("the workflows folder cannot be read");
+        return CLARIFY;
+      },
+    });
+    const a = await w.inc.create(intake({ text: "one" }));
+    await w.inc.idle();
+    expect(now(w, a.id).status).toBe("parked");
+    expect(now(w, a.id).parked).toBe("clarify did not start: the workflows folder cannot be read");
+    broken = false;
+    const b = await w.inc.create(intake({ text: "two" }));
+    const c = await w.inc.create(intake({ text: "three" }));
+    await w.inc.idle();
+    expect(now(w, b.id).status).toBe("clarifying");
+    expect(now(w, c.id).status).toBe("clarifying");
+  });
+
 });
 
 describe("the vault", () => {

@@ -5,7 +5,7 @@
  * as text, and which sprouts hold one of the running slots. Browser-safe:
  * the UI imports it.
  */
-import { SPROUT_STATUSES, type InputEntry, type InputKind, type InputVia, type RunQuestion, type RunQuestionOption, type Sprout, type SproutStatus, type Workflow } from "./types";
+import { SPROUT_STATUSES, type FlowStatus, type InputEntry, type InputKind, type InputVia, type RunQuestion, type RunQuestionOption, type Sprout, type SproutStatus, type Workflow } from "./types";
 
 /** how many sprouts run a stage at once; the rest wait their turn */
 export const SPROUT_CONCURRENCY = 2;
@@ -241,9 +241,13 @@ export const RUNNING_STATUSES: ReadonlySet<SproutStatus> = new Set<SproutStatus>
   "deploying",
 ]);
 
-/** whether a sprout holds one of the running slots: a stage in progress,
- *  except clarify waiting on the user's answers */
-export const holdsSlot = (s: Sprout): boolean => RUNNING_STATUSES.has(s.status) && !(s.status === "clarifying" && s.questions?.length);
+/** Whether a sprout holds one of the running slots: a stage in progress,
+ *  except clarify waiting on the user's answers, which frees it. A sprout
+ *  parked at a gate keeps it while its flow (`current`, the status of the
+ *  stage's flow) is gated and alive, so resuming that flow never makes one
+ *  more than `SPROUT_CONCURRENCY` run. */
+export const holdsSlot = (s: Sprout, current?: FlowStatus): boolean =>
+  (RUNNING_STATUSES.has(s.status) && !(s.status === "clarifying" && s.questions?.length)) || (s.status === "parked" && current === "gated");
 
 const ENDED: ReadonlySet<SproutStatus> = new Set<SproutStatus>(["live", "rejected", "handed-off", "stopped"]);
 export const sproutEnded = (s: Sprout): boolean => ENDED.has(s.status);
