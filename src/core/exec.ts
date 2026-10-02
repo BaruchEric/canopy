@@ -13,6 +13,8 @@ export interface ExecOptions {
   timeoutMs?: number;
   /** variables laid over the server's own environment */
   env?: Record<string, string>;
+  /** the environment `env` is laid over, in place of the server's live one */
+  base?: Readonly<Record<string, string | undefined>>;
 }
 
 /** How long a timed-out command gets after SIGTERM before SIGKILL, and
@@ -87,7 +89,7 @@ export async function exec(
       // process started with, secrets canopy took out of it since included
       // (the answer token, which a tmux server started here would hand every
       // shell)
-      env: { ...process.env, ...opts.env },
+      env: { ...(opts.base ?? process.env), ...opts.env },
       stdout: "pipe",
       stderr: "pipe",
       stdin: "ignore",

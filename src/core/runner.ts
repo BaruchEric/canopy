@@ -45,6 +45,9 @@ export interface RunnerOptions {
   backend?: string;
   /** canopy's version, which Codex hears in `initialize` */
   version?: string;
+  /** whether a repo's runs are an incubator stage's (a seed), which start
+   *  without canopy's GitHub login (`stageEnv`) */
+  stage?: (repo: Repo) => boolean;
 }
 
 /** The driver a harness gets when nothing is swapped in. */
@@ -144,7 +147,7 @@ export class Runner {
     if (by) run.by = by;
     const ctx = new RunCtx(
       run,
-      { cwd: repo.path, agent, spec, env: runEnv(run, this.opts.backend), label: driver.label },
+      { cwd: repo.path, agent, spec, env: runEnv(run, this.opts.backend), stage: this.opts.stage?.(repo) ?? false, label: driver.label },
       // `live` is read only once the run has ended, long after it is set
       { emit: (r) => this.hooks.onChange(r), ended: () => void this.settle(live) },
     );

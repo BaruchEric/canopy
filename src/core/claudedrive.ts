@@ -13,7 +13,7 @@
 
 import { describeTool, toolDetail } from "./actions";
 import { normalizeAgent } from "./agent";
-import type { DriveCtx, DriveSpec, RunDriver } from "./driver";
+import { spawnEnv, type DriveCtx, type DriveSpec, type RunDriver } from "./driver";
 import { agentArgs } from "./harness";
 import { DEFAULT_AGENT, type AgentSettings, type RunQuestion, type RunStep } from "./types";
 
@@ -178,7 +178,7 @@ export class ClaudeDriver implements RunDriver {
       const agent = normalizeAgent({ ...ctx.agent, harness: "claude" });
       proc = Bun.spawn([...command, ...cliArgs(ctx.spec, agent)], {
         cwd: ctx.cwd,
-        env: { ...process.env, ...ctx.env },
+        env: spawnEnv(ctx),
         stdin: "pipe",
         stdout: "pipe",
         stderr: "pipe",

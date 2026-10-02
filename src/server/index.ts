@@ -36,9 +36,9 @@ import {
   openHistoryNote,
 } from "../core/history";
 import { browseLocal, browseRemote, expandHome, SshError } from "../core/browse";
-import { checkEnv } from "../core/cli";
+import { runCheck } from "../core/check";
 import { exec, onHost } from "../core/exec";
-import { fleetSkipReason, Flows, type CheckResult } from "../core/flow";
+import { fleetSkipReason, Flows } from "../core/flow";
 import { INHERITED_ENV, SECRET_ENV, isKeystroke, isTermId, parseTermMessage, Scrollback, shellArgs, startTerm, termPlace, termSize, type TermSession, type TermSize } from "../core/term";
 import { attachTmuxTerm, hasSession, history, killSession, listSessions, newSession, paneInfo, paneText, sendLine, serverUp, snapshot, tmuxBase } from "../core/tmux";
 import { clip, continueLine, countLines, expiredShells, forgetKept, KEEP_EVERY, listKept, lostShells, readKeptHistory, replayCommand, replayFile, restoredBanner, writeKept } from "../core/keep";
@@ -1073,22 +1073,6 @@ class HttpError extends Error {
   ) {
     super(message);
   }
-}
-
-/** stdout and stderr of a check, tail-capped for the sheet */
-const CHECK_OUTPUT_CAP = 4000;
-const CHECK_TIMEOUT = 10 * 60_000;
-
-/** A step's check, in the repo, through a login shell so the user's PATH
- *  (bun, cargo) applies; over ssh for a remote repo. */
-async function runCheck(repo: Repo, command: string): Promise<CheckResult> {
-  const { host, path } = parseLocator(repo.path);
-  const r =
-    host === null
-      ? await exec(["sh", "-lc", command], { cwd: path, timeoutMs: CHECK_TIMEOUT, env: checkEnv() })
-      : await onHost(host, ["sh", "-lc", `cd ${shellQuote(path)} && ${command}`], { timeoutMs: CHECK_TIMEOUT });
-  const out = `${r.stdout}${r.stderr ? `\n${r.stderr}` : ""}`.trim();
-  return { exit: r.code, output: out.length > CHECK_OUTPUT_CAP ? `…${out.slice(-CHECK_OUTPUT_CAP)}` : out };
 }
 
 function broadcast(state: ServerState, event: ServerEvent): void {
@@ -2739,7 +2723,13 @@ export async function startServer(opts: {
       : async (h: Harness) => !availableHarnesses().includes(h);
   // every run is told which backend started it (CANOPY_BACKEND), and codex
   // hears canopy's version in its handshake
-  const runnerOpts = { backend: selfName(cfg.self, hostname()), version: readPkg().version ?? "0", ...(opts.runner?.driver ? { driver: opts.runner.driver } : {}) };
+  const runnerOpts = {
+    backend: selfName(cfg.self, hostname()),
+    version: readPkg().version ?? "0",
+    // a seed's runs are an incubator stage's: no GitHub login of canopy's
+    stage: (repo: Repo) => isSeedPath(root, repo.path),
+    ...(opts.runner?.driver ? { driver: opts.runner.driver } : {}),
+  };
   const runner = new Runner({
     onChange: (run) => {
       broadcast(state, { type: "run", run });
@@ -2778,7 +2768,8 @@ export async function startServer(opts: {
       broadcast(state, { type: "fleet-gone", id });
       state.chan.forget(id);
     },
-    check: runCheck,
+    // a seed's check starts without canopy's GitHub login, like its runs
+    check: (repo, command) => runCheck(repo, command, isSeedPath(root, repo.path)),
     evaluator: hasGatewayKey() ? jev : null,
     judge: hasGatewayKey() ? jevJudge : null,
     evidence: (repo, paths) => readEvidence(repo.path, paths),

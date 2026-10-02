@@ -1,0 +1,5 @@
+#!/bin/sh
+# canopy's CLI for a workflow check, which runs in the repo the step worked
+# in. Bun reads ./bunfig.toml (whose preload runs code) and ./.env from its
+# cwd; in a seed an agent may have written both, so neither is read here.
+exec "${CANOPY_BUN:-bun}" --config=/dev/null --no-env-file "$(dirname -- "$0")/canopy.ts" "$@"

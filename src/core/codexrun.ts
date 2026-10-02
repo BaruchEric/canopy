@@ -39,7 +39,7 @@ import { resolve } from "node:path";
 import { describeTool, toolDetail } from "./actions";
 import { splitArgs } from "./agent";
 import { bunSpawn, RpcClient, RpcClosed, RpcError, type RpcExit, type RpcRequest, type RpcSpawn } from "./codexrpc";
-import type { DriveAgent, DriveCtx, DriveResult, DriveTokens, PromptInput, RunDriver } from "./driver";
+import { spawnEnv, type DriveAgent, type DriveCtx, type DriveResult, type DriveTokens, type PromptInput, type RunDriver } from "./driver";
 import type { RunAnswer, RunQuestion, RunStep, RunTool } from "./types";
 
 /** characters of tool output kept per step, as for a Claude run */
@@ -959,7 +959,7 @@ export class CodexDriver implements RunDriver {
     try {
       const proc = (this.opts.spawn ?? bunSpawn)([...command, ...appServerArgs(ctx.agent)], {
         cwd: ctx.cwd,
-        env: { ...process.env, ...ctx.env },
+        env: spawnEnv(ctx),
       });
       rpc = new RpcClient(proc);
     } catch (err) {

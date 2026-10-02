@@ -13,6 +13,7 @@
  * The size, argv, id and message parsing and the scrollback are pure and
  * tested; `startTerm` is Bun-only, since the pty is Bun's.
  */
+import { PRIVATE_ENV } from "./envnames";
 import { parseLocator } from "./host";
 import { sshSessionArgs, userShell } from "./openers";
 import type { ShellPlace } from "./types";
@@ -135,14 +136,7 @@ export function parseTermMessage(text: string): TermMessage | null {
   return { kind: "resize", size: termSize(cols, rows) };
 }
 
-/** the incubator's secrets (vault token, transcribe key, Vercel token): read
- *  once at start into its own configs, then deleted from canopy's env */
-export const SECRET_ENV = ["CANOPY_VAULT_TOKEN", "CANOPY_TRANSCRIBE_KEY", "VERCEL_TOKEN"] as const;
-
-/** never in a shell's environment: the answer token a deploy from before
- *  browser-held answer keys may still set (canopy no longer reads it), and
- *  the incubator's secrets */
-export const PRIVATE_ENV = ["CANOPY_TAILCHAN_ANSWER_TOKEN", ...SECRET_ENV] as const;
+export { PRIVATE_ENV, SECRET_ENV } from "./envnames";
 
 /** What canopy tells each shell and run about itself (which shell, run,
  *  repo and backend it is, the API to call back, its tailchan handle). A
