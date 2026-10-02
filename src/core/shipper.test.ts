@@ -204,6 +204,7 @@ describe("deploy", () => {
       expect(c.opts.cwd && existsSync(c.opts.cwd)).toBe(false);
     }
     expect(f.calls.filter((c) => c.cmd[0] === "git").every((c) => c.cmd.includes("core.hooksPath=/dev/null"))).toBe(true);
+    expect(f.calls.find((c) => c.cmd.includes("clone"))?.opts.env?.["GIT_LFS_SKIP_SMUDGE"]).toBe("1");
     expect(f.fetched.map((x) => x.url)).toEqual([
       "https://api.vercel.com/v9/projects/coin-counter",
       "https://api.vercel.com/v13/deployments/coin-counter-abc-eric.vercel.app",

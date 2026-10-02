@@ -183,7 +183,10 @@ export function shipper(cfg: ShipConfig, deps: ShipDeps = { exec: realExec, fetc
         const cloned = await deps.exec(["git", ...NO_HOOKS, "clone", "--no-local", "--quiet", "--", seedPath, app], {
           cwd: tmp,
           timeoutMs: 300_000,
-          env: { GIT_TERMINAL_PROMPT: "0" },
+          // the checkout runs the global config's filter drivers on what the
+          // seed's .gitattributes names; git-lfs would fetch from wherever
+          // a committed .lfsconfig says
+          env: { GIT_TERMINAL_PROMPT: "0", GIT_LFS_SKIP_SMUDGE: "1" },
         });
         if (cloned.code !== 0) throw new Error(`git clone of the seed: ${tail(cloned)}`);
         await rm(join(app, ".vercel"), { recursive: true, force: true });
