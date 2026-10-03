@@ -115,11 +115,14 @@ services:
     # home (its tools' caches and settings, bun's install cache) and /tmp.
     # What a stage leaves in either lasts until this container restarts,
     # never into the image. The home tmpfs hides the image's own .bashrc and
-    # ble.sh, so a stage's shells start plain.
+    # ble.sh, so a stage's shells start plain. Both take exec, since docker
+    # mounts a tmpfs noexec by default and a stage's tools run from there
+    # (bun create and bunx unpack under /tmp, browsers land in ~/.cache); a
+    # stage can plant a program in the seed anyway. nosuid and nodev stay.
     read_only: true
     tmpfs:
-      - /home/bun:uid=${HOST_UID:-1000},gid=${HOST_GID:-1000},mode=0700,size=2g
-      - /tmp:mode=1777,size=1g
+      - /home/bun:uid=${HOST_UID:-1000},gid=${HOST_GID:-1000},mode=0700,size=2g,exec
+      - /tmp:mode=1777,size=1g,exec
     networks: [stages-net]
     # docker's embedded resolver forwards each query from the container's own
     # namespace, through the fenced bridge, so the host's upstream (the

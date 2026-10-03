@@ -122,8 +122,8 @@ describe("the stages container is read-only", () => {
   test("with a tmpfs home owned by the stage user and a tmpfs /tmp, nothing else writable but the mounts", () => {
     expect(stages.read_only).toBe(true);
     expect(stages.tmpfs).toEqual([
-      "/home/bun:uid=${HOST_UID:-1000},gid=${HOST_GID:-1000},mode=0700,size=2g",
-      "/tmp:mode=1777,size=1g",
+      "/home/bun:uid=${HOST_UID:-1000},gid=${HOST_GID:-1000},mode=0700,size=2g,exec",
+      "/tmp:mode=1777,size=1g,exec",
     ]);
   });
   test("the root runner makes no transpiler cache in the stage user's home", async () => {

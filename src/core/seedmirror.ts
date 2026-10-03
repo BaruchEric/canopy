@@ -12,6 +12,7 @@ import { tmpdir } from "node:os";
 import { basename, dirname, join } from "node:path";
 import { exec, git, gitToFile } from "./exec";
 import { inQuietSeed, seedHeld } from "./seedgit";
+import { SEEDS_DIR } from "./sprout";
 
 const firstLine = (s: string): string => s.trim().split("\n")[0] ?? "";
 const SHA = /^[0-9a-f]{40}([0-9a-f]{24})?$/;
@@ -75,9 +76,13 @@ async function isMirror(path: string): Promise<boolean> {
 }
 
 /** Why the gate must not serve canopy's mirror of the seed `slug` under
- *  `root`, or null: there is none yet, or what is there is not the folder
- *  canopy keeps (a link along the way), or not a whole repo. */
+ *  `root`, or null: the seed itself is gone (its mirror stays), there is
+ *  no mirror yet, or what is there is not the folder canopy keeps (a link
+ *  along the way), or not a whole repo. */
 export async function mirrorRefusal(root: string, slug: string): Promise<string | null> {
+  // a mirror outlives its seed; a seed that is gone is not served from it
+  const seed = await lstat(join(root, SEEDS_DIR, slug)).catch(() => null);
+  if (!seed?.isDirectory()) return "there is no such seed";
   const path = mirrorPath(root, slug);
   const real = await realpath(path).catch(() => null);
   if (real === null) return "canopy has no mirror of this seed yet";

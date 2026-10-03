@@ -922,6 +922,8 @@ docker compose logs stages | grep 'stages run as'
 ```
 docker compose exec -u bun stages sh -c 'touch /opt/x; touch /usr/local/bin/x; touch ~/ok && echo home ok; touch /tmp/ok && echo tmp ok'
                                         # two "Read-only file system", then home ok and tmp ok
+docker compose exec -u bun stages sh -c 'cp /bin/true /tmp/t && /tmp/t && cp /bin/true ~/t && ~/t && echo exec ok'
+                                        # exec ok: both tmpfs take exec, which bun create and bunx need
 docker compose exec stages ls -la /home/bun/.stage-claude/.claude.json /home/bun/.stage-codex
                                         # the logins are still there (they are mounts, not the tmpfs)
 ```

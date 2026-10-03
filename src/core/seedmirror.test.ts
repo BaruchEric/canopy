@@ -208,6 +208,16 @@ describe("SeedMirrors", () => {
     }
   });
 
+  test("the gate's mirror check refuses the mirror of a seed that is gone", async () => {
+    const path = await seed("removed");
+    expect(await new SeedMirrors(dir).sync(path)).toBe("synced");
+    expect(await mirrorRefusal(dir, "removed")).toBe(null);
+    await rm(path, { recursive: true, force: true });
+    expect(await mirrorRefusal(dir, "removed")).toBe("there is no such seed");
+    await symlink(join(dir, "elsewhere"), path);
+    expect(await mirrorRefusal(dir, "removed")).toBe("there is no such seed");
+  });
+
   test("the gate's mirror check refuses a link in place of the mirror", async () => {
     const path = await seed("linked");
     await new SeedMirrors(join(dir, "elsewhere")).sync(path);
