@@ -669,6 +669,17 @@ export function withWorkspaceRead(wf: Workflow, dir: string): Workflow {
   return { ...wf, steps: wf.steps.map((st) => ({ ...st, tools: [...st.tools, rule] })) };
 }
 
+/** The stages that build: on an isolated backend each of their steps may
+ *  run any command (`withShell`). Clarify, scout and retro keep their lists. */
+export const SHELL_STAGES: readonly string[] = ["build-new", "renovate", "extend"];
+
+/** A copy of the workflow whose every step may also run any shell command
+ *  without asking. Only for a stage behind the stage runner's fence, whose
+ *  container holds no token and reaches no private network. */
+export function withShell(wf: Workflow): Workflow {
+  return { ...wf, steps: wf.steps.map((st) => (st.tools.includes("Bash") ? st : { ...st, tools: [...st.tools, "Bash"] })) };
+}
+
 /** A copy of the workflow whose every step may also read the record canopy
  *  shared for the sprout's retro (`.shared/record/<id>`), and nothing else. */
 export function withRecordRead(wf: Workflow, dir: string): Workflow {

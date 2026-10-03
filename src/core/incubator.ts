@@ -53,6 +53,7 @@ import {
   pickRefusal,
   parseSummaries,
   safeInputName,
+  SHELL_STAGES,
   sproutEnded,
   sproutSlug,
   sproutTitle,
@@ -61,6 +62,7 @@ import {
   urlWithoutSecret,
   withInputsRead,
   withRecordRead,
+  withShell,
   withSummaries,
   withWorkspaceRead,
   workspaceLine,
@@ -187,6 +189,10 @@ export interface IncubatorDeps {
    *  queued sprout stays queued and holds no slot; canopy's own ship still
    *  goes. The server calls `pump` again once the runner answers. */
   isolation?: () => string | null;
+  /** True when every stage runs behind the stage runner's fence: a build
+   *  stage's steps then run any command without asking (`withShell`).
+   *  Unisolated, a stage runs as canopy and keeps its workflow's list. */
+  shell?: boolean;
   /** copies a stage reads; the real ones unless a test hands its own */
   share?: StageShare;
   /** the reason queued sprouts wait, each time it changes (`waiting`) */
@@ -1120,6 +1126,7 @@ export class Incubator {
         if (why) return this.park(s, why);
       }
     }
+    if (this.deps.shell === true && SHELL_STAGES.includes(name)) wf = withShell(wf);
     if (this.detached || s.status === "stopped") return;
     const base = stageNote(s, inputs);
     const note = [base, ws !== null ? workspaceLine(ws) : "", build ? hostLine(build) : ""].filter(Boolean).join(" ");

@@ -3209,6 +3209,8 @@ export async function startServer(opts: {
         // server for a UI check, or a pause while something is wrong
         autostart: opts.incubator?.autostart ?? process.env["CANOPY_INCUBATOR_AUTOSTART"] !== "0",
         isolation,
+        // a stage starts only once the runner answers behind its fence
+        shell: stage !== null,
         onWaiting: () => tellStages(),
       }),
       () => sprouts.list(),

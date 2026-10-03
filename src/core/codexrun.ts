@@ -418,7 +418,8 @@ export function within(path: string, root: string): boolean {
 /** Whether a job's rules answer this approval without asking. A command is
  *  accepted when it runs in the repo (its folder, when it names one, is
  *  inside `cwd`) and is one simple command whose words start with a
- *  `Bash(x:*)` rule's words, or equal a `Bash(x)` rule's. A file change is
+ *  `Bash(x:*)` rule's words, or equal a `Bash(x)` rule's, or any command at
+ *  all under a bare `Bash`. A file change is
  *  accepted when the rules allow editing and every path it touches is
  *  inside the repo; one that also asks for write access under another root
  *  never is. Anything else goes to the human, as it would for Claude. */
@@ -426,6 +427,8 @@ export function autoAnswer(rules: readonly string[], facts: ApprovalFacts, cwd: 
   const parsed = rules.map(parseRule).filter((r): r is ToolRule => r !== null);
   if (facts.kind === "command") {
     if (facts.cwd !== null && !within(facts.cwd, cwd)) return false;
+    // a bare `Bash` allows every command, as it does for Claude
+    if (parsed.some((r) => r.kind === "tool" && r.name === "Bash")) return true;
     const words = facts.command === null ? null : commandWords(facts.command);
     if (!words) return false;
     return parsed.some(

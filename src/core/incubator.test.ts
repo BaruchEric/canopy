@@ -1534,6 +1534,26 @@ describe("scout and build-new", () => {
     expect(w.flows.started.at(-1)?.workflow.name).toBe("build-new");
   });
 
+  test("behind the stage runner build-new's steps get a bare Bash; scout and clarify do not", async () => {
+    const w = world({ shell: true });
+    w.workflows.set("scout", SCOUT_STAGE);
+    w.workflows.set("build-new", BUILD_STAGE);
+    const s = await scouting(w);
+    await end(w, s.id, { ".canopy/pick.json": PICK, ".canopy/research.md": "# Research" });
+    const [clarify, scout, build] = w.flows.started.map((r) => r.workflow);
+    expect(build?.name).toBe("build-new");
+    expect(build?.steps.every((st) => st.tools.includes("Bash"))).toBe(true);
+    expect(scout?.steps.some((st) => st.tools.includes("Bash"))).toBe(false);
+    expect(clarify?.steps.some((st) => st.tools.includes("Bash"))).toBe(false);
+  });
+
+  test("unisolated build-new keeps its workflow's own tools", async () => {
+    const w = chain();
+    const s = await scouting(w);
+    await end(w, s.id, { ".canopy/pick.json": PICK, ".canopy/research.md": "# Research" });
+    expect(w.flows.started.at(-1)?.workflow.steps.some((st) => st.tools.includes("Bash"))).toBe(false);
+  });
+
   test("a pick on vercel+convex parks with its one line and is not kept; no pick parks too", async () => {
     const w = chain();
     const s = await scouting(w);
@@ -2360,8 +2380,8 @@ class FakeSource implements SeedSource {
 describe("renovate and extend builds", () => {
   const RENOVATE = JSON.stringify({ kind: "renovate", host: "vercel", why: "a maintained fork", target: "https://github.com/up/lib", license: "MIT" });
   const EXTEND = JSON.stringify({ kind: "extend", host: "vercel", why: "the user said extend clms", target: "clms" });
-  const builds = (source: FakeSource | null, ship: Shipper | null = null) => {
-    const w = world({ source, ship });
+  const builds = (source: FakeSource | null, ship: Shipper | null = null, extra: Partial<IncubatorDeps> = {}) => {
+    const w = world({ source, ship, ...extra });
     w.workflows.set("scout", SCOUT_STAGE);
     w.workflows.set("renovate", stage("renovate", ["Renovate", "Test", "Accept"], "judge"));
     w.workflows.set("extend", stage("extend", ["Build", "Test", "Accept"], "judge"));
@@ -2382,6 +2402,20 @@ describe("renovate and extend builds", () => {
     await end(w, s.id, { ".canopy/questions.json": "[]" });
     return end(w, s.id, { ".canopy/pick.json": pick });
   };
+
+  test("behind the stage runner renovate and extend get a bare Bash on every step after their rebuild", async () => {
+    for (const pick of [RENOVATE, EXTEND]) {
+      const w = builds(new FakeSource(), null, { shell: true });
+      const s = await picked(w, pick);
+      expect(s.status).toBe("building");
+      const started = w.flows.started.at(-1)?.workflow;
+      expect(started?.name).toBe(pick === RENOVATE ? "renovate" : "extend");
+      expect(started?.steps.every((st) => st.tools.includes("Bash"))).toBe(true);
+    }
+    const plain = builds(new FakeSource());
+    await picked(plain, RENOVATE);
+    expect(plain.flows.started.at(-1)?.workflow.steps.some((st) => st.tools.includes("Bash"))).toBe(false);
+  });
 
   test("the swap is on the record before it happens, and a rerun after it hands the record's swap back", async () => {
     const src = new FakeSource();
