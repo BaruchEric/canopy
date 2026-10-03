@@ -172,14 +172,22 @@ async function dropAgentSettings(path: string, self: string): Promise<void> {
   }
 }
 
-/** Where a seed is built before it moves into place: a dot folder beside
- *  it, which the scan never walks into. A seed folder is there only once
- *  it is whole, so a restart in the middle of a clone, or between the clone
- *  and taking its agent settings out, leaves nothing a later prepare would
- *  take as made. It is named for the sprout as well as the slug: a sprout
- *  stopped and dismissed mid-clone frees its slug for a new intake, and the
- *  two attempts must not clear each other's folder. */
-export const seedWorkPath = (path: string, id: string): string => join(dirname(path), `.${basename(path)}.${id}.making`);
+/** the folder under the launch root that seeds are built in, a dot folder
+ *  the scan never walks into */
+export const MAKING_DIR = ".canopy-making";
+
+/** Where a seed is built before it moves into place: under the launch
+ *  root's `.canopy-making`, beside the seeds folder rather than in it. A
+ *  clone writes its url, token and all, into its `.git/config` until canopy
+ *  sets it clean, and the stages container mounts the seeds folder, so the
+ *  clone happens where no stage can read it; on the same disk, so the move
+ *  into place stays one rename. A seed folder is there only once it is
+ *  whole, so a restart in the middle of a clone, or between the clone and
+ *  taking its agent settings out, leaves nothing a later prepare would take
+ *  as made. It is named for the sprout as well as the slug: a sprout stopped
+ *  and dismissed mid-clone frees its slug for a new intake, and the two
+ *  attempts must not clear each other's folder. */
+export const seedWorkPath = (path: string, id: string): string => join(dirname(dirname(path)), MAKING_DIR, `${basename(path)}.${id}`);
 
 export async function makeSeed(
   path: string,
@@ -195,6 +203,7 @@ export async function makeSeed(
   const work = seedWorkPath(path, opts.id);
   // what this sprout's attempt a restart cut short left behind
   await rm(work, { recursive: true, force: true });
+  await mkdir(dirname(work), { recursive: true });
   // made here, not by git, so the folder is surely this call's to take back
   await mkdir(work).catch((e: unknown) => {
     throw errCode(e) === "EEXIST" ? new Error(`${work} is being made already`) : e;

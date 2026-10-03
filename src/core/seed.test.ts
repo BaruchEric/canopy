@@ -124,7 +124,8 @@ describe("makeSeed builds aside", () => {
   test("a half-made seed an earlier attempt left is cleared, and the seed is made", async () => {
     const path = join(dir, "_incubator", "leftover");
     const work = seedWorkPath(path, SP);
-    expect(work).toBe(join(dir, "_incubator", `.leftover.${SP}.making`));
+    // outside the seeds folder, which the stages container mounts, on the same disk
+    expect(work).toBe(join(dir, ".canopy-making", `leftover.${SP}`));
     // what a restart in the middle of a clone leaves: a .git and some files, no canopy commit
     await mkdir(join(work, ".git"), { recursive: true });
     await writeFile(join(work, "half.txt"), "half\n");
@@ -237,6 +238,49 @@ describe("a stranger's clone", () => {
     }
     expect((await git(path, ["remote", "get-url", "upstream"])).stdout.trim()).toBe("https://example.invalid/private.git");
     expect(await readFile(join(path, ".git", "config"), "utf8")).not.toContain("tok3n");
+  });
+  test("no file under the seeds folder holds the clone url's token at any point, the clone's own folder included", async () => {
+    const up = await upstream("private2", { "README.md": "hi\n" });
+    const withToken = "https://x:tok3n@example.invalid/private2.git";
+    const seeds = join(dir, "_incubator");
+    const path = join(seeds, "private2");
+    // the folder the clone writes the url into is not one a stage can read
+    expect(seedWorkPath(path, SP).startsWith(`${seeds}/`)).toBe(false);
+    /** every file under the seeds folder that holds the token, objects aside */
+    const holding = async (at: string): Promise<string[]> => {
+      const out: string[] = [];
+      for (const e of await readdir(at, { withFileTypes: true }).catch(() => [])) {
+        const full = join(at, e.name);
+        if (e.isDirectory()) {
+          if (e.name !== "objects") out.push(...(await holding(full)));
+        } else if (e.isFile() && (await readFile(full, "utf8").catch(() => "")).includes("tok3n")) out.push(full);
+      }
+      return out;
+    };
+    const seen = new Set<string>();
+    let watching = true;
+    const watch = (async () => {
+      while (watching) {
+        for (const f of await holding(seeds)) seen.add(f);
+        await Bun.sleep(0);
+      }
+    })();
+    const before = { ...process.env };
+    process.env["GIT_CONFIG_COUNT"] = "1";
+    process.env["GIT_CONFIG_KEY_0"] = `url.${up}.insteadOf`;
+    process.env["GIT_CONFIG_VALUE_0"] = withToken;
+    try {
+      await makeSeed(path, {}, withToken, { self: "mini", id: SP, originOk: () => true });
+    } finally {
+      watching = false;
+      await watch;
+      for (const k of ["GIT_CONFIG_COUNT", "GIT_CONFIG_KEY_0", "GIT_CONFIG_VALUE_0"]) {
+        if (before[k] === undefined) delete process.env[k];
+        else process.env[k] = before[k];
+      }
+    }
+    expect([...seen]).toEqual([]);
+    expect(await holding(seeds)).toEqual([]);
   });
 });
 
