@@ -40,6 +40,33 @@ describe("built-in checks", () => {
     expect((await builtinCheck("@questions", dir)).exit).toBe(0);
   });
 
+  test("@advice: retro.md first, then a list canopy can read", async () => {
+    const d = await mkdtemp(join(tmpdir(), "canopy-builtin-advice-"));
+    try {
+      await mkdir(join(d, ".canopy"));
+      const run = () => builtinCheck("@advice", d);
+      expect((await run()).output).toContain("retro.md is missing");
+      await writeFile(join(d, ".canopy", "retro.md"), "# Retro\n");
+      expect((await run()).output).toContain("advice.json is missing");
+      await writeFile(join(d, ".canopy", "advice.json"), '[{"key": "Not A Slug", "lesson": "x"}]');
+      const bad = await run();
+      expect(bad.exit).toBe(1);
+      expect(bad.output).toContain(".canopy/advice.json: advice 1: key");
+      await writeFile(join(d, ".canopy", "advice.json"), "[]");
+      expect(await run()).toEqual({ exit: 0, output: "no advice" });
+      await writeFile(
+        join(d, ".canopy", "advice.json"),
+        JSON.stringify([
+          { key: "a", lesson: "one" },
+          { key: "b", lesson: "two", file: "scout" },
+        ]),
+      );
+      expect(await run()).toEqual({ exit: 0, output: "2 pieces of advice" });
+    } finally {
+      await rm(d, { recursive: true, force: true });
+    }
+  });
+
   test("a seed's bunfig preload never runs: nothing here starts bun", async () => {
     await put("bunfig.toml", 'preload = ["./p.ts"]\n');
     await put("p.ts", `await Bun.write(${JSON.stringify(join(dir, "ran"))}, "x");\n`);

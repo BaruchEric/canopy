@@ -49,6 +49,9 @@ export interface DriveSpec {
   /** Claude permission rules (`Bash(git status:*)`, `Read`, ...) */
   allowedTools: readonly string[];
   maxTurns: number;
+  /** no one answers this run: every prompt is denied at once with this
+   *  message, and the run never waits */
+  unattended?: string;
 }
 
 /** A prompt before the Runner numbers it. */
@@ -300,6 +303,11 @@ export class RunCtx implements DriveCtx {
 
   ask(prompt: PromptInput, key: string): Promise<RunAnswer> {
     if (prompt.kind === "permission" && this.allowAll) return Promise.resolve({ kind: "allow" });
+    const unattended = this.spec.unattended;
+    if (unattended) {
+      this.note(`denied, as no one answers this run: ${prompt.kind === "permission" ? prompt.title : "the question"}`);
+      return Promise.resolve({ kind: "deny", message: unattended });
+    }
     const full: RunPrompt = { ...prompt, id: `p${++this.prompts}` };
     return new Promise((resolve) => {
       const entry: Pending = {

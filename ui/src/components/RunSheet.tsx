@@ -372,6 +372,7 @@ function Console({ run, repo }: { run: Run; repo: Repo | undefined }) {
   const dismissRun = useStore((s) => s.dismissRun);
   const answerRun = useStore((s) => s.answerRun);
   const sayRun = useStore((s) => s.sayRun);
+  const draft = useStore((s) => s.chatDrafts[run.id]);
   const active = isRunActive(run);
   const chat = run.chat;
   const noChange = run.status === "done" && run.outcome === "unchanged" && run.expectsChange;
@@ -425,6 +426,7 @@ function Console({ run, repo }: { run: Run; repo: Repo | undefined }) {
           who={name}
           ready={run.status === "idle"}
           onSend={(text) => act(() => sayRun(run.id, text), true)}
+          {...(draft ? { draft } : {})}
         />
       )}
 
@@ -462,13 +464,16 @@ function Composer({
   who,
   ready,
   onSend,
+  draft = "",
 }: {
   /** the agent's name, for the box's placeholder while it replies */
   who: string;
   ready: boolean;
   onSend: (text: string) => Promise<void>;
+  /** what the box starts with: an accepted retro lesson, for the user to read and send */
+  draft?: string;
 }) {
-  const [text, setText] = useState("");
+  const [text, setText] = useState(draft);
   const [busy, setBusy] = useState(false);
   const box = useRef<HTMLTextAreaElement>(null);
   const can = ready && !busy && text.trim().length > 0;
@@ -498,7 +503,8 @@ function Composer({
       <textarea
         ref={box}
         className="composer-box"
-        rows={2}
+        // a draft is read before it is sent, so it gets room
+        rows={draft ? 10 : 2}
         placeholder={ready ? "say something…" : `${who} is replying…`}
         value={text}
         onChange={(e) => setText(e.target.value)}

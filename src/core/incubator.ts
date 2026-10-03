@@ -6,11 +6,12 @@
  * model are all dependencies, so the tests run it with fakes; the server
  * wires the real ones (server/incubator.ts, server/index.ts).
  */
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { isVercelAppUrl } from "./deploy";
 import { networkOrigin } from "./peersync";
 import type { Shipper } from "./shipper";
-import { shareInputs, shareWorkspace, unshare } from "./stageshare";
+import { PARKS_KEPT, RETRO_CONCURRENCY, RETRO_FILES, RETRO_TRIES, RETRO_UNATTENDED, RETRO_WAIT_MAX, endRetroDue, flowDigest, parkRetroDue, parseAdvice, retroNote, retroRecord, type KnownAdvice } from "./retro";
+import { shareInputs, shareRecord, shareWorkspace, unshare } from "./stageshare";
 import {
   BUILD_FILES,
   INPUT_FILE_MAX,
@@ -44,13 +45,14 @@ import {
   statusFor,
   urlWithoutSecret,
   withInputsRead,
+  withRecordRead,
   withSummaries,
   withWorkspaceRead,
   workspaceLine,
   type ParsedQuestions,
 } from "./sprout";
 import { DAILY_EVENTS, dailyLine, dailyNoteHead, dailyNotePath, sproutNote, sproutNotePath, type NoteEvent } from "./sproutnote";
-import { isFlowActive, type Flow, type FlowChoice, type InputEntry, type InputKind, type InputVia, type Repo, type Sprout, type SproutDetail, type SproutFlow, type Workflow } from "./types";
+import { isFlowActive, type Advice, type Flow, type FlowChoice, type FlowDigest, type InputEntry, type InputKind, type InputVia, type Repo, type Sprout, type SproutDetail, type SproutFlow, type Workflow } from "./types";
 import { findWorkflow, loadWorkflows } from "./workflows";
 
 export class IncubatorError extends Error {
@@ -121,10 +123,19 @@ export type Transcriber = (data: Uint8Array, name: string, type: string) => Prom
 export interface StageShare {
   inputs(seeds: string, sproutId: string, from: string): Promise<string>;
   workspace(seeds: string, root: string, sproutId: string): Promise<string>;
+  /** the record a retro reads; answers the file's path */
+  record(seeds: string, sproutId: string, json: string): Promise<string>;
   forget(seeds: string, sproutId: string): Promise<void>;
 }
 
-const REAL_SHARE: StageShare = { inputs: shareInputs, workspace: (seeds, root, id) => shareWorkspace(seeds, root, id), forget: unshare };
+const REAL_SHARE: StageShare = { inputs: shareInputs, workspace: (seeds, root, id) => shareWorkspace(seeds, root, id), record: shareRecord, forget: unshare };
+
+/** Where a retro's advice goes: the improvements list (core/improvements.ts). */
+export interface AdviceSink {
+  /** the keys already on the list, most repeated first, for the retro to reuse */
+  known(): Promise<KnownAdvice[]>;
+  fold(advice: readonly Advice[], from: { id: string; title: string }): Promise<void>;
+}
 
 export interface IncubatorDeps {
   /** the launch root; seeds go under `<root>/_incubator/` */
@@ -142,6 +153,8 @@ export interface IncubatorDeps {
   notes: NoteSink | null;
   /** canopy's own deploy; null when this backend has none */
   ship?: Shipper | null;
+  /** the improvements list a retro's advice folds into; none keeps no list */
+  advice?: AdviceSink | null;
   onChange: (s: Sprout) => void;
   onGone: (id: string) => void;
   /** false keeps every sprout queued: the server tests drive the routes with no agent */
@@ -184,6 +197,8 @@ export class Incubator {
   private readonly sprouts = new Map<string, Sprout>();
   /** each owned flow's last status, so a broadcast that changes nothing is no transition */
   private readonly seen = new Map<string, string>();
+  /** when each running retro's flow began waiting on a prompt, for the backstop */
+  private readonly retroWaiting = new Map<string, number>();
   /** each sprout's vault writes, one after another */
   private readonly noteChain = new Map<string, Promise<void>>();
   /** each sprout's slow work (prepare, more input), one after another, so two
@@ -266,7 +281,7 @@ export class Incubator {
   }
 
   private ownerOf(flowId: string): Sprout | undefined {
-    for (const s of this.sprouts.values()) if (s.flows.some((f) => f.flowId === flowId)) return s;
+    for (const s of this.sprouts.values()) if (s.flows.some((f) => f.flowId === flowId) || s.retro?.flowId === flowId) return s;
     return undefined;
   }
 
@@ -390,8 +405,8 @@ export class Incubator {
     const s = this.need(id);
     // a refused read (a planted link) shows as nothing rather than failing the sheet
     const read = (rel: string): Promise<string | null> => (s.prepared ? this.deps.seeds.read(s.seedPath, rel).catch(() => null) : Promise.resolve(null));
-    const [brief, intent, research] = await Promise.all([read(".canopy/brief.md"), read(".canopy/intent.md"), read(".canopy/research.md")]);
-    return { sprout: s, brief, intent, inputsIndex: inputsIndex(s.inputs), research };
+    const [brief, intent, research, retro] = await Promise.all([read(".canopy/brief.md"), read(".canopy/intent.md"), read(".canopy/research.md"), read(".canopy/retro.md")]);
+    return { sprout: s, brief, intent, inputsIndex: inputsIndex(s.inputs), research, retro };
   }
 
   /** the clarify batch answered, or skipped with null ("go on assumptions") */
@@ -540,6 +555,16 @@ export class Incubator {
   async resume(id: string, choice: "continue" | "retry"): Promise<Sprout> {
     const s = this.need(id);
     if (s.status !== "parked") throw new IncubatorError(409, "only a parked project resumes");
+    // a look back at the park is moot once the project goes on: its retro stops, never holding the stage back
+    const pr = s.retro;
+    if (pr?.for === "park" && pr.state === "running") {
+      delete s.retro;
+      const rf = pr.flowId ? this.deps.flows.get(pr.flowId) : undefined;
+      if (rf) {
+        this.retroWaiting.delete(rf.id);
+        this.stopFlow(rf);
+      }
+    }
     const reason = s.parked;
     // a memo the speech model failed on is tried again
     const retry = this.untranscribed(s);
@@ -591,6 +616,9 @@ export class Incubator {
   async dismiss(id: string): Promise<void> {
     const s = this.need(id);
     if (!sproutEnded(s)) throw new IncubatorError(409, "stop the project first");
+    // a retro still looking back on it goes with it
+    const retroFlow = s.retro?.flowId ? this.deps.flows.get(s.retro.flowId) : undefined;
+    if (retroFlow) this.stopFlow(retroFlow);
     // off the list first, so no write starts; then the writes under way finish
     // before the record moves, so none of them puts it back
     this.sprouts.delete(id);
@@ -606,6 +634,7 @@ export class Incubator {
     this.cloneFrom.delete(id);
     await (this.deps.share ?? REAL_SHARE).forget(join(this.deps.root, SEEDS_DIR), id).catch((err) => this.deps.log?.(`shared copies of ${id} not removed: ${msg(err)}`));
     for (const f of s.flows) this.seen.delete(f.flowId);
+    if (s.retro?.flowId) this.seen.delete(s.retro.flowId);
     this.deps.onGone(id);
   }
 
@@ -627,8 +656,26 @@ export class Incubator {
     for (const s of records) this.sprouts.set(s.id, s);
     const requeued: Sprout[] = [];
     const moves: { s: Sprout; entry: SproutFlow; flow: Flow; status: Flow["status"] }[] = [];
+    const retroMoves: { s: Sprout; flow: Flow }[] = [];
     for (const s of records) {
       try {
+        // a retro under way: its flow followed again, or the retro due again
+        const r = s.retro;
+        if (r?.state === "running") {
+          const rf = r.flowId ? this.deps.flows.get(r.flowId) : undefined;
+          if (rf) {
+            this.seen.set(rf.id, seenKey(rf));
+            retroMoves.push({ s, flow: rf });
+          } else {
+            if (r.tries >= RETRO_TRIES) {
+              r.state = "failed";
+              r.reason = `the retro was cut short ${r.tries} times`;
+              r.endedAt = this.now();
+            } else r.state = "due";
+            delete r.flowId;
+            requeued.push(s);
+          }
+        }
         if (sproutEnded(s)) continue;
         if (!s.prepared) {
           if (s.status === "queued") this.serial(s, () => this.prepare(s));
@@ -661,6 +708,10 @@ export class Incubator {
       // onFlow already took in a newer status while restore was writing
       if (this.seen.get(m.flow.id) !== seenKey(m.flow)) continue;
       await this.flowMoved(m.s, m.entry, m.flow).catch((err: unknown) => this.log(`could not restore ${m.s.id}: ${msg(err)}`));
+    }
+    for (const m of retroMoves) {
+      if (this.seen.get(m.flow.id) !== seenKey(m.flow)) continue;
+      await this.retroMoved(m.s, m.flow).catch((err: unknown) => this.log(`could not restore ${m.s.id}'s retro: ${msg(err)}`));
     }
     this.pump();
   }
@@ -752,7 +803,8 @@ export class Incubator {
     const why = this.deps.isolation?.() ?? null;
     let free = SPROUT_CONCURRENCY - this.list().filter((s) => holdsSlot(s, this.currentFlow(s)?.status)).length;
     const queued = this.list()
-      .filter((s) => s.status === "queued" && s.prepared && !this.busy.has(s.id))
+      // a retro looking back on its park finishes first: a stage beside it would not start
+      .filter((s) => s.status === "queued" && s.prepared && !this.busy.has(s.id) && s.retro?.state !== "running")
       .sort((a, b) => a.createdAt - b.createdAt);
     // apart from the slots: a sprout bound for a stage is held for the
     // runner whether or not a slot is free for it
@@ -771,6 +823,157 @@ export class Incubator {
       this.held = held;
       this.deps.onWaiting?.(held);
     }
+    this.retros(why);
+  }
+
+  /** The server's clock: a park comes due a day on with nothing else happening. */
+  tick(): void {
+    this.pump();
+  }
+
+  /* ---------- retro ---------- */
+
+  /** whether the sprout's stage flow is alive: a retro waits for it */
+  private flowAlive(s: Sprout): boolean {
+    const f = this.currentFlow(s);
+    return f !== undefined && isFlowActive(f);
+  }
+
+  /** an ended sprout's retro, marked at the transition */
+  private endRetro(s: Sprout): void {
+    if (s.retro?.state === "running" || !endRetroDue(s)) return;
+    s.retro = { for: "end", state: "due", at: this.now(), flowsSeen: s.flows.length, tries: 0 };
+  }
+
+  /** Parks a day old come due; due retros start, oldest first, at most
+   *  `RETRO_CONCURRENCY` running and none while stages wait. None holds a
+   *  sprout's slot. */
+  private retros(why: string | null): void {
+    const at = this.now();
+    for (const s of this.list()) {
+      const r = s.retro;
+      if (r?.state === "due" && r.for === "park" && s.status !== "parked") {
+        // the park ended before its retro ran: an end looks back instead, a stage going on needs none
+        if (sproutEnded(s)) r.for = "end";
+        else delete s.retro;
+        this.track(this.changed(s));
+      } else if (parkRetroDue(s, at, this.flowAlive(s))) {
+        s.retro = { for: "park", state: "due", at, flowsSeen: s.flows.length, tries: 0 };
+        this.track(this.changed(s));
+      }
+    }
+    for (const s of this.list()) {
+      const r = s.retro;
+      const since = r?.state === "running" && r.flowId ? this.retroWaiting.get(r.flowId) : undefined;
+      if (!r?.flowId || since === undefined || at - since < RETRO_WAIT_MAX) continue;
+      this.retroWaiting.delete(r.flowId);
+      const f = this.deps.flows.get(r.flowId);
+      // failed first, so the stop's own event finds the retro over
+      this.track(this.retroFailed(s, `the retro waited ${Math.round(RETRO_WAIT_MAX / 60_000)} minutes on a prompt no one answers`));
+      if (f) this.stopFlow(f);
+    }
+    if (why !== null) return;
+    let running = this.list().filter((s) => s.retro?.state === "running").length;
+    const due = this.list()
+      .filter((s) => s.retro?.state === "due" && !this.busy.has(s.id) && !this.flowAlive(s))
+      .sort((a, b) => (a.retro?.at ?? 0) - (b.retro?.at ?? 0));
+    for (const s of due) {
+      const r = s.retro;
+      if (!r || running >= RETRO_CONCURRENCY) break;
+      running += 1;
+      // claimed here, before anything awaits
+      r.state = "running";
+      r.tries += 1;
+      this.track(this.startRetro(s));
+    }
+  }
+
+  private async startRetro(s: Sprout): Promise<void> {
+    const r = s.retro;
+    if (!r) return;
+    try {
+      const repo = this.deps.repo(s.repoId);
+      if (!repo) return this.retroFailed(s, "the seed folder is gone");
+      const wf = await this.deps.workflow("retro");
+      if (!wf) return this.retroFailed(s, "the retro workflow is not installed");
+      const known = (await this.deps.advice?.known().catch(() => [])) ?? [];
+      // a flow that ended with no digest on record (a stop's) is read now, while Flows still has it
+      const now = new Map<string, FlowDigest>();
+      for (const f of s.flows) {
+        const live = f.digest ? undefined : this.deps.flows.get(f.flowId);
+        if (live) now.set(f.flowId, flowDigest(live));
+      }
+      const record = `${JSON.stringify(retroRecord(s, now, known), null, 1)}\n`;
+      const share = this.deps.share ?? REAL_SHARE;
+      const file = await share.record(join(this.deps.root, SEEDS_DIR), s.id, record);
+      if (this.gone(s)) {
+        // dismissed while the record was written: its forget ran first, so this copy goes now
+        await share.forget(join(this.deps.root, SEEDS_DIR), s.id).catch((err) => this.log(`shared copies of ${s.id} not removed: ${msg(err)}`));
+        return;
+      }
+      if (this.detached || s.retro !== r) return;
+      const flow = await this.deps.flows.start(repo, { ...withRecordRead(wf, dirname(file)), unattended: RETRO_UNATTENDED }, retroNote(s, file));
+      r.flowId = flow.id;
+      if (this.gone(s)) {
+        this.stopFlow(flow);
+        return;
+      }
+      await this.changed(s);
+      // a flow that ended inside start is read now, as launch does
+      this.onFlow(flow);
+    } catch (err) {
+      await this.retroFailed(s, `the retro did not start: ${msg(err)}`);
+    }
+  }
+
+  /** the retro's flow moved; nothing here touches the sprout's status */
+  private async retroMoved(s: Sprout, flow: Flow): Promise<void> {
+    const r = s.retro;
+    if (this.detached || !r || r.flowId !== flow.id || r.state !== "running") return;
+    if (flow.status === "waiting") {
+      // the backstop's clock: the tick fails a retro that waits too long
+      if (!this.retroWaiting.has(flow.id)) this.retroWaiting.set(flow.id, this.now());
+      return;
+    }
+    this.retroWaiting.delete(flow.id);
+    if (flow.status === "working") return;
+    const step = flow.steps[flow.current];
+    // the stage runner was away: Flows runs the step again on its hello, as for any stage
+    if (flow.status === "gated" && flow.parkedFor === "stage") return;
+    if (flow.status === "gated") {
+      // a retro never waits on the user at a gate: out of retries or budget, it ends
+      this.stopFlow(flow);
+      return this.retroFailed(s, `the retro stopped at ${step?.name ?? "a gate"}: ${step?.reason ?? "a gate"}`);
+    }
+    if (flow.status !== "done") return this.retroFailed(s, `the retro ${flow.status}${flow.error ? `: ${flow.error}` : ""}`);
+    try {
+      const text = await this.deps.seeds.read(s.seedPath, ".canopy/advice.json");
+      if (text === null) return this.retroFailed(s, "the retro wrote no .canopy/advice.json");
+      const parsed = parseAdvice(text);
+      if (!parsed.ok) return this.retroFailed(s, `the retro wrote advice canopy cannot read: ${parsed.error}`);
+      await this.deps.seeds.commit(s.seedPath, RETRO_FILES, `retro: ${s.title}`);
+      await this.deps.advice?.fold(parsed.advice, { id: s.id, title: s.title });
+      if (this.gone(s) || s.retro !== r) return;
+      r.state = "done";
+      r.endedAt = this.now();
+      r.advice = parsed.advice.map((a) => ({ key: a.key, lesson: a.lesson }));
+      delete r.reason;
+      await this.changed(s);
+      this.pump();
+    } catch (err) {
+      await this.retroFailed(s, `could not take the retro in: ${msg(err)}`);
+    }
+  }
+
+  /** a retro ends failed; the sprout's own status and park reason stay as they were */
+  private async retroFailed(s: Sprout, reason: string): Promise<void> {
+    const r = s.retro;
+    if (!r || this.gone(s)) return;
+    r.state = "failed";
+    r.reason = reason.replace(/\s+/g, " ").trim().slice(0, 300);
+    r.endedAt = this.now();
+    await this.changed(s);
+    this.pump();
   }
 
   /** the current stage's flow while its outcome is not on record */
@@ -828,6 +1031,10 @@ export class Incubator {
     const key = seenKey(flow);
     if (this.seen.get(flow.id) === key) return;
     this.seen.set(flow.id, key);
+    if (s.retro?.flowId === flow.id) {
+      queueMicrotask(() => this.track(this.retroMoved(s, flow)));
+      return;
+    }
     const entry = s.flows.at(-1);
     // only the current stage, and only until its outcome is on record: a
     // restart that broadcasts an old, finished flow again changes nothing
@@ -857,6 +1064,7 @@ export class Incubator {
       return;
     }
     entry.outcome = flow.status;
+    entry.digest = flowDigest(flow);
     s.spent = { runs: s.spent.runs + (flow.spent?.runs ?? 0), workMs: s.spent.workMs + (flow.spent?.workMs ?? 0) };
     if (flow.status !== "done") return this.park(s, `${entry.workflow} ${flow.status}${flow.error ? `: ${flow.error}` : ""}`);
     try {
@@ -941,6 +1149,7 @@ export class Incubator {
   /** the judge turned the idea down at eval: an end, not a park */
   private async reject(s: Sprout, entry: SproutFlow, flow: Flow, reason: string): Promise<void> {
     entry.outcome = "rejected";
+    entry.digest = flowDigest(flow);
     s.spent = { runs: s.spent.runs + (flow.spent?.runs ?? 0), workMs: s.spent.workMs + (flow.spent?.workMs ?? 0) };
     s.status = "rejected";
     s.parked = reason;
@@ -995,6 +1204,9 @@ export class Incubator {
     if (sproutEnded(s)) return;
     s.status = "parked";
     s.parked = reason;
+    const at = this.now();
+    s.parkedAt = at;
+    s.parks = [...(s.parks ?? []), { at, reason: reason.replace(/\s+/g, " ").trim().slice(0, 500) }].slice(-PARKS_KEPT);
     await this.changed(s, "parked");
     if (pump) this.pump();
   }
@@ -1008,6 +1220,8 @@ export class Incubator {
 
   private async changed(s: Sprout, event?: NoteEvent): Promise<void> {
     s.updatedAt = this.now();
+    // the three ends are told here, each once: its retro comes due with it
+    if (event === "live" || event === "rejected" || event === "stopped") this.endRetro(s);
     if (this.detached || this.gone(s)) return;
     try {
       await this.deps.store.save(s);
@@ -1026,7 +1240,8 @@ export class Incubator {
     const write = async (): Promise<void> => {
       // a refused read (a planted link) leaves intent out rather than the whole note
       const intent = snap.prepared ? await this.deps.seeds.read(snap.seedPath, ".canopy/intent.md").catch(() => null) : null;
-      const rev = await notes.put(sproutNotePath(snap.slug), sproutNote(snap, intent), s.noteRev);
+      const retro = snap.retro?.state === "done" ? await this.deps.seeds.read(snap.seedPath, ".canopy/retro.md").catch(() => null) : null;
+      const rev = await notes.put(sproutNotePath(snap.slug), sproutNote(snap, intent, retro), s.noteRev);
       if (rev && rev !== s.noteRev) {
         s.noteRev = rev;
         if (!this.detached && !this.gone(s)) await this.deps.store.save(s);

@@ -766,7 +766,9 @@ export type RunPrompt =
 export type RunAnswer =
   | { kind: "allow" }
   | { kind: "allow-all" }
-  | { kind: "deny" }
+  /** `message`, when given, is what the agent is told in place of the
+   *  harness driver's own words */
+  | { kind: "deny"; message?: string }
   | { kind: "answers"; answers: Record<string, string> };
 
 /** Token counts for a run, where the harness reports them (Codex does;
@@ -870,6 +872,8 @@ export type ServerEvent =
   /** a sprout, whole, whenever it changes; home backend only */
   | { type: "incubator"; sprout: Sprout }
   | { type: "incubator-gone"; id: string }
+  /** the retro advice on offer, whole, whenever it changes; home backend only */
+  | { type: "advice"; advice: AdviceOffer[] }
   /** where the incubator's stages run, whenever that changes; home backend only */
   | { type: "stages"; stages: IncubatorStages }
   | { type: "job"; job: Job }
@@ -1151,6 +1155,10 @@ export interface Workflow {
   /** false keeps the workflow out of the menus and the fleet picker: the
    *  incubator's own stages; absent means listed */
   listed?: false;
+  /** Set by canopy, never read from a file: no one answers this workflow's
+   *  runs, so every prompt is denied at once with this message (the
+   *  incubator's retro). */
+  unattended?: string;
   steps: WorkflowStep[];
   /** null when the workflow sets none */
   budget: FlowBudget | null;
@@ -1275,7 +1283,109 @@ export interface SproutFlow {
   flowId: string;
   /** how the flow ended, once it has */
   outcome?: string;
+  /** what the retro reads of it, copied when it ended: Flows keeps only
+   *  its last finished flows, so a sprout's early ones are gone by then */
+  digest?: FlowDigest;
 }
+
+/** One step of a flow as the retro reads it: text clipped, no run's output. */
+export interface StepDigest {
+  name: string;
+  status: StepStatus;
+  /** retries it used */
+  tries: number;
+  reason?: string;
+  check?: { exit: number; output: string };
+  judgment?: { fit: JudgeFit; evidence: number; rules: number; go: boolean; rejected: boolean; reason: string | null };
+  verdict?: { outcome: VerdictOutcome; go: boolean; reason: string | null };
+  /** the agent's closing summary */
+  summary?: string;
+}
+
+/** One flow as the retro reads it (`flowDigest` in core/retro.ts). */
+export interface FlowDigest {
+  status: FlowStatus;
+  startedAt: number;
+  endedAt?: number;
+  error?: string;
+  spent?: { runs: number; workMs: number };
+  budget?: FlowBudget;
+  steps: StepDigest[];
+  rewinds: FlowRewind[];
+}
+
+/** a park, kept so the retro reads every one, not only the last */
+export interface SproutPark {
+  at: number;
+  reason: string;
+}
+
+/** what a retro looks back on: the end the sprout reached, or a park left a day */
+export type RetroFor = "end" | "park";
+export type RetroState = "due" | "running" | "done" | "failed";
+
+/** The sprout's latest retro. Its flow is kept here, never in `flows`,
+ *  which the chain reads as the stage in progress. */
+export interface SproutRetro {
+  for: RetroFor;
+  state: RetroState;
+  /** when it came due */
+  at: number;
+  /** when it ended, done or failed */
+  endedAt?: number;
+  flowId?: string;
+  /** how many of the sprout's flows there were when it came due */
+  flowsSeen: number;
+  /** how many times it started; a third cut short fails it */
+  tries: number;
+  /** the lessons it left, once done */
+  advice?: { key: string; lesson: string }[];
+  /** why it failed */
+  reason?: string;
+}
+
+/** One piece of a retro's advice, read from `.canopy/advice.json` by
+ *  `parseAdvice` as untrusted: proposed, never applied. */
+export interface Advice {
+  /** a stable slug, so the same lesson counts across sprouts */
+  key: string;
+  /** one sentence */
+  lesson: string;
+  /** the workflow it would change, by name */
+  file?: string;
+  /** the proposed change, a unified diff or prose */
+  edit?: string;
+}
+
+/** A key on the improvements list (`incubator/improvements.json`). */
+export interface AdviceEntry extends Advice {
+  /** the sprouts that gave it, one each: its count is how many */
+  from: { id: string; title: string; at: number }[];
+  /** the user's last answer, and the count it was given at: the key is
+   *  offered again once three more sprouts give it */
+  decided?: { accept: boolean; at: number; count: number };
+}
+
+export interface Improvements {
+  entries: Record<string, AdviceEntry>;
+}
+
+/** A key the inbox offers (`GET /api/incubator/advice`, the `advice` event). */
+export interface AdviceOffer extends Advice {
+  count: number;
+  /** the newest projects that gave it, at most five */
+  titles: string[];
+  lastAt: number;
+}
+
+/** What accepting a piece of advice did. */
+export type AdviceAccepted =
+  /** a chat on the repo that owns the file, opened idle: `draft` (the
+   *  lesson and its edit) goes in its message box for the user to read and
+   *  send, and nothing runs before they do */
+  | { kind: "chat"; runId: string; repoId: string; run?: Run; draft: string }
+  /** a workflow in the config dir: opened on the backend's desktop, or named for the user to open */
+  | { kind: "file"; path: string; opened: boolean; edit?: string };
 
 /** One project in the incubator. */
 export interface Sprout {
@@ -1304,6 +1414,12 @@ export interface Sprout {
   spent: { runs: number; workMs: number };
   /** why it is parked, one line */
   parked?: string;
+  /** when the current park began */
+  parkedAt?: number;
+  /** the last parks, oldest first, at most `PARKS_KEPT` */
+  parks?: SproutPark[];
+  /** the latest retro, due, running or ended */
+  retro?: SproutRetro;
   /** scout's pick, once canopy has read and allowed it */
   pick?: SproutPick;
   /** the private GitHub repo canopy made for it, "owner/name" */
@@ -1325,6 +1441,8 @@ export interface SproutDetail {
   intent: string | null;
   inputsIndex: string;
   research: string | null;
+  /** the seed's `.canopy/retro.md`, once a retro wrote one */
+  retro: string | null;
 }
 
 /** Where the incubator's stages run (`GET /api/incubator/stages`, and the

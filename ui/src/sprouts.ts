@@ -41,7 +41,15 @@ export function stageAt(s: Sprout): Stage | null {
   return WORKFLOW_STAGE[nextWorkflow(s)] ?? null;
 }
 
+/** the retro's mark, from its own state: it runs after an end or beside a park */
+const RETRO_MARK: Record<NonNullable<Sprout["retro"]>["state"], StageMark> = { due: "todo", running: "now", done: "done", failed: "stuck" };
+
 export function stageStrip(s: Sprout): { stage: Stage; mark: StageMark }[] {
+  const retro: StageMark = s.retro ? RETRO_MARK[s.retro.state] : "todo";
+  return stagesBefore(s).map((x) => (x.stage === "retro" ? { stage: "retro", mark: retro } : x));
+}
+
+function stagesBefore(s: Sprout): { stage: Stage; mark: StageMark }[] {
   if (s.status === "live" || s.status === "handed-off") {
     return STAGES.map((stage) => ({ stage, mark: stage === "retro" ? "todo" : "done" }));
   }
@@ -122,6 +130,15 @@ export function sproutLines(ev: Extract<ServerEvent, { type: "incubator" | "incu
   const wasAsking = (before.questions?.length ?? 0) > 0;
   if (before.status !== s.status || asking !== wasAsking) {
     lines.push(line(s, s.status === "parked" ? `parked: ${s.parked ?? "no reason given"}` : sproutWord(s)));
+  }
+  const r = s.retro;
+  if (r && r.state !== before.retro?.state) {
+    if (r.state === "running") lines.push(line(s, "looking back"));
+    if (r.state === "failed") lines.push(line(s, `the retro failed: ${r.reason ?? "no reason given"}`));
+    if (r.state === "done") {
+      const n = r.advice?.length ?? 0;
+      lines.push(n > 0 ? line(s, `the retro left ${n} ${n === 1 ? "lesson" : "lessons"}`) : line(s, "the retro left no advice", true));
+    }
   }
   const added = s.inputs.filter((e) => e.via !== "answer").length - before.inputs.filter((e) => e.via !== "answer").length;
   if (added > 0) lines.push(line(s, `${added} more ${added === 1 ? "input" : "inputs"}`));

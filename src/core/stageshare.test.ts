@@ -2,7 +2,7 @@ import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { mkdtemp, mkdir, readdir, readFile, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { shareInputs, shareWorkspace, unshare } from "./stageshare";
+import { shareInputs, shareRecord, shareWorkspace, unshare } from "./stageshare";
 
 let root = "";
 let outside = "";
@@ -80,6 +80,18 @@ describe("stage share", () => {
     expect(await readdir(to)).toEqual(["1.txt"]);
     await writeFile(join(from, "3.txt"), "more");
     expect((await readdir(await shareInputs(join(root, "_incubator"), "abc123", from))).sort()).toEqual(["1.txt", "3.txt"]);
+  });
+
+  test("a record is written whole under record/<id>, replaces the last one, and goes with unshare", async () => {
+    const seeds = join(root, "_incubator");
+    const file = await shareRecord(seeds, "sp_r", '{"n": 1}');
+    expect(file).toBe(join(seeds, ".shared", "record", "sp_r", "record.json"));
+    await shareRecord(seeds, "sp_r", '{"n": 2}');
+    expect(await readFile(file, "utf8")).toBe('{"n": 2}');
+    expect(await readdir(join(seeds, ".shared", "record", "sp_r"))).toEqual(["record.json"]);
+    await expect(shareRecord(seeds, "../x", "{}")).rejects.toThrow("not a sprout id");
+    await unshare(seeds, "sp_r");
+    expect(await readdir(join(seeds, ".shared", "record"))).not.toContain("sp_r");
   });
 
   test("unshare removes one sprout's copies and leaves another's", async () => {

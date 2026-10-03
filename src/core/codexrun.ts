@@ -719,7 +719,7 @@ export function approvalReply(
               ? "approved"
               : stopping
                 ? "abort"
-                : { denied: { rejection: "The user declined this in canopy." } },
+                : { denied: { rejection: (a.kind === "deny" && a.message) || "The user declined this in canopy." } },
       };
     default:
       return {};
@@ -764,7 +764,7 @@ export function questionReply(questions: RunQuestion[], ids: string[], a: RunAns
   questions.forEach((q, i) => {
     const id = ids[i];
     if (id === undefined) return;
-    const given = a.kind === "answers" ? a.answers[q.question]?.trim() : undefined;
+    const given = a.kind === "answers" ? a.answers[q.question]?.trim() : a.kind === "deny" ? a.message : undefined;
     answers[id] = { answers: [given || DISMISSED] };
   });
   return { answers };

@@ -6,10 +6,11 @@ import { beforeEach, describe, expect, test } from "bun:test";
 import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { Incubator, IncubatorError, incubatorWorkflow, type IncubatorDeps, type IncubatorFlows, type IncubatorSeeds, type IncubatorStore, type Intake, type NoteSink } from "./incubator";
+import { Incubator, IncubatorError, incubatorWorkflow, type AdviceSink, type IncubatorDeps, type IncubatorFlows, type IncubatorSeeds, type IncubatorStore, type Intake, type NoteSink } from "./incubator";
 import type { Shipper } from "./shipper";
 import { BUNDLED_DIR, findWorkflow, loadWorkflows } from "./workflows";
-import type { Flow, FlowChoice, Judgment, Repo, Sprout, Workflow } from "./types";
+import { RETRO_PARK_WAIT, RETRO_UNATTENDED, RETRO_WAIT_MAX } from "./retro";
+import type { Advice, Flow, FlowChoice, Judgment, Repo, Sprout, Workflow } from "./types";
 
 const CLARIFY: Workflow = {
   name: "clarify",
@@ -189,6 +190,8 @@ interface World {
   workflows: Map<string, Workflow>;
   repos: Set<string>;
   forgot: string[];
+  /** what the retro's record would hold, by sprout id */
+  records: Map<string, string>;
 }
 
 let ids = 0;
@@ -205,6 +208,7 @@ function world(extra: Partial<IncubatorDeps> = {}): World {
     workflows: new Map([["clarify", CLARIFY]]),
     repos: new Set<string>(),
     forgot: [] as string[],
+    records: new Map<string, string>(),
   };
   // the world handed back, which the rescan counts on (a spread copies the number)
   let out: World | undefined;
@@ -213,6 +217,10 @@ function world(extra: Partial<IncubatorDeps> = {}): World {
     share: {
       inputs: async (seeds, id) => `${seeds}/.shared/inputs/${id}`,
       workspace: async (seeds, _root, id) => `${seeds}/.shared/workspace/${id}`,
+      record: async (seeds, id, json) => {
+        w.records.set(id, json);
+        return `${seeds}/.shared/record/${id}/record.json`;
+      },
       forget: async (_seeds, id) => {
         w.forgot.push(id);
       },
@@ -1491,6 +1499,8 @@ describe("scout and build-new", () => {
     expect(after.parked).toBe("a coin counter already ships with every phone");
     expect(after.flows.at(-1)?.outcome).toBe("rejected");
     expect(w.flows.get(after.flows.at(-1)?.flowId ?? "")?.status).toBe("stopped");
+    expect(after.flows.at(-1)?.digest?.steps[1]?.judgment?.fit).toBe("misses");
+    expect(after.retro?.for).toBe("end");
   });
 
   test("the status follows build-new's step, and its end commits the notes and goes to canopy's ship", async () => {
@@ -1524,6 +1534,8 @@ describe("scout and build-new", () => {
     expect(s.url).toBe("https://coin-counter.vercel.app");
     expect(s.privateRepo).toBe("eric/coin-counter");
     expect(s.vercelProject).toBe("coin-counter");
+    // going live brings its retro, which this world has no workflow for: it fails, and the sprout stays live
+    expect(s.retro).toMatchObject({ for: "end", state: "failed", reason: "the retro workflow is not installed" });
   });
 
   test("a deploy that fails parks with the reason; resume skips the repo and project already made", async () => {
@@ -1683,5 +1695,434 @@ describe("scout and build-new", () => {
     } finally {
       rmSync(tmp, { recursive: true, force: true });
     }
+  });
+});
+
+describe("retro", () => {
+  const RETRO = stage("retro", ["Retro"]);
+  const ADVICE = JSON.stringify([{ key: "clarify-asks-less", lesson: "Clarify asked what the brief said.", file: "clarify" }]);
+
+  class FakeAdvice implements AdviceSink {
+    folds: { advice: readonly Advice[]; from: { id: string; title: string } }[] = [];
+    failFold: string | null = null;
+    async known() {
+      return [{ key: "scout-reads-npm", lesson: "Scout reads npm.", count: 2 }];
+    }
+    async fold(advice: readonly Advice[], from: { id: string; title: string }) {
+      if (this.failFold) throw new Error(this.failFold);
+      this.folds.push({ advice, from });
+    }
+  }
+
+  let clock = 1_000;
+  const retroWorld = (extra: Partial<IncubatorDeps> = {}) => {
+    clock = 1_000;
+    const advice = new FakeAdvice();
+    const w = world({ advice, now: () => clock, ...extra });
+    w.workflows.set("retro", RETRO);
+    return { ...w, advice };
+  };
+  /** a sprout whose clarify is running */
+  const clarifying = async (w: World): Promise<Sprout> => {
+    const s = await w.inc.create(intake({ text: "coin counter" }));
+    await w.inc.idle();
+    return now(w, s.id);
+  };
+  /** a sprout parked by its clarify failing, so no flow is alive behind the park */
+  const parked = async (w: World): Promise<Sprout> => {
+    const s = await clarifying(w);
+    w.flows.move(s.flows[0]?.flowId ?? "", { status: "failed", error: "the run failed" });
+    await w.inc.idle();
+    return now(w, s.id);
+  };
+  const retroFlow = (w: World, id: string): Flow => {
+    const f = w.flows.get(now(w, id).retro?.flowId ?? "");
+    if (!f) throw new Error("no retro flow");
+    return f;
+  };
+  const finish = async (w: World, id: string, files: Record<string, string> = { ".canopy/retro.md": "# Retro", ".canopy/advice.json": ADVICE }, patch: Partial<Flow> = { status: "done" }) => {
+    const s = now(w, id);
+    for (const [rel, text] of Object.entries(files)) await w.seeds.write(s.seedPath, rel, text);
+    w.flows.move(retroFlow(w, id).id, patch);
+    await w.inc.idle();
+    return now(w, id);
+  };
+
+  test("a stop brings a retro on the seed, reading only its shared record; the sprout stays stopped and holds no slot", async () => {
+    const w = retroWorld();
+    const s = await clarifying(w);
+    await w.inc.stop(s.id);
+    await w.inc.idle();
+    const after = now(w, s.id);
+    expect(after.status).toBe("stopped");
+    expect(after.retro).toMatchObject({ for: "end", state: "running", flowsSeen: 1, tries: 1 });
+    const started = w.flows.started.at(-1);
+    expect(started?.workflow.name).toBe("retro");
+    expect(started?.repoId).toBe(s.repoId);
+    const dir = `/root/_incubator/.shared/record/${s.id}`;
+    expect(started?.workflow.steps[0]?.tools).toEqual(["Edit", `Read(/${dir}/**)`]);
+    expect(started?.note).toContain(`${dir}/record.json`);
+    expect(started?.note).toContain("was stopped by the user");
+    const record = JSON.parse(w.records.get(s.id) ?? "{}");
+    expect(record.sprout.status).toBe("stopped");
+    expect(record.flows).toEqual([{ workflow: "clarify", digest: expect.objectContaining({ status: "stopped" }) }]);
+    expect(record.known).toEqual([{ key: "scout-reads-npm", lesson: "Scout reads npm.", count: 2 }]);
+    expect(w.records.get(s.id)).not.toContain("001-text.md");
+    // two more sprouts both start: the retro holds no slot
+    const a = await w.inc.create(intake({ text: "tip jar" }));
+    const b = await w.inc.create(intake({ text: "tally" }));
+    await w.inc.idle();
+    expect(now(w, a.id).status).toBe("clarifying");
+    expect(now(w, b.id).status).toBe("clarifying");
+  });
+
+  test("a retro that ends well commits its files, folds its advice and keeps its lessons", async () => {
+    const w = retroWorld();
+    const s = await clarifying(w);
+    await w.inc.stop(s.id);
+    await w.inc.idle();
+    clock = 2_000;
+    const after = await finish(w, s.id);
+    expect(after.status).toBe("stopped");
+    expect(after.retro).toMatchObject({ state: "done", endedAt: 2_000, advice: [{ key: "clarify-asks-less", lesson: "Clarify asked what the brief said." }] });
+    expect(w.seeds.commits.at(-1)?.message).toBe("retro: coin counter");
+    expect(w.advice.folds).toEqual([{ advice: [{ key: "clarify-asks-less", lesson: "Clarify asked what the brief said.", file: "clarify" }], from: { id: s.id, title: "coin counter" } }]);
+    // the vault note and the sheet carry it
+    expect(w.notes.puts.at(-1)?.text).toContain("## Retro\n\nAdvice:\n\n- clarify-asks-less: Clarify asked what the brief said.");
+    expect((await w.inc.detail(s.id)).retro).toBe("# Retro");
+  });
+
+  test("a retro that fails, stops, parks at its gate, writes bad advice or is refused its commit fails, and the sprout stays as it was", async () => {
+    const cases: [string, (w: World & { advice: FakeAdvice }, id: string) => Promise<Sprout>, string][] = [
+      ["failed", (w, id) => finish(w, id, {}, { status: "failed", error: "the run failed" }), "the retro failed: the run failed"],
+      ["stopped", (w, id) => finish(w, id, {}, { status: "stopped" }), "the retro stopped"],
+      ["no advice", (w, id) => finish(w, id, { ".canopy/retro.md": "# R" }), "the retro wrote no .canopy/advice.json"],
+      ["bad advice", (w, id) => finish(w, id, { ".canopy/retro.md": "# R", ".canopy/advice.json": "{" }), "the retro wrote advice canopy cannot read: advice.json is not JSON"],
+      [
+        "refused commit",
+        (w, id) => {
+          w.seeds.failCommit = ".canopy is a symlink";
+          return finish(w, id);
+        },
+        "could not take the retro in: .canopy is a symlink",
+      ],
+    ];
+    for (const [, act, reason] of cases) {
+      const w = retroWorld();
+      const s = await parked(w);
+      clock += RETRO_PARK_WAIT;
+      w.inc.tick();
+      await w.inc.idle();
+      expect(now(w, s.id).retro?.state).toBe("running");
+      const after = await act(w, s.id);
+      expect(after.retro?.state).toBe("failed");
+      expect(after.retro?.reason).toBe(reason);
+      expect(after.status).toBe("parked");
+      expect(after.parked).toBe("clarify failed: the run failed");
+      expect(w.advice.folds).toEqual([]);
+    }
+    const w = retroWorld();
+    const s = await parked(w);
+    clock += RETRO_PARK_WAIT;
+    w.inc.tick();
+    await w.inc.idle();
+    const id = retroFlow(w, s.id).id;
+    w.flows.move(id, { status: "gated", steps: [{ name: "Retro", status: "gated", reason: "out of retries: advice 1: key" }] });
+    await w.inc.idle();
+    expect(w.flows.get(id)?.status).toBe("stopped");
+    expect(now(w, s.id).retro?.reason).toBe("the retro stopped at Retro: out of retries: advice 1: key");
+    expect(now(w, s.id).status).toBe("parked");
+  });
+
+  test("a park comes due a day on with no flow alive behind it, once; one at a live gate never does", async () => {
+    const w = retroWorld();
+    const s = await parked(w);
+    expect(now(w, s.id).parkedAt).toBe(1_000);
+    clock = 1_000 + RETRO_PARK_WAIT - 1;
+    w.inc.tick();
+    await w.inc.idle();
+    expect(now(w, s.id).retro).toBeUndefined();
+    clock = 1_000 + RETRO_PARK_WAIT;
+    w.inc.tick();
+    await w.inc.idle();
+    expect(now(w, s.id).retro).toMatchObject({ for: "park", state: "running" });
+    expect(w.flows.started.at(-1)?.note).toContain("has waited a day, parked: clarify failed: the run failed");
+    await finish(w, s.id);
+    clock += RETRO_PARK_WAIT * 3;
+    w.inc.tick();
+    await w.inc.idle();
+    expect(w.flows.started.filter((f) => f.workflow.name === "retro")).toHaveLength(1);
+
+    const g = retroWorld();
+    const t = await clarifying(g);
+    g.flows.move(t.flows[0]?.flowId ?? "", { status: "gated", steps: [{ name: "Clarify", status: "gated", reason: "a check failed" }] });
+    await g.inc.idle();
+    expect(now(g, t.id).status).toBe("parked");
+    clock += RETRO_PARK_WAIT * 2;
+    g.inc.tick();
+    await g.inc.idle();
+    expect(now(g, t.id).retro).toBeUndefined();
+  });
+
+  test("a stop right after a park retro, with no flow run since, gets no second retro", async () => {
+    const w = retroWorld();
+    const s = await parked(w);
+    clock += RETRO_PARK_WAIT;
+    w.inc.tick();
+    await w.inc.idle();
+    await finish(w, s.id);
+    await w.inc.stop(s.id);
+    await w.inc.idle();
+    expect(now(w, s.id).retro?.for).toBe("park");
+    expect(w.flows.started.filter((f) => f.workflow.name === "retro")).toHaveLength(1);
+  });
+
+  test("a retro parked because the stage runner is away waits for it, and goes on when Flows resumes it", async () => {
+    const w = retroWorld();
+    const s = await parked(w);
+    clock += RETRO_PARK_WAIT;
+    w.inc.tick();
+    await w.inc.idle();
+    const id = retroFlow(w, s.id).id;
+    w.flows.move(id, { status: "gated", parkedFor: "stage", steps: [{ name: "Retro", status: "gated", reason: "the stage runner is not answering" }] });
+    await w.inc.idle();
+    expect(w.flows.get(id)?.status).toBe("gated");
+    expect(now(w, s.id).retro?.state).toBe("running");
+    // the runner says hello and Flows runs the step again
+    w.flows.move(id, { status: "working", steps: [{ name: "Retro", status: "running" }] });
+    await w.inc.idle();
+    const after = await finish(w, s.id);
+    expect(after.retro?.state).toBe("done");
+  });
+
+  test("one retro runs at a time; the next starts when it ends", async () => {
+    const w = retroWorld();
+    const a = await clarifying(w);
+    const b = await clarifying(w);
+    await w.inc.stop(a.id);
+    await w.inc.stop(b.id);
+    await w.inc.idle();
+    expect(now(w, a.id).retro?.state).toBe("running");
+    expect(now(w, b.id).retro?.state).toBe("due");
+    await finish(w, a.id);
+    expect(now(w, b.id).retro?.state).toBe("running");
+  });
+
+  test("no retro starts while stages wait, under autostart off, or after detach", async () => {
+    let why: string | null = "the stage runner is not answering";
+    const w = retroWorld({ isolation: () => why });
+    const s = await w.inc.create(intake({ text: "x" }));
+    await w.inc.idle();
+    await w.inc.stop(s.id);
+    await w.inc.idle();
+    expect(now(w, s.id).retro?.state).toBe("due");
+    why = null;
+    w.inc.tick();
+    await w.inc.idle();
+    expect(now(w, s.id).retro?.state).toBe("running");
+
+    const off = retroWorld({ autostart: false });
+    const t = await off.inc.create(intake({ text: "x" }));
+    await off.inc.stop(t.id);
+    await off.inc.idle();
+    expect(now(off, t.id).retro?.state).toBe("due");
+    expect(off.flows.started).toHaveLength(0);
+
+    const d = retroWorld();
+    const u = await clarifying(d);
+    d.inc.detach();
+    await d.inc.stop(u.id);
+    await d.inc.idle();
+    expect(d.flows.started.filter((f) => f.workflow.name === "retro")).toHaveLength(0);
+  });
+
+  test("a sprout resumed while its park retro runs stops the retro and goes on at once", async () => {
+    const w = retroWorld();
+    const s = await parked(w);
+    clock += RETRO_PARK_WAIT;
+    w.inc.tick();
+    await w.inc.idle();
+    const id = retroFlow(w, s.id).id;
+    await w.inc.resume(s.id, "retry");
+    await w.inc.idle();
+    expect(w.flows.get(id)?.status).toBe("stopped");
+    expect(now(w, s.id).retro).toBeUndefined();
+    expect(now(w, s.id).status).toBe("clarifying");
+    expect(w.flows.started.map((f) => f.workflow.name)).toEqual(["clarify", "retro", "clarify"]);
+  });
+
+  test("a retro runs unattended: its workflow denies every prompt with a message to finish within its tools", async () => {
+    const w = retroWorld();
+    const s = await clarifying(w);
+    await w.inc.stop(s.id);
+    await w.inc.idle();
+    expect(w.flows.started.at(-1)?.workflow.unattended).toBe(RETRO_UNATTENDED);
+    expect(RETRO_UNATTENDED).toContain("Finish");
+    // the incubator's other stages are attended: clarify asks its questions
+    expect(w.flows.started[0]?.workflow.unattended).toBeUndefined();
+  });
+
+  test("a retro left waiting on a prompt past the cap fails, and the next one starts", async () => {
+    const w = retroWorld();
+    const a = await clarifying(w);
+    const b = await clarifying(w);
+    await w.inc.stop(a.id);
+    await w.inc.stop(b.id);
+    await w.inc.idle();
+    const id = retroFlow(w, a.id).id;
+    w.flows.move(id, { status: "waiting" });
+    await w.inc.idle();
+    clock += RETRO_WAIT_MAX - 1;
+    w.inc.tick();
+    await w.inc.idle();
+    expect(now(w, a.id).retro?.state).toBe("running");
+    // back to work and waiting again: the clock starts over
+    w.flows.move(id, { status: "working" });
+    await w.inc.idle();
+    w.flows.move(id, { status: "waiting" });
+    await w.inc.idle();
+    clock += RETRO_WAIT_MAX - 1;
+    w.inc.tick();
+    await w.inc.idle();
+    expect(now(w, a.id).retro?.state).toBe("running");
+    clock += 1;
+    w.inc.tick();
+    await w.inc.idle();
+    expect(now(w, a.id).retro).toMatchObject({ state: "failed", reason: "the retro waited 15 minutes on a prompt no one answers" });
+    expect(w.flows.get(id)?.status).toBe("stopped");
+    expect(now(w, a.id).status).toBe("stopped");
+    expect(now(w, b.id).retro?.state).toBe("running");
+  });
+
+  test("a park retro still due when the sprout goes on is dropped; one due when it is stopped looks back on the end", async () => {
+    let why: string | null = null;
+    const w = retroWorld({ isolation: () => why });
+    const s = await parked(w);
+    why = "away";
+    clock += RETRO_PARK_WAIT;
+    w.inc.tick();
+    await w.inc.idle();
+    expect(now(w, s.id).retro?.state).toBe("due");
+    await w.inc.stop(s.id);
+    await w.inc.idle();
+    expect(now(w, s.id).retro).toMatchObject({ for: "end", state: "due" });
+  });
+
+  test("a restart follows a running retro's flow, runs a lost one again, and fails the third cut short", async () => {
+    const w = retroWorld();
+    const s = await clarifying(w);
+    await w.inc.stop(s.id);
+    await w.inc.idle();
+    // its flow came back: followed, and its end taken in
+    const next = world({ advice: new FakeAdvice(), now: () => clock });
+    next.workflows.set("retro", RETRO);
+    next.store.records = w.store.records;
+    next.seeds.files = w.seeds.files;
+    next.flows.flows = w.flows.flows;
+    for (const p of w.seeds.files.keys()) next.repos.add(p.replace("/root/", ""));
+    await next.inc.restore();
+    const after = await finish(next, s.id);
+    expect(after.retro?.state).toBe("done");
+
+    // its flow is gone: due again, and started
+    const w2 = retroWorld();
+    const s2 = await clarifying(w2);
+    await w2.inc.stop(s2.id);
+    await w2.inc.idle();
+    const lost = world({ advice: new FakeAdvice(), now: () => clock });
+    lost.workflows.set("retro", RETRO);
+    lost.store.records = w2.store.records;
+    lost.seeds.files = w2.seeds.files;
+    for (const p of w2.seeds.files.keys()) lost.repos.add(p.replace("/root/", ""));
+    await lost.inc.restore();
+    await lost.inc.idle();
+    expect(now(lost, s2.id).retro).toMatchObject({ state: "running", tries: 2 });
+
+    // a third start cut short fails
+    const rec = w2.store.records.get(s2.id);
+    if (!rec?.retro) throw new Error("no retro on record");
+    rec.retro = { ...rec.retro, state: "running", tries: 3 };
+    const third = world({ advice: new FakeAdvice(), now: () => clock });
+    third.workflows.set("retro", RETRO);
+    third.store.records = w2.store.records;
+    await third.inc.restore();
+    await third.inc.idle();
+    expect(now(third, s2.id).retro).toMatchObject({ state: "failed", reason: "the retro was cut short 3 times" });
+    expect(now(third, s2.id).status).toBe("stopped");
+  });
+
+  test("records from before phase 5 bring no retro at the first start", async () => {
+    const w = retroWorld();
+    const s = await parked(w);
+    const rec = w.store.records.get(s.id);
+    if (!rec) throw new Error("no record");
+    delete rec.parkedAt;
+    const old = world({ advice: new FakeAdvice(), now: () => clock + RETRO_PARK_WAIT * 10 });
+    old.workflows.set("retro", RETRO);
+    old.store.records = w.store.records;
+    old.seeds.files = w.seeds.files;
+    for (const p of w.seeds.files.keys()) old.repos.add(p.replace("/root/", ""));
+    await old.inc.restore();
+    old.inc.tick();
+    await old.inc.idle();
+    expect(now(old, s.id).retro).toBeUndefined();
+  });
+
+  test("a dismiss while the retro's record is being written removes the record once it lands, and starts no retro", async () => {
+    let release: () => void = () => {};
+    const held = new Promise<void>((r) => (release = r));
+    let writing = false;
+    const forgot: string[] = [];
+    const w = retroWorld({
+      share: {
+        inputs: async (seeds, id) => `${seeds}/.shared/inputs/${id}`,
+        workspace: async (seeds, _root, id) => `${seeds}/.shared/workspace/${id}`,
+        record: async (seeds, id) => {
+          writing = true;
+          await held;
+          return `${seeds}/.shared/record/${id}/record.json`;
+        },
+        forget: async (_seeds, id) => {
+          forgot.push(id);
+        },
+      },
+    });
+    const s = await clarifying(w);
+    await w.inc.stop(s.id);
+    for (let i = 0; i < 100 && !writing; i++) await Bun.sleep(1);
+    expect(writing).toBe(true);
+    await w.inc.dismiss(s.id);
+    expect(forgot).toEqual([s.id]);
+    release();
+    await w.inc.idle();
+    // the record written after the dismiss's forget is forgotten again
+    expect(forgot).toEqual([s.id, s.id]);
+    expect(w.flows.started.filter((f) => f.workflow.name === "retro")).toHaveLength(0);
+  });
+
+  test("dismiss stops a running retro", async () => {
+    const w = retroWorld();
+    const s = await clarifying(w);
+    await w.inc.stop(s.id);
+    await w.inc.idle();
+    const id = retroFlow(w, s.id).id;
+    await w.inc.dismiss(s.id);
+    expect(w.flows.get(id)?.status).toBe("stopped");
+  });
+
+  test("each flow's digest is kept when it ends, and the parks too, at most twenty", async () => {
+    const w = retroWorld();
+    const s = await parked(w);
+    expect(now(w, s.id).flows[0]?.digest).toMatchObject({ status: "failed", error: "the run failed" });
+    expect(now(w, s.id).parks).toEqual([{ at: 1_000, reason: "clarify failed: the run failed" }]);
+    for (let i = 0; i < 25; i++) {
+      await w.inc.resume(s.id, "retry");
+      await w.inc.idle();
+      w.flows.move(now(w, s.id).flows.at(-1)?.flowId ?? "", { status: "failed", error: `try ${i}` });
+      await w.inc.idle();
+    }
+    const parks = now(w, s.id).parks ?? [];
+    expect(parks).toHaveLength(20);
+    expect(parks.at(-1)?.reason).toBe("clarify failed: try 24");
   });
 });

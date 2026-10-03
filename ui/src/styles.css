@@ -669,6 +669,42 @@ body.resizing iframe {
 .inbox-body .ask {
   margin: 0;
 }
+.inbox-glyph.k-advice {
+  color: var(--moss);
+}
+.advice-list {
+  display: grid;
+  gap: 10px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.advice-offer {
+  display: grid;
+  gap: 4px;
+  padding-bottom: 8px;
+  border-bottom: 1px solid var(--hair);
+}
+.advice-offer:last-child {
+  border-bottom: 0;
+  padding-bottom: 0;
+}
+.advice-offer .dim {
+  color: var(--ink-faint);
+}
+.advice-lesson {
+  margin: 0;
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+.advice-edit summary {
+  font-size: 11px;
+  color: var(--ink-dim);
+  cursor: pointer;
+}
+.advice-file {
+  margin-bottom: 8px;
+}
 .inbox-qs {
   margin: 0;
   padding-left: 18px;

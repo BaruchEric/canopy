@@ -24,11 +24,13 @@ import {
   sproutTitle,
   withInputsRead,
   withWorkspaceRead,
+  withRecordRead,
+  recordLine,
   workspaceLine,
   urlWithoutSecret,
   withSummaries,
 } from "./sprout";
-import type { InputEntry, Sprout, Workflow } from "./types";
+import type { FlowDigest, InputEntry, Sprout, SproutRetro, Workflow } from "./types";
 
 const at = new Date(2026, 9, 1, 14, 3).getTime();
 
@@ -232,6 +234,9 @@ describe("slots and stages", () => {
     const next = withWorkspaceRead(wf, "/seeds/.shared/workspace/sp_1");
     expect(next.steps[0]?.tools).toEqual(["WebFetch", "Read(//seeds/.shared/workspace/sp_1/**)"]);
     expect(wf.steps[0]?.tools).toEqual(["WebFetch"]);
+    const rec = withRecordRead(wf, "/seeds/.shared/record/sp_1");
+    expect(rec.steps[0]?.tools).toEqual(["WebFetch", "Read(//seeds/.shared/record/sp_1/**)"]);
+    expect(recordLine("/seeds/.shared/record/sp_1/record.json")).toBe("This project's record is /seeds/.shared/record/sp_1/record.json.");
     expect(workspaceLine("/seeds/.shared/workspace/sp_1")).toBe(
       "The workspace's devhub manifest is /seeds/.shared/workspace/sp_1/manifest.json, its saved references are /seeds/.shared/workspace/sp_1/references.json and each project's README is in /seeds/.shared/workspace/sp_1/READMEs/.",
     );
@@ -267,6 +272,26 @@ describe("parseSproutRecord", () => {
     expect(parseSproutRecord(JSON.stringify(full))).toEqual(full);
     const stamped = { ...full, root: "/root" };
     expect(parseSproutRecord(JSON.stringify(stamped))).toEqual(stamped);
+  });
+
+  test("a retro, the parks and a flow's digest round-trip; a broken one is refused", () => {
+    const digest: FlowDigest = { status: "done", startedAt: 1, endedAt: 2, steps: [{ name: "Clarify", status: "passed", tries: 0 }], rewinds: [] };
+    const retro: SproutRetro = { for: "park", state: "done", at: 10, endedAt: 11, flowId: "r1", flowsSeen: 1, tries: 1, advice: [{ key: "k", lesson: "l" }] };
+    const withRetro: Sprout = {
+      ...full,
+      flows: [{ workflow: "clarify", flowId: "abcd1234", outcome: "done", digest }],
+      parkedAt: 9,
+      parks: [{ at: 9, reason: "why" }],
+      retro,
+    };
+    expect(parseSproutRecord(JSON.stringify(withRetro))).toEqual(withRetro);
+    const bad = (patch: Record<string, unknown>) => parseSproutRecord(JSON.stringify({ ...withRetro, ...patch }));
+    expect(bad({ retro: { ...retro, state: "later" } })).toBeNull();
+    expect(bad({ retro: { ...retro, for: "fun" } })).toBeNull();
+    expect(bad({ retro: { ...retro, advice: [{ key: 1 }] } })).toBeNull();
+    expect(bad({ parks: [{ at: "x" }] })).toBeNull();
+    expect(bad({ parkedAt: "x" })).toBeNull();
+    expect(bad({ flows: [{ workflow: "clarify", flowId: "a", digest: { status: "done" } }] })).toBeNull();
   });
 
   test("a record whose parts restore reads are malformed is null", () => {

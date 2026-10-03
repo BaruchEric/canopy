@@ -72,6 +72,20 @@ export function urlWithoutSecret(url: string): string {
   return `${scheme}${user ? `${user}@` : ""}${rest}`;
 }
 
+/** a url anywhere in a string: up to whitespace, a quote or an angle bracket */
+const URL_IN_TEXT = /[a-z][a-z0-9+.-]*:\/\/[^\s"'<>]+/gi;
+
+/** a JSON value with every url in every string, whole or inside free text,
+ *  passed through `urlWithoutSecret` */
+export function withoutSecrets(v: unknown): unknown {
+  if (typeof v === "string") return v.replace(URL_IN_TEXT, (u) => urlWithoutSecret(u));
+  if (Array.isArray(v)) return v.map(withoutSecrets);
+  if (typeof v === "object" && v !== null) {
+    return Object.fromEntries(Object.entries(v).map(([k, x]) => [k, withoutSecrets(x)]));
+  }
+  return v;
+}
+
 const ID = /^sp_[0-9a-f]{12}$/;
 export const isSproutId = (id: string): boolean => ID.test(id);
 
@@ -373,6 +387,16 @@ export function withWorkspaceRead(wf: Workflow, dir: string): Workflow {
   return { ...wf, steps: wf.steps.map((st) => ({ ...st, tools: [...st.tools, rule] })) };
 }
 
+/** A copy of the workflow whose every step may also read the record canopy
+ *  shared for the sprout's retro (`.shared/record/<id>`), and nothing else. */
+export function withRecordRead(wf: Workflow, dir: string): Workflow {
+  const rule = `Read(/${dir}/**)`;
+  return { ...wf, steps: wf.steps.map((st) => ({ ...st, tools: [...st.tools, rule] })) };
+}
+
+/** the retro's note: where its record is */
+export const recordLine = (file: string): string => `This project's record is ${file}.`;
+
 /** the stage note's sentence naming what withWorkspaceRead opens */
 export const workspaceLine = (dir: string): string =>
   `The workspace's devhub manifest is ${dir}/manifest.json, its saved references are ${dir}/references.json and each project's README is in ${dir}/READMEs/.`;
@@ -459,7 +483,44 @@ function isInputEntry(e: unknown): boolean {
   );
 }
 
-const isSproutFlow = (f: unknown): boolean => isObj(f) && typeof f["workflow"] === "string" && typeof f["flowId"] === "string" && optStr(f["outcome"]);
+const isStepDigest = (st: unknown): boolean => isObj(st) && typeof st["name"] === "string" && typeof st["status"] === "string" && isNum(st["tries"]) && optStr(st["reason"]);
+
+const isDigest = (d: unknown): boolean =>
+  isObj(d) &&
+  typeof d["status"] === "string" &&
+  isNum(d["startedAt"]) &&
+  optNum(d["endedAt"]) &&
+  optStr(d["error"]) &&
+  Array.isArray(d["steps"]) &&
+  d["steps"].every(isStepDigest) &&
+  Array.isArray(d["rewinds"]);
+
+const isSproutFlow = (f: unknown): boolean =>
+  isObj(f) && typeof f["workflow"] === "string" && typeof f["flowId"] === "string" && optStr(f["outcome"]) && (f["digest"] === undefined || isDigest(f["digest"]));
+
+const isPark = (p: unknown): boolean => isObj(p) && isNum(p["at"]) && typeof p["reason"] === "string";
+
+const RETRO_FORS: readonly string[] = ["end", "park"];
+const RETRO_STATES: readonly string[] = ["due", "running", "done", "failed"];
+const isLesson = (a: unknown): boolean => isObj(a) && typeof a["key"] === "string" && typeof a["lesson"] === "string";
+
+const isRetro = (r: unknown): boolean => {
+  if (!isObj(r)) return false;
+  const { for: kind, state, at, endedAt, flowId, flowsSeen, tries, advice, reason } = r;
+  return (
+    typeof kind === "string" &&
+    RETRO_FORS.includes(kind) &&
+    typeof state === "string" &&
+    RETRO_STATES.includes(state) &&
+    isNum(at) &&
+    optNum(endedAt) &&
+    optStr(flowId) &&
+    isNum(flowsSeen) &&
+    isNum(tries) &&
+    optStr(reason) &&
+    (advice === undefined || (Array.isArray(advice) && advice.every(isLesson)))
+  );
+};
 
 const isOption = (o: unknown): boolean => isObj(o) && typeof o["label"] === "string" && typeof o["description"] === "string";
 
@@ -494,6 +555,9 @@ export function parseSproutRecord(text: string): Sprout | null {
   const { pick, privateRepo, vercelProject, url } = raw;
   if (pick !== undefined && !isPick(pick)) return null;
   if (!optStr(privateRepo) || !optStr(vercelProject) || !optStr(url)) return null;
+  const { parkedAt, parks, retro } = raw;
+  if (!optNum(parkedAt) || (parks !== undefined && !(Array.isArray(parks) && parks.every(isPark)))) return null;
+  if (retro !== undefined && !isRetro(retro)) return null;
   // canopy's own file: past these checks it is taken as written
   return raw as unknown as Sprout;
 }
