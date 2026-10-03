@@ -62,7 +62,15 @@ beforeAll(async () => {
   await Bun.$`mkdir -p ${seed} && git -C ${seed} init -q -b main`.quiet();
   await Bun.write(join(seed, "a.txt"), "a\n");
   await Bun.$`git -C ${seed} add a.txt && git -C ${seed} -c user.name=a -c user.email=a@b commit -qm one`.quiet();
-  server = await startServer({ root, port: 0, chan: null, harnesses: ["claude"], runner: { driver: (h) => new HoldingDriver(h) } });
+  server = await startServer({
+    root,
+    port: 0,
+    chan: null,
+    harnesses: ["claude"],
+    // the seed's runs start here, as on a backend with CANOPY_INCUBATOR_UNISOLATED=1
+    incubator: { stage: null, unisolated: true },
+    runner: { driver: (h) => new HoldingDriver(h) },
+  });
   // after the server's own hook, which this stands in for
   setSeedBusy(() => busy);
 });

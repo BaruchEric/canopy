@@ -239,8 +239,9 @@ export class StageClient {
   }
 
   /** A hello now and every `everyMs`, one at a time; `onUp` on the first
-   *  answer and on each answer after a miss. Returns the stop. */
-  watch(everyMs = 15_000, onUp?: () => void): () => void {
+   *  answer and on each answer after a miss, `onDown` on each miss after an
+   *  answer. Returns the stop. */
+  watch(everyMs = 15_000, onUp?: () => void, onDown?: () => void): () => void {
     let up = false;
     let stopped = false;
     let beating = false;
@@ -251,15 +252,17 @@ export class StageClient {
         const now = (await this.hello()) !== null;
         if (stopped) return;
         const back = now && !up;
+        const gone = !now && up;
         up = now;
         if (back) onUp?.();
+        if (gone) onDown?.();
       } finally {
         beating = false;
       }
     };
     const tick = (): void => {
       beat().catch(() => {
-        // onUp threw; the next tick still runs
+        // onUp or onDown threw; the next tick still runs
       });
     };
     tick();

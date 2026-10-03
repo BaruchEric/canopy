@@ -47,6 +47,9 @@ export interface InboxItem {
   budget?: true;
   /** a step the stage runner's absence parked: continuing runs it again */
   stage?: true;
+  /** with `stage`: it was the step's check that found the runner away, so
+   *  continuing runs the check alone */
+  stageCheck?: true;
 }
 
 export interface InboxContext {
@@ -172,6 +175,7 @@ function flowItem(flow: Flow, runs: Readonly<Record<string, Run>>, ctx: InboxCon
     until: null,
     ...(flow.parkedFor === "budget" ? { budget: true as const } : {}),
     ...(flow.parkedFor === "stage" ? { stage: true as const } : {}),
+    ...(flow.parkedFor === "stage" && flow.stageCheck ? { stageCheck: true as const } : {}),
   };
 }
 

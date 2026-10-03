@@ -56,7 +56,8 @@ async function server(): Promise<{ port: number; stop: () => void }> {
     port: 0,
     chan: null,
     harnesses: ["claude"],
-    incubator: { autostart: true, transcribe: null, notes: null },
+    // the stages run here, as on a backend with CANOPY_INCUBATOR_UNISOLATED=1
+    incubator: { autostart: true, transcribe: null, notes: null, stage: null, unisolated: true },
     runner: { driver: (h) => new HoldingDriver(h) },
   });
 }

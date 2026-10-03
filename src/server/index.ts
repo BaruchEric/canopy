@@ -152,7 +152,9 @@ import {
   type TermInfo,
   TERM_GONE,
 } from "../core/types";
-import type { About, RepoStatus } from "../core/types";
+import type { About, IncubatorStages, RepoStatus } from "../core/types";
+import { StageClient } from "../core/stageclient";
+import { STAGE_AWAY } from "../core/stagewire";
 import { DEFAULT_IGNORE } from "../core/scan";
 import { ChanHub, PUT_MAX } from "./tailchan";
 import { RegistryHub } from "./registry";
@@ -2722,8 +2724,20 @@ export async function startServer(opts: {
   registry?: { scanEvery?: number; relistEvery?: number; lister?: () => Promise<AgentProc[]>; container?: boolean };
   /** the asks hub's timings, shrunk by tests */
   asks?: { closedKeep?: number; relistEvery?: number; sweepEvery?: number };
-  /** the incubator: tests turn autostart off and pass a speech model and vault of their own */
-  incubator?: { autostart?: boolean; transcribe?: Transcriber | null; notes?: NoteSink | null; ship?: Shipper | null };
+  /** the incubator: tests turn autostart off and pass a speech model and
+   *  vault of their own; `stage` is the stage runner's client in place of
+   *  CANOPY_STAGE_SOCKET's (null for none), `unisolated` stands in for
+   *  CANOPY_INCUBATOR_UNISOLATED=1, and `stageEvery` is how often the
+   *  runner is asked whether it answers */
+  incubator?: {
+    autostart?: boolean;
+    transcribe?: Transcriber | null;
+    notes?: NoteSink | null;
+    ship?: Shipper | null;
+    stage?: StageClient | null;
+    unisolated?: boolean;
+    stageEvery?: number;
+  };
   /** the runner's driver per harness; tests swap in a stand-in agent */
   runner?: { driver?: (harness: Harness) => RunDriver };
 }): Promise<{ port: number; stop: () => void }> {
@@ -2770,6 +2784,33 @@ export async function startServer(opts: {
     : login
       ? (h: Harness) => login.missing(h)
       : async (h: Harness) => !availableHarnesses().includes(h);
+  // Stages fail closed. With CANOPY_STAGE_SOCKET set, a stage runs only
+  // through the stage runner, and waits while it is away. Without it, a
+  // stage runs here only under CANOPY_INCUBATOR_UNISOLATED=1; otherwise no
+  // stage starts at all.
+  const socket = process.env["CANOPY_STAGE_SOCKET"];
+  const stage: StageClient | null = opts.incubator?.stage !== undefined ? opts.incubator.stage : socket ? new StageClient(socket) : null;
+  const unisolated = opts.incubator?.unisolated ?? process.env["CANOPY_INCUBATOR_UNISOLATED"] === "1";
+  const isolation = (): string | null =>
+    stage
+      ? stage.harnessesNow()
+        ? null
+        : STAGE_AWAY
+      : unisolated
+        ? null
+        : "stages need the stage runner (CANOPY_STAGE_SOCKET), or CANOPY_INCUBATOR_UNISOLATED=1";
+  /** a stage's runs and checks: the runner's client while it answers, null
+   *  while it is away (the stage waits), undefined to run here unisolated */
+  const stageFor = (): StageClient | null | undefined => (stage ? (stage.harnessesNow() ? stage : null) : unisolated ? undefined : null);
+  if (process.env["NODE_ENV"] !== "test") {
+    console.log(
+      stage
+        ? `stages: isolated through ${socket ?? "the stage runner"}`
+        : unisolated
+          ? "stages: not isolated (CANOPY_INCUBATOR_UNISOLATED=1)"
+          : "stages: off until the stage runner is set up",
+    );
+  }
   // every run is told which backend started it (CANOPY_BACKEND), and codex
   // hears canopy's version in its handshake
   const runnerOpts = {
@@ -2777,6 +2818,7 @@ export async function startServer(opts: {
     version: readPkg().version ?? "0",
     // a seed's runs are an incubator stage's: no GitHub login of canopy's
     stage: (repo: Repo) => isSeedPath(root, repo.path),
+    stageExec: stageFor,
     ...(opts.runner?.driver ? { driver: opts.runner.driver } : {}),
   };
   /** seeds with a check running, by the seed's path */
@@ -2824,7 +2866,7 @@ export async function startServer(opts: {
       // canopy runs no git in a seed while its check runs there (seedgit.ts)
       seedChecks.set(repo.path, (seedChecks.get(repo.path) ?? 0) + 1);
       try {
-        return await runCheck(repo, command, true);
+        return await runCheck(repo, command, true, stageFor());
       } finally {
         const n = (seedChecks.get(repo.path) ?? 1) - 1;
         if (n > 0) seedChecks.set(repo.path, n);
@@ -3000,11 +3042,28 @@ export async function startServer(opts: {
         // CANOPY_INCUBATOR_AUTOSTART=0 holds every sprout queued: a scratch
         // server for a UI check, or a pause while something is wrong
         autostart: opts.incubator?.autostart ?? process.env["CANOPY_INCUBATOR_AUTOSTART"] !== "0",
+        isolation,
+        onWaiting: () => tellStages(),
       }),
       () => sprouts.list(),
+      () => stagesNow(),
     ),
     backendName: selfName(cfg.self, hostname()),
     apiUrl: null,
+  };
+  /** where stages run now, for the route and the `stages` event */
+  const stagesNow = (): IncubatorStages => ({
+    isolated: stage !== null && stage.harnessesNow() !== null,
+    waiting: state.incubator.inc.waiting(),
+  });
+  let toldStages = JSON.stringify(stagesNow());
+  /** the `stages` event, only when what it says changed */
+  const tellStages = (): void => {
+    const now = stagesNow();
+    const said = JSON.stringify(now);
+    if (said === toldStages) return;
+    toldStages = said;
+    broadcast(state, { type: "stages", stages: now });
   };
   // A seed is busy while a run of its, one of its checks, or a stage
   // process (until the stage runner says the seed is quiet) is alive there:
@@ -3149,7 +3208,10 @@ export async function startServer(opts: {
         const status =
           err instanceof HttpError || err instanceof HistoryError || err instanceof LauncherError
             ? err.status
-            : 500;
+            : // a stage while the stage runner is away waits; matched by name across modules
+              err instanceof Error && err.name === "StageAwayError"
+              ? 503
+              : 500;
         return json(
           { error: String(err instanceof Error ? err.message : err) },
           status,
@@ -3340,6 +3402,11 @@ export async function startServer(opts: {
     console.error(`flows: could not lock ${flowsDir()}: ${String(err instanceof Error ? err.message : err)}`);
     return { owner: false, holder: 0 };
   });
+  // One bounded hello before the flows come back and the sprouts are
+  // pumped, so a flow restored mid-step finds a runner compose started
+  // beside canopy. If it does not answer, that flow parks and the sprouts
+  // wait; the watch below starts them once it does.
+  if (stage) await stage.hello(10_000);
   if (flowsLock.owner) {
     flowFiles = new FlowFiles(root);
     state.flows.restore(
@@ -3357,6 +3424,20 @@ export async function startServer(opts: {
       console.error(`flows: canopy pid ${flowsLock.holder} keeps the records in ${flowsDir()}; flows started here are not kept across a restart`);
     }
   }
+  const stopStageWatch = stage
+    ? stage.watch(
+        opts.incubator?.stageEvery ?? 15_000,
+        () => {
+          state.incubator.inc.pump();
+          tellStages();
+        },
+        () => {
+          state.incubator.inc.pump();
+          tellStages();
+        },
+      )
+    : null;
+  tellStages();
   const remoteTimer = setInterval(() => {
     void refreshRemote(state)
       .catch((err) => console.error("canopy: remote refresh", err))
@@ -3401,6 +3482,7 @@ export async function startServer(opts: {
       clearInterval(remoteTimer);
       clearTimeout(firstActivity);
       for (const t of state.timers.values()) clearTimeout(t);
+      stopStageWatch?.();
       // before the flows stop, so their ends park no sprout
       state.incubator.detach();
       state.flows.detach();

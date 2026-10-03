@@ -134,7 +134,22 @@ describe("a stage check", () => {
     expect(await runCheck({ path: "/w/_incubator/coin" }, "bun test", true, client)).toEqual({ exit: 0, output: "ok" });
     // no env of canopy's: the runner builds the child's own
     expect(calls).toEqual([{ argv: ["sh", "-lc", "bun test"], cwd: "/w/_incubator/coin" }]);
-    expect(await runCheck({ path: "/w/_incubator/coin" }, "bun test", true, null)).toEqual({ exit: 127, output: "the stage runner is not answering" });
+    expect(await runCheck({ path: "/w/_incubator/coin" }, "bun test", true, null)).toEqual({ exit: 127, output: "the stage runner is not answering", away: true });
+  });
+
+  test("a check whose connection fails is away only when a hello finds no runner either", async () => {
+    let up = false;
+    const client = {
+      exec: async () => ({ code: 127, stdout: "", stderr: "the stage runner is not answering: connect ENOENT /s.sock\n" }),
+      hello: async () => (up ? ["claude"] : null),
+    } as unknown as StageClient;
+    const away = await runCheck({ path: "/w/_incubator/coin" }, "bun test", true, client);
+    expect(away).toMatchObject({ exit: 127, away: true });
+    up = true;
+    // the runner answers: the words came from the command, which is a failed check
+    const said = await runCheck({ path: "/w/_incubator/coin" }, "bun test", true, client);
+    expect(said.exit).toBe(127);
+    expect(said.away).toBeUndefined();
   });
 
   test("its output is capped like a local check's, stderr after stdout", async () => {

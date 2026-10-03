@@ -94,7 +94,8 @@ beforeAll(async () => {
     port: 0,
     chan: null,
     harnesses: ["claude"],
-    incubator: { autostart: false, transcribe: async () => "count the quarters", notes: null, ship: null },
+    // no stage starts here (autostart is off); stage: null keeps a shell's CANOPY_STAGE_SOCKET out of it
+    incubator: { autostart: false, transcribe: async () => "count the quarters", notes: null, ship: null, stage: null },
   });
 });
 

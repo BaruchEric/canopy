@@ -140,12 +140,12 @@ function InboxRow({
                     item.budget
                       ? "The budget is spent; this lets one more step run, then it parks again"
                       : item.stage
-                        ? "The stage runner was not answering; this runs the step again, and it parks again if the runner is still away"
+                        ? `The stage runner was not answering; this runs the ${item.stageCheck ? "check" : "step"} again, and it parks again if the runner is still away`
                         : undefined
                   }
                   onClick={() => answer({ choice: "continue" })}
                 >
-                  {item.budget ? "allow one more step" : item.stage ? "run the step again" : "continue"}
+                  {item.budget ? "allow one more step" : item.stage ? (item.stageCheck ? "run the check again" : "run the step again") : "continue"}
                 </button>
                 {!item.budget && !item.stage && (
                   <button type="button" className="mini" disabled={busy} onClick={() => answer({ choice: "retry" })}>

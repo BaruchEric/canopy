@@ -6548,6 +6548,20 @@ span.effective-flag:not(:first-child) {
   flex-direction: column;
   overflow: auto;
 }
+.stages-word {
+  color: var(--ink-dim);
+  font-size: 12px;
+  white-space: nowrap;
+}
+.stages-word.not {
+  color: var(--rust);
+}
+.stages-waiting {
+  margin: 0;
+  padding: 6px 16px 0;
+  color: var(--rust);
+  font-size: 12px;
+}
 .incubator-empty {
   margin: 48px auto;
   max-width: 34rem;

@@ -71,10 +71,30 @@ function SproutCard({ id }: { id: string }) {
   );
 }
 
+/** Whether the stages run isolated, the stage runner's container with no
+ *  token of canopy's, or not; nothing from a backend too old to say. */
+function StagesWord() {
+  const stages = useStore((s) => s.stages);
+  if (!stages) return null;
+  return stages.isolated ? (
+    <span className="stages-word" title="Stages run in the stages container through the stage runner (CANOPY_STAGE_SOCKET), where none of canopy's tokens are.">
+      stages isolated
+    </span>
+  ) : (
+    <span
+      className="stages-word not"
+      title="Stages are not isolated: either CANOPY_INCUBATOR_UNISOLATED=1 runs them here with canopy's tokens, or the stage runner (CANOPY_STAGE_SOCKET) is away or not set up and they wait."
+    >
+      stages not isolated
+    </span>
+  );
+}
+
 export function IncubatorView({ onGit }: { onGit?: () => void }) {
   const ready = useStore((s) => s.sproutsReady);
   const ids = useStore(useShallow((s) => sortSprouts(Object.values(s.sprouts)).map((x) => x.id)));
   const show = useStore((s) => s.showSprout);
+  const waiting = useStore((s) => s.stages?.waiting ?? null);
   // `canopy new` prints a link to its project: open it once the list is in
   useEffect(() => {
     const id = sproutHere(window.location.search);
@@ -86,10 +106,12 @@ export function IncubatorView({ onGit }: { onGit?: () => void }) {
     <section className="incubator-view" aria-label="Incubator">
       <div className="agents-bar">
         <NewProjectButton />
+        <StagesWord />
         <span className="agents-has">
           <InboxChip onGit={onGit} />
         </span>
       </div>
+      {waiting && <p className="stages-waiting">queued: {waiting}</p>}
       {!ready ? (
         <p className="sheet-empty">The home backend has no incubator to show, or has not answered yet.</p>
       ) : ids.length === 0 ? (

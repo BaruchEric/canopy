@@ -62,6 +62,7 @@ import type {
   TermInfo,
   WorkflowEntry,
   Workspace,
+  IncubatorStages,
   Sprout,
   SproutDetail,
 } from "../../src/core/types";
@@ -447,6 +448,7 @@ export const api = {
     req<Ask>(homeName(), "/api/asks/answer", { method: "POST", headers: keyHeaders(key), body: JSON.stringify({ id, ...answer, client: clientId() }) }),
   /** the incubator, the home backend's alone */
   sprouts: () => req<Sprout[]>(homeName(), "/api/incubator"),
+  incubatorStages: () => req<IncubatorStages>(homeName(), "/api/incubator/stages"),
   sprout: (id: string) => req<SproutDetail>(homeName(), `/api/incubator/one?id=${encodeURIComponent(id)}`),
   /** multipart, so a voice memo or an image goes as it is */
   newSprout: (form: FormData) => req<Sprout>(homeName(), "/api/incubator", { method: "POST", body: form }),

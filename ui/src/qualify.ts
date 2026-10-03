@@ -120,6 +120,7 @@ export function qEvent(q: Q, ev: ServerEvent): ServerEvent {
     // other backend's
     case "incubator":
     case "incubator-gone":
+    case "stages":
       return ev;
   }
 }

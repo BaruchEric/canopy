@@ -177,7 +177,8 @@ function Gate({ flow, step, onChoose }: { flow: Flow; step: FlowStep; onChoose: 
   const budget = budgetWord(flow);
   const rewinds = rewindLines(flow);
   const overBudget = flow.parkedFor === "budget";
-  // the stage runner was away: the one way on is the same step again
+  // the stage runner was away: the one way on is the same step again, or
+  // its check alone when that is what found the runner away
   const stageAway = flow.parkedFor === "stage";
   return (
     <div className="gate">
@@ -202,7 +203,9 @@ function Gate({ flow, step, onChoose }: { flow: Flow; step: FlowStep; onChoose: 
           {overBudget
             ? "allow one more step"
             : stageAway
-              ? "run the step again"
+              ? flow.stageCheck
+                ? "run the check again"
+                : "run the step again"
               : last
                 ? "accept and finish"
                 : `continue to ${flow.steps[flow.current + 1]?.name ?? "the next step"}`}

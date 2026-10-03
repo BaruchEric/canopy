@@ -131,26 +131,32 @@ describe("the stage client", () => {
     expect(client.harnessesNow()).toEqual(expect.any(Array));
   });
 
-  test("watch calls onUp again on each answer after a miss, and harnessesNow follows", async () => {
+  test("watch calls onUp again on each answer after a miss, onDown on each miss after an answer, and harnessesNow follows", async () => {
     const sock = join(dir, "later.sock");
     const later = new StageClient(sock);
     let ups = 0;
-    const stopWatch = later.watch(30, () => ups++);
+    let downs = 0;
+    const stopWatch = later.watch(30, () => ups++, () => downs++);
     await Bun.sleep(100);
     expect(ups).toBe(0);
+    // never up yet, so not down either
+    expect(downs).toBe(0);
     expect(later.harnessesNow()).toBe(null);
     let stop = await runner(sock);
     await until(() => ups === 1);
     expect(ups).toBe(1);
     expect(later.harnessesNow()).toEqual(expect.any(Array));
     await stop();
-    await until(() => later.harnessesNow() === null);
+    await until(() => downs === 1);
     expect(later.harnessesNow()).toBe(null);
+    await Bun.sleep(100);
+    expect(downs).toBe(1);
     stop = await runner(sock);
     await until(() => ups === 2);
     stopWatch();
     await stop();
     expect(ups).toBe(2);
+    expect(downs).toBe(1);
   }, 20_000);
 
   test("hello answers, and a dead socket reads as not answering", async () => {

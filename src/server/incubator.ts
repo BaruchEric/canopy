@@ -9,7 +9,7 @@
  */
 import { INPUT_TOTAL_MAX, inputsIndex, isSeedRepoId, isSproutId } from "../core/sprout";
 import { IncubatorError, type Incubator, type Intake, type IntakeFile } from "../core/incubator";
-import type { Flow, Sprout, SproutDetail } from "../core/types";
+import type { Flow, IncubatorStages, Sprout, SproutDetail } from "../core/types";
 
 const json = (data: unknown, status = 200) =>
   new Response(JSON.stringify(data), { status, headers: { "content-type": "application/json" } });
@@ -95,6 +95,8 @@ export class IncubatorHub {
     readonly inc: Incubator,
     /** this root's records on disk, what a server without the lock lists */
     private readonly records: () => Promise<Sprout[]>,
+    /** where stages run now, which any server can say */
+    private readonly stages: () => IncubatorStages,
   ) {}
 
   onFlow(flow: Flow): void {
@@ -148,6 +150,7 @@ export class IncubatorHub {
     if (path !== "/api/incubator" && !path.startsWith("/api/incubator/")) return null;
     const method = req.method;
     const id = url.searchParams.get("id") ?? "";
+    if (path === "/api/incubator/stages" && method === "GET") return json(this.stages());
     if (this.keeping.kind !== "owner") return this.readOnly(path, method, id);
     try {
       if (path === "/api/incubator" && method === "GET") return json(this.inc.list());

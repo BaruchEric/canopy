@@ -1056,6 +1056,70 @@ describe("the stage runner away", () => {
     expect(flows.get(f.id)?.parkedFor).toBeUndefined();
   });
 
+  const BUILD_CHECKED = wf(`---
+blurb: b
+---
+
+## Build
+check: bun test
+retries: 1
+
+Build it.
+
+## Ship
+
+Ship it.
+`);
+
+  test("a check that finds the stage runner away parks without spending a retry, and resume reruns the check alone", async () => {
+    let calls = 0;
+    const s = setup({ check: () => (++calls === 1 ? { exit: 127, output: STAGE_AWAY, away: true } : { exit: 0, output: "ok" }) });
+    const f = s.flows.start(seedRepo(), BUILD_CHECKED, "", DEFAULT_AGENT);
+    s.runner.end("run1", "done", "built it");
+    await flush();
+    let now = s.flows.get(f.id);
+    expect(now?.status).toBe("gated");
+    expect(now?.parkedFor).toBe("stage");
+    expect(now?.stageCheck).toBe(true);
+    expect(now?.tries).toBeUndefined();
+    expect(now?.steps[0]?.reason).toBe(STAGE_AWAY);
+    expect(now?.steps[0]?.summary).toBe("built it");
+    s.flows.resume(f.id, "continue");
+    await flush();
+    now = s.flows.get(f.id);
+    expect(s.checks).toEqual(["bun test", "bun test"]);
+    // the agent's step is not run again: the next run is the Ship step's
+    expect(s.runner.specs).toHaveLength(2);
+    expect(s.runner.specs[1]?.verb).toContain("Ship");
+    expect(now?.parkedFor).toBeUndefined();
+    expect(now?.stageCheck).toBeUndefined();
+    expect(now?.steps[0]).toMatchObject({ status: "passed", summary: "built it", check: { command: "bun test", exit: 0, output: "ok" } });
+    expect(now?.steps[1]?.status).toBe("running");
+  });
+
+  test("a check-only step that finds the runner away parks, and resume reruns its check, not the step it goes back to", async () => {
+    let calls = 0;
+    const s = setup({ check: () => (++calls === 1 ? { exit: 127, output: STAGE_AWAY, away: true } : { exit: 0, output: "ok" }) });
+    const f = s.flows.start(seedRepo(), CHECKED_RETRY, "", DEFAULT_AGENT);
+    s.runner.end("run1", "done", "built");
+    await flush();
+    expect(s.flows.get(f.id)).toMatchObject({ status: "gated", parkedFor: "stage", current: 1 });
+    s.flows.resume(f.id, "retry");
+    await flush();
+    expect(s.runner.specs).toHaveLength(1);
+    expect(s.flows.get(f.id)?.status).toBe("done");
+    expect(s.flows.get(f.id)?.tries).toBeUndefined();
+  });
+
+  test("a check that only prints the runner's words and exits 127 is a failed check, not a park", async () => {
+    const s = setup({ check: () => ({ exit: 127, output: STAGE_AWAY }) });
+    const f = s.flows.start(seedRepo(), BUILD_CHECKED, "", DEFAULT_AGENT);
+    s.runner.end("run1", "done", "built it");
+    await flush();
+    expect(s.flows.get(f.id)?.parkedFor).toBeUndefined();
+    expect(s.flows.get(f.id)?.tries).toEqual({ Build: 1 });
+  });
+
   test("a step run that ends because the stage runner went away parks too", async () => {
     const { runner, flows } = setup();
     const f = flows.start(seedRepo(), TWO, "", DEFAULT_AGENT);

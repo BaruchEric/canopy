@@ -63,6 +63,8 @@ const spentOf = (flow: Flow): { runs: number; workMs: number } => (flow.spent ??
 export interface CheckResult {
   exit: number;
   output: string;
+  /** the check never ran: the stage runner was not answering */
+  away?: boolean;
 }
 
 /** What a flow leaves on disk: the flow, the workflow it started with (so a
@@ -304,14 +306,25 @@ export class Flows {
       return live.flow;
     }
     if (live.flow.parkedFor === "stage" && choice !== "stop") {
-      // continue and retry both mean: try the step again, the stage runner
-      // being back or not (if not, it parks again)
+      // continue and retry both mean: try again, the stage runner being back
+      // or not (if not, it parks again). A check that found it away runs
+      // alone, so the agent's work and its summary stand.
       delete live.flow.parkedFor;
+      if (live.flow.stageCheck) {
+        delete live.flow.stageCheck;
+        delete step.check;
+        delete step.reason;
+        this.clock(live, true);
+        live.flow.status = "working";
+        void this.check(live);
+        return live.flow;
+      }
       this.resetStep(step);
       void this.runStep(live);
       return live.flow;
     }
     delete live.flow.parkedFor;
+    delete live.flow.stageCheck;
     if (choice === "stop") {
       step.status = "failed";
       step.reason = "stopped at the gate";
@@ -734,6 +747,13 @@ export class Flows {
     this.emit(live);
     const r = await this.hooks.check(live.repo, def.check);
     if (!isFlowActive(live.flow)) return;
+    if (r.away && isSeedId(live.repo.id)) {
+      // the check never ran: it waits for the stage runner, and no retry is spent
+      live.flow.parkedFor = "stage";
+      live.flow.stageCheck = true;
+      this.park(live, STAGE_AWAY);
+      return;
+    }
     step.check = { command: def.check, exit: r.exit, output: r.output };
     if (r.exit !== 0) {
       const reason = `check failed with exit ${r.exit}`;

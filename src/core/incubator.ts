@@ -136,6 +136,13 @@ export interface IncubatorDeps {
   onGone: (id: string) => void;
   /** false keeps every sprout queued: the server tests drive the routes with no agent */
   autostart?: boolean;
+  /** Why no stage may start now (the stage runner is away, or stages are
+   *  not set up to run anywhere), or null to go. While it says why, a
+   *  queued sprout stays queued and holds no slot; canopy's own ship still
+   *  goes. The server calls `pump` again once the runner answers. */
+  isolation?: () => string | null;
+  /** the reason queued sprouts wait, each time it changes (`waiting`) */
+  onWaiting?: (why: string | null) => void;
   now?: () => number;
   newId?: () => string;
   log?: (line: string) => void;
@@ -182,8 +189,15 @@ export class Incubator {
    *  its userinfo. A restart before the clone clones the clean url. */
   private readonly cloneFrom = new Map<string, string>();
   private detached = false;
+  /** why the last pump held a queued stage back, or null */
+  private held: string | null = null;
 
   constructor(private readonly deps: IncubatorDeps) {}
+
+  /** why queued sprouts wait for their next stage, or null when none does */
+  waiting(): string | null {
+    return this.held;
+  }
 
   private now(): number {
     return (this.deps.now ?? Date.now)();
@@ -716,21 +730,34 @@ export class Incubator {
 
   /* ---------- stages ---------- */
 
-  /** starts queued, prepared sprouts, oldest first, while a slot is free */
-  private pump(): void {
+  /** Starts queued, prepared sprouts, oldest first, while a slot is free.
+   *  While `isolation` says why no stage may start, a sprout whose next
+   *  step is a stage stays queued and claims no slot; one at canopy's own
+   *  ship still goes. */
+  pump(): void {
     if (this.detached || this.deps.autostart === false) return;
+    const why = this.deps.isolation?.() ?? null;
+    let held: string | null = null;
     let free = SPROUT_CONCURRENCY - this.list().filter((s) => holdsSlot(s, this.currentFlow(s)?.status)).length;
     const queued = this.list()
       .filter((s) => s.status === "queued" && s.prepared && !this.busy.has(s.id))
       .sort((a, b) => a.createdAt - b.createdAt);
     for (const s of queued) {
-      if (free <= 0) return;
-      free -= 1;
+      if (free <= 0) break;
       const name = nextWorkflow(s);
+      if (why !== null && name !== SHIP) {
+        held = why;
+        continue;
+      }
+      free -= 1;
       // the slot is claimed here, before anything awaits
       s.status = statusFor(name, undefined);
       delete s.parked;
       this.track(name === SHIP ? this.ship(s) : this.startStage(s, name));
+    }
+    if (held !== this.held) {
+      this.held = held;
+      this.deps.onWaiting?.(held);
     }
   }
 

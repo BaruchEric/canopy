@@ -20,7 +20,7 @@ import { boardOrder, invertPick, pickWhere, rangeIds, setPick, togglePick } from
 import { appendFeed, describeEvent, type FeedEntry, type FeedSnapshot } from "./feed";
 import { mergeAction } from "./peers";
 import { convOf, isUnread, mergeMessages } from "./chan";
-import type { AgentCard, Ask, ChanMessage, Presence, Sprout, TailchanInfo } from "../../src/core/types";
+import type { AgentCard, Ask, ChanMessage, IncubatorStages, Presence, Sprout, TailchanInfo } from "../../src/core/types";
 import { mergeAsks, mergeInbox, replaceAsks, toAskAnswer, toRunAnswer, type InboxAnswer, type InboxItem } from "./inbox";
 import { replaceSprouts, staleSprout } from "./sprouts";
 import { cardsByRepoCard, mergeCards, replaceCards } from "./agentcards";
@@ -573,6 +573,9 @@ interface CanopyState {
   sprouts: Record<string, Sprout>;
   /** whether home answered the incubator's list */
   sproutsReady: boolean;
+  /** where home runs the incubator's stages; null until it says (an older
+   *  backend never does) */
+  stages: IncubatorStages | null;
   /** whether the inbox popover is up, and the item it opened on */
   inboxOpen: boolean;
   inboxFocus: string | null;
@@ -1160,6 +1163,8 @@ const REGISTRY_RETRY_MAX = 5 * 60_000;
    closed while it was on its way */
 let sproutEvents = 0;
 const sproutHeard = new Map<string, number>();
+/* and the stages events, so a read on its way never undoes a newer one */
+let stagesEvents = 0;
 
 /** an action's answer about a sprout, applied like its event unless an
  *  event already moved the sprout on past it (checked first, so a stale
@@ -1297,6 +1302,7 @@ export const useStore = create<CanopyState>((set, get) => ({
   presence: null,
   sprouts: {},
   sproutsReady: false,
+  stages: null,
   inboxOpen: false,
   inboxFocus: null,
   workspaces: [],
@@ -1898,7 +1904,7 @@ export const useStore = create<CanopyState>((set, get) => ({
     if (!isShown(before, b)) return;
     beat();
     // workspaces, tailchan, the agent registry, the asks and the incubator are the home backend's alone
-    if ((ev.type === "chan" || ev.type === "workspaces" || ev.type === "registry" || ev.type === "asks" || ev.type === "incubator" || ev.type === "incubator-gone") && b !== before.home) return;
+    if ((ev.type === "chan" || ev.type === "workspaces" || ev.type === "registry" || ev.type === "asks" || ev.type === "incubator" || ev.type === "incubator-gone" || ev.type === "stages") && b !== before.home) return;
     // The feed says what changed, so the lines come from the event against
     // the state before it is applied, as the backend that sent it saw it.
     // a message already held (a reconnect's replay, a post heard twice) is
@@ -1932,6 +1938,11 @@ export const useStore = create<CanopyState>((set, get) => ({
         const asks = mergeAsks(s.asks, ev.asks, ev.gone);
         return { ...(asks === s.asks ? {} : { asks }), ...(ev.presence ? { presence: ev.presence } : {}) };
       });
+      return;
+    }
+    if (ev.type === "stages") {
+      stagesEvents += 1;
+      set({ stages: ev.stages });
       return;
     }
     if (ev.type === "incubator") {
@@ -2177,6 +2188,15 @@ export const useStore = create<CanopyState>((set, get) => ({
   },
   closeInbox: () => set({ inboxOpen: false, inboxFocus: null }),
   loadSprouts: async () => {
+    const stagesMark = stagesEvents;
+    void api
+      .incubatorStages()
+      .then((stages) => {
+        if (stagesEvents === stagesMark) set({ stages });
+      })
+      .catch(() => {
+        // an older backend has no such route; the view says nothing then
+      });
     // events that land while the list is on its way are newer than it
     const mark = sproutEvents;
     try {

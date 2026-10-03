@@ -1353,6 +1353,47 @@ describe("scout and build-new", () => {
     return end(w, s.id, { ".canopy/questions.json": "[]" });
   };
 
+  test("with no isolation a queued sprout waits, holds no slot, and starts on the next pump once isolation answers", async () => {
+    let why: string | null = "the stage runner is not answering";
+    const said: (string | null)[] = [];
+    const w = world({ isolation: () => why, onWaiting: (r) => said.push(r) });
+    const s = await w.inc.create(intake({ text: "coin counter" }));
+    await w.inc.idle();
+    expect(now(w, s.id).status).toBe("queued");
+    expect(now(w, s.id).flows).toHaveLength(0);
+    expect(w.flows.started).toHaveLength(0);
+    expect(w.inc.waiting()).toBe("the stage runner is not answering");
+    why = null;
+    w.inc.pump();
+    await w.inc.idle();
+    expect(now(w, s.id).status).toBe("clarifying");
+    expect(w.inc.waiting()).toBe(null);
+    // said once each time it changed, not on every pump
+    expect(said).toEqual(["the stage runner is not answering", null]);
+  });
+
+  test("a sprout whose next step is canopy's own ship still ships while stages wait", async () => {
+    let why: string | null = null;
+    const ship = new FakeShip();
+    const w = world({ ship, isolation: () => why });
+    w.workflows.set("scout", SCOUT_STAGE);
+    w.workflows.set("build-new", BUILD_STAGE);
+    const s = await w.inc.create(intake({ text: "coin counter" }));
+    await w.inc.idle();
+    await end(w, s.id, { ".canopy/questions.json": "[]" });
+    await end(w, s.id, { ".canopy/pick.json": PICK });
+    // a second idea queues behind it while the runner is away
+    why = "the stage runner is not answering";
+    const other = await w.inc.create(intake({ text: "tip jar" }));
+    await w.inc.idle();
+    expect(now(w, other.id).status).toBe("queued");
+    const after = await end(w, s.id, { ".canopy/smoke.md": "status: 200" });
+    expect(after.status).toBe("live");
+    expect(ship.calls).toContain("deploy coin-counter");
+    expect(now(w, other.id).status).toBe("queued");
+    expect(w.inc.waiting()).toBe("the stage runner is not answering");
+  });
+
   test("scout starts with the workspace reads and the manifest named in its note", async () => {
     const w = chain();
     const s = await scouting(w);

@@ -506,6 +506,9 @@ export function describeEvent(
     case "incubator":
     case "incubator-gone":
       return sproutLines(ev, prev, at);
+    // the incubator view says it; the feed has no line for it
+    case "stages":
+      return [];
   }
 }
 

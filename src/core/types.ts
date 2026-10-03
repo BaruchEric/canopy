@@ -862,6 +862,8 @@ export type ServerEvent =
   /** a sprout, whole, whenever it changes; home backend only */
   | { type: "incubator"; sprout: Sprout }
   | { type: "incubator-gone"; id: string }
+  /** where the incubator's stages run, whenever that changes; home backend only */
+  | { type: "stages"; stages: IncubatorStages }
   | { type: "job"; job: Job }
   | { type: "job-gone"; id: string }
   /** a repo's builds changed outside a job: launched, exited, removed, or a
@@ -1317,6 +1319,16 @@ export interface SproutDetail {
   research: string | null;
 }
 
+/** Where the incubator's stages run (`GET /api/incubator/stages`, and the
+ *  `stages` event whenever either changes). `isolated` is true while the
+ *  stage runner answers, so a stage runs in the stages container with no
+ *  token of canopy's; `waiting` is why queued sprouts wait for their next
+ *  stage, or null when none does. */
+export interface IncubatorStages {
+  isolated: boolean;
+  waiting: string | null;
+}
+
 /* ---------- flows: one workflow running on one repo ---------- */
 
 export type FlowStatus = "working" | "waiting" | "gated" | "done" | "failed" | "stopped";
@@ -1380,6 +1392,9 @@ export interface Flow {
    *  the stage runner was not answering when its step was to run; either
    *  way continuing runs the step again */
   parkedFor?: "budget" | "stage";
+  /** with `parkedFor` "stage": it was the step's check, not its run, that
+   *  found the stage runner away, so continuing runs the check alone */
+  stageCheck?: boolean;
   /** steps granted past the budget by continuing a budget park */
   grace?: number;
   /** set between a restore and the rerun of the step the restart cut short */
