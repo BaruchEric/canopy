@@ -5,7 +5,7 @@
  * as text, and which sprouts hold one of the running slots. Browser-safe:
  * the UI imports it.
  */
-import { HOSTS, SPROUT_STATUSES, type FlowStatus, type InputEntry, type InputKind, type InputVia, type RunQuestion, type RunQuestionOption, type HandOffReview, type HostId, type PickKind, type Sprout, type SproutPick, type SproutStatus, type SproutWork, type Workflow } from "./types";
+import { HOSTS, SPROUT_STATUSES, type FlowStatus, type InputEntry, type InputKind, type InputVia, type RunAnswerRecord, type RunQuestion, type RunQuestionOption, type HandOffReview, type HostId, type PickKind, type Sprout, type SproutPick, type SproutStatus, type SproutWork, type Workflow } from "./types";
 
 /** how many sprouts run a stage at once; the rest wait their turn */
 export const SPROUT_CONCURRENCY = 2;
@@ -285,27 +285,104 @@ export function answersText(questions: readonly RunQuestion[], answers: Readonly
   return `${head}\n\n${lines.join("\n")}\n`;
 }
 
-/** canopy's own file of what the user answered while a stage ran: the judge
- *  reads it, and no agent is told to write it (Research may rewrite intent.md) */
+/** where the seed keeps canopy's summary of what the user answered while
+ *  a stage ran, and the path the judge's copy of canopy's own record is
+ *  read under (amendment 6, rulings 14 and 20) */
 export const ANSWERS_FILE = ".canopy/answers.md";
-
-export const ANSWERS_HEAD =
-  "# Answers\n\nWhat the user answered while a stage ran, in order. canopy writes this file; the evaluator reads it with the intent.\n";
 
 /** what canopy commits to the seed after clarify, after answers and after a stage; nothing raw */
 export const SEED_FILES = [".canopy/brief.md", ".canopy/intent.md", ".canopy/inputs.md", ANSWERS_FILE];
 
-const answerOf = (answers: Readonly<Record<string, string>>, q: string): string => (Object.hasOwn(answers, q) ? (answers[q] ?? "") : "");
+/** a text the agent wrote, or the user, as one quoted line: no newline in
+ *  it can start a heading or an entry of its own */
+const quoted = (s: string, max = 300): string => JSON.stringify(oneLine(s, max));
 
-/** one answer given inside a run, as answers.md keeps it: `where` names the stage and step */
-export function runAnswersText(where: string, questions: readonly RunQuestion[], answers: Readonly<Record<string, string>>, at: number): string {
-  const lines = questions.map((q) => `- ${q.question}\n  ${oneLine(answerOf(answers, q.question), 1000) || "(no answer)"}`);
-  return `## ${oneLine(where)}, ${localStamp(at)}\n\n${lines.join("\n")}\n`;
+/** `raw` as the page sends it: the picked labels first, joined with ", ",
+ *  then anything the user wrote. The longest label that fits is taken
+ *  first; what is left is the user's own words. */
+export function splitAnswer(raw: string, labels: readonly string[]): { picked: string[]; text: string } {
+  let rest = raw.trim();
+  const picked: string[] = [];
+  const sorted = [...new Set(labels.filter((l) => l.trim()))].sort((a, b) => b.length - a.length);
+  for (;;) {
+    const hit = sorted.find((l) => !picked.includes(l) && (rest === l || rest.startsWith(`${l}, `)));
+    if (hit === undefined) break;
+    picked.push(hit);
+    rest = rest === hit ? "" : rest.slice(hit.length + 2).trim();
+  }
+  return { picked, text: rest };
 }
 
-/** the same answer as the inputs index's one line */
-export function runAnswersSummary(questions: readonly RunQuestion[], answers: Readonly<Record<string, string>>): string {
-  const parts = questions.map((q) => `${q.question} ${answerOf(answers, q.question) || "(no answer)"}`);
+/** a judge's evidence with the seed's answers.md put back as canopy's own
+ *  record: `stored` null reads as missing, whatever the seed holds */
+export function withStoredAnswers<T extends { path: string; text: string | null }>(files: readonly T[], stored: string | null): T[] {
+  return files.map((f) => (f.path === ANSWERS_FILE ? { ...f, text: stored } : f));
+}
+
+/** one answer given inside a run, as canopy's store keeps it */
+export function runAnswerRecord(where: string, questions: readonly RunQuestion[], answers: Readonly<Record<string, string>>, at: number): RunAnswerRecord {
+  const items = questions.map((q) => {
+    // own keys only: a question called "constructor" is not the object's
+    const raw = Object.hasOwn(answers, q.question) ? (answers[q.question] ?? "") : "";
+    const offered = q.options.map((o) => o.label);
+    const { picked, text } = splitAnswer(raw, offered);
+    return { question: q.question, offered, picked, text, answered: raw.trim() !== "" };
+  });
+  return { where, at, items };
+}
+
+const pickedWords = (picked: readonly string[]): string => picked.map((l) => quoted(l, 120)).join(", ");
+
+/** canopy's summary of the answers for the seed: the questions and the
+ *  labels picked, never the user's own words (ruling 21) */
+function seedSection(r: RunAnswerRecord): string {
+  const lines = r.items.map((i) => {
+    const parts: string[] = [];
+    if (i.picked.length) parts.push(`picked ${pickedWords(i.picked)} (${i.picked.length === 1 ? "an option" : "options"} the agent offered)`);
+    if (i.text) parts.push("answered in the user's own words, kept by canopy");
+    return `- ${quoted(i.question)}: ${parts.length ? parts.join(", and ") : "no answer"}`;
+  });
+  return `## ${oneLine(r.where, 120)}, ${localStamp(r.at)}\n\n${lines.join("\n")}\n`;
+}
+
+export const SEED_ANSWERS_HEAD =
+  "# Answers\n\ncanopy's summary of what the user answered while a stage ran, rewritten whole from canopy's own record each time. An answer in the user's own words stays with canopy and is not shown here.\n";
+
+/** the seed's answers.md, whole, from canopy's records */
+export function seedAnswersText(records: readonly RunAnswerRecord[]): string {
+  return [SEED_ANSWERS_HEAD, ...records.map(seedSection)].join("\n");
+}
+
+/** one record's part of the seed's file, which is also its input file */
+export const seedAnswersSection = seedSection;
+
+/** the judge's answers.md, built from canopy's records at the gate, never
+ *  read from the seed (ruling 20); null when there are none */
+export function judgeAnswersText(records: readonly RunAnswerRecord[]): string | null {
+  if (records.length === 0) return null;
+  const sections = records.map((r) => {
+    const lines = r.items.flatMap((i) => [
+      `- The agent asked: ${quoted(i.question)}`,
+      `  Options the agent offered: ${i.offered.length ? pickedWords(i.offered) : "none"}`,
+      ...(i.picked.length ? [`  The user picked (labels the agent wrote): ${pickedWords(i.picked)}`] : []),
+      ...(i.text ? [`  In the user's own words: ${quoted(i.text, 1000)}`] : []),
+      ...(i.answered ? [] : ["  (no answer)"]),
+    ]);
+    return `## ${oneLine(r.where, 120)}, ${localStamp(r.at)}\n\n${lines.join("\n")}\n`;
+  });
+  return [
+    "# Answers\n\ncanopy wrote this from its own record of what the user answered while a stage ran; no agent wrote it or can change it. Questions and option labels are the agent's words, quoted; only the lines in the user's own words are the user's.\n",
+    ...sections,
+  ].join("\n");
+}
+
+/** the same answer as the inputs index's and the vault note's one line: no own words */
+export function runAnswersSummary(r: RunAnswerRecord): string {
+  const n = r.items.filter((i) => i.answered).length;
+  const picks = r.items.filter((i) => i.picked.length).map((i) => `picked ${pickedWords(i.picked)}`);
+  const own = r.items.filter((i) => i.text).length;
+  const parts = [`answered ${n} of ${r.items.length} ${r.items.length === 1 ? "question" : "questions"} in ${oneLine(r.where, 60)}`, ...picks];
+  if (own) parts.push(`${own} in the user's own words, kept by canopy`);
   return oneLine(parts.join("; "), 200);
 }
 

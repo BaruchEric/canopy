@@ -112,7 +112,7 @@ import {
 } from "../core/store";
 import { QUIET_WAIT, Runner } from "../core/runner";
 import type { RunDriver } from "../core/driver";
-import { isSeedRepoId, SEED_AGENT_REFUSAL, SEEDS_DIR } from "../core/sprout";
+import { ANSWERS_FILE, isSeedRepoId, SEED_AGENT_REFUSAL, SEEDS_DIR, withStoredAnswers } from "../core/sprout";
 import { SeedMirrors } from "../core/seedmirror";
 import { sweepCodexTrust } from "../core/codextrust";
 import { seedBusy, seedBusyFor, seedHeld, seedRootsNow, setSeedBusy, setSeedRoots } from "../core/seedgit";
@@ -3019,7 +3019,13 @@ export async function startServer(opts: {
     },
     evaluator: hasGatewayKey() ? jev : null,
     judge: hasGatewayKey() ? jevJudge : null,
-    evidence: (repo, paths) => readEvidence(repo.path, paths),
+    // a seed's answers.md is canopy's record, built at the gate from its own
+    // store; the seed's copy is a summary any stage could have written over
+    evidence: async (repo, paths) => {
+      const files = await readEvidence(repo.path, paths);
+      if (!isSeedPath(root, repo.path) || !paths.includes(ANSWERS_FILE)) return files;
+      return withStoredAnswers(files, (await state.incubator.inc.answersEvidence(repo.path)) ?? null);
+    },
     save: (rec) => flowFiles?.save(rec),
     forget: (id) => flowFiles?.forget(id),
     // a step's run ends on its result, while its process may still be going;

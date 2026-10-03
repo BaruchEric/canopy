@@ -51,6 +51,6 @@ evidence: .canopy/intent.md .canopy/answers.md .canopy/pick.json .canopy/smoke.m
 back: Renovate
 retries: 2
 
-Task: check the work against the intent before it is deployed. Read .canopy/intent.md, .canopy/answers.md when it exists (what the user answered while a stage ran, which stands over the intent where they differ), README.md, the code and .canopy/smoke.md, then write .canopy/accept.md: each "What success looks like" line, met or not and where in the code, anything under "Out of scope" that was built anyway, and whether the upstream's LICENSE and credit are still there. Write only .canopy/accept.md. An evaluator reads these files next and decides whether it is deployed.
+Task: check the work against the intent before it is deployed. Read .canopy/intent.md, .canopy/answers.md when it exists (canopy's record of what the user answered while a stage ran: the questions and option labels are the agent's words, and only an answer in the user's own words stands over the intent where they differ), README.md, the code and .canopy/smoke.md, then write .canopy/accept.md: each "What success looks like" line, met or not and where in the code, anything under "Out of scope" that was built anyway, and whether the upstream's LICENSE and credit are still there. Write only .canopy/accept.md. An evaluator reads these files next and decides whether it is deployed.
 
 Finish with one sentence: whether it meets the intent.

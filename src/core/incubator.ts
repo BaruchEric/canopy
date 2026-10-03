@@ -16,11 +16,13 @@ import { PARKS_KEPT, RETRO_CONCURRENCY, RETRO_FILES, RETRO_TRIES, RETRO_UNATTEND
 import { shareInputs, shareRecord, shareWorkspace, unshare } from "./stageshare";
 import {
   ANSWERS_FILE,
-  ANSWERS_HEAD,
   BUILD_FILES,
   SEED_FILES,
+  judgeAnswersText,
+  runAnswerRecord,
   runAnswersSummary,
-  runAnswersText,
+  seedAnswersSection,
+  seedAnswersText,
   INPUT_FILE_MAX,
   INPUT_TOTAL_MAX,
   SEEDS_DIR,
@@ -65,7 +67,7 @@ import {
   type ParsedQuestions,
 } from "./sprout";
 import { DAILY_EVENTS, dailyLine, dailyNoteHead, dailyNotePath, sproutNote, sproutNotePath, type NoteEvent } from "./sproutnote";
-import { isFlowActive, type Advice, type Flow, type FlowChoice, type FlowDigest, type InputEntry, type InputKind, type InputVia, type Repo, type RunQuestion, type Sprout, type SproutDetail, type SproutFlow, type SproutPick, type Workflow } from "./types";
+import { isFlowActive, type Advice, type Flow, type FlowChoice, type FlowDigest, type InputEntry, type InputKind, type InputVia, type Repo, type RunAnswerRecord, type RunQuestion, type Sprout, type SproutDetail, type SproutFlow, type SproutPick, type Workflow } from "./types";
 import { findWorkflow, loadWorkflows } from "./workflows";
 
 export class IncubatorError extends Error {
@@ -101,6 +103,10 @@ export interface IncubatorStore {
   readInput(id: string, name: string): Promise<Uint8Array>;
   inputsDir(id: string): string;
   writeIndex(id: string, text: string): Promise<void>;
+  /** the answers given inside stages' runs, kept apart from the inputs,
+   *  which every stage reads a copy of (rulings 20 and 21) */
+  readRunAnswers(id: string): Promise<RunAnswerRecord[]>;
+  writeRunAnswers(id: string, records: RunAnswerRecord[]): Promise<void>;
   dismiss(id: string): Promise<void>;
 }
 
@@ -494,18 +500,32 @@ export class Incubator {
   }
 
   private async logAnswers(s: Sprout, where: string, questions: RunQuestion[], answers: Record<string, string>, at: number): Promise<void> {
-    const text = runAnswersText(where, questions, answers, at);
-    const summary = runAnswersSummary(questions, answers);
-    await this.addEntry(s, { kind: "answers", label: "answers", type: "text/markdown", via: "answer", summary, processed: true }, "answers.md", text);
+    const record = runAnswerRecord(where, questions, answers, at);
+    // the whole answer, the user's own words too, in canopy's store alone
+    const all = [...(await this.deps.store.readRunAnswers(s.id)), record];
+    await this.deps.store.writeRunAnswers(s.id, all);
+    // the input, the index, the vault note and the seed get the summary:
+    // the questions and the labels picked, never the user's own words
+    const summary = runAnswersSummary(record);
+    await this.addEntry(s, { kind: "answers", label: "answers", type: "text/markdown", via: "answer", summary, processed: true }, "answers.md", seedAnswersSection(record));
     const index = inputsIndex(s.inputs);
     await this.deps.store.writeIndex(s.id, index);
     if (s.prepared) {
-      // written now, not at the stage's end: Eval reads it in the same flow
-      const was = (await this.deps.seeds.read(s.seedPath, ANSWERS_FILE).catch(() => null)) ?? ANSWERS_HEAD;
-      await this.deps.seeds.write(s.seedPath, ANSWERS_FILE, `${was.trimEnd()}\n\n${text}`);
+      // rewritten whole from the store, so nothing a stage put in the file survives
+      await this.deps.seeds.write(s.seedPath, ANSWERS_FILE, seedAnswersText(all));
       await this.deps.seeds.write(s.seedPath, ".canopy/inputs.md", index);
     }
     await this.changed(s, "input");
+  }
+
+  /** The judge's answers.md for the seed at `seedPath`, built from canopy's
+   *  own records at the gate, never read from the seed (ruling 20): null
+   *  when the sprout has none, undefined when no sprout of this server's
+   *  is there. */
+  async answersEvidence(seedPath: string): Promise<string | null | undefined> {
+    const s = this.list().find((x) => x.seedPath === seedPath);
+    if (!s) return undefined;
+    return judgeAnswersText(await this.deps.store.readRunAnswers(s.id));
   }
 
   /** more inputs; after clarify has looked, clarify looks again before the next stage */

@@ -1220,6 +1220,29 @@ export interface EvidenceFile {
 
 /* ---------- the incubator: new projects from an idea, a link or a repo ---------- */
 
+/** One question a stage's run asked, as the user answered it */
+export interface RunAnswerItem {
+  /** the question as the agent asked it */
+  question: string;
+  /** the options' labels, as the agent wrote them */
+  offered: string[];
+  /** the offered labels the user picked */
+  picked: string[];
+  /** what the user wrote in their own words; canopy's store and the judge alone see it */
+  text: string;
+  answered: boolean;
+}
+
+/** One answer given inside a stage's run, as canopy keeps it in its own
+ *  store, outside the seed and outside what any stage reads (amendment 6,
+ *  rulings 20 and 21) */
+export interface RunAnswerRecord {
+  /** the stage and step that asked */
+  where: string;
+  at: number;
+  items: RunAnswerItem[];
+}
+
 export interface HandOffCommit {
   sha: string;
   /** one line, clipped: the agent wrote it */
