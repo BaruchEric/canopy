@@ -1220,6 +1220,41 @@ export interface EvidenceFile {
 
 /* ---------- the incubator: new projects from an idea, a link or a repo ---------- */
 
+export interface HandOffCommit {
+  sha: string;
+  /** one line, clipped: the agent wrote it */
+  subject: string;
+}
+
+export interface HandOffFile {
+  /** with any control character escaped */
+  path: string;
+  /** null for a binary file */
+  added: number | null;
+  removed: number | null;
+}
+
+/** What an extend's hand-off would push, shown to the user before it does. */
+export interface HandOffReview {
+  /** the commit that would become the branch's tip */
+  head: string;
+  base: string;
+  /** the target's https remote, as canopy resolved it for this review */
+  remote: string;
+  /** `new/<slug>` */
+  branch: string;
+  commits: HandOffCommit[];
+  /** commits past the ones listed */
+  moreCommits: number;
+  files: HandOffFile[];
+  moreFiles: number;
+  /** changes to look at first: CI, deploy config, package scripts, each as `path: why` */
+  flagged: string[];
+  at: number;
+  /** the user's yes, for this head and remote alone */
+  approved?: true;
+}
+
 /** where a sprout may deploy; anything else is refused in code */
 export const HOSTS = ["vercel", "vercel+firebase", "vercel+convex", "mini"] as const;
 export type HostId = (typeof HOSTS)[number];
@@ -1245,6 +1280,8 @@ export const SPROUT_STATUSES = [
   "testing",
   "accepting",
   "deploying",
+  /** an extend's branch waits for the user's yes before canopy pushes it */
+  "approving",
   "live",
   "parked",
   "rejected",
@@ -1438,6 +1475,8 @@ export interface Sprout {
   work?: SproutWork;
   /** an extend's branch on GitHub, once handed off */
   branch?: string;
+  /** what the hand-off would push, waiting for the user's yes (amendment 6, ruling 19) */
+  handOff?: HandOffReview;
   /** what canopy made on Firebase for a `vercel+firebase` pick, each part once it exists */
   firebase?: SproutFirebase;
   /** the vault note's revision, for the next replace */

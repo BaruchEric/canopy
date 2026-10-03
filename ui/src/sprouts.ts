@@ -16,6 +16,7 @@ const STATUS_STAGE: Partial<Record<SproutStatus, Stage>> = {
   testing: "test",
   accepting: "accept",
   deploying: "deploy",
+  approving: "deploy",
 };
 
 const WORKFLOW_STAGE: Readonly<Record<string, Stage>> = {
@@ -72,6 +73,7 @@ const STATUS_WORD: Record<SproutStatus, string> = {
   testing: "testing",
   accepting: "accepting",
   deploying: "deploying",
+  approving: "waiting for your yes to push its branch",
   live: "live",
   parked: "parked",
   rejected: "turned down at eval",

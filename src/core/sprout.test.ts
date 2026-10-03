@@ -1,5 +1,9 @@
 import { describe, expect, test } from "bun:test";
 import {
+  handOffFlag,
+  handOffText,
+  scriptsFlag,
+  showPath,
   ANSWERS_FILE,
   HAND_OFF,
   branchPushRefusal,
@@ -597,4 +601,48 @@ test("isSeedId: a sprout's seed on the launch root, not the making folder or a l
   expect(isSeedId("_incubatorx/coin")).toBe(false);
   expect(isSeedId("src2:_incubator/coin")).toBe(false);
   expect(isSeedId("mini|_incubator/coin")).toBe(true);
+});
+
+describe("the hand-off's review", () => {
+  test("CI, deploy config and hook config are flagged at any depth and in any case; plain code is not", () => {
+    expect(handOffFlag(".GITHUB/workflows/x.yml")).toBe("GitHub Actions or repo settings");
+    expect(handOffFlag("apps/web/vercel.json")).toBe("deploy config");
+    expect(handOffFlag("Netlify.toml")).toBe("deploy config");
+    expect(handOffFlag("docker/Dockerfile.dev")).toBe("deploy config");
+    expect(handOffFlag("compose.prod.yaml")).toBe("deploy config");
+    expect(handOffFlag(".circleci/config.yml")).toBe("CI config");
+    expect(handOffFlag(".husky/pre-commit")).toBe("package manager or git hook config");
+    expect(handOffFlag("src/github.ts")).toBeNull();
+    expect(handOffFlag("docs/.github-notes.md")).toBeNull();
+  });
+  test("package.json scripts are compared by name and value; a file that does not parse is flagged", () => {
+    expect(scriptsFlag('{"scripts":{"build":"vite"}}', '{"scripts":{"build":"vite"},"dependencies":{"a":"1"}}')).toBeNull();
+    expect(scriptsFlag(null, '{"scripts":{"postinstall":"sh x"}}')).toBe("scripts changed: postinstall");
+    expect(scriptsFlag('{"scripts":{"a":"1","b":"2"}}', '{"scripts":{"a":"1"}}')).toBe("scripts changed: b");
+    expect(scriptsFlag('{"scripts":{}}', "{ nope")).toContain("does not parse");
+  });
+  test("the text puts the flagged changes first and escapes what the agent named", () => {
+    const text = handOffText({
+      head: "h".repeat(40),
+      base: "b".repeat(40),
+      remote: "https://github.com/eric/clms.git",
+      branch: "new/s",
+      commits: [{ sha: "c".repeat(40), subject: "add it" }],
+      moreCommits: 2,
+      files: [
+        { path: "a.ts", added: 3, removed: 1 },
+        { path: "img.png", added: null, removed: null },
+      ],
+      moreFiles: 0,
+      flagged: ["vercel.json: deploy config"],
+      at: 1,
+    });
+    const lines = text.split("\n");
+    expect(lines[0]).toBe("Push new/s to github.com/eric/clms, from bbbbbbbbbbbb to hhhhhhhhhhhh.");
+    expect(lines.indexOf("! vercel.json: deploy config")).toBeLessThan(lines.indexOf("3 commits:"));
+    expect(text).toContain("  and 2 more");
+    expect(text).toContain("  +3 -1 a.ts");
+    expect(text).toContain("  bin img.png");
+    expect(showPath("a\nb\u0007")).toBe("a\\u000ab\\u0007");
+  });
 });

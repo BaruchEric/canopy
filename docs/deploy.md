@@ -473,7 +473,11 @@ an intake with 503. Two optional settings in the mini's `.env`:
   itself, or an owner listed under `extendOwners` in canopy's
   `config.json` (empty by default), so an employer's or an org's repo the
   token happens to reach is refused. canopy pushes the one branch, never a
-  tag or another ref, and opens no pull request.
+  tag or another ref, and opens no pull request. It pushes only after you
+  say yes in the inbox: the item lists the commits and files, with any
+  change to CI, deploy config, hooks or `package.json` scripts at the top,
+  since the push runs the repo's Actions and preview builds with its
+  secrets.
 
 canopy reads the vault token, the transcribe key, the Vercel token and the
 Firebase token once at start and then deletes all four from its own environment, so no shell, run or tmux server it

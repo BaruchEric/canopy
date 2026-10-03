@@ -10,9 +10,9 @@ import { Incubator, IncubatorError, incubatorWorkflow, type AdviceSink, type Inc
 import type { BranchPush, ShipBundle, Shipper, ShipSource } from "./shipper";
 import type { ExtendTarget, RebuildSpec, SeedSource } from "./seedsource";
 import { BUNDLED_DIR, findWorkflow, loadWorkflows } from "./workflows";
-import { branchPushRefusal } from "./sprout";
+import { branchPushRefusal, holdsSlot } from "./sprout";
 import { RETRO_PARK_WAIT, RETRO_UNATTENDED, RETRO_WAIT_MAX } from "./retro";
-import type { Advice, Flow, FlowChoice, Judgment, Repo, Sprout, SproutWork, Workflow } from "./types";
+import type { Advice, Flow, FlowChoice, HandOffReview, Judgment, Repo, Sprout, SproutWork, Workflow } from "./types";
 
 const CLARIFY: Workflow = {
   name: "clarify",
@@ -1400,8 +1400,19 @@ class FakeShip implements Shipper {
     this.shippedFrom.push(typeof from === "string" ? from : from.file);
     this.calls.push(`firebase deploy ${project}`);
   }
+  /** what a review flags */
+  flagged: string[] = [];
+  async branchReview(from: ShipSource, to: BranchPush): Promise<Omit<HandOffReview, "at" | "approved">> {
+    this.calls.push(`review ${to.want} ${to.slug} ${to.base}`);
+    if (this.failBranch) throw new Error(this.failBranch);
+    const refused = branchPushRefusal({ remote: to.remote, ref: `refs/heads/new/${to.slug}` }, { remote: to.want, slug: to.slug });
+    if (refused) throw new Error(refused);
+    const head = typeof from === "string" ? this.head : from.head;
+    return { head, base: to.base, remote: to.want, branch: `new/${to.slug}`, commits: [{ sha: head, subject: "the work" }], moreCommits: 0, files: [{ path: "src/a.ts", added: 3, removed: 1 }], moreFiles: 0, flagged: this.flagged };
+  }
   failBranch: string | null = null;
   async pushBranch(from: ShipSource, to: BranchPush): Promise<string> {
+    if (to.head !== (typeof from === "string" ? this.head : from.head)) throw new Error("pushed a head that was not approved");
     this.shippedFrom.push(typeof from === "string" ? from : from.file);
     this.calls.push(`branch ${to.remote} ${to.slug} ${to.base}`);
     if (this.failBranch) throw new Error(this.failBranch);
@@ -2408,20 +2419,68 @@ describe("renovate and extend builds", () => {
     expect(after.builtHead).toBe("branch-tip");
   });
 
-  test("an extend's Accept hands off one branch: handed-off with its url, a line in the day, the retro due, nothing deployed", async () => {
+  test("an extend's Accept waits for the user's yes: nothing is pushed until it comes, then once", async () => {
     const ship = new FakeShip();
+    ship.flagged = [".github/workflows/ci.yml: GitHub Actions or repo settings"];
     const w = builds(new FakeSource(), ship);
     const s = await picked(w, EXTEND);
-    const after = await end(w, s.id, { ".canopy/accept.md": "## Verdict\ngo" });
+    const waiting = await end(w, s.id, { ".canopy/accept.md": "## Verdict\ngo" });
+    expect(waiting.status).toBe("approving");
+    expect(waiting.handOff).toMatchObject({ head: "h1", base: "b0", remote: "https://github.com/eric/clms.git", branch: `new/${s.slug}`, flagged: [".github/workflows/ci.yml: GitHub Actions or repo settings"] });
+    expect(waiting.handOff?.approved).toBeUndefined();
+    expect(ship.calls).toEqual([`review https://github.com/eric/clms.git ${s.slug} b0`]);
+    // waiting holds no slot, and no amount of pumping pushes it
+    expect(holdsSlot(waiting)).toBe(false);
+    for (let i = 0; i < 3; i++) w.inc.pump();
+    await w.inc.idle();
+    expect(ship.calls.filter((c) => c.startsWith("branch"))).toEqual([]);
+    // a yes names the head it saw
+    await expect(w.inc.approveHandOff(s.id, true, "h0")).rejects.toThrow("look at it again");
+    await w.inc.approveHandOff(s.id, true, "h1");
+    await w.inc.idle();
+    for (let i = 0; i < 3; i++) w.inc.pump();
+    await w.inc.idle();
+    const after = now(w, s.id);
     expect(after.status).toBe("handed-off");
+    expect(after.handOff).toBeUndefined();
     expect(after.branch).toBe(`https://github.com/eric/clms/tree/new/${s.slug}`);
-    expect(ship.calls).toEqual([`branch https://github.com/eric/clms.git ${s.slug} b0`]);
+    expect(ship.calls.filter((c) => c.startsWith("branch"))).toEqual([`branch https://github.com/eric/clms.git ${s.slug} b0`]);
     expect(ship.bundles.every((b) => b.done)).toBe(true);
     expect(w.notes.lines.some((l) => l.line.includes(`handed off as the branch https://github.com/eric/clms/tree/new/${s.slug}`))).toBe(true);
     expect(after.retro?.for).toBe("end");
   });
 
-  test("a hand-off whose seed moved after Accept, or whose push fails, parks", async () => {
+  test("a declined hand-off parks with the reason and pushes nothing; resuming shows it again", async () => {
+    const ship = new FakeShip();
+    const w = builds(new FakeSource(), ship);
+    const s = await picked(w, EXTEND);
+    await end(w, s.id, { ".canopy/accept.md": "## Verdict\ngo" });
+    await w.inc.approveHandOff(s.id, false, "", "it rewrites\nthe CI");
+    await w.inc.idle();
+    const declined = now(w, s.id);
+    expect(declined.status).toBe("parked");
+    expect(declined.parked).toBe("the hand-off was declined: it rewrites the CI; resume to look at it again");
+    expect(declined.handOff).toBeUndefined();
+    // a continue is not a yes
+    await expect(w.inc.approveHandOff(s.id, true, "h1")).rejects.toThrow("no hand-off waiting");
+    await w.inc.resume(s.id, "continue");
+    await w.inc.idle();
+    expect(now(w, s.id).status).toBe("approving");
+    expect(ship.calls.filter((c) => c.startsWith("branch"))).toEqual([]);
+    expect(ship.calls.filter((c) => c.startsWith("review"))).toHaveLength(2);
+  });
+
+  test("while a hand-off waits, added inputs are refused and a stop drops the review", async () => {
+    const w = builds(new FakeSource(), new FakeShip());
+    const s = await picked(w, EXTEND);
+    await end(w, s.id, { ".canopy/accept.md": "## Verdict\ngo" });
+    await expect(w.inc.addInputs(s.id, intake({ text: "one more thing" }))).rejects.toThrow("waits for your yes");
+    await w.inc.stop(s.id);
+    expect(now(w, s.id).handOff).toBeUndefined();
+    await expect(w.inc.approveHandOff(s.id, true, "h1")).rejects.toThrow("no hand-off waiting");
+  });
+
+  test("a hand-off whose seed moved after Accept parks; a yes outlives a failed push for the same commit", async () => {
     const ship = new FakeShip();
     const w = builds(new FakeSource(), ship);
     const s = await picked(w, EXTEND);
@@ -2430,11 +2489,19 @@ describe("renovate and extend builds", () => {
     const moved = await end(w, s.id, { ".canopy/accept.md": "## Verdict\ngo" });
     expect(moved.status).toBe("parked");
     expect(moved.parked).toContain("the seed moved after the build was accepted");
-    expect(ship.calls.some((c) => c.startsWith("branch"))).toBe(false);
-    ship.failBranch = "git push: ! [rejected] new/x (non-fast-forward)";
+    expect(ship.calls).toEqual([]);
     await w.inc.resume(s.id, "retry");
     await w.inc.idle();
+    expect(now(w, s.id).handOff?.head).toBe("moved-on");
+    ship.failBranch = "git push: ! [rejected] new/x (non-fast-forward)";
+    await w.inc.approveHandOff(s.id, true, "moved-on");
+    await w.inc.idle();
     expect(now(w, s.id).parked).toBe("hand-off: git push: ! [rejected] new/x (non-fast-forward)");
+    ship.failBranch = null;
+    await w.inc.resume(s.id, "retry");
+    await w.inc.idle();
+    expect(now(w, s.id).status).toBe("handed-off");
+    expect(ship.calls.filter((c) => c.startsWith("branch"))).toHaveLength(2);
   });
 
   test("the hand-off asks again where the target is, and parks when it moved or is no longer the user's", async () => {

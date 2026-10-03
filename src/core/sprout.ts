@@ -5,7 +5,7 @@
  * as text, and which sprouts hold one of the running slots. Browser-safe:
  * the UI imports it.
  */
-import { HOSTS, SPROUT_STATUSES, type FlowStatus, type InputEntry, type InputKind, type InputVia, type RunQuestion, type RunQuestionOption, type HostId, type PickKind, type Sprout, type SproutPick, type SproutStatus, type SproutWork, type Workflow } from "./types";
+import { HOSTS, SPROUT_STATUSES, type FlowStatus, type InputEntry, type InputKind, type InputVia, type RunQuestion, type RunQuestionOption, type HandOffReview, type HostId, type PickKind, type Sprout, type SproutPick, type SproutStatus, type SproutWork, type Workflow } from "./types";
 
 /** how many sprouts run a stage at once; the rest wait their turn */
 export const SPROUT_CONCURRENCY = 2;
@@ -443,6 +443,68 @@ export function githubRepo(remote: string): GithubRepo | null {
 /** the https remote canopy clones and pushes a github.com repo through */
 export const githubUrl = (r: GithubRepo): string => `https://github.com/${r.owner}/${r.name}.git`;
 
+/** Why a path a hand-off's commits touch is shown first, or null: a push to
+ *  the user's repo runs its CI and preview builds with the repo's secrets
+ *  (amendment 6, ruling 19). Any letter case, any folder depth. */
+export function handOffFlag(path: string): string | null {
+  const parts = path.toLowerCase().split("/");
+  const base = parts.at(-1) ?? "";
+  if (parts[0] === ".github") return "GitHub Actions or repo settings";
+  if (parts.some((x) => [".circleci", ".buildkite", ".gitlab", ".woodpecker", ".drone"].includes(x))) return "CI config";
+  if ([".gitlab-ci.yml", ".travis.yml", "azure-pipelines.yml", "bitbucket-pipelines.yml", "jenkinsfile", ".drone.yml", "cloudbuild.yaml", "cloudbuild.yml", "buildspec.yml"].includes(base)) return "CI config";
+  if (parts.some((x) => x === ".vercel" || x === ".netlify")) return "deploy config";
+  if (["vercel.json", "now.json", "netlify.toml", "firebase.json", ".firebaserc", "fly.toml", "render.yaml", "railway.json", "railway.toml", "app.yaml", "procfile", "amplify.yml", "wrangler.toml", "wrangler.json", "wrangler.jsonc"].includes(base)) return "deploy config";
+  if (base.startsWith("dockerfile") || /^(docker-)?compose(\.[\w-]+)?\.ya?ml$/.test(base)) return "deploy config";
+  if (parts[0] === ".husky" || [".pre-commit-config.yaml", "lefthook.yml", "lefthook.yaml", ".npmrc", ".yarnrc", ".yarnrc.yml", "bunfig.toml", ".pnpmfile.cjs"].includes(base)) return "package manager or git hook config";
+  return null;
+}
+
+/** what changed in a package.json's scripts from `before` to `after` (null
+ *  for no file), as a flag line's why, or null when they are the same */
+export function scriptsFlag(before: string | null, after: string | null): string | null {
+  const scripts = (text: string | null): Record<string, unknown> | "bad" => {
+    if (text === null) return {};
+    try {
+      const raw: unknown = JSON.parse(text);
+      if (!isObj(raw)) return "bad";
+      const s = raw["scripts"];
+      return s === undefined ? {} : isObj(s) ? s : "bad";
+    } catch {
+      return "bad";
+    }
+  };
+  const a = scripts(before);
+  const b = scripts(after);
+  if (a === "bad" || b === "bad") return "does not parse as a package.json, so its scripts cannot be checked";
+  const names = [...new Set([...Object.keys(a), ...Object.keys(b)])].filter((k) => JSON.stringify(a[k]) !== JSON.stringify(b[k]));
+  if (names.length === 0) return null;
+  const shown = names.slice(0, 10).map((n) => showPath(n));
+  return `scripts changed: ${shown.join(", ")}${names.length > shown.length ? ` and ${names.length - shown.length} more` : ""}`;
+}
+
+/** a name as one line: every control character escaped */
+export const showPath = (p: string): string =>
+  // eslint-disable-next-line no-control-regex
+  p.replace(/[\u0000-\u001f\u007f]/g, (c) => `\\u${c.charCodeAt(0).toString(16).padStart(4, "0")}`);
+
+/** a hand-off's review as the inbox and the sheet show it, the flagged changes first */
+export function handOffText(r: HandOffReview): string {
+  const gh = githubRepo(r.remote);
+  const where = gh ? `github.com/${gh.owner}/${gh.name}` : r.remote;
+  const out: string[] = [`Push ${r.branch} to ${where}, from ${r.base.slice(0, 12)} to ${r.head.slice(0, 12)}.`, ""];
+  if (r.flagged.length) {
+    out.push("Look at these first: a push runs the repo's CI and preview builds with its secrets.");
+    for (const f of r.flagged) out.push(`! ${f}`);
+  } else out.push("Nothing in CI, deploy config, hooks or package scripts changed.");
+  out.push("", `${r.commits.length + r.moreCommits} ${r.commits.length + r.moreCommits === 1 ? "commit" : "commits"}:`);
+  for (const c of r.commits) out.push(`  ${c.sha.slice(0, 12)} ${c.subject}`);
+  if (r.moreCommits) out.push(`  and ${r.moreCommits} more`);
+  out.push("", `${r.files.length + r.moreFiles} ${r.files.length + r.moreFiles === 1 ? "file" : "files"} changed:`);
+  for (const f of r.files) out.push(`  ${f.added === null ? "bin" : `+${f.added} -${f.removed ?? 0}`} ${f.path}`);
+  if (r.moreFiles) out.push(`  and ${r.moreFiles} more`);
+  return out.join("\n");
+}
+
 /** Why canopy will not push this, or null: a hand-off pushes exactly
  *  `refs/heads/new/<slug>` to the extend target's own github.com remote, so
  *  `main`, a forced `+` ref and any other remote are refused before git runs. */
@@ -680,6 +742,14 @@ const isWork = (w: unknown): boolean => {
 };
 
 const optBool = (v: unknown): boolean => v === undefined || typeof v === "boolean";
+const isHandOff = (h: unknown): boolean => {
+  if (!isObj(h)) return false;
+  const strs = ["head", "base", "remote", "branch"].every((k) => typeof h[k] === "string");
+  const commits = Array.isArray(h["commits"]) && h["commits"].every((c: unknown) => isObj(c) && typeof c["sha"] === "string" && typeof c["subject"] === "string");
+  const files = Array.isArray(h["files"]) && h["files"].every((f: unknown) => isObj(f) && typeof f["path"] === "string");
+  const flagged = Array.isArray(h["flagged"]) && h["flagged"].every((f: unknown) => typeof f === "string");
+  return strs && commits && files && flagged && isNum(h["moreCommits"]) && isNum(h["moreFiles"]) && isNum(h["at"]) && (h["approved"] === undefined || h["approved"] === true);
+};
 const isFirebase = (f: unknown): boolean => isObj(f) && typeof f["project"] === "string" && optBool(f["created"]) && optBool(f["database"]) && optStr(f["app"]) && optBool(f["env"]);
 
 const isOption = (o: unknown): boolean => isObj(o) && typeof o["label"] === "string" && typeof o["description"] === "string";
@@ -718,8 +788,9 @@ export function parseSproutRecord(text: string): Sprout | null {
   const { parkedAt, parks, retro } = raw;
   if (!optNum(parkedAt) || (parks !== undefined && !(Array.isArray(parks) && parks.every(isPark)))) return null;
   if (retro !== undefined && !isRetro(retro)) return null;
-  const { work, branch, firebase } = raw;
+  const { work, branch, firebase, handOff } = raw;
   if ((work !== undefined && !isWork(work)) || !optStr(branch) || (firebase !== undefined && !isFirebase(firebase))) return null;
+  if (handOff !== undefined && !isHandOff(handOff)) return null;
   // canopy's own file: past these checks it is taken as written
   return raw as unknown as Sprout;
 }

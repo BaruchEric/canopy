@@ -26,8 +26,8 @@ import { exec as realExec, type ExecOptions, type ExecResult } from "./exec";
 import { firebaseConfigRefusal, firebaseEnv, firebaseFiles, firebaseResult, sdkConfigOf } from "./firebase";
 import { readSeed, writeSeed } from "./seed";
 import { bundleSeed } from "./seedmirror";
-import { NOTE_FILES, branchPushRefusal, extendBranch, githubRepo } from "./sprout";
-import type { HostId } from "./types";
+import { NOTE_FILES, branchPushRefusal, extendBranch, githubRepo, handOffFlag, scriptsFlag, showPath } from "./sprout";
+import type { HandOffReview, HostId } from "./types";
 
 export interface Shipper {
   /** null when the host can be deployed to from here, else the park reason */
@@ -53,6 +53,10 @@ export interface Shipper {
    *  to that branch on the target's own github.com remote and nowhere
    *  else, never forced; the branch's GitHub url */
   pushBranch(from: ShipSource, to: BranchPush): Promise<string>;
+  /** what `pushBranch` would push, after the same checks, for the user to
+   *  say yes to (amendment 6, ruling 19); made from a bare clone of the
+   *  bundle, nothing sent anywhere */
+  branchReview(from: ShipSource, to: BranchPush): Promise<Omit<HandOffReview, "at" | "approved">>;
   /** the Firebase project `id` made under FIREBASE_TOKEN's account; one
    *  that already exists and the login reaches counts as made */
   firebaseProject(id: string): Promise<void>;
@@ -77,6 +81,31 @@ export interface BranchPush {
   slug: string;
   /** the commit the branch was made from */
   base: string;
+  /** the commit the user approved, which the bundle's HEAD must be; a
+   *  review, which comes before any approval, leaves it empty */
+  head: string;
+}
+
+/** how much of a branch a review lists */
+const REVIEW_COMMITS = 50;
+const REVIEW_FILES = 200;
+const REVIEW_FLAGS = 100;
+
+const clipLine = (s: string, max: number): string => {
+  const one = s.replace(/\s+/g, " ").trim();
+  return one.length > max ? `${one.slice(0, max - 1)}…` : one;
+};
+
+/** `git diff -z --numstat --no-renames`: added, removed and the path, NUL-ended */
+function parseNumstat(out: string): { raw: string; path: string; added: number | null; removed: number | null }[] {
+  const files: { raw: string; path: string; added: number | null; removed: number | null }[] = [];
+  for (const rec of out.split("\0")) {
+    const m = /^(\d+|-)\t(\d+|-)\t([\s\S]+)$/.exec(rec.replace(/^\n+/, ""));
+    if (!m) continue;
+    const raw = m[3] ?? "";
+    files.push({ raw, path: showPath(raw), added: m[1] === "-" ? null : Number(m[1]), removed: m[2] === "-" ? null : Number(m[2]) });
+  }
+  return files;
 }
 
 /** a seed as one ship sends it */
@@ -389,44 +418,61 @@ export function shipper(cfg: ShipConfig, deps: ShipDeps = { exec: realExec, fetc
       });
     },
 
+    async branchReview(from, to) {
+      return inBranch(from, to, async (git, bare, head) => {
+        const range = `${to.base}..${head}`;
+        const listed = await git(["log", "--no-merges", "-z", "--format=%H%x1f%s", range], bare);
+        if (listed.code !== 0) throw new Error(`git log of the branch: ${tail(listed)}`);
+        const all = listed.stdout.split("\0").filter((l) => l.trim());
+        const commits = all.slice(0, REVIEW_COMMITS).map((l) => {
+          const [sha = "", subject = ""] = l.trim().split("\x1f");
+          return { sha, subject: clipLine(subject, 120) };
+        });
+        const stat = await git(["diff", "-z", "--numstat", "--no-renames", to.base, head], bare);
+        if (stat.code !== 0) throw new Error(`git diff of the branch: ${tail(stat)}`);
+        const files = parseNumstat(stat.stdout);
+        // every path any commit touched, not the net diff alone: a file added
+        // and taken out again still ran in CI on the way
+        const touched = await git(["log", "--no-merges", "-z", "--format=", "--name-only", "--no-renames", range], bare);
+        if (touched.code !== 0) throw new Error(`git log of the branch: ${tail(touched)}`);
+        const paths = [...new Set([...touched.stdout.split("\0"), ...files.map((f) => f.raw)].map((x) => x.replace(/^\n+/, "")).filter(Boolean))];
+        const flagged: string[] = [];
+        for (const path of paths) {
+          const why = handOffFlag(path);
+          if (why) flagged.push(`${showPath(path)}: ${why}`);
+          if (path.split("/").at(-1)?.toLowerCase() === "package.json") {
+            const at = async (rev: string): Promise<string | null> => {
+              const r = await git(["cat-file", "blob", `${rev}:${path}`], bare);
+              return r.code === 0 ? r.stdout : null;
+            };
+            const scripts = scriptsFlag(await at(to.base), await at(head));
+            if (scripts) flagged.push(`${showPath(path)}: ${scripts}`);
+          }
+        }
+        return {
+          head,
+          base: to.base,
+          remote: to.want,
+          branch: extendBranch(to.slug),
+          commits,
+          moreCommits: Math.max(0, all.length - commits.length),
+          files: files.slice(0, REVIEW_FILES).map(({ path, added, removed }) => ({ path, added, removed })),
+          moreFiles: Math.max(0, files.length - REVIEW_FILES),
+          flagged: flagged.slice(0, REVIEW_FLAGS),
+        };
+      });
+    },
+
     async pushBranch(from, to) {
-      const ref = `refs/heads/${extendBranch(to.slug)}`;
-      const refused = branchPushRefusal({ remote: to.remote, ref }, { remote: to.want, slug: to.slug });
-      if (refused) throw new Error(refused);
       const gh = githubRepo(to.remote);
       if (!gh) throw new Error(`${to.remote} is not a github.com repo`);
-      if (!/^[0-9a-f]{40}([0-9a-f]{24})?$/.test(to.base)) throw new Error("the branch's base is not a commit id");
       const url = deps.branchRemote ? deps.branchRemote(to.remote) : to.remote;
-      await withBundle(from, async ({ file, head }) => {
-        const tmp = await mkdtemp(join(tmpdir(), "canopy-handoff-"));
-        const bare = join(tmp, "seed.git");
-        const git = (args: string[], cwd: string, timeoutMs = 30_000): Promise<ExecResult> =>
-          deps.exec(["git", ...NO_HOOKS, ...args], { cwd, timeoutMs, env: { GIT_TERMINAL_PROMPT: "0" } });
-        try {
-          const cloned = await git(["clone", "--bare", "--quiet", "--", file, bare], tmp, 300_000);
-          if (cloned.code !== 0) throw new Error(`git clone of the seed's bundle: ${tail(cloned)}`);
-          // the commit Accept saw is the branch's tip, not some other branch HEAD was moved to
-          const tip = await git(["rev-parse", "--verify", "-q", `${ref}^{commit}`], bare);
-          if (tip.code !== 0 || tip.stdout.trim() !== head) throw new Error(`the seed's HEAD is not the tip of ${extendBranch(to.slug)}, so canopy will not push it`);
-          const grows = await git(["merge-base", "--is-ancestor", to.base, head], bare);
-          if (grows.code !== 0) throw new Error(`${extendBranch(to.slug)} does not grow from ${to.base.slice(0, 12)}, the target's branch canopy cloned`);
-          // every commit, a merge's other side too: history simplification
-          // would hide a `-s ours` merge of the notes' own branch
-          const touched = await git(["log", "--full-history", "--no-merges", "--format=", "--name-only", `${to.base}..${head}`, "--", ...NOTE_FILES.map((f) => `:(literal)${f}`)], bare);
-          if (touched.code !== 0) throw new Error(`git log of the branch: ${tail(touched)}`);
-          const notes = [...new Set(touched.stdout.split("\n").filter((l) => l.trim()))];
-          if (notes.length) throw new Error(`the branch's commits touch canopy's notes (${notes.join(", ")}), which never go to the user's repo`);
-          // a merge brings in history canopy did not build: the branch is a line of the agent's commits
-          const merges = await git(["rev-list", "--min-parents=2", `${to.base}..${head}`], bare);
-          if (merges.code !== 0) throw new Error(`git rev-list of the branch: ${tail(merges)}`);
-          const merge = merges.stdout.trim().split("\n")[0];
-          if (merge) throw new Error(`${extendBranch(to.slug)} holds a merge (${merge.slice(0, 12)}); canopy hands off a straight line of commits only`);
-          // one ref, no +, no tags, whatever the global config says
-          const pushed = await git(["-c", "push.followTags=false", "-c", "push.recurseSubmodules=no", "push", "--quiet", "--no-verify", "--", url, `${head}:${ref}`], bare, 300_000);
-          if (pushed.code !== 0) throw new Error(`git push: ${tail(pushed)}`);
-        } finally {
-          await rm(tmp, { recursive: true, force: true });
-        }
+      await inBranch(from, to, async (git, bare, head) => {
+        // the commit the user said yes to, and no other
+        if (head !== to.head) throw new Error(`the seed's HEAD is ${head.slice(0, 12)}, not ${to.head.slice(0, 12)}, the commit the hand-off was approved for`);
+        // one ref, no +, no tags, whatever the global config says
+        const pushed = await git(["-c", "push.followTags=false", "-c", "push.recurseSubmodules=no", "push", "--quiet", "--no-verify", "--", url, `${head}:refs/heads/${extendBranch(to.slug)}`], bare, 300_000);
+        if (pushed.code !== 0) throw new Error(`git push: ${tail(pushed)}`);
       });
       return `https://github.com/${gh.owner}/${gh.name}/tree/${extendBranch(to.slug)}`;
     },
@@ -446,6 +492,45 @@ export function shipper(cfg: ShipConfig, deps: ShipDeps = { exec: realExec, fetc
     },
   };
   return self;
+
+  /** `f` over a bare clone of the bundle, once the branch passed every
+   *  check a hand-off makes: the ref and the remote, the tip, the base, no
+   *  note of canopy's in any commit, no merge */
+  async function inBranch<T>(from: ShipSource, to: BranchPush, f: (git: (args: string[], cwd: string, timeoutMs?: number) => Promise<ExecResult>, bare: string, head: string) => Promise<T>): Promise<T> {
+    const ref = `refs/heads/${extendBranch(to.slug)}`;
+    const refused = branchPushRefusal({ remote: to.remote, ref }, { remote: to.want, slug: to.slug });
+    if (refused) throw new Error(refused);
+    if (!/^[0-9a-f]{40}([0-9a-f]{24})?$/.test(to.base)) throw new Error("the branch's base is not a commit id");
+    return withBundle(from, async ({ file, head }) => {
+      const tmp = await mkdtemp(join(tmpdir(), "canopy-handoff-"));
+      const bare = join(tmp, "seed.git");
+      const git = (args: string[], cwd: string, timeoutMs = 30_000): Promise<ExecResult> =>
+        deps.exec(["git", ...NO_HOOKS, ...args], { cwd, timeoutMs, env: { GIT_TERMINAL_PROMPT: "0" } });
+      try {
+        const cloned = await git(["clone", "--bare", "--quiet", "--", file, bare], tmp, 300_000);
+        if (cloned.code !== 0) throw new Error(`git clone of the seed's bundle: ${tail(cloned)}`);
+        // the commit Accept saw is the branch's tip, not some other branch HEAD was moved to
+        const tip = await git(["rev-parse", "--verify", "-q", `${ref}^{commit}`], bare);
+        if (tip.code !== 0 || tip.stdout.trim() !== head) throw new Error(`the seed's HEAD is not the tip of ${extendBranch(to.slug)}, so canopy will not push it`);
+        const grows = await git(["merge-base", "--is-ancestor", to.base, head], bare);
+        if (grows.code !== 0) throw new Error(`${extendBranch(to.slug)} does not grow from ${to.base.slice(0, 12)}, the target's branch canopy cloned`);
+        // every commit, a merge's other side too: history simplification
+        // would hide a `-s ours` merge of the notes' own branch
+        const touched = await git(["log", "--full-history", "--no-merges", "--format=", "--name-only", `${to.base}..${head}`, "--", ...NOTE_FILES.map((n) => `:(literal)${n}`)], bare);
+        if (touched.code !== 0) throw new Error(`git log of the branch: ${tail(touched)}`);
+        const notes = [...new Set(touched.stdout.split("\n").filter((l) => l.trim()))];
+        if (notes.length) throw new Error(`the branch's commits touch canopy's notes (${notes.join(", ")}), which never go to the user's repo`);
+        // a merge brings in history canopy did not build: the branch is a line of the agent's commits
+        const merges = await git(["rev-list", "--min-parents=2", `${to.base}..${head}`], bare);
+        if (merges.code !== 0) throw new Error(`git rev-list of the branch: ${tail(merges)}`);
+        const merge = merges.stdout.trim().split("\n")[0];
+        if (merge) throw new Error(`${extendBranch(to.slug)} holds a merge (${merge.slice(0, 12)}); canopy hands off a straight line of commits only`);
+        return await f(git, bare, head);
+      } finally {
+        await rm(tmp, { recursive: true, force: true });
+      }
+    });
+  }
 
   /** `f` over the bundle given, or over one made of the seed path given
    *  and removed after */

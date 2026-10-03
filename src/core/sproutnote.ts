@@ -72,6 +72,7 @@ const STATUS_WORD: Record<SproutStatus, string> = {
   testing: "Testing.",
   accepting: "Checking the work against the intent.",
   deploying: "Deploying.",
+  approving: "Waiting for the user's yes to push its branch.",
   live: "Live.",
   parked: "Parked.",
   rejected: "Rejected.",

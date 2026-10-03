@@ -328,6 +328,12 @@ describe("sproutNotice", () => {
     expect(sproutNotice({ ...base, status: "rejected" }, { status: "researching", asking: false })?.text).toBe("Coin counter was turned down at eval");
     expect(sproutNotice({ ...base, status: "handed-off" }, { status: "deploying", asking: false })).toEqual({ to: "channel", text: "Coin counter is handed off as a branch" });
   });
+  test("a hand-off waiting for a yes is a DM pointing at the inbox", () => {
+    expect(sproutNotice({ ...base, status: "approving" }, { status: "deploying", asking: false })).toEqual({
+      to: "human",
+      text: "Coin counter waits for your yes to push its branch, in canopy's inbox",
+    });
+  });
   test("every other move is quiet", () => {
     expect(sproutNotice({ ...base, status: "researching" }, { status: "queued", asking: false })).toBeNull();
     expect(sproutNotice({ ...base, status: "parked", parked: "x" }, { status: "parked", asking: false })).toBeNull();

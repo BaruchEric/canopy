@@ -514,6 +514,7 @@ export class Incubator {
     if (sproutEnded(s)) throw new IncubatorError(409, "this project has ended; start a new one");
     // a deploy cannot take the new input in, and would go live over it
     if (s.status === "deploying") throw new IncubatorError(409, "this project is deploying; add to it once the deploy ends");
+    if (s.status === "approving") throw new IncubatorError(409, "this project's branch waits for your yes; push it or decline it before adding to it");
     const { clean } = this.checkIntake(intake, s.inputs.reduce((t, e) => t + e.bytes, 0), false);
     await this.takeInputs(s, clean);
     // a clarify still under way (running, waiting or parked at a gate) has
@@ -605,11 +606,33 @@ export class Incubator {
     delete s.parked;
     delete s.questions;
     delete s.questionsAt;
+    delete s.handOff;
     const cur = s.flows.at(-1);
     const f = cur ? this.deps.flows.get(cur.flowId) : undefined;
     if (f) this.stopFlow(f);
     await this.changed(s, "stopped");
     this.pump();
+    return s;
+  }
+
+  /** The user's answer to a hand-off waiting in the inbox (ruling 19). A yes
+   *  names the head it saw, and holds for that commit and remote alone; a
+   *  no parks the project with the reason, and nothing is pushed. */
+  async approveHandOff(id: string, approve: boolean, head: string, reason = ""): Promise<Sprout> {
+    const s = this.need(id);
+    const review = s.handOff;
+    if (s.status !== "approving" || !review) throw new IncubatorError(409, "this project has no hand-off waiting for an answer");
+    if (approve) {
+      if (head !== review.head) throw new IncubatorError(409, `the branch is at ${review.head.slice(0, 12)} now, not ${head.slice(0, 12)}; look at it again`);
+      review.approved = true;
+      s.status = "queued";
+      await this.changed(s);
+      this.pump();
+      return s;
+    }
+    delete s.handOff;
+    const why = reason.replace(/\s+/g, " ").trim().slice(0, 300);
+    await this.park(s, `the hand-off was declined${why ? `: ${why}` : ""}; resume to look at it again`);
     return s;
   }
 
@@ -1374,17 +1397,36 @@ export class Incubator {
       if (sproutEnded(s)) return;
       // one bundle, held to the commit Accept saw, as for a ship (amendment 4)
       const bundle = await ship.bundle(s.seedPath);
-      let branch: string;
+      const to = { remote: work.remote, want: target.remote, slug: s.slug, base: work.base, head: bundle.head };
+      let branch: string | null = null;
       try {
         if (s.builtHead && bundle.head !== s.builtHead) {
           return await this.park(s, `${SEED_MOVED} (${bundle.head.slice(0, 12)}, accepted ${s.builtHead.slice(0, 12)}); resume to hand it off as it is now`);
         }
-        branch = await ship.pushBranch(bundle, { remote: work.remote, want: target.remote, slug: s.slug, base: work.base });
+        // the push runs CI and preview builds on the user's repo with its
+        // secrets, so it waits for the user's yes to this very commit and
+        // remote (ruling 19); anything else is shown again for a new yes
+        const yes = s.handOff;
+        if (yes?.approved && yes.head === bundle.head && yes.remote === target.remote) branch = await ship.pushBranch(bundle, to);
+        else {
+          const review = await ship.branchReview(bundle, to);
+          if (sproutEnded(s)) return;
+          s.handOff = { ...review, at: this.now() };
+          s.status = "approving";
+          delete s.parked;
+        }
       } finally {
         await bundle.done();
       }
       if (sproutEnded(s)) return;
+      if (branch === null) {
+        // waiting holds no slot
+        await this.changed(s);
+        this.pump();
+        return;
+      }
       s.branch = branch;
+      delete s.handOff;
       s.status = "handed-off";
       delete s.parked;
       await this.changed(s, "handed-off");

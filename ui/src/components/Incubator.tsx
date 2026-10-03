@@ -6,7 +6,7 @@
  */
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { useShallow } from "zustand/react/shallow";
-import { INPUT_FILE_MAX, inputKindOf, inputType, sizeWord } from "../../../src/core/sprout";
+import { INPUT_FILE_MAX, handOffText, inputKindOf, inputType, sizeWord } from "../../../src/core/sprout";
 import { isVercelAppUrl } from "../../../src/core/deploy";
 import type { SproutDetail, SproutRetro } from "../../../src/core/types";
 import { api } from "../api";
@@ -482,6 +482,7 @@ export function SproutSheet({ id }: { id: string }) {
   const addSproutInputs = useStore((s) => s.addSproutInputs);
   const stopSprout = useStore((s) => s.stopSprout);
   const resumeSprout = useStore((s) => s.resumeSprout);
+  const handOffSprout = useStore((s) => s.handOffSprout);
   const dismissSprout = useStore((s) => s.dismissSprout);
   const [detail, setDetail] = useState<SproutDetail | null>(null);
   const [detailErr, setDetailErr] = useState<string | null>(null);
@@ -569,6 +570,21 @@ export function SproutSheet({ id }: { id: string }) {
               <span className="spacer" />
               <button type="button" className="mini" disabled={busy} onClick={() => act(() => stopSprout(id))}>
                 stop
+              </button>
+            </div>
+          </div>
+        )}
+        {sprout.status === "approving" && sprout.handOff && (
+          <div className="ask">
+            <div className="eyebrow">waits for your yes</div>
+            <pre className="ask-detail">{handOffText(sprout.handOff)}</pre>
+            <div className="ask-row">
+              <button type="button" className="mini strong" disabled={busy} onClick={() => act(() => handOffSprout(id, true, sprout.handOff?.head ?? ""))}>
+                push the branch
+              </button>
+              <span className="spacer" />
+              <button type="button" className="mini" disabled={busy} onClick={() => act(() => handOffSprout(id, false, sprout.handOff?.head ?? ""))}>
+                decline
               </button>
             </div>
           </div>
@@ -686,7 +702,7 @@ export function SproutSheet({ id }: { id: string }) {
           </button>
         ) : (
           <>
-            {sprout.status !== "deploying" && (
+            {sprout.status !== "deploying" && sprout.status !== "approving" && (
               <button type="button" className="mini" disabled={busy} onClick={() => setAdding(true)}>
                 add input
               </button>

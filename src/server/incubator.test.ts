@@ -223,6 +223,10 @@ describe("the rest of the routes", () => {
     const s = (await (await post("/api/incubator", form({ text: "stop idea" }))).json()) as Sprout;
     expect((await fetch(url(`/api/incubator?id=${s.id}`), { method: "DELETE" })).status).toBe(409);
     expect((await postJson(`/api/incubator/resume?id=${s.id}`, { choice: "sideways" })).status).toBe(400);
+    // a hand-off answer needs a yes or no and the head it is for, and a project with one waiting
+    expect((await postJson(`/api/incubator/handoff?id=${s.id}`, { approve: "yes", head: "h" })).status).toBe(400);
+    expect((await postJson(`/api/incubator/handoff?id=${s.id}`, { approve: true })).status).toBe(400);
+    expect((await postJson(`/api/incubator/handoff?id=${s.id}`, { approve: true, head: "h" })).status).toBe(409);
     const stopped = (await (await postJson(`/api/incubator/stop?id=${s.id}`, {})).json()) as Sprout;
     expect(stopped.status).toBe("stopped");
     const ev = await eventAfter((e) => e.type === "incubator-gone" && e.id === s.id, () => fetch(url(`/api/incubator?id=${s.id}`), { method: "DELETE" }));

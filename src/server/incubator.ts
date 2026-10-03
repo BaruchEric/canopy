@@ -189,6 +189,14 @@ export class IncubatorHub {
       if (path === "/api/incubator/one" && method === "GET") return json(await this.inc.detail(id));
       if (path === "/api/incubator/advice") return await this.adviceRoute(req, method);
       if (path === "/api/incubator/input" && method === "POST") return json(await this.inc.addInputs(id, await readIntake(req)));
+      if (method === "POST" && path === "/api/incubator/handoff") {
+        // the user's yes or no to an extend's push (ruling 19): a yes names the head it saw
+        const b: unknown = await req.json().catch(() => null);
+        if (!isObj(b) || typeof b["approve"] !== "boolean" || typeof b["head"] !== "string" || (b["reason"] !== undefined && typeof b["reason"] !== "string")) {
+          return json({ error: "send {approve, head, reason?}" }, 400);
+        }
+        return json(await this.inc.approveHandOff(id, b["approve"], b["head"], typeof b["reason"] === "string" ? b["reason"] : ""));
+      }
       if (method === "POST" && (path === "/api/incubator/answer" || path === "/api/incubator/stop" || path === "/api/incubator/resume")) {
         if (path === "/api/incubator/stop") return json(await this.inc.stop(id));
         const b: unknown = await req.json().catch(() => null);
