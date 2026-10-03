@@ -457,6 +457,10 @@ an intake with 503. Two optional settings in the mini's `.env`:
   CLI (it opens a browser, so it cannot run from a harness), signed in to a
   Google account kept for incubator projects, not your main one. The token
   can create projects on that account, so treat it like the Vercel token.
+  firebase-tools 15.32.1 still takes it but warns that `FIREBASE_TOKEN` is
+  deprecated in favor of a service account key; the warning goes to stderr,
+  not into the `--json` result canopy reads. Check it before bumping the
+  pin: a major version that drops the variable breaks this path.
   `firebase-tools` is pinned in the image under `/opt/firebase`, owned by
   root and off the default PATH; compose hands canopy alone
   `CANOPY_FIREBASE_PATH` to find it.
