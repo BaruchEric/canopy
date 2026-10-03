@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { useShallow } from "zustand/react/shallow";
-import type { Ask } from "../../../src/core/types";
+import type { AdviceOffer, Ask } from "../../../src/core/types";
 import { joinTarget } from "../agentcards";
 import { api } from "../api";
 import { askWord, detailText, endingWord, inboxTick, inboxTitle, leftWord, recentAsks, type InboxAnswer, type InboxItem } from "../inbox";
@@ -32,8 +32,72 @@ function useNow(on: boolean, ms = 1000): number {
   return now;
 }
 
-const KIND_GLYPH: Record<InboxItem["kind"], string> = { permission: "⚿", question: "?", guard: "⛨", gate: "⏸", clarify: "✎", park: "⏸" };
-const SOURCE_WORD: Record<InboxItem["source"], string> = { ask: "agent", run: "run", flow: "workflow", sprout: "incubator" };
+const KIND_GLYPH: Record<InboxItem["kind"], string> = { permission: "⚿", question: "?", guard: "⛨", gate: "⏸", clarify: "✎", park: "⏸", advice: "↺" };
+const SOURCE_WORD: Record<InboxItem["source"], string> = { ask: "agent", run: "run", flow: "workflow", sprout: "incubator", advice: "incubator" };
+
+/** The retro lessons on offer, each with its own accept and dismiss.
+ *  Accepting never edits anything itself: it opens a chat on canopy's own
+ *  checkout that asks before each write, or opens the user's own workflow
+ *  file. Dismissing takes it off offer until it comes up three more times. */
+function AdviceOffers({ offers, busy, onAnswer }: { offers: readonly AdviceOffer[]; busy: boolean; onAnswer: (key: string, accept: boolean) => void }) {
+  return (
+    <ul className="advice-list">
+      {offers.map((o) => (
+        <li key={o.key} className="advice-offer">
+          <div className="eyebrow">
+            {o.key}
+            {o.file ? <span className="dim"> · {o.file}</span> : null}
+          </div>
+          <p className="advice-lesson">{o.lesson}</p>
+          <p className="settings-hint">
+            {o.count === 1 ? "1 project" : `${o.count} projects`}: {o.titles.join(", ")}
+          </p>
+          {o.edit && (
+            <details className="advice-edit">
+              <summary>the edit it proposes</summary>
+              <pre className="ask-detail">{o.edit}</pre>
+            </details>
+          )}
+          <div className="ask-row">
+            <button
+              type="button"
+              className="mini strong"
+              disabled={busy}
+              title="Opens a chat on canopy's own checkout with this lesson as its first message, and the chat asks before it writes anything; advice on a workflow of your own opens that file instead"
+              onClick={() => onAnswer(o.key, true)}
+            >
+              accept
+            </button>
+            <span className="spacer" />
+            <button type="button" className="mini" disabled={busy} title="Off offer until three more projects give it" onClick={() => onAnswer(o.key, false)}>
+              dismiss
+            </button>
+          </div>
+        </li>
+      ))}
+    </ul>
+  );
+}
+
+/** Where an accepted lesson on the user's own workflow went: opened on this
+ *  backend's desktop, or the path to open by hand, with the edit to make. */
+function AdviceFile() {
+  const file = useStore((s) => s.adviceFile);
+  if (!file) return null;
+  return (
+    <div className="ask advice-file">
+      <div className="eyebrow">{file.opened ? "opened" : "open this file"}</div>
+      <pre className="ask-detail">{file.path}</pre>
+      {file.edit && <pre className="ask-detail">{file.edit}</pre>}
+      <div className="ask-row">
+        <span className="spacer" />
+        <button type="button" className="mini" onClick={() => useStore.setState({ adviceFile: null })}>
+          done
+        </button>
+      </div>
+    </div>
+  );
+}
 
 /** One thing waiting: who, where and the countdown, then the form that
  *  answers it, folded until picked. An ask that cannot be answered here (no
@@ -127,6 +191,8 @@ function InboxRow({
               )}
               <p className="settings-hint">This device has no answer key, so this ask waits for its terminal: add yours in Settings to answer it here.</p>
             </div>
+          ) : item.kind === "advice" ? (
+            <AdviceOffers offers={item.advice ?? []} busy={busy} onAnswer={(key, accept) => answer({ advice: key, accept })} />
           ) : item.kind === "gate" || item.kind === "park" ? (
             <div className="ask">
               <div className="eyebrow">{item.who} {item.title}</div>
@@ -196,7 +262,7 @@ function InboxRow({
             />
           )}
           <div className="kept-acts">
-            {item.source !== "ask" && (
+            {item.source !== "ask" && item.source !== "advice" && (
               <button type="button" className="mini" onClick={openSheet}>
                 open the {item.source === "run" ? "run" : item.source === "sprout" ? "project" : "workflow"}
               </button>
@@ -318,6 +384,7 @@ export function InboxChip({ onGit }: { onGit?: () => void } = {}) {
           <section className="settings-row">
             <h3 className="panel-label">waiting on you</h3>
             {goneFocus && <GoneAsk id={goneFocus} />}
+            <AdviceFile />
             {items.length === 0 ? (
               <p className="settings-hint">Nothing is waiting on you: no agent asks, no run is on a prompt, no workflow is at a gate.</p>
             ) : (

@@ -531,6 +531,7 @@ describe("several backends", () => {
         "/api/registry",
         "/api/asks",
         "/api/incubator",
+        "/api/incubator/advice",
         "/api/incubator/stages",
         "/api/tasks",
       ].sort(),

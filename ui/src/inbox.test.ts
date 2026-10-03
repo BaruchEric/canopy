@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import type { AgentCard, Ask, Flow, Repo, Run, Sprout } from "../../src/core/types";
+import type { AdviceOffer, AgentCard, Ask, Flow, Repo, Run, Sprout } from "../../src/core/types";
 import {
   askWord,
   asksOf,
@@ -275,5 +275,16 @@ describe("the incubator in the inbox", () => {
   test("going on assumptions is no answer to a run or an ask", () => {
     expect(toRunAnswer({ skip: true })).toBeNull();
     expect(toAskAnswer({ skip: true })).toBeNull();
+  });
+  test("retro advice on offer is one item; none on offer is none, and its answer goes to no run or ask", () => {
+    const offer = (key: string, lastAt: number): AdviceOffer => ({ key, lesson: `Lesson ${key}.`, count: 2, titles: ["Coin counter"], lastAt });
+    expect(mergeInbox([], {}, {}, 30_000, { ...ctx, advice: [] })).toEqual([]);
+    const items = mergeInbox([], {}, {}, 30_000, { ...ctx, advice: [offer("a", 12_000), offer("b", 9_000)] });
+    expect(items).toHaveLength(1);
+    expect(items[0]).toMatchObject({ key: "advice:incubator", source: "advice", kind: "advice", who: "retro", repo: "", where: "canopy incubator", title: "2 lessons from retros", at: 9_000 });
+    expect(items[0]?.advice?.map((o) => o.key)).toEqual(["a", "b"]);
+    expect(mergeInbox([], {}, {}, 30_000, { ...ctx, advice: [offer("a", 1)] })[0]?.title).toBe("1 lesson from retros");
+    expect(toRunAnswer({ advice: "a", accept: true })).toBeNull();
+    expect(toAskAnswer({ advice: "a", accept: false })).toBeNull();
   });
 });

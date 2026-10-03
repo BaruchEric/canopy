@@ -8,7 +8,7 @@ import { useEffect, useRef, useState, type ReactNode } from "react";
 import { useShallow } from "zustand/react/shallow";
 import { INPUT_FILE_MAX, inputKindOf, inputType, sizeWord } from "../../../src/core/sprout";
 import { isVercelAppUrl } from "../../../src/core/deploy";
-import type { SproutDetail } from "../../../src/core/types";
+import type { SproutDetail, SproutRetro } from "../../../src/core/types";
 import { api } from "../api";
 import { dropSproutHere, sproutHere } from "../routes";
 import { INPUT_GLYPH, STAGES, needsYou, sortSprouts, sproutWord, stageStrip, stagesWord, type StageMark } from "../sprouts";
@@ -385,6 +385,43 @@ function IntakeForm({
   );
 }
 
+/** The sheet's retro: waiting, running (its flow a click away), its own
+ *  account and the lessons it left, or why it failed. */
+function RetroPart({ retro, text, onFlow }: { retro: SproutRetro; text: string | null; onFlow: (id: string) => void }) {
+  const why = retro.for === "park" ? "after a day parked" : "after its end";
+  if (retro.state === "due") return <p className="dim">Waiting its turn to look back, {why}.</p>;
+  if (retro.state === "failed") return <p className="dim">The retro failed: {retro.reason ?? "no reason given"}</p>;
+  if (retro.state === "running") {
+    return (
+      <p className="dim">
+        Looking back {why}.{" "}
+        {retro.flowId && (
+          <button type="button" className="mini" onClick={() => onFlow(retro.flowId ?? "")}>
+            open the workflow
+          </button>
+        )}
+      </p>
+    );
+  }
+  const advice = retro.advice ?? [];
+  return (
+    <>
+      {text && <pre className="sprout-doc">{text}</pre>}
+      {advice.length > 0 ? (
+        <ul className="sprout-inputs">
+          {advice.map((a) => (
+            <li key={a.key}>
+              <span className="sprout-input-label">{a.key}</span> <span className="dim">{a.lesson}</span>
+            </li>
+          ))}
+        </ul>
+      ) : (
+        <p className="dim">It left no advice.</p>
+      )}
+    </>
+  );
+}
+
 function SheetHead({ eyebrow, title, sub }: { eyebrow: string; title: string; sub?: string }) {
   const close = useStore((s) => s.closeSheet);
   return (
@@ -613,6 +650,12 @@ export function SproutSheet({ id }: { id: string }) {
                 </li>
               ))}
             </ol>
+          </>
+        )}
+        {sprout.retro && (
+          <>
+            <h3 className="eyebrow">retro</h3>
+            <RetroPart retro={sprout.retro} text={detail?.retro ?? null} onFlow={showFlow} />
           </>
         )}
         <p className="dim">
