@@ -475,7 +475,7 @@ docker's rules, and ufw with `MANAGE_BUILTINS=yes` flushes the built-in
 chains on a reload.
 
 ```
-systemctl is-enabled nftables.service iptables.service   # both: disabled (or not-found)
+systemctl is-enabled nftables.service iptables.service ip6tables.service   # each: disabled (or not-found)
 grep MANAGE_BUILTINS /etc/default/ufw                    # MANAGE_BUILTINS=no
 ```
 
@@ -570,6 +570,9 @@ stages check once more with `CANOPY_FENCE_TAILNET_IP` set to another node,
 the Mac (`tailscale status` shows its address): that probe would leave through
 `tailscale0`, so it is the one that shows the tailnet part of the fence
 holding.
+An asleep Mac times out too, so run the control check from canopy with the
+Mac's address as well: its line there has to say `BAD` (the Mac answering),
+or the `ok` in stages proves nothing.
 
 **7. The logins**, in a real terminal on the mini (they are interactive).
 First claude, then check where it put its account file:
@@ -592,6 +595,15 @@ again. Then codex:
 
 ```
 docker compose exec -it stages codex login --device-auth
+```
+
+**After a reboot**, check that the fence came up before docker. The unit is
+only ordered ahead of `docker.service`, so if its `--apply` fails, docker
+still starts stages, unfenced:
+
+```
+systemctl is-active canopy-stages-fence   # active
+sudo iptables -t raw -S PREROUTING        # the drops
 ```
 
 **8. The incubator word.** The incubator view should now say "stages isolated".
