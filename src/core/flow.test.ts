@@ -1138,6 +1138,70 @@ Ship it.
     expect(s.flows.get(f.id)?.tries).toEqual({ Build: 1 });
   });
 
+  describe("resumeStageParks, on every good hello", () => {
+    test("a step parked at its start runs again", async () => {
+      const s = setup();
+      const state = awayRunner(s);
+      const f = s.flows.start(seedRepo(), TWO, "", DEFAULT_AGENT);
+      expect(s.flows.get(f.id)?.parkedFor).toBe("stage");
+      state.away = false;
+      expect(s.flows.resumeStageParks()).toBe(1);
+      await flush();
+      expect(s.flows.get(f.id)?.parkedFor).toBeUndefined();
+      expect(s.flows.get(f.id)?.steps[0]).toMatchObject({ status: "running", runId: "run1" });
+    });
+
+    test("a step whose run lost the runner runs again", async () => {
+      const { runner, flows } = setup();
+      const f = flows.start(seedRepo(), TWO, "", DEFAULT_AGENT);
+      runner.end("run1", "failed", "", `Claude Code exited (code 127) without a result: ${STAGE_AWAY}`);
+      await flush();
+      expect(flows.get(f.id)?.parkedFor).toBe("stage");
+      expect(flows.resumeStageParks()).toBe(1);
+      await flush();
+      expect(flows.get(f.id)?.steps[0]).toMatchObject({ status: "running", runId: "run2" });
+    });
+
+    test("a check park reruns the check alone", async () => {
+      let calls = 0;
+      const s = setup({ check: () => (++calls === 1 ? { exit: 127, output: STAGE_AWAY, away: true } : { exit: 0, output: "ok" }) });
+      const f = s.flows.start(seedRepo(), BUILD_CHECKED, "", DEFAULT_AGENT);
+      s.runner.end("run1", "done", "built it");
+      await flush();
+      expect(s.flows.get(f.id)?.stageCheck).toBe(true);
+      expect(s.flows.resumeStageParks()).toBe(1);
+      await flush();
+      expect(s.checks).toEqual(["bun test", "bun test"]);
+      expect(s.runner.specs).toHaveLength(2);
+      expect(s.runner.specs[1]?.verb).toContain("Ship");
+      expect(s.flows.get(f.id)?.steps[0]).toMatchObject({ status: "passed", summary: "built it" });
+    });
+
+    test("a user's gate and a budget park stay as they are", async () => {
+      const gate = setup();
+      const g = gate.flows.start(seedRepo(), TWO, "", DEFAULT_AGENT);
+      gate.runner.end("run1", "done", "first");
+      await flush();
+      expect(gate.flows.get(g.id)).toMatchObject({ status: "gated" });
+      expect(gate.flows.get(g.id)?.parkedFor).toBeUndefined();
+      expect(gate.flows.resumeStageParks()).toBe(0);
+      await flush();
+      expect(gate.flows.get(g.id)?.status).toBe("gated");
+      expect(gate.runner.specs).toHaveLength(1);
+
+      const budget = setup();
+      const B = wf(`---\nblurb: b\nbudget: 1 run, 9h\n---\n\n## A\n\na\n\n## B\n\nb\n`);
+      const b = budget.flows.start(seedRepo(), B, "", DEFAULT_AGENT);
+      budget.runner.end("run1", "done", "a");
+      await flush();
+      expect(budget.flows.get(b.id)).toMatchObject({ status: "gated", parkedFor: "budget" });
+      expect(budget.flows.resumeStageParks()).toBe(0);
+      await flush();
+      expect(budget.flows.get(b.id)).toMatchObject({ status: "gated", parkedFor: "budget" });
+      expect(budget.runner.specs).toHaveLength(1);
+    });
+  });
+
   test("a step run that ends because the stage runner went away parks too", async () => {
     const { runner, flows } = setup();
     const f = flows.start(seedRepo(), TWO, "", DEFAULT_AGENT);

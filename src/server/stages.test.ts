@@ -240,6 +240,13 @@ describe("a runner that blinks between two beats", () => {
   beforeAll(async () => {
     await fresh();
     sock = join(scratch, "s.sock");
+    // a seed of its own, for a flow started by hand
+    const coin = join(root, "_incubator", "coin");
+    await Bun.$`mkdir -p ${coin} && git -C ${coin} init -q -b main`.quiet();
+    await Bun.write(join(coin, "a.txt"), "a\n");
+    await Bun.$`git -C ${coin} add a.txt && git -C ${coin} -c user.name=a -c user.email=a@b commit -qm one`.quiet();
+    await mkdir(join(scratch, "config", "workflows"), { recursive: true });
+    await writeFile(join(scratch, "config", "workflows", "held.md"), "---\nname: held\nblurb: b\n---\n\n## Do\n\nDo it.\n");
     await startRunner();
     client = new StageClient(sock);
     server = await startServer({
@@ -269,6 +276,21 @@ describe("a runner that blinks between two beats", () => {
     await startRunner();
     await until(async () => (await sprouts()).find((x) => x.id === s.id)?.status === "clarifying", "clarify to start", 8000);
     expect((await stages()).waiting).toBe(null);
+  }, 30_000);
+
+  test("a flow parked for the runner runs its step again on the next good hello, on its own", async () => {
+    await stopRunner?.();
+    stopRunner = null;
+    expect(await client.hello()).toBe(null);
+    const res = await postJson(`/api/repos/flow?id=${encodeURIComponent("_incubator/coin")}`, { workflow: "held", note: "" });
+    expect(res.status).toBe(201);
+    const flow = (await res.json()) as Flow;
+    const now = async () => ((await (await fetch(url("/api/flows"))).json()) as Flow[]).find((f) => f.id === flow.id);
+    await until(async () => (await now())?.parkedFor === "stage", "the park");
+    expect((await now())?.status).toBe("gated");
+    await startRunner();
+    await until(async () => (await now())?.steps[0]?.status === "running", "the step to run again", 8000);
+    expect((await now())?.parkedFor).toBeUndefined();
   }, 30_000);
 });
 

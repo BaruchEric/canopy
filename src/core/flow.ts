@@ -341,6 +341,24 @@ export class Flows {
     return live.flow;
   }
 
+  /** Every flow parked for the stage runner, tried again now that a hello
+   *  found it: a step parked at its start or by a run that lost the runner
+   *  runs again, a check park reruns its check alone. A user's gate and a
+   *  budget park are never touched. Returns how many it resumed. */
+  resumeStageParks(): number {
+    let n = 0;
+    for (const l of [...this.live.values()]) {
+      if (l.flow.status !== "gated" || l.flow.parkedFor !== "stage") continue;
+      try {
+        this.resume(l.flow.id, "continue");
+        n += 1;
+      } catch {
+        // gone or moved on between the read and the resume
+      }
+    }
+    return n;
+  }
+
   stop(id: string): Flow {
     const live = this.live.get(id);
     if (!live) throw new Error(`unknown flow: ${id}`);

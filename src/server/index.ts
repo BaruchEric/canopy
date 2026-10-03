@@ -3435,6 +3435,14 @@ export async function startServer(opts: {
           state.incubator.inc.pump();
           tellStages();
         },
+        // every good hello, not only the one after a miss: a flow can park
+        // while the client still believed the runner up. The resumed flows
+        // take their slots back before the queue is pumped.
+        () => {
+          if (state.flows.resumeStageParks() === 0) return;
+          state.incubator.inc.pump();
+          tellStages();
+        },
       )
     : null;
   tellStages();
