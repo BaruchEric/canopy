@@ -241,6 +241,15 @@ services:
       # /proc/<canopy>/environ like the two above.
       - VERCEL_TOKEN=${VERCEL_TOKEN:-}
       - VERCEL_SCOPE=${VERCEL_SCOPE:-}
+      # a vercel+firebase project's Firebase side (docs/deploy.md): a
+      # `firebase login:ci` token from a Google account kept for incubator
+      # projects, the Firestore location new projects take (nam5 when
+      # empty), and the PATH the firebase CLI runs with, its own node first.
+      # Only this service holds them; the token is readable through
+      # /proc/<canopy>/environ like the ones above.
+      - FIREBASE_TOKEN=${FIREBASE_TOKEN:-}
+      - FIREBASE_LOCATION=${FIREBASE_LOCATION:-}
+      - CANOPY_FIREBASE_PATH=/opt/firebase/bin:/usr/local/bin:/usr/bin:/bin
       - CANOPY_INCUBATOR_AUTOSTART=${CANOPY_INCUBATOR_AUTOSTART:-}
       # the stage runner's socket in the stages container (stage-sock below),
       # the one way canopy starts an agent, check or build in a seed

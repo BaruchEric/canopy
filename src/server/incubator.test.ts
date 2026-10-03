@@ -90,6 +90,7 @@ beforeAll(async () => {
   root = join(scratch, "root");
   await Bun.$`mkdir -p ${join(root, "app")} && git -C ${join(root, "app")} init -q`.quiet();
   process.env["VERCEL_TOKEN"] = "tok_test";
+  process.env["FIREBASE_TOKEN"] = "1//fb_test";
   server = await scratchServer({
     root,
     port: 0,
@@ -111,13 +112,15 @@ beforeAll(async () => {
   });
 });
 
-test("the Vercel token leaves canopy's env once the server has read it", () => {
+test("the Vercel and Firebase tokens leave canopy's env once the server has read them", () => {
   expect(process.env["VERCEL_TOKEN"]).toBeUndefined();
+  expect(process.env["FIREBASE_TOKEN"]).toBeUndefined();
 });
 
 afterAll(async () => {
   server.stop();
   delete process.env["VERCEL_TOKEN"];
+  delete process.env["FIREBASE_TOKEN"];
   if (previous === undefined) delete process.env["CANOPY_CONFIG_DIR"];
   else process.env["CANOPY_CONFIG_DIR"] = previous;
   await rm(scratch, { recursive: true, force: true });

@@ -61,6 +61,7 @@ import { seedOps } from "../core/seed";
 import { SproutFiles } from "../core/sproutstore";
 import { transcribeConfig, transcriber } from "../core/transcribe";
 import { shipConfig, shipper, type Shipper } from "../core/shipper";
+import { seedSource, type SeedSource } from "../core/seedsource";
 import { vaultConfig, vaultNotes } from "../core/vault";
 import { linkPeers, NO_PUSH, peerUrl } from "../core/peers";
 import { initRepo, PassSeen, seedRepo, syncAll, syncRepo, takeWip, trackBranch } from "../core/peersync";
@@ -2817,6 +2818,8 @@ export async function startServer(opts: {
     transcribe?: Transcriber | null;
     notes?: NoteSink | null;
     ship?: Shipper | null;
+    /** where a renovate or extend seed comes from; seedSource unless a test says */
+    source?: SeedSource | null;
     stage?: StageClient | null;
     unisolated?: boolean;
     stageEvery?: number;
@@ -3044,6 +3047,7 @@ export async function startServer(opts: {
     if (!vault) console.error("incubator: no CANOPY_VAULT_TOKEN, so no vault notes");
     if (!speech) console.error("incubator: no CANOPY_TRANSCRIBE_URL, so voice memos stay untranscribed");
     if (!ship.vercelToken) console.error("incubator: no VERCEL_TOKEN, so a built project parks before its deploy");
+    if (!ship.firebaseToken) console.error("incubator: no FIREBASE_TOKEN, so a vercel+firebase project parks before its deploy");
   }
   // one store, stamped with the realpath'd root, for the incubator and for
   // what a server without the flows lock lists
@@ -3176,6 +3180,11 @@ export async function startServer(opts: {
         transcribe: opts.incubator?.transcribe !== undefined ? opts.incubator.transcribe : transcriber(speech),
         notes: opts.incubator?.notes !== undefined ? opts.incubator.notes : vaultNotes(vault),
         ship: opts.incubator?.ship !== undefined ? opts.incubator.ship : shipper(ship),
+        // a renovate or extend seed is rebuilt in this process; the mirror syncs after, as for a commit
+        source:
+          opts.incubator?.source !== undefined
+            ? opts.incubator.source
+            : seedSource({ repos: () => state.result.repos, self: runnerOpts.backend, committed: (path) => syncMirror(state, path) }),
         advice: adviceFiles,
         onChange: (sprout) => {
           broadcast(state, { type: "incubator", sprout });

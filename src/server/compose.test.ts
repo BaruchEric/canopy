@@ -145,3 +145,14 @@ describe("the stage runner's socket", () => {
     expect(services["stages"]?.group_add).toBeUndefined();
   });
 });
+
+describe("the Firebase deploy's settings", () => {
+  const names = (svc: string): string[] => envOf(compose.services[svc] ?? {}).map((e) => e.split("=")[0] ?? "");
+  test("canopy holds the token, the location and the CLI's own PATH", () => {
+    expect(names("canopy")).toEqual(expect.arrayContaining(["FIREBASE_TOKEN", "FIREBASE_LOCATION", "CANOPY_FIREBASE_PATH"]));
+    expect(envOf(compose.services["canopy"] ?? {})).toContain("CANOPY_FIREBASE_PATH=/opt/firebase/bin:/usr/local/bin:/usr/bin:/bin");
+  });
+  test("neither the shells nor the stages do", () => {
+    for (const svc of ["shells", "stages"]) for (const n of names(svc)) expect(n).not.toMatch(/FIREBASE/);
+  });
+});

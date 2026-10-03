@@ -195,7 +195,7 @@ ENV CLAUDE_CONFIG_DIR=/home/bun/.stage-claude CODEX_HOME=/home/bun/.stage-codex
 # the build fails here rather than ship a stage image that has gh or the
 # Vercel CLI, a PATH folder (or one above it) the runner's user can write,
 # or a stage tool or runner file it can change
-RUN ! command -v gh && ! command -v vercel && ! command -v vc
+RUN ! command -v gh && ! command -v vercel && ! command -v vc && ! command -v firebase
 RUN set -e; \
     for d in $(echo "$PATH" | tr : ' '); do \
       p="$d"; \
@@ -222,6 +222,30 @@ ENV BUN_RUNTIME_TRANSPILER_CACHE_PATH=0
 CMD ["bun", "/app/stage-runner.js"]
 
 FROM shells
+# The firebase CLI, for the incubator's vercel+firebase deploy, in the canopy
+# image alone (the shells and the stages never get it). canopy runs it
+# itself, with FIREBASE_TOKEN in that one process's env and PATH set to
+# CANOPY_FIREBASE_PATH (docker-compose.yml). It needs node 20 or later and
+# Debian's is 18, so node 22 comes from the official image into the same
+# root-owned prefix, which no other PATH names: claude, codex and the shells
+# keep the node they had. Pinned, so a CLI release cannot change a deploy unseen.
+USER root
+COPY --from=node:22-bookworm-slim /usr/local/bin/node /opt/firebase/bin/node
+RUN set -e; \
+    BUN_INSTALL_GLOBAL_DIR=/opt/firebase/global BUN_INSTALL_BIN=/opt/firebase/bin BUN_INSTALL_CACHE_DIR=/tmp/firebase-cache \
+      bun add -g firebase-tools@15.32.1; \
+    rm -rf /tmp/firebase-cache; \
+    chown -R root:root /opt/firebase; \
+    chmod -R u+rwX,go+rX,go-w /opt/firebase; \
+    test "$(PATH=/opt/firebase/bin:/usr/bin:/bin node --version | cut -d. -f1)" = v22; \
+    # in a scratch home, as canopy runs it: the CLI writes its config store
+    # wherever HOME says, and root's file in the bun user's home would
+    # break every later run there
+    mkdir /tmp/firebase-home; \
+    test "$(HOME=/tmp/firebase-home XDG_CONFIG_HOME=/tmp/firebase-home/.config NO_UPDATE_NOTIFIER=1 PATH=/opt/firebase/bin:/usr/bin:/bin firebase --version)" = 15.32.1; \
+    rm -rf /tmp/firebase-home; \
+    test ! -e /home/bun/.config/configstore
+USER bun
 # gh comes from the shells stage above, so the server and the shells run the
 # same one
 COPY --from=build --chown=bun:bun /app /app
