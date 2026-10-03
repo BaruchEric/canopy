@@ -5,7 +5,7 @@
  * here applies an edit: advice is shown, and goes to a chat only when the
  * user accepts it. Browser-safe.
  */
-import { sproutEnded, withoutSecrets } from "./sprout";
+import { recordLine, sproutEnded, withoutSecrets } from "./sprout";
 import type { Advice, AdviceEntry, AdviceOffer, Flow, FlowDigest, Improvements, InputKind, Sprout, SproutPick, SproutStatus, StepDigest } from "./types";
 
 /** how long a park waits on the user before its retro runs */
@@ -289,4 +289,16 @@ export function endRetroDue(s: Sprout): boolean {
   if (!r) return true;
   if (r.for === "end") return false;
   return !(s.status === "stopped" && r.flowsSeen >= s.flows.length);
+}
+
+/** the retro's note: what became of the project, and where its record is */
+export function retroNote(s: Sprout, file: string): string {
+  const how: Partial<Record<SproutStatus, string>> = {
+    live: `went live${s.url ? ` at ${s.url}` : ""}`,
+    rejected: "was turned down at eval",
+    stopped: "was stopped by the user",
+    "handed-off": "was handed off as a branch",
+    parked: `has waited a day, parked: ${oneLine(s.parked ?? "no reason given", 300)}`,
+  };
+  return `This is the incubator project "${s.title}" (${s.id}); it ${how[s.status] ?? `is ${s.status}`}. ${recordLine(file)}`;
 }
