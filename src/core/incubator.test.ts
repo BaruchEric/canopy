@@ -7,7 +7,7 @@ import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Incubator, IncubatorError, incubatorWorkflow, type AdviceSink, type IncubatorDeps, type IncubatorFlows, type IncubatorSeeds, type IncubatorStore, type Intake, type NoteSink } from "./incubator";
-import type { ShipBundle, Shipper, ShipSource } from "./shipper";
+import type { BranchPush, ShipBundle, Shipper, ShipSource } from "./shipper";
 import type { ExtendTarget, RebuildSpec, SeedSource } from "./seedsource";
 import { BUNDLED_DIR, findWorkflow, loadWorkflows } from "./workflows";
 import { RETRO_PARK_WAIT, RETRO_UNATTENDED, RETRO_WAIT_MAX } from "./retro";
@@ -1380,6 +1380,13 @@ class FakeShip implements Shipper {
     if (this.failDeploy) throw new Error(this.failDeploy);
     return `https://${project}.vercel.app`;
   }
+  failBranch: string | null = null;
+  async pushBranch(from: ShipSource, to: BranchPush): Promise<string> {
+    this.shippedFrom.push(typeof from === "string" ? from : from.file);
+    this.calls.push(`branch ${to.remote} ${to.slug} ${to.base}`);
+    if (this.failBranch) throw new Error(this.failBranch);
+    return `https://github.com/eric/clms/tree/new/${to.slug}`;
+  }
 }
 
 describe("scout and build-new", () => {
@@ -2263,8 +2270,8 @@ class FakeSource implements SeedSource {
 describe("renovate and extend builds", () => {
   const RENOVATE = JSON.stringify({ kind: "renovate", host: "vercel", why: "a maintained fork", target: "https://github.com/up/lib", license: "MIT" });
   const EXTEND = JSON.stringify({ kind: "extend", host: "vercel", why: "the user said extend clms", target: "clms" });
-  const builds = (source: FakeSource | null) => {
-    const w = world({ source });
+  const builds = (source: FakeSource | null, ship: Shipper | null = null) => {
+    const w = world({ source, ship });
     w.workflows.set("scout", SCOUT_STAGE);
     w.workflows.set("renovate", stage("renovate", ["Renovate", "Test", "Accept"], "judge"));
     w.workflows.set("extend", stage("extend", ["Build", "Test", "Accept"], "judge"));
@@ -2375,5 +2382,34 @@ describe("renovate and extend builds", () => {
     expect(w2.seeds.commits.length).toBe(commits2);
     // the ship's check holds the hand-off to the commit Accept saw
     expect(after.builtHead).toBe("branch-tip");
+  });
+
+  test("an extend's Accept hands off one branch: handed-off with its url, a line in the day, the retro due, nothing deployed", async () => {
+    const ship = new FakeShip();
+    const w = builds(new FakeSource(), ship);
+    const s = await picked(w, EXTEND);
+    const after = await end(w, s.id, { ".canopy/accept.md": "## Verdict\ngo" });
+    expect(after.status).toBe("handed-off");
+    expect(after.branch).toBe(`https://github.com/eric/clms/tree/new/${s.slug}`);
+    expect(ship.calls).toEqual([`branch https://github.com/eric/clms.git ${s.slug} b0`]);
+    expect(ship.bundles.every((b) => b.done)).toBe(true);
+    expect(w.notes.lines.some((l) => l.line.includes(`handed off as the branch https://github.com/eric/clms/tree/new/${s.slug}`))).toBe(true);
+    expect(after.retro?.for).toBe("end");
+  });
+
+  test("a hand-off whose seed moved after Accept, or whose push fails, parks", async () => {
+    const ship = new FakeShip();
+    const w = builds(new FakeSource(), ship);
+    const s = await picked(w, EXTEND);
+    w.seeds.head = "accepted";
+    ship.head = "moved-on";
+    const moved = await end(w, s.id, { ".canopy/accept.md": "## Verdict\ngo" });
+    expect(moved.status).toBe("parked");
+    expect(moved.parked).toContain("the seed moved after the build was accepted");
+    expect(ship.calls.some((c) => c.startsWith("branch"))).toBe(false);
+    ship.failBranch = "git push: ! [rejected] new/x (non-fast-forward)";
+    await w.inc.resume(s.id, "retry");
+    await w.inc.idle();
+    expect(now(w, s.id).parked).toBe("hand-off: git push: ! [rejected] new/x (non-fast-forward)");
   });
 });

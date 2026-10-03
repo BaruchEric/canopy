@@ -28,6 +28,7 @@ import {
   HAND_OFF,
   isOwnStep,
   isBuildWorkflow,
+  extendBranch,
   hostLine,
   workRefusal,
   SPROUT_CONCURRENCY,
@@ -1317,7 +1318,33 @@ export class Incubator {
 
   /** canopy's push of an extend's branch (amendment 6, ruling 6) */
   private async handOff(s: Sprout): Promise<void> {
-    await this.park(s, "the hand-off of a branch is not built yet");
+    const ship = this.deps.ship ?? null;
+    const work = s.work;
+    if (work?.kind !== "extend") return this.park(s, "there is no extend branch to hand off");
+    if (!ship) return this.park(s, "this backend has no deploy set up");
+    if (work.branch !== extendBranch(s.slug)) return this.park(s, `the seed's branch is ${work.branch}, not ${extendBranch(s.slug)}`);
+    try {
+      if (sproutEnded(s)) return;
+      // one bundle, held to the commit Accept saw, as for a ship (amendment 4)
+      const bundle = await ship.bundle(s.seedPath);
+      let branch: string;
+      try {
+        if (s.builtHead && bundle.head !== s.builtHead) {
+          return await this.park(s, `${SEED_MOVED} (${bundle.head.slice(0, 12)}, accepted ${s.builtHead.slice(0, 12)}); resume to hand it off as it is now`);
+        }
+        branch = await ship.pushBranch(bundle, { remote: work.remote, slug: s.slug, base: work.base });
+      } finally {
+        await bundle.done();
+      }
+      if (sproutEnded(s)) return;
+      s.branch = branch;
+      s.status = "handed-off";
+      delete s.parked;
+      await this.changed(s, "handed-off");
+      this.pump();
+    } catch (err) {
+      await this.park(s, `hand-off: ${msg(err)}`);
+    }
   }
 
   /** `pump` false for a gate: its flow still holds the slot */

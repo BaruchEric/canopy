@@ -212,6 +212,86 @@ describe("push", () => {
   });
 });
 
+describe("pushBranch", () => {
+  const REMOTE = "https://github.com/eric/clms.git";
+  const git = async (cwd: string, ...args: string[]): Promise<string> => {
+    const r = await exec(["git", "-c", "user.name=t", "-c", "user.email=t@t", "-c", "commit.gpgsign=false", ...args], { cwd });
+    if (r.code !== 0) throw new Error(`git ${args.join(" ")}: ${r.stderr}`);
+    return r.stdout.trim();
+  };
+  const commit = async (dir: string, rel: string, text: string, msg: string): Promise<string> => {
+    await mkdir(join(dir, rel, ".."), { recursive: true });
+    await writeFile(join(dir, rel), text);
+    await git(dir, "add", "-f", "--", rel);
+    await git(dir, "commit", "-qm", msg);
+    return git(dir, "rev-parse", "HEAD");
+  };
+  const refs = async (bare: string): Promise<string[]> => (await git(bare, "for-each-ref", "--format=%(refname) %(objectname)")).split("\n").filter(Boolean);
+  /** the user's GitHub repo as a bare fixture with a main, and an extend seed cloned from it on new/s */
+  const world = async () => {
+    const dir = await mkdtemp(join(tmpdir(), "canopy-handoff-test-"));
+    const target = join(dir, "clms.git");
+    const first = join(dir, "first");
+    await mkdir(first);
+    await git(first, "init", "-q", "-b", "main");
+    const base = await commit(first, "README.md", "clms\n", "first");
+    await git(dir, "clone", "-q", "--bare", first, target);
+    const seed = join(dir, "seed");
+    await git(dir, "clone", "-q", target, seed);
+    await git(seed, "checkout", "-q", "-b", "new/s");
+    await git(seed, "remote", "remove", "origin");
+    const deps: ShipDeps = { exec, fetch, which: () => null, branchRemote: (r) => (r === REMOTE ? target : "nowhere") };
+    return { dir, target, seed, base, deps };
+  };
+
+  test("the branch's tip reaches new/<slug> on the target and nothing else moves", async () => {
+    const w = await world();
+    const head = await commit(w.seed, "src/dark.ts", "export const dark = true;\n", "dark mode");
+    // a tag in the seed stays there
+    await git(w.seed, "tag", "v9");
+    const url = await shipper(cfg, w.deps).pushBranch(w.seed, { remote: REMOTE, slug: "s", base: w.base });
+    expect(url).toBe("https://github.com/eric/clms/tree/new/s");
+    expect((await refs(w.target)).sort()).toEqual([`refs/heads/main ${w.base}`, `refs/heads/new/s ${head}`]);
+  });
+
+  test("any other remote, or one off github.com, is refused before git runs", async () => {
+    const f = fakes(() => ok());
+    await expect(shipper(cfg, f.deps).pushBranch("/seed", { remote: "https://gitlab.com/eric/clms.git", slug: "s", base: "a".repeat(40) })).rejects.toThrow("is not a github.com repo");
+    await expect(shipper(cfg, f.deps).pushBranch("/seed", { remote: REMOTE, slug: "s", base: "main" })).rejects.toThrow("not a commit id");
+    expect(f.calls).toHaveLength(0);
+  });
+
+  test("a branch that left its base, touched canopy's notes, or is not where HEAD is, is refused", async () => {
+    const w = await world();
+    await commit(w.seed, ".canopy/intent.md", "be useful", "notes by mistake");
+    await commit(w.seed, ".canopy/intent.md", "gone again", "and back");
+    await expect(shipper(cfg, w.deps).pushBranch(w.seed, { remote: REMOTE, slug: "s", base: w.base })).rejects.toThrow("touch canopy's notes (.canopy/intent.md)");
+    const w2 = await world();
+    await git(w2.seed, "checkout", "-q", "--orphan", "fresh");
+    await git(w2.seed, "rm", "-rqf", ".");
+    await commit(w2.seed, "x.md", "x", "orphan");
+    await git(w2.seed, "branch", "-qD", "new/s");
+    await git(w2.seed, "branch", "-q", "-m", "new/s");
+    await expect(shipper(cfg, w2.deps).pushBranch(w2.seed, { remote: REMOTE, slug: "s", base: w2.base })).rejects.toThrow("new/s does not grow from");
+    const w3 = await world();
+    await commit(w3.seed, "a.md", "a", "work");
+    await git(w3.seed, "checkout", "-q", "-b", "elsewhere");
+    await commit(w3.seed, "b.md", "b", "more");
+    await expect(shipper(cfg, w3.deps).pushBranch(w3.seed, { remote: REMOTE, slug: "s", base: w3.base })).rejects.toThrow("is not the tip of new/s");
+    for (const x of [w, w2, w3]) expect(await refs(x.target)).toEqual([`refs/heads/main ${x.base}`]);
+  });
+
+  test("a second push of history that moved fails as not a fast-forward, never forced", async () => {
+    const w = await world();
+    const first = await commit(w.seed, "a.md", "a", "one");
+    await shipper(cfg, w.deps).pushBranch(w.seed, { remote: REMOTE, slug: "s", base: w.base });
+    await git(w.seed, "reset", "-q", "--hard", w.base);
+    await commit(w.seed, "b.md", "b", "another");
+    await expect(shipper(cfg, w.deps).pushBranch(w.seed, { remote: REMOTE, slug: "s", base: w.base })).rejects.toThrow("git push:");
+    expect((await refs(w.target)).sort()).toEqual([`refs/heads/main ${w.base}`, `refs/heads/new/s ${first}`]);
+  });
+});
+
 describe("a seed whose config canopy will not run", () => {
   test("push and deploy refuse it before any clone, naming the key", async () => {
     const seeds = join(await mkdtemp(join(tmpdir(), "canopy-ship-guard-")), "_incubator");

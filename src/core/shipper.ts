@@ -25,6 +25,7 @@ import { join } from "node:path";
 import { exec as realExec, type ExecOptions, type ExecResult } from "./exec";
 import { readSeed, writeSeed } from "./seed";
 import { bundleSeed } from "./seedmirror";
+import { NOTE_FILES, branchPushRefusal, extendBranch, githubRepo } from "./sprout";
 import type { HostId } from "./types";
 
 export interface Shipper {
@@ -46,6 +47,20 @@ export interface Shipper {
    *  production with the project pinned; the public production url. A seed
    *  path is bundled first. */
   deploy(from: ShipSource, project: string): Promise<string>;
+  /** an extend's hand-off: the bundle's HEAD, which must be the tip of
+   *  `new/<slug>`, grow from `base` and leave canopy's notes alone, pushed
+   *  to that branch on the target's own github.com remote and nowhere
+   *  else, never forced; the branch's GitHub url */
+  pushBranch(from: ShipSource, to: BranchPush): Promise<string>;
+}
+
+/** where an extend's branch goes */
+export interface BranchPush {
+  /** the target's https remote canopy recorded at the rebuild */
+  remote: string;
+  slug: string;
+  /** the commit the branch was made from */
+  base: string;
 }
 
 /** a seed as one ship sends it */
@@ -76,6 +91,8 @@ export interface ShipDeps {
   which: (bin: string) => string | null;
   /** where "owner/name" is pushed; GitHub's https url unless a test says */
   remote?: (repo: string) => string;
+  /** where an extend's checked remote is pushed; the remote itself unless a test maps it to a fixture */
+  branchRemote?: (remote: string) => string;
   /** the seed as a bundle in `file`, and its HEAD commit; `bundleSeed`
    *  unless a test says */
   bundle?: (seedPath: string, file: string) => Promise<{ head: string }>;
@@ -200,6 +217,41 @@ export function shipper(cfg: ShipConfig, deps: ShipDeps = { exec: realExec, fetc
           await rm(tmp, { recursive: true, force: true });
         }
       });
+    },
+
+    async pushBranch(from, to) {
+      const ref = `refs/heads/${extendBranch(to.slug)}`;
+      const refused = branchPushRefusal({ remote: to.remote, ref }, { remote: to.remote, slug: to.slug });
+      if (refused) throw new Error(refused);
+      const gh = githubRepo(to.remote);
+      if (!gh) throw new Error(`${to.remote} is not a github.com repo`);
+      if (!/^[0-9a-f]{40}([0-9a-f]{24})?$/.test(to.base)) throw new Error("the branch's base is not a commit id");
+      const url = deps.branchRemote ? deps.branchRemote(to.remote) : to.remote;
+      await withBundle(from, async ({ file, head }) => {
+        const tmp = await mkdtemp(join(tmpdir(), "canopy-handoff-"));
+        const bare = join(tmp, "seed.git");
+        const git = (args: string[], cwd: string, timeoutMs = 30_000): Promise<ExecResult> =>
+          deps.exec(["git", ...NO_HOOKS, ...args], { cwd, timeoutMs, env: { GIT_TERMINAL_PROMPT: "0" } });
+        try {
+          const cloned = await git(["clone", "--bare", "--quiet", "--", file, bare], tmp, 300_000);
+          if (cloned.code !== 0) throw new Error(`git clone of the seed's bundle: ${tail(cloned)}`);
+          // the commit Accept saw is the branch's tip, not some other branch HEAD was moved to
+          const tip = await git(["rev-parse", "--verify", "-q", `${ref}^{commit}`], bare);
+          if (tip.code !== 0 || tip.stdout.trim() !== head) throw new Error(`the seed's HEAD is not the tip of ${extendBranch(to.slug)}, so canopy will not push it`);
+          const grows = await git(["merge-base", "--is-ancestor", to.base, head], bare);
+          if (grows.code !== 0) throw new Error(`${extendBranch(to.slug)} does not grow from ${to.base.slice(0, 12)}, the target's branch canopy cloned`);
+          const touched = await git(["log", "--format=", "--name-only", `${to.base}..${head}`, "--", ...NOTE_FILES.map((f) => `:(literal)${f}`)], bare);
+          if (touched.code !== 0) throw new Error(`git log of the branch: ${tail(touched)}`);
+          const notes = [...new Set(touched.stdout.split("\n").filter((l) => l.trim()))];
+          if (notes.length) throw new Error(`the branch's commits touch canopy's notes (${notes.join(", ")}), which never go to the user's repo`);
+          // one ref, no +, no tags, whatever the global config says
+          const pushed = await git(["-c", "push.followTags=false", "-c", "push.recurseSubmodules=no", "push", "--quiet", "--no-verify", "--", url, `${head}:${ref}`], bare, 300_000);
+          if (pushed.code !== 0) throw new Error(`git push: ${tail(pushed)}`);
+        } finally {
+          await rm(tmp, { recursive: true, force: true });
+        }
+      });
+      return `https://github.com/${gh.owner}/${gh.name}/tree/${extendBranch(to.slug)}`;
     },
 
     async deploy(from, project) {
