@@ -1204,7 +1204,8 @@ export class Incubator {
     const write = async (): Promise<void> => {
       // a refused read (a planted link) leaves intent out rather than the whole note
       const intent = snap.prepared ? await this.deps.seeds.read(snap.seedPath, ".canopy/intent.md").catch(() => null) : null;
-      const rev = await notes.put(sproutNotePath(snap.slug), sproutNote(snap, intent), s.noteRev);
+      const retro = snap.retro?.state === "done" ? await this.deps.seeds.read(snap.seedPath, ".canopy/retro.md").catch(() => null) : null;
+      const rev = await notes.put(sproutNotePath(snap.slug), sproutNote(snap, intent, retro), s.noteRev);
       if (rev && rev !== s.noteRev) {
         s.noteRev = rev;
         if (!this.detached && !this.gone(s)) await this.deps.store.save(s);

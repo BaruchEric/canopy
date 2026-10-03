@@ -1787,6 +1787,9 @@ describe("retro", () => {
     expect(after.retro).toMatchObject({ state: "done", endedAt: 2_000, advice: [{ key: "clarify-asks-less", lesson: "Clarify asked what the brief said." }] });
     expect(w.seeds.commits.at(-1)?.message).toBe("retro: coin counter");
     expect(w.advice.folds).toEqual([{ advice: [{ key: "clarify-asks-less", lesson: "Clarify asked what the brief said.", file: "clarify" }], from: { id: s.id, title: "coin counter" } }]);
+    // the vault note and the sheet carry it
+    expect(w.notes.puts.at(-1)?.text).toContain("## Retro\n\nAdvice:\n\n- clarify-asks-less: Clarify asked what the brief said.");
+    expect((await w.inc.detail(s.id)).retro).toBe("# Retro");
   });
 
   test("a retro that fails, stops, parks at its gate, writes bad advice or is refused its commit fails, and the sprout stays as it was", async () => {

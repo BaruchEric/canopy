@@ -25,6 +25,30 @@ const sprout = (extra: Partial<Sprout> = {}): Sprout => ({
   ...extra,
 });
 
+describe("the retro in the note", () => {
+  const retro = { for: "end" as const, state: "done" as const, at: 1, endedAt: 2, flowsSeen: 1, tries: 1, advice: [{ key: "clarify-asks-less", lesson: "Clarify asked\nwhat the brief said." }] };
+
+  test("none before a retro is done", () => {
+    expect(sproutNote(sprout(), null, "# Retro: x\n\nwords")).not.toContain("## Retro");
+    expect(sproutNote(sprout({ retro: { ...retro, state: "running" } }), null, "words")).not.toContain("## Retro");
+  });
+
+  test("a done retro: its account without its heading, clipped, then its lessons", () => {
+    const md = sproutNote(sprout({ status: "live", retro }), null, `# Retro: Change counter\n\nWhat went well: clarify.\n${"word ".repeat(2000)}`);
+    expect(md).toContain("## Retro\n\nWhat went well: clarify.");
+    expect(md).not.toContain("# Retro: Change counter");
+    expect(md).toContain("…");
+    expect(md).toContain("Advice:\n\n- clarify-asks-less: Clarify asked what the brief said.");
+    const section = md.slice(md.indexOf("## Retro"));
+    expect(section.length).toBeLessThan(4300);
+  });
+
+  test("a failed retro says why, and one with no advice says so", () => {
+    expect(sproutNote(sprout({ retro: { ...retro, state: "failed", reason: "the retro failed: the run failed" } }), null)).toContain("The retro failed: the retro failed: the run failed");
+    expect(sproutNote(sprout({ retro: { ...retro, advice: [] } }), null, "# Retro\n\nfine")).toContain("fine\n\nNo advice.");
+  });
+});
+
 describe("daily note", () => {
   test("the path and the head follow the vault's own", () => {
     expect(dailyNotePath(day)).toBe("01 - Daily Notes/10 - October 2026/2026-10-01.md");
