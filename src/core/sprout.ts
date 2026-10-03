@@ -285,6 +285,30 @@ export function answersText(questions: readonly RunQuestion[], answers: Readonly
   return `${head}\n\n${lines.join("\n")}\n`;
 }
 
+/** canopy's own file of what the user answered while a stage ran: the judge
+ *  reads it, and no agent is told to write it (Research may rewrite intent.md) */
+export const ANSWERS_FILE = ".canopy/answers.md";
+
+export const ANSWERS_HEAD =
+  "# Answers\n\nWhat the user answered while a stage ran, in order. canopy writes this file; the evaluator reads it with the intent.\n";
+
+/** what canopy commits to the seed after clarify, after answers and after a stage; nothing raw */
+export const SEED_FILES = [".canopy/brief.md", ".canopy/intent.md", ".canopy/inputs.md", ANSWERS_FILE];
+
+const answerOf = (answers: Readonly<Record<string, string>>, q: string): string => (Object.hasOwn(answers, q) ? (answers[q] ?? "") : "");
+
+/** one answer given inside a run, as answers.md keeps it: `where` names the stage and step */
+export function runAnswersText(where: string, questions: readonly RunQuestion[], answers: Readonly<Record<string, string>>, at: number): string {
+  const lines = questions.map((q) => `- ${q.question}\n  ${oneLine(answerOf(answers, q.question), 1000) || "(no answer)"}`);
+  return `## ${oneLine(where)}, ${localStamp(at)}\n\n${lines.join("\n")}\n`;
+}
+
+/** the same answer as the inputs index's one line */
+export function runAnswersSummary(questions: readonly RunQuestion[], answers: Readonly<Record<string, string>>): string {
+  const parts = questions.map((q) => `${q.question} ${answerOf(answers, q.question) || "(no answer)"}`);
+  return oneLine(parts.join("; "), 200);
+}
+
 /** the seed's first brief, until clarify rewrites it */
 export function briefText(title: string, text: string): string {
   return `# ${title}\n\n${text.trim() || "No text was given; clarify writes the brief from the other inputs."}\n`;

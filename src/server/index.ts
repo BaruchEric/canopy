@@ -2167,7 +2167,14 @@ async function handleApi(
     if (typeof b.id !== "string" || typeof b.promptId !== "string" || !answer) {
       return json({ error: "malformed answer" }, 400);
     }
-    return json(state.runner.answer(b.id, b.promptId, answer));
+    // the questions as they were asked, before the answer settles them
+    const asked = state.runner.get(b.id)?.prompt;
+    const run = state.runner.answer(b.id, b.promptId, answer);
+    // an answer inside an incubator stage is one of the sprout's inputs (amendment 6, ruling 14)
+    if (answer.kind === "answers" && asked?.kind === "question" && asked.id === b.promptId) {
+      state.incubator.inc.runAnswered(b.id, asked.questions, answer.answers);
+    }
+    return json(run);
   }
   if (path === "/api/runs/stop" && method === "POST") {
     const b = (await req.json()) as { id?: unknown };

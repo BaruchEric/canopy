@@ -13,7 +13,12 @@ import type { Shipper } from "./shipper";
 import { PARKS_KEPT, RETRO_CONCURRENCY, RETRO_FILES, RETRO_TRIES, RETRO_UNATTENDED, RETRO_WAIT_MAX, endRetroDue, flowDigest, parkRetroDue, parseAdvice, retroNote, retroRecord, type KnownAdvice } from "./retro";
 import { shareInputs, shareRecord, shareWorkspace, unshare } from "./stageshare";
 import {
+  ANSWERS_FILE,
+  ANSWERS_HEAD,
   BUILD_FILES,
+  SEED_FILES,
+  runAnswersSummary,
+  runAnswersText,
   INPUT_FILE_MAX,
   INPUT_TOTAL_MAX,
   SEEDS_DIR,
@@ -52,7 +57,7 @@ import {
   type ParsedQuestions,
 } from "./sprout";
 import { DAILY_EVENTS, dailyLine, dailyNoteHead, dailyNotePath, sproutNote, sproutNotePath, type NoteEvent } from "./sproutnote";
-import { isFlowActive, type Advice, type Flow, type FlowChoice, type FlowDigest, type InputEntry, type InputKind, type InputVia, type Repo, type Sprout, type SproutDetail, type SproutFlow, type Workflow } from "./types";
+import { isFlowActive, type Advice, type Flow, type FlowChoice, type FlowDigest, type InputEntry, type InputKind, type InputVia, type Repo, type RunQuestion, type Sprout, type SproutDetail, type SproutFlow, type Workflow } from "./types";
 import { findWorkflow, loadWorkflows } from "./workflows";
 
 export class IncubatorError extends Error {
@@ -173,11 +178,10 @@ export interface IncubatorDeps {
   log?: (line: string) => void;
 }
 
-/** what canopy commits to the seed after clarify and after answers; nothing raw */
 /** a flow moved when its status or its step did: the sprout's status follows the step */
 const seenKey = (f: Flow): string => `${f.status}:${f.current}`;
 
-export const SEED_FILES = [".canopy/brief.md", ".canopy/intent.md", ".canopy/inputs.md"];
+export { SEED_FILES };
 
 /** A stage's workflow by name, from the bundled and the user's own sources
  *  only: a seed's own `.canopy/workflows/` (a cloned repo could ship one
@@ -452,6 +456,42 @@ export class Incubator {
     await this.changed(s);
     this.pump();
     return s;
+  }
+
+  /** An answer the user gave to a question a stage's run asked (through
+   *  AskUserQuestion): an input of its own, written at once to answers.md,
+   *  which the judge reads, and the inputs index. It is part of the stage
+   *  that asked, so it never sends the chain back to clarify. False when no
+   *  sprout's current stage holds the run (a retro's flow is never in
+   *  `flows`, and its runs deny every question anyway). */
+  runAnswered(runId: string, questions: readonly RunQuestion[], answers: Readonly<Record<string, string>>): boolean {
+    if (this.detached || questions.length === 0) return false;
+    for (const s of this.sprouts.values()) {
+      const entry = s.flows.at(-1);
+      if (!entry || entry.outcome || sproutEnded(s)) continue;
+      const step = this.deps.flows.get(entry.flowId)?.steps.find((st) => st.runId === runId);
+      if (!step) continue;
+      const where = `${entry.workflow}, ${step.name}`;
+      const at = this.now();
+      this.serial(s, () => this.logAnswers(s, where, [...questions], { ...answers }, at));
+      return true;
+    }
+    return false;
+  }
+
+  private async logAnswers(s: Sprout, where: string, questions: RunQuestion[], answers: Record<string, string>, at: number): Promise<void> {
+    const text = runAnswersText(where, questions, answers, at);
+    const summary = runAnswersSummary(questions, answers);
+    await this.addEntry(s, { kind: "answers", label: "answers", type: "text/markdown", via: "answer", summary, processed: true }, "answers.md", text);
+    const index = inputsIndex(s.inputs);
+    await this.deps.store.writeIndex(s.id, index);
+    if (s.prepared) {
+      // written now, not at the stage's end: Eval reads it in the same flow
+      const was = (await this.deps.seeds.read(s.seedPath, ANSWERS_FILE).catch(() => null)) ?? ANSWERS_HEAD;
+      await this.deps.seeds.write(s.seedPath, ANSWERS_FILE, `${was.trimEnd()}\n\n${text}`);
+      await this.deps.seeds.write(s.seedPath, ".canopy/inputs.md", index);
+    }
+    await this.changed(s, "input");
   }
 
   /** more inputs; after clarify has looked, clarify looks again before the next stage */
@@ -1136,7 +1176,7 @@ export class Incubator {
   /** build-new finished: its notes committed, then canopy's own ship */
   private async built(s: Sprout): Promise<void> {
     try {
-      await this.deps.seeds.commit(s.seedPath, BUILD_FILES, `build: ${s.title}`);
+      await this.deps.seeds.commit(s.seedPath, [...SEED_FILES, ...BUILD_FILES], `build: ${s.title}`);
     } catch (err) {
       return this.park(s, `could not commit the build's notes: ${msg(err)}`);
     }

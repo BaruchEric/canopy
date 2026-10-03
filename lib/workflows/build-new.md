@@ -46,10 +46,10 @@ Finish with one sentence: whether it runs.
 tools: Edit, Write
 turns: 20
 gate: judge
-evidence: .canopy/intent.md .canopy/pick.json .canopy/smoke.md .canopy/accept.md README.md
+evidence: .canopy/intent.md .canopy/answers.md .canopy/pick.json .canopy/smoke.md .canopy/accept.md README.md
 back: Scaffold
 retries: 2
 
-Task: check the work against the intent before it is deployed. Read .canopy/intent.md, README.md, the code and .canopy/smoke.md, then write .canopy/accept.md: each "What success looks like" line, met or not and where in the code, and anything under "Out of scope" that was built anyway. Write only .canopy/accept.md. An evaluator reads these files next and decides whether it is deployed.
+Task: check the work against the intent before it is deployed. Read .canopy/intent.md, .canopy/answers.md when it exists (what the user answered while a stage ran, which stands over the intent where they differ), README.md, the code and .canopy/smoke.md, then write .canopy/accept.md: each "What success looks like" line, met or not and where in the code, and anything under "Out of scope" that was built anyway. Write only .canopy/accept.md. An evaluator reads these files next and decides whether it is deployed.
 
 Finish with one sentence: whether it meets the intent.

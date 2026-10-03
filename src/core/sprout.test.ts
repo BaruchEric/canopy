@@ -1,5 +1,9 @@
 import { describe, expect, test } from "bun:test";
 import {
+  ANSWERS_FILE,
+  SEED_FILES,
+  runAnswersSummary,
+  runAnswersText,
   answersText,
   briefTitle,
   holdsSlot,
@@ -201,6 +205,30 @@ describe("answersText", () => {
   });
   test("going on assumptions says so", () => {
     expect(answersText(qs, null, at)).toContain("chose to go on assumptions");
+  });
+});
+
+describe("answers given inside a run", () => {
+  const qs = [
+    { question: "Build inside clms or standalone?", header: "", options: [], multiSelect: false },
+    { question: "Who uses it?", header: "", options: [], multiSelect: false },
+  ];
+  test("the text names the stage and step, then each question with its answer", () => {
+    expect(runAnswersText("scout, Research", qs, { "Build inside clms or standalone?": "Extend clms", "Who uses it?": "staff" }, at)).toBe(
+      "## scout, Research, 2026-10-01 14:03\n\n- Build inside clms or standalone?\n  Extend clms\n- Who uses it?\n  staff\n",
+    );
+    // a question left out reads as unanswered, an own key only
+    expect(runAnswersText("scout, Research", qs, { "Who uses it?": "staff" }, at)).toContain("- Build inside clms or standalone?\n  (no answer)");
+  });
+  test("the summary is one line of questions and answers, clipped", () => {
+    expect(runAnswersSummary(qs, { "Build inside clms or standalone?": "Extend clms", "Who uses it?": "staff\nand guests" })).toBe(
+      "Build inside clms or standalone? Extend clms; Who uses it? staff and guests",
+    );
+    expect(runAnswersSummary(qs, { "Who uses it?": "x".repeat(400) }).length).toBeLessThanOrEqual(200);
+  });
+  test("answers.md is one of the files canopy commits after a stage", () => {
+    expect(SEED_FILES).toContain(ANSWERS_FILE);
+    expect(ANSWERS_FILE).toBe(".canopy/answers.md");
   });
 });
 

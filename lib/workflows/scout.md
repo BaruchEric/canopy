@@ -28,10 +28,10 @@ Finish with one sentence: the pick and why.
 tools: Edit, Write
 turns: 20
 gate: judge
-evidence: .canopy/intent.md .canopy/research.md .canopy/pick.json .canopy/eval.md
+evidence: .canopy/intent.md .canopy/answers.md .canopy/research.md .canopy/pick.json .canopy/eval.md
 back: Research
 retries: 2
 
-Task: judge the pick in .canopy/pick.json against .canopy/intent.md and .canopy/research.md before anything is built. Write .canopy/eval.md with each "What success looks like" line from intent.md and whether the pick can meet it, the pick's biggest risk, and whether anything breaks the rules: a host off the list, a license that forbids the use, spending money, a public repo, a domain or DNS change. Write only .canopy/eval.md. An evaluator reads these files next and decides whether the pick goes ahead; if the idea itself cannot meet the intent, say so plainly.
+Task: judge the pick in .canopy/pick.json against .canopy/intent.md and .canopy/research.md before anything is built. When .canopy/answers.md exists, it holds what the user answered while a stage ran; it stands over anything in the intent it contradicts. Write .canopy/eval.md with each "What success looks like" line from intent.md and whether the pick can meet it, the pick's biggest risk, and whether anything breaks the rules: a host off the list, a license that forbids the use, spending money, a public repo, a domain or DNS change. Write only .canopy/eval.md. An evaluator reads these files next and decides whether the pick goes ahead; if the idea itself cannot meet the intent, say so plainly.
 
 Finish with one sentence: whether the pick meets the intent.

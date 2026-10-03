@@ -131,7 +131,7 @@ describe("the bundled scout", () => {
     expect(evalStep?.gate).toBe("judge");
     expect(evalStep?.back).toBe("Research");
     expect(evalStep?.retries).toBe(2);
-    expect(evalStep?.evidence).toEqual([".canopy/intent.md", ".canopy/research.md", ".canopy/pick.json", ".canopy/eval.md"]);
+    expect(evalStep?.evidence).toEqual([".canopy/intent.md", ".canopy/answers.md", ".canopy/research.md", ".canopy/pick.json", ".canopy/eval.md"]);
   });
 
   test("no step may read the whole disk, call gh api, clone, push or touch vercel", async () => {
@@ -171,7 +171,7 @@ describe("the bundled build-new", () => {
     const accept = wf?.steps[2];
     expect(accept?.gate).toBe("judge");
     expect(accept?.back).toBe("Scaffold");
-    expect(accept?.evidence).toEqual([".canopy/intent.md", ".canopy/pick.json", ".canopy/smoke.md", ".canopy/accept.md", "README.md"]);
+    expect(accept?.evidence).toEqual([".canopy/intent.md", ".canopy/answers.md", ".canopy/pick.json", ".canopy/smoke.md", ".canopy/accept.md", "README.md"]);
   });
 
   test("no step holds push, gh, vercel or a whole-disk read", async () => {

@@ -2126,3 +2126,70 @@ describe("retro", () => {
     expect(parks.at(-1)?.reason).toBe("clarify failed: try 24");
   });
 });
+
+describe("an answer given inside a stage's run", () => {
+  const Q = { question: "Build inside clms or standalone?", header: "", options: [], multiSelect: false };
+  /** a sprout whose scout runs Research as run_1 */
+  const researching = async (): Promise<{ w: World; s: Sprout; flowId: string }> => {
+    const w = world();
+    w.workflows.set("scout", SCOUT_STAGE);
+    const s = await w.inc.create(intake({ text: "coin counter" }));
+    await w.inc.idle();
+    await w.seeds.write(now(w, s.id).seedPath, ".canopy/questions.json", "[]");
+    w.flows.move(now(w, s.id).flows.at(-1)?.flowId ?? "", { status: "done" });
+    await w.inc.idle();
+    const flowId = now(w, s.id).flows.at(-1)?.flowId ?? "";
+    w.flows.move(flowId, { status: "waiting", steps: [{ name: "Research", status: "running", runId: "run_1" }, { name: "Eval", status: "pending" }] });
+    await w.inc.idle();
+    return { w, s: now(w, s.id), flowId };
+  };
+
+  test("is an input, written at once to answers.md and the index, and the stage goes on", async () => {
+    const { w, s } = await researching();
+    expect(w.inc.runAnswered("run_1", [Q], { [Q.question]: "Extend clms" })).toBe(true);
+    await w.inc.idle();
+    const after = now(w, s.id);
+    const e = after.inputs.at(-1);
+    expect([e?.kind, e?.via, e?.summary]).toEqual(["answers", "answer", "Build inside clms or standalone? Extend clms"]);
+    const answers = (await w.seeds.read(after.seedPath, ".canopy/answers.md")) ?? "";
+    expect(answers.startsWith("# Answers\n")).toBe(true);
+    expect(answers).toContain("## scout, Research, ");
+    expect(answers).toContain("- Build inside clms or standalone?\n  Extend clms");
+    expect(await w.seeds.read(after.seedPath, ".canopy/inputs.md")).toContain(`answers ${e?.name ?? ""}: Build inside clms or standalone? Extend clms`);
+    // part of the stage that asked: no clarify again, the stage keeps running
+    expect(after.reclarify).toBe(false);
+    expect(after.status).toBe("researching");
+    expect(w.flows.started.map((f) => f.workflow.name)).toEqual(["clarify", "scout"]);
+    // a second answer is appended, the first kept
+    expect(w.inc.runAnswered("run_1", [Q], { [Q.question]: "Standalone after all" })).toBe(true);
+    await w.inc.idle();
+    const both = (await w.seeds.read(after.seedPath, ".canopy/answers.md")) ?? "";
+    expect(both).toContain("Extend clms");
+    expect(both).toContain("Standalone after all");
+  });
+
+  test("a run no stage of a sprout holds is not the incubator's", async () => {
+    const { w, s } = await researching();
+    const inputs = now(w, s.id).inputs.length;
+    expect(w.inc.runAnswered("run_other", [Q], { [Q.question]: "x" })).toBe(false);
+    await w.inc.idle();
+    expect(now(w, s.id).inputs).toHaveLength(inputs);
+    expect(await w.seeds.read(s.seedPath, ".canopy/answers.md")).toBe(null);
+  });
+
+  test("scout's commit takes answers.md with the other seed files", async () => {
+    const { w, s, flowId } = await researching();
+    w.inc.runAnswered("run_1", [Q], { [Q.question]: "Extend clms" });
+    await w.inc.idle();
+    await w.seeds.write(s.seedPath, ".canopy/pick.json", PICK);
+    const rels: string[][] = [];
+    const commit = w.seeds.commit.bind(w.seeds);
+    w.seeds.commit = async (path, r, message) => {
+      rels.push(r);
+      return commit(path, r, message);
+    };
+    w.flows.move(flowId, { status: "done" });
+    await w.inc.idle();
+    expect(rels[0]).toContain(".canopy/answers.md");
+  });
+});
