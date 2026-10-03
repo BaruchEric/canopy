@@ -1482,6 +1482,26 @@ describe("scout and build-new", () => {
     expect(w.flows.started.at(-1)?.workflow.name).toBe("build-new");
   });
 
+  test("behind the stage runner build-new's steps get a bare Bash; scout and clarify do not", async () => {
+    const w = world({ shell: true });
+    w.workflows.set("scout", SCOUT_STAGE);
+    w.workflows.set("build-new", BUILD_STAGE);
+    const s = await scouting(w);
+    await end(w, s.id, { ".canopy/pick.json": PICK, ".canopy/research.md": "# Research" });
+    const [clarify, scout, build] = w.flows.started.map((r) => r.workflow);
+    expect(build?.name).toBe("build-new");
+    expect(build?.steps.every((st) => st.tools.includes("Bash"))).toBe(true);
+    expect(scout?.steps.some((st) => st.tools.includes("Bash"))).toBe(false);
+    expect(clarify?.steps.some((st) => st.tools.includes("Bash"))).toBe(false);
+  });
+
+  test("unisolated build-new keeps its workflow's own tools", async () => {
+    const w = chain();
+    const s = await scouting(w);
+    await end(w, s.id, { ".canopy/pick.json": PICK, ".canopy/research.md": "# Research" });
+    expect(w.flows.started.at(-1)?.workflow.steps.some((st) => st.tools.includes("Bash"))).toBe(false);
+  });
+
   test("a renovate pick parks with the phase 4 reason and is not kept; no pick parks too", async () => {
     const w = chain();
     const s = await scouting(w);

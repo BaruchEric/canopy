@@ -209,6 +209,13 @@ describe("allowed tools, enforced by canopy", () => {
     expect(autoAnswer(GIT_READ, cmd("git status", "sub"), "/r")).toBe(true);
   });
 
+  test("a bare Bash covers any command in the repo, compound ones too, and none outside it", () => {
+    expect(autoAnswer(["Bash"], cmd("bun --version && cat .canopy/eval.md | head -60"), "/r")).toBe(true);
+    expect(autoAnswer(["Bash"], { kind: "command", command: null, cwd: null }, "/r")).toBe(true);
+    expect(autoAnswer(["Bash"], cmd("ls", "/elsewhere"), "/r")).toBe(false);
+    expect(autoAnswer(["Read"], cmd("ls"), "/r")).toBe(false);
+  });
+
   test("a covered command that would run outside the repo goes to the human", () => {
     expect(autoAnswer(GIT_READ, cmd("git status", "/elsewhere"), "/r")).toBe(false);
     expect(autoAnswer(GIT_READ, cmd("git status", "/r/../etc"), "/r")).toBe(false);

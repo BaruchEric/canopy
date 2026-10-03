@@ -25,6 +25,7 @@ import {
   withInputsRead,
   withWorkspaceRead,
   withRecordRead,
+  withShell,
   recordLine,
   workspaceLine,
   urlWithoutSecret,
@@ -228,6 +229,12 @@ describe("slots and stages", () => {
     const next = withInputsRead(wf, "/config/incubator/sp_0123456789ab/inputs");
     expect(next.steps[0]?.tools).toEqual(["Edit", "Read(//config/incubator/sp_0123456789ab/inputs/**)"]);
     expect(wf.steps[0]?.tools).toEqual(["Edit"]);
+  });
+  test("withShell adds a bare Bash to every step once and leaves the original alone", () => {
+    const wf = { steps: [{ name: "Scaffold", tools: ["Edit", "Bash(ls:*)"] }, { name: "Test", tools: ["Bash"] }] } as unknown as Workflow;
+    const next = withShell(wf);
+    expect(next.steps.map((st) => st.tools)).toEqual([["Edit", "Bash(ls:*)", "Bash"], ["Bash"]]);
+    expect(wf.steps[0]?.tools).toEqual(["Edit", "Bash(ls:*)"]);
   });
   test("withWorkspaceRead adds the snapshot dir's files and nothing else", () => {
     const wf = { steps: [{ name: "Research", tools: ["WebFetch"] }] } as unknown as Workflow;
