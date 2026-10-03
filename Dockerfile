@@ -212,6 +212,11 @@ RUN set -e; \
 # the checks above ran as the stage user; the runner itself runs as root, and
 # refuses to start so without CANOPY_STAGE_UID and CANOPY_STAGE_GID
 USER root
+# The container is read-only with a tmpfs home (docker-compose.yml): bun as
+# root would make its transpiler cache there, a root-owned folder in the
+# stage user's home, so the runner and its healthcheck keep none. Stages
+# inherit it; bun's install cache is a separate setting and stays on.
+ENV BUN_RUNTIME_TRANSPILER_CACHE_PATH=0
 # CMD, not ENTRYPOINT: the shells stage's tmux CMD would otherwise be appended
 # to the runner's argv
 CMD ["bun", "/app/stage-runner.js"]

@@ -111,6 +111,15 @@ services:
       - ${HOST_HOME:-/home/eric}/.config/canopy-stages/claude:/home/bun/.stage-claude
       - ${HOST_HOME:-/home/eric}/.config/canopy-stages/codex:/home/bun/.stage-codex
       - stage-sock:/run/canopy-stage
+    # Read-only but for the mounts above and two tmpfs: the stage user's
+    # home (its tools' caches and settings, bun's install cache) and /tmp.
+    # What a stage leaves in either lasts until this container restarts,
+    # never into the image. The home tmpfs hides the image's own .bashrc and
+    # ble.sh, so a stage's shells start plain.
+    read_only: true
+    tmpfs:
+      - /home/bun:uid=${HOST_UID:-1000},gid=${HOST_GID:-1000},mode=0700,size=2g
+      - /tmp:mode=1777,size=1g
     networks: [stages-net]
     # docker's embedded resolver forwards each query from the container's own
     # namespace, through the fenced bridge, so the host's upstream (the

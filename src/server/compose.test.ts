@@ -117,6 +117,23 @@ describe("the stages image", () => {
   });
 });
 
+describe("the stages container is read-only", () => {
+  const stages = compose.services["stages"] as { read_only?: boolean; tmpfs?: string[] };
+  test("with a tmpfs home owned by the stage user and a tmpfs /tmp, nothing else writable but the mounts", () => {
+    expect(stages.read_only).toBe(true);
+    expect(stages.tmpfs).toEqual([
+      "/home/bun:uid=${HOST_UID:-1000},gid=${HOST_GID:-1000},mode=0700,size=2g",
+      "/tmp:mode=1777,size=1g",
+    ]);
+  });
+  test("the root runner makes no transpiler cache in the stage user's home", async () => {
+    const text = await Bun.file(new URL("../../Dockerfile", import.meta.url)).text();
+    const start = text.indexOf("FROM shells AS stages");
+    const image = text.slice(start, text.indexOf("\nFROM ", start + 1));
+    expect(image).toContain("ENV BUN_RUNTIME_TRANSPILER_CACHE_PATH=0");
+  });
+});
+
 describe("the stage runner's socket", () => {
   const services = compose.services as Record<string, { group_add?: string[]; build?: { args?: Record<string, string> } }>;
   test("canopy holds the stagecaller group, and the stages image is built with the same gid", () => {
