@@ -473,6 +473,20 @@ describe("clarify's outcome", () => {
     expect(now(w, s.id).parked).toBeUndefined();
   });
 
+  test("a flow parked for the stage runner and resumed on its own unparks its sprout", async () => {
+    const w = world();
+    const s = await clarifying(w);
+    const id = s.flows[0]?.flowId ?? "";
+    w.flows.move(id, { status: "gated", parkedFor: "stage", steps: [{ name: "Clarify", status: "gated", reason: "the stage runner is not answering" }] });
+    await w.inc.idle();
+    expect(now(w, s.id).parked).toBe("clarify waits after Clarify: the stage runner is not answering");
+    // what resumeStageParks does on the next good hello
+    w.flows.move(id, { status: "working", steps: [{ name: "Clarify", status: "running" }] });
+    await w.inc.idle();
+    expect(now(w, s.id).status).toBe("clarifying");
+    expect(now(w, s.id).parked).toBeUndefined();
+  });
+
   test("a flow that fails parks the sprout; a broadcast that changes nothing does nothing", async () => {
     const w = world();
     const s = await clarifying(w);
