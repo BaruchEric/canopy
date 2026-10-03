@@ -139,7 +139,7 @@ export class IncubatorHub {
       const s = isSproutId(id) ? (await this.onDisk()).find((x) => x.id === id) : undefined;
       if (!s) return json({ error: "no such project" }, 404);
       // the seed's own words are the owner's to read; the record is enough here
-      const d: SproutDetail = { sprout: s, brief: null, intent: null, inputsIndex: inputsIndex(s.inputs), research: null };
+      const d: SproutDetail = { sprout: s, brief: null, intent: null, inputsIndex: inputsIndex(s.inputs), research: null, retro: null };
       return json(d);
     }
     return json({ error: "not found" }, 404);

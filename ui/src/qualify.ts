@@ -121,6 +121,7 @@ export function qEvent(q: Q, ev: ServerEvent): ServerEvent {
     case "incubator":
     case "incubator-gone":
     case "stages":
+    case "advice":
       return ev;
   }
 }

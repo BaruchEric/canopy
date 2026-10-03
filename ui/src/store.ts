@@ -1904,7 +1904,7 @@ export const useStore = create<CanopyState>((set, get) => ({
     if (!isShown(before, b)) return;
     beat();
     // workspaces, tailchan, the agent registry, the asks and the incubator are the home backend's alone
-    if ((ev.type === "chan" || ev.type === "workspaces" || ev.type === "registry" || ev.type === "asks" || ev.type === "incubator" || ev.type === "incubator-gone" || ev.type === "stages") && b !== before.home) return;
+    if ((ev.type === "chan" || ev.type === "workspaces" || ev.type === "registry" || ev.type === "asks" || ev.type === "incubator" || ev.type === "incubator-gone" || ev.type === "stages" || ev.type === "advice") && b !== before.home) return;
     // The feed says what changed, so the lines come from the event against
     // the state before it is applied, as the backend that sent it saw it.
     // a message already held (a reconnect's replay, a post heard twice) is

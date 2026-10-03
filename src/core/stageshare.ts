@@ -10,25 +10,13 @@
 import { randomBytes } from "node:crypto";
 import { copyFile, lstat, mkdir, readdir, readFile, realpath, rename, rm, writeFile } from "node:fs/promises";
 import { join, normalize, relative, sep } from "node:path";
-import { urlWithoutSecret } from "./sprout";
+import { withoutSecrets } from "./sprout";
+
+export { withoutSecrets };
 
 export const SHARED_DIR = ".shared";
 const CAP = { files: 400, bytes: 4_000_000 };
 const ID_RE = /^[A-Za-z0-9_-]+$/;
-
-/** a url anywhere in a string: up to whitespace, a quote or an angle bracket */
-const URL_IN_TEXT = /[a-z][a-z0-9+.-]*:\/\/[^\s"'<>]+/gi;
-
-/** a JSON value with every url in every string, whole or inside free text,
- *  passed through `urlWithoutSecret` */
-export function withoutSecrets(v: unknown): unknown {
-  if (typeof v === "string") return v.replace(URL_IN_TEXT, (u) => urlWithoutSecret(u));
-  if (Array.isArray(v)) return v.map(withoutSecrets);
-  if (typeof v === "object" && v !== null) {
-    return Object.fromEntries(Object.entries(v).map(([k, x]) => [k, withoutSecrets(x)]));
-  }
-  return v;
-}
 
 async function regular(path: string): Promise<boolean> {
   const st = await lstat(path).catch(() => null);

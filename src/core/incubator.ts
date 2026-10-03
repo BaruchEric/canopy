@@ -390,8 +390,8 @@ export class Incubator {
     const s = this.need(id);
     // a refused read (a planted link) shows as nothing rather than failing the sheet
     const read = (rel: string): Promise<string | null> => (s.prepared ? this.deps.seeds.read(s.seedPath, rel).catch(() => null) : Promise.resolve(null));
-    const [brief, intent, research] = await Promise.all([read(".canopy/brief.md"), read(".canopy/intent.md"), read(".canopy/research.md")]);
-    return { sprout: s, brief, intent, inputsIndex: inputsIndex(s.inputs), research };
+    const [brief, intent, research, retro] = await Promise.all([read(".canopy/brief.md"), read(".canopy/intent.md"), read(".canopy/research.md"), read(".canopy/retro.md")]);
+    return { sprout: s, brief, intent, inputsIndex: inputsIndex(s.inputs), research, retro };
   }
 
   /** the clarify batch answered, or skipped with null ("go on assumptions") */
