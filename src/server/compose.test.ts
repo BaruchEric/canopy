@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test";
 
 const compose = Bun.YAML.parse(await Bun.file(new URL("../../docker-compose.yml", import.meta.url)).text()) as {
   services: Record<string, { environment?: string[] | Record<string, string>; volumes?: string[]; network_mode?: string; pid?: string; networks?: unknown; depends_on?: unknown }>;
-  networks?: Record<string, { enable_ipv6?: boolean; ipam?: { config?: { subnet?: string }[] } }>;
+  networks?: Record<string, { enable_ipv6?: boolean; driver_opts?: Record<string, string>; ipam?: { config?: { subnet?: string }[] } }>;
 };
 const envOf = (s: { environment?: string[] | Record<string, string> }): string[] =>
   Array.isArray(s.environment) ? s.environment : Object.entries(s.environment ?? {}).map(([k, v]) => `${k}=${v}`);
@@ -50,6 +50,18 @@ describe("the stages service", () => {
   });
   test("its network has no IPv6, so the v4 subnet is the whole of its reach", () => {
     expect(compose.networks?.["stages-net"]?.enable_ipv6).toBe(false);
+  });
+  test("its bridge has the name the fence matches, short enough to be an interface name", async () => {
+    const script = await Bun.file(new URL("../../scripts/stages-fence.sh", import.meta.url)).text();
+    const fenced = /^BRIDGE=(\S+)$/m.exec(script)?.[1];
+    const name = compose.networks?.["stages-net"]?.driver_opts?.["com.docker.network.bridge.name"];
+    expect(fenced).toBe("br-canopy-stg");
+    expect(name).toBe(fenced);
+    // IFNAMSIZ is 16 with the NUL: a longer name fails the bridge and the -i match both
+    expect((name ?? "").length).toBeLessThanOrEqual(15);
+  });
+  test("resolves through public servers, since docker forwards queries from the fenced bridge", () => {
+    expect((stages as { dns?: string[] }).dns).toEqual(["1.1.1.1", "9.9.9.9"]);
   });
   test("canopy reaches it only through the socket", () => {
     const canopy = compose.services["canopy"];

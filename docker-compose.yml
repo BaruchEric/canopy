@@ -105,6 +105,11 @@ services:
       - ${HOST_HOME:-/home/eric}/.config/canopy-stages/codex:/home/bun/.stage-codex
       - stage-sock:/run/canopy-stage
     networks: [stages-net]
+    # docker's embedded resolver forwards each query from the container's own
+    # namespace, through the fenced bridge, so the host's upstream (the
+    # router, tailscale's 100.100.100.100) would be dropped; public servers
+    # are not
+    dns: [1.1.1.1, 9.9.9.9]
     init: true
     restart: unless-stopped
     healthcheck:
@@ -281,6 +286,11 @@ networks:
   # reach. The default network stays implicit.
   stages-net:
     driver: bridge
+    # the host-side bridge's name, which scripts/stages-fence.sh matches with
+    # -i; at most 15 characters, an interface name's limit. A stages-net made
+    # before this line keeps docker's br-<id>: docker network rm it first
+    driver_opts:
+      com.docker.network.bridge.name: br-canopy-stg
     enable_ipv6: false
     ipam:
       config:

@@ -1,43 +1,30 @@
 /**
- * scripts/stages-fence.sh itself, run under sh against fixture files: the
- * rules it prints, the block --persist writes into ufw's after.rules, and
- * --apply's idempotence through a stand-in iptables. The script is tested
- * rather than a TS copy of its text, so the two cannot drift apart.
+ * scripts/stages-fence.sh itself, run under sh: the rules it prints,
+ * --apply's idempotence through a stand-in iptables and ip6tables, and what
+ * --install writes under a fixture root. The script is tested rather than a
+ * TS copy of it, so the two cannot drift apart.
  */
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { chmodSync, existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 const SCRIPT = new URL("../../scripts/stages-fence.sh", import.meta.url).pathname;
-const NET = "10.250.13.0/24";
-const RETURN = `-s ${NET} -m conntrack --ctstate ESTABLISHED,RELATED -j RETURN`;
-const DROPS = ["10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "100.64.0.0/10", "169.254.0.0/16"].map(
-  (d) => `-s ${NET} -d ${d} -j DROP`,
-);
-
-// what Ubuntu and Arch ship, cut down: ufw's own *filter table and COMMIT
-const UFW_AFTER = `#
-# rules.input-after
-#
-*filter
-:ufw-after-input - [0:0]
-:ufw-after-output - [0:0]
--A ufw-after-input -p udp --dport 137 -j ufw-skip-to-policy-input
-# don't delete the 'COMMIT' line or these rules won't be processed
-COMMIT
-`;
-
-const BLOCK = [
-  "# canopy-stages begin",
-  "*filter",
-  ":DOCKER-USER - [0:0]",
-  `-A DOCKER-USER ${RETURN}`,
-  ...[...DROPS].reverse().map((r) => `-A DOCKER-USER ${r}`),
-  "COMMIT",
-  "# canopy-stages end",
-  "",
-].join("\n");
+const BRIDGE = "br-canopy-stg";
+const RANGES = [
+  "10.0.0.0/8",
+  "172.16.0.0/12",
+  "192.168.0.0/16",
+  "100.64.0.0/10",
+  "169.254.0.0/16",
+  "224.0.0.0/4",
+  "255.255.255.255/32",
+  "0.0.0.0/8",
+];
+const V4 = RANGES.map((d) => `-i ${BRIDGE} -d ${d} -j DROP`);
+const V6 = [`-i ${BRIDGE} -j DROP`];
+const SBIN = "usr/local/sbin/canopy-stages-fence";
+const UNIT = "etc/systemd/system/canopy-stages-fence.service";
 
 let dir = "";
 beforeEach(() => {
@@ -45,138 +32,200 @@ beforeEach(() => {
 });
 afterEach(() => rmSync(dir, { recursive: true, force: true }));
 
-function run(args: string[], env: Record<string, string> = {}) {
-  const p = Bun.spawnSync(["sh", SCRIPT, ...args], {
-    env: { PATH: process.env["PATH"] ?? "/usr/bin:/bin", CANOPY_FENCE_AFTER_RULES: join(dir, "after.rules"), ...env },
-  });
+const BASE_PATH = "/usr/bin:/bin";
+function run(script: string, args: string[], env: Record<string, string> = {}) {
+  const p = Bun.spawnSync(["sh", script, ...args], { env: { PATH: BASE_PATH, ...env } });
   return { code: p.exitCode, out: p.stdout.toString(), err: p.stderr.toString() };
 }
+const lines = (f: string) => (existsSync(f) ? readFileSync(f, "utf8").split("\n").filter(Boolean) : []);
 
-describe("stages-fence.sh", () => {
-  test("with no arguments it prints the rules in insert order and touches nothing", () => {
-    const r = run([]);
-    expect(r.code).toBe(0);
-    expect(r.out.trim().split("\n")).toEqual([...DROPS, RETURN].map((x) => `-I DOCKER-USER ${x}`));
-    expect(existsSync(join(dir, "after.rules"))).toBe(false);
-  });
-
-  test("refuses a word it does not know", () => {
-    expect(run(["--aply"]).code).not.toBe(0);
-  });
-
-  describe("--persist", () => {
-    test("appends the block after ufw's own table, the -A rules in reverse so the RETURN comes first", () => {
-      writeFileSync(join(dir, "after.rules"), UFW_AFTER);
-      const r = run(["--persist"]);
-      expect(r.code).toBe(0);
-      expect(readFileSync(join(dir, "after.rules"), "utf8")).toBe(`${UFW_AFTER}\n${BLOCK}`);
-    });
-
-    test("a rerun leaves the file byte for byte as it was", () => {
-      writeFileSync(join(dir, "after.rules"), UFW_AFTER);
-      run(["--persist"]);
-      const once = readFileSync(join(dir, "after.rules"), "utf8");
-      expect(run(["--persist"]).code).toBe(0);
-      expect(readFileSync(join(dir, "after.rules"), "utf8")).toBe(once);
-    });
-
-    test("replaces an older block in place and keeps what comes after it", () => {
-      const old = "# canopy-stages begin\n*filter\n:DOCKER-USER - [0:0]\n-A DOCKER-USER -s 10.9.9.0/24 -j DROP\nCOMMIT\n# canopy-stages end\n";
-      writeFileSync(join(dir, "after.rules"), `${UFW_AFTER}${old}# a line of the admin's own\n`);
-      expect(run(["--persist"]).code).toBe(0);
-      expect(readFileSync(join(dir, "after.rules"), "utf8")).toBe(`${UFW_AFTER}${BLOCK}# a line of the admin's own\n`);
-    });
-
-    test("keeps a backup of the file it replaced, and leaves no temp file behind", () => {
-      writeFileSync(join(dir, "after.rules"), UFW_AFTER);
-      run(["--persist"]);
-      expect(readFileSync(join(dir, "after.rules.canopy-stages.bak"), "utf8")).toBe(UFW_AFTER);
-      expect(readdirSync(dir).sort()).toEqual(["after.rules", "after.rules.canopy-stages.bak"]);
-    });
-
-    test("a begin marker with no end refuses and changes nothing", () => {
-      const broken = `${UFW_AFTER}# canopy-stages begin\n*filter\nCOMMIT\n# ufw's own lines that follow\n`;
-      writeFileSync(join(dir, "after.rules"), broken);
-      const r = run(["--persist"]);
-      expect(r.code).not.toBe(0);
-      expect(r.err).toContain("canopy-stages");
-      expect(readFileSync(join(dir, "after.rules"), "utf8")).toBe(broken);
-      expect(readdirSync(dir)).toEqual(["after.rules"]);
-    });
-
-    test("two blocks, or an end before its begin, refuse too", () => {
-      for (const text of [
-        `${UFW_AFTER}${BLOCK}${BLOCK}`,
-        `${UFW_AFTER}# canopy-stages end\n# canopy-stages begin\n`,
-      ]) {
-        writeFileSync(join(dir, "after.rules"), text);
-        expect(run(["--persist"]).code).not.toBe(0);
-        expect(readFileSync(join(dir, "after.rules"), "utf8")).toBe(text);
-      }
-    });
-
-    test("refuses when there is no after.rules to write into", () => {
-      expect(run(["--persist"]).code).not.toBe(0);
-      expect(existsSync(join(dir, "after.rules"))).toBe(false);
-    });
-  });
-
-  describe("--apply", () => {
-    // a stand-in iptables over one chain kept as lines in a file, top first
-    function fakeIptables(): { env: Record<string, string>; chain: () => string[]; calls: () => string[] } {
-      const state = join(dir, "chain");
-      const log = join(dir, "calls");
-      writeFileSync(state, "");
-      writeFileSync(log, "");
-      const bin = join(dir, "iptables");
-      writeFileSync(
-        bin,
-        `#!/bin/sh
-op=$1; shift; chain=$1; shift; rule="$*"
-echo "$op $rule" >> "${log}"
-[ "$chain" = DOCKER-USER ] || exit 2
+// a stand-in for iptables or ip6tables over the raw table's PREROUTING,
+// kept as lines in a file, top first; every call is logged
+function fake(name: string, at = dir): { bin: string; chain: () => string[]; calls: () => string[] } {
+  const state = join(at, `${name}.chain`);
+  const log = join(at, `${name}.calls`);
+  writeFileSync(state, "");
+  const bin = join(at, name);
+  writeFileSync(
+    bin,
+    `#!/bin/sh
+echo "$*" >> "${log}"
+[ "$1" = -t ] && [ "$2" = raw ] || exit 2
+op=$3; chain=$4; shift 4; rule="$*"
+[ "$chain" = PREROUTING ] || exit 2
 case $op in
   -C) grep -qxF -- "$rule" "${state}" ;;
   -I) { printf '%s\\n' "$rule"; cat "${state}"; } > "${state}.new" && mv "${state}.new" "${state}" ;;
-  -D) awk -v r="$rule" '!done && $0 == r { done = 1; next } { print }' "${state}" > "${state}.new" && mv "${state}.new" "${state}" ;;
   *) exit 2 ;;
 esac
 `,
-      );
-      chmodSync(bin, 0o755);
-      const lines = (f: string) => readFileSync(f, "utf8").split("\n").filter(Boolean);
-      return { env: { CANOPY_FENCE_IPTABLES: bin }, chain: () => lines(state), calls: () => lines(log) };
+  );
+  chmodSync(bin, 0o755);
+  return { bin, chain: () => lines(state), calls: () => lines(log) };
+}
+
+describe("stages-fence.sh", () => {
+  test("with no arguments it prints the rules and runs nothing", () => {
+    const v4 = fake("ipt");
+    const r = run(SCRIPT, [], { CANOPY_FENCE_IPTABLES: v4.bin });
+    expect(r.code).toBe(0);
+    expect(r.out.trim().split("\n")).toEqual([
+      ...V4.map((x) => `iptables -t raw -I PREROUTING ${x}`),
+      ...V6.map((x) => `ip6tables -t raw -I PREROUTING ${x}`),
+    ]);
+    expect(v4.calls()).toEqual([]);
+  });
+
+  test("refuses a word it does not know", () => {
+    expect(run(SCRIPT, ["--aply"]).code).toBe(2);
+  });
+
+  test("the comment owns up to dropping traffic between containers on the bridge", () => {
+    expect(readFileSync(SCRIPT, "utf8")).toMatch(/container-to-container/i);
+  });
+
+  describe("--apply", () => {
+    function both() {
+      const v4 = fake("ipt");
+      const v6 = fake("ip6t");
+      return { v4, v6, env: { CANOPY_FENCE_IPTABLES: v4.bin, CANOPY_FENCE_IP6TABLES: v6.bin } };
     }
 
-    test("inserts every rule, the RETURN ending up first", () => {
-      const ipt = fakeIptables();
-      expect(run(["--apply"], ipt.env).code).toBe(0);
-      expect(ipt.chain()).toEqual([RETURN, ...[...DROPS].reverse()]);
+    test("inserts every drop into raw PREROUTING, v4 and v6", () => {
+      const f = both();
+      expect(run(SCRIPT, ["--apply"], f.env).code).toBe(0);
+      expect(f.v4.chain().slice().sort()).toEqual(V4.slice().sort());
+      expect(f.v6.chain()).toEqual(V6);
     });
 
     test("a second run only checks", () => {
-      const ipt = fakeIptables();
-      run(["--apply"], ipt.env);
-      const before = ipt.calls().length;
-      expect(run(["--apply"], ipt.env).code).toBe(0);
-      expect(ipt.calls().slice(before).every((c) => c.startsWith("-C "))).toBe(true);
-      expect(ipt.chain()).toEqual([RETURN, ...[...DROPS].reverse()]);
+      const f = both();
+      run(SCRIPT, ["--apply"], f.env);
+      const n4 = f.v4.calls().length;
+      const n6 = f.v6.calls().length;
+      expect(run(SCRIPT, ["--apply"], f.env).code).toBe(0);
+      for (const c of [...f.v4.calls().slice(n4), ...f.v6.calls().slice(n6)]) expect(c).toStartWith("-t raw -C PREROUTING ");
+      expect(f.v4.chain()).toHaveLength(V4.length);
+      expect(f.v6.chain()).toEqual(V6);
     });
 
-    test("a missing drop goes back in, and the RETURN is moved back above it", () => {
-      const ipt = fakeIptables();
-      run(["--apply"], ipt.env);
-      writeFileSync(join(dir, "chain"), ipt.chain().filter((r) => !r.includes("172.16.0.0/12")).join("\n") + "\n");
-      expect(run(["--apply"], ipt.env).code).toBe(0);
-      const chain = ipt.chain();
-      expect(chain[0]).toBe(RETURN);
-      expect(chain.slice().sort()).toEqual([RETURN, ...DROPS].sort());
+    test("puts back only the rule that went missing", () => {
+      const f = both();
+      run(SCRIPT, ["--apply"], f.env);
+      writeFileSync(join(dir, "ipt.chain"), f.v4.chain().filter((r) => !r.includes("224.0.0.0/4")).join("\n") + "\n");
+      const n4 = f.v4.calls().length;
+      expect(run(SCRIPT, ["--apply"], f.env).code).toBe(0);
+      expect(f.v4.calls().slice(n4).filter((c) => c.includes(" -I "))).toEqual([
+        `-t raw -I PREROUTING -i ${BRIDGE} -d 224.0.0.0/4 -j DROP`,
+      ]);
+      expect(f.v4.chain().slice().sort()).toEqual(V4.slice().sort());
     });
 
-    test("an iptables that fails stops the script with its status", () => {
-      const ipt = fakeIptables();
-      writeFileSync(ipt.env["CANOPY_FENCE_IPTABLES"] ?? "", "#!/bin/sh\nexit 3\n");
-      expect(run(["--apply"], ipt.env).code).not.toBe(0);
+    test("an iptables that fails stops the script with its exit status", () => {
+      const f = both();
+      writeFileSync(f.v4.bin, "#!/bin/sh\nexit 3\n");
+      expect(run(SCRIPT, ["--apply"], f.env).code).toBe(3);
+      expect(f.v6.calls()).toEqual([]);
+    });
+  });
+
+  describe("--install", () => {
+    function install() {
+      const root = join(dir, "root");
+      mkdirSync(root);
+      const sysctl = join(dir, "systemctl");
+      writeFileSync(sysctl, `#!/bin/sh\necho "$*" >> "${join(dir, "systemctl.calls")}"\n`);
+      chmodSync(sysctl, 0o755);
+      const r = run(SCRIPT, ["--install"], { CANOPY_FENCE_ROOT: root, CANOPY_FENCE_SYSTEMCTL: sysctl });
+      return { r, root, systemctl: () => lines(join(dir, "systemctl.calls")) };
+    }
+
+    test("writes the copy at 0755: the script with only the checkout switch turned off", () => {
+      const { r, root } = install();
+      expect(r.code).toBe(0);
+      const copy = readFileSync(join(root, SBIN), "utf8");
+      const own = readFileSync(SCRIPT, "utf8");
+      expect(own.split("\n")).toContain("CHECKOUT=1");
+      expect(copy).toBe(own.replace(/^CHECKOUT=1$/m, "CHECKOUT=0"));
+      expect(statSync(join(root, SBIN)).mode & 0o777).toBe(0o755);
+    });
+
+    test("writes a oneshot unit that runs the copy's --apply before docker starts", () => {
+      const { root } = install();
+      expect(readFileSync(join(root, UNIT), "utf8")).toBe(`[Unit]
+Description=Fence the canopy stages bridge (${BRIDGE}) in the raw table
+Before=docker.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/local/sbin/canopy-stages-fence --apply
+
+[Install]
+WantedBy=multi-user.target
+`);
+    });
+
+    test("reloads systemd, enables the unit and runs it now, again on a rerun", () => {
+      const { systemctl } = install();
+      expect(systemctl()).toEqual([
+        "daemon-reload",
+        "enable --now canopy-stages-fence.service",
+        "restart canopy-stages-fence.service",
+      ]);
+    });
+
+    test("a rerun writes the same files and leaves no temp file behind", () => {
+      const { root } = install();
+      const copy = readFileSync(join(root, SBIN), "utf8");
+      const unit = readFileSync(join(root, UNIT), "utf8");
+      const again = run(SCRIPT, ["--install"], { CANOPY_FENCE_ROOT: root, CANOPY_FENCE_SYSTEMCTL: join(dir, "systemctl") });
+      expect(again.code).toBe(0);
+      expect(readFileSync(join(root, SBIN), "utf8")).toBe(copy);
+      expect(readFileSync(join(root, UNIT), "utf8")).toBe(unit);
+      expect(Bun.spawnSync(["find", root, "-type", "f"]).stdout.toString().trim().split("\n").sort()).toEqual(
+        [join(root, UNIT), join(root, SBIN)].sort(),
+      );
+    });
+
+    test("the installed copy calls iptables and ip6tables by name and ignores every test switch", () => {
+      const { root } = install();
+      // named stand-ins first on PATH: what the copy should call
+      const named = join(dir, "bin");
+      mkdirSync(named);
+      const v4 = fake("iptables", named);
+      const v6 = fake("ip6tables", named);
+      // and override stand-ins it must never call
+      const o4 = fake("o4");
+      const o6 = fake("o6");
+      const r = run(join(root, SBIN), ["--apply"], {
+        PATH: `${named}:${BASE_PATH}`,
+        CANOPY_FENCE_IPTABLES: o4.bin,
+        CANOPY_FENCE_IP6TABLES: o6.bin,
+      });
+      expect(r.code).toBe(0);
+      expect(v4.chain()).toHaveLength(V4.length);
+      expect(v6.chain()).toEqual(V6);
+      expect(o4.calls()).toEqual([]);
+      expect(o6.calls()).toEqual([]);
+    });
+
+    test.skipIf(process.getuid?.() === 0)("the installed copy ignores CANOPY_FENCE_ROOT: as a user, --install refuses before writing", () => {
+      const { root } = install();
+      const other = join(dir, "other");
+      mkdirSync(other);
+      const sysctl = fake("sysctl-o");
+      const r = run(join(root, SBIN), ["--install"], { CANOPY_FENCE_ROOT: other, CANOPY_FENCE_SYSTEMCTL: sysctl.bin });
+      expect(r.code).not.toBe(0);
+      expect(r.err).toContain("root");
+      expect(Bun.spawnSync(["find", other, "-type", "f"]).stdout.toString().trim()).toBe("");
+      expect(sysctl.calls()).toEqual([]);
+    });
+
+    test.skipIf(process.getuid?.() === 0)("from the checkout without a fixture root it needs root", () => {
+      const r = run(SCRIPT, ["--install"]);
+      expect(r.code).not.toBe(0);
+      expect(r.err).toContain("root");
     });
   });
 });
