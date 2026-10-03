@@ -1323,9 +1323,15 @@ export interface SproutDetail {
  *  `stages` event whenever either changes). `isolated` is true while the
  *  stage runner answers, so a stage runs in the stages container with no
  *  token of canopy's; `waiting` is why queued sprouts wait for their next
- *  stage, or null when none does. */
+ *  stage, or null when none does. `mode` is which env set it up:
+ *  `runner` through CANOPY_STAGE_SOCKET (answering or not), `unisolated`
+ *  under CANOPY_INCUBATOR_UNISOLATED=1 (stages run here, with canopy's
+ *  tokens), `off` when neither is set and no stage starts. */
+export type StagesMode = "runner" | "unisolated" | "off";
+
 export interface IncubatorStages {
   isolated: boolean;
+  mode: StagesMode;
   waiting: string | null;
 }
 

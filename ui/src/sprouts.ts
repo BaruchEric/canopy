@@ -1,7 +1,7 @@
 /** The incubator's words and arithmetic for the page: the stage strip, the
  *  status words, the order of the cards, and the feed's lines. Pure. */
 import { SHIP, nextWorkflow, sproutEnded } from "../../src/core/sprout";
-import type { InputKind, ServerEvent, Sprout, SproutStatus } from "../../src/core/types";
+import type { IncubatorStages, InputKind, ServerEvent, Sprout, SproutStatus } from "../../src/core/types";
 import type { FeedLine, FeedSnapshot } from "./feed";
 
 export const STAGES = ["clarify", "research", "eval", "build", "test", "accept", "deploy", "retro"] as const;
@@ -158,4 +158,35 @@ export function replaceSprouts(
   }
   for (const [id, had] of Object.entries(held)) if (!Object.hasOwn(out, id) && since(id)) out[id] = had;
   return out;
+}
+
+/** The incubator bar's word for where stages run, the title naming which
+ *  env is set or missing, and whether it is worth a second look. */
+export function stagesWord(st: IncubatorStages): { word: string; title: string; warn: boolean } {
+  switch (st.mode) {
+    case "runner":
+      return st.isolated
+        ? {
+            word: "stages isolated",
+            title: "CANOPY_STAGE_SOCKET is set and the stage runner answers: stages run in the stages container, with none of canopy's tokens.",
+            warn: false,
+          }
+        : {
+            word: "stage runner away",
+            title: "CANOPY_STAGE_SOCKET is set, but the stage runner is not answering. Stages wait for it and start on their own once it answers.",
+            warn: true,
+          };
+    case "unisolated":
+      return {
+        word: "stages unisolated",
+        title: "CANOPY_INCUBATOR_UNISOLATED=1 is set and CANOPY_STAGE_SOCKET is not: stages run here, in canopy's own container, with canopy's tokens.",
+        warn: true,
+      };
+    case "off":
+      return {
+        word: "stages off",
+        title: "Neither CANOPY_STAGE_SOCKET nor CANOPY_INCUBATOR_UNISOLATED=1 is set, so no stage starts. Set one and restart canopy.",
+        warn: true,
+      };
+  }
 }

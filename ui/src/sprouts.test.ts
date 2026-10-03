@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import type { Sprout } from "../../src/core/types";
 import type { FeedSnapshot } from "./feed";
-import { needsYou, replaceSprouts, sortSprouts, sproutLines, sproutWord, stageAt, stageStrip, staleSprout } from "./sprouts";
+import { needsYou, replaceSprouts, sortSprouts, sproutLines, sproutWord, stageAt, stageStrip, stagesWord, staleSprout } from "./sprouts";
 
 const sprout = (over: Partial<Sprout> = {}): Sprout => ({
   id: "sp_000000000001",
@@ -137,4 +137,36 @@ test("a sprout queued for canopy's ship is at the deploy stage", () => {
 test("canopy's deploy shows as the deploy stage", () => {
   const s = sprout({ status: "parked", clarified: true, parked: "deploy: vercel deploy: Build failed", flows: [{ workflow: "scout", flowId: "a", outcome: "done" }, { workflow: "build-new", flowId: "b", outcome: "done" }], pick: { kind: "new", host: "vercel", why: "w" } });
   expect(stageAt(s)).toBe("deploy");
+});
+
+describe("stagesWord", () => {
+  test("through the runner while it answers: isolated, and the title names the socket", () => {
+    const w = stagesWord({ isolated: true, mode: "runner", waiting: null });
+    expect(w).toMatchObject({ word: "stages isolated", warn: false });
+    expect(w.title).toContain("CANOPY_STAGE_SOCKET");
+  });
+
+  test("a runner set up but away is its own word: stages wait for it", () => {
+    const w = stagesWord({ isolated: false, mode: "runner", waiting: "the stage runner is not answering" });
+    expect(w).toMatchObject({ word: "stage runner away", warn: true });
+    expect(w.title).toContain("CANOPY_STAGE_SOCKET is set");
+  });
+
+  test("unisolated says stages run here with canopy's tokens", () => {
+    const w = stagesWord({ isolated: false, mode: "unisolated", waiting: null });
+    expect(w).toMatchObject({ word: "stages unisolated", warn: true });
+    expect(w.title).toContain("CANOPY_INCUBATOR_UNISOLATED=1 is set");
+    expect(w.title).toContain("canopy's tokens");
+  });
+
+  test("off names both envs as missing", () => {
+    const w = stagesWord({ isolated: false, mode: "off", waiting: null });
+    expect(w).toMatchObject({ word: "stages off", warn: true });
+    expect(w.title).toContain("Neither CANOPY_STAGE_SOCKET nor CANOPY_INCUBATOR_UNISOLATED=1 is set");
+  });
+
+  test("every mode has its own word", () => {
+    const words = (["runner", "unisolated", "off"] as const).map((mode) => stagesWord({ isolated: false, mode, waiting: null }).word);
+    expect(new Set(words).size).toBe(3);
+  });
 });

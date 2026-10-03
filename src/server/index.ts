@@ -3058,6 +3058,7 @@ export async function startServer(opts: {
   /** where stages run now, for the route and the `stages` event */
   const stagesNow = (): IncubatorStages => ({
     isolated: stage !== null && stage.harnessesNow() !== null,
+    mode: stage ? "runner" : unisolated ? "unisolated" : "off",
     waiting: state.incubator.inc.waiting(),
   });
   let toldStages = JSON.stringify(stagesNow());

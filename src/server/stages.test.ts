@@ -157,7 +157,7 @@ describe("with no stage runner and no unisolated switch", () => {
   afterAll(done);
 
   test("stages are not isolated, a new idea stays queued, and the reason is in the API", async () => {
-    expect((await stages()).isolated).toBe(false);
+    expect(await stages()).toMatchObject({ isolated: false, mode: "off" });
     const res = await intake("a coin counter");
     expect(res.status).toBe(201);
     const s = (await res.json()) as Sprout;
@@ -223,7 +223,7 @@ describe("through a stage runner that comes and goes", () => {
   });
 
   test("a queued idea waits while the runner is away and starts on its own when it answers", async () => {
-    expect(await stages()).toEqual({ isolated: false, waiting: null });
+    expect(await stages()).toEqual({ isolated: false, mode: "runner", waiting: null });
     const res = await intake("a tip jar");
     const s = (await res.json()) as Sprout;
     await until(async () => (await stages()).waiting === "the stage runner is not answering", "the runner's absence");
@@ -232,7 +232,7 @@ describe("through a stage runner that comes and goes", () => {
     await heard.ready;
     await startRunner();
     await until(async () => (await sprouts()).find((x) => x.id === s.id)?.status === "clarifying", "clarify to start");
-    expect(await stages()).toEqual({ isolated: true, waiting: null });
+    expect(await stages()).toEqual({ isolated: true, mode: "runner", waiting: null });
     await until(() => heard.events.some((e) => e.type === "stages" && e.stages.isolated && e.stages.waiting === null), "the stages event");
     // the runner going away is said too, with nothing queued behind it
     await stopRunner?.();
@@ -332,6 +332,10 @@ describe("a stage process alive after its run ended", () => {
     });
   });
   afterAll(done);
+
+  test("the stages say they run here, unisolated", async () => {
+    expect(await stages()).toEqual({ isolated: false, mode: "unisolated", waiting: null });
+  });
 
   test("keeps the seed busy once the run is done, until the process is gone", async () => {
     const res = await postJson(`/api/repos/run?id=${encodeURIComponent("_incubator/coin")}`, { action: "ask", note: "hi" });

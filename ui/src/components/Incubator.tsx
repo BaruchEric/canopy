@@ -11,7 +11,7 @@ import { isVercelAppUrl } from "../../../src/core/deploy";
 import type { SproutDetail } from "../../../src/core/types";
 import { api } from "../api";
 import { dropSproutHere, sproutHere } from "../routes";
-import { INPUT_GLYPH, STAGES, needsYou, sortSprouts, sproutWord, stageStrip, type StageMark } from "../sprouts";
+import { INPUT_GLYPH, STAGES, needsYou, sortSprouts, sproutWord, stageStrip, stagesWord, type StageMark } from "../sprouts";
 import { useStore } from "../store";
 import { ago } from "../util";
 import { InboxChip } from "./Inbox";
@@ -71,21 +71,15 @@ function SproutCard({ id }: { id: string }) {
   );
 }
 
-/** Whether the stages run isolated, the stage runner's container with no
- *  token of canopy's, or not; nothing from a backend too old to say. */
+/** Where the stages run, through the stage runner, here unisolated, or
+ *  nowhere; nothing from a backend too old to say. */
 function StagesWord() {
   const stages = useStore((s) => s.stages);
   if (!stages) return null;
-  return stages.isolated ? (
-    <span className="stages-word" title="Stages run in the stages container through the stage runner (CANOPY_STAGE_SOCKET), where none of canopy's tokens are.">
-      stages isolated
-    </span>
-  ) : (
-    <span
-      className="stages-word not"
-      title="Stages are not isolated: either CANOPY_INCUBATOR_UNISOLATED=1 runs them here with canopy's tokens, or the stage runner (CANOPY_STAGE_SOCKET) is away or not set up and they wait."
-    >
-      stages not isolated
+  const { word, title, warn } = stagesWord(stages);
+  return (
+    <span className={`stages-word${warn ? " not" : ""}`} title={title}>
+      {word}
     </span>
   );
 }

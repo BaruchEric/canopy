@@ -816,7 +816,7 @@ describe("several backends", () => {
         return backendAnswers(scanOf("/a", [repo("proj")]), [], {
           "/api/backends": twoBackends,
           "/api/incubator": [asking],
-          "/api/incubator/stages": { isolated: false, waiting: "the stage runner is not answering" },
+          "/api/incubator/stages": { isolated: false, mode: "runner", waiting: "the stage runner is not answering" },
           "/api/incubator/answer": answered,
         })(path, init);
       },
@@ -829,14 +829,14 @@ describe("several backends", () => {
     const item = inboxItems(s).find((i) => i.source === "sprout");
     if (!item) throw new Error("no sprout item in the inbox");
     expect(item.key).toBe(`sprout:${asking.id}`);
-    expect(s.stages).toEqual({ isolated: false, waiting: "the stage runner is not answering" });
+    expect(s.stages).toEqual({ isolated: false, mode: "runner", waiting: "the stage runner is not answering" });
     // b's incubator is not this page's
     useStore.getState().applyEvent({ type: "incubator", sprout: { ...asking, id: "sp_000000000002" } }, "b");
     expect(Object.keys(useStore.getState().sprouts)).toEqual([asking.id]);
-    useStore.getState().applyEvent({ type: "stages", stages: { isolated: true, waiting: null } }, "b");
+    useStore.getState().applyEvent({ type: "stages", stages: { isolated: true, mode: "runner", waiting: null } }, "b");
     expect(useStore.getState().stages?.isolated).toBe(false);
-    useStore.getState().applyEvent({ type: "stages", stages: { isolated: true, waiting: null } });
-    expect(useStore.getState().stages).toEqual({ isolated: true, waiting: null });
+    useStore.getState().applyEvent({ type: "stages", stages: { isolated: true, mode: "runner", waiting: null } });
+    expect(useStore.getState().stages).toEqual({ isolated: true, mode: "runner", waiting: null });
     // going on assumptions is a skip, to home
     await useStore.getState().answerInbox(item, { skip: true });
     expect(posted.find((p) => p.path.startsWith("/api/incubator/answer"))).toEqual({ path: `/api/incubator/answer?id=${asking.id}`, body: { skip: true } });
