@@ -1097,6 +1097,24 @@ Ship it.
     expect(now?.steps[1]?.status).toBe("running");
   });
 
+  test("a check parked for the stage runner comes back from a restart still a check park", async () => {
+    const a = setup({ check: () => ({ exit: 127, output: STAGE_AWAY, away: true }) });
+    const f = a.flows.start(seedRepo(), BUILD_CHECKED, "", DEFAULT_AGENT);
+    a.runner.end("run1", "done", "built it");
+    await flush();
+    expect(a.flows.get(f.id)?.stageCheck).toBe(true);
+    const b = setup();
+    b.flows.restore([lastRecord(a.saved, f.id)], () => seedRepo(), sameAgent);
+    expect(b.flows.get(f.id)).toMatchObject({ status: "gated", parkedFor: "stage", stageCheck: true });
+    b.flows.resume(f.id, "continue");
+    await flush();
+    expect(b.checks).toEqual(["bun test"]);
+    // the agent's step is not run again: the one run is the Ship step's
+    expect(b.runner.specs).toHaveLength(1);
+    expect(b.runner.specs[0]?.verb).toContain("Ship");
+    expect(b.flows.get(f.id)?.steps[0]).toMatchObject({ status: "passed", summary: "built it" });
+  });
+
   test("a check-only step that finds the runner away parks, and resume reruns its check, not the step it goes back to", async () => {
     let calls = 0;
     const s = setup({ check: () => (++calls === 1 ? { exit: 127, output: STAGE_AWAY, away: true } : { exit: 0, output: "ok" }) });
