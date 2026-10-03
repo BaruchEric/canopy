@@ -165,19 +165,19 @@ function offGitEnv(env: Record<string, string>): ExecResult | null {
   return off === undefined ? null : { code: 128, stdout: "", stderr: `canopy runs git in a seed with ${SEED_GIT_ENV.join(", ")} alone, not ${off}` };
 }
 
-/** Git in a seed with stdout into `file` (a bundle: bytes, not text). It
- *  goes where git() would: the stage runner on an isolated backend, else
- *  here behind the guard, with the same busy rule. */
-export async function seedGitToFile(path: string, args: string[], file: string, timeoutMs = 300_000): Promise<ExecResult> {
+/** git() in a local repo with stdout into `file` (a bundle: bytes, not
+ *  text). A seed goes where git() sends it: the stage runner on an isolated
+ *  backend, else here behind the guard, with the same busy rule. */
+export async function gitToFile(path: string, args: string[], file: string, timeoutMs = 300_000): Promise<ExecResult> {
   const seeds = seedsRootOf(path, seedRootsNow());
-  if (seeds === null) return { code: 128, stdout: "", stderr: `${path} is not in a seed` };
-  if (seedBusy(path)) return { code: 128, stdout: "", stderr: SEED_BUSY };
+  if (seeds !== null && seedBusy(path)) return { code: 128, stdout: "", stderr: SEED_BUSY };
   const refused = await seedGitRefusal(path);
   if (refused) return { code: 128, stdout: "", stderr: refused };
   const env = { GIT_OPTIONAL_LOCKS: "0" };
-  if (seedGitHook) return seedGitHook.toFile(path, args, file, { timeoutMs, env });
-  const p = Bun.spawn(["git", ...SEED_GIT_FLAGS, "-C", path, ...args], {
-    env: { ...process.env, ...env, GIT_CEILING_DIRECTORIES: seeds },
+  if (seeds !== null && seedGitHook) return seedGitHook.toFile(path, args, file, { timeoutMs, env });
+  const seedOnly = seeds !== null ? { flags: SEED_GIT_FLAGS, env: { GIT_CEILING_DIRECTORIES: seeds } } : { flags: [], env: {} };
+  const p = Bun.spawn(["git", ...seedOnly.flags, "-C", path, ...args], {
+    env: { ...process.env, ...env, ...seedOnly.env },
     stdin: "ignore",
     stdout: Bun.file(file),
     stderr: "pipe",

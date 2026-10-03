@@ -24,7 +24,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { exec as realExec, type ExecOptions, type ExecResult } from "./exec";
 import { readSeed, writeSeed } from "./seed";
-import { guardSeed, whenSeedsQuiet } from "./seedgit";
+import { bundleSeed } from "./seedmirror";
 import type { HostId } from "./types";
 
 export interface Shipper {
@@ -35,9 +35,10 @@ export interface Shipper {
   /** a Vercel project of its own, made under a name the account did not
    *  have, with the framework the seed's package.json makes clear */
   project(slug: string, seedPath: string): Promise<string>;
-  /** the seed's HEAD pushed to main from a fresh bare clone of it, hooks off */
+  /** the seed's HEAD pushed to main from a fresh bare clone of a bundle of
+   *  it, hooks off */
   push(seedPath: string, repo: string): Promise<void>;
-  /** the seed's HEAD, from a fresh clone of it, linked and deployed to
+  /** the seed's HEAD, from a fresh clone of a bundle of it, linked and deployed to
    *  production with the project pinned; the public production url */
   deploy(seedPath: string, project: string): Promise<string>;
 }
@@ -61,18 +62,12 @@ export interface ShipDeps {
   which: (bin: string) => string | null;
   /** where "owner/name" is pushed; GitHub's https url unless a test says */
   remote?: (repo: string) => string;
+  /** the seed as a bundle in `file`, and its HEAD commit; `bundleSeed`
+   *  unless a test says */
+  bundle?: (seedPath: string, file: string) => Promise<{ head: string }>;
 }
 
 const NO_HOOKS = ["-c", "core.hooksPath=/dev/null", "-c", "core.fsmonitor=false"];
-
-/** a clone runs upload-pack in the seed, which reads the seed's config: the
- *  same guard as every other git call canopy makes there (seedgit.ts) */
-async function guardOrThrow(seedPath: string): Promise<void> {
-  // a clone runs upload-pack in the seed: not while any stage is alive
-  await whenSeedsQuiet(seedPath);
-  const refused = await guardSeed(seedPath);
-  if (refused) throw new Error(`the seed: ${refused}`);
-}
 const tail = (r: ExecResult, secret: string | null = null): string => {
   const text = (r.stderr || r.stdout).trim().split("\n").slice(-3).join(" ").slice(0, 300);
   return secret ? text.split(secret).join("***") : text;
@@ -80,6 +75,7 @@ const tail = (r: ExecResult, secret: string | null = null): string => {
 const isObj = (v: unknown): v is Record<string, unknown> => typeof v === "object" && v !== null && !Array.isArray(v);
 
 export function shipper(cfg: ShipConfig, deps: ShipDeps = { exec: realExec, fetch, which: (b) => Bun.which(b) }): Shipper {
+  const bundle = deps.bundle ?? ((seedPath: string, file: string) => bundleSeed(seedPath, file));
   const scopeQuery = cfg.vercelScope ? `?slug=${encodeURIComponent(cfg.vercelScope)}` : "";
   const api = (path: string, init: { method?: string; body?: string } = {}): Promise<Response> =>
     deps.fetch(`https://api.vercel.com${path}${scopeQuery}`, {
@@ -154,22 +150,26 @@ export function shipper(cfg: ShipConfig, deps: ShipDeps = { exec: realExec, fetc
     },
 
     async push(seedPath, repo) {
-      // Pushed from a bare clone canopy makes, never from the seed itself:
-      // the seed's .git/config is the agents' to write, and a pushurl, a
-      // pushInsteadOf or a credential helper there would send canopy's push,
-      // or its token, where they chose.
-      await guardOrThrow(seedPath);
+      // Pushed from a bare clone of a bundle of the seed, never from the
+      // seed itself, nor a clone of it: the seed's .git/config is the
+      // agents' to write, and a pushurl, a pushInsteadOf or a credential
+      // helper there would send canopy's push, or its token, where they
+      // chose. The bundle is made where canopy's seed git runs (the stage
+      // runner on an isolated backend) and is plain data here.
       const url = deps.remote ? deps.remote(repo) : `https://github.com/${repo}.git`;
       const tmp = await mkdtemp(join(tmpdir(), "canopy-ship-"));
       const bare = join(tmp, "seed.git");
       const git = (args: string[], cwd: string, timeoutMs = 30_000): Promise<ExecResult> =>
         deps.exec(["git", ...NO_HOOKS, ...args], { cwd, timeoutMs, env: { GIT_TERMINAL_PROMPT: "0" } });
       try {
-        const cloned = await git(["clone", "--bare", "--no-local", "--quiet", "--", seedPath, bare], tmp, 300_000);
-        if (cloned.code !== 0) throw new Error(`git clone of the seed: ${tail(cloned)}`);
+        const file = join(tmp, "seed.bundle");
+        const { head } = await bundle(seedPath, file);
+        const cloned = await git(["clone", "--bare", "--quiet", "--", file, bare], tmp, 300_000);
+        if (cloned.code !== 0) throw new Error(`git clone of the seed's bundle: ${tail(cloned)}`);
         const set = await git(["remote", "set-url", "origin", url], bare);
         if (set.code !== 0) throw new Error(`git remote: ${tail(set)}`);
-        const pushed = await git(["push", "origin", "HEAD:refs/heads/main"], bare, 300_000);
+        // the bundle's HEAD, whatever branch the clone took as its own
+        const pushed = await git(["push", "origin", `${head}:refs/heads/main`], bare, 300_000);
         if (pushed.code !== 0) throw new Error(`git push: ${tail(pushed)}`);
       } finally {
         await rm(tmp, { recursive: true, force: true });
@@ -178,73 +178,81 @@ export function shipper(cfg: ShipConfig, deps: ShipDeps = { exec: realExec, fetc
 
     async deploy(seedPath, project) {
       const token = needToken();
-      await guardOrThrow(seedPath);
-      // the project canopy made, by id, so no link file in the seed can
-      // point the deploy at another one
-      const found = await api(`/v9/projects/${encodeURIComponent(project)}`);
-      if (!found.ok) throw new Error(`the Vercel API answered ${found.status} for project ${project}`);
-      const meta: unknown = await found.json().catch(() => null);
-      const projectId = isObj(meta) && typeof meta["id"] === "string" ? meta["id"] : "";
-      const orgId = isObj(meta) && typeof meta["accountId"] === "string" ? meta["accountId"] : "";
-      if (!projectId || !orgId) throw new Error(`the Vercel API did not say which project and team ${project} is, so canopy will not deploy it blind`);
-      // canopy goes live only on a URL its smoke GET reaches, and the team's
-      // default protection puts Vercel's login in front of production ones.
-      // Previews stay protected; set per project, never team-wide.
-      const sso = isObj(meta) ? meta["ssoProtection"] : null;
-      if (isObj(sso) && sso["deploymentType"] !== "preview") {
-        const set = await api(`/v9/projects/${encodeURIComponent(projectId)}`, { method: "PATCH", body: JSON.stringify({ ssoProtection: { deploymentType: "preview" } }) });
-        if (!set.ok) throw new Error(`the Vercel API answered ${set.status} setting Vercel Authentication on project ${project}, so canopy will not deploy a project whose production would sit behind Vercel's login`);
-      }
-      // Deployed from a fresh clone of the seed's HEAD: what was pushed, and
-      // nothing the seed holds uncommitted or ignored (.env.local, .vercel/).
+      // the seed as a bundle first, so a seed canopy will not run git in is
+      // refused before anything reaches Vercel
       const tmp = await mkdtemp(join(tmpdir(), "canopy-deploy-"));
-      const app = join(tmp, "app");
       try {
-        const cloned = await deps.exec(["git", ...NO_HOOKS, "clone", "--no-local", "--quiet", "--", seedPath, app], {
-          cwd: tmp,
-          timeoutMs: 300_000,
-          // the checkout runs the global config's filter drivers on what the
-          // seed's .gitattributes names; git-lfs would fetch from wherever
-          // a committed .lfsconfig says
-          env: { GIT_TERMINAL_PROMPT: "0", GIT_LFS_SKIP_SMUDGE: "1" },
-        });
-        if (cloned.code !== 0) throw new Error(`git clone of the seed: ${tail(cloned)}`);
-        await rm(join(app, ".vercel"), { recursive: true, force: true });
-        const refused = vercelConfigRefusal(await readdir(app), await readSeed(app, "vercel.json"));
-        if (refused) throw new Error(refused);
-        await writeSeed(app, ".vercelignore", withCanopyIgnored(await readSeed(app, ".vercelignore")));
-        const env = { VERCEL_TOKEN: token, VERCEL_TELEMETRY_DISABLED: "1", VERCEL_ORG_ID: orgId, VERCEL_PROJECT_ID: projectId };
-        const link = await deps.exec(vercelArgs("link", project, cfg.vercelScope), { cwd: app, timeoutMs: 120_000, env });
-        if (link.code !== 0) throw new Error(`vercel link: ${tail(link, token)}`);
-        const out = await deps.exec(vercelArgs("deploy", project, cfg.vercelScope), { cwd: app, timeoutMs: 15 * 60_000, env });
-        if (out.code !== 0) throw new Error(`vercel deploy: ${tail(out, token)}`);
-        const dep = deploymentUrl(out.stdout);
-        if (!dep) throw new Error("vercel deploy printed no deployment url");
-        const res = await api(`/v13/deployments/${new URL(dep).host}`);
-        if (!res.ok) throw new Error(`the Vercel API answered ${res.status} for the deployment, so canopy cannot check where it went live`);
-        const body: unknown = await res.json().catch(() => null);
-        const aliases = isObj(body) && Array.isArray(body["alias"]) ? body["alias"].filter((a): a is string => typeof a === "string") : [];
-        const strange = strangeAliases(aliases);
-        if (strange.length) throw new Error(`the deploy is also at ${strange.join(", ")}, which is not a vercel.app address: remove it from the project's domains, then resume`);
-        const url = productionUrl(aliases, dep);
-        if (!isVercelAppUrl(url)) throw new Error(`the deploy answered ${url}, which is not a vercel.app address`);
-        const home = await get(url);
-        if ("away" in home) {
-          throw new Error(`${url} sends visitors on to ${home.away ?? "an address it does not name"}, likely a sign-in page: turn off deployment protection for production, then resume`);
-        }
-        const why = smokeRefusal(home.status, url);
-        if (why) throw new Error(why);
-        // a framework the project did not take serves the repo's root, and
-        // the notes under .canopy/ with it
-        const intent = await readSeed(app, ".canopy/intent.md").catch(() => null);
-        const note = await get(`${url}/.canopy/intent.md`, true);
-        if (intent && !("away" in note) && note.status >= 200 && note.status < 300 && servesFile(note.body, intent)) {
-          throw new Error("the deploy serves the repo root; .canopy/ is public");
-        }
-        return url;
+        const file = join(tmp, "seed.bundle");
+        const { head } = await bundle(seedPath, file);
+        return await deployFrom(file, head, tmp, project, token);
       } finally {
         await rm(tmp, { recursive: true, force: true });
       }
     },
   };
+
+  /** the deploy proper, from the bundle in `file` at its commit `head` */
+  async function deployFrom(file: string, head: string, tmp: string, project: string, token: string): Promise<string> {
+    // the project canopy made, by id, so no link file in the seed can
+    // point the deploy at another one
+    const found = await api(`/v9/projects/${encodeURIComponent(project)}`);
+    if (!found.ok) throw new Error(`the Vercel API answered ${found.status} for project ${project}`);
+    const meta: unknown = await found.json().catch(() => null);
+    const projectId = isObj(meta) && typeof meta["id"] === "string" ? meta["id"] : "";
+    const orgId = isObj(meta) && typeof meta["accountId"] === "string" ? meta["accountId"] : "";
+    if (!projectId || !orgId) throw new Error(`the Vercel API did not say which project and team ${project} is, so canopy will not deploy it blind`);
+    // canopy goes live only on a URL its smoke GET reaches, and the team's
+    // default protection puts Vercel's login in front of production ones.
+    // Previews stay protected; set per project, never team-wide.
+    const sso = isObj(meta) ? meta["ssoProtection"] : null;
+    if (isObj(sso) && sso["deploymentType"] !== "preview") {
+      const set = await api(`/v9/projects/${encodeURIComponent(projectId)}`, { method: "PATCH", body: JSON.stringify({ ssoProtection: { deploymentType: "preview" } }) });
+      if (!set.ok) throw new Error(`the Vercel API answered ${set.status} setting Vercel Authentication on project ${project}, so canopy will not deploy a project whose production would sit behind Vercel's login`);
+    }
+    // Deployed from a fresh clone of the seed's bundle at its HEAD: what
+    // was pushed, and nothing the seed holds uncommitted or ignored
+    // (.env.local, .vercel/).
+    const app = join(tmp, "app");
+    // the checkout runs the global config's filter drivers on what the
+    // seed's .gitattributes names; git-lfs would fetch from wherever a
+    // committed .lfsconfig says
+    const opts = { timeoutMs: 300_000, env: { GIT_TERMINAL_PROMPT: "0", GIT_LFS_SKIP_SMUDGE: "1" } };
+    const cloned = await deps.exec(["git", ...NO_HOOKS, "clone", "--no-checkout", "--quiet", "--", file, app], { ...opts, cwd: tmp });
+    if (cloned.code !== 0) throw new Error(`git clone of the seed's bundle: ${tail(cloned)}`);
+    const checked = await deps.exec(["git", ...NO_HOOKS, "checkout", "-q", "--detach", head], { ...opts, cwd: app });
+    if (checked.code !== 0) throw new Error(`git checkout of the seed's HEAD: ${tail(checked)}`);
+    await rm(join(app, ".vercel"), { recursive: true, force: true });
+    const refused = vercelConfigRefusal(await readdir(app), await readSeed(app, "vercel.json"));
+    if (refused) throw new Error(refused);
+    await writeSeed(app, ".vercelignore", withCanopyIgnored(await readSeed(app, ".vercelignore")));
+    const env = { VERCEL_TOKEN: token, VERCEL_TELEMETRY_DISABLED: "1", VERCEL_ORG_ID: orgId, VERCEL_PROJECT_ID: projectId };
+    const link = await deps.exec(vercelArgs("link", project, cfg.vercelScope), { cwd: app, timeoutMs: 120_000, env });
+    if (link.code !== 0) throw new Error(`vercel link: ${tail(link, token)}`);
+    const out = await deps.exec(vercelArgs("deploy", project, cfg.vercelScope), { cwd: app, timeoutMs: 15 * 60_000, env });
+    if (out.code !== 0) throw new Error(`vercel deploy: ${tail(out, token)}`);
+    const dep = deploymentUrl(out.stdout);
+    if (!dep) throw new Error("vercel deploy printed no deployment url");
+    const res = await api(`/v13/deployments/${new URL(dep).host}`);
+    if (!res.ok) throw new Error(`the Vercel API answered ${res.status} for the deployment, so canopy cannot check where it went live`);
+    const body: unknown = await res.json().catch(() => null);
+    const aliases = isObj(body) && Array.isArray(body["alias"]) ? body["alias"].filter((a): a is string => typeof a === "string") : [];
+    const strange = strangeAliases(aliases);
+    if (strange.length) throw new Error(`the deploy is also at ${strange.join(", ")}, which is not a vercel.app address: remove it from the project's domains, then resume`);
+    const url = productionUrl(aliases, dep);
+    if (!isVercelAppUrl(url)) throw new Error(`the deploy answered ${url}, which is not a vercel.app address`);
+    const home = await get(url);
+    if ("away" in home) {
+      throw new Error(`${url} sends visitors on to ${home.away ?? "an address it does not name"}, likely a sign-in page: turn off deployment protection for production, then resume`);
+    }
+    const why = smokeRefusal(home.status, url);
+    if (why) throw new Error(why);
+    // a framework the project did not take serves the repo's root, and
+    // the notes under .canopy/ with it
+    const intent = await readSeed(app, ".canopy/intent.md").catch(() => null);
+    const note = await get(`${url}/.canopy/intent.md`, true);
+    if (intent && !("away" in note) && note.status >= 200 && note.status < 300 && servesFile(note.body, intent)) {
+      throw new Error("the deploy serves the repo root; .canopy/ is public");
+    }
+    return url;
+  }
 }

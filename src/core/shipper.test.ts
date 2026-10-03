@@ -161,14 +161,29 @@ describe("push", () => {
   });
   test("a refused push fails with git's words, hooks off and no prompt", async () => {
     const f = fakes((c) => (c.cmd.includes("push") ? no("rejected: non-fast-forward") : ok()));
-    await expect(shipper(cfg, f.deps).push("/seed", "eric/x")).rejects.toThrow("git push: rejected: non-fast-forward");
+    const head = "c".repeat(40);
+    const bundled: string[] = [];
+    const deps: ShipDeps = {
+      ...f.deps,
+      bundle: async (seedPath, file) => {
+        bundled.push(seedPath);
+        await writeFile(file, "a bundle");
+        return { head };
+      },
+    };
+    await expect(shipper(cfg, deps).push("/seed", "eric/x")).rejects.toThrow("git push: rejected: non-fast-forward");
+    expect(bundled).toEqual(["/seed"]);
     for (const c of f.calls) {
       expect(c.cmd).toContain("core.hooksPath=/dev/null");
       expect(c.cmd).toContain("core.fsmonitor=false");
       expect(c.opts.env?.["GIT_TERMINAL_PROMPT"]).toBe("0");
     }
+    // the clone is of the bundle, never of the seed, and the push is the bundle's HEAD
     const clone = f.calls[0]?.cmd ?? [];
-    expect(clone.slice(clone.indexOf("clone"), -1)).toEqual(["clone", "--bare", "--no-local", "--quiet", "--", "/seed"]);
+    expect(clone.slice(clone.indexOf("clone"), -2)).toEqual(["clone", "--bare", "--quiet", "--"]);
+    expect(clone.at(-2)).toEndWith("/seed.bundle");
+    expect(f.calls.some((c) => c.cmd.includes("/seed"))).toBe(false);
+    expect(f.calls.find((c) => c.cmd.includes("push"))?.cmd.slice(-2)).toEqual(["origin", `${head}:refs/heads/main`]);
   });
 });
 
@@ -192,11 +207,13 @@ describe("a seed whose config canopy will not run", () => {
 });
 
 describe("a seed while a stage is alive", () => {
-  test("push waits for the seeds to go quiet before its clone runs upload-pack there", async () => {
+  test("push waits for the seed to go quiet before it bundles the seed", async () => {
     const seeds = join(await mkdtemp(join(tmpdir(), "canopy-ship-busy-")), "_incubator");
     const dir = join(seeds, "coin");
     await mkdir(dir, { recursive: true });
     expect((await exec(["git", "init", "-q", "-b", "main"], { cwd: dir })).code).toBe(0);
+    const commit = ["git", "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "--allow-empty", "-m", "one"];
+    expect((await exec(commit, { cwd: dir })).code).toBe(0);
     let busy = true;
     setSeedRoots([seeds]);
     setSeedBusy(() => busy);
@@ -254,6 +271,12 @@ describe("deploy", () => {
     }
     expect(f.calls.filter((c) => c.cmd[0] === "git").every((c) => c.cmd.includes("core.hooksPath=/dev/null"))).toBe(true);
     expect(f.calls.find((c) => c.cmd.includes("clone"))?.opts.env?.["GIT_LFS_SKIP_SMUDGE"]).toBe("1");
+    // the clone is of a bundle of the seed, checked out at the seed's HEAD, detached
+    const clone = f.calls.find((c) => c.cmd.includes("clone"))?.cmd ?? [];
+    expect(clone.at(-2)).toEndWith("/seed.bundle");
+    expect(f.calls.some((c) => c.cmd.includes(dir))).toBe(false);
+    const head = (await exec(["git", "rev-parse", "HEAD"], { cwd: dir })).stdout.trim();
+    expect(f.calls.find((c) => c.cmd.includes("checkout"))?.cmd.slice(-3)).toEqual(["-q", "--detach", head]);
     expect(f.fetched.map((x) => x.url)).toEqual([
       "https://api.vercel.com/v9/projects/coin-counter",
       "https://api.vercel.com/v13/deployments/coin-counter-abc-eric.vercel.app",
