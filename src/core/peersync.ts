@@ -10,7 +10,7 @@ import { git, onHost } from "./exec";
 import { shellQuote } from "./host";
 import { BUSY_MARKERS, ffTarget, isPeerName, isSafeRel, NO_PUSH, parseNameStatus, parseQuotedWords, parseRefLines, parseWipLines, peerMissing, peerRefspecs, peerUnreachable, peerUrl, repoWanted, seedWanted } from "./peers";
 import { seedsDirOf, seedsRootOf } from "./seedgit";
-import { mirrorPath, mirrorSlug } from "./seedmirror";
+import { MIRRORS_DIR, mirrorPath, mirrorSlug } from "./seedmirror";
 import { SEEDS_DIR } from "./sprout";
 import { configDir } from "./store";
 import type { Peer, PeerSeen, PeerState, PeerWip } from "./types";
@@ -380,13 +380,16 @@ function reachesSeed(root: string, dir: string): boolean {
 }
 
 /** the seeds dir under `root`, and its real path when that differs */
-function seedsDirs(root: string): string[] {
-  const dir = join(root, SEEDS_DIR);
+const seedsDirs = (root: string): string[] => dirsUnder(root, SEEDS_DIR);
+
+/** the folder `name` under `root`, and its real path when that differs */
+function dirsUnder(root: string, name: string): string[] {
+  const dir = join(root, name);
   let real = dir;
   try { real = realpathSync(dir); } catch { /* no seeds yet */ }
   try {
     const realRoot = realpathSync(root);
-    const viaRoot = join(realRoot, SEEDS_DIR);
+    const viaRoot = join(realRoot, name);
     return [...new Set([dir, real, viaRoot])];
   } catch {
     return [...new Set([dir, real])];
@@ -535,7 +538,10 @@ export function gateCommand(line: string, root: string, home: string): GateComma
       }
       return { error: SEED_SERVED_AS };
     }
-    if (seedsDirOf(path, seeds) !== null) return { error: SEED_SERVED_AS };
+    // the mirrors are reached through their seeds' names alone, so the
+    // gate's checks (--strict, mirrorRefusal) always apply
+    const closed = [...seeds, ...dirsUnder(root, MIRRORS_DIR)];
+    if (inSeeds(path, closed)) return { error: SEED_SERVED_AS };
     let realRoot: string | null = null;
     for (const suffix of ENTER_REPO_SUFFIXES) {
       const candidate = path + suffix;
@@ -550,7 +556,7 @@ export function gateCommand(line: string, root: string, home: string): GateComma
       const within = realRoot;
       const reach = candidateReach(realCandidate);
       if (escapes(within, realCandidate) || reach === null || reach.some((p) => escapes(within, p))) return { error: "outside the workspace" };
-      if (reach.some((p) => inSeeds(p, seeds))) return { error: SEED_SERVED_AS };
+      if (reach.some((p) => inSeeds(p, closed))) return { error: SEED_SERVED_AS };
     }
     return { kind: "upload-pack", path };
   }

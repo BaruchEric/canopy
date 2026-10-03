@@ -13,7 +13,7 @@ import type { ExecResult } from "../core/exec";
 import { git } from "../core/exec";
 import type { Harness } from "../core/harness";
 import { seedOps, writeSeed } from "../core/seed";
-import { SEED_AWAY, seedBusy } from "../core/seedgit";
+import { SEED_AWAY, seedBusy, seedRootsNow, setSeedRoots } from "../core/seedgit";
 import { MIRRORS_DIR } from "../core/seedmirror";
 import { StageClient } from "../core/stageclient";
 import type { Run, ScanResult } from "../core/types";
@@ -123,7 +123,8 @@ describe("a stage alive in one seed, on an isolated backend", () => {
     const seeds = seedOps("mini");
     await writeSeed(alpha(), ".canopy/pick.json", '{"kind":"new","host":"vercel","why":"x"}\n');
     client.gits.length = 0;
-    expect(await within(seeds.commit(alpha(), [".canopy/pick.json"], "scout: alpha"), 3000)).toBeUndefined();
+    const alphaHead = await within(seeds.commit(alpha(), [".canopy/pick.json"], "scout: alpha"), 3000);
+    expect(alphaHead).toBe((await Bun.$`git -C ${alpha()} rev-parse HEAD`.quiet().text()).trim());
     expect(await lastSubject(alpha())).toBe("scout: alpha");
     // canopy ran none of it here
     expect(client.gits.length).toBeGreaterThan(0);
@@ -166,5 +167,24 @@ describe("a stage alive in one seed, on an isolated backend", () => {
     const after = ((await (await fetch(url("/api/tree"))).json()) as ScanResult).repos.find((x) => x.id === "_incubator/alpha");
     expect(after?.error).toBeUndefined();
     expect(after?.status?.branch).toBe("main");
+  }, 20_000);
+
+  test("a stopped server's seeds stay away: git in flight there never falls back to here", async () => {
+    server?.stop();
+    server = null;
+    const r = await git(alpha(), ["status", "--porcelain"]);
+    expect(r.code).toBe(128);
+    expect(r.stderr).toContain(SEED_AWAY);
+    // another backend's seeds (a later server, a test) are not this one's to hold
+    const other = join(scratch, "other", "_incubator");
+    await repoAt(join(other, "gamma"));
+    const roots = seedRootsNow();
+    setSeedRoots([...roots, other]);
+    try {
+      const o = await git(join(other, "gamma"), ["rev-parse", "--is-inside-work-tree"]);
+      expect(o.stdout.trim()).toBe("true");
+    } finally {
+      setSeedRoots(roots);
+    }
   }, 20_000);
 });

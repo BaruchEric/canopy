@@ -5,7 +5,8 @@
  * busy question (does any process have its cwd in a seed), or a spawn. It
  * starts only claude, codex or sh, resolved on its own PATH to a program
  * outside the stage root, only in a seed (a direct, non-dot child of the
- * stage root, by realpath, and spawned in that realpath), with an env built
+ * stage root, by realpath, which the child enters itself after the drop,
+ * `enterSeed`), with an env built
  * from its own base and three CANOPY_* names, never what canopy sends.
  * Every refusal is answered before anything starts.
  *
@@ -16,8 +17,8 @@
  * In its own pid namespace (the stages container) it also kills, at every
  * run's end and every 30 s, each process no live run and no `docker exec`
  * owns (`orphansOf`): what escaped a seed's sweep by leaving the seed.
- * Before it starts codex it drops every seed's trust from its own codex
- * config.
+ * Before every spawn it drops every seed's trust from the stages' codex
+ * config, as the stage user when it runs as root (`stageChores`).
  */
 import { constants } from "node:fs";
 import { access, readdir, realpath, rm, stat } from "node:fs/promises";
@@ -73,8 +74,10 @@ export interface RunnerOptions {
   /** A runner started as root: every child, git included, starts through
    *  `setpriv` (an absolute path) as this uid and gid, with no
    *  supplementary group and no way to gain a privilege (amendment 4,
-   *  ruling 10). */
-  as?: { uid: number; gid: number; setpriv: string };
+   *  ruling 10). `self` is the argv that starts the runner's own entry,
+   *  which the chores before a spawn run under as the stage user
+   *  (`--stage-chores`, `stageChores`). */
+  as?: { uid: number; gid: number; setpriv: string; self: string[] };
 }
 
 /** Whether `uid` with only `gid` as its group could write a file or folder
@@ -120,6 +123,50 @@ export async function socketModes(
   await fs.chown(socket, 0, gid);
   await fs.chmod(socket, 0o660);
 }
+
+/** The chores before a spawn: drop every seed's trust from the stages'
+ *  codex config, then refuse while their claude settings or codex config
+ *  hold anything that could steer a stage. A root runner runs this in a
+ *  child dropped to the stage user (`--stage-chores`), never in itself:
+ *  both config folders are the stage's to write, and a link it plants
+ *  there must reach nothing the stage could not reach on its own. */
+export async function stageChores(env: Record<string, string | undefined>, seeds: readonly string[]): Promise<string | null> {
+  const codexHome = env["CODEX_HOME"] || (env["HOME"] ? join(env["HOME"], ".codex") : null);
+  try {
+    // a link or a fifo in config.toml's place is not swept; the check below
+    // refuses a fifo without waiting on it
+    if (codexHome) for (const s of seeds) await sweepCodexTrust(codexHome, s);
+  } catch {
+    return "codex's trust of the seeds could not be cleared";
+  }
+  return await stageSettingsRefusal(env).catch(() => "the stages' claude settings and codex config could not be read");
+}
+
+/** the answer the chores child prints, or null when it is not one */
+export function choresAnswer(out: string): { refused: string | null } | null {
+  try {
+    const v: unknown = JSON.parse(out.trim().split("\n").pop() ?? "");
+    if (typeof v !== "object" || v === null) return null;
+    const refused = "refused" in v ? v.refused : undefined;
+    return refused === null || typeof refused === "string" ? { refused } : null;
+  } catch {
+    return null;
+  }
+}
+
+/** how long the chores child may take before it is killed and the spawn refused */
+const CHORES_MS = 20_000;
+const CHORES_FAILED = "the stages' settings could not be checked as the stage user";
+
+/** What every stage and seed git starts as, under the drop: sh, spawned in
+ *  "/", enters the seed only now, as the stage user, and execs the program
+ *  only when the folder it entered is the seed's checked realpath itself.
+ *  The root runner never enters a seed, and a seed swapped for a link
+ *  since the check, or gone, runs nothing (exit 126). `pwd -P` reads the
+ *  folder sh is in, so nothing can change it between the check and exec. */
+export const ENTER_SEED =
+  'cd -P -- "$1" 2>/dev/null && [ "$(pwd -P)" = "$1" ] || { echo "canopy: the seed is not where the stage runner checked it" >&2; exit 126; }; shift; exec "$@"';
+export const enterSeed = (sh: string, seed: string, argv: readonly string[]): string[] => [sh, "-c", ENTER_SEED, "canopy-stage", seed, ...argv];
 
 /** the argv prefix that drops a child to the stage user */
 const dropTo = (as: { uid: number; gid: number; setpriv: string }): string[] => [
@@ -382,12 +429,42 @@ export async function startStageRunner(opts: RunnerOptions): Promise<{ stop(): P
    *  sweep at a time; a call while one runs waits for it and runs again,
    *  so a run's end never rides on a pass that read the table before it. */
   let sweeping: Promise<void> = Promise.resolve();
+  /** the chores children alive now, which the orphan sweep spares */
+  const chores = new Set<number>();
+  /** `stageChores` in a child dropped to the stage user, in a neutral cwd,
+   *  with the runner's own env; anything but its answer refuses */
+  const choresAs = async (to: NonNullable<RunnerOptions["as"]>, seeds: string[]): Promise<string | null> => {
+    let p: Bun.Subprocess<"ignore", "pipe", "inherit">;
+    try {
+      p = Bun.spawn([...dropTo(to), ...to.self, "--stage-chores", JSON.stringify(seeds)], {
+        cwd: "/",
+        env: Object.fromEntries(Object.entries(own).filter((e): e is [string, string] => e[1] !== undefined)),
+        stdin: "ignore",
+        stdout: "pipe",
+        stderr: "inherit",
+      });
+    } catch {
+      return CHORES_FAILED;
+    }
+    chores.add(p.pid);
+    const timer = setTimeout(() => p.kill("SIGKILL"), CHORES_MS);
+    try {
+      const [out, code] = await Promise.all([new Response(p.stdout).text(), p.exited]);
+      const answer = code === 0 ? choresAnswer(out) : null;
+      return answer === null ? CHORES_FAILED : answer.refused;
+    } catch {
+      return CHORES_FAILED;
+    } finally {
+      clearTimeout(timer);
+      chores.delete(p.pid);
+    }
+  };
   const sweepOrphans = (): Promise<void> => {
     const next = sweeping.then(async () => {
       for (let round = 0; round < ROUNDS; round++) {
         const table = await procs();
         // the live runs as they stand once the table is read
-        const hit = orphansOf(table, process.pid, [...runs].filter((r) => r.running).map((r) => r.pid));
+        const hit = orphansOf(table, process.pid, [...[...runs].filter((r) => r.running).map((r) => r.pid), ...chores]);
         if (hit.length === 0) return;
         for (const pid of hit) signal(pid, "SIGSTOP");
         for (const pid of hit) signal(pid, "SIGKILL");
@@ -436,6 +513,9 @@ export async function startStageRunner(opts: RunnerOptions): Promise<{ stop(): P
   const firstProbe = probeFence();
   const fenceTimer = target ? setInterval(() => void probeFence(), opts.fenceEvery ?? FENCE_EVERY) : null;
   fenceTimer?.unref?.();
+
+  /** the sh a child enters its seed with, held to the same rule as a program */
+  const shell = () => resolveProgram("sh", programs["sh"] ?? "sh", own["PATH"], opts.root, writable);
 
   const server = createServer((sock) => {
     live.add(sock);
@@ -488,24 +568,18 @@ export async function startStageRunner(opts: RunnerOptions): Promise<{ stop(): P
       const resolved = await resolveProgram(name, programs[name] ?? name, own["PATH"], opts.root, writable);
       if ("refused" in resolved) return finish({ t: "refused", reason: resolved.refused });
       const program = resolved.program;
+      const sh = await shell();
+      if ("refused" in sh) return finish({ t: "refused", reason: sh.refused });
       // codex writes a trusted project table for every seed it runs in, so
       // those go first, before any spawn (a check's sh may run codex too);
       // then anything else either config holds that could steer a later
       // stage refuses the spawn, naming the file and the key. A refusal
       // here carries no fence, so canopy fails the step rather than park
       // it as the runner away.
-      const codexHome = own["CODEX_HOME"] || (own["HOME"] ? join(own["HOME"], ".codex") : null);
-      try {
-        // a fifo in config.toml's place is left to the check below, which
-        // refuses it without waiting on it
-        const plain = codexHome ? await stat(join(codexHome, "config.toml")).then((st) => st.isFile(), () => false) : false;
-        if (codexHome && plain) for (const seeds of new Set([opts.root, where.root])) await sweepCodexTrust(codexHome, seeds);
-      } catch {
-        return finish({ t: "refused", reason: "codex's trust of the seeds could not be cleared" });
-      }
-      const unsettled = await stageSettingsRefusal(own).catch(() => "the stages' claude settings and codex config could not be read");
+      const seeds = [...new Set([opts.root, where.root])];
+      const unsettled = as ? await choresAs(as, seeds) : await stageChores(own, seeds);
       if (unsettled) return finish({ t: "refused", reason: unsettled });
-      launch(name, [program, ...req.argv.slice(1)], where.seed, childEnv(own, req.env), false);
+      launch(name, [program, ...req.argv.slice(1)], where.seed, childEnv(own, req.env), false, sh.program);
     };
 
     /** canopy's own git in a seed: the seed's top folder only, behind the
@@ -525,19 +599,23 @@ export async function startStageRunner(opts: RunnerOptions): Promise<{ stop(): P
       if ("refused" in resolved) return finish({ t: "refused", reason: resolved.refused });
       // safe.directory on the command line, which git honours there: the
       // system config that names it is off
+      const sh = await shell();
+      if ("refused" in sh) return finish({ t: "refused", reason: sh.refused });
       const argv = [resolved.program, ...SEED_GIT_FLAGS, "-c", "safe.directory=*", ...req.args];
-      launch("git", argv, where.seed, gitEnv(own, req.env, where.root), true);
+      launch("git", argv, where.seed, gitEnv(own, req.env, where.root), true, sh.program);
     };
 
     /** starts the checked argv in the seed and carries it to its exit frame */
-    const launch = (name: string, argv: string[], seed: string, env: Record<string, string>, git: boolean): void => {
+    const launch = (name: string, argv: string[], seed: string, env: Record<string, string>, git: boolean, sh: string): void => {
       // the connection may have closed while the checks ran: then nothing starts
       if (sock.destroyed || state === "over") return;
       let p: Bun.Subprocess<"pipe", "pipe", "pipe">;
       try {
-        // setpriv execs the program in its own place: the pid is the program's
-        p = Bun.spawn(as ? [...dropTo(as), ...argv] : argv, {
-          cwd: seed,
+        // setpriv and sh each exec the next in its own place: the pid is the
+        // program's. The spawn's cwd is "/": the child enters the seed itself
+        const entered = enterSeed(sh, seed, argv);
+        p = Bun.spawn(as ? [...dropTo(as), ...entered] : entered, {
+          cwd: "/",
           env,
           stdin: "pipe",
           stdout: "pipe",

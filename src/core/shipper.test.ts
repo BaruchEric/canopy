@@ -6,6 +6,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { exec, type ExecOptions, type ExecResult } from "./exec";
 import { setSeedBusy, setSeedRoots } from "./seedgit";
+import { bundleSeed } from "./seedmirror";
 import { shipConfig, shipper, type ShipDeps } from "./shipper";
 
 interface Call { cmd: string[]; opts: ExecOptions }
@@ -158,6 +159,30 @@ describe("push", () => {
     // the seed's own config would have sent a plain push to the decoy
     await git(seed, "push", "-q", "origin", "HEAD:refs/heads/main");
     expect(await refs(decoy)).toBe(`refs/heads/main ${head}`);
+  });
+  test("one bundle serves the push and the deploy: neither makes its own, and it is gone once let go", async () => {
+    const target = await bareRepo("one-bundle");
+    const { seed, head } = await hostileSeed(target, await bareRepo("one-bundle-decoy"));
+    let made = 0;
+    const deps: ShipDeps = {
+      exec,
+      fetch,
+      which: () => null,
+      remote: () => target,
+      bundle: (seedPath, file) => {
+        made++;
+        return bundleSeed(seedPath, file);
+      },
+    };
+    const s = shipper(cfg, deps);
+    const b = await s.bundle(seed);
+    expect(b.head).toBe(head);
+    await s.push(b, "eric/x");
+    expect(made).toBe(1);
+    expect(await refs(target)).toBe(`refs/heads/main ${head}`);
+    expect(existsSync(b.file)).toBe(true);
+    await b.done();
+    expect(existsSync(b.file)).toBe(false);
   });
   test("a refused push fails with git's words, hooks off and no prompt", async () => {
     const f = fakes((c) => (c.cmd.includes("push") ? no("rejected: non-fast-forward") : ok()));

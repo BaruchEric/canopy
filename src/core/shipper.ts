@@ -35,13 +35,27 @@ export interface Shipper {
   /** a Vercel project of its own, made under a name the account did not
    *  have, with the framework the seed's package.json makes clear */
   project(slug: string, seedPath: string): Promise<string>;
-  /** the seed's HEAD pushed to main from a fresh bare clone of a bundle of
-   *  it, hooks off */
-  push(seedPath: string, repo: string): Promise<void>;
-  /** the seed's HEAD, from a fresh clone of a bundle of it, linked and deployed to
-   *  production with the project pinned; the public production url */
-  deploy(seedPath: string, project: string): Promise<string>;
+  /** a bundle of the seed in a scratch folder canopy owns, and its HEAD
+   *  commit; `done` removes it. One ship makes one, so the push and the
+   *  deploy send the same commit. */
+  bundle(seedPath: string): Promise<ShipBundle>;
+  /** the bundle's HEAD pushed to main from a fresh bare clone of it, hooks
+   *  off; a seed path is bundled first */
+  push(from: ShipSource, repo: string): Promise<void>;
+  /** the bundle's HEAD, from a fresh clone of it, linked and deployed to
+   *  production with the project pinned; the public production url. A seed
+   *  path is bundled first. */
+  deploy(from: ShipSource, project: string): Promise<string>;
 }
+
+/** a seed as one ship sends it */
+export interface ShipBundle {
+  file: string;
+  head: string;
+  done(): Promise<void>;
+}
+/** a bundle made once for the whole ship, or a seed path to bundle now */
+export type ShipSource = ShipBundle | string;
 
 export interface ShipConfig {
   vercelToken: string | null;
@@ -112,7 +126,7 @@ export function shipper(cfg: ShipConfig, deps: ShipDeps = { exec: realExec, fetc
       return { status: res.status, body };
     }
   };
-  return {
+  const self: Shipper = {
     ready: (host) => deployReady(host, { vercelToken: cfg.vercelToken !== null, vercelCli: deps.which("vercel") !== null, backend: cfg.backend }),
 
     async createRepo(slug, description) {
@@ -149,7 +163,19 @@ export function shipper(cfg: ShipConfig, deps: ShipDeps = { exec: realExec, fetc
       throw new Error(`every Vercel project name from ${slug} to ${slug}-9 is taken`);
     },
 
-    async push(seedPath, repo) {
+    async bundle(seedPath) {
+      const tmp = await mkdtemp(join(tmpdir(), "canopy-bundle-"));
+      const file = join(tmp, "seed.bundle");
+      try {
+        const { head } = await bundle(seedPath, file);
+        return { file, head, done: () => rm(tmp, { recursive: true, force: true }) };
+      } catch (err) {
+        await rm(tmp, { recursive: true, force: true });
+        throw err;
+      }
+    },
+
+    async push(from, repo) {
       // Pushed from a bare clone of a bundle of the seed, never from the
       // seed itself, nor a clone of it: the seed's .git/config is the
       // agents' to write, and a pushurl, a pushInsteadOf or a credential
@@ -157,39 +183,52 @@ export function shipper(cfg: ShipConfig, deps: ShipDeps = { exec: realExec, fetc
       // chose. The bundle is made where canopy's seed git runs (the stage
       // runner on an isolated backend) and is plain data here.
       const url = deps.remote ? deps.remote(repo) : `https://github.com/${repo}.git`;
-      const tmp = await mkdtemp(join(tmpdir(), "canopy-ship-"));
-      const bare = join(tmp, "seed.git");
-      const git = (args: string[], cwd: string, timeoutMs = 30_000): Promise<ExecResult> =>
-        deps.exec(["git", ...NO_HOOKS, ...args], { cwd, timeoutMs, env: { GIT_TERMINAL_PROMPT: "0" } });
-      try {
-        const file = join(tmp, "seed.bundle");
-        const { head } = await bundle(seedPath, file);
-        const cloned = await git(["clone", "--bare", "--quiet", "--", file, bare], tmp, 300_000);
-        if (cloned.code !== 0) throw new Error(`git clone of the seed's bundle: ${tail(cloned)}`);
-        const set = await git(["remote", "set-url", "origin", url], bare);
-        if (set.code !== 0) throw new Error(`git remote: ${tail(set)}`);
-        // the bundle's HEAD, whatever branch the clone took as its own
-        const pushed = await git(["push", "origin", `${head}:refs/heads/main`], bare, 300_000);
-        if (pushed.code !== 0) throw new Error(`git push: ${tail(pushed)}`);
-      } finally {
-        await rm(tmp, { recursive: true, force: true });
-      }
+      await withBundle(from, async ({ file, head }) => {
+        const tmp = await mkdtemp(join(tmpdir(), "canopy-ship-"));
+        const bare = join(tmp, "seed.git");
+        const git = (args: string[], cwd: string, timeoutMs = 30_000): Promise<ExecResult> =>
+          deps.exec(["git", ...NO_HOOKS, ...args], { cwd, timeoutMs, env: { GIT_TERMINAL_PROMPT: "0" } });
+        try {
+          const cloned = await git(["clone", "--bare", "--quiet", "--", file, bare], tmp, 300_000);
+          if (cloned.code !== 0) throw new Error(`git clone of the seed's bundle: ${tail(cloned)}`);
+          const set = await git(["remote", "set-url", "origin", url], bare);
+          if (set.code !== 0) throw new Error(`git remote: ${tail(set)}`);
+          // the bundle's HEAD, whatever branch the clone took as its own
+          const pushed = await git(["push", "origin", `${head}:refs/heads/main`], bare, 300_000);
+          if (pushed.code !== 0) throw new Error(`git push: ${tail(pushed)}`);
+        } finally {
+          await rm(tmp, { recursive: true, force: true });
+        }
+      });
     },
 
-    async deploy(seedPath, project) {
+    async deploy(from, project) {
       const token = needToken();
       // the seed as a bundle first, so a seed canopy will not run git in is
       // refused before anything reaches Vercel
-      const tmp = await mkdtemp(join(tmpdir(), "canopy-deploy-"));
-      try {
-        const file = join(tmp, "seed.bundle");
-        const { head } = await bundle(seedPath, file);
-        return await deployFrom(file, head, tmp, project, token);
-      } finally {
-        await rm(tmp, { recursive: true, force: true });
-      }
+      return withBundle(from, async ({ file, head }) => {
+        const tmp = await mkdtemp(join(tmpdir(), "canopy-deploy-"));
+        try {
+          return await deployFrom(file, head, tmp, project, token);
+        } finally {
+          await rm(tmp, { recursive: true, force: true });
+        }
+      });
     },
   };
+  return self;
+
+  /** `f` over the bundle given, or over one made of the seed path given
+   *  and removed after */
+  async function withBundle<T>(from: ShipSource, f: (b: ShipBundle) => Promise<T>): Promise<T> {
+    if (typeof from !== "string") return f(from);
+    const made = await self.bundle(from);
+    try {
+      return await f(made);
+    } finally {
+      await made.done();
+    }
+  }
 
   /** the deploy proper, from the bundle in `file` at its commit `head` */
   async function deployFrom(file: string, head: string, tmp: string, project: string, token: string): Promise<string> {

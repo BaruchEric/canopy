@@ -148,6 +148,9 @@ export async function onHost(
  *  as git would, or with SEED_AWAY when the runner cannot run them now;
  *  neither ever runs git in this process. */
 export interface SeedGitHook {
+  /** the seeds this hook answers for (its own backend's); every seed when
+   *  absent. A seed it does not cover runs here behind the guard. */
+  covers?(path: string): boolean;
   run(path: string, args: string[], opts: { timeoutMs: number; env: Record<string, string> }): Promise<ExecResult>;
   /** stdout into `file`, for bytes (a bundle) */
   toFile(path: string, args: string[], file: string, opts: { timeoutMs: number; env: Record<string, string> }): Promise<ExecResult>;
@@ -157,6 +160,7 @@ let seedGitHook: SeedGitHook | null = null;
 export function setSeedGit(hook: SeedGitHook | null): void {
   seedGitHook = hook;
 }
+const hookCovers = (hook: SeedGitHook, path: string): boolean => hook.covers?.(path) ?? true;
 
 /** a refusal for an env the stage runner would refuse: a name dropped
  *  would change what the command writes, so it never goes */
@@ -174,7 +178,7 @@ export async function gitToFile(path: string, args: string[], file: string, time
   const refused = await seedGitRefusal(path);
   if (refused) return { code: 128, stdout: "", stderr: refused };
   const env = { GIT_OPTIONAL_LOCKS: "0" };
-  if (seeds !== null && seedGitHook) return seedGitHook.toFile(path, args, file, { timeoutMs, env });
+  if (seeds !== null && seedGitHook && hookCovers(seedGitHook, path)) return seedGitHook.toFile(path, args, file, { timeoutMs, env });
   const seedOnly = seeds !== null ? { flags: SEED_GIT_FLAGS, env: { GIT_CEILING_DIRECTORIES: seeds } } : { flags: [], env: {} };
   const p = Bun.spawn(["git", ...seedOnly.flags, "-C", path, ...args], {
     env: { ...process.env, ...env, ...seedOnly.env },
@@ -209,7 +213,7 @@ export async function git(
     if (seeds !== null && seedBusy(path)) return { code: 128, stdout: "", stderr: SEED_BUSY };
     const refused = await seedGitRefusal(path);
     if (refused) return { code: 128, stdout: "", stderr: refused };
-    if (seeds !== null && seedGitHook) {
+    if (seeds !== null && seedGitHook && hookCovers(seedGitHook, path)) {
       const off = offGitEnv(opts.env);
       return off ?? seedGitHook.run(path, args, opts);
     }

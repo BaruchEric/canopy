@@ -486,6 +486,10 @@ describe("gateCommand", () => {
     for (const p of ["dev/_incubator", "dev/_incubator/", "dev/_incubator/coin/src", "dev/_incubator/coin/.git/config", "dev/_incubator/.hidden", "dev/_incubator/coin.git"]) {
       expect(gateCommand(`git-upload-pack '${p}'`, rootAbs, home)).toEqual({ error: SEED_SERVED_AS });
     }
+    // a mirror is reached only through its seed's name, never by its own path
+    for (const p of ["dev/.canopy-mirrors", "dev/.canopy-mirrors/coin", "dev/.canopy-mirrors/coin/.git"]) {
+      expect(gateCommand(`git-upload-pack '${p}'`, rootAbs, home)).toEqual({ error: SEED_SERVED_AS });
+    }
   });
   test("refuses paths outside the root and other git commands", () => {
     expect(gateCommand("git-upload-pack 'dev/../.ssh'", rootAbs, home)).toHaveProperty("error");
@@ -1399,6 +1403,14 @@ describe("canopy peers gate", () => {
     const top = await gate(`git-upload-pack '${join(ws, "_incubator")}'`, ws);
     expect(top.code).toBe(1);
     expect(top.stderr).toContain(SEED_SERVED_AS);
+    // the mirror by its own path, and by a link to it, is refused
+    const direct = await gate(`git-upload-pack '${join(ws, ".canopy-mirrors", "gated", ".git")}'`, ws);
+    expect(direct.code).toBe(1);
+    expect(direct.stderr).toContain(SEED_SERVED_AS);
+    await symlink(join(ws, ".canopy-mirrors", "gated"), join(ws, "to-mirror"));
+    const linked = await gate(`git-upload-pack '${join(ws, "to-mirror")}'`, ws);
+    expect(linked.code).toBe(1);
+    expect(linked.stderr).toContain(SEED_SERVED_AS);
     const inner = await gate(`git-upload-pack '${join(seed, "sub")}'`, ws);
     expect(inner.code).toBe(1);
     expect(inner.stderr).toContain(SEED_SERVED_AS);

@@ -1426,6 +1426,9 @@ export interface Sprout {
   privateRepo?: string;
   /** the Vercel project canopy deploys it as, chosen once */
   vercelProject?: string;
+  /** the seed's HEAD once canopy committed the build's notes after accept:
+   *  the commit the ship sends, which parks if the seed moved since */
+  builtHead?: string;
   /** the production url once live */
   url?: string;
   /** what canopy rebuilt the seed from for a renovate or extend pick, once it has */
