@@ -387,6 +387,16 @@ export function withWorkspaceRead(wf: Workflow, dir: string): Workflow {
   return { ...wf, steps: wf.steps.map((st) => ({ ...st, tools: [...st.tools, rule] })) };
 }
 
+/** A copy of the workflow whose every step may also read the record canopy
+ *  shared for the sprout's retro (`.shared/record/<id>`), and nothing else. */
+export function withRecordRead(wf: Workflow, dir: string): Workflow {
+  const rule = `Read(/${dir}/**)`;
+  return { ...wf, steps: wf.steps.map((st) => ({ ...st, tools: [...st.tools, rule] })) };
+}
+
+/** the retro's note: where its record is */
+export const recordLine = (file: string): string => `This project's record is ${file}.`;
+
 /** the stage note's sentence naming what withWorkspaceRead opens */
 export const workspaceLine = (dir: string): string =>
   `The workspace's devhub manifest is ${dir}/manifest.json, its saved references are ${dir}/references.json and each project's README is in ${dir}/READMEs/.`;

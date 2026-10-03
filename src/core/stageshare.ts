@@ -1,8 +1,8 @@
 /**
  * What a stage may read beyond its own seed, copied by canopy under the seeds
  * dir's `.shared/`, which the stages container mounts read-only: a sprout's
- * inputs, and a per-sprout snapshot of the workspace (devhub's two indexes and
- * each listed project's README). The stage never sees the launch root, its
+ * inputs, a per-sprout snapshot of the workspace (devhub's two indexes and
+ * each listed project's README), and the record its retro reads. The stage never sees the launch root, its
  * .env, or canopy's config volume. Regular files only; a symlink is skipped.
  * Every build happens in a tmp folder of its own, so two stages at once never
  * share one or swap a snapshot out from under each other.
@@ -105,9 +105,24 @@ export async function shareWorkspace(seeds: string, root: string, sproutId: stri
   return dest;
 }
 
+/** The record a sprout's retro reads (`retroRecord`, built by the
+ *  Incubator), as `record/<id>/record.json`, swapped in whole. Answers the
+ *  file's path. */
+export async function shareRecord(seeds: string, sproutId: string, json: string): Promise<string> {
+  checkId(sproutId);
+  const dest = join(seeds, SHARED_DIR, "record", sproutId);
+  const tmp = await scratch(seeds);
+  try {
+    await writeFile(join(tmp, "record.json"), json);
+    await swapIn(tmp, dest);
+  } finally {
+    await rm(tmp, { recursive: true, force: true });
+  }
+  return join(dest, "record.json");
+}
+
 /** a dismissed sprout's copies go with it */
 export async function unshare(seeds: string, sproutId: string): Promise<void> {
   checkId(sproutId);
-  await rm(join(seeds, SHARED_DIR, "inputs", sproutId), { recursive: true, force: true });
-  await rm(join(seeds, SHARED_DIR, "workspace", sproutId), { recursive: true, force: true });
+  for (const kind of ["inputs", "workspace", "record"]) await rm(join(seeds, SHARED_DIR, kind, sproutId), { recursive: true, force: true });
 }

@@ -24,6 +24,8 @@ import {
   sproutTitle,
   withInputsRead,
   withWorkspaceRead,
+  withRecordRead,
+  recordLine,
   workspaceLine,
   urlWithoutSecret,
   withSummaries,
@@ -232,6 +234,9 @@ describe("slots and stages", () => {
     const next = withWorkspaceRead(wf, "/seeds/.shared/workspace/sp_1");
     expect(next.steps[0]?.tools).toEqual(["WebFetch", "Read(//seeds/.shared/workspace/sp_1/**)"]);
     expect(wf.steps[0]?.tools).toEqual(["WebFetch"]);
+    const rec = withRecordRead(wf, "/seeds/.shared/record/sp_1");
+    expect(rec.steps[0]?.tools).toEqual(["WebFetch", "Read(//seeds/.shared/record/sp_1/**)"]);
+    expect(recordLine("/seeds/.shared/record/sp_1/record.json")).toBe("This project's record is /seeds/.shared/record/sp_1/record.json.");
     expect(workspaceLine("/seeds/.shared/workspace/sp_1")).toBe(
       "The workspace's devhub manifest is /seeds/.shared/workspace/sp_1/manifest.json, its saved references are /seeds/.shared/workspace/sp_1/references.json and each project's README is in /seeds/.shared/workspace/sp_1/READMEs/.",
     );
