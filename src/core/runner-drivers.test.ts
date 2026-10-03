@@ -451,22 +451,34 @@ describe("a stage run goes through the stage runner", () => {
     let busy = true;
     const { client } = recordingClient(() => busy);
     let reads = 0;
+    const atRead: { held: boolean | null } = { held: null };
     const runner: Runner = new Runner(
-      { onChange: () => {}, onGone: () => {}, status: async () => ((reads += 1), null) },
+      {
+        onChange: () => {},
+        onGone: () => {},
+        status: async () => {
+          reads += 1;
+          atRead.held = runner.liveAny();
+          return null;
+        },
+      },
       { stage: () => true, stageExec: () => client, driver: localClaude, quietWait: 200 },
     );
     const run = runner.start(seed, "ask", ACTIONS.ask, "go", { ...DEFAULT_AGENT });
-    await waitFor(() => !isRunActive(run), "the run to end");
     // the run's own end does not wait on the seed for longer than the wait
-    await waitFor(() => reads === 1, "the end-of-run status read");
+    await waitFor(() => !isRunActive(run), "the run to end");
     expect(run.status).toBe("done");
-    // a yes past the wait is still a yes: every seed stays busy
+    // a yes past the wait is still a yes: every seed stays busy, and the
+    // end-of-run status read waits for the next no
     expect(runner.liveIn(seed.path)).toBe(true);
     expect(runner.liveAny()).toBe(true);
     await Bun.sleep(600);
     expect(runner.liveIn(seed.path)).toBe(true);
+    expect(reads).toBe(0);
     busy = false;
-    await waitFor(() => !runner.liveIn(seed.path), "the seed to go quiet");
+    await waitFor(() => reads === 1, "the end-of-run status read");
+    expect(atRead.held).toBe(false);
+    expect(runner.liveIn(seed.path)).toBe(false);
     expect(runner.liveAny()).toBe(false);
   });
 

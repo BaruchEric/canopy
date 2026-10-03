@@ -107,8 +107,12 @@ interface Live {
   /** status fingerprint at start, compared with the one at the end */
   before: string;
   /** each of a stage run's processes, settled once it has exited and its
-   *  seed is quiet; the end-of-run status read waits on them */
+   *  seed is quiet or `quietWait` is up; `exited` and `whenQuiet` wait on them */
   drains: Promise<unknown>[];
+  /** each of a stage run's processes, settled once the stage runner has
+   *  let its seed go (`holdQuiet`'s release); the end-of-run status read
+   *  waits on these too, so a run's outcome is read from a quiet seed */
+  releases: Promise<unknown>[];
 }
 
 export class Runner {
@@ -140,9 +144,8 @@ export class Runner {
 
   /** Whether a stage run's process is alive in the repo at `path`: from its
    *  spawn until it has exited and the stage runner says nothing is left
-   *  running there. That is before the run's end-of-run status read as a
-   *  rule; a seed the runner still calls busy past `quietWait` stays held
-   *  after it, and that read finds the seeds busy and records no status. */
+   *  running there, past `quietWait` while the runner keeps saying busy.
+   *  The run's end-of-run status read waits for that. */
   liveIn(path: string): boolean {
     return (this.procs.get(path) ?? 0) > 0;
   }
@@ -227,7 +230,7 @@ export class Runner {
       // `live` is read only once the run has ended, long after it is set
       { emit: (r) => this.hooks.onChange(r), ended: () => void this.settle(live) },
     );
-    const live: Live = { ctx, driver, started: false, repo, spec, before: statusFingerprint(repo.status), drains: [] };
+    const live: Live = { ctx, driver, started: false, repo, spec, before: statusFingerprint(repo.status), drains: [], releases: [] };
     this.live.set(run.id, live);
     this.prune();
     if (chat) {
@@ -354,10 +357,12 @@ export class Runner {
         };
         if (hold) {
           this.holds.add(hold);
-          void hold.released.then(() => {
-            this.holds.delete(hold);
-            drop();
-          });
+          live.releases.push(
+            hold.released.then(() => {
+              this.holds.delete(hold);
+              drop();
+            }),
+          );
           await hold.settled;
         } else drop();
       }
@@ -370,8 +375,10 @@ export class Runner {
   private async settle(live: Live): Promise<void> {
     const read = this.hooks.status;
     if (!read) return;
-    // a stage run's processes first: the seed is read only once it is quiet
+    // a stage run's processes first: the seed is read only once it is quiet,
+    // past `quietWait` too while the stage runner still says busy
     if (live.drains.length) await Promise.all(live.drains);
+    if (live.releases.length) await Promise.all(live.releases);
     const run = live.ctx.run;
     let after: string | null = null;
     try {
