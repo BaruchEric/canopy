@@ -10,10 +10,25 @@
 import { randomBytes } from "node:crypto";
 import { copyFile, lstat, mkdir, readdir, readFile, realpath, rename, rm, writeFile } from "node:fs/promises";
 import { join, normalize, relative, sep } from "node:path";
+import { urlWithoutSecret } from "./sprout";
 
 export const SHARED_DIR = ".shared";
 const CAP = { files: 400, bytes: 4_000_000 };
 const ID_RE = /^[A-Za-z0-9_-]+$/;
+
+/** a url anywhere in a string: up to whitespace, a quote or an angle bracket */
+const URL_IN_TEXT = /[a-z][a-z0-9+.-]*:\/\/[^\s"'<>]+/gi;
+
+/** a JSON value with every url in every string, whole or inside free text,
+ *  passed through `urlWithoutSecret` */
+export function withoutSecrets(v: unknown): unknown {
+  if (typeof v === "string") return v.replace(URL_IN_TEXT, (u) => urlWithoutSecret(u));
+  if (Array.isArray(v)) return v.map(withoutSecrets);
+  if (typeof v === "object" && v !== null) {
+    return Object.fromEntries(Object.entries(v).map(([k, x]) => [k, withoutSecrets(x)]));
+  }
+  return v;
+}
 
 async function regular(path: string): Promise<boolean> {
   const st = await lstat(path).catch(() => null);
@@ -59,8 +74,15 @@ export async function shareWorkspace(seeds: string, root: string, sproutId: stri
   try {
     await mkdir(join(tmp, "READMEs"), { recursive: true });
     const hub = join(root, "_devhub");
+    // the indexes carry each project's remote, which may hold a password or
+    // token: every url in them goes in without its userinfo, and an index that
+    // does not parse stays out rather than go in as it is
     for (const f of ["manifest.json", "references.json"]) {
-      if (await regular(join(hub, f))) await copyFile(join(hub, f), join(tmp, f));
+      if (!(await regular(join(hub, f)))) continue;
+      const parsed: unknown = await readFile(join(hub, f), "utf8")
+        .then(JSON.parse)
+        .catch(() => undefined);
+      if (parsed !== undefined) await writeFile(join(tmp, f), JSON.stringify(withoutSecrets(parsed), null, 1));
     }
     const manifest: unknown = await readFile(join(hub, "manifest.json"), "utf8").then(JSON.parse).catch(() => null);
     const cats = typeof manifest === "object" && manifest !== null ? (manifest as { categories?: unknown }).categories : null;

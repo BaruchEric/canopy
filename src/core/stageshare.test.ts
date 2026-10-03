@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
-import { mkdtemp, mkdir, readdir, rm, symlink, writeFile } from "node:fs/promises";
+import { mkdtemp, mkdir, readdir, readFile, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { shareInputs, shareWorkspace, unshare } from "./stageshare";
@@ -89,5 +89,62 @@ describe("stage share", () => {
     await unshare(seeds, "sp_x");
     expect(await readdir(join(seeds, ".shared", "workspace"))).not.toContain("sp_x");
     expect(await readdir(join(seeds, ".shared", "workspace"))).toContain("sp_y");
+  });
+});
+
+describe("the indexes a stage reads", () => {
+  test("hold no userinfo: every remote, url and url in free text loses its password or token", async () => {
+    const ws = await mkdtemp(join(tmpdir(), "canopy-share-secret-"));
+    try {
+      await mkdir(join(ws, "_devhub"), { recursive: true });
+      await writeFile(
+        join(ws, "_devhub", "manifest.json"),
+        JSON.stringify({
+          categories: {
+            "web-apps": {
+              projects: [
+                {
+                  name: "x",
+                  path: "web-apps/x",
+                  remote: "https://eric:ghp_SECRET1@github.com/eric/x.git",
+                  related: [{ url: "https://bot:SECRET2@forge.example/eric/y" }],
+                  description: "mirrors https://ci:SECRET3@builds.example/x nightly",
+                  dev: "http://localhost:5173",
+                },
+                { name: "ssh", path: "web-apps/ssh", remote: "git@github.com:eric/ssh.git" },
+              ],
+            },
+          },
+        }),
+      );
+      await writeFile(join(ws, "_devhub", "references.json"), JSON.stringify([{ url: "https://u:SECRET4@ref.example/doc" }]));
+      const dest = await shareWorkspace(join(ws, "_incubator"), ws, "sp_secret0000");
+      const manifest = await readFile(join(dest, "manifest.json"), "utf8");
+      const refs = await readFile(join(dest, "references.json"), "utf8");
+      for (const s of ["SECRET1", "SECRET2", "SECRET3", "SECRET4", "ghp_"]) {
+        expect(manifest + refs).not.toContain(s);
+      }
+      const m = JSON.parse(manifest) as { categories: Record<string, { projects: Record<string, unknown>[] }> };
+      const [x, ssh] = m.categories["web-apps"]?.projects ?? [];
+      expect(x?.["remote"]).toBe("https://github.com/eric/x.git");
+      expect(x?.["description"]).toBe("mirrors https://builds.example/x nightly");
+      expect(x?.["dev"]).toBe("http://localhost:5173");
+      expect(ssh?.["remote"]).toBe("git@github.com:eric/ssh.git");
+      expect(JSON.parse(refs)).toEqual([{ url: "https://ref.example/doc" }]);
+    } finally {
+      await rm(ws, { recursive: true, force: true });
+    }
+  });
+
+  test("an index that does not parse is left out rather than copied as it is", async () => {
+    const ws = await mkdtemp(join(tmpdir(), "canopy-share-bad-"));
+    try {
+      await mkdir(join(ws, "_devhub"), { recursive: true });
+      await writeFile(join(ws, "_devhub", "manifest.json"), '{"remote": "https://e:SECRET5@github.com/x" ');
+      const dest = await shareWorkspace(join(ws, "_incubator"), ws, "sp_secret0001");
+      expect(await readdir(dest)).not.toContain("manifest.json");
+    } finally {
+      await rm(ws, { recursive: true, force: true });
+    }
   });
 });
