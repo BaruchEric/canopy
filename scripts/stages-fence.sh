@@ -20,17 +20,23 @@
 #              nothing
 #   --install  write a root-owned copy of this script to
 #              /usr/local/sbin/canopy-stages-fence and a systemd unit that
-#              runs its --apply before docker starts, enable it and run it
-#              now (root)
+#              runs its --apply before docker starts (and whenever docker
+#              starts), enable it and run it now (root)
 #
 # From the checkout, CANOPY_FENCE_IPTABLES, CANOPY_FENCE_IP6TABLES,
 # CANOPY_FENCE_SYSTEMCTL and CANOPY_FENCE_ROOT point the script at stand-ins
-# and a fixture root, for its tests. The installed copy has CHECKOUT=0 and
-# reads none of them.
+# and a fixture root, for its tests. Only a file named stages-fence.sh with
+# CHECKOUT=1 reads them: the installed copy has CHECKOUT=0, and any other
+# name (the root-owned canopy-stages-fence.new the deploy docs install
+# from) runs the real tools on the real paths.
 set -eu
 
 # --install writes 0 here in the installed copy
 CHECKOUT=1
+case ${0##*/} in
+  stages-fence.sh) ;;
+  *) CHECKOUT=0 ;;
+esac
 
 BRIDGE=br-canopy-stg
 COPY=/usr/local/sbin/canopy-stages-fence
@@ -97,6 +103,7 @@ ExecStart=$COPY --apply
 
 [Install]
 WantedBy=multi-user.target
+WantedBy=docker.service
 EOF
 }
 

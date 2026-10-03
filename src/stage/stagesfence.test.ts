@@ -163,6 +163,7 @@ ExecStart=/usr/local/sbin/canopy-stages-fence --apply
 
 [Install]
 WantedBy=multi-user.target
+WantedBy=docker.service
 `);
     });
 
@@ -220,6 +221,58 @@ WantedBy=multi-user.target
       expect(r.err).toContain("root");
       expect(Bun.spawnSync(["find", other, "-type", "f"]).stdout.toString().trim()).toBe("");
       expect(sysctl.calls()).toEqual([]);
+    });
+
+    describe("a copy under another name, as the deploy docs stage it in /usr/local/sbin", () => {
+      // the same bytes as the checkout, CHECKOUT=1 included, as `install` copies them
+      function staged() {
+        const sbin = join(dir, "sbin");
+        mkdirSync(sbin);
+        const copy = join(sbin, "canopy-stages-fence.new");
+        writeFileSync(copy, readFileSync(SCRIPT));
+        return copy;
+      }
+
+      test("--apply calls iptables and ip6tables by name and ignores every test switch", () => {
+        const copy = staged();
+        const named = join(dir, "bin");
+        mkdirSync(named);
+        const v4 = fake("iptables", named);
+        const v6 = fake("ip6tables", named);
+        const o4 = fake("o4");
+        const o6 = fake("o6");
+        const r = run(copy, ["--apply"], {
+          PATH: `${named}:${BASE_PATH}`,
+          CANOPY_FENCE_IPTABLES: o4.bin,
+          CANOPY_FENCE_IP6TABLES: o6.bin,
+        });
+        expect(r.code).toBe(0);
+        expect(v4.chain()).toHaveLength(V4.length);
+        expect(v6.chain()).toEqual(V6);
+        expect(o4.calls()).toEqual([]);
+        expect(o6.calls()).toEqual([]);
+      });
+
+      test.skipIf(process.getuid?.() === 0)("--install ignores CANOPY_FENCE_ROOT: as a user it refuses before writing", () => {
+        const copy = staged();
+        const other = join(dir, "other");
+        mkdirSync(other);
+        const sysctl = fake("sysctl-o");
+        const r = run(copy, ["--install"], { CANOPY_FENCE_ROOT: other, CANOPY_FENCE_SYSTEMCTL: sysctl.bin });
+        expect(r.code).not.toBe(0);
+        expect(r.err).toContain("root");
+        expect(Bun.spawnSync(["find", other, "-type", "f"]).stdout.toString().trim()).toBe("");
+        expect(sysctl.calls()).toEqual([]);
+      });
+
+      test("the copy --install writes from it is the checkout's own copy", () => {
+        // --install pipes its own file through this sed; from the staged copy
+        // it gives the same bytes as from the checkout
+        const copy = staged();
+        const flip = (f: string) => Bun.spawnSync(["sed", "s/^CHECKOUT=1$/CHECKOUT=0/", f]).stdout.toString();
+        const { root } = install();
+        expect(flip(copy)).toBe(readFileSync(join(root, SBIN), "utf8"));
+      });
     });
 
     test.skipIf(process.getuid?.() === 0)("from the checkout without a fixture root it needs root", () => {
