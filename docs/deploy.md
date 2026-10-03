@@ -486,6 +486,7 @@ prints the rules and changes nothing.
 
 ```
 sudo sh scripts/stages-fence.sh --install
+diff scripts/stages-fence.sh /usr/local/sbin/canopy-stages-fence   # only the CHECKOUT line differs
 sudo iptables -t raw -S PREROUTING      # the eight drops on -i br-canopy-stg, no ACCEPT above them
 sudo ip6tables -t raw -S PREROUTING     # the one v6 drop
 sudo ufw reload && sudo iptables -t raw -S PREROUTING   # still there
