@@ -71,12 +71,13 @@ class FakeRunner implements FlowRunner {
     return this.end(id, "stopped");
   }
   dismiss(id: string) { this.dismissed.push(id); }
-  end(id: string, status: Run["status"], text = "", error?: string): Run {
+  end(id: string, status: Run["status"], text = "", error?: string, away = false): Run {
     const run = this.runs.get(id);
     if (!run) throw new Error(id);
     run.status = status;
     if (text) run.result = { text, costUsd: 0, durationMs: 0, turns: 1 };
     if (error) run.error = error;
+    if (away) run.away = true;
     this.onChange(run);
     return run;
   }
@@ -1047,6 +1048,18 @@ describe("the stage runner away", () => {
 
   const seedRepo = (): Repo => ({ ...repo(), id: "_incubator/coin", name: "coin", path: "/tmp/_incubator/coin" });
 
+  test("a seed run whose error names the stage runner, while the runner answered, fails and parks for nothing", async () => {
+    const { runner, flows } = setup();
+    const f = flows.start(seedRepo(), TWO, "", DEFAULT_AGENT);
+    // what a stage could print to its own stderr before it exits
+    runner.end("run1", "failed", "", `Claude Code exited (code 1) without a result: ${STAGE_AWAY}`);
+    await flush();
+    expect(flows.get(f.id)?.status).toBe("failed");
+    expect(flows.get(f.id)?.parkedFor).toBeUndefined();
+    expect(flows.resumeStageParks()).toBe(0);
+    expect(runner.specs).toHaveLength(1);
+  });
+
   test("a non-seed run whose error happens to name the stage runner still fails", async () => {
     const { runner, flows } = setup();
     const f = flows.start(repo(), TWO, "", DEFAULT_AGENT);
@@ -1164,7 +1177,7 @@ Ship it.
     test("a step whose run lost the runner runs again", async () => {
       const { runner, flows } = setup();
       const f = flows.start(seedRepo(), TWO, "", DEFAULT_AGENT);
-      runner.end("run1", "failed", "", `Claude Code exited (code 127) without a result: ${STAGE_AWAY}`);
+      runner.end("run1", "failed", "", `Claude Code exited (code 127) without a result: ${STAGE_AWAY}`, true);
       await flush();
       expect(flows.get(f.id)?.parkedFor).toBe("stage");
       expect(flows.resumeStageParks()).toBe(1);
@@ -1215,7 +1228,7 @@ Ship it.
   test("a step run that ends because the stage runner went away parks too", async () => {
     const { runner, flows } = setup();
     const f = flows.start(seedRepo(), TWO, "", DEFAULT_AGENT);
-    runner.end("run1", "failed", "", `Claude Code exited (code 127) without a result: ${STAGE_AWAY}: connect ENOENT /run/canopy-stage/stage.sock`);
+    runner.end("run1", "failed", "", `Claude Code exited (code 127) without a result: ${STAGE_AWAY}: connect ENOENT /run/canopy-stage/stage.sock`, true);
     await flush();
     const now = flows.get(f.id);
     expect(now?.status).toBe("gated");

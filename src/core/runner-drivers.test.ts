@@ -533,6 +533,8 @@ describe("a stage run goes through the stage runner", () => {
       await waitFor(() => !isRunActive(run) && !runner.liveIn(seed.path), `the ${harness} run to end`);
       expect(run.status).toBe("failed");
       expect(run.error).toContain(STAGE_AWAY);
+      // a hello confirmed the runner gone: the flag a flow parks on
+      expect(run.away).toBe(true);
       runner.dismiss(run.id);
     }
   });

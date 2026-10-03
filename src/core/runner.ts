@@ -318,10 +318,12 @@ export class Runner {
     const exited = (async () => {
       try {
         const code = await proc.exited;
-        // A process gone without an exit code, not by a stop, may have gone
-        // with the stage runner itself: a hello that finds no runner says so,
-        // and the run's failure names it (a flow parks on that, not fails).
-        if (code === null && client && !live.ctx.stopping && (await client.hello().catch(() => null)) === null) {
+        // A process gone without an exit code, or with the 127 a connection
+        // that never reached the runner reads as, not by a stop, may have
+        // gone with the stage runner itself: a hello that finds no runner
+        // says so, and the run carries the flag a flow parks on. A 127 the
+        // runner answers after is the stage's own exit, and fails.
+        if ((code === null || code === 127) && client && !live.ctx.stopping && (await client.hello().catch(() => null)) === null) {
           live.ctx.away = true;
         }
         return code;

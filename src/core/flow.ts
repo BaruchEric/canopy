@@ -269,8 +269,10 @@ export class Flows {
       return;
     }
     this.byRun.delete(run.id);
-    if (run.status === "failed" && isSeedId(live.repo.id) && run.error?.includes(STAGE_AWAY)) {
-      // the stage runner went away under the run: the step waits for it
+    if (run.status === "failed" && isSeedId(live.repo.id) && run.away === true) {
+      // the stage runner went away under the run, as a hello confirmed: the
+      // step waits for it. By the flag, never the error's words, which carry
+      // the stage's own stderr and so whatever it chose to print.
       live.flow.parkedFor = "stage";
       this.park(live, STAGE_AWAY);
       return;

@@ -374,8 +374,10 @@ export class RunCtx implements DriveCtx {
 
   exited(exit: DriveExit): void {
     const out = exitOutcome({ stopping: this.stopping, ending: this.ending }, exit, this.label);
-    const error = this.away && out.status === "failed" ? `${STAGE_AWAY}: ${out.error ?? ""}` : out.error;
-    this.finish(out.status, error);
+    const away = this.away && out.status === "failed";
+    // the words are for people; a flow parks on the flag alone
+    if (away) this.run.away = true;
+    this.finish(out.status, away ? `${STAGE_AWAY}: ${out.error ?? ""}` : out.error);
   }
 
   /** Ends the run once; later calls do nothing. */

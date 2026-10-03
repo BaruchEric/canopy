@@ -822,6 +822,10 @@ export interface Run {
   result?: RunResult;
   /** why a failed run failed */
   error?: string;
+  /** a stage run that failed because the stage runner went away under it,
+   *  as a hello confirmed; a flow parks on this, never on the error's words,
+   *  which carry the stage's own stderr */
+  away?: boolean;
   /** whether git status differed after the run from before it; set when
    *  the run ends, for actions that are supposed to change something */
   outcome?: "changed" | "unchanged";
