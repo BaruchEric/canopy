@@ -347,7 +347,7 @@ export class Flows {
    *  budget park are never touched. Returns how many it resumed. */
   resumeStageParks(): number {
     let n = 0;
-    for (const l of [...this.live.values()]) {
+    for (const l of this.live.values()) {
       if (l.flow.status !== "gated" || l.flow.parkedFor !== "stage") continue;
       try {
         this.resume(l.flow.id, "continue");
