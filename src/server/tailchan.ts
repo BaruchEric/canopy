@@ -7,8 +7,8 @@
  */
 import { Chan, ChanError, type ChanConfig } from "../core/chan";
 import { loadConfig, setTailchanNotify } from "../core/store";
-import { chanTarget, fleetNotice, flowNotice, runNotice, sproutNotice, type Notice } from "../core/tailchan";
-import type { ChanMessage, Fleet, Flow, Run, ServerEvent, Sprout, SproutStatus, TailchanInfo } from "../core/types";
+import { chanTarget, fleetNotice, flowNotice, retroNotice, runNotice, sproutNotice, type Notice } from "../core/tailchan";
+import type { ChanMessage, Fleet, Flow, RetroState, Run, ServerEvent, Sprout, SproutStatus, TailchanInfo } from "../core/types";
 
 /** a posted file's cap, the broker's own default */
 export const PUT_MAX = 100 * 1024 * 1024;
@@ -37,7 +37,7 @@ export class ChanHub {
   private runs = new Map<string, Run["status"]>();
   private flows = new Map<string, Flow["status"]>();
   private fleets = new Map<string, Fleet["status"]>();
-  private sprouts = new Map<string, { status: SproutStatus; asking: boolean }>();
+  private sprouts = new Map<string, { status: SproutStatus; asking: boolean; retro?: RetroState | undefined }>();
 
   constructor(
     readonly cfg: ChanConfig | null,
@@ -97,8 +97,9 @@ export class ChanHub {
 
   onSprout(s: Sprout): void {
     const prev = this.sprouts.get(s.id);
-    this.sprouts.set(s.id, { status: s.status, asking: (s.questions?.length ?? 0) > 0 });
+    this.sprouts.set(s.id, { status: s.status, asking: (s.questions?.length ?? 0) > 0, retro: s.retro?.state });
     this.say(sproutNotice(s, prev));
+    this.say(retroNotice(s, prev, Date.now()));
   }
 
   /** keep running gave up on a task: a DM, since someone has to look */

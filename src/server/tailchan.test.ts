@@ -10,7 +10,7 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Chan, chanConfig, parseEnvFile } from "../core/chan";
-import type { ChanMessage, Flow, Run, ServerEvent, TailchanInfo, TermInfo } from "../core/types";
+import type { ChanMessage, Flow, Run, ServerEvent, Sprout, TailchanInfo, TermInfo } from "../core/types";
 import { startServer } from "./index";
 import { ChanHub } from "./tailchan";
 import { sproutFlow } from "./incubator";
@@ -285,6 +285,30 @@ describe("notices", () => {
     await until(() => posts.length >= before + 1, "the plain flow's post");
     await Bun.sleep(100);
     expect(posts.slice(before).map((m) => m.body)).toEqual(["app: review failed: boom"]);
+    hub.close();
+    await fetch(api("/api/tailchan/notify"), { method: "POST", body: JSON.stringify({ on: false }) });
+  });
+
+  test("a retro that left lessons is one silent channel line, however often the sprout is saved", async () => {
+    await fetch(api("/api/tailchan/notify"), { method: "POST", body: JSON.stringify({ on: true }) });
+    const hub = new ChanHub({ url: BROKER, as: "eric", bot: "canopy", channel: "canopy" }, { broadcast: () => {}, repoName: (id) => id, isFlowRun: () => false });
+    await hub.start();
+    const retro = { for: "end" as const, state: "running" as const, at: 1, flowsSeen: 1, tries: 1 };
+    const s: Sprout = {
+      id: "sp_000000000009", slug: "coins", title: "Coin counter", status: "live", repoId: "_incubator/coins", seedPath: "/r/_incubator/coins", prepared: true,
+      inputs: [], clarified: true, reclarify: false, flows: [], spent: { runs: 0, workMs: 0 }, createdAt: 0, updatedAt: 0, retro,
+    };
+    const done: Sprout = { ...s, retro: { ...retro, state: "done", endedAt: Date.now(), advice: [{ key: "a", lesson: "A." }] } };
+    // first sight of a live sprout says it is live; the retro comes after
+    hub.onSprout(s);
+    await until(() => posts.some((m) => m.body === "Coin counter is live"), "the live post");
+    const before = posts.length;
+    hub.onSprout(s);
+    hub.onSprout(done);
+    hub.onSprout({ ...done, updatedAt: 5 });
+    await until(() => posts.length >= before + 1, "the retro's post");
+    await Bun.sleep(100);
+    expect(posts.slice(before).map((m) => [m.channel, m.body, m.meta.silent ?? false])).toEqual([["canopy", "Coin counter: the retro left 1 lesson, in canopy's inbox", true]]);
     hub.close();
     await fetch(api("/api/tailchan/notify"), { method: "POST", body: JSON.stringify({ on: false }) });
   });

@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { asAgentCard, asAsk, asChanMessage, askOf, asPresence, chanTarget, repoChannel, dmPeer, fleetNotice, flowNotice, parseSse, readQuery, registryCard, runNotice, shellHandle, sproutNotice } from "./tailchan";
+import { asAgentCard, asAsk, asChanMessage, askOf, asPresence, chanTarget, repoChannel, dmPeer, fleetNotice, flowNotice, parseSse, readQuery, registryCard, retroNotice, runNotice, shellHandle, sproutNotice } from "./tailchan";
 import type { Fleet, Flow, Run, Sprout } from "./types";
 
 describe("chanTarget", () => {
@@ -330,5 +330,17 @@ describe("sproutNotice", () => {
   test("every other move is quiet", () => {
     expect(sproutNotice({ ...base, status: "researching" }, { status: "queued", asking: false })).toBeNull();
     expect(sproutNotice({ ...base, status: "parked", parked: "x" }, { status: "parked", asking: false })).toBeNull();
+  });
+  test("a retro that left lessons is a channel line once; one with none, a failed one or an old one is quiet", () => {
+    const retro = { for: "end" as const, state: "done" as const, at: 1, endedAt: 1_000_000, flowsSeen: 1, tries: 1, advice: [{ key: "a", lesson: "A." }, { key: "b", lesson: "B." }] };
+    const s: Sprout = { ...base, status: "live", retro };
+    const now = 1_000_000 + 60_000;
+    expect(retroNotice(s, { retro: "running" }, now)).toEqual({ to: "channel", text: "Coin counter: the retro left 2 lessons, in canopy's inbox" });
+    expect(retroNotice(s, { retro: "done" }, now)).toBeNull();
+    expect(retroNotice({ ...s, retro: { ...retro, advice: [] } }, { retro: "running" }, now)).toBeNull();
+    expect(retroNotice({ ...s, retro: { ...retro, state: "failed", reason: "x" } }, { retro: "running" }, now)).toBeNull();
+    // not seen since a restart: a fresh end is told, an old one is not
+    expect(retroNotice(s, undefined, now)?.to).toBe("channel");
+    expect(retroNotice(s, undefined, now + 3_600_000)).toBeNull();
   });
 });
