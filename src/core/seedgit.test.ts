@@ -2,8 +2,8 @@ import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { appendFile, mkdir, mkdtemp, rm, symlink, utimes, writeFile, stat } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { exec, git } from "./exec";
-import { guardSeed, seedConfigRefusal, seedTopOf, setSeedBusy, setSeedRoots, underSeeds, SEED_GIT_FLAGS } from "./seedgit";
+import { exec, git, setSeedGit } from "./exec";
+import { guardSeed, seedBusyFor, seedConfigRefusal, seedHeld, seedTopOf, setSeedBusy, setSeedRoots, underSeeds, SEED_AWAY, SEED_BUSY, SEED_GIT_FLAGS } from "./seedgit";
 
 describe("seedConfigRefusal", () => {
   const ok: [string, string][] = [
@@ -314,6 +314,39 @@ describe("the guard on real seeds", () => {
     expect((await git(dir, ["status"])).code).toBe(0);
   });
 
+  test("with a seed git hook set, a seed's git goes to it and never runs here, and other repos ignore it", async () => {
+    const dir = await seed("hooked");
+    const plain = join(root, "plain-hooked");
+    await mkdir(plain, { recursive: true });
+    await exec(["git", "init", "-q"], { cwd: plain });
+    const seen: { path: string; args: string[]; env: Record<string, string> }[] = [];
+    setSeedGit({
+      run: async (path, args, opts) => {
+        seen.push({ path, args, env: opts.env });
+        return { code: 0, stdout: "from the runner\n", stderr: "" };
+      },
+      toFile: async () => ({ code: 0, stdout: "", stderr: "" }),
+    });
+    try {
+      const r = await git(dir, ["status", "--porcelain"], 30_000, { GIT_AUTHOR_NAME: "canopy" });
+      expect(r.stdout).toBe("from the runner\n");
+      expect(seen).toEqual([{ path: dir, args: ["status", "--porcelain"], env: { GIT_OPTIONAL_LOCKS: "0", GIT_AUTHOR_NAME: "canopy" } }]);
+      // a name the runner would refuse is refused here, before anything is sent
+      const off = await git(dir, ["add", "-A"], 30_000, { GIT_INDEX_FILE: join(root, "i") });
+      expect(off.code).toBe(128);
+      expect(off.stderr).toContain("GIT_INDEX_FILE");
+      expect(seen).toHaveLength(1);
+      // the guard still runs first
+      await appendFile(join(dir, ".git", "config"), `[core]\n\tpager = sh\n`);
+      expect((await git(dir, ["status"])).stderr).toContain("core.pager");
+      expect(seen).toHaveLength(1);
+      expect((await git(plain, ["status", "--porcelain"])).stdout).toBe("");
+      expect(seen).toHaveLength(1);
+    } finally {
+      setSeedGit(null);
+    }
+  });
+
   test("a repo outside the seeds dir is not read by the guard", async () => {
     const dir = join(root, "plain");
     await mkdir(dir, { recursive: true });
@@ -321,5 +354,36 @@ describe("the guard on real seeds", () => {
     await appendFile(join(dir, ".git", "config"), `[alias]\n\tst = status\n`);
     expect(await guardSeed(dir)).toBe(null);
     expect((await git(dir, ["status"])).code).toBe(0);
+  });
+});
+
+describe("seedBusyFor", () => {
+  const roots = ["/r/_incubator"];
+  const world = (isolated: boolean, alive: string[], checks: string[] = []) => ({
+    isolated,
+    checks: new Map(checks.map((c) => [c, 1])),
+    aliveIn: (seed: string) => alive.includes(seed),
+    aliveAny: () => alive.length > 0,
+  });
+  test("isolated: a seed is busy only while its own stage or check is", () => {
+    const w = world(true, ["/r/_incubator/beta"], ["/r/_incubator/gamma"]);
+    expect(seedBusyFor("/r/_incubator/beta", roots, w)).toBe(true);
+    expect(seedBusyFor("/r/_incubator/beta/src", roots, w)).toBe(true);
+    expect(seedBusyFor("/r/_incubator/gamma", roots, w)).toBe(true);
+    expect(seedBusyFor("/r/_incubator/alpha", roots, w)).toBe(false);
+  });
+  test("unisolated: any stage or check holds every seed", () => {
+    expect(seedBusyFor("/r/_incubator/alpha", roots, world(false, ["/r/_incubator/beta"]))).toBe(true);
+    expect(seedBusyFor("/r/_incubator/alpha", roots, world(false, [], ["/r/_incubator/gamma"]))).toBe(true);
+    expect(seedBusyFor("/r/_incubator/alpha", roots, world(false, []))).toBe(false);
+  });
+  test("a path outside the seeds is never busy", () => {
+    expect(seedBusyFor("/r/app", roots, world(false, ["/r/_incubator/beta"]))).toBe(false);
+  });
+  test("a held seed is busy or away, nothing else", () => {
+    expect(seedHeld(SEED_BUSY)).toBe(true);
+    expect(seedHeld(`${SEED_AWAY}: the stage runner is not answering`)).toBe(true);
+    expect(seedHeld("fatal: not a git repository")).toBe(false);
+    expect(seedHeld(undefined)).toBe(false);
   });
 });

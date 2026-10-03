@@ -12,7 +12,9 @@
  */
 import { connect, type Socket } from "node:net";
 import type { RpcProc, RpcSpawn } from "./codexrpc";
-import type { ExecResult } from "./exec";
+import { relative } from "node:path";
+import type { ExecResult, SeedGitHook } from "./exec";
+import { SEED_AWAY, seedTopOf } from "./seedgit";
 import {
   chunkB64,
   encodeFrame,
@@ -355,6 +357,28 @@ export class StageClient {
       clearInterval(t);
     };
   }
+}
+
+/** `git()`'s seed calls on an isolated backend (`setSeedGit`): each goes to
+ *  the stage runner in the seed's top folder (a deeper path rides along as
+ *  `-C`), and answers SEED_AWAY, never local git, while `client()` gives no
+ *  runner or the runner says it cannot run it. */
+export function seedGitThrough(client: () => StageClient | null | undefined, why: () => string, roots: () => readonly string[]): SeedGitHook {
+  const away = (reason: string): ExecResult => ({ code: 128, stdout: "", stderr: `${SEED_AWAY}: ${reason}` });
+  const call = async (path: string, args: string[], file: string | null, opts: { timeoutMs: number; env: Record<string, string> }): Promise<ExecResult> => {
+    const c = client();
+    if (!c) return away(why());
+    const top = seedTopOf(path, roots());
+    if (top === null) return { code: 128, stdout: "", stderr: `${path} is not in a seed` };
+    const rel = relative(top, path);
+    const full = rel ? ["-C", rel, ...args] : args;
+    const r = file === null ? await c.git(top, full, opts) : await c.gitToFile(top, full, file, opts);
+    return r.away !== undefined ? away(r.away) : { code: r.code, stdout: r.stdout, stderr: r.stderr };
+  };
+  return {
+    run: (path, args, opts) => call(path, args, null, opts),
+    toFile: (path, args, file, opts) => call(path, args, file, opts),
+  };
 }
 
 /** How a hold on a seed came out by the end of its wait: the runner said

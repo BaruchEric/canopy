@@ -38,7 +38,7 @@ import {
 import { browseLocal, browseRemote, expandHome, SshError } from "../core/browse";
 import { builtinCheck, isBuiltinCheck } from "../core/builtincheck";
 import { runCheck } from "../core/check";
-import { exec, git, onHost } from "../core/exec";
+import { exec, git, onHost, setSeedGit } from "../core/exec";
 import { fleetSkipReason, Flows } from "../core/flow";
 import { INHERITED_ENV, SECRET_ENV, isKeystroke, isTermId, parseTermMessage, Scrollback, shellArgs, startTerm, termPlace, termSize, type TermSession, type TermSize } from "../core/term";
 import { attachTmuxTerm, hasSession, history, killSession, listSessions, newSession, paneInfo, paneText, sendLine, serverUp, snapshot, tmuxBase } from "../core/tmux";
@@ -111,7 +111,7 @@ import { QUIET_WAIT, Runner } from "../core/runner";
 import type { RunDriver } from "../core/driver";
 import { SEED_AGENT_REFUSAL, SEEDS_DIR } from "../core/sprout";
 import { sweepCodexTrust } from "../core/codextrust";
-import { SEED_BUSY, seedBusy, seedRootsNow, setSeedBusy, setSeedRoots, underSeeds } from "../core/seedgit";
+import { seedBusy, seedBusyFor, seedHeld, seedRootsNow, setSeedBusy, setSeedRoots } from "../core/seedgit";
 import { suggestMessage } from "../core/suggest";
 import {
   HISTORY_WINDOWS,
@@ -153,7 +153,7 @@ import {
   TERM_GONE,
 } from "../core/types";
 import type { About, IncubatorStages, RepoStatus } from "../core/types";
-import { holdQuiet, type QuietHold, StageClient } from "../core/stageclient";
+import { holdQuiet, type QuietHold, seedGitThrough, StageClient } from "../core/stageclient";
 import { STAGE_AWAY } from "../core/stagewire";
 import { DEFAULT_IGNORE } from "../core/scan";
 import { ChanHub, PUT_MAX } from "./tailchan";
@@ -1146,20 +1146,30 @@ async function refreshAndBroadcast(
   state: ServerState,
   id: string,
 ): Promise<Repo> {
+  return (await refreshHeld(state, id)).repo;
+}
+
+/** refreshAndBroadcast, saying whether the seed was held: a busy seed, or
+ *  one whose stage runner could not read it, keeps its last status and is
+ *  read again later */
+async function refreshHeld(state: ServerState, id: string): Promise<{ repo: Repo; held: boolean }> {
   const repo = state.result.repos.find((r) => r.id === id);
   if (!repo) throw new HttpError(404, `unknown repo: ${id}`);
-  // a busy seed keeps its last status, read again once it is quiet
   if (busySeed(repo)) {
     scheduleRefresh(state, id, SEED_RETRY);
-    return repo;
+    return { repo, held: true };
   }
   const fresh = await refreshRepo(repo, state.own.get(repo.path) ?? []);
+  if (seedHeld(fresh.error)) {
+    scheduleRefresh(state, id, SEED_RETRY);
+    return { repo, held: true };
+  }
   // Re-find after the await: a concurrent rescan may have replaced the array,
   // and writing back a pre-await index would land in the wrong slot.
   const idx = state.result.repos.findIndex((r) => r.id === id);
   if (idx !== -1) state.result.repos[idx] = fresh;
   broadcast(state, { type: "repo", repo: fresh });
-  return fresh;
+  return { repo: fresh, held: false };
 }
 
 const WATCH_GIT_HINTS = ["HEAD", "index", "ORIG_HEAD", "refs"];
@@ -1205,7 +1215,7 @@ function scanOne(state: ServerState, rt: SourceRuntime, opts: Required<ScanOptio
       const fresh = (await scanSource(rt.src, opts)).map((r) => {
         // by the refusal, not by the seed being busy now: it may have gone
         // quiet between the read and here
-        if (!r.error?.includes(SEED_BUSY)) return r;
+        if (!seedHeld(r.error)) return r;
         // the scan's read was refused: keep the last status, read it later
         scheduleRefresh(state, r.id, SEED_RETRY);
         const was = state.result.repos.find((p) => p.id === r.id);
@@ -1281,8 +1291,8 @@ async function freshStatus(state: ServerState, id: string): Promise<RepoStatus |
     scheduleRefresh(state, id, SEED_RETRY);
     return null;
   }
-  return refreshAndBroadcast(state, id)
-    .then((r) => r.status)
+  return refreshHeld(state, id)
+    .then((r) => (r.held ? null : r.repo.status))
     .catch(() => null);
 }
 
@@ -2817,6 +2827,11 @@ export async function startServer(opts: {
   /** what a stage run or check says when `stageFor` gives null: the
    *  runner's absence, or the env to set when no runner is set up */
   const stageAway = (): string => isolation() ?? STAGE_AWAY;
+  // On an isolated backend canopy runs no git in a seed: every call goes to
+  // the stage runner and runs as the stage user, and while the runner is
+  // away or unfenced it waits, never running here instead (amendment 4).
+  // Unisolated, seed git runs here behind the guard as before.
+  setSeedGit(stage ? seedGitThrough(() => (stageFor() ?? null), stageAway, seedRootsNow) : null);
   if (process.env["NODE_ENV"] !== "test") {
     console.log(
       stage
@@ -3103,11 +3118,21 @@ export async function startServer(opts: {
     toldStages = said;
     broadcast(state, { type: "stages", stages: now });
   };
-  // Every seed is busy while any stage is alive: a seed's check, a seed's
-  // run, or a stage process (until the stage runner says its seed is quiet).
-  // canopy reads a seed's config, then git reads it again, and a stage
-  // process can write any seed, not only its own, in between.
-  setSeedBusy((path) => underSeeds(path, seedRootsNow()) && (seedChecks.size > 0 || state.runner.liveAny()));
+  // A seed is busy while its stages are alive: a check in it, a run on it,
+  // or a stage process there (until the stage runner says its seed is
+  // quiet). On an isolated backend that is the seed's own stages alone,
+  // since canopy's git there runs in the stages container as the stage
+  // user (setSeedGit below). Unisolated, git runs here as canopy: canopy
+  // reads a seed's config, then git reads it again, and a stage process can
+  // write any seed in between, so any stage alive holds every seed.
+  setSeedBusy((path) =>
+    seedBusyFor(path, seedRootsNow(), {
+      isolated: stage !== null,
+      checks: seedChecks,
+      aliveIn: (seed) => state.runner.stageAliveIn(seed),
+      aliveAny: () => state.runner.liveAny(),
+    }),
+  );
   await rememberRoot(root);
   // The login shell's first answer lands whenever it lands; a list that
   // differs from what the tree offered goes out to the browsers with it.
@@ -3529,6 +3554,7 @@ export async function startServer(opts: {
       clearTimeout(firstActivity);
       for (const t of state.timers.values()) clearTimeout(t);
       stopStageWatch?.();
+      setSeedGit(null);
       // before the flows stop, so their ends park no sprout
       state.incubator.detach();
       state.flows.detach();

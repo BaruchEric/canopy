@@ -89,6 +89,14 @@ export const seedRootsNow = (): readonly string[] => seedRoots;
 /** what git() answers in a seed while it is busy */
 export const SEED_BUSY = "canopy waits for the stage running in this seed";
 
+/** what git() answers in a seed on an isolated backend while the stage
+ *  runner, which runs every git call there, is away or unfenced */
+export const SEED_AWAY = "canopy reads this seed through the stage runner, which cannot run it now";
+
+/** whether a git error is a seed held for now (busy, or its runner away),
+ *  which a reader waits out rather than shows */
+export const seedHeld = (text: string | undefined): boolean => !!text && (text.includes(SEED_BUSY) || text.includes(SEED_AWAY));
+
 let busyHook: (path: string) => boolean = () => false;
 /** set once by the server: a seed with a stage process alive in it */
 export function setSeedBusy(busy: (path: string) => boolean): void {
@@ -96,15 +104,38 @@ export function setSeedBusy(busy: (path: string) => boolean): void {
 }
 export const seedBusy = (path: string): boolean => busyHook(path);
 
+/** what makes a seed busy, as the server knows it */
+export interface SeedStages {
+  /** canopy's seed git runs in the stages container (a stage runner is set up) */
+  isolated: boolean;
+  /** the seeds with a check running, by the seed's own path */
+  checks: ReadonlyMap<string, number>;
+  /** a stage run active on the seed, or a stage process held there */
+  aliveIn(seed: string): boolean;
+  /** the same, for any seed */
+  aliveAny(): boolean;
+}
+
+/** Whether canopy holds off its git at `path`. On an isolated backend only
+ *  the seed's own stages hold it: canopy's git there runs in the stages
+ *  container as the stage user, so a stage in another seed swapping this
+ *  one's config reaches nothing of canopy's. On an unisolated backend git
+ *  runs here as canopy, so any stage alive anywhere holds every seed. */
+export function seedBusyFor(path: string, roots: readonly string[], s: SeedStages): boolean {
+  const top = seedTopOf(path, roots);
+  if (top === null) return false;
+  if (!s.isolated) return s.checks.size > 0 || s.aliveAny();
+  return s.checks.has(top) || s.aliveIn(top);
+}
+
 /** how long canopy's own write to a seed (a commit, a ship's clone) waits for
  *  the stages to go quiet before it fails */
 export const SEED_QUIET_MAX = 2 * 60 * 60 * 1000;
 const QUIET_POLL = 250;
 const pause = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
 
-/** Settles once `seedBusy(path)` is false, or throws after `maxMs`. A stage
- *  alive in any seed makes every seed busy, so canopy's own writes wait their
- *  turn rather than fail. */
+/** Settles once `seedBusy(path)` is false, or throws after `maxMs`, so
+ *  canopy's own writes wait their turn rather than fail. */
 export async function whenSeedsQuiet(path: string, maxMs = SEED_QUIET_MAX, poll = QUIET_POLL): Promise<void> {
   const deadline = Date.now() + maxMs;
   while (seedBusy(path)) {
@@ -113,8 +144,9 @@ export async function whenSeedsQuiet(path: string, maxMs = SEED_QUIET_MAX, poll 
   }
 }
 
-/** Runs `f` once the seeds are quiet, and again if a stage starting in
- *  between makes its git calls answer SEED_BUSY, all within `maxMs`. */
+/** Runs `f` once the seed is quiet, and again if a stage starting in
+ *  between, or the stage runner going away, holds its git calls
+ *  (`seedHeld`), all within `maxMs`. */
 export async function inQuietSeed<T>(path: string, f: () => Promise<T>, maxMs = SEED_QUIET_MAX, poll = QUIET_POLL): Promise<T> {
   const deadline = Date.now() + maxMs;
   for (;;) {
@@ -122,7 +154,7 @@ export async function inQuietSeed<T>(path: string, f: () => Promise<T>, maxMs = 
     try {
       return await f();
     } catch (e) {
-      if (!String(e).includes(SEED_BUSY) || Date.now() >= deadline) throw e;
+      if (!seedHeld(String(e)) || Date.now() >= deadline) throw e;
       await pause(poll);
     }
   }
