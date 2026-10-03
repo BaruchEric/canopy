@@ -22,6 +22,8 @@ import { DEFAULT_AGENT, type AgentSettings, type RunQuestion, type RunStep } fro
 const OUTPUT_CAP = 2_000;
 /** stderr kept for the failure message */
 const STDERR_CAP = 2_000;
+/** how long a stage run's exit waits for the last of its stderr */
+const STDERR_WAIT = 1_000;
 
 const errText = (err: unknown): string => (err instanceof Error ? err.message : String(err));
 
@@ -191,7 +193,7 @@ export class ClaudeDriver implements RunDriver {
       const started = spawn([...command, ...cliArgs(ctx.spec, agent, ctx.stage ?? false)], { cwd: ctx.cwd, env: spawnEnv(ctx) });
       proc = ctx.track ? ctx.track(started) : started;
       this.proc = proc;
-      void new Response(proc.stderr ?? new ReadableStream()).text().then((text) => {
+      const stderrRead = new Response(proc.stderr ?? new ReadableStream()).text().then((text) => {
         stderr = text.slice(-STDERR_CAP);
       });
       await this.send(userMessage(message));
@@ -215,6 +217,10 @@ export class ClaudeDriver implements RunDriver {
         }
       }
       const code = await proc.exited;
+      // Through the stage runner, stderr carries the runner's own word on a
+      // failure (that it is not answering), which a flow parks on: give it a
+      // moment to land. A local process's run keeps its old timing.
+      if (ctx.spawn) await Promise.race([stderrRead, Bun.sleep(STDERR_WAIT)]);
       ctx.exited({ code, stderr });
     } catch (err) {
       ctx.exited({ code: null, stderr, error: errText(err) });

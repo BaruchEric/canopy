@@ -1045,9 +1045,20 @@ describe("the stage runner away", () => {
     expect(b.runner.specs[0]?.task.startsWith(RESTART_NOTE)).toBe(true);
   });
 
-  test("a step run that ends because the stage runner went away parks too", async () => {
+  const seedRepo = (): Repo => ({ ...repo(), id: "_incubator/coin", name: "coin", path: "/tmp/_incubator/coin" });
+
+  test("a non-seed run whose error happens to name the stage runner still fails", async () => {
     const { runner, flows } = setup();
     const f = flows.start(repo(), TWO, "", DEFAULT_AGENT);
+    runner.end("run1", "failed", "", `Claude Code exited (code 1) without a result: ${STAGE_AWAY}`);
+    await flush();
+    expect(flows.get(f.id)?.status).toBe("failed");
+    expect(flows.get(f.id)?.parkedFor).toBeUndefined();
+  });
+
+  test("a step run that ends because the stage runner went away parks too", async () => {
+    const { runner, flows } = setup();
+    const f = flows.start(seedRepo(), TWO, "", DEFAULT_AGENT);
     runner.end("run1", "failed", "", `Claude Code exited (code 127) without a result: ${STAGE_AWAY}: connect ENOENT /run/canopy-stage/stage.sock`);
     await flush();
     const now = flows.get(f.id);

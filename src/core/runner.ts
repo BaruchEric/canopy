@@ -314,7 +314,14 @@ export class Runner {
     this.procs.set(path, (this.procs.get(path) ?? 0) + 1);
     const exited = (async () => {
       try {
-        return await proc.exited;
+        const code = await proc.exited;
+        // A process gone without an exit code, not by a stop, may have gone
+        // with the stage runner itself: a hello that finds no runner says so,
+        // and the run's failure names it (a flow parks on that, not fails).
+        if (code === null && client && !live.ctx.stopping && (await client.hello().catch(() => null)) === null) {
+          live.ctx.away = true;
+        }
+        return code;
       } finally {
         if (client) await this.quiet(client, path);
         const n = (this.procs.get(path) ?? 1) - 1;

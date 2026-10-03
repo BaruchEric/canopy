@@ -3,8 +3,10 @@ import { mkdir, mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { ClaudeDriver, cliArgs, parseQuestions } from "./claudedrive";
+import type { RpcSpawn } from "./codexrpc";
 import { DEFAULT_AGENT } from "./types";
 import { RunCtx, type DriveRun } from "./driver";
+import { STAGE_AWAY } from "./stagewire";
 
 /* The ClaudeDriver against a stand-in `claude` (testdata/fake-claude.ts),
  * with the Runner's half played by RunCtx, the way codexrun.test.ts drives
@@ -177,4 +179,39 @@ test("a stage run reads the user's settings only, never the seed's .claude/", ()
   expect(args[args.indexOf("--setting-sources") + 1]).toBe("user");
   const plain = cliArgs({ allowedTools: [], maxTurns: 5 }, DEFAULT_AGENT);
   expect(plain[plain.indexOf("--setting-sources") + 1]).toBe("user,project,local");
+});
+
+describe("a stage run through the stage runner's spawn", () => {
+  test("waits for stderr before the exit, so the runner's away line reaches the error", async () => {
+    const run: DriveRun = {
+      id: "r1", repoId: "_incubator/coin", action: "ask", verb: "ask", progress: "working", expectsChange: false,
+      chat: false, harness: "claude", note: "", status: "working", startedAt: Date.now(), steps: [], prompt: null,
+    };
+    const enc = new TextEncoder();
+    // exited and stdout settle at once; the away line lands on stderr a beat later
+    const spawn: RpcSpawn = () => ({
+      stdin: { write: () => undefined, flush: () => undefined, end: () => undefined },
+      stdout: new ReadableStream<Uint8Array>({ start: (c) => c.close() }),
+      stderr: new ReadableStream<Uint8Array>({
+        start: (c) => {
+          setTimeout(() => {
+            c.enqueue(enc.encode(`${STAGE_AWAY}: connect ENOENT\n`));
+            c.close();
+          }, 50);
+        },
+      }),
+      exited: Promise.resolve(127),
+      kill: () => undefined,
+    });
+    const ctx = new RunCtx(
+      run,
+      { cwd: "/w/_incubator/coin", agent: AGENT, spec: { allowedTools: [], maxTurns: 10 }, stage: true, spawn, label: "Claude Code" },
+      { emit: () => {} },
+    );
+    new ClaudeDriver().start(ctx, "go");
+    const deadline = Date.now() + 3_000;
+    while (run.status === "working" && Date.now() < deadline) await Bun.sleep(5);
+    expect(run.status).toBe("failed");
+    expect(run.error).toContain(STAGE_AWAY);
+  });
 });

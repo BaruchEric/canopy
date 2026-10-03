@@ -16,6 +16,7 @@
 
 import type { RpcProc, RpcSpawn } from "./codexrpc";
 import { stageEnv } from "./envnames";
+import { STAGE_AWAY } from "./stagewire";
 import type { Harness, Run, RunAnswer, RunPrompt, RunQuestion, RunResult, RunStatus, RunStep, RunTokens } from "./types";
 
 /** steps kept per run; the oldest fall off with a note */
@@ -226,6 +227,9 @@ export class RunCtx implements DriveCtx {
   ending = false;
   /** "allow all for this run" was chosen: later permissions pass silently */
   allowAll = false;
+  /** set by the Runner when a stage run's process died with the stage
+   *  runner itself: the failure says so, and a flow parks on it */
+  away = false;
   readonly cwd: string;
   readonly agent: DriveAgent;
   readonly spec: DriveSpec;
@@ -370,7 +374,8 @@ export class RunCtx implements DriveCtx {
 
   exited(exit: DriveExit): void {
     const out = exitOutcome({ stopping: this.stopping, ending: this.ending }, exit, this.label);
-    this.finish(out.status, out.error);
+    const error = this.away && out.status === "failed" ? `${STAGE_AWAY}: ${out.error ?? ""}` : out.error;
+    this.finish(out.status, error);
   }
 
   /** Ends the run once; later calls do nothing. */

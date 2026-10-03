@@ -4,6 +4,7 @@
  *  tests drive it with a fake runner. */
 
 import { checkWhen, type ActionSpec } from "./actions";
+import { isSeedId } from "./sprout";
 import { STAGE_AWAY } from "./stagewire";
 import { decide, decideJudge, judgeState, verdictState } from "./verdict";
 import {
@@ -266,7 +267,7 @@ export class Flows {
       return;
     }
     this.byRun.delete(run.id);
-    if (run.status === "failed" && run.error?.includes(STAGE_AWAY)) {
+    if (run.status === "failed" && isSeedId(live.repo.id) && run.error?.includes(STAGE_AWAY)) {
       // the stage runner went away under the run: the step waits for it
       live.flow.parkedFor = "stage";
       this.park(live, STAGE_AWAY);

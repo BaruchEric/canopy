@@ -7,9 +7,11 @@ import { ACTIONS } from "./actions";
 import { ClaudeDriver } from "./claudedrive";
 import { bunSpawn, type RpcSpawn } from "./codexrpc";
 import { CodexDriver } from "./codexrun";
+import { Flows } from "./flow";
 import type { DriveCtx, RunDriver } from "./driver";
 import { defaultDriver, Runner, runEnv, type RunnerOptions } from "./runner";
 import { StageClient } from "./stageclient";
+import { parseWorkflow } from "./workflow";
 import { STAGE_AWAY, StageAwayError } from "./stagewire";
 import { DEFAULT_AGENT, isRunActive, type Harness, type Repo, type RepoStatus, type Run } from "./types";
 
@@ -582,6 +584,52 @@ describe("a stage run goes through the stage runner", () => {
       expect(await client.busy(seedPath)).toBe(false);
     } finally {
       await stage.stop();
+    }
+  }, 20_000);
+
+  test("a stage runner that dies under a live run parks the flow, not fails it", async () => {
+    const dir = await realpath(await mkdtemp(join(tmpdir(), "canopy-runner-dies-")));
+    scratch.push(dir);
+    const root = join(dir, "_incubator");
+    const seedPath = join(root, "coin");
+    await mkdir(seedPath, { recursive: true });
+    const fake = join(dir, "claude");
+    await writeFile(fake, `#!/bin/sh\nexec ${JSON.stringify(process.execPath)} ${JSON.stringify(FAKE_CLAUDE)} "$@"\n`);
+    await chmod(fake, 0o755);
+    const socket = join(dir, "s.sock");
+    const stage = await startStageRunner({ socket, root, env: { PATH: process.env["PATH"], HOME: dir }, programs: { claude: fake } });
+    let stopped = false;
+    try {
+      const client = new StageClient(socket);
+      expect(await client.hello()).toContain("claude");
+      let flows!: Flows;
+      const runner = new Runner(
+        { onChange: (r) => flows.onRun(r), onGone: () => {}, status: async () => null },
+        { stage: () => true, stageExec: () => client, driver: () => new ClaudeDriver({ command: ["/nonexistent/claude"] }) },
+      );
+      flows = new Flows(runner, {
+        onChange: () => {},
+        onGone: () => {},
+        onFleet: () => {},
+        onFleetGone: () => {},
+        check: async () => ({ exit: 0, output: "" }),
+        evaluator: null,
+      });
+      const parsed = parseWorkflow("---\nname: one\nverb: do one\nblurb: b\n---\n\n## Only\n\nDo it.\n", { name: "one", source: "bundled", file: "/one.md" });
+      if (!parsed.ok) throw new Error(parsed.error);
+      const f = flows.start(repo("_incubator/coin", seedPath), parsed.workflow, "", { ...DEFAULT_AGENT, yolo: false });
+      const runId = (): string => flows.get(f.id)?.steps[0]?.runId ?? "";
+      await waitFor(() => runner.get(runId())?.status === "waiting", "the step's prompt");
+      // the stages container goes away under the live run
+      await stage.stop();
+      stopped = true;
+      await waitFor(() => flows.get(f.id)?.status !== "working" && flows.get(f.id)?.status !== "waiting", "the flow to settle");
+      const now = flows.get(f.id);
+      expect(now?.status).toBe("gated");
+      expect(now?.parkedFor).toBe("stage");
+      expect(now?.steps[0]?.reason).toContain(STAGE_AWAY);
+    } finally {
+      if (!stopped) await stage.stop();
     }
   }, 20_000);
 
