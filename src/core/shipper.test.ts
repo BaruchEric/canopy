@@ -264,6 +264,16 @@ describe("deploy", () => {
     expect(f.fetched.slice(2).every((x) => x.auth === null)).toBe(true);
   });
 
+  test("a deployment the API lists no vercel.app alias for goes live on its own hash url, which is what the smoke GET hits", async () => {
+    // why the previews-only PATCH below stays: Standard Protection guards this url
+    const f = fakes(deployed, api([], page), true);
+    expect(await shipper(cfg, f.deps).deploy(await seed(), "coin-counter")).toBe("https://coin-counter-abc-eric.vercel.app");
+    expect(f.fetched.map((x) => x.url).slice(2)).toEqual([
+      "https://coin-counter-abc-eric.vercel.app",
+      "https://coin-counter-abc-eric.vercel.app/.canopy/intent.md",
+    ]);
+  });
+
   describe("Vercel Authentication", () => {
     /** the project read with this ssoProtection (omitted when undefined); a PATCH answers `patch` */
     const withSso = (sso: unknown, patch = 200) => (url: string, method: string): Response => {

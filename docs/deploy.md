@@ -436,9 +436,15 @@ an intake with 503. Two optional settings in the mini's `.env`:
   canopy's own code. Without the token the project parks at deploy with
   "add VERCEL_TOKEN to <backend>'s .env". Make the token at
   vercel.com/account/tokens, scoped to one team kept for incubator
-  projects. A production url behind Vercel's deployment protection answers
-  401 and parks the project with that reason. Turn protection off for
-  production in that team, or per project, then resume.
+  projects. Before each deploy canopy sets the project's Vercel
+  Authentication to protect previews only (`ssoProtection.deploymentType`
+  `preview`), on that project alone, never team-wide. The url a project goes
+  live on, and the one its smoke GET hits, is the shortest `vercel.app` alias
+  the API lists, or the deployment's own hash url when it lists none, and
+  Standard Protection keeps a hash url behind Vercel's login. A production
+  url still behind a login (password protection, a team policy) answers 401
+  and parks the project with that reason. Lift it for that project, then
+  resume.
 
 canopy reads the vault token, the transcribe key and the Vercel token once at
 start and then deletes all three from its own environment, so no shell, run or tmux server it
