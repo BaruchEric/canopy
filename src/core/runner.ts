@@ -138,6 +138,18 @@ export class Runner {
     return (this.procs.get(path) ?? 0) > 0;
   }
 
+  /** Settles once every stage process started in the repo at `path` has
+   *  exited and the seed is quiet, or after `maxMs`. A run ends on its
+   *  result, before its process is gone, so a flow's gate that reads the
+   *  seed's status right after waits on this first. */
+  async whenQuiet(path: string, maxMs = 2 * QUIET_WAIT): Promise<void> {
+    const drains = [...this.live.values()].filter((l) => l.repo.path === path).flatMap((l) => l.drains);
+    if (!drains.length) return;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    await Promise.race([Promise.all(drains), new Promise<void>((r) => (timer = setTimeout(r, maxMs)))]);
+    clearTimeout(timer);
+  }
+
   /** Starts a run on the harness the settings name. A chat may start with
    *  nothing to say: it opens idle, with no process, and the first message
    *  spawns the agent. */

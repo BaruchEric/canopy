@@ -1,15 +1,16 @@
 import { afterAll, describe, expect, test } from "bun:test";
-import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, readFile, realpath, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { startStageRunner } from "../stage/runner";
 import { ACTIONS } from "./actions";
 import { ClaudeDriver } from "./claudedrive";
 import { bunSpawn, type RpcSpawn } from "./codexrpc";
 import { CodexDriver } from "./codexrun";
 import type { DriveCtx, RunDriver } from "./driver";
 import { defaultDriver, Runner, runEnv, type RunnerOptions } from "./runner";
-import type { StageClient } from "./stageclient";
-import { StageAwayError } from "./stagewire";
+import { StageClient } from "./stageclient";
+import { STAGE_AWAY, StageAwayError } from "./stagewire";
 import { DEFAULT_AGENT, isRunActive, type Harness, type Repo, type RepoStatus, type Run } from "./types";
 
 /* The Runner over its drivers: which driver a harness gets, what every run's
@@ -497,6 +498,92 @@ describe("a stage run goes through the stage runner", () => {
     expect(seen[0]?.argv.slice(0, 2)).toEqual(["codex", "app-server"]);
     expect(seen[0]?.env).toEqual({ CANOPY_RUN: run.id, CANOPY_REPO: seed.id });
   });
+
+  test("a stage run whose runner is down at connect fails in words a flow parks on, on either harness", async () => {
+    const { seed } = await folders();
+    /** a real client on a socket nothing listens on, that last heard the runner up */
+    class GoneClient extends StageClient {
+      override harnessesNow(): string[] {
+        return ["claude", "codex"];
+      }
+    }
+    const client = new GoneClient(join(seed.path, "..", "no-such.sock"));
+    const runner = new Runner(
+      { onChange: () => {}, onGone: () => {}, status: async () => null },
+      {
+        stage: () => true,
+        stageExec: () => client,
+        driver: (h) => (h === "codex" ? new CodexDriver({ graceMs: 3_000 }) : new ClaudeDriver()),
+      },
+    );
+    for (const harness of ["claude", "codex"] as const) {
+      const run = runner.start(seed, "ask", ACTIONS.ask, "go", { ...DEFAULT_AGENT, harness, yolo: false });
+      await waitFor(() => !isRunActive(run) && !runner.liveIn(seed.path), `the ${harness} run to end`);
+      expect(run.status).toBe("failed");
+      expect(run.error).toContain(STAGE_AWAY);
+      runner.dismiss(run.id);
+    }
+  });
+
+  test("whenQuiet settles once a finished stage run's process is gone and its seed quiet", async () => {
+    const { seed } = await folders();
+    let answers = 0;
+    const { client } = recordingClient(() => (answers += 1) < 3);
+    const runner = new Runner({ onChange: () => {}, onGone: () => {} }, { stage: () => true, stageExec: () => client, driver: localClaude });
+    const run = runner.start(seed, "ask", ACTIONS.ask, "go", { ...DEFAULT_AGENT });
+    // the run ends on its result, ahead of the process and the busy answers
+    await waitFor(() => !isRunActive(run), "the run to end");
+    expect(runner.liveIn(seed.path)).toBe(true);
+    await runner.whenQuiet(seed.path);
+    expect(runner.liveIn(seed.path)).toBe(false);
+    expect(answers).toBe(3);
+    // nothing started there: at once
+    await runner.whenQuiet("/nowhere");
+  });
+
+  test("through a real stage runner: a job answered to its end, and a stop that kills", async () => {
+    const dir = await realpath(await mkdtemp(join(tmpdir(), "canopy-runner-real-")));
+    scratch.push(dir);
+    const root = join(dir, "_incubator");
+    const seedPath = join(root, "coin");
+    await mkdir(seedPath, { recursive: true });
+    // the stage runner starts claude by its own map; the stand-in, in job mode
+    const fake = join(dir, "claude");
+    await writeFile(fake, `#!/bin/sh\nexec ${JSON.stringify(process.execPath)} ${JSON.stringify(FAKE_CLAUDE)} "$@"\n`);
+    await chmod(fake, 0o755);
+    const socket = join(dir, "s.sock");
+    const stage = await startStageRunner({ socket, root, env: { PATH: process.env["PATH"], HOME: dir }, programs: { claude: fake } });
+    try {
+      const client = new StageClient(socket);
+      expect(await client.hello()).toContain("claude");
+      const runner = new Runner(
+        { onChange: () => {}, onGone: () => {}, status: async () => null },
+        { stage: () => true, stageExec: () => client, driver: () => new ClaudeDriver({ command: ["/nonexistent/claude"] }) },
+      );
+      const seed = repo("_incubator/coin", seedPath);
+      const run = runner.start(seed, "ask", ACTIONS.ask, "go", { ...DEFAULT_AGENT, yolo: false });
+      await waitFor(() => run.status === "waiting", "the git push prompt");
+      expect(runner.liveIn(seedPath)).toBe(true);
+      runner.answer(run.id, run.prompt?.id ?? "", { kind: "allow" });
+      await waitFor(() => !isRunActive(run), "the job to end");
+      expect(run.status).toBe("done");
+      // the runner passes the run's own names on, so the stand-in saw CANOPY_RUN
+      expect(run.result?.text).toBe(`env:${run.id}`);
+      await runner.whenQuiet(seedPath);
+      expect(runner.liveIn(seedPath)).toBe(false);
+      expect(await client.busy(seedPath)).toBe(false);
+      runner.dismiss(run.id);
+
+      const stopped = runner.start(seed, "ask", ACTIONS.ask, "go", { ...DEFAULT_AGENT, yolo: false });
+      await waitFor(() => stopped.status === "waiting", "the second prompt");
+      runner.stop(stopped.id);
+      await waitFor(() => !isRunActive(stopped) && !runner.liveIn(seedPath), "the stop");
+      expect(stopped.status).toBe("stopped");
+      expect(await client.busy(seedPath)).toBe(false);
+    } finally {
+      await stage.stop();
+    }
+  }, 20_000);
 
   test("a plain run gets no stage spawn and no liveness tap", () => {
     const { runner, ctxOf } = setup({ stage: () => false, stageExec: () => null });

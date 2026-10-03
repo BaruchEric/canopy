@@ -2836,7 +2836,13 @@ export async function startServer(opts: {
     evidence: (repo, paths) => readEvidence(repo.path, paths),
     save: (rec) => flowFiles?.save(rec),
     forget: (id) => flowFiles?.forget(id),
-    status: (repoId) => freshStatus(state, repoId),
+    // a step's run ends on its result, while its process may still be going;
+    // a seed's gate reads status once that process is gone and the seed quiet
+    status: async (repoId) => {
+      const repo = state.result.repos.find((r) => r.id === repoId);
+      if (repo && isSeedPath(root, repo.path)) await runner.whenQuiet(repo.path);
+      return freshStatus(state, repoId);
+    },
   });
   const launcher = new Launcher({
     onJob: (job) => broadcast(state, { type: "job", job }),
