@@ -18,14 +18,14 @@ if (process.argv.includes("--health")) {
 // The orphan sweep kills every process outside the runs and docker exec's,
 // which is right only in the stages container's own pid namespace: on a
 // host it would be the whole session.
-const status = (() => {
+const proc = (path: string): string => {
   try {
-    return readFileSync("/proc/self/status", "utf8");
+    return readFileSync(path, "utf8");
   } catch {
     return "";
   }
-})();
-const sweepOrphans = process.platform === "linux" && ownPidNamespace(status, process.pid);
+};
+const sweepOrphans = process.platform === "linux" && ownPidNamespace(proc("/proc/self/status"), process.pid, proc("/proc/1/comm"));
 await startStageRunner({ socket, root, sweepOrphans });
 console.log(`canopy-stage-runner on ${socket}, seeds under ${root}`);
 console.log(sweepOrphans ? "orphans are swept at each run's end and every 30 s" : "no pid namespace of its own: orphans are not swept");

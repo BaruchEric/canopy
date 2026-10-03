@@ -539,6 +539,19 @@ describe("the orphan sweep", () => {
     expect(ownPidNamespace("", 1)).toBe(true);
   });
 
+  test("on under compose's init: true, where the container's /proc shows one NSpid level", () => {
+    // what the stages container on the mini reads: docker-init is pid 1, the
+    // runner its child, and /proc belongs to the container's own namespace
+    const status = "Name:\tbun\nPPid:\t1\nNSpid:\t7\n";
+    expect(ownPidNamespace(status, 7, "docker-init\n")).toBe(true);
+    expect(ownPidNamespace(status, 7, "tini")).toBe(true);
+    // a host's pid 1 is systemd or launchd, never one of those
+    expect(ownPidNamespace(status, 7, "systemd\n")).toBe(false);
+    // under docker-init but not its child: a run's process, not the runner
+    expect(ownPidNamespace("Name:\tbun\nPPid:\t40\nNSpid:\t7\n", 7, "docker-init")).toBe(false);
+    expect(ownPidNamespace("Name:\tbun\nNSpid:\t7\n", 7, "docker-init")).toBe(false);
+  });
+
   test("through a real runner: the timer and a run's end kill an escapee, and nothing outside the namespace's view", async () => {
     /** an escapee started outside any run, as a stage's setsid daemon would be */
     const escape = async (name: string): Promise<number> => {

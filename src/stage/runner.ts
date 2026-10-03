@@ -109,13 +109,21 @@ export function orphansOf(procs: readonly Proc[], self: number, live: readonly n
 /** Whether the runner has a pid namespace of its own, off its
  *  `/proc/self/status`: pid 1 is a namespace's init, and the NSpid line
  *  lists one pid per namespace level, so more than one means a nested one.
- *  The orphan sweep kills everything outside the runs, which on a host
+ *  A container's own /proc shows only its own level, though, so under
+ *  compose's `init: true` (`initName` is pid 1's `/proc/1/comm`) the runner
+ *  is in its own namespace when it is the direct child of docker-init or
+ *  tini. The orphan sweep kills everything outside the runs, which on a host
  *  (or a Mac, with no NSpid at all) would be the whole session. */
-export function ownPidNamespace(status: string, pid: number): boolean {
+export function ownPidNamespace(status: string, pid: number, initName = ""): boolean {
   if (pid === 1) return true;
   const line = /^NSpid:\s*(.*)$/m.exec(status);
-  return line !== null && (line[1] ?? "").trim().split(/\s+/).filter(Boolean).length > 1;
+  if (line !== null && (line[1] ?? "").trim().split(/\s+/).filter(Boolean).length > 1) return true;
+  const ppid = /^PPid:\s*(\d+)\s*$/m.exec(status)?.[1];
+  return ppid === "1" && CONTAINER_INITS.has(initName.trim());
 }
+
+/** the inits docker's `--init` runs as pid 1 */
+const CONTAINER_INITS: ReadonlySet<string> = new Set(["docker-init", "tini"]);
 
 const HARNESSES: readonly string[] = ["claude", "codex"];
 /** a connection that sends no request in this long is closed */
