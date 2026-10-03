@@ -1,9 +1,9 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
-import { mkdir, mkdtemp, realpath, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, realpath, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { exec, setSeedGit } from "./exec";
-import { bundleHead, bundleSeed } from "./seedmirror";
+import { bundleHead, bundleSeed, MIRRORS_DIR, mirrorPath, mirrorRefusal, SeedMirrors } from "./seedmirror";
 import { SEED_AWAY, setSeedRoots } from "./seedgit";
 
 let dir = "";
@@ -116,5 +116,103 @@ describe("bundleSeed", () => {
     await sh(path, "config", "core.fsmonitor", `touch ${mark}`);
     await expect(bundleSeed(path, join(dir, "hostile.bundle"))).rejects.toThrow("core.fsmonitor");
     expect(await Bun.file(mark).exists()).toBe(false);
+  });
+});
+
+describe("SeedMirrors", () => {
+  /** a hook that runs the seed's git here, counting the bundles it makes */
+  const counting = () => {
+    const bundles: string[] = [];
+    setSeedGit({
+      run: (p, args, opts) => exec(["git", "-C", p, ...args], { timeoutMs: opts.timeoutMs, env: opts.env }),
+      toFile: async (p, args, file, opts) => {
+        bundles.push(p);
+        return exec(["git", "-C", p, ...args.map((a) => (a === "-" ? file : a))], { timeoutMs: opts.timeoutMs, env: opts.env });
+      },
+    });
+    return bundles;
+  };
+  const mirrorRefs = (m: string) => sh(m, "for-each-ref", "--format=%(objectname) %(refname)");
+
+  test("a mirror holds the seed's refs and its HEAD, detached, and is made again when gone", async () => {
+    const path = await seed("mirrored");
+    await sh(path, "branch", "side");
+    const mirrors = new SeedMirrors(dir);
+    const bundles = counting();
+    try {
+      expect(await mirrors.sync(path)).toBe("synced");
+      const m = mirrorPath(dir, "mirrored");
+      expect(m).toBe(join(dir, MIRRORS_DIR, "mirrored", ".git"));
+      expect(await mirrorRefs(m)).toBe(await sh(path, "for-each-ref", "--format=%(objectname) %(refname)"));
+      expect(await sh(m, "rev-parse", "HEAD")).toBe(await sh(path, "rev-parse", "HEAD"));
+      expect((await exec(["git", "-C", m, "symbolic-ref", "-q", "HEAD"])).code).not.toBe(0);
+      expect(await mirrorRefusal(dir, "mirrored")).toBe(null);
+      // nothing new: no bundle
+      expect(await mirrors.sync(path)).toBe("same");
+      expect(bundles).toHaveLength(1);
+      // a new commit and a dropped branch reach the mirror
+      await sh(path, "branch", "-D", "side");
+      await sh(path, "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "--allow-empty", "-m", "two");
+      expect(await mirrors.sync(path)).toBe("synced");
+      expect(await mirrorRefs(m)).toBe(await sh(path, "for-each-ref", "--format=%(objectname) %(refname)"));
+      expect(await sh(m, "rev-parse", "HEAD")).toBe(await sh(path, "rev-parse", "HEAD"));
+      // a mirror that is gone comes back, though the seed did not move
+      await rm(join(dir, MIRRORS_DIR, "mirrored"), { recursive: true, force: true });
+      expect(await mirrorRefusal(dir, "mirrored")).toBe("canopy has no mirror of this seed yet");
+      expect(await mirrors.sync(path)).toBe("synced");
+      expect(await sh(m, "rev-parse", "HEAD")).toBe(await sh(path, "rev-parse", "HEAD"));
+      expect(bundles).toHaveLength(3);
+    } finally {
+      setSeedGit(null);
+    }
+  });
+
+  test("a seed held now, or with no commit, leaves the mirror as it was", async () => {
+    const empty = await seed("bare-seed", false);
+    const mirrors = new SeedMirrors(dir);
+    expect(await mirrors.sync(empty)).toBe("empty");
+    expect(await mirrorRefusal(dir, "bare-seed")).toBe("canopy has no mirror of this seed yet");
+    const path = await seed("held-mirror");
+    setSeedGit({
+      run: async () => ({ code: 128, stdout: "", stderr: `${SEED_AWAY}: away` }),
+      toFile: async () => ({ code: 128, stdout: "", stderr: `${SEED_AWAY}: away` }),
+    });
+    try {
+      expect(await mirrors.sync(path)).toBe("held");
+      expect(await mirrorRefusal(dir, "held-mirror")).toBe("canopy has no mirror of this seed yet");
+    } finally {
+      setSeedGit(null);
+    }
+  });
+
+  test("syncs of one seed run one at a time", async () => {
+    const path = await seed("queued");
+    let inFlight = 0;
+    let most = 0;
+    setSeedGit({
+      run: async (p, args, opts) => {
+        inFlight++;
+        most = Math.max(most, inFlight);
+        await Bun.sleep(30);
+        inFlight--;
+        return exec(["git", "-C", p, ...args], { timeoutMs: opts.timeoutMs, env: opts.env });
+      },
+      toFile: (p, args, file, opts) => exec(["git", "-C", p, ...args.map((a) => (a === "-" ? file : a))], { timeoutMs: opts.timeoutMs, env: opts.env }),
+    });
+    try {
+      const mirrors = new SeedMirrors(dir);
+      expect(await Promise.all([mirrors.sync(path), mirrors.sync(path), mirrors.sync(path)])).toEqual(["synced", "same", "same"]);
+      expect(most).toBe(1);
+    } finally {
+      setSeedGit(null);
+    }
+  });
+
+  test("the gate's mirror check refuses a link in place of the mirror", async () => {
+    const path = await seed("linked");
+    await new SeedMirrors(join(dir, "elsewhere")).sync(path);
+    await mkdir(join(dir, MIRRORS_DIR), { recursive: true });
+    await symlink(join(dir, "elsewhere", MIRRORS_DIR, "linked"), join(dir, MIRRORS_DIR, "linked"));
+    expect(await mirrorRefusal(dir, "linked")).toBe("canopy's mirror of this seed is not where canopy keeps it");
   });
 });

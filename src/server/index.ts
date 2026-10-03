@@ -109,7 +109,8 @@ import {
 } from "../core/store";
 import { QUIET_WAIT, Runner } from "../core/runner";
 import type { RunDriver } from "../core/driver";
-import { SEED_AGENT_REFUSAL, SEEDS_DIR } from "../core/sprout";
+import { isSeedRepoId, SEED_AGENT_REFUSAL, SEEDS_DIR } from "../core/sprout";
+import { SeedMirrors } from "../core/seedmirror";
 import { sweepCodexTrust } from "../core/codextrust";
 import { seedBusy, seedBusyFor, seedHeld, seedRootsNow, setSeedBusy, setSeedRoots } from "../core/seedgit";
 import { suggestMessage } from "../core/suggest";
@@ -273,6 +274,13 @@ interface ServerState {
    *  second refreshPeers call while this is set joins it instead of
    *  queueing a duplicate pass behind it */
   pendingPass: Promise<void> | null;
+  /** canopy's mirror of each seed, which the peer gate serves in its place
+   *  (seedmirror.ts, amendment 4) */
+  mirrors: SeedMirrors;
+  /** whether seeds stay out of the peer pass, the peer routes, the
+   *  background fetch and the clone of what a peer has: on an isolated
+   *  backend, where canopy runs no git in a seed */
+  seedsStayHome: boolean;
   /** an activity pass under way, so the timer never stacks a second one */
   activity: Promise<void> | null;
   /** the shells a machine going down left behind, the ones no live session
@@ -1292,9 +1300,29 @@ async function freshStatus(state: ServerState, id: string): Promise<RepoStatus |
     return null;
   }
   return refreshHeld(state, id)
-    .then((r) => (r.held ? null : r.repo.status))
+    .then((r) => {
+      if (r.held) return null;
+      // a run's or a flow's outcome read: the seed's mirror follows it
+      void syncMirror(state, r.repo.path);
+      return r.repo.status;
+    })
     .catch(() => null);
 }
+
+/** Brings a seed's mirror up to the seed, in the background: after canopy's
+ *  own commit there and after a run's outcome is read there. A seed held
+ *  now is left for the next sync; a failure is logged, never thrown. */
+function syncMirror(state: ServerState, path: string): Promise<void> {
+  if (!isSeedPath(state.root, path)) return Promise.resolve();
+  return state.mirrors.sync(path).then(
+    () => {},
+    (err: unknown) => console.error(`canopy: mirror of ${path}:`, err instanceof Error ? err.message : err),
+  );
+}
+
+/** the launch root's seeds, by path */
+const seedPaths = (state: ServerState): string[] =>
+  state.result.repos.filter((r) => r.source === LAUNCH_SOURCE && isSeedRepoId(r.id)).map((r) => r.path);
 
 /** how often a status read put off by a busy seed asks again */
 const SEED_RETRY = 1_000;
@@ -1433,7 +1461,7 @@ export async function ownRemotesOf(
 async function fetchLocal(state: ServerState): Promise<void> {
   const local = new Set(state.sources.filter((rt) => rt.src.kind === "local").map((rt) => rt.src.id));
   const repos = state.result.repos.filter(
-    (r) => local.has(r.source) && !r.forge && !r.error && (r.remotes?.length ?? 0) > 0,
+    (r) => local.has(r.source) && !r.forge && !r.error && (r.remotes?.length ?? 0) > 0 && !(state.seedsStayHome && isSeedPath(state.root, r.path)),
   );
   await mapPool(repos, FETCH_CONCURRENCY, async (repo) => {
     const { names, learned } = await ownRemotesOf(state, repo);
@@ -1492,6 +1520,8 @@ function refreshActivity(state: ServerState): Promise<void> {
   state.activity = (async () => {
     try {
       await retryLogin(state);
+      // every seed's mirror, so the gate is at most one pass behind
+      await Promise.all(seedPaths(state).map((p) => syncMirror(state, p)));
       const cfg = await loadConfig();
       if (cfg.fetch) await fetchLocal(state);
       await refreshPeers(state).catch((err) => console.error("canopy: peer pass", err));
@@ -1506,8 +1536,10 @@ function refreshActivity(state: ServerState): Promise<void> {
 }
 
 /** A repo peer sync covers: a local repo under the launch root, with no
- *  ongoing scan error. */
-const peerable = (r: Repo): boolean => r.source === LAUNCH_SOURCE && !r.host && !r.forge && !r.error;
+ *  ongoing scan error, and not a seed on an isolated backend, where canopy
+ *  runs no git in one (amendment 4, ruling 9). */
+const peerable = (state: ServerState, r: Repo): boolean =>
+  r.source === LAUNCH_SOURCE && !r.host && !r.forge && !r.error && !(state.seedsStayHome && isSeedRepoId(r.id));
 
 /** Runs `job` through the peering queue (withPeering), but coalesces
  *  repeat calls: while a job started this way is still pending (queued
@@ -1545,7 +1577,7 @@ async function peerPass(state: ServerState): Promise<void> {
   if (s.peerSync === "off" || !s.self) return;
   if (s.peers.length === 0) return;
   const dry = s.peerSync === "dry";
-  const repos = state.result.repos.filter((r) => peerable(r) && !state.runner.activeFor(r.id));
+  const repos = state.result.repos.filter((r) => peerable(state, r) && !state.runner.activeFor(r.id));
   for (const r of repos) {
     if (state.inited.has(r.path)) continue;
     await initRepo(r.path, r.id, s.peers, dry);
@@ -1555,7 +1587,7 @@ async function peerPass(state: ServerState): Promise<void> {
   }
   const { states, seen, cloned, failed } = await syncAll(
     repos.map((r) => r.id),
-    { self: s.self, peers: s.peers, seed: s.seed, dry, root: state.root },
+    { self: s.self, peers: s.peers, seed: s.seed, dry, root: state.root, ...(state.seedsStayHome ? { skip: isSeedRepoId } : {}) },
     FETCH_CONCURRENCY,
   );
   if (seenChanged(state.peerSeen, seen)) broadcast(state, { type: "peers", seen });
@@ -2614,7 +2646,7 @@ async function handleApi(
       return json(state.runner.start(repo, b.action, ACTIONS[b.action], note, agent, by), 201);
     }
     if (method === "POST" && action === "peer") {
-      if (!peerable(repo)) throw new HttpError(400, "peer sync covers local repos under the launch root");
+      if (!peerable(state, repo)) throw new HttpError(400, "peer sync covers local repos under the launch root");
       const raw: unknown = await req.json().catch(() => null);
       if (!raw || typeof raw !== "object" || Array.isArray(raw)) throw new HttpError(400, "malformed body");
       const body = raw as { action?: unknown; peer?: unknown; branch?: unknown };
@@ -3033,6 +3065,8 @@ export async function startServer(opts: {
     inited: new Set(),
     peering: null,
     pendingPass: null,
+    mirrors: new SeedMirrors(root),
+    seedsStayHome: stage !== null,
     activity: null,
     kept: [],
     keeping: null,
@@ -3054,7 +3088,7 @@ export async function startServer(opts: {
       new Incubator({
         root,
         store: sprouts,
-        seeds: seedOps(runnerOpts.backend),
+        seeds: seedOps(runnerOpts.backend, (path) => syncMirror(state, path)),
         flows: {
           // the same checks a flow started from a repo's menu passes
           start: async (repo, wf, note) => {

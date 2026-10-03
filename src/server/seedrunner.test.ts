@@ -14,6 +14,7 @@ import { git } from "../core/exec";
 import type { Harness } from "../core/harness";
 import { seedOps, writeSeed } from "../core/seed";
 import { SEED_AWAY, seedBusy } from "../core/seedgit";
+import { MIRRORS_DIR } from "../core/seedmirror";
 import { StageClient } from "../core/stageclient";
 import type { Run, ScanResult } from "../core/types";
 import { startStageRunner } from "../stage/runner";
@@ -140,6 +141,16 @@ describe("a stage alive in one seed, on an isolated backend", () => {
     await post("/api/runs/stop", { id: run.id });
     await betaCommit;
     expect(await lastSubject(beta())).toBe("scout: beta");
+  }, 20_000);
+
+  test("a seed's mirror follows its run's outcome, made through the runner; a seed takes no peer action", async () => {
+    const mirror = join(root, MIRRORS_DIR, "beta", ".git");
+    const head = async (path: string): Promise<string> => (await Bun.$`git -C ${path} rev-parse HEAD`.quiet().text()).trim();
+    await until(async () => (await Bun.$`git -C ${mirror} rev-parse HEAD`.quiet().nothrow().text()).trim() === (await head(beta())), "beta's mirror at beta's HEAD");
+    expect(await lastSubject(mirror)).toBe("scout: beta");
+    expect(client.gits).toContain(beta());
+    const res = await post(`/api/repos/peer?id=${encodeURIComponent("_incubator/beta")}`, { action: "sync", peer: "mac" });
+    expect(res.status).toBe(400);
   }, 20_000);
 
   test("a runner that cannot run git keeps the card's last status, and nothing runs here", async () => {

@@ -294,15 +294,18 @@ export async function writeSeed(path: string, rel: string, text: string): Promis
   }
 }
 
-/** the seed operations as the Incubator takes them */
-export function seedOps(self: string) {
+/** the seed operations as the Incubator takes them; `committed` hears of
+ *  each seed canopy committed in (the server syncs its mirror) */
+export function seedOps(self: string, committed?: (path: string) => void) {
   return {
     make: (path: string, files: Record<string, string>, clone: string | undefined, id: string) => makeSeed(path, files, clone, { self, id }),
     read: readSeed,
     write: writeSeed,
     commit: async (path: string, rels: string[], message: string): Promise<void> => {
-      // a stage alive in any seed makes this one busy: wait for quiet
+      // a busy seed (its own stage alive on an isolated backend, any
+      // stage on an unisolated one) is waited out
       await inQuietSeed(path, () => commitSeed(path, rels, message, self));
+      committed?.(path);
     },
     /** a dangling symlink counts as there, as makeSeed would refuse it */
     exists: (path: string): boolean => lstatSync(path, { throwIfNoEntry: false }) !== undefined,
