@@ -1,7 +1,7 @@
 import { mkdirSync } from "node:fs";
 import { parseLocator, remoteCommand, sshArgs } from "./host";
 import { configDir } from "./store";
-import { SEED_GIT_FLAGS, seedBusy, seedGitRefusal, seedRootsNow, seedsRootOf } from "./seedgit";
+import { SEED_BUSY, SEED_GIT_FLAGS, seedBusy, seedGitRefusal, seedRootsNow, seedsRootOf } from "./seedgit";
 
 export interface ExecResult {
   code: number;
@@ -160,7 +160,7 @@ export async function git(
   if (host === null) {
     // A seed is written by agents: see seedgit.ts.
     const seeds = seedsRootOf(path, seedRootsNow());
-    if (seeds !== null && seedBusy(path)) return { code: 128, stdout: "", stderr: "canopy waits for the stage running in this seed" };
+    if (seeds !== null && seedBusy(path)) return { code: 128, stdout: "", stderr: SEED_BUSY };
     const refused = await seedGitRefusal(path);
     if (refused) return { code: 128, stdout: "", stderr: refused };
     if (seeds !== null) {

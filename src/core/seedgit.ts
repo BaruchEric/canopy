@@ -86,6 +86,9 @@ export function setSeedRoots(roots: readonly string[]): void {
 }
 export const seedRootsNow = (): readonly string[] => seedRoots;
 
+/** what git() answers in a seed while it is busy */
+export const SEED_BUSY = "canopy waits for the stage running in this seed";
+
 let busyHook: (path: string) => boolean = () => false;
 /** set once by the server: a seed with a stage process alive in it */
 export function setSeedBusy(busy: (path: string) => boolean): void {

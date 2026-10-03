@@ -110,7 +110,7 @@ import { Runner } from "../core/runner";
 import type { RunDriver } from "../core/driver";
 import { SEED_AGENT_REFUSAL, SEEDS_DIR } from "../core/sprout";
 import { sweepCodexTrust } from "../core/codextrust";
-import { seedBusy, seedRootsNow, seedTopOf, setSeedBusy, setSeedRoots } from "../core/seedgit";
+import { SEED_BUSY, seedBusy, seedRootsNow, seedTopOf, setSeedBusy, setSeedRoots } from "../core/seedgit";
 import { suggestMessage } from "../core/suggest";
 import {
   HISTORY_WINDOWS,
@@ -151,7 +151,7 @@ import {
   type TermInfo,
   TERM_GONE,
 } from "../core/types";
-import type { About } from "../core/types";
+import type { About, RepoStatus } from "../core/types";
 import { DEFAULT_IGNORE } from "../core/scan";
 import { ChanHub, PUT_MAX } from "./tailchan";
 import { RegistryHub } from "./registry";
@@ -1200,7 +1200,9 @@ function scanOne(state: ServerState, rt: SourceRuntime, opts: Required<ScanOptio
   rt.scanning = (async () => {
     try {
       const fresh = (await scanSource(rt.src, opts)).map((r) => {
-        if (!busySeed(r)) return r;
+        // by the refusal, not by the seed being busy now: it may have gone
+        // quiet between the read and here
+        if (!r.error?.includes(SEED_BUSY)) return r;
         // the scan's read was refused: keep the last status, read it later
         scheduleRefresh(state, r.id, SEED_RETRY);
         const was = state.result.repos.find((p) => p.id === r.id);
@@ -1265,6 +1267,20 @@ function scheduleRefresh(state: ServerState, id: string, wait = 400): void {
       refreshAndBroadcast(state, id).catch(() => {});
     }, wait),
   );
+}
+
+/** A status read for a run's or a flow's outcome: null, not the last
+ *  status, for a busy seed, so nothing is judged on a reading from before
+ *  the run; the card is read again once the seed is quiet. */
+async function freshStatus(state: ServerState, id: string): Promise<RepoStatus | null> {
+  const repo = state.result.repos.find((r) => r.id === id);
+  if (repo && busySeed(repo)) {
+    scheduleRefresh(state, id, SEED_RETRY);
+    return null;
+  }
+  return refreshAndBroadcast(state, id)
+    .then((r) => r.status)
+    .catch(() => null);
 }
 
 /** how often a status read put off by a busy seed asks again */
@@ -2776,10 +2792,7 @@ export async function startServer(opts: {
     },
     // Re-read status directly rather than waiting on the watcher's
     // debounce: the card and the run's outcome should agree at once.
-    status: (repoId) =>
-      refreshAndBroadcast(state, repoId)
-        .then((r) => r.status)
-        .catch(() => null),
+    status: (repoId) => freshStatus(state, repoId),
   }, runnerOpts);
   // set once this server holds the flows folder (after the bind); without it
   // no record is written or removed
@@ -2820,10 +2833,7 @@ export async function startServer(opts: {
     evidence: (repo, paths) => readEvidence(repo.path, paths),
     save: (rec) => flowFiles?.save(rec),
     forget: (id) => flowFiles?.forget(id),
-    status: (repoId) =>
-      refreshAndBroadcast(state, repoId)
-        .then((r) => r.status)
-        .catch(() => null),
+    status: (repoId) => freshStatus(state, repoId),
   });
   const launcher = new Launcher({
     onJob: (job) => broadcast(state, { type: "job", job }),
