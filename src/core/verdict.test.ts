@@ -129,11 +129,29 @@ describe("judgeState", () => {
     const big = "x".repeat(EVIDENCE_EACH + 100);
     const files = [1, 2, 3, 4, 5].map((n) => ({ path: `f${n}.md`, text: big }));
     const s = judgeState({ task: "t", summary: "s", check: null, files });
-    expect(s).toContain(`File f1.md:\n${"x".repeat(EVIDENCE_EACH)}\n[clipped]`);
+    const half = EVIDENCE_EACH / 2;
+    expect(s).toContain(`File f1.md:\n${"x".repeat(half)}\n[clipped: 100 characters]\n${"x".repeat(half)}\n\n`);
     // three full files take 18 KB; the fourth gets what is left of 20 KB
-    expect(s).toContain(`File f4.md:\n${"x".repeat(EVIDENCE_TOTAL - 3 * EVIDENCE_EACH)}\n[clipped]`);
+    const room = EVIDENCE_TOTAL - 3 * EVIDENCE_EACH;
+    expect(s).toContain(`File f4.md:\n${"x".repeat(room / 2)}\n[clipped: ${big.length - room} characters]\n${"x".repeat(room / 2)}\n\n`);
     expect(s).not.toContain("File f5.md");
     expect(s.endsWith("(1 more file left out for room)")).toBe(true);
     expect(s).not.toContain("Check output");
+  });
+
+  test("a clipped file keeps its end, where a research file's pick and an eval's verdict sit", () => {
+    // the sizes scout's Eval judge read on 2026-10-03, when three passes in a
+    // row parked on "not enough to go on" with both conclusions clipped off
+    const fill = (n: number, end: string): string => `${"r".repeat(n - end.length)}${end}`;
+    const files = [
+      { path: ".canopy/intent.md", text: fill(3716, "## What success looks like") },
+      { path: ".canopy/research.md", text: fill(14722, "## Pick\nextend clms") },
+      { path: ".canopy/pick.json", text: fill(402, '"kind":"extend"}') },
+      { path: ".canopy/eval.md", text: fill(8006, "## Verdict\nGo ahead.") },
+    ];
+    const s = judgeState({ task: "t", summary: "s", check: null, files });
+    expect(s).toContain("## Pick\nextend clms\n\nFile .canopy/pick.json");
+    expect(s.endsWith("## Verdict\nGo ahead.")).toBe(true);
+    expect(s.match(/\[clipped: \d+ characters\]/g)?.length).toBe(2);
   });
 });

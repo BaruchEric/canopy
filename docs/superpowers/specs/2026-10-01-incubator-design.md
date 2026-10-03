@@ -250,7 +250,7 @@ JUDGE_QUESTIONS = {
 or more, and `rules` under 0.3. `misses` at 0.7 or more is reported as a
 rejection, which scout's eval turns into a `rejected` sprout rather than a
 retry. The step key `evidence: <paths>` names files in the repo whose
-contents, clipped to 6 KB each and 20 KB in all, join the summary in the text
+contents, clipped to 6 KB each (its first half and its end) and 20 KB in all, join the summary in the text
 the evaluator reads (`judgeState`). Both live in `verdict.ts`, pure and tested.
 Without a gateway key, a `judge` gate asks the user, as `verdict` does.
 

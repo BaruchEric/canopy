@@ -115,9 +115,20 @@ export function decideJudge(answers: JudgeAnswers): Judgment {
 export const EVIDENCE_EACH = 6 * 1024;
 export const EVIDENCE_TOTAL = 20 * 1024;
 
+/** `cap` characters of `text`: its first half and its last, with the count
+ *  cut between them. A research file ends in its pick and an eval in its
+ *  verdict, so a head-only clip hid the conclusion and the judge said there
+ *  was not enough to go on. */
+function clipMiddle(text: string, cap: number): string {
+  const head = Math.ceil(cap / 2);
+  const tail = cap - head;
+  return `${text.slice(0, head)}\n[clipped: ${text.length - cap} characters]\n${text.slice(text.length - tail)}`;
+}
+
 /** The text the judge reads: the step's task as the criteria, its summary,
  *  the check's output, then each evidence file clipped to EVIDENCE_EACH
- *  characters and all of them to EVIDENCE_TOTAL. */
+ *  characters, keeping its head and its end, and all of them to
+ *  EVIDENCE_TOTAL. */
 export function judgeState(input: { task: string; summary: string; check: string | null; files: EvidenceFile[] }): string {
   const parts = [
     `Task the work was judged against:\n${input.task.trim() || "(none)"}`,
@@ -136,7 +147,7 @@ export function judgeState(input: { task: string; summary: string; check: string
       continue;
     }
     const cap = Math.min(EVIDENCE_EACH, room);
-    const body = f.text.length > cap ? `${f.text.slice(0, cap)}\n[clipped]` : f.text;
+    const body = f.text.length > cap ? clipMiddle(f.text, cap) : f.text;
     room -= Math.min(f.text.length, cap);
     parts.push(`File ${f.path}:\n${body}`);
   }
