@@ -13,7 +13,11 @@ export type Fenced = true | false | "unchecked";
 export type StageRequest =
   | { t: "hello" }
   | { t: "spawn"; argv: string[]; cwd: string; env: Record<string, string> }
-  | { t: "busy"; seed: string };
+  | { t: "busy"; seed: string }
+  /** git in a seed's top folder, as the stage user, for canopy's own reads
+   *  and commits there: the runner adds SEED_GIT_FLAGS and builds the env
+   *  itself (`gitEnv`) */
+  | { t: "git"; seed: string; args: string[]; env: Record<string, string> };
 export type StageFrame =
   | { t: "in"; d: string }
   | { t: "eof" }
@@ -30,6 +34,10 @@ export type StageFrame =
 export const STAGE_PROGRAMS: readonly string[] = ["claude", "codex", "sh"];
 export const STAGE_PASSED_ENV: readonly string[] = ["CANOPY_RUN", "CANOPY_REPO", "CANOPY_BACKEND"];
 export const STAGE_BASE_ENV: readonly string[] = ["PATH", "HOME", "LANG", "LC_ALL", "TERM", "CLAUDE_CONFIG_DIR", "CODEX_HOME"];
+/** the only names a git request's env may carry. Anything else is refused,
+ *  never dropped: without GIT_INDEX_FILE, say, `add -A` would write the
+ *  seed's real index. */
+export const SEED_GIT_ENV: readonly string[] = ["GIT_OPTIONAL_LOCKS", "GIT_AUTHOR_NAME", "GIT_AUTHOR_EMAIL", "GIT_COMMITTER_NAME", "GIT_COMMITTER_EMAIL"];
 const CHUNK = 64 * 1024;
 
 export const encodeFrame = (f: StageFrame | StageRequest): string => `${JSON.stringify(f)}\n`;
@@ -79,6 +87,10 @@ export function parseFrame(line: string): StageFrame | StageRequest | null {
     const { argv, cwd, env } = o;
     return Array.isArray(argv) && argv.every(isStr) && isStr(cwd) && isStrMap(env) ? { t, argv, cwd, env } : null;
   }
+  if (t === "git") {
+    const { seed, args, env } = o;
+    return isStr(seed) && Array.isArray(args) && args.every(isStr) && isStrMap(env) ? { t, seed, args, env } : null;
+  }
   return null;
 }
 
@@ -86,6 +98,11 @@ export function parseFrame(line: string): StageFrame | StageRequest | null {
 export function requestRefusal(req: StageRequest): string | null {
   if (req.t === "hello") return null;
   if (req.t === "busy") return req.seed.startsWith("/") ? null : "the seed must be an absolute path";
+  if (req.t === "git") {
+    if (!req.seed.startsWith("/")) return "the seed must be an absolute path";
+    const off = Object.keys(req.env).find((k) => !SEED_GIT_ENV.includes(k));
+    return off === undefined ? null : `a git request carries only ${SEED_GIT_ENV.join(", ")}, not ${off}`;
+  }
   const prog = req.argv[0];
   if (prog === undefined || !STAGE_PROGRAMS.includes(prog)) {
     return `the stage runner starts only ${STAGE_PROGRAMS.join(", ")}, by bare program name`;
@@ -107,7 +124,32 @@ export function childEnv(own: Record<string, string | undefined>, asked: Record<
   return out;
 }
 
-const toB64 = (bytes: Uint8Array): string => {
+/** A git request's env: the runner's PATH and locale, no home, no global or
+ *  system config (so nothing a stage left in the home steers canopy's git),
+ *  a ceiling at the stage root, no prompt, and git's own names from the
+ *  request. */
+export function gitEnv(own: Record<string, string | undefined>, asked: Record<string, string>, root: string): Record<string, string> {
+  const out: Record<string, string> = {};
+  for (const k of ["PATH", "LANG", "LC_ALL"]) {
+    const v = own[k];
+    if (v !== undefined) out[k] = v;
+  }
+  Object.assign(out, {
+    HOME: "/nonexistent",
+    XDG_CONFIG_HOME: "/nonexistent",
+    GIT_CONFIG_NOSYSTEM: "1",
+    GIT_CONFIG_GLOBAL: "/dev/null",
+    GIT_CEILING_DIRECTORIES: root,
+    GIT_TERMINAL_PROMPT: "0",
+  });
+  for (const k of SEED_GIT_ENV) {
+    const v = Object.hasOwn(asked, k) ? asked[k] : undefined;
+    if (v !== undefined) out[k] = v;
+  }
+  return out;
+}
+
+const toB64 =(bytes: Uint8Array): string => {
   let s = "";
   for (let i = 0; i < bytes.length; i++) s += String.fromCharCode(bytes[i] ?? 0);
   return btoa(s);

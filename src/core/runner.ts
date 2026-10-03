@@ -159,6 +159,15 @@ export class Runner {
     return false;
   }
 
+  /** `liveAny` for one seed: a stage run active on the repo at `path`, or
+   *  a stage process `liveIn` it. On an isolated backend this alone holds
+   *  canopy's git off a seed. */
+  stageAliveIn(path: string): boolean {
+    if (this.liveIn(path)) return true;
+    for (const l of this.live.values()) if (l.repo.path === path && isRunActive(l.ctx.run) && (this.opts.stage?.(l.repo) ?? false)) return true;
+    return false;
+  }
+
   /** Settles once every stage process started in the repo at `path` has
    *  exited and the seed is quiet, or after `maxMs`. A run ends on its
    *  result, before its process is gone, so a flow's gate that reads the

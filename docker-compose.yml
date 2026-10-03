@@ -89,6 +89,9 @@ services:
       args:
         UID: ${HOST_UID:-1000}
         GID: ${HOST_GID:-1000}
+        # the group that reaches the stage runner's socket; canopy holds it
+        # through group_add below. Set it in .env only when 7850 is taken.
+        STAGECALLER_GID: ${STAGECALLER_GID:-7850}
     image: canopy-stages:latest
     environment:
       - CANOPY_STAGE_ROOT=${DEV_ROOT:-/home/eric/dev}/_incubator
@@ -108,6 +111,18 @@ services:
       - ${HOST_HOME:-/home/eric}/.config/canopy-stages/claude:/home/bun/.stage-claude
       - ${HOST_HOME:-/home/eric}/.config/canopy-stages/codex:/home/bun/.stage-codex
       - stage-sock:/run/canopy-stage
+    # Read-only but for the mounts above and two tmpfs: the stage user's
+    # home (its tools' caches and settings, bun's install cache) and /tmp.
+    # What a stage leaves in either lasts until this container restarts,
+    # never into the image. The home tmpfs hides the image's own .bashrc and
+    # ble.sh, so a stage's shells start plain. Both take exec, since docker
+    # mounts a tmpfs noexec by default and a stage's tools run from there
+    # (bun create and bunx unpack under /tmp, browsers land in ~/.cache); a
+    # stage can plant a program in the seed anyway. nosuid and nodev stay.
+    read_only: true
+    tmpfs:
+      - /home/bun:uid=${HOST_UID:-1000},gid=${HOST_GID:-1000},mode=0700,size=2g,exec
+      - /tmp:mode=1777,size=1g,exec
     networks: [stages-net]
     # docker's embedded resolver forwards each query from the container's own
     # namespace, through the fenced bridge, so the host's upstream (the
@@ -151,6 +166,9 @@ services:
     # ports are published on the shells service above.
     network_mode: "service:shells"
     pid: "service:shells"
+    # the stagecaller group, the only one the stage runner's socket folder
+    # lets in (root:stagecaller 0750); a stage holds no group at all
+    group_add: ["${STAGECALLER_GID:-7850}"]
     environment:
       - CANOPY_CONFIG_DIR=/config
       # how a client reaches THIS host over ssh for VS Code Remote-SSH; the

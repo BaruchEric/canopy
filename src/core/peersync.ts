@@ -9,6 +9,9 @@ import { parseRemote } from "./access";
 import { git, onHost } from "./exec";
 import { shellQuote } from "./host";
 import { BUSY_MARKERS, ffTarget, isPeerName, isSafeRel, NO_PUSH, parseNameStatus, parseQuotedWords, parseRefLines, parseWipLines, peerMissing, peerRefspecs, peerUnreachable, peerUrl, repoWanted, seedWanted } from "./peers";
+import { seedsDirOf, seedsRootOf } from "./seedgit";
+import { mirrorPath, mirrorSlug } from "./seedmirror";
+import { SEEDS_DIR } from "./sprout";
 import { configDir } from "./store";
 import type { Peer, PeerSeen, PeerState, PeerWip } from "./types";
 
@@ -301,49 +304,93 @@ function gitfileTarget(file: string): string | null {
   return isAbsolute(raw) ? raw : resolve(dirname(file), raw);
 }
 
-/** Whether `gitDir`'s own `commondir` file (present on a linked worktree's
- *  gitdir, pointing back at the main repo's real one) resolves outside
- *  `realRoot`. No commondir file is not an escape; an unreadable or
- *  unresolvable one is. */
-function commondirEscapes(gitDir: string, realRoot: string): boolean {
+/** Where `gitDir`'s own `commondir` file (present on a linked worktree's
+ *  gitdir, pointing back at the main repo's real one) leads, by real path:
+ *  undefined with no commondir file, null when it is unreadable or leads
+ *  nowhere. */
+function commondirReal(gitDir: string): string | null | undefined {
   const commonFile = join(gitDir, "commondir");
-  if (!existsSync(commonFile)) return false;
+  if (!existsSync(commonFile)) return undefined;
   let content: string;
-  try { content = readFileSync(commonFile, "utf8"); } catch { return true; }
+  try { content = readFileSync(commonFile, "utf8"); } catch { return null; }
   const rel = content.trim();
-  if (!rel) return true;
+  if (!rel) return null;
   const target = isAbsolute(rel) ? rel : resolve(gitDir, rel);
+  try { return realpathSync(target); } catch { return null; }
+}
+
+/** Every real path a candidate repo directory leads git to once gitfiles
+ *  and commondirs are followed: `dir` itself (already real), which may be a
+ *  gitdir with a commondir, and `dir/.git`, which may be a gitfile pointing
+ *  anywhere, whose own gitdir may in turn have a commondir. Null when
+ *  anything along the way is missing or unreadable, which refuses instead
+ *  of guessing. */
+function candidateReach(dir: string): string[] | null {
+  const out = [dir];
+  const common = (gitDir: string): boolean => {
+    const c = commondirReal(gitDir);
+    if (c === null) return false;
+    if (c !== undefined) out.push(c);
+    return true;
+  };
+  if (!common(dir)) return null;
+  const gitEntry = join(dir, ".git");
+  let st;
+  try { st = statSync(gitEntry); } catch { return out; } // no .git entry here: nothing further to follow
   let real: string;
-  try { real = realpathSync(target); } catch { return true; }
-  return escapes(realRoot, real);
+  if (st.isFile()) {
+    const target = gitfileTarget(gitEntry);
+    if (target === null) return null; // unreadable or malformed: refuse
+    try { real = realpathSync(target); } catch { return null; } // missing target: refuse
+  } else if (st.isDirectory()) {
+    try { real = realpathSync(gitEntry); } catch { return null; }
+  } else {
+    return out;
+  }
+  out.push(real);
+  return common(real) ? out : null;
 }
 
 /** Whether a candidate repo directory (already known to be under
  *  `realRoot` itself) reaches outside it once gitfiles and commondirs are
- *  followed: `dir` may itself be a gitdir with a commondir, and `dir/.git`
- *  may be a gitfile pointing anywhere, whose own gitdir may in turn have a
- *  commondir. A worktree checkout or a checked-out submodule under the
- *  root is exactly this shape and must still be accepted, so this follows
- *  rather than refusing gitfiles outright; anything missing or unreadable
- *  along the way refuses instead of guessing. */
+ *  followed. A worktree checkout or a checked-out submodule under the root
+ *  is exactly this shape and must still be accepted, so this follows
+ *  rather than refusing gitfiles outright. */
 function candidateEscapes(dir: string, realRoot: string): boolean {
-  if (commondirEscapes(dir, realRoot)) return true;
-  const gitEntry = join(dir, ".git");
-  let st;
-  try { st = statSync(gitEntry); } catch { return false; } // no .git entry here: nothing further to follow
-  if (st.isFile()) {
-    const target = gitfileTarget(gitEntry);
-    if (target === null) return true; // unreadable or malformed: refuse
-    let realTarget: string;
-    try { realTarget = realpathSync(target); } catch { return true; } // missing target: refuse
-    return escapes(realRoot, realTarget) || commondirEscapes(realTarget, realRoot);
+  const reach = candidateReach(dir);
+  return reach === null || reach.some((p) => escapes(realRoot, p));
+}
+
+/** the gate's answer for any path into the seeds dir but a seed's own */
+export const SEED_SERVED_AS = "a seed is served only as _incubator/<name>, from canopy's mirror of it";
+
+/** Whether `path` is one of the seeds dirs `seeds` or lies under one */
+const inSeeds = (path: string, seeds: readonly string[]): boolean => seedsDirOf(path, seeds) !== null || seedsRootOf(path, seeds) !== null;
+
+/** Whether the repo at `dir` is a seed under `root`, or leads git into one
+ *  by a link, a gitfile or a commondir. Whatever cannot be followed counts
+ *  as a seed. */
+function reachesSeed(root: string, dir: string): boolean {
+  const seeds = seedsDirs(root);
+  if (inSeeds(dir, seeds)) return true;
+  let real: string;
+  try { real = realpathSync(dir); } catch { return true; }
+  const reach = candidateReach(real);
+  return reach === null || reach.some((p) => inSeeds(p, seeds));
+}
+
+/** the seeds dir under `root`, and its real path when that differs */
+function seedsDirs(root: string): string[] {
+  const dir = join(root, SEEDS_DIR);
+  let real = dir;
+  try { real = realpathSync(dir); } catch { /* no seeds yet */ }
+  try {
+    const realRoot = realpathSync(root);
+    const viaRoot = join(realRoot, SEEDS_DIR);
+    return [...new Set([dir, real, viaRoot])];
+  } catch {
+    return [...new Set([dir, real])];
   }
-  if (st.isDirectory()) {
-    let realGitEntry: string;
-    try { realGitEntry = realpathSync(gitEntry); } catch { return true; }
-    return escapes(realRoot, realGitEntry) || commondirEscapes(realGitEntry, realRoot);
-  }
-  return false;
 }
 
 /** Absolute repo dir for an id, or null when the id leaves the root, is not
@@ -390,11 +437,18 @@ export function networkOrigin(url: string): boolean {
   return !url.slice(0, url.indexOf(":")).includes("/");
 }
 
+/** The repos under `root` a peer may list. A seed is listed with no origin
+ *  and no git run in it (a seed never has an origin, and its config is the
+ *  agents' to write), and so is any repo that leads git into one. */
 export async function serveList(root: string, maxDepth = 4): Promise<PeerListing[]> {
   const out: PeerListing[] = [];
   const walk = async (dir: string, depth: number): Promise<void> => {
     if (existsSync(join(dir, ".git")) && dir !== root) {
       const id = relative(root, dir);
+      if (reachesSeed(root, dir)) {
+        out.push({ id, origin: null });
+        return;
+      }
       const o = await git(dir, ["remote", "get-url", "origin"]);
       out.push({ id, origin: o.code === 0 ? withoutUserinfo(o.stdout.trim()) : null });
       return; // never below a repo
@@ -412,9 +466,12 @@ export async function serveList(root: string, maxDepth = 4): Promise<PeerListing
   return out.sort((a, b) => a.id.localeCompare(b.id));
 }
 
+/** A repo's ignored files a peer may copy (.env and the like); never a
+ *  seed's, whose files reach a peer only through its mirror's commits. */
 export async function serveSeeds(root: string, id: string, allow: string[]): Promise<string[]> {
   const dir = safeId(root, id);
   if (!dir) throw new Error(`not a repo: ${id}`);
+  if (reachesSeed(root, dir)) throw new Error(`a seed's files are not served: ${id}`);
   const r = await git(dir, ["ls-files", "-z", "--others", "--ignored", "--exclude-standard", "--directory"]);
   return r.stdout.split("\0").filter((f) => f && !f.endsWith("/") && seedWanted(allow, f)).sort();
 }
@@ -431,7 +488,8 @@ export async function serveSeed(root: string, id: string, file: string, allow: s
 }
 
 export type GateCommand =
-  | { kind: "upload-pack"; path: string }
+  /** `mirror` is the seed's name when `path` is canopy's mirror of a seed */
+  | { kind: "upload-pack"; path: string; mirror?: string }
   | { kind: "list" }
   | { kind: "seeds"; id: string }
   | { kind: "seed"; id: string; file: string };
@@ -451,7 +509,14 @@ export const ENTER_REPO_SUFFIXES = ["/.git", "", ".git/.git", ".git"];
  *  so nothing under the root can hand a symlink, a worktree's gitfile or a
  *  commondir off to something outside it. A resolved path with no existing
  *  candidate at all is left to the lexical check alone: upload-pack itself
- *  will fail on it. */
+ *  will fail on it.
+ *
+ *  A seed is never opened (spec 2026-10-01 amendment 4, ruling 8): its
+ *  config is the agents' to write, and upload-pack reads it. A seed asked
+ *  for as `_incubator/<slug>` or `_incubator/<slug>/.git` is answered with
+ *  canopy's mirror of it, which the caller checks is there; any other path
+ *  that is in the seeds dir, or leads into it by a link, a suffix, a
+ *  gitfile or a commondir, is refused. */
 export function gateCommand(line: string, root: string, home: string): GateCommand | { error: string } {
   const w = parseQuotedWords(line);
   if (!w || w.length === 0) return { error: "refused" };
@@ -460,6 +525,17 @@ export function gateCommand(line: string, root: string, home: string): GateComma
     const path = resolve(raw.startsWith("/") ? raw : join(home, raw));
     const rel = relative(root, path);
     if (rel === "" || rel.startsWith("..") || isAbsolute(rel)) return { error: "outside the workspace" };
+    const seeds = seedsDirs(root);
+    const under = seedsRootOf(path, seeds);
+    if (under !== null) {
+      const parts = relative(under, path).split(sep);
+      const slug = mirrorSlug(parts[0] ?? "");
+      if (slug !== null && (parts.length === 1 || (parts.length === 2 && parts[1] === ".git"))) {
+        return { kind: "upload-pack", path: mirrorPath(root, slug), mirror: slug };
+      }
+      return { error: SEED_SERVED_AS };
+    }
+    if (seedsDirOf(path, seeds) !== null) return { error: SEED_SERVED_AS };
     let realRoot: string | null = null;
     for (const suffix of ENTER_REPO_SUFFIXES) {
       const candidate = path + suffix;
@@ -471,7 +547,10 @@ export function gateCommand(line: string, root: string, home: string): GateComma
       }
       let realCandidate: string;
       try { realCandidate = realpathSync(candidate); } catch { continue; } // gone between the stat and here
-      if (escapes(realRoot, realCandidate) || candidateEscapes(realCandidate, realRoot)) return { error: "outside the workspace" };
+      const within = realRoot;
+      const reach = candidateReach(realCandidate);
+      if (escapes(within, realCandidate) || reach === null || reach.some((p) => escapes(within, p))) return { error: "outside the workspace" };
+      if (reach.some((p) => inSeeds(p, seeds))) return { error: SEED_SERVED_AS };
     }
     return { kind: "upload-pack", path };
   }
@@ -641,8 +720,9 @@ function underRepo(root: string, id: string): boolean {
  *  opens a remote helper). The clone itself takes "--"
  *  ahead of the url and destination for the same reason. A failure cloning
  *  or setting up one repo — including one thrown by initRepo or seedRepo —
- *  is recorded in `failed` and the loop moves on to the next repo. */
-export async function cloneMissing(root: string, peers: Peer[], allow: string[], dry: boolean, env: Record<string, string>) {
+ *  is recorded in `failed` and the loop moves on to the next repo. An id
+ *  `skip` names is never cloned (a seed, on an isolated backend). */
+export async function cloneMissing(root: string, peers: Peer[], allow: string[], dry: boolean, env: Record<string, string>, skip?: (id: string) => boolean) {
   const cloned: string[] = [];
   const failed: { id: string; error: string }[] = [];
   const gitPeers = peers.filter((p) => p.role === "git");
@@ -652,7 +732,7 @@ export async function cloneMissing(root: string, peers: Peer[], allow: string[],
     const listing = await listPeer(p, allow);
     if (!Array.isArray(listing)) continue;
     for (const { id, origin } of listing) {
-      if (!isSafeRel(id)) continue;
+      if (!isSafeRel(id) || skip?.(id)) continue;
       const dest = join(root, id);
       if (!repoWanted(p, id) || existsSync(dest) || cloned.includes(id)) continue;
       if (underRepo(root, id)) continue;
@@ -838,7 +918,16 @@ export async function trackBranch(repo: string, peer: string, branch: string): P
   if (r.code !== 0) throw new Error(r.stderr.trim());
 }
 
-export interface PassOptions { self: string; peers: Peer[]; seed: string[]; dry: boolean; root: string }
+export interface PassOptions {
+  self: string;
+  peers: Peer[];
+  seed: string[];
+  dry: boolean;
+  root: string;
+  /** ids the pass leaves alone, here and on the peers: neither synced nor
+   *  cloned (the seeds, on an isolated backend) */
+  skip?: (id: string) => boolean;
+}
 
 /** Peers that failed to connect this pass; shared by syncRepo calls so an
  *  asleep peer costs one timeout per pass. */
@@ -923,12 +1012,14 @@ export function syncAll(ids: string[], opts: PassOptions, concurrency: number): 
 
 async function syncAllOnce(ids: string[], opts: PassOptions, concurrency: number): Promise<SyncAllResult> {
   const seen = new PassSeen();
-  const { cloned, failed } = await cloneMissing(opts.root, opts.peers, opts.seed, opts.dry, { GIT_SSH_COMMAND: gitSshCommand(configDir()) });
+  const { cloned, failed } = await cloneMissing(opts.root, opts.peers, opts.seed, opts.dry, { GIT_SSH_COMMAND: gitSshCommand(configDir()) }, opts.skip);
+  const skip = opts.skip;
+  const here = skip ? ids.filter((id) => !skip(id)) : ids;
   const states = new Map<string, PeerState>();
   // In dry mode, cloneMissing lists what it would clone without making the
   // folder; syncing one of those ids would run git against a path that does
   // not exist. Only a real clone joins the worker list.
-  const all = opts.dry ? ids : [...ids, ...cloned.filter((c) => !ids.includes(c))];
+  const all = opts.dry ? here : [...here, ...cloned.filter((c) => !here.includes(c))];
   let next = 0;
   const worker = async (): Promise<void> => {
     while (next < all.length) {

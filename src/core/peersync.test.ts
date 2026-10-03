@@ -11,6 +11,7 @@ import {
   fastForward,
   fetchPeer,
   gateCommand,
+  type GateCommand,
   gitSshCommand,
   initRepo,
   isBusy,
@@ -18,6 +19,7 @@ import {
   PassSeen,
   peerWips,
   safeId,
+  SEED_SERVED_AS,
   seedRepo,
   serveList,
   serveSeed,
@@ -28,6 +30,8 @@ import {
   takeWip,
   trackBranch,
 } from "./peersync";
+import { setSeedRoots } from "./seedgit";
+import { SeedMirrors } from "./seedmirror";
 import type { Peer } from "./types";
 
 let root = "";
@@ -474,6 +478,14 @@ describe("gateCommand", () => {
   test("git-upload-pack under the root, home-relative or absolute", () => {
     expect(gateCommand("git-upload-pack 'dev/São Paulo'", rootAbs, home)).toEqual({ kind: "upload-pack", path: "/home/eric/dev/São Paulo" });
     expect(gateCommand("git-upload-pack '/home/eric/dev/a'", rootAbs, home)).toEqual({ kind: "upload-pack", path: "/home/eric/dev/a" });
+  });
+  test("a seed is answered with canopy's mirror of it, and nothing else in the seeds folder is", () => {
+    const mirror: GateCommand = { kind: "upload-pack", path: "/home/eric/dev/.canopy-mirrors/coin/.git", mirror: "coin" };
+    expect(gateCommand("git-upload-pack 'dev/_incubator/coin'", rootAbs, home)).toEqual(mirror);
+    expect(gateCommand("git-upload-pack '/home/eric/dev/_incubator/coin/.git/'", rootAbs, home)).toEqual(mirror);
+    for (const p of ["dev/_incubator", "dev/_incubator/", "dev/_incubator/coin/src", "dev/_incubator/coin/.git/config", "dev/_incubator/.hidden", "dev/_incubator/coin.git"]) {
+      expect(gateCommand(`git-upload-pack '${p}'`, rootAbs, home)).toEqual({ error: SEED_SERVED_AS });
+    }
   });
   test("refuses paths outside the root and other git commands", () => {
     expect(gateCommand("git-upload-pack 'dev/../.ssh'", rootAbs, home)).toHaveProperty("error");
@@ -1354,42 +1366,95 @@ describe("canopy peers gate", () => {
     expect(no.stderr).toContain("canopy-peer: refused");
   });
 
-  test("refuses to serve a seed whose config canopy will not run, before upload-pack reads it", async () => {
+  test("serves a seed from canopy's mirror and runs nothing in the seed; no mirror, no serve", async () => {
     const ws = join(root, "ws");
     const seed = join(ws, "_incubator", "gated");
     await mkdir(seed, { recursive: true });
-    expect((await exec(["git", "init", "-q", "-b", "main"], { cwd: seed })).code).toBe(0);
-    expect((await exec(["git", "config", "uploadpack.allowAnySHA1InWant", "true"], { cwd: seed })).code).toBe(0);
+    await sh(seed, "init", "-q", "-b", "main");
+    await sh(seed, "config", "user.email", "t@t");
+    await sh(seed, "config", "user.name", "t");
+    await commit(seed, "s.txt", "s\n");
+    const head = (await sh(seed, "rev-parse", "HEAD")).trim();
     const no = await gate(`git-upload-pack '${seed}'`, ws);
     expect(no.code).toBe(1);
-    expect(no.stderr).toContain("uploadpack.allowanysha1inwant");
+    expect(no.stderr).toContain("canopy has no mirror of this seed yet");
+    setSeedRoots([join(ws, "_incubator")]);
+    try {
+      expect(await new SeedMirrors(ws).sync(seed)).toBe("synced");
+    } finally {
+      setSeedRoots([]);
+    }
+    // from here any git run in the seed fails on its config
+    await writeFile(join(seed, ".git", "config"), "[broken\n");
+    const fake = join(root, "fake-ssh-seed");
+    await writeFile(fake, `#!/bin/sh\nshift\nSSH_ORIGINAL_COMMAND="$*" HOME=${root} exec ${process.execPath} ${bin} peers gate --root ${ws}\n`);
+    await exec(["chmod", "+x", fake]);
+    const env = { GIT_SSH_COMMAND: fake, GIT_SSH_VARIANT: "simple" };
+    for (const [asked, dest] of [["ws/_incubator/gated", "seed-clone"], ["ws/_incubator/gated/.git", "seed-clone-git"]] as const) {
+      const r = await exec(["git", "clone", "-q", "--no-checkout", `peerhost:${asked}`, join(root, dest)], { env });
+      expect(r.stderr).toBe("");
+      expect(r.code).toBe(0);
+      expect((await exec(["git", "rev-parse", "origin/main"], { cwd: join(root, dest) })).stdout.trim()).toBe(head);
+    }
     const top = await gate(`git-upload-pack '${join(ws, "_incubator")}'`, ws);
     expect(top.code).toBe(1);
+    expect(top.stderr).toContain(SEED_SERVED_AS);
+    const inner = await gate(`git-upload-pack '${join(seed, "sub")}'`, ws);
+    expect(inner.code).toBe(1);
+    expect(inner.stderr).toContain(SEED_SERVED_AS);
   });
 
-  test("judges the folder upload-pack would open, not only the path asked for", async () => {
+  test("refuses every other way into a seed upload-pack would open", async () => {
     const ws = join(root, "ws");
-    const bad = async (dir: string, bare = false): Promise<void> => {
-      await mkdir(dir, { recursive: true });
-      expect((await exec(["git", "init", "-q", ...(bare ? ["--bare"] : []), "-b", "main"], { cwd: dir })).code).toBe(0);
-      expect((await exec(["git", "config", "uploadpack.allowAnySHA1InWant", "true"], { cwd: dir })).code).toBe(0);
+    const seed = join(ws, "_incubator", "hidden");
+    await mkdir(seed, { recursive: true });
+    await sh(seed, "init", "-q", "-b", "main");
+    const refused = async (path: string): Promise<void> => {
+      const r = await gate(`git-upload-pack '${path}'`, ws);
+      expect(r.code).toBe(1);
+      expect(r.stderr).toContain(SEED_SERVED_AS);
     };
     // a link outside the seeds folder that leads into a seed
-    await bad(join(ws, "_incubator", "hidden"));
-    await symlink(join(ws, "_incubator", "hidden"), join(ws, "via-link"));
-    const link = await gate(`git-upload-pack '${join(ws, "via-link")}'`, ws);
-    expect(link.code).toBe(1);
-    expect(link.stderr).toContain("allowanysha1inwant");
-    // a name that is not there, whose .git suffix is a seed
-    await bad(join(ws, "_incubator", "coin.git"));
-    const suffix = await gate(`git-upload-pack '${join(ws, "_incubator", "coin")}'`, ws);
-    expect(suffix.code).toBe(1);
-    expect(suffix.stderr).toContain("allowanysha1inwant");
-    // a seed folder that is itself a bare repo, with no .git to judge
-    await bad(join(ws, "_incubator", "barren"), true);
-    const bare = await gate(`git-upload-pack '${join(ws, "_incubator", "barren")}'`, ws);
-    expect(bare.code).toBe(1);
-    expect(bare.stderr).toContain("bare");
+    await symlink(seed, join(ws, "via-link"));
+    await refused(join(ws, "via-link"));
+    // a name that is not there, whose .git suffix is a link into a seed
+    await symlink(seed, join(ws, "sneaky.git"));
+    await refused(join(ws, "sneaky"));
+    // a repo whose .git is a gitfile pointing into a seed
+    await mkdir(join(ws, "gitfile"), { recursive: true });
+    await writeFile(join(ws, "gitfile", ".git"), `gitdir: ${join(seed, ".git")}\n`);
+    await refused(join(ws, "gitfile"));
+    // a seed name no mirror takes
+    await refused(join(ws, "_incubator", ".dot"));
+  });
+
+  test("list names a seed with no origin and runs no git in it; seeds and seed refuse it; a skip keeps it from a clone", async () => {
+    const ws = join(root, "ws");
+    const seed = join(ws, "_incubator", "listed");
+    await mkdir(seed, { recursive: true });
+    await sh(seed, "init", "-q", "-b", "main");
+    await sh(seed, "remote", "add", "origin", "git@github.com:x/listed.git");
+    await writeFile(join(seed, ".env"), "S=1\n");
+    await writeFile(join(seed, ".gitignore"), ".env\n");
+    // any git run in the seed now fails on its config
+    const config = join(seed, ".git", "config");
+    await writeFile(config, `${await readFile(config, "utf8")}[broken\n`);
+    const listed = await serveList(ws);
+    expect(listed).toContainEqual({ id: "_incubator/listed", origin: null });
+    expect(listed.find((r) => r.id === "group/a")?.origin).toBe("git@github.com:x/a.git");
+    await expect(serveSeeds(ws, "_incubator/listed", [".env"])).rejects.toThrow("a seed's files are not served");
+    await expect(serveSeed(ws, "_incubator/listed", ".env", [".env"])).rejects.toThrow("a seed's files are not served");
+    // nor through a link to it from outside the seeds folder
+    await mkdir(join(ws, "linked"), { recursive: true });
+    await symlink(join(seed, ".git"), join(ws, "linked", ".git"));
+    await expect(serveSeeds(ws, "linked", [".env"])).rejects.toThrow("a seed's files are not served");
+    const peer: Peer = { name: "mini", alias: null, root: ws, role: "git" };
+    const ours = await mkdtemp(join(root, "ours-"));
+    const all = (await cloneMissing(ours, [peer], [".env"], true, {})).cloned;
+    expect(all).toContain("_incubator/listed");
+    const kept = (await cloneMissing(ours, [peer], [".env"], true, {}, (id) => id.startsWith("_incubator/"))).cloned;
+    expect(kept.some((id) => id.startsWith("_incubator/"))).toBe(false);
+    expect(kept).toContain("group/a");
   });
 
   test("serves git-upload-pack so a clone works through it", async () => {
