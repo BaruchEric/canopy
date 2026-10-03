@@ -123,7 +123,8 @@ describe("a stage alive in one seed, on an isolated backend", () => {
     const seeds = seedOps("mini");
     await writeSeed(alpha(), ".canopy/pick.json", '{"kind":"new","host":"vercel","why":"x"}\n');
     client.gits.length = 0;
-    expect(await within(seeds.commit(alpha(), [".canopy/pick.json"], "scout: alpha"), 3000)).toBeUndefined();
+    const alphaHead = await within(seeds.commit(alpha(), [".canopy/pick.json"], "scout: alpha"), 3000);
+    expect(alphaHead).toBe((await Bun.$`git -C ${alpha()} rev-parse HEAD`.quiet().text()).trim());
     expect(await lastSubject(alpha())).toBe("scout: alpha");
     // canopy ran none of it here
     expect(client.gits.length).toBeGreaterThan(0);
