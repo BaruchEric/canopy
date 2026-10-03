@@ -493,6 +493,20 @@ nothing but these rules (and Docker's own trailing `-j RETURN`, if your
 version adds one, which losing does no harm). Anything else there would be
 gone after the reload, so move it into the block first.
 
+Then look at the order of FORWARD's first rules:
+
+```
+sudo iptables -S FORWARD | head
+```
+
+`-j DOCKER-USER` has to come above `-j ts-forward`. Tailscale's chain ends by
+accepting anything that leaves through `tailscale0`, so where it runs first, a
+stages packet to another tailnet node (the Mac's canopy, the NAS) is let
+through before the 100.64.0.0/10 drop sees it. Both daemons insert their jump
+at the top, so whichever started last wins, and that can change across a
+reboot. With no `ts-forward` in the list (tailscale on nftables keeps its own
+table) the drop holds regardless.
+
 The fence covers forwarded traffic: other containers, the LAN, the tailnet.
 Traffic to the host's own addresses (its LAN IP, its tailnet IP, the bridge
 gateway 10.250.13.1) is INPUT, which ufw's default deny incoming refuses for
@@ -555,6 +569,13 @@ docker compose exec -e CANOPY_FENCE_TAILNET_IP=$(tailscale ip -4) \
 
 Each target that says `BAD` there and `ok` in stages is one the fence is
 refusing. A target that says `ok` on both sides proves nothing either way.
+
+The mini's own tailnet address does not test the tailnet part of the fence:
+docker hands a connection to it straight to the shells container, so it never
+leaves through `tailscale0`. Run both checks once more with
+`CANOPY_FENCE_TAILNET_IP` set to another node that answers on 7850, the Mac
+(`tailscale status` shows its address). That probe is the one that says
+whether `ts-forward` lets stages traffic out ahead of the drop.
 
 **The incubator word.** The incubator view should now say "stages isolated".
 
