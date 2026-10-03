@@ -37,8 +37,9 @@ const SOURCE_WORD: Record<InboxItem["source"], string> = { ask: "agent", run: "r
 
 /** The retro lessons on offer, each with its own accept and dismiss.
  *  Accepting never edits anything itself: it opens a chat on canopy's own
- *  checkout that asks before each write, or opens the user's own workflow
- *  file. Dismissing takes it off offer until it comes up three more times. */
+ *  checkout with the lesson in its message box, unsent, or opens the user's
+ *  own workflow file. Dismissing takes it off offer until it comes up three
+ *  more times. */
 function AdviceOffers({ offers, busy, onAnswer }: { offers: readonly AdviceOffer[]; busy: boolean; onAnswer: (key: string, accept: boolean) => void }) {
   return (
     <ul className="advice-list">
@@ -63,7 +64,7 @@ function AdviceOffers({ offers, busy, onAnswer }: { offers: readonly AdviceOffer
               type="button"
               className="mini strong"
               disabled={busy}
-              title="Opens a chat on canopy's own checkout with this lesson as its first message, and the chat asks before it writes anything; advice on a workflow of your own opens that file instead"
+              title="Opens a chat on canopy's own checkout with this lesson and its edit in the message box. Nothing runs until you read it and send it, and the chat then runs with yolo off under your usual permission rules. Advice on a workflow of your own opens that file instead"
               onClick={() => onAnswer(o.key, true)}
             >
               accept

@@ -578,6 +578,9 @@ interface CanopyState {
   stages: IncubatorStages | null;
   /** the retro lessons home has on offer, which the inbox shows as one item */
   advice: AdviceOffer[];
+  /** an accepted lesson's text by chat run id, which that chat's message box
+   *  starts with; the user sends it, or not */
+  chatDrafts: Record<string, string>;
   /** the user's own workflow file an accepted lesson named, until put away */
   adviceFile: Extract<AdviceAccepted, { kind: "file" }> | null;
   /** whether the inbox popover is up, and the item it opened on */
@@ -1313,6 +1316,7 @@ export const useStore = create<CanopyState>((set, get) => ({
   sproutsReady: false,
   stages: null,
   advice: [],
+  chatDrafts: {},
   adviceFile: null,
   inboxOpen: false,
   inboxFocus: null,
@@ -2266,7 +2270,12 @@ export const useStore = create<CanopyState>((set, get) => ({
     if (accepted?.kind === "chat") {
       // the run as the answer gave it, as startRun does, so its sheet never opens on nothing
       const run = accepted.run;
-      set((s) => ({ inboxOpen: false, inboxFocus: null, ...(run && !s.runs[run.id] ? { runs: { ...s.runs, [run.id]: run } } : {}) }));
+      set((s) => ({
+        inboxOpen: false,
+        inboxFocus: null,
+        chatDrafts: { ...s.chatDrafts, [accepted.runId]: accepted.draft },
+        ...(run && !s.runs[run.id] ? { runs: { ...s.runs, [run.id]: run } } : {}),
+      }));
       get().showRun(accepted.runId);
     }
     if (accepted?.kind === "file") set({ adviceFile: accepted });
@@ -2640,7 +2649,11 @@ export const useStore = create<CanopyState>((set, get) => ({
   },
   sayRun: async (runId, text) => {
     const run = await api.say(runId, text);
-    set((s) => ({ runs: { ...s.runs, [run.id]: run } }));
+    set((s) => {
+      // a draft once sent is done with
+      const { [runId]: _sent, ...chatDrafts } = s.chatDrafts;
+      return { runs: { ...s.runs, [run.id]: run }, chatDrafts };
+    });
   },
   stopRun: async (runId) => {
     const run = await api.stopRun(runId);

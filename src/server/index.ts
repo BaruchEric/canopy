@@ -665,9 +665,12 @@ const stageAgent = (a: AgentSettings): AgentSettings => ({ ...a, yolo: false, ex
  *  workflow of the user's own, in the config dir, is opened on this
  *  backend's desktop when it has one, else named for the page to show. A
  *  bundled workflow, or advice with no file, opens a chat on canopy's own
- *  checkout with the edit quoted as its first message. The chat's agent is
- *  the repo's chat route with yolo off and its extra flags dropped, as a
- *  stage's is, so it asks before it writes anything. */
+ *  checkout, idle: the lesson and its edit come back as a draft for the
+ *  page's message box, and no agent starts until the user reads it and
+ *  sends it. The text is an agent's, so it is never sent on the user's
+ *  behalf. The chat's agent is the repo's chat route with yolo off and its
+ *  extra flags dropped, as a stage's is; the user's own allow rules still
+ *  apply, as in any chat they start. */
 async function acceptAdvice(state: ServerState, entry: AdviceEntry): Promise<AdviceAccepted> {
   const wf = entry.file ? findWorkflow(await loadWorkflows({ path: "", host: "none" }), entry.file) : undefined;
   if (wf?.source === "user") {
@@ -685,9 +688,9 @@ async function acceptAdvice(state: ServerState, entry: AdviceEntry): Promise<Adv
   await needHarness(state, agent.harness, repo.path);
   // the bundled file as the checkout holds it, not where this process runs from
   const file = wf ? join("lib", "workflows", relative(BUNDLED_DIR, wf.file)) : null;
-  const run = state.runner.start(repo, "chat", ACTIONS.chat, adviceMessage(entry, file), agent);
+  const run = state.runner.start(repo, "chat", ACTIONS.chat, "", agent);
   // the run itself, so the page shows the chat before its event lands
-  return { kind: "chat", runId: run.id, repoId: repo.id, run };
+  return { kind: "chat", runId: run.id, repoId: repo.id, run, draft: adviceMessage(entry, file) };
 }
 
 /** whether a repo is a sprout's seed, by its path under the launch root:

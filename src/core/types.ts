@@ -1374,8 +1374,10 @@ export interface AdviceOffer extends Advice {
 
 /** What accepting a piece of advice did. */
 export type AdviceAccepted =
-  /** a chat on the repo that owns the file, the edit its first message */
-  | { kind: "chat"; runId: string; repoId: string; run?: Run }
+  /** a chat on the repo that owns the file, opened idle: `draft` (the
+   *  lesson and its edit) goes in its message box for the user to read and
+   *  send, and nothing runs before they do */
+  | { kind: "chat"; runId: string; repoId: string; run?: Run; draft: string }
   /** a workflow in the config dir: opened on the backend's desktop, or named for the user to open */
   | { kind: "file"; path: string; opened: boolean; edit?: string };
 

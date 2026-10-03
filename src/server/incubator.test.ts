@@ -105,7 +105,7 @@ beforeAll(async () => {
       // a stand-in for the chat or the file, so no agent starts
       accept: async (e) => {
         if (e.key === "refuse-me") throw new IncubatorError(409, "canopy's own checkout is not in this backend's scan");
-        return { kind: "chat", runId: `run-${e.key}`, repoId: "app" };
+        return { kind: "chat", runId: `run-${e.key}`, repoId: "app", draft: e.lesson };
       },
     },
   });
@@ -341,7 +341,7 @@ describe("retro advice", () => {
     const res = await postJson("/api/incubator/advice", { key: "keep-me", accept: true });
     expect(res.status).toBe(200);
     const body = (await res.json()) as { advice: AdviceOffer[]; accepted?: unknown };
-    expect(body.accepted).toEqual({ kind: "chat", runId: "run-keep-me", repoId: "app" });
+    expect(body.accepted).toEqual({ kind: "chat", runId: "run-keep-me", repoId: "app", draft: "Lesson keep-me." });
     expect(body.advice.map((o) => o.key)).toEqual(["refuse-me"]);
   });
 
