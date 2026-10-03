@@ -96,8 +96,17 @@ const clean = (env: Record<string, string | undefined>): Record<string, string> 
   return out;
 };
 
+interface Watcher {
+  up: boolean;
+  onUp: (() => void) | undefined;
+  onDown: (() => void) | undefined;
+  onAnswer: (() => void) | undefined;
+}
+
 export class StageClient {
   private last: string[] | null = null;
+  /** every watch's listeners, each with the up it last told */
+  private readonly watchers = new Set<Watcher>();
   constructor(private readonly socket: string) {}
 
   /** a process in the stages container whose stdio rides the socket */
@@ -224,7 +233,34 @@ export class StageClient {
   async hello(timeoutMs = HELLO_TIMEOUT): Promise<string[] | null> {
     const answer = await this.ask({ t: "hello" }, (f) => (f.t === "hello" && "harnesses" in f ? f.harnesses : undefined), timeoutMs);
     this.last = answer;
+    this.tell(answer !== null);
     return answer;
+  }
+
+  /** Each watch hears every hello, whoever made it: an answer, and a flip
+   *  from its last word. On a microtask, so a listener never runs inside
+   *  the run or check that asked, and caught, so one that throws cannot
+   *  turn an answer into a miss for the caller. */
+  private tell(now: boolean): void {
+    for (const w of this.watchers) {
+      const back = now && !w.up;
+      const gone = !now && w.up;
+      w.up = now;
+      const fire = (f: (() => void) | undefined): void => {
+        if (!f) return;
+        queueMicrotask(() => {
+          if (!this.watchers.has(w)) return;
+          try {
+            f();
+          } catch {
+            // a listener's own failure is its own
+          }
+        });
+      };
+      if (back) fire(w.onUp);
+      if (gone) fire(w.onDown);
+      if (now) fire(w.onAnswer);
+    }
   }
 
   /** whether any process in the stages container has its cwd in the seed;
@@ -238,37 +274,28 @@ export class StageClient {
     return this.last;
   }
 
-  /** A hello now and every `everyMs`, one at a time; `onUp` on the first
-   *  answer and on each answer after a miss, `onDown` on each miss after an
-   *  answer. Returns the stop. */
-  watch(everyMs = 15_000, onUp?: () => void, onDown?: () => void): () => void {
-    let up = false;
-    let stopped = false;
+  /** A hello now and every `everyMs`, one at a time. Every hello, the
+   *  watch's own or a run's or a check's, tells the listeners: `onUp` on
+   *  the first answer and on each answer after a miss, `onDown` on each miss
+   *  after an answer, `onAnswer` on every answer. Returns the stop, which
+   *  also stops the telling. */
+  watch(everyMs = 15_000, onUp?: () => void, onDown?: () => void, onAnswer?: () => void): () => void {
+    const w: Watcher = { up: false, onUp, onDown, onAnswer };
+    this.watchers.add(w);
     let beating = false;
-    const beat = async (): Promise<void> => {
-      if (beating || stopped) return;
-      beating = true;
-      try {
-        const now = (await this.hello()) !== null;
-        if (stopped) return;
-        const back = now && !up;
-        const gone = !now && up;
-        up = now;
-        if (back) onUp?.();
-        if (gone) onDown?.();
-      } finally {
-        beating = false;
-      }
-    };
     const tick = (): void => {
-      beat().catch(() => {
-        // onUp or onDown threw; the next tick still runs
-      });
+      if (beating || !this.watchers.has(w)) return;
+      beating = true;
+      this.hello()
+        .catch(() => null)
+        .finally(() => {
+          beating = false;
+        });
     };
     tick();
     const t = setInterval(tick, everyMs);
     return () => {
-      stopped = true;
+      this.watchers.delete(w);
       clearInterval(t);
     };
   }

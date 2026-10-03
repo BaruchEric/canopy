@@ -159,6 +159,45 @@ describe("the stage client", () => {
     expect(downs).toBe(1);
   }, 20_000);
 
+  test("a hello made by anyone, not only the watch, moves the watch's up and down", async () => {
+    const sock = join(dir, "other.sock");
+    const other = new StageClient(sock);
+    let stop = await runner(sock);
+    let ups = 0;
+    let downs = 0;
+    let answers = 0;
+    const stopWatch = other.watch(400, () => ups++, () => downs++, () => answers++);
+    await until(() => ups === 1);
+    expect(ups).toBe(1);
+    expect(answers).toBe(1);
+    // the runner goes away and comes back between two beats; a run or a
+    // check saw it gone with a hello of its own
+    await stop();
+    expect(await other.hello()).toBe(null);
+    await Bun.sleep(0);
+    expect(downs).toBe(1);
+    stop = await runner(sock);
+    // the next beat finds it back: up again within one interval
+    await until(() => ups === 2, 800);
+    expect(ups).toBe(2);
+    expect(answers).toBeGreaterThanOrEqual(2);
+    // a stopped watch hears no more hellos
+    stopWatch();
+    await stop();
+    await other.hello();
+    await Bun.sleep(0);
+    expect(downs).toBe(1);
+  }, 20_000);
+
+  test("a listener that throws does not turn an answer into a miss", async () => {
+    const stopWatch = client.watch(60_000, () => {
+      throw new Error("boom");
+    });
+    expect(await client.hello()).toEqual(expect.any(Array));
+    await Bun.sleep(10);
+    stopWatch();
+  });
+
   test("hello answers, and a dead socket reads as not answering", async () => {
     expect(await client.hello()).toEqual(expect.any(Array));
     expect(await new StageClient(join(dir, "none.sock")).hello(300)).toBe(null);

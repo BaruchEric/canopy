@@ -224,6 +224,54 @@ describe("through a stage runner that comes and goes", () => {
   }, 30_000);
 });
 
+describe("a runner that blinks between two beats", () => {
+  let sock = "";
+  let client: StageClient;
+  let stopRunner: (() => Promise<void>) | null = null;
+  const startRunner = async () => {
+    const { stop } = await startStageRunner({
+      socket: sock,
+      root: join(root, "_incubator"),
+      env: { PATH: process.env["PATH"], HOME: scratch },
+      programs: { claude: "/usr/bin/true", codex: "/nonexistent/codex" },
+    });
+    stopRunner = stop;
+  };
+  beforeAll(async () => {
+    await fresh();
+    sock = join(scratch, "s.sock");
+    await startRunner();
+    client = new StageClient(sock);
+    server = await startServer({
+      root,
+      port: 0,
+      chan: null,
+      harnesses: ["claude"],
+      // beats far apart, so the outage falls between two of them
+      incubator: { autostart: true, transcribe: null, notes: null, ship: null, stage: client, stageEvery: 4000 },
+      runner: { driver: (h) => new HoldingDriver(h) },
+    });
+  });
+  afterAll(async () => {
+    await stopRunner?.();
+    await done();
+  });
+
+  test("a hello a run made while the runner was away holds the queue, and the next beat that finds it back starts it", async () => {
+    await until(async () => (await stages()).isolated, "the runner");
+    await stopRunner?.();
+    stopRunner = null;
+    // a run's or a check's hello finds it gone, between two beats
+    expect(await client.hello()).toBe(null);
+    const s = (await (await intake("a tally")).json()) as Sprout;
+    await until(async () => (await stages()).waiting === "the stage runner is not answering", "the hold");
+    expect((await sprouts()).find((x) => x.id === s.id)?.status).toBe("queued");
+    await startRunner();
+    await until(async () => (await sprouts()).find((x) => x.id === s.id)?.status === "clarifying", "clarify to start", 8000);
+    expect((await stages()).waiting).toBe(null);
+  }, 30_000);
+});
+
 describe("a stage process alive after its run ended", () => {
   const seed = () => join(root, "_incubator", "coin");
   beforeAll(async () => {
