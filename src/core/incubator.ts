@@ -24,6 +24,8 @@ import {
   SEEDS_DIR,
   SCOUT_FILES,
   SHIP,
+  HAND_OFF,
+  isOwnStep,
   SPROUT_CONCURRENCY,
   RUNNING_STATUSES,
   WORKFLOW_STATUS,
@@ -837,7 +839,7 @@ export class Incubator {
   /** Starts queued, prepared sprouts, oldest first, while a slot is free.
    *  While `isolation` says why no stage may start, a sprout whose next
    *  step is a stage stays queued and claims no slot; one at canopy's own
-   *  ship still goes. */
+   *  ship or hand-off still goes. */
   pump(): void {
     if (this.detached || this.deps.autostart === false) return;
     const why = this.deps.isolation?.() ?? null;
@@ -848,16 +850,16 @@ export class Incubator {
       .sort((a, b) => a.createdAt - b.createdAt);
     // apart from the slots: a sprout bound for a stage is held for the
     // runner whether or not a slot is free for it
-    const held = why !== null && queued.some((s) => nextWorkflow(s) !== SHIP) ? why : null;
+    const held = why !== null && queued.some((s) => !isOwnStep(nextWorkflow(s))) ? why : null;
     for (const s of queued) {
       if (free <= 0) break;
       const name = nextWorkflow(s);
-      if (why !== null && name !== SHIP) continue;
+      if (why !== null && !isOwnStep(name)) continue;
       free -= 1;
       // the slot is claimed here, before anything awaits
       s.status = statusFor(name, undefined);
       delete s.parked;
-      this.track(name === SHIP ? this.ship(s) : this.startStage(s, name));
+      this.track(name === SHIP ? this.ship(s) : name === HAND_OFF ? this.handOff(s) : this.startStage(s, name));
     }
     if (held !== this.held) {
       this.held = held;
@@ -1240,6 +1242,11 @@ export class Incubator {
   }
 
   /** `pump` false for a gate: its flow still holds the slot */
+  /** canopy's push of an extend's branch (amendment 6, ruling 6) */
+  private async handOff(s: Sprout): Promise<void> {
+    await this.park(s, "the hand-off of a branch is not built yet");
+  }
+
   private async park(s: Sprout, reason: string, pump = true): Promise<void> {
     if (sproutEnded(s)) return;
     s.status = "parked";
@@ -1261,7 +1268,7 @@ export class Incubator {
   private async changed(s: Sprout, event?: NoteEvent): Promise<void> {
     s.updatedAt = this.now();
     // the three ends are told here, each once: its retro comes due with it
-    if (event === "live" || event === "rejected" || event === "stopped") this.endRetro(s);
+    if (event === "live" || event === "handed-off" || event === "rejected" || event === "stopped") this.endRetro(s);
     if (this.detached || this.gone(s)) return;
     try {
       await this.deps.store.save(s);

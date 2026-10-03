@@ -1,6 +1,11 @@
 import { describe, expect, test } from "bun:test";
 import {
   ANSWERS_FILE,
+  HAND_OFF,
+  branchPushRefusal,
+  extendBranch,
+  githubRepo,
+  hostLine,
   SEED_FILES,
   runAnswersSummary,
   runAnswersText,
@@ -430,15 +435,59 @@ describe("the pick", () => {
     expect(parsePick(pick({ kind: "extend" }))).toEqual({ ok: false, error: "an extend pick needs target: the repo it extends" });
   });
 
-  test("pickRefusal holds the license rules, phaseRefusal holds phase 3 to new picks on vercel", () => {
+  test("pickRefusal holds the license rules", () => {
     const base = { kind: "renovate" as const, host: "vercel" as const, why: "w", target: "https://github.com/a/b" };
     expect(pickRefusal(base)).toBe("a renovate pick needs the upstream's SPDX license");
     expect(pickRefusal({ ...base, license: "AGPL-3.0" })).toBe("AGPL-3.0 is not on the allowed license list");
     expect(pickRefusal({ ...base, license: "MIT" })).toBe(null);
     expect(pickRefusal({ kind: "new", host: "vercel", why: "w" })).toBe(null);
-    expect(phaseRefusal({ kind: "new", host: "vercel", why: "w" })).toBe(null);
-    expect(phaseRefusal({ ...base, license: "MIT" })).toBe("a renovate pick arrives in phase 4; the research is in .canopy/research.md");
-    expect(phaseRefusal({ kind: "new", host: "vercel+convex", why: "w" })).toBe("deploying to vercel+convex arrives in phase 4; the research is in .canopy/research.md");
+  });
+
+  test("phaseRefusal: new and renovate on vercel or vercel+firebase; convex and mini park; extend never deploys", () => {
+    const renovate = { kind: "renovate" as const, why: "w", target: "https://github.com/a/b", license: "MIT" };
+    for (const host of ["vercel", "vercel+firebase"] as const) {
+      expect(phaseRefusal({ kind: "new", host, why: "w" })).toBe(null);
+      expect(phaseRefusal({ ...renovate, host })).toBe(null);
+    }
+    expect(phaseRefusal({ kind: "new", host: "vercel+convex", why: "w" })).toBe(
+      "vercel+convex is parked: canopy cannot run a Convex deploy without handing it files outside the project; pick vercel+firebase for a database",
+    );
+    expect(phaseRefusal({ ...renovate, host: "mini" })).toBe("the mini host is not built yet: a stage's compose file would be root on the mini; pick vercel or vercel+firebase");
+    // an extend is a branch, never a deploy, so whatever host scout wrote stands aside
+    for (const host of ["vercel", "vercel+convex", "mini"] as const) expect(phaseRefusal({ kind: "extend", host, why: "w", target: "web-apps/clms" })).toBe(null);
+  });
+
+  test("githubRepo reads a github.com remote in each form, and nothing else", () => {
+    expect(githubRepo("https://github.com/eric/clms")).toEqual({ owner: "eric", name: "clms" });
+    expect(githubRepo("https://github.com/eric/clms.git")).toEqual({ owner: "eric", name: "clms" });
+    expect(githubRepo("https://x:tok@github.com/eric/clms.git/")).toEqual({ owner: "eric", name: "clms" });
+    expect(githubRepo("git@github.com:eric/clms.git")).toEqual({ owner: "eric", name: "clms" });
+    expect(githubRepo("ssh://git@github.com/eric/clms")).toEqual({ owner: "eric", name: "clms" });
+    for (const bad of ["https://gitlab.com/eric/clms", "https://github.com/eric", "https://github.com/eric/clms/tree/main", "https://github.com.evil.io/eric/clms", "http://github.com/eric/clms", "/home/eric/dev/clms", "https://github.com/-x/clms", "https://github.com/eric/..", ""]) {
+      expect(githubRepo(bad)).toBe(null);
+    }
+  });
+
+  test("the hand-off pushes one branch, refused in code for any other ref or remote", () => {
+    const want = { remote: "https://github.com/eric/clms.git", slug: "dark-mode" };
+    expect(extendBranch("dark-mode")).toBe("new/dark-mode");
+    expect(branchPushRefusal({ remote: want.remote, ref: "refs/heads/new/dark-mode" }, want)).toBe(null);
+    expect(branchPushRefusal({ remote: want.remote, ref: "refs/heads/main" }, want)).toBe("canopy pushes only refs/heads/new/dark-mode, not refs/heads/main");
+    expect(branchPushRefusal({ remote: want.remote, ref: "+refs/heads/new/dark-mode" }, want)).toBe("canopy pushes only refs/heads/new/dark-mode, not +refs/heads/new/dark-mode");
+    expect(branchPushRefusal({ remote: want.remote, ref: "refs/heads/new/other" }, want)).toBe("canopy pushes only refs/heads/new/dark-mode, not refs/heads/new/other");
+    expect(branchPushRefusal({ remote: want.remote, ref: "new/dark-mode" }, want)).toBe("canopy pushes only refs/heads/new/dark-mode, not new/dark-mode");
+    expect(branchPushRefusal({ remote: "https://github.com/eric/other.git", ref: "refs/heads/new/dark-mode" }, want)).toBe(
+      "canopy pushes only to https://github.com/eric/clms.git, the extend target's own remote",
+    );
+    expect(branchPushRefusal({ remote: want.remote, ref: "refs/heads/new/dark-mode" }, { ...want, remote: "https://gitlab.com/eric/clms.git" })).toBe(
+      "https://gitlab.com/eric/clms.git is not a github.com repo",
+    );
+  });
+
+  test("hostLine tells a build what its host needs", () => {
+    expect(hostLine({ kind: "new", host: "vercel", why: "w" })).toContain("no database");
+    expect(hostLine({ kind: "new", host: "vercel+firebase", why: "w" })).toContain("VITE_FIREBASE_PROJECT_ID");
+    expect(hostLine({ kind: "extend", host: "vercel", why: "w", target: "x" })).toContain("branch");
   });
 
   test("a record with a pick, a repo and a url reads back; a bad pick refuses the record", () => {
@@ -467,6 +516,35 @@ describe("the chain", () => {
     expect(nextWorkflow(base({ flows: [done("clarify", 1)] }))).toBe("scout");
     expect(nextWorkflow(base({ pick, flows: [done("clarify", 1), done("scout", 2)] }))).toBe("build-new");
     expect(nextWorkflow(base({ pick, flows: [done("clarify", 1), done("scout", 2), done("build-new", 3)] }))).toBe(SHIP);
+  });
+
+  test("a renovate pick builds with renovate then ships; an extend builds with extend then hands off", () => {
+    const flows = [done("clarify", 1), done("scout", 2)];
+    const renovate = { kind: "renovate" as const, host: "vercel" as const, why: "w", target: "https://github.com/a/b", license: "MIT" };
+    const extend = { kind: "extend" as const, host: "vercel" as const, why: "w", target: "web-apps/clms" };
+    expect(nextWorkflow(base({ pick: renovate, flows }))).toBe("renovate");
+    expect(nextWorkflow(base({ pick: renovate, flows: [...flows, done("renovate", 3)] }))).toBe(SHIP);
+    expect(nextWorkflow(base({ pick: extend, flows }))).toBe("extend");
+    expect(nextWorkflow(base({ pick: extend, flows: [...flows, done("extend", 3)] }))).toBe(HAND_OFF);
+    // a build of another kind does not count for this pick
+    expect(nextWorkflow(base({ pick: extend, flows: [...flows, done("build-new", 3)] }))).toBe("extend");
+    expect(statusFor(HAND_OFF, undefined)).toBe("deploying");
+    expect(statusFor("renovate", "Renovate")).toBe("building");
+    expect(statusFor("renovate", "Test")).toBe("testing");
+    expect(statusFor("extend", "Build")).toBe("building");
+    expect(statusFor("extend", "Accept")).toBe("accepting");
+  });
+
+  test("a record with a rebuilt seed and a branch reads back; a bad one is refused", () => {
+    const rec = base({ status: "handed-off", branch: "https://github.com/eric/clms/tree/new/s" });
+    const work = { kind: "extend", from: "https://github.com/eric/clms.git", base: "abc", target: "web-apps/clms", remote: "https://github.com/eric/clms.git", branch: "new/s", at: 1 };
+    expect(parseSproutRecord(JSON.stringify({ ...rec, work }))?.work).toEqual(work as Sprout["work"]);
+    expect(parseSproutRecord(JSON.stringify({ ...rec, work: { kind: "renovate", from: "https://github.com/a/b", base: "abc", at: 1 } }))?.work?.kind).toBe("renovate");
+    expect(parseSproutRecord(JSON.stringify({ ...rec, work: { ...work, branch: undefined } }))).toBe(null);
+    expect(parseSproutRecord(JSON.stringify({ ...rec, work: { ...work, kind: "fork" } }))).toBe(null);
+    expect(parseSproutRecord(JSON.stringify({ ...rec, branch: 3 }))).toBe(null);
+    expect(parseSproutRecord(JSON.stringify({ ...rec, firebase: { project: "p-1", database: true, app: "1:2:web:3" } }))?.firebase?.app).toBe("1:2:web:3");
+    expect(parseSproutRecord(JSON.stringify({ ...rec, firebase: { database: true } }))).toBe(null);
   });
 
   test("a build from before the newest scout does not count", () => {

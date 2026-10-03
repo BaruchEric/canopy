@@ -1428,10 +1428,54 @@ export interface Sprout {
   vercelProject?: string;
   /** the production url once live */
   url?: string;
+  /** what canopy rebuilt the seed from for a renovate or extend pick, once it has */
+  work?: SproutWork;
+  /** an extend's branch on GitHub, once handed off */
+  branch?: string;
+  /** what canopy made on Firebase for a `vercel+firebase` pick, each part once it exists */
+  firebase?: SproutFirebase;
   /** the vault note's revision, for the next replace */
   noteRev?: string;
   createdAt: number;
   updatedAt: number;
+}
+
+/** The source a renovate or extend seed was rebuilt from (amendment 6,
+ *  ruling 2). Set once, so a resume or a restart never rebuilds it. */
+export type SproutWork = RenovateWork | ExtendWork;
+
+interface WorkBase {
+  /** the url it was cloned from, with no userinfo */
+  from: string;
+  /** the commit the work starts from: the upstream's or the target's default branch */
+  base: string;
+  at: number;
+}
+
+export interface RenovateWork extends WorkBase {
+  kind: "renovate";
+}
+
+export interface ExtendWork extends WorkBase {
+  kind: "extend";
+  /** the target's repo id in the scan */
+  target: string;
+  /** where the branch is pushed, `https://github.com/<owner>/<name>.git` */
+  remote: string;
+  /** `new/<slug>` */
+  branch: string;
+}
+
+/** What canopy made on Firebase for a sprout (amendment 6, ruling 10).
+ *  Each mark is set as its part comes to exist, so a resume makes nothing twice. */
+export interface SproutFirebase {
+  project: string;
+  /** the default Firestore database exists */
+  database?: boolean;
+  /** the web app's id, once made */
+  app?: string;
+  /** its SDK config was written to the Vercel project's env */
+  env?: boolean;
 }
 
 /** what the sheet shows beyond the record: the seed's own words */

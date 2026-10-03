@@ -1,15 +1,15 @@
 /**
  * The vault's view of a sprout: one note per project at
  * `02 - Dev/incubator/<slug>.md`, rewritten whole at each change, and a
- * line in that day's daily note when a project starts or parks or goes live or is turned down. An index and summaries only: no raw input
+ * line in that day's daily note when a project starts, parks, goes live, is handed off or is turned down. An index and summaries only: no raw input
  * and no transcript ever reaches the vault. Pure, so it is tested.
  */
 import type { Sprout, SproutStatus } from "./types";
 
-export type NoteEvent = "started" | "questions" | "input" | "parked" | "stopped" | "live" | "rejected";
+export type NoteEvent = "started" | "questions" | "input" | "parked" | "stopped" | "live" | "rejected" | "handed-off";
 
 /** the events that also put a line in the day's note */
-export const DAILY_EVENTS: ReadonlySet<NoteEvent> = new Set<NoteEvent>(["started", "parked", "live", "rejected"]);
+export const DAILY_EVENTS: ReadonlySet<NoteEvent> = new Set<NoteEvent>(["started", "parked", "live", "rejected", "handed-off"]);
 
 export const sproutNotePath = (slug: string): string => `02 - Dev/incubator/${slug}.md`;
 
@@ -51,6 +51,8 @@ const eventWord = (s: Sprout, event: NoteEvent): string => {
       return `parked: ${flat(s.parked ?? "") || "no reason given"}`;
     case "live":
       return `live at ${s.url ?? "an address canopy did not keep"}`;
+    case "handed-off":
+      return `handed off as the branch ${s.branch ?? "canopy did not keep"}`;
     case "rejected":
       return `turned down at eval: ${flat(s.parked ?? "") || "no reason given"}`;
     default:
@@ -79,6 +81,7 @@ const STATUS_WORD: Record<SproutStatus, string> = {
 
 function statusLine(s: Sprout): string {
   if (s.status === "live" && s.url) return `Live at ${s.url}.`;
+  if (s.status === "handed-off" && s.branch) return `Handed off as the branch ${s.branch}.`;
   if (s.status === "rejected") return `Turned down at eval: ${flat(s.parked ?? "") || "no reason given"}`;
   if (s.status === "parked") return `Parked: ${flat(s.parked ?? "") || "no reason given"}`;
   const n = s.questions?.length ?? 0;
@@ -91,6 +94,9 @@ function whereLines(s: Sprout): string[] {
     ...(s.pick ? [`- Pick: ${s.pick.kind}, on ${s.pick.host}. ${flat(s.pick.why)}`] : []),
     ...(s.privateRepo ? [`- Repo: https://github.com/${s.privateRepo} (private)`] : []),
     ...(s.url ? [`- Url: ${s.url}`] : []),
+    ...(s.work?.kind === "extend" ? [`- Extends: ${s.work.target}, ${s.work.remote}`] : []),
+    ...(s.work?.kind === "renovate" ? [`- Renovates: ${s.work.from}`] : []),
+    ...(s.branch ? [`- Branch: ${s.branch}`] : []),
   ];
   return lines.length ? ["## Where it lives", "", ...lines, ""] : [];
 }

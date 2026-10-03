@@ -1,6 +1,6 @@
 /** The incubator's words and arithmetic for the page: the stage strip, the
  *  status words, the order of the cards, and the feed's lines. Pure. */
-import { SHIP, nextWorkflow, sproutEnded } from "../../src/core/sprout";
+import { HAND_OFF, SHIP, nextWorkflow, sproutEnded } from "../../src/core/sprout";
 import type { IncubatorStages, InputKind, ServerEvent, Sprout, SproutStatus } from "../../src/core/types";
 import type { FeedLine, FeedSnapshot } from "./feed";
 
@@ -25,6 +25,7 @@ const WORKFLOW_STAGE: Readonly<Record<string, Stage>> = {
   renovate: "build",
   extend: "build",
   [SHIP]: "deploy",
+  [HAND_OFF]: "deploy",
   retro: "retro",
 };
 

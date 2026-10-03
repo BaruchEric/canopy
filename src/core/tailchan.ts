@@ -401,6 +401,7 @@ export function sproutNotice(s: Sprout, prev: { status: SproutStatus; asking: bo
   if (s.status === prev?.status) return null;
   if (s.status === "parked") return { to: "human", text: `${s.title} is parked: ${s.parked ?? "no reason given"}` };
   if (s.status === "live") return { to: "channel", text: `${s.title} is live` };
+  if (s.status === "handed-off") return { to: "channel", text: `${s.title} is handed off as a branch` };
   if (s.status === "rejected") return { to: "channel", text: `${s.title} was turned down at eval` };
   return null;
 }

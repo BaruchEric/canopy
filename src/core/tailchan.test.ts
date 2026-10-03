@@ -326,6 +326,7 @@ describe("sproutNotice", () => {
     });
     expect(sproutNotice({ ...base, status: "live" }, { status: "deploying", asking: false })?.to).toBe("channel");
     expect(sproutNotice({ ...base, status: "rejected" }, { status: "researching", asking: false })?.text).toBe("Coin counter was turned down at eval");
+    expect(sproutNotice({ ...base, status: "handed-off" }, { status: "deploying", asking: false })).toEqual({ to: "channel", text: "Coin counter is handed off as a branch" });
   });
   test("every other move is quiet", () => {
     expect(sproutNotice({ ...base, status: "researching" }, { status: "queued", asking: false })).toBeNull();

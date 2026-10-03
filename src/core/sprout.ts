@@ -346,8 +346,17 @@ export const holdsSlot = (s: Sprout, current?: FlowStatus): boolean =>
 const ENDED: ReadonlySet<SproutStatus> = new Set<SproutStatus>(["live", "rejected", "handed-off", "stopped"]);
 export const sproutEnded = (s: Sprout): boolean => ENDED.has(s.status);
 
-/** not a workflow: the deploy canopy carries out itself after build-new */
+/** not a workflow: the deploy canopy carries out itself after a new or renovate build */
 export const SHIP = "ship";
+
+/** not a workflow: the push of an extend's branch canopy carries out itself after its build */
+export const HAND_OFF = "hand-off";
+
+/** a next step canopy carries out itself, with no stage and no runner */
+export const isOwnStep = (name: string): boolean => name === SHIP || name === HAND_OFF;
+
+/** the build workflow each kind of pick runs */
+export const BUILD_WORKFLOW: Readonly<Record<PickKind, string>> = { new: "build-new", renovate: "renovate", extend: "extend" };
 
 /** the status a sprout shows while a workflow runs for it */
 export const WORKFLOW_STATUS: Readonly<Record<string, SproutStatus>> = {
@@ -357,11 +366,14 @@ export const WORKFLOW_STATUS: Readonly<Record<string, SproutStatus>> = {
   renovate: "building",
   extend: "building",
   [SHIP]: "deploying",
+  [HAND_OFF]: "deploying",
 };
 
 /** within a workflow, the status each step shows; a step not named here shows the workflow's */
 export const STEP_STATUS: Readonly<Record<string, Readonly<Record<string, SproutStatus>>>> = {
   "build-new": { Scaffold: "building", Test: "testing", Accept: "accepting" },
+  renovate: { Renovate: "building", Test: "testing", Accept: "accepting" },
+  extend: { Build: "building", Test: "testing", Accept: "accepting" },
 };
 
 export function statusFor(workflow: string, step: string | undefined): SproutStatus {
@@ -381,13 +393,89 @@ export function lastDone(s: Sprout, workflow: string): number {
 }
 
 /** what a queued sprout runs next: clarify until it has clarified what is
- *  known now, scout until there is a pick, a build after the newest scout,
- *  then canopy's own ship */
+ *  known now, scout until there is a pick, the pick's build after the newest
+ *  scout, then canopy's own ship, or for an extend its hand-off */
 export function nextWorkflow(s: Sprout): string {
   if (!s.clarified || s.reclarify) return "clarify";
   if (!s.pick) return "scout";
-  if (lastDone(s, "build-new") < lastDone(s, "scout")) return "build-new";
-  return SHIP;
+  const build = BUILD_WORKFLOW[s.pick.kind];
+  if (lastDone(s, build) < lastDone(s, "scout")) return build;
+  return s.pick.kind === "extend" ? HAND_OFF : SHIP;
+}
+
+/** the branch an extend builds in its seed and canopy pushes to the target */
+export const extendBranch = (slug: string): string => `new/${slug}`;
+
+export interface GithubRepo {
+  owner: string;
+  name: string;
+}
+
+const GH_OWNER = /^[A-Za-z0-9][A-Za-z0-9-]{0,38}$/;
+const GH_NAME = /^[A-Za-z0-9._-]{1,100}$/;
+const GH_FORMS = [
+  /^https:\/\/(?:[^@/\s]+@)?github\.com\/([^/\s]+)\/([^/\s]+?)(?:\.git)?\/?$/,
+  /^ssh:\/\/git@github\.com(?::22)?\/([^/\s]+)\/([^/\s]+?)(?:\.git)?\/?$/,
+  /^git@github\.com:([^/\s]+)\/([^/\s]+?)(?:\.git)?\/?$/,
+];
+
+/** A github.com remote's owner and name, from its https, ssh or scp form;
+ *  null for any other host, a path, or a url naming more than a repo. */
+export function githubRepo(remote: string): GithubRepo | null {
+  for (const form of GH_FORMS) {
+    const m = form.exec(remote.trim());
+    if (!m) continue;
+    const owner = m[1] ?? "";
+    const name = m[2] ?? "";
+    if (!GH_OWNER.test(owner) || !GH_NAME.test(name) || name === "." || name === "..") return null;
+    return { owner, name };
+  }
+  return null;
+}
+
+/** the https remote canopy clones and pushes a github.com repo through */
+export const githubUrl = (r: GithubRepo): string => `https://github.com/${r.owner}/${r.name}.git`;
+
+/** Why canopy will not push this, or null: a hand-off pushes exactly
+ *  `refs/heads/new/<slug>` to the extend target's own github.com remote, so
+ *  `main`, a forced `+` ref and any other remote are refused before git runs. */
+export function branchPushRefusal(push: { remote: string; ref: string }, want: { remote: string; slug: string }): string | null {
+  if (!githubRepo(want.remote)) return `${want.remote} is not a github.com repo`;
+  if (push.remote !== want.remote) return `canopy pushes only to ${want.remote}, the extend target's own remote`;
+  const ref = `refs/heads/${extendBranch(want.slug)}`;
+  if (push.ref !== ref) return `canopy pushes only ${ref}, not ${push.ref}`;
+  return null;
+}
+
+/** the web app config keys firebase-tools prints, and the env name each takes on Vercel after its prefix */
+export const FIREBASE_ENV: Readonly<Record<string, string>> = {
+  apiKey: "API_KEY",
+  authDomain: "AUTH_DOMAIN",
+  projectId: "PROJECT_ID",
+  storageBucket: "STORAGE_BUCKET",
+  messagingSenderId: "MESSAGING_SENDER_ID",
+  appId: "APP_ID",
+};
+
+/** the prefixes the Firebase config goes to Vercel under: Vite's and Next.js's public ones */
+export const FIREBASE_ENV_PREFIXES = ["VITE_FIREBASE_", "NEXT_PUBLIC_FIREBASE_"] as const;
+
+/** the build stage note's line saying what the pick's host needs, so the workflow files stay host-free */
+export function hostLine(p: SproutPick): string {
+  if (p.kind === "extend") {
+    return "This build becomes a branch of the user's own repo, which canopy pushes once Accept passes; it deploys nothing, so leave the project's own build and deploy setup as it is.";
+  }
+  if (p.host === "vercel") return "The host is Vercel with no database: a site Vercel builds from the repo on its own, holding no server state.";
+  if (p.host === "vercel+firebase") {
+    const names = Object.values(FIREBASE_ENV).map((k) => `VITE_FIREBASE_${k}`);
+    return [
+      "The host is Vercel with Firestore for data, read in the browser through the Firebase web SDK.",
+      `Canopy makes the Firebase project and web app and sets ${names.join(", ")} on Vercel (NEXT_PUBLIC_FIREBASE_ for Next.js); read the config from those.`,
+      "Keep firebase.json to firestore (rules and indexes files inside the repo) and emulators: canopy refuses hosting, functions, storage and any predeploy or postdeploy script.",
+      "Write firestore.rules that let the app work and nothing more, and never write a .firebaserc or a key into the repo.",
+    ].join(" ");
+  }
+  return `The host is ${p.host}.`;
 }
 
 /** what canopy commits to the seed after scout, beside SEED_FILES */
@@ -475,10 +563,15 @@ export function pickRefusal(p: SproutPick): string | null {
   return null;
 }
 
-/** what this phase can carry out: a new pick deployed to vercel */
+/** what this phase can carry out: a new or renovate pick on vercel or
+ *  vercel+firebase, and an extend, which never deploys (amendment 6,
+ *  ruling 13); vercel+convex and mini park in one line each */
 export function phaseRefusal(p: SproutPick): string | null {
-  if (p.kind !== "new") return `a ${p.kind} pick arrives in phase 4; the research is in .canopy/research.md`;
-  if (p.host !== "vercel") return `deploying to ${p.host} arrives in phase 4; the research is in .canopy/research.md`;
+  if (p.kind === "extend") return null;
+  if (p.host === "vercel+convex") {
+    return "vercel+convex is parked: canopy cannot run a Convex deploy without handing it files outside the project; pick vercel+firebase for a database";
+  }
+  if (p.host === "mini") return "the mini host is not built yet: a stage's compose file would be root on the mini; pick vercel or vercel+firebase";
   return null;
 }
 
@@ -546,6 +639,15 @@ const isRetro = (r: unknown): boolean => {
   );
 };
 
+const isWork = (w: unknown): boolean => {
+  if (!isObj(w) || typeof w["from"] !== "string" || typeof w["base"] !== "string" || !isNum(w["at"])) return false;
+  if (w["kind"] === "renovate") return true;
+  return w["kind"] === "extend" && typeof w["target"] === "string" && typeof w["remote"] === "string" && typeof w["branch"] === "string";
+};
+
+const optBool = (v: unknown): boolean => v === undefined || typeof v === "boolean";
+const isFirebase = (f: unknown): boolean => isObj(f) && typeof f["project"] === "string" && optBool(f["database"]) && optStr(f["app"]) && optBool(f["env"]);
+
 const isOption = (o: unknown): boolean => isObj(o) && typeof o["label"] === "string" && typeof o["description"] === "string";
 
 const isQuestion = (q: unknown): boolean => {
@@ -582,6 +684,8 @@ export function parseSproutRecord(text: string): Sprout | null {
   const { parkedAt, parks, retro } = raw;
   if (!optNum(parkedAt) || (parks !== undefined && !(Array.isArray(parks) && parks.every(isPark)))) return null;
   if (retro !== undefined && !isRetro(retro)) return null;
+  const { work, branch, firebase } = raw;
+  if ((work !== undefined && !isWork(work)) || !optStr(branch) || (firebase !== undefined && !isFirebase(firebase))) return null;
   // canopy's own file: past these checks it is taken as written
   return raw as unknown as Sprout;
 }

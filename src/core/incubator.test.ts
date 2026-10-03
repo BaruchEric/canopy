@@ -1468,13 +1468,13 @@ describe("scout and build-new", () => {
     expect(w.flows.started.at(-1)?.workflow.name).toBe("build-new");
   });
 
-  test("a renovate pick parks with the phase 4 reason and is not kept; no pick parks too", async () => {
+  test("a pick on vercel+convex parks with its one line and is not kept; no pick parks too", async () => {
     const w = chain();
     const s = await scouting(w);
-    const renovate = JSON.stringify({ kind: "renovate", host: "vercel", why: "w", target: "https://github.com/a/b", license: "MIT" });
-    const after = await end(w, s.id, { ".canopy/pick.json": renovate });
+    const convex = JSON.stringify({ kind: "new", host: "vercel+convex", why: "w" });
+    const after = await end(w, s.id, { ".canopy/pick.json": convex });
     expect(after.status).toBe("parked");
-    expect(after.parked).toBe("a renovate pick arrives in phase 4; the research is in .canopy/research.md");
+    expect(after.parked).toBe("vercel+convex is parked: canopy cannot run a Convex deploy without handing it files outside the project; pick vercel+firebase for a database");
     expect(after.pick).toBe(undefined);
     const w2 = chain();
     const s2 = await scouting(w2);
