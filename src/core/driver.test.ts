@@ -4,7 +4,7 @@ import { exitOutcome, RunCtx, settleNote, STEP_CAP, type DriveRun } from "./driv
 const AGENT = { model: "default", effort: "default", yolo: false, extra: "" };
 const SPEC = { allowedTools: [], maxTurns: 10 };
 
-function makeCtx(chat = false) {
+function makeCtx(chat = false, spec: { allowedTools: string[]; maxTurns: number; unattended?: string } = SPEC) {
   const run: DriveRun = {
     id: "r1",
     repoId: "fx",
@@ -24,7 +24,7 @@ function makeCtx(chat = false) {
   const ended: string[] = [];
   const ctx = new RunCtx(
     run,
-    { cwd: "/r", agent: AGENT, spec: SPEC, label: "Codex" },
+    { cwd: "/r", agent: AGENT, spec, label: "Codex" },
     { emit: (r) => emits.push(r.status), ended: (r) => ended.push(r.status) },
   );
   return { run, ctx, emits, ended };
@@ -89,6 +89,17 @@ describe("the prompt queue", () => {
     expect(run.prompt).toBeNull();
     expect(notes(run)).toEqual(["allowed: one", "denied: two"]);
     expect(() => ctx.answer("p2", { kind: "allow" })).toThrow("no longer waiting");
+  });
+
+  test("an unattended run's every prompt is denied at once with its message, and the run never waits", async () => {
+    const { run, ctx, emits } = makeCtx(false, { ...SPEC, unattended: "Nobody is watching; finish with your tools." });
+    expect(await ctx.ask(perm("git push"), "0")).toEqual({ kind: "deny", message: "Nobody is watching; finish with your tools." });
+    const q = { kind: "question" as const, questions: [{ question: "Which?", header: "", options: [], multiSelect: false }] };
+    expect(await ctx.ask(q, "1")).toEqual({ kind: "deny", message: "Nobody is watching; finish with your tools." });
+    expect(run.status).toBe("working");
+    expect(run.prompt).toBeNull();
+    expect(emits).not.toContain("waiting");
+    expect(notes(run)).toEqual(["denied, as no one answers this run: git push", "denied, as no one answers this run: the question"]);
   });
 
   test("allow all lets the queued permissions and every later one through", async () => {

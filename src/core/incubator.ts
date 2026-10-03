@@ -10,7 +10,7 @@ import { dirname, join } from "node:path";
 import { isVercelAppUrl } from "./deploy";
 import { networkOrigin } from "./peersync";
 import type { Shipper } from "./shipper";
-import { PARKS_KEPT, RETRO_CONCURRENCY, RETRO_FILES, RETRO_TRIES, endRetroDue, flowDigest, parkRetroDue, parseAdvice, retroNote, retroRecord, type KnownAdvice } from "./retro";
+import { PARKS_KEPT, RETRO_CONCURRENCY, RETRO_FILES, RETRO_TRIES, RETRO_UNATTENDED, RETRO_WAIT_MAX, endRetroDue, flowDigest, parkRetroDue, parseAdvice, retroNote, retroRecord, type KnownAdvice } from "./retro";
 import { shareInputs, shareRecord, shareWorkspace, unshare } from "./stageshare";
 import {
   BUILD_FILES,
@@ -197,6 +197,8 @@ export class Incubator {
   private readonly sprouts = new Map<string, Sprout>();
   /** each owned flow's last status, so a broadcast that changes nothing is no transition */
   private readonly seen = new Map<string, string>();
+  /** when each running retro's flow began waiting on a prompt, for the backstop */
+  private readonly retroWaiting = new Map<string, number>();
   /** each sprout's vault writes, one after another */
   private readonly noteChain = new Map<string, Promise<void>>();
   /** each sprout's slow work (prepare, more input), one after another, so two
@@ -553,6 +555,16 @@ export class Incubator {
   async resume(id: string, choice: "continue" | "retry"): Promise<Sprout> {
     const s = this.need(id);
     if (s.status !== "parked") throw new IncubatorError(409, "only a parked project resumes");
+    // a look back at the park is moot once the project goes on: its retro stops, never holding the stage back
+    const pr = s.retro;
+    if (pr?.for === "park" && pr.state === "running") {
+      delete s.retro;
+      const rf = pr.flowId ? this.deps.flows.get(pr.flowId) : undefined;
+      if (rf) {
+        this.retroWaiting.delete(rf.id);
+        this.stopFlow(rf);
+      }
+    }
     const reason = s.parked;
     // a memo the speech model failed on is tried again
     const retry = this.untranscribed(s);
@@ -850,6 +862,16 @@ export class Incubator {
         this.track(this.changed(s));
       }
     }
+    for (const s of this.list()) {
+      const r = s.retro;
+      const since = r?.state === "running" && r.flowId ? this.retroWaiting.get(r.flowId) : undefined;
+      if (!r?.flowId || since === undefined || at - since < RETRO_WAIT_MAX) continue;
+      this.retroWaiting.delete(r.flowId);
+      const f = this.deps.flows.get(r.flowId);
+      // failed first, so the stop's own event finds the retro over
+      this.track(this.retroFailed(s, `the retro waited ${Math.round(RETRO_WAIT_MAX / 60_000)} minutes on a prompt no one answers`));
+      if (f) this.stopFlow(f);
+    }
     if (why !== null) return;
     let running = this.list().filter((s) => s.retro?.state === "running").length;
     const due = this.list()
@@ -884,7 +906,7 @@ export class Incubator {
       const record = `${JSON.stringify(retroRecord(s, now, known), null, 1)}\n`;
       const file = await (this.deps.share ?? REAL_SHARE).record(join(this.deps.root, SEEDS_DIR), s.id, record);
       if (this.detached || this.gone(s) || s.retro !== r) return;
-      const flow = await this.deps.flows.start(repo, withRecordRead(wf, dirname(file)), retroNote(s, file));
+      const flow = await this.deps.flows.start(repo, { ...withRecordRead(wf, dirname(file)), unattended: RETRO_UNATTENDED }, retroNote(s, file));
       r.flowId = flow.id;
       if (this.gone(s)) {
         this.stopFlow(flow);
@@ -902,7 +924,13 @@ export class Incubator {
   private async retroMoved(s: Sprout, flow: Flow): Promise<void> {
     const r = s.retro;
     if (this.detached || !r || r.flowId !== flow.id || r.state !== "running") return;
-    if (flow.status === "working" || flow.status === "waiting") return;
+    if (flow.status === "waiting") {
+      // the backstop's clock: the tick fails a retro that waits too long
+      if (!this.retroWaiting.has(flow.id)) this.retroWaiting.set(flow.id, this.now());
+      return;
+    }
+    this.retroWaiting.delete(flow.id);
+    if (flow.status === "working") return;
     const step = flow.steps[flow.current];
     // the stage runner was away: Flows runs the step again on its hello, as for any stage
     if (flow.status === "gated" && flow.parkedFor === "stage") return;

@@ -172,6 +172,7 @@ export function stepSpec(
     // the flow judges the outcome over all its steps
     expectsChange: false,
     task: [restarted ? RESTART_NOTE : "", earlier, retry, step.body].filter(Boolean).join("\n\n"),
+    ...(wf.unattended ? { unattended: wf.unattended } : {}),
     mode: "job",
   };
 }

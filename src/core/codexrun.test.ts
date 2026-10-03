@@ -446,6 +446,14 @@ describe("approvals and questions", () => {
     const dismissed = questionReply(prompt.questions, ids, { kind: "deny" }) as { answers: Record<string, { answers: string[] }> };
     expect(dismissed.answers["a"]?.answers[0]).toContain("closed the question without answering");
   });
+
+  test("a deny with its own message says it, to a question and to an approval", () => {
+    const { prompt, ids } = questionPrompt({ questions: [{ id: "a", header: "Pick", question: "Which?", isOther: true, isSecret: false, options: null }] });
+    expect(questionReply(prompt.questions, ids, { kind: "deny", message: "finish within your tools" })).toEqual({ answers: { a: { answers: ["finish within your tools"] } } });
+    expect(approvalReply("applyPatchApproval", {}, { kind: "deny", message: "finish within your tools" }, false)).toEqual({
+      decision: { denied: { rejection: "finish within your tools" } },
+    });
+  });
 });
 
 describe("the result", () => {

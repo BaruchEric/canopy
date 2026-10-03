@@ -20,7 +20,7 @@ afterAll(async () => {
   for (const d of scratch) await rm(d, { recursive: true, force: true });
 });
 
-async function drive(mode: "job" | "chat" | "die", message = "do the thing") {
+async function drive(mode: "job" | "chat" | "die", message = "do the thing", unattended?: string) {
   const dir = await mkdtemp(join(tmpdir(), "canopy-claude-"));
   scratch.push(dir);
   const repo = join(dir, "repo");
@@ -48,7 +48,7 @@ async function drive(mode: "job" | "chat" | "die", message = "do the thing") {
     {
       cwd: repo,
       agent: AGENT,
-      spec: { allowedTools: ["Read"], maxTurns: 10 },
+      spec: { allowedTools: ["Read"], maxTurns: 10, ...(unattended ? { unattended } : {}) },
       env: { CANOPY_RUN: "r1", FAKE_CLAUDE_MODE: mode, FAKE_CLAUDE_LOG: logPath },
       label: "Claude Code",
     },
@@ -115,6 +115,18 @@ describe("a Claude run through the driver", () => {
     expect(argv).toContain("--allowedTools");
     const first = log.find((m) => m["type"] === "user") as { message: { content: string } };
     expect(first.message.content).toBe("do the thing");
+  });
+
+  test("an unattended run answers a permission with a deny carrying its message, and never waits", async () => {
+    const d = await drive("job", "do the thing", "No one answers this run. Finish within your tools.");
+    const run = await d.until(d.done, "the end");
+    expect(run.status).toBe("done");
+    let log = await d.sent();
+    for (let i = 0; i < 100 && !responseTo(log, "req-1"); i++) {
+      await Bun.sleep(20);
+      log = await d.sent();
+    }
+    expect(responseTo(log, "req-1")?.response.response).toEqual({ behavior: "deny", message: "No one answers this run. Finish within your tools." });
   });
 
   test("a chat goes idle after each reply, takes the next message on the same process, and ends politely", async () => {

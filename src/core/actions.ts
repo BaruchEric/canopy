@@ -30,6 +30,8 @@ export interface ActionSpec {
    *  ground rules, an ask frames the note as the task, a chat puts the
    *  first message last */
   mode: "job" | "ask" | "chat";
+  /** no one answers this run: every prompt is denied at once with this message */
+  unattended?: string;
 }
 
 const SAFETY = `- Work only inside this repository (submodules under it included).

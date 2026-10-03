@@ -9,7 +9,7 @@ import { join } from "node:path";
 import { Incubator, IncubatorError, incubatorWorkflow, type AdviceSink, type IncubatorDeps, type IncubatorFlows, type IncubatorSeeds, type IncubatorStore, type Intake, type NoteSink } from "./incubator";
 import type { Shipper } from "./shipper";
 import { BUNDLED_DIR, findWorkflow, loadWorkflows } from "./workflows";
-import { RETRO_PARK_WAIT } from "./retro";
+import { RETRO_PARK_WAIT, RETRO_UNATTENDED, RETRO_WAIT_MAX } from "./retro";
 import type { Advice, Flow, FlowChoice, Judgment, Repo, Sprout, Workflow } from "./types";
 
 const CLARIFY: Workflow = {
@@ -1936,19 +1936,62 @@ describe("retro", () => {
     expect(d.flows.started.filter((f) => f.workflow.name === "retro")).toHaveLength(0);
   });
 
-  test("a sprout resumed while its park retro runs waits for the retro, then goes on", async () => {
+  test("a sprout resumed while its park retro runs stops the retro and goes on at once", async () => {
     const w = retroWorld();
     const s = await parked(w);
     clock += RETRO_PARK_WAIT;
     w.inc.tick();
     await w.inc.idle();
+    const id = retroFlow(w, s.id).id;
     await w.inc.resume(s.id, "retry");
     await w.inc.idle();
-    expect(now(w, s.id).status).toBe("queued");
-    expect(w.flows.started.map((f) => f.workflow.name)).toEqual(["clarify", "retro"]);
-    await finish(w, s.id);
+    expect(w.flows.get(id)?.status).toBe("stopped");
+    expect(now(w, s.id).retro).toBeUndefined();
     expect(now(w, s.id).status).toBe("clarifying");
     expect(w.flows.started.map((f) => f.workflow.name)).toEqual(["clarify", "retro", "clarify"]);
+  });
+
+  test("a retro runs unattended: its workflow denies every prompt with a message to finish within its tools", async () => {
+    const w = retroWorld();
+    const s = await clarifying(w);
+    await w.inc.stop(s.id);
+    await w.inc.idle();
+    expect(w.flows.started.at(-1)?.workflow.unattended).toBe(RETRO_UNATTENDED);
+    expect(RETRO_UNATTENDED).toContain("Finish");
+    // the incubator's other stages are attended: clarify asks its questions
+    expect(w.flows.started[0]?.workflow.unattended).toBeUndefined();
+  });
+
+  test("a retro left waiting on a prompt past the cap fails, and the next one starts", async () => {
+    const w = retroWorld();
+    const a = await clarifying(w);
+    const b = await clarifying(w);
+    await w.inc.stop(a.id);
+    await w.inc.stop(b.id);
+    await w.inc.idle();
+    const id = retroFlow(w, a.id).id;
+    w.flows.move(id, { status: "waiting" });
+    await w.inc.idle();
+    clock += RETRO_WAIT_MAX - 1;
+    w.inc.tick();
+    await w.inc.idle();
+    expect(now(w, a.id).retro?.state).toBe("running");
+    // back to work and waiting again: the clock starts over
+    w.flows.move(id, { status: "working" });
+    await w.inc.idle();
+    w.flows.move(id, { status: "waiting" });
+    await w.inc.idle();
+    clock += RETRO_WAIT_MAX - 1;
+    w.inc.tick();
+    await w.inc.idle();
+    expect(now(w, a.id).retro?.state).toBe("running");
+    clock += 1;
+    w.inc.tick();
+    await w.inc.idle();
+    expect(now(w, a.id).retro).toMatchObject({ state: "failed", reason: "the retro waited 15 minutes on a prompt no one answers" });
+    expect(w.flows.get(id)?.status).toBe("stopped");
+    expect(now(w, a.id).status).toBe("stopped");
+    expect(now(w, b.id).retro?.state).toBe("running");
   });
 
   test("a park retro still due when the sprout goes on is dropped; one due when it is stopped looks back on the end", async () => {

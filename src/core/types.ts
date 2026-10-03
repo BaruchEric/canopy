@@ -766,7 +766,9 @@ export type RunPrompt =
 export type RunAnswer =
   | { kind: "allow" }
   | { kind: "allow-all" }
-  | { kind: "deny" }
+  /** `message`, when given, is what the agent is told in place of the
+   *  harness driver's own words */
+  | { kind: "deny"; message?: string }
   | { kind: "answers"; answers: Record<string, string> };
 
 /** Token counts for a run, where the harness reports them (Codex does;
@@ -1153,6 +1155,10 @@ export interface Workflow {
   /** false keeps the workflow out of the menus and the fleet picker: the
    *  incubator's own stages; absent means listed */
   listed?: false;
+  /** Set by canopy, never read from a file: no one answers this workflow's
+   *  runs, so every prompt is denied at once with this message (the
+   *  incubator's retro). */
+  unattended?: string;
   steps: WorkflowStep[];
   /** null when the workflow sets none */
   budget: FlowBudget | null;

@@ -19,6 +19,15 @@ export const PARKS_KEPT = 20;
 /** what canopy commits to the seed after a retro */
 export const RETRO_FILES = [".canopy/retro.md", ".canopy/advice.json"];
 
+/** What a retro's agent hears when it asks anything or reaches past its
+ *  tools: no one answers a retro's runs, so it finishes with what it has. */
+export const RETRO_UNATTENDED =
+  "No one answers this run: it is canopy's unattended retro. Do not ask questions or use tools outside your allowed list. Finish with the record you were given, writing only .canopy/retro.md and .canopy/advice.json.";
+
+/** a retro whose flow still waits on a prompt this long fails, so it never
+ *  holds the one retro slot for good; checked on the incubator's tick */
+export const RETRO_WAIT_MAX = 15 * 60_000;
+
 export const ADVICE_MAX = 6;
 export const ADVICE_FILE_MAX = 64 * 1024;
 const KEY_MAX = 60;
