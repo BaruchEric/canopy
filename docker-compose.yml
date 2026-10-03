@@ -79,6 +79,41 @@ services:
     init: true
     restart: unless-stopped
 
+  # The incubator's agents and their checks: no token, its own pid namespace
+  # and network, the seeds and nothing else of the workspace. canopy starts
+  # processes here only through the stage runner's socket.
+  stages:
+    build:
+      context: .
+      target: stages
+      args:
+        UID: ${HOST_UID:-1000}
+        GID: ${HOST_GID:-1000}
+    image: canopy-stages:latest
+    environment:
+      - CANOPY_STAGE_ROOT=${DEV_ROOT:-/home/eric/dev}/_incubator
+      - CANOPY_STAGE_SOCKET=/run/canopy-stage/runner.sock
+      - LANG=C.UTF-8
+    volumes:
+      # every one of these must exist on the host, owned by the host user,
+      # before `up`: docker makes a missing one as root, and a root .shared
+      # stops canopy copying a stage's inputs in
+      - ${DEV_ROOT:-/home/eric/dev}/_incubator:${DEV_ROOT:-/home/eric/dev}/_incubator
+      - ${DEV_ROOT:-/home/eric/dev}/_incubator/.shared:${DEV_ROOT:-/home/eric/dev}/_incubator/.shared:ro
+      # the stages' own claude and codex logins, never the host's
+      - ${HOST_HOME:-/home/eric}/.config/canopy-stages/claude:/home/bun/.stage-claude
+      - ${HOST_HOME:-/home/eric}/.config/canopy-stages/codex:/home/bun/.stage-codex
+      - stage-sock:/run/canopy-stage
+    networks: [stages-net]
+    init: true
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "bun", "/app/stage-runner.js", "--health"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 5s
+
   canopy:
     build:
       context: .
@@ -98,6 +133,9 @@ services:
         # a container on another's network loses it when that one restarts;
         # compose restarts canopy along with shells
         restart: true
+      # the incubator's stages run there, through the runner's socket
+      stages:
+        condition: service_healthy
     # In the shells container's network and process namespaces: the in-app
     # browser dials a dev server on the loopback the shells listen on, and
     # reads /proc to tell which repo each listening process runs in. The
@@ -177,6 +215,9 @@ services:
       - VERCEL_TOKEN=${VERCEL_TOKEN:-}
       - VERCEL_SCOPE=${VERCEL_SCOPE:-}
       - CANOPY_INCUBATOR_AUTOSTART=${CANOPY_INCUBATOR_AUTOSTART:-}
+      # the stage runner's socket in the stages container (stage-sock below),
+      # the one way canopy starts an agent, check or build in a seed
+      - CANOPY_STAGE_SOCKET=/run/canopy-stage/runner.sock
     volumes:
       # the repos to scan, mounted at the SAME path they have on the host so
       # git in the container and VS Code Remote-SSH on the host agree
@@ -196,6 +237,8 @@ services:
       # git on the host leaves out (.claude/settings.local.json and the like);
       # the folder must exist on the host first or docker makes it as root
       - ${HOST_HOME:-/home/eric}/.config/git:/home/bun/.config/git:ro
+      # the stage runner's socket, shared with the stages service alone
+      - stage-sock:/run/canopy-stage
     command:
       - bun
       - bin/canopy.ts
@@ -229,3 +272,16 @@ services:
 
 volumes:
   canopy-config:
+  # the stage runner's socket folder, owned by the stages' user (Dockerfile)
+  stage-sock:
+
+networks:
+  # the stages' own bridge, off docker's default pools (ufw's docker range and
+  # the tailchan rule cover those), and v4 only so this subnet is its whole
+  # reach. The default network stays implicit.
+  stages-net:
+    driver: bridge
+    enable_ipv6: false
+    ipam:
+      config:
+        - subnet: 10.250.13.0/24

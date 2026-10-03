@@ -4,14 +4,16 @@
 # them and the UI drops them); the in-browser core is the whole point. See
 # docs/prd-shared-backend.md and docs/deploy.md.
 #
-# Two images come out of this file. `shells` is everything a shell needs
+# Three images come out of this file. `shells` is everything a shell needs
 # (git, tmux, claude, codex, the user, the PATH) and no canopy code: the
 # tmux server runs in a container of its own off it (the `shells` service in
 # docker-compose.yml), so a canopy redeploy, which recreates the canopy
 # container, leaves every shell running. The final stage adds the built
 # canopy on top. A change above the `shells` line changes that image too and
 # its container is recreated, which drops the shells; a change to canopy
-# alone does not.
+# alone does not. `stages` is the shells image without gh or the Vercel CLI,
+# plus the bundled stage runner: where the incubator's agents run, with no
+# token (the `stages` service).
 
 FROM oven/bun:1 AS build
 WORKDIR /app
@@ -23,6 +25,9 @@ COPY . .
 ARG CANOPY_COMMIT=""
 ARG CANOPY_COMMITTED=""
 RUN CANOPY_COMMIT="$CANOPY_COMMIT" CANOPY_COMMITTED="$CANOPY_COMMITTED" bun run build
+# the incubator's stage runner as one file, the only canopy code the stages
+# image carries
+RUN bun build src/stage/main.ts --target=bun --outfile /app/dist/stage-runner.js
 
 FROM oven/bun:1 AS shells
 # git for the scan and every mutation; tmux so a shell outlives a canopy
@@ -123,6 +128,31 @@ ENV CANOPY_CONFIG_DIR=/config
 # runs this as the `shells` service and canopy's tmux client, in the other
 # container, joins it there
 CMD ["tmux", "-S", "/config/tmux.sock", "-f", "/app/lib/tmux-server.conf", "-D"]
+
+# The incubator's stages: the shells' runtime, user, claude, codex, bun and
+# git, without gh or the Vercel CLI, and the stage runner. No canopy server
+# code, no token. compose runs this as the `stages` service, and canopy
+# reaches it only through the runner's socket on the stage-sock volume.
+FROM shells AS stages
+USER root
+# gh is GitHub's apt package (above); the binary is all a stage could use
+RUN rm -f /usr/bin/gh
+# the socket's folder, made here so the fresh named volume copies up owned by
+# the runner's user and it can bind the socket
+RUN mkdir -p /run/canopy-stage && chown bun:bun /run/canopy-stage
+USER bun
+# the Vercel CLI went in with `bun add -g` (above), which links `vercel` and
+# `vc`; it may be missing if that install failed, so nothing here insists
+RUN (bun remove -g vercel || true) \
+    && rm -f /home/bun/.bun/bin/vercel /home/bun/.bun/bin/vc \
+    && rm -rf /home/bun/.bun/install/global/node_modules/vercel
+# the build fails here rather than ship a stage image that still has either
+RUN ! command -v gh && ! command -v vercel && ! command -v vc
+COPY --from=build --chown=bun:bun /app/dist/stage-runner.js /app/stage-runner.js
+ENV CLAUDE_CONFIG_DIR=/home/bun/.stage-claude CODEX_HOME=/home/bun/.stage-codex
+# CMD, not ENTRYPOINT: the shells stage's tmux CMD would otherwise be appended
+# to the runner's argv
+CMD ["bun", "/app/stage-runner.js"]
 
 FROM shells
 # gh comes from the shells stage above, so the server and the shells run the
