@@ -66,10 +66,70 @@ export interface RunnerOptions {
   probe?: (url: string) => Promise<{ result: ProbeResult; why?: string }>;
   /** how often the fence is probed again, ms */
   fenceEvery?: number;
-  /** whether the runner's own uid could write a path; `access(W_OK)`
-   *  unless a test hands in its own for stand-ins in its temp folder */
+  /** whether a stage could write a path: `access(W_OK)` for the runner's
+   *  own uid, or with `as` set `writableBy` for the stage uid, unless a
+   *  test hands in its own for stand-ins in its temp folder */
   writable?: (path: string) => Promise<boolean>;
+  /** A runner started as root: every child, git included, starts through
+   *  `setpriv` (an absolute path) as this uid and gid, with no
+   *  supplementary group and no way to gain a privilege (amendment 4,
+   *  ruling 10). */
+  as?: { uid: number; gid: number; setpriv: string };
 }
+
+/** Whether `uid` with only `gid` as its group could write a file or folder
+ *  with this owner and mode. Pure. The owner's bits decide for the owner,
+ *  the group's for the group; a folder's sticky bit is not counted, since
+ *  a file the stage user made in it is its own to change. */
+export function writableBy(st: { uid: number; gid: number; mode: number }, uid: number, gid: number): boolean {
+  if (st.uid === uid) return (st.mode & 0o200) !== 0;
+  if (st.gid === gid) return (st.mode & 0o020) !== 0;
+  return (st.mode & 0o002) !== 0;
+}
+
+/** What a runner started as root drops its children to, and which group
+ *  reaches its socket, from its env (`CANOPY_STAGE_UID`, `CANOPY_STAGE_GID`,
+ *  `CANOPY_STAGE_CALLER_GID`, baked into the image), or why it will not
+ *  start. Pure. */
+export function rootStart(env: Record<string, string | undefined>): { uid: number; gid: number; callerGid: number } | { refused: string } {
+  const id = (name: string): number | null => {
+    const v = env[name] ?? "";
+    return /^[1-9]\d{0,9}$/.test(v) ? Number(v) : null;
+  };
+  const uid = id("CANOPY_STAGE_UID");
+  const gid = id("CANOPY_STAGE_GID");
+  const callerGid = id("CANOPY_STAGE_CALLER_GID");
+  if (uid === null || gid === null) return { refused: "the stage runner runs as root only to drop each stage to CANOPY_STAGE_UID and CANOPY_STAGE_GID, which must be set and not 0" };
+  if (callerGid === null) return { refused: "the stage runner as root needs CANOPY_STAGE_CALLER_GID, the group canopy reaches its socket with, set and not 0" };
+  if (callerGid === gid) return { refused: "CANOPY_STAGE_CALLER_GID must not be the stage user's own group, or a stage could reach the socket" };
+  return { uid, gid, callerGid };
+}
+
+/** The socket's folder as root's, readable and enterable by `gid` alone
+ *  (0750), and the socket root's and `gid`'s, 0660. Set at every start:
+ *  the volume keeps whatever ownership it was first made with. */
+export async function socketModes(
+  dir: string,
+  socket: string | null,
+  gid: number,
+  fs: { chown: (p: string, uid: number, gid: number) => Promise<void>; chmod: (p: string, mode: number) => Promise<void> },
+): Promise<void> {
+  await fs.chown(dir, 0, gid);
+  await fs.chmod(dir, 0o750);
+  if (socket === null) return;
+  await fs.chown(socket, 0, gid);
+  await fs.chmod(socket, 0o660);
+}
+
+/** the argv prefix that drops a child to the stage user */
+const dropTo = (as: { uid: number; gid: number; setpriv: string }): string[] => [
+  as.setpriv,
+  `--reuid=${as.uid}`,
+  `--regid=${as.gid}`,
+  "--clear-groups",
+  "--no-new-privs",
+  "--",
+];
 
 /** the fence as the runner knows it, and why it is not confirmed */
 export interface FenceState {
@@ -213,7 +273,7 @@ async function resolveProgram(
   const realRoot = await realpath(root).catch(() => root);
   if ([root, realRoot].some((r) => inside(found, r) || inside(real, r))) return missing;
   for (const p of [...chain(found), ...chain(real)]) {
-    if (await writable(p)) return { refused: `${name} is not started: ${p} is writable by the stage runner's own user, so a stage could change it` };
+    if (await writable(p)) return { refused: `${name} is not started: ${p} is writable by the stage user, so a stage could change it` };
   }
   return { program: found };
 }
@@ -267,7 +327,22 @@ interface Live {
 export async function startStageRunner(opts: RunnerOptions): Promise<{ stop(): Promise<void> }> {
   const own = opts.env ?? process.env;
   const procs = opts.procs ?? allProcs;
-  const writable = opts.writable ?? canWrite;
+  const as = opts.as;
+  const stageWrites = (a: { uid: number; gid: number }) => (path: string): Promise<boolean> =>
+    stat(path).then(
+      (st) => writableBy(st, a.uid, a.gid),
+      () => false,
+    );
+  const writable = opts.writable ?? (as ? stageWrites(as) : canWrite);
+  if (as) {
+    if (!(as.uid > 0 && as.gid > 0)) throw new Error("a stage runner started as root needs a stage uid and gid other than 0");
+    if (!as.setpriv.startsWith("/")) throw new Error("setpriv must be an absolute path");
+    const real = await realpath(as.setpriv).catch(() => null);
+    if (real === null) throw new Error(`setpriv is not at ${as.setpriv}`);
+    for (const p of [...chain(as.setpriv), ...chain(real)]) {
+      if (await writable(p)) throw new Error(`setpriv is not used: ${p} is writable by the stage user`);
+    }
+  }
   const identity = Object.fromEntries(STAGE_PROGRAMS.map((p) => [p, p]));
   const programs: Record<string, string> = { ...identity, git: "git", ...opts.programs };
   await rm(opts.socket, { force: true });
@@ -460,7 +535,8 @@ export async function startStageRunner(opts: RunnerOptions): Promise<{ stop(): P
       if (sock.destroyed || state === "over") return;
       let p: Bun.Subprocess<"pipe", "pipe", "pipe">;
       try {
-        p = Bun.spawn(argv, {
+        // setpriv execs the program in its own place: the pid is the program's
+        p = Bun.spawn(as ? [...dropTo(as), ...argv] : argv, {
           cwd: seed,
           env,
           stdin: "pipe",

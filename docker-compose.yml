@@ -89,6 +89,9 @@ services:
       args:
         UID: ${HOST_UID:-1000}
         GID: ${HOST_GID:-1000}
+        # the group that reaches the stage runner's socket; canopy holds it
+        # through group_add below. Set it in .env only when 7850 is taken.
+        STAGECALLER_GID: ${STAGECALLER_GID:-7850}
     image: canopy-stages:latest
     environment:
       - CANOPY_STAGE_ROOT=${DEV_ROOT:-/home/eric/dev}/_incubator
@@ -151,6 +154,9 @@ services:
     # ports are published on the shells service above.
     network_mode: "service:shells"
     pid: "service:shells"
+    # the stagecaller group, the only one the stage runner's socket folder
+    # lets in (root:stagecaller 0750); a stage holds no group at all
+    group_add: ["${STAGECALLER_GID:-7850}"]
     environment:
       - CANOPY_CONFIG_DIR=/config
       # how a client reaches THIS host over ssh for VS Code Remote-SSH; the

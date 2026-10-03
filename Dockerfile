@@ -143,11 +143,22 @@ CMD ["tmux", "-S", "/config/tmux.sock", "-f", "/app/lib/tmux-server.conf", "-D"]
 # is not so. The stage runner checks it again at every spawn.
 FROM shells AS stages
 USER root
+# The runner runs as root and starts every stage, and canopy's git in a
+# seed, as the bun user (the host uid) through setpriv with no
+# supplementary group; only the stagecaller group (canopy's service holds it
+# through group_add) reaches its socket. setpriv is util-linux's, which
+# Debian always installs.
+ARG UID=1000
+ARG GID=1000
+ARG STAGECALLER_GID=7850
+ENV CANOPY_STAGE_UID=${UID} CANOPY_STAGE_GID=${GID} CANOPY_STAGE_CALLER_GID=${STAGECALLER_GID}
+RUN test -x "$(command -v setpriv)" && test "$STAGECALLER_GID" != "$GID" && test "$STAGECALLER_GID" != 0
 # gh is GitHub's apt package (above); the binary is all a stage could use
 RUN rm -f /usr/bin/gh
-# the socket's folder, made here so the fresh named volume copies up owned by
-# the runner's user and it can bind the socket
-RUN mkdir -p /run/canopy-stage && chown bun:bun /run/canopy-stage
+# the socket's folder, made here so a fresh named volume copies up as
+# root:stagecaller 0750; the runner sets both again at every start, since a
+# volume made before keeps the ownership it was first made with
+RUN mkdir -p /run/canopy-stage && chown "root:${STAGECALLER_GID}" /run/canopy-stage && chmod 0750 /run/canopy-stage
 # a login shell (claude's Bash tool starts one) would put the home's own,
 # writable bin folders back on the PATH
 RUN rm -f /etc/profile.d/canopy-path.sh
@@ -198,6 +209,9 @@ RUN set -e; \
     if [ -n "$w" ]; then echo "$w is writable by $(id -un)"; exit 1; fi; \
     test "$(command -v claude)" = /opt/stage-tools/bin/claude; \
     if command -v codex; then test "$(command -v codex)" = /opt/stage-tools/bin/codex; fi
+# the checks above ran as the stage user; the runner itself runs as root, and
+# refuses to start so without CANOPY_STAGE_UID and CANOPY_STAGE_GID
+USER root
 # CMD, not ENTRYPOINT: the shells stage's tmux CMD would otherwise be appended
 # to the runner's argv
 CMD ["bun", "/app/stage-runner.js"]

@@ -101,4 +101,30 @@ describe("the stages image", () => {
     expect(checks).toContain("find /opt/stage-tools /app -writable");
     expect(checks).toContain("! command -v gh && ! command -v vercel && ! command -v vc");
   });
+
+  test("ends as root after the checks, with setpriv and the uids the runner drops to baked in", async () => {
+    const stages = await docker();
+    const checked = stages.indexOf("find /opt/stage-tools /app -writable");
+    const users = [...stages.matchAll(/^USER (\w+)$/gm)];
+    expect(users.at(-1)?.[1]).toBe("root");
+    expect(users.at(-1)?.index ?? -1).toBeGreaterThan(checked);
+    expect(users.at(-2)?.[1]).toBe("bun");
+    expect(users.at(-2)?.index ?? Infinity).toBeLessThan(checked);
+    expect(stages).toContain("ARG STAGECALLER_GID=7850");
+    expect(stages).toContain("ENV CANOPY_STAGE_UID=${UID} CANOPY_STAGE_GID=${GID} CANOPY_STAGE_CALLER_GID=${STAGECALLER_GID}");
+    expect(stages).toContain('test -x "$(command -v setpriv)"');
+    expect(stages).toContain('chown "root:${STAGECALLER_GID}" /run/canopy-stage && chmod 0750 /run/canopy-stage');
+  });
+});
+
+describe("the stage runner's socket", () => {
+  const services = compose.services as Record<string, { group_add?: string[]; build?: { args?: Record<string, string> } }>;
+  test("canopy holds the stagecaller group, and the stages image is built with the same gid", () => {
+    expect(services["canopy"]?.group_add).toEqual(["${STAGECALLER_GID:-7850}"]);
+    expect(services["stages"]?.build?.args?.["STAGECALLER_GID"]).toBe("${STAGECALLER_GID:-7850}");
+  });
+  test("neither the shells nor the stages hold it", () => {
+    expect(services["shells"]?.group_add).toBeUndefined();
+    expect(services["stages"]?.group_add).toBeUndefined();
+  });
 });

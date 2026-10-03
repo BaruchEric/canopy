@@ -6,7 +6,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { encodeFrame, fromB64, lineSplitter, parseFrame, type StageFrame, type StageRequest } from "../core/stagewire";
 import { allProcs, type Proc } from "../core/procs";
-import { killTree, orphansOf, ownPidNamespace, startStageRunner, type RunnerOptions } from "./runner";
+import { killTree, orphansOf, ownPidNamespace, rootStart, socketModes, startStageRunner, writableBy, type RunnerOptions } from "./runner";
 
 let dir = "";
 let root = "";
@@ -176,7 +176,7 @@ describe("the stage runner", () => {
       ["codex", lockedDir],
     ] as const) {
       const fs = await talk({ t: "spawn", argv: [name], cwd: join(root, "coin"), env: {} }, [], 5000, path);
-      expect(fs.at(-1)).toEqual({ t: "refused", reason: `${name} is not started: ${file} is writable by the stage runner's own user, so a stage could change it` });
+      expect(fs.at(-1)).toEqual({ t: "refused", reason: `${name} is not started: ${file} is writable by the stage user, so a stage could change it` });
     }
     // sh resolves to the system's, which no user here can write
     const fs = await talk({ t: "spawn", argv: ["sh", "-c", "exit 0"], cwd: join(root, "coin"), env: {} }, [], 5000, path);
@@ -705,5 +705,77 @@ describe("git in a seed", () => {
     expect(alive(pid)).toBe(true);
     live.c.destroy();
     expect(await gone(pid)).toBe(true);
+  });
+});
+
+describe("a root runner drops every child", () => {
+  test("writableBy reads the owner, group and other bits for the stage uid alone", () => {
+    const st = (uid: number, gid: number, mode: number) => ({ uid, gid, mode });
+    expect(writableBy(st(1000, 1000, 0o755), 1000, 1000)).toBe(true);
+    expect(writableBy(st(1000, 1000, 0o555), 1000, 1000)).toBe(false);
+    expect(writableBy(st(0, 1000, 0o775), 1000, 1000)).toBe(true);
+    expect(writableBy(st(0, 1000, 0o755), 1000, 1000)).toBe(false);
+    expect(writableBy(st(0, 0, 0o757), 1000, 1000)).toBe(true);
+    // root's own files, as a root runner sees them: not the stage user's
+    expect(writableBy(st(0, 0, 0o755), 1000, 1000)).toBe(false);
+    // the owner bits decide for the owner, whatever the group's say
+    expect(writableBy(st(1000, 1000, 0o575), 1000, 1000)).toBe(false);
+    // a sticky world-writable folder still counts: what the stage made there is its own
+    expect(writableBy(st(0, 0, 0o1777), 1000, 1000)).toBe(true);
+  });
+
+  test("every child, git included, starts through setpriv as the stage uid with no groups", async () => {
+    const log = join(dir, "setpriv.log");
+    const setpriv = join(dir, "setpriv");
+    await writeFile(setpriv, `#!/bin/sh\nprintf '%s\\n' "$@" >> ${log}\nwhile [ "$1" != "--" ]; do shift; done\nshift\nexec "$@"\n`);
+    await chmod(setpriv, 0o755);
+    const seed = join(root, "dropped");
+    await mkdir(seed, { recursive: true });
+    expect(await Bun.spawn(["git", "init", "-q", "-b", "main"], { cwd: seed }).exited).toBe(0);
+    // the default writability check, judged for a stage uid that owns nothing here
+    const path = await extra("dropped", { as: { uid: 4242, gid: 4343, setpriv }, writable: undefined });
+    const ran = await talk({ t: "spawn", argv: ["sh", "-c", "echo hi"], cwd: seed, env: {} }, [], 8000, path);
+    expect(text(ran, "out")).toBe("hi\n");
+    const gitRan = await talk({ t: "git", seed, args: ["rev-parse", "--is-inside-work-tree"], env: {} }, [], 8000, path);
+    expect(text(gitRan, "out").trim()).toBe("true");
+    const lines = (await readFile(log, "utf8")).trim().split("\n");
+    const head = ["--reuid=4242", "--regid=4343", "--clear-groups", "--no-new-privs", "--"];
+    const starts = lines.flatMap((l, i) => (l === "--reuid=4242" ? [lines.slice(i, i + 6)] : []));
+    expect(starts).toHaveLength(2);
+    for (const s of starts) expect(s.slice(0, 5)).toEqual(head);
+    expect(starts[0]?.[5]).toEndWith("/sh");
+    expect(starts[1]?.[5]).toEndWith("/git");
+  });
+
+  test("a root start needs a stage uid and gid, and a caller group of its own", () => {
+    const ok = { CANOPY_STAGE_UID: "1000", CANOPY_STAGE_GID: "1000", CANOPY_STAGE_CALLER_GID: "7850" };
+    expect(rootStart(ok)).toEqual({ uid: 1000, gid: 1000, callerGid: 7850 });
+    expect(rootStart({ ...ok, CANOPY_STAGE_UID: "0" })).toHaveProperty("refused");
+    expect(rootStart({ ...ok, CANOPY_STAGE_GID: undefined })).toHaveProperty("refused");
+    expect(rootStart({ ...ok, CANOPY_STAGE_UID: "1000x" })).toHaveProperty("refused");
+    expect(rootStart({ ...ok, CANOPY_STAGE_CALLER_GID: "" })).toHaveProperty("refused");
+    expect(rootStart({ ...ok, CANOPY_STAGE_CALLER_GID: "1000" })).toHaveProperty("refused");
+  });
+
+  test("the socket's folder is root's and the caller group's alone, and so is the socket", async () => {
+    const calls: string[] = [];
+    const fs = {
+      chown: async (p: string, uid: number, gid: number) => void calls.push(`chown ${p} ${uid}:${gid}`),
+      chmod: async (p: string, mode: number) => void calls.push(`chmod ${p} ${mode.toString(8)}`),
+    };
+    await socketModes("/run/canopy-stage", "/run/canopy-stage/runner.sock", 7850, fs);
+    expect(calls).toEqual([
+      "chown /run/canopy-stage 0:7850",
+      "chmod /run/canopy-stage 750",
+      "chown /run/canopy-stage/runner.sock 0:7850",
+      "chmod /run/canopy-stage/runner.sock 660",
+    ]);
+  });
+
+  test("a setpriv the stage user could write starts nothing", async () => {
+    const setpriv = join(dir, "setpriv-open");
+    await writeFile(setpriv, "#!/bin/sh\nexit 0\n");
+    await chmod(setpriv, 0o777);
+    await expect(startStageRunner({ socket: join(dir, "open.sock"), root, probe: blocked, as: { uid: 4242, gid: 4343, setpriv } })).rejects.toThrow("setpriv");
   });
 });
