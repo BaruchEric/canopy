@@ -468,8 +468,12 @@ an intake with 503. Two optional settings in the mini's `.env`:
   extend pushes its `new/<slug>` branch with, so it needs contents write on
   the repos you want extended. A fine-grained token limited to some repos is
   fine: before it rebuilds the seed, canopy asks GitHub whether the login
-  can push, and a repo it cannot push parks the project with that reason. canopy pushes the
-  one branch, never a tag or another ref, and opens no pull request.
+  can push, and a repo it cannot push parks the project with that reason.
+  Push rights are not enough: the repo's owner must be the `gh` login
+  itself, or an owner listed under `extendOwners` in canopy's
+  `config.json` (empty by default), so an employer's or an org's repo the
+  token happens to reach is refused. canopy pushes the one branch, never a
+  tag or another ref, and opens no pull request.
 
 canopy reads the vault token, the transcribe key, the Vercel token and the
 Firebase token once at start and then deletes all four from its own environment, so no shell, run or tmux server it

@@ -427,6 +427,9 @@ export interface CanopyConfig {
   /** the canopy backends a page served from here may connect to, in the
    *  order a client falls back through (see the multi-backend spec) */
   backends: BackendEntry[];
+  /** GitHub owners, besides the gh login, whose repos the incubator may
+   *  extend (amendment 6, ruling 17); none by default */
+  extendOwners: string[];
 }
 
 /* ---------- the launcher: release builds and pull requests, run here ---------- */

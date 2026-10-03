@@ -67,6 +67,8 @@ describe("extendTarget", () => {
     const bare = await repoWith(join(ws, "plain/none"), { "README.md": "none" });
     const twinA = await repoWith(join(ws, "a/twin"), { "README.md": "a" }, "https://github.com/eric/twin-a");
     const twinB = await repoWith(join(ws, "b/twin"), { "README.md": "b" }, "https://github.com/eric/twin-b");
+    const work = await repoWith(join(ws, "work/app"), { "README.md": "app" }, "https://github.com/acme/app.git");
+    const moved = await repoWith(join(ws, "tools/old"), { "README.md": "old" }, "https://github.com/eric/old-name");
     repos = [
       repo("web-apps/clms", mine),
       repo("tools/kit", https),
@@ -74,18 +76,26 @@ describe("extendTarget", () => {
       repo("plain/none", bare),
       repo("a/twin", twinA),
       repo("b/twin", twinB),
+      repo("work/app", work),
+      repo("tools/old", moved),
       repo("_incubator/seed", mine),
       repo(".hidden/x", mine),
       repo("mini:web/app", mine, { source: "mini" }),
       repo("far", "ssh://box/srv/far", { host: "box" }),
     ];
   });
+  const mine = (name: string, o: Record<string, unknown>, owner = "eric") => meta({ owner: { login: owner }, name, ...o });
   const gh = {
-    "api repos/eric/clms": meta({ archived: false, permissions: { push: true } }),
-    "api repos/eric/kit": meta({ archived: true, permissions: { push: true } }),
-    "api repos/eric/twin-a": meta({ archived: false, permissions: { push: false, pull: true } }),
+    "api user": meta({ login: "Eric" }),
+    "api repos/eric/clms": mine("clms", { archived: false, permissions: { push: true } }),
+    "api repos/eric/kit": mine("kit", { archived: true, permissions: { push: true } }),
+    "api repos/eric/twin-a": mine("twin-a", { archived: false, permissions: { push: false, pull: true } }),
+    // an org repo the token can push: an employer's, say
+    "api repos/acme/app": mine("app", { archived: false, permissions: { push: true } }, "acme"),
+    // GitHub follows a rename and says where the repo is now
+    "api repos/eric/old-name": mine("new-name", { archived: false, permissions: { push: true } }),
   };
-  const src = () => seedSource({ repos: () => repos, self: "t", exec: withGh(gh) });
+  const src = (owners: string[] = []) => seedSource({ repos: () => repos, self: "t", exec: withGh(gh), owners: () => owners });
 
   test("a repo id, or a folder name only one repo has, resolves to its GitHub remote", async () => {
     const want = { repoId: "web-apps/clms", remote: "https://github.com/eric/clms.git", owner: "eric", name: "clms" };
@@ -106,6 +116,16 @@ describe("extendTarget", () => {
     expect(await why("tools/kit")).toContain("github.com/eric/kit is archived");
     expect(await why("a/twin")).toContain("cannot push to github.com/eric/twin-a");
     expect(await why("b/twin")).toContain("gh cannot read github.com/eric/twin-b");
+  });
+
+  test("a repo the token can push but the gh login does not own is refused, unless the config names its owner", async () => {
+    const why = (owners: string[]) => src(owners).extendTarget("work/app").then((t) => t.remote, (e: unknown) => String(e));
+    expect(await why([])).toContain("github.com/acme/app belongs to acme, not the gh login Eric");
+    expect(await why(["ACME"])).toBe("https://github.com/acme/app.git");
+  });
+
+  test("the remote is where GitHub says the repo is now, after a rename", async () => {
+    expect(await src().extendTarget("tools/old")).toEqual({ repoId: "tools/old", remote: "https://github.com/eric/new-name.git", owner: "eric", name: "new-name" });
   });
 });
 

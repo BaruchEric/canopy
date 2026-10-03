@@ -61,6 +61,9 @@ export interface SeedSourceDeps {
   quiet?: <T>(seedPath: string, f: () => Promise<T>) => Promise<T>;
   /** hears of a seed canopy changed (the server syncs its mirror) */
   committed?: (seedPath: string) => void;
+  /** GitHub owners besides the gh login whose repos an extend may target
+   *  (canopy's config, `extendOwners`); none unless a test says */
+  owners?: () => readonly string[] | Promise<readonly string[]>;
   now?: () => number;
 }
 
@@ -95,6 +98,21 @@ export function seedSource(deps: SeedSourceDeps): SeedSource {
     return meta;
   };
 
+  /** the gh login's own name on GitHub */
+  const ghLogin = async (): Promise<string> => {
+    const got = await run(["gh", "api", "user"], { timeoutMs: 30_000 });
+    if (got.code !== 0) throw new Error(`gh cannot say who it is logged in as: ${tail(got)}`);
+    let user: unknown;
+    try {
+      user = JSON.parse(got.stdout);
+    } catch {
+      user = null;
+    }
+    const login = isObj(user) ? user["login"] : null;
+    if (typeof login !== "string" || !login) throw new Error("gh answered with no login");
+    return login;
+  };
+
   /** the one repo `target` names: its id, else a folder name exactly one repo has */
   const findRepo = (target: string): Repo => {
     const repos = deps.repos();
@@ -123,7 +141,17 @@ export function seedSource(deps: SeedSourceDeps): SeedSource {
       if (meta["archived"] === true) throw new Error(`github.com/${gh.owner}/${gh.name} is archived`);
       const perms = meta["permissions"];
       if (!isObj(perms) || perms["push"] !== true) throw new Error(`the gh login cannot push to github.com/${gh.owner}/${gh.name}, so it is not yours to extend`);
-      return { repoId: id, remote: githubUrl(gh), owner: gh.owner, name: gh.name };
+      // where GitHub says the repo is now (a rename or a transfer redirects), by its own words
+      const ownerLogin = isObj(meta["owner"]) ? meta["owner"]["login"] : null;
+      const now = typeof ownerLogin === "string" && typeof meta["name"] === "string" ? githubRepo(`https://github.com/${ownerLogin}/${meta["name"]}`) : null;
+      if (!now) throw new Error(`gh answered github.com/${gh.owner}/${gh.name} with no owner and name`);
+      // push rights are not ownership: an employer's repo the token can push is not the user's to extend
+      const login = await ghLogin();
+      const allowed = new Set([login, ...(await (deps.owners?.() ?? []))].map((o) => o.toLowerCase()));
+      if (!allowed.has(now.owner.toLowerCase())) {
+        throw new Error(`github.com/${now.owner}/${now.name} belongs to ${now.owner}, not the gh login ${login}; add ${now.owner} to extendOwners in canopy's config to extend its repos`);
+      }
+      return { repoId: id, remote: githubUrl(now), owner: now.owner, name: now.name };
     },
 
     async upstreamLicense(url) {

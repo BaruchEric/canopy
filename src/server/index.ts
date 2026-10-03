@@ -3184,7 +3184,12 @@ export async function startServer(opts: {
         source:
           opts.incubator?.source !== undefined
             ? opts.incubator.source
-            : seedSource({ repos: () => state.result.repos, self: runnerOpts.backend, committed: (path) => syncMirror(state, path) }),
+            : seedSource({
+                repos: () => state.result.repos,
+                self: runnerOpts.backend,
+                committed: (path) => syncMirror(state, path),
+                owners: async () => (await loadConfig()).extendOwners,
+              }),
         advice: adviceFiles,
         onChange: (sprout) => {
           broadcast(state, { type: "incubator", sprout });

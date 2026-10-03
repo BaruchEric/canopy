@@ -279,6 +279,14 @@ describe("config store", () => {
     expect(cfg.peerSync).toBe("off");
     expect(cfg.seed).toEqual([".env", ".env.local"]);
   });
+
+  test("extendOwners is empty by default and keeps GitHub logins only", async () => {
+    const path = join(dir, "config.json");
+    await writeFile(path, JSON.stringify({}));
+    expect((await loadConfig()).extendOwners).toEqual([]);
+    await writeFile(path, JSON.stringify({ extendOwners: ["acme", "", "-bad", "a/b", 7, "Side-Org", "acme"] }));
+    expect((await loadConfig()).extendOwners).toEqual(["acme", "Side-Org"]);
+  });
 });
 
 describe("task overrides", () => {
