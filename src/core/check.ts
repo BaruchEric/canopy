@@ -19,18 +19,19 @@ const CHECK_TIMEOUT = 10 * 60_000;
  *  GitHub login and the rest `stageEnv` drops, like the stage's runs.
  *  `client` is the stage runner's: a stage check with one runs in the stages
  *  container, with the runner's env and none of canopy's; null means the
- *  runner is away, and the check says so as a shell says a command is
- *  missing, with `away` set so the flow waits for the runner rather than
- *  counting a failed check. Undefined runs it here, as an unisolated
- *  backend does. */
+ *  runner is away or not set up, and the check says `away` (the runner's
+ *  absence, or the env to set) as a shell says a command is missing, with
+ *  `away` set so the flow waits rather than counting a failed check.
+ *  Undefined runs it here, as an unisolated backend does. */
 export async function runCheck(
   repo: Pick<Repo, "path">,
   command: string,
   stage = false,
   client?: StageClient | null,
+  away: string = STAGE_AWAY,
 ): Promise<CheckResult> {
   const { host, path } = parseLocator(repo.path);
-  if (stage && client === null) return { exit: 127, output: STAGE_AWAY, away: true };
+  if (stage && client === null) return { exit: 127, output: away, away: true };
   const r: ExecResult =
     stage && client
       ? await client.exec(["sh", "-lc", command], { cwd: path, timeoutMs: CHECK_TIMEOUT })
@@ -47,7 +48,7 @@ export async function runCheck(
   // A connection that failed reads as 127 with the runner's words, which a
   // command could print as well: away only when a hello finds no runner.
   if (stage && client && r.code === 127 && r.stderr.startsWith(STAGE_AWAY) && (await client.hello().catch(() => null)) === null) {
-    return { exit: r.code, output, away: true };
+    return { exit: r.code, output: STAGE_AWAY, away: true };
   }
   return { exit: r.code, output };
 }

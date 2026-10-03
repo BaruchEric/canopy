@@ -60,6 +60,9 @@ export interface RunnerOptions {
    *  the run refuses with `StageAwayError`, and undefined when stages run
    *  here, unisolated. Asked once per stage run, at its start. */
   stageExec?: () => StageClient | null | undefined;
+  /** why a stage run cannot start when `stageExec` gives null: the
+   *  runner's absence by default, or the env to set when none is set up */
+  stageAway?: () => string;
 }
 
 /** Why a stage run cannot start through the stage runner, in the words the
@@ -170,7 +173,7 @@ export class Runner {
     }
     const stage = this.opts.stage?.(repo) ?? false;
     const client = stage && this.opts.stageExec ? this.opts.stageExec() : undefined;
-    if (client === null) throw new StageAwayError();
+    if (client === null) throw new StageAwayError(this.opts.stageAway?.());
     const make = this.opts.driver ?? ((h: Harness) => defaultDriver(h, this.opts.version));
     const driver = make(agent.harness);
     const missing = client ? stageRefusal(client, agent.harness) : driver.check();

@@ -110,8 +110,9 @@ export const STAGE_AWAY = "the stage runner is not answering";
 /** what the Runner throws for a stage while the runner is away: a flow
  *  parks on it instead of failing */
 export class StageAwayError extends Error {
-  constructor() {
-    super(STAGE_AWAY);
+  /** the runner's absence by default; with no runner set up, the env words */
+  constructor(message: string = STAGE_AWAY) {
+    super(message);
     this.name = "StageAwayError";
   }
 }

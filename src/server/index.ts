@@ -2802,6 +2802,9 @@ export async function startServer(opts: {
   /** a stage's runs and checks: the runner's client while it answers, null
    *  while it is away (the stage waits), undefined to run here unisolated */
   const stageFor = (): StageClient | null | undefined => (stage ? (stage.harnessesNow() ? stage : null) : unisolated ? undefined : null);
+  /** what a stage run or check says when `stageFor` gives null: the
+   *  runner's absence, or the env to set when no runner is set up */
+  const stageAway = (): string => isolation() ?? STAGE_AWAY;
   if (process.env["NODE_ENV"] !== "test") {
     console.log(
       stage
@@ -2819,6 +2822,7 @@ export async function startServer(opts: {
     // a seed's runs are an incubator stage's: no GitHub login of canopy's
     stage: (repo: Repo) => isSeedPath(root, repo.path),
     stageExec: stageFor,
+    stageAway,
     ...(opts.runner?.driver ? { driver: opts.runner.driver } : {}),
   };
   /** seeds with a check running, by the seed's path */
@@ -2866,7 +2870,7 @@ export async function startServer(opts: {
       // canopy runs no git in a seed while its check runs there (seedgit.ts)
       seedChecks.set(repo.path, (seedChecks.get(repo.path) ?? 0) + 1);
       try {
-        return await runCheck(repo, command, true, stageFor());
+        return await runCheck(repo, command, true, stageFor(), stageAway());
       } finally {
         const n = (seedChecks.get(repo.path) ?? 1) - 1;
         if (n > 0) seedChecks.set(repo.path, n);

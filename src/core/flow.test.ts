@@ -1129,6 +1129,16 @@ Ship it.
     expect(s.flows.get(f.id)?.tries).toBeUndefined();
   });
 
+  test("a check park gives the words the check gave, as when no runner is set up", async () => {
+    const why = "stages need the stage runner (CANOPY_STAGE_SOCKET), or CANOPY_INCUBATOR_UNISOLATED=1";
+    const s = setup({ check: () => ({ exit: 127, output: why, away: true }) });
+    const f = s.flows.start(seedRepo(), BUILD_CHECKED, "", DEFAULT_AGENT);
+    s.runner.end("run1", "done", "built it");
+    await flush();
+    expect(s.flows.get(f.id)).toMatchObject({ status: "gated", parkedFor: "stage", stageCheck: true });
+    expect(s.flows.get(f.id)?.steps[0]?.reason).toBe(why);
+  });
+
   test("a check that only prints the runner's words and exits 127 is a failed check, not a park", async () => {
     const s = setup({ check: () => ({ exit: 127, output: STAGE_AWAY }) });
     const f = s.flows.start(seedRepo(), BUILD_CHECKED, "", DEFAULT_AGENT);

@@ -379,6 +379,16 @@ describe("a stage run goes through the stage runner", () => {
     expect(runner.list()).toEqual([]);
   });
 
+  test("a stage run with no runner set up refuses in the words stageAway gives", () => {
+    const why = "stages need the stage runner (CANOPY_STAGE_SOCKET), or CANOPY_INCUBATOR_UNISOLATED=1";
+    const runner = new Runner(
+      { onChange: () => {}, onGone: () => {} },
+      { stage: () => true, stageExec: () => null, stageAway: () => why, driver: (h) => new FakeDriver(h) },
+    );
+    expect(() => runner.start(repo("_incubator/coin"), "ask", ACTIONS.ask, "go", { ...DEFAULT_AGENT })).toThrow(why);
+    expect(() => runner.start(repo("_incubator/coin"), "ask", ACTIONS.ask, "go", { ...DEFAULT_AGENT })).toThrow(StageAwayError);
+  });
+
   test("a stage run whose runner has not answered a hello yet refuses as away, not as missing", () => {
     const client = { spawn: (() => { throw new Error("no"); }) as RpcSpawn, harnessesNow: () => null } as unknown as StageClient;
     const runner = new Runner({ onChange: () => {}, onGone: () => {} }, { stage: () => true, stageExec: () => client, driver: (h) => new FakeDriver(h) });

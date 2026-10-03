@@ -137,6 +137,11 @@ describe("a stage check", () => {
     expect(await runCheck({ path: "/w/_incubator/coin" }, "bun test", true, null)).toEqual({ exit: 127, output: "the stage runner is not answering", away: true });
   });
 
+  test("with no runner set up, a stage check says the words it is handed", async () => {
+    const why = "stages need the stage runner (CANOPY_STAGE_SOCKET), or CANOPY_INCUBATOR_UNISOLATED=1";
+    expect(await runCheck({ path: "/w/_incubator/coin" }, "bun test", true, null, why)).toEqual({ exit: 127, output: why, away: true });
+  });
+
   test("a check whose connection fails is away only when a hello finds no runner either", async () => {
     let up = false;
     const client = {
@@ -144,7 +149,8 @@ describe("a stage check", () => {
       hello: async () => (up ? ["claude"] : null),
     } as unknown as StageClient;
     const away = await runCheck({ path: "/w/_incubator/coin" }, "bun test", true, client);
-    expect(away).toMatchObject({ exit: 127, away: true });
+    // the runner's words alone, not the connection's error
+    expect(away).toEqual({ exit: 127, output: "the stage runner is not answering", away: true });
     up = true;
     // the runner answers: the words came from the command, which is a failed check
     const said = await runCheck({ path: "/w/_incubator/coin" }, "bun test", true, client);

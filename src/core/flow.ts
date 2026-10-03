@@ -769,7 +769,7 @@ export class Flows {
       // the check never ran: it waits for the stage runner, and no retry is spent
       live.flow.parkedFor = "stage";
       live.flow.stageCheck = true;
-      this.park(live, STAGE_AWAY);
+      this.park(live, r.output || STAGE_AWAY);
       return;
     }
     step.check = { command: def.check, exit: r.exit, output: r.output };

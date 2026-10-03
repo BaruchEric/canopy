@@ -142,6 +142,9 @@ afterAll(() => {
 describe("with no stage runner and no unisolated switch", () => {
   beforeAll(async () => {
     await fresh();
+    await mkdir(join(scratch, "config", "workflows"), { recursive: true });
+    await writeFile(join(scratch, "config", "workflows", "held.md"), "---\nname: held\nblurb: b\n---\n\n## Do\n\nDo it.\n");
+    await writeFile(join(scratch, "config", "workflows", "checkonly.md"), "---\nname: checkonly\nblurb: b\n---\n\n## Test\ncheck: true\n");
     server = await startServer({
       root,
       port: 0,
@@ -170,7 +173,23 @@ describe("with no stage runner and no unisolated switch", () => {
     const s = (await sprouts())[0];
     const res = await postJson(`/api/repos/run?id=${encodeURIComponent(s?.repoId ?? "")}`, { action: "ask", note: "hi" });
     expect(res.status).toBe(503);
-    expect(((await res.json()) as { error: string }).error).toContain("the stage runner is not answering");
+    // no runner is set up here, so the answer names the env, not a runner to wait for
+    expect(((await res.json()) as { error: string }).error).toBe(NO_RUNNER);
+  });
+
+  test("a flow on a seed parks with the env words, at a step's start and at a check alike", async () => {
+    const s = (await sprouts())[0];
+    const id = encodeURIComponent(s?.repoId ?? "");
+    const flowOf = async (fid: string) => ((await (await fetch(url("/api/flows"))).json()) as Flow[]).find((f) => f.id === fid);
+    for (const workflow of ["checkonly", "held"]) {
+      const res = await postJson(`/api/repos/flow?id=${id}`, { workflow, note: "" });
+      expect(res.status).toBe(201);
+      const flow = (await res.json()) as Flow;
+      await until(async () => (await flowOf(flow.id))?.parkedFor === "stage", `${workflow} to park`);
+      expect((await flowOf(flow.id))?.steps[0]?.reason).toBe(NO_RUNNER);
+      await postJson("/api/flows/stop", { id: flow.id });
+      await until(async () => (await flowOf(flow.id))?.status === "stopped", `${workflow} to stop`);
+    }
   });
 });
 
