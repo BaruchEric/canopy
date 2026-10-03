@@ -264,6 +264,11 @@ describe("the incubator in the inbox", () => {
     const items = mergeInbox([], {}, { f: flow({ id: "f", parkedFor: "budget" }) }, 30_000, ctx);
     expect(items[0]?.budget).toBe(true);
   });
+  test("a gate the stage runner's absence parked says so, and is no budget", () => {
+    const items = mergeInbox([], {}, { f: flow({ id: "f", parkedFor: "stage" }) }, 30_000, ctx);
+    expect(items[0]?.stage).toBe(true);
+    expect(items[0]?.budget).toBeUndefined();
+  });
   test("going on assumptions is no answer to a run or an ask", () => {
     expect(toRunAnswer({ skip: true })).toBeNull();
     expect(toAskAnswer({ skip: true })).toBeNull();

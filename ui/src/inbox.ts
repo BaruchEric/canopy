@@ -45,6 +45,8 @@ export interface InboxItem {
   promptId?: string;
   /** a gate the flow's budget parked: continuing grants one more step */
   budget?: true;
+  /** a step the stage runner's absence parked: continuing runs it again */
+  stage?: true;
 }
 
 export interface InboxContext {
@@ -169,6 +171,7 @@ function flowItem(flow: Flow, runs: Readonly<Record<string, Run>>, ctx: InboxCon
     left: null,
     until: null,
     ...(flow.parkedFor === "budget" ? { budget: true as const } : {}),
+    ...(flow.parkedFor === "stage" ? { stage: true as const } : {}),
   };
 }
 

@@ -13,6 +13,7 @@
 
 import { describeTool, toolDetail } from "./actions";
 import { normalizeAgent } from "./agent";
+import { bunSpawn, type RpcProc, type RpcSpawn } from "./codexrpc";
 import { spawnEnv, type DriveCtx, type DriveSpec, type RunDriver } from "./driver";
 import { agentArgs } from "./harness";
 import { DEFAULT_AGENT, type AgentSettings, type RunQuestion, type RunStep } from "./types";
@@ -125,13 +126,16 @@ export interface ClaudeOptions {
   /** argv that starts claude, before its flags; the default is the claude
    *  binary on PATH (a stand-in in tests) */
   command?: readonly string[];
+  /** starts the process; Bun.spawn with every stream piped unless a test
+   *  swaps it. A stage run's own spawn (`DriveCtx.spawn`) wins over it. */
+  spawn?: RpcSpawn;
 }
 
 export class ClaudeDriver implements RunDriver {
   readonly harness = "claude" as const;
   readonly label = "Claude Code";
   private ctx: DriveCtx | null = null;
-  private proc: Bun.Subprocess<"pipe", "pipe", "pipe"> | null = null;
+  private proc: RpcProc | null = null;
   /** the binary check() found */
   private bin: string | null = null;
   /** tool_use id → its step, to attach results to their call */
@@ -172,21 +176,22 @@ export class ClaudeDriver implements RunDriver {
     if (!ctx) return;
     const chat = ctx.chat;
     let stderr = "";
-    let proc: Bun.Subprocess<"pipe", "pipe", "pipe"> | null = null;
+    let proc: RpcProc | null = null;
     try {
-      const command = this.opts.command?.length ? [...this.opts.command] : [this.bin ?? claudeBinary() ?? "claude"];
+      const spawn = ctx.spawn ?? this.opts.spawn ?? bunSpawn;
+      // the stage runner starts programs by bare name, out of its own PATH
+      const command = ctx.spawn
+        ? ["claude"]
+        : this.opts.command?.length
+          ? [...this.opts.command]
+          : [this.bin ?? claudeBinary() ?? "claude"];
       // normalized again as Claude's own, so a stray value never reaches the
       // command line; settings the Runner resolved come through unchanged
       const agent = normalizeAgent({ ...ctx.agent, harness: "claude" });
-      proc = Bun.spawn([...command, ...cliArgs(ctx.spec, agent, ctx.stage ?? false)], {
-        cwd: ctx.cwd,
-        env: spawnEnv(ctx),
-        stdin: "pipe",
-        stdout: "pipe",
-        stderr: "pipe",
-      });
+      const started = spawn([...command, ...cliArgs(ctx.spec, agent, ctx.stage ?? false)], { cwd: ctx.cwd, env: spawnEnv(ctx) });
+      proc = ctx.track ? ctx.track(started) : started;
       this.proc = proc;
-      void new Response(proc.stderr).text().then((text) => {
+      void new Response(proc.stderr ?? new ReadableStream()).text().then((text) => {
         stderr = text.slice(-STDERR_CAP);
       });
       await this.send(userMessage(message));
@@ -226,7 +231,7 @@ export class ClaudeDriver implements RunDriver {
       // Awaited: the write must reach the pipe before the caller starts
       // draining stdout, or a resumed turn can begin before its own prompt
       // arrives and end empty.
-      await proc.stdin.flush();
+      await proc.stdin.flush?.();
     } catch {
       // the process is gone; the read loop will report that
     }

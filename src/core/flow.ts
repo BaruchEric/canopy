@@ -4,6 +4,7 @@
  *  tests drive it with a fake runner. */
 
 import { checkWhen, type ActionSpec } from "./actions";
+import { STAGE_AWAY } from "./stagewire";
 import { decide, decideJudge, judgeState, verdictState } from "./verdict";
 import {
   DEFAULT_AGENT,
@@ -265,6 +266,12 @@ export class Flows {
       return;
     }
     this.byRun.delete(run.id);
+    if (run.status === "failed" && run.error?.includes(STAGE_AWAY)) {
+      // the stage runner went away under the run: the step waits for it
+      live.flow.parkedFor = "stage";
+      this.park(live, STAGE_AWAY);
+      return;
+    }
     if (run.status === "failed") {
       step.status = "failed";
       step.reason = run.error ?? "the run failed";
@@ -291,6 +298,14 @@ export class Flows {
       // continue and retry both mean: allow one more step, and run the one that was waiting
       delete live.flow.parkedFor;
       live.flow.grace = (live.flow.grace ?? 0) + 1;
+      this.resetStep(step);
+      void this.runStep(live);
+      return live.flow;
+    }
+    if (live.flow.parkedFor === "stage" && choice !== "stop") {
+      // continue and retry both mean: try the step again, the stage runner
+      // being back or not (if not, it parks again)
+      delete live.flow.parkedFor;
       this.resetStep(step);
       void this.runStep(live);
       return live.flow;
@@ -663,8 +678,8 @@ export class Flows {
     }
     this.clock(live, true);
     const restarted = flow.restarted === true;
-    delete flow.restarted;
     if (!def.body) {
+      delete flow.restarted;
       // check-only: no agent, straight to the command
       flow.status = "working";
       await this.check(live);
@@ -675,11 +690,20 @@ export class Flows {
     try {
       run = this.runner.start(live.repo, workflow.name, spec, flow.note, live.agent(def.agent));
     } catch (err) {
+      // The stage runner is away: the step waits for it, and keeps the
+      // restart note for when it runs. By name, not class, as a thrown
+      // error is matched across modules.
+      if (err instanceof Error && err.name === "StageAwayError") {
+        flow.parkedFor = "stage";
+        this.park(live, err.message);
+        return;
+      }
       step.status = "failed";
       step.reason = String(err instanceof Error ? err.message : err);
       this.end(live, "failed", step.reason);
       return;
     }
+    delete flow.restarted;
     step.status = "running";
     step.runId = run.id;
     spentOf(flow).runs += 1;

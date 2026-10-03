@@ -3000,13 +3000,14 @@ export async function startServer(opts: {
     backendName: selfName(cfg.self, hostname()),
     apiUrl: null,
   };
-  // Until stages run apart from canopy, a seed is busy while a run of its
-  // or one of its checks is alive: canopy reads its config, then git reads
-  // it again, and a process still running there could swap it in between.
+  // A seed is busy while a run of its, one of its checks, or a stage
+  // process (until the stage runner says the seed is quiet) is alive there:
+  // canopy reads its config, then git reads it again, and a process still
+  // running there could swap it in between.
   setSeedBusy((path) => {
     const top = seedTopOf(path, seedRootsNow());
     if (top === null) return false;
-    if (seedChecks.has(top)) return true;
+    if (seedChecks.has(top) || state.runner.liveIn(top)) return true;
     const repo = state.result.repos.find((r) => r.path === top && !r.host);
     return repo !== undefined && state.runner.activeFor(repo.id) !== undefined;
   });

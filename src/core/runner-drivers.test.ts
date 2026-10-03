@@ -3,11 +3,14 @@ import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { ACTIONS } from "./actions";
-import { bunSpawn } from "./codexrpc";
+import { ClaudeDriver } from "./claudedrive";
+import { bunSpawn, type RpcSpawn } from "./codexrpc";
 import { CodexDriver } from "./codexrun";
 import type { DriveCtx, RunDriver } from "./driver";
 import { defaultDriver, Runner, runEnv, type RunnerOptions } from "./runner";
-import { DEFAULT_AGENT, type Harness, type Repo, type RepoStatus, type Run } from "./types";
+import type { StageClient } from "./stageclient";
+import { StageAwayError } from "./stagewire";
+import { DEFAULT_AGENT, isRunActive, type Harness, type Repo, type RepoStatus, type Run } from "./types";
 
 /* The Runner over its drivers: which driver a harness gets, what every run's
  * process is told, a chat's turn-taking and stops as the Runner drives them,
@@ -303,4 +306,202 @@ describe("a Codex job through the Runner", () => {
     const init = log.find((m) => m["method"] === "initialize")?.["params"] as { clientInfo: { name: string } };
     expect(init.clientInfo.name).toBe("canopy");
   }, 20_000);
+});
+
+const FAKE_CLAUDE = join(import.meta.dir, "testdata", "fake-claude.ts");
+
+/** polls every 10 ms for up to 5 s */
+async function waitFor(pred: () => boolean, what = "the condition"): Promise<void> {
+  const deadline = Date.now() + 5_000;
+  while (!pred()) {
+    if (Date.now() > deadline) throw new Error(`timed out waiting for ${what}`);
+    await Bun.sleep(10);
+  }
+}
+
+/** the stand-in claude answers each message with a result, so a job ends */
+const chatMode = (spawn: RpcSpawn): RpcSpawn => (argv, o) => spawn(argv, { ...o, env: { ...o.env, FAKE_CLAUDE_MODE: "chat" } });
+
+describe("a stage run goes through the stage runner", () => {
+  /** a seed under _incubator and a plain repo, both real folders */
+  const folders = async (): Promise<{ seed: Repo; plain: Repo }> => {
+    const dir = await mkdtemp(join(tmpdir(), "canopy-runner-stage-"));
+    scratch.push(dir);
+    const seedPath = join(dir, "_incubator", "coin");
+    const plainPath = join(dir, "plain");
+    await mkdir(seedPath, { recursive: true });
+    await mkdir(plainPath);
+    return { seed: repo("_incubator/coin", seedPath), plain: repo("plain", plainPath) };
+  };
+  const isSeed = (r: Repo): boolean => r.path.includes("/_incubator/");
+
+  /** a client whose spawn records the request and starts the stand-in claude
+   *  in place of the bare name; busy answers from `busy` */
+  const recordingClient = (busy: () => boolean | null = () => false) => {
+    const seen: { argv: readonly string[]; cwd: string; env: Record<string, string | undefined> }[] = [];
+    const busyAsked: string[] = [];
+    const spawn: RpcSpawn = (argv, { cwd, env }) => {
+      seen.push({ argv, cwd, env });
+      return bunSpawn([process.execPath, FAKE_CLAUDE, ...argv.slice(1)], { cwd, env: { ...process.env, FAKE_CLAUDE_MODE: "chat" } });
+    };
+    const client = {
+      spawn,
+      harnessesNow: () => ["claude"],
+      busy: async (seed: string) => (busyAsked.push(seed), busy()),
+    } as unknown as StageClient;
+    return { client, seen, busyAsked };
+  };
+  const localClaude = (h: Harness): RunDriver =>
+    h === "claude" ? new ClaudeDriver({ command: [process.execPath, FAKE_CLAUDE], spawn: chatMode(bunSpawn) }) : new FakeDriver(h);
+
+  test("a stage run starts through the stage spawn by bare name, and a plain run does not", async () => {
+    const { seed, plain } = await folders();
+    const { client, seen } = recordingClient();
+    const runner = new Runner({ onChange: () => {}, onGone: () => {} }, { stage: isSeed, stageExec: () => client, driver: localClaude });
+    const a = runner.start(seed, "ask", ACTIONS.ask, "go", { ...DEFAULT_AGENT });
+    const b = runner.start(plain, "ask", ACTIONS.ask, "go", { ...DEFAULT_AGENT });
+    await waitFor(() => !isRunActive(a) && !isRunActive(b), "both runs to end");
+    expect([a.status, b.status]).toEqual(["done", "done"]);
+    expect(seen).toHaveLength(1);
+    expect(seen[0]?.argv[0]).toBe("claude");
+    expect(seen[0]?.argv).toContain("--setting-sources");
+    expect(seen[0]?.cwd).toBe(seed.path);
+    // the runner builds the child's env; canopy sends only the run's own names
+    expect(seen[0]?.env).toEqual({ CANOPY_RUN: a.id, CANOPY_REPO: seed.id });
+  });
+
+  test("a stage run with no stage runner refuses before a run exists", () => {
+    const runner = new Runner({ onChange: () => {}, onGone: () => {} }, { stage: () => true, stageExec: () => null, driver: (h) => new FakeDriver(h) });
+    expect(() => runner.start(repo("_incubator/coin"), "ask", ACTIONS.ask, "go", { ...DEFAULT_AGENT })).toThrow(StageAwayError);
+    expect(runner.list()).toEqual([]);
+  });
+
+  test("a stage run whose runner has not answered a hello yet refuses as away, not as missing", () => {
+    const client = { spawn: (() => { throw new Error("no"); }) as RpcSpawn, harnessesNow: () => null } as unknown as StageClient;
+    const runner = new Runner({ onChange: () => {}, onGone: () => {} }, { stage: () => true, stageExec: () => client, driver: (h) => new FakeDriver(h) });
+    expect(() => runner.start(repo("_incubator/coin"), "ask", ACTIONS.ask, "go", { ...DEFAULT_AGENT })).toThrow(StageAwayError);
+  });
+
+  test("a stage run whose runner lacks the harness refuses in words", () => {
+    const client = { spawn: (() => { throw new Error("no"); }) as RpcSpawn, harnessesNow: () => ["claude"] } as unknown as StageClient;
+    // the local driver's own check would pass: the stages container's list is what counts
+    const runner = new Runner({ onChange: () => {}, onGone: () => {} }, { stage: () => true, stageExec: () => client, driver: (h) => new FakeDriver(h) });
+    expect(() => runner.start(repo("_incubator/coin"), "ask", ACTIONS.ask, "go", { ...DEFAULT_AGENT, harness: "codex" })).toThrow(
+      "codex is not installed in the stages container",
+    );
+  });
+
+  test("liveIn holds from spawn to exit, and is clear by the end-of-run status read", async () => {
+    const { seed } = await folders();
+    const { client, busyAsked } = recordingClient();
+    const seenAtRead: boolean[] = [];
+    const runner: Runner = new Runner(
+      {
+        onChange: () => {},
+        onGone: () => {},
+        // the runner's settle() reads status once the process is over
+        status: async () => (seenAtRead.push(runner.liveIn(seed.path)), null),
+      },
+      { stage: () => true, stageExec: () => client, driver: localClaude },
+    );
+    const run = runner.start(seed, "ask", ACTIONS.ask, "go", { ...DEFAULT_AGENT });
+    expect(runner.liveIn(seed.path)).toBe(true);
+    await waitFor(() => !isRunActive(run), "the run to end");
+    await waitFor(() => seenAtRead.length > 0, "the status read");
+    expect(seenAtRead).toEqual([false]);
+    expect(runner.liveIn(seed.path)).toBe(false);
+    // the runner was asked whether anything still runs in the seed
+    expect(busyAsked).toEqual([seed.path]);
+  });
+
+  test("liveIn holds while the stage runner says the seed is still busy", async () => {
+    const { seed } = await folders();
+    let answers = 0;
+    const { client } = recordingClient(() => (answers += 1) < 3);
+    let reads = 0;
+    const runner: Runner = new Runner(
+      { onChange: () => {}, onGone: () => {}, status: async () => ((reads += 1), null) },
+      { stage: () => true, stageExec: () => client, driver: localClaude },
+    );
+    const run = runner.start(seed, "ask", ACTIONS.ask, "go", { ...DEFAULT_AGENT });
+    await waitFor(() => !isRunActive(run), "the run to end");
+    await waitFor(() => answers >= 1, "the first busy answer");
+    expect(runner.liveIn(seed.path)).toBe(true);
+    expect(reads).toBe(0);
+    await waitFor(() => !runner.liveIn(seed.path), "the seed to go quiet");
+    expect(answers).toBe(3);
+    await waitFor(() => reads === 1, "the status read");
+  });
+
+  test("an unisolated stage run feeds liveIn and still starts the local binary", async () => {
+    const { seed } = await folders();
+    const argvs: string[][] = [];
+    const recorded: RpcSpawn = (argv, o) => (argvs.push([...argv]), chatMode(bunSpawn)(argv, o));
+    let ctx: DriveCtx | null = null;
+    const runner = new Runner(
+      { onChange: () => {}, onGone: () => {} },
+      {
+        stage: () => true,
+        stageExec: () => undefined,
+        driver: () => {
+          const d = new ClaudeDriver({ command: [process.execPath, FAKE_CLAUDE], spawn: recorded });
+          const start = d.start.bind(d);
+          d.start = (c, m) => ((ctx = c), start(c, m));
+          return d;
+        },
+      },
+    );
+    const run = runner.start(seed, "ask", ACTIONS.ask, "go", { ...DEFAULT_AGENT });
+    expect(runner.liveIn(seed.path)).toBe(true);
+    expect(argvs[0]?.slice(0, 2)).toEqual([process.execPath, FAKE_CLAUDE]);
+    expect((ctx as DriveCtx | null)?.spawn).toBeUndefined();
+    await waitFor(() => !isRunActive(run) && !runner.liveIn(seed.path), "the run to end and the seed to go quiet");
+    expect(run.status).toBe("done");
+  });
+
+  test("a stage codex run starts the app-server through the stage spawn by bare name", async () => {
+    const { seed } = await folders();
+    const scenarioPath = join(seed.path, "..", "scenario.json");
+    await writeFile(
+      scenarioPath,
+      JSON.stringify({
+        turns: [
+          [
+            { notify: "item/completed", params: { threadId: "$THREAD", turnId: "$TURN", item: { type: "agentMessage", id: "m", text: "done", phase: "final_answer" } } },
+            { complete: "completed", durationMs: 1 },
+          ],
+        ],
+      }),
+    );
+    const seen: { argv: readonly string[]; env: Record<string, string | undefined> }[] = [];
+    const client = {
+      spawn: ((argv, { cwd, env }) => {
+        seen.push({ argv, env });
+        return bunSpawn([process.execPath, FAKE, ...argv.slice(1)], { cwd, env: { ...process.env, FAKE_CODEX_SCENARIO: scenarioPath } });
+      }) as RpcSpawn,
+      harnessesNow: () => ["claude", "codex"],
+      busy: async () => false,
+    } as unknown as StageClient;
+    const runner = new Runner(
+      { onChange: () => {}, onGone: () => {} },
+      {
+        stage: () => true,
+        stageExec: () => client,
+        // a local command the stage run must not use
+        driver: () => new CodexDriver({ command: ["/nonexistent/codex"], graceMs: 3_000 }),
+      },
+    );
+    const run = runner.start(seed, "ask", ACTIONS.ask, "go", { ...DEFAULT_AGENT, harness: "codex", yolo: false });
+    await waitFor(() => !isRunActive(run) && !runner.liveIn(seed.path), "the codex run to end");
+    expect(run.status).toBe("done");
+    expect(seen[0]?.argv.slice(0, 2)).toEqual(["codex", "app-server"]);
+    expect(seen[0]?.env).toEqual({ CANOPY_RUN: run.id, CANOPY_REPO: seed.id });
+  });
+
+  test("a plain run gets no stage spawn and no liveness tap", () => {
+    const { runner, ctxOf } = setup({ stage: () => false, stageExec: () => null });
+    runner.start(repo("a"), "ask", ACTIONS.ask, "x", DEFAULT_AGENT);
+    expect(ctxOf(0).spawn).toBeUndefined();
+    expect(ctxOf(0).track).toBeUndefined();
+  });
 });

@@ -14,6 +14,7 @@
  *  not per run: the map of live runs, one-at-a-time per repo, pruning, which
  *  driver a harness gets, and the git status read that sets `outcome`. */
 
+import type { RpcProc, RpcSpawn } from "./codexrpc";
 import { stageEnv } from "./envnames";
 import type { Harness, Run, RunAnswer, RunPrompt, RunQuestion, RunResult, RunStatus, RunStep, RunTokens } from "./types";
 
@@ -79,6 +80,16 @@ export interface DriveCtx {
   /** an incubator stage's run: its process starts without what `stageEnv`
    *  drops (canopy's GitHub login, the callback API, tailchan) */
   readonly stage?: boolean;
+  /** a stage's process, started in the stages container; its env is the
+   *  runner's own, so `spawnEnv` is only what the runner may pass on. Set
+   *  only for an isolated stage run: the driver then starts its harness by
+   *  bare program name, never a path found here. */
+  readonly spawn?: RpcSpawn;
+  /** Every process the driver starts goes through this before the driver
+   *  uses it, whichever spawn made it. The Runner sets it on a stage run to
+   *  hold the seed busy until the process is gone; the proc it hands back
+   *  resolves `exited` only once the seed is quiet. */
+  readonly track?: (proc: RpcProc) => RpcProc;
   /** the run's status now; "idle" tells a chat between turns */
   status(): RunStatus;
   /** Appends a step and returns it. A tool step's `tool` may be updated in
@@ -110,8 +121,14 @@ export interface DriveCtx {
 /** The environment a run's process starts with: canopy's live one with the
  *  run's own laid over it, and for an incubator stage without what
  *  `stageEnv` drops, so the harness and every command it runs go without
- *  canopy's GitHub login. */
-export function spawnEnv(ctx: Pick<DriveCtx, "env" | "stage">, base: Readonly<Record<string, string | undefined>> = process.env): Record<string, string | undefined> {
+ *  canopy's GitHub login. A stage started through the stage runner gets the
+ *  run's own names alone: none of canopy's env crosses the socket, and the
+ *  runner builds the child's env from its own. */
+export function spawnEnv(
+  ctx: Pick<DriveCtx, "env" | "stage" | "spawn">,
+  base: Readonly<Record<string, string | undefined>> = process.env,
+): Record<string, string | undefined> {
+  if (ctx.spawn) return { ...stageEnv(ctx.env) };
   return ctx.stage ? { ...stageEnv(base), ...stageEnv(ctx.env) } : { ...base, ...ctx.env };
 }
 
@@ -183,6 +200,10 @@ export interface RunCtxInit {
   env?: Record<string, string>;
   /** an incubator stage's run (`DriveCtx.stage`) */
   stage?: boolean;
+  /** the stage runner's spawn (`DriveCtx.spawn`) */
+  spawn?: RpcSpawn;
+  /** the Runner's tap on every process (`DriveCtx.track`) */
+  track?: (proc: RpcProc) => RpcProc;
   /** the harness's name in failure messages */
   label: string;
 }
@@ -210,6 +231,8 @@ export class RunCtx implements DriveCtx {
   readonly spec: DriveSpec;
   readonly env: Readonly<Record<string, string>>;
   readonly stage: boolean;
+  readonly spawn?: RpcSpawn;
+  readonly track?: (proc: RpcProc) => RpcProc;
   /** The prompts the harness waits on, oldest first; the first is the one
    *  the run shows. More than one when tools are called in parallel. */
   private pending: Pending[] = [];
@@ -228,6 +251,8 @@ export class RunCtx implements DriveCtx {
     this.spec = init.spec;
     this.stage = init.stage ?? false;
     this.env = this.stage ? stageEnv(init.env ?? {}) : (init.env ?? {});
+    if (init.spawn) this.spawn = init.spawn;
+    if (init.track) this.track = init.track;
     this.label = init.label;
   }
 

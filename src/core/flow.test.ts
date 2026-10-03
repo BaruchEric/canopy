@@ -1,5 +1,6 @@
 import { describe, expect, spyOn, test } from "bun:test";
 import { Flows, overBudget, RESTART_NOTE, stepSpec, summaryOf, type CheckResult, type FlowRecord, type FlowRunner } from "./flow";
+import { STAGE_AWAY, StageAwayError } from "./stagewire";
 import { parseWorkflow } from "./workflow";
 import { DEFAULT_AGENT, type AgentSettings, type EvidenceFile, type Fleet, type Flow, type JudgeAnswers, type Repo, type Run, type VerdictAnswers, type Workflow } from "./types";
 import type { ActionSpec } from "./actions";
@@ -987,5 +988,73 @@ describe("records and restore", () => {
     await flush();
     a.flows.dismiss(flow.id);
     expect(a.forgotten).toEqual([flow.id]);
+  });
+});
+
+describe("the stage runner away", () => {
+  /** a runner whose start throws the stage runner's away error while `away` */
+  const awayRunner = (s: ReturnType<typeof setup>) => {
+    const state = { away: true };
+    const start = s.runner.start.bind(s.runner);
+    s.runner.start = (...args: Parameters<FakeRunner["start"]>) => {
+      if (state.away) throw new StageAwayError();
+      return start(...args);
+    };
+    return state;
+  };
+
+  test("a step whose start finds the stage runner away parks, and resume runs it", async () => {
+    const s = setup();
+    const state = awayRunner(s);
+    const f = s.flows.start(repo(), TWO, "", DEFAULT_AGENT);
+    let now = s.flows.get(f.id);
+    expect(now?.status).toBe("gated");
+    expect(now?.parkedFor).toBe("stage");
+    expect(now?.steps[0]?.reason).toContain("the stage runner is not answering");
+    expect(now?.spent?.runs ?? 0).toBe(0);
+    state.away = false;
+    s.flows.resume(f.id, "continue");
+    await flush();
+    now = s.flows.get(f.id);
+    expect(now?.status).toBe("working");
+    expect(now?.parkedFor).toBeUndefined();
+    expect(now?.steps[0]).toMatchObject({ status: "running", runId: "run1" });
+    // no extra step was granted: the stage park is not a budget
+    expect(now?.grace).toBeUndefined();
+  });
+
+  test("any other throw at a step's start still fails the flow", () => {
+    const s = setup();
+    s.runner.start = () => {
+      throw new Error("r already has a run going");
+    };
+    const f = s.flows.start(repo(), TWO, "", DEFAULT_AGENT);
+    expect(s.flows.get(f.id)?.status).toBe("failed");
+  });
+
+  test("a restored mid-step flow that finds the runner away keeps its restart note for the rerun", async () => {
+    const a = setup();
+    const flow = a.flows.start(repo(), TWO, "", DEFAULT_AGENT);
+    const b = setup();
+    const state = awayRunner(b);
+    b.flows.restore([lastRecord(a.saved, flow.id)], () => repo(), sameAgent);
+    expect(b.flows.get(flow.id)?.parkedFor).toBe("stage");
+    state.away = false;
+    b.flows.resume(flow.id, "continue");
+    await flush();
+    expect(b.runner.specs[0]?.task.startsWith(RESTART_NOTE)).toBe(true);
+  });
+
+  test("a step run that ends because the stage runner went away parks too", async () => {
+    const { runner, flows } = setup();
+    const f = flows.start(repo(), TWO, "", DEFAULT_AGENT);
+    runner.end("run1", "failed", "", `Claude Code exited (code 127) without a result: ${STAGE_AWAY}: connect ENOENT /run/canopy-stage/stage.sock`);
+    await flush();
+    const now = flows.get(f.id);
+    expect(now?.status).toBe("gated");
+    expect(now?.parkedFor).toBe("stage");
+    flows.resume(f.id, "continue");
+    await flush();
+    expect(flows.get(f.id)?.steps[0]).toMatchObject({ status: "running", runId: "run2" });
   });
 });

@@ -1376,8 +1376,10 @@ export interface Flow {
   budget?: FlowBudget;
   /** agent step runs started and working time so far */
   spent?: { runs: number; workMs: number };
-  /** set while the flow is parked because its budget is spent */
-  parkedFor?: "budget";
+  /** set while the flow is parked because its budget is spent, or because
+   *  the stage runner was not answering when its step was to run; either
+   *  way continuing runs the step again */
+  parkedFor?: "budget" | "stage";
   /** steps granted past the budget by continuing a budget park */
   grace?: number;
   /** set between a restore and the rerun of the step the restart cut short */

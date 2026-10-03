@@ -177,6 +177,8 @@ function Gate({ flow, step, onChoose }: { flow: Flow; step: FlowStep; onChoose: 
   const budget = budgetWord(flow);
   const rewinds = rewindLines(flow);
   const overBudget = flow.parkedFor === "budget";
+  // the stage runner was away: the one way on is the same step again
+  const stageAway = flow.parkedFor === "stage";
   return (
     <div className="gate">
       <p className="outcome-lead">{step.reason}</p>
@@ -197,9 +199,15 @@ function Gate({ flow, step, onChoose }: { flow: Flow; step: FlowStep; onChoose: 
       )}
       <div className="gate-buttons">
         <button type="button" className="mini strong" onClick={() => onChoose("continue")}>
-          {overBudget ? "allow one more step" : last ? "accept and finish" : `continue to ${flow.steps[flow.current + 1]?.name ?? "the next step"}`}
+          {overBudget
+            ? "allow one more step"
+            : stageAway
+              ? "run the step again"
+              : last
+                ? "accept and finish"
+                : `continue to ${flow.steps[flow.current + 1]?.name ?? "the next step"}`}
         </button>
-        {!overBudget && (
+        {!overBudget && !stageAway && (
           <button type="button" className="mini" onClick={() => onChoose("retry")}>retry this step</button>
         )}
         <button type="button" className="mini" onClick={() => onChoose("stop")}>stop here</button>

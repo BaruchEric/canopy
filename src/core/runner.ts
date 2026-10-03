@@ -11,8 +11,11 @@
 
 import { buildPrompt, type ActionSpec } from "./actions";
 import { ClaudeDriver } from "./claudedrive";
+import type { RpcProc } from "./codexrpc";
 import { CodexDriver } from "./codexrun";
 import { RunCtx, type RunDriver } from "./driver";
+import type { StageClient } from "./stageclient";
+import { StageAwayError } from "./stagewire";
 import {
   DEFAULT_AGENT,
   isRunActive,
@@ -29,6 +32,11 @@ export { claudeBinary, cliArgs } from "./claudedrive";
 
 /** finished runs kept for late-joining browsers */
 const KEEP_FINISHED = 60;
+/** how long a stage run's end waits for the stage runner to call its seed
+ *  quiet before canopy takes it as quiet anyway */
+const QUIET_WAIT = 5_000;
+/** the pause between two busy questions while the seed is still busy */
+const QUIET_POLL = 100;
 
 export interface RunnerHooks {
   onChange: (run: Run) => void;
@@ -48,6 +56,19 @@ export interface RunnerOptions {
   /** whether a repo's runs are an incubator stage's (a seed), which start
    *  without canopy's GitHub login (`stageEnv`) */
   stage?: (repo: Repo) => boolean;
+  /** The stage runner's client for a stage run: null while it is away, so
+   *  the run refuses with `StageAwayError`, and undefined when stages run
+   *  here, unisolated. Asked once per stage run, at its start. */
+  stageExec?: () => StageClient | null | undefined;
+}
+
+/** Why a stage run cannot start through the stage runner, in the words the
+ *  browser shows: the runner's own list of harnesses is what counts, since
+ *  the harness runs in its container and not here. */
+function stageRefusal(client: StageClient, harness: Harness): string | null {
+  const have = client.harnessesNow();
+  if (have === null) throw new StageAwayError();
+  return have.includes(harness) ? null : `${harness} is not installed in the stages container`;
 }
 
 /** The driver a harness gets when nothing is swapped in. */
@@ -80,10 +101,15 @@ interface Live {
   spec: ActionSpec;
   /** status fingerprint at start, compared with the one at the end */
   before: string;
+  /** each of a stage run's processes, settled once it has exited and its
+   *  seed is quiet; the end-of-run status read waits on them */
+  drains: Promise<unknown>[];
 }
 
 export class Runner {
   private live = new Map<string, Live>();
+  /** repo path → how many stage processes are alive there */
+  private procs = new Map<string, number>();
 
   constructor(
     private hooks: RunnerHooks,
@@ -105,6 +131,13 @@ export class Runner {
     return undefined;
   }
 
+  /** Whether a stage run's process is alive in the repo at `path`: from its
+   *  spawn until it has exited and the stage runner says nothing is left
+   *  running there, which is before the run's end-of-run status read. */
+  liveIn(path: string): boolean {
+    return (this.procs.get(path) ?? 0) > 0;
+  }
+
   /** Starts a run on the harness the settings name. A chat may start with
    *  nothing to say: it opens idle, with no process, and the first message
    *  spawns the agent. */
@@ -123,9 +156,12 @@ export class Runner {
     if (spec.noteRequired && !note.trim()) {
       throw new Error("write what the agent should do first");
     }
+    const stage = this.opts.stage?.(repo) ?? false;
+    const client = stage && this.opts.stageExec ? this.opts.stageExec() : undefined;
+    if (client === null) throw new StageAwayError();
     const make = this.opts.driver ?? ((h: Harness) => defaultDriver(h, this.opts.version));
     const driver = make(agent.harness);
-    const missing = driver.check();
+    const missing = client ? stageRefusal(client, agent.harness) : driver.check();
     if (missing) throw new Error(missing);
     const chat = spec.mode === "chat";
     const run: Run = {
@@ -147,11 +183,21 @@ export class Runner {
     if (by) run.by = by;
     const ctx = new RunCtx(
       run,
-      { cwd: repo.path, agent, spec, env: runEnv(run, this.opts.backend), stage: this.opts.stage?.(repo) ?? false, label: driver.label },
+      {
+        cwd: repo.path,
+        agent,
+        spec,
+        env: runEnv(run, this.opts.backend),
+        stage,
+        label: driver.label,
+        ...(client ? { spawn: client.spawn } : {}),
+        // `live` is set before the driver starts anything
+        ...(stage ? { track: (proc: RpcProc) => this.track(live, repo.path, proc, client) } : {}),
+      },
       // `live` is read only once the run has ended, long after it is set
       { emit: (r) => this.hooks.onChange(r), ended: () => void this.settle(live) },
     );
-    const live: Live = { ctx, driver, started: false, repo, spec, before: statusFingerprint(repo.status) };
+    const live: Live = { ctx, driver, started: false, repo, spec, before: statusFingerprint(repo.status), drains: [] };
     this.live.set(run.id, live);
     this.prune();
     if (chat) {
@@ -248,10 +294,59 @@ export class Runner {
     }
   }
 
+  /** Holds the seed busy (`liveIn`) for one of a stage run's processes.
+   *  The proc handed back resolves `exited` only once the process is gone
+   *  and, through the stage runner, nothing else runs in the seed, so the
+   *  driver's exit and the status read after it both find the seed quiet. */
+  private track(live: Live, path: string, proc: RpcProc, client: StageClient | undefined): RpcProc {
+    this.procs.set(path, (this.procs.get(path) ?? 0) + 1);
+    const exited = (async () => {
+      try {
+        return await proc.exited;
+      } finally {
+        if (client) await this.quiet(client, path);
+        const n = (this.procs.get(path) ?? 1) - 1;
+        if (n > 0) this.procs.set(path, n);
+        else this.procs.delete(path);
+      }
+    })();
+    live.drains.push(exited.catch(() => null));
+    return { stdin: proc.stdin, stdout: proc.stdout, stderr: proc.stderr, exited, kill: () => proc.kill() };
+  }
+
+  /** Asks the stage runner whether anything still runs in the seed, until
+   *  it says no or `QUIET_WAIT` is up. The runner kills what a run left
+   *  behind when its connection ends, so a no comes at once as a rule; an
+   *  answer that does not come counts as quiet, with one line in the log. */
+  private async quiet(client: StageClient, path: string): Promise<void> {
+    const deadline = Date.now() + QUIET_WAIT;
+    for (;;) {
+      const left = deadline - Date.now();
+      if (left <= 0) {
+        console.error(`runner: ${path} still had a process in it ${QUIET_WAIT} ms after the run's own ended; taking it as quiet`);
+        return;
+      }
+      let busy: boolean | null;
+      try {
+        busy = await client.busy(path, left);
+      } catch {
+        busy = null;
+      }
+      if (busy === false) return;
+      if (busy === null) {
+        console.error(`runner: the stage runner did not say whether ${path} is quiet; taking it as quiet`);
+        return;
+      }
+      await new Promise((r) => setTimeout(r, Math.min(QUIET_POLL, Math.max(0, deadline - Date.now()))));
+    }
+  }
+
   /** Reads git status once the run is over and records whether it moved. */
   private async settle(live: Live): Promise<void> {
     const read = this.hooks.status;
     if (!read) return;
+    // a stage run's processes first: the seed is read only once it is quiet
+    if (live.drains.length) await Promise.all(live.drains);
     const run = live.ctx.run;
     let after: string | null = null;
     try {

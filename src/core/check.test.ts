@@ -6,6 +6,7 @@ import { join } from "node:path";
 import { builtinCheck } from "./builtincheck";
 import { runCheck } from "./check";
 import { CANOPY_CLI_PATH } from "./cli";
+import type { StageClient } from "./stageclient";
 import { findWorkflow, loadWorkflows } from "./workflows";
 
 const scratch: string[] = [];
@@ -119,5 +120,35 @@ describe("a seed's check starts without canopy's GitHub login", () => {
     // canopy's own check variables are there either way
     expect(stage.output).toContain("CANOPY_CLI=");
     expect(stage.output).toContain("PATH=");
+  });
+});
+
+describe("a stage check", () => {
+  test("runs through the client, and with none it says the runner is not answering", async () => {
+    const calls: { argv: string[]; cwd: string; env?: Record<string, string> }[] = [];
+    const client = {
+      exec: async (argv: string[], o: { cwd: string; timeoutMs: number; env?: Record<string, string> }) => (
+        calls.push({ argv, cwd: o.cwd, ...(o.env ? { env: o.env } : {}) }), { code: 0, stdout: "ok", stderr: "" }
+      ),
+    } as unknown as StageClient;
+    expect(await runCheck({ path: "/w/_incubator/coin" }, "bun test", true, client)).toEqual({ exit: 0, output: "ok" });
+    // no env of canopy's: the runner builds the child's own
+    expect(calls).toEqual([{ argv: ["sh", "-lc", "bun test"], cwd: "/w/_incubator/coin" }]);
+    expect(await runCheck({ path: "/w/_incubator/coin" }, "bun test", true, null)).toEqual({ exit: 127, output: "the stage runner is not answering" });
+  });
+
+  test("its output is capped like a local check's, stderr after stdout", async () => {
+    const client = { exec: async () => ({ code: 1, stdout: "x".repeat(5000), stderr: "boom" }) } as unknown as StageClient;
+    const r = await runCheck({ path: "/w/_incubator/coin" }, "bun test", true, client);
+    expect(r.exit).toBe(1);
+    expect(r.output.startsWith("…")).toBe(true);
+    expect(r.output.endsWith("x\nboom")).toBe(true);
+    expect(r.output.length).toBe(4001);
+  });
+
+  test("an undefined client keeps the local exec", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "canopy-check-local-"));
+    scratch.push(dir);
+    expect(await runCheck({ path: dir }, "echo here", true, undefined)).toEqual({ exit: 0, output: "here" });
   });
 });

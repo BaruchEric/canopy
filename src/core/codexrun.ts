@@ -956,19 +956,22 @@ export class CodexDriver implements RunDriver {
   private async open(message: string): Promise<void> {
     const ctx = this.ctx;
     if (!ctx) return;
-    const command = this.opts.command?.length ? [...this.opts.command] : [codexBinary() ?? "codex"];
-    // a seed codex trusts would have its own .codex/ config read (codextrust.ts)
-    if (ctx.stage) {
+    // the stage runner starts programs by bare name, out of its own PATH
+    const command = ctx.spawn ? ["codex"] : this.opts.command?.length ? [...this.opts.command] : [codexBinary() ?? "codex"];
+    // A seed codex trusts would have its own .codex/ config read
+    // (codextrust.ts). Through the stage runner, codex reads the stages
+    // container's CODEX_HOME, which the runner sweeps itself.
+    if (ctx.stage && !ctx.spawn) {
       const env = spawnEnv(ctx);
       await sweepCodexTrust(env["CODEX_HOME"] ?? join(homedir(), ".codex"), dirname(ctx.cwd)).catch(() => false);
     }
     let rpc: RpcClient;
     try {
-      const proc = (this.opts.spawn ?? bunSpawn)([...command, ...appServerArgs(ctx.agent)], {
+      const started = (ctx.spawn ?? this.opts.spawn ?? bunSpawn)([...command, ...appServerArgs(ctx.agent)], {
         cwd: ctx.cwd,
         env: spawnEnv(ctx),
       });
-      rpc = new RpcClient(proc);
+      rpc = new RpcClient(ctx.track ? ctx.track(started) : started);
     } catch (err) {
       ctx.exited({ code: null, stderr: "", error: `could not start codex: ${errText(err)}` });
       return;
