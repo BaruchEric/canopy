@@ -7,14 +7,16 @@
  * it reads the seed's status.
  */
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
-import { mkdir, mkdtemp, realpath, rm, writeFile } from "node:fs/promises";
+import { appendFile, mkdir, mkdtemp, realpath, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { DriveCtx, RunDriver } from "../core/driver";
+import type { ExecResult } from "../core/exec";
+import { git } from "../core/exec";
 import type { Harness } from "../core/harness";
-import { seedBusy } from "../core/seedgit";
+import { SEED_BUSY, seedBusy } from "../core/seedgit";
 import { StageClient } from "../core/stageclient";
-import type { Flow, IncubatorStages, Run, ServerEvent, Sprout } from "../core/types";
+import type { Flow, IncubatorStages, Run, ScanResult, ServerEvent, Sprout } from "../core/types";
 import { startStageRunner } from "../stage/runner";
 import { startServer } from "./index";
 
@@ -360,4 +362,105 @@ describe("a stage process alive after its run ended", () => {
     await until(async () => (await now())?.outcome !== undefined, "the outcome once quiet");
     expect((await now())?.outcome).toBe("unchanged");
   });
+});
+
+/** a committed repo at `path` with one clean file */
+async function repoAt(path: string): Promise<void> {
+  await Bun.$`mkdir -p ${path} && git -C ${path} init -q -b main`.quiet();
+  await Bun.write(join(path, "a.txt"), "a\n");
+  await Bun.$`git -C ${path} add a.txt && git -C ${path} -c user.name=a -c user.email=a@b commit -qm one`.quiet();
+}
+const dirtyFiles = async (id: string): Promise<number> =>
+  ((await (await fetch(url("/api/tree"))).json()) as ScanResult).repos.find((r) => r.id === id)?.status?.files.length ?? -1;
+
+describe("a stage alive in one seed", () => {
+  const alpha = () => join(root, "_incubator", "alpha");
+  beforeAll(async () => {
+    await fresh();
+    await repoAt(alpha());
+    await repoAt(join(root, "_incubator", "beta"));
+    server = await startServer({
+      root,
+      port: 0,
+      chan: null,
+      harnesses: ["claude"],
+      incubator: { autostart: false, transcribe: null, notes: null, ship: null, stage: null, unisolated: true },
+      runner: { driver: (h) => new HoldingDriver(h) },
+    });
+  });
+  afterAll(done);
+
+  test("holds every seed busy: another seed's status read waits for it, and comes once it ends", async () => {
+    expect(await dirtyFiles("_incubator/alpha")).toBe(0);
+    const res = await postJson(`/api/repos/run?id=${encodeURIComponent("_incubator/beta")}`, { action: "ask", note: "hi" });
+    expect(res.status).toBe(201);
+    const run = (await res.json()) as Run;
+    // a stage can write every seed, so canopy runs git in none of them
+    expect(seedBusy(alpha())).toBe(true);
+    expect((await git(alpha(), ["status", "--porcelain"])).stderr).toBe(SEED_BUSY);
+    await appendFile(join(alpha(), "a.txt"), "moved\n");
+    // past the watcher's debounce and a retry: nothing was read in alpha
+    await Bun.sleep(1500);
+    expect(await dirtyFiles("_incubator/alpha")).toBe(0);
+    await postJson("/api/runs/stop", { id: run.id });
+    await until(async () => (await dirtyFiles("_incubator/alpha")) === 1, "alpha's read once beta's run is over");
+    expect(seedBusy(alpha())).toBe(false);
+  }, 20_000);
+});
+
+/** a stage runner that answers at once and calls a seed busy until told */
+class LingeringClient extends StageClient {
+  lingering = true;
+  asked = 0;
+  constructor() {
+    super("/nonexistent/stage.sock");
+  }
+  override async hello(): Promise<string[] | null> {
+    return ["claude"];
+  }
+  override harnessesNow(): string[] | null {
+    return ["claude"];
+  }
+  override async exec(): Promise<ExecResult> {
+    return { code: 0, stdout: "ok", stderr: "" };
+  }
+  override async busy(): Promise<boolean | null> {
+    this.asked += 1;
+    return this.lingering;
+  }
+}
+
+describe("a check through the stage runner", () => {
+  const seed = () => join(root, "_incubator", "coin");
+  const client = new LingeringClient();
+  beforeAll(async () => {
+    await fresh();
+    await repoAt(seed());
+    await mkdir(join(scratch, "config", "workflows"), { recursive: true });
+    await writeFile(join(scratch, "config", "workflows", "checkonly.md"), "---\nname: checkonly\nblurb: b\n---\n\n## Test\ncheck: true\n");
+    server = await startServer({
+      root,
+      port: 0,
+      chan: null,
+      harnesses: ["claude"],
+      incubator: { autostart: false, transcribe: null, notes: null, ship: null, stage: client },
+      runner: { driver: (h) => new HoldingDriver(h), quietWait: 200 },
+    });
+  });
+  afterAll(done);
+
+  test("is over only once the runner calls the seed quiet: the seeds stay busy until it does", async () => {
+    const res = await postJson(`/api/repos/flow?id=${encodeURIComponent("_incubator/coin")}`, { workflow: "checkonly", note: "" });
+    expect(res.status).toBe(201);
+    const flow = (await res.json()) as Flow;
+    const now = async () => ((await (await fetch(url("/api/flows"))).json()) as Flow[]).find((f) => f.id === flow.id);
+    await until(async () => (await now())?.status === "done", "the check to pass");
+    // the runner still says something runs there
+    expect(client.asked).toBeGreaterThan(0);
+    expect(seedBusy(seed())).toBe(true);
+    await Bun.sleep(500);
+    expect(seedBusy(seed())).toBe(true);
+    client.lingering = false;
+    await until(() => !seedBusy(seed()), "the seed to go quiet");
+  }, 20_000);
 });

@@ -96,6 +96,38 @@ export function setSeedBusy(busy: (path: string) => boolean): void {
 }
 export const seedBusy = (path: string): boolean => busyHook(path);
 
+/** how long canopy's own write to a seed (a commit, a ship's clone) waits for
+ *  the stages to go quiet before it fails */
+export const SEED_QUIET_MAX = 2 * 60 * 60 * 1000;
+const QUIET_POLL = 250;
+const pause = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
+
+/** Settles once `seedBusy(path)` is false, or throws after `maxMs`. A stage
+ *  alive in any seed makes every seed busy, so canopy's own writes wait their
+ *  turn rather than fail. */
+export async function whenSeedsQuiet(path: string, maxMs = SEED_QUIET_MAX, poll = QUIET_POLL): Promise<void> {
+  const deadline = Date.now() + maxMs;
+  while (seedBusy(path)) {
+    if (Date.now() >= deadline) throw new Error(`${SEED_BUSY}: the seeds were still busy after ${Math.round(maxMs / 60_000)} min`);
+    await pause(Math.min(poll, Math.max(1, deadline - Date.now())));
+  }
+}
+
+/** Runs `f` once the seeds are quiet, and again if a stage starting in
+ *  between makes its git calls answer SEED_BUSY, all within `maxMs`. */
+export async function inQuietSeed<T>(path: string, f: () => Promise<T>, maxMs = SEED_QUIET_MAX, poll = QUIET_POLL): Promise<T> {
+  const deadline = Date.now() + maxMs;
+  for (;;) {
+    await whenSeedsQuiet(path, Math.max(0, deadline - Date.now()), poll);
+    try {
+      return await f();
+    } catch (e) {
+      if (!String(e).includes(SEED_BUSY) || Date.now() >= deadline) throw e;
+      await pause(poll);
+    }
+  }
+}
+
 /** keyed on ctime too: `touch -r` puts an mtime back, nothing puts a ctime back */
 const memo = new Map<string, { ctime: number; mtime: number; ino: number; size: number; refusal: string | null }>();
 

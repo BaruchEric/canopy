@@ -300,3 +300,81 @@ export class StageClient {
     };
   }
 }
+
+/** How a hold on a seed came out by the end of its wait: the runner said
+ *  nothing runs there, did not answer, or still says something does. */
+export type QuietWord = "quiet" | "away" | "busy";
+
+export interface QuietHold {
+  /** within `wait`: what the stage runner said by then */
+  settled: Promise<QuietWord>;
+  /** once the runner says no, or stops answering: until then canopy keeps
+   *  the seeds busy and reads none of them */
+  released: Promise<void>;
+  /** lets go at once, for a server stopping */
+  cancel(): void;
+}
+
+/** first ask, then every `poll` ms until `wait` is up, then every `repoll` */
+const HOLD_POLL = 100;
+const HOLD_REPOLL = 1_000;
+
+/** Asks the stage runner whether anything still runs in `seed` until it says
+ *  no. A persistent yes stays busy past `wait`, with one line in the log, and
+ *  the hold lets go only on the next no: a process a stage left alive in a
+ *  seed must not see canopy run git there. Only an answer that does not come
+ *  (the runner gone, which takes its processes with it) counts as quiet. */
+export function holdQuiet(
+  client: Pick<StageClient, "busy">,
+  seed: string,
+  wait: number,
+  label = "canopy",
+  poll = HOLD_POLL,
+  repoll = HOLD_REPOLL,
+): QuietHold {
+  let settle!: (w: QuietWord) => void;
+  let release!: () => void;
+  const settled = new Promise<QuietWord>((r) => (settle = r));
+  const released = new Promise<void>((r) => (release = r));
+  let over = false;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  let word: QuietWord | null = null;
+  const start = Date.now();
+  const say = (w: QuietWord): void => {
+    if (word !== null) return;
+    word = w;
+    settle(w);
+  };
+  const end = (w: QuietWord): void => {
+    if (over) return;
+    over = true;
+    if (timer) clearTimeout(timer);
+    say(w);
+    release();
+  };
+  const ask = async (): Promise<void> => {
+    if (over) return;
+    const held = Date.now() - start;
+    if (word === null && held >= wait) {
+      console.error(`${label}: ${seed} still has a process in it ${wait} ms after the run's own ended; every seed stays busy until it has none`);
+      say("busy");
+    }
+    let busy: boolean | null;
+    try {
+      busy = await client.busy(seed, word === null ? Math.max(1, wait - held) : undefined);
+    } catch {
+      busy = null;
+    }
+    if (over) return;
+    if (busy === false) return end("quiet");
+    if (busy === null) {
+      console.error(`${label}: the stage runner did not say whether ${seed} is quiet; taking it as quiet`);
+      return end("away");
+    }
+    const next = word === null ? Math.min(poll, Math.max(0, wait - (Date.now() - start))) : repoll;
+    timer = setTimeout(() => void ask(), next);
+    if (word !== null) timer.unref?.();
+  };
+  void ask();
+  return { settled, released, cancel: () => end(word ?? "quiet") };
+}

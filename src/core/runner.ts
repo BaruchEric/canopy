@@ -14,7 +14,7 @@ import { ClaudeDriver } from "./claudedrive";
 import type { RpcProc } from "./codexrpc";
 import { CodexDriver } from "./codexrun";
 import { RunCtx, type RunDriver } from "./driver";
-import type { StageClient } from "./stageclient";
+import { holdQuiet, type QuietHold, type StageClient } from "./stageclient";
 import { StageAwayError } from "./stagewire";
 import {
   DEFAULT_AGENT,
@@ -33,10 +33,9 @@ export { claudeBinary, cliArgs } from "./claudedrive";
 /** finished runs kept for late-joining browsers */
 const KEEP_FINISHED = 60;
 /** how long a stage run's end waits for the stage runner to call its seed
- *  quiet before canopy takes it as quiet anyway */
-const QUIET_WAIT = 5_000;
-/** the pause between two busy questions while the seed is still busy */
-const QUIET_POLL = 100;
+ *  quiet before the run ends anyway; the seeds stay busy past it until the
+ *  runner says no */
+export const QUIET_WAIT = 5_000;
 
 export interface RunnerHooks {
   onChange: (run: Run) => void;
@@ -63,6 +62,9 @@ export interface RunnerOptions {
   /** why a stage run cannot start when `stageExec` gives null: the
    *  runner's absence by default, or the env to set when none is set up */
   stageAway?: () => string;
+  /** how long a stage run's end waits for the runner to call its seed
+   *  quiet before the run ends anyway; tests shorten it */
+  quietWait?: number;
 }
 
 /** Why a stage run cannot start through the stage runner, in the words the
@@ -113,6 +115,8 @@ export class Runner {
   private live = new Map<string, Live>();
   /** repo path → how many stage processes are alive there */
   private procs = new Map<string, number>();
+  /** every seed a stage run left still busy, let go of on `stopAll` */
+  private holds = new Set<QuietHold>();
 
   constructor(
     private hooks: RunnerHooks,
@@ -136,9 +140,20 @@ export class Runner {
 
   /** Whether a stage run's process is alive in the repo at `path`: from its
    *  spawn until it has exited and the stage runner says nothing is left
-   *  running there, which is before the run's end-of-run status read. */
+   *  running there. That is before the run's end-of-run status read as a
+   *  rule; a seed the runner still calls busy past `quietWait` stays held
+   *  after it, and that read finds the seeds busy and records no status. */
   liveIn(path: string): boolean {
     return (this.procs.get(path) ?? 0) > 0;
+  }
+
+  /** Whether anything of the stages is alive anywhere: a stage run that is
+   *  active, or a stage process `liveIn` some seed. A stage can write every
+   *  seed, so while this holds canopy runs git in none of them. */
+  liveAny(): boolean {
+    if (this.procs.size > 0) return true;
+    for (const l of this.live.values()) if (isRunActive(l.ctx.run) && (this.opts.stage?.(l.repo) ?? false)) return true;
+    return false;
   }
 
   /** Settles once every stage process started in the repo at `path` has
@@ -287,6 +302,7 @@ export class Runner {
 
   /** Stops everything, for server shutdown. */
   stopAll(): void {
+    for (const h of this.holds) h.cancel();
     for (const l of this.live.values()) {
       if (isRunActive(l.ctx.run)) this.stop(l.ctx.run.id);
     }
@@ -328,41 +344,26 @@ export class Runner {
         }
         return code;
       } finally {
-        if (client) await this.quiet(client, path);
-        const n = (this.procs.get(path) ?? 1) - 1;
-        if (n > 0) this.procs.set(path, n);
-        else this.procs.delete(path);
+        // the exit waits for the wait; the seeds stay busy past it while
+        // the stage runner still says something runs there
+        const hold = client ? holdQuiet(client, path, this.opts.quietWait ?? QUIET_WAIT, "runner") : null;
+        const drop = (): void => {
+          const n = (this.procs.get(path) ?? 1) - 1;
+          if (n > 0) this.procs.set(path, n);
+          else this.procs.delete(path);
+        };
+        if (hold) {
+          this.holds.add(hold);
+          void hold.released.then(() => {
+            this.holds.delete(hold);
+            drop();
+          });
+          await hold.settled;
+        } else drop();
       }
     })();
     live.drains.push(exited.catch(() => null));
     return { stdin: proc.stdin, stdout: proc.stdout, stderr: proc.stderr, exited, kill: () => proc.kill() };
-  }
-
-  /** Asks the stage runner whether anything still runs in the seed, until
-   *  it says no or `QUIET_WAIT` is up. The runner kills what a run left
-   *  behind when its connection ends, so a no comes at once as a rule; an
-   *  answer that does not come counts as quiet, with one line in the log. */
-  private async quiet(client: StageClient, path: string): Promise<void> {
-    const deadline = Date.now() + QUIET_WAIT;
-    for (;;) {
-      const left = deadline - Date.now();
-      if (left <= 0) {
-        console.error(`runner: ${path} still had a process in it ${QUIET_WAIT} ms after the run's own ended; taking it as quiet`);
-        return;
-      }
-      let busy: boolean | null;
-      try {
-        busy = await client.busy(path, left);
-      } catch {
-        busy = null;
-      }
-      if (busy === false) return;
-      if (busy === null) {
-        console.error(`runner: the stage runner did not say whether ${path} is quiet; taking it as quiet`);
-        return;
-      }
-      await new Promise((r) => setTimeout(r, Math.min(QUIET_POLL, Math.max(0, deadline - Date.now()))));
-    }
   }
 
   /** Reads git status once the run is over and records whether it moved. */

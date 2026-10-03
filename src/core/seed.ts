@@ -11,6 +11,7 @@ import { lstat, mkdir, open, realpath, rename, rm } from "node:fs/promises";
 import { basename, dirname, isAbsolute, join, relative, sep } from "node:path";
 import { exec, git } from "./exec";
 import { networkOrigin } from "./peersync";
+import { inQuietSeed } from "./seedgit";
 import { isSproutId, urlWithoutSecret } from "./sprout";
 
 export const SEED_READ_MAX = 256 * 1024;
@@ -300,7 +301,8 @@ export function seedOps(self: string) {
     read: readSeed,
     write: writeSeed,
     commit: async (path: string, rels: string[], message: string): Promise<void> => {
-      await commitSeed(path, rels, message, self);
+      // a stage alive in any seed makes this one busy: wait for quiet
+      await inQuietSeed(path, () => commitSeed(path, rels, message, self));
     },
     /** a dangling symlink counts as there, as makeSeed would refuse it */
     exists: (path: string): boolean => lstatSync(path, { throwIfNoEntry: false }) !== undefined,

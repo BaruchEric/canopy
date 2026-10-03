@@ -4,7 +4,8 @@ import { link, mkdir, mkdtemp, readFile, readdir, rename, rm, symlink, writeFile
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { git } from "./exec";
-import { commitSeed, makeSeed, readSeed, seedWorkPath, writeSeed } from "./seed";
+import { commitSeed, makeSeed, readSeed, seedOps, seedWorkPath, writeSeed } from "./seed";
+import { setSeedBusy, setSeedRoots } from "./seedgit";
 
 let dir: string;
 /** the sprout every seed here is made for */
@@ -281,6 +282,34 @@ describe("a stranger's clone", () => {
     }
     expect([...seen]).toEqual([]);
     expect(await holding(seeds)).toEqual([]);
+  });
+});
+
+describe("canopy's own commit while a stage is alive", () => {
+  test("waits for the seeds to go quiet rather than fail", async () => {
+    const seeds = join(dir, "_incubator");
+    const path = join(seeds, "quietly");
+    await makeSeed(path, { ".canopy/brief.md": "# Q\n" }, undefined, { self: "mini", id: SP });
+    await writeFile(join(path, ".canopy", "intent.md"), "want\n");
+    let busy = true;
+    setSeedRoots([seeds]);
+    setSeedBusy(() => busy);
+    let over = false;
+    try {
+      const committing = seedOps("mini").commit(path, [".canopy/intent.md"], "clarify: Q").then(
+        () => "committed",
+        (e: unknown) => String(e),
+      );
+      void committing.then(() => (over = true));
+      await Bun.sleep(600);
+      expect(over).toBe(false);
+      busy = false;
+      expect(await committing).toBe("committed");
+    } finally {
+      setSeedBusy(() => false);
+      setSeedRoots([]);
+    }
+    expect((await log(path))[0]).toBe("canopy <canopy@mini>|clarify: Q");
   });
 });
 

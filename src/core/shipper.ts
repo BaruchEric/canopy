@@ -24,7 +24,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { exec as realExec, type ExecOptions, type ExecResult } from "./exec";
 import { readSeed, writeSeed } from "./seed";
-import { guardSeed } from "./seedgit";
+import { guardSeed, whenSeedsQuiet } from "./seedgit";
 import type { HostId } from "./types";
 
 export interface Shipper {
@@ -68,6 +68,8 @@ const NO_HOOKS = ["-c", "core.hooksPath=/dev/null", "-c", "core.fsmonitor=false"
 /** a clone runs upload-pack in the seed, which reads the seed's config: the
  *  same guard as every other git call canopy makes there (seedgit.ts) */
 async function guardOrThrow(seedPath: string): Promise<void> {
+  // a clone runs upload-pack in the seed: not while any stage is alive
+  await whenSeedsQuiet(seedPath);
   const refused = await guardSeed(seedPath);
   if (refused) throw new Error(`the seed: ${refused}`);
 }

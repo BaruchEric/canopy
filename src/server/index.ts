@@ -107,11 +107,11 @@ import {
   setRole,
   upsertWorkspace,
 } from "../core/store";
-import { Runner } from "../core/runner";
+import { QUIET_WAIT, Runner } from "../core/runner";
 import type { RunDriver } from "../core/driver";
 import { SEED_AGENT_REFUSAL, SEEDS_DIR } from "../core/sprout";
 import { sweepCodexTrust } from "../core/codextrust";
-import { SEED_BUSY, seedBusy, seedRootsNow, seedTopOf, setSeedBusy, setSeedRoots } from "../core/seedgit";
+import { SEED_BUSY, seedBusy, seedRootsNow, setSeedBusy, setSeedRoots, underSeeds } from "../core/seedgit";
 import { suggestMessage } from "../core/suggest";
 import {
   HISTORY_WINDOWS,
@@ -153,7 +153,7 @@ import {
   TERM_GONE,
 } from "../core/types";
 import type { About, IncubatorStages, RepoStatus } from "../core/types";
-import { StageClient } from "../core/stageclient";
+import { holdQuiet, type QuietHold, StageClient } from "../core/stageclient";
 import { STAGE_AWAY } from "../core/stagewire";
 import { DEFAULT_IGNORE } from "../core/scan";
 import { ChanHub, PUT_MAX } from "./tailchan";
@@ -2739,7 +2739,9 @@ export async function startServer(opts: {
     stageEvery?: number;
   };
   /** the runner's driver per harness; tests swap in a stand-in agent */
-  runner?: { driver?: (harness: Harness) => RunDriver };
+  /** `quietWait` shortens how long a stage run's or check's end waits for
+   *  the stage runner to call its seed quiet, for tests */
+  runner?: { driver?: (harness: Harness) => RunDriver; quietWait?: number };
 }): Promise<{ port: number; stop: () => void }> {
   const cfg = await loadConfig();
   const root = await realpath(opts.root);
@@ -2824,9 +2826,12 @@ export async function startServer(opts: {
     stageExec: stageFor,
     stageAway,
     ...(opts.runner?.driver ? { driver: opts.runner.driver } : {}),
+    ...(opts.runner?.quietWait !== undefined ? { quietWait: opts.runner.quietWait } : {}),
   };
   /** seeds with a check running, by the seed's path */
   const seedChecks = new Map<string, number>();
+  /** checks whose seed the stage runner still calls busy, let go on stop */
+  const checkHolds = new Set<QuietHold>();
   const runner = new Runner({
     onChange: (run) => {
       broadcast(state, { type: "run", run });
@@ -2867,14 +2872,31 @@ export async function startServer(opts: {
       // @name is a built-in canopy runs itself over readSeed, never a shell line
       if (isBuiltinCheck(command)) return builtinCheck(command, repo.path);
       if (!isSeedPath(root, repo.path)) return runCheck(repo, command, false);
-      // canopy runs no git in a seed while its check runs there (seedgit.ts)
+      // canopy runs no git in any seed while a check runs in one (seedgit.ts),
+      // nor after it while the stage runner still says something runs there
       seedChecks.set(repo.path, (seedChecks.get(repo.path) ?? 0) + 1);
-      try {
-        return await runCheck(repo, command, true, stageFor(), stageAway());
-      } finally {
+      const drop = (): void => {
         const n = (seedChecks.get(repo.path) ?? 1) - 1;
         if (n > 0) seedChecks.set(repo.path, n);
         else seedChecks.delete(repo.path);
+      };
+      const client = stageFor();
+      let held = false;
+      try {
+        const result = await runCheck(repo, command, true, client, stageAway());
+        if (client) {
+          const hold = holdQuiet(client, repo.path, runnerOpts.quietWait ?? QUIET_WAIT, "check");
+          checkHolds.add(hold);
+          held = true;
+          void hold.released.then(() => {
+            checkHolds.delete(hold);
+            drop();
+          });
+          await hold.settled;
+        }
+        return result;
+      } finally {
+        if (!held) drop();
       }
     },
     evaluator: hasGatewayKey() ? jev : null,
@@ -3070,17 +3092,11 @@ export async function startServer(opts: {
     toldStages = said;
     broadcast(state, { type: "stages", stages: now });
   };
-  // A seed is busy while a run of its, one of its checks, or a stage
-  // process (until the stage runner says the seed is quiet) is alive there:
-  // canopy reads its config, then git reads it again, and a process still
-  // running there could swap it in between.
-  setSeedBusy((path) => {
-    const top = seedTopOf(path, seedRootsNow());
-    if (top === null) return false;
-    if (seedChecks.has(top) || state.runner.liveIn(top)) return true;
-    const repo = state.result.repos.find((r) => r.path === top && !r.host);
-    return repo !== undefined && state.runner.activeFor(repo.id) !== undefined;
-  });
+  // Every seed is busy while any stage is alive: a seed's check, a seed's
+  // run, or a stage process (until the stage runner says its seed is quiet).
+  // canopy reads a seed's config, then git reads it again, and a stage
+  // process can write any seed, not only its own, in between.
+  setSeedBusy((path) => underSeeds(path, seedRootsNow()) && (seedChecks.size > 0 || state.runner.liveAny()));
   await rememberRoot(root);
   // The login shell's first answer lands whenever it lands; a list that
   // differs from what the tree offered goes out to the browsers with it.
@@ -3503,6 +3519,7 @@ export async function startServer(opts: {
       if (flowsLock.owner) flowsLock.release();
       state.flows.stopAll();
       state.runner.stopAll();
+      for (const h of checkHolds) h.cancel();
       state.launcher.shutdown();
       state.chan.close();
       state.registry.close();

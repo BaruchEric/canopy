@@ -5,7 +5,7 @@ import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { exec, type ExecOptions, type ExecResult } from "./exec";
-import { setSeedRoots } from "./seedgit";
+import { setSeedBusy, setSeedRoots } from "./seedgit";
 import { shipConfig, shipper, type ShipDeps } from "./shipper";
 
 interface Call { cmd: string[]; opts: ExecOptions }
@@ -186,6 +186,35 @@ describe("a seed whose config canopy will not run", () => {
       await expect(shipper(cfg, f.deps).deploy(dir, "coin")).rejects.toThrow("core.fsmonitor");
       expect(f.calls.filter((c) => c.cmd.includes("clone"))).toHaveLength(0);
     } finally {
+      setSeedRoots([]);
+    }
+  });
+});
+
+describe("a seed while a stage is alive", () => {
+  test("push waits for the seeds to go quiet before its clone runs upload-pack there", async () => {
+    const seeds = join(await mkdtemp(join(tmpdir(), "canopy-ship-busy-")), "_incubator");
+    const dir = join(seeds, "coin");
+    await mkdir(dir, { recursive: true });
+    expect((await exec(["git", "init", "-q", "-b", "main"], { cwd: dir })).code).toBe(0);
+    let busy = true;
+    setSeedRoots([seeds]);
+    setSeedBusy(() => busy);
+    try {
+      const f = fakes(() => ok());
+      const pushing = shipper(cfg, f.deps)
+        .push(dir, "eric/coin")
+        .then(
+          () => "pushed",
+          (e: unknown) => String(e),
+        );
+      await Bun.sleep(600);
+      expect(f.calls.filter((c) => c.cmd.includes("clone"))).toHaveLength(0);
+      busy = false;
+      expect(await pushing).toBe("pushed");
+      expect(f.calls.filter((c) => c.cmd.includes("clone"))).toHaveLength(1);
+    } finally {
+      setSeedBusy(() => false);
       setSeedRoots([]);
     }
   });

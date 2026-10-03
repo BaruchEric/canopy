@@ -446,6 +446,39 @@ describe("a stage run goes through the stage runner", () => {
     await waitFor(() => reads === 1, "the status read");
   });
 
+  test("a seed the stage runner keeps calling busy stays held past the wait, and the run still ends", async () => {
+    const { seed } = await folders();
+    let busy = true;
+    const { client } = recordingClient(() => busy);
+    let reads = 0;
+    const runner: Runner = new Runner(
+      { onChange: () => {}, onGone: () => {}, status: async () => ((reads += 1), null) },
+      { stage: () => true, stageExec: () => client, driver: localClaude, quietWait: 200 },
+    );
+    const run = runner.start(seed, "ask", ACTIONS.ask, "go", { ...DEFAULT_AGENT });
+    await waitFor(() => !isRunActive(run), "the run to end");
+    // the run's own end does not wait on the seed for longer than the wait
+    await waitFor(() => reads === 1, "the end-of-run status read");
+    expect(run.status).toBe("done");
+    // a yes past the wait is still a yes: every seed stays busy
+    expect(runner.liveIn(seed.path)).toBe(true);
+    expect(runner.liveAny()).toBe(true);
+    await Bun.sleep(600);
+    expect(runner.liveIn(seed.path)).toBe(true);
+    busy = false;
+    await waitFor(() => !runner.liveIn(seed.path), "the seed to go quiet");
+    expect(runner.liveAny()).toBe(false);
+  });
+
+  test("a stage runner that does not answer the busy question lets the seed go, as before", async () => {
+    const { seed } = await folders();
+    const { client } = recordingClient(() => null);
+    const runner = new Runner({ onChange: () => {}, onGone: () => {} }, { stage: () => true, stageExec: () => client, driver: localClaude, quietWait: 200 });
+    const run = runner.start(seed, "ask", ACTIONS.ask, "go", { ...DEFAULT_AGENT });
+    await waitFor(() => !isRunActive(run) && !runner.liveIn(seed.path), "the run to end and the seed to go");
+    expect(runner.liveAny()).toBe(false);
+  });
+
   test("an unisolated stage run feeds liveIn and still starts the local binary", async () => {
     const { seed } = await folders();
     const argvs: string[][] = [];
