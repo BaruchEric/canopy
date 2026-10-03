@@ -53,6 +53,27 @@ describe("the deploy's answers", () => {
     expect(deploymentUrl(out)).toBe("https://coin-counter-abc123-eric.vercel.app");
     expect(deploymentUrl("Error: no\n")).toBe(null);
   });
+  test("vercel 61 off a terminal prints json, and the deployment url is its deployment.url", () => {
+    const out = JSON.stringify(
+      {
+        status: "ok",
+        deployment: {
+          id: "dpl_5kynSKkQoQ7oeHJ1bt5gd9CCuYmL",
+          url: "https://coin-counter-4d19ino5q-eric.vercel.app",
+          productionUrl: "https://coin-counter.vercel.app",
+          inspectorUrl: "https://vercel.com/eric/coin-counter/5kynSKkQoQ7oeHJ1bt5gd9CCuYmL",
+          readyState: "READY",
+          target: "production",
+        },
+      },
+      null,
+      2,
+    );
+    expect(deploymentUrl(out)).toBe("https://coin-counter-4d19ino5q-eric.vercel.app");
+    // a url off vercel.app in the json is not taken
+    expect(deploymentUrl(JSON.stringify({ deployment: { url: "https://coins.example.com" } }))).toBe(null);
+    expect(deploymentUrl(JSON.stringify({ status: "error" }))).toBe(null);
+  });
   test("the production url is the shortest vercel.app alias, else the deployment's own", () => {
     expect(productionUrl(["coin-counter-eric.vercel.app", "coin-counter.vercel.app", "coins.example.com"], "https://d.vercel.app")).toBe("https://coin-counter.vercel.app");
     expect(productionUrl([], "https://d.vercel.app")).toBe("https://d.vercel.app");

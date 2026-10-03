@@ -44,11 +44,30 @@ const VERCEL_APP = /^https:\/\/[a-z0-9-]+(?:\.[a-z0-9-]+)*\.vercel\.app\/?$/;
 /** the only addresses a sprout goes live at: no custom domain is ever involved */
 export const isVercelAppUrl = (u: string): boolean => VERCEL_APP.test(u);
 
-/** the deployment url `vercel deploy` printed: its last vercel.app line */
+/** the deployment url `vercel deploy` printed: off a terminal, vercel 61
+ *  prints json and the url is its `deployment.url`; older ones print the
+ *  url as their last vercel.app line */
 export function deploymentUrl(stdout: string): string | null {
+  const json = deploymentJsonUrl(stdout);
+  if (json !== undefined) return json;
   const urls = stdout.split("\n").map((l) => l.trim()).filter(isVercelAppUrl);
   const last = urls.at(-1);
   return last ? last.replace(/\/$/, "") : null;
+}
+
+/** `deployment.url` from vercel's json output: undefined when the output is
+ *  not json, null when it is but names no vercel.app url */
+function deploymentJsonUrl(stdout: string): string | null | undefined {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(stdout);
+  } catch {
+    return undefined;
+  }
+  if (typeof parsed !== "object" || parsed === null || !("deployment" in parsed)) return null;
+  const dep = parsed.deployment;
+  if (typeof dep !== "object" || dep === null || !("url" in dep) || typeof dep.url !== "string") return null;
+  return isVercelAppUrl(dep.url) ? dep.url.replace(/\/$/, "") : null;
 }
 
 /** the production url among a deployment's aliases: the shortest vercel.app one, else the deployment's own */
