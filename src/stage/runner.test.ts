@@ -215,6 +215,20 @@ describe("the stage runner", () => {
     expect(await gone(pid)).toBe(true);
   });
 
+  test("closing the connection kills a grandchild only the tree walk reaches", async () => {
+    // set -m puts the job in a process group of its own, and its cwd is out
+    // of the seed, so neither the group kill nor the seed sweep reaches it
+    const pidFile = join(dir, "treeonly.pid");
+    const c = connect(sock);
+    c.on("error", () => {});
+    await new Promise<void>((r) => c.on("connect", () => r()));
+    c.write(encodeFrame({ t: "spawn", argv: ["sh", "-c", `set -m; (cd / && exec sleep 300) & echo $! > ${pidFile}; wait`], cwd: join(root, "coin"), env: {} }));
+    const pid = await pidIn(pidFile);
+    expect(alive(pid)).toBe(true);
+    c.destroy();
+    expect(await gone(pid)).toBe(true);
+  });
+
   test("a kill frame ends the process and the exit frame still comes", async () => {
     const fs = await talk({ t: "spawn", argv: ["sh", "-c", "sleep 300"], cwd: join(root, "coin"), env: {} }, [{ t: "kill" }]);
     expect(fs.at(-1)?.t).toBe("exit");
@@ -297,12 +311,18 @@ describe("the stage runner", () => {
     await mkdir(home, { recursive: true });
     const config = `model = "x"\n\n[projects."${join(root, "coin")}"]\ntrust_level = "trusted"\n\n[projects."/elsewhere"]\ntrust_level = "trusted"\n`;
     await writeFile(join(home, "config.toml"), config);
+    const fakeCodex = join(dir, "fake-codex");
+    await writeFile(fakeCodex, '#!/bin/sh\ncat "$CODEX_HOME/config.toml"\n');
+    await chmod(fakeCodex, 0o755);
     const path = await extra("codex", {
       env: { PATH: process.env["PATH"], HOME: dir, CODEX_HOME: home },
-      programs: { codex: await standIn(join(dir, "fake-codex")) },
+      programs: { codex: fakeCodex },
     });
     const fs = await talk({ t: "spawn", argv: ["codex"], cwd: join(root, "coin"), env: {} }, [], 5000, path);
     expect(fs.at(-1)).toEqual({ t: "exit", code: 0 });
+    // what codex itself read when it started
+    expect(text(fs, "out")).toContain(`[projects."/elsewhere"]`);
+    expect(text(fs, "out")).not.toContain(join(root, "coin"));
     const after = await readFile(join(home, "config.toml"), "utf8");
     expect(after).not.toContain(join(root, "coin"));
     expect(after).toContain(`[projects."/elsewhere"]`);
