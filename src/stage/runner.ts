@@ -5,7 +5,8 @@
  * busy question (does any process have its cwd in a seed), or a spawn. It
  * starts only claude, codex or sh, resolved on its own PATH to a program
  * outside the stage root, only in a seed (a direct, non-dot child of the
- * stage root, by realpath, and spawned in that realpath), with an env built
+ * stage root, by realpath, which the child enters itself after the drop,
+ * `enterSeed`), with an env built
  * from its own base and three CANOPY_* names, never what canopy sends.
  * Every refusal is answered before anything starts.
  *
@@ -156,6 +157,16 @@ export function choresAnswer(out: string): { refused: string | null } | null {
 /** how long the chores child may take before it is killed and the spawn refused */
 const CHORES_MS = 20_000;
 const CHORES_FAILED = "the stages' settings could not be checked as the stage user";
+
+/** What every stage and seed git starts as, under the drop: sh, spawned in
+ *  "/", enters the seed only now, as the stage user, and execs the program
+ *  only when the folder it entered is the seed's checked realpath itself.
+ *  The root runner never enters a seed, and a seed swapped for a link
+ *  since the check, or gone, runs nothing (exit 126). `pwd -P` reads the
+ *  folder sh is in, so nothing can change it between the check and exec. */
+export const ENTER_SEED =
+  'cd -P -- "$1" 2>/dev/null && [ "$(pwd -P)" = "$1" ] || { echo "canopy: the seed is not where the stage runner checked it" >&2; exit 126; }; shift; exec "$@"';
+export const enterSeed = (sh: string, seed: string, argv: readonly string[]): string[] => [sh, "-c", ENTER_SEED, "canopy-stage", seed, ...argv];
 
 /** the argv prefix that drops a child to the stage user */
 const dropTo = (as: { uid: number; gid: number; setpriv: string }): string[] => [
@@ -503,6 +514,9 @@ export async function startStageRunner(opts: RunnerOptions): Promise<{ stop(): P
   const fenceTimer = target ? setInterval(() => void probeFence(), opts.fenceEvery ?? FENCE_EVERY) : null;
   fenceTimer?.unref?.();
 
+  /** the sh a child enters its seed with, held to the same rule as a program */
+  const shell = () => resolveProgram("sh", programs["sh"] ?? "sh", own["PATH"], opts.root, writable);
+
   const server = createServer((sock) => {
     live.add(sock);
     const split = lineSplitter();
@@ -554,6 +568,8 @@ export async function startStageRunner(opts: RunnerOptions): Promise<{ stop(): P
       const resolved = await resolveProgram(name, programs[name] ?? name, own["PATH"], opts.root, writable);
       if ("refused" in resolved) return finish({ t: "refused", reason: resolved.refused });
       const program = resolved.program;
+      const sh = await shell();
+      if ("refused" in sh) return finish({ t: "refused", reason: sh.refused });
       // codex writes a trusted project table for every seed it runs in, so
       // those go first, before any spawn (a check's sh may run codex too);
       // then anything else either config holds that could steer a later
@@ -563,7 +579,7 @@ export async function startStageRunner(opts: RunnerOptions): Promise<{ stop(): P
       const seeds = [...new Set([opts.root, where.root])];
       const unsettled = as ? await choresAs(as, seeds) : await stageChores(own, seeds);
       if (unsettled) return finish({ t: "refused", reason: unsettled });
-      launch(name, [program, ...req.argv.slice(1)], where.seed, childEnv(own, req.env), false);
+      launch(name, [program, ...req.argv.slice(1)], where.seed, childEnv(own, req.env), false, sh.program);
     };
 
     /** canopy's own git in a seed: the seed's top folder only, behind the
@@ -583,19 +599,23 @@ export async function startStageRunner(opts: RunnerOptions): Promise<{ stop(): P
       if ("refused" in resolved) return finish({ t: "refused", reason: resolved.refused });
       // safe.directory on the command line, which git honours there: the
       // system config that names it is off
+      const sh = await shell();
+      if ("refused" in sh) return finish({ t: "refused", reason: sh.refused });
       const argv = [resolved.program, ...SEED_GIT_FLAGS, "-c", "safe.directory=*", ...req.args];
-      launch("git", argv, where.seed, gitEnv(own, req.env, where.root), true);
+      launch("git", argv, where.seed, gitEnv(own, req.env, where.root), true, sh.program);
     };
 
     /** starts the checked argv in the seed and carries it to its exit frame */
-    const launch = (name: string, argv: string[], seed: string, env: Record<string, string>, git: boolean): void => {
+    const launch = (name: string, argv: string[], seed: string, env: Record<string, string>, git: boolean, sh: string): void => {
       // the connection may have closed while the checks ran: then nothing starts
       if (sock.destroyed || state === "over") return;
       let p: Bun.Subprocess<"pipe", "pipe", "pipe">;
       try {
-        // setpriv execs the program in its own place: the pid is the program's
-        p = Bun.spawn(as ? [...dropTo(as), ...argv] : argv, {
-          cwd: seed,
+        // setpriv and sh each exec the next in its own place: the pid is the
+        // program's. The spawn's cwd is "/": the child enters the seed itself
+        const entered = enterSeed(sh, seed, argv);
+        p = Bun.spawn(as ? [...dropTo(as), ...entered] : entered, {
+          cwd: "/",
           env,
           stdin: "pipe",
           stdout: "pipe",

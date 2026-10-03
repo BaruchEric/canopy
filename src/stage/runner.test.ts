@@ -6,7 +6,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { encodeFrame, fromB64, lineSplitter, parseFrame, type StageFrame, type StageRequest } from "../core/stagewire";
 import { allProcs, type Proc } from "../core/procs";
-import { killTree, orphansOf, ownPidNamespace, rootStart, socketModes, stageChores, startStageRunner, writableBy, type RunnerOptions } from "./runner";
+import { enterSeed, killTree, orphansOf, ownPidNamespace, rootStart, socketModes, stageChores, startStageRunner, writableBy, type RunnerOptions } from "./runner";
 
 let dir = "";
 let root = "";
@@ -727,7 +727,8 @@ describe("a root runner drops every child", () => {
   test("every child, git included, starts through setpriv as the stage uid with no groups", async () => {
     const log = join(dir, "setpriv.log");
     const setpriv = join(dir, "setpriv");
-    await writeFile(setpriv, `#!/bin/sh\nprintf '%s\\n' "$@" >> ${log}\nwhile [ "$1" != "--" ]; do shift; done\nshift\nexec "$@"\n`);
+    const cwds = join(dir, "setpriv.cwd");
+    await writeFile(setpriv, `#!/bin/sh\npwd -P >> ${cwds}\nprintf '%s\\n' "$@" >> ${log}\nwhile [ "$1" != "--" ]; do shift; done\nshift\nexec "$@"\n`);
     await chmod(setpriv, 0o755);
     const seed = join(root, "dropped");
     await mkdir(seed, { recursive: true });
@@ -750,14 +751,39 @@ describe("a root runner drops every child", () => {
     expect(text(gitRan, "out").trim()).toBe("true");
     const lines = (await readFile(log, "utf8")).trim().split("\n");
     const head = ["--reuid=4242", "--regid=4343", "--clear-groups", "--no-new-privs", "--"];
-    const starts = lines.flatMap((l, i) => (l === "--reuid=4242" ? [lines.slice(i, i + 8)] : []));
+    const starts = lines.flatMap((l, i) => (l === "--reuid=4242" ? [lines.slice(i, i + 11)] : []));
     expect(starts).toHaveLength(3);
     for (const s of starts) expect(s.slice(0, 5)).toEqual(head);
     // the sweep and the settings check, as the stage user, before the spawn
     expect(starts[0]?.slice(5, 8)).toEqual([...self, "--stage-chores"]);
-    expect(starts[1]?.[5]).toEndWith("/sh");
-    expect(starts[2]?.[5]).toEndWith("/git");
+    // each stage starts in "/" and enters its seed only after the drop
+    const real = await realpath(seed);
+    for (const s of starts.slice(1)) expect(s.slice(6, 10)).toEqual(enterSeed("sh", real, []).slice(1));
+    expect(starts[1]?.[10]).toEndWith("/sh");
+    expect(starts[2]?.[10]).toEndWith("/git");
+    expect(new Set((await readFile(cwds, "utf8")).trim().split("\n"))).toEqual(new Set(["/"]));
   }, 20_000);
+
+  test("a stage enters its seed after the drop, and runs nothing when the seed is not where it was checked", async () => {
+    const real = await realpath(await mkdtemp(join(dir, "enter-")));
+    const ran = join(real, "ran");
+    const go = (seed: string) => Bun.spawn(enterSeed("/bin/sh", seed, ["/bin/sh", "-c", `pwd -P > ${ran}`]), { cwd: "/", stderr: "pipe" });
+    const ok = go(real);
+    expect(await ok.exited).toBe(0);
+    expect((await readFile(ran, "utf8")).trim()).toBe(real);
+    await rm(ran);
+    // the seed swapped for a link to a folder elsewhere since the check
+    const elsewhere = await realpath(await mkdtemp(join(dir, "elsewhere-")));
+    const swapped = join(real, "seed");
+    await symlink(elsewhere, swapped);
+    const no = go(swapped);
+    expect(await no.exited).toBe(126);
+    expect(await new Response(no.stderr).text()).toContain("seed");
+    expect(await Bun.file(ran).exists()).toBe(false);
+    // and a seed that is gone
+    const gone = go(join(real, "gone"));
+    expect(await gone.exited).toBe(126);
+  });
 
   test("the chores never follow a link the stage planted in its config folders", async () => {
     const home = join(dir, "chores-codex");
