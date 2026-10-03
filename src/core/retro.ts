@@ -254,7 +254,7 @@ export function improvementsMd(st: Improvements): string {
   if (all.length === 0) return [...head, "Nothing yet.", ""].join("\n");
   const body = all.flatMap((e) => {
     const n = countOf(e);
-    const decided = e.decided ? `${e.decided.accept ? "accepted" : "dismissed"} ${ymd(e.decided.at)} at ${e.decided.count}` : "open";
+    const decided = e.decided ? `${e.decided.accept ? "accepted" : "dismissed"} ${ymd(e.decided.at)} at ${e.decided.count} ${e.decided.count === 1 ? "project" : "projects"}` : "open";
     return [
       `## ${e.key}`,
       "",

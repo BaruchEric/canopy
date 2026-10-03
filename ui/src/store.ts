@@ -2264,7 +2264,9 @@ export const useStore = create<CanopyState>((set, get) => ({
     adviceEvents += 1;
     set({ advice });
     if (accepted?.kind === "chat") {
-      set({ inboxOpen: false, inboxFocus: null });
+      // the run as the answer gave it, as startRun does, so its sheet never opens on nothing
+      const run = accepted.run;
+      set((s) => ({ inboxOpen: false, inboxFocus: null, ...(run && !s.runs[run.id] ? { runs: { ...s.runs, [run.id]: run } } : {}) }));
       get().showRun(accepted.runId);
     }
     if (accepted?.kind === "file") set({ adviceFile: accepted });

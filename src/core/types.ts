@@ -1375,7 +1375,7 @@ export interface AdviceOffer extends Advice {
 /** What accepting a piece of advice did. */
 export type AdviceAccepted =
   /** a chat on the repo that owns the file, the edit its first message */
-  | { kind: "chat"; runId: string; repoId: string }
+  | { kind: "chat"; runId: string; repoId: string; run?: Run }
   /** a workflow in the config dir: opened on the backend's desktop, or named for the user to open */
   | { kind: "file"; path: string; opened: boolean; edit?: string };
 

@@ -686,7 +686,8 @@ async function acceptAdvice(state: ServerState, entry: AdviceEntry): Promise<Adv
   // the bundled file as the checkout holds it, not where this process runs from
   const file = wf ? join("lib", "workflows", relative(BUNDLED_DIR, wf.file)) : null;
   const run = state.runner.start(repo, "chat", ACTIONS.chat, adviceMessage(entry, file), agent);
-  return { kind: "chat", runId: run.id, repoId: repo.id };
+  // the run itself, so the page shows the chat before its event lands
+  return { kind: "chat", runId: run.id, repoId: repo.id, run };
 }
 
 /** whether a repo is a sprout's seed, by its path under the launch root:

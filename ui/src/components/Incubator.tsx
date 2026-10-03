@@ -404,9 +404,11 @@ function RetroPart({ retro, text, onFlow }: { retro: SproutRetro; text: string |
     );
   }
   const advice = retro.advice ?? [];
+  // the sheet's own heading says retro; the file's first line would say it again
+  const body = (text ?? "").replace(/^#\s+Retro\b[^\n]*(\n+|$)/, "").trim();
   return (
     <>
-      {text && <pre className="sprout-doc">{text}</pre>}
+      {body && <pre className="sprout-doc">{body}</pre>}
       {advice.length > 0 ? (
         <ul className="sprout-inputs">
           {advice.map((a) => (
