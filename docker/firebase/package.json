@@ -1,0 +1,8 @@
+{
+  "name": "canopy-firebase-cli",
+  "private": true,
+  "description": "The firebase CLI the canopy image installs under /opt/firebase for the incubator's vercel+firebase deploy, at an exact version and from this lockfile (Dockerfile, final stage).",
+  "dependencies": {
+    "firebase-tools": "15.32.1"
+  }
+}

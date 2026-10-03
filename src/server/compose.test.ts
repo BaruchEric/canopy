@@ -155,4 +155,14 @@ describe("the Firebase deploy's settings", () => {
   test("neither the shells nor the stages do", () => {
     for (const svc of ["shells", "stages"]) for (const n of names(svc)) expect(n).not.toMatch(/FIREBASE/);
   });
+  test("the CLI is an exact version installed from its own lockfile, which the build may not change", async () => {
+    const pkg = (await Bun.file(new URL("../../docker/firebase/package.json", import.meta.url)).json()) as { dependencies?: Record<string, string> };
+    expect(pkg.dependencies).toEqual({ "firebase-tools": "15.32.1" });
+    const lock = await Bun.file(new URL("../../docker/firebase/bun.lock", import.meta.url)).text();
+    expect(lock).toContain('"firebase-tools": ["firebase-tools@15.32.1"');
+    const docker = await Bun.file(new URL("../../Dockerfile", import.meta.url)).text();
+    expect(docker).toContain("COPY docker/firebase/package.json docker/firebase/bun.lock /opt/firebase/");
+    expect(docker).toContain("bun install --frozen-lockfile --production");
+    expect(docker).not.toMatch(/bun add -g firebase-tools/);
+  });
 });

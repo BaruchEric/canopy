@@ -463,7 +463,11 @@ an intake with 503. Two optional settings in the mini's `.env`:
   pin: a major version that drops the variable breaks this path.
   `firebase-tools` is pinned in the image under `/opt/firebase`, owned by
   root and off the default PATH; compose hands canopy alone
-  `CANOPY_FIREBASE_PATH` to find it.
+  `CANOPY_FIREBASE_PATH` to find it. Its version and every dependency come
+  from `docker/firebase/package.json` and `bun.lock`, installed with
+  `--frozen-lockfile`; to move the pin, change the version there, run
+  `bun install --lockfile-only` in that folder inside `oven/bun:1`, and
+  commit both files.
 - `GH_TOKEN` (already in `.env` for the rest of canopy) is also what an
   extend pushes its `new/<slug>` branch with, so it needs contents write on
   the repos you want extended. A fine-grained token limited to some repos is

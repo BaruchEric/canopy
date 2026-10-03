@@ -228,13 +228,18 @@ FROM shells
 # CANOPY_FIREBASE_PATH (docker-compose.yml). It needs node 20 or later and
 # Debian's is 18, so node 22 comes from the official image into the same
 # root-owned prefix, which no other PATH names: claude, codex and the shells
-# keep the node they had. Pinned, so a CLI release cannot change a deploy unseen.
+# keep the node they had. Pinned, every dependency with it: docker/firebase
+# holds the exact version and its bun.lock, and --frozen-lockfile fails the
+# build rather than resolve anything anew, so neither a CLI release nor a
+# release of one of its dependencies can change a deploy unseen.
 USER root
 COPY --from=node:22-bookworm-slim /usr/local/bin/node /opt/firebase/bin/node
+COPY docker/firebase/package.json docker/firebase/bun.lock /opt/firebase/
 RUN set -e; \
-    BUN_INSTALL_GLOBAL_DIR=/opt/firebase/global BUN_INSTALL_BIN=/opt/firebase/bin BUN_INSTALL_CACHE_DIR=/tmp/firebase-cache \
-      bun add -g firebase-tools@15.32.1; \
+    cd /opt/firebase; \
+    BUN_INSTALL_CACHE_DIR=/tmp/firebase-cache bun install --frozen-lockfile --production; \
     rm -rf /tmp/firebase-cache; \
+    ln -s ../node_modules/.bin/firebase /opt/firebase/bin/firebase; \
     chown -R root:root /opt/firebase; \
     chmod -R u+rwX,go+rX,go-w /opt/firebase; \
     test "$(PATH=/opt/firebase/bin:/usr/bin:/bin node --version | cut -d. -f1)" = v22; \
