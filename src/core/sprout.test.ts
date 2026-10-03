@@ -6,6 +6,7 @@ import {
   extendBranch,
   githubRepo,
   hostLine,
+  workRefusal,
   SEED_FILES,
   runAnswersSummary,
   runAnswersText,
@@ -482,6 +483,21 @@ describe("the pick", () => {
     expect(branchPushRefusal({ remote: want.remote, ref: "refs/heads/new/dark-mode" }, { ...want, remote: "https://gitlab.com/eric/clms.git" })).toBe(
       "https://gitlab.com/eric/clms.git is not a github.com repo",
     );
+  });
+
+  test("workRefusal: a rebuilt seed takes only a pick of its own kind and source", () => {
+    const ext = { kind: "extend" as const, from: "https://github.com/eric/clms.git", base: "b", target: "web-apps/clms", remote: "https://github.com/eric/clms.git", branch: "new/s", at: 1 };
+    const ren = { kind: "renovate" as const, from: "https://github.com/up/lib", base: "b", at: 1 };
+    const extend = (target: string) => ({ kind: "extend" as const, host: "vercel" as const, why: "w", target });
+    const renovate = (target: string) => ({ kind: "renovate" as const, host: "vercel" as const, why: "w", target, license: "MIT" });
+    expect(workRefusal(undefined, { kind: "new", host: "vercel", why: "w" })).toBe(null);
+    expect(workRefusal(ext, extend("web-apps/clms"))).toBe(null);
+    expect(workRefusal(ext, extend("clms"))).toBe(null);
+    expect(workRefusal(ext, extend("web-apps/other"))).toBe("this seed already holds web-apps/clms; start a new project for another pick");
+    expect(workRefusal(ext, { kind: "new", host: "vercel", why: "w" })).toContain("already holds web-apps/clms");
+    expect(workRefusal(ren, renovate("https://github.com/Up/lib.git"))).toBe(null);
+    expect(workRefusal(ren, renovate("https://github.com/up/other"))).toBe("this seed already holds https://github.com/up/lib; start a new project for another pick");
+    expect(workRefusal(ren, extend("clms"))).toContain("already holds https://github.com/up/lib");
   });
 
   test("hostLine tells a build what its host needs", () => {

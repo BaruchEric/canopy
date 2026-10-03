@@ -10,6 +10,7 @@ import { dirname, join } from "node:path";
 import { isVercelAppUrl } from "./deploy";
 import { networkOrigin } from "./peersync";
 import type { Shipper } from "./shipper";
+import type { SeedSource } from "./seedsource";
 import { PARKS_KEPT, RETRO_CONCURRENCY, RETRO_FILES, RETRO_TRIES, RETRO_UNATTENDED, RETRO_WAIT_MAX, endRetroDue, flowDigest, parkRetroDue, parseAdvice, retroNote, retroRecord, type KnownAdvice } from "./retro";
 import { shareInputs, shareRecord, shareWorkspace, unshare } from "./stageshare";
 import {
@@ -26,6 +27,9 @@ import {
   SHIP,
   HAND_OFF,
   isOwnStep,
+  isBuildWorkflow,
+  hostLine,
+  workRefusal,
   SPROUT_CONCURRENCY,
   RUNNING_STATUSES,
   WORKFLOW_STATUS,
@@ -59,7 +63,7 @@ import {
   type ParsedQuestions,
 } from "./sprout";
 import { DAILY_EVENTS, dailyLine, dailyNoteHead, dailyNotePath, sproutNote, sproutNotePath, type NoteEvent } from "./sproutnote";
-import { isFlowActive, type Advice, type Flow, type FlowChoice, type FlowDigest, type InputEntry, type InputKind, type InputVia, type Repo, type RunQuestion, type Sprout, type SproutDetail, type SproutFlow, type Workflow } from "./types";
+import { isFlowActive, type Advice, type Flow, type FlowChoice, type FlowDigest, type InputEntry, type InputKind, type InputVia, type Repo, type RunQuestion, type Sprout, type SproutDetail, type SproutFlow, type SproutPick, type Workflow } from "./types";
 import { findWorkflow, loadWorkflows } from "./workflows";
 
 export class IncubatorError extends Error {
@@ -107,6 +111,8 @@ export interface IncubatorSeeds {
   write(path: string, rel: string, text: string): Promise<void>;
   /** the named files only, as canopy; the seed's HEAD after, when known */
   commit(path: string, rels: string[], message: string): Promise<string | void>;
+  /** the seed's HEAD commit, with nothing committed */
+  headOf(path: string): Promise<string>;
   exists(path: string): boolean;
 }
 
@@ -160,6 +166,8 @@ export interface IncubatorDeps {
   notes: NoteSink | null;
   /** canopy's own deploy; null when this backend has none */
   ship?: Shipper | null;
+  /** where a renovate or extend seed comes from (seedsource.ts); null when this backend has none */
+  source?: SeedSource | null;
   /** the improvements list a retro's advice folds into; none keeps no list */
   advice?: AdviceSink | null;
   onChange: (s: Sprout) => void;
@@ -542,7 +550,7 @@ export class Incubator {
     if (s.prepared) {
       await this.deps.seeds.write(s.seedPath, ".canopy/inputs.md", index);
       try {
-        await this.deps.seeds.commit(s.seedPath, SEED_FILES, `inputs: ${s.title}`);
+        await this.commitFiles(s, SEED_FILES, `inputs: ${s.title}`);
       } catch (err) {
         // a stage may be running, so this parks nothing: the next stage's own commit says it
         this.log(`${s.slug}: could not commit the inputs index: ${msg(err)}`);
@@ -551,10 +559,18 @@ export class Incubator {
     await this.changed(s);
   }
 
+  /** The one way canopy commits its files in a seed. None lands on an
+   *  extend's branch (amendment 6, ruling 5): there the notes are plain
+   *  files git does not see, and this commits nothing. */
+  private async commitFiles(s: Sprout, rels: string[], message: string): Promise<string | void> {
+    if (s.work?.kind === "extend") return;
+    return this.deps.seeds.commit(s.seedPath, rels, message);
+  }
+
   /** the seed's files committed as canopy; a refusal (a planted link) parks the sprout */
   private async commit(s: Sprout, message: string, what: string): Promise<boolean> {
     try {
-      await this.deps.seeds.commit(s.seedPath, SEED_FILES, message);
+      await this.commitFiles(s, SEED_FILES, message);
       return true;
     } catch (err) {
       await this.park(s, `could not commit the ${what}: ${msg(err)}`);
@@ -997,7 +1013,7 @@ export class Incubator {
       if (text === null) return this.retroFailed(s, "the retro wrote no .canopy/advice.json");
       const parsed = parseAdvice(text);
       if (!parsed.ok) return this.retroFailed(s, `the retro wrote advice canopy cannot read: ${parsed.error}`);
-      await this.deps.seeds.commit(s.seedPath, RETRO_FILES, `retro: ${s.title}`);
+      await this.commitFiles(s, RETRO_FILES, `retro: ${s.title}`);
       await this.deps.advice?.fold(parsed.advice, { id: s.id, title: s.title });
       if (this.gone(s) || s.retro !== r) return;
       r.state = "done";
@@ -1050,9 +1066,18 @@ export class Incubator {
     const ws = name === "scout" ? await share.workspace(seedsDir, this.deps.root, s.id) : null;
     if (name === "clarify") wf = withInputsRead(wf, inputs);
     if (ws !== null) wf = withWorkspaceRead(wf, ws);
+    const build = isBuildWorkflow(name) ? s.pick : undefined;
+    if (build) {
+      const refused = workRefusal(s.work, build);
+      if (refused) return this.park(s, refused);
+      if (build.kind !== "new" && !s.work) {
+        const why = await this.rebuild(s, build);
+        if (why) return this.park(s, why);
+      }
+    }
     if (this.detached || s.status === "stopped") return;
     const base = stageNote(s, inputs);
-    const note = ws !== null ? `${base} ${workspaceLine(ws)}` : base;
+    const note = [base, ws !== null ? workspaceLine(ws) : "", build ? hostLine(build) : ""].filter(Boolean).join(" ");
     const flow = await this.deps.flows.start(repo, wf, note);
     s.flows.push({ workflow: name, flowId: flow.id });
     if (sproutEnded(s)) {
@@ -1067,6 +1092,35 @@ export class Incubator {
     // missing harness) and broadcast it before it was ours: read it now as a
     // transition, so a flow that never ran parks the sprout and frees the slot
     this.onFlow(flow);
+  }
+
+  /** Swaps the notes-only seed for a clone of what a renovate or extend
+   *  pick names, once (amendment 6, rulings 1, 2 and 7): `work` on record
+   *  means it is done. The park reason, or null once the seed is rebuilt. */
+  private async rebuild(s: Sprout, p: SproutPick): Promise<string | null> {
+    const source = this.deps.source ?? null;
+    if (!source) return "this backend cannot rebuild a seed for a renovate or extend pick";
+    const target = (p.target ?? "").trim();
+    try {
+      if (p.kind === "renovate") {
+        const license = await source.upstreamLicense(target);
+        if (license === null) return `GitHub names no license for ${target}, so canopy will not renovate it`;
+        if (license !== p.license) return `GitHub says ${target} is ${license}, not the ${p.license ?? "license"} scout read`;
+        const work = await source.rebuild({ kind: "renovate", seedPath: s.seedPath, id: s.id, slug: s.slug, from: target });
+        if (this.gone(s)) return null;
+        s.work = work;
+      } else {
+        const t = await source.extendTarget(target);
+        const work = await source.rebuild({ kind: "extend", seedPath: s.seedPath, id: s.id, slug: s.slug, from: t.remote, target: t.repoId });
+        if (this.gone(s)) return null;
+        s.work = work;
+      }
+    } catch (err) {
+      return `the seed could not be rebuilt for the ${p.kind} pick: ${msg(err)}`;
+    }
+    await this.changed(s);
+    await this.deps.rescan();
+    return null;
   }
 
   /** every flow broadcast; only an owned flow whose status moved is acted on */
@@ -1116,7 +1170,7 @@ export class Incubator {
     try {
       if (entry.workflow === "clarify") await this.clarified(s);
       else if (entry.workflow === "scout") await this.scouted(s);
-      else if (entry.workflow === "build-new") await this.built(s);
+      else if (isBuildWorkflow(entry.workflow)) await this.built(s);
       else await this.park(s, `nothing follows ${entry.workflow} yet`);
     } catch (err) {
       await this.park(s, `could not read what ${entry.workflow} wrote: ${msg(err)}`);
@@ -1137,7 +1191,7 @@ export class Incubator {
     await this.deps.store.writeIndex(s.id, index);
     await this.deps.seeds.write(s.seedPath, ".canopy/inputs.md", index);
     try {
-      await this.deps.seeds.commit(s.seedPath, SEED_FILES, `clarify: ${s.title}`);
+      await this.commitFiles(s, SEED_FILES, `clarify: ${s.title}`);
     } catch (err) {
       // a link planted in the seed is refused here: the stage failed, nothing goes on
       return this.park(s, `could not commit clarify's files: ${msg(err)}`);
@@ -1165,11 +1219,11 @@ export class Incubator {
     const parsed = parsePick(raw);
     if (!parsed.ok) return this.park(s, `scout wrote a pick canopy cannot read: ${parsed.error}`);
     try {
-      await this.deps.seeds.commit(s.seedPath, [...SEED_FILES, ...SCOUT_FILES], `scout: ${s.title}`);
+      await this.commitFiles(s, [...SEED_FILES, ...SCOUT_FILES], `scout: ${s.title}`);
     } catch (err) {
       return this.park(s, `could not commit scout's files: ${msg(err)}`);
     }
-    const refused = pickRefusal(parsed.pick) ?? phaseRefusal(parsed.pick);
+    const refused = pickRefusal(parsed.pick) ?? phaseRefusal(parsed.pick) ?? workRefusal(s.work, parsed.pick);
     if (refused) return this.park(s, refused);
     if (sproutEnded(s)) return;
     // input that came while scout ran: clarify reads it, and scout picks again
@@ -1179,10 +1233,12 @@ export class Incubator {
     this.pump();
   }
 
-  /** build-new finished: its notes committed, then canopy's own ship */
+  /** a build finished: its notes committed (none on an extend's branch),
+   *  then canopy's own ship or hand-off */
   private async built(s: Sprout): Promise<void> {
     try {
-      const head = await this.deps.seeds.commit(s.seedPath, [...SEED_FILES, ...BUILD_FILES], `build: ${s.title}`);
+      const committed = await this.commitFiles(s, [...SEED_FILES, ...BUILD_FILES], `build: ${s.title}`);
+      const head = s.work?.kind === "extend" ? await this.deps.seeds.headOf(s.seedPath) : committed;
       // what the ship sends: the seed as accepted (amendment 4)
       if (head) s.builtHead = head;
     } catch (err) {

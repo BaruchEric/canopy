@@ -8,9 +8,10 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Incubator, IncubatorError, incubatorWorkflow, type AdviceSink, type IncubatorDeps, type IncubatorFlows, type IncubatorSeeds, type IncubatorStore, type Intake, type NoteSink } from "./incubator";
 import type { ShipBundle, Shipper, ShipSource } from "./shipper";
+import type { ExtendTarget, RebuildSpec, SeedSource } from "./seedsource";
 import { BUNDLED_DIR, findWorkflow, loadWorkflows } from "./workflows";
 import { RETRO_PARK_WAIT, RETRO_UNATTENDED, RETRO_WAIT_MAX } from "./retro";
-import type { Advice, Flow, FlowChoice, Judgment, Repo, Sprout, Workflow } from "./types";
+import type { Advice, Flow, FlowChoice, Judgment, Repo, Sprout, SproutWork, Workflow } from "./types";
 
 const CLARIFY: Workflow = {
   name: "clarify",
@@ -103,6 +104,9 @@ class FakeSeeds implements IncubatorSeeds {
   async commit(path: string, _rels: string[], message: string): Promise<string> {
     if (this.failCommit) throw new Error(this.failCommit);
     this.commits.push({ path, message });
+    return this.head;
+  }
+  async headOf(_path: string): Promise<string> {
     return this.head;
   }
   exists(path: string): boolean {
@@ -2231,5 +2235,145 @@ describe("an answer given inside a stage's run", () => {
     w.flows.move(flowId, { status: "done" });
     await w.inc.idle();
     expect(rels[0]).toContain(".canopy/answers.md");
+  });
+});
+
+class FakeSource implements SeedSource {
+  calls: string[] = [];
+  license: string | null = "MIT";
+  refuseTarget: string | null = null;
+  failRebuild: string | null = null;
+  async extendTarget(target: string): Promise<ExtendTarget> {
+    this.calls.push(`target ${target}`);
+    if (this.refuseTarget) throw new Error(this.refuseTarget);
+    return { repoId: "web-apps/clms", remote: "https://github.com/eric/clms.git", owner: "eric", name: "clms" };
+  }
+  async upstreamLicense(url: string): Promise<string | null> {
+    this.calls.push(`license ${url}`);
+    return this.license;
+  }
+  async rebuild(spec: RebuildSpec): Promise<SproutWork> {
+    this.calls.push(`rebuild ${spec.kind} ${spec.from}`);
+    if (this.failRebuild) throw new Error(this.failRebuild);
+    if (spec.kind === "renovate") return { kind: "renovate", from: spec.from, base: "b0", at: 5 };
+    return { kind: "extend", from: spec.from, base: "b0", target: spec.target ?? "", remote: spec.from, branch: `new/${spec.slug}`, at: 5 };
+  }
+}
+
+describe("renovate and extend builds", () => {
+  const RENOVATE = JSON.stringify({ kind: "renovate", host: "vercel", why: "a maintained fork", target: "https://github.com/up/lib", license: "MIT" });
+  const EXTEND = JSON.stringify({ kind: "extend", host: "vercel", why: "the user said extend clms", target: "clms" });
+  const builds = (source: FakeSource | null) => {
+    const w = world({ source });
+    w.workflows.set("scout", SCOUT_STAGE);
+    w.workflows.set("renovate", stage("renovate", ["Renovate", "Test", "Accept"], "judge"));
+    w.workflows.set("extend", stage("extend", ["Build", "Test", "Accept"], "judge"));
+    w.workflows.set("build-new", BUILD_STAGE);
+    return w;
+  };
+  const end = async (w: World, id: string, files: Record<string, string>, patch: Partial<Flow> = { status: "done" }) => {
+    const s = now(w, id);
+    for (const [rel, text] of Object.entries(files)) await w.seeds.write(s.seedPath, rel, text);
+    w.flows.move(s.flows.at(-1)?.flowId ?? "", patch);
+    await w.inc.idle();
+    return now(w, id);
+  };
+  /** a sprout through clarify and a scout that picked `pick` */
+  const picked = async (w: World, pick: string): Promise<Sprout> => {
+    const s = await w.inc.create(intake({ text: "coin counter" }));
+    await w.inc.idle();
+    await end(w, s.id, { ".canopy/questions.json": "[]" });
+    return end(w, s.id, { ".canopy/pick.json": pick });
+  };
+
+  test("a renovate pick checks GitHub's license, rebuilds the seed once and starts renovate with the host line", async () => {
+    const src = new FakeSource();
+    const w = builds(src);
+    const before = w.rescans;
+    const s = await picked(w, RENOVATE);
+    expect(src.calls).toEqual(["license https://github.com/up/lib", "rebuild renovate https://github.com/up/lib"]);
+    expect(s.work).toEqual({ kind: "renovate", from: "https://github.com/up/lib", base: "b0", at: 5 });
+    expect(s.status).toBe("building");
+    const started = w.flows.started.at(-1);
+    expect(started?.workflow.name).toBe("renovate");
+    expect(started?.note).toContain("The host is Vercel with no database");
+    expect(started?.note).toContain("incubator/notes");
+    expect(w.rescans).toBeGreaterThan(before);
+    // the build's end commits the notes as for build-new, then ships
+    const after = await end(w, s.id, { ".canopy/accept.md": "## Verdict\ngo" });
+    expect(w.seeds.commits.at(-1)?.message).toBe("build: coin counter");
+    expect(after.builtHead).toBe("h1");
+  });
+
+  test("GitHub naming another license, or none, parks before anything is cloned", async () => {
+    const src = new FakeSource();
+    src.license = "AGPL-3.0";
+    const w = builds(src);
+    const s = await picked(w, RENOVATE);
+    expect(s.status).toBe("parked");
+    expect(s.parked).toBe("GitHub says https://github.com/up/lib is AGPL-3.0, not the MIT scout read");
+    src.license = null;
+    const w2 = builds(src);
+    expect((await picked(w2, RENOVATE)).parked).toBe("GitHub names no license for https://github.com/up/lib, so canopy will not renovate it");
+    expect(src.calls.some((c) => c.startsWith("rebuild"))).toBe(false);
+  });
+
+  test("an extend pick resolves its target, rebuilds the seed and starts extend", async () => {
+    const src = new FakeSource();
+    const w = builds(src);
+    const s = await picked(w, EXTEND);
+    expect(src.calls).toEqual(["target clms", "rebuild extend https://github.com/eric/clms.git"]);
+    expect(s.work).toMatchObject({ kind: "extend", target: "web-apps/clms", branch: `new/${s.slug}` });
+    expect(w.flows.started.at(-1)?.workflow.name).toBe("extend");
+    expect(w.flows.started.at(-1)?.note).toContain(`on the branch new/${s.slug}`);
+  });
+
+  test("a target that is not the user's parks with why, and no backend source parks too", async () => {
+    const src = new FakeSource();
+    src.refuseTarget = "the gh login cannot push to github.com/someone/thing, so it is not yours to extend";
+    const s = await picked(builds(src), EXTEND);
+    expect(s.status).toBe("parked");
+    expect(s.parked).toBe("the seed could not be rebuilt for the extend pick: the gh login cannot push to github.com/someone/thing, so it is not yours to extend");
+    expect(s.work).toBe(undefined);
+    expect((await picked(builds(null), EXTEND)).parked).toBe("this backend cannot rebuild a seed for a renovate or extend pick");
+  });
+
+  test("a retry with the seed already rebuilt does not rebuild it again", async () => {
+    const src = new FakeSource();
+    const w = builds(src);
+    const s = await picked(w, EXTEND);
+    const failed = await end(w, s.id, {}, { status: "failed", error: "boom" });
+    expect(failed.status).toBe("parked");
+    await w.inc.resume(s.id, "retry");
+    await w.inc.idle();
+    expect(w.flows.started.filter((f) => f.workflow.name === "extend")).toHaveLength(2);
+    expect(src.calls.filter((c) => c.startsWith("rebuild"))).toHaveLength(1);
+  });
+
+  test("a pick of another kind or source on a rebuilt seed parks", async () => {
+    const w = builds(new FakeSource());
+    const s = await picked(w, EXTEND);
+    await end(w, s.id, {}, { status: "failed", error: "boom" });
+    now(w, s.id).pick = { kind: "renovate", host: "vercel", why: "w", target: "https://github.com/up/lib", license: "MIT" };
+    await w.inc.resume(s.id, "retry");
+    await w.inc.idle();
+    expect(now(w, s.id).parked).toBe("this seed already holds web-apps/clms; start a new project for another pick");
+  });
+
+  test("canopy commits nothing on an extend seed once it is rebuilt: not the inputs, not the build's notes", async () => {
+    const w = builds(new FakeSource());
+    const s = await picked(w, EXTEND);
+    const commits = w.seeds.commits.length;
+    await w.inc.addInputs(s.id, intake({ text: "and dark mode" }));
+    await w.inc.idle();
+    const w2 = builds(new FakeSource());
+    const s2 = await picked(w2, EXTEND);
+    const commits2 = w2.seeds.commits.length;
+    w2.seeds.head = "branch-tip";
+    const after = await end(w2, s2.id, { ".canopy/accept.md": "## Verdict\ngo" });
+    expect(w.seeds.commits.length).toBe(commits);
+    expect(w2.seeds.commits.length).toBe(commits2);
+    // the ship's check holds the hand-off to the commit Accept saw
+    expect(after.builtHead).toBe("branch-tip");
   });
 });

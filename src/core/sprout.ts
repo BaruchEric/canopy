@@ -5,7 +5,7 @@
  * as text, and which sprouts hold one of the running slots. Browser-safe:
  * the UI imports it.
  */
-import { HOSTS, SPROUT_STATUSES, type FlowStatus, type InputEntry, type InputKind, type InputVia, type RunQuestion, type RunQuestionOption, type HostId, type PickKind, type Sprout, type SproutPick, type SproutStatus, type Workflow } from "./types";
+import { HOSTS, SPROUT_STATUSES, type FlowStatus, type InputEntry, type InputKind, type InputVia, type RunQuestion, type RunQuestionOption, type HostId, type PickKind, type Sprout, type SproutPick, type SproutStatus, type SproutWork, type Workflow } from "./types";
 
 /** how many sprouts run a stage at once; the rest wait their turn */
 export const SPROUT_CONCURRENCY = 2;
@@ -320,6 +320,10 @@ export function stageNote(s: Sprout, inputsDir: string): string {
     `This is the incubator project "${s.title}" (${s.id}).`,
     `The user's raw inputs are in ${inputsDir}; .canopy/inputs.md in this repo indexes them.`,
     s.repo ? `The seed is a clone of ${s.repo}; its remote is called upstream.` : "",
+    s.work?.kind === "renovate" ? `The seed is a clone of ${s.work.from}; its remote is called upstream, and the incubator's earlier notes are on the branch incubator/notes.` : "",
+    s.work?.kind === "extend"
+      ? `The seed is a clone of the user's own repo ${s.work.target}, on the branch ${s.work.branch}; it has no remote, the files under .canopy/ stay out of git, and canopy pushes the branch once Accept passes.`
+      : "",
   ]
     .filter(Boolean)
     .join(" ");
@@ -357,6 +361,9 @@ export const isOwnStep = (name: string): boolean => name === SHIP || name === HA
 
 /** the build workflow each kind of pick runs */
 export const BUILD_WORKFLOW: Readonly<Record<PickKind, string>> = { new: "build-new", renovate: "renovate", extend: "extend" };
+
+/** whether a workflow is one of the builds a pick runs */
+export const isBuildWorkflow = (name: string): boolean => Object.values(BUILD_WORKFLOW).includes(name);
 
 /** the status a sprout shows while a workflow runs for it */
 export const WORKFLOW_STATUS: Readonly<Record<string, SproutStatus>> = {
@@ -445,6 +452,24 @@ export function branchPushRefusal(push: { remote: string; ref: string }, want: {
   const ref = `refs/heads/${extendBranch(want.slug)}`;
   if (push.ref !== ref) return `canopy pushes only ${ref}, not ${push.ref}`;
   return null;
+}
+
+/** the same github.com repo, whatever form each url names it in */
+const sameGithub = (a: string, b: string): boolean => {
+  const x = githubRepo(a);
+  const y = githubRepo(b);
+  return !!x && !!y && x.owner.toLowerCase() === y.owner.toLowerCase() && x.name.toLowerCase() === y.name.toLowerCase();
+};
+
+/** Why a pick cannot be built on a seed canopy already rebuilt, or null: a
+ *  rebuilt seed holds one source, so a pick of another kind or source needs
+ *  a project of its own (amendment 6, ruling 2). */
+export function workRefusal(work: SproutWork | undefined, p: SproutPick): string | null {
+  if (!work) return null;
+  const t = (p.target ?? "").trim();
+  if (work.kind === "renovate" && p.kind === "renovate" && sameGithub(work.from, t)) return null;
+  if (work.kind === "extend" && p.kind === "extend" && (t === work.target || t === work.target.split("/").at(-1))) return null;
+  return `this seed already holds ${work.kind === "extend" ? work.target : work.from}; start a new project for another pick`;
 }
 
 /** the web app config keys firebase-tools prints, and the env name each takes on Vercel after its prefix */

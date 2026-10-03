@@ -316,6 +316,14 @@ export function seedOps(self: string, committed?: (path: string) => void) {
       committed?.(path);
       return head;
     },
+    /** the seed's HEAD, once it is quiet, with nothing committed */
+    headOf: (path: string): Promise<string> =>
+      inQuietSeed(path, async () => {
+        const r = await git(path, ["rev-parse", "--verify", "-q", "HEAD^{commit}"]);
+        if (seedHeld(r.stderr)) throw new Error(r.stderr.trim());
+        if (r.code !== 0) throw new Error(`the seed has no commit: ${firstLine(r.stderr)}`);
+        return r.stdout.trim();
+      }),
     /** a dangling symlink counts as there, as makeSeed would refuse it */
     exists: (path: string): boolean => lstatSync(path, { throwIfNoEntry: false }) !== undefined,
   };
