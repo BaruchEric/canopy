@@ -599,12 +599,15 @@ export function pickRefusal(p: SproutPick): string | null {
  *  ruling 13); vercel+convex and mini park in one line each */
 export function phaseRefusal(p: SproutPick): string | null {
   if (p.kind === "extend") return null;
-  if (p.host === "vercel+convex") {
-    return "vercel+convex is parked: canopy cannot run a Convex deploy without handing it files outside the project; pick vercel+firebase for a database";
-  }
-  if (p.host === "mini") return "the mini host is not built yet: a stage's compose file would be root on the mini; pick vercel or vercel+firebase";
+  if (p.host === "vercel+convex") return CONVEX_PARKED;
+  if (p.host === "mini") return MINI_PARKED;
   return null;
 }
+
+/** the one line a vercel+convex pick parks with (amendment 6, ruling 9) */
+export const CONVEX_PARKED = "vercel+convex is parked: canopy cannot run a Convex deploy without handing it files outside the project; pick vercel+firebase for a database";
+/** the one line a mini pick parks with (amendment 6, ruling 12) */
+export const MINI_PARKED = "the mini host is not built yet: a stage's compose file would be root on the mini; pick vercel or vercel+firebase";
 
 export const isPick = (v: unknown): v is SproutPick =>
   isObj(v) && isPickKind(v["kind"]) && isHostId(v["host"]) && typeof v["why"] === "string" && optStr(v["target"]) && optStr(v["license"]);

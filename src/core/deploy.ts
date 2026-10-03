@@ -3,20 +3,29 @@
  * (spec 2026-10-01-incubator-design.md, amendment 2). The deploy itself is
  * shipper.ts: canopy's own code, never an agent's step.
  */
+import { CONVEX_PARKED, MINI_PARKED } from "./sprout";
 import type { HostId } from "./types";
 
 export interface DeployEnv {
   vercelToken: boolean;
   vercelCli: boolean;
+  /** whether FIREBASE_TOKEN is set, and the firebase CLI found; only vercel+firebase asks */
+  firebaseToken?: boolean;
+  firebaseCli?: boolean;
   /** the backend's name, for the reason a park gives */
   backend: string;
 }
 
 /** null when `host` can be deployed to from here, else the one-line park reason */
 export function deployReady(host: HostId, env: DeployEnv): string | null {
-  if (host !== "vercel") return `deploying to ${host} arrives in phase 4`;
+  if (host === "vercel+convex") return CONVEX_PARKED;
+  if (host === "mini") return MINI_PARKED;
   if (!env.vercelToken) return `add VERCEL_TOKEN to ${env.backend}'s .env`;
   if (!env.vercelCli) return `the vercel CLI is not installed on ${env.backend}`;
+  if (host === "vercel+firebase") {
+    if (!env.firebaseToken) return `add FIREBASE_TOKEN to ${env.backend}'s .env`;
+    if (!env.firebaseCli) return `the firebase CLI is not installed on ${env.backend}`;
+  }
   return null;
 }
 

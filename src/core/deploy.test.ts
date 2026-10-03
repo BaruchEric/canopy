@@ -14,6 +14,7 @@ import {
   vercelProject,
   withCanopyIgnored,
 } from "./deploy";
+import { CONVEX_PARKED, MINI_PARKED } from "./sprout";
 
 describe("deployReady", () => {
   const env = { vercelToken: true, vercelCli: true, backend: "mini" };
@@ -21,8 +22,14 @@ describe("deployReady", () => {
     expect(deployReady("vercel", env)).toBe(null);
     expect(deployReady("vercel", { ...env, vercelToken: false })).toBe("add VERCEL_TOKEN to mini's .env");
     expect(deployReady("vercel", { ...env, vercelCli: false })).toBe("the vercel CLI is not installed on mini");
-    expect(deployReady("vercel+convex", env)).toBe("deploying to vercel+convex arrives in phase 4");
-    expect(deployReady("mini", env)).toBe("deploying to mini arrives in phase 4");
+    expect(deployReady("vercel+convex", env)).toBe(CONVEX_PARKED);
+    expect(deployReady("mini", env)).toBe(MINI_PARKED);
+    // vercel+firebase needs Vercel's two, then Firebase's token and CLI
+    expect(deployReady("vercel+firebase", { ...env, vercelToken: false })).toBe("add VERCEL_TOKEN to mini's .env");
+    expect(deployReady("vercel+firebase", env)).toBe("add FIREBASE_TOKEN to mini's .env");
+    expect(deployReady("vercel+firebase", { ...env, firebaseToken: true })).toBe("the firebase CLI is not installed on mini");
+    expect(deployReady("vercel+firebase", { ...env, firebaseToken: true, firebaseCli: true })).toBe(null);
+    expect(deployReady("vercel", { ...env, firebaseToken: false })).toBe(null);
   });
 });
 
