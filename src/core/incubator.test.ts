@@ -1372,6 +1372,26 @@ describe("scout and build-new", () => {
     expect(said).toEqual(["the stage runner is not answering", null]);
   });
 
+  test("waiting says why a sprout is held for the runner even while every slot is full, and nothing when only the slots hold it", async () => {
+    let why: string | null = null;
+    const w = world({ isolation: () => why });
+    const a = await w.inc.create(intake({ text: "coin counter" }));
+    const b = await w.inc.create(intake({ text: "tip jar" }));
+    await w.inc.idle();
+    expect(now(w, a.id).status).toBe("clarifying");
+    expect(now(w, b.id).status).toBe("clarifying");
+    const c = await w.inc.create(intake({ text: "tally" }));
+    await w.inc.idle();
+    // full slots alone are no reason to give
+    expect(now(w, c.id).status).toBe("queued");
+    expect(w.inc.waiting()).toBe(null);
+    why = "the stage runner is not answering";
+    w.inc.pump();
+    await w.inc.idle();
+    expect(now(w, c.id).status).toBe("queued");
+    expect(w.inc.waiting()).toBe("the stage runner is not answering");
+  });
+
   test("a sprout whose next step is canopy's own ship still ships while stages wait", async () => {
     let why: string | null = null;
     const ship = new FakeShip();

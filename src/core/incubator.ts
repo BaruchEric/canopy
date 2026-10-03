@@ -737,18 +737,17 @@ export class Incubator {
   pump(): void {
     if (this.detached || this.deps.autostart === false) return;
     const why = this.deps.isolation?.() ?? null;
-    let held: string | null = null;
     let free = SPROUT_CONCURRENCY - this.list().filter((s) => holdsSlot(s, this.currentFlow(s)?.status)).length;
     const queued = this.list()
       .filter((s) => s.status === "queued" && s.prepared && !this.busy.has(s.id))
       .sort((a, b) => a.createdAt - b.createdAt);
+    // apart from the slots: a sprout bound for a stage is held for the
+    // runner whether or not a slot is free for it
+    const held = why !== null && queued.some((s) => nextWorkflow(s) !== SHIP) ? why : null;
     for (const s of queued) {
       if (free <= 0) break;
       const name = nextWorkflow(s);
-      if (why !== null && name !== SHIP) {
-        held = why;
-        continue;
-      }
+      if (why !== null && name !== SHIP) continue;
       free -= 1;
       // the slot is claimed here, before anything awaits
       s.status = statusFor(name, undefined);
