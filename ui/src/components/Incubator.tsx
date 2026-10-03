@@ -11,7 +11,7 @@ import { isVercelAppUrl } from "../../../src/core/deploy";
 import type { SproutDetail, SproutRetro } from "../../../src/core/types";
 import { api } from "../api";
 import { dropSproutHere, sproutHere } from "../routes";
-import { INPUT_GLYPH, STAGES, needsYou, sortSprouts, sproutWord, stageStrip, stagesWord, type StageMark } from "../sprouts";
+import { INPUT_GLYPH, STAGES, branchHref, needsYou, sortSprouts, sproutWord, stageStrip, stagesWord, workLine, type StageMark } from "../sprouts";
 import { useStore } from "../store";
 import { ago } from "../util";
 import { InboxChip } from "./Inbox";
@@ -573,7 +573,7 @@ export function SproutSheet({ id }: { id: string }) {
             </div>
           </div>
         )}
-        {(sprout.pick || sprout.privateRepo || sprout.url) && (
+        {(sprout.pick || sprout.privateRepo || sprout.url || sprout.branch || sprout.work) && (
           <div className="ask">
             <div className="eyebrow">where it lives</div>
             {sprout.pick && (
@@ -593,6 +593,20 @@ export function SproutSheet({ id }: { id: string }) {
                 (private)
               </p>
             )}
+            {workLine(sprout) && <p>{workLine(sprout)}</p>}
+            {sprout.branch && (
+              <p>
+                handed off as{" "}
+                {branchHref(sprout.branch) ? (
+                  <a href={sprout.branch} target="_blank" rel="noopener noreferrer">
+                    {sprout.branch}
+                  </a>
+                ) : (
+                  sprout.branch
+                )}
+              </p>
+            )}
+            {sprout.firebase && <p>Firebase project {sprout.firebase.project}</p>}
             {sprout.url && (
               <p>
                 {isVercelAppUrl(sprout.url) ? (

@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import type { Sprout } from "../../src/core/types";
 import type { FeedSnapshot } from "./feed";
-import { needsYou, replaceSprouts, sortSprouts, sproutLines, sproutWord, stageAt, stageStrip, stagesWord, staleSprout } from "./sprouts";
+import { branchHref, needsYou, replaceSprouts, sortSprouts, sproutLines, sproutWord, stageAt, stageStrip, stagesWord, staleSprout, workLine } from "./sprouts";
 
 const sprout = (over: Partial<Sprout> = {}): Sprout => ({
   id: "sp_000000000001",
@@ -66,6 +66,26 @@ describe("words and order", () => {
     expect(sproutWord(sprout({ status: "clarifying" }))).toBe("clarifying");
     expect(sproutWord(sprout({ status: "clarifying", questions: [q("a"), q("b")] }))).toBe("2 questions for you");
     expect(sproutWord(sprout({ status: "rejected" }))).toBe("turned down at eval");
+    expect(sproutWord(sprout({ status: "handed-off" }))).toBe("handed off");
+  });
+  test("a queued sprout says which turn it waits for, the build and the hand-off included", () => {
+    const done = (workflow: string, n: number) => ({ workflow, flowId: `f${n}`, outcome: "done" as const });
+    const flows = [done("clarify", 1), done("scout", 2)];
+    const extend = { kind: "extend" as const, host: "vercel" as const, why: "w", target: "web-apps/clms" };
+    expect(sproutWord(sprout({ clarified: true, pick: extend, flows }))).toBe("waiting its turn to build");
+    expect(sproutWord(sprout({ clarified: true, pick: extend, flows: [...flows, done("extend", 3)] }))).toBe("waiting its turn to hand off");
+    expect(sproutWord(sprout({ clarified: true, pick: { ...extend, kind: "new", target: undefined }, flows: [...flows, done("build-new", 3)] }))).toBe("waiting its turn to deploy");
+  });
+  test("the branch is a link only when it is canopy's GitHub tree url; the sheet says what the seed came from", () => {
+    expect(branchHref("https://github.com/eric/clms/tree/new/dark-mode")).toBe("https://github.com/eric/clms/tree/new/dark-mode");
+    for (const bad of ["javascript:alert(1)", "https://evil.io/eric/clms/tree/new/x", "https://github.com/eric/clms/tree/main", undefined]) expect(branchHref(bad)).toBe(null);
+    const work = { kind: "extend" as const, from: "https://github.com/eric/clms.git", base: "b", target: "web-apps/clms", remote: "https://github.com/eric/clms.git", branch: "new/s", at: 1 };
+    expect(workLine(sprout({ work }))).toBe("extends web-apps/clms, on the branch new/s");
+    expect(workLine(sprout({ work: { kind: "renovate", from: "https://github.com/up/lib", base: "b", at: 1 } }))).toBe("renovates https://github.com/up/lib");
+    expect(workLine(sprout())).toBe(null);
+  });
+  test("a hand-off fills the strip up to the retro", () => {
+    expect(stageStrip(sprout({ status: "handed-off" })).map((x) => x.mark)).toEqual(["done", "done", "done", "done", "done", "done", "done", "todo"]);
   });
   test("questions and parks need you; the rest do not", () => {
     expect(needsYou(sprout({ status: "clarifying", questions: [q("a")] }))).toBe(true);
