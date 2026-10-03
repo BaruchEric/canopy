@@ -183,6 +183,34 @@ describe("a stage check", () => {
     }
   });
 
+  test("through a real runner, a check refused for the stages' settings fails with the file and key, never away", async () => {
+    const dir = await realpath(await mkdtemp(join(tmpdir(), "canopy-check-settings-")));
+    scratch.push(dir);
+    const seed = join(dir, "_incubator", "coin");
+    await mkdir(seed, { recursive: true });
+    const cfg = join(dir, "stage-claude");
+    await mkdir(cfg, { recursive: true });
+    await writeFile(join(cfg, "settings.json"), JSON.stringify({ hooks: { Stop: [] } }));
+    const marker = join(dir, "check-ran");
+    const socket = join(dir, "s.sock");
+    const runner = await startStageRunner({
+      socket,
+      root: join(dir, "_incubator"),
+      env: { PATH: process.env["PATH"], HOME: dir, CLAUDE_CONFIG_DIR: cfg, CANOPY_FENCE_PROBE: "http://probe.test/" },
+      probe: async () => ({ result: "blocked" }),
+      writable: async () => false,
+    });
+    try {
+      const r = await runCheck({ path: seed }, `touch ${marker}`, true, new StageClient(socket));
+      expect(r.away).toBeUndefined();
+      expect(r.exit).not.toBe(0);
+      expect(r.output).toContain(`${join(cfg, "settings.json")} holds "hooks"`);
+      expect(existsSync(marker)).toBe(false);
+    } finally {
+      await runner.stop();
+    }
+  });
+
   test("a check the runner refuses for its fence waits for the fence, in the runner's words", async () => {
     const client = {
       exec: async () => ({ code: 126, stdout: "", stderr: "the fence is down: http://192.168.1.1/ answered\n", unfenced: "the fence is down: http://192.168.1.1/ answered" }),
