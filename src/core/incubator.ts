@@ -904,8 +904,14 @@ export class Incubator {
         if (live) now.set(f.flowId, flowDigest(live));
       }
       const record = `${JSON.stringify(retroRecord(s, now, known), null, 1)}\n`;
-      const file = await (this.deps.share ?? REAL_SHARE).record(join(this.deps.root, SEEDS_DIR), s.id, record);
-      if (this.detached || this.gone(s) || s.retro !== r) return;
+      const share = this.deps.share ?? REAL_SHARE;
+      const file = await share.record(join(this.deps.root, SEEDS_DIR), s.id, record);
+      if (this.gone(s)) {
+        // dismissed while the record was written: its forget ran first, so this copy goes now
+        await share.forget(join(this.deps.root, SEEDS_DIR), s.id).catch((err) => this.log(`shared copies of ${s.id} not removed: ${msg(err)}`));
+        return;
+      }
+      if (this.detached || s.retro !== r) return;
       const flow = await this.deps.flows.start(repo, { ...withRecordRead(wf, dirname(file)), unattended: RETRO_UNATTENDED }, retroNote(s, file));
       r.flowId = flow.id;
       if (this.gone(s)) {

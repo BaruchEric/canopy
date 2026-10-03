@@ -2068,6 +2068,38 @@ describe("retro", () => {
     expect(now(old, s.id).retro).toBeUndefined();
   });
 
+  test("a dismiss while the retro's record is being written removes the record once it lands, and starts no retro", async () => {
+    let release: () => void = () => {};
+    const held = new Promise<void>((r) => (release = r));
+    let writing = false;
+    const forgot: string[] = [];
+    const w = retroWorld({
+      share: {
+        inputs: async (seeds, id) => `${seeds}/.shared/inputs/${id}`,
+        workspace: async (seeds, _root, id) => `${seeds}/.shared/workspace/${id}`,
+        record: async (seeds, id) => {
+          writing = true;
+          await held;
+          return `${seeds}/.shared/record/${id}/record.json`;
+        },
+        forget: async (_seeds, id) => {
+          forgot.push(id);
+        },
+      },
+    });
+    const s = await clarifying(w);
+    await w.inc.stop(s.id);
+    for (let i = 0; i < 100 && !writing; i++) await Bun.sleep(1);
+    expect(writing).toBe(true);
+    await w.inc.dismiss(s.id);
+    expect(forgot).toEqual([s.id]);
+    release();
+    await w.inc.idle();
+    // the record written after the dismiss's forget is forgotten again
+    expect(forgot).toEqual([s.id, s.id]);
+    expect(w.flows.started.filter((f) => f.workflow.name === "retro")).toHaveLength(0);
+  });
+
   test("dismiss stops a running retro", async () => {
     const w = retroWorld();
     const s = await clarifying(w);
