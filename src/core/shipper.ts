@@ -407,10 +407,17 @@ export function shipper(cfg: ShipConfig, deps: ShipDeps = { exec: realExec, fetc
           if (tip.code !== 0 || tip.stdout.trim() !== head) throw new Error(`the seed's HEAD is not the tip of ${extendBranch(to.slug)}, so canopy will not push it`);
           const grows = await git(["merge-base", "--is-ancestor", to.base, head], bare);
           if (grows.code !== 0) throw new Error(`${extendBranch(to.slug)} does not grow from ${to.base.slice(0, 12)}, the target's branch canopy cloned`);
-          const touched = await git(["log", "--format=", "--name-only", `${to.base}..${head}`, "--", ...NOTE_FILES.map((f) => `:(literal)${f}`)], bare);
+          // every commit, a merge's other side too: history simplification
+          // would hide a `-s ours` merge of the notes' own branch
+          const touched = await git(["log", "--full-history", "--no-merges", "--format=", "--name-only", `${to.base}..${head}`, "--", ...NOTE_FILES.map((f) => `:(literal)${f}`)], bare);
           if (touched.code !== 0) throw new Error(`git log of the branch: ${tail(touched)}`);
           const notes = [...new Set(touched.stdout.split("\n").filter((l) => l.trim()))];
           if (notes.length) throw new Error(`the branch's commits touch canopy's notes (${notes.join(", ")}), which never go to the user's repo`);
+          // a merge brings in history canopy did not build: the branch is a line of the agent's commits
+          const merges = await git(["rev-list", "--min-parents=2", `${to.base}..${head}`], bare);
+          if (merges.code !== 0) throw new Error(`git rev-list of the branch: ${tail(merges)}`);
+          const merge = merges.stdout.trim().split("\n")[0];
+          if (merge) throw new Error(`${extendBranch(to.slug)} holds a merge (${merge.slice(0, 12)}); canopy hands off a straight line of commits only`);
           // one ref, no +, no tags, whatever the global config says
           const pushed = await git(["-c", "push.followTags=false", "-c", "push.recurseSubmodules=no", "push", "--quiet", "--no-verify", "--", url, `${head}:${ref}`], bare, 300_000);
           if (pushed.code !== 0) throw new Error(`git push: ${tail(pushed)}`);

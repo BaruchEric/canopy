@@ -261,6 +261,33 @@ describe("pushBranch", () => {
     expect(f.calls).toHaveLength(0);
   });
 
+  test("canopy's notes merged in with -s ours are found and refused, and nothing reaches the target", async () => {
+    const w = await world();
+    await commit(w.seed, "src/a.ts", "a\n", "work");
+    // the notes' own history on a branch of its own, as a rebuilt seed keeps it
+    await git(w.seed, "checkout", "-q", "--orphan", "incubator/notes");
+    await git(w.seed, "rm", "-rqf", ".");
+    await commit(w.seed, ".canopy/intent.md", "secret plans\n", "notes");
+    await git(w.seed, "checkout", "-q", "new/s");
+    // the merge keeps new/s's tree, so default history simplification hides the notes commit
+    await git(w.seed, "merge", "-q", "-s", "ours", "--allow-unrelated-histories", "-m", "m", "incubator/notes");
+    const before = await refs(w.target);
+    await expect(shipper(cfg, w.deps).pushBranch(w.seed, { remote: REMOTE, slug: "s", base: w.base })).rejects.toThrow("touch canopy's notes (.canopy/intent.md)");
+    expect(await refs(w.target)).toEqual(before);
+  });
+
+  test("any merge on the branch is refused, even one that touches no notes", async () => {
+    const w = await world();
+    await commit(w.seed, "src/a.ts", "a\n", "work");
+    await git(w.seed, "checkout", "-q", "-b", "side", w.base);
+    await commit(w.seed, "src/b.ts", "b\n", "side work");
+    await git(w.seed, "checkout", "-q", "new/s");
+    await git(w.seed, "merge", "-q", "--no-ff", "-m", "merge side", "side");
+    const before = await refs(w.target);
+    await expect(shipper(cfg, w.deps).pushBranch(w.seed, { remote: REMOTE, slug: "s", base: w.base })).rejects.toThrow("holds a merge");
+    expect(await refs(w.target)).toEqual(before);
+  });
+
   test("a branch that left its base, touched canopy's notes, or is not where HEAD is, is refused", async () => {
     const w = await world();
     await commit(w.seed, ".canopy/intent.md", "be useful", "notes by mistake");
