@@ -363,7 +363,12 @@ export class StageClient {
  *  the stage runner in the seed's top folder (a deeper path rides along as
  *  `-C`), and answers SEED_AWAY, never local git, while `client()` gives no
  *  runner or the runner says it cannot run it. */
-export function seedGitThrough(client: () => StageClient | null | undefined, why: () => string, roots: () => readonly string[]): SeedGitHook {
+export function seedGitThrough(
+  client: () => StageClient | null | undefined,
+  why: () => string,
+  roots: () => readonly string[],
+  covers?: (path: string) => boolean,
+): SeedGitHook {
   const away = (reason: string): ExecResult => ({ code: 128, stdout: "", stderr: `${SEED_AWAY}: ${reason}` });
   const call = async (path: string, args: string[], file: string | null, opts: { timeoutMs: number; env: Record<string, string> }): Promise<ExecResult> => {
     const c = client();
@@ -376,6 +381,7 @@ export function seedGitThrough(client: () => StageClient | null | undefined, why
     return r.away !== undefined ? away(r.away) : { code: r.code, stdout: r.stdout, stderr: r.stderr };
   };
   return {
+    ...(covers ? { covers } : {}),
     run: (path, args, opts) => call(path, args, null, opts),
     toFile: (path, args, file, opts) => call(path, args, file, opts),
   };

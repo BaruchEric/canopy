@@ -2862,8 +2862,21 @@ export async function startServer(opts: {
   // On an isolated backend canopy runs no git in a seed: every call goes to
   // the stage runner and runs as the stage user, and while the runner is
   // away or unfenced it waits, never running here instead (amendment 4).
-  // Unisolated, seed git runs here behind the guard as before.
-  setSeedGit(stage ? seedGitThrough(() => (stageFor() ?? null), stageAway, seedRootsNow) : null);
+  // Unisolated, seed git runs here behind the guard as before. A stopped
+  // server's seeds stay away, so a refresh or a mirror sync still in flight
+  // never falls back to git here; the hook answers for this root's seeds
+  // alone, so another backend's (a later server's) are its own.
+  let stopped = false;
+  setSeedGit(
+    stage
+      ? seedGitThrough(
+          () => (stopped ? null : (stageFor() ?? null)),
+          () => (stopped ? "canopy is stopping" : stageAway()),
+          seedRootsNow,
+          (path) => isSeedPath(root, path),
+        )
+      : null,
+  );
   if (process.env["NODE_ENV"] !== "test") {
     console.log(
       stage
@@ -3588,7 +3601,8 @@ export async function startServer(opts: {
       clearTimeout(firstActivity);
       for (const t of state.timers.values()) clearTimeout(t);
       stopStageWatch?.();
-      setSeedGit(null);
+      // the hook stays, answering SEED_AWAY for this root's seeds
+      stopped = true;
       // before the flows stop, so their ends park no sprout
       state.incubator.detach();
       state.flows.detach();
