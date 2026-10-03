@@ -11,7 +11,7 @@ import { appendFile, lstat, mkdir, mkdtemp, rename, rm } from "node:fs/promises"
 import { tmpdir } from "node:os";
 import { basename, dirname, join } from "node:path";
 import { exec as realExec, type ExecOptions, type ExecResult } from "./exec";
-import { commitSeed, dropAgentSettings, MAKING_DIR, readSeed, writeSeed } from "./seed";
+import { commitSeed, dropAgentSettings, dropUpstreamNotes, MAKING_DIR, readSeed, writeSeed } from "./seed";
 import { bundleSeed } from "./seedmirror";
 import { inQuietSeed } from "./seedgit";
 import { NOTE_FILES, extendBranch, githubRepo, githubUrl, isSeedRepoId, urlWithoutSecret, type GithubRepo } from "./sprout";
@@ -196,6 +196,7 @@ export function seedSource(deps: SeedSourceDeps): SeedSource {
           await git("remote", ["remote", "rename", "origin", "upstream"]);
           await git("remote", ["remote", "set-url", "upstream", urlWithoutSecret(spec.from)]);
           await dropAgentSettings(work, deps.self);
+          await dropUpstreamNotes(work, deps.self);
         }
         // the notes-only seed's history, from its bundle, never its path
         const file = join(scratch, "seed.bundle");

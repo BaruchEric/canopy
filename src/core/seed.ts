@@ -144,6 +144,20 @@ export async function commitSeed(path: string, rels: string[], message: string, 
 export async function dropAgentSettings(path: string, self: string): Promise<void> {
   const claude = await lstatOrNull(join(path, ".claude"));
   const names = claude && !claude.isDirectory() ? [".claude", ".mcp.json"] : AGENT_SETTINGS;
+  await dropPaths(path, names, false, "seed: drop the cloned project's agent settings", "the cloned project's agent settings are", self);
+}
+
+/** take out a `.canopy` the upstream tracks, in any letter case, as canopy's
+ *  commit, before canopy's own notes go in (amendment 6, ruling 20): a
+ *  renovate upstream could ship notes, an answers file among them, that
+ *  read as canopy's. A link or a file goes as it is; a folder goes whole. */
+export async function dropUpstreamNotes(path: string, self: string): Promise<void> {
+  await dropPaths(path, [".canopy"], true, "seed: drop the upstream's own .canopy", "the upstream's .canopy is", self);
+}
+
+/** `names` out of the index and off the disk, in any letter case, in one
+ *  commit of canopy's; `whole` takes each tracked path's top folder too */
+async function dropPaths(path: string, names: readonly string[], whole: boolean, message: string, what: string, self: string): Promise<void> {
   const specs = names.map((n) => `:(icase)${n}`);
   const listed = await git(path, [...NO_HOOKS, "ls-files", "-z", "--", ...specs]);
   if (listed.code !== 0) throw new Error(`git ls-files: ${firstLine(listed.stderr)}`);
@@ -156,12 +170,13 @@ export async function dropAgentSettings(path: string, self: string): Promise<voi
     if (r.code !== 0) throw new Error(`git rm: ${firstLine(r.stderr)}`);
   }
   // the files themselves, tracked under any case or not tracked at all
-  for (const n of [...tracked, ...onDisk]) await rm(join(path, n), { recursive: true, force: true });
+  const tops = whole ? tracked.map((n) => n.split("/")[0] ?? n) : [];
+  for (const n of new Set([...tracked, ...onDisk, ...tops])) await rm(join(path, n), { recursive: true, force: true });
   // committed by the names the index had, since a commit's pathspec must
   // match something git knows
   const staged = tracked.length > 0 ? await git(path, [...QUIET, "diff", "--cached", "--quiet", "--", ...tracked]) : null;
   if (staged && staged.code !== 0) {
-    const c = await git(path, [...COMMIT, "-m", "seed: drop the cloned project's agent settings", "--", ...tracked], 30_000, identity(self));
+    const c = await git(path, [...COMMIT, "-m", message, "--", ...tracked], 30_000, identity(self));
     if (c.code !== 0) throw new Error(`git commit: ${firstLine(c.stderr)}`);
   }
   // nothing of them may be left, in the index or on disk, or makeSeed takes
@@ -169,7 +184,7 @@ export async function dropAgentSettings(path: string, self: string): Promise<voi
   const left = await git(path, [...NO_HOOKS, "status", "--porcelain", "-z", "--ignored", "--", ...specs]);
   const still = await git(path, [...NO_HOOKS, "ls-files", "-z", "--", ...specs]);
   if (left.code !== 0 || still.code !== 0 || left.stdout !== "" || still.stdout !== "") {
-    throw new Error("the cloned project's agent settings are still in the seed");
+    throw new Error(`${what} still in the seed`);
   }
 }
 
