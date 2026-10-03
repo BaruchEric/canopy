@@ -591,3 +591,119 @@ describe("the orphan sweep", () => {
     }
   });
 });
+
+describe("git in a seed", () => {
+  const seed = () => join(root, "gitseed");
+  const quiet = { stdout: "ignore", stderr: "ignore" } as const;
+  let runnerPath = "";
+  let head = "";
+  beforeAll(async () => {
+    await mkdir(seed(), { recursive: true });
+    for (const argv of [
+      ["git", "init", "-q", "-b", "main"],
+      ["git", "-c", "user.name=a", "-c", "user.email=a@b", "commit", "-q", "--allow-empty", "-m", "one"],
+    ]) {
+      expect(await Bun.spawn(argv, { cwd: seed(), ...quiet }).exited).toBe(0);
+    }
+    head = (await new Response(Bun.spawn(["git", "rev-parse", "HEAD"], { cwd: seed(), stdout: "pipe" }).stdout).text()).trim();
+    // a global config the runner's own HOME holds, which canopy's git must never read
+    await writeFile(join(dir, ".gitconfig"), "[user]\n\tname = from-the-home\n");
+    runnerPath = await extra("git", { env: { PATH: process.env["PATH"], HOME: dir, ...FENCE } });
+  });
+
+  test("runs git in the seed and answers its output and exit code", async () => {
+    const fs = await talk({ t: "git", seed: seed(), args: ["rev-parse", "HEAD"], env: {} }, [], 8000, runnerPath);
+    expect(text(fs, "out").trim()).toBe(head);
+    expect(fs.at(-1)).toEqual({ t: "exit", code: 0 });
+  });
+
+  test("reads no global config, sets the ceiling, and passes git's own names alone", async () => {
+    const fs = await talk(
+      { t: "git", seed: seed(), args: ["var", "GIT_AUTHOR_IDENT"], env: { GIT_AUTHOR_NAME: "canopy", GIT_AUTHOR_EMAIL: "canopy@mini" } },
+      [],
+      8000,
+      runnerPath,
+    );
+    expect(text(fs, "out")).toStartWith("canopy <canopy@mini>");
+    const user = await talk({ t: "git", seed: seed(), args: ["config", "user.name"], env: {} }, [], 8000, runnerPath);
+    expect(text(user, "out")).toBe("");
+    expect(user.at(-1)).toEqual({ t: "exit", code: 1 });
+  });
+
+  test("the seed's fsmonitor and hooks do not run", async () => {
+    const mark = join(dir, "fsmonitor-ran");
+    await writeFile(join(dir, "fsmonitor.sh"), `#!/bin/sh\ntouch ${mark}\n`);
+    await chmod(join(dir, "fsmonitor.sh"), 0o755);
+    expect(await Bun.spawn(["git", "config", "core.fsmonitor", join(dir, "fsmonitor.sh")], { cwd: seed(), ...quiet }).exited).toBe(0);
+    try {
+      const fs = await talk({ t: "git", seed: seed(), args: ["status", "--porcelain"], env: {} }, [], 8000, runnerPath);
+      expect(fs.at(-1)).toEqual({ t: "exit", code: 0 });
+      expect(await Bun.file(mark).exists()).toBe(false);
+    } finally {
+      await Bun.spawn(["git", "config", "--unset", "core.fsmonitor"], { cwd: seed(), ...quiet }).exited;
+    }
+  });
+
+  test.each([
+    ["a nested folder", () => join(root, "coin", "sub")],
+    ["a dot folder", () => join(root, ".shared")],
+    ["the root itself", () => root],
+    ["a symlink out of the root", () => join(root, "escape")],
+    ["a relative path", () => "gitseed"],
+  ])("in %s is refused", async (_name, where) => {
+    const fs = await talk({ t: "git", seed: where(), args: ["status"], env: {} }, [], 8000, runnerPath);
+    expect(fs).toHaveLength(1);
+    expect(fs[0]?.t).toBe("refused");
+  });
+
+  test("an env name off git's own list is refused before anything runs", async () => {
+    const fs = await talk({ t: "git", seed: seed(), args: ["add", "-A"], env: { GIT_INDEX_FILE: join(dir, "elsewhere") } }, [], 8000, runnerPath);
+    expect(fs).toEqual([{ t: "refused", reason: expect.stringContaining("GIT_INDEX_FILE") }]);
+  });
+
+  test("waits for the fence like a spawn, and refuses unfenced", async () => {
+    const path = await extra("git-open", { probe: async () => ({ result: "open" }) });
+    const fs = await talk({ t: "git", seed: seed(), args: ["status"], env: {} }, [], 8000, path);
+    expect(fs).toEqual([{ t: "refused", reason: `the fence is down: ${PROBE} answered`, fenced: false }]);
+  });
+
+  test("a git the stage user could rewrite is refused", async () => {
+    const path = await extra("git-writable", { writable: async () => true });
+    const fs = await talk({ t: "git", seed: seed(), args: ["status"], env: {} }, [], 8000, path);
+    expect(fs.at(-1)?.t).toBe("refused");
+    expect((fs.at(-1) as { reason: string }).reason).toContain("writable");
+  });
+
+  test("the orphan sweep spares a git still running, and its end takes its tree", async () => {
+    const pidFile = join(dir, "slow-git.pid");
+    const slow = join(dir, "slow-git");
+    await writeFile(slow, `#!/bin/sh\necho $$ > ${pidFile}\nexec sleep 300\n`);
+    await chmod(slow, 0o755);
+    const watched = new Set<number>();
+    const view = async (): Promise<Proc[]> => [
+      { pid: 1, ppid: 0, argv: [] },
+      { pid: process.pid, ppid: 1, argv: [] },
+      ...(await allProcs()).filter((x) => watched.has(x.pid)),
+    ];
+    const path = await extra("git-sweep", { programs: { git: slow }, procs: view, sweepOrphans: true, sweepEvery: 100 });
+    const live = (() => {
+      const got: StageFrame[] = [];
+      const split = lineSplitter();
+      const c = connect(path, () => c.write(encodeFrame({ t: "git", seed: seed(), args: ["status"], env: {} })));
+      c.on("data", (b) => {
+        for (const line of split(b.toString())) {
+          const f = parseFrame(line) as StageFrame | null;
+          if (f) got.push(f);
+        }
+      });
+      c.on("error", () => {});
+      return { c, got };
+    })();
+    const pid = await pidIn(pidFile);
+    watched.add(pid);
+    await Bun.sleep(600);
+    expect(alive(pid)).toBe(true);
+    live.c.destroy();
+    expect(await gone(pid)).toBe(true);
+  });
+});

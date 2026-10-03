@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { childEnv, chunkB64, encodeFrame, fromB64, lineSplitter, parseFrame, requestRefusal, StageAwayError, STAGE_AWAY } from "./stagewire";
+import { childEnv, chunkB64, encodeFrame, fromB64, gitEnv, lineSplitter, parseFrame, requestRefusal, StageAwayError, STAGE_AWAY, type StageRequest } from "./stagewire";
 
 describe("stage wire", () => {
   test("frames round-trip one per line", () => {
@@ -52,6 +52,34 @@ describe("stage wire", () => {
     expect(parseFrame(JSON.stringify({ t: "busy", busy: "yes" }))).toBe(null);
     expect(requestRefusal(q)).toBe(null);
     expect(requestRefusal({ t: "busy", seed: "coin" })).toContain("seed");
+  });
+  test("git: a request names a seed, its args and an env of git's own names only", () => {
+    const q: Extract<StageRequest, { t: "git" }> = { t: "git", seed: "/s/coin", args: ["status", "--porcelain=v2"], env: { GIT_OPTIONAL_LOCKS: "0" } };
+    expect(parseFrame(encodeFrame(q))).toEqual(q);
+    expect(parseFrame(JSON.stringify({ t: "git", seed: "/s/coin", args: "status", env: {} }))).toBe(null);
+    expect(parseFrame(JSON.stringify({ t: "git", seed: "/s/coin", args: ["status"], env: { A: 1 } }))).toBe(null);
+    expect(requestRefusal(q)).toBe(null);
+    expect(requestRefusal({ ...q, seed: "coin" })).toContain("seed");
+    // a name the runner would drop changes what git writes: refused, never dropped
+    for (const name of ["GIT_INDEX_FILE", "GIT_OBJECT_DIRECTORY", "GIT_DIR", "GIT_CONFIG_COUNT", "PATH", "GH_TOKEN"]) {
+      expect(requestRefusal({ ...q, env: { [name]: "x" } })).toContain(name);
+    }
+  });
+  test("a git request's env is the runner's own: no global or system config, a ceiling at the stage root", () => {
+    const own = { PATH: "/usr/bin", HOME: "/home/bun", LANG: "C.UTF-8", GH_TOKEN: "no", CLAUDE_CONFIG_DIR: "/c" };
+    const asked = { GIT_OPTIONAL_LOCKS: "0", GIT_AUTHOR_NAME: "canopy", GIT_INDEX_FILE: "/tmp/i", HOME: "/evil" };
+    expect(gitEnv(own, asked, "/s")).toEqual({
+      PATH: "/usr/bin",
+      LANG: "C.UTF-8",
+      HOME: "/nonexistent",
+      XDG_CONFIG_HOME: "/nonexistent",
+      GIT_CONFIG_NOSYSTEM: "1",
+      GIT_CONFIG_GLOBAL: "/dev/null",
+      GIT_CEILING_DIRECTORIES: "/s",
+      GIT_TERMINAL_PROMPT: "0",
+      GIT_OPTIONAL_LOCKS: "0",
+      GIT_AUTHOR_NAME: "canopy",
+    });
   });
   test("hello and exit frames parse, with their fields checked", () => {
     expect(parseFrame('{"t":"hello"}')).toEqual({ t: "hello" });

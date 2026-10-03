@@ -18,6 +18,8 @@ const runner = async (socket: string): Promise<() => Promise<void>> => {
     root,
     env: { PATH: process.env["PATH"], HOME: dir, CANOPY_FENCE_PROBE: "http://probe.test/" },
     probe: async () => ({ result: "blocked" }),
+    // the git on this Mac's PATH may sit in a folder its user owns
+    writable: async () => false,
   });
   return stop;
 };
@@ -114,6 +116,34 @@ describe("the stage client", () => {
     p.stdin.end();
     expect(await new Response(p.stdout).text()).toBe("");
     expect(await p.exited).toBe(127);
+  });
+
+  test("git runs in the seed through the runner and hands back its output", async () => {
+    const quiet = { stdout: "ignore", stderr: "ignore" } as const;
+    expect(await Bun.spawn(["git", "init", "-q", "-b", "main"], { cwd: seed, ...quiet }).exited).toBe(0);
+    // 1 MB of bytes no text decoder keeps whole
+    const blob = new Uint8Array(1024 * 1024).map((_, i) => (i * 131 + 7) % 256);
+    await Bun.write(join(seed, "blob.bin"), blob);
+    expect(await Bun.spawn(["git", "add", "blob.bin"], { cwd: seed, ...quiet }).exited).toBe(0);
+    const env = { GIT_AUTHOR_NAME: "canopy", GIT_AUTHOR_EMAIL: "c@x", GIT_COMMITTER_NAME: "canopy", GIT_COMMITTER_EMAIL: "c@x" };
+    const made = await client.git(seed, ["commit", "-q", "-m", "one"], { timeoutMs: 10_000, env });
+    expect(made).toEqual({ code: 0, stdout: "", stderr: "" });
+    const log = await client.git(seed, ["log", "--format=%an %s"], { timeoutMs: 10_000 });
+    expect(log.stdout).toBe("canopy one\n");
+    const file = join(dir, "blob.out");
+    const r = await client.gitToFile(seed, ["cat-file", "blob", "HEAD:blob.bin"], file, { timeoutMs: 10_000 });
+    expect(r.code).toBe(0);
+    expect(Buffer.from(await Bun.file(file).arrayBuffer()).equals(Buffer.from(blob))).toBe(true);
+    // a name off git's own list is refused, not dropped
+    const refused = await client.git(seed, ["add", "-A"], { timeoutMs: 10_000, env: { GIT_INDEX_FILE: join(dir, "i") } });
+    expect(refused.code).toBe(126);
+    expect(refused.away).toBeUndefined();
+  }, 20_000);
+
+  test("git with no runner to answer is away, and nothing runs", async () => {
+    const r = await new StageClient(join(dir, "none.sock")).git(seed, ["status"], { timeoutMs: 2000 });
+    expect(r.code).toBe(127);
+    expect(r.away).toContain("the stage runner is not answering");
   });
 
   test("busy says whether anything has its cwd in the seed", async () => {

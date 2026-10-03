@@ -213,22 +213,43 @@ export class StageClient {
    *  stderr; 126 for a refusal and 127 when the runner is not answering;
    *  `unfenced` holds the runner's words when it refused for its fence */
   async exec(argv: string[], opts: { cwd: string; timeoutMs: number; env?: Record<string, string> }): Promise<ExecResult & { unfenced?: string }> {
-    const p = this.open({ t: "spawn", argv, cwd: opts.cwd, env: opts.env ?? {} });
+    const r = await this.collect(this.open({ t: "spawn", argv, cwd: opts.cwd, env: opts.env ?? {} }), opts.timeoutMs);
+    return { code: r.code, stdout: r.stdout, stderr: r.stderr, ...(r.unfenced !== null ? { unfenced: r.unfenced } : {}) };
+  }
+
+  /** Canopy's own git in a seed's top folder, run by the runner as the
+   *  stage user. `away` holds why it did not run at all: the runner did not
+   *  answer, or refused for its fence. Never anything run here instead. */
+  async git(seed: string, args: string[], opts: { timeoutMs: number; env?: Record<string, string> }): Promise<ExecResult & { away?: string }> {
+    return this.gitOut(seed, args, opts, null);
+  }
+
+  /** `git`, with stdout streamed into `file` (a bundle, which is bytes, not
+   *  text); the result's stdout is empty */
+  async gitToFile(seed: string, args: string[], file: string, opts: { timeoutMs: number; env?: Record<string, string> }): Promise<ExecResult & { away?: string }> {
+    return this.gitOut(seed, args, opts, file);
+  }
+
+  private async gitOut(seed: string, args: string[], opts: { timeoutMs: number; env?: Record<string, string> }, file: string | null): Promise<ExecResult & { away?: string }> {
+    const r = await this.collect(this.open({ t: "git", seed, args, env: opts.env ?? {} }), opts.timeoutMs, file);
+    const away = r.unfenced ?? (r.code === AWAY && r.stderr.startsWith(STAGE_AWAY) ? r.stderr.trim() : null);
+    return { code: r.code, stdout: r.stdout, stderr: r.stderr, ...(away !== null ? { away } : {}) };
+  }
+
+  /** a process's stdout, stderr and code at its end or the timeout's kill;
+   *  stdout into `file` when one is named */
+  private async collect(p: RpcProc, timeoutMs: number, file: string | null = null): Promise<ExecResult & { unfenced: string | null }> {
     p.stdin.end();
     let timedOut = false;
     const timer = setTimeout(() => {
       timedOut = true;
       p.kill();
-    }, opts.timeoutMs);
-    const [stdout, stderr, code] = await Promise.all([
-      new Response(p.stdout).text(),
-      new Response(p.stderr ?? null).text(),
-      p.exited,
-    ]);
+    }, timeoutMs);
+    const out = file === null ? new Response(p.stdout).text() : Bun.write(file, new Response(p.stdout)).then(() => "");
+    const [stdout, stderr, code] = await Promise.all([out, new Response(p.stderr ?? null).text(), p.exited]);
     clearTimeout(timer);
-    const said = timedOut ? `${stderr}timed out after ${opts.timeoutMs} ms\n` : stderr;
-    const unfenced = this.fenceRefusal(p);
-    return { code: code ?? KILLED, stdout, stderr: said, ...(unfenced !== null ? { unfenced } : {}) };
+    const said = timedOut ? `${stderr}timed out after ${timeoutMs} ms\n` : stderr;
+    return { code: code ?? KILLED, stdout, stderr: said, unfenced: this.fenceRefusal(p) };
   }
 
   /** One request whose answer is one frame: what `pick` reads off it, or

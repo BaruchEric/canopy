@@ -26,9 +26,11 @@ import { basename, dirname, join } from "node:path";
 import { sweepCodexTrust } from "../core/codextrust";
 import { exec } from "../core/exec";
 import { parseLsofCwd } from "../core/ports";
+import { SEED_GIT_FLAGS } from "../core/seedgit";
 import { allProcs, descendants, procCwd, type Proc } from "../core/procs";
 import {
   childEnv,
+  gitEnv,
   type Fenced,
   chunkB64,
   encodeFrame,
@@ -257,6 +259,9 @@ interface Live {
   pid: number;
   seed: string;
   running: boolean;
+  /** canopy's git: its end takes its own tree and group, not the seed,
+   *  where a stage of that seed's own may still be running */
+  git: boolean;
 }
 
 export async function startStageRunner(opts: RunnerOptions): Promise<{ stop(): Promise<void> }> {
@@ -264,7 +269,7 @@ export async function startStageRunner(opts: RunnerOptions): Promise<{ stop(): P
   const procs = opts.procs ?? allProcs;
   const writable = opts.writable ?? canWrite;
   const identity = Object.fromEntries(STAGE_PROGRAMS.map((p) => [p, p]));
-  const programs: Record<string, string> = { ...identity, ...opts.programs };
+  const programs: Record<string, string> = { ...identity, git: "git", ...opts.programs };
   await rm(opts.socket, { force: true });
   const live = new Set<Socket>();
   const runs = new Set<Live>();
@@ -323,6 +328,7 @@ export async function startStageRunner(opts: RunnerOptions): Promise<{ stop(): P
   const endRun = async (run: Live): Promise<void> => {
     if (run.running) await killTree(run.pid, procs);
     signal(-run.pid, "SIGKILL");
+    if (run.git) return;
     await sweepSeed(run.seed, run);
     if (opts.sweepOrphans) await sweepOrphans();
   };
@@ -424,13 +430,39 @@ export async function startStageRunner(opts: RunnerOptions): Promise<{ stop(): P
       }
       const unsettled = await stageSettingsRefusal(own).catch(() => "the stages' claude settings and codex config could not be read");
       if (unsettled) return finish({ t: "refused", reason: unsettled });
+      launch(name, [program, ...req.argv.slice(1)], where.seed, childEnv(own, req.env), false);
+    };
+
+    /** canopy's own git in a seed: the seed's top folder only, behind the
+     *  fence like a spawn (the seed's config is the agents'), with
+     *  SEED_GIT_FLAGS ahead of the args and an env the runner builds. The
+     *  claude and codex settings checks are left out: they steer the
+     *  harnesses, not git. */
+    const gitIn = async (req: Extract<StageRequest, { t: "git" }>): Promise<void> => {
+      const refused = requestRefusal(req);
+      if (refused) return finish({ t: "refused", reason: refused });
+      const where = await seedOf(opts.root, req.seed);
+      if ("refused" in where) return finish({ t: "refused", reason: where.refused });
+      await firstProbe;
+      const now = fence;
+      if (now.fenced !== true) return finish({ t: "refused", reason: now.reason ?? FENCE_UNSET, fenced: now.fenced });
+      const resolved = await resolveProgram("git", programs["git"] ?? "git", own["PATH"], opts.root, writable);
+      if ("refused" in resolved) return finish({ t: "refused", reason: resolved.refused });
+      // safe.directory on the command line, which git honours there: the
+      // system config that names it is off
+      const argv = [resolved.program, ...SEED_GIT_FLAGS, "-c", "safe.directory=*", ...req.args];
+      launch("git", argv, where.seed, gitEnv(own, req.env, where.root), true);
+    };
+
+    /** starts the checked argv in the seed and carries it to its exit frame */
+    const launch = (name: string, argv: string[], seed: string, env: Record<string, string>, git: boolean): void => {
       // the connection may have closed while the checks ran: then nothing starts
       if (sock.destroyed || state === "over") return;
       let p: Bun.Subprocess<"pipe", "pipe", "pipe">;
       try {
-        p = Bun.spawn([program, ...req.argv.slice(1)], {
-          cwd: where.seed,
-          env: childEnv(own, req.env),
+        p = Bun.spawn(argv, {
+          cwd: seed,
+          env,
           stdin: "pipe",
           stdout: "pipe",
           stderr: "pipe",
@@ -442,7 +474,7 @@ export async function startStageRunner(opts: RunnerOptions): Promise<{ stop(): P
         return finish({ t: "refused", reason: `${name} could not be started` });
       }
       proc = p;
-      const self: Live = { pid: p.pid, seed: where.seed, running: true };
+      const self: Live = { pid: p.pid, seed, running: true, git };
       run = self;
       runs.add(self);
       state = "running";
@@ -493,6 +525,7 @@ export async function startStageRunner(opts: RunnerOptions): Promise<{ stop(): P
           return refused ? finish({ t: "refused", reason: refused }) : busy(f.seed);
         }
         if (f.t === "spawn") return spawn(f);
+        if (f.t === "git") return gitIn(f);
         return finish({ t: "refused", reason: "the first frame must be a request" });
       }
       if (state !== "running" || !proc || !run) return;
