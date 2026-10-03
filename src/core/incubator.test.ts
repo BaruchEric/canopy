@@ -12,7 +12,7 @@ import type { ExtendTarget, RebuildSpec, SeedSource } from "./seedsource";
 import { BUNDLED_DIR, findWorkflow, loadWorkflows } from "./workflows";
 import { branchPushRefusal, holdsSlot } from "./sprout";
 import { RETRO_PARK_WAIT, RETRO_UNATTENDED, RETRO_WAIT_MAX } from "./retro";
-import type { Advice, Flow, FlowChoice, HandOffReview, Judgment, Repo, RunAnswerRecord, Sprout, SproutWork, Workflow } from "./types";
+import type { Advice, Flow, FlowChoice, HandOffReview, Judgment, PendingRework, Repo, RunAnswerRecord, Sprout, SproutWork, Workflow } from "./types";
 
 const CLARIFY: Workflow = {
   name: "clarify",
@@ -2338,11 +2338,22 @@ class FakeSource implements SeedSource {
     this.calls.push(`license ${url}`);
     return this.license;
   }
+  /** the record as the swap found it, and a failure right after the swap */
+  pendings: (PendingRework | undefined)[] = [];
+  records: (Sprout | undefined)[] = [];
+  failAfterSwap: string | null = null;
+  store: FakeStore | null = null;
   async rebuild(spec: RebuildSpec): Promise<SproutWork> {
     this.calls.push(`rebuild ${spec.kind} ${spec.from}`);
+    this.pendings.push(spec.pending);
     if (this.failRebuild) throw new Error(this.failRebuild);
-    if (spec.kind === "renovate") return { kind: "renovate", from: spec.from, base: "b0", at: 5 };
-    return { kind: "extend", from: spec.from, base: "b0", target: spec.target ?? "", remote: spec.from, branch: `new/${spec.slug}`, at: 5 };
+    const work: SproutWork =
+      spec.kind === "renovate" ? { kind: "renovate", from: spec.from, base: "b0", at: 5 } : { kind: "extend", from: spec.from, base: "b0", target: spec.target ?? "", remote: spec.from, branch: `new/${spec.slug}`, at: 5 };
+    if (spec.pending) return spec.pending.work;
+    await spec.swapping?.({ work, head: "rebuilt" });
+    this.records.push(this.store ? (await this.store.list())[0] : undefined);
+    if (this.failAfterSwap) throw new Error(this.failAfterSwap);
+    return work;
   }
 }
 
@@ -2371,6 +2382,26 @@ describe("renovate and extend builds", () => {
     await end(w, s.id, { ".canopy/questions.json": "[]" });
     return end(w, s.id, { ".canopy/pick.json": pick });
   };
+
+  test("the swap is on the record before it happens, and a rerun after it hands the record's swap back", async () => {
+    const src = new FakeSource();
+    const w = builds(src);
+    src.store = w.store;
+    src.failAfterSwap = "canopy restarted";
+    const s = await picked(w, RENOVATE);
+    // saved before the swap, as the record a restart would find
+    expect(src.records[0]?.rework).toEqual({ work: { kind: "renovate", from: "https://github.com/up/lib", base: "b0", at: 5 }, head: "rebuilt" });
+    expect(s.status).toBe("parked");
+    expect(s.work).toBeUndefined();
+    src.failAfterSwap = null;
+    await w.inc.resume(s.id, "retry");
+    await w.inc.idle();
+    const after = now(w, s.id);
+    expect(src.pendings.at(-1)).toEqual({ work: { kind: "renovate", from: "https://github.com/up/lib", base: "b0", at: 5 }, head: "rebuilt" });
+    expect(after.work).toEqual({ kind: "renovate", from: "https://github.com/up/lib", base: "b0", at: 5 });
+    expect(after.rework).toBeUndefined();
+    expect(after.status).toBe("building");
+  });
 
   test("a renovate pick checks GitHub's license, rebuilds the seed once and starts renovate with the host line", async () => {
     const src = new FakeSource();

@@ -865,8 +865,9 @@ export function parseSproutRecord(text: string): Sprout | null {
   const { parkedAt, parks, retro } = raw;
   if (!optNum(parkedAt) || (parks !== undefined && !(Array.isArray(parks) && parks.every(isPark)))) return null;
   if (retro !== undefined && !isRetro(retro)) return null;
-  const { work, branch, firebase, handOff } = raw;
+  const { work, branch, firebase, handOff, rework } = raw;
   if ((work !== undefined && !isWork(work)) || !optStr(branch) || (firebase !== undefined && !isFirebase(firebase))) return null;
+  if (rework !== undefined && !(isObj(rework) && isWork(rework["work"]) && typeof rework["head"] === "string")) return null;
   if (handOff !== undefined && !isHandOff(handOff)) return null;
   // canopy's own file: past these checks it is taken as written
   return raw as unknown as Sprout;

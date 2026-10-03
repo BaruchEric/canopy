@@ -15,7 +15,7 @@ import { commitSeed, dropAgentSettings, dropUpstreamNotes, MAKING_DIR, readSeed,
 import { bundleSeed } from "./seedmirror";
 import { inQuietSeed } from "./seedgit";
 import { NOTE_FILES, extendBranch, githubRepo, githubUrl, isSeedRepoId, urlWithoutSecret, type GithubRepo } from "./sprout";
-import { LAUNCH_SOURCE, type Repo, type SproutWork } from "./types";
+import { LAUNCH_SOURCE, type PendingRework, type Repo, type SproutWork } from "./types";
 
 /** an extend target as canopy resolved it */
 export interface ExtendTarget {
@@ -35,6 +35,11 @@ export interface RebuildSpec {
   from: string;
   /** an extend's target repo id */
   target?: string;
+  /** the last attempt's swap, as the sprout's record kept it: a restart cut
+   *  that attempt short after the swap began (ruling 22) */
+  pending?: PendingRework;
+  /** told just before the swap, and awaited, so the record holds it first */
+  swapping?: (p: PendingRework) => Promise<void>;
 }
 
 export interface SeedSource {
@@ -124,6 +129,38 @@ export function seedSource(deps: SeedSourceDeps): SeedSource {
     throw new Error(`no repo in the workspace is ${target}`);
   };
 
+  /** HEAD of a folder canopy made itself under `.canopy-making`, or null */
+  const headIn = async (dir: string): Promise<string | null> => {
+    if (!(await lstat(dir).catch(() => null))) return null;
+    const r = await run(["git", ...NO_HOOKS, "-C", dir, "rev-parse", "--verify", "-q", "HEAD^{commit}"], { timeoutMs: 30_000 });
+    return r.code === 0 ? r.stdout.trim() : null;
+  };
+
+  /** Puts the seed path right after a restart cut a swap short: the rebuilt
+   *  seed moved in when it waited between the renames, else the old seed
+   *  back. True when the seed in place is the rebuilt one, read through its
+   *  bundle, never by running git in it. */
+  const settle = async (spec: RebuildSpec, p: PendingRework, work: string, old: string): Promise<boolean> => {
+    if (p.work.kind !== spec.kind) return false;
+    if (!(await lstat(spec.seedPath).catch(() => null))) {
+      if ((await headIn(work)) === p.head) await rename(work, spec.seedPath);
+      else if (await lstat(old).catch(() => null)) await rename(old, spec.seedPath);
+      else throw new Error("the seed is gone, and neither the rebuilt one nor the old one is there to put back");
+    }
+    const scratch = await mkdtemp(join(tmpdir(), "canopy-rework-"));
+    let head: string;
+    try {
+      head = (await bundle(spec.seedPath, join(scratch, "seed.bundle"))).head;
+    } finally {
+      await rm(scratch, { recursive: true, force: true });
+    }
+    if (head !== p.head) return false;
+    await rm(old, { recursive: true, force: true });
+    await rm(work, { recursive: true, force: true });
+    deps.committed?.(spec.seedPath);
+    return true;
+  };
+
   return {
     async extendTarget(target) {
       const t = target.trim();
@@ -165,6 +202,9 @@ export function seedSource(deps: SeedSourceDeps): SeedSource {
     async rebuild(spec) {
       const work = reworkPath(spec.seedPath, spec.id);
       const old = `${work}.old`;
+      // a restart after the swap began: finish it, or take the seed back,
+      // before anything is removed, and a seed already rebuilt is kept
+      if (spec.pending && (await settle(spec, spec.pending, work, old))) return spec.pending.work;
       // what a rebuild a restart cut short left behind
       await rm(work, { recursive: true, force: true });
       await rm(old, { recursive: true, force: true });
@@ -210,6 +250,13 @@ export function seedSource(deps: SeedSourceDeps): SeedSource {
           notes.push(rel);
         }
         if (spec.kind === "renovate") await commitSeed(work, notes, "seed: the incubator's notes", deps.self);
+        const at = now();
+        const result: SproutWork =
+          spec.kind === "renovate"
+            ? { kind: "renovate", from: urlWithoutSecret(spec.from), base, at }
+            : { kind: "extend", from: spec.from, base, target: spec.target ?? "", remote: spec.from, branch, at };
+        // on the record before the swap, so a restart in it can tell what is in place
+        await spec.swapping?.({ work: result, head: await git("rev-parse", ["rev-parse", "--verify", "HEAD^{commit}"]) });
         await quiet(spec.seedPath, async () => {
           // a rename onto what is there would fail or nest, so the seed steps aside first
           await rename(spec.seedPath, old);
@@ -222,9 +269,7 @@ export function seedSource(deps: SeedSourceDeps): SeedSource {
         });
         await rm(old, { recursive: true, force: true });
         deps.committed?.(spec.seedPath);
-        const at = now();
-        if (spec.kind === "renovate") return { kind: "renovate", from: urlWithoutSecret(spec.from), base, at };
-        return { kind: "extend", from: spec.from, base, target: spec.target ?? "", remote: spec.from, branch, at };
+        return result;
       } catch (e) {
         // the old seed stands as it was; nothing half-made is left
         if (await lstat(work).catch(() => null)) await rm(work, { recursive: true, force: true });

@@ -1,11 +1,11 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
-import { lstat, mkdir, mkdtemp, readdir, rm, symlink, writeFile } from "node:fs/promises";
+import { cp, lstat, mkdir, mkdtemp, readdir, rename, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { exec, type ExecOptions, type ExecResult } from "./exec";
 import { readSeed } from "./seed";
 import { reworkPath, seedSource, type SeedSourceDeps } from "./seedsource";
-import { LAUNCH_SOURCE, type Repo } from "./types";
+import { LAUNCH_SOURCE, type PendingRework, type Repo } from "./types";
 
 let scratch: string;
 const ID = "sp_0123456789ab";
@@ -197,6 +197,70 @@ describe("rebuild", () => {
     expect(sh(w.seedPath, "rev-parse", "incubator/notes")).toBe(w.oldHead);
     expect(sh(w.seedPath, "status", "--porcelain")).toBe("");
     expect(await making(w.root)).toEqual([]);
+  });
+
+  /** deps that count the clones, and a rebuild whose swap is kept as the record would keep it */
+  const counted = (deps: SeedSourceDeps) => {
+    const clones: string[] = [];
+    const d: SeedSourceDeps = {
+      ...deps,
+      exec: async (cmd, opts) => {
+        if (cmd.includes("clone")) clones.push(cmd.join(" "));
+        return exec(cmd, opts);
+      },
+    };
+    return { d, clones };
+  };
+
+  test("a rerun after the swap, before the record took the work, keeps the rebuilt seed and clones nothing", async () => {
+    const w = await world();
+    let pending: PendingRework | undefined;
+    const spec = { kind: "renovate" as const, seedPath: w.seedPath, id: ID, slug: "s", from: "https://github.com/up/lib" };
+    const first = await seedSource(w.deps).rebuild({ ...spec, swapping: async (p) => void (pending = p) });
+    expect(pending).toEqual({ work: first, head: sh(w.seedPath, "rev-parse", "HEAD") });
+    const head = sh(w.seedPath, "rev-parse", "HEAD");
+    const { d, clones } = counted(w.deps);
+    const again = await seedSource(d).rebuild({ ...spec, ...(pending ? { pending } : {}) });
+    expect(again).toEqual(first);
+    expect(clones).toEqual([]);
+    expect(sh(w.seedPath, "rev-parse", "HEAD")).toBe(head);
+    // the notes' history is the notes-only seed's still, not the rebuilt seed's own
+    expect(sh(w.seedPath, "rev-parse", "incubator/notes")).toBe(w.oldHead);
+    expect(await making(w.root)).toEqual([]);
+  });
+
+  test("a rerun cut between the two renames moves the rebuilt seed in first, and removes the old one after", async () => {
+    const w = await world();
+    const backup = join(scratch, `backup${n}`);
+    await cp(w.seedPath, backup, { recursive: true, verbatimSymlinks: true });
+    let pending: PendingRework | undefined;
+    const spec = { kind: "extend" as const, seedPath: w.seedPath, id: ID, slug: "s", from: "https://github.com/eric/clms.git", target: "web-apps/clms" };
+    const first = await seedSource(w.deps).rebuild({ ...spec, swapping: async (p) => void (pending = p) });
+    // the moment between the renames: the old seed aside, the rebuilt one still in the work folder
+    const work = reworkPath(w.seedPath, ID);
+    await rename(w.seedPath, work);
+    await rename(backup, `${work}.old`);
+    const { d, clones } = counted(w.deps);
+    expect(await seedSource(d).rebuild({ ...spec, ...(pending ? { pending } : {}) })).toEqual(first);
+    expect(clones).toEqual([]);
+    expect(sh(w.seedPath, "symbolic-ref", "--short", "HEAD")).toBe("new/s");
+    expect(sh(w.seedPath, "rev-parse", "incubator/notes")).toBe(w.oldHead);
+    expect(await making(w.root)).toEqual([]);
+  });
+
+  test("a rerun whose swap never moved the rebuilt seed in puts the old seed back and rebuilds from it", async () => {
+    const w = await world();
+    const spec = { kind: "renovate" as const, seedPath: w.seedPath, id: ID, slug: "s", from: "https://github.com/up/lib" };
+    // the old seed set aside, and the rebuilt one lost: only the record says a swap began
+    const work = reworkPath(w.seedPath, ID);
+    await mkdir(join(work, ".."), { recursive: true });
+    await rename(w.seedPath, `${work}.old`);
+    const pending: PendingRework = { work: { kind: "renovate", from: "https://github.com/up/lib", base: "b", at: 1 }, head: "f".repeat(40) };
+    const { d, clones } = counted(w.deps);
+    await seedSource(d).rebuild({ ...spec, pending });
+    expect(clones).toHaveLength(1);
+    expect(sh(w.seedPath, "rev-parse", "incubator/notes")).toBe(w.oldHead);
+    expect(await readSeed(w.seedPath, ".canopy/intent.md")).toBe("be useful");
   });
 
   test("renovate: a .canopy the upstream tracks, in any case, goes in canopy's own commit before the notes", async () => {

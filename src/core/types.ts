@@ -1243,6 +1243,13 @@ export interface RunAnswerRecord {
   items: RunAnswerItem[];
 }
 
+/** A rebuild at its swap: what the seed is being rebuilt as, and the HEAD
+ *  the rebuilt seed has */
+export interface PendingRework {
+  work: SproutWork;
+  head: string;
+}
+
 export interface HandOffCommit {
   sha: string;
   /** one line, clipped: the agent wrote it */
@@ -1496,6 +1503,9 @@ export interface Sprout {
   url?: string;
   /** what canopy rebuilt the seed from for a renovate or extend pick, once it has */
   work?: SproutWork;
+  /** a rebuild about to swap the seed, saved before the swap so a restart
+   *  can tell a seed already rebuilt (amendment 6, ruling 22) */
+  rework?: PendingRework;
   /** an extend's branch on GitHub, once handed off */
   branch?: string;
   /** what the hand-off would push, waiting for the user's yes (amendment 6, ruling 19) */

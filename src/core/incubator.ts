@@ -67,7 +67,7 @@ import {
   type ParsedQuestions,
 } from "./sprout";
 import { DAILY_EVENTS, dailyLine, dailyNoteHead, dailyNotePath, sproutNote, sproutNotePath, type NoteEvent } from "./sproutnote";
-import { isFlowActive, type Advice, type Flow, type FlowChoice, type FlowDigest, type InputEntry, type InputKind, type InputVia, type Repo, type RunAnswerRecord, type RunQuestion, type Sprout, type SproutDetail, type SproutFlow, type SproutPick, type Workflow } from "./types";
+import { isFlowActive, type Advice, type Flow, type FlowChoice, type FlowDigest, type InputEntry, type InputKind, type InputVia, type PendingRework, type Repo, type RunAnswerRecord, type RunQuestion, type Sprout, type SproutDetail, type SproutFlow, type SproutPick, type Workflow } from "./types";
 import { findWorkflow, loadWorkflows } from "./workflows";
 
 export class IncubatorError extends Error {
@@ -1146,20 +1146,30 @@ export class Incubator {
     const source = this.deps.source ?? null;
     if (!source) return "this backend cannot rebuild a seed for a renovate or extend pick";
     const target = (p.target ?? "").trim();
+    // the swap is on the record before it happens, and the last one's is
+    // handed back, so a restart in between never rebuilds a rebuilt seed
+    const swap = {
+      ...(s.rework ? { pending: s.rework } : {}),
+      swapping: async (pending: PendingRework): Promise<void> => {
+        s.rework = pending;
+        await this.changed(s);
+      },
+    };
     try {
       if (p.kind === "renovate") {
         const license = await source.upstreamLicense(target);
         if (license === null) return `GitHub names no license for ${target}, so canopy will not renovate it`;
         if (license !== p.license) return `GitHub says ${target} is ${license}, not the ${p.license ?? "license"} scout read`;
-        const work = await source.rebuild({ kind: "renovate", seedPath: s.seedPath, id: s.id, slug: s.slug, from: target });
+        const work = await source.rebuild({ kind: "renovate", seedPath: s.seedPath, id: s.id, slug: s.slug, from: target, ...swap });
         if (this.gone(s)) return null;
         s.work = work;
       } else {
         const t = await source.extendTarget(target);
-        const work = await source.rebuild({ kind: "extend", seedPath: s.seedPath, id: s.id, slug: s.slug, from: t.remote, target: t.repoId });
+        const work = await source.rebuild({ kind: "extend", seedPath: s.seedPath, id: s.id, slug: s.slug, from: t.remote, target: t.repoId, ...swap });
         if (this.gone(s)) return null;
         s.work = work;
       }
+      delete s.rework;
     } catch (err) {
       return `the seed could not be rebuilt for the ${p.kind} pick: ${msg(err)}`;
     }
