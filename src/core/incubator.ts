@@ -1365,7 +1365,12 @@ export class Incubator {
     if (work?.kind !== "extend") return this.park(s, "there is no extend branch to hand off");
     if (!ship) return this.park(s, "this backend has no deploy set up");
     if (work.branch !== extendBranch(s.slug)) return this.park(s, `the seed's branch is ${work.branch}, not ${extendBranch(s.slug)}`);
+    const source = this.deps.source;
+    if (!source) return this.park(s, "this backend cannot resolve an extend target");
     try {
+      // the target asked about again at the push: still the user's, still
+      // pushable, and still at the remote the seed was rebuilt from
+      const target = await source.extendTarget(work.target);
       if (sproutEnded(s)) return;
       // one bundle, held to the commit Accept saw, as for a ship (amendment 4)
       const bundle = await ship.bundle(s.seedPath);
@@ -1374,7 +1379,7 @@ export class Incubator {
         if (s.builtHead && bundle.head !== s.builtHead) {
           return await this.park(s, `${SEED_MOVED} (${bundle.head.slice(0, 12)}, accepted ${s.builtHead.slice(0, 12)}); resume to hand it off as it is now`);
         }
-        branch = await ship.pushBranch(bundle, { remote: work.remote, slug: s.slug, base: work.base });
+        branch = await ship.pushBranch(bundle, { remote: work.remote, want: target.remote, slug: s.slug, base: work.base });
       } finally {
         await bundle.done();
       }

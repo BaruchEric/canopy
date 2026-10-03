@@ -249,15 +249,22 @@ describe("pushBranch", () => {
     const head = await commit(w.seed, "src/dark.ts", "export const dark = true;\n", "dark mode");
     // a tag in the seed stays there
     await git(w.seed, "tag", "v9");
-    const url = await shipper(cfg, w.deps).pushBranch(w.seed, { remote: REMOTE, slug: "s", base: w.base });
+    const url = await shipper(cfg, w.deps).pushBranch(w.seed, { remote: REMOTE, want: REMOTE, slug: "s", base: w.base });
     expect(url).toBe("https://github.com/eric/clms/tree/new/s");
     expect((await refs(w.target)).sort()).toEqual([`refs/heads/main ${w.base}`, `refs/heads/new/s ${head}`]);
   });
 
   test("any other remote, or one off github.com, is refused before git runs", async () => {
     const f = fakes(() => ok());
-    await expect(shipper(cfg, f.deps).pushBranch("/seed", { remote: "https://gitlab.com/eric/clms.git", slug: "s", base: "a".repeat(40) })).rejects.toThrow("is not a github.com repo");
-    await expect(shipper(cfg, f.deps).pushBranch("/seed", { remote: REMOTE, slug: "s", base: "main" })).rejects.toThrow("not a commit id");
+    await expect(shipper(cfg, f.deps).pushBranch("/seed", { remote: "https://gitlab.com/eric/clms.git", want: "https://gitlab.com/eric/clms.git", slug: "s", base: "a".repeat(40) })).rejects.toThrow("is not a github.com repo");
+    await expect(shipper(cfg, f.deps).pushBranch("/seed", { remote: REMOTE, want: REMOTE, slug: "s", base: "main" })).rejects.toThrow("not a commit id");
+    expect(f.calls).toHaveLength(0);
+  });
+
+  test("a recorded remote that is not the target's remote now is refused before git runs", async () => {
+    const f = fakes(() => ok());
+    const moved = "https://github.com/eric/clms-renamed.git";
+    await expect(shipper(cfg, f.deps).pushBranch("/seed", { remote: REMOTE, want: moved, slug: "s", base: "a".repeat(40) })).rejects.toThrow(`canopy pushes only to ${moved}`);
     expect(f.calls).toHaveLength(0);
   });
 
@@ -272,7 +279,7 @@ describe("pushBranch", () => {
     // the merge keeps new/s's tree, so default history simplification hides the notes commit
     await git(w.seed, "merge", "-q", "-s", "ours", "--allow-unrelated-histories", "-m", "m", "incubator/notes");
     const before = await refs(w.target);
-    await expect(shipper(cfg, w.deps).pushBranch(w.seed, { remote: REMOTE, slug: "s", base: w.base })).rejects.toThrow("touch canopy's notes (.canopy/intent.md)");
+    await expect(shipper(cfg, w.deps).pushBranch(w.seed, { remote: REMOTE, want: REMOTE, slug: "s", base: w.base })).rejects.toThrow("touch canopy's notes (.canopy/intent.md)");
     expect(await refs(w.target)).toEqual(before);
   });
 
@@ -284,7 +291,7 @@ describe("pushBranch", () => {
     await git(w.seed, "checkout", "-q", "new/s");
     await git(w.seed, "merge", "-q", "--no-ff", "-m", "merge side", "side");
     const before = await refs(w.target);
-    await expect(shipper(cfg, w.deps).pushBranch(w.seed, { remote: REMOTE, slug: "s", base: w.base })).rejects.toThrow("holds a merge");
+    await expect(shipper(cfg, w.deps).pushBranch(w.seed, { remote: REMOTE, want: REMOTE, slug: "s", base: w.base })).rejects.toThrow("holds a merge");
     expect(await refs(w.target)).toEqual(before);
   });
 
@@ -292,29 +299,29 @@ describe("pushBranch", () => {
     const w = await world();
     await commit(w.seed, ".canopy/intent.md", "be useful", "notes by mistake");
     await commit(w.seed, ".canopy/intent.md", "gone again", "and back");
-    await expect(shipper(cfg, w.deps).pushBranch(w.seed, { remote: REMOTE, slug: "s", base: w.base })).rejects.toThrow("touch canopy's notes (.canopy/intent.md)");
+    await expect(shipper(cfg, w.deps).pushBranch(w.seed, { remote: REMOTE, want: REMOTE, slug: "s", base: w.base })).rejects.toThrow("touch canopy's notes (.canopy/intent.md)");
     const w2 = await world();
     await git(w2.seed, "checkout", "-q", "--orphan", "fresh");
     await git(w2.seed, "rm", "-rqf", ".");
     await commit(w2.seed, "x.md", "x", "orphan");
     await git(w2.seed, "branch", "-qD", "new/s");
     await git(w2.seed, "branch", "-q", "-m", "new/s");
-    await expect(shipper(cfg, w2.deps).pushBranch(w2.seed, { remote: REMOTE, slug: "s", base: w2.base })).rejects.toThrow("new/s does not grow from");
+    await expect(shipper(cfg, w2.deps).pushBranch(w2.seed, { remote: REMOTE, want: REMOTE, slug: "s", base: w2.base })).rejects.toThrow("new/s does not grow from");
     const w3 = await world();
     await commit(w3.seed, "a.md", "a", "work");
     await git(w3.seed, "checkout", "-q", "-b", "elsewhere");
     await commit(w3.seed, "b.md", "b", "more");
-    await expect(shipper(cfg, w3.deps).pushBranch(w3.seed, { remote: REMOTE, slug: "s", base: w3.base })).rejects.toThrow("is not the tip of new/s");
+    await expect(shipper(cfg, w3.deps).pushBranch(w3.seed, { remote: REMOTE, want: REMOTE, slug: "s", base: w3.base })).rejects.toThrow("is not the tip of new/s");
     for (const x of [w, w2, w3]) expect(await refs(x.target)).toEqual([`refs/heads/main ${x.base}`]);
   });
 
   test("a second push of history that moved fails as not a fast-forward, never forced", async () => {
     const w = await world();
     const first = await commit(w.seed, "a.md", "a", "one");
-    await shipper(cfg, w.deps).pushBranch(w.seed, { remote: REMOTE, slug: "s", base: w.base });
+    await shipper(cfg, w.deps).pushBranch(w.seed, { remote: REMOTE, want: REMOTE, slug: "s", base: w.base });
     await git(w.seed, "reset", "-q", "--hard", w.base);
     await commit(w.seed, "b.md", "b", "another");
-    await expect(shipper(cfg, w.deps).pushBranch(w.seed, { remote: REMOTE, slug: "s", base: w.base })).rejects.toThrow("git push:");
+    await expect(shipper(cfg, w.deps).pushBranch(w.seed, { remote: REMOTE, want: REMOTE, slug: "s", base: w.base })).rejects.toThrow("git push:");
     expect((await refs(w.target)).sort()).toEqual([`refs/heads/main ${w.base}`, `refs/heads/new/s ${first}`]);
   });
 });

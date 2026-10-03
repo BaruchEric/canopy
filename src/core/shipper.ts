@@ -71,6 +71,9 @@ export interface Shipper {
 export interface BranchPush {
   /** the target's https remote canopy recorded at the rebuild */
   remote: string;
+  /** the target's remote as canopy resolved it just now; a push goes only
+   *  where the two agree */
+  want: string;
   slug: string;
   /** the commit the branch was made from */
   base: string;
@@ -388,7 +391,7 @@ export function shipper(cfg: ShipConfig, deps: ShipDeps = { exec: realExec, fetc
 
     async pushBranch(from, to) {
       const ref = `refs/heads/${extendBranch(to.slug)}`;
-      const refused = branchPushRefusal({ remote: to.remote, ref }, { remote: to.remote, slug: to.slug });
+      const refused = branchPushRefusal({ remote: to.remote, ref }, { remote: to.want, slug: to.slug });
       if (refused) throw new Error(refused);
       const gh = githubRepo(to.remote);
       if (!gh) throw new Error(`${to.remote} is not a github.com repo`);

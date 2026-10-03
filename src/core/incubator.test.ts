@@ -10,6 +10,7 @@ import { Incubator, IncubatorError, incubatorWorkflow, type AdviceSink, type Inc
 import type { BranchPush, ShipBundle, Shipper, ShipSource } from "./shipper";
 import type { ExtendTarget, RebuildSpec, SeedSource } from "./seedsource";
 import { BUNDLED_DIR, findWorkflow, loadWorkflows } from "./workflows";
+import { branchPushRefusal } from "./sprout";
 import { RETRO_PARK_WAIT, RETRO_UNATTENDED, RETRO_WAIT_MAX } from "./retro";
 import type { Advice, Flow, FlowChoice, Judgment, Repo, Sprout, SproutWork, Workflow } from "./types";
 
@@ -1404,6 +1405,9 @@ class FakeShip implements Shipper {
     this.shippedFrom.push(typeof from === "string" ? from : from.file);
     this.calls.push(`branch ${to.remote} ${to.slug} ${to.base}`);
     if (this.failBranch) throw new Error(this.failBranch);
+    // the real shipper's first check, so a test sees which remotes it was handed
+    const refused = branchPushRefusal({ remote: to.remote, ref: `refs/heads/new/${to.slug}` }, { remote: to.want, slug: to.slug });
+    if (refused) throw new Error(refused);
     return `https://github.com/eric/clms/tree/new/${to.slug}`;
   }
 }
@@ -2269,10 +2273,11 @@ class FakeSource implements SeedSource {
   license: string | null = "MIT";
   refuseTarget: string | null = null;
   failRebuild: string | null = null;
+  remote = "https://github.com/eric/clms.git";
   async extendTarget(target: string): Promise<ExtendTarget> {
     this.calls.push(`target ${target}`);
     if (this.refuseTarget) throw new Error(this.refuseTarget);
-    return { repoId: "web-apps/clms", remote: "https://github.com/eric/clms.git", owner: "eric", name: "clms" };
+    return { repoId: "web-apps/clms", remote: this.remote, owner: "eric", name: "clms" };
   }
   async upstreamLicense(url: string): Promise<string | null> {
     this.calls.push(`license ${url}`);
@@ -2430,6 +2435,26 @@ describe("renovate and extend builds", () => {
     await w.inc.resume(s.id, "retry");
     await w.inc.idle();
     expect(now(w, s.id).parked).toBe("hand-off: git push: ! [rejected] new/x (non-fast-forward)");
+  });
+
+  test("the hand-off asks again where the target is, and parks when it moved or is no longer the user's", async () => {
+    const ship = new FakeShip();
+    const src = new FakeSource();
+    const w = builds(src, ship);
+    const s = await picked(w, EXTEND);
+    src.calls = [];
+    src.remote = "https://github.com/eric/clms-renamed.git";
+    const moved = await end(w, s.id, { ".canopy/accept.md": "## Verdict\ngo" });
+    expect(src.calls).toEqual(["target web-apps/clms"]);
+    expect(moved.status).toBe("parked");
+    expect(moved.parked).toContain("canopy pushes only to https://github.com/eric/clms-renamed.git");
+    src.remote = "https://github.com/eric/clms.git";
+    src.refuseTarget = "github.com/acme/clms belongs to acme, not the gh login eric";
+    ship.calls = [];
+    await w.inc.resume(s.id, "retry");
+    await w.inc.idle();
+    expect(now(w, s.id).parked).toBe("hand-off: github.com/acme/clms belongs to acme, not the gh login eric");
+    expect(ship.calls.some((c) => c.startsWith("branch"))).toBe(false);
   });
 
   test("a vercel+firebase ship makes the Firebase side in order, deploys the rules before the app, and never makes a part twice", async () => {
