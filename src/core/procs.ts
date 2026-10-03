@@ -150,10 +150,12 @@ async function psProcs(): Promise<Proc[]> {
   return r.code === 0 ? parsePs(r.stdout) : [];
 }
 
+/** every process on this machine: `/proc` on Linux, `ps` elsewhere */
+export const allProcs = (): Promise<Proc[]> => (process.platform === "linux" ? linuxProcs() : psProcs());
+
 /** the argv of every process under `root` on this machine */
 export async function processTree(root: number): Promise<string[][]> {
-  const procs = process.platform === "linux" ? await linuxProcs() : await psProcs();
-  return descendants(procs, root).map((p) => p.argv);
+  return descendants(await allProcs(), root).map((p) => p.argv);
 }
 
 /** The agent a pane runs: what tmux says, and when that names nothing and
