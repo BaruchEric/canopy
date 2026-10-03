@@ -42,7 +42,7 @@ describe("loadWorkflows", () => {
   test("bundled, then user, then repo, later winning by name; broken files stay listed", async () => {
     const list = await loadWorkflows({ path: repo });
     const names = list.map((e) => (e.ok ? e.workflow.name : e.name));
-    expect(names).toEqual(["commit", "push", "ship", "deploy", "review", "clarify", "scout", "build-new", "broken", "tidy"]);
+    expect(names).toEqual(["commit", "push", "ship", "deploy", "review", "clarify", "scout", "build-new", "retro", "broken", "tidy"]);
     const review = findWorkflow(list, "review");
     expect(review?.source).toBe("user");
     expect(review?.blurb).toBe("my own review");
@@ -141,6 +141,22 @@ describe("the bundled scout", () => {
     expect(tools.some((t) => t.startsWith("Bash("))).toBe(false);
     for (const banned of ["Read", "Glob", "Grep", "Bash(gh api:*)", "Bash(git clone:*)", "Bash(git push:*)"]) expect(tools).not.toContain(banned);
     expect(tools.some((t) => /vercel|gh repo create|gh repo fork/.test(t))).toBe(false);
+  });
+});
+
+describe("the bundled retro", () => {
+  test("one unlisted step, budgeted, checked by @advice with one retry, writing only through Edit and Write", async () => {
+    const wf = findWorkflow(await loadWorkflows({ path: "", host: "none" }), "retro");
+    expect(wf?.source).toBe("bundled");
+    expect(wf?.listed).toBe(false);
+    expect(wf?.budget).toEqual({ runs: 2, hours: 0.34 });
+    expect(wf?.steps.map((s) => s.name)).toEqual(["Retro"]);
+    const step = wf?.steps[0];
+    expect(step?.check).toBe("@advice");
+    expect(step?.retries).toBe(1);
+    expect(step?.gate).not.toBe("judge");
+    expect(step?.tools).toEqual(["Edit", "Write"]);
+    expect(step?.body).toContain(".canopy/advice.json");
   });
 });
 

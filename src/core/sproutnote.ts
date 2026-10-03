@@ -95,14 +95,36 @@ function whereLines(s: Sprout): string[] {
   return lines.length ? ["## Where it lives", "", ...lines, ""] : [];
 }
 
+/** the retro's own account clipped to this, so a long one never swamps the note */
+export const RETRO_NOTE_MAX = 4000;
+
+/** Once a retro is done: its account (the seed's `.canopy/retro.md`, its
+ *  own heading dropped) and its lessons. A failed one says why. */
+function retroLines(s: Sprout, retro: string | null): string[] {
+  const r = s.retro;
+  if (!r || (r.state !== "done" && r.state !== "failed")) return [];
+  if (r.state === "failed") return ["## Retro", "", `The retro failed: ${flat(r.reason ?? "no reason given")}`, ""];
+  const text = (retro ?? "").replace(/^#\s+Retro\b[^\n]*(\n+|$)/, "").trim();
+  const clipped = text.length > RETRO_NOTE_MAX ? `${text.slice(0, RETRO_NOTE_MAX).replace(/\s+\S*$/, "")}…` : text;
+  const lessons = (r.advice ?? []).map((a) => `- ${a.key}: ${flat(a.lesson)}`);
+  return [
+    "## Retro",
+    "",
+    ...(clipped ? [clipped, ""] : []),
+    ...(lessons.length ? ["Advice:", "", ...lessons] : ["No advice."]),
+    "",
+  ];
+}
+
 function spentLine(s: Sprout): string {
   const runs = s.spent.runs;
   const minutes = Math.round(s.spent.workMs / 60_000);
   return `${runs} agent ${runs === 1 ? "run" : "runs"}, ${minutes} ${minutes === 1 ? "minute" : "minutes"} of agent work.`;
 }
 
-/** the whole note; `intent` is the seed's intent.md, null before clarify wrote one */
-export function sproutNote(s: Sprout, intent: string | null): string {
+/** the whole note; `intent` is the seed's intent.md, null before clarify
+ *  wrote one, and `retro` its retro.md, null before a retro wrote one */
+export function sproutNote(s: Sprout, intent: string | null, retro: string | null = null): string {
   const inputs = s.inputs.map((e) => `- [${e.n}] ${e.kind} ${flat(e.label)}: ${flat(e.summary || e.note || "not summarized yet")}`);
   const stages = s.flows.map((f) => `- ${f.workflow}: ${f.outcome ?? "running"}`);
   return [
@@ -134,6 +156,7 @@ export function sproutNote(s: Sprout, intent: string | null): string {
     "",
     spentLine(s),
     "",
+    ...retroLines(s, retro),
     "<!-- canopy rewrites this note at each change; edits here are replaced -->",
     "",
   ].join("\n");

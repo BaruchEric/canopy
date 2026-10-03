@@ -65,6 +65,8 @@ import type {
   IncubatorStages,
   Sprout,
   SproutDetail,
+  AdviceAccepted,
+  AdviceOffer,
 } from "../../src/core/types";
 import { pickUrl, split, wsUrl, type BackendSignal } from "./backends";
 import { normalizeRoutes } from "../../src/core/route";
@@ -460,6 +462,18 @@ export const api = {
   resumeSprout: (id: string, choice: "continue" | "retry") =>
     req<Sprout>(homeName(), `/api/incubator/resume?id=${encodeURIComponent(id)}`, { method: "POST", body: JSON.stringify({ choice }) }),
   dismissSprout: (id: string) => req<{ ok: true }>(homeName(), `/api/incubator?id=${encodeURIComponent(id)}`, { method: "DELETE" }),
+  /** the retro lessons on offer */
+  advice: () => req<AdviceOffer[]>(homeName(), "/api/incubator/advice"),
+  /** accepts or dismisses one; a chat it opened is named by the page's ids */
+  answerAdvice: async (key: string, accept: boolean) => {
+    const out = await req<{ advice: AdviceOffer[]; accepted?: AdviceAccepted }>(homeName(), "/api/incubator/advice", {
+      method: "POST",
+      body: JSON.stringify({ key, accept }),
+    });
+    const a = out.accepted;
+    if (a?.kind !== "chat") return out;
+    return { ...out, accepted: { ...a, runId: qual(homeName(), a.runId), repoId: qual(homeName(), a.repoId) } };
+  },
   /** away pins until cleared; clearing it is being here */
   setAway: (away: boolean, key: string) =>
     req<Presence>(homeName(), "/api/presence", { method: "POST", headers: keyHeaders(key), body: JSON.stringify({ away }) }),

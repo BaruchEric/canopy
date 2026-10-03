@@ -20,7 +20,7 @@ import { boardOrder, invertPick, pickWhere, rangeIds, setPick, togglePick } from
 import { appendFeed, describeEvent, type FeedEntry, type FeedSnapshot } from "./feed";
 import { mergeAction } from "./peers";
 import { convOf, isUnread, mergeMessages } from "./chan";
-import type { AgentCard, Ask, ChanMessage, IncubatorStages, Presence, Sprout, TailchanInfo } from "../../src/core/types";
+import type { AdviceAccepted, AdviceOffer, AgentCard, Ask, ChanMessage, IncubatorStages, Presence, Sprout, TailchanInfo } from "../../src/core/types";
 import { mergeAsks, mergeInbox, replaceAsks, toAskAnswer, toRunAnswer, type InboxAnswer, type InboxItem } from "./inbox";
 import { replaceSprouts, staleSprout } from "./sprouts";
 import { cardsByRepoCard, mergeCards, replaceCards } from "./agentcards";
@@ -576,6 +576,13 @@ interface CanopyState {
   /** where home runs the incubator's stages; null until it says (an older
    *  backend never does) */
   stages: IncubatorStages | null;
+  /** the retro lessons home has on offer, which the inbox shows as one item */
+  advice: AdviceOffer[];
+  /** an accepted lesson's text by chat run id, which that chat's message box
+   *  starts with; the user sends it, or not */
+  chatDrafts: Record<string, string>;
+  /** the user's own workflow file an accepted lesson named, until put away */
+  adviceFile: Extract<AdviceAccepted, { kind: "file" }> | null;
   /** whether the inbox popover is up, and the item it opened on */
   inboxOpen: boolean;
   inboxFocus: string | null;
@@ -807,6 +814,9 @@ interface CanopyState {
   answerInbox: (item: InboxItem, answer: InboxAnswer) => Promise<void>;
   /** reads the incubator's list off the home backend */
   loadSprouts: () => Promise<void>;
+  /** accepts or dismisses a retro lesson; a chat it opened is shown, a file
+   *  is answered for the inbox to name */
+  answerAdvice: (key: string, accept: boolean) => Promise<AdviceAccepted | null>;
   /** a new project from the + project sheet or n; answers before the seed is made */
   createSprout: (form: FormData) => Promise<Sprout>;
   addSproutInputs: (id: string, form: FormData) => Promise<Sprout>;
@@ -1165,6 +1175,8 @@ let sproutEvents = 0;
 const sproutHeard = new Map<string, number>();
 /* and the stages events, so a read on its way never undoes a newer one */
 let stagesEvents = 0;
+/** the same for the advice on offer */
+let adviceEvents = 0;
 
 /** an action's answer about a sprout, applied like its event unless an
  *  event already moved the sprout on past it (checked first, so a stale
@@ -1303,6 +1315,9 @@ export const useStore = create<CanopyState>((set, get) => ({
   sprouts: {},
   sproutsReady: false,
   stages: null,
+  advice: [],
+  chatDrafts: {},
+  adviceFile: null,
   inboxOpen: false,
   inboxFocus: null,
   workspaces: [],
@@ -1904,7 +1919,7 @@ export const useStore = create<CanopyState>((set, get) => ({
     if (!isShown(before, b)) return;
     beat();
     // workspaces, tailchan, the agent registry, the asks and the incubator are the home backend's alone
-    if ((ev.type === "chan" || ev.type === "workspaces" || ev.type === "registry" || ev.type === "asks" || ev.type === "incubator" || ev.type === "incubator-gone" || ev.type === "stages") && b !== before.home) return;
+    if ((ev.type === "chan" || ev.type === "workspaces" || ev.type === "registry" || ev.type === "asks" || ev.type === "incubator" || ev.type === "incubator-gone" || ev.type === "stages" || ev.type === "advice") && b !== before.home) return;
     // The feed says what changed, so the lines come from the event against
     // the state before it is applied, as the backend that sent it saw it.
     // a message already held (a reconnect's replay, a post heard twice) is
@@ -1943,6 +1958,11 @@ export const useStore = create<CanopyState>((set, get) => ({
     if (ev.type === "stages") {
       stagesEvents += 1;
       set({ stages: ev.stages });
+      return;
+    }
+    if (ev.type === "advice") {
+      adviceEvents += 1;
+      set({ advice: ev.advice });
       return;
     }
     if (ev.type === "incubator") {
@@ -2197,6 +2217,15 @@ export const useStore = create<CanopyState>((set, get) => ({
       .catch(() => {
         // an older backend has no such route; the view says nothing then
       });
+    const adviceMark = adviceEvents;
+    void api
+      .advice()
+      .then((advice) => {
+        if (adviceEvents === adviceMark && Array.isArray(advice)) set({ advice });
+      })
+      .catch(() => {
+        // an older backend has no such route, and offers nothing
+      });
     // events that land while the list is on its way are newer than it
     const mark = sproutEvents;
     try {
@@ -2234,7 +2263,30 @@ export const useStore = create<CanopyState>((set, get) => ({
   },
   showSprout: (id) => set({ sheet: { kind: "sprout", id } }),
   openNewSprout: () => set({ sheet: { kind: "new-sprout" } }),
+  answerAdvice: async (key, accept) => {
+    const { advice, accepted } = await api.answerAdvice(key, accept);
+    adviceEvents += 1;
+    set({ advice });
+    if (accepted?.kind === "chat") {
+      // the run as the answer gave it, as startRun does, so its sheet never opens on nothing
+      const run = accepted.run;
+      set((s) => ({
+        inboxOpen: false,
+        inboxFocus: null,
+        chatDrafts: { ...s.chatDrafts, [accepted.runId]: accepted.draft },
+        ...(run && !s.runs[run.id] ? { runs: { ...s.runs, [run.id]: run } } : {}),
+      }));
+      get().showRun(accepted.runId);
+    }
+    if (accepted?.kind === "file") set({ adviceFile: accepted });
+    return accepted ?? null;
+  },
   answerInbox: async (item, answer) => {
+    if (item.source === "advice") {
+      if (!("advice" in answer)) throw new Error("a lesson takes accept or dismiss");
+      await get().answerAdvice(answer.advice, answer.accept);
+      return;
+    }
     if (item.source === "sprout") {
       if ("choice" in answer) {
         if (answer.choice === "stop") return get().stopSprout(item.id);
@@ -2597,7 +2649,11 @@ export const useStore = create<CanopyState>((set, get) => ({
   },
   sayRun: async (runId, text) => {
     const run = await api.say(runId, text);
-    set((s) => ({ runs: { ...s.runs, [run.id]: run } }));
+    set((s) => {
+      // a draft once sent is done with
+      const { [runId]: _sent, ...chatDrafts } = s.chatDrafts;
+      return { runs: { ...s.runs, [run.id]: run }, chatDrafts };
+    });
   },
   stopRun: async (runId) => {
     const run = await api.stopRun(runId);
@@ -3051,7 +3107,15 @@ export const canAnswer = (s: Pick<CanopyState, "asksReady" | "answerKey">): bool
 const PAGE_BEAT = 60_000;
 let lastPageBeat = 0;
 
-let inboxIn: { asks: Record<string, Ask>; runs: Record<string, Run>; flows: Record<string, Flow>; repos: Repo[]; registry: Record<string, AgentCard>; sprouts: Record<string, Sprout> } | null = null;
+let inboxIn: {
+  asks: Record<string, Ask>;
+  runs: Record<string, Run>;
+  flows: Record<string, Flow>;
+  repos: Repo[];
+  registry: Record<string, AgentCard>;
+  sprouts: Record<string, Sprout>;
+  advice: AdviceOffer[];
+} | null = null;
 let inboxOut: InboxItem[] = [];
 
 /** Everything waiting on the human, oldest first: the home broker's open
@@ -3059,16 +3123,17 @@ let inboxOut: InboxItem[] = [];
  *  once per change of what it reads, so a selector over it settles; a
  *  countdown keeps its own time off each item's `until`. */
 export function inboxItems(s: CanopyState): InboxItem[] {
-  if (inboxIn && inboxIn.asks === s.asks && inboxIn.runs === s.runs && inboxIn.flows === s.flows && inboxIn.repos === s.repos && inboxIn.registry === s.registry && inboxIn.sprouts === s.sprouts) {
+  if (inboxIn && inboxIn.asks === s.asks && inboxIn.runs === s.runs && inboxIn.flows === s.flows && inboxIn.repos === s.repos && inboxIn.registry === s.registry && inboxIn.sprouts === s.sprouts && inboxIn.advice === s.advice) {
     return inboxOut;
   }
-  inboxIn = { asks: s.asks, runs: s.runs, flows: s.flows, repos: s.repos, registry: s.registry, sprouts: s.sprouts };
+  inboxIn = { asks: s.asks, runs: s.runs, flows: s.flows, repos: s.repos, registry: s.registry, sprouts: s.sprouts, advice: s.advice };
   inboxOut = mergeInbox(Object.values(s.asks), s.runs, s.flows, Date.now(), {
     repos: s.repos,
     cards: s.registry,
     backendOf: (id) => (s.backendOrder.length > 1 ? backendOf(id) : ""),
     askRepos: s.repos.filter((r) => backendOf(r.id) === s.home),
     sprouts: Object.values(s.sprouts),
+    advice: s.advice,
   });
   return inboxOut;
 }

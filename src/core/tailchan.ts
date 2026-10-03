@@ -22,6 +22,7 @@ import {
   type Run,
   type RunQuestion,
   type RunStatus,
+  type RetroState,
   type Sprout,
   type SproutStatus,
 } from "./types";
@@ -402,4 +403,20 @@ export function sproutNotice(s: Sprout, prev: { status: SproutStatus; asking: bo
   if (s.status === "live") return { to: "channel", text: `${s.title} is live` };
   if (s.status === "rejected") return { to: "channel", text: `${s.title} was turned down at eval` };
   return null;
+}
+
+/** how recent a retro's end must be to be told on a sprout not seen before
+ *  (a restart empties what was seen), so a later save of an old one is quiet */
+export const RETRO_FRESH = 5 * 60_000;
+
+/** A retro that left lessons is a silent channel line pointing at the
+ *  inbox, once (amendment 5, ruling 14). One that left none or failed is
+ *  quiet here: the feed and the sheet say so, and nobody has to act. */
+export function retroNotice(s: Sprout, prev: { retro?: RetroState | undefined } | undefined, now: number): Notice | null {
+  const r = s.retro;
+  if (r?.state !== "done") return null;
+  const n = r.advice?.length ?? 0;
+  if (n === 0) return null;
+  if (prev ? prev.retro === "done" : now - (r.endedAt ?? 0) > RETRO_FRESH) return null;
+  return { to: "channel", text: `${s.title}: the retro left ${n} ${n === 1 ? "lesson" : "lessons"}, in canopy's inbox` };
 }

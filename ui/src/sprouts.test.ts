@@ -46,6 +46,16 @@ describe("the stage strip", () => {
   test("live is done through deploy", () => {
     expect(marks(sprout({ status: "live", clarified: true }))).toBe("clarify:done research:done eval:done build:done test:done accept:done deploy:done retro:todo");
   });
+  test("the retro's mark is its own state, whatever the sprout's status", () => {
+    const retro = { for: "end" as const, state: "running" as const, at: 1, flowsSeen: 1, tries: 1 };
+    const live = (state: "due" | "running" | "done" | "failed") => marks(sprout({ status: "live", clarified: true, retro: { ...retro, state } })).split(" ").at(-1);
+    expect(live("due")).toBe("retro:todo");
+    expect(live("running")).toBe("retro:now");
+    expect(live("done")).toBe("retro:done");
+    expect(live("failed")).toBe("retro:stuck");
+    const parked = sprout({ status: "parked", parked: "x", clarified: true, retro: { ...retro, for: "park" } });
+    expect(marks(parked).endsWith("retro:now")).toBe(true);
+  });
 });
 
 describe("words and order", () => {
@@ -86,6 +96,17 @@ describe("feed lines", () => {
     const [line] = sproutLines({ type: "incubator", sprout: parked }, snap({ [s.id]: c }), 5);
     expect(line).toMatchObject({ kind: "incubator", repo: "Coin counter", repoId: "_incubator/coins", text: "parked: the scout workflow is not installed", quiet: false });
     expect(sproutLines({ type: "incubator-gone", id: s.id }, snap({ [s.id]: s }), 5).map((l) => [l.text, l.quiet])).toEqual([["dismissed", true]]);
+  });
+  test("a retro starting, leaving lessons, leaving none, and failing", () => {
+    const retro = { for: "end" as const, state: "due" as const, at: 1, flowsSeen: 1, tries: 0 };
+    const was = sprout({ status: "live", retro });
+    const text = (s: Sprout, before: Sprout = was) => sproutLines({ type: "incubator", sprout: s }, snap({ [s.id]: before }), 5).map((l) => [l.text, l.quiet]);
+    const running = sprout({ status: "live", retro: { ...retro, state: "running", tries: 1 } });
+    expect(text(running)).toEqual([["looking back", false]]);
+    const two = [{ key: "a", lesson: "A." }, { key: "b", lesson: "B." }];
+    expect(text(sprout({ status: "live", retro: { ...retro, state: "done", advice: two } }), running)).toEqual([["the retro left 2 lessons", false]]);
+    expect(text(sprout({ status: "live", retro: { ...retro, state: "done", advice: [] } }), running)).toEqual([["the retro left no advice", true]]);
+    expect(text(sprout({ status: "live", retro: { ...retro, state: "failed", reason: "the run failed" } }), running)).toEqual([["the retro failed: the run failed", false]]);
   });
   test("a save that changes nothing a person reads is quiet", () => {
     const s = sprout({ status: "clarifying" });

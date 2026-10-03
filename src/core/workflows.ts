@@ -11,7 +11,7 @@ import type { Repo, Workflow, WorkflowEntry, WorkflowSource } from "./types";
 export const BUNDLED_DIR = join(import.meta.dir, "../../lib/workflows");
 
 /** Bundled files in the order the menu shows them. */
-const BUNDLED_ORDER = ["commit", "push", "ship", "deploy", "review", "clarify", "scout", "build-new"];
+const BUNDLED_ORDER = ["commit", "push", "ship", "deploy", "review", "clarify", "scout", "build-new", "retro"];
 
 async function readDir(dir: string, source: WorkflowSource): Promise<WorkflowEntry[]> {
   let names: string[];

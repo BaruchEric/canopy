@@ -7,8 +7,10 @@ import { listeningPorts, repoOfCwd } from "../core/ports";
 import { watch, type FSWatcher } from "node:fs";
 import { readFile, realpath, stat } from "node:fs/promises";
 import { arch, homedir, hostname } from "node:os";
-import { readBuild, readPkg } from "../core/build";
-import { join, resolve, sep } from "node:path";
+import { CANOPY_DIR, readBuild, readPkg } from "../core/build";
+import { AdviceFiles } from "../core/improvements";
+import { adviceMessage } from "../core/retro";
+import { basename, dirname, join, relative, resolve, sep } from "node:path";
 import {
   commit,
   fetchRepo,
@@ -54,7 +56,7 @@ import type { AgentEnv } from "../core/harness";
 import { paneAgent } from "../core/procs";
 import { effectiveAgents, hasProfile, isProfileName, launchPick, normalizePick, normalizeRepoAgent, pickRefusal, repoAgentRefusal } from "../core/route";
 import { selfName } from "../core/backends";
-import { Incubator, incubatorWorkflow, type NoteSink, type Transcriber } from "../core/incubator";
+import { Incubator, IncubatorError, incubatorWorkflow, type NoteSink, type Transcriber } from "../core/incubator";
 import { seedOps } from "../core/seed";
 import { SproutFiles } from "../core/sproutstore";
 import { transcribeConfig, transcriber } from "../core/transcribe";
@@ -80,7 +82,7 @@ import { clientKey, HELPER_PING, HELPER_TIMEOUT, helperRefusal, isLoopback, isLo
 import { devicesOf, parseStream, type Stream } from "../core/presence";
 import { mapPool, searchRepo } from "../core/search";
 import { agentSessions, hasAgentSession, isSessionId, newestTranscript, resumeLine } from "../core/sessions";
-import { findWorkflow, loadWorkflows } from "../core/workflows";
+import { BUNDLED_DIR, findWorkflow, loadWorkflows } from "../core/workflows";
 import {
   launchSource,
   refreshRepo,
@@ -153,14 +155,14 @@ import {
   type TermInfo,
   TERM_GONE,
 } from "../core/types";
-import type { About, IncubatorStages, RepoStatus } from "../core/types";
+import type { About, AdviceAccepted, AdviceEntry, IncubatorStages, RepoStatus } from "../core/types";
 import { holdQuiet, type QuietHold, seedGitThrough, StageClient } from "../core/stageclient";
 import { STAGE_AWAY } from "../core/stagewire";
 import { DEFAULT_IGNORE } from "../core/scan";
 import { ChanHub, PUT_MAX } from "./tailchan";
 import { RegistryHub } from "./registry";
 import { AskHub } from "./asks";
-import { BODY_MAX as INTAKE_BODY_MAX, IncubatorHub } from "./incubator";
+import { BODY_MAX as INTAKE_BODY_MAX, IncubatorHub, canopyRepoOf } from "./incubator";
 import { SCAN_EVERY, type AgentProc } from "../core/agentscan";
 import { TaskHub } from "./tasks";
 import type { TaskTimings } from "../core/tasks";
@@ -666,6 +668,38 @@ const stepAgentFor = (cfg: CanopyConfig, path: string, profile: string | undefin
  *  bypass of their own (`--dangerously-skip-permissions`, a codex sandbox
  *  override) that no list of words would surely catch. */
 const stageAgent = (a: AgentSettings): AgentSettings => ({ ...a, yolo: false, extra: "" });
+
+/** What accepting a piece of retro advice does (amendment 5, ruling 12). A
+ *  workflow of the user's own, in the config dir, is opened on this
+ *  backend's desktop when it has one, else named for the page to show. A
+ *  bundled workflow, or advice with no file, opens a chat on canopy's own
+ *  checkout, idle: the lesson and its edit come back as a draft for the
+ *  page's message box, and no agent starts until the user reads it and
+ *  sends it. The text is an agent's, so it is never sent on the user's
+ *  behalf. The chat's agent is the repo's chat route with yolo off and its
+ *  extra flags dropped, as a stage's is; the user's own allow rules still
+ *  apply, as in any chat they start. */
+async function acceptAdvice(state: ServerState, entry: AdviceEntry): Promise<AdviceAccepted> {
+  const wf = entry.file ? findWorkflow(await loadWorkflows({ path: "", host: "none" }), entry.file) : undefined;
+  if (wf?.source === "user") {
+    let opened = false;
+    if (hostOpeners()) opened = await openFile(dirname(wf.file), basename(wf.file), 1).then(
+      () => true,
+      () => false,
+    );
+    return { kind: "file", path: wf.file, opened, ...(entry.edit ? { edit: entry.edit } : {}) };
+  }
+  const repo = await canopyRepoOf(state.result.repos, CANOPY_DIR, readPkg().homepage, realpath);
+  if (!repo) throw new IncubatorError(409, "canopy's own checkout is not in this backend's scan, so there is no repo to open the chat on");
+  if (state.flows.activeFor(repo.id) || state.runner.activeFor(repo.id)) throw new IncubatorError(409, `${repo.name} has a run or a workflow going; accept this once it ends`);
+  const agent = { ...agentFor(await loadConfig(), repo.path, "chat"), yolo: false, extra: "" };
+  await needHarness(state, agent.harness, repo.path);
+  // the bundled file as the checkout holds it, not where this process runs from
+  const file = wf ? join("lib", "workflows", relative(BUNDLED_DIR, wf.file)) : null;
+  const run = state.runner.start(repo, "chat", ACTIONS.chat, "", agent);
+  // the run itself, so the page shows the chat before its event lands
+  return { kind: "chat", runId: run.id, repoId: repo.id, run, draft: adviceMessage(entry, file) };
+}
 
 /** whether a repo is a sprout's seed, by its path under the launch root:
  *  true before the incubator has taken its records back, so a flow restored
@@ -2779,6 +2813,10 @@ export async function startServer(opts: {
     stage?: StageClient | null;
     unisolated?: boolean;
     stageEvery?: number;
+    /** what accepting a piece of retro advice does, in place of the chat or the file */
+    accept?: (entry: AdviceEntry) => Promise<AdviceAccepted>;
+    /** how often a park is looked at for its day-old retro */
+    tickEvery?: number;
   };
   /** the runner's driver per harness; tests swap in a stand-in agent */
   /** `quietWait` shortens how long a stage run's or check's end waits for
@@ -3003,6 +3041,8 @@ export async function startServer(opts: {
   // one store, stamped with the realpath'd root, for the incubator and for
   // what a server without the flows lock lists
   const sprouts = new SproutFiles(root);
+  // the improvements list retros fold into, and the page hears of each change
+  const adviceFiles = new AdviceFiles(undefined, (advice) => broadcast(state, { type: "advice", advice }));
   const state: ServerState = {
     root,
     agentLine: opts.agentLine ?? (async (_repo, agent, env) => agentLine(agent, undefined, env)),
@@ -3129,6 +3169,7 @@ export async function startServer(opts: {
         transcribe: opts.incubator?.transcribe !== undefined ? opts.incubator.transcribe : transcriber(speech),
         notes: opts.incubator?.notes !== undefined ? opts.incubator.notes : vaultNotes(vault),
         ship: opts.incubator?.ship !== undefined ? opts.incubator.ship : shipper(ship),
+        advice: adviceFiles,
         onChange: (sprout) => {
           broadcast(state, { type: "incubator", sprout });
           state.chan.onSprout(sprout);
@@ -3145,6 +3186,7 @@ export async function startServer(opts: {
       }),
       () => sprouts.list(),
       () => stagesNow(),
+      { files: adviceFiles, accept: (entry) => (opts.incubator?.accept ?? ((e) => acceptAdvice(state, e)))(entry) },
     ),
     backendName: selfName(cfg.self, hostname()),
     apiUrl: null,
@@ -3556,6 +3598,8 @@ export async function startServer(opts: {
       )
     : null;
   tellStages();
+  // a park waits a day for its retro with nothing else happening to pump the queue
+  const retroTimer = setInterval(() => state.incubator.inc.tick(), opts.incubator?.tickEvery ?? 10 * 60_000);
   const remoteTimer = setInterval(() => {
     void refreshRemote(state)
       .catch((err) => console.error("canopy: remote refresh", err))
@@ -3598,6 +3642,7 @@ export async function startServer(opts: {
       clearInterval(helperTimer);
       clearInterval(keepTimer);
       clearInterval(remoteTimer);
+      clearInterval(retroTimer);
       clearTimeout(firstActivity);
       for (const t of state.timers.values()) clearTimeout(t);
       stopStageWatch?.();

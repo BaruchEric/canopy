@@ -276,7 +276,7 @@ export class ClaudeDriver implements RunDriver {
       if (a.kind === "answers") return { behavior: "allow", updatedInput: { ...input, answers: a.answers } };
       return {
         behavior: "deny",
-        message: "The user closed the question without answering. Stop and summarize.",
+        message: (a.kind === "deny" && a.message) || "The user closed the question without answering. Stop and summarize.",
       };
     }
     const a = await ctx.ask(
@@ -292,7 +292,7 @@ export class ClaudeDriver implements RunDriver {
     return {
       behavior: "deny",
       message:
-        "The user declined this in canopy. Do not retry it; continue without it, or stop and explain what is left.",
+        (a.kind === "deny" && a.message) || "The user declined this in canopy. Do not retry it; continue without it, or stop and explain what is left.",
     };
   }
 

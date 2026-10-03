@@ -7,20 +7,20 @@
  * tested; the store feeds it what it holds and routes an answer back to
  * where the item came from.
  */
-import type { AgentCard, Ask, AskAnswer, Flow, FlowChoice, Repo, Run, RunAnswer, RunQuestion, Sprout } from "../../src/core/types";
+import type { AdviceOffer, AgentCard, Ask, AskAnswer, Flow, FlowChoice, Repo, Run, RunAnswer, RunQuestion, Sprout } from "../../src/core/types";
 import { repoOfCard, repoWord, whereWord } from "./agentcards";
 import { agentWord, harnessOf } from "./runs";
 
-export type InboxSource = "ask" | "run" | "flow" | "sprout";
+export type InboxSource = "ask" | "run" | "flow" | "sprout" | "advice";
 
 export interface InboxItem {
-  /** `${source}:${id}`, unique across the four */
+  /** `${source}:${id}`, unique across the five */
   key: string;
   source: InboxSource;
   /** the broker's ask id (the home backend's), or a run's or flow's
    *  qualified id */
   id: string;
-  kind: "permission" | "question" | "guard" | "gate" | "clarify" | "park";
+  kind: "permission" | "question" | "guard" | "gate" | "clarify" | "park" | "advice";
   /** the repo it is about, by the page's id, when the page has it */
   repoId: string | null;
   /** the repo in words: the checkout's name, else what the agent's card says */
@@ -50,6 +50,8 @@ export interface InboxItem {
   /** with `stage`: it was the step's check that found the runner away, so
    *  continuing runs the check alone */
   stageCheck?: true;
+  /** the retro lessons on offer, the advice item's alone */
+  advice?: AdviceOffer[];
 }
 
 export interface InboxContext {
@@ -64,6 +66,8 @@ export interface InboxContext {
   askRepos?: readonly Repo[];
   /** the incubator's sprouts, home's alone; one with open questions is an item */
   sprouts?: readonly Sprout[];
+  /** the retro lessons on offer, home's alone; any make one item */
+  advice?: readonly AdviceOffer[];
 }
 
 /** "asks to use Bash", "has a question", "hit a guard on Bash" */
@@ -209,6 +213,29 @@ function sproutItem(s: Sprout, flows: Readonly<Record<string, Flow>>, ctx: Inbox
   };
 }
 
+/** The lessons retros left that are on offer, as one item: accepting or
+ *  dismissing goes key by key. Empty is none. */
+function adviceItem(advice: readonly AdviceOffer[]): InboxItem | null {
+  if (advice.length === 0) return null;
+  const n = advice.length;
+  return {
+    key: "advice:incubator",
+    source: "advice",
+    id: "incubator",
+    kind: "advice",
+    repoId: null,
+    repo: "",
+    who: "retro",
+    where: "canopy incubator",
+    title: `${n} ${n === 1 ? "lesson" : "lessons"} from retros`,
+    detail: "",
+    at: Math.min(...advice.map((o) => o.lastAt)),
+    left: null,
+    until: null,
+    advice: [...advice],
+  };
+}
+
 /** Everything waiting on the human, oldest first: open asks, waiting runs
  *  (a flow's step run named by its flow), gated flows. */
 export function mergeInbox(
@@ -234,6 +261,8 @@ export function mergeInbox(
     const it = sproutItem(s, flows, ctx);
     if (it) items.push(it);
   }
+  const advice = adviceItem(ctx.advice ?? []);
+  if (advice) items.push(advice);
   return items.sort((a, b) => a.at - b.at || a.key.localeCompare(b.key));
 }
 
@@ -255,12 +284,14 @@ export type InboxAnswer =
   | { answers: Record<string, string> }
   | { choice: FlowChoice }
   /** clarify's questions passed over: go on assumptions */
-  | { skip: true };
+  | { skip: true }
+  /** a retro lesson accepted or dismissed, by its key */
+  | { advice: string; accept: boolean };
 
 /** a run's answer: "allow always" is "allow all" for the rest of the run;
  *  a run's deny carries no message */
 export function toRunAnswer(a: InboxAnswer): RunAnswer | null {
-  if ("choice" in a || "skip" in a) return null;
+  if ("choice" in a || "skip" in a || "advice" in a) return null;
   if ("answers" in a) return { kind: "answers", answers: a.answers };
   if (a.behavior === "deny") return { kind: "deny" };
   return { kind: a.always ? "allow-all" : "allow" };
@@ -268,7 +299,7 @@ export function toRunAnswer(a: InboxAnswer): RunAnswer | null {
 
 /** the broker's answer: a question's answers go as an allow */
 export function toAskAnswer(a: InboxAnswer): AskAnswer | null {
-  if ("choice" in a || "skip" in a) return null;
+  if ("choice" in a || "skip" in a || "advice" in a) return null;
   if ("answers" in a) return { behavior: "allow", answers: a.answers };
   if (a.behavior === "deny") return { behavior: "deny", ...(a.message?.trim() ? { message: a.message.trim() } : {}) };
   return { behavior: "allow", ...(a.always ? { always: true } : {}) };

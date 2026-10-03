@@ -141,6 +141,10 @@ describe("stepSpec", () => {
     expect(spec.task).toContain("Earlier steps of this workflow, already done:\n- First: did the first");
     expect(spec.task.endsWith("Do the second.")).toBe(true);
   });
+  test("a workflow nobody attends runs each step's run unattended, with its message", () => {
+    expect(stepSpec({ ...TWO, unattended: "finish within your tools" }, 0, []).unattended).toBe("finish within your tools");
+    expect(stepSpec(TWO, 0, []).unattended).toBeUndefined();
+  });
   test("a retry says why the last try was not accepted", () => {
     const spec = stepSpec(TWO, 0, [], "the summary asks you something");
     expect(spec.task).toContain("not accepted because: the summary asks you something");
