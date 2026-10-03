@@ -55,9 +55,21 @@ describe("stage wire", () => {
   });
   test("hello and exit frames parse, with their fields checked", () => {
     expect(parseFrame('{"t":"hello"}')).toEqual({ t: "hello" });
-    expect(parseFrame('{"t":"hello","harnesses":["claude"]}')).toEqual({ t: "hello", harnesses: ["claude"] });
+    // a runner from before the fence says nothing of it, and reads as unchecked
+    expect(parseFrame('{"t":"hello","harnesses":["claude"]}')).toEqual({ t: "hello", harnesses: ["claude"], fenced: "unchecked" });
+    expect(parseFrame('{"t":"hello","harnesses":["claude"],"fenced":"yes"}')).toEqual({ t: "hello", harnesses: ["claude"], fenced: "unchecked" });
+    expect(parseFrame('{"t":"hello","harnesses":[],"fenced":true}')).toEqual({ t: "hello", harnesses: [], fenced: true });
+    expect(parseFrame('{"t":"hello","harnesses":[],"fenced":false,"reason":"the fence is down: http://x/ answered"}')).toEqual({
+      t: "hello",
+      harnesses: [],
+      fenced: false,
+      reason: "the fence is down: http://x/ answered",
+    });
     expect(parseFrame('{"t":"hello","harnesses":[1]}')).toBe(null);
     expect(parseFrame('{"t":"exit","code":null}')).toEqual({ t: "exit", code: null });
+    // a refusal keeps fenced only when it says the fence is why
+    expect(parseFrame('{"t":"refused","reason":"r","fenced":"unchecked"}')).toEqual({ t: "refused", reason: "r", fenced: "unchecked" });
+    expect(parseFrame('{"t":"refused","reason":"r","fenced":true}')).toEqual({ t: "refused", reason: "r" });
     expect(parseFrame('{"t":"exit","code":"0"}')).toBe(null);
   });
   test("the away error carries its message and name", () => {
