@@ -36,6 +36,7 @@ import {
   openHistoryNote,
 } from "../core/history";
 import { browseLocal, browseRemote, expandHome, SshError } from "../core/browse";
+import { builtinCheck, isBuiltinCheck } from "../core/builtincheck";
 import { runCheck } from "../core/check";
 import { exec, git, onHost } from "../core/exec";
 import { fleetSkipReason, Flows } from "../core/flow";
@@ -2817,6 +2818,8 @@ export async function startServer(opts: {
     },
     // a seed's check starts without canopy's GitHub login, like its runs
     check: async (repo, command) => {
+      // @name is a built-in canopy runs itself over readSeed, never a shell line
+      if (isBuiltinCheck(command)) return builtinCheck(command, repo.path);
       if (!isSeedPath(root, repo.path)) return runCheck(repo, command, false);
       // canopy runs no git in a seed while its check runs there (seedgit.ts)
       seedChecks.set(repo.path, (seedChecks.get(repo.path) ?? 0) + 1);

@@ -10,7 +10,7 @@ budget: 8 runs, 1h
 ## Research
 tools: WebSearch, WebFetch, Edit, Write
 turns: 80
-check: "$CANOPY_CLI" incubator pick-check
+check: @pick-check
 retries: 2
 
 Task: you are the research stage of canopy's incubator. .canopy/intent.md says what the user wants, with the answers to clarify's questions at its end; .canopy/brief.md names the project.

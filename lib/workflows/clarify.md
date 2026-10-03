@@ -10,7 +10,7 @@ budget: 2 runs, 0.34h
 ## Clarify
 tools: git-read, Edit, Write, WebFetch
 turns: 40
-check: "${CANOPY_BUN:-bun}" --config=/dev/null --no-env-file -e 'const f = Bun.file(".canopy/questions.json"); if (await f.exists()) { let q; try { q = JSON.parse(await f.text()); } catch { console.error(".canopy/questions.json is not JSON"); process.exit(1); } const list = Array.isArray(q) ? q : q && q.questions; if (!Array.isArray(list) || !list.every((x) => x && typeof x.question === "string" && x.question.trim())) { console.error(".canopy/questions.json must be a JSON list of questions, each with its question text"); process.exit(1); } }'
+check: @questions
 retries: 1
 
 Task: you are the clarify stage of canopy's incubator. The note names the project and the folder that holds the user's raw inputs; .canopy/inputs.md in this repo lists them, one line each.

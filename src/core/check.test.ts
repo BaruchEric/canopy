@@ -3,6 +3,7 @@ import { existsSync } from "node:fs";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { builtinCheck } from "./builtincheck";
 import { runCheck } from "./check";
 import { CANOPY_CLI_PATH } from "./cli";
 import { findWorkflow, loadWorkflows } from "./workflows";
@@ -45,12 +46,12 @@ describe("a check never runs the seed's bunfig preload or reads its .env", () =>
   test("scout's pick check gives its own answer, and the preload never runs", async () => {
     const line = await stepCheck("scout", "Research");
     const good = await hostileSeed({ ".canopy/research.md": "# Research\n", ".canopy/pick.json": JSON.stringify({ kind: "new", host: "vercel", why: "w" }) });
-    const ok = await runCheck({ path: good.dir }, line, true);
+    const ok = await builtinCheck(line, good.dir);
     expect(ok.exit).toBe(0);
     expect(ok.output).toContain("pick ok: new on vercel");
     expect(existsSync(good.marker)).toBe(false);
     const bad = await hostileSeed({ ".canopy/research.md": "# Research\n", ".canopy/pick.json": "{" });
-    const no = await runCheck({ path: bad.dir }, line, true);
+    const no = await builtinCheck(line, bad.dir);
     expect(no.exit).toBe(1);
     expect(no.output).toContain("pick.json is not JSON");
     expect(existsSync(bad.marker)).toBe(false);
@@ -59,10 +60,10 @@ describe("a check never runs the seed's bunfig preload or reads its .env", () =>
   test("clarify's check gives its own answer, and the preload never runs", async () => {
     const line = await stepCheck("clarify", "Clarify");
     const good = await hostileSeed({ ".canopy/questions.json": "[]" });
-    expect((await runCheck({ path: good.dir }, line, true)).exit).toBe(0);
+    expect((await builtinCheck(line, good.dir)).exit).toBe(0);
     expect(existsSync(good.marker)).toBe(false);
     const bad = await hostileSeed({ ".canopy/questions.json": "not json" });
-    const no = await runCheck({ path: bad.dir }, line, true);
+    const no = await builtinCheck(line, bad.dir);
     expect(no.exit).toBe(1);
     expect(no.output).toContain("questions.json is not JSON");
     expect(existsSync(bad.marker)).toBe(false);

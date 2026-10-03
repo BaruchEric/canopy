@@ -2,6 +2,7 @@ import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { builtinCheck } from "./builtincheck";
 import { findWorkflow, loadWorkflows } from "./workflows";
 import { parseWorkflow } from "./workflow";
 import { readFile } from "node:fs/promises";
@@ -85,7 +86,7 @@ describe("the bundled clarify", () => {
     const step = findWorkflow(await loadWorkflows({ path: "", host: "none" }), "clarify")?.steps[0];
     expect(step?.retries).toBe(1);
     const check = step?.check ?? "";
-    expect(check).not.toBe("");
+    expect(check).toBe("@questions");
     const dir = await mkdtemp(join(tmpdir(), "canopy-clarify-check-"));
     try {
       await mkdir(join(dir, ".canopy"));
@@ -93,8 +94,7 @@ describe("the bundled clarify", () => {
         const file = join(dir, ".canopy", "questions.json");
         await rm(file, { force: true });
         if (body !== null) await writeFile(file, body);
-        const p = Bun.spawn(["sh", "-c", check], { cwd: dir, stdout: "ignore", stderr: "ignore" });
-        return await p.exited;
+        return (await builtinCheck(check, dir)).exit;
       };
       expect(await run(null)).toBe(0);
       expect(await run("[]")).toBe(0);
@@ -126,7 +126,7 @@ describe("the bundled scout", () => {
     expect(scout?.budget).toEqual({ runs: 8, hours: 1 });
     expect(scout?.steps.map((s) => s.name)).toEqual(["Research", "Eval"]);
     const [research, evalStep] = scout?.steps ?? [];
-    expect(research?.check).toBe('"$CANOPY_CLI" incubator pick-check');
+    expect(research?.check).toBe("@pick-check");
     expect(research?.retries).toBe(2);
     expect(evalStep?.gate).toBe("judge");
     expect(evalStep?.back).toBe("Research");
