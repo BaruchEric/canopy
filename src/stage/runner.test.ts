@@ -5,7 +5,8 @@ import { connect, type Socket } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { encodeFrame, fromB64, lineSplitter, parseFrame, type StageFrame, type StageRequest } from "../core/stagewire";
-import { killTree, startStageRunner, type RunnerOptions } from "./runner";
+import { allProcs, type Proc } from "../core/procs";
+import { killTree, orphansOf, ownPidNamespace, startStageRunner, type RunnerOptions } from "./runner";
 
 let dir = "";
 let root = "";
@@ -353,5 +354,88 @@ describe("the stage runner", () => {
     const after = await readFile(join(home, "config.toml"), "utf8");
     expect(after).not.toContain(join(root, "coin"));
     expect(after).toContain(`[projects."/elsewhere"]`);
+  });
+});
+
+describe("the orphan sweep", () => {
+  /** the stages container as the runner sees it: docker's init as pid 1,
+   *  the runner its child, and docker exec's processes with ppid 0 */
+  const p = (pid: number, ppid: number, state?: string): Proc => ({ pid, ppid, argv: [], ...(state ? { state } : {}) });
+  const TABLE: Proc[] = [
+    p(1, 0), // docker-init
+    p(7, 1), // the runner
+    p(20, 7), // a live run's harness
+    p(21, 20),
+    p(22, 21), // the live run's grandchild
+    p(30, 1), // setsid, then chdir("/"): reparented to init, cwd outside every seed
+    p(40, 1), // double forked: the middle process exited
+    p(41, 40), // and what it started
+    p(50, 0), // docker compose exec stages claude, a login
+    p(51, 50), // its child
+    p(60, 0), // the healthcheck, another docker exec
+    p(70, 1, "Z"), // a zombie, which only its parent can reap
+    p(80, 7), // a run of the runner's whose connection is gone
+  ];
+
+  test("kills the setsid escapee and the double-forked tree, and spares init, the runner, live runs, docker exec and zombies", () => {
+    expect(orphansOf(TABLE, 7, [20]).sort((a, b) => a - b)).toEqual([30, 40, 41, 80]);
+  });
+
+  test("a run that is no longer live is not spared", () => {
+    expect(orphansOf(TABLE, 7, [20, 80]).sort((a, b) => a - b)).toEqual([30, 40, 41]);
+  });
+
+  test("with the runner as pid 1 the rule is the same: orphans reparent to it and still die", () => {
+    const table = [p(1, 0), p(20, 1), p(21, 20), p(30, 1), p(50, 0), p(51, 50)];
+    expect(orphansOf(table, 1, [20]).sort((a, b) => a - b)).toEqual([30]);
+  });
+
+  test("on only in a pid namespace of the runner's own", () => {
+    // a container's process sees its pid in its own namespace last
+    expect(ownPidNamespace("Name:\tbun\nNSpid:\t4123\t7\n", 7)).toBe(true);
+    // the host's, or a Mac with no NSpid line
+    expect(ownPidNamespace("Name:\tbun\nNSpid:\t4123\n", 4123)).toBe(false);
+    expect(ownPidNamespace("", 4123)).toBe(false);
+    // pid 1 is a namespace's own init, whatever the line says
+    expect(ownPidNamespace("", 1)).toBe(true);
+  });
+
+  test("through a real runner: the timer and a run's end kill an escapee, and nothing outside the namespace's view", async () => {
+    /** an escapee started outside any run, as a stage's setsid daemon would be */
+    const escape = async (name: string): Promise<number> => {
+      const pidFile = join(dir, `${name}.pid`);
+      const sh = nodeSpawn("sh", ["-c", `'${process.execPath}' ${join(dir, "escape.ts")} ${pidFile}`], { cwd: "/", detached: true, stdio: "ignore" });
+      sh.unref();
+      return pidIn(pidFile);
+    };
+    const neighbour = nodeSpawn("sleep", ["300"], { detached: true, stdio: "ignore" });
+    neighbour.unref();
+    /** the namespace a runner sees: init, itself, and the escapees put in it */
+    const viewOf =
+      (watched: Set<number>) =>
+      async (): Promise<Proc[]> => [p(1, 0), p(process.pid, 1), ...(await allProcs()).filter((x) => watched.has(x.pid))];
+    const byTimer = new Set<number>();
+    const byEnd = new Set<number>();
+    try {
+      byTimer.add(await escape("orphan-timer"));
+      await extra("sweeper", { env: { PATH: process.env["PATH"], HOME: dir }, procs: viewOf(byTimer), sweepOrphans: true, sweepEvery: 200 });
+      for (const pid of byTimer) expect(await gone(pid, 3000)).toBe(true);
+
+      const path = await extra("sweeper-end", { env: { PATH: process.env["PATH"], HOME: dir }, procs: viewOf(byEnd), sweepOrphans: true, sweepEvery: 600_000 });
+      byEnd.add(await escape("orphan-end"));
+      const fs = await talk({ t: "spawn", argv: ["sh", "-c", "true"], cwd: join(root, "other"), env: {} }, [], 5000, path);
+      expect(fs.at(-1)).toEqual({ t: "exit", code: 0 });
+      for (const pid of byEnd) expect(await gone(pid, 3000)).toBe(true);
+
+      expect(alive(neighbour.pid ?? 0)).toBe(true);
+    } finally {
+      for (const pid of [...byTimer, ...byEnd, neighbour.pid ?? 0]) {
+        try {
+          process.kill(pid, "SIGKILL");
+        } catch {
+          // already gone
+        }
+      }
+    }
   });
 });

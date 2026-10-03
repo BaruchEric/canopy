@@ -13,6 +13,9 @@
  * every descendant: the tree is frozen and killed, then the child's process
  * group, then every process whose cwd is inside the seed (what a setsid or a
  * double fork leaves behind), sparing the trees of other live connections.
+ * In its own pid namespace (the stages container) it also kills, at every
+ * run's end and every 30 s, each process no live run and no `docker exec`
+ * owns (`orphansOf`): what escaped a seed's sweep by leaving the seed.
  * Before it starts codex it drops every seed's trust from its own codex
  * config.
  */
@@ -46,6 +49,42 @@ export interface RunnerOptions {
   /** the process table every walk reads; `allProcs` unless a test hands
    *  in its own */
   procs?: () => Promise<Proc[]>;
+  /** kill every process in the runner's pid namespace that no live run or
+   *  `docker exec` owns, at each run's end and every `sweepEvery`; on only
+   *  where the runner has a pid namespace of its own (`ownPidNamespace`) */
+  sweepOrphans?: boolean;
+  /** how often the orphan sweep runs, ms */
+  sweepEvery?: number;
+}
+
+/** The processes the orphan sweep kills, out of every process in the
+ *  runner's pid namespace: all but pid 1 (docker's init, or the runner
+ *  itself), the runner, every live run's tree, and every tree whose top has
+ *  ppid 0 other than pid 1. Inside a pid namespace a process whose parent
+ *  lives outside it reads ppid 0, which is how `docker exec` arrives (the
+ *  logins, the healthcheck). What a setsid or a double fork leaves behind
+ *  reparents to pid 1 and is in none of those trees, so it dies; so does a
+ *  child of the runner that is no longer a live run. A zombie is left to
+ *  the parent that reaps it. Pure. */
+export function orphansOf(procs: readonly Proc[], self: number, live: readonly number[]): number[] {
+  const keep = new Set<number>([1, self]);
+  const tree = (root: number): void => {
+    for (const d of descendants(procs, root, Infinity)) keep.add(d.pid);
+  };
+  for (const root of live) tree(root);
+  for (const top of procs) if (top.ppid === 0 && top.pid !== 1) tree(top.pid);
+  return procs.filter((x) => x.state !== "Z" && !keep.has(x.pid)).map((x) => x.pid);
+}
+
+/** Whether the runner has a pid namespace of its own, off its
+ *  `/proc/self/status`: pid 1 is a namespace's init, and the NSpid line
+ *  lists one pid per namespace level, so more than one means a nested one.
+ *  The orphan sweep kills everything outside the runs, which on a host
+ *  (or a Mac, with no NSpid at all) would be the whole session. */
+export function ownPidNamespace(status: string, pid: number): boolean {
+  if (pid === 1) return true;
+  const line = /^NSpid:\s*(.*)$/m.exec(status);
+  return line !== null && (line[1] ?? "").trim().split(/\s+/).filter(Boolean).length > 1;
 }
 
 const HARNESSES: readonly string[] = ["claude", "codex"];
@@ -58,6 +97,8 @@ const LINE_MAX = 8 * 1024 * 1024;
 const DRAIN_MS = 2_000;
 /** passes over the tree or the seed, each catching what forked during the last */
 const ROUNDS = 5;
+/** how often the orphan sweep runs between runs' ends */
+const SWEEP_EVERY = 30_000;
 
 /** one line in the runner's log for something that failed where nothing
  *  else would hear of it */
@@ -187,14 +228,39 @@ export async function startStageRunner(opts: RunnerOptions): Promise<{ stop(): P
     }
   };
 
+  /** Every process in the namespace that no live run or docker exec owns,
+   *  frozen then killed, a pass at a time until a pass finds nothing. One
+   *  sweep at a time; a call while one runs waits for it and runs again,
+   *  so a run's end never rides on a pass that read the table before it. */
+  let sweeping: Promise<void> = Promise.resolve();
+  const sweepOrphans = (): Promise<void> => {
+    const next = sweeping.then(async () => {
+      for (let round = 0; round < ROUNDS; round++) {
+        const table = await procs();
+        // the live runs as they stand once the table is read
+        const hit = orphansOf(table, process.pid, [...runs].filter((r) => r.running).map((r) => r.pid));
+        if (hit.length === 0) return;
+        for (const pid of hit) signal(pid, "SIGSTOP");
+        for (const pid of hit) signal(pid, "SIGKILL");
+      }
+    });
+    sweeping = next.catch(() => {});
+    return next;
+  };
+
   /** The run's tree while its process lives (once it is reaped its children
-   *  belong to init and the walk finds nothing), its process group, and
-   *  everything left in its seed. */
+   *  belong to init and the walk finds nothing), its process group,
+   *  everything left in its seed, and every orphan in the namespace. */
   const endRun = async (run: Live): Promise<void> => {
     if (run.running) await killTree(run.pid, procs);
     signal(-run.pid, "SIGKILL");
     await sweepSeed(run.seed, run);
+    if (opts.sweepOrphans) await sweepOrphans();
   };
+  const sweepTimer = opts.sweepOrphans
+    ? setInterval(() => void sweepOrphans().catch((e: unknown) => warn("the orphan sweep failed", e)), opts.sweepEvery ?? SWEEP_EVERY)
+    : null;
+  sweepTimer?.unref?.();
 
   const server = createServer((sock) => {
     live.add(sock);
@@ -407,6 +473,7 @@ export async function startStageRunner(opts: RunnerOptions): Promise<{ stop(): P
   });
   return {
     stop: async () => {
+      if (sweepTimer) clearInterval(sweepTimer);
       for (const s of live) s.destroy();
       const closed = new Promise<void>((r) => server.close(() => r()));
       while (finishing.size > 0) await Promise.allSettled(finishing);
