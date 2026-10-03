@@ -570,6 +570,27 @@ canopy `depends_on` stages being healthy, so a broken stages image keeps
 canopy down too. If canopy does not come up after a deploy, the first look is
 `docker compose ps` and `docker compose logs stages`.
 
+In the stages image claude and codex are root's, under `/opt/stage-tools`,
+and the PATH holds root-owned folders only, so no stage can change what a
+later one runs; the build fails if that is not so. claude does not update
+itself there (`DISABLE_AUTOUPDATER=1`): a rebuild of stages is the update.
+Before every start the stage runner also reads the stages' claude settings
+(`settings.json` and `settings.local.json` in
+`~/.config/canopy-stages/claude`) and codex config (`config.toml` in
+`~/.config/canopy-stages/codex`) and refuses while either holds a key off
+its short list, since a stage could have written hooks, an env, an MCP
+server or a model provider there for every later stage. The step fails with
+the file and the key; remove the key by hand, then retry the step:
+
+```
+cat ~/.config/canopy-stages/claude/settings.json ~/.config/canopy-stages/codex/config.toml
+```
+
+claude may keep `$schema`, `model` and `theme`; codex may keep `model`,
+`model_reasoning_effort`, `model_reasoning_summary`, `model_verbosity`,
+`personality`, `service_tier`, `preferred_auth_method` and the `[notice]`
+table.
+
 **5. The bridge.** `ip -br link show br-canopy-stg` on the host shows it.
 Without it the fence has nothing to match: go back to step 3.
 

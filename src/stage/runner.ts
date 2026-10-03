@@ -41,6 +41,7 @@ import {
   type StageRequest,
 } from "../core/stagewire";
 import { reach, type ProbeResult } from "./fencecheck";
+import { stageSettingsRefusal } from "./settingscheck";
 
 export interface RunnerOptions {
   socket: string;
@@ -398,14 +399,23 @@ export async function startStageRunner(opts: RunnerOptions): Promise<{ stop(): P
       const resolved = await resolveProgram(name, programs[name] ?? name, own["PATH"], opts.root, writable);
       if ("refused" in resolved) return finish({ t: "refused", reason: resolved.refused });
       const program = resolved.program;
-      if (name === "codex") {
-        const home = own["CODEX_HOME"] ?? (own["HOME"] ? join(own["HOME"], ".codex") : null);
-        try {
-          if (home) for (const seeds of new Set([opts.root, where.root])) await sweepCodexTrust(home, seeds);
-        } catch {
-          return finish({ t: "refused", reason: "codex's trust of the seeds could not be cleared" });
-        }
+      // codex writes a trusted project table for every seed it runs in, so
+      // those go first, before any spawn (a check's sh may run codex too);
+      // then anything else either config holds that could steer a later
+      // stage refuses the spawn, naming the file and the key. A refusal
+      // here carries no fence, so canopy fails the step rather than park
+      // it as the runner away.
+      const codexHome = own["CODEX_HOME"] || (own["HOME"] ? join(own["HOME"], ".codex") : null);
+      try {
+        // a fifo in config.toml's place is left to the check below, which
+        // refuses it without waiting on it
+        const plain = codexHome ? await stat(join(codexHome, "config.toml")).then((st) => st.isFile(), () => false) : false;
+        if (codexHome && plain) for (const seeds of new Set([opts.root, where.root])) await sweepCodexTrust(codexHome, seeds);
+      } catch {
+        return finish({ t: "refused", reason: "codex's trust of the seeds could not be cleared" });
       }
+      const unsettled = await stageSettingsRefusal(own).catch(() => "the stages' claude settings and codex config could not be read");
+      if (unsettled) return finish({ t: "refused", reason: unsettled });
       // the connection may have closed while the checks ran: then nothing starts
       if (sock.destroyed || state === "over") return;
       let p: Bun.Subprocess<"pipe", "pipe", "pipe">;

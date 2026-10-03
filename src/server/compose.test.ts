@@ -73,3 +73,32 @@ describe("the stages service", () => {
     expect(compose.services["shells"]?.volumes ?? []).not.toContain("stage-sock:/run/canopy-stage");
   });
 });
+
+describe("the stages image", () => {
+  const docker = async (): Promise<string> => {
+    const text = await Bun.file(new URL("../../Dockerfile", import.meta.url)).text();
+    const start = text.indexOf("FROM shells AS stages");
+    return text.slice(start, text.indexOf("\nFROM ", start + 1));
+  };
+
+  test("puts only root-owned folders on the PATH, with claude and codex moved out of the runner's home", async () => {
+    const stages = await docker();
+    expect(stages).toContain("ENV PATH=/opt/stage-tools/bin:/usr/local/bin:/usr/bin:/bin\n");
+    expect(stages).toContain("ENV DISABLE_AUTOUPDATER=1\n");
+    expect(stages).toContain("chown -R root:root /opt/stage-tools");
+    expect(stages).toContain("rm -f /etc/profile.d/canopy-path.sh");
+    // nothing the runner runs is copied in as its own user's
+    expect(stages).not.toMatch(/COPY[^\n]*--chown=bun/);
+    expect(stages).toContain("chown -R root:root /app");
+  });
+
+  test("fails the build on a PATH folder, a stage tool or a runner file the runner's user can write", async () => {
+    const stages = await docker();
+    const checks = stages.slice(stages.indexOf("ENV PATH=/opt/stage-tools/bin"));
+    // the checks run as the runner's user, after the PATH they check is set
+    expect(stages.lastIndexOf("USER bun")).toBeLessThan(stages.indexOf(checks));
+    expect(checks).toContain('if [ -w "$p" ]; then');
+    expect(checks).toContain("find /opt/stage-tools /app -writable");
+    expect(checks).toContain("! command -v gh && ! command -v vercel && ! command -v vc");
+  });
+});

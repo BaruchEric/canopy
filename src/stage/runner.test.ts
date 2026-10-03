@@ -370,7 +370,7 @@ describe("the stage runner", () => {
   test("before it starts codex, the runner drops every seed's trust from its own codex config", async () => {
     const home = join(dir, "codex-home");
     await mkdir(home, { recursive: true });
-    const config = `model = "x"\n\n[projects."${join(root, "coin")}"]\ntrust_level = "trusted"\n\n[projects."/elsewhere"]\ntrust_level = "trusted"\n`;
+    const config = `model = "x"\n\n[projects."${join(root, "coin")}"]\ntrust_level = "trusted"\n`;
     await writeFile(join(home, "config.toml"), config);
     const fakeCodex = join(dir, "fake-codex");
     await writeFile(fakeCodex, '#!/bin/sh\ncat "$CODEX_HOME/config.toml"\n');
@@ -382,11 +382,40 @@ describe("the stage runner", () => {
     const fs = await talk({ t: "spawn", argv: ["codex"], cwd: join(root, "coin"), env: {} }, [], 5000, path);
     expect(fs.at(-1)).toEqual({ t: "exit", code: 0 });
     // what codex itself read when it started
-    expect(text(fs, "out")).toContain(`[projects."/elsewhere"]`);
+    expect(text(fs, "out")).toContain('model = "x"');
     expect(text(fs, "out")).not.toContain(join(root, "coin"));
-    const after = await readFile(join(home, "config.toml"), "utf8");
-    expect(after).not.toContain(join(root, "coin"));
-    expect(after).toContain(`[projects."/elsewhere"]`);
+    expect(await readFile(join(home, "config.toml"), "utf8")).not.toContain(join(root, "coin"));
+  });
+
+  test("any spawn sweeps the seeds' trust first, and a projects table left after it refuses, naming it", async () => {
+    const home = join(dir, "codex-home-2");
+    await mkdir(home, { recursive: true });
+    await writeFile(join(home, "config.toml"), `[projects."${join(root, "coin")}"]\ntrust_level = "trusted"\n`);
+    const path = await extra("codex2", { env: { PATH: process.env["PATH"], HOME: dir, CODEX_HOME: home } });
+    const ran = await talk({ t: "spawn", argv: ["sh", "-c", "exit 0"], cwd: join(root, "coin"), env: {} }, [], 5000, path);
+    expect(ran.at(-1)).toEqual({ t: "exit", code: 0 });
+    expect(await readFile(join(home, "config.toml"), "utf8")).not.toContain(join(root, "coin"));
+    await writeFile(join(home, "config.toml"), '[projects."/elsewhere"]\ntrust_level = "trusted"\n');
+    const fs = await talk({ t: "spawn", argv: ["sh", "-c", `touch ${join(dir, "ran-projects")}`], cwd: join(root, "coin"), env: {} }, [], 5000, path);
+    expect(fs.at(-1)).toMatchObject({ t: "refused" });
+    expect((fs.at(-1) as { reason: string }).reason).toStartWith(`${join(home, "config.toml")} holds "projects"`);
+    expect(await Bun.file(join(dir, "ran-projects")).exists()).toBe(false);
+  });
+
+  test("a stage claude settings file off the allowlist refuses every spawn, by file and key, as a plain refusal and not the fence", async () => {
+    const cfg = join(dir, "stage-claude");
+    await mkdir(cfg, { recursive: true });
+    await writeFile(join(cfg, "settings.json"), JSON.stringify({ model: "opus", hooks: { PreToolUse: [] } }));
+    const path = await extra("settings", { env: { PATH: process.env["PATH"], HOME: dir, CLAUDE_CONFIG_DIR: cfg } });
+    const fs = await talk({ t: "spawn", argv: ["sh", "-c", `touch ${join(dir, "ran-settings")}`], cwd: join(root, "coin"), env: {} }, [], 5000, path);
+    const last = fs.at(-1) as { t: string; reason: string; fenced?: unknown };
+    expect(last.t).toBe("refused");
+    expect(last.reason).toStartWith(`${join(cfg, "settings.json")} holds "hooks"`);
+    expect(last.fenced).toBeUndefined();
+    expect(await Bun.file(join(dir, "ran-settings")).exists()).toBe(false);
+    // fixed by hand, the next spawn runs
+    await writeFile(join(cfg, "settings.json"), JSON.stringify({ model: "opus" }));
+    expect((await talk({ t: "spawn", argv: ["sh", "-c", "exit 0"], cwd: join(root, "coin"), env: {} }, [], 5000, path)).at(-1)).toEqual({ t: "exit", code: 0 });
   });
 });
 

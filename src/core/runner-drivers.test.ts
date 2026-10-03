@@ -756,6 +756,59 @@ describe("a stage run goes through the stage runner", () => {
     }
   }, 20_000);
 
+  test("a step the stage runner refuses for its claude settings fails with the file and key, never parked as the runner away", async () => {
+    const dir = await realpath(await mkdtemp(join(tmpdir(), "canopy-runner-settings-")));
+    scratch.push(dir);
+    const root = join(dir, "_incubator");
+    const seedPath = join(root, "coin");
+    await mkdir(seedPath, { recursive: true });
+    const cfg = join(dir, "stage-claude");
+    await mkdir(cfg, { recursive: true });
+    await writeFile(join(cfg, "settings.json"), JSON.stringify({ hooks: { Stop: [] } }));
+    const claude = join(dir, "claude");
+    await writeFile(claude, `#!/bin/sh\ntouch ${join(dir, "ran")}\n`);
+    await chmod(claude, 0o755);
+    const socket = join(dir, "s.sock");
+    const stage = await startStageRunner({
+      socket,
+      root,
+      env: { PATH: process.env["PATH"], HOME: dir, CLAUDE_CONFIG_DIR: cfg, ...FENCE },
+      probe: blocked,
+      writable: notWritable,
+      programs: { claude },
+    });
+    try {
+      const client = new StageClient(socket);
+      expect(await client.hello()).toContain("claude");
+      let flows!: Flows;
+      const runner = new Runner(
+        { onChange: (r) => flows.onRun(r), onGone: () => {}, status: async () => null },
+        { stage: () => true, stageExec: () => client, driver: () => new ClaudeDriver({ command: ["claude"] }) },
+      );
+      flows = new Flows(runner, {
+        onChange: () => {},
+        onGone: () => {},
+        onFleet: () => {},
+        onFleetGone: () => {},
+        check: async () => ({ exit: 0, output: "" }),
+        evaluator: null,
+      });
+      const parsed = parseWorkflow("---\nname: one\nverb: do one\nblurb: b\n---\n\n## Only\n\nDo it.\n", { name: "one", source: "bundled", file: "/one.md" });
+      if (!parsed.ok) throw new Error(parsed.error);
+      const f = flows.start(repo("_incubator/coin", seedPath), parsed.workflow, "", { ...DEFAULT_AGENT, yolo: false });
+      await waitFor(() => flows.get(f.id)?.status === "failed", "the flow to fail");
+      const failed = flows.get(f.id);
+      expect(failed?.parkedFor).toBeUndefined();
+      const run = runner.get(failed?.steps[0]?.runId ?? "");
+      expect(run?.status).toBe("failed");
+      expect(run?.away).toBeUndefined();
+      expect(run?.error).toContain(`${join(cfg, "settings.json")} holds "hooks"`);
+      expect(await Bun.file(join(dir, "ran")).exists()).toBe(false);
+    } finally {
+      await stage.stop();
+    }
+  }, 20_000);
+
   test("a plain run gets no stage spawn and no liveness tap", () => {
     const { runner, ctxOf } = setup({ stage: () => false, stageExec: () => null });
     runner.start(repo("a"), "ask", ACTIONS.ask, "x", DEFAULT_AGENT);

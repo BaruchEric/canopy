@@ -135,6 +135,12 @@ CMD ["tmux", "-S", "/config/tmux.sock", "-f", "/app/lib/tmux-server.conf", "-D"]
 # git, without gh or the Vercel CLI, and the stage runner. No canopy server
 # code, no token. compose runs this as the `stages` service, and canopy
 # reaches it only through the runner's socket on the stage-sock volume.
+#
+# Every stage runs as the same user, so nothing a later stage runs may be a
+# file that user can write: claude and codex move out of its home into
+# root-owned /opt/stage-tools, the PATH names root-owned folders only, the
+# runner and its bundle are root's, and the build fails below if any of that
+# is not so. The stage runner checks it again at every spawn.
 FROM shells AS stages
 USER root
 # gh is GitHub's apt package (above); the binary is all a stage could use
@@ -142,17 +148,56 @@ RUN rm -f /usr/bin/gh
 # the socket's folder, made here so the fresh named volume copies up owned by
 # the runner's user and it can bind the socket
 RUN mkdir -p /run/canopy-stage && chown bun:bun /run/canopy-stage
+# a login shell (claude's Bash tool starts one) would put the home's own,
+# writable bin folders back on the PATH
+RUN rm -f /etc/profile.d/canopy-path.sh
 USER bun
 # the Vercel CLI went in with `bun add -g` (above), which links `vercel` and
 # `vc`; it may be missing if that install failed, so nothing here insists
 RUN (bun remove -g vercel || true) \
     && rm -f /home/bun/.bun/bin/vercel /home/bun/.bun/bin/vc \
     && rm -rf /home/bun/.bun/install/global/node_modules/vercel
-# the build fails here rather than ship a stage image that still has either
-RUN ! command -v gh && ! command -v vercel && ! command -v vc
-COPY --from=build --chown=bun:bun /app/dist/stage-runner.js /app/stage-runner.js
-COPY --from=build --chown=bun:bun /app/dist/fence-check.js /app/fence-check.js
+USER root
+# claude is one native file, copied off its version link; codex is its npm
+# package with the platform binary beside it, so the global node_modules
+# moves whole and the link points at the same file inside it. codex may be
+# missing if its install failed (above); claude may not.
+RUN set -e; \
+    mkdir -p /opt/stage-tools/bin; \
+    cp -L /home/bun/.local/bin/claude /opt/stage-tools/bin/claude; \
+    if [ -e /home/bun/.bun/bin/codex ]; then \
+      js=$(readlink -f /home/bun/.bun/bin/codex); \
+      cp -a /home/bun/.bun/install/global/node_modules /opt/stage-tools/node_modules; \
+      ln -s "/opt/stage-tools/node_modules/${js#/home/bun/.bun/install/global/node_modules/}" /opt/stage-tools/bin/codex; \
+    fi; \
+    rm -rf /home/bun/.local/bin/claude /home/bun/.local/share/claude /home/bun/.bun/bin /home/bun/.bun/install/global; \
+    chown -R root:root /opt/stage-tools; \
+    chmod -R u+rwX,go+rX,go-w /opt/stage-tools
+COPY --from=build /app/dist/stage-runner.js /app/stage-runner.js
+COPY --from=build /app/dist/fence-check.js /app/fence-check.js
+RUN chown -R root:root /app && chmod -R go-w /app
+USER bun
+ENV PATH=/opt/stage-tools/bin:/usr/local/bin:/usr/bin:/bin
+# claude's own updater would write a new claude somewhere the user can
+ENV DISABLE_AUTOUPDATER=1
 ENV CLAUDE_CONFIG_DIR=/home/bun/.stage-claude CODEX_HOME=/home/bun/.stage-codex
+# the build fails here rather than ship a stage image that has gh or the
+# Vercel CLI, a PATH folder (or one above it) the runner's user can write,
+# or a stage tool or runner file it can change
+RUN ! command -v gh && ! command -v vercel && ! command -v vc
+RUN set -e; \
+    for d in $(echo "$PATH" | tr : ' '); do \
+      p="$d"; \
+      while :; do \
+        if [ -w "$p" ]; then echo "$p is writable by $(id -un), and the PATH reaches it"; exit 1; fi; \
+        [ "$p" = / ] && break; \
+        p=$(dirname "$p"); \
+      done; \
+    done; \
+    w=$(find /opt/stage-tools /app -writable -print -quit); \
+    if [ -n "$w" ]; then echo "$w is writable by $(id -un)"; exit 1; fi; \
+    test "$(command -v claude)" = /opt/stage-tools/bin/claude; \
+    if command -v codex; then test "$(command -v codex)" = /opt/stage-tools/bin/codex; fi
 # CMD, not ENTRYPOINT: the shells stage's tmux CMD would otherwise be appended
 # to the runner's argv
 CMD ["bun", "/app/stage-runner.js"]
