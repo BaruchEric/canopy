@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
-import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, mkdir, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { builtinCheck, isBuiltinCheck } from "./builtincheck";
@@ -51,5 +51,23 @@ describe("built-in checks", () => {
   test("an unknown name says so", async () => {
     expect(await builtinCheck("@nope", dir)).toEqual({ exit: 2, output: "no built-in check @nope" });
     expect(await builtinCheck("@pick-check; echo hi", dir)).toEqual({ exit: 2, output: "no built-in check @pick-check; echo hi" });
+  });
+
+  test("a symlinked or oversize file fails the check instead of throwing", async () => {
+    const d = await mkdtemp(join(tmpdir(), "canopy-builtin-bad-"));
+    try {
+      await mkdir(join(d, ".canopy"));
+      await writeFile(join(d, "elsewhere"), "{}");
+      await symlink(join(d, "elsewhere"), join(d, ".canopy", "pick.json"));
+      const link = await builtinCheck("@pick-check", d);
+      expect(link.exit).toBe(1);
+      expect(link.output).toContain("pick.json");
+      await writeFile(join(d, ".canopy", "questions.json"), "x".repeat(300 * 1024));
+      const big = await builtinCheck("@questions", d);
+      expect(big.exit).toBe(1);
+      expect(big.output).toContain("questions.json");
+    } finally {
+      await rm(d, { recursive: true, force: true });
+    }
   });
 });

@@ -39,5 +39,11 @@ const BUILTINS: Readonly<Record<string, (seed: string) => Promise<CheckResult>>>
 export async function builtinCheck(command: string, seedPath: string): Promise<CheckResult> {
   const name = command.slice(1);
   const run = Object.hasOwn(BUILTINS, name) ? BUILTINS[name] : undefined;
-  return run ? run(seedPath) : { exit: 2, output: `no built-in check ${command}` };
+  if (!run) return { exit: 2, output: `no built-in check ${command}` };
+  // an agent wrote these files: a symlink, a fifo or a huge file fails the check, never throws
+  try {
+    return await run(seedPath);
+  } catch (e) {
+    return fail(`${command}: ${e instanceof Error ? e.message : String(e)}`);
+  }
 }
