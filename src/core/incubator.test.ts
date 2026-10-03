@@ -7,7 +7,7 @@ import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Incubator, IncubatorError, incubatorWorkflow, type IncubatorDeps, type IncubatorFlows, type IncubatorSeeds, type IncubatorStore, type Intake, type NoteSink } from "./incubator";
-import type { Shipper } from "./shipper";
+import type { ShipBundle, Shipper, ShipSource } from "./shipper";
 import { BUNDLED_DIR, findWorkflow, loadWorkflows } from "./workflows";
 import type { Flow, FlowChoice, Judgment, Repo, Sprout, Workflow } from "./types";
 
@@ -97,9 +97,12 @@ class FakeSeeds implements IncubatorSeeds {
     m.set(rel, text);
     this.files.set(path, m);
   }
-  async commit(path: string, _rels: string[], message: string): Promise<void> {
+  /** the seed's HEAD after each commit */
+  head = "h1";
+  async commit(path: string, _rels: string[], message: string): Promise<string> {
     if (this.failCommit) throw new Error(this.failCommit);
     this.commits.push({ path, message });
+    return this.head;
   }
   exists(path: string): boolean {
     return this.files.has(path);
@@ -1345,10 +1348,21 @@ class FakeShip implements Shipper {
     if (this.failProject) throw new Error(this.failProject);
     return slug;
   }
-  async push(_seed: string, repo: string): Promise<void> {
+  /** the HEAD each bundle names, and every bundle made and let go */
+  head = "h1";
+  bundles: { file: string; head: string; done: boolean }[] = [];
+  shippedFrom: string[] = [];
+  async bundle(): Promise<ShipBundle> {
+    const b = { file: `/scratch/${this.bundles.length}.bundle`, head: this.head, done: false };
+    this.bundles.push(b);
+    return { file: b.file, head: b.head, done: async () => void (b.done = true) };
+  }
+  async push(from: ShipSource, repo: string): Promise<void> {
+    this.shippedFrom.push(typeof from === "string" ? from : from.file);
     this.calls.push(`push ${repo}`);
   }
-  async deploy(_seed: string, project: string): Promise<string> {
+  async deploy(from: ShipSource, project: string): Promise<string> {
+    this.shippedFrom.push(typeof from === "string" ? from : from.file);
     this.calls.push(`deploy ${project}`);
     if (this.hold) await new Promise<void>((resolve) => this.held.push(resolve));
     if (this.failDeploy) throw new Error(this.failDeploy);
@@ -1524,6 +1538,32 @@ describe("scout and build-new", () => {
     expect(s.url).toBe("https://coin-counter.vercel.app");
     expect(s.privateRepo).toBe("eric/coin-counter");
     expect(s.vercelProject).toBe("coin-counter");
+  });
+
+  test("push and deploy ship one bundle, made once and let go after", async () => {
+    const ship = new FakeShip();
+    const w = chain(ship);
+    const s = await shipped(w);
+    expect(s.status).toBe("live");
+    expect(ship.bundles).toEqual([{ file: "/scratch/0.bundle", head: "h1", done: true }]);
+    expect(ship.shippedFrom).toEqual(["/scratch/0.bundle", "/scratch/0.bundle"]);
+    expect(s.builtHead).toBe("h1");
+  });
+
+  test("a seed that moved after the build was accepted parks before the push; a resume ships it as it is", async () => {
+    const ship = new FakeShip();
+    const w = chain(ship);
+    // another seed's stage, or anything else, committed here after the accept
+    ship.head = "h2";
+    const s = await shipped(w);
+    expect(s.status).toBe("parked");
+    expect(s.parked).toContain("the seed moved after the build was accepted");
+    expect(ship.calls).toEqual(["create coin-counter", "project coin-counter"]);
+    expect(ship.bundles.every((b) => b.done)).toBe(true);
+    await w.inc.resume(s.id, "retry");
+    await w.inc.idle();
+    expect(now(w, s.id).status).toBe("live");
+    expect(ship.calls.slice(-2)).toEqual(["push eric/coin-counter", "deploy coin-counter"]);
   });
 
   test("a deploy that fails parks with the reason; resume skips the repo and project already made", async () => {

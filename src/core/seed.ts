@@ -11,7 +11,7 @@ import { lstat, mkdir, open, realpath, rename, rm } from "node:fs/promises";
 import { basename, dirname, isAbsolute, join, relative, sep } from "node:path";
 import { exec, git } from "./exec";
 import { networkOrigin } from "./peersync";
-import { inQuietSeed } from "./seedgit";
+import { inQuietSeed, seedHeld } from "./seedgit";
 import { isSproutId, urlWithoutSecret } from "./sprout";
 
 export const SEED_READ_MAX = 256 * 1024;
@@ -294,15 +294,27 @@ export async function writeSeed(path: string, rel: string, text: string): Promis
   }
 }
 
-/** the seed operations as the Incubator takes them */
-export function seedOps(self: string) {
+/** the seed operations as the Incubator takes them; `committed` hears of
+ *  each seed canopy committed in (the server syncs its mirror) */
+export function seedOps(self: string, committed?: (path: string) => void) {
   return {
     make: (path: string, files: Record<string, string>, clone: string | undefined, id: string) => makeSeed(path, files, clone, { self, id }),
     read: readSeed,
     write: writeSeed,
-    commit: async (path: string, rels: string[], message: string): Promise<void> => {
-      // a stage alive in any seed makes this one busy: wait for quiet
-      await inQuietSeed(path, () => commitSeed(path, rels, message, self));
+    /** the seed's HEAD after the commit, which the ship holds the seed to */
+    commit: async (path: string, rels: string[], message: string): Promise<string> => {
+      // a busy seed (its own stage alive on an isolated backend, any
+      // stage on an unisolated one) is waited out; a commit already made
+      // stages nothing the second time
+      const head = await inQuietSeed(path, async () => {
+        await commitSeed(path, rels, message, self);
+        const r = await git(path, ["rev-parse", "--verify", "-q", "HEAD^{commit}"]);
+        if (seedHeld(r.stderr)) throw new Error(r.stderr.trim());
+        if (r.code !== 0) throw new Error(`the seed has no commit after canopy's: ${firstLine(r.stderr)}`);
+        return r.stdout.trim();
+      });
+      committed?.(path);
+      return head;
     },
     /** a dangling symlink counts as there, as makeSeed would refuse it */
     exists: (path: string): boolean => lstatSync(path, { throwIfNoEntry: false }) !== undefined,

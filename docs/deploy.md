@@ -557,8 +557,8 @@ copying a stage's inputs in, and a root login folder keeps the logins out.
 ```
 stat -c '%U %n' ~/dev/_incubator ~/dev/_incubator/.shared ~/.config/canopy-stages/claude ~/.config/canopy-stages/codex
 sudo chown -R "$(id -un):$(id -gn)" <each one that says root>
-docker compose exec stages claude --version
-docker compose exec stages codex --version
+docker compose exec -u bun stages claude --version
+docker compose exec -u bun stages codex --version
 ```
 
 By hand the folders are
@@ -642,10 +642,12 @@ Mac's address as well: its line there has to say `BAD` (the Mac answering),
 or the `ok` in stages proves nothing.
 
 **7. The logins**, in a real terminal on the mini (they are interactive).
-First claude, then check where it put its account file:
+The stages container runs as root (the stage runner drops each stage to
+`bun`), so every exec that acts as a stage names the user. First claude,
+then check where it put its account file:
 
 ```
-docker compose exec -it stages claude              # then /login
+docker compose exec -u bun -it stages claude              # then /login
 docker compose exec stages ls -la /home/bun/.stage-claude/.claude.json   # should be there
 docker compose exec stages ls -la /home/bun/.claude.json                 # should not
 ```
@@ -653,7 +655,7 @@ docker compose exec stages ls -la /home/bun/.claude.json                 # shoul
 With `CLAUDE_CONFIG_DIR` set to `/home/bun/.stage-claude` (the image sets it)
 the file belongs inside that folder, which is the mounted
 `~/.config/canopy-stages/claude`. If it landed at `/home/bun/.claude.json`
-instead, it sits in the container's own layer and the next recreate loses it,
+instead, it sits in the home's tmpfs and the next restart of stages loses it,
 with the login. Then `touch ~/.config/canopy-stages/claude.json` on the host
 (a missing file would be made as a folder), add
 `${HOST_HOME:-/home/eric}/.config/canopy-stages/claude.json:/home/bun/.claude.json`
@@ -661,7 +663,7 @@ to the stages service's volumes, `docker compose up -d stages`, and log in
 again. Then codex:
 
 ```
-docker compose exec -it stages codex login --device-auth
+docker compose exec -u bun -it stages codex login --device-auth
 ```
 
 **After a reboot**, check that the fence came up before docker. The unit is
@@ -679,6 +681,285 @@ until the fence is back and the next probe, within 5 minutes, times out.
 **8. The incubator word.** The incubator view should now say "stages
 isolated". "stages unfenced" means the runner answers but its probe got
 through, failed, or has no target: its title says which.
+
+### Hardening (amendment 4)
+
+The design is amendment 4 of
+`docs/superpowers/specs/2026-10-01-incubator-design.md`. What changes on the
+mini:
+
+- canopy runs no git in a seed. Every git call it makes there (a card's
+  status, its commit after scout, the ship's bundle, a mirror sync) runs in
+  the stages container through the runner, as the stage user. While the
+  runner is away a seed card keeps its last status and canopy's commit
+  waits; nothing falls back.
+- A seed is busy only while its own stage is, so one sprout's long build no
+  longer holds the other sprout.
+- The peer gate serves a seed from canopy's mirror at
+  `~/dev/.canopy-mirrors/<slug>/.git`, never from the seed, and seeds leave
+  the mini's own peer pass. A peer still reads the mini's seeds, at most one
+  activity pass behind; a commit made to a peer's copy of a seed stays there.
+- The stage runner runs as root and drops every child to `bun` with no
+  groups. Its socket folder is `root:7850 0750`, and canopy holds gid 7850
+  through `group_add`. No group by that name has to exist on the host.
+- The stages container is read-only. The stage user's home and `/tmp` are
+  tmpfs, so whatever a stage leaves there ends when stages restarts.
+
+The deploy, once this is on main:
+
+**1. Pick the caller gid.** On the mini, both of these should print
+nothing; if either prints a line, put a free gid in `.env` as
+`STAGECALLER_GID=<gid>` (it must not be `HOST_GID`):
+
+```
+getent group 7850
+grep -E '^(HOST_GID|STAGECALLER_GID)=7850 It runs the incubator only with
+`CANOPY_INCUBATOR_UNISOLATED=1`, which gives up all of part 3: stages run as
+canopy, in its pid namespace and network. Parts 1 and 2 still hold.
+
+## Codex
+
+The Dockerfile installs `codex` via `bun add -g @openai/codex` and `nodejs`
+next to it, since the codex npm wrapper launches on node. If that package
+name is wrong for your setup, install codex your own way in the final image (a
+`RUN` line, or a mounted binary that is a linux-x64 build), and rebuild. codex
+runs inside the in-browser shell on your Codex subscription, using the mounted
+`~/.codex`; canopy does not shell out to it directly, so a missing codex does
+not stop canopy from starting.
+
+## Try it on a Mac first
+
+To see the shared-backend UI without a container, run canopy on your Mac with
+the headless behaviour forced:
+
+```
+CANOPY_NO_DESKTOP=1 CANOPY_SSH_HOST=canopy bun bin/canopy.ts ui ~/dev --port 7899
+```
+
+The desktop openers and the launcher drop from the menus, and VS Code shows as a
+Remote-SSH link, exactly as they will on the mini. The in-browser shells and
+Claude still work locally.
+
+## What is off in this mode
+
+- The launcher (install, build, launch): it needs the checkout and a desktop
+  on one machine. The server refuses it with a clear message and the UI hides
+  it. Release and pull request listings read through `gh`, which the image
+  carries (the shells stage, so the shells have it too), logged in by
+  `GH_TOKEN` from `.env`. That login is also git's credential helper for
+  github.com in both containers (`GIT_CONFIG_*` in `docker-compose.yml`), so
+  the panel's push, the background fetch of a private https remote and a
+  `git push` typed into a shell all work. The desktop openers are not off,
+  they moved: see the helper section above.
+- The history section (the rings, sessions, the Claude panel). It reads
+  through the claude-history CLI, and the archive it reads lives in the vault
+  on the Mac alone. The archive's projects are keyed by Mac paths
+  (`/Users/ericbaruch/dev/...`) while the mini's repos sit at
+  `/home/eric/dev/...`, and canopy matches the two by realpath. So pointing
+  `historyBin` at the mini's checkout would show nothing. Turning it on takes
+  a copy of the archive on the mini plus a path map, or a CLI run over ssh on
+  the Mac. Until then the overview answers `available: false` and the section
+  stays empty.
+- Without a helper, VS Code is the one opener kept, as a
+  `vscode-remote://ssh-remote+<host>` link built from `CANOPY_SSH_HOST`, and a
+  search hit's file open answers 400. With a helper picked, both go through it.
+
+## ssh sources
+
+Repos you keep on another host (not on the mini) can still appear: add them in
+the UI as ssh sources. The mounted `~/.ssh` gives the container the keys and
+host aliases. Those repos are re-read on a timer rather than live-watched, and a
+shell into them is an ssh session, so that host needs its own git, `claude`, and
+`codex` if you want the AI tools there.
+
+## Gotchas met on the way
+
+- The backend does not come back from a reboot on its own, which is what
+  `lib/canopy-backend.service` is for. At boot docker starts its
+  `unless-stopped` containers before tailscaled has assigned the tailnet
+  address, so publishing the port on that address fails with "cannot assign
+  requested address" and the canopy container exits 255. Docker does not
+  retry a networking failure, and a later `docker compose up -d` on that
+  container starts it with no published port at all (`NetworkSettings.Ports`
+  comes back empty), so the fix is to recreate it: the unit waits for an
+  address on `tailscale0`, brings the shells container up, and recreates
+  canopy alone. The shells container has no published port, so it is never
+  the one that fails. Seen and fixed on the mini 2026-09-22.
+- `depends_on … service_healthy` orders a compose `up`; it does not order
+  the daemon's `unless-stopped` restarts after a host reboot. If canopy is up
+  before the shells container's socket and a browser opens a shell in that
+  window, canopy's tmux client starts a server of its own inside the canopy
+  container, and those shells die with the next redeploy while the log says
+  nothing. Two reboots of the mini did not hit it (`docker top
+  canopy-canopy-1 | grep tmux` came back empty both times, and the unit above
+  starts the shells container first), but the check is worth doing after a
+  reboot; the image has no `ps`, so `docker top` is the way. If a tmux is
+  there, `docker compose up -d --force-recreate --no-deps canopy` once
+  nothing is running in a shell.
+
+- The server bound `127.0.0.1` inside the container, so docker's published
+  port DNAT'd to the container's ethernet address and hit a wall. The compose
+  sets `CANOPY_BIND=0.0.0.0`; the published port on the tailnet address is
+  what keeps it off the LAN.
+- The container first ran as root. git over a tree owned by the host user
+  was "dubious ownership" everywhere, and claude refuses
+  `--dangerously-skip-permissions` as root, which is what every canopy run
+  passes. So the container runs as the image's `bun` user, remapped to the
+  host uid and gid by build args (`HOST_UID`/`HOST_GID` in `.env`, 1000 by
+  default), and the tree, `~/.claude` and `~/.codex` are its own files. The
+  image keeps `safe.directory '*'` for a tree owned by a uid the build args
+  did not name.
+- A container sets no `SHELL`, and the image has no zsh, so the in-browser
+  shell used to start `/bin/zsh` and die at once. `userShell()` now falls back
+  to bash off a Mac, and the image sets `SHELL=/bin/bash` besides.
+- `codex` is an npm wrapper whose launcher runs on node; bun does not satisfy
+  its shebang, so the image installs `nodejs` too. The image also points
+  `bun add -g` at `/usr/local/bin`, which the `bun` user cannot write, so
+  `BUN_INSTALL_BIN` is moved under its home.
+- The Library (the `/library/*` workspace manager) refused every request as a
+  "Foreign origin": its CSRF guard took only localhost or a configured HTTPS
+  proxy origin. With `CANOPY_BIND` set beyond loopback it now takes a
+  same-origin request by a tailnet name too (an address in 100.64/10, a
+  `.ts.net` name, or a bare machine name); a dotted public name is still
+  refused, since a domain someone else controls could resolve to the same
+  address.
+
+## Other canopy pages (multi-backend)
+
+A backend answers another canopy page only when that page's origin is in
+`CANOPY_ORIGINS`, comma separated, exact origins. This is a separate list
+from each machine's own `backends` config (what `GET /api/backends` answers,
+which URLs to dial): `CANOPY_ORIGINS` says who may call *this* machine,
+`backends` says which *other* machines this page should call. The mini's
+`.env` and the Mac's launchd plist each list the other machine's public and
+tailnet origins plus their own ts.net origin. Prefer an https origin in
+`CANOPY_ORIGINS` where the page allows it: a plain http page sends no
+`Sec-Fetch-Site` header, which the origin gate otherwise uses to tell a
+same-origin request apart from a cross-site one.
+
+What each machine's `CANOPY_ORIGINS` should hold, once the rollout below has
+added the mini's two loopback entries:
+
+```
+# the mini's .env
+CANOPY_ORIGINS=https://canopy-mac.beric.ca,https://erics-macbook-pro.tail2d2c60.ts.net:7850,https://macmini-2018.tail2d2c60.ts.net:7849,http://127.0.0.1:7850,http://localhost:7850
+
+# the Mac's launchd plist (ca.beric.canopy-server)
+CANOPY_ORIGINS=https://canopy.beric.ca,https://macmini-2018.tail2d2c60.ts.net:7849,https://erics-macbook-pro.tail2d2c60.ts.net:7850,http://macmini-2018:7850,http://100.68.139.95:7850
+```
+
+Both machines list both tailnet https origins (each `tailscale serve` name,
+amendment 2), since a page opened from either tailnet address may reach
+either backend, and each other's public `beric.ca` origin, since a page
+opened from one public name is home to that machine and needs the other's
+permission to call it as a foreign backend. The mini also lists the Mac's own
+page, `http://127.0.0.1:7850` and `http://localhost:7850`: the Mac's canopy
+binds loopback only, so its own page is home there at that address, and it
+needs the mini's permission the same way (amendment 7). The Mac lists the
+mini's plain http tailnet addresses, `http://macmini-2018:7850` and
+`http://100.68.139.95:7850`, for the matching case when the mini's own page
+is open off `tailscale serve`, at the plain port canopy publishes directly.
+Add a machine's origins on both sides before its client code ships, so a page
+never sends a foreign origin nobody has listed yet.
+
+**After a deploy**, check the multi-backend page actually reaches every
+backend:
+
+1. Run `~/.claude/skills/verify-build/clean-rebuild.sh verify checkoutPref`
+   on the Mac and inside the mini's container, so a stale `dist/web` is not
+   what you are about to check.
+2. `GET /api/backends` on each machine and confirm its `backends` array
+   names the other one with the right public and tailnet URLs (this is that
+   machine's own config, not `CANOPY_ORIGINS`).
+3. Open the page in a browser, both at a public name
+   (`https://canopy.beric.ca` or `https://canopy-mac.beric.ca`) and at the
+   Mac's own `http://127.0.0.1:7850`, the amendment 7 case the mini's
+   loopback origins exist for. Look for the backends chip in the top bar:
+   it shows as soon as this machine's own `backends` config names another
+   one, whether or not that other one currently answers, so a missing chip
+   means the config (or `GET /api/backends`) is wrong, not that the other
+   backend is unreachable.
+4. Open the chip's popover: both backends should read "online", each with the
+   URL this page is actually using (`this page` for home, an origin for the
+   other). Tell the reasons apart before touching `CANOPY_ORIGINS`: "*did not
+   answer*" is a fetch that got no response at all (check the URL is right
+   and reachable, e.g. `curl <url>/api/about`, before suspecting the origin
+   gate); "*the event stream dropped*" can mean the backend is down just as
+   easily as a CORS refusal on the stream, so confirm a plain fetch to that
+   backend works before chasing `CANOPY_ORIGINS`; "*no URL this page can
+   use*" means the `backends` entry itself has no public or tailnet URL this
+   page's protocol can reach, which is a config problem on this machine, not
+   the other one.
+5. Find a repo checked out on both machines: its card should carry two
+   machine chips, and clicking the non-home one should open that checkout's
+   panel and, from there, a shell on the other machine.
+ ~/dev/dev-tools/canopy/.env
+```
+
+**2. Deploy** with `bun run redeploy`, from the Mac or the mini, as usual.
+It rebuilds both images; compose recreates stages for the read-only change
+and canopy for the group. Nothing here needs sudo: the runner sets the
+socket folder's owner and mode itself at every start, so the `stage-sock`
+volume made before (owned by `bun`) needs no hand fix, and canopy makes
+`.canopy-mirrors` as the host user.
+
+**3. Check the runner and the socket:**
+
+```
+docker compose exec stages ps -eo user,group,args | grep stage-runner
+                                        # root root bun /app/stage-runner.js
+docker compose exec stages ls -ldn /run/canopy-stage /run/canopy-stage/runner.sock
+                                        # drwxr-x--- 0 7850 and srw-rw---- 0 7850
+docker compose exec canopy id           # groups=... includes 7850
+docker compose exec -u bun stages ls /run/canopy-stage
+                                        # Permission denied: a stage cannot reach the socket
+docker compose logs stages | grep 'stages run as'
+                                        # stages run as 1000:1000 with no groups; the socket is for group 7850 alone
+```
+
+**4. Check what a stage can write:**
+
+```
+docker compose exec -u bun stages sh -c 'touch /opt/x; touch /usr/local/bin/x; touch ~/ok && echo home ok; touch /tmp/ok && echo tmp ok'
+                                        # two "Read-only file system", then home ok and tmp ok
+docker compose exec -u bun stages sh -c 'cp /bin/true /tmp/t && /tmp/t && cp /bin/true ~/t && ~/t && echo exec ok'
+                                        # exec ok: both tmpfs take exec, which bun create and bunx need
+docker compose exec stages ls -la /home/bun/.stage-claude/.claude.json /home/bun/.stage-codex
+                                        # the logins are still there (they are mounts, not the tmpfs)
+```
+
+If a login is gone, redo step 7 above.
+
+**5. Check the incubator.** The incubator view says "stages isolated", and
+each seed's card shows its status. Start a sprout, or wait for a running
+one's next stage, and during it:
+
+```
+docker compose exec stages ps -eo user,group,supgrp,args | grep -E 'claude|codex'
+                                        # bun bun - ... : the stage user, no supplementary group
+```
+
+**6. Check the mirrors and the gate.** After one activity pass (a minute or
+so after start):
+
+```
+ls ~/dev/.canopy-mirrors
+git -C ~/dev/.canopy-mirrors/<slug>/.git log -1 --oneline   # the seed's HEAD
+```
+
+Then, on the Mac, a fetch of that seed from the mini goes through the gate
+to the mirror:
+
+```
+git -C ~/dev/_incubator/<slug> fetch mini && git -C ~/dev/_incubator/<slug> rev-parse mini/main
+```
+
+The sha matches the mini's `git -C ~/dev/_incubator/<slug> rev-parse main`.
+A seed that has no mirror yet answers "canopy has no mirror of this seed
+yet" until the next pass makes one.
+
+**Back out** by redeploying the commit before the merge. The mirrors folder
+can stay; nothing reads it then.
 
 **A Mac backend** has no stages container. It runs the incubator only with
 `CANOPY_INCUBATOR_UNISOLATED=1`, which gives up all of part 3: stages run as

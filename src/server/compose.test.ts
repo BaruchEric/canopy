@@ -101,4 +101,47 @@ describe("the stages image", () => {
     expect(checks).toContain("find /opt/stage-tools /app -writable");
     expect(checks).toContain("! command -v gh && ! command -v vercel && ! command -v vc");
   });
+
+  test("ends as root after the checks, with setpriv and the uids the runner drops to baked in", async () => {
+    const stages = await docker();
+    const checked = stages.indexOf("find /opt/stage-tools /app -writable");
+    const users = [...stages.matchAll(/^USER (\w+)$/gm)];
+    expect(users.at(-1)?.[1]).toBe("root");
+    expect(users.at(-1)?.index ?? -1).toBeGreaterThan(checked);
+    expect(users.at(-2)?.[1]).toBe("bun");
+    expect(users.at(-2)?.index ?? Infinity).toBeLessThan(checked);
+    expect(stages).toContain("ARG STAGECALLER_GID=7850");
+    expect(stages).toContain("ENV CANOPY_STAGE_UID=${UID} CANOPY_STAGE_GID=${GID} CANOPY_STAGE_CALLER_GID=${STAGECALLER_GID}");
+    expect(stages).toContain('test -x "$(command -v setpriv)"');
+    expect(stages).toContain('chown "root:${STAGECALLER_GID}" /run/canopy-stage && chmod 0750 /run/canopy-stage');
+  });
+});
+
+describe("the stages container is read-only", () => {
+  const stages = compose.services["stages"] as { read_only?: boolean; tmpfs?: string[] };
+  test("with a tmpfs home owned by the stage user and a tmpfs /tmp, nothing else writable but the mounts", () => {
+    expect(stages.read_only).toBe(true);
+    expect(stages.tmpfs).toEqual([
+      "/home/bun:uid=${HOST_UID:-1000},gid=${HOST_GID:-1000},mode=0700,size=2g,exec",
+      "/tmp:mode=1777,size=1g,exec",
+    ]);
+  });
+  test("the root runner makes no transpiler cache in the stage user's home", async () => {
+    const text = await Bun.file(new URL("../../Dockerfile", import.meta.url)).text();
+    const start = text.indexOf("FROM shells AS stages");
+    const image = text.slice(start, text.indexOf("\nFROM ", start + 1));
+    expect(image).toContain("ENV BUN_RUNTIME_TRANSPILER_CACHE_PATH=0");
+  });
+});
+
+describe("the stage runner's socket", () => {
+  const services = compose.services as Record<string, { group_add?: string[]; build?: { args?: Record<string, string> } }>;
+  test("canopy holds the stagecaller group, and the stages image is built with the same gid", () => {
+    expect(services["canopy"]?.group_add).toEqual(["${STAGECALLER_GID:-7850}"]);
+    expect(services["stages"]?.build?.args?.["STAGECALLER_GID"]).toBe("${STAGECALLER_GID:-7850}");
+  });
+  test("neither the shells nor the stages hold it", () => {
+    expect(services["shells"]?.group_add).toBeUndefined();
+    expect(services["stages"]?.group_add).toBeUndefined();
+  });
 });

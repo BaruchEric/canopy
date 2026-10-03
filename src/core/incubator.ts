@@ -96,8 +96,8 @@ export interface IncubatorSeeds {
   /** a plain file the agent wrote, or null; throws on a symlink */
   read(path: string, rel: string): Promise<string | null>;
   write(path: string, rel: string, text: string): Promise<void>;
-  /** the named files only, as canopy */
-  commit(path: string, rels: string[], message: string): Promise<void>;
+  /** the named files only, as canopy; the seed's HEAD after, when known */
+  commit(path: string, rels: string[], message: string): Promise<string | void>;
   exists(path: string): boolean;
 }
 
@@ -176,6 +176,8 @@ export const incubatorWorkflow = async (name: string): Promise<Workflow | undefi
 export const newSproutId = (): string => `sp_${crypto.randomUUID().replace(/-/g, "").slice(0, 12)}`;
 
 const msg = (err: unknown): string => String(err instanceof Error ? err.message : err);
+/** the park reason's start when the seed's HEAD is not the one accepted */
+const SEED_MOVED = "the seed moved after the build was accepted";
 const enc = new TextEncoder();
 const dec = new TextDecoder();
 const bytesOf = (data: Uint8Array | string): number => (typeof data === "string" ? enc.encode(data).byteLength : data.byteLength);
@@ -541,6 +543,8 @@ export class Incubator {
     const s = this.need(id);
     if (s.status !== "parked") throw new IncubatorError(409, "only a parked project resumes");
     const reason = s.parked;
+    // the user's word that the seed as it is now is the one to ship
+    if (reason?.startsWith(SEED_MOVED)) delete s.builtHead;
     // a memo the speech model failed on is tried again
     const retry = this.untranscribed(s);
     const cur = s.flows.at(-1);
@@ -928,7 +932,9 @@ export class Incubator {
   /** build-new finished: its notes committed, then canopy's own ship */
   private async built(s: Sprout): Promise<void> {
     try {
-      await this.deps.seeds.commit(s.seedPath, BUILD_FILES, `build: ${s.title}`);
+      const head = await this.deps.seeds.commit(s.seedPath, BUILD_FILES, `build: ${s.title}`);
+      // what the ship sends: the seed as accepted (amendment 4)
+      if (head) s.builtHead = head;
     } catch (err) {
       return this.park(s, `could not commit the build's notes: ${msg(err)}`);
     }
@@ -969,9 +975,21 @@ export class Incubator {
         await this.changed(s);
       }
       if (sproutEnded(s)) return;
-      await ship.push(s.seedPath, s.privateRepo);
-      if (sproutEnded(s)) return;
-      const url = await ship.deploy(s.seedPath, s.vercelProject);
+      // one bundle for the push and the deploy, so both send one commit,
+      // and that commit is the one accepted: another seed's stage runs on
+      // while this one ships (amendment 4)
+      const bundle = await ship.bundle(s.seedPath);
+      let url: string;
+      try {
+        if (s.builtHead && bundle.head !== s.builtHead) {
+          return await this.park(s, `${SEED_MOVED} (${bundle.head.slice(0, 12)}, accepted ${s.builtHead.slice(0, 12)}); resume to ship it as it is now`);
+        }
+        await ship.push(bundle, s.privateRepo);
+        if (sproutEnded(s)) return;
+        url = await ship.deploy(bundle, s.vercelProject);
+      } finally {
+        await bundle.done();
+      }
       if (sproutEnded(s)) return;
       if (!isVercelAppUrl(url)) return this.park(s, `the deploy answered ${url}, which is not a vercel.app address`);
       s.url = url;

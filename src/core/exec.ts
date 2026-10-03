@@ -2,6 +2,7 @@ import { mkdirSync } from "node:fs";
 import { parseLocator, remoteCommand, sshArgs } from "./host";
 import { configDir } from "./store";
 import { SEED_BUSY, SEED_GIT_FLAGS, seedBusy, seedGitRefusal, seedRootsNow, seedsRootOf } from "./seedgit";
+import { SEED_GIT_ENV } from "./stagewire";
 
 export interface ExecResult {
   code: number;
@@ -142,6 +143,55 @@ export async function onHost(
   return exec([...sshArgs(host, sshControlDir()), remoteCommand(cmd)], { timeoutMs: opts.timeoutMs });
 }
 
+/** Where canopy's git in a seed runs instead of here: on an isolated
+ *  backend, the stage runner (seedgit.ts, amendment 4). Both calls answer
+ *  as git would, or with SEED_AWAY when the runner cannot run them now;
+ *  neither ever runs git in this process. */
+export interface SeedGitHook {
+  /** the seeds this hook answers for (its own backend's); every seed when
+   *  absent. A seed it does not cover runs here behind the guard. */
+  covers?(path: string): boolean;
+  run(path: string, args: string[], opts: { timeoutMs: number; env: Record<string, string> }): Promise<ExecResult>;
+  /** stdout into `file`, for bytes (a bundle) */
+  toFile(path: string, args: string[], file: string, opts: { timeoutMs: number; env: Record<string, string> }): Promise<ExecResult>;
+}
+let seedGitHook: SeedGitHook | null = null;
+/** set by the server on an isolated backend, cleared on one that is not */
+export function setSeedGit(hook: SeedGitHook | null): void {
+  seedGitHook = hook;
+}
+const hookCovers = (hook: SeedGitHook, path: string): boolean => hook.covers?.(path) ?? true;
+
+/** a refusal for an env the stage runner would refuse: a name dropped
+ *  would change what the command writes, so it never goes */
+function offGitEnv(env: Record<string, string>): ExecResult | null {
+  const off = Object.keys(env).find((k) => !SEED_GIT_ENV.includes(k));
+  return off === undefined ? null : { code: 128, stdout: "", stderr: `canopy runs git in a seed with ${SEED_GIT_ENV.join(", ")} alone, not ${off}` };
+}
+
+/** git() in a local repo with stdout into `file` (a bundle: bytes, not
+ *  text). A seed goes where git() sends it: the stage runner on an isolated
+ *  backend, else here behind the guard, with the same busy rule. */
+export async function gitToFile(path: string, args: string[], file: string, timeoutMs = 300_000): Promise<ExecResult> {
+  const seeds = seedsRootOf(path, seedRootsNow());
+  if (seeds !== null && seedBusy(path)) return { code: 128, stdout: "", stderr: SEED_BUSY };
+  const refused = await seedGitRefusal(path);
+  if (refused) return { code: 128, stdout: "", stderr: refused };
+  const env = { GIT_OPTIONAL_LOCKS: "0" };
+  if (seeds !== null && seedGitHook && hookCovers(seedGitHook, path)) return seedGitHook.toFile(path, args, file, { timeoutMs, env });
+  const seedOnly = seeds !== null ? { flags: SEED_GIT_FLAGS, env: { GIT_CEILING_DIRECTORIES: seeds } } : { flags: [], env: {} };
+  const p = Bun.spawn(["git", ...seedOnly.flags, "-C", path, ...args], {
+    env: { ...process.env, ...env, ...seedOnly.env },
+    stdin: "ignore",
+    stdout: Bun.file(file),
+    stderr: "pipe",
+  });
+  const timer = setTimeout(() => p.kill("SIGKILL"), timeoutMs);
+  const [stderr, code] = await Promise.all([new Response(p.stderr).text(), p.exited]);
+  clearTimeout(timer);
+  return { code, stdout: "", stderr };
+}
+
 /** git in a repo, wherever the repo's locator says it is.
  *
  *  `GIT_OPTIONAL_LOCKS=0`: canopy reads while the user works, and a status
@@ -163,6 +213,10 @@ export async function git(
     if (seeds !== null && seedBusy(path)) return { code: 128, stdout: "", stderr: SEED_BUSY };
     const refused = await seedGitRefusal(path);
     if (refused) return { code: 128, stdout: "", stderr: refused };
+    if (seeds !== null && seedGitHook && hookCovers(seedGitHook, path)) {
+      const off = offGitEnv(opts.env);
+      return off ?? seedGitHook.run(path, args, opts);
+    }
     if (seeds !== null) {
       return onHost(host, ["git", ...SEED_GIT_FLAGS, "-C", path, ...args], { ...opts, env: { ...opts.env, GIT_CEILING_DIRECTORIES: seeds } });
     }
