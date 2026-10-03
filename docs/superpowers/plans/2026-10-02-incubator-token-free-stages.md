@@ -2452,8 +2452,8 @@ git commit -m "docs(incubator): amendment 3, token-free stages" -m "Claude-Sessi
 ## After the plan: what Eric runs on the mini
 
 1. Merge phase 3 and this branch to `main`, in his order, once both are reviewed. Merging is his call.
-2. Make the host folders, build and start the services, and check `vercel --version` and `claude --version` in `stages`.
-3. Log `claude` and `codex` in, once, inside `stages`.
-4. Apply the fence, then run the fence check.
+2. Follow the deploy docs' "Stages" steps in order: install the fence from a root-owned copy of the script, then `bun run redeploy` (it makes the host folders, builds and starts the services), then check `claude --version` in `stages` and `vercel --version` in canopy (`docker compose exec canopy vercel --version`).
+3. Run the fence check, in `stages` and the control from canopy.
+4. Log `claude` and `codex` in, once, inside `stages`.
 5. Set `VERCEL_TOKEN` and `VERCEL_SCOPE` in the mini's `.env`, turn off deployment protection for production, and run the live shipper test once from the Mac (`CANOPY_INCUBATOR_IT=1`) with a minimal Vite build instead of the bare `index.html`.
 6. Resume the parked laundromat sprout.

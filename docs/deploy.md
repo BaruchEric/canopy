@@ -442,9 +442,10 @@ an intake with 503. Two optional settings in the mini's `.env`:
 
 canopy reads the vault token, the transcribe key and the Vercel token once at
 start and then deletes all three from its own environment, so no shell, run or tmux server it
-starts inherits them. They are still readable by the agents canopy starts
-through `/proc/<canopy>/environ` (the shared pid namespace), which keeps the
-values the process started with.
+starts inherits them. `/proc/<canopy>/environ` still keeps the values the
+process started with. The incubator's agents cannot reach it once they run in
+the `stages` container (below), which has its own pid namespace; on a backend
+that runs them unisolated, they can.
 `CANOPY_INCUBATOR_AUTOSTART=0` holds every project queued, for a pause.
 
 ## Stages
@@ -479,28 +480,39 @@ systemctl is-enabled nftables.service iptables.service ip6tables.service   # eac
 grep MANAGE_BUILTINS /etc/default/ufw                    # MANAGE_BUILTINS=no
 ```
 
-**1. Read the script**, `scripts/stages-fence.sh`. `sh scripts/stages-fence.sh`
-prints the rules and changes nothing.
-
-**2. Install the fence.**
+**1. Copy the script where only root can change it, and read that copy.**
+The checkout is writable by canopy's containers and peer sync, so the file
+read and the file installed must be one root-owned copy:
 
 ```
-sudo sh scripts/stages-fence.sh --install
-diff scripts/stages-fence.sh /usr/local/sbin/canopy-stages-fence   # only the CHECKOUT line differs
+sudo install -m 0755 -o root -g root scripts/stages-fence.sh /usr/local/sbin/canopy-stages-fence.new
+less /usr/local/sbin/canopy-stages-fence.new
+sh /usr/local/sbin/canopy-stages-fence.new   # prints the rules, changes nothing
+```
+
+**2. Install the fence** from that copy, then remove it:
+
+```
+sudo sh /usr/local/sbin/canopy-stages-fence.new --install
+diff /usr/local/sbin/canopy-stages-fence.new /usr/local/sbin/canopy-stages-fence   # only the CHECKOUT line differs
+sudo rm /usr/local/sbin/canopy-stages-fence.new
 sudo iptables -t raw -S PREROUTING      # the eight drops on -i br-canopy-stg, no ACCEPT above them
 sudo ip6tables -t raw -S PREROUTING     # the one v6 drop
 sudo ufw reload && sudo iptables -t raw -S PREROUTING   # still there
 ```
 
-`--install` writes a root-owned copy of the script, as read at that moment, to
-`/usr/local/sbin/canopy-stages-fence` and the unit
+`--install` writes a root-owned copy of the script it was run as, read at that
+moment, to `/usr/local/sbin/canopy-stages-fence` and the unit
 `/etc/systemd/system/canopy-stages-fence.service`, a oneshot that runs the
-copy's `--apply` before `docker.service`, so no boot has an unfenced window.
-It enables the unit and runs it. The unit never runs the checkout's script,
-which canopy's containers and peer sync can write. The rules need nothing
-docker makes, since `-i` matches the bridge by name, so they can go in before
-the bridge exists. Rerun `--install` after a change to the script;
-`--apply` alone adds any missing rule and changes nothing on a rerun.
+copy's `--apply`, ordered before `docker.service` and wanted by it. It enables
+the unit and runs it. The unit never runs the checkout's script. A copy under
+any name but `stages-fence.sh` reads none of the `CANOPY_FENCE_*` test
+switches, so the `.new` copy installs the real paths whatever the env holds.
+The unit is ordered first but fails open: if its `--apply` fails at boot,
+docker still starts stages, unfenced (see "After a reboot" below). The rules
+need nothing docker makes, since `-i` matches the bridge by name, so they can
+go in before the bridge exists. After a change to the script, repeat steps 1
+and 2; `--apply` alone adds any missing rule and changes nothing on a rerun.
 
 **3. A `stages-net` from before the bridge name.** One made before
 `docker-compose.yml` named the bridge keeps docker's `br-<id>`, and the fence
@@ -555,10 +567,15 @@ docker compose exec -e CANOPY_FENCE_TAILNET_IP=$(tailscale ip -4) \
 Every line should say `ok`. Only a timeout counts as blocked, since the fence
 drops and never answers. Any answer, or a refused or reset connection, means a
 packet reached a host and counts as open, and a lookup or certificate failure
-is an error. So a target with nothing listening still says `BAD` when the
-fence is not there. For the LAN, name a host on the LAN (the router,
-192.168.1.1, or the NAS). The same check from canopy's container, which is not
-fenced, shows the difference:
+is an error. A target with nothing listening still says `BAD` without the
+fence, except where ufw drops the packet on INPUT, which also ends in a
+timeout: the bridge gateway and :7855 on the mini's own address read `ok` from
+stages with or without the fence. The `iptables -t raw -S` listing in step 2
+is what shows the fence there. For the LAN, name a host on the LAN (the
+router, 192.168.1.1, or the NAS). The same check from canopy's container,
+which is not fenced, is the control that gives the targets meaning: each
+target stages should not reach should say `BAD` there (it answers, or refuses,
+from a subnet ufw lets in), or an `ok` for it in stages proves nothing:
 
 ```
 docker compose exec -e CANOPY_FENCE_TAILNET_IP=$(tailscale ip -4) \

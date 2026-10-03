@@ -1,6 +1,6 @@
 # Token-free incubator stages
 
-Status: draft, 2026-10-02. Follows the incubator spec (`2026-10-01-incubator-design.md`) and its amendment 2. Builds on `feat/incubator-phase-3`.
+Status: built, 2026-10-02, on `feat/incubator-stages` (parts 1 to 2b on `feat/incubator-phase-3`). Follows the incubator spec (`2026-10-01-incubator-design.md`) and its amendment 2; that spec's amendment 3 sums this one up. Where this text and the code differ, this text was corrected to what was built.
 
 ## The problem
 
@@ -67,9 +67,10 @@ Every git command canopy runs on a path under `<root>/_incubator/` goes through 
 - After it come stdin frames, stdout and stderr frames, and one exit frame, all as JSON lines carrying base64 data.
 - The runner refuses an `argv[0]` other than `claude`, `codex` or `sh`.
 - It refuses a cwd whose realpath is not a direct, non-dot child of the stage root.
-- It builds the child's env from its own minimal base (`PATH`, `HOME`, `LANG`, `TERM`, `CLAUDE_CONFIG_DIR`, `CODEX_HOME`) plus the request's `CANOPY_RUN`, `CANOPY_REPO` and `CANOPY_BACKEND`. Nothing else canopy sends is passed on.
-- When the connection closes or a kill frame arrives, it kills the child and every descendant.
+- It builds the child's env from its own minimal base (`PATH`, `HOME`, `LANG`, `LC_ALL`, `TERM`, `CLAUDE_CONFIG_DIR`, `CODEX_HOME`) plus the request's `CANOPY_RUN`, `CANOPY_REPO` and `CANOPY_BACKEND`. Nothing else canopy sends is passed on: a request env carrying anything else, a token included, has it dropped.
+- When the run ends, the connection closes or a kill frame arrives, it kills the child and every descendant in three layers: the tree it tracked, the child's process group, and every process whose cwd is inside the seed, sparing the trees of other live connections. Before it starts codex it drops every seed's trust from its own codex config.
 - A `hello` request answers with the harnesses on its PATH.
+- A `busy` request (`{seed}`) answers whether any process has its cwd in that seed. Once a stage run's own process has ended, canopy asks it until it says no before it reads the seed's status, so a process the run left behind counts, not only the pid canopy tracked. An answer that does not come within a bounded wait counts as quiet, with a log line.
 
 **Canopy's side.**
 
@@ -82,22 +83,25 @@ Every git command canopy runs on a path under `<root>/_incubator/` goes through 
 **Inputs and the workspace.**
 
 - Before a stage, canopy copies the sprout's inputs to `.shared/inputs/<sprout id>/`.
-- Before scout, it copies a workspace snapshot to `.shared/workspace/`: the devhub `manifest.json`, `references.json`, and the README.md of every project the manifest lists, capped.
-- `withInputsRead` and `withWorkspaceRead` point there.
+- Before scout, it copies a workspace snapshot to `.shared/workspace/<sprout id>/`: the devhub `manifest.json`, `references.json`, and the README.md of every project the manifest lists whose real path stays inside the workspace, capped. Each sprout gets its own, built in a temp folder of its own, so two scouts never swap one out from under the other.
+- `withInputsRead` and `withWorkspaceRead` point there. Sharing happens in every mode, unisolated too.
 - Nothing from `canopy-config` is mounted.
 
 **Policy.**
 
-- With `CANOPY_STAGE_SOCKET` set, every stage runs through the runner. If the runner does not answer, a queued sprout stays queued, the incubator view says "the stage runner is not answering", and it starts on the next good hello. A flow whose step start finds the runner away parks, so it resumes.
+- With `CANOPY_STAGE_SOCKET` set, every stage runs through the runner. If the runner does not answer, a queued sprout stays queued, the incubator view says "the stage runner is not answering", and it starts on the next good hello. A flow whose step or check finds the runner away, or whose run loses the runner under it, parks for the stage runner, and resumes on its own at the next good hello; a parked check reruns only the check. A park of the user's own (a gate) never resumes on its own.
 - Compose starts canopy once the runner answers its healthcheck, and canopy waits for one bounded hello before it restores flows or starts sprouts.
 - Without `CANOPY_STAGE_SOCKET`, stages start only when `CANOPY_INCUBATOR_UNISOLATED=1`, which is for a Mac backend and tests. Otherwise sprouts stay queued with "stages need the stage runner (CANOPY_STAGE_SOCKET), or CANOPY_INCUBATOR_UNISOLATED=1".
-- `GET /api/incubator` says `isolated`, and the incubator view shows it.
+- `GET /api/incubator/stages` answers `{isolated, mode, waiting}` (`mode` is `runner`, `unisolated` or `off`), a `stages` event carries it on every change, and the incubator view shows it.
 
 **The network fence.**
 
-- `scripts/stages-fence.sh` prints, and with `--apply` installs, `DOCKER-USER` rules. They drop traffic from the stages subnet to RFC 1918, CGNAT (100.64.0.0/10, the tailnet), link-local and the host's own addresses. Docker's embedded DNS and the internet stay reachable.
-- The fence relies on the host's ufw default of deny incoming, since container-to-host traffic is INPUT, not FORWARD. The stages subnet must sit outside 172.16.0.0/12 and outside 192.168.48.0/20, the ranges ufw already lets in.
-- A fence check bundled into the stages image (`/app/fence-check.js`, since that image holds no canopy CLI), run inside the container, probes canopy's tailnet address on :7850, the broker on :7855, the bridge gateway and a LAN address, and expects each to fail. It also expects `https://api.anthropic.com` to answer.
+- The stages network is `stages-net`, 10.250.13.0/24, v4 only (`enable_ipv6: false`), on a host bridge docker names `br-canopy-stg` (`com.docker.network.bridge.name`; an interface name holds at most 15 characters).
+- `scripts/stages-fence.sh` prints the rules, and with `--apply` inserts each one that is missing (`-C` before every `-I`, so a rerun changes nothing). They sit in the raw table's `PREROUTING` and match `-i br-canopy-stg`, the interface a packet arrived on, which nothing inside the container can change. They drop every packet to 10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16, 100.64.0.0/10 (the tailnet), 169.254.0.0/16, 224.0.0.0/4, 255.255.255.255/32 and 0.0.0.0/8. `ip6tables -t raw -I PREROUTING -i br-canopy-stg -j DROP` drops every IPv6 packet from it.
+- Raw `PREROUTING` runs before routing, docker's DNAT and every filter chain. So the drops cover the host's own addresses (INPUT) as well as forwarded traffic, and no filter chain's order (docker's, ufw's, tailscale's `ts-forward`) can let a packet past them. A ufw reload or a docker restart does not flush them. Replies to the container's own connections arrive on the uplink or `tailscale0`, never on the bridge, so they pass. Traffic between containers on the bridge is dropped too; stages is alone on its network.
+- `--install`, run once as root, writes a root-owned copy of the script, with its `CHECKOUT` switch off, to `/usr/local/sbin/canopy-stages-fence`, and a oneshot unit, `canopy-stages-fence.service`, that runs the copy's `--apply` ordered `Before=docker.service` and is wanted by `multi-user.target` and `docker.service`. It enables the unit and runs it. The unit never runs the checkout's script, which canopy's containers and peer sync can write. The copy, and any copy not named `stages-fence.sh`, ignores the `CANOPY_FENCE_*` switches the tests use. The deploy docs install from a root-owned copy of the script made before it is read.
+- Docker's embedded resolver forwards a container's queries from inside the container's namespace, through the fenced bridge, so the host's own upstream (the router, tailscale's 100.100.100.100) would be dropped. The stages service resolves through public servers instead: `dns: [1.1.1.1, 9.9.9.9]`.
+- A fence check bundled into the stages image (`/app/fence-check.js`, since that image holds no canopy CLI; `src/stage/fencecheck.ts`), run inside the container, probes canopy's tailnet address on :7850 and the broker on :7855 (`CANOPY_FENCE_TAILNET_IP`), the bridge gateway, and a LAN address (`CANOPY_FENCE_LAN_IP`), and expects each to be blocked. It expects `https://api.anthropic.com` to be open. Each probe has a 4 s timeout. Only the timeout counts as blocked, since the fence drops and never answers. An answer, or a refused or reset connection, means a packet reached a host and counts as open. Any other failure, a lookup or a certificate, is an error, which matches no expectation, so a DNS failure never passes as the internet being open. The same check from canopy's container, which is not fenced, is the control.
 
 ## What stays true, and residuals
 
@@ -108,3 +112,9 @@ Every git command canopy runs on a path under `<root>/_incubator/` goes through 
 - **Residual:** a stage can write any seed under `_incubator/`, including other sprouts' seeds. `.shared/` is read-only, but a stage can read every sprout's `.shared/inputs/`.
 - **Residual:** what the user starts by hand in a seed (a task, a plain shell and whatever they type there, the guided panel's run button) runs in the shells container with its tokens. That is the user's act. The incubator view says so on a seed's sheet.
 - **Residual:** stage egress to the internet is open, so an agent can still send what it can read: the seed, the shared inputs, its own OAuth credentials.
+- **Residual:** a stage process that calls `setsid` and then `chdir("/")`, or double-forks out of the tree, escapes all three kill layers at the end of its run: the tree, the process group, and the cwd sweep. It lives until the stages container stops.
+- **Residual:** such a process can unlink the runner's socket and serve its own. It could then answer `busy: false` while seed processes live, pass the healthcheck, take later runs' spawn requests, and report shell checks as passed. Built-in checks and judge gates run in canopy and are out of its reach, and no token is reachable either way. Canopy and every stage process share the host uid across both containers, so no file mode or peer credential tells them apart. The fix: run the runner as root, have it drop its children to the `bun` user, and put the socket dir at `root:stagecaller 0750` with `group_add` on canopy.
+- **Residual:** if the fence unit fails at boot, docker still starts stages unfenced. The unit is not `RequiredBy` docker, because that would take every container down. The deploy docs' after-reboot check is the net.
+- **Residual:** the fence script can be swapped between reading it and running `sudo ... --install`, since the checkout is writable by canopy's containers and peer sync. The deploy docs narrow this by copying the script to a root-owned path first, reading that copy, and installing from it.
+- **Residual:** a runner that dies during a check reads as a failed check and spends a retry. The check's connection closes with no exit frame, which reads as a kill (137), and only a runner that is away when a check starts makes the check wait for it.
+- **Residual:** under mode `off` or `unisolated` no watch runs, so a stage park waits for a resume by hand.
