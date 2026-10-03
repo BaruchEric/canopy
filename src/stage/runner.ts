@@ -43,6 +43,9 @@ export interface RunnerOptions {
   /** a bare program name to the command it runs; each name runs itself
    *  unless named here */
   programs?: Record<string, string>;
+  /** the process table every walk reads; `allProcs` unless a test hands
+   *  in its own */
+  procs?: () => Promise<Proc[]>;
 }
 
 const HARNESSES: readonly string[] = ["claude", "codex"];
@@ -55,6 +58,12 @@ const LINE_MAX = 8 * 1024 * 1024;
 const DRAIN_MS = 2_000;
 /** passes over the tree or the seed, each catching what forked during the last */
 const ROUNDS = 5;
+
+/** one line in the runner's log for something that failed where nothing
+ *  else would hear of it */
+const warn = (what: string, e: unknown): void => {
+  console.error(`canopy-stage-runner: ${what}: ${e instanceof Error ? e.message : String(e)}`);
+};
 
 const inside = (path: string, dir: string): boolean => path === dir || path.startsWith(`${dir}/`);
 
@@ -118,10 +127,10 @@ async function cwdsNow(env: Record<string, string | undefined>): Promise<Map<num
 
 /** Every process under `pid`, frozen top down a pass at a time (so a parent
  *  forks no more while its children are found), then killed. */
-export async function killTree(pid: number): Promise<void> {
+export async function killTree(pid: number, procs: () => Promise<Proc[]> = allProcs): Promise<void> {
   const hit = new Set<number>();
   for (let round = 0; round < ROUNDS; round++) {
-    const fresh = descendants(await allProcs(), pid, Infinity)
+    const fresh = descendants(await procs(), pid, Infinity)
       .map((p) => p.pid)
       .filter((p) => !hit.has(p) && p !== process.pid);
     if (fresh.length === 0) break;
@@ -143,6 +152,7 @@ interface Live {
 
 export async function startStageRunner(opts: RunnerOptions): Promise<{ stop(): Promise<void> }> {
   const own = opts.env ?? process.env;
+  const procs = opts.procs ?? allProcs;
   const identity = Object.fromEntries(STAGE_PROGRAMS.map((p) => [p, p]));
   const programs: Record<string, string> = { ...identity, ...opts.programs };
   await rm(opts.socket, { force: true });
@@ -163,7 +173,7 @@ export async function startStageRunner(opts: RunnerOptions): Promise<{ stop(): P
   /** the processes whose cwd is in the seed, past the ones spared */
   const inSeed = async (seed: string, self: Live): Promise<number[]> => {
     const where = await cwdsNow(own);
-    const keep = spared(await allProcs(), self);
+    const keep = spared(await procs(), self);
     return [...where].filter(([pid, cwd]) => !keep.has(pid) && inside(cwd, seed)).map(([pid]) => pid);
   };
 
@@ -181,7 +191,7 @@ export async function startStageRunner(opts: RunnerOptions): Promise<{ stop(): P
    *  belong to init and the walk finds nothing), its process group, and
    *  everything left in its seed. */
   const endRun = async (run: Live): Promise<void> => {
-    if (run.running) await killTree(run.pid);
+    if (run.running) await killTree(run.pid, procs);
     signal(-run.pid, "SIGKILL");
     await sweepSeed(run.seed, run);
   };
@@ -194,6 +204,8 @@ export async function startStageRunner(opts: RunnerOptions): Promise<{ stop(): P
     let state: "new" | "starting" | "running" | "over" = "new";
     let proc: Bun.Subprocess<"pipe", "pipe", "pipe"> | null = null;
     let run: Live | null = null;
+    /** a kill frame came: later stdin is dropped */
+    let killed = false;
 
     const send = (f: StageFrame): void => {
       if (state !== "over" && !sock.destroyed) sock.write(encodeFrame(f));
@@ -278,15 +290,21 @@ export async function startStageRunner(opts: RunnerOptions): Promise<{ stop(): P
       const done = (async () => {
         await p.exited;
         self.running = false;
-        // the group at once, before its pid could be handed to anything else
-        await endRun(self);
+        try {
+          // the group at once, before its pid could be handed to anything else
+          await endRun(self);
+        } catch (e) {
+          // the exit frame still goes: the client waits on it, and a run
+          // that never ends holds the seed busy in canopy
+          warn(`ending the run in ${self.seed} failed`, e);
+        }
         const drained = await Promise.race([pumps.then(() => true), Bun.sleep(DRAIN_MS).then(() => false)]);
         if (!drained) for (const cancel of cancels) cancel();
         runs.delete(self);
         finish({ t: "exit", code: p.exitCode });
       })();
       finishing.add(done);
-      void done.finally(() => finishing.delete(done));
+      void done.catch((e: unknown) => warn("a run's end failed", e)).finally(() => finishing.delete(done));
     };
 
     const handle = async (f: StageFrame | StageRequest): Promise<void> => {
@@ -303,6 +321,9 @@ export async function startStageRunner(opts: RunnerOptions): Promise<{ stop(): P
         return finish({ t: "refused", reason: "the first frame must be a request" });
       }
       if (state !== "running" || !proc || !run) return;
+      // nothing reaches a process once it is being killed: a stop's deny
+      // comes after its kill, and must not let the agent finish its turn
+      if (killed) return;
       const p = proc;
       if (f.t === "in") {
         let bytes: Uint8Array;
@@ -316,7 +337,10 @@ export async function startStageRunner(opts: RunnerOptions): Promise<{ stop(): P
         }
         try {
           p.stdin.write(bytes);
-          await p.stdin.flush();
+          // not awaited: a child that stops reading would hold every frame
+          // behind this one, a kill's included
+          const flushed = p.stdin.flush();
+          if (flushed instanceof Promise) flushed.catch(() => {});
         } catch {
           // the child closed its stdin
         }
@@ -327,8 +351,19 @@ export async function startStageRunner(opts: RunnerOptions): Promise<{ stop(): P
           // already closed
         }
       } else if (f.t === "kill") {
-        await endRun(run);
+        kill(run);
       }
+    };
+
+    /** A kill ends the run now, never behind the frames queued ahead of it:
+     *  it goes around the chain once the process runs, and through it while
+     *  the spawn is still being checked. */
+    const kill = (r: Live): void => {
+      if (killed) return;
+      killed = true;
+      const killing = endRun(r);
+      finishing.add(killing);
+      void killing.catch((e: unknown) => warn(`killing the run in ${r.seed} failed`, e)).finally(() => finishing.delete(killing));
     };
 
     let chain = Promise.resolve();
@@ -342,7 +377,9 @@ export async function startStageRunner(opts: RunnerOptions): Promise<{ stop(): P
       }
       for (const line of split(s)) {
         const f = parseFrame(line);
-        if (f) chain = chain.then(() => handle(f)).catch(() => {});
+        if (!f) continue;
+        if (f.t === "kill" && state === "running" && run) kill(run);
+        else chain = chain.then(() => handle(f)).catch((e: unknown) => warn("a frame failed", e));
       }
     });
     sock.on("close", () => {
@@ -350,9 +387,11 @@ export async function startStageRunner(opts: RunnerOptions): Promise<{ stop(): P
       live.delete(sock);
       const r = run;
       if (r?.running) {
-        const killing = killTree(r.pid).then(() => signal(-r.pid, "SIGKILL"));
+        const killing = killTree(r.pid, procs)
+          .catch((e: unknown) => warn(`killing the tree of ${r.pid} failed`, e))
+          .then(() => signal(-r.pid, "SIGKILL"));
         finishing.add(killing);
-        void killing.finally(() => finishing.delete(killing));
+        void killing.catch((e: unknown) => warn("a closed connection's kill failed", e)).finally(() => finishing.delete(killing));
       }
       state = "over";
     });

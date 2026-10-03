@@ -234,6 +234,33 @@ describe("the stage runner", () => {
     expect(fs.at(-1)?.t).toBe("exit");
   });
 
+  test("a kill frame lands within a second while the child never reads its stdin", async () => {
+    const pidFile = join(dir, "noread.pid");
+    const r = open({ t: "spawn", argv: ["sh", "-c", `echo $$ > ${pidFile}; exec sleep 300`], cwd: join(root, "coin"), env: {} });
+    const pid = await pidIn(pidFile);
+    // far past a pipe's buffer, so a write that waits for the child to read never returns
+    const chunk = btoa("x".repeat(48 * 1024));
+    for (let i = 0; i < 100; i++) r.c.write(encodeFrame({ t: "in", d: chunk }));
+    await Bun.sleep(200);
+    const sent = Date.now();
+    r.c.write(encodeFrame({ t: "kill" }));
+    const end = await Promise.race([r.ended.then((fs) => fs.at(-1)), Bun.sleep(3000).then(() => null)]);
+    const took = Date.now() - sent;
+    r.c.destroy();
+    expect(end?.t).toBe("exit");
+    expect(took).toBeLessThan(1000);
+    expect(await gone(pid)).toBe(true);
+  });
+
+  test("a run whose end fails to sweep still sends its exit frame", async () => {
+    const path = await extra("sweepfails", {
+      env: { PATH: process.env["PATH"], HOME: dir },
+      procs: () => Promise.reject(new Error("the process table could not be read")),
+    });
+    const fs = await talk({ t: "spawn", argv: ["sh", "-c", "exit 0"], cwd: join(root, "coin"), env: {} }, [], 4000, path);
+    expect(fs.at(-1)).toEqual({ t: "exit", code: 0 });
+  });
+
   test("an escapee in its own session outlives the tree kill alone", async () => {
     const pidFile = join(dir, "control.pid");
     const sh = nodeSpawn("sh", ["-c", `'${process.execPath}' ${join(dir, "escape.ts")} ${pidFile}; sleep 300`], {
