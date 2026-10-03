@@ -185,6 +185,14 @@ export function shipper(cfg: ShipConfig, deps: ShipDeps = { exec: realExec, fetc
       const projectId = isObj(meta) && typeof meta["id"] === "string" ? meta["id"] : "";
       const orgId = isObj(meta) && typeof meta["accountId"] === "string" ? meta["accountId"] : "";
       if (!projectId || !orgId) throw new Error(`the Vercel API did not say which project and team ${project} is, so canopy will not deploy it blind`);
+      // canopy goes live only on a URL its smoke GET reaches, and the team's
+      // default protection puts Vercel's login in front of production ones.
+      // Previews stay protected; set per project, never team-wide.
+      const sso = isObj(meta) ? meta["ssoProtection"] : null;
+      if (isObj(sso) && sso["deploymentType"] !== "preview") {
+        const set = await api(`/v9/projects/${encodeURIComponent(projectId)}`, { method: "PATCH", body: JSON.stringify({ ssoProtection: { deploymentType: "preview" } }) });
+        if (!set.ok) throw new Error(`the Vercel API answered ${set.status} setting Vercel Authentication on project ${project}, so canopy will not deploy a project whose production would sit behind Vercel's login`);
+      }
       // Deployed from a fresh clone of the seed's HEAD: what was pushed, and
       // nothing the seed holds uncommitted or ignored (.env.local, .vercel/).
       const tmp = await mkdtemp(join(tmpdir(), "canopy-deploy-"));

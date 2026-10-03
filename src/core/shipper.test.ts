@@ -235,6 +235,53 @@ describe("deploy", () => {
     expect(f.fetched.slice(2).every((x) => x.auth === null)).toBe(true);
   });
 
+  describe("Vercel Authentication", () => {
+    /** the project read with this ssoProtection (omitted when undefined); a PATCH answers `patch` */
+    const withSso = (sso: unknown, patch = 200) => (url: string, method: string): Response => {
+      if (method === "PATCH") return new Response("{}", { status: patch });
+      if (url.includes("/v9/projects/")) return new Response(JSON.stringify({ id: "prj_123", accountId: "team_456", ...(sso === undefined ? {} : { ssoProtection: sso }) }), { status: 200 });
+      return api(PROD, page)(url);
+    };
+    const patches = (f: { fetched: { method: string; url: string; body?: string }[] }) => f.fetched.filter((x) => x.method === "PATCH");
+
+    for (const type of ["prod_deployment_urls_and_all_previews", "all"]) {
+      test(`${type} is set to previews only, once, before the first exec`, async () => {
+        let patchedBeforeExec = false;
+        const f = fakes(
+          (c) => {
+            patchedBeforeExec ||= patches(f).length === 1;
+            return deployed(c);
+          },
+          withSso({ deploymentType: type }),
+          true,
+        );
+        await shipper(cfg, f.deps).deploy(await seed(), "coin-counter");
+        expect(patches(f).map((x) => `${x.url} ${x.body}`)).toEqual(['https://api.vercel.com/v9/projects/prj_123 {"ssoProtection":{"deploymentType":"preview"}}']);
+        expect(f.fetched.find((x) => x.method === "PATCH")?.auth).toBe("Bearer tok_secret");
+        expect(patchedBeforeExec).toBe(true);
+      });
+    }
+
+    for (const [name, sso] of [["null", null], ["absent", undefined], ["already preview", { deploymentType: "preview" }]] as const) {
+      test(`${name} sends no PATCH`, async () => {
+        const f = fakes(deployed, withSso(sso), true);
+        await shipper(cfg, f.deps).deploy(await seed(), "coin-counter");
+        expect(patches(f)).toEqual([]);
+      });
+    }
+
+    test("a PATCH answering 403 throws before any clone, and the error holds no token", async () => {
+      const f = fakes(deployed, withSso({ deploymentType: "all" }, 403), true);
+      const err = await shipper(cfg, f.deps).deploy(await seed(), "coin-counter").then(() => null, (e: unknown) => e);
+      expect(err).toBeInstanceOf(Error);
+      const msg = (err as Error).message;
+      expect(msg).toContain("403");
+      expect(msg).toContain("login");
+      expect(msg).not.toContain("tok_secret");
+      expect(f.calls).toEqual([]);
+    });
+  });
+
   test("before the link .vercel/ is gone and .vercelignore ends with .canopy/", async () => {
     const seen: { vercel?: boolean; ignore?: string } = {};
     const f = fakes(
