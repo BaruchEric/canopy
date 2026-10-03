@@ -680,7 +680,7 @@ const isWork = (w: unknown): boolean => {
 };
 
 const optBool = (v: unknown): boolean => v === undefined || typeof v === "boolean";
-const isFirebase = (f: unknown): boolean => isObj(f) && typeof f["project"] === "string" && optBool(f["database"]) && optStr(f["app"]) && optBool(f["env"]);
+const isFirebase = (f: unknown): boolean => isObj(f) && typeof f["project"] === "string" && optBool(f["created"]) && optBool(f["database"]) && optStr(f["app"]) && optBool(f["env"]);
 
 const isOption = (o: unknown): boolean => isObj(o) && typeof o["label"] === "string" && typeof o["description"] === "string";
 

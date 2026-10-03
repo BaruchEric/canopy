@@ -11,6 +11,7 @@ import { isVercelAppUrl } from "./deploy";
 import { networkOrigin } from "./peersync";
 import type { Shipper } from "./shipper";
 import type { SeedSource } from "./seedsource";
+import { firebaseProjectId } from "./firebase";
 import { PARKS_KEPT, RETRO_CONCURRENCY, RETRO_FILES, RETRO_TRIES, RETRO_UNATTENDED, RETRO_WAIT_MAX, endRetroDue, flowDigest, parkRetroDue, parseAdvice, retroNote, retroRecord, type KnownAdvice } from "./retro";
 import { shareInputs, shareRecord, shareWorkspace, unshare } from "./stageshare";
 import {
@@ -1283,6 +1284,7 @@ export class Incubator {
         await this.changed(s);
       }
       if (sproutEnded(s)) return;
+      if (s.pick.host === "vercel+firebase" && !(await this.firebaseMade(s, ship, s.vercelProject))) return;
       // one bundle for the push and the deploy, so both send one commit,
       // and that commit is the one accepted: another seed's stage runs on
       // while this one ships (amendment 4)
@@ -1294,6 +1296,11 @@ export class Incubator {
         }
         await ship.push(bundle, s.privateRepo);
         if (sproutEnded(s)) return;
+        // the rules first, so the app never runs against a database without them
+        if (s.pick.host === "vercel+firebase" && s.firebase) {
+          await ship.firebaseDeploy(bundle, s.firebase.project);
+          if (sproutEnded(s)) return;
+        }
         url = await ship.deploy(bundle, s.vercelProject);
       } finally {
         await bundle.done();
@@ -1314,6 +1321,41 @@ export class Incubator {
   private reclarify(s: Sprout): void {
     s.reclarify = true;
     delete s.pick;
+  }
+
+  /** The Firebase side of a vercel+firebase ship (amendment 6, ruling
+   *  10), each part put on record as it exists so a resume never makes it
+   *  twice: the project id before the project is asked for, then the
+   *  project, its Firestore, its web app and the app's config on Vercel.
+   *  False when the sprout ended on the way. */
+  private async firebaseMade(s: Sprout, ship: Shipper, vercelProject: string): Promise<boolean> {
+    if (!s.firebase) {
+      const hex = [...crypto.getRandomValues(new Uint8Array(3))].map((b) => b.toString(16).padStart(2, "0")).join("");
+      s.firebase = { project: firebaseProjectId(s.slug, hex) };
+      await this.changed(s);
+    }
+    const fb = s.firebase;
+    if (!fb.created) {
+      await ship.firebaseProject(fb.project);
+      fb.created = true;
+      await this.changed(s);
+    }
+    if (sproutEnded(s)) return false;
+    if (!fb.database) {
+      await ship.firebaseDatabase(fb.project);
+      fb.database = true;
+      await this.changed(s);
+    }
+    if (!fb.app) {
+      fb.app = await ship.firebaseApp(fb.project, s.slug);
+      await this.changed(s);
+    }
+    if (!fb.env) {
+      await ship.firebaseEnv(fb.project, fb.app, vercelProject);
+      fb.env = true;
+      await this.changed(s);
+    }
+    return !sproutEnded(s);
   }
 
   /** canopy's push of an extend's branch (amendment 6, ruling 6) */

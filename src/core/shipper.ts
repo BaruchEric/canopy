@@ -19,10 +19,11 @@ import {
   vercelProject,
   withCanopyIgnored,
 } from "./deploy";
-import { mkdtemp, readdir, rm } from "node:fs/promises";
+import { lstat, mkdtemp, readdir, realpath, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { exec as realExec, type ExecOptions, type ExecResult } from "./exec";
+import { firebaseConfigRefusal, firebaseEnv, firebaseFiles, firebaseResult, sdkConfigOf } from "./firebase";
 import { readSeed, writeSeed } from "./seed";
 import { bundleSeed } from "./seedmirror";
 import { NOTE_FILES, branchPushRefusal, extendBranch, githubRepo } from "./sprout";
@@ -52,6 +53,18 @@ export interface Shipper {
    *  to that branch on the target's own github.com remote and nowhere
    *  else, never forced; the branch's GitHub url */
   pushBranch(from: ShipSource, to: BranchPush): Promise<string>;
+  /** the Firebase project `id` made under FIREBASE_TOKEN's account; one
+   *  that already exists and the login reaches counts as made */
+  firebaseProject(id: string): Promise<void>;
+  /** the project's default Firestore database at FIREBASE_LOCATION; one already there counts */
+  firebaseDatabase(project: string): Promise<void>;
+  /** the project's web app named `name`, made unless one is there; its app id */
+  firebaseApp(project: string, name: string): Promise<string>;
+  /** the web app's config set on the Vercel project as public env */
+  firebaseEnv(project: string, app: string, vercelProject: string): Promise<void>;
+  /** firebase.json's Firestore rules and indexes, deployed from a fresh
+   *  clone of the bundle, refused when firebase.json holds more */
+  firebaseDeploy(from: ShipSource, project: string): Promise<void>;
 }
 
 /** where an extend's branch goes */
@@ -77,18 +90,32 @@ export interface ShipConfig {
   /** a Vercel team slug; null is the token's own account */
   vercelScope: string | null;
   backend: string;
+  /** a `firebase login:ci` token; null deploys nothing to Firebase */
+  firebaseToken?: string | null;
+  /** where a new project's Firestore lives; nam5 unless FIREBASE_LOCATION says */
+  firebaseLocation?: string;
+  /** the PATH the firebase CLI runs with (the image keeps it and its node
+   *  under their own prefix); the server's own PATH when null */
+  firebasePath?: string | null;
 }
 
 export const shipConfig = (env: Record<string, string | undefined>, backend: string): ShipConfig => ({
   vercelToken: env["VERCEL_TOKEN"]?.trim() || null,
   vercelScope: env["VERCEL_SCOPE"]?.trim() || null,
   backend,
+  firebaseToken: env["FIREBASE_TOKEN"]?.trim() || null,
+  firebaseLocation: env["FIREBASE_LOCATION"]?.trim() || "nam5",
+  firebasePath: env["CANOPY_FIREBASE_PATH"]?.trim() || null,
 });
+
+/** a Firestore location id as Google names them: nam5, eur3, us-central1 */
+export const isLocationId = (s: string): boolean => /^[a-z][a-z0-9-]{1,39}$/.test(s);
 
 export interface ShipDeps {
   exec: (cmd: string[], opts?: ExecOptions) => Promise<ExecResult>;
   fetch: typeof fetch;
-  which: (bin: string) => string | null;
+  /** a command's path, looked up on `path` when given */
+  which: (bin: string, path?: string) => string | null;
   /** where "owner/name" is pushed; GitHub's https url unless a test says */
   remote?: (repo: string) => string;
   /** where an extend's checked remote is pushed; the remote itself unless a test maps it to a fixture */
@@ -105,11 +132,32 @@ const tail = (r: ExecResult, secret: string | null = null): string => {
 };
 const isObj = (v: unknown): v is Record<string, unknown> => typeof v === "object" && v !== null && !Array.isArray(v);
 
-export function shipper(cfg: ShipConfig, deps: ShipDeps = { exec: realExec, fetch, which: (b) => Bun.which(b) }): Shipper {
+/** the first symlink under `dir` (its .git aside) that leads outside it, by its path in `dir`, or null */
+async function linkOut(dir: string): Promise<string | null> {
+  const top = await realpath(dir);
+  const walk = async (rel: string): Promise<string | null> => {
+    for (const name of await readdir(join(dir, rel))) {
+      const r = rel ? `${rel}/${name}` : name;
+      if (r === ".git") continue;
+      const st = await lstat(join(dir, r));
+      if (st.isSymbolicLink()) {
+        const to = await realpath(join(dir, r)).catch(() => null);
+        if (to === null || (to !== top && !to.startsWith(`${top}/`))) return r;
+      } else if (st.isDirectory()) {
+        const found = await walk(r);
+        if (found) return found;
+      }
+    }
+    return null;
+  };
+  return walk("");
+}
+
+export function shipper(cfg: ShipConfig, deps: ShipDeps = { exec: realExec, fetch, which: (b, p) => Bun.which(b, p ? { PATH: p } : undefined) }): Shipper {
   const bundle = deps.bundle ?? ((seedPath: string, file: string) => bundleSeed(seedPath, file));
-  const scopeQuery = cfg.vercelScope ? `?slug=${encodeURIComponent(cfg.vercelScope)}` : "";
+  const scope = cfg.vercelScope ? `slug=${encodeURIComponent(cfg.vercelScope)}` : "";
   const api = (path: string, init: { method?: string; body?: string } = {}): Promise<Response> =>
-    deps.fetch(`https://api.vercel.com${path}${scopeQuery}`, {
+    deps.fetch(`https://api.vercel.com${path}${scope ? `${path.includes("?") ? "&" : "?"}${scope}` : ""}`, {
       ...init,
       headers: { authorization: `Bearer ${cfg.vercelToken ?? ""}`, ...(init.body ? { "content-type": "application/json" } : {}) },
       signal: AbortSignal.timeout(30_000),
@@ -143,8 +191,127 @@ export function shipper(cfg: ShipConfig, deps: ShipDeps = { exec: realExec, fetc
       return { status: res.status, body };
     }
   };
+  const firebaseToken = cfg.firebaseToken ?? null;
+  const location = cfg.firebaseLocation ?? "nam5";
+  const firebasePath = (): string => cfg.firebasePath ?? process.env["PATH"] ?? "/usr/bin:/bin";
+  /** One firebase CLI call, with the token in its env alone and an env of
+   *  its own: PATH, and a scratch home and config dir removed after, so it
+   *  never reads a login left on disk nor writes one. Its --json result. */
+  const firebase = async (args: string[], cwd?: string, timeoutMs = 120_000): Promise<unknown> => {
+    if (!firebaseToken) throw new Error(`add FIREBASE_TOKEN to ${cfg.backend}'s .env`);
+    const path = firebasePath();
+    const bin = deps.which("firebase", path);
+    if (!bin) throw new Error(`the firebase CLI is not installed on ${cfg.backend}`);
+    const home = await mkdtemp(join(tmpdir(), "canopy-firebase-"));
+    try {
+      const r = await deps.exec([bin, ...args, "--non-interactive", "--json"], {
+        cwd: cwd ?? home,
+        timeoutMs,
+        base: { PATH: path },
+        env: { HOME: home, XDG_CONFIG_HOME: join(home, ".config"), XDG_CACHE_HOME: join(home, ".cache"), NO_UPDATE_NOTIFIER: "1", FIREBASE_TOKEN: firebaseToken },
+      });
+      const parsed = firebaseResult(r.stdout);
+      if (r.code !== 0 || !parsed.ok) {
+        const why = parsed.ok ? tail(r, firebaseToken) : parsed.error.split(firebaseToken).join("***");
+        throw new Error(`firebase ${args[0] ?? ""}: ${why || tail(r, firebaseToken)}`);
+      }
+      return parsed.result;
+    } finally {
+      await rm(home, { recursive: true, force: true });
+    }
+  };
+  /** the project's web apps as `apps:list WEB` names them */
+  const webApps = async (project: string): Promise<{ appId: string; displayName: string }[]> => {
+    const listed = await firebase(["apps:list", "WEB", "--project", project]);
+    if (!Array.isArray(listed)) return [];
+    return listed.flatMap((a: unknown) => (isObj(a) && typeof a["appId"] === "string" ? [{ appId: a["appId"], displayName: typeof a["displayName"] === "string" ? a["displayName"] : "" }] : []));
+  };
+  const exists = (err: unknown): boolean => /already exists|ALREADY_EXISTS/i.test(String(err));
+
   const self: Shipper = {
-    ready: (host) => deployReady(host, { vercelToken: cfg.vercelToken !== null, vercelCli: deps.which("vercel") !== null, backend: cfg.backend }),
+    ready: (host) => {
+      const why = deployReady(host, {
+        vercelToken: cfg.vercelToken !== null,
+        vercelCli: deps.which("vercel") !== null,
+        firebaseToken: firebaseToken !== null,
+        firebaseCli: deps.which("firebase", firebasePath()) !== null,
+        backend: cfg.backend,
+      });
+      if (why || host !== "vercel+firebase") return why;
+      return isLocationId(location) ? null : `FIREBASE_LOCATION ${location} on ${cfg.backend} is not a Firestore location id`;
+    },
+
+    async firebaseProject(id) {
+      try {
+        await firebase(["projects:create", id, "--display-name", id], undefined, 300_000);
+      } catch (err) {
+        // made on an earlier try that a restart cut short: taken only when this login reaches it
+        if (!exists(err)) throw err;
+        await webApps(id).catch(() => {
+          throw err;
+        });
+      }
+    },
+
+    async firebaseDatabase(project) {
+      try {
+        await firebase(["firestore:databases:create", "(default)", "--location", location, "--project", project], undefined, 300_000);
+      } catch (err) {
+        if (!exists(err)) throw err;
+      }
+    },
+
+    async firebaseApp(project, name) {
+      const had = (await webApps(project)).find((a) => a.displayName === name);
+      if (had) return had.appId;
+      const made = await firebase(["apps:create", "WEB", name, "--project", project]);
+      const appId = isObj(made) ? made["appId"] : null;
+      if (typeof appId !== "string" || !appId) throw new Error("firebase apps:create named no app id");
+      return appId;
+    },
+
+    async firebaseEnv(project, app, vercelProject) {
+      needToken();
+      const config = sdkConfigOf(await firebase(["apps:sdkconfig", "WEB", app, "--project", project]));
+      if (!config || config["projectId"] !== project) throw new Error(`firebase apps:sdkconfig did not answer the config of a web app in ${project}`);
+      const env = firebaseEnv(config);
+      const body = Object.entries(env).map(([key, value]) => ({ key, value, type: "plain", target: ["production", "preview", "development"] }));
+      const res = await api(`/v10/projects/${encodeURIComponent(vercelProject)}/env?upsert=true`, { method: "POST", body: JSON.stringify(body) });
+      if (!res.ok) throw new Error(`the Vercel API answered ${res.status} setting the Firebase config on project ${vercelProject}`);
+      const answer: unknown = await res.json().catch(() => null);
+      const failed = isObj(answer) && Array.isArray(answer["failed"]) ? answer["failed"].length : 0;
+      if (failed) throw new Error(`the Vercel API refused ${failed} of the Firebase config's env on project ${vercelProject}`);
+    },
+
+    async firebaseDeploy(from, project) {
+      await withBundle(from, async ({ file, head }) => {
+        const tmp = await mkdtemp(join(tmpdir(), "canopy-firebase-deploy-"));
+        try {
+          const app = join(tmp, "app");
+          const opts = { timeoutMs: 300_000, env: { GIT_TERMINAL_PROMPT: "0", GIT_LFS_SKIP_SMUDGE: "1" } };
+          const cloned = await deps.exec(["git", ...NO_HOOKS, "clone", "--no-checkout", "--quiet", "--", file, app], { ...opts, cwd: tmp });
+          if (cloned.code !== 0) throw new Error(`git clone of the seed's bundle: ${tail(cloned)}`);
+          const checked = await deps.exec(["git", ...NO_HOOKS, "checkout", "-q", "--detach", head], { ...opts, cwd: app });
+          if (checked.code !== 0) throw new Error(`git checkout of the seed's HEAD: ${tail(checked)}`);
+          // the project is named on the command line, and no env file of the agent's is read
+          for (const name of await readdir(app)) {
+            if (name === ".firebaserc" || name.startsWith(".env")) await rm(join(app, name), { recursive: true, force: true });
+          }
+          const config = await readSeed(app, "firebase.json");
+          const refused = firebaseConfigRefusal(config);
+          if (refused) throw new Error(refused);
+          // read as canopy reads a seed's file: a symlink on the way or a hard link is refused
+          for (const f of firebaseFiles(config ?? "")) {
+            if ((await readSeed(app, f)) === null) throw new Error(`firebase.json names ${f}, which is not in the repo`);
+          }
+          const out = await linkOut(app);
+          if (out) throw new Error(`${out} is a symlink out of the repo, so canopy will not hand the repo to the firebase CLI`);
+          await firebase(["deploy", "--only", "firestore", "--project", project], app, 600_000);
+        } finally {
+          await rm(tmp, { recursive: true, force: true });
+        }
+      });
+    },
 
     async createRepo(slug, description) {
       const who = await deps.exec(["gh", "api", "user", "--jq", ".login"], { timeoutMs: 30_000 });

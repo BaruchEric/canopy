@@ -1380,6 +1380,25 @@ class FakeShip implements Shipper {
     if (this.failDeploy) throw new Error(this.failDeploy);
     return `https://${project}.vercel.app`;
   }
+  failFirebase: string | null = null;
+  async firebaseProject(id: string): Promise<void> {
+    this.calls.push(`firebase project ${id}`);
+    if (this.failFirebase) throw new Error(this.failFirebase);
+  }
+  async firebaseDatabase(project: string): Promise<void> {
+    this.calls.push(`firebase database ${project}`);
+  }
+  async firebaseApp(project: string, name: string): Promise<string> {
+    this.calls.push(`firebase app ${project} ${name}`);
+    return "1:2:web:3";
+  }
+  async firebaseEnv(project: string, app: string, vercelProject: string): Promise<void> {
+    this.calls.push(`firebase env ${project} ${app} ${vercelProject}`);
+  }
+  async firebaseDeploy(from: ShipSource, project: string): Promise<void> {
+    this.shippedFrom.push(typeof from === "string" ? from : from.file);
+    this.calls.push(`firebase deploy ${project}`);
+  }
   failBranch: string | null = null;
   async pushBranch(from: ShipSource, to: BranchPush): Promise<string> {
     this.shippedFrom.push(typeof from === "string" ? from : from.file);
@@ -2411,5 +2430,37 @@ describe("renovate and extend builds", () => {
     await w.inc.resume(s.id, "retry");
     await w.inc.idle();
     expect(now(w, s.id).parked).toBe("hand-off: git push: ! [rejected] new/x (non-fast-forward)");
+  });
+
+  test("a vercel+firebase ship makes the Firebase side in order, deploys the rules before the app, and never makes a part twice", async () => {
+    const ship = new FakeShip();
+    const w = builds(null, ship);
+    const s = await picked(w, JSON.stringify({ kind: "new", host: "vercel+firebase", why: "it keeps a shared tally" }));
+    expect(w.flows.started.at(-1)?.note).toContain("VITE_FIREBASE_PROJECT_ID");
+    ship.failFirebase = "firebase projects:create: quota exceeded";
+    const parked = await end(w, s.id, { ".canopy/accept.md": "## Verdict\ngo" });
+    expect(parked.parked).toBe("deploy: firebase projects:create: quota exceeded");
+    // the id was on record before the ask, so a resume asks for the same one
+    const id = parked.firebase?.project ?? "";
+    expect(id).toMatch(new RegExp(`^${s.slug.slice(0, 23).replace(/-+$/, "")}-[0-9a-f]{6}$`));
+    expect(parked.firebase?.created).toBe(undefined);
+    ship.failFirebase = null;
+    ship.calls = [];
+    await w.inc.resume(s.id, "retry");
+    await w.inc.idle();
+    const live = now(w, s.id);
+    expect(live.status).toBe("live");
+    expect(ship.calls).toEqual([
+      `firebase project ${id}`,
+      `firebase database ${id}`,
+      `firebase app ${id} ${s.slug}`,
+      `firebase env ${id} 1:2:web:3 ${s.slug}`,
+      `push eric/${s.slug}`,
+      `firebase deploy ${id}`,
+      `deploy ${s.slug}`,
+    ]);
+    expect(live.firebase).toEqual({ project: id, created: true, database: true, app: "1:2:web:3", env: true });
+    // the push, the rules and the app all went from one bundle
+    expect(new Set(ship.shippedFrom).size).toBe(1);
   });
 });

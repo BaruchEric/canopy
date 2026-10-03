@@ -1472,7 +1472,10 @@ export interface ExtendWork extends WorkBase {
 /** What canopy made on Firebase for a sprout (amendment 6, ruling 10).
  *  Each mark is set as its part comes to exist, so a resume makes nothing twice. */
 export interface SproutFirebase {
+  /** the id canopy chose, on record before the project is asked for */
   project: string;
+  /** the project is made and the login can reach it */
+  created?: boolean;
   /** the default Firestore database exists */
   database?: boolean;
   /** the web app's id, once made */
