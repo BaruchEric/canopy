@@ -56,7 +56,7 @@ test("an answer given inside a run reaches the judge at every judged step, whate
   await writeFile(join(dir, ".canopy/pick.json"), "{}");
   await writeFile(join(dir, ".canopy/answers.md"), "# Answers\n\n## scout, Research\n\n- Build inside clms or standalone?\n  Extend clms\n");
   const all = await loadWorkflows({ path: "", host: "none" });
-  for (const [name, step] of [["scout", "Eval"], ["build-new", "Accept"]] as const) {
+  for (const [name, step] of [["scout", "Eval"], ["build-new", "Accept"], ["renovate", "Accept"], ["extend", "Accept"]] as const) {
     const st = findWorkflow(all, name)?.steps.find((x) => x.name === step);
     expect(st?.evidence).toContain(".canopy/answers.md");
     const text = judgeState({ task: "t", summary: "s", check: null, files: await readEvidence(dir, st?.evidence ?? []) });
