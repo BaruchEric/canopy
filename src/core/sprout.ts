@@ -484,6 +484,12 @@ export const SCOUT_FILES = [".canopy/research.md", ".canopy/pick.json", ".canopy
 /** what canopy commits to the seed after build-new: the smoke and accept notes */
 export const BUILD_FILES = [".canopy/smoke.md", ".canopy/accept.md"];
 
+/** Every note of the incubator's own in a seed: what a rebuild carries
+ *  over, what an extend's target may not already track, and what no
+ *  commit on an extend's branch may touch. The retro's two files are
+ *  retro.ts's RETRO_FILES. */
+export const NOTE_FILES = [...SEED_FILES, ...SCOUT_FILES, ...BUILD_FILES, ".canopy/retro.md", ".canopy/advice.json"];
+
 /** A copy of the workflow whose every step may also read the sprout's raw
  *  inputs: `//` makes the rule an absolute path for Claude Code. */
 export function withInputsRead(wf: Workflow, dir: string): Workflow {

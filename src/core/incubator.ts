@@ -1259,12 +1259,12 @@ export class Incubator {
     delete s.pick;
   }
 
-  /** `pump` false for a gate: its flow still holds the slot */
   /** canopy's push of an extend's branch (amendment 6, ruling 6) */
   private async handOff(s: Sprout): Promise<void> {
     await this.park(s, "the hand-off of a branch is not built yet");
   }
 
+  /** `pump` false for a gate: its flow still holds the slot */
   private async park(s: Sprout, reason: string, pump = true): Promise<void> {
     if (sproutEnded(s)) return;
     s.status = "parked";

@@ -141,7 +141,7 @@ export async function commitSeed(path: string, rels: string[], message: string, 
  *  symlink or a file goes whole, since its settings cannot be told apart.
  *  Names match in any letter case: a case-insensitive disk (APFS) hands
  *  Claude a tracked `.Claude/settings.json` as `.claude/settings.json`. */
-async function dropAgentSettings(path: string, self: string): Promise<void> {
+export async function dropAgentSettings(path: string, self: string): Promise<void> {
   const claude = await lstatOrNull(join(path, ".claude"));
   const names = claude && !claude.isDirectory() ? [".claude", ".mcp.json"] : AGENT_SETTINGS;
   const specs = names.map((n) => `:(icase)${n}`);
