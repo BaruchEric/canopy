@@ -513,7 +513,7 @@ export const BUILD_FILES = [".canopy/smoke.md", ".canopy/accept.md"];
  *  over, what an extend's target may not already track, and what no
  *  commit on an extend's branch may touch. The retro's two files are
  *  retro.ts's RETRO_FILES. */
-export const NOTE_FILES = [...SEED_FILES, ...SCOUT_FILES, ...BUILD_FILES, ".canopy/retro.md", ".canopy/advice.json"];
+export const NOTE_FILES = [...SEED_FILES, ".canopy/questions.json", ...SCOUT_FILES, ...BUILD_FILES, ".canopy/retro.md", ".canopy/advice.json"];
 
 /** A copy of the workflow whose every step may also read the sprout's raw
  *  inputs: `//` makes the rule an absolute path for Claude Code. */

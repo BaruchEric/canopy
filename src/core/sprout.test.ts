@@ -7,6 +7,7 @@ import {
   githubRepo,
   hostLine,
   workRefusal,
+  NOTE_FILES,
   SEED_FILES,
   runAnswersSummary,
   runAnswersText,
@@ -41,6 +42,7 @@ import {
   withSummaries,
 } from "./sprout";
 import type { FlowDigest, InputEntry, Sprout, SproutRetro, Workflow } from "./types";
+import { RETRO_FILES } from "./retro";
 
 const at = new Date(2026, 9, 1, 14, 3).getTime();
 
@@ -483,6 +485,12 @@ describe("the pick", () => {
     expect(branchPushRefusal({ remote: want.remote, ref: "refs/heads/new/dark-mode" }, { ...want, remote: "https://gitlab.com/eric/clms.git" })).toBe(
       "https://gitlab.com/eric/clms.git is not a github.com repo",
     );
+  });
+
+  test("NOTE_FILES holds every note canopy or a stage writes under .canopy/", () => {
+    for (const f of [...SEED_FILES, ".canopy/questions.json", ".canopy/research.md", ".canopy/pick.json", ".canopy/eval.md", ".canopy/smoke.md", ".canopy/accept.md", ...RETRO_FILES]) {
+      expect(NOTE_FILES).toContain(f);
+    }
   });
 
   test("workRefusal: a rebuilt seed takes only a pick of its own kind and source", () => {
