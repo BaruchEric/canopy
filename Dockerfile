@@ -28,6 +28,8 @@ RUN CANOPY_COMMIT="$CANOPY_COMMIT" CANOPY_COMMITTED="$CANOPY_COMMITTED" bun run 
 # the incubator's stage runner as one file, the only canopy code the stages
 # image carries
 RUN bun build src/stage/main.ts --target=bun --outfile /app/dist/stage-runner.js
+# the fence check (docs/deploy.md, "Stages"), run inside the stages container
+RUN bun build src/stage/fencecheck.ts --target=bun --outfile /app/dist/fence-check.js
 
 FROM oven/bun:1 AS shells
 # git for the scan and every mutation; tmux so a shell outlives a canopy
@@ -149,6 +151,7 @@ RUN (bun remove -g vercel || true) \
 # the build fails here rather than ship a stage image that still has either
 RUN ! command -v gh && ! command -v vercel && ! command -v vc
 COPY --from=build --chown=bun:bun /app/dist/stage-runner.js /app/stage-runner.js
+COPY --from=build --chown=bun:bun /app/dist/fence-check.js /app/fence-check.js
 ENV CLAUDE_CONFIG_DIR=/home/bun/.stage-claude CODEX_HOME=/home/bun/.stage-codex
 # CMD, not ENTRYPOINT: the shells stage's tmux CMD would otherwise be appended
 # to the runner's argv

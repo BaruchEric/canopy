@@ -154,6 +154,15 @@ CANOPY_COMMIT=$(git rev-parse HEAD)
 CANOPY_COMMITTED=$(git log -1 --format=%cI HEAD)
 echo "redeploy: $sha (log $log)"
 
+# The stages service's bind mounts, resolved the way compose resolves them
+# (the environment, then .env, then the default in docker-compose.yml).
+# job() runs in a detached shell that has neither envval nor .env, so they
+# are worked out here and exported.
+STAGE_DEV_ROOT=${DEV_ROOT:-$(envval DEV_ROOT)}
+STAGE_DEV_ROOT=${STAGE_DEV_ROOT:-/home/eric/dev}
+STAGE_HOST_HOME=${HOST_HOME:-$(envval HOST_HOME)}
+STAGE_HOST_HOME=${STAGE_HOST_HOME:-/home/eric}
+
 # the whole deploy, detached from this session
 job() {
   set -o pipefail
@@ -162,6 +171,11 @@ job() {
   # a bind mount's missing host folder is made by docker, as root, and the
   # shells container's user could never write a login into it
   mkdir -p "$HOME/.convex"
+  # the same for the stages: a root .shared would stop canopy copying a
+  # stage's inputs in, and a root login folder would keep the stages' own
+  # claude and codex logins out
+  mkdir -p "$STAGE_DEV_ROOT/_incubator" "$STAGE_DEV_ROOT/_incubator/.shared" \
+    "$STAGE_HOST_HOME/.config/canopy-stages/claude" "$STAGE_HOST_HOME/.config/canopy-stages/codex"
   if docker compose --dry-run up -d 2>&1 | grep -q 'canopy-shells-1.*Recreate'; then
     if [ "$shells" != 1 ]; then
       echo "this deploy recreates the shells container, which ends every shell."
@@ -200,7 +214,7 @@ job() {
   echo "== deployed $sha on $port"
 }
 export -f job
-export sha shells LOGS CANOPY_COMMIT CANOPY_COMMITTED
+export sha shells LOGS CANOPY_COMMIT CANOPY_COMMITTED STAGE_DEV_ROOT STAGE_HOST_HOME
 setsid nohup bash -c 'job; echo $? > "$0"' "$rc" >"$log" 2>&1 </dev/null &
 
 # follow along; if this session goes, the deploy carries on

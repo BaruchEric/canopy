@@ -447,6 +447,121 @@ through `/proc/<canopy>/environ` (the shared pid namespace), which keeps the
 values the process started with.
 `CANOPY_INCUBATOR_AUTOSTART=0` holds every project queued, for a pause.
 
+## Stages
+
+The incubator's agents and their checks run in the `stages` container, not in
+canopy's: no token in its env, its own pid namespace and network
+(`stages-net`, 10.250.13.0/24, v4 only), the seeds under `_incubator/` and
+nothing else of the workspace, and its own claude and codex logins. canopy
+starts processes there only through the stage runner's socket. The design is
+`docs/superpowers/specs/2026-10-02-incubator-token-free-stages-design.md`,
+part 3. Setting it up on the mini, once, in this order:
+
+**Folders.** Every bind mount of the stages service has to exist, owned by
+you, before the first `up`, or docker makes it as root: a root `.shared`
+stops canopy copying a stage's inputs in, and a root login folder keeps the
+logins out. `bun run redeploy` makes them before it runs compose (next to
+`~/.convex`), off `DEV_ROOT` and `HOST_HOME` in `.env`. By hand it is:
+
+```
+mkdir -p ~/dev/_incubator/.shared ~/.config/canopy-stages/claude ~/.config/canopy-stages/codex
+```
+
+**The fence, before the first `up`.** Until it is in place the stages network
+has open outbound to everything the host can reach: canopy on the tailnet,
+the tailchan broker, the LAN. Apply it before the stages container first
+starts, or at the latest in the same session. The rules match the subnet as a
+source address, so they work before `stages-net` exists; they need only the
+`DOCKER-USER` chain, which dockerd makes when it starts
+(`sudo iptables -S DOCKER-USER` shows it).
+
+```
+sh scripts/stages-fence.sh                        # read the rules first
+sudo iptables -S DOCKER-USER                      # see what is in the chain now
+sudo sh scripts/stages-fence.sh --apply --persist && sudo ufw reload
+sudo iptables -S DOCKER-USER                      # each rule once, the RETURN first
+```
+
+`--apply` inserts the rules that are missing and leaves the rest, so a rerun
+changes nothing. `--persist` writes them into `/etc/ufw/after.rules` as a block
+between `# canopy-stages begin` and `# canopy-stages end`, replaces that block
+on a rerun, and keeps the file it replaced as
+`/etc/ufw/after.rules.canopy-stages.bak`. Nothing is pasted by hand. The
+block declares `DOCKER-USER`, and on every `ufw reload` that empties the chain
+before its rules go back in. So before `--persist`, check that the chain holds
+nothing but these rules (and Docker's own trailing `-j RETURN`, if your
+version adds one, which losing does no harm). Anything else there would be
+gone after the reload, so move it into the block first.
+
+The fence covers forwarded traffic: other containers, the LAN, the tailnet.
+Traffic to the host's own addresses (its LAN IP, its tailnet IP, the bridge
+gateway 10.250.13.1) is INPUT, which ufw's default deny incoming refuses for
+this subnet. A ufw rule that allows a port from anywhere (ssh, say) is the
+exception: that port stays reachable from the stages network through INPUT. A
+rule scoped to a source, like tailchan's 7855 from 192.168.48.0/20, is not.
+
+**Build and start.**
+
+```
+docker compose build stages canopy && docker compose up -d
+docker compose exec stages claude --version
+docker compose exec stages codex --version
+```
+
+canopy `depends_on` stages being healthy, so a broken stages image keeps
+canopy down too. If canopy does not come up after a deploy, the first look is
+`docker compose ps` and `docker compose logs stages`.
+
+**Logins**, once, in a real terminal on the mini (they are interactive):
+
+```
+docker compose exec -it stages claude              # then /login
+docker compose exec -it stages codex login --device-auth
+```
+
+Then check where claude put its account file. With `CLAUDE_CONFIG_DIR` set to
+`/home/bun/.stage-claude` (the image sets it) it belongs inside that folder,
+which is the mounted `~/.config/canopy-stages/claude`:
+
+```
+docker compose exec stages ls -la /home/bun/.stage-claude/.claude.json   # should be there
+docker compose exec stages ls -la /home/bun/.claude.json                 # should not
+```
+
+If it landed at `/home/bun/.claude.json` instead, it sits in the container's
+own layer and the next recreate loses it, with the login. Then
+`touch ~/.config/canopy-stages/claude.json` on the host (a missing file would
+be made as a folder) and add
+`${HOST_HOME:-/home/eric}/.config/canopy-stages/claude.json:/home/bun/.claude.json`
+to the stages service's volumes, `docker compose up -d stages`, and log in
+again.
+
+**The fence check.** Inside the stages container, every line should say `ok`:
+
+```
+docker compose exec -e CANOPY_FENCE_TAILNET_IP=$(tailscale ip -4) \
+  -e CANOPY_FENCE_LAN_IP=192.168.1.1 stages bun /app/fence-check.js
+```
+
+A refusal counts as blocked, so a target with nothing listening says `ok`
+with or without the fence. For the LAN, name a host that answers on port 80
+(the router, 192.168.1.1, or the NAS), not the mini itself. Then run the same
+check from canopy's container, which is not fenced:
+
+```
+docker compose exec -e CANOPY_FENCE_TAILNET_IP=$(tailscale ip -4) \
+  -e CANOPY_FENCE_LAN_IP=192.168.1.1 canopy bun /app/src/stage/fencecheck.ts
+```
+
+Each target that says `BAD` there and `ok` in stages is one the fence is
+refusing. A target that says `ok` on both sides proves nothing either way.
+
+**The incubator word.** The incubator view should now say "stages isolated".
+
+**A Mac backend** has no stages container. It runs the incubator only with
+`CANOPY_INCUBATOR_UNISOLATED=1`, which gives up all of part 3: stages run as
+canopy, in its pid namespace and network. Parts 1 and 2 still hold.
+
 ## Codex
 
 The Dockerfile installs `codex` via `bun add -g @openai/codex` and `nodejs`

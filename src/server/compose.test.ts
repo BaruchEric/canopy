@@ -30,6 +30,10 @@ describe("the stages service", () => {
     expect((stages as { healthcheck?: { test?: string[] } }).healthcheck?.test).toEqual(["CMD", "bun", "/app/stage-runner.js", "--health"]);
     expect((compose.services["canopy"]?.depends_on as Record<string, { condition?: string }>)?.["stages"]?.condition).toBe("service_healthy");
   });
+  test("canopy still waits for the shells and restarts with them", () => {
+    // canopy lives in the shells' network namespace and loses it when they restart
+    expect((compose.services["canopy"]?.depends_on as Record<string, unknown>)?.["shells"]).toEqual({ condition: "service_healthy", restart: true });
+  });
   test("holds no token, key or secret, and mounts no ssh, git config, .env or docker socket", () => {
     for (const e of envOf(stages ?? {})) expect(e.split("=")[0]).not.toMatch(/TOKEN|KEY|SECRET|PASSWORD/);
     for (const v of stages?.volumes ?? []) expect(v).not.toMatch(/\.ssh|\.config\/git|\.env|docker\.sock|canopy-config|\/\.claude[:/]|\/\.codex[:/]/);
