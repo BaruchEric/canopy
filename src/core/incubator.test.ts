@@ -1877,6 +1877,24 @@ describe("retro", () => {
     expect(w.flows.started.filter((f) => f.workflow.name === "retro")).toHaveLength(1);
   });
 
+  test("a retro parked because the stage runner is away waits for it, and goes on when Flows resumes it", async () => {
+    const w = retroWorld();
+    const s = await parked(w);
+    clock += RETRO_PARK_WAIT;
+    w.inc.tick();
+    await w.inc.idle();
+    const id = retroFlow(w, s.id).id;
+    w.flows.move(id, { status: "gated", parkedFor: "stage", steps: [{ name: "Retro", status: "gated", reason: "the stage runner is not answering" }] });
+    await w.inc.idle();
+    expect(w.flows.get(id)?.status).toBe("gated");
+    expect(now(w, s.id).retro?.state).toBe("running");
+    // the runner says hello and Flows runs the step again
+    w.flows.move(id, { status: "working", steps: [{ name: "Retro", status: "running" }] });
+    await w.inc.idle();
+    const after = await finish(w, s.id);
+    expect(after.retro?.state).toBe("done");
+  });
+
   test("one retro runs at a time; the next starts when it ends", async () => {
     const w = retroWorld();
     const a = await clarifying(w);

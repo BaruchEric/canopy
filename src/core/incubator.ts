@@ -904,6 +904,8 @@ export class Incubator {
     if (this.detached || !r || r.flowId !== flow.id || r.state !== "running") return;
     if (flow.status === "working" || flow.status === "waiting") return;
     const step = flow.steps[flow.current];
+    // the stage runner was away: Flows runs the step again on its hello, as for any stage
+    if (flow.status === "gated" && flow.parkedFor === "stage") return;
     if (flow.status === "gated") {
       // a retro never waits on the user at a gate: out of retries or budget, it ends
       this.stopFlow(flow);
