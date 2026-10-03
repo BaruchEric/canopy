@@ -451,133 +451,149 @@ values the process started with.
 
 The incubator's agents and their checks run in the `stages` container, not in
 canopy's: no token in its env, its own pid namespace and network
-(`stages-net`, 10.250.13.0/24, v4 only), the seeds under `_incubator/` and
-nothing else of the workspace, and its own claude and codex logins. canopy
-starts processes there only through the stage runner's socket. The design is
+(`stages-net`, 10.250.13.0/24, v4 only, on a host bridge named
+`br-canopy-stg`), the seeds under `_incubator/` and nothing else of the
+workspace, and its own claude and codex logins. canopy starts processes there
+only through the stage runner's socket. The design is
 `docs/superpowers/specs/2026-10-02-incubator-token-free-stages-design.md`,
-part 3. Setting it up on the mini, once, in this order:
+part 3.
 
-**Folders.** Every bind mount of the stages service has to exist, owned by
-you, before the first `up`, or docker makes it as root: a root `.shared`
-stops canopy copying a stage's inputs in, and a root login folder keeps the
-logins out. `bun run redeploy` makes them before it runs compose (next to
-`~/.convex`), off `DEV_ROOT` and `HOST_HOME` in `.env`. By hand it is:
+The fence is `scripts/stages-fence.sh`. It drops every packet that arrives on
+`br-canopy-stg` for a private, tailnet, link-local, multicast or broadcast
+address, and every IPv6 packet from it, in the raw table's PREROUTING. That
+runs before routing, docker's DNAT and every filter chain, so it covers the
+host's own addresses too, and neither ufw, docker nor tailscale's
+`ts-forward` can get a packet past it. The internet stays open. Until the
+fence is in place the stages network has open outbound to everything the host
+can reach, so it goes in before the first `up`.
 
-```
-mkdir -p ~/dev/_incubator/.shared ~/.config/canopy-stages/claude ~/.config/canopy-stages/codex
-```
+Setting it up on the mini, once, in one session:
 
-**The fence, before the first `up`.** Until it is in place the stages network
-has open outbound to everything the host can reach: canopy on the tailnet,
-the tailchan broker, the LAN. Apply it before the stages container first
-starts, or at the latest in the same session. The rules match the subnet as a
-source address, so they work before `stages-net` exists; they need only the
-`DOCKER-USER` chain, which dockerd makes when it starts
-(`sudo iptables -S DOCKER-USER` shows it).
+**0. Two things that would undo the fence.** Arch's stock `/etc/nftables.conf`
+starts with `flush ruleset`, which would wipe the raw table along with
+docker's rules, and ufw with `MANAGE_BUILTINS=yes` flushes the built-in
+chains on a reload.
 
 ```
-sh scripts/stages-fence.sh                        # read the rules first
-sudo iptables -S DOCKER-USER                      # see what is in the chain now
-sudo sh scripts/stages-fence.sh --apply --persist && sudo ufw reload
-sudo iptables -S DOCKER-USER                      # each rule once, the RETURN first
+systemctl is-enabled nftables.service iptables.service   # both: disabled (or not-found)
+grep MANAGE_BUILTINS /etc/default/ufw                    # MANAGE_BUILTINS=no
 ```
 
-`--apply` inserts the rules that are missing and leaves the rest, so a rerun
-changes nothing. `--persist` writes them into `/etc/ufw/after.rules` as a block
-between `# canopy-stages begin` and `# canopy-stages end`, replaces that block
-on a rerun, and keeps the file it replaced as
-`/etc/ufw/after.rules.canopy-stages.bak`. Nothing is pasted by hand. The
-block declares `DOCKER-USER`, and on every `ufw reload` that empties the chain
-before its rules go back in. So before `--persist`, check that the chain holds
-nothing but these rules (and Docker's own trailing `-j RETURN`, if your
-version adds one, which losing does no harm). Anything else there would be
-gone after the reload, so move it into the block first.
+**1. Read the script**, `scripts/stages-fence.sh`. `sh scripts/stages-fence.sh`
+prints the rules and changes nothing.
 
-Then look at the order of FORWARD's first rules:
+**2. Install the fence.**
 
 ```
-sudo iptables -S FORWARD | head
+sudo sh scripts/stages-fence.sh --install
+sudo iptables -t raw -S PREROUTING      # the eight drops on -i br-canopy-stg, no ACCEPT above them
+sudo ip6tables -t raw -S PREROUTING     # the one v6 drop
+sudo ufw reload && sudo iptables -t raw -S PREROUTING   # still there
 ```
 
-`-j DOCKER-USER` has to come above `-j ts-forward`. Tailscale's chain ends by
-accepting anything that leaves through `tailscale0`, so where it runs first, a
-stages packet to another tailnet node (the Mac's canopy, the NAS) is let
-through before the 100.64.0.0/10 drop sees it. Both daemons insert their jump
-at the top, so whichever started last wins, and that can change across a
-reboot. With no `ts-forward` in the list (tailscale on nftables keeps its own
-table) the drop holds regardless.
+`--install` writes a root-owned copy of the script, as read at that moment, to
+`/usr/local/sbin/canopy-stages-fence` and the unit
+`/etc/systemd/system/canopy-stages-fence.service`, a oneshot that runs the
+copy's `--apply` before `docker.service`, so no boot has an unfenced window.
+It enables the unit and runs it. The unit never runs the checkout's script,
+which canopy's containers and peer sync can write. The rules need nothing
+docker makes, since `-i` matches the bridge by name, so they can go in before
+the bridge exists. Rerun `--install` after a change to the script;
+`--apply` alone adds any missing rule and changes nothing on a rerun.
 
-The fence covers forwarded traffic: other containers, the LAN, the tailnet.
-Traffic to the host's own addresses (its LAN IP, its tailnet IP, the bridge
-gateway 10.250.13.1) is INPUT, which ufw's default deny incoming refuses for
-this subnet. A ufw rule that allows a port from anywhere (ssh, say) is the
-exception: that port stays reachable from the stages network through INPUT. A
-rule scoped to a source, like tailchan's 7855 from 192.168.48.0/20, is not.
-
-**Build and start.**
+**3. A `stages-net` from before the bridge name.** One made before
+`docker-compose.yml` named the bridge keeps docker's `br-<id>`, and the fence
+matches nothing on it. If the network exists (a first deploy has none, and the
+inspect says so) and this prints an empty line, remove it:
 
 ```
-docker compose build stages canopy && docker compose up -d
+docker network inspect canopy_stages-net -f '{{index .Options "com.docker.network.bridge.name"}}'
+docker compose rm -sf stages && docker network rm canopy_stages-net
+```
+
+**4. Build and start** with `bun run redeploy`. Before compose runs it makes
+the stages' host folders (off `DEV_ROOT` and `HOST_HOME` in `.env`), since
+docker would make a missing bind mount as root: a root `.shared` stops canopy
+copying a stage's inputs in, and a root login folder keeps the logins out.
+`mkdir -p` leaves a folder docker already made alone, so check the owners:
+
+```
+stat -c '%U %n' ~/dev/_incubator ~/dev/_incubator/.shared ~/.config/canopy-stages/claude ~/.config/canopy-stages/codex
+sudo chown -R "$(id -un):$(id -gn)" <each one that says root>
 docker compose exec stages claude --version
 docker compose exec stages codex --version
 ```
+
+By hand the folders are
+`mkdir -p ~/dev/_incubator/.shared ~/.config/canopy-stages/claude ~/.config/canopy-stages/codex`
+and the deploy is `docker compose build stages canopy && docker compose up -d`,
+which leaves out the commit stamp and the shells guard that redeploy adds.
 
 canopy `depends_on` stages being healthy, so a broken stages image keeps
 canopy down too. If canopy does not come up after a deploy, the first look is
 `docker compose ps` and `docker compose logs stages`.
 
-**Logins**, once, in a real terminal on the mini (they are interactive):
+**5. The bridge.** `ip -br link show br-canopy-stg` on the host shows it.
+Without it the fence has nothing to match: go back to step 3.
+
+**6. DNS, then the fence check.** docker's resolver forwards the container's
+queries from inside its namespace, through the fenced bridge, so the stages
+service uses public servers (`dns:` in compose). Check what it forwards to:
 
 ```
-docker compose exec -it stages claude              # then /login
-docker compose exec -it stages codex login --device-auth
+docker compose exec stages cat /etc/resolv.conf   # "# ExtServers:" names 1.1.1.1 and 9.9.9.9, nothing private
 ```
 
-Then check where claude put its account file. With `CLAUDE_CONFIG_DIR` set to
-`/home/bun/.stage-claude` (the image sets it) it belongs inside that folder,
-which is the mounted `~/.config/canopy-stages/claude`:
-
-```
-docker compose exec stages ls -la /home/bun/.stage-claude/.claude.json   # should be there
-docker compose exec stages ls -la /home/bun/.claude.json                 # should not
-```
-
-If it landed at `/home/bun/.claude.json` instead, it sits in the container's
-own layer and the next recreate loses it, with the login. Then
-`touch ~/.config/canopy-stages/claude.json` on the host (a missing file would
-be made as a folder) and add
-`${HOST_HOME:-/home/eric}/.config/canopy-stages/claude.json:/home/bun/.claude.json`
-to the stages service's volumes, `docker compose up -d stages`, and log in
-again.
-
-**The fence check.** Inside the stages container, every line should say `ok`:
+Then the fence check, inside stages:
 
 ```
 docker compose exec -e CANOPY_FENCE_TAILNET_IP=$(tailscale ip -4) \
   -e CANOPY_FENCE_LAN_IP=192.168.1.1 stages bun /app/fence-check.js
 ```
 
-A refusal counts as blocked, so a target with nothing listening says `ok`
-with or without the fence. For the LAN, name a host that answers on port 80
-(the router, 192.168.1.1, or the NAS), not the mini itself. Then run the same
-check from canopy's container, which is not fenced:
+Every line should say `ok`. Only a timeout counts as blocked, since the fence
+drops and never answers. Any answer, or a refused or reset connection, means a
+packet reached a host and counts as open, and a lookup or certificate failure
+is an error. So a target with nothing listening still says `BAD` when the
+fence is not there. For the LAN, name a host on the LAN (the router,
+192.168.1.1, or the NAS). The same check from canopy's container, which is not
+fenced, shows the difference:
 
 ```
 docker compose exec -e CANOPY_FENCE_TAILNET_IP=$(tailscale ip -4) \
   -e CANOPY_FENCE_LAN_IP=192.168.1.1 canopy bun /app/src/stage/fencecheck.ts
 ```
 
-Each target that says `BAD` there and `ok` in stages is one the fence is
-refusing. A target that says `ok` on both sides proves nothing either way.
+The mini's own tailnet address tests the drop ahead of docker's DNAT. Run the
+stages check once more with `CANOPY_FENCE_TAILNET_IP` set to another node,
+the Mac (`tailscale status` shows its address): that probe would leave through
+`tailscale0`, so it is the one that shows the tailnet part of the fence
+holding.
 
-The mini's own tailnet address does not test the tailnet part of the fence:
-docker hands a connection to it straight to the shells container, so it never
-leaves through `tailscale0`. Run both checks once more with
-`CANOPY_FENCE_TAILNET_IP` set to another node that answers on 7850, the Mac
-(`tailscale status` shows its address). That probe is the one that says
-whether `ts-forward` lets stages traffic out ahead of the drop.
+**7. The logins**, in a real terminal on the mini (they are interactive).
+First claude, then check where it put its account file:
 
-**The incubator word.** The incubator view should now say "stages isolated".
+```
+docker compose exec -it stages claude              # then /login
+docker compose exec stages ls -la /home/bun/.stage-claude/.claude.json   # should be there
+docker compose exec stages ls -la /home/bun/.claude.json                 # should not
+```
+
+With `CLAUDE_CONFIG_DIR` set to `/home/bun/.stage-claude` (the image sets it)
+the file belongs inside that folder, which is the mounted
+`~/.config/canopy-stages/claude`. If it landed at `/home/bun/.claude.json`
+instead, it sits in the container's own layer and the next recreate loses it,
+with the login. Then `touch ~/.config/canopy-stages/claude.json` on the host
+(a missing file would be made as a folder), add
+`${HOST_HOME:-/home/eric}/.config/canopy-stages/claude.json:/home/bun/.claude.json`
+to the stages service's volumes, `docker compose up -d stages`, and log in
+again. Then codex:
+
+```
+docker compose exec -it stages codex login --device-auth
+```
+
+**8. The incubator word.** The incubator view should now say "stages isolated".
 
 **A Mac backend** has no stages container. It runs the incubator only with
 `CANOPY_INCUBATOR_UNISOLATED=1`, which gives up all of part 3: stages run as

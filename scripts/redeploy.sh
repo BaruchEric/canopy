@@ -170,12 +170,13 @@ job() {
   docker compose build || { echo "build failed"; return 1; }
   # a bind mount's missing host folder is made by docker, as root, and the
   # shells container's user could never write a login into it
-  mkdir -p "$HOME/.convex"
+  mkdir -p "$HOME/.convex" || { echo "could not make $HOME/.convex"; return 1; }
   # the same for the stages: a root .shared would stop canopy copying a
   # stage's inputs in, and a root login folder would keep the stages' own
   # claude and codex logins out
   mkdir -p "$STAGE_DEV_ROOT/_incubator" "$STAGE_DEV_ROOT/_incubator/.shared" \
-    "$STAGE_HOST_HOME/.config/canopy-stages/claude" "$STAGE_HOST_HOME/.config/canopy-stages/codex"
+    "$STAGE_HOST_HOME/.config/canopy-stages/claude" "$STAGE_HOST_HOME/.config/canopy-stages/codex" ||
+    { echo "could not make the stages folders; up would make them as root"; return 1; }
   if docker compose --dry-run up -d 2>&1 | grep -q 'canopy-shells-1.*Recreate'; then
     if [ "$shells" != 1 ]; then
       echo "this deploy recreates the shells container, which ends every shell."
