@@ -7,12 +7,13 @@
  */
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { existsSync } from "node:fs";
-import { mkdir, mkdtemp, realpath, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, realpath, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, sep } from "node:path";
-import type { ScanResult, ServerEvent, Sprout, SproutDetail, WorkflowEntry } from "../core/types";
+import { IncubatorError } from "../core/incubator";
+import type { AdviceOffer, Repo, ScanResult, ServerEvent, Sprout, SproutDetail, WorkflowEntry } from "../core/types";
 import { startServer } from "./index";
-import { clipLabel, notKeeping, sproutFlow } from "./incubator";
+import { canopyRepoOf, clipLabel, notKeeping, sproutFlow } from "./incubator";
 
 let scratch: string;
 let root: string;
@@ -95,7 +96,18 @@ beforeAll(async () => {
     chan: null,
     harnesses: ["claude"],
     // no stage starts here (autostart is off); stage: null keeps a shell's CANOPY_STAGE_SOCKET out of it
-    incubator: { autostart: false, transcribe: async () => "count the quarters", notes: null, ship: null, stage: null },
+    incubator: {
+      autostart: false,
+      transcribe: async () => "count the quarters",
+      notes: null,
+      ship: null,
+      stage: null,
+      // a stand-in for the chat or the file, so no agent starts
+      accept: async (e) => {
+        if (e.key === "refuse-me") throw new IncubatorError(409, "canopy's own checkout is not in this backend's scan");
+        return { kind: "chat", runId: `run-${e.key}`, repoId: "app" };
+      },
+    },
   });
 });
 
@@ -298,5 +310,60 @@ describe("who keeps the incubator", () => {
     expect(sproutFlow({ id: "f2", repoId: "app" }, none)).toBe(false);
     expect(sproutFlow({ id: "f3", repoId: "app" }, (id) => id === "f3")).toBe(true);
     expect(sproutFlow({ id: "f4", repoId: "src:_incubator/x" }, none)).toBe(false);
+  });
+});
+
+describe("retro advice", () => {
+  const seedList = async () => {
+    const dir = join(process.env["CANOPY_CONFIG_DIR"] ?? "", "incubator");
+    await mkdir(dir, { recursive: true });
+    const entry = (key: string, n: number) => ({ key, lesson: `Lesson ${key}.`, from: Array.from({ length: n }, (_, i) => ({ id: `sp_${key}${i}`, title: `P${i}`, at: i })) });
+    await writeFile(join(dir, "improvements.json"), JSON.stringify({ entries: { "keep-me": entry("keep-me", 2), "drop-me": entry("drop-me", 1), "refuse-me": entry("refuse-me", 1) } }));
+  };
+
+  test("the keys on offer, most repeated first", async () => {
+    await seedList();
+    const offers = (await (await fetch(url("/api/incubator/advice"))).json()) as AdviceOffer[];
+    expect(offers.map((o) => [o.key, o.count])).toEqual([
+      ["keep-me", 2],
+      ["drop-me", 1],
+      ["refuse-me", 1],
+    ]);
+  });
+
+  test("dismissing takes a key off offer and tells the page; accepting answers what it opened", async () => {
+    await seedList();
+    const ev = await eventAfter(
+      (e) => e.type === "advice",
+      () => postJson("/api/incubator/advice", { key: "drop-me", accept: false }),
+    );
+    expect(ev.type === "advice" && ev.advice.map((o) => o.key)).toEqual(["keep-me", "refuse-me"]);
+    const res = await postJson("/api/incubator/advice", { key: "keep-me", accept: true });
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { advice: AdviceOffer[]; accepted?: unknown };
+    expect(body.accepted).toEqual({ kind: "chat", runId: "run-keep-me", repoId: "app" });
+    expect(body.advice.map((o) => o.key)).toEqual(["refuse-me"]);
+  });
+
+  test("a refused accept leaves the key on offer; an unknown key, a decided one and a bad body are refused", async () => {
+    await seedList();
+    const refused = await postJson("/api/incubator/advice", { key: "refuse-me", accept: true });
+    expect(refused.status).toBe(409);
+    expect(((await (await fetch(url("/api/incubator/advice"))).json()) as AdviceOffer[]).map((o) => o.key)).toContain("refuse-me");
+    expect((await postJson("/api/incubator/advice", { key: "nope", accept: true })).status).toBe(404);
+    await postJson("/api/incubator/advice", { key: "drop-me", accept: false });
+    expect((await postJson("/api/incubator/advice", { key: "drop-me", accept: false })).status).toBe(404);
+    expect((await postJson("/api/incubator/advice", { key: "keep-me" })).status).toBe(400);
+  });
+
+  test("canopy's own repo is found by its real path, else by a remote naming its homepage, never on another host", async () => {
+    const repo = (id: string, path: string, remotes: string[] = [], host?: string): Repo => ({ id, name: id, path, group: "", source: "root", status: null, remotes, ...(host ? { host } : {}) });
+    const real = async (p: string) => (p === "/link/canopy" ? "/real/canopy" : p);
+    const home = "https://github.com/BaruchEric/canopy";
+    expect((await canopyRepoOf([repo("a", "/x"), repo("c", "/real/canopy")], "/link/canopy", home, real))?.id).toBe("c");
+    const byRemote = [repo("a", "/x"), repo("far", "/far", ["git@github.com:BaruchEric/canopy.git"], "mini"), repo("c", "/dev/canopy", ["https://github.com/baruchEric/canopy.git"])];
+    expect((await canopyRepoOf(byRemote, "/app", home, real))?.id).toBe("c");
+    expect(await canopyRepoOf([repo("a", "/x")], "/app", home, real)).toBeUndefined();
+    expect(await canopyRepoOf(byRemote, "/app", undefined, real)).toBeUndefined();
   });
 });

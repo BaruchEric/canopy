@@ -7,9 +7,11 @@
  * scratch or dev server on the same config dir) lists the owner's records
  * read-only and answers every write with 503.
  */
+import { githubSlug } from "../core/github";
+import type { AdviceFiles } from "../core/improvements";
 import { INPUT_TOTAL_MAX, inputsIndex, isSeedRepoId, isSproutId } from "../core/sprout";
 import { IncubatorError, type Incubator, type Intake, type IntakeFile } from "../core/incubator";
-import type { Flow, IncubatorStages, Sprout, SproutDetail } from "../core/types";
+import type { AdviceAccepted, AdviceEntry, Flow, IncubatorStages, Repo, Sprout, SproutDetail } from "../core/types";
 
 const json = (data: unknown, status = 200) =>
   new Response(JSON.stringify(data), { status, headers: { "content-type": "application/json" } });
@@ -87,6 +89,27 @@ export async function readIntake(req: Request): Promise<Intake> {
 
 const isAnswers = (v: unknown): v is Record<string, string> => isObj(v) && Object.values(v).every((x) => typeof x === "string");
 
+/** The repo a bundled workflow's advice opens a chat on: canopy's own
+ *  checkout in the scan, by its real path, else by a remote naming canopy's
+ *  homepage repo (on the mini canopy runs from its image, and the checkout
+ *  peer sync keeps under ~/dev is the one found). A repo on another host is
+ *  never it: a chat runs here. */
+export async function canopyRepoOf(repos: readonly Repo[], own: string, homepage: string | undefined, real: (path: string) => Promise<string>): Promise<Repo | undefined> {
+  const local = repos.filter((r) => !r.host);
+  const mine = await real(own).catch(() => own);
+  for (const r of local) if ((await real(r.path).catch(() => r.path)) === mine) return r;
+  const slug = homepage ? githubSlug(homepage) : null;
+  if (!slug) return undefined;
+  return local.find((r) => (r.remotes ?? []).some((u) => githubSlug(u) === slug));
+}
+
+/** The improvements list's routes: the list, and the user's answer on a key. */
+export interface AdviceRoutes {
+  files: AdviceFiles;
+  /** what accepting a key does: a chat, or the file (server/index.ts) */
+  accept: (entry: AdviceEntry) => Promise<AdviceAccepted>;
+}
+
 export class IncubatorHub {
   /** whether this server keeps the incubator, and if not, why */
   private keeping: Keeping = { kind: "starting" };
@@ -97,6 +120,8 @@ export class IncubatorHub {
     private readonly records: () => Promise<Sprout[]>,
     /** where stages run now, which any server can say */
     private readonly stages: () => IncubatorStages,
+    /** the improvements list, on a backend that keeps one */
+    private readonly advice: AdviceRoutes | null = null,
   ) {}
 
   onFlow(flow: Flow): void {
@@ -135,6 +160,7 @@ export class IncubatorHub {
   private async readOnly(path: string, method: string, id: string): Promise<Response> {
     if (method !== "GET") return json({ error: notKeeping(this.keeping) }, 503);
     if (path === "/api/incubator") return json(await this.onDisk());
+    if (path === "/api/incubator/advice") return json(this.advice ? await this.advice.files.offers() : []);
     if (path === "/api/incubator/one") {
       const s = isSproutId(id) ? (await this.onDisk()).find((x) => x.id === id) : undefined;
       if (!s) return json({ error: "no such project" }, 404);
@@ -161,6 +187,7 @@ export class IncubatorHub {
         return json({ ok: true });
       }
       if (path === "/api/incubator/one" && method === "GET") return json(await this.inc.detail(id));
+      if (path === "/api/incubator/advice") return await this.adviceRoute(req, method);
       if (path === "/api/incubator/input" && method === "POST") return json(await this.inc.addInputs(id, await readIntake(req)));
       if (method === "POST" && (path === "/api/incubator/answer" || path === "/api/incubator/stop" || path === "/api/incubator/resume")) {
         if (path === "/api/incubator/stop") return json(await this.inc.stop(id));
@@ -181,5 +208,23 @@ export class IncubatorHub {
       if (err instanceof IncubatorError) return json({ error: err.message }, err.status);
       throw err;
     }
+  }
+
+  /** `GET` the keys on offer; `POST {key, accept}` answers one. Accepting
+   *  opens the chat or the file first, and the key is marked only once
+   *  that worked, so a refusal leaves it on offer. */
+  private async adviceRoute(req: Request, method: string): Promise<Response> {
+    const advice = this.advice;
+    if (method === "GET") return json(advice ? await advice.files.offers() : []);
+    if (method !== "POST") return json({ error: "not found" }, 404);
+    if (!advice) return json({ error: "this backend keeps no improvements list" }, 503);
+    const b: unknown = await req.json().catch(() => null);
+    if (!isObj(b) || typeof b["key"] !== "string" || typeof b["accept"] !== "boolean") return json({ error: "send {key, accept}" }, 400);
+    const key = b["key"];
+    const entry = await advice.files.offer(key);
+    if (!entry) return json({ error: "no such advice on offer" }, 404);
+    const accepted = b["accept"] ? await advice.accept(entry) : null;
+    await advice.files.decide(key, b["accept"]);
+    return json({ advice: await advice.files.offers(), ...(accepted ? { accepted } : {}) });
   }
 }
