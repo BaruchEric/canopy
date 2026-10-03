@@ -1,12 +1,13 @@
 import { afterAll, afterEach, describe, expect, test } from "bun:test";
 import { existsSync } from "node:fs";
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, realpath, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { builtinCheck } from "./builtincheck";
 import { runCheck } from "./check";
 import { CANOPY_CLI_PATH } from "./cli";
-import type { StageClient } from "./stageclient";
+import { startStageRunner } from "../stage/runner";
+import { StageClient } from "./stageclient";
 import { findWorkflow, loadWorkflows } from "./workflows";
 
 const scratch: string[] = [];
@@ -133,7 +134,8 @@ describe("a stage check", () => {
     } as unknown as StageClient;
     expect(await runCheck({ path: "/w/_incubator/coin" }, "bun test", true, client)).toEqual({ exit: 0, output: "ok" });
     // no env of canopy's: the runner builds the child's own
-    expect(calls).toEqual([{ argv: ["sh", "-lc", "bun test"], cwd: "/w/_incubator/coin" }]);
+    // and no login shell: nothing a stage wrote into ~/.profile runs ahead of it
+    expect(calls).toEqual([{ argv: ["sh", "-c", "bun test"], cwd: "/w/_incubator/coin" }]);
     expect(await runCheck({ path: "/w/_incubator/coin" }, "bun test", true, null)).toEqual({ exit: 127, output: "the stage runner is not answering", away: true });
   });
 
@@ -156,6 +158,44 @@ describe("a stage check", () => {
     const said = await runCheck({ path: "/w/_incubator/coin" }, "bun test", true, client);
     expect(said.exit).toBe(127);
     expect(said.away).toBeUndefined();
+  });
+
+  test("through a real runner, a ~/.profile a stage wrote is never sourced", async () => {
+    const dir = await realpath(await mkdtemp(join(tmpdir(), "canopy-check-profile-")));
+    scratch.push(dir);
+    const seed = join(dir, "_incubator", "coin");
+    await mkdir(seed, { recursive: true });
+    const marker = join(dir, "profile-ran");
+    await writeFile(join(dir, ".profile"), `touch ${marker}\n`);
+    const socket = join(dir, "s.sock");
+    const runner = await startStageRunner({
+      socket,
+      root: join(dir, "_incubator"),
+      env: { PATH: process.env["PATH"], HOME: dir, CANOPY_FENCE_PROBE: "http://probe.test/" },
+      probe: async () => ({ result: "blocked" }),
+    });
+    try {
+      const r = await runCheck({ path: seed }, "echo checked", true, new StageClient(socket));
+      expect(r).toEqual({ exit: 0, output: "checked" });
+      expect(existsSync(marker)).toBe(false);
+    } finally {
+      await runner.stop();
+    }
+  });
+
+  test("a check the runner refuses for its fence waits for the fence, in the runner's words", async () => {
+    const client = {
+      exec: async () => ({ code: 126, stdout: "", stderr: "the fence is down: http://192.168.1.1/ answered\n", unfenced: "the fence is down: http://192.168.1.1/ answered" }),
+      hello: async () => ["claude"],
+    } as unknown as StageClient;
+    expect(await runCheck({ path: "/w/_incubator/coin" }, "bun test", true, client)).toEqual({
+      exit: 126,
+      output: "the fence is down: http://192.168.1.1/ answered",
+      away: true,
+    });
+    // the same words from the command itself are only a failed check
+    const said = { exec: async () => ({ code: 126, stdout: "", stderr: "the fence is down: http://192.168.1.1/ answered\n" }) } as unknown as StageClient;
+    expect((await runCheck({ path: "/w/_incubator/coin" }, "bun test", true, said)).away).toBeUndefined();
   });
 
   test("its output is capped like a local check's, stderr after stdout", async () => {

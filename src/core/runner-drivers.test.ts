@@ -2,7 +2,7 @@ import { afterAll, describe, expect, test } from "bun:test";
 import { chmod, mkdir, mkdtemp, readFile, realpath, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { startStageRunner } from "../stage/runner";
+import { startStageRunner, type RunnerOptions as StageRunnerOptions } from "../stage/runner";
 import { ACTIONS } from "./actions";
 import { ClaudeDriver } from "./claudedrive";
 import { bunSpawn, type RpcSpawn } from "./codexrpc";
@@ -312,6 +312,11 @@ describe("a Codex job through the Runner", () => {
 });
 
 const FAKE_CLAUDE = join(import.meta.dir, "testdata", "fake-claude.ts");
+/** a stage runner behind a fence: its probe target times out */
+const FENCE = { CANOPY_FENCE_PROBE: "http://probe.test/" };
+const blocked: NonNullable<StageRunnerOptions["probe"]> = async () => ({ result: "blocked" });
+/** the stand-in claude sits in a temp dir the test owns */
+const notWritable: NonNullable<StageRunnerOptions["writable"]> = async () => false;
 
 /** polls every 10 ms for up to 5 s */
 async function waitFor(pred: () => boolean, what = "the condition"): Promise<void> {
@@ -611,7 +616,7 @@ describe("a stage run goes through the stage runner", () => {
     await writeFile(fake, `#!/bin/sh\nexec ${JSON.stringify(process.execPath)} ${JSON.stringify(FAKE_CLAUDE)} "$@"\n`);
     await chmod(fake, 0o755);
     const socket = join(dir, "s.sock");
-    const stage = await startStageRunner({ socket, root, env: { PATH: process.env["PATH"], HOME: dir }, programs: { claude: fake } });
+    const stage = await startStageRunner({ socket, root, env: { PATH: process.env["PATH"], HOME: dir, ...FENCE }, probe: blocked, writable: notWritable, programs: { claude: fake } });
     try {
       const client = new StageClient(socket);
       expect(await client.hello()).toContain("claude");
@@ -654,7 +659,7 @@ describe("a stage run goes through the stage runner", () => {
     await writeFile(fake, `#!/bin/sh\nexec ${JSON.stringify(process.execPath)} ${JSON.stringify(FAKE_CLAUDE)} "$@"\n`);
     await chmod(fake, 0o755);
     const socket = join(dir, "s.sock");
-    const stage = await startStageRunner({ socket, root, env: { PATH: process.env["PATH"], HOME: dir }, programs: { claude: fake } });
+    const stage = await startStageRunner({ socket, root, env: { PATH: process.env["PATH"], HOME: dir, ...FENCE }, probe: blocked, writable: notWritable, programs: { claude: fake } });
     let stopped = false;
     try {
       const client = new StageClient(socket);
@@ -687,6 +692,67 @@ describe("a stage run goes through the stage runner", () => {
       expect(now?.steps[0]?.reason).toContain(STAGE_AWAY);
     } finally {
       if (!stopped) await stage.stop();
+    }
+  }, 20_000);
+
+  test("a step the stage runner refuses for its fence parks with the runner's words; any other refusal fails", async () => {
+    const dir = await realpath(await mkdtemp(join(tmpdir(), "canopy-runner-fence-")));
+    scratch.push(dir);
+    const root = join(dir, "_incubator");
+    const seedPath = join(root, "coin");
+    await mkdir(seedPath, { recursive: true });
+    const socket = join(dir, "s.sock");
+    // no probe target: the runner refuses every spawn for its fence
+    const stage = await startStageRunner({ socket, root, env: { PATH: process.env["PATH"], HOME: dir }, programs: { claude: "/nonexistent/claude" } });
+    /** a client that still believes the runner fenced, as one does between two hellos */
+    class Stale extends StageClient {
+      override harnessesNow(): string[] {
+        return ["claude"];
+      }
+    }
+    try {
+      const client = new Stale(socket);
+      let flows!: Flows;
+      const runner = new Runner(
+        { onChange: (r) => flows.onRun(r), onGone: () => {}, status: async () => null },
+        { stage: () => true, stageExec: () => client, driver: () => new ClaudeDriver({ command: ["/nonexistent/claude"] }) },
+      );
+      flows = new Flows(runner, {
+        onChange: () => {},
+        onGone: () => {},
+        onFleet: () => {},
+        onFleetGone: () => {},
+        check: async () => ({ exit: 0, output: "" }),
+        evaluator: null,
+      });
+      const parsed = parseWorkflow("---\nname: one\nverb: do one\nblurb: b\n---\n\n## Only\n\nDo it.\n", { name: "one", source: "bundled", file: "/one.md" });
+      if (!parsed.ok) throw new Error(parsed.error);
+      const f = flows.start(repo("_incubator/coin", seedPath), parsed.workflow, "", { ...DEFAULT_AGENT, yolo: false });
+      await waitFor(() => flows.get(f.id)?.status === "gated", "the flow to park");
+      const parked = flows.get(f.id);
+      expect(parked?.parkedFor).toBe("stage");
+      expect(parked?.steps[0]?.reason).toBe("the fence is unchecked: set CANOPY_FENCE_PROBE");
+      const run = runner.get(parked?.steps[0]?.runId ?? "");
+      expect(run?.away).toBe(true);
+      expect(run?.error).toBe("the fence is unchecked: set CANOPY_FENCE_PROBE");
+      flows.stop(f.id);
+    } finally {
+      await stage.stop();
+    }
+    // the same runner fenced, but with no claude to start: a plain refusal fails the step
+    const fenced = await startStageRunner({ socket, root, env: { PATH: process.env["PATH"], HOME: dir, ...FENCE }, probe: blocked, programs: { claude: "/nonexistent/claude" } });
+    try {
+      const runner = new Runner(
+        { onChange: () => {}, onGone: () => {}, status: async () => null },
+        { stage: () => true, stageExec: () => new Stale(socket), driver: () => new ClaudeDriver({ command: ["/nonexistent/claude"] }) },
+      );
+      const run = runner.start(repo("_incubator/coin", seedPath), "ask", ACTIONS.ask, "go", { ...DEFAULT_AGENT, yolo: false });
+      await waitFor(() => !isRunActive(run) && !runner.liveIn(seedPath), "the run to end");
+      expect(run.status).toBe("failed");
+      expect(run.away).toBeUndefined();
+      expect(run.error).toContain("claude is not installed where the stage runner can start it");
+    } finally {
+      await fenced.stop();
     }
   }, 20_000);
 

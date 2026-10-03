@@ -3,6 +3,13 @@
  * per process, one JSON object per line, bytes as base64. Pure and
  * browser-safe (no Buffer: base64 through btoa/atob over byte strings).
  */
+/** Whether the stages container's fence holds, as the runner last probed
+ *  it: true once its probe target timed out, false once it answered or the
+ *  probe failed some other way, "unchecked" while no target is set or the
+ *  first probe is still out. A hello from a runner older than the fence
+ *  says nothing, which reads as "unchecked". */
+export type Fenced = true | false | "unchecked";
+
 export type StageRequest =
   | { t: "hello" }
   | { t: "spawn"; argv: string[]; cwd: string; env: Record<string, string> }
@@ -14,8 +21,10 @@ export type StageFrame =
   | { t: "out"; d: string }
   | { t: "err"; d: string }
   | { t: "exit"; code: number | null }
-  | { t: "refused"; reason: string }
-  | { t: "hello"; harnesses: string[] }
+  /** `fenced` is there only on a refusal for the fence: a spawn the runner
+   *  would start once its fence is confirmed */
+  | { t: "refused"; reason: string; fenced?: false | "unchecked" }
+  | { t: "hello"; harnesses: string[]; fenced: Fenced; reason?: string }
   | { t: "busy"; busy: boolean };
 
 export const STAGE_PROGRAMS: readonly string[] = ["claude", "codex", "sh"];
@@ -45,7 +54,10 @@ export function parseFrame(line: string): StageFrame | StageRequest | null {
   if (t === "hello") {
     if (!("harnesses" in o)) return { t };
     const h = o["harnesses"];
-    return Array.isArray(h) && h.every(isStr) ? { t, harnesses: h } : null;
+    if (!Array.isArray(h) || !h.every(isStr)) return null;
+    const f = o["fenced"];
+    const reason = o["reason"];
+    return { t, harnesses: h, fenced: f === true || f === false ? f : "unchecked", ...(isStr(reason) ? { reason } : {}) };
   }
   if (t === "busy") {
     const seed = o["seed"];
@@ -59,7 +71,9 @@ export function parseFrame(line: string): StageFrame | StageRequest | null {
   }
   if (t === "refused") {
     const reason = o["reason"];
-    return isStr(reason) ? { t, reason } : null;
+    if (!isStr(reason)) return null;
+    const f = o["fenced"];
+    return f === false || f === "unchecked" ? { t, reason, fenced: f } : { t, reason };
   }
   if (t === "spawn") {
     const { argv, cwd, env } = o;

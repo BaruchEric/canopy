@@ -63,6 +63,9 @@ describe("the stages service", () => {
   test("resolves through public servers, since docker forwards queries from the fenced bridge", () => {
     expect((stages as { dns?: string[] }).dns).toEqual(["1.1.1.1", "9.9.9.9"]);
   });
+  test("the runner's fence probe target comes from .env, with no default in the file", () => {
+    expect(envOf(stages ?? {})).toContain("CANOPY_FENCE_PROBE=${CANOPY_FENCE_PROBE:-}");
+  });
   test("canopy reaches it only through the socket", () => {
     const canopy = compose.services["canopy"];
     expect(envOf(canopy ?? {})).toContain("CANOPY_STAGE_SOCKET=/run/canopy-stage/runner.sock");

@@ -20,6 +20,7 @@ import {
   lineSplitter,
   parseFrame,
   STAGE_AWAY,
+  type Fenced,
   type StageFrame,
   type StageRequest,
 } from "./stagewire";
@@ -103,8 +104,20 @@ interface Watcher {
   onAnswer: (() => void) | undefined;
 }
 
+/** the fence as the runner's last answer said it */
+export interface FenceNow {
+  fenced: Fenced;
+  reason: string | null;
+}
+
 export class StageClient {
   private last: string[] | null = null;
+  /** the fence as the last hello said it, or a fence refusal since; null
+   *  while the runner has not answered */
+  private fence: FenceNow | null = null;
+  /** the processes the runner refused for its fence, with its words: by
+   *  the refusal's own field, never by what the stage printed */
+  private readonly unfenced = new WeakMap<RpcProc, string>();
   /** every watch's listeners, each with the up it last told */
   private readonly watchers = new Set<Watcher>();
   constructor(private readonly socket: string) {}
@@ -147,6 +160,10 @@ export class StageClient {
         else if (f.t === "err") err.push(fromB64(f.d));
         else if (f.t === "exit") finish(f.code);
         else if (f.t === "refused") {
+          if (f.fenced !== undefined) {
+            this.unfenced.set(proc, f.reason);
+            this.fence = { fenced: f.fenced, reason: f.reason };
+          }
           err.push(enc.encode(`${f.reason}\n`));
           finish(REFUSED);
         }
@@ -160,7 +177,7 @@ export class StageClient {
     // a connection gone without an exit frame: the runner killed the run
     sock.on("close", () => finish(null));
 
-    return {
+    const proc: RpcProc = {
       stdin: {
         write: (chunk: string) => {
           for (const d of chunkB64(enc.encode(chunk))) write({ t: "in", d });
@@ -179,11 +196,23 @@ export class StageClient {
         grace = setTimeout(() => sock.destroy(), KILL_GRACE);
       },
     };
+    return proc;
+  }
+
+  /** the runner's words when it refused this process for its fence, else null */
+  fenceRefusal(proc: RpcProc): string | null {
+    return this.unfenced.get(proc) ?? null;
+  }
+
+  /** the fence as the runner last said it, or null while it has not answered */
+  fenceNow(): FenceNow | null {
+    return this.fence;
   }
 
   /** a check: the command to its end or the timeout, then code, stdout and
-   *  stderr; 126 for a refusal and 127 when the runner is not answering */
-  async exec(argv: string[], opts: { cwd: string; timeoutMs: number; env?: Record<string, string> }): Promise<ExecResult> {
+   *  stderr; 126 for a refusal and 127 when the runner is not answering;
+   *  `unfenced` holds the runner's words when it refused for its fence */
+  async exec(argv: string[], opts: { cwd: string; timeoutMs: number; env?: Record<string, string> }): Promise<ExecResult & { unfenced?: string }> {
     const p = this.open({ t: "spawn", argv, cwd: opts.cwd, env: opts.env ?? {} });
     p.stdin.end();
     let timedOut = false;
@@ -198,7 +227,8 @@ export class StageClient {
     ]);
     clearTimeout(timer);
     const said = timedOut ? `${stderr}timed out after ${opts.timeoutMs} ms\n` : stderr;
-    return { code: code ?? KILLED, stdout, stderr: said };
+    const unfenced = this.fenceRefusal(p);
+    return { code: code ?? KILLED, stdout, stderr: said, ...(unfenced !== null ? { unfenced } : {}) };
   }
 
   /** One request whose answer is one frame: what `pick` reads off it, or
@@ -231,10 +261,15 @@ export class StageClient {
 
   /** the harnesses the runner can start, or null when it is not answering */
   async hello(timeoutMs = HELLO_TIMEOUT): Promise<string[] | null> {
-    const answer = await this.ask({ t: "hello" }, (f) => (f.t === "hello" && "harnesses" in f ? f.harnesses : undefined), timeoutMs);
-    this.last = answer;
+    const answer = await this.ask(
+      { t: "hello" },
+      (f) => (f.t === "hello" && "harnesses" in f ? { harnesses: f.harnesses, fence: { fenced: f.fenced, reason: f.reason ?? null } } : undefined),
+      timeoutMs,
+    );
+    this.last = answer?.harnesses ?? null;
+    this.fence = answer?.fence ?? null;
     this.tell(answer !== null);
-    return answer;
+    return this.last;
   }
 
   /** Each watch hears every hello, whoever made it: an answer, and a flip

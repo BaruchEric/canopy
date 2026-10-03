@@ -19,7 +19,8 @@
  * Before it starts codex it drops every seed's trust from its own codex
  * config.
  */
-import { readdir, realpath, rm, stat } from "node:fs/promises";
+import { constants } from "node:fs";
+import { access, readdir, realpath, rm, stat } from "node:fs/promises";
 import { createServer, type Socket } from "node:net";
 import { basename, dirname, join } from "node:path";
 import { sweepCodexTrust } from "../core/codextrust";
@@ -28,6 +29,7 @@ import { parseLsofCwd } from "../core/ports";
 import { allProcs, descendants, procCwd, type Proc } from "../core/procs";
 import {
   childEnv,
+  type Fenced,
   chunkB64,
   encodeFrame,
   fromB64,
@@ -38,6 +40,7 @@ import {
   type StageFrame,
   type StageRequest,
 } from "../core/stagewire";
+import { reach, type ProbeResult } from "./fencecheck";
 
 export interface RunnerOptions {
   socket: string;
@@ -55,6 +58,32 @@ export interface RunnerOptions {
   sweepOrphans?: boolean;
   /** how often the orphan sweep runs, ms */
   sweepEvery?: number;
+  /** one probe of the fence's target (CANOPY_FENCE_PROBE in `env`); a
+   *  fetch with a 4 s timeout (`reach`) unless a test hands in its own */
+  probe?: (url: string) => Promise<{ result: ProbeResult; why?: string }>;
+  /** how often the fence is probed again, ms */
+  fenceEvery?: number;
+  /** whether the runner's own uid could write a path; `access(W_OK)`
+   *  unless a test hands in its own for stand-ins in its temp folder */
+  writable?: (path: string) => Promise<boolean>;
+}
+
+/** the fence as the runner knows it, and why it is not confirmed */
+export interface FenceState {
+  fenced: Fenced;
+  reason: string | null;
+}
+export const FENCE_UNSET = "the fence is unchecked: set CANOPY_FENCE_PROBE";
+export const FENCE_PENDING = "the fence probe has not finished";
+
+/** What one probe of the target says about the fence. The target is past
+ *  the host and answers whenever nothing drops the packet, so only a
+ *  timeout is the fence; an answer is a fence that is down, and any other
+ *  failure (a lookup, a certificate) says nothing either way. Pure. */
+export function fenceOf(url: string, r: { result: ProbeResult; why?: string }): FenceState {
+  if (r.result === "blocked") return { fenced: true, reason: null };
+  if (r.result === "open") return { fenced: false, reason: `the fence is down: ${url} answered` };
+  return { fenced: false, reason: `the fence probe of ${url} failed${r.why ? ` (${r.why})` : ""}, so the fence is not confirmed` };
 }
 
 /** The processes the orphan sweep kills, out of every process in the
@@ -99,6 +128,8 @@ const DRAIN_MS = 2_000;
 const ROUNDS = 5;
 /** how often the orphan sweep runs between runs' ends */
 const SWEEP_EVERY = 30_000;
+/** how often the fence is probed again */
+const FENCE_EVERY = 5 * 60_000;
 
 /** one line in the runner's log for something that failed where nothing
  *  else would hear of it */
@@ -132,20 +163,48 @@ async function seedOf(root: string, path: string): Promise<{ seed: string; root:
   return { seed, root: realRoot };
 }
 
+const canWrite = (path: string): Promise<boolean> =>
+  access(path, constants.W_OK).then(
+    () => true,
+    () => false,
+  );
+
+/** the path and every folder above it, nearest first */
+const chain = (path: string): string[] => {
+  const out = [path];
+  for (let d = dirname(path); ; d = dirname(d)) {
+    out.push(d);
+    if (d === dirname(d)) return out;
+  }
+};
+
 /** A program on the runner's own PATH (absolute entries only, so nothing
- *  resolves against a cwd), and never one inside the stage root. */
-async function resolveProgram(cmd: string, path: string | undefined, root: string): Promise<string | null> {
+ *  resolves against a cwd), never one inside the stage root, and never one
+ *  the runner's own uid could rewrite: the file PATH found, its realpath,
+ *  or any folder above either. A stage runs as that uid, so a program it
+ *  could write is one it could swap for the next stage. */
+async function resolveProgram(
+  name: string,
+  cmd: string,
+  path: string | undefined,
+  root: string,
+  writable: (path: string) => Promise<boolean>,
+): Promise<{ program: string } | { refused: string }> {
+  const missing = { refused: `${name} is not installed where the stage runner can start it` };
   const PATH = (path ?? "")
     .split(":")
     .filter((p) => p.startsWith("/"))
     .join(":");
   const found = Bun.which(cmd, { PATH });
-  if (!found?.startsWith("/")) return null;
+  if (!found?.startsWith("/")) return missing;
   const real = await realpath(found).catch(() => null);
-  if (real === null) return null;
+  if (real === null) return missing;
   const realRoot = await realpath(root).catch(() => root);
-  if ([root, realRoot].some((r) => inside(found, r) || inside(real, r))) return null;
-  return found;
+  if ([root, realRoot].some((r) => inside(found, r) || inside(real, r))) return missing;
+  for (const p of [...chain(found), ...chain(real)]) {
+    if (await writable(p)) return { refused: `${name} is not started: ${p} is writable by the stage runner's own user, so a stage could change it` };
+  }
+  return { program: found };
 }
 
 /** every process's cwd, read before the process table so a process seen
@@ -194,6 +253,7 @@ interface Live {
 export async function startStageRunner(opts: RunnerOptions): Promise<{ stop(): Promise<void> }> {
   const own = opts.env ?? process.env;
   const procs = opts.procs ?? allProcs;
+  const writable = opts.writable ?? canWrite;
   const identity = Object.fromEntries(STAGE_PROGRAMS.map((p) => [p, p]));
   const programs: Record<string, string> = { ...identity, ...opts.programs };
   await rm(opts.socket, { force: true });
@@ -262,6 +322,31 @@ export async function startStageRunner(opts: RunnerOptions): Promise<{ stop(): P
     : null;
   sweepTimer?.unref?.();
 
+  // The fence: nothing spawns until a probe past the host times out. The
+  // first probe starts now; a spawn that comes before it is back waits for
+  // it, a hello does not. One probe at a time.
+  const target = (own["CANOPY_FENCE_PROBE"] ?? "").trim();
+  const probeOnce = opts.probe ?? ((url: string) => reach({ name: "the fence probe", url, expect: "blocked" }));
+  let fence: FenceState = target ? { fenced: "unchecked", reason: FENCE_PENDING } : { fenced: "unchecked", reason: FENCE_UNSET };
+  let probing: Promise<void> | null = null;
+  const probeFence = (): Promise<void> => {
+    if (!target) return Promise.resolve();
+    probing ??= probeOnce(target)
+      .then((r) => {
+        fence = fenceOf(target, r);
+      })
+      .catch((e: unknown) => {
+        fence = { fenced: false, reason: `the fence probe of ${target} failed (${e instanceof Error ? e.message : String(e)}), so the fence is not confirmed` };
+      })
+      .finally(() => {
+        probing = null;
+      });
+    return probing;
+  };
+  const firstProbe = probeFence();
+  const fenceTimer = target ? setInterval(() => void probeFence(), opts.fenceEvery ?? FENCE_EVERY) : null;
+  fenceTimer?.unref?.();
+
   const server = createServer((sock) => {
     live.add(sock);
     const split = lineSplitter();
@@ -287,9 +372,9 @@ export async function startStageRunner(opts: RunnerOptions): Promise<{ stop(): P
     const hello = async (): Promise<void> => {
       const harnesses: string[] = [];
       for (const h of HARNESSES) {
-        if (await resolveProgram(programs[h] ?? h, own["PATH"], opts.root)) harnesses.push(h);
+        if ("program" in (await resolveProgram(h, programs[h] ?? h, own["PATH"], opts.root, writable))) harnesses.push(h);
       }
-      finish({ t: "hello", harnesses });
+      finish({ t: "hello", harnesses, fenced: fence.fenced, ...(fence.reason ? { reason: fence.reason } : {}) });
     };
 
     const busy = async (path: string): Promise<void> => {
@@ -304,9 +389,15 @@ export async function startStageRunner(opts: RunnerOptions): Promise<{ stop(): P
       if (refused) return finish({ t: "refused", reason: refused });
       const where = await seedOf(opts.root, req.cwd);
       if ("refused" in where) return finish({ t: "refused", reason: where.refused });
+      // nothing starts unfenced: the first probe is waited for, and the
+      // state is read after it
+      await firstProbe;
+      const now = fence;
+      if (now.fenced !== true) return finish({ t: "refused", reason: now.reason ?? FENCE_UNSET, fenced: now.fenced });
       const name = req.argv[0] ?? "";
-      const program = await resolveProgram(programs[name] ?? name, own["PATH"], opts.root);
-      if (program === null) return finish({ t: "refused", reason: `${name} is not installed where the stage runner can start it` });
+      const resolved = await resolveProgram(name, programs[name] ?? name, own["PATH"], opts.root, writable);
+      if ("refused" in resolved) return finish({ t: "refused", reason: resolved.refused });
+      const program = resolved.program;
       if (name === "codex") {
         const home = own["CODEX_HOME"] ?? (own["HOME"] ? join(own["HOME"], ".codex") : null);
         try {
@@ -474,6 +565,7 @@ export async function startStageRunner(opts: RunnerOptions): Promise<{ stop(): P
   return {
     stop: async () => {
       if (sweepTimer) clearInterval(sweepTimer);
+      if (fenceTimer) clearInterval(fenceTimer);
       for (const s of live) s.destroy();
       const closed = new Promise<void>((r) => server.close(() => r()));
       while (finishing.size > 0) await Promise.allSettled(finishing);

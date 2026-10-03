@@ -824,8 +824,12 @@ export interface Run {
   error?: string;
   /** a stage run that failed because the stage runner went away under it,
    *  as a hello confirmed; a flow parks on this, never on the error's words,
-   *  which carry the stage's own stderr */
+   *  which carry the stage's own stderr. Also set when the runner refused
+   *  the run's process for its fence, which a flow waits out the same way */
   away?: boolean;
+  /** with `away`, the stage runner's own words for a fence refusal (never
+   *  the stage's output); the flow's park says them */
+  awayWhy?: string;
   /** whether git status differed after the run from before it; set when
    *  the run ends, for actions that are supposed to change something */
   outcome?: "changed" | "unchanged";
@@ -1325,8 +1329,8 @@ export interface SproutDetail {
 
 /** Where the incubator's stages run (`GET /api/incubator/stages`, and the
  *  `stages` event whenever either changes). `isolated` is true while the
- *  stage runner answers, so a stage runs in the stages container with no
- *  token of canopy's; `waiting` is why queued sprouts wait for their next
+ *  stage runner answers and says its fence holds, so a stage runs in the
+ *  stages container with no token of canopy's and no way to the tailnet; `waiting` is why queued sprouts wait for their next
  *  stage, or null when none does. `mode` is which env set it up:
  *  `runner` through CANOPY_STAGE_SOCKET (answering or not), `unisolated`
  *  under CANOPY_INCUBATOR_UNISOLATED=1 (stages run here, with canopy's
@@ -1337,6 +1341,11 @@ export interface IncubatorStages {
   isolated: boolean;
   mode: StagesMode;
   waiting: string | null;
+  /** the runner answers but its fence is not confirmed: why, in its words
+   *  (no probe target, a probe still out, or one that got through); stages
+   *  wait as they do for a runner away. Absent from a backend older than
+   *  the fence. */
+  unfenced?: string | null;
 }
 
 /* ---------- flows: one workflow running on one repo ---------- */

@@ -93,6 +93,10 @@ services:
     environment:
       - CANOPY_STAGE_ROOT=${DEV_ROOT:-/home/eric/dev}/_incubator
       - CANOPY_STAGE_SOCKET=/run/canopy-stage/runner.sock
+      # a URL past the host that answers HTTP whenever nothing drops the
+      # packet (the LAN router's page): the runner starts nothing until its
+      # probe of it times out. Set in .env; unset, every stage waits.
+      - CANOPY_FENCE_PROBE=${CANOPY_FENCE_PROBE:-}
       - LANG=C.UTF-8
     volumes:
       # every one of these must exist on the host, owned by the host user,

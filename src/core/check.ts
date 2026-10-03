@@ -1,6 +1,8 @@
 /**
  * A workflow step's check, in the repo, through a login shell so the user's
- * PATH (bun, cargo) applies; over ssh for a remote repo. Bun-only.
+ * PATH (bun, cargo) applies; over ssh for a remote repo. A stage's check
+ * through the stage runner is a plain `sh -c`: its login files sit in the
+ * stages container's home, which every stage can write. Bun-only.
  */
 import { checkEnv } from "./cli";
 import { stageEnv } from "./envnames";
@@ -32,9 +34,9 @@ export async function runCheck(
 ): Promise<CheckResult> {
   const { host, path } = parseLocator(repo.path);
   if (stage && client === null) return { exit: 127, output: away, away: true };
-  const r: ExecResult =
+  const r: ExecResult & { unfenced?: string } =
     stage && client
-      ? await client.exec(["sh", "-lc", command], { cwd: path, timeoutMs: CHECK_TIMEOUT })
+      ? await client.exec(["sh", "-c", command], { cwd: path, timeoutMs: CHECK_TIMEOUT })
       : host === null
         ? await exec(["sh", "-lc", command], {
             cwd: path,
@@ -43,6 +45,9 @@ export async function runCheck(
             ...(stage ? { base: stageEnv(process.env) } : {}),
           })
         : await onHost(host, ["sh", "-lc", `cd ${shellQuote(path)} && ${command}`], { timeoutMs: CHECK_TIMEOUT });
+  // the runner refused it for its fence, by the refusal's own field: the
+  // check waits for the fence, as it waits for a runner away
+  if (stage && client && r.unfenced !== undefined) return { exit: r.code, output: r.unfenced, away: true };
   const out = `${r.stdout}${r.stderr ? `\n${r.stderr}` : ""}`.trim();
   const output = out.length > CHECK_OUTPUT_CAP ? `…${out.slice(-CHECK_OUTPUT_CAP)}` : out;
   // A connection that failed reads as 127 with the runner's words, which a

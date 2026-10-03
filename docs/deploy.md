@@ -509,7 +509,9 @@ the unit and runs it. The unit never runs the checkout's script. A copy under
 any name but `stages-fence.sh` reads none of the `CANOPY_FENCE_*` test
 switches, so the `.new` copy installs the real paths whatever the env holds.
 The unit is ordered first but fails open: if its `--apply` fails at boot,
-docker still starts stages, unfenced (see "After a reboot" below). The rules
+docker still starts stages, unfenced (see "After a reboot" below). The stage
+runner then starts nothing: its probe of `CANOPY_FENCE_PROBE` (step 4) gets
+an answer, and canopy holds every stage and says "stages unfenced". The rules
 need nothing docker makes, since `-i` matches the bridge by name, so they can
 go in before the bridge exists. After a change to the script, repeat steps 1
 and 2; `--apply` alone adds any missing rule and changes nothing on a rerun.
@@ -524,7 +526,23 @@ docker network inspect canopy_stages-net -f '{{index .Options "com.docker.networ
 docker compose rm -sf stages && docker network rm canopy_stages-net
 ```
 
-**4. Build and start** with `bun run redeploy`. Before compose runs it makes
+**4. The fence probe, then build and start.** Set the probe target in `.env`:
+
+```
+CANOPY_FENCE_PROBE=http://192.168.1.1/
+```
+
+It must be a URL past the mini that answers HTTP whenever nothing drops the
+packet: the LAN router's page is the usual one. The stage runner probes it at
+start and every 5 minutes and starts nothing until a probe times out, which
+only the fence makes happen. An answer means the fence is down. A lookup or
+certificate failure says nothing either way, and holds the stages too. The
+mini's own addresses and the stages bridge gateway will not do: ufw drops
+those on INPUT with or without the fence, so their timeout proves nothing.
+Unset or empty, every stage waits and the incubator says "stages unfenced"
+with "set CANOPY_FENCE_PROBE".
+
+Then build and start with `bun run redeploy`. Before compose runs it makes
 the stages' host folders (off `DEV_ROOT` and `HOST_HOME` in `.env`), since
 docker would make a missing bind mount as root: a root `.shared` stops canopy
 copying a stage's inputs in, and a root login folder keeps the logins out.
@@ -565,7 +583,12 @@ docker compose exec -e CANOPY_FENCE_TAILNET_IP=$(tailscale ip -4) \
 ```
 
 Every line should say `ok`. Only a timeout counts as blocked, since the fence
-drops and never answers. Any answer, or a refused or reset connection, means a
+drops and never answers. canopy itself makes the same test on one target
+before it runs any stage: the stage runner holds every spawn until its probe
+of `CANOPY_FENCE_PROBE` (step 4) times out, and again from any probe that gets
+an answer. This check is still worth running, since that probe covers one
+target and a fence that drops it while letting something else through would
+pass it. Any answer, or a refused or reset connection, means a
 packet reached a host and counts as open, and a lookup or certificate failure
 is an error. A target with nothing listening still says `BAD` without the
 fence, except where ufw drops the packet on INPUT, which also ends in a
@@ -623,7 +646,12 @@ systemctl is-active canopy-stages-fence   # active
 sudo iptables -t raw -S PREROUTING        # the drops
 ```
 
-**8. The incubator word.** The incubator view should now say "stages isolated".
+If the unit failed, the incubator says "stages unfenced" and nothing runs
+until the fence is back and the next probe, within 5 minutes, times out.
+
+**8. The incubator word.** The incubator view should now say "stages
+isolated". "stages unfenced" means the runner answers but its probe got
+through, failed, or has no target: its title says which.
 
 **A Mac backend** has no stages container. It runs the incubator only with
 `CANOPY_INCUBATOR_UNISOLATED=1`, which gives up all of part 3: stages run as

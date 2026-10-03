@@ -230,6 +230,8 @@ export class RunCtx implements DriveCtx {
   /** set by the Runner when a stage run's process died with the stage
    *  runner itself: the failure says so, and a flow parks on it */
   away = false;
+  /** with `away`, the stage runner's words when it refused for its fence */
+  awayWhy: string | null = null;
   readonly cwd: string;
   readonly agent: DriveAgent;
   readonly spec: DriveSpec;
@@ -377,7 +379,8 @@ export class RunCtx implements DriveCtx {
     const away = this.away && out.status === "failed";
     // the words are for people; a flow parks on the flag alone
     if (away) this.run.away = true;
-    this.finish(out.status, away ? `${STAGE_AWAY}: ${out.error ?? ""}` : out.error);
+    if (away && this.awayWhy !== null) this.run.awayWhy = this.awayWhy;
+    this.finish(out.status, away ? (this.awayWhy ?? `${STAGE_AWAY}: ${out.error ?? ""}`) : out.error);
   }
 
   /** Ends the run once; later calls do nothing. */

@@ -13,6 +13,14 @@ let root = "";
 let sock = "";
 const stops: (() => Promise<void>)[] = [];
 
+/** the fence probe's target in these tests, never fetched: each runner gets a probe of its own */
+const PROBE = "http://probe.test/";
+const FENCE = { CANOPY_FENCE_PROBE: PROBE };
+/** a probe that times out, as one does behind the fence: every runner here but the fence's own tests */
+const blocked: NonNullable<RunnerOptions["probe"]> = async () => ({ result: "blocked" });
+/** stand-ins live in a temp dir the tests own: only the writability tests ask */
+const notWritable: NonNullable<RunnerOptions["writable"]> = async () => false;
+
 beforeAll(async () => {
   // the realpath, since a Mac's tmpdir sits behind /var -> /private/var and
   // the runner spawns in the realpath it checked
@@ -25,7 +33,7 @@ beforeAll(async () => {
   await symlink("/", join(root, "escape"));
   await writeFile(join(dir, "escape.ts"), ESCAPE);
   sock = join(dir, "s.sock");
-  const r = await startStageRunner({ socket: sock, root, env: { PATH: process.env["PATH"], HOME: dir, GH_TOKEN: "own-secret" } });
+  const r = await startStageRunner({ socket: sock, root, env: { PATH: process.env["PATH"], HOME: dir, GH_TOKEN: "own-secret", ...FENCE }, probe: blocked });
   stops.push(r.stop);
 });
 afterAll(async () => {
@@ -36,7 +44,7 @@ afterAll(async () => {
 /** a runner of its own on another socket, stopped in afterAll */
 async function extra(name: string, opts: Omit<RunnerOptions, "socket" | "root">): Promise<string> {
   const path = join(dir, `${name}.sock`);
-  const r = await startStageRunner({ socket: path, root, ...opts });
+  const r = await startStageRunner({ socket: path, root, probe: blocked, writable: notWritable, ...opts, env: { PATH: process.env["PATH"], HOME: dir, ...FENCE, ...opts.env } });
   stops.push(r.stop);
   return path;
 }
@@ -138,16 +146,41 @@ describe("the stage runner", () => {
       programs: { claude: await standIn(join(dir, "fake-claude")), codex: "/nonexistent/codex" },
     });
     const [f] = await talk({ t: "hello" }, [], 5000, path);
-    expect(f).toEqual({ t: "hello", harnesses: ["claude"] });
+    expect(f).toEqual({ t: "hello", harnesses: ["claude"], fenced: true });
   });
 
   test("a program that resolves inside the stage root is neither listed nor started", async () => {
     const inside = await standIn(join(root, "coin", "claude"));
     const path = await extra("inroot", { env: { PATH: process.env["PATH"], HOME: dir }, programs: { claude: inside, codex: "/nonexistent/codex" } });
-    expect((await talk({ t: "hello" }, [], 5000, path))[0]).toEqual({ t: "hello", harnesses: [] });
+    expect((await talk({ t: "hello" }, [], 5000, path))[0]).toEqual({ t: "hello", harnesses: [], fenced: true });
     const fs = await talk({ t: "spawn", argv: ["claude"], cwd: join(root, "coin"), env: {} }, [], 5000, path);
     expect(fs.at(-1)?.t).toBe("refused");
     await rm(inside);
+  });
+
+  test("a program the runner's own uid could rewrite, the file or any folder above it, is neither listed nor started", async () => {
+    // the real check, not the stand-ins' pass
+    const own = await standIn(join(dir, "own-claude"));
+    const lockedDir = join(dir, "locked");
+    await mkdir(lockedDir, { recursive: true });
+    const locked = await standIn(join(lockedDir, "codex"));
+    // the file is read-only, but its folder is ours: a stage could swap it
+    await chmod(locked, 0o555);
+    const path = await extra("writable", {
+      writable: undefined,
+      programs: { claude: own, codex: locked },
+    });
+    expect((await talk({ t: "hello" }, [], 5000, path))[0]).toMatchObject({ harnesses: [] });
+    for (const [name, file] of [
+      ["claude", own],
+      ["codex", lockedDir],
+    ] as const) {
+      const fs = await talk({ t: "spawn", argv: [name], cwd: join(root, "coin"), env: {} }, [], 5000, path);
+      expect(fs.at(-1)).toEqual({ t: "refused", reason: `${name} is not started: ${file} is writable by the stage runner's own user, so a stage could change it` });
+    }
+    // sh resolves to the system's, which no user here can write
+    const fs = await talk({ t: "spawn", argv: ["sh", "-c", "exit 0"], cwd: join(root, "coin"), env: {} }, [], 5000, path);
+    expect(fs.at(-1)).toEqual({ t: "exit", code: 0 });
   });
 
   test("sh runs in a seed, stdin in, stdout out, the exit code back", async () => {
@@ -354,6 +387,83 @@ describe("the stage runner", () => {
     const after = await readFile(join(home, "config.toml"), "utf8");
     expect(after).not.toContain(join(root, "coin"));
     expect(after).toContain(`[projects."/elsewhere"]`);
+  });
+});
+
+describe("the fence", () => {
+  const coin = () => join(root, "coin");
+  /** a spawn that would leave a marker; refused means the marker never appears */
+  const tryMark = async (path: string, mark: string): Promise<StageFrame[]> =>
+    talk({ t: "spawn", argv: ["sh", "-c", `touch ${join(dir, mark)}`], cwd: coin(), env: {} }, [], 8000, path);
+
+  test("with no probe target set it is unchecked: hello says so and every spawn is refused", async () => {
+    const path = await extra("fence-unset", { env: { PATH: process.env["PATH"], HOME: dir, CANOPY_FENCE_PROBE: "" } });
+    const [hello] = await talk({ t: "hello" }, [], 5000, path);
+    expect(hello).toMatchObject({ t: "hello", fenced: "unchecked", reason: "the fence is unchecked: set CANOPY_FENCE_PROBE" });
+    const fs = await tryMark(path, "fence-unset");
+    expect(fs.at(-1)).toEqual({ t: "refused", reason: "the fence is unchecked: set CANOPY_FENCE_PROBE", fenced: "unchecked" });
+    expect(await Bun.file(join(dir, "fence-unset")).exists()).toBe(false);
+  });
+
+  test("a probe that gets an answer is a fence that is down: refused, and hello says why", async () => {
+    const path = await extra("fence-open", { probe: async () => ({ result: "open" }) });
+    const fs = await tryMark(path, "fence-open");
+    expect(fs.at(-1)).toEqual({ t: "refused", reason: `the fence is down: ${PROBE} answered`, fenced: false });
+    expect(await Bun.file(join(dir, "fence-open")).exists()).toBe(false);
+    expect((await talk({ t: "hello" }, [], 5000, path))[0]).toMatchObject({ fenced: false, reason: `the fence is down: ${PROBE} answered` });
+  });
+
+  test("a probe that fails some other way (a lookup, a certificate) is not a fence: refused with its own reason", async () => {
+    const path = await extra("fence-dns", { probe: async () => ({ result: "error", why: "ENOTFOUND" }) });
+    const fs = await tryMark(path, "fence-dns");
+    expect(fs.at(-1)).toEqual({ t: "refused", reason: `the fence probe of ${PROBE} failed (ENOTFOUND), so the fence is not confirmed`, fenced: false });
+    expect(await Bun.file(join(dir, "fence-dns")).exists()).toBe(false);
+  });
+
+  test("a probe that times out is the fence: the spawn runs", async () => {
+    const asked: string[] = [];
+    const path = await extra("fence-up", {
+      probe: async (url) => {
+        asked.push(url);
+        return { result: "blocked" };
+      },
+    });
+    const fs = await talk({ t: "spawn", argv: ["sh", "-c", "echo ran"], cwd: coin(), env: {} }, [], 8000, path);
+    expect(text(fs, "out")).toBe("ran\n");
+    expect(fs.at(-1)).toEqual({ t: "exit", code: 0 });
+    expect(asked).toEqual([PROBE]);
+  });
+
+  test("a spawn that comes while the first probe is still out waits for it; hello does not", async () => {
+    let let_go: () => void = () => {};
+    const out = new Promise<void>((r) => (let_go = r));
+    const path = await extra("fence-pending", {
+      probe: async () => {
+        await out;
+        return { result: "blocked" };
+      },
+    });
+    expect((await talk({ t: "hello" }, [], 5000, path))[0]).toMatchObject({ fenced: "unchecked", reason: "the fence probe has not finished" });
+    const spawned = talk({ t: "spawn", argv: ["sh", "-c", "echo waited"], cwd: coin(), env: {} }, [], 8000, path);
+    await Bun.sleep(100);
+    let_go();
+    const fs = await spawned;
+    expect(text(fs, "out")).toBe("waited\n");
+  });
+
+  test("the probe runs again on its timer, and a fence that drops refuses from then on", async () => {
+    let calls = 0;
+    const path = await extra("fence-timer", {
+      probe: async () => (++calls === 1 ? { result: "blocked" } : { result: "open" }),
+      fenceEvery: 100,
+    });
+    expect((await talk({ t: "hello" }, [], 5000, path))[0]).toMatchObject({ fenced: true });
+    for (let i = 0; i < 100 && calls < 2; i++) await Bun.sleep(20);
+    await Bun.sleep(20);
+    expect(calls).toBeGreaterThanOrEqual(2);
+    expect((await talk({ t: "hello" }, [], 5000, path))[0]).toMatchObject({ fenced: false });
+    expect((await tryMark(path, "fence-timer")).at(-1)).toMatchObject({ t: "refused", fenced: false });
+    expect(await Bun.file(join(dir, "fence-timer")).exists()).toBe(false);
   });
 });
 

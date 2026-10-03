@@ -2793,17 +2793,27 @@ export async function startServer(opts: {
   const socket = process.env["CANOPY_STAGE_SOCKET"];
   const stage: StageClient | null = opts.incubator?.stage !== undefined ? opts.incubator.stage : socket ? new StageClient(socket) : null;
   const unisolated = opts.incubator?.unisolated ?? process.env["CANOPY_INCUBATOR_UNISOLATED"] === "1";
+  /** Why an answering runner may not start a stage: its fence is not
+   *  confirmed (no probe target, the first probe still out, or a probe that
+   *  got through), in its own words. Null once its probe timed out. */
+  const unfencedWhy = (): string | null => {
+    if (!stage || stage.harnessesNow() === null) return null;
+    const f = stage.fenceNow();
+    return f?.fenced === true ? null : (f?.reason ?? "the stage runner says nothing of its fence: update the stages image");
+  };
   const isolation = (): string | null =>
     stage
       ? stage.harnessesNow()
-        ? null
+        ? unfencedWhy()
         : STAGE_AWAY
       : unisolated
         ? null
         : "stages need the stage runner (CANOPY_STAGE_SOCKET), or CANOPY_INCUBATOR_UNISOLATED=1";
-  /** a stage's runs and checks: the runner's client while it answers, null
-   *  while it is away (the stage waits), undefined to run here unisolated */
-  const stageFor = (): StageClient | null | undefined => (stage ? (stage.harnessesNow() ? stage : null) : unisolated ? undefined : null);
+  /** a stage's runs and checks: the runner's client while it answers behind
+   *  its fence, null while it is away or unfenced (the stage waits),
+   *  undefined to run here unisolated */
+  const stageFor = (): StageClient | null | undefined =>
+    stage ? (stage.harnessesNow() && unfencedWhy() === null ? stage : null) : unisolated ? undefined : null;
   /** what a stage run or check says when `stageFor` gives null: the
    *  runner's absence, or the env to set when no runner is set up */
   const stageAway = (): string => isolation() ?? STAGE_AWAY;
@@ -3079,9 +3089,10 @@ export async function startServer(opts: {
   };
   /** where stages run now, for the route and the `stages` event */
   const stagesNow = (): IncubatorStages => ({
-    isolated: stage !== null && stage.harnessesNow() !== null,
+    isolated: stage !== null && stage.harnessesNow() !== null && unfencedWhy() === null,
     mode: stage ? "runner" : unisolated ? "unisolated" : "off",
     waiting: state.incubator.inc.waiting(),
+    unfenced: unfencedWhy(),
   });
   let toldStages = JSON.stringify(stagesNow());
   /** the `stages` event, only when what it says changed */
@@ -3445,6 +3456,8 @@ export async function startServer(opts: {
       console.error(`flows: canopy pid ${flowsLock.holder} keeps the records in ${flowsDir()}; flows started here are not kept across a restart`);
     }
   }
+  /** whether the last good hello said fenced: a flip pumps the queue */
+  let wasFenced = unfencedWhy() === null;
   const stopStageWatch = stage
     ? stage.watch(
         opts.incubator?.stageEvery ?? 15_000,
@@ -3457,11 +3470,15 @@ export async function startServer(opts: {
           tellStages();
         },
         // every good hello, not only the one after a miss: a flow can park
-        // while the client still believed the runner up. The resumed flows
-        // take their slots back before the queue is pumped.
+        // while the client still believed the runner up, and the fence can
+        // come or go while the runner answers throughout. Parks resume only
+        // on a hello that says fenced; the resumed flows take their slots
+        // back before the queue is pumped.
         () => {
-          if (state.flows.resumeStageParks() === 0) return;
-          state.incubator.inc.pump();
+          const fenced = unfencedWhy() === null;
+          const resumed = fenced ? state.flows.resumeStageParks() : 0;
+          if (resumed > 0 || fenced !== wasFenced) state.incubator.inc.pump();
+          wasFenced = fenced;
           tellStages();
         },
       )

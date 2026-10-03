@@ -165,10 +165,17 @@ export function replaceSprouts(
 export function stagesWord(st: IncubatorStages): { word: string; title: string; warn: boolean } {
   switch (st.mode) {
     case "runner":
+      if (!st.isolated && st.unfenced) {
+        return {
+          word: "stages unfenced",
+          title: `The stage runner answers, but its fence is not confirmed: ${st.unfenced}. Stages wait until its probe of CANOPY_FENCE_PROBE times out, and start on their own then.`,
+          warn: true,
+        };
+      }
       return st.isolated
         ? {
             word: "stages isolated",
-            title: "CANOPY_STAGE_SOCKET is set and the stage runner answers: stages run in the stages container, with none of canopy's tokens.",
+            title: "CANOPY_STAGE_SOCKET is set and the stage runner answers behind its fence: stages run in the stages container, with none of canopy's tokens.",
             warn: false,
           }
         : {

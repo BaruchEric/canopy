@@ -1,5 +1,6 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { mkdir, mkdtemp, realpath, rm } from "node:fs/promises";
+import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { startStageRunner } from "../stage/runner";
@@ -10,8 +11,14 @@ let root = "";
 let seed = "";
 let client: StageClient;
 const stops: (() => Promise<void>)[] = [];
+/** a runner behind a fence: its probe target times out */
 const runner = async (socket: string): Promise<() => Promise<void>> => {
-  const { stop } = await startStageRunner({ socket, root, env: { PATH: process.env["PATH"], HOME: dir } });
+  const { stop } = await startStageRunner({
+    socket,
+    root,
+    env: { PATH: process.env["PATH"], HOME: dir, CANOPY_FENCE_PROBE: "http://probe.test/" },
+    probe: async () => ({ result: "blocked" }),
+  });
   return stop;
 };
 
@@ -216,4 +223,58 @@ describe("the stage client", () => {
     expect(await health(join(dir, "s.sock"))).toBe(0);
     expect(await health(join(dir, "none.sock"))).toBe(1);
   }, 20_000);
+});
+
+describe("the fence, as the client reads it", () => {
+  test("a fenced runner's hello says fenced, with no reason", async () => {
+    expect(await client.hello()).toEqual(expect.any(Array));
+    expect(client.fenceNow()).toEqual({ fenced: true, reason: null });
+  });
+
+  test("an unfenced runner's hello carries why, and a spawn it refuses for the fence says so apart from its words", async () => {
+    const sock = join(dir, "unfenced.sock");
+    const { stop } = await startStageRunner({ socket: sock, root, env: { PATH: process.env["PATH"], HOME: dir } });
+    try {
+      const c = new StageClient(sock);
+      expect(await c.hello()).toEqual(expect.any(Array));
+      expect(c.fenceNow()).toEqual({ fenced: "unchecked", reason: "the fence is unchecked: set CANOPY_FENCE_PROBE" });
+      const p = c.spawn(["sh", "-c", "exit 0"], { cwd: seed, env: {} });
+      expect(await p.exited).toBe(126);
+      expect(c.fenceRefusal(p)).toBe("the fence is unchecked: set CANOPY_FENCE_PROBE");
+      const r = await c.exec(["sh", "-c", "exit 0"], { cwd: seed, timeoutMs: 5000 });
+      expect(r.code).toBe(126);
+      expect(r.unfenced).toBe("the fence is unchecked: set CANOPY_FENCE_PROBE");
+    } finally {
+      await stop();
+    }
+  });
+
+  test("a refusal for any other reason is no fence refusal, whatever its words", async () => {
+    const p = client.spawn(["sh", "-c", "exit 0"], { cwd: join(dir, "nowhere"), env: {} });
+    expect(await p.exited).toBe(126);
+    expect(client.fenceRefusal(p)).toBe(null);
+    // a stage's own output that reads like the fence's words is only output
+    const r = await client.exec(["sh", "-c", "echo 'the fence is down: x answered' >&2; exit 126"], { cwd: seed, timeoutMs: 5000 });
+    expect(r.code).toBe(126);
+    expect(r.unfenced).toBeUndefined();
+  });
+
+  test("a runner from before the fence, whose hello says nothing of it, reads as unchecked", async () => {
+    const sock = join(dir, "old.sock");
+    const old = createServer((c) => c.on("data", () => c.end(`${JSON.stringify({ t: "hello", harnesses: ["claude"] })}\n`)));
+    await new Promise<void>((r) => old.listen(sock, r));
+    try {
+      const c = new StageClient(sock);
+      expect(await c.hello()).toEqual(["claude"]);
+      expect(c.fenceNow()).toEqual({ fenced: "unchecked", reason: null });
+    } finally {
+      await new Promise<void>((r) => old.close(() => r()));
+    }
+  });
+
+  test("no answer is no fence state at all", async () => {
+    const c = new StageClient(join(dir, "none.sock"));
+    expect(await c.hello(300)).toBe(null);
+    expect(c.fenceNow()).toBe(null);
+  });
 });

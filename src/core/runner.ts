@@ -337,6 +337,14 @@ export class Runner {
     const exited = (async () => {
       try {
         const code = await proc.exited;
+        // the runner refused it for its fence, by the refusal's own field:
+        // the step waits for the fence as it waits for a runner away
+        const unfenced = client?.fenceRefusal(proc) ?? null;
+        if (unfenced !== null && !live.ctx.stopping) {
+          live.ctx.away = true;
+          live.ctx.awayWhy = unfenced;
+          return code;
+        }
         // A process gone without an exit code, or with the 127 a connection
         // that never reached the runner reads as, not by a stop, may have
         // gone with the stage runner itself: a hello that finds no runner

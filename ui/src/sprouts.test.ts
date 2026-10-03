@@ -152,6 +152,14 @@ describe("stagesWord", () => {
     expect(w.title).toContain("CANOPY_STAGE_SOCKET is set");
   });
 
+  test("a runner that answers with its fence not confirmed is unfenced, never isolated, and the title says why", () => {
+    const why = "the fence is down: http://192.168.1.1/ answered";
+    const w = stagesWord({ isolated: false, mode: "runner", waiting: why, unfenced: why });
+    expect(w).toMatchObject({ word: "stages unfenced", warn: true });
+    expect(w.title).toContain(why);
+    expect(w.title).toContain("CANOPY_FENCE_PROBE");
+  });
+
   test("unisolated says stages run here with canopy's tokens", () => {
     const w = stagesWord({ isolated: false, mode: "unisolated", waiting: null });
     expect(w).toMatchObject({ word: "stages unisolated", warn: true });

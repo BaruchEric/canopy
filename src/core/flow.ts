@@ -274,7 +274,7 @@ export class Flows {
       // step waits for it. By the flag, never the error's words, which carry
       // the stage's own stderr and so whatever it chose to print.
       live.flow.parkedFor = "stage";
-      this.park(live, STAGE_AWAY);
+      this.park(live, run.awayWhy ?? STAGE_AWAY);
       return;
     }
     if (run.status === "failed") {
