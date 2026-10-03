@@ -365,18 +365,17 @@ export function withInputsRead(wf: Workflow, dir: string): Workflow {
   return { ...wf, steps: wf.steps.map((st) => ({ ...st, tools: [...st.tools, rule] })) };
 }
 
-/** A copy of the workflow whose every step may also read devhub's two
- *  indexes and the READMEs under the launch root, and nothing else there:
- *  the root holds a shared `.env`, and a whole-disk Read reaches
- *  /proc/<pid>/environ, either of which WebFetch could carry out. */
-export function withWorkspaceRead(wf: Workflow, root: string): Workflow {
-  const rules = [`Read(/${root}/_devhub/manifest.json)`, `Read(/${root}/_devhub/references.json)`, `Read(/${root}/**/README.md)`];
-  return { ...wf, steps: wf.steps.map((st) => ({ ...st, tools: [...st.tools, ...rules] })) };
+/** A copy of the workflow whose every step may also read the workspace
+ *  snapshot canopy copied for it (`.shared/workspace/<id>`), and nothing
+ *  else: the launch root holds a shared `.env`. */
+export function withWorkspaceRead(wf: Workflow, dir: string): Workflow {
+  const rule = `Read(/${dir}/**)`;
+  return { ...wf, steps: wf.steps.map((st) => ({ ...st, tools: [...st.tools, rule] })) };
 }
 
 /** the stage note's sentence naming what withWorkspaceRead opens */
-export const workspaceLine = (root: string): string =>
-  `The workspace's devhub manifest is ${root}/_devhub/manifest.json and its saved references are ${root}/_devhub/references.json.`;
+export const workspaceLine = (dir: string): string =>
+  `The workspace's devhub manifest is ${dir}/manifest.json, its saved references are ${dir}/references.json and each project's README is in ${dir}/READMEs/.`;
 
 const isNum = (v: unknown): v is number => typeof v === "number" && Number.isFinite(v);
 const optStr = (v: unknown): boolean => v === undefined || typeof v === "string";

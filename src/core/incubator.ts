@@ -10,6 +10,7 @@ import { join } from "node:path";
 import { isVercelAppUrl } from "./deploy";
 import { networkOrigin } from "./peersync";
 import type { Shipper } from "./shipper";
+import { shareInputs, shareWorkspace, unshare } from "./stageshare";
 import {
   BUILD_FILES,
   INPUT_FILE_MAX,
@@ -116,6 +117,15 @@ export interface NoteSink {
 
 export type Transcriber = (data: Uint8Array, name: string, type: string) => Promise<string>;
 
+/** what a stage reads, copied under the seeds dir's `.shared` (stageshare.ts) */
+export interface StageShare {
+  inputs(seeds: string, sproutId: string, from: string): Promise<string>;
+  workspace(seeds: string, root: string, sproutId: string): Promise<string>;
+  forget(seeds: string, sproutId: string): Promise<void>;
+}
+
+const REAL_SHARE: StageShare = { inputs: shareInputs, workspace: (seeds, root, id) => shareWorkspace(seeds, root, id), forget: unshare };
+
 export interface IncubatorDeps {
   /** the launch root; seeds go under `<root>/_incubator/` */
   root: string;
@@ -141,6 +151,8 @@ export interface IncubatorDeps {
    *  queued sprout stays queued and holds no slot; canopy's own ship still
    *  goes. The server calls `pump` again once the runner answers. */
   isolation?: () => string | null;
+  /** copies a stage reads; the real ones unless a test hands its own */
+  share?: StageShare;
   /** the reason queued sprouts wait, each time it changes (`waiting`) */
   onWaiting?: (why: string | null) => void;
   now?: () => number;
@@ -592,6 +604,7 @@ export class Incubator {
     this.noteChain.delete(id);
     this.workChain.delete(id);
     this.cloneFrom.delete(id);
+    await (this.deps.share ?? REAL_SHARE).forget(join(this.deps.root, SEEDS_DIR), id).catch((err) => this.deps.log?.(`shared copies of ${id} not removed: ${msg(err)}`));
     for (const f of s.flows) this.seen.delete(f.flowId);
     this.deps.onGone(id);
   }
@@ -781,11 +794,16 @@ export class Incubator {
     if (!repo) return this.park(s, "the seed folder is gone");
     let wf = await this.deps.workflow(name);
     if (!wf) return this.park(s, `the ${name} workflow is not installed`);
-    if (name === "clarify") wf = withInputsRead(wf, this.deps.store.inputsDir(s.id));
-    if (name === "scout") wf = withWorkspaceRead(wf, this.deps.root);
+    // the stage reads copies under the seeds dir's .shared, never canopy's config dir or the root
+    const seedsDir = join(this.deps.root, SEEDS_DIR);
+    const share = this.deps.share ?? REAL_SHARE;
+    const inputs = await share.inputs(seedsDir, s.id, this.deps.store.inputsDir(s.id));
+    const ws = name === "scout" ? await share.workspace(seedsDir, this.deps.root, s.id) : null;
+    if (name === "clarify") wf = withInputsRead(wf, inputs);
+    if (ws !== null) wf = withWorkspaceRead(wf, ws);
     if (this.detached || s.status === "stopped") return;
-    const base = stageNote(s, this.deps.store.inputsDir(s.id));
-    const note = name === "scout" ? `${base} ${workspaceLine(this.deps.root)}` : base;
+    const base = stageNote(s, inputs);
+    const note = ws !== null ? `${base} ${workspaceLine(ws)}` : base;
     const flow = await this.deps.flows.start(repo, wf, note);
     s.flows.push({ workflow: name, flowId: flow.id });
     if (sproutEnded(s)) {

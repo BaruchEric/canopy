@@ -3,7 +3,7 @@
  * the seed, the flows, the vault and the speech model.
  */
 import { beforeEach, describe, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Incubator, IncubatorError, incubatorWorkflow, type IncubatorDeps, type IncubatorFlows, type IncubatorSeeds, type IncubatorStore, type Intake, type NoteSink } from "./incubator";
@@ -188,6 +188,7 @@ interface World {
   rescans: number;
   workflows: Map<string, Workflow>;
   repos: Set<string>;
+  forgot: string[];
 }
 
 let ids = 0;
@@ -203,11 +204,19 @@ function world(extra: Partial<IncubatorDeps> = {}): World {
     rescans: 0,
     workflows: new Map([["clarify", CLARIFY]]),
     repos: new Set<string>(),
+    forgot: [] as string[],
   };
   // the world handed back, which the rescan counts on (a spread copies the number)
   let out: World | undefined;
   const inc = new Incubator({
     root: "/root",
+    share: {
+      inputs: async (seeds, id) => `${seeds}/.shared/inputs/${id}`,
+      workspace: async (seeds, _root, id) => `${seeds}/.shared/workspace/${id}`,
+      forget: async (_seeds, id) => {
+        w.forgot.push(id);
+      },
+    },
     store: w.store,
     seeds: w.seeds,
     flows: w.flows,
@@ -267,8 +276,8 @@ describe("intake", () => {
     expect(w.rescans).toBe(1);
     expect(w.flows.started).toHaveLength(1);
     const run = w.flows.started[0];
-    expect(run?.workflow.steps[0]?.tools).toContain(`Read(//config/incubator/${s.id}/inputs/**)`);
-    expect(run?.note).toContain(`/config/incubator/${s.id}/inputs`);
+    expect(run?.workflow.steps[0]?.tools).toContain(`Read(//root/_incubator/.shared/inputs/${s.id}/**)`);
+    expect(run?.note).toContain(`/root/_incubator/.shared/inputs/${s.id}`);
     expect(after.flows).toEqual([{ workflow: "clarify", flowId: "flow1" }]);
     // the record, the note and the daily line
     expect(w.store.records.get(s.id)?.status).toBe("clarifying");
@@ -1072,6 +1081,7 @@ describe("stop, resume and dismiss", () => {
     expect(w.inc.list()).toEqual([]);
     expect(w.store.dismissed).toEqual([s.id]);
     expect(w.gone).toEqual([s.id]);
+    expect(w.forgot).toEqual([s.id]);
   });
 
   test("a vault write still under way never puts a dismissed record back", async () => {
@@ -1434,8 +1444,10 @@ describe("scout and build-new", () => {
     expect(s.status).toBe("researching");
     const started = w.flows.started.at(-1);
     expect(started?.workflow.name).toBe("scout");
-    expect(started?.workflow.steps[0]?.tools).toContain("Read(//root/_devhub/manifest.json)");
-    expect(started?.note).toContain("/root/_devhub/manifest.json");
+    const dir = `/root/_incubator/.shared/workspace/${s.id}`;
+    expect(started?.workflow.steps[0]?.tools).toContain(`Read(/${dir}/**)`);
+    expect(started?.workflow.steps[0]?.tools.some((t) => t.includes("/root/_devhub"))).toBe(false);
+    expect(started?.note).toContain(`${dir}/manifest.json`);
   });
 
   test("a new pick on vercel is kept, scout's files are committed, and build-new starts", async () => {
@@ -1650,5 +1662,26 @@ describe("scout and build-new", () => {
     const after = await end(w, s.id, { ".canopy/pick.json": PICK });
     expect(after.pick).toBe(undefined);
     expect(w.flows.started.at(-1)?.workflow.name).toBe("clarify");
+  });
+
+  test("with the real share, a scout reads the copies under _incubator/.shared and a dismiss removes them", async () => {
+    const tmp = mkdtempSync(join(tmpdir(), "canopy-incubator-share-"));
+    try {
+      const root = join(tmp, "root");
+      mkdirSync(join(root, "_devhub"), { recursive: true });
+      writeFileSync(join(root, "_devhub", "manifest.json"), "{}");
+      writeFileSync(join(root, ".env"), "GH_TOKEN=secret");
+      const w = world({ root, share: undefined, rescan: async () => {}, repo: (id) => ({ id, name: id, path: join(root, id), group: "", source: "root", status: null }) });
+      const s = await w.inc.create(intake({ text: "coin counter" }));
+      await w.inc.idle();
+      const shared = join(root, "_incubator", ".shared");
+      expect(w.flows.started[0]?.note).toContain(join(shared, "inputs", s.id));
+      expect(existsSync(join(shared, "inputs", s.id))).toBe(true);
+      await w.inc.stop(s.id);
+      await w.inc.dismiss(s.id);
+      expect(existsSync(join(shared, "inputs", s.id))).toBe(false);
+    } finally {
+      rmSync(tmp, { recursive: true, force: true });
+    }
   });
 });

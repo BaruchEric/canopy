@@ -227,17 +227,14 @@ describe("slots and stages", () => {
     expect(next.steps[0]?.tools).toEqual(["Edit", "Read(//config/incubator/sp_0123456789ab/inputs/**)"]);
     expect(wf.steps[0]?.tools).toEqual(["Edit"]);
   });
-  test("withWorkspaceRead adds devhub's two indexes and READMEs under the root, and nothing wider", () => {
+  test("withWorkspaceRead adds the snapshot dir's files and nothing else", () => {
     const wf = { steps: [{ name: "Research", tools: ["WebFetch"] }] } as unknown as Workflow;
-    const next = withWorkspaceRead(wf, "/work/dev");
-    expect(next.steps[0]?.tools).toEqual([
-      "WebFetch",
-      "Read(//work/dev/_devhub/manifest.json)",
-      "Read(//work/dev/_devhub/references.json)",
-      "Read(//work/dev/**/README.md)",
-    ]);
+    const next = withWorkspaceRead(wf, "/seeds/.shared/workspace/sp_1");
+    expect(next.steps[0]?.tools).toEqual(["WebFetch", "Read(//seeds/.shared/workspace/sp_1/**)"]);
     expect(wf.steps[0]?.tools).toEqual(["WebFetch"]);
-    expect(workspaceLine("/work/dev")).toBe("The workspace's devhub manifest is /work/dev/_devhub/manifest.json and its saved references are /work/dev/_devhub/references.json.");
+    expect(workspaceLine("/seeds/.shared/workspace/sp_1")).toBe(
+      "The workspace's devhub manifest is /seeds/.shared/workspace/sp_1/manifest.json, its saved references are /seeds/.shared/workspace/sp_1/references.json and each project's README is in /seeds/.shared/workspace/sp_1/READMEs/.",
+    );
   });
 });
 

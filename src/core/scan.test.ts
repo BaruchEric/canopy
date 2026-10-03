@@ -68,6 +68,14 @@ describe("findRepoDirs", () => {
     expect(dirs).toContain(join(w, "x", "_incubator"));
     await rm(w, { recursive: true, force: true });
   });
+  test("the shared copies under the seeds folder never become cards, even with a .git in them", async () => {
+    const w = await mkdtemp(join(tmpdir(), "canopy-shared-scan-"));
+    await mkdir(join(w, "_incubator", "coin", ".git"), { recursive: true });
+    await mkdir(join(w, "_incubator", ".shared", "workspace", "sp_1", ".git"), { recursive: true });
+    const dirs = await findRepoDirs(w);
+    expect(dirs).toEqual([join(w, "_incubator", "coin")]);
+    await rm(w, { recursive: true, force: true });
+  });
   test("finds repos, skips ignored dirs, stops at repo roots except for submodules", async () => {
     const dirs = await findRepoDirs(root);
     const rels = dirs.map((d) => repoId(root, d));
