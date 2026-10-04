@@ -52,6 +52,59 @@ export interface RepoStatus {
   /** absent when every remote-tracking branch is already in the checkout's
    *  history, or the repo has no remotes */
   tip?: RemoteTip;
+  /** work this repo holds outside this checkout's own tree; read only on a
+   *  main checkout (a linked worktree's card leaves it to the main one) and
+   *  absent when there is none */
+  elsewhere?: Elsewhere;
+}
+
+/** A linked worktree of the repo (`git worktree add`, Claude's agent
+ *  worktrees under `.claude/worktrees/`). canopy's own pull request build
+ *  worktrees are left out: they hold no work of yours. */
+export interface WorktreeWip {
+  /** absolute, on the repo's host */
+  path: string;
+  /** null when its HEAD is detached */
+  branch: string | null;
+  /** changed entries in its tree, untracked ones counted per folder */
+  files: number;
+  /** commits on its branch that this checkout's HEAD lacks */
+  unmerged: number;
+}
+
+/** A local branch with commits this checkout's HEAD lacks, checked out
+ *  nowhere (a branch checked out in a worktree is told under that one). */
+export interface BranchWip {
+  name: string;
+  /** commits on it that HEAD lacks; absent when the host's git is older
+   *  than 2.41 and cannot count them in the same read */
+  unmerged?: number;
+  /** where it stands against its upstream (`origin/x`, without
+   *  `refs/remotes/`): none set, set and `unpushed` commits short of it, or
+   *  set to a branch the remote no longer has */
+  push: { kind: "local" } | { kind: "upstream"; ref: string; unpushed: number } | { kind: "gone"; ref: string };
+  /** committer date of its tip, unix seconds */
+  at: number;
+  subject: string;
+}
+
+export interface StashWip {
+  count: number;
+  /** the newest entry's message and date */
+  subject: string;
+  at: number;
+}
+
+/** How many unmerged branches a status reads; a card showing this many
+ *  says "or more". */
+export const BRANCH_WIP_CAP = 12;
+
+export interface Elsewhere {
+  /** the linked worktrees holding work: changed files or unmerged commits */
+  worktrees: WorktreeWip[];
+  /** newest first, at most BRANCH_WIP_CAP of them */
+  branches: BranchWip[];
+  stash?: StashWip;
 }
 
 /** Open pull requests on the repo's GitHub page, counted for the repos the

@@ -42,6 +42,11 @@ export function statusSummary(r: Repo): string {
   if (st.behind > 0) parts.push(rust(`↓${st.behind}`));
   if (st.tip && st.tip.ref !== st.upstream) parts.push(sky(`⇣${st.tip.ref}`));
   if (parts.length === 0) parts.push(dim("clean"));
+  // work held outside this tree: worktrees, unmerged branches, the stash
+  const e = st.elsewhere;
+  if (e?.worktrees.length) parts.push(lichen(`⧉${e.worktrees.length}`));
+  if (e?.branches.length) parts.push(sky(`⑂${e.branches.length}`));
+  if (e?.stash) parts.push(dim(`≡${e.stash.count}`));
   return parts.join(" ");
 }
 

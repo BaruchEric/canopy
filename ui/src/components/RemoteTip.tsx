@@ -1,5 +1,6 @@
 import type { SyntheticEvent } from "react";
 import type { PeerState, PullCount, RemoteTip, RepoStatus } from "../../../src/core/types";
+import { elsewhereChips } from "../elsewhere";
 import { peerChips } from "../peers";
 import { ago } from "../util";
 
@@ -34,6 +35,22 @@ export function RemoteTipChip({ tip, upstream }: { tip: RemoteTip; upstream: str
     <span className="tip" title={`${tip.ref} ${tip.hash} ${ago(tip.at)}: ${tip.subject}`}>
       ⇣ {tip.ref}
     </span>
+  );
+}
+
+/** What the repo holds outside this checkout: linked worktrees with work
+ *  in them, unmerged branches checked out nowhere, the stash. The tooltip
+ *  lists each one. */
+export function ElsewhereChips({ st }: { st: RepoStatus | null | undefined }) {
+  const chips = elsewhereChips(st?.elsewhere, st?.branch || "HEAD");
+  return (
+    <>
+      {chips.map((c) => (
+        <span key={c.kind} className={`elsewhere elsewhere-${c.kind}`} title={c.title}>
+          {c.text}
+        </span>
+      ))}
+    </>
   );
 }
 

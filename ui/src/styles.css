@@ -1755,6 +1755,31 @@ a.chan-text {
 .peer-only {
   color: var(--ink-faint);
 }
+/* work this repo holds outside the checkout: a linked worktree, an
+   unmerged branch checked out nowhere, the stash */
+.elsewhere {
+  font-size: 11px;
+  line-height: 17px;
+  padding: 0 7px;
+  border-radius: 999px;
+  border: 1px dashed var(--hair);
+  background: var(--bark2);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+  max-width: 55%;
+  flex-shrink: 1;
+}
+.elsewhere-worktree {
+  color: var(--lichen);
+}
+.elsewhere-branch {
+  color: var(--sky);
+}
+.elsewhere-stash {
+  color: var(--ink-faint);
+}
 .pulls {
   color: var(--sky);
   text-decoration: none;

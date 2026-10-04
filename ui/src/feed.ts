@@ -27,6 +27,7 @@ import type {
 import { cardName, repoOfCard, repoWord, whereWord } from "./agentcards";
 import { chanLine } from "./chan";
 import { askWord, endingWord } from "./inbox";
+import { elsewhereLines } from "./elsewhere";
 import { peerLines } from "./peers";
 import { sproutLines } from "./sprouts";
 import { taskLines } from "./tasks";
@@ -158,6 +159,7 @@ export function statusLines(before: RepoStatus | null, after: RepoStatus | null)
   if (after.tip && after.tip.hash !== before.tip?.hash) {
     lines.push(`${after.tip.ref} pushed ${shortHash(after.tip.hash)} ${after.tip.subject}`);
   }
+  lines.push(...elsewhereLines(before.elsewhere, after.elsewhere));
   const was = new Map(before.files.map((f) => [f.path, f]));
   const now = new Map(after.files.map((f) => [f.path, f]));
   const added = after.files.filter((f) => !was.has(f.path)).map((f) => f.path);

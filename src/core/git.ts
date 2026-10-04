@@ -1,16 +1,23 @@
-import { stat } from "node:fs/promises";
+import { realpath, stat } from "node:fs/promises";
 import { isAbsolute, join, resolve, sep } from "node:path";
 import { git, onHost } from "./exec";
-import { parseLocator } from "./host";
+import { parseLocator, toLocator } from "./host";
 import { NO_PUSH } from "./peers";
-import type {
-  CommitDetail,
-  CommitFile,
-  GitUser,
-  LogEntry,
-  RemoteTip,
-  RepoFile,
-  RepoStatus,
+import { seedRootsNow, seedsRootOf } from "./seedgit";
+import { configDir } from "./store";
+import {
+  BRANCH_WIP_CAP,
+  type BranchWip,
+  type CommitDetail,
+  type CommitFile,
+  type Elsewhere,
+  type GitUser,
+  type LogEntry,
+  type RemoteTip,
+  type RepoFile,
+  type RepoStatus,
+  type StashWip,
+  type WorktreeWip,
 } from "./types";
 
 /** Resolve a repo-relative path, refusing anything that escapes the repo.
@@ -199,6 +206,157 @@ export function parseRemoteTip(text: string): RemoteTip | undefined {
   return undefined;
 }
 
+/** One entry of `git worktree list --porcelain`. The first is always the
+ *  main worktree. */
+export interface WorktreeEntry {
+  path: string;
+  /** null when detached */
+  branch: string | null;
+  bare: boolean;
+  /** git's own word that the folder is gone */
+  prunable: boolean;
+}
+
+/** Parse `git worktree list --porcelain`: blank-line separated records of
+ *  `worktree <path>`, `HEAD <sha>`, `branch refs/heads/<name>` or
+ *  `detached`, and the bare/locked/prunable flags. */
+export function parseWorktreeList(text: string): WorktreeEntry[] {
+  const out: WorktreeEntry[] = [];
+  let cur: WorktreeEntry | null = null;
+  for (const line of text.split("\n")) {
+    if (line.startsWith("worktree ")) {
+      cur = { path: line.slice("worktree ".length), branch: null, bare: false, prunable: false };
+      out.push(cur);
+    } else if (!cur) {
+      continue;
+    } else if (line.startsWith("branch ")) {
+      cur.branch = line.slice("branch ".length).replace(/^refs\/heads\//, "");
+    } else if (line === "bare") {
+      cur.bare = true;
+    } else if (line === "prunable" || line.startsWith("prunable ")) {
+      cur.prunable = true;
+    }
+  }
+  return out;
+}
+
+/** The local branches HEAD lacks commits from, newest first. With `counts`,
+ *  each line also carries how far it is ahead of HEAD, which only git 2.41
+ *  and later can say (`%(ahead-behind:)`); an older git fails the whole
+ *  read and the caller asks again without. */
+export const branchWipArgs = (counts: boolean): string[] => [
+  "for-each-ref",
+  "--sort=-committerdate",
+  "--no-merged=HEAD",
+  `--format=%(refname:short)%00%(upstream:short)%00%(upstream:track,nobracket)%00%(committerdate:unix)%00%(subject)%00%(worktreepath)${counts ? "%00%(ahead-behind:HEAD)" : ""}`,
+  "refs/heads",
+];
+
+/** A branch line of `branchWipArgs` output, with where it is checked out. */
+export interface BranchLine extends BranchWip {
+  /** the worktree it is checked out in, "" when none */
+  worktree: string;
+}
+
+/** `ahead 2`, `behind 1`, `ahead 2, behind 1`, `gone`, or "" when even */
+function parsePush(upstream: string, track: string): BranchWip["push"] {
+  if (!upstream) return { kind: "local" };
+  if (track === "gone") return { kind: "gone", ref: upstream };
+  const m = /ahead (\d+)/.exec(track);
+  return { kind: "upstream", ref: upstream, unpushed: m ? Number(m[1]) : 0 };
+}
+
+export function parseBranchWip(text: string): BranchLine[] {
+  const out: BranchLine[] = [];
+  for (const line of text.split("\n")) {
+    if (line === "") continue;
+    const [name = "", upstream = "", track = "", ct = "", subject = "", worktree = "", ab] = line.split("\0");
+    if (!name) continue;
+    const ahead = ab === undefined ? undefined : Number(ab.split(" ")[0]);
+    out.push({
+      name,
+      push: parsePush(upstream, track),
+      at: Number(ct) || 0,
+      subject,
+      worktree,
+      ...(ahead !== undefined && Number.isFinite(ahead) ? { unmerged: ahead } : {}),
+    });
+  }
+  return out;
+}
+
+/** `git stash list --format=%ct%x00%gs`, newest first */
+export function parseStash(text: string): StashWip | undefined {
+  const lines = text.split("\n").filter((l) => l !== "");
+  const [ct = "", subject = ""] = (lines[0] ?? "").split("\0");
+  return lines.length === 0 ? undefined : { count: lines.length, subject, at: Number(ct) || 0 };
+}
+
+/** Entries in `git status --porcelain=v2` output without `--branch`. */
+export const countStatusEntries = (text: string): number =>
+  text.split("\n").filter((l) => l !== "" && !l.startsWith("#")).length;
+
+/** At most this many linked worktrees get their tree read per status. */
+const WORKTREE_CAP = 12;
+
+/** What the repo holds outside this checkout: dirty or unmerged linked
+ *  worktrees, unmerged branches checked out nowhere, the stash. Read only
+ *  from a main checkout, since every linked worktree shares the same refs
+ *  and stash and would otherwise repeat them on its own card. Never throws;
+ *  a read that fails just leaves its part out. */
+export async function readElsewhere(repoPath: string): Promise<Elsewhere | undefined> {
+  const { host, path: root } = parseLocator(repoPath);
+  const seeds = host === null ? seedRootsNow() : [];
+  // A seed's worktree list is agent-written and may point anywhere, and a
+  // status there would run under a config nobody vetted (seedgit.ts).
+  if (seedsRootOf(root, seeds) !== null) return undefined;
+  const [dirs, list, refs, stashes] = await Promise.all([
+    git(repoPath, ["rev-parse", "--path-format=absolute", "--git-dir", "--git-common-dir"]),
+    git(repoPath, ["worktree", "list", "--porcelain"]),
+    git(repoPath, branchWipArgs(true)),
+    git(repoPath, ["stash", "list", "--format=%ct%x00%gs"]),
+  ]);
+  const [gitDir, commonDir] = dirs.stdout.trim().split("\n");
+  if (dirs.code !== 0 || !gitDir || gitDir !== commonDir) return undefined;
+  // Fails on an unborn HEAD, too, which has nothing unmerged anyway.
+  const branchText = refs.code === 0 ? refs.stdout : await git(repoPath, branchWipArgs(false)).then((r) => (r.code === 0 ? r.stdout : ""));
+  const lines = parseBranchWip(branchText);
+  const unmergedOf = new Map(lines.map((b) => [b.name, b.unmerged ?? 0]));
+  // git prints real paths, so a config dir reached through a symlink is
+  // matched in both spellings.
+  const buildsAt = join(configDir(), "builds");
+  const builds =
+    host === null ? [buildsAt, await realpath(buildsAt).catch(() => buildsAt)].map((b) => b + sep) : [];
+  const linked = (list.code === 0 ? parseWorktreeList(list.stdout) : [])
+    .slice(1)
+    .filter((w) => !w.bare && !w.prunable)
+    .filter((w) => !builds.some((b) => w.path.startsWith(b)) && seedsRootOf(w.path, seeds) === null)
+    .slice(0, WORKTREE_CAP);
+  const read = new Set(linked.map((w) => w.path));
+  const counted = await Promise.all(
+    linked.map(async (w): Promise<WorktreeWip> => {
+      const r = await git(toLocator(host, w.path), ["status", "--porcelain=v2", "-unormal"]);
+      return {
+        path: w.path,
+        branch: w.branch,
+        files: r.code === 0 ? countStatusEntries(r.stdout) : 0,
+        unmerged: w.branch === null ? 0 : (unmergedOf.get(w.branch) ?? 0),
+      };
+    }),
+  );
+  const worktrees = counted.filter((w) => w.files > 0 || w.unmerged > 0);
+  // A branch is told under its worktree only when that worktree was read: a
+  // deleted but unpruned agent worktree still names its branch's
+  // worktreepath, and its commits must not drop out of both lists.
+  const branches: BranchWip[] = lines
+    .filter((b) => !read.has(b.worktree))
+    .slice(0, BRANCH_WIP_CAP)
+    .map(({ worktree: _, ...b }) => b);
+  const stash = stashes.code === 0 ? parseStash(stashes.stdout) : undefined;
+  if (worktrees.length === 0 && branches.length === 0 && !stash) return undefined;
+  return { worktrees, branches, ...(stash ? { stash } : {}) };
+}
+
 /** One line per path given, in order: the file's mtime in unix seconds, or
  *  an empty line when it is gone. GNU stat is tried first and BSD stat when
  *  that fails, since the host may be either; a missing file fails both. */
@@ -249,7 +407,7 @@ export interface StatusOptions {
 }
 
 export async function getStatus(repoPath: string, opts: StatusOptions = {}): Promise<RepoStatus> {
-  const [st, log, cfg, tips] = await Promise.all([
+  const [st, log, cfg, tips, elsewhere] = await Promise.all([
     // -uall lists untracked files individually; without it a new directory
     // arrives as a single "dir/" entry that no per-file diff can render.
     git(repoPath, [
@@ -267,6 +425,7 @@ export async function getStatus(repoPath: string, opts: StatusOptions = {}): Pro
     opts.tipRemotes?.length === 0
       ? Promise.resolve({ code: 1, stdout: "", stderr: "" })
       : git(repoPath, tipArgs(opts.tipRemotes)),
+    readElsewhere(repoPath).catch(() => undefined),
   ]);
   if (st.code !== 0) throw new Error(st.stderr.trim() || "git status failed");
   const status = parsePorcelainV2(st.stdout);
@@ -287,7 +446,7 @@ export async function getStatus(repoPath: string, opts: StatusOptions = {}): Pro
   }
   const user = cfg.code === 0 ? parseUserConfig(cfg.stdout) : null;
   const tip = tips.code === 0 ? parseRemoteTip(tips.stdout) : undefined;
-  return { ...status, lastCommit, user, ...(tip ? { tip } : {}) };
+  return { ...status, lastCommit, user, ...(tip ? { tip } : {}), ...(elsewhere ? { elsewhere } : {}) };
 }
 
 /** A fetch may sit on a dead host or a credential lookup; a minute is long

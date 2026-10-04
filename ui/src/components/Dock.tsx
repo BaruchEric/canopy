@@ -49,7 +49,8 @@ import { GuidedPanel } from "./Guided";
 import { Tour } from "./Tour";
 import { CommitRow } from "./Commit";
 import { DiffView } from "./DiffView";
-import { PeerChips, Pulls, RemoteTipChip } from "./RemoteTip";
+import { baseName, branchText, pushText, worktreeText } from "../elsewhere";
+import { ElsewhereChips, PeerChips, Pulls, RemoteTipChip } from "./RemoteTip";
 import { RepoLink } from "./RepoLink";
 import { Star } from "./Star";
 import { RepoMenu } from "./RepoMenu";
@@ -431,6 +432,55 @@ function WorkspaceMenu({
         </span>
       )}
     </span>
+  );
+}
+
+/**
+ * What the repo holds outside this checkout, a row each: a linked worktree
+ * with work in it, an unmerged branch checked out nowhere, the stash. A
+ * worktree that is a card of its own opens that card's panel.
+ */
+function ElsewhereList({ repo }: { repo: Repo }) {
+  const e = repo.status?.elsewhere;
+  const here = repo.status?.branch || "HEAD";
+  const cards = useStore((s) => s.repos);
+  const openPanel = useStore((s) => s.openPanel);
+  if (!e) return null;
+  return (
+    <>
+      {e.worktrees.map((w) => {
+        const card = cards.find((r) => r.path === w.path);
+        return (
+          <div key={`wt:${w.path}`} className="peers-row">
+            <span className="peers-text elsewhere-worktree" title={worktreeText(w, here)}>
+              ⧉ {w.branch ?? "detached"} · {baseName(w.path)}
+              {w.files > 0 && ` · ${w.files} changed`}
+              {w.unmerged > 0 && ` · ${w.unmerged} unmerged`}
+            </span>
+            {card && (
+              <button type="button" className="mini" onClick={() => openPanel(card.id)}>
+                open
+              </button>
+            )}
+          </div>
+        );
+      })}
+      {e.branches.map((b) => (
+        <div key={`br:${b.name}`} className="peers-row">
+          <span className="peers-text elsewhere-branch" title={branchText(b, here)}>
+            ⑂ {b.name}
+            {b.unmerged !== undefined && ` · ${b.unmerged} unmerged`} · {pushText(b)} · {ago(b.at)}
+          </span>
+        </div>
+      ))}
+      {e.stash && (
+        <div className="peers-row">
+          <span className="peers-text elsewhere-stash" title={e.stash.subject}>
+            ≡ {e.stash.count} stashed · newest {ago(e.stash.at)}: {e.stash.subject}
+          </span>
+        </div>
+      )}
+    </>
   );
 }
 
@@ -851,6 +901,7 @@ function ChangesSection({ repo }: { repo: Repo }) {
         String(files.length),
         ...peerWipCounts(repo.peers).map((c) => c.text),
         ...((st?.ahead ?? 0) > 0 ? [`↑${st?.ahead} not pushed`] : []),
+        ...(st?.elsewhere?.worktrees.length ? [`⧉ ${st.elsewhere.worktrees.length} in worktrees`] : []),
       ].join(" · ")}
       layout={views}
       copy={() => files.map((f) => `${markOf(f)} ${f.orig ? `${f.orig} → ${f.path}` : f.path}`).join("\n")}
@@ -863,6 +914,7 @@ function ChangesSection({ repo }: { repo: Repo }) {
         <ChangesList repo={repo} files={files} onError={showError} />
       )}
       <PeerWipList repo={repo} paths />
+      <ElsewhereList repo={repo} />
 
       {files.length > 0 && (
         <div className="commit-box">
@@ -1406,6 +1458,7 @@ export function RepoPanel({
             {(st?.ahead ?? 0) > 0 && <span className="ahead">↑{st?.ahead}</span>}
             {(st?.behind ?? 0) > 0 && <span className="behind">↓{st?.behind}</span>}
             {st?.tip && <RemoteTipChip tip={st.tip} upstream={st.upstream} />}
+            <ElsewhereChips st={st} />
             <PeerChips st={repo.peers} />
             {repo.pulls && <Pulls pulls={repo.pulls} name={repo.name} />}
             <span className="when">{ago(st?.lastCommit?.at)}</span>

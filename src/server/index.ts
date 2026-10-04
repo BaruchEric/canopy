@@ -1227,7 +1227,7 @@ async function refreshHeld(state: ServerState, id: string): Promise<{ repo: Repo
   return { repo: fresh, held: false };
 }
 
-const WATCH_GIT_HINTS = ["HEAD", "index", "ORIG_HEAD", "refs"];
+const WATCH_GIT_HINTS = ["HEAD", "index", "ORIG_HEAD", "refs", "worktrees"];
 
 /** How often a remote source's repos get their status re-read: there is no
  *  watcher on another host, and a scan of a whole tree is too much to repeat. */

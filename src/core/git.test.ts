@@ -17,7 +17,11 @@ import {
   parseMtimes,
   parsePorcelainV2,
   parseRemoteTip,
+  parseBranchWip,
+  parseStash,
   parseUserConfig,
+  parseWorktreeList,
+  readElsewhere,
   stageFile,
 } from "./git";
 import { heuristicMessage } from "./suggest";
@@ -313,6 +317,119 @@ describe("getStatus in the background", () => {
       // the control: plain git status does write it, so the check above can fail
       await run("status", "--porcelain");
       expect(Buffer.compare(await readFile(join(dir, ".git", "index")), before)).not.toBe(0);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("parseWorktreeList", () => {
+  test("reads branch, detached, bare and prunable records in order", () => {
+    const text = [
+      "worktree /r",
+      "HEAD aaaa",
+      "branch refs/heads/main",
+      "",
+      "worktree /r/.claude/worktrees/a",
+      "HEAD bbbb",
+      "branch refs/heads/feat/x",
+      "locked",
+      "",
+      "worktree /tmp/gone",
+      "HEAD cccc",
+      "detached",
+      "prunable gitdir file points to non-existent location",
+      "",
+    ].join("\n");
+    expect(parseWorktreeList(text)).toEqual([
+      { path: "/r", branch: "main", bare: false, prunable: false },
+      { path: "/r/.claude/worktrees/a", branch: "feat/x", bare: false, prunable: false },
+      { path: "/tmp/gone", branch: null, bare: false, prunable: true },
+    ]);
+  });
+});
+
+describe("parseBranchWip", () => {
+  const line = (...f: string[]) => f.join("\0");
+  test("reads the push state and the count ahead of HEAD", () => {
+    const text = [
+      line("local", "", "", "200", "only here", "", "3 0"),
+      line("pushed", "origin/pushed", "", "150", "even", "", "1 4"),
+      line("ahead", "origin/ahead", "ahead 2, behind 1", "120", "two more", "/r/wt", "5 1"),
+      line("gone", "origin/gone", "gone", "100", "deleted there", "", "1 0"),
+    ].join("\n");
+    expect(parseBranchWip(text)).toEqual([
+      { name: "local", push: { kind: "local" }, at: 200, subject: "only here", worktree: "", unmerged: 3 },
+      { name: "pushed", push: { kind: "upstream", ref: "origin/pushed", unpushed: 0 }, at: 150, subject: "even", worktree: "", unmerged: 1 },
+      { name: "ahead", push: { kind: "upstream", ref: "origin/ahead", unpushed: 2 }, at: 120, subject: "two more", worktree: "/r/wt", unmerged: 5 },
+      { name: "gone", push: { kind: "gone", ref: "origin/gone" }, at: 100, subject: "deleted there", worktree: "", unmerged: 1 },
+    ]);
+  });
+
+  test("leaves the count out when an older git could not give it", () => {
+    expect(parseBranchWip(line("b", "", "", "1", "s", "") + "\n")).toEqual([
+      { name: "b", push: { kind: "local" }, at: 1, subject: "s", worktree: "" },
+    ]);
+  });
+});
+
+describe("parseStash", () => {
+  test("counts entries and keeps the newest", () => {
+    expect(parseStash("300\0WIP on main: abc one\n200\0On main: two\n")).toEqual({
+      count: 2,
+      subject: "WIP on main: abc one",
+      at: 300,
+    });
+    expect(parseStash("")).toBeUndefined();
+  });
+});
+
+describe("readElsewhere", () => {
+  test("finds a dirty worktree, an unmerged branch and the stash from the main checkout only", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "canopy-elsewhere-"));
+    const main = join(dir, "main");
+    const wt = join(dir, "wt");
+    try {
+      const run = (...args: string[]) =>
+        exec(["git", "-C", main, "-c", "user.name=t", "-c", "user.email=t@t", ...args]);
+      await exec(["git", "init", "-q", "-b", "main", main]);
+      await writeFile(join(main, "f.txt"), "one\n");
+      await run("add", "f.txt");
+      await run("commit", "-q", "-m", "one");
+      expect(await readElsewhere(main)).toBeUndefined();
+
+      // a branch checked out nowhere, one commit past main
+      await run("checkout", "-q", "-b", "idea");
+      await writeFile(join(main, "g.txt"), "idea\n");
+      await run("add", "g.txt");
+      await run("commit", "-q", "-m", "an idea");
+      await run("checkout", "-q", "main");
+      // a linked worktree with an untracked file
+      await run("worktree", "add", "-q", "-b", "agent", wt);
+      await writeFile(join(wt, "new.txt"), "wip\n");
+      // a stash
+      await writeFile(join(main, "f.txt"), "two\n");
+      await run("stash", "push", "-q", "-m", "parked");
+
+      const e = await readElsewhere(main);
+      expect(e?.worktrees.map((w) => ({ ...w, path: w.path.endsWith("/wt") }))).toEqual([
+        { path: true, branch: "agent", files: 1, unmerged: 0 },
+      ]);
+      expect(e?.branches.map((b) => [b.name, b.unmerged, b.push.kind, b.subject])).toEqual([
+        ["idea", 1, "local", "an idea"],
+      ]);
+      expect(e?.stash).toMatchObject({ count: 1, subject: "On main: parked" });
+      // the linked worktree's own card does not repeat what the main one shows
+      expect(await readElsewhere(wt)).toBeUndefined();
+
+      // a worktree folder deleted without a prune: its branch's commits
+      // still show, now as a branch
+      await exec(["git", "-C", wt, "-c", "user.name=t", "-c", "user.email=t@t", "add", "new.txt"]);
+      await exec(["git", "-C", wt, "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "-m", "agent work"]);
+      await rm(wt, { recursive: true, force: true });
+      const after = await readElsewhere(main);
+      expect(after?.worktrees).toEqual([]);
+      expect(after?.branches.map((b) => [b.name, b.unmerged])).toContainEqual(["agent", 1]);
     } finally {
       await rm(dir, { recursive: true, force: true });
     }
