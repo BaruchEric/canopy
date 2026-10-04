@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import type { AdviceOffer, AgentCard, Ask, Flow, Repo, Run, Sprout } from "../../src/core/types";
+import { rememberOffer } from "../../src/core/offer";
 import {
   askPermission,
   askWord,
@@ -129,6 +130,15 @@ describe("mergeInbox", () => {
     // a remote repo's folder is not this machine's
     const [remote] = mergeInbox([], { r1: run({ prompt: p }) }, {}, 0, { ...ctx, repos: [repo("app", { host: "mini" })] });
     expect(remote?.repoPath).toBeUndefined();
+  });
+
+  test("a permission no rule may answer keeps its noRule, so the inbox offers no remember either", () => {
+    const p = { id: "p2", kind: "permission" as const, tool: "Bash", title: "ls", detail: "ls", command: "ls", noRule: "an incubator stage's run keeps no rule" };
+    const [item] = mergeInbox([], { r1: run({ prompt: p }) }, {}, 0, ctx);
+    const permission = item?.permission;
+    if (!permission) throw new Error("the run's item lost its permission");
+    expect(permission.noRule).toBe("an incubator stage's run keeps no rule");
+    expect(rememberOffer(permission, item.repoPath)).toBeNull();
   });
 
   test("scopeOffers: a flow step's run offers its step first, then its workflow, then the repo", () => {
