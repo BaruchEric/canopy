@@ -62,8 +62,17 @@ async function shellWith(id: string, marker: string): Promise<void> {
   const client = connect(id);
   await client.opened;
   await Bun.sleep(700); // the shell's own start-up, before it reads input
-  client.ws.send(new TextEncoder().encode(`echo ${marker}\n`));
-  await until(() => client.text().includes(marker), `the shell to print ${marker}`);
+  // a slow start-up can drop what was typed before it was ready, so type it
+  // again until the shell has it
+  let typed = 0;
+  await until(() => {
+    if (client.text().includes(marker)) return true;
+    if (Date.now() - typed > 2_000) {
+      client.ws.send(new TextEncoder().encode(`echo ${marker}\n`));
+      typed = Date.now();
+    }
+    return false;
+  }, `the shell to print ${marker}`);
   client.ws.close();
   await Bun.sleep(200);
 }
