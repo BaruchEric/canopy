@@ -112,8 +112,12 @@ describe("a seed's check starts without canopy's GitHub login", () => {
     plant();
     const dir = await mkdtemp(join(tmpdir(), "canopy-check-env-"));
     scratch.push(dir);
-    const stage = await runCheck({ path: dir }, "env", true);
-    const normal = await runCheck({ path: dir }, "env", false);
+    // only the names asserted on: a check's output keeps its last 4000
+    // characters, which a whole env can run past
+    const names = [...Object.keys(SENTINELS), "CANOPY_CLI", "PATH"];
+    const env = `env | grep -E '^(${names.join("|")})='`;
+    const stage = await runCheck({ path: dir }, env, true);
+    const normal = await runCheck({ path: dir }, env, false);
     for (const [k, v] of Object.entries(SENTINELS)) {
       expect(stage.output).not.toContain(`${k}=${v}`);
       expect(normal.output).toContain(`${k}=${v}`);

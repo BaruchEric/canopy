@@ -726,7 +726,14 @@ describe("a root runner drops every child", () => {
 
   test("every child, git included, starts through setpriv as the stage uid with no groups", async () => {
     const log = join(dir, "setpriv.log");
-    const setpriv = join(dir, "setpriv");
+    // the stand-in sits where the stage uid can write nothing up to "/", or
+    // the runner refuses it: not the scratch dir, since Linux's tmpdir is a
+    // world-writable /tmp (a Mac's is the user's own)
+    const cache = join(import.meta.dir, "../../node_modules/.cache");
+    await mkdir(cache, { recursive: true });
+    const own = await mkdtemp(join(cache, "setpriv-"));
+    stops.push(() => rm(own, { recursive: true, force: true }));
+    const setpriv = join(own, "setpriv");
     const cwds = join(dir, "setpriv.cwd");
     await writeFile(setpriv, `#!/bin/sh\npwd -P >> ${cwds}\nprintf '%s\\n' "$@" >> ${log}\nwhile [ "$1" != "--" ]; do shift; done\nshift\nexec "$@"\n`);
     await chmod(setpriv, 0o755);
