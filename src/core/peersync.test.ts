@@ -1451,7 +1451,7 @@ describe("canopy peers gate", () => {
     await exec(["chmod", "+x", fake]);
     const env = { GIT_SSH_COMMAND: fake, GIT_SSH_VARIANT: "simple" };
     for (const [asked, dest] of [["ws/_incubator/gated", "seed-clone"], ["ws/_incubator/gated/.git", "seed-clone-git"]] as const) {
-      const r = await exec(["git", "clone", "-q", "--no-checkout", `peerhost:${asked}`, join(root, dest)], { env });
+      const r = await exec(["git", "-c", "init.defaultBranch=main", "clone", "-q", "--no-checkout", `peerhost:${asked}`, join(root, dest)], { env });
       expect(r.stderr).toBe("");
       expect(r.code).toBe(0);
       expect((await exec(["git", "rev-parse", "origin/main"], { cwd: join(root, dest) })).stdout.trim()).toBe(head);
