@@ -53,6 +53,20 @@ describe("matchesFilter", () => {
     expect(pick("no-upstream")).toEqual(["detached"]);
     expect(pick("unreadable")).toEqual(["broken"]);
   });
+
+  test("the spec facets read the scan's spec state, and skip repos without one", () => {
+    const specd = (id: string, spec: Repo["spec"]): Repo => ({ ...repo(id, {}), ...(spec ? { spec } : {}) });
+    const list = [
+      specd("s/ok", "in-sync"),
+      specd("s/old", "behind"),
+      specd("s/edited", "drifted"),
+      specd("s/none", "not-adopted"),
+      specd("s/remote", undefined),
+    ];
+    const pick = (f: Parameters<typeof matchesFilter>[1]) => names(list.filter((r) => matchesFilter(r, f)));
+    expect(pick("spec-drift")).toEqual(["old", "edited"]);
+    expect(pick("no-spec")).toEqual(["none"]);
+  });
 });
 
 describe("applyQuery", () => {
@@ -116,6 +130,8 @@ describe("countFacets", () => {
       conflicts: 1,
       "off-main": 2,
       "no-upstream": 1,
+      "spec-drift": 0,
+      "no-spec": 0,
       unreadable: 1,
     });
   });

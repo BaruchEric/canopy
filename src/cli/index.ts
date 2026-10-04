@@ -32,7 +32,8 @@ import {
   setLaunch,
   upsertWorkspace,
 } from "../core/store";
-import type { Job, LaunchSettings, SourceInput, Sprout, SproutDetail } from "../core/types";
+import type { Job, LaunchSettings, SourceInput, SpecHalf, SpecState, Sprout, SproutDetail } from "../core/types";
+import { loadSpec, repoSpecState, syncRepo } from "../core/spec";
 import { parsePick, pickRefusal, SEEDS_DIR } from "../core/sprout";
 import { setSeedRoots } from "../core/seedgit";
 import { mirrorRefusal } from "../core/seedmirror";
@@ -42,7 +43,7 @@ import { PortUnavailableError, startServer } from "../server/index";
 import { helperName, localOpeners, runHelper } from "../core/helperd";
 import { readBuild } from "../core/build";
 import { versionLine } from "../core/version";
-import { bold, dim, lichen, moss, renderTree, sky } from "./render";
+import { bold, dim, lichen, moss, renderTree, rust, sky } from "./render";
 
 const HELP = `${bold("canopy")} — multi-repo git cockpit
 
@@ -89,6 +90,10 @@ usage:
                                      start a project in the incubator; prints its link
   canopy incubator list | show <id>  the incubator's projects, or one project
     --backend URL                    the backend (default: $CANOPY_API, else 127.0.0.1:7850)
+  canopy spec status [dir]           every repo against the shared repo spec
+  canopy spec sync <repo> [--visual | --doc]   write the spec's blocks into a repo
+                                     --visual adds DESIGN.md, --doc keeps only SPEC.md
+  canopy spec check [repo]           exit 1 unless the repo's spec text is in sync
   canopy version                     the version and the commit this canopy was built from
 `;
 
@@ -126,6 +131,14 @@ async function scanOpts(): Promise<{ maxDepth: number; ignore: string[] }> {
   return { maxDepth: cfg.maxDepth, ignore: [...DEFAULT_IGNORE, ...cfg.ignore] };
 }
 
+const SPEC_WORDS: Record<SpecState, string> = {
+  "in-sync": "spec text in sync",
+  behind: "behind",
+  drifted: "drifted",
+  "not-adopted": "not adopted",
+};
+const SPEC_PAINT: Record<SpecState, (s: string) => string> = { "in-sync": moss, behind: lichen, drifted: rust, "not-adopted": dim };
+
 const COMMANDS = new Set([
   "new",
   "incubator",
@@ -144,6 +157,7 @@ const COMMANDS = new Set([
   "source",
   "sources",
   "peers",
+  "spec",
   "help",
   "--help",
   "-h",
@@ -644,6 +658,38 @@ export async function main(argv: string[]): Promise<void> {
         default:
           return fail(`unknown peers command: ${sub}\n\nusage: canopy peers status|sync [id]|init|take|track|seed|gate`);
       }
+    }
+    case "spec": {
+      const sub = args.shift() ?? "status";
+      if (sub === "status") {
+        const result = await scan(resolve(args[0] ?? "."), await scanOpts());
+        const spec = await loadSpec();
+        console.log(dim(`shared repo spec v${spec.version}`));
+        for (const r of result.repos) {
+          if (r.spec === undefined) continue;
+          console.log(`${SPEC_PAINT[r.spec](SPEC_WORDS[r.spec].padEnd(18))} ${r.id}`);
+        }
+        return;
+      }
+      if (sub === "sync") {
+        const visual = flag(args, "--visual");
+        const doc = flag(args, "--doc");
+        if (visual && doc) return fail("pass --visual or --doc, not both");
+        const repo = resolve(args[0] ?? fail("usage: canopy spec sync <repo> [--visual | --doc]"));
+        const halves: SpecHalf[] | undefined = visual ? ["doc", "visual"] : doc ? ["doc"] : undefined;
+        const { written, record } = await syncRepo(repo, halves ? { halves } : {});
+        console.log(`spec v${record.version} (${record.halves.join(" + ")}): ${written.length ? `wrote ${written.join(", ")}` : "already in sync"}`);
+        return;
+      }
+      if (sub === "check") {
+        const state = await repoSpecState(resolve(args[0] ?? "."));
+        if (state === "in-sync") {
+          console.log(SPEC_WORDS[state]);
+          return;
+        }
+        return fail(state === undefined ? "could not read the repo's spec record" : SPEC_WORDS[state]);
+      }
+      return fail("usage: canopy spec status [dir] | sync <repo> [--visual | --doc] | check [repo]");
     }
     case "help":
     case "--help":

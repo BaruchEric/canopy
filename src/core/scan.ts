@@ -5,6 +5,7 @@ import { forgeRepo, listForgeRepos } from "./forge";
 import { getStatus } from "./git";
 import { parseLocator, toLocator } from "./host";
 import { readMeta } from "./meta";
+import { repoSpecState } from "./spec";
 import { backendCaps } from "./openers";
 import { SEEDS_DIR } from "./sprout";
 import { LAUNCH_SOURCE, type Repo, type ScanResult, type Source } from "./types";
@@ -336,6 +337,7 @@ export async function scanSource(
     // also stays outside the catch — a repo whose status will not parse still
     // has a remote worth linking to.
     const meta = readMeta(path);
+    const spec = host === null ? repoSpecState(dir) : Promise.resolve(undefined);
     let status = null;
     let error: string | undefined;
     try {
@@ -351,6 +353,7 @@ export async function scanSource(
       source: source.id,
       ...(host === null ? {} : { host }),
       ...(await meta),
+      ...await spec.then((s) => (s === undefined ? {} : { spec: s })),
       status,
       ...(error === undefined ? {} : { error }),
     };

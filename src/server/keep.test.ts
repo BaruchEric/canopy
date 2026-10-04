@@ -62,8 +62,18 @@ async function shellWith(id: string, marker: string): Promise<void> {
   const client = connect(id);
   await client.opened;
   await Bun.sleep(700); // the shell's own start-up, before it reads input
-  client.ws.send(new TextEncoder().encode(`echo ${marker}\n`));
-  await until(() => client.text().includes(marker), `the shell to print ${marker}`);
+  // a slow start-up can drop what was typed before it was ready, so type it
+  // again until the shell has it; on a busy machine a login shell with a
+  // heavy rc can take most of the default wait just to start
+  let typed = 0;
+  await until(() => {
+    if (client.text().includes(marker)) return true;
+    if (Date.now() - typed > 2_000) {
+      client.ws.send(new TextEncoder().encode(`echo ${marker}\n`));
+      typed = Date.now();
+    }
+    return false;
+  }, `the shell to print ${marker}`, 30_000);
   client.ws.close();
   await Bun.sleep(200);
 }
@@ -110,7 +120,7 @@ describe("keeping shells", () => {
     const after = await keptList();
     expect(after.keeping).toBe(false);
     expect(after.kept).toEqual([]);
-  }, 30_000);
+  }, 60_000);
 
   test.if(tmux)("a live shell is recorded but not offered; one whose session is gone is", async () => {
     const id = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb0";
@@ -129,7 +139,7 @@ describe("keeping shells", () => {
     expect(kept.repoId).toBe("app");
     expect(kept.place).toBe("strip");
     expect(kept.lines).toBeGreaterThan(0);
-  }, 30_000);
+  }, 60_000);
 
   test.if(tmux)("restoring starts it again under its own name, with what it had ahead of it", async () => {
     const id = "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeee0";
@@ -153,7 +163,7 @@ describe("keeping shells", () => {
     expect(client.text()).toContain("[restored by canopy]");
     client.ws.close();
     await Bun.sleep(200);
-  }, 30_000);
+  }, 60_000);
 
   test.if(tmux)("a name nothing was kept under cannot be restored, and a live one cannot be restored twice", async () => {
     const gone = await post("/api/terms/restore", { term: "cccccccccccccccccccccccccccccccc", cols: 80, rows: 24 });
@@ -178,7 +188,7 @@ describe("keeping shells", () => {
     // with the repo's shell route for claude (the builtin: yolo) on it
     await until(async () => (await pane(id)).includes("claude --dangerously-skip-permissions --continue"), "the continue line in the pane");
     expect(await pane(id)).toContain("what the agent had said");
-  }, 30_000);
+  }, 60_000);
 
   test.if(tmux)("a kept shell can be forgotten instead", async () => {
     const id = "ddddddddddddddddddddddddddddddd0";
@@ -192,7 +202,7 @@ describe("keeping shells", () => {
     expect(res.status).toBe(200);
     expect((await keptList()).kept.some((k) => k.id === id)).toBe(false);
     expect((await fetch(api(`/api/terms/kept?term=${id}`), { method: "DELETE" })).status).toBe(404);
-  }, 30_000);
+  }, 60_000);
 
   test.if(tmux)("a window that still names a lost shell does not start a new one under its name", async () => {
     const id = "ddddddddddddddddddddddddddddddd1";
@@ -210,7 +220,7 @@ describe("keeping shells", () => {
     const kept = (await keptList()).kept.find((k) => k.id === id);
     expect(kept?.lines).toBeGreaterThan(0);
     expect(await pane(id)).toBe("");
-  }, 30_000);
+  }, 60_000);
 
   // last in the file: it takes the tmux server down with it
   test.if(tmux)("the tmux server going out from under canopy is not a shell exiting, so the records stay", async () => {
@@ -231,7 +241,7 @@ describe("keeping shells", () => {
     await Bun.sleep(1_000);
     await until(async () => (await keptList()).kept.some((k) => k.id === id), "the record to still be offered");
     client.ws.close();
-  }, 30_000);
+  }, 60_000);
 
   // after the server went: this shell is the only one on a fresh one
   test.if(tmux)("exiting the last shell on the server forgets it, though the server exits with it", async () => {
@@ -255,7 +265,7 @@ describe("keeping shells", () => {
     // and it stays forgotten through the next pass
     await post("/api/keep", { on: true });
     expect((await keptList()).kept.some((k) => k.id === id)).toBe(false);
-  }, 30_000);
+  }, 60_000);
 
   // last in the file: it takes the tmux server down again
   test.if(tmux)("a pass that cannot reach tmux leaves the last good record alone", async () => {
@@ -272,5 +282,5 @@ describe("keeping shells", () => {
     await until(async () => (await keptList()).kept.some((k) => k.id === id), "the lost shell to be offered");
     const kept = (await keptList()).kept.find((k) => k.id === id)!;
     expect(kept.lines).toBeGreaterThan(0);
-  }, 30_000);
+  }, 60_000);
 });

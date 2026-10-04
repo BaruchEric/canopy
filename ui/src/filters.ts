@@ -10,6 +10,8 @@ export const REPO_FILTERS = [
   "conflicts",
   "off-main",
   "no-upstream",
+  "spec-drift",
+  "no-spec",
   "unreadable",
 ] as const;
 export type RepoFilter = (typeof REPO_FILTERS)[number];
@@ -39,6 +41,14 @@ export const FILTER_INFO: Record<RepoFilter, { label: string; title: string }> =
     label: "no upstream",
     title: "The branch tracks nothing, so a push has nowhere to go yet",
   },
+  "spec-drift": {
+    label: "spec drift",
+    title: "Behind the shared repo spec, or its blocks edited by hand",
+  },
+  "no-spec": {
+    label: "no spec",
+    title: "A local checkout that has not adopted the shared repo spec",
+  },
   unreadable: {
     label: "unreadable",
     title: "git could not read the repo",
@@ -62,6 +72,10 @@ export function matchesFilter(r: Repo, f: RepoFilter): boolean {
       return st !== null && !DEFAULT_BRANCHES.has(st.branch);
     case "no-upstream":
       return st !== null && st.upstream === null;
+    case "spec-drift":
+      return r.spec === "behind" || r.spec === "drifted";
+    case "no-spec":
+      return r.spec === "not-adopted";
     case "unreadable":
       return Boolean(r.error);
   }
