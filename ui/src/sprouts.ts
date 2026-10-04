@@ -1,6 +1,6 @@
 /** The incubator's words and arithmetic for the page: the stage strip, the
  *  status words, the order of the cards, and the feed's lines. Pure. */
-import { SHIP, nextWorkflow, sproutEnded } from "../../src/core/sprout";
+import { HAND_OFF, SHIP, nextWorkflow, sproutEnded } from "../../src/core/sprout";
 import type { IncubatorStages, InputKind, ServerEvent, Sprout, SproutStatus } from "../../src/core/types";
 import type { FeedLine, FeedSnapshot } from "./feed";
 
@@ -16,6 +16,7 @@ const STATUS_STAGE: Partial<Record<SproutStatus, Stage>> = {
   testing: "test",
   accepting: "accept",
   deploying: "deploy",
+  approving: "deploy",
 };
 
 const WORKFLOW_STAGE: Readonly<Record<string, Stage>> = {
@@ -25,6 +26,7 @@ const WORKFLOW_STAGE: Readonly<Record<string, Stage>> = {
   renovate: "build",
   extend: "build",
   [SHIP]: "deploy",
+  [HAND_OFF]: "deploy",
   retro: "retro",
 };
 
@@ -71,6 +73,7 @@ const STATUS_WORD: Record<SproutStatus, string> = {
   testing: "testing",
   accepting: "accepting",
   deploying: "deploying",
+  approving: "waiting for your yes to push its branch",
   live: "live",
   parked: "parked",
   rejected: "turned down at eval",
@@ -83,9 +86,25 @@ export function sproutWord(s: Sprout): string {
   if (s.status === "clarifying" && n > 0) return `${n} ${n === 1 ? "question" : "questions"} for you`;
   if (s.status === "queued") {
     if (!s.prepared) return "making the seed";
-    return nextWorkflow(s) === "clarify" ? "waiting its turn to clarify" : "waiting its turn for research";
+    const next = nextWorkflow(s);
+    if (next === "clarify") return "waiting its turn to clarify";
+    if (next === "scout") return "waiting its turn for research";
+    if (next === SHIP) return "waiting its turn to deploy";
+    if (next === HAND_OFF) return "waiting its turn to hand off";
+    return "waiting its turn to build";
   }
   return STATUS_WORD[s.status];
+}
+
+/** the branch a hand-off pushed, as a link only when it is the GitHub tree url canopy writes */
+export const branchHref = (url: string | undefined): string | null =>
+  url && /^https:\/\/github\.com\/[\w.-]+\/[\w.-]+\/tree\/new\/[\w.-]+$/.test(url) ? url : null;
+
+/** the sheet's line on what a rebuilt seed came from */
+export function workLine(s: Sprout): string | null {
+  if (s.work?.kind === "extend") return `extends ${s.work.target}, on the branch ${s.work.branch}`;
+  if (s.work?.kind === "renovate") return `renovates ${s.work.from}`;
+  return null;
 }
 
 export const needsYou = (s: Sprout): boolean => s.status === "parked" || (s.status === "clarifying" && (s.questions?.length ?? 0) > 0);

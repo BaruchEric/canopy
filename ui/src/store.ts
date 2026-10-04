@@ -824,6 +824,8 @@ interface CanopyState {
   answerSprout: (id: string, answers: Record<string, string> | null) => Promise<void>;
   stopSprout: (id: string) => Promise<void>;
   resumeSprout: (id: string, choice: "continue" | "retry") => Promise<void>;
+  /** the yes or no to an extend's push, for the head the page showed */
+  handOffSprout: (id: string, approve: boolean, head: string) => Promise<void>;
   dismissSprout: (id: string) => Promise<void>;
   showSprout: (id: string) => void;
   openNewSprout: () => void;
@@ -2257,6 +2259,9 @@ export const useStore = create<CanopyState>((set, get) => ({
   resumeSprout: async (id, choice) => {
     sproutAnswered(get, await api.resumeSprout(id, choice));
   },
+  handOffSprout: async (id, approve, head) => {
+    sproutAnswered(get, await api.handOffSprout(id, approve, head));
+  },
   dismissSprout: async (id) => {
     await api.dismissSprout(id);
     get().applyEvent({ type: "incubator-gone", id });
@@ -2288,6 +2293,10 @@ export const useStore = create<CanopyState>((set, get) => ({
       return;
     }
     if (item.source === "sprout") {
+      if ("handOff" in answer) {
+        if (!item.head) throw new Error("this project has no hand-off waiting");
+        return get().handOffSprout(item.id, answer.handOff, item.head);
+      }
       if ("choice" in answer) {
         if (answer.choice === "stop") return get().stopSprout(item.id);
         return get().resumeSprout(item.id, answer.choice);

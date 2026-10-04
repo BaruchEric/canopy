@@ -427,6 +427,9 @@ export interface CanopyConfig {
   /** the canopy backends a page served from here may connect to, in the
    *  order a client falls back through (see the multi-backend spec) */
   backends: BackendEntry[];
+  /** GitHub owners, besides the gh login, whose repos the incubator may
+   *  extend (amendment 6, ruling 17); none by default */
+  extendOwners: string[];
 }
 
 /* ---------- the launcher: release builds and pull requests, run here ---------- */
@@ -1217,6 +1220,71 @@ export interface EvidenceFile {
 
 /* ---------- the incubator: new projects from an idea, a link or a repo ---------- */
 
+/** One question a stage's run asked, as the user answered it */
+export interface RunAnswerItem {
+  /** the question as the agent asked it */
+  question: string;
+  /** the options' labels, as the agent wrote them */
+  offered: string[];
+  /** the offered labels the user picked */
+  picked: string[];
+  /** what the user wrote in their own words; canopy's store and the judge alone see it */
+  text: string;
+  answered: boolean;
+}
+
+/** One answer given inside a stage's run, as canopy keeps it in its own
+ *  store, outside the seed and outside what any stage reads (amendment 6,
+ *  rulings 20 and 21) */
+export interface RunAnswerRecord {
+  /** the stage and step that asked */
+  where: string;
+  at: number;
+  items: RunAnswerItem[];
+}
+
+/** A rebuild at its swap: what the seed is being rebuilt as, and the HEAD
+ *  the rebuilt seed has */
+export interface PendingRework {
+  work: SproutWork;
+  head: string;
+}
+
+export interface HandOffCommit {
+  sha: string;
+  /** one line, clipped: the agent wrote it */
+  subject: string;
+}
+
+export interface HandOffFile {
+  /** with any control character escaped */
+  path: string;
+  /** null for a binary file */
+  added: number | null;
+  removed: number | null;
+}
+
+/** What an extend's hand-off would push, shown to the user before it does. */
+export interface HandOffReview {
+  /** the commit that would become the branch's tip */
+  head: string;
+  base: string;
+  /** the target's https remote, as canopy resolved it for this review */
+  remote: string;
+  /** `new/<slug>` */
+  branch: string;
+  commits: HandOffCommit[];
+  /** commits past the ones listed */
+  moreCommits: number;
+  files: HandOffFile[];
+  moreFiles: number;
+  /** changes to look at first: CI, deploy config, package scripts, each as `path: why` */
+  flagged: string[];
+  at: number;
+  /** the user's yes, for this head and remote alone */
+  approved?: true;
+}
+
 /** where a sprout may deploy; anything else is refused in code */
 export const HOSTS = ["vercel", "vercel+firebase", "vercel+convex", "mini"] as const;
 export type HostId = (typeof HOSTS)[number];
@@ -1242,6 +1310,8 @@ export const SPROUT_STATUSES = [
   "testing",
   "accepting",
   "deploying",
+  /** an extend's branch waits for the user's yes before canopy pushes it */
+  "approving",
   "live",
   "parked",
   "rejected",
@@ -1431,10 +1501,62 @@ export interface Sprout {
   builtHead?: string;
   /** the production url once live */
   url?: string;
+  /** what canopy rebuilt the seed from for a renovate or extend pick, once it has */
+  work?: SproutWork;
+  /** a rebuild about to swap the seed, saved before the swap so a restart
+   *  can tell a seed already rebuilt (amendment 6, ruling 22) */
+  rework?: PendingRework;
+  /** an extend's branch on GitHub, once handed off */
+  branch?: string;
+  /** what the hand-off would push, waiting for the user's yes (amendment 6, ruling 19) */
+  handOff?: HandOffReview;
+  /** what canopy made on Firebase for a `vercel+firebase` pick, each part once it exists */
+  firebase?: SproutFirebase;
   /** the vault note's revision, for the next replace */
   noteRev?: string;
   createdAt: number;
   updatedAt: number;
+}
+
+/** The source a renovate or extend seed was rebuilt from (amendment 6,
+ *  ruling 2). Set once, so a resume or a restart never rebuilds it. */
+export type SproutWork = RenovateWork | ExtendWork;
+
+interface WorkBase {
+  /** the url it was cloned from, with no userinfo */
+  from: string;
+  /** the commit the work starts from: the upstream's or the target's default branch */
+  base: string;
+  at: number;
+}
+
+export interface RenovateWork extends WorkBase {
+  kind: "renovate";
+}
+
+export interface ExtendWork extends WorkBase {
+  kind: "extend";
+  /** the target's repo id in the scan */
+  target: string;
+  /** where the branch is pushed, `https://github.com/<owner>/<name>.git` */
+  remote: string;
+  /** `new/<slug>` */
+  branch: string;
+}
+
+/** What canopy made on Firebase for a sprout (amendment 6, ruling 10).
+ *  Each mark is set as its part comes to exist, so a resume makes nothing twice. */
+export interface SproutFirebase {
+  /** the id canopy chose, on record before the project is asked for */
+  project: string;
+  /** the project is made and the login can reach it */
+  created?: boolean;
+  /** the default Firestore database exists */
+  database?: boolean;
+  /** the web app's id, once made */
+  app?: string;
+  /** its SDK config was written to the Vercel project's env */
+  env?: boolean;
 }
 
 /** what the sheet shows beyond the record: the seed's own words */

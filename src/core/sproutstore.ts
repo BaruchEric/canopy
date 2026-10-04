@@ -12,7 +12,23 @@ import { mkdir, readFile, readdir, rename, rm, writeFile } from "node:fs/promise
 import { join } from "node:path";
 import { isSproutId, parseSproutRecord } from "./sprout";
 import { configDir } from "./store";
-import type { Sprout } from "./types";
+import type { RunAnswerRecord, Sprout } from "./types";
+
+const isStrs = (v: unknown): v is string[] => Array.isArray(v) && v.every((x) => typeof x === "string");
+
+/** one stored record, or null for one that is not */
+function runAnswerOf(v: unknown): RunAnswerRecord | null {
+  if (typeof v !== "object" || v === null) return null;
+  const r = v as Record<string, unknown>;
+  const items = r["items"];
+  if (typeof r["where"] !== "string" || typeof r["at"] !== "number" || !Array.isArray(items)) return null;
+  const ok = items.every((i: unknown) => {
+    if (typeof i !== "object" || i === null) return false;
+    const x = i as Record<string, unknown>;
+    return typeof x["question"] === "string" && isStrs(x["offered"]) && isStrs(x["picked"]) && typeof x["text"] === "string" && typeof x["answered"] === "boolean";
+  });
+  return ok ? (v as RunAnswerRecord) : null;
+}
 
 export const incubatorDir = (): string => join(configDir(), "incubator");
 
@@ -123,6 +139,29 @@ export class SproutFiles {
     const home = this.home(id);
     await mkdir(home, { recursive: true, mode: 0o700 });
     await writeFile(join(home, "inputs.md"), text, { mode: 0o600 });
+  }
+
+  /** the answers given inside stages' runs, in the sprout's folder beside
+   *  its record, never under inputs/, which every stage reads a copy of */
+  async readRunAnswers(id: string): Promise<RunAnswerRecord[]> {
+    const text = await readFile(join(this.home(id), "run-answers.json"), "utf8").catch(() => null);
+    if (text === null) return [];
+    let raw: unknown;
+    try {
+      raw = JSON.parse(text);
+    } catch {
+      return [];
+    }
+    return Array.isArray(raw) ? raw.map(runAnswerOf).filter((r): r is RunAnswerRecord => r !== null) : [];
+  }
+
+  /** whole, through a rename */
+  async writeRunAnswers(id: string, records: RunAnswerRecord[]): Promise<void> {
+    const home = this.home(id);
+    await mkdir(home, { recursive: true, mode: 0o700 });
+    const tmp = join(home, `.run-answers.${process.pid}.${Date.now()}.${Math.random().toString(16).slice(2)}.tmp`);
+    await writeFile(tmp, `${JSON.stringify(records, null, 2)}\n`, { mode: 0o600 });
+    await rename(tmp, join(home, "run-answers.json"));
   }
 
   async dismiss(id: string): Promise<void> {

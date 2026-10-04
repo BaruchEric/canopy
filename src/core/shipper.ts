@@ -19,13 +19,15 @@ import {
   vercelProject,
   withCanopyIgnored,
 } from "./deploy";
-import { mkdtemp, readdir, rm } from "node:fs/promises";
+import { lstat, mkdtemp, readdir, realpath, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { exec as realExec, type ExecOptions, type ExecResult } from "./exec";
+import { firebaseConfigRefusal, firebaseEnv, firebaseFiles, firebaseResult, sdkConfigOf } from "./firebase";
 import { readSeed, writeSeed } from "./seed";
 import { bundleSeed } from "./seedmirror";
-import type { HostId } from "./types";
+import { NOTE_FILES, branchPushRefusal, extendBranch, githubRepo, handOffFlag, scriptsFlag, showPath } from "./sprout";
+import type { HandOffReview, HostId } from "./types";
 
 export interface Shipper {
   /** null when the host can be deployed to from here, else the park reason */
@@ -46,6 +48,64 @@ export interface Shipper {
    *  production with the project pinned; the public production url. A seed
    *  path is bundled first. */
   deploy(from: ShipSource, project: string): Promise<string>;
+  /** an extend's hand-off: the bundle's HEAD, which must be the tip of
+   *  `new/<slug>`, grow from `base` and leave canopy's notes alone, pushed
+   *  to that branch on the target's own github.com remote and nowhere
+   *  else, never forced; the branch's GitHub url */
+  pushBranch(from: ShipSource, to: BranchPush): Promise<string>;
+  /** what `pushBranch` would push, after the same checks, for the user to
+   *  say yes to (amendment 6, ruling 19); made from a bare clone of the
+   *  bundle, nothing sent anywhere */
+  branchReview(from: ShipSource, to: BranchPush): Promise<Omit<HandOffReview, "at" | "approved">>;
+  /** the Firebase project `id` made under FIREBASE_TOKEN's account; one
+   *  that already exists and the login reaches counts as made */
+  firebaseProject(id: string): Promise<void>;
+  /** the project's default Firestore database at FIREBASE_LOCATION; one already there counts */
+  firebaseDatabase(project: string): Promise<void>;
+  /** the project's web app named `name`, made unless one is there; its app id */
+  firebaseApp(project: string, name: string): Promise<string>;
+  /** the web app's config set on the Vercel project as public env */
+  firebaseEnv(project: string, app: string, vercelProject: string): Promise<void>;
+  /** firebase.json's Firestore rules and indexes, deployed from a fresh
+   *  clone of the bundle, refused when firebase.json holds more */
+  firebaseDeploy(from: ShipSource, project: string): Promise<void>;
+}
+
+/** where an extend's branch goes */
+export interface BranchPush {
+  /** the target's https remote canopy recorded at the rebuild */
+  remote: string;
+  /** the target's remote as canopy resolved it just now; a push goes only
+   *  where the two agree */
+  want: string;
+  slug: string;
+  /** the commit the branch was made from */
+  base: string;
+  /** the commit the user approved, which the bundle's HEAD must be; a
+   *  review, which comes before any approval, leaves it empty */
+  head: string;
+}
+
+/** how much of a branch a review lists */
+const REVIEW_COMMITS = 50;
+const REVIEW_FILES = 200;
+const REVIEW_FLAGS = 100;
+
+const clipLine = (s: string, max: number): string => {
+  const one = s.replace(/\s+/g, " ").trim();
+  return one.length > max ? `${one.slice(0, max - 1)}…` : one;
+};
+
+/** `git diff -z --numstat --no-renames`: added, removed and the path, NUL-ended */
+function parseNumstat(out: string): { raw: string; path: string; added: number | null; removed: number | null }[] {
+  const files: { raw: string; path: string; added: number | null; removed: number | null }[] = [];
+  for (const rec of out.split("\0")) {
+    const m = /^(\d+|-)\t(\d+|-)\t([\s\S]+)$/.exec(rec.replace(/^\n+/, ""));
+    if (!m) continue;
+    const raw = m[3] ?? "";
+    files.push({ raw, path: showPath(raw), added: m[1] === "-" ? null : Number(m[1]), removed: m[2] === "-" ? null : Number(m[2]) });
+  }
+  return files;
 }
 
 /** a seed as one ship sends it */
@@ -62,20 +122,36 @@ export interface ShipConfig {
   /** a Vercel team slug; null is the token's own account */
   vercelScope: string | null;
   backend: string;
+  /** a `firebase login:ci` token; null deploys nothing to Firebase */
+  firebaseToken?: string | null;
+  /** where a new project's Firestore lives; nam5 unless FIREBASE_LOCATION says */
+  firebaseLocation?: string;
+  /** the PATH the firebase CLI runs with (the image keeps it and its node
+   *  under their own prefix); the server's own PATH when null */
+  firebasePath?: string | null;
 }
 
 export const shipConfig = (env: Record<string, string | undefined>, backend: string): ShipConfig => ({
   vercelToken: env["VERCEL_TOKEN"]?.trim() || null,
   vercelScope: env["VERCEL_SCOPE"]?.trim() || null,
   backend,
+  firebaseToken: env["FIREBASE_TOKEN"]?.trim() || null,
+  firebaseLocation: env["FIREBASE_LOCATION"]?.trim() || "nam5",
+  firebasePath: env["CANOPY_FIREBASE_PATH"]?.trim() || null,
 });
+
+/** a Firestore location id as Google names them: nam5, eur3, us-central1 */
+export const isLocationId = (s: string): boolean => /^[a-z][a-z0-9-]{1,39}$/.test(s);
 
 export interface ShipDeps {
   exec: (cmd: string[], opts?: ExecOptions) => Promise<ExecResult>;
   fetch: typeof fetch;
-  which: (bin: string) => string | null;
+  /** a command's path, looked up on `path` when given */
+  which: (bin: string, path?: string) => string | null;
   /** where "owner/name" is pushed; GitHub's https url unless a test says */
   remote?: (repo: string) => string;
+  /** where an extend's checked remote is pushed; the remote itself unless a test maps it to a fixture */
+  branchRemote?: (remote: string) => string;
   /** the seed as a bundle in `file`, and its HEAD commit; `bundleSeed`
    *  unless a test says */
   bundle?: (seedPath: string, file: string) => Promise<{ head: string }>;
@@ -88,11 +164,32 @@ const tail = (r: ExecResult, secret: string | null = null): string => {
 };
 const isObj = (v: unknown): v is Record<string, unknown> => typeof v === "object" && v !== null && !Array.isArray(v);
 
-export function shipper(cfg: ShipConfig, deps: ShipDeps = { exec: realExec, fetch, which: (b) => Bun.which(b) }): Shipper {
+/** the first symlink under `dir` (its .git aside) that leads outside it, by its path in `dir`, or null */
+async function linkOut(dir: string): Promise<string | null> {
+  const top = await realpath(dir);
+  const walk = async (rel: string): Promise<string | null> => {
+    for (const name of await readdir(join(dir, rel))) {
+      const r = rel ? `${rel}/${name}` : name;
+      if (r === ".git") continue;
+      const st = await lstat(join(dir, r));
+      if (st.isSymbolicLink()) {
+        const to = await realpath(join(dir, r)).catch(() => null);
+        if (to === null || (to !== top && !to.startsWith(`${top}/`))) return r;
+      } else if (st.isDirectory()) {
+        const found = await walk(r);
+        if (found) return found;
+      }
+    }
+    return null;
+  };
+  return walk("");
+}
+
+export function shipper(cfg: ShipConfig, deps: ShipDeps = { exec: realExec, fetch, which: (b, p) => Bun.which(b, p ? { PATH: p } : undefined) }): Shipper {
   const bundle = deps.bundle ?? ((seedPath: string, file: string) => bundleSeed(seedPath, file));
-  const scopeQuery = cfg.vercelScope ? `?slug=${encodeURIComponent(cfg.vercelScope)}` : "";
+  const scope = cfg.vercelScope ? `slug=${encodeURIComponent(cfg.vercelScope)}` : "";
   const api = (path: string, init: { method?: string; body?: string } = {}): Promise<Response> =>
-    deps.fetch(`https://api.vercel.com${path}${scopeQuery}`, {
+    deps.fetch(`https://api.vercel.com${path}${scope ? `${path.includes("?") ? "&" : "?"}${scope}` : ""}`, {
       ...init,
       headers: { authorization: `Bearer ${cfg.vercelToken ?? ""}`, ...(init.body ? { "content-type": "application/json" } : {}) },
       signal: AbortSignal.timeout(30_000),
@@ -126,8 +223,127 @@ export function shipper(cfg: ShipConfig, deps: ShipDeps = { exec: realExec, fetc
       return { status: res.status, body };
     }
   };
+  const firebaseToken = cfg.firebaseToken ?? null;
+  const location = cfg.firebaseLocation ?? "nam5";
+  const firebasePath = (): string => cfg.firebasePath ?? process.env["PATH"] ?? "/usr/bin:/bin";
+  /** One firebase CLI call, with the token in its env alone and an env of
+   *  its own: PATH, and a scratch home and config dir removed after, so it
+   *  never reads a login left on disk nor writes one. Its --json result. */
+  const firebase = async (args: string[], cwd?: string, timeoutMs = 120_000): Promise<unknown> => {
+    if (!firebaseToken) throw new Error(`add FIREBASE_TOKEN to ${cfg.backend}'s .env`);
+    const path = firebasePath();
+    const bin = deps.which("firebase", path);
+    if (!bin) throw new Error(`the firebase CLI is not installed on ${cfg.backend}`);
+    const home = await mkdtemp(join(tmpdir(), "canopy-firebase-"));
+    try {
+      const r = await deps.exec([bin, ...args, "--non-interactive", "--json"], {
+        cwd: cwd ?? home,
+        timeoutMs,
+        base: { PATH: path },
+        env: { HOME: home, XDG_CONFIG_HOME: join(home, ".config"), XDG_CACHE_HOME: join(home, ".cache"), NO_UPDATE_NOTIFIER: "1", FIREBASE_TOKEN: firebaseToken },
+      });
+      const parsed = firebaseResult(r.stdout);
+      if (r.code !== 0 || !parsed.ok) {
+        const why = parsed.ok ? tail(r, firebaseToken) : parsed.error.split(firebaseToken).join("***");
+        throw new Error(`firebase ${args[0] ?? ""}: ${why || tail(r, firebaseToken)}`);
+      }
+      return parsed.result;
+    } finally {
+      await rm(home, { recursive: true, force: true });
+    }
+  };
+  /** the project's web apps as `apps:list WEB` names them */
+  const webApps = async (project: string): Promise<{ appId: string; displayName: string }[]> => {
+    const listed = await firebase(["apps:list", "WEB", "--project", project]);
+    if (!Array.isArray(listed)) return [];
+    return listed.flatMap((a: unknown) => (isObj(a) && typeof a["appId"] === "string" ? [{ appId: a["appId"], displayName: typeof a["displayName"] === "string" ? a["displayName"] : "" }] : []));
+  };
+  const exists = (err: unknown): boolean => /already exists|ALREADY_EXISTS/i.test(String(err));
+
   const self: Shipper = {
-    ready: (host) => deployReady(host, { vercelToken: cfg.vercelToken !== null, vercelCli: deps.which("vercel") !== null, backend: cfg.backend }),
+    ready: (host) => {
+      const why = deployReady(host, {
+        vercelToken: cfg.vercelToken !== null,
+        vercelCli: deps.which("vercel") !== null,
+        firebaseToken: firebaseToken !== null,
+        firebaseCli: deps.which("firebase", firebasePath()) !== null,
+        backend: cfg.backend,
+      });
+      if (why || host !== "vercel+firebase") return why;
+      return isLocationId(location) ? null : `FIREBASE_LOCATION ${location} on ${cfg.backend} is not a Firestore location id`;
+    },
+
+    async firebaseProject(id) {
+      try {
+        await firebase(["projects:create", id, "--display-name", id], undefined, 300_000);
+      } catch (err) {
+        // made on an earlier try that a restart cut short: taken only when this login reaches it
+        if (!exists(err)) throw err;
+        await webApps(id).catch(() => {
+          throw err;
+        });
+      }
+    },
+
+    async firebaseDatabase(project) {
+      try {
+        await firebase(["firestore:databases:create", "(default)", "--location", location, "--project", project], undefined, 300_000);
+      } catch (err) {
+        if (!exists(err)) throw err;
+      }
+    },
+
+    async firebaseApp(project, name) {
+      const had = (await webApps(project)).find((a) => a.displayName === name);
+      if (had) return had.appId;
+      const made = await firebase(["apps:create", "WEB", name, "--project", project]);
+      const appId = isObj(made) ? made["appId"] : null;
+      if (typeof appId !== "string" || !appId) throw new Error("firebase apps:create named no app id");
+      return appId;
+    },
+
+    async firebaseEnv(project, app, vercelProject) {
+      needToken();
+      const config = sdkConfigOf(await firebase(["apps:sdkconfig", "WEB", app, "--project", project]));
+      if (!config || config["projectId"] !== project) throw new Error(`firebase apps:sdkconfig did not answer the config of a web app in ${project}`);
+      const env = firebaseEnv(config);
+      const body = Object.entries(env).map(([key, value]) => ({ key, value, type: "plain", target: ["production", "preview", "development"] }));
+      const res = await api(`/v10/projects/${encodeURIComponent(vercelProject)}/env?upsert=true`, { method: "POST", body: JSON.stringify(body) });
+      if (!res.ok) throw new Error(`the Vercel API answered ${res.status} setting the Firebase config on project ${vercelProject}`);
+      const answer: unknown = await res.json().catch(() => null);
+      const failed = isObj(answer) && Array.isArray(answer["failed"]) ? answer["failed"].length : 0;
+      if (failed) throw new Error(`the Vercel API refused ${failed} of the Firebase config's env on project ${vercelProject}`);
+    },
+
+    async firebaseDeploy(from, project) {
+      await withBundle(from, async ({ file, head }) => {
+        const tmp = await mkdtemp(join(tmpdir(), "canopy-firebase-deploy-"));
+        try {
+          const app = join(tmp, "app");
+          const opts = { timeoutMs: 300_000, env: { GIT_TERMINAL_PROMPT: "0", GIT_LFS_SKIP_SMUDGE: "1" } };
+          const cloned = await deps.exec(["git", ...NO_HOOKS, "clone", "--no-checkout", "--quiet", "--", file, app], { ...opts, cwd: tmp });
+          if (cloned.code !== 0) throw new Error(`git clone of the seed's bundle: ${tail(cloned)}`);
+          const checked = await deps.exec(["git", ...NO_HOOKS, "checkout", "-q", "--detach", head], { ...opts, cwd: app });
+          if (checked.code !== 0) throw new Error(`git checkout of the seed's HEAD: ${tail(checked)}`);
+          // the project is named on the command line, and no env file of the agent's is read
+          for (const name of await readdir(app)) {
+            if (name === ".firebaserc" || name.startsWith(".env")) await rm(join(app, name), { recursive: true, force: true });
+          }
+          const config = await readSeed(app, "firebase.json");
+          const refused = firebaseConfigRefusal(config);
+          if (refused) throw new Error(refused);
+          // read as canopy reads a seed's file: a symlink on the way or a hard link is refused
+          for (const f of firebaseFiles(config ?? "")) {
+            if ((await readSeed(app, f)) === null) throw new Error(`firebase.json names ${f}, which is not in the repo`);
+          }
+          const out = await linkOut(app);
+          if (out) throw new Error(`${out} is a symlink out of the repo, so canopy will not hand the repo to the firebase CLI`);
+          await firebase(["deploy", "--only", "firestore", "--project", project], app, 600_000);
+        } finally {
+          await rm(tmp, { recursive: true, force: true });
+        }
+      });
+    },
 
     async createRepo(slug, description) {
       const who = await deps.exec(["gh", "api", "user", "--jq", ".login"], { timeoutMs: 30_000 });
@@ -202,6 +418,65 @@ export function shipper(cfg: ShipConfig, deps: ShipDeps = { exec: realExec, fetc
       });
     },
 
+    async branchReview(from, to) {
+      return inBranch(from, to, async (git, bare, head) => {
+        const range = `${to.base}..${head}`;
+        const listed = await git(["log", "--no-merges", "-z", "--format=%H%x1f%s", range], bare);
+        if (listed.code !== 0) throw new Error(`git log of the branch: ${tail(listed)}`);
+        const all = listed.stdout.split("\0").filter((l) => l.trim());
+        const commits = all.slice(0, REVIEW_COMMITS).map((l) => {
+          const [sha = "", subject = ""] = l.trim().split("\x1f");
+          return { sha, subject: clipLine(subject, 120) };
+        });
+        const stat = await git(["diff", "-z", "--numstat", "--no-renames", to.base, head], bare);
+        if (stat.code !== 0) throw new Error(`git diff of the branch: ${tail(stat)}`);
+        const files = parseNumstat(stat.stdout);
+        // every path any commit touched, not the net diff alone: a file added
+        // and taken out again still ran in CI on the way
+        const touched = await git(["log", "--no-merges", "-z", "--format=", "--name-only", "--no-renames", range], bare);
+        if (touched.code !== 0) throw new Error(`git log of the branch: ${tail(touched)}`);
+        const paths = [...new Set([...touched.stdout.split("\0"), ...files.map((f) => f.raw)].map((x) => x.replace(/^\n+/, "")).filter(Boolean))];
+        const flagged: string[] = [];
+        for (const path of paths) {
+          const why = handOffFlag(path);
+          if (why) flagged.push(`${showPath(path)}: ${why}`);
+          if (path.split("/").at(-1)?.toLowerCase() === "package.json") {
+            const at = async (rev: string): Promise<string | null> => {
+              const r = await git(["cat-file", "blob", `${rev}:${path}`], bare);
+              return r.code === 0 ? r.stdout : null;
+            };
+            const scripts = scriptsFlag(await at(to.base), await at(head));
+            if (scripts) flagged.push(`${showPath(path)}: ${scripts}`);
+          }
+        }
+        return {
+          head,
+          base: to.base,
+          remote: to.want,
+          branch: extendBranch(to.slug),
+          commits,
+          moreCommits: Math.max(0, all.length - commits.length),
+          files: files.slice(0, REVIEW_FILES).map(({ path, added, removed }) => ({ path, added, removed })),
+          moreFiles: Math.max(0, files.length - REVIEW_FILES),
+          flagged: flagged.slice(0, REVIEW_FLAGS),
+        };
+      });
+    },
+
+    async pushBranch(from, to) {
+      const gh = githubRepo(to.remote);
+      if (!gh) throw new Error(`${to.remote} is not a github.com repo`);
+      const url = deps.branchRemote ? deps.branchRemote(to.remote) : to.remote;
+      await inBranch(from, to, async (git, bare, head) => {
+        // the commit the user said yes to, and no other
+        if (head !== to.head) throw new Error(`the seed's HEAD is ${head.slice(0, 12)}, not ${to.head.slice(0, 12)}, the commit the hand-off was approved for`);
+        // one ref, no +, no tags, whatever the global config says
+        const pushed = await git(["-c", "push.followTags=false", "-c", "push.recurseSubmodules=no", "push", "--quiet", "--no-verify", "--", url, `${head}:refs/heads/${extendBranch(to.slug)}`], bare, 300_000);
+        if (pushed.code !== 0) throw new Error(`git push: ${tail(pushed)}`);
+      });
+      return `https://github.com/${gh.owner}/${gh.name}/tree/${extendBranch(to.slug)}`;
+    },
+
     async deploy(from, project) {
       const token = needToken();
       // the seed as a bundle first, so a seed canopy will not run git in is
@@ -217,6 +492,45 @@ export function shipper(cfg: ShipConfig, deps: ShipDeps = { exec: realExec, fetc
     },
   };
   return self;
+
+  /** `f` over a bare clone of the bundle, once the branch passed every
+   *  check a hand-off makes: the ref and the remote, the tip, the base, no
+   *  note of canopy's in any commit, no merge */
+  async function inBranch<T>(from: ShipSource, to: BranchPush, f: (git: (args: string[], cwd: string, timeoutMs?: number) => Promise<ExecResult>, bare: string, head: string) => Promise<T>): Promise<T> {
+    const ref = `refs/heads/${extendBranch(to.slug)}`;
+    const refused = branchPushRefusal({ remote: to.remote, ref }, { remote: to.want, slug: to.slug });
+    if (refused) throw new Error(refused);
+    if (!/^[0-9a-f]{40}([0-9a-f]{24})?$/.test(to.base)) throw new Error("the branch's base is not a commit id");
+    return withBundle(from, async ({ file, head }) => {
+      const tmp = await mkdtemp(join(tmpdir(), "canopy-handoff-"));
+      const bare = join(tmp, "seed.git");
+      const git = (args: string[], cwd: string, timeoutMs = 30_000): Promise<ExecResult> =>
+        deps.exec(["git", ...NO_HOOKS, ...args], { cwd, timeoutMs, env: { GIT_TERMINAL_PROMPT: "0" } });
+      try {
+        const cloned = await git(["clone", "--bare", "--quiet", "--", file, bare], tmp, 300_000);
+        if (cloned.code !== 0) throw new Error(`git clone of the seed's bundle: ${tail(cloned)}`);
+        // the commit Accept saw is the branch's tip, not some other branch HEAD was moved to
+        const tip = await git(["rev-parse", "--verify", "-q", `${ref}^{commit}`], bare);
+        if (tip.code !== 0 || tip.stdout.trim() !== head) throw new Error(`the seed's HEAD is not the tip of ${extendBranch(to.slug)}, so canopy will not push it`);
+        const grows = await git(["merge-base", "--is-ancestor", to.base, head], bare);
+        if (grows.code !== 0) throw new Error(`${extendBranch(to.slug)} does not grow from ${to.base.slice(0, 12)}, the target's branch canopy cloned`);
+        // every commit, a merge's other side too: history simplification
+        // would hide a `-s ours` merge of the notes' own branch
+        const touched = await git(["log", "--full-history", "--no-merges", "--format=", "--name-only", `${to.base}..${head}`, "--", ...NOTE_FILES.map((n) => `:(literal)${n}`)], bare);
+        if (touched.code !== 0) throw new Error(`git log of the branch: ${tail(touched)}`);
+        const notes = [...new Set(touched.stdout.split("\n").filter((l) => l.trim()))];
+        if (notes.length) throw new Error(`the branch's commits touch canopy's notes (${notes.join(", ")}), which never go to the user's repo`);
+        // a merge brings in history canopy did not build: the branch is a line of the agent's commits
+        const merges = await git(["rev-list", "--min-parents=2", `${to.base}..${head}`], bare);
+        if (merges.code !== 0) throw new Error(`git rev-list of the branch: ${tail(merges)}`);
+        const merge = merges.stdout.trim().split("\n")[0];
+        if (merge) throw new Error(`${extendBranch(to.slug)} holds a merge (${merge.slice(0, 12)}); canopy hands off a straight line of commits only`);
+        return await f(git, bare, head);
+      } finally {
+        await rm(tmp, { recursive: true, force: true });
+      }
+    });
+  }
 
   /** `f` over the bundle given, or over one made of the seed path given
    *  and removed after */

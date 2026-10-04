@@ -306,7 +306,7 @@ export function retroNote(s: Sprout, file: string): string {
     live: `went live${s.url ? ` at ${s.url}` : ""}`,
     rejected: "was turned down at eval",
     stopped: "was stopped by the user",
-    "handed-off": "was handed off as a branch",
+    "handed-off": `was handed off as a branch${s.branch ? `, ${s.branch}` : ""}`,
     parked: `has waited a day, parked: ${oneLine(s.parked ?? "no reason given", 300)}`,
   };
   return `This is the incubator project "${s.title}" (${s.id}); it ${how[s.status] ?? `is ${s.status}`}. ${recordLine(file)}`;

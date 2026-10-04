@@ -77,6 +77,14 @@ describe("daily note", () => {
       "turned down at eval: a coin app already exists.",
     );
   });
+  test("a hand-off puts a line in the day, and the note links the branch", () => {
+    const branch = "https://github.com/eric/clms/tree/new/change-counter";
+    expect(DAILY_EVENTS.has("handed-off")).toBe(true);
+    expect(dailyLine(sprout({ status: "handed-off", branch }), "handed-off")).toContain(`- **incubator: Change counter** - handed off as the branch ${branch}. Note:`);
+    const md = sproutNote(sprout({ status: "handed-off", branch }), null, null);
+    expect(md).toContain(`Handed off as the branch ${branch}.`);
+    expect(md).toContain(`- Branch: ${branch}`);
+  });
 });
 
 describe("sproutNote", () => {

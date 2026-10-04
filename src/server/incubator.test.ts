@@ -90,6 +90,7 @@ beforeAll(async () => {
   root = join(scratch, "root");
   await Bun.$`mkdir -p ${join(root, "app")} && git -C ${join(root, "app")} init -q`.quiet();
   process.env["VERCEL_TOKEN"] = "tok_test";
+  process.env["FIREBASE_TOKEN"] = "1//fb_test";
   server = await scratchServer({
     root,
     port: 0,
@@ -111,13 +112,15 @@ beforeAll(async () => {
   });
 });
 
-test("the Vercel token leaves canopy's env once the server has read it", () => {
+test("the Vercel and Firebase tokens leave canopy's env once the server has read them", () => {
   expect(process.env["VERCEL_TOKEN"]).toBeUndefined();
+  expect(process.env["FIREBASE_TOKEN"]).toBeUndefined();
 });
 
 afterAll(async () => {
   server.stop();
   delete process.env["VERCEL_TOKEN"];
+  delete process.env["FIREBASE_TOKEN"];
   if (previous === undefined) delete process.env["CANOPY_CONFIG_DIR"];
   else process.env["CANOPY_CONFIG_DIR"] = previous;
   await rm(scratch, { recursive: true, force: true });
@@ -220,6 +223,10 @@ describe("the rest of the routes", () => {
     const s = (await (await post("/api/incubator", form({ text: "stop idea" }))).json()) as Sprout;
     expect((await fetch(url(`/api/incubator?id=${s.id}`), { method: "DELETE" })).status).toBe(409);
     expect((await postJson(`/api/incubator/resume?id=${s.id}`, { choice: "sideways" })).status).toBe(400);
+    // a hand-off answer needs a yes or no and the head it is for, and a project with one waiting
+    expect((await postJson(`/api/incubator/handoff?id=${s.id}`, { approve: "yes", head: "h" })).status).toBe(400);
+    expect((await postJson(`/api/incubator/handoff?id=${s.id}`, { approve: true })).status).toBe(400);
+    expect((await postJson(`/api/incubator/handoff?id=${s.id}`, { approve: true, head: "h" })).status).toBe(409);
     const stopped = (await (await postJson(`/api/incubator/stop?id=${s.id}`, {})).json()) as Sprout;
     expect(stopped.status).toBe("stopped");
     const ev = await eventAfter((e) => e.type === "incubator-gone" && e.id === s.id, () => fetch(url(`/api/incubator?id=${s.id}`), { method: "DELETE" }));

@@ -61,6 +61,7 @@ import { seedOps } from "../core/seed";
 import { SproutFiles } from "../core/sproutstore";
 import { transcribeConfig, transcriber } from "../core/transcribe";
 import { shipConfig, shipper, type Shipper } from "../core/shipper";
+import { seedSource, type SeedSource } from "../core/seedsource";
 import { vaultConfig, vaultNotes } from "../core/vault";
 import { linkPeers, NO_PUSH, peerUrl } from "../core/peers";
 import { initRepo, PassSeen, seedRepo, syncAll, syncRepo, takeWip, trackBranch } from "../core/peersync";
@@ -111,7 +112,7 @@ import {
 } from "../core/store";
 import { QUIET_WAIT, Runner } from "../core/runner";
 import type { RunDriver } from "../core/driver";
-import { isSeedRepoId, SEED_AGENT_REFUSAL, SEEDS_DIR } from "../core/sprout";
+import { ANSWERS_FILE, isSeedRepoId, SEED_AGENT_REFUSAL, SEEDS_DIR, withStoredAnswers } from "../core/sprout";
 import { SeedMirrors } from "../core/seedmirror";
 import { sweepCodexTrust } from "../core/codextrust";
 import { seedBusy, seedBusyFor, seedHeld, seedRootsNow, setSeedBusy, setSeedRoots } from "../core/seedgit";
@@ -2167,7 +2168,14 @@ async function handleApi(
     if (typeof b.id !== "string" || typeof b.promptId !== "string" || !answer) {
       return json({ error: "malformed answer" }, 400);
     }
-    return json(state.runner.answer(b.id, b.promptId, answer));
+    // the questions as they were asked, before the answer settles them
+    const asked = state.runner.get(b.id)?.prompt;
+    const run = state.runner.answer(b.id, b.promptId, answer);
+    // an answer inside an incubator stage is one of the sprout's inputs (amendment 6, ruling 14)
+    if (answer.kind === "answers" && asked?.kind === "question" && asked.id === b.promptId) {
+      state.incubator.inc.runAnswered(b.id, asked.questions, answer.answers);
+    }
+    return json(run);
   }
   if (path === "/api/runs/stop" && method === "POST") {
     const b = (await req.json()) as { id?: unknown };
@@ -2810,6 +2818,8 @@ export async function startServer(opts: {
     transcribe?: Transcriber | null;
     notes?: NoteSink | null;
     ship?: Shipper | null;
+    /** where a renovate or extend seed comes from; seedSource unless a test says */
+    source?: SeedSource | null;
     stage?: StageClient | null;
     unisolated?: boolean;
     stageEvery?: number;
@@ -3009,7 +3019,13 @@ export async function startServer(opts: {
     },
     evaluator: hasGatewayKey() ? jev : null,
     judge: hasGatewayKey() ? jevJudge : null,
-    evidence: (repo, paths) => readEvidence(repo.path, paths),
+    // a seed's answers.md is canopy's record, built at the gate from its own
+    // store; the seed's copy is a summary any stage could have written over
+    evidence: async (repo, paths) => {
+      const files = await readEvidence(repo.path, paths);
+      if (!isSeedPath(root, repo.path) || !paths.includes(ANSWERS_FILE)) return files;
+      return withStoredAnswers(files, (await state.incubator.inc.answersEvidence(repo.path)) ?? null);
+    },
     save: (rec) => flowFiles?.save(rec),
     forget: (id) => flowFiles?.forget(id),
     // a step's run ends on its result, while its process may still be going;
@@ -3037,6 +3053,7 @@ export async function startServer(opts: {
     if (!vault) console.error("incubator: no CANOPY_VAULT_TOKEN, so no vault notes");
     if (!speech) console.error("incubator: no CANOPY_TRANSCRIBE_URL, so voice memos stay untranscribed");
     if (!ship.vercelToken) console.error("incubator: no VERCEL_TOKEN, so a built project parks before its deploy");
+    if (!ship.firebaseToken) console.error("incubator: no FIREBASE_TOKEN, so a vercel+firebase project parks before its deploy");
   }
   // one store, stamped with the realpath'd root, for the incubator and for
   // what a server without the flows lock lists
@@ -3169,6 +3186,16 @@ export async function startServer(opts: {
         transcribe: opts.incubator?.transcribe !== undefined ? opts.incubator.transcribe : transcriber(speech),
         notes: opts.incubator?.notes !== undefined ? opts.incubator.notes : vaultNotes(vault),
         ship: opts.incubator?.ship !== undefined ? opts.incubator.ship : shipper(ship),
+        // a renovate or extend seed is rebuilt in this process; the mirror syncs after, as for a commit
+        source:
+          opts.incubator?.source !== undefined
+            ? opts.incubator.source
+            : seedSource({
+                repos: () => state.result.repos,
+                self: runnerOpts.backend,
+                committed: (path) => syncMirror(state, path),
+                owners: async () => (await loadConfig()).extendOwners,
+              }),
         advice: adviceFiles,
         onChange: (sprout) => {
           broadcast(state, { type: "incubator", sprout });

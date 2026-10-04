@@ -10,6 +10,7 @@
 import type { AdviceOffer, AgentCard, Ask, AskAnswer, Flow, FlowChoice, Repo, Run, RunAnswer, RunQuestion, Sprout } from "../../src/core/types";
 import { repoOfCard, repoWord, whereWord } from "./agentcards";
 import { agentWord, harnessOf } from "./runs";
+import { handOffText } from "../../src/core/sprout";
 
 export type InboxSource = "ask" | "run" | "flow" | "sprout" | "advice";
 
@@ -20,7 +21,7 @@ export interface InboxItem {
   /** the broker's ask id (the home backend's), or a run's or flow's
    *  qualified id */
   id: string;
-  kind: "permission" | "question" | "guard" | "gate" | "clarify" | "park" | "advice";
+  kind: "permission" | "question" | "guard" | "gate" | "clarify" | "park" | "advice" | "hand-off";
   /** the repo it is about, by the page's id, when the page has it */
   repoId: string | null;
   /** the repo in words: the checkout's name, else what the agent's card says */
@@ -52,6 +53,8 @@ export interface InboxItem {
   stageCheck?: true;
   /** the retro lessons on offer, the advice item's alone */
   advice?: AdviceOffer[];
+  /** a hand-off's: the commit a yes is for */
+  head?: string;
 }
 
 export interface InboxContext {
@@ -194,6 +197,10 @@ function sproutItem(s: Sprout, flows: Readonly<Record<string, Flow>>, ctx: Inbox
     left: null,
     until: null,
   };
+  if (s.status === "approving" && s.handOff) {
+    const r = s.handOff;
+    return { ...base, kind: "hand-off", who: "hand-off", title: `waits for your yes to push ${r.branch}${r.flagged.length ? `, ${r.flagged.length} ${r.flagged.length === 1 ? "change" : "changes"} to look at first` : ""}`, detail: handOffText(r), head: r.head, at: r.at };
+  }
   if (s.status === "parked") {
     // a gate behind the park is in the inbox already, as that flow's
     const cur = s.flows.at(-1);
@@ -286,12 +293,14 @@ export type InboxAnswer =
   /** clarify's questions passed over: go on assumptions */
   | { skip: true }
   /** a retro lesson accepted or dismissed, by its key */
-  | { advice: string; accept: boolean };
+  | { advice: string; accept: boolean }
+  /** an extend's push: yes or no, for the head the item shows */
+  | { handOff: boolean };
 
 /** a run's answer: "allow always" is "allow all" for the rest of the run;
  *  a run's deny carries no message */
 export function toRunAnswer(a: InboxAnswer): RunAnswer | null {
-  if ("choice" in a || "skip" in a || "advice" in a) return null;
+  if ("choice" in a || "skip" in a || "advice" in a || "handOff" in a) return null;
   if ("answers" in a) return { kind: "answers", answers: a.answers };
   if (a.behavior === "deny") return { kind: "deny" };
   return { kind: a.always ? "allow-all" : "allow" };
@@ -299,7 +308,7 @@ export function toRunAnswer(a: InboxAnswer): RunAnswer | null {
 
 /** the broker's answer: a question's answers go as an allow */
 export function toAskAnswer(a: InboxAnswer): AskAnswer | null {
-  if ("choice" in a || "skip" in a || "advice" in a) return null;
+  if ("choice" in a || "skip" in a || "advice" in a || "handOff" in a) return null;
   if ("answers" in a) return { behavior: "allow", answers: a.answers };
   if (a.behavior === "deny") return { behavior: "deny", ...(a.message?.trim() ? { message: a.message.trim() } : {}) };
   return { behavior: "allow", ...(a.always ? { always: true } : {}) };

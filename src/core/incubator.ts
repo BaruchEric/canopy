@@ -10,15 +10,30 @@ import { dirname, join } from "node:path";
 import { isVercelAppUrl } from "./deploy";
 import { networkOrigin } from "./peersync";
 import type { Shipper } from "./shipper";
+import type { SeedSource } from "./seedsource";
+import { firebaseProjectId } from "./firebase";
 import { PARKS_KEPT, RETRO_CONCURRENCY, RETRO_FILES, RETRO_TRIES, RETRO_UNATTENDED, RETRO_WAIT_MAX, endRetroDue, flowDigest, parkRetroDue, parseAdvice, retroNote, retroRecord, type KnownAdvice } from "./retro";
 import { shareInputs, shareRecord, shareWorkspace, unshare } from "./stageshare";
 import {
+  ANSWERS_FILE,
   BUILD_FILES,
+  SEED_FILES,
+  judgeAnswersText,
+  runAnswerRecord,
+  runAnswersSummary,
+  seedAnswersSection,
+  seedAnswersText,
   INPUT_FILE_MAX,
   INPUT_TOTAL_MAX,
   SEEDS_DIR,
   SCOUT_FILES,
   SHIP,
+  HAND_OFF,
+  isOwnStep,
+  isBuildWorkflow,
+  extendBranch,
+  hostLine,
+  workRefusal,
   SPROUT_CONCURRENCY,
   RUNNING_STATUSES,
   WORKFLOW_STATUS,
@@ -54,7 +69,7 @@ import {
   type ParsedQuestions,
 } from "./sprout";
 import { DAILY_EVENTS, dailyLine, dailyNoteHead, dailyNotePath, sproutNote, sproutNotePath, type NoteEvent } from "./sproutnote";
-import { isFlowActive, type Advice, type Flow, type FlowChoice, type FlowDigest, type InputEntry, type InputKind, type InputVia, type Repo, type Sprout, type SproutDetail, type SproutFlow, type Workflow } from "./types";
+import { isFlowActive, type Advice, type Flow, type FlowChoice, type FlowDigest, type InputEntry, type InputKind, type InputVia, type PendingRework, type Repo, type RunAnswerRecord, type RunQuestion, type Sprout, type SproutDetail, type SproutFlow, type SproutPick, type Workflow } from "./types";
 import { findWorkflow, loadWorkflows } from "./workflows";
 
 export class IncubatorError extends Error {
@@ -90,6 +105,10 @@ export interface IncubatorStore {
   readInput(id: string, name: string): Promise<Uint8Array>;
   inputsDir(id: string): string;
   writeIndex(id: string, text: string): Promise<void>;
+  /** the answers given inside stages' runs, kept apart from the inputs,
+   *  which every stage reads a copy of (rulings 20 and 21) */
+  readRunAnswers(id: string): Promise<RunAnswerRecord[]>;
+  writeRunAnswers(id: string, records: RunAnswerRecord[]): Promise<void>;
   dismiss(id: string): Promise<void>;
 }
 
@@ -102,6 +121,8 @@ export interface IncubatorSeeds {
   write(path: string, rel: string, text: string): Promise<void>;
   /** the named files only, as canopy; the seed's HEAD after, when known */
   commit(path: string, rels: string[], message: string): Promise<string | void>;
+  /** the seed's HEAD commit, with nothing committed */
+  headOf(path: string): Promise<string>;
   exists(path: string): boolean;
 }
 
@@ -155,6 +176,8 @@ export interface IncubatorDeps {
   notes: NoteSink | null;
   /** canopy's own deploy; null when this backend has none */
   ship?: Shipper | null;
+  /** where a renovate or extend seed comes from (seedsource.ts); null when this backend has none */
+  source?: SeedSource | null;
   /** the improvements list a retro's advice folds into; none keeps no list */
   advice?: AdviceSink | null;
   onChange: (s: Sprout) => void;
@@ -179,11 +202,10 @@ export interface IncubatorDeps {
   log?: (line: string) => void;
 }
 
-/** what canopy commits to the seed after clarify and after answers; nothing raw */
 /** a flow moved when its status or its step did: the sprout's status follows the step */
 const seenKey = (f: Flow): string => `${f.status}:${f.current}`;
 
-export const SEED_FILES = [".canopy/brief.md", ".canopy/intent.md", ".canopy/inputs.md"];
+export { SEED_FILES };
 
 /** A stage's workflow by name, from the bundled and the user's own sources
  *  only: a seed's own `.canopy/workflows/` (a cloned repo could ship one
@@ -462,12 +484,63 @@ export class Incubator {
     return s;
   }
 
+  /** An answer the user gave to a question a stage's run asked (through
+   *  AskUserQuestion): an input of its own, written at once to answers.md,
+   *  which the judge reads, and the inputs index. It is part of the stage
+   *  that asked, so it never sends the chain back to clarify. False when no
+   *  sprout's current stage holds the run (a retro's flow is never in
+   *  `flows`, and its runs deny every question anyway). */
+  runAnswered(runId: string, questions: readonly RunQuestion[], answers: Readonly<Record<string, string>>): boolean {
+    if (this.detached || questions.length === 0) return false;
+    for (const s of this.sprouts.values()) {
+      const entry = s.flows.at(-1);
+      if (!entry || entry.outcome || sproutEnded(s)) continue;
+      const step = this.deps.flows.get(entry.flowId)?.steps.find((st) => st.runId === runId);
+      if (!step) continue;
+      const where = `${entry.workflow}, ${step.name}`;
+      const at = this.now();
+      this.serial(s, () => this.logAnswers(s, where, [...questions], { ...answers }, at));
+      return true;
+    }
+    return false;
+  }
+
+  private async logAnswers(s: Sprout, where: string, questions: RunQuestion[], answers: Record<string, string>, at: number): Promise<void> {
+    const record = runAnswerRecord(where, questions, answers, at);
+    // the whole answer, the user's own words too, in canopy's store alone
+    const all = [...(await this.deps.store.readRunAnswers(s.id)), record];
+    await this.deps.store.writeRunAnswers(s.id, all);
+    // the input, the index, the vault note and the seed get the summary:
+    // the questions and the labels picked, never the user's own words
+    const summary = runAnswersSummary(record);
+    await this.addEntry(s, { kind: "answers", label: "answers", type: "text/markdown", via: "answer", summary, processed: true }, "answers.md", seedAnswersSection(record));
+    const index = inputsIndex(s.inputs);
+    await this.deps.store.writeIndex(s.id, index);
+    if (s.prepared) {
+      // rewritten whole from the store, so nothing a stage put in the file survives
+      await this.deps.seeds.write(s.seedPath, ANSWERS_FILE, seedAnswersText(all));
+      await this.deps.seeds.write(s.seedPath, ".canopy/inputs.md", index);
+    }
+    await this.changed(s, "input");
+  }
+
+  /** The judge's answers.md for the seed at `seedPath`, built from canopy's
+   *  own records at the gate, never read from the seed (ruling 20): null
+   *  when the sprout has none, undefined when no sprout of this server's
+   *  is there. */
+  async answersEvidence(seedPath: string): Promise<string | null | undefined> {
+    const s = this.list().find((x) => x.seedPath === seedPath);
+    if (!s) return undefined;
+    return judgeAnswersText(await this.deps.store.readRunAnswers(s.id));
+  }
+
   /** more inputs; after clarify has looked, clarify looks again before the next stage */
   async addInputs(id: string, intake: Intake): Promise<Sprout> {
     const s = this.need(id);
     if (sproutEnded(s)) throw new IncubatorError(409, "this project has ended; start a new one");
     // a deploy cannot take the new input in, and would go live over it
     if (s.status === "deploying") throw new IncubatorError(409, "this project is deploying; add to it once the deploy ends");
+    if (s.status === "approving") throw new IncubatorError(409, "this project's branch waits for your yes; push it or decline it before adding to it");
     const { clean } = this.checkIntake(intake, s.inputs.reduce((t, e) => t + e.bytes, 0), false);
     await this.takeInputs(s, clean);
     // a clarify still under way (running, waiting or parked at a gate) has
@@ -506,7 +579,7 @@ export class Incubator {
     if (s.prepared) {
       await this.deps.seeds.write(s.seedPath, ".canopy/inputs.md", index);
       try {
-        await this.deps.seeds.commit(s.seedPath, SEED_FILES, `inputs: ${s.title}`);
+        await this.commitFiles(s, SEED_FILES, `inputs: ${s.title}`);
       } catch (err) {
         // a stage may be running, so this parks nothing: the next stage's own commit says it
         this.log(`${s.slug}: could not commit the inputs index: ${msg(err)}`);
@@ -515,10 +588,18 @@ export class Incubator {
     await this.changed(s);
   }
 
+  /** The one way canopy commits its files in a seed. None lands on an
+   *  extend's branch (amendment 6, ruling 5): there the notes are plain
+   *  files git does not see, and this commits nothing. */
+  private async commitFiles(s: Sprout, rels: string[], message: string): Promise<string | void> {
+    if (s.work?.kind === "extend") return;
+    return this.deps.seeds.commit(s.seedPath, rels, message);
+  }
+
   /** the seed's files committed as canopy; a refusal (a planted link) parks the sprout */
   private async commit(s: Sprout, message: string, what: string): Promise<boolean> {
     try {
-      await this.deps.seeds.commit(s.seedPath, SEED_FILES, message);
+      await this.commitFiles(s, SEED_FILES, message);
       return true;
     } catch (err) {
       await this.park(s, `could not commit the ${what}: ${msg(err)}`);
@@ -551,11 +632,33 @@ export class Incubator {
     delete s.parked;
     delete s.questions;
     delete s.questionsAt;
+    delete s.handOff;
     const cur = s.flows.at(-1);
     const f = cur ? this.deps.flows.get(cur.flowId) : undefined;
     if (f) this.stopFlow(f);
     await this.changed(s, "stopped");
     this.pump();
+    return s;
+  }
+
+  /** The user's answer to a hand-off waiting in the inbox (ruling 19). A yes
+   *  names the head it saw, and holds for that commit and remote alone; a
+   *  no parks the project with the reason, and nothing is pushed. */
+  async approveHandOff(id: string, approve: boolean, head: string, reason = ""): Promise<Sprout> {
+    const s = this.need(id);
+    const review = s.handOff;
+    if (s.status !== "approving" || !review) throw new IncubatorError(409, "this project has no hand-off waiting for an answer");
+    if (approve) {
+      if (head !== review.head) throw new IncubatorError(409, `the branch is at ${review.head.slice(0, 12)} now, not ${head.slice(0, 12)}; look at it again`);
+      review.approved = true;
+      s.status = "queued";
+      await this.changed(s);
+      this.pump();
+      return s;
+    }
+    delete s.handOff;
+    const why = reason.replace(/\s+/g, " ").trim().slice(0, 300);
+    await this.park(s, `the hand-off was declined${why ? `: ${why}` : ""}; resume to look at it again`);
     return s;
   }
 
@@ -807,7 +910,7 @@ export class Incubator {
   /** Starts queued, prepared sprouts, oldest first, while a slot is free.
    *  While `isolation` says why no stage may start, a sprout whose next
    *  step is a stage stays queued and claims no slot; one at canopy's own
-   *  ship still goes. */
+   *  ship or hand-off still goes. */
   pump(): void {
     if (this.detached || this.deps.autostart === false) return;
     const why = this.deps.isolation?.() ?? null;
@@ -818,16 +921,16 @@ export class Incubator {
       .sort((a, b) => a.createdAt - b.createdAt);
     // apart from the slots: a sprout bound for a stage is held for the
     // runner whether or not a slot is free for it
-    const held = why !== null && queued.some((s) => nextWorkflow(s) !== SHIP) ? why : null;
+    const held = why !== null && queued.some((s) => !isOwnStep(nextWorkflow(s))) ? why : null;
     for (const s of queued) {
       if (free <= 0) break;
       const name = nextWorkflow(s);
-      if (why !== null && name !== SHIP) continue;
+      if (why !== null && !isOwnStep(name)) continue;
       free -= 1;
       // the slot is claimed here, before anything awaits
       s.status = statusFor(name, undefined);
       delete s.parked;
-      this.track(name === SHIP ? this.ship(s) : this.startStage(s, name));
+      this.track(name === SHIP ? this.ship(s) : name === HAND_OFF ? this.handOff(s) : this.startStage(s, name));
     }
     if (held !== this.held) {
       this.held = held;
@@ -961,7 +1064,7 @@ export class Incubator {
       if (text === null) return this.retroFailed(s, "the retro wrote no .canopy/advice.json");
       const parsed = parseAdvice(text);
       if (!parsed.ok) return this.retroFailed(s, `the retro wrote advice canopy cannot read: ${parsed.error}`);
-      await this.deps.seeds.commit(s.seedPath, RETRO_FILES, `retro: ${s.title}`);
+      await this.commitFiles(s, RETRO_FILES, `retro: ${s.title}`);
       await this.deps.advice?.fold(parsed.advice, { id: s.id, title: s.title });
       if (this.gone(s) || s.retro !== r) return;
       r.state = "done";
@@ -1014,10 +1117,19 @@ export class Incubator {
     const ws = name === "scout" ? await share.workspace(seedsDir, this.deps.root, s.id) : null;
     if (name === "clarify") wf = withInputsRead(wf, inputs);
     if (ws !== null) wf = withWorkspaceRead(wf, ws);
+    const build = isBuildWorkflow(name) ? s.pick : undefined;
+    if (build) {
+      const refused = workRefusal(s.work, build);
+      if (refused) return this.park(s, refused);
+      if (build.kind !== "new" && !s.work) {
+        const why = await this.rebuild(s, build);
+        if (why) return this.park(s, why);
+      }
+    }
     if (this.deps.shell === true && SHELL_STAGES.includes(name)) wf = withShell(wf);
     if (this.detached || s.status === "stopped") return;
     const base = stageNote(s, inputs);
-    const note = ws !== null ? `${base} ${workspaceLine(ws)}` : base;
+    const note = [base, ws !== null ? workspaceLine(ws) : "", build ? hostLine(build) : ""].filter(Boolean).join(" ");
     const flow = await this.deps.flows.start(repo, wf, note);
     s.flows.push({ workflow: name, flowId: flow.id });
     if (sproutEnded(s)) {
@@ -1032,6 +1144,45 @@ export class Incubator {
     // missing harness) and broadcast it before it was ours: read it now as a
     // transition, so a flow that never ran parks the sprout and frees the slot
     this.onFlow(flow);
+  }
+
+  /** Swaps the notes-only seed for a clone of what a renovate or extend
+   *  pick names, once (amendment 6, rulings 1, 2 and 7): `work` on record
+   *  means it is done. The park reason, or null once the seed is rebuilt. */
+  private async rebuild(s: Sprout, p: SproutPick): Promise<string | null> {
+    const source = this.deps.source ?? null;
+    if (!source) return "this backend cannot rebuild a seed for a renovate or extend pick";
+    const target = (p.target ?? "").trim();
+    // the swap is on the record before it happens, and the last one's is
+    // handed back, so a restart in between never rebuilds a rebuilt seed
+    const swap = {
+      ...(s.rework ? { pending: s.rework } : {}),
+      swapping: async (pending: PendingRework): Promise<void> => {
+        s.rework = pending;
+        await this.changed(s);
+      },
+    };
+    try {
+      if (p.kind === "renovate") {
+        const license = await source.upstreamLicense(target);
+        if (license === null) return `GitHub names no license for ${target}, so canopy will not renovate it`;
+        if (license !== p.license) return `GitHub says ${target} is ${license}, not the ${p.license ?? "license"} scout read`;
+        const work = await source.rebuild({ kind: "renovate", seedPath: s.seedPath, id: s.id, slug: s.slug, from: target, ...swap });
+        if (this.gone(s)) return null;
+        s.work = work;
+      } else {
+        const t = await source.extendTarget(target);
+        const work = await source.rebuild({ kind: "extend", seedPath: s.seedPath, id: s.id, slug: s.slug, from: t.remote, target: t.repoId, ...swap });
+        if (this.gone(s)) return null;
+        s.work = work;
+      }
+      delete s.rework;
+    } catch (err) {
+      return `the seed could not be rebuilt for the ${p.kind} pick: ${msg(err)}`;
+    }
+    await this.changed(s);
+    await this.deps.rescan();
+    return null;
   }
 
   /** every flow broadcast; only an owned flow whose status moved is acted on */
@@ -1081,7 +1232,7 @@ export class Incubator {
     try {
       if (entry.workflow === "clarify") await this.clarified(s);
       else if (entry.workflow === "scout") await this.scouted(s);
-      else if (entry.workflow === "build-new") await this.built(s);
+      else if (isBuildWorkflow(entry.workflow)) await this.built(s);
       else await this.park(s, `nothing follows ${entry.workflow} yet`);
     } catch (err) {
       await this.park(s, `could not read what ${entry.workflow} wrote: ${msg(err)}`);
@@ -1102,7 +1253,7 @@ export class Incubator {
     await this.deps.store.writeIndex(s.id, index);
     await this.deps.seeds.write(s.seedPath, ".canopy/inputs.md", index);
     try {
-      await this.deps.seeds.commit(s.seedPath, SEED_FILES, `clarify: ${s.title}`);
+      await this.commitFiles(s, SEED_FILES, `clarify: ${s.title}`);
     } catch (err) {
       // a link planted in the seed is refused here: the stage failed, nothing goes on
       return this.park(s, `could not commit clarify's files: ${msg(err)}`);
@@ -1130,11 +1281,11 @@ export class Incubator {
     const parsed = parsePick(raw);
     if (!parsed.ok) return this.park(s, `scout wrote a pick canopy cannot read: ${parsed.error}`);
     try {
-      await this.deps.seeds.commit(s.seedPath, [...SEED_FILES, ...SCOUT_FILES], `scout: ${s.title}`);
+      await this.commitFiles(s, [...SEED_FILES, ...SCOUT_FILES], `scout: ${s.title}`);
     } catch (err) {
       return this.park(s, `could not commit scout's files: ${msg(err)}`);
     }
-    const refused = pickRefusal(parsed.pick) ?? phaseRefusal(parsed.pick);
+    const refused = pickRefusal(parsed.pick) ?? phaseRefusal(parsed.pick) ?? workRefusal(s.work, parsed.pick);
     if (refused) return this.park(s, refused);
     if (sproutEnded(s)) return;
     // input that came while scout ran: clarify reads it, and scout picks again
@@ -1144,10 +1295,12 @@ export class Incubator {
     this.pump();
   }
 
-  /** build-new finished: its notes committed, then canopy's own ship */
+  /** a build finished: its notes committed (none on an extend's branch),
+   *  then canopy's own ship or hand-off */
   private async built(s: Sprout): Promise<void> {
     try {
-      const head = await this.deps.seeds.commit(s.seedPath, BUILD_FILES, `build: ${s.title}`);
+      const committed = await this.commitFiles(s, [...SEED_FILES, ...BUILD_FILES], `build: ${s.title}`);
+      const head = s.work?.kind === "extend" ? await this.deps.seeds.headOf(s.seedPath) : committed;
       // what the ship sends: the seed as accepted (amendment 4)
       if (head) s.builtHead = head;
     } catch (err) {
@@ -1191,6 +1344,7 @@ export class Incubator {
         await this.changed(s);
       }
       if (sproutEnded(s)) return;
+      if (s.pick.host === "vercel+firebase" && !(await this.firebaseMade(s, ship, s.vercelProject))) return;
       // one bundle for the push and the deploy, so both send one commit,
       // and that commit is the one accepted: another seed's stage runs on
       // while this one ships (amendment 4)
@@ -1202,6 +1356,11 @@ export class Incubator {
         }
         await ship.push(bundle, s.privateRepo);
         if (sproutEnded(s)) return;
+        // the rules first, so the app never runs against a database without them
+        if (s.pick.host === "vercel+firebase" && s.firebase) {
+          await ship.firebaseDeploy(bundle, s.firebase.project);
+          if (sproutEnded(s)) return;
+        }
         url = await ship.deploy(bundle, s.vercelProject);
       } finally {
         await bundle.done();
@@ -1222,6 +1381,96 @@ export class Incubator {
   private reclarify(s: Sprout): void {
     s.reclarify = true;
     delete s.pick;
+  }
+
+  /** The Firebase side of a vercel+firebase ship (amendment 6, ruling
+   *  10), each part put on record as it exists so a resume never makes it
+   *  twice: the project id before the project is asked for, then the
+   *  project, its Firestore, its web app and the app's config on Vercel.
+   *  False when the sprout ended on the way. */
+  private async firebaseMade(s: Sprout, ship: Shipper, vercelProject: string): Promise<boolean> {
+    if (!s.firebase) {
+      const hex = [...crypto.getRandomValues(new Uint8Array(3))].map((b) => b.toString(16).padStart(2, "0")).join("");
+      s.firebase = { project: firebaseProjectId(s.slug, hex) };
+      await this.changed(s);
+    }
+    const fb = s.firebase;
+    if (!fb.created) {
+      await ship.firebaseProject(fb.project);
+      fb.created = true;
+      await this.changed(s);
+    }
+    if (sproutEnded(s)) return false;
+    if (!fb.database) {
+      await ship.firebaseDatabase(fb.project);
+      fb.database = true;
+      await this.changed(s);
+    }
+    if (!fb.app) {
+      fb.app = await ship.firebaseApp(fb.project, s.slug);
+      await this.changed(s);
+    }
+    if (!fb.env) {
+      await ship.firebaseEnv(fb.project, fb.app, vercelProject);
+      fb.env = true;
+      await this.changed(s);
+    }
+    return !sproutEnded(s);
+  }
+
+  /** canopy's push of an extend's branch (amendment 6, ruling 6) */
+  private async handOff(s: Sprout): Promise<void> {
+    const ship = this.deps.ship ?? null;
+    const work = s.work;
+    if (work?.kind !== "extend") return this.park(s, "there is no extend branch to hand off");
+    if (!ship) return this.park(s, "this backend has no deploy set up");
+    if (work.branch !== extendBranch(s.slug)) return this.park(s, `the seed's branch is ${work.branch}, not ${extendBranch(s.slug)}`);
+    const source = this.deps.source;
+    if (!source) return this.park(s, "this backend cannot resolve an extend target");
+    try {
+      // the target asked about again at the push: still the user's, still
+      // pushable, and still at the remote the seed was rebuilt from
+      const target = await source.extendTarget(work.target);
+      if (sproutEnded(s)) return;
+      // one bundle, held to the commit Accept saw, as for a ship (amendment 4)
+      const bundle = await ship.bundle(s.seedPath);
+      const to = { remote: work.remote, want: target.remote, slug: s.slug, base: work.base, head: bundle.head };
+      let branch: string | null = null;
+      try {
+        if (s.builtHead && bundle.head !== s.builtHead) {
+          return await this.park(s, `${SEED_MOVED} (${bundle.head.slice(0, 12)}, accepted ${s.builtHead.slice(0, 12)}); resume to hand it off as it is now`);
+        }
+        // the push runs CI and preview builds on the user's repo with its
+        // secrets, so it waits for the user's yes to this very commit and
+        // remote (ruling 19); anything else is shown again for a new yes
+        const yes = s.handOff;
+        if (yes?.approved && yes.head === bundle.head && yes.remote === target.remote) branch = await ship.pushBranch(bundle, to);
+        else {
+          const review = await ship.branchReview(bundle, to);
+          if (sproutEnded(s)) return;
+          s.handOff = { ...review, at: this.now() };
+          s.status = "approving";
+          delete s.parked;
+        }
+      } finally {
+        await bundle.done();
+      }
+      if (sproutEnded(s)) return;
+      if (branch === null) {
+        // waiting holds no slot
+        await this.changed(s);
+        this.pump();
+        return;
+      }
+      s.branch = branch;
+      delete s.handOff;
+      s.status = "handed-off";
+      delete s.parked;
+      await this.changed(s, "handed-off");
+      this.pump();
+    } catch (err) {
+      await this.park(s, `hand-off: ${msg(err)}`);
+    }
   }
 
   /** `pump` false for a gate: its flow still holds the slot */
@@ -1246,7 +1495,7 @@ export class Incubator {
   private async changed(s: Sprout, event?: NoteEvent): Promise<void> {
     s.updatedAt = this.now();
     // the three ends are told here, each once: its retro comes due with it
-    if (event === "live" || event === "rejected" || event === "stopped") this.endRetro(s);
+    if (event === "live" || event === "handed-off" || event === "rejected" || event === "stopped") this.endRetro(s);
     if (this.detached || this.gone(s)) return;
     try {
       await this.deps.store.save(s);

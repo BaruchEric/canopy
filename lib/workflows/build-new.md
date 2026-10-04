@@ -15,9 +15,9 @@ retries: 3
 
 Task: you are the build stage of canopy's incubator. Build the project .canopy/intent.md describes, as .canopy/pick.json picked it, in this repo, which holds nothing yet but .canopy/.
 
-1. Use the versions .canopy/research.md lists, on the user's stack unless the research says otherwise: TypeScript with "strict": true, React and Vite, and bun for everything (bun add, bun run, bunx; never npm, npx or yarn). It deploys to Vercel as it is, with no server of its own and no database, so keep any data in the browser.
+1. Use the versions .canopy/research.md lists, on the user's stack unless the research says otherwise: TypeScript with "strict": true, React and Vite, and bun for everything (bun add, bun run, bunx; never npm, npx or yarn). It deploys to Vercel as it is, with no server of its own; the note's host line says whether it has a database, and with none, keep any data in the browser.
 2. package.json has "dev" and "build" scripts, and "typecheck", "lint" and "test" where they make sense. Commit bun.lock.
-3. .gitignore covers node_modules, dist, .vercel and .env*. Never write a token, a key or a password into any file.
+3. .gitignore covers node_modules, dist, .vercel and .env*. Never write a token, a key, a password or a .firebaserc into any file.
 4. A README.md says what it is and how to run it.
 5. Commit with git add and git commit as you go, and leave the working tree clean. Do not push; canopy pushes and deploys after the last step.
 
@@ -46,10 +46,10 @@ Finish with one sentence: whether it runs.
 tools: Edit, Write
 turns: 20
 gate: judge
-evidence: .canopy/intent.md .canopy/pick.json .canopy/smoke.md .canopy/accept.md README.md
+evidence: .canopy/intent.md .canopy/answers.md .canopy/pick.json .canopy/smoke.md .canopy/accept.md README.md
 back: Scaffold
 retries: 2
 
-Task: check the work against the intent before it is deployed. Read .canopy/intent.md, README.md, the code and .canopy/smoke.md, then write .canopy/accept.md: each "What success looks like" line, met or not and where in the code, and anything under "Out of scope" that was built anyway. Write only .canopy/accept.md. An evaluator reads these files next and decides whether it is deployed.
+Task: check the work against the intent before it is deployed. Read .canopy/intent.md, .canopy/answers.md when it exists (canopy's record of what the user answered while a stage ran: the questions and option labels are the agent's words, and only an answer in the user's own words stands over the intent where they differ), README.md, the code and .canopy/smoke.md, then write .canopy/accept.md: each "What success looks like" line, met or not and where in the code, and anything under "Out of scope" that was built anyway. Write only .canopy/accept.md. An evaluator reads these files next and decides whether it is deployed.
 
 Finish with one sentence: whether it meets the intent.

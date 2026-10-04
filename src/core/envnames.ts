@@ -2,9 +2,10 @@
  * Environment names canopy keeps from what it starts. Pure and tested.
  */
 
-/** the incubator's secrets (vault token, transcribe key, Vercel token): read
- *  once at start into its own configs, then deleted from canopy's env */
-export const SECRET_ENV = ["CANOPY_VAULT_TOKEN", "CANOPY_TRANSCRIBE_KEY", "VERCEL_TOKEN"] as const;
+/** the incubator's secrets (vault token, transcribe key, Vercel and Firebase
+ *  tokens): read once at start into its own configs, then deleted from
+ *  canopy's env */
+export const SECRET_ENV = ["CANOPY_VAULT_TOKEN", "CANOPY_TRANSCRIBE_KEY", "VERCEL_TOKEN", "FIREBASE_TOKEN"] as const;
 
 /** never in a shell's environment: the answer token a deploy from before
  *  browser-held answer keys may still set (canopy no longer reads it), and

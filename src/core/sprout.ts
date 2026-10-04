@@ -5,7 +5,7 @@
  * as text, and which sprouts hold one of the running slots. Browser-safe:
  * the UI imports it.
  */
-import { HOSTS, SPROUT_STATUSES, type FlowStatus, type InputEntry, type InputKind, type InputVia, type RunQuestion, type RunQuestionOption, type HostId, type PickKind, type Sprout, type SproutPick, type SproutStatus, type Workflow } from "./types";
+import { HOSTS, SPROUT_STATUSES, type FlowStatus, type InputEntry, type InputKind, type InputVia, type RunAnswerRecord, type RunQuestion, type RunQuestionOption, type HandOffReview, type HostId, type PickKind, type Sprout, type SproutPick, type SproutStatus, type SproutWork, type Workflow } from "./types";
 
 /** how many sprouts run a stage at once; the rest wait their turn */
 export const SPROUT_CONCURRENCY = 2;
@@ -285,6 +285,107 @@ export function answersText(questions: readonly RunQuestion[], answers: Readonly
   return `${head}\n\n${lines.join("\n")}\n`;
 }
 
+/** where the seed keeps canopy's summary of what the user answered while
+ *  a stage ran, and the path the judge's copy of canopy's own record is
+ *  read under (amendment 6, rulings 14 and 20) */
+export const ANSWERS_FILE = ".canopy/answers.md";
+
+/** what canopy commits to the seed after clarify, after answers and after a stage; nothing raw */
+export const SEED_FILES = [".canopy/brief.md", ".canopy/intent.md", ".canopy/inputs.md", ANSWERS_FILE];
+
+/** a text the agent wrote, or the user, as one quoted line: no newline in
+ *  it can start a heading or an entry of its own */
+const quoted = (s: string, max = 300): string => JSON.stringify(oneLine(s, max));
+
+/** `raw` as the page sends it: the picked labels first, joined with ", ",
+ *  then anything the user wrote. The longest label that fits is taken
+ *  first; what is left is the user's own words. */
+export function splitAnswer(raw: string, labels: readonly string[]): { picked: string[]; text: string } {
+  let rest = raw.trim();
+  const picked: string[] = [];
+  const sorted = [...new Set(labels.filter((l) => l.trim()))].sort((a, b) => b.length - a.length);
+  for (;;) {
+    const hit = sorted.find((l) => !picked.includes(l) && (rest === l || rest.startsWith(`${l}, `)));
+    if (hit === undefined) break;
+    picked.push(hit);
+    rest = rest === hit ? "" : rest.slice(hit.length + 2).trim();
+  }
+  return { picked, text: rest };
+}
+
+/** a judge's evidence with the seed's answers.md put back as canopy's own
+ *  record: `stored` null reads as missing, whatever the seed holds */
+export function withStoredAnswers<T extends { path: string; text: string | null }>(files: readonly T[], stored: string | null): T[] {
+  return files.map((f) => (f.path === ANSWERS_FILE ? { ...f, text: stored } : f));
+}
+
+/** one answer given inside a run, as canopy's store keeps it */
+export function runAnswerRecord(where: string, questions: readonly RunQuestion[], answers: Readonly<Record<string, string>>, at: number): RunAnswerRecord {
+  const items = questions.map((q) => {
+    // own keys only: a question called "constructor" is not the object's
+    const raw = Object.hasOwn(answers, q.question) ? (answers[q.question] ?? "") : "";
+    const offered = q.options.map((o) => o.label);
+    const { picked, text } = splitAnswer(raw, offered);
+    return { question: q.question, offered, picked, text, answered: raw.trim() !== "" };
+  });
+  return { where, at, items };
+}
+
+const pickedWords = (picked: readonly string[]): string => picked.map((l) => quoted(l, 120)).join(", ");
+
+/** canopy's summary of the answers for the seed: the questions and the
+ *  labels picked, never the user's own words (ruling 21) */
+function seedSection(r: RunAnswerRecord): string {
+  const lines = r.items.map((i) => {
+    const parts: string[] = [];
+    if (i.picked.length) parts.push(`picked ${pickedWords(i.picked)} (${i.picked.length === 1 ? "an option" : "options"} the agent offered)`);
+    if (i.text) parts.push("answered in the user's own words, kept by canopy");
+    return `- ${quoted(i.question)}: ${parts.length ? parts.join(", and ") : "no answer"}`;
+  });
+  return `## ${oneLine(r.where, 120)}, ${localStamp(r.at)}\n\n${lines.join("\n")}\n`;
+}
+
+export const SEED_ANSWERS_HEAD =
+  "# Answers\n\ncanopy's summary of what the user answered while a stage ran, rewritten whole from canopy's own record each time. An answer in the user's own words stays with canopy and is not shown here.\n";
+
+/** the seed's answers.md, whole, from canopy's records */
+export function seedAnswersText(records: readonly RunAnswerRecord[]): string {
+  return [SEED_ANSWERS_HEAD, ...records.map(seedSection)].join("\n");
+}
+
+/** one record's part of the seed's file, which is also its input file */
+export const seedAnswersSection = seedSection;
+
+/** the judge's answers.md, built from canopy's records at the gate, never
+ *  read from the seed (ruling 20); null when there are none */
+export function judgeAnswersText(records: readonly RunAnswerRecord[]): string | null {
+  if (records.length === 0) return null;
+  const sections = records.map((r) => {
+    const lines = r.items.flatMap((i) => [
+      `- The agent asked: ${quoted(i.question)}`,
+      `  Options the agent offered: ${i.offered.length ? pickedWords(i.offered) : "none"}`,
+      ...(i.picked.length ? [`  The user picked (labels the agent wrote): ${pickedWords(i.picked)}`] : []),
+      ...(i.text ? [`  In the user's own words: ${quoted(i.text, 1000)}`] : []),
+      ...(i.answered ? [] : ["  (no answer)"]),
+    ]);
+    return `## ${oneLine(r.where, 120)}, ${localStamp(r.at)}\n\n${lines.join("\n")}\n`;
+  });
+  return [
+    "# Answers\n\ncanopy wrote this from its own record of what the user answered while a stage ran; no agent wrote it or can change it. Questions and option labels are the agent's words, quoted; only the lines in the user's own words are the user's.\n",
+    ...sections,
+  ].join("\n");
+}
+
+/** the same answer as the inputs index's and the vault note's one line: no own words */
+export function runAnswersSummary(r: RunAnswerRecord): string {
+  const n = r.items.filter((i) => i.answered).length;
+  const picks = r.items.filter((i) => i.picked.length).map((i) => `picked ${pickedWords(i.picked)}`);
+  const own = r.items.filter((i) => i.text).length;
+  const parts = [`answered ${n} of ${r.items.length} ${r.items.length === 1 ? "question" : "questions"} in ${oneLine(r.where, 60)}`, ...picks];
+  if (own) parts.push(`${own} in the user's own words, kept by canopy`);
+  return oneLine(parts.join("; "), 200);
+}
+
 /** the seed's first brief, until clarify rewrites it */
 export function briefText(title: string, text: string): string {
   return `# ${title}\n\n${text.trim() || "No text was given; clarify writes the brief from the other inputs."}\n`;
@@ -296,6 +397,10 @@ export function stageNote(s: Sprout, inputsDir: string): string {
     `This is the incubator project "${s.title}" (${s.id}).`,
     `The user's raw inputs are in ${inputsDir}; .canopy/inputs.md in this repo indexes them.`,
     s.repo ? `The seed is a clone of ${s.repo}; its remote is called upstream.` : "",
+    s.work?.kind === "renovate" ? `The seed is a clone of ${s.work.from}; its remote is called upstream, and the incubator's earlier notes are on the branch incubator/notes.` : "",
+    s.work?.kind === "extend"
+      ? `The seed is a clone of the user's own repo ${s.work.target}, on the branch ${s.work.branch}; it has no remote, the files under .canopy/ stay out of git, and canopy pushes the branch once Accept passes.`
+      : "",
   ]
     .filter(Boolean)
     .join(" ");
@@ -322,8 +427,20 @@ export const holdsSlot = (s: Sprout, current?: FlowStatus): boolean =>
 const ENDED: ReadonlySet<SproutStatus> = new Set<SproutStatus>(["live", "rejected", "handed-off", "stopped"]);
 export const sproutEnded = (s: Sprout): boolean => ENDED.has(s.status);
 
-/** not a workflow: the deploy canopy carries out itself after build-new */
+/** not a workflow: the deploy canopy carries out itself after a new or renovate build */
 export const SHIP = "ship";
+
+/** not a workflow: the push of an extend's branch canopy carries out itself after its build */
+export const HAND_OFF = "hand-off";
+
+/** a next step canopy carries out itself, with no stage and no runner */
+export const isOwnStep = (name: string): boolean => name === SHIP || name === HAND_OFF;
+
+/** the build workflow each kind of pick runs */
+export const BUILD_WORKFLOW: Readonly<Record<PickKind, string>> = { new: "build-new", renovate: "renovate", extend: "extend" };
+
+/** whether a workflow is one of the builds a pick runs */
+export const isBuildWorkflow = (name: string): boolean => Object.values(BUILD_WORKFLOW).includes(name);
 
 /** the status a sprout shows while a workflow runs for it */
 export const WORKFLOW_STATUS: Readonly<Record<string, SproutStatus>> = {
@@ -333,11 +450,14 @@ export const WORKFLOW_STATUS: Readonly<Record<string, SproutStatus>> = {
   renovate: "building",
   extend: "building",
   [SHIP]: "deploying",
+  [HAND_OFF]: "deploying",
 };
 
 /** within a workflow, the status each step shows; a step not named here shows the workflow's */
 export const STEP_STATUS: Readonly<Record<string, Readonly<Record<string, SproutStatus>>>> = {
   "build-new": { Scaffold: "building", Test: "testing", Accept: "accepting" },
+  renovate: { Renovate: "building", Test: "testing", Accept: "accepting" },
+  extend: { Build: "building", Test: "testing", Accept: "accepting" },
 };
 
 export function statusFor(workflow: string, step: string | undefined): SproutStatus {
@@ -357,13 +477,169 @@ export function lastDone(s: Sprout, workflow: string): number {
 }
 
 /** what a queued sprout runs next: clarify until it has clarified what is
- *  known now, scout until there is a pick, a build after the newest scout,
- *  then canopy's own ship */
+ *  known now, scout until there is a pick, the pick's build after the newest
+ *  scout, then canopy's own ship, or for an extend its hand-off */
 export function nextWorkflow(s: Sprout): string {
   if (!s.clarified || s.reclarify) return "clarify";
   if (!s.pick) return "scout";
-  if (lastDone(s, "build-new") < lastDone(s, "scout")) return "build-new";
-  return SHIP;
+  const build = BUILD_WORKFLOW[s.pick.kind];
+  if (lastDone(s, build) < lastDone(s, "scout")) return build;
+  return s.pick.kind === "extend" ? HAND_OFF : SHIP;
+}
+
+/** the branch an extend builds in its seed and canopy pushes to the target */
+export const extendBranch = (slug: string): string => `new/${slug}`;
+
+export interface GithubRepo {
+  owner: string;
+  name: string;
+}
+
+const GH_OWNER = /^[A-Za-z0-9][A-Za-z0-9-]{0,38}$/;
+const GH_NAME = /^[A-Za-z0-9._-]{1,100}$/;
+const GH_FORMS = [
+  /^https:\/\/(?:[^@/\s]+@)?github\.com\/([^/\s]+)\/([^/\s]+?)(?:\.git)?\/?$/,
+  /^ssh:\/\/git@github\.com(?::22)?\/([^/\s]+)\/([^/\s]+?)(?:\.git)?\/?$/,
+  /^git@github\.com:([^/\s]+)\/([^/\s]+?)(?:\.git)?\/?$/,
+];
+
+/** A github.com remote's owner and name, from its https, ssh or scp form;
+ *  null for any other host, a path, or a url naming more than a repo. */
+export function githubRepo(remote: string): GithubRepo | null {
+  for (const form of GH_FORMS) {
+    const m = form.exec(remote.trim());
+    if (!m) continue;
+    const owner = m[1] ?? "";
+    const name = m[2] ?? "";
+    if (!GH_OWNER.test(owner) || !GH_NAME.test(name) || name === "." || name === "..") return null;
+    return { owner, name };
+  }
+  return null;
+}
+
+/** the https remote canopy clones and pushes a github.com repo through */
+export const githubUrl = (r: GithubRepo): string => `https://github.com/${r.owner}/${r.name}.git`;
+
+/** Why a path a hand-off's commits touch is shown first, or null: a push to
+ *  the user's repo runs its CI and preview builds with the repo's secrets
+ *  (amendment 6, ruling 19). Any letter case, any folder depth. */
+export function handOffFlag(path: string): string | null {
+  const parts = path.toLowerCase().split("/");
+  const base = parts.at(-1) ?? "";
+  if (parts[0] === ".github") return "GitHub Actions or repo settings";
+  if (parts.some((x) => [".circleci", ".buildkite", ".gitlab", ".woodpecker", ".drone"].includes(x))) return "CI config";
+  if ([".gitlab-ci.yml", ".travis.yml", "azure-pipelines.yml", "bitbucket-pipelines.yml", "jenkinsfile", ".drone.yml", "cloudbuild.yaml", "cloudbuild.yml", "buildspec.yml"].includes(base)) return "CI config";
+  if (parts.some((x) => x === ".vercel" || x === ".netlify")) return "deploy config";
+  if (["vercel.json", "now.json", "netlify.toml", "firebase.json", ".firebaserc", "fly.toml", "render.yaml", "railway.json", "railway.toml", "app.yaml", "procfile", "amplify.yml", "wrangler.toml", "wrangler.json", "wrangler.jsonc"].includes(base)) return "deploy config";
+  if (base.startsWith("dockerfile") || /^(docker-)?compose(\.[\w-]+)?\.ya?ml$/.test(base)) return "deploy config";
+  if (parts[0] === ".husky" || [".pre-commit-config.yaml", "lefthook.yml", "lefthook.yaml", ".npmrc", ".yarnrc", ".yarnrc.yml", "bunfig.toml", ".pnpmfile.cjs"].includes(base)) return "package manager or git hook config";
+  return null;
+}
+
+/** what changed in a package.json's scripts from `before` to `after` (null
+ *  for no file), as a flag line's why, or null when they are the same */
+export function scriptsFlag(before: string | null, after: string | null): string | null {
+  const scripts = (text: string | null): Record<string, unknown> | "bad" => {
+    if (text === null) return {};
+    try {
+      const raw: unknown = JSON.parse(text);
+      if (!isObj(raw)) return "bad";
+      const s = raw["scripts"];
+      return s === undefined ? {} : isObj(s) ? s : "bad";
+    } catch {
+      return "bad";
+    }
+  };
+  const a = scripts(before);
+  const b = scripts(after);
+  if (a === "bad" || b === "bad") return "does not parse as a package.json, so its scripts cannot be checked";
+  const names = [...new Set([...Object.keys(a), ...Object.keys(b)])].filter((k) => JSON.stringify(a[k]) !== JSON.stringify(b[k]));
+  if (names.length === 0) return null;
+  const shown = names.slice(0, 10).map((n) => showPath(n));
+  return `scripts changed: ${shown.join(", ")}${names.length > shown.length ? ` and ${names.length - shown.length} more` : ""}`;
+}
+
+/** a name as one line: every control character escaped */
+export const showPath = (p: string): string =>
+  // eslint-disable-next-line no-control-regex
+  p.replace(/[\u0000-\u001f\u007f]/g, (c) => `\\u${c.charCodeAt(0).toString(16).padStart(4, "0")}`);
+
+/** a hand-off's review as the inbox and the sheet show it, the flagged changes first */
+export function handOffText(r: HandOffReview): string {
+  const gh = githubRepo(r.remote);
+  const where = gh ? `github.com/${gh.owner}/${gh.name}` : r.remote;
+  const out: string[] = [`Push ${r.branch} to ${where}, from ${r.base.slice(0, 12)} to ${r.head.slice(0, 12)}.`, ""];
+  if (r.flagged.length) {
+    out.push("Look at these first: a push runs the repo's CI and preview builds with its secrets.");
+    for (const f of r.flagged) out.push(`! ${f}`);
+  } else out.push("Nothing in CI, deploy config, hooks or package scripts changed.");
+  out.push("", `${r.commits.length + r.moreCommits} ${r.commits.length + r.moreCommits === 1 ? "commit" : "commits"}:`);
+  for (const c of r.commits) out.push(`  ${c.sha.slice(0, 12)} ${c.subject}`);
+  if (r.moreCommits) out.push(`  and ${r.moreCommits} more`);
+  out.push("", `${r.files.length + r.moreFiles} ${r.files.length + r.moreFiles === 1 ? "file" : "files"} changed:`);
+  for (const f of r.files) out.push(`  ${f.added === null ? "bin" : `+${f.added} -${f.removed ?? 0}`} ${f.path}`);
+  if (r.moreFiles) out.push(`  and ${r.moreFiles} more`);
+  return out.join("\n");
+}
+
+/** Why canopy will not push this, or null: a hand-off pushes exactly
+ *  `refs/heads/new/<slug>` to the extend target's own github.com remote, so
+ *  `main`, a forced `+` ref and any other remote are refused before git runs. */
+export function branchPushRefusal(push: { remote: string; ref: string }, want: { remote: string; slug: string }): string | null {
+  if (!githubRepo(want.remote)) return `${want.remote} is not a github.com repo`;
+  if (push.remote !== want.remote) return `canopy pushes only to ${want.remote}, the extend target's own remote`;
+  const ref = `refs/heads/${extendBranch(want.slug)}`;
+  if (push.ref !== ref) return `canopy pushes only ${ref}, not ${push.ref}`;
+  return null;
+}
+
+/** the same github.com repo, whatever form each url names it in */
+const sameGithub = (a: string, b: string): boolean => {
+  const x = githubRepo(a);
+  const y = githubRepo(b);
+  return !!x && !!y && x.owner.toLowerCase() === y.owner.toLowerCase() && x.name.toLowerCase() === y.name.toLowerCase();
+};
+
+/** Why a pick cannot be built on a seed canopy already rebuilt, or null: a
+ *  rebuilt seed holds one source, so a pick of another kind or source needs
+ *  a project of its own (amendment 6, ruling 2). */
+export function workRefusal(work: SproutWork | undefined, p: SproutPick): string | null {
+  if (!work) return null;
+  const t = (p.target ?? "").trim();
+  if (work.kind === "renovate" && p.kind === "renovate" && sameGithub(work.from, t)) return null;
+  if (work.kind === "extend" && p.kind === "extend" && (t === work.target || t === work.target.split("/").at(-1))) return null;
+  return `this seed already holds ${work.kind === "extend" ? work.target : work.from}; start a new project for another pick`;
+}
+
+/** the web app config keys firebase-tools prints, and the env name each takes on Vercel after its prefix */
+export const FIREBASE_ENV: Readonly<Record<string, string>> = {
+  apiKey: "API_KEY",
+  authDomain: "AUTH_DOMAIN",
+  projectId: "PROJECT_ID",
+  storageBucket: "STORAGE_BUCKET",
+  messagingSenderId: "MESSAGING_SENDER_ID",
+  appId: "APP_ID",
+};
+
+/** the prefixes the Firebase config goes to Vercel under: Vite's and Next.js's public ones */
+export const FIREBASE_ENV_PREFIXES = ["VITE_FIREBASE_", "NEXT_PUBLIC_FIREBASE_"] as const;
+
+/** the build stage note's line saying what the pick's host needs, so the workflow files stay host-free */
+export function hostLine(p: SproutPick): string {
+  if (p.kind === "extend") {
+    return "This build becomes a branch of the user's own repo, which canopy pushes once Accept passes; it deploys nothing, so leave the project's own build and deploy setup as it is.";
+  }
+  if (p.host === "vercel") return "The host is Vercel with no database: a site Vercel builds from the repo on its own, holding no server state.";
+  if (p.host === "vercel+firebase") {
+    const names = Object.values(FIREBASE_ENV).map((k) => `VITE_FIREBASE_${k}`);
+    return [
+      "The host is Vercel with Firestore for data, read in the browser through the Firebase web SDK.",
+      `Canopy makes the Firebase project and web app and sets ${names.join(", ")} on Vercel (NEXT_PUBLIC_FIREBASE_ for Next.js); read the config from those.`,
+      "Keep firebase.json to firestore (rules and indexes files inside the repo) and emulators: canopy refuses hosting, functions, storage and any predeploy or postdeploy script.",
+      "Write firestore.rules that let the app work and nothing more, and never write a .firebaserc or a key into the repo.",
+    ].join(" ");
+  }
+  return `The host is ${p.host}.`;
 }
 
 /** what canopy commits to the seed after scout, beside SEED_FILES */
@@ -371,6 +647,12 @@ export const SCOUT_FILES = [".canopy/research.md", ".canopy/pick.json", ".canopy
 
 /** what canopy commits to the seed after build-new: the smoke and accept notes */
 export const BUILD_FILES = [".canopy/smoke.md", ".canopy/accept.md"];
+
+/** Every note of the incubator's own in a seed: what a rebuild carries
+ *  over, what an extend's target may not already track, and what no
+ *  commit on an extend's branch may touch. The retro's two files are
+ *  retro.ts's RETRO_FILES. */
+export const NOTE_FILES = [...SEED_FILES, ".canopy/questions.json", ...SCOUT_FILES, ...BUILD_FILES, ".canopy/retro.md", ".canopy/advice.json"];
 
 /** A copy of the workflow whose every step may also read the sprout's raw
  *  inputs: `//` makes the rule an absolute path for Claude Code. */
@@ -462,12 +744,20 @@ export function pickRefusal(p: SproutPick): string | null {
   return null;
 }
 
-/** what this phase can carry out: a new pick deployed to vercel */
+/** what this phase can carry out: a new or renovate pick on vercel or
+ *  vercel+firebase, and an extend, which never deploys (amendment 6,
+ *  ruling 13); vercel+convex and mini park in one line each */
 export function phaseRefusal(p: SproutPick): string | null {
-  if (p.kind !== "new") return `a ${p.kind} pick arrives in phase 4; the research is in .canopy/research.md`;
-  if (p.host !== "vercel") return `deploying to ${p.host} arrives in phase 4; the research is in .canopy/research.md`;
+  if (p.kind === "extend") return null;
+  if (p.host === "vercel+convex") return CONVEX_PARKED;
+  if (p.host === "mini") return MINI_PARKED;
   return null;
 }
+
+/** the one line a vercel+convex pick parks with (amendment 6, ruling 9) */
+export const CONVEX_PARKED = "vercel+convex is parked: canopy cannot run a Convex deploy without handing it files outside the project; pick vercel+firebase for a database";
+/** the one line a mini pick parks with (amendment 6, ruling 12) */
+export const MINI_PARKED = "the mini host is not built yet: a stage's compose file would be root on the mini; pick vercel or vercel+firebase";
 
 export const isPick = (v: unknown): v is SproutPick =>
   isObj(v) && isPickKind(v["kind"]) && isHostId(v["host"]) && typeof v["why"] === "string" && optStr(v["target"]) && optStr(v["license"]);
@@ -533,6 +823,23 @@ const isRetro = (r: unknown): boolean => {
   );
 };
 
+const isWork = (w: unknown): boolean => {
+  if (!isObj(w) || typeof w["from"] !== "string" || typeof w["base"] !== "string" || !isNum(w["at"])) return false;
+  if (w["kind"] === "renovate") return true;
+  return w["kind"] === "extend" && typeof w["target"] === "string" && typeof w["remote"] === "string" && typeof w["branch"] === "string";
+};
+
+const optBool = (v: unknown): boolean => v === undefined || typeof v === "boolean";
+const isHandOff = (h: unknown): boolean => {
+  if (!isObj(h)) return false;
+  const strs = ["head", "base", "remote", "branch"].every((k) => typeof h[k] === "string");
+  const commits = Array.isArray(h["commits"]) && h["commits"].every((c: unknown) => isObj(c) && typeof c["sha"] === "string" && typeof c["subject"] === "string");
+  const files = Array.isArray(h["files"]) && h["files"].every((f: unknown) => isObj(f) && typeof f["path"] === "string");
+  const flagged = Array.isArray(h["flagged"]) && h["flagged"].every((f: unknown) => typeof f === "string");
+  return strs && commits && files && flagged && isNum(h["moreCommits"]) && isNum(h["moreFiles"]) && isNum(h["at"]) && (h["approved"] === undefined || h["approved"] === true);
+};
+const isFirebase = (f: unknown): boolean => isObj(f) && typeof f["project"] === "string" && optBool(f["created"]) && optBool(f["database"]) && optStr(f["app"]) && optBool(f["env"]);
+
 const isOption = (o: unknown): boolean => isObj(o) && typeof o["label"] === "string" && typeof o["description"] === "string";
 
 const isQuestion = (q: unknown): boolean => {
@@ -569,6 +876,10 @@ export function parseSproutRecord(text: string): Sprout | null {
   const { parkedAt, parks, retro } = raw;
   if (!optNum(parkedAt) || (parks !== undefined && !(Array.isArray(parks) && parks.every(isPark)))) return null;
   if (retro !== undefined && !isRetro(retro)) return null;
+  const { work, branch, firebase, handOff, rework } = raw;
+  if ((work !== undefined && !isWork(work)) || !optStr(branch) || (firebase !== undefined && !isFirebase(firebase))) return null;
+  if (rework !== undefined && !(isObj(rework) && isWork(rework["work"]) && typeof rework["head"] === "string")) return null;
+  if (handOff !== undefined && !isHandOff(handOff)) return null;
   // canopy's own file: past these checks it is taken as written
   return raw as unknown as Sprout;
 }

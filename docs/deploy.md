@@ -445,9 +445,46 @@ an intake with 503. Two optional settings in the mini's `.env`:
   url still behind a login (password protection, a team policy) answers 401
   and parks the project with that reason. Lift it for that project, then
   resume.
+- `FIREBASE_TOKEN` and, optionally, `FIREBASE_LOCATION` (a Firestore
+  location id, default `nam5`). With the token, a `vercel+firebase` project
+  gets a Firebase project of its own (id from its slug plus six hex
+  characters), a default Firestore database at that location and a web app,
+  and the web app's config goes into the Vercel project's env before the
+  deploy. canopy then deploys the Firestore rules and indexes, and nothing
+  else, from a clean clone of what it pushed. Without the token the project
+  parks at deploy with "add FIREBASE_TOKEN to <backend>'s .env". Make the
+  token with `firebase login:ci` in a real terminal on any machine with the
+  CLI (it opens a browser, so it cannot run from a harness), signed in to a
+  Google account kept for incubator projects, not your main one. The token
+  can create projects on that account, so treat it like the Vercel token.
+  firebase-tools 15.32.1 still takes it but warns that `FIREBASE_TOKEN` is
+  deprecated in favor of a service account key; the warning goes to stderr,
+  not into the `--json` result canopy reads. Check it before bumping the
+  pin: a major version that drops the variable breaks this path.
+  `firebase-tools` is pinned in the image under `/opt/firebase`, owned by
+  root and off the default PATH; compose hands canopy alone
+  `CANOPY_FIREBASE_PATH` to find it. Its version and every dependency come
+  from `docker/firebase/package.json` and `bun.lock`, installed with
+  `--frozen-lockfile`; to move the pin, change the version there, run
+  `bun install --lockfile-only` in that folder inside `oven/bun:1`, and
+  commit both files.
+- `GH_TOKEN` (already in `.env` for the rest of canopy) is also what an
+  extend pushes its `new/<slug>` branch with, so it needs contents write on
+  the repos you want extended. A fine-grained token limited to some repos is
+  fine: before it rebuilds the seed, canopy asks GitHub whether the login
+  can push, and a repo it cannot push parks the project with that reason.
+  Push rights are not enough: the repo's owner must be the `gh` login
+  itself, or an owner listed under `extendOwners` in canopy's
+  `config.json` (empty by default), so an employer's or an org's repo the
+  token happens to reach is refused. canopy pushes the one branch, never a
+  tag or another ref, and opens no pull request. It pushes only after you
+  say yes in the inbox: the item lists the commits and files, with any
+  change to CI, deploy config, hooks or `package.json` scripts at the top,
+  since the push runs the repo's Actions and preview builds with its
+  secrets.
 
-canopy reads the vault token, the transcribe key and the Vercel token once at
-start and then deletes all three from its own environment, so no shell, run or tmux server it
+canopy reads the vault token, the transcribe key, the Vercel token and the
+Firebase token once at start and then deletes all four from its own environment, so no shell, run or tmux server it
 starts inherits them. `/proc/<canopy>/environ` still keeps the values the
 process started with. The incubator's agents cannot reach it once they run in
 the `stages` container (below), which has its own pid namespace; on a backend

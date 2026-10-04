@@ -32,7 +32,7 @@ function useNow(on: boolean, ms = 1000): number {
   return now;
 }
 
-const KIND_GLYPH: Record<InboxItem["kind"], string> = { permission: "⚿", question: "?", guard: "⛨", gate: "⏸", clarify: "✎", park: "⏸", advice: "↺" };
+const KIND_GLYPH: Record<InboxItem["kind"], string> = { permission: "⚿", question: "?", guard: "⛨", gate: "⏸", clarify: "✎", park: "⏸", advice: "↺", "hand-off": "⇪" };
 const SOURCE_WORD: Record<InboxItem["source"], string> = { ask: "agent", run: "run", flow: "workflow", sprout: "incubator", advice: "incubator" };
 
 /** The retro lessons on offer, each with its own accept and dismiss.
@@ -194,6 +194,28 @@ function InboxRow({
             </div>
           ) : item.kind === "advice" ? (
             <AdviceOffers offers={item.advice ?? []} busy={busy} onAnswer={(key, accept) => answer({ advice: key, accept })} />
+          ) : item.kind === "hand-off" ? (
+            <div className="ask">
+              <div className="eyebrow">
+                {item.repo} {item.title}
+              </div>
+              {detail && <pre className="ask-detail">{detail}</pre>}
+              <div className="ask-row">
+                <button
+                  type="button"
+                  className="mini strong"
+                  disabled={busy}
+                  title="canopy pushes this commit to the branch on GitHub; the repo's CI and preview builds run on it"
+                  onClick={() => answer({ handOff: true })}
+                >
+                  push the branch
+                </button>
+                <span className="spacer" />
+                <button type="button" className="mini" disabled={busy} title="Nothing is pushed; the project parks until you resume it" onClick={() => answer({ handOff: false })}>
+                  decline
+                </button>
+              </div>
+            </div>
           ) : item.kind === "gate" || item.kind === "park" ? (
             <div className="ask">
               <div className="eyebrow">{item.who} {item.title}</div>

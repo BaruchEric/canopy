@@ -461,6 +461,9 @@ export const api = {
   stopSprout: (id: string) => req<Sprout>(homeName(), `/api/incubator/stop?id=${encodeURIComponent(id)}`, { method: "POST", body: "{}" }),
   resumeSprout: (id: string, choice: "continue" | "retry") =>
     req<Sprout>(homeName(), `/api/incubator/resume?id=${encodeURIComponent(id)}`, { method: "POST", body: JSON.stringify({ choice }) }),
+  /** the user's yes or no to an extend's push; a yes names the head it saw */
+  handOffSprout: (id: string, approve: boolean, head: string) =>
+    req<Sprout>(homeName(), `/api/incubator/handoff?id=${encodeURIComponent(id)}`, { method: "POST", body: JSON.stringify({ approve, head }) }),
   dismissSprout: (id: string) => req<{ ok: true }>(homeName(), `/api/incubator?id=${encodeURIComponent(id)}`, { method: "DELETE" }),
   /** the retro lessons on offer */
   advice: () => req<AdviceOffer[]>(homeName(), "/api/incubator/advice"),

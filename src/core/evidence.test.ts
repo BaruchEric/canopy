@@ -3,7 +3,8 @@ import { mkdir, mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { readEvidence } from "./evidence";
-import { EVIDENCE_EACH } from "./verdict";
+import { EVIDENCE_EACH, judgeState } from "./verdict";
+import { findWorkflow, loadWorkflows } from "./workflows";
 
 let scratch: string;
 let repoDir: string;
@@ -45,6 +46,22 @@ test("cuts a huge multibyte file between characters, never mid-sequence", async 
   const [file] = await readEvidence(repoDir, ["wide.md"]);
   expect(file?.text).toContain("\n[…]\n");
   expect(file?.text).not.toContain("�");
+});
+
+test("an answer given inside a run reaches the judge at every judged step, whatever else is long", async () => {
+  // the live case of 2026-10-03: "Extend clms" was answered in Research and Eval never read it
+  const dir = join(scratch, "answered");
+  await mkdir(join(dir, ".canopy"), { recursive: true });
+  for (const f of ["intent.md", "research.md", "eval.md", "smoke.md", "accept.md"]) await writeFile(join(dir, ".canopy", f), "w".repeat(EVIDENCE_EACH * 3));
+  await writeFile(join(dir, ".canopy/pick.json"), "{}");
+  await writeFile(join(dir, ".canopy/answers.md"), "# Answers\n\n## scout, Research\n\n- Build inside clms or standalone?\n  Extend clms\n");
+  const all = await loadWorkflows({ path: "", host: "none" });
+  for (const [name, step] of [["scout", "Eval"], ["build-new", "Accept"], ["renovate", "Accept"], ["extend", "Accept"]] as const) {
+    const st = findWorkflow(all, name)?.steps.find((x) => x.name === step);
+    expect(st?.evidence).toContain(".canopy/answers.md");
+    const text = judgeState({ task: "t", summary: "s", check: null, files: await readEvidence(dir, st?.evidence ?? []) });
+    expect(text).toContain("Extend clms");
+  }
 });
 
 test("reads only regular files, so a FIFO named as evidence reads as missing instead of hanging", async () => {

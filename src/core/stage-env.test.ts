@@ -73,6 +73,7 @@ describe("stageEnv", () => {
       GIT_CONFIG_PARAMETERS: "'core.fsmonitor'='x'",
       SSH_AUTH_SOCK: "/tmp/agent",
       VERCEL_TOKEN: "v",
+      FIREBASE_TOKEN: "f",
       CANOPY_VAULT_TOKEN: "v",
       PATH: "/usr/bin",
       HOME: "/home/x",

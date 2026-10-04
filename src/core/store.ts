@@ -60,6 +60,7 @@ const defaults = (): CanopyConfig => ({
   peerSync: "off",
   seed: [...DEFAULT_SEED],
   backends: [],
+  extendOwners: [],
 });
 
 /** The launch settings the same way: only repos that differ from the defaults. */
@@ -150,6 +151,9 @@ function normalize(parsed: Partial<CanopyConfig>): CanopyConfig {
     peerSync: PEER_SYNC.includes(cfg.peerSync) ? cfg.peerSync : "off",
     seed: normalizeSeed(cfg.seed),
     backends: normalizeBackends(cfg.backends),
+    extendOwners: (Array.isArray(cfg.extendOwners) ? cfg.extendOwners : []).filter(
+      (o, i, all): o is string => typeof o === "string" && /^[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})$/.test(o) && all.indexOf(o) === i,
+    ),
   };
 }
 

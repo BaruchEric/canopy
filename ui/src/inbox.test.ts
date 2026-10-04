@@ -260,6 +260,27 @@ describe("the incubator in the inbox", () => {
     const gated = mergeInbox([], {}, { fs: flow({ id: "fs", status: "gated" }) }, 30_000, { ...ctx, sprouts: [behind] });
     expect(gated.map((i) => i.source)).toEqual(["flow"]);
   });
+  test("a hand-off waiting for a yes is one item with its head, the flagged changes first in its detail", () => {
+    const handOff = {
+      head: "h".repeat(40),
+      base: "b".repeat(40),
+      remote: "https://github.com/eric/clms.git",
+      branch: "new/coin",
+      commits: [{ sha: "c".repeat(40), subject: "count coins" }],
+      moreCommits: 0,
+      files: [{ path: ".github/workflows/ci.yml", added: 4, removed: 0 }],
+      moreFiles: 0,
+      flagged: [".github/workflows/ci.yml: GitHub Actions or repo settings"],
+      at: 27_000,
+    };
+    const waiting: Sprout = { ...sprout, status: "approving", questions: [], handOff };
+    const items = mergeInbox([], {}, {}, 30_000, { ...ctx, sprouts: [waiting] });
+    expect(items).toHaveLength(1);
+    expect(items[0]).toMatchObject({ key: "sprout:sp_000000000001", kind: "hand-off", who: "hand-off", title: "waits for your yes to push new/coin, 1 change to look at first", head: "h".repeat(40), at: 27_000 });
+    expect(items[0]?.detail.split("\n")[3]).toBe("! .github/workflows/ci.yml: GitHub Actions or repo settings");
+    expect(toRunAnswer({ handOff: true })).toBeNull();
+    expect(toAskAnswer({ handOff: true })).toBeNull();
+  });
   test("a gate a budget parked says so", () => {
     const items = mergeInbox([], {}, { f: flow({ id: "f", parkedFor: "budget" }) }, 30_000, ctx);
     expect(items[0]?.budget).toBe(true);

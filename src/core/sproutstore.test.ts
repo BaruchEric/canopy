@@ -110,6 +110,17 @@ describe("SproutFiles", () => {
     await files.writeIndex("sp_000000000001", "# Inputs\n");
     expect(await readFile(join(dir, "sp_000000000001", "inputs.md"), "utf8")).toBe("# Inputs\n");
   });
+  test("run answers are kept beside the record, private, never under inputs/, and a bad entry is dropped", async () => {
+    const id = "sp_000000000007";
+    expect(await files.readRunAnswers(id)).toEqual([]);
+    const rec = { where: "scout, Research", at: 5, items: [{ question: "Q?", offered: ["A"], picked: [], text: "my secret", answered: true }] };
+    await files.writeRunAnswers(id, [rec]);
+    expect(await files.readRunAnswers(id)).toEqual([rec]);
+    expect((await stat(join(dir, id, "run-answers.json"))).mode & 0o777).toBe(0o600);
+    expect(await stat(join(files.inputsDir(id), "run-answers.json")).catch(() => null)).toBeNull();
+    await writeFile(join(dir, id, "run-answers.json"), JSON.stringify([rec, { where: 1 }, { ...rec, items: [{ question: "x" }] }]));
+    expect(await files.readRunAnswers(id)).toEqual([rec]);
+  });
   test("dismiss keeps the inputs under .dismissed and drops the sprout from the list", async () => {
     await files.dismiss("sp_000000000001");
     expect(await files.list()).toEqual([]);

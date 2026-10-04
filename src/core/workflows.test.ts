@@ -42,7 +42,7 @@ describe("loadWorkflows", () => {
   test("bundled, then user, then repo, later winning by name; broken files stay listed", async () => {
     const list = await loadWorkflows({ path: repo });
     const names = list.map((e) => (e.ok ? e.workflow.name : e.name));
-    expect(names).toEqual(["commit", "push", "ship", "deploy", "review", "clarify", "scout", "build-new", "retro", "broken", "tidy"]);
+    expect(names).toEqual(["commit", "push", "ship", "deploy", "review", "clarify", "scout", "build-new", "renovate", "extend", "retro", "broken", "tidy"]);
     const review = findWorkflow(list, "review");
     expect(review?.source).toBe("user");
     expect(review?.blurb).toBe("my own review");
@@ -131,7 +131,7 @@ describe("the bundled scout", () => {
     expect(evalStep?.gate).toBe("judge");
     expect(evalStep?.back).toBe("Research");
     expect(evalStep?.retries).toBe(2);
-    expect(evalStep?.evidence).toEqual([".canopy/intent.md", ".canopy/research.md", ".canopy/pick.json", ".canopy/eval.md"]);
+    expect(evalStep?.evidence).toEqual([".canopy/intent.md", ".canopy/answers.md", ".canopy/research.md", ".canopy/pick.json", ".canopy/eval.md"]);
   });
 
   test("no step may read the whole disk, call gh api, clone, push or touch vercel", async () => {
@@ -171,7 +171,7 @@ describe("the bundled build-new", () => {
     const accept = wf?.steps[2];
     expect(accept?.gate).toBe("judge");
     expect(accept?.back).toBe("Scaffold");
-    expect(accept?.evidence).toEqual([".canopy/intent.md", ".canopy/pick.json", ".canopy/smoke.md", ".canopy/accept.md", "README.md"]);
+    expect(accept?.evidence).toEqual([".canopy/intent.md", ".canopy/answers.md", ".canopy/pick.json", ".canopy/smoke.md", ".canopy/accept.md", "README.md"]);
   });
 
   test("no step holds push, gh, vercel or a whole-disk read", async () => {
@@ -222,5 +222,54 @@ describe("the bundled build-new", () => {
   test("test's check wants a 2xx status in smoke.md", async () => {
     const check = (await load())?.steps[1]?.check ?? "";
     expect(check).toContain("^status: 2");
+  });
+});
+
+describe("the bundled renovate and extend", () => {
+  const load = async (name: string) => findWorkflow(await loadWorkflows({ path: "", host: "none" }), name);
+
+  test("each builds, tests and is judged at Accept, unlisted, on its own budget, reading the answers", async () => {
+    const renovate = await load("renovate");
+    const extend = await load("extend");
+    expect(renovate?.listed).toBe(false);
+    expect(extend?.listed).toBe(false);
+    expect(renovate?.budget).toEqual({ runs: 30, hours: 6 });
+    expect(extend?.budget).toEqual({ runs: 20, hours: 4 });
+    expect(renovate?.steps.map((s) => s.name)).toEqual(["Renovate", "Test", "Accept"]);
+    expect(extend?.steps.map((s) => s.name)).toEqual(["Build", "Test", "Accept"]);
+    expect(renovate?.steps[2]?.back).toBe("Renovate");
+    expect(extend?.steps[2]?.back).toBe("Build");
+    for (const wf of [renovate, extend]) {
+      expect(wf?.steps[2]?.gate).toBe("judge");
+      expect(wf?.steps[2]?.evidence.slice(0, 2)).toEqual([".canopy/intent.md", ".canopy/answers.md"]);
+    }
+  });
+
+  test("no step holds push, gh, a deploy CLI or a whole-disk read", async () => {
+    for (const name of ["renovate", "extend"]) {
+      const tools = ((await load(name))?.steps ?? []).flatMap((s) => s.tools);
+      for (const banned of ["Read", "Bash(git push:*)", "Bash(gh api:*)"]) expect(tools).not.toContain(banned);
+      expect(tools.some((t) => /vercel|firebase|convex|^Bash\(gh /.test(t))).toBe(false);
+    }
+  });
+
+  test("extend's build check holds the agent to its new/ branch and a clean tree, .canopy/ aside", async () => {
+    const check = (await load("extend"))?.steps[0]?.check ?? "";
+    const dir = await mkdtemp(join(tmpdir(), "canopy-extend-check-"));
+    const sh = async (cmd: string): Promise<{ code: number; out: string }> => {
+      const p = Bun.spawn(["sh", "-c", cmd], { cwd: dir, stdout: "pipe", stderr: "pipe" });
+      const [o, e] = await Promise.all([new Response(p.stdout).text(), new Response(p.stderr).text()]);
+      return { code: await p.exited, out: o + e };
+    };
+    try {
+      await sh("git init -q -b main && git config user.email t@t && git config user.name t && echo x > a.md && git add -A && git commit -qm init");
+      expect((await sh(check)).out).toContain("stay on the branch canopy made");
+      await sh("git checkout -q -b new/s && mkdir .canopy && echo n > .canopy/intent.md");
+      expect((await sh(check)).code).toBe(0);
+      await writeFile(join(dir, "b.md"), "b");
+      expect((await sh(check)).out).toContain("the working tree is not clean");
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
   });
 });
