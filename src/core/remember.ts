@@ -13,8 +13,9 @@
  *  escalation (`Permissions`) and a question are never remembered.
  *
  *  Fail closed: no rule covers a command that reaches outside the project
- *  by any word, or that writes or runs code where code runs from (`.git`,
- *  an agent's settings, package scripts: `guardedPath`); a prefix rule
+ *  by any word, or that names a place code runs from (`.git`, an agent's
+ *  settings, package scripts: `guardedPath`) in a step that is not a known
+ *  reader, nor an edit there; a prefix rule
  *  never covers a command whose words run another program (`runsOther`),
  *  and a bare `Bash` never covers code canopy cannot read (`opaque`). */
 

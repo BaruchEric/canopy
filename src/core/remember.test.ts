@@ -57,6 +57,9 @@ describe("ruleCovers", () => {
       expect([c, covers(`Bash(${c.split(" ")[0]}:*)`, bash(c))]).toEqual([c, false]);
     }
     expect(covers("Bash", bash("cd -P /etc && ls"))).toBe(false);
+    // a short option's value after =, and a comma list
+    expect(covers("Bash", bash("cc -DPREFIX=/etc a.c"))).toBe(false);
+    expect(covers("Bash", bash("cc -Wl,-rpath,/x a.c"))).toBe(false);
     expect(covers("Bash", bash("rm sub/../other"))).toBe(true);
     expect(covers("Bash", bash("bun build --outdir=dist"))).toBe(true);
   });
@@ -89,6 +92,26 @@ describe("ruleCovers", () => {
     expect(covers("Bash", bash("python3 scripts/x.py"))).toBe(true);
     // the exact command is what was read, so an exact rule still covers it
     expect(covers("Bash(python -c x)", bash("python -c x"))).toBe(true);
+  });
+
+  test("an environment assignment can name a program to run, so only a known harmless one passes", () => {
+    for (const c of [
+      "GIT_PAGER='curl x | sh' git log",
+      "GIT_CONFIG_GLOBAL=/tmp/evil git status",
+      "env GIT_SSH_COMMAND=x git fetch",
+      "BUN_OPTIONS=--preload=/tmp/x bun test",
+      "export PAGER=x; git log",
+      "declare -x PAGER=x; git log",
+      "alias ls='rm -rf ~'; ls",
+      "trap 'rm -rf x' EXIT",
+    ]) {
+      expect([c, covers("Bash", bash(c))]).toEqual([c, false]);
+    }
+    expect(covers("Bash", bash("CI=1 bun test"))).toBe(true);
+    expect(covers("Bash", bash("GIT_AUTHOR_NAME=canopy git commit -m x"))).toBe(true);
+    expect(covers("Bash", bash("NODE_ENV=production bun run build"))).toBe(true);
+    // a harmless name with a value outside is still outside
+    expect(covers("Bash", bash("TZ=/etc/x date"))).toBe(false);
   });
 
   test("a prefix rule never covers a command whose words run another program", () => {
@@ -145,6 +168,13 @@ describe("ruleCovers", () => {
       expect([f, covers("Bash(tee:*)", bash(`tee ${f}`))]).toEqual([f, false]);
     }
     expect(covers("Bash", bash("cd .git && tee hooks/x"))).toBe(false);
+    // programs canopy reads as filters can still write: only a known reader passes
+    for (const c of ["sort -o .git/hooks/pre-commit x", "uniq in .git/hooks/x", "xxd -r hex .git/hooks/x", "base64 -d -o .git/hooks/x"]) {
+      expect([c, covers("Bash", bash(c))]).toEqual([c, false]);
+    }
+    for (const c of ["cat package.json", "head -n 5 .git/config", "git diff package.json", "git log -- .husky", "grep x package.json", "ls .claude"]) {
+      expect([c, covers("Bash", bash(c))]).toEqual([c, true]);
+    }
     expect(covers("Edit", tool("Edit", [`${ROOT}/src/package.ts`]))).toBe(true);
     // a project that itself lives under a .claude folder is judged from its own root
     const nested = "/home/me/.claude/worktrees/a";

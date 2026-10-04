@@ -441,9 +441,14 @@ describe("approvals and questions", () => {
     expect(noRule(m, { command: "ls", kind: "somethingNew" })).toBe(NOT_PLAIN);
     expect(noRule(m, { command: "ls", proposedNetworkPolicyAmendments: [{ host: "a.com" }] })).toBe(NOT_PLAIN);
     expect(noRule(m, { command: "ls", additionalPermissions: { network: null } })).toBe(NOT_PLAIN);
+    // a field this canopy does not know may be how a later codex says it: not plain
+    expect(noRule(m, { command: "ls", escalate: true })).toBe(NOT_PLAIN);
+    expect(noRule(m, { threadId: "t", turnId: "u", itemId: "i", startedAtMs: 1, environmentId: null, command: "ls", cwd: "/r", commandActions: [], proposedExecpolicyAmendment: null, kind: "command" })).toBeNull();
     const item = { changes: [{ path: "/r/a.ts", kind: { type: "update", move_path: null }, diff: "" }] };
     expect(noRule("item/fileChange/requestApproval", {}, item)).toBeNull();
     expect(noRule("item/fileChange/requestApproval", { reason: "extra write access" }, item)).toBe(NOT_PLAIN);
+    expect(noRule("item/fileChange/requestApproval", { threadId: "t", turnId: "u", itemId: "i", startedAtMs: 1 }, item)).toBeNull();
+    expect(noRule("item/fileChange/requestApproval", { writeAnywhere: true }, item)).toBe(NOT_PLAIN);
   });
 
   test("a command asking to leave the sandbox gets a note; nothing else does", () => {

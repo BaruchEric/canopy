@@ -315,6 +315,8 @@ export function reaches(arg: string): string[] {
     if (eq !== -1) out.push(arg.slice(eq + 1));
   } else if (arg.startsWith("-")) {
     if (arg.length > 2) out.push(arg.slice(2));
+    // `-DPREFIX=/etc`
+    if (eq !== -1) out.push(arg.slice(eq + 1));
   } else {
     out.push(arg);
     if (eq !== -1) out.push(arg.slice(eq + 1));
@@ -323,6 +325,8 @@ export function reaches(arg: string): string[] {
   for (const v of out) {
     if (v.startsWith("@")) more.push(v.slice(1));
     if (v.includes(":") && !v.includes("://")) more.push(...v.split(":"));
+    // `-Wl,-rpath,/x`
+    if (v.includes(",")) more.push(...v.split(","));
   }
   return [...out, ...more].filter((v) => v !== "");
 }
@@ -422,7 +426,19 @@ const OPAQUE_PROGRAMS = new Set([
   "sudo", "doas", "su", "watch", "ssh", "mosh", "parallel", "flock", "chroot", "strace", "dtrace", "script", "builtin",
   "eval", "source", ".", "awk", "gawk", "nawk", "mawk", "xargs", "vi", "vim", "nvim", "emacs", "ed", "ex", "tmux", "screen",
   "lua", "rscript", "tclsh", "expect", "gdb", "lldb", "crontab", "at", "batch", "defaults", "launchctl", "systemctl", "open", "xdg-open",
+  "alias", "trap", "hash", "enable",
 ]);
+
+/** environment variables that name no program and no file: an assignment of
+ *  any other (`GIT_PAGER`, `GIT_CONFIG_GLOBAL`, `BUN_OPTIONS`, `PATH`)
+ *  can change what runs, so canopy cannot read the command */
+const PLAIN_ENV = new Set([
+  "GIT_AUTHOR_NAME", "GIT_AUTHOR_EMAIL", "GIT_COMMITTER_NAME", "GIT_COMMITTER_EMAIL", "CI", "NODE_ENV", "TZ", "LANG", "NO_COLOR", "FORCE_COLOR",
+]);
+const plainEnv = (name: string): boolean => PLAIN_ENV.has(name) || name.startsWith("LC_");
+
+/** builtins that set variables from their words */
+const DECLARERS = new Set(["export", "declare", "typeset", "readonly", "local"]);
 
 /** A sed script canopy can read: printing, deleting, quitting and plain
  *  substitutions by line or pattern. Anything else (`w` a file, `e` a
@@ -625,14 +641,24 @@ function packagePart(prog: string, args: readonly string[]): Part[] {
   return [vaguePart(prog, `runs ${prog}`, ["code"])];
 }
 
-/** What one simple command does, as parts, marked `guarded` when it writes
- *  or runs code and a word of it names a place code runs from. */
+/** the readings of a step that only reads: listing, reading, searching,
+ *  counting, git's status, changes, history and info */
+const READ_KEYS = new Set(["list", "read", "filter", "search", "count", "git status", "git diff", "git log", "git info"]);
+
+/** Whether a step's parts are a known reader's and nothing else: no write,
+ *  no code, no reading canopy lacks. A program canopy reads as a filter
+ *  (`sort -o`, `xxd -r`) is not one. */
+const onlyReads = (parts: readonly Part[]): boolean =>
+  parts.some((p) => READ_KEYS.has(p.key)) &&
+  parts.every((p) => !p.opaque && !p.vague && (p.flags ?? []).every((f) => f === "outside") && (READ_KEYS.has(p.key) || p.one === ""));
+
+/** What one simple command does, as parts, marked `guarded` when a word of
+ *  it names a place code runs from, unless the step only reads. */
 function commandParts(cmd: SimpleCommand, w: Where, root: string | null): Part[] {
   const from = w.cwd;
   const parts = commandPartsOf(cmd, w, root);
-  const risky = parts.some((p) => p.vague || p.opaque || p.flags?.some((f) => f === "writes" || f === "deletes" || f === "code"));
   const named = [...cmd.words.flatMap(reaches), ...cmd.writes, ...cmd.reads];
-  if (risky && named.some((x) => guardedPath(x, root, from))) parts.push({ key: "", one: "", guarded: true });
+  if (!onlyReads(parts) && named.some((x) => guardedPath(x, root, from))) parts.push({ key: "", one: "", guarded: true });
   return parts;
 }
 
@@ -641,12 +667,15 @@ function commandPartsOf(cmd: SimpleCommand, w: Where, root: string | null): Part
   let words = cmd.words.filter((x) => x !== "");
   let who: string | null = null;
   const hidden: Part[] = [];
+  // `VAR=value` words, before the program, after `env`, or set by `export`
+  const assigned: string[] = [];
   // env assignments and wrappers run what follows them
   for (;;) {
     const first = words[0] ?? "";
     const assign = /^([A-Za-z_][A-Za-z0-9_]*)=(.*)$/.exec(first);
     if (assign) {
       if (assign[1] === "GIT_AUTHOR_NAME" || assign[1] === "GIT_COMMITTER_NAME") who = assign[2] ?? null;
+      assigned.push(first);
       words = words.slice(1);
       continue;
     }
@@ -658,6 +687,7 @@ function commandPartsOf(cmd: SimpleCommand, w: Where, root: string | null): Part
     if (WRAPPERS.has(name)) {
       let k = 1;
       while (k < words.length && ((words[k] ?? "").startsWith("-") || /^[A-Za-z_]\w*=/.test(words[k] ?? "") || (name === "timeout" && /^\d/.test(words[k] ?? "")))) {
+        if (/^[A-Za-z_]\w*=/.test(words[k] ?? "")) assigned.push(words[k] ?? "");
         if (name === "sudo" && (words[k] === "-u" || words[k] === "-g")) k++;
         if (name === "nice" && words[k] === "-n") k++;
         k++;
@@ -667,7 +697,10 @@ function commandPartsOf(cmd: SimpleCommand, w: Where, root: string | null): Part
     }
     break;
   }
+  if (DECLARERS.has(progName(words[0] ?? ""))) assigned.push(...words.slice(1).filter((x) => /^[A-Za-z_]\w*=/.test(x)));
   const parts: Part[] = [...hidden];
+  // a variable that can name a program (a pager, a config file, a preload)
+  if (assigned.some((a) => !plainEnv(a.slice(0, a.indexOf("="))))) parts.push(OPAQUE);
   // a program's own way to run another: `rg --pre`, `git -c`, `bun install`
   if (words.length && execOption(words) !== null) parts.push(OPAQUE);
   if ([...cmd.writes, ...cmd.reads].some((x) => /[$`]/.test(x))) parts.push(OPAQUE);
@@ -676,6 +709,7 @@ function commandPartsOf(cmd: SimpleCommand, w: Where, root: string | null): Part
     const out = (x: string) => /(^|\/)\.[*?[]/.test(x) || (pathy(x) && outsidePath(x, w));
     if (reaches(p).some(out)) parts.push(part("outside", "", undefined, ["outside"]));
   };
+  for (const a of assigned) flagOutside(a);
   for (const t of cmd.writes) {
     if (t.startsWith("/dev/")) continue;
     flagOutside(t);
@@ -732,6 +766,8 @@ function commandPartsOf(cmd: SimpleCommand, w: Where, root: string | null): Part
 
   if (SILENT.has(base)) return parts;
   if (base === "echo" || base === "printf") return cmd.writes.length ? parts : [...parts, part("print", "prints text")];
+  // `tree -o` writes its listing to a file
+  if (base === "tree" && args.some((a) => a === "-o" || a.startsWith("-o"))) return [...parts, part("write", "writes a file listing", undefined, ["writes"])];
   if (base === "ls" || base === "tree" || base === "exa" || base === "eza") {
     const dirs = ops(["-I", "-L", "--ignore"]);
     if (dirs.length === 0) return [...parts, part("list", "lists files", (n) => `lists files ${n} times`)];

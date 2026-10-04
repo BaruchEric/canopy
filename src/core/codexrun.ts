@@ -449,24 +449,27 @@ export function approvalPrompt(
 /** why a request canopy cannot read as plainly inside the sandbox keeps no rule */
 export const NOT_PLAIN = "codex did not ask it as a plain request inside its sandbox, so no remembered rule answers it";
 
+/** The fields a plain request carries, from Codex 0.159's app-server schema
+ *  (`codex app-server generate-ts`): every other field set (a reason, a
+ *  network context or amendment, an `approvalId`, a grant, a field a later
+ *  Codex adds) means canopy cannot call the request plain. */
+const PLAIN_FIELDS: Record<string, ReadonlySet<string>> = {
+  "item/commandExecution/requestApproval": new Set([
+    "threadId", "turnId", "itemId", "startedAtMs", "environmentId", "command", "cwd", "commandActions", "proposedExecpolicyAmendment", "kind",
+  ]),
+  "item/fileChange/requestApproval": new Set(["threadId", "turnId", "itemId", "startedAtMs"]),
+};
+
 /** Whether an approval is one canopy recognises as a plain request inside
- *  Codex's sandbox: a command with no reason, no network context or
- *  amendment, no callback of its own and no extra permissions, or a file
- *  change with no reason and no wider grant. Anything else, a field Codex
- *  adds later included, is not. */
+ *  Codex's sandbox: only known fields set, and a command's `kind` a
+ *  command. Anything else is not. */
 function plainInSandbox(method: string, params: Record<string, unknown>): boolean {
-  const empty = (k: string): boolean => {
-    const v = params[k];
-    return v === undefined || v === null || v === "" || (Array.isArray(v) && v.length === 0);
-  };
-  if (!empty("reason")) return false;
-  if (method === "item/commandExecution/requestApproval") {
-    const kind = str(params, "kind");
-    if (kind !== "" && kind !== "command") return false;
-    return ["networkApprovalContext", "approvalId", "proposedNetworkPolicyAmendments", "additionalPermissions", "permissions", "sandboxPermissions"].every(empty);
-  }
-  if (method === "item/fileChange/requestApproval") return empty("grantRoot");
-  return false;
+  const known = PLAIN_FIELDS[method];
+  if (!known) return false;
+  const set = (v: unknown): boolean => v !== undefined && v !== null && v !== "" && !(Array.isArray(v) && v.length === 0);
+  if (Object.entries(params).some(([k, v]) => set(v) && !known.has(k))) return false;
+  const kind = str(params, "kind");
+  return kind === "" || kind === "command";
 }
 
 function approvalPromptOf(
