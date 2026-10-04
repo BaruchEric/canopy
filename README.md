@@ -52,6 +52,9 @@ canopy source add ~/dev --host wsl # …or one on an ssh host
 canopy source add --forgejo https://git.example.com --token ~/secrets/forgejo.txt
 canopy source rm <id>              # stop scanning it
 canopy helper [--backend URL]      # lend this machine's desktop openers to a shared backend
+canopy spec status [dir]           # every local repo against the shared repo spec
+canopy spec sync <repo> [--visual] # write the spec into a repo (--visual adds DESIGN.md)
+canopy spec check [repo]           # exit 1 unless the repo's spec text is in sync
 canopy version                     # the version and commit (also --version, -V)
 ```
 
@@ -143,6 +146,10 @@ A step whose body is empty is check-only: no Claude run, just the command. Workf
 Every step's `check`, when present, runs after the step's Claude run ends and before the gate; a nonzero exit fails the step and the flow. Then the gate: `continue` starts the next step at once, `ask` parks the flow for you to continue, retry, or stop, and `verdict` hands the step's summary to an evaluator (Jev, over the Vercel AI Gateway) that decides the same three ways on its own. `verdict` needs `AI_GATEWAY_API_KEY` set in the server's environment; without it, a `verdict` gate behaves like `ask`.
 
 Select several repos on the board (the select button in the top bar, or `x`) and run one workflow across all of them as a fleet: each repo whose precondition does not hold is skipped, the rest run up to three at a time, and the fleet's own sheet shows every repo's flow. Select mode starts with nothing picked. Click a card or a tree row to pick it, shift-click to pick (or unpick) everything from the last click to that one, tick a group heading to take the whole group, and use the bar along the bottom for all, none, invert, or just the repos in one state (with changes, unpushed, behind, and so on). ⌘A picks everything in view, Escape leaves. The count and the fleet only ever include picks the current filters show. All, none, invert and "only…" replace the selection with what is in view; a single pick a filter hides stays put and comes back when the filter clears.
+
+## The shared repo spec
+
+`spec/` is one spec for every repo canopy scans, versioned in `spec/manifest.json`: `SPEC.template.md`, a seven-section SPEC.md every repo keeps (what it is, who uses it, stack, how it is built and run, data, decisions, out of scope), and `DESIGN.md`, one visual system in Google's [DESIGN.md](https://github.com/google-labs-code/design.md) format (check it with `bunx @google/design.md@0.4.0 lint spec/DESIGN.md`). A repo adopts it with `canopy spec sync <repo>` or the bundled **spec** workflow, run on one repo or as a fleet: canopy writes marker blocks (`<!-- spec:begin vX.Y.Z -->…<!-- spec:end -->`) into SPEC.md and AGENTS.md or CLAUDE.md, DESIGN.md whole only for a repo that opts into the visual half (`--visual`), and records the version and each block's sha256 in `.canopy/spec.json`; the workflow's agent then fills in a new SPEC.md's sections. Text outside the blocks stays the repo's. The scan reads each local checkout's state: **spec text in sync**, **behind** (an older version, untouched), **drifted** (a block or DESIGN.md edited by hand) or **not adopted**. The board's filter menu has **spec drift** and **no spec** chips, and the select bar can pick by them, so a fleet of the spec workflow brings every drifted repo up to date. "In sync" means the text matches, not that the code follows DESIGN.md. Bump the version in the manifest whenever the spec changes; every adopted repo then reads as behind.
 
 `docs/workflows/example-update-deps.md` is a worked example meant to be copied to `$CANOPY_CONFIG_DIR/workflows/` rather than bundled, since a dependency bump belongs to you, not to canopy.
 

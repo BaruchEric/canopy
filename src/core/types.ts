@@ -217,8 +217,18 @@ export interface Repo {
   archived?: "canopy" | "github";
   /** set on a repo the user starred in canopy */
   favorite?: true;
+  /** where a local checkout stands against the shared repo spec (core/spec.ts);
+   *  absent on a remote or forge repo, whose files the scan does not read */
+  spec?: SpecState;
   error?: string;
 }
+
+/** The two halves of the shared repo spec a repo can take: the SPEC.md
+ *  standard, and the DESIGN.md visual system. */
+export type SpecHalf = "doc" | "visual";
+
+/** "in-sync" says the spec's text matches, not that the code follows it. */
+export type SpecState = "in-sync" | "behind" | "drifted" | "not-adopted";
 
 /** A repo with no working copy on any machine canopy can reach: git cannot
  *  be run against it, so status, diffs, openers and runs all refuse. */

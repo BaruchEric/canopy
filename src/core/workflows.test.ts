@@ -42,7 +42,7 @@ describe("loadWorkflows", () => {
   test("bundled, then user, then repo, later winning by name; broken files stay listed", async () => {
     const list = await loadWorkflows({ path: repo });
     const names = list.map((e) => (e.ok ? e.workflow.name : e.name));
-    expect(names).toEqual(["commit", "push", "ship", "deploy", "review", "clarify", "scout", "build-new", "renovate", "extend", "retro", "broken", "tidy"]);
+    expect(names).toEqual(["commit", "push", "ship", "deploy", "review", "clarify", "scout", "build-new", "renovate", "extend", "retro", "spec", "broken", "tidy"]);
     const review = findWorkflow(list, "review");
     expect(review?.source).toBe("user");
     expect(review?.blurb).toBe("my own review");
