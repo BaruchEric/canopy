@@ -1,0 +1,10 @@
+{
+  "version": "1.0.0",
+  "design": "DESIGN.md",
+  "template": "SPEC.template.md",
+  "blocks": {
+    "SPEC.md": "blocks/spec.md",
+    "AGENTS.md": "blocks/agents.md",
+    "CLAUDE.md": "blocks/agents.md"
+  }
+}

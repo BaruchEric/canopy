@@ -1,0 +1,11 @@
+How to keep this file (shared repo spec {{version}}):
+- SPEC.md says what this repo is, how it is built and why. It is the first file a person or an agent reads.
+- Keep the seven sections below, in this order, under the same headings. Write "none" rather than drop one.
+- Sections 1, 3 and 4 are required: what it is, the stack with versions, and the exact commands to build, test and run.
+- Stay under 120 lines. Link to longer docs rather than copying them here.
+- Decisions are dated one-liners with their why: "2026-10-04: Bun over Node, because the CLI starts faster."
+- Update SPEC.md in the same commit as the change that makes it wrong.
+- Out of scope lists what this repo will not do, so an agent does not add it.
+- Commands are written as they are typed, one per line, from the repo root.
+- Name versions as the lockfile has them, not "latest".
+- No secrets, tokens or hostnames that are private.
