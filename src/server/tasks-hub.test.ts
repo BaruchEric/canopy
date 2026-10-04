@@ -236,7 +236,8 @@ describe.skipIf(!tmux)("keep running across a canopy restart", () => {
     await first.act(app, "start", "late");
     first.stop();
     const id = taskTermId(app.path, "late");
-    await until(async () => (await panes()).some((p) => p.termId === id && p.dead), "late to exit");
+    // a busy machine can be slow to start the pane and see it exit
+    await until(async () => (await panes()).some((p) => p.termId === id && p.dead), "late to exit", 25_000);
     // the next canopy's first look at the definitions is slow, which is the gap
     let slow = true;
     const next = hub({
@@ -250,11 +251,11 @@ describe.skipIf(!tmux)("keep running across a canopy restart", () => {
       timings: { backoff: 5000, backoffCap: 5000 },
     });
     await next.start();
-    await until(async () => (await info(next, "late")).exitedAt !== undefined, "the death on record");
+    await until(async () => (await info(next, "late")).exitedAt !== undefined, "the death on record", 25_000);
     await next.act(app, "stop", "late");
     await Bun.sleep(900);
     expect((await info(next, "late")).status).toBe("stopped");
-  });
+  }, 60_000);
 });
 
 describe.skipIf(!tmux)("the supervisor", () => {
