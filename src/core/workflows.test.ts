@@ -236,12 +236,14 @@ describe("the bundled renovate and extend", () => {
     expect(renovate?.budget).toEqual({ runs: 30, hours: 6 });
     expect(extend?.budget).toEqual({ runs: 20, hours: 4 });
     expect(renovate?.steps.map((s) => s.name)).toEqual(["Renovate", "Test", "Accept"]);
-    expect(extend?.steps.map((s) => s.name)).toEqual(["Build", "Test", "Accept"]);
+    expect(extend?.steps.map((s) => s.name)).toEqual(["Baseline", "Build", "Test", "Accept"]);
+    expect(extend?.steps[0]?.body).toBe("");
     expect(renovate?.steps[2]?.back).toBe("Renovate");
-    expect(extend?.steps[2]?.back).toBe("Build");
+    expect(extend?.steps[3]?.back).toBe("Build");
     for (const wf of [renovate, extend]) {
-      expect(wf?.steps[2]?.gate).toBe("judge");
-      expect(wf?.steps[2]?.evidence.slice(0, 2)).toEqual([".canopy/intent.md", ".canopy/answers.md"]);
+      const accept = wf?.steps.find((s) => s.name === "Accept");
+      expect(accept?.gate).toBe("judge");
+      expect(accept?.evidence.slice(0, 2)).toEqual([".canopy/intent.md", ".canopy/answers.md"]);
     }
   });
 
@@ -254,7 +256,7 @@ describe("the bundled renovate and extend", () => {
   });
 
   test("extend's build check holds the agent to its new/ branch and a clean tree, .canopy/ aside", async () => {
-    const check = (await load("extend"))?.steps[0]?.check ?? "";
+    const check = (await load("extend"))?.steps.find((s) => s.name === "Build")?.check ?? "";
     const dir = await mkdtemp(join(tmpdir(), "canopy-extend-check-"));
     const sh = async (cmd: string): Promise<{ code: number; out: string }> => {
       const p = Bun.spawn(["sh", "-c", cmd], { cwd: dir, stdout: "pipe", stderr: "pipe" });
@@ -268,6 +270,65 @@ describe("the bundled renovate and extend", () => {
       expect((await sh(check)).code).toBe(0);
       await writeFile(join(dir, "b.md"), "b");
       expect((await sh(check)).out).toContain("the working tree is not clean");
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("extend's baseline records the gates that fail before any change, and only those stop failing the checks after it", async () => {
+    const steps = (await load("extend"))?.steps ?? [];
+    const checkOf = (name: string): string => steps.find((s) => s.name === name)?.check ?? "";
+    const dir = await mkdtemp(join(tmpdir(), "canopy-extend-baseline-"));
+    const sh = async (cmd: string): Promise<{ code: number; out: string }> => {
+      const p = Bun.spawn(["sh", "-c", cmd], { cwd: dir, stdout: "pipe", stderr: "pipe" });
+      const [o, e] = await Promise.all([new Response(p.stdout).text(), new Response(p.stderr).text()]);
+      return { code: await p.exited, out: o + e };
+    };
+    const scripts = async (s: Record<string, string>): Promise<void> => {
+      await writeFile(join(dir, "package.json"), JSON.stringify({ name: "t", scripts: s }));
+    };
+    try {
+      await sh("git init -q -b main && git config user.email t@t && git config user.name t && printf 'node_modules\\n' > .gitignore");
+      await scripts({ lint: "true", test: "echo flaky-timing-test; exit 1" });
+      await sh("git add -A && git commit -qm init && git checkout -q -b new/s && mkdir .canopy && echo /.canopy/ >> .git/info/exclude");
+
+      const base = await sh(checkOf("Baseline"));
+      expect(base.code).toBe(0);
+      expect(base.out).toContain("bun run test fails on the base commit");
+      expect(base.out).not.toContain("bun run lint");
+      expect(await readFile(join(dir, ".git", "canopy-baseline"), "utf8")).toBe("test\n");
+      const notes = await readFile(join(dir, ".canopy", "baseline.md"), "utf8");
+      expect(notes).toContain("- bun run lint passes.");
+      expect(notes).toContain("- bun run test fails.");
+      expect(notes).toContain("    flaky-timing-test");
+
+      // the test gate fails as it did on the base: reported, not failed
+      expect((await sh("git status --porcelain")).out).toBe("");
+      const build = await sh(checkOf("Build"));
+      expect(build.code).toBe(0);
+      expect(build.out).toContain("bun run test failed, as it did on the base commit");
+
+      // a gate that passed on the base still fails the check, and the notes a stage can write do not change that
+      await scripts({ lint: "exit 1", test: "echo flaky-timing-test; exit 1" });
+      await writeFile(join(dir, ".canopy", "baseline.md"), "lint\ntest\n");
+      await sh("git commit -qam 'break lint'");
+      const broken = await sh(checkOf("Build"));
+      expect(broken.code).toBe(1);
+      expect(broken.out).toContain("bun run lint failed");
+
+      // taken once: a second run keeps the record, and with none, a branch already past its start gets no baseline
+      expect((await sh(checkOf("Baseline"))).out).toContain("the baseline was taken already");
+      await rm(join(dir, ".git", "canopy-baseline"));
+      const moved = await sh(checkOf("Baseline"));
+      expect(moved.code).toBe(0);
+      expect(moved.out).toContain("HEAD is not where this branch began");
+      expect(await readFile(join(dir, ".git", "canopy-baseline"), "utf8")).toBe("");
+      await scripts({ lint: "true", test: "echo flaky-timing-test; exit 1" });
+      await sh("git commit -qam 'fix lint'");
+      const strict = await sh(checkOf("Build"));
+      expect(strict.code).toBe(1);
+      expect(strict.out).toContain("bun run test failed");
+      expect(strict.out).not.toContain("as it did on the base commit");
     } finally {
       await rm(dir, { recursive: true, force: true });
     }
