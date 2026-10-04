@@ -14,7 +14,8 @@ import { ClaudeDriver } from "./claudedrive";
 import type { RpcProc } from "./codexrpc";
 import { CodexDriver, runsInside } from "./codexrun";
 import { RunCtx, type RememberHook, type RunDriver } from "./driver";
-import { rememberedFor, ruleCovers, type RunScope } from "./remember";
+import { rememberOffer } from "./offer";
+import { pathsInside, rememberedFor, ruleCovers, type RunScope } from "./remember";
 import { holdQuiet, type QuietHold, type StageClient } from "./stageclient";
 import { StageAwayError } from "./stagewire";
 import {
@@ -228,7 +229,9 @@ export class Runner {
     };
     if (by) run.by = by;
     if (spec.flowStep) run.flowStep = { ...spec.flowStep };
-    const remember = this.rememberHook(run, repo.path);
+    // a stage's run never takes a remembered rule (amendment 4, ruling 16):
+    // a rule kept on one seed, or for one step, must not hold for the next
+    const remember = stage ? null : this.rememberHook(run, repo.path);
     const ctx = new RunCtx(
       run,
       {
@@ -287,18 +290,23 @@ export class Runner {
     const scope: RunScope = { path, ...(run.flowStep ? { flowStep: run.flowStep } : {}) };
     return {
       match: (prompt, facts) => rememberedFor(rules(), scope, prompt, facts, path)?.rule ?? null,
-      inside: (facts) => runsInside(facts, path),
+      inside: async (prompt, facts) => (await runsInside(facts, path)) && (await pathsInside(prompt.paths ?? [], path)),
     };
   }
 
   /** What a remember on a waiting permission needs: the run's scope, after
-   *  checking that `rule` covers that very prompt (a rule that would not
-   *  have answered it is refused). */
+   *  checking that `rule` is one the page offered for that very prompt
+   *  (`rememberOffer`) and covers it. A stage's run, a prompt id that is no
+   *  longer the one waiting, and any other rule are refused. */
   rememberScope(id: string, promptId: string, rule: string): { scope: RunScope; title: string } {
     const live = this.live.get(id);
     if (!live) throw new Error(`unknown run: ${id}`);
+    if (live.ctx.stage) throw new Error("an incubator stage's run keeps no rule");
     const waiting = live.ctx.waitingPermission(promptId);
     if (!waiting) throw new Error("that permission is no longer waiting");
+    if (!rememberOffer(waiting.prompt, live.repo.path)?.rules.includes(rule)) {
+      throw new Error(`canopy does not offer ${rule} for this request`);
+    }
     if (!ruleCovers(rule, waiting.prompt, waiting.facts, live.repo.path)) {
       throw new Error(`${rule} does not cover this request, so remembering it would not stop it asking`);
     }

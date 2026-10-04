@@ -173,7 +173,7 @@ export function stepSpec(
     expectsChange: false,
     task: [restarted ? RESTART_NOTE : "", earlier, retry, step.body].filter(Boolean).join("\n\n"),
     ...(wf.unattended ? { unattended: wf.unattended } : {}),
-    flowStep: { workflow: wf.name, step: step.name },
+    flowStep: { workflow: wf.name, step: step.name, source: wf.source },
     mode: "job",
   };
 }

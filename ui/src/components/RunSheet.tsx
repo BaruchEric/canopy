@@ -263,7 +263,8 @@ export function Timeline({
   run: Run;
   repo: Repo | undefined;
   error: string | null;
-  onAnswer: (a: RunAnswer) => void;
+  /** the answer names the prompt it was given on, never the one waiting at click time */
+  onAnswer: (a: RunAnswer, promptId: string) => void;
   /** rendered at the end of the same scrolling body, for a flow's step check */
   extra?: ReactNode;
 }) {
@@ -333,6 +334,7 @@ export function Timeline({
       </ol>
       {run.prompt && (
         <RunPromptForm
+          key={run.prompt.id}
           prompt={run.prompt}
           harness={harness}
           onAnswer={onAnswer}
@@ -427,7 +429,7 @@ function Console({ run, repo }: { run: Run; repo: Repo | undefined }) {
         run={run}
         repo={repo}
         error={error}
-        onAnswer={(a) => void act(() => answerRun(run.id, run.prompt?.id ?? "", a))}
+        onAnswer={(a, promptId) => void act(() => answerRun(run.id, promptId, a))}
       />
 
       {chat && active && (

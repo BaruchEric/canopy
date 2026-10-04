@@ -429,9 +429,30 @@ export function approvalPrompt(
   root: string,
 ): PromptInput {
   const reason = str(params, "reason");
-  const tail = (lines: string[]): string => lines.filter(Boolean).join("\n\n").slice(0, DETAIL_CAP);
   // the agent's own words for it; the sandbox's retry line is not that
   const why = reason && !ESCALATION.test(reason) ? { description: reason.slice(0, 500) } : {};
+  const prompt = approvalPromptOf(method, params, item, root, reason, why);
+  if (prompt.kind !== "permission") return prompt;
+  // a remembered rule must never let a command out of the sandbox, and an
+  // older approval's facts are not what canopy matches a rule on
+  const noRule =
+    method === "item/commandExecution/requestApproval" && ESCALATION.test(reason)
+      ? "it asks to run outside codex's sandbox, which is granted one time at a time"
+      : method === "execCommandApproval" || method === "applyPatchApproval"
+        ? "an older codex approval, which canopy cannot match a rule against"
+        : null;
+  return noRule ? { ...prompt, noRule } : prompt;
+}
+
+function approvalPromptOf(
+  method: string,
+  params: Record<string, unknown>,
+  item: Record<string, unknown> | null,
+  root: string,
+  reason: string,
+  why: { description?: string },
+): PromptInput {
+  const tail = (lines: string[]): string => lines.filter(Boolean).join("\n\n").slice(0, DETAIL_CAP);
   switch (method) {
     case "item/commandExecution/requestApproval":
     case "execCommandApproval": {

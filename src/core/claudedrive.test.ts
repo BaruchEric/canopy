@@ -1,6 +1,6 @@
 import { afterAll, describe, expect, test } from "bun:test";
 import { mkdir, mkdtemp, readFile, rm } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import { ClaudeDriver, cliArgs, parseQuestions, permissionAsk } from "./claudedrive";
 import type { RpcSpawn } from "./codexrpc";
@@ -186,6 +186,10 @@ describe("a permission's input", () => {
   test("names the file a file tool touches, made absolute", () => {
     expect(permissionAsk("Write", { file_path: "/r/a.ts", content: "x" }, "/r").paths).toEqual(["/r/a.ts"]);
     expect(permissionAsk("Grep", { pattern: "x", path: "src" }, "/r").paths).toEqual(["/r/src"]);
+    // a home path is the home folder, not a folder named ~ in the project
+    expect(permissionAsk("Read", { file_path: "~/.ssh/id_rsa" }, "/r").paths).toEqual([join(homedir(), ".ssh/id_rsa")]);
+    expect(permissionAsk("Read", { file_path: "~" }, "/r").paths).toEqual([homedir()]);
+    expect(permissionAsk("Read", { file_path: "../x/../y" }, "/r/a").paths).toEqual(["/r/y"]);
     const web = permissionAsk("WebFetch", { url: "https://a.com", prompt: "read" }, "/r");
     expect(web.paths).toBeUndefined();
     expect(web.description).toBeUndefined();

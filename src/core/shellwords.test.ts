@@ -20,27 +20,61 @@ describe("quoteWord and ruleOf", () => {
 });
 
 describe("ruleOffer", () => {
-  test("a plain command offers its prefixes and itself, one word by default", () => {
-    expect(ruleOffer("Bash", "ls -la workspace/src")).toEqual({
-      rules: ["Bash(ls:*)", "Bash(ls -la:*)", "Bash(ls -la workspace/src:*)", "Bash(ls -la workspace/src)"],
+  test("a plain command offers its leading words as prefixes and itself, one word by default", () => {
+    expect(ruleOffer("Bash", "cat a.txt")).toEqual({ rules: ["Bash(cat:*)", "Bash(cat a.txt:*)", "Bash(cat a.txt)"], pick: 0 });
+    expect(ruleOffer("Bash", "make build docs")).toEqual({
+      rules: ["Bash(make build:*)", "Bash(make build docs:*)", "Bash(make build docs)"],
       pick: 0,
     });
   });
 
-  test("a tool with subcommands picks two words", () => {
-    expect(ruleOffer("Bash", "git status --short")).toEqual({
-      rules: ["Bash(git:*)", "Bash(git status:*)", "Bash(git status --short:*)", "Bash(git status --short)"],
-      pick: 1,
-    });
-    // a flag is not a subcommand
-    expect(ruleOffer("Bash", "git --version")?.pick).toBe(0);
+  test("a flag as the second word makes the offer exact only", () => {
+    expect(ruleOffer("Bash", "ls -la workspace/src")).toEqual({ rules: ["Bash(ls -la workspace/src)"], pick: 0 });
+    expect(ruleOffer("Bash", "git -C sub status")).toEqual({ rules: ["Bash(git -C sub status)"], pick: 0 });
+    expect(ruleOffer("Bash", "git --version")).toEqual({ rules: ["Bash(git --version)"], pick: 0 });
+    expect(ruleOffer("Bash", "bun -e 'console.log(1)'")).toEqual({ rules: ["Bash(bun -e 'console.log(1)')"], pick: 0 });
   });
 
-  test("an interpreter or a script path picks the exact command", () => {
-    const py = ruleOffer("Bash", "python3 scripts/count.py --all");
-    expect(py?.rules[py.pick]).toBe("Bash(python3 scripts/count.py --all)");
-    const sh = ruleOffer("Bash", "./build.sh");
-    expect(sh?.rules[sh.pick]).toBe("Bash(./build.sh)");
+  test("a leading assignment makes the offer exact only", () => {
+    expect(ruleOffer("Bash", "FOO=1 bun test")).toEqual({ rules: ["Bash(FOO=1 bun test)"], pick: 0 });
+  });
+
+  test("a tool with subcommands offers two words at least and stops at a flag", () => {
+    expect(ruleOffer("Bash", "git status --short")).toEqual({ rules: ["Bash(git status:*)", "Bash(git status --short)"], pick: 0 });
+    expect(ruleOffer("Bash", "bun test src/a.test.ts")).toEqual({
+      rules: ["Bash(bun test:*)", "Bash(bun test src/a.test.ts:*)", "Bash(bun test src/a.test.ts)"],
+      pick: 0,
+    });
+    // never one word: git:* would cover git -c alias.x=... and git push --force
+    for (const c of ["git status", "git push origin main", "bun test"]) {
+      expect(ruleOffer("Bash", c)?.rules).not.toContain("Bash(git:*)");
+      expect(ruleOffer("Bash", c)?.rules).not.toContain("Bash(bun:*)");
+    }
+    expect(ruleOffer("Bash", "git")).toEqual({ rules: ["Bash(git)"], pick: 0 });
+  });
+
+  test("whatever runs anything else is exact only", () => {
+    for (const c of [
+      "python3 scripts/count.py --all",
+      "./build.sh",
+      "command rm -rf x",
+      "! true",
+      "ssh host ls",
+      "awk '{print}' a",
+      "find . -name x",
+      "sed s/a/b/ f",
+      "docker run alpine sh",
+      "docker exec box sh",
+      "kubectl exec pod sh",
+      "npm exec cowsay",
+      "uv run anything",
+      "gh api repos/x -X DELETE",
+      "bunx some-tool",
+      "xargs rm",
+    ]) {
+      expect(ruleOffer("Bash", c)?.rules, c).toHaveLength(1);
+      expect(ruleOffer("Bash", c)?.rules[0]?.endsWith(":*)"), c).toBe(false);
+    }
   });
 
   test("a one-word command offers the prefix and the exact word", () => {
@@ -53,7 +87,7 @@ describe("ruleOffer", () => {
   });
 
   test("a shell wrapper is read through", () => {
-    expect(ruleOffer("Bash", "/bin/sh -lc 'git status'")?.rules[1]).toBe("Bash(git status:*)");
+    expect(ruleOffer("Bash", "/bin/sh -lc 'git status'")?.rules[0]).toBe("Bash(git status:*)");
   });
 
   test("a chain, a pipe, a redirect or a heredoc can only be covered by a bare Bash", () => {
@@ -62,12 +96,12 @@ describe("ruleOffer", () => {
     }
   });
 
-  test("another tool offers its name; sandbox escalation and odd names offer nothing", () => {
-    expect(ruleOffer("WebFetch")).toEqual({ rules: ["WebFetch"], pick: 0 });
+  test("another tool offers its name; escalations, plan mode, the network, notebooks and odd names offer nothing", () => {
+    expect(ruleOffer("Read")).toEqual({ rules: ["Read"], pick: 0 });
     expect(ruleOffer("Edit")).toEqual({ rules: ["Edit"], pick: 0 });
-    expect(ruleOffer("Permissions")).toBeNull();
-    expect(ruleOffer("AskUserQuestion")).toBeNull();
-    expect(ruleOffer("item/unknown/requestApproval")).toBeNull();
+    for (const t of ["Permissions", "AskUserQuestion", "ExitPlanMode", "Network", "NotebookEdit", "item/unknown/requestApproval"]) {
+      expect(ruleOffer(t), t).toBeNull();
+    }
     expect(ruleOffer("Bash", "")).toBeNull();
     expect(ruleOffer("Bash")).toBeNull();
   });

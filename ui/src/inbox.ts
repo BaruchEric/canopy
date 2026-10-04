@@ -208,7 +208,8 @@ function runItem(run: Run, flow: Flow | undefined, ctx: InboxContext): InboxItem
     ...(p.kind === "question" ? { questions: p.questions } : {}),
     ...(p.kind === "permission" ? { permission: p } : {}),
     ...(repo && !repo.host ? { repoPath: repo.path } : {}),
-    ...(run.flowStep ? { flowStep: run.flowStep } : flow && step ? { flowStep: { workflow: flow.workflow, step: step.name } } : {}),
+    // only the run's own word: it says where the workflow's file came from
+    ...(run.flowStep ? { flowStep: run.flowStep } : {}),
     at: promptAt(run),
     left: null,
     until: null,
@@ -384,15 +385,16 @@ export interface ScopeOffer {
 }
 
 /** The scopes a run's permission can be remembered for, the default first:
- *  a flow's step (every project's, since an incubator seed is a one-off
- *  repo), its whole workflow, or the repo; a plain run has the repo alone. */
+ *  a flow's step in every project, its whole workflow, or the repo; a plain
+ *  run, or a step of a workflow the repo ships itself, has the repo alone. */
 export function scopeOffers(item: Pick<InboxItem, "flowStep" | "repo" | "repoPath">): ScopeOffer[] {
   const repo: ScopeOffer = { kind: "repo", label: scopeWords({ kind: "repo", path: item.repoPath ?? item.repo }) };
-  if (!item.flowStep) return [repo];
-  const { workflow, step } = item.flowStep;
+  const f = item.flowStep;
+  if (!f || f.source === "repo") return [repo];
+  const { workflow, step, source } = f;
   return [
-    { kind: "step", label: scopeWords({ kind: "step", workflow, step }) },
-    { kind: "workflow", label: scopeWords({ kind: "workflow", workflow }) },
+    { kind: "step", label: scopeWords({ kind: "step", workflow, step, source }) },
+    { kind: "workflow", label: scopeWords({ kind: "workflow", workflow, source }) },
     repo,
   ];
 }

@@ -3,8 +3,8 @@ import { useShallow } from "zustand/react/shallow";
 import type { AdviceOffer, Ask } from "../../../src/core/types";
 import { joinTarget } from "../agentcards";
 import { api } from "../api";
-import { startsOutside } from "../../../src/core/explain";
-import { ruleOffer, ruleWords, scopeWords } from "../../../src/core/shellwords";
+import { rememberOffer } from "../../../src/core/offer";
+import { ruleWords, scopeWords } from "../../../src/core/shellwords";
 import { askWord, detailText, endingWord, inboxTick, inboxTitle, leftWord, recentAsks, scopeOffers, type InboxAnswer, type InboxItem } from "../inbox";
 import { useFitPop } from "../pop";
 import { qual } from "../registry";
@@ -163,8 +163,9 @@ function InboxRow({
   const root = item.repoPath ?? card?.cwd ?? undefined;
   const explain = permission ? plainWords(permission, root) : undefined;
   // a remember answers a run's permission only (an ask's hook has its own
-  // "allow always"), and never one outside the project, which no rule answers
-  const offer = item.source === "run" && permission && !startsOutside(permission, root) ? ruleOffer(permission.tool, permission.command) : null;
+  // "allow always"), and only the one the server would take: never outside
+  // the project, never a codex escalation or a stage run (noRule)
+  const offer = item.source === "run" && permission ? rememberOffer(permission, root) : null;
   const remember: RememberChoice | undefined = offer
     ? { offer, scopes: scopeOffers(item), onRemember: (r) => answer({ behavior: "allow", remember: r }) }
     : undefined;
@@ -264,6 +265,7 @@ function InboxRow({
             </div>
           ) : item.questions?.length ? (
             <Questions
+              key={item.promptId ?? item.key}
               questions={item.questions}
               who={item.who}
               busy={busy}
@@ -280,6 +282,7 @@ function InboxRow({
             />
           ) : (
             <PermissionForm
+              key={item.promptId ?? item.key}
               heading={heading}
               detail={item.source === "ask" && permission?.command ? permission.command : detail}
               busy={busy}

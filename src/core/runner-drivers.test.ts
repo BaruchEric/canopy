@@ -816,3 +816,47 @@ describe("a stage run goes through the stage runner", () => {
     expect(ctxOf(0).track).toBeUndefined();
   });
 });
+
+describe("remembered rules and stages", () => {
+  const bare = (path: string) => [{ id: "b", rule: "Bash", scope: { kind: "repo" as const, path }, at: 0 }];
+  const runnerWith = (stage: boolean, path: string) => {
+    const made: FakeDriver[] = [];
+    const runner = new Runner(
+      { onChange: () => {}, onGone: () => {} },
+      {
+        stage: () => stage,
+        remembered: () => bare(path),
+        driver: (h) => {
+          const d = new FakeDriver(h);
+          made.push(d);
+          return d;
+        },
+      },
+    );
+    return { runner, made };
+  };
+  const ls = { kind: "permission" as const, tool: "Bash", title: "ls", detail: "ls", command: "ls" };
+
+  test("an unisolated stage run never takes a remembered rule, and a remember on it is refused", async () => {
+    const seed = repo("_incubator/coin");
+    const { runner, made } = runnerWith(true, seed.path);
+    const run = runner.start(seed, "ask", ACTIONS.ask, "go", { ...DEFAULT_AGENT });
+    const ctx = made[0]?.ctx;
+    if (!ctx) throw new Error("the driver never started");
+    void ctx.ask(ls, "0");
+    await Bun.sleep(5);
+    expect(run.status).toBe("waiting");
+    expect(run.prompt?.kind === "permission" && run.prompt.noRule).toBeTruthy();
+    expect(() => runner.rememberScope(run.id, run.prompt?.id ?? "", "Bash(ls:*)")).toThrow("stage");
+    runner.stop(run.id);
+  });
+
+  test("the same rule answers a plain run in that folder", async () => {
+    const plain = repo("app");
+    const { runner, made } = runnerWith(false, plain.path);
+    runner.start(plain, "ask", ACTIONS.ask, "go", { ...DEFAULT_AGENT });
+    const ctx = made[0]?.ctx;
+    if (!ctx) throw new Error("the driver never started");
+    expect(await ctx.ask(ls, "0")).toEqual({ kind: "allow" });
+  });
+});

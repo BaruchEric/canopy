@@ -13,16 +13,23 @@
  *  escalation (`Permissions`) and a question are never remembered. */
 
 import { readFileSync } from "node:fs";
-import { mkdir, rename, writeFile } from "node:fs/promises";
-import { basename, dirname, join } from "node:path";
+import { mkdir, realpath, rename, writeFile } from "node:fs/promises";
+import { basename, dirname, join, resolve } from "node:path";
 import { autoAnswer, within, type ApprovalFacts } from "./codexrun";
 import { promptFacts } from "./driver";
+import { explainCommand } from "./explain";
 import { parseRule, rememberable } from "./shellwords";
 import { configDir } from "./store";
-import type { FlowStepName, PermissionAsk, RememberedRule, RememberScope } from "./types";
+import type { FlowStepName, PermissionAsk, RememberedRule, RememberScope, SharedWorkflowSource } from "./types";
 
 /** the tools whose rule is about files, covered inside the project only */
-const EDIT_TOOLS = new Set(["Edit", "Write", "MultiEdit", "NotebookEdit"]);
+const EDIT_TOOLS = new Set(["Edit", "Write", "MultiEdit"]);
+
+/** Whether a shell command reaches outside the project by its own words:
+ *  a `cd` away, a path outside it, `git -C` elsewhere. Claude's prompts
+ *  carry no folder, so the words are all there is to go on. */
+const reachesOutside = (command: string, root: string, cwd: string | null): boolean =>
+  explainCommand(command, root, cwd ?? undefined).flags.includes("outside");
 
 /** What a run is, for a scope: its repo's absolute path and, for a flow's
  *  step, which workflow and step. */
@@ -37,31 +44,66 @@ export const factsOf = (p: PermissionAsk): ApprovalFacts => promptFacts(p);
 
 /** Whether one rule covers a permission run in `cwd` (the repo's folder). */
 export function ruleCovers(rule: string, p: PermissionAsk, facts: ApprovalFacts, cwd: string): boolean {
+  if (p.noRule) return false;
   const r = parseRule(rule);
   if (!r) return false;
-  if (r.kind === "bash") return p.tool === "Bash" && autoAnswer([rule], facts, cwd);
-  if (!rememberable(r.name)) return false;
-  if (r.kind === "tool" && r.name === "Bash") {
-    return p.tool === "Bash" && facts.kind === "command" && (facts.cwd === null || within(facts.cwd, cwd));
+  if (r.kind === "bash" || r.name === "Bash") {
+    if (p.tool !== "Bash" || facts.kind !== "command" || facts.command === null) return false;
+    if (reachesOutside(facts.command, cwd, facts.cwd)) return false;
+    if (r.kind === "bash") return autoAnswer([rule], facts, cwd);
+    return facts.cwd === null || within(facts.cwd, cwd);
   }
-  if (p.tool !== r.name) return false;
+  if (!rememberable(r.name) || p.tool !== r.name) return false;
   if (EDIT_TOOLS.has(r.name)) return facts.kind === "fileChange" && autoAnswer([rule], facts, cwd);
   if (facts.kind !== "other") return false;
-  return (p.paths ?? []).every((x) => within(x, cwd));
+  // at least one file, all inside: a Glob with no folder goes where its pattern says
+  const paths = p.paths ?? [];
+  return paths.length > 0 && paths.every((x) => within(x, cwd));
 }
 
+/** Whether every path is inside `root` on disk, not only by its words: a
+ *  link in the project can lead out of it. A path that does not exist yet
+ *  is judged by its nearest folder that does. */
+export async function pathsInside(paths: readonly string[], root: string): Promise<boolean> {
+  const realRoot = await realpath(root).catch(() => resolve(root));
+  const real = async (p: string): Promise<string> => {
+    const abs = resolve(root, p);
+    let dir = abs;
+    let rest = "";
+    for (;;) {
+      const got = await realpath(dir).catch(() => null);
+      if (got !== null) return rest ? join(got, rest) : got;
+      const up = dirname(dir);
+      if (up === dir) return abs;
+      rest = rest ? join(basename(dir), rest) : basename(dir);
+      dir = up;
+    }
+  };
+  for (const p of paths) if (!within(await real(p), realRoot)) return false;
+  return true;
+}
+
+/** A step or workflow scope holds only for that workflow's own file, by
+ *  where it came from; a repo scope for every run in that folder.
+ *  A repo scope is keyed by path, so an incubator seed whose slug is reused
+ *  would inherit an old seed's rules: no stage run consults or offers a
+ *  remembered rule at all (`Runner.start`, `RunCtx`), which closes that. */
 export function scopeHolds(s: RememberScope, run: RunScope): boolean {
   if (s.kind === "repo") return s.path === run.path;
-  if (!run.flowStep || run.flowStep.workflow !== s.workflow) return false;
-  return s.kind === "workflow" || run.flowStep.step === s.step;
+  const f = run.flowStep;
+  if (!f || f.source === "repo" || f.workflow !== s.workflow || f.source !== s.source) return false;
+  return s.kind === "workflow" || f.step === s.step;
 }
 
 /** The scope of this run a remember asks for, or null when the run has no
- *  such scope (a step's or a workflow's outside a flow). */
+ *  such scope: a step's or a workflow's outside a flow, or for a workflow
+ *  the repo itself ships (a clone could name its own file `scout`). */
 export function scopeOf(kind: RememberScope["kind"], run: RunScope): RememberScope | null {
   if (kind === "repo") return { kind: "repo", path: run.path };
-  if (!run.flowStep) return null;
-  return kind === "workflow" ? { kind: "workflow", workflow: run.flowStep.workflow } : { kind: "step", ...run.flowStep };
+  const f = run.flowStep;
+  if (!f || f.source === "repo") return null;
+  const source: SharedWorkflowSource = f.source;
+  return kind === "workflow" ? { kind: "workflow", workflow: f.workflow, source } : { kind: "step", workflow: f.workflow, step: f.step, source };
 }
 
 export { scopeWords } from "./shellwords";
@@ -83,8 +125,10 @@ const text = (v: unknown): v is string => typeof v === "string" && v.length > 0;
 function scopeFrom(v: unknown): RememberScope | null {
   if (!isRecord(v)) return null;
   if (v["kind"] === "repo" && text(v["path"])) return { kind: "repo", path: v["path"] };
-  if (v["kind"] === "workflow" && text(v["workflow"])) return { kind: "workflow", workflow: v["workflow"] };
-  if (v["kind"] === "step" && text(v["workflow"]) && text(v["step"])) return { kind: "step", workflow: v["workflow"], step: v["step"] };
+  const source = v["source"];
+  if (source !== "bundled" && source !== "user") return null;
+  if (v["kind"] === "workflow" && text(v["workflow"])) return { kind: "workflow", workflow: v["workflow"], source };
+  if (v["kind"] === "step" && text(v["workflow"]) && text(v["step"])) return { kind: "step", workflow: v["workflow"], step: v["step"], source };
   return null;
 }
 
@@ -148,15 +192,22 @@ export class RememberedRules {
     return this.rules;
   }
 
-  private write(next: RememberedRule[]): Promise<void> {
+  /** One change after another: `change` reads the rules as the last write
+   *  left them, the file is written, and only then does the change count in
+   *  memory, so a rule that never reached the disk never answers a prompt. */
+  private update<T>(change: (rules: readonly RememberedRule[]) => { next: RememberedRule[] | null; out: T }): Promise<T> {
     const run = this.chain
       .catch(() => {})
       .then(async () => {
+        const { next, out } = change(this.rules);
+        if (next === null) return out;
         const dir = dirname(this.file);
         await mkdir(dir, { recursive: true, mode: 0o700 });
         const tmp = join(dir, `.${basename(this.file)}.${process.pid}.${Date.now()}.${Math.random().toString(16).slice(2)}.tmp`);
         await writeFile(tmp, `${JSON.stringify({ rules: next }, null, 2)}\n`, { mode: 0o600 });
         await rename(tmp, this.file);
+        this.rules = next;
+        return out;
       });
     this.chain = run;
     return run;
@@ -165,26 +216,25 @@ export class RememberedRules {
   /** Keeps a rule for a scope; the same rule for the same scope is kept once. */
   async add(rule: string, scope: RememberScope, extra: { by?: string; from?: string } = {}): Promise<RememberedRule> {
     if (!applicable(rule)) throw new Error(`${rule} is not a rule canopy can remember`);
-    const held = this.rules.find((r) => r.rule === rule && sameScope(r.scope, scope));
-    if (held) return held;
-    const entry: RememberedRule = {
-      id: crypto.randomUUID().slice(0, 8),
-      rule,
-      scope,
-      at: Date.now(),
-      ...(extra.by ? { by: extra.by } : {}),
-      ...(extra.from ? { from: extra.from.slice(0, 200) } : {}),
-    };
-    this.rules = [...this.rules, entry];
-    await this.write(this.rules);
-    return entry;
+    return this.update((rules) => {
+      const held = rules.find((r) => r.rule === rule && sameScope(r.scope, scope));
+      if (held) return { next: null, out: held };
+      const entry: RememberedRule = {
+        id: crypto.randomUUID().slice(0, 8),
+        rule,
+        scope,
+        at: Date.now(),
+        ...(extra.by ? { by: extra.by } : {}),
+        ...(extra.from ? { from: extra.from.slice(0, 200) } : {}),
+      };
+      return { next: [...rules, entry], out: entry };
+    });
   }
 
   /** Drops a rule by id; false when there is none. */
-  async forget(id: string): Promise<boolean> {
-    if (!this.rules.some((r) => r.id === id)) return false;
-    this.rules = this.rules.filter((r) => r.id !== id);
-    await this.write(this.rules);
-    return true;
+  forget(id: string): Promise<boolean> {
+    return this.update((rules) =>
+      rules.some((r) => r.id === id) ? { next: rules.filter((r) => r.id !== id), out: true } : { next: null, out: false },
+    );
   }
 }

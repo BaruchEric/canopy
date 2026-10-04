@@ -142,9 +142,57 @@ describe("explainCommand", () => {
     expect(ex("bunx tsc --noEmit")).toEqual({ says: "runs tsc via bunx", flags: ["code"] });
   });
 
-  test("an unknown program runs it; an empty command says so", () => {
-    expect(ex("frobnicate --all")).toEqual({ says: "runs frobnicate", flags: ["code"] });
-    expect(ex("   ").says).toBe("runs a shell command");
+  test("an unknown program runs it, and says canopy has no reading of its own", () => {
+    expect(ex("frobnicate --all")).toEqual({ says: "runs frobnicate", flags: ["code"], vague: true });
+    expect(ex("   ")).toEqual({ says: "runs a shell command", flags: [], vague: true });
+    expect(ex("git frob")).toEqual({ says: "runs git frob", flags: [], vague: true });
+    expect(ex("ls src && frobnicate").vague).toBe(true);
+    expect(ex("ls src").vague).toBeUndefined();
+  });
+
+  test("git deletes say so", () => {
+    expect(ex("git branch -D old")).toEqual({ says: "deletes branch old", flags: ["deletes"] });
+    expect(ex("git branch --delete old").flags).toEqual(["deletes"]);
+    expect(ex("git tag -d v1")).toEqual({ says: "deletes tag v1", flags: ["deletes"] });
+    expect(ex("git stash drop")).toEqual({ says: "drops a stash", flags: ["deletes"] });
+    expect(ex("git stash clear").flags).toEqual(["deletes"]);
+    expect(ex("git stash").says).toBe("stashes changes");
+  });
+
+  test("git -c can run code; an identity cannot", () => {
+    expect(ex("git -c alias.x='!rm -rf ~' x").flags).toContain("code");
+    expect(ex("git -c core.pager=evil log").flags).toEqual(["code"]);
+    expect(ex("git -c user.name=a log").flags).toEqual([]);
+  });
+
+  test("deletes elsewhere than rm", () => {
+    for (const c of [
+      "find . -name '*.tmp' -exec rm {} \\;",
+      "gh repo delete me/x --yes",
+      "kubectl delete pod web",
+      "docker rm box",
+      "docker rmi img",
+      "docker system prune -f",
+      "aws s3 rm s3://b/k",
+      "crontab -r",
+      "shred secret.txt",
+      "truncate -s 0 log.txt",
+    ]) {
+      expect(ex(c).flags, c).toContain("deletes");
+    }
+  });
+
+  test("publishing and deploying push to the network", () => {
+    for (const c of ["npm publish", "bun publish", "cargo publish", "firebase deploy", "vercel --prod", "vercel deploy --prod"]) {
+      expect(ex(c).flags, c).toEqual(expect.arrayContaining(["push", "network"]));
+    }
+    expect(ex("npm publish").says).toBe("publishes the package");
+    expect(ex("firebase deploy").says).toBe("deploys with firebase");
+  });
+
+  test("a cd home shows home as ~", () => {
+    expect(ex("cd ~ && rm -rf x")).toEqual({ says: "deletes ~/x", flags: ["deletes", "outside"] });
+    expect(ex("cd && cat notes.txt").says).toBe("reads ~/notes.txt");
   });
 
   test("env assignments and wrappers are read through", () => {
@@ -172,7 +220,7 @@ describe("explainPrompt", () => {
   test("web tools are network; anything else keeps its title", () => {
     expect(explainPrompt({ tool: "WebFetch", title: "WebFetch" }, ROOT).flags).toEqual(["network"]);
     expect(explainPrompt({ tool: "Network", title: "network access to a.com" }, ROOT)).toEqual({ says: "network access to a.com", flags: ["network"] });
-    expect(explainPrompt({ tool: "Skill", title: "skill pdf" }, ROOT)).toEqual({ says: "skill pdf", flags: [] });
+    expect(explainPrompt({ tool: "Skill", title: "skill pdf" }, ROOT)).toEqual({ says: "skill pdf", flags: [], vague: true });
   });
 
   test("a codex command's own folder counts", () => {

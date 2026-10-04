@@ -64,10 +64,14 @@ export type PromptInput = PermissionAsk | { kind: "question"; questions: RunQues
 export interface RememberHook {
   /** the remembered rule that answers this permission, or null */
   match(prompt: PermissionAsk, facts: ApprovalFacts): string | null;
-  /** a command's folder, checked on disk (a symlink out of the repo) before
-   *  a match answers it */
-  inside(facts: ApprovalFacts): Promise<boolean>;
+  /** a command's folder and a file tool's paths, checked on disk (a
+   *  symlink out of the repo) before a match answers it */
+  inside(prompt: PermissionAsk, facts: ApprovalFacts): Promise<boolean>;
 }
+
+/** why a stage run's prompts never take a remembered rule (amendment 4,
+ *  ruling 16: a stage's grants hold for that stage alone) */
+const STAGE_NO_RULE = "an incubator stage's run: no remembered rule answers it";
 
 /** How a driver's process ended. */
 export interface DriveExit {
@@ -342,25 +346,26 @@ export class RunCtx implements DriveCtx {
       return Promise.resolve({ kind: "deny", message: unattended });
     }
     const facts = given ?? promptFacts(prompt);
+    // a stage's prompts say no rule can be kept for them, which the page reads
+    const asked: PromptInput = prompt.kind === "permission" && this.stage && !prompt.noRule ? { ...prompt, noRule: STAGE_NO_RULE } : prompt;
     // a remembered rule answers a permission, never a question
-    const rule = prompt.kind === "permission" ? this.remembered(prompt, facts) : null;
-    if (rule) {
-      const allowed = (): RunAnswer => {
-        this.note(`allowed by a remembered rule (${rule}): ${prompt.kind === "permission" ? prompt.title : ""}`);
+    const rule = asked.kind === "permission" ? this.remembered(asked, facts) : null;
+    if (rule && asked.kind === "permission" && this.remember) {
+      const title = asked.title;
+      // the folder and files are checked on disk first; the words alone already passed
+      return this.remember.inside(asked, facts).then((ok) => {
+        if (!ok) return this.park(asked, key, facts);
+        this.note(`allowed by a remembered rule (${rule}): ${title}`);
         return { kind: "allow" };
-      };
-      // a folder the request names is checked on disk first; the words
-      // alone already passed
-      if (facts.kind === "command" && facts.cwd !== null && this.remember) {
-        return this.remember.inside(facts).then((ok) => (ok ? allowed() : this.park(prompt, key, facts)));
-      }
-      return Promise.resolve(allowed());
+      });
     }
-    return this.park(prompt, key, facts);
+    return this.park(asked, key, facts);
   }
 
-  /** the remembered rule answering a permission now, or null */
+  /** the remembered rule answering a permission now, or null; never on a
+   *  stage's run nor a prompt marked `noRule` */
   private remembered(prompt: PermissionAsk, facts: ApprovalFacts): string | null {
+    if (this.stage || prompt.noRule) return null;
     return this.remember?.match(prompt, facts) ?? null;
   }
 
@@ -372,10 +377,7 @@ export class RunCtx implements DriveCtx {
       const prompt = p.prompt;
       const rule = this.remembered(prompt, p.facts);
       if (!rule || !this.remember) continue;
-      const settle = () => p.settle({ kind: "allow" }, `allowed by a remembered rule (${rule}): ${prompt.title}`);
-      if (p.facts.kind === "command" && p.facts.cwd !== null) {
-        void this.remember.inside(p.facts).then((ok) => ok && settle());
-      } else settle();
+      void this.remember.inside(prompt, p.facts).then((ok) => ok && p.settle({ kind: "allow" }, `allowed by a remembered rule (${rule}): ${prompt.title}`));
     }
   }
 

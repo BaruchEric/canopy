@@ -159,48 +159,71 @@ export interface RuleOffer {
   chain?: true;
 }
 
-/** tools whose second word is what they do: `git status`, `bun test` */
+/** tools whose second word is what they do: `git status`, `bun test`. A
+ *  prefix rule for one is never shorter than two words: `git:*` would also
+ *  cover `git -c alias.x='!…' x` and `git push --force`. */
 const SUBCOMMANDS = new Set([
-  "git", "gh", "bun", "bunx", "npm", "npx", "pnpm", "yarn", "deno", "cargo", "go", "uv", "uvx", "pip", "pip3",
-  "docker", "kubectl", "brew", "make", "pacman", "systemctl", "launchctl", "tailscale", "vercel", "firebase",
+  "git", "gh", "bun", "npm", "pnpm", "yarn", "deno", "cargo", "go", "uv", "pip", "pip3",
+  "docker", "podman", "kubectl", "brew", "make", "pacman", "systemctl", "launchctl", "tailscale", "vercel", "firebase", "aws",
 ]);
 
-/** words that run whatever follows them: a prefix of one runs anything */
+/** programs that run whatever their words say (an interpreter, a wrapper,
+ *  a remote shell, a program with its own exec): any prefix of one runs
+ *  anything, so only the exact command is offered */
 const RUNS_ANYTHING = new Set([
-  "python", "python3", "node", "ruby", "perl", "php", "sh", "bash", "zsh", "dash", "fish", "eval", "exec",
-  "sudo", "env", "xargs", "osascript", "source", ".", "nohup", "time", "timeout", "nice",
+  "python", "python3", "node", "ruby", "perl", "php", "lua", "Rscript", "tclsh", "expect", "osascript",
+  "sh", "bash", "zsh", "dash", "fish", "eval", "exec", "source", ".", "command", "builtin", "!",
+  "sudo", "doas", "env", "xargs", "nohup", "time", "timeout", "nice", "stdbuf", "watch", "parallel", "flock", "chroot", "script", "strace",
+  "ssh", "mosh", "awk", "gawk", "nawk", "sed", "find", "fd", "open", "xdg-open", "bunx", "npx", "pnpx", "uvx", "pipx",
 ]);
 
-/** tools that are never remembered: a sandbox escalation is granted each time */
-const NEVER = new Set(["Permissions", "AskUserQuestion"]);
+/** a subcommand that runs whatever follows it: exact only, like RUNS_ANYTHING */
+const RUNS_ANYTHING_SUB = new Set([
+  "docker run", "docker exec", "docker compose", "podman run", "podman exec", "podman compose", "kubectl exec", "kubectl run",
+  "npm exec", "pnpm exec", "pnpm dlx", "yarn dlx", "yarn exec", "bun x", "uv run", "uv tool", "gh api", "aws ssm",
+]);
+
+/** tools that are never remembered: a sandbox escalation is granted each
+ *  time, plan mode and questions are the human's call, a network rule would
+ *  cover every host, and a notebook edit is not matched as a file change */
+const NEVER = new Set(["Permissions", "AskUserQuestion", "ExitPlanMode", "Network", "NotebookEdit"]);
+
+/** `FOO=1`: an assignment the command runs under, which changes what it does */
+const ASSIGNS = /^[A-Za-z_][A-Za-z0-9_]*=/;
 
 /** Whether a rule may name this tool: a plain name, not one never remembered. */
 export const rememberable = (tool: string): boolean => !NEVER.has(tool) && /^[A-Za-z]+$/.test(tool);
 
 /** The rules a "remember" can save for a prompt on `tool` (with `command`,
  *  for a shell command), or null when none would ever cover it. A plain
- *  command offers its first one to three words as a prefix and itself
- *  exactly, and picks one word, two for a tool with subcommands, the exact
- *  command for an interpreter or a script; a chain offers a bare `Bash`
- *  alone, since a prefix rule never matches one. Another tool offers its
- *  name. */
+ *  command offers its leading words, up to three and never past a flag, as
+ *  prefixes, broadest first and picked, then itself exactly; a tool with
+ *  subcommands starts at two words. Only the exact command is offered when
+ *  a prefix could run anything: a flag as the second word (`git -C x`,
+ *  `bun -e`), a leading assignment (`FOO=1 bun test`), a program path, an
+ *  interpreter, a wrapper or a program with its own exec (`RUNS_ANYTHING`,
+ *  `RUNS_ANYTHING_SUB`). A chain offers a bare `Bash` alone, since a prefix
+ *  rule never matches one. Another tool offers its name. */
 export function ruleOffer(tool: string, command?: string): RuleOffer | null {
   if (tool === "Bash") {
     if (!command?.trim()) return null;
     const words = commandWords(command);
     if (!words) return { rules: ["Bash"], pick: 0, chain: true };
-    const depth = Math.min(3, words.length);
-    const prefixes = words.slice(0, depth).map((_, i) => ruleOf(words.slice(0, i + 1), true));
-    const rules = [...prefixes, ruleOf(words, false)];
+    const exact = ruleOf(words, false);
     const first = words[0] ?? "";
     const second = words[1];
-    const pick =
-      RUNS_ANYTHING.has(first) || first.includes("/")
-        ? rules.length - 1
-        : SUBCOMMANDS.has(first) && second !== undefined && !second.startsWith("-") && prefixes.length > 1
-          ? 1
-          : 0;
-    return { rules, pick };
+    const exactOnly = { rules: [exact], pick: 0 };
+    if (ASSIGNS.test(first) || first.includes("/") || RUNS_ANYTHING.has(first)) return exactOnly;
+    if (second?.startsWith("-")) return exactOnly;
+    const sub = SUBCOMMANDS.has(first);
+    if (sub && (second === undefined || RUNS_ANYTHING_SUB.has(`${first} ${second}`))) return exactOnly;
+    // the leading words before any flag, three at most
+    const flag = words.findIndex((w) => w.startsWith("-"));
+    const lead = Math.min(3, flag === -1 ? words.length : flag);
+    const from = sub ? 2 : 1;
+    const prefixes: string[] = [];
+    for (let n = from; n <= lead; n++) prefixes.push(ruleOf(words.slice(0, n), true));
+    return { rules: [...prefixes, exact], pick: 0 };
   }
   return rememberable(tool) ? { rules: [tool], pick: 0 } : null;
 }

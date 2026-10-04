@@ -410,6 +410,18 @@ describe("approvals and questions", () => {
     ).toMatchObject({ tool: "Permissions", title: "more access: network, write out" });
   });
 
+  test("a sandbox escalation and an older approval are marked: no remembered rule answers them", () => {
+    const esc = approvalPrompt("item/commandExecution/requestApproval", { command: "ls", reason: "command failed; retry without sandbox?" }, null, "/r");
+    expect(esc).toMatchObject({ tool: "Bash", command: "ls" });
+    expect(esc.kind === "permission" && esc.noRule).toContain("sandbox");
+    const legacy = approvalPrompt("execCommandApproval", { command: ["ls"], cwd: "/r" }, null, "/r");
+    expect(legacy.kind === "permission" && legacy.noRule).toBeTruthy();
+    const patch = approvalPrompt("applyPatchApproval", { fileChanges: { "/r/a.ts": { type: "update", unified_diff: "" } } }, null, "/r");
+    expect(patch.kind === "permission" && patch.noRule).toBeTruthy();
+    const plain = approvalPrompt("item/commandExecution/requestApproval", { command: "ls", cwd: "/r" }, null, "/r");
+    expect(plain).not.toHaveProperty("noRule");
+  });
+
   test("a command asking to leave the sandbox gets a note; nothing else does", () => {
     const m = "item/commandExecution/requestApproval";
     expect(escalationNote(m, { reason: "command failed; retry without sandbox?" })).toContain("asks to run outside it");

@@ -756,6 +756,9 @@ export interface RunQuestion {
 export interface FlowStepName {
   workflow: string;
   step: string;
+  /** where the workflow's file came from; a remembered rule for a step or a
+   *  workflow names it, so a repo's own same-named file never inherits one */
+  source: WorkflowSource;
 }
 
 /** A permission a run asks for, before canopy numbers it. */
@@ -774,6 +777,9 @@ export interface PermissionAsk {
   cwd?: string;
   /** the files a file tool touches */
   paths?: string[];
+  /** why no remembered rule may answer this one and none is offered: a
+   *  sandbox escalation, an older Codex approval, an incubator stage's run */
+  noRule?: string;
 }
 
 export type RunPrompt = (PermissionAsk & { id: string }) | { id: string; kind: "question"; questions: RunQuestion[] };
@@ -781,9 +787,13 @@ export type RunPrompt = (PermissionAsk & { id: string }) | { id: string; kind: "
 /** Where a remembered rule applies: one workflow's step wherever it runs, a
  *  whole workflow, or one repo (every run in it, a flow's included). */
 export type RememberScope =
-  | { kind: "step"; workflow: string; step: string }
-  | { kind: "workflow"; workflow: string }
+  | { kind: "step"; workflow: string; step: string; source: SharedWorkflowSource }
+  | { kind: "workflow"; workflow: string; source: SharedWorkflowSource }
   | { kind: "repo"; path: string };
+
+/** a workflow file canopy or the user wrote, never a repo's own: only
+ *  these can hold a remembered rule for a step or a whole workflow */
+export type SharedWorkflowSource = Exclude<WorkflowSource, "repo">;
 
 /** An allow that also remembers: the rule, and which of the run's scopes it
  *  is kept for; the server works the scope out from the run itself. */

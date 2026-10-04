@@ -281,7 +281,7 @@ export function FlowConsole({ flowId }: { flowId: string }) {
           run={run}
           repo={repo}
           error={error}
-          onAnswer={(a) => void act(() => answerRun(run.id, run.prompt?.id ?? "", a))}
+          onAnswer={(a, promptId) => void act(() => answerRun(run.id, promptId, a))}
           extra={
             <>
               {step?.check && (
@@ -438,7 +438,7 @@ export function FleetSheet({ fleetId }: { fleetId: string }) {
             {parked.status === "gated" ? (
               <Gate flow={parked} step={parkedStep} onChoose={(c) => void act(() => resumeFlow(parked.id, c))} />
             ) : parkedRun?.prompt ? (
-              <Timeline run={parkedRun} repo={repos.find((r) => r.id === parked.repoId)} error={null} onAnswer={(a) => void act(() => answerRun(parkedRun.id, parkedRun.prompt?.id ?? "", a))} />
+              <Timeline run={parkedRun} repo={repos.find((r) => r.id === parked.repoId)} error={null} onAnswer={(a, promptId) => void act(() => answerRun(parkedRun.id, promptId, a))} />
             ) : null}
           </section>
         )}

@@ -11,6 +11,8 @@
  *  The prompt queue, "allow all", the notes a settled prompt leaves and how
  *  an exit becomes a status are the Runner's `RunCtx`, shared with Codex. */
 
+import { homedir } from "node:os";
+import { resolve } from "node:path";
 import { describeTool, toolDetail } from "./actions";
 import { normalizeAgent } from "./agent";
 import { bunSpawn, type RpcProc, type RpcSpawn } from "./codexrpc";
@@ -86,8 +88,15 @@ export function permissionAsk(tool: string, input: Record<string, unknown>, cwd:
     detail: toolDetail(tool, input, cwd),
     ...(description ? { description } : {}),
     ...(tool === "Bash" && command ? { command } : {}),
-    ...(file ? { paths: [file.startsWith("/") ? file : `${cwd}/${file}`] } : {}),
+    ...(file ? { paths: [absolutePath(file, cwd)] } : {}),
   };
+}
+
+/** A tool's path as the file it names: `~` is the home folder, a relative
+ *  path is under the run's folder, `..` folded. */
+function absolutePath(file: string, cwd: string): string {
+  if (file === "~" || file.startsWith("~/")) return resolve(homedir(), file.slice(2));
+  return resolve(cwd, file);
 }
 
 /** The reply the CLI expects on stdin to a can_use_tool request. */

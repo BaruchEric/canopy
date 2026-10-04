@@ -6,7 +6,7 @@ import type { RememberedRule } from "./types";
 const AGENT = { model: "default", effort: "default", yolo: false, extra: "" };
 const SPEC = { allowedTools: [], maxTurns: 10 };
 
-function makeCtx(chat = false, spec: { allowedTools: string[]; maxTurns: number; unattended?: string } = SPEC, remember?: RememberHook) {
+function makeCtx(chat = false, spec: { allowedTools: string[]; maxTurns: number; unattended?: string } = SPEC, remember?: RememberHook, stage = false) {
   const run: DriveRun = {
     id: "r1",
     repoId: "fx",
@@ -26,7 +26,7 @@ function makeCtx(chat = false, spec: { allowedTools: string[]; maxTurns: number;
   const ended: string[] = [];
   const ctx = new RunCtx(
     run,
-    { cwd: "/r", agent: AGENT, spec, label: "Codex", ...(remember ? { remember } : {}) },
+    { cwd: "/r", agent: AGENT, spec, label: "Codex", stage, ...(remember ? { remember } : {}) },
     { emit: (r) => emits.push(r.status), ended: (r) => ended.push(r.status) },
   );
   return { run, ctx, emits, ended };
@@ -179,6 +179,43 @@ describe("remembered rules", () => {
     void ctx.ask({ kind: "question", questions: [] }, "0");
     expect(run.status).toBe("waiting");
     expect(run.prompt?.kind).toBe("question");
+  });
+
+  test("an incubator stage's run is never answered by a rule, and its prompts say none can be kept", async () => {
+    const { run, ctx } = makeCtx(false, SPEC, hook([repoRule("Bash")]), true);
+    void ctx.ask(sh("ls"), "0");
+    await Bun.sleep(0);
+    expect(run.status).toBe("waiting");
+    expect(run.prompt?.kind === "permission" && run.prompt.noRule).toBeTruthy();
+    ctx.recheck();
+    await Bun.sleep(0);
+    expect(run.status).toBe("waiting");
+    ctx.denyAll();
+  });
+
+  test("a prompt marked noRule waits under a rule that would cover it", async () => {
+    const { run, ctx } = makeCtx(false, SPEC, hook([repoRule("Bash")]));
+    void ctx.ask({ ...sh("ls"), noRule: "it asks to run outside codex's sandbox" }, "0");
+    await Bun.sleep(0);
+    expect(run.status).toBe("waiting");
+    ctx.denyAll();
+  });
+
+  test("a file tool's paths that leave the repo on disk ask after all", async () => {
+    const seen: string[][] = [];
+    const h: RememberHook = {
+      match: () => "Read",
+      inside: (p) => {
+        seen.push(p.paths ?? []);
+        return Promise.resolve(false);
+      },
+    };
+    const { run, ctx } = makeCtx(false, SPEC, h);
+    void ctx.ask({ kind: "permission", tool: "Read", title: "read", detail: "", paths: ["/r/link/x"] }, "0");
+    await Bun.sleep(0);
+    expect(seen).toEqual([["/r/link/x"]]);
+    expect(run.status).toBe("waiting");
+    ctx.denyAll();
   });
 
   test("an unattended run still denies everything with its message", async () => {

@@ -11,7 +11,7 @@ export type ExplainFlag = (typeof EXPLAIN_FLAGS)[number];
 
 export const FLAG_WORDS: Record<ExplainFlag, string> = {
   deletes: "deletes",
-  push: "git push",
+  push: "pushes or publishes",
   commit: "git commit",
   outside: "outside the project",
   network: "network",
@@ -23,6 +23,9 @@ export interface Explained {
   /** one line, lower case: "lists files in src and reads 3 files" */
   says: string;
   flags: ExplainFlag[];
+  /** canopy has no reading of its own for some step ("runs frobnicate"),
+   *  so the raw command shows unfolded */
+  vague?: true;
 }
 
 /* ---------- splitting: a command line into its simple commands ---------- */
@@ -265,11 +268,17 @@ interface Where {
 /** A path as the line shows it: under the project, from its folder; else
  *  as the command wrote it. */
 function shown(p: string, w: Where): string {
-  if (!w.root || p.startsWith("~")) return clipPath(p);
+  if (p.startsWith("~")) return clipPath(p);
   const abs = norm(p, w.cwd);
+  // after a `cd ~`, home is HOME, whatever its path
+  if (abs === HOME || abs.startsWith(`${HOME}/`)) return clipPath(`~${abs.slice(HOME.length)}`);
+  if (!w.root) return clipPath(p);
   if (inside(abs, w.root)) return clipPath(abs === w.root ? "." : abs.slice(w.root.length + 1));
   return clipPath(p.startsWith("/") ? p : abs);
 }
+
+/** where a `cd ~` lands: a stand-in for the home folder, never inside a project */
+const HOME = "/~home";
 
 const clipPath = (p: string): string => (p.length > 48 ? `…${p.slice(-47)}` : p);
 
@@ -292,6 +301,8 @@ interface Part {
   one: string;
   many?: (n: number) => string;
   flags?: ExplainFlag[];
+  /** no reading of canopy's own: the program's name and nothing more */
+  vague?: true;
 }
 
 const part = (key: string, one: string, many?: (n: number) => string, flags?: ExplainFlag[]): Part => ({
@@ -300,6 +311,12 @@ const part = (key: string, one: string, many?: (n: number) => string, flags?: Ex
   ...(many ? { many } : {}),
   ...(flags?.length ? { flags } : {}),
 });
+
+/** a step canopy only names: the raw command says more */
+const vaguePart = (key: string, one: string, flags?: ExplainFlag[]): Part => ({ ...part(key, one, undefined, flags), vague: true });
+
+/** only flags, no words: what a step also does */
+const flagPart = (...flags: ExplainFlag[]): Part => part("", "", undefined, flags);
 
 const plural = (n: number, word: string) => `${n} ${word}${n === 1 ? "" : "s"}`;
 
@@ -390,6 +407,9 @@ const SILENT = new Set(["true", "false", "test", "[", "[[", ":", "set", "export"
 
 const READERS = new Set(["cat", "less", "more", "bat", "nl"]);
 
+/** what a `find -exec` deletes with */
+const REMOVERS = new Set(["rm", "rmdir", "unlink", "shred", "trash"]);
+
 function gitPart(args: readonly string[], w: Where, who: string | null): Part[] {
   let i = 0;
   let as = who;
@@ -397,9 +417,12 @@ function gitPart(args: readonly string[], w: Where, who: string | null): Part[] 
   // options before the subcommand
   while (i < args.length && (args[i] ?? "").startsWith("-")) {
     const a = args[i] ?? "";
+    if (a === "--config-env" || a.startsWith("--config-env=") || a === "--exec-path" || a.startsWith("--exec-path=")) parts.push(flagPart("code"));
     if (a === "-c" || a === "-C") {
       const v = args[i + 1] ?? "";
       if (a === "-c" && v.startsWith("user.name=")) as = v.slice("user.name=".length);
+      // any other setting can name a program git runs: an alias, a pager, a hook path
+      else if (a === "-c" && !v.startsWith("user.email=")) parts.push(flagPart("code"));
       if (a === "-C" && pathy(v) && outsidePath(v, w)) parts.push(part("outside", "", undefined, ["outside"]));
       i += 2;
       continue;
@@ -435,6 +458,7 @@ function gitPart(args: readonly string[], w: Where, who: string | null): Part[] 
       return rest.some((a) => a === "--get" || a === "--list" || a === "-l") || ops.length < 2 ? g("info", "reads git info") : g("config", "changes git config", ["writes"]);
     case "branch":
     case "tag":
+      if (rest.some((a) => a === "-d" || a === "-D" || a === "--delete")) return g(`${sub} delete`, `deletes ${sub}${ops.length ? ` ${ops.join(", ")}` : ""}`, ["deletes"]);
       return ops.length === 0 || rest.some((a) => a === "--list" || a === "-l") ? g(sub, `lists ${sub === "tag" ? "tags" : "branches"}`) : g(sub, `makes a ${sub}`, ["writes"]);
     case "add":
       return g("add", "stages changes", ["writes"]);
@@ -463,6 +487,8 @@ function gitPart(args: readonly string[], w: Where, who: string | null): Part[] 
     case "mv":
       return g("mv", "moves files in git", ["writes"]);
     case "stash":
+      if (ops[0] === "drop") return g("stash drop", "drops a stash", ["deletes"]);
+      if (ops[0] === "clear") return g("stash clear", "drops every stash", ["deletes"]);
       return g("stash", "stashes changes", ["writes"]);
     case "merge":
     case "rebase":
@@ -476,9 +502,9 @@ function gitPart(args: readonly string[], w: Where, who: string | null): Part[] 
     case "submodule":
       return g(sub, `runs git ${sub}`, ["writes"]);
     case "":
-      return g("", "runs git");
+      return [...parts, vaguePart("git", "runs git")];
     default:
-      return g(sub, `runs git ${sub}`);
+      return [...parts, vaguePart(`git ${sub}`, `runs git ${sub}`)];
   }
 }
 
@@ -493,8 +519,9 @@ function packagePart(prog: string, args: readonly string[]): Part[] {
   if (sub === "x" || sub === "dlx" || sub === "exec") return [part(`x ${ops[0] ?? ""}`, `runs ${ops[0] ?? "a tool"} via ${prog}`, undefined, ["code"])];
   if (sub === "pip") return packagePart("pip", args.slice(1));
   if (sub === "build") return [part("build", "builds the project", undefined, ["code"])];
-  if (sub && !sub.startsWith("-")) return [part(`${prog} ${sub}`, `runs ${prog} ${sub}`, undefined, ["code"])];
-  return [part(prog, `runs ${prog}`, undefined, ["code"])];
+  if (sub === "publish") return [part("publish", "publishes the package", undefined, ["push", "network"])];
+  if (sub && !sub.startsWith("-")) return [vaguePart(`${prog} ${sub}`, `runs ${prog} ${sub}`, ["code"])];
+  return [vaguePart(prog, `runs ${prog}`, ["code"])];
 }
 
 /** What one simple command does, as parts. `w.cwd` moves with a `cd`. */
@@ -561,7 +588,7 @@ function commandParts(cmd: SimpleCommand, w: Where, root: string | null): Part[]
     if (to === "-") return parts;
     w.cwd = to === undefined ? "~" : norm(to, w.cwd);
     if (to === undefined || to.startsWith("~")) {
-      w.cwd = "/~home";
+      w.cwd = norm(`${HOME}/${to?.slice(1) ?? ""}`, "/");
       if (root) parts.push(part("outside", "", undefined, ["outside"]));
       return parts;
     }
@@ -614,14 +641,25 @@ function commandParts(cmd: SimpleCommand, w: Where, root: string | null): Part[]
   if (base === "find" || base === "fd") {
     const start = base === "find" ? args.filter((a, i) => !a.startsWith("-") && args.slice(0, i).every((b) => !b.startsWith("-"))) : [];
     const flags: ExplainFlag[] = [];
-    if (args.includes("-delete")) flags.push("deletes");
-    if (args.some((a) => a === "-exec" || a === "-execdir" || a === "-x" || a === "--exec")) flags.push("code");
+    const execAt = args.findIndex((a) => a === "-exec" || a === "-execdir" || a === "-ok" || a === "-x" || a === "--exec");
+    const runs = execAt === -1 ? "" : (args[execAt + 1] ?? "");
+    if (args.includes("-delete") || REMOVERS.has(runs.slice(runs.lastIndexOf("/") + 1))) flags.push("deletes");
+    if (execAt !== -1) flags.push("code");
     const where = start[0] && start[0] !== "." ? ` in ${shown(start[0], w)}` : "";
     return [...parts, part(`find${where}`, `${flags.includes("deletes") ? "finds and deletes files" : "finds files"}${where}`, undefined, flags)];
   }
   if (base === "rm" || base === "rmdir" || base === "unlink" || base === "trash") {
     const files = ops();
     return [...parts, ...files.map((f) => part("delete", `deletes ${shown(f, w)}`, (n) => `deletes ${plural(n, "file")}`, ["deletes"]))];
+  }
+  if (base === "shred") return [...parts, ...ops(["-n", "-s"]).map((f) => part("shred", `shreds ${shown(f, w)}`, (n) => `shreds ${plural(n, "file")}`, ["deletes"]))];
+  if (base === "truncate") {
+    const files = ops(["-s", "-r", "--size", "--reference"]);
+    return [...parts, part("truncate", `truncates ${files.length === 1 ? shown(files[0] ?? "", w) : plural(files.length, "file")}`, undefined, ["deletes", "writes"])];
+  }
+  if (base === "crontab") {
+    if (args.includes("-r")) return [...parts, part("crontab -r", "removes the crontab", undefined, ["deletes"])];
+    return [...parts, args.includes("-l") ? part("crontab", "reads the crontab") : part("crontab", "replaces the crontab", undefined, ["writes"])];
   }
   if (base === "mkdir") return [...parts, ...ops(["-m"]).map((d) => part("mkdir", `makes folder ${shown(d, w)}`, (n) => `makes ${plural(n, "folder")}`, ["writes"]))];
   if (base === "touch") return [...parts, ...ops().map((f) => part("touch", `creates ${shown(f, w)}`, (n) => `creates ${plural(n, "file")}`, ["writes"]))];
@@ -647,7 +685,25 @@ function commandParts(cmd: SimpleCommand, w: Where, root: string | null): Part[]
   if (base === "scp" || base === "rsync" || base === "sftp") return [...parts, part("copy-net", "copies files over the network", undefined, ["network", "writes"])];
   if (["ping", "dig", "nslookup", "nc", "telnet", "host", "traceroute"].includes(base)) return [...parts, part("net", `checks ${ops()[0] ?? "the network"}`, undefined, ["network"])];
   if (base === "git") return [...parts, ...gitPart(args, w, who)];
-  if (base === "gh") return [...parts, part(`gh ${args.slice(0, 2).join(" ")}`, `uses GitHub: ${operands(args).slice(0, 2).join(" ") || "gh"}`, undefined, ["network"])];
+  if (base === "gh") {
+    const o = operands(args);
+    const deletes = o.slice(0, 3).some((a) => a === "delete" || a === "remove" || a === "rm");
+    return [...parts, part(`gh ${args.slice(0, 2).join(" ")}`, `uses GitHub: ${o.slice(0, 2).join(" ") || "gh"}`, undefined, deletes ? ["deletes", "network"] : ["network"])];
+  }
+  if (base === "aws") {
+    const o = operands(args, ["--profile", "--region", "--output", "--query"]);
+    const deletes = o.some((a) => a === "rm" || a === "rb" || a.startsWith("delete-") || a.startsWith("terminate-"));
+    const writes = o[0] === "s3" && ["cp", "mv", "sync"].includes(o[1] ?? "");
+    const flags: ExplainFlag[] = deletes ? ["deletes", "network"] : writes ? ["network", "writes"] : ["network"];
+    return [...parts, part(`aws ${o.slice(0, 2).join(" ")}`, `uses AWS: ${o.slice(0, 2).join(" ") || "aws"}`, undefined, flags)];
+  }
+  if (base === "firebase" || base === "vercel" || base === "netlify" || base === "wrangler" || base === "fly" || base === "flyctl") {
+    const sub = operands(args)[0];
+    // a bare `vercel` deploys, as does `--prod`
+    const deploys = sub === "deploy" || sub === "publish" || args.includes("--prod") || (base === "vercel" && sub === undefined);
+    if (deploys) return [...parts, part(`deploy ${base}`, `deploys with ${base}`, undefined, ["push", "network"])];
+    return [...parts, vaguePart(`${base} ${sub ?? ""}`, `runs ${base}${sub ? ` ${sub}` : ""}`, ["network"])];
+  }
   if (["bun", "npm", "pnpm", "yarn", "uv", "pip", "pip3", "cargo", "go"].includes(base)) {
     if (base === "bun" && args[0] && /\.(ts|tsx|js|mjs|cjs)$/.test(args[0])) return [...parts, part(`script ${args[0]}`, `runs ${shown(args[0], w)} with Bun`, undefined, ["code"])];
     if (base === "bun" && (args[0] === "-e" || args[0] === "--eval")) return [...parts, part("snippet Bun", "runs a Bun snippet", undefined, ["code"])];
@@ -664,17 +720,26 @@ function commandParts(cmd: SimpleCommand, w: Where, root: string | null): Part[]
   }
   if (base === "eval" || base === "source" || base === ".") return [...parts, part(base, base === "eval" ? "runs a shell snippet" : `runs ${shown(args[0] ?? "a file", w)} in this shell`, undefined, ["code"])];
   if (base === "open" || base === "xdg-open") return [...parts, part("open", `opens ${ops()[0] ? shown(ops()[0] ?? "", w) : "something"}`)];
-  if (base === "docker" || base === "podman" || base === "kubectl" || base === "make") {
+  if (base === "docker" || base === "podman" || base === "kubectl") {
+    const o = operands(args);
+    const sub = o[0];
+    // `docker rm`, `docker rmi`, `docker system prune`, `docker volume rm`, `kubectl delete`
+    if (o.slice(0, 2).some((a) => a === "rm" || a === "rmi" || a === "prune" || a === "delete")) {
+      return [...parts, part(`${base} delete`, `deletes with ${base} ${o.slice(0, 2).join(" ")}`, undefined, ["deletes"])];
+    }
+    return [...parts, vaguePart(`${base} ${sub ?? ""}`, `runs ${base}${sub ? ` ${sub}` : ""}`, ["code"])];
+  }
+  if (base === "make") {
     const sub = operands(args)[0];
-    return [...parts, part(`${base} ${sub ?? ""}`, `runs ${base}${sub ? ` ${sub}` : ""}`, undefined, ["code"])];
+    return [...parts, part(`make ${sub ?? ""}`, `runs make${sub ? ` ${sub}` : ""}`, undefined, ["code"])];
   }
   const quiet = QUIET[base];
   if (quiet) return [...parts, part(quiet, quiet)];
   if (prog.includes("/")) {
     flagOutside(prog);
-    return [...parts, part(`run ${prog}`, `runs ${shown(prog, w)}`, undefined, ["code"])];
+    return [...parts, vaguePart(`run ${prog}`, `runs ${shown(prog, w)}`, ["code"])];
   }
-  return [...parts, part(`run ${base}`, `runs ${base}`, undefined, ["code"])];
+  return [...parts, vaguePart(`run ${base}`, `runs ${base}`, ["code"])];
 }
 
 /** every part of a line, `w.cwd` moving with its `cd`s */
@@ -688,8 +753,10 @@ const MAX_STEPS = 5;
 function fold(parts: readonly Part[]): Explained {
   const groups = new Map<string, Part[]>();
   const flags = new Set<ExplainFlag>();
+  let vague = false;
   for (const p of parts) {
     for (const f of p.flags ?? []) flags.add(f);
+    if (p.vague) vague = true;
     if (!p.one) continue;
     const g = groups.get(p.key);
     if (g) g.push(p);
@@ -711,7 +778,7 @@ function fold(parts: readonly Part[]): Explained {
         : phrases.length === 1
           ? (phrases[0] ?? "")
           : `${phrases.slice(0, -1).join(", ")} and ${phrases[phrases.length - 1]}`;
-  return { says, flags: EXPLAIN_FLAGS.filter((f) => flags.has(f)) };
+  return { says, flags: EXPLAIN_FLAGS.filter((f) => flags.has(f)), ...(vague || phrases.length === 0 ? { vague: true as const } : {}) };
 }
 
 /** A shell command in plain words. `root` is the project's folder (outside
@@ -773,5 +840,5 @@ export function explainPrompt(p: ExplainInput, root?: string): Explained {
     return { says, flags: EXPLAIN_FLAGS.filter((f) => (f === "outside" ? out : flags.includes(f))) };
   }
   const net = p.tool === "WebFetch" || p.tool === "WebSearch" || p.tool === "Network";
-  return { says: p.title, flags: net ? ["network"] : [] };
+  return net ? { says: p.title, flags: ["network"] } : { says: p.title, flags: [], vague: true };
 }

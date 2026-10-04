@@ -1,7 +1,8 @@
 import { useEffect, useId, useState } from "react";
 import { useShallow } from "zustand/react/shallow";
-import { explainPrompt, FLAG_WORDS, startsOutside, type Explained } from "../../../src/core/explain";
-import { ruleOffer, ruleWords, type RuleOffer } from "../../../src/core/shellwords";
+import { explainPrompt, FLAG_WORDS, type Explained } from "../../../src/core/explain";
+import { rememberOffer } from "../../../src/core/offer";
+import { ruleWords, type RuleOffer } from "../../../src/core/shellwords";
 import type { Harness, PermissionAsk, RememberAsk, RunAnswer, RunPrompt, RunQuestion } from "../../../src/core/types";
 import type { ScopeOffer } from "../inbox";
 import { agentWord } from "../runs";
@@ -111,7 +112,10 @@ function RememberPanel({ remember, busy, onCancel }: { remember: RememberChoice;
     <div className="ask-remember" role="group" aria-label="Allow and remember">
       <div className="eyebrow">allow and remember</div>
       {offer.chain && (
-        <p className="ask-warn">This chains several commands. A rule for one command never matches a chain, so only "any shell command" would stop this asking. That rule lets every shell command in the project through.</p>
+        <p className="ask-warn">
+          This chains several commands. A rule for one command never matches a chain, so only "any shell command" would stop this asking. That rule lets
+          through every command in this scope, chains included, unless canopy sees it leave the project (a cd away, a path outside).
+        </p>
       )}
       <fieldset className="ask-choice">
         <legend>{offer.rules.length > 1 ? "the rule, broadest first: narrow it here" : "the rule"}</legend>
@@ -191,7 +195,8 @@ export function PermissionForm({
     <div className="ask">
       <div className="eyebrow">{heading}</div>
       {explain && <Explanation explain={explain} />}
-      {detail && <RawCommand detail={detail} view={view} foldable={explain !== undefined} />}
+      {/* folds only under a reading of canopy's own; "runs frobnicate" says too little */}
+      {detail && <RawCommand detail={detail} view={view} foldable={explain !== undefined && !explain.vague} />}
       {remember && keeping && <RememberPanel remember={remember} busy={busy} onCancel={() => setKeeping(false)} />}
       {denyMessage && why && (
         <input
@@ -236,7 +241,10 @@ export function PermissionForm({
 }
 
 /** A run's own prompt, as its console shows it: allow, allow all for the
- *  rest of the run, deny; or the agent's questions. */
+ *  rest of the run, deny; or the agent's questions. Every answer names the
+ *  prompt it was given on, and the form starts over when another prompt
+ *  takes its place, so a remember half done on one is never saved on the
+ *  next (the server refuses a prompt id that is not the one waiting). */
 export function RunPromptForm({
   prompt,
   harness,
@@ -247,29 +255,31 @@ export function RunPromptForm({
   prompt: RunPrompt;
   /** whose prompt it is, for its heading */
   harness: Harness;
-  onAnswer: (a: RunAnswer) => void;
+  onAnswer: (a: RunAnswer, promptId: string) => void;
   /** the run's project folder, for "outside the project" */
   root?: string;
   /** the scopes a remember offers; none, no remember */
   scopes?: ScopeOffer[];
 }) {
   const view = useCommandView();
+  const id = prompt.id;
   if (prompt.kind === "permission") {
-    const offer = startsOutside(prompt, root) ? null : ruleOffer(prompt.tool, prompt.command);
+    const offer = rememberOffer(prompt, root);
     return (
       <PermissionForm
+        key={id}
         heading={`${agentWord(harness)} wants to run`}
         detail={prompt.detail}
         explain={plainWords(prompt, root)}
         view={view}
-        {...(offer && scopes?.length ? { remember: { offer, scopes, onRemember: (remember: RememberAsk) => onAnswer({ kind: "allow", remember }) } } : {})}
-        onAllow={() => onAnswer({ kind: "allow" })}
-        always={{ label: "allow all for this run", title: "Every later request in this run passes without asking", onClick: () => onAnswer({ kind: "allow-all" }) }}
-        onDeny={() => onAnswer({ kind: "deny" })}
+        {...(offer && scopes?.length ? { remember: { offer, scopes, onRemember: (remember: RememberAsk) => onAnswer({ kind: "allow", remember }, id) } } : {})}
+        onAllow={() => onAnswer({ kind: "allow" }, id)}
+        always={{ label: "allow all for this run", title: "Every later request in this run passes without asking", onClick: () => onAnswer({ kind: "allow-all" }, id) }}
+        onDeny={() => onAnswer({ kind: "deny" }, id)}
       />
     );
   }
-  return <Questions questions={prompt.questions} who={agentWord(harness)} onAnswer={(answers) => onAnswer({ kind: "answers", answers })} />;
+  return <Questions key={id} questions={prompt.questions} who={agentWord(harness)} onAnswer={(answers) => onAnswer({ kind: "answers", answers }, id)} />;
 }
 
 /**

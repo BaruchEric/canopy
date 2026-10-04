@@ -90,6 +90,13 @@ test("remember keeps a covering rule, answers the next match with it, and forget
     // a plain run has no step or workflow to remember for
     expect((await remember("Bash(git status:*)", "step")).status).toBe(400);
     expect((await remember("Edit(src/**)", "repo")).status).toBe(409);
+    // a rule that covers the prompt but that the page never offers: git:* would also cover git -c alias.x=...
+    const unoffered = await remember("Bash(git:*)", "repo");
+    expect(unoffered.status).toBe(409);
+    expect(((await unoffered.json()) as { error: string }).error).toContain("does not offer");
+    // a save against a prompt id that is not the one waiting (one withdrawn, another come in its place)
+    const stale = await post("/api/runs/answer", { id, promptId: "p9", answer: { kind: "allow", remember: { rule: "Bash(git status:*)", scope: "repo" } } });
+    expect(stale.status).toBe(409);
     expect((await run(id))?.prompt?.id).toBe("p1");
     expect(((await (await fetch(`${base}/api/remembered`)).json()) as { rules: RememberedRule[] }).rules).toEqual([]);
 

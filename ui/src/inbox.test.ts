@@ -121,23 +121,25 @@ describe("mergeInbox", () => {
     const [plain] = mergeInbox([], { r1: run({ prompt: p }) }, {}, 0, ctx);
     expect(plain).toMatchObject({ permission: p, repoPath: "/dev/app" });
     expect(plain?.flowStep).toBeUndefined();
-    // the run's own word wins; a flow's step is the fallback for an older server
+    // only the run's own word, which says where the workflow came from; a flow's step name alone does not
     const [stepped] = mergeInbox([], { fr: run({ id: "fr", repoId: "mac|lib", prompt: p }) }, { "mac|f1": flow({ status: "waiting" }) }, 0, ctx);
-    expect(stepped?.flowStep).toEqual({ workflow: "ship", step: "test" });
-    const [named] = mergeInbox([], { r1: run({ prompt: p, flowStep: { workflow: "scout", step: "Eval" } }) }, {}, 0, ctx);
-    expect(named?.flowStep).toEqual({ workflow: "scout", step: "Eval" });
+    expect(stepped?.flowStep).toBeUndefined();
+    const [named] = mergeInbox([], { r1: run({ prompt: p, flowStep: { workflow: "scout", step: "Eval", source: "bundled" } }) }, {}, 0, ctx);
+    expect(named?.flowStep).toEqual({ workflow: "scout", step: "Eval", source: "bundled" });
     // a remote repo's folder is not this machine's
     const [remote] = mergeInbox([], { r1: run({ prompt: p }) }, {}, 0, { ...ctx, repos: [repo("app", { host: "mini" })] });
     expect(remote?.repoPath).toBeUndefined();
   });
 
   test("scopeOffers: a flow step's run offers its step first, then its workflow, then the repo", () => {
-    expect(scopeOffers({ repo: "seed-1", repoPath: "/dev/_incubator/seed-1", flowStep: { workflow: "scout", step: "Eval" } })).toEqual([
-      { kind: "step", label: "scout · Eval, in every project" },
-      { kind: "workflow", label: "every step of scout" },
-      { kind: "repo", label: "runs in seed-1" },
+    expect(scopeOffers({ repo: "app", repoPath: "/dev/app", flowStep: { workflow: "ship", step: "test", source: "bundled" } })).toEqual([
+      { kind: "step", label: "ship · test, in every project" },
+      { kind: "workflow", label: "every step of ship" },
+      { kind: "repo", label: "runs in app" },
     ]);
     expect(scopeOffers({ repo: "app" })).toEqual([{ kind: "repo", label: "runs in app" }]);
+    // a workflow the repo ships itself: a clone could call its own file ship
+    expect(scopeOffers({ repo: "app", flowStep: { workflow: "ship", step: "test", source: "repo" } })).toEqual([{ kind: "repo", label: "runs in app" }]);
   });
 
   test("an ask from an agent the registry does not know says where by its node", () => {
