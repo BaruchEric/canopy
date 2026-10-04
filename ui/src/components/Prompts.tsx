@@ -1,4 +1,4 @@
-import { useId, useState } from "react";
+import { useEffect, useId, useState } from "react";
 import { useShallow } from "zustand/react/shallow";
 import { explainPrompt, FLAG_WORDS, startsOutside, type Explained } from "../../../src/core/explain";
 import { ruleOffer, ruleWords, type RuleOffer } from "../../../src/core/shellwords";
@@ -79,6 +79,8 @@ function Explanation({ explain }: { explain: PlainWords }) {
 /** The raw command or input, always there; under plain words it can fold. */
 function RawCommand({ detail, view, foldable }: { detail: string; view: CommandView; foldable: boolean }) {
   const [open, setOpen] = useState(!(foldable && view.fold));
+  // the gear's fold setting applies to what is already showing, too
+  useEffect(() => setOpen(!(foldable && view.fold)), [foldable, view.fold]);
   const pre = (
     <pre className={`ask-detail${view.wrap ? "" : " nowrap"}`} style={view.text === INBOX_TEXT.size ? undefined : { fontSize: view.text }}>
       {detail}
