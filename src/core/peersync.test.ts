@@ -40,6 +40,8 @@ const sh = async (cwd: string, ...args: string[]): Promise<string> => {
   if (r.code !== 0) throw new Error(`git ${args.join(" ")}: ${r.stderr}`);
   return r.stdout.trim();
 };
+const hasRef = async (cwd: string, ref: string): Promise<boolean> =>
+  (await exec(["git", "rev-parse", "-q", "--verify", ref], { cwd })).code === 0;
 /** Loose objects in the repo's real store (git count-objects, not packs). */
 const looseObjects = async (cwd: string): Promise<number> => {
   const out = await sh(cwd, "count-objects");
@@ -197,17 +199,71 @@ describe("snapshotWip", () => {
     expect(await looseObjects(r)).toBe(before);
   });
 
-  test("a ref namespace collision returns null instead of a false wrote", async () => {
-    const r = await repo("collision");
-    // A plain ref at refs/wip/feat, unrelated to any branch (a branch named
-    // "feat" would itself collide with "feat/x" at refs/heads/, which is a
-    // different conflict than the one under test).
+  test("a failed update-ref returns null instead of a false wrote", async () => {
+    const r = await repo("locked");
+    // Another git holding the ref's lock: update-ref refuses to take it.
+    await mkdir(join(r, ".git", "refs", "wip"), { recursive: true });
+    await writeFile(join(r, ".git", "refs", "wip", "main.lock"), "");
+    await writeFile(join(r, "a.txt"), "locked\n");
+    expect(await snapshotWip(r, "mac", false)).toBeNull();
+  });
+
+  test("switching away drops the old branch's snapshot, from a dirty tree or a clean one", async () => {
+    const r = await repo("switched");
+    await sh(r, "checkout", "-q", "-b", "feat");
+    await writeFile(join(r, "a.txt"), "on feat\n");
+    expect((await snapshotWip(r, "mac", false))?.branch).toBe("feat");
+    await sh(r, "checkout", "-q", "main"); // the edit comes along
+    expect((await snapshotWip(r, "mac", false))?.branch).toBe("main");
+    expect(await hasRef(r, "refs/wip/feat")).toBe(false);
+    await sh(r, "stash", "-q");
+    await sh(r, "checkout", "-q", "feat");
+    expect(await snapshotWip(r, "mac", false)).toBeNull();
+    expect(await hasRef(r, "refs/wip/main")).toBe(false);
+  });
+
+  test("a stale ref in the way of this branch's is dropped, so the snapshot lands", async () => {
+    const r = await repo("inway");
+    // refs/wip/feat, left by a branch "feat" that is gone: refs/wip/feat/x
+    // can't be created next to it (a git ref D/F conflict) until it goes.
     await sh(r, "update-ref", "refs/wip/feat", await sh(r, "rev-parse", "HEAD"));
     await sh(r, "checkout", "-q", "-b", "feat/x");
     await writeFile(join(r, "a.txt"), "feat/x change\n");
-    // refs/wip/feat/x can't be created while refs/wip/feat exists as a
-    // plain ref (a git ref D/F conflict).
-    expect(await snapshotWip(r, "mac", false)).toBeNull();
+    expect((await snapshotWip(r, "mac", false))?.wrote).toBe(true);
+    expect(await hasRef(r, "refs/wip/feat")).toBe(false);
+    expect(await hasRef(r, "refs/wip/feat/x")).toBe(true);
+  });
+
+  test("a branch another worktree is on, rebasing or bisecting keeps its snapshot", async () => {
+    const r = await repo("worktrees");
+    const base = await sh(r, "rev-parse", "HEAD");
+    for (const b of ["on", "rebasing", "bisecting"]) {
+      await sh(r, "worktree", "add", "-q", "-b", b, join(root, `wt-${b}`));
+      await sh(r, "update-ref", `refs/wip/${b}`, base);
+    }
+    await sh(r, "update-ref", "refs/wip/gone", base);
+    // A conflict stops the rebase with that worktree's HEAD detached.
+    await commit(join(root, "wt-rebasing"), "c.txt", "theirs\n");
+    await commit(r, "c.txt", "ours\n");
+    await exec(["git", "rebase", "main"], { cwd: join(root, "wt-rebasing") });
+    // A bisect checks out a commit in the middle, also detached.
+    const wb = join(root, "wt-bisecting");
+    for (const n of ["d1", "d2", "d3"]) await commit(wb, `${n}.txt`, `${n}\n`);
+    await sh(wb, "bisect", "start", "HEAD", base);
+    const listing = await sh(r, "worktree", "list", "--porcelain");
+    expect(listing).not.toContain("refs/heads/rebasing");
+    expect(listing).not.toContain("refs/heads/bisecting");
+
+    expect(await snapshotWip(r, "mac", false)).toBeNull(); // main itself is clean
+    for (const b of ["on", "rebasing", "bisecting"]) expect(await hasRef(r, `refs/wip/${b}`)).toBe(true);
+    expect(await hasRef(r, "refs/wip/gone")).toBe(false);
+  });
+
+  test("dry drops no stale snapshot", async () => {
+    const r = await repo("drysweep");
+    await sh(r, "update-ref", "refs/wip/gone", await sh(r, "rev-parse", "HEAD"));
+    await snapshotWip(r, "mac", true);
+    expect(await hasRef(r, "refs/wip/gone")).toBe(true);
   });
 
   test("commit-tree gets an identity even without any git config", async () => {

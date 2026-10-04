@@ -76,6 +76,72 @@ async function worktreeTree(repo: string, dry: boolean): Promise<string | null> 
   }
 }
 
+const errCode = (err: unknown): unknown =>
+  typeof err === "object" && err !== null && "code" in err ? (err as Record<string, unknown>).code : undefined;
+
+/** A file's text, "" when it is genuinely not there (ENOENT, or ENOTDIR
+ *  under a path that is a file). Anything else throws: a state file that
+ *  can't be read is not proof of no state. */
+async function readState(path: string): Promise<string> {
+  try {
+    return await readFile(path, "utf8");
+  } catch (err) {
+    if (errCode(err) === "ENOENT" || errCode(err) === "ENOTDIR") return "";
+    throw err;
+  }
+}
+
+/** Branches some worktree here is on, the main one or a linked one: the
+ *  ones `git worktree list` names, plus any a worktree is rebasing or
+ *  bisecting. Both detach HEAD, which drops the branch from that listing,
+ *  though git itself still counts it as checked out (and so does this).
+ *  null when git can't list the worktrees or a state file can't be read. */
+async function occupiedBranches(repo: string): Promise<Set<string> | null> {
+  const list = await git(repo, ["worktree", "list", "--porcelain"]);
+  const c = await git(repo, ["rev-parse", "--git-common-dir"]);
+  if (list.code !== 0 || c.code !== 0) return null;
+  const out = new Set<string>();
+  for (const l of list.stdout.split("\n")) {
+    if (l.startsWith("branch refs/heads/")) out.add(l.slice("branch refs/heads/".length));
+  }
+  const common = isAbsolute(c.stdout.trim()) ? c.stdout.trim() : join(repo, c.stdout.trim());
+  try {
+    const linked = await readdir(join(common, "worktrees")).catch((err: unknown) => {
+      if (errCode(err) === "ENOENT") return [];
+      throw err;
+    });
+    for (const dir of [common, ...linked.map((d) => join(common, "worktrees", d))]) {
+      for (const f of ["rebase-merge/head-name", "rebase-apply/head-name"]) {
+        const head = (await readState(join(dir, f))).trim();
+        if (head.startsWith("refs/heads/")) out.add(head.slice("refs/heads/".length));
+      }
+      // The branch's short name, or a hash when the bisect began detached.
+      const start = (await readState(join(dir, "BISECT_START"))).trim();
+      if (start) out.add(start);
+    }
+  } catch {
+    return null;
+  }
+  return out;
+}
+
+/** A snapshot is one checkout's uncommitted work, so once no worktree here
+ *  is on its branch (switched away from, or merged and deleted) it is
+ *  stale, and nothing else would ever clear it, here or on a peer that
+ *  fetched it. Each delete is a compare-and-swap on the hash just read.
+ *  When the occupied branches can't be told, nothing goes: keeping a stale
+ *  snapshot is the safe side. */
+async function dropStaleWips(repo: string, current: string): Promise<void> {
+  const busy = await occupiedBranches(repo);
+  if (busy === null) return;
+  const r = await git(repo, ["for-each-ref", "--format=%(objectname) %(refname)", "refs/wip/"]);
+  if (r.code !== 0) return;
+  for (const { ref, hash } of parseRefLines(r.stdout)) {
+    const branch = ref.slice("refs/wip/".length);
+    if (branch !== current && !busy.has(branch)) await git(repo, ["update-ref", "-d", ref, hash]);
+  }
+}
+
 export async function snapshotWip(
   repo: string,
   self: string,
@@ -83,6 +149,9 @@ export async function snapshotWip(
 ): Promise<{ branch: string; at: number; wrote: boolean } | null> {
   const branch = await currentBranch(repo);
   if (!branch) return null;
+  // First, so a stale ref in the way of this branch's (refs/wip/feat under
+  // feat/x) is gone before the write below.
+  if (!dry) await dropStaleWips(repo, branch);
   const ref = `refs/wip/${branch}`;
   const had = await git(repo, ["rev-parse", "-q", "--verify", ref]);
   if (!(await isDirty(repo))) {
