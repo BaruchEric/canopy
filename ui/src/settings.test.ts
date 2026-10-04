@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { DEFAULT_SETTINGS, levelOf, loadSettings, saveSettings, shellPlace } from "./settings";
+import { DEFAULT_SETTINGS, INBOX_TEXT, inboxTextOf, levelOf, loadSettings, saveSettings, shellPlace } from "./settings";
 
 describe("shellPlace", () => {
   test("auto follows the panel", () => {
@@ -71,6 +71,25 @@ describe("loadSettings", () => {
     store.set("canopy.settings", JSON.stringify({ zoom: "big", sectionOrder: 4 }));
     expect(loadSettings().zoom).toEqual({});
     expect(loadSettings().sectionOrder[0]).toBe("changes");
+    delete (globalThis as { localStorage?: unknown }).localStorage;
+  });
+});
+
+describe("the inbox's view", () => {
+  test("zoom, command text size, wrap and fold survive a reload, repaired", () => {
+    const store = new Map<string, string>();
+    (globalThis as { localStorage?: unknown }).localStorage = {
+      getItem: (k: string) => store.get(k) ?? null,
+      setItem: (k: string, v: string) => void store.set(k, v),
+    };
+    store.set("canopy.settings", "{}");
+    expect(loadSettings()).toMatchObject({ inboxText: INBOX_TEXT.size, inboxWrap: true, inboxFold: true });
+    store.set("canopy.settings", JSON.stringify({ zoom: { inbox: 1.25 }, inboxText: 40, inboxWrap: false, inboxFold: "no" }));
+    expect(loadSettings()).toMatchObject({ zoom: { inbox: 1.25 }, inboxText: INBOX_TEXT.max, inboxWrap: false, inboxFold: true });
+    saveSettings({ ...loadSettings(), inboxText: 10.6, inboxFold: false });
+    expect(loadSettings()).toMatchObject({ inboxText: 11, inboxFold: false });
+    expect(inboxTextOf("big")).toBe(INBOX_TEXT.size);
+    expect(inboxTextOf(2)).toBe(INBOX_TEXT.min);
     delete (globalThis as { localStorage?: unknown }).localStorage;
   });
 });

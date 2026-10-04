@@ -20,9 +20,10 @@ export function fitShift(left: number, right: number, width: number): number {
  * The popovers hang off their chip's right edge, and when the top bar wraps
  * a chip can land at the left of the window with its popover off-screen.
  * The shift goes on `translate`, not `transform`, which the settle
- * animation owns.
+ * animation owns. `size` is whatever else changes its width (the inbox's
+ * zoom), so it fits again when that moves.
  */
-export function useFitPop(ref: RefObject<HTMLElement | null>, open: boolean): void {
+export function useFitPop(ref: RefObject<HTMLElement | null>, open: boolean, size?: number): void {
   useLayoutEffect(() => {
     if (!open) return;
     const fit = () => {
@@ -36,5 +37,5 @@ export function useFitPop(ref: RefObject<HTMLElement | null>, open: boolean): vo
     fit();
     window.addEventListener("resize", fit);
     return () => window.removeEventListener("resize", fit);
-  }, [ref, open]);
+  }, [ref, open, size]);
 }

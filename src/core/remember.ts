@@ -64,11 +64,7 @@ export function scopeOf(kind: RememberScope["kind"], run: RunScope): RememberSco
   return kind === "workflow" ? { kind: "workflow", workflow: run.flowStep.workflow } : { kind: "step", ...run.flowStep };
 }
 
-export function scopeWords(s: RememberScope): string {
-  if (s.kind === "step") return `${s.workflow} · ${s.step}, in every project`;
-  if (s.kind === "workflow") return `every step of ${s.workflow}`;
-  return `runs in ${basename(s.path)}`;
-}
+export { scopeWords } from "./shellwords";
 
 /** The remembered rule that answers this permission, or null. */
 export function rememberedFor(

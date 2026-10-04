@@ -747,6 +747,17 @@ const FILE_VERBS: Record<string, [string, ExplainFlag[]]> = {
   NotebookEdit: ["edits", ["writes"]],
 };
 
+/** Whether a request starts outside the project: a command run from a
+ *  folder outside it, or a file tool on a file outside it. A remembered rule
+ *  never answers one (the server's matching checks the same), so the page
+ *  does not offer to remember it. With no project folder, false. */
+export function startsOutside(p: ExplainInput, root?: string): boolean {
+  if (!root) return false;
+  const r = norm(root, "/");
+  if (p.cwd && !inside(norm(p.cwd, r), r)) return true;
+  return (p.paths ?? []).some((x) => outsidePath(x, { root: r, cwd: p.cwd ? norm(p.cwd, r) : r }));
+}
+
 /** A permission prompt in plain words: a shell command read step by step,
  *  a file tool by its files, the web tools as network, and anything else
  *  by the title the run gave it. */

@@ -64,6 +64,7 @@ import {
   type TaskInfo,
   type TaskPatch,
   type TermInfo,
+  type RememberedRule,
   type Run,
   type RunAction,
   type RunAnswer,
@@ -647,6 +648,9 @@ interface CanopyState {
   agents: Record<string, AgentRoutes>;
   /** how a repo's builds are made and run, by backend then repo path */
   launchers: Record<string, Record<string, LaunchSettings>>;
+  /** each backend's remembered rules, which answer its runs' permissions;
+   *  read when the inbox opens, then kept by the `remembered` event */
+  remembered: Record<string, RememberedRule[]>;
   /** downloads and builds by id, live and recently finished */
   jobs: Record<string, Job>;
   /** each repo's tasks as last read or told, by repo id */
@@ -926,6 +930,10 @@ interface CanopyState {
   takePendingSearch: () => void;
   startRun: (repoId: string, action: RunAction, note: string) => Promise<void>;
   answerRun: (runId: string, promptId: string, answer: RunAnswer) => Promise<void>;
+  /** every shown backend's remembered rules, read again; one that cannot
+   *  say (an older canopy) keeps what the page had */
+  loadRemembered: () => Promise<void>;
+  forgetRemembered: (backend: string, id: string) => Promise<void>;
   /** the next message in a chat */
   sayRun: (runId: string, text: string) => Promise<void>;
   stopRun: (runId: string) => Promise<void>;
@@ -1352,6 +1360,7 @@ export const useStore = create<CanopyState>((set, get) => ({
   histories: {},
   agents: {},
   launchers: {},
+  remembered: {},
   jobs: {},
   tasks: {},
   taskErrors: {},
@@ -1698,6 +1707,7 @@ export const useStore = create<CanopyState>((set, get) => ({
     const { [name]: _conn, ...conns } = s.conns;
     const { [name]: _agents, ...agents } = s.agents;
     const { [name]: _launchers, ...launchers } = s.launchers;
+    const { [name]: _remembered, ...remembered } = s.remembered;
     const { [name]: _history, ...histories } = s.histories;
     const backendOrder = applyRegistry(s.home, registryEntries, hiddenBackends);
     set({
@@ -1719,6 +1729,7 @@ export const useStore = create<CanopyState>((set, get) => ({
       taskAll: s.taskAll.filter((t) => backendOf(t.repoId) !== name),
       agents,
       launchers,
+      remembered,
       histories,
       history: historyOf(histories, backendOrder),
       // its tabs leave this window but not the saved layout
@@ -2054,6 +2065,8 @@ export const useStore = create<CanopyState>((set, get) => ({
       set((s) => ({ buildsAt: { ...s.buildsAt, [ev.repoId]: Date.now() } }));
     } else if (ev.type === "launchers") {
       set((s) => ({ launchers: { ...s.launchers, [b]: ev.launchers } }));
+    } else if (ev.type === "remembered") {
+      set((s) => ({ remembered: { ...s.remembered, [b]: ev.rules } }));
     } else if (ev.type === "helpers") {
       set((s) => ({ conns: withConn(s, b, { helpers: ev.helpers }) }));
     } else if (ev.type === "devices") {
@@ -2655,6 +2668,22 @@ export const useStore = create<CanopyState>((set, get) => ({
   answerRun: async (runId, promptId, answer) => {
     const run = await api.answerRun(runId, promptId, answer);
     set((s) => ({ runs: { ...s.runs, [run.id]: run } }));
+  },
+  loadRemembered: async () => {
+    const order = get().backendOrder;
+    const got = await Promise.all(
+      order.map((b) =>
+        api.remembered(b).then(
+          (r) => (Array.isArray(r?.rules) ? ([b, r.rules] as const) : null),
+          () => null,
+        ),
+      ),
+    );
+    set((s) => ({ remembered: { ...s.remembered, ...Object.fromEntries(got.filter((g) => g !== null)) } }));
+  },
+  forgetRemembered: async (backend, id) => {
+    const { rules } = await api.forgetRemembered(backend, id);
+    set((s) => ({ remembered: { ...s.remembered, [backend]: rules } }));
   },
   sayRun: async (runId, text) => {
     const run = await api.say(runId, text);

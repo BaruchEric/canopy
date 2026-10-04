@@ -40,6 +40,7 @@ import {
   type Ask,
   type KeptShell,
   type PeerSeen,
+  type RememberedRule,
   type Repo,
   type ScanResult,
   type SourceState,
@@ -576,6 +577,32 @@ describe("several backends", () => {
     expect(connOf(s, "b").status.state).toBe("online");
   });
 
+  test("remembered rules are read per backend, kept by each one's event, and forgotten where they live", async () => {
+    const rule = (id: string, path: string): RememberedRule => ({ id, rule: "Bash(ls:*)", scope: { kind: "repo", path }, at: 1 });
+    await start(
+      backendAnswers(scanOf("/a", [repo("proj")]), [], {
+        "/api/backends": twoBackends,
+        "/api/remembered": { rules: [rule("ra", "/a/proj")] },
+      }),
+      // b is an older canopy with no remembered rules to say
+      backendAnswers(scanOf("/b", [repo("proj")]), [], {
+        "/api/remembered": () => {
+          throw new Error("404");
+        },
+        "/api/remembered/forget": { rules: [] },
+      }),
+    );
+    await settle();
+    await useStore.getState().loadRemembered();
+    expect(useStore.getState().remembered).toEqual({ a: [rule("ra", "/a/proj")] });
+    expect(Object.keys(useStore.getState().remembered)).toEqual(["a"]);
+    useStore.getState().applyEvent({ type: "remembered", rules: [rule("rb", "/b/proj")] }, "b");
+    expect(useStore.getState().remembered).toEqual({ a: [rule("ra", "/a/proj")], b: [rule("rb", "/b/proj")] });
+    await useStore.getState().forgetRemembered("b", "rb");
+    expect(useStore.getState().remembered["b"]).toEqual([]);
+    expect(calls.some((u) => u.startsWith("http://b.test/api/remembered/forget"))).toBe(true);
+  });
+
   test("an event from b changes b's checkout and leaves home's alone", async () => {
     await start(
       backendAnswers(scanOf("/a", [repo("proj")]), [], { "/api/backends": twoBackends }),
@@ -700,7 +727,7 @@ describe("several backends", () => {
     // an answer to b's run goes to b, as a run's answer
     const run = inboxItems(useStore.getState()).find((i) => i.source === "run")!;
     await useStore.getState().answerInbox(run, { behavior: "allow", always: true });
-    expect(posted.find((p) => p.path.startsWith("b:/api/runs/answer"))?.body).toEqual({ id: "r1", promptId: "p1", answer: { kind: "allow-all" } });
+    expect(posted.find((p) => p.path.startsWith("b:/api/runs/answer"))?.body).toMatchObject({ id: "r1", promptId: "p1", answer: { kind: "allow-all" } });
     // a run's answer carries no key, to any backend
     expect(posted.find((p) => p.path.startsWith("b:/api/runs/answer"))?.key).toBeNull();
     // an answer to an ask goes to home, with this browser's id and key

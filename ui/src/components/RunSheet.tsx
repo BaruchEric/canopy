@@ -11,6 +11,7 @@ import { FleetPlan, FleetSheet, FlowConsole, FlowPlan } from "./FlowSheet";
 import { SearchSheet } from "./Search";
 import { NewSproutSheet, SproutSheet } from "./Incubator";
 import { RunPromptForm } from "./Prompts";
+import { scopeOffers } from "../inbox";
 import {
   AGENT_ROLES,
   DEFAULT_LAUNCH,
@@ -330,7 +331,15 @@ export function Timeline({
           </li>
         )}
       </ol>
-      {run.prompt && <RunPromptForm prompt={run.prompt} harness={harness} onAnswer={onAnswer} />}
+      {run.prompt && (
+        <RunPromptForm
+          prompt={run.prompt}
+          harness={harness}
+          onAnswer={onAnswer}
+          {...(repo && !repo.host ? { root: repo.path } : {})}
+          scopes={scopeOffers({ ...(run.flowStep ? { flowStep: run.flowStep } : {}), repo: repo?.name ?? idText(run.repoId), ...(repo && !repo.host ? { repoPath: repo.path } : {}) })}
+        />
+      )}
       {run.result && run.status === "done" && !chat && (
         <div className={noChange ? "outcome warn" : "outcome ok"}>
           {noChange && (

@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import type { AdviceOffer, AgentCard, Ask, Flow, Repo, Run, Sprout } from "../../src/core/types";
 import {
+  askPermission,
   askWord,
   asksOf,
   detailText,
@@ -14,6 +15,7 @@ import {
   replaceAsks,
   toAskAnswer,
   toRunAnswer,
+  scopeOffers,
 } from "./inbox";
 
 const ask = (over: Partial<Ask> = {}): Ask => ({
@@ -114,6 +116,30 @@ describe("mergeInbox", () => {
     expect(items[0]).toMatchObject({ who: "ship · test", kind: "question", title: "question: Which?", questions: q.prompt?.kind === "question" ? q.prompt.questions : [] });
   });
 
+  test("a run's permission carries what it asked, its project folder and its flow step", () => {
+    const p = { id: "p1", kind: "permission" as const, tool: "Bash", title: "ls", detail: "ls", command: "ls", description: "List files" };
+    const [plain] = mergeInbox([], { r1: run({ prompt: p }) }, {}, 0, ctx);
+    expect(plain).toMatchObject({ permission: p, repoPath: "/dev/app" });
+    expect(plain?.flowStep).toBeUndefined();
+    // the run's own word wins; a flow's step is the fallback for an older server
+    const [stepped] = mergeInbox([], { fr: run({ id: "fr", repoId: "mac|lib", prompt: p }) }, { "mac|f1": flow({ status: "waiting" }) }, 0, ctx);
+    expect(stepped?.flowStep).toEqual({ workflow: "ship", step: "test" });
+    const [named] = mergeInbox([], { r1: run({ prompt: p, flowStep: { workflow: "scout", step: "Eval" } }) }, {}, 0, ctx);
+    expect(named?.flowStep).toEqual({ workflow: "scout", step: "Eval" });
+    // a remote repo's folder is not this machine's
+    const [remote] = mergeInbox([], { r1: run({ prompt: p }) }, {}, 0, { ...ctx, repos: [repo("app", { host: "mini" })] });
+    expect(remote?.repoPath).toBeUndefined();
+  });
+
+  test("scopeOffers: a flow step's run offers its step first, then its workflow, then the repo", () => {
+    expect(scopeOffers({ repo: "seed-1", repoPath: "/dev/_incubator/seed-1", flowStep: { workflow: "scout", step: "Eval" } })).toEqual([
+      { kind: "step", label: "scout · Eval, in every project" },
+      { kind: "workflow", label: "every step of scout" },
+      { kind: "repo", label: "runs in seed-1" },
+    ]);
+    expect(scopeOffers({ repo: "app" })).toEqual([{ kind: "repo", label: "runs in app" }]);
+  });
+
   test("an ask from an agent the registry does not know says where by its node", () => {
     const [a] = mergeInbox([ask({ agent: "codex:x", handle: "" })], {}, {}, 0, { repos, cards: {} });
     expect(a).toMatchObject({ who: "codex:x", where: "on macmini-2018", repo: "", repoId: null });
@@ -166,12 +192,37 @@ describe("words", () => {
     expect(detailText(JSON.stringify({ file_path: "/x" }))).toBe('{\n  "file_path": "/x"\n}');
     expect(detailText("plain words")).toBe("plain words");
   });
+
+  test("askPermission reads an ask's tool input for the plain words", () => {
+    expect(askPermission(ask({ detail: JSON.stringify({ command: "rm -rf build", description: "Clear the build" }) }))).toEqual({
+      kind: "permission",
+      tool: "Bash",
+      title: "Bash: rm -rf build",
+      detail: JSON.stringify({ command: "rm -rf build", description: "Clear the build" }),
+      command: "rm -rf build",
+      description: "Clear the build",
+    });
+    expect(askPermission(ask({ tool: "Edit", title: "Edit: a.ts", detail: JSON.stringify({ file_path: "/dev/app/a.ts" }) }))).toMatchObject({
+      tool: "Edit",
+      paths: ["/dev/app/a.ts"],
+    });
+    expect(askPermission(ask({ detail: "not json" }))).toMatchObject({ tool: "Bash" });
+    expect(askPermission(ask({ detail: "not json" }))?.command).toBeUndefined();
+    expect(askPermission(ask({ tool: null }))).toBeUndefined();
+    expect(askPermission(ask({ kind: "guard" }))).toBeUndefined();
+  });
+
+  test("an ask's item carries its permission", () => {
+    const [item] = mergeInbox([ask()], {}, {}, 0, ctx);
+    expect(item?.permission?.command).toBe("rm -rf build");
+  });
 });
 
 describe("answers go back the way the item came", () => {
   test("a run's", () => {
     expect(toRunAnswer({ behavior: "allow" })).toEqual({ kind: "allow" });
     expect(toRunAnswer({ behavior: "allow", always: true })).toEqual({ kind: "allow-all" });
+    expect(toRunAnswer({ behavior: "allow", remember: { rule: "Bash(ls:*)", scope: "step" } })).toEqual({ kind: "allow", remember: { rule: "Bash(ls:*)", scope: "step" } });
     expect(toRunAnswer({ behavior: "deny", message: "no" })).toEqual({ kind: "deny" });
     expect(toRunAnswer({ answers: { q: "a" } })).toEqual({ kind: "answers", answers: { q: "a" } });
     expect(toRunAnswer({ choice: "continue" })).toBeNull();

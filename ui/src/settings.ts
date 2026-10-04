@@ -140,7 +140,20 @@ export interface Settings {
   level: Level;
   /** the guided panel's tour has been seen or skipped */
   onboarded: boolean;
+  /** the inbox's raw commands: their text size in px */
+  inboxText: number;
+  /** a long command wraps; off, it keeps its lines and scrolls sideways */
+  inboxWrap: boolean;
+  /** a raw command starts folded under its plain-language line */
+  inboxFold: boolean;
 }
+
+/** the inbox command block's text size, px */
+export const INBOX_TEXT = { min: 9, max: 18, size: 12 } as const;
+
+/** a saved command text size, whole px in range, else the default */
+export const inboxTextOf = (v: unknown): number =>
+  typeof v === "number" && Number.isFinite(v) ? Math.min(INBOX_TEXT.max, Math.max(INBOX_TEXT.min, Math.round(v))) : INBOX_TEXT.size;
 
 export const DEFAULT_SETTINGS: Settings = {
   sort: "recent",
@@ -170,6 +183,9 @@ export const DEFAULT_SETTINGS: Settings = {
   hiddenBackends: [],
   level: "intermediate",
   onboarded: false,
+  inboxText: INBOX_TEXT.size,
+  inboxWrap: true,
+  inboxFold: true,
 };
 
 const KEY = "canopy.settings";
@@ -277,6 +293,7 @@ export const SCREEN_SETTINGS = [
   "fileSort",
   "sectionOrder",
   "sectionsHidden",
+  "inboxText",
 ] as const satisfies readonly (keyof Settings)[];
 
 /** what is stored under the key, an empty object for anything else */
@@ -321,6 +338,9 @@ export function loadSettings(): Settings {
       sectionsHidden: sectionsHidden(saved.sectionsHidden),
       backends: backendEntries(saved.backends),
       hiddenBackends: backendNamesOf(saved.hiddenBackends),
+      inboxText: inboxTextOf(saved.inboxText),
+      inboxWrap: typeof saved.inboxWrap === "boolean" ? saved.inboxWrap : DEFAULT_SETTINGS.inboxWrap,
+      inboxFold: typeof saved.inboxFold === "boolean" ? saved.inboxFold : DEFAULT_SETTINGS.inboxFold,
       ...levelOf(saved),
     };
   } catch {

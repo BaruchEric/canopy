@@ -7,10 +7,27 @@
  * tested; the store feeds it what it holds and routes an answer back to
  * where the item came from.
  */
-import type { AdviceOffer, AgentCard, Ask, AskAnswer, Flow, FlowChoice, Repo, Run, RunAnswer, RunQuestion, Sprout } from "../../src/core/types";
+import type {
+  AdviceOffer,
+  AgentCard,
+  Ask,
+  AskAnswer,
+  Flow,
+  FlowChoice,
+  FlowStepName,
+  PermissionAsk,
+  RememberAsk,
+  RememberScope,
+  Repo,
+  Run,
+  RunAnswer,
+  RunQuestion,
+  Sprout,
+} from "../../src/core/types";
 import { repoOfCard, repoWord, whereWord } from "./agentcards";
 import { agentWord, harnessOf } from "./runs";
 import { handOffText } from "../../src/core/sprout";
+import { scopeWords } from "../../src/core/shellwords";
 
 export type InboxSource = "ask" | "run" | "flow" | "sprout" | "advice";
 
@@ -44,6 +61,13 @@ export interface InboxItem {
   until: number | null;
   /** a run's prompt, which its answer names */
   promptId?: string;
+  /** a run's permission as it was asked: the agent's own words, the
+   *  command, the files, for the plain-language line and a remember */
+  permission?: PermissionAsk;
+  /** the run's project folder, which "outside the project" is judged by */
+  repoPath?: string;
+  /** a flow step's run: its workflow and step, the scopes a remember offers */
+  flowStep?: FlowStepName;
   /** a gate the flow's budget parked: continuing grants one more step */
   budget?: true;
   /** a step the stage runner's absence parked: continuing runs it again */
@@ -113,10 +137,39 @@ export function leftWord(left: number | null, kind: InboxItem["kind"]): string {
  *  last step's, which is what asked */
 const promptAt = (run: Run): number => run.steps.at(-1)?.at ?? run.startedAt;
 
+/** An agent's permission ask as a run's would be, for the plain words: the
+ *  tool, and from its input (the hook's JSON) the command, the agent's own
+ *  description and the file it touches. Nothing for a guard or a question,
+ *  or an ask with no tool. */
+export function askPermission(a: Ask): PermissionAsk | undefined {
+  if (a.kind !== "permission" || !a.tool) return undefined;
+  const p: PermissionAsk = { kind: "permission", tool: a.tool, title: a.title, detail: a.detail };
+  let input: unknown;
+  try {
+    input = JSON.parse(a.detail);
+  } catch {
+    return p;
+  }
+  if (!input || typeof input !== "object" || Array.isArray(input)) return p;
+  const o = input as Record<string, unknown>;
+  const text = (v: unknown) => (typeof v === "string" && v.trim() ? v : undefined);
+  const command = text(o.command);
+  const description = text(o.description) ?? text(o.reason);
+  const path = text(o.file_path) ?? text(o.notebook_path) ?? text(o.path);
+  return {
+    ...p,
+    ...(command ? { command } : {}),
+    ...(description ? { description: description.slice(0, 500) } : {}),
+    ...(path ? { paths: [path] } : {}),
+  };
+}
+
 function askItem(a: Ask, now: number, ctx: InboxContext): InboxItem {
   const card = ctx.cards[a.agent];
   const repo = card ? repoOfCard(card, ctx.askRepos ?? ctx.repos) : undefined;
+  const permission = askPermission(a);
   return {
+    ...(permission ? { permission } : {}),
     key: `ask:${a.id}`,
     source: "ask",
     id: a.id,
@@ -153,6 +206,9 @@ function runItem(run: Run, flow: Flow | undefined, ctx: InboxContext): InboxItem
     title: p.kind === "permission" ? p.title : `question: ${p.questions[0]?.question ?? "a question"}`,
     detail: p.kind === "permission" ? p.detail : "",
     ...(p.kind === "question" ? { questions: p.questions } : {}),
+    ...(p.kind === "permission" ? { permission: p } : {}),
+    ...(repo && !repo.host ? { repoPath: repo.path } : {}),
+    ...(run.flowStep ? { flowStep: run.flowStep } : flow && step ? { flowStep: { workflow: flow.workflow, step: step.name } } : {}),
     at: promptAt(run),
     left: null,
     until: null,
@@ -286,7 +342,8 @@ export const asksOf = (asks: readonly Ask[], agent: string): Ask[] => asks.filte
 
 /** What the human said, before it is routed to where the item came from. */
 export type InboxAnswer =
-  | { behavior: "allow"; always?: boolean }
+  /** `remember` is a run's: allow, and keep this rule for later runs */
+  | { behavior: "allow"; always?: boolean; remember?: RememberAsk }
   | { behavior: "deny"; message?: string }
   | { answers: Record<string, string> }
   | { choice: FlowChoice }
@@ -303,7 +360,8 @@ export function toRunAnswer(a: InboxAnswer): RunAnswer | null {
   if ("choice" in a || "skip" in a || "advice" in a || "handOff" in a) return null;
   if ("answers" in a) return { kind: "answers", answers: a.answers };
   if (a.behavior === "deny") return { kind: "deny" };
-  return { kind: a.always ? "allow-all" : "allow" };
+  if (a.always) return { kind: "allow-all" };
+  return a.remember ? { kind: "allow", remember: a.remember } : { kind: "allow" };
 }
 
 /** the broker's answer: a question's answers go as an allow */
@@ -318,6 +376,26 @@ export function toAskAnswer(a: InboxAnswer): AskAnswer | null {
  *  ask counts down to its terminal, else often enough for a run's or a
  *  gate's "how long ago" to move on (it reads in minutes). */
 export const inboxTick = (items: readonly Pick<InboxItem, "until">[]): number => (items.some((i) => i.until !== null) ? 1_000 : 15_000);
+
+/** One scope a remember can keep a rule for, in words. */
+export interface ScopeOffer {
+  kind: RememberScope["kind"];
+  label: string;
+}
+
+/** The scopes a run's permission can be remembered for, the default first:
+ *  a flow's step (every project's, since an incubator seed is a one-off
+ *  repo), its whole workflow, or the repo; a plain run has the repo alone. */
+export function scopeOffers(item: Pick<InboxItem, "flowStep" | "repo" | "repoPath">): ScopeOffer[] {
+  const repo: ScopeOffer = { kind: "repo", label: scopeWords({ kind: "repo", path: item.repoPath ?? item.repo }) };
+  if (!item.flowStep) return [repo];
+  const { workflow, step } = item.flowStep;
+  return [
+    { kind: "step", label: scopeWords({ kind: "step", workflow, step }) },
+    { kind: "workflow", label: scopeWords({ kind: "workflow", workflow }) },
+    repo,
+  ];
+}
 
 /** what the chip says on the tooltip: "2 waiting on you: …" */
 export function inboxTitle(items: readonly InboxItem[]): string {

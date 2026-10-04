@@ -46,6 +46,7 @@ import type {
   PushAccess,
   Release,
   Repo,
+  RememberedRule,
   Run,
   RunAction,
   RunAnswer,
@@ -518,11 +519,16 @@ export const api = {
       b,
       await req<Run>(b, "/api/runs/answer", {
         method: "POST",
-        body: JSON.stringify({ id: plain, promptId, answer }),
+        // the device, which a remembered rule keeps as who remembered it
+        body: JSON.stringify({ id: plain, promptId, answer, client: clientId() }),
       }),
       qRun,
     );
   },
+  /** a backend's remembered rules, which answer its runs' permissions */
+  remembered: (b: string = homeName()) => req<{ rules: RememberedRule[] }>(b, "/api/remembered"),
+  forgetRemembered: (b: string, id: string) =>
+    req<{ rules: RememberedRule[] }>(b, "/api/remembered/forget", { method: "POST", body: JSON.stringify({ id }) }),
   stopRun: async (id: string) => {
     const [b, plain] = on(id);
     return from(b, await req<Run>(b, "/api/runs/stop", { method: "POST", body: JSON.stringify({ id: plain }) }), qRun);

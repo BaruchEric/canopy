@@ -669,6 +669,159 @@ body.resizing iframe {
 .inbox-body .ask {
   margin: 0;
 }
+/* the inbox's own head: its label and its gear, outside the zoom so the
+   gear stays put while what is under it grows */
+.inbox-top {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px 0 14px;
+}
+.inbox-top .panel-label {
+  flex: 1;
+  margin: 0;
+}
+.inbox-top .gear {
+  opacity: 0.8;
+}
+.inbox-zoom > .settings-row:first-child {
+  padding-top: 4px;
+}
+
+/* a permission in plain words: the agent's line, canopy's reading, the flags */
+.ask-explain {
+  display: grid;
+  gap: 4px;
+}
+.ask-says {
+  margin: 0;
+  color: var(--ink);
+  font-size: 13px;
+  line-height: 1.4;
+}
+.ask-reads {
+  margin: 0;
+  color: var(--ink-dim);
+  font-size: 12px;
+}
+.ask-by {
+  color: var(--ink-faint);
+}
+.ask-flags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin: 2px 0 0;
+  padding: 0;
+  list-style: none;
+}
+.ask-flag {
+  --flag: var(--lichen);
+  padding: 1px 7px;
+  border: 1px solid color-mix(in srgb, var(--flag) 55%, transparent);
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--flag) 10%, transparent);
+  color: var(--flag);
+  font-size: 11px;
+}
+.ask-flag.f-deletes,
+.ask-flag.f-push {
+  --flag: var(--rust);
+}
+.ask-flag.f-network {
+  --flag: var(--sky);
+}
+.ask-flag.f-code {
+  --flag: var(--moss);
+}
+/* the raw command under the plain words, folded or open */
+.ask-raw {
+  display: grid;
+  gap: 4px;
+}
+.ask-fold {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  justify-self: start;
+  padding: 0;
+  color: var(--ink-dim);
+  font-size: 11px;
+}
+.ask-fold:hover,
+.ask-fold:focus-visible {
+  color: var(--ink);
+}
+.ask-size {
+  color: var(--ink-faint);
+}
+.ask-detail.nowrap {
+  white-space: pre;
+  overflow-wrap: normal;
+}
+/* allow and remember: the rule, where it applies, then save */
+.ask-remember {
+  display: grid;
+  gap: 8px;
+  padding: 10px;
+  border: 1px solid color-mix(in srgb, var(--moss) 45%, var(--hair2));
+  border-radius: var(--r);
+  background: color-mix(in srgb, var(--moss) 6%, var(--bark1));
+}
+.ask-remember .eyebrow {
+  color: var(--moss);
+}
+.ask-warn {
+  margin: 0;
+  color: var(--rust);
+  font-size: 12px;
+}
+.ask-choice {
+  display: grid;
+  gap: 2px;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  min-width: 0;
+}
+.ask-choice > legend {
+  padding: 0 0 4px;
+  color: var(--ink-faint);
+  font-size: 11px;
+}
+.ask-opt {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  padding: 3px 6px;
+  border-radius: var(--r);
+  font-size: 12px;
+  cursor: pointer;
+}
+.ask-opt.on {
+  background: color-mix(in srgb, var(--moss) 12%, transparent);
+}
+.ask-opt > input {
+  flex: none;
+  accent-color: var(--moss);
+}
+.ask-opt-text {
+  display: grid;
+  gap: 1px;
+  min-width: 0;
+}
+.ask-opt-text > code {
+  overflow-wrap: anywhere;
+  color: var(--ink);
+}
+.ask-opt-words {
+  overflow-wrap: anywhere;
+  color: var(--ink-dim);
+  font-size: 11px;
+}
+.ask-remember .settings-hint {
+  margin: 0;
+}
 .inbox-glyph.k-advice {
   color: var(--moss);
 }
@@ -2581,6 +2734,30 @@ a.chan-text {
 }
 .gear-note.err {
   color: var(--rust);
+}
+/* something kept, with a forget: a remembered rule and where it applies */
+.gear-forget {
+  gap: 4px;
+  padding: 2px 8px 2px 12px;
+}
+.gear-kept {
+  flex: 1;
+  min-width: 0;
+  display: grid;
+  gap: 1px;
+}
+.gear-kept > .menu-text {
+  overflow-wrap: anywhere;
+}
+.gear-sub {
+  color: var(--ink-faint);
+  font-size: 11px;
+}
+.gear-line {
+  margin: 0;
+  padding: 2px 12px 4px;
+  color: var(--ink-faint);
+  font-size: 12px;
 }
 
 /* ---------- claude sessions, from the claude-history archive ---------- */

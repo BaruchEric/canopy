@@ -13,7 +13,20 @@ export type GearEntry =
       more: (() => void) | null;
       reset: (() => void) | null;
       home?: string;
+      /** what grows and shrinks, when it is not the zoom: "command text" */
+      what?: string;
     }
+  /** something kept that can be dropped: a remembered rule, with a line
+   *  under it saying where it applies */
+  | {
+      type: "forget";
+      label: string;
+      sub?: string;
+      title?: string;
+      forget: () => unknown;
+    }
+  /** a line of text, when a group has nothing else to show */
+  | { type: "note"; label: string }
   /** something to do. `on` marks the current choice of a set; `stay` keeps
    *  the menu open, and whatever `run` resolves to shows at its foot, which
    *  is how a copy or a capture says where it went */
@@ -50,7 +63,7 @@ const MENU_W = 256;
  * `overflow: hidden` cannot clip it. Closed by an outside click or Escape;
  * kept beside its button through scrolls, resizes and zooms.
  */
-export function Gear({ label, groups }: { label: string; groups: GearGroup[] }) {
+export function Gear({ label, groups, hint = "Zoom, layout and sharing" }: { label: string; groups: GearGroup[]; hint?: string }) {
   const [open, setOpen] = useState(false);
   const [pos, setPos] = useState<{ top: number; left: number } | null>(null);
   const [note, setNote] = useState<{ ok: boolean; text: string } | null>(null);
@@ -155,7 +168,7 @@ export function Gear({ label, groups }: { label: string; groups: GearGroup[] }) 
         aria-label={`Settings for ${label}`}
         aria-haspopup="menu"
         aria-expanded={open}
-        title="Zoom, layout and sharing"
+        title={hint}
         onClick={(e) => {
           e.stopPropagation();
           setPos(null);
@@ -194,7 +207,7 @@ export function Gear({ label, groups }: { label: string; groups: GearGroup[] }) 
                 <div key={g.label} className="gear-group" role="group" aria-label={g.label}>
                   <p className="menu-label">{g.label}</p>
                   {g.entries.map((entry) => (
-                    <Entry key={`${entry.type}:${entry.label}`} entry={entry} act={act} />
+                    <Entry key={`${entry.type}:${entry.label}${entry.type === "forget" ? `:${entry.sub ?? ""}` : ""}`} entry={entry} act={act} />
                   ))}
                 </div>
               ))}
@@ -219,7 +232,7 @@ function Entry({ entry, act }: { entry: GearEntry; act: (fn: () => unknown, stay
           <button
             type="button"
             role="menuitem"
-            aria-label="Zoom out"
+            aria-label={entry.what ? `Smaller ${entry.what}` : "Zoom out"}
             disabled={!entry.less}
             onClick={() => entry.less && act(entry.less, true)}
           >
@@ -229,8 +242,8 @@ function Entry({ entry, act }: { entry: GearEntry; act: (fn: () => unknown, stay
             type="button"
             role="menuitem"
             className="gear-zoom-value"
-            title="Back to 100%"
-            aria-label={`Zoom ${entry.value}, back to ${entry.home ?? "100%"}`}
+            title={`Back to ${entry.home ?? "100%"}`}
+            aria-label={`${entry.what ? `${entry.what[0]?.toUpperCase()}${entry.what.slice(1)}` : "Zoom"} ${entry.value}, back to ${entry.home ?? "100%"}`}
             disabled={!entry.reset}
             onClick={() => entry.reset && act(entry.reset, true)}
           >
@@ -239,7 +252,7 @@ function Entry({ entry, act }: { entry: GearEntry; act: (fn: () => unknown, stay
           <button
             type="button"
             role="menuitem"
-            aria-label="Zoom in"
+            aria-label={entry.what ? `Larger ${entry.what}` : "Zoom in"}
             disabled={!entry.more}
             onClick={() => entry.more && act(entry.more, true)}
           >
@@ -265,6 +278,20 @@ function Entry({ entry, act }: { entry: GearEntry; act: (fn: () => unknown, stay
           </span>
           <span className="menu-text">{entry.label}</span>
         </button>
+      );
+    case "note":
+      return <p className="gear-line">{entry.label}</p>;
+    case "forget":
+      return (
+        <div className="gear-row gear-forget">
+          <span className="gear-kept" title={entry.title ?? entry.label}>
+            <span className="menu-text">{entry.label}</span>
+            {entry.sub && <span className="gear-sub">{entry.sub}</span>}
+          </span>
+          <button type="button" role="menuitem" className="gear-move" aria-label={`Forget ${entry.label}`} title="Forget it: this asks again" onClick={() => act(entry.forget, true)}>
+            ✕
+          </button>
+        </div>
       );
     case "row":
       return (

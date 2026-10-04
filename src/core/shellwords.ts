@@ -3,6 +3,8 @@
  *  matches it with. Codex's approvals, a run's own allowlist and the
  *  remembered rules (`remember.ts`) all read commands through here. */
 
+import type { RememberScope } from "./types";
+
 /* ---------- shell words: what an approval's command actually runs ---------- */
 
 /** A command line as words, the way a POSIX shell would split it, or null
@@ -205,6 +207,13 @@ export function ruleOffer(tool: string, command?: string): RuleOffer | null {
 
 /** tools whose remembered rule covers files inside the project only */
 const FILE_TOOLS = new Set(["Edit", "Write", "MultiEdit", "NotebookEdit", "Read", "NotebookRead", "Glob", "Grep"]);
+
+/** Where a remembered rule applies, in words. */
+export function scopeWords(s: RememberScope): string {
+  if (s.kind === "step") return `${s.workflow} · ${s.step}, in every project`;
+  if (s.kind === "workflow") return `every step of ${s.workflow}`;
+  return `runs in ${s.path.replace(/\/+$/, "").split("/").pop() || s.path}`;
+}
 
 /** A rule in words, for the remember line and the gear's list. */
 export function ruleWords(rule: string): string {

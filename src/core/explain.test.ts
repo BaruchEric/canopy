@@ -1,7 +1,19 @@
 import { describe, expect, test } from "bun:test";
-import { explainCommand, explainPrompt, splitShell } from "./explain";
+import { explainCommand, explainPrompt, splitShell, startsOutside } from "./explain";
 
 const ROOT = "/home/me/dev/proj";
+
+describe("startsOutside", () => {
+  test("a request that runs or touches files outside the project, which no remembered rule answers", () => {
+    expect(startsOutside({ tool: "Bash", title: "", command: "git push", cwd: "/tmp/elsewhere" }, ROOT)).toBe(true);
+    expect(startsOutside({ tool: "Bash", title: "", command: "git push", cwd: `${ROOT}/sub` }, ROOT)).toBe(false);
+    expect(startsOutside({ tool: "Bash", title: "", command: "git push" }, ROOT)).toBe(false);
+    expect(startsOutside({ tool: "Edit", title: "", paths: ["/etc/hosts"] }, ROOT)).toBe(true);
+    expect(startsOutside({ tool: "Edit", title: "", paths: [`${ROOT}/a.ts`] }, ROOT)).toBe(false);
+    // no project folder to judge by (a remote repo): the server decides
+    expect(startsOutside({ tool: "Bash", title: "", command: "ls", cwd: "/tmp" })).toBe(false);
+  });
+});
 
 describe("splitShell", () => {
   test("splits on chains, pipes and newlines, keeping quoted text whole", () => {

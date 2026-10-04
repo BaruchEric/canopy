@@ -3,11 +3,16 @@ import { useShallow } from "zustand/react/shallow";
 import type { AdviceOffer, Ask } from "../../../src/core/types";
 import { joinTarget } from "../agentcards";
 import { api } from "../api";
-import { askWord, detailText, endingWord, inboxTick, inboxTitle, leftWord, recentAsks, type InboxAnswer, type InboxItem } from "../inbox";
+import { startsOutside } from "../../../src/core/explain";
+import { ruleOffer, ruleWords, scopeWords } from "../../../src/core/shellwords";
+import { askWord, detailText, endingWord, inboxTick, inboxTitle, leftWord, recentAsks, scopeOffers, type InboxAnswer, type InboxItem } from "../inbox";
 import { useFitPop } from "../pop";
 import { qual } from "../registry";
+import { INBOX_TEXT } from "../settings";
 import { canAnswer as canAnswerHere, inboxItems, useStore } from "../store";
-import { PermissionForm, Questions } from "./Prompts";
+import { Gear, type GearEntry, type GearGroup } from "./Gear";
+import { PermissionForm, plainWords, Questions, useCommandView, type RememberChoice } from "./Prompts";
+import { useZoom, zoomStyle } from "./Surface";
 
 const errText = (err: unknown) => String(err instanceof Error ? err.message : err);
 
@@ -153,6 +158,16 @@ function InboxRow({
 
   const heading = item.source === "ask" ? `${item.who} ${item.kind === "guard" ? "hit a guard; it waits for you" : "wants to run"}` : `${item.who} wants to run`;
   const detail = item.source === "ask" ? detailText(item.detail) : item.detail;
+  const view = useCommandView();
+  const permission = item.permission;
+  const root = item.repoPath ?? card?.cwd ?? undefined;
+  const explain = permission ? plainWords(permission, root) : undefined;
+  // a remember answers a run's permission only (an ask's hook has its own
+  // "allow always"), and never one outside the project, which no rule answers
+  const offer = item.source === "run" && permission && !startsOutside(permission, root) ? ruleOffer(permission.tool, permission.command) : null;
+  const remember: RememberChoice | undefined = offer
+    ? { offer, scopes: scopeOffers(item), onRemember: (r) => answer({ behavior: "allow", remember: r }) }
+    : undefined;
 
   return (
     <li className={`inbox-item${open ? " open" : ""}${left !== null && left <= 0 ? " late" : ""}`} data-key={item.key}>
@@ -266,8 +281,11 @@ function InboxRow({
           ) : (
             <PermissionForm
               heading={heading}
-              detail={detail}
+              detail={item.source === "ask" && permission?.command ? permission.command : detail}
               busy={busy}
+              view={view}
+              {...(explain ? { explain } : {})}
+              {...(remember ? { remember } : {})}
               onAllow={() => answer({ behavior: "allow" })}
               {...(item.source === "run"
                 ? { always: { label: "allow all for this run", title: "Every later request in this run passes without asking", onClick: () => answer({ behavior: "allow", always: true }) } }
@@ -354,13 +372,20 @@ export function InboxChip({ onGit }: { onGit?: () => void } = {}) {
   // the clocks move whenever the inbox is open: a countdown by the second,
   // a waiting run's or gate's age more slowly
   const now = useNow(open, inboxTick(items));
-  useFitPop(ref, open);
+  const { zoom, entry: zoomEntry } = useZoom("inbox");
+  const gear = useInboxGear(zoomEntry);
+  useFitPop(ref, open, zoom);
 
   useEffect(() => {
     if (!open) return;
     setPicked(null);
+    // the rules a remember kept, read fresh: another device may have added some
+    void useStore.getState().loadRemembered();
     const onDown = (e: PointerEvent) => {
-      if (!ref.current?.contains(e.target as Node)) closeInbox();
+      const t = e.target;
+      // the gear's menu sits in a portal outside the inbox; a click in it stays in
+      if (!(t instanceof Node) || (t instanceof Element && t.closest(".gear-pop"))) return;
+      if (!ref.current?.contains(t)) closeInbox();
     };
     const onKey = (e: KeyboardEvent) => {
       if (e.key === "Escape") closeInbox();
@@ -403,9 +428,13 @@ export function InboxChip({ onGit }: { onGit?: () => void } = {}) {
         <span aria-hidden="true">?</span> {items.length || ""}
       </button>
       {open && (
-        <div className="settings-pop inbox-pop" role="dialog" aria-label="Waiting on you">
-          <section className="settings-row">
+        <div className="settings-pop inbox-pop" role="dialog" aria-label="Waiting on you" style={zoom === 1 ? undefined : { width: Math.round(460 * zoom) }}>
+          <div className="inbox-top">
             <h3 className="panel-label">waiting on you</h3>
+            <Gear label="the inbox" hint="Zoom, the command's text, and the rules you remembered" groups={gear} />
+          </div>
+          <div className="inbox-zoom" style={zoomStyle(zoom)}>
+          <section className="settings-row">
             {goneFocus && <GoneAsk id={goneFocus} />}
             <AdviceFile />
             {items.length === 0 ? (
@@ -465,8 +494,57 @@ export function InboxChip({ onGit }: { onGit?: () => void } = {}) {
               {err && <p className="settings-hint error">{err}</p>}
             </section>
           )}
+          </div>
         </div>
       )}
     </div>
   );
+}
+
+/** The inbox's gear: its zoom; the raw command's text size, wrap and fold;
+ *  and every shown backend's remembered rules, each with a forget. */
+function useInboxGear(zoom: GearEntry): GearGroup[] {
+  const { text, wrap, fold } = useCommandView();
+  const setSetting = useStore((s) => s.setSetting);
+  const remembered = useStore((s) => s.remembered);
+  const order = useStore(useShallow((s) => s.backendOrder));
+  const forgetRemembered = useStore((s) => s.forgetRemembered);
+  const several = order.filter((b) => (remembered[b]?.length ?? 0) > 0).length > 1;
+  const rules = order.flatMap((b) =>
+    (remembered[b] ?? []).map(
+      (r): GearEntry => ({
+        type: "forget",
+        label: ruleWords(r.rule),
+        sub: `${scopeWords(r.scope)}${several ? ` · ${b}` : ""}`,
+        title: [r.rule, r.from ? `first for: ${r.from}` : "", r.by ? `by ${r.by}` : ""].filter(Boolean).join("\n"),
+        forget: () => forgetRemembered(b, r.id).then(() => `Forgot ${r.rule}: it asks again`),
+      }),
+    ),
+  );
+  return [
+    { label: "inbox", entries: [zoom] },
+    {
+      label: "the command",
+      entries: [
+        {
+          type: "zoom",
+          label: "text",
+          what: "command text",
+          value: `${text}px`,
+          less: text > INBOX_TEXT.min ? () => setSetting("inboxText", text - 1) : null,
+          more: text < INBOX_TEXT.max ? () => setSetting("inboxText", text + 1) : null,
+          reset: text !== INBOX_TEXT.size ? () => setSetting("inboxText", INBOX_TEXT.size) : null,
+          home: `${INBOX_TEXT.size}px`,
+        },
+        { type: "item", label: "wrap long lines", on: wrap, stay: true, run: () => setSetting("inboxWrap", true) },
+        { type: "item", label: "one line, scroll sideways", on: !wrap, stay: true, run: () => setSetting("inboxWrap", false) },
+        { type: "item", label: "folded at first", on: fold, stay: true, title: "Under the plain words, the raw command starts folded", run: () => setSetting("inboxFold", true) },
+        { type: "item", label: "always shown", on: !fold, stay: true, run: () => setSetting("inboxFold", false) },
+      ],
+    },
+    {
+      label: "remembered rules",
+      entries: rules.length ? rules : [{ type: "note", label: "Nothing remembered yet. Allow and remember, on a run's request, keeps a rule here." }],
+    },
+  ];
 }
