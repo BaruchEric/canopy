@@ -42,7 +42,7 @@ import { splitArgs } from "./agent";
 import { sweepCodexTrust } from "./codextrust";
 import { bunSpawn, RpcClient, RpcClosed, RpcError, type RpcExit, type RpcRequest, type RpcSpawn } from "./codexrpc";
 import { spawnEnv, type DriveAgent, type DriveCtx, type DriveResult, type DriveTokens, type PromptInput, type RunDriver } from "./driver";
-import { commandWords, parseRule, unwrapShell, type ToolRule } from "./shellwords";
+import { commandWords, EDIT_TOOLS, parseRule, unwrapShell, type ToolRule } from "./shellwords";
 import type { RunAnswer, RunQuestion, RunStep, RunTool } from "./types";
 
 /** characters of tool output kept per step, as for a Claude run */
@@ -271,8 +271,6 @@ export type ApprovalFacts =
   | { kind: "fileChange"; paths: string[] | null; grantRoot: string | null }
   | { kind: "other" };
 
-const EDIT_TOOLS = new Set(["Edit", "Write", "MultiEdit"]);
-
 /** Whether the rules let a run edit files at all: a bare `Edit`, `Write` or
  *  `MultiEdit`. */
 export function allowsEdits(rules: readonly string[]): boolean {
@@ -434,14 +432,41 @@ export function approvalPrompt(
   const prompt = approvalPromptOf(method, params, item, root, reason, why);
   if (prompt.kind !== "permission") return prompt;
   // a remembered rule must never let a command out of the sandbox, and an
-  // older approval's facts are not what canopy matches a rule on
+  // older approval's facts are not what canopy matches a rule on. Codex marks
+  // no escalation in its own fields (0.159's protocol), so this fails closed:
+  // only a request canopy reads as plainly inside the sandbox may be answered
   const noRule =
     method === "item/commandExecution/requestApproval" && ESCALATION.test(reason)
       ? "it asks to run outside codex's sandbox, which is granted one time at a time"
       : method === "execCommandApproval" || method === "applyPatchApproval"
         ? "an older codex approval, which canopy cannot match a rule against"
-        : null;
+        : plainInSandbox(method, params)
+          ? null
+          : NOT_PLAIN;
   return noRule ? { ...prompt, noRule } : prompt;
+}
+
+/** why a request canopy cannot read as plainly inside the sandbox keeps no rule */
+export const NOT_PLAIN = "codex did not ask it as a plain request inside its sandbox, so no remembered rule answers it";
+
+/** Whether an approval is one canopy recognises as a plain request inside
+ *  Codex's sandbox: a command with no reason, no network context or
+ *  amendment, no callback of its own and no extra permissions, or a file
+ *  change with no reason and no wider grant. Anything else, a field Codex
+ *  adds later included, is not. */
+function plainInSandbox(method: string, params: Record<string, unknown>): boolean {
+  const empty = (k: string): boolean => {
+    const v = params[k];
+    return v === undefined || v === null || v === "" || (Array.isArray(v) && v.length === 0);
+  };
+  if (!empty("reason")) return false;
+  if (method === "item/commandExecution/requestApproval") {
+    const kind = str(params, "kind");
+    if (kind !== "" && kind !== "command") return false;
+    return ["networkApprovalContext", "approvalId", "proposedNetworkPolicyAmendments", "additionalPermissions", "permissions", "sandboxPermissions"].every(empty);
+  }
+  if (method === "item/fileChange/requestApproval") return empty("grantRoot");
+  return false;
 }
 
 function approvalPromptOf(

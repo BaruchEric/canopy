@@ -17,6 +17,7 @@ import {
   configFlags,
   escalationNote,
   itemTool,
+  NOT_PLAIN,
   parseRule,
   questionPrompt,
   questionReply,
@@ -386,6 +387,7 @@ describe("approvals and questions", () => {
       command: "git push",
       cwd: "/other",
       description: "needs the network",
+      noRule: NOT_PLAIN,
     });
     // the sandbox's retry line is not the agent's reason
     expect(
@@ -404,6 +406,7 @@ describe("approvals and questions", () => {
       title: "edit a.ts, and write access under /etc",
       detail: "a.ts\n-a\n+b\n\nalso asks to write anywhere under /etc for the rest of the run",
       paths: ["/r/a.ts"],
+      noRule: NOT_PLAIN,
     });
     expect(
       approvalPrompt("item/permissions/requestApproval", { permissions: { network: { enabled: true }, fileSystem: { write: ["/r/out"] } } }, null, "/r"),
@@ -420,6 +423,27 @@ describe("approvals and questions", () => {
     expect(patch.kind === "permission" && patch.noRule).toBeTruthy();
     const plain = approvalPrompt("item/commandExecution/requestApproval", { command: "ls", cwd: "/r" }, null, "/r");
     expect(plain).not.toHaveProperty("noRule");
+  });
+
+  test("a remembered rule answers only what codex plainly asks inside its sandbox; anything else fails closed", () => {
+    const m = "item/commandExecution/requestApproval";
+    const noRule = (method: string, params: Record<string, unknown>, item: Record<string, unknown> | null = null) => {
+      const p = approvalPrompt(method, params, item, "/r");
+      return p.kind === "permission" ? (p.noRule ?? null) : "a question";
+    };
+    expect(noRule(m, { command: "ls", cwd: "/r" })).toBeNull();
+    expect(noRule(m, { command: "ls", kind: "command", reason: null, approvalId: null })).toBeNull();
+    // any reason: a retry line in other words, a model's justification for running unsandboxed
+    expect(noRule(m, { command: "ls", reason: "needs to write outside the workspace" })).toBe(NOT_PLAIN);
+    expect(noRule(m, { command: "ls", reason: "Command failed; RETRY WITHOUT SANDBOX?" })).toContain("sandbox");
+    expect(noRule(m, { command: "ls", approvalId: "u-1" })).toBe(NOT_PLAIN);
+    expect(noRule(m, { command: "ls", kind: "writeStdin" })).toBe(NOT_PLAIN);
+    expect(noRule(m, { command: "ls", kind: "somethingNew" })).toBe(NOT_PLAIN);
+    expect(noRule(m, { command: "ls", proposedNetworkPolicyAmendments: [{ host: "a.com" }] })).toBe(NOT_PLAIN);
+    expect(noRule(m, { command: "ls", additionalPermissions: { network: null } })).toBe(NOT_PLAIN);
+    const item = { changes: [{ path: "/r/a.ts", kind: { type: "update", move_path: null }, diff: "" }] };
+    expect(noRule("item/fileChange/requestApproval", {}, item)).toBeNull();
+    expect(noRule("item/fileChange/requestApproval", { reason: "extra write access" }, item)).toBe(NOT_PLAIN);
   });
 
   test("a command asking to leave the sandbox gets a note; nothing else does", () => {
@@ -756,6 +780,8 @@ describe("a Codex run", () => {
       command: "git push",
       cwd: "/elsewhere",
       description: "needs the network",
+      // it gives a reason: not a plain request inside the sandbox
+      noRule: NOT_PLAIN,
     });
     d.ctx.answer("p1", { kind: "allow" });
     await d.until(d.ended, "the end");

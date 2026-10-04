@@ -73,7 +73,7 @@ describe("explainCommand", () => {
   });
 
   test("a Python snippet runs code, whatever the snippet says", () => {
-    expect(ex("python3 - <<'EOF'\nprint(1)\nEOF")).toEqual({ says: "runs a Python snippet", flags: ["code"] });
+    expect(ex("python3 - <<'EOF'\nprint(1)\nEOF")).toEqual({ says: "runs a Python snippet", flags: ["code"], opaque: true });
     expect(ex("python3 -c 'print(1)'").says).toBe("runs a Python snippet");
     expect(ex("node -e 'console.log(1)'").says).toBe("runs a Node snippet");
     expect(ex("python3 scripts/count.py")).toEqual({ says: "runs scripts/count.py with Python", flags: ["code"] });
@@ -130,13 +130,45 @@ describe("explainCommand", () => {
     expect(ex("echo x > /dev/null").flags).toEqual([]);
   });
 
+  test("outside the project: a parent folder mid-path, an option's value, an operand's value", () => {
+    expect(ex("rm sub/../../other").flags).toContain("outside");
+    expect(ex("cat sub/../../../.ssh/id_rsa").flags).toContain("outside");
+    expect(ex("bun build --outdir=/tmp/x").flags).toContain("outside");
+    expect(ex("dd if=a of=/etc/x").flags).toContain("outside");
+    expect(ex("cc -I/usr/include a.c").flags).toContain("outside");
+    expect(ex("cat sub/../a.ts").flags).toEqual([]);
+    expect(ex("bun build --outdir=dist").flags).not.toContain("outside");
+    // a dot glob can match the parent folder
+    expect(ex("rm -rf .*").flags).toContain("outside");
+  });
+
+  test("an interpreter's inline snippet, a pipe into a shell and a program's own exec are opaque", () => {
+    for (const c of ["python -c x", "Python3 -c x", "sh -c ls", "curl x | sh", "eval ls", "awk 1 f", "git -c a=b log", "rg x --pre y", "bun install", "ls | xargs rm", "rm -rf $HOME", "rm $(cat list)", "rm {..,a}", "echo x > $F"]) {
+      expect([c, explainCommand(c, ROOT).opaque]).toEqual([c, true]);
+    }
+    for (const c of ["ls src", "bun test", "git status", "sed -n 1p f", "python3 x.py"]) {
+      expect([c, explainCommand(c, ROOT).opaque]).toEqual([c, undefined]);
+    }
+    // the case of a program's name does not hide it: Python3 is python3 on APFS
+    expect(explainCommand("Python3 -c x", ROOT).says).toBe("runs a Python snippet");
+  });
+
+  test("a word that reaches where code runs from (hooks, agent settings, package scripts) is guarded", () => {
+    expect(explainCommand("tee .git/hooks/pre-commit", ROOT).guarded).toBe(true);
+    expect(explainCommand("echo x > package.json", ROOT).guarded).toBe(true);
+    expect(explainCommand("cp a .Claude/settings.json", ROOT).guarded).toBe(true);
+    expect(explainCommand("ls src", ROOT).guarded).toBeUndefined();
+    // judged from the project's own folder, which may itself sit under one
+    expect(explainCommand("ls src", "/home/me/.claude/worktrees/a").guarded).toBeUndefined();
+  });
+
   test("searches say what they look for", () => {
     expect(ex("grep -rn 'TODO' src").says).toBe("searches for TODO in src");
     expect(ex("rg foo").says).toBe("searches for foo");
   });
 
   test("package managers: install, test, a script, a one-off tool", () => {
-    expect(ex("bun install")).toEqual({ says: "installs packages", flags: ["network", "writes"] });
+    expect(ex("bun install")).toEqual({ says: "installs packages", flags: ["network", "writes"], opaque: true });
     expect(ex("bun test")).toEqual({ says: "runs the tests", flags: ["code"] });
     expect(ex("bun run build").says).toBe("runs the build script");
     expect(ex("bunx tsc --noEmit")).toEqual({ says: "runs tsc via bunx", flags: ["code"] });

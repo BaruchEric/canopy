@@ -5,6 +5,8 @@
  *  imports. The reading is a guide, never a guarantee; the raw command
  *  stays on screen beside it. */
 
+import { execOption, progName } from "./shellwords";
+
 /** What a human deciding on a prompt would want flagged, in the order shown. */
 export const EXPLAIN_FLAGS = ["deletes", "push", "commit", "outside", "network", "writes", "code"] as const;
 export type ExplainFlag = (typeof EXPLAIN_FLAGS)[number];
@@ -26,6 +28,14 @@ export interface Explained {
   /** canopy has no reading of its own for some step ("runs frobnicate"),
    *  so the raw command shows unfolded */
   vague?: true;
+  /** some step runs code canopy cannot read (an inline snippet, a pipe into
+   *  a shell, a program's own exec option, a wrapper that hides what runs):
+   *  a bare `Bash` rule never covers it */
+  opaque?: true;
+  /** some step that writes or runs code names a place code runs from (git's
+   *  hooks and config, an agent's settings, package scripts): no remembered
+   *  rule covers it */
+  guarded?: true;
 }
 
 /* ---------- splitting: a command line into its simple commands ---------- */
@@ -290,8 +300,52 @@ function outsidePath(p: string, w: Where): boolean {
   return !inside(norm(p, w.cwd), w.root);
 }
 
-/** A word that looks like a path a command reaches, worth an outside check. */
-const pathy = (word: string): boolean => /^(\/|~|\.\.(\/|$))/.test(word);
+/** A word that may name a path a command reaches, worth an outside check:
+ *  anything with a slash (`sub/../../x` climbs out mid-word), a home path,
+ *  a bare parent folder. */
+const pathy = (word: string): boolean => word.startsWith("~") || word.includes("/") || word === "..";
+
+/** The places one argument may name: the word itself, an option's value
+ *  (`--out=/x`, `-I/x`), an operand's value (dd's `of=/x`), a curl
+ *  `@file`, and each part of a colon list (`--path=a:/x`). */
+export function reaches(arg: string): string[] {
+  const out: string[] = [];
+  const eq = arg.indexOf("=");
+  if (arg.startsWith("--")) {
+    if (eq !== -1) out.push(arg.slice(eq + 1));
+  } else if (arg.startsWith("-")) {
+    if (arg.length > 2) out.push(arg.slice(2));
+  } else {
+    out.push(arg);
+    if (eq !== -1) out.push(arg.slice(eq + 1));
+  }
+  const more: string[] = [];
+  for (const v of out) {
+    if (v.startsWith("@")) more.push(v.slice(1));
+    if (v.includes(":") && !v.includes("://")) more.push(...v.split(":"));
+  }
+  return [...out, ...more].filter((v) => v !== "");
+}
+
+/** folders in a project whose files run code when git, an editor, a package
+ *  manager, an agent or canopy reads them */
+const GUARDED_DIRS = new Set([".git", ".canopy", ".claude", ".codex", ".vscode", ".husky", ".githooks", ".devcontainer", ".idea"]);
+/** files that do the same: package scripts and the settings that name a program */
+const GUARDED_FILES = new Set(["package.json", ".npmrc", ".yarnrc", ".yarnrc.yml", "bunfig.toml", ".envrc", ".gitmodules"]);
+
+/** Whether a path (absolute, or against `cwd`) is in a place code runs
+ *  from, judged by its parts below the project's own folder (which may sit
+ *  under a `.claude` itself); with no project, or outside it, by every
+ *  part of the path as written. Case is folded: APFS finds `.GIT` as `.git`. */
+export function guardedPath(p: string, root: string | null, cwd: string = root ?? "/"): boolean {
+  const abs = norm(p, cwd);
+  const r = root ? norm(root, "/") : null;
+  const segs = (r && inside(abs, r) ? abs.slice(r.length) : p).split("/");
+  return segs.some((x) => {
+    const low = x.toLowerCase();
+    return GUARDED_DIRS.has(low) || GUARDED_FILES.has(low);
+  });
+}
 
 /* ---------- reading one simple command ---------- */
 
@@ -303,6 +357,10 @@ interface Part {
   flags?: ExplainFlag[];
   /** no reading of canopy's own: the program's name and nothing more */
   vague?: true;
+  /** runs code canopy cannot read (`Explained.opaque`) */
+  opaque?: true;
+  /** names a place code runs from (`Explained.guarded`) */
+  guarded?: true;
 }
 
 const part = (key: string, one: string, many?: (n: number) => string, flags?: ExplainFlag[]): Part => ({
@@ -317,6 +375,9 @@ const vaguePart = (key: string, one: string, flags?: ExplainFlag[]): Part => ({ 
 
 /** only flags, no words: what a step also does */
 const flagPart = (...flags: ExplainFlag[]): Part => part("", "", undefined, flags);
+
+/** no words: code runs that canopy cannot read */
+const OPAQUE: Part = { key: "", one: "", opaque: true };
 
 const plural = (n: number, word: string) => `${n} ${word}${n === 1 ? "" : "s"}`;
 
@@ -352,7 +413,47 @@ const LANG: Record<string, string> = {
   osascript: "AppleScript",
 };
 
-const SHELLS = new Set(["sh", "bash", "zsh", "dash", "fish"]);
+const SHELLS = new Set(["sh", "bash", "zsh", "dash", "fish", "ksh", "csh", "tcsh"]);
+
+/** programs whose run canopy cannot read from their words: privilege and
+ *  remote wrappers, programs that take a program (awk, an editor, a
+ *  multiplexer), and ones that act outside the project without naming a path */
+const OPAQUE_PROGRAMS = new Set([
+  "sudo", "doas", "su", "watch", "ssh", "mosh", "parallel", "flock", "chroot", "strace", "dtrace", "script", "builtin",
+  "eval", "source", ".", "awk", "gawk", "nawk", "mawk", "xargs", "vi", "vim", "nvim", "emacs", "ed", "ex", "tmux", "screen",
+  "lua", "rscript", "tclsh", "expect", "gdb", "lldb", "crontab", "at", "batch", "defaults", "launchctl", "systemctl", "open", "xdg-open",
+]);
+
+/** A sed script canopy can read: printing, deleting, quitting and plain
+ *  substitutions by line or pattern. Anything else (`w` a file, `e` a
+ *  command, `r` a file, a substitution with the `w` or `e` flag) is not. */
+function plainSed(script: string): boolean {
+  const addr = String.raw`(?:\d+|\$|/(?:\\.|[^/\\])*/)?(?:,(?:\d+|\$|/(?:\\.|[^/\\])*/))?\s*!?\s*`;
+  return script.split(/[;\n]/).every((raw) => {
+    const piece = raw.trim();
+    if (piece === "" || new RegExp(`^${addr}[pdqPD=]?$`).test(piece)) return true;
+    const m = new RegExp(`^${addr}([sy])(.)`).exec(piece);
+    if (!m) return false;
+    const d = (m[2] ?? "").replace(/[.*+?^${}()|[\]\\/]/g, "\\$&");
+    const body = `(?:\\\\.|[^${d}\\\\])*`;
+    return new RegExp(`^${addr}[sy]${d}${body}${d}${body}${d}${m[1] === "s" ? "[gpiI0-9]*" : ""}$`).test(piece);
+  });
+}
+
+/** Whether a sed run is one `plainSed` reads: its scripts plain and none from a file. */
+function sedPlain(args: readonly string[]): boolean {
+  if (args.some((a) => a === "-f" || a.startsWith("--file") || /^-[a-zA-Z]*f/.test(a))) return false;
+  const scripts: string[] = [];
+  for (let i = 0; i < args.length; i++) {
+    const a = args[i] ?? "";
+    if (a === "-e" || a === "--expression") scripts.push(args[++i] ?? "");
+    else if (a.startsWith("--expression=")) scripts.push(a.slice("--expression=".length));
+  }
+  // the first operand that says anything: BSD sed -i takes an empty suffix first
+  if (scripts.length === 0) scripts.push(operands(args, ["-l"]).find((a) => a !== "") ?? "");
+  return scripts.every(plainSed);
+}
+
 const WRAPPERS = new Set(["sudo", "env", "time", "nohup", "nice", "timeout", "command", "exec", "doas", "stdbuf"]);
 
 /** What a short program with nothing much to say does, and no flags. */
@@ -524,10 +625,22 @@ function packagePart(prog: string, args: readonly string[]): Part[] {
   return [vaguePart(prog, `runs ${prog}`, ["code"])];
 }
 
-/** What one simple command does, as parts. `w.cwd` moves with a `cd`. */
+/** What one simple command does, as parts, marked `guarded` when it writes
+ *  or runs code and a word of it names a place code runs from. */
 function commandParts(cmd: SimpleCommand, w: Where, root: string | null): Part[] {
+  const from = w.cwd;
+  const parts = commandPartsOf(cmd, w, root);
+  const risky = parts.some((p) => p.vague || p.opaque || p.flags?.some((f) => f === "writes" || f === "deletes" || f === "code"));
+  const named = [...cmd.words.flatMap(reaches), ...cmd.writes, ...cmd.reads];
+  if (risky && named.some((x) => guardedPath(x, root, from))) parts.push({ key: "", one: "", guarded: true });
+  return parts;
+}
+
+/** What one simple command does, as parts. `w.cwd` moves with a `cd`. */
+function commandPartsOf(cmd: SimpleCommand, w: Where, root: string | null): Part[] {
   let words = cmd.words.filter((x) => x !== "");
   let who: string | null = null;
+  const hidden: Part[] = [];
   // env assignments and wrappers run what follows them
   for (;;) {
     const first = words[0] ?? "";
@@ -537,11 +650,16 @@ function commandParts(cmd: SimpleCommand, w: Where, root: string | null): Part[]
       words = words.slice(1);
       continue;
     }
-    if (WRAPPERS.has(first)) {
+    const name = progName(first);
+    // root, a split string, a remote shell: what runs is not these words
+    if (OPAQUE_PROGRAMS.has(name) || (name === "env" && words.some((x) => x === "-S" || x.startsWith("--split-string") || /^-[a-zA-Z]*S/.test(x)))) hidden.push(OPAQUE);
+    // a variable, a substitution or a brace list: the words are not what runs
+    if (words.some((x) => /[$`]/.test(x) || (x.includes("{") && /,|\.\./.test(x)))) hidden.push(OPAQUE);
+    if (WRAPPERS.has(name)) {
       let k = 1;
-      while (k < words.length && ((words[k] ?? "").startsWith("-") || /^[A-Za-z_]\w*=/.test(words[k] ?? "") || (first === "timeout" && /^\d/.test(words[k] ?? "")))) {
-        if (first === "sudo" && (words[k] === "-u" || words[k] === "-g")) k++;
-        if (first === "nice" && words[k] === "-n") k++;
+      while (k < words.length && ((words[k] ?? "").startsWith("-") || /^[A-Za-z_]\w*=/.test(words[k] ?? "") || (name === "timeout" && /^\d/.test(words[k] ?? "")))) {
+        if (name === "sudo" && (words[k] === "-u" || words[k] === "-g")) k++;
+        if (name === "nice" && words[k] === "-n") k++;
         k++;
       }
       words = words.slice(k);
@@ -549,9 +667,14 @@ function commandParts(cmd: SimpleCommand, w: Where, root: string | null): Part[]
     }
     break;
   }
-  const parts: Part[] = [];
+  const parts: Part[] = [...hidden];
+  // a program's own way to run another: `rg --pre`, `git -c`, `bun install`
+  if (words.length && execOption(words) !== null) parts.push(OPAQUE);
+  if ([...cmd.writes, ...cmd.reads].some((x) => /[$`]/.test(x))) parts.push(OPAQUE);
   const flagOutside = (p: string) => {
-    if (pathy(p) && outsidePath(p, w)) parts.push(part("outside", "", undefined, ["outside"]));
+    // `.*` matches `..` in some shells
+    const out = (x: string) => /(^|\/)\.[*?[]/.test(x) || (pathy(x) && outsidePath(x, w));
+    if (reaches(p).some(out)) parts.push(part("outside", "", undefined, ["outside"]));
   };
   for (const t of cmd.writes) {
     if (t.startsWith("/dev/")) continue;
@@ -562,29 +685,36 @@ function commandParts(cmd: SimpleCommand, w: Where, root: string | null): Part[]
   const prog = words[0];
   if (prog === undefined) return parts;
   const args = words.slice(1);
-  const base = prog.slice(prog.lastIndexOf("/") + 1);
+  // looked up in lower case: APFS runs `Python3` as python3
+  const base = progName(prog);
+  if (prog.includes("/")) flagOutside(prog);
   const ops = (takes?: readonly string[]) => operands(args, takes);
 
   // interpreters and shells: their snippet is code, never read for paths
   const lang = LANG[base] ?? (SHELLS.has(base) ? "shell" : null);
   if (lang) {
-    const inline = args.findIndex((a) => /^-[a-z]*[ce]$/.test(a) || a === "-p");
+    const inline = args.findIndex((a) => /^-[a-z]*[ce]$/.test(a) || a === "-p" || a === "--eval" || a === "--print" || a === "--command" || a.startsWith("--eval="));
+    // what an interpreter's other words name is checked like any program's
+    for (const a of args) if (a !== args[inline + 1] || inline === -1) flagOutside(a);
     if (lang === "shell" && inline !== -1) {
       const script = args[inline + 1] ?? "";
-      return [...parts, ...explainParts(script, w, root)];
+      // read for its steps, but a bare Bash never takes a script on its word
+      return [...parts, OPAQUE, ...explainParts(script, w, root)];
     }
     const mod = args.indexOf("-m");
-    if (mod !== -1 && args[mod + 1]) return [...parts, part(`mod ${args[mod + 1]}`, `runs the ${args[mod + 1]} module with ${lang}`, undefined, ["code"])];
+    if (mod !== -1 && args[mod + 1]) return [...parts, OPAQUE, part(`mod ${args[mod + 1]}`, `runs the ${args[mod + 1]} module with ${lang}`, undefined, ["code"])];
     const file = base === "deno" ? operands(args).find((a) => a !== "run") : operands(args)[0];
-    if (inline !== -1 || cmd.heredoc !== undefined || file === undefined || file === "-") {
+    const denoSnippet = base === "deno" && (file === "eval" || file === "repl");
+    if (inline !== -1 || denoSnippet || cmd.heredoc !== undefined || file === undefined || file === "-") {
+      parts.push(OPAQUE);
       return [...parts, part(`snippet ${lang}`, `runs a${/^[AEIOU]/.test(lang) ? "n" : ""} ${lang} snippet`, (n) => `runs ${n} ${lang} snippets`, ["code"])];
     }
-    flagOutside(file);
     return [...parts, part(`script ${file}`, `runs ${shown(file, w)} with ${lang === "shell" ? "the shell" : lang}`, undefined, ["code"])];
   }
 
   if (base === "cd") {
-    const to = args[0];
+    // past \`-P\` and \`-L\`: \`cd -P /etc\` goes to /etc
+    const to = operands(args)[0];
     if (to === "-") return parts;
     w.cwd = to === undefined ? "~" : norm(to, w.cwd);
     if (to === undefined || to.startsWith("~")) {
@@ -598,12 +728,7 @@ function commandParts(cmd: SimpleCommand, w: Where, root: string | null): Part[]
 
   // every other program: its path-like words are checked against the project
   const checkWords = !["echo", "printf"].includes(base);
-  if (checkWords) {
-    for (const a of args) {
-      const v = a.startsWith("--") && a.includes("=") ? a.slice(a.indexOf("=") + 1) : a;
-      flagOutside(v);
-    }
-  }
+  if (checkWords) for (const a of args) flagOutside(a);
 
   if (SILENT.has(base)) return parts;
   if (base === "echo" || base === "printf") return cmd.writes.length ? parts : [...parts, part("print", "prints text")];
@@ -623,6 +748,7 @@ function commandParts(cmd: SimpleCommand, w: Where, root: string | null): Part[]
     return [...parts, ...files.map((f) => part("read", `reads ${shown(f, w)}`, (n) => `reads ${plural(n, "file")}`))];
   }
   if (base === "wc") return [...parts, part("count", args.includes("-l") ? "counts lines" : "counts words")];
+  if (base === "sed" && !sedPlain(args)) parts.push(OPAQUE);
   if (base === "sed" || (base === "perl" && args.includes("-i"))) {
     const inPlace = args.some((a) => a === "-i" || a.startsWith("-i") || a === "--in-place");
     if (!inPlace) return [...parts, part("filter", "filters output")];
@@ -706,7 +832,7 @@ function commandParts(cmd: SimpleCommand, w: Where, root: string | null): Part[]
   }
   if (["bun", "npm", "pnpm", "yarn", "uv", "pip", "pip3", "cargo", "go"].includes(base)) {
     if (base === "bun" && args[0] && /\.(ts|tsx|js|mjs|cjs)$/.test(args[0])) return [...parts, part(`script ${args[0]}`, `runs ${shown(args[0], w)} with Bun`, undefined, ["code"])];
-    if (base === "bun" && (args[0] === "-e" || args[0] === "--eval")) return [...parts, part("snippet Bun", "runs a Bun snippet", undefined, ["code"])];
+    if (base === "bun" && args.some((a) => a === "-e" || a === "--eval" || a === "-p" || a === "--print")) return [...parts, OPAQUE, part("snippet Bun", "runs a Bun snippet", undefined, ["code"])];
     return [...parts, ...packagePart(base, args)];
   }
   if (["bunx", "npx", "uvx", "pnpx"].includes(base)) {
@@ -739,7 +865,8 @@ function commandParts(cmd: SimpleCommand, w: Where, root: string | null): Part[]
     flagOutside(prog);
     return [...parts, vaguePart(`run ${prog}`, `runs ${shown(prog, w)}`, ["code"])];
   }
-  return [...parts, vaguePart(`run ${base}`, `runs ${base}`, ["code"])];
+  const shownName = prog.slice(prog.lastIndexOf("/") + 1);
+  return [...parts, vaguePart(`run ${shownName}`, `runs ${shownName}`, ["code"])];
 }
 
 /** every part of a line, `w.cwd` moving with its `cd`s */
@@ -754,9 +881,13 @@ function fold(parts: readonly Part[]): Explained {
   const groups = new Map<string, Part[]>();
   const flags = new Set<ExplainFlag>();
   let vague = false;
+  let opaque = false;
+  let guarded = false;
   for (const p of parts) {
     for (const f of p.flags ?? []) flags.add(f);
     if (p.vague) vague = true;
+    if (p.opaque) opaque = true;
+    if (p.guarded) guarded = true;
     if (!p.one) continue;
     const g = groups.get(p.key);
     if (g) g.push(p);
@@ -778,7 +909,13 @@ function fold(parts: readonly Part[]): Explained {
         : phrases.length === 1
           ? (phrases[0] ?? "")
           : `${phrases.slice(0, -1).join(", ")} and ${phrases[phrases.length - 1]}`;
-  return { says, flags: EXPLAIN_FLAGS.filter((f) => flags.has(f)), ...(vague || phrases.length === 0 ? { vague: true as const } : {}) };
+  return {
+    says,
+    flags: EXPLAIN_FLAGS.filter((f) => flags.has(f)),
+    ...(vague || phrases.length === 0 ? { vague: true as const } : {}),
+    ...(opaque ? { opaque: true as const } : {}),
+    ...(guarded ? { guarded: true as const } : {}),
+  };
 }
 
 /** A shell command in plain words. `root` is the project's folder (outside

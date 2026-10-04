@@ -18,6 +18,7 @@ import type { RpcProc, RpcSpawn } from "./codexrpc";
 // a type alone: codexrun imports this module at run time
 import type { ApprovalFacts } from "./codexrun";
 import { stageEnv } from "./envnames";
+import { EDIT_TOOLS } from "./shellwords";
 import { STAGE_AWAY } from "./stagewire";
 import type { Harness, PermissionAsk, Run, RunAnswer, RunPrompt, RunQuestion, RunResult, RunStatus, RunStep, RunTokens } from "./types";
 
@@ -218,7 +219,9 @@ interface Pending {
   settle: (a: RunAnswer, note?: string) => void;
 }
 
-const EDIT_TOOLS = new Set(["Edit", "Write", "MultiEdit", "NotebookEdit"]);
+/** the tools whose prompt is a file change, a notebook's included (never
+ *  remembered, but a run's own rules judge it as one) */
+const CHANGE_TOOLS = new Set([...EDIT_TOOLS, "NotebookEdit"]);
 
 /** The facts a prompt's own fields give: a shell command, a file tool's
  *  paths, or anything else (`factsOf` in remember.ts, here without its
@@ -226,7 +229,7 @@ const EDIT_TOOLS = new Set(["Edit", "Write", "MultiEdit", "NotebookEdit"]);
 export function promptFacts(p: PromptInput): ApprovalFacts {
   if (p.kind !== "permission") return { kind: "other" };
   if (p.tool === "Bash") return { kind: "command", command: p.command ?? null, cwd: p.cwd ?? null };
-  if (EDIT_TOOLS.has(p.tool)) return { kind: "fileChange", paths: p.paths ?? null, grantRoot: null };
+  if (CHANGE_TOOLS.has(p.tool)) return { kind: "fileChange", paths: p.paths ?? null, grantRoot: null };
   return { kind: "other" };
 }
 

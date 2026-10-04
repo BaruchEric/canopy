@@ -171,7 +171,7 @@ const SUBCOMMANDS = new Set([
  *  a remote shell, a program with its own exec): any prefix of one runs
  *  anything, so only the exact command is offered */
 const RUNS_ANYTHING = new Set([
-  "python", "python3", "node", "ruby", "perl", "php", "lua", "Rscript", "tclsh", "expect", "osascript",
+  "python", "python3", "node", "ruby", "perl", "php", "lua", "rscript", "tclsh", "expect", "osascript", "deno",
   "sh", "bash", "zsh", "dash", "fish", "eval", "exec", "source", ".", "command", "builtin", "!",
   "sudo", "doas", "env", "xargs", "nohup", "time", "timeout", "nice", "stdbuf", "watch", "parallel", "flock", "chroot", "script", "strace",
   "ssh", "mosh", "awk", "gawk", "nawk", "sed", "find", "fd", "open", "xdg-open", "bunx", "npx", "pnpx", "uvx", "pipx",
@@ -182,6 +182,110 @@ const RUNS_ANYTHING_SUB = new Set([
   "docker run", "docker exec", "docker compose", "podman run", "podman exec", "podman compose", "kubectl exec", "kubectl run",
   "npm exec", "pnpm exec", "pnpm dlx", "yarn dlx", "yarn exec", "bun x", "uv run", "uv tool", "gh api", "aws ssm",
 ]);
+
+/** A program's name as the lookups know it: the last part of its path, in
+ *  lower case, since APFS finds `Python3` and `NODE` as the real binaries. */
+export const progName = (word: string): string => word.slice(word.lastIndexOf("/") + 1).toLowerCase();
+
+/** installs and the like, which run the scripts of whatever they fetch */
+const INSTALLS: Record<string, readonly string[]> = {
+  npm: ["install", "i", "in", "ins", "isntall", "add", "ci", "update", "up", "upgrade", "rebuild", "link", "ln", "exec", "x", "init", "create", "pkg", "set-script", "config", "publish", "pack", "version", "dlx"],
+  pnpm: ["install", "i", "add", "update", "up", "upgrade", "rebuild", "link", "exec", "dlx", "create", "init", "pkg", "config", "publish", "pack", "version"],
+  yarn: ["install", "add", "upgrade", "up", "dlx", "exec", "create", "init", "link", "config", "publish", "pack", "version"],
+  bun: ["install", "i", "add", "a", "update", "upgrade", "link", "x", "create", "init", "pm", "publish"],
+  pip: ["install", "download", "wheel"],
+  pip3: ["install", "download", "wheel"],
+  uv: ["pip", "add", "sync", "lock", "run", "tool", "build"],
+  cargo: ["install"],
+  go: ["run", "generate", "install", "get", "tool"],
+  gem: ["install", "update"],
+  bundle: ["install", "exec", "update"],
+  brew: ["install", "reinstall", "upgrade", "bundle", "tap"],
+  git: ["config", "hook", "filter-branch", "send-email"],
+};
+
+/** options that name a program to run, by the program they belong to */
+const EXEC_OPTIONS: Record<string, readonly string[]> = {
+  rg: ["--pre"],
+  tar: ["--to-command", "--use-compress-program", "--checkpoint-action", "--info-script", "--new-volume-script", "--rsh-command", "--rmt-command"],
+  git: ["--config-env", "--exec-path", "--upload-pack", "--receive-pack", "--exec", "--open-files-in-pager", "--extcmd", "--template", "--config"],
+  make: ["--file", "--makefile", "--eval", "--directory", "--include-dir", "--environment-overrides"],
+  find: ["-exec", "-execdir", "-ok", "-okdir", "-fprint", "-fprint0", "-fprintf", "-fls"],
+  fd: ["--exec", "--exec-batch"],
+  npm: ["--script-shell", "--node-options", "--userconfig", "--globalconfig"],
+  pnpm: ["--script-shell", "--node-options", "--userconfig", "--globalconfig"],
+  yarn: ["--script-shell", "--node-options", "--use-yarnrc"],
+  bun: ["--script-shell", "--preload", "--config"],
+  go: ["-exec", "-toolexec", "-vettool", "-overlay"],
+  cargo: ["--config"],
+};
+
+/** The option in `words` that runs another program, or null. Fail closed:
+ *  a short option is caught bundled (`tar -xIf`) and an option with its
+ *  value attached (`--pre=x`). */
+export function execOption(words: readonly string[]): string | null {
+  const prog = progName(words[0] ?? "");
+  const args = words.slice(1);
+  const long = EXEC_OPTIONS[prog] ?? [];
+  for (const a of args) {
+    const name = a.includes("=") ? a.slice(0, a.indexOf("=")) : a;
+    if (long.includes(name)) return name;
+  }
+  const subOf = (skip: readonly string[]): string | undefined => {
+    for (let i = 0; i < args.length; i++) {
+      const a = args[i] ?? "";
+      if (a.startsWith("-")) {
+        if (skip.includes(a)) i++;
+        continue;
+      }
+      return a.toLowerCase();
+    }
+    return undefined;
+  };
+  if (prog === "tar") {
+    // old style: the first word is a bundle of letters without a dash
+    for (const [i, a] of args.entries()) {
+      const bundle = /^-[A-Za-z]+$/.test(a) || (i === 0 && /^[A-Za-z]+$/.test(a));
+      if (bundle && /[IF]/.test(a)) return a;
+      if (/^-[IF]./.test(a)) return a;
+    }
+  }
+  if (prog === "git") {
+    for (const [i, a] of args.entries()) {
+      // an identity is the one setting that names no program
+      if (a === "-c" && /^user\.(name|email)=/.test(args[i + 1] ?? "")) continue;
+      if (a === "-c" || /^-c./.test(a) || a === "-O" || /^-O./.test(a)) return a;
+    }
+    const sub = subOf(["-C", "-c", "--git-dir", "--work-tree", "--namespace"]);
+    if (sub && ["fetch", "pull", "clone", "ls-remote", "submodule", "archive"].includes(sub) && args.includes("-u")) return "-u";
+    if (sub && ["rebase", "difftool", "mergetool"].includes(sub) && args.some((a) => a === "-x" || a === "-t" || a.startsWith("--tool") || a.startsWith("--exec"))) return "-x";
+    if (sub === "bisect" && args.includes("run")) return "bisect run";
+    if (sub === "submodule" && args.includes("foreach")) return "submodule foreach";
+  }
+  if (prog === "make") {
+    for (const a of args) {
+      if (/^-[fECIe]/.test(a) || (!a.startsWith("-") && a.includes("="))) return a;
+    }
+  }
+  if (prog === "fd") for (const a of args) if (a === "-x" || a === "-X") return a;
+  const sub = subOf(prog === "git" ? ["-C", "-c", "--git-dir", "--work-tree", "--namespace"] : []);
+  const installs = INSTALLS[prog];
+  // a bare `yarn` installs
+  if (prog === "yarn" && sub === undefined) return "yarn";
+  if (installs && sub !== undefined && installs.includes(sub)) return `${prog} ${sub}`;
+  return null;
+}
+
+/** Whether a simple command's words can run some other program: one that
+ *  runs anything (`RUNS_ANYTHING`, `RUNS_ANYTHING_SUB`), or one with an
+ *  option or a subcommand that does (`execOption`). A prefix rule never
+ *  covers one, and is never offered for one. */
+export function runsOther(words: readonly string[]): boolean {
+  const first = progName(words[0] ?? "");
+  if (RUNS_ANYTHING.has(first)) return true;
+  if (RUNS_ANYTHING_SUB.has(`${first} ${(words[1] ?? "").toLowerCase()}`)) return true;
+  return execOption(words) !== null;
+}
 
 /** tools that are never remembered: a sandbox escalation is granted each
  *  time, plan mode and questions are the human's call, a network rule would
@@ -213,10 +317,10 @@ export function ruleOffer(tool: string, command?: string): RuleOffer | null {
     const first = words[0] ?? "";
     const second = words[1];
     const exactOnly = { rules: [exact], pick: 0 };
-    if (ASSIGNS.test(first) || first.includes("/") || RUNS_ANYTHING.has(first)) return exactOnly;
+    if (ASSIGNS.test(first) || first.includes("/") || runsOther(words)) return exactOnly;
     if (second?.startsWith("-")) return exactOnly;
-    const sub = SUBCOMMANDS.has(first);
-    if (sub && (second === undefined || RUNS_ANYTHING_SUB.has(`${first} ${second}`))) return exactOnly;
+    const sub = SUBCOMMANDS.has(progName(first));
+    if (sub && second === undefined) return exactOnly;
     // the leading words before any flag, three at most
     const flag = words.findIndex((w) => w.startsWith("-"));
     const lead = Math.min(3, flag === -1 ? words.length : flag);
@@ -228,8 +332,12 @@ export function ruleOffer(tool: string, command?: string): RuleOffer | null {
   return rememberable(tool) ? { rules: [tool], pick: 0 } : null;
 }
 
-/** tools whose remembered rule covers files inside the project only */
-const FILE_TOOLS = new Set(["Edit", "Write", "MultiEdit", "NotebookEdit", "Read", "NotebookRead", "Glob", "Grep"]);
+/** tools whose rule is about the files they change, covered inside the project only */
+export const EDIT_TOOLS: ReadonlySet<string> = new Set(["Edit", "Write", "MultiEdit"]);
+
+/** tools a rule covers by their files, inside the project only: the one list
+ *  the page's offer, the server and the rule's words all read */
+export const FILE_TOOLS: ReadonlySet<string> = new Set([...EDIT_TOOLS, "Read", "NotebookRead", "Glob", "Grep", "LS"]);
 
 /** Where a remembered rule applies, in words. */
 export function scopeWords(s: RememberScope): string {

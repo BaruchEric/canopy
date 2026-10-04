@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { parseRule, quoteWord, ruleOf, ruleOffer, ruleWords } from "./shellwords";
+import { parseRule, quoteWord, ruleOf, ruleOffer, ruleWords, runsOther, shellWords } from "./shellwords";
 
 describe("quoteWord and ruleOf", () => {
   test("plain words stay bare, the rest are single-quoted", () => {
@@ -74,6 +74,50 @@ describe("ruleOffer", () => {
     ]) {
       expect(ruleOffer("Bash", c)?.rules, c).toHaveLength(1);
       expect(ruleOffer("Bash", c)?.rules[0]?.endsWith(":*)"), c).toBe(false);
+    }
+  });
+
+  test("a program's own way to run another program, or an install that runs package scripts, is exact only", () => {
+    for (const c of [
+      "rg foo --pre ./x",
+      "tar tf a.tar --to-command=x",
+      "tar tf a.tar -I x",
+      "tar xIf x a.tar",
+      "git fetch --upload-pack=x origin",
+      "git clone -u x a b",
+      "git grep -O x",
+      "git log -c alias.x=y",
+      "git config core.hooksPath h",
+      "make build CC=x",
+      "make build -f other.mk",
+      "npm install",
+      "npm i x",
+      "pnpm add x",
+      "yarn add x",
+      "bun install",
+      "bun add x",
+      "npm pkg set scripts.x=y",
+      "pip install x",
+      "uv pip install x",
+      "cargo install x",
+      "go run .",
+      "go generate ./...",
+      "go install x",
+      "go test -exec x ./...",
+    ]) {
+      const rules = ruleOffer("Bash", c)?.rules ?? [];
+      expect([c, rules.length, rules.some((r) => r.endsWith(":*)"))]).toEqual([c, 1, false]);
+      expect(runsOther(shellWords(c) ?? []), c).toBe(true);
+    }
+    for (const c of ["git log --oneline", "make build", "rg foo src", "bun test", "go test ./...", "tar tf a.tar"]) {
+      expect(runsOther(shellWords(c) ?? []), c).toBe(false);
+    }
+  });
+
+  test("a program is known whatever its case: APFS finds Python3 and NODE", () => {
+    for (const c of ["Python3 -c x", "NODE -e x", "Bash -c x", "XARGS rm", "Sudo ls", "Docker run x"]) {
+      expect(ruleOffer("Bash", c)?.rules, c).toHaveLength(1);
+      expect(runsOther(shellWords(c) ?? []), c).toBe(true);
     }
   });
 

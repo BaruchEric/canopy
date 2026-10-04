@@ -10,26 +10,24 @@
  *  `Bash` covers any shell command run inside the project, chains included,
  *  and is the only rule that ever covers a chain; any other bare tool name
  *  covers that tool, inside the project when it names files. A sandbox
- *  escalation (`Permissions`) and a question are never remembered. */
+ *  escalation (`Permissions`) and a question are never remembered.
+ *
+ *  Fail closed: no rule covers a command that reaches outside the project
+ *  by any word, or that writes or runs code where code runs from (`.git`,
+ *  an agent's settings, package scripts: `guardedPath`); a prefix rule
+ *  never covers a command whose words run another program (`runsOther`),
+ *  and a bare `Bash` never covers code canopy cannot read (`opaque`). */
 
 import { readFileSync } from "node:fs";
 import { mkdir, realpath, rename, writeFile } from "node:fs/promises";
 import { basename, dirname, join, resolve } from "node:path";
 import { autoAnswer, within, type ApprovalFacts } from "./codexrun";
 import { promptFacts } from "./driver";
-import { explainCommand } from "./explain";
-import { parseRule, rememberable } from "./shellwords";
+import { explainCommand, guardedPath } from "./explain";
+import { commandWords, EDIT_TOOLS, parseRule, rememberable, runsOther, unwrapShell } from "./shellwords";
 import { configDir } from "./store";
 import type { FlowStepName, PermissionAsk, RememberedRule, RememberScope, SharedWorkflowSource } from "./types";
 
-/** the tools whose rule is about files, covered inside the project only */
-const EDIT_TOOLS = new Set(["Edit", "Write", "MultiEdit"]);
-
-/** Whether a shell command reaches outside the project by its own words:
- *  a `cd` away, a path outside it, `git -C` elsewhere. Claude's prompts
- *  carry no folder, so the words are all there is to go on. */
-const reachesOutside = (command: string, root: string, cwd: string | null): boolean =>
-  explainCommand(command, root, cwd ?? undefined).flags.includes("outside");
 
 /** What a run is, for a scope: its repo's absolute path and, for a flow's
  *  step, which workflow and step. */
@@ -49,12 +47,25 @@ export function ruleCovers(rule: string, p: PermissionAsk, facts: ApprovalFacts,
   if (!r) return false;
   if (r.kind === "bash" || r.name === "Bash") {
     if (p.tool !== "Bash" || facts.kind !== "command" || facts.command === null) return false;
-    if (reachesOutside(facts.command, cwd, facts.cwd)) return false;
-    if (r.kind === "bash") return autoAnswer([rule], facts, cwd);
+    // read by the prompt's own words (codex's `sh -lc` wrapper already taken
+    // off; a Claude `sh -c` kept, which is opaque): Claude's prompts carry no
+    // folder, so the words are all there is to go on
+    const read = explainCommand(p.command ?? unwrapShell(facts.command), cwd, facts.cwd ?? undefined);
+    if (read.flags.includes("outside") || read.guarded) return false;
+    if (r.kind === "bash") {
+      if (!r.prefix) return autoAnswer([rule], facts, cwd);
+      const words = commandWords(facts.command);
+      return words !== null && !read.opaque && !runsOther(words) && autoAnswer([rule], facts, cwd);
+    }
+    if (read.opaque) return false;
     return facts.cwd === null || within(facts.cwd, cwd);
   }
   if (!rememberable(r.name) || p.tool !== r.name) return false;
-  if (EDIT_TOOLS.has(r.name)) return facts.kind === "fileChange" && autoAnswer([rule], facts, cwd);
+  if (EDIT_TOOLS.has(r.name)) {
+    const changed = [...(p.paths ?? []), ...(facts.kind === "fileChange" ? (facts.paths ?? []) : [])];
+    if (changed.some((x) => guardedPath(x, cwd))) return false;
+    return facts.kind === "fileChange" && autoAnswer([rule], facts, cwd);
+  }
   if (facts.kind !== "other") return false;
   // at least one file, all inside: a Glob with no folder goes where its pattern says
   const paths = p.paths ?? [];
@@ -63,8 +74,10 @@ export function ruleCovers(rule: string, p: PermissionAsk, facts: ApprovalFacts,
 
 /** Whether every path is inside `root` on disk, not only by its words: a
  *  link in the project can lead out of it. A path that does not exist yet
- *  is judged by its nearest folder that does. */
-export async function pathsInside(paths: readonly string[], root: string): Promise<boolean> {
+ *  is judged by its nearest folder that does. With `guard` (an edit), a
+ *  path whose real place is where code runs from (`guardedPath`) fails too:
+ *  `tools -> .git/hooks` makes `tools/pre-commit` a hook. */
+export async function pathsInside(paths: readonly string[], root: string, opts: { guard?: boolean } = {}): Promise<boolean> {
   const realRoot = await realpath(root).catch(() => resolve(root));
   const real = async (p: string): Promise<string> => {
     const abs = resolve(root, p);
@@ -79,7 +92,11 @@ export async function pathsInside(paths: readonly string[], root: string): Promi
       dir = up;
     }
   };
-  for (const p of paths) if (!within(await real(p), realRoot)) return false;
+  for (const p of paths) {
+    const at = await real(p);
+    if (!within(at, realRoot)) return false;
+    if (opts.guard && guardedPath(at, realRoot)) return false;
+  }
   return true;
 }
 

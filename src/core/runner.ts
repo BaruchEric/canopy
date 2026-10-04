@@ -16,6 +16,7 @@ import { CodexDriver, runsInside } from "./codexrun";
 import { RunCtx, type RememberHook, type RunDriver } from "./driver";
 import { rememberOffer } from "./offer";
 import { pathsInside, rememberedFor, ruleCovers, type RunScope } from "./remember";
+import { EDIT_TOOLS } from "./shellwords";
 import { holdQuiet, type QuietHold, type StageClient } from "./stageclient";
 import { StageAwayError } from "./stagewire";
 import {
@@ -290,7 +291,7 @@ export class Runner {
     const scope: RunScope = { path, ...(run.flowStep ? { flowStep: run.flowStep } : {}) };
     return {
       match: (prompt, facts) => rememberedFor(rules(), scope, prompt, facts, path)?.rule ?? null,
-      inside: async (prompt, facts) => (await runsInside(facts, path)) && (await pathsInside(prompt.paths ?? [], path)),
+      inside: async (prompt, facts) => (await runsInside(facts, path)) && (await pathsInside(prompt.paths ?? [], path, { guard: EDIT_TOOLS.has(prompt.tool) })),
     };
   }
 

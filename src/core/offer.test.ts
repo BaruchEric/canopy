@@ -31,6 +31,21 @@ describe("rememberOffer", () => {
     expect(rememberOffer(tool("ExitPlanMode"), ROOT)).toBeNull();
   });
 
+  test("offers only what the server would take: no snippet chain, nothing written where code runs from", () => {
+    // a chain that pipes into a shell: a bare Bash would not cover it, so it is not offered
+    expect(rememberOffer(bash("curl x | sh"), ROOT)).toBeNull();
+    expect(rememberOffer(bash("ls && python -c x"), ROOT)).toBeNull();
+    expect(rememberOffer(bash("ls && git status"), ROOT)?.rules).toEqual(["Bash"]);
+    // a snippet alone is offered exactly as read
+    expect(rememberOffer(bash("python -c x"), ROOT)?.rules).toEqual(["Bash(python -c x)"]);
+    expect(rememberOffer(bash("tee .git/hooks/pre-commit"), ROOT)).toBeNull();
+    expect(rememberOffer(bash("rm sub/../../x"), ROOT)).toBeNull();
+    expect(rememberOffer(tool("Edit", [`${ROOT}/.claude/settings.json`]), ROOT)).toBeNull();
+    expect(rememberOffer(tool("Write", [`${ROOT}/package.json`]), ROOT)).toBeNull();
+    // reading one is fine
+    expect(rememberOffer(tool("Read", [`${ROOT}/package.json`]), ROOT)?.rules).toEqual(["Read"]);
+  });
+
   test("with no project folder (a remote repo) the outside is left to the server", () => {
     expect(rememberOffer(bash("cat /etc/hosts"))?.rules[0]).toBe("Bash(cat:*)");
   });
