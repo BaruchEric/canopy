@@ -28,6 +28,8 @@ export const SEED_GIT_FLAGS: readonly string[] = [
 
 const ALLOWED: readonly RegExp[] = [
   /^core\.(repositoryformatversion|filemode|bare|logallrefupdates|ignorecase|precomposeunicode|symlinks)$/,
+  // a project's install sets it (husky, a prepare script); SEED_GIT_FLAGS lays /dev/null over it on every call
+  /^core\.hookspath$/,
   // a subsection keeps its dots (branch.release-1.2.merge), so `.+`, not `[^.]+`
   /^remote\..+\.(url|fetch|pushurl|tagopt|prune)$/,
   // what a person's own tools write too: VS Code's merge base, a rebase or push remote, a description

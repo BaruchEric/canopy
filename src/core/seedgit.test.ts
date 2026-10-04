@@ -23,13 +23,14 @@ describe("seedConfigRefusal", () => {
     ["user.name", "canopy"],
     ["user.email", "canopy@mini"],
     ["extensions.objectformat", "sha1"],
+    // a project's own install script sets it (husky, a prepare script); every call carries core.hooksPath=/dev/null over it
+    ["core.hookspath", ".githooks"],
   ];
   test("what canopy and a plain commit write passes", () => {
     expect(seedConfigRefusal(ok)).toBe(null);
   });
   test.each([
     ["core.fsmonitor", "./x"],
-    ["core.hookspath", "./hooks"],
     ["core.sshcommand", "sh -c x"],
     ["core.pager", "sh"],
     ["filter.lfs.clean", "sh -c x"],
@@ -135,6 +136,21 @@ describe("the guard on real seeds", () => {
     const r = await git(dir, ["status", "--porcelain=v2"]);
     expect(r.code).toBe(128);
     expect(r.stderr).toContain("core.fsmonitor");
+    expect(await ran()).toBe(false);
+  });
+
+  test("a hooks path the project's install set is let through, and its hooks never run", async () => {
+    const dir = await seed("hookspath");
+    const hook = `#!/bin/sh\ntouch ${marker()}\n`;
+    await mkdir(join(dir, ".githooks"), { recursive: true });
+    for (const h of [join(dir, ".githooks", "pre-commit"), join(dir, ".githooks", "post-commit"), join(dir, ".git", "hooks", "post-commit")]) {
+      await writeFile(h, hook, { mode: 0o755 });
+    }
+    expect((await exec(["git", "config", "core.hooksPath", ".githooks"], { cwd: dir })).code).toBe(0);
+    expect(await guardSeed(dir)).toBe(null);
+    expect((await git(dir, ["add", "a.txt"])).code).toBe(0);
+    const r = await git(dir, ["-c", "user.name=a", "-c", "user.email=a@b", "commit", "-qm", "s"]);
+    expect(r.code).toBe(0);
     expect(await ran()).toBe(false);
   });
 
