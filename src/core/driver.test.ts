@@ -1,10 +1,12 @@
 import { describe, expect, test } from "bun:test";
-import { exitOutcome, RunCtx, settleNote, STEP_CAP, type DriveRun } from "./driver";
+import { exitOutcome, RunCtx, settleNote, STEP_CAP, type DriveRun, type RememberHook } from "./driver";
+import { rememberedFor } from "./remember";
+import type { RememberedRule } from "./types";
 
 const AGENT = { model: "default", effort: "default", yolo: false, extra: "" };
 const SPEC = { allowedTools: [], maxTurns: 10 };
 
-function makeCtx(chat = false, spec: { allowedTools: string[]; maxTurns: number; unattended?: string } = SPEC) {
+function makeCtx(chat = false, spec: { allowedTools: string[]; maxTurns: number; unattended?: string } = SPEC, remember?: RememberHook) {
   const run: DriveRun = {
     id: "r1",
     repoId: "fx",
@@ -24,7 +26,7 @@ function makeCtx(chat = false, spec: { allowedTools: string[]; maxTurns: number;
   const ended: string[] = [];
   const ctx = new RunCtx(
     run,
-    { cwd: "/r", agent: AGENT, spec, label: "Codex" },
+    { cwd: "/r", agent: AGENT, spec, label: "Codex", ...(remember ? { remember } : {}) },
     { emit: (r) => emits.push(r.status), ended: (r) => ended.push(r.status) },
   );
   return { run, ctx, emits, ended };
@@ -142,6 +144,83 @@ describe("the prompt queue", () => {
     ctx.withdraw("0");
     await a;
     expect(run.status).toBe("failed");
+  });
+});
+
+describe("remembered rules", () => {
+  const sh = (command: string, cwd?: string) => ({ kind: "permission" as const, tool: "Bash", title: command, detail: command, command, ...(cwd ? { cwd } : {}) });
+  /** a hook over a list the test can add to, matched as the Runner does, in repo /r */
+  function hook(rules: RememberedRule[], inside = true): RememberHook {
+    return {
+      match: (p, facts) => rememberedFor(rules, { path: "/r" }, p, facts, "/r")?.rule ?? null,
+      inside: () => Promise.resolve(inside),
+    };
+  }
+  const repoRule = (rule: string): RememberedRule => ({ id: rule, rule, scope: { kind: "repo", path: "/r" }, at: 0 });
+
+  test("a covered permission is allowed at once, with a note naming the rule; the run never waits", async () => {
+    const { run, ctx, emits } = makeCtx(false, SPEC, hook([repoRule("Bash(git status:*)")]));
+    expect(await ctx.ask(sh("git status --short"), "0")).toEqual({ kind: "allow" });
+    expect(emits).not.toContain("waiting");
+    expect(notes(run)).toEqual(["allowed by a remembered rule (Bash(git status:*)): git status --short"]);
+  });
+
+  test("a chain waits under a prefix rule and passes under a bare Bash", async () => {
+    const rules = [repoRule("Bash(git status:*)")];
+    const { run, ctx } = makeCtx(false, SPEC, hook(rules));
+    void ctx.ask(sh("git status && rm -rf x"), "0");
+    expect(run.status).toBe("waiting");
+    const { ctx: ctx2 } = makeCtx(false, SPEC, hook([repoRule("Bash")]));
+    expect(await ctx2.ask(sh("git status && rm -rf x"), "0")).toEqual({ kind: "allow" });
+  });
+
+  test("never a question, even under a rule that covers every tool", async () => {
+    const { run, ctx } = makeCtx(false, SPEC, { match: () => "Bash", inside: () => Promise.resolve(true) });
+    void ctx.ask({ kind: "question", questions: [] }, "0");
+    expect(run.status).toBe("waiting");
+    expect(run.prompt?.kind).toBe("question");
+  });
+
+  test("an unattended run still denies everything with its message", async () => {
+    const { ctx } = makeCtx(false, { ...SPEC, unattended: "no one" }, hook([repoRule("Bash")]));
+    expect(await ctx.ask(sh("ls"), "0")).toEqual({ kind: "deny", message: "no one" });
+  });
+
+  test("a folder the request names that leaves the repo on disk asks after all", async () => {
+    const { run, ctx } = makeCtx(false, SPEC, hook([repoRule("Bash(ls:*)")], false));
+    const a = ctx.ask(sh("ls", "/r/link"), "0");
+    await Bun.sleep(0);
+    expect(run.status).toBe("waiting");
+    ctx.answer("p1", { kind: "deny" });
+    expect(await a).toEqual({ kind: "deny" });
+  });
+
+  test("the driver's own facts win over the prompt's fields", async () => {
+    const { run, ctx } = makeCtx(false, SPEC, hook([repoRule("Bash")]));
+    // Codex's input to a running program: a Bash prompt, but not a command
+    void ctx.ask(sh("y"), "0", { kind: "other" });
+    expect(run.status).toBe("waiting");
+  });
+
+  test("recheck settles the waiting permissions a new rule covers and leaves the rest", async () => {
+    const rules: RememberedRule[] = [];
+    const { run, ctx } = makeCtx(false, SPEC, hook(rules));
+    const a = ctx.ask(sh("ls -la"), "0");
+    const q = ctx.ask({ kind: "question", questions: [] }, "1");
+    const b = ctx.ask(sh("rm x"), "2");
+    expect(ctx.waitingPermission("p1")).toEqual({ prompt: { ...sh("ls -la"), id: "p1" }, facts: { kind: "command", command: "ls -la", cwd: null } });
+    expect(ctx.waitingPermission("p2")).toBeUndefined();
+    rules.push(repoRule("Bash(ls:*)"));
+    ctx.recheck();
+    expect(await a).toEqual({ kind: "allow" });
+    expect(run.prompt?.kind).toBe("question");
+    expect(notes(run)).toEqual(["allowed by a remembered rule (Bash(ls:*)): ls -la"]);
+    ctx.denyAll();
+    await Promise.all([q, b]);
+  });
+
+  test("an allow that remembers says so in the timeline", () => {
+    expect(settleNote(perm("ls"), { kind: "allow", remember: { rule: "Bash(ls:*)", scope: "repo" } })).toBe("allowed, and remembered Bash(ls:*): ls");
   });
 });
 

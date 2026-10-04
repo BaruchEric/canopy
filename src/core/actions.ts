@@ -4,7 +4,7 @@
  *  Codex's items. Browser-safe: the UI imports this for labels and
  *  preconditions, the runner for prompts and titles. */
 
-import type { Repo, RunAction, WorkflowWhen } from "./types";
+import type { FlowStepName, Repo, RunAction, WorkflowWhen } from "./types";
 
 export interface ActionSpec {
   /** menu label */
@@ -32,6 +32,8 @@ export interface ActionSpec {
   mode: "job" | "ask" | "chat";
   /** no one answers this run: every prompt is denied at once with this message */
   unattended?: string;
+  /** a flow's step: which workflow and step, the run's `flowStep` */
+  flowStep?: FlowStepName;
 }
 
 const SAFETY = `- Work only inside this repository (submodules under it included).

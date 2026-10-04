@@ -15,9 +15,11 @@
  *  driver a harness gets, and the git status read that sets `outcome`. */
 
 import type { RpcProc, RpcSpawn } from "./codexrpc";
+// a type alone: codexrun imports this module at run time
+import type { ApprovalFacts } from "./codexrun";
 import { stageEnv } from "./envnames";
 import { STAGE_AWAY } from "./stagewire";
-import type { Harness, Run, RunAnswer, RunPrompt, RunQuestion, RunResult, RunStatus, RunStep, RunTokens } from "./types";
+import type { Harness, PermissionAsk, Run, RunAnswer, RunPrompt, RunQuestion, RunResult, RunStatus, RunStep, RunTokens } from "./types";
 
 /** steps kept per run; the oldest fall off with a note */
 export const STEP_CAP = 400;
@@ -55,9 +57,17 @@ export interface DriveSpec {
 }
 
 /** A prompt before the Runner numbers it. */
-export type PromptInput =
-  | { kind: "permission"; tool: string; title: string; detail: string }
-  | { kind: "question"; questions: RunQuestion[] };
+export type PromptInput = PermissionAsk | { kind: "question"; questions: RunQuestion[] };
+
+/** What a run's remembered rules say about a permission (`core/remember.ts`,
+ *  wired by the Runner). */
+export interface RememberHook {
+  /** the remembered rule that answers this permission, or null */
+  match(prompt: PermissionAsk, facts: ApprovalFacts): string | null;
+  /** a command's folder, checked on disk (a symlink out of the repo) before
+   *  a match answers it */
+  inside(facts: ApprovalFacts): Promise<boolean>;
+}
 
 /** How a driver's process ended. */
 export interface DriveExit {
@@ -106,8 +116,11 @@ export interface DriveCtx {
   /** Parks the run on a prompt until the browser answers it, the driver
    *  withdraws it, or the run stops (a stop answers "deny"). `key` is the
    *  driver's own name for it, the wire's request id. After "allow all" a
-   *  permission resolves "allow" at once without showing anything. */
-  ask(prompt: PromptInput, key: string): Promise<RunAnswer>;
+   *  permission resolves "allow" at once without showing anything, and so
+   *  does one a remembered rule covers. `facts` are what the rule is matched
+   *  on, when the driver has its own (Codex); else they are read off the
+   *  prompt's fields. */
+  ask(prompt: PromptInput, key: string, facts?: ApprovalFacts): Promise<RunAnswer>;
   /** The harness took a prompt back (Claude's control_cancel_request, Codex's
    *  serverRequest/resolved for one canopy never answered). It settles as a
    *  "deny". */
@@ -166,6 +179,7 @@ export function settleNote(prompt: RunPrompt | PromptInput, a: RunAnswer): strin
     return a.kind === "answers" ? `answered: ${Object.values(a.answers).join("; ")}` : "question dismissed";
   }
   if (a.kind === "allow-all") return `allowed everything from here: ${prompt.title}`;
+  if (a.kind === "allow" && a.remember) return `allowed, and remembered ${a.remember.rule}: ${prompt.title}`;
   if (a.kind === "allow") return `allowed: ${prompt.title}`;
   return `denied: ${prompt.title}`;
 }
@@ -194,7 +208,22 @@ export function exitOutcome(
 interface Pending {
   key: string;
   prompt: RunPrompt;
-  settle: (a: RunAnswer) => void;
+  /** what a remembered rule is matched on, for a permission */
+  facts: ApprovalFacts;
+  /** settles it; `note` replaces the timeline's usual words */
+  settle: (a: RunAnswer, note?: string) => void;
+}
+
+const EDIT_TOOLS = new Set(["Edit", "Write", "MultiEdit", "NotebookEdit"]);
+
+/** The facts a prompt's own fields give: a shell command, a file tool's
+ *  paths, or anything else (`factsOf` in remember.ts, here without its
+ *  imports). */
+export function promptFacts(p: PromptInput): ApprovalFacts {
+  if (p.kind !== "permission") return { kind: "other" };
+  if (p.tool === "Bash") return { kind: "command", command: p.command ?? null, cwd: p.cwd ?? null };
+  if (EDIT_TOOLS.has(p.tool)) return { kind: "fileChange", paths: p.paths ?? null, grantRoot: null };
+  return { kind: "other" };
 }
 
 export interface RunCtxInit {
@@ -210,6 +239,8 @@ export interface RunCtxInit {
   track?: (proc: RpcProc) => RpcProc;
   /** the harness's name in failure messages */
   label: string;
+  /** the remembered rules that answer this run's permissions */
+  remember?: RememberHook;
 }
 
 export interface RunCtxHooks {
@@ -249,6 +280,7 @@ export class RunCtx implements DriveCtx {
   private prompts = 0;
   private seq = 0;
   private label: string;
+  private remember: RememberHook | null;
 
   constructor(
     readonly run: DriveRun,
@@ -263,6 +295,7 @@ export class RunCtx implements DriveCtx {
     if (init.spawn) this.spawn = init.spawn;
     if (init.track) this.track = init.track;
     this.label = init.label;
+    this.remember = init.remember ?? null;
   }
 
   get chat(): boolean {
@@ -301,19 +334,67 @@ export class RunCtx implements DriveCtx {
     this.run.session = id;
   }
 
-  ask(prompt: PromptInput, key: string): Promise<RunAnswer> {
+  ask(prompt: PromptInput, key: string, given?: ApprovalFacts): Promise<RunAnswer> {
     if (prompt.kind === "permission" && this.allowAll) return Promise.resolve({ kind: "allow" });
     const unattended = this.spec.unattended;
     if (unattended) {
       this.note(`denied, as no one answers this run: ${prompt.kind === "permission" ? prompt.title : "the question"}`);
       return Promise.resolve({ kind: "deny", message: unattended });
     }
+    const facts = given ?? promptFacts(prompt);
+    // a remembered rule answers a permission, never a question
+    const rule = prompt.kind === "permission" ? this.remembered(prompt, facts) : null;
+    if (rule) {
+      const allowed = (): RunAnswer => {
+        this.note(`allowed by a remembered rule (${rule}): ${prompt.kind === "permission" ? prompt.title : ""}`);
+        return { kind: "allow" };
+      };
+      // a folder the request names is checked on disk first; the words
+      // alone already passed
+      if (facts.kind === "command" && facts.cwd !== null && this.remember) {
+        return this.remember.inside(facts).then((ok) => (ok ? allowed() : this.park(prompt, key, facts)));
+      }
+      return Promise.resolve(allowed());
+    }
+    return this.park(prompt, key, facts);
+  }
+
+  /** the remembered rule answering a permission now, or null */
+  private remembered(prompt: PermissionAsk, facts: ApprovalFacts): string | null {
+    return this.remember?.match(prompt, facts) ?? null;
+  }
+
+  /** Settles every waiting permission a remembered rule now covers, after
+   *  a rule was added. */
+  recheck(): void {
+    for (const p of this.pending.slice()) {
+      if (p.prompt.kind !== "permission") continue;
+      const prompt = p.prompt;
+      const rule = this.remembered(prompt, p.facts);
+      if (!rule || !this.remember) continue;
+      const settle = () => p.settle({ kind: "allow" }, `allowed by a remembered rule (${rule}): ${prompt.title}`);
+      if (p.facts.kind === "command" && p.facts.cwd !== null) {
+        void this.remember.inside(p.facts).then((ok) => ok && settle());
+      } else settle();
+    }
+  }
+
+  /** The waiting permission under `promptId`, with the facts a rule is
+   *  matched on; undefined when it is not waiting. */
+  waitingPermission(promptId: string): { prompt: PermissionAsk & { id: string }; facts: ApprovalFacts } | undefined {
+    const p = this.pending.find((x) => x.prompt.id === promptId);
+    return p && p.prompt.kind === "permission" ? { prompt: p.prompt, facts: p.facts } : undefined;
+  }
+
+  /** Parks the run on a prompt until it is settled. */
+  private park(prompt: PromptInput, key: string, facts: ApprovalFacts): Promise<RunAnswer> {
     const full: RunPrompt = { ...prompt, id: `p${++this.prompts}` };
     return new Promise((resolve) => {
       const entry: Pending = {
         key,
         prompt: full,
-        settle: (a) => {
+        facts,
+        settle: (a, note) => {
           const i = this.pending.indexOf(entry);
           if (i === -1) return;
           this.pending.splice(i, 1);
@@ -325,7 +406,7 @@ export class RunCtx implements DriveCtx {
             this.run.status = next ? "waiting" : "working";
             this.run.prompt = next?.prompt ?? null;
           }
-          this.step({ kind: "note", text: settleNote(full, a) });
+          this.step({ kind: "note", text: note ?? settleNote(full, a) });
           if (a.kind === "allow-all" && full.kind === "permission") {
             this.allowAll = true;
             // the ones already queued behind it are "later" too

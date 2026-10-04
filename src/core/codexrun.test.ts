@@ -383,7 +383,14 @@ describe("approvals and questions", () => {
       tool: "Bash",
       title: "git push",
       detail: "git push\n\nin /other\n\nneeds the network",
+      command: "git push",
+      cwd: "/other",
+      description: "needs the network",
     });
+    // the sandbox's retry line is not the agent's reason
+    expect(
+      approvalPrompt("item/commandExecution/requestApproval", { command: "ls", reason: "command failed; retry without sandbox?" }, null, "/r"),
+    ).not.toHaveProperty("description");
     expect(
       approvalPrompt("item/commandExecution/requestApproval", { networkApprovalContext: { host: "npmjs.org", protocol: "https" } }, null, "/r"),
     ).toMatchObject({ tool: "Network", title: "network access to npmjs.org" });
@@ -396,6 +403,7 @@ describe("approvals and questions", () => {
       tool: "Edit",
       title: "edit a.ts, and write access under /etc",
       detail: "a.ts\n-a\n+b\n\nalso asks to write anywhere under /etc for the rest of the run",
+      paths: ["/r/a.ts"],
     });
     expect(
       approvalPrompt("item/permissions/requestApproval", { permissions: { network: { enabled: true }, fileSystem: { write: ["/r/out"] } } }, null, "/r"),
@@ -733,6 +741,9 @@ describe("a Codex run", () => {
       tool: "Bash",
       title: "git push",
       detail: "git push\n\nin /elsewhere\n\nneeds the network",
+      command: "git push",
+      cwd: "/elsewhere",
+      description: "needs the network",
     });
     d.ctx.answer("p1", { kind: "allow" });
     await d.until(d.ended, "the end");

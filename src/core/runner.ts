@@ -12,8 +12,9 @@
 import { buildPrompt, type ActionSpec } from "./actions";
 import { ClaudeDriver } from "./claudedrive";
 import type { RpcProc } from "./codexrpc";
-import { CodexDriver } from "./codexrun";
-import { RunCtx, type RunDriver } from "./driver";
+import { CodexDriver, runsInside } from "./codexrun";
+import { RunCtx, type RememberHook, type RunDriver } from "./driver";
+import { rememberedFor, ruleCovers, type RunScope } from "./remember";
 import { holdQuiet, type QuietHold, type StageClient } from "./stageclient";
 import { StageAwayError } from "./stagewire";
 import {
@@ -24,6 +25,7 @@ import {
   type Harness,
   type Repo,
   type RepoStatus,
+  type RememberedRule,
   type Run,
   type RunAnswer,
 } from "./types";
@@ -65,6 +67,8 @@ export interface RunnerOptions {
   /** how long a stage run's end waits for the runner to call its seed
    *  quiet before the run ends anyway; tests shorten it */
   quietWait?: number;
+  /** the remembered rules as they are now, read at every permission */
+  remembered?: () => readonly RememberedRule[];
 }
 
 /** Why a stage run cannot start through the stage runner, in the words the
@@ -223,6 +227,8 @@ export class Runner {
       prompt: null,
     };
     if (by) run.by = by;
+    if (spec.flowStep) run.flowStep = { ...spec.flowStep };
+    const remember = this.rememberHook(run, repo.path);
     const ctx = new RunCtx(
       run,
       {
@@ -232,6 +238,7 @@ export class Runner {
         env: runEnv(run, this.opts.backend),
         stage,
         label: driver.label,
+        ...(remember ? { remember } : {}),
         ...(client ? { spawn: client.spawn } : {}),
         // `live` is set before the driver starts anything
         ...(stage ? { track: (proc: RpcProc) => this.track(live, repo.path, proc, client) } : {}),
@@ -270,6 +277,39 @@ export class Runner {
     if (live.started) live.driver.say(message);
     else this.begin(live, buildPrompt(live.repo, live.spec, message));
     return run;
+  }
+
+  /** The remembered rules' say over one run's permissions, read fresh at
+   *  each one, so a rule added mid-run counts at its next prompt. */
+  private rememberHook(run: Run, path: string): RememberHook | null {
+    const rules = this.opts.remembered;
+    if (!rules) return null;
+    const scope: RunScope = { path, ...(run.flowStep ? { flowStep: run.flowStep } : {}) };
+    return {
+      match: (prompt, facts) => rememberedFor(rules(), scope, prompt, facts, path)?.rule ?? null,
+      inside: (facts) => runsInside(facts, path),
+    };
+  }
+
+  /** What a remember on a waiting permission needs: the run's scope, after
+   *  checking that `rule` covers that very prompt (a rule that would not
+   *  have answered it is refused). */
+  rememberScope(id: string, promptId: string, rule: string): { scope: RunScope; title: string } {
+    const live = this.live.get(id);
+    if (!live) throw new Error(`unknown run: ${id}`);
+    const waiting = live.ctx.waitingPermission(promptId);
+    if (!waiting) throw new Error("that permission is no longer waiting");
+    if (!ruleCovers(rule, waiting.prompt, waiting.facts, live.repo.path)) {
+      throw new Error(`${rule} does not cover this request, so remembering it would not stop it asking`);
+    }
+    const run = live.ctx.run;
+    return { scope: { path: live.repo.path, ...(run.flowStep ? { flowStep: run.flowStep } : {}) }, title: waiting.prompt.title };
+  }
+
+  /** Every live run's waiting permissions that a remembered rule now
+   *  covers are let through, after a rule was added. */
+  recheck(): void {
+    for (const live of this.live.values()) live.ctx.recheck();
   }
 
   /** Settles the prompt the run is waiting on. */

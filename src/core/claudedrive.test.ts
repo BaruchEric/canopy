@@ -2,7 +2,7 @@ import { afterAll, describe, expect, test } from "bun:test";
 import { mkdir, mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { ClaudeDriver, cliArgs, parseQuestions } from "./claudedrive";
+import { ClaudeDriver, cliArgs, parseQuestions, permissionAsk } from "./claudedrive";
 import type { RpcSpawn } from "./codexrpc";
 import { DEFAULT_AGENT } from "./types";
 import { RunCtx, type DriveRun } from "./driver";
@@ -168,6 +168,28 @@ describe("a Claude run through the driver", () => {
   test("check() names a missing binary before a run exists", () => {
     const why = new ClaudeDriver().check();
     expect(why === null || why.includes("claude CLI is not on PATH")).toBe(true);
+  });
+});
+
+describe("a permission's input", () => {
+  test("keeps the model's description of a Bash call and the command itself", () => {
+    expect(permissionAsk("Bash", { command: "ls -la src", description: "List the source folder" }, "/r")).toEqual({
+      kind: "permission",
+      tool: "Bash",
+      title: "ls -la src",
+      detail: "ls -la src",
+      description: "List the source folder",
+      command: "ls -la src",
+    });
+  });
+
+  test("names the file a file tool touches, made absolute", () => {
+    expect(permissionAsk("Write", { file_path: "/r/a.ts", content: "x" }, "/r").paths).toEqual(["/r/a.ts"]);
+    expect(permissionAsk("Grep", { pattern: "x", path: "src" }, "/r").paths).toEqual(["/r/src"]);
+    const web = permissionAsk("WebFetch", { url: "https://a.com", prompt: "read" }, "/r");
+    expect(web.paths).toBeUndefined();
+    expect(web.description).toBeUndefined();
+    expect(web.command).toBeUndefined();
   });
 });
 

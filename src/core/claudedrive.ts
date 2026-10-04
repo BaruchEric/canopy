@@ -16,7 +16,7 @@ import { normalizeAgent } from "./agent";
 import { bunSpawn, type RpcProc, type RpcSpawn } from "./codexrpc";
 import { spawnEnv, type DriveCtx, type DriveSpec, type RunDriver } from "./driver";
 import { agentArgs } from "./harness";
-import { DEFAULT_AGENT, type AgentSettings, type RunQuestion, type RunStep } from "./types";
+import { DEFAULT_AGENT, type AgentSettings, type PermissionAsk, type RunQuestion, type RunStep } from "./types";
 
 /** characters of tool output kept per step */
 const OUTPUT_CAP = 2_000;
@@ -69,6 +69,25 @@ export function parseQuestions(input: Record<string, unknown>): RunQuestion[] {
     out.push({ question, header, options, multiSelect: o["multiSelect"] === true });
   }
   return out;
+}
+
+/** A can_use_tool request as the permission the browser shows: the title
+ *  and detail it always had, plus what the plain-language line and a
+ *  remembered rule read: the model's own `description` of a Bash call (or
+ *  a sub-agent's), the command, and the files a file tool names. */
+export function permissionAsk(tool: string, input: Record<string, unknown>, cwd: string): PermissionAsk {
+  const description = (str(input, "description") || str(input, "reason")).trim().slice(0, 500);
+  const file = str(input, "file_path") || str(input, "notebook_path") || str(input, "path");
+  const command = str(input, "command");
+  return {
+    kind: "permission",
+    tool,
+    title: describeTool(tool, input, cwd),
+    detail: toolDetail(tool, input, cwd),
+    ...(description ? { description } : {}),
+    ...(tool === "Bash" && command ? { command } : {}),
+    ...(file ? { paths: [file.startsWith("/") ? file : `${cwd}/${file}`] } : {}),
+  };
 }
 
 /** The reply the CLI expects on stdin to a can_use_tool request. */
@@ -279,15 +298,7 @@ export class ClaudeDriver implements RunDriver {
         message: (a.kind === "deny" && a.message) || "The user closed the question without answering. Stop and summarize.",
       };
     }
-    const a = await ctx.ask(
-      {
-        kind: "permission",
-        tool,
-        title: describeTool(tool, input, ctx.cwd),
-        detail: toolDetail(tool, input, ctx.cwd),
-      },
-      requestId,
-    );
+    const a = await ctx.ask(permissionAsk(tool, input, ctx.cwd), requestId);
     if (a.kind === "allow" || a.kind === "allow-all") return { behavior: "allow", updatedInput: input };
     return {
       behavior: "deny",

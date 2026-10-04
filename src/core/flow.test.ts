@@ -145,6 +145,10 @@ describe("stepSpec", () => {
     expect(stepSpec({ ...TWO, unattended: "finish within your tools" }, 0, []).unattended).toBe("finish within your tools");
     expect(stepSpec(TWO, 0, []).unattended).toBeUndefined();
   });
+
+  test("a step's spec names its workflow and step, the scope a remembered rule can take", () => {
+    expect(stepSpec(TWO, 1, []).flowStep).toEqual({ workflow: TWO.name, step: TWO.steps[1]?.name ?? "" });
+  });
   test("a retry says why the last try was not accepted", () => {
     const spec = stepSpec(TWO, 0, [], "the summary asks you something");
     expect(spec.task).toContain("not accepted because: the summary asks you something");

@@ -752,22 +752,66 @@ export interface RunQuestion {
   multiSelect: boolean;
 }
 
-export type RunPrompt =
-  | {
-      id: string;
-      kind: "permission";
-      tool: string;
-      /** what Claude wants to do, as one line */
-      title: string;
-      /** the full command or input, for the details view */
-      detail: string;
-    }
-  | { id: string; kind: "question"; questions: RunQuestion[] };
+/** A flow's step by name: which workflow, which of its steps. */
+export interface FlowStepName {
+  workflow: string;
+  step: string;
+}
+
+/** A permission a run asks for, before canopy numbers it. */
+export interface PermissionAsk {
+  kind: "permission";
+  tool: string;
+  /** what Claude wants to do, as one line */
+  title: string;
+  /** the full command or input, for the details view */
+  detail: string;
+  /** the agent's own words for it: Claude's Bash `description`, Codex's reason */
+  description?: string;
+  /** a shell prompt's command, unwrapped from Codex's `/bin/sh -lc` */
+  command?: string;
+  /** where a command runs, when the request names a folder (Codex) */
+  cwd?: string;
+  /** the files a file tool touches */
+  paths?: string[];
+}
+
+export type RunPrompt = (PermissionAsk & { id: string }) | { id: string; kind: "question"; questions: RunQuestion[] };
+
+/** Where a remembered rule applies: one workflow's step wherever it runs, a
+ *  whole workflow, or one repo (every run in it, a flow's included). */
+export type RememberScope =
+  | { kind: "step"; workflow: string; step: string }
+  | { kind: "workflow"; workflow: string }
+  | { kind: "repo"; path: string };
+
+/** An allow that also remembers: the rule, and which of the run's scopes it
+ *  is kept for; the server works the scope out from the run itself. */
+export interface RememberAsk {
+  rule: string;
+  scope: RememberScope["kind"];
+}
+
+/** A rule canopy keeps in its config dir and answers matching run
+ *  permissions with, so they stop asking (`core/remember.ts`). */
+export interface RememberedRule {
+  id: string;
+  /** one of Claude's rules: `Bash(git status:*)`, `Bash(ls)`, `Bash`, `WebFetch` */
+  rule: string;
+  scope: RememberScope;
+  /** unix ms */
+  at: number;
+  /** the device that remembered it, when it said */
+  by?: string;
+  /** the prompt's title it was remembered from */
+  from?: string;
+}
 
 /** The user's reply to a RunPrompt. Answers map question text to the chosen
- *  label(s); "allow-all" allows every later permission in the same run. */
+ *  label(s); "allow-all" allows every later permission in the same run; an
+ *  allow with `remember` also keeps a rule for later runs. */
 export type RunAnswer =
-  | { kind: "allow" }
+  | { kind: "allow"; remember?: RememberAsk }
   | { kind: "allow-all" }
   /** `message`, when given, is what the agent is told in place of the
    *  harness driver's own words */
@@ -817,6 +861,8 @@ export interface Run {
   note: string;
   /** the device it was started from, when the request said */
   by?: string;
+  /** a flow's step run: its workflow and step, a remembered rule's scope */
+  flowStep?: FlowStepName;
   status: RunStatus;
   /** unix ms */
   startedAt: number;
@@ -885,6 +931,8 @@ export type ServerEvent =
    *  job just installed or built one; the panel re-reads the list */
   | { type: "builds"; repoId: string; what: BuildChange; build: string }
   | { type: "launchers"; launchers: Record<string, LaunchSettings> }
+  /** the remembered rules, whole, whenever one is added or forgotten */
+  | { type: "remembered"; rules: RememberedRule[] }
   /** sent to the browsers on one address only: what their machine can open
    *  changed, a helper came or went */
   | { type: "helpers"; helpers: HelperInfo[] }

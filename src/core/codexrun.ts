@@ -42,6 +42,7 @@ import { splitArgs } from "./agent";
 import { sweepCodexTrust } from "./codextrust";
 import { bunSpawn, RpcClient, RpcClosed, RpcError, type RpcExit, type RpcRequest, type RpcSpawn } from "./codexrpc";
 import { spawnEnv, type DriveAgent, type DriveCtx, type DriveResult, type DriveTokens, type PromptInput, type RunDriver } from "./driver";
+import { commandWords, parseRule, unwrapShell, type ToolRule } from "./shellwords";
 import type { RunAnswer, RunQuestion, RunStep, RunTool } from "./types";
 
 /** characters of tool output kept per step, as for a Claude run */
@@ -257,136 +258,10 @@ export function turnParams(threadId: string, text: string, agent: DriveAgent): R
   };
 }
 
-/* ---------- shell words: what an approval's command actually runs ---------- */
+/* ---------- shell words and rules: shellwords.ts, browser-safe ---------- */
 
-/** A command line as words, the way a POSIX shell would split it, or null
- *  when the shell would do more than run one simple command: chain another
- *  (`;`, `|`, `&`, newline), redirect (`<`, `>`), open a subshell or group
- *  (`(`, `)`, `{`, `}`), substitute anything (`$`, a backtick) or start a
- *  comment. Quotes are honoured: what sits inside them is data, so `git
- *  commit -m "a; b"` is one command, while `$` and backticks are refused in
- *  double quotes too, since they expand there. */
-export function shellWords(s: string): string[] | null {
-  const out: string[] = [];
-  let word = "";
-  let inWord = false;
-  let i = 0;
-  const end = () => {
-    if (inWord) out.push(word);
-    word = "";
-    inWord = false;
-  };
-  while (i < s.length) {
-    const ch = s[i] ?? "";
-    if (ch === " " || ch === "\t") {
-      end();
-      i++;
-      continue;
-    }
-    if (ch === "'") {
-      const close = s.indexOf("'", i + 1);
-      if (close === -1) return null;
-      word += s.slice(i + 1, close);
-      inWord = true;
-      i = close + 1;
-      continue;
-    }
-    if (ch === '"') {
-      i++;
-      inWord = true;
-      let closed = false;
-      while (i < s.length) {
-        const c = s[i] ?? "";
-        if (c === '"') {
-          closed = true;
-          i++;
-          break;
-        }
-        if (c === "$" || c === "`") return null;
-        if (c === "\\") {
-          const n = s[i + 1];
-          if (n === undefined || n === "\n") return null;
-          if (n === "$" || n === "`" || n === '"' || n === "\\") {
-            word += n;
-            i += 2;
-            continue;
-          }
-          word += c;
-          i++;
-          continue;
-        }
-        word += c;
-        i++;
-      }
-      if (!closed) return null;
-      continue;
-    }
-    if (ch === "\\") {
-      const n = s[i + 1];
-      if (n === undefined || n === "\n") return null;
-      word += n;
-      inWord = true;
-      i += 2;
-      continue;
-    }
-    if (";|&<>(){}$`\n\r".includes(ch)) return null;
-    if (ch === "#" && !inWord) return null;
-    word += ch;
-    inWord = true;
-    i++;
-  }
-  end();
-  return out;
-}
+export { commandWords, parseRule, shellWords, unwrapShell, type ToolRule } from "./shellwords";
 
-const SHELLS = new Set(["sh", "bash", "zsh", "dash"]);
-const SHELL_FLAGS = new Set(["-c", "-lc", "-cl"]);
-
-/** `/bin/sh -lc '<script>'` and its kin as [script], else null. */
-function wrapped(words: string[]): string | null {
-  if (words.length !== 3) return null;
-  const [shell = "", flag = "", script = ""] = words;
-  const base = shell.slice(shell.lastIndexOf("/") + 1);
-  return SHELLS.has(base) && SHELL_FLAGS.has(flag) ? script : null;
-}
-
-/** The script a command runs, for a step's title: codex hands every command
- *  over as `/bin/sh -lc '<script>'`, and the wrapper says nothing. */
-export function unwrapShell(command: string): string {
-  const words = shellWords(command);
-  return (words && wrapped(words)) ?? command;
-}
-
-/** The words of the one simple command an approval would run, unwrapped from
- *  its shell, or null when it is anything more. */
-export function commandWords(command: string): string[] | null {
-  const outer = shellWords(command);
-  if (!outer) return null;
-  const script = wrapped(outer);
-  const words = script === null ? outer : shellWords(script);
-  return words && words.length > 0 ? words : null;
-}
-
-/* ---------- allowed tools: Claude's rules, enforced by canopy ---------- */
-
-export type ToolRule =
-  | { kind: "bash"; words: string[]; prefix: boolean }
-  | { kind: "tool"; name: string };
-
-/** One of Claude's permission rules as canopy can apply it to Codex:
- *  `Bash(git status:*)` is a word prefix, `Bash(bun install)` an exact
- *  command, a bare `Edit` a whole tool. A rule scoped to paths (`Edit(src/**)`)
- *  or unreadable is null: honouring half of it would allow more than it says. */
-export function parseRule(rule: string): ToolRule | null {
-  const bash = /^Bash\((.+)\)$/.exec(rule.trim());
-  if (bash) {
-    const inner = bash[1] ?? "";
-    const prefix = inner.endsWith(":*");
-    const words = shellWords(prefix ? inner.slice(0, -2) : inner);
-    return words && words.length > 0 ? { kind: "bash", words, prefix } : null;
-  }
-  return /^[A-Za-z]+$/.test(rule.trim()) ? { kind: "tool", name: rule.trim() } : null;
-}
 
 /** What canopy knows about an approval when it decides whether a rule
  *  covers it. A command's `cwd` is where it would run, null when the
@@ -555,6 +430,8 @@ export function approvalPrompt(
 ): PromptInput {
   const reason = str(params, "reason");
   const tail = (lines: string[]): string => lines.filter(Boolean).join("\n\n").slice(0, DETAIL_CAP);
+  // the agent's own words for it; the sandbox's retry line is not that
+  const why = reason && !ESCALATION.test(reason) ? { description: reason.slice(0, 500) } : {};
   switch (method) {
     case "item/commandExecution/requestApproval":
     case "execCommandApproval": {
@@ -566,6 +443,7 @@ export function approvalPrompt(
           tool: "Network",
           title: describeTool("Network", input),
           detail: tail([toolDetail("Network", input), reason]),
+          ...why,
         };
       }
       const raw = params["command"];
@@ -579,6 +457,7 @@ export function approvalPrompt(
           tool: "Bash",
           title: `send input to ${script}`,
           detail: tail([script, where, reason]),
+          ...why,
         };
       }
       return {
@@ -586,13 +465,16 @@ export function approvalPrompt(
         tool: "Bash",
         title: describeTool("Bash", { command: script }),
         detail: tail([toolDetail("Bash", { command: script }), where, reason]),
+        command: script,
+        ...(cwd ? { cwd } : {}),
+        ...why,
       };
     }
     case "item/fileChange/requestApproval":
     case "applyPatchApproval": {
-      const input = changesInput(
-        method === "applyPatchApproval" ? legacyChanges(params["fileChanges"]) : fileChanges(item ?? {}),
-      );
+      const changes = method === "applyPatchApproval" ? legacyChanges(params["fileChanges"]) : fileChanges(item ?? {});
+      const input = changesInput(changes);
+      const paths = changes.flatMap((c) => (c.movePath ? [c.path, c.movePath] : [c.path]));
       const grant = str(params, "grantRoot");
       return {
         kind: "permission",
@@ -603,6 +485,8 @@ export function approvalPrompt(
           grant ? `also asks to write anywhere under ${grant} for the rest of the run` : "",
           reason,
         ]),
+        ...(paths.length ? { paths } : {}),
+        ...why,
       };
     }
     case "item/permissions/requestApproval": {
@@ -612,6 +496,7 @@ export function approvalPrompt(
         tool: "Permissions",
         title: describeTool("Permissions", perms, root),
         detail: tail([toolDetail("Permissions", perms, root), reason]),
+        ...why,
       };
     }
     default:
@@ -1252,7 +1137,7 @@ export class CodexDriver implements RunDriver {
           rpc.reply(req.id, approvalReply(req.method, params, { kind: "allow" }, false));
           return;
         }
-        const a = await this.ask(approvalPrompt(req.method, params, item, ctx.cwd), key);
+        const a = await this.ask(approvalPrompt(req.method, params, item, ctx.cwd), key, facts);
         if (a) rpc.reply(req.id, approvalReply(req.method, params, a, this.interrupting));
         return;
       }
@@ -1278,12 +1163,12 @@ export class CodexDriver implements RunDriver {
 
   /** Parks the run on a prompt. Null when the server cleared the request
    *  first: it is answered already, and a reply would go nowhere. */
-  private async ask(prompt: PromptInput, key: string): Promise<RunAnswer | null> {
+  private async ask(prompt: PromptInput, key: string, facts?: ApprovalFacts): Promise<RunAnswer | null> {
     const ctx = this.ctx;
     if (!ctx) return null;
     this.asking.add(key);
     try {
-      const a = await ctx.ask(prompt, key);
+      const a = await ctx.ask(prompt, key, facts);
       return this.resolved.has(key) ? null : a;
     } finally {
       this.asking.delete(key);

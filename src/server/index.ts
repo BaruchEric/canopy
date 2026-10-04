@@ -110,6 +110,7 @@ import {
   setRole,
   upsertWorkspace,
 } from "../core/store";
+import { RememberedRules, scopeOf } from "../core/remember";
 import { QUIET_WAIT, Runner } from "../core/runner";
 import type { RunDriver } from "../core/driver";
 import { ANSWERS_FILE, isSeedRepoId, SEED_AGENT_REFUSAL, SEEDS_DIR, withStoredAnswers } from "../core/sprout";
@@ -223,6 +224,8 @@ interface ServerState {
   timers: Map<string, ReturnType<typeof setTimeout>>;
   /** Claude Code jobs, one live session per repo at most */
   runner: Runner;
+  /** the rules an allow said to remember, answering runs' permissions */
+  remembered: RememberedRules;
   /** workflow runs, step by step, over the runner's jobs */
   flows: Flows;
   /** the claude-history overview, kept for HISTORY_TTL and for one scan */
@@ -1069,7 +1072,16 @@ async function historyContext(
 function parseAnswer(v: unknown): RunAnswer | null {
   if (!v || typeof v !== "object") return null;
   const kind = (v as { kind?: unknown }).kind;
-  if (kind === "allow" || kind === "allow-all" || kind === "deny") return { kind };
+  if (kind === "allow") {
+    const r = (v as { remember?: unknown }).remember;
+    if (r === undefined) return { kind };
+    if (!r || typeof r !== "object") return null;
+    const { rule, scope } = r as { rule?: unknown; scope?: unknown };
+    if (typeof rule !== "string" || !rule.trim() || rule.length > 2_000) return null;
+    if (scope !== "step" && scope !== "workflow" && scope !== "repo") return null;
+    return { kind, remember: { rule: rule.trim(), scope } };
+  }
+  if (kind === "allow-all" || kind === "deny") return { kind };
   if (kind !== "answers") return null;
   const raw = (v as { answers?: unknown }).answers;
   if (!raw || typeof raw !== "object") return null;
@@ -2163,19 +2175,46 @@ async function handleApi(
     return json({ ok: true });
   }
   if (path === "/api/runs/answer" && method === "POST") {
-    const b = (await req.json()) as { id?: unknown; promptId?: unknown; answer?: unknown };
+    const b = (await req.json()) as { id?: unknown; promptId?: unknown; answer?: unknown; client?: unknown };
     const answer = parseAnswer(b.answer);
     if (typeof b.id !== "string" || typeof b.promptId !== "string" || !answer) {
       return json({ error: "malformed answer" }, 400);
     }
+    // an allow that remembers keeps its rule first: one that would not
+    // cover this very prompt, or a scope the run does not have, is refused
+    // and nothing is answered
+    if (answer.kind === "allow" && answer.remember) {
+      const { rule, scope: kind } = answer.remember;
+      let held: ReturnType<Runner["rememberScope"]>;
+      try {
+        held = state.runner.rememberScope(b.id, b.promptId, rule);
+      } catch (err) {
+        return json({ error: String(err instanceof Error ? err.message : err) }, 409);
+      }
+      const scope = scopeOf(kind, held.scope);
+      if (!scope) return json({ error: "only a workflow's step run can be remembered for its step or its workflow" }, 400);
+      const by = deviceNameOf(state, typeof b.client === "string" ? b.client : null);
+      await state.remembered.add(rule, scope, { ...(by ? { by } : {}), from: held.title });
+      broadcast(state, { type: "remembered", rules: state.remembered.list() });
+    }
     // the questions as they were asked, before the answer settles them
     const asked = state.runner.get(b.id)?.prompt;
     const run = state.runner.answer(b.id, b.promptId, answer);
+    // the new rule may cover what other runs are waiting on
+    if (answer.kind === "allow" && answer.remember) state.runner.recheck();
     // an answer inside an incubator stage is one of the sprout's inputs (amendment 6, ruling 14)
     if (answer.kind === "answers" && asked?.kind === "question" && asked.id === b.promptId) {
       state.incubator.inc.runAnswered(b.id, asked.questions, answer.answers);
     }
     return json(run);
+  }
+  if (path === "/api/remembered" && method === "GET") return json({ rules: state.remembered.list() });
+  if (path === "/api/remembered/forget" && method === "POST") {
+    const b = (await req.json()) as { id?: unknown };
+    if (typeof b.id !== "string") return json({ error: "missing rule id" }, 400);
+    if (!(await state.remembered.forget(b.id))) return json({ error: "no such remembered rule" }, 404);
+    broadcast(state, { type: "remembered", rules: state.remembered.list() });
+    return json({ rules: state.remembered.list() });
   }
   if (path === "/api/runs/stop" && method === "POST") {
     const b = (await req.json()) as { id?: unknown };
@@ -2934,9 +2973,12 @@ export async function startServer(opts: {
           : "stages: off until the stage runner is set up",
     );
   }
+  // the rules an allow said to remember, in the config dir
+  const remembered = new RememberedRules();
   // every run is told which backend started it (CANOPY_BACKEND), and codex
   // hears canopy's version in its handshake
   const runnerOpts = {
+    remembered: () => remembered.list(),
     backend: selfName(cfg.self, hostname()),
     version: readPkg().version ?? "0",
     // a seed's runs are an incubator stage's: no GitHub login of canopy's
@@ -3089,6 +3131,7 @@ export async function startServer(opts: {
     terms: new Map(),
     tmux: tmuxBase(),
     runner,
+    remembered,
     flows,
     launcher,
     chan: new ChanHub(chanCfg, {
