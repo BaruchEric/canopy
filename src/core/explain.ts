@@ -552,6 +552,12 @@ function gitPart(args: readonly string[], w: Where, who: string | null): Part[] 
   const authorAt = rest.indexOf("--author");
   const author = rest.find((a) => a.startsWith("--author="))?.slice("--author=".length) ?? (authorAt === -1 ? undefined : rest[authorAt + 1]);
   const g = (key: string, one: string, flags?: ExplainFlag[]) => [...parts, part(`git ${key}`, one, undefined, flags)];
+  // a reader's --output writes a file of its choosing, so it reads as a write, never a reader's key
+  const outAt = rest.indexOf("--output");
+  const out = rest.find((a) => a.startsWith("--output="))?.slice("--output=".length) ?? (outAt === -1 ? undefined : rest[outAt + 1]);
+  if (out !== undefined && ["diff", "show", "log", "shortlog", "reflog"].includes(sub)) {
+    return g("output", `writes git ${sub === "diff" || sub === "show" ? "changes" : "history"} to ${out}`, ["writes"]);
+  }
   switch (sub) {
     case "status":
       return g("status", "reads git status");

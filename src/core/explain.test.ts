@@ -158,6 +158,11 @@ describe("explainCommand", () => {
     expect(explainCommand("echo x > package.json", ROOT).guarded).toBe(true);
     expect(explainCommand("cp a .Claude/settings.json", ROOT).guarded).toBe(true);
     expect(explainCommand("ls src", ROOT).guarded).toBeUndefined();
+    // git's readers write with --output, so they are not readers then
+    expect(explainCommand("git diff --output=.git/hooks/pre-commit", ROOT).guarded).toBe(true);
+    expect(explainCommand("git log --output .git/config", ROOT).guarded).toBe(true);
+    expect(ex("git log --output=notes.txt")).toEqual({ says: "writes git history to notes.txt", flags: ["writes"] });
+    expect(explainCommand("git log -- .husky", ROOT).guarded).toBeUndefined();
     // judged from the project's own folder, which may itself sit under one
     expect(explainCommand("ls src", "/home/me/.claude/worktrees/a").guarded).toBeUndefined();
   });

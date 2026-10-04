@@ -172,6 +172,17 @@ describe("ruleCovers", () => {
     for (const c of ["sort -o .git/hooks/pre-commit x", "uniq in .git/hooks/x", "xxd -r hex .git/hooks/x", "base64 -d -o .git/hooks/x"]) {
       expect([c, covers("Bash", bash(c))]).toEqual([c, false]);
     }
+    // git's readers write a file of their choosing with --output
+    const gitOut = [
+      "git log -1 --format='[core]%n%x09fsmonitor = x' --output=.git/config",
+      "git diff --output=.git/hooks/pre-commit",
+      "git diff --output .git/hooks/pre-commit",
+      "git show HEAD --output=package.json",
+    ];
+    for (const c of gitOut) {
+      expect([c, covers("Bash", bash(c))]).toEqual([c, false]);
+      expect([c, covers(`Bash(git ${c.split(" ")[1]}:*)`, bash(c))]).toEqual([c, false]);
+    }
     for (const c of ["cat package.json", "head -n 5 .git/config", "git diff package.json", "git log -- .husky", "grep x package.json", "ls .claude"]) {
       expect([c, covers("Bash", bash(c))]).toEqual([c, true]);
     }
