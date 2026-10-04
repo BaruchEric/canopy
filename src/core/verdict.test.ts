@@ -131,7 +131,7 @@ describe("judgeState", () => {
     const s = judgeState({ task: "t", summary: "s", check: null, files });
     const half = EVIDENCE_EACH / 2;
     expect(s).toContain(`File f1.md:\n${"x".repeat(half)}\n[clipped: 100 characters]\n${"x".repeat(half)}\n\n`);
-    // three full files take 18 KB; the fourth gets what is left of 20 KB
+    // three full files take their share each; the fourth gets what is left of the total
     const room = EVIDENCE_TOTAL - 3 * EVIDENCE_EACH;
     expect(s).toContain(`File f4.md:\n${"x".repeat(room / 2)}\n[clipped: ${big.length - room} characters]\n${"x".repeat(room / 2)}\n\n`);
     expect(s).not.toContain("File f5.md");
@@ -140,18 +140,20 @@ describe("judgeState", () => {
   });
 
   test("a clipped file keeps its end, where a research file's pick and an eval's verdict sit", () => {
-    // the sizes scout's Eval judge read on 2026-10-03, when three passes in a
-    // row parked on "not enough to go on" with both conclusions clipped off
+    // the sizes scout's Eval judge read on 2026-10-03 for an extend pick, when
+    // pass after pass parked on "not enough to go on" at 6 KB each
     const fill = (n: number, end: string): string => `${"r".repeat(n - end.length)}${end}`;
     const files = [
-      { path: ".canopy/intent.md", text: fill(3716, "## What success looks like") },
-      { path: ".canopy/research.md", text: fill(14722, "## Pick\nextend clms") },
-      { path: ".canopy/pick.json", text: fill(402, '"kind":"extend"}') },
-      { path: ".canopy/eval.md", text: fill(8006, "## Verdict\nGo ahead.") },
+      { path: ".canopy/intent.md", text: fill(3894, "## What success looks like") },
+      { path: ".canopy/research.md", text: fill(20302, "## Pick\nextend clms") },
+      { path: ".canopy/pick.json", text: fill(425, '"kind":"extend"}') },
+      { path: ".canopy/eval.md", text: fill(9831, "## Verdict\nGo ahead.") },
     ];
     const s = judgeState({ task: "t", summary: "s", check: null, files });
     expect(s).toContain("## Pick\nextend clms\n\nFile .canopy/pick.json");
     expect(s.endsWith("## Verdict\nGo ahead.")).toBe(true);
-    expect(s.match(/\[clipped: \d+ characters\]/g)?.length).toBe(2);
+    // only research is over its share; the eval is read whole
+    expect(s.match(/\[clipped: \d+ characters\]/g)?.length).toBe(1);
+    expect(s).toContain(`File .canopy/eval.md:\n${"r".repeat(9831 - "## Verdict\nGo ahead.".length)}`);
   });
 });

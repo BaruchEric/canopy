@@ -111,9 +111,12 @@ export function decideJudge(answers: JudgeAnswers): Judgment {
 }
 
 /** Clip sizes in characters (UTF-16 code units, as the strings are sliced),
- *  not bytes. */
-export const EVIDENCE_EACH = 6 * 1024;
-export const EVIDENCE_TOTAL = 20 * 1024;
+ *  not bytes. At 6 KB each and 20 KB in all, an extend pick's evidence (a
+ *  20 KB research, a 10 KB eval) lost its middle, and Jev put its trust in
+ *  the evidence at 0.45 every time while saying the pick met the intent at
+ *  0.7; at 12 KB and 40 KB the same files read 0.52 to 0.55 and 0.85 to 0.89. */
+export const EVIDENCE_EACH = 12 * 1024;
+export const EVIDENCE_TOTAL = 40 * 1024;
 
 /** `cap` characters of `text`: its first half and its last, with the count
  *  cut between them. A research file ends in its pick and an eval in its
