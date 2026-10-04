@@ -88,8 +88,11 @@ export const JUDGE_QUESTIONS = {
 export const JUDGE_THRESHOLDS = {
   /** meets needs at least this much probability */
   meets: 0.7,
-  /** enough evidence needs at least this much */
-  evidence: 0.5,
+  /** enough evidence needs at least this much. Jev's answer here is low
+   *  across the board: on 2026-10-03 empty or one-line notes scored 0.09 to
+   *  0.14 and full notes it said met the intent at 0.9 scored 0.41 to 0.55,
+   *  so 0.5 parked sound work about half the time (amendment 6 ruling 26) */
+  evidence: 0.35,
   /** a broken rule at this much or more parks */
   rules: 0.3,
   /** misses at this much or more is a rejection */

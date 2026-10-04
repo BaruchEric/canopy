@@ -97,8 +97,19 @@ describe("decideJudge", () => {
   });
 
   test("too little evidence parks", () => {
-    const j = decideJudge(judged({ evidence: { probability: 0.49 } }));
+    // empty and one-line notes, replayed through Jev on 2026-10-03, scored 0.09 to 0.14
+    const j = decideJudge(judged({ evidence: { probability: 0.14 } }));
     expect(j).toMatchObject({ go: false, rejected: false, reason: "the judge says there is not enough to go on" });
+    expect(decideJudge(judged({ evidence: { probability: 0.34 } })).go).toBe(false);
+  });
+
+  test("full notes the judge trusts go, though Jev scores them under one half", () => {
+    // the laundromat's extend Accept (smoke and accept notes, every success
+    // line traced to code) scored 0.41 to 0.47 on every replay, the bill
+    // splitter's 0.51: Jev's evidence answer sits below 0.6 even for work it
+    // says meets the intent at 0.9
+    expect(decideJudge(judged({ evidence: { probability: 0.41 } })).go).toBe(true);
+    expect(decideJudge(judged({ evidence: { probability: 0.35 } })).go).toBe(true);
   });
 
   test("partly parks", () => {
