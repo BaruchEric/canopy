@@ -21,22 +21,22 @@
     "redeploy": "bash scripts/redeploy.sh"
   },
   "dependencies": {
-    "@ai-sdk/gateway": "^4.0.85",
+    "@ai-sdk/gateway": "^4.0.103",
     "@xterm/addon-fit": "^0.11.0",
     "@xterm/xterm": "^6.0.0",
-    "ai": "^7.0.105",
+    "ai": "^7.0.127",
     "modern-screenshot": "^4.7.0",
-    "react": "^19.1.0",
-    "react-dom": "^19.1.0",
-    "zustand": "^5.0.5"
+    "react": "^19.3.0",
+    "react-dom": "^19.3.0",
+    "zustand": "^5.0.15"
   },
   "devDependencies": {
-    "@types/bun": "^1.2.19",
-    "@types/react": "^19.1.8",
-    "@types/react-dom": "^19.1.6",
-    "@vitejs/plugin-react": "^4.6.0",
-    "oxlint": "^1.8.0",
-    "typescript": "^5.8.3",
-    "vite": "^7.0.0"
+    "@types/bun": "^1.4.2",
+    "@types/react": "^19.3.0",
+    "@types/react-dom": "^19.3.0",
+    "@vitejs/plugin-react": "^4.7.0",
+    "oxlint": "^1.86.0",
+    "typescript": "^5.9.3",
+    "vite": "^7.3.6"
   }
 }
