@@ -6,6 +6,7 @@
     "moduleResolution": "bundler",
     "lib": ["ESNext", "DOM", "DOM.Iterable"],
     "jsx": "react-jsx",
+    "types": ["bun", "vite/client"],
     "noEmit": true,
     "skipLibCheck": true,
     "verbatimModuleSyntax": true,

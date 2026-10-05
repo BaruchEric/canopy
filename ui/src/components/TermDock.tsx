@@ -269,7 +269,7 @@ export function TermView({
       exitRef.current?.(code);
       note(text);
     };
-    const send = (data: string | Uint8Array) => {
+    const send = (data: string | Uint8Array<ArrayBuffer>) => {
       if (ws?.readyState === WebSocket.OPEN) ws.send(data);
     };
     // The shell lives on the server: a connection that drops without the
