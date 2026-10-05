@@ -1,35 +1,17 @@
 /* canopy — forest-floor instrument panel
    bark surfaces, moss/lichen/rust/sky state colors, all-mono type.
    Every color is a light-dark() pair; the theme setting only flips
-   color-scheme on <html>, so the OS choice and the manual one share tokens. */
+   color-scheme on <html>, so the OS choice and the manual one share tokens.
+   The palette setting swaps the whole set: data-palette on <html> picks one
+   of the [data-palette] blocks below, each a light and a dark variant of the
+   same tokens (ui/src/settings.ts lists the names, and a test holds every
+   block to forest's set). The blocks match any element, so a swatch in
+   Settings paints with its own palette whatever the page wears. */
 
 :root {
   color-scheme: light dark;
-  --bark0: light-dark(#f2f4ee, #0c110d);
-  --bark1: light-dark(#fafbf8, #121a14);
-  --bark2: light-dark(#eef1e9, #19241b);
-  --bark3: light-dark(#e2e8db, #223022);
-  /* what floats above the page: popover, menu, sheet. Lighter than any
-     bark in the dark, plain white in the light, so a popup never reads
-     as part of the surface it opened from. */
-  --float: light-dark(#ffffff, #1f2d22);
-  --float-edge: light-dark(#b7c2ab, #3d4f38);
   --float-shadow: light-dark(rgb(35 45 32 / 0.28), rgb(0 0 0 / 0.75));
-  --hair: light-dark(#d8dfd0, #24301f);
-  --hair2: light-dark(#c3cdb8, #33422e);
-  --ink: light-dark(#232d20, #dce5da);
-  --ink-dim: light-dark(#64705a, #8fa083);
-  --ink-faint: light-dark(#97a28c, #5d6b55);
-  --moss: light-dark(#3e7a38, #93c98b);
-  --moss-deep: light-dark(#2c5d28, #6aa065);
-  --moss-pale: light-dark(#6aa065, #b8d9a8);
-  --lichen: light-dark(#a5762a, #d9b36b);
-  --rust: light-dark(#a84e2f, #c97b5f);
-  --sky: light-dark(#2f7a99, #7fb4c9);
   --trunk: #7a5c44;
-  /* the two ANSI colors the palette has no name for; the shell paints with them */
-  --term-magenta: light-dark(#8a5a8f, #c9a0d0);
-  --term-cyan: light-dark(#2a8a8a, #7fcfc9);
   /* a top-edge highlight, the way light catches bark */
   --sheen: light-dark(rgb(255 255 255 / 0.6), rgb(255 255 255 / 0.04));
   --shadow: light-dark(rgb(35 45 32 / 0.18), rgb(0 0 0 / 0.55));
@@ -49,6 +31,166 @@
 }
 :root[data-theme="light"] {
   color-scheme: light;
+}
+
+/* forest, the default and canopy's own */
+:root,
+[data-palette="forest"] {
+  --bark0: light-dark(#f2f4ee, #0c110d);
+  --bark1: light-dark(#fafbf8, #121a14);
+  --bark2: light-dark(#eef1e9, #19241b);
+  --bark3: light-dark(#e2e8db, #223022);
+  /* what floats above the page: popover, menu, sheet. Lighter than any
+     bark in the dark, plain white in the light, so a popup never reads
+     as part of the surface it opened from. */
+  --float: light-dark(#ffffff, #1f2d22);
+  --float-edge: light-dark(#b7c2ab, #3d4f38);
+  --hair: light-dark(#d8dfd0, #24301f);
+  --hair2: light-dark(#c3cdb8, #33422e);
+  --ink: light-dark(#232d20, #dce5da);
+  --ink-dim: light-dark(#64705a, #8fa083);
+  --ink-faint: light-dark(#97a28c, #5d6b55);
+  --moss: light-dark(#3e7a38, #93c98b);
+  --moss-deep: light-dark(#2c5d28, #6aa065);
+  --moss-pale: light-dark(#6aa065, #b8d9a8);
+  --lichen: light-dark(#a5762a, #d9b36b);
+  --rust: light-dark(#a84e2f, #c97b5f);
+  --sky: light-dark(#2f7a99, #7fb4c9);
+  /* the two ANSI colors the palette has no name for; the shell paints with them */
+  --term-magenta: light-dark(#8a5a8f, #c9a0d0);
+  --term-cyan: light-dark(#2a8a8a, #7fcfc9);
+}
+/* everforest's medium contrast; the light side's accents a step darker so they hold up as text */
+[data-palette="everforest"] {
+  --bark0: light-dark(#f4f0d9, #232a2e);
+  --bark1: light-dark(#fdf6e3, #2d353b);
+  --bark2: light-dark(#efebd4, #343f44);
+  --bark3: light-dark(#e6e2cc, #3d484d);
+  --float: light-dark(#fffbef, #384247);
+  --float-edge: light-dark(#bdc3af, #56635f);
+  --hair: light-dark(#e0dcc7, #3d484d);
+  --hair2: light-dark(#c9ccb5, #4f585e);
+  --ink: light-dark(#5c6a72, #d3c6aa);
+  --ink-dim: light-dark(#66756a, #9da9a0);
+  --ink-faint: light-dark(#a6b0a0, #7a8478);
+  --moss: light-dark(#5f7700, #a7c080);
+  --moss-deep: light-dark(#4b5e00, #83a36b);
+  --moss-pale: light-dark(#7f9400, #c3d6a0);
+  --lichen: light-dark(#9a6c00, #dbbc7f);
+  --rust: light-dark(#d83d3a, #e67e80);
+  --sky: light-dark(#2f7fae, #7fbbb3);
+  --term-magenta: light-dark(#c4549f, #d699b6);
+  --term-cyan: light-dark(#2d9068, #83c092);
+}
+/* gruvbox: the hard background under the soft one, the faded accents in the light */
+[data-palette="gruvbox"] {
+  --bark0: light-dark(#fbf1c7, #1d2021);
+  --bark1: light-dark(#f9f5d7, #282828);
+  --bark2: light-dark(#f2e5bc, #32302f);
+  --bark3: light-dark(#ebdbb2, #3c3836);
+  --float: light-dark(#fffcea, #3c3836);
+  --float-edge: light-dark(#bdae93, #665c54);
+  --hair: light-dark(#ebdbb2, #3c3836);
+  --hair2: light-dark(#d5c4a1, #504945);
+  --ink: light-dark(#3c3836, #ebdbb2);
+  --ink-dim: light-dark(#7c6f64, #a89984);
+  --ink-faint: light-dark(#a89984, #7c6f64);
+  --moss: light-dark(#79740e, #b8bb26);
+  --moss-deep: light-dark(#5f5b08, #98971a);
+  --moss-pale: light-dark(#98971a, #cdcf67);
+  --lichen: light-dark(#a36608, #fabd2f);
+  --rust: light-dark(#9d0006, #fb4934);
+  --sky: light-dark(#076678, #83a598);
+  --term-magenta: light-dark(#8f3f71, #d3869b);
+  --term-cyan: light-dark(#427b58, #8ec07c);
+}
+/* nord: polar night and snow storm, aurora for the states, frost for links */
+[data-palette="nord"] {
+  --bark0: light-dark(#e5e9f0, #2a2f3a);
+  --bark1: light-dark(#eceff4, #2e3440);
+  --bark2: light-dark(#e1e5ec, #353c4a);
+  --bark3: light-dark(#d8dee9, #3b4252);
+  --float: light-dark(#f6f8fb, #3b4252);
+  --float-edge: light-dark(#b6bfcd, #4c566a);
+  --hair: light-dark(#d8dee9, #3b4252);
+  --hair2: light-dark(#c2cad6, #4c566a);
+  --ink: light-dark(#2e3440, #e5e9f0);
+  --ink-dim: light-dark(#4c566a, #a3adbf);
+  --ink-faint: light-dark(#7b88a1, #6b7891);
+  --moss: light-dark(#4f7a3a, #a3be8c);
+  --moss-deep: light-dark(#3f6230, #8aa673);
+  --moss-pale: light-dark(#6f945a, #c0d4ad);
+  --lichen: light-dark(#9a6f12, #ebcb8b);
+  --rust: light-dark(#a9444e, #d0767e);
+  --sky: light-dark(#4c6f9c, #88c0d0);
+  --term-magenta: light-dark(#8a5f86, #b48ead);
+  --term-cyan: light-dark(#3d7f86, #8fbcbb);
+}
+/* solarized: the sixteen colors, with the light side's ink at base02 and its accents darkened for text */
+[data-palette="solarized"] {
+  --bark0: light-dark(#eee8d5, #00212b);
+  --bark1: light-dark(#fdf6e3, #002b36);
+  --bark2: light-dark(#f5efdc, #073642);
+  --bark3: light-dark(#e6dfca, #0d4050);
+  --float: light-dark(#fffbf0, #08394a);
+  --float-edge: light-dark(#c9c2ac, #2a5561);
+  --hair: light-dark(#e6dfca, #073642);
+  --hair2: light-dark(#d6cfb9, #164a58);
+  --ink: light-dark(#073642, #93a1a1);
+  --ink-dim: light-dark(#586e75, #74898c);
+  --ink-faint: light-dark(#93a1a1, #586e75);
+  --moss: light-dark(#677600, #859900);
+  --moss-deep: light-dark(#525e00, #6c7c00);
+  --moss-pale: light-dark(#859900, #a3b52b);
+  --lichen: light-dark(#8f6c00, #b58900);
+  --rust: light-dark(#c42a27, #e8504d);
+  --sky: light-dark(#1f73b0, #268bd2);
+  --term-magenta: light-dark(#b72c70, #d33682);
+  --term-cyan: light-dark(#1f8079, #2aa198);
+}
+/* catppuccin: latte in the light, mocha in the dark */
+[data-palette="catppuccin"] {
+  --bark0: light-dark(#e6e9ef, #181825);
+  --bark1: light-dark(#eff1f5, #1e1e2e);
+  --bark2: light-dark(#e9ecf2, #262637);
+  --bark3: light-dark(#dce0e8, #313244);
+  --float: light-dark(#ffffff, #2a2b3d);
+  --float-edge: light-dark(#bcc0cc, #45475a);
+  --hair: light-dark(#dce0e8, #313244);
+  --hair2: light-dark(#ccd0da, #45475a);
+  --ink: light-dark(#4c4f69, #cdd6f4);
+  --ink-dim: light-dark(#6c6f85, #a6adc8);
+  --ink-faint: light-dark(#9ca0b0, #6c7086);
+  --moss: light-dark(#2b7d1a, #a6e3a1);
+  --moss-deep: light-dark(#216313, #7fc87a);
+  --moss-pale: light-dark(#40a02b, #c6f0c2);
+  --lichen: light-dark(#a35f08, #f9e2af);
+  --rust: light-dark(#d20f39, #f38ba8);
+  --sky: light-dark(#1e66f5, #89b4fa);
+  --term-magenta: light-dark(#8839ef, #f5c2e7);
+  --term-cyan: light-dark(#14808a, #94e2d5);
+}
+/* tokyo night: day in the light, with the light theme's ink, night in the dark */
+[data-palette="tokyo-night"] {
+  --bark0: light-dark(#e1e2e7, #16161e);
+  --bark1: light-dark(#e9eaee, #1a1b26);
+  --bark2: light-dark(#dadce4, #1f2335);
+  --bark3: light-dark(#d0d5e3, #292e42);
+  --float: light-dark(#f3f4f7, #24283b);
+  --float-edge: light-dark(#a8aecb, #3b4261);
+  --hair: light-dark(#d0d5e3, #232433);
+  --hair2: light-dark(#c4c8da, #3b4261);
+  --ink: light-dark(#343b58, #c0caf5);
+  --ink-dim: light-dark(#565c78, #8f97c4);
+  --ink-faint: light-dark(#9699a3, #565f89);
+  --moss: light-dark(#587539, #9ece6a);
+  --moss-deep: light-dark(#42592a, #73a94a);
+  --moss-pale: light-dark(#789a55, #b9e08f);
+  --lichen: light-dark(#8c6c3e, #e0af68);
+  --rust: light-dark(#c64343, #f7768e);
+  --sky: light-dark(#2a6fd0, #7aa2f7);
+  --term-magenta: light-dark(#9854f1, #bb9af7);
+  --term-cyan: light-dark(#007197, #7dcfff);
 }
 
 * {
@@ -511,6 +653,57 @@ body.resizing iframe {
   margin: 0;
   font-size: 11px;
   color: var(--ink-faint);
+}
+/* the palette picker: a swatch per palette, each carrying its own
+   data-palette, so its ground, ink and dots are that palette's */
+.palettes {
+  align-self: stretch;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 6px;
+}
+.palettes button {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  padding: 5px 8px;
+  border: 1px solid var(--hair2);
+  border-radius: var(--r);
+  background: var(--bark1);
+  color: var(--ink);
+  font-size: 12px;
+  text-align: left;
+  white-space: nowrap;
+}
+.palettes button:hover {
+  border-color: var(--ink-faint);
+}
+.palettes button[aria-checked="true"] {
+  border-color: var(--moss);
+  box-shadow: inset 0 0 0 1px var(--moss);
+}
+.palette-dots {
+  flex: none;
+  display: inline-flex;
+  gap: 3px;
+}
+.palette-dots i {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+}
+.palette-dots i:nth-child(1) {
+  background: var(--moss);
+}
+.palette-dots i:nth-child(2) {
+  background: var(--lichen);
+}
+.palette-dots i:nth-child(3) {
+  background: var(--rust);
+}
+.palette-dots i:nth-child(4) {
+  background: var(--sky);
 }
 .settings-input {
   width: 100%;
@@ -1836,6 +2029,7 @@ a.chan-text {
   .tab,
   .pill,
   .seg button,
+  .palettes button,
   .icon-btn,
   .tree-item {
     transition:
@@ -5705,6 +5899,7 @@ button.machine:hover {
   .chip:active:not(:disabled),
   .icon-btn:active,
   .seg button:active,
+  .palettes button:active,
   .view-nav button:active,
   .tab:active,
   .option:active {

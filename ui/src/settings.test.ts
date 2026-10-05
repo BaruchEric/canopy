@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
-import { DEFAULT_SETTINGS, INBOX_TEXT, inboxTextOf, levelOf, loadSettings, saveSettings, shellPlace } from "./settings";
+import { readFileSync } from "node:fs";
+import { DEFAULT_SETTINGS, INBOX_TEXT, PALETTES, inboxTextOf, levelOf, loadSettings, saveSettings, shellPlace } from "./settings";
 
 describe("shellPlace", () => {
   test("auto follows the panel", () => {
@@ -91,6 +92,37 @@ describe("the inbox's view", () => {
     expect(inboxTextOf("big")).toBe(INBOX_TEXT.size);
     expect(inboxTextOf(2)).toBe(INBOX_TEXT.min);
     delete (globalThis as { localStorage?: unknown }).localStorage;
+  });
+});
+
+describe("palettes", () => {
+  test("a saved palette survives a reload, an unknown one falls back to forest", () => {
+    const store = new Map<string, string>();
+    (globalThis as { localStorage?: unknown }).localStorage = {
+      getItem: (k: string) => store.get(k) ?? null,
+      setItem: (k: string, v: string) => void store.set(k, v),
+    };
+    store.set("canopy.settings", "{}");
+    expect(loadSettings().palette).toBe("forest");
+    saveSettings({ ...loadSettings(), palette: "nord" });
+    expect(loadSettings().palette).toBe("nord");
+    store.set("canopy.settings", JSON.stringify({ palette: "neon" }));
+    expect(loadSettings().palette).toBe("forest");
+    delete (globalThis as { localStorage?: unknown }).localStorage;
+  });
+  test("every palette in the stylesheet sets forest's colors, each a light and a dark one", () => {
+    const css = readFileSync(new URL("./styles.css", import.meta.url), "utf8");
+    const blocks = new Map<string, Map<string, string>>();
+    for (const [, name, body] of css.matchAll(/\[data-palette="([\w-]+)"\]\s*\{([^}]*)\}/g)) {
+      blocks.set(name!, new Map([...body!.matchAll(/(--[\w-]+):\s*([^;]+);/g)].map(([, k, v]) => [k!, v!])));
+    }
+    expect([...blocks.keys()]).toEqual([...PALETTES]);
+    const forest = [...blocks.get("forest")!.keys()];
+    expect(forest).toContain("--bark0");
+    for (const [name, tokens] of blocks) {
+      expect({ name, tokens: [...tokens.keys()] }).toEqual({ name, tokens: forest });
+      for (const [k, v] of tokens) expect({ name, k, v }).toMatchObject({ v: expect.stringMatching(/^light-dark\(#[0-9a-f]{6}, #[0-9a-f]{6}\)$/) });
+    }
   });
 });
 

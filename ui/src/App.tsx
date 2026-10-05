@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import type { CSSProperties } from "react";
 import { Library } from "./components/Library";
 import { AgentsView } from "./components/AgentsView";
@@ -16,7 +16,7 @@ import { ShellSolo, TermDock } from "./components/TermDock";
 import { Crowns, TopBar } from "./components/TopBar";
 import { NARROW, useMedia } from "./media";
 import { dropAskHere, parseRoute } from "./routes";
-import { SORT_MODES } from "./settings";
+import { SORT_MODES, type Theme } from "./settings";
 import { SIDEBAR, useStore } from "./store";
 
 const route = parseRoute(window.location.search);
@@ -53,6 +53,23 @@ function ViewNav({ view, navigate }: { view: string; navigate: (next: string) =>
   );
 }
 
+/** The phone's status bar in the palette's own bark: each theme-color meta
+ *  in index.html takes `--bark1` as its media's scheme paints it, or as the
+ *  scheme the setting forces does. A probe with its own color-scheme is
+ *  what makes `light-dark()` resolve to the side asked for. */
+function paintThemeColor(theme: Theme) {
+  const probe = document.createElement("span");
+  probe.style.position = "absolute";
+  probe.style.visibility = "hidden";
+  probe.style.color = "var(--bark1)";
+  document.body.appendChild(probe);
+  for (const meta of document.querySelectorAll<HTMLMetaElement>('meta[name="theme-color"]')) {
+    probe.style.colorScheme = theme !== "system" ? theme : meta.media.includes("dark") ? "dark" : "light";
+    meta.content = getComputedStyle(probe).color;
+  }
+  probe.remove();
+}
+
 export function App() {
   const [view, setView] = useState(() => new URLSearchParams(location.search).get("view") || "git");
   const [project, setProject] = useState(() => new URLSearchParams(location.search).get("project"));
@@ -85,6 +102,7 @@ export function App() {
   const setDirtyOnly = useStore((s) => s.setDirtyOnly);
   const setSetting = useStore((s) => s.setSetting);
   const theme = useStore((s) => s.settings.theme);
+  const palette = useStore((s) => s.settings.palette);
   const density = useStore((s) => s.settings.density);
   const sidebarWidth = useStore((s) => s.sidebarWidth);
   const setSidebarWidth = useStore((s) => s.setSidebarWidth);
@@ -110,14 +128,18 @@ export function App() {
     };
   }, [init, attempt]);
 
-  // Theme and density live on <html> so the solo view and the popover get
-  // them too. "system" removes the attribute and lets color-scheme decide.
-  useEffect(() => {
+  // Theme, palette and density live on <html> so the solo view and the
+  // popover get them too. "system" removes the attribute and lets
+  // color-scheme decide. Before paint, so a saved palette never flashes
+  // forest first.
+  useLayoutEffect(() => {
     const el = document.documentElement;
     if (theme === "system") delete el.dataset["theme"];
     else el.dataset["theme"] = theme;
+    el.dataset["palette"] = palette;
     el.dataset["density"] = density;
-  }, [theme, density]);
+    paintThemeColor(theme);
+  }, [theme, palette, density]);
 
   // `?view=agents&ask=<id>`, the link an away DM carries: the inbox opens on
   // that ask once the page is up, and the link leaves the URL so a reload

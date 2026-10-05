@@ -11,6 +11,7 @@ import { PAGE_BUILD } from "../build";
 import { ago } from "../util";
 import { Seg } from "./Seg";
 import { screenNow, screenWord } from "../screens";
+import type { Palette } from "../settings";
 
 const LEVEL = [
   { value: "intermediate", label: "intermediate", title: "Agent first: run your app, save your work, and the rest one click away" },
@@ -42,6 +43,45 @@ const THEME = [
   { value: "dark", label: "dark" },
   { value: "light", label: "light" },
 ] as const;
+
+const PALETTE: readonly { value: Palette; label: string; title: string }[] = [
+  { value: "forest", label: "forest", title: "Canopy's own: bark, moss and lichen" },
+  { value: "everforest", label: "everforest", title: "Soft greens and warm paper" },
+  { value: "gruvbox", label: "gruvbox", title: "Retro, warm and earthy" },
+  { value: "nord", label: "nord", title: "Arctic blue-greys, aurora accents" },
+  { value: "solarized", label: "solarized", title: "Ethan Schoonover's sixteen colors" },
+  { value: "catppuccin", label: "catppuccin", title: "Latte in the light, mocha in the dark" },
+  { value: "tokyo-night", label: "tokyo night", title: "Day in the light, night in the dark" },
+];
+
+/** One swatch per palette. Each carries its own `data-palette`, and the
+ *  palette blocks in styles.css match any element, so a swatch shows its
+ *  set on the scheme in force whatever the page itself wears. */
+function PalettePick({ value, onChange }: { value: Palette; onChange: (p: Palette) => void }) {
+  return (
+    <div className="palettes" role="radiogroup" aria-label="Palette">
+      {PALETTE.map((p) => (
+        <button
+          key={p.value}
+          type="button"
+          role="radio"
+          aria-checked={p.value === value}
+          data-palette={p.value}
+          title={p.title}
+          onClick={() => onChange(p.value)}
+        >
+          <span className="palette-dots" aria-hidden="true">
+            <i />
+            <i />
+            <i />
+            <i />
+          </span>
+          {p.label}
+        </button>
+      ))}
+    </div>
+  );
+}
 
 const DENSITY = [
   { value: "cozy", label: "cozy" },
@@ -254,6 +294,7 @@ export function SettingsMenu() {
               options={THEME}
               onChange={(v) => setSetting("theme", v)}
             />
+            <PalettePick value={settings.palette} onChange={(v) => setSetting("palette", v)} />
           </section>
           <section className="settings-row">
             <h3 className="panel-label">density</h3>

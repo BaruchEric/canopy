@@ -72,6 +72,11 @@ export function shellPlace(
 export const THEMES = ["system", "dark", "light"] as const;
 export type Theme = (typeof THEMES)[number];
 
+/** the color palettes, each a `[data-palette]` block in styles.css with a
+ *  light and a dark side; the theme picks the side, this picks the set */
+export const PALETTES = ["forest", "everforest", "gruvbox", "nord", "solarized", "catppuccin", "tokyo-night"] as const;
+export type Palette = (typeof PALETTES)[number];
+
 export const DENSITIES = ["cozy", "compact"] as const;
 export type Density = (typeof DENSITIES)[number];
 
@@ -91,6 +96,7 @@ export interface Settings {
   /** where a shell in canopy lands */
   shell: ShellTarget;
   theme: Theme;
+  palette: Palette;
   density: Density;
   /** which of a forge's repos are worth a card */
   forge: ForgeView;
@@ -161,6 +167,7 @@ export const DEFAULT_SETTINGS: Settings = {
   terminal: "window",
   shell: "auto",
   theme: "system",
+  palette: "forest",
   density: "cozy",
   forge: "missing",
   hideArchived: true,
@@ -318,6 +325,7 @@ export function loadSettings(): Settings {
       terminal: pick(TERMINAL_MODES, saved.terminal, DEFAULT_SETTINGS.terminal),
       shell: pick(SHELL_TARGETS, saved.shell, DEFAULT_SETTINGS.shell),
       theme: pick(THEMES, saved.theme, DEFAULT_SETTINGS.theme),
+      palette: pick(PALETTES, saved.palette, DEFAULT_SETTINGS.palette),
       density: pick(DENSITIES, saved.density, DEFAULT_SETTINGS.density),
       forge: pick(FORGE_VIEWS, saved.forge, DEFAULT_SETTINGS.forge),
       hideArchived: typeof saved.hideArchived === "boolean" ? saved.hideArchived : DEFAULT_SETTINGS.hideArchived,
