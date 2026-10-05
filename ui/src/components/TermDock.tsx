@@ -43,6 +43,7 @@ import { clientId, myPlatform } from "../client";
 import { BAR_KEYS, NO_MODS, keyBytes, shortcutOf, withMods, type BarKey, type Mods } from "../keys";
 import { osc52Text } from "../osc52";
 import { GLIDE_MIN, TAP_SLOP, dragLines, gapOf, glide, pinchFont, speedOf } from "../touch";
+import { showKeyboard } from "../softkeys";
 import { Wordmark } from "./TopBar";
 import { AgentButtons } from "./AgentButtons";
 import { LIVE } from "../liveTerms";
@@ -459,8 +460,9 @@ export function TermView({
     // drag scrolls (the scrollback, or for a program that owns the screen
     // the arrows or wheel reports it would get from a mouse), a flick glides
     // on, and two fingers pinch the text size. A touch that stays within
-    // TAP_SLOP is left alone and arrives at xterm as a click, which is what
-    // focuses it and raises the phone's keyboard.
+    // TAP_SLOP is left alone and arrives at xterm as a click, which focuses
+    // it; the phone's keyboard stays down for that (softkeys.ts) and comes
+    // up from the key bar's ⌨.
     let drag: { start: number; y: number; carry: number; moved: boolean; samples: { y: number; t: number }[] } | null =
       null;
     let pinch: { gap: number; font: number } | null = null;
@@ -653,7 +655,7 @@ export function TermView({
           mods={mods}
           onMods={setMods}
           onKey={tapKey}
-          onKeyboard={() => termRef.current?.focus()}
+          onKeyboard={() => showKeyboard(termRef.current?.textarea)}
           onPaste={
             canPaste()
               ? () => {
