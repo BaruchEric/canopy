@@ -74,7 +74,20 @@ export type Theme = (typeof THEMES)[number];
 
 /** the color palettes, each a `[data-palette]` block in styles.css with a
  *  light and a dark side; the theme picks the side, this picks the set */
-export const PALETTES = ["forest", "everforest", "gruvbox", "nord", "solarized", "catppuccin", "tokyo-night"] as const;
+export const PALETTES = [
+  "forest",
+  "everforest",
+  "gruvbox",
+  "nord",
+  "solarized",
+  "catppuccin",
+  "tokyo-night",
+  "rose-pine",
+  "dracula",
+  "vivid",
+  "neon",
+  "contrast",
+] as const;
 export type Palette = (typeof PALETTES)[number];
 
 export const DENSITIES = ["cozy", "compact"] as const;

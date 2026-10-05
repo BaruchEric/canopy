@@ -6,7 +6,11 @@
    of the [data-palette] blocks below, each a light and a dark variant of the
    same tokens (ui/src/settings.ts lists the names, and a test holds every
    block to forest's set). The blocks match any element, so a swatch in
-   Settings paints with its own palette whatever the page wears. */
+   Settings paints with its own palette whatever the page wears.
+   Text has floors, against the worst of bark0, bark1, bark2 and float:
+   ink 9:1, ink-dim 6:1, ink-faint and every accent 4.5:1. A published
+   palette's color that falls short is darkened (light side) or lightened
+   (dark side) in its own hue until it clears; the same test checks them. */
 
 :root {
   color-scheme: light dark;
@@ -48,19 +52,19 @@
   --hair: light-dark(#d8dfd0, #24301f);
   --hair2: light-dark(#c3cdb8, #33422e);
   --ink: light-dark(#232d20, #dce5da);
-  --ink-dim: light-dark(#64705a, #8fa083);
-  --ink-faint: light-dark(#97a28c, #5d6b55);
+  --ink-dim: light-dark(#525e48, #9cae90);
+  --ink-faint: light-dark(#65705b, #87967e);
   --moss: light-dark(#3e7a38, #93c98b);
   --moss-deep: light-dark(#2c5d28, #6aa065);
   --moss-pale: light-dark(#6aa065, #b8d9a8);
-  --lichen: light-dark(#a5762a, #d9b36b);
-  --rust: light-dark(#a84e2f, #c97b5f);
-  --sky: light-dark(#2f7a99, #7fb4c9);
+  --lichen: light-dark(#926411, #d9b36b);
+  --rust: light-dark(#a84e2f, #ca7c60);
+  --sky: light-dark(#297594, #7fb4c9);
   /* the two ANSI colors the palette has no name for; the shell paints with them */
   --term-magenta: light-dark(#8a5a8f, #c9a0d0);
-  --term-cyan: light-dark(#2a8a8a, #7fcfc9);
+  --term-cyan: light-dark(#0e7979, #7fcfc9);
 }
-/* everforest's medium contrast; the light side's accents a step darker so they hold up as text */
+/* everforest, medium contrast */
 [data-palette="everforest"] {
   --bark0: light-dark(#f4f0d9, #232a2e);
   --bark1: light-dark(#fdf6e3, #2d353b);
@@ -70,19 +74,19 @@
   --float-edge: light-dark(#bdc3af, #56635f);
   --hair: light-dark(#e0dcc7, #3d484d);
   --hair2: light-dark(#c9ccb5, #4f585e);
-  --ink: light-dark(#5c6a72, #d3c6aa);
-  --ink-dim: light-dark(#66756a, #9da9a0);
-  --ink-faint: light-dark(#a6b0a0, #7a8478);
-  --moss: light-dark(#5f7700, #a7c080);
+  --ink: light-dark(#323f46, #fcefd2);
+  --ink-dim: light-dark(#4b5a4f, #bcc9bf);
+  --ink-faint: light-dark(#636d5e, #a4afa2);
+  --moss: light-dark(#5b7203, #a7c080);
   --moss-deep: light-dark(#4b5e00, #83a36b);
   --moss-pale: light-dark(#7f9400, #c3d6a0);
-  --lichen: light-dark(#9a6c00, #dbbc7f);
-  --rust: light-dark(#d83d3a, #e67e80);
-  --sky: light-dark(#2f7fae, #7fbbb3);
-  --term-magenta: light-dark(#c4549f, #d699b6);
-  --term-cyan: light-dark(#2d9068, #83c092);
+  --lichen: light-dark(#8b6103, #dbbc7f);
+  --rust: light-dark(#c82c2d, #f88e90);
+  --sky: light-dark(#1b6f9e, #7fbbb3);
+  --term-magenta: light-dark(#ad3f8a, #d79ab7);
+  --term-cyan: light-dark(#037953, #83c092);
 }
-/* gruvbox: the hard background under the soft one, the faded accents in the light */
+/* gruvbox: faded accents in the light, bright ones in the dark */
 [data-palette="gruvbox"] {
   --bark0: light-dark(#fbf1c7, #1d2021);
   --bark1: light-dark(#f9f5d7, #282828);
@@ -92,19 +96,19 @@
   --float-edge: light-dark(#bdae93, #665c54);
   --hair: light-dark(#ebdbb2, #3c3836);
   --hair2: light-dark(#d5c4a1, #504945);
-  --ink: light-dark(#3c3836, #ebdbb2);
-  --ink-dim: light-dark(#7c6f64, #a89984);
-  --ink-faint: light-dark(#a89984, #7c6f64);
-  --moss: light-dark(#79740e, #b8bb26);
+  --ink: light-dark(#3c3836, #f2e2b8);
+  --ink-dim: light-dark(#5e5247, #c9b9a4);
+  --ink-faint: light-dark(#736551, #ad9f93);
+  --moss: light-dark(#6e6903, #b8bb26);
   --moss-deep: light-dark(#5f5b08, #98971a);
   --moss-pale: light-dark(#98971a, #cdcf67);
-  --lichen: light-dark(#a36608, #fabd2f);
-  --rust: light-dark(#9d0006, #fb4934);
-  --sky: light-dark(#076678, #83a598);
-  --term-magenta: light-dark(#8f3f71, #d3869b);
-  --term-cyan: light-dark(#427b58, #8ec07c);
+  --lichen: light-dark(#935a00, #fabd2f);
+  --rust: light-dark(#9d0006, #ff7b66);
+  --sky: light-dark(#076678, #87a99c);
+  --term-magenta: light-dark(#8f3f71, #da8ca1);
+  --term-cyan: light-dark(#39724f, #8ec07c);
 }
-/* nord: polar night and snow storm, aurora for the states, frost for links */
+/* nord: snow storm and polar night, aurora for the states, frost for links */
 [data-palette="nord"] {
   --bark0: light-dark(#e5e9f0, #2a2f3a);
   --bark1: light-dark(#eceff4, #2e3440);
@@ -114,19 +118,19 @@
   --float-edge: light-dark(#b6bfcd, #4c566a);
   --hair: light-dark(#d8dee9, #3b4252);
   --hair2: light-dark(#c2cad6, #4c566a);
-  --ink: light-dark(#2e3440, #e5e9f0);
-  --ink-dim: light-dark(#4c566a, #a3adbf);
-  --ink-faint: light-dark(#7b88a1, #6b7891);
-  --moss: light-dark(#4f7a3a, #a3be8c);
+  --ink: light-dark(#2e3440, #f0f4fb);
+  --ink-dim: light-dark(#4a5468, #bfc9db);
+  --ink-faint: light-dark(#5b677f, #a1afca);
+  --moss: light-dark(#467131, #a3be8c);
   --moss-deep: light-dark(#3f6230, #8aa673);
   --moss-pale: light-dark(#6f945a, #c0d4ad);
-  --lichen: light-dark(#9a6f12, #ebcb8b);
-  --rust: light-dark(#a9444e, #d0767e);
-  --sky: light-dark(#4c6f9c, #88c0d0);
-  --term-magenta: light-dark(#8a5f86, #b48ead);
-  --term-cyan: light-dark(#3d7f86, #8fbcbb);
+  --lichen: light-dark(#875f02, #ebcb8b);
+  --rust: light-dark(#a9444e, #f1949b);
+  --sky: light-dark(#456895, #88c0d0);
+  --term-magenta: light-dark(#83587f, #c9a2c1);
+  --term-cyan: light-dark(#2c7077, #8fbcbb);
 }
-/* solarized: the sixteen colors, with the light side's ink at base02 and its accents darkened for text */
+/* solarized: base3 in the light, base03 in the dark */
 [data-palette="solarized"] {
   --bark0: light-dark(#eee8d5, #00212b);
   --bark1: light-dark(#fdf6e3, #002b36);
@@ -136,17 +140,17 @@
   --float-edge: light-dark(#c9c2ac, #2a5561);
   --hair: light-dark(#e6dfca, #073642);
   --hair2: light-dark(#d6cfb9, #164a58);
-  --ink: light-dark(#073642, #93a1a1);
-  --ink-dim: light-dark(#586e75, #74898c);
-  --ink-faint: light-dark(#93a1a1, #586e75);
-  --moss: light-dark(#677600, #859900);
+  --ink: light-dark(#073642, #d1dfdf);
+  --ink-dim: light-dark(#43585f, #a3b9bc);
+  --ink-faint: light-dark(#5e6b6b, #89a0a8);
+  --moss: light-dark(#616f05, #91a61f);
   --moss-deep: light-dark(#525e00, #6c7c00);
   --moss-pale: light-dark(#859900, #a3b52b);
-  --lichen: light-dark(#8f6c00, #b58900);
-  --rust: light-dark(#c42a27, #e8504d);
-  --sky: light-dark(#1f73b0, #268bd2);
-  --term-magenta: light-dark(#b72c70, #d33682);
-  --term-cyan: light-dark(#1f8079, #2aa198);
+  --lichen: light-dark(#846301, #c39721);
+  --rust: light-dark(#c42a27, #ff6f68);
+  --sky: light-dark(#166daa, #43a3ec);
+  --term-magenta: light-dark(#b72c70, #fe67a9);
+  --term-cyan: light-dark(#0a756f, #3baea4);
 }
 /* catppuccin: latte in the light, mocha in the dark */
 [data-palette="catppuccin"] {
@@ -158,17 +162,17 @@
   --float-edge: light-dark(#bcc0cc, #45475a);
   --hair: light-dark(#dce0e8, #313244);
   --hair2: light-dark(#ccd0da, #45475a);
-  --ink: light-dark(#4c4f69, #cdd6f4);
-  --ink-dim: light-dark(#6c6f85, #a6adc8);
-  --ink-faint: light-dark(#9ca0b0, #6c7086);
-  --moss: light-dark(#2b7d1a, #a6e3a1);
+  --ink: light-dark(#373a52, #cdd6f4);
+  --ink-dim: light-dark(#52556a, #a6adc8);
+  --ink-faint: light-dark(#646877, #8e92aa);
+  --moss: light-dark(#277915, #a6e3a1);
   --moss-deep: light-dark(#216313, #7fc87a);
   --moss-pale: light-dark(#40a02b, #c6f0c2);
-  --lichen: light-dark(#a35f08, #f9e2af);
-  --rust: light-dark(#d20f39, #f38ba8);
-  --sky: light-dark(#1e66f5, #89b4fa);
-  --term-magenta: light-dark(#8839ef, #f5c2e7);
-  --term-cyan: light-dark(#14808a, #94e2d5);
+  --lichen: light-dark(#9a5906, #f9e2af);
+  --rust: light-dark(#d10b38, #f38ba8);
+  --sky: light-dark(#145deb, #89b4fa);
+  --term-magenta: light-dark(#8737ee, #f5c2e7);
+  --term-cyan: light-dark(#05747d, #94e2d5);
 }
 /* tokyo night: day in the light, with the light theme's ink, night in the dark */
 [data-palette="tokyo-night"] {
@@ -180,17 +184,128 @@
   --float-edge: light-dark(#a8aecb, #3b4261);
   --hair: light-dark(#d0d5e3, #232433);
   --hair2: light-dark(#c4c8da, #3b4261);
-  --ink: light-dark(#343b58, #c0caf5);
-  --ink-dim: light-dark(#565c78, #8f97c4);
-  --ink-faint: light-dark(#9699a3, #565f89);
-  --moss: light-dark(#587539, #9ece6a);
+  --ink: light-dark(#2c334f, #c0caf5);
+  --ink-dim: light-dark(#474d68, #9ca5d2);
+  --ink-faint: light-dark(#5e616a, #848ebb);
+  --moss: light-dark(#4d692d, #9ece6a);
   --moss-deep: light-dark(#42592a, #73a94a);
   --moss-pale: light-dark(#789a55, #b9e08f);
-  --lichen: light-dark(#8c6c3e, #e0af68);
-  --rust: light-dark(#c64343, #f7768e);
-  --sky: light-dark(#2a6fd0, #7aa2f7);
-  --term-magenta: light-dark(#9854f1, #bb9af7);
-  --term-cyan: light-dark(#007197, #7dcfff);
+  --lichen: light-dark(#7a5b2d, #e0af68);
+  --rust: light-dark(#b33033, #f7768e);
+  --sky: light-dark(#165ebd, #7aa2f7);
+  --term-magenta: light-dark(#7f36d4, #bb9af7);
+  --term-cyan: light-dark(#02688c, #7dcfff);
+}
+/* rosé pine: dawn in the light, main in the dark. It has no green, so moss is
+   pine and sky is foam, the way its own terminal colors go */
+[data-palette="rose-pine"] {
+  --bark0: light-dark(#faf4ed, #191724);
+  --bark1: light-dark(#fffaf3, #1f1d2e);
+  --bark2: light-dark(#f4ede8, #26233a);
+  --bark3: light-dark(#ece3db, #2e2b44);
+  --float: light-dark(#fffdf9, #2a273f);
+  --float-edge: light-dark(#c4bfc4, #524f67);
+  --hair: light-dark(#dfdad9, #2a2740);
+  --hair2: light-dark(#cecacd, #403d52);
+  --ink: light-dark(#3f3a5f, #e0def4);
+  --ink-dim: light-dark(#5a5673, #a9a4c3);
+  --ink-faint: light-dark(#6e6a7b, #918dab);
+  --moss: light-dark(#286983, #4e9bb9);
+  --moss-deep: light-dark(#1f5568, #31748f);
+  --moss-pale: light-dark(#4d8aa3, #74afc6);
+  --lichen: light-dark(#995f06, #f6c177);
+  --rust: light-dark(#a2536a, #eb6f92);
+  --sky: light-dark(#35747e, #9ccfd8);
+  --term-magenta: light-dark(#786390, #c4a7e7);
+  --term-cyan: light-dark(#a45552, #ebbcba);
+}
+/* dracula, with alucard, its own light theme, on the light side */
+[data-palette="dracula"] {
+  --bark0: light-dark(#f7f2df, #21222c);
+  --bark1: light-dark(#fffbeb, #282a36);
+  --bark2: light-dark(#f6f1dc, #2f3241);
+  --bark3: light-dark(#ece6cf, #383a4c);
+  --float: light-dark(#fffdf4, #343746);
+  --float-edge: light-dark(#c9c4ad, #565a75);
+  --hair: light-dark(#e8e2cb, #343746);
+  --hair2: light-dark(#d6d0b8, #44475a);
+  --ink: light-dark(#1f1f1f, #f8f8f2);
+  --ink-dim: light-dark(#4f4a3a, #c5c8de);
+  --ink-faint: light-dark(#6c664b, #8d9fd4);
+  --moss: light-dark(#14710a, #50fa7b);
+  --moss-deep: light-dark(#0e5507, #2fd660);
+  --moss-pale: light-dark(#2f8f22, #96fcb0);
+  --lichen: light-dark(#826c11, #f1fa8c);
+  --rust: light-dark(#c83727, #ff7570);
+  --sky: light-dark(#644ac9, #bd93f9);
+  --term-magenta: light-dark(#a3144d, #ff79c6);
+  --term-cyan: light-dark(#036a96, #8be9fd);
+}
+/* vivid: saturated primaries on a neutral slate */
+[data-palette="vivid"] {
+  --bark0: light-dark(#f3f5f8, #0e1116);
+  --bark1: light-dark(#ffffff, #151a21);
+  --bark2: light-dark(#eef1f5, #1b212a);
+  --bark3: light-dark(#e3e8ef, #232b36);
+  --float: light-dark(#ffffff, #1f2630);
+  --float-edge: light-dark(#b9c2ce, #3a4656);
+  --hair: light-dark(#dde3ea, #222a35);
+  --hair2: light-dark(#c8d0da, #313b48);
+  --ink: light-dark(#0f1720, #f2f5f9);
+  --ink-dim: light-dark(#44505e, #b4bfcc);
+  --ink-faint: light-dark(#636f7f, #818e9e);
+  --moss: light-dark(#077f37, #2ee86f);
+  --moss-deep: light-dark(#006a2d, #1fb455);
+  --moss-pale: light-dark(#1fae55, #7ff5a6);
+  --lichen: light-dark(#aa5802, #ffc61a);
+  --rust: light-dark(#d4142a, #ff4f5e);
+  --sky: light-dark(#0a63d8, #3fa7ff);
+  --term-magenta: light-dark(#a21fc4, #e266ff);
+  --term-cyan: light-dark(#057b75, #22e5d4);
+}
+/* neon: glowing accents on purple-black, their deep inks on lavender in the light */
+[data-palette="neon"] {
+  --bark0: light-dark(#f6f0ff, #0b0714);
+  --bark1: light-dark(#fdfaff, #120c1f);
+  --bark2: light-dark(#f0e8ff, #181029);
+  --bark3: light-dark(#e6dafa, #221636);
+  --float: light-dark(#ffffff, #1c1330);
+  --float-edge: light-dark(#c3a9ec, #4a2f73);
+  --hair: light-dark(#e4d6f7, #241838);
+  --hair2: light-dark(#d0bcef, #3a2659);
+  --ink: light-dark(#1a0b2e, #f5eaff);
+  --ink-dim: light-dark(#4b3470, #c9b3e8);
+  --ink-faint: light-dark(#775f9c, #8d76b0);
+  --moss: light-dark(#077a3f, #39ff88);
+  --moss-deep: light-dark(#007038, #1fd068);
+  --moss-pale: light-dark(#00b85e, #9dffc4);
+  --lichen: light-dark(#9c5b04, #ffe600);
+  --rust: light-dark(#d20c4b, #ff3864);
+  --sky: light-dark(#0062e6, #36c5ff);
+  --term-magenta: light-dark(#c000b0, #ff4ddb);
+  --term-cyan: light-dark(#017684, #36f9f6);
+}
+/* contrast: black and white, hard hairlines, accents at full strength */
+[data-palette="contrast"] {
+  --bark0: light-dark(#f2f2f2, #000000);
+  --bark1: light-dark(#ffffff, #0a0a0a);
+  --bark2: light-dark(#ebebeb, #141414);
+  --bark3: light-dark(#dcdcdc, #262626);
+  --float: light-dark(#ffffff, #1a1a1a);
+  --float-edge: light-dark(#4a4a4a, #8a8a8a);
+  --hair: light-dark(#9a9a9a, #3a3a3a);
+  --hair2: light-dark(#6a6a6a, #6a6a6a);
+  --ink: light-dark(#000000, #ffffff);
+  --ink-dim: light-dark(#2b2b2b, #d6d6d6);
+  --ink-faint: light-dark(#505050, #a8a8a8);
+  --moss: light-dark(#006b25, #5cff8a);
+  --moss-deep: light-dark(#00521c, #2fd665);
+  --moss-pale: light-dark(#138a3c, #a6ffbf);
+  --lichen: light-dark(#7a4a00, #ffd23f);
+  --rust: light-dark(#b00012, #ff6b6b);
+  --sky: light-dark(#0047b3, #6cc4ff);
+  --term-magenta: light-dark(#8a008a, #ff8cff);
+  --term-cyan: light-dark(#005f66, #5ff5ee);
 }
 
 * {

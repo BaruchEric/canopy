@@ -52,6 +52,11 @@ const PALETTE: readonly { value: Palette; label: string; title: string }[] = [
   { value: "solarized", label: "solarized", title: "Ethan Schoonover's sixteen colors" },
   { value: "catppuccin", label: "catppuccin", title: "Latte in the light, mocha in the dark" },
   { value: "tokyo-night", label: "tokyo night", title: "Day in the light, night in the dark" },
+  { value: "rose-pine", label: "rosé pine", title: "Dawn in the light, main in the dark" },
+  { value: "dracula", label: "dracula", title: "Dracula in the dark, Alucard in the light" },
+  { value: "vivid", label: "vivid", title: "Saturated primaries on a neutral slate" },
+  { value: "neon", label: "neon", title: "Glowing accents on purple-black" },
+  { value: "contrast", label: "contrast", title: "Black and white, the most legible" },
 ];
 
 /** One swatch per palette. Each carries its own `data-palette`, and the

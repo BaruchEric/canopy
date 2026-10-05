@@ -95,6 +95,27 @@ describe("the inbox's view", () => {
   });
 });
 
+/** each `[data-palette]` block in the stylesheet, its tokens in order */
+function paletteBlocks(): Map<string, Map<string, string>> {
+  const css = readFileSync(new URL("./styles.css", import.meta.url), "utf8");
+  const blocks = new Map<string, Map<string, string>>();
+  for (const [, name, body] of css.matchAll(/\[data-palette="([\w-]+)"\]\s*\{([^}]*)\}/g)) {
+    blocks.set(name!, new Map([...body!.matchAll(/(--[\w-]+):\s*([^;]+);/g)].map(([, k, v]) => [k!, v!])));
+  }
+  return blocks;
+}
+
+/** WCAG's contrast ratio between two #rrggbb colors */
+function contrast(a: string, b: string): number {
+  const lum = (hex: string) => {
+    const n = parseInt(hex.slice(1), 16);
+    const [r, g, bl] = [n >> 16, (n >> 8) & 255, n & 255].map((c) => (c / 255 <= 0.03928 ? c / 255 / 12.92 : ((c / 255 + 0.055) / 1.055) ** 2.4));
+    return 0.2126 * r! + 0.7152 * g! + 0.0722 * bl!;
+  };
+  const [hi, lo] = [lum(a), lum(b)].sort((x, y) => y - x);
+  return (hi! + 0.05) / (lo! + 0.05);
+}
+
 describe("palettes", () => {
   test("a saved palette survives a reload, an unknown one falls back to forest", () => {
     const store = new Map<string, string>();
@@ -106,22 +127,41 @@ describe("palettes", () => {
     expect(loadSettings().palette).toBe("forest");
     saveSettings({ ...loadSettings(), palette: "nord" });
     expect(loadSettings().palette).toBe("nord");
-    store.set("canopy.settings", JSON.stringify({ palette: "neon" }));
+    store.set("canopy.settings", JSON.stringify({ palette: "plaid" }));
     expect(loadSettings().palette).toBe("forest");
     delete (globalThis as { localStorage?: unknown }).localStorage;
   });
   test("every palette in the stylesheet sets forest's colors, each a light and a dark one", () => {
-    const css = readFileSync(new URL("./styles.css", import.meta.url), "utf8");
-    const blocks = new Map<string, Map<string, string>>();
-    for (const [, name, body] of css.matchAll(/\[data-palette="([\w-]+)"\]\s*\{([^}]*)\}/g)) {
-      blocks.set(name!, new Map([...body!.matchAll(/(--[\w-]+):\s*([^;]+);/g)].map(([, k, v]) => [k!, v!])));
-    }
+    const blocks = paletteBlocks();
     expect([...blocks.keys()]).toEqual([...PALETTES]);
     const forest = [...blocks.get("forest")!.keys()];
     expect(forest).toContain("--bark0");
     for (const [name, tokens] of blocks) {
       expect({ name, tokens: [...tokens.keys()] }).toEqual({ name, tokens: forest });
       for (const [k, v] of tokens) expect({ name, k, v }).toMatchObject({ v: expect.stringMatching(/^light-dark\(#[0-9a-f]{6}, #[0-9a-f]{6}\)$/) });
+    }
+  });
+  test("every palette's text clears its floor on each surface it sits on, light and dark", () => {
+    const floors: Record<string, number> = {
+      "--ink": 9,
+      "--ink-dim": 6,
+      "--ink-faint": 4.5,
+      "--moss": 4.5,
+      "--lichen": 4.5,
+      "--rust": 4.5,
+      "--sky": 4.5,
+      "--term-magenta": 4.5,
+      "--term-cyan": 4.5,
+    };
+    const surfaces = ["--bark0", "--bark1", "--bark2", "--float"];
+    for (const [name, tokens] of paletteBlocks()) {
+      const side = (k: string, i: number) => tokens.get(k)!.match(/#[0-9a-f]{6}/g)![i]!;
+      for (const [i, scheme] of ["light", "dark"].entries()) {
+        for (const [k, floor] of Object.entries(floors)) {
+          const worst = Math.min(...surfaces.map((bg) => contrast(side(k, i), side(bg, i))));
+          expect({ name, scheme, k, clears: worst >= floor }).toEqual({ name, scheme, k, clears: true });
+        }
+      }
     }
   });
 });
