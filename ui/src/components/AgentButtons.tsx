@@ -112,7 +112,7 @@ export function AgentButtons({ tab }: { tab: TermTab }) {
   return (
     <span className="agent-buttons">
       {state === "none" && seed ? null : state === "none" ? (
-        <button type="button" className="term-new" title="Ask your agent to set up a way to run this app" onClick={() => void askAgent(tab.repoId, SETUP_PROMPT, tab)}>
+        <button type="button" className="term-new term-word" title="Ask your agent to set up a way to run this app" onClick={() => void askAgent(tab.repoId, SETUP_PROMPT, tab)}>
           set up run
         </button>
       ) : state === "running" ? (
@@ -135,7 +135,7 @@ export function AgentButtons({ tab }: { tab: TermTab }) {
         </button>
       )}
       {!seed && agent.harness && tab.task === undefined && (
-        <HandoffButton className="term-new" repoId={tab.repoId} backend={backendOf(tab.id)} from={agent.harness} transcript={agent.transcript} term={tab.id} />
+        <HandoffButton className="term-new term-word" repoId={tab.repoId} backend={backendOf(tab.id)} from={agent.harness} transcript={agent.transcript} term={tab.id} />
       )}
     </span>
   );
