@@ -95,14 +95,32 @@ describe("the inbox's view", () => {
   });
 });
 
-/** each `[data-palette]` block in the stylesheet, its tokens in order */
+const CSS = readFileSync(new URL("./styles.css", import.meta.url), "utf8");
+
+/** the declarations of the stylesheet's block for `selector`, in order */
+function block(selector: string): Map<string, string> {
+  const at = CSS.indexOf(`${selector} {`);
+  expect({ selector, found: at >= 0 }).toEqual({ selector, found: true });
+  const body = CSS.slice(at, CSS.indexOf("}", at));
+  return new Map([...body.matchAll(/(--[\w-]+):\s*([^;]+);/g)].map(([, k, v]) => [k!, v!]));
+}
+
+/** each `[data-palette]` block in the stylesheet, its colors in order */
 function paletteBlocks(): Map<string, Map<string, string>> {
-  const css = readFileSync(new URL("./styles.css", import.meta.url), "utf8");
   const blocks = new Map<string, Map<string, string>>();
-  for (const [, name, body] of css.matchAll(/\[data-palette="([\w-]+)"\]\s*\{([^}]*)\}/g)) {
+  for (const [, name, body] of CSS.matchAll(/\[data-palette="([\w-]+)"\]\s*\{([^}]*)\}/g)) {
     blocks.set(name!, new Map([...body!.matchAll(/(--[\w-]+):\s*([^;]+);/g)].map(([, k, v]) => [k!, v!])));
   }
   return blocks;
+}
+
+/** one side of a `light-dark(#rrggbb, #rrggbb)`, 0 the light one */
+const sideOf = (value: string, i: number) => value.match(/#[0-9a-f]{6}/g)![i]!;
+
+/** `color-mix(in srgb, a, b pct)` of two #rrggbb colors, rounded the way a screen shows it */
+function mix(a: string, b: string, pct: number): string {
+  const [x, y] = [a, b].map((hex) => parseInt(hex.slice(1), 16));
+  return `#${[16, 8, 0].map((sh) => Math.round(((x! >> sh) & 255) * (1 - pct / 100) + ((y! >> sh) & 255) * (pct / 100)).toString(16).padStart(2, "0")).join("")}`;
 }
 
 /** WCAG's contrast ratio between two #rrggbb colors */
@@ -114,6 +132,18 @@ function contrast(a: string, b: string): number {
   };
   const [hi, lo] = [lum(a), lum(b)].sort((x, y) => y - x);
   return (hi! + 0.05) / (lo! + 0.05);
+}
+
+/** whether every floor clears against the worst of the surfaces text sits
+ *  on, `color(k, i)` giving token `k` on side `i` (0 light, 1 dark) */
+function floorsClear(name: string, floors: Record<string, number>, color: (k: string, i: number) => string) {
+  const surfaces = ["--bark0", "--bark1", "--bark2", "--float"];
+  for (const [i, scheme] of ["light", "dark"].entries()) {
+    for (const [k, floor] of Object.entries(floors)) {
+      const worst = Math.min(...surfaces.map((bg) => contrast(color(k, i), color(bg, i))));
+      expect({ name, scheme, k, clears: worst >= floor }).toEqual({ name, scheme, k, clears: true });
+    }
+  }
 }
 
 describe("palettes", () => {
@@ -129,13 +159,18 @@ describe("palettes", () => {
     expect(loadSettings().palette).toBe("nord");
     store.set("canopy.settings", JSON.stringify({ palette: "plaid" }));
     expect(loadSettings().palette).toBe("forest");
+    expect(loadSettings().moreContrast).toBe(false);
+    saveSettings({ ...loadSettings(), moreContrast: true });
+    expect(loadSettings().moreContrast).toBe(true);
+    store.set("canopy.settings", JSON.stringify({ moreContrast: "yes" }));
+    expect(loadSettings().moreContrast).toBe(false);
     delete (globalThis as { localStorage?: unknown }).localStorage;
   });
   test("every palette in the stylesheet sets forest's colors, each a light and a dark one", () => {
     const blocks = paletteBlocks();
     expect([...blocks.keys()]).toEqual([...PALETTES]);
     const forest = [...blocks.get("forest")!.keys()];
-    expect(forest).toContain("--bark0");
+    expect(forest).toContain("--pal-bark0");
     for (const [name, tokens] of blocks) {
       expect({ name, tokens: [...tokens.keys()] }).toEqual({ name, tokens: forest });
       for (const [k, v] of tokens) expect({ name, k, v }).toMatchObject({ v: expect.stringMatching(/^light-dark\(#[0-9a-f]{6}, #[0-9a-f]{6}\)$/) });
@@ -153,15 +188,41 @@ describe("palettes", () => {
       "--term-magenta": 4.5,
       "--term-cyan": 4.5,
     };
-    const surfaces = ["--bark0", "--bark1", "--bark2", "--float"];
     for (const [name, tokens] of paletteBlocks()) {
-      const side = (k: string, i: number) => tokens.get(k)!.match(/#[0-9a-f]{6}/g)![i]!;
-      for (const [i, scheme] of ["light", "dark"].entries()) {
-        for (const [k, floor] of Object.entries(floors)) {
-          const worst = Math.min(...surfaces.map((bg) => contrast(side(k, i), side(bg, i))));
-          expect({ name, scheme, k, clears: worst >= floor }).toEqual({ name, scheme, k, clears: true });
-        }
-      }
+      floorsClear(name, floors, (k, i) => sideOf(tokens.get(k.replace("--", "--pal-"))!, i));
+    }
+  });
+  test("every token the rules use is a palette color, as it is or with more contrast", () => {
+    const colors = [...paletteBlocks().get("forest")!.keys()];
+    const tokens = colors.map((k) => k.replace("--pal-", "--"));
+    const plain = block(":root,\n[data-palette]");
+    expect([...plain.keys()]).toEqual(tokens);
+    for (const [i, k] of tokens.entries()) expect(plain.get(k)).toBe(`var(${colors[i]})`);
+    const more = block(':root[data-contrast="more"],\n[data-contrast="more"] [data-palette]');
+    for (const [i, k] of tokens.entries()) {
+      expect({ k, v: more.get(k) }).toMatchObject({ v: expect.stringMatching(new RegExp(`^color-mix\\(in srgb, var\\(${colors[i]}\\), var\\(--to-(paper|ink)\\) \\d+%\\)$`)) });
+    }
+  });
+  test("more contrast raises every palette's floors, light and dark", () => {
+    const more = block(':root[data-contrast="more"],\n[data-contrast="more"] [data-palette]');
+    const floors: Record<string, number> = {
+      "--ink": 14,
+      "--ink-dim": 10,
+      "--ink-faint": 7,
+      "--moss": 7,
+      "--lichen": 7,
+      "--rust": 7,
+      "--sky": 7,
+      "--term-magenta": 7,
+      "--term-cyan": 7,
+      "--hair2": 3,
+      "--float-edge": 3,
+    };
+    for (const [name, colors] of paletteBlocks()) {
+      floorsClear(name, floors, (k, i) => {
+        const [, color, pole, pct] = more.get(k)!.match(/var\((--[\w-]+)\), var\((--[\w-]+)\) (\d+)%/)!;
+        return mix(sideOf(colors.get(color!)!, i), sideOf(more.get(pole!)!, i), Number(pct));
+      });
     }
   });
 });

@@ -300,6 +300,10 @@ export function SettingsMenu() {
               onChange={(v) => setSetting("theme", v)}
             />
             <PalettePick value={settings.palette} onChange={(v) => setSetting("palette", v)} />
+            <label className="settings-line">
+              <input type="checkbox" checked={settings.moreContrast} onChange={(e) => setSetting("moreContrast", e.target.checked)} />
+              more contrast: starker text, lines and grounds, whichever palette
+            </label>
           </section>
           <section className="settings-row">
             <h3 className="panel-label">density</h3>

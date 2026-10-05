@@ -203,6 +203,7 @@ export function TermView({
   const fitRef = useRef<FitAddon | null>(null);
   const theme = useStore((s) => s.settings.theme);
   const palette = useStore((s) => s.settings.palette);
+  const moreContrast = useStore((s) => s.settings.moreContrast);
   const endTerm = useStore((s) => s.endTerm);
   // the text size is where the shell shows: in place, filling, in front
   // or in a window of its own each keep theirs
@@ -625,7 +626,8 @@ export function TermView({
     if (host.current?.offsetParent) fitRef.current?.fit();
   }, [fontSize]);
 
-  // The theme and palette settings and the OS scheme all repaint the terminal.
+  // The theme, palette and contrast settings and the OS scheme all repaint
+  // the terminal.
   useEffect(() => {
     const paint = () => {
       const term = termRef.current;
@@ -635,7 +637,7 @@ export function TermView({
     const mq = matchMedia("(prefers-color-scheme: dark)");
     mq.addEventListener("change", paint);
     return () => mq.removeEventListener("change", paint);
-  }, [theme, palette]);
+  }, [theme, palette, moreContrast]);
 
   const tapKey = (key: BarKey) => {
     const term = termRef.current;

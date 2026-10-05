@@ -103,6 +103,7 @@ export function App() {
   const setSetting = useStore((s) => s.setSetting);
   const theme = useStore((s) => s.settings.theme);
   const palette = useStore((s) => s.settings.palette);
+  const moreContrast = useStore((s) => s.settings.moreContrast);
   const density = useStore((s) => s.settings.density);
   const sidebarWidth = useStore((s) => s.sidebarWidth);
   const setSidebarWidth = useStore((s) => s.setSidebarWidth);
@@ -128,8 +129,8 @@ export function App() {
     };
   }, [init, attempt]);
 
-  // Theme, palette and density live on <html> so the solo view and the
-  // popover get them too. "system" removes the attribute and lets
+  // Theme, palette, contrast and density live on <html> so the solo view
+  // and the popover get them too. "system" removes the attribute and lets
   // color-scheme decide. Before paint, so a saved palette never flashes
   // forest first.
   useLayoutEffect(() => {
@@ -137,9 +138,11 @@ export function App() {
     if (theme === "system") delete el.dataset["theme"];
     else el.dataset["theme"] = theme;
     el.dataset["palette"] = palette;
+    if (moreContrast) el.dataset["contrast"] = "more";
+    else delete el.dataset["contrast"];
     el.dataset["density"] = density;
     paintThemeColor(theme);
-  }, [theme, palette, density]);
+  }, [theme, palette, moreContrast, density]);
 
   // `?view=agents&ask=<id>`, the link an away DM carries: the inbox opens on
   // that ask once the page is up, and the link leaves the URL so a reload

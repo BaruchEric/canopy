@@ -110,6 +110,8 @@ export interface Settings {
   shell: ShellTarget;
   theme: Theme;
   palette: Palette;
+  /** pulls the palette's text, lines and surfaces apart, whichever it is */
+  moreContrast: boolean;
   density: Density;
   /** which of a forge's repos are worth a card */
   forge: ForgeView;
@@ -181,6 +183,7 @@ export const DEFAULT_SETTINGS: Settings = {
   shell: "auto",
   theme: "system",
   palette: "forest",
+  moreContrast: false,
   density: "cozy",
   forge: "missing",
   hideArchived: true,
@@ -339,6 +342,7 @@ export function loadSettings(): Settings {
       shell: pick(SHELL_TARGETS, saved.shell, DEFAULT_SETTINGS.shell),
       theme: pick(THEMES, saved.theme, DEFAULT_SETTINGS.theme),
       palette: pick(PALETTES, saved.palette, DEFAULT_SETTINGS.palette),
+      moreContrast: typeof saved.moreContrast === "boolean" ? saved.moreContrast : DEFAULT_SETTINGS.moreContrast,
       density: pick(DENSITIES, saved.density, DEFAULT_SETTINGS.density),
       forge: pick(FORGE_VIEWS, saved.forge, DEFAULT_SETTINGS.forge),
       hideArchived: typeof saved.hideArchived === "boolean" ? saved.hideArchived : DEFAULT_SETTINGS.hideArchived,
