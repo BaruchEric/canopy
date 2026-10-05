@@ -15,3 +15,48 @@ input.cell-port,input.cell-path,.toolbar input[type=number],.drawer-body textare
 table.ports td{border-color:var(--border)}
 .toolbar{flex-wrap:wrap}
 div:has(>label + #cf-host_root){display:none}
+
+/* One box deep, as in the cockpit: a card, a floating layer and a field
+   keep an edge, and nothing with an edge sits inside another. Buttons and
+   filters are words that take a wash under the pointer or when chosen;
+   badges, counts and tags are coloured text; notes hang off a rail. The
+   blueprint corners and the boxed stats go. */
+:root{--green:light-dark(#3e7a38,#93c98b);--amber:light-dark(#926411,#d9b36b);--red:light-dark(#a84e2f,#ca7c60);
+  --wash:color-mix(in srgb,var(--text) 7%,transparent);--wash2:color-mix(in srgb,var(--text) 12%,transparent);--well:color-mix(in srgb,var(--text) 4%,transparent)}
+header{border:0;border-bottom:1px solid var(--border);border-radius:0;background:none;padding:2px 0 14px}
+header::before,header::after,div.card::before,div.card::after,.modal-card::before,.modal-card::after,.stat::after{display:none}
+.stats{gap:6px 32px;margin:16px 0 4px}
+.stat{flex:none;min-width:0;background:none;border:0;padding:4px 0}
+.btn,.mini,.filt,.viewbtn,.gear,.lgear,.afilt,.open-btn,.mini.addbtn{background:none;border-color:transparent;border-radius:6px}
+.btn{color:var(--accent);padding:5px 10px}
+.mini,.filt,.viewbtn{padding:5px 10px}
+.btn:hover,.mini:hover,.filt:hover,.viewbtn:hover,.gear:hover,.lgear:hover,.open-btn:hover,.mini.addbtn:hover{background:var(--wash);border-color:transparent}
+.filt.active,.viewbtn.active,.filt.tag.active,.gear[aria-expanded="true"],.lgear[aria-expanded="true"]{background:var(--wash2);border-color:transparent;color:var(--text)}
+.viewbtn:not(:last-child){border-right:1px solid transparent}
+.viewbtns{gap:2px}
+.afilt{background:var(--wash2)}
+.btn.danger,.btn.danger:hover{background:none;color:var(--red)}
+.btn.success,.btn.success:hover{background:none;color:var(--green)}
+.btn.danger:hover,.btn.success:hover{background:var(--wash)}
+div.card{border-color:var(--border)}
+div.card:hover{border-color:color-mix(in srgb,var(--text) 25%,var(--border));box-shadow:none}
+div.card.pinned{border-left-color:var(--amber)}
+.badges{gap:2px 12px}
+.badge,.ref-ty,.dcat,.lhead .lcount,.tagedit-chip,.badge.dom-link,.badge.method,.badge.subn,.badge.tag,.badge.rel,.badge.linkn,.badge.dom{background:none;border:0;padding:0;border-radius:0}
+.badge.pinned{background:none}
+.meta{border-top:0;padding-top:0}
+.cat h2{border-bottom:1px solid var(--border)}
+.cat h2 .count::before,.cat h2 .count::after{content:none}
+.refs,.tree,.ltable,.ltable thead{background:none;border:0;box-shadow:none}
+.refs{padding:0}.tree{padding:0}
+.ref{border-bottom-style:solid}
+.ref-wrap{border-bottom-style:solid}
+.ref-notes,.topic,.strays,#running-panel{border:0;border-left:2px solid var(--accent);border-radius:0;background:none;padding:2px 0 2px 12px}
+.strays{border-left-color:var(--amber)}
+.ref-notes[open]>summary{border-bottom:0}
+code{background:var(--wash);border:0}
+.editform{background:none;border:0;border-top:1px solid var(--border);border-radius:0;padding:12px 0 0}
+.name .author:hover,.name-cell .author:hover,.name .author.active,.name-cell .author.active{border-color:transparent;background:var(--wash);color:var(--text)}
+.tagedit-chip{padding:0 0 0 2px}
+.drawer-body{background:var(--well)}
+.wrap .toolbar{background:none}

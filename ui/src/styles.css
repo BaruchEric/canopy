@@ -1,5 +1,12 @@
 /* canopy — forest-floor instrument panel
    bark surfaces, moss/lichen/rust/sky state colors, all-mono type.
+   One box deep: a card, a floating layer (popover, menu, sheet), a text
+   field and the one strong button may have an edge, and nothing with an
+   edge sits inside another. Regions meet at a hairline. Everything inside
+   them is flat: a control is a word or a glyph that takes a wash under the
+   pointer or when chosen, a fact (a branch, a machine, a tag, a stage) is
+   coloured text, a callout hangs off a rail, and a well of code or output
+   is a tint of the ground with no edge of its own.
    Every color is a light-dark() pair; the theme setting only flips
    color-scheme on <html>, so the OS choice and the manual one share tokens.
    The palette setting swaps the whole set: data-palette on <html> picks one
@@ -20,9 +27,13 @@
   color-scheme: light dark;
   --float-shadow: light-dark(rgb(35 45 32 / 0.28), rgb(0 0 0 / 0.75));
   --trunk: #7a5c44;
-  /* a top-edge highlight, the way light catches bark */
-  --sheen: light-dark(rgb(255 255 255 / 0.6), rgb(255 255 255 / 0.04));
   --shadow: light-dark(rgb(35 45 32 / 0.18), rgb(0 0 0 / 0.55));
+  /* the flat language's fills: a wash is a control under the pointer or a
+     choice made, a well is code or output set into the ground; both tint
+     whatever they sit on, so neither needs an edge to be told apart */
+  --wash: color-mix(in srgb, var(--ink) 7%, transparent);
+  --wash-strong: color-mix(in srgb, var(--ink) 12%, transparent);
+  --well: color-mix(in srgb, var(--ink) 4%, transparent);
   --mono:
     "Berkeley Mono", "JetBrains Mono", ui-monospace, "SF Mono", Menlo,
     monospace;
@@ -426,11 +437,9 @@ kbd {
   font-size: 10px;
   line-height: 15px;
   padding: 0 5px;
-  border: 1px solid var(--hair2);
-  border-bottom-width: 2px;
   border-radius: 4px;
   color: var(--ink-faint);
-  background: var(--bark1);
+  background: var(--wash);
 }
 
 .loading,
@@ -536,12 +545,9 @@ body.resizing iframe {
   min-height: 46px;
   padding: 2px 14px;
   border-bottom: 1px solid var(--hair);
-  background: color-mix(in srgb, var(--bark1) 94%, transparent);
-  box-shadow:
-    inset 0 1px 0 var(--sheen),
-    0 6px 18px -14px var(--shadow);
-  /* positioned so its shadow paints over the tree and the cards below it;
-     no z-index, which would trap the popovers inside its layer */
+  background: var(--bark1);
+  /* positioned so its popovers place against it; no z-index, which would
+     trap them inside its layer */
   position: relative;
 }
 /* controls that wrap as one unit; the tail sits at the right of its row */
@@ -603,14 +609,12 @@ body.resizing iframe {
   gap: 6px;
   padding: 3px 8px;
   border-radius: var(--r);
-  border: 1px solid transparent;
   color: var(--ink-faint);
 }
 .root-btn:hover,
 .root-btn.on {
   color: var(--ink-dim);
-  background: var(--bark2);
-  border-color: var(--hair2);
+  background: var(--wash);
 }
 .root-btn:hover .root-path,
 .root-btn.on .root-path {
@@ -641,18 +645,17 @@ body.resizing iframe {
 }
 .tab {
   padding: 3px 10px;
-  border-radius: 999px;
+  border-radius: var(--r);
   color: var(--ink-dim);
-  border: 1px solid transparent;
   white-space: nowrap;
 }
 .tab:hover {
   color: var(--ink);
+  background: var(--wash);
 }
 .tab.active {
   color: var(--moss);
-  border-color: var(--hair2);
-  background: var(--bark2);
+  background: var(--wash);
 }
 .tab-count {
   margin-left: 6px;
@@ -707,26 +710,23 @@ body.resizing iframe {
   accent-color: var(--lichen);
 }
 
-/* the attention pill doubles as a live count */
+/* the attention count: a dot and its words, washed while it filters */
 .pill {
   display: inline-flex;
   align-items: center;
   gap: 7px;
-  padding: 3px 11px 3px 9px;
-  border-radius: 999px;
-  border: 1px solid var(--hair2);
-  background: var(--bark2);
+  padding: 3px 8px;
+  border-radius: var(--r);
   color: var(--ink-dim);
   white-space: nowrap;
 }
 .pill:hover {
   color: var(--ink);
-  border-color: var(--ink-faint);
+  background: var(--wash);
 }
 .pill.on {
   color: var(--lichen);
-  border-color: color-mix(in srgb, var(--lichen) 55%, var(--hair2));
-  background: color-mix(in srgb, var(--lichen) 10%, var(--bark2));
+  background: color-mix(in srgb, var(--lichen) 12%, transparent);
 }
 .dot {
   width: 7px;
@@ -745,28 +745,25 @@ body.resizing iframe {
   background: var(--moss);
 }
 
-/* segmented choice: grouping in the top bar, every setting in the popover */
+/* segmented choice: grouping in the top bar, every setting in the popover.
+   No track: the words sit side by side and the chosen one is washed. */
 .seg {
   display: inline-flex;
   gap: 2px;
-  padding: 2px;
-  border: 1px solid var(--hair2);
-  border-radius: 999px;
-  background: var(--bark0);
 }
 .seg button {
-  padding: 1px 10px;
-  border-radius: 999px;
+  padding: 1px 8px;
+  border-radius: var(--r);
   color: var(--ink-dim);
   white-space: nowrap;
 }
 .seg button:hover {
   color: var(--ink);
+  background: var(--wash);
 }
 .seg button[aria-checked="true"] {
   color: var(--ink);
-  background: var(--bark3);
-  box-shadow: inset 0 1px 0 var(--sheen);
+  background: var(--wash-strong);
 }
 
 .icon-btn {
@@ -774,15 +771,13 @@ body.resizing iframe {
   height: 28px;
   display: inline-grid;
   place-items: center;
-  border-radius: 50%;
-  border: 1px solid transparent;
+  border-radius: var(--r);
   color: var(--ink-dim);
 }
 .icon-btn:hover,
 .icon-btn.on {
   color: var(--ink);
-  background: var(--bark2);
-  border-color: var(--hair2);
+  background: var(--wash);
 }
 
 /* ---------- settings popover ---------- */
@@ -801,7 +796,6 @@ body.resizing iframe {
   border: 1px solid var(--float-edge);
   border-radius: 10px;
   box-shadow:
-    inset 0 1px 0 var(--sheen),
     0 2px 6px -2px var(--float-shadow),
     0 22px 48px -16px var(--float-shadow);
 }
@@ -819,7 +813,6 @@ body.resizing iframe {
 .settings-pop .seg {
   flex-wrap: wrap;
   max-width: 100%;
-  border-radius: 14px;
 }
 .settings-row .panel-label {
   margin: 0;
@@ -838,13 +831,14 @@ body.resizing iframe {
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 6px;
 }
+/* a swatch is a patch of its palette's own ground, so it needs no edge;
+   the one in use is ringed in its moss */
 .palettes button {
   display: flex;
   align-items: center;
   gap: 8px;
   min-width: 0;
   padding: 5px 8px;
-  border: 1px solid var(--hair2);
   border-radius: var(--r);
   background: var(--bark1);
   color: var(--ink);
@@ -853,11 +847,10 @@ body.resizing iframe {
   white-space: nowrap;
 }
 .palettes button:hover {
-  border-color: var(--ink-faint);
+  box-shadow: inset 0 0 0 1px var(--hair2);
 }
 .palettes button[aria-checked="true"] {
-  border-color: var(--moss);
-  box-shadow: inset 0 0 0 1px var(--moss);
+  box-shadow: inset 0 0 0 2px var(--moss);
 }
 .palette-dots {
   flex: none;
@@ -951,7 +944,7 @@ body.resizing iframe {
 }
 .mini.inbox-waiting {
   color: var(--rust);
-  border-color: var(--rust);
+  background: color-mix(in srgb, var(--rust) 12%, transparent);
   font-weight: 700;
 }
 .inbox-list,
@@ -964,14 +957,23 @@ body.resizing iframe {
   align-self: stretch;
   min-width: 0;
 }
+/* the items are rows with a hairline between them; the open one hangs off
+   a rust rail */
+.inbox-list {
+  gap: 0;
+}
 .inbox-item {
   min-width: 0;
-  border: 1px solid var(--hair);
-  border-radius: 8px;
-  background: var(--bark1);
+  border-left: 2px solid transparent;
+}
+.inbox-item + .inbox-item {
+  border-top: 1px solid var(--hair);
 }
 .inbox-item.open {
-  border-color: color-mix(in srgb, var(--rust) 45%, var(--hair2));
+  border-left-color: var(--rust);
+}
+.inbox-head:hover {
+  background: var(--wash);
 }
 .inbox-head {
   display: flex;
@@ -1084,14 +1086,22 @@ body.resizing iframe {
   padding: 0;
   list-style: none;
 }
+/* a flag is a word in its colour after a dot of it */
 .ask-flag {
   --flag: var(--lichen);
-  padding: 1px 7px;
-  border: 1px solid color-mix(in srgb, var(--flag) 55%, transparent);
-  border-radius: 999px;
-  background: color-mix(in srgb, var(--flag) 10%, transparent);
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  margin-right: 6px;
   color: var(--flag);
   font-size: 11px;
+}
+.ask-flag::before {
+  content: "";
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: currentColor;
 }
 .ask-flag.f-deletes,
 .ask-flag.f-push {
@@ -1132,10 +1142,8 @@ body.resizing iframe {
 .ask-remember {
   display: grid;
   gap: 8px;
-  padding: 10px;
-  border: 1px solid color-mix(in srgb, var(--moss) 45%, var(--hair2));
-  border-radius: var(--r);
-  background: color-mix(in srgb, var(--moss) 6%, var(--bark1));
+  padding: 4px 0 4px 12px;
+  border-left: 3px solid var(--moss);
 }
 .ask-remember .eyebrow {
   color: var(--moss);
@@ -1291,7 +1299,7 @@ body.resizing iframe {
 }
 .mini.chan-unread {
   color: var(--sky);
-  border-color: var(--sky);
+  background: color-mix(in srgb, var(--sky) 12%, transparent);
 }
 .chan-convs {
   display: flex;
@@ -1519,9 +1527,6 @@ a.chan-text {
 }
 .src-where {
   font-size: 10.5px;
-  padding: 1px 6px;
-  border-radius: 999px;
-  border: 1px solid var(--hair2);
   color: var(--sky);
   white-space: nowrap;
 }
@@ -1560,7 +1565,6 @@ a.chan-text {
 }
 .src-row.broken .src-where {
   color: var(--rust);
-  border-color: color-mix(in srgb, var(--rust) 50%, var(--hair2));
 }
 .src-err {
   grid-column: 1 / -1;
@@ -1604,7 +1608,7 @@ a.chan-text {
 
 .mini.on {
   color: var(--ink);
-  border-color: var(--ink-faint);
+  background: var(--wash-strong);
 }
 
 /* the folder browser: breadcrumbs, one level of subfolders, a pick */
@@ -1612,7 +1616,6 @@ a.chan-text {
   display: grid;
   gap: 6px;
   padding: 8px;
-  border: 1px solid var(--hair2);
   border-radius: var(--r);
   background: var(--bark0);
 }
@@ -1688,16 +1691,12 @@ a.chan-text {
 /* a repo that lives on another host, or only on a forge, says so next to
    its name */
 .host-tag.forge {
-  border-color: color-mix(in srgb, var(--ink-dim) 45%, var(--hair2));
   color: var(--ink-dim);
 }
 .host-tag {
   flex: none;
   font-size: 10px;
   line-height: 1.4;
-  padding: 0 5px;
-  border-radius: 999px;
-  border: 1px solid color-mix(in srgb, var(--sky) 40%, var(--hair2));
   color: var(--sky);
 }
 
@@ -1714,17 +1713,15 @@ a.chan-text {
   display: inline-flex;
   align-items: center;
   gap: 6px;
-  padding: 2px 9px;
-  border-radius: 999px;
-  border: 1px solid var(--hair2);
-  background: var(--bark2);
+  padding: 2px 8px;
+  border-radius: var(--r);
   color: var(--ink-dim);
   white-space: nowrap;
   max-width: 100%;
 }
 .chip:hover:not(:disabled) {
   color: var(--ink);
-  border-color: var(--ink-faint);
+  background: var(--wash);
 }
 .chip:disabled {
   opacity: 0.4;
@@ -1732,8 +1729,7 @@ a.chan-text {
 }
 .chip.on {
   color: var(--lichen);
-  border-color: color-mix(in srgb, var(--lichen) 55%, var(--hair2));
-  background: color-mix(in srgb, var(--lichen) 10%, var(--bark2));
+  background: color-mix(in srgb, var(--lichen) 12%, transparent);
 }
 .chip-n {
   font-size: 11px;
@@ -1748,20 +1744,21 @@ a.chan-text {
 }
 
 /* ---------- buttons ---------- */
+/* a word you can press: no edge and no fill until the pointer is on it.
+   The strong one is the only filled button, the step a screen exists for. */
 .mini {
   display: inline-flex;
   align-items: center;
   padding: 2px 8px;
+  border: 1px solid transparent;
   border-radius: var(--r);
-  border: 1px solid var(--hair2);
-  background: var(--bark2);
   color: var(--ink-dim);
   white-space: nowrap;
   text-decoration: none;
 }
 .mini:hover:not(:disabled) {
   color: var(--ink);
-  border-color: var(--ink-faint);
+  background: var(--wash);
 }
 .mini:disabled {
   opacity: 0.45;
@@ -1942,9 +1939,6 @@ a.chan-text {
   border-radius: var(--r-card);
   padding: 10px 12px 10px 14px;
   cursor: pointer;
-  box-shadow:
-    inset 0 1px 0 var(--sheen),
-    0 1px 2px -1px var(--shadow);
 }
 /* a card with something in it wears its colour a shade stronger */
 .card:is(.s-dirty, .s-conflict, .s-error) {
@@ -1976,15 +1970,9 @@ a.chan-text {
 .card:hover {
   background: color-mix(in srgb, var(--state) 6%, var(--bark2));
   border-color: color-mix(in srgb, var(--state) 34%, var(--hair2));
-  box-shadow:
-    inset 0 1px 0 var(--sheen),
-    0 12px 26px -14px var(--shadow),
-    0 0 0 1px color-mix(in srgb, var(--state) 8%, transparent);
-  transform: translateY(-2px);
 }
 .card:active {
-  transform: translateY(0) scale(0.995);
-  box-shadow: inset 0 1px 0 var(--sheen);
+  transform: scale(0.995);
 }
 .card-top {
   display: flex;
@@ -2062,18 +2050,28 @@ a.chan-text {
   gap: 8px;
   white-space: nowrap;
 }
+/* a fact in the dim ink: the branch on a card or a panel, where a small
+   fork goes before it, and the facts a sheet or a session lists */
 .branch {
   color: var(--ink-dim);
   font-size: 11px;
   line-height: 17px;
-  padding: 0 7px;
-  border-radius: 999px;
-  border: 1px solid var(--hair);
-  background: var(--bark2);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
   min-width: 0;
+}
+.card-meta > .branch::before,
+.panel-sub > .branch::before {
+  content: "";
+  display: inline-block;
+  width: 10px;
+  height: 10px;
+  margin-right: 5px;
+  vertical-align: -1px;
+  background: currentColor;
+  opacity: 0.8;
+  mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16' fill='none' stroke='black' stroke-width='1.7' stroke-linecap='round'%3E%3Ccircle cx='4.5' cy='3.5' r='1.8'/%3E%3Ccircle cx='4.5' cy='12.5' r='1.8'/%3E%3Ccircle cx='11.5' cy='4.5' r='1.8'/%3E%3Cpath d='M4.5 5.3v5.4M11.5 6.3c0 3-7 2.4-7 4.4'/%3E%3C/svg%3E") center / contain no-repeat;
 }
 .ahead {
   color: var(--sky);
@@ -2081,16 +2079,12 @@ a.chan-text {
 .behind {
   color: var(--rust);
 }
-/* a remote branch the checkout does not have: a chip like the branch, in
+/* a remote branch the checkout does not have: words like the branch, in
    the remote's colour, clipped so a long agent branch name stays one line */
 .tip {
   color: var(--sky);
   font-size: 11px;
   line-height: 17px;
-  padding: 0 7px;
-  border-radius: 999px;
-  border: 1px solid var(--hair);
-  background: var(--bark2);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -2098,16 +2092,12 @@ a.chan-text {
   max-width: 55%;
   flex-shrink: 1;
 }
-/* a peer chip: like .tip, but for what a repo's peers know that this
+/* a peer's word: like .tip, but for what a repo's peers know that this
    checkout does not — a diverged branch, a peer's uncommitted work, or
    nothing else having this repo at all. */
 .peer {
   font-size: 11px;
   line-height: 17px;
-  padding: 0 7px;
-  border-radius: 999px;
-  border: 1px solid var(--hair);
-  background: var(--bark2);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -2129,10 +2119,6 @@ a.chan-text {
 .elsewhere {
   font-size: 11px;
   line-height: 17px;
-  padding: 0 7px;
-  border-radius: 999px;
-  border: 1px dashed var(--hair);
-  background: var(--bark2);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -2364,8 +2350,6 @@ a.chan-text {
   gap: 7px;
   margin-bottom: -1px;
   padding: 4px 6px 5px 10px;
-  border: 1px solid transparent;
-  border-bottom: 0;
   border-radius: var(--r) var(--r) 0 0;
   font-size: 12px;
   color: var(--ink-dim);
@@ -2377,12 +2361,12 @@ a.chan-text {
 }
 .dock-tab:hover {
   color: var(--ink);
-  background: var(--bark2);
+  background: var(--wash);
 }
+/* the tab showing is underlined in its repo's state colour */
 .dock-tab.on {
   color: var(--ink);
-  background: color-mix(in srgb, var(--state) 6%, var(--bark1));
-  border-color: color-mix(in srgb, var(--state) 20%, var(--hair));
+  box-shadow: inset 0 -2px 0 var(--state);
 }
 .dock-tab-name {
   max-width: 180px;
@@ -2462,10 +2446,8 @@ a.chan-text {
   flex-wrap: wrap;
   gap: 6px;
   margin-top: 6px;
-  padding: 8px;
-  border: 1px solid var(--hair2);
-  border-radius: var(--r);
-  background: var(--bark2);
+  padding: 6px 0 2px 10px;
+  border-left: 2px solid var(--hair2);
 }
 .ws-new input {
   padding: 2px 8px;
@@ -2680,11 +2662,10 @@ a.chan-text {
   color: var(--sky);
 }
 
-/* diff */
+/* diff: a well of the darker ground */
 .diff {
   margin: 4px 14px 10px;
   padding: 8px 10px;
-  border: 1px solid var(--hair);
   border-radius: var(--r);
   background: var(--bark0);
   overflow-x: auto;
@@ -2740,21 +2721,20 @@ a.chan-text {
   gap: 8px;
   flex-wrap: wrap;
 }
+/* a callout hangs off a rail in its colour, with no box around it */
 .note {
   margin: 10px 14px 0;
-  padding: 8px 10px;
-  border-radius: var(--r);
+  padding: 2px 0 2px 10px;
+  border-left: 2px solid currentColor;
   font-size: 12px;
   white-space: pre-wrap;
   overflow-wrap: anywhere;
 }
 .note.ok {
   color: var(--moss);
-  border: 1px solid color-mix(in srgb, var(--moss) 35%, transparent);
 }
 .note.err {
   color: var(--rust);
-  border: 1px solid color-mix(in srgb, var(--rust) 35%, transparent);
 }
 
 /* pre-flight push warning */
@@ -2762,9 +2742,8 @@ a.chan-text {
    failure it predicts should read as one voice. */
 .panel-hint {
   margin: 0 14px 10px;
-  padding: 8px 10px;
-  border: 1px solid color-mix(in srgb, var(--lichen) 35%, transparent);
-  border-radius: var(--r);
+  padding: 2px 0 2px 10px;
+  border-left: 2px solid currentColor;
   font-size: 12px;
   color: var(--lichen);
 }
@@ -2819,8 +2798,8 @@ a.chan-text {
 }
 
 /* ---------- the drill: one commit opened in place ---------- */
-/* The row is a button; open, it lets the subject wrap and hangs a card
-   beneath it on the panel's darker ground, the same card a session opens.
+/* The row is a button; open, it lets the subject wrap and hangs a well
+   beneath it of the panel's darker ground, the same well a session opens.
    Each file carries a short bar, moss for lines added and rust for lines
    removed, scaled to the biggest file in the commit: where the commit
    grew and where it was pruned, before a single number is read. */
@@ -2845,7 +2824,6 @@ a.chan-text {
 .rev-detail {
   margin: 4px 14px 10px;
   padding: 10px 12px;
-  border: 1px solid var(--hair);
   border-radius: var(--r);
   background: var(--bark0);
 }
@@ -2958,9 +2936,11 @@ a.chan-text {
   font-size: 11px;
   font-variant-numeric: tabular-nums;
 }
+/* already in a well: the lines sit on it, no second ground */
 .rev-file .diff {
   margin: 4px 0 8px;
-  background: var(--bark1);
+  padding: 4px 0;
+  background: none;
 }
 
 /* ---------- the rings: what Claude's work here has cost, day by day ---------- */
@@ -3037,7 +3017,7 @@ a.chan-text {
 .gear:hover,
 .gear.on {
   color: var(--moss);
-  background: var(--bark2);
+  background: var(--wash);
 }
 .term-tabs > .gear {
   align-self: center;
@@ -3241,10 +3221,7 @@ a.chan-text {
   flex: none;
   font-size: 10px;
   line-height: 15px;
-  padding: 0 6px;
-  border-radius: 999px;
-  border: 1px solid var(--hair2);
-  color: var(--ink-dim);
+  color: var(--sky);
 }
 .sess-snip {
   margin: 0;
@@ -3264,7 +3241,6 @@ a.chan-text {
 .sess-detail {
   margin: 4px 14px 10px;
   padding: 10px 12px;
-  border: 1px solid var(--hair);
   border-radius: var(--r);
   background: var(--bark0);
 }
@@ -3420,7 +3396,6 @@ a.chan-text {
   display: inline-grid;
   place-items: center;
   border-radius: var(--r);
-  border: 1px solid transparent;
   color: var(--ink-faint);
   opacity: 0.55;
 }
@@ -3432,8 +3407,7 @@ a.chan-text {
 .more:hover,
 .more.on {
   color: var(--ink);
-  background: var(--bark2);
-  border-color: var(--hair2);
+  background: var(--wash);
 }
 .menu {
   position: fixed;
@@ -3443,7 +3417,6 @@ a.chan-text {
   border: 1px solid var(--float-edge);
   border-radius: 10px;
   box-shadow:
-    inset 0 1px 0 var(--sheen),
     0 2px 6px -2px var(--float-shadow),
     0 22px 48px -16px var(--float-shadow);
 }
@@ -3526,21 +3499,20 @@ a.chan-text {
 .card.run-waiting::before {
   background: var(--lichen);
 }
+/* a run: its dot and its word in its tone, washed under the pointer */
 .run-chip {
   display: inline-flex;
   align-items: center;
   gap: 5px;
   font-size: 11px;
   line-height: 17px;
-  padding: 0 8px 0 6px;
-  border-radius: 999px;
-  border: 1px solid color-mix(in srgb, var(--tone) 45%, var(--hair2));
-  background: color-mix(in srgb, var(--tone) 10%, var(--bark2));
+  padding: 0 4px;
+  border-radius: var(--r);
   color: var(--tone);
   white-space: nowrap;
 }
 .run-chip:hover {
-  border-color: var(--tone);
+  background: color-mix(in srgb, var(--tone) 12%, transparent);
 }
 .run-chip .dot {
   width: 6px;
@@ -3576,11 +3548,9 @@ a.chan-text {
 }
 .pill.runs {
   color: var(--sky);
-  border-color: color-mix(in srgb, var(--sky) 45%, var(--hair2));
 }
 .pill.runs.on {
   color: var(--lichen);
-  border-color: color-mix(in srgb, var(--lichen) 55%, var(--hair2));
 }
 
 /* ---------- the sheet: pre-flight, then the console ---------- */
@@ -3603,7 +3573,6 @@ a.chan-text {
   border: 1px solid var(--float-edge);
   border-radius: 12px;
   box-shadow:
-    inset 0 1px 0 var(--sheen),
     0 4px 10px -4px var(--float-shadow),
     0 36px 80px -28px var(--float-shadow);
   overflow: hidden;
@@ -3673,10 +3642,16 @@ a.chan-text {
   flex-direction: column;
   gap: 12px;
 }
+/* facts in a row, a faint dot between them */
 .facts {
   display: flex;
   flex-wrap: wrap;
-  gap: 6px;
+  gap: 2px 0;
+}
+.facts > .branch + .branch::before {
+  content: "·";
+  margin: 0 7px;
+  color: var(--ink-faint);
 }
 .blurb {
   margin: 0;
@@ -3697,7 +3672,6 @@ a.chan-text {
   gap: 8px;
   padding: 10px 16px;
   border-top: 1px solid var(--hair);
-  background: color-mix(in srgb, var(--bark0) 45%, var(--float));
 }
 .sheet-hint {
   flex: 1;
@@ -3715,12 +3689,11 @@ a.chan-text {
 }
 .run-note {
   margin: 0 0 12px;
-  padding: 8px 10px;
+  padding: 2px 0 2px 10px;
   display: flex;
   flex-direction: column;
   gap: 3px;
-  border: 1px solid var(--hair);
-  border-radius: var(--r);
+  border-left: 2px solid var(--hair2);
   color: var(--ink-dim);
   white-space: pre-wrap;
   overflow-wrap: anywhere;
@@ -3817,7 +3790,6 @@ a.chan-text {
   white-space: pre-wrap;
   overflow-wrap: anywhere;
   background: var(--bark0);
-  border: 1px solid var(--hair);
   border-radius: var(--r);
 }
 .step-text {
@@ -3846,9 +3818,8 @@ a.chan-text {
   flex-direction: column;
   gap: 2px;
   padding: 6px 10px;
-  border: 1px solid var(--hair);
   border-radius: var(--r);
-  background: var(--bark2);
+  background: var(--wash);
 }
 
 /* the chat's message box, between the timeline and the footer */
@@ -3897,16 +3868,14 @@ a.chan-text {
   color: var(--lichen);
 }
 
-/* a question or a permission: the run's "needs you" moment, in lichen */
+/* a question or a permission: the run's "needs you" moment, on a lichen rail */
 .ask {
   margin: 12px 0 0;
-  padding: 12px;
+  padding: 4px 0 4px 12px;
   display: flex;
   flex-direction: column;
   gap: 10px;
-  border: 1px solid color-mix(in srgb, var(--lichen) 55%, var(--hair2));
-  border-radius: 8px;
-  background: color-mix(in srgb, var(--lichen) 7%, var(--bark1));
+  border-left: 3px solid var(--lichen);
 }
 .ask .eyebrow {
   color: var(--lichen);
@@ -3920,7 +3889,6 @@ a.chan-text {
   white-space: pre-wrap;
   overflow-wrap: anywhere;
   background: var(--bark0);
-  border: 1px solid var(--hair);
   border-radius: var(--r);
 }
 .ask-row {
@@ -3941,27 +3909,26 @@ a.chan-text {
   gap: 8px;
   flex-wrap: wrap;
 }
+/* the answers as rows: washed under the pointer, the picked one in moss */
 .options {
   display: grid;
-  gap: 6px;
+  gap: 2px;
 }
 .option {
   display: flex;
   flex-direction: column;
   align-items: flex-start;
   gap: 2px;
-  padding: 7px 10px;
+  padding: 6px 10px;
   text-align: left;
-  border: 1px solid var(--hair2);
   border-radius: var(--r);
-  background: var(--bark1);
 }
 .option:hover {
-  border-color: var(--ink-faint);
+  background: var(--wash);
 }
 .option.on {
-  border-color: var(--moss);
-  background: color-mix(in srgb, var(--moss) 10%, var(--bark1));
+  background: color-mix(in srgb, var(--moss) 12%, transparent);
+  box-shadow: inset 2px 0 0 var(--moss);
 }
 .opt-label {
   font-weight: 700;
@@ -3979,9 +3946,8 @@ a.chan-text {
 }
 .outcome {
   margin: 12px 0 0;
-  padding: 10px 12px;
-  border: 1px solid var(--hair2);
-  border-radius: 8px;
+  padding: 4px 0 4px 12px;
+  border-left: 3px solid var(--hair2);
   line-height: 1.5;
   white-space: pre-wrap;
   overflow-wrap: anywhere;
@@ -3993,17 +3959,17 @@ a.chan-text {
   margin-top: 8px;
 }
 .outcome.ok {
-  border-color: color-mix(in srgb, var(--moss) 40%, transparent);
+  border-color: var(--moss);
 }
 .outcome.err {
-  border-color: color-mix(in srgb, var(--rust) 40%, transparent);
+  border-color: var(--rust);
   color: var(--rust);
 }
 .outcome.dim {
   color: var(--ink-dim);
 }
 .outcome.warn {
-  border-color: color-mix(in srgb, var(--lichen) 45%, transparent);
+  border-color: var(--lichen);
 }
 .outcome-lead {
   color: var(--lichen);
@@ -4101,7 +4067,6 @@ a.chan-text {
   padding-top: max(6px, env(safe-area-inset-top));
   border-bottom: 1px solid var(--hair);
   background: var(--bark1);
-  box-shadow: inset 0 1px 0 var(--sheen);
 }
 .library-view{display:flex;flex:1;min-height:0;flex-direction:column}
 .library-toolbar{display:flex;gap:18px;align-items:center;padding:10px 16px;border-bottom:1px solid var(--hair);color:var(--ink-dim);flex-wrap:wrap}
@@ -4195,8 +4160,6 @@ a.chan-text {
   gap: 8px;
   margin-bottom: -1px;
   padding: 4px 6px 5px 10px;
-  border: 1px solid transparent;
-  border-bottom: 0;
   border-radius: var(--r) var(--r) 0 0;
   font-size: 12px;
   color: var(--ink-dim);
@@ -4206,12 +4169,12 @@ a.chan-text {
 }
 .term-tab:hover {
   color: var(--ink);
-  background: var(--bark2);
+  background: var(--wash);
 }
+/* the shell showing: underlined in moss, like a view or a dock tab */
 .term-tab.on {
   color: var(--ink);
-  background: var(--bark0);
-  border-color: var(--hair);
+  box-shadow: inset 0 -2px 0 var(--moss);
 }
 .term-tab.exited {
   color: var(--ink-faint);
@@ -4232,7 +4195,7 @@ a.chan-text {
 }
 .term-x:hover {
   color: var(--rust);
-  background: var(--bark3);
+  background: var(--wash);
 }
 .term-body {
   position: relative;
@@ -4270,21 +4233,23 @@ a.chan-text {
   -webkit-user-select: none;
   user-select: none;
 }
+/* keys under a thumb keep a fill, since a finger needs to see where one
+   ends, but no edge */
 .term-key {
   flex: none;
   min-width: 40px;
   height: 34px;
   padding: 0 10px;
   border-radius: var(--r);
-  border: 1px solid var(--hair2);
-  background: var(--bark2);
+  border: 1px solid transparent;
+  background: var(--wash);
   color: var(--ink);
   font-family: var(--mono);
   font-size: 13px;
   -webkit-tap-highlight-color: transparent;
 }
 .term-key:active {
-  background: var(--bark3);
+  background: var(--wash-strong);
 }
 .term-key.mod.on {
   color: var(--bark0);
@@ -4376,18 +4341,26 @@ a.chan-text {
   align-items: center;
   gap: 8px;
 }
+/* the guided panel's few big steps: a washed word each, the main one
+   filled like a strong button */
 .guided-btn {
   font: inherit;
   padding: 6px 12px;
-  border: 1px solid var(--hair);
   border-radius: var(--r);
-  background: var(--bark2);
+  background: var(--wash);
   color: inherit;
   cursor: pointer;
 }
+.guided-btn:hover:not(:disabled) {
+  background: var(--wash-strong);
+}
 .guided-btn.primary {
-  border-color: var(--moss);
-  color: var(--moss);
+  color: var(--bark0);
+  background: var(--moss);
+  font-weight: 700;
+}
+.guided-btn.primary:hover:not(:disabled) {
+  background: var(--moss-pale);
 }
 .guided-btn:disabled {
   opacity: 0.5;
@@ -4432,7 +4405,7 @@ a.chan-text {
 }
 .term-new:hover {
   color: var(--moss);
-  background: var(--bark2);
+  background: var(--wash);
 }
 /* the focus and maximize switches at the right end of a shells tab row */
 .term-focus {
@@ -4495,7 +4468,6 @@ a.chan-text {
   overflow: hidden;
   background: var(--bark0);
   box-shadow:
-    inset 0 1px 0 var(--sheen),
     0 2px 6px -2px var(--float-shadow),
     0 22px 48px -16px var(--float-shadow);
 }
@@ -4528,7 +4500,7 @@ a.chan-text {
 .term-other:hover,
 .term-other:focus-visible {
   color: var(--ink);
-  background: var(--bark2);
+  background: var(--wash);
 }
 .term-other.away {
   color: var(--ink-faint);
@@ -4928,8 +4900,7 @@ body:has(.focus-grip.se.dragging) {
   gap: 6px;
   width: 100%;
   padding: 6px 8px;
-  border: 1px solid var(--hair);
-  border-radius: 6px;
+  border-radius: var(--r);
   background: transparent;
   color: var(--ink-dim);
   font: inherit;
@@ -4940,7 +4911,8 @@ body:has(.focus-grip.se.dragging) {
   cursor: pointer;
 }
 .step-seg:disabled { cursor: default; }
-.step-seg.shown { border-color: var(--ink-dim); color: var(--ink); }
+.step-seg:hover:not(:disabled) { background: var(--wash); }
+.step-seg.shown { background: var(--wash-strong); color: var(--ink); }
 .step-seg .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--hair); flex: none; }
 .step-seg.st-running .dot, .step-seg.st-checking .dot { background: var(--sky); }
 .step-seg.st-gated .dot { background: var(--lichen); }
@@ -4958,7 +4930,7 @@ body:has(.focus-grip.se.dragging) {
 .plan-steps { margin: 8px 0 0; padding-left: 20px; font-size: 13px; }
 .plan-steps li { margin: 2px 0; }
 .plan-step-meta { color: var(--ink-dim); margin-left: 6px; }
-.gate { border: 1px solid var(--lichen); border-radius: 8px; padding: 12px; margin: 0 0 12px; }
+.gate { border-left: 3px solid var(--lichen); padding: 2px 0 2px 12px; margin: 0 0 12px; }
 .gate-summary { white-space: pre-wrap; margin: 8px 0; }
 .gate-budget, .gate-rewinds { font-size: 12px; color: var(--ink-dim); }
 .gate-budget { margin: 4px 0; }
@@ -5009,7 +4981,7 @@ body:has(.focus-grip.se.dragging) {
 .fleet-list { margin: 8px 0; }
 .fleet-skipped { margin: 4px 0; color: var(--ink-dim); font-size: 13px; }
 .fleet-skipped .eyebrow { display: block; }
-.fleet-needs { border: 1px solid var(--lichen); border-radius: 8px; padding: 12px; margin-bottom: 12px; }
+.fleet-needs { border-left: 3px solid var(--lichen); padding: 2px 0 2px 12px; margin-bottom: 12px; }
 .fleet-rows { list-style: none; margin: 0; padding: 0; }
 .fleet-row { display: grid; grid-template-columns: max-content 1fr; gap: 2px 12px; padding: 6px 0; border-bottom: 1px solid var(--hair); align-items: baseline; }
 .fleet-name { font: inherit; background: none; border: 0; padding: 0; cursor: pointer; display: inline-flex; align-items: center; gap: 6px; color: var(--ink); }
@@ -5058,20 +5030,18 @@ body:has(.focus-grip.se.dragging) {
 }
 .feed-chip {
   padding: 1px 8px;
-  border-radius: 999px;
-  border: 1px solid transparent;
+  border-radius: var(--r);
   font-size: 11px;
   color: var(--ink-dim);
   white-space: nowrap;
 }
 .feed-chip:hover {
   color: var(--ink);
-  background: var(--bark2);
+  background: var(--wash);
 }
 .feed-chip.on {
   color: var(--ink);
-  background: var(--bark2);
-  border-color: var(--hair2);
+  background: var(--wash-strong);
 }
 .feed-chip.err {
   color: var(--rust);
@@ -5471,15 +5441,14 @@ a.build-label:hover {
 }
 .mini.confirm {
   color: var(--lichen);
-  border-color: color-mix(in srgb, var(--lichen) 55%, var(--hair2));
+  background: color-mix(in srgb, var(--lichen) 12%, transparent);
 }
 
 /* a download or a build, with the tail of what it printed */
 .job {
   margin: 2px 14px 6px;
   padding: 6px 8px;
-  border: 1px solid var(--hair);
-  border-radius: 6px;
+  border-radius: var(--r);
   background: var(--bark0);
 }
 .job-head {
@@ -5595,12 +5564,12 @@ a.build-label:hover {
   color: var(--sky);
 }
 
-/* a card's machines: one chip per checkout, the lead lit */
+/* a card's machines: one word per checkout, the lead in full ink */
 .machines {
   display: flex;
   flex-wrap: wrap;
-  gap: 4px;
-  margin-top: 5px;
+  gap: 2px 6px;
+  margin: 4px 0 0 -4px;
 }
 .machine {
   display: inline-flex;
@@ -5608,24 +5577,20 @@ a.build-label:hover {
   gap: 5px;
   font-size: 10.5px;
   line-height: 16px;
-  padding: 0 7px;
-  border-radius: 999px;
-  border: 1px solid var(--hair);
-  color: var(--ink-dim);
-  background: var(--bark1);
+  padding: 0 4px;
+  border-radius: var(--r);
+  color: var(--ink-faint);
 }
 button.machine:hover {
   color: var(--ink);
-  border-color: var(--hair2);
+  background: var(--wash);
 }
 .machine.on {
   color: var(--ink);
-  background: var(--bark3);
-  border-color: color-mix(in srgb, var(--sky) 45%, var(--hair2));
 }
 .machine.away {
   color: var(--ink-faint);
-  border-style: dashed;
+  font-style: italic;
 }
 .machine-name {
   font-weight: 600;
@@ -5643,7 +5608,6 @@ button.machine:hover {
   opacity: 0.6;
 }
 .host-tag.archived {
-  border-style: dashed;
   color: var(--ink-dim);
 }
 
@@ -5675,9 +5639,8 @@ button.machine:hover {
   align-items: center;
   gap: 8px;
   margin: 8px 14px;
-  padding: 6px 10px;
-  border: 1px dashed var(--hair2);
-  border-radius: var(--r);
+  padding: 2px 0 2px 10px;
+  border-left: 2px solid var(--hair2);
   font-size: 12px;
   color: var(--ink-dim);
 }
@@ -5747,29 +5710,25 @@ button.machine:hover {
 }
 
 /* ---------- the views: git, library, ports ---------- */
-/* a segmented row like the grouping's, beside the name */
+/* the views as words beside the name, the one showing underlined in moss */
 .view-nav {
   flex: none;
   display: inline-flex;
   gap: 2px;
-  padding: 2px;
-  border: 1px solid var(--hair2);
-  border-radius: 999px;
-  background: var(--bark0);
 }
 .view-nav button {
-  padding: 1px 11px;
-  border-radius: 999px;
+  padding: 1px 8px;
+  border-radius: var(--r) var(--r) 0 0;
   color: var(--ink-dim);
   white-space: nowrap;
 }
 .view-nav button:hover {
   color: var(--ink);
+  background: var(--wash);
 }
 .view-nav button.on {
   color: var(--moss);
-  background: var(--bark3);
-  box-shadow: inset 0 1px 0 var(--sheen);
+  box-shadow: inset 0 -2px 0 var(--moss);
 }
 
 /* ---------- the live light ---------- */
@@ -5828,8 +5787,8 @@ button.machine:hover {
 }
 .filter {
   min-height: 28px;
-  border-radius: 999px;
-  background: color-mix(in srgb, var(--bark0) 70%, var(--bark1));
+  background: var(--bark0);
+  border-color: var(--hair);
 }
 .filter:focus {
   outline: none;
@@ -6018,9 +5977,7 @@ button.machine:hover {
     padding-bottom: max(12px, env(safe-area-inset-bottom));
     border-bottom: 0;
     border-radius: 16px 16px 0 0;
-    box-shadow:
-      inset 0 1px 0 var(--sheen),
-      0 -18px 48px -12px var(--float-shadow);
+    box-shadow: 0 -18px 48px -12px var(--float-shadow);
   }
   /* the grabber that says it is a sheet */
   .settings-pop::before {
@@ -6279,10 +6236,7 @@ button.machine:hover {
 }
 .task-source {
   font-size: 0.75em;
-  color: var(--ink-dim);
-  border: 1px solid currentColor;
-  border-radius: 3px;
-  padding: 0 3px;
+  color: var(--ink-faint);
 }
 .task-when {
   color: var(--ink-dim);
@@ -6318,7 +6272,6 @@ button.machine:hover {
 .task-chip.bad,
 .tasks-chip .mini.bad {
   color: var(--rust);
-  border-color: var(--rust);
 }
 
 @media (min-width: 761px) {
@@ -6456,7 +6409,6 @@ button.machine:hover {
   overflow: hidden;
   background: var(--bark0);
   box-shadow:
-    inset 0 1px 0 var(--sheen),
     0 2px 6px -2px var(--float-shadow),
     0 22px 48px -16px var(--float-shadow);
 }
@@ -6861,9 +6813,7 @@ button.machine:hover {
   display: flex;
   flex-direction: column;
   margin-top: 4px;
-  border: 1px solid var(--hair);
-  border-radius: var(--r);
-  background: color-mix(in srgb, var(--bark0) 45%, var(--float));
+  border-left: 2px solid var(--hair2);
 }
 .agent-settings .settings-row {
   padding: 6px 10px;
@@ -6875,7 +6825,6 @@ button.machine:hover {
 .agent-settings .seg {
   flex-wrap: wrap;
   max-width: 100%;
-  border-radius: 14px;
 }
 .pick-editor {
   align-self: stretch;
@@ -6953,14 +6902,12 @@ span.effective-flag:not(:first-child) {
   margin-left: auto;
 }
 .harness-chip {
-  padding: 1px 8px;
-  border: 1px solid var(--hair2);
-  border-radius: 999px;
   font-size: 11px;
+  color: var(--moss);
 }
 .harness-chip.off {
   color: var(--ink-faint);
-  border-style: dashed;
+  text-decoration: line-through;
 }
 .agents-body {
   flex: 1;
@@ -6987,10 +6934,10 @@ span.effective-flag:not(:first-child) {
 .agents-section .panel-label {
   margin: 0;
 }
+/* rows of a list, a hairline between them; an open one is washed */
 .agents-list {
   display: flex;
   flex-direction: column;
-  gap: 4px;
   margin: 4px 0 0;
   padding: 0;
   list-style: none;
@@ -6998,14 +6945,16 @@ span.effective-flag:not(:first-child) {
 .agents-row {
   display: flex;
   flex-direction: column;
-  gap: 6px;
-  padding: 6px 10px;
-  border: 1px solid var(--hair);
+  gap: 4px;
+  padding: 8px 6px;
   border-radius: var(--r);
-  background: var(--bark1);
+}
+.agents-row + .agents-row {
+  border-top: 1px solid var(--hair);
+  border-radius: 0;
 }
 .agents-row.open {
-  border-color: var(--hair2);
+  background: var(--well);
 }
 .agents-row-head {
   display: flex;
@@ -7106,12 +7055,15 @@ span.effective-flag:not(:first-child) {
   gap: 4px 6px;
   padding-left: calc(1ch + 10px);
 }
+/* what an agent's machine has, as words split by a faint dot */
 .reg-cap {
-  padding: 0 6px;
-  border: 1px solid var(--hair2);
-  border-radius: 999px;
   font-size: 10.5px;
-  color: var(--ink-dim);
+  color: var(--ink-faint);
+}
+.reg-cap + .reg-cap::before {
+  content: "·";
+  margin-right: 6px;
+  color: var(--hair2);
 }
 .reg-offer {
   flex-basis: 100%;
@@ -7216,6 +7168,10 @@ span.effective-flag:not(:first-child) {
   color: var(--ink);
   cursor: pointer;
 }
+.sprout-card:hover {
+  background: var(--bark2);
+  border-color: var(--hair2);
+}
 .sprout-card.needs {
   border-color: color-mix(in srgb, var(--rust) 50%, var(--hair));
 }
@@ -7254,32 +7210,38 @@ span.effective-flag:not(:first-child) {
   color: var(--ink-faint);
   font-size: 12px;
 }
+/* the stages as one line of words, a chevron between each: done in moss,
+   the one under way in sky and underlined, a stuck one in rust */
 .stage-strip {
   display: flex;
   flex-wrap: wrap;
-  gap: 4px;
+  gap: 2px 0;
   margin: 0;
   padding: 0;
   list-style: none;
 }
 .stage {
   font-size: 11px;
-  padding: 1px 6px;
-  border-radius: var(--r);
-  border: 1px solid var(--hair2);
   color: var(--ink-faint);
+}
+.stage + .stage::before {
+  content: "›";
+  /* inline-block, so the underline of the stage under way skips it */
+  display: inline-block;
+  margin: 0 5px;
+  color: var(--hair2);
 }
 .stage.done {
   color: var(--moss);
-  border-color: color-mix(in srgb, var(--moss) 40%, var(--hair));
 }
 .stage.now {
   color: var(--sky);
-  border-color: var(--sky);
+  text-decoration: underline 1px;
+  text-underline-offset: 3px;
 }
 .stage.stuck {
   color: var(--rust);
-  border-color: var(--rust);
+  font-weight: 700;
 }
 .drop-zone {
   display: flex;
