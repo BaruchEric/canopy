@@ -149,8 +149,10 @@ export class SeedMirrors {
       const file = join(tmp, "seed.bundle");
       const made = await bundleNow(seedPath, file, this.timeoutMs);
       if ("held" in made) return "held";
+      // a fetch's auto maintenance runs before it returns, not detached:
+      // left running, it writes into a mirror this class may be removing
       const run = async (what: string, args: string[]): Promise<void> => {
-        const r = await exec(["git", ...args], { timeoutMs: this.timeoutMs, env: { GIT_TERMINAL_PROMPT: "0" } });
+        const r = await exec(["git", "-c", "gc.autoDetach=false", "-c", "maintenance.autoDetach=false", ...args], { timeoutMs: this.timeoutMs, env: { GIT_TERMINAL_PROMPT: "0" } });
         if (r.code !== 0) throw new Error(`git ${what} in the seed's mirror: ${firstLine(r.stderr)}`);
       };
       if (!(await isMirror(mirror))) {

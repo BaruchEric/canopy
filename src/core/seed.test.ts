@@ -150,6 +150,9 @@ describe("makeSeed builds aside", () => {
     watching = false;
     await watch;
     expect(seen.every((x) => x === "whole")).toBe(true);
+    // the watcher may not tick between the rename and the return, so the end state is checked as well
+    expect(existsSync(join(path, ".claude"))).toBe(false);
+    expect(existsSync(join(path, ".canopy", "brief.md"))).toBe(true);
     expect((await log(path))[0]).toBe("canopy <canopy@mini>|seed: drop the cloned project's agent settings");
     expect(existsSync(seedWorkPath(path, SP))).toBe(false);
   });

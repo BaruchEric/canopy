@@ -7,7 +7,7 @@
  * with another hard link, never past 256 KB.
  */
 import { constants, lstatSync, type Stats } from "node:fs";
-import { lstat, mkdir, open, realpath, rename, rm } from "node:fs/promises";
+import { lstat, mkdir, open, realpath, rename, rm, rmdir } from "node:fs/promises";
 import { basename, dirname, isAbsolute, join, relative, sep } from "node:path";
 import { exec, git } from "./exec";
 import { networkOrigin } from "./peersync";
@@ -172,6 +172,12 @@ async function dropPaths(path: string, names: readonly string[], whole: boolean,
   // the files themselves, tracked under any case or not tracked at all
   const tops = whole ? tracked.map((n) => n.split("/")[0] ?? n) : [];
   for (const n of new Set([...tracked, ...onDisk, ...tops])) await rm(join(path, n), { recursive: true, force: true });
+  // and a folder that held only them, since an empty .claude still reads as
+  // the project's agent settings to anything that looks for the folder
+  for (const n of new Set([...tracked, ...onDisk])) {
+    const parent = dirname(n);
+    if (parent !== ".") await rmdir(join(path, parent)).catch(() => {});
+  }
   // committed by the names the index had, since a commit's pathspec must
   // match something git knows
   const staged = tracked.length > 0 ? await git(path, [...QUIET, "diff", "--cached", "--quiet", "--", ...tracked]) : null;
