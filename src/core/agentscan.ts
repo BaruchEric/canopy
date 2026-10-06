@@ -106,12 +106,14 @@ export function parsePsComm(text: string): Map<number, string> {
 const base = (p: string): string => p.slice(p.lastIndexOf("/") + 1);
 const INTERPRETER = /^(node|nodejs|bun|deno)(\d+(\.\d+)*)?$/;
 const VERSION = /^\d+\.\d+\.\d+/;
-/** Claude Code's own helpers, which run the claude binary but are no
- *  session: the Chrome extension's native host, and the background daemon
- *  with its pty hosts and warm spares. The session a pty host runs is its
- *  child, the version file, and counts once the host is passed over. */
+/** The harnesses' own helpers, which run the agent's binary but are no
+ *  session: Claude Code's Chrome extension host, its background daemon with
+ *  the daemon's pty hosts and warm spares, and Codex's shared app server.
+ *  The session a pty host runs is its child, the version file, and counts
+ *  once the host is passed over; a Codex session counts by its TUI. */
 const HELPER = new Set(["--chrome-native-host", "--bg-pty-host", "bg-pty-host", "--bg-spare", "bg-spare"]);
-const isHelper = (argv: readonly string[]): boolean => argv[1] === "daemon" || argv.some((w) => HELPER.has(w));
+const HELPER_VERB = new Set(["daemon", "app-server"]);
+const isHelper = (argv: readonly string[]): boolean => HELPER_VERB.has(argv[1] ?? "") || argv.some((w) => HELPER.has(w));
 
 /**
  * The harness a process is, or null. Measured, not assumed: Claude Code's
@@ -152,7 +154,7 @@ export function pickAgents(procs: readonly Proc[]): (Proc & { harness: Harness }
 
 /** The CPU time a process and each one under it has used, in ms by pid,
  *  or undefined when the table did not read the process's own. It stops at
- *  Claude's helpers (`isHelper`): a session that started the background
+ *  the harnesses' helpers (`isHelper`): a session that started the background
  *  daemon is its parent, and the sessions the daemon hosts count on their
  *  own, so the daemon's tree would make the first read as busy as all. */
 export function treeCpu(procs: readonly Proc[], pid: number): Map<number, number> | undefined {

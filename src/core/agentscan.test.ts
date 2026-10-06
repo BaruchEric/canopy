@@ -135,6 +135,8 @@ describe("classify", () => {
     expect(classify("/Users/e/.local/bin/claude", ["/Users/e/.local/bin/claude", "daemon", "run", "--origin", "transient"])).toBeNull();
     expect(classify("claude bg-pty-host", ["claude", "bg-pty-host", "--bg-pty-host", "/tmp/x.sock"])).toBeNull();
     expect(classify("claude bg-spare", ["claude", "bg-spare", "--bg-spare", "/tmp/x.sock"])).toBeNull();
+    expect(classify("codex", ["/Users/e/.codex/packages/app-server-daemon/releases/0.160.0/bin/codex", "app-server"])).toBeNull();
+    expect(classify("codex", ["codex"])).toBe("codex");
     const ver = "/Users/e/.local/share/claude/versions/2.1.290";
     const procs = [
       { pid: 10, ppid: 1, comm: "/Users/e/.local/bin/claude", argv: ["/Users/e/.local/bin/claude", "daemon", "run"], state: "S" },
