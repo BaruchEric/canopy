@@ -95,6 +95,13 @@ const repos = [repo("app", { link: "https://github.com/me/app", remotes: ["git@g
 const ctx = { repos, cards: { "claude:s1": card }, backendOf: (id: string) => (id.includes("|") ? id.split("|")[0]! : "mini") };
 
 describe("mergeInbox", () => {
+  test("a run's proposal is its own kind, with no permission or questions to answer from the inbox", () => {
+    const p = { id: "p1", kind: "proposal" as const, plan: "1. x", auto: false };
+    const [item] = mergeInbox([], { r1: run({ prompt: p }) }, {}, 0, ctx);
+    expect(item).toMatchObject({ kind: "proposal", title: "a plan to approve", promptId: "p1" });
+    expect(item?.permission).toBeUndefined();
+    expect(item?.questions).toBeUndefined();
+  });
   test("open asks, waiting runs and gated flows, oldest first", () => {
     const items = mergeInbox(
       [ask(), ask({ id: "a2", state: "answered", createdAt: 1 })],

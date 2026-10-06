@@ -263,6 +263,8 @@ function InboxRow({
                 </button>
               </div>
             </div>
+          ) : item.kind === "proposal" ? (
+            <p className="settings-hint">a plan is waiting for review; open the run to approve it or send it back</p>
           ) : item.questions?.length ? (
             <Questions
               key={item.promptId ?? item.key}
