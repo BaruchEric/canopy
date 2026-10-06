@@ -71,7 +71,7 @@ Claude Code 2.1.292, `claude -p --permission-mode plan --input-format stream-jso
 - **Workspace runs.** `POST /api/workspaces/run` takes `{ name, action, note, client? }` and starts an `ask`, `chat` or `propose` run on the primary repo. It passes `--add-dir` for every other member that is a local folder. A member on another host or on the forge is skipped, and the run's first note names each skipped one.
 - **Workspace prompt.** A workspace run's prompt names the workspace, the primary ("new code goes here") and the other folders. Its safety rule reads "Work only inside these folders" in place of "Work only inside this repository".
 - **Workspace locking.** A workspace run is refused (409) when any local member has an active run or flow. While it runs, only the primary is locked by the runner; the other members are not. The card's change fingerprint covers the primary only. Both limits are accepted for v1 and written into `docs/architecture.md`.
-- Workspace runs are Claude only for v1, refused for Codex with the same words as `propose`.
+- Workspace runs are Claude only for v1, refused for Codex with "workspace runs need Claude Code".
 - `Run` gains `workspace?: string`, so the sheet and the feed say "in workspace bike-trips".
 - **UI.** Workspace tabs show a color dot. A workspace menu offers set primary, color, "ask in workspace…", "chat in workspace…" and "plan, then build in workspace…". Member cards carry the workspace color as a left rule, and the primary carries a "primary" chip.
 

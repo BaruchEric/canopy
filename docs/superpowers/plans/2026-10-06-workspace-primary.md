@@ -665,19 +665,19 @@ git commit -m "feat(workspaces): primary, color and workspace runs in the UI"
 **Files:**
 - Modify: `docs/architecture.md`, sections "src/core" (the workspace sentence) and "ui/".
 
-- [ ] **Step 1: Write the notes.** Cover:
+- [x] **Step 1: Write the notes.** Cover:
   - `Workspace.primary` and `color` and their normalization.
   - `setWorkspaceLook`, and that `removeWorkspace` clears a removed primary.
   - The two routes.
   - That a workspace run is Claude only, works in the effective primary with `--add-dir` for local members, refuses when any local member is busy, and locks and fingerprints the primary alone.
   - The UI entries.
 
-- [ ] **Step 2: Gates**
+- [x] **Step 2: Gates**
 
 Run: `bun run typecheck && bun run lint && env -u TMUX SHELL=/bin/bash bun test && bun run build`
 Expected: all pass.
 
-- [ ] **Step 3: Commit**
+- [x] **Step 3: Commit**
 
 ```bash
 git add docs/architecture.md
