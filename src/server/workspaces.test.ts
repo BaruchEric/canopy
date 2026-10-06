@@ -120,6 +120,10 @@ test("a workspace run starts on the primary with the others added", async () => 
   const again = await call("POST", "/api/workspaces/run", { name: "bike", action: "ask", note: "again" });
   expect(again.status).toBe(409);
   expect(await errorOf(again)).toContain("analysis");
+  // only the primary is held while it runs: the other member takes a run of its own
+  const onApi = await call("POST", "/api/repos/run?id=api", { action: "ask", note: "meanwhile" });
+  expect(onApi.status).toBe(201);
+  await stopRun(((await onApi.json()) as Run).id);
   await stopRun(run.id);
 });
 
