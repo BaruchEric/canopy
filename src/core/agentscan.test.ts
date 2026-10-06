@@ -185,8 +185,9 @@ describe("working or idle, off the CPU", () => {
 
   test("an agent's tree: itself, its tools and their children", () => {
     const table = [p(1, 0, 900), p(10, 1, 100), p(11, 10, 20), p(12, 11, 5), p(13, 1, 7), p(14, 10)];
-    expect(treeCpu(table, 10)).toBe(125);
+    expect(treeCpu(table, 10)).toEqual(new Map([[10, 100], [11, 20], [12, 5], [14, 0]]));
     expect(treeCpu(table, 14)).toBeUndefined();
+    expect(treeCpu(table, 12)).toEqual(new Map([[12, 5]]));
     expect(treeCpu(table, 99)).toBeUndefined();
   });
 
@@ -198,13 +199,13 @@ describe("working or idle, off the CPU", () => {
       { pid: 23, ppid: 22, argv: ["/x/claude", "--bg-pty-host", "/tmp/a.sock"], cpuMs: 40 },
       { pid: 24, ppid: 23, argv: ["/x/versions/2.1.290", "--session-id", "s"], cpuMs: 9_000 },
     ];
-    expect(treeCpu(table, 20)).toBe(1_050);
-    expect(treeCpu(table, 24)).toBe(9_000);
+    expect(treeCpu(table, 20)).toEqual(new Map([[20, 1_000], [21, 50]]));
+    expect(treeCpu(table, 24)).toEqual(new Map([[24, 9_000]]));
   });
 
   test("busy between two scans is working; a first scan or a reused pid is idle; no reading, no state", () => {
     const at = (pid: number, cpuMs: number | undefined, startedAt = 5): AgentProc => ({
-      pid, ppid: 1, harness: "claude", cwd: "", startedAt, ...(cpuMs !== undefined ? { cpuMs } : {}),
+      pid, ppid: 1, harness: "claude", cwd: "", startedAt, ...(cpuMs !== undefined ? { tree: new Map([[pid, cpuMs]]) } : {}),
     });
     const first = scanStates(new Map(), [at(41, 1_000), at(42, 1_000), at(43, 1_000), at(44, undefined)], 0);
     expect(Object.fromEntries(first.states)).toEqual({ 41: "idle", 42: "idle", 43: "idle" });
@@ -212,7 +213,18 @@ describe("working or idle, off the CPU", () => {
     const busy = 30_000 * BUSY_SHARE;
     const second = scanStates(first.next, [at(41, 1_000 + busy), at(42, 1_000 + busy - 1), at(43, 9_000, 6), at(44, undefined)], 30_000);
     expect(Object.fromEntries(second.states)).toEqual({ 41: "working", 42: "idle", 43: "idle" });
-    expect(second.next.get(43)).toEqual({ cpuMs: 9_000, at: 30_000, startedAt: 6 });
+    expect(second.next.get(43)).toEqual({ tree: new Map([[43, 9_000]]), at: 30_000, startedAt: 6 });
+  });
+
+  test("a child that ends gives no CPU back, and one new since the last scan counts whole", () => {
+    const agent = (tree: [number, number][]): AgentProc => ({ pid: 41, ppid: 1, harness: "claude", cwd: "", startedAt: 5, tree: new Map(tree) });
+    const first = scanStates(new Map(), [agent([[41, 1_000], [50, 60_000]])], 0);
+    // a long test run (50) ended; the agent itself used a little
+    const quiet = scanStates(first.next, [agent([[41, 1_100]])], 30_000);
+    expect(quiet.states.get(41)).toBe("idle");
+    // a tool (60) started after the last scan and has used 2 s so far
+    const busy = scanStates(quiet.next, [agent([[41, 1_150], [60, 2_000]])], 60_000);
+    expect(busy.states.get(41)).toBe("working");
   });
 
   test("the post carries each state it was given", () => {

@@ -16,8 +16,10 @@
  * A scan card has no hooks to say what the agent is doing, so the scan
  * guesses it from CPU: an agent whose process tree (itself, its tools, its
  * MCP servers) used `BUSY_SHARE` of a core or more since the last scan is
- * working, else idle (`scanStates`). Measured on a Mac: a Claude Code at its
- * prompt uses 1 to 2.5% of a core, one taking a turn 10% and up.
+ * working, else idle (`scanStates`). Measured on a Mac over 20 minutes: a
+ * Claude Code at its prompt used 0.3 to 2% of a core, one taking a turn 2
+ * to 24% and mostly over 5%, its low stretches being the model's own
+ * thinking, which spends no CPU here.
  */
 import { existsSync } from "node:fs";
 import { exec } from "./exec";
@@ -31,7 +33,7 @@ export const SCAN_EVERY = 30_000;
 
 /** the share of one core an agent's process tree uses between two scans
  *  from which it reads as working */
-export const BUSY_SHARE = 0.04;
+export const BUSY_SHARE = 0.03;
 
 /** one agent the scan found, before its folder is matched to a repo */
 export interface AgentProc {
@@ -41,9 +43,9 @@ export interface AgentProc {
   /** "" when it could not be read (another user's process) */
   cwd: string;
   startedAt: number;
-  /** CPU time used so far by it and every process under it, in ms, when
-   *  the table had it */
-  cpuMs?: number;
+  /** the CPU time used so far by it and each process under it, in ms by
+   *  pid, when the table had its own */
+  tree?: ReadonlyMap<number, number>;
 }
 
 const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
@@ -148,12 +150,12 @@ export function pickAgents(procs: readonly Proc[]): (Proc & { harness: Harness }
   return [...hits.values()].filter((p) => hits.get(p.ppid)?.harness !== p.harness).sort((a, b) => a.pid - b.pid);
 }
 
-/** The CPU time a process and everything under it has used, in ms, or
- *  undefined when the table did not read the process's own. It stops at
+/** The CPU time a process and each one under it has used, in ms by pid,
+ *  or undefined when the table did not read the process's own. It stops at
  *  Claude's helpers (`isHelper`): a session that started the background
  *  daemon is its parent, and the sessions the daemon hosts count on their
  *  own, so the daemon's tree would make the first read as busy as all. */
-export function treeCpu(procs: readonly Proc[], pid: number): number | undefined {
+export function treeCpu(procs: readonly Proc[], pid: number): Map<number, number> | undefined {
   const kids = new Map<number, Proc[]>();
   let self: Proc | undefined;
   for (const p of procs) {
@@ -165,21 +167,20 @@ export function treeCpu(procs: readonly Proc[], pid: number): number | undefined
     }
   }
   if (self?.cpuMs === undefined) return undefined;
-  let total = 0;
-  const seen = new Set<number>();
+  const tree = new Map<number, number>();
   const queue = [self];
   for (let p = queue.pop(); p; p = queue.pop()) {
-    if (seen.has(p.pid)) continue;
-    seen.add(p.pid);
-    total += p.cpuMs ?? 0;
+    if (tree.has(p.pid)) continue;
+    tree.set(p.pid, p.cpuMs ?? 0);
     for (const k of kids.get(p.pid) ?? []) if (!isHelper(k.argv)) queue.push(k);
   }
-  return total;
+  return tree;
 }
 
 /** one agent's CPU reading at a scan, kept for the next */
 export interface CpuSample {
-  cpuMs: number;
+  /** its tree's CPU time in ms by pid, as `treeCpu` read it */
+  tree: ReadonlyMap<number, number>;
   at: number;
   /** the process's start, so a reused pid is not read as the same agent */
   startedAt: number;
@@ -189,10 +190,12 @@ export interface CpuSample {
  * Each agent's state off two scans' CPU readings: working when its tree
  * used `BUSY_SHARE` of a core or more between them, idle otherwise, and
  * idle on its first scan; none without a reading, which the broker takes
- * as idle. A tool that started and
- * ended between scans is missed, and a child that ended takes its time
- * with it, which only ever reads as less busy. Returns the samples to keep
- * for the next call.
+ * as idle. The use is added up process by process: what each one in the
+ * tree used since the last scan, all of it for one that is new since. A
+ * process that ended takes its time with it, which a plain sum of the tree
+ * would read as the agent giving CPU back, and a tool that started and
+ * ended between scans is missed. Returns the samples to keep for the next
+ * call.
  */
 export function scanStates(
   prev: ReadonlyMap<number, CpuSample>,
@@ -202,12 +205,13 @@ export function scanStates(
   const states = new Map<number, "working" | "idle">();
   const next = new Map<number, CpuSample>();
   for (const p of procs) {
-    if (p.cpuMs === undefined) continue;
-    next.set(p.pid, { cpuMs: p.cpuMs, at: now, startedAt: p.startedAt });
+    if (p.tree === undefined) continue;
+    next.set(p.pid, { tree: p.tree, at: now, startedAt: p.startedAt });
     const before = prev.get(p.pid);
     const span = before && before.startedAt === p.startedAt ? now - before.at : 0;
-    const share = span > 0 && before ? Math.max(0, p.cpuMs - before.cpuMs) / span : 0;
-    states.set(p.pid, share >= BUSY_SHARE ? "working" : "idle");
+    let used = 0;
+    if (before && span > 0) for (const [pid, ms] of p.tree) used += Math.max(0, ms - (before.tree.get(pid) ?? 0));
+    states.set(p.pid, span > 0 && used / span >= BUSY_SHARE ? "working" : "idle");
   }
   return { states, next };
 }
@@ -277,8 +281,8 @@ async function macCwds(pids: number[]): Promise<Map<number, string>> {
 export async function scanProcs(platform: NodeJS.Platform = process.platform): Promise<AgentProc[]> {
   const now = Date.now();
   const agent = (table: readonly Proc[], p: Proc & { harness: Harness }, cwd: string): AgentProc => {
-    const cpuMs = treeCpu(table, p.pid);
-    return { pid: p.pid, ppid: p.ppid, harness: p.harness, cwd, startedAt: p.startedAt ?? now, ...(cpuMs !== undefined ? { cpuMs } : {}) };
+    const tree = treeCpu(table, p.pid);
+    return { pid: p.pid, ppid: p.ppid, harness: p.harness, cwd, startedAt: p.startedAt ?? now, ...(tree ? { tree } : {}) };
   };
   if (platform === "linux") {
     const table = await linuxProcs();
