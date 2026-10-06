@@ -27,7 +27,7 @@ export const isSectionKey = (v: unknown): v is SectionKey =>
 /** the surfaces with a zoom of their own; the shells zoom through the
  *  terminal's font size instead, since css zoom on an xterm puts its mouse
  *  and selection off by the factor */
-export const ZOOM_KINDS = ["panel", ...SECTION_KEYS, "feed", "inbox"] as const;
+export const ZOOM_KINDS = ["panel", ...SECTION_KEYS, "feed", "inbox", "sidebar", "board", "agents", "incubator", "library"] as const;
 export type ZoomKind = (typeof ZOOM_KINDS)[number];
 export type Zooms = Partial<Record<ZoomKind, number>>;
 

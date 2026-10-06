@@ -112,6 +112,13 @@ export function useShellZoom(spot: ShellSpot): GearEntry {
   };
 }
 
+/** The gear on a whole view or column with no layout of its own to pick
+ *  (the repo tree, the board, the agents, the incubator, the library): its
+ *  zoom, then sharing it, in the order every gear keeps. */
+export function WidgetGear({ label, what, zoom, share }: { label: string; what: string; zoom: GearEntry; share: GearEntry[] }) {
+  return <Gear label={label} hint="Zoom and sharing" groups={[{ label: what, entries: [zoom] }, { label: "share", entries: share }]} />;
+}
+
 /* ---------- how a surface sits ---------- */
 
 /** The mode picks for a surface: in place, taking the whole of `what`, or

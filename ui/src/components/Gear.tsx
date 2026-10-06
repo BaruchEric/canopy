@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import type { KeyboardEvent as ReactKeyboardEvent, SyntheticEvent } from "react";
 import { createPortal } from "react-dom";
+import { keptForNow } from "../screens";
 
 /** One line of a gear's menu. */
 export type GearEntry =
@@ -57,16 +58,43 @@ export interface GearGroup {
 
 const MENU_W = 256;
 
+/** The one settings icon: every gear has it, and so does the top bar's
+ *  settings button. */
+export function GearIcon({ size = 13 }: { size?: number }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 16 16" aria-hidden="true">
+      <path
+        fill="currentColor"
+        fillRule="evenodd"
+        d="M6.6 1h2.8l.4 2 1.4.8 1.9-.7 1.4 2.4-1.5 1.3v1.6l1.5 1.3-1.4 2.4-1.9-.7-1.4.8-.4 2H6.6l-.4-2-1.4-.8-1.9.7-1.4-2.4L3 8.8V7.2L1.5 5.9l1.4-2.4 1.9.7 1.4-.8zM8 5.6a2.4 2.4 0 1 0 0 4.8 2.4 2.4 0 0 0 0-4.8z"
+      />
+    </svg>
+  );
+}
+
 /**
  * The ⚙ on a panel, a section, a shell or the feed: its zoom, how it sits,
  * and sharing it, in a menu rendered through a portal so a panel's
  * `overflow: hidden` cannot clip it. Closed by an outside click or Escape;
  * kept beside its button through scrolls, resizes and zooms.
  */
-export function Gear({ label, groups, hint = "Zoom, layout and sharing" }: { label: string; groups: GearGroup[]; hint?: string }) {
+export function Gear({
+  label,
+  groups,
+  hint = "Zoom, layout and sharing",
+  keptElse,
+}: {
+  label: string;
+  groups: GearGroup[];
+  hint?: string;
+  /** what the menu holds that is kept somewhere else, said at its foot */
+  keptElse?: string;
+}) {
   const [open, setOpen] = useState(false);
   const [pos, setPos] = useState<{ top: number; left: number } | null>(null);
   const [note, setNote] = useState<{ ok: boolean; text: string } | null>(null);
+  // read as the menu opens: the screen the window is on now
+  const keptFor = open ? keptForNow() : null;
   const trigger = useRef<HTMLButtonElement>(null);
   const menu = useRef<HTMLDivElement>(null);
 
@@ -178,13 +206,7 @@ export function Gear({ label, groups, hint = "Zoom, layout and sharing" }: { lab
         onPointerDown={swallow}
         onKeyDown={swallow}
       >
-        <svg width="13" height="13" viewBox="0 0 16 16" aria-hidden="true">
-          <path
-            fill="currentColor"
-            fillRule="evenodd"
-            d="M6.6 1h2.8l.4 2 1.4.8 1.9-.7 1.4 2.4-1.5 1.3v1.6l1.5 1.3-1.4 2.4-1.9-.7-1.4.8-.4 2H6.6l-.4-2-1.4-.8-1.9.7-1.4-2.4L3 8.8V7.2L1.5 5.9l1.4-2.4 1.9.7 1.4-.8zM8 5.6a2.4 2.4 0 1 0 0 4.8 2.4 2.4 0 0 0 0-4.8z"
-          />
-        </svg>
+        <GearIcon />
       </button>
       {open &&
         createPortal(
@@ -214,6 +236,12 @@ export function Gear({ label, groups, hint = "Zoom, layout and sharing" }: { lab
             {note && (
               <p className={`gear-note${note.ok ? "" : " err"}`} role="status">
                 {note.text}
+              </p>
+            )}
+            {keptFor && (
+              <p className="gear-where">
+                Kept for this {keptFor}
+                {keptElse ? `; ${keptElse}` : ""}
               </p>
             )}
           </div>,

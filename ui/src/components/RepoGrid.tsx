@@ -22,6 +22,7 @@ import { backendOf } from "../registry";
 import type { RepoCard as Card } from "../checkouts";
 import { ago, GLYPH, stateOf } from "../util";
 import { GroupHead } from "./GroupHead";
+import { WidgetGear, shareEntries, useZoom, zoomStyle } from "./Surface";
 import { Tick } from "./SelectBar";
 import { RepoLink } from "./RepoLink";
 import { Star } from "./Star";
@@ -324,6 +325,8 @@ export function RepoGrid() {
   const collapsed = useStore((s) => s.collapsed);
   const toggleGroup = useStore((s) => s.toggleGroup);
   const selecting = useStore((s) => s.selecting);
+  const box = useRef<HTMLElement>(null);
+  const { zoom, entry: zoomEntry } = useZoom("board");
   const groups = useMemo(
     () => groupRepos(
         repos,
@@ -346,8 +349,8 @@ export function RepoGrid() {
     );
   }
   return (
-    <main className={selecting ? "main selecting" : "main"}>
-      {groups.map(({ key, label, hint, repos: members }) => {
+    <main ref={box} className={selecting ? "main selecting" : "main"}>
+      {groups.map(({ key, label, hint, repos: members }, i) => {
         const id = sectionKey(sort, key);
         const open = !collapsed.includes(id);
         return (
@@ -359,6 +362,14 @@ export function RepoGrid() {
               open={open}
               onToggle={() => toggleGroup(id)}
             >
+              {i === 0 && (
+                <WidgetGear
+                  label="the board"
+                  what="board"
+                  zoom={zoomEntry}
+                  share={shareEntries({ el: () => box.current, label: "board" })}
+                />
+              )}
               {selecting ? (
                 <GroupPick label={label} ids={members.filter(pickable).map((r) => r.id)} total={members.length} />
               ) : (
@@ -366,7 +377,7 @@ export function RepoGrid() {
               )}
             </GroupHead>
             {open && (
-              <div className="grid">
+              <div className="grid" style={zoomStyle(zoom)}>
                 {members.map((r, i) => (
                   <RepoCard key={r.id} repo={r} i={i} />
                 ))}

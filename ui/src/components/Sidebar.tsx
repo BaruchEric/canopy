@@ -1,4 +1,4 @@
-import { memo, useMemo } from "react";
+import { memo, useMemo, useRef } from "react";
 import { useShallow } from "zustand/react/shallow";
 import { pickable } from "../flows";
 import { peerWipCounts } from "../peers";
@@ -8,6 +8,7 @@ import { boardChangedAt, boardFavorite, cardOf, isFavorite, idText, multi, useSt
 import { backendOf } from "../registry";
 import { GLYPH, stateOf } from "../util";
 import { GroupHead } from "./GroupHead";
+import { WidgetGear, shareEntries, useZoom, zoomStyle } from "./Surface";
 import { Tick } from "./SelectBar";
 import type { Repo } from "../../../src/core/types";
 
@@ -109,6 +110,8 @@ export function Sidebar({ drawer = false }: { drawer?: boolean }) {
   const collapsed = useStore((s) => s.collapsed);
   const toggleGroup = useStore((s) => s.toggleGroup);
   const selecting = useStore((s) => s.selecting);
+  const box = useRef<HTMLElement>(null);
+  const { zoom, entry: zoomEntry } = useZoom("sidebar");
 
   // the same `at` the grid groups by, so a heading means the same in both
   const groups = useMemo(
@@ -124,6 +127,7 @@ export function Sidebar({ drawer = false }: { drawer?: boolean }) {
 
   return (
     <aside
+      ref={box}
       id="sidebar"
       className={`sidebar${drawer ? " drawer" : ""}${selecting ? " selecting" : ""}`}
       aria-label="Repository tree"
@@ -138,7 +142,7 @@ export function Sidebar({ drawer = false }: { drawer?: boolean }) {
           </button>
         </div>
       )}
-      {groups.map(({ key, label, hint, repos: members }) => {
+      {groups.map(({ key, label, hint, repos: members }, i) => {
         const dirty = members.filter(
           (r) => (r.status?.files.length ?? 0) > 0,
         ).length;
@@ -153,6 +157,14 @@ export function Sidebar({ drawer = false }: { drawer?: boolean }) {
               open={open}
               onToggle={() => toggleGroup(id)}
             >
+              {i === 0 && (
+                <WidgetGear
+                  label="the repo tree"
+                  what="repo tree"
+                  zoom={zoomEntry}
+                  share={shareEntries({ el: () => box.current, label: "repos" })}
+                />
+              )}
               <span className="tree-counts">
                 {selecting ? (
                   <TreePick label={label} ids={members.filter(pickable).map((r) => r.id)} total={members.length} />
@@ -165,7 +177,7 @@ export function Sidebar({ drawer = false }: { drawer?: boolean }) {
               </span>
             </GroupHead>
             {open && (
-              <ul className="tree-list">
+              <ul className="tree-list" style={zoomStyle(zoom)}>
                 {members.map((r) => (
                   <li key={r.id}>
                     <TreeItem repo={r} />

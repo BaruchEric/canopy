@@ -1,5 +1,6 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useStore } from "../store";
+import { WidgetGear, shareEntries, useZoom } from "./Surface";
 
 export function Library({ ports, project, onRepo, onPorts }: {
   ports: boolean;
@@ -13,6 +14,15 @@ export function Library({ ports, project, onRepo, onPorts }: {
   const [attempt, setAttempt] = useState(0);
   const [refreshing, setRefreshing] = useState(false);
   const [revision, setRevision] = useState(0);
+  const frame = useRef<HTMLIFrameElement>(null);
+  const { zoom, entry: zoomEntry } = useZoom("library");
+  // the library is a page of its own, same origin: zoom its root, since css
+  // zoom on the iframe would size the frame as well as what is in it
+  const zoomFrame = () => {
+    const root = frame.current?.contentDocument?.documentElement;
+    if (root) root.style.zoom = zoom === 1 ? "" : String(zoom);
+  };
+  useEffect(zoomFrame);
   useEffect(() => {
     const controller = new AbortController();
     setReady(false);
@@ -63,10 +73,22 @@ export function Library({ ports, project, onRepo, onPorts }: {
       <button type="button" className="mini" disabled={!ready || refreshing} onClick={() => void refresh()}>
         {refreshing ? "refreshing…" : "refresh library"}
       </button>
+      <WidgetGear
+        // one zoom for both: the ports are a page of the library
+        label={ports ? "the ports" : "the library"}
+        what={ports ? "ports" : "library"}
+        zoom={zoomEntry}
+        share={shareEntries({
+          el: () => frame.current?.contentDocument?.body ?? null,
+          label: ports ? "ports" : "library",
+          copy: () => frame.current?.contentDocument?.body.innerText ?? "",
+          noCapture: "the library is a page of its own, which a capture cannot see into",
+        })}
+      />
     </div>
     {error && <div className="library-message" role="alert">{error} <button type="button" className="mini" onClick={() => setAttempt(n => n + 1)}>retry</button></div>}
     {!ready && !error && <div className="loading" role="status">Loading library and scanning projects…</div>}
-    {ready && <iframe key={`${revision}:${ports}:${project}`} className="library-frame"
+    {ready && <iframe ref={frame} onLoad={zoomFrame} key={`${revision}:${ports}:${project}`} className="library-frame"
       title={ports ? "Canopy ports and dev servers" : "Canopy project library"}
       src={`/library/${ports ? "ports" : ""}${project ? `?project=${encodeURIComponent(project)}` : ""}`} />}
   </section>;

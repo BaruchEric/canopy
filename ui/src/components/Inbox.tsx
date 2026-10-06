@@ -434,7 +434,12 @@ export function InboxChip({ onGit }: { onGit?: () => void } = {}) {
         <div className="settings-pop inbox-pop" role="dialog" aria-label="Waiting on you" style={zoom === 1 ? undefined : { width: Math.round(460 * zoom) }}>
           <div className="inbox-top">
             <h3 className="panel-label">waiting on you</h3>
-            <Gear label="the inbox" hint="Zoom, the command's text, and the rules you remembered" groups={gear} />
+            <Gear
+              label="the inbox"
+              hint="Zoom, the command's text, and the rules you remembered"
+              groups={gear}
+              keptElse="the rules are the backend's, for every screen"
+            />
           </div>
           <div className="inbox-zoom" style={zoomStyle(zoom)}>
           <section className="settings-row">

@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { describeAgent } from "../../../src/core/agent";
 import { HARNESS } from "../../../src/core/harness";
 import { DEFAULT_PROFILE, hasProfile, isProfileName, isProfilePick, profileOf, resolveAgent, roleRefusal, roleTakes } from "../../../src/core/route";
@@ -25,6 +25,7 @@ import { ChanChip } from "./Chan";
 import { InboxChip } from "./Inbox";
 import { RegistryTab } from "./Registry";
 import { Seg } from "./Seg";
+import { WidgetGear, shareEntries, useZoom, zoomStyle } from "./Surface";
 
 const errText = (err: unknown) => String(err instanceof Error ? err.message : err);
 
@@ -57,6 +58,8 @@ export function AgentsView({ onGit }: { onGit?: () => void } = {}) {
   // the registry first when there is one: the broker's pages link here
   const [chosen, setTab] = useState<Tab | null>(null);
   const tab: Tab = ready ? (chosen ?? "registry") : "routing";
+  const body = useRef<HTMLDivElement>(null);
+  const { zoom, entry: zoomEntry } = useZoom("agents");
 
   return (
     <section className="agents-view" aria-label="Agents">
@@ -85,8 +88,9 @@ export function AgentsView({ onGit }: { onGit?: () => void } = {}) {
             </span>
           ))}
         </span>}
+        <WidgetGear label="the agents" what="agents" zoom={zoomEntry} share={shareEntries({ el: () => body.current, label: "agents" })} />
       </div>
-      <div className="agents-body">
+      <div ref={body} className="agents-body" style={zoomStyle(zoom)}>
         {tab === "registry" ? <RegistryTab onGit={onGit} /> : <Routing scope={scope} routes={routes} has={has} routing={routing} />}
       </div>
     </section>

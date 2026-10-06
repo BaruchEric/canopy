@@ -16,6 +16,7 @@ import { useStore } from "../store";
 import { ago } from "../util";
 import { InboxChip } from "./Inbox";
 import { Questions } from "./Prompts";
+import { WidgetGear, shareEntries, useZoom, zoomStyle } from "./Surface";
 
 const errText = (err: unknown) => String(err instanceof Error ? err.message : err);
 /** the HTTP status `api` puts on its errors, when there is one */
@@ -89,6 +90,8 @@ export function IncubatorView({ onGit }: { onGit?: () => void }) {
   const ids = useStore(useShallow((s) => sortSprouts(Object.values(s.sprouts)).map((x) => x.id)));
   const show = useStore((s) => s.showSprout);
   const waiting = useStore((s) => s.stages?.waiting ?? null);
+  const body = useRef<HTMLDivElement>(null);
+  const { zoom, entry: zoomEntry } = useZoom("incubator");
   // `canopy new` prints a link to its project: open it once the list is in
   useEffect(() => {
     const id = sproutHere(window.location.search);
@@ -104,22 +107,25 @@ export function IncubatorView({ onGit }: { onGit?: () => void }) {
         <span className="agents-has">
           <InboxChip onGit={onGit} />
         </span>
+        <WidgetGear label="the incubator" what="incubator" zoom={zoomEntry} share={shareEntries({ el: () => body.current, label: "incubator" })} />
       </div>
-      {waiting && <p className="stages-waiting">queued: {waiting}</p>}
-      {!ready ? (
-        <p className="sheet-empty">The home backend has no incubator to show, or has not answered yet.</p>
-      ) : ids.length === 0 ? (
-        <div className="incubator-empty">
-          <p>Nothing in the incubator. A project starts from an idea, a link, a file, a voice memo or a repo, and is clarified and researched before anything is built.</p>
-          <NewProjectButton />
-        </div>
-      ) : (
-        <div className="sprout-grid">
-          {ids.map((id) => (
-            <SproutCard key={id} id={id} />
-          ))}
-        </div>
-      )}
+      <div ref={body} className="incubator-body" style={zoomStyle(zoom)}>
+        {waiting && <p className="stages-waiting">queued: {waiting}</p>}
+        {!ready ? (
+          <p className="sheet-empty">The home backend has no incubator to show, or has not answered yet.</p>
+        ) : ids.length === 0 ? (
+          <div className="incubator-empty">
+            <p>Nothing in the incubator. A project starts from an idea, a link, a file, a voice memo or a repo, and is clarified and researched before anything is built.</p>
+            <NewProjectButton />
+          </div>
+        ) : (
+          <div className="sprout-grid">
+            {ids.map((id) => (
+              <SproutCard key={id} id={id} />
+            ))}
+          </div>
+        )}
+      </div>
     </section>
   );
 }

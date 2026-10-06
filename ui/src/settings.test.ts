@@ -280,6 +280,30 @@ describe("sizes per screen", () => {
       delete g.window;
     }
   });
+
+  test("a pop-out window keeps its own, and leaves the main window's alone", () => {
+    const store = new Map<string, string>();
+    const g = globalThis as { localStorage?: unknown; window?: unknown };
+    g.localStorage = {
+      getItem: (k: string) => store.get(k) ?? null,
+      setItem: (k: string, v: string) => void store.set(k, v),
+    };
+    const at = (search: string) => (g.window = { screen: { width: 1728, height: 1117 }, location: { search } });
+    try {
+      at("");
+      saveSettings({ ...DEFAULT_SETTINGS, zoom: { changes: 1.25 } });
+      at("?repo=a&view=section&section=changes");
+      // never zoomed in a section window: the main window's zoom
+      expect(loadSettings().zoom).toEqual({ changes: 1.25 });
+      saveSettings({ ...loadSettings(), zoom: { changes: 2 } });
+      at("");
+      expect(loadSettings().zoom).toEqual({ changes: 1.25 });
+      at("?repo=a&view=section&section=changes");
+      expect(loadSettings().zoom).toEqual({ changes: 2 });
+    } finally {
+      delete g.window;
+    }
+  });
 });
 
 describe("the backends a page remembers", () => {

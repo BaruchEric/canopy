@@ -10,7 +10,8 @@ import { maskKey } from "../answerKey";
 import { PAGE_BUILD } from "../build";
 import { ago } from "../util";
 import { Seg } from "./Seg";
-import { screenNow, screenWord } from "../screens";
+import { screenNow, screenWord, windowNow, windowWord } from "../screens";
+import { GearIcon } from "./Gear";
 import type { Palette } from "../settings";
 
 const LEVEL = [
@@ -154,20 +155,7 @@ export function SettingsMenu() {
         title="Settings"
         onClick={() => setOpen(!open)}
       >
-        <svg
-          width="15"
-          height="15"
-          viewBox="0 0 24 24"
-          fill="none"
-          stroke="currentColor"
-          strokeWidth="2"
-          strokeLinecap="round"
-          strokeLinejoin="round"
-          aria-hidden="true"
-        >
-          <circle cx="12" cy="12" r="3" />
-          <path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z" />
-        </svg>
+        <GearIcon size={15} />
       </button>
       {open && (
         <div className="settings-pop" role="dialog" aria-label="Settings">
@@ -190,8 +178,10 @@ export function SettingsMenu() {
             </button>
             {screen && (
               <p className="settings-hint">
-                Widths, heights, zoom, font sizes and what each gear sets are kept for each kind of screen. This one counts as a{" "}
-                {screenWord(screen.cls)} ({screen.w}×{screen.h}).
+                Widths, heights, zoom, font sizes and what each gear sets are kept by device, by kind of screen (phone, tablet,
+                laptop, desktop, wide, ultra HD) and by kind of window. This browser keeps its own; this screen counts as{" "}
+                {/^[aeiou]/.test(screenWord(screen.cls)) ? "an" : "a"} {screenWord(screen.cls)} ({screen.w}×{screen.h}), and this is the{" "}
+                {windowWord(windowNow())}.
               </p>
             )}
           </section>

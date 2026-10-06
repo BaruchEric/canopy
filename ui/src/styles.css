@@ -3023,6 +3023,16 @@ a.chan-text {
   align-self: center;
   margin: 0 4px 4px 2px;
 }
+/* the repo tree's and the board's gear: at the end of the first heading's
+   branch line, after the counts */
+.tree-head > .gear,
+.grid-head > .gear {
+  order: 4;
+  margin: -4px 0;
+}
+.tree-head > .gear {
+  margin-right: -6px;
+}
 @media (pointer: coarse) {
   .gear {
     width: 32px;
@@ -3109,6 +3119,14 @@ a.chan-text {
 }
 .gear-note.err {
   color: var(--rust);
+}
+/* the menu's foot: which screen and window what it sets is kept for */
+.gear-where {
+  margin: 6px 12px 0;
+  padding-top: 6px;
+  border-top: 1px solid var(--hair);
+  font-size: 11px;
+  color: var(--ink-faint);
 }
 /* something kept, with a forget: a remembered rule and where it applies */
 .gear-forget {
@@ -7578,6 +7596,9 @@ span.effective-flag:not(:first-child) {
 }
 .stages-word.not {
   color: var(--rust);
+}
+.incubator-body {
+  flex: none;
 }
 .stages-waiting {
   margin: 0;

@@ -14,7 +14,7 @@ import { TERM_FONT } from "./term";
 import { termFontSize } from "./touch";
 import { PREVIEW_H, previewHeightOf } from "./preview";
 import { BENCH_DOCK, BENCH_SPLIT, benchRailOf, shareOf } from "./front";
-import { putScreen, screenNow, withScreen } from "./screens";
+import { putScreen, slotsNow, withScreen, writesFlat } from "./screens";
 import {
   SECTION_KEYS,
   normalizeTermFonts,
@@ -297,8 +297,8 @@ function backendEntries(v: unknown): BackendEntry[] {
 const backendNamesOf = (v: unknown): string[] =>
   Array.isArray(v) ? v.filter(isBackendName).filter((n, i, all) => all.indexOf(n) === i) : [];
 
-/** the settings kept per kind of screen (screens.ts): every size, and
- *  everything a panel's, section's, shell's or the feed's gear saves */
+/** the settings kept per kind of screen and window (screens.ts): every
+ *  size, and everything any gear saves */
 export const SCREEN_SETTINGS = [
   "termFont",
   "termFonts",
@@ -317,6 +317,8 @@ export const SCREEN_SETTINGS = [
   "sectionOrder",
   "sectionsHidden",
   "inboxText",
+  "inboxWrap",
+  "inboxFold",
 ] as const satisfies readonly (keyof Settings)[];
 
 /** what is stored under the key, an empty object for anything else */
@@ -332,7 +334,7 @@ export function loadSettings(): Settings {
     // A browser that kept a layout but never changed a setting is one from
     // before levels, not a new one: it keeps the panel it had.
     if (!raw) return localStorage.getItem("canopy.layout") ? { ...DEFAULT_SETTINGS, ...levelOf({}) } : DEFAULT_SETTINGS;
-    const saved: Partial<Record<keyof Settings, unknown>> = withScreen(storedSettings(), screenNow()?.cls ?? null, SCREEN_SETTINGS);
+    const saved: Partial<Record<keyof Settings, unknown>> = withScreen(storedSettings(), slotsNow(), SCREEN_SETTINGS);
     // Every field is validated against its list: a value written by an older
     // build or edited by hand must not put the UI in a state it cannot render.
     return {
@@ -375,10 +377,13 @@ export function loadSettings(): Settings {
 
 export function saveSettings(s: Settings): void {
   try {
-    // the other screens' sizes stay; this one's are written into its slot
-    const { screens } = storedSettings();
-    const base = screens === undefined ? {} : { screens };
-    localStorage.setItem(KEY, JSON.stringify(putScreen(base, { ...s }, screenNow()?.cls ?? null, SCREEN_SETTINGS)));
+    // the other slots' sizes stay; this window's are written into its own,
+    // and a pop-out leaves the flat ones as the main window set them
+    const stored = storedSettings();
+    const flat = writesFlat();
+    const base: Record<string, unknown> = stored.screens === undefined ? {} : { screens: stored.screens };
+    if (!flat) for (const k of SCREEN_SETTINGS) if (k in stored) base[k] = stored[k];
+    localStorage.setItem(KEY, JSON.stringify(putScreen(base, { ...s }, slotsNow()[0] ?? null, SCREEN_SETTINGS, flat)));
   } catch {
     // storage can be disabled outright; the choice just won't survive a reload
   }

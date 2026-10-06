@@ -30,7 +30,7 @@ import { flatAgent, hasRouting, NO_ROUTES } from "./agents";
 import { cleanKey, keyTestOf, readAnswerKey, writeAnswerKey, type KeyTest } from "./answerKey";
 import { listedTask } from "../../src/core/tasks";
 import { startsDev } from "./tasks";
-import { putScreen, screenNow, withScreen } from "./screens";
+import { putScreen, slotsNow, withScreen, writesFlat } from "./screens";
 import {
   DEFAULT_LAUNCH,
   isFlowActive,
@@ -150,8 +150,8 @@ export function changed<T extends object>(next: T, before: T): Partial<T> {
 
 const LAYOUT_KEY = "canopy.layout";
 
-/** the layout kept per kind of screen (screens.ts): its sizes, and the
- *  feed being up, which the feed's gear puts away */
+/** the layout kept per kind of screen and window (screens.ts): its sizes,
+ *  and the feed being up, which the feed's gear puts away */
 export const SCREEN_LAYOUT = [
   "feedOpen",
   "sidebarWidth",
@@ -239,7 +239,7 @@ function loadLayout(): Layout {
     if (!raw) return fallback;
     const stored: unknown = JSON.parse(raw);
     if (!stored || typeof stored !== "object" || Array.isArray(stored)) return fallback;
-    const saved = withScreen(stored as Record<string, unknown>, screenNow()?.cls ?? null, SCREEN_LAYOUT) as {
+    const saved = withScreen(stored as Record<string, unknown>, slotsNow(), SCREEN_LAYOUT) as {
       sidebarWidth?: unknown;
       panelWidths?: Record<string, unknown>;
       soloWidth?: unknown;
@@ -346,7 +346,7 @@ function saveLayout(patch: Partial<Layout>) {
       stored && typeof stored === "object" && !Array.isArray(stored) ? (stored as Record<string, unknown>) : {};
     localStorage.setItem(
       LAYOUT_KEY,
-      JSON.stringify(putScreen(base, { ...patch, knownSections: DEFAULT_CLOSED }, screenNow()?.cls ?? null, SCREEN_LAYOUT)),
+      JSON.stringify(putScreen(base, { ...patch, knownSections: DEFAULT_CLOSED }, slotsNow()[0] ?? null, SCREEN_LAYOUT, writesFlat())),
     );
   } catch {
     // storage can be disabled outright; the layout just won't survive a reload
@@ -2865,10 +2865,10 @@ useStore.subscribe((s, prev) => {
 // A window moved to another screen takes up the sizes and gear choices kept
 // for that kind of screen (screens.ts). Chrome fires resize when a window crosses to a screen
 // of another size, and the screen's own change event where it has one.
-let screenSeen = screenNow()?.cls ?? null;
+let screenSeen = slotsNow().join();
 if (typeof window !== "undefined" && typeof window.screen !== "undefined") {
   const onScreen = () => {
-    const now = screenNow()?.cls ?? null;
+    const now = slotsNow().join();
     if (now === screenSeen) return;
     screenSeen = now;
     const layout = loadLayout();
