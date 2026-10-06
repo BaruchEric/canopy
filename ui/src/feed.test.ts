@@ -209,6 +209,16 @@ describe("describeEvent", () => {
       "commit done, changed in 4s",
     ]);
   });
+  test("a workspace run says which workspace it spans", () => {
+    const ask = run({ note: "look around", workspace: "bike-trips" });
+    expect(describeEvent({ type: "run", run: ask }, snap(), 5).map((l) => l.text)).toEqual([
+      "commit started in workspace bike-trips: look around",
+    ]);
+    const chat = run({ chat: true, status: "idle", workspace: "bike-trips" });
+    expect(describeEvent({ type: "run", run: chat }, snap(), 5).map((l) => l.text)).toEqual([
+      "chat opened in workspace bike-trips",
+    ]);
+  });
   test("a permission prompt says what Claude asks for", () => {
     const waiting = run({ status: "waiting", prompt: { id: "p", kind: "permission", tool: "Bash", title: "rm -rf dist", detail: "" } });
     const lines = describeEvent({ type: "run", run: waiting }, snap({ runs: { r1: run() } }), 5);

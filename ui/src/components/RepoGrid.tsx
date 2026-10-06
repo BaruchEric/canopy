@@ -18,7 +18,8 @@ import {
   visibleCards,
   visibleRepos,
 } from "../store";
-import { backendOf } from "../registry";
+import { backendOf, isHome } from "../registry";
+import { isPrimary, wsOf } from "../workspaces";
 import type { RepoCard as Card } from "../checkouts";
 import { ago, GLYPH, stateOf } from "../util";
 import { GroupHead } from "./GroupHead";
@@ -125,6 +126,11 @@ const RepoCard = memo(function RepoCard({ repo, i }: { repo: Repo; i: number }) 
   const picked = useStore((s) => s.selected.includes(repo.id));
   const toggleSelected = useStore((s) => s.toggleSelected);
   const canPick = pickable(repo);
+  // the active workspace tab, when it holds this card: a workspace holds
+  // home's checkouts, so another backend's card at the same path is not in it
+  const ws = useStore((s) =>
+    s.activeWs && isHome(repo.id) ? wsOf(s.workspaces, repo.path).find((w) => w.name === s.activeWs) : undefined,
+  );
   const [pulse, setPulse] = useState(false);
   // what the ⋯ menu last failed at, shown on the card for a few seconds
   const [menuErr, setMenuErr] = useState<string | null>(null);
@@ -185,6 +191,7 @@ const RepoCard = memo(function RepoCard({ repo, i }: { repo: Repo; i: number }) 
           openRepo(repo.id, e);
         }
       }}
+      data-ws-color={ws?.color}
       tabIndex={0}
       // its place in the group, which sets how late it rises in
       style={{ "--i": i } as CSSProperties}
@@ -210,6 +217,11 @@ const RepoCard = memo(function RepoCard({ repo, i }: { repo: Repo; i: number }) 
         <span className="glyph">{GLYPH[state]}</span>
         <span className="card-name">{repo.name}</span>
         <Star repoId={repo.id} name={repo.name} onError={setMenuErr} />
+        {ws && isPrimary(ws, repo.path) && (
+          <span className="chip primary" title={`New code for the ${ws.name} workspace goes here`}>
+            primary
+          </span>
+        )}
         {repo.host && (
           <span className="host-tag" title={`on ${repo.host}, over ssh`}>
             {repo.host}

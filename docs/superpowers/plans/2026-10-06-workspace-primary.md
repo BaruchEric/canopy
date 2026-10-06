@@ -541,7 +541,7 @@ git commit -m "feat(workspaces): set the look and start a run from a workspace"
   - The sheet kind `{ kind: "plan"; repoId; action; workspace?: string }`.
   - Pure helpers in `ui/src/workspaces.ts`: `wsOf(workspaces, repoPath): Workspace[]` and `isPrimary(ws, repoPath): boolean`.
 
-- [ ] **Step 1: Write the failing test** for the pure helpers, `ui/src/workspaces.test.ts`:
+- [x] **Step 1: Write the failing test** for the pure helpers, `ui/src/workspaces.test.ts`:
 
 ```ts
 import { describe, expect, test } from "bun:test";
@@ -566,12 +566,12 @@ describe("workspace helpers", () => {
 
 The `!` in the test is on a literal array; if lint refuses it, use `ws.at(0)` with a guard.
 
-- [ ] **Step 2: Run it and watch it fail**
+- [x] **Step 2: Run it and watch it fail**
 
 Run: `env -u TMUX SHELL=/bin/bash bun test ui/src/workspaces.test.ts`
 Expected: FAIL, the module is missing.
 
-- [ ] **Step 3: Implement**
+- [x] **Step 3: Implement**
 
 `ui/src/workspaces.ts`:
 
@@ -639,7 +639,7 @@ The repo card:
 
 Check the real names of `--ink-faint` and `--bark` in the token block at `styles.css:330-380`, and use the ones that exist. Run `settings.test.ts` after this edit, since it reads `styles.css` for palette rules.
 
-- [ ] **Step 4: Gates and a browser check**
+- [x] **Step 4: Gates and a browser check**
 
 Run: `bun run typecheck && bun run lint && env -u TMUX SHELL=/bin/bash bun test && bun run build`
 Expected: all pass.
@@ -651,7 +651,7 @@ Then start a scratch canopy server, following the memory note "Scratch canopy se
 4. Run "ask in workspace…" with the note "list the folders you can see". Check that the run sheet says the workspace and the first step lists the add-dir folder.
 5. Resize the window to 390px wide and check that the gear opens as a bottom sheet.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add ui/src

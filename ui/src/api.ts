@@ -64,6 +64,7 @@ import type {
   TermInfo,
   WorkflowEntry,
   Workspace,
+  WsColor,
   IncubatorStages,
   Sprout,
   SproutDetail,
@@ -781,6 +782,19 @@ export const api = {
     req<{ ok: true }>(homeName(), "/api/workspaces/open", {
       method: "POST",
       body: JSON.stringify({ name, app, helper }),
+    }),
+  /** sets or clears (null) a workspace's primary, a repo id, and its color;
+   *  what is absent stays as it was */
+  wsLook: (name: string, look: { primary?: string | null; color?: WsColor | null }) =>
+    req<Workspace[]>(homeName(), "/api/workspaces", {
+      method: "PATCH",
+      body: JSON.stringify({ name, ...look }),
+    }),
+  /** a run on the workspace's primary that sees the other members too */
+  wsRun: (name: string, action: RunAction, note: string) =>
+    req<Run>(homeName(), "/api/workspaces/run", {
+      method: "POST",
+      body: JSON.stringify({ name, action, note, client: clientId() }),
     }),
 };
 

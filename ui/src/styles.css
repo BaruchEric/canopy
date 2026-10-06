@@ -664,7 +664,44 @@ body.resizing iframe {
 }
 .ws-actions {
   display: inline-flex;
+  align-items: center;
   gap: 4px;
+}
+/* a workspace's color: the dot on its tab and the rule on its cards. Bark
+   is the surface family, so its rule and dot take the dim ink, which shows
+   on a bark card. No color is an empty ring, so it never reads as bark. */
+.ws-dot {
+  display: inline-block;
+  inline-size: 7px;
+  block-size: 7px;
+  margin-inline-end: 6px;
+  border-radius: 50%;
+  border: 1px solid var(--ink-faint);
+  vertical-align: 1px;
+}
+.ws-dot[data-color="moss"],
+.card[data-ws-color="moss"] {
+  --ws: var(--moss);
+}
+.ws-dot[data-color="lichen"],
+.card[data-ws-color="lichen"] {
+  --ws: var(--lichen);
+}
+.ws-dot[data-color="rust"],
+.card[data-ws-color="rust"] {
+  --ws: var(--rust);
+}
+.ws-dot[data-color="sky"],
+.card[data-ws-color="sky"] {
+  --ws: var(--sky);
+}
+.ws-dot[data-color="bark"],
+.card[data-ws-color="bark"] {
+  --ws: var(--ink-dim);
+}
+.ws-dot[data-color]:not([data-color=""]) {
+  border-color: var(--ws);
+  background: var(--ws);
 }
 
 /* search box: glyph on the left, the shortcut on the right until it is used */
@@ -1961,6 +1998,20 @@ a.chan-text {
 .card:not(.s-clean):not(.s-forge)::before {
   opacity: 0.9;
 }
+/* the workspace's color down the left edge, drawn over the border so it
+   follows the corners. Not a box-shadow, which the pulse replaces for its
+   second; the leaf edge steps in beside it so both show. */
+.card[data-ws-color]::after {
+  content: "";
+  position: absolute;
+  inset: -1px;
+  border-radius: inherit;
+  border-left: 3px solid var(--ws);
+  pointer-events: none;
+}
+.card[data-ws-color]::before {
+  left: 3px;
+}
 .card.s-forge {
   border-style: dashed;
 }
@@ -1970,6 +2021,15 @@ a.chan-text {
 .card:hover {
   background: color-mix(in srgb, var(--state) 6%, var(--bark2));
   border-color: color-mix(in srgb, var(--state) 34%, var(--hair2));
+}
+/* the member a workspace's runs work in */
+.card .chip.primary {
+  flex: none;
+  padding: 0 6px;
+  font-size: 10px;
+  line-height: 1.4;
+  color: var(--moss-deep);
+  background: color-mix(in srgb, var(--moss) 12%, transparent);
 }
 .card:active {
   transform: scale(0.995);
@@ -5961,7 +6021,10 @@ button.machine:hover {
   .tb-scroll::-webkit-scrollbar {
     display: none;
   }
+  /* back from the narrow bar's display: none, as the sort is below: the
+     workspace tabs and the active one's menu ride in this row */
   .tb-scroll .ws-tabs {
+    display: flex;
     flex: none;
     max-width: none;
     overflow: visible;

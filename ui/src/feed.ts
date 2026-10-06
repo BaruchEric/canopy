@@ -287,7 +287,8 @@ function runLines(ev: Extract<ServerEvent, { type: "run" }>, prev: FeedSnapshot,
   const lines: FeedLine[] = [];
   const say = (text: string) => lines.push(about(repo, "run", at, text));
   if (!before) {
-    say(run.chat ? "chat opened" : `${run.verb} started${run.note ? `: ${clip(run.note, 80)}` : ""}`);
+    const where = run.workspace ? ` in workspace ${run.workspace}` : "";
+    say(run.chat ? `chat opened${where}` : `${run.verb} started${where}${run.note ? `: ${clip(run.note, 80)}` : ""}`);
   }
   for (let i = before?.steps.length ?? 0; i < run.steps.length; i++) {
     const text = stepLine(run, i);

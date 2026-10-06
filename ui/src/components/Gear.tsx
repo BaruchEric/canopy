@@ -83,18 +83,22 @@ export function Gear({
   groups,
   hint = "Zoom, layout and sharing",
   keptElse,
+  perScreen = true,
 }: {
   label: string;
   groups: GearGroup[];
   hint?: string;
   /** what the menu holds that is kept somewhere else, said at its foot */
   keptElse?: string;
+  /** false for a menu whose choices are kept in the backend's config, so
+   *  its foot does not say they are kept for this screen */
+  perScreen?: boolean;
 }) {
   const [open, setOpen] = useState(false);
   const [pos, setPos] = useState<{ top: number; left: number } | null>(null);
   const [note, setNote] = useState<{ ok: boolean; text: string } | null>(null);
   // read as the menu opens: the screen the window is on now
-  const keptFor = open ? keptForNow() : null;
+  const keptFor = open && perScreen ? keptForNow() : null;
   const trigger = useRef<HTMLButtonElement>(null);
   const menu = useRef<HTMLDivElement>(null);
 

@@ -119,7 +119,7 @@ function Body({ sheet }: { sheet: Sheet }) {
 
   if (sheet.kind === "plan") {
     if (!repo) return <Missing what="That repo is no longer in the tree." onClose={close} />;
-    return <Plan repo={repo} action={sheet.action} />;
+    return <Plan repo={repo} action={sheet.action} workspace={sheet.workspace} />;
   }
   if (sheet.kind === "search") return <SearchSheet />;
   if (sheet.kind === "agent") {
@@ -163,9 +163,11 @@ function Missing({ what, onClose }: { what: string; onClose: () => void }) {
 
 /* ---------- pre-flight ---------- */
 
-function Plan({ repo, action }: { repo: Repo; action: RunAction }) {
+/** `workspace` starts the run across that workspace, `repo` being its primary */
+function Plan({ repo, action, workspace }: { repo: Repo; action: RunAction; workspace?: string | undefined }) {
   const close = useStore((s) => s.closeSheet);
   const startRun = useStore((s) => s.startRun);
+  const startWsRun = useStore((s) => s.startWsRun);
   const spec = ACTIONS[action];
   const agent = useStore((s) => agentFor(s, repo, spec.mode === "chat" ? "chat" : "job"));
   const name = AGENT_NAME[agent.harness];
@@ -179,7 +181,7 @@ function Plan({ repo, action }: { repo: Repo; action: RunAction }) {
     setBusy(true);
     setError(null);
     try {
-      await startRun(repo.id, action, note);
+      await (workspace ? startWsRun(workspace, action, note) : startRun(repo.id, action, note));
     } catch (err) {
       setError(errText(err));
       setBusy(false);
@@ -190,7 +192,10 @@ function Plan({ repo, action }: { repo: Repo; action: RunAction }) {
     <>
       <header className="sheet-head">
         <div>
-          <div className="eyebrow">with {name}</div>
+          <div className="eyebrow">
+            with {name}
+            {workspace && ` · in workspace ${workspace}`}
+          </div>
           <h2 className="sheet-title">
             {spec.verb} <span className="sheet-repo">{idText(repo.id)}</span>
           </h2>
@@ -407,6 +412,7 @@ function Console({ run, repo }: { run: Run; repo: Repo | undefined }) {
               {HARNESS[harness].glyph}
             </span>{" "}
             with {name}
+            {run.workspace && <span className="run-by" title="it works in this repo and sees the workspace's other members"> · in workspace {run.workspace}</span>}
             {run.by && <span className="run-by" title="the device that started it"> · from {run.by}</span>}
           </div>
           <h2 className="sheet-title">

@@ -33,6 +33,7 @@ import { startsDev } from "./tasks";
 import { putScreen, slotsNow, withScreen, writesFlat } from "./screens";
 import {
   DEFAULT_LAUNCH,
+  effectivePrimary,
   isFlowActive,
   isRunActive,
   type About,
@@ -873,6 +874,9 @@ interface CanopyState {
 
   /** opens the pre-flight dialog for an action on a repo */
   plan: (repoId: string, action: RunAction) => void;
+  /** the pre-flight dialog for a run across a workspace, on its primary;
+   *  throws when the workspace has no primary in the tree */
+  openWsPlan: (name: string, action: RunAction) => void;
   /** opens a chat with Claude in a repo: the repo's live run if it has one,
    *  else a new idle chat whose first message starts Claude (the peers
    *  panel's "merge with claude" passes one; the menu's plain chat does not) */
@@ -931,6 +935,8 @@ interface CanopyState {
   /** the section took its term */
   takePendingSearch: () => void;
   startRun: (repoId: string, action: RunAction, note: string) => Promise<void>;
+  /** a run on a workspace's primary that sees its other members too */
+  startWsRun: (name: string, action: RunAction, note: string) => Promise<void>;
   answerRun: (runId: string, promptId: string, answer: RunAnswer) => Promise<void>;
   /** every shown backend's remembered rules, read again; one that cannot
    *  say (an older canopy) keeps what the page had */
@@ -972,7 +978,8 @@ interface CanopyState {
 }
 
 export type Sheet =
-  | { kind: "plan"; repoId: string; action: RunAction }
+  /** `workspace` makes it a run across that workspace; `repoId` is then its primary */
+  | { kind: "plan"; repoId: string; action: RunAction; workspace?: string }
   | { kind: "run"; runId: string }
   | { kind: "agent"; repoId: string }
   | { kind: "new-sprout" }
@@ -2527,6 +2534,21 @@ export const useStore = create<CanopyState>((set, get) => ({
     const active = activeRunFor(get(), repoId);
     set({ sheet: active ? { kind: "run", runId: active.id } : { kind: "plan", repoId, action } });
   },
+  openWsPlan: (name, action) => {
+    const s = get();
+    const ws = s.workspaces.find((w) => w.name === name);
+    if (!ws) throw new Error(`no workspace named ${name}`);
+    const path = effectivePrimary(ws);
+    if (!path) throw new Error("the workspace has no repos");
+    // a workspace holds home's checkouts, so its primary is a home card
+    const primary = s.repos.find((r) => isHome(r.id) && r.path === path);
+    if (!primary) throw new Error(`the primary ${path} is not in the tree`);
+    // the primary's own run going shows that run, as plan does
+    const active = activeRunFor(s, primary.id);
+    set({
+      sheet: active ? { kind: "run", runId: active.id } : { kind: "plan", repoId: primary.id, action, workspace: name },
+    });
+  },
   openChat: async (repoId, note = "") => {
     const active = activeRunFor(get(), repoId);
     const trimmed = note.trim();
@@ -2670,6 +2692,13 @@ export const useStore = create<CanopyState>((set, get) => ({
   takePendingSearch: () => set({ pendingSearch: null }),
   startRun: async (repoId, action, note) => {
     const run = await api.run(repoId, action, note, clientId());
+    set((s) => ({
+      runs: { ...s.runs, [run.id]: run },
+      sheet: { kind: "run", runId: run.id },
+    }));
+  },
+  startWsRun: async (name, action, note) => {
+    const run = await api.wsRun(name, action, note);
     set((s) => ({
       runs: { ...s.runs, [run.id]: run },
       sheet: { kind: "run", runId: run.id },

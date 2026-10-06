@@ -5,11 +5,14 @@ import { ownRun } from "../flows";
 import { allRuns, attentionCount, capsFor, homeConn, pickedIds, useStore } from "../store";
 import { onBeat } from "../live";
 import { NARROW, PHONE, useMedia } from "../media";
-import { isRunActive } from "../../../src/core/types";
+import { effectivePrimary, isRunActive, WS_COLORS, type RunAction, type Workspace } from "../../../src/core/types";
+import { isHome } from "../registry";
+import { baseName } from "../elsewhere";
 import { seenWord } from "../peers";
 import { PAGE_BUILD } from "../build";
 import { versionLine } from "../../../src/core/version";
 import { FilterMenu } from "./Filters";
+import { Gear, type GearEntry, type GearGroup } from "./Gear";
 import { Seg } from "./Seg";
 import { SettingsMenu } from "./Settings";
 import { BackendsChip } from "./Backends";
@@ -212,10 +215,13 @@ function WsTabs() {
             className={activeWs === w.name ? "tab active" : "tab"}
             onClick={() => setActiveWs(activeWs === w.name ? null : w.name)}
           >
+            <span className="ws-dot" data-color={w.color ?? ""} aria-hidden="true" />
             {w.name}
             <span className="tab-count">{w.repos.length}</span>
           </button>
-          {activeWs === w.name && (canOpen.includes("code") || canOpen.includes("kitty")) && (
+          {/* the gear shows everywhere, a phone too: asking and chatting
+              work anywhere; only the openers need a laptop */}
+          {activeWs === w.name && (
             <span className="ws-actions">
               {canOpen.includes("code") && (
                 <button
@@ -237,11 +243,63 @@ function WsTabs() {
                   kitty
                 </button>
               )}
+              <WsGear ws={w} />
             </span>
           )}
         </span>
       ))}
     </nav>
+  );
+}
+
+/** What the workspace menu starts, one line each; another kind of run across
+ *  a workspace is one more line here. */
+const WS_RUNS: { action: RunAction; label: string }[] = [
+  { action: "ask", label: "ask in workspace…" },
+  { action: "chat", label: "chat in workspace…" },
+];
+
+/** The active workspace's menu: a run across it, which member is its
+ *  primary, and its color. The look is kept in the backend's config. */
+function WsGear({ ws }: { ws: Workspace }) {
+  const repos = useStore((s) => s.repos);
+  const openWsPlan = useStore((s) => s.openWsPlan);
+  const primary = effectivePrimary(ws);
+  const look = (l: Parameters<typeof api.wsLook>[1]) => () => api.wsLook(ws.name, l);
+  const groups: GearGroup[] = [
+    {
+      label: "run",
+      entries: WS_RUNS.map(({ action, label }): GearEntry => ({
+        type: "item",
+        label,
+        run: () => openWsPlan(ws.name, action),
+      })),
+    },
+    {
+      label: "primary",
+      entries: ws.repos.map((path): GearEntry => {
+        // a workspace holds home's checkouts, so a member is a home card
+        const repo = repos.find((r) => isHome(r.id) && r.path === path);
+        return repo
+          ? { type: "item", label: repo.name, title: path, on: path === primary, stay: true, run: look({ primary: repo.id }) }
+          : { type: "item", label: baseName(path), on: path === primary, off: `${path} is not in the tree`, run: () => undefined };
+      }),
+    },
+    {
+      label: "color",
+      entries: [
+        ...WS_COLORS.map((c): GearEntry => ({ type: "item", label: c, on: ws.color === c, stay: true, run: look({ color: c }) })),
+        { type: "item", label: "none", on: !ws.color, stay: true, run: look({ color: null }) },
+      ],
+    },
+  ];
+  return (
+    <Gear
+      label={`the ${ws.name} workspace`}
+      hint="Ask or chat across the workspace, set its primary and its color"
+      groups={groups}
+      perScreen={false}
+    />
   );
 }
 
