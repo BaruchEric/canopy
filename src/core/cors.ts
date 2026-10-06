@@ -27,7 +27,7 @@ export function corsHeaders(origin: string | null, origins: readonly string[]): 
 /** What a preflight from a listed origin is told on top of `corsHeaders`:
  *  the methods and the one header the client sends. */
 export const PREFLIGHT_HEADERS: Record<string, string> = {
-  "Access-Control-Allow-Methods": "GET, POST, DELETE",
+  "Access-Control-Allow-Methods": "GET, POST, DELETE, PATCH",
   "Access-Control-Allow-Headers": "content-type",
   "Access-Control-Max-Age": "600",
 };

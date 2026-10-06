@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { ACTIONS, buildPrompt, checkWhen, describeTool, repoFacts, toolDetail } from "./actions";
+import { ACTIONS, buildPrompt, checkWhen, describeTool, repoFacts, splitMembers, toolDetail } from "./actions";
 import { RUN_ACTIONS, statusFingerprint, type Repo, type RepoStatus } from "./types";
 
 function repo(over: Partial<Repo["status"] & { error: string }> = {}): Repo {
@@ -41,6 +41,26 @@ test("a workspace prompt names the primary and the other folders, and widens the
   expect(p).toContain("Work only inside these folders");
   expect(p).not.toContain("Work only inside this repository");
   expect(buildPrompt(repo(), ACTIONS.ask, "x")).toContain("Work only inside this repository");
+});
+
+test("a workspace's members split into local folders to add and the rest left out in words", () => {
+  const at = (id: string, path: string, more: Partial<Repo> = {}): Repo => ({ ...repo(), id, name: id, path, ...more });
+  const forge = { kind: "forgejo", slug: "eric/y", clone: "ssh://git@forge/eric/y.git", branch: "main", updated: 0, private: false, empty: false } as const;
+  const repos = [
+    at("api", "/w/api"),
+    at("analysis", "/w/analysis"),
+    at("x", "ssh://mini/x", { host: "mini" }),
+    at("y", "https://forge.example/eric/y", { forge }),
+  ];
+  const ws = { name: "bike", repos: ["/w/api", "/w/analysis", "ssh://mini/x", "https://forge.example/eric/y", "/w/gone"] };
+  const { others, skipped } = splitMembers(ws, "/w/analysis", repos);
+  expect(others.map((r) => r.path)).toEqual(["/w/api"]);
+  expect(skipped).toEqual([
+    "ssh://mini/x (on mini)",
+    "https://forge.example/eric/y (on the forge)",
+    "/w/gone (not found by the last scan)",
+  ]);
+  expect(splitMembers({ name: "solo", repos: ["/w/api"] }, "/w/api", repos)).toEqual({ others: [], skipped: [] });
 });
 
 describe("checkWhen", () => {

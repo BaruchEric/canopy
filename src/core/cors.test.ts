@@ -33,4 +33,7 @@ describe("corsHeaders", () => {
   test("the preflight answer never names a wildcard", () => {
     expect(Object.values(PREFLIGHT_HEADERS).some((v) => v.includes("*"))).toBe(false);
   });
+  test("the preflight allows every method the API answers, PATCH included", () => {
+    expect(PREFLIGHT_HEADERS["Access-Control-Allow-Methods"]?.split(", ")).toEqual(["GET", "POST", "DELETE", "PATCH"]);
+  });
 });

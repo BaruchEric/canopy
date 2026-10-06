@@ -4,7 +4,7 @@
  *  Codex's items. Browser-safe: the UI imports this for labels and
  *  preconditions, the runner for prompts and titles. */
 
-import type { FlowStepName, Repo, RunAction, RunScope, WorkflowWhen } from "./types";
+import type { FlowStepName, Repo, RunAction, RunScope, WorkflowWhen, Workspace } from "./types";
 
 export interface ActionSpec {
   /** menu label */
@@ -157,6 +157,24 @@ export function repoFacts(repo: Repo): string[] {
   if (st.behind) facts.push(`${st.behind} behind`);
   if (!st.upstream) facts.push("no upstream");
   return facts;
+}
+
+/** A workspace's members around its primary, for a run there: the local
+ *  repos the run adds as folders, and in words the members it cannot open
+ *  here (on another host, on the forge, or missing from the last scan),
+ *  which it leaves out rather than refuses. */
+export function splitMembers(ws: Workspace, primary: string, repos: readonly Repo[]): { others: Repo[]; skipped: string[] } {
+  const others: Repo[] = [];
+  const skipped: string[] = [];
+  for (const p of ws.repos) {
+    if (p === primary) continue;
+    const r = repos.find((x) => x.path === p);
+    if (!r) skipped.push(`${p} (not found by the last scan)`);
+    else if (r.host) skipped.push(`${p} (on ${r.host})`);
+    else if (r.forge) skipped.push(`${p} (on the forge)`);
+    else others.push(r);
+  }
+  return { others, skipped };
 }
 
 /** The full prompt for a run. The repo facts come from canopy's own status

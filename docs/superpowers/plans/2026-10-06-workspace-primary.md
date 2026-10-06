@@ -402,7 +402,7 @@ git commit -m "feat(runs): a run can span a workspace with add-dir"
   - `PATCH /api/workspaces`, body `{ name, primary?: repoId | null, color?: WsColor | null }`. It returns `Workspace[]` and broadcasts `{type:"workspaces"}`.
   - `POST /api/workspaces/run`, body `{ name, action: "ask" | "chat", note?, client? }`. It returns 201 with `Run`. Plan 2 widens `action` to `"propose"`.
 
-- [ ] **Step 1: Write the failing test.** Make a scratch scan root with three git repos, `api`, `analysis` and `other`, using the helper the server tests already use. Start the server with a fake `claude` driver as `agents.test.ts` does, and add a workspace `bike` with `api` and `analysis`. Then:
+- [x] **Step 1: Write the failing test.** Make a scratch scan root with three git repos, `api`, `analysis` and `other`, using the helper the server tests already use. Start the server with a fake `claude` driver as `agents.test.ts` does, and add a workspace `bike` with `api` and `analysis`. Then:
 
 ```ts
 test("PATCH sets the primary by repo id and refuses a non-member", async () => {
@@ -440,12 +440,12 @@ test("an empty workspace and an unknown one are refused plainly", async () => {
 
 `call` and `lastSpec` are small helpers at the top of the file: `fetch` against the started port, and the fake driver's last `ctx.spec`.
 
-- [ ] **Step 2: Run it and watch it fail**
+- [x] **Step 2: Run it and watch it fail**
 
 Run: `env -u TMUX SHELL=/bin/bash bun test src/server/workspaces.test.ts`
 Expected: FAIL, 404 on both routes.
 
-- [ ] **Step 3: Implement** after the `DELETE /api/workspaces` route:
+- [x] **Step 3: Implement** after the `DELETE /api/workspaces` route:
 
 ```ts
   if (path === "/api/workspaces" && method === "PATCH") {
@@ -508,12 +508,12 @@ Expected: FAIL, 404 on both routes.
 
 `state.result.repos` is the scan result `repoById` (`index.ts:1195`) reads; a workspace holds home's checkouts only, so it is the right list. Import `isWsColor`, `type WsColor`, `effectivePrimary`, `type RunScope` and `setWorkspaceLook`.
 
-- [ ] **Step 4: Run it and watch it pass**
+- [x] **Step 4: Run it and watch it pass**
 
 Run: `env -u TMUX SHELL=/bin/bash bun test src/server/workspaces.test.ts`
 Expected: PASS.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add src/server

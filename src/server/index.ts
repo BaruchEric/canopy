@@ -1,4 +1,4 @@
-import { ACTIONS } from "../core/actions";
+import { ACTIONS, splitMembers } from "../core/actions";
 import { PREFLIGHT_HEADERS, corsHeaders, parseOrigins } from "../core/cors";
 import { Library, libraryOriginAllowed, openBind, tailnetHost } from "../core/library";
 import { PreviewProxy, parsePortRange, previewHostOk, previewable } from "../core/preview";
@@ -109,6 +109,7 @@ import {
   setRepoAgent,
   setRepoAll,
   setRole,
+  setWorkspaceLook,
   upsertWorkspace,
 } from "../core/store";
 import { RememberedRules, scopeOf } from "../core/remember";
@@ -123,8 +124,10 @@ import {
   HISTORY_WINDOWS,
   LAUNCH_SOURCE,
   RUN_ACTIONS,
+  effectivePrimary,
   isAgentRole,
   isHarness,
+  isWsColor,
   type AgentSettings,
   type AgentTable,
   type CanopyConfig,
@@ -148,6 +151,8 @@ import {
   type Repo,
   type RunAction,
   type RunAnswer,
+  type Run,
+  type RunScope,
   type ScanResult,
   type ServerEvent,
   type ShellPlace,
@@ -156,6 +161,8 @@ import {
   type Workflow,
   type SourceState,
   type TermInfo,
+  type Workspace,
+  type WsColor,
   TERM_GONE,
 } from "../core/types";
 import type { About, AdviceAccepted, AdviceEntry, IncubatorStages, RepoStatus } from "../core/types";
@@ -651,6 +658,45 @@ async function harnessRefusal(state: ServerState, h: Harness, path: string): Pro
 async function needHarness(state: ServerState, h: Harness, path: string): Promise<void> {
   const why = await harnessRefusal(state, h, path);
   if (why) throw new HttpError(400, why);
+}
+
+/** Starts a built-in action's run on a repo, after the checks every run
+ *  route makes: the repo is on this machine, no workflow or other run has
+ *  it, and its route's harness is installed here. A workspace run (`scope`)
+ *  is Claude Code's alone for now, since its other folders go in as
+ *  --add-dir. */
+async function startRepoRun(
+  state: ServerState,
+  repo: Repo,
+  action: RunAction,
+  note: string,
+  client: unknown,
+  scope?: RunScope,
+): Promise<Run> {
+  // The runner spawns the agent here, at the repo's path; there is no
+  // agent to spawn at a folder on another host.
+  if (repo.host) throw new HttpError(400, `agent runs only work on this machine; ${repo.name} is on ${repo.host}`);
+  // A workflow owns the repo while it runs, gate included: a second
+  // agent here would make the flow's next step throw and die.
+  if (state.flows.activeFor(repo.id)) throw new HttpError(409, "a workflow is running here");
+  const busy = state.runner.activeFor(repo.id);
+  if (busy) throw new HttpError(409, `${repo.name} already has a ${busy.verb} run going`);
+  const agent = agentFor(await loadConfig(), repo.path, action === "chat" ? "chat" : "job");
+  if (scope && agent.harness !== "claude") throw new HttpError(400, "workspace runs need Claude Code");
+  await needHarness(state, agent.harness, repo.path);
+  // the device it was started from, when the browser said and is on the stream
+  const by = deviceNameOf(state, typeof client === "string" ? client : null) ?? undefined;
+  return state.runner.start(repo, action, ACTIONS[action], note, agent, by, scope);
+}
+
+const isRecord = (v: unknown): v is Record<string, unknown> => typeof v === "object" && v !== null && !Array.isArray(v);
+
+/** A JSON body that must be an object. Bad JSON, null or an array is a 400
+ *  here, not the TypeError reading a field off one would turn into a 500. */
+async function objectBody(req: Request): Promise<Record<string, unknown>> {
+  const raw: unknown = await req.json().catch(() => null);
+  if (!isRecord(raw)) throw new HttpError(400, "malformed body");
+  return raw;
 }
 
 /** A workflow whose steps name an agent profile this backend has not got
@@ -2405,6 +2451,54 @@ async function handleApi(
     broadcast(state, { type: "workspaces", workspaces });
     return json(workspaces);
   }
+  // The look: the primary (a member, by repo id) and the color, each set,
+  // cleared with null, or left alone when absent. Membership never moves.
+  if (path === "/api/workspaces" && method === "PATCH") {
+    const b = await objectBody(req);
+    if (typeof b.name !== "string") return json({ error: "missing workspace name" }, 400);
+    const look: { primary?: string | null; color?: WsColor | null } = {};
+    if (b.primary === null) look.primary = null;
+    else if (typeof b.primary === "string") look.primary = idToPath(b.primary);
+    else if (b.primary !== undefined) return json({ error: "a primary is a repo id or null" }, 400);
+    if (b.color === null) look.color = null;
+    else if (isWsColor(b.color)) look.color = b.color;
+    else if (b.color !== undefined) return json({ error: "unknown color" }, 400);
+    let workspaces: Workspace[];
+    try {
+      workspaces = await setWorkspaceLook(b.name, look);
+    } catch (err) {
+      const msg = String(err instanceof Error ? err.message : err);
+      if (msg === "unknown workspace") throw new HttpError(404, msg);
+      if (msg.startsWith("not a member of ")) throw new HttpError(400, msg);
+      throw err;
+    }
+    broadcast(state, { type: "workspaces", workspaces });
+    return json(workspaces);
+  }
+  // One run on the primary, the other local members added as folders. Every
+  // local member must be free: a run or a workflow going on any of them
+  // refuses it. While it runs only the primary is held, the way every run
+  // holds its repo.
+  if (path === "/api/workspaces/run" && method === "POST") {
+    const b = await objectBody(req);
+    if (typeof b.name !== "string") return json({ error: "missing workspace name" }, 400);
+    if (!isRunAction(b.action)) return json({ error: "unknown action" }, 400);
+    const ws = (await loadConfig()).workspaces.find((w) => w.name === b.name);
+    if (!ws) return json({ error: "unknown workspace" }, 404);
+    const primaryPath = effectivePrimary(ws);
+    if (!primaryPath) return json({ error: "the workspace has no repos" }, 400);
+    const primary = state.result.repos.find((r) => r.path === primaryPath);
+    if (!primary) return json({ error: `the primary ${primaryPath} is not among the scanned repos` }, 404);
+    const { others, skipped } = splitMembers(ws, primaryPath, state.result.repos);
+    for (const r of others) {
+      const busy = state.runner.activeFor(r.id);
+      if (busy) throw new HttpError(409, `${r.name} already has a ${busy.verb} run going`);
+      if (state.flows.activeFor(r.id)) throw new HttpError(409, `a workflow is running in ${r.name}`);
+    }
+    const note = typeof b.note === "string" ? b.note : "";
+    const scope: RunScope = { workspace: ws.name, primary: primary.path, others: others.map((r) => r.path), skipped };
+    return json(await startRepoRun(state, primary, b.action, note, b.client, scope), 201);
+  }
   if (path === "/api/workspaces/open" && method === "POST") {
     const b = (await req.json()) as { name: string; app: string; helper?: unknown };
     if (!isOpenerId(b.app)) return json({ error: "unknown app" }, 400);
@@ -2724,20 +2818,10 @@ async function handleApi(
       }
     }
     if (method === "POST" && action === "run") {
-      // The runner spawns the agent here, at the repo's path; there is no
-      // agent to spawn at a folder on another host.
-      if (repo.host) return json({ error: `agent runs only work on this machine; ${repo.name} is on ${repo.host}` }, 400);
-      // A workflow owns the repo while it runs, gate included: a second
-      // agent here would make the flow's next step throw and die.
-      if (state.flows.activeFor(repo.id)) throw new HttpError(409, "a workflow is running here");
-      const b = (await req.json()) as { action?: unknown; note?: unknown; client?: unknown };
+      const b = await objectBody(req);
       if (!isRunAction(b.action)) return json({ error: "unknown action" }, 400);
       const note = typeof b.note === "string" ? b.note : "";
-      const agent = agentFor(await loadConfig(), repo.path, b.action === "chat" ? "chat" : "job");
-      await needHarness(state, agent.harness, repo.path);
-      // the device it was started from, when the browser said and is on the stream
-      const by = deviceNameOf(state, typeof b.client === "string" ? b.client : null) ?? undefined;
-      return json(state.runner.start(repo, b.action, ACTIONS[b.action], note, agent, by), 201);
+      return json(await startRepoRun(state, repo, b.action, note, b.client), 201);
     }
     if (method === "POST" && action === "peer") {
       if (!peerable(state, repo)) throw new HttpError(400, "peer sync covers local repos under the launch root");
