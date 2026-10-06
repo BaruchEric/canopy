@@ -464,7 +464,7 @@ git commit -m "feat(runs): the propose action and the proposal prompt types"
   - `ClaudeDriver.request(subtype: string, body: Record<string, unknown>, ms?: number): Promise<{ ok: true; response: Record<string, unknown> } | { ok: false; error: string }>`, private.
   - `DriveCtx.proposal(plan: string): void`, implemented in `RunCtx`, which sets `run.proposal` and broadcasts.
 
-- [ ] **Step 1: Add the `propose` mode to the fake.**
+- [x] **Step 1: Add the `propose` mode to the fake.**
 - `onUser` emits `TaskCreate` tool_use `tc1` `{ subject: "Read the code", activeForm: "Reading the code" }`, its tool_result "Task #1 created successfully: Read the code", then:
 
 ```ts
@@ -497,7 +497,7 @@ git commit -m "feat(runs): the propose action and the proposal prompt types"
     - a result whose text is `approved`.
   - On any other deny, emit a result whose text is `declined`.
 
-- [ ] **Step 2: Write the failing tests**
+- [x] **Step 2: Write the failing tests**
 
 ```ts
 const AGENT_YOLO = { ...AGENT, yolo: true };
@@ -579,12 +579,12 @@ test("a stop while the proposal waits ends the run stopped", async () => {
 
 `drive`'s options gain `agent?` and `env?`. Check how `runner.ts` marks `stopping` before `driver.stop()`. If `RunCtx` needs a `stopping` flag set for `exitOutcome`, call the same method the Runner calls instead of `denyAll` plus `stop`.
 
-- [ ] **Step 3: Run them and watch them fail**
+- [x] **Step 3: Run them and watch them fail**
 
 Run: `env -u TMUX SHELL=/bin/bash bun test src/core/claudedrive.test.ts`
 Expected: FAIL. ExitPlanMode shows as a permission.
 
-- [ ] **Step 4: Implement** in `ClaudeDriver`:
+- [x] **Step 4: Implement** in `ClaudeDriver`:
 
 ```ts
   /** our own control requests to the CLI, waiting on its control_response */
@@ -678,12 +678,12 @@ In `permission`, before the `AskUserQuestion` branch:
 
 When the user writes nothing, the deny's message is the default above. Give the revise button in the UI its own default, "Revise the plan.", so a revise with no note never reads as "turned down". See Task 6.
 
-- [ ] **Step 5: Run the tests and watch them pass**
+- [x] **Step 5: Run the tests and watch them pass**
 
 Run: `env -u TMUX SHELL=/bin/bash bun test src/core/claudedrive.test.ts src/core/driver.test.ts`
 Expected: PASS.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add src/core

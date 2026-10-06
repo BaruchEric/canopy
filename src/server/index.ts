@@ -2208,6 +2208,9 @@ async function handleApi(
     if (typeof b.id !== "string" || typeof b.promptId !== "string" || !answer) {
       return json({ error: "malformed answer" }, 400);
     }
+    // checked before a rule is kept: an answer of the wrong kind settles nothing
+    const misfit = state.runner.misfit(b.id, b.promptId, answer);
+    if (misfit) return json({ error: misfit }, 400);
     // an allow that remembers keeps its rule first: one that would not
     // cover this very prompt, or a scope the run does not have, is refused
     // and nothing is answered

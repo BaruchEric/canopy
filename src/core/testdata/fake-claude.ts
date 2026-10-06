@@ -32,6 +32,21 @@
  *          wakes sends a second result while the other still runs, which
  *          then asks a permission; once answered it ends and the real
  *          result follows
+ *    propose plan mode: makes a task, then calls ExitPlanMode. A deny of the
+ *          first plan brings a second one, any other deny ends "declined".
+ *          FAKE_CLAUDE_EMPTY_PLAN=1 sends a blank first plan, whose deny
+ *          ends it.
+ *          An allow brings the approval's tool result; the task update and
+ *          the result "approved" follow once canopy's last
+ *          set_permission_mode has been answered (a bypass refused for want
+ *          of the launch flag waits for the fallback after it)
+ *
+ *  Host control requests (set_permission_mode) are answered the way the
+ *  real CLI did (spec P3, P8): a bypass is refused without
+ *  --allow-dangerously-skip-permissions. FAKE_CLAUDE_REFUSE_BYPASS=1 refuses
+ *  a bypass anyway, FAKE_CLAUDE_REFUSE_MODE=1 refuses every other mode, and
+ *  FAKE_CLAUDE_SILENT_MODE never answers: "wait" sends the result 500 ms
+ *  after the request, "now" at once.
  *
  *  The background modes use the message shapes a probe of the real CLI
  *  showed (spec P5 and P7): task_started, task_notification and
@@ -64,6 +79,48 @@ const bash = (id: string, command: string) =>
     request: { subtype: "can_use_tool", tool_name: "Bash", input: { command }, tool_use_id: `tu-${id}` },
   });
 
+const result = (text: string) =>
+  out({ type: "result", subtype: "success", is_error: false, result: text, num_turns: 2, total_cost_usd: 0.02, duration_ms: 4, session_id: "sess-1" });
+const toolResult = (id: string, text: string) =>
+  out({ type: "user", session_id: "sess-1", message: { role: "user", content: [{ type: "tool_result", tool_use_id: id, content: [{ type: "text", text }], is_error: false }] } });
+const exitPlan = (id: string, plan: string, use: string) =>
+  out({ type: "control_request", request_id: id, request: { subtype: "can_use_tool", tool_name: "ExitPlanMode", input: { plan }, tool_use_id: use } });
+
+/** propose: the build after an approved plan, which the real CLI starts on its own */
+function build(): void {
+  out({ type: "assistant", session_id: "sess-1", message: { role: "assistant", content: [{ type: "tool_use", id: "tu1", name: "TaskUpdate", input: { taskId: "1", status: "completed" } }] } });
+  toolResult("tu1", "Updated task #1 status");
+  result("approved");
+}
+
+/** A control request from canopy: set_permission_mode, answered as the real
+ *  CLI did. */
+function onHostRequest(m: Record<string, unknown>): void {
+  const r = (m["request"] ?? {}) as Record<string, unknown>;
+  const silent = process.env["FAKE_CLAUDE_SILENT_MODE"];
+  if (r["subtype"] === "set_permission_mode" && silent) {
+    if (silent === "now") build();
+    else setTimeout(build, 500);
+    return;
+  }
+  // spec P8: bypass needs the launch flag, and the refusal names why
+  const bypassBlocked =
+    r["mode"] === "bypassPermissions" &&
+    (!process.argv.includes("--allow-dangerously-skip-permissions") || process.env["FAKE_CLAUDE_REFUSE_BYPASS"] === "1");
+  if (r["subtype"] === "set_permission_mode" && bypassBlocked) {
+    out({ type: "control_response", response: { subtype: "error", request_id: m["request_id"], error: "Cannot set permission mode to bypassPermissions because the session was not launched with --dangerously-skip-permissions", error_code: "bypass_not_launched" } });
+    // canopy falls back to acceptEdits: the build waits for that answer
+    return;
+  }
+  if (r["subtype"] === "set_permission_mode" && process.env["FAKE_CLAUDE_REFUSE_MODE"] !== "1") {
+    out({ type: "control_response", response: { subtype: "success", request_id: m["request_id"], response: { mode: r["mode"] } } });
+    out({ type: "system", subtype: "status", permissionMode: r["mode"], session_id: "sess-1" });
+  } else {
+    out({ type: "control_response", response: { subtype: "error", request_id: m["request_id"], error: "refused" } });
+  }
+  if (mode === "propose" && r["subtype"] === "set_permission_mode") build();
+}
+
 function onUser(): void {
   turns += 1;
   if (mode === "die") {
@@ -73,6 +130,12 @@ function onUser(): void {
   if (mode === "chat") {
     out({ type: "assistant", session_id: "sess-1", message: { role: "assistant", content: [{ type: "text", text: `reply ${turns}` }] } });
     out({ type: "result", subtype: "success", is_error: false, result: `reply ${turns}`, num_turns: 1, total_cost_usd: 0.01, duration_ms: 3, session_id: "sess-1" });
+    return;
+  }
+  if (mode === "propose") {
+    out({ type: "assistant", session_id: "sess-1", message: { role: "assistant", content: [{ type: "tool_use", id: "tc1", name: "TaskCreate", input: { subject: "Read the code", activeForm: "Reading the code" } }] } });
+    toolResult("tc1", "Task #1 created successfully: Read the code");
+    exitPlan("req-p1", process.env["FAKE_CLAUDE_EMPTY_PLAN"] === "1" ? "  " : "# Plan\n1. add it", "ep1");
     return;
   }
   if (mode === "two") {
@@ -134,6 +197,19 @@ function onUser(): void {
 
 function onResponse(m: Record<string, unknown>): void {
   const response = (m["response"] ?? {}) as Record<string, unknown>;
+  if (mode === "propose") {
+    const id = response["request_id"];
+    const behavior = ((response["response"] ?? {}) as Record<string, unknown>)["behavior"];
+    if (behavior === "allow" && (id === "req-p1" || id === "req-p2")) {
+      // spec P2; the build waits for canopy's mode switch
+      toolResult(id === "req-p1" ? "ep1" : "ep2", "User has approved your plan. You can now start coding.");
+    } else if (behavior === "deny" && id === "req-p1" && process.env["FAKE_CLAUDE_EMPTY_PLAN"] !== "1") {
+      exitPlan("req-p2", "# Plan v2\n1. add it\n2. test it", "ep2");
+    } else if (behavior === "deny") {
+      result("declined");
+    }
+    return;
+  }
   if (mode === "woke" && response["request_id"] === "req-m") {
     out({ type: "user", session_id: "sess-1", message: { role: "user", content: [{ type: "tool_result", tool_use_id: "m1", content: [{ type: "text", text: "12 pass" }], is_error: false }] } });
     out({ type: "result", subtype: "success", is_error: false, result: "final", num_turns: 3, total_cost_usd: 0.05, duration_ms: 9, session_id: "sess-1" });
@@ -189,6 +265,7 @@ for await (const chunk of Bun.stdin.stream()) {
     record(m);
     if (m["type"] === "user") onUser();
     else if (m["type"] === "control_response") onResponse(m);
+    else if (m["type"] === "control_request") onHostRequest(m);
   }
 }
 record({ eof: true });

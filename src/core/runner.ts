@@ -13,7 +13,7 @@ import { buildPrompt, type ActionSpec } from "./actions";
 import { ClaudeDriver } from "./claudedrive";
 import type { RpcProc } from "./codexrpc";
 import { CodexDriver, runsInside } from "./codexrun";
-import { RunCtx, type RememberHook, type RunDriver } from "./driver";
+import { answerMisfit, RunCtx, type RememberHook, type RunDriver } from "./driver";
 import { rememberOffer } from "./offer";
 import { pathsInside, rememberedFor, ruleCovers, type RunScope } from "./remember";
 import { EDIT_TOOLS } from "./shellwords";
@@ -325,6 +325,14 @@ export class Runner {
    *  covers are let through, after a rule was added. */
   recheck(): void {
     for (const live of this.live.values()) live.ctx.recheck();
+  }
+
+  /** Why `answer` cannot settle the prompt under `promptId` (approve to
+   *  a permission, allow-all to a plan), or null; null too when the run or
+   *  the prompt is not waiting, which `answer` reports itself. */
+  misfit(id: string, promptId: string, answer: RunAnswer): string | null {
+    const waiting = this.live.get(id)?.ctx.waiting(promptId);
+    return waiting ? answerMisfit(waiting, answer) : null;
   }
 
   /** Settles the prompt the run is waiting on. */

@@ -15,16 +15,23 @@ import { STAGE_AWAY } from "./stagewire";
 
 const FAKE = join(import.meta.dir, "testdata", "fake-claude.ts");
 const AGENT = { model: "default", effort: "default", yolo: false, extra: "" };
+const AGENT_YOLO = { ...AGENT, yolo: true };
 const scratch: string[] = [];
 afterAll(async () => {
   for (const d of scratch) await rm(d, { recursive: true, force: true });
 });
 
 async function drive(
-  mode: "job" | "chat" | "die" | "async" | "bgshell" | "quiet" | "woke" | "lost" | "notifyonly" | "crash" | "two",
+  mode: "job" | "chat" | "die" | "async" | "bgshell" | "quiet" | "woke" | "lost" | "notifyonly" | "crash" | "two" | "propose",
   message = "do the thing",
   unattended?: string,
-  opts: { chat?: boolean; heldGraceMs?: number } = {},
+  opts: {
+    chat?: boolean;
+    heldGraceMs?: number;
+    requestMs?: number;
+    agent?: typeof AGENT;
+    env?: Record<string, string>;
+  } = {},
 ) {
   const dir = await mkdtemp(join(tmpdir(), "canopy-claude-"));
   scratch.push(dir);
@@ -52,9 +59,15 @@ async function drive(
     run,
     {
       cwd: repo,
-      agent: AGENT,
-      spec: { allowedTools: ["Read"], maxTurns: 10, ...(unattended ? { unattended } : {}) },
-      env: { CANOPY_RUN: "r1", FAKE_CLAUDE_MODE: mode, FAKE_CLAUDE_LOG: logPath },
+      agent: opts.agent ?? AGENT,
+      spec: {
+        allowedTools: ["Read"],
+        maxTurns: 10,
+        ...(unattended ? { unattended } : {}),
+        // a propose run starts in plan mode, which is what adds the launch flag a bypass needs
+        ...(mode === "propose" ? { permissionMode: "plan" as const } : {}),
+      },
+      env: { CANOPY_RUN: "r1", FAKE_CLAUDE_MODE: mode, FAKE_CLAUDE_LOG: logPath, ...opts.env },
       label: "Claude Code",
     },
     { emit: () => {}, ended: (r) => ended.push(r.status) },
@@ -62,6 +75,7 @@ async function drive(
   const driver = new ClaudeDriver({
     command: [process.execPath, FAKE],
     ...(opts.heldGraceMs !== undefined ? { heldGraceMs: opts.heldGraceMs } : {}),
+    ...(opts.requestMs !== undefined ? { requestMs: opts.requestMs } : {}),
   });
   expect(driver.check()).toBeNull();
   driver.start(ctx, message);
@@ -97,6 +111,169 @@ test("cliArgs adds one --add-dir per extra folder", () => {
 test("cliArgs starts in plan mode when the spec says, whatever yolo says", () => {
   const args = cliArgs({ allowedTools: [], maxTurns: 5, permissionMode: "plan" }, { ...DEFAULT_AGENT, yolo: true });
   expect(args[args.indexOf("--permission-mode") + 1]).toBe("plan");
+});
+
+test("cliArgs: a plan-mode run on a yolo agent may switch to bypass later", () => {
+  const yolo = cliArgs({ allowedTools: [], maxTurns: 5, permissionMode: "plan" }, { ...DEFAULT_AGENT, yolo: true });
+  expect(yolo).toContain("--allow-dangerously-skip-permissions");
+  expect(cliArgs({ allowedTools: [], maxTurns: 5, permissionMode: "plan" }, { ...DEFAULT_AGENT, yolo: false })).not.toContain("--allow-dangerously-skip-permissions");
+  expect(cliArgs({ allowedTools: [], maxTurns: 5 }, { ...DEFAULT_AGENT, yolo: true })).not.toContain("--allow-dangerously-skip-permissions");
+});
+
+/** canopy's own control requests in the fake's log, in the order sent */
+const modesAsked = (log: Record<string, unknown>[]) =>
+  log.filter((m) => m["type"] === "control_request").map((m) => (m["request"] as { mode?: string }).mode);
+
+describe("a propose run: ExitPlanMode is a proposal", () => {
+  test("approve allows first, then sets acceptEdits (spec P8)", async () => {
+    const d = await drive("propose");
+    const w = await d.until((r) => r.prompt?.kind === "proposal", "the proposal");
+    expect(w.prompt).toMatchObject({ kind: "proposal", plan: "# Plan\n1. add it", auto: false });
+    expect(w.proposal).toBe("# Plan\n1. add it");
+    // auto refused: not yolo
+    d.ctx.answer(w.prompt?.id ?? "", { kind: "approve", auto: true });
+    const run = await d.until(d.done, "the end");
+    expect(run.status).toBe("done");
+    expect(run.result?.text).toBe("approved");
+    const log = await d.sent();
+    const modeAt = log.findIndex((m) => m["type"] === "control_request" && (m["request"] as { subtype?: string }).subtype === "set_permission_mode");
+    const allowAt = log.findIndex((m) => m["type"] === "control_response" && (m["response"] as { request_id?: string }).request_id === "req-p1");
+    expect(modeAt).toBeGreaterThan(-1);
+    expect(modesAsked(log)).toEqual(["acceptEdits"]);
+    // the allow resets the session to default, so the switch must come after it
+    expect(allowAt).toBeGreaterThan(-1);
+    expect(allowAt).toBeLessThan(modeAt);
+    expect(responseTo(log, "req-p1")?.response.response).toEqual({ behavior: "allow", updatedInput: { plan: "# Plan\n1. add it" } });
+    // the yolo launch flag is for a yolo agent only
+    expect((log[0] as { argv: string[] }).argv).not.toContain("--allow-dangerously-skip-permissions");
+    expect(run.steps.some((s) => s.kind === "note" && s.text?.startsWith("could not"))).toBe(false);
+  });
+
+  test("approve on a yolo agent with auto runs on its own", async () => {
+    const d = await drive("propose", "build it", undefined, { agent: AGENT_YOLO });
+    const w = await d.until((r) => r.prompt?.kind === "proposal", "the proposal");
+    expect(w.prompt).toMatchObject({ auto: true });
+    d.ctx.answer(w.prompt?.id ?? "", { kind: "approve", auto: true });
+    const run = await d.until(d.done, "the end");
+    expect(run.result?.text).toBe("approved");
+    const log = await d.sent();
+    expect(modesAsked(log)).toEqual(["bypassPermissions"]);
+    const argv = (log[0] as { argv: string[] }).argv;
+    expect(argv).toContain("--allow-dangerously-skip-permissions");
+    expect(argv[argv.indexOf("--permission-mode") + 1]).toBe("plan");
+  });
+
+  test("approve without auto on a yolo agent asks before commands", async () => {
+    const d = await drive("propose", "build it", undefined, { agent: AGENT_YOLO });
+    const w = await d.until((r) => r.prompt?.kind === "proposal", "the proposal");
+    d.ctx.answer(w.prompt?.id ?? "", { kind: "approve", auto: false });
+    await d.until(d.done, "the end");
+    expect(modesAsked(await d.sent())).toEqual(["acceptEdits"]);
+  });
+
+  test("a refused bypass falls back to acceptEdits, with a note", async () => {
+    const d = await drive("propose", "build it", undefined, { agent: AGENT_YOLO, env: { FAKE_CLAUDE_REFUSE_BYPASS: "1" } });
+    const w = await d.until((r) => r.prompt?.kind === "proposal", "the proposal");
+    d.ctx.answer(w.prompt?.id ?? "", { kind: "approve", auto: true });
+    const run = await d.until(d.done, "the end");
+    expect(run.result?.text).toBe("approved");
+    expect(modesAsked(await d.sent())).toEqual(["bypassPermissions", "acceptEdits"]);
+    expect(run.steps.some((s) => s.kind === "note" && s.text?.startsWith("could not run on its own"))).toBe(true);
+    expect(run.steps.some((s) => s.kind === "note" && s.text?.startsWith("could not switch"))).toBe(false);
+  });
+
+  test("revise sends the note back and the next proposal replaces the last", async () => {
+    const d = await drive("propose");
+    const w = await d.until((r) => r.prompt?.kind === "proposal", "the proposal");
+    // until() hands back the live run, so the first id is kept by value
+    const first = w.prompt?.id ?? "";
+    d.ctx.answer(first, { kind: "deny", message: "add a test step" });
+    const w2 = await d.until((r) => r.prompt?.kind === "proposal" && r.prompt.id !== first, "the second proposal");
+    expect(w2.proposal).toContain("Plan v2");
+    const log = await d.sent();
+    expect(responseTo(log, "req-p1")?.response.response).toEqual({ behavior: "deny", message: "add a test step" });
+    expect(modesAsked(log)).toEqual([]);
+    d.ctx.stopping = true;
+    d.ctx.denyAll();
+    d.driver.stop();
+    await d.until(d.done, "the end");
+  });
+
+  test("turning the plan down denies it with the default words", async () => {
+    const d = await drive("propose");
+    const w = await d.until((r) => r.prompt?.kind === "proposal", "the proposal");
+    const first = w.prompt?.id ?? "";
+    d.ctx.answer(first, { kind: "deny" });
+    const w2 = await d.until((r) => r.prompt?.kind === "proposal" && r.prompt.id !== first, "the second proposal");
+    d.ctx.answer(w2.prompt?.id ?? "", { kind: "deny" });
+    const run = await d.until(d.done, "the end");
+    expect(run.result?.text).toBe("declined");
+    const log = await d.sent();
+    expect(responseTo(log, "req-p2")?.response.response).toEqual({
+      behavior: "deny",
+      message: "The user turned the plan down. Stop here and summarize what you found.",
+    });
+    expect(modesAsked(log)).toEqual([]);
+  });
+
+  test("a refused mode switch still approves, with a note", async () => {
+    const d = await drive("propose", "build it", undefined, { env: { FAKE_CLAUDE_REFUSE_MODE: "1" } });
+    const w = await d.until((r) => r.prompt?.kind === "proposal", "the proposal");
+    d.ctx.answer(w.prompt?.id ?? "", { kind: "approve", auto: false });
+    const run = await d.until(d.done, "the end");
+    expect(run.result?.text).toBe("approved");
+    expect(run.steps.some((s) => s.kind === "note" && s.text === "could not switch to acceptEdits (refused); every edit will ask")).toBe(true);
+  });
+
+  test("a mode switch with no answer still approves, with a note, once the wait is over", async () => {
+    const d = await drive("propose", "build it", undefined, { requestMs: 50, env: { FAKE_CLAUDE_SILENT_MODE: "wait" } });
+    const w = await d.until((r) => r.prompt?.kind === "proposal", "the proposal");
+    d.ctx.answer(w.prompt?.id ?? "", { kind: "approve", auto: false });
+    const run = await d.until(d.done, "the end");
+    expect(run.status).toBe("done");
+    expect(run.result?.text).toBe("approved");
+    expect(run.steps.some((s) => s.kind === "note" && s.text === "could not switch to acceptEdits (no answer); every edit will ask")).toBe(true);
+  });
+
+  test("a result while canopy's own request waits keeps stdin open, and a late timeout leaves no note on the ended run", async () => {
+    const d = await drive("propose", "build it", undefined, { requestMs: 300, env: { FAKE_CLAUDE_SILENT_MODE: "now" } });
+    const w = await d.until((r) => r.prompt?.kind === "proposal", "the proposal");
+    d.ctx.answer(w.prompt?.id ?? "", { kind: "approve", auto: false });
+    const run = await d.until(d.done, "the end");
+    expect(run.result?.text).toBe("approved");
+    const endedAt = Date.now();
+    let log = await d.sent();
+    for (let i = 0; i < 100 && !log.some((m) => m["eof"]); i++) {
+      await Bun.sleep(20);
+      log = await d.sent();
+    }
+    // stdin closed only once the request gave up, not on the result
+    expect(log.some((m) => m["eof"])).toBe(true);
+    expect(Date.now() - endedAt).toBeGreaterThan(150);
+    expect(modesAsked(log)).toEqual(["acceptEdits"]);
+    expect(run.steps.some((s) => s.kind === "note" && s.text?.startsWith("could not"))).toBe(false);
+  });
+
+  test("an empty plan is sent back without asking anyone", async () => {
+    const d = await drive("propose", "build it", undefined, { env: { FAKE_CLAUDE_EMPTY_PLAN: "1" } });
+    const run = await d.until(d.done, "the end");
+    expect(run.prompt).toBeNull();
+    expect(run.proposal).toBeUndefined();
+    const log = await d.sent();
+    expect(responseTo(log, "req-p1")?.response.response.message).toBe("The plan came through empty. Present it again with ExitPlanMode.");
+  });
+
+  test("a stop while the proposal waits denies it and ends the run stopped", async () => {
+    const d = await drive("propose");
+    await d.until((r) => r.prompt?.kind === "proposal", "the proposal");
+    // the Runner's stop() while a turn runs
+    d.ctx.stopping = true;
+    d.ctx.denyAll();
+    d.driver.stop();
+    const run = await d.until(d.done, "the end");
+    expect(run.status).toBe("stopped");
+    expect(run.steps.some((s) => s.text === "turned the plan down")).toBe(true);
+  });
 });
 
 describe("a Claude run through the driver", () => {

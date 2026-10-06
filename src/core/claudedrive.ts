@@ -16,7 +16,7 @@ import { resolve } from "node:path";
 import { describeTool, toolDetail } from "./actions";
 import { normalizeAgent } from "./agent";
 import { bunSpawn, type RpcProc, type RpcSpawn } from "./codexrpc";
-import { spawnEnv, type DriveCtx, type DriveSpec, type RunDriver } from "./driver";
+import { activeStatus, spawnEnv, type DriveCtx, type DriveSpec, type RunDriver } from "./driver";
 import { agentArgs } from "./harness";
 import { DEFAULT_AGENT, type AgentSettings, type PermissionAsk, type RunQuestion, type RunStep } from "./types";
 
@@ -29,6 +29,8 @@ const STDERR_WAIT = 1_000;
 /** how long a held result waits once the subagents are done, for the turn
  *  their results wake */
 const HELD_GRACE_MS = 60_000;
+/** how long canopy's own control request waits for the CLI's reply */
+const REQUEST_MS = 10_000;
 
 const errText = (err: unknown): string => (err instanceof Error ? err.message : String(err));
 
@@ -115,6 +117,18 @@ type PermissionResult =
   | { behavior: "allow"; updatedInput: Record<string, unknown> }
   | { behavior: "deny"; message: string };
 
+/** A can_use_tool reply, and what to send once it is on the wire: the mode
+ *  switch after a plan's approval, which the allow would undo (spec P8).
+ *  Each reply carries its own, so two prompts settled together can never
+ *  send one's switch before the other's allow. */
+interface PermissionReply {
+  result: PermissionResult;
+  after?: () => Promise<void>;
+}
+
+/** How the CLI answered one of canopy's own control requests. */
+type RequestReply = { ok: true; response: Record<string, unknown> } | { ok: false; error: string };
+
 /** Where the `claude` binary is, or null. Spawning the binary directly
  *  bypasses the shell function some setups wrap around it, so no
  *  auto-update chatter lands on stdout. */
@@ -152,6 +166,9 @@ export function cliArgs(spec: DriveSpec, agent: AgentSettings = DEFAULT_AGENT, s
     "--strict-mcp-config",
     ...(spec.allowedTools.length ? ["--allowedTools", spec.allowedTools.join(",")] : []),
     ...(spec.addDirs ?? []).flatMap((d) => ["--add-dir", d]),
+    // spec P8: a switch to bypass after the plan is refused without it; a
+    // run that starts in bypass needs no switch
+    ...(spec.permissionMode === "plan" && agent.yolo ? ["--allow-dangerously-skip-permissions"] : []),
     ...flags,
   ];
 }
@@ -173,6 +190,8 @@ export interface ClaudeOptions {
   spawn?: RpcSpawn;
   /** how long a held result waits once the subagents are done, for the turn they wake */
   heldGraceMs?: number;
+  /** how long canopy's own control request waits for the CLI's reply */
+  requestMs?: number;
 }
 
 export class ClaudeDriver implements RunDriver {
@@ -196,6 +215,13 @@ export class ClaudeDriver implements RunDriver {
   /** the subagents are done and the turn they woke has begun: the held
    *  result now waits for that turn's own, however long it runs */
   private woke = false;
+  /** canopy's own control requests to the CLI, waiting on its control_response */
+  private asked = new Map<string, { settle: (r: RequestReply) => void; done: Promise<RequestReply> }>();
+  private asks = 0;
+  /** what a sent reply still has to do (a mode switch), until it is done */
+  private followUps = new Set<Promise<void>>();
+  /** the CLI's stdout has ended: a request now gets no reply */
+  private closed = false;
 
   constructor(private opts: ClaudeOptions = {}) {}
 
@@ -264,6 +290,7 @@ export class ClaudeDriver implements RunDriver {
     this.held = null;
     this.woke = false;
     this.clearGrace();
+    this.closed = false;
     try {
       const spawn = ctx.spawn ?? this.opts.spawn ?? bunSpawn;
       // the stage runner starts programs by bare name, out of its own PATH
@@ -296,6 +323,15 @@ export class ClaudeDriver implements RunDriver {
           this.woke = true;
           this.clearGrace();
         }
+        if (m["type"] === "control_response") {
+          // the CLI's reply to a request of canopy's own: not the CLI at work
+          // on a turn, so it leaves the grace alone
+          const r = isRecord(m["response"]) ? m["response"] : {};
+          this.asked
+            .get(str(r, "request_id"))
+            ?.settle(str(r, "subtype") === "success" ? { ok: true, response: isRecord(r["response"]) ? r["response"] : {} } : { ok: false, error: str(r, "error") || "refused" });
+          continue;
+        }
         if (m["type"] === "control_request") {
           void this.control(m);
         } else if (m["type"] === "control_cancel_request") {
@@ -316,7 +352,7 @@ export class ClaudeDriver implements RunDriver {
           // Stdin stays open while the turn runs, for the control replies.
           // The result ends the turn; closing stdin lets the CLI exit. A chat
           // keeps it open: the next message continues the same session.
-          if (m["type"] === "result" && !chat) proc.stdin.end();
+          if (m["type"] === "result" && !chat) this.endInput(proc);
           // subagents done, a result held: the CLI normally starts a turn
           // with their results; if none begins, the held result is the end
           if (this.held && this.agents.size === 0 && !this.woke && !this.grace) {
@@ -327,12 +363,15 @@ export class ClaudeDriver implements RunDriver {
               if (this.held !== held) return;
               this.held = null;
               this.apply(held);
-              if (!chat) running.stdin.end();
+              if (!chat) this.endInput(running);
             }, this.opts.heldGraceMs ?? HELD_GRACE_MS);
           }
         }
       }
       this.clearGrace();
+      // no reply comes now; a follow-up waiting on one gives up at once
+      this.closed = true;
+      for (const a of this.asked.values()) a.settle({ ok: false, error: "the run ended" });
       const held = this.held;
       this.held = null;
       const code = await proc.exited;
@@ -374,6 +413,62 @@ export class ClaudeDriver implements RunDriver {
     }
   }
 
+  /** Closes stdin, which lets the CLI exit, once canopy's own requests and
+   *  the follow-ups that send them are done: closing it first would cut
+   *  them off (spec P6). Each request gives up after its own wait, so this
+   *  never holds a run open for good. */
+  private endInput(proc: RpcProc): void {
+    const waits: Promise<unknown>[] = [...this.followUps, ...[...this.asked.values()].map((a) => a.done)];
+    if (waits.length > 0) {
+      void Promise.all(waits).then(() => this.endInput(proc));
+      return;
+    }
+    try {
+      proc.stdin.end();
+    } catch {
+      // the process is gone; the read loop will report that
+    }
+  }
+
+  /** A control request from canopy to the CLI (spec P3), settled by its
+   *  control_response, an error, or `ms` without one. */
+  private request(subtype: string, body: Record<string, unknown>, ms = this.opts.requestMs ?? REQUEST_MS): Promise<RequestReply> {
+    if (this.closed || !this.proc) return Promise.resolve({ ok: false, error: "the run ended" });
+    const id = `canopy-${++this.asks}`;
+    let settle: (r: RequestReply) => void = () => {};
+    const done = new Promise<RequestReply>((resolve) => {
+      const timer = setTimeout(() => settle({ ok: false, error: "no answer" }), ms);
+      settle = (r) => {
+        clearTimeout(timer);
+        this.asked.delete(id);
+        resolve(r);
+      };
+    });
+    this.asked.set(id, { settle, done });
+    void this.send({ type: "control_request", request_id: id, request: { subtype, ...body } });
+    return done;
+  }
+
+  /** After a plan's approval: bypass when the user chose "run on its own"
+   *  (and the agent's settings allow it), else acceptEdits, so edits go
+   *  through and commands still ask (spec P3). A switch that fails still
+   *  leaves the plan approved, and says so while the run is live. */
+  private async switchMode(auto: boolean): Promise<void> {
+    const ctx = this.ctx;
+    if (!ctx) return;
+    // a stop or a crash leaves no note behind on a run that is ending
+    const say = (text: string) => {
+      if (!this.closed && activeStatus(ctx.status())) ctx.note(text);
+    };
+    if (auto) {
+      const bypass = await this.request("set_permission_mode", { mode: "bypassPermissions" });
+      if (bypass.ok) return;
+      say(`could not run on its own (${bypass.error}); asking before commands instead`);
+    }
+    const edits = await this.request("set_permission_mode", { mode: "acceptEdits" });
+    if (!edits.ok) say(`could not switch to acceptEdits (${edits.error}); every edit will ask`);
+  }
+
   /** A control request from the CLI. Only can_use_tool is understood; the
    *  rest get an error reply so the CLI never waits on us. */
   private async control(m: Record<string, unknown>): Promise<void> {
@@ -388,34 +483,62 @@ export class ClaudeDriver implements RunDriver {
     }
     const tool = str(request, "tool_name");
     const input = isRecord(request["input"]) ? request["input"] : {};
-    const response = await this.permission(requestId, tool, input);
-    await this.send({
+    const { result, after } = await this.permission(requestId, tool, input);
+    const sent = this.send({
       type: "control_response",
-      response: { subtype: "success", request_id: requestId, response },
+      response: { subtype: "success", request_id: requestId, response: result },
     });
+    if (!after) return sent;
+    // tracked from before the allow goes out, so a result in between cannot
+    // close stdin ahead of the switch
+    const followUp: Promise<void> = sent.then(after).finally(() => this.followUps.delete(followUp));
+    this.followUps.add(followUp);
+    await followUp;
   }
 
-  private async permission(requestId: string, tool: string, input: Record<string, unknown>): Promise<PermissionResult> {
+  private async permission(requestId: string, tool: string, input: Record<string, unknown>): Promise<PermissionReply> {
     const ctx = this.ctx;
-    if (!ctx) return { behavior: "deny", message: "The run is gone." };
+    if (!ctx) return { result: { behavior: "deny", message: "The run is gone." } };
+    if (tool === "ExitPlanMode") {
+      // spec P1: plan mode's end is the plan, put to the user as a proposal
+      const plan = str(input, "plan").trim();
+      if (!plan) return { result: { behavior: "deny", message: "The plan came through empty. Present it again with ExitPlanMode." } };
+      ctx.proposal(plan);
+      const a = await ctx.ask({ kind: "proposal", plan, auto: ctx.agent.yolo }, requestId);
+      if (a.kind === "approve" || a.kind === "allow") {
+        // never past what the agent's settings allow: auto needs yolo
+        const auto = a.kind === "approve" && a.auto && ctx.agent.yolo;
+        return { result: { behavior: "allow", updatedInput: input }, after: () => this.switchMode(auto) };
+      }
+      return {
+        result: {
+          behavior: "deny",
+          message: (a.kind === "deny" && a.message) || "The user turned the plan down. Stop here and summarize what you found.",
+        },
+      };
+    }
     if (tool === "AskUserQuestion") {
       const questions = parseQuestions(input);
       if (questions.length === 0) {
-        return { behavior: "deny", message: "The question could not be shown." };
+        return { result: { behavior: "deny", message: "The question could not be shown." } };
       }
       const a = await ctx.ask({ kind: "question", questions }, requestId);
-      if (a.kind === "answers") return { behavior: "allow", updatedInput: { ...input, answers: a.answers } };
+      if (a.kind === "answers") return { result: { behavior: "allow", updatedInput: { ...input, answers: a.answers } } };
       return {
-        behavior: "deny",
-        message: (a.kind === "deny" && a.message) || "The user closed the question without answering. Stop and summarize.",
+        result: {
+          behavior: "deny",
+          message: (a.kind === "deny" && a.message) || "The user closed the question without answering. Stop and summarize.",
+        },
       };
     }
     const a = await ctx.ask(permissionAsk(tool, input, ctx.cwd), requestId);
-    if (a.kind === "allow" || a.kind === "allow-all") return { behavior: "allow", updatedInput: input };
+    if (a.kind === "allow" || a.kind === "allow-all") return { result: { behavior: "allow", updatedInput: input } };
     return {
-      behavior: "deny",
-      message:
-        (a.kind === "deny" && a.message) || "The user declined this in canopy. Do not retry it; continue without it, or stop and explain what is left.",
+      result: {
+        behavior: "deny",
+        message:
+          (a.kind === "deny" && a.message) || "The user declined this in canopy. Do not retry it; continue without it, or stop and explain what is left.",
+      },
     };
   }
 

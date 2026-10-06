@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { exitOutcome, RunCtx, settleNote, STEP_CAP, type DriveRun, type RememberHook } from "./driver";
+import { answerMisfit, exitOutcome, RunCtx, settleNote, STEP_CAP, type DriveRun, type RememberHook } from "./driver";
 import { rememberedFor } from "./remember";
 import type { RememberedRule } from "./types";
 
@@ -331,6 +331,43 @@ describe("steps", () => {
     if (s.tool) s.tool.status = "ok";
     expect(run.steps[0]?.tool?.status).toBe("ok");
   });
+});
+
+test("an answer must fit its prompt: approve is for a plan alone, and a plan takes approve or deny", async () => {
+  const plan = { kind: "proposal" as const, plan: "1. x", auto: false };
+  expect(answerMisfit(plan, { kind: "approve", auto: false })).toBeNull();
+  expect(answerMisfit(plan, { kind: "deny", message: "no" })).toBeNull();
+  for (const a of [{ kind: "allow" as const }, { kind: "allow-all" as const }, { kind: "answers" as const, answers: { q: "a" } }]) {
+    expect(answerMisfit(plan, a)).toBe("a plan is approved, sent back or turned down");
+  }
+  expect(answerMisfit(perm("x"), { kind: "approve", auto: true })).toBe("only a plan is approved");
+  expect(answerMisfit(perm("x"), { kind: "allow-all" })).toBeNull();
+
+  const { run, ctx } = makeCtx();
+  const p = ctx.ask(perm("one"), "0");
+  const q = ctx.ask(plan, "1");
+  // a queued plan is checked too, not only the prompt on show
+  expect(ctx.waiting("p2")).toMatchObject({ kind: "proposal" });
+  expect(() => ctx.answer("p2", { kind: "allow-all" })).toThrow("a plan is approved");
+  expect(() => ctx.answer("p1", { kind: "approve", auto: false })).toThrow("only a plan is approved");
+  expect(run.prompt?.id).toBe("p1");
+  expect(notes(run)).toEqual([]);
+  ctx.answer("p1", { kind: "allow" });
+  expect(await p).toEqual({ kind: "allow" });
+  // "run on its own" where it was never offered is approval that asks
+  ctx.answer("p2", { kind: "approve", auto: true });
+  expect(await q).toEqual({ kind: "approve", auto: false });
+  expect(notes(run)).toEqual(["allowed: one", "approved the plan, asking before commands"]);
+});
+
+test("a proposal is kept on the run while it is live, never after", () => {
+  const { run, ctx, emits } = makeCtx();
+  ctx.proposal("# one");
+  expect(run.proposal).toBe("# one");
+  expect(emits.length).toBe(1);
+  ctx.finish("done");
+  ctx.proposal("# two");
+  expect(run.proposal).toBe("# one");
 });
 
 test("settle notes for a proposal", () => {

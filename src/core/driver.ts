@@ -139,6 +139,8 @@ export interface DriveCtx {
   withdraw(key: string): void;
   /** the harness's session id for the run, once it is known */
   session(id: string): void;
+  /** the plan the agent proposed, which replaces the one before it */
+  proposal(plan: string): void;
   /** A turn's result. A job ends with it: done, or failed with `problem`. A
    *  chat goes idle, the problem said as a note. */
   result(result: DriveResult, problem: string | null): void;
@@ -199,6 +201,16 @@ export function settleNote(prompt: RunPrompt | PromptInput, a: RunAnswer): strin
   if (a.kind === "allow" && a.remember) return `allowed, and remembered ${a.remember.rule}: ${prompt.title}`;
   if (a.kind === "allow") return `allowed: ${prompt.title}`;
   return `denied: ${prompt.title}`;
+}
+
+/** Why an answer cannot settle a prompt, or null when it fits: a plan is
+ *  approved or sent back, and only a plan is approved. "allow all" or
+ *  answers to a plan would settle it as a turn-down nobody chose. */
+export function answerMisfit(prompt: RunPrompt | PromptInput, a: RunAnswer): string | null {
+  if (prompt.kind === "proposal") {
+    return a.kind === "approve" || a.kind === "deny" ? null : "a plan is approved, sent back or turned down";
+  }
+  return a.kind === "approve" ? "only a plan is approved" : null;
 }
 
 /** How a process ending becomes the run's status. `stopping` is a stop
@@ -353,6 +365,12 @@ export class RunCtx implements DriveCtx {
     this.run.session = id;
   }
 
+  proposal(plan: string): void {
+    if (!activeStatus(this.run.status)) return;
+    this.run.proposal = plan;
+    this.changed();
+  }
+
   ask(prompt: PromptInput, key: string, given?: ApprovalFacts): Promise<RunAnswer> {
     if (prompt.kind === "permission" && this.allowAll) return Promise.resolve({ kind: "allow" });
     const unattended = this.spec.unattended;
@@ -442,11 +460,22 @@ export class RunCtx implements DriveCtx {
     });
   }
 
-  /** The browser's answer to the prompt under `promptId`. */
+  /** The prompt waiting under `promptId`, the shown one or one queued
+   *  behind it; undefined when it is not waiting. */
+  waiting(promptId: string): RunPrompt | undefined {
+    return this.pending.find((p) => p.prompt.id === promptId)?.prompt;
+  }
+
+  /** The browser's answer to the prompt under `promptId`. One that does not
+   *  fit the prompt (`answerMisfit`) is refused and settles nothing. */
   answer(promptId: string, a: RunAnswer): void {
     const waiting = this.pending.find((p) => p.prompt.id === promptId);
     if (!waiting) throw new Error("that prompt is no longer waiting");
-    waiting.settle(a);
+    const misfit = answerMisfit(waiting.prompt, a);
+    if (misfit) throw new Error(misfit);
+    // "run on its own" where it was never offered is approval that asks
+    const p = waiting.prompt;
+    waiting.settle(p.kind === "proposal" && a.kind === "approve" && a.auto && !p.auto ? { kind: "approve", auto: false } : a);
   }
 
   withdraw(key: string): void {

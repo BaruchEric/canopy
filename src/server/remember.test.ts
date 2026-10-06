@@ -3,7 +3,8 @@
  * remembers keeps its rule only when the rule covers the prompt and the run
  * has the scope, the rule then answers the run's later matching permission
  * without asking, a chain and a question still wait, and forgetting drops
- * the rule from the config dir.
+ * the rule from the config dir. An answer of the wrong kind for the prompt
+ * (approve to a question, allow-all to a plan) is refused.
  */
 import { afterAll, beforeAll, expect, test } from "bun:test";
 import { mkdir, mkdtemp, readFile, realpath, rm } from "node:fs/promises";
@@ -18,6 +19,7 @@ const SCRIPT: PromptInput[] = [
   { kind: "permission", tool: "Bash", title: "git status", detail: "git status", command: "git status" },
   { kind: "permission", tool: "Bash", title: "git status && rm x", detail: "git status && rm x", command: "git status && rm x" },
   { kind: "question", questions: [{ question: "Which?", header: "", options: [{ label: "a", description: "" }], multiSelect: false }] },
+  { kind: "proposal", plan: "# Plan\n1. add it", auto: false },
 ];
 
 /** each answer the agent got, in order */
@@ -122,6 +124,26 @@ test("remember keeps a covering rule, answers the next match with it, and forget
     expect((await post("/api/remembered/forget", { id: list[1]?.id })).status).toBe(404);
     const after = JSON.parse(await readFile(join(dir, "remembered.json"), "utf8")) as { rules: RememberedRule[] };
     expect(after.rules.map((r) => r.rule)).toEqual(["Bash(git status:*)"]);
+
+    // an answer must fit the prompt it answers: approve is for a plan alone
+    const question = (await run(id))?.prompt?.id ?? "";
+    const approveQ = await post("/api/runs/answer", { id, promptId: question, answer: { kind: "approve", auto: false } });
+    expect(approveQ.status).toBe(400);
+    expect(((await approveQ.json()) as { error: string }).error).toBe("only a plan is approved");
+    expect((await run(id))?.prompt?.id).toBe(question);
+    expect((await post("/api/runs/answer", { id, promptId: question, answer: { kind: "answers", answers: { "Which?": "a" } } })).status).toBe(200);
+    await until(async () => (await run(id))?.prompt?.kind === "proposal", "the plan");
+    const plan = (await run(id))?.prompt?.id ?? "";
+    // a plan takes approve or deny: allow-all, answers, or an allow that would keep a rule are refused, and nothing is kept
+    for (const answer of [{ kind: "allow-all" }, { kind: "answers", answers: { x: "y" } }, { kind: "allow" }, { kind: "allow", remember: { rule: "Bash", scope: "repo" } }]) {
+      expect((await post("/api/runs/answer", { id, promptId: plan, answer })).status).toBe(400);
+    }
+    expect((await run(id))?.prompt?.id).toBe(plan);
+    expect(((await (await fetch(`${base}/api/remembered`)).json()) as { rules: RememberedRule[] }).rules.map((r) => r.rule)).toEqual(["Bash(git status:*)"]);
+    expect((await post("/api/runs/answer", { id, promptId: plan, answer: { kind: "approve", auto: true } })).status).toBe(200);
+    // auto was never offered here, so the approval asks before commands
+    await until(() => answers.length === 5, "the plan's answer");
+    expect(answers.at(-1)).toEqual({ kind: "approve", auto: false });
   } finally {
     srv.stop();
   }
