@@ -12,6 +12,12 @@
  * and only the last column can; then `lsof` for the agents' cwds. The
  * parsers, `classify`, `pickAgents` and `scanBody` are pure and tested; the
  * walk in `scanProcs` is the only part that reads the machine.
+ *
+ * A scan card has no hooks to say what the agent is doing, so the scan
+ * guesses it from CPU: an agent whose process tree (itself, its tools, its
+ * MCP servers) used `BUSY_SHARE` of a core or more since the last scan is
+ * working, else idle (`scanStates`). Measured on a Mac: a Claude Code at its
+ * prompt uses 1 to 2.5% of a core, one taking a turn 10% and up.
  */
 import { existsSync } from "node:fs";
 import { exec } from "./exec";
@@ -23,6 +29,10 @@ import type { Harness, Repo, ScanBody, ScanProc } from "./types";
 /** how often a backend scans its machine */
 export const SCAN_EVERY = 30_000;
 
+/** the share of one core an agent's process tree uses between two scans
+ *  from which it reads as working */
+export const BUSY_SHARE = 0.04;
+
 /** one agent the scan found, before its folder is matched to a repo */
 export interface AgentProc {
   pid: number;
@@ -31,6 +41,9 @@ export interface AgentProc {
   /** "" when it could not be read (another user's process) */
   cwd: string;
   startedAt: number;
+  /** CPU time used so far by it and every process under it, in ms, when
+   *  the table had it */
+  cpuMs?: number;
 }
 
 const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
@@ -46,22 +59,33 @@ export function parseLstart(text: string): number | null {
   return new Date(Number(m[7]), month, Number(m[3]), Number(m[4]), Number(m[5]), Number(m[6])).getTime();
 }
 
-/** `ps -axww -o pid=,ppid=,lstart=,args=`: one process a line, the args
- *  split on spaces, which is enough for the program and script words the
- *  classifier reads */
+/** `ps -o time` as ms: a Mac's `M:SS.ss` (minutes past 59 and all) or
+ *  procps's `[D-]HH:MM:SS`; null for anything else */
+export function parseCpuTime(text: string): number | null {
+  const m = /^(?:(\d+)-)?(\d+(?::\d+){0,2}(?:\.\d+)?)$/.exec(text.trim());
+  if (!m) return null;
+  const secs = (m[2] ?? "").split(":").reduce((acc, part) => acc * 60 + Number(part), 0);
+  return Math.round((Number(m[1] ?? 0) * 86_400 + secs) * 1000);
+}
+
+/** `ps -axww -o pid=,ppid=,lstart=,time=,args=`: one process a line, the
+ *  args split on spaces, which is enough for the program and script words
+ *  the classifier reads */
 export function parsePsLong(text: string): Proc[] {
   const out: Proc[] = [];
-  const line = new RegExp(`^\\s*(\\d+)\\s+(\\d+)\\s+(${LSTART.source})\\s*(.*)$`);
+  const line = new RegExp(`^\\s*(\\d+)\\s+(\\d+)\\s+(${LSTART.source})\\s+([\\d:.-]+)\\s*(.*)$`);
   for (const l of text.split("\n")) {
     const m = line.exec(l);
     if (!m) continue;
     const startedAt = parseLstart(m[3] ?? "");
-    const args = m[11] ?? "";
+    const cpuMs = parseCpuTime(m[11] ?? "");
+    const args = m[12] ?? "";
     out.push({
       pid: Number(m[1]),
       ppid: Number(m[2]),
       argv: args.trim().split(/\s+/).filter(Boolean),
       ...(startedAt !== null ? { startedAt } : {}),
+      ...(cpuMs !== null ? { cpuMs } : {}),
     });
   }
   return out;
@@ -124,11 +148,78 @@ export function pickAgents(procs: readonly Proc[]): (Proc & { harness: Harness }
   return [...hits.values()].filter((p) => hits.get(p.ppid)?.harness !== p.harness).sort((a, b) => a.pid - b.pid);
 }
 
+/** The CPU time a process and everything under it has used, in ms, or
+ *  undefined when the table did not read the process's own. */
+export function treeCpu(procs: readonly Proc[], pid: number): number | undefined {
+  const kids = new Map<number, Proc[]>();
+  let self: Proc | undefined;
+  for (const p of procs) {
+    if (p.pid === pid) self = p;
+    else {
+      const list = kids.get(p.ppid);
+      if (list) list.push(p);
+      else kids.set(p.ppid, [p]);
+    }
+  }
+  if (self?.cpuMs === undefined) return undefined;
+  let total = 0;
+  const seen = new Set<number>();
+  const queue = [self];
+  for (let p = queue.pop(); p; p = queue.pop()) {
+    if (seen.has(p.pid)) continue;
+    seen.add(p.pid);
+    total += p.cpuMs ?? 0;
+    queue.push(...(kids.get(p.pid) ?? []));
+  }
+  return total;
+}
+
+/** one agent's CPU reading at a scan, kept for the next */
+export interface CpuSample {
+  cpuMs: number;
+  at: number;
+  /** the process's start, so a reused pid is not read as the same agent */
+  startedAt: number;
+}
+
+/**
+ * Each agent's state off two scans' CPU readings: working when its tree
+ * used `BUSY_SHARE` of a core or more between them, idle otherwise, and
+ * idle on its first scan; none without a reading, which the broker takes
+ * as idle. A tool that started and
+ * ended between scans is missed, and a child that ended takes its time
+ * with it, which only ever reads as less busy. Returns the samples to keep
+ * for the next call.
+ */
+export function scanStates(
+  prev: ReadonlyMap<number, CpuSample>,
+  procs: readonly AgentProc[],
+  now: number,
+): { states: Map<number, "working" | "idle">; next: Map<number, CpuSample> } {
+  const states = new Map<number, "working" | "idle">();
+  const next = new Map<number, CpuSample>();
+  for (const p of procs) {
+    if (p.cpuMs === undefined) continue;
+    next.set(p.pid, { cpuMs: p.cpuMs, at: now, startedAt: p.startedAt });
+    const before = prev.get(p.pid);
+    const span = before && before.startedAt === p.startedAt ? now - before.at : 0;
+    const share = span > 0 && before ? Math.max(0, p.cpuMs - before.cpuMs) / span : 0;
+    states.set(p.pid, share >= BUSY_SHARE ? "working" : "idle");
+  }
+  return { states, next };
+}
+
 /** What the broker's scan route takes: each agent with its repo (the
  *  remote as a web url, the key cards join repo cards on) and branch when
  *  its folder is inside a scanned repo on this machine, the deepest one
- *  when repos nest. */
-export function scanBody(procs: readonly AgentProc[], repos: readonly Repo[], container: boolean, os: string): ScanBody {
+ *  when repos nest, and its state when `states` has one. */
+export function scanBody(
+  procs: readonly AgentProc[],
+  repos: readonly Repo[],
+  container: boolean,
+  os: string,
+  states: ReadonlyMap<number, "working" | "idle"> = new Map(),
+): ScanBody {
   const local = repos.filter((r) => !r.host && !r.forge);
   return {
     container,
@@ -137,6 +228,7 @@ export function scanBody(procs: readonly AgentProc[], repos: readonly Repo[], co
       const id = repoOfCwd(p.cwd || undefined, local);
       const repo = id === undefined ? undefined : local.find((r) => r.id === id);
       const branch = repo?.status?.branch;
+      const state = states.get(p.pid);
       return {
         pid: p.pid,
         harness: p.harness,
@@ -144,6 +236,7 @@ export function scanBody(procs: readonly AgentProc[], repos: readonly Repo[], co
         startedAt: p.startedAt,
         ...(repo?.link ? { repo: repo.link } : {}),
         ...(branch ? { branch } : {}),
+        ...(state ? { state } : {}),
       };
     }),
   };
@@ -161,7 +254,7 @@ const whole = (text: string): string => text.slice(0, text.lastIndexOf("\n") + 1
 async function macProcs(): Promise<Proc[]> {
   const env = { LC_ALL: "C", LANG: "C" };
   const [long, comm] = await Promise.all([
-    exec(["ps", "-axww", "-o", "pid=,ppid=,lstart=,args="], { timeoutMs: 5_000, env }),
+    exec(["ps", "-axww", "-o", "pid=,ppid=,lstart=,time=,args="], { timeoutMs: 5_000, env }),
     exec(["ps", "-ax", "-o", "pid=,comm="], { timeoutMs: 5_000, env }),
   ]);
   const comms = parsePsComm(whole(comm.stdout));
@@ -180,16 +273,19 @@ async function macCwds(pids: number[]): Promise<Map<number, string>> {
 /** Every agent on this machine, best effort: an unreadable table is none. */
 export async function scanProcs(platform: NodeJS.Platform = process.platform): Promise<AgentProc[]> {
   const now = Date.now();
+  const agent = (table: readonly Proc[], p: Proc & { harness: Harness }, cwd: string): AgentProc => {
+    const cpuMs = treeCpu(table, p.pid);
+    return { pid: p.pid, ppid: p.ppid, harness: p.harness, cwd, startedAt: p.startedAt ?? now, ...(cpuMs !== undefined ? { cpuMs } : {}) };
+  };
   if (platform === "linux") {
-    const hits = pickAgents(await linuxProcs());
-    return Promise.all(
-      hits.map(async (p) => ({ pid: p.pid, ppid: p.ppid, harness: p.harness, cwd: (await procCwd(p.pid)) ?? "", startedAt: p.startedAt ?? now })),
-    );
+    const table = await linuxProcs();
+    return Promise.all(pickAgents(table).map(async (p) => agent(table, p, (await procCwd(p.pid)) ?? "")));
   }
   if (platform === "darwin") {
-    const hits = pickAgents(await macProcs().catch(() => []));
+    const table = await macProcs().catch(() => []);
+    const hits = pickAgents(table);
     const cwds = await macCwds(hits.map((p) => p.pid)).catch(() => new Map<number, string>());
-    return hits.map((p) => ({ pid: p.pid, ppid: p.ppid, harness: p.harness, cwd: cwds.get(p.pid) ?? "", startedAt: p.startedAt ?? now }));
+    return hits.map((p) => agent(table, p, cwds.get(p.pid) ?? ""));
   }
   return [];
 }

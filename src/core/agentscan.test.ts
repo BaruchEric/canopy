@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { classify, inContainer, parseLstart, parsePsComm, parsePsLong, pickAgents, scanBody, type AgentProc } from "./agentscan";
+import { BUSY_SHARE, classify, inContainer, parseCpuTime, parseLstart, parsePsComm, parsePsLong, pickAgents, scanBody, scanStates, treeCpu, type AgentProc } from "./agentscan";
 import { parseBootTime, parseCmdline, parseStat, tickTime, type Proc } from "./procs";
 import type { Repo } from "./types";
 
@@ -41,9 +41,11 @@ function table(): Proc[] {
 
 describe("/proc", () => {
   test("a stat line's comm, state, ppid and start, whatever the comm holds", () => {
-    expect(parseStat(STAT[41]!)).toEqual({ comm: "claude", state: "S", ppid: 40, start: 360000 });
-    expect(parseStat("77 (my (odd) name) R 1 77 77 0 -1 0 0 0 0 0 0 0 0 0 20 0 1 0 42 0 0")).toEqual({ comm: "my (odd) name", state: "R", ppid: 1, start: 42 });
+    expect(parseStat(STAT[41]!)).toEqual({ comm: "claude", state: "S", ppid: 40, cpu: 0, start: 360000 });
+    expect(parseStat("77 (my (odd) name) R 1 77 77 0 -1 0 0 0 0 0 0 0 0 0 20 0 1 0 42 0 0")).toEqual({ comm: "my (odd) name", state: "R", ppid: 1, cpu: 0, start: 42 });
+    expect(parseStat("9 (busy) R 1 9 9 0 -1 0 0 0 0 0 150 25 0 0 20 0 1 0 42 0 0")?.cpu).toBe(175);
     expect(parseStat("5 (short) S 1 5")?.start).toBeNull();
+    expect(parseStat("5 (short) S 1 5")?.cpu).toBeNull();
     expect(parseStat("garbage")).toBeNull();
   });
 
@@ -65,11 +67,11 @@ describe("/proc", () => {
 
 describe("a Mac's ps and lsof", () => {
   const LONG = [
-    "    1     0 Tue Sep 29 08:00:01 2026     /sbin/launchd",
-    "  880   870 Wed Sep 30 10:11:12 2026     claude --model opus",
-    "  990   870 Wed Sep  3 09:05:00 2026     node /opt/homebrew/bin/codex",
-    "  991   990 Wed Sep  3 09:05:01 2026     /opt/homebrew/lib/node_modules/@openai/codex/vendor/aarch64-apple-darwin/codex/codex",
-    "  995   870 Wed Sep 30 11:00:00 2026     /Applications/Visual Studio Code.app/Contents/MacOS/Electron --type=renderer",
+    "    1     0 Tue Sep 29 08:00:01 2026   102:42.63 /sbin/launchd",
+    "  880   870 Wed Sep 30 10:11:12 2026     1:19.24 claude --model opus",
+    "  990   870 Wed Sep  3 09:05:00 2026     0:00.50 node /opt/homebrew/bin/codex",
+    "  991   990 Wed Sep  3 09:05:01 2026     0:03.25 /opt/homebrew/lib/node_modules/@openai/codex/vendor/aarch64-apple-darwin/codex/codex",
+    "  995   870 Wed Sep 30 11:00:00 2026     0:00.00 /Applications/Visual Studio Code.app/Contents/MacOS/Electron --type=renderer",
     "not a line",
   ].join("\n");
   const COMM = [
@@ -79,6 +81,14 @@ describe("a Mac's ps and lsof", () => {
     "  991 /opt/homebrew/lib/node_modules/@openai/codex/vendor/aarch64-apple-darwin/codex/codex",
     "  995 /Applications/Visual Studio Code.app/Contents/MacOS/Electron",
   ].join("\n");
+
+  test("cpu time in a Mac's and procps's forms", () => {
+    expect(parseCpuTime("1:19.24")).toBe(79_240);
+    expect(parseCpuTime("102:42.63")).toBe(6_162_630);
+    expect(parseCpuTime("01:02:03")).toBe(3_723_000);
+    expect(parseCpuTime("2-00:00:01")).toBe(172_801_000);
+    expect(parseCpuTime("soon")).toBeNull();
+  });
 
   test("lstart is local time", () => {
     expect(parseLstart("Wed Sep 30 10:11:12 2026")).toBe(new Date(2026, 8, 30, 10, 11, 12).getTime());
@@ -95,6 +105,7 @@ describe("a Mac's ps and lsof", () => {
       [991, 990, "/opt/homebrew/lib/node_modules/@openai/codex/vendor/aarch64-apple-darwin/codex/codex"],
       [995, 870, "/Applications/Visual"],
     ]);
+    expect(procs.map((p) => p.cpuMs)).toEqual([6_162_630, 79_240, 500, 3_250, 0]);
     const comms = parsePsComm(COMM);
     expect(comms.get(995)).toBe("/Applications/Visual Studio Code.app/Contents/MacOS/Electron");
     const hits = pickAgents(procs.map((p) => ({ ...p, comm: comms.get(p.pid) })));
@@ -166,5 +177,37 @@ describe("the post", () => {
     expect(inContainer((p) => p === "/.dockerenv")).toBe(true);
     expect(inContainer((p) => p === "/run/.containerenv")).toBe(true);
     expect(inContainer(() => false)).toBe(false);
+  });
+});
+
+describe("working or idle, off the CPU", () => {
+  const p = (pid: number, ppid: number, cpuMs?: number): Proc => ({ pid, ppid, argv: ["x"], ...(cpuMs !== undefined ? { cpuMs } : {}) });
+
+  test("an agent's tree: itself, its tools and their children", () => {
+    const table = [p(1, 0, 900), p(10, 1, 100), p(11, 10, 20), p(12, 11, 5), p(13, 1, 7), p(14, 10)];
+    expect(treeCpu(table, 10)).toBe(125);
+    expect(treeCpu(table, 14)).toBeUndefined();
+    expect(treeCpu(table, 99)).toBeUndefined();
+  });
+
+  test("busy between two scans is working; a first scan or a reused pid is idle; no reading, no state", () => {
+    const at = (pid: number, cpuMs: number | undefined, startedAt = 5): AgentProc => ({
+      pid, ppid: 1, harness: "claude", cwd: "", startedAt, ...(cpuMs !== undefined ? { cpuMs } : {}),
+    });
+    const first = scanStates(new Map(), [at(41, 1_000), at(42, 1_000), at(43, 1_000), at(44, undefined)], 0);
+    expect(Object.fromEntries(first.states)).toEqual({ 41: "idle", 42: "idle", 43: "idle" });
+    expect(first.next.has(44)).toBe(false);
+    const busy = 30_000 * BUSY_SHARE;
+    const second = scanStates(first.next, [at(41, 1_000 + busy), at(42, 1_000 + busy - 1), at(43, 9_000, 6), at(44, undefined)], 30_000);
+    expect(Object.fromEntries(second.states)).toEqual({ 41: "working", 42: "idle", 43: "idle" });
+    expect(second.next.get(43)).toEqual({ cpuMs: 9_000, at: 30_000, startedAt: 6 });
+  });
+
+  test("the post carries each state it was given", () => {
+    const procs: AgentProc[] = [
+      { pid: 41, ppid: 1, harness: "claude", cwd: "", startedAt: 5 },
+      { pid: 42, ppid: 1, harness: "claude", cwd: "", startedAt: 5 },
+    ];
+    expect(scanBody(procs, [], false, "darwin", new Map([[41, "working"]])).procs.map((x) => x.state)).toEqual(["working", undefined]);
   });
 });

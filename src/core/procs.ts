@@ -24,6 +24,8 @@ export interface Proc {
   state?: string;
   /** when it started, unix ms, when it could be told */
   startedAt?: number;
+  /** the CPU time it has used so far, user and system, in ms, when read */
+  cpuMs?: number;
 }
 
 /** how many processes under a pane are looked at, at most */
@@ -41,9 +43,10 @@ export function parseStatPpid(stat: string): number | null {
 
 /** The `/proc/<pid>/stat` fields the process table keeps: the command
  *  (in parens, and it may hold spaces and parens itself), the state letter
- *  after it, the ppid, and the start time in clock ticks after boot (field
- *  22). Null for a line that is not one. */
-export function parseStat(stat: string): { comm: string; state: string; ppid: number; start: number | null } | null {
+ *  after it, the ppid, the CPU time used in clock ticks (utime and stime,
+ *  fields 14 and 15, added) and the start time in clock ticks after boot
+ *  (field 22). Null for a line that is not one. */
+export function parseStat(stat: string): { comm: string; state: string; ppid: number; cpu: number | null; start: number | null } | null {
   const open = stat.indexOf("(");
   const close = stat.lastIndexOf(")");
   if (open < 0 || close < open) return null;
@@ -51,7 +54,14 @@ export function parseStat(stat: string): { comm: string; state: string; ppid: nu
   const ppid = Number(rest[1]);
   if (!Number.isInteger(ppid) || ppid < 0) return null;
   const start = Number(rest[19]);
-  return { comm: stat.slice(open + 1, close), state: rest[0] ?? "", ppid, start: Number.isFinite(start) && rest[19] !== undefined ? start : null };
+  const cpu = Number(rest[11]) + Number(rest[12]);
+  return {
+    comm: stat.slice(open + 1, close),
+    state: rest[0] ?? "",
+    ppid,
+    cpu: Number.isFinite(cpu) && rest[12] !== undefined ? cpu : null,
+    start: Number.isFinite(start) && rest[19] !== undefined ? start : null,
+  };
 }
 
 /** The boot time out of `/proc/stat`, unix seconds: its `btime` line. A
@@ -108,7 +118,8 @@ export function descendants(procs: readonly Proc[], root: number, cap = TREE_CAP
 }
 
 /** Every process `/proc` shows: pid, ppid, argv, and off the same stat
- *  read its comm, state and start (as unix ms when the boot time reads). */
+ *  read its comm, state, CPU time and start (as unix ms when the boot time
+ *  reads). */
 export async function linuxProcs(): Promise<Proc[]> {
   const [pids, boot] = await Promise.all([
     readdir("/proc").then((ds) => ds.filter((d) => /^\d+$/.test(d))).catch(() => [] as string[]),
@@ -129,6 +140,7 @@ export async function linuxProcs(): Promise<Proc[]> {
         comm: f.comm,
         state: f.state,
         ...(boot !== null && f.start !== null ? { startedAt: tickTime(boot, f.start) } : {}),
+        ...(f.cpu !== null ? { cpuMs: (f.cpu * 1000) / CLOCK_TICKS } : {}),
       };
     }),
   );

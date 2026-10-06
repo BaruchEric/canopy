@@ -16,7 +16,7 @@
  *
  * The cards are the broker's; canopy never writes one but through the scan.
  */
-import { SCAN_EVERY, inContainer, scanBody, scanProcs, type AgentProc } from "../core/agentscan";
+import { SCAN_EVERY, inContainer, scanBody, scanProcs, scanStates, type AgentProc, type CpuSample } from "../core/agentscan";
 import { Chan, type ChanConfig } from "../core/chan";
 import { AGENTS_CHANNEL, asAgentCard, registryCard } from "../core/tailchan";
 import type { AgentCard, ChanMessage, RegistryInfo, Repo, ServerEvent } from "../core/types";
@@ -62,6 +62,9 @@ export class RegistryHub {
   private listed = false;
   private listing: Promise<void> | null = null;
   private scanning: Promise<void> | null = null;
+  /** each scanned agent's CPU at the last scan, which the next reads its
+   *  state against */
+  private cpu = new Map<number, CpuSample>();
   /** the last scan failed, so the next failure says nothing */
   private scanFailing = false;
   private listFailing = false;
@@ -181,7 +184,9 @@ export class RegistryHub {
     const lister = this.deps.lister ?? (() => scanProcs());
     const pass = (async () => {
       const procs = await lister();
-      const body = scanBody(procs, this.deps.repos(), this.deps.container ?? inContainer(), process.platform);
+      const { states, next } = scanStates(this.cpu, procs, Date.now());
+      this.cpu = next;
+      const body = scanBody(procs, this.deps.repos(), this.deps.container ?? inContainer(), process.platform, states);
       await chan.scanAgents(cfg.bot, body);
       this.scanFailing = false;
     })()

@@ -2198,6 +2198,8 @@ export interface ScanProc {
   startedAt: number;
   repo?: string;
   branch?: string;
+  /** what its CPU says it is doing, from the second scan that sees it */
+  state?: "working" | "idle";
 }
 
 /** The scan's whole post: every agent in this pid namespace, which the
