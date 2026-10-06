@@ -20,13 +20,18 @@ afterAll(async () => {
   for (const d of scratch) await rm(d, { recursive: true, force: true });
 });
 
-async function drive(mode: "job" | "chat" | "die", message = "do the thing", unattended?: string) {
+async function drive(
+  mode: "job" | "chat" | "die" | "async" | "bgshell" | "quiet",
+  message = "do the thing",
+  unattended?: string,
+  opts: { chat?: boolean; heldGraceMs?: number } = {},
+) {
   const dir = await mkdtemp(join(tmpdir(), "canopy-claude-"));
   scratch.push(dir);
   const repo = join(dir, "repo");
   await mkdir(repo);
   const logPath = join(dir, "log.jsonl");
-  const chat = mode === "chat";
+  const chat = opts.chat ?? mode === "chat";
   const run: DriveRun = {
     id: "r1",
     repoId: "repo",
@@ -54,7 +59,10 @@ async function drive(mode: "job" | "chat" | "die", message = "do the thing", una
     },
     { emit: () => {}, ended: (r) => ended.push(r.status) },
   );
-  const driver = new ClaudeDriver({ command: [process.execPath, FAKE] });
+  const driver = new ClaudeDriver({
+    command: [process.execPath, FAKE],
+    ...(opts.heldGraceMs !== undefined ? { heldGraceMs: opts.heldGraceMs } : {}),
+  });
   expect(driver.check()).toBeNull();
   driver.start(ctx, message);
   const until = async (pred: (r: DriveRun) => boolean, what: string, ms = 8_000): Promise<DriveRun> => {
@@ -163,6 +171,56 @@ describe("a Claude run through the driver", () => {
     expect(run.status).toBe("stopped");
     expect(run.error).toBeUndefined();
     expect(run.steps.some((s) => s.text === "denied: git push")).toBe(true);
+  });
+
+  test("a result while a background subagent runs is held: stdin stays open, the prompt is answered, the real result ends the run", async () => {
+    const d = await drive("async");
+    const waiting = await d.until((r) => r.status === "waiting", "the subagent's prompt");
+    expect(waiting.result).toBeUndefined();
+    d.ctx.answer(waiting.prompt?.id ?? "", { kind: "allow" });
+    const run = await d.until(d.done, "the end");
+    expect(run.status).toBe("done");
+    expect(run.result?.text).toBe("final");
+    const log = await d.sent();
+    // the fake logged the answer, so stdin was still open when it was sent
+    expect(log.some((m) => m["type"] === "control_response" && (m["response"] as { request_id?: string }).request_id === "req-a")).toBe(true);
+  });
+
+  test("a chat holds the early result too: no idle and no denied prompt while the subagent runs", async () => {
+    const d = await drive("async", "do the thing", undefined, { chat: true });
+    const waiting = await d.until((r) => r.status === "waiting", "the subagent's prompt");
+    expect(waiting.result).toBeUndefined();
+    d.ctx.answer(waiting.prompt?.id ?? "", { kind: "allow" });
+    await d.until((r) => r.status === "idle" && r.result?.text === "final", "the reply's end");
+    // the Runner's stop() on an idle chat, so the fake does not outlive the test
+    d.ctx.ending = true;
+    d.driver.stop();
+    await d.until(d.done, "the end");
+  });
+
+  test("a background shell never holds a result", async () => {
+    const run = await (await drive("bgshell")).until((r) => r.status === "done", "the end");
+    expect(run.result?.text).toBe("server up");
+  });
+
+  test("subagents done and no further result: the held one ends the run after the grace", async () => {
+    const d = await drive("quiet", "do the thing", undefined, { heldGraceMs: 50 });
+    const waiting = await d.until((r) => r.status === "waiting", "the subagent's prompt");
+    d.ctx.answer(waiting.prompt?.id ?? "", { kind: "allow" });
+    const run = await d.until(d.done, "the end");
+    expect(run.status).toBe("done");
+    expect(run.result?.text).toBe("early");
+  });
+
+  test("a stop while a result is held for a subagent ends the run stopped, not done", async () => {
+    const d = await drive("async");
+    await d.until((r) => r.status === "waiting", "the subagent's prompt");
+    d.ctx.stopping = true;
+    d.ctx.denyAll();
+    d.driver.stop();
+    const run = await d.until(d.done, "the stop");
+    expect(run.status).toBe("stopped");
+    expect(run.result).toBeUndefined();
   });
 
   test("check() names a missing binary before a run exists", () => {

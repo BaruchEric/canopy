@@ -71,7 +71,7 @@
 **Interfaces:**
 - Produces: nothing new outside the driver. The behavior changes for every Claude run.
 
-- [ ] **Step 1: Add three modes to the fake**, with the real message shapes from spec P7.
+- [x] **Step 1: Add three modes to the fake**, with the real message shapes from spec P7.
 
 Document them in the header comment:
 - **async** starts a background Agent and sends a result while it runs. Then it sends a subagent permission request. After that is answered, it sends the task notification and the real result.
@@ -122,7 +122,7 @@ In `onResponse`, before the `req-1` check:
   }
 ```
 
-- [ ] **Step 2: Write the failing tests** in `claudedrive.test.ts`.
+- [x] **Step 2: Write the failing tests** in `claudedrive.test.ts`.
   - Widen `drive`'s `mode` union to include `"async" | "bgshell" | "quiet"`.
   - `drive` gains an optional fourth argument, `{ chat?: boolean; heldGraceMs?: number }`. `chat` overrides `chat`, `action` and `verb` for that run. `heldGraceMs` is passed to `new ClaudeDriver({ command, heldGraceMs })`.
 
@@ -162,12 +162,12 @@ test("subagents done and no further result: the held one ends the run after the 
 });
 ```
 
-- [ ] **Step 3: Run them and watch them fail**
+- [x] **Step 3: Run them and watch them fail**
 
 Run: `env -u TMUX SHELL=/bin/bash bun test src/core/claudedrive.test.ts`
 Expected: FAIL. The async job ends "done" with result "early" before the prompt. The quiet one never ends, so it times out.
 
-- [ ] **Step 4: Implement** in `ClaudeDriver`. `ClaudeOptions` gains `/** how long a held result waits once the subagents are done, for the turn they wake */ heldGraceMs?: number;`, with a default of `HELD_GRACE_MS = 60_000`.
+- [x] **Step 4: Implement** in `ClaudeDriver`. `ClaudeOptions` gains `/** how long a held result waits once the subagents are done, for the turn they wake */ heldGraceMs?: number;`, with a default of `HELD_GRACE_MS = 60_000`.
 
 ```ts
   /** live subagent task ids (spec P7): task_type local_agent only, since a
@@ -236,12 +236,12 @@ After the loop, before `const code = await proc.exited;`:
 
 Reset `agents`, `held` and `grace` at the top of `drive`. A chat's later turns reuse the same process, so do not reset them in `say`. `track` is a new private method; check that the name does not clash with `DriveCtx.track`, which is a different object, and rename it `noteBackground` if lint or readers would confuse them.
 
-- [ ] **Step 5: Run the tests and watch them pass**
+- [x] **Step 5: Run the tests and watch them pass**
 
 Run: `env -u TMUX SHELL=/bin/bash bun test src/core/claudedrive.test.ts src/core/runner.test.ts src/core/runner-drivers.test.ts`
 Expected: PASS, the old job, chat and die tests included.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add src/core/claudedrive.ts src/core/claudedrive.test.ts src/core/testdata/fake-claude.ts

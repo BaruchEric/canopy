@@ -26,6 +26,9 @@ const OUTPUT_CAP = 2_000;
 const STDERR_CAP = 2_000;
 /** how long a stage run's exit waits for the last of its stderr */
 const STDERR_WAIT = 1_000;
+/** how long a held result waits once the subagents are done, for the turn
+ *  their results wake */
+const HELD_GRACE_MS = 60_000;
 
 const errText = (err: unknown): string => (err instanceof Error ? err.message : String(err));
 
@@ -159,6 +162,8 @@ export interface ClaudeOptions {
   /** starts the process; Bun.spawn with every stream piped unless a test
    *  swaps it. A stage run's own spawn (`DriveCtx.spawn`) wins over it. */
   spawn?: RpcSpawn;
+  /** how long a held result waits once the subagents are done, for the turn they wake */
+  heldGraceMs?: number;
 }
 
 export class ClaudeDriver implements RunDriver {
@@ -172,6 +177,13 @@ export class ClaudeDriver implements RunDriver {
   private tools = new Map<string, RunStep>();
   /** the session id is taken from the first message that carries one */
   private sessionSeen = false;
+  /** live subagent task ids (spec P7): task_type local_agent only, since a
+   *  background shell may run for good (a dev server) and must not hold a
+   *  run open */
+  private agents = new Set<string>();
+  /** the last result that came while subagents ran */
+  private held: Record<string, unknown> | null = null;
+  private grace: ReturnType<typeof setTimeout> | null = null;
 
   constructor(private opts: ClaudeOptions = {}) {}
 
@@ -198,7 +210,34 @@ export class ClaudeDriver implements RunDriver {
     const proc = this.proc;
     if (!proc || !this.ctx) return;
     if (this.ctx.status() === "idle") proc.stdin.end();
-    else proc.kill();
+    else {
+      // a result held for a subagent is not the run's once it is stopped
+      this.held = null;
+      this.clearGrace();
+      proc.kill();
+    }
+  }
+
+  private clearGrace(): void {
+    if (this.grace) {
+      clearTimeout(this.grace);
+      this.grace = null;
+    }
+  }
+
+  /** What one system message says about background work. */
+  private noteBackground(m: Record<string, unknown>): void {
+    const sub = str(m, "subtype");
+    if (sub === "background_tasks_changed" && Array.isArray(m["tasks"])) {
+      // the CLI's own list is the truth: a lost notification cannot hold a run
+      this.agents = new Set(
+        m["tasks"]
+          .filter(isRecord)
+          .filter((t) => str(t, "task_type") === "local_agent")
+          .map((t) => str(t, "task_id")),
+      );
+    } else if (sub === "task_started" && str(m, "task_type") === "local_agent") this.agents.add(str(m, "task_id"));
+    else if (sub === "task_notification") this.agents.delete(str(m, "task_id"));
   }
 
   private async drive(message: string): Promise<void> {
@@ -207,6 +246,10 @@ export class ClaudeDriver implements RunDriver {
     const chat = ctx.chat;
     let stderr = "";
     let proc: RpcProc | null = null;
+    // a chat's later turns reuse this process, so only a new drive resets these
+    this.agents = new Set();
+    this.held = null;
+    this.clearGrace();
     try {
       const spawn = ctx.spawn ?? this.opts.spawn ?? bunSpawn;
       // the stage runner starts programs by bare name, out of its own PATH
@@ -237,12 +280,42 @@ export class ClaudeDriver implements RunDriver {
         } else if (m["type"] === "control_cancel_request") {
           ctx.withdraw(str(m, "request_id"));
         } else {
+          // any word from the CLI means the turn the subagents woke is running
+          this.clearGrace();
+          if (m["type"] === "system") this.noteBackground(m);
+          if (m["type"] === "result" && this.agents.size > 0) {
+            // spec P5/P6: the main thread paused for a subagent; closing
+            // stdin now would fail every later permission request
+            this.held = m;
+            continue;
+          }
+          if (m["type"] === "result") this.held = null;
           this.apply(m);
           // Stdin stays open while the turn runs, for the control replies.
           // The result ends the turn; closing stdin lets the CLI exit. A chat
           // keeps it open: the next message continues the same session.
           if (m["type"] === "result" && !chat) proc.stdin.end();
+          // subagents done, a result held: the CLI normally starts a turn
+          // with their results; if it does not, the held result is the end
+          if (this.held && this.agents.size === 0 && !this.grace) {
+            const held = this.held;
+            const running = proc;
+            this.grace = setTimeout(() => {
+              this.grace = null;
+              if (this.held !== held) return;
+              this.held = null;
+              this.apply(held);
+              if (!chat) running.stdin.end();
+            }, this.opts.heldGraceMs ?? HELD_GRACE_MS);
+          }
         }
+      }
+      this.clearGrace();
+      // the process ended with a result still held: it is the run's, not a
+      // failure for want of one
+      if (this.held) {
+        this.apply(this.held);
+        this.held = null;
       }
       const code = await proc.exited;
       // Through the stage runner, stderr carries the runner's own word on a
