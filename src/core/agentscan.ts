@@ -149,7 +149,10 @@ export function pickAgents(procs: readonly Proc[]): (Proc & { harness: Harness }
 }
 
 /** The CPU time a process and everything under it has used, in ms, or
- *  undefined when the table did not read the process's own. */
+ *  undefined when the table did not read the process's own. It stops at
+ *  Claude's helpers (`isHelper`): a session that started the background
+ *  daemon is its parent, and the sessions the daemon hosts count on their
+ *  own, so the daemon's tree would make the first read as busy as all. */
 export function treeCpu(procs: readonly Proc[], pid: number): number | undefined {
   const kids = new Map<number, Proc[]>();
   let self: Proc | undefined;
@@ -169,7 +172,7 @@ export function treeCpu(procs: readonly Proc[], pid: number): number | undefined
     if (seen.has(p.pid)) continue;
     seen.add(p.pid);
     total += p.cpuMs ?? 0;
-    queue.push(...(kids.get(p.pid) ?? []));
+    for (const k of kids.get(p.pid) ?? []) if (!isHelper(k.argv)) queue.push(k);
   }
   return total;
 }

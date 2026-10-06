@@ -190,6 +190,18 @@ describe("working or idle, off the CPU", () => {
     expect(treeCpu(table, 99)).toBeUndefined();
   });
 
+  test("a session's tree stops at the daemon it started, whose sessions count on their own", () => {
+    const table: Proc[] = [
+      { pid: 20, ppid: 1, argv: ["claude"], cpuMs: 1_000 },
+      { pid: 21, ppid: 20, argv: ["node", "mcp.js"], cpuMs: 50 },
+      { pid: 22, ppid: 20, argv: ["/x/claude", "daemon", "run"], cpuMs: 300 },
+      { pid: 23, ppid: 22, argv: ["/x/claude", "--bg-pty-host", "/tmp/a.sock"], cpuMs: 40 },
+      { pid: 24, ppid: 23, argv: ["/x/versions/2.1.290", "--session-id", "s"], cpuMs: 9_000 },
+    ];
+    expect(treeCpu(table, 20)).toBe(1_050);
+    expect(treeCpu(table, 24)).toBe(9_000);
+  });
+
   test("busy between two scans is working; a first scan or a reused pid is idle; no reading, no state", () => {
     const at = (pid: number, cpuMs: number | undefined, startedAt = 5): AgentProc => ({
       pid, ppid: 1, harness: "claude", cwd: "", startedAt, ...(cpuMs !== undefined ? { cpuMs } : {}),
