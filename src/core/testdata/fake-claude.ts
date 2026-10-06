@@ -22,6 +22,16 @@
  *    quiet like async, but after the notification it sends nothing more
  *    woke  like async, but the turn the subagent's end wakes asks to run
  *          `bun test` from the main thread before its real result
+ *    lost  like async, but the subagent's end comes only as an empty
+ *          background_tasks_changed, its task_notification lost
+ *    notifyonly like async, but the subagent's end comes only as its
+ *          task_notification, with no background_tasks_changed after it
+ *    crash like async up to the early result, then writes "subagent lost"
+ *          to stderr and exits 7 while the subagent still runs
+ *    two   starts two background Agents; the first ends and the turn it
+ *          wakes sends a second result while the other still runs, which
+ *          then asks a permission; once answered it ends and the real
+ *          result follows
  *
  *  The background modes use the message shapes a probe of the real CLI
  *  showed (spec P5 and P7): task_started, task_notification and
@@ -45,6 +55,8 @@ record({ argv: process.argv.slice(2) });
 out({ type: "system", subtype: "init", session_id: "sess-1", cwd: process.cwd() });
 
 let turns = 0;
+/** the modes that start one background Agent and send a result while it runs */
+const ASYNC = new Set(["async", "quiet", "woke", "lost", "notifyonly", "crash"]);
 const bash = (id: string, command: string) =>
   out({
     type: "control_request",
@@ -63,13 +75,36 @@ function onUser(): void {
     out({ type: "result", subtype: "success", is_error: false, result: `reply ${turns}`, num_turns: 1, total_cost_usd: 0.01, duration_ms: 3, session_id: "sess-1" });
     return;
   }
-  if (mode === "async" || mode === "quiet" || mode === "woke") {
+  if (mode === "two") {
+    out({ type: "assistant", session_id: "sess-1", message: { role: "assistant", content: [
+      { type: "tool_use", id: "ag1", name: "Agent", input: { description: "read math.ts", subagent_type: "Explore", prompt: "read it" } },
+      { type: "tool_use", id: "ag2", name: "Agent", input: { description: "read log", subagent_type: "Explore", prompt: "read the log" } },
+    ] } });
+    tasks([{ task_id: "t-ag", task_type: "local_agent" }, { task_id: "t-ag2", task_type: "local_agent" }]);
+    sys("task_started", { task_id: "t-ag", tool_use_id: "ag1", task_type: "local_agent", is_backgrounded: true });
+    sys("task_started", { task_id: "t-ag2", tool_use_id: "ag2", task_type: "local_agent", is_backgrounded: true });
+    out({ type: "result", subtype: "success", is_error: false, result: "early", num_turns: 1, total_cost_usd: 0.01, duration_ms: 1, session_id: "sess-1" });
+    // the first subagent ends; the turn it wakes ends while the second runs on
+    sys("task_notification", { task_id: "t-ag", tool_use_id: "ag1", status: "completed" });
+    tasks([{ task_id: "t-ag2", task_type: "local_agent" }]);
+    sys("init", { cwd: process.cwd() });
+    out({ type: "assistant", session_id: "sess-1", message: { role: "assistant", content: [{ type: "text", text: "One back." }] } });
+    out({ type: "result", subtype: "success", is_error: false, result: "middle", num_turns: 2, total_cost_usd: 0.02, duration_ms: 2, session_id: "sess-1" });
+    out({ type: "assistant", session_id: "sess-1", parent_tool_use_id: "ag2", message: { role: "assistant", content: [{ type: "tool_use", id: "sub1", name: "Bash", input: { command: "git log" } }] } });
+    out({ type: "control_request", request_id: "req-a", request: { subtype: "can_use_tool", tool_name: "Bash", input: { command: "git log" }, tool_use_id: "sub1" } });
+    return;
+  }
+  if (ASYNC.has(mode)) {
     out({ type: "assistant", session_id: "sess-1", message: { role: "assistant", content: [{ type: "tool_use", id: "ag1", name: "Agent", input: { description: "read math.ts", subagent_type: "Explore", prompt: "read it" } }] } });
     tasks([{ task_id: "t-ag", task_type: "local_agent" }]);
     sys("task_started", { task_id: "t-ag", tool_use_id: "ag1", task_type: "local_agent", is_backgrounded: true });
     out({ type: "user", session_id: "sess-1", message: { role: "user", content: [{ type: "tool_result", tool_use_id: "ag1", content: [{ type: "text", text: "Async agent launched successfully." }], is_error: false }] } });
     // the early result (spec P5): the main thread's turn ended, the subagent's did not
     out({ type: "result", subtype: "success", is_error: false, result: "early", num_turns: 1, total_cost_usd: 0.01, duration_ms: 1, session_id: "sess-1" });
+    if (mode === "crash") {
+      process.stderr.write("subagent lost\n");
+      process.exit(7);
+    }
     out({ type: "assistant", session_id: "sess-1", parent_tool_use_id: "ag1", message: { role: "assistant", content: [{ type: "tool_use", id: "sub1", name: "Bash", input: { command: "git log" } }] } });
     out({ type: "control_request", request_id: "req-a", request: { subtype: "can_use_tool", tool_name: "Bash", input: { command: "git log" }, tool_use_id: "sub1" } });
     return;
@@ -104,10 +139,11 @@ function onResponse(m: Record<string, unknown>): void {
     out({ type: "result", subtype: "success", is_error: false, result: "final", num_turns: 3, total_cost_usd: 0.05, duration_ms: 9, session_id: "sess-1" });
     return;
   }
-  if ((mode === "async" || mode === "quiet" || mode === "woke") && response["request_id"] === "req-a") {
-    out({ type: "user", session_id: "sess-1", parent_tool_use_id: "ag1", message: { role: "user", content: [{ type: "tool_result", tool_use_id: "sub1", content: [{ type: "text", text: "abc123 first" }], is_error: false }] } });
-    sys("task_notification", { task_id: "t-ag", tool_use_id: "ag1", status: "completed" });
-    tasks([]);
+  if ((ASYNC.has(mode) || mode === "two") && response["request_id"] === "req-a") {
+    const two = mode === "two";
+    out({ type: "user", session_id: "sess-1", parent_tool_use_id: two ? "ag2" : "ag1", message: { role: "user", content: [{ type: "tool_result", tool_use_id: "sub1", content: [{ type: "text", text: "abc123 first" }], is_error: false }] } });
+    if (mode !== "lost") sys("task_notification", { task_id: two ? "t-ag2" : "t-ag", tool_use_id: two ? "ag2" : "ag1", status: "completed" });
+    if (mode !== "notifyonly") tasks([]);
     if (mode === "quiet") return;
     if (mode === "woke") {
       // the fresh init and the main thread's own turn (spec P5)

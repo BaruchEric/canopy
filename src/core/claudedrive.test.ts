@@ -21,7 +21,7 @@ afterAll(async () => {
 });
 
 async function drive(
-  mode: "job" | "chat" | "die" | "async" | "bgshell" | "quiet" | "woke",
+  mode: "job" | "chat" | "die" | "async" | "bgshell" | "quiet" | "woke" | "lost" | "notifyonly" | "crash" | "two",
   message = "do the thing",
   unattended?: string,
   opts: { chat?: boolean; heldGraceMs?: number } = {},
@@ -222,6 +222,36 @@ describe("a Claude run through the driver", () => {
     expect(d.run.status).toBe("waiting");
     expect(d.run.result).toBeUndefined();
     d.ctx.answer(d.run.prompt?.id ?? "", { kind: "allow" });
+    const run = await d.until(d.done, "the end");
+    expect(run.status).toBe("done");
+    expect(run.result?.text).toBe("final");
+  });
+
+  test("a CLI that dies while a result is held fails the run: the early result is not a success", async () => {
+    const d = await drive("crash");
+    const run = await d.until(d.done, "the end");
+    expect(run.status).toBe("failed");
+    expect(run.error).toBe("Claude Code exited (code 7) while a subagent ran: subagent lost");
+  });
+
+  for (const mode of ["lost", "notifyonly"] as const) {
+    test(`a subagent whose end says only ${mode === "lost" ? "the task list" : "its notification"} still lets the real result end the run`, async () => {
+      const d = await drive(mode);
+      const waiting = await d.until((r) => r.status === "waiting", "the subagent's prompt");
+      expect(waiting.result).toBeUndefined();
+      d.ctx.answer(waiting.prompt?.id ?? "", { kind: "allow" });
+      const run = await d.until(d.done, "the end");
+      expect(run.status).toBe("done");
+      expect(run.result?.text).toBe("final");
+    });
+  }
+
+  test("two subagents: a result while the second still runs is held too", async () => {
+    const d = await drive("two");
+    const waiting = await d.until((r) => r.status === "waiting", "the second subagent's prompt");
+    expect(waiting.result).toBeUndefined();
+    expect(waiting.steps.some((s) => s.text === "One back.")).toBe(true);
+    d.ctx.answer(waiting.prompt?.id ?? "", { kind: "allow" });
     const run = await d.until(d.done, "the end");
     expect(run.status).toBe("done");
     expect(run.result?.text).toBe("final");

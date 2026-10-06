@@ -332,21 +332,29 @@ export class ClaudeDriver implements RunDriver {
         }
       }
       this.clearGrace();
-      // the process ended with a result still held: it is the run's, not a
-      // failure for want of one
-      if (this.held) {
-        this.apply(this.held);
-        this.held = null;
-      }
+      const held = this.held;
+      this.held = null;
       const code = await proc.exited;
       // Through the stage runner, stderr carries the runner's own word on a
       // failure (that it is not answering), which a flow parks on: give it a
-      // moment to land. A local process's run keeps its old timing.
-      if (ctx.spawn) await Promise.race([stderrRead, Bun.sleep(STDERR_WAIT)]);
+      // moment to land. A local process's run keeps its old timing, unless a
+      // held result needs the tail to say why the process died.
+      if (ctx.spawn || (held && code !== 0)) await Promise.race([stderrRead, Bun.sleep(STDERR_WAIT)]);
+      // The process ended with a result still held. A clean exit makes it
+      // the run's, not a failure for want of one; a crash while a subagent
+      // ran is a failure, whatever the early result said. A stop dropped it.
+      if (held) {
+        const tail = stderr.trim();
+        this.apply(held, code === 0 ? null : `${this.label} exited (code ${code}) while a subagent ran${tail ? `: ${tail}` : ""}`);
+      }
       ctx.exited({ code, stderr });
     } catch (err) {
       ctx.exited({ code: null, stderr, error: errText(err) });
     } finally {
+      // a throw must not leave the grace timer to apply a result after the
+      // exit, onto a run that already ended
+      this.clearGrace();
+      this.held = null;
       if (this.proc === proc) this.proc = null;
     }
   }
@@ -410,7 +418,9 @@ export class ClaudeDriver implements RunDriver {
     };
   }
 
-  private apply(m: Record<string, unknown>): void {
+  /** Folds one message into the run. `failure`, for a result only, is the
+   *  problem that overrides what the result itself says. */
+  private apply(m: Record<string, unknown>, failure: string | null = null): void {
     const ctx = this.ctx;
     if (!ctx) return;
     const type = str(m, "type");
@@ -468,7 +478,7 @@ export class ClaudeDriver implements RunDriver {
       // conversation, and a reply that failed is said in the timeline.
       ctx.result(
         { text: text.trim(), costUsd: num(m, "total_cost_usd"), durationMs: num(m, "duration_ms"), turns },
-        ok ? null : problem,
+        failure ?? (ok ? null : problem),
       );
     }
   }
