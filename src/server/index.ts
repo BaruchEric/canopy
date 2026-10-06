@@ -152,7 +152,7 @@ import {
   type RunAction,
   type RunAnswer,
   type Run,
-  type RunScope,
+  type WorkspaceScope,
   type ScanResult,
   type ServerEvent,
   type ShellPlace,
@@ -661,21 +661,25 @@ async function needHarness(state: ServerState, h: Harness, path: string): Promis
 }
 
 /** Starts a built-in action's run on a repo, after the checks every run
- *  route makes: the repo is on this machine, no workflow or other run has
- *  it, and its route's harness is installed here. A workspace run (`scope`)
- *  is Claude Code's alone for now, since its other folders go in as
- *  --add-dir. */
+ *  route makes: the repo is a folder on this machine (not on another host,
+ *  not a forge listing), no workflow or other run has it, and its route's
+ *  harness is installed here. A workspace run (`scope`) is Claude Code's
+ *  alone for now, since its other folders go in as --add-dir. */
 async function startRepoRun(
   state: ServerState,
   repo: Repo,
   action: RunAction,
   note: string,
   client: unknown,
-  scope?: RunScope,
+  scope?: WorkspaceScope,
 ): Promise<Run> {
   // The runner spawns the agent here, at the repo's path; there is no
   // agent to spawn at a folder on another host.
   if (repo.host) throw new HttpError(400, `agent runs only work on this machine; ${repo.name} is on ${repo.host}`);
+  // A forge repo is a listing with a web address for a path. The repo
+  // route's own gate stops it first; a workspace whose primary was put
+  // there by hand reaches here.
+  if (repo.forge) throw new HttpError(400, `${repo.name} is on the forge; an agent runs in a folder on this machine`);
   // A workflow owns the repo while it runs, gate included: a second
   // agent here would make the flow's next step throw and die.
   if (state.flows.activeFor(repo.id)) throw new HttpError(409, "a workflow is running here");
@@ -2458,7 +2462,12 @@ async function handleApi(
     if (typeof b.name !== "string") return json({ error: "missing workspace name" }, 400);
     const look: { primary?: string | null; color?: WsColor | null } = {};
     if (b.primary === null) look.primary = null;
-    else if (typeof b.primary === "string") look.primary = idToPath(b.primary);
+    else if (typeof b.primary === "string") {
+      // a workspace run starts in its primary, and runs start only here
+      const repo = repoById(state, b.primary);
+      if (repo.host) throw new HttpError(400, `${repo.name} is on ${repo.host}; a workspace run starts in a primary on this machine`);
+      look.primary = idToPath(b.primary);
+    }
     else if (b.primary !== undefined) return json({ error: "a primary is a repo id or null" }, 400);
     if (b.color === null) look.color = null;
     else if (isWsColor(b.color)) look.color = b.color;
@@ -2478,7 +2487,9 @@ async function handleApi(
   // One run on the primary, the other local members added as folders. Every
   // local member must be free: a run or a workflow going on any of them
   // refuses it. While it runs only the primary is held, the way every run
-  // holds its repo.
+  // holds its repo. A seed's agents run only through the incubator, behind
+  // its git guards and in its stage, so a seed primary refuses the run and a
+  // seed member is left out like one on another host.
   if (path === "/api/workspaces/run" && method === "POST") {
     const b = await objectBody(req);
     if (typeof b.name !== "string") return json({ error: "missing workspace name" }, 400);
@@ -2489,14 +2500,15 @@ async function handleApi(
     if (!primaryPath) return json({ error: "the workspace has no repos" }, 400);
     const primary = state.result.repos.find((r) => r.path === primaryPath);
     if (!primary) return json({ error: `the primary ${primaryPath} is not among the scanned repos` }, 404);
-    const { others, skipped } = splitMembers(ws, primaryPath, state.result.repos);
+    if (isSeedPath(state.root, primary.path)) throw new HttpError(400, SEED_AGENT_REFUSAL);
+    const { others, skipped } = splitMembers(ws, primaryPath, state.result.repos, (r) => isSeedPath(state.root, r.path));
     for (const r of others) {
       const busy = state.runner.activeFor(r.id);
       if (busy) throw new HttpError(409, `${r.name} already has a ${busy.verb} run going`);
       if (state.flows.activeFor(r.id)) throw new HttpError(409, `a workflow is running in ${r.name}`);
     }
     const note = typeof b.note === "string" ? b.note : "";
-    const scope: RunScope = { workspace: ws.name, primary: primary.path, others: others.map((r) => r.path), skipped };
+    const scope: WorkspaceScope = { workspace: ws.name, primary: primary.path, others: others.map((r) => r.path), skipped };
     return json(await startRepoRun(state, primary, b.action, note, b.client, scope), 201);
   }
   if (path === "/api/workspaces/open" && method === "POST") {

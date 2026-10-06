@@ -3,14 +3,17 @@
  * primary (by repo id) and the color without touching the members, and
  * POST /api/workspaces/run starts one run on the primary with the other
  * local members added as folders. Any local member with a run or a flow
- * going refuses the run, a member the run cannot open is left out in
- * words, and a Codex route is refused: workspace runs are Claude Code's.
+ * going refuses the run, a member the run cannot open (an incubator seed
+ * among them) is left out in words, and a Codex route, a seed primary and a
+ * forge primary are refused. A member on another host cannot be made the
+ * primary.
  */
 import { afterAll, beforeAll, expect, test } from "bun:test";
-import { mkdtemp, rm } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { DriveCtx, DriveSpec, RunDriver } from "../core/driver";
+import { SEED_AGENT_REFUSAL } from "../core/sprout";
 import { upsertWorkspace } from "../core/store";
 import { isRunActive, type Harness, type Repo, type Run, type Workspace } from "../core/types";
 import { startServer } from "./index";
@@ -42,6 +45,7 @@ let server: { port: number; stop: () => void };
 /** the members' paths as the server holds them (realpath'd) */
 let api = "";
 let analysis = "";
+let seed = "";
 
 const url = (p: string) => `http://127.0.0.1:${server.port}${p}`;
 const call = (method: string, p: string, body: unknown) => fetch(url(p), { method, body: JSON.stringify(body) });
@@ -70,7 +74,7 @@ beforeAll(async () => {
   previous = process.env["CANOPY_CONFIG_DIR"];
   process.env["CANOPY_CONFIG_DIR"] = join(scratch, "config");
   const root = join(scratch, "root");
-  for (const name of ["api", "analysis", "other"]) {
+  for (const name of ["api", "analysis", "other", "_incubator/sprout"]) {
     await Bun.$`mkdir -p ${join(root, name)} && git -C ${join(root, name)} init -q`.quiet();
   }
   server = await startServer({ root, port: 0, chan: null, harnesses: ["claude"], runner: { driver: (h) => new HoldingDriver(h) } });
@@ -82,6 +86,7 @@ beforeAll(async () => {
   };
   api = pathOf("api");
   analysis = pathOf("analysis");
+  seed = pathOf("_incubator/sprout");
   expect((await call("POST", "/api/workspaces", { name: "bike", repos: ["api", "analysis"] })).status).toBe(200);
 });
 
@@ -171,5 +176,84 @@ test("a workspace run on a Codex route is refused", async () => {
     expect(await errorOf(r)).toBe("workspace runs need Claude Code");
   } finally {
     expect((await call("POST", "/api/agents/role", { role: "job", pick: null })).status).toBe(200);
+  }
+});
+
+test("an incubator seed among the members is left out in words, not added as a folder", async () => {
+  await upsertWorkspace("seeded", [analysis, seed, api]);
+  const before = specs.length;
+  const r = await call("POST", "/api/workspaces/run", { name: "seeded", action: "ask", note: "x" });
+  expect(r.status).toBe(201);
+  const run = (await r.json()) as Run;
+  expect(specs.length).toBe(before + 1);
+  expect(lastSpec()?.addDirs).toEqual([api]);
+  expect(run.steps.filter((s) => s.kind === "note").map((s) => s.text)).toEqual([`left out of this run: ${seed} (an incubator seed)`]);
+  await stopRun(run.id);
+});
+
+test("a seed as the primary refuses the workspace run before anything starts", async () => {
+  await upsertWorkspace("sprouting", [seed, api]);
+  const before = specs.length;
+  const r = await call("POST", "/api/workspaces/run", { name: "sprouting", action: "ask", note: "x" });
+  expect(r.status).toBe(400);
+  expect(await errorOf(r)).toBe(SEED_AGENT_REFUSAL);
+  expect(specs.length).toBe(before);
+  const runs = (await (await fetch(url("/api/runs"))).json()) as Run[];
+  for (const run of runs.filter(isRunActive)) await stopRun(run.id);
+});
+
+test("a forge repo as the primary, from a hand-edited config, refuses the run", async () => {
+  const forge = Bun.serve({
+    port: 0,
+    fetch: () =>
+      Response.json([{ name: "lamp", full_name: "eric/lamp", html_url: "https://forge.test/eric/lamp", clone_url: "https://forge.test/eric/lamp.git", default_branch: "main" }]),
+  });
+  try {
+    const added = await call("POST", "/api/sources", { kind: "forgejo", url: `http://127.0.0.1:${forge.port}` });
+    expect(added.status).toBe(201);
+    const tree = (await added.json()) as { repos: Repo[] };
+    const lamp = tree.repos.find((r) => r.forge && r.name === "lamp");
+    if (!lamp) throw new Error("no forge repo in the scan");
+    await upsertWorkspace("forged", [lamp.path, api]);
+    const before = specs.length;
+    const r = await call("POST", "/api/workspaces/run", { name: "forged", action: "ask", note: "x" });
+    expect(r.status).toBe(400);
+    expect(await errorOf(r)).toBe("lamp is on the forge; an agent runs in a folder on this machine");
+    expect(specs.length).toBe(before);
+    expect((await call("DELETE", `/api/sources?id=${encodeURIComponent(lamp.source)}`, null)).status).toBe(200);
+  } finally {
+    const runs = (await (await fetch(url("/api/runs"))).json()) as Run[];
+    for (const run of runs.filter(isRunActive)) await stopRun(run.id);
+    forge.stop(true);
+  }
+});
+
+test("a member on another host cannot be made the primary", async () => {
+  // a stand-in ssh that runs the remote command here, so a folder of this
+  // machine scans as one on the host "far"
+  const bin = join(scratch, "bin");
+  await mkdir(bin, { recursive: true });
+  await writeFile(join(bin, "ssh"), `#!/bin/sh\nwhile [ "$1" != "--" ]; do shift; done\nshift 2\nexec /bin/sh -c "$1"\n`);
+  await chmod(join(bin, "ssh"), 0o755);
+  const far = join(scratch, "far");
+  await Bun.$`mkdir -p ${join(far, "lamp")} && git -C ${join(far, "lamp")} init -q`.quiet();
+  const path = process.env["PATH"];
+  process.env["PATH"] = `${bin}:${path ?? ""}`;
+  try {
+    const added = await call("POST", "/api/sources", { kind: "ssh", host: "far", path: far });
+    expect(added.status).toBe(201);
+    const tree = (await added.json()) as { repos: Repo[] };
+    const lamp = tree.repos.find((r) => r.host === "far" && r.name === "lamp");
+    if (!lamp) throw new Error("no remote repo in the scan");
+    expect((await call("POST", "/api/workspaces", { name: "wide", repos: ["api", lamp.id] })).status).toBe(200);
+    const r = await call("PATCH", "/api/workspaces", { name: "wide", primary: lamp.id });
+    expect(r.status).toBe(400);
+    expect(await errorOf(r)).toBe("lamp is on far; a workspace run starts in a primary on this machine");
+    const ws = ((await (await fetch(url("/api/workspaces"))).json()) as Workspace[]).find((w) => w.name === "wide");
+    expect(ws?.primary).toBeUndefined();
+    expect((await call("DELETE", `/api/sources?id=${encodeURIComponent(lamp.source)}`, null)).status).toBe(200);
+  } finally {
+    if (path === undefined) delete process.env["PATH"];
+    else process.env["PATH"] = path;
   }
 });

@@ -930,7 +930,7 @@ export interface RunResult {
 
 /** A run that spans a workspace: it works in the primary and may read and
  *  change the other local members. */
-export interface RunScope {
+export interface WorkspaceScope {
   workspace: string;
   /** absolute path, the run's cwd */
   primary: string;

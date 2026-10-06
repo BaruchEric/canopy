@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
-import { ACTIONS, repoFacts } from "../../../src/core/actions";
+import { ACTIONS, planWords, repoFacts } from "../../../src/core/actions";
 import { describeAgent, isDefaultAgent } from "../../../src/core/agent";
 import { describeLaunch, isDefaultLaunch } from "../../../src/core/launch";
 import { agentFor, connOf, idText, launchFor, routesOf, tasksOf, useStore, type Sheet } from "../store";
@@ -169,6 +169,7 @@ function Plan({ repo, action, workspace }: { repo: Repo; action: RunAction; work
   const startRun = useStore((s) => s.startRun);
   const startWsRun = useStore((s) => s.startWsRun);
   const spec = ACTIONS[action];
+  const words = planWords(action, workspace);
   const agent = useStore((s) => agentFor(s, repo, spec.mode === "chat" ? "chat" : "job"));
   const name = AGENT_NAME[agent.harness];
   const [note, setNote] = useState("");
@@ -217,11 +218,11 @@ function Plan({ repo, action, workspace }: { repo: Repo; action: RunAction; work
             </span>
           )}
         </div>
-        <p className="blurb">{spec.blurb}</p>
+        <p className="blurb">{words.blurb}</p>
         <textarea
           className="plan-note"
           rows={spec.noteRequired ? 5 : 3}
-          placeholder={spec.notePlaceholder}
+          placeholder={words.notePlaceholder}
           value={note}
           onChange={(e) => setNote(e.target.value)}
           onKeyDown={(e) => {

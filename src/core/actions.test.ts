@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { ACTIONS, buildPrompt, checkWhen, describeTool, repoFacts, splitMembers, toolDetail } from "./actions";
+import { ACTIONS, buildPrompt, checkWhen, describeTool, planWords, repoFacts, splitMembers, toolDetail } from "./actions";
 import { RUN_ACTIONS, statusFingerprint, type Repo, type RepoStatus } from "./types";
 
 function repo(over: Partial<Repo["status"] & { error: string }> = {}): Repo {
@@ -61,6 +61,26 @@ test("a workspace's members split into local folders to add and the rest left ou
     "/w/gone (not found by the last scan)",
   ]);
   expect(splitMembers({ name: "solo", repos: ["/w/api"] }, "/w/api", repos)).toEqual({ others: [], skipped: [] });
+});
+
+test("a member the caller calls a seed is left out in words, not added", () => {
+  const at = (id: string, path: string): Repo => ({ ...repo(), id, name: id, path });
+  const repos = [at("api", "/w/api"), at("_incubator/sprout", "/w/_incubator/sprout"), at("analysis", "/w/analysis")];
+  const ws = { name: "bike", repos: ["/w/analysis", "/w/_incubator/sprout", "/w/api"] };
+  const seed = (r: Repo) => r.path.includes("/_incubator/");
+  const { others, skipped } = splitMembers(ws, "/w/analysis", repos, seed);
+  expect(others.map((r) => r.path)).toEqual(["/w/api"]);
+  expect(skipped).toEqual(["/w/_incubator/sprout (an incubator seed)"]);
+});
+
+test("the plan sheet's words name the workspace on a workspace run and stay as they were otherwise", () => {
+  for (const action of ["ask", "chat"] as const) {
+    expect(planWords(action)).toEqual({ blurb: ACTIONS[action].blurb, notePlaceholder: ACTIONS[action].notePlaceholder });
+    const ws = planWords(action, "bike");
+    expect(ws.blurb).toContain("workspace bike");
+    expect(ws.notePlaceholder).toContain("workspace bike");
+    expect(`${ws.blurb} ${ws.notePlaceholder}`).not.toContain("this repo");
+  }
 });
 
 describe("checkWhen", () => {

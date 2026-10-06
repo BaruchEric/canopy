@@ -4,7 +4,7 @@
  *  Codex's items. Browser-safe: the UI imports this for labels and
  *  preconditions, the runner for prompts and titles. */
 
-import type { FlowStepName, Repo, RunAction, RunScope, WorkflowWhen, Workspace } from "./types";
+import type { FlowStepName, Repo, RunAction, WorkflowWhen, Workspace, WorkspaceScope } from "./types";
 
 export interface ActionSpec {
   /** menu label */
@@ -125,6 +125,26 @@ export const ACTIONS: Record<RunAction, ActionSpec> = {
   },
 };
 
+/** The plan sheet's words for a built-in action. A workspace run speaks of
+ *  the workspace, since the agent works across its folders, not in one repo. */
+export function planWords(action: RunAction, workspace?: string): { blurb: string; notePlaceholder: string } {
+  const spec = ACTIONS[action];
+  if (!workspace) return { blurb: spec.blurb, notePlaceholder: spec.notePlaceholder };
+  const steady = "It asks before running anything beyond reading files and git status.";
+  switch (action) {
+    case "ask":
+      return {
+        blurb: `The agent opens in workspace ${workspace}'s primary with your note as the task, and can work in its other folders too. ${steady}`,
+        notePlaceholder: `what should the agent do in workspace ${workspace}?`,
+      };
+    case "chat":
+      return {
+        blurb: `A conversation with the agent across workspace ${workspace}'s folders, turn by turn, in canopy. ${steady}`,
+        notePlaceholder: `say something about workspace ${workspace}`,
+      };
+  }
+}
+
 /** Whether the action makes sense for the repo right now. `why` is shown as
  *  the disabled item's tooltip, so it names the missing thing, not a rule. */
 export type RunCheck = { ok: true } | { ok: false; why: string };
@@ -161,9 +181,16 @@ export function repoFacts(repo: Repo): string[] {
 
 /** A workspace's members around its primary, for a run there: the local
  *  repos the run adds as folders, and in words the members it cannot open
- *  here (on another host, on the forge, or missing from the last scan),
- *  which it leaves out rather than refuses. */
-export function splitMembers(ws: Workspace, primary: string, repos: readonly Repo[]): { others: Repo[]; skipped: string[] } {
+ *  here (on another host, on the forge, missing from the last scan, or an
+ *  incubator seed by the caller's `isSeed`), which it leaves out rather than
+ *  refuses. A seed's agents run only through the incubator, so a seed never
+ *  goes in as a folder of an ordinary run. */
+export function splitMembers(
+  ws: Workspace,
+  primary: string,
+  repos: readonly Repo[],
+  isSeed: (repo: Repo) => boolean = () => false,
+): { others: Repo[]; skipped: string[] } {
   const others: Repo[] = [];
   const skipped: string[] = [];
   for (const p of ws.repos) {
@@ -172,6 +199,7 @@ export function splitMembers(ws: Workspace, primary: string, repos: readonly Rep
     if (!r) skipped.push(`${p} (not found by the last scan)`);
     else if (r.host) skipped.push(`${p} (on ${r.host})`);
     else if (r.forge) skipped.push(`${p} (on the forge)`);
+    else if (isSeed(r)) skipped.push(`${p} (an incubator seed)`);
     else others.push(r);
   }
   return { others, skipped };
@@ -181,7 +209,7 @@ export function splitMembers(ws: Workspace, primary: string, repos: readonly Rep
  *  read, so the agent starts with the same picture the card shows. The
  *  ground rules name Claude's AskUserQuestion; a Codex run is told its own
  *  tool for the same thing (codexrun.ts). */
-export function buildPrompt(repo: Repo, spec: ActionSpec, note: string, scope?: RunScope): string {
+export function buildPrompt(repo: Repo, spec: ActionSpec, note: string, scope?: WorkspaceScope): string {
   const facts = repoFacts(repo);
   const rules = scope ? WS_RULES : RULES;
   const head = (

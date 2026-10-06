@@ -30,7 +30,7 @@ import {
   type RememberedRule,
   type Run,
   type RunAnswer,
-  type RunScope as WorkspaceScope,
+  type WorkspaceScope,
 } from "./types";
 
 export { claudeBinary, cliArgs } from "./claudedrive";
