@@ -134,11 +134,225 @@ function span(ms: number): string {
   return `${Math.floor(s / 86400)}d`;
 }
 
-/** how long: "12m" running, "ended 3h ago", "lost 5m ago" (since its last beat) */
+/** a run's length as a person says it, to the minute: "45s", "12m",
+ *  "1h 12m", "2d 3h" */
+export function durationWord(ms: number): string {
+  const s = Math.max(0, Math.round(ms / 1000));
+  if (s < 60) return `${s}s`;
+  const m = Math.floor(s / 60);
+  if (m < 60) return `${m}m`;
+  const h = Math.floor(m / 60);
+  if (h < 24) return m % 60 ? `${h}h ${m % 60}m` : `${h}h`;
+  const d = Math.floor(h / 24);
+  return h % 24 ? `${d}d ${h % 24}h` : `${d}d`;
+}
+
+/** when a card's run stopped: its end, its last beat once lost, else now */
+export const runEnd = (c: AgentCard, now: number): number => (c.state === "ended" ? (c.endedAt ?? c.seenAt) : c.state === "lost" ? c.seenAt : now);
+
+/** how long it has run, or ran */
+export const runMs = (c: AgentCard, now: number): number => Math.max(0, runEnd(c, now) - c.startedAt);
+
+/** how long: "1h 12m" running, "ran 42m, ended 3h ago", "ran 2h, lost 5m
+ *  ago" (since its last beat) */
 export function ageWord(c: AgentCard, now: number): string {
-  if (c.state === "ended") return `ended ${span(now - (c.endedAt ?? c.seenAt))} ago`;
-  if (c.state === "lost") return `lost ${span(now - c.seenAt)} ago`;
-  return span(now - c.startedAt);
+  if (c.state === "ended") return `ran ${durationWord(runMs(c, now))}, ended ${span(now - (c.endedAt ?? c.seenAt))} ago`;
+  if (c.state === "lost") return `ran ${durationWord(runMs(c, now))}, lost ${span(now - c.seenAt)} ago`;
+  return durationWord(runMs(c, now));
+}
+
+/** local midnight of the day `now` is in */
+export function dayStartOf(now: number): number {
+  const d = new Date(now);
+  d.setHours(0, 0, 0, 0);
+  return d.getTime();
+}
+
+/** the part of a card's run since `dayStart` */
+export const todayMs = (c: AgentCard, now: number, dayStart: number): number => Math.max(0, runEnd(c, now) - Math.max(c.startedAt, dayStart));
+
+/** The registry tab's summary: the live agents by state, the machines and
+ *  repos they are on, the day's starts and ends, every agent's time since
+ *  midnight added up, the longest running and the harnesses. */
+export interface RegistrySummary {
+  live: number;
+  working: number;
+  waiting: number;
+  idle: number;
+  machines: number;
+  repos: number;
+  startedToday: number;
+  endedToday: number;
+  lostToday: number;
+  todayMs: number;
+  longest: AgentCard | null;
+  harnesses: { harness: AgentCard["harness"]; count: number }[];
+}
+
+export function registrySummary(cards: readonly AgentCard[], now: number, dayStart = dayStartOf(now)): RegistrySummary {
+  const out: RegistrySummary = {
+    live: 0,
+    working: 0,
+    waiting: 0,
+    idle: 0,
+    machines: 0,
+    repos: 0,
+    startedToday: 0,
+    endedToday: 0,
+    lostToday: 0,
+    todayMs: 0,
+    longest: null,
+    harnesses: [],
+  };
+  const machines = new Set<string>();
+  const repos = new Set<string>();
+  const harnesses = new Map<AgentCard["harness"], number>();
+  for (const c of cards) {
+    if (c.startedAt >= dayStart) out.startedToday++;
+    if (c.state === "ended" && (c.endedAt ?? c.seenAt) >= dayStart) out.endedToday++;
+    if (c.state === "lost" && c.seenAt >= dayStart) out.lostToday++;
+    out.todayMs += todayMs(c, now, dayStart);
+    if (!isLiveAgent(c)) continue;
+    out.live++;
+    if (c.state === "working") out.working++;
+    else if (c.state === "waiting") out.waiting++;
+    else out.idle++;
+    machines.add(machineOf(c));
+    const repo = urlKey(c.repo) ?? (c.cwd || null);
+    if (repo) repos.add(repo);
+    harnesses.set(c.harness, (harnesses.get(c.harness) ?? 0) + 1);
+    if (!out.longest || c.startedAt < out.longest.startedAt) out.longest = c;
+  }
+  out.machines = machines.size;
+  out.repos = repos.size;
+  out.harnesses = [...harnesses].map(([harness, count]) => ({ harness, count })).sort((a, b) => b.count - a.count || a.harness.localeCompare(b.harness));
+  return out;
+}
+
+/** one agent's run on the day's timeline, cut at its left edge */
+export interface Lane {
+  card: AgentCard;
+  start: number;
+  end: number;
+  /** it started before the timeline does */
+  clipped: boolean;
+}
+
+export interface Timeline {
+  from: number;
+  to: number;
+  lanes: Lane[];
+  ticks: { at: number; label: string }[];
+}
+
+/** how many lanes the timeline draws: the live ones first, then the latest
+ *  to stop */
+export const TIMELINE_LANES = 24;
+const HOUR = 3_600_000;
+const TICK_STEPS = [15, 30, 60, 120, 180, 360].map((m) => m * 60_000);
+
+const pad2 = (n: number): string => String(n).padStart(2, "0");
+
+/** "09:30", local */
+export function clockWord(ms: number): string {
+  const d = new Date(ms);
+  return `${pad2(d.getHours())}:${pad2(d.getMinutes())}`;
+}
+
+/** The day's runs as lanes over time, earliest start first: every live card
+ *  and every one that stopped since `dayStart`. It spans from the earliest
+ *  start (never before midnight, a run from before cut there) to now, an
+ *  hour at least; ticks fall on the local clock, eight at most. */
+export function timelineOf(cards: readonly AgentCard[], now: number, dayStart = dayStartOf(now), max = TIMELINE_LANES): Timeline {
+  const kept = cards
+    .filter((c) => isLiveAgent(c) || runEnd(c, now) >= dayStart)
+    .sort((a, b) => Number(isLiveAgent(b)) - Number(isLiveAgent(a)) || runEnd(b, now) - runEnd(a, now) || a.id.localeCompare(b.id))
+    .slice(0, max);
+  const earliest = Math.min(now, ...kept.map((c) => c.startedAt));
+  const from = Math.min(Math.max(dayStart, earliest), now - HOUR);
+  const lanes = kept
+    .map((card) => {
+      const start = Math.max(card.startedAt, from);
+      return { card, start, end: Math.max(start, runEnd(card, now)), clipped: card.startedAt < from };
+    })
+    .sort((a, b) => a.start - b.start || a.card.id.localeCompare(b.card.id));
+  const step = TICK_STEPS.find((s) => (now - from) / s <= 8) ?? TICK_STEPS[TICK_STEPS.length - 1]!;
+  const base = dayStartOf(from);
+  const ticks: Timeline["ticks"] = [];
+  for (let at = base + Math.ceil((from - base) / step) * step; at <= now; at += step) ticks.push({ at, label: clockWord(at) });
+  return { from, to: now, lanes, ticks };
+}
+
+/** The backend that can read a card's transcript: the canopy backend it
+ *  ran under, else one the page shows on the same machine, learned from
+ *  another card that ran under a canopy backend on that node or by a
+ *  backend named as the node is. Null for a card with no session (a scan's)
+ *  or another harness, and for a machine no backend here is on. */
+export function readerOf(card: AgentCard, shown: readonly string[], cards: readonly AgentCard[]): string | null {
+  if (!card.session || card.harness === "other") return null;
+  const own = card.where.canopy?.backend;
+  if (own && shown.includes(own)) return own;
+  for (const c of cards) {
+    const b = c.where.canopy?.backend;
+    if (b && c.node === card.node && shown.includes(b)) return b;
+  }
+  const node = card.node.toLowerCase();
+  return shown.find((b) => b.toLowerCase() === node) ?? null;
+}
+
+/** a state the page saw a card take, and when */
+export interface TrailMark {
+  state: AgentState;
+  at: number;
+  /** what it waited on, for a wait */
+  waiting?: string;
+}
+
+/** how many marks a card keeps, the oldest dropped */
+export const TRAIL_CAP = 24;
+/** a card first heard of this soon after its start is a start the page saw */
+const FRESH = 2 * 60_000;
+
+/** What the page saw of each card's states, laid over `trail`: a mark on
+ *  each change of state (a new wait counts), and one for a card heard of
+ *  within `FRESH` of its start; a card the page met later has no mark
+ *  until it changes, since when it took its state is not known. `after` is
+ *  the registry with `cards` laid in, so one it passed over (older than
+ *  the card held) marks nothing; `gone` are dropped. The same object when
+ *  nothing moved. */
+export function markTrail(
+  trail: Record<string, TrailMark[]>,
+  before: Record<string, AgentCard>,
+  after: Record<string, AgentCard>,
+  cards: readonly AgentCard[],
+  at: number,
+  gone: readonly string[] = [],
+): Record<string, TrailMark[]> {
+  let next: Record<string, TrailMark[]> | null = null;
+  for (const c of cards) {
+    if (after[c.id] !== c) continue;
+    const prev = Object.hasOwn(before, c.id) ? before[c.id] : undefined;
+    const moved = prev ? prev.state !== c.state || (c.state === "waiting" && c.waiting !== prev.waiting) : isLiveAgent(c) && at - c.startedAt <= FRESH;
+    if (!moved) continue;
+    const mark: TrailMark = { state: c.state, at };
+    if (c.state === "waiting" && c.waiting) mark.waiting = c.waiting;
+    next ??= { ...trail };
+    const list = [...(next[c.id] ?? []), mark];
+    next[c.id] = list.length > TRAIL_CAP ? list.slice(-TRAIL_CAP) : list;
+  }
+  for (const id of gone) {
+    if (!Object.hasOwn(next ?? trail, id)) continue;
+    next ??= { ...trail };
+    delete next[id];
+  }
+  return next ?? trail;
+}
+
+/** since when a live card has been in its state, when the page saw it
+ *  change; null when it did not */
+export function stateSince(c: AgentCard, marks: readonly TrailMark[] | undefined): number | null {
+  const last = marks?.[marks.length - 1];
+  return last && isLiveAgent(c) && last.state === c.state ? last.at : null;
 }
 
 export type CardGrouping = "machine" | "repo";

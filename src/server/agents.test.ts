@@ -11,7 +11,7 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { loadConfig } from "../core/store";
-import { DEFAULT_AGENT, type AgentRoutes, type AgentTable, type Repo, type ServerEvent } from "../core/types";
+import { DEFAULT_AGENT, type AgentActivity, type AgentRoutes, type AgentTable, type Repo, type ServerEvent } from "../core/types";
 import { startServer } from "./index";
 
 let scratch: string;
@@ -135,5 +135,30 @@ describe("the agent routes", () => {
     expect(u.roles.flow).toMatchObject({ settings: DEFAULT_AGENT, from: "default" });
     expect((await fetch(url("/api/agents/resolve?id=nope"))).status).toBe(404);
     await post("/api/repos/agent?id=app", {});
+  });
+});
+
+describe("a registry card's activity", () => {
+  test("is read from its transcript on this machine by harness and session id", async () => {
+    const session = "0d0d0d0d-1111-4222-8333-444444444444";
+    const home = join(scratch, "claude-home");
+    const dir = join(home, "projects", "-dev-app");
+    await Bun.$`mkdir -p ${dir}`.quiet();
+    const rec = (content: string) => JSON.stringify({ type: "user", timestamp: "2026-10-06T10:00:00.000Z", message: { role: "user", content } });
+    await Bun.write(join(dir, `${session}.jsonl`), `${rec("tidy the readme")}\n`);
+    const was = process.env["CLAUDE_CONFIG_DIR"];
+    process.env["CLAUDE_CONFIG_DIR"] = home;
+    try {
+      const res = await fetch(url(`/api/agents/activity?harness=claude&session=${session}&cwd=/dev/app`));
+      expect(res.status).toBe(200);
+      const a = (await res.json()) as AgentActivity;
+      expect(a).toMatchObject({ harness: "claude", session, prompts: 1, firstPrompt: "tidy the readme" });
+      expect((await fetch(url("/api/agents/activity?harness=claude&session=0d0d0d0d-1111-4222-8333-555555555555"))).status).toBe(404);
+      expect((await fetch(url(`/api/agents/activity?harness=gemini&session=${session}`))).status).toBe(400);
+      expect((await fetch(url("/api/agents/activity?harness=claude&session=../../etc/passwd"))).status).toBe(400);
+    } finally {
+      if (was === undefined) delete process.env["CLAUDE_CONFIG_DIR"];
+      else process.env["CLAUDE_CONFIG_DIR"] = was;
+    }
   });
 });

@@ -2130,6 +2130,64 @@ export interface RegistryInfo {
   cards: AgentCard[];
 }
 
+/** One thing an agent did, as its transcript tells it: a prompt typed to
+ *  it, a reply, a tool it called, or a tool call that came back failed. */
+export interface ActivityEvent {
+  /** unix ms, null for a record with no time */
+  at: number | null;
+  kind: "prompt" | "reply" | "tool" | "error";
+  /** the tool, for a call or its failure */
+  tool?: string;
+  /** one line, clipped */
+  text: string;
+}
+
+/**
+ * `GET /api/agents/activity`: what one session's transcript on the
+ * backend's own machine says its agent did (`core/activity.ts`). Claude
+ * Code's and Codex's files both read into this; a field a harness does not
+ * write stays null or zero.
+ */
+export interface AgentActivity {
+  harness: Harness;
+  session: string;
+  /** the transcript's size and its last write, unix ms */
+  bytes: number;
+  writtenAt: number;
+  /** the harness's own name for the session (Claude Code's ai-title, its
+   *  agent name or a summary line), else null */
+  title: string | null;
+  firstPrompt: string | null;
+  lastPrompt: string | null;
+  lastReply: string | null;
+  firstAt: number | null;
+  lastAt: number | null;
+  /** the time between records that came less than `ACTIVE_GAP` apart: how
+   *  long it was busy, rather than how long it was open */
+  activeMs: number;
+  /** prompts typed to it, not tool results or the harness's own messages */
+  prompts: number;
+  toolCalls: number;
+  toolErrors: number;
+  /** tools by how often it called them, most first */
+  tools: { name: string; count: number }[];
+  /** files a tool wrote or edited, the latest first, at most a few dozen */
+  files: string[];
+  /** how many different files that was in all */
+  filesTouched: number;
+  tokens: { input: number; output: number; cacheRead: number; cacheWrite: number };
+  models: string[];
+  /** what the harness counted itself, when it wrote it down (Claude Code's
+   *  cost-state record); canopy keeps no price list */
+  costUsd: number | null;
+  linesAdded: number | null;
+  linesRemoved: number | null;
+  /** subagent transcripts beside the session's (Claude Code's Task runs) */
+  subagents: number;
+  /** the newest events, oldest first */
+  events: ActivityEvent[];
+}
+
 /** One agent process a backend's scan found, as `POST /v1/agents/scan`
  *  takes it: the repo (as a web url) and branch when its folder is in a
  *  scanned repo. */

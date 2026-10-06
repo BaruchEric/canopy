@@ -1,4 +1,5 @@
 import type {
+  AgentActivity,
   AgentKind,
   About,
   AgentPick,
@@ -439,6 +440,10 @@ export const api = {
   tailchan: () => req<TailchanInfo>(homeName(), "/api/tailchan"),
   /** the agent registry, the home backend's alone; a 503 without a broker */
   registry: () => req<RegistryInfo>(homeName(), "/api/registry"),
+  /** what a registry card's session did, read from its transcript by the
+   *  backend `b` on the machine it ran on; a 404 when the file is not there */
+  agentActivity: (b: string, harness: Harness, session: string, cwd: string) =>
+    req<AgentActivity>(b, `/api/agents/activity?harness=${harness}&session=${encodeURIComponent(session)}&cwd=${encodeURIComponent(cwd)}`),
   /** the broker's asks as the home backend follows them, and presence; a
    *  503 without a broker */
   asks: () => req<AsksInfo>(homeName(), "/api/asks"),

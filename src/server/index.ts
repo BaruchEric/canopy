@@ -82,6 +82,7 @@ import {
 import { clientKey, HELPER_PING, HELPER_TIMEOUT, helperRefusal, isLoopback, isLoopbackHost, parseDefaultGateway, parseHelperQuery, parseHelperReply, reachFrom, staleHelpers, type HelperAsk } from "../core/helper";
 import { devicesOf, parseStream, type Stream } from "../core/presence";
 import { mapPool, searchRepo } from "../core/search";
+import { readActivity } from "../core/activity";
 import { agentSessions, hasAgentSession, isSessionId, newestTranscript, resumeLine } from "../core/sessions";
 import { BUNDLED_DIR, findWorkflow, loadWorkflows } from "../core/workflows";
 import {
@@ -2344,6 +2345,18 @@ async function handleApi(
     const repo = repoById(state, url.searchParams.get("id") ?? "");
     const table: AgentTable = { roles: effectiveAgents(agentRoutes(await loadConfig()), repo.path), harnesses: state.harnesses() };
     return json(table);
+  }
+  // What a registry card's session did, from its transcript on this
+  // machine (core/activity): found by harness and session id, `cwd` only
+  // naming the folder Claude Code files it under, so no path reaches the disk.
+  if (path === "/api/agents/activity" && method === "GET") {
+    const harness = url.searchParams.get("harness");
+    const session = url.searchParams.get("session") ?? "";
+    if (!isHarness(harness)) return json({ error: "unknown harness" }, 400);
+    if (!isSessionId(session)) return json({ error: "session must be a session id" }, 400);
+    const got = await readActivity(harness, session, url.searchParams.get("cwd") ?? "");
+    if (!got) return json({ error: `no ${harness} transcript of that session on ${state.backendName}` }, 404);
+    return json(got);
   }
 
   if (path === "/api/backends" && method === "GET") {

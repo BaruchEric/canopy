@@ -23,7 +23,7 @@ import { convOf, isUnread, mergeMessages } from "./chan";
 import type { AdviceAccepted, AdviceOffer, AgentCard, Ask, ChanMessage, IncubatorStages, Presence, Sprout, TailchanInfo } from "../../src/core/types";
 import { mergeAsks, mergeInbox, replaceAsks, toAskAnswer, toRunAnswer, type InboxAnswer, type InboxItem } from "./inbox";
 import { replaceSprouts, staleSprout } from "./sprouts";
-import { cardsByRepoCard, mergeCards, replaceCards } from "./agentcards";
+import { cardsByRepoCard, markTrail, mergeCards, replaceCards, type TrailMark } from "./agentcards";
 import { clientCaps } from "../../src/core/client";
 import { normalizeRoutes, resolveAgent } from "../../src/core/route";
 import { flatAgent, hasRouting, NO_ROUTES } from "./agents";
@@ -559,6 +559,8 @@ interface CanopyState {
   /** whether the home backend has a registry to show; false shows nothing
    *  registry-related */
   registryReady: boolean;
+  /** the states this page saw each card take, by card id (`markTrail`) */
+  registryTrail: Record<string, TrailMark[]>;
   /** the broker's asks as the home backend follows them, open and lately
    *  closed, by id */
   asks: Record<string, Ask>;
@@ -1318,6 +1320,7 @@ export const useStore = create<CanopyState>((set, get) => ({
   chanConv: null,
   registry: {},
   registryReady: false,
+  registryTrail: {},
   asks: {},
   asksReady: false,
   answerKey: readAnswerKey(),
@@ -1951,7 +1954,8 @@ export const useStore = create<CanopyState>((set, get) => ({
       for (const id of ev.gone ?? []) registryHeard.set(id, registryEvents);
       set((s) => {
         const registry = mergeCards(s.registry, ev.cards, ev.gone);
-        return registry === s.registry ? {} : { registry };
+        if (registry === s.registry) return {};
+        return { registry, registryTrail: markTrail(s.registryTrail, s.registry, registry, ev.cards, Date.now(), ev.gone) };
       });
       // the broker is there after all: a first load that failed reads the
       // whole list now rather than showing this card alone
@@ -2189,9 +2193,15 @@ export const useStore = create<CanopyState>((set, get) => ({
       const info = await api.registry();
       const cards = Array.isArray(info.cards) ? info.cards : [];
       registryTries = 0;
-      set((s) => ({ registry: replaceCards(s.registry, cards, (id) => (registryHeard.get(id) ?? 0) > mark), registryReady: true }));
+      set((s) => {
+        const registry = replaceCards(s.registry, cards, (id) => (registryHeard.get(id) ?? 0) > mark);
+        // a change the list brings is a change seen; a card it no longer names takes its trail along
+        const marked = markTrail(s.registryTrail, s.registry, registry, cards, Date.now());
+        const registryTrail = Object.fromEntries(Object.entries(marked).filter(([id]) => Object.hasOwn(registry, id)));
+        return { registry, registryReady: true, registryTrail };
+      });
     } catch (e) {
-      set({ registry: {}, registryReady: false });
+      set({ registry: {}, registryReady: false, registryTrail: {} });
       // A backend with no broker says so with a 503 and is asked again only
       // when its stream comes back; a broker or a backend that did not
       // answer is asked again at doubling waits, so the view comes back.

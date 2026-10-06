@@ -7014,8 +7014,24 @@ span.effective-flag:not(:first-child) {
 .reg-bar {
   margin: 0 0 4px;
 }
-.reg-row.reg-gone {
+/* an ended or lost row dims its head; its drill-down stays readable */
+.reg-row.reg-gone > .agents-row-head,
+.reg-row.reg-gone > .reg-more {
   opacity: 0.7;
+}
+/* a state's colour wherever it is named: a row, the summary, the timeline */
+.rs-working {
+  color: var(--sky);
+}
+.rs-idle {
+  color: var(--moss);
+}
+.rs-waiting {
+  color: var(--rust);
+}
+.rs-ended,
+.rs-lost {
+  color: var(--ink-faint);
 }
 .reg-state {
   font-size: 12px;
@@ -7092,6 +7108,422 @@ span.effective-flag:not(:first-child) {
 .reg-body .reg-past {
   padding: 6px 0 0;
 }
+/* an agent's name opens its drill-down: a word washed under the pointer */
+.reg-open {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 5px;
+  margin: 0 -4px;
+  padding: 0 4px;
+  border-radius: var(--r);
+  color: var(--ink);
+  text-align: left;
+}
+.reg-open:hover {
+  background: var(--wash);
+}
+.reg-caret {
+  font-size: 10px;
+  font-weight: 400;
+  color: var(--ink-faint);
+}
+.reg-run {
+  white-space: nowrap;
+}
+
+/* the registry at a glance: numbers on the ground, a label over each */
+.reg-summary {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px 36px;
+  margin: 0;
+  padding: 2px 0 14px;
+}
+.reg-stat {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  min-width: 0;
+}
+.reg-stat dt {
+  font-size: 10.5px;
+  text-transform: uppercase;
+  letter-spacing: 0.12em;
+  color: var(--ink-faint);
+}
+.reg-stat dd {
+  margin: 0;
+}
+.reg-stat-n {
+  font-size: 22px;
+  font-weight: 700;
+  line-height: 1.2;
+  color: var(--ink);
+  font-variant-numeric: tabular-nums;
+}
+.reg-stat-sub {
+  max-width: 34ch;
+  overflow: hidden;
+  font-size: 11.5px;
+  color: var(--ink-dim);
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+.reg-stat-link {
+  margin: 0 -3px;
+  padding: 0 3px;
+  border-radius: var(--r);
+  font-weight: 700;
+}
+.reg-stat-link:hover {
+  background: var(--wash);
+}
+
+/* the day's runs: a lane per agent on one time axis, hairline hours behind */
+.reg-timeline {
+  --tl-name: 20ch;
+  --tl-pad: 6px;
+  --tl-gap: 10px;
+}
+.tl {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+.tl-axis,
+.tl-lane {
+  display: grid;
+  grid-template-columns: var(--tl-name) minmax(0, 1fr);
+  gap: var(--tl-gap);
+  align-items: center;
+}
+.tl-axis {
+  padding: 0 var(--tl-pad);
+}
+.tl-ticks {
+  position: relative;
+  height: 14px;
+}
+.tl-tick {
+  position: absolute;
+  top: 0;
+  transform: translateX(-50%);
+  font-size: 10px;
+  color: var(--ink-faint);
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+.tl-tick.tl-now {
+  right: 0;
+  transform: none;
+}
+.tl-lanes {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+}
+.tl-rules {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: calc(var(--tl-pad) + var(--tl-name) + var(--tl-gap));
+  right: var(--tl-pad);
+  pointer-events: none;
+}
+.tl-rules > span {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 1px;
+  background: var(--hair);
+}
+.tl-lane {
+  position: relative;
+  width: 100%;
+  padding: 1px var(--tl-pad);
+  border-radius: var(--r);
+  text-align: left;
+}
+.tl-lane:hover,
+.tl-lane.on {
+  background: var(--wash);
+}
+.tl-name {
+  overflow: hidden;
+  font-size: 11.5px;
+  color: var(--ink-dim);
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+.tl-lane.on .tl-name {
+  color: var(--ink);
+}
+.tl-track {
+  position: relative;
+  height: 16px;
+}
+.tl-bar {
+  position: absolute;
+  top: 4px;
+  height: 8px;
+  border-radius: 4px;
+  background: currentColor;
+}
+/* a run from before the axis begins goes on past its left edge */
+.tl-bar.clipped {
+  border-top-left-radius: 0;
+  border-bottom-left-radius: 0;
+}
+/* lost is hatched, so it is told from ended without its colour */
+.tl-bar.rs-lost,
+.tl-swatch.rs-lost {
+  background: repeating-linear-gradient(135deg, currentColor 0 2px, transparent 2px 4px);
+}
+.tl-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 14px;
+  margin: 4px 0 0;
+  padding: 0 var(--tl-pad);
+  font-size: 11px;
+  color: var(--ink-dim);
+}
+.tl-key {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.tl-swatch {
+  width: 14px;
+  height: 8px;
+  border-radius: 4px;
+  background: currentColor;
+}
+
+/* one agent drilled into: its facts, its activity, the states seen here */
+.reg-detail {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 0;
+  padding: 6px 0 4px calc(1ch + 10px);
+}
+.reg-title {
+  margin: 0;
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--ink);
+}
+.reg-facts {
+  display: grid;
+  grid-template-columns: max-content minmax(0, 1fr);
+  gap: 3px 14px;
+  margin: 0;
+  font-size: 12px;
+}
+.reg-facts dt {
+  color: var(--ink-faint);
+}
+.reg-facts dd {
+  min-width: 0;
+  margin: 0;
+  color: var(--ink);
+  overflow-wrap: anywhere;
+}
+.reg-facts dd.reg-path {
+  font-size: 11.5px;
+  color: var(--ink-dim);
+}
+.reg-facts dd.reg-waits {
+  color: var(--rust);
+}
+.reg-activity-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 4px 10px;
+}
+.reg-activity-head .panel-label {
+  margin: 6px 0 0;
+}
+.reg-activity {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 8px;
+  min-width: 0;
+}
+.reg-activity > * {
+  align-self: stretch;
+}
+.reg-activity > .mini {
+  align-self: flex-start;
+}
+.reg-tally {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 2px 16px;
+  margin: 0;
+  font-size: 12px;
+  color: var(--ink-dim);
+}
+.reg-tally b {
+  color: var(--ink);
+  font-variant-numeric: tabular-nums;
+}
+.reg-tally .reg-failed {
+  color: var(--rust);
+}
+.reg-tally b.reg-added {
+  color: var(--moss);
+}
+.reg-tally b.reg-removed {
+  color: var(--rust);
+}
+.reg-cols {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 8px 28px;
+}
+.reg-tools-used,
+.reg-files {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  font-size: 11.5px;
+}
+.reg-tools-used li {
+  display: grid;
+  grid-template-columns: minmax(0, 13ch) minmax(0, 1fr) 4ch;
+  align-items: center;
+  gap: 8px;
+}
+.reg-tool-name {
+  overflow: hidden;
+  color: var(--ink-dim);
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+.reg-files li {
+  display: flex;
+  min-width: 0;
+  color: var(--ink-dim);
+  white-space: nowrap;
+}
+.reg-file-dir {
+  flex: 0 1 auto;
+  min-width: 2ch;
+  overflow: hidden;
+  color: var(--ink-faint);
+  text-overflow: ellipsis;
+}
+.reg-file-name {
+  flex: 0 0 auto;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.reg-tool-bar > span {
+  display: block;
+  height: 4px;
+  border-radius: 2px;
+  background: var(--sky);
+}
+.reg-tool-n {
+  text-align: right;
+  color: var(--ink-faint);
+  font-variant-numeric: tabular-nums;
+}
+/* the last thing asked and said, each off a rail, three lines at most */
+.reg-said {
+  display: -webkit-box;
+  overflow: hidden;
+  margin: 0;
+  padding: 1px 0 1px 10px;
+  border-left: 2px solid var(--hair2);
+  font-size: 12px;
+  color: var(--ink);
+  overflow-wrap: anywhere;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 3;
+  line-clamp: 3;
+}
+.reg-said-prompt {
+  border-left-color: var(--lichen);
+}
+.reg-said-who {
+  margin-right: 6px;
+  font-size: 10.5px;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  color: var(--ink-faint);
+}
+/* the latest events, newest first, in a well */
+.reg-events {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  max-height: 340px;
+  margin: 0;
+  padding: 8px 10px;
+  overflow-y: auto;
+  list-style: none;
+  border-radius: var(--r);
+  background: var(--bark0);
+  font-size: 11.5px;
+}
+.reg-ev {
+  display: grid;
+  grid-template-columns: 5ch 14ch minmax(0, 1fr);
+  align-items: baseline;
+  gap: 10px;
+}
+.reg-ev-at {
+  color: var(--ink-faint);
+  font-variant-numeric: tabular-nums;
+}
+.reg-ev-kind,
+.reg-ev-text {
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+.reg-ev-kind {
+  color: var(--sky);
+}
+.reg-ev-text {
+  color: var(--ink-dim);
+}
+.ev-prompt .reg-ev-kind {
+  color: var(--lichen);
+}
+.ev-prompt .reg-ev-text {
+  color: var(--ink);
+}
+.ev-reply .reg-ev-kind {
+  color: var(--ink-faint);
+}
+.ev-error .reg-ev-kind,
+.ev-error .reg-ev-text {
+  color: var(--rust);
+}
+.reg-trail {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 2px 12px;
+  margin: 0;
+  font-size: 11.5px;
+  color: var(--ink-faint);
+}
+.reg-mark {
+  white-space: nowrap;
+}
 /* the repo card's ✦ n: moss while its agents work, rust while one waits */
 .agent-chip {
   --tone: var(--moss);
@@ -7110,6 +7542,20 @@ span.effective-flag:not(:first-child) {
   }
   .agents-has {
     margin-left: 0;
+  }
+  .reg-summary {
+    gap: 10px 22px;
+  }
+  .reg-timeline {
+    --tl-name: 11ch;
+    --tl-gap: 8px;
+  }
+  .reg-detail {
+    padding-left: 0;
+  }
+  .reg-ev {
+    grid-template-columns: 5ch 9ch minmax(0, 1fr);
+    gap: 8px;
   }
   .effective-table th,
   .effective-table td {

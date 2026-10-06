@@ -7,19 +7,28 @@ import {
   cardOnRepo,
   cardsByRepoCard,
   cardsFor,
+  durationWord,
   groupCards,
   joinTarget,
   liveCount,
+  markTrail,
   mergeCards,
   orderCards,
+  readerOf,
+  registrySummary,
   relPath,
   replaceCards,
   repoWord,
+  runMs,
   splitRecent,
+  stateSince,
   stateWord,
+  timelineOf,
+  TRAIL_CAP,
   transcriptTarget,
   urlKey,
   whereWord,
+  type TrailMark,
 } from "./agentcards";
 import { split, qualify, type Reg } from "./backends";
 import { joinRepos } from "./checkouts";
@@ -115,8 +124,145 @@ describe("words", () => {
   test("how long", () => {
     const now = 10_000_000;
     expect(ageWord(card({ startedAt: now - 12 * 60_000 }), now)).toBe("12m");
-    expect(ageWord(card({ state: "ended", endedAt: now - 3 * 3_600_000 }), now)).toBe("ended 3h ago");
-    expect(ageWord(card({ state: "lost", seenAt: now - 5 * 60_000 }), now)).toBe("lost 5m ago");
+    expect(ageWord(card({ startedAt: now - 72 * 60_000, state: "working" }), now)).toBe("1h 12m");
+    expect(ageWord(card({ startedAt: now - 3 * 3_600_000 - 42 * 60_000, state: "ended", endedAt: now - 3 * 3_600_000 }), now)).toBe("ran 42m, ended 3h ago");
+    expect(ageWord(card({ startedAt: now - 2 * 3_600_000, state: "lost", seenAt: now - 5 * 60_000 }), now)).toBe("ran 1h 55m, lost 5m ago");
+  });
+
+  test("a run's length, to the minute", () => {
+    expect(durationWord(-5)).toBe("0s");
+    expect(durationWord(45_000)).toBe("45s");
+    expect(durationWord(12 * 60_000 + 59_000)).toBe("12m");
+    expect(durationWord(3_600_000)).toBe("1h");
+    expect(durationWord(3_600_000 + 60_000)).toBe("1h 1m");
+    expect(durationWord(2 * 86_400_000 + 3 * 3_600_000 + 60_000)).toBe("2d 3h");
+    expect(durationWord(86_400_000)).toBe("1d");
+  });
+
+  test("a run stops at its end, its last beat once lost, else now", () => {
+    const now = 100_000;
+    expect(runMs(card({ startedAt: 10_000, state: "working" }), now)).toBe(90_000);
+    expect(runMs(card({ startedAt: 10_000, state: "ended", endedAt: 40_000, seenAt: 39_000 }), now)).toBe(30_000);
+    expect(runMs(card({ startedAt: 10_000, state: "ended", endedAt: null, seenAt: 25_000 }), now)).toBe(15_000);
+    expect(runMs(card({ startedAt: 10_000, state: "lost", seenAt: 20_000 }), now)).toBe(10_000);
+    // a clock that ran ahead on the agent's machine is no negative run
+    expect(runMs(card({ startedAt: now + 5, state: "working" }), now)).toBe(0);
+  });
+});
+
+describe("the day's summary and timeline", () => {
+  const H = 3_600_000;
+  const day = 20 * 86_400_000;
+  const now = day + 15 * H;
+  const cards = [
+    card({ id: "w1", state: "working", node: "mini", startedAt: day + 9 * H, repo: "https://github.com/me/app" }),
+    card({ id: "w2", state: "waiting", node: "mini", startedAt: day + 14 * H, harness: "codex", repo: "https://github.com/me/app" }),
+    // started yesterday, still going: only today's part counts
+    card({ id: "i1", state: "idle", node: "ericmac", startedAt: day - 2 * H, repo: null, cwd: "/Users/e/notes" }),
+    card({ id: "e1", state: "ended", startedAt: day + 10 * H, endedAt: day + 11 * H }),
+    card({ id: "l1", state: "lost", startedAt: day + 12 * H, seenAt: day + 12.5 * H }),
+    // ended yesterday: not today's
+    card({ id: "e0", state: "ended", startedAt: day - 5 * H, endedAt: day - 4 * H }),
+  ];
+
+  test("live ones by state, machines, repos, the day's starts and ends, and time since midnight", () => {
+    const s = registrySummary(cards, now, day);
+    expect([s.live, s.working, s.waiting, s.idle]).toEqual([3, 1, 1, 1]);
+    expect([s.machines, s.repos]).toEqual([2, 2]);
+    expect([s.startedToday, s.endedToday, s.lostToday]).toEqual([4, 1, 1]);
+    // w1 6h, w2 1h, i1 15h (from midnight), e1 1h, l1 0.5h
+    expect(s.todayMs).toBe(23.5 * H);
+    expect(s.longest?.id).toBe("i1");
+    expect(s.harnesses).toEqual([
+      { harness: "claude", count: 2 },
+      { harness: "codex", count: 1 },
+    ]);
+    expect(registrySummary([], now, day)).toMatchObject({ live: 0, longest: null, todayMs: 0 });
+  });
+
+  test("lanes from the earliest start today, a run from before cut at midnight, earliest first", () => {
+    const t = timelineOf(cards, now, day);
+    expect(t.from).toBe(day);
+    expect(t.to).toBe(now);
+    expect(t.lanes.map((l) => l.card.id)).toEqual(["i1", "w1", "e1", "l1", "w2"]);
+    expect(t.lanes[0]).toMatchObject({ start: day, end: now, clipped: true });
+    expect(t.lanes.find((l) => l.card.id === "l1")).toMatchObject({ start: day + 12 * H, end: day + 12.5 * H, clipped: false });
+    // 15 hours in steps of two, on the clock
+    expect(t.ticks.map((x) => x.label)).toEqual(["00:00", "02:00", "04:00", "06:00", "08:00", "10:00", "12:00", "14:00"]);
+  });
+
+  test("an hour at least, on the half hour; the live ones kept first when there are too many", () => {
+    const fresh = card({ id: "f", state: "working", startedAt: now - 10 * 60_000 });
+    const t = timelineOf([fresh], now, day);
+    expect(t.from).toBe(now - H);
+    expect(t.ticks.map((x) => x.label)).toEqual(["14:00", "14:15", "14:30", "14:45", "15:00"]);
+    // three live ones, all running till now: by id among them
+    expect(timelineOf(cards, now, day, 2).lanes.map((l) => l.card.id)).toEqual(["i1", "w1"]);
+    expect(timelineOf(cards, now, day, 4).lanes.map((l) => l.card.id)).toEqual(["i1", "w1", "l1", "w2"]);
+    expect(timelineOf([], now, day).lanes).toEqual([]);
+  });
+});
+
+describe("who reads a card's transcript", () => {
+  const shown = ["mini", "mac"];
+  test("the canopy backend it ran under, else one on its machine, else none", () => {
+    const inShell = card({ node: "macmini-2018", where: canopy("mini", "t1") });
+    const kitty = card({ node: "macmini-2018" });
+    const mac = card({ node: "Mac" });
+    const away = card({ node: "gpd" });
+    const all = [inShell, kitty, mac, away];
+    expect(readerOf(inShell, shown, all)).toBe("mini");
+    // learned from the shell card on the same node
+    expect(readerOf(kitty, shown, all)).toBe("mini");
+    // a backend named as the node is
+    expect(readerOf(mac, shown, all)).toBe("mac");
+    expect(readerOf(away, shown, all)).toBeNull();
+    // a backend the page does not show reads nothing
+    expect(readerOf(card({ node: "x", where: canopy("lab", "t2") }), shown, [])).toBeNull();
+    // no session, no transcript
+    expect(readerOf(card({ session: null, origin: "scan", where: canopy("mini") }), shown, all)).toBeNull();
+    expect(readerOf(card({ harness: "other", where: canopy("mini") }), shown, all)).toBeNull();
+  });
+});
+
+describe("the trail of states the page saw", () => {
+  test("a mark on each change and each new wait, none for a beat or a reading passed over", () => {
+    const a = card({ id: "a", state: "working", startedAt: 0, seenAt: 10 });
+    const waiting = { ...a, state: "waiting" as const, waiting: "permission", seenAt: 20 };
+    let trail = markTrail({}, { a }, { a: waiting }, [waiting], 100);
+    expect(trail).toEqual({ a: [{ state: "waiting", at: 100, waiting: "permission" }] });
+    const other = { ...waiting, waiting: "a question", seenAt: 30 };
+    trail = markTrail(trail, { a: waiting }, { a: other }, [other], 200);
+    expect(trail["a"]).toHaveLength(2);
+    const beat = { ...other, seenAt: 40 };
+    expect(markTrail(trail, { a: other }, { a: beat }, [beat], 300)).toBe(trail);
+    // older than the card held: mergeCards kept the held one
+    const stale = { ...a, state: "idle" as const, seenAt: 5 };
+    expect(markTrail(trail, { a: other }, { a: other }, [stale], 400)).toBe(trail);
+    expect(stateSince(other, trail["a"])).toBe(200);
+    expect(stateSince({ ...other, state: "working" }, trail["a"])).toBeNull();
+    expect(markTrail(trail, {}, {}, [], 500, ["a", "nope"])).toEqual({});
+  });
+
+  test("a card met at its start is marked; one met long after is not, its state's start unknown", () => {
+    const now = 10 * 60_000;
+    const fresh = card({ id: "f", state: "working", startedAt: now - 30_000 });
+    const old = card({ id: "o", state: "working", startedAt: 0 });
+    const done = card({ id: "d", state: "ended", startedAt: now - 1000 });
+    const trail = markTrail({}, {}, { f: fresh, o: old, d: done }, [fresh, old, done], now);
+    expect(Object.keys(trail)).toEqual(["f"]);
+  });
+
+  test("keeps the latest TRAIL_CAP marks", () => {
+    let trail: Record<string, TrailMark[]> = {};
+    let held = card({ id: "a", state: "working", startedAt: 0 });
+    for (let i = 0; i < TRAIL_CAP + 5; i++) {
+      const next = { ...held, state: i % 2 ? ("working" as const) : ("idle" as const) };
+      trail = markTrail(trail, { a: held }, { a: next }, [next], i);
+      held = next;
+    }
+    expect(trail["a"]).toHaveLength(TRAIL_CAP);
+    expect(trail["a"]?.at(-1)?.at).toBe(TRAIL_CAP + 4);
   });
 });
 
