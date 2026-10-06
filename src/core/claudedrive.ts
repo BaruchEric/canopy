@@ -39,6 +39,14 @@ const str = (o: Record<string, unknown>, k: string): string => (typeof o[k] === 
 
 const num = (o: Record<string, unknown>, k: string): number => (typeof o[k] === "number" ? o[k] : 0);
 
+/** Whether a message is the CLI at work on a turn (a fresh init, a message,
+ *  a prompt) rather than its bookkeeping about background tasks. */
+const wakes = (m: Record<string, unknown>): boolean => {
+  const type = str(m, "type");
+  if (type === "system") return str(m, "subtype") === "init";
+  return type === "assistant" || type === "user" || type === "control_request" || type === "control_cancel_request";
+};
+
 /** Text of a tool_result block, whatever shape it arrived in. */
 function resultText(content: unknown): string {
   if (typeof content === "string") return content;
@@ -184,6 +192,9 @@ export class ClaudeDriver implements RunDriver {
   /** the last result that came while subagents ran */
   private held: Record<string, unknown> | null = null;
   private grace: ReturnType<typeof setTimeout> | null = null;
+  /** the subagents are done and the turn they woke has begun: the held
+   *  result now waits for that turn's own, however long it runs */
+  private woke = false;
 
   constructor(private opts: ClaudeOptions = {}) {}
 
@@ -213,6 +224,7 @@ export class ClaudeDriver implements RunDriver {
     else {
       // a result held for a subagent is not the run's once it is stopped
       this.held = null;
+      this.woke = false;
       this.clearGrace();
       proc.kill();
     }
@@ -249,6 +261,7 @@ export class ClaudeDriver implements RunDriver {
     // a chat's later turns reuse this process, so only a new drive resets these
     this.agents = new Set();
     this.held = null;
+    this.woke = false;
     this.clearGrace();
     try {
       const spawn = ctx.spawn ?? this.opts.spawn ?? bunSpawn;
@@ -275,6 +288,13 @@ export class ClaudeDriver implements RunDriver {
           this.sessionSeen = true;
           ctx.session(session);
         }
+        if (this.held && this.agents.size === 0 && wakes(m)) {
+          // spec P5: the subagents' end starts a turn; its result is the
+          // real one, and a prompt or a long tool call in it is no reason
+          // to fall back on the held one
+          this.woke = true;
+          this.clearGrace();
+        }
         if (m["type"] === "control_request") {
           void this.control(m);
         } else if (m["type"] === "control_cancel_request") {
@@ -287,6 +307,7 @@ export class ClaudeDriver implements RunDriver {
             // spec P5/P6: the main thread paused for a subagent; closing
             // stdin now would fail every later permission request
             this.held = m;
+            this.woke = false;
             continue;
           }
           if (m["type"] === "result") this.held = null;
@@ -296,8 +317,8 @@ export class ClaudeDriver implements RunDriver {
           // keeps it open: the next message continues the same session.
           if (m["type"] === "result" && !chat) proc.stdin.end();
           // subagents done, a result held: the CLI normally starts a turn
-          // with their results; if it does not, the held result is the end
-          if (this.held && this.agents.size === 0 && !this.grace) {
+          // with their results; if none begins, the held result is the end
+          if (this.held && this.agents.size === 0 && !this.woke && !this.grace) {
             const held = this.held;
             const running = proc;
             this.grace = setTimeout(() => {

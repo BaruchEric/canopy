@@ -21,7 +21,7 @@ afterAll(async () => {
 });
 
 async function drive(
-  mode: "job" | "chat" | "die" | "async" | "bgshell" | "quiet",
+  mode: "job" | "chat" | "die" | "async" | "bgshell" | "quiet" | "woke",
   message = "do the thing",
   unattended?: string,
   opts: { chat?: boolean; heldGraceMs?: number } = {},
@@ -210,6 +210,21 @@ describe("a Claude run through the driver", () => {
     const run = await d.until(d.done, "the end");
     expect(run.status).toBe("done");
     expect(run.result?.text).toBe("early");
+  });
+
+  test("a held result waits out the turn the subagents woke, however long its prompt waits", async () => {
+    const d = await drive("woke", "do the thing", undefined, { heldGraceMs: 50 });
+    const first = await d.until((r) => r.status === "waiting", "the subagent's prompt");
+    d.ctx.answer(first.prompt?.id ?? "", { kind: "allow" });
+    await d.until((r) => r.status === "waiting" && r.prompt?.kind === "permission" && r.prompt.title === "bun test", "the main thread's prompt");
+    // far past the grace: the woken turn is still the run's, not over
+    await Bun.sleep(300);
+    expect(d.run.status).toBe("waiting");
+    expect(d.run.result).toBeUndefined();
+    d.ctx.answer(d.run.prompt?.id ?? "", { kind: "allow" });
+    const run = await d.until(d.done, "the end");
+    expect(run.status).toBe("done");
+    expect(run.result?.text).toBe("final");
   });
 
   test("a stop while a result is held for a subagent ends the run stopped, not done", async () => {
