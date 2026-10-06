@@ -91,7 +91,8 @@ describe.skipIf(!tmux)("rotation and the sweep", () => {
     expect(all.find((t) => t.name === "orphan")).toMatchObject({ gone: "definition", status: "running" });
     expect((await post("/api/repos/tasks?id=app", { action: "stop", name: "orphan" })).status).toBe(200);
     await until(async () => !(await Bun.file(join(scratch, `config/tasks/logs/${id}.log`)).exists()), "the orphan's log to go");
-    const st = JSON.parse(await readFile(join(scratch, "config/tasks/state.json"), "utf8")) as Record<string, unknown>;
-    expect(st[id]).toBeUndefined();
+    // the sweep removes the log first and drops the record after, so the saved file lags the log
+    const saved = async () => JSON.parse(await readFile(join(scratch, "config/tasks/state.json"), "utf8")) as Record<string, unknown>;
+    await until(async () => (await saved())[id] === undefined, "the orphan's record to go");
   });
 });
