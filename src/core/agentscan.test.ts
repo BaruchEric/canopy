@@ -118,6 +118,21 @@ describe("classify", () => {
     expect(classify("vim", ["vim", "/tmp/codex"])).toBeNull();
     expect(classify("claude-history", ["claude-history"])).toBeNull();
   });
+
+  test("Claude's helpers are no agent, and a pty host's session counts once", () => {
+    expect(classify("/Users/e/.local/bin/claude", ["/Users/e/.local/bin/claude", "--chrome-native-host"])).toBeNull();
+    expect(classify("/Users/e/.local/bin/claude", ["/Users/e/.local/bin/claude", "daemon", "run", "--origin", "transient"])).toBeNull();
+    expect(classify("claude bg-pty-host", ["claude", "bg-pty-host", "--bg-pty-host", "/tmp/x.sock"])).toBeNull();
+    expect(classify("claude bg-spare", ["claude", "bg-spare", "--bg-spare", "/tmp/x.sock"])).toBeNull();
+    const ver = "/Users/e/.local/share/claude/versions/2.1.290";
+    const procs = [
+      { pid: 10, ppid: 1, comm: "/Users/e/.local/bin/claude", argv: ["/Users/e/.local/bin/claude", "daemon", "run"], state: "S" },
+      { pid: 11, ppid: 10, comm: "/x/ClaudeCode.app/Contents/MacOS/claude", argv: ["/x/claude", "--bg-pty-host", "/tmp/a.sock", "--", ver], state: "S" },
+      { pid: 12, ppid: 11, comm: ver, argv: [ver, "--session-id", "s"], state: "S" },
+      { pid: 13, ppid: 10, comm: "claude bg-spare", argv: ["claude", "bg-spare", "--bg-spare", "/tmp/b.sock"], state: "S" },
+    ];
+    expect(pickAgents(procs).map((p) => p.pid)).toEqual([12]);
+  });
 });
 
 describe("the post", () => {

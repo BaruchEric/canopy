@@ -80,6 +80,12 @@ export function parsePsComm(text: string): Map<number, string> {
 const base = (p: string): string => p.slice(p.lastIndexOf("/") + 1);
 const INTERPRETER = /^(node|nodejs|bun|deno)(\d+(\.\d+)*)?$/;
 const VERSION = /^\d+\.\d+\.\d+/;
+/** Claude Code's own helpers, which run the claude binary but are no
+ *  session: the Chrome extension's native host, and the background daemon
+ *  with its pty hosts and warm spares. The session a pty host runs is its
+ *  child, the version file, and counts once the host is passed over. */
+const HELPER = new Set(["--chrome-native-host", "--bg-pty-host", "bg-pty-host", "--bg-spare", "bg-spare"]);
+const isHelper = (argv: readonly string[]): boolean => argv[1] === "daemon" || argv.some((w) => HELPER.has(w));
 
 /**
  * The harness a process is, or null. Measured, not assumed: Claude Code's
@@ -88,9 +94,11 @@ const VERSION = /^\d+\.\d+\.\d+/;
  * version string, taken as Claude only with `claude` in its path or argv
  * (or an argv that is its version too); a bun- or npm-installed Codex is
  * `node …/codex` (the script word only counts after an interpreter, so
- * `which codex` is no agent) over a native `codex` child.
+ * `which codex` is no agent) over a native `codex` child. Claude's helper
+ * processes (`isHelper`) are none.
  */
 export function classify(comm: string, argv: readonly string[]): Harness | null {
+  if (isHelper(argv)) return null;
   const name = base(comm).toLowerCase();
   if (name === "claude") return "claude";
   if (name === "codex") return "codex";
