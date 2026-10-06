@@ -31,6 +31,7 @@ import {
   type StoredSource,
   type TaskPatch,
   type Workspace,
+  isWsColor,
 } from "./types";
 
 export const DEFAULT_PORT = 7850;
@@ -118,6 +119,19 @@ const configPath = (): string => join(configDir(), "config.json");
 const paths = (v: unknown): string[] =>
   Array.isArray(v) ? v.filter((p, i, all): p is string => typeof p === "string" && p !== "" && all.indexOf(p) === i) : [];
 
+/** One stored workspace, or null for junk. A primary that is not a member
+ *  and a color outside the palette are dropped, not kept to fail later. */
+export function normalizeWorkspace(v: unknown): Workspace | null {
+  if (!v || typeof v !== "object") return null;
+  const w = v as { name?: unknown; repos?: unknown; primary?: unknown; color?: unknown };
+  if (typeof w.name !== "string" || !Array.isArray(w.repos)) return null;
+  const repos = w.repos.filter((r): r is string => typeof r === "string");
+  const out: Workspace = { name: w.name, repos };
+  if (typeof w.primary === "string" && repos.includes(w.primary)) out.primary = w.primary;
+  if (isWsColor(w.color)) out.color = w.color;
+  return out;
+}
+
 function normalize(parsed: Partial<CanopyConfig>): CanopyConfig {
   const base = defaults();
   const cfg = { ...base, ...parsed };
@@ -130,10 +144,9 @@ function normalize(parsed: Partial<CanopyConfig>): CanopyConfig {
     sources: (Array.isArray(cfg.sources) ? cfg.sources : []).filter(isStoredSource),
     historyBin:
       typeof cfg.historyBin === "string" && cfg.historyBin ? cfg.historyBin : null,
-    workspaces: (Array.isArray(cfg.workspaces) ? cfg.workspaces : []).filter(
-      (w): w is Workspace =>
-        Boolean(w) && typeof w.name === "string" && Array.isArray(w.repos),
-    ),
+    workspaces: (Array.isArray(cfg.workspaces) ? cfg.workspaces : [])
+      .map(normalizeWorkspace)
+      .filter((w): w is Workspace => w !== null),
     // an entry from before roles (plain settings) reads as the repo's
     // whole-repo pick; core/route has the rules
     agents: normalizeRepoAgents(cfg.agents),

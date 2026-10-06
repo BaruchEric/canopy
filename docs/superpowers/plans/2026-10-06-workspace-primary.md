@@ -66,7 +66,7 @@
 **Interfaces:**
 - Produces: `WS_COLORS`, `type WsColor`, `isWsColor(v: unknown): v is WsColor`, `Workspace { name; repos; primary?: string; color?: WsColor }`, `effectivePrimary(ws: Workspace): string | null`, `normalizeWorkspace(v: unknown): Workspace | null` (exported from `store.ts` for the test).
 
-- [ ] **Step 1: Write the failing test** in `src/core/store.test.ts`
+- [x] **Step 1: Write the failing test** in `src/core/store.test.ts`
 
 ```ts
 import { normalizeWorkspace } from "./store";
@@ -97,12 +97,12 @@ describe("workspace look", () => {
 });
 ```
 
-- [ ] **Step 2: Run it and watch it fail**
+- [x] **Step 2: Run it and watch it fail**
 
 Run: `env -u TMUX SHELL=/bin/bash bun test src/core/store.test.ts`
 Expected: FAIL, `normalizeWorkspace` is not exported.
 
-- [ ] **Step 3: Implement.** Replace the `Workspace` interface in `src/core/types.ts`:
+- [x] **Step 3: Implement.** Replace the `Workspace` interface in `src/core/types.ts`:
 
 ```ts
 /** The palette's own token names; a workspace's identity color is one of
@@ -153,12 +153,12 @@ Replace the `workspaces:` line in `normalizeConfig` with:
 
 Import `isWsColor` from `./types`.
 
-- [ ] **Step 4: Run the tests and watch them pass**
+- [x] **Step 4: Run the tests and watch them pass**
 
 Run: `env -u TMUX SHELL=/bin/bash bun test src/core/store.test.ts`
 Expected: PASS, the old workspace tests included.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add src/core/types.ts src/core/store.ts src/core/store.test.ts

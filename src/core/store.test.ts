@@ -7,6 +7,7 @@ import {
   agentFor,
   defaultLabel,
   loadConfig,
+  normalizeWorkspace,
   rememberRoot,
   removeSource,
   removeWorkspace,
@@ -23,7 +24,7 @@ import {
   uniqueId,
   upsertWorkspace,
 } from "./store";
-import { DEFAULT_AGENT } from "./types";
+import { DEFAULT_AGENT, effectivePrimary } from "./types";
 
 let dir = "";
 const prev = process.env["CANOPY_CONFIG_DIR"];
@@ -301,5 +302,29 @@ describe("task overrides", () => {
     const cfg = await loadConfig();
     await saveConfig({ ...cfg, tasks: { "/s": [{ name: "ok", cmd: "a" }, { name: "Bad" } as never] } });
     expect(tasksFor(await loadConfig(), "/s")).toEqual([{ name: "ok", cmd: "a" }]);
+  });
+});
+
+describe("workspace look", () => {
+  test("keeps a primary that is a member and a known color", () => {
+    expect(normalizeWorkspace({ name: "w", repos: ["/a", "/b"], primary: "/b", color: "sky" })).toEqual({
+      name: "w",
+      repos: ["/a", "/b"],
+      primary: "/b",
+      color: "sky",
+    });
+  });
+  test("drops a primary that is not a member, and a color not in the palette", () => {
+    expect(normalizeWorkspace({ name: "w", repos: ["/a"], primary: "/zzz", color: "#ff0000" })).toEqual({ name: "w", repos: ["/a"] });
+  });
+  test("refuses junk", () => {
+    expect(normalizeWorkspace(null)).toBeNull();
+    expect(normalizeWorkspace({ name: 3, repos: [] })).toBeNull();
+    expect(normalizeWorkspace({ name: "w", repos: "x" })).toBeNull();
+  });
+  test("the effective primary is the marked one, else the first member, else none", () => {
+    expect(effectivePrimary({ name: "w", repos: ["/a", "/b"], primary: "/b" })).toBe("/b");
+    expect(effectivePrimary({ name: "w", repos: ["/a", "/b"] })).toBe("/a");
+    expect(effectivePrimary({ name: "w", repos: [] })).toBeNull();
   });
 });

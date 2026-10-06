@@ -359,11 +359,25 @@ export interface ScanResult {
   backend: Backend;
 }
 
+/** The palette's own token names; a workspace's identity color is one of
+ *  them, so it follows the theme like every other color. */
+export const WS_COLORS = ["moss", "lichen", "rust", "sky", "bark"] as const;
+export type WsColor = (typeof WS_COLORS)[number];
+
 export interface Workspace {
   name: string;
   /** absolute repo paths — stable across different scan roots */
   repos: string[];
+  /** the member new code goes in: a workspace run's cwd. One of `repos`;
+   *  absent means the first member */
+  primary?: string;
+  color?: WsColor;
 }
+
+export const isWsColor = (v: unknown): v is WsColor => typeof v === "string" && (WS_COLORS as readonly string[]).includes(v);
+
+/** Where a workspace run works: the marked primary, else the first member. */
+export const effectivePrimary = (ws: Workspace): string | null => ws.primary ?? ws.repos[0] ?? null;
 
 export type PeerRole = "git" | "mirror";
 export type PeerSync = "off" | "dry" | "on";
