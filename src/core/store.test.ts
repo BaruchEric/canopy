@@ -19,6 +19,7 @@ import {
   setRepoAgent,
   setRole,
   setTask,
+  setWorkspaceLook,
   slugify,
   tasksFor,
   uniqueId,
@@ -326,5 +327,24 @@ describe("workspace look", () => {
     expect(effectivePrimary({ name: "w", repos: ["/a", "/b"], primary: "/b" })).toBe("/b");
     expect(effectivePrimary({ name: "w", repos: ["/a", "/b"] })).toBe("/a");
     expect(effectivePrimary({ name: "w", repos: [] })).toBeNull();
+  });
+});
+
+describe("workspace look updates", () => {
+  test("sets and clears primary and color without touching members", async () => {
+    await upsertWorkspace("look", ["/a", "/b"]);
+    let ws = await setWorkspaceLook("look", { primary: "/b", color: "rust" });
+    expect(ws.find((w) => w.name === "look")).toEqual({ name: "look", repos: ["/a", "/b"], primary: "/b", color: "rust" });
+    ws = await setWorkspaceLook("look", { color: null });
+    expect(ws.find((w) => w.name === "look")).toEqual({ name: "look", repos: ["/a", "/b"], primary: "/b" });
+  });
+  test("refuses a primary that is not a member, and an unknown workspace", async () => {
+    await expect(setWorkspaceLook("look", { primary: "/zzz" })).rejects.toThrow("not a member of look");
+    await expect(setWorkspaceLook("nope", { color: "sky" })).rejects.toThrow("unknown workspace");
+  });
+  test("removing the primary member clears primary", async () => {
+    const ws = await removeWorkspace("look", "/b");
+    expect(ws.find((w) => w.name === "look")).toEqual({ name: "look", repos: ["/a"] });
+    await removeWorkspace("look");
   });
 });

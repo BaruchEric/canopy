@@ -177,7 +177,7 @@ git commit -m "feat(workspaces): a primary member and an identity color"
 - Consumes: `Workspace`, `WsColor` (Task 1).
 - Produces: `setWorkspaceLook(name: string, look: { primary?: string | null; color?: WsColor | null }): Promise<Workspace[]>`. It throws `Error("unknown workspace")` or `Error("not a member of <name>")`.
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 ```ts
 import { setWorkspaceLook } from "./store";
@@ -202,12 +202,12 @@ describe("workspace look updates", () => {
 });
 ```
 
-- [ ] **Step 2: Run it and watch it fail**
+- [x] **Step 2: Run it and watch it fail**
 
 Run: `env -u TMUX SHELL=/bin/bash bun test src/core/store.test.ts`
 Expected: FAIL, `setWorkspaceLook` is not exported.
 
-- [ ] **Step 3: Implement** in `src/core/store.ts`, after `removeWorkspace`:
+- [x] **Step 3: Implement** in `src/core/store.ts`, after `removeWorkspace`:
 
 ```ts
 /** Sets or clears a workspace's primary and color; membership stays as it
@@ -239,12 +239,12 @@ In `removeWorkspace`, inside `if (ws)`, after filtering the repos:
 
 Check that `withConfig` lets a throw inside the callback abort the write. Read its body: if it writes before rethrowing, move the checks out of the callback into a `loadConfig()` pre-check.
 
-- [ ] **Step 4: Run the tests and watch them pass**
+- [x] **Step 4: Run the tests and watch them pass**
 
 Run: `env -u TMUX SHELL=/bin/bash bun test src/core/store.test.ts`
 Expected: PASS.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add src/core/store.ts src/core/store.test.ts

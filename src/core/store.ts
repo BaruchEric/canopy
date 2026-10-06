@@ -31,6 +31,7 @@ import {
   type StoredSource,
   type TaskPatch,
   type Workspace,
+  type WsColor,
   isWsColor,
 } from "./types";
 
@@ -281,10 +282,33 @@ export async function removeWorkspace(
   return withConfig((cfg) => {
     if (repo) {
       const ws = cfg.workspaces.find((w) => w.name === name);
-      if (ws) ws.repos = ws.repos.filter((r) => r !== repo);
+      if (ws) {
+        ws.repos = ws.repos.filter((r) => r !== repo);
+        if (ws.primary === repo) delete ws.primary;
+      }
     } else {
       cfg.workspaces = cfg.workspaces.filter((w) => w.name !== name);
     }
+    return cfg.workspaces;
+  });
+}
+
+/** Sets or clears a workspace's primary and color; membership stays as it
+ *  is. `null` clears a field and `undefined` leaves it alone. */
+export async function setWorkspaceLook(
+  name: string,
+  look: { primary?: string | null; color?: WsColor | null },
+): Promise<Workspace[]> {
+  return withConfig((cfg) => {
+    const ws = cfg.workspaces.find((w) => w.name === name);
+    if (!ws) throw new Error("unknown workspace");
+    if (look.primary === null) delete ws.primary;
+    else if (look.primary !== undefined) {
+      if (!ws.repos.includes(look.primary)) throw new Error(`not a member of ${name}`);
+      ws.primary = look.primary;
+    }
+    if (look.color === null) delete ws.color;
+    else if (look.color !== undefined) ws.color = look.color;
     return cfg.workspaces;
   });
 }
