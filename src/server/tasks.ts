@@ -564,8 +564,15 @@ export class TaskHub {
         // a stop can land while the definition is read
         if (this.stopped || this.state[id] !== rec || rec.want !== "running" || rec.gaveUp || this.running(id)) return;
         if (!current?.keep || current.hidden) return;
-        await this.launch(currentRepo, current, false);
+        // counted before the launch: the pane is visible as running the moment it
+        // starts, and a reader seeing it running must already see the restart
         rt.restarts += 1;
+        try {
+          await this.launch(currentRepo, current, false);
+        } catch (e) {
+          rt.restarts -= 1;
+          throw e;
+        }
       })
         .catch(say(`task ${def.name}`))
         .finally(() => void this.tell(repo.id).catch(say("tasks")));

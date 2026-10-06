@@ -63,7 +63,7 @@ const panes = async () => {
   return Array.isArray(r) ? r : [];
 };
 const record = async (id: string) =>
-  (JSON.parse(await readFile(join(process.env["CANOPY_CONFIG_DIR"]!, "tasks/state.json"), "utf8")) as Record<string, { fails?: number; gaveUp?: boolean }>)[id];
+  (JSON.parse(await readFile(join(process.env["CANOPY_CONFIG_DIR"]!, "tasks/state.json"), "utf8")) as Record<string, { fails?: number; gaveUp?: boolean; exitedAt?: number }>)[id];
 
 const post = (h: TaskHub, path: string, body: unknown, repoOf: (id: string) => Repo | undefined) => {
   const url = new URL(`http://x${path}`);
@@ -112,6 +112,8 @@ describe.skipIf(!tmux)("keep running across a canopy restart", () => {
     await first.start();
     await first.act(app, "start", "crash");
     await until(async () => (await info(first, "crash")).status === "backoff", "the first backoff");
+    // the backoff shows from memory; the next canopy only knows the death once it is saved
+    await until(async () => (await record(taskTermId(app.path, "crash")))?.fails === 1, "the death on disk");
     first.stop();
     const next = hub();
     await next.start();
@@ -128,6 +130,8 @@ describe.skipIf(!tmux)("keep running across a canopy restart", () => {
     const id = taskTermId(app.path, "runner");
     await killSession(tmuxBase()!, id);
     await until(async () => (await info(first, "runner")).status === "backoff", "the backoff after the kill");
+    // the backoff shows from memory; the next canopy only knows the death once it is saved
+    await until(async () => (await record(id))?.fails === 1, "the death on disk");
     first.stop();
     const next = hub();
     await next.start();
@@ -158,7 +162,8 @@ describe.skipIf(!tmux)("keep running across a canopy restart", () => {
     expect(toldAgain).toBe(0);
     await next.act(app, "start", "crash");
     await until(async () => (await info(next, "crash")).status === "backoff", "a fresh backoff");
-    expect(await record(id)).toMatchObject({ fails: 1 });
+    // the backoff shows from memory, the record follows once it is saved
+    await until(async () => (await record(id))?.fails === 1, "the failure on disk");
     expect((await record(id))?.gaveUp).toBeUndefined();
   });
 
