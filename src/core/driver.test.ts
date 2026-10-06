@@ -332,3 +332,11 @@ describe("steps", () => {
     expect(run.steps[0]?.tool?.status).toBe("ok");
   });
 });
+
+test("settle notes for a proposal", () => {
+  const p = { kind: "proposal" as const, plan: "1. x", auto: false };
+  expect(settleNote(p, { kind: "approve", auto: false })).toBe("approved the plan, asking before commands");
+  expect(settleNote(p, { kind: "approve", auto: true })).toBe("approved the plan, running on its own");
+  expect(settleNote(p, { kind: "deny", message: "split step 2" })).toBe("sent the plan back: split step 2");
+  expect(settleNote(p, { kind: "deny" })).toBe("turned the plan down");
+});

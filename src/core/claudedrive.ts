@@ -139,7 +139,7 @@ export function cliArgs(spec: DriveSpec, agent: AgentSettings = DEFAULT_AGENT, s
     "--permission-prompt-tool",
     "stdio",
     "--permission-mode",
-    agent.yolo ? "bypassPermissions" : "default",
+    spec.permissionMode ?? (agent.yolo ? "bypassPermissions" : "default"),
     "--max-turns",
     String(spec.maxTurns),
     // The same CLAUDE.md files and permission rules a terminal session

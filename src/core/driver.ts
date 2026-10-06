@@ -57,10 +57,15 @@ export interface DriveSpec {
   /** no one answers this run: every prompt is denied at once with this
    *  message, and the run never waits */
   unattended?: string;
+  /** start Claude in this permission mode instead of the agent's own */
+  permissionMode?: "plan";
 }
 
 /** A prompt before the Runner numbers it. */
-export type PromptInput = PermissionAsk | { kind: "question"; questions: RunQuestion[] };
+export type PromptInput =
+  | PermissionAsk
+  | { kind: "question"; questions: RunQuestion[] }
+  | { kind: "proposal"; plan: string; auto: boolean };
 
 /** What a run's remembered rules say about a permission (`core/remember.ts`,
  *  wired by the Runner). */
@@ -184,6 +189,11 @@ export const activeStatus = (s: RunStatus): boolean =>
 export function settleNote(prompt: RunPrompt | PromptInput, a: RunAnswer): string {
   if (prompt.kind === "question") {
     return a.kind === "answers" ? `answered: ${Object.values(a.answers).join("; ")}` : "question dismissed";
+  }
+  if (prompt.kind === "proposal") {
+    if (a.kind === "approve") return a.auto ? "approved the plan, running on its own" : "approved the plan, asking before commands";
+    if (a.kind === "allow") return "approved the plan, asking before commands";
+    return a.kind === "deny" && a.message ? `sent the plan back: ${a.message}` : "turned the plan down";
   }
   if (a.kind === "allow-all") return `allowed everything from here: ${prompt.title}`;
   if (a.kind === "allow" && a.remember) return `allowed, and remembered ${a.remember.rule}: ${prompt.title}`;

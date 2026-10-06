@@ -781,7 +781,7 @@ export const AGENT_OPENERS: readonly OpenerId[] = ["agent", "herdr"];
 
 /* ---------- runs: a job handed to Claude Code for one repo ---------- */
 
-export const RUN_ACTIONS = ["ask", "chat"] as const;
+export const RUN_ACTIONS = ["ask", "chat", "propose"] as const;
 export type RunAction = (typeof RUN_ACTIONS)[number];
 
 export type RunStatus =
@@ -805,6 +805,16 @@ export interface RunTool {
   output?: string;
 }
 
+/** One line of the agent's own checklist (Claude's TaskCreate or TodoWrite). */
+export interface RunTodo {
+  /** the agent's id: "3" from "Task #3 created", or the index for TodoWrite */
+  id: string;
+  subject: string;
+  status: "pending" | "in_progress" | "completed";
+  /** the present-tense form the agent gave, shown while in progress */
+  active?: string;
+}
+
 export interface RunStep {
   id: string;
   /** unix ms */
@@ -814,6 +824,8 @@ export interface RunStep {
   kind: "text" | "tool" | "note" | "user";
   text?: string;
   tool?: RunTool;
+  /** the step id of the Agent call this ran under, for a subagent's steps */
+  parent?: string;
 }
 
 export interface RunQuestionOption {
@@ -859,7 +871,12 @@ export interface PermissionAsk {
   noRule?: string;
 }
 
-export type RunPrompt = (PermissionAsk & { id: string }) | { id: string; kind: "question"; questions: RunQuestion[] };
+export type RunPrompt =
+  | (PermissionAsk & { id: string })
+  | { id: string; kind: "question"; questions: RunQuestion[] }
+  /** a plan the agent wants approved before it builds (Claude's
+   *  ExitPlanMode); `auto` says whether "run on its own" may be offered */
+  | { id: string; kind: "proposal"; plan: string; auto: boolean };
 
 /** Where a remembered rule applies: one workflow's step wherever it runs, a
  *  whole workflow, or one repo (every run in it, a flow's included). */
@@ -900,6 +917,8 @@ export interface RememberedRule {
 export type RunAnswer =
   | { kind: "allow"; remember?: RememberAsk }
   | { kind: "allow-all" }
+  /** a proposal approved; `auto` runs it without asking */
+  | { kind: "approve"; auto: boolean }
   /** `message`, when given, is what the agent is told in place of the
    *  harness driver's own words */
   | { kind: "deny"; message?: string }
@@ -971,6 +990,10 @@ export interface Run {
   steps: RunStep[];
   /** the prompt the run is blocked on, when status is "waiting" */
   prompt: RunPrompt | null;
+  /** the plan the agent proposed last (propose runs) */
+  proposal?: string;
+  /** the agent's checklist as it last stood */
+  todos?: RunTodo[];
   result?: RunResult;
   /** why a failed run failed */
   error?: string;

@@ -274,7 +274,7 @@ This task ships on its own. It fixes runs today, before anything else in this pl
   - `ActionSpec.permissionMode?: "plan"` and `DriveSpec.permissionMode?: "plan"`.
   - `ACTIONS.propose`.
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 `claudedrive.test.ts`:
 
@@ -333,12 +333,12 @@ describe("parseAnswer", () => {
 });
 ```
 
-- [ ] **Step 2: Run them and watch them fail**
+- [x] **Step 2: Run them and watch them fail**
 
 Run: `env -u TMUX SHELL=/bin/bash bun test src/core/ src/server/answers.test.ts`
 Expected: FAIL on the type errors and the missing action.
 
-- [ ] **Step 3: Implement**
+- [x] **Step 3: Implement**
 
 `types.ts`:
 
@@ -437,12 +437,12 @@ In the run route, after `agentFor`:
       if (b.action === "propose" && agent.harness !== "claude") return json({ error: "plan, then build needs Claude Code" }, 400);
 ```
 
-- [ ] **Step 4: Run the tests and watch them pass**
+- [x] **Step 4: Run the tests and watch them pass**
 
 Run: `bun run typecheck && env -u TMUX SHELL=/bin/bash bun test src/core/ src/server/`
 Expected: PASS.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add src ui/src

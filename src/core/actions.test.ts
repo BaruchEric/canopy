@@ -257,3 +257,12 @@ describe("describeTool", () => {
     expect(toolDetail("Grep", { pattern: "x" })).toContain('"pattern": "x"');
   });
 });
+
+test("propose starts in plan mode with room for plan and build", () => {
+  expect(ACTIONS.propose.permissionMode).toBe("plan");
+  expect(ACTIONS.propose.maxTurns).toBe(200);
+  expect(ACTIONS.propose.expectsChange).toBe(true);
+  expect(ACTIONS.propose.task).toContain("ExitPlanMode");
+  expect(ACTIONS.propose.task).toContain("subagents");
+  expect(ACTIONS.propose.allowedTools.some((t) => t.startsWith("Bash(bun"))).toBe(false);
+});

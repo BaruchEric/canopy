@@ -38,7 +38,7 @@ export interface InboxItem {
   /** the broker's ask id (the home backend's), or a run's or flow's
    *  qualified id */
   id: string;
-  kind: "permission" | "question" | "guard" | "gate" | "clarify" | "park" | "advice" | "hand-off";
+  kind: "permission" | "question" | "proposal" | "guard" | "gate" | "clarify" | "park" | "advice" | "hand-off";
   /** the repo it is about, by the page's id, when the page has it */
   repoId: string | null;
   /** the repo in words: the checkout's name, else what the agent's card says */
@@ -203,7 +203,7 @@ function runItem(run: Run, flow: Flow | undefined, ctx: InboxContext): InboxItem
     repo: repo?.name ?? run.repoId,
     who,
     where: `canopy ${run.chat ? "chat" : "run"}${backend ? ` on ${backend}` : ""}`,
-    title: p.kind === "permission" ? p.title : `question: ${p.questions[0]?.question ?? "a question"}`,
+    title: p.kind === "permission" ? p.title : p.kind === "proposal" ? "a plan to approve" : `question: ${p.questions[0]?.question ?? "a question"}`,
     detail: p.kind === "permission" ? p.detail : "",
     ...(p.kind === "question" ? { questions: p.questions } : {}),
     ...(p.kind === "permission" ? { permission: p } : {}),

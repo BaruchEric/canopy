@@ -32,6 +32,8 @@ export interface ActionSpec {
   mode: "job" | "ask" | "chat";
   /** no one answers this run: every prompt is denied at once with this message */
   unattended?: string;
+  /** Claude's starting permission mode, over the agent's yolo */
+  permissionMode?: "plan";
   /** a flow's step: which workflow and step, the run's `flowStep` */
   flowStep?: FlowStepName;
 }
@@ -107,6 +109,22 @@ export const ACTIONS: Record<RunAction, ActionSpec> = {
     mode: "ask",
     task: `Task: see the note below.`,
   },
+  propose: {
+    label: "plan, then build…",
+    verb: "plan",
+    blurb:
+      "The repo's agent reads the code and proposes a step-by-step plan without changing anything. You approve it, send it back with notes, or turn it down. Once approved it builds the plan in the same session, with a checklist you can watch.",
+    notePlaceholder: "what should be built?",
+    noteRequired: true,
+    allowedTools: [...READ, ...GIT_READ],
+    // per reply, and one reply covers both the plan and the build
+    maxTurns: 200,
+    progress: "planning",
+    expectsChange: true,
+    mode: "ask",
+    permissionMode: "plan",
+    task: `Task: plan, then build what the note below asks for. You start in plan mode. Read what you need, using subagents for wide reading, then present a step-by-step plan with ExitPlanMode. Change nothing before the plan is approved. The user may send the plan back with notes; revise it and present it again. Once it is approved: track each step of the plan with your task tool, hand steps that do not depend on each other to subagents running in parallel, run the repository's own checks (typecheck, lint, tests and build, as its scripts name them) at the end, and do not commit unless the note asks you to.`,
+  },
   chat: {
     label: "chat…",
     verb: "chat",
@@ -141,6 +159,11 @@ export function planWords(action: RunAction, workspace?: string): { blurb: strin
       return {
         blurb: `A conversation with the agent across workspace ${workspace}'s folders, turn by turn, in canopy. ${steady}`,
         notePlaceholder: `say something about workspace ${workspace}`,
+      };
+    case "propose":
+      return {
+        blurb: `The agent reads across workspace ${workspace}'s folders and proposes a step-by-step plan without changing anything. You approve it, send it back with notes, or turn it down. Once approved it builds the plan in the same session.`,
+        notePlaceholder: `what should be built in workspace ${workspace}?`,
       };
   }
 }
@@ -360,6 +383,10 @@ export function describeTool(
       return `agent: ${str("description") || "subtask"}`;
     case "Skill":
       return `skill ${str("skill")}`;
+    case "TaskCreate":
+      return `todo: ${str("subject")}`;
+    case "TaskUpdate":
+      return `todo ${str("taskId")}: ${str("status")}`;
     case "TodoWrite":
     case "Plan":
       return "update the plan";

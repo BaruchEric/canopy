@@ -1,3 +1,4 @@
+import { parseAnswer } from "./answers";
 import { ACTIONS, splitMembers } from "../core/actions";
 import { PREFLIGHT_HEADERS, corsHeaders, parseOrigins } from "../core/cors";
 import { Library, libraryOriginAllowed, openBind, tailnetHost } from "../core/library";
@@ -150,7 +151,6 @@ import {
   type PullCount,
   type Repo,
   type RunAction,
-  type RunAnswer,
   type Run,
   type WorkspaceScope,
   type ScanResult,
@@ -686,6 +686,9 @@ async function startRepoRun(
   const busy = state.runner.activeFor(repo.id);
   if (busy) throw new HttpError(409, `${repo.name} already has a ${busy.verb} run going`);
   const agent = agentFor(await loadConfig(), repo.path, action === "chat" ? "chat" : "job");
+  // Before the workspace and install checks, so a workspace propose on
+  // Codex hears what is wrong with the action, not with the workspace.
+  if (action === "propose" && agent.harness !== "claude") throw new HttpError(400, "plan, then build needs Claude Code");
   if (scope && agent.harness !== "claude") throw new HttpError(400, "workspace runs need Claude Code");
   await needHarness(state, agent.harness, repo.path);
   // the device it was started from, when the browser said and is on the stream
@@ -1116,32 +1119,6 @@ async function historyContext(
   const h = v.repos[repo.id];
   if (!h) throw new HttpError(404, "no Claude sessions recorded for this repo");
   return { bin: c.bin, project: h.project };
-}
-
-/** The browser's reply to a run prompt, checked field by field: a malformed
- *  body must not reach the SDK as an "allow". */
-function parseAnswer(v: unknown): RunAnswer | null {
-  if (!v || typeof v !== "object") return null;
-  const kind = (v as { kind?: unknown }).kind;
-  if (kind === "allow") {
-    const r = (v as { remember?: unknown }).remember;
-    if (r === undefined) return { kind };
-    if (!r || typeof r !== "object") return null;
-    const { rule, scope } = r as { rule?: unknown; scope?: unknown };
-    if (typeof rule !== "string" || !rule.trim() || rule.length > 2_000) return null;
-    if (scope !== "step" && scope !== "workflow" && scope !== "repo") return null;
-    return { kind, remember: { rule: rule.trim(), scope } };
-  }
-  if (kind === "allow-all" || kind === "deny") return { kind };
-  if (kind !== "answers") return null;
-  const raw = (v as { answers?: unknown }).answers;
-  if (!raw || typeof raw !== "object") return null;
-  const answers: Record<string, string> = {};
-  for (const [q, a] of Object.entries(raw)) {
-    if (typeof a !== "string") return null;
-    answers[q] = a;
-  }
-  return { kind: "answers", answers };
 }
 
 /** Scan options from config — DEFAULT_IGNORE plus whatever the user added.

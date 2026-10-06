@@ -279,6 +279,8 @@ export function RunPromptForm({
       />
     );
   }
+  // the proposal form lands with the plan UI; until then the plan reads as text
+  if (prompt.kind === "proposal") return <pre key={id}>{prompt.plan}</pre>;
   return <Questions key={id} questions={prompt.questions} who={agentWord(harness)} onAnswer={(answers) => onAnswer({ kind: "answers", answers }, id)} />;
 }
 

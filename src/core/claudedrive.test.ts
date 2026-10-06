@@ -94,6 +94,11 @@ test("cliArgs adds one --add-dir per extra folder", () => {
   expect(cliArgs({ allowedTools: [], maxTurns: 5 })).not.toContain("--add-dir");
 });
 
+test("cliArgs starts in plan mode when the spec says, whatever yolo says", () => {
+  const args = cliArgs({ allowedTools: [], maxTurns: 5, permissionMode: "plan" }, { ...DEFAULT_AGENT, yolo: true });
+  expect(args[args.indexOf("--permission-mode") + 1]).toBe("plan");
+});
+
 describe("a Claude run through the driver", () => {
   test("steps, prompts through the shared queue, a withdrawn prompt, the session, the cost and the env", async () => {
     const d = await drive("job");
