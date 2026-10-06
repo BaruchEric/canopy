@@ -271,7 +271,7 @@ git commit -m "feat(workspaces): set the look without touching members"
   - `buildPrompt(repo, spec, note, scope?: RunScope)`.
   - `Runner.start(repo, action, spec, note, agent?, by?, scope?: RunScope)`.
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 `src/core/claudedrive.test.ts`:
 
@@ -309,12 +309,12 @@ If `actions.test.ts` already builds a `Repo` fixture, reuse it instead of the ca
 
 `src/core/runner-drivers.test.ts`: follow the file's existing fake-driver pattern. Start a run with a scope and assert three things: `run.workspace === "bike-trips"`, the driver's `ctx.spec.addDirs` equals `["/w/trips-analysis"]`, and the first step is the note "left out of this run: ssh://mini/x (on another machine)" when `skipped` holds that line.
 
-- [ ] **Step 2: Run them and watch them fail**
+- [x] **Step 2: Run them and watch them fail**
 
 Run: `env -u TMUX SHELL=/bin/bash bun test src/core/claudedrive.test.ts src/core/actions.test.ts src/core/runner-drivers.test.ts`
 Expected: FAIL. The type errors are about `addDirs` and the fourth argument.
 
-- [ ] **Step 3: Implement**
+- [x] **Step 3: Implement**
 
 `types.ts`, beside `Run`:
 
@@ -376,12 +376,12 @@ const WS_SAFETY = safetyFor("Work only inside these folders (submodules under th
     if (scope?.skipped.length) live.ctx.step({ kind: "note", text: `left out of this run: ${scope.skipped.join("; ")}` });
 ```
 
-- [ ] **Step 4: Run the tests and watch them pass**
+- [x] **Step 4: Run the tests and watch them pass**
 
 Run: `env -u TMUX SHELL=/bin/bash bun test src/core/`
 Expected: PASS.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add src/core

@@ -52,6 +52,8 @@ export interface DriveSpec {
   /** Claude permission rules (`Bash(git status:*)`, `Read`, ...) */
   allowedTools: readonly string[];
   maxTurns: number;
+  /** folders beside the cwd the agent may use (`--add-dir`): a workspace run's other members */
+  addDirs?: readonly string[];
   /** no one answers this run: every prompt is denied at once with this
    *  message, and the run never waits */
   unattended?: string;

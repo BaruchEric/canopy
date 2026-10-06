@@ -123,6 +123,27 @@ describe("the driver a run gets", () => {
   });
 });
 
+describe("a workspace run", () => {
+  const scope = { workspace: "bike-trips", primary: "/tmp/a", others: ["/w/trips-analysis"], skipped: ["ssh://mini/x (on mini)"] };
+
+  test("carries the workspace, hands the others to the driver and says what it left out", () => {
+    const { runner, ctxOf } = setup();
+    const run = runner.start(repo("a"), "ask", ACTIONS.ask, "look", DEFAULT_AGENT, undefined, scope);
+    expect(run.workspace).toBe("bike-trips");
+    expect(ctxOf(0).spec.addDirs).toEqual(["/w/trips-analysis"]);
+    expect(run.steps[0]).toMatchObject({ kind: "note", text: "left out of this run: ssh://mini/x (on mini)" });
+  });
+
+  test("a chat opened empty keeps the workspace wording in its first prompt", () => {
+    const { runner, made } = setup();
+    const run = runner.start(repo("a"), "chat", ACTIONS.chat, "", DEFAULT_AGENT, undefined, scope);
+    runner.say(run.id, "hello");
+    const prompt = made[0]?.started[0] ?? "";
+    expect(prompt).toContain("workspace bike-trips");
+    expect(prompt).toContain("Work only inside these folders");
+  });
+});
+
 describe("a chat through its driver", () => {
   test("opens idle; the first message starts the driver framed, later ones are its next turns", () => {
     const { runner, made, ctxOf } = setup();

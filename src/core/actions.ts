@@ -4,7 +4,7 @@
  *  Codex's items. Browser-safe: the UI imports this for labels and
  *  preconditions, the runner for prompts and titles. */
 
-import type { FlowStepName, Repo, RunAction, WorkflowWhen } from "./types";
+import type { FlowStepName, Repo, RunAction, RunScope, WorkflowWhen } from "./types";
 
 export interface ActionSpec {
   /** menu label */
@@ -36,10 +36,13 @@ export interface ActionSpec {
   flowStep?: FlowStepName;
 }
 
-const SAFETY = `- Work only inside this repository (submodules under it included).
+const safetyFor = (where: string) => `- ${where}
 - Never rewrite published history, never force-push, never discard uncommitted work, never run destructive git commands (reset --hard, clean, checkout -- on tracked files).
 - Do not add a Co-Authored-By trailer or any mention of Claude, Codex or an AI agent to commit messages.
 - No backticks in commit messages.`;
+
+const SAFETY = safetyFor("Work only inside this repository (submodules under it included).");
+const WS_SAFETY = safetyFor("Work only inside these folders (submodules under them included).");
 
 const DONE = `- canopy shows this repo as "changed" for as long as git status lists anything at all: untracked files, and submodules with new commits, modified content, or untracked content inside them. The job is done when the list is empty and the branch is not ahead, or when the user has decided to leave something.`;
 
@@ -47,18 +50,23 @@ const STUCK = `- When you cannot finish the task as stated (nothing you would co
 
 const SUMMARY = `- Finish with a short plain-prose summary of what you did (commit hashes, remote, URL) and anything you left alone and why. No headings, no bullet lists.`;
 
-const RULES = ["Ground rules:", SAFETY, DONE, STUCK, SUMMARY].join("\n");
+/** The three rule sets, built once per safety wording: a workspace run is
+ *  told the same rules over its folders instead of one repository. */
+const rulesFor = (safety: string) => ({
+  job: ["Ground rules:", safety, DONE, STUCK, SUMMARY].join("\n"),
+  /** An ask is the note's task and no more, so it goes without the line that
+   *  makes a job done only once the repo is clean and pushed: with it, "explain
+   *  this" or "pull main" ended by offering to commit whatever else was lying
+   *  around and to push. */
+  ask: ["Ground rules:", safety, STUCK, SUMMARY].join("\n"),
+  /** The chat keeps the safety rules and drops the ones about how a job ends:
+   *  a conversation has no closing summary, and it is not done until the user
+   *  says so. */
+  chat: ["Ground rules:", safety].join("\n"),
+});
 
-/** An ask is the note's task and no more, so it goes without the line that
- *  makes a job done only once the repo is clean and pushed: with it, "explain
- *  this" or "pull main" ended by offering to commit whatever else was lying
- *  around and to push. */
-const ASK_RULES = ["Ground rules:", SAFETY, STUCK, SUMMARY].join("\n");
-
-/** The chat keeps the safety rules and drops the ones about how a job ends:
- *  a conversation has no closing summary, and it is not done until the user
- *  says so. */
-const CHAT_RULES = ["Ground rules:", SAFETY].join("\n");
+const RULES = rulesFor(SAFETY);
+const WS_RULES = rulesFor(WS_SAFETY);
 
 const GIT_READ = [
   "Bash(git status:*)",
@@ -155,12 +163,22 @@ export function repoFacts(repo: Repo): string[] {
  *  read, so the agent starts with the same picture the card shows. The
  *  ground rules name Claude's AskUserQuestion; a Codex run is told its own
  *  tool for the same thing (codexrun.ts). */
-export function buildPrompt(repo: Repo, spec: ActionSpec, note: string): string {
+export function buildPrompt(repo: Repo, spec: ActionSpec, note: string, scope?: RunScope): string {
   const facts = repoFacts(repo);
-  const head = [
-    `You are in the git repository ${repo.name} at ${repo.path}, launched from canopy (a multi-repo git dashboard).`,
-    facts.length ? `Current state: ${facts.join(", ")}.` : "",
-  ]
+  const rules = scope ? WS_RULES : RULES;
+  const head = (
+    scope
+      ? [
+          `You are working across the workspace ${scope.workspace}, launched from canopy (a multi-repo git dashboard).`,
+          `Primary folder, where new code goes: ${scope.primary} (the git repository ${repo.name}).`,
+          scope.others.length ? `Other folders you may read and change: ${scope.others.join(", ")}.` : "",
+          facts.length ? `Primary's current state: ${facts.join(", ")}.` : "",
+        ]
+      : [
+          `You are in the git repository ${repo.name} at ${repo.path}, launched from canopy (a multi-repo git dashboard).`,
+          facts.length ? `Current state: ${facts.join(", ")}.` : "",
+        ]
+  )
     .filter(Boolean)
     .join("\n");
   const trimmed = note.trim();
@@ -174,8 +192,8 @@ export function buildPrompt(repo: Repo, spec: ActionSpec, note: string): string 
   // A chat's first message comes last, where a reply naturally follows it.
   const parts =
     spec.mode === "chat"
-      ? [head, spec.task, CHAT_RULES, noteBlock]
-      : [head, spec.task, noteBlock, spec.mode === "ask" ? ASK_RULES : RULES];
+      ? [head, spec.task, rules.chat, noteBlock]
+      : [head, spec.task, noteBlock, spec.mode === "ask" ? rules.ask : rules.job];
   return parts.filter(Boolean).join("\n\n");
 }
 

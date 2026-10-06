@@ -30,6 +30,7 @@ import {
   type RememberedRule,
   type Run,
   type RunAnswer,
+  type RunScope as WorkspaceScope,
 } from "./types";
 
 export { claudeBinary, cliArgs } from "./claudedrive";
@@ -110,6 +111,8 @@ interface Live {
    *  message reuses for the prompt's framing */
   repo: Repo;
   spec: ActionSpec;
+  /** the workspace a run spans, kept so a chat's later prompts say so too */
+  scope?: WorkspaceScope;
   /** status fingerprint at start, compared with the one at the end */
   before: string;
   /** each of a stage run's processes, settled once it has exited and its
@@ -196,6 +199,7 @@ export class Runner {
     note: string,
     agent: AgentSettings = DEFAULT_AGENT,
     by?: string,
+    scope?: WorkspaceScope,
   ): Run {
     const busy = this.activeFor(repo.id);
     if (busy) {
@@ -229,6 +233,7 @@ export class Runner {
       prompt: null,
     };
     if (by) run.by = by;
+    if (scope) run.workspace = scope.workspace;
     if (spec.flowStep) run.flowStep = { ...spec.flowStep };
     // a stage's run never takes a remembered rule (amendment 4, ruling 16):
     // a rule kept on one seed, or for one step, must not hold for the next
@@ -238,7 +243,7 @@ export class Runner {
       {
         cwd: repo.path,
         agent,
-        spec,
+        spec: scope ? { ...spec, addDirs: scope.others } : spec,
         env: runEnv(run, this.opts.backend),
         stage,
         label: driver.label,
@@ -250,17 +255,18 @@ export class Runner {
       // `live` is read only once the run has ended, long after it is set
       { emit: (r) => this.hooks.onChange(r), ended: () => void this.settle(live) },
     );
-    const live: Live = { ctx, driver, started: false, repo, spec, before: statusFingerprint(repo.status), drains: [], releases: [] };
+    const live: Live = { ctx, driver, started: false, repo, spec, ...(scope ? { scope } : {}), before: statusFingerprint(repo.status), drains: [], releases: [] };
     this.live.set(run.id, live);
     this.prune();
+    if (scope?.skipped.length) live.ctx.step({ kind: "note", text: `left out of this run: ${scope.skipped.join("; ")}` });
     if (chat) {
       if (note.trim()) live.ctx.step({ kind: "user", text: note.trim() });
       this.hooks.onChange(run);
-      if (note.trim()) this.begin(live, buildPrompt(repo, spec, note));
+      if (note.trim()) this.begin(live, buildPrompt(repo, spec, note, scope));
       return run;
     }
     this.hooks.onChange(run);
-    this.begin(live, buildPrompt(repo, spec, run.note));
+    this.begin(live, buildPrompt(repo, spec, run.note, scope));
     return run;
   }
 
@@ -279,7 +285,7 @@ export class Runner {
     run.status = "working";
     this.hooks.onChange(run);
     if (live.started) live.driver.say(message);
-    else this.begin(live, buildPrompt(live.repo, live.spec, message));
+    else this.begin(live, buildPrompt(live.repo, live.spec, message, live.scope));
     return run;
   }
 

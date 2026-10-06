@@ -928,6 +928,18 @@ export interface RunResult {
   tokens?: RunTokens;
 }
 
+/** A run that spans a workspace: it works in the primary and may read and
+ *  change the other local members. */
+export interface RunScope {
+  workspace: string;
+  /** absolute path, the run's cwd */
+  primary: string;
+  /** the other local members, absolute paths, passed with --add-dir */
+  others: string[];
+  /** members left out, in words: "ssh://mini/x (on mini)" */
+  skipped: string[];
+}
+
 export interface Run {
   id: string;
   repoId: string;
@@ -950,6 +962,8 @@ export interface Run {
   by?: string;
   /** a flow's step run: its workflow and step, a remembered rule's scope */
   flowStep?: FlowStepName;
+  /** the workspace this run spans, when it was started from one */
+  workspace?: string;
   status: RunStatus;
   /** unix ms */
   startedAt: number;

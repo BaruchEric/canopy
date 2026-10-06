@@ -24,7 +24,24 @@ function repo(over: Partial<Repo["status"] & { error: string }> = {}): Repo {
   };
 }
 
+const SCOPE = {
+  workspace: "bike-trips",
+  primary: "/tmp/grove/apps/orchard",
+  others: ["/w/trips-analysis"],
+  skipped: [],
+};
+
 const file = { path: "a.ts", index: ".", worktree: "M", untracked: false, conflicted: false };
+
+test("a workspace prompt names the primary and the other folders, and widens the safety rule", () => {
+  const p = buildPrompt(repo(), ACTIONS.ask, "add an endpoint", SCOPE);
+  expect(p).toContain("workspace bike-trips");
+  expect(p).toContain("Primary folder, where new code goes: /tmp/grove/apps/orchard");
+  expect(p).toContain("/w/trips-analysis");
+  expect(p).toContain("Work only inside these folders");
+  expect(p).not.toContain("Work only inside this repository");
+  expect(buildPrompt(repo(), ACTIONS.ask, "x")).toContain("Work only inside this repository");
+});
 
 describe("checkWhen", () => {
   test("dirty, unpushed, either, any", () => {

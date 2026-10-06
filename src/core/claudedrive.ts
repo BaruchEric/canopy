@@ -151,6 +151,7 @@ export function cliArgs(spec: DriveSpec, agent: AgentSettings = DEFAULT_AGENT, s
     stage ? "user" : "user,project,local",
     "--strict-mcp-config",
     ...(spec.allowedTools.length ? ["--allowedTools", spec.allowedTools.join(",")] : []),
+    ...(spec.addDirs ?? []).flatMap((d) => ["--add-dir", d]),
     ...flags,
   ];
 }

@@ -87,6 +87,13 @@ const responseTo = (log: Record<string, unknown>[], id: string) =>
     | { response: { subtype: string; response: { behavior: string; message?: string; updatedInput?: unknown } } }
     | undefined;
 
+test("cliArgs adds one --add-dir per extra folder", () => {
+  const args = cliArgs({ allowedTools: [], maxTurns: 5, addDirs: ["/x", "/y z"] });
+  const at = args.indexOf("--add-dir");
+  expect(args.slice(at, at + 4)).toEqual(["--add-dir", "/x", "--add-dir", "/y z"]);
+  expect(cliArgs({ allowedTools: [], maxTurns: 5 })).not.toContain("--add-dir");
+});
+
 describe("a Claude run through the driver", () => {
   test("steps, prompts through the shared queue, a withdrawn prompt, the session, the cost and the env", async () => {
     const d = await drive("job");
