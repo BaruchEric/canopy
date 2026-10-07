@@ -257,10 +257,14 @@ const OWN_ESCAPE = ".term-screen, .xterm, .menu, .sheet";
  *  screen (there a press in the commit box must not end full screen) */
 const TEXT_ESCAPE = 'input, textarea, select, [contenteditable]:not([contenteditable="false"])';
 
-/** what sits over every surface and takes Escape first while it is up: a
- *  run sheet, a top-bar popover, a menu, the repo tree's drawer. Not the
- *  guided panel's tour, a coach mark with no Escape of its own. */
-export const LAYER_ABOVE = '[role="dialog"]:not(.tour), [role="menu"], .sidebar.drawer';
+/** what is up over the page and keeps its keys while it is: a run sheet, a
+ *  top-bar popover, a menu. Not the guided panel's tour, a coach mark with
+ *  no Escape of its own. */
+export const OVER_PAGE = '[role="dialog"]:not(.tour), [role="menu"]';
+
+/** what sits over every surface and takes Escape first while it is up:
+ *  `OVER_PAGE` and the repo tree's drawer */
+export const LAYER_ABOVE = `${OVER_PAGE}, .sidebar.drawer`;
 
 /** Whether an Escape at `target` steps a surface back to normal. `typing`
  *  adds text fields to what keeps it: a panel in full screen with Escape

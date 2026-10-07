@@ -16,6 +16,7 @@ import { ShellSolo, TermDock } from "./components/TermDock";
 import { Crowns, TopBar } from "./components/TopBar";
 import { NARROW, PHONE, useMedia } from "./media";
 import { PANES_CHANNEL, listenPanes, parsePaneMsg, type PaneMsg } from "./panes";
+import { OVER_PAGE } from "./surface";
 import { dropAskHere, parseRoute } from "./routes";
 import { SORT_MODES, type Theme } from "./settings";
 import { SIDEBAR, dockless, useStore } from "./store";
@@ -241,7 +242,7 @@ export function App() {
       // browser's new window, which a page cannot take)
       if (e.key === "n" && !e.metaKey && !e.ctrlKey && !e.altKey && (view === "git" || view === "incubator")) {
         const st = useStore.getState();
-        if (st.sproutsReady && !st.sheet && !document.querySelector('[role="dialog"], [role="menu"]')) {
+        if (st.sproutsReady && !st.sheet && !document.querySelector(OVER_PAGE)) {
           e.preventDefault();
           st.openNewSprout();
         }
@@ -250,7 +251,7 @@ export function App() {
       if (OTHER_VIEWS.includes(view)) return;
       const st = useStore.getState();
       // the drawer is the top layer while it is out
-      if (st.drawerOpen && e.key === "Escape" && !document.querySelector('[role="dialog"], [role="menu"]')) {
+      if (st.drawerOpen && e.key === "Escape" && !document.querySelector(OVER_PAGE)) {
         // taken, so a surface under the drawer stays: this listener may run
         // before the surface's, which then finds the drawer already gone
         e.preventDefault();
@@ -259,7 +260,7 @@ export function App() {
       }
       // Select mode's two keys. A sheet, a menu or a popover owns Escape
       // while it is up, and a select box owns ⌘A, so neither reaches here then.
-      if (st.selecting && !st.sheet && !document.querySelector('[role="dialog"], [role="menu"]')) {
+      if (st.selecting && !st.sheet && !document.querySelector(OVER_PAGE)) {
         // a surface over the page or its panel takes Escape first
         if (e.key === "Escape" && !document.querySelector(".surface-focus, .surface-full, .section-full")) {
           st.setSelecting(false);

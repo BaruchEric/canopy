@@ -7,6 +7,7 @@ import {
   keepKeys,
   escapeCloses,
   LAYER_ABOVE,
+  OVER_PAGE,
   captureName,
   flipMode,
   moveSection,
@@ -254,5 +255,9 @@ describe("a popover's Escape", () => {
     // the guided panel's tour is a dialog too, but a coach mark beside the
     // page, not a layer over it: Escape still leaves a surface while it shows
     expect(LAYER_ABOVE.split(",").map((s) => s.trim())).toEqual(['[role="dialog"]:not(.tour)', '[role="menu"]', ".sidebar.drawer"]);
+  });
+  test("what keeps the page's own keys (the drawer's Escape, select mode, n) is the same less the drawer, the tour left out", () => {
+    expect(OVER_PAGE.split(",").map((s) => s.trim())).toEqual(['[role="dialog"]:not(.tour)', '[role="menu"]']);
+    expect(LAYER_ABOVE).toBe(`${OVER_PAGE}, .sidebar.drawer`);
   });
 });
