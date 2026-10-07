@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { activate, cellOf, columnOf, cssId, dropTarget, dropZone, fromLegacy, gearDrops, gridOf, gridTemplate, moveCell, moveColumn, moveTo, moveWithin, normalizeLayout, panelsOf, placements, place, regroup, rename, resizeColumn, resizeSeam, rowsTemplate, seamDrag, seamLabel, seamStart, zoneRect } from "./grid";
+import { activate, cellOf, columnOf, cssId, dropTarget, dropZone, fromLegacy, gearDrops, gridOf, gridTemplate, moveCell, moveColumn, moveTo, moveWithin, normalizeLayout, panelsOf, placements, place, regroup, rename, resizeColumn, resizeSeam, rowsTemplate, seamDrag, seamLabel, seamStart, stepPanel, zoneRect } from "./grid";
 import type { DockLayout } from "./grid";
 
 const W = 440;
@@ -290,6 +290,39 @@ describe("the gear's layout moves", () => {
   });
   test("a panel the layout does not hold has no moves", () => {
     expect(gearDrops(three, "zzz")).toEqual({ splitLeft: null, newColumn: null, joinLeft: null });
+  });
+});
+
+describe("a move one place left or right", () => {
+  const four = place(empty, ["a", "b", "c", "d"], "a", "columns", W);
+  const cell = (l: DockLayout, id: string) => cellOf(l, id)?.id ?? "";
+  // [a, b] over [c], then [d]
+  const tabs = moveTo(four, "b", { cell: cell(four, "a"), zone: "center" }, W);
+  const stack = moveTo(tabs, "c", { cell: cell(tabs, "a"), zone: "below" }, W);
+  test("an edge tab of a stacked cell goes nowhere, and its siblings never come along", () => {
+    expect(cols(stack)).toEqual([[["a", "b"], ["c"]], [["d"]]]);
+    expect(stepPanel(stack, "b", 2)).toBeNull();
+    // [c] over [a, b]: a's left neighbour is the cell above it
+    const above = moveCell(stack, cell(stack, "c"), 0);
+    expect(cols(above)).toEqual([[["c"], ["a", "b"]], [["d"]]]);
+    expect(stepPanel(above, "a", 0)).toBeNull();
+  });
+  test("a tab inside its cell reorders, the showing tab kept", () => {
+    const moved = stepPanel(stack, "b", 0);
+    expect(cols(moved ?? empty)).toEqual([[["b", "a"], ["c"]], [["d"]]]);
+    expect(cellOf(moved ?? empty, "a")?.active).toBe(cellOf(stack, "a")?.active);
+  });
+  test("a lone column moves as a column, a single-tab cell up or down its column", () => {
+    expect(cols(stepPanel(four, "c", 1) ?? empty)).toEqual([[["a"]], [["c"]], [["b"]], [["d"]]]);
+    expect(cols(stepPanel(stack, "c", 1) ?? empty)).toEqual([[["c"], ["a", "b"]], [["d"]]]);
+  });
+  test("the top cell of a stack moved toward another column, or a panel moved onto itself, is no move", () => {
+    const split = moveTo(four, "c", { cell: cell(four, "b"), zone: "below" }, W);
+    expect(cols(split)).toEqual([[["a"]], [["b"], ["c"]], [["d"]]]);
+    expect(stepPanel(split, "b", 0)).toBeNull();
+    expect(stepPanel(split, "c", 3)).toBeNull();
+    expect(stepPanel(four, "a", -1)).toBeNull();
+    expect(stepPanel(four, "zzz", 0)).toBeNull();
   });
 });
 

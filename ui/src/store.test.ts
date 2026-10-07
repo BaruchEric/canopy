@@ -1834,6 +1834,27 @@ describe("the dock as columns of cells", () => {
     expect(cellOf(useStore.getState().dockLayout, "b")?.active).toBe("b");
   });
 
+  test("an edge tab of a cell in a stack moves alone or not at all", () => {
+    useStore.setState({ panels: ["a", "b", "c", "d"], activePanel: "a" });
+    useStore.getState().dropPanel("b", cell("a"), "center");
+    useStore.getState().dropPanel("c", cell("a"), "below");
+    expect(cols(useStore.getState().dockLayout)).toEqual([[["a", "b"], ["c"]], [["d"]]]);
+    let before = useStore.getState();
+    useStore.getState().movePanel("b", 2);
+    expect(useStore.getState()).toBe(before);
+    // b left stays inside its cell
+    useStore.getState().movePanel("b", 0);
+    mirrored();
+    expect(cols(useStore.getState().dockLayout)).toEqual([[["b", "a"], ["c"]], [["d"]]]);
+    // [c] over [b, a]: b's left neighbour is the cell above it
+    useStore.getState().movePanel("c", 0);
+    mirrored();
+    expect(cols(useStore.getState().dockLayout)).toEqual([[["c"], ["b", "a"]], [["d"]]]);
+    before = useStore.getState();
+    useStore.getState().movePanel("b", 0);
+    expect(useStore.getState()).toBe(before);
+  });
+
   test("a lone column's width outlives a close and a pop-out", () => {
     useStore.setState({ repos: [repo("app")], panels: ["x", "app", "y"], activePanel: "app" });
     useStore.getState().setPanelWidth("app", 610);

@@ -13,8 +13,6 @@ import {
   columnOf,
   COLUMN_WIDTH,
   fromLegacy,
-  moveCell,
-  moveColumn,
   moveTo,
   moveWithin,
   normalizeLayout,
@@ -24,6 +22,7 @@ import {
   rename,
   resizeColumn as sizeColumn,
   resizeSeam as moveSeam,
+  stepPanel,
   type Arrangement,
   type DockLayout,
   type Zone,
@@ -2181,33 +2180,10 @@ export const useStore = create<CanopyState>((set, get) => ({
   movePanel: (id, to) =>
     set((s) => {
       // `to` is an index into the flat list (the gear's and the keys' left
-      // and right); the panel there is where this one heads
-      const l = laidOut(s);
-      const from = s.panels.indexOf(id);
-      const own = cellOf(l, id);
-      const col = columnOf(l, id);
-      const target = s.panels[Math.max(0, Math.min(s.panels.length - 1, to))];
-      if (from === -1 || !own || !col || target === undefined || target === id) return s;
-      const toward = to < from ? 0 : Number.MAX_SAFE_INTEGER;
-      const at = own.panels.indexOf(id);
-      let dockLayout: DockLayout;
-      if (own.panels.includes(target)) {
-        // a tab among its cell's tabs; the tab showing stays the one showing
-        dockLayout = activate(moveWithin(l, id, own.id, own.panels.indexOf(target)), own.active);
-      } else if (loneColumn(l, id)) {
-        dockLayout = moveColumn(l, col.id, l.columns.findIndex((c) => c.id === columnOf(l, target)?.id));
-      } else if (col.cells.some((x) => x.panels.includes(target))) {
-        // a cell of a stack moves up or down its column
-        dockLayout = moveCell(l, own.id, col.cells.findIndex((x) => x.panels.includes(target)));
-      } else if (own.panels.length > 1) {
-        // out of a cell of tabs no further than its edge, and already there
-        // is no change
-        if (toward === 0 ? at === 0 : at === own.panels.length - 1) return s;
-        dockLayout = activate(moveWithin(l, id, own.id, toward), own.active);
-      } else {
-        dockLayout = moveCell(l, own.id, toward);
-      }
-      return dockLayout === l ? s : { dockLayout, panels: panelsFor(s, dockLayout) };
+      // and right), which laidOut makes the layout's own order; stepPanel
+      // is also the gear's dry run
+      const dockLayout = stepPanel(laidOut(s), id, to);
+      return dockLayout === null ? s : { dockLayout, panels: panelsFor(s, dockLayout) };
     }),
   dropPanel: (id, cell, zone) =>
     set((s) => {

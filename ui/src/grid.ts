@@ -217,8 +217,43 @@ export function moveCell(l: DockLayout, cell: string, index: number): DockLayout
   return { columns: l.columns.map((c) => (c.id === col.id ? { ...c, cells } : c)) };
 }
 
+/** Panel `id` one step along the flat order (`panelsOf`), toward index
+ *  `to`, the move keys' and the gear's left and right; null where that
+ *  changes nothing, so the gear can grey the entry out. The panel at `to`
+ *  is where it heads: a tab among its cell's tabs reorders (the showing
+ *  tab kept), a lone column moves as a column, a tab heading out of its
+ *  cell of tabs goes no further than the cell's edge (its siblings never
+ *  move with it), and a cell of one panel in a stack moves up or down its
+ *  column. */
+export function stepPanel(l: DockLayout, id: string, to: number): DockLayout | null {
+  const panels = panelsOf(l);
+  const from = panels.indexOf(id);
+  const own = cellOf(l, id);
+  const col = columnOf(l, id);
+  const target = panels[Math.max(0, Math.min(panels.length - 1, to))];
+  if (from === -1 || !own || !col || target === undefined || target === id) return null;
+  const toward = to < from ? 0 : Number.MAX_SAFE_INTEGER;
+  const at = own.panels.indexOf(id);
+  let out: DockLayout;
+  if (own.panels.includes(target)) {
+    out = activate(moveWithin(l, id, own.id, own.panels.indexOf(target)), own.active);
+  } else if (col.cells.length === 1 && own.panels.length === 1) {
+    out = moveColumn(l, col.id, l.columns.findIndex((c) => c.id === columnOf(l, target)?.id));
+  } else if (own.panels.length > 1) {
+    if (toward === 0 ? at === 0 : at === own.panels.length - 1) return null;
+    out = activate(moveWithin(l, id, own.id, toward), own.active);
+  } else if (col.cells.some((x) => x.panels.includes(target))) {
+    out = moveCell(l, own.id, col.cells.findIndex((x) => x.panels.includes(target)));
+  } else {
+    out = moveCell(l, own.id, toward);
+  }
+  return out === l ? null : out;
+}
+
 /** Every panel in one cell (tabs) or one column each (columns). Old column
- *  widths are reused by position. */
+ *  widths are reused by position, which is all this pure op can see; the
+ *  store's `arrangeDock` overrides them, keeping each width by panel id
+ *  through `panelWidths`. */
 export function regroup(l: DockLayout, into: Arrangement, width: number): DockLayout {
   const ids = panelsOf(l);
   if (ids.length === 0) return l;

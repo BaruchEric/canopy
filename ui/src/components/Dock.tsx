@@ -36,7 +36,7 @@ import { devState } from "../guided";
 import { BENCH_ONE, BenchBar, BenchSeams, type BenchPane } from "./Bench";
 import { PHONE, useMedia } from "../media";
 import { stableOrder } from "../dock";
-import { columnVar, dropTarget, gearDrops, gridOf, gridTemplate, placements, resizeSeam, rowsTemplate, seamDrag, seamLabel, seamStart, zoneRect, type Box, type DockLayout, type Drop, type GridPlan } from "../grid";
+import { columnVar, dropTarget, gearDrops, gridOf, gridTemplate, placements, resizeSeam, rowsTemplate, seamDrag, seamLabel, seamStart, stepPanel, zoneRect, type Box, type DockLayout, type Drop, type GridPlan } from "../grid";
 import { PAN_SLOP, overflowsX, snapTo, wheelTake } from "../carousel";
 import { dragStep, type DragInput, type DragPhase } from "../drag";
 import { backendOf, homeName, isHome } from "../registry";
@@ -1054,12 +1054,17 @@ function PanelGear({
     ? []
     : [
         { type: "item", label: "carousel", on: carousel, run: () => setSetting("dockCarousel", !carousel) },
-        { type: "item", label: "move left", run: () => movePanel(repo.id, at - 1), off: at <= 0 ? "already first" : undefined },
+        {
+          type: "item",
+          label: "move left",
+          run: () => movePanel(repo.id, at - 1),
+          off: stepPanel(dockLayout, repo.id, at - 1) ? undefined : at <= 0 ? "already first" : "no further left from here",
+        },
         {
           type: "item",
           label: "move right",
           run: () => movePanel(repo.id, at + 1),
-          off: at >= panels.length - 1 ? "already last" : undefined,
+          off: stepPanel(dockLayout, repo.id, at + 1) ? undefined : at >= panels.length - 1 ? "already last" : "no further right from here",
         },
         dropEntry("split below the panel on the left", drops.splitLeft, "no column on the left"),
         dropEntry("move to a new column", drops.newColumn, "already a column of its own"),
