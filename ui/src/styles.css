@@ -2360,9 +2360,12 @@ a.chan-text {
   scroll-snap-type: x proximity;
   overscroll-behavior-x: contain;
 }
-/* a panel's edge is its handle's, so the whole panel lands in view */
-.body.carousel > .dock > .panel-resizer {
+/* a panel's edge is its handle's, so the whole panel lands in view. The
+   snap is the panel's, not the handle's, so a panel wider than the row is
+   one the row can rest anywhere inside. */
+.body.carousel > .dock > .panel {
   scroll-snap-align: start;
+  scroll-margin-left: 6px;
 }
 /* tabbed, there is no row: the one panel fills the dock */
 .body.carousel > .dock.tabbed {
