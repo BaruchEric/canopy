@@ -529,7 +529,7 @@ git commit -m "feat(dock): panels placed on one grid of columns and cells"
 **Interfaces:**
 - Consumes: `dropZone`, `dropPanel`, `PAN_SLOP` (phase A).
 
-- [ ] **Step 1: Implement**
+- [x] **Step 1: Implement**
 
 Use pointer events, not HTML5 drag and drop, which cannot cross iframes reliably. Phase A's HTML5 reorder on heads and tabs is replaced by this one path.
 - **`pointerdown`** on a tab or a panel head's background records `{ id, x0, y0 }`.
@@ -565,7 +565,7 @@ Phones get no pointer drag and no split entries.
 
 `.dock` needs `position: relative` for the shield. Check that this does not break the carousel's sticky elements.
 
-- [ ] **Step 2: Gates, then the browser check**
+- [x] **Step 2: Gates, then the browser check**
 
 Run: `bun run typecheck && bun run lint && env -u TMUX SHELL=/bin/bash bun test && bun run build`
 Expected: all pass.
@@ -578,7 +578,7 @@ Then, at 1440px with four panels, one with a live preview and one with a running
 5. Press Escape mid-drag. Check that nothing moves.
 6. At 390px, check that nothing drags.
 
-- [ ] **Step 3: Commit**
+- [x] **Step 3: Commit**
 
 ```bash
 git add ui/src

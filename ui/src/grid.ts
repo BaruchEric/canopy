@@ -422,6 +422,61 @@ export function dropZone(rect: { left: number; top: number; width: number; heigh
   return d < EDGE ? zone : "center";
 }
 
+export interface Box { left: number; top: number; width: number; height: number }
+export interface Drop { cell: string; zone: Zone }
+
+/** Where panel `id`, dragged to (x, y) over `hit` (the cell under the
+ *  pointer and its rect), would land; null with no cell under it, or where
+ *  letting go would change nothing (a lone panel over its own cell, any
+ *  panel over its own cell's middle). */
+export function dropTarget(l: DockLayout, id: string, hit: { cell: string; rect: Box } | null, x: number, y: number): Drop | null {
+  if (!hit) return null;
+  const t = { cell: hit.cell, zone: dropZone(hit.rect, x, y) };
+  return moveTo(l, id, t, COLUMN_WIDTH) === l ? null : t;
+}
+
+/** The part of a cell's rect a drop in `zone` takes: the half toward an
+ *  edge, or all of it for the middle. */
+export function zoneRect(r: Box, zone: Zone): Box {
+  const w = r.width / 2;
+  const h = r.height / 2;
+  switch (zone) {
+    case "center":
+      // fields by name: a DOMRect's are getters, which a spread drops
+      return { left: r.left, top: r.top, width: r.width, height: r.height };
+    case "above":
+      return { left: r.left, top: r.top, width: r.width, height: h };
+    case "below":
+      return { left: r.left, top: r.top + h, width: r.width, height: h };
+    case "left":
+      return { left: r.left, top: r.top, width: w, height: r.height };
+    case "right":
+      return { left: r.left + w, top: r.top, width: w, height: r.height };
+  }
+}
+
+/** The panel gear's layout moves for `id`, each a drop or null where it
+ *  has none: under the last cell of the column on its left, a column of
+ *  its own just right of its column, and a tab of the first cell of the
+ *  column on its left. */
+export function gearDrops(l: DockLayout, id: string): { splitLeft: Drop | null; newColumn: Drop | null; joinLeft: Drop | null } {
+  const at = l.columns.findIndex((c) => c.cells.some((x) => x.panels.includes(id)));
+  const col = l.columns[at];
+  const own = cellOf(l, id);
+  if (!col || !own) return { splitLeft: null, newColumn: null, joinLeft: null };
+  const left = l.columns[at - 1];
+  const last = left?.cells.at(-1);
+  const first = left?.cells[0];
+  // a right drop on any cell of the column makes the column after it; on
+  // its own cell only when other tabs keep that cell
+  const beside = col.cells.find((x) => x.id !== own.id) ?? (own.panels.length > 1 ? own : undefined);
+  return {
+    splitLeft: last ? { cell: last.id, zone: "below" } : null,
+    newColumn: beside ? { cell: beside.id, zone: "right" } : null,
+    joinLeft: first ? { cell: first.id, zone: "center" } : null,
+  };
+}
+
 /** An id as part of a CSS custom property name: every character outside
  *  [A-Za-z0-9_-] becomes "_", and a hash of the whole id follows, so two
  *  ids that differ only in those characters never share a name. */

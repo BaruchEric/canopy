@@ -44,20 +44,6 @@ export function movePanel(panels: readonly string[], id: string, to: number): st
   return [...rest.slice(0, at), id, ...rest.slice(at)];
 }
 
-/** The index `movePanel` takes to drop `dragged` just before (or after)
- *  `over`: counted in the list without `dragged`, where it is inserted. */
-export function dropIndex(
-  panels: readonly string[],
-  dragged: string,
-  over: string,
-  after: boolean,
-): number {
-  const rest = panels.filter((p) => p !== dragged);
-  const i = rest.indexOf(over);
-  if (i === -1) return panels.indexOf(dragged);
-  return after ? i + 1 : i;
-}
-
 /** The order panels are rendered in the DOM: by id, so a reorder (a
  *  change of CSS order) never moves an element, which would reload a
  *  preview's iframe. */

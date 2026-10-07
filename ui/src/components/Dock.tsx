@@ -1,4 +1,4 @@
-import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import type { CSSProperties, DragEvent, KeyboardEvent, PointerEvent as ReactPointerEvent, RefObject } from "react";
 import { api } from "../api";
 import {
@@ -35,8 +35,8 @@ import { devTask } from "../tasks";
 import { devState } from "../guided";
 import { BENCH_ONE, BenchBar, BenchSeams, type BenchPane } from "./Bench";
 import { PHONE, useMedia } from "../media";
-import { dropIndex, stableOrder } from "../dock";
-import { columnVar, gridOf, gridTemplate, placements, resizeSeam, rowsTemplate, seamDrag, seamLabel, seamStart, type DockLayout, type GridPlan } from "../grid";
+import { stableOrder } from "../dock";
+import { columnVar, dropTarget, gearDrops, gridOf, gridTemplate, placements, resizeSeam, rowsTemplate, seamDrag, seamLabel, seamStart, zoneRect, type Box, type DockLayout, type Drop, type GridPlan } from "../grid";
 import { PAN_SLOP, overflowsX, snapTo, wheelTake } from "../carousel";
 import { backendOf, homeName, isHome } from "../registry";
 import { signinUrl } from "../backends";
@@ -1030,6 +1030,8 @@ function PanelGear({
   const level = useStore((s) => s.settings.level);
   const panels = useStore((s) => s.panels);
   const movePanel = useStore((s) => s.movePanel);
+  const dockLayout = useStore((s) => s.dockLayout);
+  const dropPanel = useStore((s) => s.dropPanel);
   const arrangeDock = useStore((s) => s.arrangeDock);
   const popOut = useStore((s) => s.popOut);
   const carousel = useStore((s) => s.settings.dockCarousel);
@@ -1037,6 +1039,16 @@ function PanelGear({
   // a phone's dock stays as it was, without the moves, the carousel or
   // pop out
   const phone = useMedia(PHONE);
+  // the drag's moves, for the keyboard: each a drop the pointer could make
+  const drops = gearDrops(dockLayout, repo.id);
+  const dropEntry = (label: string, d: Drop | null, off: string): GearEntry => ({
+    type: "item",
+    label,
+    run: () => {
+      if (d) dropPanel(repo.id, d.cell, d.zone);
+    },
+    off: d ? undefined : off,
+  });
   const moves: GearEntry[] = phone
     ? []
     : [
@@ -1048,6 +1060,9 @@ function PanelGear({
           run: () => movePanel(repo.id, at + 1),
           off: at >= panels.length - 1 ? "already last" : undefined,
         },
+        dropEntry("split below the panel on the left", drops.splitLeft, "no column on the left"),
+        dropEntry("move to a new column", drops.newColumn, "already a column of its own"),
+        dropEntry("join the cell on the left", drops.joinLeft, "no column on the left"),
       ];
   // out of the dock into a window of its own, and back to its slot from
   // there; a new tab is a copy and leaves the dock as it is. Not on a
@@ -1209,56 +1224,156 @@ function AwayWords({
   );
 }
 
-/** What a panel carries while it is dragged, from its head or its dock tab. */
-const PANEL_DRAG = "application/x-canopy-panel";
-
-/** Whether a drag over `e.currentTarget` sits on its right half. */
-const dropAfter = (e: DragEvent<HTMLElement>): boolean => {
-  const r = e.currentTarget.getBoundingClientRect();
-  return e.clientX > r.left + r.width / 2;
+/** What the drag layer shows while a panel is dragged: its name by the
+ *  pointer and, over a cell it would land in, the part of it the drop
+ *  takes. Kept outside React state, so a move redraws the layer alone. */
+interface DragView {
+  label: string;
+  x: number;
+  y: number;
+  box: Box | null;
+}
+let dragView: DragView | null = null;
+const dragSubs = new Set<() => void>();
+const readDrag = (): DragView | null => dragView;
+const subscribeDrag = (f: () => void) => {
+  dragSubs.add(f);
+  return () => {
+    dragSubs.delete(f);
+  };
 };
+function showDrag(v: DragView | null) {
+  dragView = v;
+  for (const f of dragSubs) f();
+}
 
-/** Props that pick panel `id` up: a dock tab, or the name and glyph on a
- *  panel head. Only those two on a head, since the rest of the head is
- *  left for panning the dock. */
-function panelDragSource(id: string) {
+/** The open panel cell under (x, y) in `dock`, and its rect: the drag
+ *  layer covers the panels, so it is found among everything at that point.
+ *  Row seams carry `data-cell` too, hence the panels alone. */
+function cellAt(dock: HTMLElement, x: number, y: number): { cell: string; rect: Box } | null {
+  for (const el of document.elementsFromPoint(x, y)) {
+    if (el instanceof HTMLElement && el.parentElement === dock && el.classList.contains("panel") && el.dataset.cell !== undefined) {
+      const r = el.getBoundingClientRect();
+      return { cell: el.dataset.cell, rect: { left: r.left, top: r.top, width: r.width, height: r.height } };
+    }
+  }
+  return null;
+}
+
+/** The release that ends a drag is not a click on what it ends over. */
+function swallowClick() {
+  const swallow = (c: MouseEvent) => {
+    c.stopPropagation();
+    c.preventDefault();
+  };
+  window.addEventListener("click", swallow, { capture: true, once: true });
+  setTimeout(() => window.removeEventListener("click", swallow, { capture: true }), 0);
+}
+
+/**
+ * Picks panel `id` up by one of its handles (the name or glyph on its head,
+ * or its strip tab) with the pointer, on the dock's grid only.
+ *
+ * - Under `PAN_SLOP` it stays a click.
+ * - Past it the drag layer shows over the dock: a shield, so a preview's
+ *   iframe never takes the pointer, the part of the cell under the pointer
+ *   the drop would take (`dropTarget`, `zoneRect`), and the panel's name.
+ * - Letting go over a cell drops the panel in it or beside it (the store's
+ *   `dropPanel`), which changes grid areas and never the DOM.
+ * - Escape before letting go, or a cancelled pointer, leaves everything
+ *   where it was and saves nothing.
+ */
+function startPanelDrag(e: ReactPointerEvent<HTMLElement>, id: string, label: string) {
+  const dock = e.currentTarget.closest(".dock.grid");
+  const t = e.target;
+  if (e.button !== 0 || e.pointerType === "touch" || !(dock instanceof HTMLElement) || !(t instanceof Element)) return;
+  // a tab's close is its own, and a panel over the window keeps the dock
+  // behind it still
+  if (t.closest("button") || rowCovered(dock, t)) return;
+  const { pointerId, clientX: x0, clientY: y0 } = e;
+  let dragging = false;
+  let cancelled = false;
+  let target: Drop | null = null;
+  const move = (m: PointerEvent) => {
+    if (m.pointerId !== pointerId || cancelled) return;
+    if (!dragging) {
+      if (Math.hypot(m.clientX - x0, m.clientY - y0) < PAN_SLOP) return;
+      dragging = true;
+      dock.setPointerCapture(pointerId);
+      document.body.classList.add("dragging-panel");
+      getSelection()?.removeAllRanges();
+    }
+    const hit = cellAt(dock, m.clientX, m.clientY);
+    const drop = dropTarget(useStore.getState().dockLayout, id, hit, m.clientX, m.clientY);
+    target = drop;
+    showDrag({ label, x: m.clientX, y: m.clientY, box: drop && hit ? zoneRect(hit.rect, drop.zone) : null });
+  };
+  const stop = () => {
+    window.removeEventListener("pointermove", move);
+    window.removeEventListener("pointerup", up);
+    window.removeEventListener("pointercancel", cancel);
+    window.removeEventListener("keydown", key, { capture: true });
+    if (dock.hasPointerCapture(pointerId)) dock.releasePointerCapture(pointerId);
+    document.body.classList.remove("dragging-panel");
+    showDrag(null);
+  };
+  const up = (u: PointerEvent) => {
+    if (u.pointerId !== pointerId) return;
+    const drop = cancelled ? null : target;
+    stop();
+    if (!dragging) return;
+    swallowClick();
+    if (drop) useStore.getState().dropPanel(id, drop.cell, drop.zone);
+  };
+  const cancel = (c: PointerEvent) => {
+    if (c.pointerId === pointerId) stop();
+  };
+  const key = (k: globalThis.KeyboardEvent) => {
+    if (k.key !== "Escape") return;
+    if (!dragging) {
+      stop();
+      return;
+    }
+    // the layer goes at once; the release still comes, and is no click
+    k.preventDefault();
+    k.stopPropagation();
+    cancelled = true;
+    document.body.classList.remove("dragging-panel");
+    showDrag(null);
+  };
+  window.addEventListener("pointermove", move);
+  window.addEventListener("pointerup", up);
+  window.addEventListener("pointercancel", cancel);
+  window.addEventListener("keydown", key, { capture: true });
+}
+
+/** Props that make an element a handle that picks panel `id` up: a strip
+ *  tab, or the name and glyph on a panel head. Only those two on a head,
+ *  since the rest of it is left for panning the dock (`NOT_PAN` skips the
+ *  attribute). */
+function dragHandle(id: string, label: string) {
   return {
-    draggable: true,
-    onDragStart: (e: DragEvent<HTMLElement>) => {
-      e.dataTransfer.setData(PANEL_DRAG, id);
-      e.dataTransfer.effectAllowed = "move";
-    },
-    // a drag let go outside any target, or cancelled, leaves its mark behind
-    onDragEnd: () => {
-      for (const el of document.querySelectorAll("[data-drop]")) el.removeAttribute("data-drop");
-    },
+    "data-drag-handle": "",
+    onPointerDown: (e: ReactPointerEvent<HTMLElement>) => startPanelDrag(e, id, label),
   };
 }
 
-/** Props that take a dragged panel just before or after panel `id`: its
- *  dock tab and its whole head, each a target for the other. */
-function panelDropTarget(id: string) {
-  return {
-    onDragOver: (e: DragEvent<HTMLElement>) => {
-      if (!e.dataTransfer.types.includes(PANEL_DRAG)) return;
-      e.preventDefault();
-      e.dataTransfer.dropEffect = "move";
-      e.currentTarget.dataset.drop = dropAfter(e) ? "after" : "before";
-    },
-    onDragLeave: (e: DragEvent<HTMLElement>) => {
-      // crossing onto a child of the target is not leaving it
-      if (e.relatedTarget instanceof Node && e.currentTarget.contains(e.relatedTarget)) return;
-      e.currentTarget.removeAttribute("data-drop");
-    },
-    onDrop: (e: DragEvent<HTMLElement>) => {
-      e.currentTarget.removeAttribute("data-drop");
-      const dragged = e.dataTransfer.getData(PANEL_DRAG);
-      const { panels, movePanel } = useStore.getState();
-      if (dragged === id || !panels.includes(dragged)) return;
-      e.preventDefault();
-      movePanel(dragged, dropIndex(panels, dragged, id, dropAfter(e)));
-    },
-  };
+/** The drag layer while a panel is dragged (`startPanelDrag`): the shield
+ *  over the whole dock, the drop's preview and the panel's name by the
+ *  pointer. It renders after the panels, so showing it moves none. */
+function DragLayer() {
+  const view = useSyncExternalStore(subscribeDrag, readDrag);
+  if (!view) return null;
+  const { box } = view;
+  return (
+    <>
+      <div className="drag-shield" aria-hidden="true" />
+      {box && <div className="drop-preview" style={{ left: box.left, top: box.top, width: box.width, height: box.height }} />}
+      <div className="drag-ghost" aria-hidden="true" style={{ left: view.x + 12, top: view.y + 12 }}>
+        {view.label}
+      </div>
+    </>
+  );
 }
 
 /** Alt+Shift+Left/Right moves panel `id` one place along the dock; true
@@ -1272,7 +1387,7 @@ function movePanelKey(e: KeyboardEvent<HTMLElement>, id: string): boolean {
 }
 
 /** A docked panel head's own props: it takes the focus for the move keys
- *  (only while focused itself, not a button in it), and a dragged panel. */
+ *  (only while focused itself, not a button in it). */
 function panelHead(id: string, name: string, movable: boolean | undefined) {
   if (!movable) return {};
   return {
@@ -1286,7 +1401,6 @@ function panelHead(id: string, name: string, movable: boolean | undefined) {
       const head = e.currentTarget;
       requestAnimationFrame(() => revealHead(head));
     },
-    ...panelDropTarget(id),
   };
 }
 
@@ -1340,10 +1454,10 @@ function PanelWaiting({
     >
       <div className="panel-body">
         <header className="panel-head" {...panelHead(id, plain, movable)}>
-          <span className="glyph" {...(movable && panelDragSource(id))}>
+          <span className="glyph" {...(movable && dragHandle(id, plain))}>
             ○
           </span>
-          <span className="panel-name" title={`${plain} on ${b}`} {...(movable && panelDragSource(id))}>
+          <span className="panel-name" title={`${plain} on ${b}`} {...(movable && dragHandle(id, plain))}>
             {plain}
             <span className="backend-word">{b}</span>
           </span>
@@ -1661,10 +1775,10 @@ export function RepoPanel({
           along the panel's bottom edge, whatever the scroll position. */}
       <div className="panel-body" ref={bodyRef} style={zoomStyle(zoom)}>
       <header className="panel-head" {...panelHead(id, repo.name, movable)}>
-        <span className="glyph" {...(movable && panelDragSource(id))}>
+        <span className="glyph" {...(movable && dragHandle(id, repo.name))}>
           {GLYPH[stateOf(repo)]}
         </span>
-        <span className="panel-name" title={repo.path} {...(movable && panelDragSource(id))}>
+        <span className="panel-name" title={repo.path} {...(movable && dragHandle(id, repo.name))}>
           <IdLabel id={repo.id} />
         </span>
         <Star repoId={repo.id} name={repo.name} onError={showError} />
@@ -1931,8 +2045,7 @@ function CellStrip({
               if (e.button === 1) closePanel(id);
             }}
             {...(movable && {
-              ...panelDragSource(id),
-              ...panelDropTarget(id),
+              ...dragHandle(id, repo?.name ?? idText(id)),
               "aria-keyshortcuts": "Alt+Shift+ArrowLeft Alt+Shift+ArrowRight",
             })}
             onKeyDown={(e) => {
@@ -1989,8 +2102,8 @@ function dockRoom(dock: HTMLElement | null): number {
 
 /** a press here is a control's, never a pan: the head's buttons, links and
  *  menus, a strip's tabs, and the name and glyph that pick the panel up to
- *  move it */
-const NOT_PAN = 'button, a, input, select, textarea, label, [role="button"], [role="tab"], [draggable="true"], .gear, .star';
+ *  move it (`dragHandle`, a pointer drag of its own) */
+const NOT_PAN = 'button, a, input, select, textarea, label, [role="button"], [role="tab"], [data-drag-handle], .gear, .star';
 
 /** whether `el`, or anything between it and the dock, scrolls sideways
  *  itself (a wide diff); the dock always does, so it is left out */
@@ -2036,8 +2149,8 @@ function revealHead(head: Element | null) {
  *
  * - A drag on a panel head or a strip's empty space pans, past `PAN_SLOP`,
  *   and so does one on the dock's own background past the last column. The head's name and glyph
- *   stay the handle that picks the panel up to reorder it, and its buttons
- *   stay buttons: a press on any of them is theirs, never a pan. A touch
+ *   stay the handle that picks the panel up to move it (`startPanelDrag`),
+ *   and its buttons stay buttons: a press on any of them is theirs, never a pan. A touch
  *   is left alone, since the row already scrolls under a finger.
  * - A vertical wheel over a head or a strip pans; shift+wheel anywhere pans unless what
  *   is under the pointer scrolls sideways itself (`wheelPan`), and a ctrl or
@@ -2340,7 +2453,7 @@ export function Dock() {
           );
         })}
       {gridded && g.rowSeams.map((seam) => <RowSeam key={`${seam.column}:${seam.index}`} seam={seam} layout={layout} />)}
-      {/* last in the DOM, so showing it or not moves no panel */}
+      {/* after the panels, so showing it or not moves no panel */}
       {movable && (
         <div className="dock-corner">
           <button
@@ -2361,6 +2474,8 @@ export function Dock() {
           </button>
         </div>
       )}
+      {/* last in the DOM, so a drag's layer coming and going moves nothing */}
+      {gridded && <DragLayer />}
     </div>
   );
 }

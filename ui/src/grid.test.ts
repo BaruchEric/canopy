@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { activate, cellOf, columnOf, cssId, dropZone, fromLegacy, gridOf, gridTemplate, moveCell, moveColumn, moveTo, moveWithin, normalizeLayout, panelsOf, placements, place, regroup, rename, resizeColumn, resizeSeam, rowsTemplate, seamDrag, seamLabel, seamStart } from "./grid";
+import { activate, cellOf, columnOf, cssId, dropTarget, dropZone, fromLegacy, gearDrops, gridOf, gridTemplate, moveCell, moveColumn, moveTo, moveWithin, normalizeLayout, panelsOf, placements, place, regroup, rename, resizeColumn, resizeSeam, rowsTemplate, seamDrag, seamLabel, seamStart, zoneRect } from "./grid";
 import type { DockLayout } from "./grid";
 
 const W = 440;
@@ -192,6 +192,93 @@ describe("drop zones", () => {
     expect(dropZone(r, 5, 700)).toBe("left");
   });
   test("outside the rect clamps to the nearest edge", () => expect(dropZone(r, -50, 400)).toBe("left"));
+});
+
+describe("a pointer drop", () => {
+  const r = { left: 440, top: 0, width: 400, height: 800 };
+  const two = place(empty, ["a", "b"], "a", "columns", W);
+  const cell = (l: DockLayout, id: string) => cellOf(l, id)?.id ?? "";
+  test("nothing under the pointer is no drop", () => {
+    expect(dropTarget(two, "a", null, 600, 700)).toBeNull();
+  });
+  test("another cell's lower quarter splits below it, its middle joins it", () => {
+    const hit = { cell: cell(two, "b"), rect: r };
+    expect(dropTarget(two, "a", hit, 640, 700)).toEqual({ cell: cell(two, "b"), zone: "below" });
+    expect(dropTarget(two, "a", hit, 640, 400)).toEqual({ cell: cell(two, "b"), zone: "center" });
+    expect(dropTarget(two, "a", hit, 830, 400)).toEqual({ cell: cell(two, "b"), zone: "right" });
+  });
+  test("a lone panel over its own cell, or any over its own middle, is no drop", () => {
+    const own = { cell: cell(two, "a"), rect: r };
+    expect(dropTarget(two, "a", own, 640, 700)).toBeNull();
+    expect(dropTarget(two, "a", own, 640, 400)).toBeNull();
+    const tabs = moveTo(two, "b", { cell: cell(two, "a"), zone: "center" }, W);
+    const both = { cell: cell(tabs, "a"), rect: r };
+    expect(dropTarget(tabs, "b", both, 640, 400)).toBeNull();
+    // a tab over its own cell's edge leaves the cell for a split of it
+    expect(dropTarget(tabs, "b", both, 640, 790)).toEqual({ cell: cell(tabs, "a"), zone: "below" });
+  });
+  test("a panel the layout does not hold is no drop", () => {
+    expect(dropTarget(two, "zzz", { cell: cell(two, "b"), rect: r }, 640, 700)).toBeNull();
+  });
+  test("the preview covers the half an edge means, or all of the cell", () => {
+    expect(zoneRect(r, "center")).toEqual(r);
+    expect(zoneRect(r, "below")).toEqual({ left: 440, top: 400, width: 400, height: 400 });
+    expect(zoneRect(r, "above")).toEqual({ left: 440, top: 0, width: 400, height: 400 });
+    expect(zoneRect(r, "left")).toEqual({ left: 440, top: 0, width: 200, height: 800 });
+    expect(zoneRect(r, "right")).toEqual({ left: 640, top: 0, width: 200, height: 800 });
+  });
+  test("a rect whose fields are getters, as a DOMRect's are, keeps them in the middle", () => {
+    class Rect {
+      get left() { return 440; }
+      get top() { return 0; }
+      get width() { return 400; }
+      get height() { return 800; }
+    }
+    expect(zoneRect(new Rect(), "center")).toEqual(r);
+  });
+});
+
+describe("the gear's layout moves", () => {
+  const three = place(empty, ["a", "b", "c"], "a", "columns", W);
+  const cell = (l: DockLayout, id: string) => cellOf(l, id)?.id ?? "";
+  test("the first column has nothing on its left", () => {
+    const g = gearDrops(three, "a");
+    expect(g.splitLeft).toBeNull();
+    expect(g.joinLeft).toBeNull();
+  });
+  test("split below the panel on the left, and join the cell on the left", () => {
+    const g = gearDrops(three, "c");
+    expect(g.splitLeft).toEqual({ cell: cell(three, "b"), zone: "below" });
+    expect(g.joinLeft).toEqual({ cell: cell(three, "b"), zone: "center" });
+    const split = moveTo(three, "c", g.splitLeft ?? { cell: "", zone: "center" }, W);
+    expect(cols(split)).toEqual([[["a"]], [["b"], ["c"]]]);
+    const joined = moveTo(three, "c", g.joinLeft ?? { cell: "", zone: "center" }, W);
+    expect(cols(joined)).toEqual([[["a"]], [["b", "c"]]]);
+  });
+  test("split below goes under the last cell of a stacked column", () => {
+    const stack = moveTo(three, "b", { cell: cell(three, "a"), zone: "below" }, W);
+    const g = gearDrops(stack, "c");
+    expect(g.splitLeft).toEqual({ cell: cell(stack, "b"), zone: "below" });
+    expect(g.joinLeft).toEqual({ cell: cell(stack, "a"), zone: "center" });
+  });
+  test("a column of its own cannot move to a new one", () => {
+    expect(gearDrops(three, "b").newColumn).toBeNull();
+  });
+  test("the bottom of a stack moves to a new column beside its own", () => {
+    const stack = moveTo(three, "b", { cell: cell(three, "a"), zone: "below" }, W);
+    const t = gearDrops(stack, "b").newColumn;
+    expect(t).not.toBeNull();
+    expect(cols(moveTo(stack, "b", t ?? { cell: "", zone: "center" }, W))).toEqual([[["a"]], [["b"]], [["c"]]]);
+  });
+  test("a tab moves out of its cell to a new column beside it", () => {
+    const tabs = moveTo(three, "b", { cell: cell(three, "a"), zone: "center" }, W);
+    const t = gearDrops(tabs, "b").newColumn;
+    expect(t).not.toBeNull();
+    expect(cols(moveTo(tabs, "b", t ?? { cell: "", zone: "center" }, W))).toEqual([[["a"]], [["b"]], [["c"]]]);
+  });
+  test("a panel the layout does not hold has no moves", () => {
+    expect(gearDrops(three, "zzz")).toEqual({ splitLeft: null, newColumn: null, joinLeft: null });
+  });
 });
 
 describe("saved layouts", () => {

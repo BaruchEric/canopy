@@ -2473,6 +2473,40 @@ a.chan-text {
   block-size: var(--strip-h, 34px);
   min-width: 0;
 }
+/* a panel being dragged (Dock.tsx, startPanelDrag): a shield over the
+   whole grid, so a preview's iframe never takes the pointer, the part of
+   the cell the drop would take, and the panel's name by the pointer */
+.drag-shield { position: absolute; inset: 0; z-index: 5; cursor: grabbing; }
+.drop-preview { position: fixed; pointer-events: none; z-index: 6; border: 2px solid var(--sky); background: color-mix(in srgb, var(--sky) 12%, transparent); border-radius: 4px; }
+@media (prefers-reduced-motion: no-preference) {
+  .drop-preview { transition: left 80ms ease-out, top 80ms ease-out, width 80ms ease-out, height 80ms ease-out; }
+}
+/* the grid scrolls sideways under the carousel: spanning every track, the
+   shield covers whatever part of it shows */
+.dock.grid > .drag-shield {
+  grid-area: 1 / 1 / -1 / -1;
+}
+.drag-ghost {
+  position: fixed;
+  pointer-events: none;
+  z-index: 7;
+  max-width: 220px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  padding: 3px 8px;
+  border-radius: var(--r);
+  font-size: 12px;
+  color: var(--ink);
+  background: var(--float);
+  border: 1px solid var(--float-edge);
+  box-shadow: 0 2px 6px -2px var(--float-shadow);
+}
+body.dragging-panel,
+body.dragging-panel * {
+  cursor: grabbing;
+  user-select: none;
+}
 .dock.grid > .seam-row {
   align-self: start;
   block-size: 6px;
@@ -2575,27 +2609,16 @@ body.resizing-rows {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-/* a panel's name and glyph pick it up to move it; the rest of the head is
-   left for panning the dock. A dragged panel lands on the side of a tab or
-   head the line shows. */
-.panel-head > [draggable="true"] {
+/* a panel's name and glyph, and its strip tab, pick it up to move it to
+   another cell or beside one; the rest of the head is left for panning
+   the dock */
+[data-drag-handle] {
   cursor: grab;
-}
-.panel-head > [draggable="true"]:active {
-  cursor: grabbing;
 }
 /* the head scrolls with its panel body, which would clip an outline drawn
    outside it */
 .panel-head:focus-visible {
   outline-offset: -2px;
-}
-.dock-tab[data-drop="before"],
-.panel-head[data-drop="before"] {
-  box-shadow: inset 2px 0 0 var(--sky);
-}
-.dock-tab[data-drop="after"],
-.panel-head[data-drop="after"] {
-  box-shadow: inset -2px 0 0 var(--sky);
 }
 .close {
   margin-left: auto;

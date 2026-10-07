@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { dropIndex, focusPanel, movePanel, nextActive, stableOrder } from "./dock";
+import { focusPanel, movePanel, nextActive, stableOrder } from "./dock";
 
 describe("focusPanel", () => {
   test("appends a new panel and shows it", () => {
@@ -56,14 +56,6 @@ describe("moving panels", () => {
     expect(movePanel(p, "b", -5)).toEqual(["b", "a", "c", "d"]);
     expect(movePanel(p, "zzz", 1)).toEqual(p);
     expect(p).toEqual(["a", "b", "c", "d"]);
-  });
-  test("a drop before or after a panel lands next to it, either direction", () => {
-    const p = ["a", "b", "c", "d"];
-    expect(movePanel(p, "a", dropIndex(p, "a", "c", false))).toEqual(["b", "a", "c", "d"]);
-    expect(movePanel(p, "a", dropIndex(p, "a", "c", true))).toEqual(["b", "c", "a", "d"]);
-    expect(movePanel(p, "d", dropIndex(p, "d", "b", false))).toEqual(["a", "d", "b", "c"]);
-    expect(movePanel(p, "d", dropIndex(p, "d", "b", true))).toEqual(["a", "b", "d", "c"]);
-    expect(movePanel(p, "b", dropIndex(p, "b", "b", true))).toEqual(p);
   });
   test("the DOM order is the ids sorted, whatever the visual order", () => {
     expect(stableOrder(["c", "a", "b"])).toEqual(["a", "b", "c"]);
