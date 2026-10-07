@@ -95,6 +95,23 @@ describe("the inbox's view", () => {
   });
 });
 
+describe("the dock's carousel", () => {
+  test("starts off, survives a reload, and a bad value falls back to off", () => {
+    const store = new Map<string, string>();
+    (globalThis as { localStorage?: unknown }).localStorage = {
+      getItem: (k: string) => store.get(k) ?? null,
+      setItem: (k: string, v: string) => void store.set(k, v),
+    };
+    store.set("canopy.settings", "{}");
+    expect(loadSettings().dockCarousel).toBe(false);
+    saveSettings({ ...loadSettings(), dockCarousel: true });
+    expect(loadSettings().dockCarousel).toBe(true);
+    store.set("canopy.settings", JSON.stringify({ dockCarousel: "yes" }));
+    expect(loadSettings().dockCarousel).toBe(false);
+    delete (globalThis as { localStorage?: unknown }).localStorage;
+  });
+});
+
 const CSS = readFileSync(new URL("./styles.css", import.meta.url), "utf8");
 
 /** the declarations of the stylesheet's block for `selector`, in order */

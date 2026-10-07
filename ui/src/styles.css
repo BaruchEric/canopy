@@ -2341,6 +2341,83 @@ a.chan-text {
 .body.no-side > .dock {
   max-width: calc(100vw - var(--cards-min, 320px));
 }
+/* the carousel: the dock takes the cards' room and scrolls sideways, one
+   panel's edge at a time. The cards' track goes to 0 and the dock is placed
+   in the last one by hand, since the body's children are placed in turn and
+   would otherwise slide into the empty track. */
+.body.carousel {
+  grid-template-columns: var(--sidebar-w, 264px) 6px 0 minmax(0, 1fr);
+}
+.body.carousel.no-side {
+  grid-template-columns: 0 minmax(0, 1fr);
+}
+.body.carousel > .main {
+  display: none;
+}
+.body.carousel > .dock {
+  grid-column: -2 / -1;
+  max-width: none;
+  scroll-snap-type: x proximity;
+  overscroll-behavior-x: contain;
+}
+/* a panel's edge is its handle's, so the whole panel lands in view */
+.body.carousel > .dock > .panel-resizer {
+  scroll-snap-align: start;
+}
+/* tabbed, there is no row: the one panel fills the dock */
+.body.carousel > .dock.tabbed {
+  grid-template-columns: 0 minmax(0, 1fr);
+}
+.body.carousel > .dock.tabbed > .panel-resizer {
+  display: none;
+}
+.dock.panning,
+.dock.panning * {
+  cursor: grabbing;
+  user-select: none;
+}
+/* a pan is the pointer's; a snap mid-drag would fight it */
+.body.carousel > .dock.panning {
+  scroll-snap-type: none;
+}
+/* the carousel's switch at the dock's top-right, whichever way the row is
+   scrolled: a zero-width item after the last panel, pushed to the right edge
+   when the panels leave room and held there by sticky when they overflow */
+.dock-corner {
+  order: 9999;
+  flex: none;
+  width: 0;
+  margin-left: auto;
+  align-self: flex-start;
+  position: sticky;
+  right: 0;
+  z-index: 3;
+}
+.dock.tabbed > .dock-corner {
+  grid-area: 1 / 2;
+  justify-self: end;
+}
+.dock.tabbed > .dock-corner > .dock-carousel {
+  top: 2px;
+}
+.dock-corner > .dock-carousel {
+  position: absolute;
+  top: 9px;
+  right: 4px;
+  padding: 2px 6px;
+}
+/* the switch sits over whichever head reaches the dock's right edge, so
+   every head keeps room for it past its own close; the strip of tabs too */
+.dock:has(> .dock-corner):not(.tabbed) > .panel > .panel-body > .panel-head {
+  padding-right: 32px;
+}
+.dock.tabbed:has(> .dock-corner) > .dock-tabs {
+  padding-right: 34px;
+}
+.dock-carousel[aria-pressed="true"] {
+  color: var(--ink);
+  background: var(--wash-strong);
+}
 .panel {
   width: var(--panel-w, 440px);
   flex: none;
@@ -3441,6 +3518,10 @@ a.chan-text {
   }
   .root-path {
     display: none;
+  }
+  /* the tree is a drawer here, so its two tracks are not kept for it */
+  .body.carousel {
+    grid-template-columns: 0 minmax(0, 1fr);
   }
 }
 @media (max-width: 760px) {

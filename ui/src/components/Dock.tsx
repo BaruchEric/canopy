@@ -1,5 +1,5 @@
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
-import type { CSSProperties, DragEvent, KeyboardEvent } from "react";
+import type { CSSProperties, DragEvent, KeyboardEvent, RefObject } from "react";
 import { api } from "../api";
 import {
   FILE_COL_INFO,
@@ -37,6 +37,7 @@ import { devState } from "../guided";
 import { BENCH_ONE, BenchBar, BenchSeams, type BenchPane } from "./Bench";
 import { PHONE, useMedia } from "../media";
 import { dropIndex, stableOrder } from "../dock";
+import { PAN_SLOP, snapTo, wheelPan } from "../carousel";
 import { backendOf, homeName, isHome } from "../registry";
 import { signinUrl } from "../backends";
 import { IdLabel } from "./IdLabel";
@@ -1020,12 +1021,14 @@ function PanelGear({
   const level = useStore((s) => s.settings.level);
   const panels = useStore((s) => s.panels);
   const movePanel = useStore((s) => s.movePanel);
+  const carousel = useStore((s) => s.settings.dockCarousel);
   const at = panels.indexOf(repo.id);
-  // a phone's dock stays as it was, without the moves
+  // a phone's dock stays as it was, without the moves or the carousel
   const phone = useMedia(PHONE);
   const moves: GearEntry[] = phone
     ? []
     : [
+        { type: "item", label: "carousel", on: carousel, run: () => setSetting("dockCarousel", !carousel) },
         { type: "item", label: "move left", run: () => movePanel(repo.id, at - 1), off: at <= 0 ? "already first" : undefined },
         {
           type: "item",
@@ -1802,6 +1805,147 @@ function DockTabs({ panels, active, movable }: { panels: string[]; active: strin
   );
 }
 
+/** what one panel may take: the dock's own max-width (the window less the
+ *  tree and the cards' floor, styles.css) less its 6px handle; Infinity where
+ *  nothing caps it. The carousel lifts the cap: there a panel may be as wide
+ *  as the window less its handle. */
+function dockRoom(dock: HTMLElement | null): number {
+  if (!dock) return Infinity;
+  if (dock.parentElement?.classList.contains("carousel")) return window.innerWidth - 6;
+  const cap = Number.parseFloat(getComputedStyle(dock).maxWidth);
+  return Number.isFinite(cap) ? cap - 6 : Infinity;
+}
+
+/** a press here is a control's, never a pan: the head's buttons, links and
+ *  menus, and the name and glyph that pick the panel up to move it */
+const NOT_PAN = 'button, a, input, select, textarea, label, [role="button"], [draggable="true"], .gear, .star';
+
+/** whether `el`, or anything between it and the dock, scrolls sideways
+ *  itself (a wide diff); the dock always does, so it is left out */
+function scrollsX(el: Element, dock: HTMLElement): boolean {
+  for (let at: Element | null = el; at && at !== dock; at = at.parentElement) {
+    if (at.scrollWidth > at.clientWidth && /auto|scroll/.test(getComputedStyle(at).overflowX)) return true;
+  }
+  return false;
+}
+
+/** each panel's left edge along the row, in the dock's scroll px: its
+ *  handle's, since the handle is the panel's left edge; in visual order */
+function panelEdges(dock: HTMLElement): number[] {
+  const base = dock.getBoundingClientRect().left + dock.clientLeft - dock.scrollLeft;
+  const edges = new Set<number>();
+  for (const el of dock.querySelectorAll(":scope > .panel-resizer")) {
+    if (el instanceof HTMLElement && el.offsetParent !== null) edges.add(Math.round(el.getBoundingClientRect().left - base));
+  }
+  return [...edges].sort((a, b) => a - b);
+}
+
+/** a wheel's delta in px, whatever unit the browser counted it in */
+function wheelPx(e: WheelEvent, dock: HTMLElement): { deltaX: number; deltaY: number; shiftKey: boolean } {
+  const unit = e.deltaMode === WheelEvent.DOM_DELTA_LINE ? 16 : e.deltaMode === WheelEvent.DOM_DELTA_PAGE ? dock.clientWidth : 1;
+  return { deltaX: e.deltaX * unit, deltaY: e.deltaY * unit, shiftKey: e.shiftKey };
+}
+
+/**
+ * The carousel's panning, while `on`: the side-by-side row scrolls sideways
+ * by a drag, a wheel and Ctrl+Alt+arrow.
+ *
+ * - A drag on a panel head pans, past `PAN_SLOP`, and so does one on the
+ *   dock's own background past the last panel. The head's name and glyph
+ *   stay the handle that picks the panel up to reorder it, and its buttons
+ *   stay buttons: a press on any of them is theirs, never a pan. A touch
+ *   is left alone, since the row already scrolls under a finger.
+ * - A vertical wheel over a head pans; shift+wheel anywhere pans unless what
+ *   is under the pointer scrolls sideways itself (`wheelPan`). The listener
+ *   captures, so a terminal in mouse mode never sees a wheel the row took,
+ *   and a wheel the row did not take is left to whatever is under it.
+ * - Ctrl+Alt+Left/Right anywhere on the page goes to the previous or next
+ *   panel's edge, captured before a focused terminal can take the keys.
+ */
+function useCarousel(ref: RefObject<HTMLDivElement | null>, on: boolean) {
+  useEffect(() => {
+    const dock = ref.current;
+    if (!on || !dock) return;
+    const onWheel = (e: WheelEvent) => {
+      const t = e.target;
+      if (!(t instanceof Element)) return;
+      const over = t.closest(".panel-head") ? "head" : "content";
+      const dx = wheelPan(wheelPx(e, dock), over, over === "content" && scrollsX(t, dock));
+      if (dx === 0) return;
+      e.preventDefault();
+      e.stopPropagation();
+      // scrollBy, not scrollLeft: the browser reads it as a scroll with a
+      // direction and snaps forward the way a native wheel does, where a
+      // new scrollLeft is snapped back to the nearest edge, which is
+      // usually the one it left
+      dock.scrollBy({ left: dx });
+    };
+    let stop = () => {};
+    const onDown = (e: PointerEvent) => {
+      stop();
+      const t = e.target;
+      if (e.button !== 0 || e.pointerType === "touch" || !(t instanceof Element)) return;
+      if (t !== dock && (!t.closest(".panel-head") || t.closest(NOT_PAN))) return;
+      const x0 = e.clientX;
+      const left0 = dock.scrollLeft;
+      let panning = false;
+      const move = (m: PointerEvent) => {
+        if (m.pointerId !== e.pointerId) return;
+        const d = m.clientX - x0;
+        if (!panning) {
+          // under the slop it is still a click, which focuses the head
+          if (Math.abs(d) < PAN_SLOP) return;
+          panning = true;
+          dock.setPointerCapture(e.pointerId);
+          dock.classList.add("panning");
+          getSelection()?.removeAllRanges();
+        }
+        dock.scrollLeft = left0 - d;
+      };
+      const up = (u: PointerEvent) => {
+        if (u.pointerId !== e.pointerId) return;
+        stop();
+        if (!panning) return;
+        // the release that ends a pan is not a click on what it ends over
+        const swallow = (c: MouseEvent) => {
+          c.stopPropagation();
+          c.preventDefault();
+        };
+        window.addEventListener("click", swallow, { capture: true, once: true });
+        setTimeout(() => window.removeEventListener("click", swallow, { capture: true }), 0);
+      };
+      stop = () => {
+        window.removeEventListener("pointermove", move);
+        window.removeEventListener("pointerup", up);
+        window.removeEventListener("pointercancel", up);
+        dock.classList.remove("panning");
+        stop = () => {};
+      };
+      window.addEventListener("pointermove", move);
+      window.addEventListener("pointerup", up);
+      window.addEventListener("pointercancel", up);
+    };
+    const onKey = (e: globalThis.KeyboardEvent) => {
+      if (!e.ctrlKey || !e.altKey || e.shiftKey || e.metaKey) return;
+      if (e.key !== "ArrowLeft" && e.key !== "ArrowRight") return;
+      e.preventDefault();
+      e.stopPropagation();
+      const left = snapTo(panelEdges(dock), dock.scrollLeft, e.key === "ArrowRight" ? 1 : -1);
+      const still = matchMedia("(prefers-reduced-motion: reduce)").matches;
+      dock.scrollTo({ left, behavior: still ? "auto" : "smooth" });
+    };
+    dock.addEventListener("wheel", onWheel, { passive: false, capture: true });
+    dock.addEventListener("pointerdown", onDown);
+    window.addEventListener("keydown", onKey, { capture: true });
+    return () => {
+      stop();
+      dock.removeEventListener("wheel", onWheel, { capture: true });
+      dock.removeEventListener("pointerdown", onDown);
+      window.removeEventListener("keydown", onKey, { capture: true });
+    };
+  }, [ref, on]);
+}
+
 /**
  * The panels pinned open on the right. Side by side by default, each with a
  * handle on its left edge; with `openIn: "tabs"` one panel's width with a
@@ -1814,15 +1958,6 @@ function DockTabs({ panels, active, movable }: { panels: string[]; active: strin
  * their place from CSS `order`, so moving a panel (a drag, Alt+Shift+arrow,
  * the gear) moves no element. Moving one would reload a preview's iframe.
  */
-/** what one panel may take: the dock's own max-width (the window less the
- *  tree and the cards' floor, styles.css) less its 6px handle; Infinity where
- *  nothing caps it */
-function dockRoom(dock: HTMLElement | null): number {
-  if (!dock) return Infinity;
-  const cap = Number.parseFloat(getComputedStyle(dock).maxWidth);
-  return Number.isFinite(cap) ? cap - 6 : Infinity;
-}
-
 export function Dock() {
   const panels = useStore((s) => s.panels);
   const panelWidths = useStore((s) => s.panelWidths);
@@ -1831,8 +1966,14 @@ export function Dock() {
   const active = useStore((s) => s.activePanel);
   const dockWidth = useStore((s) => s.dockWidth);
   const setDockWidth = useStore((s) => s.setDockWidth);
-  // below PHONE the dock stays as it was: nothing drags or moves by keys
+  const carousel = useStore((s) => s.settings.dockCarousel);
+  const setSetting = useStore((s) => s.setSetting);
+  // below PHONE the dock stays as it was: nothing drags or moves by keys,
+  // and there is no carousel
   const movable = !useMedia(PHONE);
+  const ref = useRef<HTMLDivElement>(null);
+  // a tabbed dock is one panel wide, with no row to pan
+  useCarousel(ref, carousel && movable && !tabbed && panels.length > 0);
   if (panels.length === 0) return null;
   // a stale active (never set, or pruned) shows the first tab rather than
   // an empty dock with a strip of tabs above it
@@ -1843,6 +1984,7 @@ export function Dock() {
       : (panels[0] ?? null);
   return (
     <div
+      ref={ref}
       className={tabbed ? "dock tabbed" : "dock"}
       // the tabbed dock's one width lives on the dock itself, where the grid
       // columns read it and the handle writes it live
@@ -1893,6 +2035,25 @@ export function Dock() {
           <RepoPanel key={id} id={id} width={width} order={2 * at + 1} movable={movable} />,
         ];
       })}
+      {/* last in the DOM, so showing it or not moves no panel */}
+      {movable && (
+        <div className="dock-corner">
+          <button
+            type="button"
+            className="mini dock-carousel"
+            aria-pressed={carousel}
+            aria-label="Carousel"
+            title={
+              carousel
+                ? "Carousel: on. The cards get their column back when it is off"
+                : "Carousel: the dock takes the cards' room and scrolls sideways a panel at a time"
+            }
+            onClick={() => setSetting("dockCarousel", !carousel)}
+          >
+            ⇄
+          </button>
+        </div>
+      )}
     </div>
   );
 }

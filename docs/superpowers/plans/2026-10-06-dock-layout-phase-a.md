@@ -285,7 +285,7 @@ git commit -m "feat(dock): drag panels and tabs into a new order without reloadi
   - `PAN_SLOP = 6`.
   - The setting `dockCarousel: boolean`, default `false`.
 
-- [ ] **Step 1: Write the failing tests**, `ui/src/carousel.test.ts`:
+- [x] **Step 1: Write the failing tests**, `ui/src/carousel.test.ts`:
 
 ```ts
 import { describe, expect, test } from "bun:test";
@@ -322,12 +322,12 @@ describe("carousel snap", () => {
 });
 ```
 
-- [ ] **Step 2: Run them and watch them fail**
+- [x] **Step 2: Run them and watch them fail**
 
 Run: `env -u TMUX SHELL=/bin/bash bun test ui/src/carousel.test.ts`
 Expected: FAIL.
 
-- [ ] **Step 3: Implement**
+- [x] **Step 3: Implement**
 
 `ui/src/carousel.ts`:
 
@@ -393,7 +393,7 @@ Check the real class of the cards grid element (`RepoGrid`'s root) and the real 
   - **Keys.** Ctrl+Alt+ArrowLeft/Right anywhere in the document while the carousel is on calls `dock.scrollTo({ left: snapTo(lefts, dock.scrollLeft, dir), behavior: reduced ? "auto" : "smooth" })`. `lefts` is each `.panel`'s `offsetLeft - dock.offsetLeft`, read in visual order (sorted by `offsetLeft`, since the DOM order is by id).
 - A toggle button at the dock's top-right (`className="mini dock-carousel"`, `aria-pressed`) and a gear entry "carousel" both flip `settings.dockCarousel`.
 
-- [ ] **Step 4: Gates, then the browser check**
+- [x] **Step 4: Gates, then the browser check**
 
 Run: `bun run typecheck && bun run lint && env -u TMUX SHELL=/bin/bash bun test && bun run build`
 Expected: all pass.
@@ -408,7 +408,7 @@ Then, at 1440px wide with four panels open:
 7. Resize to 390px and check that the carousel class is off and the phone dock is as before.
 8. Resize back and check that the setting is still on.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add ui/src

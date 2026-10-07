@@ -167,6 +167,8 @@ export interface Settings {
   inboxWrap: boolean;
   /** a raw command starts folded under its plain-language line */
   inboxFold: boolean;
+  /** the dock takes the cards' room and scrolls sideways a panel at a time */
+  dockCarousel: boolean;
 }
 
 /** the inbox command block's text size, px */
@@ -209,6 +211,7 @@ export const DEFAULT_SETTINGS: Settings = {
   inboxText: INBOX_TEXT.size,
   inboxWrap: true,
   inboxFold: true,
+  dockCarousel: false,
 };
 
 const KEY = "canopy.settings";
@@ -319,6 +322,7 @@ export const SCREEN_SETTINGS = [
   "inboxText",
   "inboxWrap",
   "inboxFold",
+  "dockCarousel",
 ] as const satisfies readonly (keyof Settings)[];
 
 /** what is stored under the key, an empty object for anything else */
@@ -368,6 +372,7 @@ export function loadSettings(): Settings {
       inboxText: inboxTextOf(saved.inboxText),
       inboxWrap: typeof saved.inboxWrap === "boolean" ? saved.inboxWrap : DEFAULT_SETTINGS.inboxWrap,
       inboxFold: typeof saved.inboxFold === "boolean" ? saved.inboxFold : DEFAULT_SETTINGS.inboxFold,
+      dockCarousel: typeof saved.dockCarousel === "boolean" ? saved.dockCarousel : DEFAULT_SETTINGS.dockCarousel,
       ...levelOf(saved),
     };
   } catch {

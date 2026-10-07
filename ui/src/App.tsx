@@ -14,7 +14,7 @@ import { Sidebar } from "./components/Sidebar";
 import { SectionSolo, Solo } from "./components/Solo";
 import { ShellSolo, TermDock } from "./components/TermDock";
 import { Crowns, TopBar } from "./components/TopBar";
-import { NARROW, useMedia } from "./media";
+import { NARROW, PHONE, useMedia } from "./media";
 import { dropAskHere, parseRoute } from "./routes";
 import { SORT_MODES, type Theme } from "./settings";
 import { SIDEBAR, useStore } from "./store";
@@ -112,6 +112,10 @@ export function App() {
   const drawerOpen = useStore((s) => s.drawerOpen);
   const setDrawer = useStore((s) => s.setDrawer);
   const narrow = useMedia(NARROW);
+  // the carousel gives the dock the cards' room; a phone's dock covers them
+  // already and stays as it was
+  const phone = useMedia(PHONE);
+  const carousel = useStore((s) => s.settings.dockCarousel && s.panels.length > 0) && !phone;
   const openPanel = useStore((s) => s.openPanel);
   const [attempt, setAttempt] = useState(0);
   const pinned = useRef(false);
@@ -295,7 +299,7 @@ export function App() {
       </> : <>
       <TopBar nav={nav} />
       <div
-        className={sidebarOpen ? "body" : "body no-side"}
+        className={`body${sidebarOpen ? "" : " no-side"}${carousel ? " carousel" : ""}`}
         style={{ "--sidebar-w": `${sidebarWidth}px` } as CSSProperties}
       >
         {narrow && drawerOpen && (
