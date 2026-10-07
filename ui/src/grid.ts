@@ -216,7 +216,8 @@ export function resizeColumn(l: DockLayout, column: string, px: number, min: num
 
 /** Moves the boundary between cells `index` and `index + 1` to `at`, a
  *  fraction of the column's height from the top. No cell drops under 0.1,
- *  and the other cells keep their shares. */
+ *  and the other cells keep their shares. A boundary that stays put
+ *  (moved nowhere, or held at its limit) gives back `l` itself. */
 export function resizeSeam(l: DockLayout, column: string, index: number, at: number): DockLayout {
   const col = l.columns.find((c) => c.id === column);
   const a = col?.cells[index];
@@ -227,6 +228,7 @@ export function resizeSeam(l: DockLayout, column: string, index: number, at: num
   if (pair < 2 * MIN_SHARE) return l;
   const first = round(Math.max(MIN_SHARE, Math.min(pair - MIN_SHARE, at - above)));
   const second = round(pair - first);
+  if (first === a.share && second === b.share) return l;
   return {
     columns: l.columns.map((c) =>
       c.id === column ? { ...c, cells: c.cells.map((x, i) => (i === index ? { ...x, share: first } : i === index + 1 ? { ...x, share: second } : x)) } : c,
@@ -444,12 +446,14 @@ export function rowsTemplate(rows: string): string {
 
 /** The dock's grid templates. Each column reads its own variable, and
  *  `vars` sets every one from the layout, so a seam's live write is
- *  replaced by the next render rather than outliving a width change. */
-export function gridTemplate(l: DockLayout, plan: GridPlan): { columns: string; rows: string; vars: Record<string, string> } {
+ *  replaced by the next render rather than outliving a width change. With
+ *  `fill` (a lone column under the carousel) the column takes the whole
+ *  dock and its seam no room. */
+export function gridTemplate(l: DockLayout, plan: GridPlan, fill = false): { columns: string; rows: string; vars: Record<string, string> } {
   const vars: Record<string, string> = {};
   for (const c of l.columns) vars[columnVar(c.id)] = `${c.width}px`;
   return {
-    columns: l.columns.map((c) => `6px var(${columnVar(c.id)}, ${c.width}px)`).join(" "),
+    columns: fill ? "0 minmax(0, 1fr)" : l.columns.map((c) => `6px var(${columnVar(c.id)}, ${c.width}px)`).join(" "),
     rows: rowsTemplate(plan.rows),
     vars,
   };
@@ -463,6 +467,15 @@ export function seamStart(l: DockLayout, column: string, index: number): number 
   return col.cells.slice(0, index + 1).reduce((s, x) => s + x.share, 0);
 }
 
+/** A row seam's accessible name: the showing panels of the two cells it
+ *  sits between, through `name`. */
+export function seamLabel(l: DockLayout, column: string, index: number, name: (id: string) => string): string {
+  const cells = l.columns.find((c) => c.id === column)?.cells;
+  const above = cells?.[index]?.active;
+  const below = cells?.[index + 1]?.active;
+  return above && below ? `Height of ${name(above)} and ${name(below)}` : "Height of the cells above and below";
+}
+
 /** A seam dragged `dy` px down a column `height` px tall, from `start`.
  *  Every column spans the dock's full height, so that is the dock's. */
 export function seamDrag(start: number, dy: number, height: number): number {
@@ -473,10 +486,12 @@ export function seamDrag(start: number, dy: number, height: number): number {
 export interface Placement { area?: string; cell?: string; order?: number; hidden: boolean; strip: boolean }
 
 /** Where each open panel goes: its grid area with `plan`, or, with none
- *  (a phone, or no layout yet), a CSS order in the flat dock, every panel
- *  showing in the layout's order and any it does not hold after them. A
- *  panel the plan does not hold takes no room rather than auto-placing. */
-export function placements(l: DockLayout, open: readonly string[], plan: GridPlan | null): Record<string, Placement> {
+ *  (a phone, or no layout yet), a CSS order in the flat dock, in the
+ *  layout's order and any it does not hold after them: every panel
+ *  showing, or with `showing` (tabs on a phone) that one alone, the rest
+ *  tabs of the one strip. A panel the plan does not hold takes no room
+ *  rather than auto-placing. */
+export function placements(l: DockLayout, open: readonly string[], plan: GridPlan | null, showing?: string): Record<string, Placement> {
   const out: Record<string, Placement> = {};
   if (plan) {
     for (const id of open) {
@@ -487,6 +502,7 @@ export function placements(l: DockLayout, open: readonly string[], plan: GridPla
   }
   const laid = panelsOf(l).filter((id) => open.includes(id));
   const order = [...laid, ...open.filter((id) => !laid.includes(id))];
-  for (const id of open) out[id] = { order: order.indexOf(id), hidden: false, strip: false };
+  const tabs = showing !== undefined;
+  for (const id of open) out[id] = { order: order.indexOf(id), hidden: tabs && id !== showing, strip: tabs };
   return out;
 }

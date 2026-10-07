@@ -1962,6 +1962,20 @@ describe("the dock as columns of cells", () => {
     expect(useStore.getState()).toBe(before);
   });
 
+  test("a row seam moved nowhere is no change at all", () => {
+    useStore.setState({ panels: ["a", "b"], activePanel: "a" });
+    useStore.getState().dropPanel("b", cell("a"), "below");
+    const before = useStore.getState();
+    let heard = 0;
+    const off = useStore.subscribe(() => {
+      heard++;
+    });
+    useStore.getState().resizeSeam(column("a"), 0, 0.5);
+    off();
+    expect(heard).toBe(0);
+    expect(useStore.getState()).toBe(before);
+  });
+
   test("the layout is saved in this screen's slot, and a dockless window saves none", () => {
     const l = globalThis as unknown as { localStorage?: unknown };
     const kept = new Map<string, string>();

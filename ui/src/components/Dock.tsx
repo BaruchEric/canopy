@@ -36,7 +36,7 @@ import { devState } from "../guided";
 import { BENCH_ONE, BenchBar, BenchSeams, type BenchPane } from "./Bench";
 import { PHONE, useMedia } from "../media";
 import { dropIndex, stableOrder } from "../dock";
-import { columnVar, gridOf, gridTemplate, placements, resizeSeam, rowsTemplate, seamDrag, seamStart, type DockLayout, type GridPlan } from "../grid";
+import { columnVar, gridOf, gridTemplate, placements, resizeSeam, rowsTemplate, seamDrag, seamLabel, seamStart, type DockLayout, type GridPlan } from "../grid";
 import { PAN_SLOP, overflowsX, snapTo, wheelTake } from "../carousel";
 import { backendOf, homeName, isHome } from "../registry";
 import { signinUrl } from "../backends";
@@ -1290,6 +1290,16 @@ function panelHead(id: string, name: string, movable: boolean | undefined) {
   };
 }
 
+/** Whether a panel has been a tab of a strip since it mounted. It keeps
+ *  the tab's fade then: a cell dropping to one tab would otherwise change
+ *  its animation and slide it in again, with a transform that a section in
+ *  front inside it must not have. */
+function useWasTab(strip: boolean | undefined): boolean {
+  const [was, setWas] = useState(false);
+  if (strip && !was) setWas(true);
+  return was || strip === true;
+}
+
 /** A panel whose repo is on a machine that has not answered, or no longer
  *  has it: its name, where it lives, and why it is empty. It keeps the
  *  panel's place in the dock until the machine comes back. */
@@ -1319,9 +1329,10 @@ function PanelWaiting({
   const status = conn.status;
   const shown = useStore((s) => s.backendOrder.includes(b));
   const retry = useStore((s) => s.retryBackend);
+  const wasTab = useWasTab(strip);
   return (
     <section
-      className={`panel panel-waiting${strip ? " has-strip" : ""}`}
+      className={`panel panel-waiting${strip ? " has-strip" : ""}${wasTab ? " was-tab" : ""}`}
       aria-label={`${plain} on ${b}`}
       hidden={hidden}
       data-cell={cell}
@@ -1430,6 +1441,7 @@ export function RepoPanel({
   // shows under the commit box, in the changes section.
   const [note, setNote] = useState<{ kind: "ok" | "err"; text: string } | null>(null);
   const [placed, setPlaced] = useState<"normal" | "full">("normal");
+  const wasTab = useWasTab(strip);
   const box = useRef<HTMLElement>(null);
   const bodyRef = useRef<HTMLDivElement>(null);
   // In front, a panel is its project's bench: its column along the side,
@@ -1624,7 +1636,7 @@ export function RepoPanel({
       {bench && <FocusBackdrop onLeave={() => setMode("normal")} />}
     <section
       ref={box}
-      className={`panel s-${stateOf(repo)}${guided ? " guided-panel" : ""}${strip ? " has-strip" : ""}${modeClass}`}
+      className={`panel s-${stateOf(repo)}${guided ? " guided-panel" : ""}${strip ? " has-strip" : ""}${wasTab ? " was-tab" : ""}${modeClass}`}
       aria-label={repo.name}
       hidden={hidden}
       data-pane={bench ? (shownPane ?? undefined) : undefined}
@@ -1835,11 +1847,26 @@ export function RepoPanel({
   );
 }
 
-/** The tab strip over a cell of more than one panel: one tab per panel in
- *  it, the showing one lit, each with the repo's state glyph and its own
- *  close. Arrow keys move along the strip, wrapping at either end, and take
- *  the focus with them. */
-function CellStrip({ strip: { cell, area, panels, active }, movable }: { strip: GridPlan["strips"][number]; movable: boolean }) {
+/** The tab strip over a cell of more than one panel, or over a phone's
+ *  tabbed dock: one tab per panel in it, the showing one lit, each with the
+ *  repo's state glyph and its own close. Arrow keys move along the strip,
+ *  wrapping at either end, and take the focus with them. */
+function CellStrip({
+  panels,
+  active,
+  movable,
+  label,
+  cell,
+  area,
+}: {
+  panels: string[];
+  active: string | null;
+  movable: boolean;
+  /** its name for a screen reader, told apart from the other strips' */
+  label: string;
+  cell?: string;
+  area?: string;
+}) {
   const repos = useStore((s) => s.repos);
   const showPanel = useStore((s) => s.showPanel);
   const closePanel = useStore((s) => s.closePanel);
@@ -1878,7 +1905,7 @@ function CellStrip({ strip: { cell, area, panels, active }, movable }: { strip: 
     <div
       className="dock-tabs cell-strip"
       role="tablist"
-      aria-label="Open repos"
+      aria-label={label}
       ref={strip}
       data-cell={cell}
       style={{ gridArea: area }}
@@ -2152,24 +2179,35 @@ function RowSeam({ seam, layout }: { seam: GridPlan["rowSeams"][number]; layout:
     // sideways scrollbar along the bottom
     const height = dock.clientHeight;
     let at = start;
+    let moved = false;
     handle.setPointerCapture(e.pointerId);
     setDragging(true);
     document.body.classList.add("resizing-rows");
     const move = (ev: globalThis.PointerEvent) => {
+      moved = true;
       at = seamDrag(start, ev.clientY - y0, height);
       paintGrid(dock, gridOf(resizeSeam(layout, column, index, at)));
     };
-    const up = () => {
+    const end = () => {
       handle.removeEventListener("pointermove", move);
       handle.removeEventListener("pointerup", up);
-      handle.removeEventListener("pointercancel", up);
+      handle.removeEventListener("pointercancel", cancel);
       setDragging(false);
       document.body.classList.remove("resizing-rows");
-      commit(column, index, at);
+    };
+    // a click that moved nothing saves nothing
+    const up = () => {
+      end();
+      if (moved) commit(column, index, at);
+    };
+    // a gesture the system took back leaves the layout as it was
+    const cancel = () => {
+      end();
+      if (moved) paintGrid(dock, gridOf(layout));
     };
     handle.addEventListener("pointermove", move);
     handle.addEventListener("pointerup", up);
-    handle.addEventListener("pointercancel", up);
+    handle.addEventListener("pointercancel", cancel);
   };
   const onKeyDown = (e: KeyboardEvent<HTMLDivElement>) => {
     if ((e.key !== "ArrowUp" && e.key !== "ArrowDown") || start === null) return;
@@ -2182,7 +2220,7 @@ function RowSeam({ seam, layout }: { seam: GridPlan["rowSeams"][number]; layout:
       className={`seam-row${dragging ? " dragging" : ""}`}
       role="separator"
       aria-orientation="horizontal"
-      aria-label="Height of the cells above and below"
+      aria-label={seamLabel(layout, column, index, idText)}
       aria-valuenow={Math.round((start ?? 0) * 100)}
       aria-valuemin={0}
       aria-valuemax={100}
@@ -2220,17 +2258,31 @@ export function Dock() {
   const movable = !useMedia(PHONE);
   // no grid either before the layout holds a panel, so nothing auto-places
   const gridded = movable && layout.columns.length > 0;
+  // a lone column under the carousel takes the cards' room, as the one
+  // panel of a tabbed dock did, with no seam to size it
+  const fill = gridded && carousel && layout.columns.length === 1;
+  // tabs on a phone: the one strip over the one panel showing, as before
+  // there were cells
+  const tabbed = useStore((s) => s.settings.openIn === "tabs");
+  const active = useStore((s) => s.activePanel);
+  const phoneTabs = !movable && tabbed;
+  const showing = phoneTabs ? (active !== null && panels.includes(active) ? active : panels[0]) : undefined;
   const g = useMemo(() => gridOf(layout), [layout]);
-  const t = useMemo(() => gridTemplate(layout, g), [layout, g]);
-  const placed = useMemo(() => placements(layout, panels, gridded ? g : null), [layout, panels, gridded, g]);
+  const t = useMemo(() => gridTemplate(layout, g, fill), [layout, g, fill]);
+  const placed = useMemo(
+    () => placements(layout, panels, gridded ? g : null, showing),
+    [layout, panels, gridded, g, showing],
+  );
   const ref = useRef<HTMLDivElement>(null);
   // one column has no row to pan
   useCarousel(ref, carousel && movable && layout.columns.length > 1);
   if (panels.length === 0) return null;
+  // the phone's strip lists the panels in the order they show in
+  const phoneStrip = phoneTabs ? [...panels].sort((a, b) => (placed[a]?.order ?? 0) - (placed[b]?.order ?? 0)) : [];
   return (
     <div
       ref={ref}
-      className={gridded ? "dock grid" : "dock"}
+      className={gridded ? "dock grid" : phoneTabs ? "dock phone-tabs" : "dock"}
       style={
         gridded ? ({ gridTemplateColumns: t.columns, gridTemplateRows: t.rows, ...t.vars } as CSSProperties) : undefined
       }
@@ -2250,8 +2302,21 @@ export function Dock() {
           />
         );
       })}
-      {gridded && g.strips.map((strip) => <CellStrip key={strip.cell} strip={strip} movable={movable} />)}
       {gridded &&
+        g.strips.map(({ cell, area, panels: tabs, active: on }) => (
+          <CellStrip
+            key={cell}
+            cell={cell}
+            area={area}
+            panels={tabs}
+            active={on}
+            movable={movable}
+            label={`Tabs with ${idText(on)} showing`}
+          />
+        ))}
+      {phoneTabs && <CellStrip panels={phoneStrip} active={showing ?? null} movable={false} label="Open repos" />}
+      {gridded &&
+        !fill &&
         g.colSeams.map(({ column, area }) => {
           const col = layout.columns.find((c) => c.id === column);
           const lead = col?.cells[0]?.active;

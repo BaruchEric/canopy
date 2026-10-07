@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { activate, cellOf, columnOf, cssId, dropZone, fromLegacy, gridOf, gridTemplate, moveCell, moveColumn, moveTo, moveWithin, normalizeLayout, panelsOf, placements, place, regroup, rename, resizeColumn, resizeSeam, rowsTemplate, seamDrag, seamStart } from "./grid";
+import { activate, cellOf, columnOf, cssId, dropZone, fromLegacy, gridOf, gridTemplate, moveCell, moveColumn, moveTo, moveWithin, normalizeLayout, panelsOf, placements, place, regroup, rename, resizeColumn, resizeSeam, rowsTemplate, seamDrag, seamLabel, seamStart } from "./grid";
 import type { DockLayout } from "./grid";
 
 const W = 440;
@@ -344,7 +344,7 @@ describe("the grid as the dock renders it", () => {
     expect(onGrid.b).toEqual({ area: g.panels.b?.area, cell: g.panels.b?.cell, hidden: false, strip: false });
     // a panel the layout does not hold yet takes no room rather than auto-placing
     expect(onGrid.z).toEqual({ hidden: true, strip: false });
-    // flat: every panel shows, tabs too, in the layout's order, no splits
+    // flat, side by side on a phone: every panel shows in the layout's order, no splits
     const flat = placements(l, ["a", "b", "c", "z"], null);
     expect(flat).toEqual({
       a: { order: 0, hidden: false, strip: false },
@@ -352,5 +352,40 @@ describe("the grid as the dock renders it", () => {
       b: { order: 2, hidden: false, strip: false },
       z: { order: 3, hidden: false, strip: false },
     });
+    // tabs on a phone: one strip of every panel, and only the one showing
+    const tabs = placements(l, ["a", "b", "c", "z"], null, "b");
+    expect(tabs).toEqual({
+      a: { order: 0, hidden: true, strip: true },
+      c: { order: 1, hidden: true, strip: true },
+      b: { order: 2, hidden: false, strip: true },
+      z: { order: 3, hidden: true, strip: true },
+    });
+  });
+
+  test("a lone column under the carousel fills the dock", () => {
+    const l = place(empty, ["a", "b"], "a", "tabs", W);
+    const t = gridTemplate(l, gridOf(l), true);
+    expect(t.columns).toBe("0 minmax(0, 1fr)");
+    expect(gridTemplate(l, gridOf(l)).columns).toBe(`6px var(--col-w-${cssId(l.columns[0]?.id ?? "")}, 440px)`);
+  });
+
+  test("a seam moved nowhere, or past its limit, is the same layout", () => {
+    let l = place(empty, ["a", "b"], "a", "columns", W);
+    l = moveTo(l, "b", { cell: cellOf(l, "a")?.id ?? "", zone: "below" }, W);
+    const col = l.columns[0]?.id ?? "";
+    expect(resizeSeam(l, col, 0, 0.5)).toBe(l);
+    const low = resizeSeam(l, col, 0, 0.1);
+    expect(resizeSeam(low, col, 0, 0.08)).toBe(low);
+    expect(resizeSeam(l, col, 0, 0.6)).not.toBe(l);
+  });
+
+  test("a row seam is named after the cells it sits between", () => {
+    let l = place(empty, ["a", "b", "c"], "a", "columns", W);
+    l = moveTo(l, "b", { cell: cellOf(l, "a")?.id ?? "", zone: "below" }, W);
+    l = moveTo(l, "c", { cell: cellOf(l, "b")?.id ?? "", zone: "center" }, W);
+    const col = l.columns[0]?.id ?? "";
+    const name = (id: string) => id.toUpperCase();
+    expect(seamLabel(l, col, 0, name)).toBe("Height of A and C");
+    expect(seamLabel(l, "nope", 0, name)).toBe("Height of the cells above and below");
   });
 });

@@ -2218,7 +2218,12 @@ export const useStore = create<CanopyState>((set, get) => ({
       return dockLayout === l ? s : { dockLayout, panels: panelsFor(s, dockLayout), activePanel: id };
     }),
   resizeColumn: (column, px) => set((s) => ({ dockLayout: sizeColumn(laidOut(s), column, px, PANEL.min, PANEL.max) })),
-  resizeSeam: (column, index, at) => set((s) => ({ dockLayout: moveSeam(laidOut(s), column, index, at) })),
+  resizeSeam: (column, index, at) =>
+    set((s) => {
+      const l = laidOut(s);
+      const dockLayout = moveSeam(l, column, index, at);
+      return dockLayout === l ? s : { dockLayout };
+    }),
   arrangeDock: (into) => {
     get().setSetting("openIn", into === "tabs" ? "tabs" : "dock");
     set((s) => {

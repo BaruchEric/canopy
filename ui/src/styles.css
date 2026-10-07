@@ -3589,6 +3589,25 @@ body.resizing-rows {
     width: 100%;
     scroll-snap-align: start;
   }
+  /* tabs on a phone: the strip across the top, the one panel showing
+     below it, the others hidden in the same cell */
+  .dock.phone-tabs {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: auto minmax(0, 1fr);
+    overflow: hidden;
+  }
+  .dock.phone-tabs > .cell-strip {
+    grid-row: 1;
+    min-width: 0;
+  }
+  .dock.phone-tabs > .panel {
+    grid-row: 2;
+    grid-column: 1;
+    width: auto;
+    min-width: 0;
+    min-height: 0;
+  }
   .panel-resizer,
   .solo-resizer {
     display: none;
@@ -6413,11 +6432,13 @@ button.machine:hover {
   }
   /* a panel slides in a little from the edge it grows from. A tab
      switch in a cell fades, and no transform there, since a section
-     brought to the front inside it is fixed. */
+     brought to the front inside it is fixed. A panel that has been a tab
+     keeps the fade, so its cell dropping to one tab never slides it. */
   .dock > .panel {
     animation: panel-in 240ms var(--ease);
   }
-  .dock > .panel.has-strip {
+  .dock > .panel.has-strip,
+  .dock > .panel.was-tab {
     animation: fade-in 160ms ease-out;
   }
   @keyframes panel-in {
