@@ -33,3 +33,32 @@ export function nextActive(
   // that sat to the right of the closed one
   return rest[Math.min(i, rest.length - 1)] ?? null;
 }
+
+/** `panels` with `id` moved to index `to` (clamped). An id that is not
+ *  open leaves the list as it was. */
+export function movePanel(panels: readonly string[], id: string, to: number): string[] {
+  const from = panels.indexOf(id);
+  if (from === -1) return [...panels];
+  const rest = panels.filter((p) => p !== id);
+  const at = Math.max(0, Math.min(rest.length, to));
+  return [...rest.slice(0, at), id, ...rest.slice(at)];
+}
+
+/** The index `movePanel` takes to drop `dragged` just before (or after)
+ *  `over`: counted in the list without `dragged`, where it is inserted. */
+export function dropIndex(
+  panels: readonly string[],
+  dragged: string,
+  over: string,
+  after: boolean,
+): number {
+  const rest = panels.filter((p) => p !== dragged);
+  const i = rest.indexOf(over);
+  if (i === -1) return panels.indexOf(dragged);
+  return after ? i + 1 : i;
+}
+
+/** The order panels are rendered in the DOM: by id, so a reorder (a
+ *  change of CSS order) never moves an element, which would reload a
+ *  preview's iframe. */
+export const stableOrder = (panels: readonly string[]): string[] => [...panels].sort();

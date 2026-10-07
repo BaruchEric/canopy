@@ -76,7 +76,7 @@ No panel's shell or preview reloads along the way.
   - `dropIndex(panels: readonly string[], dragged: string, over: string, after: boolean): number`. This is the `to` for `movePanel` when `dragged` is dropped before or after `over`.
   - `stableOrder(panels: readonly string[]): string[]`. This is the DOM order, sorted by id.
 
-- [ ] **Step 1: Write the failing tests**, appended to `dock.test.ts`:
+- [x] **Step 1: Write the failing tests**, appended to `dock.test.ts`:
 
 ```ts
 import { dropIndex, movePanel, stableOrder } from "./dock";
@@ -105,12 +105,12 @@ describe("moving panels", () => {
 });
 ```
 
-- [ ] **Step 2: Run them and watch them fail**
+- [x] **Step 2: Run them and watch them fail**
 
 Run: `env -u TMUX SHELL=/bin/bash bun test ui/src/dock.test.ts`
 Expected: FAIL, the exports are missing.
 
-- [ ] **Step 3: Implement** in `ui/src/dock.ts`:
+- [x] **Step 3: Implement** in `ui/src/dock.ts`:
 
 ```ts
 /** `panels` with `id` moved to index `to` (clamped). An id that is not
@@ -138,12 +138,12 @@ export function dropIndex(panels: readonly string[], dragged: string, over: stri
 export const stableOrder = (panels: readonly string[]): string[] => [...panels].sort();
 ```
 
-- [ ] **Step 4: Run the tests and watch them pass**
+- [x] **Step 4: Run the tests and watch them pass**
 
 Run: `env -u TMUX SHELL=/bin/bash bun test ui/src/dock.test.ts`
 Expected: PASS.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add ui/src/dock.ts ui/src/dock.test.ts
