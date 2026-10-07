@@ -36,7 +36,7 @@ import { devState } from "../guided";
 import { BENCH_ONE, BenchBar, BenchSeams, type BenchPane } from "./Bench";
 import { PHONE, useMedia } from "../media";
 import { stableOrder } from "../dock";
-import { columnVar, dropTarget, gearDrops, gridOf, gridTemplate, placements, resizeSeam, rowsTemplate, seamDrag, seamLabel, seamStart, stepPanel, zoneRect, type Box, type DockLayout, type Drop, type GridPlan } from "../grid";
+import { columnVar, dropTarget, gearDrops, gridOf, gridTemplate, placements, resizeSeam, rowsTemplate, seamDrag, seamLabel, seamRange, seamStart, stepPanel, zoneRect, type Box, type DockLayout, type Drop, type GridPlan } from "../grid";
 import { PAN_SLOP, overflowsX, snapTo, wheelTake } from "../carousel";
 import { dragStep, type DragInput, type DragPhase } from "../drag";
 import { backendOf, homeName, isHome } from "../registry";
@@ -1281,6 +1281,32 @@ function swallowClick() {
  *  and nothing moves. The drag layer calls it when it unmounts (the dock
  *  going, or leaving its grid), since the drag's listeners are on window. */
 let cancelPanelDrag = () => {};
+/** Takes the drag in progress down as Escape does: nothing moves, and the
+ *  release still to come is swallowed rather than taken as a click. */
+let haltPanelDrag = () => {};
+
+/** the seam drags in progress, a column's or a row's, each by its cancel */
+const seamCancels = new Set<() => void>();
+/** Holds `cancel` while a seam drag runs; the drag lets go of it (the
+ *  returned function) before it commits, so its own commit never cancels
+ *  it. */
+function holdSeam(cancel: () => void): () => void {
+  seamCancels.add(cancel);
+  return () => {
+    seamCancels.delete(cancel);
+  };
+}
+
+// A layout changed from outside a gesture (another kind of screen's taken
+// up, a scan pruning a panel) can reuse the ids a gesture holds: the drag's
+// drop cell, a seam's column and index. Each gesture still live ends then,
+// leaving the dock as the new layout draws it. A gesture's own commit comes
+// after it has let go of its hook, so it never ends itself.
+useStore.subscribe((s, prev) => {
+  if (s.dockLayout === prev.dockLayout) return;
+  haltPanelDrag();
+  for (const cancel of seamCancels) cancel();
+});
 
 /**
  * Picks panel `id` up by one of its handles (the name or glyph on its head,
@@ -1332,6 +1358,7 @@ function startPanelDrag(e: ReactPointerEvent<HTMLElement>, id: string, label: st
     if (dock.isConnected && dock.hasPointerCapture(pointerId)) dock.releasePointerCapture(pointerId);
     hide();
     cancelPanelDrag = () => {};
+    haltPanelDrag = () => {};
   };
   const step = (input: DragInput) => {
     const next = dragStep(phase, input, PAN_SLOP);
@@ -1394,6 +1421,7 @@ function startPanelDrag(e: ReactPointerEvent<HTMLElement>, id: string, label: st
   window.addEventListener("scroll", scrolled, { capture: true, passive: true });
   dock.addEventListener("lostpointercapture", lost);
   cancelPanelDrag = gone;
+  haltPanelDrag = () => step({ type: "escape" });
 }
 
 /** Props that make an element a handle that picks panel `id` up: a strip
@@ -2327,19 +2355,22 @@ function RowSeam({ seam, layout }: { seam: GridPlan["rowSeams"][number]; layout:
   useEffect(() => () => document.body.classList.remove("resizing-rows"), []);
   const { column, index, area } = seam;
   const start = seamStart(layout, column, index);
+  const range = seamRange(layout, column, index);
   const below = layout.columns.find((c) => c.id === column)?.cells[index + 1]?.id;
   const onPointerDown = (e: ReactPointerEvent<HTMLDivElement>) => {
     const dock = e.currentTarget.parentElement;
     if (e.button !== 0 || start === null || !dock) return;
     e.preventDefault();
     const handle = e.currentTarget;
+    const { pointerId } = e;
     const y0 = e.clientY;
     // every column spans the dock's height; clientHeight leaves out a
     // sideways scrollbar along the bottom
     const height = dock.clientHeight;
     let at = start;
     let moved = false;
-    handle.setPointerCapture(e.pointerId);
+    let release = () => {};
+    handle.setPointerCapture(pointerId);
     setDragging(true);
     document.body.classList.add("resizing-rows");
     const move = (ev: globalThis.PointerEvent) => {
@@ -2348,9 +2379,11 @@ function RowSeam({ seam, layout }: { seam: GridPlan["rowSeams"][number]; layout:
       paintGrid(dock, gridOf(resizeSeam(layout, column, index, at)));
     };
     const end = () => {
+      release();
       handle.removeEventListener("pointermove", move);
       handle.removeEventListener("pointerup", up);
       handle.removeEventListener("pointercancel", cancel);
+      if (handle.isConnected && handle.hasPointerCapture(pointerId)) handle.releasePointerCapture(pointerId);
       setDragging(false);
       document.body.classList.remove("resizing-rows");
     };
@@ -2359,7 +2392,9 @@ function RowSeam({ seam, layout }: { seam: GridPlan["rowSeams"][number]; layout:
       end();
       if (moved) commit(column, index, at);
     };
-    // a gesture the system took back leaves the layout as it was
+    // A gesture the system took back, or a layout changed from outside
+    // it, paints back the layout this seam was pressed on, which is what
+    // React last drew; a new layout then renders over it as usual.
     const cancel = () => {
       end();
       if (moved) paintGrid(dock, gridOf(layout));
@@ -2367,12 +2402,23 @@ function RowSeam({ seam, layout }: { seam: GridPlan["rowSeams"][number]; layout:
     handle.addEventListener("pointermove", move);
     handle.addEventListener("pointerup", up);
     handle.addEventListener("pointercancel", cancel);
+    release = holdSeam(cancel);
   };
   const onKeyDown = (e: KeyboardEvent<HTMLDivElement>) => {
-    if ((e.key !== "ArrowUp" && e.key !== "ArrowDown") || start === null) return;
+    if (start === null || range === null) return;
+    // Home and End go to the seam's limits; at a limit, as at a held
+    // arrow, resizeSeam keeps the layout and nothing is saved
+    const to =
+      e.key === "Home"
+        ? range.min
+        : e.key === "End"
+          ? range.max
+          : e.key === "ArrowUp" || e.key === "ArrowDown"
+            ? start + (e.shiftKey ? 0.08 : 0.02) * (e.key === "ArrowDown" ? 1 : -1)
+            : null;
+    if (to === null) return;
     e.preventDefault();
-    const step = (e.shiftKey ? 0.08 : 0.02) * (e.key === "ArrowDown" ? 1 : -1);
-    commit(column, index, start + step);
+    commit(column, index, to);
   };
   return (
     <div
@@ -2381,13 +2427,17 @@ function RowSeam({ seam, layout }: { seam: GridPlan["rowSeams"][number]; layout:
       aria-orientation="horizontal"
       aria-label={seamLabel(layout, column, index, idText)}
       aria-valuenow={Math.round((start ?? 0) * 100)}
-      aria-valuemin={0}
-      aria-valuemax={100}
+      aria-valuemin={Math.round((range?.min ?? 0) * 100)}
+      aria-valuemax={Math.round((range?.max ?? 1) * 100)}
       tabIndex={0}
       data-cell={below}
       style={{ gridArea: area }}
       onPointerDown={onPointerDown}
       onKeyDown={onKeyDown}
+      // as a column seam resets its width: the two cells share evenly
+      onDoubleClick={() => {
+        if (range) commit(column, index, range.middle);
+      }}
     />
   );
 }
@@ -2494,6 +2544,7 @@ export function Dock() {
               cssVar={columnVar(column)}
               target={(h) => h.parentElement}
               fit={(h) => dockRoom(h.parentElement)}
+              hold={holdSeam}
               onCommit={(px) => resizeColumn(column, px)}
             />
           );

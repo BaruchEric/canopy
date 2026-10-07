@@ -26,6 +26,11 @@ interface ResizerProps {
    *  below `max` when the window is what limits it, so the drag never runs
    *  into width nobody can see */
   fit?: (handle: HTMLElement) => number;
+  /** Called as a drag starts with a cancel that ends it with no commit and
+   *  puts `cssVar` back as it was; returns what lets go of it, which the
+   *  drag calls before it commits. The dock's column seams use it to end a
+   *  drag whose layout changed under it. */
+  hold?: (cancel: () => void) => () => void;
   onCommit: (px: number) => void;
 }
 
@@ -47,6 +52,7 @@ export function Resizer({
   cssVar,
   target,
   fit,
+  hold,
   onCommit,
 }: ResizerProps) {
   const [dragging, setDragging] = useState(false);
@@ -70,8 +76,11 @@ export function Resizer({
     const top = ceiling(handle);
     const startValue = Math.min(value, top);
     live.current = startValue;
+    const { pointerId } = e;
+    const owner = target(handle);
+    const before = owner?.style.getPropertyValue(cssVar) ?? "";
     // Capture keeps the moves coming once the cursor outruns a 6px strip.
-    handle.setPointerCapture(e.pointerId);
+    handle.setPointerCapture(pointerId);
     setDragging(true);
     document.body.classList.add("resizing");
 
@@ -84,17 +93,30 @@ export function Resizer({
       live.current = next;
       target(handle)?.style.setProperty(cssVar, `${next}px`);
     };
-    const up = () => {
+    let release = () => {};
+    const end = () => {
+      release();
       handle.removeEventListener("pointermove", move);
       handle.removeEventListener("pointerup", up);
       handle.removeEventListener("pointercancel", up);
       setDragging(false);
       document.body.classList.remove("resizing");
+    };
+    const up = () => {
+      end();
       onCommit(live.current);
     };
     handle.addEventListener("pointermove", move);
     handle.addEventListener("pointerup", up);
     handle.addEventListener("pointercancel", up);
+    if (hold) {
+      release = hold(() => {
+        end();
+        if (handle.isConnected && handle.hasPointerCapture(pointerId)) handle.releasePointerCapture(pointerId);
+        if (before) owner?.style.setProperty(cssVar, before);
+        else owner?.style.removeProperty(cssVar);
+      });
+    }
   };
 
   const onKeyDown = (e: KeyboardEvent<HTMLDivElement>) => {

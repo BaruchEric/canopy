@@ -589,6 +589,25 @@ export function seamStart(l: DockLayout, column: string, index: number): number 
   return col.cells.slice(0, index + 1).reduce((s, x) => s + x.share, 0);
 }
 
+/** How far the seam under cell `index` of `column` can go, as fractions of
+ *  the column's height from the top: MIN_SHARE short of the boundary above
+ *  the pair and of the one below it, which is where `resizeSeam` holds it,
+ *  and the pair's midpoint, its reset. Null when there is no such seam. */
+export function seamRange(l: DockLayout, column: string, index: number): { min: number; max: number; middle: number } | null {
+  const cells = l.columns.find((c) => c.id === column)?.cells;
+  const a = cells?.[index];
+  const b = cells?.[index + 1];
+  if (!cells || !a || !b) return null;
+  const above = cells.slice(0, index).reduce((s, x) => s + x.share, 0);
+  const pair = a.share + b.share;
+  // a pair too small to move has its one place, where the seam is now
+  if (pair < 2 * MIN_SHARE) {
+    const at = round(above + a.share);
+    return { min: at, max: at, middle: at };
+  }
+  return { min: round(above + MIN_SHARE), max: round(above + pair - MIN_SHARE), middle: round(above + pair / 2) };
+}
+
 /** A row seam's accessible name: the showing panels of the two cells it
  *  sits between, through `name`. */
 export function seamLabel(l: DockLayout, column: string, index: number, name: (id: string) => string): string {

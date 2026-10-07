@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { activate, cellOf, columnOf, cssId, dropTarget, dropZone, fromLegacy, gearDrops, gridOf, gridTemplate, moveCell, moveColumn, moveTo, moveWithin, normalizeLayout, panelsOf, placements, place, regroup, rename, resizeColumn, resizeSeam, rowsTemplate, seamDrag, seamLabel, seamStart, stepPanel, zoneRect } from "./grid";
+import { activate, cellOf, columnOf, cssId, dropTarget, dropZone, fromLegacy, gearDrops, gridOf, gridTemplate, moveCell, moveColumn, moveTo, moveWithin, normalizeLayout, panelsOf, placements, place, regroup, rename, resizeColumn, resizeSeam, rowsTemplate, seamDrag, seamLabel, seamRange, seamStart, stepPanel, zoneRect } from "./grid";
 import type { DockLayout } from "./grid";
 
 const W = 440;
@@ -471,6 +471,20 @@ describe("the grid as the dock renders it", () => {
     expect(seamDrag(0.5, 100, 800)).toBeCloseTo(0.625);
     expect(seamDrag(0.5, -800, 800)).toBe(0);
     expect(seamDrag(0.5, 100, 0)).toBe(0.5);
+  });
+
+  test("a row seam's range stops short of each neighbouring boundary, and its reset splits the pair evenly", () => {
+    let l = place(empty, ["a", "b", "c"], "a", "columns", W);
+    l = moveTo(l, "b", { cell: cellOf(l, "a")?.id ?? "", zone: "below" }, W);
+    l = moveTo(l, "c", { cell: cellOf(l, "b")?.id ?? "", zone: "below" }, W);
+    const col = l.columns[0]?.id ?? "";
+    expect(seamRange(l, col, 0)).toEqual({ min: 0.1, max: 0.65, middle: 0.375 });
+    expect(seamRange(l, col, 1)).toEqual({ min: 0.6, max: 0.9, middle: 0.75 });
+    expect(seamRange(l, col, 2)).toBeNull();
+    // each limit is where resizeSeam holds the boundary
+    const range = seamRange(l, col, 0);
+    expect(resizeSeam(l, col, 0, 0)).toEqual(resizeSeam(l, col, 0, range?.min ?? -1));
+    expect(resizeSeam(l, col, 0, 1)).toEqual(resizeSeam(l, col, 0, range?.max ?? -1));
   });
 
   test("each panel's place: an area on the grid, or a CSS order in the flat phone dock", () => {
