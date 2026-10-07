@@ -11,6 +11,10 @@ export const WHO_WAIT_MS = 1500;
 /** how long the dock waits on a bye before taking the panel back, so a
  *  reloading pop-out's hello can call it off */
 export const BYE_WAIT_MS = 300;
+/** how long a panel this window popped out waits for its window's first
+ *  hello before it comes back: a window closed before it loaded says
+ *  nothing, not even bye */
+export const HELLO_WAIT_MS = 1500;
 
 export type PaneMsg =
   | { type: "hello"; id: string }
@@ -74,10 +78,26 @@ export interface PaneDock {
  *  bye and then hello again; its close forgets the slot. "who" is a loading
  *  main window's question for the pop-outs, so this window lets another's
  *  pass. Starting, it asks who is out there and after `waits.who` takes
- *  back every popped panel no window answered for. Returns what stops it. */
-export function listenPanes(ch: PaneLine, dock: PaneDock, waits = { bye: BYE_WAIT_MS, who: WHO_WAIT_MS }): () => void {
+ *  back every popped panel no window answered for. A panel this window
+ *  pops out (`poppedOut`) comes back after `waits.hello` unless its window
+ *  says hello first. Returns what stops it. */
+export function listenPanes(
+  ch: PaneLine,
+  dock: PaneDock,
+  waits = { bye: BYE_WAIT_MS, who: WHO_WAIT_MS, hello: HELLO_WAIT_MS },
+): () => void {
   const claimed = new Set<string>();
+  // per panel, the wait on a bye or on a new pop-out's first hello; any
+  // message about the panel calls it off
   const byes = new Map<string, ReturnType<typeof setTimeout>>();
+  const backAfter = (id: string, ms: number) => {
+    clearTimeout(byes.get(id));
+    const back = () => {
+      byes.delete(id);
+      dock.returnPanel(id);
+    };
+    byes.set(id, setTimeout(back, ms));
+  };
   ch.listen((data) => {
     const m = parsePaneMsg(data);
     if (!m || m.type === "who") return;
@@ -91,14 +111,9 @@ export function listenPanes(ch: PaneLine, dock: PaneDock, waits = { bye: BYE_WAI
     claimed.delete(m.id);
     if (m.type === "return") dock.returnPanel(m.id);
     else if (m.type === "close") dock.forgetPopped(m.id);
-    else {
-      const back = () => {
-        byes.delete(m.id);
-        dock.returnPanel(m.id);
-      };
-      byes.set(m.id, setTimeout(back, waits.bye));
-    }
+    else backAfter(m.id, waits.bye);
   });
+  watching = (id) => backAfter(id, waits.hello);
   // only the panels out when this window loaded: one it pops out itself
   // in the meantime has a window that is still saying hello
   const out = new Set(Object.keys(dock.popped()));
@@ -109,10 +124,21 @@ export function listenPanes(ch: PaneLine, dock: PaneDock, waits = { bye: BYE_WAI
     }
   }, waits.who);
   return () => {
+    watching = null;
     clearTimeout(who);
     for (const t of byes.values()) clearTimeout(t);
     ch.close();
   };
+}
+
+/** this window's listener's watch on a panel it just popped out */
+let watching: ((id: string) => void) | null = null;
+
+/** Tells this window's listener it just popped `id` out (the store's
+ *  `popOut`), so the panel comes back if its window never says hello.
+ *  Nothing listens in a pop-out or under the tests. */
+export function poppedOut(id: string): void {
+  watching?.(id);
 }
 
 /** Says one thing on the channel from a window that does not stay to

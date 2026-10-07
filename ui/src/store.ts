@@ -28,7 +28,7 @@ import {
   type Zone,
 } from "./grid";
 import { heldShellUrl, openElsewhere, openShellElsewhere, parseRoute, popOutWindow, soloUrl } from "./routes";
-import { poppedOf, without } from "./panes";
+import { poppedOf, poppedOut, without } from "./panes";
 import { loadSettings, saveSettings, SCREEN_SETTINGS, shellPlace, type Settings, type ShellPlace } from "./settings";
 import { PANEL_TERM_ROWS, adoptPoppedTerms, adoptTerms, loadFocusSize, loadTermTabs, needsPanelShell, nextStripTab, panelShellStart, reconcileTerms, rowsPx, termId, type FocusSize, type TermTab } from "./term";
 import { clearTask, frontForTab, frontForTask, keepFront, projectFront, withSolo, type BenchPane, type Front } from "./front";
@@ -2270,6 +2270,8 @@ export const useStore = create<CanopyState>((set, get) => ({
     // the window first: a blocked popup leaves the panel where it was
     if (!get().panels.includes(id) || !popOutWindow(id)) return;
     get().claimPanel(id);
+    // a window closed before it loads never says hello: then it comes back
+    poppedOut(id);
   },
   returnPanel: (id) =>
     set((s) => {

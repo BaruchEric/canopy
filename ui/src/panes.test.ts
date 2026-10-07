@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { listenPanes, parsePaneMsg, poppedOf, unclaimed, without, type PaneDock, type PaneLine, type PaneMsg } from "./panes";
+import { listenPanes, parsePaneMsg, poppedOut, poppedOf, unclaimed, without, type PaneDock, type PaneLine, type PaneMsg } from "./panes";
 
 describe("pane messages", () => {
   test("parses the five kinds and refuses anything else", () => {
@@ -58,7 +58,7 @@ function rig(popped: Record<string, number> = {}) {
     returnPanel: (id) => did.push(`return ${id}`),
     forgetPopped: (id) => did.push(`forget ${id}`),
   };
-  const stop = listenPanes(line, dock, { bye: 10, who: 30 });
+  const stop = listenPanes(line, dock, { bye: 10, who: 30, hello: 30 });
   return { did, sent, hear: (data: unknown) => hear(data), stop };
 }
 
@@ -84,6 +84,21 @@ describe("the main window's pane listener", () => {
     await Bun.sleep(25);
     expect(r.did).toEqual(["return a", "forget b", "hello c", "return d"]);
     r.stop();
+  });
+
+  test("a panel popped out here comes back when its window never says hello", async () => {
+    const r = rig();
+    poppedOut("a");
+    poppedOut("b");
+    r.hear({ type: "hello", id: "b" });
+    await Bun.sleep(50);
+    // a closed before it loaded; b's window answered
+    expect(r.did).toEqual(["hello b", "return a"]);
+    r.stop();
+    // no listener, nothing to watch
+    poppedOut("c");
+    await Bun.sleep(50);
+    expect(r.did).toEqual(["hello b", "return a", "closed"]);
   });
 
   test("stopping clears every wait and closes the channel", async () => {
