@@ -8,6 +8,7 @@ import { NARROW, PHONE, useMedia } from "../media";
 import { effectivePrimary, isRunActive, WS_COLORS, type RunAction, type Workspace } from "../../../src/core/types";
 import { isHome } from "../registry";
 import { baseName } from "../elsewhere";
+import { primaryRefusal } from "../workspaces";
 import { seenWord } from "../peers";
 import { PAGE_BUILD } from "../build";
 import { versionLine } from "../../../src/core/version";
@@ -281,9 +282,9 @@ function WsGear({ ws }: { ws: Workspace }) {
       entries: ws.repos.map((path): GearEntry => {
         // a workspace holds home's checkouts, so a member is a home card
         const repo = repos.find((r) => isHome(r.id) && r.path === path);
-        if (!repo) return { type: "item", label: baseName(path), on: path === primary, off: `${path} is not in the tree`, run: () => undefined };
-        // a run starts only on this machine, so a member on another host cannot lead one
-        if (repo.host) return { type: "item", label: repo.name, on: path === primary, off: `${repo.name} is on ${repo.host}; the primary has to be on this machine`, run: () => undefined };
+        // one a workspace run would refuse to start in shows, greyed, with why
+        const why = primaryRefusal(repo, path);
+        if (why !== null || !repo) return { type: "item", label: repo?.name ?? baseName(path), on: path === primary, off: why ?? `${path} is not in the tree`, run: () => undefined };
         return { type: "item", label: repo.name, title: path, on: path === primary, stay: true, run: look({ primary: repo.id }) };
       }),
     },
@@ -301,6 +302,7 @@ function WsGear({ ws }: { ws: Workspace }) {
       hint="Ask, chat or plan, then build across the workspace, set its primary and its color"
       groups={groups}
       perScreen={false}
+      sheet
     />
   );
 }
