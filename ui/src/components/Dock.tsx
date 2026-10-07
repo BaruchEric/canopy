@@ -1476,8 +1476,8 @@ function panelHead(id: string, name: string, movable: boolean | undefined) {
     "aria-keyshortcuts": "Alt+Shift+ArrowLeft Alt+Shift+ArrowRight",
     onKeyDown: (e: KeyboardEvent<HTMLElement>) => {
       if (e.target !== e.currentTarget || !movePanelKey(e, id)) return;
-      // the move is CSS order, laid out on the next frame: then the head,
-      // which keeps the focus, is brought into sight
+      // the move changes grid areas, laid out on the next frame: then the
+      // head, which keeps the focus, is brought into sight
       const head = e.currentTarget;
       requestAnimationFrame(() => revealHead(head));
     },
