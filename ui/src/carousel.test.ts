@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { canPan, overflowsX, snapTo, wheelPan } from "./carousel";
+import { canPan, overflowsX, snapTo, wheelPan, wheelPx, wheelTake } from "./carousel";
 
 describe("carousel wheel", () => {
   test("over a head, a vertical wheel pans sideways", () => {
@@ -63,5 +63,48 @@ describe("carousel snap", () => {
   test("stops at the ends", () => {
     expect(snapTo(lefts, 1498, 1)).toBe(1498);
     expect(snapTo(lefts, 0, -1)).toBe(0);
+  });
+});
+
+describe("the wheel the row takes", () => {
+  const wheel = (over: Partial<{ deltaX: number; deltaY: number; deltaMode: number; shiftKey: boolean; ctrlKey: boolean; metaKey: boolean }>) => ({
+    deltaX: 0,
+    deltaY: 0,
+    deltaMode: 0,
+    shiftKey: false,
+    ctrlKey: false,
+    metaKey: false,
+    ...over,
+  });
+  const mid = { scrollLeft: 100, scrollWidth: 1000, clientWidth: 400 };
+  const never = () => {
+    throw new Error("asked whether the content scrolls sideways");
+  };
+  test("lines and pages count in px, and ctrl and cmd ride along", () => {
+    expect(wheelPx(wheel({ deltaY: 3, deltaMode: 1 }), 400)).toMatchObject({ deltaY: 48 });
+    expect(wheelPx(wheel({ deltaX: 1, deltaMode: 2 }), 400)).toMatchObject({ deltaX: 400 });
+    expect(wheelPx(wheel({ deltaY: 5, ctrlKey: true }), 400)).toMatchObject({ deltaY: 5, ctrlKey: true, metaKey: false });
+    expect(wheelPx(wheel({ deltaY: 5, metaKey: true }), 400)).toMatchObject({ metaKey: true });
+  });
+  test("a ctrl or cmd wheel over a head is a zoom, never a pan", () => {
+    expect(wheelTake(wheel({ deltaY: 40 }), "head", never, mid)).toBe(40);
+    expect(wheelTake(wheel({ deltaY: 40, ctrlKey: true }), "head", never, mid)).toBe(0);
+    expect(wheelTake(wheel({ deltaY: 40, metaKey: true }), "head", never, mid)).toBe(0);
+  });
+  test("the row at an end leaves the wheel to what is under it", () => {
+    expect(wheelTake(wheel({ deltaY: -40 }), "head", never, { ...mid, scrollLeft: 0 })).toBe(0);
+    expect(wheelTake(wheel({ deltaY: 40 }), "head", never, { ...mid, scrollLeft: 600 })).toBe(0);
+    expect(wheelTake(wheel({ deltaY: 40 }), "head", never, { ...mid, scrollLeft: 0 })).toBe(40);
+  });
+  test("asks whether the content scrolls sideways only for a shift+wheel over it", () => {
+    expect(wheelTake(wheel({ deltaY: 40 }), "content", never, mid)).toBe(0);
+    let asked = 0;
+    const wide = () => {
+      asked++;
+      return true;
+    };
+    expect(wheelTake(wheel({ deltaY: 40, shiftKey: true }), "content", wide, mid)).toBe(0);
+    expect(wheelTake(wheel({ deltaY: 40, shiftKey: true }), "content", () => false, mid)).toBe(40);
+    expect(asked).toBe(1);
   });
 });

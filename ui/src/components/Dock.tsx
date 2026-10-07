@@ -37,7 +37,7 @@ import { devState } from "../guided";
 import { BENCH_ONE, BenchBar, BenchSeams, type BenchPane } from "./Bench";
 import { PHONE, useMedia } from "../media";
 import { dropIndex, stableOrder } from "../dock";
-import { PAN_SLOP, canPan, overflowsX, snapTo, wheelPan } from "../carousel";
+import { PAN_SLOP, overflowsX, snapTo, wheelTake } from "../carousel";
 import { backendOf, homeName, isHome } from "../registry";
 import { signinUrl } from "../backends";
 import { IdLabel } from "./IdLabel";
@@ -1030,7 +1030,8 @@ function PanelGear({
   const popOut = useStore((s) => s.popOut);
   const carousel = useStore((s) => s.settings.dockCarousel);
   const at = panels.indexOf(repo.id);
-  // a phone's dock stays as it was, without the moves or the carousel
+  // a phone's dock stays as it was, without the moves, the carousel or
+  // pop out
   const phone = useMedia(PHONE);
   const moves: GearEntry[] = phone
     ? []
@@ -1044,6 +1045,11 @@ function PanelGear({
           off: at >= panels.length - 1 ? "already last" : undefined,
         },
       ];
+  // out of the dock into a window of its own, and back to its slot from
+  // there; a new tab is a copy and leaves the dock as it is. Not on a
+  // phone, where the window is a tab the browser may freeze or drop
+  // without a word, so the dock would never hear it go.
+  const moreWindows: GearEntry[] = phone ? [] : [{ type: "item", label: "pop out", run: () => popOut(repo.id) }];
   // where the browser cannot go full screen, "fill the window" already is
   // the fallback in the dock's gear; the solo window's gear dropped it
   const canFull = document.fullscreenEnabled;
@@ -1058,9 +1064,7 @@ function PanelGear({
         { type: "item", label: "panels as tabs", on: openIn === "tabs", run: () => setSetting("openIn", "tabs") },
         ...moves,
         { type: "item", label: "open in a new tab", run: () => openElsewhere(repo.id, "tab") },
-        // out of the dock into a window of its own, and back to its slot
-        // from there; a new tab is a copy and leaves the dock as it is
-        { type: "item", label: "pop out", run: () => popOut(repo.id) },
+        ...moreWindows,
       ] satisfies GearEntry[]),
     { type: "item", label: "intermediate panel", on: level === "intermediate", run: () => setSetting("level", "intermediate") },
     { type: "item", label: "advanced panel", on: level === "advanced", run: () => setSetting("level", "advanced") },
@@ -1272,7 +1276,11 @@ function panelHead(id: string, name: string, movable: boolean | undefined) {
     "aria-label": `${name} panel`,
     "aria-keyshortcuts": "Alt+Shift+ArrowLeft Alt+Shift+ArrowRight",
     onKeyDown: (e: KeyboardEvent<HTMLElement>) => {
-      if (e.target === e.currentTarget) movePanelKey(e, id);
+      if (e.target !== e.currentTarget || !movePanelKey(e, id)) return;
+      // the move is CSS order, laid out on the next frame: then the head,
+      // which keeps the focus, is brought into sight
+      const head = e.currentTarget;
+      requestAnimationFrame(() => revealHead(head));
     },
     ...panelDropTarget(id),
   };
@@ -1501,6 +1509,16 @@ export function RepoPanel({
       if (hidden) setPlaced("normal");
     }
   }, [screen, mode, hidden]);
+  // In a side-by-side dock, the panel that comes forward (opened from its
+  // card, back from a pop-out) is brought into the row's sight; a tabbed
+  // dock's strip keeps its own tab in sight.
+  const forward = useStore((s) => s.activePanel === id);
+  const sideBySide = place !== undefined;
+  useEffect(() => {
+    if (!forward || !sideBySide) return;
+    const frame = requestAnimationFrame(() => revealHead(box.current?.querySelector(".panel-head") ?? null));
+    return () => cancelAnimationFrame(frame);
+  }, [forward, sideBySide]);
   const { zoom: panelZoom } = useZoom("panel");
   // the bench's panes sit outside the column's scroll, where a zoom on it
   // would scale their size and place too
@@ -1922,10 +1940,22 @@ function panelEdges(dock: HTMLElement): number[] {
   return [...edges].sort((a, b) => a - b);
 }
 
-/** a wheel's delta in px, whatever unit the browser counted it in */
-function wheelPx(e: WheelEvent, dock: HTMLElement): Parameters<typeof wheelPan>[0] {
-  const unit = e.deltaMode === WheelEvent.DOM_DELTA_LINE ? 16 : e.deltaMode === WheelEvent.DOM_DELTA_PAGE ? dock.clientWidth : 1;
-  return { deltaX: e.deltaX * unit, deltaY: e.deltaY * unit, shiftKey: e.shiftKey, ctrlKey: e.ctrlKey, metaKey: e.metaKey };
+/** a panel over the window (full screen, filling it, or the bench): a
+ *  fixed box that is still the dock's child, so the row behind it must
+ *  not pan from its events */
+const OVER_ROW = ".panel.surface-full, .panel.panel-bench";
+
+/** whether a panel is over the window now, or `t` is inside one */
+function rowCovered(dock: HTMLElement, t: Element | null): boolean {
+  if (dock.querySelector(":scope > .panel.surface-full, :scope > .panel.panel-bench")) return true;
+  return (t?.closest(OVER_ROW) ?? null) !== null;
+}
+
+/** brings a panel's head into the row's sight after it moved or came
+ *  forward, without a smooth scroll where the user asked for less motion */
+function revealHead(head: Element | null) {
+  const still = matchMedia("(prefers-reduced-motion: reduce)").matches;
+  head?.scrollIntoView({ inline: "nearest", block: "nearest", behavior: still ? "auto" : "smooth" });
 }
 
 /**
@@ -1952,10 +1982,10 @@ function useCarousel(ref: RefObject<HTMLDivElement | null>, on: boolean) {
     if (!on || !dock) return;
     const onWheel = (e: WheelEvent) => {
       const t = e.target;
-      if (!(t instanceof Element)) return;
+      if (!(t instanceof Element) || rowCovered(dock, t)) return;
       const over = t.closest(".panel-head") ? "head" : "content";
-      const dx = wheelPan(wheelPx(e, dock), over, over === "content" && scrollsX(t, dock));
-      if (!canPan(dock, dx)) return;
+      const dx = wheelTake(e, over, () => scrollsX(t, dock), dock);
+      if (dx === 0) return;
       e.preventDefault();
       e.stopPropagation();
       // scrollBy, not scrollLeft: the browser reads it as a scroll with a
@@ -1969,6 +1999,7 @@ function useCarousel(ref: RefObject<HTMLDivElement | null>, on: boolean) {
       stop();
       const t = e.target;
       if (e.button !== 0 || e.pointerType === "touch" || !(t instanceof Element)) return;
+      if (rowCovered(dock, t)) return;
       if (t !== dock && (!t.closest(".panel-head") || t.closest(NOT_PAN))) return;
       const x0 = e.clientX;
       const left0 = dock.scrollLeft;
@@ -2012,6 +2043,8 @@ function useCarousel(ref: RefObject<HTMLDivElement | null>, on: boolean) {
     const onKey = (e: globalThis.KeyboardEvent) => {
       if (!e.ctrlKey || !e.altKey || e.shiftKey || e.metaKey) return;
       if (e.key !== "ArrowLeft" && e.key !== "ArrowRight") return;
+      // a panel over the window has no row to move behind it
+      if (rowCovered(dock, e.target instanceof Element ? e.target : null)) return;
       e.preventDefault();
       e.stopPropagation();
       const left = snapTo(panelEdges(dock), dock.scrollLeft, e.key === "ArrowRight" ? 1 : -1);
@@ -2130,7 +2163,9 @@ export function Dock() {
             title={
               carousel
                 ? "Carousel: on. The cards get their column back when it is off"
-                : "Carousel: the dock takes the cards' room and scrolls sideways a panel at a time"
+                : tabbed
+                  ? "Carousel: the dock takes the cards' room"
+                  : "Carousel: the dock takes the cards' room and scrolls sideways a panel at a time"
             }
             onClick={() => setSetting("dockCarousel", !carousel)}
           >

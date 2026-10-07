@@ -26,6 +26,40 @@ export function wheelPan(
   return 0;
 }
 
+/** A wheel event as the row reads it: its deltas, the unit they came in
+ *  (0 px, 1 lines, 2 pages, as `WheelEvent.deltaMode`) and its keys. */
+export interface WheelIn {
+  deltaX: number;
+  deltaY: number;
+  deltaMode: number;
+  shiftKey: boolean;
+  ctrlKey: boolean;
+  metaKey: boolean;
+}
+
+/** a wheel's delta in px, whatever unit the browser counted it in; a page
+ *  is the row's width. The ctrl and cmd keys ride along, so `wheelPan`
+ *  can leave a zoom alone. */
+export function wheelPx(e: WheelIn, pageWidth: number): Parameters<typeof wheelPan>[0] {
+  const unit = e.deltaMode === 1 ? 16 : e.deltaMode === 2 ? pageWidth : 1;
+  return { deltaX: e.deltaX * unit, deltaY: e.deltaY * unit, shiftKey: e.shiftKey, ctrlKey: e.ctrlKey, metaKey: e.metaKey };
+}
+
+/** px the row takes from a wheel, or 0 to leave it to what is under it:
+ *  `wheelPan`, then only while the row can still move that way
+ *  (`canPan`). Whether the content scrolls sideways costs a layout read up
+ *  its ancestors, so it is asked only for a shift+wheel over content, the
+ *  one case `wheelPan` reads it. */
+export function wheelTake(
+  e: WheelIn,
+  over: "head" | "content",
+  contentScrollsX: () => boolean,
+  row: { scrollLeft: number; scrollWidth: number; clientWidth: number },
+): number {
+  const dx = wheelPan(wheelPx(e, row.clientWidth), over, over === "content" && e.shiftKey && contentScrollsX());
+  return canPan(row, dx) ? dx : 0;
+}
+
 /** whether content scrolls sideways itself: it may (`overflow-x` auto or
  *  scroll) and it overflows by more than the pixel a rounded width leaves */
 export function overflowsX(scrollWidth: number, clientWidth: number, overflowX: string): boolean {
