@@ -1067,6 +1067,17 @@ describe("a Codex run", () => {
     expect(requests(log, "turn/interrupt")[0]?.["params"]).toEqual({ threadId: "thr-1", turnId: "turn-1" });
   });
 
+  test("a stopped run's command the server never completed ends as an error", async () => {
+    const d = await drive(() => ({
+      turns: [[commandItem("item/started", "c1", "sleep 100"), { waitInterrupt: true }, { complete: "interrupted" }]],
+    }));
+    await d.until((r) => r.steps.some((s) => s.tool?.status === "running"), "the command");
+    d.stop();
+    const run = await d.until(d.ended, "the stop");
+    expect(run.status).toBe("stopped");
+    expect(run.steps.filter((s) => s.tool).map((s) => s.tool?.status)).toEqual(["error"]);
+  });
+
   test("a stop while an approval waits cancels it and interrupts", async () => {
     const d = await drive(() => ({
       turns: [[approval("c1", "git push"), { waitInterrupt: true }, { complete: "interrupted" }]],
