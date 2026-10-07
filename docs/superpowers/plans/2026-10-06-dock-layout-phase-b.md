@@ -77,7 +77,7 @@ export function cellOf(l: DockLayout, id: string): DockCell | undefined;
 
 Ids for new cells and columns come from a counter in the function: `c${n}`, where `n` is one more than the highest numeric suffix in the layout. Generating them that way keeps the functions pure and the tests deterministic.
 
-- [ ] **Step 1: Write the failing tests**, `ui/src/grid.test.ts`:
+- [x] **Step 1: Write the failing tests**, `ui/src/grid.test.ts`:
 
 ```ts
 import { describe, expect, test } from "bun:test";
@@ -163,12 +163,12 @@ describe("regroup, seams and the active tab", () => {
 });
 ```
 
-- [ ] **Step 2: Run them and watch them fail**
+- [x] **Step 2: Run them and watch them fail**
 
 Run: `env -u TMUX SHELL=/bin/bash bun test ui/src/grid.test.ts`
 Expected: FAIL, the module is missing.
 
-- [ ] **Step 3: Implement** `ui/src/grid.ts`, with these rules:
+- [x] **Step 3: Implement** `ui/src/grid.ts`, with these rules:
 
 - `newId(l)` returns `c${max+1}` over every column and cell id.
 - `prune(l)` does four things:
@@ -196,12 +196,12 @@ Expected: FAIL, the module is missing.
 
 Return new objects throughout and never mutate the input. The tests check the input is unchanged where it matters.
 
-- [ ] **Step 4: Run the tests and watch them pass**
+- [x] **Step 4: Run the tests and watch them pass**
 
 Run: `env -u TMUX SHELL=/bin/bash bun test ui/src/grid.test.ts`
 Expected: PASS.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add ui/src/grid.ts ui/src/grid.test.ts
