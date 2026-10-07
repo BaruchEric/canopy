@@ -6359,9 +6359,11 @@ button.machine:hover {
     display: none;
   }
 
-  /* the popovers come up from the bottom edge as sheets, where a thumb is */
+  /* the popovers come up from the bottom edge as sheets, where a thumb is,
+     and so does a gear that asks to be one (the workspace's) */
   .settings-pop,
-  .shells-pop {
+  .shells-pop,
+  .gear-sheet {
     position: fixed;
     top: auto;
     left: 0;
@@ -6380,7 +6382,8 @@ button.machine:hover {
     box-shadow: 0 -18px 48px -12px var(--float-shadow);
   }
   /* the grabber that says it is a sheet */
-  .settings-pop::before {
+  .settings-pop::before,
+  .gear-sheet::before {
     content: "";
     display: block;
     width: 36px;
@@ -6513,7 +6516,8 @@ button.machine:hover {
     animation: none;
   }
   .settings-pop,
-  .shells-pop {
+  .shells-pop,
+  .gear-sheet {
     animation: sheet-up 240ms var(--ease);
   }
   @keyframes sheet-up {

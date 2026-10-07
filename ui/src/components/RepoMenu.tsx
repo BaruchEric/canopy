@@ -12,7 +12,9 @@ import { describeLaunch } from "../../../src/core/launch";
 import { flowWord } from "../flows";
 import { useShallow } from "zustand/react/shallow";
 import { activeFlowFor, activeRunFor, agentFor, capsFor, connOf, isFavorite, launchFor, routesOf, useStore } from "../store";
+import { oneMenu } from "../menus";
 import { backendOf } from "../registry";
+import { triggerKeeps } from "../surface";
 import {
   AGENT_OPENERS,
   HARNESSES,
@@ -115,24 +117,30 @@ export function RepoMenu({
   useEffect(() => {
     if (!open) return;
     const close = () => setOpen(false);
+    const release = oneMenu(close);
     const onDown = (e: PointerEvent) => {
       const t = e.target;
       if (!(t instanceof Node)) return;
       if (!menu.current?.contains(t) && !trigger.current?.contains(t)) close();
     };
+    // Both in capture, as the gear's are: the menu and every card's ⋯ stop
+    // their own keys and pointerdown, which a listener in the bubble phase
+    // then never heard. The Escape goes no further, so a panel in full
+    // screen keeps it for the next one.
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") {
-        close();
-        trigger.current?.focus();
-      }
+      if (e.key !== "Escape") return;
+      e.stopPropagation();
+      close();
+      trigger.current?.focus();
     };
-    document.addEventListener("pointerdown", onDown);
-    window.addEventListener("keydown", onKey);
+    document.addEventListener("pointerdown", onDown, true);
+    window.addEventListener("keydown", onKey, true);
     document.addEventListener("scroll", close, true);
     window.addEventListener("resize", close);
     return () => {
-      document.removeEventListener("pointerdown", onDown);
-      window.removeEventListener("keydown", onKey);
+      release();
+      document.removeEventListener("pointerdown", onDown, true);
+      window.removeEventListener("keydown", onKey, true);
       document.removeEventListener("scroll", close, true);
       window.removeEventListener("resize", close);
     };
@@ -254,7 +262,9 @@ export function RepoMenu({
           setOpen(!open);
         }}
         onPointerDown={swallow}
-        onKeyDown={swallow}
+        onKeyDown={(e) => {
+          if (triggerKeeps(e.key, open)) swallow(e);
+        }}
         onAuxClick={swallow}
       >
         <svg width="14" height="14" viewBox="0 0 14 14" fill="currentColor" aria-hidden="true">

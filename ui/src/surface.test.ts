@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import {
   SECTION_KEYS,
   escapeLeaves,
+  triggerKeeps,
   captureName,
   flipMode,
   moveSection,
@@ -200,5 +201,15 @@ describe("Escape leaving a surface", () => {
     expect(escapeLeaves(at('[contenteditable]:not([contenteditable="false"])'), true)).toBe(false);
     expect(escapeLeaves(at(".xterm"), true)).toBe(false);
     expect(escapeLeaves(at("button"), true)).toBe(true);
+  });
+});
+
+describe("what a menu's button keeps from what holds it", () => {
+  test("every key while the menu is open, and every key but Escape while it is shut", () => {
+    expect(triggerKeeps("Enter", false)).toBe(true);
+    expect(triggerKeeps(" ", true)).toBe(true);
+    expect(triggerKeeps("Escape", true)).toBe(true);
+    // a full-screen panel's Escape must reach the page from the gear's button
+    expect(triggerKeeps("Escape", false)).toBe(false);
   });
 });

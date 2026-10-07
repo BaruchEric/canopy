@@ -225,6 +225,12 @@ export function copiedWord(out: CopyOut): string {
   return typeof out === "string" ? said : `${said} · ${out.note}`;
 }
 
+/** Whether a menu's button keeps `key` from what holds it (a card that opens
+ *  on Enter, say). An Escape while its menu is shut goes on, so a panel in
+ *  full screen hears it with the focus on its gear; while the menu is open,
+ *  the menu's own Escape closes it first. */
+export const triggerKeeps = (key: string, open: boolean): boolean => open || key !== "Escape";
+
 /** what keeps its own Escape: a shell, an open menu, a sheet */
 const OWN_ESCAPE = ".term-screen, .xterm, .menu, .sheet";
 /** a text field, which keeps Escape too while the page holds it in full

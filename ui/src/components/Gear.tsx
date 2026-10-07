@@ -1,7 +1,10 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import type { KeyboardEvent as ReactKeyboardEvent, SyntheticEvent } from "react";
 import { createPortal } from "react-dom";
+import { PHONE, useMedia } from "../media";
+import { oneMenu } from "../menus";
 import { keptForNow } from "../screens";
+import { triggerKeeps } from "../surface";
 
 /** One line of a gear's menu. */
 export type GearEntry =
@@ -84,6 +87,7 @@ export function Gear({
   hint = "Zoom, layout and sharing",
   keptElse,
   perScreen = true,
+  sheet = false,
 }: {
   label: string;
   groups: GearGroup[];
@@ -93,6 +97,9 @@ export function Gear({
   /** false for a menu whose choices are kept in the backend's config, so
    *  its foot does not say they are kept for this screen */
   perScreen?: boolean;
+  /** a bottom sheet on a phone, the way the top bar's popovers are, rather
+   *  than a menu hung off its button */
+  sheet?: boolean;
 }) {
   const [open, setOpen] = useState(false);
   const [pos, setPos] = useState<{ top: number; left: number } | null>(null);
@@ -101,6 +108,8 @@ export function Gear({
   const keptFor = open && perScreen ? keptForNow() : null;
   const trigger = useRef<HTMLButtonElement>(null);
   const menu = useRef<HTMLDivElement>(null);
+  // a sheet sits on the bottom edge by its stylesheet, not beside the button
+  const asSheet = useMedia(PHONE) && sheet;
 
   const place = useCallback(() => {
     if (!trigger.current || !menu.current) return;
@@ -119,6 +128,7 @@ export function Gear({
   useEffect(() => {
     if (!open) return;
     const close = () => setOpen(false);
+    const release = oneMenu(close);
     const onDown = (e: PointerEvent) => {
       const t = e.target;
       if (!(t instanceof Node)) return;
@@ -132,12 +142,14 @@ export function Gear({
     };
     // a zoom moves the button under the menu; follow it rather than close
     const follow = () => requestAnimationFrame(place);
-    document.addEventListener("pointerdown", onDown);
+    // in capture, ahead of a trigger that stops its own pointerdown
+    document.addEventListener("pointerdown", onDown, true);
     window.addEventListener("keydown", onKey, true);
     document.addEventListener("scroll", follow, true);
     window.addEventListener("resize", follow);
     return () => {
-      document.removeEventListener("pointerdown", onDown);
+      release();
+      document.removeEventListener("pointerdown", onDown, true);
       window.removeEventListener("keydown", onKey, true);
       document.removeEventListener("scroll", follow, true);
       window.removeEventListener("resize", follow);
@@ -208,7 +220,9 @@ export function Gear({
           setOpen(!open);
         }}
         onPointerDown={swallow}
-        onKeyDown={swallow}
+        onKeyDown={(e) => {
+          if (triggerKeeps(e.key, open)) swallow(e);
+        }}
       >
         <GearIcon />
       </button>
@@ -216,10 +230,10 @@ export function Gear({
         createPortal(
           <div
             ref={menu}
-            className="menu gear-pop"
+            className={`menu gear-pop${asSheet ? " gear-sheet" : ""}`}
             role="menu"
             aria-label={`Settings for ${label}`}
-            style={{ width: MENU_W, top: pos?.top ?? -9999, left: pos?.left ?? -9999 }}
+            style={asSheet ? undefined : { width: MENU_W, top: pos?.top ?? -9999, left: pos?.left ?? -9999 }}
             onKeyDown={(e) => {
               onMenuKey(e);
               swallow(e);
