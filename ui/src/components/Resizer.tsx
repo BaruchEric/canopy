@@ -34,6 +34,23 @@ interface ResizerProps {
   onCommit: (px: number) => void;
 }
 
+const SIZE_KEYS = new Set(["ArrowLeft", "ArrowRight", "Home", "End"]);
+
+/** The width a key sizes a pane to: the arrows step it the way the handle
+ *  faces, Home and End go to `min` and to `top` (the most that fits now),
+ *  as `aria-valuemin` and `aria-valuemax` say. Null for any other key and
+ *  for a press that changes nothing, so a key at a limit saves nothing. */
+export function keyedWidth(
+  e: { key: string; shiftKey: boolean },
+  { value, min, top, dir }: { value: number; min: number; top: number; dir: 1 | -1 },
+): number | null {
+  const from = Math.min(value, top);
+  const step = (e.shiftKey ? 48 : 12) * (e.key === "ArrowRight" ? 1 : -1);
+  const next =
+    e.key === "Home" ? min : e.key === "End" ? top : e.key === "ArrowLeft" || e.key === "ArrowRight" ? clamp(from + step * dir, min, top) : null;
+  return next === null || next === value ? null : next;
+}
+
 /**
  * A drag strip between two panes. The drag writes `cssVar` straight to the DOM
  * and only calls `onCommit` on release — routing every pointermove through the
@@ -131,11 +148,10 @@ export function Resizer({
   };
 
   const onKeyDown = (e: KeyboardEvent<HTMLDivElement>) => {
-    if (e.key !== "ArrowLeft" && e.key !== "ArrowRight") return;
+    if (!SIZE_KEYS.has(e.key)) return;
     e.preventDefault();
-    const step = (e.shiftKey ? 48 : 12) * (e.key === "ArrowRight" ? 1 : -1);
-    const top = ceiling(e.currentTarget);
-    onCommit(clamp(Math.min(value, top) + step * dir, min, top));
+    const next = keyedWidth(e, { value, min, top: ceiling(e.currentTarget), dir });
+    if (next !== null) onCommit(next);
   };
 
   return (

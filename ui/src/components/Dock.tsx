@@ -18,6 +18,7 @@ import { useShallow } from "zustand/react/shallow";
 import {
   PANEL,
   activeFlowFor,
+  arrangementOf,
   capsFor,
   cardOf,
   connOf,
@@ -1024,7 +1025,8 @@ function PanelGear({
 }) {
   // the bench applies no zoom of its own: the line is always the one in place
   const { entry: zoom } = useZoom("panel");
-  const openIn = useStore((s) => s.settings.openIn);
+  // the dock, a tab and a window all lay the dock out in columns
+  const arranged = useStore(arrangementOf);
   const order = useStore((s) => s.settings.sectionOrder);
   const hidden = useStore((s) => s.settings.sectionsHidden);
   const setSetting = useStore((s) => s.setSetting);
@@ -1085,8 +1087,8 @@ function PanelGear({
     : [
         ...modeEntries(mode, setMode, "window"),
         ...(canFull ? [full] : []),
-        { type: "item", label: "panels side by side", on: openIn === "dock", run: () => arrangeDock("columns"), title: ARRANGE_TITLE },
-        { type: "item", label: "panels as tabs", on: openIn === "tabs", run: () => arrangeDock("tabs"), title: ARRANGE_TITLE },
+        { type: "item", label: "panels side by side", on: arranged === "columns", run: () => arrangeDock("columns"), title: ARRANGE_TITLE },
+        { type: "item", label: "panels as tabs", on: arranged === "tabs", run: () => arrangeDock("tabs"), title: ARRANGE_TITLE },
         ...moves,
         { type: "item", label: "open in a new tab", run: () => openElsewhere(repo.id, "tab") },
         ...moreWindows,

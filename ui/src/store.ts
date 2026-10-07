@@ -1462,7 +1462,7 @@ function recall(s: Pick<CanopyState, "popped" | "recalled">, id: string): Pick<C
 type DockState = Pick<CanopyState, "panels" | "dockLayout" | "activePanel" | "panelWidths" | "settings">;
 
 /** how a panel opened now joins the dock: a column of its own, or a tab */
-const arrangementOf = (s: Pick<CanopyState, "settings">): Arrangement => (s.settings.openIn === "tabs" ? "tabs" : "columns");
+export const arrangementOf = (s: Pick<CanopyState, "settings">): Arrangement => (s.settings.openIn === "tabs" ? "tabs" : "columns");
 
 /** a new column's width: the one its panel had when it last closed alone */
 const widthOf =

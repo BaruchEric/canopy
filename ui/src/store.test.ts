@@ -29,6 +29,7 @@ import {
   useStore,
   visibleCards,
   visibleRepos,
+  arrangementOf,
 } from "./store";
 import { applyQuery } from "./filters";
 import { cellOf, columnOf, panelsOf, type DockLayout } from "./grid";
@@ -2020,6 +2021,16 @@ describe("the dock as columns of cells", () => {
     const tabbed = useStore.getState();
     useStore.getState().arrangeDock("tabs");
     expect(useStore.getState()).toBe(tabbed);
+  });
+
+  test("the dock, a tab and a window are all side by side; only tabs is tabs", () => {
+    for (const openIn of ["dock", "tab", "window"] as const) {
+      useStore.getState().setSetting("openIn", openIn);
+      expect(arrangementOf(useStore.getState())).toBe("columns");
+    }
+    useStore.getState().setSetting("openIn", "tabs");
+    expect(arrangementOf(useStore.getState())).toBe("tabs");
+    useStore.getState().setSetting("openIn", "dock");
   });
 
   test("tab or window to the dock is the same arrangement: openIn changes, the splits stay", () => {
