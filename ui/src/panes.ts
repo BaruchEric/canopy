@@ -29,12 +29,6 @@ export function parsePaneMsg(v: unknown): PaneMsg | null {
   return null;
 }
 
-export function restorePanel(panels: readonly string[], id: string, slot: number): string[] {
-  if (panels.includes(id)) return [...panels];
-  const at = Math.max(0, Math.min(panels.length, slot));
-  return [...panels.slice(0, at), id, ...panels.slice(at)];
-}
-
 export const unclaimed = (popped: Record<string, number>, claimed: ReadonlySet<string>): string[] =>
   Object.keys(popped).filter((id) => !claimed.has(id));
 

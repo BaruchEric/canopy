@@ -102,8 +102,6 @@ import {
 export const SIDEBAR = { min: 180, max: 560, initial: 264 };
 /** a dock column; the room the cards leave caps it before max does (`dockRoom`) */
 export const PANEL = { min: 240, max: 2400, initial: COLUMN_WIDTH };
-/** the dock when it is one tabbed panel, capped the same way */
-export const DOCK = { min: 240, max: 2400, initial: 440 };
 /** the solo view's centered panel; the window caps it before max does */
 export const SOLO = { min: 420, max: 2400, initial: 980 };
 /** the terminal strip along the bottom, in px of height */
@@ -249,7 +247,7 @@ export function loadLayout(): Layout {
     sidebarWidth: SIDEBAR.initial,
     panelWidths: {},
     soloWidth: SOLO.initial,
-    dockWidth: DOCK.initial,
+    dockWidth: PANEL.initial,
     sidebarOpen: true,
     collapsed: [],
     closedSections: {},
@@ -323,7 +321,7 @@ export function loadLayout(): Layout {
     const dw = saved.dockWidth;
     const th = saved.termHeight;
     const fh = saved.feedHeight;
-    const dockWidth = typeof dw === "number" && Number.isFinite(dw) ? clamp(dw, DOCK.min, DOCK.max) : DOCK.initial;
+    const dockWidth = typeof dw === "number" && Number.isFinite(dw) ? clamp(dw, PANEL.min, PANEL.max) : PANEL.initial;
     const activePanel = typeof saved.activePanel === "string" ? saved.activePanel : null;
     const into: Arrangement = loadSettings().openIn === "tabs" ? "tabs" : "columns";
     const ownSaved = legacySlot(stored as Record<string, unknown>, slotsNow(), screenNow()?.cls ?? null) ? undefined : saved.dockLayout;
@@ -902,9 +900,7 @@ interface CanopyState {
   toggleGroup: (key: string) => void;
   /** folds or unfolds one section (changes, shell, history, claude…) of one repo's panel */
   toggleSection: (repoId: string, key: string) => void;
-  setPanelWidth: (id: string, px: number) => void;
   setSoloWidth: (px: number) => void;
-  setDockWidth: (px: number) => void;
   setSetting: <K extends keyof Settings>(key: K, value: Settings[K]) => void;
   /** opens a new shell at a repo where the settings say: its panel, the
    *  strip, or a tab or window of its own; `place` overrides the setting */
@@ -2488,21 +2484,7 @@ export const useStore = create<CanopyState>((set, get) => ({
     })),
   toggleSection: (repoId, key) =>
     set((s) => ({ closedSections: toggleIn(s.closedSections, repoId, key) })),
-  // the width of the column a panel is in; the old width maps are not written
-  setPanelWidth: (id, px) =>
-    set((s) => {
-      const l = laidOut(s);
-      const col = columnOf(l, id);
-      return col ? { dockLayout: sizeColumn(l, col.id, px, PANEL.min, PANEL.max) } : {};
-    }),
   setSoloWidth: (px) => set({ soloWidth: clamp(px, SOLO.min, SOLO.max) }),
-  // the tabbed dock's width is its column's, the one showing
-  setDockWidth: (px) =>
-    set((s) => {
-      const l = laidOut(s);
-      const col = columnOf(l, s.activePanel ?? "") ?? l.columns[0];
-      return col ? { dockLayout: sizeColumn(l, col.id, px, DOCK.min, DOCK.max) } : {};
-    }),
   setSetting: (key, value) =>
     set((s) => {
       const settings = { ...s.settings, [key]: value };

@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { parsePaneMsg, poppedOf, restorePanel, unclaimed, without } from "./panes";
+import { parsePaneMsg, poppedOf, unclaimed, without } from "./panes";
 
 describe("pane messages", () => {
   test("parses the five kinds and refuses anything else", () => {
@@ -20,11 +20,6 @@ describe("pane messages", () => {
 });
 
 describe("putting a panel back", () => {
-  test("at its old slot, clamped, once", () => {
-    expect(restorePanel(["a", "c"], "b", 1)).toEqual(["a", "b", "c"]);
-    expect(restorePanel(["a"], "b", 9)).toEqual(["a", "b"]);
-    expect(restorePanel(["a", "b"], "b", 0)).toEqual(["a", "b"]);
-  });
   test("popped ids no window answered for", () => {
     expect(unclaimed({ a: 0, b: 2 }, new Set(["b"]))).toEqual(["a"]);
   });

@@ -1858,7 +1858,7 @@ describe("the dock as columns of cells", () => {
 
   test("a lone column's width outlives a close and a pop-out", () => {
     useStore.setState({ repos: [repo("app")], panels: ["x", "app", "y"], activePanel: "app" });
-    useStore.getState().setPanelWidth("app", 610);
+    useStore.getState().resizeColumn(column("app"), 610);
     expect(columnOf(useStore.getState().dockLayout, "app")?.width).toBe(610);
     useStore.getState().claimPanel("app");
     expect(useStore.getState().panelWidths.app).toBe(610);
@@ -1894,7 +1894,7 @@ describe("the dock as columns of cells", () => {
     useStore.setState({ panels: ["a"], activePanel: "a" });
     useStore.getState().resizeColumn(column("a"), 99999);
     expect(columnOf(useStore.getState().dockLayout, "a")?.width).toBe(2400);
-    useStore.getState().setDockWidth(500);
+    useStore.getState().resizeColumn(column("a"), 500);
     expect(columnOf(useStore.getState().dockLayout, "a")?.width).toBe(500);
     expect(useStore.getState().panelWidths).toEqual({});
   });
