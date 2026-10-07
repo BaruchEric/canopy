@@ -1,5 +1,7 @@
 import { describe, expect, test } from "bun:test";
-import { AGENT_NAME, agentWord, clock, harnessOf, resultLine, tokenCount, tokenTitle } from "./runs";
+import { settleNote } from "../../src/core/driver";
+import type { RunStep } from "../../src/core/types";
+import { AGENT_NAME, agentWord, clock, harnessOf, hideTodoSteps, nestSteps, planState, resultLine, tokenCount, tokenTitle } from "./runs";
 
 describe("a run's words", () => {
   test("its harness, and a run from before harnesses was Claude's", () => {
@@ -30,5 +32,44 @@ describe("a run's words", () => {
     expect([950, 1000, 1250, 48_400, 999_000, 1_300_000].map(tokenCount)).toEqual(["950", "1k", "1.3k", "48k", "999k", "1.3M"]);
     expect(clock(61_999)).toBe("1:01");
     expect(clock(-5)).toBe("0:00");
+  });
+});
+
+const s = (id: string, extra: Partial<RunStep> = {}): RunStep => ({ id, at: 0, kind: "tool", tool: { name: "Bash", title: id, status: "ok" }, ...extra });
+
+describe("plan, then build in the timeline", () => {
+  test("subagent steps fold under their Agent step, in order", () => {
+    const steps = [s("a", { tool: { name: "Agent", title: "agent: read", status: "running" } }), s("b", { parent: "a" }), s("c"), s("d", { parent: "a" })];
+    expect(nestSteps(steps).map((n) => [n.step.id, n.kids.map((k) => k.id)])).toEqual([
+      ["a", ["b", "d"]],
+      ["c", []],
+    ]);
+  });
+
+  test("a step whose parent is unknown stays at the top level", () => {
+    expect(nestSteps([s("x", { parent: "gone" })]).map((n) => n.step.id)).toEqual(["x"]);
+  });
+
+  test("todo tool steps hide only when the checklist shows", () => {
+    const steps = [s("t", { tool: { name: "TaskCreate", title: "todo: a", status: "ok" } }), s("b")];
+    expect(hideTodoSteps(steps, true).map((x) => x.id)).toEqual(["b"]);
+    expect(hideTodoSteps(steps, false).map((x) => x.id)).toEqual(["t", "b"]);
+  });
+
+  test("a subagent's todo steps stay, since its list never reaches the checklist", () => {
+    const steps = [s("a", { tool: { name: "Agent", title: "agent: read", status: "ok" } }), s("t", { parent: "a", tool: { name: "TaskCreate", title: "todo: a", status: "ok" } })];
+    expect(hideTodoSteps(steps, true).map((x) => x.id)).toEqual(["a", "t"]);
+  });
+
+  test("the plan card names how the latest plan was settled", () => {
+    const plan = { id: "p", kind: "proposal" as const, plan: "1. x", auto: true };
+    const note = (text: string): RunStep => ({ id: text, at: 0, kind: "note", text });
+    expect(planState([])).toBeNull();
+    expect(planState([note(settleNote(plan, { kind: "approve", auto: false }))])).toBe("approved");
+    expect(planState([note(settleNote(plan, { kind: "approve", auto: true }))])).toBe("approved");
+    expect(planState([note(settleNote(plan, { kind: "deny", message: "smaller" }))])).toBe("sent back");
+    expect(planState([note(settleNote(plan, { kind: "deny" }))])).toBe("turned down");
+    // the latest settle wins: sent back once, then approved
+    expect(planState([note(settleNote(plan, { kind: "deny", message: "smaller" })), s("x"), note(settleNote(plan, { kind: "approve", auto: false }))])).toBe("approved");
   });
 });

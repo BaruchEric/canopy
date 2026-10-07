@@ -279,9 +279,93 @@ export function RunPromptForm({
       />
     );
   }
-  // the proposal form lands with the plan UI; until then the plan reads as text
-  if (prompt.kind === "proposal") return <pre key={id}>{prompt.plan}</pre>;
+  if (prompt.kind === "proposal") {
+    return (
+      <ProposalForm
+        key={id}
+        plan={prompt.plan}
+        auto={prompt.auto}
+        who={agentWord(harness)}
+        onApprove={(auto) => onAnswer({ kind: "approve", auto }, id)}
+        // a bare deny reads as a turn-down, so an empty revise still says what it is
+        onRevise={(note) => onAnswer({ kind: "deny", message: note.trim() || "Revise the plan." }, id)}
+        onDecline={() => onAnswer({ kind: "deny" }, id)}
+      />
+    );
+  }
   return <Questions key={id} questions={prompt.questions} who={agentWord(harness)} onAnswer={(answers) => onAnswer({ kind: "answers", answers }, id)} />;
+}
+
+/**
+ * A plan put to the user before anything is built: approve it (asking
+ * before commands, or on its own when the agent's settings have yolo),
+ * send it back with a note, or turn it down. The plan shows as the agent
+ * wrote it, preformatted.
+ */
+export function ProposalForm({
+  plan,
+  auto,
+  who,
+  onApprove,
+  onRevise,
+  onDecline,
+}: {
+  plan: string;
+  /** "run on its own" is offered: the agent's settings have yolo */
+  auto: boolean;
+  /** the agent's word, for the heading */
+  who: string;
+  onApprove: (auto: boolean) => void;
+  onRevise: (note: string) => void;
+  onDecline: () => void;
+}) {
+  const [note, setNote] = useState("");
+  const noteId = useId();
+  return (
+    <div className="ask proposal-form">
+      <div className="eyebrow">{who} proposes a plan</div>
+      <pre className="proposal-text" tabIndex={0} aria-label="The proposed plan">
+        {plan}
+      </pre>
+      <div className="ask-row proposal-row">
+        <button type="button" className="mini strong" title="Build it, asking before each command beyond file edits" onClick={() => onApprove(false)}>
+          approve, ask before commands
+        </button>
+        {auto && (
+          <button type="button" className="mini" title="Build it without asking, as the agent's yolo setting allows" onClick={() => onApprove(true)}>
+            approve, run on its own
+          </button>
+        )}
+      </div>
+      <label className="eyebrow" htmlFor={noteId}>
+        what should change?
+      </label>
+      <textarea
+        id={noteId}
+        className="other proposal-note"
+        rows={3}
+        placeholder="a note for the agent, which plans again"
+        value={note}
+        onChange={(e) => setNote(e.target.value)}
+        onKeyDown={(e) => {
+          // a note runs to several lines, so only Cmd/Ctrl+Enter sends it
+          if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
+            e.preventDefault();
+            onRevise(note);
+          }
+        }}
+      />
+      <div className="ask-row proposal-row">
+        <button type="button" className="mini" title="Send the plan back with your note (⌘↩)" onClick={() => onRevise(note)}>
+          revise
+        </button>
+        <span className="spacer" />
+        <button type="button" className="proposal-decline" title="Nothing is built; the agent stops and sums up what it found" onClick={onDecline}>
+          turn it down
+        </button>
+      </div>
+    </div>
+  );
 }
 
 /**

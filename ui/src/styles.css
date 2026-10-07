@@ -3900,6 +3900,138 @@ a.chan-text {
   background: var(--wash);
 }
 
+/* plan, then build: the settled plan as a card at the top, the agent's
+   checklist pinned above the timeline, a subagent's steps under its call */
+.proposal {
+  margin: 0 0 12px;
+  padding: 4px 0 4px 12px;
+  border-left: 3px solid var(--moss);
+}
+.proposal > summary,
+.step-kids > summary {
+  cursor: pointer;
+  list-style: none;
+  font-size: 11px;
+  color: var(--ink-faint);
+}
+.proposal > summary::-webkit-details-marker,
+.step-kids > summary::-webkit-details-marker {
+  display: none;
+}
+.proposal > summary::before,
+.step-kids > summary::before {
+  content: "▸ ";
+}
+.proposal[open] > summary::before,
+.step-kids[open] > summary::before {
+  content: "▾ ";
+}
+.proposal-text {
+  margin: 6px 0 0;
+  padding: 8px 10px;
+  max-block-size: 50vh;
+  overflow: auto;
+  font-size: 12px;
+  line-height: 1.45;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  background: var(--bark0);
+  border-radius: var(--r);
+}
+.ask .proposal-text {
+  margin: 0;
+}
+.todos {
+  position: sticky;
+  /* sticky stops at the console's padding; this takes it to the very edge,
+     so no step shows through above the list */
+  top: -12px;
+  z-index: 1;
+  list-style: none;
+  margin: 0 0 12px;
+  padding: 6px 0 8px;
+  max-block-size: 30vh;
+  overflow: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  background: var(--float);
+  border-bottom: 1px solid var(--hair);
+}
+.todo {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  color: var(--ink);
+}
+.todo-mark {
+  flex: none;
+  box-sizing: border-box;
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  border: 1.5px solid var(--ink-faint);
+}
+.t-in_progress .todo-mark {
+  border-color: var(--sky);
+  background: linear-gradient(90deg, var(--sky) 50%, transparent 50%);
+}
+.t-completed .todo-mark {
+  border-color: var(--moss);
+  background: var(--moss);
+}
+.t-completed .todo-text {
+  color: var(--ink-faint);
+  text-decoration: line-through;
+}
+.step-kids {
+  margin: 2px 0 0;
+}
+.step-kids > ol {
+  list-style: none;
+  margin: 4px 0 0;
+  padding: 0 0 0 16px;
+  border-left: 1px solid var(--hair2);
+}
+.step-kids .node {
+  left: -20px;
+}
+.proposal-note {
+  width: 100%;
+  padding: 6px 10px;
+  resize: vertical;
+}
+.proposal-decline {
+  padding: 2px 4px;
+  font-size: 11px;
+  color: var(--ink-faint);
+  text-decoration: underline;
+}
+.proposal-decline:hover {
+  color: var(--ink-dim);
+}
+@media (max-width: 760px) {
+  /* .ask-row comes later, so the pair outranks it */
+  .ask-row.proposal-row {
+    flex-direction: column;
+    align-items: stretch;
+  }
+  .proposal-row .mini {
+    justify-content: center;
+  }
+  .proposal-row .spacer {
+    display: none;
+  }
+}
+@media (prefers-reduced-motion: no-preference) {
+  .todo-mark {
+    transition:
+      background-color 0.2s ease,
+      border-color 0.2s ease;
+  }
+}
+
 /* the chat's message box, between the timeline and the footer */
 .composer {
   display: flex;

@@ -224,6 +224,10 @@ describe("describeEvent", () => {
     const lines = describeEvent({ type: "run", run: waiting }, snap({ runs: { r1: run() } }), 5);
     expect(lines.map((l) => l.text)).toEqual(["asks to Bash: rm -rf dist"]);
   });
+  test("a proposal says there is a plan to approve", () => {
+    const waiting = run({ status: "waiting", prompt: { id: "p", kind: "proposal", plan: "1. x", auto: false } });
+    expect(describeEvent({ type: "run", run: waiting }, snap({ runs: { r1: run() } }), 5).map((l) => l.text)).toEqual(["has a plan to approve"]);
+  });
   test("a chat opens, then goes idle when Claude answers", () => {
     const chat = run({ chat: true, status: "idle" });
     expect(describeEvent({ type: "run", run: chat }, snap(), 5).map((l) => l.text)).toEqual(["chat opened"]);

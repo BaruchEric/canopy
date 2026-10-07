@@ -26,7 +26,7 @@ import {
   type RunStep,
 } from "../../../src/core/types";
 import { renameOld, taskDraftCwd, taskDraftPatch, withChange } from "../tasks";
-import { AGENT_NAME, harnessOf, resultLine, tokenTitle } from "../runs";
+import { AGENT_NAME, harnessOf, hideTodoSteps, nestSteps, planState, resultLine, tokenTitle, type PlanState } from "../runs";
 import { HARNESS } from "../../../src/core/harness";
 
 const STATUS_WORD: Record<Run["status"], string> = {
@@ -297,6 +297,12 @@ export function Timeline({
     !chat && run.result && last?.kind === "text" && last.text === run.result.text
       ? run.steps.slice(0, -1)
       : run.steps;
+  const todos = run.todos ?? [];
+  // a subagent's steps fold under its Agent call; the main thread's todo
+  // steps give way to the checklist
+  const nodes = nestSteps(hideTodoSteps(steps, todos.length > 0));
+  // the latest plan, once settled: the one waiting shows in its form below
+  const settled = run.proposal && run.prompt?.kind !== "proposal" ? planState(run.steps) : null;
 
   return (
     <div
@@ -313,9 +319,25 @@ export function Timeline({
           {run.note}
         </p>
       )}
+      {settled && (
+        <details className="proposal">
+          <summary>{PLAN_SUMMARY[settled]}</summary>
+          <pre className="proposal-text">{run.proposal}</pre>
+        </details>
+      )}
+      {todos.length > 0 && (
+        <ol className="todos" aria-label="The agent's checklist">
+          {todos.map((t) => (
+            <li key={t.id} className={`todo t-${t.status}`}>
+              <span className="todo-mark" aria-hidden="true" />
+              <span className="todo-text">{t.status === "in_progress" && t.active ? t.active : t.subject}</span>
+            </li>
+          ))}
+        </ol>
+      )}
       <ol className="steps">
-        {steps.map((s) => (
-          <Step key={s.id} step={s} />
+        {nodes.map((n) => (
+          <Step key={n.step.id} step={n.step} kids={n.kids} />
         ))}
         {run.status === "working" && run.steps.length === 0 && (
           <li className="step k-note">
@@ -547,9 +569,20 @@ function Composer({
   );
 }
 
-function Step({ step }: { step: RunStep }) {
+/** the approved-plan card's line, by how the latest plan was settled */
+const PLAN_SUMMARY: Record<PlanState, string> = {
+  approved: "the approved plan",
+  "sent back": "the plan, sent back",
+  "turned down": "the plan, turned down",
+};
+
+/** One step, and a subagent's steps folded under the Agent call that
+ *  started them. They open while one of them runs: the Agent step's own
+ *  status says nothing, since an async one is done the moment it launches. */
+function Step({ step, kids = [] }: { step: RunStep; kids?: readonly RunStep[] }) {
   if (step.kind === "tool" && step.tool) {
     const t = step.tool;
+    const kidRunning = kids.some((k) => k.tool?.status === "running");
     return (
       <li className={`step k-tool st-${t.status}`}>
         <span className="node" />
@@ -559,6 +592,18 @@ function Step({ step }: { step: RunStep }) {
             <details className="step-out">
               <summary>{t.status === "error" ? "error" : "output"}</summary>
               <pre>{t.output}</pre>
+            </details>
+          )}
+          {kids.length > 0 && (
+            <details className="step-kids" open={kidRunning}>
+              <summary>
+                {kids.length} step{kids.length === 1 ? "" : "s"} inside
+              </summary>
+              <ol>
+                {kids.map((k) => (
+                  <Step key={k.id} step={k} />
+                ))}
+              </ol>
             </details>
           )}
         </div>

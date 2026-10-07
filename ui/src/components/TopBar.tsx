@@ -257,6 +257,7 @@ function WsTabs() {
 const WS_RUNS: { action: RunAction; label: string }[] = [
   { action: "ask", label: "ask in workspace…" },
   { action: "chat", label: "chat in workspace…" },
+  { action: "propose", label: "plan, then build in workspace…" },
 ];
 
 /** The active workspace's menu: a run across it, which member is its
@@ -297,7 +298,7 @@ function WsGear({ ws }: { ws: Workspace }) {
   return (
     <Gear
       label={`the ${ws.name} workspace`}
-      hint="Ask or chat across the workspace, set its primary and its color"
+      hint="Ask, chat or plan, then build across the workspace, set its primary and its color"
       groups={groups}
       perScreen={false}
     />

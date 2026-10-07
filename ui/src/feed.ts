@@ -296,7 +296,13 @@ function runLines(ev: Extract<ServerEvent, { type: "run" }>, prev: FeedSnapshot,
   }
   if (before?.status !== run.status) {
     if (run.status === "waiting" && run.prompt) {
-      say(run.prompt.kind === "permission" ? `asks to ${run.prompt.tool}: ${clip(run.prompt.title, 100)}` : "asks a question");
+      say(
+        run.prompt.kind === "permission"
+          ? `asks to ${run.prompt.tool}: ${clip(run.prompt.title, 100)}`
+          : run.prompt.kind === "proposal"
+            ? "has a plan to approve"
+            : "asks a question",
+      );
     } else if (run.status === "idle" && before) {
       say(`${agentWord(harnessOf(run))} answered, chat idle`);
     } else if (run.status === "done") {

@@ -91,6 +91,7 @@ describe("runNotice", () => {
     expect(runNotice(r, "working", "canopy")).toEqual({ to: "human", text: "canopy: commit wants to run git push" });
     expect(runNotice(r, "waiting", "canopy")).toBeNull();
     expect(runNotice(run({ status: "waiting", prompt: { id: "q", kind: "question", questions: [] } }), "working", "x")?.text).toBe("x: commit has a question");
+    expect(runNotice(run({ status: "waiting", prompt: { id: "p", kind: "proposal", plan: "1. x", auto: false } }), "working", "x")?.text).toBe("x: commit has a plan to approve");
   });
   test("an end is a channel line with its outcome or its error", () => {
     expect(runNotice(run({ status: "done", outcome: "changed" }), "working", "canopy")).toEqual({ to: "channel", text: "canopy: commit done, changed" });

@@ -357,7 +357,8 @@ function ending(status: string, outcome?: string, error?: string): string {
 export function runNotice(run: Run, prev: RunStatus | undefined, repo: string): Notice | null {
   if (run.status === prev) return null;
   if (run.status === "waiting") {
-    const what = run.prompt?.kind === "permission" ? `wants to ${run.prompt.title}` : "has a question";
+    const what =
+      run.prompt?.kind === "permission" ? `wants to ${run.prompt.title}` : run.prompt?.kind === "proposal" ? "has a plan to approve" : "has a question";
     return { to: "human", text: `${repo}: ${run.verb} ${what}` };
   }
   if (ENDED.has(run.status) && !(prev && ENDED.has(prev))) {

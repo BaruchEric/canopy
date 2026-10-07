@@ -98,7 +98,9 @@ describe("mergeInbox", () => {
   test("a run's proposal is its own kind, with no permission or questions to answer from the inbox", () => {
     const p = { id: "p1", kind: "proposal" as const, plan: "1. x", auto: false };
     const [item] = mergeInbox([], { r1: run({ prompt: p }) }, {}, 0, ctx);
-    expect(item).toMatchObject({ kind: "proposal", title: "a plan to approve", promptId: "p1" });
+    expect(item).toMatchObject({ kind: "proposal", title: "plan to approve", detail: "1. x", promptId: "p1" });
+    const [long] = mergeInbox([], { r1: run({ prompt: { ...p, plan: "y".repeat(900) } }) }, {}, 0, ctx);
+    expect(long?.detail.length).toBe(400);
     expect(item?.permission).toBeUndefined();
     expect(item?.questions).toBeUndefined();
   });

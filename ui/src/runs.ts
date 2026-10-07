@@ -4,7 +4,8 @@
    cost where it reports a cost (Claude Code). Pure; tested in runs.test.ts. */
 
 import { HARNESS } from "../../src/core/harness";
-import type { Harness, RunResult } from "../../src/core/types";
+import { TODO_TOOLS } from "../../src/core/todos";
+import type { Harness, RunResult, RunStep } from "../../src/core/types";
 
 /** The harness a run is on. A run from a backend older than harnesses was
  *  Claude's, the only agent a run could be then. */
@@ -46,4 +47,47 @@ export function tokenTitle(r: RunResult): string | null {
   const t = r.tokens;
   if (!t) return null;
   return `${t.input} in (${t.cachedInput} cached), ${t.output} out (${t.reasoning} reasoning), ${t.total} in all`;
+}
+
+/* ---------- plan, then build ---------- */
+
+export interface StepNode {
+  step: RunStep;
+  kids: RunStep[];
+}
+
+/** A subagent's steps under the Agent call that started it, so parallel
+ *  subagents read as lanes rather than one interleaved list. */
+export function nestSteps(steps: readonly RunStep[]): StepNode[] {
+  const top: StepNode[] = [];
+  const byId = new Map<string, StepNode>();
+  for (const step of steps) {
+    const home = step.parent ? byId.get(step.parent) : undefined;
+    if (home) home.kids.push(step);
+    else {
+      const node: StepNode = { step, kids: [] };
+      top.push(node);
+      byId.set(step.id, node);
+    }
+  }
+  return top;
+}
+
+/** The main thread's todo tool steps, gone when the checklist above says it
+ *  better. A subagent's stay: its list never reaches the checklist. */
+export const hideTodoSteps = (steps: readonly RunStep[], hasTodos: boolean): RunStep[] =>
+  hasTodos ? steps.filter((x) => !(x.tool && !x.parent && TODO_TOOLS.has(x.tool.name))) : [...steps];
+
+export type PlanState = "approved" | "sent back" | "turned down";
+
+/** How the latest plan was settled, read off the note the timeline keeps
+ *  for it (settleNote in src/core/driver.ts), or null before any was. */
+export function planState(steps: readonly RunStep[]): PlanState | null {
+  for (let i = steps.length - 1; i >= 0; i--) {
+    const t = steps[i]?.kind === "note" ? (steps[i]?.text ?? "") : "";
+    if (t.startsWith("approved the plan")) return "approved";
+    if (t.startsWith("sent the plan back")) return "sent back";
+    if (t === "turned the plan down") return "turned down";
+  }
+  return null;
 }

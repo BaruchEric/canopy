@@ -26,9 +26,9 @@ import {
 const OPENERS = OPENER_IDS.filter((app) => !AGENT_OPENERS.includes(app));
 
 /** The jobs; the built-in commit/push/commit-push/deploy have workflow twins
- *  now, so only the free-form ask remains here. Chat has its own entry since
- *  it opens no pre-flight. */
-const JOBS = ["ask"] as const;
+ *  now, so only the free-form ask and plan, then build remain here. Chat has
+ *  its own entry since it opens no pre-flight. */
+const JOBS = ["ask", "propose"] as const;
 
 const MENU_W = 296;
 
@@ -407,7 +407,9 @@ export function RepoMenu({
                     ? { ok: false as const, why: "wait for the current run" }
                     : !has.includes(jobAgent.harness)
                       ? { ok: false as const, why: `${HARNESS[jobAgent.harness].label} not installed` }
-                      : checkWhen(repo, "any");
+                      : action === "propose" && jobAgent.harness !== "claude"
+                        ? { ok: false as const, why: "plan, then build needs Claude Code" }
+                        : checkWhen(repo, "any");
                 return (
                   <button
                     key={action}

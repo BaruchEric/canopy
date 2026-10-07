@@ -917,7 +917,7 @@ git commit -m "test(runs): propose end to end through the API"
   - `hideTodoSteps(steps: readonly RunStep[], hasTodos: boolean): RunStep[]`.
   - `ProposalForm({ plan, auto, onApprove(auto: boolean), onRevise(note: string), onDecline() })`.
 
-- [ ] **Step 1: Write the failing test**, in `ui/src/runs.test.ts`:
+- [x] **Step 1: Write the failing test**, in `ui/src/runs.test.ts`:
 
 ```ts
 import { hideTodoSteps, nestSteps } from "./runs";
@@ -940,12 +940,12 @@ test("todo tool steps hide only when the checklist shows", () => {
 });
 ```
 
-- [ ] **Step 2: Run it and watch it fail**
+- [x] **Step 2: Run it and watch it fail**
 
 Run: `env -u TMUX SHELL=/bin/bash bun test ui/src/runs.test.ts`
 Expected: FAIL.
 
-- [ ] **Step 3: Implement**
+- [x] **Step 3: Implement**
 
 `ui/src/runs.ts`:
 
@@ -1046,7 +1046,7 @@ If plan 1 (workspace primary) has shipped, the workspace gear in `TopBar.tsx` ga
 - `.step-kids`: indented under its step with a 1px left rule.
 - Any motion goes only under `@media (prefers-reduced-motion: no-preference)`.
 
-- [ ] **Step 4: Gates and a browser check**
+- [x] **Step 4: Gates and a browser check**
 
 Run: `bun run typecheck && bun run lint && env -u TMUX SHELL=/bin/bash bun test && bun run build`
 Expected: all pass.
@@ -1061,7 +1061,7 @@ Then start a scratch canopy server (memory note "Scratch canopy server for UI ch
 
 This step spends real Claude usage on Eric's login, so keep the repo tiny.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add ui/src

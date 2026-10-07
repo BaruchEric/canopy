@@ -156,7 +156,12 @@ function InboxRow({
     if (held === "panel") onGit?.();
   };
 
-  const heading = item.source === "ask" ? `${item.who} ${item.kind === "guard" ? "hit a guard; it waits for you" : "wants to run"}` : `${item.who} wants to run`;
+  const heading =
+    item.kind === "proposal"
+      ? "the proposed plan"
+      : item.source === "ask"
+        ? `${item.who} ${item.kind === "guard" ? "hit a guard; it waits for you" : "wants to run"}`
+        : `${item.who} wants to run`;
   const detail = item.source === "ask" ? detailText(item.detail) : item.detail;
   const view = useCommandView();
   const permission = item.permission;
@@ -264,7 +269,12 @@ function InboxRow({
               </div>
             </div>
           ) : item.kind === "proposal" ? (
-            <p className="settings-hint">a plan is waiting for review; open the run to approve it or send it back</p>
+            // answered in the run sheet only, where the whole plan shows
+            <div className="ask">
+              <div className="eyebrow">{heading}</div>
+              {detail && <pre className="ask-detail">{detail}</pre>}
+              <p className="settings-hint">Open the run to read the whole plan, then approve it or send it back.</p>
+            </div>
           ) : item.questions?.length ? (
             <Questions
               key={item.promptId ?? item.key}

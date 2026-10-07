@@ -203,8 +203,9 @@ function runItem(run: Run, flow: Flow | undefined, ctx: InboxContext): InboxItem
     repo: repo?.name ?? run.repoId,
     who,
     where: `canopy ${run.chat ? "chat" : "run"}${backend ? ` on ${backend}` : ""}`,
-    title: p.kind === "permission" ? p.title : p.kind === "proposal" ? "a plan to approve" : `question: ${p.questions[0]?.question ?? "a question"}`,
-    detail: p.kind === "permission" ? p.detail : "",
+    title: p.kind === "permission" ? p.title : p.kind === "proposal" ? "plan to approve" : `question: ${p.questions[0]?.question ?? "a question"}`,
+    // a plan's opening, to see what it is about; the run sheet holds the rest
+    detail: p.kind === "permission" ? p.detail : p.kind === "proposal" ? p.plan.slice(0, 400) : "",
     ...(p.kind === "question" ? { questions: p.questions } : {}),
     ...(p.kind === "permission" ? { permission: p } : {}),
     ...(repo && !repo.host ? { repoPath: repo.path } : {}),
