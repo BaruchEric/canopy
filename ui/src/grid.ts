@@ -26,6 +26,14 @@ export function cellOf(l: DockLayout, id: string): DockCell | undefined {
   return undefined;
 }
 
+export function columnOf(l: DockLayout, id: string): DockColumn | undefined {
+  return l.columns.find((c) => c.cells.some((x) => x.panels.includes(id)));
+}
+
+/** A new column's width: one for every panel, or each panel's own. */
+export type NewWidth = number | ((id: string) => number);
+const widthFor = (w: NewWidth, id: string): number => (typeof w === "number" ? w : w(id));
+
 /** `c${n}`, one more than the highest numeric suffix of any column or cell id. */
 function newId(l: DockLayout): string {
   let max = 0;
@@ -80,23 +88,24 @@ function mapCell(l: DockLayout, cell: string, fn: (x: DockCell) => DockCell): Do
 
 export function activate(l: DockLayout, id: string): DockLayout {
   const own = cellOf(l, id);
-  if (!own) return l;
+  if (!own || own.active === id) return l;
   return mapCell(l, own.id, (x) => ({ ...x, active: id }));
 }
 
 /** Makes the layout hold exactly the `open` panels: closed ones leave, new
  *  ones become a column each or tabs in the active cell. */
-export function place(l: DockLayout, open: readonly string[], active: string | null, into: Arrangement, newWidth: number): DockLayout {
+export function place(l: DockLayout, open: readonly string[], active: string | null, into: Arrangement, newWidth: NewWidth): DockLayout {
   let out = l;
   for (const id of panelsOf(l)) if (!open.includes(id)) out = remove(out, id);
   const seen = new Set(panelsOf(out));
   for (const id of open) {
     if (seen.has(id)) continue;
     seen.add(id);
+    const width = widthFor(newWidth, id);
     if (into === "columns") {
       const colId = newId(out);
-      const cellId = newId({ columns: [...out.columns, { id: colId, width: newWidth, cells: [] }] });
-      out = { columns: [...out.columns, { id: colId, width: newWidth, cells: [{ id: cellId, panels: [id], active: id, share: 1 }] }] };
+      const cellId = newId({ columns: [...out.columns, { id: colId, width, cells: [] }] });
+      out = { columns: [...out.columns, { id: colId, width, cells: [{ id: cellId, panels: [id], active: id, share: 1 }] }] };
       continue;
     }
     const target = (active !== null ? cellOf(out, active) : undefined) ?? out.columns.at(-1)?.cells.at(-1);
@@ -104,8 +113,8 @@ export function place(l: DockLayout, open: readonly string[], active: string | n
       out = mapCell(out, target.id, (x) => ({ ...x, panels: [...x.panels, id], active: id }));
     } else {
       const colId = newId(out);
-      const cellId = newId({ columns: [{ id: colId, width: newWidth, cells: [] }] });
-      out = { columns: [{ id: colId, width: newWidth, cells: [{ id: cellId, panels: [id], active: id, share: 1 }] }] };
+      const cellId = newId({ columns: [{ id: colId, width, cells: [] }] });
+      out = { columns: [{ id: colId, width, cells: [{ id: cellId, panels: [id], active: id, share: 1 }] }] };
     }
   }
   return active !== null && seen.has(active) ? activate(out, active) : out;
@@ -153,6 +162,31 @@ export function moveWithin(l: DockLayout, id: string, cell: string, index: numbe
     const at = Math.max(0, Math.min(index, rest.length));
     return { ...x, panels: [...rest.slice(0, at), id, ...rest.slice(at)], active: id };
   });
+}
+
+/** A whole column to index `index` (clamped), its width and cells with it. */
+export function moveColumn(l: DockLayout, column: string, index: number): DockLayout {
+  const from = l.columns.findIndex((c) => c.id === column);
+  const col = l.columns[from];
+  if (!col || !Number.isFinite(index)) return l;
+  const at = Math.max(0, Math.min(l.columns.length - 1, index));
+  if (at === from) return l;
+  const columns = l.columns.filter((c) => c.id !== column);
+  columns.splice(at, 0, col);
+  return { columns };
+}
+
+/** A cell to index `index` (clamped) of its own column, its share with it. */
+export function moveCell(l: DockLayout, cell: string, index: number): DockLayout {
+  const col = l.columns.find((c) => c.cells.some((x) => x.id === cell));
+  const from = col?.cells.findIndex((x) => x.id === cell) ?? -1;
+  const own = col?.cells[from];
+  if (!col || !own || !Number.isFinite(index)) return l;
+  const at = Math.max(0, Math.min(col.cells.length - 1, index));
+  if (at === from) return l;
+  const cells = col.cells.filter((x) => x.id !== cell);
+  cells.splice(at, 0, own);
+  return { columns: l.columns.map((c) => (c.id === col.id ? { ...c, cells } : c)) };
 }
 
 /** Every panel in one cell (tabs) or one column each (columns). Old column
@@ -211,6 +245,72 @@ export function rename(l: DockLayout, from: string, to: string): DockLayout {
       cells: c.cells.map((x) => (x.panels.includes(from) ? { ...x, panels: x.panels.map(sw), active: sw(x.active) } : x)),
     })),
   };
+}
+
+const isRecord = (v: unknown): v is Record<string, unknown> => !!v && typeof v === "object" && !Array.isArray(v);
+/** the ids a saved layout may keep: they become CSS custom property names */
+const SAFE_ID = /^c\d{1,6}$/;
+
+/** A layout read back from storage, repaired: entries of the wrong shape
+ *  go, a panel saved twice keeps its first place, widths and shares are
+ *  finite and positive (shares summing to 1 in each column, none a
+ *  sliver), and ids that are not `c` and a number, or repeat, are issued
+ *  again. Null when it is not a layout at all. */
+export function normalizeLayout(v: unknown): DockLayout | null {
+  if (!isRecord(v) || !Array.isArray(v.columns)) return null;
+  const seen = new Set<string>();
+  const raw: DockColumn[] = [];
+  for (const c of v.columns) {
+    if (!isRecord(c) || !Array.isArray(c.cells)) continue;
+    const cells: DockCell[] = [];
+    for (const x of c.cells) {
+      if (!isRecord(x) || !Array.isArray(x.panels)) continue;
+      const panels: string[] = [];
+      for (const p of x.panels) {
+        if (typeof p !== "string" || seen.has(p)) continue;
+        seen.add(p);
+        panels.push(p);
+      }
+      const share = typeof x.share === "number" && Number.isFinite(x.share) && x.share > 0 ? x.share : 1;
+      cells.push({ id: typeof x.id === "string" ? x.id : "", panels, active: typeof x.active === "string" ? x.active : "", share });
+    }
+    const width = typeof c.width === "number" && Number.isFinite(c.width) && c.width > 0 ? c.width : COLUMN_WIDTH;
+    raw.push({ id: typeof c.id === "string" ? c.id : "", width, cells });
+  }
+  // a share that renormalized under MIN_SHARE is raised to it and the
+  // column renormalized once more, so no cell is a sliver gridOf merges away
+  let out = prune({ columns: raw });
+  out = prune({ columns: out.columns.map((c) => ({ ...c, cells: c.cells.map((x) => ({ ...x, share: Math.max(MIN_SHARE, x.share) })) })) });
+  // ids: the safe ones keep their first use, every other is issued again
+  const used = new Set<string>();
+  const keep = (id: string): string => {
+    if (!SAFE_ID.test(id) || used.has(id)) return "";
+    used.add(id);
+    return id;
+  };
+  out = { columns: out.columns.map((c) => ({ ...c, id: keep(c.id), cells: c.cells.map((x) => ({ ...x, id: keep(x.id) })) })) };
+  const columns: DockColumn[] = [];
+  for (const c of out.columns) {
+    const colId = c.id || newId({ columns: [...out.columns, ...columns] });
+    const col: DockColumn = { ...c, id: colId, cells: [] };
+    columns.push(col);
+    for (const x of c.cells) col.cells.push({ ...x, id: x.id || newId({ columns: [...out.columns, ...columns] }) });
+  }
+  return { columns };
+}
+
+/** The first layout for a dock saved before there were layouts: its open
+ *  panels placed in order, each column at the panel's own old width, or
+ *  as tabs at the tabbed dock's old width. */
+export function fromLegacy(
+  panels: readonly string[],
+  active: string | null,
+  widths: Record<string, number>,
+  dockWidth: number,
+  into: Arrangement,
+): DockLayout {
+  const l = place({ columns: [] }, panels, active, into, (id) => widths[id] ?? COLUMN_WIDTH);
+  return into === "tabs" ? { columns: l.columns.map((c) => ({ ...c, width: dockWidth })) } : l;
 }
 
 export interface GridPlan {

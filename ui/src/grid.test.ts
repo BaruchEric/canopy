@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { activate, cellOf, dropZone, gridOf, moveTo, moveWithin, panelsOf, place, regroup, rename, resizeColumn, resizeSeam } from "./grid";
+import { activate, cellOf, columnOf, dropZone, fromLegacy, gridOf, moveCell, moveColumn, moveTo, moveWithin, normalizeLayout, panelsOf, place, regroup, rename, resizeColumn, resizeSeam } from "./grid";
 import type { DockLayout } from "./grid";
 
 const W = 440;
@@ -192,4 +192,102 @@ describe("drop zones", () => {
     expect(dropZone(r, 5, 700)).toBe("left");
   });
   test("outside the rect clamps to the nearest edge", () => expect(dropZone(r, -50, 400)).toBe("left"));
+});
+
+describe("saved layouts", () => {
+  test("a saved layout is repaired or refused", () => {
+    expect(normalizeLayout("x")).toBeNull();
+    expect(normalizeLayout({ columns: "x" })).toBeNull();
+    const fixed = normalizeLayout({ columns: [{ id: "c1", width: 400, cells: [{ id: "c2", panels: ["a", 7], active: "zzz", share: 3 }] }] });
+    expect(fixed?.columns[0]?.cells[0]).toEqual({ id: "c2", panels: ["a"], active: "a", share: 1 });
+  });
+
+  test("legacy widths and mode become a layout", () => {
+    expect(cols(fromLegacy(["a", "b"], "b", { a: 500 }, 600, "columns"))).toEqual([[["a"]], [["b"]]]);
+    expect(fromLegacy(["a", "b"], "b", { a: 500 }, 600, "columns").columns.map((c) => c.width)).toEqual([500, 440]);
+    expect(fromLegacy(["a", "b"], "b", {}, 600, "tabs").columns[0]?.width).toBe(600);
+  });
+
+  test("ids that are not c and a number, or repeat, are issued again", () => {
+    const l = normalizeLayout({
+      columns: [
+        { id: "--x;", width: 400, cells: [{ id: "c1", panels: ["a"], active: "a", share: 1 }] },
+        { id: "c1", width: 400, cells: [{ id: "c9999999", panels: ["b"], active: "b", share: 1 }] },
+      ],
+    });
+    const ids = l?.columns.flatMap((c) => [c.id, ...c.cells.map((x) => x.id)]) ?? [];
+    expect(ids.every((id) => /^c\d{1,6}$/.test(id))).toBe(true);
+    expect(new Set(ids).size).toBe(4);
+    expect(cols(l ?? empty)).toEqual([[["a"]], [["b"]]]);
+  });
+
+  test("a panel saved twice keeps its first place; bad entries and empty cells go", () => {
+    const l = normalizeLayout({
+      columns: [
+        { id: "c1", width: 400, cells: [{ id: "c2", panels: ["a", "b"], active: "b", share: 1 }] },
+        "junk",
+        { id: "c3", width: "wide", cells: [{ id: "c4", panels: ["b"], active: "b", share: 1 }, { id: "c5", panels: ["c"], active: "c", share: 1 }, null] },
+        { id: "c6", width: 400, cells: [{ id: "c7", panels: [], active: "", share: 1 }] },
+      ],
+    });
+    expect(cols(l ?? empty)).toEqual([[["a", "b"]], [["c"]]]);
+    expect(l?.columns[1]?.width).toBe(440);
+    expect(l?.columns[1]?.cells[0]?.share).toBe(1);
+  });
+
+  test("shares become finite and positive, sum to 1 per column, and none is a sliver", () => {
+    const l = normalizeLayout({
+      columns: [
+        {
+          id: "c1",
+          width: 400,
+          cells: [
+            { id: "c2", panels: ["a"], active: "a", share: -2 },
+            { id: "c3", panels: ["b"], active: "b", share: Number.NaN },
+            { id: "c4", panels: ["c"], active: "c", share: 1e-9 },
+            { id: "c5", panels: ["d"], active: "d", share: 2 },
+          ],
+        },
+      ],
+    });
+    const shares = l?.columns[0]?.cells.map((x) => x.share) ?? [];
+    expect(shares.reduce((a, b) => a + b, 0)).toBeCloseTo(1, 5);
+    expect(Math.min(...shares)).toBeGreaterThan(0.05);
+    expect(shares.every((x) => Number.isFinite(x) && x > 0)).toBe(true);
+  });
+});
+
+describe("moves that keep sizes", () => {
+  test("a column moves whole, with its width", () => {
+    let l = place(empty, ["a", "b", "c"], "a", "columns", W);
+    l = resizeColumn(l, l.columns[2]?.id ?? "", 600, 200, 800);
+    const moved = moveColumn(l, l.columns[2]?.id ?? "", 0);
+    expect(cols(moved)).toEqual([[["c"]], [["a"]], [["b"]]]);
+    expect(moved.columns[0]?.width).toBe(600);
+    expect(moveColumn(l, l.columns[0]?.id ?? "", 0)).toBe(l);
+    expect(moveColumn(l, "nope", 1)).toBe(l);
+  });
+
+  test("a cell moves up or down its column, with its share", () => {
+    let l = place(empty, ["a", "b"], "a", "columns", W);
+    l = moveTo(l, "b", { cell: cellOf(l, "a")?.id ?? "", zone: "below" }, W);
+    l = resizeSeam(l, l.columns[0]?.id ?? "", 0, 0.7);
+    const moved = moveCell(l, cellOf(l, "b")?.id ?? "", 0);
+    expect(cols(moved)).toEqual([[["b"], ["a"]]]);
+    expect(moved.columns[0]?.cells.map((x) => x.share)).toEqual([0.3, 0.7]);
+    expect(moveCell(l, cellOf(l, "a")?.id ?? "", 0)).toBe(l);
+  });
+
+  test("activating the tab already showing is no change", () => {
+    const l = place(empty, ["a", "b"], "a", "tabs", W);
+    expect(activate(l, "a")).toBe(l);
+    expect(cellOf(activate(l, "b"), "a")?.active).toBe("b");
+  });
+
+  test("a new column takes the width asked for that panel", () => {
+    const l = place(empty, ["a", "b"], "a", "columns", (id) => (id === "b" ? 520 : W));
+    expect(l.columns.map((c) => c.width)).toEqual([440, 520]);
+    expect(columnOf(l, "b")?.width).toBe(520);
+    expect(columnOf(l, "zzz")).toBeUndefined();
+  });
 });

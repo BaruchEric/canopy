@@ -6,9 +6,30 @@ import { mergeHistory } from "./qualify";
 import { applyQuery, type RepoFilter } from "./filters";
 import { cardChangedAt, cardFavorite, joinRepos, leadOf, type RepoCard } from "./checkouts";
 import { changedAt } from "./grouping";
-import { focusPanel, movePanel as moveIn, nextActive } from "./dock";
+import { focusPanel, nextActive } from "./dock";
+import {
+  activate,
+  cellOf,
+  columnOf,
+  COLUMN_WIDTH,
+  fromLegacy,
+  moveCell,
+  moveColumn,
+  moveTo,
+  moveWithin,
+  normalizeLayout,
+  panelsOf,
+  place as placeAll,
+  regroup,
+  rename,
+  resizeColumn as sizeColumn,
+  resizeSeam as moveSeam,
+  type Arrangement,
+  type DockLayout,
+  type Zone,
+} from "./grid";
 import { heldShellUrl, openElsewhere, openShellElsewhere, parseRoute, popOutWindow, soloUrl } from "./routes";
-import { poppedOf, restorePanel, without } from "./panes";
+import { poppedOf, without } from "./panes";
 import { loadSettings, saveSettings, SCREEN_SETTINGS, shellPlace, type Settings, type ShellPlace } from "./settings";
 import { PANEL_TERM_ROWS, adoptPoppedTerms, adoptTerms, loadFocusSize, loadTermTabs, needsPanelShell, nextStripTab, panelShellStart, reconcileTerms, rowsPx, termId, type FocusSize, type TermTab } from "./term";
 import { clearTask, frontForTab, frontForTask, keepFront, projectFront, withSolo, type BenchPane, type Front } from "./front";
@@ -80,8 +101,8 @@ import {
 
 /** drag limits for the two resizable panes, in px */
 export const SIDEBAR = { min: 180, max: 560, initial: 264 };
-/** a dock panel; the room the cards leave caps it before max does (`dockRoom`) */
-export const PANEL = { min: 240, max: 2400, initial: 440 };
+/** a dock column; the room the cards leave caps it before max does (`dockRoom`) */
+export const PANEL = { min: 240, max: 2400, initial: COLUMN_WIDTH };
 /** the dock when it is one tabbed panel, capped the same way */
 export const DOCK = { min: 240, max: 2400, initial: 440 };
 /** the solo view's centered panel; the window caps it before max does */
@@ -160,6 +181,7 @@ export const SCREEN_LAYOUT = [
   "panelWidths",
   "soloWidth",
   "dockWidth",
+  "dockLayout",
   "termHeight",
   "panelTermHeights",
   "focusSize",
@@ -171,11 +193,17 @@ const HISTORY_REFRESH = 10 * 60_000;
 
 interface Layout {
   sidebarWidth: number;
+  /** px width of a panel that closed while it was a column of its own,
+   *  read when it opens as a column again; before phase B every panel's
+   *  width, read once to build the first `dockLayout` */
   panelWidths: Record<string, number>;
   /** px width of the panel in the solo view, shared by every solo tab */
   soloWidth: number;
-  /** px width of the dock when it is tabbed, whichever tab shows */
+  /** px width of the tabbed dock from before phase B: read only for the
+   *  migration to `dockLayout`, never written */
   dockWidth: number;
+  /** the dock as columns of cells of tabs (grid.ts), kept per kind of screen */
+  dockLayout: DockLayout;
   /** whether the repo tree is showing at all */
   sidebarOpen: boolean;
   /** folded tree groups, as group-key strings */
@@ -235,6 +263,7 @@ function loadLayout(): Layout {
     panels: [],
     activePanel: null,
     popped: {},
+    dockLayout: { columns: [] },
     terms: [],
     activeTerm: null,
     hiddenTerms: [],
@@ -262,6 +291,7 @@ function loadLayout(): Layout {
       panels?: unknown;
       activePanel?: unknown;
       popped?: unknown;
+      dockLayout?: unknown;
       terms?: unknown;
       activeTerm?: unknown;
       hiddenTerms?: unknown;
@@ -294,6 +324,10 @@ function loadLayout(): Layout {
     const dw = saved.dockWidth;
     const th = saved.termHeight;
     const fh = saved.feedHeight;
+    const dockWidth = typeof dw === "number" && Number.isFinite(dw) ? clamp(dw, DOCK.min, DOCK.max) : DOCK.initial;
+    const activePanel = typeof saved.activePanel === "string" ? saved.activePanel : null;
+    const into: Arrangement = loadSettings().openIn === "tabs" ? "tabs" : "columns";
+    const dockLayout = loadDock(saved.dockLayout, strings(saved.panels), activePanel, panelWidths, dockWidth, into);
     return {
       sidebarWidth:
         typeof sw === "number" && Number.isFinite(sw)
@@ -304,10 +338,7 @@ function loadLayout(): Layout {
         typeof solo === "number" && Number.isFinite(solo)
           ? clamp(solo, SOLO.min, SOLO.max)
           : SOLO.initial,
-      dockWidth:
-        typeof dw === "number" && Number.isFinite(dw)
-          ? clamp(dw, DOCK.min, DOCK.max)
-          : DOCK.initial,
+      dockWidth,
       sidebarOpen: saved.sidebarOpen !== false,
       collapsed: strings(saved.collapsed),
       closedSections,
@@ -323,9 +354,12 @@ function loadLayout(): Layout {
         typeof fh === "number" && Number.isFinite(fh)
           ? clamp(fh, FEED.min, FEED.max)
           : FEED.initial,
-      panels: strings(saved.panels),
-      activePanel: typeof saved.activePanel === "string" ? saved.activePanel : null,
+      // the open set is the window's, the layout the screen's: a layout
+      // saved on another kind of screen is placed over this window's panels
+      panels: panelsOf(dockLayout),
+      activePanel,
       popped: poppedOf(saved.popped),
+      dockLayout,
       terms: loadTermTabs(saved.terms),
       activeTerm: typeof saved.activeTerm === "string" ? saved.activeTerm : null,
       hiddenTerms: strings(saved.hiddenTerms),
@@ -334,6 +368,25 @@ function loadLayout(): Layout {
   } catch {
     return fallback;
   }
+}
+
+/** The dock's layout from what was saved: the saved layout repaired, its
+ *  widths clamped, or, when there is none (a layout from before phase B),
+ *  one built from the old widths and the open target. Either way then
+ *  placed over `panels`, so it holds exactly the panels open here. */
+export function loadDock(
+  saved: unknown,
+  panels: readonly string[],
+  active: string | null,
+  widths: Record<string, number>,
+  dockWidth: number,
+  into: Arrangement,
+): DockLayout {
+  const fixed = normalizeLayout(saved);
+  const base = fixed
+    ? { columns: fixed.columns.map((c) => ({ ...c, width: clamp(c.width, PANEL.min, PANEL.max) })) }
+    : fromLegacy(panels, active, widths, dockWidth, into);
+  return placeAll(base, panels, active, into, (id) => widths[id] ?? PANEL.initial);
 }
 
 /** a record of strings to strings, anything else in it left out */
@@ -392,6 +445,7 @@ export const layoutOf = (s: CanopyState): Omit<Layout, "knownSections"> => ({
   panels: s.panels,
   activePanel: s.activePanel,
   popped: s.popped,
+  dockLayout: s.dockLayout,
   terms: savedTerms(s),
   activeTerm: s.activeTerm,
   hiddenTerms: s.hiddenTerms,
@@ -612,8 +666,13 @@ interface CanopyState {
   users: string[];
   /** active workspace tab; null = all */
   activeWs: string | null;
-  /** repo ids pinned open in the dock, left to right */
+  /** repo ids pinned open in the dock, in the layout's order: always
+   *  `panelsOf(dockLayout)`, columns left to right, cells top to bottom,
+   *  tabs in order */
   panels: string[];
+  /** the dock as columns of cells of tabs (grid.ts); every action that
+   *  changes the open set writes it and `panels` together */
+  dockLayout: DockLayout;
   /** the panel showing when the dock is tabbed (`openIn: "tabs"`); kept
    *  in every mode so switching the setting keeps the place */
   activePanel: string | null;
@@ -636,11 +695,14 @@ interface CanopyState {
   collapsed: string[];
   /** folded panel sections (changes, shell, history, claude…) by repo id */
   closedSections: ClosedSections;
-  /** repo id → px width of its dock panel; missing means PANEL.initial */
+  /** repo id → px width its column had when it closed while alone in it,
+   *  for a column it opens in later; missing means PANEL.initial. Before
+   *  phase B every panel's width, read once for the first layout */
   panelWidths: Record<string, number>;
   /** px width of the solo view's panel, dragged by its edge handles */
   soloWidth: number;
-  /** px width of the tabbed dock, dragged by its left edge */
+  /** px width of the tabbed dock from before phase B, read only for the
+   *  migration to `dockLayout` */
   dockWidth: number;
   /** per-browser preferences, persisted in localStorage */
   settings: Settings;
@@ -785,9 +847,20 @@ interface CanopyState {
    *  say so; rejects with the server's reason */
   openApp: (id: string, app: OpenerId) => Promise<void>;
   closePanel: (id: string) => void;
-  /** moves an open panel to index `to` of the dock (clamped); the panel
-   *  showing stays the one showing */
+  /** moves an open panel toward index `to` of `panels`: a panel alone in
+   *  its column moves the column, width and all; one among tabs or in a
+   *  stack moves inside its cell or its column. The panel showing stays
+   *  the one showing */
   movePanel: (id: string, to: number) => void;
+  /** a panel dropped on a cell: a tab of it, or a split toward an edge */
+  dropPanel: (id: string, cell: string, zone: Zone) => void;
+  /** a column's width, clamped to PANEL */
+  resizeColumn: (column: string, px: number) => void;
+  /** the boundary under cell `index` of a column, to `at` of its height */
+  resizeSeam: (column: string, index: number, at: number) => void;
+  /** the gear's "side by side" or "as tabs": the open target, and every
+   *  open panel put in that arrangement */
+  arrangeDock: (into: Arrangement) => void;
   /** opens the panel in a window of its own and, once that window is open,
    *  takes it out of the dock, keeping its slot */
   popOut: (id: string) => void;
@@ -1070,6 +1143,7 @@ function treeState(
   | "repos"
   | "conns"
   | "panels"
+  | "dockLayout"
   | "activePanel"
   | "popped"
   | "panelWidths"
@@ -1086,19 +1160,19 @@ function treeState(
   // none goes, so a scan that changes nothing does not count as a change.
   const kept = s.panels.filter((id) => !mine(id) || tree.repos.some((r) => r.id === id));
   const panels = kept.length === s.panels.length ? s.panels : kept;
+  const activePanel = s.activePanel !== null && panels.includes(s.activePanel) ? s.activePanel : (panels[0] ?? null);
   return {
     root: from === s.home ? tree.root : s.root,
     sources: sliceIn(reg, s.sources, from, tree.sources, (x) => x.id),
     repos: sliceIn(reg, s.repos, from, tree.repos, (r) => r.id),
     conns: withConn(s, from, { backend: tree.backend }),
     panels,
+    // the layout loses the same panels, and is the same object when none go
+    dockLayout: panels === s.panels ? s.dockLayout : placeAll(laidOut(s), panels, activePanel, arrangementOf(s), widthOf(s)),
     // a bench whose repo left the scan goes with its panel
     front: panels === s.panels ? s.front : keepFront(s.front, s.terms, panels),
     // the showing tab may be among the dropped; then its neighbour shows
-    activePanel:
-      s.activePanel !== null && panels.includes(s.activePanel)
-        ? s.activePanel
-        : (panels[0] ?? null),
+    activePanel,
     // a popped panel whose repo left the scan has nothing to come back to
     popped: pruneByRepo(s.popped, tree.repos, mine),
     panelWidths: pruneByRepo(s.panelWidths, tree.repos, mine),
@@ -1364,10 +1438,59 @@ function recall(s: Pick<CanopyState, "popped" | "recalled">, id: string): Pick<C
   return { popped: without(s.popped, id), recalled: s.recalled.includes(id) ? s.recalled : [...s.recalled, id] };
 }
 
+type DockState = Pick<CanopyState, "panels" | "dockLayout" | "activePanel" | "panelWidths" | "settings">;
+
+/** how a panel opened now joins the dock: a column of its own, or a tab */
+const arrangementOf = (s: Pick<CanopyState, "settings">): Arrangement => (s.settings.openIn === "tabs" ? "tabs" : "columns");
+
+/** a new column's width: the one its panel had when it last closed alone */
+const widthOf =
+  (s: Pick<CanopyState, "panelWidths">) =>
+  (id: string): number =>
+    s.panelWidths[id] ?? PANEL.initial;
+
+const sameList = (a: readonly string[], b: readonly string[]): boolean => a.length === b.length && a.every((x, i) => x === b[i]);
+
+/** The layout holding exactly `s.panels`, in their order: the layout itself
+ *  when it already does. Otherwise `panels` was set on its own (a load, a
+ *  backend's tree, a test), so the layout follows it: closed panels leave,
+ *  new ones join, and a list reordered by hand rebuilds the layout flat,
+ *  each column keeping its width. */
+function laidOut(s: DockState): DockLayout {
+  if (sameList(panelsOf(s.dockLayout), s.panels)) return s.dockLayout;
+  const into = arrangementOf(s);
+  const l = placeAll(s.dockLayout, s.panels, s.activePanel, into, widthOf(s));
+  if (sameList(panelsOf(l), s.panels)) return l;
+  const widths = { ...s.panelWidths };
+  for (const c of l.columns) {
+    const only = c.cells.length === 1 ? c.cells[0]?.panels : undefined;
+    if (only?.length === 1 && only[0] !== undefined) widths[only[0]] = c.width;
+  }
+  return fromLegacy(s.panels, s.activePanel, widths, l.columns[0]?.width ?? PANEL.initial, into);
+}
+
+/** `panels` for a layout: the same array when it reads the same, so an
+ *  action that moved nothing is no change to save */
+const panelsFor = (s: Pick<CanopyState, "panels">, l: DockLayout): string[] => {
+  const next = panelsOf(l);
+  return sameList(next, s.panels) ? s.panels : next;
+};
+
+/** the column `id` is alone in, if it is: one cell of one panel */
+function loneColumn(l: DockLayout, id: string) {
+  const col = columnOf(l, id);
+  return col && col.cells.length === 1 && col.cells[0]?.panels.length === 1 ? col : undefined;
+}
+
 /** `focusPanel`, and a panel docked here is out in no window of its own any
- *  more (`recall`). Every way into the dock by hand goes through this. */
-function dockPanel(s: Pick<CanopyState, "panels" | "popped" | "recalled">, id: string) {
-  return { ...focusPanel(s.panels, id), ...recall(s, id) };
+ *  more (`recall`). Every way into the dock by hand goes through this, so
+ *  it writes the layout too: a new panel becomes a column, or a tab of the
+ *  cell that was showing (the previous active, not the new one, which no
+ *  cell holds yet), and then shows. */
+function dockPanel(s: DockState & Pick<CanopyState, "popped" | "recalled">, id: string) {
+  const next = focusPanel(s.panels, id);
+  const dockLayout = activate(placeAll(laidOut(s), next.panels, s.activePanel, arrangementOf(s), widthOf(s)), id);
+  return { panels: panelsFor(s, dockLayout), activePanel: next.activePanel, dockLayout, ...recall(s, id) };
 }
 
 export const useStore = create<CanopyState>((set, get) => ({
@@ -1413,6 +1536,7 @@ export const useStore = create<CanopyState>((set, get) => ({
   users: [],
   activeWs: null,
   panels: layout.panels,
+  dockLayout: layout.dockLayout,
   activePanel: layout.activePanel,
   popped: layout.popped,
   recalled: [],
@@ -1539,7 +1663,11 @@ export const useStore = create<CanopyState>((set, get) => ({
       // not run for a shell reconcileTerms adopted, or every closed panel
       // with a shell in it would reopen on the very load meant to keep it
       // closed. A dockless window opens nothing: its folds are the grove's.
-      const { panels, closedSections, popped } = openSavedPanels(s.panels, s.closedSections, s.popped, dockless() ? [] : terms);
+      const opened = openSavedPanels(s.panels, s.closedSections, s.popped, dockless() ? [] : terms);
+      const { closedSections, popped } = opened;
+      const activePanel = s.activePanel ?? opened.panels[0] ?? null;
+      const dockLayout = placeAll(laidOut(s), opened.panels, activePanel, arrangementOf(s), widthOf(s));
+      const panels = panelsOf(dockLayout);
       const reg = registry();
       set({
         root: tree.root,
@@ -1565,8 +1693,9 @@ export const useStore = create<CanopyState>((set, get) => ({
         parkedTerms,
         activeTerm: strip.some((t) => t.id === saved.activeTerm) ? saved.activeTerm : (strip.at(-1)?.id ?? null),
         panels,
+        dockLayout,
         popped,
-        activePanel: s.activePanel ?? panels[0] ?? null,
+        activePanel,
         closedSections,
         loaded: true,
         loadError: null,
@@ -1709,7 +1838,11 @@ export const useStore = create<CanopyState>((set, get) => ({
         : reconcileTerms(s.parkedTerms.filter((x) => mine(x.id)), held, tree.repos, t.panels, new Set(hiddenTerms)).filter(
             (x) => !s.terms.some((have) => have.id === x.id),
           );
-      const { panels, closedSections, popped } = openSavedPanels(t.panels, t.closedSections, t.popped, dockless() ? [] : back);
+      const opened = openSavedPanels(t.panels, t.closedSections, t.popped, dockless() ? [] : back);
+      const { closedSections, popped } = opened;
+      const activePanel = t.activePanel ?? opened.panels[0] ?? null;
+      const dockLayout = placeAll(laidOut({ ...t, settings: s.settings }), opened.panels, activePanel, arrangementOf(s), widthOf(t));
+      const panels = panelsOf(dockLayout);
       const strip = back.filter((x) => x.place === "strip");
       const want = loadedTabs.activeTerm;
       return {
@@ -1726,8 +1859,9 @@ export const useStore = create<CanopyState>((set, get) => ({
         parkedTerms: s.parkedTerms.some((x) => mine(x.id)) ? s.parkedTerms.filter((x) => !mine(x.id)) : s.parkedTerms,
         activeTerm: want !== null && strip.some((x) => x.id === want) ? want : (s.activeTerm ?? strip.at(-1)?.id ?? null),
         panels,
+        dockLayout,
         popped,
-        activePanel: t.activePanel ?? panels[0] ?? null,
+        activePanel,
         closedSections,
       };
     });
@@ -1835,23 +1969,26 @@ export const useStore = create<CanopyState>((set, get) => ({
     }
     set((s) => {
       const card = cardOf(s, fromId);
-      // the sibling's panel may be open already; it keeps its place then
-      const panels = s.panels.includes(toId)
-        ? s.panels.filter((p) => p !== fromId)
-        : s.panels.map((p) => (p === fromId ? toId : p));
+      // the sibling's panel may be open already; it keeps its place then.
+      // Otherwise it takes the old one's place in the layout, cell, tab and
+      // column width alike (rename changes nothing when the sibling is open)
+      const open = s.panels.includes(toId);
+      const flat = open ? s.panels.filter((p) => p !== fromId) : s.panels.map((p) => (p === fromId ? toId : p));
       const activePanel = s.activePanel === fromId ? toId : s.activePanel;
+      const l = laidOut(s);
+      const dockLayout = placeAll(open ? l : rename(l, fromId, toId), flat, activePanel, arrangementOf(s), widthOf(s));
+      const panels = panelsFor(s, dockLayout);
       // like a close: the old panel's shell tabs go, the shells stay held
       const kept = s.terms.filter((t) => !(t.repoId === fromId && t.place === "panel"));
       const terms = dockless() ? kept : adoptTerms(kept, s.shells, s.repos, panels, skipped(s.hiddenTerms));
-      const width = s.panelWidths[fromId];
       return {
         panels,
+        dockLayout,
         activePanel,
         // the sibling docked here by hand is out in no window any more
         ...recall(s, toId),
         terms,
         front: keepFront(s.front, terms, panels),
-        ...(width !== undefined && s.panelWidths[toId] === undefined ? { panelWidths: { ...s.panelWidths, [toId]: width } } : {}),
         ...(card ? { checkoutPref: { ...s.checkoutPref, [card.key]: backendOf(toId) } } : {}),
       };
     });
@@ -1966,7 +2103,7 @@ export const useStore = create<CanopyState>((set, get) => ({
       return { ...next, terms: dockless() ? s.terms : adoptTerms(s.terms, s.shells, s.repos, next.panels, skipped(s.hiddenTerms)) };
     }),
   showPanel: (id) =>
-    set((s) => (s.panels.includes(id) ? { activePanel: id } : {})),
+    set((s) => (s.panels.includes(id) ? { activePanel: id, dockLayout: activate(laidOut(s), id) } : {})),
   openRepo: (id, mods) => {
     // a repo picked from the drawer is where the eye goes next
     if (get().drawerOpen) set({ drawerOpen: false });
@@ -1997,16 +2134,73 @@ export const useStore = create<CanopyState>((set, get) => ({
     // it back.
     const mine = (t: TermTab) => t.repoId === id && t.place === "panel";
     const terms = s.terms.filter((t) => !mine(t));
-    const panels = s.panels.filter((p) => p !== id);
+    const activePanel = nextActive(s.panels, id, s.activePanel);
+    const l = laidOut(s);
+    // a column of its own leaves its width behind for the panel's next
+    // column, a reopen or a pop-out coming back
+    const lone = loneColumn(l, id);
+    const closed = placeAll(l, s.panels.filter((p) => p !== id), activePanel, arrangementOf(s), widthOf(s));
+    const dockLayout = activePanel === null ? closed : activate(closed, activePanel);
+    const panels = panelsFor(s, dockLayout);
     set({
       panels,
+      dockLayout,
       ...recall(s, id),
-      activePanel: nextActive(s.panels, id, s.activePanel),
+      activePanel,
       terms,
       front: keepFront(s.front, terms, panels),
+      ...(lone && s.panelWidths[id] !== lone.width ? { panelWidths: { ...s.panelWidths, [id]: lone.width } } : {}),
     });
   },
-  movePanel: (id, to) => set((s) => ({ panels: moveIn(s.panels, id, to) })),
+  movePanel: (id, to) =>
+    set((s) => {
+      // `to` is an index into the flat list (the gear's and the keys' left
+      // and right); the panel there is where this one heads
+      const l = laidOut(s);
+      const from = s.panels.indexOf(id);
+      const own = cellOf(l, id);
+      const col = columnOf(l, id);
+      const target = s.panels[Math.max(0, Math.min(s.panels.length - 1, to))];
+      if (from === -1 || !own || !col || target === undefined || target === id) return {};
+      const toward = to < from ? 0 : Number.MAX_SAFE_INTEGER;
+      let dockLayout: DockLayout;
+      if (own.panels.includes(target)) {
+        // a tab among its cell's tabs; the tab showing stays the one showing
+        dockLayout = activate(moveWithin(l, id, own.id, own.panels.indexOf(target)), own.active);
+      } else if (loneColumn(l, id)) {
+        dockLayout = moveColumn(l, col.id, l.columns.findIndex((c) => c.id === columnOf(l, target)?.id));
+      } else if (col.cells.some((x) => x.panels.includes(target))) {
+        // a cell of a stack moves up or down its column
+        dockLayout = moveCell(l, own.id, col.cells.findIndex((x) => x.panels.includes(target)));
+      } else if (own.panels.length > 1) {
+        // out of a cell of tabs no further than its edge
+        dockLayout = activate(moveWithin(l, id, own.id, toward), own.active);
+      } else {
+        dockLayout = moveCell(l, own.id, toward);
+      }
+      return dockLayout === l ? {} : { dockLayout, panels: panelsFor(s, dockLayout) };
+    }),
+  dropPanel: (id, cell, zone) =>
+    set((s) => {
+      const l = laidOut(s);
+      // a column of its own dropped beside another keeps its width
+      const width = loneColumn(l, id)?.width ?? widthOf(s)(id);
+      const dockLayout = moveTo(l, id, { cell, zone }, width);
+      return dockLayout === l ? {} : { dockLayout, panels: panelsFor(s, dockLayout), activePanel: id };
+    }),
+  resizeColumn: (column, px) => set((s) => ({ dockLayout: sizeColumn(laidOut(s), column, px, PANEL.min, PANEL.max) })),
+  resizeSeam: (column, index, at) => set((s) => ({ dockLayout: moveSeam(laidOut(s), column, index, at) })),
+  arrangeDock: (into) => {
+    get().setSetting("openIn", into === "tabs" ? "tabs" : "dock");
+    set((s) => {
+      const l = laidOut(s);
+      // as tabs the one column takes the width of the one that was showing
+      const width = into === "tabs" ? (columnOf(l, s.activePanel ?? "")?.width ?? l.columns[0]?.width ?? PANEL.initial) : PANEL.initial;
+      const grouped = regroup(l, into, width);
+      const dockLayout = s.activePanel !== null ? activate(grouped, s.activePanel) : grouped;
+      return { dockLayout, panels: panelsFor(s, dockLayout) };
+    });
+  },
   popOut: (id) => {
     // the window first: a blocked popup leaves the panel where it was
     if (!get().panels.includes(id) || !popOutWindow(id)) return;
@@ -2020,10 +2214,23 @@ export const useStore = create<CanopyState>((set, get) => ({
       // for the next tree to prune. Before the first tree, no repos says
       // nothing yet.
       if (s.loaded && ownerOf(id) === registry().home && !s.repos.some((r) => r.id === id)) return {};
-      const panels = restorePanel(s.panels, id, slot);
+      // The slot is a hint: the panel lands beside the one that sat after
+      // it, a column to its left side by side or a tab before it in its
+      // cell. A split it was part of is not put back. Past the end, or
+      // with no slot left in this window's layout, it goes last.
+      const into = arrangementOf(s);
+      const rest = s.panels.filter((p) => p !== id);
+      const neighbour = s.panels.includes(id) ? undefined : rest[slot];
+      let l = placeAll(laidOut(s), [...rest, id], s.activePanel, into, widthOf(s));
+      const by = neighbour === undefined ? undefined : cellOf(l, neighbour);
+      if (neighbour !== undefined && by) {
+        l = into === "tabs" ? moveWithin(l, id, by.id, by.panels.indexOf(neighbour)) : moveTo(l, id, { cell: by.id, zone: "left" }, widthOf(s)(id));
+      }
+      const dockLayout = activate(l, id);
+      const panels = panelsFor(s, dockLayout);
       // its held shells come back as tabs, the way openPanel adopts them
       const terms = dockless() ? s.terms : adoptTerms(s.terms, s.shells, s.repos, panels, skipped(s.hiddenTerms));
-      return { popped: without(s.popped, id), panels, activePanel: id, terms };
+      return { popped: without(s.popped, id), panels, dockLayout, activePanel: id, terms };
     }),
   claimPanel: (id) => {
     const s = get();
@@ -2223,10 +2430,21 @@ export const useStore = create<CanopyState>((set, get) => ({
     })),
   toggleSection: (repoId, key) =>
     set((s) => ({ closedSections: toggleIn(s.closedSections, repoId, key) })),
+  // the width of the column a panel is in; the old width maps are not written
   setPanelWidth: (id, px) =>
-    set((s) => ({ panelWidths: { ...s.panelWidths, [id]: clamp(px, PANEL.min, PANEL.max) } })),
+    set((s) => {
+      const l = laidOut(s);
+      const col = columnOf(l, id);
+      return col ? { dockLayout: sizeColumn(l, col.id, px, PANEL.min, PANEL.max) } : {};
+    }),
   setSoloWidth: (px) => set({ soloWidth: clamp(px, SOLO.min, SOLO.max) }),
-  setDockWidth: (px) => set({ dockWidth: clamp(px, DOCK.min, DOCK.max) }),
+  // the tabbed dock's width is its column's, the one showing
+  setDockWidth: (px) =>
+    set((s) => {
+      const l = laidOut(s);
+      const col = columnOf(l, s.activePanel ?? "") ?? l.columns[0];
+      return col ? { dockLayout: sizeColumn(l, col.id, px, DOCK.min, DOCK.max) } : {};
+    }),
   setSetting: (key, value) =>
     set((s) => {
       const settings = { ...s.settings, [key]: value };
@@ -2992,6 +3210,7 @@ useStore.subscribe((s, prev) => {
   const patch = changed(layoutOf(s), layoutOf(prev));
   if (dockless()) {
     delete patch.panels;
+    delete patch.dockLayout;
     delete patch.activePanel;
     delete patch.popped;
     delete patch.terms;
@@ -3071,6 +3290,23 @@ useStore.subscribe((s, prev) => {
     };
     useStore.setState((t) => ({ terms: [...t.terms, tab], closedSections: unfoldIn(t.closedSections, id, "shell") }));
   }
+});
+
+// `panels` is always `panelsOf(dockLayout)`. Every action writes both; this
+// is the net for the rest. A layout that changed alone (another screen's,
+// read by the handler above) leads, and the open set takes its order once
+// it is placed over this window's panels. Panels set alone (a test, a
+// write from outside the actions) lead, and the layout follows them. It is
+// registered after every other subscription, the layout's save among
+// them, so the run of them that comes last, the nested one, sees the
+// reconciled pair.
+useStore.subscribe((s, prev) => {
+  if (s.panels === prev.panels && s.dockLayout === prev.dockLayout) return;
+  if (sameList(panelsOf(s.dockLayout), s.panels)) return;
+  const dockLayout =
+    s.panels === prev.panels ? placeAll(s.dockLayout, s.panels, s.activePanel, arrangementOf(s), widthOf(s)) : laidOut(s);
+  const panels = panelsOf(dockLayout);
+  useStore.setState(sameList(panels, s.panels) ? { dockLayout } : { dockLayout, panels });
 });
 
 /** The run a repo's card should talk about: a live one first, else the most

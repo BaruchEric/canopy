@@ -389,7 +389,7 @@ git commit -m "feat(dock): which edge a dropped tab splits toward"
   - Store: `dockLayout: DockLayout`, plus `dropPanel(id, cell, zone)`, `resizeColumn(column, px)` and `resizeSeam(column, index, at)`.
   - Invariant: `panels` equals `panelsOf(dockLayout)` after every action.
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 `grid.test.ts`:
 
@@ -426,12 +426,12 @@ test("panels always mirror the layout", () => {
 });
 ```
 
-- [ ] **Step 2: Run them and watch them fail**
+- [x] **Step 2: Run them and watch them fail**
 
 Run: `env -u TMUX SHELL=/bin/bash bun test ui/src/grid.test.ts ui/src/store.test.ts`
 Expected: FAIL.
 
-- [ ] **Step 3: Implement**
+- [x] **Step 3: Implement**
 
 - **`normalizeLayout`** keeps:
   - columns with string `id`s and finite widths (default 440);
@@ -450,12 +450,12 @@ Expected: FAIL.
 - **Old fields.** `panelWidths` and `dockWidth` stay readable for one release, for the migration, and are no longer written. Mark them in their comments as read only for the migration from before phase B.
 - **Dockless windows** strip `dockLayout` from their patch, as they strip `panels`.
 
-- [ ] **Step 4: Run the tests and watch them pass**
+- [x] **Step 4: Run the tests and watch them pass**
 
 Run: `env -u TMUX SHELL=/bin/bash bun test ui/src/`
 Expected: PASS, the old dock and store tests included. Old tests that assert `panelWidths` writes change to assert the column width in `dockLayout`; adjust them in this task.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add ui/src

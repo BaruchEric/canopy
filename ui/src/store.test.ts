@@ -16,6 +16,7 @@ import {
   isFavorite,
   isOnline,
   layoutOf,
+  loadDock,
   multi,
   panelTermHeightFor,
   pruneByRepo,
@@ -29,6 +30,7 @@ import {
   visibleRepos,
 } from "./store";
 import { applyQuery } from "./filters";
+import { cellOf, columnOf, panelsOf, type DockLayout } from "./grid";
 import { projectFront } from "./front";
 import { onBackendSignal } from "./api";
 import { setBase, setRegistry } from "./registry";
@@ -1682,5 +1684,219 @@ describe("the asks list read while events land", () => {
     release();
     await loading;
     expect(useStore.getState().asks["q1"]?.state).toBe("answered");
+  });
+});
+
+describe("the dock as columns of cells", () => {
+  const pristine = useStore.getState();
+  const realFetch = globalThis.fetch;
+  const g = globalThis as unknown as { window?: unknown };
+  const cols = (l: DockLayout) => l.columns.map((c) => c.cells.map((x) => x.panels));
+  /** the invariant: the flat open list is the layout read in order */
+  const mirrored = () => {
+    const s = useStore.getState();
+    expect(s.panels).toEqual(panelsOf(s.dockLayout));
+  };
+  const cell = (id: string) => cellOf(useStore.getState().dockLayout, id)?.id ?? "";
+  const column = (id: string) => columnOf(useStore.getState().dockLayout, id)?.id ?? "";
+  beforeEach(() => {
+    globalThis.fetch = (async () => new Response(JSON.stringify({ tasks: [], errors: [] }), { status: 200 })) as unknown as typeof fetch;
+  });
+  afterEach(() => {
+    globalThis.fetch = realFetch;
+    delete g.window;
+    useStore.setState(
+      {
+        repos: [],
+        panels: [],
+        dockLayout: { columns: [] },
+        activePanel: null,
+        terms: [],
+        shells: [],
+        popped: {},
+        recalled: [],
+        panelWidths: {},
+        settings: pristine.settings,
+        loaded: false,
+      },
+    );
+  });
+
+  test("panels always mirror the layout", () => {
+    const st = useStore.getState();
+    useStore.setState({ panels: [], dockLayout: { columns: [] } });
+    st.openPanel("a");
+    st.openPanel("b");
+    const c = cellOf(useStore.getState().dockLayout, "a")?.id ?? "";
+    useStore.getState().dropPanel("b", c, "below");
+    expect(useStore.getState().panels).toEqual(panelsOf(useStore.getState().dockLayout));
+    useStore.getState().closePanel("a");
+    expect(useStore.getState().panels).toEqual(["b"]);
+  });
+
+  test("panels set on their own bring the layout with them", () => {
+    useStore.setState({ panels: ["a", "b", "c"], activePanel: "b" });
+    expect(cols(useStore.getState().dockLayout)).toEqual([[["a"]], [["b"]], [["c"]]]);
+    // a reorder set straight on the list is the list's
+    useStore.setState({ panels: ["c", "a", "b"] });
+    mirrored();
+    expect(useStore.getState().panels).toEqual(["c", "a", "b"]);
+  });
+
+  test("the invariant holds through opens, a drop, pop-out and back, a checkout switch, a scan and a regroup", () => {
+    const st = () => useStore.getState();
+    g.window = { location: { href: "http://a.test/", search: "" }, open: () => ({ focus: () => {} }) };
+    useStore.setState({ repos: [repo("a"), repo("b"), repo("c"), repo("a2")] });
+    st().openPanel("a");
+    mirrored();
+    st().openPanel("b");
+    st().openPanel("c");
+    mirrored();
+    st().dropPanel("b", cell("a"), "below");
+    mirrored();
+    expect(cols(st().dockLayout)).toEqual([[["a"], ["b"]], [["c"]]]);
+    st().popOut("c");
+    mirrored();
+    expect(st().panels).toEqual(["a", "b"]);
+    expect(st().popped).toEqual({ c: 2 });
+    st().returnPanel("c");
+    mirrored();
+    expect(cols(st().dockLayout)).toEqual([[["a"], ["b"]], [["c"]]]);
+    // a panel popped out of a split comes back as a column beside its old neighbour
+    st().popOut("b");
+    mirrored();
+    st().returnPanel("b");
+    mirrored();
+    expect(cols(st().dockLayout)).toEqual([[["a"]], [["b"]], [["c"]]]);
+    st().dropPanel("b", cell("a"), "below");
+    st().switchCheckout("a", "a2");
+    mirrored();
+    expect(cols(st().dockLayout)).toEqual([[["a2"], ["b"]], [["c"]]]);
+    st().applyEvent({ type: "scan", result: scanOf("/a", [repo("b"), repo("c")]) });
+    mirrored();
+    expect(cols(st().dockLayout)).toEqual([[["b"]], [["c"]]]);
+    st().arrangeDock("tabs");
+    mirrored();
+    expect(cols(st().dockLayout)).toEqual([[["b", "c"]]]);
+    expect(st().settings.openIn).toBe("tabs");
+    st().openPanel("a2");
+    mirrored();
+    expect(cols(st().dockLayout)).toEqual([[["b", "c", "a2"]]]);
+    st().arrangeDock("columns");
+    mirrored();
+    expect(cols(st().dockLayout)).toEqual([[["b"]], [["c"]], [["a2"]]]);
+    expect(st().settings.openIn).toBe("dock");
+  });
+
+  test("in tabs a new panel joins the cell that was showing, not the last one", () => {
+    useStore.setState({ panels: ["a", "b"], activePanel: "a" });
+    useStore.getState().dropPanel("b", cell("a"), "below");
+    useStore.getState().showPanel("a");
+    useStore.setState({ settings: { ...useStore.getState().settings, openIn: "tabs" } });
+    useStore.getState().openPanel("c");
+    mirrored();
+    expect(cols(useStore.getState().dockLayout)).toEqual([[["a", "c"], ["b"]]]);
+    expect(useStore.getState().activePanel).toBe("c");
+    expect(cellOf(useStore.getState().dockLayout, "c")?.active).toBe("c");
+  });
+
+  test("a hand-docked panel stays docked on its pop-out's hello, with a split open", () => {
+    useStore.setState({ panels: ["x", "y"], activePanel: "x", popped: { app: 1 }, recalled: [] });
+    useStore.getState().dropPanel("y", cell("x"), "below");
+    useStore.getState().openPanel("app");
+    expect(useStore.getState().recalled).toEqual(["app"]);
+    useStore.getState().heardHello("app");
+    mirrored();
+    expect(useStore.getState().panels).toEqual(["x", "y", "app"]);
+    expect(cols(useStore.getState().dockLayout)).toEqual([[["x"], ["y"]], [["app"]]]);
+    expect(useStore.getState().popped).toEqual({});
+  });
+
+  test("moving a lone column keeps its width; a tab or a stacked cell moves inside its own place", () => {
+    useStore.setState({ panels: ["a", "b", "c"], activePanel: "b" });
+    useStore.getState().resizeColumn(column("c"), 600);
+    useStore.getState().movePanel("c", 0);
+    mirrored();
+    expect(useStore.getState().panels).toEqual(["c", "a", "b"]);
+    expect(useStore.getState().dockLayout.columns.map((c) => c.width)).toEqual([600, 440, 440]);
+    // a stacked cell moves up its column
+    useStore.getState().dropPanel("b", cell("a"), "below");
+    useStore.getState().movePanel("b", 1);
+    mirrored();
+    expect(cols(useStore.getState().dockLayout)).toEqual([[["c"]], [["b"], ["a"]]]);
+    // tabs reorder inside their cell, and the showing tab stays the one showing
+    useStore.getState().arrangeDock("tabs");
+    useStore.getState().showPanel("b");
+    useStore.getState().movePanel("a", 0);
+    mirrored();
+    expect(useStore.getState().panels).toEqual(["a", "c", "b"]);
+    expect(useStore.getState().activePanel).toBe("b");
+    expect(cellOf(useStore.getState().dockLayout, "b")?.active).toBe("b");
+  });
+
+  test("a lone column's width outlives a close and a pop-out", () => {
+    useStore.setState({ repos: [repo("app")], panels: ["x", "app", "y"], activePanel: "app" });
+    useStore.getState().setPanelWidth("app", 610);
+    expect(columnOf(useStore.getState().dockLayout, "app")?.width).toBe(610);
+    useStore.getState().claimPanel("app");
+    expect(useStore.getState().panelWidths.app).toBe(610);
+    useStore.getState().returnPanel("app");
+    mirrored();
+    expect(useStore.getState().panels).toEqual(["x", "app", "y"]);
+    expect(columnOf(useStore.getState().dockLayout, "app")?.width).toBe(610);
+    useStore.getState().closePanel("app");
+    useStore.getState().openPanel("app");
+    expect(columnOf(useStore.getState().dockLayout, "app")?.width).toBe(610);
+  });
+
+  test("a scan that drops nothing keeps the very same layout", () => {
+    useStore.setState({ repos: [repo("a"), repo("b")], panels: ["a", "b"], activePanel: "a" });
+    const before = useStore.getState().dockLayout;
+    useStore.getState().applyEvent({ type: "scan", result: scanOf("/a", [repo("a"), repo("b")]) });
+    expect(useStore.getState().dockLayout).toBe(before);
+  });
+
+  test("a checkout switch keeps the panel's place in a split, and a sibling already open keeps its own", () => {
+    useStore.setState({ panels: ["a", "b", "c"], activePanel: "b" });
+    useStore.getState().dropPanel("b", cell("a"), "below");
+    useStore.getState().switchCheckout("b", "b2");
+    mirrored();
+    expect(cols(useStore.getState().dockLayout)).toEqual([[["a"], ["b2"]], [["c"]]]);
+    expect(useStore.getState().activePanel).toBe("b2");
+    useStore.getState().switchCheckout("a", "c");
+    mirrored();
+    expect(cols(useStore.getState().dockLayout)).toEqual([[["b2"]], [["c"]]]);
+  });
+
+  test("a resize writes the layout, clamped, and the old width maps are left alone", () => {
+    useStore.setState({ panels: ["a"], activePanel: "a" });
+    useStore.getState().resizeColumn(column("a"), 99999);
+    expect(columnOf(useStore.getState().dockLayout, "a")?.width).toBe(2400);
+    useStore.getState().setDockWidth(500);
+    expect(columnOf(useStore.getState().dockLayout, "a")?.width).toBe(500);
+    expect(useStore.getState().panelWidths).toEqual({});
+  });
+
+  test("a seam drag moves the boundary in the layout", () => {
+    useStore.setState({ panels: ["a", "b"], activePanel: "a" });
+    useStore.getState().dropPanel("b", cell("a"), "below");
+    useStore.getState().resizeSeam(column("a"), 0, 0.7);
+    expect(useStore.getState().dockLayout.columns[0]?.cells.map((x) => x.share)).toEqual([0.7, 0.3]);
+  });
+
+  test("the saved layout is repaired, falls back to the old widths, and matches this window's panels", () => {
+    expect(loadDock("bad", ["a", "b"], "b", { a: 500 }, 600, "columns").columns.map((c) => c.width)).toEqual([500, 440]);
+    expect(loadDock(undefined, ["a", "b"], "b", {}, 600, "tabs").columns.map((c) => c.width)).toEqual([600]);
+    const saved = {
+      columns: [{ id: "c1", width: 99999, cells: [{ id: "c2", panels: ["b"], active: "b", share: 1 }, { id: "c3", panels: ["gone", "a"], active: "a", share: 1 }] }],
+    };
+    const l = loadDock(saved, ["a", "b", "c"], "a", { c: 300 }, 600, "columns");
+    expect(cols(l)).toEqual([[["b"], ["a"]], [["c"]]]);
+    expect(l.columns.map((c) => c.width)).toEqual([2400, 300]);
+  });
+
+  test("the layout is saved with the rest", () => {
+    const s = useStore.getState();
+    expect(layoutOf(s).dockLayout).toBe(s.dockLayout);
   });
 });

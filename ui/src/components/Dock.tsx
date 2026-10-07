@@ -37,6 +37,7 @@ import { devState } from "../guided";
 import { BENCH_ONE, BenchBar, BenchSeams, type BenchPane } from "./Bench";
 import { PHONE, useMedia } from "../media";
 import { dropIndex, stableOrder } from "../dock";
+import { columnOf } from "../grid";
 import { PAN_SLOP, overflowsX, snapTo, wheelTake } from "../carousel";
 import { backendOf, homeName, isHome } from "../registry";
 import { signinUrl } from "../backends";
@@ -195,6 +196,9 @@ function FileRow({
     </li>
   );
 }
+
+/** the title on the gear's two dock arrangements: each regroups the dock */
+const ARRANGE_TITLE = "puts every open panel in this arrangement";
 
 const VIEWS: readonly { value: FileView; label: string }[] = [
   { value: "list", label: "every file in one list" },
@@ -1027,6 +1031,7 @@ function PanelGear({
   const level = useStore((s) => s.settings.level);
   const panels = useStore((s) => s.panels);
   const movePanel = useStore((s) => s.movePanel);
+  const arrangeDock = useStore((s) => s.arrangeDock);
   const popOut = useStore((s) => s.popOut);
   const carousel = useStore((s) => s.settings.dockCarousel);
   const at = panels.indexOf(repo.id);
@@ -1060,8 +1065,8 @@ function PanelGear({
     : [
         ...modeEntries(mode, setMode, "window"),
         ...(canFull ? [full] : []),
-        { type: "item", label: "panels side by side", on: openIn === "dock", run: () => setSetting("openIn", "dock") },
-        { type: "item", label: "panels as tabs", on: openIn === "tabs", run: () => setSetting("openIn", "tabs") },
+        { type: "item", label: "panels side by side", on: openIn === "dock", run: () => arrangeDock("columns"), title: ARRANGE_TITLE },
+        { type: "item", label: "panels as tabs", on: openIn === "tabs", run: () => arrangeDock("tabs"), title: ARRANGE_TITLE },
         ...moves,
         { type: "item", label: "open in a new tab", run: () => openElsewhere(repo.id, "tab") },
         ...moreWindows,
@@ -2077,11 +2082,13 @@ function useCarousel(ref: RefObject<HTMLDivElement | null>, on: boolean) {
  */
 export function Dock() {
   const panels = useStore((s) => s.panels);
-  const panelWidths = useStore((s) => s.panelWidths);
+  const layout = useStore((s) => s.dockLayout);
   const setPanelWidth = useStore((s) => s.setPanelWidth);
   const tabbed = useStore((s) => s.settings.openIn === "tabs");
   const active = useStore((s) => s.activePanel);
-  const dockWidth = useStore((s) => s.dockWidth);
+  // the widths are the layout's columns: a panel's own column, and as tabs
+  // the column of the one showing
+  const dockWidth = columnOf(layout, active ?? "")?.width ?? layout.columns[0]?.width ?? DOCK.initial;
   const setDockWidth = useStore((s) => s.setDockWidth);
   const carousel = useStore((s) => s.settings.dockCarousel);
   const setSetting = useStore((s) => s.setSetting);
@@ -2129,7 +2136,7 @@ export function Dock() {
         if (tabbed) {
           return [<RepoPanel key={id} id={id} width={dockWidth} hidden={id !== showing} movable={movable} />];
         }
-        const width = panelWidths[id] ?? PANEL.initial;
+        const width = columnOf(layout, id)?.width ?? PANEL.initial;
         // each handle sits just before its panel in CSS order, as in the DOM
         const at = panels.indexOf(id);
         return [
