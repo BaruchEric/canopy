@@ -233,7 +233,7 @@ export interface GridPlan {
 export function gridOf(l: DockLayout): GridPlan;
 ```
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 ```ts
 import { gridOf } from "./grid";
@@ -279,12 +279,12 @@ describe("the grid", () => {
 });
 ```
 
-- [ ] **Step 2: Run them and watch them fail**
+- [x] **Step 2: Run them and watch them fail**
 
 Run: `env -u TMUX SHELL=/bin/bash bun test ui/src/grid.test.ts`
 Expected: FAIL.
 
-- [ ] **Step 3: Implement `gridOf`:**
+- [x] **Step 3: Implement `gridOf`:**
 
 1. Gather every column's boundaries as cumulative shares, including 0 and 1. Sort them and merge any two closer than 0.001.
 2. Row tracks are `Math.round((b[i+1] - b[i]) * 1000) + "fr"`.
@@ -294,12 +294,12 @@ Expected: FAIL.
 6. Strips appear only for cells with more than one panel. A cell with one panel shows no strip, so it looks like today's side-by-side panel.
 7. Row seams sit in the body column at the lower cell's area. CSS puts them at the top edge, `align-self: start` with a −3px margin.
 
-- [ ] **Step 4: Run the tests and watch them pass**
+- [x] **Step 4: Run the tests and watch them pass**
 
 Run: `env -u TMUX SHELL=/bin/bash bun test ui/src/grid.test.ts`
 Expected: PASS.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add ui/src/grid.ts ui/src/grid.test.ts

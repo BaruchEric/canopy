@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { activate, cellOf, moveTo, moveWithin, panelsOf, place, regroup, rename, resizeColumn, resizeSeam } from "./grid";
+import { activate, cellOf, gridOf, moveTo, moveWithin, panelsOf, place, regroup, rename, resizeColumn, resizeSeam } from "./grid";
 import type { DockLayout } from "./grid";
 
 const W = 440;
@@ -119,5 +119,61 @@ describe("regroup, seams and the active tab", () => {
     expect(panelsOf(r)).toEqual(["q/y:2", "b"]);
     expect(cellOf(r, "q/y:2")?.active).toBe("q/y:2");
     expect(rename(l, "nope", "z")).toEqual(l);
+  });
+});
+
+describe("the grid", () => {
+  test("two side-by-side panels: one row, a seam before each column", () => {
+    const l = place(empty, ["a", "b"], "a", "columns", 440);
+    const g = gridOf(l);
+    expect(g.columns).toBe("6px 440px 6px 440px");
+    expect(g.rows).toBe("1000fr");
+    expect(g.panels["a"]).toEqual({ area: "1 / 2 / 2 / 3", shown: true, strip: false, cell: cellOf(l, "a")?.id ?? "" });
+    expect(g.panels["b"]?.area).toBe("1 / 4 / 2 / 5");
+    expect(g.colSeams.map((s) => s.area)).toEqual(["1 / 1 / 2 / 2", "1 / 3 / 2 / 4"]);
+  });
+  test("a split column and a whole one share row lines", () => {
+    let l = place(empty, ["a", "b", "c"], "a", "columns", 440);
+    l = moveTo(l, "c", { cell: cellOf(l, "a")?.id ?? "", zone: "below" }, 440);
+    const g = gridOf(l);
+    expect(g.rows).toBe("500fr 500fr");
+    expect(g.panels["a"]?.area).toBe("1 / 2 / 2 / 3");
+    expect(g.panels["c"]?.area).toBe("2 / 2 / 3 / 3");
+    expect(g.panels["b"]?.area).toBe("1 / 4 / 3 / 5");
+    expect(g.rowSeams).toEqual([{ column: l.columns[0]?.id ?? "", index: 0, area: "2 / 2 / 3 / 3" }]);
+  });
+  test("thirds against halves line up without slivers", () => {
+    let l = place(empty, ["a", "b", "c", "d", "e"], "a", "columns", 300);
+    const first = cellOf(l, "a")?.id ?? "";
+    l = moveTo(l, "b", { cell: first, zone: "below" }, 300);
+    l = moveTo(l, "c", { cell: cellOf(l, "b")?.id ?? "", zone: "below" }, 300);
+    l = resizeSeam(l, l.columns[0]?.id ?? "", 0, 1 / 3);
+    l = resizeSeam(l, l.columns[0]?.id ?? "", 1, 2 / 3);
+    l = moveTo(l, "e", { cell: cellOf(l, "d")?.id ?? "", zone: "below" }, 300);
+    const g = gridOf(l);
+    expect(g.rows.split(" ").length).toBe(4);
+  });
+  test("a tabbed cell shows its strip and hides all but its active panel", () => {
+    const l = place(place(empty, ["a"], "a", "tabs", 440), ["a", "b"], "b", "tabs", 440);
+    const g = gridOf(l);
+    expect(g.panels["a"]).toMatchObject({ shown: false, strip: true });
+    expect(g.panels["b"]).toMatchObject({ shown: true, strip: true });
+    expect(g.strips).toEqual([{ cell: l.columns[0]?.cells[0]?.id ?? "", area: "1 / 2 / 2 / 3", panels: ["a", "b"], active: "b" }]);
+  });
+});
+
+describe("resizing rejects bad input", () => {
+  const l = place(empty, ["a", "b"], "a", "columns", 440);
+  const col = l.columns[0]?.id ?? "";
+  test("a non-finite seam or width changes nothing", () => {
+    expect(resizeColumn(l, col, Number.NaN, 200, 800)).toBe(l);
+    expect(resizeColumn(l, col, Number.POSITIVE_INFINITY, 200, 800)).toBe(l);
+    const split = moveTo(l, "b", { cell: cellOf(l, "a")?.id ?? "", zone: "below" }, 440);
+    const c = split.columns[0]?.id ?? "";
+    expect(resizeSeam(split, c, 0, Number.NaN)).toBe(split);
+    expect(resizeSeam(split, c, 0, Number.POSITIVE_INFINITY)).toBe(split);
+  });
+  test("resizing an unknown column returns the layout itself", () => {
+    expect(resizeColumn(l, "nope", 500, 200, 800)).toBe(l);
   });
 });

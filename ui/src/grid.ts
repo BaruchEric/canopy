@@ -175,6 +175,7 @@ export function regroup(l: DockLayout, into: Arrangement, width: number): DockLa
 }
 
 export function resizeColumn(l: DockLayout, column: string, px: number, min: number, max: number): DockLayout {
+  if (!Number.isFinite(px) || !l.columns.some((c) => c.id === column)) return l;
   const width = Math.max(min, Math.min(max, px));
   return { columns: l.columns.map((c) => (c.id === column ? { ...c, width } : c)) };
 }
@@ -186,7 +187,7 @@ export function resizeSeam(l: DockLayout, column: string, index: number, at: num
   const col = l.columns.find((c) => c.id === column);
   const a = col?.cells[index];
   const b = col?.cells[index + 1];
-  if (!col || !a || !b) return l;
+  if (!col || !a || !b || !Number.isFinite(at)) return l;
   const above = col.cells.slice(0, index).reduce((s, x) => s + x.share, 0);
   const pair = a.share + b.share;
   if (pair < 2 * MIN_SHARE) return l;
@@ -210,4 +211,71 @@ export function rename(l: DockLayout, from: string, to: string): DockLayout {
       cells: c.cells.map((x) => (x.panels.includes(from) ? { ...x, panels: x.panels.map(sw), active: sw(x.active) } : x)),
     })),
   };
+}
+
+export interface GridPlan {
+  /** grid-template-columns: a 6px seam then the column, per column */
+  columns: string;
+  /** grid-template-rows: the union of every column's cell boundaries, in fr */
+  rows: string;
+  /** each open panel's grid-area, its cell id, whether it is its cell's active one, and whether its cell shows a strip */
+  panels: Record<string, { area: string; cell: string; shown: boolean; strip: boolean }>;
+  strips: { cell: string; area: string; panels: string[]; active: string }[];
+  colSeams: { column: string; area: string }[];
+  rowSeams: { column: string; index: number; area: string }[];
+}
+
+/** Boundaries closer than this are one line, so thirds against halves leave no sliver. */
+const MERGE = 0.001;
+
+export function gridOf(l: DockLayout): GridPlan {
+  const raw = [0, 1];
+  for (const col of l.columns) {
+    let sum = 0;
+    for (const x of col.cells) {
+      sum += x.share;
+      raw.push(Math.max(0, Math.min(1, sum)));
+    }
+  }
+  raw.sort((a, b) => a - b);
+  const bounds: number[] = [];
+  for (const b of raw) {
+    const last = bounds.at(-1);
+    if (last === undefined || b - last >= MERGE) bounds.push(b);
+  }
+  // the nearest boundary's 1-based grid line
+  const line = (v: number): number => {
+    let best = 0;
+    bounds.forEach((b, i) => {
+      if (Math.abs(b - v) < Math.abs((bounds[best] ?? 0) - v)) best = i;
+    });
+    return best + 1;
+  };
+  const rows = bounds.slice(1).map((b, i) => `${Math.round((b - (bounds[i] ?? 0)) * 1000)}fr`);
+  const plan: GridPlan = {
+    columns: l.columns.map((c) => `6px ${c.width}px`).join(" "),
+    rows: rows.join(" "),
+    panels: {},
+    strips: [],
+    colSeams: [],
+    rowSeams: [],
+  };
+  l.columns.forEach((col, i) => {
+    const seamCol = 2 * i + 1;
+    const bodyCol = 2 * i + 2;
+    const end = line(1);
+    plan.colSeams.push({ column: col.id, area: `1 / ${seamCol} / ${end} / ${bodyCol}` });
+    let top = 0;
+    col.cells.forEach((x, j) => {
+      const start = line(top);
+      top += x.share;
+      const stop = j === col.cells.length - 1 ? end : line(top);
+      const area = `${start} / ${bodyCol} / ${stop} / ${bodyCol + 1}`;
+      const strip = x.panels.length > 1;
+      for (const p of x.panels) plan.panels[p] = { area, cell: x.id, shown: p === x.active, strip };
+      if (strip) plan.strips.push({ cell: x.id, area, panels: [...x.panels], active: x.active });
+      if (j > 0) plan.rowSeams.push({ column: col.id, index: j - 1, area });
+    });
+  });
+  return plan;
 }
