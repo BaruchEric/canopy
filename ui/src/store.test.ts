@@ -17,6 +17,7 @@ import {
   isOnline,
   layoutOf,
   loadDock,
+  loadLayout,
   multi,
   panelTermHeightFor,
   pruneByRepo,
@@ -2073,6 +2074,50 @@ describe("the dock as columns of cells", () => {
       expect(saved.dockLayout).toBeUndefined();
       expect(saved.panels).toBeUndefined();
       expect(Object.values(saved.screens ?? {}).some((x) => x.dockLayout !== undefined)).toBe(false);
+    } finally {
+      delete l.localStorage;
+    }
+  });
+
+  test("a screen class arranged before phase B builds its own layout from its own slot", () => {
+    const l = globalThis as unknown as { localStorage?: unknown };
+    const kept = new Map<string, string>();
+    l.localStorage = {
+      getItem: (k: string) => kept.get(k) ?? null,
+      setItem: (k: string, v: string) => void kept.set(k, v),
+      removeItem: (k: string) => void kept.delete(k),
+    };
+    const at = (width: number, height: number) => {
+      g.window = { screen: { width, height }, location: { href: "http://a.test/", search: "" } };
+    };
+    // the desktop wrote the first layout after the upgrade, flat and into
+    // its slot; the laptop's slot is still the one it had before B, tabs
+    const desktop: DockLayout = {
+      columns: [
+        { id: "c1", width: 500, cells: [{ id: "c2", panels: ["a"], active: "a", share: 1 }] },
+        { id: "c3", width: 600, cells: [{ id: "c4", panels: ["b"], active: "b", share: 1 }] },
+      ],
+    };
+    kept.set(
+      "canopy.layout",
+      JSON.stringify({
+        panels: ["a", "b"],
+        activePanel: "b",
+        dockLayout: desktop,
+        screens: { laptop: { dockWidth: 700, sidebarWidth: 300 }, desktop: { dockLayout: desktop, panelWidths: { a: 500 } } },
+      }),
+    );
+    kept.set("canopy.settings", JSON.stringify({ openIn: "dock", screens: { laptop: { openIn: "tabs" }, desktop: { openIn: "dock" } } }));
+    try {
+      at(1440, 900);
+      const laptop = loadLayout().dockLayout;
+      expect(cols(laptop)).toEqual([[["a", "b"]]]);
+      expect(laptop.columns[0]?.width).toBe(700);
+      at(2560, 1440);
+      expect(loadLayout().dockLayout).toEqual(desktop);
+      // a class never visited has no slot, and inherits the nearest
+      at(1100, 800);
+      expect(loadLayout().dockLayout).toEqual(desktop);
     } finally {
       delete l.localStorage;
     }

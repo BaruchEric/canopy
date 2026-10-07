@@ -51,7 +51,7 @@ import { flatAgent, hasRouting, NO_ROUTES } from "./agents";
 import { cleanKey, keyTestOf, readAnswerKey, writeAnswerKey, type KeyTest } from "./answerKey";
 import { listedTask } from "../../src/core/tasks";
 import { startsDev } from "./tasks";
-import { putScreen, slotsNow, withScreen, writesFlat } from "./screens";
+import { putScreen, screenNow, slotsNow, withScreen, writesFlat } from "./screens";
 import {
   DEFAULT_LAUNCH,
   effectivePrimary,
@@ -244,7 +244,7 @@ interface Layout {
 const strings = (v: unknown): string[] =>
   Array.isArray(v) ? v.filter((k): k is string => typeof k === "string") : [];
 
-function loadLayout(): Layout {
+export function loadLayout(): Layout {
   const fallback: Layout = {
     sidebarWidth: SIDEBAR.initial,
     panelWidths: {},
@@ -326,7 +326,8 @@ function loadLayout(): Layout {
     const dockWidth = typeof dw === "number" && Number.isFinite(dw) ? clamp(dw, DOCK.min, DOCK.max) : DOCK.initial;
     const activePanel = typeof saved.activePanel === "string" ? saved.activePanel : null;
     const into: Arrangement = loadSettings().openIn === "tabs" ? "tabs" : "columns";
-    const dockLayout = loadDock(saved.dockLayout, strings(saved.panels), activePanel, panelWidths, dockWidth, into);
+    const ownSaved = legacySlot(stored as Record<string, unknown>, slotsNow(), screenNow()?.cls ?? null) ? undefined : saved.dockLayout;
+    const dockLayout = loadDock(ownSaved, strings(saved.panels), activePanel, panelWidths, dockWidth, into);
     return {
       sidebarWidth:
         typeof sw === "number" && Number.isFinite(sw)
@@ -367,6 +368,24 @@ function loadLayout(): Layout {
   } catch {
     return fallback;
   }
+}
+
+/** Whether this screen class kept a slot of its own from before phase B:
+ *  the slot holds sizes but no `dockLayout`, and no slot in the window's
+ *  chain has one either, so the only layout to read is the flat copy some
+ *  other class wrote after the upgrade. Such a class builds its first
+ *  layout from its own slot (`fromLegacy`) instead. A class never visited
+ *  has no slot and still inherits the nearest one's arrangement. */
+function legacySlot(stored: Record<string, unknown>, slots: readonly string[], cls: string | null): boolean {
+  const record = (v: unknown): v is Record<string, unknown> => !!v && typeof v === "object" && !Array.isArray(v);
+  const screens = stored.screens;
+  const slot = (key: string): Record<string, unknown> | undefined => {
+    const v = record(screens) ? screens[key] : undefined;
+    return record(v) ? v : undefined;
+  };
+  if (slots.some((k) => slot(k)?.dockLayout !== undefined)) return false;
+  const own = cls !== null ? slot(cls) : undefined;
+  return own !== undefined && own.dockLayout === undefined && SCREEN_LAYOUT.some((k) => k in own);
 }
 
 /** The dock's layout from what was saved: the saved layout repaired, its
