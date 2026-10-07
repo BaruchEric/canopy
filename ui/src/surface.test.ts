@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import {
   SECTION_KEYS,
+  escapeLeaves,
   captureName,
   flipMode,
   moveSection,
@@ -178,4 +179,26 @@ describe("shell text size by spot", () => {
 
 test("a saved order from before tasks gets them after changes", () => {
   expect(sectionOrder(["changes", "search", "history", "peers", "preview", "launch", "claude"])).toEqual([...SECTION_KEYS]);
+});
+
+describe("Escape leaving a surface", () => {
+  /** a stand-in target inside whatever `inside` matches */
+  const at = (...inside: string[]) => ({
+    closest: (sel: string) => (sel.split(",").some((part) => inside.some((m) => part.trim() === m)) ? {} : null),
+  });
+  test("a shell, a menu or a sheet keeps its own Escape", () => {
+    expect(escapeLeaves(at(".term-screen"), false)).toBe(false);
+    expect(escapeLeaves(at(".menu"), false)).toBe(false);
+    expect(escapeLeaves(at(".sheet"), false)).toBe(false);
+    expect(escapeLeaves(at(), false)).toBe(true);
+    expect(escapeLeaves(null, false)).toBe(true);
+  });
+  test("a text field keeps it only while Escape is the page's in full screen", () => {
+    expect(escapeLeaves(at("textarea"), false)).toBe(true);
+    expect(escapeLeaves(at("textarea"), true)).toBe(false);
+    expect(escapeLeaves(at("input"), true)).toBe(false);
+    expect(escapeLeaves(at('[contenteditable]:not([contenteditable="false"])'), true)).toBe(false);
+    expect(escapeLeaves(at(".xterm"), true)).toBe(false);
+    expect(escapeLeaves(at("button"), true)).toBe(true);
+  });
 });

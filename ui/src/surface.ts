@@ -224,3 +224,18 @@ export function copiedWord(out: CopyOut): string {
   const said = `copied ${n} line${n === 1 ? "" : "s"}`;
   return typeof out === "string" ? said : `${said} · ${out.note}`;
 }
+
+/** what keeps its own Escape: a shell, an open menu, a sheet */
+const OWN_ESCAPE = ".term-screen, .xterm, .menu, .sheet";
+/** a text field, which keeps Escape too while the page holds it in full
+ *  screen (there a press in the commit box must not end full screen) */
+const TEXT_ESCAPE = 'input, textarea, select, [contenteditable]:not([contenteditable="false"])';
+
+/** Whether an Escape at `target` steps a surface back to normal. `typing`
+ *  adds text fields to what keeps it: a panel in full screen with Escape
+ *  locked (`lockEscape`), where a single Escape anywhere else leaves. */
+export function escapeLeaves(target: { closest(sel: string): unknown } | null, typing: boolean): boolean {
+  if (!target) return true;
+  if (target.closest(OWN_ESCAPE)) return false;
+  return !(typing && target.closest(TEXT_ESCAPE));
+}

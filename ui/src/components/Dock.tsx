@@ -74,7 +74,7 @@ import {
 } from "./Surface";
 import { SECTION_WORD, moveSection, toggleHidden, type SectionKey, type SurfaceMode } from "../surface";
 import { openElsewhere, soloUrl } from "../routes";
-import { enterFull, fullWord, leaveFull, useFullscreenExit } from "../fullscreen";
+import { enterFull, fullWord, leaveFull, lockEscape, unlockKeys, useFullscreenExit } from "../fullscreen";
 import { copyText } from "../share";
 import {
   OPENER_IDS,
@@ -1427,19 +1427,28 @@ export function RepoPanel({
   const benchRail = useStore((s) => s.settings.benchRail);
   const benchDock = useStore((s) => s.settings.benchDock);
   const benchSplit = useStore((s) => s.settings.benchSplit);
-  // Escape steps back one level: a part filling the bench gives it back
-  // first, the bench goes the next time
-  useLeaveOnEscape(mode, (m) => {
-    if (bench && m === "normal" && benchPart !== null) soloBench(id, null);
-    else setMode(m);
-  });
   // true full screen: the browser's, over the whole page, with the panel
-  // in its fill-the-window mode. Leaving by any road ends it.
+  // in its fill-the-window mode. Leaving by any road ends it. Where the
+  // browser can, Escape is locked to the page while it lasts, so a shell
+  // gets its Escape (an agent's interrupt) and a held Escape leaves.
   const [screen, setScreen] = useState(false);
+  const [locked, setLocked] = useState(false);
+  // Escape steps back one level: a part filling the bench gives it back
+  // first, the bench goes the next time. With Escape locked, a press in a
+  // text field is the field's, as one in a shell always is.
+  useLeaveOnEscape(
+    mode,
+    (m) => {
+      if (bench && m === "normal" && benchPart !== null) soloBench(id, null);
+      else setMode(m);
+    },
+    locked,
+  );
   const toggleScreen = () => {
     if (screen || (!document.fullscreenEnabled && mode === "full")) {
       leaveFull(document);
       setScreen(false);
+      setLocked(false);
       setMode("normal");
       return;
     }
@@ -1451,6 +1460,13 @@ export function RepoPanel({
         return;
       }
       setScreen(went);
+      if (!went) return;
+      void lockEscape().then((ok) => {
+        if (!ok) return;
+        // full screen ended (or the panel closed) while the lock was asked
+        if (!alive.current || !document.fullscreenElement) unlockKeys();
+        else setLocked(true);
+      });
     });
   };
   // a closed panel takes the browser's full screen with it
@@ -1467,6 +1483,10 @@ export function RepoPanel({
     };
   }, []);
   useFullscreenExit(screen, () => {
+    // a held Escape or F11 ended it: the lock goes too, or it would be
+    // armed again on the next full screen
+    unlockKeys();
+    setLocked(false);
     setScreen(false);
     // a pick of another mode that raced the browser's exit stays
     if (modeNow.current === "full") setMode("normal");
@@ -1475,8 +1495,12 @@ export function RepoPanel({
     if (screen && mode !== "full") {
       leaveFull(document);
       setScreen(false);
+      setLocked(false);
+      // a tab hidden by another one showing (a pop-out returning) does not
+      // come back filling the window without full screen
+      if (hidden) setPlaced("normal");
     }
-  }, [screen, mode]);
+  }, [screen, mode, hidden]);
   const { zoom: panelZoom } = useZoom("panel");
   // the bench's panes sit outside the column's scroll, where a zoom on it
   // would scale their size and place too

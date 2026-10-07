@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { enterFull, fullWord, leaveFull } from "./fullscreen";
+import { enterFull, fullWord, leaveFull, lockEscape, unlockKeys } from "./fullscreen";
 
 describe("full screen", () => {
   test("the word says what the browser can do", () => {
@@ -33,5 +33,35 @@ describe("leaving full screen", () => {
   });
   test("a refused exit does not throw", () => {
     leaveFull({ fullscreenElement: {} as Element, exitFullscreen: () => Promise.reject(new Error("no")) });
+  });
+});
+
+describe("holding Escape in full screen", () => {
+  test("locks Escape where the browser can, and says whether it did", async () => {
+    const asked: (string[] | undefined)[] = [];
+    expect(await lockEscape({ keyboard: { lock: async (keys) => void asked.push(keys), unlock: () => {} } })).toBe(true);
+    expect(asked).toEqual([["Escape"]]);
+  });
+  test("without keyboard.lock nothing changes", async () => {
+    expect(await lockEscape({})).toBe(false);
+    expect(await lockEscape({ keyboard: {} })).toBe(false);
+    expect(await lockEscape(undefined)).toBe(false);
+  });
+  test("a refused lock resolves false instead of throwing", async () => {
+    expect(await lockEscape({ keyboard: { lock: () => Promise.reject(new Error("not full screen")) } })).toBe(false);
+  });
+  test("unlocks where it can", () => {
+    let unlocks = 0;
+    unlockKeys({ keyboard: { unlock: () => void unlocks++ } });
+    unlockKeys({});
+    unlockKeys(undefined);
+    expect(unlocks).toBe(1);
+  });
+  test("leaving full screen lets go of the keys, even when the browser already left", () => {
+    let unlocks = 0;
+    const nav = { keyboard: { unlock: () => void unlocks++ } };
+    leaveFull({ fullscreenElement: null, exitFullscreen: async () => {} }, nav);
+    leaveFull({ fullscreenElement: {} as Element, exitFullscreen: async () => {} }, nav);
+    expect(unlocks).toBe(2);
   });
 });

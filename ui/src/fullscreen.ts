@@ -22,7 +22,58 @@ export async function enterFull(doc: FsDoc): Promise<boolean> {
   }
 }
 
-export function leaveFull(doc: { fullscreenElement: Element | null; exitFullscreen(): Promise<void> }): void {
+/** The keyboard lock, where the browser has one (Chromium): while held in
+ *  full screen, Escape reaches the page and only a held Escape leaves. */
+interface KeyNav {
+  keyboard?: { lock?: (keys?: string[]) => Promise<void>; unlock?: () => void };
+}
+
+/** the page's own keyboard lock, read without trusting its shape: the DOM
+ *  types here do not know `navigator.keyboard` */
+function pageNav(): KeyNav | undefined {
+  if (typeof navigator === "undefined" || !("keyboard" in navigator)) return undefined;
+  const kb: unknown = navigator.keyboard;
+  if (!kb || typeof kb !== "object") return undefined;
+  const lock: unknown = "lock" in kb ? kb.lock : undefined;
+  const unlock: unknown = "unlock" in kb ? kb.unlock : undefined;
+  return {
+    keyboard: {
+      lock:
+        typeof lock === "function"
+          ? async (keys) => {
+              await Reflect.apply(lock, kb, [keys]);
+            }
+          : undefined,
+      unlock: typeof unlock === "function" ? () => void Reflect.apply(unlock, kb, []) : undefined,
+    },
+  };
+}
+
+/** Takes Escape from the browser, so a shell in a full-screen panel gets
+ *  it (an agent's interrupt) and a single press no longer leaves. True when
+ *  the browser locked it; false where it cannot or refused. */
+export async function lockEscape(nav: KeyNav | undefined = pageNav()): Promise<boolean> {
+  const kb = nav?.keyboard;
+  if (!kb?.lock) return false;
+  try {
+    await kb.lock(["Escape"]);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+export function unlockKeys(nav: KeyNav | undefined = pageNav()): void {
+  nav?.keyboard?.unlock?.();
+}
+
+/** Leaves the browser's full screen and lets go of the keys, which a
+ *  browser that already left may still hold for the next time. */
+export function leaveFull(
+  doc: { fullscreenElement: Element | null; exitFullscreen(): Promise<void> },
+  nav: KeyNav | undefined = pageNav(),
+): void {
+  unlockKeys(nav);
   if (doc.fullscreenElement) void doc.exitFullscreen().catch(() => {});
 }
 
