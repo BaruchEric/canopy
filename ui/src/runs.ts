@@ -5,7 +5,7 @@
 
 import { HARNESS } from "../../src/core/harness";
 import { TODO_TOOLS } from "../../src/core/todos";
-import type { Harness, RunResult, RunStep } from "../../src/core/types";
+import type { Harness, RunAnswer, RunResult, RunStep } from "../../src/core/types";
 
 /** The harness a run is on. A run from a backend older than harnesses was
  *  Claude's, the only agent a run could be then. */
@@ -91,3 +91,7 @@ export function planState(steps: readonly RunStep[]): PlanState | null {
   }
   return null;
 }
+
+/** A revise is a deny that carries a note. An empty one still says what it
+ *  is, since a bare deny reads as the plan turned down. */
+export const reviseAnswer = (note: string): RunAnswer => ({ kind: "deny", message: note.trim() || "Revise the plan." });

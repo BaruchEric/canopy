@@ -5,7 +5,7 @@ import { rememberOffer } from "../../../src/core/offer";
 import { ruleWords, type RuleOffer } from "../../../src/core/shellwords";
 import type { Harness, PermissionAsk, RememberAsk, RunAnswer, RunPrompt, RunQuestion } from "../../../src/core/types";
 import type { ScopeOffer } from "../inbox";
-import { agentWord } from "../runs";
+import { agentWord, reviseAnswer } from "../runs";
 import { INBOX_TEXT } from "../settings";
 import { useStore } from "../store";
 
@@ -287,8 +287,7 @@ export function RunPromptForm({
         auto={prompt.auto}
         who={agentWord(harness)}
         onApprove={(auto) => onAnswer({ kind: "approve", auto }, id)}
-        // a bare deny reads as a turn-down, so an empty revise still says what it is
-        onRevise={(note) => onAnswer({ kind: "deny", message: note.trim() || "Revise the plan." }, id)}
+        onRevise={(note) => onAnswer(reviseAnswer(note), id)}
         onDecline={() => onAnswer({ kind: "deny" }, id)}
       />
     );

@@ -405,10 +405,10 @@ export function RepoMenu({
                   ? { ok: false as const, why: "workflow running" }
                   : active
                     ? { ok: false as const, why: "wait for the current run" }
-                    : !has.includes(jobAgent.harness)
-                      ? { ok: false as const, why: `${HARNESS[jobAgent.harness].label} not installed` }
-                      : action === "propose" && jobAgent.harness !== "claude"
-                        ? { ok: false as const, why: "plan, then build needs Claude Code" }
+                    : action === "propose" && jobAgent.harness !== "claude"
+                      ? { ok: false as const, why: "plan, then build needs Claude Code" }
+                      : !has.includes(jobAgent.harness)
+                        ? { ok: false as const, why: `${HARNESS[jobAgent.harness].label} not installed` }
                         : checkWhen(repo, "any");
                 return (
                   <button

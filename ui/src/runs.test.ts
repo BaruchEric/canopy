@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { settleNote } from "../../src/core/driver";
 import type { RunStep } from "../../src/core/types";
-import { AGENT_NAME, agentWord, clock, harnessOf, hideTodoSteps, nestSteps, planState, resultLine, tokenCount, tokenTitle } from "./runs";
+import { AGENT_NAME, agentWord, clock, harnessOf, hideTodoSteps, nestSteps, planState, resultLine, reviseAnswer, tokenCount, tokenTitle } from "./runs";
 
 describe("a run's words", () => {
   test("its harness, and a run from before harnesses was Claude's", () => {
@@ -59,6 +59,12 @@ describe("plan, then build in the timeline", () => {
   test("a subagent's todo steps stay, since its list never reaches the checklist", () => {
     const steps = [s("a", { tool: { name: "Agent", title: "agent: read", status: "ok" } }), s("t", { parent: "a", tool: { name: "TaskCreate", title: "todo: a", status: "ok" } })];
     expect(hideTodoSteps(steps, true).map((x) => x.id)).toEqual(["a", "t"]);
+  });
+
+  test("a revise sends its note, and an empty one still reads as a revise", () => {
+    expect(reviseAnswer("  smaller steps \n")).toEqual({ kind: "deny", message: "smaller steps" });
+    expect(reviseAnswer("   ")).toEqual({ kind: "deny", message: "Revise the plan." });
+    expect(settleNote({ id: "p", kind: "proposal", plan: "x", auto: false }, reviseAnswer(""))).toBe("sent the plan back: Revise the plan.");
   });
 
   test("the plan card names how the latest plan was settled", () => {
