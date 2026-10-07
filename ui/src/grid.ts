@@ -271,9 +271,13 @@ export function regroup(l: DockLayout, into: Arrangement, width: number): DockLa
   };
 }
 
+/** A column's width to `px`, clamped to [min, max]. A width that stays
+ *  what it was (held at its limit, say) gives back `l` itself. */
 export function resizeColumn(l: DockLayout, column: string, px: number, min: number, max: number): DockLayout {
-  if (!Number.isFinite(px) || !l.columns.some((c) => c.id === column)) return l;
+  const col = l.columns.find((c) => c.id === column);
+  if (!Number.isFinite(px) || !col) return l;
   const width = Math.max(min, Math.min(max, px));
+  if (width === col.width) return l;
   return { columns: l.columns.map((c) => (c.id === column ? { ...c, width } : c)) };
 }
 

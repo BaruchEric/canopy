@@ -121,6 +121,13 @@ describe("regroup, seams and the active tab", () => {
     expect(resizeColumn(l, col, 10, 240, 2400).columns[0]?.width).toBe(240);
     expect(resizeColumn(l, col, 500, 240, 2400).columns[0]?.width).toBe(500);
   });
+  test("a column held at its width, or at its limit, is the same layout", () => {
+    const l = place(empty, ["a"], "a", "columns", W);
+    const col = l.columns[0]?.id ?? "";
+    expect(resizeColumn(l, col, W, 240, 2400)).toBe(l);
+    const wide = resizeColumn(l, col, 9000, 240, 2400);
+    expect(resizeColumn(wide, col, 9500, 240, 2400)).toBe(wide);
+  });
   test("activate shows the panel in its cell", () => {
     const l = place(place(empty, ["a"], "a", "tabs", W), ["a", "b"], "b", "tabs", W);
     expect(cellOf(activate(l, "a"), "a")?.active).toBe("a");

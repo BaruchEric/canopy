@@ -1963,6 +1963,7 @@ describe("the dock as columns of cells", () => {
     // a column a panel led keeps its width when that panel leads one again
     useStore.getState().dropPanel("a", cell("c"), "above");
     useStore.getState().resizeColumn(column("c"), 700);
+    useStore.getState().arrangeDock("tabs");
     useStore.getState().arrangeDock("columns");
     expect(cols(useStore.getState().dockLayout)).toEqual([[["b"]], [["a"]], [["c"]]]);
     expect(useStore.getState().dockLayout.columns.map((c) => c.width)).toEqual([500, 700, 440]);
@@ -1981,6 +1982,55 @@ describe("the dock as columns of cells", () => {
     off();
     expect(heard).toBe(0);
     expect(useStore.getState()).toBe(before);
+  });
+
+  test("a column resize that changes nothing is no change at all", () => {
+    useStore.setState({ panels: ["a", "b"], activePanel: "a" });
+    useStore.getState().resizeColumn(column("a"), 99999);
+    const before = useStore.getState();
+    let heard = 0;
+    const off = useStore.subscribe(() => {
+      heard++;
+    });
+    useStore.getState().resizeColumn(column("a"), 99999);
+    useStore.getState().resizeColumn(column("a"), 2400);
+    off();
+    expect(heard).toBe(0);
+    expect(useStore.getState()).toBe(before);
+  });
+
+  test("picking the arrangement already chosen keeps every split and tab", () => {
+    useStore.setState({ panels: ["a", "b", "c"], activePanel: "a" });
+    useStore.getState().dropPanel("b", cell("a"), "below");
+    useStore.getState().dropPanel("c", cell("a"), "center");
+    expect(useStore.getState().settings.openIn).toBe("dock");
+    const before = useStore.getState();
+    let heard = 0;
+    const off = useStore.subscribe(() => {
+      heard++;
+    });
+    useStore.getState().arrangeDock("columns");
+    off();
+    expect(heard).toBe(0);
+    expect(useStore.getState()).toBe(before);
+    // a change of arrangement still regroups
+    useStore.getState().arrangeDock("tabs");
+    expect(cols(useStore.getState().dockLayout)).toEqual([[["a", "c", "b"]]]);
+    const tabbed = useStore.getState();
+    useStore.getState().arrangeDock("tabs");
+    expect(useStore.getState()).toBe(tabbed);
+  });
+
+  test("a checkout switch onto a sibling already open keeps the old lone column's width", () => {
+    useStore.setState({ panels: ["a", "b", "c"], activePanel: "a" });
+    useStore.getState().resizeColumn(column("a"), 800);
+    useStore.getState().dropPanel("b", cell("c"), "center");
+    useStore.getState().switchCheckout("a", "b");
+    mirrored();
+    expect(cols(useStore.getState().dockLayout)).toEqual([[["c", "b"]]]);
+    expect(useStore.getState().panelWidths.a).toBe(800);
+    useStore.getState().openPanel("a");
+    expect(columnOf(useStore.getState().dockLayout, "a")?.width).toBe(800);
   });
 
   test("a row seam moved nowhere is no change at all", () => {

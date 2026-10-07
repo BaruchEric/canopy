@@ -1993,6 +1993,9 @@ export const useStore = create<CanopyState>((set, get) => ({
       const l = laidOut(s);
       const dockLayout = placeAll(open ? l : rename(l, fromId, toId), flat, activePanel, arrangementOf(s), widthOf(s));
       const panels = panelsFor(s, dockLayout);
+      // the old panel leaving a column of its own leaves its width behind,
+      // as a close does
+      const lone = open ? loneColumn(l, fromId) : undefined;
       // like a close: the old panel's shell tabs go, the shells stay held
       const kept = s.terms.filter((t) => !(t.repoId === fromId && t.place === "panel"));
       const terms = dockless() ? kept : adoptTerms(kept, s.shells, s.repos, panels, skipped(s.hiddenTerms));
@@ -2005,6 +2008,7 @@ export const useStore = create<CanopyState>((set, get) => ({
         terms,
         front: keepFront(s.front, terms, panels),
         ...(card ? { checkoutPref: { ...s.checkoutPref, [card.key]: backendOf(toId) } } : {}),
+        ...(lone && s.panelWidths[fromId] !== lone.width ? { panelWidths: { ...s.panelWidths, [fromId]: lone.width } } : {}),
       };
     });
   },
@@ -2193,7 +2197,12 @@ export const useStore = create<CanopyState>((set, get) => ({
       const dockLayout = moveTo(l, id, { cell, zone }, width);
       return dockLayout === l ? s : { dockLayout, panels: panelsFor(s, dockLayout), activePanel: id };
     }),
-  resizeColumn: (column, px) => set((s) => ({ dockLayout: sizeColumn(laidOut(s), column, px, PANEL.min, PANEL.max) })),
+  resizeColumn: (column, px) =>
+    set((s) => {
+      const l = laidOut(s);
+      const dockLayout = sizeColumn(l, column, px, PANEL.min, PANEL.max);
+      return dockLayout === l ? s : { dockLayout };
+    }),
   resizeSeam: (column, index, at) =>
     set((s) => {
       const l = laidOut(s);
@@ -2201,7 +2210,11 @@ export const useStore = create<CanopyState>((set, get) => ({
       return dockLayout === l ? s : { dockLayout };
     }),
   arrangeDock: (into) => {
-    get().setSetting("openIn", into === "tabs" ? "tabs" : "dock");
+    // only a change regroups: picking the arrangement already lit (the
+    // gear's entry, the Settings picker) keeps every split and tab
+    const openIn = into === "tabs" ? "tabs" : "dock";
+    if (get().settings.openIn === openIn) return;
+    get().setSetting("openIn", openIn);
     set((s) => {
       const l = laidOut(s);
       // Widths go by panel, not by place (regroup's own reuse is by
