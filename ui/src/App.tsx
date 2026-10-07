@@ -284,6 +284,9 @@ export function App() {
       const st = useStore.getState();
       // the drawer is the top layer while it is out
       if (st.drawerOpen && e.key === "Escape" && !document.querySelector('[role="dialog"], [role="menu"]')) {
+        // taken, so a surface under the drawer stays: this listener may run
+        // before the surface's, which then finds the drawer already gone
+        e.preventDefault();
         st.setDrawer(false);
         return;
       }

@@ -202,6 +202,12 @@ describe("Escape leaving a surface", () => {
     expect(escapeLeaves(at(".xterm"), true)).toBe(false);
     expect(escapeLeaves(at("button"), true)).toBe(true);
   });
+  test("a sheet, a popover or the drawer up over the surface takes the Escape, wherever the focus is", () => {
+    // a gear's button behind a run sheet: the sheet closes, the surface stays
+    expect(escapeLeaves(at("button"), false, true)).toBe(false);
+    expect(escapeLeaves(null, true, true)).toBe(false);
+    expect(escapeLeaves(at("button"), false, false)).toBe(true);
+  });
 });
 
 describe("what a menu's button keeps from what holds it", () => {

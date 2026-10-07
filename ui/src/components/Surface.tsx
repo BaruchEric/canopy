@@ -19,6 +19,7 @@ import {
   withTermFont,
   copiedWord,
   escapeLeaves,
+  LAYER_ABOVE,
   type CopyOut,
   type SectionKey,
   type ShellSpot,
@@ -149,8 +150,9 @@ export function FocusBackdrop({ onLeave }: { onLeave: () => void }) {
 
 /** Escape puts a surface back while it is over the panel, the window or in
  *  front, from anywhere but a terminal, where Escape belongs to the program
- *  in it. A menu or sheet that is up takes its Escape first. With `typing`
- *  (a panel holding Escape in full screen), a text field keeps it too. */
+ *  in it. A menu, a sheet, a popover or the drawer that is up takes its
+ *  Escape first, wherever the focus is. With `typing` (a panel holding
+ *  Escape in full screen), a text field keeps it too. */
 export function useLeaveOnEscape(mode: SurfaceMode, setMode: (m: SurfaceMode) => void, typing = false): void {
   const leave = useRef(setMode);
   leave.current = setMode;
@@ -158,7 +160,8 @@ export function useLeaveOnEscape(mode: SurfaceMode, setMode: (m: SurfaceMode) =>
     if (mode === "normal") return;
     const onKey = (e: globalThis.KeyboardEvent) => {
       if (e.key !== "Escape" || e.defaultPrevented) return;
-      if (!escapeLeaves(e.target instanceof Element ? e.target : null, typing)) return;
+      const above = document.querySelector(LAYER_ABOVE) !== null;
+      if (!escapeLeaves(e.target instanceof Element ? e.target : null, typing, above)) return;
       e.preventDefault();
       leave.current("normal");
     };

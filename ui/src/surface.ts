@@ -237,10 +237,18 @@ const OWN_ESCAPE = ".term-screen, .xterm, .menu, .sheet";
  *  screen (there a press in the commit box must not end full screen) */
 const TEXT_ESCAPE = 'input, textarea, select, [contenteditable]:not([contenteditable="false"])';
 
+/** what sits over every surface and takes Escape first while it is up: a
+ *  run sheet, a top-bar popover, the repo tree's drawer */
+export const LAYER_ABOVE = '[role="dialog"], .sidebar.drawer';
+
 /** Whether an Escape at `target` steps a surface back to normal. `typing`
  *  adds text fields to what keeps it: a panel in full screen with Escape
- *  locked (`lockEscape`), where a single Escape anywhere else leaves. */
-export function escapeLeaves(target: { closest(sel: string): unknown } | null, typing: boolean): boolean {
+ *  locked (`lockEscape`), where a single Escape anywhere else leaves.
+ *  `above` is a layer up over the surface (`LAYER_ABOVE`), which keeps it
+ *  wherever the focus is, a button behind a sheet included: one Escape
+ *  closes one layer. */
+export function escapeLeaves(target: { closest(sel: string): unknown } | null, typing: boolean, above = false): boolean {
+  if (above) return false;
   if (!target) return true;
   if (target.closest(OWN_ESCAPE)) return false;
   return !(typing && target.closest(TEXT_ESCAPE));

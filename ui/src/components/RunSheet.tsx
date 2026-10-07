@@ -77,7 +77,10 @@ export function RunSheet() {
   useEffect(() => {
     if (!sheet) return;
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") close();
+      if (e.key !== "Escape") return;
+      // taken, so a surface under the sheet stays when this runs first
+      e.preventDefault();
+      close();
     };
     window.addEventListener("keydown", onKey);
     // Focus lands inside, so the keyboard user is in the dialog, not behind it.
