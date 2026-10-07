@@ -431,7 +431,7 @@ git commit -m "feat(dock): a carousel that pans by drag, wheel and keys"
   - `leaveFull(doc)`.
   - `useFullscreenExit(on: boolean, onExit: () => void): void`.
 
-- [ ] **Step 1: Write the failing tests**, `ui/src/fullscreen.test.ts`:
+- [x] **Step 1: Write the failing tests**, `ui/src/fullscreen.test.ts`:
 
 ```ts
 import { describe, expect, test } from "bun:test";
@@ -457,12 +457,12 @@ describe("full screen", () => {
 
 `as never` is for a test double only. If lint refuses it, type the parameter as a minimal interface, `{ fullscreenEnabled: boolean; documentElement: { requestFullscreen(): Promise<void> } }`, and drop the cast.
 
-- [ ] **Step 2: Run them and watch them fail**
+- [x] **Step 2: Run them and watch them fail**
 
 Run: `env -u TMUX SHELL=/bin/bash bun test ui/src/fullscreen.test.ts`
 Expected: FAIL.
 
-- [ ] **Step 3: Implement** `ui/src/fullscreen.ts`:
+- [x] **Step 3: Implement** `ui/src/fullscreen.ts`:
 
 ```ts
 /** True full screen for a panel: the browser's Fullscreen API on the whole
@@ -513,7 +513,7 @@ In `RepoPanel`:
 - `Solo.tsx` gets the same entry for the solo window's panel.
 - `onExit` must be stable or listed honestly in the effect's dependencies. Wrap it in `useCallback` with `setMode` in its dependencies. Mind stale closures.
 
-- [ ] **Step 4: Gates, then the browser check**
+- [x] **Step 4: Gates, then the browser check**
 
 Run: `bun run typecheck && bun run lint && env -u TMUX SHELL=/bin/bash bun test && bun run build`
 Expected: all pass.
@@ -526,7 +526,7 @@ Then:
 
 Playwright's headless Chromium may refuse full screen. Run this check headed, or accept the "fill the window" fallback and check that path.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add ui/src

@@ -74,6 +74,7 @@ import {
 } from "./Surface";
 import { SECTION_WORD, moveSection, toggleHidden, type SectionKey, type SurfaceMode } from "../surface";
 import { openElsewhere, soloUrl } from "../routes";
+import { enterFull, fullWord, leaveFull, useFullscreenExit } from "../fullscreen";
 import { copyText } from "../share";
 import {
   OPENER_IDS,
@@ -1005,12 +1006,17 @@ function PanelGear({
   setMode,
   body,
   solo,
+  screen,
+  toggleScreen,
 }: {
   repo: Repo;
   mode: SurfaceMode;
   setMode: (m: SurfaceMode) => void;
   body: () => HTMLElement | null;
   solo: boolean;
+  /** the browser is full screen for this panel */
+  screen: boolean;
+  toggleScreen: () => void;
 }) {
   // the bench applies no zoom of its own: the line is always the one in place
   const { entry: zoom } = useZoom("panel");
@@ -1037,11 +1043,16 @@ function PanelGear({
           off: at >= panels.length - 1 ? "already last" : undefined,
         },
       ];
+  // where the browser cannot go full screen, "fill the window" already is
+  // the fallback in the dock's gear; the solo window's gear dropped it
+  const canFull = document.fullscreenEnabled;
+  const full: GearEntry = { type: "item", label: fullWord(canFull), on: screen || (!canFull && mode === "full"), run: toggleScreen };
   const layout: GearEntry[] = [
     ...(solo
-    ? modeEntries(mode, setMode, "window").slice(2)
+    ? [...modeEntries(mode, setMode, "window").slice(2), full]
     : [
         ...modeEntries(mode, setMode, "window"),
+        ...(canFull ? [full] : []),
         { type: "item", label: "panels side by side", on: openIn === "dock", run: () => setSetting("openIn", "dock") },
         { type: "item", label: "panels as tabs", on: openIn === "tabs", run: () => setSetting("openIn", "tabs") },
         ...moves,
@@ -1419,6 +1430,29 @@ export function RepoPanel({
     if (bench && m === "normal" && benchPart !== null) soloBench(id, null);
     else setMode(m);
   });
+  // true full screen: the browser's, over the whole page, with the panel
+  // in its fill-the-window mode. Leaving by any road ends it.
+  const [screen, setScreen] = useState(false);
+  const toggleScreen = () => {
+    if (screen || (!document.fullscreenEnabled && mode === "full")) {
+      leaveFull(document);
+      setScreen(false);
+      setMode("normal");
+      return;
+    }
+    setMode("full");
+    void enterFull(document).then(setScreen);
+  };
+  useFullscreenExit(screen, () => {
+    setScreen(false);
+    setMode("normal");
+  });
+  useEffect(() => {
+    if (screen && mode !== "full") {
+      leaveFull(document);
+      setScreen(false);
+    }
+  }, [screen, mode]);
   const { zoom: panelZoom } = useZoom("panel");
   // the bench's panes sit outside the column's scroll, where a zoom on it
   // would scale their size and place too
@@ -1535,7 +1569,7 @@ export function RepoPanel({
             ⧉
           </button>
         )}
-        <PanelGear repo={repo} mode={mode} setMode={setMode} body={() => bodyRef.current} solo={solo} />
+        <PanelGear repo={repo} mode={mode} setMode={setMode} body={() => bodyRef.current} solo={solo} screen={screen} toggleScreen={toggleScreen} />
         {!guided && <RepoMenu repo={repo} onError={showError} />}
         <button
           type="button"
