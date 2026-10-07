@@ -1895,6 +1895,17 @@ describe("the dock as columns of cells", () => {
     expect(l.columns.map((c) => c.width)).toEqual([2400, 300]);
   });
 
+  test("a layout that changes alone (another screen's) leads, placed over the open panels", () => {
+    useStore.setState({ panels: ["a", "b"], activePanel: "a" });
+    const other: DockLayout = {
+      columns: [{ id: "c1", width: 500, cells: [{ id: "c2", panels: ["b"], active: "b", share: 0.5 }, { id: "c3", panels: ["gone", "a"], active: "a", share: 0.5 }] }],
+    };
+    useStore.setState({ dockLayout: other });
+    mirrored();
+    expect(useStore.getState().panels).toEqual(["b", "a"]);
+    expect(cols(useStore.getState().dockLayout)).toEqual([[["b"], ["a"]]]);
+  });
+
   test("the layout is saved with the rest", () => {
     const s = useStore.getState();
     expect(layoutOf(s).dockLayout).toBe(s.dockLayout);
