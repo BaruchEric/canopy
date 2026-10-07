@@ -36,9 +36,23 @@ export function restorePanel(panels: readonly string[], id: string, slot: number
 export const unclaimed = (popped: Record<string, number>, claimed: ReadonlySet<string>): string[] =>
   Object.keys(popped).filter((id) => !claimed.has(id));
 
-/** the popped slots less `id`'s */
+/** the popped slots less `id`'s; the same object when it had none, so
+ *  docking a panel that was never out is no change to save */
 export const without = (popped: Record<string, number>, id: string): Record<string, number> =>
-  Object.fromEntries(Object.entries(popped).filter(([k]) => k !== id));
+  Object.hasOwn(popped, id) ? Object.fromEntries(Object.entries(popped).filter(([k]) => k !== id)) : popped;
+
+/** the popped slots a saved layout holds: a plain object of slots, each a
+ *  whole number from 0. Anything else (an array, whose indexes would read
+ *  as panels "0" and "1", or a slot that is not a finite number) is
+ *  dropped, since the load sweep would bring each key back as a panel. */
+export function poppedOf(v: unknown): Record<string, number> {
+  const out: Record<string, number> = {};
+  if (!v || typeof v !== "object" || Array.isArray(v)) return out;
+  for (const [id, slot] of Object.entries(v)) {
+    if (typeof slot === "number" && Number.isFinite(slot)) out[id] = Math.max(0, Math.floor(slot));
+  }
+  return out;
+}
 
 /** Says one thing on the channel from a window that does not stay to
  *  listen: a pop-out's "back to the dock". */

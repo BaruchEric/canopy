@@ -9,18 +9,35 @@ export const PAN_SLOP = 6;
  *  sideways swipe is the browser's already; over a head a vertical wheel
  *  pans; over content only shift+wheel does, and not where the content
  *  itself scrolls sideways (a wide diff). macOS hands a mouse's shift+wheel
- *  over as a sideways one, which is read as the vertical one it was. */
+ *  over as a sideways one, which is read as the vertical one it was. A ctrl
+ *  or cmd wheel, which is also how a trackpad pinch arrives, is the page's
+ *  zoom wherever it lands. */
 export function wheelPan(
-  e: { deltaX: number; deltaY: number; shiftKey: boolean },
+  e: { deltaX: number; deltaY: number; shiftKey: boolean; ctrlKey?: boolean; metaKey?: boolean },
   over: "head" | "content",
   contentScrollsX: boolean,
 ): number {
+  if (e.ctrlKey || e.metaKey) return 0;
   const dy = e.shiftKey && e.deltaY === 0 ? e.deltaX : e.deltaY;
   const dx = e.shiftKey && e.deltaY === 0 ? 0 : e.deltaX;
   if (Math.abs(dx) > Math.abs(dy)) return 0;
   if (over === "head") return dy;
   if (e.shiftKey && !contentScrollsX) return dy;
   return 0;
+}
+
+/** whether content scrolls sideways itself: it may (`overflow-x` auto or
+ *  scroll) and it overflows by more than the pixel a rounded width leaves */
+export function overflowsX(scrollWidth: number, clientWidth: number, overflowX: string): boolean {
+  return scrollWidth - clientWidth > 1 && /auto|scroll/.test(overflowX);
+}
+
+/** whether the row can still move `dx` px's way; a row resting within a
+ *  pixel of an end is at it */
+export function canPan(row: { scrollLeft: number; scrollWidth: number; clientWidth: number }, dx: number): boolean {
+  if (dx < 0) return row.scrollLeft >= 1;
+  if (dx > 0) return row.scrollWidth - row.clientWidth - row.scrollLeft >= 1;
+  return false;
 }
 
 /** the left edge of the next panel past `scrollLeft` in `dir`, or the

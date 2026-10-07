@@ -37,7 +37,7 @@ import { devState } from "../guided";
 import { BENCH_ONE, BenchBar, BenchSeams, type BenchPane } from "./Bench";
 import { PHONE, useMedia } from "../media";
 import { dropIndex, stableOrder } from "../dock";
-import { PAN_SLOP, snapTo, wheelPan } from "../carousel";
+import { PAN_SLOP, canPan, overflowsX, snapTo, wheelPan } from "../carousel";
 import { backendOf, homeName, isHome } from "../registry";
 import { signinUrl } from "../backends";
 import { IdLabel } from "./IdLabel";
@@ -1882,7 +1882,7 @@ const NOT_PAN = 'button, a, input, select, textarea, label, [role="button"], [dr
  *  itself (a wide diff); the dock always does, so it is left out */
 function scrollsX(el: Element, dock: HTMLElement): boolean {
   for (let at: Element | null = el; at && at !== dock; at = at.parentElement) {
-    if (at.scrollWidth > at.clientWidth && /auto|scroll/.test(getComputedStyle(at).overflowX)) return true;
+    if (overflowsX(at.scrollWidth, at.clientWidth, getComputedStyle(at).overflowX)) return true;
   }
   return false;
 }
@@ -1899,9 +1899,9 @@ function panelEdges(dock: HTMLElement): number[] {
 }
 
 /** a wheel's delta in px, whatever unit the browser counted it in */
-function wheelPx(e: WheelEvent, dock: HTMLElement): { deltaX: number; deltaY: number; shiftKey: boolean } {
+function wheelPx(e: WheelEvent, dock: HTMLElement): Parameters<typeof wheelPan>[0] {
   const unit = e.deltaMode === WheelEvent.DOM_DELTA_LINE ? 16 : e.deltaMode === WheelEvent.DOM_DELTA_PAGE ? dock.clientWidth : 1;
-  return { deltaX: e.deltaX * unit, deltaY: e.deltaY * unit, shiftKey: e.shiftKey };
+  return { deltaX: e.deltaX * unit, deltaY: e.deltaY * unit, shiftKey: e.shiftKey, ctrlKey: e.ctrlKey, metaKey: e.metaKey };
 }
 
 /**
@@ -1914,9 +1914,11 @@ function wheelPx(e: WheelEvent, dock: HTMLElement): { deltaX: number; deltaY: nu
  *   stay buttons: a press on any of them is theirs, never a pan. A touch
  *   is left alone, since the row already scrolls under a finger.
  * - A vertical wheel over a head pans; shift+wheel anywhere pans unless what
- *   is under the pointer scrolls sideways itself (`wheelPan`). The listener
- *   captures, so a terminal in mouse mode never sees a wheel the row took,
- *   and a wheel the row did not take is left to whatever is under it.
+ *   is under the pointer scrolls sideways itself (`wheelPan`), and a ctrl or
+ *   cmd wheel never does, since it is a zoom. The listener captures, so a
+ *   terminal in mouse mode never sees a wheel the row took, and a wheel the
+ *   row did not take, or could not (it is at that end), is left to whatever
+ *   is under it.
  * - Ctrl+Alt+Left/Right anywhere on the page goes to the previous or next
  *   panel's edge, captured before a focused terminal can take the keys.
  */
@@ -1929,7 +1931,7 @@ function useCarousel(ref: RefObject<HTMLDivElement | null>, on: boolean) {
       if (!(t instanceof Element)) return;
       const over = t.closest(".panel-head") ? "head" : "content";
       const dx = wheelPan(wheelPx(e, dock), over, over === "content" && scrollsX(t, dock));
-      if (dx === 0) return;
+      if (!canPan(dock, dx)) return;
       e.preventDefault();
       e.stopPropagation();
       // scrollBy, not scrollLeft: the browser reads it as a scroll with a

@@ -288,6 +288,29 @@ describe("popping a panel out and back", () => {
     expect(useStore.getState().terms).toEqual([]);
   });
 
+  test("a popped panel docked again here is no longer out, and a later bye leaves it be", () => {
+    useStore.setState({ repos: [app], panels: ["x", "y"], activePanel: "x", terms: [], shells: [held], hiddenTerms: [], popped: { app: 1 } });
+    useStore.getState().openPanel("app");
+    expect(useStore.getState().popped).toEqual({});
+    // closed in the dock, then its window goes: the panel stays closed
+    useStore.getState().closePanel("app");
+    useStore.getState().returnPanel("app");
+    expect(useStore.getState().panels).toEqual(["x", "y"]);
+    // any other way into the dock does the same (a shell, the bench)
+    useStore.setState({ popped: { app: 1 } });
+    useStore.getState().bringProject("app");
+    expect(useStore.getState().popped).toEqual({});
+  });
+
+  test("closing a panel forgets any slot it had", () => {
+    // a dock and a slot at once, as a layout from before this saved it
+    useStore.setState({ repos: [app], panels: ["x", "app"], activePanel: "app", terms: [], shells: [], hiddenTerms: [], popped: { app: 1, y: 0 } });
+    useStore.getState().closePanel("app");
+    expect(useStore.getState().popped).toEqual({ y: 0 });
+    useStore.getState().returnPanel("app");
+    expect(useStore.getState().panels).toEqual(["x"]);
+  });
+
   test("a window claiming a docked panel takes it out and keeps its slot", () => {
     useStore.setState({ repos: [app], panels: ["x", "app", "y"], activePanel: "app", terms: [panelTab], shells: [held], hiddenTerms: [], popped: {} });
     useStore.getState().claimPanel("app");

@@ -733,9 +733,9 @@ git commit -m "feat(dock): pop a panel out to its own window and back to its slo
 **Files:**
 - Modify: `docs/architecture.md`, sections "Layout and motion" and "ui/"
 
-- [ ] **Step 1: Run the clean-build gate.** Run `~/.claude/skills/verify-build/clean-rebuild.sh rebuild`, then `verify "dockCarousel"`. The served bundle must carry the new setting key.
+- [x] **Step 1: Run the clean-build gate.** Run `~/.claude/skills/verify-build/clean-rebuild.sh rebuild`, then `verify "dockCarousel"`. The served bundle must carry the new setting key.
 
-- [ ] **Step 2: One end-to-end browser pass** at 1440px:
+- [x] **Step 2: One end-to-end browser pass** at 1440px:
 1. Reorder three panels, one with a live preview.
 2. Turn the carousel on and pan it.
 3. Take one panel full screen and back.
@@ -743,7 +743,7 @@ git commit -m "feat(dock): pop a panel out to its own window and back to its slo
 
 Throughout, the preview's navigation entry stays the same and the shell keeps its scrollback. Then resize to 760px and 390px and check that nothing overflows sideways.
 
-- [ ] **Step 3: Write the notes.** Cover:
+- [x] **Step 3: Write the notes.** Cover:
   - The stable DOM order and the CSS order rule, why it exists, and that a reorder is never a DOM move.
   - The carousel setting, the wheel rules and the snap keys.
   - Full screen on `documentElement` with `surface-full`.
@@ -751,12 +751,12 @@ Throughout, the preview's navigation entry stays the same and the shell keeps it
   - `popped` in the layout, and that dockless windows strip it.
   - The 1.5 s `who` wait.
 
-- [ ] **Step 4: Gates**
+- [x] **Step 4: Gates**
 
 Run: `bun run typecheck && bun run lint && env -u TMUX SHELL=/bin/bash bun test && bun run build`
 Expected: all pass.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add docs/architecture.md

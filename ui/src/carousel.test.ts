@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { snapTo, wheelPan } from "./carousel";
+import { canPan, overflowsX, snapTo, wheelPan } from "./carousel";
 
 describe("carousel wheel", () => {
   test("over a head, a vertical wheel pans sideways", () => {
@@ -21,6 +21,34 @@ describe("carousel wheel", () => {
     expect(wheelPan({ deltaX: 40, deltaY: 0, shiftKey: true }, "content", false)).toBe(40);
     expect(wheelPan({ deltaX: 40, deltaY: 0, shiftKey: true }, "content", true)).toBe(0);
     expect(wheelPan({ deltaX: -40, deltaY: 0, shiftKey: true }, "head", false)).toBe(-40);
+  });
+  // a trackpad pinch arrives as a ctrl+wheel; both are the page's zoom
+  test("a ctrl or cmd wheel is a zoom, never a pan", () => {
+    expect(wheelPan({ deltaX: 0, deltaY: 40, shiftKey: false, ctrlKey: true }, "head", false)).toBe(0);
+    expect(wheelPan({ deltaX: 0, deltaY: 40, shiftKey: false, metaKey: true }, "head", false)).toBe(0);
+    expect(wheelPan({ deltaX: 0, deltaY: 40, shiftKey: true, ctrlKey: true }, "content", false)).toBe(0);
+  });
+});
+
+describe("carousel bounds", () => {
+  test("content scrolls sideways only past a pixel of overflow, and only where it may", () => {
+    expect(overflowsX(401, 400, "auto")).toBe(false);
+    expect(overflowsX(402, 400, "auto")).toBe(true);
+    expect(overflowsX(900, 400, "scroll")).toBe(true);
+    expect(overflowsX(900, 400, "hidden")).toBe(false);
+    expect(overflowsX(400, 400, "auto")).toBe(false);
+  });
+  const row = { scrollLeft: 0, scrollWidth: 2000, clientWidth: 1000 };
+  test("the row takes a wheel only where it can move that way", () => {
+    expect(canPan(row, 40)).toBe(true);
+    expect(canPan(row, -40)).toBe(false);
+    expect(canPan({ ...row, scrollLeft: 1000 }, 40)).toBe(false);
+    expect(canPan({ ...row, scrollLeft: 1000 }, -40)).toBe(true);
+    // a fractional rest at the far end is the end
+    expect(canPan({ ...row, scrollLeft: 999.5 }, 40)).toBe(false);
+    expect(canPan({ ...row, scrollLeft: 500 }, 40)).toBe(true);
+    expect(canPan({ ...row, scrollWidth: 1000 }, 40)).toBe(false);
+    expect(canPan(row, 0)).toBe(false);
   });
 });
 

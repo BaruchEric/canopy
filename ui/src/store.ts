@@ -8,7 +8,7 @@ import { cardChangedAt, cardFavorite, joinRepos, leadOf, type RepoCard } from ".
 import { changedAt } from "./grouping";
 import { focusPanel, movePanel as moveIn, nextActive } from "./dock";
 import { heldShellUrl, openElsewhere, openShellElsewhere, parseRoute, popOutWindow, soloUrl } from "./routes";
-import { restorePanel, without } from "./panes";
+import { poppedOf, restorePanel, without } from "./panes";
 import { loadSettings, saveSettings, SCREEN_SETTINGS, shellPlace, type Settings, type ShellPlace } from "./settings";
 import { PANEL_TERM_ROWS, adoptPoppedTerms, adoptTerms, loadFocusSize, loadTermTabs, needsPanelShell, nextStripTab, panelShellStart, reconcileTerms, rowsPx, termId, type FocusSize, type TermTab } from "./term";
 import { clearTask, frontForTab, frontForTask, keepFront, projectFront, withSolo, type BenchPane, type Front } from "./front";
@@ -261,7 +261,7 @@ function loadLayout(): Layout {
       feedHeight?: unknown;
       panels?: unknown;
       activePanel?: unknown;
-      popped?: Record<string, unknown>;
+      popped?: unknown;
       terms?: unknown;
       activeTerm?: unknown;
       hiddenTerms?: unknown;
@@ -325,7 +325,7 @@ function loadLayout(): Layout {
           : FEED.initial,
       panels: strings(saved.panels),
       activePanel: typeof saved.activePanel === "string" ? saved.activePanel : null,
-      popped: sizes(saved.popped, { min: 0, max: Number.MAX_SAFE_INTEGER }),
+      popped: poppedOf(saved.popped),
       terms: loadTermTabs(saved.terms),
       activeTerm: typeof saved.activeTerm === "string" ? saved.activeTerm : null,
       hiddenTerms: strings(saved.hiddenTerms),
@@ -1337,6 +1337,13 @@ function readTasks(get: () => CanopyState, set: (fn: (s: CanopyState) => Partial
     .catch(() => {});
 }
 
+/** `focusPanel`, and a panel docked here is out in no window of its own any
+ *  more: its popped slot goes, so a later bye or load sweep cannot pull it
+ *  back in after it is closed. Every way into the dock goes through this. */
+function dockPanel(s: Pick<CanopyState, "panels" | "popped">, id: string) {
+  return { ...focusPanel(s.panels, id), popped: without(s.popped, id) };
+}
+
 export const useStore = create<CanopyState>((set, get) => ({
   root: "",
   sources: [],
@@ -1481,8 +1488,10 @@ export const useStore = create<CanopyState>((set, get) => ({
       ]);
       // The shells come back only now, against what the server still holds:
       // a tab shown sooner would open its socket and start a shell of its
-      // own under the old name. A solo or shell window keeps none: what it
-      // saved is the grove's, and the grove is what shows them. Only home's
+      // own under the old name. A solo or shell window keeps none of the
+      // saved tabs: what it saved is the grove's, and the grove is what
+      // shows them. A pop-out (popped=1) takes up its own panel's held
+      // shells instead, so they travel with it (adoptHere). Only home's
       // saved tabs are judged here; another backend's wait, parked (and
       // still saved), until that backend answers.
       const saved = loadLayout();
@@ -1921,7 +1930,7 @@ export const useStore = create<CanopyState>((set, get) => ({
   },
   openPanel: (id) =>
     set((s) => {
-      const next = focusPanel(s.panels, id);
+      const next = dockPanel(s, id);
       // a panel shell another device opened here waits for its panel
       return { ...next, terms: dockless() ? s.terms : adoptTerms(s.terms, s.shells, s.repos, next.panels, skipped(s.hiddenTerms)) };
     }),
@@ -1952,12 +1961,15 @@ export const useStore = create<CanopyState>((set, get) => ({
     const s = get();
     // A panel's shells outlive it: closing only drops the tabs, and the
     // shells stay held on the backend, in the shells picker, until their
-    // own × or "end". Reopening the panel adopts them back as tabs.
+    // own × or "end". Reopening the panel adopts them back as tabs. A
+    // closed panel keeps no popped slot either, so no window's bye brings
+    // it back.
     const mine = (t: TermTab) => t.repoId === id && t.place === "panel";
     const terms = s.terms.filter((t) => !mine(t));
     const panels = s.panels.filter((p) => p !== id);
     set({
       panels,
+      popped: without(s.popped, id),
       activePanel: nextActive(s.panels, id, s.activePanel),
       terms,
       front: keepFront(s.front, terms, panels),
@@ -1970,10 +1982,11 @@ export const useStore = create<CanopyState>((set, get) => ({
     if (slot === -1) return;
     // the window first: a blocked popup leaves the panel where it was.
     // closePanel drops only the panel's shell tabs, so its shells run on
-    // and its folds stay.
+    // and its folds stay. The slot is set after it, since closing forgets
+    // a slot.
     if (!popOutWindow(id)) return;
-    set({ popped: { ...s.popped, [id]: slot } });
     get().closePanel(id);
+    set((now) => ({ popped: { ...now.popped, [id]: slot } }));
   },
   returnPanel: (id) =>
     set((s) => {
@@ -1988,8 +2001,8 @@ export const useStore = create<CanopyState>((set, get) => ({
     const s = get();
     const slot = s.panels.indexOf(id);
     if (slot === -1) return;
-    set({ popped: { ...s.popped, [id]: slot } });
     get().closePanel(id);
+    set((now) => ({ popped: { ...now.popped, [id]: slot } }));
   },
 
   applyEvent: (sent, from) => {
@@ -2148,7 +2161,8 @@ export const useStore = create<CanopyState>((set, get) => ({
       readPeers(get, set, b);
     } else if (ev.type === "terms") {
       // a shell opened on another device shows up here too; a dockless
-      // window (solo, shell) keeps no tabs of its own
+      // window (solo, shell) keeps no tabs of its own, but a pop-out
+      // (popped=1) keeps its own panel's (adoptHere)
       set((s) => {
         const shells = sliceIn(registry(), s.shells, b, ev.terms, (t) => t.id);
         const hiddenTerms = pruneHiddenOf(s.hiddenTerms, b, ev.terms);
@@ -2213,7 +2227,7 @@ export const useStore = create<CanopyState>((set, get) => ({
       terms: [...s.terms, tab],
       activeTerm: where === "strip" ? tab.id : s.activeTerm,
       ...(where === "panel"
-        ? { ...focusPanel(s.panels, repoId), closedSections: unfoldIn(s.closedSections, repoId, "shell") }
+        ? { ...dockPanel(s, repoId), closedSections: unfoldIn(s.closedSections, repoId, "shell") }
         : {}),
     });
   },
@@ -2237,7 +2251,7 @@ export const useStore = create<CanopyState>((set, get) => ({
         : [...now.terms, tab],
       activeTerm: rec.place === "strip" ? id : now.activeTerm,
       ...(rec.place === "panel"
-        ? { ...focusPanel(now.panels, repo.id), closedSections: unfoldIn(now.closedSections, repo.id, "shell") }
+        ? { ...dockPanel(now, repo.id), closedSections: unfoldIn(now.closedSections, repo.id, "shell") }
         : {}),
     }));
   },
@@ -2526,7 +2540,7 @@ export const useStore = create<CanopyState>((set, get) => ({
       hiddenTerms: s.hiddenTerms.filter((h) => h !== id),
       activeTerm: tab.place === "strip" ? id : s.activeTerm,
       ...(tab.place === "panel"
-        ? { ...focusPanel(s.panels, repo.id), closedSections: unfoldIn(s.closedSections, repo.id, "shell") }
+        ? { ...dockPanel(s, repo.id), closedSections: unfoldIn(s.closedSections, repo.id, "shell") }
         : {}),
     });
   },
@@ -2552,7 +2566,7 @@ export const useStore = create<CanopyState>((set, get) => ({
       terms: now.terms.some((t) => t.id === id) ? now.terms : [...now.terms, tab],
       activeTerm: place === "strip" ? id : now.activeTerm,
       ...(place === "panel"
-        ? { ...focusPanel(now.panels, repoId), closedSections: unfoldIn(now.closedSections, repoId, "shell") }
+        ? { ...dockPanel(now, repoId), closedSections: unfoldIn(now.closedSections, repoId, "shell") }
         : {}),
     }));
   },
@@ -2563,7 +2577,7 @@ export const useStore = create<CanopyState>((set, get) => ({
   setFocusSize: (size) => set({ focusSize: size }),
   setFront: (front) => set({ front }),
   bringProject: (repoId) =>
-    set((s) => (repoId === null ? { front: null } : { ...focusPanel(s.panels, repoId), front: projectFront(repoId) })),
+    set((s) => (repoId === null ? { front: null } : { ...dockPanel(s, repoId), front: projectFront(repoId) })),
   soloBench: (repoId, pane) =>
     set((s) => {
       const front = withSolo(s.front, repoId, pane);
@@ -2580,7 +2594,7 @@ export const useStore = create<CanopyState>((set, get) => ({
       front: frontForTab(s.front, tab),
       ...(tab.place === "strip"
         ? { activeTerm: id }
-        : { ...focusPanel(s.panels, tab.repoId), closedSections: unfoldIn(s.closedSections, tab.repoId, "shell") }),
+        : { ...dockPanel(s, tab.repoId), closedSections: unfoldIn(s.closedSections, tab.repoId, "shell") }),
     });
   },
   setPanelTermHeight: (repoId, px) =>
@@ -2666,16 +2680,16 @@ export const useStore = create<CanopyState>((set, get) => ({
   editTask: (repoId, name) => set({ sheet: { kind: "task", repoId, name } }),
   showTasks: (repoId) =>
     set((s) => ({
-      ...focusPanel(s.panels, repoId),
+      ...dockPanel(s, repoId),
       closedSections: unfoldIn(s.closedSections, repoId, "tasks"),
     })),
   showAgents: (repoId) =>
     set((s) => ({
-      ...focusPanel(s.panels, repoId),
+      ...dockPanel(s, repoId),
       closedSections: unfoldIn(s.closedSections, repoId, "agents"),
     })),
   bringTask: (repoId, task = null) =>
-    set((s) => ({ ...focusPanel(s.panels, repoId), front: frontForTask(s.front, repoId, task) })),
+    set((s) => ({ ...dockPanel(s, repoId), front: frontForTask(s.front, repoId, task) })),
   dropBenchTask: (repoId) =>
     set((s) => {
       const front = clearTask(s.front, repoId);
@@ -2701,7 +2715,7 @@ export const useStore = create<CanopyState>((set, get) => ({
     set({
       activeTerm: tab.place === "strip" ? tab.id : now.activeTerm,
       ...(tab.place === "panel"
-        ? { ...focusPanel(now.panels, repoId), closedSections: unfoldIn(now.closedSections, repoId, "shell") }
+        ? { ...dockPanel(now, repoId), closedSections: unfoldIn(now.closedSections, repoId, "shell") }
         : {}),
     });
   },
@@ -2711,7 +2725,7 @@ export const useStore = create<CanopyState>((set, get) => ({
   },
   showLaunch: (repoId) =>
     set((s) => ({
-      ...focusPanel(s.panels, repoId),
+      ...dockPanel(s, repoId),
       closedSections: unfoldIn(s.closedSections, repoId, "launch"),
     })),
   stopJob: async (jobId) => {
@@ -2745,7 +2759,7 @@ export const useStore = create<CanopyState>((set, get) => ({
     set((s) => ({
       sheet: null,
       pendingSearch: { repoId, q },
-      ...focusPanel(s.panels, repoId),
+      ...dockPanel(s, repoId),
       closedSections: unfoldIn(s.closedSections, repoId, "search"),
     })),
   takePendingSearch: () => set({ pendingSearch: null }),
