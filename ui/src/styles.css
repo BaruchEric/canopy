@@ -2457,6 +2457,28 @@ a.chan-text {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+/* a panel's name and glyph pick it up to move it; the rest of the head is
+   left for panning the dock. A dragged panel lands on the side of a tab or
+   head the line shows. */
+.panel-head > [draggable="true"] {
+  cursor: grab;
+}
+.panel-head > [draggable="true"]:active {
+  cursor: grabbing;
+}
+/* the head scrolls with its panel body, which would clip an outline drawn
+   outside it */
+.panel-head:focus-visible {
+  outline-offset: -2px;
+}
+.dock-tab[data-drop="before"],
+.panel-head[data-drop="before"] {
+  box-shadow: inset 2px 0 0 var(--sky);
+}
+.dock-tab[data-drop="after"],
+.panel-head[data-drop="after"] {
+  box-shadow: inset -2px 0 0 var(--sky);
+}
 .close {
   margin-left: auto;
 }

@@ -35,7 +35,8 @@ import { benchIs, benchSolo } from "../front";
 import { devTask } from "../tasks";
 import { devState } from "../guided";
 import { BENCH_ONE, BenchBar, BenchSeams, type BenchPane } from "./Bench";
-import { useMedia } from "../media";
+import { PHONE, useMedia } from "../media";
+import { dropIndex, stableOrder } from "../dock";
 import { backendOf, homeName, isHome } from "../registry";
 import { signinUrl } from "../backends";
 import { IdLabel } from "./IdLabel";
@@ -1017,6 +1018,9 @@ function PanelGear({
   const hidden = useStore((s) => s.settings.sectionsHidden);
   const setSetting = useStore((s) => s.setSetting);
   const level = useStore((s) => s.settings.level);
+  const panels = useStore((s) => s.panels);
+  const movePanel = useStore((s) => s.movePanel);
+  const at = panels.indexOf(repo.id);
   const layout: GearEntry[] = [
     ...(solo
     ? modeEntries(mode, setMode, "window").slice(2)
@@ -1024,6 +1028,13 @@ function PanelGear({
         ...modeEntries(mode, setMode, "window"),
         { type: "item", label: "panels side by side", on: openIn === "dock", run: () => setSetting("openIn", "dock") },
         { type: "item", label: "panels as tabs", on: openIn === "tabs", run: () => setSetting("openIn", "tabs") },
+        { type: "item", label: "move left", run: () => movePanel(repo.id, at - 1), off: at <= 0 ? "already first" : undefined },
+        {
+          type: "item",
+          label: "move right",
+          run: () => movePanel(repo.id, at + 1),
+          off: at >= panels.length - 1 ? "already last" : undefined,
+        },
         { type: "item", label: "open in a new tab", run: () => openElsewhere(repo.id, "tab") },
         { type: "item", label: "open in a new window", run: () => openElsewhere(repo.id, "window") },
       ] satisfies GearEntry[]),
@@ -1166,10 +1177,105 @@ function AwayWords({
   );
 }
 
+/** How a panel moves in the dock: by keys and the gear only on a phone, by
+ *  dragging too elsewhere. A panel in a window of its own has neither. */
+type PanelMove = "keys" | "drag";
+
+/** What a panel carries while it is dragged, from its head or its dock tab. */
+const PANEL_DRAG = "application/x-canopy-panel";
+
+/** Whether a drag over `e.currentTarget` sits on its right half. */
+const dropAfter = (e: DragEvent<HTMLElement>): boolean => {
+  const r = e.currentTarget.getBoundingClientRect();
+  return e.clientX > r.left + r.width / 2;
+};
+
+/** Props that pick panel `id` up: a dock tab, or the name and glyph on a
+ *  panel head. Only those two on a head, since the rest of the head is
+ *  left for panning the dock. */
+function panelDragSource(id: string) {
+  return {
+    draggable: true,
+    onDragStart: (e: DragEvent<HTMLElement>) => {
+      e.dataTransfer.setData(PANEL_DRAG, id);
+      e.dataTransfer.effectAllowed = "move";
+    },
+    // a drag let go outside any target, or cancelled, leaves its mark behind
+    onDragEnd: () => {
+      for (const el of document.querySelectorAll("[data-drop]")) el.removeAttribute("data-drop");
+    },
+  };
+}
+
+/** Props that take a dragged panel just before or after panel `id`: its
+ *  dock tab and its whole head, each a target for the other. */
+function panelDropTarget(id: string) {
+  return {
+    onDragOver: (e: DragEvent<HTMLElement>) => {
+      if (!e.dataTransfer.types.includes(PANEL_DRAG)) return;
+      e.preventDefault();
+      e.dataTransfer.dropEffect = "move";
+      e.currentTarget.dataset.drop = dropAfter(e) ? "after" : "before";
+    },
+    onDragLeave: (e: DragEvent<HTMLElement>) => {
+      // crossing onto a child of the target is not leaving it
+      if (e.relatedTarget instanceof Node && e.currentTarget.contains(e.relatedTarget)) return;
+      e.currentTarget.removeAttribute("data-drop");
+    },
+    onDrop: (e: DragEvent<HTMLElement>) => {
+      e.currentTarget.removeAttribute("data-drop");
+      const dragged = e.dataTransfer.getData(PANEL_DRAG);
+      const { panels, movePanel } = useStore.getState();
+      if (dragged === id || !panels.includes(dragged)) return;
+      e.preventDefault();
+      movePanel(dragged, dropIndex(panels, dragged, id, dropAfter(e)));
+    },
+  };
+}
+
+/** Alt+Shift+Left/Right moves panel `id` one place along the dock; true
+ *  when the key was that. */
+function movePanelKey(e: KeyboardEvent<HTMLElement>, id: string): boolean {
+  if (!e.altKey || !e.shiftKey || (e.key !== "ArrowLeft" && e.key !== "ArrowRight")) return false;
+  e.preventDefault();
+  const { panels, movePanel } = useStore.getState();
+  movePanel(id, panels.indexOf(id) + (e.key === "ArrowLeft" ? -1 : 1));
+  return true;
+}
+
+/** A docked panel head's own props: it takes the focus for the move keys
+ *  (only while focused itself, not a button in it), and a dragged panel. */
+function panelHead(id: string, name: string, move: PanelMove | undefined) {
+  if (!move) return {};
+  return {
+    tabIndex: 0,
+    "aria-label": `${name} panel`,
+    "aria-keyshortcuts": "Alt+Shift+ArrowLeft Alt+Shift+ArrowRight",
+    onKeyDown: (e: KeyboardEvent<HTMLElement>) => {
+      if (e.target === e.currentTarget) movePanelKey(e, id);
+    },
+    ...(move === "drag" && panelDropTarget(id)),
+  };
+}
+
 /** A panel whose repo is on a machine that has not answered, or no longer
  *  has it: its name, where it lives, and why it is empty. It keeps the
  *  panel's place in the dock until the machine comes back. */
-function PanelWaiting({ id, width, hidden, onClose }: { id: string; width: number; hidden?: boolean; onClose: () => void }) {
+function PanelWaiting({
+  id,
+  width,
+  hidden,
+  order,
+  move,
+  onClose,
+}: {
+  id: string;
+  width: number;
+  hidden?: boolean;
+  order?: number;
+  move?: PanelMove;
+  onClose: () => void;
+}) {
   const [b, plain] = idParts(id);
   const conn = useStore((s) => connOf(s, b));
   const status = conn.status;
@@ -1180,12 +1286,14 @@ function PanelWaiting({ id, width, hidden, onClose }: { id: string; width: numbe
       className="panel panel-waiting"
       aria-label={`${plain} on ${b}`}
       hidden={hidden}
-      style={{ "--panel-w": `${width}px` } as CSSProperties}
+      style={{ "--panel-w": `${width}px`, order } as CSSProperties}
     >
       <div className="panel-body">
-        <header className="panel-head">
-          <span className="glyph">○</span>
-          <span className="panel-name" title={`${plain} on ${b}`}>
+        <header className="panel-head" {...panelHead(id, plain, move)}>
+          <span className="glyph" {...(move === "drag" && panelDragSource(id))}>
+            ○
+          </span>
+          <span className="panel-name" title={`${plain} on ${b}`} {...(move === "drag" && panelDragSource(id))}>
             {plain}
             <span className="backend-word">{b}</span>
           </span>
@@ -1222,9 +1330,15 @@ export function RepoPanel({
   width,
   onClose,
   hidden,
+  order: place,
+  move,
 }: {
   id: string;
   width: number;
+  /** its CSS order in a side-by-side dock, where the DOM order never moves */
+  order?: number;
+  /** how it moves in the dock; none in a window of its own */
+  move?: PanelMove;
   /** replaces "unpin from the dock", for a panel that owns its window */
   onClose?: () => void;
   /** a tab that is not showing: the panel stays mounted (its shell keeps
@@ -1331,7 +1445,7 @@ export function RepoPanel({
     // a home repo gone from the scan is pruned with it; another machine's
     // keeps its place until that machine says
     if (idParts(id)[0] === homeName()) return null;
-    return <PanelWaiting id={id} width={width} hidden={hidden} onClose={() => closePanel(id)} />;
+    return <PanelWaiting id={id} width={width} hidden={hidden} order={place} move={move} onClose={() => closePanel(id)} />;
   }
   const st = repo.status;
   const solo = onClose !== undefined;
@@ -1376,6 +1490,7 @@ export function RepoPanel({
       style={
         {
           "--panel-w": `${width}px`,
+          order: place,
           // the bench's seams, which styles.css reads as the parts' sizes
           ...(bench && {
             ...(benchRail !== null && { "--bench-rail-user": `${benchRail}px` }),
@@ -1390,9 +1505,11 @@ export function RepoPanel({
       {/* Everything but the shells scrolls in here; the shells sit below it,
           along the panel's bottom edge, whatever the scroll position. */}
       <div className="panel-body" ref={bodyRef} style={zoomStyle(zoom)}>
-      <header className="panel-head">
-        <span className="glyph">{GLYPH[stateOf(repo)]}</span>
-        <span className="panel-name" title={repo.path}>
+      <header className="panel-head" {...panelHead(id, repo.name, move)}>
+        <span className="glyph" {...(move === "drag" && panelDragSource(id))}>
+          {GLYPH[stateOf(repo)]}
+        </span>
+        <span className="panel-name" title={repo.path} {...(move === "drag" && panelDragSource(id))}>
           <IdLabel id={repo.id} />
         </span>
         <Star repoId={repo.id} name={repo.name} onError={showError} />
@@ -1578,11 +1695,22 @@ export function RepoPanel({
 /** The tab strip of a tabbed dock: one tab per open panel, the showing one
  *  lit, each with the repo's state glyph and its own close. Arrow keys move
  *  along the strip, wrapping at either end, and take the focus with them. */
-function DockTabs({ panels, active }: { panels: string[]; active: string | null }) {
+function DockTabs({ panels, active, drag }: { panels: string[]; active: string | null; drag: boolean }) {
   const repos = useStore((s) => s.repos);
   const showPanel = useStore((s) => s.showPanel);
   const closePanel = useStore((s) => s.closePanel);
   const strip = useRef<HTMLDivElement>(null);
+  // The tabs follow `panels`, so a move by keys reorders their nodes and the
+  // browser drops the focus from the moved one; it is given back here.
+  const refocus = useRef<string | null>(null);
+  useEffect(() => {
+    const id = refocus.current;
+    refocus.current = null;
+    if (id === null) return;
+    for (const tab of strip.current?.children ?? []) {
+      if (tab instanceof HTMLElement && tab.dataset.id === id) tab.focus();
+    }
+  }, [panels]);
   // the strip scrolls without a scrollbar, so the showing tab must be kept
   // in sight itself: a card click far down the list opens a tab far right
   useEffect(() => {
@@ -1624,8 +1752,13 @@ function DockTabs({ panels, active }: { panels: string[]; active: string | null 
             onAuxClick={(e) => {
               if (e.button === 1) closePanel(id);
             }}
+            {...(drag && { ...panelDragSource(id), ...panelDropTarget(id) })}
+            aria-keyshortcuts="Alt+Shift+ArrowLeft Alt+Shift+ArrowRight"
             onKeyDown={(e) => {
-              if (e.key === "Enter" || e.key === " ") {
+              // before the plain arrows, which step along the strip
+              if (movePanelKey(e, id)) {
+                refocus.current = id;
+              } else if (e.key === "Enter" || e.key === " ") {
                 e.preventDefault();
                 showPanel(id);
               } else if (e.key === "ArrowRight") {
@@ -1669,6 +1802,10 @@ function DockTabs({ panels, active }: { panels: string[]; active: string | null 
  * panels are the same keyed children of the same element in both layouts,
  * so flipping the setting moves them rather than remounting them: a shell in
  * a panel keeps its pty across the switch.
+ *
+ * Their DOM order never changes either: they render sorted by id and take
+ * their place from CSS `order`, so moving a panel (a drag, Alt+Shift+arrow,
+ * the gear) moves no element. Moving one would reload a preview's iframe.
  */
 /** what one panel may take: the dock's own max-width (the window less the
  *  tree and the cards' floor, styles.css) less its 6px handle; Infinity where
@@ -1687,6 +1824,7 @@ export function Dock() {
   const active = useStore((s) => s.activePanel);
   const dockWidth = useStore((s) => s.dockWidth);
   const setDockWidth = useStore((s) => s.setDockWidth);
+  const move: PanelMove = useMedia(PHONE) ? "keys" : "drag";
   if (panels.length === 0) return null;
   // a stale active (never set, or pruned) shows the first tab rather than
   // an empty dock with a strip of tabs above it
@@ -1717,18 +1855,21 @@ export function Dock() {
             fit={(h) => dockRoom(h.parentElement)}
             onCommit={setDockWidth}
           />
-          <DockTabs panels={panels} active={showing} />
+          <DockTabs panels={panels} active={showing} drag={move === "drag"} />
         </>
       )}
-      {panels.flatMap((id) => {
+      {stableOrder(panels).flatMap((id) => {
         if (tabbed) {
-          return [<RepoPanel key={id} id={id} width={dockWidth} hidden={id !== showing} />];
+          return [<RepoPanel key={id} id={id} width={dockWidth} hidden={id !== showing} move={move} />];
         }
         const width = panelWidths[id] ?? PANEL.initial;
+        // each handle sits just before its panel in CSS order, as in the DOM
+        const at = panels.indexOf(id);
         return [
           <Resizer
             key={`edge:${id}`}
             className="panel-resizer"
+            style={{ order: 2 * at }}
             label={`Width of the ${idText(id)} panel`}
             value={width}
             min={PANEL.min}
@@ -1741,7 +1882,7 @@ export function Dock() {
             fit={(h) => dockRoom(h.parentElement)}
             onCommit={(px) => setPanelWidth(id, px)}
           />,
-          <RepoPanel key={id} id={id} width={width} />,
+          <RepoPanel key={id} id={id} width={width} order={2 * at + 1} move={move} />,
         ];
       })}
     </div>

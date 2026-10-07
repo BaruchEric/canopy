@@ -118,6 +118,17 @@ describe("panelTermHeightFor", () => {
   });
 });
 
+describe("moving a panel", () => {
+  const pristine = useStore.getState();
+  afterEach(() => useStore.setState({ panels: pristine.panels, activePanel: pristine.activePanel }));
+  test("movePanel reorders the open panels and keeps the active one", () => {
+    useStore.setState({ panels: ["a", "b", "c"], activePanel: "b" });
+    useStore.getState().movePanel("c", 0);
+    expect(useStore.getState().panels).toEqual(["c", "a", "b"]);
+    expect(useStore.getState().activePanel).toBe("b");
+  });
+});
+
 describe("shells this window ends or restores", () => {
   const app = { id: "app", name: "app", path: "/dev/app", group: "", source: "launch", status: null } as unknown as Repo;
   const tab = (id: string, exit?: number | null) => ({ id, repoId: "app", name: "app", path: "/dev/app", place: "strip" as const, ...(exit === undefined ? {} : { exit }) });

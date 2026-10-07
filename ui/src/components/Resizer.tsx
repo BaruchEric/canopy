@@ -1,11 +1,13 @@
 import { useEffect, useRef, useState } from "react";
-import type { KeyboardEvent, PointerEvent } from "react";
+import type { CSSProperties, KeyboardEvent, PointerEvent } from "react";
 import { clamp } from "../util";
 
 interface ResizerProps {
   /** what the handle sizes, for screen readers */
   label: string;
   className?: string;
+  /** inline style on the handle: the dock sets its CSS order beside its panel */
+  style?: CSSProperties;
   value: number;
   min: number;
   max: number;
@@ -35,6 +37,7 @@ interface ResizerProps {
 export function Resizer({
   label,
   className,
+  style,
   value,
   min,
   max,
@@ -105,6 +108,7 @@ export function Resizer({
   return (
     <div
       className={`resizer${className ? ` ${className}` : ""}${dragging ? " dragging" : ""}`}
+      style={style}
       role="separator"
       aria-orientation="vertical"
       aria-label={label}

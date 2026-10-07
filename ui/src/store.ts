@@ -6,7 +6,7 @@ import { mergeHistory } from "./qualify";
 import { applyQuery, type RepoFilter } from "./filters";
 import { cardChangedAt, cardFavorite, joinRepos, leadOf, type RepoCard } from "./checkouts";
 import { changedAt } from "./grouping";
-import { focusPanel, nextActive } from "./dock";
+import { focusPanel, movePanel as moveIn, nextActive } from "./dock";
 import { heldShellUrl, openElsewhere, openShellElsewhere, parseRoute, soloUrl } from "./routes";
 import { loadSettings, saveSettings, SCREEN_SETTINGS, shellPlace, type Settings, type ShellPlace } from "./settings";
 import { PANEL_TERM_ROWS, adoptTerms, loadFocusSize, loadTermTabs, needsPanelShell, nextStripTab, panelShellStart, reconcileTerms, rowsPx, termId, type FocusSize, type TermTab } from "./term";
@@ -770,6 +770,9 @@ interface CanopyState {
    *  say so; rejects with the server's reason */
   openApp: (id: string, app: OpenerId) => Promise<void>;
   closePanel: (id: string) => void;
+  /** moves an open panel to index `to` of the dock (clamped); the panel
+   *  showing stays the one showing */
+  movePanel: (id: string, to: number) => void;
   /** what one backend's stream said, `from` home unless named */
   applyEvent: (ev: ServerEvent, from?: string) => void;
   setWorkspaces: (ws: Workspace[]) => void;
@@ -1932,6 +1935,7 @@ export const useStore = create<CanopyState>((set, get) => ({
       front: keepFront(s.front, terms, panels),
     });
   },
+  movePanel: (id, to) => set((s) => ({ panels: moveIn(s.panels, id, to) })),
 
   applyEvent: (sent, from) => {
     // an older backend's agents event is its plain map of settings by path

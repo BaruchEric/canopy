@@ -164,7 +164,7 @@ git commit -m "feat(dock): the arithmetic for moving a panel"
 - Consumes: `movePanel`, `dropIndex`, `stableOrder` (Task 1).
 - Produces: store action `movePanel(id: string, to: number): void`, and the drag data type `"application/x-canopy-panel"`.
 
-- [ ] **Step 1: Write the failing store test**, in `store.test.ts`, the way its other dock tests set state:
+- [x] **Step 1: Write the failing store test**, in `store.test.ts`, the way its other dock tests set state:
 
 ```ts
 test("movePanel reorders the open panels and keeps the active one", () => {
@@ -175,12 +175,12 @@ test("movePanel reorders the open panels and keeps the active one", () => {
 });
 ```
 
-- [ ] **Step 2: Run it and watch it fail**
+- [x] **Step 2: Run it and watch it fail**
 
 Run: `env -u TMUX SHELL=/bin/bash bun test ui/src/store.test.ts`
 Expected: FAIL, `movePanel` is not a function.
 
-- [ ] **Step 3: Implement**
+- [x] **Step 3: Implement**
 
 `store.ts`:
 - Declare `movePanel: (id: string, to: number) => void;` beside `closePanel`.
@@ -247,7 +247,7 @@ If `GearEntry` has no `disabled` field, leave the entry out at the ends instead.
 .panel-head[draggable="true"]:active { cursor: grabbing; }
 ```
 
-- [ ] **Step 4: Gates, then the browser check**
+- [x] **Step 4: Gates, then the browser check**
 
 Run: `bun run typecheck && bun run lint && env -u TMUX SHELL=/bin/bash bun test && bun run build`
 Expected: all pass.
@@ -260,7 +260,7 @@ Then, on a scratch server with three repos:
 5. Switch the gear to "panels as tabs", drag a tab, and check that the tab order follows.
 6. Resize to 390px and check that heads are not draggable.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add ui/src
