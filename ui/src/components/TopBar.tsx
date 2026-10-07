@@ -303,6 +303,8 @@ function WsGear({ ws }: { ws: Workspace }) {
       groups={groups}
       perScreen={false}
       sheet
+      // "plan, then build in workspace…" is cut short at 256
+      width={288}
     />
   );
 }

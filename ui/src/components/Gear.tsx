@@ -61,6 +61,21 @@ export interface GearGroup {
 
 const MENU_W = 256;
 
+/** Where a menu `w` wide and `h` tall goes beside its button: hung off the
+ *  button's right edge, 8px inside the window, and above the button when
+ *  there is no room below. */
+export function menuSpot(
+  r: { right: number; top: number; bottom: number },
+  h: number,
+  w: number,
+  view: { w: number; h: number },
+): { top: number; left: number } {
+  const left = Math.max(8, Math.min(r.right - w, view.w - w - 8));
+  const below = r.bottom + 6;
+  const top = below + h > view.h - 8 ? Math.max(8, r.top - 6 - h) : below;
+  return { top, left };
+}
+
 /** The one settings icon: every gear has it, and so does the top bar's
  *  settings button. */
 export function GearIcon({ size = 13 }: { size?: number }) {
@@ -88,6 +103,7 @@ export function Gear({
   keptElse,
   perScreen = true,
   sheet = false,
+  width = MENU_W,
 }: {
   label: string;
   groups: GearGroup[];
@@ -100,6 +116,8 @@ export function Gear({
   /** a bottom sheet on a phone, the way the top bar's popovers are, rather
    *  than a menu hung off its button */
   sheet?: boolean;
+  /** px, for a menu whose lines need more than the usual 256 */
+  width?: number;
 }) {
   const [open, setOpen] = useState(false);
   const [pos, setPos] = useState<{ top: number; left: number } | null>(null);
@@ -114,12 +132,8 @@ export function Gear({
   const place = useCallback(() => {
     if (!trigger.current || !menu.current) return;
     const r = trigger.current.getBoundingClientRect();
-    const h = menu.current.offsetHeight;
-    const left = Math.max(8, Math.min(r.right - MENU_W, window.innerWidth - MENU_W - 8));
-    const below = r.bottom + 6;
-    const top = below + h > window.innerHeight - 8 ? Math.max(8, r.top - 6 - h) : below;
-    setPos({ top, left });
-  }, []);
+    setPos(menuSpot(r, menu.current.offsetHeight, width, { w: window.innerWidth, h: window.innerHeight }));
+  }, [width]);
 
   useLayoutEffect(() => {
     if (open) place();
@@ -233,7 +247,7 @@ export function Gear({
             className={`menu gear-pop${asSheet ? " gear-sheet" : ""}`}
             role="menu"
             aria-label={`Settings for ${label}`}
-            style={asSheet ? undefined : { width: MENU_W, top: pos?.top ?? -9999, left: pos?.left ?? -9999 }}
+            style={asSheet ? undefined : { width, top: pos?.top ?? -9999, left: pos?.left ?? -9999 }}
             onKeyDown={(e) => {
               onMenuKey(e);
               swallow(e);
