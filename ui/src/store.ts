@@ -10,7 +10,7 @@ import { focusPanel, movePanel as moveIn, nextActive } from "./dock";
 import { heldShellUrl, openElsewhere, openShellElsewhere, parseRoute, popOutWindow, soloUrl } from "./routes";
 import { restorePanel, without } from "./panes";
 import { loadSettings, saveSettings, SCREEN_SETTINGS, shellPlace, type Settings, type ShellPlace } from "./settings";
-import { PANEL_TERM_ROWS, adoptTerms, loadFocusSize, loadTermTabs, needsPanelShell, nextStripTab, panelShellStart, reconcileTerms, rowsPx, termId, type FocusSize, type TermTab } from "./term";
+import { PANEL_TERM_ROWS, adoptPoppedTerms, adoptTerms, loadFocusSize, loadTermTabs, needsPanelShell, nextStripTab, panelShellStart, reconcileTerms, rowsPx, termId, type FocusSize, type TermTab } from "./term";
 import { clearTask, frontForTab, frontForTask, keepFront, projectFront, withSolo, type BenchPane, type Front } from "./front";
 import { clientId, identity } from "./client";
 export type { TermTab } from "./term";
@@ -1031,6 +1031,16 @@ const endedShells = new Set<string>();
  *  ones this browser hid */
 const skipped = (hidden: string[]): ReadonlySet<string> => new Set([...endedShells, ...hidden]);
 
+/** The tabs this window takes up from the shells the backends hold: the
+ *  grove's for its dock and strip; a pop-out's (`popped=1`) for its own
+ *  panel alone, so its shell travels with it; none in any other dockless
+ *  window, whose shells the grove shows. */
+function adoptHere(tabs: TermTab[], live: TermInfo[], repos: Repo[], panels: string[], ended: ReadonlySet<string>): TermTab[] {
+  if (!dockless()) return adoptTerms(tabs, live, repos, panels, ended);
+  const route = parseRoute(window.location.search);
+  return route.popped && route.repo ? adoptPoppedTerms(tabs, live, repos, route.repo, ended) : tabs;
+}
+
 /** a shell window's url onto one named shell */
 const shellUrlFor = heldShellUrl;
 
@@ -1481,7 +1491,7 @@ export const useStore = create<CanopyState>((set, get) => ({
       const s = get();
       const hiddenTerms = pruneHiddenOf(s.hiddenTerms, home, held);
       const terms = dockless()
-        ? []
+        ? adoptHere([], held, tree.repos, s.panels, skipped(hiddenTerms))
         : reconcileTerms(saved.terms.filter((t) => mine(t.id)), held, tree.repos, s.panels, new Set(hiddenTerms));
       const parkedTerms = dockless() ? [] : saved.terms.filter((t) => !mine(t.id));
       const strip = terms.filter((t) => t.place === "strip");
@@ -1492,8 +1502,8 @@ export const useStore = create<CanopyState>((set, get) => ({
       // opening-and-unfolding here is scoped to saved tabs alone. It must
       // not run for a shell reconcileTerms adopted, or every closed panel
       // with a shell in it would reopen on the very load meant to keep it
-      // closed.
-      const { panels, closedSections } = openSavedPanels(s.panels, s.closedSections, terms);
+      // closed. A dockless window opens nothing: its folds are the grove's.
+      const { panels, closedSections } = openSavedPanels(s.panels, s.closedSections, dockless() ? [] : terms);
       const reg = registry();
       set({
         root: tree.root,
@@ -1658,11 +1668,11 @@ export const useStore = create<CanopyState>((set, get) => ({
       // this backend's parked tabs come back against what it holds, the
       // way home's did at load
       const back = dockless()
-        ? []
+        ? adoptHere([], held, tree.repos, t.panels, skipped(hiddenTerms)).filter((x) => !s.terms.some((have) => have.id === x.id))
         : reconcileTerms(s.parkedTerms.filter((x) => mine(x.id)), held, tree.repos, t.panels, new Set(hiddenTerms)).filter(
             (x) => !s.terms.some((have) => have.id === x.id),
           );
-      const { panels, closedSections } = openSavedPanels(t.panels, t.closedSections, back);
+      const { panels, closedSections } = openSavedPanels(t.panels, t.closedSections, dockless() ? [] : back);
       const strip = back.filter((x) => x.place === "strip");
       const want = loadedTabs.activeTerm;
       return {
@@ -2145,7 +2155,7 @@ export const useStore = create<CanopyState>((set, get) => ({
         return {
           shells,
           hiddenTerms,
-          terms: dockless() ? s.terms : adoptTerms(s.terms, shells, s.repos, s.panels, skipped(hiddenTerms)),
+          terms: adoptHere(s.terms, shells, s.repos, s.panels, skipped(hiddenTerms)),
         };
       });
     }

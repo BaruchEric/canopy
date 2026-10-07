@@ -157,6 +157,20 @@ export function adoptTerms(
   return out;
 }
 
+/** The tabs a pop-out takes up: its own repo's panel shells and no other
+ *  shell, since the panel took its shells with it when it left the dock.
+ *  The rest as `adoptTerms`. */
+export function adoptPoppedTerms(
+  tabs: TermTab[],
+  live: TermInfo[],
+  repos: Repo[],
+  repoId: string,
+  ended: ReadonlySet<string> = new Set(),
+): TermTab[] {
+  const own = live.filter((t) => t.place === "panel" && t.repoId === repoId);
+  return adoptTerms(tabs, own, repos, [repoId], ended);
+}
+
 /** The shells this browser hid that are still running: a hidden name whose
  *  shell ended has nothing left to hide. The same array when none went, so
  *  a list that changes nothing here is not a layout change. */

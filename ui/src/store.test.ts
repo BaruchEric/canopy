@@ -272,6 +272,22 @@ describe("popping a panel out and back", () => {
     expect(useStore.getState().panels).toEqual(["x", "app", "y"]);
   });
 
+  test("a pop-out shows its own panel's shells, a plain solo window none", () => {
+    const lib = { ...app, id: "lib", name: "lib", path: "/dev/lib" } as unknown as Repo;
+    const theirs: TermInfo = { ...held, id: "8".repeat(32), repoId: "lib", path: "/dev/lib" };
+    const strip: TermInfo = { ...held, id: "7".repeat(32), place: "strip" };
+    const live = [held, theirs, strip];
+    g.window = { location: { href: "http://a.test/?repo=app&view=solo&popped=1", search: "?repo=app&view=solo&popped=1" } };
+    useStore.setState({ repos: [app, lib], panels: ["lib"], activePanel: "lib", terms: [], shells: [], hiddenTerms: [], popped: {} });
+    useStore.getState().applyEvent({ type: "terms", terms: live });
+    expect(useStore.getState().terms.map((t) => t.id)).toEqual([shell]);
+    // the same window without the marker keeps none
+    g.window = { location: { href: "http://a.test/?repo=app&view=solo", search: "?repo=app&view=solo" } };
+    useStore.setState({ terms: [], shells: [] });
+    useStore.getState().applyEvent({ type: "terms", terms: live });
+    expect(useStore.getState().terms).toEqual([]);
+  });
+
   test("a window claiming a docked panel takes it out and keeps its slot", () => {
     useStore.setState({ repos: [app], panels: ["x", "app", "y"], activePanel: "app", terms: [panelTab], shells: [held], hiddenTerms: [], popped: {} });
     useStore.getState().claimPanel("app");

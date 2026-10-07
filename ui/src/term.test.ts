@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { FOCUS_GAP, FOCUS_MIN, PANEL_TERM_ROWS, adoptTerms, otherShells, shellSet, cellHeight, focusResize, loadFocusSize, loadTermTabs, nextStripTab, pruneHidden, joinsOnly, needsPanelShell, panelShellStart, reconcileTerms, rowsPx, termId, viewKey, type TermTab } from "./term";
+import { FOCUS_GAP, FOCUS_MIN, PANEL_TERM_ROWS, adoptPoppedTerms, adoptTerms, otherShells, shellSet, cellHeight, focusResize, loadFocusSize, loadTermTabs, nextStripTab, pruneHidden, joinsOnly, needsPanelShell, panelShellStart, reconcileTerms, rowsPx, termId, viewKey, type TermTab } from "./term";
 import type { Repo, TermInfo } from "../../src/core/types";
 
 describe("rowsPx", () => {
@@ -92,6 +92,20 @@ describe("reconcileTerms", () => {
   test("a saved panel tab is kept whether or not its panel is in the passed list", () => {
     const saved = tab("a", "app", "panel");
     expect(reconcileTerms([saved], [info("a", "app", "panel")], repos, [])).toEqual([saved]);
+  });
+});
+
+describe("adoptPoppedTerms", () => {
+  const repos = [repo("app"), repo("lib")];
+  test("a pop-out takes up its own repo's panel shells and nothing else", () => {
+    const live = [info("mine", "app", "panel"), info("strip", "app", "strip"), info("theirs", "lib", "panel")];
+    expect(adoptPoppedTerms([], live, repos, "app").map((t) => t.id)).toEqual(["mine"]);
+    expect(adoptPoppedTerms([], live, repos, "app")[0]?.place).toBe("panel");
+  });
+  test("keeps its tabs, skips an ended shell, and returns the same array when nothing is new", () => {
+    const tabs = [tab("mine", "app", "panel")];
+    expect(adoptPoppedTerms(tabs, [info("mine", "app", "panel")], repos, "app")).toBe(tabs);
+    expect(adoptPoppedTerms([], [info("gone", "app", "panel")], repos, "app", new Set(["gone"]))).toEqual([]);
   });
 });
 
