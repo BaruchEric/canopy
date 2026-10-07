@@ -861,7 +861,7 @@ git commit -m "feat(runs): the agent's checklist and subagent steps under their 
 **Interfaces:**
 - Consumes: everything above.
 
-- [ ] **Step 1: Write the failing test.** Start the server with a Claude driver whose command is the fake in `propose` mode, the way `runner.test.ts` or `remember.test.ts` stands up a fake `claude`. Then:
+- [x] **Step 1: Write the failing test.** Start the server with a Claude driver whose command is the fake in `propose` mode, the way `runner.test.ts` or `remember.test.ts` stands up a fake `claude`. Then:
 
 ```ts
 test("propose: start, the proposal over the API, approve, done", async () => {
@@ -887,12 +887,12 @@ test("propose on a Codex repo is refused", async () => {
 
 If plan 1 has shipped, also start `POST /api/workspaces/run` with `action: "propose"` and assert 201. `isRunAction` already accepts it, so this only proves the route did not narrow its action list.
 
-- [ ] **Step 2: Run, fix what fails, run again**
+- [x] **Step 2: Run, fix what fails, run again**
 
 Run: `env -u TMUX SHELL=/bin/bash bun test src/server/`
 Expected: PASS once the route accepts `propose` and the answer reaches the driver.
 
-- [ ] **Step 3: Commit**
+- [x] **Step 3: Commit**
 
 ```bash
 git add src/server

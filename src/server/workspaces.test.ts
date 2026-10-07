@@ -179,6 +179,34 @@ test("a workspace run on a Codex route is refused", async () => {
   }
 });
 
+test("a workspace propose run starts in plan mode on the primary with the others added", async () => {
+  const r = await call("POST", "/api/workspaces/run", { name: "bike", action: "propose", note: "plan it" });
+  expect(r.status).toBe(201);
+  const run = (await r.json()) as Run;
+  expect(run.action).toBe("propose");
+  expect(run.repoId).toBe("analysis");
+  expect(run.workspace).toBe("bike");
+  expect(lastSpec()?.permissionMode).toBe("plan");
+  expect(lastSpec()?.addDirs).toEqual([api]);
+  await stopRun(run.id);
+});
+
+test("a propose run on a Codex route is refused, in a repo and in a workspace", async () => {
+  const codex = { harness: "codex", model: "gpt-5.5", effort: "high", yolo: false, extra: "" };
+  expect((await call("POST", "/api/agents/role", { role: "job", pick: codex })).status).toBe(200);
+  try {
+    const repo = await call("POST", "/api/repos/run?id=api", { action: "propose", note: "x" });
+    expect(repo.status).toBe(400);
+    expect(await errorOf(repo)).toBe("plan, then build needs Claude Code");
+    // the action is checked before the workspace, so a workspace propose hears the same words
+    const ws = await call("POST", "/api/workspaces/run", { name: "bike", action: "propose", note: "x" });
+    expect(ws.status).toBe(400);
+    expect(await errorOf(ws)).toBe("plan, then build needs Claude Code");
+  } finally {
+    expect((await call("POST", "/api/agents/role", { role: "job", pick: null })).status).toBe(200);
+  }
+});
+
 test("an incubator seed among the members is left out in words, not added as a folder", async () => {
   await upsertWorkspace("seeded", [analysis, seed, api]);
   const before = specs.length;
