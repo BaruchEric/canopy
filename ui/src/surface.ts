@@ -229,7 +229,12 @@ export function copiedWord(out: CopyOut): string {
  *  on Enter, say). An Escape while its menu is shut goes on, so a panel in
  *  full screen hears it with the focus on its gear; while the menu is open,
  *  the menu's own Escape closes it first. */
-export const triggerKeeps = (key: string, open: boolean): boolean => open || key !== "Escape";
+export const triggerKeeps = (key: string, open: boolean): boolean => open || buttonKeeps(key);
+
+/** Whether a button on a card or a panel head (a star, say) keeps `key`
+ *  from what holds it: every key but Escape, which goes on to the page's
+ *  layers, so a panel filling the window leaves with the focus on it. */
+export const buttonKeeps = (key: string): boolean => key !== "Escape";
 
 /** what keeps its own Escape: a shell, an open menu, a sheet */
 const OWN_ESCAPE = ".term-screen, .xterm, .menu, .sheet";

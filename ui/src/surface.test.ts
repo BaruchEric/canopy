@@ -3,6 +3,7 @@ import {
   SECTION_KEYS,
   escapeLeaves,
   triggerKeeps,
+  buttonKeeps,
   captureName,
   flipMode,
   moveSection,
@@ -217,5 +218,14 @@ describe("what a menu's button keeps from what holds it", () => {
     expect(triggerKeeps("Escape", true)).toBe(true);
     // a full-screen panel's Escape must reach the page from the gear's button
     expect(triggerKeeps("Escape", false)).toBe(false);
+  });
+});
+
+describe("what a button on a card keeps from the card", () => {
+  test("every key but Escape, which goes on to the page's layers", () => {
+    expect(buttonKeeps("Enter")).toBe(true);
+    expect(buttonKeeps(" ")).toBe(true);
+    // a star in a panel filling the window must not keep the Escape that leaves
+    expect(buttonKeeps("Escape")).toBe(false);
   });
 });
