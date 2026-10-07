@@ -96,9 +96,10 @@ test("remember keeps a covering rule, answers the next match with it, and forget
     const unoffered = await remember("Bash(git:*)", "repo");
     expect(unoffered.status).toBe(409);
     expect(((await unoffered.json()) as { error: string }).error).toContain("does not offer");
-    // a save against a prompt id that is not the one waiting (one withdrawn, another come in its place)
+    // a save against a prompt id this run never asked is refused before any rule is kept
+    // (one asked and no longer waiting is a 409, propose.test.ts)
     const stale = await post("/api/runs/answer", { id, promptId: "p9", answer: { kind: "allow", remember: { rule: "Bash(git status:*)", scope: "repo" } } });
-    expect(stale.status).toBe(409);
+    expect(stale.status).toBe(404);
     expect((await run(id))?.prompt?.id).toBe("p1");
     expect(((await (await fetch(`${base}/api/remembered`)).json()) as { rules: RememberedRule[] }).rules).toEqual([]);
 

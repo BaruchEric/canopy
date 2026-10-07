@@ -490,6 +490,13 @@ export class RunCtx implements DriveCtx {
     });
   }
 
+  /** Whether this run ever asked the prompt under `promptId`: ids run
+   *  p1, p2 and on, one per prompt parked. */
+  asked(promptId: string): boolean {
+    const m = /^p([1-9]\d*)$/.exec(promptId);
+    return m !== null && Number(m[1]) <= this.prompts;
+  }
+
   /** The prompt waiting under `promptId`, the shown one or one queued
    *  behind it; undefined when it is not waiting. */
   waiting(promptId: string): RunPrompt | undefined {

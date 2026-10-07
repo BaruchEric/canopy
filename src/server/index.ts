@@ -2211,9 +2211,11 @@ async function handleApi(
     if (typeof b.id !== "string" || typeof b.promptId !== "string" || !answer) {
       return json({ error: "malformed answer" }, 400);
     }
-    // a run canopy does not hold, and a prompt it is not waiting on, are
-    // the browser's stale view, not the server failing
+    // a run canopy does not hold, a prompt the run never asked (404), and
+    // one it asked and is not waiting on now (409) are the browser's stale
+    // view, not the server failing
     if (!state.runner.get(b.id)) return json({ error: "no such run" }, 404);
+    if (!state.runner.asked(b.id, b.promptId)) return json({ error: "this run never asked that prompt" }, 404);
     if (!state.runner.waiting(b.id, b.promptId)) return json({ error: new NotWaitingError().message }, 409);
     // checked before a rule is kept: an answer of the wrong kind settles nothing
     const misfit = state.runner.misfit(b.id, b.promptId, answer);

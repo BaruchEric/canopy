@@ -327,6 +327,11 @@ export class Runner {
     for (const live of this.live.values()) live.ctx.recheck();
   }
 
+  /** Whether the run ever asked the prompt under `promptId`. */
+  asked(id: string, promptId: string): boolean {
+    return this.live.get(id)?.ctx.asked(promptId) ?? false;
+  }
+
   /** Whether the run is waiting on the prompt under `promptId`. */
   waiting(id: string, promptId: string): boolean {
     return this.live.get(id)?.ctx.waiting(promptId) !== undefined;
