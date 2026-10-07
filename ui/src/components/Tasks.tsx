@@ -1,5 +1,5 @@
 import { useContext, useEffect, useLayoutEffect, useRef, useState } from "react";
-import { keepKeys } from "../surface";
+import { keepKeys, escapeCloses } from "../surface";
 import { useShallow } from "zustand/react/shallow";
 import { api } from "../api";
 import { useFitPop } from "../pop";
@@ -377,7 +377,7 @@ export function TasksChip() {
       if (!ref.current?.contains(e.target as Node)) setOpen(false);
     };
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") setOpen(false);
+      escapeCloses(e, () => setOpen(false));
     };
     document.addEventListener("pointerdown", onDown);
     window.addEventListener("keydown", onKey);

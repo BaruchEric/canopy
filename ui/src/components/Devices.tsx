@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { escapeCloses } from "../surface";
 import { clientId } from "../client";
 import { backendOf, plainOf } from "../registry";
 import { idText, useStore } from "../store";
@@ -60,7 +61,7 @@ export function DevicesChip() {
       if (!ref.current?.contains(e.target as Node)) setOpen(false);
     };
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") setOpen(false);
+      escapeCloses(e, () => setOpen(false));
     };
     document.addEventListener("pointerdown", onDown);
     window.addEventListener("keydown", onKey);

@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { escapeCloses } from "../surface";
 import { hasOtherBackend, signinUrl } from "../backends";
 import { sameBuild } from "../../../src/core/version";
 import { PAGE_BUILD } from "../build";
@@ -42,7 +43,7 @@ export function BackendsChip() {
       if (!ref.current?.contains(e.target as Node)) setOpen(false);
     };
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") setOpen(false);
+      escapeCloses(e, () => setOpen(false));
     };
     document.addEventListener("pointerdown", onDown);
     window.addEventListener("keydown", onKey);

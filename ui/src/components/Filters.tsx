@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import { escapeCloses } from "../surface";
 import { useShallow } from "zustand/react/shallow";
 import { countFacets, FILTER_INFO, REPO_FILTERS } from "../filters";
 import { activeFilterCount, archivedCount, favoriteCount, scopedRepos, useStore } from "../store";
@@ -31,7 +32,7 @@ export function FilterMenu() {
       if (!ref.current?.contains(e.target as Node)) setOpen(false);
     };
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") setOpen(false);
+      escapeCloses(e, () => setOpen(false));
     };
     document.addEventListener("pointerdown", onDown);
     window.addEventListener("keydown", onKey);

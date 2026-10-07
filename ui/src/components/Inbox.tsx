@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { escapeCloses } from "../surface";
 import { useShallow } from "zustand/react/shallow";
 import type { AdviceOffer, Ask } from "../../../src/core/types";
 import { joinTarget } from "../agentcards";
@@ -403,7 +404,7 @@ export function InboxChip({ onGit }: { onGit?: () => void } = {}) {
       if (!ref.current?.contains(t)) closeInbox();
     };
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") closeInbox();
+      escapeCloses(e, () => closeInbox());
     };
     document.addEventListener("pointerdown", onDown);
     window.addEventListener("keydown", onKey);

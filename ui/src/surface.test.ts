@@ -5,6 +5,8 @@ import {
   triggerKeeps,
   buttonKeeps,
   keepKeys,
+  escapeCloses,
+  LAYER_ABOVE,
   captureName,
   flipMode,
   moveSection,
@@ -236,5 +238,19 @@ describe("a card button's key handler", () => {
     const stopped: string[] = [];
     for (const key of ["Enter", " ", "Escape", "a"]) keepKeys({ key, stopPropagation: () => stopped.push(key) });
     expect(stopped).toEqual(["Enter", " ", "a"]);
+  });
+});
+
+describe("a popover's Escape", () => {
+  test("closes it and is taken, so a surface under it stays; other keys do nothing", () => {
+    const did: string[] = [];
+    for (const key of ["Escape", "Enter"]) {
+      escapeCloses({ key, preventDefault: () => did.push(`taken ${key}`) }, () => did.push(`closed by ${key}`));
+    }
+    expect(did).toEqual(["taken Escape", "closed by Escape"]);
+  });
+  test("a menu with the focus left on its button is a layer above a surface too", () => {
+    // the new-shell menu opens on a long press and leaves the focus on its +
+    expect(LAYER_ABOVE.split(",").map((s) => s.trim())).toEqual(['[role="dialog"]', '[role="menu"]', ".sidebar.drawer"]);
   });
 });

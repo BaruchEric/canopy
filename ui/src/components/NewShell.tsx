@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState, type CSSProperties } from "react";
+import { escapeCloses } from "../surface";
 import { isSeedId } from "../../../src/core/sprout";
 import { describeAgent } from "../../../src/core/agent";
 import { HARNESS } from "../../../src/core/harness";
@@ -49,7 +50,7 @@ export function NewShellButton({ repoId }: { repoId: string }) {
       if (!box.current?.contains(e.target as Node)) setMenu(false);
     };
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") setMenu(false);
+      escapeCloses(e, () => setMenu(false));
     };
     document.addEventListener("pointerdown", onDown);
     window.addEventListener("keydown", onKey);

@@ -1,4 +1,5 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import { escapeCloses } from "../surface";
 import { chanBlobUrl } from "../api";
 import { convName, convOf, convOrder, latestClip, messageText } from "../chan";
 import { useFitPop } from "../pop";
@@ -73,7 +74,7 @@ export function ChanChip() {
       if (!ref.current?.contains(e.target as Node)) closeChan();
     };
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") closeChan();
+      escapeCloses(e, () => closeChan());
     };
     document.addEventListener("pointerdown", onDown);
     window.addEventListener("keydown", onKey);

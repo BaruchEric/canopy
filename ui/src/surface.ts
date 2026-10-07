@@ -242,6 +242,15 @@ export function keepKeys(e: { key: string; stopPropagation(): void }): void {
   if (buttonKeeps(e.key)) e.stopPropagation();
 }
 
+/** A popover's window listener for Escape: closes it and takes the key
+ *  (`preventDefault`), so a surface under it whose listener runs later
+ *  stays, as `LAYER_ABOVE` keeps one whose listener runs first. */
+export function escapeCloses(e: { key: string; preventDefault(): void }, close: () => void): void {
+  if (e.key !== "Escape") return;
+  e.preventDefault();
+  close();
+}
+
 /** what keeps its own Escape: a shell, an open menu, a sheet */
 const OWN_ESCAPE = ".term-screen, .xterm, .menu, .sheet";
 /** a text field, which keeps Escape too while the page holds it in full
@@ -249,8 +258,8 @@ const OWN_ESCAPE = ".term-screen, .xterm, .menu, .sheet";
 const TEXT_ESCAPE = 'input, textarea, select, [contenteditable]:not([contenteditable="false"])';
 
 /** what sits over every surface and takes Escape first while it is up: a
- *  run sheet, a top-bar popover, the repo tree's drawer */
-export const LAYER_ABOVE = '[role="dialog"], .sidebar.drawer';
+ *  run sheet, a top-bar popover, a menu, the repo tree's drawer */
+export const LAYER_ABOVE = '[role="dialog"], [role="menu"], .sidebar.drawer';
 
 /** Whether an Escape at `target` steps a surface back to normal. `typing`
  *  adds text fields to what keeps it: a panel in full screen with Escape
