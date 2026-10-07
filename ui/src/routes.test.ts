@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { parseRoute, popupFeatures, sproutHere } from "./routes";
+import { parseRoute, popupFeatures, soloUrl, sproutHere } from "./routes";
 
 const features = (w: number, h: number): Record<string, number> => {
   const out: Record<string, number> = {};
@@ -26,7 +26,7 @@ describe("parseRoute", () => {
     expect(parseRoute("?repo=web-apps/ripe&view=solo&section=history").section).toBeNull();
     expect(parseRoute("?view=section&section=history").section).toBeNull();
   });
-  const none = { repo: null, solo: false, shell: false, term: null, section: null, task: null, ask: null };
+  const none = { repo: null, solo: false, shell: false, term: null, section: null, task: null, ask: null, popped: false };
   test("reads the repo and the shell view", () => {
     expect(parseRoute("?repo=web-apps/ripe&view=shell")).toEqual({
       repo: "web-apps/ripe",
@@ -36,6 +36,7 @@ describe("parseRoute", () => {
       section: null,
       task: null,
       ask: null,
+      popped: false,
     });
     expect(parseRoute("?view=shell")).toEqual(none);
   });
@@ -59,6 +60,7 @@ describe("parseRoute", () => {
       section: null,
       task: null,
       ask: null,
+      popped: false,
     });
     expect(parseRoute("?repo=web-apps/ripe")).toEqual({
       repo: "web-apps/ripe",
@@ -68,11 +70,26 @@ describe("parseRoute", () => {
       section: null,
       task: null,
       ask: null,
+      popped: false,
     });
     // solo needs a repo to be solo about
     expect(parseRoute("?view=solo")).toEqual(none);
     expect(parseRoute("")).toEqual(none);
   });
+});
+
+test("a popped solo window says so in its URL, and only then", () => {
+  // soloUrl builds on this window's address, and bun test has no window
+  const g = globalThis as unknown as { window?: unknown };
+  g.window = { location: { href: "http://x/" } };
+  try {
+    expect(parseRoute(new URL(soloUrl("a/b", { popped: true }), "http://x").search).popped).toBe(true);
+    expect(parseRoute(new URL(soloUrl("a/b"), "http://x").search).popped).toBe(false);
+    // the marker means nothing outside a solo window
+    expect(parseRoute("?repo=a/b&view=shell&popped=1").popped).toBe(false);
+  } finally {
+    delete g.window;
+  }
 });
 
 describe("popupFeatures", () => {

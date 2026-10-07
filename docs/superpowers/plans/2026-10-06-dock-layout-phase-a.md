@@ -553,7 +553,7 @@ git commit -m "feat(dock): a panel can go full screen and come back on Esc"
   - `unclaimed(popped: Record<string, number>, claimed: ReadonlySet<string>): string[]`.
   - Store: `popped: Record<string, number>` in `Layout`, plus `popOut(id)`, `returnPanel(id)` and `claimPanel(id)`.
 
-- [ ] **Step 1: Write the failing tests.** In `ui/src/routes.test.ts`:
+- [x] **Step 1: Write the failing tests.** In `ui/src/routes.test.ts`:
 
 ```ts
 test("a popped solo window says so in its URL, and only then", () => {
@@ -592,12 +592,12 @@ describe("putting a panel back", () => {
 });
 ```
 
-- [ ] **Step 2: Run them and watch them fail**
+- [x] **Step 2: Run them and watch them fail**
 
 Run: `env -u TMUX SHELL=/bin/bash bun test ui/src/panes.test.ts`
 Expected: FAIL.
 
-- [ ] **Step 3: Implement** `ui/src/panes.ts`:
+- [x] **Step 3: Implement** `ui/src/panes.ts`:
 
 ```ts
 /** Pop out and back: the main window and a panel's own window talk on one
@@ -703,7 +703,7 @@ useEffect(() => {
 
 `Dock.tsx:1027-1028`: "open in a new window" becomes "pop out", which calls `popOut(repo.id)`. "open in a new tab" stays, opening a copy without leaving the dock, as today.
 
-- [ ] **Step 4: Gates, then the browser check**
+- [x] **Step 4: Gates, then the browser check**
 
 Run: `bun run typecheck && bun run lint && env -u TMUX SHELL=/bin/bash bun test && bun run build`
 Expected: all pass.
@@ -719,7 +719,7 @@ Then, with three panels:
 8. Pop out a panel with a running shell. Check that the shell is still running in the pop-out and is back in the panel after "back to the dock".
 9. Open a second main window and check that both docks agree after each step.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add ui/src

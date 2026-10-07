@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import type { CSSProperties } from "react";
-import { groveUrl, soloUrl } from "../routes";
+import { tellPanes } from "../panes";
+import { groveUrl, parseRoute, soloUrl } from "../routes";
 import { SOLO, idText, useStore } from "../store";
 import { SECTION_WORD, type SectionKey } from "../surface";
 import { PanelSection, RepoPanel } from "./Dock";
@@ -48,6 +49,12 @@ export function Solo({ id }: { id: string }) {
     window.close();
     window.location.assign(groveUrl());
   };
+  // a panel popped out of the dock can go back to its slot there
+  const popped = parseRoute(window.location.search).popped;
+  const backToDock = () => {
+    tellPanes({ type: "return", id });
+    close();
+  };
 
   return (
     <div className="solo">
@@ -60,6 +67,11 @@ export function Solo({ id }: { id: string }) {
           <IdLabel id={id} />
         </span>
         <span className="spacer" />
+        {popped && (
+          <button type="button" className="mini" onClick={backToDock}>
+            back to the dock
+          </button>
+        )}
         <a className="mini" href={groveUrl()} target="_blank">
           whole grove ↗
         </a>

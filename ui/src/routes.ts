@@ -19,6 +19,9 @@ export interface Route {
   /** `?view=agents&ask=<id>`: the inbox opened on that ask, the link the
    *  broker's away DM carries */
   ask: string | null;
+  /** `popped=1`: a solo window the dock popped its panel out to, the only
+   *  kind that tells the dock it has the panel */
+  popped: boolean;
 }
 
 /** a shell's name: 32 hex digits, after another backend's name for one of
@@ -40,6 +43,7 @@ export function parseRoute(search: string): Route {
     section: view === "section" && isSectionKey(section) ? section : null,
     task: view === "shell" && task && /^[a-z0-9][a-z0-9._-]{0,39}$/.test(task) ? task : null,
     ask: askOf(q),
+    popped: view === "solo" && q.get("popped") === "1",
   };
 }
 
@@ -90,7 +94,11 @@ function viewUrl(id: string, view: "solo" | "shell" | "section"): string {
   return u.toString();
 }
 
-export const soloUrl = (id: string): string => viewUrl(id, "solo");
+export function soloUrl(id: string, opts?: { popped?: boolean }): string {
+  const u = new URL(viewUrl(id, "solo"));
+  if (opts?.popped) u.searchParams.set("popped", "1");
+  return u.toString();
+}
 export const shellUrl = (id: string): string => viewUrl(id, "shell");
 
 /** one section of a repo's panel, in a window of its own */
@@ -145,6 +153,13 @@ export function openElsewhere(id: string, target: "tab" | "window") {
   openNamed(`canopy:${id}`, soloUrl(id), target);
 }
 
+/** A panel popped out of the dock, in a window of its own named apart from
+ *  the plain solo window's, so a later "open in a new tab" of the same repo
+ *  does not land in it. The window, or null when the browser blocked it. */
+export function popOutWindow(id: string): Window | null {
+  return openNamed(`canopy:pop:${id}`, soloUrl(id, { popped: true }), "window");
+}
+
 /** A shell at a repo in a tab or window of its own. Every click is a new
  *  shell, so the window is named after the moment rather than the repo. */
 export function openShellElsewhere(id: string, target: "tab" | "window") {
@@ -163,7 +178,7 @@ export function popShell(id: string, term: string, target: "tab" | "window") {
   openNamed(`canopy:shell:${term}`, heldShellUrl(id, term), target);
 }
 
-function openNamed(name: string, url: string, target: "tab" | "window") {
+function openNamed(name: string, url: string, target: "tab" | "window"): Window | null {
   const avail = {
     width: window.screen?.availWidth || 1440,
     height: window.screen?.availHeight || 900,
@@ -173,4 +188,5 @@ function openNamed(name: string, url: string, target: "tab" | "window") {
       ? window.open(url, name, popupFeatures(avail))
       : window.open(url, name);
   win?.focus();
+  return win;
 }

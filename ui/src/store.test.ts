@@ -204,6 +204,90 @@ describe("shells this window ends or restores", () => {
   });
 });
 
+describe("popping a panel out and back", () => {
+  const app = { id: "app", name: "app", path: "/dev/app", group: "", source: "launch", status: null } as unknown as Repo;
+  const shell = "9".repeat(32);
+  const panelTab = { id: shell, repoId: "app", name: "app", path: "/dev/app", place: "panel" as const };
+  const held: TermInfo = { id: shell, repoId: "app", path: "/dev/app", place: "panel", attached: false, viewers: [], startedAt: 1 };
+  const realFetch = globalThis.fetch;
+  const g = globalThis as unknown as { window?: unknown };
+  beforeEach(() => {
+    // opening a panel asks to start its tasks
+    globalThis.fetch = (async () => new Response(JSON.stringify({ tasks: [], errors: [] }), { status: 200 })) as unknown as typeof fetch;
+  });
+  afterEach(() => {
+    globalThis.fetch = realFetch;
+    delete g.window;
+    useStore.setState({ repos: [], panels: [], activePanel: null, terms: [], shells: [], hiddenTerms: [], popped: {} });
+  });
+  /** a window whose window.open answers with `win`, recording each call */
+  const stubWindow = (win: { focus: () => void } | null) => {
+    const opened: { url: string; name: string }[] = [];
+    g.window = {
+      location: { href: "http://a.test/", search: "" },
+      open: (url: string, name: string) => {
+        opened.push({ url, name });
+        return win;
+      },
+    };
+    return opened;
+  };
+
+  test("pop out opens the panel's own window, then takes it out of the dock with its slot", () => {
+    const opened = stubWindow({ focus: () => {} });
+    useStore.setState({ repos: [app], panels: ["x", "app", "y"], activePanel: "app", terms: [panelTab], shells: [held], hiddenTerms: [], popped: {} });
+    useStore.getState().popOut("app");
+    const s = useStore.getState();
+    expect(opened).toHaveLength(1);
+    expect(opened[0]?.name).toBe("canopy:pop:app");
+    const u = new URL(opened[0]?.url ?? "");
+    expect([u.searchParams.get("repo"), u.searchParams.get("view"), u.searchParams.get("popped")]).toEqual(["app", "solo", "1"]);
+    expect(s.panels).toEqual(["x", "y"]);
+    expect(s.popped).toEqual({ app: 1 });
+    // the shell runs on, held, with no tab in the dock
+    expect(s.terms).toEqual([]);
+    expect(s.shells).toEqual([held]);
+  });
+
+  test("a blocked pop-out leaves the panel where it was", () => {
+    stubWindow(null);
+    useStore.setState({ repos: [app], panels: ["x", "app", "y"], activePanel: "app", terms: [panelTab], shells: [held], hiddenTerms: [], popped: {} });
+    useStore.getState().popOut("app");
+    const s = useStore.getState();
+    expect(s.panels).toEqual(["x", "app", "y"]);
+    expect(s.popped).toEqual({});
+    expect(s.terms).toEqual([panelTab]);
+  });
+
+  test("returning puts the panel back at its slot, in front, with its shell", () => {
+    useStore.setState({ repos: [app], panels: ["x", "y"], activePanel: "x", terms: [], shells: [held], hiddenTerms: [], popped: { app: 1 } });
+    useStore.getState().returnPanel("app");
+    const s = useStore.getState();
+    expect(s.panels).toEqual(["x", "app", "y"]);
+    expect(s.popped).toEqual({});
+    expect(s.activePanel).toBe("app");
+    expect(s.terms.map((t) => t.id)).toEqual([shell]);
+    // a panel no window popped is not this one's to bring back
+    useStore.getState().returnPanel("x");
+    expect(useStore.getState().panels).toEqual(["x", "app", "y"]);
+  });
+
+  test("a window claiming a docked panel takes it out and keeps its slot", () => {
+    useStore.setState({ repos: [app], panels: ["x", "app", "y"], activePanel: "app", terms: [panelTab], shells: [held], hiddenTerms: [], popped: {} });
+    useStore.getState().claimPanel("app");
+    let s = useStore.getState();
+    expect(s.panels).toEqual(["x", "y"]);
+    expect(s.popped).toEqual({ app: 1 });
+    expect(s.terms).toEqual([]);
+    expect(s.shells).toEqual([held]);
+    // a claim on a panel already out changes nothing
+    useStore.getState().claimPanel("app");
+    s = useStore.getState();
+    expect(s.panels).toEqual(["x", "y"]);
+    expect(s.popped).toEqual({ app: 1 });
+  });
+});
+
 describe("a panel's tasks start once per open, by any path", () => {
   const realFetch = globalThis.fetch;
   const started: string[] = [];

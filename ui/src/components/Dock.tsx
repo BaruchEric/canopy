@@ -1027,6 +1027,7 @@ function PanelGear({
   const level = useStore((s) => s.settings.level);
   const panels = useStore((s) => s.panels);
   const movePanel = useStore((s) => s.movePanel);
+  const popOut = useStore((s) => s.popOut);
   const carousel = useStore((s) => s.settings.dockCarousel);
   const at = panels.indexOf(repo.id);
   // a phone's dock stays as it was, without the moves or the carousel
@@ -1057,7 +1058,9 @@ function PanelGear({
         { type: "item", label: "panels as tabs", on: openIn === "tabs", run: () => setSetting("openIn", "tabs") },
         ...moves,
         { type: "item", label: "open in a new tab", run: () => openElsewhere(repo.id, "tab") },
-        { type: "item", label: "open in a new window", run: () => openElsewhere(repo.id, "window") },
+        // out of the dock into a window of its own, and back to its slot
+        // from there; a new tab is a copy and leaves the dock as it is
+        { type: "item", label: "pop out", run: () => popOut(repo.id) },
       ] satisfies GearEntry[]),
     { type: "item", label: "intermediate panel", on: level === "intermediate", run: () => setSetting("level", "intermediate") },
     { type: "item", label: "advanced panel", on: level === "advanced", run: () => setSetting("level", "advanced") },

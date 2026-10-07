@@ -7,7 +7,8 @@ import { applyQuery, type RepoFilter } from "./filters";
 import { cardChangedAt, cardFavorite, joinRepos, leadOf, type RepoCard } from "./checkouts";
 import { changedAt } from "./grouping";
 import { focusPanel, movePanel as moveIn, nextActive } from "./dock";
-import { heldShellUrl, openElsewhere, openShellElsewhere, parseRoute, soloUrl } from "./routes";
+import { heldShellUrl, openElsewhere, openShellElsewhere, parseRoute, popOutWindow, soloUrl } from "./routes";
+import { restorePanel, without } from "./panes";
 import { loadSettings, saveSettings, SCREEN_SETTINGS, shellPlace, type Settings, type ShellPlace } from "./settings";
 import { PANEL_TERM_ROWS, adoptTerms, loadFocusSize, loadTermTabs, needsPanelShell, nextStripTab, panelShellStart, reconcileTerms, rowsPx, termId, type FocusSize, type TermTab } from "./term";
 import { clearTask, frontForTab, frontForTask, keepFront, projectFront, withSolo, type BenchPane, type Front } from "./front";
@@ -206,6 +207,9 @@ interface Layout {
   panels: string[];
   /** the dock's showing tab */
   activePanel: string | null;
+  /** the panels popped out to windows of their own, by the dock slot each
+   *  goes back to */
+  popped: Record<string, number>;
   /** which backend's checkout a card that has several stands for, by card key */
   checkoutPref: Record<string, string>;
 }
@@ -230,6 +234,7 @@ function loadLayout(): Layout {
     feedHeight: FEED.initial,
     panels: [],
     activePanel: null,
+    popped: {},
     terms: [],
     activeTerm: null,
     hiddenTerms: [],
@@ -256,6 +261,7 @@ function loadLayout(): Layout {
       feedHeight?: unknown;
       panels?: unknown;
       activePanel?: unknown;
+      popped?: Record<string, unknown>;
       terms?: unknown;
       activeTerm?: unknown;
       hiddenTerms?: unknown;
@@ -319,6 +325,7 @@ function loadLayout(): Layout {
           : FEED.initial,
       panels: strings(saved.panels),
       activePanel: typeof saved.activePanel === "string" ? saved.activePanel : null,
+      popped: sizes(saved.popped, { min: 0, max: Number.MAX_SAFE_INTEGER }),
       terms: loadTermTabs(saved.terms),
       activeTerm: typeof saved.activeTerm === "string" ? saved.activeTerm : null,
       hiddenTerms: strings(saved.hiddenTerms),
@@ -384,6 +391,7 @@ export const layoutOf = (s: CanopyState): Omit<Layout, "knownSections"> => ({
   feedHeight: s.feedHeight,
   panels: s.panels,
   activePanel: s.activePanel,
+  popped: s.popped,
   terms: savedTerms(s),
   activeTerm: s.activeTerm,
   hiddenTerms: s.hiddenTerms,
@@ -609,6 +617,8 @@ interface CanopyState {
   /** the panel showing when the dock is tabbed (`openIn: "tabs"`); kept
    *  in every mode so switching the setting keeps the place */
   activePanel: string | null;
+  /** the panels popped out to windows of their own, by their dock slot */
+  popped: Record<string, number>;
   /** repo id → last SSE update, for the update pulse */
   updatedAt: Record<string, number>;
   /** px width of the repo tree, dragged by the sidebar resizer */
@@ -773,6 +783,13 @@ interface CanopyState {
   /** moves an open panel to index `to` of the dock (clamped); the panel
    *  showing stays the one showing */
   movePanel: (id: string, to: number) => void;
+  /** opens the panel in a window of its own and, once that window is open,
+   *  takes it out of the dock, keeping its slot */
+  popOut: (id: string) => void;
+  /** a pop-out said bye or asked to go back: the panel returns to its slot */
+  returnPanel: (id: string) => void;
+  /** a pop-out says it shows `id`: the dock lets go of it */
+  claimPanel: (id: string) => void;
   /** what one backend's stream said, `from` home unless named */
   applyEvent: (ev: ServerEvent, from?: string) => void;
   setWorkspaces: (ws: Workspace[]) => void;
@@ -1354,6 +1371,7 @@ export const useStore = create<CanopyState>((set, get) => ({
   activeWs: null,
   panels: layout.panels,
   activePanel: layout.activePanel,
+  popped: layout.popped,
   updatedAt: {},
   sidebarWidth: layout.sidebarWidth,
   panelWidths: layout.panelWidths,
@@ -1936,6 +1954,33 @@ export const useStore = create<CanopyState>((set, get) => ({
     });
   },
   movePanel: (id, to) => set((s) => ({ panels: moveIn(s.panels, id, to) })),
+  popOut: (id) => {
+    const s = get();
+    const slot = s.panels.indexOf(id);
+    if (slot === -1) return;
+    // the window first: a blocked popup leaves the panel where it was.
+    // closePanel drops only the panel's shell tabs, so its shells run on
+    // and its folds stay.
+    if (!popOutWindow(id)) return;
+    set({ popped: { ...s.popped, [id]: slot } });
+    get().closePanel(id);
+  },
+  returnPanel: (id) =>
+    set((s) => {
+      const slot = s.popped[id];
+      if (slot === undefined) return {};
+      const panels = restorePanel(s.panels, id, slot);
+      // its held shells come back as tabs, the way openPanel adopts them
+      const terms = dockless() ? s.terms : adoptTerms(s.terms, s.shells, s.repos, panels, skipped(s.hiddenTerms));
+      return { popped: without(s.popped, id), panels, activePanel: id, terms };
+    }),
+  claimPanel: (id) => {
+    const s = get();
+    const slot = s.panels.indexOf(id);
+    if (slot === -1) return;
+    set({ popped: { ...s.popped, [id]: slot } });
+    get().closePanel(id);
+  },
 
   applyEvent: (sent, from) => {
     // an older backend's agents event is its plain map of settings by path
@@ -2889,6 +2934,7 @@ useStore.subscribe((s, prev) => {
   if (dockless()) {
     delete patch.panels;
     delete patch.activePanel;
+    delete patch.popped;
     delete patch.terms;
     delete patch.activeTerm;
   }
