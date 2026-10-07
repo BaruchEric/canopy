@@ -20,7 +20,7 @@ import type { ApprovalFacts } from "./codexrun";
 import { stageEnv } from "./envnames";
 import { EDIT_TOOLS } from "./shellwords";
 import { STAGE_AWAY } from "./stagewire";
-import type { Harness, PermissionAsk, Run, RunAnswer, RunPrompt, RunQuestion, RunResult, RunStatus, RunStep, RunTokens } from "./types";
+import type { Harness, PermissionAsk, Run, RunAnswer, RunPrompt, RunQuestion, RunResult, RunStatus, RunStep, RunTodo, RunTokens } from "./types";
 
 /** steps kept per run; the oldest fall off with a note */
 export const STEP_CAP = 400;
@@ -141,6 +141,8 @@ export interface DriveCtx {
   session(id: string): void;
   /** the plan the agent proposed, which replaces the one before it */
   proposal(plan: string): void;
+  /** the agent's checklist as it now stands, which replaces the one before */
+  todos(next: RunTodo[]): void;
   /** A turn's result. A job ends with it: done, or failed with `problem`. A
    *  chat goes idle, the problem said as a note. */
   result(result: DriveResult, problem: string | null): void;
@@ -368,6 +370,12 @@ export class RunCtx implements DriveCtx {
   proposal(plan: string): void {
     if (!activeStatus(this.run.status)) return;
     this.run.proposal = plan;
+    this.changed();
+  }
+
+  todos(next: RunTodo[]): void {
+    if (!activeStatus(this.run.status)) return;
+    this.run.todos = next;
     this.changed();
   }
 

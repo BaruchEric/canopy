@@ -18,7 +18,8 @@ import { normalizeAgent } from "./agent";
 import { bunSpawn, type RpcProc, type RpcSpawn } from "./codexrpc";
 import { activeStatus, spawnEnv, type DriveCtx, type DriveSpec, type RunDriver } from "./driver";
 import { agentArgs } from "./harness";
-import { DEFAULT_AGENT, type AgentSettings, type PermissionAsk, type RunQuestion, type RunStep } from "./types";
+import { DEFAULT_AGENT, type AgentSettings, type PermissionAsk, type RunQuestion, type RunStep, type RunTodo } from "./types";
+import { TODO_TOOLS, todoCreated, todoUpdated, todoWritten } from "./todos";
 
 /** characters of tool output kept per step */
 const OUTPUT_CAP = 2_000;
@@ -203,6 +204,9 @@ export class ClaudeDriver implements RunDriver {
   private bin: string | null = null;
   /** tool_use id → its step, to attach results to their call */
   private tools = new Map<string, RunStep>();
+  /** main-thread todo tool calls by id, read once their result arrives */
+  private todoInputs = new Map<string, { name: string; input: Record<string, unknown> }>();
+  private todos: RunTodo[] = [];
   /** the session id is taken from the first message that carries one */
   private sessionSeen = false;
   /** live subagent task ids (spec P7): task_type local_agent only, since a
@@ -553,13 +557,15 @@ export class ClaudeDriver implements RunDriver {
       const content = message["content"];
       if (!Array.isArray(content)) return;
       let changed = false;
+      const parentUse = str(m, "parent_tool_use_id");
+      const parent = parentUse ? this.tools.get(parentUse)?.id : undefined;
       for (const block of content) {
         if (!isRecord(block)) continue;
         const kind = str(block, "type");
         if (kind === "text") {
           const text = str(block, "text").trim();
           if (text) {
-            ctx.step({ kind: "text", text });
+            ctx.step({ kind: "text", text, ...(parent ? { parent } : {}) });
             changed = true;
           }
         } else if (kind === "tool_use") {
@@ -568,11 +574,33 @@ export class ClaudeDriver implements RunDriver {
           const step = ctx.step({
             kind: "tool",
             tool: { name, title: describeTool(name, input, ctx.cwd), status: "running" },
+            ...(parent ? { parent } : {}),
           });
           this.tools.set(str(block, "id"), step);
+          if (!parentUse && TODO_TOOLS.has(name)) {
+            if (name === "TodoWrite") {
+              const next = todoWritten(input);
+              if (next) {
+                this.todos = next;
+                ctx.todos(next);
+              }
+            } else {
+              this.todoInputs.set(str(block, "id"), { name, input });
+            }
+          }
           changed = true;
         } else if (kind === "tool_result") {
-          const step = this.tools.get(str(block, "tool_use_id"));
+          const useId = str(block, "tool_use_id");
+          const step = this.tools.get(useId);
+          const todoCall = this.todoInputs.get(useId);
+          if (todoCall) {
+            this.todoInputs.delete(useId);
+            if (block["is_error"] !== true) {
+              if (todoCall.name === "TaskCreate") this.todos = todoCreated(this.todos, todoCall.input, resultText(block["content"]));
+              else if (todoCall.name === "TaskUpdate") this.todos = todoUpdated(this.todos, todoCall.input);
+              if (todoCall.name === "TaskCreate" || todoCall.name === "TaskUpdate") ctx.todos(this.todos);
+            }
+          }
           if (!step?.tool) continue;
           step.tool.status = block["is_error"] === true ? "error" : "ok";
           const text = resultText(block["content"]).trim();

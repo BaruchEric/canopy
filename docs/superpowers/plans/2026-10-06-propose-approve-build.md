@@ -708,7 +708,7 @@ git commit -m "feat(runs): ExitPlanMode is a proposal, and approval switches the
   - `TODO_TOOLS: ReadonlySet<string>`, which holds TaskCreate, TaskUpdate, TaskList, TaskGet and TodoWrite.
   - `DriveCtx.todos(next: RunTodo[]): void`.
 
-- [ ] **Step 1: Write the failing tests**, `src/core/todos.test.ts`:
+- [x] **Step 1: Write the failing tests**, `src/core/todos.test.ts`:
 
 ```ts
 import { describe, expect, test } from "bun:test";
@@ -769,12 +769,12 @@ test("a subagent's steps carry their Agent step as parent", async () => {
 });
 ```
 
-- [ ] **Step 2: Run them and watch them fail**
+- [x] **Step 2: Run them and watch them fail**
 
 Run: `env -u TMUX SHELL=/bin/bash bun test src/core/todos.test.ts src/core/claudedrive.test.ts`
 Expected: FAIL, the module is missing.
 
-- [ ] **Step 3: Implement** `src/core/todos.ts`:
+- [x] **Step 3: Implement** `src/core/todos.ts`:
 
 ```ts
 /** The agent's own checklist, read off its todo tools (spec P4): Claude
@@ -838,12 +838,12 @@ In `ClaudeDriver.apply`:
 
 `DriveCtx.todos(next)` sets `run.todos = next` and broadcasts. Implement it in `RunCtx`.
 
-- [ ] **Step 4: Run the tests and watch them pass**
+- [x] **Step 4: Run the tests and watch them pass**
 
 Run: `env -u TMUX SHELL=/bin/bash bun test src/core/`
 Expected: PASS.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add src/core

@@ -545,3 +545,25 @@ describe("a stage run through the stage runner's spawn", () => {
     expect(run.error).toContain(STAGE_AWAY);
   });
 });
+
+test("the checklist follows TaskCreate and TaskUpdate", async () => {
+  const d = await drive("propose");
+  const w = await d.until((r) => (r.todos?.length ?? 0) > 0, "the first todo");
+  expect(w.todos).toEqual([{ id: "1", subject: "Read the code", status: "pending", active: "Reading the code" }]);
+  const asked = await d.until((r) => r.prompt?.kind === "proposal", "the proposal");
+  d.ctx.answer(asked.prompt?.id ?? "", { kind: "approve", auto: false });
+  const run = await d.until(d.done, "the end");
+  expect(run.todos?.[0]?.status).toBe("completed");
+});
+
+test("a subagent's steps carry their Agent step as parent", async () => {
+  const d = await drive("async");
+  const w = await d.until((r) => r.status === "waiting", "the prompt");
+  const agentStep = w.steps.find((s) => s.tool?.name === "Agent");
+  const child = w.steps.find((s) => s.tool?.name === "Bash");
+  expect(agentStep).toBeDefined();
+  expect(child?.parent).toBe(agentStep?.id);
+  expect(agentStep?.parent).toBeUndefined();
+  d.ctx.answer(w.prompt?.id ?? "", { kind: "allow" });
+  await d.until(d.done, "the end");
+});
