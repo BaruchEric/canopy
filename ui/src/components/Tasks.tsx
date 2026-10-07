@@ -1,4 +1,5 @@
 import { useContext, useEffect, useLayoutEffect, useRef, useState } from "react";
+import { keepKeys } from "../surface";
 import { useShallow } from "zustand/react/shallow";
 import { api } from "../api";
 import { useFitPop } from "../pop";
@@ -348,7 +349,7 @@ export function TaskChip({ repoId }: { repoId: string }) {
         showTasks(repoId);
       }}
       onAuxClick={(e) => e.stopPropagation()}
-      onKeyDown={(e) => e.stopPropagation()}
+      onKeyDown={keepKeys}
     >
       {chip.text}
     </button>

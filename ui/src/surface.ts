@@ -236,6 +236,12 @@ export const triggerKeeps = (key: string, open: boolean): boolean => open || but
  *  layers, so a panel filling the window leaves with the focus on it. */
 export const buttonKeeps = (key: string): boolean => key !== "Escape";
 
+/** A button's onKeyDown on a card or a panel head that opens on Enter:
+ *  keeps every key from it but Escape (`buttonKeeps`). */
+export function keepKeys(e: { key: string; stopPropagation(): void }): void {
+  if (buttonKeeps(e.key)) e.stopPropagation();
+}
+
 /** what keeps its own Escape: a shell, an open menu, a sheet */
 const OWN_ESCAPE = ".term-screen, .xterm, .menu, .sheet";
 /** a text field, which keeps Escape too while the page holds it in full

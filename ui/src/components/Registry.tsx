@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
+import { keepKeys } from "../surface";
 import { useShallow } from "zustand/react/shallow";
 import { HARNESS } from "../../../src/core/harness";
 import { isLiveAgent, type ActivityEvent, type AgentActivity, type AgentCard, type Repo } from "../../../src/core/types";
@@ -767,7 +768,7 @@ export function AgentChip({ repoId }: { repoId: string }) {
         showAgents(repoId);
       }}
       onAuxClick={(e) => e.stopPropagation()}
-      onKeyDown={(e) => e.stopPropagation()}
+      onKeyDown={keepKeys}
     >
       ✦ {live.length}
     </button>

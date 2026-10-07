@@ -1,4 +1,5 @@
 import type { SyntheticEvent } from "react";
+import { keepKeys } from "../surface";
 import type { PeerState, PullCount, RemoteTip, RepoStatus } from "../../../src/core/types";
 import { elsewhereChips } from "../elsewhere";
 import { peerChips } from "../peers";
@@ -86,7 +87,7 @@ export function Pulls({ pulls, name }: { pulls: PullCount; name: string }) {
       aria-label={`${pulls.open} open pull request${pulls.open === 1 ? "" : "s"} on ${name}`}
       onClick={stop}
       onAuxClick={stop}
-      onKeyDown={stop}
+      onKeyDown={keepKeys}
     >
       ⇄ {pulls.open}
     </a>

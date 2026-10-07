@@ -1,4 +1,5 @@
 import type { SyntheticEvent } from "react";
+import { keepKeys } from "../surface";
 import { linkLabel } from "../util";
 
 /** The repo's remote, as a link out of canopy. Every way of activating a card
@@ -16,7 +17,7 @@ export function RepoLink({ url, name, labeled = false }: { url: string; name: st
       aria-label={`Open ${name} at ${linkLabel(url)}`}
       onClick={stop}
       onAuxClick={stop}
-      onKeyDown={stop}
+      onKeyDown={keepKeys}
     >
       <svg
         width="13"

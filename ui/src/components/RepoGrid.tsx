@@ -1,4 +1,5 @@
 import { memo, useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
+import { keepKeys } from "../surface";
 import { useShallow } from "zustand/react/shallow";
 import { pickable } from "../flows";
 import { changedAt, groupRepos, newestEdit, sectionKey } from "../grouping";
@@ -100,7 +101,7 @@ function MachineStrip({ card, lead, selecting }: { card: Card; lead: string; sel
               if (e.button === 1) openRepo(c.id, { metaKey: true });
             }}
             // the card opens its lead on Enter; this chip opens its own
-            onKeyDown={(e) => e.stopPropagation()}
+            onKeyDown={keepKeys}
           >
             {inner}
           </button>

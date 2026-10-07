@@ -1,6 +1,6 @@
 import type { SyntheticEvent } from "react";
 import { isFavorite, useStore } from "../store";
-import { buttonKeeps } from "../surface";
+import { keepKeys } from "../surface";
 
 /** The ☆/★ that stars a repo in canopy. It swallows its own click, middle
  *  click and Enter, like RepoLink, so the card or row underneath does not
@@ -31,9 +31,7 @@ export function Star({ repoId, name, onError }: { repoId: string; name: string; 
         void toggle();
       }}
       onAuxClick={stop}
-      onKeyDown={(e) => {
-        if (buttonKeeps(e.key)) stop(e);
-      }}
+      onKeyDown={keepKeys}
     >
       {on ? "★" : "☆"}
     </button>

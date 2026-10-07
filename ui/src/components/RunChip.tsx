@@ -1,4 +1,5 @@
 import { useStore } from "../store";
+import { keepKeys } from "../surface";
 import { flowWord } from "../flows";
 import { AGENT_NAME, agentWord, harnessOf, progressWord } from "../runs";
 import type { Flow, Run } from "../../../src/core/types";
@@ -53,7 +54,7 @@ export function RunChip({ run, long = false }: { run: Run; long?: boolean }) {
         showRun(run.id);
       }}
       onPointerDown={(e) => e.stopPropagation()}
-      onKeyDown={(e) => e.stopPropagation()}
+      onKeyDown={keepKeys}
     >
       <span className="dot" />
       {text}
@@ -76,7 +77,7 @@ export function FlowChip({ flow, long = false }: { flow: Flow; long?: boolean })
         showFlow(flow.id);
       }}
       onPointerDown={(e) => e.stopPropagation()}
-      onKeyDown={(e) => e.stopPropagation()}
+      onKeyDown={keepKeys}
     >
       <span className="dot" />
       {flowWord(flow, long)}

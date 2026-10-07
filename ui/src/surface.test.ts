@@ -4,6 +4,7 @@ import {
   escapeLeaves,
   triggerKeeps,
   buttonKeeps,
+  keepKeys,
   captureName,
   flipMode,
   moveSection,
@@ -227,5 +228,13 @@ describe("what a button on a card keeps from the card", () => {
     expect(buttonKeeps(" ")).toBe(true);
     // a star in a panel filling the window must not keep the Escape that leaves
     expect(buttonKeeps("Escape")).toBe(false);
+  });
+});
+
+describe("a card button's key handler", () => {
+  test("stops every key but Escape from reaching the card", () => {
+    const stopped: string[] = [];
+    for (const key of ["Enter", " ", "Escape", "a"]) keepKeys({ key, stopPropagation: () => stopped.push(key) });
+    expect(stopped).toEqual(["Enter", " ", "a"]);
   });
 });
