@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { parsePaneMsg, poppedOf, unclaimed, without } from "./panes";
+import { listenPanes, parsePaneMsg, poppedOf, unclaimed, without, type PaneDock, type PaneLine, type PaneMsg } from "./panes";
 
 describe("pane messages", () => {
   test("parses the five kinds and refuses anything else", () => {
@@ -42,5 +42,55 @@ describe("the saved popped slots", () => {
     expect(poppedOf(null)).toEqual({});
     expect(poppedOf("a")).toEqual({});
     expect(poppedOf(undefined)).toEqual({});
+  });
+});
+
+/** the main window's side, on a stand-in channel and dock, with waits short
+ *  enough to sleep through */
+function rig(popped: Record<string, number> = {}) {
+  const did: string[] = [];
+  const sent: PaneMsg[] = [];
+  let hear: (data: unknown) => void = () => {};
+  const line: PaneLine = { listen: (fn) => (hear = fn), postMessage: (m) => sent.push(m), close: () => did.push("closed") };
+  const dock: PaneDock = {
+    popped: () => popped,
+    heardHello: (id) => did.push(`hello ${id}`),
+    returnPanel: (id) => did.push(`return ${id}`),
+    forgetPopped: (id) => did.push(`forget ${id}`),
+  };
+  const stop = listenPanes(line, dock, { bye: 10, who: 30 });
+  return { did, sent, hear: (data: unknown) => hear(data), stop };
+}
+
+describe("the main window's pane listener", () => {
+  test("asks who is out there as it starts, and takes back a popped panel no window answers for", async () => {
+    const r = rig({ a: 0, b: 1 });
+    expect(r.sent).toEqual([{ type: "who" }]);
+    r.hear({ type: "hello", id: "a" });
+    await Bun.sleep(50);
+    expect(r.did).toEqual(["hello a", "return b"]);
+    r.stop();
+  });
+
+  test("hello claims, return and close act at once, and a bye waits for a reload's hello", async () => {
+    const r = rig();
+    r.hear({ type: "return", id: "a" });
+    r.hear({ type: "close", id: "b" });
+    r.hear({ type: "bye", id: "c" });
+    r.hear({ type: "hello", id: "c" });
+    r.hear({ type: "bye", id: "d" });
+    r.hear({ type: "who" });
+    r.hear({ type: "nuke", id: "e" });
+    await Bun.sleep(25);
+    expect(r.did).toEqual(["return a", "forget b", "hello c", "return d"]);
+    r.stop();
+  });
+
+  test("stopping clears every wait and closes the channel", async () => {
+    const r = rig({ a: 0 });
+    r.hear({ type: "bye", id: "b" });
+    r.stop();
+    await Bun.sleep(50);
+    expect(r.did).toEqual(["closed"]);
   });
 });

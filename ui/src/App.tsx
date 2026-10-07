@@ -15,7 +15,7 @@ import { SectionSolo, Solo } from "./components/Solo";
 import { ShellSolo, TermDock } from "./components/TermDock";
 import { Crowns, TopBar } from "./components/TopBar";
 import { NARROW, PHONE, useMedia } from "./media";
-import { BYE_WAIT_MS, PANES_CHANNEL, WHO_WAIT_MS, parsePaneMsg, unclaimed, type PaneMsg } from "./panes";
+import { PANES_CHANNEL, listenPanes, parsePaneMsg, type PaneMsg } from "./panes";
 import { dropAskHere, parseRoute } from "./routes";
 import { SORT_MODES, type Theme } from "./settings";
 import { SIDEBAR, dockless, useStore } from "./store";
@@ -158,55 +158,22 @@ export function App() {
     dropAskHere();
   }, [loaded]);
 
-  // Pop out and back, the main window's side. A pop-out's hello takes its
-  // panel out of the dock, unless the user docked it again by hand
-  // (heardHello); its "back to the dock" puts the panel back at its slot,
-  // and so does its bye after a moment, since a reloading pop-out says bye
-  // and then hello again; its close forgets the slot. "who" is a loading
-  // main window's question for the pop-outs, so this window lets another's
-  // pass. Loading, it asks who is out there and takes back every popped
-  // panel no window answers for.
+  // Pop out and back, the main window's side (listenPanes)
   useEffect(() => {
     if (dockless() || typeof BroadcastChannel === "undefined") return;
+    const s = () => useStore.getState();
     const ch = new BroadcastChannel(PANES_CHANNEL);
-    const claimed = new Set<string>();
-    const byes = new Map<string, ReturnType<typeof setTimeout>>();
-    ch.onmessage = (e: MessageEvent) => {
-      const m = parsePaneMsg(e.data);
-      if (!m || m.type === "who") return;
-      clearTimeout(byes.get(m.id));
-      byes.delete(m.id);
-      const s = useStore.getState();
-      if (m.type === "hello") {
-        claimed.add(m.id);
-        s.heardHello(m.id);
-        return;
-      }
-      claimed.delete(m.id);
-      if (m.type === "return") s.returnPanel(m.id);
-      else if (m.type === "close") s.forgetPopped(m.id);
-      else {
-        const back = () => {
-          byes.delete(m.id);
-          useStore.getState().returnPanel(m.id);
-        };
-        byes.set(m.id, setTimeout(back, BYE_WAIT_MS));
-      }
+    const line = {
+      listen: (hear: (data: unknown) => void) => (ch.onmessage = (e: MessageEvent) => hear(e.data)),
+      postMessage: (m: PaneMsg) => ch.postMessage(m),
+      close: () => ch.close(),
     };
-    // only the panels out when this window loaded: one it pops out itself
-    // in the meantime has a window that is still saying hello
-    const out = new Set(Object.keys(useStore.getState().popped));
-    ch.postMessage({ type: "who" } satisfies PaneMsg);
-    const who = setTimeout(() => {
-      for (const id of unclaimed(useStore.getState().popped, claimed)) {
-        if (out.has(id)) useStore.getState().returnPanel(id);
-      }
-    }, WHO_WAIT_MS);
-    return () => {
-      clearTimeout(who);
-      for (const t of byes.values()) clearTimeout(t);
-      ch.close();
-    };
+    return listenPanes(line, {
+      popped: () => s().popped,
+      heardHello: (id) => s().heardHello(id),
+      returnPanel: (id) => s().returnPanel(id),
+      forgetPopped: (id) => s().forgetPopped(id),
+    });
   }, []);
 
   // Pop out and back, the pop-out's side: only a solo window opened with

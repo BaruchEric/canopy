@@ -50,6 +50,71 @@ export function poppedOf(v: unknown): Record<string, number> {
   return out;
 }
 
+/** The channel as the main window's listener uses it: a BroadcastChannel,
+ *  or a stand-in in the tests. */
+export interface PaneLine {
+  /** hands every message's data to `hear` */
+  listen(hear: (data: unknown) => void): void;
+  postMessage(msg: PaneMsg): void;
+  close(): void;
+}
+
+/** What the listener does to the dock: the store's actions. */
+export interface PaneDock {
+  popped(): Record<string, number>;
+  heardHello(id: string): void;
+  returnPanel(id: string): void;
+  forgetPopped(id: string): void;
+}
+
+/** Pop out and back, the main window's side. A pop-out's hello takes its
+ *  panel out of the dock, unless the user docked it again by hand
+ *  (heardHello); its "back to the dock" puts the panel back at its slot,
+ *  and so does its bye after `waits.bye`, since a reloading pop-out says
+ *  bye and then hello again; its close forgets the slot. "who" is a loading
+ *  main window's question for the pop-outs, so this window lets another's
+ *  pass. Starting, it asks who is out there and after `waits.who` takes
+ *  back every popped panel no window answered for. Returns what stops it. */
+export function listenPanes(ch: PaneLine, dock: PaneDock, waits = { bye: BYE_WAIT_MS, who: WHO_WAIT_MS }): () => void {
+  const claimed = new Set<string>();
+  const byes = new Map<string, ReturnType<typeof setTimeout>>();
+  ch.listen((data) => {
+    const m = parsePaneMsg(data);
+    if (!m || m.type === "who") return;
+    clearTimeout(byes.get(m.id));
+    byes.delete(m.id);
+    if (m.type === "hello") {
+      claimed.add(m.id);
+      dock.heardHello(m.id);
+      return;
+    }
+    claimed.delete(m.id);
+    if (m.type === "return") dock.returnPanel(m.id);
+    else if (m.type === "close") dock.forgetPopped(m.id);
+    else {
+      const back = () => {
+        byes.delete(m.id);
+        dock.returnPanel(m.id);
+      };
+      byes.set(m.id, setTimeout(back, waits.bye));
+    }
+  });
+  // only the panels out when this window loaded: one it pops out itself
+  // in the meantime has a window that is still saying hello
+  const out = new Set(Object.keys(dock.popped()));
+  ch.postMessage({ type: "who" });
+  const who = setTimeout(() => {
+    for (const id of unclaimed(dock.popped(), claimed)) {
+      if (out.has(id)) dock.returnPanel(id);
+    }
+  }, waits.who);
+  return () => {
+    clearTimeout(who);
+    for (const t of byes.values()) clearTimeout(t);
+    ch.close();
+  };
+}
+
 /** Says one thing on the channel from a window that does not stay to
  *  listen: a pop-out's "back to the dock" or its close. */
 export function tellPanes(msg: PaneMsg) {
