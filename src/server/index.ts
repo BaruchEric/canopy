@@ -1,5 +1,5 @@
 import { parseAnswer } from "./answers";
-import { ACTIONS, splitMembers } from "../core/actions";
+import { ACTIONS, busyWith, splitMembers } from "../core/actions";
 import { PREFLIGHT_HEADERS, corsHeaders, parseOrigins } from "../core/cors";
 import { Library, libraryOriginAllowed, openBind, tailnetHost } from "../core/library";
 import { PreviewProxy, parsePortRange, previewHostOk, previewable } from "../core/preview";
@@ -115,7 +115,7 @@ import {
 } from "../core/store";
 import { RememberedRules, scopeOf } from "../core/remember";
 import { QUIET_WAIT, Runner } from "../core/runner";
-import type { RunDriver } from "../core/driver";
+import { NotWaitingError, type RunDriver } from "../core/driver";
 import { ANSWERS_FILE, isSeedRepoId, SEED_AGENT_REFUSAL, SEEDS_DIR, withStoredAnswers } from "../core/sprout";
 import { SeedMirrors } from "../core/seedmirror";
 import { sweepCodexTrust } from "../core/codextrust";
@@ -684,7 +684,7 @@ async function startRepoRun(
   // agent here would make the flow's next step throw and die.
   if (state.flows.activeFor(repo.id)) throw new HttpError(409, "a workflow is running here");
   const busy = state.runner.activeFor(repo.id);
-  if (busy) throw new HttpError(409, `${repo.name} already has a ${busy.verb} run going`);
+  if (busy) throw new HttpError(409, busyWith(repo.name, busy.verb));
   const agent = agentFor(await loadConfig(), repo.path, action === "chat" ? "chat" : "job");
   // Before the workspace and install checks, so a workspace propose on
   // Codex hears what is wrong with the action, not with the workspace.
@@ -2208,6 +2208,10 @@ async function handleApi(
     if (typeof b.id !== "string" || typeof b.promptId !== "string" || !answer) {
       return json({ error: "malformed answer" }, 400);
     }
+    // a run canopy does not hold, and a prompt it is not waiting on, are
+    // the browser's stale view, not the server failing
+    if (!state.runner.get(b.id)) return json({ error: "no such run" }, 404);
+    if (!state.runner.waiting(b.id, b.promptId)) return json({ error: new NotWaitingError().message }, 409);
     // checked before a rule is kept: an answer of the wrong kind settles nothing
     const misfit = state.runner.misfit(b.id, b.promptId, answer);
     if (misfit) return json({ error: misfit }, 400);
@@ -2230,7 +2234,14 @@ async function handleApi(
     }
     // the questions as they were asked, before the answer settles them
     const asked = state.runner.get(b.id)?.prompt;
-    const run = state.runner.answer(b.id, b.promptId, answer);
+    let run: Run;
+    try {
+      run = state.runner.answer(b.id, b.promptId, answer);
+    } catch (err) {
+      // settled by someone else while the rule above was being kept
+      if (err instanceof NotWaitingError) return json({ error: err.message }, 409);
+      throw err;
+    }
     // the new rule may cover what other runs are waiting on
     if (answer.kind === "allow" && answer.remember) state.runner.recheck();
     // an answer inside an incubator stage is one of the sprout's inputs (amendment 6, ruling 14)
@@ -2484,7 +2495,7 @@ async function handleApi(
     const { others, skipped } = splitMembers(ws, primaryPath, state.result.repos, (r) => isSeedPath(state.root, r.path));
     for (const r of others) {
       const busy = state.runner.activeFor(r.id);
-      if (busy) throw new HttpError(409, `${r.name} already has a ${busy.verb} run going`);
+      if (busy) throw new HttpError(409, busyWith(r.name, busy.verb));
       if (state.flows.activeFor(r.id)) throw new HttpError(409, `a workflow is running in ${r.name}`);
     }
     const note = typeof b.note === "string" ? b.note : "";
@@ -2840,7 +2851,7 @@ async function handleApi(
       // workflow already has this repo, and initRepo/syncRepo/takeWip could
       // step on files or refs either of those is using.
       const activeRun = state.runner.activeFor(repo.id);
-      if (activeRun) throw new HttpError(409, `${repo.name} already has a ${activeRun.verb} run going`);
+      if (activeRun) throw new HttpError(409, busyWith(repo.name, activeRun.verb));
       if (state.flows.activeFor(repo.id)) throw new HttpError(409, "a workflow is running here");
       const dry = s.peerSync === "dry";
       let take: unknown;

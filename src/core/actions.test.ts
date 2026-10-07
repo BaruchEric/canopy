@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { ACTIONS, buildPrompt, checkWhen, describeTool, planWords, repoFacts, splitMembers, toolDetail } from "./actions";
+import { ACTIONS, buildPrompt, busyWith, checkWhen, describeTool, planWords, repoFacts, splitMembers, toolDetail } from "./actions";
 import { RUN_ACTIONS, statusFingerprint, type Repo, type RepoStatus } from "./types";
 
 function repo(over: Partial<Repo["status"] & { error: string }> = {}): Repo {
@@ -265,4 +265,10 @@ test("propose starts in plan mode with room for plan and build", () => {
   expect(ACTIONS.propose.task).toContain("ExitPlanMode");
   expect(ACTIONS.propose.task).toContain("subagents");
   expect(ACTIONS.propose.allowedTools.some((t) => t.startsWith("Bash(bun"))).toBe(false);
+});
+
+test("the busy message names the run's kind without an article that depends on it", () => {
+  expect(busyWith("beta", "ask")).toBe("beta already has a run going (ask)");
+  expect(busyWith("beta", "plan")).toBe("beta already has a run going (plan)");
+  expect(busyWith("beta", "update · gate")).toBe("beta already has a run going (update · gate)");
 });

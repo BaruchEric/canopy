@@ -3,7 +3,7 @@
  *  through its hooks (the check and the evaluator), pure in its logic, so the
  *  tests drive it with a fake runner. */
 
-import { checkWhen, type ActionSpec } from "./actions";
+import { busyWith, checkWhen, type ActionSpec } from "./actions";
 import { isSeedId } from "./sprout";
 import { STAGE_AWAY } from "./stagewire";
 import { decide, decideJudge, judgeState, verdictState } from "./verdict";
@@ -225,7 +225,7 @@ export class Flows {
     const busyFlow = this.activeFor(repo.id);
     if (busyFlow) throw new Error(`${repo.name} already has ${busyFlow.verb} going`);
     const busyRun = this.runner.activeFor(repo.id);
-    if (busyRun) throw new Error(`${repo.name} already has a ${busyRun.verb} run going`);
+    if (busyRun) throw new Error(busyWith(repo.name, busyRun.verb));
     if (workflow.noteRequired && !note.trim()) throw new Error("write what the agent should do first");
     const flow: Flow = {
       id: crypto.randomUUID().slice(0, 8),

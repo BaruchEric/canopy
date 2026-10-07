@@ -222,6 +222,13 @@ export class ClaudeDriver implements RunDriver {
   /** the subagents are done and the turn they woke has begun: the held
    *  result now waits for that turn's own, however long it runs */
   private woke = false;
+  /** the turns of results held and then outrun by a later one, which the
+   *  CLI counts per result: the run's own result adds them back. Null when
+   *  nothing was held, so a plain result keeps the CLI's own numbers. */
+  private heldTurns: number | null = null;
+  /** when the message that began this turn went down stdin, for the time
+   *  of a result after a hold (the CLI times its last turn alone) */
+  private turnStart = Date.now();
   /** canopy's own control requests to the CLI, waiting on its control_response */
   private asked = new Map<string, { settle: (r: RequestReply) => void; done: Promise<RequestReply> }>();
   private asks = 0;
@@ -246,6 +253,8 @@ export class ClaudeDriver implements RunDriver {
   /** A chat's next message goes down the same stdin as a plain user
    *  message, and the CLI keeps the conversation. */
   say(text: string): void {
+    this.turnStart = Date.now();
+    this.heldTurns = null;
     void this.send(userMessage(text));
   }
 
@@ -296,6 +305,8 @@ export class ClaudeDriver implements RunDriver {
     this.agents = new Set();
     this.held = null;
     this.woke = false;
+    this.heldTurns = null;
+    this.turnStart = Date.now();
     this.clearGrace();
     this.closed = false;
     try {
@@ -350,11 +361,15 @@ export class ClaudeDriver implements RunDriver {
           if (m["type"] === "result" && this.agents.size > 0) {
             // spec P5/P6: the main thread paused for a subagent; closing
             // stdin now would fail every later permission request
+            if (this.held) this.heldTurns = (this.heldTurns ?? 0) + num(this.held, "num_turns");
             this.held = m;
             this.woke = false;
             continue;
           }
-          if (m["type"] === "result") this.held = null;
+          if (m["type"] === "result" && this.held) {
+            this.heldTurns = (this.heldTurns ?? 0) + num(this.held, "num_turns");
+            this.held = null;
+          }
           this.apply(m);
           // Stdin stays open while the turn runs, for the control replies.
           // The result ends the turn; closing stdin lets the CLI exit. A chat
@@ -369,6 +384,8 @@ export class ClaudeDriver implements RunDriver {
               this.grace = null;
               if (this.held !== held) return;
               this.held = null;
+              // a held result is timed from the start too, as one that outran it is
+              this.heldTurns ??= 0;
               this.apply(held);
               if (!chat) this.endInput(running);
             }, this.opts.heldGraceMs ?? HELD_GRACE_MS);
@@ -392,6 +409,7 @@ export class ClaudeDriver implements RunDriver {
       // ran is a failure, whatever the early result said. A stop dropped it.
       if (held) {
         const tail = stderr.trim();
+        this.heldTurns ??= 0;
         this.apply(held, code === 0 ? null : `${this.label} exited (code ${code}) while a subagent ran${tail ? `: ${tail}` : ""}`);
       }
       ctx.exited({ code, stderr });
@@ -626,18 +644,25 @@ export class ClaudeDriver implements RunDriver {
         ? m["errors"].filter((e): e is string => typeof e === "string")
         : [];
       const text = subtype === "success" ? str(m, "result") : errors.join("\n");
-      const turns = num(m, "num_turns");
+      const own = num(m, "num_turns");
+      // a result that outran a held one, or a held one the run ends on,
+      // counts every turn since the message and the time since it went
+      // down stdin
+      const outran = this.heldTurns !== null;
+      const turns = own + (this.heldTurns ?? 0);
+      const durationMs = outran ? Date.now() - this.turnStart : num(m, "duration_ms");
+      this.heldTurns = null;
       const ok = subtype === "success" && !isError;
       const problem =
         subtype === "error_max_turns"
-          ? `stopped after ${turns} turns without finishing`
+          ? `stopped after ${own} turns without finishing`
           : subtype === "error_max_budget_usd"
             ? "stopped at the spending limit"
             : text.trim() || "Claude Code reported an error";
       // A job ends with it; a chat's result ends one reply, not the
       // conversation, and a reply that failed is said in the timeline.
       ctx.result(
-        { text: text.trim(), costUsd: num(m, "total_cost_usd"), durationMs: num(m, "duration_ms"), turns },
+        { text: text.trim(), costUsd: num(m, "total_cost_usd"), durationMs, turns },
         failure ?? (ok ? null : problem),
       );
     }

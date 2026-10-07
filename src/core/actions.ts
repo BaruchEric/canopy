@@ -202,6 +202,11 @@ export function repoFacts(repo: Repo): string[] {
   return facts;
 }
 
+/** What a start refused for a run already going on the repo says. The kind
+ *  rides in brackets, since a workflow step's verb is free text and no one
+ *  article fits every kind ("a ask run"). */
+export const busyWith = (name: string, verb: string): string => `${name} already has a run going (${verb})`;
+
 /** A workspace's members around its primary, for a run there: the local
  *  repos the run adds as folders, and in words the members it cannot open
  *  here (on another host, on the forge, missing from the last scan, or an

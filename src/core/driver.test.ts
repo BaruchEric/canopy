@@ -314,6 +314,26 @@ describe("results and exits", () => {
     expect(run.session).toBe("thr-1");
     expect(run.error).toBeUndefined();
   });
+
+  test("a run that stops or fails ends every step still running, as an error", () => {
+    for (const how of ["stop", "fail"] as const) {
+      const { run, ctx } = makeCtx();
+      const plan = ctx.step({ kind: "tool", tool: { name: "ExitPlanMode", title: "the plan", status: "running" } });
+      const read = ctx.step({ kind: "tool", tool: { name: "Read", title: "a.ts", status: "ok" } });
+      if (how === "stop") ctx.stopping = true;
+      ctx.exited({ code: null, stderr: "" });
+      expect(run.status).toBe(how === "stop" ? "stopped" : "failed");
+      expect(plan.tool?.status).toBe("error");
+      expect(read.tool?.status).toBe("ok");
+    }
+  });
+
+  test("a run that ends done leaves its steps as they are", () => {
+    const { ctx } = makeCtx();
+    const step = ctx.step({ kind: "tool", tool: { name: "Bash", title: "ls", status: "running" } });
+    ctx.result({ text: "ok", durationMs: 5, turns: 1 }, null);
+    expect(step.tool?.status).toBe("running");
+  });
 });
 
 describe("steps", () => {

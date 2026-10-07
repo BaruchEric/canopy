@@ -137,7 +137,7 @@ test("a busy member that is not the primary refuses the workspace run", async ()
   expect(onApi.status).toBe(201);
   const r = await call("POST", "/api/workspaces/run", { name: "bike", action: "ask", note: "again" });
   expect(r.status).toBe(409);
-  expect(await errorOf(r)).toMatch(/^api already has a .+ run going$/);
+  expect(await errorOf(r)).toMatch(/^api already has a run going \(.+\)$/);
   const runs = (await (await fetch(url("/api/runs"))).json()) as Run[];
   for (const run of runs.filter(isRunActive)) await stopRun(run.id);
 });

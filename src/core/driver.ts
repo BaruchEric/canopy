@@ -243,6 +243,15 @@ export function exitOutcome(
   };
 }
 
+/** An answer for a prompt the run is not waiting on: answered already,
+ *  withdrawn, never asked, or the run is over. The answer route says 409. */
+export class NotWaitingError extends Error {
+  constructor() {
+    super("that prompt is no longer waiting");
+    this.name = "NotWaitingError";
+  }
+}
+
 interface Pending {
   key: string;
   prompt: RunPrompt;
@@ -491,7 +500,7 @@ export class RunCtx implements DriveCtx {
    *  fit the prompt (`answerMisfit`) is refused and settles nothing. */
   answer(promptId: string, a: RunAnswer): void {
     const waiting = this.pending.find((p) => p.prompt.id === promptId);
-    if (!waiting) throw new Error("that prompt is no longer waiting");
+    if (!waiting) throw new NotWaitingError();
     const misfit = answerMisfit(waiting.prompt, a);
     if (misfit) throw new Error(misfit);
     // "run on its own" where it was never offered is approval that asks
@@ -546,6 +555,12 @@ export class RunCtx implements DriveCtx {
     this.run.endedAt = Date.now();
     this.run.prompt = null;
     if (error) this.run.error = error;
+    // a stopped or failed run's process is gone, so no result comes for a
+    // call still open (a plan that waited, a command cut off): it ends as
+    // an error, the way Codex marks an interrupted item
+    if (status !== "done") {
+      for (const s of this.run.steps) if (s.tool?.status === "running") s.tool.status = "error";
+    }
     this.changed();
     this.hooks.ended?.(this.run);
   }

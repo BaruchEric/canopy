@@ -396,6 +396,25 @@ describe("a Claude run through the driver", () => {
     expect(log.some((m) => m["type"] === "control_response" && (m["response"] as { request_id?: string }).request_id === "req-a")).toBe(true);
   });
 
+  test("a held result's turns count toward the real one's, and the time runs from the start", async () => {
+    const d = await drive("async");
+    const waiting = await d.until((r) => r.status === "waiting", "the subagent's prompt");
+    await Bun.sleep(120);
+    d.ctx.answer(waiting.prompt?.id ?? "", { kind: "allow" });
+    const run = await d.until(d.done, "the end");
+    // the early result's 1 turn and the woken turn's 3; the cost is the
+    // CLI's running total already, so it is the last result's alone
+    expect(run.result?.turns).toBe(4);
+    expect(run.result?.durationMs).toBeGreaterThanOrEqual(120);
+    expect(run.result?.costUsd).toBe(0.05);
+  });
+
+  test("a result nothing held keeps the CLI's own turns and time", async () => {
+    const run = await (await drive("bgshell")).until((r) => r.status === "done", "the end");
+    expect(run.result?.turns).toBe(1);
+    expect(run.result?.durationMs).toBe(1);
+  });
+
   test("a chat holds the early result too: no idle and no denied prompt while the subagent runs", async () => {
     const d = await drive("async", "do the thing", undefined, { chat: true });
     const waiting = await d.until((r) => r.status === "waiting", "the subagent's prompt");

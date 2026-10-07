@@ -9,7 +9,7 @@
  *  queue, the result, how an exit becomes a status) is a `RunCtx`
  *  (`driver.ts`), and the server broadcasts the `Run` whole on every change. */
 
-import { buildPrompt, type ActionSpec } from "./actions";
+import { buildPrompt, busyWith, type ActionSpec } from "./actions";
 import { ClaudeDriver } from "./claudedrive";
 import type { RpcProc } from "./codexrpc";
 import { CodexDriver, runsInside } from "./codexrun";
@@ -203,7 +203,7 @@ export class Runner {
   ): Run {
     const busy = this.activeFor(repo.id);
     if (busy) {
-      throw new Error(`${repo.name} already has a ${busy.verb} run going`);
+      throw new Error(busyWith(repo.name, busy.verb));
     }
     if (spec.noteRequired && !note.trim()) {
       throw new Error("write what the agent should do first");
@@ -325,6 +325,11 @@ export class Runner {
    *  covers are let through, after a rule was added. */
   recheck(): void {
     for (const live of this.live.values()) live.ctx.recheck();
+  }
+
+  /** Whether the run is waiting on the prompt under `promptId`. */
+  waiting(id: string, promptId: string): boolean {
+    return this.live.get(id)?.ctx.waiting(promptId) !== undefined;
   }
 
   /** Why `answer` cannot settle the prompt under `promptId` (approve to

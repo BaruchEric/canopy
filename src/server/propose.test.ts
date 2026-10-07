@@ -117,3 +117,25 @@ test("propose: an allow or allow-all to a proposal is refused and the proposal s
   await until(async () => (await runOf(id))?.status === "done", "the declined run to end");
   expect((await runOf(id))?.result?.text).toBe("declined");
 });
+
+test("an answer to a prompt that is not waiting is a 409, and one to a run canopy does not know a 404", async () => {
+  const { id } = (await (await call("/api/repos/run?id=proj", { action: "propose", note: "stale" })).json()) as Run;
+  const first = (await proposalOf(id)).prompt;
+  if (first?.kind !== "proposal") throw new Error("not a proposal");
+  expect((await call("/api/runs/answer", { id, promptId: first.id, answer: { kind: "deny" } })).status).toBe(200);
+  const second = (await proposalOf(id, "Plan v2")).prompt;
+  if (second?.kind !== "proposal") throw new Error("not a proposal");
+  // the first one again (answered already), and an id no prompt ever had
+  for (const promptId of [first.id, ""]) {
+    const stale = await call("/api/runs/answer", { id, promptId, answer: { kind: "deny" } });
+    expect(stale.status).toBe(409);
+    expect(((await stale.json()) as { error: string }).error).toBe("that prompt is no longer waiting");
+  }
+  const unknown = await call("/api/runs/answer", { id: "nope", promptId: "p1", answer: { kind: "deny" } });
+  expect(unknown.status).toBe(404);
+  expect(((await unknown.json()) as { error: string }).error).toBe("no such run");
+  // the plan that waits is untouched
+  expect((await runOf(id))?.prompt?.id).toBe(second.id);
+  expect((await call("/api/runs/answer", { id, promptId: second.id, answer: { kind: "deny" } })).status).toBe(200);
+  await until(async () => (await runOf(id))?.status === "done", "the declined run to end");
+});
