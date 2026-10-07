@@ -62,6 +62,18 @@ describe("moving a panel", () => {
     const l = three();
     expect(moveTo(l, "a", { cell: cellOf(l, "a")?.id ?? "", zone: "below" }, W)).toEqual(l);
   });
+  test("a drop that rebuilds the same arrangement gives back the layout itself", () => {
+    const l = place(empty, ["a", "b"], "a", "columns", W);
+    // beside its neighbour, on the side it already is
+    expect(moveTo(l, "a", { cell: cellOf(l, "b")?.id ?? "", zone: "left" }, W)).toBe(l);
+    expect(moveTo(l, "b", { cell: cellOf(l, "a")?.id ?? "", zone: "right" }, W)).toBe(l);
+    // over the cell below, in a stack whose seam the user moved
+    const stack = resizeSeam(moveTo(l, "b", { cell: cellOf(l, "a")?.id ?? "", zone: "below" }, W), l.columns[0]?.id ?? "", 0, 0.7);
+    expect(stack.columns[0]?.cells.map((x) => x.share)).toEqual([0.7, 0.3]);
+    expect(moveTo(stack, "a", { cell: cellOf(stack, "b")?.id ?? "", zone: "above" }, W)).toBe(stack);
+    expect(moveTo(stack, "b", { cell: cellOf(stack, "a")?.id ?? "", zone: "below" }, W)).toBe(stack);
+    expect(dropTarget(stack, "a", { cell: cellOf(stack, "b")?.id ?? "", rect: { left: 0, top: 0, width: 400, height: 800 } }, 200, 10)).toBeNull();
+  });
   test("an unknown id or cell changes nothing", () => {
     const l = three();
     expect(moveTo(l, "zzz", { cell: cellOf(l, "a")?.id ?? "", zone: "center" }, W)).toEqual(l);

@@ -2611,9 +2611,11 @@ body.resizing-rows {
 }
 /* a panel's name and glyph, and its strip tab, pick it up to move it to
    another cell or beside one; the rest of the head is left for panning
-   the dock */
+   the dock. Their text is never selected, so a press never starts the
+   browser's own drag of it. */
 [data-drag-handle] {
   cursor: grab;
+  user-select: none;
 }
 /* the head scrolls with its panel body, which would clip an outline drawn
    outside it */

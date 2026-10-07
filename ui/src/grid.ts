@@ -120,7 +120,35 @@ export function place(l: DockLayout, open: readonly string[], active: string | n
   return active !== null && seen.has(active) ? activate(out, active) : out;
 }
 
+/** Whether two layouts group the same panels the same way: the same
+ *  columns of the same cells of the same tabs, in order. */
+function sameShape(a: DockLayout, b: DockLayout): boolean {
+  return (
+    a.columns.length === b.columns.length &&
+    a.columns.every((c, i) => {
+      const d = b.columns[i];
+      return (
+        d !== undefined &&
+        c.cells.length === d.cells.length &&
+        c.cells.every((x, j) => {
+          const y = d.cells[j];
+          return y !== undefined && x.panels.length === y.panels.length && x.panels.every((p, k) => p === y.panels[k]);
+        })
+      );
+    })
+  );
+}
+
+/** `id` into `target`: a tab of the cell (center), a new cell above or
+ *  below it, or a new column left or right of its column. A move that
+ *  would rebuild the arrangement it started from (beside a neighbour on
+ *  the side it already is) gives back `l` itself, its shares and ids kept. */
 export function moveTo(l: DockLayout, id: string, target: { cell: string; zone: Zone }, newWidth: number): DockLayout {
+  const out = moveToShape(l, id, target, newWidth);
+  return out !== l && sameShape(l, out) ? l : out;
+}
+
+function moveToShape(l: DockLayout, id: string, target: { cell: string; zone: Zone }, newWidth: number): DockLayout {
   const own = cellOf(l, id);
   const dest = l.columns.flatMap((c) => c.cells).find((x) => x.id === target.cell);
   if (!own || !dest) return l;
