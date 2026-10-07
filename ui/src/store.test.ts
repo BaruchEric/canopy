@@ -1906,6 +1906,93 @@ describe("the dock as columns of cells", () => {
     expect(cols(useStore.getState().dockLayout)).toEqual([[["b"], ["a"]]]);
   });
 
+  test("closing a panel leaves what every other cell shows alone", () => {
+    useStore.setState({ panels: ["a", "b", "c"], activePanel: "a" });
+    useStore.getState().dropPanel("c", cell("b"), "center");
+    useStore.getState().showPanel("a");
+    useStore.getState().closePanel("a");
+    expect(cols(useStore.getState().dockLayout)).toEqual([[["b", "c"]]]);
+    expect(cellOf(useStore.getState().dockLayout, "b")?.active).toBe("c");
+    expect(useStore.getState().activePanel).toBe("c");
+    // within its own cell the neighbour to its right shows, as before
+    useStore.setState({ panels: ["x", "y", "z"], dockLayout: { columns: [] }, activePanel: "y" });
+    useStore.getState().arrangeDock("tabs");
+    useStore.getState().closePanel("y");
+    expect(useStore.getState().activePanel).toBe("z");
+    expect(cellOf(useStore.getState().dockLayout, "z")?.active).toBe("z");
+  });
+
+  test("a scan that drops the showing panel leaves what every other cell shows alone", () => {
+    useStore.setState({ repos: [repo("a"), repo("b"), repo("c")], panels: ["a", "b", "c"], activePanel: "a" });
+    useStore.getState().dropPanel("c", cell("b"), "center");
+    useStore.getState().showPanel("a");
+    useStore.getState().applyEvent({ type: "scan", result: scanOf("/a", [repo("b"), repo("c")]) });
+    expect(cols(useStore.getState().dockLayout)).toEqual([[["b", "c"]]]);
+    expect(cellOf(useStore.getState().dockLayout, "b")?.active).toBe("c");
+    expect(useStore.getState().activePanel).toBe("c");
+  });
+
+  test("tabs and back keeps each panel's width, by panel, not by place", () => {
+    useStore.setState({ panels: ["a", "b", "c"], activePanel: "a" });
+    useStore.getState().resizeColumn(column("a"), 600);
+    useStore.getState().resizeColumn(column("b"), 500);
+    useStore.getState().arrangeDock("tabs");
+    useStore.getState().arrangeDock("columns");
+    expect(useStore.getState().dockLayout.columns.map((c) => c.width)).toEqual([600, 500, 440]);
+    // a column a panel led keeps its width when that panel leads one again
+    useStore.getState().dropPanel("a", cell("c"), "above");
+    useStore.getState().resizeColumn(column("c"), 700);
+    useStore.getState().arrangeDock("columns");
+    expect(cols(useStore.getState().dockLayout)).toEqual([[["b"]], [["a"]], [["c"]]]);
+    expect(useStore.getState().dockLayout.columns.map((c) => c.width)).toEqual([500, 700, 440]);
+  });
+
+  test("a move that changes nothing is no change at all", () => {
+    useStore.setState({ panels: ["a", "b", "c", "d"], activePanel: "a" });
+    useStore.getState().dropPanel("c", cell("b"), "center");
+    const before = useStore.getState();
+    let heard = 0;
+    const off = useStore.subscribe(() => {
+      heard++;
+    });
+    // c is the last tab of its cell already
+    useStore.getState().movePanel("c", 3);
+    off();
+    expect(heard).toBe(0);
+    expect(useStore.getState()).toBe(before);
+  });
+
+  test("the layout is saved in this screen's slot, and a dockless window saves none", () => {
+    const l = globalThis as unknown as { localStorage?: unknown };
+    const kept = new Map<string, string>();
+    l.localStorage = {
+      getItem: (k: string) => kept.get(k) ?? null,
+      setItem: (k: string, v: string) => void kept.set(k, v),
+      removeItem: (k: string) => void kept.delete(k),
+    };
+    const stored = (): { dockLayout?: unknown; panels?: unknown; screens?: Record<string, { dockLayout?: unknown }> } =>
+      JSON.parse(kept.get("canopy.layout") ?? "{}");
+    try {
+      g.window = { screen: { width: 1440, height: 900 }, location: { href: "http://a.test/", search: "" } };
+      useStore.setState({ panels: ["a", "b"], activePanel: "a" });
+      const laid = useStore.getState().dockLayout;
+      expect(cols(laid)).toEqual([[["a"]], [["b"]]]);
+      expect(stored().screens?.laptop?.dockLayout).toEqual(laid);
+      expect(stored().dockLayout).toEqual(laid);
+      // a solo window holds a copy of the grove's dock and writes none of it
+      kept.clear();
+      g.window = { screen: { width: 1440, height: 900 }, location: { href: "http://a.test/?repo=a&view=solo", search: "?repo=a&view=solo" } };
+      useStore.setState({ panels: ["a", "b", "c"] });
+      useStore.getState().resizeColumn(column("a"), 600);
+      const saved = stored();
+      expect(saved.dockLayout).toBeUndefined();
+      expect(saved.panels).toBeUndefined();
+      expect(Object.values(saved.screens ?? {}).some((x) => x.dockLayout !== undefined)).toBe(false);
+    } finally {
+      delete l.localStorage;
+    }
+  });
+
   test("the layout is saved with the rest", () => {
     const s = useStore.getState();
     expect(layoutOf(s).dockLayout).toBe(s.dockLayout);

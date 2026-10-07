@@ -252,9 +252,17 @@ describe("saved layouts", () => {
     });
     const shares = l?.columns[0]?.cells.map((x) => x.share) ?? [];
     expect(shares.reduce((a, b) => a + b, 0)).toBeCloseTo(1, 5);
-    expect(Math.min(...shares)).toBeGreaterThan(0.05);
+    expect(Math.min(...shares)).toBeGreaterThanOrEqual(0.1);
     expect(shares.every((x) => Number.isFinite(x) && x > 0)).toBe(true);
   });
+});
+
+test("a column with more cells than the floor allows shares equally", () => {
+  const cells = Array.from({ length: 12 }, (_, i) => ({ id: `c${i + 2}`, panels: [`p${i}`], active: `p${i}`, share: i === 0 ? 100 : 1 }));
+  const l = normalizeLayout({ columns: [{ id: "c1", width: 400, cells }] });
+  const shares = l?.columns[0]?.cells.map((x) => x.share) ?? [];
+  expect(shares).toHaveLength(12);
+  for (const x of shares) expect(x).toBeCloseTo(1 / 12, 5);
 });
 
 describe("moves that keep sizes", () => {

@@ -1158,9 +1158,14 @@ function treeState(
   // drop panels whose repo no longer exists — a panel with no repo
   // renders nothing, including its own close button. The same array when
   // none goes, so a scan that changes nothing does not count as a change.
-  const kept = s.panels.filter((id) => !mine(id) || tree.repos.some((r) => r.id === id));
-  const panels = kept.length === s.panels.length ? s.panels : kept;
-  const activePanel = s.activePanel !== null && panels.includes(s.activePanel) ? s.activePanel : (panels[0] ?? null);
+  const left = s.panels.filter((id) => !mine(id) || tree.repos.some((r) => r.id === id));
+  const panels = left.length === s.panels.length ? s.panels : left;
+  // The showing tab may be among the dropped; then the first panel's cell
+  // says what shows, and no other cell's showing tab changes
+  const kept = s.activePanel !== null && panels.includes(s.activePanel) ? s.activePanel : null;
+  const dockLayout = panels === s.panels ? s.dockLayout : placeAll(laidOut(s), panels, kept, arrangementOf(s), widthOf(s));
+  const first = panels[0];
+  const activePanel = kept ?? (first === undefined ? null : (cellOf(dockLayout, first)?.active ?? first));
   return {
     root: from === s.home ? tree.root : s.root,
     sources: sliceIn(reg, s.sources, from, tree.sources, (x) => x.id),
@@ -1168,10 +1173,9 @@ function treeState(
     conns: withConn(s, from, { backend: tree.backend }),
     panels,
     // the layout loses the same panels, and is the same object when none go
-    dockLayout: panels === s.panels ? s.dockLayout : placeAll(laidOut(s), panels, activePanel, arrangementOf(s), widthOf(s)),
+    dockLayout,
     // a bench whose repo left the scan goes with its panel
     front: panels === s.panels ? s.front : keepFront(s.front, s.terms, panels),
-    // the showing tab may be among the dropped; then its neighbour shows
     activePanel,
     // a popped panel whose repo left the scan has nothing to come back to
     popped: pruneByRepo(s.popped, tree.repos, mine),
@@ -1475,6 +1479,18 @@ const panelsFor = (s: Pick<CanopyState, "panels">, l: DockLayout): string[] => {
   const next = panelsOf(l);
   return sameList(next, s.panels) ? s.panels : next;
 };
+
+/** Each column's width by the panel leading it, the one alone in its top
+ *  cell. A column topped by a cell of tabs has no lead: its width is the
+ *  tabbed dock's, not one panel's. */
+function leadWidths(l: DockLayout): Record<string, number> {
+  const out: Record<string, number> = {};
+  for (const c of l.columns) {
+    const top = c.cells[0]?.panels;
+    if (top?.length === 1 && top[0] !== undefined) out[top[0]] = c.width;
+  }
+  return out;
+}
 
 /** the column `id` is alone in, if it is: one cell of one panel */
 function loneColumn(l: DockLayout, id: string) {
@@ -2134,13 +2150,23 @@ export const useStore = create<CanopyState>((set, get) => ({
     // it back.
     const mine = (t: TermTab) => t.repoId === id && t.place === "panel";
     const terms = s.terms.filter((t) => !mine(t));
-    const activePanel = nextActive(s.panels, id, s.activePanel);
     const l = laidOut(s);
     // a column of its own leaves its width behind for the panel's next
     // column, a reopen or a pop-out coming back
     const lone = loneColumn(l, id);
-    const closed = placeAll(l, s.panels.filter((p) => p !== id), activePanel, arrangementOf(s), widthOf(s));
-    const dockLayout = activePanel === null ? closed : activate(closed, activePanel);
+    const own = cellOf(l, id);
+    // the closed panel's own cell picks its next tab as it leaves (remove)
+    const closed = placeAll(l, s.panels.filter((p) => p !== id), null, arrangementOf(s), widthOf(s));
+    // The showing panel moves to its neighbour, as in a flat dock. One in
+    // the closed panel's cell shows; one in another cell is not brought
+    // forward over that cell's own tab, whose tab shows instead.
+    const next = nextActive(s.panels, id, s.activePanel);
+    let dockLayout = closed;
+    let activePanel = next;
+    if (next !== null && next !== s.activePanel) {
+      if (own?.panels.includes(next)) dockLayout = activate(closed, next);
+      else activePanel = cellOf(closed, next)?.active ?? next;
+    }
     const panels = panelsFor(s, dockLayout);
     set({
       panels,
@@ -2161,8 +2187,9 @@ export const useStore = create<CanopyState>((set, get) => ({
       const own = cellOf(l, id);
       const col = columnOf(l, id);
       const target = s.panels[Math.max(0, Math.min(s.panels.length - 1, to))];
-      if (from === -1 || !own || !col || target === undefined || target === id) return {};
+      if (from === -1 || !own || !col || target === undefined || target === id) return s;
       const toward = to < from ? 0 : Number.MAX_SAFE_INTEGER;
+      const at = own.panels.indexOf(id);
       let dockLayout: DockLayout;
       if (own.panels.includes(target)) {
         // a tab among its cell's tabs; the tab showing stays the one showing
@@ -2173,12 +2200,14 @@ export const useStore = create<CanopyState>((set, get) => ({
         // a cell of a stack moves up or down its column
         dockLayout = moveCell(l, own.id, col.cells.findIndex((x) => x.panels.includes(target)));
       } else if (own.panels.length > 1) {
-        // out of a cell of tabs no further than its edge
+        // out of a cell of tabs no further than its edge, and already there
+        // is no change
+        if (toward === 0 ? at === 0 : at === own.panels.length - 1) return s;
         dockLayout = activate(moveWithin(l, id, own.id, toward), own.active);
       } else {
         dockLayout = moveCell(l, own.id, toward);
       }
-      return dockLayout === l ? {} : { dockLayout, panels: panelsFor(s, dockLayout) };
+      return dockLayout === l ? s : { dockLayout, panels: panelsFor(s, dockLayout) };
     }),
   dropPanel: (id, cell, zone) =>
     set((s) => {
@@ -2186,7 +2215,7 @@ export const useStore = create<CanopyState>((set, get) => ({
       // a column of its own dropped beside another keeps its width
       const width = loneColumn(l, id)?.width ?? widthOf(s)(id);
       const dockLayout = moveTo(l, id, { cell, zone }, width);
-      return dockLayout === l ? {} : { dockLayout, panels: panelsFor(s, dockLayout), activePanel: id };
+      return dockLayout === l ? s : { dockLayout, panels: panelsFor(s, dockLayout), activePanel: id };
     }),
   resizeColumn: (column, px) => set((s) => ({ dockLayout: sizeColumn(laidOut(s), column, px, PANEL.min, PANEL.max) })),
   resizeSeam: (column, index, at) => set((s) => ({ dockLayout: moveSeam(laidOut(s), column, index, at) })),
@@ -2194,10 +2223,26 @@ export const useStore = create<CanopyState>((set, get) => ({
     get().setSetting("openIn", into === "tabs" ? "tabs" : "dock");
     set((s) => {
       const l = laidOut(s);
-      // as tabs the one column takes the width of the one that was showing
-      const width = into === "tabs" ? (columnOf(l, s.activePanel ?? "")?.width ?? l.columns[0]?.width ?? PANEL.initial) : PANEL.initial;
-      const grouped = regroup(l, into, width);
-      const dockLayout = s.activePanel !== null ? activate(grouped, s.activePanel) : grouped;
+      // Widths go by panel, not by place (regroup's own reuse is by
+      // position): each column's width belongs to the panel leading it,
+      // and a panel leading a column again takes it back. As tabs they wait
+      // in panelWidths, as a closed column's do.
+      const leads = leadWidths(l);
+      const widths = { ...s.panelWidths, ...leads };
+      if (into === "tabs") {
+        // the one column takes the width of the one that was showing
+        const grouped = regroup(l, "tabs", columnOf(l, s.activePanel ?? "")?.width ?? l.columns[0]?.width ?? PANEL.initial);
+        const dockLayout = s.activePanel !== null ? activate(grouped, s.activePanel) : grouped;
+        const keep = Object.entries(leads).every(([id, w]) => s.panelWidths[id] === w);
+        return { dockLayout, panels: panelsFor(s, dockLayout), ...(keep ? {} : { panelWidths: widths }) };
+      }
+      const grouped = regroup(l, "columns", PANEL.initial);
+      const dockLayout = {
+        columns: grouped.columns.map((c) => {
+          const lead = c.cells[0]?.panels[0];
+          return lead === undefined ? c : { ...c, width: widths[lead] ?? PANEL.initial };
+        }),
+      };
       return { dockLayout, panels: panelsFor(s, dockLayout) };
     });
   },
@@ -3296,7 +3341,9 @@ useStore.subscribe((s, prev) => {
 // is the net for the rest. A layout that changed alone (another screen's,
 // read by the handler above) leads, and the open set takes its order once
 // it is placed over this window's panels. Panels set alone (a test, a
-// write from outside the actions) lead, and the layout follows them. It is
+// write from outside the actions) lead, and the layout follows them; a
+// list reordered that way rebuilds the layout flat, losing its splits, so a
+// new writer of the open set goes through the layout instead. It is
 // registered after every other subscription, the layout's save among
 // them, so the run of them that comes last, the nested one, sees the
 // reconciled pair.

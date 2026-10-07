@@ -277,10 +277,14 @@ export function normalizeLayout(v: unknown): DockLayout | null {
     const width = typeof c.width === "number" && Number.isFinite(c.width) && c.width > 0 ? c.width : COLUMN_WIDTH;
     raw.push({ id: typeof c.id === "string" ? c.id : "", width, cells });
   }
-  // a share that renormalized under MIN_SHARE is raised to it and the
-  // column renormalized once more, so no cell is a sliver gridOf merges away
+  // no cell under MIN_SHARE, so none is a sliver gridOf merges away
   let out = prune({ columns: raw });
-  out = prune({ columns: out.columns.map((c) => ({ ...c, cells: c.cells.map((x) => ({ ...x, share: Math.max(MIN_SHARE, x.share) })) })) });
+  out = {
+    columns: out.columns.map((c) => {
+      const shares = floored(c.cells.map((x) => x.share));
+      return { ...c, cells: c.cells.map((x, i) => ({ ...x, share: shares[i] ?? x.share })) };
+    }),
+  };
   // ids: the safe ones keep their first use, every other is issued again
   const used = new Set<string>();
   const keep = (id: string): string => {
@@ -297,6 +301,29 @@ export function normalizeLayout(v: unknown): DockLayout | null {
     for (const x of c.cells) col.cells.push({ ...x, id: x.id || newId({ columns: [...out.columns, ...columns] }) });
   }
   return { columns };
+}
+
+/** Shares summing to 1 with none under MIN_SHARE: the cells that would
+ *  fall under it are held at it and the rest share what is left, until
+ *  none falls under. A column with more cells than the floor allows
+ *  shares equally. */
+function floored(shares: readonly number[]): number[] {
+  const n = shares.length;
+  if (n * MIN_SHARE >= 1) return shares.map(() => round(1 / n));
+  const held = new Set<number>();
+  for (;;) {
+    const free = shares.reduce((sum, x, i) => (held.has(i) ? sum : sum + x), 0);
+    const room = 1 - held.size * MIN_SHARE;
+    const out = shares.map((x, i) => (held.has(i) ? MIN_SHARE : free > 0 ? (x / free) * room : room / (n - held.size)));
+    let more = false;
+    out.forEach((x, i) => {
+      if (!held.has(i) && x < MIN_SHARE) {
+        held.add(i);
+        more = true;
+      }
+    });
+    if (!more) return out.map(round);
+  }
 }
 
 /** The first layout for a dock saved before there were layouts: its open

@@ -110,6 +110,7 @@ const KEYS = [
 export function SettingsMenu() {
   const settings = useStore((s) => s.settings);
   const setSetting = useStore((s) => s.setSetting);
+  const arrangeDock = useStore((s) => s.arrangeDock);
   const home = useStore((s) => s.home);
   const backendOrder = useStore((s) => s.backendOrder);
   const isMulti = useStore(multi);
@@ -191,7 +192,9 @@ export function SettingsMenu() {
               label="Where a clicked repo opens"
               value={settings.openIn}
               options={OPEN_IN}
-              onChange={(v) => setSetting("openIn", v)}
+              // side by side and tabs put the open panels in that
+              // arrangement, as the panel gear's entries do
+              onChange={(v) => (v === "dock" || v === "tabs" ? arrangeDock(v === "tabs" ? "tabs" : "columns") : setSetting("openIn", v))}
             />
             <p className="settings-hint">
               Cmd-click always opens a tab, shift-click a window.
