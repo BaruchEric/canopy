@@ -505,6 +505,34 @@ export function dropTarget(l: DockLayout, id: string, hit: { cell: string; rect:
   return moveTo(l, id, t, COLUMN_WIDTH) === l ? null : t;
 }
 
+/** a strip tab's place across the page, for `stripDrop` */
+export interface TabBox { id: string; left: number; width: number }
+/** A drop on a cell's tab strip: a tab of `cell` at `index` (`moveWithin`'s
+ *  index, among the cell's other tabs), and `at`, the x of the gap it goes
+ *  in, where the insertion mark is drawn. */
+export interface StripDrop { cell: string; index: number; at: number }
+
+/** Where panel `id`, dragged to x over the tab strip of `cell` whose tabs
+ *  are drawn at `tabs`, would land: in the gap before the first of the
+ *  cell's other tabs whose middle is at or right of x, or after the last.
+ *  Null where letting go would change nothing (back at its own place in
+ *  its own strip, showing or not) or with no such cell or panel. A strip
+ *  drop never splits. */
+export function stripDrop(l: DockLayout, id: string, cell: string, x: number, tabs: readonly TabBox[]): StripDrop | null {
+  const dest = l.columns.flatMap((c) => c.cells).find((c) => c.id === cell);
+  const own = cellOf(l, id);
+  if (!dest || !own) return null;
+  const others = tabs.filter((t) => t.id !== id && dest.panels.includes(t.id)).sort((a, b) => a.left - b.left);
+  const last = others[others.length - 1];
+  if (!last) return null;
+  const before = others.find((t) => t.left + t.width / 2 >= x);
+  const rest = dest.panels.filter((p) => p !== id);
+  const index = before ? rest.indexOf(before.id) : rest.length;
+  if (own.id === cell && own.panels.indexOf(id) === index) return null;
+  if (moveWithin(l, id, cell, index) === l) return null;
+  return { cell, index, at: before ? before.left : last.left + last.width };
+}
+
 /** The part of a cell's rect a drop in `zone` takes: the half toward an
  *  edge, or all of it for the middle. */
 export function zoneRect(r: Box, zone: Zone): Box {

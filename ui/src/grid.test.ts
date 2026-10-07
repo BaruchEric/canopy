@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { activate, cellOf, columnOf, cssId, dropTarget, dropZone, fromLegacy, gearDrops, gridOf, gridTemplate, moveCell, moveColumn, moveTo, moveWithin, normalizeLayout, panelsOf, placements, place, regroup, rename, resizeColumn, resizeSeam, rowsTemplate, seamDrag, seamLabel, seamRange, seamStart, stepPanel, zoneRect } from "./grid";
+import { activate, cellOf, columnOf, cssId, dropTarget, dropZone, fromLegacy, gearDrops, gridOf, gridTemplate, moveCell, moveColumn, moveTo, moveWithin, normalizeLayout, panelsOf, placements, place, regroup, rename, resizeColumn, resizeSeam, rowsTemplate, seamDrag, seamLabel, seamRange, seamStart, stepPanel, stripDrop, zoneRect } from "./grid";
 import type { DockLayout } from "./grid";
 
 const W = 440;
@@ -262,6 +262,59 @@ describe("a pointer drop", () => {
       get height() { return 800; }
     }
     expect(zoneRect(new Rect(), "center")).toEqual(r);
+  });
+});
+
+describe("a drop on a tab strip", () => {
+  const cell = (l: DockLayout, id: string) => cellOf(l, id)?.id ?? "";
+  // one cell of a, b, c as tabs, each tab 100px wide from x = 0, a showing
+  const tabs = activate(place(empty, ["a", "b", "c"], "a", "tabs", W), "a");
+  const boxes = [
+    { id: "a", left: 0, width: 100 },
+    { id: "b", left: 100, width: 100 },
+    { id: "c", left: 200, width: 100 },
+  ];
+  test("a tab dragged along its own strip reorders at the gap under the pointer", () => {
+    const one = cell(tabs, "a");
+    expect(stripDrop(tabs, "a", one, 160, boxes)).toEqual({ cell: one, index: 1, at: 200 });
+    expect(stripDrop(tabs, "a", one, 290, boxes)).toEqual({ cell: one, index: 2, at: 300 });
+    expect(stripDrop(tabs, "c", one, 10, boxes)).toEqual({ cell: one, index: 0, at: 0 });
+    expect(stripDrop(tabs, "c", one, 120, boxes)).toEqual({ cell: one, index: 1, at: 100 });
+    const moved = moveWithin(tabs, "a", one, 2);
+    expect(cols(moved)).toEqual([[["b", "c", "a"]]]);
+  });
+  test("back at its own place, on either side of it, is no drop", () => {
+    const one = cell(tabs, "a");
+    expect(stripDrop(tabs, "a", one, 40, boxes)).toBeNull();
+    expect(stripDrop(tabs, "a", one, 140, boxes)).toBeNull();
+    // a tab not showing, too: letting it go there must not even show it
+    expect(stripDrop(tabs, "b", one, 60, boxes)).toBeNull();
+    expect(stripDrop(tabs, "b", one, 120, boxes)).toBeNull();
+    expect(stripDrop(tabs, "b", one, 180, boxes)).toBeNull();
+    expect(stripDrop(tabs, "b", one, 240, boxes)).toBeNull();
+    expect(stripDrop(tabs, "b", one, 260, boxes)).toEqual({ cell: one, index: 2, at: 300 });
+  });
+  test("the tabs may come in any order; their places decide", () => {
+    const one = cell(tabs, "a");
+    expect(stripDrop(tabs, "a", one, 160, [...boxes].reverse())).toEqual({ cell: one, index: 1, at: 200 });
+  });
+  test("a panel from another cell joins the strip's cell at the gap", () => {
+    const two = place(tabs, ["a", "b", "c", "d"], "d", "columns", W);
+    expect(cols(two)).toEqual([[["a", "b", "c"]], [["d"]]]);
+    const one = cell(two, "a");
+    const drop = stripDrop(two, "d", one, 150, boxes);
+    expect(drop).toEqual({ cell: one, index: 1, at: 100 });
+    expect(cols(moveWithin(two, "d", one, drop?.index ?? -1))).toEqual([[["a", "d", "b", "c"]]]);
+    expect(stripDrop(two, "d", one, 999, boxes)).toEqual({ cell: one, index: 3, at: 300 });
+  });
+  test("a cell or a panel the layout does not hold is no drop", () => {
+    expect(stripDrop(tabs, "a", "c999", 160, boxes)).toBeNull();
+    expect(stripDrop(tabs, "zzz", cell(tabs, "a"), 160, boxes)).toBeNull();
+  });
+  test("tabs drawn for panels the cell does not hold are passed over", () => {
+    const one = cell(tabs, "a");
+    const extra = [...boxes, { id: "zzz", left: 300, width: 100 }];
+    expect(stripDrop(tabs, "a", one, 390, extra)).toEqual({ cell: one, index: 2, at: 300 });
   });
 });
 

@@ -2022,6 +2022,46 @@ describe("the dock as columns of cells", () => {
     expect(useStore.getState()).toBe(tabbed);
   });
 
+  test("tab or window to the dock is the same arrangement: openIn changes, the splits stay", () => {
+    for (const from of ["tab", "window"] as const) {
+      useStore.setState({ panels: ["a", "b", "c"], activePanel: "a" });
+      useStore.getState().setSetting("openIn", "dock");
+      useStore.getState().dropPanel("b", cell("a"), "below");
+      useStore.getState().dropPanel("c", cell("a"), "center");
+      useStore.getState().setSetting("openIn", from);
+      const layout = useStore.getState().dockLayout;
+      useStore.getState().arrangeDock("columns");
+      expect(useStore.getState().settings.openIn).toBe("dock");
+      expect(useStore.getState().dockLayout).toBe(layout);
+      // tabs is another arrangement, so it still regroups
+      useStore.getState().setSetting("openIn", from);
+      useStore.getState().arrangeDock("tabs");
+      expect(useStore.getState().settings.openIn).toBe("tabs");
+      expect(cols(useStore.getState().dockLayout)).toEqual([[["a", "c", "b"]]]);
+    }
+  });
+
+  test("a tab dropped on a strip joins that cell at an index; back at its own place nothing changes", () => {
+    useStore.setState({ panels: ["a", "b", "c"], activePanel: "a" });
+    useStore.getState().arrangeDock("tabs");
+    expect(cols(useStore.getState().dockLayout)).toEqual([[["a", "b", "c"]]]);
+    const one = cell("a");
+    useStore.getState().dropTab("c", one, 0);
+    expect(cols(useStore.getState().dockLayout)).toEqual([[["c", "a", "b"]]]);
+    expect(useStore.getState().panels).toEqual(["c", "a", "b"]);
+    expect(useStore.getState().activePanel).toBe("c");
+    expect(useStore.getState().settings.openIn).toBe("tabs");
+    const before = useStore.getState();
+    let heard = 0;
+    const off = useStore.subscribe(() => {
+      heard++;
+    });
+    useStore.getState().dropTab("c", one, 0);
+    off();
+    expect(heard).toBe(0);
+    expect(useStore.getState()).toBe(before);
+  });
+
   test("a checkout switch onto a sibling already open keeps the old lone column's width", () => {
     useStore.setState({ panels: ["a", "b", "c"], activePanel: "a" });
     useStore.getState().resizeColumn(column("a"), 800);

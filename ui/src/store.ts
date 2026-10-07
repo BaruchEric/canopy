@@ -324,7 +324,7 @@ export function loadLayout(): Layout {
     const dockWidth = typeof dw === "number" && Number.isFinite(dw) ? clamp(dw, PANEL.min, PANEL.max) : PANEL.initial;
     const activePanel = typeof saved.activePanel === "string" ? saved.activePanel : null;
     const into: Arrangement = loadSettings().openIn === "tabs" ? "tabs" : "columns";
-    const ownSaved = legacySlot(stored as Record<string, unknown>, slotsNow(), screenNow()?.cls ?? null) ? undefined : saved.dockLayout;
+    const ownSaved = legacySlot(stored, slotsNow(), screenNow()?.cls ?? null) ? undefined : saved.dockLayout;
     const dockLayout = loadDock(ownSaved, strings(saved.panels), activePanel, panelWidths, dockWidth, into);
     return {
       sidebarWidth:
@@ -374,9 +374,9 @@ export function loadLayout(): Layout {
  *  other class wrote after the upgrade. Such a class builds its first
  *  layout from its own slot (`fromLegacy`) instead. A class never visited
  *  has no slot and still inherits the nearest one's arrangement. */
-function legacySlot(stored: Record<string, unknown>, slots: readonly string[], cls: string | null): boolean {
+function legacySlot(stored: unknown, slots: readonly string[], cls: string | null): boolean {
   const record = (v: unknown): v is Record<string, unknown> => !!v && typeof v === "object" && !Array.isArray(v);
-  const screens = stored.screens;
+  const screens = record(stored) ? stored.screens : undefined;
   const slot = (key: string): Record<string, unknown> | undefined => {
     const v = record(screens) ? screens[key] : undefined;
     return record(v) ? v : undefined;
@@ -870,6 +870,9 @@ interface CanopyState {
   movePanel: (id: string, to: number) => void;
   /** a panel dropped on a cell: a tab of it, or a split toward an edge */
   dropPanel: (id: string, cell: string, zone: Zone) => void;
+  /** a panel dropped on a cell's tab strip: a tab of that cell at `index`,
+   *  which along its own strip is a reorder */
+  dropTab: (id: string, cell: string, index: number) => void;
   /** a column's width, clamped to PANEL */
   resizeColumn: (column: string, px: number) => void;
   /** the boundary under cell `index` of a column, to `at` of its height */
@@ -2212,6 +2215,12 @@ export const useStore = create<CanopyState>((set, get) => ({
       const dockLayout = moveTo(l, id, { cell, zone }, width);
       return dockLayout === l ? s : { dockLayout, panels: panelsFor(s, dockLayout), activePanel: id };
     }),
+  dropTab: (id, cell, index) =>
+    set((s) => {
+      const l = laidOut(s);
+      const dockLayout = moveWithin(l, id, cell, index);
+      return dockLayout === l ? s : { dockLayout, panels: panelsFor(s, dockLayout), activePanel: id };
+    }),
   resizeColumn: (column, px) =>
     set((s) => {
       const l = laidOut(s);
@@ -2225,11 +2234,13 @@ export const useStore = create<CanopyState>((set, get) => ({
       return dockLayout === l ? s : { dockLayout };
     }),
   arrangeDock: (into) => {
-    // only a change regroups: picking the arrangement already lit (the
-    // gear's entry, the Settings picker) keeps every split and tab
+    // Only a change of arrangement regroups. The dock, a tab and a window
+    // all arrange the dock in columns, so picking the dock from either of
+    // the other two, or the entry already lit, keeps every split and tab.
     const openIn = into === "tabs" ? "tabs" : "dock";
-    if (get().settings.openIn === openIn) return;
-    get().setSetting("openIn", openIn);
+    const from = arrangementOf(get());
+    if (get().settings.openIn !== openIn) get().setSetting("openIn", openIn);
+    if (from === into) return;
     set((s) => {
       const l = laidOut(s);
       // Widths go by panel, not by place (regroup's own reuse is by

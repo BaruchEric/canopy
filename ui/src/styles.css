@@ -2478,6 +2478,8 @@ a.chan-text {
    the cell the drop would take, and the panel's name by the pointer */
 .drag-shield { position: absolute; inset: 0; z-index: 5; cursor: grabbing; }
 .drop-preview { position: fixed; pointer-events: none; z-index: 6; border: 2px solid var(--sky); background: color-mix(in srgb, var(--sky) 12%, transparent); border-radius: 4px; }
+/* over a tab strip: a bar in the gap the tab would go in */
+.drop-preview.drop-mark { border: 0; background: var(--sky); border-radius: 2px; }
 @media (prefers-reduced-motion: no-preference) {
   .drop-preview { transition: left 80ms ease-out, top 80ms ease-out, width 80ms ease-out, height 80ms ease-out; }
 }

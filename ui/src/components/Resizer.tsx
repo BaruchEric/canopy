@@ -58,10 +58,19 @@ export function Resizer({
   const [dragging, setDragging] = useState(false);
   const live = useRef(value);
 
-  // If the handle unmounts mid-drag — a scan can prune the repo out from under
-  // an open panel — pointerup never fires and the whole app is left
-  // unselectable with a col-resize cursor until reload.
-  useEffect(() => () => document.body.classList.remove("resizing"), []);
+  // If the handle unmounts mid-drag (a scan can prune the repo out from under
+  // an open panel, or the window narrows past where the dock has seams),
+  // pointerup never fires and the whole app is left unselectable with a
+  // col-resize cursor until reload. Ending the drag here also lets go of
+  // its `hold`, so a later layout change does not put back a stale width.
+  const ending = useRef<(() => void) | null>(null);
+  useEffect(
+    () => () => {
+      ending.current?.();
+      document.body.classList.remove("resizing");
+    },
+    [],
+  );
 
   const ceiling = (handle: HTMLElement) => {
     const room = fit?.(handle);
@@ -95,6 +104,7 @@ export function Resizer({
     };
     let release = () => {};
     const end = () => {
+      ending.current = null;
       release();
       handle.removeEventListener("pointermove", move);
       handle.removeEventListener("pointerup", up);
@@ -117,6 +127,7 @@ export function Resizer({
         else owner?.style.removeProperty(cssVar);
       });
     }
+    ending.current = end;
   };
 
   const onKeyDown = (e: KeyboardEvent<HTMLDivElement>) => {

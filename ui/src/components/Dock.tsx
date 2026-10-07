@@ -36,7 +36,7 @@ import { devState } from "../guided";
 import { BENCH_ONE, BenchBar, BenchSeams, type BenchPane } from "./Bench";
 import { PHONE, useMedia } from "../media";
 import { stableOrder } from "../dock";
-import { columnVar, dropTarget, gearDrops, gridOf, gridTemplate, placements, resizeSeam, rowsTemplate, seamDrag, seamLabel, seamRange, seamStart, stepPanel, zoneRect, type Box, type DockLayout, type Drop, type GridPlan } from "../grid";
+import { columnVar, dropTarget, gearDrops, gridOf, gridTemplate, placements, resizeSeam, rowsTemplate, seamDrag, seamLabel, seamRange, seamStart, stepPanel, stripDrop, zoneRect, type Box, type DockLayout, type Drop, type GridPlan, type StripDrop, type TabBox } from "../grid";
 import { PAN_SLOP, overflowsX, snapTo, wheelTake } from "../carousel";
 import { dragStep, type DragInput, type DragPhase } from "../drag";
 import { backendOf, homeName, isHome } from "../registry";
@@ -1232,12 +1232,14 @@ function AwayWords({
 
 /** What the drag layer shows while a panel is dragged: its name by the
  *  pointer and, over a cell it would land in, the part of it the drop
- *  takes. Kept outside React state, so a move redraws the layer alone. */
+ *  takes, or over a tab strip the gap it would go in (`mark`). Kept
+ *  outside React state, so a move redraws the layer alone. */
 interface DragView {
   label: string;
   x: number;
   y: number;
   box: Box | null;
+  mark: boolean;
 }
 let dragView: DragView | null = null;
 const dragSubs = new Set<() => void>();
@@ -1265,6 +1267,28 @@ function cellAt(dock: HTMLElement, x: number, y: number): { cell: string; rect: 
   }
   return null;
 }
+
+/** The tab strip under (x, y) in `dock`: its cell, its rect and where each
+ *  of its tabs is drawn. Like `cellAt`, it looks beneath the drag layer. */
+function stripAt(dock: HTMLElement, x: number, y: number): { cell: string; rect: Box; tabs: TabBox[] } | null {
+  for (const el of document.elementsFromPoint(x, y)) {
+    if (!(el instanceof HTMLElement) || el.parentElement !== dock || !el.classList.contains("cell-strip")) continue;
+    const cell = el.dataset.cell;
+    if (cell === undefined) continue;
+    const tabs: TabBox[] = [];
+    for (const tab of el.children) {
+      if (!(tab instanceof HTMLElement) || tab.dataset.id === undefined) continue;
+      const t = tab.getBoundingClientRect();
+      tabs.push({ id: tab.dataset.id, left: t.left, width: t.width });
+    }
+    const r = el.getBoundingClientRect();
+    return { cell, rect: { left: r.left, top: r.top, width: r.width, height: r.height }, tabs };
+  }
+  return null;
+}
+
+/** where a drag would land: beside or in a cell, or on a cell's tab strip */
+type PanelDrop = { on: "cell"; drop: Drop } | { on: "strip"; drop: StripDrop };
 
 /** The release that ends a drag or a pan is not a click on what it ends
  *  over. */
@@ -1316,10 +1340,13 @@ useStore.subscribe((s, prev) => {
  * - Under `PAN_SLOP` it stays a click.
  * - Past it the drag layer shows over the dock: a shield, so a preview's
  *   iframe never takes the pointer, the part of the cell under the pointer
- *   the drop would take (`dropTarget`, `zoneRect`), and the panel's name.
+ *   the drop would take (`dropTarget`, `zoneRect`) or, over a tab strip,
+ *   a mark at the gap the tab would go in (`stripDrop`), and the panel's
+ *   name.
  *   A scroll under it (a wheel) redraws them from the last pointer place.
  * - Letting go over a cell drops the panel in it or beside it (the store's
- *   `dropPanel`), which changes grid areas and never the DOM.
+ *   `dropPanel`), and over a strip makes it a tab of that cell at the gap
+ *   (`dropTab`). Either changes grid areas and never the DOM.
  * - Escape before letting go, a cancelled pointer, a lost capture, a blur,
  *   a context menu, or a move with no button held (a release the page
  *   never heard) leaves everything where it was and saves nothing.
@@ -1334,13 +1361,25 @@ function startPanelDrag(e: ReactPointerEvent<HTMLElement>, id: string, label: st
   cancelPanelDrag();
   const { pointerId, clientX: x0, clientY: y0 } = e;
   let phase: DragPhase = "pressed";
-  let target: Drop | null = null;
+  let target: PanelDrop | null = null;
   let at = { x: x0, y: y0 };
   const track = () => {
+    const layout = useStore.getState().dockLayout;
+    // Over a strip the drop is a tab of its cell at the gap under the
+    // pointer, a reorder along its own strip; it never splits, and where
+    // it would change nothing there is no drop at all.
+    const strip = stripAt(dock, at.x, at.y);
+    if (strip) {
+      const drop = stripDrop(layout, id, strip.cell, at.x, strip.tabs);
+      target = drop && { on: "strip", drop };
+      const box = drop && { left: drop.at - 1, top: strip.rect.top, width: 3, height: strip.rect.height };
+      showDrag({ label, x: at.x, y: at.y, box, mark: true });
+      return;
+    }
     const hit = cellAt(dock, at.x, at.y);
-    const drop = dropTarget(useStore.getState().dockLayout, id, hit, at.x, at.y);
-    target = drop;
-    showDrag({ label, x: at.x, y: at.y, box: drop && hit ? zoneRect(hit.rect, drop.zone) : null });
+    const drop = dropTarget(layout, id, hit, at.x, at.y);
+    target = drop && { on: "cell", drop };
+    showDrag({ label, x: at.x, y: at.y, box: drop && hit ? zoneRect(hit.rect, drop.zone) : null, mark: false });
   };
   const hide = () => {
     document.body.classList.remove("dragging-panel");
@@ -1381,7 +1420,8 @@ function startPanelDrag(e: ReactPointerEvent<HTMLElement>, id: string, label: st
         hide();
         break;
       case "drop":
-        if (drop) useStore.getState().dropPanel(id, drop.cell, drop.zone);
+        if (drop?.on === "cell") useStore.getState().dropPanel(id, drop.drop.cell, drop.drop.zone);
+        else if (drop?.on === "strip") useStore.getState().dropTab(id, drop.drop.cell, drop.drop.index);
         break;
       default:
         break;
@@ -1448,7 +1488,12 @@ function DragLayer() {
   return (
     <>
       <div className="drag-shield" aria-hidden="true" />
-      {box && <div className="drop-preview" style={{ left: box.left, top: box.top, width: box.width, height: box.height }} />}
+      {box && (
+        <div
+          className={`drop-preview${view.mark ? " drop-mark" : ""}`}
+          style={{ left: box.left, top: box.top, width: box.width, height: box.height }}
+        />
+      )}
       <div className="drag-ghost" aria-hidden="true" style={{ left: view.x + 12, top: view.y + 12 }}>
         {view.label}
       </div>
@@ -2351,8 +2396,17 @@ function paintGrid(dock: HTMLElement, plan: GridPlan) {
 function RowSeam({ seam, layout }: { seam: GridPlan["rowSeams"][number]; layout: DockLayout }) {
   const commit = useStore((s) => s.resizeSeam);
   const [dragging, setDragging] = useState(false);
-  // a seam unmounted mid-drag (its cell closed) never sees its pointerup
-  useEffect(() => () => document.body.classList.remove("resizing-rows"), []);
+  // A seam unmounted mid-drag (its cell closed, the window narrowing past
+  // PHONE) never sees its pointerup: it ends the drag here, letting go of
+  // its cancel too, so a later layout change does not paint it back.
+  const ending = useRef<(() => void) | null>(null);
+  useEffect(
+    () => () => {
+      ending.current?.();
+      document.body.classList.remove("resizing-rows");
+    },
+    [],
+  );
   const { column, index, area } = seam;
   const start = seamStart(layout, column, index);
   const range = seamRange(layout, column, index);
@@ -2379,6 +2433,7 @@ function RowSeam({ seam, layout }: { seam: GridPlan["rowSeams"][number]; layout:
       paintGrid(dock, gridOf(resizeSeam(layout, column, index, at)));
     };
     const end = () => {
+      ending.current = null;
       release();
       handle.removeEventListener("pointermove", move);
       handle.removeEventListener("pointerup", up);
@@ -2403,6 +2458,7 @@ function RowSeam({ seam, layout }: { seam: GridPlan["rowSeams"][number]; layout:
     handle.addEventListener("pointerup", up);
     handle.addEventListener("pointercancel", cancel);
     release = holdSeam(cancel);
+    ending.current = end;
   };
   const onKeyDown = (e: KeyboardEvent<HTMLDivElement>) => {
     if (start === null || range === null) return;
