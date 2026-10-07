@@ -251,6 +251,8 @@ describe("a popover's Escape", () => {
   });
   test("a menu with the focus left on its button is a layer above a surface too", () => {
     // the new-shell menu opens on a long press and leaves the focus on its +
-    expect(LAYER_ABOVE.split(",").map((s) => s.trim())).toEqual(['[role="dialog"]', '[role="menu"]', ".sidebar.drawer"]);
+    // the guided panel's tour is a dialog too, but a coach mark beside the
+    // page, not a layer over it: Escape still leaves a surface while it shows
+    expect(LAYER_ABOVE.split(",").map((s) => s.trim())).toEqual(['[role="dialog"]:not(.tour)', '[role="menu"]', ".sidebar.drawer"]);
   });
 });

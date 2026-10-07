@@ -258,8 +258,9 @@ const OWN_ESCAPE = ".term-screen, .xterm, .menu, .sheet";
 const TEXT_ESCAPE = 'input, textarea, select, [contenteditable]:not([contenteditable="false"])';
 
 /** what sits over every surface and takes Escape first while it is up: a
- *  run sheet, a top-bar popover, a menu, the repo tree's drawer */
-export const LAYER_ABOVE = '[role="dialog"], [role="menu"], .sidebar.drawer';
+ *  run sheet, a top-bar popover, a menu, the repo tree's drawer. Not the
+ *  guided panel's tour, a coach mark with no Escape of its own. */
+export const LAYER_ABOVE = '[role="dialog"]:not(.tour), [role="menu"], .sidebar.drawer';
 
 /** Whether an Escape at `target` steps a surface back to normal. `typing`
  *  adds text fields to what keeps it: a panel in full screen with Escape
