@@ -190,9 +190,14 @@ export function App() {
         byes.set(m.id, setTimeout(back, BYE_WAIT_MS));
       }
     };
+    // only the panels out when this window loaded: one it pops out itself
+    // in the meantime has a window that is still saying hello
+    const out = new Set(Object.keys(useStore.getState().popped));
     ch.postMessage({ type: "who" } satisfies PaneMsg);
     const who = setTimeout(() => {
-      for (const id of unclaimed(useStore.getState().popped, claimed)) useStore.getState().returnPanel(id);
+      for (const id of unclaimed(useStore.getState().popped, claimed)) {
+        if (out.has(id)) useStore.getState().returnPanel(id);
+      }
     }, WHO_WAIT_MS);
     return () => {
       clearTimeout(who);
