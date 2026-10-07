@@ -98,6 +98,14 @@ describe("moving a panel", () => {
     const joined = moveWithin(sep, "b", cellOf(sep, "a")?.id ?? "", 99);
     expect(cols(joined)).toEqual([[["a", "b"]]]);
   });
+  test("moveWithin to the place a showing tab already has is the same layout", () => {
+    const l = place(empty, ["a", "b", "c"], "c", "tabs", W);
+    const cell = cellOf(l, "a")?.id ?? "";
+    expect(moveWithin(l, "c", cell, 2)).toBe(l);
+    expect(moveWithin(l, "c", cell, 99)).toBe(l);
+    // the same place but not showing yet still changes: it shows
+    expect(moveWithin(l, "a", cell, 0)).not.toBe(l);
+  });
 });
 
 describe("regroup, seams and the active tab", () => {

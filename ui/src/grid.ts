@@ -179,11 +179,14 @@ function moveToShape(l: DockLayout, id: string, target: { cell: string; zone: Zo
 }
 
 /** `id` joins `cell` as a tab at `index` (clamped) and becomes its active
- *  tab. Inside its own cell this reorders. Not phase A's movePanel, which
- *  is the left/right move and tab reorder in store.ts. */
+ *  tab. Inside its own cell this reorders; the showing tab moved to where
+ *  it already is gives back `l` itself. Not phase A's movePanel, which is
+ *  the left/right move and tab reorder in store.ts. */
 export function moveWithin(l: DockLayout, id: string, cell: string, index: number): DockLayout {
   const own = cellOf(l, id);
   if (!own || !l.columns.some((c) => c.cells.some((x) => x.id === cell))) return l;
+  const stay = Math.max(0, Math.min(index, own.panels.length - 1));
+  if (own.id === cell && own.active === id && own.panels[stay] === id) return l;
   const out = own.id === cell ? l : remove(l, id);
   return mapCell(out, cell, (x) => {
     const rest = x.panels.filter((p) => p !== id);
