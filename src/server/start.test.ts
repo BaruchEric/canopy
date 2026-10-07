@@ -160,8 +160,9 @@ describe("start=agent", () => {
     await c.closed;
   });
 
-  test("the agent route refuses a shell it does not hold", async () => {
-    expect((await agentOf("c0000000000000000000000000000003")).status).toBe(404);
+  test("the agent route answers no agent, not an error, for a shell it does not hold yet", async () => {
+    // a panel asks the moment its tab appears, before its socket starts the shell
+    expect(await agentOf("c0000000000000000000000000000003")).toEqual({ status: 200, body: { agent: null } });
   });
 
   test("start=claude from a page older than harnesses starts the agent the same way", async () => {
@@ -182,7 +183,8 @@ describe("start=agent", () => {
     expect(c.close().code).toBe(1011);
     expect(c.close().reason).toMatch(/^codex is not installed on /);
     expect(typed).toBe(before);
-    expect((await agentOf(id)).status).toBe(404);
+    const held = (await (await fetch(`http://127.0.0.1:${server.port}/api/terms`)).json()) as { id: string }[];
+    expect(held.some((t) => t.id === id)).toBe(false);
   });
 
   test("in a seed, start=agent is refused before a shell starts, and a plain shell opens", async () => {

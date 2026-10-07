@@ -2151,7 +2151,10 @@ async function handleApi(
     const term = url.searchParams.get("term") ?? "";
     const live = state.terms.get(term);
     if (live?.info.task || state.tasks.knows(term)) return json({ error: "that is a task, not a shell" }, 400);
-    if (!live || live.ending) return json({ error: "no such shell" }, 404);
+    // A shell not held (yet: a panel asks as its tab appears, before its
+    // socket starts the shell; or no more) runs no agent. Every caller reads
+    // a failure as none anyway, so an error status would only be noise.
+    if (!live || live.ending) return json({ agent: null });
     // a plain pty has no one to ask: what canopy started there may have
     // exited back to the shell, so it never counts as an agent
     if (!state.tmux) return json({ agent: null });
