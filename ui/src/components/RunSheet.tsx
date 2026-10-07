@@ -26,7 +26,7 @@ import {
   type RunStep,
 } from "../../../src/core/types";
 import { renameOld, taskDraftCwd, taskDraftPatch, withChange } from "../tasks";
-import { AGENT_NAME, harnessOf, hideTodoSteps, nestSteps, planState, resultLine, tokenTitle, type PlanState } from "../runs";
+import { AGENT_NAME, harnessOf, hideTodoSteps, nestSteps, resultLine, settledProposal, tokenTitle, type SettledProposal } from "../runs";
 import { HARNESS } from "../../../src/core/harness";
 
 const STATUS_WORD: Record<Run["status"], string> = {
@@ -302,7 +302,7 @@ export function Timeline({
   // steps give way to the checklist
   const nodes = nestSteps(hideTodoSteps(steps, todos.length > 0));
   // the latest plan, once settled: the one waiting shows in its form below
-  const settled = run.proposal && run.prompt?.kind !== "proposal" ? planState(run.steps) : null;
+  const settled = settledProposal(run);
 
   return (
     <div
@@ -321,7 +321,7 @@ export function Timeline({
       )}
       {settled && (
         <details className="proposal">
-          <summary>{PLAN_SUMMARY[settled]}</summary>
+          <summary>{PROPOSAL_SUMMARY[settled]}</summary>
           <pre className="proposal-text">{run.proposal}</pre>
         </details>
       )}
@@ -569,20 +569,45 @@ function Composer({
   );
 }
 
-/** the approved-plan card's line, by how the latest plan was settled */
-const PLAN_SUMMARY: Record<PlanState, string> = {
+/** the approved-plan card's line, by how the latest plan was settled. Both
+ *  approvals read the same: a bypass the CLI refused falls back to asking,
+ *  which the timeline's note says and this line could not. */
+const PROPOSAL_SUMMARY: Record<SettledProposal, string> = {
   approved: "the approved plan",
+  "approved-auto": "the approved plan",
   "sent back": "the plan, sent back",
   "turned down": "the plan, turned down",
 };
 
-/** One step, and a subagent's steps folded under the Agent call that
- *  started them. They open while one of them runs: the Agent step's own
- *  status says nothing, since an async one is done the moment it launches. */
+/** A subagent's steps folded under the Agent call that started them. The
+ *  fold opens when one of them starts running (the Agent step's own status
+ *  says nothing, since an async one is done the moment it launches), and
+ *  otherwise stays as the user left it: a fold they opened never closes on
+ *  them when the last one finishes. */
+function KidSteps({ kids }: { kids: readonly RunStep[] }) {
+  const running = kids.some((k) => k.tool?.status === "running");
+  const [open, setOpen] = useState(running);
+  useEffect(() => {
+    if (running) setOpen(true);
+  }, [running]);
+  return (
+    <details className="step-kids" open={open} onToggle={(e) => setOpen(e.currentTarget.open)}>
+      <summary>
+        {kids.length} step{kids.length === 1 ? "" : "s"} inside
+      </summary>
+      <ol>
+        {kids.map((k) => (
+          <Step key={k.id} step={k} />
+        ))}
+      </ol>
+    </details>
+  );
+}
+
+/** One step, and a subagent's steps under the Agent call that started them. */
 function Step({ step, kids = [] }: { step: RunStep; kids?: readonly RunStep[] }) {
   if (step.kind === "tool" && step.tool) {
     const t = step.tool;
-    const kidRunning = kids.some((k) => k.tool?.status === "running");
     return (
       <li className={`step k-tool st-${t.status}`}>
         <span className="node" />
@@ -594,18 +619,7 @@ function Step({ step, kids = [] }: { step: RunStep; kids?: readonly RunStep[] })
               <pre>{t.output}</pre>
             </details>
           )}
-          {kids.length > 0 && (
-            <details className="step-kids" open={kidRunning}>
-              <summary>
-                {kids.length} step{kids.length === 1 ? "" : "s"} inside
-              </summary>
-              <ol>
-                {kids.map((k) => (
-                  <Step key={k.id} step={k} />
-                ))}
-              </ol>
-            </details>
-          )}
+          {kids.length > 0 && <KidSteps kids={kids} />}
         </div>
       </li>
     );

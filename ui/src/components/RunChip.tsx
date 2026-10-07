@@ -1,6 +1,6 @@
 import { useStore } from "../store";
 import { flowWord } from "../flows";
-import { AGENT_NAME, agentWord, harnessOf } from "../runs";
+import { AGENT_NAME, agentWord, harnessOf, progressWord } from "../runs";
 import type { Flow, Run } from "../../../src/core/types";
 
 /** One word about a repo's run, on the card and in the panel. Clicking it
@@ -9,6 +9,8 @@ export function RunChip({ run, long = false }: { run: Run; long?: boolean }) {
   const showRun = useStore((s) => s.showRun);
   const verb = run.verb;
   const harness = harnessOf(run);
+  // a propose run's "planning" turns to "building" once the plan is approved
+  const progress = progressWord(run);
   const who = agentWord(harness);
   // A commit or push that left git status exactly as it was is not a
   // success the card can show, so the chip says so instead of "done".
@@ -20,8 +22,8 @@ export function RunChip({ run, long = false }: { run: Run; long?: boolean }) {
     :
     run.status === "working"
       ? long
-        ? `${who} is ${run.progress}`
-        : `${run.progress}…`
+        ? `${who} is ${progress}`
+        : `${progress}…`
       : run.status === "waiting"
         ? long
           ? `${verb}: ${who} needs you`

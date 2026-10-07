@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { settleNote } from "../../src/core/driver";
 import type { RunStep } from "../../src/core/types";
-import { AGENT_NAME, agentWord, clock, harnessOf, hideTodoSteps, nestSteps, planState, resultLine, reviseAnswer, tokenCount, tokenTitle } from "./runs";
+import { AGENT_NAME, agentWord, clock, harnessOf, hideTodoSteps, nestSteps, progressWord, resultLine, reviseAnswer, settledProposal, tokenCount, tokenTitle } from "./runs";
 
 describe("a run's words", () => {
   test("its harness, and a run from before harnesses was Claude's", () => {
@@ -67,15 +67,26 @@ describe("plan, then build in the timeline", () => {
     expect(settleNote({ id: "p", kind: "proposal", plan: "x", auto: false }, reviseAnswer(""))).toBe("sent the plan back: Revise the plan.");
   });
 
-  test("the plan card names how the latest plan was settled", () => {
-    const plan = { id: "p", kind: "proposal" as const, plan: "1. x", auto: true };
-    const note = (text: string): RunStep => ({ id: text, at: 0, kind: "note", text });
-    expect(planState([])).toBeNull();
-    expect(planState([note(settleNote(plan, { kind: "approve", auto: false }))])).toBe("approved");
-    expect(planState([note(settleNote(plan, { kind: "approve", auto: true }))])).toBe("approved");
-    expect(planState([note(settleNote(plan, { kind: "deny", message: "smaller" }))])).toBe("sent back");
-    expect(planState([note(settleNote(plan, { kind: "deny" }))])).toBe("turned down");
-    // the latest settle wins: sent back once, then approved
-    expect(planState([note(settleNote(plan, { kind: "deny", message: "smaller" })), s("x"), note(settleNote(plan, { kind: "approve", auto: false }))])).toBe("approved");
+  test("the plan card shows once the latest proposal is settled, never while it waits", () => {
+    const at = { prompt: null };
+    expect(settledProposal({ ...at })).toBeNull();
+    expect(settledProposal({ ...at, proposal: "1. x", proposalState: "waiting" })).toBeNull();
+    // a run from before the state was kept shows no card
+    expect(settledProposal({ ...at, proposal: "1. x" })).toBeNull();
+    expect(settledProposal({ ...at, proposal: "1. x", proposalState: "approved" })).toBe("approved");
+    expect(settledProposal({ ...at, proposal: "1. x", proposalState: "approved-auto" })).toBe("approved-auto");
+    expect(settledProposal({ ...at, proposal: "1. x", proposalState: "sent back" })).toBe("sent back");
+    expect(settledProposal({ ...at, proposal: "1. x", proposalState: "turned down" })).toBe("turned down");
+    // the one on show in the form below is not repeated as a card
+    expect(settledProposal({ prompt: { id: "p", kind: "proposal", plan: "1. x", auto: false }, proposal: "1. x", proposalState: "sent back" })).toBeNull();
+  });
+
+  test("the chip says building once the plan is approved", () => {
+    expect(progressWord({ progress: "planning" })).toBe("planning");
+    expect(progressWord({ progress: "planning", proposalState: "waiting" })).toBe("planning");
+    expect(progressWord({ progress: "planning", proposalState: "sent back" })).toBe("planning");
+    expect(progressWord({ progress: "planning", proposalState: "approved" })).toBe("building");
+    expect(progressWord({ progress: "planning", proposalState: "approved-auto" })).toBe("building");
+    expect(progressWord({ progress: "working" })).toBe("working");
   });
 });

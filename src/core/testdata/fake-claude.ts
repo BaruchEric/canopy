@@ -20,6 +20,10 @@
  *    bgshell starts a background shell and ends its turn: a shell never
  *          holds a result
  *    quiet like async, but after the notification it sends nothing more
+ *    stray like quiet, but one last subagent message (parent_tool_use_id
+ *          set) comes after the task list empties: bookkeeping, not a turn
+ *    subtodo like async, but the subagent makes a task of its own first,
+ *          TaskCreate and its result both carrying parent_tool_use_id
  *    woke  like async, but the turn the subagent's end wakes asks to run
  *          `bun test` from the main thread before its real result
  *    lost  like async, but the subagent's end comes only as an empty
@@ -71,7 +75,7 @@ out({ type: "system", subtype: "init", session_id: "sess-1", cwd: process.cwd() 
 
 let turns = 0;
 /** the modes that start one background Agent and send a result while it runs */
-const ASYNC = new Set(["async", "quiet", "woke", "lost", "notifyonly", "crash"]);
+const ASYNC = new Set(["async", "quiet", "stray", "subtodo", "woke", "lost", "notifyonly", "crash"]);
 const bash = (id: string, command: string) =>
   out({
     type: "control_request",
@@ -168,6 +172,10 @@ function onUser(): void {
       process.stderr.write("subagent lost\n");
       process.exit(7);
     }
+    if (mode === "subtodo") {
+      out({ type: "assistant", session_id: "sess-1", parent_tool_use_id: "ag1", message: { role: "assistant", content: [{ type: "tool_use", id: "st1", name: "TaskCreate", input: { subject: "Read the log", activeForm: "Reading the log" } }] } });
+      out({ type: "user", session_id: "sess-1", parent_tool_use_id: "ag1", message: { role: "user", content: [{ type: "tool_result", tool_use_id: "st1", content: [{ type: "text", text: "Task #1 created successfully: Read the log" }], is_error: false }] } });
+    }
     out({ type: "assistant", session_id: "sess-1", parent_tool_use_id: "ag1", message: { role: "assistant", content: [{ type: "tool_use", id: "sub1", name: "Bash", input: { command: "git log" } }] } });
     out({ type: "control_request", request_id: "req-a", request: { subtype: "can_use_tool", tool_name: "Bash", input: { command: "git log" }, tool_use_id: "sub1" } });
     return;
@@ -221,6 +229,10 @@ function onResponse(m: Record<string, unknown>): void {
     if (mode !== "lost") sys("task_notification", { task_id: two ? "t-ag2" : "t-ag", tool_use_id: two ? "ag2" : "ag1", status: "completed" });
     if (mode !== "notifyonly") tasks([]);
     if (mode === "quiet") return;
+    if (mode === "stray") {
+      out({ type: "assistant", session_id: "sess-1", parent_tool_use_id: "ag1", message: { role: "assistant", content: [{ type: "text", text: "late word" }] } });
+      return;
+    }
     if (mode === "woke") {
       // the fresh init and the main thread's own turn (spec P5)
       sys("init", { cwd: process.cwd() });

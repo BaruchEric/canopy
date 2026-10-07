@@ -43,8 +43,11 @@ const str = (o: Record<string, unknown>, k: string): string => (typeof o[k] === 
 const num = (o: Record<string, unknown>, k: string): number => (typeof o[k] === "number" ? o[k] : 0);
 
 /** Whether a message is the CLI at work on a turn (a fresh init, a message,
- *  a prompt) rather than its bookkeeping about background tasks. */
+ *  a prompt) rather than its bookkeeping about background tasks. A
+ *  subagent's own message (one with `parent_tool_use_id`) is never the main
+ *  thread's turn, even one that straggles in after the task list emptied. */
 const wakes = (m: Record<string, unknown>): boolean => {
+  if (str(m, "parent_tool_use_id")) return false;
   const type = str(m, "type");
   if (type === "system") return str(m, "subtype") === "init";
   return type === "assistant" || type === "user" || type === "control_request" || type === "control_cancel_request";
@@ -419,12 +422,13 @@ export class ClaudeDriver implements RunDriver {
 
   /** Closes stdin, which lets the CLI exit, once canopy's own requests and
    *  the follow-ups that send them are done: closing it first would cut
-   *  them off (spec P6). Each request gives up after its own wait, so this
-   *  never holds a run open for good. */
+   *  them off (spec P6). Each request gives up after its own wait, and a
+   *  follow-up that failed counts as done, so this never holds a run open
+   *  for good. */
   private endInput(proc: RpcProc): void {
     const waits: Promise<unknown>[] = [...this.followUps, ...[...this.asked.values()].map((a) => a.done)];
     if (waits.length > 0) {
-      void Promise.all(waits).then(() => this.endInput(proc));
+      void Promise.allSettled(waits).then(() => this.endInput(proc));
       return;
     }
     try {
@@ -494,8 +498,12 @@ export class ClaudeDriver implements RunDriver {
     });
     if (!after) return sent;
     // tracked from before the allow goes out, so a result in between cannot
-    // close stdin ahead of the switch
-    const followUp: Promise<void> = sent.then(after).finally(() => this.followUps.delete(followUp));
+    // close stdin ahead of the switch; one that throws must neither hold
+    // stdin open nor go unhandled
+    const followUp: Promise<void> = sent
+      .then(after)
+      .catch(() => {})
+      .finally(() => this.followUps.delete(followUp));
     this.followUps.add(followUp);
     await followUp;
   }

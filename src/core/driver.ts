@@ -20,7 +20,7 @@ import type { ApprovalFacts } from "./codexrun";
 import { stageEnv } from "./envnames";
 import { EDIT_TOOLS } from "./shellwords";
 import { STAGE_AWAY } from "./stagewire";
-import type { Harness, PermissionAsk, Run, RunAnswer, RunPrompt, RunQuestion, RunResult, RunStatus, RunStep, RunTodo, RunTokens } from "./types";
+import type { Harness, PermissionAsk, ProposalState, Run, RunAnswer, RunPrompt, RunQuestion, RunResult, RunStatus, RunStep, RunTodo, RunTokens } from "./types";
 
 /** steps kept per run; the oldest fall off with a note */
 export const STEP_CAP = 400;
@@ -205,6 +205,13 @@ export function settleNote(prompt: RunPrompt | PromptInput, a: RunAnswer): strin
   return `denied: ${prompt.title}`;
 }
 
+/** Where an answer leaves a proposal, in the same terms as its note. */
+export function proposalSettled(a: RunAnswer): ProposalState {
+  if (a.kind === "approve") return a.auto ? "approved-auto" : "approved";
+  if (a.kind === "allow") return "approved";
+  return a.kind === "deny" && a.message ? "sent back" : "turned down";
+}
+
 /** Why an answer cannot settle a prompt, or null when it fits: a plan is
  *  approved or sent back, and only a plan is approved. "allow all" or
  *  answers to a plan would settle it as a turn-down nobody chose. */
@@ -369,7 +376,10 @@ export class RunCtx implements DriveCtx {
 
   proposal(plan: string): void {
     if (!activeStatus(this.run.status)) return;
+    // the text and its state change together, so new text never shows
+    // under the last one's label
     this.run.proposal = plan;
+    this.run.proposalState = "waiting";
     this.changed();
   }
 
@@ -450,6 +460,9 @@ export class RunCtx implements DriveCtx {
             this.run.prompt = next?.prompt ?? null;
           }
           this.step({ kind: "note", text: note ?? settleNote(full, a) });
+          // kept on the run, since the note falls off on a long build; only
+          // for the text on show, never one a later proposal replaced
+          if (full.kind === "proposal" && this.run.proposal === full.plan) this.run.proposalState = proposalSettled(a);
           if (a.kind === "allow-all" && full.kind === "permission") {
             this.allowAll = true;
             // the ones already queued behind it are "later" too

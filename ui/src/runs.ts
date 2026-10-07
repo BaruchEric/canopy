@@ -5,7 +5,7 @@
 
 import { HARNESS } from "../../src/core/harness";
 import { TODO_TOOLS } from "../../src/core/todos";
-import type { Harness, RunAnswer, RunResult, RunStep } from "../../src/core/types";
+import type { Harness, ProposalState, Run, RunAnswer, RunResult, RunStep } from "../../src/core/types";
 
 /** The harness a run is on. A run from a backend older than harnesses was
  *  Claude's, the only agent a run could be then. */
@@ -78,19 +78,21 @@ export function nestSteps(steps: readonly RunStep[]): StepNode[] {
 export const hideTodoSteps = (steps: readonly RunStep[], hasTodos: boolean): RunStep[] =>
   hasTodos ? steps.filter((x) => !(x.tool && !x.parent && TODO_TOOLS.has(x.tool.name))) : [...steps];
 
-export type PlanState = "approved" | "sent back" | "turned down";
+export type SettledProposal = Exclude<ProposalState, "waiting">;
 
-/** How the latest plan was settled, read off the note the timeline keeps
- *  for it (settleNote in src/core/driver.ts), or null before any was. */
-export function planState(steps: readonly RunStep[]): PlanState | null {
-  for (let i = steps.length - 1; i >= 0; i--) {
-    const t = steps[i]?.kind === "note" ? (steps[i]?.text ?? "") : "";
-    if (t.startsWith("approved the plan")) return "approved";
-    if (t.startsWith("sent the plan back")) return "sent back";
-    if (t === "turned the plan down") return "turned down";
-  }
-  return null;
+/** How the latest proposal was settled, for the card above the timeline,
+ *  or null: none yet, one still waiting (its form shows it), or a run from
+ *  a backend that did not keep the state. */
+export function settledProposal(run: Pick<Run, "proposal" | "proposalState" | "prompt">): SettledProposal | null {
+  const state = run.proposalState;
+  if (!run.proposal || !state || state === "waiting" || run.prompt?.kind === "proposal") return null;
+  return state;
 }
+
+/** The chip's word for a working run: an approved proposal is building,
+ *  whatever the action's own word ("planning") says. */
+export const progressWord = (run: Pick<Run, "progress" | "proposalState">): string =>
+  run.proposalState === "approved" || run.proposalState === "approved-auto" ? "building" : run.progress;
 
 /** A revise is a deny that carries a note. An empty one still says what it
  *  is, since a bare deny reads as the plan turned down. */

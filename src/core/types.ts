@@ -878,6 +878,12 @@ export type RunPrompt =
    *  ExitPlanMode); `auto` says whether "run on its own" may be offered */
   | { id: string; kind: "proposal"; plan: string; auto: boolean };
 
+/** Where the latest proposal stands: waiting on the user, approved (asking
+ *  before commands, or running on its own), sent back with a note, or turned
+ *  down. Kept on the run rather than read off the timeline, whose oldest
+ *  steps fall off on a long build. */
+export type ProposalState = "waiting" | "approved" | "approved-auto" | "sent back" | "turned down";
+
 /** Where a remembered rule applies: one workflow's step wherever it runs, a
  *  whole workflow, or one repo (every run in it, a flow's included). */
 export type RememberScope =
@@ -992,6 +998,8 @@ export interface Run {
   prompt: RunPrompt | null;
   /** the plan the agent proposed last (propose runs) */
   proposal?: string;
+  /** how `proposal` was settled; a new proposal starts it at "waiting" */
+  proposalState?: ProposalState;
   /** the agent's checklist as it last stood */
   todos?: RunTodo[];
   result?: RunResult;

@@ -370,6 +370,54 @@ test("a proposal is kept on the run while it is live, never after", () => {
   expect(run.proposal).toBe("# one");
 });
 
+test("the proposal's settle state is kept on the run, past the step cap", async () => {
+  const { run, ctx } = makeCtx();
+  const plan = { kind: "proposal" as const, plan: "# one", auto: false };
+  ctx.proposal("# one");
+  expect(run.proposalState).toBe("waiting");
+  const asked = ctx.ask(plan, "1");
+  ctx.answer(run.prompt?.id ?? "", { kind: "approve", auto: false });
+  await asked;
+  expect(run.proposalState).toBe("approved");
+  // a long build pushes the settle note out of the timeline
+  for (let i = 0; i < STEP_CAP + 5; i++) ctx.step({ kind: "text", text: String(i) });
+  expect(notes(run)).not.toContain("approved the plan, asking before commands");
+  expect(run.proposalState).toBe("approved");
+  expect(run.proposal).toBe("# one");
+});
+
+test("a revised proposal starts waiting again under its own text", async () => {
+  const { run, ctx } = makeCtx();
+  ctx.proposal("# one");
+  const first = ctx.ask({ kind: "proposal", plan: "# one", auto: true }, "1");
+  ctx.answer(run.prompt?.id ?? "", { kind: "deny", message: "smaller" });
+  await first;
+  expect(run.proposalState).toBe("sent back");
+  // the new text never shows under the old label
+  ctx.proposal("# two");
+  expect(run.proposal).toBe("# two");
+  expect(run.proposalState).toBe("waiting");
+  const second = ctx.ask({ kind: "proposal", plan: "# two", auto: true }, "2");
+  ctx.answer(run.prompt?.id ?? "", { kind: "approve", auto: true });
+  await second;
+  expect(run.proposalState).toBe("approved-auto");
+});
+
+test("a proposal turned down, or settled after newer text came, is labelled for its own text", async () => {
+  const { run, ctx } = makeCtx();
+  ctx.proposal("# one");
+  const stale = ctx.ask({ kind: "proposal", plan: "# one", auto: false }, "1");
+  // newer text arrives while the first still waits: its settle is not the new one's
+  ctx.proposal("# two");
+  ctx.withdraw("1");
+  await stale;
+  expect(run.proposalState).toBe("waiting");
+  const asked = ctx.ask({ kind: "proposal", plan: "# two", auto: false }, "2");
+  ctx.denyAll();
+  await asked;
+  expect(run.proposalState).toBe("turned down");
+});
+
 test("settle notes for a proposal", () => {
   const p = { kind: "proposal" as const, plan: "1. x", auto: false };
   expect(settleNote(p, { kind: "approve", auto: false })).toBe("approved the plan, asking before commands");

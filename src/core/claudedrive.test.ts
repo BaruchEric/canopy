@@ -22,7 +22,7 @@ afterAll(async () => {
 });
 
 async function drive(
-  mode: "job" | "chat" | "die" | "async" | "bgshell" | "quiet" | "woke" | "lost" | "notifyonly" | "crash" | "two" | "propose",
+  mode: "job" | "chat" | "die" | "async" | "bgshell" | "quiet" | "stray" | "subtodo" | "woke" | "lost" | "notifyonly" | "crash" | "two" | "propose",
   message = "do the thing",
   unattended?: string,
   opts: {
@@ -31,6 +31,7 @@ async function drive(
     requestMs?: number;
     agent?: typeof AGENT;
     env?: Record<string, string>;
+    emit?: (run: DriveRun) => void;
   } = {},
 ) {
   const dir = await mkdtemp(join(tmpdir(), "canopy-claude-"));
@@ -70,7 +71,7 @@ async function drive(
       env: { CANOPY_RUN: "r1", FAKE_CLAUDE_MODE: mode, FAKE_CLAUDE_LOG: logPath, ...opts.env },
       label: "Claude Code",
     },
-    { emit: () => {}, ended: (r) => ended.push(r.status) },
+    { emit: opts.emit ?? (() => {}), ended: (r) => ended.push(r.status) },
   );
   const driver = new ClaudeDriver({
     command: [process.execPath, FAKE],
@@ -190,6 +191,7 @@ describe("a propose run: ExitPlanMode is a proposal", () => {
     d.ctx.answer(first, { kind: "deny", message: "add a test step" });
     const w2 = await d.until((r) => r.prompt?.kind === "proposal" && r.prompt.id !== first, "the second proposal");
     expect(w2.proposal).toContain("Plan v2");
+    expect(w2.proposalState).toBe("waiting");
     const log = await d.sent();
     expect(responseTo(log, "req-p1")?.response.response).toEqual({ behavior: "deny", message: "add a test step" });
     expect(modesAsked(log)).toEqual([]);
@@ -252,6 +254,25 @@ describe("a propose run: ExitPlanMode is a proposal", () => {
     expect(Date.now() - endedAt).toBeGreaterThan(150);
     expect(modesAsked(log)).toEqual(["acceptEdits"]);
     expect(run.steps.some((s) => s.kind === "note" && s.text?.startsWith("could not"))).toBe(false);
+  });
+
+  test("a mode switch whose follow-up throws still lets stdin close", async () => {
+    const d = await drive("propose", "build it", undefined, {
+      env: { FAKE_CLAUDE_REFUSE_MODE: "1" },
+      // the note the refused switch leaves fails to broadcast
+      emit: (r) => {
+        if (r.steps.at(-1)?.text?.startsWith("could not switch")) throw new Error("emit failed");
+      },
+    });
+    const w = await d.until((r) => r.prompt?.kind === "proposal", "the proposal");
+    d.ctx.answer(w.prompt?.id ?? "", { kind: "approve", auto: false });
+    await d.until(d.done, "the end");
+    let log = await d.sent();
+    for (let i = 0; i < 50 && !log.some((m) => m["eof"]); i++) {
+      await Bun.sleep(20);
+      log = await d.sent();
+    }
+    expect(log.some((m) => m["eof"])).toBe(true);
   });
 
   test("an empty plan is sent back without asking anyone", async () => {
@@ -399,6 +420,16 @@ describe("a Claude run through the driver", () => {
     const run = await d.until(d.done, "the end");
     expect(run.status).toBe("done");
     expect(run.result?.text).toBe("early");
+  });
+
+  test("a stray subagent message after the subagents are done is not a new turn: the grace still ends the run", async () => {
+    const d = await drive("stray", "do the thing", undefined, { heldGraceMs: 50 });
+    const waiting = await d.until((r) => r.status === "waiting", "the subagent's prompt");
+    d.ctx.answer(waiting.prompt?.id ?? "", { kind: "allow" });
+    const run = await d.until(d.done, "the end", 2_000);
+    expect(run.status).toBe("done");
+    expect(run.result?.text).toBe("early");
+    expect(run.steps.some((s) => s.text === "late word")).toBe(true);
   });
 
   test("a held result waits out the turn the subagents woke, however long its prompt waits", async () => {
@@ -554,6 +585,18 @@ test("the checklist follows TaskCreate and TaskUpdate", async () => {
   d.ctx.answer(asked.prompt?.id ?? "", { kind: "approve", auto: false });
   const run = await d.until(d.done, "the end");
   expect(run.todos?.[0]?.status).toBe("completed");
+});
+
+test("a subagent's own TaskCreate never reaches the checklist", async () => {
+  const d = await drive("subtodo");
+  const w = await d.until((r) => r.status === "waiting", "the subagent's prompt");
+  const made = w.steps.find((s) => s.tool?.name === "TaskCreate");
+  expect(made?.parent).toBe(w.steps.find((s) => s.tool?.name === "Agent")?.id);
+  expect(made?.tool?.status).toBe("ok");
+  expect(w.todos).toBeUndefined();
+  d.ctx.answer(w.prompt?.id ?? "", { kind: "allow" });
+  const run = await d.until(d.done, "the end");
+  expect(run.todos).toBeUndefined();
 });
 
 test("a subagent's steps carry their Agent step as parent", async () => {
