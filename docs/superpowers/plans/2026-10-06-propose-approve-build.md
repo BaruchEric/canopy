@@ -1075,7 +1075,7 @@ git commit -m "feat(ui): plan, then build: the proposal, the checklist, nested s
 **Files:**
 - Modify: `docs/architecture.md`, sections "src/core" (runs and drivers) and "ui/".
 
-- [ ] **Step 1: Write the notes.** Cover:
+- [x] **Step 1: Write the notes.** Cover:
   - The background count and the held result (P5, P6), and why closing stdin early breaks permission requests.
   - `propose`: plan mode and the proposal prompt. Approval sends `set_permission_mode` (`acceptEdits`, or `bypassPermissions` only with yolo) before allowing `ExitPlanMode`.
   - `run.todos` from TaskCreate and TaskUpdate (or TodoWrite), main thread only.
@@ -1083,12 +1083,12 @@ git commit -m "feat(ui): plan, then build: the proposal, the checklist, nested s
   - The names `propose`, `proposal` and `todos`, and why they avoid "plan" and "tasks".
   - Correct `CLAUDE.md`'s runs gotcha. It says "Stdin must stay open until the `result` message (the CLI exits once it is closed)", which spec P5 shows is wrong while a subagent runs. Change it to say stdin stays open until a `result` that arrives with no `local_agent` task live, and name the held result and its grace.
 
-- [ ] **Step 2: Gates**
+- [x] **Step 2: Gates**
 
 Run: `bun run typecheck && bun run lint && env -u TMUX SHELL=/bin/bash bun test && bun run build`
 Expected: all pass.
 
-- [ ] **Step 3: Commit**
+- [x] **Step 3: Commit**
 
 ```bash
 git add docs/architecture.md CLAUDE.md
