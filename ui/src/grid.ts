@@ -279,3 +279,16 @@ export function gridOf(l: DockLayout): GridPlan {
   });
   return plan;
 }
+
+/** how near an edge, as a fraction of that side, a drop must be to split */
+export const EDGE = 0.25;
+
+/** Where a drop at (x, y) lands in a cell's rect: the nearest edge when
+ *  within EDGE of it, else the middle. A point outside clamps to the rect. */
+export function dropZone(rect: { left: number; top: number; width: number; height: number }, x: number, y: number): Zone {
+  const fx = Math.max(0, Math.min(1, (x - rect.left) / rect.width));
+  const fy = Math.max(0, Math.min(1, (y - rect.top) / rect.height));
+  const edges: [Zone, number][] = [["left", fx], ["right", 1 - fx], ["above", fy], ["below", 1 - fy]];
+  const [zone, d] = edges.reduce((a, b) => (b[1] < a[1] ? b : a));
+  return d < EDGE ? zone : "center";
+}

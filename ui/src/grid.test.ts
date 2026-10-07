@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { activate, cellOf, gridOf, moveTo, moveWithin, panelsOf, place, regroup, rename, resizeColumn, resizeSeam } from "./grid";
+import { activate, cellOf, dropZone, gridOf, moveTo, moveWithin, panelsOf, place, regroup, rename, resizeColumn, resizeSeam } from "./grid";
 import type { DockLayout } from "./grid";
 
 const W = 440;
@@ -176,4 +176,20 @@ describe("resizing rejects bad input", () => {
   test("resizing an unknown column returns the layout itself", () => {
     expect(resizeColumn(l, "nope", 500, 200, 800)).toBe(l);
   });
+});
+
+describe("drop zones", () => {
+  const r = { left: 0, top: 0, width: 400, height: 800 };
+  test("the middle joins as a tab", () => expect(dropZone(r, 200, 400)).toBe("center"));
+  test("near an edge splits toward it", () => {
+    expect(dropZone(r, 200, 780)).toBe("below");
+    expect(dropZone(r, 200, 20)).toBe("above");
+    expect(dropZone(r, 10, 400)).toBe("left");
+    expect(dropZone(r, 390, 400)).toBe("right");
+  });
+  test("a corner goes to the nearer edge", () => {
+    expect(dropZone(r, 20, 790)).toBe("below");
+    expect(dropZone(r, 5, 700)).toBe("left");
+  });
+  test("outside the rect clamps to the nearest edge", () => expect(dropZone(r, -50, 400)).toBe("left"));
 });

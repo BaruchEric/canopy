@@ -316,7 +316,7 @@ git commit -m "feat(dock): turn the layout into one CSS grid"
 **Interfaces:**
 - Produces: `dropZone(rect: { left: number; top: number; width: number; height: number }, x: number, y: number): Zone` and `EDGE = 0.25`.
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 ```ts
 import { dropZone } from "./grid";
@@ -340,12 +340,12 @@ describe("drop zones", () => {
 
 The corner cases compare edge distances as fractions of each side: (20, 790) is 0.05 from the left and 0.0125 from the bottom.
 
-- [ ] **Step 2: Run them and watch them fail**
+- [x] **Step 2: Run them and watch them fail**
 
 Run: `env -u TMUX SHELL=/bin/bash bun test ui/src/grid.test.ts`
 Expected: FAIL.
 
-- [ ] **Step 3: Implement**
+- [x] **Step 3: Implement**
 
 ```ts
 /** how near an edge, as a fraction of that side, a drop must be to split */
@@ -360,12 +360,12 @@ export function dropZone(rect: { left: number; top: number; width: number; heigh
 }
 ```
 
-- [ ] **Step 4: Run the tests and watch them pass**
+- [x] **Step 4: Run the tests and watch them pass**
 
 Run: `env -u TMUX SHELL=/bin/bash bun test ui/src/grid.test.ts`
 Expected: PASS.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add ui/src/grid.ts ui/src/grid.test.ts
