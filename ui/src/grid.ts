@@ -419,3 +419,74 @@ export function dropZone(rect: { left: number; top: number; width: number; heigh
   const [zone, d] = edges.reduce((a, b) => (b[1] < a[1] ? b : a));
   return d < EDGE ? zone : "center";
 }
+
+/** An id as part of a CSS custom property name: every character outside
+ *  [A-Za-z0-9_-] becomes "_", and a hash of the whole id follows, so two
+ *  ids that differ only in those characters never share a name. */
+export function cssId(id: string): string {
+  let h = 0x811c9dc5;
+  for (let i = 0; i < id.length; i++) h = Math.imul(h ^ id.charCodeAt(i), 0x01000193) >>> 0;
+  return `${id.replace(/[^A-Za-z0-9_-]/g, "_")}-${h.toString(36)}`;
+}
+
+/** the custom property a column's live width is written to */
+export const columnVar = (column: string): string => `--col-w-${cssId(column)}`;
+
+/** gridOf's rows as tracks that may shrink to nothing, so the rows always
+ *  fit the dock's height and it never scrolls up and down */
+export function rowsTemplate(rows: string): string {
+  return rows
+    .split(" ")
+    .filter((r) => r !== "")
+    .map((r) => `minmax(0, ${r})`)
+    .join(" ");
+}
+
+/** The dock's grid templates. Each column reads its own variable, and
+ *  `vars` sets every one from the layout, so a seam's live write is
+ *  replaced by the next render rather than outliving a width change. */
+export function gridTemplate(l: DockLayout, plan: GridPlan): { columns: string; rows: string; vars: Record<string, string> } {
+  const vars: Record<string, string> = {};
+  for (const c of l.columns) vars[columnVar(c.id)] = `${c.width}px`;
+  return {
+    columns: l.columns.map((c) => `6px var(${columnVar(c.id)}, ${c.width}px)`).join(" "),
+    rows: rowsTemplate(plan.rows),
+    vars,
+  };
+}
+
+/** Where the seam under cell `index` of `column` sits, a fraction of the
+ *  column's height from the top; null when there is no such seam. */
+export function seamStart(l: DockLayout, column: string, index: number): number | null {
+  const col = l.columns.find((c) => c.id === column);
+  if (!col || index < 0 || index >= col.cells.length - 1) return null;
+  return col.cells.slice(0, index + 1).reduce((s, x) => s + x.share, 0);
+}
+
+/** A seam dragged `dy` px down a column `height` px tall, from `start`.
+ *  Every column spans the dock's full height, so that is the dock's. */
+export function seamDrag(start: number, dy: number, height: number): number {
+  if (!(height > 0) || !Number.isFinite(dy)) return start;
+  return Math.max(0, Math.min(1, start + dy / height));
+}
+
+export interface Placement { area?: string; cell?: string; order?: number; hidden: boolean; strip: boolean }
+
+/** Where each open panel goes: its grid area with `plan`, or, with none
+ *  (a phone, or no layout yet), a CSS order in the flat dock, every panel
+ *  showing in the layout's order and any it does not hold after them. A
+ *  panel the plan does not hold takes no room rather than auto-placing. */
+export function placements(l: DockLayout, open: readonly string[], plan: GridPlan | null): Record<string, Placement> {
+  const out: Record<string, Placement> = {};
+  if (plan) {
+    for (const id of open) {
+      const p = plan.panels[id];
+      out[id] = p ? { area: p.area, cell: p.cell, hidden: !p.shown, strip: p.strip } : { hidden: true, strip: false };
+    }
+    return out;
+  }
+  const laid = panelsOf(l).filter((id) => open.includes(id));
+  const order = [...laid, ...open.filter((id) => !laid.includes(id))];
+  for (const id of open) out[id] = { order: order.indexOf(id), hidden: false, strip: false };
+  return out;
+}

@@ -474,7 +474,7 @@ git commit -m "feat(dock): the store keeps the dock as columns of cells"
 **Interfaces:**
 - Consumes: `gridOf`, the store actions from Task 4.
 
-- [ ] **Step 1: Implement**
+- [x] **Step 1: Implement**
 
 `Dock`:
 - Compute `const g = useMemo(() => gridOf(layout), [layout])`.
@@ -499,7 +499,7 @@ git commit -m "feat(dock): the store keeps the dock as columns of cells"
 
 Keep the carousel rules from phase A working. A grid wider than the dock scrolls sideways the same way, and `scroll-snap-align` moves onto the column seams.
 
-- [ ] **Step 2: Gates, then the browser check**
+- [x] **Step 2: Gates, then the browser check**
 
 Run: `bun run typecheck && bun run lint && env -u TMUX SHELL=/bin/bash bun test && bun run build`
 Expected: all pass.
@@ -511,7 +511,7 @@ Then:
 4. With a split made through the store from the console (`useStore.getState().dropPanel(...)`), drag the row seam and reload, and check that it is kept.
 5. Resize the window to 1100px and 760px, and check that the grid does not overflow the page sideways outside the carousel.
 
-- [ ] **Step 3: Commit**
+- [x] **Step 3: Commit**
 
 ```bash
 git add ui/src

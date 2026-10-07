@@ -1,5 +1,5 @@
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
-import type { CSSProperties, DragEvent, KeyboardEvent, RefObject } from "react";
+import type { CSSProperties, DragEvent, KeyboardEvent, PointerEvent as ReactPointerEvent, RefObject } from "react";
 import { api } from "../api";
 import {
   FILE_COL_INFO,
@@ -16,7 +16,6 @@ import {
 import { peerable, peerWipCounts } from "../peers";
 import { useShallow } from "zustand/react/shallow";
 import {
-  DOCK,
   PANEL,
   activeFlowFor,
   capsFor,
@@ -37,7 +36,7 @@ import { devState } from "../guided";
 import { BENCH_ONE, BenchBar, BenchSeams, type BenchPane } from "./Bench";
 import { PHONE, useMedia } from "../media";
 import { dropIndex, stableOrder } from "../dock";
-import { columnOf } from "../grid";
+import { columnVar, gridOf, gridTemplate, placements, resizeSeam, rowsTemplate, seamDrag, seamStart, type DockLayout, type GridPlan } from "../grid";
 import { PAN_SLOP, overflowsX, snapTo, wheelTake } from "../carousel";
 import { backendOf, homeName, isHome } from "../registry";
 import { signinUrl } from "../backends";
@@ -1299,13 +1298,19 @@ function PanelWaiting({
   width,
   hidden,
   order,
+  area,
+  cell,
+  strip,
   movable,
   onClose,
 }: {
   id: string;
-  width: number;
+  width?: number;
   hidden?: boolean;
   order?: number;
+  area?: string;
+  cell?: string;
+  strip?: boolean;
   movable?: boolean;
   onClose: () => void;
 }) {
@@ -1316,10 +1321,11 @@ function PanelWaiting({
   const retry = useStore((s) => s.retryBackend);
   return (
     <section
-      className="panel panel-waiting"
+      className={`panel panel-waiting${strip ? " has-strip" : ""}`}
       aria-label={`${plain} on ${b}`}
       hidden={hidden}
-      style={{ "--panel-w": `${width}px`, order } as CSSProperties}
+      data-cell={cell}
+      style={{ ...(width !== undefined && { "--panel-w": `${width}px` }), order, gridArea: area } as CSSProperties}
     >
       <div className="panel-body">
         <header className="panel-head" {...panelHead(id, plain, movable)}>
@@ -1364,12 +1370,23 @@ export function RepoPanel({
   onClose,
   hidden,
   order: place,
+  area,
+  cell,
+  strip,
   movable,
 }: {
   id: string;
-  width: number;
-  /** its CSS order in a side-by-side dock, where the DOM order never moves */
+  /** its own width, where it has one: not on the dock's grid, whose
+   *  column tracks size it */
+  width?: number;
+  /** its CSS order in the flat dock on a phone, where the DOM order never
+   *  moves */
   order?: number;
+  /** its grid-area on the dock's grid, and the cell it is a tab of */
+  area?: string;
+  cell?: string;
+  /** whether its cell shows a strip of tabs over it */
+  strip?: boolean;
   /** whether it moves in the dock (drag, keys): not on a phone, where the
    *  dock stays as it was, nor in a window of its own */
   movable?: boolean;
@@ -1514,11 +1531,11 @@ export function RepoPanel({
       if (hidden) setPlaced("normal");
     }
   }, [screen, mode, hidden]);
-  // In a side-by-side dock, the panel that comes forward (opened from its
-  // card, back from a pop-out) is brought into the row's sight; a tabbed
-  // dock's strip keeps its own tab in sight.
+  // The panel that comes forward (opened from its card, back from a
+  // pop-out) is brought into the row's sight, on the grid once it shows
+  // and in a phone's flat dock; a cell's strip keeps its own tab in sight.
   const forward = useStore((s) => s.activePanel === id);
-  const sideBySide = place !== undefined;
+  const sideBySide = (area !== undefined && !hidden) || place !== undefined;
   useEffect(() => {
     if (!forward || !sideBySide) return;
     const frame = requestAnimationFrame(() => revealHead(box.current?.querySelector(".panel-head") ?? null));
@@ -1557,7 +1574,19 @@ export function RepoPanel({
     // a home repo gone from the scan is pruned with it; another machine's
     // keeps its place until that machine says
     if (idParts(id)[0] === homeName()) return null;
-    return <PanelWaiting id={id} width={width} hidden={hidden} order={place} movable={movable} onClose={() => closePanel(id)} />;
+    return (
+      <PanelWaiting
+        id={id}
+        width={width}
+        hidden={hidden}
+        order={place}
+        area={area}
+        cell={cell}
+        strip={strip}
+        movable={movable}
+        onClose={() => closePanel(id)}
+      />
+    );
   }
   const st = repo.status;
   const solo = onClose !== undefined;
@@ -1595,14 +1624,16 @@ export function RepoPanel({
       {bench && <FocusBackdrop onLeave={() => setMode("normal")} />}
     <section
       ref={box}
-      className={`panel s-${stateOf(repo)}${guided ? " guided-panel" : ""}${modeClass}`}
+      className={`panel s-${stateOf(repo)}${guided ? " guided-panel" : ""}${strip ? " has-strip" : ""}${modeClass}`}
       aria-label={repo.name}
       hidden={hidden}
       data-pane={bench ? (shownPane ?? undefined) : undefined}
+      data-cell={cell}
       style={
         {
-          "--panel-w": `${width}px`,
+          ...(width !== undefined && { "--panel-w": `${width}px` }),
           order: place,
+          gridArea: area,
           // the bench's seams, which styles.css reads as the parts' sizes
           ...(bench && {
             ...(benchRail !== null && { "--bench-rail-user": `${benchRail}px` }),
@@ -1804,10 +1835,11 @@ export function RepoPanel({
   );
 }
 
-/** The tab strip of a tabbed dock: one tab per open panel, the showing one
- *  lit, each with the repo's state glyph and its own close. Arrow keys move
- *  along the strip, wrapping at either end, and take the focus with them. */
-function DockTabs({ panels, active, movable }: { panels: string[]; active: string | null; movable: boolean }) {
+/** The tab strip over a cell of more than one panel: one tab per panel in
+ *  it, the showing one lit, each with the repo's state glyph and its own
+ *  close. Arrow keys move along the strip, wrapping at either end, and take
+ *  the focus with them. */
+function CellStrip({ strip: { cell, area, panels, active }, movable }: { strip: GridPlan["strips"][number]; movable: boolean }) {
   const repos = useStore((s) => s.repos);
   const showPanel = useStore((s) => s.showPanel);
   const closePanel = useStore((s) => s.closePanel);
@@ -1843,7 +1875,14 @@ function DockTabs({ panels, active, movable }: { panels: string[]; active: strin
     next.focus();
   };
   return (
-    <div className="dock-tabs" role="tablist" aria-label="Open repos" ref={strip}>
+    <div
+      className="dock-tabs cell-strip"
+      role="tablist"
+      aria-label="Open repos"
+      ref={strip}
+      data-cell={cell}
+      style={{ gridArea: area }}
+    >
       {panels.map((id) => {
         const repo = repos.find((r) => r.id === id);
         // another machine's panel that is waiting for it keeps its tab
@@ -1922,8 +1961,9 @@ function dockRoom(dock: HTMLElement | null): number {
 }
 
 /** a press here is a control's, never a pan: the head's buttons, links and
- *  menus, and the name and glyph that pick the panel up to move it */
-const NOT_PAN = 'button, a, input, select, textarea, label, [role="button"], [draggable="true"], .gear, .star';
+ *  menus, a strip's tabs, and the name and glyph that pick the panel up to
+ *  move it */
+const NOT_PAN = 'button, a, input, select, textarea, label, [role="button"], [role="tab"], [draggable="true"], .gear, .star';
 
 /** whether `el`, or anything between it and the dock, scrolls sideways
  *  itself (a wide diff); the dock always does, so it is left out */
@@ -1934,12 +1974,12 @@ function scrollsX(el: Element, dock: HTMLElement): boolean {
   return false;
 }
 
-/** each panel's left edge along the row, in the dock's scroll px: its
- *  handle's, since the handle is the panel's left edge; in visual order */
+/** each column's left edge along the row, in the dock's scroll px: its
+ *  seam's, since the seam is the column's left edge; in visual order */
 function panelEdges(dock: HTMLElement): number[] {
   const base = dock.getBoundingClientRect().left + dock.clientLeft - dock.scrollLeft;
   const edges = new Set<number>();
-  for (const el of dock.querySelectorAll(":scope > .panel-resizer")) {
+  for (const el of dock.querySelectorAll(":scope > .seam-col")) {
     if (el instanceof HTMLElement && el.offsetParent !== null) edges.add(Math.round(el.getBoundingClientRect().left - base));
   }
   return [...edges].sort((a, b) => a - b);
@@ -1967,19 +2007,19 @@ function revealHead(head: Element | null) {
  * The carousel's panning, while `on`: the side-by-side row scrolls sideways
  * by a drag, a wheel and Ctrl+Alt+arrow.
  *
- * - A drag on a panel head pans, past `PAN_SLOP`, and so does one on the
- *   dock's own background past the last panel. The head's name and glyph
+ * - A drag on a panel head or a strip's empty space pans, past `PAN_SLOP`,
+ *   and so does one on the dock's own background past the last column. The head's name and glyph
  *   stay the handle that picks the panel up to reorder it, and its buttons
  *   stay buttons: a press on any of them is theirs, never a pan. A touch
  *   is left alone, since the row already scrolls under a finger.
- * - A vertical wheel over a head pans; shift+wheel anywhere pans unless what
+ * - A vertical wheel over a head or a strip pans; shift+wheel anywhere pans unless what
  *   is under the pointer scrolls sideways itself (`wheelPan`), and a ctrl or
  *   cmd wheel never does, since it is a zoom. The listener captures, so a
  *   terminal in mouse mode never sees a wheel the row took, and a wheel the
  *   row did not take, or could not (it is at that end), is left to whatever
  *   is under it.
  * - Ctrl+Alt+Left/Right anywhere on the page goes to the previous or next
- *   panel's edge, captured before a focused terminal can take the keys.
+ *   column's edge, captured before a focused terminal can take the keys.
  */
 function useCarousel(ref: RefObject<HTMLDivElement | null>, on: boolean) {
   useEffect(() => {
@@ -1988,7 +2028,7 @@ function useCarousel(ref: RefObject<HTMLDivElement | null>, on: boolean) {
     const onWheel = (e: WheelEvent) => {
       const t = e.target;
       if (!(t instanceof Element) || rowCovered(dock, t)) return;
-      const over = t.closest(".panel-head") ? "head" : "content";
+      const over = t.closest(".panel-head, .cell-strip") ? "head" : "content";
       const dx = wheelTake(e, over, () => scrollsX(t, dock), dock);
       if (dx === 0) return;
       e.preventDefault();
@@ -2005,7 +2045,7 @@ function useCarousel(ref: RefObject<HTMLDivElement | null>, on: boolean) {
       const t = e.target;
       if (e.button !== 0 || e.pointerType === "touch" || !(t instanceof Element)) return;
       if (rowCovered(dock, t)) return;
-      if (t !== dock && (!t.closest(".panel-head") || t.closest(NOT_PAN))) return;
+      if (t !== dock && (!t.closest(".panel-head, .cell-strip") || t.closest(NOT_PAN))) return;
       const x0 = e.clientX;
       const left0 = dock.scrollLeft;
       let panning = false;
@@ -2068,97 +2108,173 @@ function useCarousel(ref: RefObject<HTMLDivElement | null>, on: boolean) {
   }, [ref, on]);
 }
 
+/** Lays a draft plan straight onto the dock, as a row seam's drag does
+ *  between renders: the row tracks, every cell's area (its panels, its
+ *  strip and the seam above it carry `data-cell`) and the column seams'
+ *  areas, which reach the last row line. A seam moved past another
+ *  column's boundary renumbers the row lines, so the rows alone would
+ *  leave the areas on the wrong tracks. */
+function paintGrid(dock: HTMLElement, plan: GridPlan) {
+  const cells = new Map<string, string>();
+  for (const p of Object.values(plan.panels)) cells.set(p.cell, p.area);
+  dock.style.gridTemplateRows = rowsTemplate(plan.rows);
+  let seam = 0;
+  for (const el of dock.children) {
+    if (!(el instanceof HTMLElement)) continue;
+    const area = el.classList.contains("seam-col")
+      ? plan.colSeams[seam++]?.area
+      : el.dataset.cell !== undefined
+        ? cells.get(el.dataset.cell)
+        : undefined;
+    if (area !== undefined) el.style.gridArea = area;
+  }
+}
+
+/** The seam between two cells of a column, at the top of the lower one.
+ *  A drag lays the layout it would make onto the dock as it goes, through
+ *  the same `resizeSeam` and `gridOf` the store and the render use, so
+ *  what shows while dragging is what the release keeps. */
+function RowSeam({ seam, layout }: { seam: GridPlan["rowSeams"][number]; layout: DockLayout }) {
+  const commit = useStore((s) => s.resizeSeam);
+  const [dragging, setDragging] = useState(false);
+  // a seam unmounted mid-drag (its cell closed) never sees its pointerup
+  useEffect(() => () => document.body.classList.remove("resizing-rows"), []);
+  const { column, index, area } = seam;
+  const start = seamStart(layout, column, index);
+  const below = layout.columns.find((c) => c.id === column)?.cells[index + 1]?.id;
+  const onPointerDown = (e: ReactPointerEvent<HTMLDivElement>) => {
+    const dock = e.currentTarget.parentElement;
+    if (e.button !== 0 || start === null || !dock) return;
+    e.preventDefault();
+    const handle = e.currentTarget;
+    const y0 = e.clientY;
+    // every column spans the dock's height; clientHeight leaves out a
+    // sideways scrollbar along the bottom
+    const height = dock.clientHeight;
+    let at = start;
+    handle.setPointerCapture(e.pointerId);
+    setDragging(true);
+    document.body.classList.add("resizing-rows");
+    const move = (ev: globalThis.PointerEvent) => {
+      at = seamDrag(start, ev.clientY - y0, height);
+      paintGrid(dock, gridOf(resizeSeam(layout, column, index, at)));
+    };
+    const up = () => {
+      handle.removeEventListener("pointermove", move);
+      handle.removeEventListener("pointerup", up);
+      handle.removeEventListener("pointercancel", up);
+      setDragging(false);
+      document.body.classList.remove("resizing-rows");
+      commit(column, index, at);
+    };
+    handle.addEventListener("pointermove", move);
+    handle.addEventListener("pointerup", up);
+    handle.addEventListener("pointercancel", up);
+  };
+  const onKeyDown = (e: KeyboardEvent<HTMLDivElement>) => {
+    if ((e.key !== "ArrowUp" && e.key !== "ArrowDown") || start === null) return;
+    e.preventDefault();
+    const step = (e.shiftKey ? 0.08 : 0.02) * (e.key === "ArrowDown" ? 1 : -1);
+    commit(column, index, start + step);
+  };
+  return (
+    <div
+      className={`seam-row${dragging ? " dragging" : ""}`}
+      role="separator"
+      aria-orientation="horizontal"
+      aria-label="Height of the cells above and below"
+      aria-valuenow={Math.round((start ?? 0) * 100)}
+      aria-valuemin={0}
+      aria-valuemax={100}
+      tabIndex={0}
+      data-cell={below}
+      style={{ gridArea: area }}
+      onPointerDown={onPointerDown}
+      onKeyDown={onKeyDown}
+    />
+  );
+}
+
 /**
- * The panels pinned open on the right. Side by side by default, each with a
- * handle on its left edge; with `openIn: "tabs"` one panel's width with a
- * tab strip across the top, the open panels behind it, one showing. The
- * panels are the same keyed children of the same element in both layouts,
- * so flipping the setting moves them rather than remounting them: a shell in
- * a panel keeps its pty across the switch.
+ * The panels pinned open on the right, on one grid: columns side by side,
+ * each with a seam down its left edge, and cells stacked in a column, each
+ * with a seam along its top and, holding more than one panel, a strip of
+ * tabs with the one showing below it. Below `PHONE` there is no grid: the
+ * flat row of panels a phone has always had, one panel to a page.
  *
- * Their DOM order never changes either: they render sorted by id and take
- * their place from CSS `order`, so moving a panel (a drag, Alt+Shift+arrow,
- * the gear) moves no element. Moving one would reload a preview's iframe.
+ * The panels are the same keyed children of the same element whatever the
+ * layout, and their DOM order never changes: they render sorted by id and
+ * take their place from `grid-area` (on a phone, CSS `order`), so a move or
+ * a change of layout moves no element. Moving one would reload a preview's
+ * iframe, and a remount would drop a shell. Strips and seams come after the
+ * panels, so their churn never moves one either.
  */
 export function Dock() {
   const panels = useStore((s) => s.panels);
   const layout = useStore((s) => s.dockLayout);
-  const setPanelWidth = useStore((s) => s.setPanelWidth);
-  const tabbed = useStore((s) => s.settings.openIn === "tabs");
-  const active = useStore((s) => s.activePanel);
-  // the widths are the layout's columns: a panel's own column, and as tabs
-  // the column of the one showing
-  const dockWidth = columnOf(layout, active ?? "")?.width ?? layout.columns[0]?.width ?? DOCK.initial;
-  const setDockWidth = useStore((s) => s.setDockWidth);
+  const resizeColumn = useStore((s) => s.resizeColumn);
   const carousel = useStore((s) => s.settings.dockCarousel);
   const setSetting = useStore((s) => s.setSetting);
-  // below PHONE the dock stays as it was: nothing drags or moves by keys,
-  // and there is no carousel
+  // below PHONE the dock stays as it was: no grid, nothing drags or moves
+  // by keys, and there is no carousel
   const movable = !useMedia(PHONE);
+  // no grid either before the layout holds a panel, so nothing auto-places
+  const gridded = movable && layout.columns.length > 0;
+  const g = useMemo(() => gridOf(layout), [layout]);
+  const t = useMemo(() => gridTemplate(layout, g), [layout, g]);
+  const placed = useMemo(() => placements(layout, panels, gridded ? g : null), [layout, panels, gridded, g]);
   const ref = useRef<HTMLDivElement>(null);
-  // a tabbed dock is one panel wide, with no row to pan
-  useCarousel(ref, carousel && movable && !tabbed && panels.length > 0);
+  // one column has no row to pan
+  useCarousel(ref, carousel && movable && layout.columns.length > 1);
   if (panels.length === 0) return null;
-  // a stale active (never set, or pruned) shows the first tab rather than
-  // an empty dock with a strip of tabs above it
-  const showing = !tabbed
-    ? null
-    : active !== null && panels.includes(active)
-      ? active
-      : (panels[0] ?? null);
   return (
     <div
       ref={ref}
-      className={tabbed ? "dock tabbed" : "dock"}
-      // the tabbed dock's one width lives on the dock itself, where the grid
-      // columns read it and the handle writes it live
-      style={tabbed ? ({ "--panel-w": `${dockWidth}px` } as CSSProperties) : undefined}
+      className={gridded ? "dock grid" : "dock"}
+      style={
+        gridded ? ({ gridTemplateColumns: t.columns, gridTemplateRows: t.rows, ...t.vars } as CSSProperties) : undefined
+      }
     >
-      {tabbed && (
-        <>
-          <Resizer
-            className="panel-resizer"
-            label="Width of the dock"
-            value={dockWidth}
-            min={DOCK.min}
-            max={DOCK.max}
-            initial={DOCK.initial}
-            dir={-1}
-            cssVar="--panel-w"
-            target={(h) => h.parentElement}
-            fit={(h) => dockRoom(h.parentElement)}
-            onCommit={setDockWidth}
+      {stableOrder(panels).map((id) => {
+        const p = placed[id];
+        return (
+          <RepoPanel
+            key={id}
+            id={id}
+            area={p?.area}
+            cell={p?.cell}
+            order={p?.order}
+            hidden={p?.hidden}
+            strip={p?.strip}
+            movable={movable}
           />
-          <DockTabs panels={panels} active={showing} movable={movable} />
-        </>
-      )}
-      {stableOrder(panels).flatMap((id) => {
-        if (tabbed) {
-          return [<RepoPanel key={id} id={id} width={dockWidth} hidden={id !== showing} movable={movable} />];
-        }
-        const width = columnOf(layout, id)?.width ?? PANEL.initial;
-        // each handle sits just before its panel in CSS order, as in the DOM
-        const at = panels.indexOf(id);
-        return [
-          <Resizer
-            key={`edge:${id}`}
-            className="panel-resizer"
-            style={{ order: 2 * at }}
-            label={`Width of the ${idText(id)} panel`}
-            value={width}
-            min={PANEL.min}
-            max={PANEL.max}
-            initial={PANEL.initial}
-            // the handle sits on the panel's left edge, so rightwards shrinks it
-            dir={-1}
-            cssVar="--panel-w"
-            target={(h) => h.nextElementSibling as HTMLElement | null}
-            fit={(h) => dockRoom(h.parentElement)}
-            onCommit={(px) => setPanelWidth(id, px)}
-          />,
-          <RepoPanel key={id} id={id} width={width} order={2 * at + 1} movable={movable} />,
-        ];
+        );
       })}
+      {gridded && g.strips.map((strip) => <CellStrip key={strip.cell} strip={strip} movable={movable} />)}
+      {gridded &&
+        g.colSeams.map(({ column, area }) => {
+          const col = layout.columns.find((c) => c.id === column);
+          const lead = col?.cells[0]?.active;
+          return (
+            <Resizer
+              key={column}
+              className="panel-resizer seam-col"
+              style={{ gridArea: area }}
+              label={lead ? `Width of the ${idText(lead)} column` : "Width of the column"}
+              value={col?.width ?? PANEL.initial}
+              min={PANEL.min}
+              max={PANEL.max}
+              initial={PANEL.initial}
+              // the seam sits on the column's left edge, so rightwards shrinks it
+              dir={-1}
+              cssVar={columnVar(column)}
+              target={(h) => h.parentElement}
+              fit={(h) => dockRoom(h.parentElement)}
+              onCommit={(px) => resizeColumn(column, px)}
+            />
+          );
+        })}
+      {gridded && g.rowSeams.map((seam) => <RowSeam key={`${seam.column}:${seam.index}`} seam={seam} layout={layout} />)}
       {/* last in the DOM, so showing it or not moves no panel */}
       {movable && (
         <div className="dock-corner">
@@ -2170,9 +2286,9 @@ export function Dock() {
             title={
               carousel
                 ? "Carousel: on. The cards get their column back when it is off"
-                : tabbed
-                  ? "Carousel: the dock takes the cards' room"
-                  : "Carousel: the dock takes the cards' room and scrolls sideways a panel at a time"
+                : layout.columns.length > 1
+                  ? "Carousel: the dock takes the cards' room and scrolls sideways a column at a time"
+                  : "Carousel: the dock takes the cards' room"
             }
             onClick={() => setSetting("dockCarousel", !carousel)}
           >

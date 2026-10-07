@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { activate, cellOf, columnOf, dropZone, fromLegacy, gridOf, moveCell, moveColumn, moveTo, moveWithin, normalizeLayout, panelsOf, place, regroup, rename, resizeColumn, resizeSeam } from "./grid";
+import { activate, cellOf, columnOf, cssId, dropZone, fromLegacy, gridOf, gridTemplate, moveCell, moveColumn, moveTo, moveWithin, normalizeLayout, panelsOf, placements, place, regroup, rename, resizeColumn, resizeSeam, rowsTemplate, seamDrag, seamStart } from "./grid";
 import type { DockLayout } from "./grid";
 
 const W = 440;
@@ -297,5 +297,60 @@ describe("moves that keep sizes", () => {
     expect(l.columns.map((c) => c.width)).toEqual([440, 520]);
     expect(columnOf(l, "b")?.width).toBe(520);
     expect(columnOf(l, "zzz")).toBeUndefined();
+  });
+});
+
+describe("the grid as the dock renders it", () => {
+  test("an id becomes a custom property name that is safe, stable and its own", () => {
+    for (const id of ["c1", "a/b", "a_b", "home:web/app", "x y", "\"};", ""]) expect(cssId(id)).toMatch(/^[A-Za-z0-9_-]+$/);
+    expect(cssId("a/b")).not.toBe(cssId("a_b"));
+    expect(cssId("a/b")).not.toBe(cssId("a:b"));
+    expect(cssId("home:web/app")).toBe(cssId("home:web/app"));
+  });
+
+  test("columns read their own variable, set from the layout; rows never force a scroll", () => {
+    let l = place(empty, ["a", "b"], "a", "columns", (id) => (id === "b" ? 520 : W));
+    l = moveTo(l, "b", { cell: cellOf(l, "a")?.id ?? "", zone: "below" }, W);
+    l = place(l, ["a", "b", "c"], "c", "columns", 600);
+    const t = gridTemplate(l, gridOf(l));
+    const [one, two] = l.columns.map((c) => `--col-w-${cssId(c.id)}`);
+    expect(t.columns).toBe(`6px var(${one}, 440px) 6px var(${two}, 600px)`);
+    expect(t.vars).toEqual({ [one ?? ""]: "440px", [two ?? ""]: "600px" });
+    expect(t.rows).toBe("minmax(0, 500fr) minmax(0, 500fr)");
+    expect(rowsTemplate("1000fr")).toBe("minmax(0, 1000fr)");
+  });
+
+  test("a row seam starts at its boundary and follows the pointer as a share of the height", () => {
+    let l = place(empty, ["a", "b", "c"], "a", "columns", W);
+    l = moveTo(l, "b", { cell: cellOf(l, "a")?.id ?? "", zone: "below" }, W);
+    l = moveTo(l, "c", { cell: cellOf(l, "b")?.id ?? "", zone: "below" }, W);
+    const col = l.columns[0]?.id ?? "";
+    expect(seamStart(l, col, 0)).toBeCloseTo(0.5);
+    expect(seamStart(l, col, 1)).toBeCloseTo(0.75);
+    expect(seamStart(l, col, 2)).toBeNull();
+    expect(seamStart(l, "nope", 0)).toBeNull();
+    expect(seamDrag(0.5, 100, 800)).toBeCloseTo(0.625);
+    expect(seamDrag(0.5, -800, 800)).toBe(0);
+    expect(seamDrag(0.5, 100, 0)).toBe(0.5);
+  });
+
+  test("each panel's place: an area on the grid, or a CSS order in the flat phone dock", () => {
+    let l = place(empty, ["a", "b", "c"], "a", "columns", W);
+    l = moveTo(l, "c", { cell: cellOf(l, "a")?.id ?? "", zone: "center" }, W);
+    const g = gridOf(l);
+    const onGrid = placements(l, ["a", "b", "c", "z"], g);
+    expect(onGrid.c).toEqual({ area: g.panels.c?.area, cell: g.panels.c?.cell, hidden: false, strip: true });
+    expect(onGrid.a).toEqual({ area: g.panels.a?.area, cell: g.panels.a?.cell, hidden: true, strip: true });
+    expect(onGrid.b).toEqual({ area: g.panels.b?.area, cell: g.panels.b?.cell, hidden: false, strip: false });
+    // a panel the layout does not hold yet takes no room rather than auto-placing
+    expect(onGrid.z).toEqual({ hidden: true, strip: false });
+    // flat: every panel shows, tabs too, in the layout's order, no splits
+    const flat = placements(l, ["a", "b", "c", "z"], null);
+    expect(flat).toEqual({
+      a: { order: 0, hidden: false, strip: false },
+      c: { order: 1, hidden: false, strip: false },
+      b: { order: 2, hidden: false, strip: false },
+      z: { order: 3, hidden: false, strip: false },
+    });
   });
 });

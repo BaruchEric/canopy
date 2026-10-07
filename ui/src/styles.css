@@ -2360,19 +2360,11 @@ a.chan-text {
   scroll-snap-type: x proximity;
   overscroll-behavior-x: contain;
 }
-/* a panel's edge is its handle's, so the whole panel lands in view. The
-   snap is the panel's, not the handle's, so a panel wider than the row is
-   one the row can rest anywhere inside. */
-.body.carousel > .dock > .panel {
+/* a column's edge is its seam's, so the whole column lands in view, its
+   seam with it. No scroll margin: the seam is the edge itself, where a
+   panel's snap needed 6px to take in the handle before it. */
+.body.carousel > .dock.grid > .seam-col {
   scroll-snap-align: start;
-  scroll-margin-left: 6px;
-}
-/* tabbed, there is no row: the one panel fills the dock */
-.body.carousel > .dock.tabbed {
-  grid-template-columns: 0 minmax(0, 1fr);
-}
-.body.carousel > .dock.tabbed > .panel-resizer {
-  display: none;
 }
 .dock.panning,
 .dock.panning * {
@@ -2396,12 +2388,12 @@ a.chan-text {
   right: 0;
   z-index: 3;
 }
-.dock.tabbed > .dock-corner {
-  grid-area: 1 / 2;
+/* on the grid it spans the first row's whole width, so sticky holds it to
+   the right edge however far the row scrolls, and adds no track */
+.dock.grid > .dock-corner {
+  grid-area: 1 / 1 / 2 / -1;
   justify-self: end;
-}
-.dock.tabbed > .dock-corner > .dock-carousel {
-  top: 2px;
+  order: 0;
 }
 .dock-corner > .dock-carousel {
   position: absolute;
@@ -2411,10 +2403,10 @@ a.chan-text {
 }
 /* the switch sits over whichever head reaches the dock's right edge, so
    every head keeps room for it past its own close; the strip of tabs too */
-.dock:has(> .dock-corner):not(.tabbed) > .panel > .panel-body > .panel-head {
+.dock.grid:has(> .dock-corner) > .panel > .panel-body > .panel-head {
   padding-right: 32px;
 }
-.dock.tabbed:has(> .dock-corner) > .dock-tabs {
+.dock.grid:has(> .dock-corner) > .cell-strip {
   padding-right: 34px;
 }
 .dock-carousel[aria-pressed="true"] {
@@ -2447,31 +2439,77 @@ a.chan-text {
   display: none;
 }
 
-/* ---------- the tabbed dock ---------- */
-/* one panel's width, the open repos as tabs across the top of it: the handle
-   down the left edge, the strip, then every panel in the one cell below it,
-   the hidden ones taking no room */
-.dock.tabbed {
+/* ---------- the dock's grid ---------- */
+/* columns side by side, a 6px seam before each, and cells stacked in a
+   column. Every panel, strip and seam is placed by grid-area (Dock.tsx);
+   the column tracks read --col-w-*, which a seam's drag writes live, and
+   the rows shrink to nothing at need, so the grid fits the dock's height
+   and only ever scrolls sideways. A cell of more than one panel has a
+   strip of tabs over its top, and its panels make room for it. The cards
+   use .grid too, so their gap, compact density's with it, is undone here. */
+.dock.grid,
+:root[data-density="compact"] .dock.grid {
   display: grid;
-  grid-template-columns: 6px minmax(0, var(--panel-w, 440px));
-  grid-template-rows: auto minmax(0, 1fr);
-  overflow: hidden;
+  gap: 0;
+  overflow: auto;
+  position: relative;
 }
-.dock.tabbed > .panel-resizer {
-  grid-column: 1;
-  grid-row: 1 / -1;
-}
-.dock.tabbed > .dock-tabs {
-  grid-column: 2;
-  grid-row: 1;
-  min-width: 0;
-}
-.dock.tabbed > .panel {
-  grid-column: 2;
-  grid-row: 2;
+.dock.grid > .panel {
   width: auto;
   min-width: 0;
   min-height: 0;
+}
+.dock.grid > .panel.has-strip {
+  padding-top: var(--strip-h, 34px);
+}
+/* a panel over the window leaves its cell, and its strip, behind */
+.dock.grid > .panel.surface-full,
+.dock.grid > .panel.panel-bench {
+  padding-top: 0;
+}
+.dock.grid > .cell-strip {
+  align-self: start;
+  z-index: 1;
+  block-size: var(--strip-h, 34px);
+  min-width: 0;
+}
+.dock.grid > .seam-row {
+  align-self: start;
+  block-size: 6px;
+  margin-block-start: -3px;
+  cursor: row-resize;
+  z-index: 2;
+  position: relative;
+  touch-action: none;
+}
+/* the line between two cells, and the seam's own mark under the pointer */
+.seam-row::after {
+  content: "";
+  position: absolute;
+  inset: 3px 0 auto;
+  block-size: 1px;
+  background: var(--hair);
+}
+.seam-row::before {
+  content: "";
+  position: absolute;
+  inset: 2px 0;
+  background: transparent;
+  transition: background 120ms ease;
+}
+.seam-row:hover::before {
+  background: var(--ink-faint);
+}
+.seam-row:focus-visible::before,
+.seam-row.dragging::before {
+  background: var(--moss-deep);
+}
+.seam-row:focus-visible {
+  outline: none;
+}
+body.resizing-rows {
+  cursor: row-resize;
+  user-select: none;
 }
 .dock-tabs {
   flex: none;
@@ -3550,9 +3588,6 @@ a.chan-text {
   .panel {
     width: 100%;
     scroll-snap-align: start;
-  }
-  .dock.tabbed {
-    grid-template-columns: 0 minmax(0, 1fr);
   }
   .panel-resizer,
   .solo-resizer {
@@ -6376,13 +6411,13 @@ button.machine:hover {
   .tree-item:active {
     background: var(--bark3);
   }
-  /* a panel fades in where it opens; a side-by-side one slides a little
-     from the edge it grows from. A tab switch fades, and no transform
-     there, since a section brought to the front inside it is fixed. */
-  .dock:not(.tabbed) > .panel {
+  /* a panel slides in a little from the edge it grows from. A tab
+     switch in a cell fades, and no transform there, since a section
+     brought to the front inside it is fixed. */
+  .dock > .panel {
     animation: panel-in 240ms var(--ease);
   }
-  .dock.tabbed > .panel {
+  .dock > .panel.has-strip {
     animation: fade-in 160ms ease-out;
   }
   @keyframes panel-in {
@@ -6426,7 +6461,7 @@ button.machine:hover {
       opacity: 0;
     }
   }
-  .dock:not(.tabbed) > .panel {
+  .dock > .panel {
     animation: none;
   }
   .settings-pop,
