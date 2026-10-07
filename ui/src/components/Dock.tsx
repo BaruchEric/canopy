@@ -1441,11 +1441,32 @@ export function RepoPanel({
       return;
     }
     setMode("full");
-    void enterFull(document).then(setScreen);
+    void enterFull(document).then((went) => {
+      // the panel closed while the browser was asking: nobody owns it now
+      if (!alive.current) {
+        if (went) leaveFull(document);
+        return;
+      }
+      setScreen(went);
+    });
   };
+  // a closed panel takes the browser's full screen with it
+  const alive = useRef(true);
+  const screenNow = useRef(false);
+  screenNow.current = screen;
+  const modeNow = useRef(mode);
+  modeNow.current = mode;
+  useEffect(() => {
+    alive.current = true;
+    return () => {
+      alive.current = false;
+      if (screenNow.current) leaveFull(document);
+    };
+  }, []);
   useFullscreenExit(screen, () => {
     setScreen(false);
-    setMode("normal");
+    // a pick of another mode that raced the browser's exit stays
+    if (modeNow.current === "full") setMode("normal");
   });
   useEffect(() => {
     if (screen && mode !== "full") {
