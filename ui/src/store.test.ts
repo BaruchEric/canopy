@@ -218,7 +218,7 @@ describe("popping a panel out and back", () => {
   afterEach(() => {
     globalThis.fetch = realFetch;
     delete g.window;
-    useStore.setState({ repos: [], panels: [], activePanel: null, terms: [], shells: [], hiddenTerms: [], popped: {} });
+    useStore.setState({ repos: [], panels: [], activePanel: null, terms: [], shells: [], hiddenTerms: [], popped: {}, recalled: [], loaded: false });
   });
   /** a window whose window.open answers with `win`, recording each call */
   const stubWindow = (win: { focus: () => void } | null) => {
@@ -324,6 +324,67 @@ describe("popping a panel out and back", () => {
     s = useStore.getState();
     expect(s.panels).toEqual(["x", "y"]);
     expect(s.popped).toEqual({ app: 1 });
+  });
+
+  test("a panel docked by hand ignores the hello of its pop-out still open", () => {
+    useStore.setState({ repos: [app], panels: ["x", "y"], activePanel: "x", terms: [], shells: [held], hiddenTerms: [], popped: { app: 1 } });
+    useStore.getState().openPanel("app");
+    expect(useStore.getState().recalled).toEqual(["app"]);
+    // the old window reloads and says hello: the panel stays docked
+    useStore.getState().heardHello("app");
+    const s = useStore.getState();
+    expect(s.panels).toEqual(["x", "y", "app"]);
+    expect(s.popped).toEqual({});
+  });
+
+  test("a panel the bye timer or the sweep brought back is a later hello's again", () => {
+    // a pop-out back from the back-forward cache, or one slow to reload
+    useStore.setState({ repos: [app], panels: ["x", "y"], activePanel: "x", terms: [], shells: [held], hiddenTerms: [], popped: { app: 1 } });
+    useStore.getState().returnPanel("app");
+    expect(useStore.getState().recalled).toEqual([]);
+    useStore.getState().heardHello("app");
+    const s = useStore.getState();
+    expect(s.panels).toEqual(["x", "y"]);
+    expect(s.popped).toEqual({ app: 1 });
+  });
+
+  test("popping out again after a hand dock makes the new window's hello count", () => {
+    stubWindow({ focus: () => {} });
+    useStore.setState({ repos: [app], panels: ["x", "y"], activePanel: "x", terms: [], shells: [held], hiddenTerms: [], popped: { app: 1 } });
+    useStore.getState().openPanel("app");
+    useStore.getState().popOut("app");
+    expect(useStore.getState().recalled).toEqual([]);
+    expect(useStore.getState().popped).toEqual({ app: 2 });
+    // its window goes into the back-forward cache, the bye returns it, Back
+    useStore.getState().returnPanel("app");
+    useStore.getState().heardHello("app");
+    expect(useStore.getState().panels).toEqual(["x", "y"]);
+  });
+
+  test("closing a popped panel by hand also recalls it, and only a popped one", () => {
+    useStore.setState({ repos: [app], panels: ["x", "app"], activePanel: "app", terms: [], shells: [], hiddenTerms: [], popped: { app: 1 } });
+    useStore.getState().closePanel("x");
+    expect(useStore.getState().recalled).toEqual([]);
+    useStore.getState().closePanel("app");
+    expect(useStore.getState().recalled).toEqual(["app"]);
+  });
+
+  test("a pop-out's close forgets its slot, so its bye brings nothing back", () => {
+    useStore.setState({ repos: [app], panels: ["x", "y"], activePanel: "x", terms: [], shells: [held], hiddenTerms: [], popped: { app: 1, y: 0 } });
+    useStore.getState().forgetPopped("app");
+    expect(useStore.getState().popped).toEqual({ y: 0 });
+    useStore.getState().returnPanel("app");
+    expect(useStore.getState().panels).toEqual(["x", "y"]);
+  });
+
+  test("a home panel whose repo left the scan does not come back", () => {
+    useStore.setState({ repos: [], loaded: true, panels: ["x"], activePanel: "x", terms: [], shells: [], hiddenTerms: [], popped: { app: 0 } });
+    useStore.getState().returnPanel("app");
+    expect(useStore.getState().panels).toEqual(["x"]);
+    // before the first tree, an empty list of repos says nothing yet
+    useStore.setState({ loaded: false });
+    useStore.getState().returnPanel("app");
+    expect(useStore.getState().panels).toEqual(["app", "x"]);
   });
 });
 
@@ -1026,6 +1087,16 @@ describe("several backends", () => {
     expect(s.root).toBe("/a");
   });
 
+  test("a repo leaving the scan drops its popped slot, and only that backend's", async () => {
+    await start(backendAnswers(scanOf("/a", [repo("proj")]), [], { "/api/backends": twoBackends }), backendAnswers(scanOf("/b", [repo("proj")]), []));
+    await settle();
+    useStore.setState({ popped: { proj: 0, "b|proj": 1, "b|gone": 2 } });
+    // an event's ids come already qualified, as the stream hands them over
+    useStore.getState().applyEvent({ type: "scan", result: { ...scanOf("/b", [repo("b|proj")]), sources: [source("b|launch", "launch")] } }, "b");
+    expect(useStore.getState().popped).toEqual({ proj: 0, "b|proj": 1 });
+    useStore.setState({ popped: {} });
+  });
+
   test("a repo leaving the scan drops its loaded tasks and the server answers for the top bar list", async () => {
     const t = (repoId: string) => ({ name: "dev", cmd: "x", repoId, source: "detected" as const, termId: "0".repeat(32), status: "running" as const, live: true, restarts: 0, viewers: [] });
     await start(
@@ -1452,6 +1523,16 @@ describe("cards over several backends", () => {
     s = useStore.getState();
     expect(s.panels).toEqual(["other", "b|proj"]);
     expect(s.activePanel).toBe("other");
+  });
+
+  test("switchCheckout to a popped sibling docks it by hand", () => {
+    two();
+    useStore.setState({ panels: ["other", "proj"], activePanel: "proj", popped: { "b|proj": 0 }, recalled: [] });
+    useStore.getState().switchCheckout("proj", "b|proj");
+    const s = useStore.getState();
+    expect(s.popped).toEqual({});
+    expect(s.recalled).toEqual(["b|proj"]);
+    useStore.setState({ popped: {}, recalled: [] });
   });
 
   test("in a solo window the switch goes to the sibling's own solo window", () => {

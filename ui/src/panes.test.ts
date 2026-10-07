@@ -2,8 +2,11 @@ import { describe, expect, test } from "bun:test";
 import { parsePaneMsg, poppedOf, restorePanel, unclaimed, without } from "./panes";
 
 describe("pane messages", () => {
-  test("parses the four kinds and refuses anything else", () => {
+  test("parses the five kinds and refuses anything else", () => {
     expect(parsePaneMsg({ type: "hello", id: "a" })).toEqual({ type: "hello", id: "a" });
+    expect(parsePaneMsg({ type: "close", id: "a" })).toEqual({ type: "close", id: "a" });
+    expect(parsePaneMsg({ type: "close" })).toBeNull();
+    expect(parsePaneMsg({ type: "close", id: 7 })).toBeNull();
     expect(parsePaneMsg({ type: "bye", id: "a" })).toEqual({ type: "bye", id: "a" });
     expect(parsePaneMsg({ type: "return", id: "a" })).toEqual({ type: "return", id: "a" });
     expect(parsePaneMsg({ type: "who" })).toEqual({ type: "who" });

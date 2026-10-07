@@ -1,8 +1,9 @@
 /** Pop out and back: the main window and a panel's own window talk on one
  *  BroadcastChannel. A pop-out says hello when it shows a panel and bye
- *  when it goes; "return" asks the dock to take it back; "who" asks every
- *  pop-out to say hello again (a main window just loaded). Messages come
- *  from any same-origin page, so each one is checked. */
+ *  when it goes; "return" asks the dock to take it back; "close" asks the
+ *  dock to forget it (the panel's own close, in its window); "who" asks
+ *  every pop-out to say hello again (a main window just loaded). Messages
+ *  come from any same-origin page, so each one is checked. */
 
 export const PANES_CHANNEL = "canopy:panes";
 /** how long a loading main window waits for pop-outs to answer "who" */
@@ -15,6 +16,7 @@ export type PaneMsg =
   | { type: "hello"; id: string }
   | { type: "bye"; id: string }
   | { type: "return"; id: string }
+  | { type: "close"; id: string }
   | { type: "who" };
 
 export function parsePaneMsg(v: unknown): PaneMsg | null {
@@ -23,7 +25,7 @@ export function parsePaneMsg(v: unknown): PaneMsg | null {
   if (type === "who") return { type };
   const id = "id" in v ? v.id : undefined;
   if (typeof id !== "string" || !id) return null;
-  if (type === "hello" || type === "bye" || type === "return") return { type, id };
+  if (type === "hello" || type === "bye" || type === "return" || type === "close") return { type, id };
   return null;
 }
 
@@ -55,7 +57,7 @@ export function poppedOf(v: unknown): Record<string, number> {
 }
 
 /** Says one thing on the channel from a window that does not stay to
- *  listen: a pop-out's "back to the dock". */
+ *  listen: a pop-out's "back to the dock" or its close. */
 export function tellPanes(msg: PaneMsg) {
   if (typeof BroadcastChannel === "undefined") return;
   const ch = new BroadcastChannel(PANES_CHANNEL);

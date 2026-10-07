@@ -619,6 +619,11 @@ interface CanopyState {
   activePanel: string | null;
   /** the panels popped out to windows of their own, by their dock slot */
   popped: Record<string, number>;
+  /** the panels the user docked again by hand while they were popped out
+   *  (their card, a shell, a close): a pop-out still open says hello on
+   *  its next load, and that hello must not take the panel back. Kept by
+   *  this window only, never saved. */
+  recalled: string[];
   /** repo id → last SSE update, for the update pulse */
   updatedAt: Record<string, number>;
   /** px width of the repo tree, dragged by the sidebar resizer */
@@ -788,8 +793,14 @@ interface CanopyState {
   popOut: (id: string) => void;
   /** a pop-out said bye or asked to go back: the panel returns to its slot */
   returnPanel: (id: string) => void;
-  /** a pop-out says it shows `id`: the dock lets go of it */
+  /** takes `id` out of the dock, keeping its slot: a pop-out showing it */
   claimPanel: (id: string) => void;
+  /** a pop-out's hello for `id`: the dock lets go of it, unless the user
+   *  docked it again by hand while it was out */
+  heardHello: (id: string) => void;
+  /** a pop-out's own close: the dock forgets the panel's slot, so the
+   *  window's bye brings nothing back */
+  forgetPopped: (id: string) => void;
   /** what one backend's stream said, `from` home unless named */
   applyEvent: (ev: ServerEvent, from?: string) => void;
   setWorkspaces: (ws: Workspace[]) => void;
@@ -1060,6 +1071,7 @@ function treeState(
   | "conns"
   | "panels"
   | "activePanel"
+  | "popped"
   | "panelWidths"
   | "panelTermHeights"
   | "closedSections"
@@ -1087,6 +1099,8 @@ function treeState(
       s.activePanel !== null && panels.includes(s.activePanel)
         ? s.activePanel
         : (panels[0] ?? null),
+    // a popped panel whose repo left the scan has nothing to come back to
+    popped: pruneByRepo(s.popped, tree.repos, mine),
     panelWidths: pruneByRepo(s.panelWidths, tree.repos, mine),
     panelTermHeights: pruneByRepo(s.panelTermHeights, tree.repos, mine),
     closedSections: pruneByRepo(s.closedSections, tree.repos, mine),
@@ -1279,19 +1293,23 @@ let registryEntries: BackendEntry[] = [];
 /** Opens the panel of each saved panel shell among `tabs` whose panel is
  *  not open, with its shell section unfolded. Saved tabs alone: a shell
  *  adopted from the backend's list must not reopen a panel that was closed
- *  on purpose. */
+ *  on purpose. A panel it opens loses any popped slot, as one docked by
+ *  any other road does, but is not recalled: this is a load, not the
+ *  user, so a pop-out still showing it may claim it again. */
 function openSavedPanels(
   panels: string[],
   closedSections: ClosedSections,
+  popped: Record<string, number>,
   tabs: readonly TermTab[],
-): { panels: string[]; closedSections: ClosedSections } {
+): { panels: string[]; closedSections: ClosedSections; popped: Record<string, number> } {
   const savedIds = new Set(loadedTabs.terms.map((t) => t.id));
   for (const t of tabs) {
     if (t.place !== "panel" || panels.includes(t.repoId) || !savedIds.has(t.id)) continue;
     panels = [...panels, t.repoId];
     closedSections = unfoldIn(closedSections, t.repoId, "shell");
+    popped = without(popped, t.repoId);
   }
-  return { panels, closedSections };
+  return { panels, closedSections, popped };
 }
 
 /** What a backend's stream coming back after a drop re-reads: the server
@@ -1337,11 +1355,19 @@ function readTasks(get: () => CanopyState, set: (fn: (s: CanopyState) => Partial
     .catch(() => {});
 }
 
+/** A popped panel the user brings into the dock, or closes, by hand: its
+ *  slot goes, so a later bye or load sweep cannot pull it back in after it
+ *  is closed, and it is recalled, so its old window's next hello does not
+ *  take it out again. A panel that was not out is no change. */
+function recall(s: Pick<CanopyState, "popped" | "recalled">, id: string): Pick<CanopyState, "popped" | "recalled"> {
+  if (!Object.hasOwn(s.popped, id)) return { popped: s.popped, recalled: s.recalled };
+  return { popped: without(s.popped, id), recalled: s.recalled.includes(id) ? s.recalled : [...s.recalled, id] };
+}
+
 /** `focusPanel`, and a panel docked here is out in no window of its own any
- *  more: its popped slot goes, so a later bye or load sweep cannot pull it
- *  back in after it is closed. Every way into the dock goes through this. */
-function dockPanel(s: Pick<CanopyState, "panels" | "popped">, id: string) {
-  return { ...focusPanel(s.panels, id), popped: without(s.popped, id) };
+ *  more (`recall`). Every way into the dock by hand goes through this. */
+function dockPanel(s: Pick<CanopyState, "panels" | "popped" | "recalled">, id: string) {
+  return { ...focusPanel(s.panels, id), ...recall(s, id) };
 }
 
 export const useStore = create<CanopyState>((set, get) => ({
@@ -1389,6 +1415,7 @@ export const useStore = create<CanopyState>((set, get) => ({
   panels: layout.panels,
   activePanel: layout.activePanel,
   popped: layout.popped,
+  recalled: [],
   updatedAt: {},
   sidebarWidth: layout.sidebarWidth,
   panelWidths: layout.panelWidths,
@@ -1512,7 +1539,7 @@ export const useStore = create<CanopyState>((set, get) => ({
       // not run for a shell reconcileTerms adopted, or every closed panel
       // with a shell in it would reopen on the very load meant to keep it
       // closed. A dockless window opens nothing: its folds are the grove's.
-      const { panels, closedSections } = openSavedPanels(s.panels, s.closedSections, dockless() ? [] : terms);
+      const { panels, closedSections, popped } = openSavedPanels(s.panels, s.closedSections, s.popped, dockless() ? [] : terms);
       const reg = registry();
       set({
         root: tree.root,
@@ -1538,6 +1565,7 @@ export const useStore = create<CanopyState>((set, get) => ({
         parkedTerms,
         activeTerm: strip.some((t) => t.id === saved.activeTerm) ? saved.activeTerm : (strip.at(-1)?.id ?? null),
         panels,
+        popped,
         activePanel: s.activePanel ?? panels[0] ?? null,
         closedSections,
         loaded: true,
@@ -1681,7 +1709,7 @@ export const useStore = create<CanopyState>((set, get) => ({
         : reconcileTerms(s.parkedTerms.filter((x) => mine(x.id)), held, tree.repos, t.panels, new Set(hiddenTerms)).filter(
             (x) => !s.terms.some((have) => have.id === x.id),
           );
-      const { panels, closedSections } = openSavedPanels(t.panels, t.closedSections, dockless() ? [] : back);
+      const { panels, closedSections, popped } = openSavedPanels(t.panels, t.closedSections, t.popped, dockless() ? [] : back);
       const strip = back.filter((x) => x.place === "strip");
       const want = loadedTabs.activeTerm;
       return {
@@ -1698,6 +1726,7 @@ export const useStore = create<CanopyState>((set, get) => ({
         parkedTerms: s.parkedTerms.some((x) => mine(x.id)) ? s.parkedTerms.filter((x) => !mine(x.id)) : s.parkedTerms,
         activeTerm: want !== null && strip.some((x) => x.id === want) ? want : (s.activeTerm ?? strip.at(-1)?.id ?? null),
         panels,
+        popped,
         activePanel: t.activePanel ?? panels[0] ?? null,
         closedSections,
       };
@@ -1818,6 +1847,8 @@ export const useStore = create<CanopyState>((set, get) => ({
       return {
         panels,
         activePanel,
+        // the sibling docked here by hand is out in no window any more
+        ...recall(s, toId),
         terms,
         front: keepFront(s.front, terms, panels),
         ...(width !== undefined && s.panelWidths[toId] === undefined ? { panelWidths: { ...s.panelWidths, [toId]: width } } : {}),
@@ -1969,7 +2000,7 @@ export const useStore = create<CanopyState>((set, get) => ({
     const panels = s.panels.filter((p) => p !== id);
     set({
       panels,
-      popped: without(s.popped, id),
+      ...recall(s, id),
       activePanel: nextActive(s.panels, id, s.activePanel),
       terms,
       front: keepFront(s.front, terms, panels),
@@ -1977,21 +2008,18 @@ export const useStore = create<CanopyState>((set, get) => ({
   },
   movePanel: (id, to) => set((s) => ({ panels: moveIn(s.panels, id, to) })),
   popOut: (id) => {
-    const s = get();
-    const slot = s.panels.indexOf(id);
-    if (slot === -1) return;
-    // the window first: a blocked popup leaves the panel where it was.
-    // closePanel drops only the panel's shell tabs, so its shells run on
-    // and its folds stay. The slot is set after it, since closing forgets
-    // a slot.
-    if (!popOutWindow(id)) return;
-    get().closePanel(id);
-    set((now) => ({ popped: { ...now.popped, [id]: slot } }));
+    // the window first: a blocked popup leaves the panel where it was
+    if (!get().panels.includes(id) || !popOutWindow(id)) return;
+    get().claimPanel(id);
   },
   returnPanel: (id) =>
     set((s) => {
       const slot = s.popped[id];
       if (slot === undefined) return {};
+      // a home repo gone from the scan has no panel to show; its slot stays
+      // for the next tree to prune. Before the first tree, no repos says
+      // nothing yet.
+      if (s.loaded && ownerOf(id) === registry().home && !s.repos.some((r) => r.id === id)) return {};
       const panels = restorePanel(s.panels, id, slot);
       // its held shells come back as tabs, the way openPanel adopts them
       const terms = dockless() ? s.terms : adoptTerms(s.terms, s.shells, s.repos, panels, skipped(s.hiddenTerms));
@@ -2001,9 +2029,16 @@ export const useStore = create<CanopyState>((set, get) => ({
     const s = get();
     const slot = s.panels.indexOf(id);
     if (slot === -1) return;
+    // closePanel drops only the panel's shell tabs, so its shells run on
+    // and its folds stay. The slot is set after it, since closing forgets
+    // a slot, and the panel is out again, so a later hello is its own.
     get().closePanel(id);
-    set((now) => ({ popped: { ...now.popped, [id]: slot } }));
+    set((now) => ({ popped: { ...now.popped, [id]: slot }, recalled: now.recalled.filter((r) => r !== id) }));
   },
+  heardHello: (id) => {
+    if (!get().recalled.includes(id)) get().claimPanel(id);
+  },
+  forgetPopped: (id) => set((s) => ({ popped: without(s.popped, id) })),
 
   applyEvent: (sent, from) => {
     // an older backend's agents event is its plain map of settings by path

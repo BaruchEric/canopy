@@ -55,6 +55,12 @@ export function Solo({ id }: { id: string }) {
     tellPanes({ type: "return", id });
     close();
   };
+  // the panel's own close in a pop-out closes it: the dock forgets its
+  // slot first, so the window's bye does not bring it back
+  const closePopped = () => {
+    tellPanes({ type: "close", id });
+    close();
+  };
 
   return (
     <div className="solo">
@@ -83,7 +89,7 @@ export function Solo({ id }: { id: string }) {
         {repo ? (
           <>
             <SoloResizer dir={-1} value={soloWidth} max={max} onCommit={setSoloWidth} />
-            <RepoPanel id={id} width={0} onClose={close} />
+            <RepoPanel id={id} width={0} onClose={popped ? closePopped : close} />
             <SoloResizer dir={1} value={soloWidth} max={max} onCommit={setSoloWidth} />
           </>
         ) : waiting ? (

@@ -159,11 +159,13 @@ export function App() {
   }, [loaded]);
 
   // Pop out and back, the main window's side. A pop-out's hello takes its
-  // panel out of the dock; its "back to the dock" puts the panel back at its
-  // slot, and so does its bye after a moment, since a reloading pop-out says
-  // bye and then hello again. "who" is a loading main window's question for
-  // the pop-outs, so this window lets another's pass. Loading, it asks who is
-  // out there and takes back every popped panel no window answers for.
+  // panel out of the dock, unless the user docked it again by hand
+  // (heardHello); its "back to the dock" puts the panel back at its slot,
+  // and so does its bye after a moment, since a reloading pop-out says bye
+  // and then hello again; its close forgets the slot. "who" is a loading
+  // main window's question for the pop-outs, so this window lets another's
+  // pass. Loading, it asks who is out there and takes back every popped
+  // panel no window answers for.
   useEffect(() => {
     if (dockless() || typeof BroadcastChannel === "undefined") return;
     const ch = new BroadcastChannel(PANES_CHANNEL);
@@ -177,11 +179,12 @@ export function App() {
       const s = useStore.getState();
       if (m.type === "hello") {
         claimed.add(m.id);
-        s.claimPanel(m.id);
+        s.heardHello(m.id);
         return;
       }
       claimed.delete(m.id);
       if (m.type === "return") s.returnPanel(m.id);
+      else if (m.type === "close") s.forgetPopped(m.id);
       else {
         const back = () => {
           byes.delete(m.id);
