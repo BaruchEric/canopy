@@ -592,9 +592,9 @@ git commit -m "feat(dock): drag a tab into a cell, beside it or under it"
 **Files:**
 - Modify: `docs/architecture.md`, sections "Layout and motion" and "ui/"
 
-- [ ] **Step 1:** Run `~/.claude/skills/verify-build/clean-rebuild.sh rebuild`, then `verify "dockLayout"`.
+- [x] **Step 1:** Run `~/.claude/skills/verify-build/clean-rebuild.sh rebuild`, then `verify "dockLayout"`.
 
-- [ ] **Step 2: One end-to-end pass.**
+- [x] **Step 2: One end-to-end pass.**
 1. Build a two-column layout with a split and a tabbed cell.
 2. Pop one panel out and back. It returns to its old flat slot through `place`, as a new column in side-by-side mode or a tab in tabs mode; write down which.
 3. Turn the carousel on and pan it.
@@ -603,7 +603,7 @@ git commit -m "feat(dock): drag a tab into a cell, beside it or under it"
 6. Move the window to a smaller screen class with a resize to 1100px. Check that its own saved arrangement, or a fresh flat one, shows.
 7. Resize back and check that the first arrangement returns.
 
-- [ ] **Step 3: Write the notes.** Cover:
+- [x] **Step 3: Write the notes.** Cover:
   - The model.
   - `gridOf` and its boundary merging.
   - That panels stay flat keyed children placed by `grid-area`.
@@ -613,12 +613,12 @@ git commit -m "feat(dock): drag a tab into a cell, beside it or under it"
   - The migration from `panelWidths`, `dockWidth` and `openIn`.
   - That `panels` is always `panelsOf(dockLayout)`.
 
-- [ ] **Step 4: Gates**
+- [x] **Step 4: Gates**
 
 Run: `bun run typecheck && bun run lint && env -u TMUX SHELL=/bin/bash bun test && bun run build`
 Expected: all pass.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add docs/architecture.md
