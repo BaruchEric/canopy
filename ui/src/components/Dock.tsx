@@ -2603,6 +2603,7 @@ export function Dock() {
               target={(h) => h.parentElement}
               fit={(h) => dockRoom(h.parentElement)}
               hold={holdSeam}
+              follow
               onCommit={(px) => resizeColumn(column, px)}
             />
           );

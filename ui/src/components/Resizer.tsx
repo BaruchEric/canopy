@@ -31,6 +31,11 @@ interface ResizerProps {
    *  drag calls before it commits. The dock's column seams use it to end a
    *  drag whose layout changed under it. */
   hold?: (cancel: () => void) => () => void;
+  /** Keep the handle under the pointer by scrolling the `target` element
+   *  sideways. The dock's column seams use it: a seam is its column's left
+   *  edge, and once the dock is as wide as it may get and scrolls, a width
+   *  change moves the column's far edge while the seam stays put. */
+  follow?: boolean;
   onCommit: (px: number) => void;
 }
 
@@ -49,6 +54,17 @@ export function keyedWidth(
   const next =
     e.key === "Home" ? min : e.key === "End" ? top : e.key === "ArrowLeft" || e.key === "ArrowRight" ? clamp(from + step * dir, min, top) : null;
   return next === null || next === value ? null : next;
+}
+
+/** How far to scroll so a dragged handle stays under the pointer: the
+ *  handle's place now less where the width change would have put it, from
+ *  the clamped width so a drag past a limit leaves the handle at the limit.
+ *  Added to the scroller's `scrollLeft`, which the browser clamps in turn. */
+export function followBy(
+  now: number,
+  { startLeft, startValue, next, dir, factor }: { startLeft: number; startValue: number; next: number; dir: 1 | -1; factor: number },
+): number {
+  return now - (startLeft + ((next - startValue) * dir) / factor);
 }
 
 /**
@@ -70,6 +86,7 @@ export function Resizer({
   target,
   fit,
   hold,
+  follow = false,
   onCommit,
 }: ResizerProps) {
   const [dragging, setDragging] = useState(false);
@@ -105,6 +122,8 @@ export function Resizer({
     const { pointerId } = e;
     const owner = target(handle);
     const before = owner?.style.getPropertyValue(cssVar) ?? "";
+    const scrolled = owner?.scrollLeft ?? 0;
+    const startLeft = handle.getBoundingClientRect().left;
     // Capture keeps the moves coming once the cursor outruns a 6px strip.
     handle.setPointerCapture(pointerId);
     setDragging(true);
@@ -117,7 +136,9 @@ export function Resizer({
         top,
       );
       live.current = next;
-      target(handle)?.style.setProperty(cssVar, `${next}px`);
+      const el = target(handle);
+      el?.style.setProperty(cssVar, `${next}px`);
+      if (follow && el) el.scrollLeft += followBy(handle.getBoundingClientRect().left, { startLeft, startValue, next, dir, factor });
     };
     let release = () => {};
     const end = () => {
@@ -142,6 +163,7 @@ export function Resizer({
         if (handle.isConnected && handle.hasPointerCapture(pointerId)) handle.releasePointerCapture(pointerId);
         if (before) owner?.style.setProperty(cssVar, before);
         else owner?.style.removeProperty(cssVar);
+        if (follow && owner) owner.scrollLeft = scrolled;
       });
     }
     ending.current = end;
