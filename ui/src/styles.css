@@ -2375,9 +2375,9 @@ a.chan-text {
 .body.carousel > .dock.panning {
   scroll-snap-type: none;
 }
-/* the carousel's switch at the dock's top-right, whichever way the row is
-   scrolled: a zero-width item after the last panel, pushed to the right edge
-   when the panels leave room and held there by sticky when they overflow */
+/* the carousel's switch at the dock's top-right: a zero-width item after
+   the last panel, pushed to the right edge when the panels leave room and
+   held there by sticky when they overflow */
 .dock-corner {
   order: 9999;
   flex: none;
@@ -2388,12 +2388,17 @@ a.chan-text {
   right: 0;
   z-index: 3;
 }
-/* on the grid it spans the first row's whole width, so sticky holds it to
-   the right edge however far the row scrolls, and adds no track */
+/* on the grid it spans the first row's whole width and sits at its end,
+   adding no track. Not sticky: held to the visible edge, it sat on the ×
+   of whichever head the edge cut through, so it scrolls with the last
+   column and sits in the room every head and strip keeps for it there.
+   Scrolled away, every panel gear's "carousel" does the same. */
 .dock.grid > .dock-corner {
   grid-area: 1 / 1 / 2 / -1;
   justify-self: end;
   order: 0;
+  position: relative;
+  right: auto;
 }
 .dock-corner > .dock-carousel {
   position: absolute;
@@ -2401,8 +2406,8 @@ a.chan-text {
   right: 4px;
   padding: 2px 6px;
 }
-/* the switch sits over whichever head reaches the dock's right edge, so
-   every head keeps room for it past its own close; the strip of tabs too */
+/* the switch sits over the last column's top head or strip, so every
+   head keeps room for it past its own close; the strip of tabs too */
 .dock.grid:has(> .dock-corner) > .panel > .panel-body > .panel-head {
   padding-right: 32px;
 }
