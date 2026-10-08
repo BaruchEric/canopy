@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { activate, cellOf, columnOf, cssId, dropTarget, dropZone, fromLegacy, gearDrops, gridOf, gridTemplate, moveCell, moveColumn, moveTo, moveWithin, normalizeLayout, panelsOf, placements, place, regroup, rename, resizeColumn, resizeSeam, rowsTemplate, seamDrag, seamLabel, seamRange, seamStart, stepPanel, stripDrop, zoneRect } from "./grid";
+import { activate, cellOf, clipBox, columnOf, cssId, dropTarget, dropZone, fromLegacy, gearDrops, gridOf, gridTemplate, moveCell, moveColumn, moveTo, moveWithin, normalizeLayout, panelsOf, placements, place, regroup, rename, resizeColumn, resizeSeam, rowsTemplate, seamDrag, seamLabel, seamRange, seamStart, stepPanel, stripDrop, zoneRect } from "./grid";
 import type { DockLayout } from "./grid";
 
 const W = 440;
@@ -601,5 +601,21 @@ describe("the grid as the dock renders it", () => {
     const name = (id: string) => id.toUpperCase();
     expect(seamLabel(l, col, 0, name)).toBe("Height of A and C");
     expect(seamLabel(l, "nope", 0, name)).toBe("Height of the cells above and below");
+  });
+});
+
+describe("clipBox", () => {
+  const view = { left: 590, top: 80, width: 849, height: 820 };
+
+  test("a preview reaching past the dock's left edge is cut at it", () => {
+    expect(clipBox({ left: 554, top: 100, width: 440, height: 400 }, view)).toEqual({ left: 590, top: 100, width: 404, height: 400 });
+  });
+
+  test("a preview inside the dock is left as it is", () => {
+    expect(clipBox({ left: 700, top: 100, width: 200, height: 300 }, view)).toEqual({ left: 700, top: 100, width: 200, height: 300 });
+  });
+
+  test("a preview the dock does not show at all is none", () => {
+    expect(clipBox({ left: 560, top: 100, width: 3, height: 30 }, view)).toBeNull();
   });
 });

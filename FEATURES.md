@@ -18,10 +18,6 @@ The gear still marks "panels side by side" once the dock is a grid of split cell
 P2 · added 2026-10-07 · source: dock pass
 On the unfolded Fold 8 (884x1000, touch) the strip, grid and drag handles show, but a touch drag does nothing (`startPanelDrag` returns on `pointerType` touch). Either take touch drags there or point to the gear's move, split and new-column entries. Seam resize by touch already works.
 
-### FR-005 · Drop previews stay inside the dock, and a dropped panel scrolls into view
-P2 · added 2026-10-07 · source: dock pass
-The cell preview and the tab insertion mark are page-fixed and draw over the cards column (preview at x=554 with the dock starting at 590). After a drop or split the dock keeps a stale scrollLeft of about 42, so the leftmost column sits partly behind the cards.
-
 ### FR-003 · Bug: a column seam lags the pointer when the dock is scrolled to its start
 P1 · added 2026-10-07 · source: dock pass
 Mostly fixed on 2026-10-07: a seam drag now scrolls the dock to keep the seam under the pointer once the dock is at its widest. What is left: with nothing scrolled off the left (scrollLeft 0) and the overflow hidden on the right, a shrink moves the column's far edge, and the seam lags by the hidden overflow (43px with two default columns at 1440x900). Closing that needs the seam to take width from its left neighbour at the cap, which changes what a seam owns. Waiting on Eric's call.
@@ -29,6 +25,10 @@ Mostly fixed on 2026-10-07: a seam drag now scrolls the dock to keep the seam un
 ## In Progress
 
 ## Shipped
+
+### FR-005 · Drop previews stay inside the dock, and a dropped panel scrolls into view
+P2 · added 2026-10-07 · source: dock pass · shipped 2026-10-07
+The cell preview and the tab insertion mark are page-fixed and draw over the cards column (preview at x=554 with the dock starting at 590). After a drop or split the dock keeps a stale scrollLeft of about 42, so the leftmost column sits partly behind the cards. Fixed: previews are cut to the dock (`clipBox`), and a dropped panel scrolls into sight.
 
 ### FR-004 · Bug: the carousel toggle covers the last panel's close button
 P1 · added 2026-10-07 · source: dock pass · shipped 2026-10-07

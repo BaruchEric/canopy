@@ -533,6 +533,16 @@ export function stripDrop(l: DockLayout, id: string, cell: string, x: number, ta
   return { cell, index, at: before ? before.left : last.left + last.width };
 }
 
+/** `b` cut to what `view` shows, or null when none of it shows: a drop's
+ *  preview stays inside the dock when its cell is scrolled partly out. */
+export function clipBox(b: Box, view: Box): Box | null {
+  const left = Math.max(b.left, view.left);
+  const top = Math.max(b.top, view.top);
+  const right = Math.min(b.left + b.width, view.left + view.width);
+  const bottom = Math.min(b.top + b.height, view.top + view.height);
+  return right > left && bottom > top ? { left, top, width: right - left, height: bottom - top } : null;
+}
+
 /** The part of a cell's rect a drop in `zone` takes: the half toward an
  *  edge, or all of it for the middle. */
 export function zoneRect(r: Box, zone: Zone): Box {

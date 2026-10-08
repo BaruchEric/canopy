@@ -37,7 +37,7 @@ import { devState } from "../guided";
 import { BENCH_ONE, BenchBar, BenchSeams, type BenchPane } from "./Bench";
 import { PHONE, useMedia } from "../media";
 import { stableOrder } from "../dock";
-import { columnVar, dropTarget, gearDrops, gridOf, gridTemplate, placements, resizeSeam, rowsTemplate, seamDrag, seamLabel, seamRange, seamStart, stepPanel, stripDrop, zoneRect, type Box, type DockLayout, type Drop, type GridPlan, type StripDrop, type TabBox } from "../grid";
+import { clipBox, columnVar, dropTarget, gearDrops, gridOf, gridTemplate, placements, resizeSeam, rowsTemplate, seamDrag, seamLabel, seamRange, seamStart, stepPanel, stripDrop, zoneRect, type Box, type DockLayout, type Drop, type GridPlan, type StripDrop, type TabBox } from "../grid";
 import { PAN_SLOP, overflowsX, snapTo, wheelTake } from "../carousel";
 import { dragStep, type DragInput, type DragPhase } from "../drag";
 import { backendOf, homeName, isHome } from "../registry";
@@ -1289,6 +1289,13 @@ function stripAt(dock: HTMLElement, x: number, y: number): { cell: string; rect:
   return null;
 }
 
+/** The part of the window `dock` shows its row in, inside its border: a
+ *  cell scrolled partly out of it is drawn there only. */
+function shown(dock: HTMLElement): Box {
+  const r = dock.getBoundingClientRect();
+  return { left: r.left + dock.clientLeft, top: r.top + dock.clientTop, width: dock.clientWidth, height: dock.clientHeight };
+}
+
 /** where a drag would land: beside or in a cell, or on a cell's tab strip */
 type PanelDrop = { on: "cell"; drop: Drop } | { on: "strip"; drop: StripDrop };
 
@@ -1374,14 +1381,14 @@ function startPanelDrag(e: ReactPointerEvent<HTMLElement>, id: string, label: st
     if (strip) {
       const drop = stripDrop(layout, id, strip.cell, at.x, strip.tabs);
       target = drop && { on: "strip", drop };
-      const box = drop && { left: drop.at - 1, top: strip.rect.top, width: 3, height: strip.rect.height };
+      const box = drop && clipBox({ left: drop.at - 1, top: strip.rect.top, width: 3, height: strip.rect.height }, shown(dock));
       showDrag({ label, x: at.x, y: at.y, box, mark: true });
       return;
     }
     const hit = cellAt(dock, at.x, at.y);
     const drop = dropTarget(layout, id, hit, at.x, at.y);
     target = drop && { on: "cell", drop };
-    showDrag({ label, x: at.x, y: at.y, box: drop && hit ? zoneRect(hit.rect, drop.zone) : null, mark: false });
+    showDrag({ label, x: at.x, y: at.y, box: drop && hit ? clipBox(zoneRect(hit.rect, drop.zone), shown(dock)) : null, mark: false });
   };
   const hide = () => {
     document.body.classList.remove("dragging-panel");
@@ -1785,15 +1792,17 @@ export function RepoPanel({
     }
   }, [screen, mode, hidden]);
   // The panel that comes forward (opened from its card, back from a
-  // pop-out) is brought into the row's sight, on the grid once it shows
-  // and in a phone's flat dock; a cell's strip keeps its own tab in sight.
+  // pop-out, dropped somewhere new) is brought into the row's sight, on the
+  // grid once it shows and in a phone's flat dock, and again whenever it
+  // moves to another area while forward, since a drop of the panel already
+  // forward changes only its area; a cell's strip keeps its own tab in sight.
   const forward = useStore((s) => s.activePanel === id);
   const sideBySide = (area !== undefined && !hidden) || place !== undefined;
   useEffect(() => {
     if (!forward || !sideBySide) return;
     const frame = requestAnimationFrame(() => revealHead(box.current?.querySelector(".panel-head") ?? null));
     return () => cancelAnimationFrame(frame);
-  }, [forward, sideBySide]);
+  }, [forward, sideBySide, area]);
   const { zoom: panelZoom } = useZoom("panel");
   // the bench's panes sit outside the column's scroll, where a zoom on it
   // would scale their size and place too
