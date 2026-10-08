@@ -41,6 +41,7 @@ canopy ws                          # list workspaces
 canopy ws create <name> <dirs...>  # group repos
 canopy ws open <name> --app code   # one multi-root VS Code window
 canopy ws open <name> --app kitty  # one kitty window, a tab per repo
+canopy ws open <name> --app agent  # one agent at the primary, the other members as --add-dir
 canopy launch <repo>               # builds here, the repo's releases, its open pull requests
 canopy launch <repo> v1.2.0        # install that release for this machine if needed, launch it
 canopy launch <repo> --pr 42       # check the pull request out as a worktree, build, launch

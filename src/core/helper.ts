@@ -21,7 +21,12 @@ export { clientCaps, clientKey, isLoopback, isLoopbackHost } from "./client";
 export type HelperIntent =
   | { id: number; open: { app: OpenerId; path: string; agent: AgentSettings; tab: boolean } }
   | { id: number; file: { path: string; file: string; line: number } }
-  | { id: number; group: { app: OpenerId; name: string; repos: string[]; agents: Record<string, AgentSettings> } };
+  | {
+      id: number;
+      /** `primary` is where the agent opener starts; a backend from before
+       *  it leaves it out, and the first member stands in */
+      group: { app: OpenerId; name: string; repos: string[]; agents: Record<string, AgentSettings>; primary?: string };
+    };
 
 export type HelperReply = { id: number; ok: true } | { id: number; error: string };
 
@@ -144,7 +149,8 @@ export function parseHelperIntent(text: string): HelperIntent | null {
     if (typeof x.agents === "object" && x.agents !== null) {
       for (const [k, v] of Object.entries(x.agents as Record<string, unknown>)) agents[k] = normalizeAgent(v);
     }
-    return { id, group: { app: x.app, name: x.name, repos, agents } };
+    const primary = typeof x.primary === "string" && repos.includes(x.primary) ? { primary: x.primary } : {};
+    return { id, group: { app: x.app, name: x.name, repos, agents, ...primary } };
   }
   return null;
 }

@@ -2,7 +2,7 @@ import { existsSync } from "node:fs";
 import { lstat, mkdir, readdir, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join } from "node:path";
-import { agentArgv, HARNESS, HARNESSES, presentHarnesses, type AgentEnv } from "./harness";
+import { agentArgv, HARNESS, HARNESSES, presentHarnesses, type AgentEnv, type AgentLaunch } from "./harness";
 import { exec } from "./exec";
 import { openHerdr } from "./herdr";
 import { parseLocator, shellLine, shellQuote } from "./host";
@@ -22,7 +22,7 @@ const defaultAgent: AgentLookup = () => DEFAULT_AGENT;
  *  positional argument). `env` is what the agent's own commands are to see
  *  (a canopy shell's TAILCHAN_AS), for a harness that does not pass the
  *  shell's environment on by itself. */
-export const agentLine = (agent: AgentSettings = DEFAULT_AGENT, prompt?: string, env: AgentEnv = {}): string =>
+export const agentLine = (agent: AgentLaunch = DEFAULT_AGENT, prompt?: string, env: AgentEnv = {}): string =>
   shellLine([...agentArgv(agent, env), ...(prompt ? [prompt] : [])]);
 
 /* ---------- repos on another host: an ssh session in place of a cd ---------- */
@@ -33,7 +33,7 @@ export function sshSessionArgs(
   host: string,
   path: string,
   what: "shell" | "agent",
-  agent: AgentSettings = DEFAULT_AGENT,
+  agent: AgentLaunch = DEFAULT_AGENT,
 ): string[] {
   const cmd = what === "agent" ? agentLine(agent) : 'exec "$SHELL" -l';
   return ["ssh", "-t", "--", host, `cd ${shellQuote(path)} && ${cmd}`];
@@ -287,7 +287,7 @@ export function userShell(): string {
  *  would from a prompt. */
 export function agentShellCommand(
   shell = userShell(),
-  agent: AgentSettings = DEFAULT_AGENT,
+  agent: AgentLaunch = DEFAULT_AGENT,
 ): string[] {
   return [shell, "-l", "-i", "-c", agentLine(agent)];
 }
@@ -345,7 +345,7 @@ export function terminalLineArgs(line: string, tab = false): string[] {
  *  session that runs the agent there instead. */
 export function terminalAgentArgs(
   path: string,
-  agent: AgentSettings = DEFAULT_AGENT,
+  agent: AgentLaunch = DEFAULT_AGENT,
   tab = false,
 ): string[] {
   const { host, path: dir } = parseLocator(path);
@@ -357,7 +357,7 @@ export function terminalAgentArgs(
   );
 }
 
-async function openAgentInTerminal(path: string, agent: AgentSettings, tab = false): Promise<void> {
+async function openAgentInTerminal(path: string, agent: AgentLaunch, tab = false): Promise<void> {
   const t = await exec(terminalAgentArgs(path, agent, tab), { timeoutMs: 15_000 });
   if (t.code !== 0) {
     throw new Error(t.stderr.trim() || "failed to open a terminal for the agent");
@@ -439,8 +439,9 @@ export async function openIn(
 /** Open a group of repos as one unit:
  *  - code → generated multi-root .code-workspace
  *  - kitty → one OS window with a tab per repo (session file)
- *  - agent → the same window, each tab running the agent; one Terminal
- *    window per repo when kitty is not installed
+ *  - agent → the same window, one agent tab at the primary that may use
+ *    the members on its machine, a tab each for members elsewhere
+ *    (`agentTabs`); Terminal windows the same way when kitty is not installed
  *  - herdr → one herdr workspace per repo, each running the agent
  *  - terminal/finder → one window per repo */
 /** Workspace names become filenames — keep them to one harmless path segment. */
@@ -450,20 +451,42 @@ function safeFileName(name: string): string {
   return safe;
 }
 
-/** The kitty session for a workspace: a tab per repo, each at its root and,
- *  for the agent, running it with the window held open afterwards. */
+/** A workspace's agent tabs: one at the primary, with every other member
+ *  on the primary's machine beside it as a folder it may use, and a tab of
+ *  its own for each member on another machine, which no one agent there can
+ *  reach. A primary that is not a member gives way to the first member. */
+export function agentTabs(paths: readonly string[], primary?: string): { path: string; dirs: string[] }[] {
+  const at = primary !== undefined && paths.includes(primary) ? primary : paths[0];
+  if (at === undefined) return [];
+  const home = parseLocator(at).host;
+  const dirs: string[] = [];
+  const apart: { path: string; dirs: string[] }[] = [];
+  for (const p of paths) {
+    if (p === at) continue;
+    const { host, path } = parseLocator(p);
+    if (host === home) dirs.push(path);
+    else apart.push({ path: p, dirs: [] });
+  }
+  return [{ path: at, dirs }, ...apart];
+}
+
+/** The kitty session for a workspace, each tab at its root: a shell per
+ *  repo, or the agent at the primary (see `agentTabs`) with the window held
+ *  open afterwards. */
 export function kittySessionLines(
   paths: string[],
   app: "kitty" | "agent",
   shell = userShell(),
   agentFor: AgentLookup = defaultAgent,
+  primary?: string,
 ): string {
+  const tabs = app === "agent" ? agentTabs(paths, primary) : paths.map((path) => ({ path, dirs: [] }));
   return (
-    paths
-      .map((p) => {
-        const { host, path } = parseLocator(p);
+    tabs
+      .map((t) => {
+        const { host, path } = parseLocator(t.path);
         const name = path.split("/").pop();
-        const agent = agentFor(p);
+        const agent: AgentLaunch = { ...agentFor(t.path), dirs: t.dirs };
         // kitty splits a launch line like a shell, so the agent line has to
         // stay one quoted word, or `-c` gets the binary and every flag after
         // it becomes the shell's own arguments
@@ -486,6 +509,7 @@ export async function openGroup(
   name: string,
   paths: string[],
   agentFor: AgentLookup = defaultAgent,
+  primary?: string,
 ): Promise<void> {
   if (paths.length === 0) throw new Error("workspace has no repos");
   // A newline in a stored path would inject extra `launch` lines into the
@@ -508,7 +532,7 @@ export async function openGroup(
   }
   if (app === "kitty" || app === "agent") {
     const file = join(dir, `${safeFileName(name)}.kitty-session`);
-    await writeFile(file, kittySessionLines(paths, app, userShell(), agentFor));
+    await writeFile(file, kittySessionLines(paths, app, userShell(), agentFor, primary));
     const mac = platform() === "darwin";
     if (!mac && !Bun.which("kitty")) throw new Error("a workspace of shells needs kitty on PATH here");
     const r = await exec(
@@ -517,7 +541,7 @@ export async function openGroup(
     );
     if (r.code === 0) return;
     if (app === "kitty" || !mac) throw new Error(r.stderr.trim() || "failed to open kitty");
-    await Promise.all(paths.map((p) => openAgentInTerminal(p, agentFor(p))));
+    await Promise.all(agentTabs(paths, primary).map((t) => openAgentInTerminal(t.path, { ...agentFor(t.path), dirs: t.dirs })));
     return;
   }
   if (app === "herdr") {

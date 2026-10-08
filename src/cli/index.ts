@@ -32,7 +32,7 @@ import {
   setLaunch,
   upsertWorkspace,
 } from "../core/store";
-import type { Job, LaunchSettings, SourceInput, SpecHalf, SpecState, Sprout, SproutDetail } from "../core/types";
+import { effectivePrimary, type Job, type LaunchSettings, type SourceInput, type SpecHalf, type SpecState, type Sprout, type SproutDetail } from "../core/types";
 import { loadSpec, repoSpecState, syncRepo } from "../core/spec";
 import { parsePick, pickRefusal, SEEDS_DIR } from "../core/sprout";
 import { setSeedRoots } from "../core/seedgit";
@@ -446,7 +446,7 @@ export async function main(argv: string[]): Promise<void> {
         const cfg = await loadConfig();
         const ws = cfg.workspaces.find((w) => w.name === name);
         if (!ws) return fail(`unknown workspace: ${name}`);
-        await openGroup(app, name, ws.repos, (p) => agentFor(cfg, p));
+        await openGroup(app, name, ws.repos, (p) => agentFor(cfg, p), effectivePrimary(ws) ?? undefined);
         return;
       }
       return fail(`unknown ws command: ${sub}`);

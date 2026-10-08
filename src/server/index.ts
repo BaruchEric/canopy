@@ -2514,8 +2514,9 @@ async function handleApi(
     const cfg = await loadConfig();
     const ws = cfg.workspaces.find((w) => w.name === b.name);
     if (!ws) return json({ error: "unknown workspace" }, 404);
+    const primary = effectivePrimary(ws) ?? undefined;
     if (via.via === "backend") {
-      await openGroup(b.app, b.name, ws.repos, (p) => agentFor(cfg, p));
+      await openGroup(b.app, b.name, ws.repos, (p) => agentFor(cfg, p), primary);
     } else {
       const agents: Record<string, AgentSettings> = {};
       const repos = ws.repos.map((p) => {
@@ -2523,7 +2524,8 @@ async function handleApi(
         agents[there] = agentFor(cfg, p);
         return there;
       });
-      await askHelper(state, via.name, { group: { app: b.app, name: b.name, repos, agents } });
+      const group = { app: b.app, name: b.name, repos, agents, ...(primary ? { primary: helperPath(primary) } : {}) };
+      await askHelper(state, via.name, { group });
     }
     return json({ ok: true });
   }

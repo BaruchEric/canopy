@@ -37,6 +37,20 @@ describe("the argv table", () => {
     ]);
   });
 
+  test("a launch's folders come last, one --add-dir each, in both harnesses", () => {
+    const dirs = ["/a b", "/c"];
+    expect(agentArgs({ ...claude({ extra: "--verbose" }), dirs })).toEqual([
+      "--dangerously-skip-permissions",
+      "--verbose",
+      "--add-dir",
+      "/a b",
+      "--add-dir",
+      "/c",
+    ]);
+    expect(agentArgs({ ...codex(), dirs }).slice(-4)).toEqual(["--add-dir", "/a b", "--add-dir", "/c"]);
+    expect(agentArgs({ ...claude(), dirs: [] })).toEqual(agentArgs(claude()));
+  });
+
   test("every effort a harness takes maps to its flag, default to none", () => {
     for (const e of HARNESS.claude.efforts) {
       expect(agentArgs(claude({ effort: e, yolo: false }))).toEqual(e === "default" ? [] : ["--effort", e]);

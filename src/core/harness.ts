@@ -17,6 +17,11 @@ export { HARNESSES, type Harness };
  *  phases' CANOPY_*): by name, each a plain identifier. */
 export type AgentEnv = Record<string, string>;
 
+/** The settings for one launch, with the folders beside its cwd it may also
+ *  use: a workspace's agent tab names the members on the primary's machine.
+ *  Both harnesses spell each one `--add-dir <dir>`. */
+export type AgentLaunch = AgentSettings & { dirs?: readonly string[] };
+
 const ENV_NAME = /^[A-Za-z_][A-Za-z0-9_]*$/;
 
 /** a TOML basic string, for a codex `-c` value */
@@ -165,9 +170,11 @@ export function splitArgs(s: string): string[] {
 
 /** The flags an interactive agent gets for these settings, in the
  *  harness's own spelling: model, effort, permissions, what it always
- *  takes, the environment its commands are to see, then the extra flags as
- *  typed. */
-export function agentArgs(a: AgentSettings, env: AgentEnv = {}): string[] {
+ *  takes, the environment its commands are to see, the extra flags as
+ *  typed, then the launch's folders. Claude's `--add-dir` takes every
+ *  plain word after it, so the folders go after the typed flags (whose
+ *  values it would swallow) and no first message rides with them. */
+export function agentArgs(a: AgentLaunch, env: AgentEnv = {}): string[] {
   const h = HARNESS[a.harness];
   return [
     ...h.modelArgs(a.model),
@@ -176,11 +183,12 @@ export function agentArgs(a: AgentSettings, env: AgentEnv = {}): string[] {
     ...h.always,
     ...h.envArgs(env),
     ...splitArgs(a.extra),
+    ...(a.dirs ?? []).flatMap((d) => ["--add-dir", d]),
   ];
 }
 
 /** The whole argv: the binary, then its flags. */
-export const agentArgv = (a: AgentSettings, env: AgentEnv = {}): string[] => [HARNESS[a.harness].binary, ...agentArgs(a, env)];
+export const agentArgv = (a: AgentLaunch, env: AgentEnv = {}): string[] => [HARNESS[a.harness].binary, ...agentArgs(a, env)];
 
 /** The argv that picks conversation `session` back up with these settings. */
 export const resumeArgv = (a: AgentSettings, session: string, env: AgentEnv = {}): string[] => {

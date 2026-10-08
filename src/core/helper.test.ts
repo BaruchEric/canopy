@@ -120,6 +120,15 @@ describe("parseHelperIntent", () => {
     });
   });
 
+  test("a group's primary rides along when it is a member, and drops when it is not", () => {
+    const frame = (primary: unknown) =>
+      JSON.stringify({ id: 5, group: { app: "agent", name: "w", repos: ["/a", "/b"], agents: {}, primary } });
+    const one = parseHelperIntent(frame("/b"));
+    expect(one && "group" in one ? one.group.primary : null).toBe("/b");
+    const gone = parseHelperIntent(frame("/z"));
+    expect(gone && "group" in gone ? "primary" in gone.group : null).toBe(false);
+  });
+
   test("null for a malformed frame", () => {
     expect(parseHelperIntent("{")).toBeNull();
     expect(parseHelperIntent('{"open":{"app":"kitty","path":"/r"}}')).toBeNull();

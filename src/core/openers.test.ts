@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
   agentShellCommand,
+  agentTabs,
   agentLine,
   backendCaps,
   missingHarness,
@@ -154,6 +155,52 @@ describe("kitty session", () => {
   test("the agent tab launches held", () => {
     expect(kittySessionLines(["/a/x"], "agent", "/bin/zsh", () => ask)).toBe(
       "new_tab x\ncd /a/x\nlaunch --hold /bin/zsh -l -i -c claude\n",
+    );
+  });
+
+  test("a workspace's agent is one tab at the primary, the other members beside it", () => {
+    expect(kittySessionLines(["/a/x", "/b/y", "/c/z"], "agent", "/bin/zsh", () => ask, "/b/y")).toBe(
+      `new_tab y\ncd /b/y\nlaunch --hold /bin/zsh -l -i -c ${shellQuote("claude --add-dir /a/x --add-dir /c/z")}\n`,
+    );
+  });
+
+  test("the primary's tab takes its own repo's settings, the folders after the typed flags", () => {
+    const lines = kittySessionLines(["/a/x", "/b/y"], "agent", "/bin/zsh", (p) => (p === "/a/x" ? opusYolo : ask));
+    expect(lines).toContain("--add-dir '\\''../my lib'\\'' --add-dir /b/y");
+  });
+
+  test("shells stay a tab per repo whatever the primary", () => {
+    expect(kittySessionLines(["/a/x", "/b/y"], "kitty", "/bin/zsh", () => ask, "/b/y")).toBe(
+      "new_tab x\ncd /a/x\nlaunch\nnew_tab y\ncd /b/y\nlaunch\n",
+    );
+  });
+});
+
+describe("agentTabs", () => {
+  test("members on the primary's machine join it; members elsewhere get a tab each", () => {
+    expect(agentTabs(["/a/x", "ssh://wsl/home/b", "/c/z", "ssh://wsl/home/d"], "/c/z")).toEqual([
+      { path: "/c/z", dirs: ["/a/x"] },
+      { path: "ssh://wsl/home/b", dirs: [] },
+      { path: "ssh://wsl/home/d", dirs: [] },
+    ]);
+  });
+
+  test("a remote primary takes the members on its own host, by their paths there", () => {
+    expect(agentTabs(["/a/x", "ssh://wsl/home/b", "ssh://wsl/home/d"], "ssh://wsl/home/b")).toEqual([
+      { path: "ssh://wsl/home/b", dirs: ["/home/d"] },
+      { path: "/a/x", dirs: [] },
+    ]);
+  });
+
+  test("no primary, or one that is not a member, falls to the first member", () => {
+    expect(agentTabs(["/a/x", "/b/y"])).toEqual([{ path: "/a/x", dirs: ["/b/y"] }]);
+    expect(agentTabs(["/a/x", "/b/y"], "/gone")).toEqual([{ path: "/a/x", dirs: ["/b/y"] }]);
+    expect(agentTabs([])).toEqual([]);
+  });
+
+  test("an ssh session at a remote primary carries its folders", () => {
+    expect(sshSessionArgs("wsl", "/home/b", "agent", { ...ask, dirs: ["/home/d"] }).at(-1)).toBe(
+      "cd '/home/b' && claude --add-dir /home/d",
     );
   });
 });

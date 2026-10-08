@@ -82,8 +82,8 @@ export async function runIntent(intent: HelperIntent): Promise<void> {
     await openFile(path, file, line);
     return;
   }
-  const { app, name, repos, agents } = intent.group;
-  await openGroup(app, name, repos, (p) => agents[p] ?? DEFAULT_AGENT);
+  const { app, name, repos, agents, primary } = intent.group;
+  await openGroup(app, name, repos, (p) => agents[p] ?? DEFAULT_AGENT, primary);
 }
 
 /** Keep one helper connected until `stop()` is called. Resolves the handle
