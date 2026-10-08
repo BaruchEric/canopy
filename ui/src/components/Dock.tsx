@@ -39,7 +39,7 @@ import { PHONE, useMedia } from "../media";
 import { stableOrder } from "../dock";
 import { clipBox, columnVar, dropTarget, gearDrops, gridOf, gridTemplate, placements, resizeSeam, rowsTemplate, seamDrag, seamLabel, seamRange, seamStart, stepPanel, stripDrop, zoneRect, type Box, type DockLayout, type Drop, type GridPlan, type StripDrop, type TabBox } from "../grid";
 import { PAN_SLOP, overflowsX, snapTo, wheelTake } from "../carousel";
-import { dragStep, type DragInput, type DragPhase } from "../drag";
+import { dragStep, TOUCH_HOLD, type DragInput, type DragPhase } from "../drag";
 import { backendOf, homeName, isHome } from "../registry";
 import { signinUrl } from "../backends";
 import { IdLabel } from "./IdLabel";
@@ -1346,7 +1346,11 @@ useStore.subscribe((s, prev) => {
  * or its strip tab) with the pointer, on the dock's grid only. What each
  * event does is `dragStep`'s (ui/src/drag.ts).
  *
- * - Under `PAN_SLOP` it stays a click.
+ * - Under `PAN_SLOP` it stays a click. A finger instead picks the panel up
+ *   by resting on the handle for `TOUCH_HOLD`; one that moves sooner is
+ *   scrolling the row, and the drag lets it. Once picked up, the finger's
+ *   moves are kept from scrolling (`keepStill`) and the long press's own
+ *   context menu is kept from showing.
  * - Past it the drag layer shows over the dock: a shield, so a preview's
  *   iframe never takes the pointer, the part of the cell under the pointer
  *   the drop would take (`dropTarget`, `zoneRect`) or, over a tab strip,
@@ -1363,12 +1367,13 @@ useStore.subscribe((s, prev) => {
 function startPanelDrag(e: ReactPointerEvent<HTMLElement>, id: string, label: string) {
   const dock = e.currentTarget.closest(".dock.grid");
   const t = e.target;
-  if (e.button !== 0 || e.pointerType === "touch" || !(dock instanceof HTMLElement) || !(t instanceof Element)) return;
+  if (e.button !== 0 || !(dock instanceof HTMLElement) || !(t instanceof Element)) return;
   // a tab's close is its own, and a panel over the window keeps the dock
   // behind it still
   if (t.closest("button") || rowCovered(dock, t)) return;
   cancelPanelDrag();
   const { pointerId, clientX: x0, clientY: y0 } = e;
+  const touch = e.pointerType === "touch";
   let phase: DragPhase = "pressed";
   let target: PanelDrop | null = null;
   let at = { x: x0, y: y0 };
@@ -1400,8 +1405,10 @@ function startPanelDrag(e: ReactPointerEvent<HTMLElement>, id: string, label: st
     window.removeEventListener("pointercancel", lost);
     window.removeEventListener("keydown", key, { capture: true });
     window.removeEventListener("blur", gone);
-    window.removeEventListener("contextmenu", gone, { capture: true });
+    window.removeEventListener("contextmenu", menu, { capture: true });
     window.removeEventListener("scroll", scrolled, { capture: true });
+    clearTimeout(holding);
+    fingerHolds = false;
     dock.removeEventListener("lostpointercapture", lost);
     if (dock.isConnected && dock.hasPointerCapture(pointerId)) dock.releasePointerCapture(pointerId);
     hide();
@@ -1409,13 +1416,17 @@ function startPanelDrag(e: ReactPointerEvent<HTMLElement>, id: string, label: st
     haltPanelDrag = () => {};
   };
   const step = (input: DragInput) => {
-    const next = dragStep(phase, input, PAN_SLOP);
+    const next = dragStep(phase, input, PAN_SLOP, touch);
     const drop = target;
     if (next.phase === "ended") stop();
     else phase = next.phase;
     if (next.swallow) swallowClick();
     switch (next.effect) {
       case "start":
+        if (touch) {
+          fingerHolds = true;
+          navigator.vibrate?.(10);
+        }
         dock.setPointerCapture(pointerId);
         document.body.classList.add("dragging-panel");
         getSelection()?.removeAllRanges();
@@ -1448,6 +1459,13 @@ function startPanelDrag(e: ReactPointerEvent<HTMLElement>, id: string, label: st
     if (c.pointerId === pointerId) step({ type: "cancel" });
   };
   const gone = () => step({ type: "cancel" });
+  // a long press opens the browser's menu, which on a touch is the hold
+  // picking the panel up, not a sign the release went missing
+  const menu = (c: Event) => {
+    if (touch) c.preventDefault();
+    else gone();
+  };
+  const holding = touch ? setTimeout(() => step({ type: "hold" }), TOUCH_HOLD) : undefined;
   const key = (k: globalThis.KeyboardEvent) => {
     if (k.key !== "Escape") return;
     // mid-drag the key is the drag's alone; under the slop it goes on
@@ -1466,11 +1484,28 @@ function startPanelDrag(e: ReactPointerEvent<HTMLElement>, id: string, label: st
   window.addEventListener("pointercancel", lost);
   window.addEventListener("keydown", key, { capture: true });
   window.addEventListener("blur", gone);
-  window.addEventListener("contextmenu", gone, { capture: true });
+  window.addEventListener("contextmenu", menu, { capture: true });
   window.addEventListener("scroll", scrolled, { capture: true, passive: true });
   dock.addEventListener("lostpointercapture", lost);
   cancelPanelDrag = gone;
   haltPanelDrag = () => step({ type: "escape" });
+}
+
+/** whether a finger holds a panel now (`startPanelDrag`) */
+let fingerHolds = false;
+
+/** A handle's own touchmove listener, not passive (React's are), so the
+ *  browser knows from the moment a touch starts there that it may cancel
+ *  its moves: while a finger holds a panel they move the panel, never the
+ *  row. Only on the handles, so every other touch in the dock still
+ *  scrolls without waiting on the page. */
+function keepStill(el: HTMLElement | null) {
+  if (!el) return;
+  const still = (m: TouchEvent) => {
+    if (fingerHolds) m.preventDefault();
+  };
+  el.addEventListener("touchmove", still, { passive: false });
+  return () => el.removeEventListener("touchmove", still);
 }
 
 /** Props that make an element a handle that picks panel `id` up: a strip
@@ -1480,6 +1515,7 @@ function startPanelDrag(e: ReactPointerEvent<HTMLElement>, id: string, label: st
 function dragHandle(id: string, label: string) {
   return {
     "data-drag-handle": "",
+    ref: keepStill,
     onPointerDown: (e: ReactPointerEvent<HTMLElement>) => startPanelDrag(e, id, label),
     onDragStart: (e: DragEvent<HTMLElement>) => e.preventDefault(),
   };

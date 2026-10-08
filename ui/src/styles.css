@@ -2623,6 +2623,9 @@ body.resizing-rows {
 [data-drag-handle] {
   cursor: grab;
   user-select: none;
+  -webkit-user-select: none;
+  /* a finger's long press picks the panel up; no callout over it */
+  -webkit-touch-callout: none;
 }
 /* the head scrolls with its panel body, which would clip an outline drawn
    outside it */

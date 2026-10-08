@@ -7,12 +7,18 @@
 export type DragPhase = "pressed" | "dragging" | "cancelled";
 
 /** `cancel` is a pointercancel, a lost pointer capture, a window blur or a
- *  context menu: any sign the release may never come */
+ *  context menu: any sign the release may never come. `hold` is a finger
+ *  kept still on the handle for `TOUCH_HOLD`. */
 export type DragInput =
   | { type: "move"; dx: number; dy: number; buttons: number }
   | { type: "up" }
   | { type: "cancel" }
-  | { type: "escape" };
+  | { type: "escape" }
+  | { type: "hold" };
+
+/** How long a finger rests on a handle before it picks the panel up. A
+ *  finger that moves sooner is scrolling, and the drag never starts. */
+export const TOUCH_HOLD = 350;
 
 /** none: nothing to do; start: show the layer; track: redraw it; drop:
  *  drop on the target; hide: take the layer down but keep listening for
@@ -24,8 +30,12 @@ export interface DragStep {
   swallow?: true;
 }
 
-export function dragStep(phase: DragPhase, input: DragInput, slop: number): DragStep {
+/** `byHold`: a touch, which starts on a `hold` alone, so a move past the
+ *  slop before it ends the gesture and leaves the row to scroll. */
+export function dragStep(phase: DragPhase, input: DragInput, slop: number, byHold = false): DragStep {
   switch (input.type) {
+    case "hold":
+      return phase === "pressed" ? { phase: "dragging", effect: "start" } : { phase, effect: "none" };
     case "cancel":
       return { phase: "ended", effect: "cancel" };
     case "move":
@@ -33,7 +43,8 @@ export function dragStep(phase: DragPhase, input: DragInput, slop: number): Drag
       if ((input.buttons & 1) === 0) return { phase: "ended", effect: "cancel" };
       if (phase === "cancelled") return { phase, effect: "none" };
       if (phase === "dragging") return { phase, effect: "track" };
-      return Math.hypot(input.dx, input.dy) < slop ? { phase, effect: "none" } : { phase: "dragging", effect: "start" };
+      if (Math.hypot(input.dx, input.dy) < slop) return { phase, effect: "none" };
+      return byHold ? { phase: "ended", effect: "cancel" } : { phase: "dragging", effect: "start" };
     case "up":
       if (phase === "dragging") return { phase: "ended", effect: "drop", swallow: true };
       if (phase === "cancelled") return { phase: "ended", effect: "none", swallow: true };

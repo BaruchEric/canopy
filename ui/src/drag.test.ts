@@ -36,4 +36,15 @@ describe("a panel drag's steps", () => {
   test("Escape under the slop only lets the press go", () => {
     expect(dragStep("pressed", { type: "escape" }, 6)).toEqual({ phase: "ended", effect: "cancel" });
   });
+  test("a touch starts on a hold alone, and a finger that moves first is scrolling", () => {
+    expect(dragStep("pressed", { type: "hold" }, 6, true)).toEqual({ phase: "dragging", effect: "start" });
+    expect(dragStep("pressed", move(3, 0), 6, true)).toEqual({ phase: "pressed", effect: "none" });
+    expect(dragStep("pressed", move(10, 0), 6, true)).toEqual({ phase: "ended", effect: "cancel" });
+    expect(dragStep("dragging", move(40, 0), 6, true)).toEqual({ phase: "dragging", effect: "track" });
+    expect(dragStep("pressed", { type: "up" }, 6, true)).toEqual({ phase: "ended", effect: "none" });
+  });
+  test("a hold after the drag began changes nothing", () => {
+    expect(dragStep("dragging", { type: "hold" }, 6, true)).toEqual({ phase: "dragging", effect: "none" });
+    expect(dragStep("cancelled", { type: "hold" }, 6, true)).toEqual({ phase: "cancelled", effect: "none" });
+  });
 });
