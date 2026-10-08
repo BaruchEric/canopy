@@ -169,6 +169,22 @@ describe("lockFlows", () => {
     if (lock.owner) lock.release();
   });
 
+  test("a lock from before the machine booted is taken over, whoever has its pid now", async () => {
+    // pid 1 is up, but the lock is older than the boot, so not its
+    const path = join(dir, "owner.lock");
+    await writeFile(path, JSON.stringify({ pid: 1, token: "last-boot" }));
+    const old = new Date(Date.now() - 3_600_000);
+    await utimes(path, old, old);
+    const lock = await lockFlows(dir, Date.now() - 60_000);
+    expect(lock.owner).toBe(true);
+    if (lock.owner) lock.release();
+  });
+
+  test("a live holder's lock from this boot is left alone", async () => {
+    await writeFile(join(dir, "owner.lock"), JSON.stringify({ pid: 1, token: "theirs" }));
+    expect(await lockFlows(dir, Date.now() - 3_600_000)).toEqual({ owner: false, holder: 1 });
+  });
+
   test("letting go leaves a lock someone else took since alone", async () => {
     const lock = await lockFlows(dir);
     const path = join(dir, "owner.lock");

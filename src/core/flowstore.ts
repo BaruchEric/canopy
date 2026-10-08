@@ -4,6 +4,7 @@
 
 import { readFileSync, rmSync } from "node:fs";
 import { link, mkdir, readdir, readFile, rename, rm, stat, writeFile } from "node:fs/promises";
+import { uptime } from "node:os";
 import { join } from "node:path";
 import type { FlowRecord } from "./flow";
 import { configDir } from "./store";
@@ -116,10 +117,18 @@ const readLock = (text: string): { pid: number; token: string } | null => {
   }
 };
 
+/** When this machine booted, give or take a minute (the uptime clock and
+ *  the wall clock drift apart, so the minute keeps a lock from this boot
+ *  from looking older than it). */
+const bootedAt = (): number => Date.now() - uptime() * 1000 - 60_000;
+
 /** Takes the flows folder for this server: a pid file made exclusively (a
  *  whole file linked into place, so nobody reads it half written), taken
- *  over when the process that made it is gone. */
-export async function lockFlows(dir = flowsDir()): Promise<FlowsLock> {
+ *  over when the process that made it is gone. A lock written before the
+ *  machine last booted is gone too, whatever holds its pid now: after a
+ *  reboot the pid is often some other program's (an Epson helper held the
+ *  Mac's on 2026-10-07, and flows went unkept). `booted` is for the tests. */
+export async function lockFlows(dir = flowsDir(), booted = bootedAt()): Promise<FlowsLock> {
   await mkdir(dir, { recursive: true, mode: 0o700 });
   const path = join(dir, LOCK);
   const token = crypto.randomUUID();
@@ -137,7 +146,9 @@ export async function lockFlows(dir = flowsDir()): Promise<FlowsLock> {
         if ((err as { code?: string }).code !== "EEXIST") throw err;
       }
       const lock = readLock(await readFile(path, "utf8").catch(() => ""));
-      if (lock && (lock.pid === process.pid ? held.has(lock.token) : alive(lock.pid))) return { owner: false, holder: lock.pid };
+      const thisBoot = ((await stat(path).catch(() => null))?.mtimeMs ?? 0) >= booted;
+      const live = lock !== null && thisBoot && (lock.pid === process.pid ? held.has(lock.token) : alive(lock.pid));
+      if (lock && live) return { owner: false, holder: lock.pid };
       // a server that is gone left it (or it is no lock at all): take it over
       holder = lock?.pid ?? 0;
       await rm(path, { force: true });
