@@ -96,6 +96,10 @@ beforeEach(async () => {
 
 afterEach(async () => {
   for (const h of hubs) h.stop();
+  // a start in flight would make its session after the kill below, on a
+  // server of its own that nothing ever ends; bounded, since one test's
+  // fake repo check never answers
+  await Promise.race([Promise.all(hubs.map((h) => h.settled())), Bun.sleep(5000)]);
   const base = tmuxBase();
   if (base) await killServer(base);
 });

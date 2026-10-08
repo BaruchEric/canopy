@@ -126,6 +126,13 @@ export class TaskHub {
     this.stopped = true;
   }
 
+  /** Resolves once every start, stop and tick in flight has finished. For
+   *  a caller that takes tmux down after stop(): a start still running
+   *  would otherwise make its session, and with it a server, after that. */
+  async settled(): Promise<void> {
+    while (this.locks.size > 0 || this.ticking) await Promise.allSettled([...this.locks.values(), this.ticking]);
+  }
+
   /** one tick at a time, never stacked */
   private poke(): Promise<void> {
     if (!this.ticking) this.ticking = this.tick().catch(say("task supervisor")).finally(() => (this.ticking = null));
