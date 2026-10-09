@@ -13,6 +13,7 @@ import { ago } from "../util";
 import { Seg } from "./Seg";
 import { screenNow, screenWord, windowNow, windowWord } from "../screens";
 import { GearIcon } from "./Gear";
+import { ScreenLayoutsRow } from "./ScreenLayouts";
 import type { Palette } from "../settings";
 
 const LEVEL = [
@@ -187,6 +188,7 @@ export function SettingsMenu() {
               </p>
             )}
           </section>
+          <ScreenLayoutsRow />
           <section className="settings-row">
             <h3 className="panel-label">open a repo</h3>
             <Seg

@@ -734,6 +734,7 @@ describe("several backends", () => {
         "/api/incubator/advice",
         "/api/incubator/stages",
         "/api/tasks",
+        "/api/layouts",
       ].sort(),
     );
     const s = useStore.getState();
@@ -1764,6 +1765,46 @@ describe("the dock as columns of cells", () => {
         loaded: false,
       },
     );
+  });
+
+  test("a screen layout applies through the setters and leaves the open panels open", () => {
+    const st = useStore.getState();
+    useStore.setState({ panels: [], dockLayout: { columns: [] }, sidebarOpen: false, feedOpen: false });
+    st.openPanel("a");
+    st.openPanel("b");
+    const before = useStore.getState().dockLayout;
+    useStore.getState().applyScreenLayout({
+      arrange: "columns",
+      carousel: true,
+      sidebarOpen: true,
+      sidebarWidth: 9000,
+      columnWidth: 700,
+      panelZoom: 1.25,
+      termFont: 14,
+      level: "advanced",
+      sectionsHidden: ["peers"],
+      feedOpen: true,
+    });
+    const s = useStore.getState();
+    expect(s.panels).toEqual(["a", "b"]);
+    mirrored();
+    expect(s.dockLayout.columns.map((c) => c.width)).toEqual([700, 700]);
+    // a new layout object even when nothing in it moves, so the screen's
+    // slot keeps one and counts as arranged
+    expect(s.dockLayout).not.toBe(before);
+    expect(s.sidebarOpen).toBe(true);
+    expect(s.sidebarWidth).toBe(560);
+    expect(s.feedOpen).toBe(true);
+    expect(s.settings.dockCarousel).toBe(true);
+    expect(s.settings.zoom.panel).toBe(1.25);
+    expect(s.settings.termFont).toBe(14);
+    expect(s.settings.level).toBe("advanced");
+    expect(s.settings.sectionsHidden).toEqual(["peers"]);
+    // an empty layout touches nothing but the dock's object
+    useStore.getState().applyScreenLayout({});
+    expect(useStore.getState().settings.termFont).toBe(14);
+    expect(useStore.getState().panels).toEqual(["a", "b"]);
+    useStore.setState({ sidebarOpen: pristine.sidebarOpen, sidebarWidth: pristine.sidebarWidth, feedOpen: pristine.feedOpen });
   });
 
   test("panels always mirror the layout", () => {

@@ -70,7 +70,9 @@ import type {
   SproutDetail,
   AdviceAccepted,
   AdviceOffer,
+  ScreenProfile,
 } from "../../src/core/types";
+import type { ProfileFields } from "../../src/core/screenlayouts";
 import { pickUrl, split, wsUrl, type BackendSignal } from "./backends";
 import { normalizeRoutes } from "../../src/core/route";
 import { keyHeaders } from "./answerKey";
@@ -814,6 +816,20 @@ export const api = {
       method: "POST",
       body: JSON.stringify({ name, action, note, client: clientId() }),
     }),
+  /** the screen layout profiles, kept on the home backend: the presets,
+   *  changed ones as changed, then the user's own */
+  layouts: () => req<{ profiles: ScreenProfile[] }>(homeName(), "/api/layouts"),
+  /** a new profile of the user's own, or (`from`) a copy of any profile */
+  layoutCreate: (what: { profile: ProfileFields } | { from: string }) =>
+    req<{ profile: ScreenProfile; profiles: ScreenProfile[] }>(homeName(), "/api/layouts", { method: "POST", body: JSON.stringify(what) }),
+  /** a profile changed; a preset's change is kept beside it, for a reset */
+  layoutUpdate: (id: string, profile: ProfileFields) =>
+    req<{ profile: ScreenProfile; profiles: ScreenProfile[] }>(homeName(), `/api/layouts?id=${encodeURIComponent(id)}`, {
+      method: "PUT",
+      body: JSON.stringify({ profile }),
+    }),
+  layoutDelete: (id: string) => req<{ profiles: ScreenProfile[] }>(homeName(), `/api/layouts?id=${encodeURIComponent(id)}`, { method: "DELETE" }),
+  layoutReset: (id: string) => req<{ profiles: ScreenProfile[] }>(homeName(), `/api/layouts/reset?id=${encodeURIComponent(id)}`, { method: "POST" }),
 };
 
 /** Which base URL a backend is reached at from this page: its first pick,

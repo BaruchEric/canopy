@@ -452,6 +452,57 @@ export interface BackendEntry {
   tailnet?: string;
 }
 
+/** What a screen layout profile sets: a few of the page's own settings and
+ *  layout values, each optional, so a profile leaves alone what it does not
+ *  name. Never a panel: which repos are open stays the window's. */
+export interface ScreenLayout {
+  /** the dock's panels side by side in columns, or one cell of tabs */
+  arrange?: "columns" | "tabs";
+  /** the dock takes the cards' room and scrolls sideways */
+  carousel?: boolean;
+  /** the repo tree beside the cards */
+  sidebarOpen?: boolean;
+  /** its width, CSS px */
+  sidebarWidth?: number;
+  /** every dock column's width, CSS px */
+  columnWidth?: number;
+  /** the panels' zoom, 0.5 to 2 */
+  panelZoom?: number;
+  /** the shells' font size in place, px */
+  termFont?: number;
+  /** how much a repo's panel shows */
+  level?: "intermediate" | "advanced";
+  /** the sections every panel leaves out */
+  sectionsHidden?: string[];
+  /** the event feed along the bottom */
+  feedOpen?: boolean;
+}
+
+/** A screen layout profile: a screen it is for, by name and size, and the
+ *  layout it gives that screen. The built-in ones are the recommended
+ *  presets, one per common size, which can be edited and reset but not
+ *  deleted; the user's own can be anything. Kept on the home backend
+ *  (`/api/layouts`). */
+export interface ScreenProfile {
+  id: string;
+  name: string;
+  /** the device it is for, in the user's words: "MacBook Pro 16" */
+  device: string;
+  /** the model the device names itself, where it does (a monitor through
+   *  Chrome's screen details, a phone through its browser's hints) */
+  model?: string;
+  /** the screen's physical pixels, CSS px times the device pixel ratio */
+  width: number;
+  height: number;
+  /** the device pixel ratio it was measured at */
+  dpr?: number;
+  layout: ScreenLayout;
+  /** a recommended preset rather than one the user made */
+  builtin?: true;
+  /** a preset the user changed, which a reset puts back */
+  edited?: true;
+}
+
 export interface CanopyConfig {
   port: number;
   maxDepth: number;

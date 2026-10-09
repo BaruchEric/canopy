@@ -175,6 +175,7 @@ import { ChanHub, PUT_MAX } from "./tailchan";
 import { RegistryHub } from "./registry";
 import { AskHub } from "./asks";
 import { BODY_MAX as INTAKE_BODY_MAX, IncubatorHub, canopyRepoOf } from "./incubator";
+import { ScreenLayouts } from "./layouts";
 import { SCAN_EVERY, type AgentProc } from "../core/agentscan";
 import { TaskHub } from "./tasks";
 import type { TaskTimings } from "../core/tasks";
@@ -314,6 +315,8 @@ interface ServerState {
   asks: AskHub;
   /** new projects carried from an idea through clarify and on (core/incubator.ts) */
   incubator: IncubatorHub;
+  /** the screen layout profiles the pages keep here (`/api/layouts`) */
+  layouts: ScreenLayouts;
   /** the name this backend goes by (`selfName`), read at start; what a
    *  shell's `CANOPY_BACKEND` says */
   backendName: string;
@@ -1984,6 +1987,8 @@ async function handleApi(
   if (askRes) return askRes;
   const incubatorRes = await state.incubator.handle(req, url);
   if (incubatorRes) return incubatorRes;
+  const layoutsRes = await state.layouts.handle(req, url);
+  if (layoutsRes) return layoutsRes;
   const taskRes = await state.tasks.handle(req, url, (id) => state.result.repos.find((r) => r.id === id));
   if (taskRes) return taskRes;
 
@@ -3412,6 +3417,7 @@ export async function startServer(opts: {
       () => stagesNow(),
       { files: adviceFiles, accept: (entry) => (opts.incubator?.accept ?? ((e) => acceptAdvice(state, e)))(entry) },
     ),
+    layouts: new ScreenLayouts(),
     backendName: selfName(cfg.self, hostname()),
     apiUrl: null,
   };

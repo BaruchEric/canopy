@@ -6,6 +6,10 @@ import { mergeHistory } from "./qualify";
 import { applyQuery, type RepoFilter } from "./filters";
 import { cardChangedAt, cardFavorite, joinRepos, leadOf, type RepoCard } from "./checkouts";
 import { changedAt } from "./grouping";
+import { sectionsHidden, withZoom, zoomOf, ZOOM_MAX, ZOOM_MIN } from "./surface";
+import { termFontSize } from "./touch";
+import { isPresetId, matchProfile, type ProfileFields } from "../../src/core/screenlayouts";
+import { deviceHere, neverArranged, screenHere } from "./screenprofiles";
 import { focusPanel, nextActive } from "./dock";
 import {
   activate,
@@ -30,8 +34,8 @@ import {
 import { heldShellUrl, openElsewhere, openShellElsewhere, parseRoute, popOutWindow, soloUrl } from "./routes";
 import { poppedOf, poppedOut, without } from "./panes";
 import { loadSettings, saveSettings, SCREEN_SETTINGS, shellPlace, type Settings, type ShellPlace } from "./settings";
-import { PANEL_TERM_ROWS, adoptPoppedTerms, adoptTerms, loadFocusSize, loadTermTabs, needsPanelShell, nextStripTab, panelShellStart, reconcileTerms, rowsPx, termId, type FocusSize, type TermTab } from "./term";
 import { clearTask, frontForTab, frontForTask, keepFront, projectFront, withSolo, type BenchPane, type Front } from "./front";
+import { TERM_FONT, PANEL_TERM_ROWS, adoptPoppedTerms, adoptTerms, loadFocusSize, loadTermTabs, needsPanelShell, nextStripTab, panelShellStart, reconcileTerms, rowsPx, termId, type FocusSize, type TermTab } from "./term";
 import { clientId, identity } from "./client";
 export type { TermTab } from "./term";
 import { clamp, needsAttention } from "./util";
@@ -87,6 +91,8 @@ import {
   type TaskPatch,
   type TermInfo,
   type RememberedRule,
+  type ScreenLayout,
+  type ScreenProfile,
   type Run,
   type RunAction,
   type RunAnswer,
@@ -171,8 +177,10 @@ export function changed<T extends object>(next: T, before: T): Partial<T> {
 const LAYOUT_KEY = "canopy.layout";
 
 /** the layout kept per kind of screen and window (screens.ts): its sizes,
- *  and the feed being up, which the feed's gear puts away */
+ *  the tree being open, and the feed being up, which the feed's gear puts
+ *  away */
 export const SCREEN_LAYOUT = [
+  "sidebarOpen",
   "feedOpen",
   "sidebarWidth",
   "panelWidths",
@@ -409,6 +417,16 @@ export function loadDock(
 function stringMap(v: unknown): Record<string, string> {
   if (!v || typeof v !== "object" || Array.isArray(v)) return {};
   return Object.fromEntries(Object.entries(v).filter((e): e is [string, string] => typeof e[1] === "string"));
+}
+
+/** the layout as stored, unread; null when there is none or it will not parse */
+function storedLayout(): unknown {
+  try {
+    const raw = localStorage.getItem(LAYOUT_KEY);
+    return raw ? (JSON.parse(raw) as unknown) : null;
+  } catch {
+    return null;
+  }
 }
 
 /** Writes the fields in `patch` over what is stored, leaving the rest as the
@@ -670,6 +688,10 @@ interface CanopyState {
   inboxOpen: boolean;
   inboxFocus: string | null;
   workspaces: Workspace[];
+  /** the screen layout profiles, kept on the home backend: the presets
+   *  first, then the user's own; empty until read or on a backend from
+   *  before them */
+  screenProfiles: ScreenProfile[];
   loaded: boolean;
   /** why the initial load failed, if it did */
   loadError: string | null;
@@ -847,6 +869,17 @@ interface CanopyState {
    *  and the attention toggle have their own ways back */
   clearFilters: () => void;
   setActiveWs: (name: string | null) => void;
+  /** reads the screen layout profiles from the home backend */
+  loadScreenProfiles: () => Promise<void>;
+  /** keeps a profile: a new one of the user's own (`id` null), a copy of
+   *  any (`from`), or a change to one, a preset's kept beside it */
+  saveScreenProfile: (what: { id: string | null; fields: ProfileFields } | { from: string }) => Promise<ScreenProfile>;
+  /** drops a profile of the user's own, or puts a preset back as it ships */
+  dropScreenProfile: (id: string) => Promise<void>;
+  /** lays a profile's layout over this window through the usual setters,
+   *  so the screen's own slots keep it; the dock's layout is written out
+   *  either way, so this screen counts as arranged from then on */
+  applyScreenLayout: (layout: ScreenLayout) => void;
   /** reads a repo's tasks from its backend */
   loadTasks: (repoId: string) => Promise<void>;
   taskAct: (repoId: string, action: TaskAction, name?: string) => Promise<void>;
@@ -1467,6 +1500,26 @@ type DockState = Pick<CanopyState, "panels" | "dockLayout" | "activePanel" | "pa
 /** how a panel opened now joins the dock: a column of its own, or a tab */
 export const arrangementOf = (s: Pick<CanopyState, "settings">): Arrangement => (s.settings.openIn === "tabs" ? "tabs" : "columns");
 
+/** this window's layout as a screen layout profile keeps one: what Settings
+ *  offers to take into a profile. The column width is the dock's first
+ *  column's, or a new column's with none open. */
+export function screenLayoutOf(
+  s: Pick<CanopyState, "settings" | "dockLayout" | "sidebarOpen" | "sidebarWidth" | "feedOpen">,
+): ScreenLayout {
+  return {
+    arrange: arrangementOf(s),
+    carousel: s.settings.dockCarousel,
+    sidebarOpen: s.sidebarOpen,
+    sidebarWidth: Math.round(s.sidebarWidth),
+    columnWidth: Math.round(s.dockLayout.columns[0]?.width ?? PANEL.initial),
+    panelZoom: zoomOf(s.settings.zoom, "panel"),
+    termFont: s.settings.termFont,
+    level: s.settings.level,
+    sectionsHidden: [...s.settings.sectionsHidden],
+    feedOpen: s.feedOpen,
+  };
+}
+
 /** a new column's width: the one its panel had when it last closed alone */
 const widthOf =
   (s: Pick<CanopyState, "panelWidths">) =>
@@ -1563,6 +1616,7 @@ export const useStore = create<CanopyState>((set, get) => ({
   inboxOpen: false,
   inboxFocus: null,
   workspaces: [],
+  screenProfiles: [],
   loaded: false,
   loadError: null,
   filter: "",
@@ -1756,6 +1810,8 @@ export const useStore = create<CanopyState>((set, get) => ({
     // and the asks waiting on the human, the same
     void get().loadAsks();
     void get().loadSprouts();
+    // the screen layouts, which a backend from before them does not have
+    void get().loadScreenProfiles();
     // what home runs, for naming the machines; a page with one backend
     // names none, so it does not ask
     if (order.length > 1) {
@@ -2111,6 +2167,59 @@ export const useStore = create<CanopyState>((set, get) => ({
     })),
   clearFilters: () => set({ filters: [], users: [], favoritesOnly: false }),
   setActiveWs: (activeWs) => set({ activeWs }),
+
+  loadScreenProfiles: async () => {
+    try {
+      const { profiles } = await api.layouts();
+      set({ screenProfiles: profiles });
+    } catch {
+      // a backend from before layouts: Settings offers none
+    }
+  },
+  saveScreenProfile: async (what) => {
+    const r =
+      "from" in what
+        ? await api.layoutCreate({ from: what.from })
+        : what.id === null
+          ? await api.layoutCreate({ profile: what.fields })
+          : await api.layoutUpdate(what.id, what.fields);
+    set({ screenProfiles: r.profiles });
+    return r.profile;
+  },
+  dropScreenProfile: async (id) => {
+    const r = isPresetId(id) ? await api.layoutReset(id) : await api.layoutDelete(id);
+    set({ screenProfiles: r.profiles });
+  },
+  applyScreenLayout: (layout) => {
+    const st = get();
+    // through the setters the gears use, each kept for this screen
+    if (layout.arrange) st.arrangeDock(layout.arrange);
+    if (layout.carousel !== undefined) st.setSetting("dockCarousel", layout.carousel);
+    if (layout.level) st.setSetting("level", layout.level);
+    if (layout.panelZoom !== undefined) st.setSetting("zoom", withZoom(get().settings.zoom, "panel", clamp(layout.panelZoom, ZOOM_MIN, ZOOM_MAX)));
+    if (layout.termFont !== undefined) st.setSetting("termFont", termFontSize(layout.termFont, TERM_FONT.size));
+    if (layout.sectionsHidden) st.setSetting("sectionsHidden", sectionsHidden(layout.sectionsHidden));
+    set((s) => {
+      const l = laidOut(s);
+      const w = layout.columnWidth === undefined ? undefined : clamp(layout.columnWidth, PANEL.min, PANEL.max);
+      return {
+        dockLayout: { columns: l.columns.map((c) => (w === undefined ? c : { ...c, width: w })) },
+        ...(layout.sidebarOpen !== undefined ? { sidebarOpen: layout.sidebarOpen } : {}),
+        ...(layout.sidebarWidth !== undefined ? { sidebarWidth: clamp(layout.sidebarWidth, SIDEBAR.min, SIDEBAR.max) } : {}),
+        ...(layout.feedOpen !== undefined ? { feedOpen: layout.feedOpen } : {}),
+      };
+    });
+    // The layout subscription saves only what changed, so a value the
+    // profile names that already held would not reach this screen's slot,
+    // and a change made on another screen would show through here later.
+    const s = get();
+    const named: Partial<Layout> = {
+      ...(layout.sidebarOpen !== undefined ? { sidebarOpen: s.sidebarOpen } : {}),
+      ...(layout.sidebarWidth !== undefined ? { sidebarWidth: s.sidebarWidth } : {}),
+      ...(layout.feedOpen !== undefined ? { feedOpen: s.feedOpen } : {}),
+    };
+    if (Object.keys(named).length > 0) saveLayout(named);
+  },
 
   loadTasks: async (repoId) => {
     const r = await api.tasks(repoId);
@@ -3295,13 +3404,21 @@ if (typeof window !== "undefined" && typeof window.screen !== "undefined") {
     const now = slotsNow().join();
     if (now === screenSeen) return;
     screenSeen = now;
+    // asked before anything is written under the new slot: the setState
+    // below writes the layout it loads there
+    const fresh = writesFlat() && neverArranged(storedLayout(), slotsNow()[0]);
     const layout = loadLayout();
-    const fresh = loadSettings();
+    const settings = loadSettings();
     const sizes: Partial<Layout> = {};
     for (const k of SCREEN_LAYOUT) Object.assign(sizes, { [k]: layout[k] });
     const sized: Partial<Settings> = {};
-    for (const k of SCREEN_SETTINGS) Object.assign(sized, { [k]: fresh[k] });
+    for (const k of SCREEN_SETTINGS) Object.assign(sized, { [k]: settings[k] });
     useStore.setState((s) => ({ ...sizes, settings: { ...s.settings, ...sized } }));
+    // A screen this browser has never arranged takes the profile that fits
+    // it. One arranged before keeps its own; Settings offers the rest.
+    const here = fresh ? screenHere(deviceHere(settings.device)) : null;
+    const match = here ? matchProfile(useStore.getState().screenProfiles, here) : null;
+    if (match) useStore.getState().applyScreenLayout(match.profile.layout);
   };
   window.addEventListener("resize", onScreen);
   // not in this TS's DOM types yet: Chrome's Window Management API
