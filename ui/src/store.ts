@@ -5,8 +5,8 @@ import { backendState, RETRY_FIRST, retryWait, sliceIn, split, type BackendStatu
 import { mergeHistory } from "./qualify";
 import { applyQuery, type RepoFilter } from "./filters";
 import { cardChangedAt, cardFavorite, joinRepos, leadOf, type RepoCard } from "./checkouts";
-import { changedAt } from "./grouping";
-import { sectionsHidden, withZoom, zoomOf, ZOOM_MAX, ZOOM_MIN } from "./surface";
+import { changedAt, foldGroups as foldGroupList } from "./grouping";
+import { foldKeys, sectionsHidden, withZoom, zoomOf, ZOOM_MAX, ZOOM_MIN } from "./surface";
 import { termFontSize } from "./touch";
 import { isPresetId, matchProfile, type ProfileFields } from "../../src/core/screenlayouts";
 import { deviceHere, neverArranged, screenHere } from "./screenprofiles";
@@ -34,8 +34,8 @@ import {
 import { heldShellUrl, openElsewhere, openShellElsewhere, parseRoute, popOutWindow, soloUrl } from "./routes";
 import { poppedOf, poppedOut, without } from "./panes";
 import { loadSettings, saveSettings, SCREEN_SETTINGS, shellPlace, type Settings, type ShellPlace } from "./settings";
-import { clearTask, frontForTab, frontForTask, keepFront, projectFront, withSolo, type BenchPane, type Front } from "./front";
 import { TERM_FONT, PANEL_TERM_ROWS, adoptPoppedTerms, adoptTerms, loadFocusSize, loadTermTabs, needsPanelShell, nextStripTab, panelShellStart, reconcileTerms, rowsPx, termId, type FocusSize, type TermTab } from "./term";
+import { benchHolds, clearTask, frontForTab, frontForTask, keepFront, projectFront, withSolo, type BenchPane, type Front } from "./front";
 import { clientId, identity } from "./client";
 export type { TermTab } from "./term";
 import { clamp, needsAttention } from "./util";
@@ -55,6 +55,7 @@ import { flatAgent, hasRouting, NO_ROUTES } from "./agents";
 import { cleanKey, keyTestOf, readAnswerKey, writeAnswerKey, type KeyTest } from "./answerKey";
 import { listedTask } from "../../src/core/tasks";
 import { startsDev } from "./tasks";
+import { WAITING_FOLDED, WAITING_GROUPS, attentionRepos, failedRows, isUnpushed, isWaitingPanel, turnRows, type AttentionRow, type FailedRow, type TurnRow } from "./waiting";
 import { putScreen, screenNow, slotsNow, withScreen, writesFlat } from "./screens";
 import {
   DEFAULT_LAUNCH,
@@ -139,9 +140,10 @@ export function panelTermHeightFor(s: { panelTermHeights: Record<string, number>
   return s.panelTermHeights[repoId] ?? PANEL_TERM.initial;
 }
 
-/** the folded sections of one repo's panel */
-export function sectionsFor(closed: ClosedSections, repoId: string): string[] {
-  return closed[repoId] ?? DEFAULT_CLOSED;
+/** the folded sections of one repo's panel, or the groups of the "waiting
+ *  on you" panel, which folds its own until the user says otherwise */
+export function sectionsFor(closed: ClosedSections, repoId: string): readonly string[] {
+  return closed[repoId] ?? (isWaitingPanel(repoId) ? WAITING_FOLDED : DEFAULT_CLOSED);
 }
 
 /** whether `key` is folded in one repo's panel; a boolean, so a selector
@@ -163,6 +165,26 @@ export function toggleIn(closed: ClosedSections, repoId: string, key: string): C
 export function unfoldIn(closed: ClosedSections, repoId: string, key: string): ClosedSections {
   const mine = sectionsFor(closed, repoId);
   return mine.includes(key) ? { ...closed, [repoId]: mine.filter((k) => k !== key) } : closed;
+}
+
+/** `closed` with every one of `keys` folded in one repo's panel, the rest
+ *  of its folds as they were; the same object when they already are. The
+ *  entry is written out whole, since an absent one means the defaults. */
+export function foldAllIn(closed: ClosedSections, repoId: string, keys: readonly string[]): ClosedSections {
+  const mine = sectionsFor(closed, repoId);
+  const add = keys.filter((k, i) => !mine.includes(k) && keys.indexOf(k) === i);
+  if (add.length === 0 && closed[repoId] !== undefined) return closed;
+  return { ...closed, [repoId]: [...mine, ...add] };
+}
+
+/** `closed` with every one of `keys` unfolded in one repo's panel, the rest
+ *  of its folds as they were; the same object when none is folded. An
+ *  empty list is still an entry: no entry would fold the defaults again. */
+export function unfoldAllIn(closed: ClosedSections, repoId: string, keys: readonly string[]): ClosedSections {
+  const mine = sectionsFor(closed, repoId);
+  const left = mine.filter((k) => !keys.includes(k));
+  if (left.length === mine.length && closed[repoId] !== undefined) return closed;
+  return { ...closed, [repoId]: left };
 }
 
 /** the fields of `next` that are not the same value as in `before` */
@@ -579,11 +601,13 @@ export function idText(id: string): string {
   return backend ? `${plain} on ${backend}` : plain;
 }
 
-/** whether an id is one backend's */
+/** whether an id is one backend's. The "waiting on you" panel reads as a
+ *  home id but is no backend's, so no scan prunes it, nor its width or
+ *  its folds. */
 const mineOf =
   (from: string) =>
   (id: string): boolean =>
-    ownerOf(id) === from;
+    ownerOf(id) === from && !isWaitingPanel(id);
 
 /** a record by id with one backend's entries replaced by `list` */
 function recordIn<T extends { id: string }>(rec: Record<string, T>, from: string, list: readonly T[]): Record<string, T> {
@@ -935,8 +959,13 @@ interface CanopyState {
   setDrawer: (open: boolean) => void;
   /** folds or unfolds one section; the tree and the grid fold together */
   toggleGroup: (key: string) => void;
+  /** folds (`fold`) or opens every group of `keys`, the ones showing */
+  foldGroups: (keys: readonly string[], fold: boolean) => void;
   /** folds or unfolds one section (changes, shell, history, claude…) of one repo's panel */
   toggleSection: (repoId: string, key: string) => void;
+  /** folds (`fold`) or unfolds every section one repo's panel shows, its
+   *  shells too; a hidden section, or one the bench holds open, stays as it was */
+  foldSections: (repoId: string, fold: boolean) => void;
   setSoloWidth: (px: number) => void;
   setSetting: <K extends keyof Settings>(key: K, value: Settings[K]) => void;
   /** opens a new shell at a repo where the settings say: its panel, the
@@ -2384,7 +2413,8 @@ export const useStore = create<CanopyState>((set, get) => ({
   },
   popOut: (id) => {
     // the window first: a blocked popup leaves the panel where it was
-    if (!get().panels.includes(id) || !popOutWindow(id)) return;
+    // "waiting on you" is no repo's and has no window of its own
+    if (isWaitingPanel(id) || !get().panels.includes(id) || !popOutWindow(id)) return;
     get().claimPanel(id);
     // a window closed before it loads never says hello: then it comes back
     poppedOut(id);
@@ -2611,8 +2641,22 @@ export const useStore = create<CanopyState>((set, get) => ({
         ? s.collapsed.filter((k) => k !== key)
         : [...s.collapsed, key],
     })),
+  foldGroups: (keys, fold) =>
+    set((s) => {
+      const collapsed = foldGroupList(s.collapsed, keys, fold);
+      return collapsed === s.collapsed ? {} : { collapsed };
+    }),
   toggleSection: (repoId, key) =>
     set((s) => ({ closedSections: toggleIn(s.closedSections, repoId, key) })),
+  foldSections: (repoId, fold) =>
+    set((s) => {
+      // the "waiting on you" panel folds its own groups
+      const keys = isWaitingPanel(repoId)
+        ? WAITING_GROUPS
+        : foldKeys(s.settings.sectionOrder, s.settings.sectionsHidden, (k) => benchHolds(s.front, repoId, k));
+      const closedSections = (fold ? foldAllIn : unfoldAllIn)(s.closedSections, repoId, keys);
+      return closedSections === s.closedSections ? {} : { closedSections };
+    }),
   setSoloWidth: (px) => set({ soloWidth: clamp(px, SOLO.min, SOLO.max) }),
   setSetting: (key, value) =>
     set((s) => {
@@ -3006,7 +3050,7 @@ export const useStore = create<CanopyState>((set, get) => ({
   setFocusSize: (size) => set({ focusSize: size }),
   setFront: (front) => set({ front }),
   bringProject: (repoId) =>
-    set((s) => (repoId === null ? { front: null } : { ...dockPanel(s, repoId), front: projectFront(repoId) })),
+    set((s) => (repoId === null ? { front: null } : isWaitingPanel(repoId) ? {} : { ...dockPanel(s, repoId), front: projectFront(repoId) })),
   soloBench: (repoId, pane) =>
     set((s) => {
       const front = withSolo(s.front, repoId, pane);
@@ -3745,6 +3789,54 @@ export function inboxItems(s: CanopyState): InboxItem[] {
   });
   return inboxOut;
 }
+
+let attentionIn: { repos: Repo[]; settings: Settings; ws: string | null; workspaces: Workspace[] } | null = null;
+let attentionOut: AttentionRow[] = [];
+
+/** The repos in scope that need you, the most pressing first, for the
+ *  "waiting on you" panel; worked out once per change of what it reads. */
+export function attentionItems(s: CanopyState): AttentionRow[] {
+  const a = attentionIn;
+  if (a && a.repos === s.repos && a.settings === s.settings && a.ws === s.activeWs && a.workspaces === s.workspaces) return attentionOut;
+  attentionIn = { repos: s.repos, settings: s.settings, ws: s.activeWs, workspaces: s.workspaces };
+  attentionOut = attentionRepos(scopedRepos(s));
+  return attentionOut;
+}
+
+let failedIn: { runs: Record<string, Run>; flowRuns: Record<string, string>; tasks: TaskInfo[] } | null = null;
+let failedOut: FailedRow[] = [];
+
+/** The runs and tasks that failed, newest first, for the same panel. */
+export function failedItems(s: CanopyState): FailedRow[] {
+  const f = failedIn;
+  if (f && f.runs === s.runs && f.flowRuns === s.flowRuns && f.tasks === s.taskAll) return failedOut;
+  failedIn = { runs: s.runs, flowRuns: s.flowRuns, tasks: s.taskAll };
+  failedOut = failedRows(Object.values(s.runs), s.flowRuns, s.taskAll);
+  return failedOut;
+}
+
+let turnIn: {
+  runs: Record<string, Run>;
+  flowRuns: Record<string, string>;
+  registry: Record<string, AgentCard>;
+  asks: Record<string, Ask>;
+  repos: Repo[];
+} | null = null;
+let turnOut: TurnRow[] = [];
+
+/** The chats and terminal agents whose turn it is, for the same panel. */
+export function turnItems(s: CanopyState): TurnRow[] {
+  const t = turnIn;
+  if (t && t.runs === s.runs && t.flowRuns === s.flowRuns && t.registry === s.registry && t.asks === s.asks && t.repos === s.repos) return turnOut;
+  turnIn = { runs: s.runs, flowRuns: s.flowRuns, registry: s.registry, asks: s.asks, repos: s.repos };
+  turnOut = turnRows(Object.values(s.runs), s.flowRuns, Object.values(s.registry), Object.values(s.asks), s.repos);
+  return turnOut;
+}
+
+/** how many things in the "waiting on you" panel need you now: everything
+ *  it lists but the unpushed commits, which can wait */
+export const waitingCount = (s: CanopyState): number =>
+  turnItems(s).length + inboxItems(s).length + attentionItems(s).filter((r) => !isUnpushed(r)).length + failedItems(s).length;
 
 /** The card a checkout is on, whichever checkout of it. */
 export function cardOf(s: CanopyState, repoId: string): RepoCard | undefined {

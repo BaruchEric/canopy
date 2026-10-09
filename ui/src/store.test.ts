@@ -24,7 +24,9 @@ import {
   scopedRepos,
   sectionsFor,
   setRetryFirst,
+  foldAllIn,
   toggleIn,
+  unfoldAllIn,
   unfoldIn,
   useStore,
   visibleCards,
@@ -37,6 +39,7 @@ import { projectFront } from "./front";
 import { onBackendSignal } from "./api";
 import { setBase, setRegistry } from "./registry";
 import { hasOtherBackend, RETRY_FIRST } from "./backends";
+import { WAITING_PANEL } from "./waiting";
 import {
   DEFAULT_AGENT,
   type AgentCard,
@@ -84,6 +87,8 @@ describe("per-repo folds", () => {
     const one = toggleIn({}, "a", "history");
     expect(sectionsFor(one, "a")).toEqual(["search", "claude", "launch", "peers", "preview", "agents"]);
     expect(sectionsFor(one, "b")).toEqual(["search", "history", "claude", "launch", "peers", "preview", "agents"]);
+    // the "waiting on you" panel starts with its unpushed repos folded
+    expect(sectionsFor({}, WAITING_PANEL)).toEqual(["unpushed"]);
     const two = toggleIn(one, "a", "changes");
     expect(closedIn({ closedSections: two }, "a", "changes")).toBe(true);
     expect(closedIn({ closedSections: two }, "b", "changes")).toBe(false);
@@ -93,6 +98,25 @@ describe("per-repo folds", () => {
     expect(unfoldIn(closed, "a", "history")).toBe(closed);
     expect(sectionsFor(unfoldIn(closed, "a", "search"), "a")).toEqual([]);
     expect(sectionsFor(unfoldIn({}, "b", "launch"), "b")).toEqual(["search", "history", "claude", "peers", "preview", "agents"]);
+  });
+  test("folding every section keeps the other folds and writes the entry out", () => {
+    const keys = ["changes", "tasks", "search", "shell"];
+    const all = foldAllIn({}, "a", keys);
+    // the defaults stay folded, and the new keys join them once each
+    expect(sectionsFor(all, "a")).toEqual(["search", "history", "claude", "launch", "peers", "preview", "agents", "changes", "tasks", "shell"]);
+    expect(all["b"]).toBeUndefined();
+    expect(foldAllIn(all, "a", keys)).toBe(all);
+    // an absent entry folded to exactly the defaults is still written out
+    expect(foldAllIn({}, "c", ["search"])).toEqual({ c: ["search", "history", "claude", "launch", "peers", "preview", "agents"] });
+  });
+  test("unfolding every section leaves an empty list, not a missing entry", () => {
+    const keys = ["changes", "search", "history", "claude", "launch", "peers", "preview", "agents", "tasks", "shell"];
+    const none = unfoldAllIn({}, "a", keys);
+    expect(none).toEqual({ a: [] });
+    expect(closedIn({ closedSections: none }, "a", "search")).toBe(false);
+    expect(unfoldAllIn(none, "a", keys)).toBe(none);
+    // a key left out (hidden, or held by the bench) keeps its fold
+    expect(sectionsFor(unfoldAllIn({ a: ["search", "preview"] }, "a", ["search"]), "a")).toEqual(["preview"]);
   });
 });
 
@@ -1132,6 +1156,27 @@ describe("several backends", () => {
     expect(s.activePanel).toBe("proj");
     expect(s.repos.map((r) => r.id)).toEqual(["proj"]);
     expect(s.root).toBe("/a");
+  });
+
+  test("a home scan keeps the waiting on you panel, its width and its folds, and it never pops out", async () => {
+    await start(backendAnswers(scanOf("/a", [repo("proj")]), [], { "/api/backends": twoBackends }), backendAnswers(scanOf("/b", [repo("proj")]), []));
+    await settle();
+    useStore.getState().openPanel("proj");
+    useStore.getState().openPanel(WAITING_PANEL);
+    useStore.getState().foldSections(WAITING_PANEL, true);
+    useStore.setState((s) => ({ panelWidths: { ...s.panelWidths, [WAITING_PANEL]: 600 } }));
+    useStore.getState().applyEvent({ type: "scan", result: { ...scanOf("/a", [repo("proj")]), scannedAt: 3 } });
+    let s = useStore.getState();
+    expect(s.panels).toContain(WAITING_PANEL);
+    expect(s.panelWidths[WAITING_PANEL]).toBe(600);
+    expect(sectionsFor(s.closedSections, WAITING_PANEL)).toEqual(expect.arrayContaining(["inbox", "repos", "failed"]));
+    useStore.getState().popOut(WAITING_PANEL);
+    useStore.getState().bringProject(WAITING_PANEL);
+    s = useStore.getState();
+    expect(s.panels).toContain(WAITING_PANEL);
+    expect(s.front).toBeNull();
+    useStore.getState().closePanel(WAITING_PANEL);
+    expect(useStore.getState().panels).not.toContain(WAITING_PANEL);
   });
 
   test("a repo leaving the scan drops its popped slot, and only that backend's", async () => {

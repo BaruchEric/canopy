@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import type { Repo, RepoStatus } from "../../src/core/types";
-import { changedAt, groupRepos, newestEdit } from "./grouping";
+import { changedAt, foldGroups, groupRepos, newestEdit } from "./grouping";
 
 const NOW = 1_800_000_000;
 const DAY = 86_400;
@@ -201,5 +201,19 @@ describe("groupRepos", () => {
     for (const mode of ["recent", "folder", "activity", "name", "user", "favorites"] as const) {
       expect(groupRepos([], mode, NOW)).toEqual([]);
     }
+  });
+});
+
+describe("foldGroups", () => {
+  test("folds every key once, keeping the ones already folded", () => {
+    expect(foldGroups(["recent:old"], ["recent:today", "recent:old", "recent:today"], true)).toEqual(["recent:old", "recent:today"]);
+  });
+  test("opens only the keys it is given, so another mode's folds stay", () => {
+    expect(foldGroups(["folder:a", "recent:old", "recent:today"], ["recent:old", "recent:today"], false)).toEqual(["folder:a"]);
+  });
+  test("the same array when nothing changes", () => {
+    const folded = ["recent:old"];
+    expect(foldGroups(folded, ["recent:old"], true)).toBe(folded);
+    expect(foldGroups(folded, ["recent:today"], false)).toBe(folded);
   });
 });

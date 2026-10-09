@@ -106,6 +106,7 @@ const KEYS = [
   ["f", "filters"],
   ["s", "next grouping"],
   ["[", "hide or show the repo tree"],
+  ["w", "waiting on you, in a dock panel"],
   ["esc", "clear the filter"],
 ] as const;
 
@@ -179,6 +180,10 @@ export function SettingsMenu() {
             <button type="button" className="mini" onClick={() => setSetting("onboarded", false)}>
               show the tour again
             </button>
+            <label className="settings-line">
+              <input type="checkbox" checked={settings.panelClose} onChange={(e) => setSetting("panelClose", e.target.checked)} />
+              close buttons: a docked panel's ✕, its tab's × and a middle click on the tab
+            </label>
             {screen && (
               <p className="settings-hint">
                 Widths, heights, zoom, font sizes and what each gear sets are kept by device, by kind of screen (phone, tablet,

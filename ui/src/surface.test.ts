@@ -21,6 +21,7 @@ import {
   tidyLines,
   copiedWord,
   FULLSCREEN_NOTE,
+  foldKeys,
   shellCopyOf,
   toggleHidden,
   withFrontZoom,
@@ -259,5 +260,14 @@ describe("a popover's Escape", () => {
   test("what keeps the page's own keys (the drawer's Escape, select mode, n) is the same less the drawer, the tour left out", () => {
     expect(OVER_PAGE.split(",").map((s) => s.trim())).toEqual(['[role="dialog"]:not(.tour)', '[role="menu"]']);
     expect(LAYER_ABOVE).toBe(`${OVER_PAGE}, .sidebar.drawer`);
+  });
+});
+
+describe("foldKeys", () => {
+  test("the shown sections in order, then the shells", () => {
+    expect(foldKeys(["changes", "search", "history"], [])).toEqual(["changes", "search", "history", "shell"]);
+  });
+  test("a hidden section and one held open are left out", () => {
+    expect(foldKeys(["changes", "search", "preview"], ["search"], (k) => k === "preview" || k === "shell")).toEqual(["changes"]);
   });
 });

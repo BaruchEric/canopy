@@ -2,7 +2,8 @@ import { useEffect, useRef, useState, type ReactNode } from "react";
 import { useShallow } from "zustand/react/shallow";
 import { api } from "../api";
 import { ownRun } from "../flows";
-import { allRuns, attentionCount, capsFor, homeConn, pickedIds, useStore } from "../store";
+import { allRuns, attentionCount, capsFor, homeConn, pickedIds, useStore, waitingCount } from "../store";
+import { WAITING_GLYPH, WAITING_PANEL } from "../waiting";
 import { onBeat } from "../live";
 import { NARROW, PHONE, useMedia } from "../media";
 import { effectivePrimary, isRunActive, WS_COLORS, type RunAction, type Workspace } from "../../../src/core/types";
@@ -501,6 +502,26 @@ function RescanButton() {
   );
 }
 
+/** Opens the "waiting on you" panel in the dock, or brings it forward when
+ *  it is open: everything that needs you in one place, counted beside its
+ *  flag as the inbox chip counts its own. `w` does the same. */
+function WaitingButton() {
+  const openPanel = useStore((s) => s.openPanel);
+  const open = useStore((s) => s.panels.includes(WAITING_PANEL));
+  const count = useStore(waitingCount);
+  return (
+    <button
+      type="button"
+      className={open ? "mini waiting-btn on" : "mini waiting-btn"}
+      aria-label={`Waiting on you, ${count} ${count === 1 ? "thing" : "things"}`}
+      title={`Waiting on you (w): asks, prompts, gates, the repos that need you and what failed, ${count} in all, in a dock panel`}
+      onClick={() => openPanel(WAITING_PANEL)}
+    >
+      <span aria-hidden="true">{WAITING_GLYPH}</span> {count || ""}
+    </button>
+  );
+}
+
 /** Who else is here and what is running: each chip is absent when it has
  *  nothing to say. A phone keeps the tasks' chip and the inbox on its first
  *  row instead, where a thumb finds them without scrolling. */
@@ -514,6 +535,7 @@ function Chips({ phone = false }: { phone?: boolean }) {
       {!phone && <TasksChip />}
       <DevicesChip />
       {!phone && <InboxChip />}
+      {!phone && <WaitingButton />}
       <ChanChip />
     </>
   );
@@ -539,6 +561,7 @@ export function TopBar({ nav }: { nav?: ReactNode }) {
               under this one go: it brings a task to the front from anywhere */}
           <TasksChip />
           <InboxChip />
+          <WaitingButton />
           <LiveDot />
           <SearchButton />
           <SettingsMenu />

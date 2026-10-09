@@ -8,7 +8,7 @@ import { boardChangedAt, boardFavorite, cardOf, isFavorite, idText, multi, useSt
 import { backendOf } from "../registry";
 import { GLYPH, stateOf } from "../util";
 import { GroupHead } from "./GroupHead";
-import { WidgetGear, shareEntries, useZoom, zoomStyle } from "./Surface";
+import { WidgetGear, shareEntries, useGroupFolds, useZoom, zoomStyle } from "./Surface";
 import { Tick } from "./SelectBar";
 import type { Repo } from "../../../src/core/types";
 
@@ -124,6 +124,10 @@ export function Sidebar({ drawer = false }: { drawer?: boolean }) {
       ),
     [repos, cards, many, sort],
   );
+  // the groups showing, which the gear's and Alt+click's folds act on
+  const shownKeys = groups.map((g) => sectionKey(sort, g.key));
+  const folds = useGroupFolds(shownKeys);
+  const foldGroups = useStore((s) => s.foldGroups);
 
   return (
     <aside
@@ -156,12 +160,14 @@ export function Sidebar({ drawer = false }: { drawer?: boolean }) {
               hint={hint}
               open={open}
               onToggle={() => toggleGroup(id)}
+              onToggleAll={() => foldGroups(shownKeys, open)}
             >
               {i === 0 && (
                 <WidgetGear
                   label="the repo tree"
                   what="repo tree"
                   zoom={zoomEntry}
+                  extra={folds}
                   share={shareEntries({ el: () => box.current, label: "repos" })}
                 />
               )}

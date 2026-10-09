@@ -27,7 +27,7 @@ export const isSectionKey = (v: unknown): v is SectionKey =>
 /** the surfaces with a zoom of their own; the shells zoom through the
  *  terminal's font size instead, since css zoom on an xterm puts its mouse
  *  and selection off by the factor */
-export const ZOOM_KINDS = ["panel", ...SECTION_KEYS, "feed", "inbox", "sidebar", "board", "agents", "incubator", "library"] as const;
+export const ZOOM_KINDS = ["panel", ...SECTION_KEYS, "feed", "inbox", "waiting", "sidebar", "board", "agents", "incubator", "library"] as const;
 export type ZoomKind = (typeof ZOOM_KINDS)[number];
 export type Zooms = Partial<Record<ZoomKind, number>>;
 
@@ -115,6 +115,14 @@ export function moveSection(order: SectionKey[], key: SectionKey, by: 1 | -1): S
   next[i] = order[j] as SectionKey;
   next[j] = key;
   return next;
+}
+
+/** What "fold every section" folds in a panel, top to bottom: the sections
+ *  it shows, then its shells, which fold under the key "shell" though they
+ *  are not a section. A hidden section is left out, and so is one `held`
+ *  open (the project's bench holds its parts), whose fold does nothing. */
+export function foldKeys(order: readonly SectionKey[], hidden: readonly SectionKey[], held: (key: string) => boolean = () => false): string[] {
+  return [...order.filter((k) => !hidden.includes(k)), "shell"].filter((k) => !held(k));
 }
 
 /** `hidden` with `key` shown or hidden */

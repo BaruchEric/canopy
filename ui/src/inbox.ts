@@ -402,10 +402,10 @@ export function scopeOffers(item: Pick<InboxItem, "flowStep" | "repo" | "repoPat
   ];
 }
 
-/** what the chip says on the tooltip: "2 waiting on you: …" */
+/** what the chip says on the tooltip: "2 in the inbox: …" */
 export function inboxTitle(items: readonly InboxItem[]): string {
-  if (items.length === 0) return "Nothing is waiting on you";
-  return [`${items.length} waiting on you`, ...items.slice(0, 5).map((i) => `${i.who}${i.repo ? ` in ${i.repo}` : ""}: ${i.title}`)].join("\n");
+  if (items.length === 0) return "The inbox is empty";
+  return [`${items.length} in the inbox`, ...items.slice(0, 5).map((i) => `${i.who}${i.repo ? ` in ${i.repo}` : ""}: ${i.title}`)].join("\n");
 }
 
 /** Asks held by id with `incoming` laid over them and `gone` dropped; an

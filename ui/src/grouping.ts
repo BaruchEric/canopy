@@ -126,6 +126,17 @@ function ageKey(at: number, now: number): string {
 export const sectionKey = (mode: SortMode, key: string): string =>
   `${mode}:${key}`;
 
+/** `collapsed` with every one of `keys` folded (`fold`) or open, every other
+ *  key as it was; the same array when nothing changes */
+export function foldGroups(collapsed: string[], keys: readonly string[], fold: boolean): string[] {
+  if (fold) {
+    const add = keys.filter((k, i) => !collapsed.includes(k) && keys.indexOf(k) === i);
+    return add.length ? [...collapsed, ...add] : collapsed;
+  }
+  const left = collapsed.filter((k) => !keys.includes(k));
+  return left.length === collapsed.length ? collapsed : left;
+}
+
 /**
  * Groups already-filtered repos for the tree and the grid. Both views call
  * this with the same mode, so a heading in one is the same heading in the

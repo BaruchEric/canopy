@@ -27,11 +27,15 @@ import {
   idText,
   multi,
   runFor,
+  sectionsFor,
   tasksOf,
   useStore,
   dockless,
+  waitingCount,
 } from "../store";
-import { benchIs, benchSolo } from "../front";
+import { WAITING_GLYPH, WAITING_GROUPS, WAITING_PANEL, isWaitingPanel } from "../waiting";
+import { WaitingBody } from "./Waiting";
+import { benchHolds, benchIs, benchSolo } from "../front";
 import { devTask } from "../tasks";
 import { devState } from "../guided";
 import { BENCH_ONE, BenchBar, BenchSeams, type BenchPane } from "./Bench";
@@ -74,7 +78,7 @@ import {
   useZoom,
   zoomStyle,
 } from "./Surface";
-import { SECTION_WORD, moveSection, toggleHidden, type SectionKey, type SurfaceMode } from "../surface";
+import { SECTION_WORD, foldKeys, moveSection, toggleHidden, type SectionKey, type SurfaceMode } from "../surface";
 import { openElsewhere, soloUrl } from "../routes";
 import { enterFull, fullWord, leaveFull, lockEscape, unlockKeys, useFullscreenExit } from "../fullscreen";
 import { copyText } from "../share";
@@ -1003,6 +1007,41 @@ export function PanelSection({ k, repo }: { k: SectionKey; repo: Repo }) {
   }
 }
 
+/** A gear's "move left" and "move right" for panel `id`, each run dry
+ *  first, so it is greyed out where it would do nothing. */
+function stepEntries(id: string, panels: string[], layout: DockLayout, movePanel: (id: string, to: number) => void): GearEntry[] {
+  const at = panels.indexOf(id);
+  return [
+    {
+      type: "item",
+      label: "move left",
+      run: () => movePanel(id, at - 1),
+      off: stepPanel(layout, id, at - 1) ? undefined : at <= 0 ? "already first" : "no further left from here",
+    },
+    {
+      type: "item",
+      label: "move right",
+      run: () => movePanel(id, at + 1),
+      off: stepPanel(layout, id, at + 1) ? undefined : at >= panels.length - 1 ? "already last" : "no further right from here",
+    },
+  ];
+}
+
+/** The gear line that turns the docked panels' close controls on or off.
+ *  It lives in every docked panel's gear, so turning them off is never a
+ *  one-way trip. */
+function closeEntry(on: boolean, setSetting: (key: "panelClose", value: boolean) => void): GearEntry {
+  return {
+    type: "item",
+    label: "close buttons",
+    on,
+    title: on
+      ? "Every docked panel can be closed: its ✕, its tab's × and a middle click on the tab. Pick to take them away"
+      : "Off: no docked panel closes, so none goes by accident. Pick to bring the close buttons back",
+    run: () => setSetting("panelClose", !on),
+  };
+}
+
 /** The panel's gear: its zoom, how it sits, the dock's layout, its
  *  sections' order and which show, and sharing it. */
 function PanelGear({
@@ -1038,7 +1077,7 @@ function PanelGear({
   const arrangeDock = useStore((s) => s.arrangeDock);
   const popOut = useStore((s) => s.popOut);
   const carousel = useStore((s) => s.settings.dockCarousel);
-  const at = panels.indexOf(repo.id);
+  const panelClose = useStore((s) => s.settings.panelClose);
   // a phone's dock stays as it was, without the moves, the carousel or
   // pop out
   const phone = useMedia(PHONE);
@@ -1056,18 +1095,7 @@ function PanelGear({
     ? []
     : [
         { type: "item", label: "carousel", on: carousel, run: () => setSetting("dockCarousel", !carousel) },
-        {
-          type: "item",
-          label: "move left",
-          run: () => movePanel(repo.id, at - 1),
-          off: stepPanel(dockLayout, repo.id, at - 1) ? undefined : at <= 0 ? "already first" : "no further left from here",
-        },
-        {
-          type: "item",
-          label: "move right",
-          run: () => movePanel(repo.id, at + 1),
-          off: stepPanel(dockLayout, repo.id, at + 1) ? undefined : at >= panels.length - 1 ? "already last" : "no further right from here",
-        },
+        ...stepEntries(repo.id, panels, dockLayout, movePanel),
         dropEntry("split below the panel on the left", drops.splitLeft, "no column on the left"),
         dropEntry("move to a new column", drops.newColumn, "already a column of its own"),
         dropEntry("join the cell on the left", drops.joinLeft, "no column on the left"),
@@ -1092,6 +1120,7 @@ function PanelGear({
         ...moves,
         { type: "item", label: "open in a new tab", run: () => openElsewhere(repo.id, "tab") },
         ...moreWindows,
+        closeEntry(panelClose, setSetting),
       ] satisfies GearEntry[]),
     { type: "item", label: "intermediate panel", on: level === "intermediate", run: () => setSetting("level", "intermediate") },
     { type: "item", label: "advanced panel", on: level === "advanced", run: () => setSetting("level", "advanced") },
@@ -1104,13 +1133,35 @@ function PanelGear({
     up: i > 0 ? () => setSetting("sectionOrder", moveSection(order, k, -1)) : null,
     down: i < order.length - 1 ? () => setSetting("sectionOrder", moveSection(order, k, 1)) : null,
   }));
+  // Folds are this repo's own, unlike the rows above: every section this
+  // panel shows and its shells, less what the bench holds open.
+  const folds = useStore((s) => sectionsFor(s.closedSections, repo.id));
+  const front = useStore((s) => s.front);
+  const foldSections = useStore((s) => s.foldSections);
+  const foldable = foldKeys(order, hidden, (k) => benchHolds(front, repo.id, k));
+  const foldAll: GearEntry[] = [
+    {
+      type: "item",
+      label: `fold every section of ${repo.name}`,
+      title: "This panel's folds only; the other panels keep theirs",
+      run: () => foldSections(repo.id, true),
+      off: foldable.every((k) => folds.includes(k)) ? "every section here is folded" : undefined,
+    },
+    {
+      type: "item",
+      label: `unfold every section of ${repo.name}`,
+      title: "This panel's folds only; the other panels keep theirs",
+      run: () => foldSections(repo.id, false),
+      off: foldable.some((k) => folds.includes(k)) ? undefined : "every section here is open",
+    },
+  ];
   return (
     <Gear
       label={repo.name}
       groups={[
         { label: "panel · every one", entries: [zoom] },
         { label: "layout", entries: layout },
-        { label: "sections · every panel", entries: rows },
+        { label: "sections · every panel", entries: [...rows, ...foldAll] },
         {
           label: "share",
           entries: [
@@ -1606,7 +1657,8 @@ function PanelWaiting({
   cell?: string;
   strip?: boolean;
   movable?: boolean;
-  onClose: () => void;
+  /** none while the panel close setting is off */
+  onClose?: () => void;
 }) {
   const [b, plain] = idParts(id);
   const conn = useStore((s) => connOf(s, b));
@@ -1632,9 +1684,11 @@ function PanelWaiting({
             <span className="backend-word">{b}</span>
           </span>
           <span className="spacer" />
-          <button type="button" className="mini close" onClick={onClose} aria-label={`Close ${plain}`}>
-            ✕
-          </button>
+          {onClose && (
+            <button type="button" className="mini close" onClick={onClose} aria-label={`Close ${plain}`}>
+              ✕
+            </button>
+          )}
         </header>
         <p className="panel-away" role="status">
           {!shown ? (
@@ -1654,6 +1708,138 @@ function PanelWaiting({
             />
           )}
         </p>
+      </div>
+    </section>
+  );
+}
+
+const WAITING_NAME = "waiting on you";
+
+/** a panel's name for a label: its repo's id, or the waiting panel's name */
+const panelText = (id: string): string => (isWaitingPanel(id) ? WAITING_NAME : idText(id));
+
+/** The gear of the "waiting on you" panel: its zoom, the dock's layout and
+ *  moves, the close setting, folding its groups, and sharing it. No pop
+ *  out, new tab or bench: those are a repo's. */
+function WaitingGear({ zoom, body }: { zoom: GearEntry; body: () => HTMLElement | null }) {
+  const arranged = useStore(arrangementOf);
+  const arrangeDock = useStore((s) => s.arrangeDock);
+  const setSetting = useStore((s) => s.setSetting);
+  const carousel = useStore((s) => s.settings.dockCarousel);
+  const panelClose = useStore((s) => s.settings.panelClose);
+  const panels = useStore((s) => s.panels);
+  const dockLayout = useStore((s) => s.dockLayout);
+  const movePanel = useStore((s) => s.movePanel);
+  const folds = useStore((s) => sectionsFor(s.closedSections, WAITING_PANEL));
+  const foldSections = useStore((s) => s.foldSections);
+  const phone = useMedia(PHONE);
+  const layout: GearEntry[] = [
+    { type: "item", label: "panels side by side", on: arranged === "columns", run: () => arrangeDock("columns"), title: ARRANGE_TITLE },
+    { type: "item", label: "panels as tabs", on: arranged === "tabs", run: () => arrangeDock("tabs"), title: ARRANGE_TITLE },
+    ...(phone
+      ? []
+      : ([
+          { type: "item", label: "carousel", on: carousel, run: () => setSetting("dockCarousel", !carousel) },
+          ...stepEntries(WAITING_PANEL, panels, dockLayout, movePanel),
+        ] satisfies GearEntry[])),
+    closeEntry(panelClose, setSetting),
+  ];
+  return (
+    <Gear
+      label={WAITING_NAME}
+      groups={[
+        { label: WAITING_NAME, entries: [zoom] },
+        { label: "layout", entries: layout },
+        {
+          label: "groups",
+          entries: [
+            {
+              type: "item",
+              label: "fold every group",
+              title: "Alt+click on a group's name does this too",
+              run: () => foldSections(WAITING_PANEL, true),
+              off: WAITING_GROUPS.every((k) => folds.includes(k)) ? "every group is folded" : undefined,
+            },
+            {
+              type: "item",
+              label: "unfold every group",
+              title: "Alt+click on a group's name does this too",
+              run: () => foldSections(WAITING_PANEL, false),
+              off: WAITING_GROUPS.some((k) => folds.includes(k)) ? undefined : "every group is open",
+            },
+          ],
+        },
+        { label: "share", entries: shareEntries({ el: body, label: WAITING_NAME }) },
+      ]}
+    />
+  );
+}
+
+/** The "waiting on you" panel (`WAITING_PANEL`), the one dock panel that
+ *  is no repo's: everything that needs you, in one place. It tabs, moves
+ *  and sizes like a repo's panel and obeys the close setting. */
+function WaitingPanel({
+  hidden,
+  order,
+  area,
+  cell,
+  strip,
+  movable,
+}: {
+  hidden?: boolean;
+  order?: number;
+  area?: string;
+  cell?: string;
+  strip?: boolean;
+  movable?: boolean;
+}) {
+  const id = WAITING_PANEL;
+  const count = useStore(waitingCount);
+  const closable = useStore((s) => s.settings.panelClose);
+  const closePanel = useStore((s) => s.closePanel);
+  const wasTab = useWasTab(strip);
+  const box = useRef<HTMLElement>(null);
+  const bodyRef = useRef<HTMLDivElement>(null);
+  const { zoom, entry: zoomEntry } = useZoom("waiting");
+  // brought into the row's sight when it comes forward, as a repo's panel is
+  const forward = useStore((s) => s.activePanel === id);
+  const sideBySide = (area !== undefined && !hidden) || order !== undefined;
+  useEffect(() => {
+    if (!forward || !sideBySide) return;
+    const frame = requestAnimationFrame(() => revealHead(box.current?.querySelector(".panel-head") ?? null));
+    return () => cancelAnimationFrame(frame);
+  }, [forward, sideBySide, area]);
+  return (
+    <section
+      ref={box}
+      className={`panel waiting-panel${strip ? " has-strip" : ""}${wasTab ? " was-tab" : ""}`}
+      aria-label={WAITING_NAME}
+      hidden={hidden}
+      data-cell={cell}
+      style={{ order, gridArea: area }}
+    >
+      <div className="panel-body">
+        <header className="panel-head" {...panelHead(id, WAITING_NAME, movable)}>
+          <span className="glyph" {...(movable && dragHandle(id, WAITING_NAME))}>
+            {WAITING_GLYPH}
+          </span>
+          <span className="panel-name" {...(movable && dragHandle(id, WAITING_NAME))}>
+            {WAITING_NAME}
+          </span>
+          <span className="waiting-count" aria-label={`${count} ${count === 1 ? "thing" : "things"}`}>
+            {count}
+          </span>
+          <span className="spacer" />
+          <WaitingGear zoom={zoomEntry} body={() => bodyRef.current} />
+          {closable && (
+            <button type="button" className="mini close" onClick={() => closePanel(id)} aria-label={`Close ${WAITING_NAME}`}>
+              ✕
+            </button>
+          )}
+        </header>
+        <div className="waiting-body" ref={bodyRef} style={zoomStyle(zoom)}>
+          <WaitingBody hidden={hidden} />
+        </div>
       </div>
     </section>
   );
@@ -1720,6 +1906,8 @@ export function RepoPanel({
     [],
   );
   const closePanel = onClose ? (_id: string) => onClose() : unpin;
+  // the close setting is the dock's; a window of its own keeps its close
+  const closable = useStore((s) => s.settings.panelClose) || onClose !== undefined;
   const [busy, setBusy] = useState<string | null>(null);
   // A pull or push says how it went under its own row; a commit's result
   // shows under the commit box, in the changes section.
@@ -1882,7 +2070,7 @@ export function RepoPanel({
         cell={cell}
         strip={strip}
         movable={movable}
-        onClose={() => closePanel(id)}
+        onClose={closable ? () => closePanel(id) : undefined}
       />
     );
   }
@@ -1971,14 +2159,16 @@ export function RepoPanel({
         )}
         <PanelGear repo={repo} mode={mode} setMode={setMode} body={() => bodyRef.current} solo={solo} screen={screen} toggleScreen={toggleScreen} />
         {!guided && <RepoMenu repo={repo} onError={showError} />}
-        <button
-          type="button"
-          className="mini close"
-          onClick={() => closePanel(id)}
-          aria-label={`Close ${repo.name}`}
-        >
-          ✕
-        </button>
+        {closable && (
+          <button
+            type="button"
+            className="mini close"
+            onClick={() => closePanel(id)}
+            aria-label={`Close ${repo.name}`}
+          >
+            ✕
+          </button>
+        )}
       </header>
 
       {guided ? (
@@ -2156,6 +2346,7 @@ function CellStrip({
   const repos = useStore((s) => s.repos);
   const showPanel = useStore((s) => s.showPanel);
   const closePanel = useStore((s) => s.closePanel);
+  const closable = useStore((s) => s.settings.panelClose);
   const strip = useRef<HTMLDivElement>(null);
   // The tabs follow `panels`, so a move by keys reorders their nodes and the
   // browser drops the focus from the moved one; it is given back here.
@@ -2198,10 +2389,13 @@ function CellStrip({
     >
       {panels.map((id) => {
         const repo = repos.find((r) => r.id === id);
-        // another machine's panel that is waiting for it keeps its tab
-        if (!repo && idParts(id)[0] === homeName()) return null;
+        // "waiting on you" is no repo's and keeps its tab, as another
+        // machine's panel that is waiting for it does
+        const waiting = isWaitingPanel(id);
+        if (!repo && !waiting && idParts(id)[0] === homeName()) return null;
         const on = id === active;
         const state = repo ? stateOf(repo) : "clean";
+        const name = waiting ? WAITING_NAME : (repo?.name ?? idText(id));
         return (
           <div
             key={id}
@@ -2209,15 +2403,15 @@ function CellStrip({
             tabIndex={on ? 0 : -1}
             aria-selected={on}
             data-id={id}
-            className={`dock-tab s-${state}${on ? " on" : ""}${repo ? "" : " waiting"}`}
-            title={repo?.path ?? idText(id)}
+            className={`dock-tab s-${state}${on ? " on" : ""}${repo || waiting ? "" : " waiting"}`}
+            title={repo?.path ?? name}
             onClick={() => showPanel(id)}
-            // middle click closes, as browser tabs do
+            // middle click closes, as browser tabs do, while panels close
             onAuxClick={(e) => {
-              if (e.button === 1) closePanel(id);
+              if (e.button === 1 && closable) closePanel(id);
             }}
             {...(movable && {
-              ...dragHandle(id, repo?.name ?? idText(id)),
+              ...dragHandle(id, name),
               "aria-keyshortcuts": "Alt+Shift+ArrowLeft Alt+Shift+ArrowRight",
             })}
             onKeyDown={(e) => {
@@ -2237,23 +2431,25 @@ function CellStrip({
             }}
           >
             <span className="glyph" aria-hidden="true">
-              {GLYPH[state]}
+              {waiting ? WAITING_GLYPH : GLYPH[state]}
             </span>
             <span className="dock-tab-name">
-              <IdLabel id={id} />
+              {waiting ? name : <IdLabel id={id} />}
             </span>
-            <button
-              type="button"
-              className="term-x"
-              aria-label={`Close the ${repo?.name ?? idText(id)} tab`}
-              title="close"
-              onClick={(e) => {
-                e.stopPropagation();
-                closePanel(id);
-              }}
-            >
-              ×
-            </button>
+            {closable && (
+              <button
+                type="button"
+                className="term-x"
+                aria-label={`Close the ${name} tab`}
+                title="close"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  closePanel(id);
+                }}
+              >
+                ×
+              </button>
+            )}
           </div>
         );
       })}
@@ -2601,6 +2797,10 @@ export function Dock() {
     >
       {stableOrder(panels).map((id) => {
         const p = placed[id];
+        // the one panel that is no repo's
+        if (isWaitingPanel(id)) {
+          return <WaitingPanel key={id} area={p?.area} cell={p?.cell} order={p?.order} hidden={p?.hidden} strip={p?.strip} movable={movable} />;
+        }
         return (
           <RepoPanel
             key={id}
@@ -2623,7 +2823,7 @@ export function Dock() {
             panels={tabs}
             active={on}
             movable={movable}
-            label={`Tabs with ${idText(on)} showing`}
+            label={`Tabs with ${panelText(on)} showing`}
           />
         ))}
       {phoneTabs && <CellStrip panels={phoneStrip} active={showing ?? null} movable={false} label="Open repos" />}
@@ -2637,7 +2837,7 @@ export function Dock() {
               key={column}
               className="panel-resizer seam-col"
               style={{ gridArea: area }}
-              label={lead ? `Width of the ${idText(lead)} column` : "Width of the column"}
+              label={lead ? `Width of the ${panelText(lead)} column` : "Width of the column"}
               value={col?.width ?? PANEL.initial}
               min={PANEL.min}
               max={PANEL.max}

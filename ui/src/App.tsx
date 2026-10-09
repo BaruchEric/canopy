@@ -20,6 +20,7 @@ import { OVER_PAGE } from "./surface";
 import { dropAskHere, parseRoute } from "./routes";
 import { SORT_MODES, type Theme } from "./settings";
 import { SIDEBAR, dockless, useStore } from "./store";
+import { WAITING_PANEL } from "./waiting";
 
 const route = parseRoute(window.location.search);
 
@@ -283,6 +284,9 @@ export function App() {
         else toggleSidebar();
       } else if (e.key === "e") {
         useStore.getState().toggleFeed();
+      } else if (e.key === "w") {
+        // opens "waiting on you", or brings it forward; never closes it
+        st.openPanel(WAITING_PANEL);
       } else if (e.key === "d") {
         setDirtyOnly(!useStore.getState().dirtyOnly);
       } else if (e.key === "*") {

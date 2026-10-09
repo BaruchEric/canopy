@@ -201,9 +201,9 @@ describe("words", () => {
   });
 
   test("inboxTitle lists what waits", () => {
-    expect(inboxTitle([])).toBe("Nothing is waiting on you");
+    expect(inboxTitle([])).toBe("The inbox is empty");
     const items = mergeInbox([ask()], {}, {}, 0, ctx);
-    expect(inboxTitle(items)).toBe("1 waiting on you\napp-0123 in app: Bash: rm -rf build");
+    expect(inboxTitle(items)).toBe("1 in the inbox\napp-0123 in app: Bash: rm -rf build");
   });
 
   test("detailText shows a command as a command", () => {

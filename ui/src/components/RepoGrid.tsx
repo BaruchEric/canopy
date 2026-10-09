@@ -24,7 +24,7 @@ import { isPrimary, wsOf } from "../workspaces";
 import type { RepoCard as Card } from "../checkouts";
 import { ago, GLYPH, stateOf } from "../util";
 import { GroupHead } from "./GroupHead";
-import { WidgetGear, shareEntries, useZoom, zoomStyle } from "./Surface";
+import { WidgetGear, shareEntries, useGroupFolds, useZoom, zoomStyle } from "./Surface";
 import { Tick } from "./SelectBar";
 import { RepoLink } from "./RepoLink";
 import { Star } from "./Star";
@@ -350,6 +350,10 @@ export function RepoGrid() {
       ),
     [repos, cards, many, sort],
   );
+  // the groups showing, which the gear's and Alt+click's folds act on
+  const shownKeys = groups.map((g) => sectionKey(sort, g.key));
+  const folds = useGroupFolds(shownKeys);
+  const foldGroups = useStore((s) => s.foldGroups);
 
   if (repos.length === 0) {
     return (
@@ -374,12 +378,14 @@ export function RepoGrid() {
               hint={hint}
               open={open}
               onToggle={() => toggleGroup(id)}
+              onToggleAll={() => foldGroups(shownKeys, open)}
             >
               {i === 0 && (
                 <WidgetGear
                   label="the board"
                   what="board"
                   zoom={zoomEntry}
+                  extra={folds}
                   share={shareEntries({ el: () => box.current, label: "board" })}
                 />
               )}

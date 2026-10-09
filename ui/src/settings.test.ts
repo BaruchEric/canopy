@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
-import { DEFAULT_SETTINGS, INBOX_TEXT, PALETTES, inboxTextOf, levelOf, loadSettings, saveSettings, shellPlace } from "./settings";
+import { DEFAULT_SETTINGS, INBOX_TEXT, PALETTES, SCREEN_SETTINGS, inboxTextOf, levelOf, loadSettings, saveSettings, shellPlace } from "./settings";
 
 describe("shellPlace", () => {
   test("auto follows the panel", () => {
@@ -108,6 +108,24 @@ describe("the dock's carousel", () => {
     expect(loadSettings().dockCarousel).toBe(true);
     store.set("canopy.settings", JSON.stringify({ dockCarousel: "yes" }));
     expect(loadSettings().dockCarousel).toBe(false);
+    delete (globalThis as { localStorage?: unknown }).localStorage;
+  });
+});
+
+describe("panel close buttons", () => {
+  test("start on, survive a reload, are kept per screen, and a bad value falls back to on", () => {
+    const store = new Map<string, string>();
+    (globalThis as { localStorage?: unknown }).localStorage = {
+      getItem: (k: string) => store.get(k) ?? null,
+      setItem: (k: string, v: string) => void store.set(k, v),
+    };
+    expect(SCREEN_SETTINGS).toContain("panelClose");
+    store.set("canopy.settings", "{}");
+    expect(loadSettings().panelClose).toBe(true);
+    saveSettings({ ...loadSettings(), panelClose: false });
+    expect(loadSettings().panelClose).toBe(false);
+    store.set("canopy.settings", JSON.stringify({ panelClose: "no" }));
+    expect(loadSettings().panelClose).toBe(true);
     delete (globalThis as { localStorage?: unknown }).localStorage;
   });
 });

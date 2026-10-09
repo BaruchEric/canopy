@@ -169,6 +169,9 @@ export interface Settings {
   inboxFold: boolean;
   /** the dock takes the cards' room and scrolls sideways a panel at a time */
   dockCarousel: boolean;
+  /** a docked panel can be closed: off, its ✕, its tab's × and a middle
+   *  click on the tab are gone, so nothing closes one by accident */
+  panelClose: boolean;
 }
 
 /** the inbox command block's text size, px */
@@ -212,6 +215,7 @@ export const DEFAULT_SETTINGS: Settings = {
   inboxWrap: true,
   inboxFold: true,
   dockCarousel: false,
+  panelClose: true,
 };
 
 const KEY = "canopy.settings";
@@ -323,6 +327,7 @@ export const SCREEN_SETTINGS = [
   "inboxWrap",
   "inboxFold",
   "dockCarousel",
+  "panelClose",
 ] as const satisfies readonly (keyof Settings)[];
 
 /** what is stored under the key, an empty object for anything else */
@@ -373,6 +378,7 @@ export function loadSettings(): Settings {
       inboxWrap: typeof saved.inboxWrap === "boolean" ? saved.inboxWrap : DEFAULT_SETTINGS.inboxWrap,
       inboxFold: typeof saved.inboxFold === "boolean" ? saved.inboxFold : DEFAULT_SETTINGS.inboxFold,
       dockCarousel: typeof saved.dockCarousel === "boolean" ? saved.dockCarousel : DEFAULT_SETTINGS.dockCarousel,
+      panelClose: typeof saved.panelClose === "boolean" ? saved.panelClose : DEFAULT_SETTINGS.panelClose,
       ...levelOf(saved),
     };
   } catch {

@@ -1048,7 +1048,7 @@ body.resizing iframe {
 .kept-pop {
   width: 340px;
 }
-/* ---------- the inbox: everything waiting on you, oldest first ---------- */
+/* ---------- the inbox: the asks, prompts and gates, oldest first ---------- */
 .inbox-pop {
   width: 460px;
   max-height: min(80vh, 760px);
@@ -1170,6 +1170,85 @@ body.resizing iframe {
 }
 .inbox-zoom > .settings-row:first-child {
   padding-top: 4px;
+}
+
+/* ---------- waiting on you: the inbox and the repos that need you, in a dock panel ---------- */
+.waiting-panel {
+  --state: var(--lichen);
+}
+/* a repo panel's head holds taller buttons; this one keeps its height
+   beside them with the close buttons off */
+.waiting-panel .panel-head {
+  min-height: 45px;
+}
+.waiting-count {
+  font-size: 11px;
+  color: var(--ink-dim);
+}
+.waiting-body {
+  padding-bottom: 12px;
+}
+.waiting-group .inbox-list {
+  margin: 0 14px;
+}
+.waiting-list {
+  margin: 0;
+  padding: 0 0 4px;
+  list-style: none;
+}
+/* a row is words on a wash under the pointer, like a tree row */
+.waiting-row {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  width: 100%;
+  min-width: 0;
+  padding: 3px 14px;
+  font: inherit;
+  font-size: 12px;
+  text-align: left;
+  color: var(--ink-dim);
+  background: none;
+  border: 0;
+  cursor: pointer;
+}
+/* a chat or an agent on its prompt: the user's move, so rust */
+.waiting-row.s-turn {
+  --state: var(--rust);
+}
+/* an agent canopy cannot place in a repo has nowhere to open */
+div.waiting-row {
+  cursor: default;
+}
+.waiting-row:hover,
+.waiting-row:focus-visible {
+  background: var(--wash);
+  color: var(--ink);
+}
+.waiting-name {
+  flex: none;
+  max-width: 45%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--ink);
+}
+.waiting-state {
+  flex: none;
+  color: var(--state);
+}
+.waiting-detail {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--ink-faint);
+}
+.waiting-empty {
+  margin: 12px 14px;
+  font-size: 12px;
+  color: var(--ink-dim);
 }
 
 /* a permission in plain words: the agent's line, canopy's reading, the flags */

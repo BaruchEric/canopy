@@ -116,9 +116,50 @@ export function useShellZoom(spot: ShellSpot): GearEntry {
 
 /** The gear on a whole view or column with no layout of its own to pick
  *  (the repo tree, the board, the agents, the incubator, the library): its
- *  zoom, then sharing it, in the order every gear keeps. */
-export function WidgetGear({ label, what, zoom, share }: { label: string; what: string; zoom: GearEntry; share: GearEntry[] }) {
-  return <Gear label={label} hint="Zoom and sharing" groups={[{ label: what, entries: [zoom] }, { label: "share", entries: share }]} />;
+ *  zoom, then `extra` (the tree's and the board's folds), then sharing it,
+ *  in the order every gear keeps. */
+export function WidgetGear({
+  label,
+  what,
+  zoom,
+  share,
+  extra,
+}: {
+  label: string;
+  what: string;
+  zoom: GearEntry;
+  share: GearEntry[];
+  extra?: GearGroup;
+}) {
+  const groups: GearGroup[] = [{ label: what, entries: [zoom] }, ...(extra ? [extra] : []), { label: "share", entries: share }];
+  return <Gear label={label} hint={extra ? `Zoom, ${extra.label} and sharing` : "Zoom and sharing"} groups={groups} />;
+}
+
+/** The fold entries of a view whose groups fold (the repo tree, the board):
+ *  every group showing folded or opened at once. The tree and the board
+ *  fold together, so either one's entries fold both. */
+export function useGroupFolds(keys: readonly string[]): GearGroup {
+  const collapsed = useStore((s) => s.collapsed);
+  const foldGroups = useStore((s) => s.foldGroups);
+  return {
+    label: "groups",
+    entries: [
+      {
+        type: "item",
+        label: "fold every group",
+        title: "Alt+click on a group's name does this too",
+        run: () => foldGroups(keys, true),
+        off: keys.every((k) => collapsed.includes(k)) ? "every group is folded" : undefined,
+      },
+      {
+        type: "item",
+        label: "unfold every group",
+        title: "Alt+click on a group's name does this too",
+        run: () => foldGroups(keys, false),
+        off: keys.some((k) => collapsed.includes(k)) ? undefined : "every group is open",
+      },
+    ],
+  };
 }
 
 /* ---------- how a surface sits ---------- */

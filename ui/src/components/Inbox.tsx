@@ -27,7 +27,7 @@ function ago(ts: number, now: number): string {
 }
 
 /** now, again every `ms` while `on` */
-function useNow(on: boolean, ms = 1000): number {
+export function useNow(on: boolean, ms = 1000): number {
   const [now, setNow] = useState(() => Date.now());
   useEffect(() => {
     if (!on) return;
@@ -109,7 +109,7 @@ function AdviceFile() {
 /** One thing waiting: who, where and the countdown, then the form that
  *  answers it, folded until picked. An ask that cannot be answered here (no
  *  answer key on this device) shows what it asks and says so. */
-function InboxRow({
+export function InboxRow({
   item,
   now,
   open,
@@ -444,7 +444,7 @@ export function InboxChip({ onGit }: { onGit?: () => void } = {}) {
       <button
         type="button"
         className={open ? "mini on" : items.length ? "mini inbox-waiting" : "mini"}
-        aria-label={`${items.length} waiting on you`}
+        aria-label={`Inbox, ${items.length} ${items.length === 1 ? "item" : "items"}`}
         aria-expanded={open}
         title={inboxTitle(items)}
         onClick={() => (open ? closeInbox() : openInbox())}
@@ -452,9 +452,9 @@ export function InboxChip({ onGit }: { onGit?: () => void } = {}) {
         <span aria-hidden="true">?</span> {items.length || ""}
       </button>
       {open && (
-        <div className="settings-pop inbox-pop" role="dialog" aria-label="Waiting on you" style={zoom === 1 ? undefined : { width: Math.round(460 * zoom) }}>
+        <div className="settings-pop inbox-pop" role="dialog" aria-label="Inbox" style={zoom === 1 ? undefined : { width: Math.round(460 * zoom) }}>
           <div className="inbox-top">
-            <h3 className="panel-label">waiting on you</h3>
+            <h3 className="panel-label">inbox</h3>
             <Gear
               label="the inbox"
               hint="Zoom, the command's text, and the rules you remembered"
@@ -467,7 +467,7 @@ export function InboxChip({ onGit }: { onGit?: () => void } = {}) {
             {goneFocus && <GoneAsk id={goneFocus} />}
             <AdviceFile />
             {items.length === 0 ? (
-              <p className="settings-hint">Nothing is waiting on you: no agent asks, no run is on a prompt, no workflow is at a gate.</p>
+              <p className="settings-hint">The inbox is empty: no agent asks, no run is on a prompt, no workflow is at a gate.</p>
             ) : (
               <ul className="inbox-list">
                 {items.map((i) => (
