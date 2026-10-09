@@ -439,6 +439,11 @@ export interface PeerState {
   onlyHere: boolean;
   /** what dry mode would have moved, instead of `moved` */
   would?: { branch: string; to: string; peer: string }[];
+  /** origin tracking refs carried forward to a peer's view of them, so a
+   *  branch the pass brought in is not counted as unpushed against an
+   *  origin this machine never fetched; `ref` is the short name
+   *  (`origin/main`). Present only when something moved. */
+  upstreams?: { ref: string; from: string; to: string; peer: string }[];
   error?: string;
   at: number;
 }

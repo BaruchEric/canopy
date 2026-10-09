@@ -1832,7 +1832,7 @@ function applyPeerState(state: ServerState, id: string, st: PeerState): void {
   state.peerStates.set(id, st);
   if (!changed) return;
   for (const d of newDivergences(state.divergedSeen, id, st.diverged, { errored: !!st.error })) notifyDiverged(id, d);
-  if (st.moved.length > 0) scheduleRefresh(state, id);
+  if (st.moved.length > 0 || (st.upstreams?.length ?? 0) > 0) scheduleRefresh(state, id);
   const repo = state.result.repos[idx]!;
   const next = { ...repo, peers: st };
   state.result.repos[idx] = next;

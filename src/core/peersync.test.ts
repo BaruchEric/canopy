@@ -6,6 +6,7 @@ import { dirname, join } from "node:path";
 import { exec } from "./exec";
 import { NO_PUSH, peerUrl } from "./peers";
 import {
+  advanceUpstreams,
   cloneMissing,
   decodeBase64Strict,
   fastForward,
@@ -525,6 +526,102 @@ describe("fetch and fast-forward", () => {
     await snapshotWip(mini, "mini", false);
     await fetchPeer(mac, miniId, toMini, {});
     expect(await peerWips(mac, ["mini"])).toEqual([]);
+  });
+});
+
+/** Two clones of a third repo, their origin, wired as peers under one id in
+ *  two roots: the shape the Mac and the mini actually have, where `pair`
+ *  makes one the other's origin. */
+const triangle = async (name: string) => {
+  const up = await repo(`${name}-up`);
+  const id = "repo";
+  const clone = async (side: string): Promise<string> => {
+    const dir = join(root, `${name}-${side}`, id);
+    await exec(["git", "clone", "-q", up, dir]);
+    await sh(dir, "config", "user.email", "t@t");
+    await sh(dir, "config", "user.name", "t");
+    return dir;
+  };
+  const mac = await clone("mac");
+  const mini = await clone("mini");
+  const toMac: Peer = { name: "mac", alias: null, root: join(root, `${name}-mac`), role: "git" };
+  await initRepo(mini, id, [toMac], false);
+  const opts = { self: "mini", peers: [toMac], seed: [], dry: false, root: join(root, `${name}-mini`) };
+  return { up, mac, mini, toMac, macId: id, miniId: id, opts };
+};
+const aheadOfUpstream = async (cwd: string): Promise<number> => Number(await sh(cwd, "rev-list", "--count", "@{u}..HEAD"));
+
+describe("origin tracking refs follow the peer's", () => {
+  test("a branch the pass brought in is not unpushed against an origin this clone never fetched", async () => {
+    const { up, mac, mini, miniId, opts } = await triangle("upff");
+    const old = await sh(mini, "rev-parse", "origin/main");
+    await commit(up, "b.txt", "b\n");
+    const tip = await commit(up, "c.txt", "c\n");
+    await sh(mac, "pull", "-q", "--ff-only");
+    const st = await syncRepo(miniId, opts, new PassSeen());
+    expect(st.moved).toEqual([{ branch: "main", from: old, to: tip, peer: "mac" }]);
+    expect(st.upstreams).toEqual([{ ref: "origin/main", from: old, to: tip, peer: "mac" }]);
+    expect(await sh(mini, "rev-parse", "origin/main")).toBe(tip);
+    expect(await aheadOfUpstream(mini)).toBe(0);
+    // nothing left to carry: the next pass reports no upstream move
+    expect((await syncRepo(miniId, opts, new PassSeen())).upstreams).toBeUndefined();
+  });
+
+  test("the peer's origin tip is fetched when this clone lacks it, and only that ref", async () => {
+    const { up, mac, mini, macId, toMac } = await triangle("upfetch");
+    await commit(mini, "mine.txt", "mine\n"); // ahead of origin here, so the upstream is looked at
+    const tip = await commit(up, "b.txt", "b\n");
+    await sh(up, "branch", "elsewhere");
+    await sh(mac, "fetch", "-q"); // the peer knows origin moved, but never pulled
+    const old = await sh(mini, "rev-parse", "origin/main");
+    expect(await advanceUpstreams(mini, macId, toMac, {}, false)).toEqual([{ ref: "origin/main", from: old, to: tip, peer: "mac" }]);
+    expect(await sh(mini, "rev-parse", "origin/main")).toBe(tip);
+    expect(await hasRef(mini, "refs/remotes/origin/elsewhere")).toBe(false);
+  });
+
+  test("an origin fetched here more recently than the peer's is never moved back", async () => {
+    const { up, mac, mini, macId, toMac } = await triangle("upfresh");
+    await commit(up, "b.txt", "b\n");
+    await sh(mac, "fetch", "-q");
+    const fresher = await commit(up, "c.txt", "c\n");
+    await sh(mini, "fetch", "-q");
+    await commit(mini, "mine.txt", "mine\n");
+    expect(await advanceUpstreams(mini, macId, toMac, {}, false)).toEqual([]);
+    expect(await sh(mini, "rev-parse", "origin/main")).toBe(fresher);
+  });
+
+  test("a peer origin with unrelated history moves nothing", async () => {
+    const { mac, mini, macId, toMac } = await triangle("upother");
+    const other = await repo("upother-elsewhere");
+    await commit(other, "z.txt", "z\n");
+    await sh(mac, "remote", "set-url", "origin", other);
+    await sh(mac, "fetch", "-q", "--force", "origin", "+refs/heads/main:refs/remotes/origin/main");
+    await commit(mini, "mine.txt", "mine\n");
+    const old = await sh(mini, "rev-parse", "origin/main");
+    expect(await advanceUpstreams(mini, macId, toMac, {}, false)).toEqual([]);
+    expect(await sh(mini, "rev-parse", "origin/main")).toBe(old);
+  });
+
+  test("a branch level with its upstream asks the peer nothing, and dry moves nothing", async () => {
+    const { up, mac, mini, macId, toMac } = await triangle("upquiet");
+    await commit(up, "b.txt", "b\n");
+    await sh(mac, "pull", "-q", "--ff-only");
+    const old = await sh(mini, "rev-parse", "origin/main");
+    // level: not ahead, so origin is left to this clone's own fetch
+    expect(await advanceUpstreams(mini, macId, toMac, {}, false)).toEqual([]);
+    await commit(mini, "mine.txt", "mine\n");
+    expect(await advanceUpstreams(mini, macId, toMac, {}, true)).toEqual([]);
+    expect(await sh(mini, "rev-parse", "origin/main")).toBe(old);
+  });
+
+  test("a peer branch named origin/main never stands in for the peer's origin", async () => {
+    const { mac, mini, macId, toMac } = await triangle("upname");
+    await sh(mac, "checkout", "-q", "-b", "origin/main");
+    await commit(mac, "decoy.txt", "decoy\n");
+    await commit(mini, "mine.txt", "mine\n");
+    const old = await sh(mini, "rev-parse", "refs/remotes/origin/main");
+    expect(await advanceUpstreams(mini, macId, toMac, {}, false)).toEqual([]);
+    expect(await sh(mini, "rev-parse", "refs/remotes/origin/main")).toBe(old);
   });
 });
 

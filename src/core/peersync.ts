@@ -332,6 +332,73 @@ export async function fastForward(repo: string, peers: string[], dry: boolean) {
   return out;
 }
 
+const ORIGIN_TRACKING = "refs/remotes/origin/";
+
+/** Carries a peer's view of `origin` forward onto this clone's own tracking
+ *  refs. The pass fast-forwards a branch from the peer, but nothing here
+ *  fetches origin itself when it is someone else's repo or one this machine
+ *  has no credentials for, so `origin/main` would stay wherever the clone
+ *  left it and every commit the pass brought in would read as unpushed.
+ *
+ *  Only a branch that reads ahead of (or diverged from) its origin upstream
+ *  is looked at, and only that upstream is asked of the peer, by name: a
+ *  glob over the peer's whole `refs/remotes/origin/*` would pull every
+ *  branch the peer ever fetched, history and all into a shallow clone.
+ *  The upstream moves only forward (the current ref an ancestor of the
+ *  peer's), by compare-and-swap, so a fresher fetch of origin here is never
+ *  undone. Ancestry is also the only check that the peer's origin is the
+ *  same repo as this one's; peer sync already assumes both clones are of
+ *  one repo. Read-only on the peer: an ls-remote and, when the peer's tip
+ *  is not here yet, a fetch of that one ref into nothing but the object
+ *  store. Best effort: any failure leaves the ref where it was. */
+export async function advanceUpstreams(
+  repo: string,
+  id: string,
+  peer: Peer,
+  env: Record<string, string>,
+  dry: boolean,
+): Promise<NonNullable<PeerState["upstreams"]>> {
+  const out: NonNullable<PeerState["upstreams"]> = [];
+  if (dry) return out;
+  const r = await git(repo, ["for-each-ref", "--format=%(upstream)%00%(upstream:trackshort)", "refs/heads/"]);
+  if (r.code !== 0) return out;
+  const wanted = new Set<string>();
+  for (const line of r.stdout.split("\n")) {
+    const [up = "", track = ""] = line.split("\0");
+    if (up.startsWith(ORIGIN_TRACKING) && (track === ">" || track === "<>")) wanted.add(up);
+  }
+  if (wanted.size === 0) return out;
+  const fetchEnv = { GIT_TERMINAL_PROMPT: "0", ...env };
+  const url = peerUrl(peer, id);
+  const ls = await git(repo, ["ls-remote", "--refs", url, ...wanted], 60_000, fetchEnv);
+  if (ls.code !== 0) return out;
+  for (const { ref, hash } of parseLsRemote(ls.stdout)) {
+    if (!wanted.has(ref)) continue; // ls-remote matches a pattern's tail, not the whole name
+    const cur = await git(repo, ["rev-parse", "-q", "--verify", `${ref}^{commit}`]);
+    if (cur.code !== 0) continue;
+    const old = cur.stdout.trim();
+    if (old === hash) continue;
+    const have = async () => (await git(repo, ["cat-file", "-e", `${hash}^{commit}`])).code === 0;
+    if (!(await have())) {
+      await git(repo, ["fetch", "--no-tags", "--no-write-fetch-head", "--quiet", url, ref], 60_000, fetchEnv);
+      if (!(await have())) continue; // the peer's ref moved between the two asks
+    }
+    if ((await git(repo, ["merge-base", "--is-ancestor", old, hash])).code !== 0) continue;
+    const u = await git(repo, ["update-ref", "-m", `canopy: ${ref.slice("refs/remotes/".length)} as ${peer.name} last fetched it`, ref, hash, old]);
+    if (u.code === 0) out.push({ ref: ref.slice("refs/remotes/".length), from: old, to: hash, peer: peer.name });
+  }
+  return out;
+}
+
+function parseLsRemote(s: string): { ref: string; hash: string }[] {
+  const out: { ref: string; hash: string }[] = [];
+  for (const line of s.split("\n")) {
+    const tab = line.indexOf("\t");
+    if (tab > 0) out.push({ hash: line.slice(0, tab), ref: line.slice(tab + 1) });
+  }
+  return out;
+}
+
 export async function peerWips(repo: string, peers: string[]): Promise<PeerWip[]> {
   const out: PeerWip[] = [];
   for (const p of peers) {
@@ -1040,10 +1107,11 @@ async function passOne(id: string, opts: PassOptions, seen: PassSeen): Promise<P
     const gitPeers = opts.peers.filter((p) => p.role === "git" && repoWanted(p, id));
     let absent = 0;
     const errors: string[] = [];
+    const answered: Peer[] = [];
     for (const p of gitPeers) {
       if (seen.offline(p.name)) continue;
       const got = await fetchPeer(repo, id, p, env);
-      if (got === "ok") seen.mark(p.name, true);
+      if (got === "ok") { seen.mark(p.name, true); answered.push(p); }
       else if (got === "unreachable") seen.mark(p.name, false, "unreachable");
       else if (got === "missing") { seen.mark(p.name, true); absent++; }
       else errors.push(`${p.name}: ${got.error}`);
@@ -1053,6 +1121,12 @@ async function passOne(id: string, opts: PassOptions, seen: PassSeen): Promise<P
     // Refs already fetched from a peer that is offline now still count.
     const names = gitPeers.map((p) => p.name);
     Object.assign(state, await fastForward(repo, names, opts.dry));
+    // After the fast-forward, which is what leaves a branch ahead of an
+    // origin this machine never fetched. Peers in turn: each moves the ref
+    // only forward from wherever the one before left it.
+    const upstreams: NonNullable<PeerState["upstreams"]> = [];
+    for (const p of answered) upstreams.push(...(await advanceUpstreams(repo, id, p, env, opts.dry)));
+    if (upstreams.length > 0) state.upstreams = upstreams;
     state.wip = await peerWips(repo, names);
   } catch (err) {
     // Appended, not overwritten: a fetch error already recorded above (from
