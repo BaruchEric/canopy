@@ -915,6 +915,11 @@ export interface RememberedRule {
   by?: string;
   /** the prompt's title it was remembered from */
   from?: string;
+  /** kept by a write that carried an answer key the broker took, so it may
+   *  also answer agents in a terminal (`core/sessionrules.ts`); a rule kept
+   *  without one answers canopy's own runs alone, since any shell on this
+   *  machine can reach the loopback API that keeps it */
+  keyed?: true;
 }
 
 /** The user's reply to a RunPrompt. Answers map question text to the chosen
@@ -2311,6 +2316,9 @@ export interface Ask {
   questions?: RunQuestion[];
   route: "remote" | "local";
   waitUntil: number;
+  /** the agent shows the same prompt at its terminal while the ask waits
+   *  (Claude's dialog beside its hook): the first answer wins */
+  mirrored?: true;
   state: AskState;
   answer?: AskAnswer;
   answeredBy?: string;

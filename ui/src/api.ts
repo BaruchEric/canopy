@@ -461,7 +461,7 @@ export const api = {
   /** Answers an ask with this browser's answer key, which the home backend
    *  (and it alone) forwards to the broker; `client` names this browser, so
    *  the broker can say which device answered. */
-  answerAsk: (id: string, answer: AskAnswer, key: string) =>
+  answerAsk: (id: string, answer: AskAnswer & { remember?: string }, key: string) =>
     req<Ask>(homeName(), "/api/asks/answer", { method: "POST", headers: keyHeaders(key), body: JSON.stringify({ id, ...answer, client: clientId() }) }),
   /** the incubator, one backend's at a time; a sprout's calls go to the
    *  backend its id names */
@@ -534,12 +534,15 @@ export const api = {
       qRun,
     );
   },
-  answerRun: async (id: string, promptId: string, answer: RunAnswer) => {
+  /** `key`, sent to the home backend alone, makes a remembered rule good
+   *  for agents in a terminal too (core/sessionrules.ts) */
+  answerRun: async (id: string, promptId: string, answer: RunAnswer, key?: string | null) => {
     const [b, plain] = on(id);
     return from(
       b,
       await req<Run>(b, "/api/runs/answer", {
         method: "POST",
+        ...(key && b === homeName() && answer.kind === "allow" && answer.remember ? { headers: keyHeaders(key) } : {}),
         // the device, which a remembered rule keeps as who remembered it
         body: JSON.stringify({ id: plain, promptId, answer, client: clientId() }),
       }),

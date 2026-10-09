@@ -177,6 +177,7 @@ export function parseRemembered(raw: string): RememberedRule[] {
         at: typeof r["at"] === "number" ? r["at"] : 0,
         ...(text(r["by"]) ? { by: r["by"] } : {}),
         ...(text(r["from"]) ? { from: r["from"].slice(0, 200) } : {}),
+        ...(r["keyed"] === true ? { keyed: true as const } : {}),
       },
     ];
   });
@@ -231,11 +232,16 @@ export class RememberedRules {
     return run;
   }
 
-  /** Keeps a rule for a scope; the same rule for the same scope is kept once. */
-  async add(rule: string, scope: RememberScope, extra: { by?: string; from?: string } = {}): Promise<RememberedRule> {
+  /** Keeps a rule for a scope; the same rule for the same scope is kept
+   *  once, and a keyed keep of a rule held unkeyed marks it keyed. */
+  async add(rule: string, scope: RememberScope, extra: { by?: string; from?: string; keyed?: boolean } = {}): Promise<RememberedRule> {
     if (!applicable(rule)) throw new Error(`${rule} is not a rule canopy can remember`);
     return this.update((rules) => {
       const held = rules.find((r) => r.rule === rule && sameScope(r.scope, scope));
+      if (held && extra.keyed && !held.keyed) {
+        const keyed: RememberedRule = { ...held, keyed: true };
+        return { next: rules.map((r) => (r === held ? keyed : r)), out: keyed };
+      }
       if (held) return { next: null, out: held };
       const entry: RememberedRule = {
         id: crypto.randomUUID().slice(0, 8),
@@ -244,6 +250,7 @@ export class RememberedRules {
         at: Date.now(),
         ...(extra.by ? { by: extra.by } : {}),
         ...(extra.from ? { from: extra.from.slice(0, 200) } : {}),
+        ...(extra.keyed ? { keyed: true as const } : {}),
       };
       return { next: [...rules, entry], out: entry };
     });

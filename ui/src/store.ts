@@ -3098,7 +3098,7 @@ export const useStore = create<CanopyState>((set, get) => ({
     }));
   },
   answerRun: async (runId, promptId, answer) => {
-    const run = await api.answerRun(runId, promptId, answer);
+    const run = await api.answerRun(runId, promptId, answer, get().answerKey);
     set((s) => ({ runs: { ...s.runs, [run.id]: run } }));
   },
   loadRemembered: async () => {

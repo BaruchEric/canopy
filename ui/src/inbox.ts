@@ -367,12 +367,13 @@ export function toRunAnswer(a: InboxAnswer): RunAnswer | null {
   return a.remember ? { kind: "allow", remember: a.remember } : { kind: "allow" };
 }
 
-/** the broker's answer: a question's answers go as an allow */
-export function toAskAnswer(a: InboxAnswer): AskAnswer | null {
+/** the broker's answer: a question's answers go as an allow; a remember's
+ *  rule rides along for the home backend to keep (the broker never sees it) */
+export function toAskAnswer(a: InboxAnswer): (AskAnswer & { remember?: string }) | null {
   if ("choice" in a || "skip" in a || "advice" in a || "handOff" in a) return null;
   if ("answers" in a) return { behavior: "allow", answers: a.answers };
   if (a.behavior === "deny") return { behavior: "deny", ...(a.message?.trim() ? { message: a.message.trim() } : {}) };
-  return { behavior: "allow", ...(a.always ? { always: true } : {}) };
+  return { behavior: "allow", ...(a.always ? { always: true } : {}), ...(a.remember ? { remember: a.remember.rule } : {}) };
 }
 
 /** How often the open inbox redraws its clocks: every second while an

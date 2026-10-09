@@ -114,6 +114,7 @@ import {
   upsertWorkspace,
 } from "../core/store";
 import { RememberedRules, scopeOf } from "../core/remember";
+import { repoHolding, sessionAsk, sessionRemember, sessionRule } from "../core/sessionrules";
 import { QUIET_WAIT, Runner } from "../core/runner";
 import { NotWaitingError, type RunDriver } from "../core/driver";
 import { ANSWERS_FILE, isSeedRepoId, SEED_AGENT_REFUSAL, SEEDS_DIR, withStoredAnswers } from "../core/sprout";
@@ -136,6 +137,7 @@ import {
   type ClientInfo,
   type Device,
   type FlowChoice,
+  type Ask,
   type HelperInfo,
   type GrepRepoResult,
   type HistoryOverview,
@@ -1257,6 +1259,37 @@ async function refreshHeld(state: ServerState, id: string): Promise<{ repo: Repo
 
 const WATCH_GIT_HINTS = ["HEAD", "index", "ORIG_HEAD", "refs", "worktrees"];
 
+/** the folders of the repos on this machine, for a session's rules */
+const localRoots = (state: ServerState): string[] => state.result.repos.filter((r) => !r.host && !r.forge).map((r) => r.path);
+
+/** A remember on an agent's ask: the agent's folder (its registry card) must
+ *  be in a repo on this machine, and the rule one canopy offers for the call
+ *  and that covers it; it is kept for that repo, which the agent's hook then
+ *  reads through `/api/remembered/check`. */
+function rememberForAsk(state: ServerState, ask: Ask, rule: string): { error: string } | { save: (by: string | null) => Promise<void> } {
+  if (ask.kind !== "permission" || !ask.tool) return { error: "only a permission can be remembered" };
+  const card = state.registry.list().find((c) => c.id === ask.agent);
+  const root = card ? repoHolding(localRoots(state), card.cwd) : null;
+  if (!card || !root) return { error: "that agent does not work in a repo on this machine, so its hook would never read the rule here" };
+  let input: unknown;
+  try {
+    input = JSON.parse(ask.detail);
+  } catch {
+    input = null;
+  }
+  if (!input || typeof input !== "object" || Array.isArray(input)) return { error: "canopy cannot read that request's input" };
+  const p = sessionAsk(ask.tool, input as Record<string, unknown>, card.cwd);
+  const ok = sessionRemember(rule, p, root);
+  if ("error" in ok) return ok;
+  return {
+    save: async (by) => {
+      // the broker took the allow, so the answer key was good
+      await state.remembered.add(rule, { kind: "repo", path: root }, { ...(by ? { by } : {}), from: ask.title, keyed: true });
+      broadcast(state, { type: "remembered", rules: state.remembered.list() });
+    },
+  };
+}
+
 /** How often a remote source's repos get their status re-read: there is no
  *  watcher on another host, and a scan of a whole tree is too much to repeat. */
 const REMOTE_REFRESH = 5 * 60_000;
@@ -2234,7 +2267,10 @@ async function handleApi(
       const scope = scopeOf(kind, held.scope);
       if (!scope) return json({ error: "only a workflow's step run can be remembered for its step or its workflow" }, 400);
       const by = deviceNameOf(state, typeof b.client === "string" ? b.client : null);
-      await state.remembered.add(rule, scope, { ...(by ? { by } : {}), from: held.title });
+      // an answer key the broker takes makes the rule good for terminal
+      // sessions too (core/sessionrules.ts); without one it answers runs alone
+      const keyed = scope.kind === "repo" && (await state.asks.keyHolds(req));
+      await state.remembered.add(rule, scope, { ...(by ? { by } : {}), from: held.title, keyed });
       broadcast(state, { type: "remembered", rules: state.remembered.list() });
     }
     // the questions as they were asked, before the answer settles them
@@ -2256,6 +2292,14 @@ async function handleApi(
     return json(run);
   }
   if (path === "/api/remembered" && method === "GET") return json({ rules: state.remembered.list() });
+  // a terminal session's hook, before it raises an ask: the rule that lets
+  // its call through, if any (core/sessionrules.ts)
+  if (path === "/api/remembered/check" && method === "POST") {
+    const b = (await req.json().catch(() => null)) as { tool?: unknown; input?: unknown; cwd?: unknown } | null;
+    const input = b?.input && typeof b.input === "object" && !Array.isArray(b.input) ? (b.input as Record<string, unknown>) : null;
+    if (typeof b?.tool !== "string" || typeof b.cwd !== "string" || !input) return json({ error: "a check is {tool, input, cwd}" }, 400);
+    return json({ rule: await sessionRule(state.remembered.list(), localRoots(state), b.tool, input, b.cwd) });
+  }
   if (path === "/api/remembered/forget" && method === "POST") {
     const b = (await req.json()) as { id?: unknown };
     if (typeof b.id !== "string") return json({ error: "missing rule id" }, 400);
@@ -3302,6 +3346,7 @@ export async function startServer(opts: {
     asks: new AskHub(chanCfg, {
       broadcast: (ev) => broadcast(state, ev),
       deviceName: (client) => deviceNameOf(state, client),
+      remember: (ask, rule) => rememberForAsk(state, ask, rule),
       ...opts.asks,
     }),
     incubator: new IncubatorHub(

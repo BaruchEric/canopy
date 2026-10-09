@@ -127,6 +127,8 @@ function InboxRow({
   const answerInbox = useStore((s) => s.answerInbox);
   const shown = useStore(useShallow((s) => s.backendOrder));
   const card = useStore((s) => (item.source === "ask" ? s.registry[s.asks[item.id]?.agent ?? ""] : undefined));
+  // the agent's terminal shows the same prompt meanwhile
+  const mirrored = useStore((s) => item.source === "ask" && s.asks[item.id]?.mirrored === true);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   const left = item.until !== null ? item.until - now : null;
@@ -168,10 +170,12 @@ function InboxRow({
   const permission = item.permission;
   const root = item.repoPath ?? card?.cwd ?? undefined;
   const explain = permission ? plainWords(permission, root) : undefined;
-  // a remember answers a run's permission only (an ask's hook has its own
-  // "allow always"), and only the one the server would take: never outside
-  // the project, never a codex escalation or a stage run (noRule)
-  const offer = item.source === "run" && permission ? rememberOffer(permission, root) : null;
+  // a remember answers a run's permission, or an agent's in a repo on the
+  // home backend's machine, whose hook then reads the rule from canopy; and
+  // only the one the server would take: never outside the project, never a
+  // codex escalation or a stage run (noRule)
+  const rememberable = item.source === "run" || (item.source === "ask" && item.kind === "permission");
+  const offer = rememberable && permission ? rememberOffer(permission, root) : null;
   const remember: RememberChoice | undefined = offer
     ? { offer, scopes: scopeOffers(item), onRemember: (r) => answer({ behavior: "allow", remember: r }) }
     : undefined;
@@ -212,7 +216,11 @@ function InboxRow({
               ) : (
                 detail && <pre className="ask-detail">{detail}</pre>
               )}
-              <p className="settings-hint">This device has no answer key, so this ask waits for its terminal: add yours in Settings to answer it here.</p>
+              <p className="settings-hint">
+                {mirrored
+                  ? "This device has no answer key: answer it at its terminal, where the same prompt is showing, or add yours in Settings to answer it here."
+                  : "This device has no answer key, so this ask waits for its terminal: add yours in Settings to answer it here."}
+              </p>
             </div>
           ) : item.kind === "advice" ? (
             <AdviceOffers offers={item.advice ?? []} busy={busy} onAnswer={(key, accept) => answer({ advice: key, accept })} />

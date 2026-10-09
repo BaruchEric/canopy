@@ -72,7 +72,7 @@ export function answerer(name: string | null | undefined): string {
 
 /** An answer as the page posts it, checked field by field; null for one the
  *  broker would refuse anyway. */
-export function parseAskAnswer(b: unknown): (AskAnswer & { id: string; client: string | null }) | null {
+export function parseAskAnswer(b: unknown): (AskAnswer & { id: string; client: string | null; remember?: string }) | null {
   if (!b || typeof b !== "object") return null;
   const o = b as Record<string, unknown>;
   if (typeof o.id !== "string" || !/^[A-Za-z0-9-]{1,64}$/.test(o.id)) return null;
@@ -90,6 +90,8 @@ export function parseAskAnswer(b: unknown): (AskAnswer & { id: string; client: s
     ...(answers && Object.keys(answers).length ? { answers } : {}),
     ...(o.always === true ? { always: true } : {}),
     client: typeof o.client === "string" ? o.client : null,
+    // a rule to keep with an allow, canopy-side (`remember` in AskHubDeps)
+    ...(o.behavior === "allow" && typeof o.remember === "string" && o.remember.length <= 500 ? { remember: o.remember } : {}),
   };
 }
 
@@ -97,6 +99,10 @@ export interface AskHubDeps {
   broadcast: (ev: ServerEvent) => void;
   /** a browser's device name by its client id, for who answered */
   deviceName: (client: string | null) => string | null;
+  /** Checks a rule an allow asks to remember for `ask` (the session's own
+   *  repo, on this machine), before the answer goes: the error says why it
+   *  cannot be kept, else `save` keeps it once the broker took the allow. */
+  remember?: (ask: Ask, rule: string) => { error: string } | { save: (by: string | null) => Promise<void> };
   /** the client; tests pass one over a stand-in broker */
   chan?: Chan;
   /** ms a closed ask is kept */
@@ -241,6 +247,21 @@ export class AskHub {
     return p;
   }
 
+  /** Whether `req` carries an answer key the broker takes, tried with a
+   *  presence beat, the one write that changes nothing a person set. */
+  async keyHolds(req: Request): Promise<boolean> {
+    if (!this.cfg || !this.chan || !req.headers.get(ANSWER_KEY_HEADER)) return false;
+    const auth = answerKeyOf(req);
+    if ("error" in auth) return false;
+    return this.chan.beatPresence(this.cfg.bot, auth.key).then(
+      (p) => {
+        this.tell(p);
+        return true;
+      },
+      () => false,
+    );
+  }
+
   /** the routes under /api/asks, /api/presence and /api/guards, or null */
   async handle(req: Request, url: URL): Promise<Response | null> {
     const path = url.pathname;
@@ -285,10 +306,21 @@ export class AskHub {
       if (path === "/api/asks/answer" && method === "POST") {
         const b = parseAskAnswer(await req.json().catch(() => null));
         if (!b) return json({ error: "an answer is {id, behavior: allow|deny, message?, answers?, always?}" }, 400);
-        const { id, client, ...answer } = b;
-        const by = answerer(this.deps.deviceName(client));
+        const { id, client, remember: rule, ...answer } = b;
+        const device = this.deps.deviceName(client);
+        const by = answerer(device);
+        // a remember is checked before anything is answered: one canopy
+        // would not keep answers nothing
+        let keep: ((by: string | null) => Promise<void>) | null = null;
+        if (rule !== undefined) {
+          const held = this.asks.get(id) ?? (await chan.getAsk(cfg.bot, id));
+          const check = this.deps.remember?.(held, rule) ?? { error: "this backend keeps no rules for agents" };
+          if ("error" in check) return json({ error: check.error }, 400);
+          keep = check.save;
+        }
         const ask = await chan.answerAsk(cfg.bot, key, id, { ...answer, by });
         if (this.absorb(ask)) this.deps.broadcast({ type: "asks", asks: [ask] });
+        if (keep && ask.state === "answered" && ask.answer?.behavior === "allow") await keep(device);
         return json(ask);
       }
       if (path === "/api/presence" && method === "GET") {

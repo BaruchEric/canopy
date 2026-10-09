@@ -15,7 +15,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Chan, ChanError } from "../core/chan";
 import { projectFolder } from "../core/sessions";
-import type { Ask, AsksInfo, GuardsInfo, Presence, ServerEvent } from "../core/types";
+import type { Ask, AskAnswer, AsksInfo, GuardsInfo, Presence, ServerEvent } from "../core/types";
 import { ANSWER_KEY_HEADER, AskHub, answerKeyOf, answerer, parseAskAnswer } from "./asks";
 import { startServer } from "./index";
 
@@ -371,6 +371,49 @@ describe("asks through canopy", () => {
     expect(seen.at(-1)).toEqual({ type: "asks", asks: [], gone: ["k1"] });
   });
 
+  test("a remember is checked before the answer goes, and kept once the allow lands", async () => {
+    const sent: unknown[] = [];
+    const kept: [string, string | null][] = [];
+    const stub = {
+      listAsks: async () => [],
+      getAsk: async (_: unknown, id: string) => ask({ id }),
+      answerAsk: async (_: unknown, _key: string, id: string, body: AskAnswer & { by: string }) => {
+        sent.push(body);
+        return { ...ask({ id }), state: "answered", answer: { behavior: body.behavior } };
+      },
+    } as unknown as Chan;
+    const hub = new AskHub(CFG, {
+      broadcast: () => {},
+      deviceName: () => "Mac",
+      chan: stub,
+      relistEvery: 0,
+      sweepEvery: 0,
+      remember: (_a, rule) => (rule === "Bash(ls)" ? { save: async (by) => void kept.push([rule, by]) } : { error: "not offered" }),
+    });
+    const answer = (body: unknown) =>
+      hub.handle(
+        new Request("http://x/api/asks/answer", { method: "POST", headers: { [ANSWER_KEY_HEADER]: "k" }, body: JSON.stringify(body) }),
+        new URL("http://x/api/asks/answer"),
+      );
+    const refused = await answer({ id: "m1", behavior: "allow", remember: "Bash" });
+    expect(refused?.status).toBe(400);
+    expect(sent).toEqual([]);
+    expect((await answer({ id: "m1", behavior: "allow", remember: "Bash(ls)" }))?.status).toBe(200);
+    // the rule is canopy's own: the broker hears a plain allow
+    expect(sent).toEqual([{ behavior: "allow", by: "Mac" }]);
+    expect(kept).toEqual([["Bash(ls)", "Mac"]]);
+  });
+
+  test("a key holds when the broker takes its beat, and only then", async () => {
+    const hub = new AskHub(CFG, { broadcast: () => {}, deviceName: () => null, chan: new Chan(BROKER), relistEvery: 0, sweepEvery: 0 });
+    const req = (h: Record<string, string>) => new Request("http://x/api/runs/answer", { method: "POST", headers: h });
+    expect(await hub.keyHolds(req({ [ANSWER_KEY_HEADER]: TOKEN }))).toBe(true);
+    expect(await hub.keyHolds(req({ [ANSWER_KEY_HEADER]: "not-the-key" }))).toBe(false);
+    expect(await hub.keyHolds(req({ [ANSWER_KEY_HEADER]: TOKEN, "sec-fetch-site": "cross-site" }))).toBe(false);
+    expect(await hub.keyHolds(req({}))).toBe(false);
+    expect(await new AskHub(null, { broadcast: () => {}, deviceName: () => null }).keyHolds(req({ [ANSWER_KEY_HEADER]: TOKEN }))).toBe(false);
+  });
+
   test("without a broker every route is a 503", async () => {
     const hub = new AskHub(null, { broadcast: () => {}, deviceName: () => null });
     const res = await hub.handle(new Request("http://x/api/asks"), new URL("http://x/api/asks"));
@@ -400,6 +443,9 @@ describe("the pure parts", () => {
   test("an answer as the page posts it", () => {
     expect(parseAskAnswer({ id: "a1", behavior: "deny", message: "  not now ", client: "c" })).toEqual({ id: "a1", behavior: "deny", message: "not now", client: "c" });
     expect(parseAskAnswer({ id: "a1", behavior: "allow", answers: { "Which?": "A", n: 1 } })).toEqual({ id: "a1", behavior: "allow", answers: { "Which?": "A" }, client: null });
+    expect(parseAskAnswer({ id: "a1", behavior: "allow", remember: "Bash(ls)" })).toEqual({ id: "a1", behavior: "allow", client: null, remember: "Bash(ls)" });
+    // a deny keeps nothing
+    expect(parseAskAnswer({ id: "a1", behavior: "deny", remember: "Bash(ls)" })).toEqual({ id: "a1", behavior: "deny", client: null });
     expect(parseAskAnswer({ id: "../x", behavior: "allow" })).toBeNull();
     expect(parseAskAnswer({ id: "a1", behavior: "allow", answers: ["A"] })).toBeNull();
   });

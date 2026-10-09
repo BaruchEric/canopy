@@ -275,6 +275,7 @@ export function asAsk(v: unknown): Ask | null {
     ...(questions ? { questions } : {}),
     route: a.route === "local" ? "local" : "remote",
     waitUntil: num(a.waitUntil) ?? createdAt,
+    ...(a.mirrored === true ? { mirrored: true as const } : {}),
     state: a.state as AskState,
     ...(answer ? { answer } : {}),
     ...(answeredBy ? { answeredBy } : {}),

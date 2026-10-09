@@ -107,6 +107,17 @@ test("remember keeps a covering rule, answers the next match with it, and forget
     const saved = JSON.parse(await readFile(join(dir, "remembered.json"), "utf8")) as { rules: RememberedRule[] };
     expect(saved.rules.map((r) => [r.rule, r.scope, r.from])).toEqual([["Bash(git status:*)", { kind: "repo", path: await realpath(join(root, "proj")) }, "git status --short"]]);
 
+    // a terminal session's hook asks after the same rules for its own call;
+    // this one was kept with no answer key, as any shell could have kept it
+    // through the loopback, so it answers runs only (sessionrules.test.ts
+    // has a keyed rule covering a session's calls)
+    expect(saved.rules[0]?.keyed).toBeUndefined();
+    const proj = await realpath(join(root, "proj"));
+    const check = async (input: Record<string, unknown>, cwd: string, tool = "Bash") =>
+      ((await (await post("/api/remembered/check", { tool, input, cwd })).json()) as { rule: string | null }).rule;
+    expect(await check({ command: "git status -s" }, proj)).toBeNull();
+    expect((await post("/api/remembered/check", { tool: "Bash", cwd: proj })).status).toBe(400);
+
     // the second prompt matches and is let through; the chain waits
     await until(async () => (await run(id))?.prompt?.id === "p2", "the chain's prompt");
     expect(answers).toEqual([{ kind: "allow", remember: { rule: "Bash(git status:*)", scope: "repo" } }, { kind: "allow" }]);

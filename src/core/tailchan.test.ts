@@ -270,6 +270,11 @@ describe("asks as the broker posts them", () => {
     });
   });
 
+  test("asAsk keeps a mirrored ask's flag, and only a true one", () => {
+    expect(asAsk({ ...raw, mirrored: true })?.mirrored).toBe(true);
+    expect(asAsk({ ...raw, mirrored: "yes" })).not.toHaveProperty("mirrored");
+  });
+
   test("asAsk refuses what canopy cannot key or route on", () => {
     expect(asAsk({ ...raw, id: "" })).toBeNull();
     expect(asAsk({ ...raw, kind: "vote" })).toBeNull();

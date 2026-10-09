@@ -250,6 +250,7 @@ describe("answers go back the way the item came", () => {
   });
   test("the broker's", () => {
     expect(toAskAnswer({ behavior: "allow", always: true })).toEqual({ behavior: "allow", always: true });
+    expect(toAskAnswer({ behavior: "allow", remember: { rule: "Bash(ls)", scope: "repo" } })).toEqual({ behavior: "allow", remember: "Bash(ls)" });
     expect(toAskAnswer({ behavior: "deny", message: "  not now " })).toEqual({ behavior: "deny", message: "not now" });
     expect(toAskAnswer({ behavior: "deny", message: "  " })).toEqual({ behavior: "deny" });
     expect(toAskAnswer({ answers: { q: "a" } })).toEqual({ behavior: "allow", answers: { q: "a" } });
