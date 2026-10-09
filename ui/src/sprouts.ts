@@ -109,6 +109,17 @@ export function workLine(s: Sprout): string | null {
 
 export const needsYou = (s: Sprout): boolean => s.status === "parked" || (s.status === "clarifying" && (s.questions?.length ?? 0) > 0);
 
+/** What a card's motion says: `needs` waits on the user (a question, a
+ *  park, a branch to push), `working` has an agent on a stage or its
+ *  retro, `still` has nothing under way (queued, ended). */
+export type SproutActivity = "needs" | "working" | "still";
+
+export function sproutActivity(s: Sprout): SproutActivity {
+  if (needsYou(s) || s.status === "approving") return "needs";
+  if (STATUS_STAGE[s.status] !== undefined || s.retro?.state === "running") return "working";
+  return "still";
+}
+
 /** what needs you, then what runs or waits its turn, then what ended; newest change first in each */
 export function sortSprouts(list: readonly Sprout[]): Sprout[] {
   const rank = (s: Sprout): number => (needsYou(s) ? 0 : sproutEnded(s) ? 2 : 1);

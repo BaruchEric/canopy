@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import type { IncubatorStages, Sprout } from "../../src/core/types";
 import type { FeedSnapshot } from "./feed";
-import { branchHref, needsYou, replaceSprouts, sortSprouts, sproutBackend, sproutLines, sproutWord, stageAt, stageStrip, stagesWord, staleSprout, workLine } from "./sprouts";
+import { branchHref, needsYou, replaceSprouts, sortSprouts, sproutActivity, sproutBackend, sproutLines, sproutWord, stageAt, stageStrip, stagesWord, staleSprout, workLine } from "./sprouts";
 
 const sprout = (over: Partial<Sprout> = {}): Sprout => ({
   id: "sp_000000000001",
@@ -240,5 +240,25 @@ describe("where a new project goes", () => {
     expect(sproutBackend(order, "mac", { mac: off, mini: isolated }, (b) => b !== "mini")).toBe("mac");
     expect(sproutBackend(order, "mac", { mac: off }, all)).toBe("mac");
     expect(sproutBackend(["mac"], "mac", {}, all)).toBe("mac");
+  });
+});
+
+describe("a card's activity", () => {
+  test("questions, a park and a branch to push wait on you", () => {
+    expect(sproutActivity(sprout({ status: "clarifying", questions: [q("Who?")] }))).toBe("needs");
+    expect(sproutActivity(sprout({ status: "parked", parked: "x" }))).toBe("needs");
+    expect(sproutActivity(sprout({ status: "approving" }))).toBe("needs");
+  });
+  test("a stage under way works, clarify before its questions among them", () => {
+    for (const status of ["clarifying", "researching", "building", "testing", "accepting", "deploying"] as const) {
+      expect(sproutActivity(sprout({ status }))).toBe("working");
+    }
+  });
+  test("a retro running after the end works; queued and ended are still", () => {
+    const retro = { for: "live", state: "running", at: 1, flowsSeen: 1, tries: 1 } as unknown as NonNullable<Sprout["retro"]>;
+    expect(sproutActivity(sprout({ status: "live", retro }))).toBe("working");
+    expect(sproutActivity(sprout({ status: "live" }))).toBe("still");
+    expect(sproutActivity(sprout({ status: "queued" }))).toBe("still");
+    expect(sproutActivity(sprout({ status: "stopped" }))).toBe("still");
   });
 });

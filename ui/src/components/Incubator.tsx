@@ -4,7 +4,7 @@
  * or a repo, and one project's sheet (intent, inputs, the chain of flows,
  * what it spent, and add input, stop, resume, dismiss).
  */
-import { useEffect, useRef, useState, type ReactNode } from "react";
+import { useEffect, useRef, useState, type CSSProperties, type ReactNode } from "react";
 import { useShallow } from "zustand/react/shallow";
 import { INPUT_FILE_MAX, handOffText, inputKindOf, inputType, sizeWord } from "../../../src/core/sprout";
 import { isVercelAppUrl } from "../../../src/core/deploy";
@@ -12,7 +12,7 @@ import type { SproutDetail, SproutRetro } from "../../../src/core/types";
 import { api } from "../api";
 import { dropSproutHere, sproutHere } from "../routes";
 import { backendOf, plainOf } from "../registry";
-import { INPUT_GLYPH, STAGES, branchHref, needsYou, sortSprouts, sproutBackend, sproutWord, stageStrip, stagesWord, workLine, type StageMark } from "../sprouts";
+import { INPUT_GLYPH, STAGES, branchHref, sortSprouts, sproutActivity, sproutBackend, sproutWord, stageStrip, stagesWord, workLine, type StageMark } from "../sprouts";
 import { isOnline, multi, useStore } from "../store";
 import { ago } from "../util";
 import { InboxChip } from "./Inbox";
@@ -54,13 +54,37 @@ function StageStrip({ id }: { id: string }) {
   );
 }
 
-function SproutCard({ id }: { id: string }) {
+/** One project's card. It moves with what it is doing: an agent at work
+ *  runs sap along its top, one waiting on you breathes rust, and any change
+ *  the stream brings ripples it once. */
+function SproutCard({ id, i }: { id: string; i: number }) {
   const s = useStore((st) => st.sprouts[id]);
   const show = useStore((st) => st.showSprout);
   const many = useStore(multi);
+  const updatedAt = s?.updatedAt;
+  const [pulse, setPulse] = useState(false);
+  const first = useRef(true);
+  useEffect(() => {
+    // the card's first paint is its rise in, not a change
+    if (first.current) {
+      first.current = false;
+      return;
+    }
+    if (updatedAt === undefined) return;
+    setPulse(true);
+    const t = setTimeout(() => setPulse(false), 1200);
+    return () => clearTimeout(t);
+  }, [updatedAt]);
   if (!s) return null;
+  const activity = sproutActivity(s);
   return (
-    <button type="button" className={`sprout-card${needsYou(s) ? " needs" : ""}`} onClick={() => show(s.id)}>
+    <button
+      type="button"
+      className={`sprout-card ${activity}${pulse ? " pulse" : ""}`}
+      style={{ "--i": i } as CSSProperties}
+      aria-busy={activity === "working"}
+      onClick={() => show(s.id)}
+    >
       <span className="sprout-head">
         <span className="sprout-title">
           {s.title}
@@ -145,8 +169,8 @@ export function IncubatorView({ onGit }: { onGit?: () => void }) {
           </div>
         ) : (
           <div className="sprout-grid">
-            {ids.map((id) => (
-              <SproutCard key={id} id={id} />
+            {ids.map((id, i) => (
+              <SproutCard key={id} id={id} i={i} />
             ))}
           </div>
         )}

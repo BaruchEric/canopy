@@ -8042,6 +8042,11 @@ span.effective-flag:not(:first-child) {
   padding: 10px 12px;
   color: var(--ink);
   cursor: pointer;
+  /* the working edge sits inside the rounded corners */
+  position: relative;
+  overflow: hidden;
+  /* the colour a change ripples in */
+  --state: var(--sky);
 }
 .sprout-card:hover {
   background: var(--bark2);
@@ -8049,6 +8054,82 @@ span.effective-flag:not(:first-child) {
 }
 .sprout-card.needs {
   border-color: color-mix(in srgb, var(--rust) 50%, var(--hair));
+}
+.sprout-card.needs {
+  --state: var(--rust);
+}
+/* an agent at work on it: a sky edge along the top, which the motion
+   block below sets flowing */
+.sprout-card.working::before {
+  content: "";
+  position: absolute;
+  inset: 0 0 auto;
+  height: 2px;
+  background: color-mix(in srgb, var(--sky) 70%, transparent);
+  pointer-events: none;
+}
+@media (prefers-reduced-motion: no-preference) {
+  .sprout-grid > .sprout-card {
+    transition:
+      background 120ms ease,
+      border-color 120ms ease;
+    animation: card-in 280ms var(--ease) min(calc(var(--i, 0) * 30ms), 240ms) backwards;
+  }
+  /* sap runs along the top edge while a stage or the retro is under way */
+  .sprout-card.working::before {
+    background: linear-gradient(
+      90deg,
+      transparent 0%,
+      color-mix(in srgb, var(--sky) 25%, transparent) 20%,
+      var(--sky) 50%,
+      color-mix(in srgb, var(--sky) 25%, transparent) 80%,
+      transparent 100%
+    );
+    background-size: 50% 100%;
+    background-repeat: no-repeat;
+    animation: sprout-sap 1.8s ease-in-out infinite;
+  }
+  @keyframes sprout-sap {
+    from {
+      background-position: -100% 0;
+    }
+    to {
+      background-position: 200% 0;
+    }
+  }
+  /* and the stage under way fades in and out, on the card and its sheet */
+  .sprout-card.working .stage.now,
+  .sprout-sheet .stage.now {
+    animation: needs 1.1s ease-in-out infinite alternate;
+  }
+  /* waiting on you: the rust edge breathes */
+  .sprout-grid > .sprout-card.needs {
+    animation:
+      card-in 280ms var(--ease) min(calc(var(--i, 0) * 30ms), 240ms) backwards,
+      sprout-needs 1.4s ease-in-out infinite alternate;
+  }
+  @keyframes sprout-needs {
+    from {
+      border-color: color-mix(in srgb, var(--rust) 25%, var(--hair));
+    }
+    to {
+      border-color: var(--rust);
+      box-shadow: 0 0 0 3px color-mix(in srgb, var(--rust) 12%, transparent);
+    }
+  }
+  /* the stream just moved it on: a ring spreads in its state colour, as a
+     repo card's does; card-in stays first so the ripple does not replay it */
+  .sprout-grid > .sprout-card.pulse {
+    animation:
+      card-in 280ms var(--ease) min(calc(var(--i, 0) * 30ms), 240ms) backwards,
+      pulse 1.2s ease-out;
+  }
+  .sprout-grid > .sprout-card.needs.pulse {
+    animation:
+      card-in 280ms var(--ease) min(calc(var(--i, 0) * 30ms), 240ms) backwards,
+      pulse 1.2s ease-out,
+      sprout-needs 1.4s ease-in-out 1.2s infinite alternate;
+  }
 }
 .sprout-head {
   display: flex;
