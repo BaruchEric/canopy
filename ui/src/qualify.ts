@@ -13,6 +13,8 @@ import type {
   TaskInfo,
   ServerEvent,
   SourceState,
+  Sprout,
+  SproutDetail,
   TermInfo,
 } from "../../src/core/types";
 
@@ -71,6 +73,19 @@ export const qKept = (q: Q, k: KeptShell): KeptShell => ({ ...k, id: q(k.id), re
  *  one browser on two backends is two rows, each with its backend's word. */
 export const qDevice = (q: Q, d: Device): Device => ({ ...d, id: q(d.id) });
 
+/** A sprout's own id, its seed's repo id, the flows it ran and an extend's
+ *  target are all the backend's, so a sheet opens the right flow. */
+export const qSprout = (q: Q, s: Sprout): Sprout => ({
+  ...s,
+  id: q(s.id),
+  repoId: q(s.repoId),
+  flows: s.flows.map((f) => ({ ...f, flowId: q(f.flowId) })),
+  ...(s.retro ? { retro: { ...s.retro, ...(s.retro.flowId !== undefined ? { flowId: q(s.retro.flowId) } : {}) } } : {}),
+  ...(s.work?.kind === "extend" ? { work: { ...s.work, target: q(s.work.target) } } : {}),
+});
+
+export const qSproutDetail = (q: Q, d: SproutDetail): SproutDetail => ({ ...d, sprout: qSprout(q, d.sprout) });
+
 export const qHistory = (q: Q, h: HistoryOverview): HistoryOverview =>
   h.available ? { ...h, repos: Object.fromEntries(Object.entries(h.repos).map(([id, v]) => [q(id), v])) } : h;
 
@@ -105,6 +120,10 @@ export function qEvent(q: Q, ev: ServerEvent): ServerEvent {
       return { ...ev, kept: ev.kept.map((k) => qKept(q, k)) };
     case "tasks":
       return { ...ev, repoId: q(ev.repoId), tasks: ev.tasks.map((t) => qTask(q, t)) };
+    case "incubator":
+      return { ...ev, sprout: qSprout(q, ev.sprout) };
+    case "incubator-gone":
+      return { ...ev, id: q(ev.id) };
     case "workspaces":
     case "agents":
     case "launchers":
@@ -118,10 +137,8 @@ export function qEvent(q: Q, ev: ServerEvent): ServerEvent {
     // backend's)
     case "registry":
     case "asks":
-    // the incubator is the home backend's alone, and the store drops any
-    // other backend's
-    case "incubator":
-    case "incubator-gone":
+    // where a backend runs stages is kept per backend by the store; the
+    // retro lessons on offer are the home backend's alone
     case "stages":
     case "advice":
       return ev;

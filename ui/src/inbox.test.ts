@@ -320,7 +320,7 @@ describe("the incubator in the inbox", () => {
   test("open questions are one clarify item; a sprout without them is none", () => {
     const items = mergeInbox([], {}, {}, 30_000, { ...ctx, sprouts: [sprout, { ...sprout, id: "sp_000000000002", questions: [] }] });
     expect(items).toHaveLength(1);
-    expect(items[0]).toMatchObject({ key: "sprout:sp_000000000001", source: "sprout", kind: "clarify", who: "clarify", repo: "Coin counter", where: "canopy incubator", title: "1 question before research", at: 20_000 });
+    expect(items[0]).toMatchObject({ key: "sprout:sp_000000000001", source: "sprout", kind: "clarify", who: "clarify", repo: "Coin counter", where: "canopy incubator on mini", title: "1 question before research", at: 20_000 });
     expect(items[0]?.questions?.[0]?.question).toBe("Who counts?");
   });
   test("a park with no gated flow behind it is one park item; a gated flow's park stays the flow's", () => {

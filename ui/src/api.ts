@@ -87,6 +87,8 @@ import {
   qRun,
   qScan,
   qSource,
+  qSprout,
+  qSproutDetail,
   qTask,
   qTerm,
   type Q,
@@ -181,6 +183,12 @@ function from<T>(b: string, v: T, f: (q: Q, v: T) => T): T {
 }
 const fromAll = <T>(b: string, list: T[], f: (q: Q, v: T) => T): T[] =>
   b === homeName() ? list : list.map((v) => from(b, v, f));
+
+/** One sprout's action on the backend its id names, its answer qualified. */
+async function sproutReq(id: string, path: string, init: RequestInit): Promise<Sprout> {
+  const [b, plain] = on(id);
+  return from(b, await req<Sprout>(b, `${path}?id=${encodeURIComponent(plain)}`, init), qSprout);
+}
 
 /** Ids by the backend they belong to, in registry order, each as that
  *  backend knows it and in the order given. None at all is home's. */
@@ -455,23 +463,30 @@ export const api = {
    *  the broker can say which device answered. */
   answerAsk: (id: string, answer: AskAnswer, key: string) =>
     req<Ask>(homeName(), "/api/asks/answer", { method: "POST", headers: keyHeaders(key), body: JSON.stringify({ id, ...answer, client: clientId() }) }),
-  /** the incubator, the home backend's alone */
-  sprouts: () => req<Sprout[]>(homeName(), "/api/incubator"),
-  incubatorStages: () => req<IncubatorStages>(homeName(), "/api/incubator/stages"),
-  sprout: (id: string) => req<SproutDetail>(homeName(), `/api/incubator/one?id=${encodeURIComponent(id)}`),
+  /** the incubator, one backend's at a time; a sprout's calls go to the
+   *  backend its id names */
+  sprouts: async (b: string = homeName()) => fromAll(b, await req<Sprout[]>(b, "/api/incubator"), qSprout),
+  incubatorStages: (b: string = homeName()) => req<IncubatorStages>(b, "/api/incubator/stages"),
+  sprout: async (id: string) => {
+    const [b, plain] = on(id);
+    return from(b, await req<SproutDetail>(b, `/api/incubator/one?id=${encodeURIComponent(plain)}`), qSproutDetail);
+  },
   /** multipart, so a voice memo or an image goes as it is */
-  newSprout: (form: FormData) => req<Sprout>(homeName(), "/api/incubator", { method: "POST", body: form }),
-  addSproutInputs: (id: string, form: FormData) =>
-    req<Sprout>(homeName(), `/api/incubator/input?id=${encodeURIComponent(id)}`, { method: "POST", body: form }),
+  newSprout: async (form: FormData, b: string = homeName()) =>
+    from(b, await req<Sprout>(b, "/api/incubator", { method: "POST", body: form }), qSprout),
+  addSproutInputs: (id: string, form: FormData) => sproutReq(id, "/api/incubator/input", { method: "POST", body: form }),
   answerSprout: (id: string, body: { answers: Record<string, string> } | { skip: true }) =>
-    req<Sprout>(homeName(), `/api/incubator/answer?id=${encodeURIComponent(id)}`, { method: "POST", body: JSON.stringify(body) }),
-  stopSprout: (id: string) => req<Sprout>(homeName(), `/api/incubator/stop?id=${encodeURIComponent(id)}`, { method: "POST", body: "{}" }),
+    sproutReq(id, "/api/incubator/answer", { method: "POST", body: JSON.stringify(body) }),
+  stopSprout: (id: string) => sproutReq(id, "/api/incubator/stop", { method: "POST", body: "{}" }),
   resumeSprout: (id: string, choice: "continue" | "retry") =>
-    req<Sprout>(homeName(), `/api/incubator/resume?id=${encodeURIComponent(id)}`, { method: "POST", body: JSON.stringify({ choice }) }),
+    sproutReq(id, "/api/incubator/resume", { method: "POST", body: JSON.stringify({ choice }) }),
   /** the user's yes or no to an extend's push; a yes names the head it saw */
   handOffSprout: (id: string, approve: boolean, head: string) =>
-    req<Sprout>(homeName(), `/api/incubator/handoff?id=${encodeURIComponent(id)}`, { method: "POST", body: JSON.stringify({ approve, head }) }),
-  dismissSprout: (id: string) => req<{ ok: true }>(homeName(), `/api/incubator?id=${encodeURIComponent(id)}`, { method: "DELETE" }),
+    sproutReq(id, "/api/incubator/handoff", { method: "POST", body: JSON.stringify({ approve, head }) }),
+  dismissSprout: (id: string) => {
+    const [b, plain] = on(id);
+    return req<{ ok: true }>(b, `/api/incubator?id=${encodeURIComponent(plain)}`, { method: "DELETE" });
+  },
   /** the retro lessons on offer */
   advice: () => req<AdviceOffer[]>(homeName(), "/api/incubator/advice"),
   /** accepts or dismisses one; a chat it opened is named by the page's ids */

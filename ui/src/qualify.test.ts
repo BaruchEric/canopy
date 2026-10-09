@@ -13,6 +13,8 @@ import {
   qRepo,
   qRun,
   qScan,
+  qSprout,
+  qSproutDetail,
   qTask,
   qTerm,
 } from "./qualify";
@@ -29,6 +31,7 @@ import type {
   Run,
   ScanResult,
   ServerEvent,
+  Sprout,
   TermInfo,
 } from "../../src/core/types";
 
@@ -44,6 +47,13 @@ const job = { id: "j1", repoId: "a/b" } as Job;
 const term = { id: "0123456789abcdef0123456789abcdef", repoId: "a/b" } as TermInfo;
 const kept = { id: "0123456789abcdef0123456789abcdef", repoId: "a/b" } as KeptShell;
 const device = { id: "00ff00ff00ff00ff", name: "phone" } as Device;
+const sprout = {
+  id: "sp_000000000001",
+  repoId: "_incubator/coins",
+  flows: [{ workflow: "clarify", flowId: "f1", outcome: "done" }],
+  retro: { flowId: "f2" },
+  work: { kind: "extend", target: "a/b", remote: "https://github.com/o/b.git", branch: "new/coins" },
+} as unknown as Sprout;
 
 describe("shapes", () => {
   test("a repo, its source and a forge clone's id", () => {
@@ -85,6 +95,28 @@ describe("shapes", () => {
   });
 });
 
+describe("sprouts", () => {
+  test("a sprout's id, seed, flows, retro flow and extend target", () => {
+    const out = qSprout(q, sprout);
+    expect(out.id).toBe("mac|sp_000000000001");
+    expect(out.repoId).toBe("mac|_incubator/coins");
+    expect(out.flows.map((f) => f.flowId)).toEqual(["mac|f1"]);
+    expect(out.retro?.flowId).toBe("mac|f2");
+    expect(out.work?.kind === "extend" && out.work.target).toBe("mac|a/b");
+    expect(sprout.id).toBe("sp_000000000001");
+  });
+  test("one with no retro or work gains none", () => {
+    const out = qSprout(q, { ...sprout, retro: undefined, work: undefined });
+    expect("retro" in out && out.retro !== undefined).toBe(false);
+    expect(out.work).toBeUndefined();
+  });
+  test("a detail's sprout", () => {
+    const out = qSproutDetail(q, { sprout, brief: null, intent: "x", inputsIndex: "", research: null, retro: null });
+    expect(out.sprout.id).toBe("mac|sp_000000000001");
+    expect(out.intent).toBe("x");
+  });
+});
+
 describe("qEvent", () => {
   test("every event that carries an id comes out qualified", () => {
     const cases: [ServerEvent, (e: ServerEvent) => string[]][] = [
@@ -101,6 +133,8 @@ describe("qEvent", () => {
       [{ type: "terms", terms: [term] }, (e) => (e.type === "terms" ? e.terms.flatMap((t) => [t.id, t.repoId]) : [])],
       [{ type: "devices", devices: [device] }, (e) => (e.type === "devices" ? e.devices.map((d) => d.id) : [])],
       [{ type: "kept", kept: [kept] }, (e) => (e.type === "kept" ? e.kept.flatMap((k) => [k.id, k.repoId]) : [])],
+      [{ type: "incubator", sprout }, (e) => (e.type === "incubator" ? [e.sprout.id, e.sprout.repoId, ...e.sprout.flows.map((f) => f.flowId)] : [])],
+      [{ type: "incubator-gone", id: "sp_000000000001" }, (e) => (e.type === "incubator-gone" ? [e.id] : [])],
     ];
     for (const [ev, ids] of cases) {
       const out = ids(qEvent(q, ev));

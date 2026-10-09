@@ -233,3 +233,21 @@ export function stagesWord(st: IncubatorStages): { word: string; title: string; 
       };
   }
 }
+
+/** Where a new project goes unless the user picks: home while its stages
+ *  can start (a runner away still counts, since its sprouts start once it
+ *  answers), else the first online backend in the page's order whose can,
+ *  else home, which says why it waits. */
+export function sproutBackend(
+  order: readonly string[],
+  home: string,
+  stages: Readonly<Record<string, IncubatorStages>>,
+  online: (b: string) => boolean,
+): string {
+  const can = (b: string): boolean => {
+    const st = Object.hasOwn(stages, b) ? stages[b] : undefined;
+    return st !== undefined && st.mode !== "off";
+  };
+  if (can(home)) return home;
+  return order.find((b) => b !== home && online(b) && can(b)) ?? home;
+}

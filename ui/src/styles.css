@@ -7993,6 +7993,18 @@ span.effective-flag:not(:first-child) {
 .stages-word.not {
   color: var(--rust);
 }
+/* + project's choice of backend, one word each with where it runs stages */
+.sprout-backends {
+  align-items: center;
+  margin: 8px 0;
+}
+.sprout-backends .stages-word {
+  font-size: 10.5px;
+}
+.sprout-backends .machine.on {
+  background: var(--wash);
+  box-shadow: inset 0 0 0 1px var(--hair);
+}
 .incubator-body {
   flex: none;
 }

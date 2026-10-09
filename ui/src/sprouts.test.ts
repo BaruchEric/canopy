@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
-import type { Sprout } from "../../src/core/types";
+import type { IncubatorStages, Sprout } from "../../src/core/types";
 import type { FeedSnapshot } from "./feed";
-import { branchHref, needsYou, replaceSprouts, sortSprouts, sproutLines, sproutWord, stageAt, stageStrip, stagesWord, staleSprout, workLine } from "./sprouts";
+import { branchHref, needsYou, replaceSprouts, sortSprouts, sproutBackend, sproutLines, sproutWord, stageAt, stageStrip, stagesWord, staleSprout, workLine } from "./sprouts";
 
 const sprout = (over: Partial<Sprout> = {}): Sprout => ({
   id: "sp_000000000001",
@@ -217,5 +217,28 @@ describe("stagesWord", () => {
   test("every mode has its own word", () => {
     const words = (["runner", "unisolated", "off"] as const).map((mode) => stagesWord({ isolated: false, mode, waiting: null }).word);
     expect(new Set(words).size).toBe(3);
+  });
+});
+
+describe("where a new project goes", () => {
+  const off: IncubatorStages = { isolated: false, mode: "off", waiting: null };
+  const isolated: IncubatorStages = { isolated: true, mode: "runner", waiting: null };
+  const away: IncubatorStages = { isolated: false, mode: "runner", waiting: "the stage runner is not answering" };
+  const unisolated: IncubatorStages = { isolated: false, mode: "unisolated", waiting: null };
+  const order = ["mac", "mini"];
+  const all = () => true;
+  test("home while its stages can start, a runner away among them", () => {
+    expect(sproutBackend(order, "mac", { mac: unisolated, mini: isolated }, all)).toBe("mac");
+    expect(sproutBackend(order, "mac", { mac: away, mini: isolated }, all)).toBe("mac");
+  });
+  test("home with stages off sends it to the first online backend whose stages can start", () => {
+    expect(sproutBackend(order, "mac", { mac: off, mini: isolated }, all)).toBe("mini");
+    expect(sproutBackend(["mac", "nas", "mini"], "mac", { mac: off, nas: off, mini: isolated }, all)).toBe("mini");
+  });
+  test("home when no other can, is offline, or has not said", () => {
+    expect(sproutBackend(order, "mac", { mac: off, mini: off }, all)).toBe("mac");
+    expect(sproutBackend(order, "mac", { mac: off, mini: isolated }, (b) => b !== "mini")).toBe("mac");
+    expect(sproutBackend(order, "mac", { mac: off }, all)).toBe("mac");
+    expect(sproutBackend(["mac"], "mac", {}, all)).toBe("mac");
   });
 });

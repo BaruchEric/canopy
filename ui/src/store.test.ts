@@ -1016,7 +1016,7 @@ describe("several backends", () => {
     expect(useStore.getState().sproutsReady).toBe(true);
   });
 
-  test("the incubator is home's alone; its questions are in the inbox and answered there", async () => {
+  test("every backend's incubator is on the page; its questions are in the inbox and answered on their own backend", async () => {
     const asking: Sprout = {
       id: "sp_000000000001",
       slug: "coins",
@@ -1036,43 +1036,85 @@ describe("several backends", () => {
       updatedAt: 5,
     };
     const answered: Sprout = { ...asking, status: "queued", questions: undefined, questionsAt: undefined, updatedAt: 6 };
+    // b's own sprout, which ran a clarify flow; b names it by its plain ids
+    const theirs: Sprout = { ...asking, id: "sp_000000000002", repoId: "_incubator/rea", flows: [{ workflow: "clarify", flowId: "f1", outcome: "done" }] };
+    const theirsAnswered: Sprout = { ...theirs, status: "queued", questions: undefined, questionsAt: undefined, updatedAt: 6 };
+    const made: Sprout = { ...theirs, id: "sp_000000000003", status: "queued", questions: undefined, flows: [], updatedAt: 7 };
     const posted: { path: string; body: unknown }[] = [];
+    const postedB: { path: string; body: unknown }[] = [];
     await start(
       (path, init) => {
         if (init?.method === "POST") posted.push({ path, body: JSON.parse(String(init.body ?? "null")) });
         return backendAnswers(scanOf("/a", [repo("proj")]), [], {
           "/api/backends": twoBackends,
           "/api/incubator": [asking],
-          "/api/incubator/stages": { isolated: false, mode: "runner", waiting: "the stage runner is not answering" },
+          "/api/incubator/stages": { isolated: false, mode: "off", waiting: "stages need the stage runner" },
           "/api/incubator/answer": answered,
         })(path, init);
       },
-      backendAnswers(scanOf("/b", [repo("proj")]), []),
+      (path, init) => {
+        if (init?.method === "POST" && path === "/api/incubator") {
+          postedB.push({ path, body: null });
+          return new Response(JSON.stringify(made), { status: 201 });
+        }
+        if (init?.method === "POST") postedB.push({ path, body: JSON.parse(String(init.body ?? "null")) });
+        return backendAnswers(scanOf("/b", [repo("proj")]), [], {
+          "/api/incubator": [theirs],
+          "/api/incubator/stages": { isolated: true, mode: "runner", waiting: null },
+          "/api/incubator/answer": theirsAnswered,
+        })(path, init);
+      },
     );
     await settle();
     let s = useStore.getState();
     expect(s.sproutsReady).toBe(true);
-    expect(Object.keys(s.sprouts)).toEqual([asking.id]);
-    const item = inboxItems(s).find((i) => i.source === "sprout");
+    expect(Object.keys(s.sprouts).sort()).toEqual(["b|sp_000000000002", asking.id]);
+    // b's ids come qualified, the flows it ran among them
+    expect(s.sprouts["b|sp_000000000002"]?.repoId).toBe("b|_incubator/rea");
+    expect(s.sprouts["b|sp_000000000002"]?.flows[0]?.flowId).toBe("b|f1");
+    expect(s.stages).toEqual({
+      a: { isolated: false, mode: "off", waiting: "stages need the stage runner" },
+      b: { isolated: true, mode: "runner", waiting: null },
+    });
+    const item = inboxItems(s).find((i) => i.source === "sprout" && i.id === asking.id);
     if (!item) throw new Error("no sprout item in the inbox");
     expect(item.key).toBe(`sprout:${asking.id}`);
-    expect(s.stages).toEqual({ isolated: false, mode: "runner", waiting: "the stage runner is not answering" });
-    // b's incubator is not this page's
-    useStore.getState().applyEvent({ type: "incubator", sprout: { ...asking, id: "sp_000000000002" } }, "b");
-    expect(Object.keys(useStore.getState().sprouts)).toEqual([asking.id]);
-    useStore.getState().applyEvent({ type: "stages", stages: { isolated: true, mode: "runner", waiting: null } }, "b");
-    expect(useStore.getState().stages?.isolated).toBe(false);
-    useStore.getState().applyEvent({ type: "stages", stages: { isolated: true, mode: "runner", waiting: null } });
-    expect(useStore.getState().stages).toEqual({ isolated: true, mode: "runner", waiting: null });
+    const bItem = inboxItems(s).find((i) => i.source === "sprout" && i.id === "b|sp_000000000002");
+    if (!bItem) throw new Error("no sprout item from b in the inbox");
+    expect(bItem.where).toBe("canopy incubator on b");
+    // each backend's stages events land on its own
+    useStore.getState().applyEvent({ type: "stages", stages: { isolated: false, mode: "runner", waiting: null } }, "b");
+    expect(useStore.getState().stages["b"]?.isolated).toBe(false);
+    expect(useStore.getState().stages["a"]?.mode).toBe("off");
+    // a reload of a's list leaves b's sprouts where they are
+    await useStore.getState().loadSprouts();
+    expect(Object.keys(useStore.getState().sprouts).sort()).toEqual(["b|sp_000000000002", asking.id]);
     // going on assumptions is a skip, to home
     await useStore.getState().answerInbox(item, { skip: true });
     expect(posted.find((p) => p.path.startsWith("/api/incubator/answer"))).toEqual({ path: `/api/incubator/answer?id=${asking.id}`, body: { skip: true } });
+    // and b's goes to b, with the id b knows
+    await useStore.getState().answerInbox(bItem, { skip: true });
+    expect(postedB.find((p) => p.path.startsWith("/api/incubator/answer"))).toEqual({ path: "/api/incubator/answer?id=sp_000000000002", body: { skip: true } });
     s = useStore.getState();
     expect(s.sprouts[asking.id]?.status).toBe("queued");
+    expect(s.sprouts["b|sp_000000000002"]?.status).toBe("queued");
     expect(inboxItems(s).some((i) => i.source === "sprout")).toBe(false);
     expect(s.feed.some((l) => l.kind === "incubator" && l.text === "waiting its turn for research")).toBe(true);
     useStore.getState().applyEvent({ type: "incubator-gone", id: asking.id });
+    expect(Object.keys(useStore.getState().sprouts)).toEqual(["b|sp_000000000002"]);
+    // a project started on b goes to b and comes back under b's name
+    const form = new FormData();
+    form.append("text", "a new idea");
+    const started = await useStore.getState().createSprout(form, "b");
+    expect(postedB.some((p) => p.path === "/api/incubator")).toBe(true);
+    expect(posted.some((p) => p.path === "/api/incubator")).toBe(false);
+    expect(started.id).toBe("b|sp_000000000003");
+    expect(useStore.getState().sprouts["b|sp_000000000003"]?.status).toBe("queued");
+    // hiding b takes its sprouts and its stages off the page
+    useStore.getState().hideBackend("b", true);
     expect(useStore.getState().sprouts).toEqual({});
+    expect(Object.keys(useStore.getState().stages)).toEqual(["a"]);
+    useStore.getState().hideBackend("b", false);
   });
 
   test("a scan from b prunes only b's panels", async () => {

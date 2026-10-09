@@ -651,13 +651,14 @@ interface CanopyState {
   answerKey: string | null;
   /** the human's presence at the broker, as last heard */
   presence: Presence | null;
-  /** the incubator's sprouts by id, the home backend's alone */
+  /** the incubator's sprouts by id, every shown backend's (another
+   *  backend's ids qualified) */
   sprouts: Record<string, Sprout>;
-  /** whether home answered the incubator's list */
+  /** whether any backend answered the incubator's list */
   sproutsReady: boolean;
-  /** where home runs the incubator's stages; null until it says (an older
-   *  backend never does) */
-  stages: IncubatorStages | null;
+  /** where each backend runs the incubator's stages, by backend name; one
+   *  that has not said (an older backend never does) is missing */
+  stages: Record<string, IncubatorStages>;
   /** the retro lessons home has on offer, which the inbox shows as one item */
   advice: AdviceOffer[];
   /** an accepted lesson's text by chat run id, which that chat's message box
@@ -940,13 +941,14 @@ interface CanopyState {
   /** routes an answer to where the item came from: a run's prompt, a
    *  flow's gate, or the broker's ask with this browser's answer key */
   answerInbox: (item: InboxItem, answer: InboxAnswer) => Promise<void>;
-  /** reads the incubator's list off the home backend */
-  loadSprouts: () => Promise<void>;
+  /** reads the incubator's list off one backend, home by default */
+  loadSprouts: (backend?: string) => Promise<void>;
   /** accepts or dismisses a retro lesson; a chat it opened is shown, a file
    *  is answered for the inbox to name */
   answerAdvice: (key: string, accept: boolean) => Promise<AdviceAccepted | null>;
   /** a new project from the + project sheet or n; answers before the seed is made */
-  createSprout: (form: FormData) => Promise<Sprout>;
+  /** starts a project on the named backend, home by default */
+  createSprout: (form: FormData, backend?: string) => Promise<Sprout>;
   addSproutInputs: (id: string, form: FormData) => Promise<Sprout>;
   /** clarify's questions answered, or null to go on assumptions */
   answerSprout: (id: string, answers: Record<string, string> | null) => Promise<void>;
@@ -1331,8 +1333,8 @@ const REGISTRY_RETRY_MAX = 5 * 60_000;
    closed while it was on its way */
 let sproutEvents = 0;
 const sproutHeard = new Map<string, number>();
-/* and the stages events, so a read on its way never undoes a newer one */
-let stagesEvents = 0;
+/* and each backend's stages events, so a read on its way never undoes a newer one */
+const stagesEvents = new Map<string, number>();
 /** the same for the advice on offer */
 let adviceEvents = 0;
 
@@ -1421,8 +1423,9 @@ function resync(get: () => CanopyState, set: (fn: (s: CanopyState) => Partial<Ca
   if (b === get().home) {
     void get().loadRegistry();
     void get().loadAsks();
-    void get().loadSprouts();
   }
+  // every backend's incubator, which may have moved on too
+  void get().loadSprouts(b);
   // the tasks a panel loaded may have moved while the stream was down
   for (const id of Object.keys(get().tasks)) if (backendOf(id) === b) void get().loadTasks(id).catch(() => {});
   void Promise.all([api.terms(b), api.kept(b), api.helpers(b)])
@@ -1553,7 +1556,7 @@ export const useStore = create<CanopyState>((set, get) => ({
   presence: null,
   sprouts: {},
   sproutsReady: false,
-  stages: null,
+  stages: {},
   advice: [],
   chatDrafts: {},
   adviceFile: null,
@@ -1909,6 +1912,7 @@ export const useStore = create<CanopyState>((set, get) => ({
     void get().loadHistory(false, name);
     readTasks(get, set, name);
     readPeers(get, set, name);
+    void get().loadSprouts(name);
     void api
       .about(name)
       .then((about) => set((s) => ({ conns: connsIf(s, name, { about }) })))
@@ -1955,6 +1959,7 @@ export const useStore = create<CanopyState>((set, get) => ({
     const { [name]: _launchers, ...launchers } = s.launchers;
     const { [name]: _remembered, ...remembered } = s.remembered;
     const { [name]: _history, ...histories } = s.histories;
+    const { [name]: _stages, ...stages } = s.stages;
     const backendOrder = applyRegistry(s.home, registryEntries, hiddenBackends);
     set({
       settings,
@@ -1973,6 +1978,8 @@ export const useStore = create<CanopyState>((set, get) => ({
       tasks: recordOut(s.tasks, name),
       taskErrors: recordOut(s.taskErrors, name),
       taskAll: s.taskAll.filter((t) => backendOf(t.repoId) !== name),
+      sprouts: recordOut(s.sprouts, name),
+      stages,
       agents,
       launchers,
       remembered,
@@ -2322,8 +2329,8 @@ export const useStore = create<CanopyState>((set, get) => ({
     // a backend hidden since this was sent is not on the page any more
     if (!isShown(before, b)) return;
     beat();
-    // workspaces, tailchan, the agent registry, the asks and the incubator are the home backend's alone
-    if ((ev.type === "chan" || ev.type === "workspaces" || ev.type === "registry" || ev.type === "asks" || ev.type === "incubator" || ev.type === "incubator-gone" || ev.type === "stages" || ev.type === "advice") && b !== before.home) return;
+    // workspaces, tailchan, the agent registry, the asks and the retro lessons are the home backend's alone
+    if ((ev.type === "chan" || ev.type === "workspaces" || ev.type === "registry" || ev.type === "asks" || ev.type === "advice") && b !== before.home) return;
     // The feed says what changed, so the lines come from the event against
     // the state before it is applied, as the backend that sent it saw it.
     // a message already held (a reconnect's replay, a post heard twice) is
@@ -2361,8 +2368,8 @@ export const useStore = create<CanopyState>((set, get) => ({
       return;
     }
     if (ev.type === "stages") {
-      stagesEvents += 1;
-      set({ stages: ev.stages });
+      stagesEvents.set(b, (stagesEvents.get(b) ?? 0) + 1);
+      set((st) => ({ stages: { ...st.stages, [b]: ev.stages } }));
       return;
     }
     if (ev.type === "advice") {
@@ -2618,39 +2625,46 @@ export const useStore = create<CanopyState>((set, get) => ({
     void get().loadAsks();
   },
   closeInbox: () => set({ inboxOpen: false, inboxFocus: null }),
-  loadSprouts: async () => {
-    const stagesMark = stagesEvents;
+  loadSprouts: async (backend) => {
+    const b = backend ?? get().home;
+    const stagesMark = stagesEvents.get(b) ?? 0;
     void api
-      .incubatorStages()
+      .incubatorStages(b)
       .then((stages) => {
-        if (stagesEvents === stagesMark) set({ stages });
+        if ((stagesEvents.get(b) ?? 0) === stagesMark && isShown(get(), b)) set((s) => ({ stages: { ...s.stages, [b]: stages } }));
       })
       .catch(() => {
         // an older backend has no such route; the view says nothing then
       });
-    const adviceMark = adviceEvents;
-    void api
-      .advice()
-      .then((advice) => {
-        if (adviceEvents === adviceMark && Array.isArray(advice)) set({ advice });
-      })
-      .catch(() => {
-        // an older backend has no such route, and offers nothing
-      });
+    if (b === get().home) {
+      const adviceMark = adviceEvents;
+      void api
+        .advice()
+        .then((advice) => {
+          if (adviceEvents === adviceMark && Array.isArray(advice)) set({ advice });
+        })
+        .catch(() => {
+          // an older backend has no such route, and offers nothing
+        });
+    }
     // events that land while the list is on its way are newer than it
     const mark = sproutEvents;
     try {
-      const list = await api.sprouts();
-      set((s) => ({
-        sprouts: replaceSprouts(s.sprouts, Array.isArray(list) ? list : [], (id) => (sproutHeard.get(id) ?? 0) > mark),
-        sproutsReady: true,
-      }));
+      const list = await api.sprouts(b);
+      // hidden while the list was on its way: it lands nothing
+      if (!isShown(get(), b)) return;
+      set((s) => {
+        const mine = mineOf(b);
+        const held = Object.fromEntries(Object.entries(s.sprouts).filter(([id]) => mine(id)));
+        const fresh = replaceSprouts(held, Array.isArray(list) ? list : [], (id) => (sproutHeard.get(id) ?? 0) > mark);
+        return { sprouts: { ...recordOut(s.sprouts, b), ...fresh }, sproutsReady: true };
+      });
     } catch {
       // a failed reload keeps what is held, so a blip does not drop the inbox's questions
     }
   },
-  createSprout: async (form) => {
-    const sp = await api.newSprout(form);
+  createSprout: async (form, backend) => {
+    const sp = await api.newSprout(form, backend ?? get().home);
     sproutAnswered(get, sp);
     return sp;
   },

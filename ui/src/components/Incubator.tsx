@@ -11,8 +11,9 @@ import { isVercelAppUrl } from "../../../src/core/deploy";
 import type { SproutDetail, SproutRetro } from "../../../src/core/types";
 import { api } from "../api";
 import { dropSproutHere, sproutHere } from "../routes";
-import { INPUT_GLYPH, STAGES, branchHref, needsYou, sortSprouts, sproutWord, stageStrip, stagesWord, workLine, type StageMark } from "../sprouts";
-import { useStore } from "../store";
+import { backendOf, plainOf } from "../registry";
+import { INPUT_GLYPH, STAGES, branchHref, needsYou, sortSprouts, sproutBackend, sproutWord, stageStrip, stagesWord, workLine, type StageMark } from "../sprouts";
+import { isOnline, multi, useStore } from "../store";
 import { ago } from "../util";
 import { InboxChip } from "./Inbox";
 import { Questions } from "./Prompts";
@@ -56,11 +57,15 @@ function StageStrip({ id }: { id: string }) {
 function SproutCard({ id }: { id: string }) {
   const s = useStore((st) => st.sprouts[id]);
   const show = useStore((st) => st.showSprout);
+  const many = useStore(multi);
   if (!s) return null;
   return (
     <button type="button" className={`sprout-card${needsYou(s) ? " needs" : ""}`} onClick={() => show(s.id)}>
       <span className="sprout-head">
-        <span className="sprout-title">{s.title}</span>
+        <span className="sprout-title">
+          {s.title}
+          {many && <span className="backend-word">{backendOf(s.id)}</span>}
+        </span>
         <span className={`sprout-word st-${s.status}`}>{sproutWord(s)}</span>
       </span>
       <StageStrip id={s.id} />
@@ -72,16 +77,25 @@ function SproutCard({ id }: { id: string }) {
   );
 }
 
-/** Where the stages run, through the stage runner, here unisolated, or
- *  nowhere; nothing from a backend too old to say. */
+/** Where each backend runs its stages, through the stage runner, there
+ *  unisolated, or nowhere, named by backend when the page shows several;
+ *  nothing from a backend too old to say. */
 function StagesWord() {
+  const order = useStore((s) => s.backendOrder);
   const stages = useStore((s) => s.stages);
-  if (!stages) return null;
-  const { word, title, warn } = stagesWord(stages);
+  const many = order.length > 1;
+  const words = order.flatMap((b) => {
+    const st = Object.hasOwn(stages, b) ? stages[b] : undefined;
+    return st ? [{ b, ...stagesWord(st) }] : [];
+  });
   return (
-    <span className={`stages-word${warn ? " not" : ""}`} title={title}>
-      {word}
-    </span>
+    <>
+      {words.map(({ b, word, title, warn }) => (
+        <span key={b} className={`stages-word${warn ? " not" : ""}`} title={title}>
+          {many ? `${b}: ${word}` : word}
+        </span>
+      ))}
+    </>
   );
 }
 
@@ -89,7 +103,14 @@ export function IncubatorView({ onGit }: { onGit?: () => void }) {
   const ready = useStore((s) => s.sproutsReady);
   const ids = useStore(useShallow((s) => sortSprouts(Object.values(s.sprouts)).map((x) => x.id)));
   const show = useStore((s) => s.showSprout);
-  const waiting = useStore((s) => s.stages?.waiting ?? null);
+  const waiting = useStore(
+    useShallow((s) =>
+      s.backendOrder.flatMap((b) => {
+        const w = Object.hasOwn(s.stages, b) ? s.stages[b]?.waiting : null;
+        return w ? [`queued${multi(s) ? ` on ${b}` : ""}: ${w}`] : [];
+      }),
+    ),
+  );
   const body = useRef<HTMLDivElement>(null);
   const { zoom, entry: zoomEntry } = useZoom("incubator");
   // `canopy new` prints a link to its project: open it once the list is in
@@ -110,9 +131,13 @@ export function IncubatorView({ onGit }: { onGit?: () => void }) {
         <WidgetGear label="the incubator" what="incubator" zoom={zoomEntry} share={shareEntries({ el: () => body.current, label: "incubator" })} />
       </div>
       <div ref={body} className="incubator-body" style={zoomStyle(zoom)}>
-        {waiting && <p className="stages-waiting">queued: {waiting}</p>}
+        {waiting.map((w) => (
+          <p key={w} className="stages-waiting">
+            {w}
+          </p>
+        ))}
         {!ready ? (
-          <p className="sheet-empty">The home backend has no incubator to show, or has not answered yet.</p>
+          <p className="sheet-empty">No backend has an incubator to show, or none has answered yet.</p>
         ) : ids.length === 0 ? (
           <div className="incubator-empty">
             <p>Nothing in the incubator. A project starts from an idea, a link, a file, a voice memo or a repo, and is clarified and researched before anything is built.</p>
@@ -255,6 +280,7 @@ function Recorder({ onFiles, onRecording }: { onFiles: (files: File[]) => void; 
  *  sheet's body and footer. */
 function IntakeForm({
   lead,
+  tail,
   allowRepo,
   busy,
   error,
@@ -263,6 +289,8 @@ function IntakeForm({
   onCancel,
 }: {
   lead?: ReactNode;
+  /** under the inputs, above any error */
+  tail?: ReactNode;
   allowRepo: boolean;
   busy: boolean;
   error: string | null;
@@ -370,6 +398,7 @@ function IntakeForm({
             aria-label="A git repo to start from"
           />
         )}
+        {tail}
         {error && <p className="note err">{error}</p>}
       </div>
       <footer className="sheet-foot">
@@ -447,16 +476,51 @@ function SheetHead({ eyebrow, title, sub }: { eyebrow: string; title: string; su
   );
 }
 
+/** Which backend a new project starts on, when the page shows several: one
+ *  word per online backend, each with where it runs stages. */
+function BackendPick({ value, onPick }: { value: string; onPick: (b: string) => void }) {
+  const online = useStore(useShallow((s) => s.backendOrder.filter((b) => isOnline(s, b))));
+  const stages = useStore((s) => s.stages);
+  const choices = online.map((b) => {
+    const st = Object.hasOwn(stages, b) ? stages[b] : undefined;
+    return { b, ...(st ? stagesWord(st) : { word: "stages unknown", warn: true }) };
+  });
+  return (
+    <div className="machines sprout-backends" role="radiogroup" aria-label="Runs on">
+      <span className="dim">runs on</span>
+      {choices.map(({ b, word, warn }) => (
+        <button
+          key={b}
+          type="button"
+          role="radio"
+          aria-checked={b === value}
+          className={`machine${b === value ? " on" : ""}`}
+          title={word}
+          onClick={() => onPick(b)}
+        >
+          <span className="machine-name">{b}</span>
+          <span className={warn ? "stages-word not" : "dim"}>{word}</span>
+        </button>
+      ))}
+    </div>
+  );
+}
+
 export function NewSproutSheet() {
   const close = useStore((s) => s.closeSheet);
   const create = useStore((s) => s.createSprout);
   const show = useStore((s) => s.showSprout);
+  const many = useStore(multi);
+  // the default follows the backends' stages as they answer, until picked
+  const fallback = useStore((s) => sproutBackend(s.backendOrder, s.home, s.stages, (b) => isOnline(s, b)));
+  const [picked, setPicked] = useState<string | null>(null);
+  const backend = picked ?? fallback;
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const submit = (form: FormData) => {
     setBusy(true);
     setError(null);
-    create(form).then(
+    create(form, backend).then(
       (s) => show(s.id),
       (e: unknown) => {
         setError(errText(e));
@@ -469,6 +533,7 @@ export function NewSproutSheet() {
       <SheetHead eyebrow="incubator" title="a new project" />
       <IntakeForm
         lead={<p className="blurb">Clarify reads everything given here and asks at most four questions; research then looks for something to renovate or extend before anything new is built.</p>}
+        tail={many && <BackendPick value={backend} onPick={setPicked} />}
         allowRepo
         busy={busy}
         error={error}
@@ -490,6 +555,7 @@ export function SproutSheet({ id }: { id: string }) {
   const resumeSprout = useStore((s) => s.resumeSprout);
   const handOffSprout = useStore((s) => s.handOffSprout);
   const dismissSprout = useStore((s) => s.dismissSprout);
+  const many = useStore(multi);
   const [detail, setDetail] = useState<SproutDetail | null>(null);
   const [detailErr, setDetailErr] = useState<string | null>(null);
   const [adding, setAdding] = useState(false);
@@ -559,7 +625,7 @@ export function SproutSheet({ id }: { id: string }) {
   const minutes = Math.round(sprout.spent.workMs / 60_000);
   return (
     <>
-      <SheetHead eyebrow={`incubator · ${sproutWord(sprout)}`} title={sprout.title} sub={sprout.repoId} />
+      <SheetHead eyebrow={`incubator · ${sproutWord(sprout)}`} title={sprout.title} sub={`${plainOf(sprout.repoId)}${many ? ` on ${backendOf(sprout.id)}` : ""}`} />
       <div className="sheet-body plan sprout-sheet">
         <StageStrip id={sprout.id} />
         {sprout.status === "parked" && (

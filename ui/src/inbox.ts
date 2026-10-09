@@ -245,13 +245,14 @@ function flowItem(flow: Flow, runs: Readonly<Record<string, Run>>, ctx: InboxCon
 }
 
 function sproutItem(s: Sprout, flows: Readonly<Record<string, Flow>>, ctx: InboxContext): InboxItem | null {
+  const backend = ctx.backendOf?.(s.id) ?? "";
   const base = {
     key: `sprout:${s.id}`,
     source: "sprout" as const,
     id: s.id,
     repoId: ctx.repos.some((r) => r.id === s.repoId) ? s.repoId : null,
     repo: s.title,
-    where: "canopy incubator",
+    where: `canopy incubator${backend ? ` on ${backend}` : ""}`,
     left: null,
     until: null,
   };
