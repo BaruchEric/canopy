@@ -28,3 +28,12 @@ for (const line of dotenv.split("\n")) {
 // that. The mini's .env and its shells set TZ to the host's zone, and
 // deleting TZ (above) leaves Bun in that zone; assigning one moves it.
 process.env["TZ"] = "Etc/UTC";
+
+// Shell tests start dozens of interactive login shells under $SHELL, and a
+// zsh login runs the user's ~/.zshrc each time. On the Mac that file starts a
+// background find over /private/var/folders per shell; they pile up until the
+// timing tests time out. bash with no ~/.bashrc work keeps the suite quiet,
+// and a test that wants another shell sets SHELL itself. TMUX goes too: run
+// from inside a canopy shell, it makes a test's tmux attach refuse to nest.
+process.env["SHELL"] = "/bin/bash";
+delete process.env["TMUX"];
