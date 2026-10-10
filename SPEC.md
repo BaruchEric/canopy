@@ -29,7 +29,7 @@ One developer (the owner) across a laptop, an always-on Linux backend, a tablet 
 - React 19.3.0, Zustand 5.0.15, Vite 8.3.2 with @vitejs/plugin-react 6.1.1 for the SPA.
 - @xterm/xterm 6.0.0 for shells; tmux on the backend keeps them alive.
 - ai 7.0.127 and @ai-sdk/gateway 4.0.103 for commit message suggestions.
-- oxlint 1.86.0 for lint.
+- oxlint 1.86.0 for lint, configured in `.oxlintrc.json`; a hook called after an early return fails lint (`react/rules-of-hooks`).
 - Plain CSS in `ui/src/styles.css`; no CSS framework.
 - git, gh and the `claude` CLI are shelled out to, never linked.
 
