@@ -2,6 +2,14 @@
 
 ## Open
 
+### FR-011 · A run keeps watching the PR it opened
+P2 · added 2026-10-09 · source: Eric (Claude Code Projects video)
+When a run opens a PR, its footer shows the PR number, the diff size and a CI chip whose popover lists checks in progress and passed. Two toggles there: "auto-fix CI and address comments" (the run pushes fixes when checks fail and answers review comments) and "auto-merge when ready". Reference: https://www.youtube.com/watch?v=omihvjf0A2k at 2:15.
+
+### FR-010 · A coordinator that splits a goal into runs, on its own model and effort
+P2 · added 2026-10-09 · source: Eric (Claude Code Projects video)
+One chat takes a goal, proposes the tasks, and starts a run per task, showing each as a card with a live one-line status. The coordinator gets its own model and effort (default low, since it mostly routes work), separate from the per-role settings the runs use. Reference: https://www.youtube.com/watch?v=omihvjf0A2k at 1:52 and 3:24.
+
 ### FR-009 · Wider first columns on an ultrawide
 P3 · added 2026-10-07 · source: dock pass
 At 3440 wide the dock stays near 1300px and leaves about 1000px of cards. New columns could start wider when the room is there.
