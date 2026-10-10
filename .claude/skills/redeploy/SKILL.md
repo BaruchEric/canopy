@@ -23,7 +23,7 @@ The compose run is detached on the host and logged under `~/.cache/canopy-deploy
 
 ## Shells
 
-A normal deploy recreates only the canopy container. Every shell stays, including the one running the deploy, and browser tabs rejoin. When the deploy would also recreate the `shells` container (a change to the Dockerfile's `shells` stage or `lib/tmux*.conf`, a compose change to that service, or a base image bump), the script stops with exit 3 and says so. That recreate ends every shell. Only rerun with `--shells` once the user agrees. The `⟲` chip restores kept shells afterwards.
+A normal deploy recreates only the canopy container. Every shell stays, including the one running the deploy, and browser tabs rejoin. When the deploy would also recreate the `shells` container (a change to the Dockerfile's `shells` stage or `lib/tmux*.conf`, a compose change to that service, or a base image bump), the script stops with exit 3 and says so. That recreate ends every shell. Only rerun with `--shells` once the user agrees. The kept-shells chip (a clock with a back arrow and a count) restores them afterwards.
 
 ## When it fails
 

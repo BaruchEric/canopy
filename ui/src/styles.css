@@ -1046,7 +1046,21 @@ body.resizing iframe {
   color: var(--ink-dim);
 }
 .kept-pop {
-  width: 340px;
+  width: 380px;
+  max-height: min(80vh, 760px);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+/* the chip's clock-and-arrow, drawn rather than the ⟲ character, which the
+   mono face lacks and its fallback draws at half the count's height */
+.kept-chip {
+  gap: 5px;
+}
+.kept-glyph {
+  flex: none;
+}
+.kept-pop input[type="checkbox"] {
+  accent-color: var(--moss);
 }
 /* ---------- the inbox: the asks, prompts and gates, oldest first ---------- */
 .inbox-pop {
@@ -1639,8 +1653,49 @@ a.chan-text {
 }
 .kept-shell {
   display: grid;
-  gap: 4px;
+  grid-template-columns: auto 1fr;
+  column-gap: 8px;
+  row-gap: 4px;
   font-size: 12px;
+}
+.kept-shell > .kept-acts {
+  grid-column: 2;
+}
+.kept-pick {
+  grid-row: span 2;
+  align-self: start;
+  margin: 2px 0 0;
+}
+/* pick all, and the backends to pick by */
+.kept-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+  align-self: stretch;
+  font-size: 12px;
+}
+.kept-all {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--ink-dim);
+}
+.kept-all input {
+  margin: 0;
+}
+.kept-by {
+  display: inline-flex;
+  gap: 2px;
+}
+/* what to do with every pick, under the bar */
+.kept-bulk {
+  align-items: center;
+  align-self: stretch;
+  padding: 6px 8px;
+  border-radius: var(--r);
+  background: var(--wash);
 }
 .kept-where {
   display: grid;
