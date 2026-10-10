@@ -303,6 +303,12 @@ export const api = {
       method: "POST",
       body: "{}",
     }),
+  /** removes the repo's index.lock when it is stale; 409 when it is not */
+  unlock: (id: string) =>
+    repoReq<{ ok: true; cleared: string }>(id, (p) => `/api/repos/unlock?${rq(p)}`, {
+      method: "POST",
+      body: "{}",
+    }),
   suggest: (id: string) =>
     repoReq<{ message: string; source: "ai" | "heuristic" }>(
       id,

@@ -47,6 +47,10 @@ function Group({ k, count, children }: { k: WaitingGroup; count: number; childre
 
 const errText = (err: unknown) => String(err instanceof Error ? err.message : err);
 
+/** git refused over the index lock (`isLockedIndex` in core/git.ts, which
+ *  the page cannot import) */
+const lockedIndex = (text: string) => /index\.lock'?: File exists/.test(text);
+
 /** a git move a row offers beside it */
 interface RowAct {
   kind: "push" | "pull";
@@ -66,6 +70,18 @@ function RepoRow({ repo, state, word, detail, act }: { repo: Repo; state: RepoSt
     (a.kind === "push" ? api.push(repo.id) : api.pull(repo.id))
       .catch((e: unknown) => setErr(errText(e)))
       .finally(() => setBusy(false));
+  };
+  // clear a stale lock, then try the move again; the server refuses a
+  // lock young enough that git may still hold it
+  const unlock = (a: RowAct) => {
+    setBusy(true);
+    api
+      .unlock(repo.id)
+      .then(() => go(a))
+      .catch((e: unknown) => {
+        setErr(errText(e));
+        setBusy(false);
+      });
   };
   const commits = (n: number) => `${n} commit${n === 1 ? "" : "s"}`;
   const upstream = repo.status?.upstream ?? "the remote";
@@ -100,6 +116,11 @@ function RepoRow({ repo, state, word, detail, act }: { repo: Repo; state: RepoSt
       {err && (
         <p className="waiting-err" role="alert">
           {err}
+          {act && lockedIndex(err) && (
+            <button type="button" className="mini" disabled={busy} title="Remove the lock if it is stale, then try again" onClick={() => unlock(act)}>
+              clear lock and retry
+            </button>
+          )}
         </p>
       )}
     </li>

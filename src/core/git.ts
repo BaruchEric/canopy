@@ -833,13 +833,17 @@ export async function push(repoPath: string): Promise<string> {
         : tracked
           ? ["push", remote, `HEAD:${branch}`]
           : ["push", "-u", remote, `HEAD:${branch}`];
-    const r = await git(repoPath, args, 120_000);
+    const t0 = Date.now();
+    const r = await git(repoPath, args, NET_TIMEOUT_MS);
     if (r.code === 0) {
       const out = (r.stdout + r.stderr).trim();
       return remote === tracked ? out : `pushed to ${remote}\n${out}`;
     }
     lastErr = r.stderr.trim() || "git push failed";
-    if (!isAccessDenied(lastErr)) break;
+    if (!isAccessDenied(lastErr)) {
+      lastErr = netError(lastErr, "push", Date.now() - t0).message;
+      break;
+    }
   }
   // Every remote refused us. Say so plainly: the fallback cannot help a clone
   // whose only remote belongs to someone else.
@@ -870,8 +874,57 @@ export function isNoLogin(stderr: string): boolean {
   return /could not read (?:username|password)/i.test(stderr);
 }
 
+/** How long a push or a pull may take. A clone months behind a busy
+ *  upstream fetches tens of thousands of commits, which ran past the two
+ *  minutes this used to be; the server never times a request out. */
+export const NET_TIMEOUT_MS = 15 * 60_000;
+
+/** git's own words after its output, when it failed: a lock gets canopy's
+ *  offer to clear it, and a run stopped at the timeout says so, since the
+ *  output alone reads like a fetch that went fine. */
+function netError(stderr: string, what: string, tookMs: number): Error {
+  const words = stderr.trim() || `git ${what} failed`;
+  if (isLockedIndex(words)) {
+    return new Error(`${words}\n\nA git process that died can leave this lock behind. canopy clears one that is over ${STALE_LOCK_MIN} minutes old.`);
+  }
+  if (tookMs >= NET_TIMEOUT_MS) return new Error(`${words}\n\ngit ${what} ran past ${NET_TIMEOUT_MS / 60_000} minutes and was stopped.`);
+  return new Error(words);
+}
+
 export async function pull(repoPath: string): Promise<string> {
-  const r = await git(repoPath, ["pull", "--ff-only"], 120_000);
-  if (r.code !== 0) throw new Error(r.stderr.trim() || "git pull failed");
+  const t0 = Date.now();
+  const r = await git(repoPath, ["pull", "--ff-only"], NET_TIMEOUT_MS);
+  if (r.code !== 0) throw netError(r.stderr, "pull", Date.now() - t0);
   return r.stdout.trim();
+}
+
+/** A lock is stale past this: no git command canopy or a person runs holds
+ *  the index that long, and a younger one may still be in use. */
+export const STALE_LOCK_MIN = 10;
+
+/** git refused because another process holds, or held, the index lock */
+export function isLockedIndex(stderr: string): boolean {
+  return /index\.lock'?: File exists/.test(stderr);
+}
+
+/** Remove the repo's index.lock when it is older than STALE_LOCK_MIN
+ *  minutes, and say which file went. Throws when there is none, when it is
+ *  younger, and for a seed, whose git belongs to its agents. The path comes
+ *  from git (`--git-path`), so a submodule's or a worktree's lock is found
+ *  where git keeps it; `find -mmin` reads its age the same on macOS and
+ *  Linux, here or over ssh. */
+export async function clearStaleLock(repoPath: string): Promise<string> {
+  const { host, path } = parseLocator(repoPath);
+  if (host === null && seedsRootOf(path, seedRootsNow()) !== null) throw new Error("a seed's git is its agents': canopy leaves its lock alone");
+  const r = await git(repoPath, ["rev-parse", "--git-path", "index.lock"]);
+  const rel = r.stdout.trim();
+  if (r.code !== 0 || !rel) throw new Error(r.stderr.trim() || "git could not say where the lock is");
+  const lock = rel.startsWith("/") ? rel : `${path.replace(/\/+$/, "")}/${rel}`;
+  const found = await onHost(host, ["find", lock, "-maxdepth", "0"]);
+  if (found.code !== 0 || !found.stdout.trim()) throw new Error("there is no index.lock to clear");
+  const old = await onHost(host, ["find", lock, "-maxdepth", "0", "-mmin", `+${STALE_LOCK_MIN}`]);
+  if (!old.stdout.trim()) throw new Error(`the lock is under ${STALE_LOCK_MIN} minutes old, so git may still be using it`);
+  const gone = await onHost(host, ["rm", "-f", lock]);
+  if (gone.code !== 0) throw new Error(gone.stderr.trim() || "could not remove the lock");
+  return lock;
 }

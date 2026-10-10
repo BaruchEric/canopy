@@ -1267,6 +1267,11 @@ div.waiting-row {
   font-size: 11.5px;
   color: var(--rust);
   overflow-wrap: anywhere;
+  white-space: pre-line;
+}
+.waiting-err .mini {
+  display: block;
+  margin-top: 4px;
 }
 .waiting-empty {
   margin: 12px 14px;

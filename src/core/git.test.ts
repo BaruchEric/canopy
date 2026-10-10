@@ -7,8 +7,10 @@ import {
   commitFiles,
   getDiff,
   getLog,
+  clearStaleLock,
   getStatus,
   isAccessDenied,
+  isLockedIndex,
   isNoLogin,
   isHash,
   parseLog,
@@ -294,6 +296,30 @@ describe("parseMtimes", () => {
       undefined,
     ]);
     expect(parseMtimes("", 0)).toEqual([]);
+  });
+});
+
+describe("stale index locks", () => {
+  test("git's lock refusal reads as one", () => {
+    expect(isLockedIndex("fatal: Unable to create '/r/.git/index.lock': File exists.\n\nAnother git process seems to be running")).toBe(true);
+    expect(isLockedIndex("fatal: not a git repository")).toBe(false);
+  });
+
+  test("an old lock goes, a fresh one stays, and no lock says so", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "canopy-stale-"));
+    try {
+      await exec(["git", "-C", dir, "init", "-q"]);
+      const lock = join(dir, ".git", "index.lock");
+      await writeFile(lock, "");
+      await expect(clearStaleLock(dir)).rejects.toThrow(/minutes old/);
+      const old = new Date(Date.now() - 60 * 60_000);
+      await utimes(lock, old, old);
+      expect(await clearStaleLock(dir)).toBe(lock);
+      expect(await Bun.file(lock).exists()).toBe(false);
+      await expect(clearStaleLock(dir)).rejects.toThrow(/no index.lock/);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
   });
 });
 

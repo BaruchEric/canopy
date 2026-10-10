@@ -20,6 +20,7 @@ import {
   getLog,
   isHash,
   pull,
+  clearStaleLock,
   push,
   stageFile,
   UnknownCommitError,
@@ -2748,6 +2749,18 @@ async function handleApi(
       const out = await push(repo.path);
       await refreshAndBroadcast(state, repo.id);
       return json({ ok: true, out });
+    }
+    // a stale index.lock, cleared only when it is old enough that no git
+    // process can still hold it (clearStaleLock); 409 says why not
+    if (method === "POST" && action === "unlock") {
+      let cleared: string;
+      try {
+        cleared = await clearStaleLock(repo.path);
+      } catch (err) {
+        throw new HttpError(409, String(err instanceof Error ? err.message : err));
+      }
+      await refreshAndBroadcast(state, repo.id);
+      return json({ ok: true, cleared });
     }
     if (method === "POST" && action === "pull") {
       const out = await pull(repo.path);
