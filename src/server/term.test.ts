@@ -246,6 +246,26 @@ describe("a shell behind the socket", () => {
     await c.closed;
   });
 
+  test.if(tmux)("a new session gets canopy's TZ even when the tmux server has none", async () => {
+    // a session started first, with no TZ anywhere, holds the tmux server up,
+    // so the second session's environment is the server's plus what canopy hands it
+    const held = connect({ term: "abcdefabcdefabcdefabcdefabcdef02", place: "strip" });
+    await held.opened;
+    const was = process.env["TZ"];
+    process.env["TZ"] = "America/Los_Angeles";
+    const id = "abcdefabcdefabcdefabcdefabcdef03";
+    try {
+      const c = connect({ term: id, place: "strip", cols: "200" });
+      await c.opened;
+      c.ws.send(new TextEncoder().encode('echo "tz=$TZ="\n'));
+      await until(() => c.text().includes("tz=America/Los_Angeles="), "the TZ in the session");
+    } finally {
+      if (was === undefined) delete process.env["TZ"];
+      else process.env["TZ"] = was;
+      for (const term of [id, "abcdefabcdefabcdefabcdefabcdef02"]) await fetch(`http://127.0.0.1:${server.port}/api/terms?term=${term}`, { method: "DELETE" });
+    }
+  });
+
   test.if(tmux)("outlives the server: the next one finds it and a socket rejoins", async () => {
     const id = "fedcbafedcbafedcbafedcbafedcbafe";
     const first = connect({ term: id, place: "strip" });

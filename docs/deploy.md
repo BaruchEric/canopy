@@ -105,7 +105,8 @@ TZ=America/Los_Angeles          # the host's zone by name: canopy's local time (
 `TZ` is there because Bun takes the time zone from its name. The host's
 `/etc/localtime`, mounted into both containers, changes what `date` and sqlite
 read but not what Bun reads, since the image's file is a link named `Etc/UTC`.
-Without it canopy runs on UTC.
+Without it canopy runs on UTC. canopy hands its `TZ` to every tmux session it
+starts, so the shells get the host's local time too.
 
 `CANOPY_LISTEN` is where docker publishes the port. Leave it unset and canopy
 answers on the mini's loopback only, so a missing `.env` never puts it on the

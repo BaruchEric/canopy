@@ -272,9 +272,8 @@ Phases 1 and 2, and phase 3's Telegram switch, built in one pass. Where the buil
   - Each time the restarted plugin took the bot back.
   - The deaths on record went back to zero after five good minutes.
 - **A code review (high), 2026-10-10.** It found ten issues; nine were fixed in 9ce8da5 (the commit lists them). The one left by design: when a conversation never got a message, `previous` still names the last conversation that has a transcript.
-- **Not done yet:**
-  - P5 (a session several days long);
-  - `TZ` for the shells service.
+- **Local time in the shells, without recreating them.** New tmux sessions and the ranger now get canopy's own `TZ` in their environment (`sessionEnv`). Every shell opened from now on, and the ranger after its next start, keeps the host's local time. The shells service itself still has no `TZ`, so shells opened before this keep UTC until they are reopened.
+- **Not done yet:** P5 (a session several days long), which only time shows.
 
 Deploy steps on the mini, in order:
 

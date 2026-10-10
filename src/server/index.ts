@@ -820,7 +820,7 @@ async function restoreTerm(state: ServerState, id: string, size: TermSize, resum
   try {
     await newSession(
       tmux,
-      { id, repoId: rec.repoId, path: rec.path, place: rec.place, ...handleOf(state, rec.repoId, rec.path, id), env: canopyEnv(state, rec.repoId, rec.path, id) },
+      { id, repoId: rec.repoId, path: rec.path, place: rec.place, ...handleOf(state, rec.repoId, rec.path, id), env: sessionEnv(state, rec.repoId, rec.path, id) },
       size,
       command,
     );
@@ -872,7 +872,7 @@ async function resumeTerm(
   let live: LiveTerm;
   if (tmux) {
     if (await hasSession(tmux, id)) throw new HttpError(409, "that shell name is taken");
-    await newSession(tmux, { id, repoId: repo.id, path: repo.path, place, ...handleOf(state, repo.id, repo.path, id), env: canopyEnv(state, repo.id, repo.path, id) }, size);
+    await newSession(tmux, { id, repoId: repo.id, path: repo.path, place, ...handleOf(state, repo.id, repo.path, id), env: sessionEnv(state, repo.id, repo.path, id) }, size);
     live = {
       info: { id, repoId: repo.id, path: repo.path, place, attached: false, viewers: [], startedAt: Date.now(), ...handleOf(state, repo.id, repo.path, id) },
       pty: null,
@@ -929,6 +929,17 @@ function canopyEnv(state: ServerState, repoId: string, path: string, id: string)
     CANOPY_REPO: repoId,
     ...(state.apiUrl ? { CANOPY_API: state.apiUrl } : {}),
   };
+}
+
+/** What a new tmux session's environment adds to `canopyEnv`: canopy's own
+ *  `TZ` when it has one. The tmux server lives in the shells container,
+ *  whose processes would otherwise read the zone off `/etc/localtime`, and
+ *  Bun, so Claude Code too, takes that name (the image's says `Etc/UTC`);
+ *  passing it here gives every new shell the host's local time without
+ *  recreating that container. A plain pty inherits canopy's env already. */
+function sessionEnv(state: ServerState, repoId: string, path: string, id: string): Record<string, string> {
+  const tz = process.env["TZ"];
+  return { ...canopyEnv(state, repoId, path, id), ...(tz && parseLocator(path).host === null ? { TZ: tz } : {}) };
 }
 
 /** `CANOPY_API` off the address the server binds: loopback for a loopback
@@ -996,7 +1007,7 @@ async function joinTmuxTerm(state: ServerState, tmux: string[], ws: ServerWebSoc
   const size = { cols, rows };
   let live = state.terms.get(id);
   if (!live) {
-    await newSession(tmux, { id, repoId: repo.id, path: repo.path, place, ...handleOf(state, repo.id, repo.path, id), env: canopyEnv(state, repo.id, repo.path, id) }, size);
+    await newSession(tmux, { id, repoId: repo.id, path: repo.path, place, ...handleOf(state, repo.id, repo.path, id), env: sessionEnv(state, repo.id, repo.path, id) }, size);
     live = {
       info: { id, repoId: repo.id, path: repo.path, place, attached: false, viewers: [], startedAt: Date.now(), ...handleOf(state, repo.id, repo.path, id) },
       pty: null,
@@ -3377,7 +3388,13 @@ export async function startServer(opts: {
       root,
       backend: () => state.backendName,
       // what any canopy shell gets, less CANOPY_REPO: it is in no repo
-      env: (term) => ({ CANOPY_TERM: term, CANOPY_BACKEND: state.backendName, ...(state.apiUrl ? { CANOPY_API: state.apiUrl } : {}) }),
+      env: (term) => ({
+        CANOPY_TERM: term,
+        CANOPY_BACKEND: state.backendName,
+        ...(state.apiUrl ? { CANOPY_API: state.apiUrl } : {}),
+        // the host's local time for its claude, as sessionEnv gives a shell
+        ...(process.env["TZ"] ? { TZ: process.env["TZ"] } : {}),
+      }),
       shell: userShell(),
       hasClaude: () => state.harnesses().includes("claude"),
       settings: async (profile) => agentFor(await loadConfig(), root, "shell", profile ? { profile } : undefined),
