@@ -1,6 +1,6 @@
 import { open, readdir, stat } from "node:fs/promises";
 import { homedir } from "node:os";
-import { join } from "node:path";
+import { join, relative } from "node:path";
 import { resumeArgv, type AgentEnv } from "./harness";
 import { shellLine } from "./host";
 import { mapPool } from "./search";
@@ -353,4 +353,25 @@ export async function newestTranscript(
   const home = homes.claude ?? claudeHome();
   const [newest] = await claudeSessions(path, 1, home);
   return newest ? join(home, "projects", projectFolder(path), `${newest.id}.jsonl`) : null;
+}
+
+/** The file `session` of `harness` is kept in for `path` on this machine,
+ *  with the name a move carries it under: `<id>.jsonl` for Claude, the
+ *  path under `sessions/` for Codex. Null when there is none. */
+export async function transcriptFile(
+  harness: Harness,
+  path: string,
+  session: string,
+  homes: { claude?: string; codex?: string } = {},
+  now = new Date(),
+): Promise<{ file: string; name: string } | null> {
+  if (!isSessionId(session)) return null;
+  if (harness === "codex") {
+    const home = homes.codex ?? codexHome();
+    const hit = (await codexRollouts(path, home, now)).find((x) => x.s.meta.id === session);
+    return hit ? { file: hit.file, name: relative(join(home, "sessions"), hit.file) } : null;
+  }
+  const file = join(homes.claude ?? claudeHome(), "projects", projectFolder(path), `${session}.jsonl`);
+  const s = await stat(file).catch(() => null);
+  return s?.isFile() ? { file, name: `${session}.jsonl` } : null;
 }
