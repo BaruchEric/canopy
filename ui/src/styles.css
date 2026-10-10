@@ -1059,7 +1059,8 @@ body.resizing iframe {
 .kept-glyph {
   flex: none;
 }
-.kept-pop input[type="checkbox"] {
+.kept-pop input[type="checkbox"],
+.shells-pop input[type="checkbox"] {
   accent-color: var(--moss);
 }
 /* ---------- the inbox: the asks, prompts and gates, oldest first ---------- */
@@ -6166,6 +6167,14 @@ a.build-label:hover {
 }
 .shell-row.here .kept-where {
   color: var(--moss);
+}
+/* a running shell with its checkbox beside it, like a kept one */
+.shell-row.picks {
+  grid-template-columns: auto 1fr;
+  column-gap: 8px;
+}
+.shell-row.picks > .kept-acts {
+  grid-column: 2;
 }
 .claude-prompt {
   overflow-wrap: anywhere;

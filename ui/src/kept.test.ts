@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { eachOf, keptByBackend, newestFirst, restorePlan, stillPicked } from "./kept";
+import { eachOf, keptByBackend, newestFirst, restorePlan, stillPicked, unwatched } from "./kept";
 import type { KeptShell } from "../../src/core/types";
 
 const shell = (id: string, savedAt: number, agent: KeptShell["agent"] = null): KeptShell => ({
@@ -44,6 +44,25 @@ describe("stillPicked", () => {
   test("drops picks that left the list and keeps the list's order", () => {
     const list = [shell("a", 1), shell("b", 2), shell("c", 3)];
     expect(stillPicked(list, new Set(["c", "gone", "a"])).map((k) => k.id)).toEqual(["a", "c"]);
+  });
+  test("picks running shells the same way, keeping what each row carries", () => {
+    const running = [
+      { id: "x", viewers: ["mac"] },
+      { id: "y", viewers: [] },
+    ];
+    expect(stillPicked(running, new Set(["y"]))).toEqual([{ id: "y", viewers: [] }]);
+  });
+});
+
+describe("unwatched", () => {
+  test("keeps only the shells no device has open", () => {
+    const running = [
+      { id: "x", viewers: ["mac"] },
+      { id: "y", viewers: [] },
+      { id: "z", viewers: ["phone", "mac"] },
+      { id: "w", viewers: [] },
+    ];
+    expect(unwatched(running).map((t) => t.id)).toEqual(["y", "w"]);
   });
 });
 

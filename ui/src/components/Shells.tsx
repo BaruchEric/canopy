@@ -2,8 +2,9 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { escapeCloses } from "../surface";
 import { api } from "../api";
 import { clientId } from "../client";
-import { idText, useStore } from "../store";
+import { dockless, idText, useStore } from "../store";
 import { useFitPop } from "../pop";
+import { eachOf, stillPicked, unwatched } from "../kept";
 import { BackendWord } from "./IdLabel";
 import { HARNESS } from "../../../src/core/harness";
 import type { AgentSession } from "../../../src/core/types";
@@ -17,13 +18,17 @@ function ago(at: number, now: number): string {
   return `${Math.round(s / 86400)}d`;
 }
 
+/** what a busy row or the whole list is doing: a shell's id, or every pick */
+const ALL = "*";
+
 /**
  * The shells chip in the top bar: every shell the backend holds, whichever
  * device started it, to pick up here, and the Claude Code and Codex
  * conversations started at a repo on the backend, to pick back up in a new
  * shell by their own harness. A
  * shell's tab can be hidden here without ending it, which leaves it running
- * for the other devices and in this list.
+ * for the other devices and in this list. The running shells take picks:
+ * join, hide here or end every picked shell at once.
  */
 export function ShellsChip() {
   const shells = useStore((s) => s.shells);
@@ -46,6 +51,10 @@ export function ShellsChip() {
   const [sessions, setSessions] = useState<AgentSession[] | null>(null);
   const [busy, setBusy] = useState("");
   const [error, setError] = useState("");
+  const [picked, setPicked] = useState<ReadonlySet<string>>(() => new Set());
+  const [asking, setAsking] = useState(false);
+  // a bulk action's failure, shown under the list it acted on
+  const [pickError, setPickError] = useState("");
   const ref = useRef<HTMLDivElement>(null);
   useFitPop(ref, open);
 
@@ -78,6 +87,14 @@ export function ShellsChip() {
     // the repo default is taken once per opening, not on every scan
   }, [open]);
 
+  // a closed popover forgets its picks and any end it was asking about
+  useEffect(() => {
+    if (open) return;
+    setPicked(new Set());
+    setAsking(false);
+    setPickError("");
+  }, [open]);
+
   // who is listening, for the dots by each shell's handle
   useEffect(() => {
     if (open) void loadChan();
@@ -107,6 +124,14 @@ export function ShellsChip() {
   const here = new Set(terms.map((t) => t.id));
   const list = [...shells].sort((a, b) => b.startedAt - a.startedAt);
   const elsewhere = list.filter((t) => !here.has(t.id)).length;
+  // a shell ended on another device drops out of the pick
+  const chosen = stillPicked(list, picked);
+  const chosenHere = chosen.filter((t) => here.has(t.id));
+  const idle = unwatched(list).map((t) => t.id);
+  const allPicked = list.length > 0 && chosen.length === list.length;
+  const idlePicked = idle.length > 0 && chosen.length === idle.length && chosen.every((t) => t.viewers.length === 0);
+  const canJoin = !dockless();
+  const locked = busy !== "";
 
   const run = async (key: string, what: () => Promise<void> | void) => {
     setBusy(key);
@@ -119,6 +144,34 @@ export function ShellsChip() {
     } finally {
       setBusy("");
     }
+  };
+
+  const runAll = async (act: (id: string) => Promise<void> | void, ids: string[], close: boolean) => {
+    setBusy(ALL);
+    setPickError("");
+    const failed = await eachOf(ids, async (id) => act(id));
+    if (failed) setPickError(failed);
+    setPicked(new Set());
+    setAsking(false);
+    setBusy("");
+    if (!failed && close) setOpen(false);
+  };
+  const endOne = async (id: string) => {
+    if (here.has(id)) closeTerm(id);
+    else await api.endTerm(id);
+  };
+  const toggle = (id: string) => {
+    setAsking(false);
+    setPicked((p) => {
+      const next = new Set(p);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  };
+  const pick = (ids: string[]) => {
+    setAsking(false);
+    setPicked(new Set(ids));
   };
 
   return (
@@ -145,76 +198,164 @@ export function ShellsChip() {
             {list.length === 0 ? (
               <p className="settings-hint">No shell is running on the backend.</p>
             ) : (
-              <ul className="shells-list">
-                {list.map((t) => {
-                  const shown = here.has(t.id);
-                  const others = t.viewers.filter((v) => v !== me);
-                  return (
-                    <li key={t.id} className={shown ? "shell-row here" : "shell-row"}>
-                      <span className="kept-where">
-                        {repoName(t.repoId)}
-                        {repos.some((r) => r.id === t.repoId) && <BackendWord id={t.repoId} />}
-                        <span className="kept-fact">
-                          {t.place === "panel" ? "panel" : "strip"} · {ago(t.startedAt, now)}
-                          {shown ? " · open here" : hidden.includes(t.id) ? " · hidden here" : ""}
-                          {others.length > 0 && ` · on ${others.join(", ")}`}
-                          {t.viewers.length === 0 && " · nobody watching"}
+              <>
+                <div className="kept-bar">
+                  <label className="kept-all">
+                    <input
+                      type="checkbox"
+                      checked={allPicked}
+                      ref={(el) => {
+                        if (el) el.indeterminate = chosen.length > 0 && !allPicked;
+                      }}
+                      disabled={locked}
+                      onChange={() => pick(allPicked ? [] : list.map((t) => t.id))}
+                    />
+                    {chosen.length > 0 ? `${chosen.length} picked` : "pick all"}
+                  </label>
+                  {idle.length > 0 && idle.length < list.length && (
+                    <button
+                      type="button"
+                      className={idlePicked ? "mini on" : "mini"}
+                      disabled={locked}
+                      title={`Pick only the ${idle.length} no device has open`}
+                      onClick={() => pick(idlePicked ? [] : idle)}
+                    >
+                      nobody watching {idle.length}
+                    </button>
+                  )}
+                </div>
+                {chosen.length > 0 && (
+                  <div className="kept-acts kept-bulk">
+                    {asking ? (
+                      <>
+                        <span className="layout-ask">
+                          end {chosen.length} shell{chosen.length === 1 ? "" : "s"} on every device?
                         </span>
-                        {t.handle && chan?.ready && (
-                          <span className="kept-fact" title="The tailchan handle this shell runs under (TAILCHAN_AS)">
-                            <span className={chan.who.some((w) => w.handle === t.handle && w.live) ? "chan-dot live" : "chan-dot"} /> @{t.handle}
-                          </span>
-                        )}
-                      </span>
-                      <span className="kept-acts">
-                        <button type="button" className="mini" disabled={busy !== ""} onClick={() => void run(t.id, () => joinTerm(t.id))}>
-                          {shown ? "show" : "join"}
-                        </button>
-                        {t.handle && chan?.ready && (
-                          <button
-                            type="button"
-                            className="mini"
-                            title={`A tailchan DM to @${t.handle}, whoever runs in the shell`}
-                            onClick={() => {
-                              setOpen(false);
-                              openChan(`@${t.handle}`);
-                            }}
-                          >
-                            message
-                          </button>
-                        )}
-                        {shown && (
-                          <button
-                            type="button"
-                            className="mini"
-                            disabled={busy !== ""}
-                            title="Takes the tab away here and leaves the shell running"
-                            onClick={() => void run(t.id, () => hideTerm(t.id))}
-                          >
-                            hide here
-                          </button>
-                        )}
                         <button
                           type="button"
-                          className="mini"
-                          disabled={busy !== ""}
-                          title="Ends the shell on every device"
-                          onClick={() => {
-                            if (!window.confirm(`End the shell at ${repoName(t.repoId)} on every device?`)) return;
-                            void run(t.id, async () => {
-                              if (here.has(t.id)) closeTerm(t.id);
-                              else await api.endTerm(t.id);
-                            });
-                          }}
+                          className="mini confirm"
+                          disabled={locked}
+                          onClick={() => void runAll(endOne, chosen.map((t) => t.id), false)}
                         >
                           end
                         </button>
-                      </span>
-                    </li>
-                  );
-                })}
-              </ul>
+                        <button type="button" className="mini" disabled={locked} onClick={() => setAsking(false)}>
+                          keep
+                        </button>
+                      </>
+                    ) : (
+                      <>
+                        {canJoin && (
+                          <button
+                            type="button"
+                            className="mini"
+                            disabled={locked}
+                            title="Opens every picked shell here as a tab"
+                            onClick={() => void runAll(joinTerm, chosen.map((t) => t.id), true)}
+                          >
+                            join {chosen.length}
+                          </button>
+                        )}
+                        {chosenHere.length > 0 && (
+                          <button
+                            type="button"
+                            className="mini"
+                            disabled={locked}
+                            title="Takes the picked shells' tabs away here and leaves them running"
+                            onClick={() => void runAll(hideTerm, chosenHere.map((t) => t.id), false)}
+                          >
+                            hide {chosenHere.length} here
+                          </button>
+                        )}
+                        <button type="button" className="mini" disabled={locked} title="Ends every picked shell on every device" onClick={() => setAsking(true)}>
+                          end {chosen.length}
+                        </button>
+                        <button type="button" className="mini" disabled={locked} onClick={() => pick([])}>
+                          clear
+                        </button>
+                      </>
+                    )}
+                  </div>
+                )}
+                <ul className="shells-list">
+                  {list.map((t) => {
+                    const shown = here.has(t.id);
+                    const others = t.viewers.filter((v) => v !== me);
+                    const rowClass = ["shell-row", "picks", shown && "here", picked.has(t.id) && "on"].filter(Boolean).join(" ");
+                    return (
+                      <li key={t.id} className={rowClass}>
+                        <input
+                          type="checkbox"
+                          className="kept-pick"
+                          aria-label={`Pick ${repoName(t.repoId)}`}
+                          checked={picked.has(t.id)}
+                          disabled={locked}
+                          onChange={() => toggle(t.id)}
+                        />
+                        <span className="kept-where">
+                          {repoName(t.repoId)}
+                          {repos.some((r) => r.id === t.repoId) && <BackendWord id={t.repoId} />}
+                          <span className="kept-fact">
+                            {t.place === "panel" ? "panel" : "strip"} · {ago(t.startedAt, now)}
+                            {shown ? " · open here" : hidden.includes(t.id) ? " · hidden here" : ""}
+                            {others.length > 0 && ` · on ${others.join(", ")}`}
+                            {t.viewers.length === 0 && " · nobody watching"}
+                          </span>
+                          {t.handle && chan?.ready && (
+                            <span className="kept-fact" title="The tailchan handle this shell runs under (TAILCHAN_AS)">
+                              <span className={chan.who.some((w) => w.handle === t.handle && w.live) ? "chan-dot live" : "chan-dot"} /> @{t.handle}
+                            </span>
+                          )}
+                        </span>
+                        <span className="kept-acts">
+                          <button type="button" className="mini" disabled={locked} onClick={() => void run(t.id, () => joinTerm(t.id))}>
+                            {shown ? "show" : "join"}
+                          </button>
+                          {t.handle && chan?.ready && (
+                            <button
+                              type="button"
+                              className="mini"
+                              disabled={locked}
+                              title={`A tailchan DM to @${t.handle}, whoever runs in the shell`}
+                              onClick={() => {
+                                setOpen(false);
+                                openChan(`@${t.handle}`);
+                              }}
+                            >
+                              message
+                            </button>
+                          )}
+                          {shown && (
+                            <button
+                              type="button"
+                              className="mini"
+                              disabled={locked}
+                              title="Takes the tab away here and leaves the shell running"
+                              onClick={() => void run(t.id, () => hideTerm(t.id))}
+                            >
+                              hide here
+                            </button>
+                          )}
+                          <button
+                            type="button"
+                            className="mini"
+                            disabled={locked}
+                            title="Ends the shell on every device"
+                            onClick={() => {
+                              if (!window.confirm(`End the shell at ${repoName(t.repoId)} on every device?`)) return;
+                              void run(t.id, () => endOne(t.id));
+                            }}
+                          >
+                            end
+                          </button>
+                        </span>
+                      </li>
+                    );
+                  })}
+                </ul>
+              </>
             )}
+            {pickError && <p className="settings-hint error">{pickError}</p>}
           </section>
           <section className="settings-row">
             <h3 className="panel-label">agent conversations</h3>

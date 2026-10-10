@@ -17,10 +17,17 @@ export function keptByBackend(kept: readonly KeptShell[], owner: (id: string) =>
   return [...counts].map(([name, count]) => ({ name, count }));
 }
 
-/** The picked shells still on offer, in the list's order: a shell restored
- *  or forgotten elsewhere drops out of the pick. */
-export function stillPicked(kept: readonly KeptShell[], picked: ReadonlySet<string>): KeptShell[] {
-  return kept.filter((k) => picked.has(k.id));
+/** The picked shells still on offer, in the list's order: a shell restored,
+ *  forgotten or ended elsewhere drops out of the pick. Kept and running
+ *  shells both pick this way. */
+export function stillPicked<T extends { id: string }>(list: readonly T[], picked: ReadonlySet<string>): T[] {
+  return list.filter((k) => picked.has(k.id));
+}
+
+/** The running shells no device has a socket on: the ones most likely left
+ *  behind, and the quick pick for ending them. */
+export function unwatched<T extends { viewers: readonly string[] }>(list: readonly T[]): T[] {
+  return list.filter((t) => t.viewers.length === 0);
 }
 
 /** One restore per picked shell. `resume` types the agent's continue only
