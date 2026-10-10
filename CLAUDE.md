@@ -9,7 +9,7 @@ canopy — multi-repo git cockpit (Bun + TS server, React 19 + Vite SPA, full CL
 ## Commands
 
 - Gates: `bun run typecheck && bun run lint && bun test && bun run build` — all four before calling anything done. Build is required: the server serves `dist/web`, so a stale build shows stale UI.
-- Redeploy the mini's shared backend: `bun run redeploy` (`status`, `log`, `--pull`, `--shells`), from the Mac, a canopy shell on the mini, or the mini itself; `scripts/redeploy.sh`, the `redeploy` skill, and `docs/deploy.md`.
+- Redeploy the mini's shared backend: `bun run redeploy` (`status`, `log`, `--pull`, `--shells`, `--restart`), from the Mac, a canopy shell on the mini, or the mini itself; `scripts/redeploy.sh`, the `redeploy` skill, and `docs/deploy.md`.
 - Single test file: `bun test src/core/git.test.ts`
 - Dev: `bun run dev` (API :7850) + `bun run dev:web` (Vite :7851, proxies /api). Production mode is the built SPA served by the Bun server on :7850 only.
 - Shared-backend mode: canopy runs headless in docker compose on the mini (`canopy`, `shells` holding the tmux server, `stages` for the incubator's agents, `tunnel` under its profile). See `docs/deploy.md`, `docs/prd-shared-backend.md` and "Shared-backend mode" in `docs/architecture.md`.

@@ -55,3 +55,50 @@ job
     }
   });
 }
+
+for (const [name, restart, upRecreates, recreated] of [
+  ["leaves an unchanged container alone without --restart", "0", false, false],
+  ["recreates an unchanged container with --restart", "1", false, true],
+  ["does not recreate twice when up already did", "1", true, false],
+] as const) {
+  test(`redeploy ${name}`, async () => {
+    const logs = await mkdtemp(join(tmpdir(), "canopy-redeploy-test-"));
+    try {
+      const source = await readFile(script, "utf8");
+      const job = source.slice(source.indexOf("\njob() {") + 1, source.indexOf("\nexport -f job"));
+      const calls = join(logs, "calls");
+      const harness = `
+id=old
+docker() {
+  printf '%s\\n' "$*" >>${shellQuote(calls)}
+  if [ "$1" = inspect ]; then printf '%s\\n' "$id"; return 0; fi
+  if [ "$*" = "compose up -d" ] && [ "$UP_RECREATES" = 1 ]; then id=new; return 0; fi
+  if [ "$1" = port ]; then printf '100.64.0.1:7850\\n'; return 0; fi
+  return 0
+}
+mkdir() { :; }
+sleep() { :; }
+seq() { printf '1\\n'; }
+${job}
+job
+`;
+      const child = Bun.spawn(["bash", "-c", harness], {
+        stdout: "pipe", stderr: "pipe",
+        env: {
+          ...process.env, LOGS: logs, sha: "fixture revision", shells: "0", restart,
+          CANOPY_COMMIT: commit, UP_RECREATES: upRecreates ? "1" : "0",
+        },
+      });
+      const [code, stdout, stderr] = await Promise.all([
+        child.exited, new Response(child.stdout).text(), new Response(child.stderr).text(),
+      ]);
+      expect(stderr).toBe("");
+      expect(code).toBe(0);
+      const forced = (await readFile(calls, "utf8")).split("\n").includes("compose up -d --no-deps --force-recreate canopy");
+      expect(forced).toBe(recreated);
+      expect(stdout.includes("recreating the canopy container")).toBe(recreated);
+    } finally {
+      await rm(logs, { recursive: true, force: true });
+    }
+  });
+}

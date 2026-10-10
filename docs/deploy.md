@@ -142,7 +142,9 @@ the host, with a key whose `authorized_keys` line runs only
 that key once. The compose run is detached and logged under
 `~/.cache/canopy-deploy/` (`bun run redeploy log`), `bun run redeploy status`
 says what is running, and a deploy that would recreate the shells container
-stops unless given `--shells`. By hand it is the same command as above; the
+stops unless given `--shells`. A deploy of the commit already running changes
+nothing, so compose leaves every container up; `--restart` recreates the
+canopy container anyway, and the shells stay. By hand it is the same command as above; the
 canopy image rebuilds and its container is replaced. The rsync no longer
 carries canopy's checkout, so an uncommitted change on the Mac never reaches
 the mini's build, and a dirty checkout on the mini is not fast-forwarded. Config in

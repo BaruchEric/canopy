@@ -9,11 +9,13 @@
 #                     script, and deploy the checkout the shell sees
 #   on the mini       deploy directly
 #
-# Usage: redeploy.sh [--pull] [--shells] [--expect SHA] | status | log
+# Usage: redeploy.sh [--pull] [--shells] [--restart] [--expect SHA] | status | log
 #   --pull    fast-forward the mini's checkout to the Mac's main first
 #             (always on from the Mac)
 #   --shells  go ahead when the deploy would recreate the shells container,
 #             which ends every shell, the one running this included
+#   --restart recreate the canopy container even when the deploy changes
+#             nothing in it; the shells stay
 #   --expect  refuse unless the checkout's HEAD is this commit after pulling
 #   status    what is deployed and running
 #   log       the last deploy's log
@@ -43,7 +45,7 @@ if [ "${1:-}" = "--gate" ]; then
     w=${words[$i]}
     case $w in
       redeploy | redeploy.sh) ;;
-      --pull | --shells | status | log) args+=("$w") ;;
+      --pull | --shells | --restart | status | log) args+=("$w") ;;
       --expect)
         i=$((i + 1))
         sha=${words[$i]:-}
@@ -82,12 +84,13 @@ if [ -z "${CANOPY_DEPLOY_HOST_SIDE:-}" ] && ! command -v docker >/dev/null 2>&1;
 fi
 
 # ---------- the host
-pull=0 shells=0 expect=""
+pull=0 shells=0 restart=0 expect=""
 cmd=deploy
 while [ $# -gt 0 ]; do
   case $1 in
     --pull) pull=1 ;;
     --shells) shells=1 ;;
+    --restart) restart=1 ;;
     --expect) expect=${2:-}; shift ;;
     status | log) cmd=$1 ;;
     *) die "unknown argument: $1" ;;
@@ -136,6 +139,7 @@ if [ $pull = 1 ]; then
   if [ "$(git hash-object "$HERE/scripts/redeploy.sh")" != "$self" ]; then
     again=()
     [ "$shells" = 1 ] && again+=(--shells)
+    [ "$restart" = 1 ] && again+=(--restart)
     [ -n "$expect" ] && again+=(--expect "$expect")
     exec 9>&-
     exec bash "$HERE/scripts/redeploy.sh" "${again[@]}"
@@ -185,11 +189,18 @@ job() {
     fi
     echo "recreating the shells container: every shell ends"
   fi
+  before=$(docker inspect -f '{{.Id}}' canopy-canopy-1 2>/dev/null || true)
   docker compose up -d || {
     echo "up failed; what holds 7850:"
     ss -ltnp 2>/dev/null | grep ':7850 ' || true
     return 1
   }
+  # up leaves a container alone when nothing in it changed (the same commit
+  # rebuilds to the same image); --restart asks for a fresh one anyway
+  if [ "$restart" = 1 ] && [ "$(docker inspect -f '{{.Id}}' canopy-canopy-1 2>/dev/null || true)" = "$before" ]; then
+    echo "recreating the canopy container: nothing in it changed"
+    docker compose up -d --no-deps --force-recreate canopy || { echo "could not recreate the canopy container"; return 1; }
+  fi
   ready=0
   for _ in $(seq 1 30); do
     # Probe inside the container's network namespace and require this build:
@@ -215,7 +226,7 @@ job() {
   echo "== deployed $sha on $port"
 }
 export -f job
-export sha shells LOGS CANOPY_COMMIT CANOPY_COMMITTED STAGE_DEV_ROOT STAGE_HOST_HOME
+export sha shells restart LOGS CANOPY_COMMIT CANOPY_COMMITTED STAGE_DEV_ROOT STAGE_HOST_HOME
 setsid nohup bash -c 'job; echo $? > "$0"' "$rc" >"$log" 2>&1 </dev/null &
 
 # follow along; if this session goes, the deploy carries on

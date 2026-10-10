@@ -9,6 +9,7 @@ One command, the same everywhere, run in the canopy checkout:
 
 ```
 bun run redeploy            # deploy
+bun run redeploy --restart  # deploy, and recreate canopy even if nothing changed
 bun run redeploy status     # checkout, deployed commit, containers, port
 bun run redeploy log        # the last deploy's full log
 ```
@@ -23,7 +24,7 @@ The compose run is detached on the host and logged under `~/.cache/canopy-deploy
 
 ## Shells
 
-A normal deploy recreates only the canopy container. Every shell stays, including the one running the deploy, and browser tabs rejoin. When the deploy would also recreate the `shells` container (a change to the Dockerfile's `shells` stage or `lib/tmux*.conf`, a compose change to that service, or a base image bump), the script stops with exit 3 and says so. That recreate ends every shell. Only rerun with `--shells` once the user agrees. The kept-shells chip (a clock with a back arrow and a count) restores them afterwards.
+A normal deploy recreates only the canopy container, and only when it changed. A deploy of the commit already running rebuilds to the same image and leaves the container up, so pass `--restart` to get a fresh one anyway. Every shell stays, including the one running the deploy, and browser tabs rejoin. When the deploy would also recreate the `shells` container (a change to the Dockerfile's `shells` stage or `lib/tmux*.conf`, a compose change to that service, or a base image bump), the script stops with exit 3 and says so. That recreate ends every shell. Only rerun with `--shells` once the user agrees. The kept-shells chip (a clock with a back arrow and a count) restores them afterwards.
 
 ## When it fails
 
