@@ -19,6 +19,7 @@ import {
   pipeArgs,
   respawnArgs,
   interruptArgs,
+  keysArgs,
   parseTaskPanes,
   taskCommand,
   parsePane,
@@ -306,4 +307,10 @@ describe("the ranger's session", () => {
       { termId: ID, dead: false, code: null, createdAt: 100_000, activityAt: null },
     ]);
   });
+});
+
+test("keysArgs: named keys as they are, literal text after -l", () => {
+  const base = ["tmux", "-S", "/s"];
+  expect(keysArgs(base, "ab", ["Escape"])).toEqual([...base, "send-keys", "-t", sessionName("ab"), "Escape"]);
+  expect(keysArgs(base, "ab", ["/exit"], true)).toEqual([...base, "send-keys", "-t", sessionName("ab"), "-l", "/exit"]);
 });

@@ -133,3 +133,35 @@ export async function placeTranscript(o: {
 
 /** the size of a file, null when it is not there */
 export const sizeOf = async (file: string): Promise<number | null> => (await stat(file).catch(() => null))?.size ?? null;
+
+/** what a stop needs of a pane: keys in, and which agent runs there now */
+export interface PaneDriver {
+  keys(keys: string[], literal?: boolean): Promise<void>;
+  agent(): Promise<Harness | null>;
+}
+
+/** the command each harness quits on */
+export const QUIT: Record<Harness, string> = { claude: "/exit", codex: "/quit" };
+
+/** Quits the agent in a pane the way a person would: Escape (stops a turn
+ *  in progress, nothing at an idle prompt), the quit command, then Enter on
+ *  its own, since Codex swallows an Enter sent with the text. True once the
+ *  pane is back at its shell; false if it is not within `waitMs`. */
+export async function endAgent(pane: PaneDriver, harness: Harness, o: { waitMs?: number; beatMs?: number } = {}): Promise<boolean> {
+  const waitMs = o.waitMs ?? 20_000;
+  const beat = o.beatMs ?? 300;
+  const now = await pane.agent();
+  if (now === null) return true;
+  if (now !== harness) throw new MoveError(409, `${now} runs in that shell, not ${harness}`);
+  await pane.keys(["Escape"]);
+  await Bun.sleep(beat);
+  await pane.keys([QUIT[harness]], true);
+  await Bun.sleep(beat);
+  await pane.keys(["Enter"]);
+  const until = Date.now() + waitMs;
+  while (Date.now() < until) {
+    if ((await pane.agent()) === null) return true;
+    await Bun.sleep(beat);
+  }
+  return false;
+}

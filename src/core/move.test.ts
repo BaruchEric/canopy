@@ -2,7 +2,7 @@ import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { MOVE_MAX, MoveError, movePath, placeTranscript, rewriteTranscript } from "./move";
+import { endAgent, MOVE_MAX, MoveError, movePath, placeTranscript, QUIT, rewriteTranscript, type PaneDriver } from "./move";
 import { projectFolder, transcriptFile } from "./sessions";
 
 const S = "0f5e2c1a-1111-4222-8333-444455556666";
@@ -99,5 +99,50 @@ describe("transcriptFile", () => {
     await writeFile(join(dir, `${S}.jsonl`), "{}\n");
     expect(await transcriptFile("claude", FROM, S, { claude: home })).toEqual({ file: join(dir, `${S}.jsonl`), name: `${S}.jsonl` });
     expect(await transcriptFile("claude", FROM, S.replace("0f", "1f"), { claude: home })).toBeNull();
+  });
+});
+
+/** a pane whose agent exits once it has been sent its quit command and Enter */
+function fakePane(runs: "claude" | "codex" | null, exits = true): PaneDriver & { sent: string[][] } {
+  let agent = runs;
+  let typed = "";
+  const sent: string[][] = [];
+  return {
+    sent,
+    async keys(keys, literal) {
+      sent.push(literal ? ["-l", ...keys] : keys);
+      if (literal) typed = keys.join("");
+      if (!literal && keys[0] === "Enter" && exits && agent && typed === QUIT[agent]) agent = null;
+    },
+    async agent() {
+      return agent;
+    },
+  };
+}
+
+describe("endAgent", () => {
+  const quick = { waitMs: 200, beatMs: 1 };
+  test("claude: Escape, then /exit and Enter as two sends, then back at the shell", async () => {
+    const pane = fakePane("claude");
+    expect(await endAgent(pane, "claude", quick)).toBe(true);
+    expect(pane.sent).toEqual([["Escape"], ["-l", "/exit"], ["Enter"]]);
+  });
+  test("codex quits with /quit", async () => {
+    const pane = fakePane("codex");
+    expect(await endAgent(pane, "codex", quick)).toBe(true);
+    expect(pane.sent[1]).toEqual(["-l", "/quit"]);
+  });
+  test("nothing running: done, no keys", async () => {
+    const pane = fakePane(null);
+    expect(await endAgent(pane, "claude", quick)).toBe(true);
+    expect(pane.sent).toEqual([]);
+  });
+  test("an agent that never exits times out", async () => {
+    expect(await endAgent(fakePane("claude", false), "claude", quick)).toBe(false);
+  });
+  test("the other harness in the pane is refused before any key", async () => {
+    const pane = fakePane("codex");
+    await expect(endAgent(pane, "claude", quick)).rejects.toMatchObject({ status: 409 });
+    expect(pane.sent).toEqual([]);
   });
 });

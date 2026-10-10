@@ -163,6 +163,16 @@ export const paneArgs = (base: string[], id: string): string[] => [...base, "dis
 /** a line typed into a shell, Enter and all */
 export const sendLineArgs = (base: string[], id: string, line: string): string[] => [...base, "send-keys", "-t", sessionName(id), line, "Enter"];
 
+/** keys to the pane: tmux key names (Escape, Enter), or with `literal` text typed as is */
+export const keysArgs = (base: string[], id: string, keys: string[], literal = false): string[] => [
+  ...base,
+  "send-keys",
+  "-t",
+  sessionName(id),
+  ...(literal ? ["-l"] : []),
+  ...keys,
+];
+
 /* ---------- tasks: a session that runs one command and keeps its pane when it ends ---------- */
 
 export interface TaskMeta {
@@ -573,4 +583,8 @@ export function attachTmuxTerm(base: string[], id: string, size: TermSize, hooks
     size,
     hooks,
   );
+}
+
+export async function sendKeys(base: string[], id: string, keys: string[], literal = false): Promise<void> {
+  await exec(keysArgs(base, id, keys, literal), { timeoutMs: 10_000 });
 }
