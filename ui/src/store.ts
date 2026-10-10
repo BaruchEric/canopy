@@ -1,6 +1,7 @@
 import { create } from "zustand";
 import { api, onBackendSignal, PartialFleetError, resolveBase, subscribe } from "./api";
 import { backendOf, homeName, isHome, plainOf, qual, registry, setBase, setRegistry } from "./registry";
+import { rangerSessions } from "./ranger";
 import { backendState, RETRY_FIRST, retryWait, sliceIn, split, type BackendStatus, type Reg } from "./backends";
 import { mergeHistory } from "./qualify";
 import { applyQuery, type RepoFilter } from "./filters";
@@ -3969,15 +3970,20 @@ let turnIn: {
   registry: Record<string, AgentCard>;
   asks: Record<string, Ask>;
   repos: Repo[];
+  rangers: Record<string, RangerInfo>;
 } | null = null;
 let turnOut: TurnRow[] = [];
 
-/** The chats and terminal agents whose turn it is, for the same panel. */
+/** The chats and terminal agents whose turn it is, for the same panel; a
+ *  ranger's card is left out, since it is reached by DM and sits at its
+ *  prompt by design (a permission it waits on is in the inbox). */
 export function turnItems(s: CanopyState): TurnRow[] {
   const t = turnIn;
-  if (t && t.runs === s.runs && t.flowRuns === s.flowRuns && t.registry === s.registry && t.asks === s.asks && t.repos === s.repos) return turnOut;
-  turnIn = { runs: s.runs, flowRuns: s.flowRuns, registry: s.registry, asks: s.asks, repos: s.repos };
-  turnOut = turnRows(Object.values(s.runs), s.flowRuns, Object.values(s.registry), Object.values(s.asks), s.repos);
+  if (t && t.runs === s.runs && t.flowRuns === s.flowRuns && t.registry === s.registry && t.asks === s.asks && t.repos === s.repos && t.rangers === s.rangers) return turnOut;
+  turnIn = { runs: s.runs, flowRuns: s.flowRuns, registry: s.registry, asks: s.asks, repos: s.repos, rangers: s.rangers };
+  const rangers = rangerSessions(s.rangers);
+  const cards = Object.values(s.registry).filter((c) => c.session === null || !rangers.has(c.session));
+  turnOut = turnRows(Object.values(s.runs), s.flowRuns, cards, Object.values(s.asks), s.repos);
   return turnOut;
 }
 

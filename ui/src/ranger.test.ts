@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { ericsCrons, rangerCard, rangerLine, rangerTone, shownRangers, sizeWord, wakeWhen, worstTone } from "./ranger";
+import { ericsCrons, rangerCard, rangerLine, rangerSessions, rangerTone, shownRangers, sizeWord, wakeWhen, worstTone } from "./ranger";
 import { RANGER_DEFAULTS } from "../../src/core/ranger";
 import type { AgentCard, RangerInfo } from "../../src/core/types";
 
@@ -29,7 +29,10 @@ const card = (over: Partial<AgentCard>): AgentCard =>
 describe("the ranger's words", () => {
   test("tone: fine running, on its way, or needing someone", () => {
     expect(rangerTone(info())).toBe("ok");
-    expect(rangerTone(info(), card({ state: "waiting" }))).toBe("warn");
+    expect(rangerTone(info(), card({ state: "waiting", waiting: "permission" }))).toBe("warn");
+    // Claude's minute-at-the-prompt notice is idle, not a wait on Eric
+    expect(rangerTone(info(), card({ state: "waiting", waiting: "your turn" }))).toBe("ok");
+    expect(rangerLine(info(), card({ state: "waiting", waiting: "your turn" }))).toBe("idle");
     expect(rangerTone(info({ state: "backoff" }))).toBe("busy");
     expect(rangerTone(info({ state: "gave-up" }))).toBe("warn");
     expect(rangerTone(info({ on: false, state: "off" }))).toBe("off");
@@ -50,6 +53,7 @@ describe("the ranger's words", () => {
     expect(rangerLine(info(), card({ state: "waiting", waiting: "permission: Bash" }))).toBe("waiting on you: permission: Bash");
     expect(rangerLine(info())).toBe("running");
     expect(rangerLine(info({ state: "trust" }))).toBe("waiting at Claude's trust prompt");
+    expect([...rangerSessions({ mini: info(), mac: info({ on: false, session: "x" }), new: info({ session: null }) })]).toEqual(["35adf21d-777e-428a-aec9-639404e23258"]);
   });
 
   test("sizes and wakes in a few words", () => {

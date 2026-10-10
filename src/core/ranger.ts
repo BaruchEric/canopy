@@ -243,6 +243,12 @@ export function rangerBrief(template: string, v: BriefVars): string {
 /** what Claude's trust dialog says, seen on the ranger's pane (Claude Code 2.1.296) */
 export const TRUST_RE = /Yes, I trust this folder|Is this a project you created or one you trust|Do you trust the files in this folder/;
 
+/** Whether a card says its agent is idle at its prompt. Claude's own
+ *  notice after a minute at the prompt reaches the card as waiting "your
+ *  turn" (tailchan's `idle_prompt`), which for the ranger, reached by DM,
+ *  is idle too; a permission or a question waiting is not. */
+export const cardIdle = (c: { state: AgentState; waiting: string | null }): boolean => c.state === "idle" || (c.state === "waiting" && c.waiting === "your turn");
+
 /** how long nothing must have happened on the pane before a fresh start */
 export const RANGER_QUIET = 10 * 60_000;
 
@@ -261,12 +267,12 @@ export function freshDue(o: { now: number; fresh: RangerFresh; sessionAt: number
 
 /**
  * Whether the ranger is quiet enough to be moved to a fresh conversation:
- * its card (when there is one) says idle, and nothing came out of its pane
+ * its card (when there is one) says idle (`cardIdle`), and nothing came out of its pane
  * and nobody typed into it for `quiet`.
  */
-export function isQuiet(o: { now: number; card: AgentState | undefined; lastOutput: number | undefined; lastInput: number | undefined; quiet?: number }): boolean {
+export function isQuiet(o: { now: number; card: { state: AgentState; waiting: string | null } | undefined; lastOutput: number | undefined; lastInput: number | undefined; quiet?: number }): boolean {
   const span = o.quiet ?? RANGER_QUIET;
-  if (o.card !== undefined && o.card !== "idle") return false;
+  if (o.card !== undefined && !cardIdle(o.card)) return false;
   if (o.lastOutput !== undefined && o.now - o.lastOutput < span) return false;
   if (o.lastInput !== undefined && o.now - o.lastInput < span) return false;
   return true;

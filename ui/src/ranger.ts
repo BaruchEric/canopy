@@ -2,6 +2,7 @@
  *  words for its state, which backends' rangers the chip shows, how worried
  *  the chip looks, and its wakes and transcript in a few words. Pure. */
 
+import { cardIdle } from "../../src/core/ranger";
 import { isLiveAgent, type AgentCard, type RangerInfo, type RangerState, type RangerWake } from "../../src/core/types";
 
 export const RANGER_WORD: Record<RangerState, string> = {
@@ -22,7 +23,7 @@ export type RangerTone = "ok" | "busy" | "warn" | "off";
 
 export function rangerTone(r: RangerInfo, card?: AgentCard): RangerTone {
   if (!r.on) return "off";
-  if (r.state === "running") return card?.state === "waiting" ? "warn" : "ok";
+  if (r.state === "running") return card && card.state === "waiting" && !cardIdle(card) ? "warn" : "ok";
   if (r.state === "starting" || r.state === "backoff") return "busy";
   return "warn";
 }
@@ -49,7 +50,7 @@ export function rangerCard(cards: Record<string, AgentCard>, r: RangerInfo): Age
 
 /** one line for what it is doing: its card's state while it runs, else the hub's word */
 export function rangerLine(r: RangerInfo, card?: AgentCard): string {
-  if (r.state === "running" && card) return card.state === "waiting" ? `waiting on you${card.waiting ? `: ${card.waiting}` : ""}` : card.state;
+  if (r.state === "running" && card) return cardIdle(card) ? "idle" : card.state === "waiting" ? `waiting on you${card.waiting ? `: ${card.waiting}` : ""}` : card.state;
   return RANGER_WORD[r.state];
 }
 
@@ -74,6 +75,11 @@ export function wakeWhen(w: RangerWake, now: number): string {
   if (w.cron) return `cron ${w.cron}${due ? ` · ${due}` : ""}`;
   return due || "at a time";
 }
+
+/** the conversations the rangers are on: their cards are reached by DM, so
+ *  an idle prompt there is never "your turn" in waiting on you */
+export const rangerSessions = (rangers: Record<string, RangerInfo>): Set<string> =>
+  new Set(Object.values(rangers).flatMap((r) => (r.on && r.session ? [r.session] : [])));
 
 /** the crons Eric set, which Settings lists; the ranger's own are in the chip */
 export const ericsCrons = (r: RangerInfo): RangerWake[] => r.wakes.filter((w) => w.by === "eric" && w.cron !== undefined);

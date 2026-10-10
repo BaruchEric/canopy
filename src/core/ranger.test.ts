@@ -116,11 +116,15 @@ describe("fresh conversations", () => {
   test("quiet: an idle card, and nothing out of or into the pane for a while", () => {
     const now = at("2026-10-10T08:00");
     const long = now - 11 * 60_000;
-    expect(isQuiet({ now, card: "idle", lastOutput: long, lastInput: long })).toBe(true);
+    const idle = { state: "idle" as const, waiting: null };
+    expect(isQuiet({ now, card: idle, lastOutput: long, lastInput: long })).toBe(true);
     expect(isQuiet({ now, card: undefined, lastOutput: long, lastInput: undefined })).toBe(true);
-    expect(isQuiet({ now, card: "waiting", lastOutput: long, lastInput: long })).toBe(false);
-    expect(isQuiet({ now, card: "idle", lastOutput: now - 60_000, lastInput: long })).toBe(false);
-    expect(isQuiet({ now, card: "idle", lastOutput: long, lastInput: now - 60_000 })).toBe(false);
+    // Claude's minute-at-the-prompt notice is idle; a permission is not
+    expect(isQuiet({ now, card: { state: "waiting", waiting: "your turn" }, lastOutput: long, lastInput: long })).toBe(true);
+    expect(isQuiet({ now, card: { state: "waiting", waiting: "permission" }, lastOutput: long, lastInput: long })).toBe(false);
+    expect(isQuiet({ now, card: { state: "working", waiting: null }, lastOutput: long, lastInput: long })).toBe(false);
+    expect(isQuiet({ now, card: idle, lastOutput: now - 60_000, lastInput: long })).toBe(false);
+    expect(isQuiet({ now, card: idle, lastOutput: long, lastInput: now - 60_000 })).toBe(false);
   });
 
   test("the trust dialog is recognised", () => {

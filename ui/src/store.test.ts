@@ -32,6 +32,8 @@ import {
   visibleCards,
   visibleRepos,
   arrangementOf,
+  failedItems,
+  turnItems,
 } from "./store";
 import { applyQuery } from "./filters";
 import { cellOf, columnOf, panelsOf, type DockLayout } from "./grid";
@@ -47,6 +49,7 @@ import {
   type Ask,
   type KeptShell,
   type PeerSeen,
+  type RangerInfo,
   type RememberedRule,
   type Repo,
   type ScanResult,
@@ -2309,5 +2312,28 @@ describe("the dock as columns of cells", () => {
   test("the layout is saved with the rest", () => {
     const s = useStore.getState();
     expect(layoutOf(s).dockLayout).toBe(s.dockLayout);
+  });
+});
+
+describe("the ranger in waiting on you", () => {
+  test("its card is never your turn, and one that gave up is a failed row", () => {
+    const base = useStore.getState();
+    const card = {
+      id: "claude:r",
+      handle: "ranger",
+      session: "s-r",
+      state: "waiting",
+      waiting: "your turn",
+      origin: "canopy-shell",
+      cwd: "/config/ranger/home",
+      repo: null,
+      seenAt: 1,
+      where: { os: "linux", container: true, pid: 1, term: null, canopy: { backend: "mini" } },
+    } as unknown as AgentCard;
+    const other = { ...card, id: "claude:o", handle: "app-1234", session: "s-o" } as AgentCard;
+    const ranger = { on: true, state: "gave-up", session: "s-r", handle: "ranger", why: "it exited 5 times", lastExit: { at: 5, code: 1 }, wakes: [] } as unknown as RangerInfo;
+    const s = { ...base, runs: {}, registry: { [card.id]: card, [other.id]: other }, asks: {}, rangers: { mini: ranger } };
+    expect(turnItems(s).map((r) => r.id)).toEqual(["claude:o"]);
+    expect(failedItems(s).map((r) => [r.kind, r.id])).toEqual([["ranger", "mini"]]);
   });
 });

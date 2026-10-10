@@ -664,7 +664,7 @@ export class RangerHub {
     this.tell();
     const due = freshDue({ now: this.now(), fresh: this.settings.fresh, sessionAt: this.rec.sessionAt, bytes: this.bytes });
     if (!due) return;
-    const quiet = isQuiet({ now: this.now(), card: this.card()?.state, lastOutput: this.pane?.activityAt ?? undefined, lastInput: this.deps.lastInput(this.termId), quiet: this.t.quiet });
+    const quiet = isQuiet({ now: this.now(), card: this.card(), lastOutput: this.pane?.activityAt ?? undefined, lastInput: this.deps.lastInput(this.termId), quiet: this.t.quiet });
     if (!quiet) return;
     await this.launch("fresh");
   }
