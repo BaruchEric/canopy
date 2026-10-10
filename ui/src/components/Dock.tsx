@@ -2264,6 +2264,8 @@ export function RepoPanel({
       live = false;
     };
   }, [id, present]);
+  // the move a lock note retries once the lock is cleared
+  const [lastMove, setLastMove] = useState<(() => void) | null>(null);
 
   if (!repo) {
     // a home repo gone from the scan is pruned with it; another machine's
@@ -2301,8 +2303,6 @@ export function RepoPanel({
       setBusy(null);
     }
   };
-  // the move a lock note retries once the lock is cleared
-  const [lastMove, setLastMove] = useState<(() => void) | null>(null);
   const pull = () => {
     setLastMove(() => pull);
     void run("pull", async () => (await api.pull(id)).out);
