@@ -9,6 +9,7 @@ import { parseRemote } from "./access";
 import { git, onHost } from "./exec";
 import { shellQuote } from "./host";
 import { BUSY_MARKERS, ffTarget, isPeerName, isSafeRel, NO_PUSH, parseNameStatus, parseQuotedWords, parseRefLines, parseWipLines, peerMissing, peerRefspecs, peerUnreachable, peerUrl, repoWanted, seedWanted } from "./peers";
+import { isSessionId } from "./sessions";
 import { seedsDirOf, seedsRootOf } from "./seedgit";
 import { MIRRORS_DIR, mirrorPath, mirrorSlug } from "./seedmirror";
 import { SEEDS_DIR } from "./sprout";
@@ -1072,6 +1073,37 @@ export async function takeWip(repo: string, peer: string, branch: string): Promi
     return { how: "files" as const };
   }
   return { how: "branch" as const, branch: await landWip(repo, peer, branch, hash) };
+}
+
+/** whether the working copy, untracked files included and ignored ones
+ *  not, is exactly `commit`'s tree; built in scratch, writing nothing */
+export async function treeIs(repo: string, commit: string): Promise<boolean> {
+  const want = await git(repo, ["rev-parse", "-q", "--verify", `${commit}^{tree}`]);
+  if (want.code !== 0) return false;
+  return (await worktreeTree(repo, true)) === want.stdout.trim();
+}
+
+/** After a move: the source tree back to HEAD, its uncommitted work kept
+ *  first under refs/canopy-moved/<session>, a namespace peer sync neither
+ *  fetches nor prunes. Refuses when anything changed since the snapshot
+ *  `wip`, so an edit made after the move began is never thrown away. */
+export async function resetTree(repo: string, wip: string, session: string): Promise<"reset" | "clean"> {
+  if (!isSessionId(session)) throw new Error("session must be a session id");
+  const parent = await git(repo, ["rev-parse", "-q", "--verify", `${wip}^`]);
+  const head = await git(repo, ["rev-parse", "-q", "--verify", "HEAD"]);
+  if (parent.code !== 0 || head.code !== 0 || parent.stdout.trim() !== head.stdout.trim()) {
+    throw new Error("HEAD moved since the move began; nothing was reset");
+  }
+  if (await isBusy(repo)) throw new Error("a merge, rebase or similar is in progress; nothing was reset");
+  const keep = await git(repo, ["update-ref", `refs/canopy-moved/${session}`, wip]);
+  if (keep.code !== 0) throw new Error(keep.stderr.trim());
+  if (!(await isDirty(repo))) return "clean";
+  if (!(await treeIs(repo, wip))) throw new Error("the tree changed since the move began; nothing was reset");
+  const reset = await git(repo, ["reset", "--hard", "--quiet", "HEAD"]);
+  if (reset.code !== 0) throw new Error(reset.stderr.trim());
+  const clean = await git(repo, ["clean", "-f", "-d", "--quiet"]);
+  if (clean.code !== 0) throw new Error(clean.stderr.trim());
+  return "reset";
 }
 
 export async function trackBranch(repo: string, peer: string, branch: string): Promise<void> {

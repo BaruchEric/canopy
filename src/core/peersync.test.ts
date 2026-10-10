@@ -19,6 +19,7 @@ import {
   isDirty,
   PassSeen,
   peerWips,
+  resetTree,
   safeId,
   SEED_SERVED_AS,
   seedRepo,
@@ -28,6 +29,7 @@ import {
   snapshotWip,
   syncAll,
   syncRepo,
+  treeIs,
   takeWip,
   trackBranch,
 } from "./peersync";
@@ -1889,5 +1891,85 @@ describe("canopy peers CLI honours peerSync", () => {
     } finally {
       await rm(cfgDir, { recursive: true, force: true });
     }
+  });
+});
+
+describe("resetTree", () => {
+  const S = "0f5e2c1a-1111-4222-8333-444455556666";
+  const dirtied = async (name: string) => {
+    const r = await repo(name);
+    await commit(r, ".gitignore", "secret.env\n");
+    await writeFile(join(r, "a.txt"), "changed\n");
+    await writeFile(join(r, "new.txt"), "new\n");
+    await writeFile(join(r, "secret.env"), "x\n");
+    const snap = await snapshotWip(r, "mac", false);
+    const wip = await sh(r, "rev-parse", `refs/wip/${snap!.branch}`);
+    return { r, wip };
+  };
+  test("keeps the snapshot, then cleans tracked and untracked files but not ignored ones", async () => {
+    const { r, wip } = await dirtied("reset-ok");
+    expect(await treeIs(r, wip)).toBe(true);
+    expect(await resetTree(r, wip, S)).toBe("reset");
+    expect(await sh(r, "rev-parse", `refs/canopy-moved/${S}`)).toBe(wip);
+    expect(await sh(r, "status", "--porcelain")).toBe("");
+    expect(await readFile(join(r, "a.txt"), "utf8")).toBe("one\n");
+    expect(existsSync(join(r, "new.txt"))).toBe(false);
+    expect(existsSync(join(r, "secret.env"))).toBe(true);
+  });
+  test("treeIs is false for drift and writes no objects", async () => {
+    const { r, wip } = await dirtied("reset-treeis");
+    await writeFile(join(r, "new.txt"), "other\n");
+    const before = await sh(r, "count-objects", "-v");
+    expect(await treeIs(r, wip)).toBe(false);
+    await writeFile(join(r, "brand-new.txt"), "zzz\n");
+    expect(await treeIs(r, wip)).toBe(false);
+    expect(await sh(r, "count-objects", "-v")).toBe(before);
+  });
+  test("a second run on the clean tree only answers clean", async () => {
+    const { r, wip } = await dirtied("reset-twice");
+    await resetTree(r, wip, S);
+    expect(await resetTree(r, wip, S)).toBe("clean");
+  });
+  test("an edit after the snapshot is refused and left in place", async () => {
+    const { r, wip } = await dirtied("reset-drift");
+    await writeFile(join(r, "new.txt"), "edited after\n");
+    await expect(resetTree(r, wip, S)).rejects.toThrow(/changed since/);
+    expect(await readFile(join(r, "new.txt"), "utf8")).toBe("edited after\n");
+    expect(await readFile(join(r, "a.txt"), "utf8")).toBe("changed\n");
+  });
+  test("a new untracked file after the snapshot is refused and left in place", async () => {
+    const { r, wip } = await dirtied("reset-extra");
+    await writeFile(join(r, "late.txt"), "late\n");
+    await expect(resetTree(r, wip, S)).rejects.toThrow(/changed since/);
+    expect(existsSync(join(r, "late.txt"))).toBe(true);
+    expect(existsSync(join(r, "new.txt"))).toBe(true);
+  });
+  test("HEAD moved since the snapshot is refused and touches nothing", async () => {
+    const { r, wip } = await dirtied("reset-head");
+    await sh(r, "add", "-A");
+    await sh(r, "commit", "-qm", "moved on");
+    await writeFile(join(r, "after.txt"), "after\n");
+    await expect(resetTree(r, wip, S)).rejects.toThrow(/HEAD moved/);
+    expect(existsSync(join(r, "after.txt"))).toBe(true);
+    expect(await hasRef(r, `refs/canopy-moved/${S}`)).toBe(false);
+  });
+  test("a merge in progress is refused and touches nothing", async () => {
+    const { r, wip } = await dirtied("reset-busy");
+    await writeFile(join(r, ".git", "MERGE_HEAD"), `${wip}\n`);
+    await expect(resetTree(r, wip, S)).rejects.toThrow(/in progress/);
+    expect(existsSync(join(r, "new.txt"))).toBe(true);
+    expect(await readFile(join(r, "a.txt"), "utf8")).toBe("changed\n");
+    expect(await hasRef(r, `refs/canopy-moved/${S}`)).toBe(false);
+  });
+  test("a rebase in progress is refused", async () => {
+    const { r, wip } = await dirtied("reset-rebase");
+    await mkdir(join(r, ".git", "rebase-merge"));
+    await expect(resetTree(r, wip, S)).rejects.toThrow(/in progress/);
+    expect(existsSync(join(r, "new.txt"))).toBe(true);
+  });
+  test("a bad session id is refused before anything is written", async () => {
+    const { r, wip } = await dirtied("reset-badid");
+    await expect(resetTree(r, wip, "../x")).rejects.toThrow(/session id/);
+    expect(existsSync(join(r, "new.txt"))).toBe(true);
   });
 });
