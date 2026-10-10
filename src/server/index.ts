@@ -298,9 +298,9 @@ interface ServerState {
   /** the current occupant of the peering queue (a whole-tree pass, or a
    *  route action), whichever is running or next in line; see withPeering */
   peering: Promise<void> | null;
-  /** shells whose agent a move has stopped, by term id: what the target
-   *  loads, until the move finishes or is undone */
-  moving: Map<string, MoveOut>;
+  /** shells a move has in hand, by term id, from the moment move/out
+   *  takes one until the move finishes or is undone */
+  moving: Map<string, MoveRecord>;
   /** the whole-tree pass currently pending (queued or running), if any: a
    *  second refreshPeers call while this is set joins it instead of
    *  queueing a duplicate pass behind it */
@@ -343,6 +343,12 @@ interface ServerState {
  *  one session is shared and its output kept for the next socket; on tmux
  *  the shell is a session there and every socket runs a client of its own
  *  (`TermSocket.client`), so `pty` is null. */
+/** A move in hand on this machine: "stopping" while move/out waits on the
+ *  agent (which may still run), "stopped" once the agent quit but before
+ *  its work was saved (or after the save failed), "saved" once the
+ *  snapshot is written and the target may load it. */
+type MoveRecord = { stage: "stopping" } | { stage: "stopped" | "saved"; out: MoveOut };
+
 interface LiveTerm {
   info: TermInfo;
   pty: { session: TermSession; scrollback: Scrollback } | null;
@@ -951,6 +957,37 @@ async function moveFiles(path: string): Promise<{ files: string[]; changed: numb
     if (code[0] === "R" || code[0] === "C") i++; // the original path follows a rename
   }
   return { files, changed, ignored };
+}
+
+/** what transcript and finish say when the agent quit but the snapshot did not land */
+const NOT_SAVED = "the agent stopped but its work was not saved; resume here";
+
+/** move/out up to the agent quitting: the checks, then the stop. Throws
+ *  before anything is touched when one fails or the agent stays. */
+async function stopForMove(state: ServerState, req: Request, term: string, live: LiveTerm, repo: Repo, tmux: string[]): Promise<{ out: MoveOut; self: string }> {
+  const b: unknown = await req.json().catch(() => null);
+  const session = b && typeof b === "object" && "session" in b ? b.session : undefined;
+  const harness = b && typeof b === "object" && "harness" in b ? b.harness : undefined;
+  if (!isSessionId(session) || !isHarness(harness)) throw new HttpError(400, "session and harness are required");
+  const s = await movePeers();
+  const activeRun = state.runner.activeFor(repo.id);
+  if (activeRun) throw new HttpError(409, busyWith(repo.name, activeRun.verb));
+  if (state.flows.activeFor(repo.id)) throw new HttpError(409, "a workflow is running here");
+  const at = live.info.path;
+  const branch = await currentBranch(at);
+  if (!branch) throw new HttpError(409, "a detached HEAD: a move needs a branch");
+  const found = await transcriptFile(harness, at, session);
+  if (!found) throw new HttpError(404, `no ${harness} conversation under that id at this repo`);
+  let stopped: boolean;
+  try {
+    stopped = await endAgent(paneDriver(tmux, term), harness);
+  } catch (err) {
+    if (err instanceof MoveError) throw new HttpError(err.status, err.message);
+    throw err;
+  }
+  if (!stopped) throw new HttpError(409, "the agent did not quit within 20 s; nothing else was touched");
+  const head = (await git(at, ["rev-parse", "HEAD"])).stdout.trim();
+  return { out: { session, harness, path: at, branch, head, name: found.name, wip: null }, self: s.self };
 }
 
 /** the pane as a move's stop drives it */
@@ -2346,57 +2383,59 @@ async function handleApi(
     const term = url.searchParams.get("term") ?? "";
     const { live, repo, tmux } = moveShell(state, term);
     if (state.moving.has(term)) throw new HttpError(409, "that shell is already moving");
-    const b: unknown = await req.json().catch(() => null);
-    const session = b && typeof b === "object" && "session" in b ? b.session : undefined;
-    const harness = b && typeof b === "object" && "harness" in b ? b.harness : undefined;
-    if (!isSessionId(session) || !isHarness(harness)) throw new HttpError(400, "session and harness are required");
-    const s = await movePeers();
-    const activeRun = state.runner.activeFor(repo.id);
-    if (activeRun) throw new HttpError(409, busyWith(repo.name, activeRun.verb));
-    if (state.flows.activeFor(repo.id)) throw new HttpError(409, "a workflow is running here");
-    const at = live.info.path;
-    const branch = await currentBranch(at);
-    if (!branch) throw new HttpError(409, "a detached HEAD: a move needs a branch");
-    const found = await transcriptFile(harness, at, session);
-    if (!found) throw new HttpError(404, `no ${harness} conversation under that id at this repo`);
-    let stopped: boolean;
+    // held before the first await, so a second out while this one waits on
+    // the agent is refused above; dropped again if the agent never stops
+    state.moving.set(term, { stage: "stopping" });
+    let stopped: { out: MoveOut; self: string };
     try {
-      stopped = await endAgent(paneDriver(tmux, term), harness);
+      stopped = await stopForMove(state, req, term, live, repo, tmux);
     } catch (err) {
-      if (err instanceof MoveError) throw new HttpError(err.status, err.message);
+      state.moving.delete(term);
       throw err;
     }
-    if (!stopped) throw new HttpError(409, "the agent did not quit within 20 s; nothing else was touched");
     // on record as soon as the agent is gone, so a snapshot that fails
     // below still leaves "resume here" (move/undo) something to resume
-    const stoppedOut: MoveOut = { session, harness, path: at, branch, head: "", name: found.name, wip: null };
-    state.moving.set(term, stoppedOut);
+    const { self } = stopped;
+    const { path: at, branch } = stopped.out;
+    state.moving.set(term, { stage: "stopped", out: stopped.out });
     const out = await withPeering(state, async (): Promise<MoveOut> => {
       const head = (await git(at, ["rev-parse", "HEAD"])).stdout.trim();
       let wip: string | null = null;
       if (await isDirty(at)) {
-        await snapshotWip(at, s.self, false);
+        const notSaved = new HttpError(500, "the snapshot was not written; resume here to carry on");
+        // a failed write leaves whatever refs/wip/<branch> a peer pass wrote
+        // earlier, so the ref counts only when this call wrote or confirmed
+        // it and it sits right on the HEAD read above
+        const snap = await snapshotWip(at, self, false);
+        if (!snap || snap.branch !== branch) throw notSaved;
         const r = await git(at, ["rev-parse", "-q", "--verify", `refs/wip/${branch}`]);
-        if (r.code !== 0) throw new HttpError(500, "the snapshot was not written; resume here to carry on");
+        if (r.code !== 0) throw notSaved;
+        const parent = await git(at, ["rev-parse", "-q", "--verify", `${r.stdout.trim()}^`]);
+        if (parent.code !== 0 || parent.stdout.trim() !== head) throw notSaved;
         wip = r.stdout.trim();
       }
-      return { ...stoppedOut, head, wip };
+      return { ...stopped.out, head, wip };
     });
-    state.moving.set(term, out);
+    state.moving.set(term, { stage: "saved", out });
     return json(out);
   }
   if (path === "/api/terms/move/transcript" && method === "GET") {
     const term = url.searchParams.get("term") ?? "";
-    const out = state.moving.get(term);
-    if (!out || out.session !== url.searchParams.get("session")) throw new HttpError(409, "stop the agent first (move/out)");
+    const rec = state.moving.get(term);
+    if (rec?.stage === "stopped") throw new HttpError(409, NOT_SAVED);
+    if (rec?.stage !== "saved" || rec.out.session !== url.searchParams.get("session")) throw new HttpError(409, "stop the agent first (move/out)");
+    const { out } = rec;
     const found = await transcriptFile(out.harness, out.path, out.session);
     if (!found) throw new HttpError(404, "the transcript is gone");
     return new Response(Bun.file(found.file), { headers: { "Content-Type": "application/x-ndjson" } });
   }
   if (path === "/api/terms/move/finish" && method === "POST") {
     const term = url.searchParams.get("term") ?? "";
-    const out = state.moving.get(term);
-    if (!out) throw new HttpError(409, "that shell is not moving");
+    const rec = state.moving.get(term);
+    if (!rec) throw new HttpError(409, "that shell is not moving");
+    if (rec.stage === "stopping") throw new HttpError(409, "the agent in that shell is still stopping");
+    if (rec.stage === "stopped") throw new HttpError(409, NOT_SAVED);
+    const { out } = rec;
     const live = state.terms.get(term);
     const repoId = live?.info.repoId;
     let reset: "reset" | "clean" | "none" = "none";
@@ -2415,10 +2454,18 @@ async function handleApi(
   }
   if (path === "/api/terms/move/undo" && method === "POST") {
     const term = url.searchParams.get("term") ?? "";
-    const out = state.moving.get(term);
-    // a stop that failed before the agent quit left nothing to undo
-    if (!out) return json({ ok: true, resumed: false });
+    const rec = state.moving.get(term);
+    // a stop that failed before the agent quit left nothing to undo, and
+    // one still waiting on the agent is out's to finish or drop
+    if (!rec || rec.stage === "stopping") return json({ ok: true, resumed: false });
+    const { out } = rec;
     const { repo, tmux } = moveShell(state, term);
+    // an agent back in the pane (someone started one by hand) is left be:
+    // typing the resume line would land in its prompt
+    if (await paneDriver(tmux, term).agent()) {
+      state.moving.delete(term);
+      return json({ ok: true, resumed: false });
+    }
     const line = resumeLine(out.session, agentFor(await loadConfig(), repo.path, "shell", { harness: out.harness }), shellEnv(state, repo.id, repo.path, term));
     await sendLine(tmux, term, line);
     state.moving.delete(term);

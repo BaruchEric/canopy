@@ -24,14 +24,18 @@ const url = (p: string) => `http://127.0.0.1:${server.port}${p}`;
 const git = (cwd: string, ...args: string[]) => Bun.$`git -C ${cwd} ${args}`.quiet().text();
 const post = (p: string, body: unknown = {}) => fetch(url(p), { method: "POST", body: JSON.stringify(body) });
 
-/** a shell at the repo with the stub agent typed into it, once tmux shows it */
-async function shellWithAgent(term: string): Promise<void> {
-  const ws = new WebSocket(url(`/api/term?id=app&term=${term}&place=panel`).replace("http", "ws"));
+/** which agent tmux sees in a shell */
+const agentIn = async (term: string): Promise<string | null> =>
+  ((await (await fetch(url(`/api/terms/agent?term=${term}`))).json()) as { agent: string | null }).agent;
+
+/** a shell at the repo with the stub agent typed into it, once tmux shows
+ *  it; `attach` joins a shell the server already holds */
+async function shellWithAgent(term: string, attach = false): Promise<void> {
+  const ws = new WebSocket(url(`/api/term?id=app&term=${term}&place=panel${attach ? "&attach=1" : ""}`).replace("http", "ws"));
   await new Promise((r) => ws.addEventListener("open", r));
   ws.send(new TextEncoder().encode("claude\n"));
   for (let i = 0; i < 100; i++) {
-    const r = (await (await fetch(url(`/api/terms/agent?term=${term}`))).json()) as { agent: string | null };
-    if (r.agent === "claude") return ws.close();
+    if ((await agentIn(term)) === "claude") return ws.close();
     await Bun.sleep(100);
   }
   throw new Error("the stub agent never showed");
@@ -141,6 +145,74 @@ describe("the source half of a move", () => {
     }
   });
 
+  test.if(tmux)("a second out while the first waits on the agent is refused", async () => {
+    const term = TERM.replace("ab", "a1");
+    await shellWithAgent(term);
+    const first = post(`/api/terms/move/out?term=${term}`, { session: S, harness: "claude" });
+    // the first is in hand once the stop has begun; the stop itself takes beats
+    await Bun.sleep(100);
+    const second = await post(`/api/terms/move/out?term=${term}`, { session: S, harness: "claude" });
+    expect(second.status).toBe(409);
+    expect(((await second.json()) as { error: string }).error).toMatch(/already moving/);
+    // undo while the first still waits on the agent types nothing
+    expect(await (await post(`/api/terms/move/undo?term=${term}`)).json()).toEqual({ ok: true, resumed: false });
+    expect((await first).status).toBe(200);
+    expect(await (await post(`/api/terms/move/undo?term=${term}`)).json()).toEqual({ ok: true, resumed: true });
+  });
+
+  test.if(tmux)("a snapshot that fails holds transcript and finish, and undo still resumes", async () => {
+    const term = TERM.replace("ab", "a2");
+    const app = join(root, "app");
+    await shellWithAgent(term);
+    // a ref from an earlier snapshot is there, so a failed write would leave a stale one in place
+    await writeFile(join(app, "README.md"), "stale\n");
+    expect((await post(`/api/terms/move/out?term=${term}`, { session: S, harness: "claude" })).status).toBe(200);
+    expect((await post(`/api/terms/move/undo?term=${term}`)).status).toBe(200);
+    for (let i = 0; i < 50 && (await agentIn(term)) !== "claude"; i++) await Bun.sleep(100);
+    expect((await git(app, "rev-parse", "-q", "--verify", "refs/wip/main")).trim()).toMatch(/^[0-9a-f]{40}$/);
+    await writeFile(join(app, "README.md"), `unsaved ${Date.now()}\n`);
+    // git cannot write the new blob, so the snapshot fails
+    const objects = join(app, ".git", "objects");
+    await Bun.$`chmod -R a-w ${objects}`.quiet();
+    let res: Response;
+    try {
+      res = await post(`/api/terms/move/out?term=${term}`, { session: S, harness: "claude" });
+    } finally {
+      await Bun.$`chmod -R u+w ${objects}`.quiet();
+    }
+    expect(res.status).toBe(500);
+    expect(((await res.json()) as { error: string }).error).toMatch(/snapshot was not written/);
+    const t = await fetch(url(`/api/terms/move/transcript?term=${term}&session=${S}`));
+    expect(t.status).toBe(409);
+    expect(((await t.json()) as { error: string }).error).toMatch(/not saved/);
+    const fin = await post(`/api/terms/move/finish?term=${term}`);
+    expect(fin.status).toBe(409);
+    expect(((await fin.json()) as { error: string }).error).toMatch(/not saved/);
+    const terms = (await (await fetch(url("/api/terms"))).json()) as { id: string }[];
+    expect(terms.some((x) => x.id === term)).toBe(true);
+    expect(await (await post(`/api/terms/move/undo?term=${term}`)).json()).toEqual({ ok: true, resumed: true });
+    let back: string | null = null;
+    for (let i = 0; i < 50 && back !== "claude"; i++) {
+      await Bun.sleep(100);
+      back = await agentIn(term);
+    }
+    expect(back).toBe("claude");
+  });
+
+  test.if(tmux)("undo while an agent runs again types nothing and forgets the move", async () => {
+    const term = TERM.replace("ab", "a3");
+    await shellWithAgent(term);
+    expect((await post(`/api/terms/move/out?term=${term}`, { session: S, harness: "claude" })).status).toBe(200);
+    // someone starts the agent again by hand
+    await shellWithAgent(term, true);
+    expect(await (await post(`/api/terms/move/undo?term=${term}`)).json()).toEqual({ ok: true, resumed: false });
+    await Bun.sleep(400);
+    const text = (await (await fetch(url(`/api/terms/text?term=${term}`))).json()) as { text: string | null };
+    expect(text.text).not.toContain(S);
+    // forgotten: finish has nothing to do
+    expect((await post(`/api/terms/move/finish?term=${term}`)).status).toBe(409);
+  });
+
   test("undo with no move on record has nothing to resume", async () => {
     const r = await post(`/api/terms/move/undo?term=${"9".repeat(32)}`);
     expect(r.status).toBe(200);
@@ -148,6 +220,8 @@ describe("the source half of a move", () => {
   });
 
   test("an unknown shell is a 404", async () => {
-    expect((await fetch(url("/api/terms/move/plan?term=00000000000000000000000000000000"))).status).toBe(404);
+    const r = await fetch(url("/api/terms/move/plan?term=00000000000000000000000000000000"));
+    expect(r.status).toBe(404);
+    expect(((await r.json()) as { error: string }).error).toMatch(/no such shell/);
   });
 });
