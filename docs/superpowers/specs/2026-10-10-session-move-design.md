@@ -1,0 +1,112 @@
+# Moving a shell's agent session to another backend
+
+Date: 2026-10-10. Status: design agreed with Eric in conversation, written spec awaiting his review.
+
+## What the user asked for
+
+"transfer sessions between servers". Asked what that means, Eric picked:
+
+- what moves is the agent conversation (Claude Code or Codex) **and** the repo's uncommitted work, so the agent picks up mid-edit on the other machine;
+- it is a move, not a fork: the source agent stops, and the source tree is reset to clean once the target has taken over (the work stays recoverable in `refs/wip` and the reflog);
+- it starts from a live canopy shell's tab row, and only there (no registry row, sessions list or CLI entry in v1);
+- the browser carries the transcript between backends (approach A below), not the servers over ssh.
+
+## What already exists
+
+- **Several backends, one page.** The UI talks to each backend directly (`req(b, …)` in `ui/src/api.ts`). A shell tab's id is `<backend>|<hex>`, so every call for it goes to the backend it runs on. `joinRepos` (`ui/src/checkouts.ts`) folds one repo's checkouts on several machines into one card, and `checkoutPref` picks which one a panel shows.
+- **Servers never call each other over HTTP.** Between machines they use git over ssh and the narrow `canopy-peer` gate (`askPeer`, `gateCommand` in `src/core/peersync.ts`).
+- **Peer sync** snapshots a dirty tree as `refs/wip/<branch>` (`snapshotWip`), fetches peers into `refs/remotes/<peer>/*` and `refs/peer-wip/<peer>/*` (`fetchPeer`), fast-forwards local branches, and lands a peer's WIP as uncommitted files with `takeWip` when the tree is clean, HEAD is the WIP's parent, and nothing is busy. `POST /api/repos/peer {action: "sync"|"take"}` runs either for one repo under `withPeering`.
+- **Resume.** `POST /api/repos/resume` opens a tmux shell and types `resumeLine` (`claude … --resume <id>`, `codex resume <id>`), after `hasAgentSession` finds the session under this machine's path.
+- **Which session a shell runs.** The registry card for the shell (`cardOfShell`) carries `session` and `transcript`. Without a card, `GET /api/terms/transcript` gives the newest transcript in the shell's repo.
+- **Paths.** Mac repos are under `/Users/ericbaruch/dev/`; the mini's are under `/home/eric/dev/` both on the host and inside the containers. Peer sync matches a repo across machines by its id, the path relative to the scan root. The mini's containers bind-mount the host's `~/.claude`, `~/.claude.json` and `~/.codex`.
+
+## What is missing
+
+- No code copies a file from one machine to another (only `askPeer`'s small allowlisted seeds).
+- Claude files a conversation under `~/.claude/projects/<projectFolder(cwd)>/`, so a Mac session is invisible to `hasAgentSession` on the mini.
+- No route stops a shell's agent, and no route resets a working tree.
+
+## The main decision: the browser carries the transcript
+
+The page asks the source for the transcript and posts it to the target. The servers stay unaware of each other, as they are today, and the `canopy-peer` gate gains nothing. The alternative, a `transcript <session>` gate command the target calls over ssh, would let any peer that reaches the gate read conversation transcripts, a wider opening than anything the gate allows now. The cost of the choice is that a long transcript (tens of MB) goes through the device running the page, phone included; the 64 MB cap below bounds it.
+
+The uncommitted work still moves through peer sync: the target fetches from the source over ssh and lands the snapshot with `takeWip`.
+
+## The flow
+
+The page runs five steps, each one call to one backend.
+
+1. **Check** (target). `POST /api/repos/move/check?id=<target repo>` with `{from, branch, head, transcriptBytes}`. The target runs a peer sync of this repo, then requires:
+   - peer sync is not `off`, and `from` is a git peer of this repo;
+   - no canopy run or workflow is active on the repo;
+   - the tree is clean;
+   - `branch` is checked out and its HEAD equals `head` after the sync (a fast-forward during the sync counts; a target that is ahead or diverged is refused);
+   - `transcriptBytes` is at most 64 MB;
+   - no transcript of that session id already exists here, or the existing one passes the prefix rule (see "The transcript"), which the check can only confirm at load, so here it only reports that one exists.
+
+   It returns `{ok: true}` or `{ok: false, reason}`. Nothing changes on either side. The source supplies `branch`, `head` and `transcriptBytes` through `GET /api/terms/move/plan?term=`, which also returns the session id, harness, first prompt, last activity time and the list of uncommitted files for the confirm sheet.
+
+2. **Stop** (source). `POST /api/terms/move/out?term=` with `{session}`.
+   - Marks the shell as moving; a second `out` for it is refused (409).
+   - Ends the agent with `endAgent`: Escape if a turn is running, then `/exit`, then waits up to 20 s for the pane's current command to be a shell again. If the agent does not exit, the step fails with nothing else touched.
+   - Takes the repo's peer lock and runs `snapshotWip`. Returns `{session, harness, branch, head, wip}` (`wip` null for a clean tree).
+
+3. **Transcript** (source). `GET /api/terms/move/transcript?term=&session=` streams the session file as it now is (complete, since the agent has exited).
+
+4. **Load** (target). `POST /api/repos/move/in?id=` with a multipart body: the transcript file and `{from, session, harness, branch, head, wip, term, place, cols, rows}`. Under the repo's peer lock the target:
+   - fetches from `from` (`fetchPeer`);
+   - if `wip` is set, lands it with `takeWip`, accepting only the clean landing (`how: "tree"`); any other outcome undoes nothing it did not do and fails the step;
+   - writes the transcript (see below);
+   - resumes the session in a new tmux shell (`resumeTerm`) and returns its term id.
+
+5. **Clean** (source). `POST /api/terms/move/finish?term=`. Under the peer lock, `resetTree` returns the tree to HEAD (tracked files restored, files untracked in the snapshot removed), then the old shell ends (`endTerm`). The snapshot stays as `refs/wip/<branch>` until the next sync pass sees the clean tree and deletes it, and in the reflog after that.
+
+Gitignored files (`.env`, build output) are not in a WIP snapshot and do not move. The confirm sheet says so when the repo has any.
+
+## The transcript
+
+New `src/core/move.ts` (pure where it can be, tested):
+
+- **Claude.** One JSON object per line; most lines carry a top-level `cwd`. Each `cwd` under the source repo path is rewritten to the target repo path, keeping any subfolder part (`/Users/ericbaruch/dev/x/ui` becomes `/home/eric/dev/x/ui`). Message content, tool inputs and quoted paths are left as they are. The file is written to `~/.claude/projects/<projectFolder(target path)>/<session>.jsonl`, after which `hasAgentSession` finds it.
+- **Codex.** The rollout keeps the source's `YYYY/MM/DD/` folders and file name under `$CODEX_HOME/sessions/`, with `cwd` rewritten in the first `session_meta` line. `codex resume <id>` finds it by id.
+- **A file already there.** If the target already holds that session id (an earlier move the other way), the incoming file replaces it only when the existing one is a line-for-line prefix of it. Otherwise the load fails: the two copies have split, and canopy does not pick one.
+- **Integrity.** Every line must parse as JSON before anything is written; the file is written to a temp name beside the destination and renamed. Over 64 MB is refused.
+
+The mini's canopy container writes into the host's `~/.claude` through the bind mount, and `claude` in the `shells` container reads it. The build checks that both sides agree on ownership and that a moved file resumes there.
+
+## The UI
+
+- **The button.** "move to <backend>" in a shell tab's row (`AgentButtons.tsx`), beside "switch to codex". Shown when an agent runs in the shell, the shell is not a task or a seed's, and the repo's card has a checkout on another backend the page shows. With two or more such backends it opens a short list.
+- **The confirm sheet** (`ui/src/components/MoveSheet.tsx`). Before anything stops it shows the session's first prompt and last activity (so a wrong guess of the session is caught), the target backend and its repo path, the count of uncommitted files with a toggle to list them, a note when gitignored files will stay behind, and the check's result, run as the sheet opens. A failed check disables "move" and shows its reason.
+- **Progress.** The sheet lists the five steps and ticks each off. When load succeeds, the new tab takes the old tab's place in the same panel, and the panel's `checkoutPref` switches to the target.
+- **Failure.**
+  - Before stop: everything is as it was; the sheet shows the reason.
+  - After stop, before load succeeds: "resume here" runs `resumeAgent` with the session id on the source. The source tree is still dirty, since nothing reset it.
+  - At clean: the session already runs on the target. The sheet says so and offers "clean source" to retry the step.
+- **Code.** A store action `moveShell(tabId, toBackend)` in `ui/src/store.ts` runs the steps; calls go in `ui/src/api.ts`. Styles use the existing tokens in `ui/src/styles.css`.
+
+## Safety
+
+- **Locks.** Each side holds the repo's peer lock (`withPeering`) for its own steps, so a background sync pass cannot snapshot or fast-forward mid-move. Both sides refuse with 409 while a canopy run or workflow is active on the repo.
+- **Each step can be run again.** Check changes nothing. Stop on an agent that has already exited only snapshots. Load that finds the WIP already landed and the transcript already written only starts the shell. Clean on a tree already at HEAD only ends the shell.
+- **`resetTree` refuses drift.** It compares the working tree with the snapshot taken at stop and refuses (409) if anything changed since, so an edit made on the source after the move is never thrown away.
+- **Auth.** The new routes sit behind the same access checks as the other mutating routes. The upload is a single body capped at 64 MB plus the form fields.
+
+## Files
+
+- New: `src/core/move.ts` and `move.test.ts`; `ui/src/components/MoveSheet.tsx`.
+- Changed: `src/core/tmux.ts` (`endAgent`), `src/core/peersync.ts` (`resetTree`), `src/server/index.ts` (the six routes: `move/plan`, `move/check`, `move/out`, `move/transcript`, `move/in`, `move/finish`), `ui/src/api.ts`, `ui/src/store.ts`, `ui/src/components/AgentButtons.tsx`, `ui/src/styles.css`, `docs/architecture.md` (a "Moving a session" section).
+
+## Testing
+
+- **Unit.** `move.test.ts`: the `cwd` rewrite at the repo root and in a subfolder, a `cwd` outside the repo left alone, the Codex `session_meta` line, the prefix rule (replace, refuse a split), a cut-off last line refused, the size cap. `tmux.test.ts`: `endAgent` against a fake pane, including an agent that never exits. `peersync.test.ts`: `resetTree` cleaning a tree that matches its snapshot and refusing one that drifted.
+- **Server.** Two scratch checkouts set up as each other's peers with the existing peersync fixtures, and fixture transcripts under two separate homes. End to end: plan, check, out, transcript, in, finish. Then a dirty target refused at check, a target branch ahead refused at check, and a load failure leaving the source dirty and resumable.
+- **Live.** After the four gates, a throwaway Claude session in a scratch repo moves from the Mac to the mini and back, in a real browser. Each time, the resumed agent recalls an earlier turn, and the uncommitted files appear on the target and are gone from the source.
+
+## Out of scope
+
+- Moving a headless run (`claude -p`) or a past session from the sessions list.
+- A CLI entry (`canopy move`).
+- Forking a session (both sides keep going).
+- Carrying gitignored files.
+- Rewriting paths inside message content.
