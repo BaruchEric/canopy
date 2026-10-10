@@ -1942,6 +1942,39 @@ export const TERM_GONE = 4404;
 /** The two places a shell can live inside a window. */
 export type ShellPlace = "panel" | "strip";
 
+/** What a move would carry from a shell, for the confirm sheet and the target's check. */
+export interface MovePlan {
+  session: string;
+  harness: Harness;
+  /** the source repo's path, which the target rewrites `cwd` from */
+  path: string;
+  branch: string;
+  head: string;
+  /** the transcript's name as the target files it (codex: under sessions/) */
+  name: string;
+  transcriptBytes: number;
+  prompt: string | null;
+  /** ms, the transcript's last write */
+  at: number;
+  /** uncommitted paths, at most 200 */
+  files: string[];
+  changed: number;
+  /** gitignored entries that stay behind */
+  ignored: number;
+}
+
+/** The source after its agent stopped: what the target loads. */
+export interface MoveOut {
+  session: string;
+  harness: Harness;
+  path: string;
+  branch: string;
+  head: string;
+  name: string;
+  /** the snapshot commit, null for a clean tree */
+  wip: string | null;
+}
+
 /** One pty the server holds, as `GET /api/terms` lists it: a browser that
  *  comes back reattaches to the ones it knows and adopts the rest. */
 export interface TermInfo {

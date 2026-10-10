@@ -45,7 +45,7 @@ import { runCheck } from "../core/check";
 import { exec, git, onHost, setSeedGit } from "../core/exec";
 import { fleetSkipReason, Flows } from "../core/flow";
 import { INHERITED_ENV, SECRET_ENV, isKeystroke, isTermId, parseTermMessage, Scrollback, shellArgs, startTerm, termPlace, termSize, type TermSession, type TermSize } from "../core/term";
-import { attachTmuxTerm, hasSession, history, killSession, listSessions, newSession, paneInfo, paneText, sendLine, serverUp, snapshot, tmuxBase } from "../core/tmux";
+import { attachTmuxTerm, hasSession, history, killSession, listSessions, newSession, paneInfo, paneText, sendKeys, sendLine, serverUp, snapshot, tmuxBase } from "../core/tmux";
 import { clip, continueLine, countLines, expiredShells, forgetKept, KEEP_EVERY, listKept, lostShells, readKeptHistory, replayCommand, replayFile, restoredBanner, writeKept } from "../core/keep";
 import { PASTE_MAX, pasteName, pasteText, savePaste } from "../core/paste";
 import { apiBase, ForgeAuthError, linkForgeClones, listForgeRepos } from "../core/forge";
@@ -66,7 +66,8 @@ import { shipConfig, shipper, type Shipper } from "../core/shipper";
 import { seedSource, type SeedSource } from "../core/seedsource";
 import { vaultConfig, vaultNotes } from "../core/vault";
 import { linkPeers, NO_PUSH, peerUrl } from "../core/peers";
-import { initRepo, PassSeen, seedRepo, syncAll, syncRepo, takeWip, trackBranch } from "../core/peersync";
+import { currentBranch, initRepo, isDirty, PassSeen, resetTree, seedRepo, snapshotWip, syncAll, syncRepo, takeWip, trackBranch } from "../core/peersync";
+import { endAgent, MOVE_MAX, MoveError, type PaneDriver } from "../core/move";
 import { normalizeLaunch } from "../core/launch";
 import { repoSpecState, syncRepo as syncSpec } from "../core/spec";
 import { Launcher, LauncherError } from "../core/launcher";
@@ -87,7 +88,7 @@ import { clientKey, HELPER_PING, HELPER_TIMEOUT, helperRefusal, isLoopback, isLo
 import { devicesOf, parseStream, type Stream } from "../core/presence";
 import { mapPool, searchRepo } from "../core/search";
 import { readActivity } from "../core/activity";
-import { agentSessions, hasAgentSession, isSessionId, newestTranscript, resumeLine } from "../core/sessions";
+import { agentSessions, hasAgentSession, isSessionId, newestTranscript, resumeLine, transcriptFile } from "../core/sessions";
 import { BUNDLED_DIR, findWorkflow, loadWorkflows } from "../core/workflows";
 import {
   launchSource,
@@ -137,6 +138,8 @@ import {
   type AgentTable,
   type CanopyConfig,
   type Harness,
+  type MoveOut,
+  type MovePlan,
   type ClientInfo,
   type Device,
   type FlowChoice,
@@ -295,6 +298,9 @@ interface ServerState {
   /** the current occupant of the peering queue (a whole-tree pass, or a
    *  route action), whichever is running or next in line; see withPeering */
   peering: Promise<void> | null;
+  /** shells whose agent a move has stopped, by term id: what the target
+   *  loads, until the move finishes or is undone */
+  moving: Map<string, MoveOut>;
   /** the whole-tree pass currently pending (queued or running), if any: a
    *  second refreshPeers call while this is set joins it instead of
    *  queueing a duplicate pass behind it */
@@ -890,6 +896,71 @@ async function resumeTerm(
   }
   return termInfo(state, live);
 }
+
+/** A move's shell: held, a plain shell (not a task or the ranger), on this
+ *  machine, in a repo peer sync covers, with tmux to drive it. */
+function moveShell(state: ServerState, term: string): { live: LiveTerm; repo: Repo; tmux: string[] } {
+  const live = state.terms.get(term);
+  if (live?.info.task || state.tasks.knows(term) || state.ranger.knows(term)) throw new HttpError(400, "only a plain shell moves");
+  if (!live || live.ending) throw new HttpError(404, "no such shell");
+  const repo = repoById(state, live.info.repoId);
+  if (!peerable(state, repo)) throw new HttpError(400, "a move covers local repos under the launch root");
+  if (!state.tmux) throw new HttpError(400, "a move needs tmux shells");
+  return { live, repo, tmux: state.tmux };
+}
+
+/** peer sync's settings when a move can use them: on, with a self */
+async function movePeers(): Promise<PeerSettings & { self: string }> {
+  const s = await peerSettings();
+  if (!s.self) throw new HttpError(400, "peers are not set up: no self in the config");
+  if (s.peerSync === "off") throw new HttpError(409, "peer sync is off");
+  return { ...s, self: s.self };
+}
+
+/** The session a move carries: the card's when the page names one this
+ *  machine has, else the newest of the running harness at the repo. */
+async function moveSession(path: string, harness: Harness, asked: string | null): Promise<{ session: string; file: string; name: string }> {
+  if (asked && isSessionId(asked)) {
+    const got = await transcriptFile(harness, path, asked);
+    if (got) return { session: asked, ...got };
+  }
+  const newest = await newestTranscript(harness, path);
+  const id = newest?.match(/([0-9a-f-]{36})\.jsonl$/)?.[1];
+  const got = id ? await transcriptFile(harness, path, id) : null;
+  if (!id || !got) throw new HttpError(404, `no ${harness} transcript in ${path}`);
+  return { session: id, ...got };
+}
+
+/** uncommitted paths and gitignored entries, off one porcelain listing */
+async function moveFiles(path: string): Promise<{ files: string[]; changed: number; ignored: number }> {
+  const r = await git(path, ["status", "--porcelain=v1", "-z", "--untracked-files=all", "--ignored=traditional"]);
+  const files: string[] = [];
+  let changed = 0;
+  let ignored = 0;
+  const parts = r.stdout.split("\0");
+  for (let i = 0; i < parts.length; i++) {
+    const e = parts[i] ?? "";
+    if (e.length < 4) continue;
+    const code = e.slice(0, 2);
+    if (code === "!!") {
+      ignored++;
+      continue;
+    }
+    changed++;
+    if (files.length < 200) files.push(e.slice(3));
+    if (code[0] === "R" || code[0] === "C") i++; // the original path follows a rename
+  }
+  return { files, changed, ignored };
+}
+
+/** the pane as a move's stop drives it */
+const paneDriver = (tmux: string[], term: string): PaneDriver => ({
+  keys: (keys, literal) => sendKeys(tmux, term, keys, literal),
+  agent: async () => {
+    const pane = await paneInfo(tmux, term);
+    return pane ? await paneAgent(pane) : null;
+  },
+});
 
 /** the longest first message a new agent shell takes off its socket's url */
 const PROMPT_MAX = 6000;
@@ -2250,6 +2321,109 @@ async function handleApi(
     if (!file) return json({ error: `no ${harness} transcript in ${live.info.path}` }, 404);
     return json({ harness, path: file });
   }
+  // Moving a shell's agent session to another backend, this machine's half:
+  // what would go, stopping the agent and snapshotting the tree, the
+  // transcript for the target to fetch, the clean-up once the target holds
+  // it, and putting the agent back when the move is called off.
+  if (path === "/api/terms/move/plan" && method === "GET") {
+    const term = url.searchParams.get("term") ?? "";
+    const { live, tmux } = moveShell(state, term);
+    await movePeers();
+    const running = await paneDriver(tmux, term).agent();
+    if (!running) throw new HttpError(409, "no agent runs in that shell");
+    const at = live.info.path;
+    const branch = await currentBranch(at);
+    if (!branch) throw new HttpError(409, "a detached HEAD: a move needs a branch");
+    const head = (await git(at, ["rev-parse", "HEAD"])).stdout.trim();
+    const { session, file, name } = await moveSession(at, running, url.searchParams.get("session"));
+    const st = await stat(file);
+    if (st.size > MOVE_MAX) throw new HttpError(413, "the transcript is over 64 MB");
+    const seen = (await agentSessions(at, 200)).find((x) => x.id === session);
+    const plan: MovePlan = { session, harness: running, path: at, branch, head, name, transcriptBytes: st.size, prompt: seen?.prompt ?? null, at: st.mtimeMs, ...(await moveFiles(at)) };
+    return json(plan);
+  }
+  if (path === "/api/terms/move/out" && method === "POST") {
+    const term = url.searchParams.get("term") ?? "";
+    const { live, repo, tmux } = moveShell(state, term);
+    if (state.moving.has(term)) throw new HttpError(409, "that shell is already moving");
+    const b: unknown = await req.json().catch(() => null);
+    const session = b && typeof b === "object" && "session" in b ? b.session : undefined;
+    const harness = b && typeof b === "object" && "harness" in b ? b.harness : undefined;
+    if (!isSessionId(session) || !isHarness(harness)) throw new HttpError(400, "session and harness are required");
+    const s = await movePeers();
+    const activeRun = state.runner.activeFor(repo.id);
+    if (activeRun) throw new HttpError(409, busyWith(repo.name, activeRun.verb));
+    if (state.flows.activeFor(repo.id)) throw new HttpError(409, "a workflow is running here");
+    const at = live.info.path;
+    const branch = await currentBranch(at);
+    if (!branch) throw new HttpError(409, "a detached HEAD: a move needs a branch");
+    const found = await transcriptFile(harness, at, session);
+    if (!found) throw new HttpError(404, `no ${harness} conversation under that id at this repo`);
+    let stopped: boolean;
+    try {
+      stopped = await endAgent(paneDriver(tmux, term), harness);
+    } catch (err) {
+      if (err instanceof MoveError) throw new HttpError(err.status, err.message);
+      throw err;
+    }
+    if (!stopped) throw new HttpError(409, "the agent did not quit within 20 s; nothing else was touched");
+    // on record as soon as the agent is gone, so a snapshot that fails
+    // below still leaves "resume here" (move/undo) something to resume
+    const stoppedOut: MoveOut = { session, harness, path: at, branch, head: "", name: found.name, wip: null };
+    state.moving.set(term, stoppedOut);
+    const out = await withPeering(state, async (): Promise<MoveOut> => {
+      const head = (await git(at, ["rev-parse", "HEAD"])).stdout.trim();
+      let wip: string | null = null;
+      if (await isDirty(at)) {
+        await snapshotWip(at, s.self, false);
+        const r = await git(at, ["rev-parse", "-q", "--verify", `refs/wip/${branch}`]);
+        if (r.code !== 0) throw new HttpError(500, "the snapshot was not written; resume here to carry on");
+        wip = r.stdout.trim();
+      }
+      return { ...stoppedOut, head, wip };
+    });
+    state.moving.set(term, out);
+    return json(out);
+  }
+  if (path === "/api/terms/move/transcript" && method === "GET") {
+    const term = url.searchParams.get("term") ?? "";
+    const out = state.moving.get(term);
+    if (!out || out.session !== url.searchParams.get("session")) throw new HttpError(409, "stop the agent first (move/out)");
+    const found = await transcriptFile(out.harness, out.path, out.session);
+    if (!found) throw new HttpError(404, "the transcript is gone");
+    return new Response(Bun.file(found.file), { headers: { "Content-Type": "application/x-ndjson" } });
+  }
+  if (path === "/api/terms/move/finish" && method === "POST") {
+    const term = url.searchParams.get("term") ?? "";
+    const out = state.moving.get(term);
+    if (!out) throw new HttpError(409, "that shell is not moving");
+    const live = state.terms.get(term);
+    const repoId = live?.info.repoId;
+    let reset: "reset" | "clean" | "none" = "none";
+    const wip = out.wip;
+    if (wip) {
+      try {
+        reset = await withPeering(state, () => resetTree(out.path, wip, out.session));
+      } catch (err) {
+        throw new HttpError(409, err instanceof Error ? err.message : String(err));
+      }
+    }
+    await endTerm(state, term);
+    state.moving.delete(term);
+    if (repoId) await refreshAndBroadcast(state, repoId);
+    return json({ ok: true, reset });
+  }
+  if (path === "/api/terms/move/undo" && method === "POST") {
+    const term = url.searchParams.get("term") ?? "";
+    const out = state.moving.get(term);
+    // a stop that failed before the agent quit left nothing to undo
+    if (!out) return json({ ok: true, resumed: false });
+    const { repo, tmux } = moveShell(state, term);
+    const line = resumeLine(out.session, agentFor(await loadConfig(), repo.path, "shell", { harness: out.harness }), shellEnv(state, repo.id, repo.path, term));
+    await sendLine(tmux, term, line);
+    state.moving.delete(term);
+    return json({ ok: true, resumed: true });
+  }
   if (path === "/api/terms/text" && method === "GET") {
     const term = url.searchParams.get("term") ?? "";
     const live = state.terms.get(term);
@@ -3437,6 +3611,7 @@ export async function startServer(opts: {
     divergedSeen: new Map(),
     inited: new Set(),
     peering: null,
+    moving: new Map(),
     pendingPass: null,
     mirrors: new SeedMirrors(root),
     seedsStayHome: stage !== null,
