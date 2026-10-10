@@ -21,7 +21,7 @@ Task: canopy has just written the shared repo spec into this repo. Make SPEC.md 
 1. Read SPEC.md. Leave everything between the spec:begin and spec:end markers exactly as it is, in every file.
 2. Fill each of the seven sections that is still empty or a placeholder, from what the repo shows: the README, the manifest and lockfile, the build and test scripts, CLAUDE.md or AGENTS.md. Sections 1, 3 and 4 must not be empty; write "none" in any other section the repo gives you nothing for. Keep the whole file under 120 lines.
 3. Sections someone already wrote stay as they are, unless they contradict the code; then fix only that line.
-4. Do not change code, DESIGN.md, or any styling. Do not commit.
+4. Do not change code, DESIGN.md, or any styling. Do not commit, and do not ask about committing: the files stay untracked on purpose, and the workflow's next step commits them once the user approves your draft.
 
 Finish with one line per section saying where its content came from.
 
