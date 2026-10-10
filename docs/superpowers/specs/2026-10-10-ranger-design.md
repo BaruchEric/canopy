@@ -265,6 +265,12 @@ Phases 1 and 2, and phase 3's Telegram switch, built in one pass. Where the buil
 - **A run wake, live.** A read-only ask run in canopy's repo ended, the wake fired, and the ranger fetched the run with a GET and reported its answer.
 - **P2, longer form, live.** A wake 44 minutes after the ranger's last turn woke it within 13 s of delivery. Before that, a wake after 17 minutes idle and across two redeploys did the same.
 - **The daily fresh start, live, after a time zone fix.** It did not fire at 04:00: the canopy container ran on UTC. Bun takes the zone from its name, and the image's `/etc/localtime` is a link named `Etc/UTC`, so mounting the host's file changed `date` but not Bun. `TZ` now comes from `.env` (`America/Los_Angeles` on the mini; d6f4c78, documented in docs/deploy.md). The first check after that deploy started a fresh conversation at 04:20:30 local time, pointing back to the previous one. Claude Code in the shells container still stamps its turns in UTC for the same reason. Fixing it needs `TZ` on the shells service too, which recreates that container and ends every shell, so it waits for Eric.
+- **Recovery and the CLI, live (04:36–04:47).**
+  - `canopy ranger wake --cron` set Eric's cron for 04:36 local. It fired at 04:36 tagged `[cron <id>]` and moved to 04:36 the next day, and `canopy ranger unwake` removed it.
+  - A SIGKILL of the ranger's claude: it resumed the same conversation after the backoff.
+  - Its tmux session killed outright, as a reboot would leave it: the session came back with its `@canopy_ranger` mark, on the same conversation.
+  - Each time the restarted plugin took the bot back.
+  - The deaths on record went back to zero after five good minutes.
 - **A code review (high), 2026-10-10.** It found ten issues; nine were fixed in 9ce8da5 (the commit lists them). The one left by design: when a conversation never got a message, `previous` still names the last conversation that has a transcript.
 - **Not done yet:**
   - P5 (a session several days long);
