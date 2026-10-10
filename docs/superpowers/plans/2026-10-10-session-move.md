@@ -1216,11 +1216,15 @@ function movePeer(s: PeerSettings, from: unknown): Peer {
       const activeRun = state.runner.activeFor(repo.id);
       if (activeRun) throw new HttpError(409, busyWith(repo.name, activeRun.verb));
       if (state.flows.activeFor(repo.id)) throw new HttpError(409, "a workflow is running here");
+      let fetched = "unreachable";
       await withPeering(state, async () => {
         await initRepo(repo.path, repo.id, s.peers, false);
         applyPeerState(state, repo.id, await syncRepo(repo.id, { self: s.self, peers: s.peers, seed: s.seed, dry: false, root: state.root }, new PassSeen()));
+        // syncRepo swallows a peer it cannot reach and keeps the refs from the
+        // last fetch, so this fetch is what proves the source answers now
+        fetched = await fetchPeer(repo.path, repo.id, peer, { GIT_SSH_COMMAND: gitSshCommand(configDir()) });
       });
-      const reason = await moveBlocker(repo.path, repo.name, peer.name, b.branch, b.head);
+      const reason = fetched !== "ok" ? `${peer.name} could not be reached for ${repo.name} (${fetched})` : await moveBlocker(repo.path, repo.name, peer.name, b.branch, b.head);
       const check: MoveCheck = { ok: reason === null, ...(reason ? { reason } : {}), path: repo.path, existing: await hasAgentSession(b.harness, repo.path, b.session) };
       return json(check);
     }
