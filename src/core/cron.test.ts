@@ -1,4 +1,4 @@
-import { describe, expect, test } from "bun:test";
+import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { isCron, lastClock, nextFire, parseCron, parseWhen, type Cron } from "./cron";
 
 // Bun pins JS Dates to UTC under test, so local time here is UTC
@@ -99,5 +99,64 @@ describe("lastClock", () => {
     expect(iso(lastClock("04:00", at("2026-10-10T08:30")))).toBe("2026-10-10T04:00");
     expect(iso(lastClock("09:00", at("2026-10-10T08:30")))).toBe("2026-10-09T09:00");
     expect(lastClock("4:00", at("2026-10-10T08:30"))).toBeNull();
+  });
+});
+
+// Vixie cron's rules for a clock change: a line at fixed times runs a time
+// the clock skips as soon as it jumps, and a time it repeats once; a line
+// with * in its minute or hour field runs on the clock, skipped minutes and
+// the repeated hour included. Times carry their offset, so the two 01:30s
+// on the day the clock goes back read apart.
+describe("across a clock change, in Los Angeles", () => {
+  const was = process.env["TZ"] ?? "Etc/UTC";
+  beforeAll(() => {
+    process.env["TZ"] = "America/Los_Angeles";
+  });
+  afterAll(() => {
+    process.env["TZ"] = was;
+  });
+  const t = (stamp: string): number => new Date(stamp).getTime();
+  const local = (ms: number | null): string | null => {
+    if (ms === null) return null;
+    const off = -new Date(ms).getTimezoneOffset();
+    const hours = String(Math.abs(off) / 60).padStart(2, "0");
+    return `${new Date(ms + off * 60_000).toISOString().slice(0, 16)}${off < 0 ? "-" : "+"}${hours}:00`;
+  };
+  const next = (line: string, after: string): string | null => local(nextFire(cron(line), t(after)));
+
+  // 2026-03-08: 01:59 PST, then 03:00 PDT
+  test("a fixed time the clock skips runs as it jumps, once", () => {
+    expect(next("30 2 * * *", "2026-03-08T00:00-08:00")).toBe("2026-03-08T03:00-07:00");
+    expect(next("30 2 * * *", "2026-03-08T03:00-07:00")).toBe("2026-03-09T02:30-07:00");
+    expect(next("0,30 2 * * *", "2026-03-08T00:00-08:00")).toBe("2026-03-08T03:00-07:00");
+    expect(next("0,30 2 * * *", "2026-03-08T03:00-07:00")).toBe("2026-03-09T02:00-07:00");
+    // not on a day the line does not run
+    expect(next("30 2 * * 1", "2026-03-08T00:00-08:00")).toBe("2026-03-09T02:30-07:00");
+  });
+
+  test("a line on the clock goes on from 03:00, the skipped minutes gone", () => {
+    expect(next("0 * * * *", "2026-03-08T01:30-08:00")).toBe("2026-03-08T03:00-07:00");
+    expect(next("5 * * * *", "2026-03-08T01:05-08:00")).toBe("2026-03-08T03:05-07:00");
+    expect(next("*/15 * * * *", "2026-03-08T01:45-08:00")).toBe("2026-03-08T03:00-07:00");
+    expect(next("*/15 2 * * *", "2026-03-08T00:00-08:00")).toBe("2026-03-09T02:00-07:00");
+  });
+
+  // 2026-11-01: 01:59 PDT, then 01:00 PST
+  test("a fixed time the clock repeats runs the first time only", () => {
+    expect(next("30 1 * * *", "2026-11-01T00:00-07:00")).toBe("2026-11-01T01:30-07:00");
+    expect(next("30 1 * * *", "2026-11-01T01:30-07:00")).toBe("2026-11-02T01:30-08:00");
+    expect(next("45 1 * * *", "2026-11-01T01:10-08:00")).toBe("2026-11-02T01:45-08:00");
+    expect(next("15 2 * * *", "2026-11-01T01:10-08:00")).toBe("2026-11-01T02:15-08:00");
+  });
+
+  test("a line on the clock runs through the repeated hour", () => {
+    expect(next("0 * * * *", "2026-11-01T01:00-07:00")).toBe("2026-11-01T01:00-08:00");
+    expect(next("0 * * * *", "2026-11-01T01:00-08:00")).toBe("2026-11-01T02:00-08:00");
+    expect(next("*/15 * * * *", "2026-11-01T01:45-07:00")).toBe("2026-11-01T01:00-08:00");
+  });
+
+  test("the next fire is after the given time, in the repeated hour too", () => {
+    expect(next("* * * * *", "2026-11-01T01:10:30-08:00")).toBe("2026-11-01T01:11-08:00");
+    expect(next("*/15 * * * *", "2026-11-01T01:10-08:00")).toBe("2026-11-01T01:15-08:00");
   });
 });

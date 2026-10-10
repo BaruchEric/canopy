@@ -4,7 +4,10 @@
  * (minute, hour, day of month, month, day of week) with `*`, lists, ranges
  * and steps, plus `@hourly`, `@daily`, `@weekly` and `@monthly`. As in
  * Vixie cron, when both day fields are restricted (neither starts with `*`)
- * a day matching either one counts.
+ * a day matching either one counts, and a clock change follows its rules:
+ * a line at fixed times runs a time the clock skips as soon as it jumps and
+ * a time it repeats once, while a line with `*` in its minute or hour field
+ * runs on the clock, through the repeated hour and past the skipped one.
  */
 
 export interface Cron {
@@ -17,6 +20,8 @@ export interface Cron {
   /** whether each day field was `*`, for the either-day rule */
   anyDay: boolean;
   anyWeekday: boolean;
+  /** whether the minute or hour field starts with `*`, for the clock-change rules */
+  onTheClock: boolean;
 }
 
 const MACROS: Record<string, string> = {
@@ -79,7 +84,12 @@ export function parseCron(line: string): Cron | { error: string } {
   const weekdays = new Set([...rawWeekdays].map((d) => d % 7));
   // as Vixie cron: a day field starting with * (a step over the whole range
   // included) counts as unrestricted for the either-day rule
-  return { minutes, hours, days, months, weekdays, anyDay: (parts[2] ?? "").startsWith("*"), anyWeekday: (parts[4] ?? "").startsWith("*") };
+  return {
+    minutes, hours, days, months, weekdays,
+    anyDay: (parts[2] ?? "").startsWith("*"),
+    anyWeekday: (parts[4] ?? "").startsWith("*"),
+    onTheClock: (parts[0] ?? "").startsWith("*") || (parts[1] ?? "").startsWith("*"),
+  };
 }
 
 /** the longest cron line taken */
@@ -91,46 +101,69 @@ export const isCron = (line: unknown): line is string => typeof line === "string
 /** Vixie cron's rule: with either day field starred both must match (a
  *  plain * matches every day, so only the other field counts), and with
  *  both restricted either one does. */
-function dayMatches(c: Cron, d: Date): boolean {
-  const day = c.days.has(d.getDate());
-  const weekday = c.weekdays.has(d.getDay());
-  return c.anyDay || c.anyWeekday ? day && weekday : day || weekday;
+function dayMatches(c: Cron, date: number, weekday: number): boolean {
+  const day = c.days.has(date);
+  const onWeekday = c.weekdays.has(weekday);
+  return c.anyDay || c.anyWeekday ? day && onWeekday : day || onWeekday;
 }
 
 /** how far ahead `nextFire` looks before saying never (Feb 29 on a Monday is rare) */
 const HORIZON_YEARS = 8;
 
+const MINUTE = 60_000;
+
+/** what the clock shows at `t`, as a date read with the UTC getters, so
+ *  a time the clock skips can be named and checked too */
+function clockAt(t: number): Date {
+  const d = new Date(t);
+  return new Date(Date.UTC(d.getFullYear(), d.getMonth(), d.getDate(), d.getHours(), d.getMinutes()));
+}
+
+/** whether the clock jumped forward into `t` over a time the line allows */
+function jumpedOver(c: Cron, t: number): boolean {
+  const to = clockAt(t).getTime();
+  for (let w = clockAt(t - MINUTE).getTime() + MINUTE; w < to; w += MINUTE) {
+    const s = new Date(w);
+    if (c.months.has(s.getUTCMonth() + 1) && dayMatches(c, s.getUTCDate(), s.getUTCDay()) && c.hours.has(s.getUTCHours()) && c.minutes.has(s.getUTCMinutes())) return true;
+  }
+  return false;
+}
+
+/** whether the clock showed `d`'s time once already: the local-time
+ *  constructor gives a repeated time's first pass */
+const repeated = (d: Date): boolean => new Date(d.getFullYear(), d.getMonth(), d.getDate(), d.getHours(), d.getMinutes()).getTime() !== d.getTime();
+
 /**
  * The first minute strictly after `after` (unix ms) that the line allows,
  * in local time, or null when none comes within the horizon. Walks month,
- * day, hour and minute, skipping whole units that cannot match.
+ * day, hour and minute, skipping whole units that cannot match. Hours and
+ * minutes step in real time: a setter puts a time in the repeated hour on
+ * its first pass, which can be before `after`.
  */
 export function nextFire(c: Cron, after: number): number | null {
-  const d = new Date(after);
-  d.setSeconds(0, 0);
-  d.setMinutes(d.getMinutes() + 1);
   const end = new Date(after);
   end.setFullYear(end.getFullYear() + HORIZON_YEARS);
-  while (d.getTime() <= end.getTime()) {
+  let t = Math.floor(after / MINUTE) * MINUTE + MINUTE;
+  while (t <= end.getTime()) {
+    if (!c.onTheClock && jumpedOver(c, t)) return t;
+    const d = new Date(t);
     if (!c.months.has(d.getMonth() + 1)) {
-      d.setMonth(d.getMonth() + 1, 1);
-      d.setHours(0, 0, 0, 0);
+      t = new Date(d.getFullYear(), d.getMonth() + 1, 1).getTime();
       continue;
     }
-    if (!dayMatches(c, d)) {
-      d.setDate(d.getDate() + 1);
-      d.setHours(0, 0, 0, 0);
+    if (!dayMatches(c, d.getDate(), d.getDay())) {
+      t = new Date(d.getFullYear(), d.getMonth(), d.getDate() + 1).getTime();
       continue;
     }
     if (!c.hours.has(d.getHours())) {
-      d.setHours(d.getHours() + 1, 0, 0, 0);
+      t += (60 - d.getMinutes()) * MINUTE;
       continue;
     }
-    if (!c.minutes.has(d.getMinutes())) {
-      d.setMinutes(d.getMinutes() + 1, 0, 0);
+    if (!c.minutes.has(d.getMinutes()) || (!c.onTheClock && repeated(d))) {
+      t += MINUTE;
       continue;
     }
-    return d.getTime();
+    return t;
   }
   return null;
 }
