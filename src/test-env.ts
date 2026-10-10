@@ -23,3 +23,8 @@ for (const line of dotenv.split("\n")) {
   const name = /^\s*(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*=/.exec(line)?.[1];
   if (name) delete process.env[name];
 }
+
+// Bun runs a test in UTC unless TZ is set, and the suite's dates count on
+// that. The mini's .env and its shells set TZ to the host's zone, and
+// deleting TZ (above) leaves Bun in that zone; assigning one moves it.
+process.env["TZ"] = "Etc/UTC";
