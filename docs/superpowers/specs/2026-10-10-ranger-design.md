@@ -253,8 +253,15 @@ Phases 1 and 2, and phase 3's Telegram switch, built in one pass. Where the buil
 - **Its own folder by default (`ranger.home`).** Probed on 2026-10-10 while Eric slept: trusting a folder also trusts every folder under it. A session in a subfolder of a trusted folder skipped the dialog. Accepting the prompt for `~/dev` would therefore trust every project there, third-party clones included. The ranger now runs in `<config dir>/ranger/home` (`home: "own"`, the default), with `--add-dir <scan root>`. `CLAUDE_CODE_ADDITIONAL_DIRECTORIES_CLAUDE_MD=1` loads the root's `CLAUDE.md` (probed: without it the added folder's CLAUDE.md was not in context, with it it was). Accepting the trust prompt for its own folder did not trust the added one, and the added one raised no prompt. `home: "root"` is the design as first written, and Settings says what trusting it means. Moving between the two starts a new conversation, since Claude files a conversation under the folder it ran in.
 - **"Waiting on you" has the gave-up row.** It sits in the failed group and opens its session.
 - **A refusal is not a death.** No claude, a codex profile and a taken handle set the state and try again after 30 s, without spending the deaths that lead to `gave-up`.
+- **"Your turn" is idle.** tailchan words Claude's own notice after a minute at the prompt (`idle_prompt`) as waiting "your turn". Read as a wait on Eric, that left the chip permanently rust, blocked every fresh conversation, and kept the ranger in "waiting on you". `cardIdle` now treats it as idle. A permission wait still counts.
+- **Live on the mini, 2026-10-10 02:43.** Deployed f158d31 and earlier. On, with `home: own` and `telegram: true`:
+  - The telegram plugin is off in the mini's `~/.claude/settings.json`, a one-line change backed up as `settings.json.ranger-bak`.
+  - The trust prompt for `/config/ranger/home` was accepted once. `~/.claude.json` is bind-mounted from the host, so the trust survives a shells recreate.
+  - It runs Opus 5.5 at xhigh from the default profile, in auto mode, with yolo dropped.
+  - Its card is `@ranger` with canopy's UUID, and its plugin holds the bot.
+  - Two redeploys left it on the same process and conversation.
+  - A DM from another agent's handle woke it. Per its brief, it asked Eric on tailchan before answering.
 - **Not done yet:**
-  - turning the telegram plugin off in the mini's user settings (a deploy step, see below);
   - an inbound Telegram message (P4);
   - a long idle followed by a wake (P2, long form);
   - P5.
