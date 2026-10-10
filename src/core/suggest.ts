@@ -63,11 +63,16 @@ async function diffContext(repoPath: string): Promise<string> {
   ].join("\n");
 }
 
-/** `claude` argv after the binary: print mode, plain text, and the route's
- *  model and effort (none at the defaults). */
+/** No hooks for a suggestion: a user's async Stop hook (tailchan's `--wake`
+ *  waiter) keeps `claude -p` alive after it prints, past the timeout, and
+ *  the one-click commit + push then lands the heuristic message. */
+const NO_HOOKS = JSON.stringify({ disableAllHooks: true });
+
+/** `claude` argv after the binary: print mode, plain text, hooks off, and
+ *  the route's model and effort (none at the defaults). */
 export function claudeSuggestArgs(agent: AgentSettings, prompt: string): string[] {
   const h = HARNESS.claude;
-  return ["-p", prompt, "--output-format", "text", ...h.modelArgs(agent.model), ...h.effortArgs(agent.effort)];
+  return ["-p", prompt, "--output-format", "text", "--settings", NO_HOOKS, ...h.modelArgs(agent.model), ...h.effortArgs(agent.effort)];
 }
 
 /** Where `codex exec` runs for a suggestion: in the repo, whose AGENTS.md

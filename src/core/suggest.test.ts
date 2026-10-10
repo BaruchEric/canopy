@@ -9,13 +9,15 @@ import { DEFAULT_AGENT, type AgentSettings, type RepoFile } from "./types";
 const codex = (over: Partial<AgentSettings> = {}): AgentSettings => ({ ...DEFAULT_AGENT, harness: "codex", ...over });
 
 describe("the suggestion's command lines", () => {
-  test("claude at the defaults is the print-mode line it always was", () => {
-    expect(claudeSuggestArgs(DEFAULT_AGENT, "P")).toEqual(["-p", "P", "--output-format", "text"]);
+  test("claude at the defaults is the print-mode line with hooks off", () => {
+    const noHooks = ["--settings", '{"disableAllHooks":true}'];
+    expect(claudeSuggestArgs(DEFAULT_AGENT, "P")).toEqual(["-p", "P", "--output-format", "text", ...noHooks]);
     expect(claudeSuggestArgs({ ...DEFAULT_AGENT, model: "haiku", effort: "low", extra: "--x" }, "P")).toEqual([
       "-p",
       "P",
       "--output-format",
       "text",
+      ...noHooks,
       "--model",
       "haiku",
       "--effort",
