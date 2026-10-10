@@ -45,9 +45,15 @@ describe("rewriteTranscript", () => {
     const good = JSON.stringify({ cwd: FROM });
     expect(() => rewriteTranscript(`${good}\n{"cwd":"/Us`, FROM, TO)).toThrow(MoveError);
   });
-  test("a cwd written in a shape the rewrite cannot find is refused, not left behind", () => {
+  test("a cwd written with odd spacing still moves", () => {
     const spaced = `{"type":"user","cwd": "${FROM}"}`;
-    expect(() => rewriteTranscript(`${spaced}\n`, FROM, TO)).toThrow(MoveError);
+    expect(JSON.parse(rewriteTranscript(`${spaced}\n`, FROM, TO).trim()).cwd).toBe(TO);
+  });
+  test("a nested cwd with the same value is left alone", () => {
+    const line = `{"message":{"content":[{"input":{"cwd":${JSON.stringify(FROM)}}}]},"cwd":${JSON.stringify(FROM)}}`;
+    const rec = JSON.parse(rewriteTranscript(`${line}\n`, FROM, TO).trim());
+    expect(rec.cwd).toBe(TO);
+    expect(rec.message.content[0].input.cwd).toBe(FROM);
   });
   test("a line with nothing to move comes back byte for byte", () => {
     const line = '{"type":"summary","summary":"caf\\u00e9"}';

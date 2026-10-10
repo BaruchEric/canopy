@@ -46,8 +46,22 @@ function cwdsOf(rec: unknown): string[] {
   return out;
 }
 
-/** Every line checked as JSON and its `cwd` fields moved, the rest of the
- *  line left byte for byte as it was. */
+/** the record with only its own cwd fields moved (top-level and payload) */
+function moveCwds(rec: unknown, from: string, to: string): unknown {
+  if (!rec || typeof rec !== "object") return rec;
+  const out: Record<string, unknown> = { ...(rec as Record<string, unknown>) };
+  if (typeof out.cwd === "string") out.cwd = movePath(out.cwd, from, to);
+  const payload = out.payload;
+  if (payload && typeof payload === "object" && typeof (payload as { cwd?: unknown }).cwd === "string") {
+    const p = payload as Record<string, unknown> & { cwd: string };
+    out.payload = { ...p, cwd: movePath(p.cwd, from, to) };
+  }
+  return out;
+}
+
+/** Every line checked as JSON and its own `cwd` fields moved. A line is
+ *  edited in place when that gives exactly the right record, so the rest
+ *  stays byte for byte; otherwise it is written out again. */
 export function rewriteTranscript(text: string, from: string, to: string): string {
   const lines = text.split("\n");
   const trailing = lines.at(-1) === "";
@@ -59,18 +73,22 @@ export function rewriteTranscript(text: string, from: string, to: string): strin
     } catch {
       throw new MoveError(400, `line ${i + 1} of the transcript is not JSON (cut off?)`);
     }
+    // move the first `"cwd":<old>` in the line; when the result is not
+    // exactly the record with only its own cwd fields moved (the first hit
+    // was a nested key, odd spacing, escaping), write the record out again
     let next = line;
-    let changed = false;
+    let moves = false;
     for (const cwd of new Set(cwdsOf(rec))) {
       const moved = movePath(cwd, from, to);
       if (moved === cwd) continue;
-      next = next.split(`"cwd":${JSON.stringify(cwd)}`).join(`"cwd":${JSON.stringify(moved)}`);
-      changed = true;
+      moves = true;
+      const key = `"cwd":${JSON.stringify(cwd)}`;
+      const at = next.indexOf(key);
+      if (at >= 0) next = next.slice(0, at) + `"cwd":${JSON.stringify(moved)}` + next.slice(at + key.length);
     }
-    // the rewrite matched the compact form both harnesses write; a line in
-    // any other shape would keep the old folder, so it fails loudly here
-    if (changed && cwdsOf(JSON.parse(next)).some((c) => movePath(c, from, to) !== c)) {
-      throw new MoveError(400, `line ${i + 1} of the transcript keeps a cwd the move could not rewrite`);
+    if (moves) {
+      const want = moveCwds(rec, from, to);
+      if (!Bun.deepEquals(JSON.parse(next), want, true)) next = JSON.stringify(want);
     }
     return next;
   });
