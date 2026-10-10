@@ -287,7 +287,10 @@ export class TaskHub {
     } catch (err) {
       throw new TaskError(500, `cannot write the log at ${logPath(id)}: ${err instanceof Error ? err.message : err}`);
     }
-    await startTaskSession(tmux, { id, repoId: repo.id, path: repo.path, task: def.name }, repo.path, def.cmd, def.cwd);
+    // canopy's own TZ, as a shell gets it: the tmux server in the shells
+    // container has none, and a dev server's log would read in UTC
+    const tz = process.env["TZ"];
+    await startTaskSession(tmux, { id, repoId: repo.id, path: repo.path, task: def.name }, repo.path, def.cmd, def.cwd, tz && !repo.host ? { TZ: tz } : {});
     const fails = fresh ? 0 : (this.state[id]?.fails ?? 0);
     this.state[id] = { repoId: repo.id, path: repo.path, name: def.name, want: "running", startedAt: at, ...(fails ? { fails } : {}) };
     await this.save();

@@ -90,6 +90,7 @@ beforeEach(async () => {
       { name: "crash", cmd: "echo crash; exit 1", keep: true },
       { name: "runner", cmd: "echo up; sleep 30", keep: true },
       { name: "late", cmd: "sleep 0.4; exit 1", keep: true },
+      { name: "tz", cmd: "echo tz=$TZ=; sleep 30" },
     ]),
   );
 });
@@ -289,6 +290,23 @@ describe.skipIf(!tmux)("the supervisor", () => {
     held.length = 0;
     await Bun.sleep(300);
     expect(held.filter((x) => x === id).length).toBeGreaterThanOrEqual(2);
+  });
+
+  test("a task gets canopy's TZ even when the tmux server has none", async () => {
+    const h = hub();
+    await h.start();
+    // a task started first, with no TZ anywhere, holds the tmux server up
+    await h.act(app, "start", "runner");
+    const was = process.env["TZ"];
+    process.env["TZ"] = "America/Los_Angeles";
+    try {
+      await h.act(app, "start", "tz");
+    } finally {
+      if (was === undefined) delete process.env["TZ"];
+      else process.env["TZ"] = was;
+    }
+    const id = taskTermId(app.path, "tz");
+    await until(async () => (await readFile(join(process.env["CANOPY_CONFIG_DIR"]!, "tasks/logs", `${id}.log`), "utf8").catch(() => "")).includes("tz=America/Los_Angeles="), "the TZ in the task's log");
   });
 
   test("a start does not wait on recovery or the repo checks", async () => {

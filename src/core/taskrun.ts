@@ -123,9 +123,10 @@ export async function removeLog(termId: string): Promise<void> {
 /**
  * Runs a task's command on its session: the session made first when there
  * is none, the log's pipe attached (again, so a rotated log is followed),
- * then the command swapped in for whatever the pane held.
+ * then the command swapped in for whatever the pane held, with `env` added
+ * to its environment.
  */
-export async function startTaskSession(base: string[], meta: TaskMeta, locator: string, cmd: string, cwd?: string): Promise<void> {
+export async function startTaskSession(base: string[], meta: TaskMeta, locator: string, cmd: string, cwd?: string, env: Record<string, string> = {}): Promise<void> {
   await mkdir(logDir(), { recursive: true });
   if (!(await hasSession(base, meta.id))) {
     const made = await exec(taskSessionArgs(base, meta, { cols: 120, rows: 32 }), { timeoutMs: 15_000 });
@@ -141,7 +142,7 @@ export async function startTaskSession(base: string[], meta: TaskMeta, locator: 
     piped = await exec(pipeArgs(base, meta.id, logPath(meta.id)), { timeoutMs: 10_000 });
   }
   if (piped.code !== 0) throw new Error(piped.stderr.trim() || "tmux could not pipe the task's output");
-  const r = await exec(respawnArgs(base, meta.id, command, dir), { timeoutMs: 10_000 });
+  const r = await exec(respawnArgs(base, meta.id, command, dir, env), { timeoutMs: 10_000 });
   if (r.code !== 0) throw new Error(r.stderr.trim() || "tmux could not start the task");
 }
 
