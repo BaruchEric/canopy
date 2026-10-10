@@ -110,3 +110,11 @@ The mini's canopy container writes into the host's `~/.claude` through the bind 
 - Forking a session (both sides keep going).
 - Carrying gitignored files.
 - Rewriting paths inside message content.
+
+## What the probes showed (2026-10-10, plan Task 0)
+
+- **A hand-moved Claude session resumes on the mini.** A `claude -p` session made in the Mac's `~/dev/dev-tools/canopy` (24 `cwd` lines, all the compact `"cwd":"…"` form) was copied with `cwd` rewritten to `/home/eric/dev/dev-tools/canopy` into the mini host's `~/.claude/projects/-home-eric-dev-dev-tools-canopy/`. `claude -p --resume <id>` inside `canopy-shells-1` at that folder recalled the codeword. The host writes the file as uid 1000 and the container runs as `bun`, uid 1000, so ownership needs nothing. The resume appended to the same file rather than forking a new id.
+- **The sibling folder.** Some sessions have `projects/<folder>/<session>/tool-results/` beside the transcript (64 KB in the one looked at). The probe session had none and resumed fine. Moving that folder stays out of scope: the transcript already carries what the agent saw, and only a later re-read of a saved tool output would miss it.
+- **Claude quits on Escape, `/exit`, Enter** sent as three separate key sends in a tmux pane: back at the shell in 2 s, and slash autocomplete did not pick another command.
+- **Codex quits on `/quit` and on `/exit` alike**, back at the shell in 1 s. Codex 0.162 runs its work in a shared daemon, and quitting the TUI only disconnects: it prints "Any running work continues". So Escape before the quit command matters for Codex (it stops the turn in progress), and if a turn kept going in the daemon and edited files after the snapshot, `resetTree`'s drift check refuses the reset rather than losing those edits. Codex stays on `/quit`.
+- **Backend names are peer names.** The Mac's config has self `mac`, peer `mini`; the mini's has self `mini`, peer `mac`; both list backends `mini` and `mac`, and peer sync is on for both. The page's `backendOf(tab.id)` is what the target looks up among its peers, so no mapping is needed.
