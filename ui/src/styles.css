@@ -8884,3 +8884,95 @@ span.effective-flag:not(:first-child) {
 .mini.reload-chip:hover {
   background: color-mix(in srgb, var(--moss) 22%, transparent);
 }
+
+/* ---------- the ranger: its chip, popover and Settings row (Ranger.tsx) ---------- */
+.mini.ranger-chip.ranger-ok {
+  color: var(--moss);
+}
+.mini.ranger-chip.ranger-busy {
+  color: var(--lichen);
+}
+.mini.ranger-chip.ranger-warn {
+  color: var(--rust);
+  background: color-mix(in srgb, var(--rust) 12%, transparent);
+  font-weight: 700;
+}
+.ranger-pop {
+  width: 380px;
+  max-height: min(80vh, 760px);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+.ranger-head {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  font-size: 12px;
+  color: var(--ink);
+}
+.ranger-dot {
+  flex: none;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--ink-faint);
+  align-self: center;
+}
+.ranger-dot.ranger-ok {
+  background: var(--moss);
+}
+.ranger-dot.ranger-busy {
+  background: var(--lichen);
+}
+.ranger-dot.ranger-warn {
+  background: var(--rust);
+}
+.ranger-state {
+  color: var(--ink-dim);
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.ranger-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.ranger-wakes {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: grid;
+  gap: 4px;
+  align-self: stretch;
+}
+.ranger-wakes li {
+  display: grid;
+  grid-template-columns: auto auto minmax(0, 1fr) auto;
+  align-items: baseline;
+  gap: 8px;
+  font-size: 11px;
+}
+.ranger-when {
+  font-family: var(--mono);
+  color: var(--ink);
+}
+.ranger-by {
+  color: var(--ink-faint);
+}
+.ranger-prompt {
+  color: var(--ink-dim);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.ranger-fields {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 6px 8px;
+}
+.ranger-cron {
+  flex: 0 0 9em;
+  font-family: var(--mono);
+}

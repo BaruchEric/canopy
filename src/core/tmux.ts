@@ -212,14 +212,16 @@ export function taskSessionArgs(base: string[], meta: TaskMeta, size: TermSize):
 /** everything the pane writes, appended to the log; given again it replaces the pipe */
 export const pipeArgs = (base: string[], id: string, log: string): string[] => [...base, "pipe-pane", "-t", sessionName(id), `cat >> ${shellQuote(log)}`];
 
-/** the pane's process swapped for `command`, killing whatever ran there */
-export const respawnArgs = (base: string[], id: string, command: string[], dir: string | null): string[] => [
+/** the pane's process swapped for `command`, killing whatever ran there;
+ *  `env` goes into the new process's environment */
+export const respawnArgs = (base: string[], id: string, command: string[], dir: string | null, env: Record<string, string> = {}): string[] => [
   ...base,
   "respawn-pane",
   "-k",
   "-t",
   sessionName(id),
   ...(dir === null ? [] : ["-c", dir]),
+  ...Object.entries(env).flatMap(([k, v]) => ["-e", `${k}=${v}`]),
   command.map(shellQuote).join(" "),
 ];
 
@@ -266,6 +268,81 @@ export function parseTaskPanes(out: string): TaskPane[] {
       dead: dead === "1",
       code: dead === "1" && status !== "" && Number.isFinite(code) ? code : null,
       createdAt: Number.isFinite(secs) && secs > 0 ? secs * 1000 : Date.now(),
+    });
+  }
+  return panes;
+}
+
+/* ---------- the ranger: canopy's always-on agent, one session of its own ---------- */
+
+/**
+ * The ranger's session: a placeholder `sleep` until `respawnArgs` swaps its
+ * claude in, kept when claude exits so the hub reads the exit. It has no
+ * `@canopy_repo`, so neither the shell list nor the task list reads it, and
+ * `@canopy_ranger` is what the ranger's own list keys on.
+ */
+export function rangerSessionArgs(base: string[], id: string, root: string, size: TermSize): string[] {
+  const name = sessionName(id);
+  const opt = (key: string, value: string) => [";", "set-option", "-t", name, key, value];
+  return [
+    ...base,
+    "new-session",
+    "-d",
+    "-s",
+    name,
+    "-c",
+    root,
+    "-x",
+    String(size.cols),
+    "-y",
+    String(size.rows),
+    ["sleep", "2147483647"].map(shellQuote).join(" "),
+    ...opt("@canopy_ranger", "1"),
+    ...opt("@canopy_path", root),
+    ";",
+    "set-option",
+    "-w",
+    "-t",
+    name,
+    "remain-on-exit",
+    "on",
+  ];
+}
+
+/** one line per session: name, ranger mark, dead, exit status, created, and
+ *  the window's last output (unix seconds), which says how long it has been quiet */
+export const RANGER_FORMAT = "#{session_name}\t#{@canopy_ranger}\t#{pane_dead}\t#{pane_dead_status}\t#{session_created}\t#{window_activity}";
+
+export const rangerPanesArgs = (base: string[]): string[] => [...base, "list-sessions", "-F", RANGER_FORMAT];
+
+export interface RangerPane {
+  termId: string;
+  dead: boolean;
+  /** the exit status once dead; null while alive or when tmux did not say */
+  code: number | null;
+  /** ms */
+  createdAt: number;
+  /** ms; when the pane last wrote anything */
+  activityAt: number | null;
+}
+
+/** reads `rangerPanesArgs`, keeping the ranger's sessions only */
+export function parseRangerPanes(out: string): RangerPane[] {
+  const panes: RangerPane[] = [];
+  for (const line of out.split("\n")) {
+    if (!line) continue;
+    const [name = "", mark = "", dead = "", status = "", created = "", activity = ""] = line.split("\t");
+    const termId = sessionId(name);
+    if (!termId || mark !== "1") continue;
+    const code = Number(status);
+    const secs = Number(created);
+    const act = Number(activity);
+    panes.push({
+      termId,
+      dead: dead === "1",
+      code: dead === "1" && status !== "" && Number.isFinite(code) ? code : null,
+      createdAt: Number.isFinite(secs) && secs > 0 ? secs * 1000 : Date.now(),
+      activityAt: Number.isFinite(act) && act > 0 ? act * 1000 : null,
     });
   }
   return panes;

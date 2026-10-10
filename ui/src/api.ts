@@ -1,4 +1,6 @@
 import type {
+  RangerInfo,
+  RangerWake,
   AgentActivity,
   AgentKind,
   About,
@@ -496,6 +498,15 @@ export const api = {
     const [b, plain] = on(id);
     return req<{ ok: true }>(b, `/api/incubator?id=${encodeURIComponent(plain)}`, { method: "DELETE" });
   },
+  /** the ranger, canopy's always-on agent, one backend's */
+  ranger: (b: string = homeName()) => req<RangerInfo>(b, "/api/ranger"),
+  /** a change to its settings: on, profile, handle, telegram, fresh */
+  setRanger: (b: string, patch: Record<string, unknown>) => req<RangerInfo>(b, "/api/ranger", { method: "POST", body: JSON.stringify(patch) }),
+  rangerAct: (b: string, act: "restart" | "fresh") => req<RangerInfo>(b, `/api/ranger/${act}`, { method: "POST", body: "{}" }),
+  /** a wake set from the page, which is Eric's */
+  addRangerWake: (b: string, wake: { prompt: string; cron?: string; when?: string }) =>
+    req<RangerWake>(b, "/api/ranger/wakes", { method: "POST", body: JSON.stringify({ ...wake, by: "eric" }) }),
+  removeRangerWake: (b: string, id: string) => req<RangerInfo>(b, `/api/ranger/wakes?id=${encodeURIComponent(id)}`, { method: "DELETE" }),
   /** the retro lessons on offer */
   advice: () => req<AdviceOffer[]>(homeName(), "/api/incubator/advice"),
   /** accepts or dismisses one; a chat it opened is named by the page's ids */

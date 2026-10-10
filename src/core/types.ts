@@ -563,6 +563,8 @@ export interface CanopyConfig {
   /** GitHub owners, besides the gh login, whose repos the incubator may
    *  extend (amendment 6, ruling 17); none by default */
   extendOwners: string[];
+  /** the ranger, canopy's always-on agent on this backend; off by default */
+  ranger: RangerSettings;
 }
 
 /* ---------- the launcher: release builds and pull requests, run here ---------- */
@@ -1148,7 +1150,9 @@ export type ServerEvent =
   /** asks the broker changed, whole, the ids that left canopy's list (closed
    *  long enough ago), and the human's presence when it moved; the home
    *  backend's alone, like `registry` */
-  | { type: "asks"; asks: Ask[]; gone?: string[]; presence?: Presence };
+  | { type: "asks"; asks: Ask[]; gone?: string[]; presence?: Presence }
+  /** the ranger, whole, whenever anything about it changes (server/ranger.ts) */
+  | { type: "ranger"; ranger: RangerInfo };
 
 export type BuildChange = "installed" | "built" | "launched" | "exited" | "removed";
 
@@ -1961,6 +1965,9 @@ export interface TermInfo {
   handle?: string;
   /** the task this session runs, for a task's session; never set on a shell */
   task?: string;
+  /** the ranger's own session (server/ranger.ts): never a shell or a task,
+   *  joined only with `attach=1` and passed over by every shell list */
+  ranger?: true;
 }
 
 /* ---------- tasks: a repo's named processes (core/tasks, server/tasks) ---------- */
@@ -2410,4 +2417,103 @@ export interface AsksInfo {
 export interface GuardsInfo {
   rules: string[];
   canEdit: boolean;
+}
+
+/* ---------- the ranger: canopy's always-on agent (core/ranger, server/ranger) ---------- */
+
+/** When canopy starts the ranger on a fresh conversation by itself (a fresh
+ *  one by hand is always there): daily at a local `HH:MM`, and once the
+ *  transcript passes `maxMb`. Null turns either off. */
+export interface RangerFresh {
+  daily: string | null;
+  maxMb: number | null;
+}
+
+/** The ranger's settings in canopy's config (`ranger`). */
+export interface RangerSettings {
+  on: boolean;
+  /** the profile it runs; null follows the shell route and the default profile */
+  profile: string | null;
+  /** its tailchan handle; null is `ranger` */
+  handle: string | null;
+  /** whether it owns the Telegram bot through the channels plugin */
+  telegram: boolean;
+  fresh: RangerFresh;
+}
+
+/**
+ * What the ranger is doing, as the hub sees it:
+ * - `off`: turned off;
+ * - `starting`: a start is under way;
+ * - `trust`: stopped at Claude's trust dialog, waiting for someone to accept the folder;
+ * - `running`: its session is up;
+ * - `backoff`: it died and waits to be started again;
+ * - `gave-up`: it died too often in a row;
+ * - `handle-taken`: a live agent on another backend has its handle;
+ * - `no-tmux`: this backend has no tmux;
+ * - `no-claude`: Claude Code is not installed here;
+ * - `error`: it cannot start for the reason in `why`.
+ */
+export type RangerState = "off" | "starting" | "trust" | "running" | "backoff" | "gave-up" | "handle-taken" | "no-tmux" | "no-claude" | "error";
+
+/** Who set a wake: Eric (a cron, from Settings or the CLI) or the ranger itself. */
+export type RangerWakeBy = "eric" | "ranger";
+
+/**
+ * Something that wakes the ranger: a prompt canopy DMs it, once at a time
+ * (`at`), on a five-field cron line in the backend's local time (`cron`), or
+ * when a run ends (`run`). Exactly one of the three is set.
+ */
+export interface RangerWake {
+  /** 8 hex */
+  id: string;
+  by: RangerWakeBy;
+  prompt: string;
+  at?: number;
+  cron?: string;
+  run?: string;
+  /** unix ms */
+  created: number;
+  /** when it next fires, for a time or a cron; absent for a run */
+  next?: number;
+}
+
+/** `GET /api/ranger` and the `ranger` event. */
+export interface RangerInfo {
+  on: boolean;
+  state: RangerState;
+  /** why it is in that state, in words the UI shows as they are */
+  why?: string;
+  /** its session's id on canopy's tmux, what `/api/term?attach=1` joins */
+  term: string;
+  handle: string;
+  /** this backend's name */
+  backend: string;
+  /** the folder it runs in, the scan root */
+  root: string;
+  /** the Claude conversation it is on */
+  session: string | null;
+  /** that conversation's transcript, once it has one */
+  transcript: string | null;
+  transcriptBytes?: number;
+  /** when the current conversation began */
+  sessionAt?: number;
+  /** when the current process started */
+  startedAt?: number;
+  /** when the next start is due, while backing off */
+  retryAt?: number;
+  /** deaths in a row */
+  fails: number;
+  /** starts after a death, this canopy process */
+  restarts: number;
+  lastExit?: { at: number; code: number | null };
+  /** `owned` while it holds the Telegram bot alone, `contested` while user
+   *  settings still give the plugin to every other session too */
+  telegram: "off" | "owned" | "contested";
+  settings: RangerSettings;
+  wakes: RangerWake[];
+  /** the devices with a socket on its session */
+  viewers: string[];
+  /** whether this backend knows a broker, which a wake needs to be delivered */
+  broker: boolean;
 }

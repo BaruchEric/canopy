@@ -45,7 +45,7 @@ import { boardOrder, invertPick, pickWhere, rangeIds, setPick, togglePick } from
 import { appendFeed, describeEvent, type FeedEntry, type FeedSnapshot } from "./feed";
 import { mergeAction } from "./peers";
 import { convOf, isUnread, mergeMessages } from "./chan";
-import type { AdviceAccepted, AdviceOffer, AgentCard, Ask, ChanMessage, IncubatorStages, Presence, Sprout, TailchanInfo } from "../../src/core/types";
+import type { AdviceAccepted, AdviceOffer, AgentCard, Ask, ChanMessage, IncubatorStages, Presence, RangerInfo, Sprout, TailchanInfo } from "../../src/core/types";
 import { mergeAsks, mergeInbox, replaceAsks, toAskAnswer, toRunAnswer, type InboxAnswer, type InboxItem } from "./inbox";
 import { replaceSprouts, staleSprout } from "./sprouts";
 import { cardsByRepoCard, markTrail, mergeCards, replaceCards, type TrailMark } from "./agentcards";
@@ -716,6 +716,8 @@ interface CanopyState {
   /** where each backend runs the incubator's stages, by backend name; one
    *  that has not said (an older backend never does) is missing */
   stages: Record<string, IncubatorStages>;
+  /** the ranger on each backend that has said, by backend name (server/ranger) */
+  rangers: Record<string, RangerInfo>;
   /** the retro lessons home has on offer, which the inbox shows as one item */
   advice: AdviceOffer[];
   /** an accepted lesson's text by chat run id, which that chat's message box
@@ -1032,6 +1034,15 @@ interface CanopyState {
   answerInbox: (item: InboxItem, answer: InboxAnswer) => Promise<void>;
   /** reads the incubator's list off one backend, home by default */
   loadSprouts: (backend?: string) => Promise<void>;
+  /** reads one backend's ranger, home by default; an older backend has none */
+  loadRanger: (backend?: string) => Promise<void>;
+  /** a change to a backend's ranger: on, profile, handle, telegram, fresh */
+  setRanger: (backend: string, patch: Record<string, unknown>) => Promise<void>;
+  rangerAct: (backend: string, act: "restart" | "fresh") => Promise<void>;
+  addRangerWake: (backend: string, wake: { prompt: string; cron?: string; when?: string }) => Promise<void>;
+  removeRangerWake: (backend: string, id: string) => Promise<void>;
+  /** the ranger's session as a tab in the strip along the bottom, joined only */
+  openRanger: (backend: string) => void;
   /** accepts or dismisses a retro lesson; a chat it opened is shown, a file
    *  is answered for the inbox to name */
   answerAdvice: (key: string, accept: boolean) => Promise<AdviceAccepted | null>;
@@ -1437,6 +1448,8 @@ let sproutEvents = 0;
 const sproutHeard = new Map<string, number>();
 /* and each backend's stages events, so a read on its way never undoes a newer one */
 const stagesEvents = new Map<string, number>();
+/* and each backend's ranger events, the same */
+const rangerEvents = new Map<string, number>();
 /** the same for the advice on offer */
 let adviceEvents = 0;
 
@@ -1530,6 +1543,7 @@ function resync(get: () => CanopyState, set: (fn: (s: CanopyState) => Partial<Ca
   }
   // every backend's incubator, which may have moved on too
   void get().loadSprouts(b);
+  void get().loadRanger(b);
   // the tasks a panel loaded may have moved while the stream was down
   for (const id of Object.keys(get().tasks)) if (backendOf(id) === b) void get().loadTasks(id).catch(() => {});
   void Promise.all([api.terms(b), api.kept(b), api.helpers(b)])
@@ -1695,6 +1709,7 @@ export const useStore = create<CanopyState>((set, get) => ({
   sprouts: {},
   sproutsReady: false,
   stages: {},
+  rangers: {},
   advice: [],
   chatDrafts: {},
   adviceFile: null,
@@ -1898,6 +1913,7 @@ export const useStore = create<CanopyState>((set, get) => ({
     // and the asks waiting on the human, the same
     void get().loadAsks();
     void get().loadSprouts();
+    void get().loadRanger();
     // the screen layouts, which a backend from before them does not have
     void get().loadScreenProfiles();
     // what home runs: it names the machines, and it is the build a later
@@ -2052,6 +2068,7 @@ export const useStore = create<CanopyState>((set, get) => ({
     readTasks(get, set, name);
     readPeers(get, set, name);
     void get().loadSprouts(name);
+    void get().loadRanger(name);
     void api
       .about(name)
       .then((about) => set((s) => ({ conns: connsIf(s, name, { about }) })))
@@ -2099,6 +2116,7 @@ export const useStore = create<CanopyState>((set, get) => ({
     const { [name]: _remembered, ...remembered } = s.remembered;
     const { [name]: _history, ...histories } = s.histories;
     const { [name]: _stages, ...stages } = s.stages;
+    const { [name]: _ranger, ...rangers } = s.rangers;
     const backendOrder = applyRegistry(s.home, registryEntries, hiddenBackends);
     set({
       settings,
@@ -2119,6 +2137,7 @@ export const useStore = create<CanopyState>((set, get) => ({
       taskAll: s.taskAll.filter((t) => backendOf(t.repoId) !== name),
       sprouts: recordOut(s.sprouts, name),
       stages,
+      rangers,
       agents,
       launchers,
       remembered,
@@ -2565,6 +2584,11 @@ export const useStore = create<CanopyState>((set, get) => ({
       set((st) => ({ stages: { ...st.stages, [b]: ev.stages } }));
       return;
     }
+    if (ev.type === "ranger") {
+      rangerEvents.set(b, (rangerEvents.get(b) ?? 0) + 1);
+      set((st) => ({ rangers: { ...st.rangers, [b]: ev.ranger } }));
+      return;
+    }
     if (ev.type === "advice") {
       adviceEvents += 1;
       set({ advice: ev.advice });
@@ -2840,6 +2864,51 @@ export const useStore = create<CanopyState>((set, get) => ({
     void get().loadAsks();
   },
   closeInbox: () => set({ inboxOpen: false, inboxFocus: null }),
+  loadRanger: async (backend) => {
+    const b = backend ?? get().home;
+    const mark = rangerEvents.get(b) ?? 0;
+    try {
+      const ranger = await api.ranger(b);
+      if ((rangerEvents.get(b) ?? 0) === mark && isShown(get(), b)) set((s) => ({ rangers: { ...s.rangers, [b]: ranger } }));
+    } catch {
+      // an older backend has no ranger; nothing shows for it
+    }
+  },
+  setRanger: async (b, patch) => {
+    const ranger = await api.setRanger(b, patch);
+    rangerEvents.set(b, (rangerEvents.get(b) ?? 0) + 1);
+    set((s) => ({ rangers: { ...s.rangers, [b]: ranger } }));
+  },
+  rangerAct: async (b, act) => {
+    const ranger = await api.rangerAct(b, act);
+    rangerEvents.set(b, (rangerEvents.get(b) ?? 0) + 1);
+    set((s) => ({ rangers: { ...s.rangers, [b]: ranger } }));
+  },
+  addRangerWake: async (b, wake) => {
+    await api.addRangerWake(b, wake);
+    await get().loadRanger(b);
+  },
+  removeRangerWake: async (b, id) => {
+    const ranger = await api.removeRangerWake(b, id);
+    rangerEvents.set(b, (rangerEvents.get(b) ?? 0) + 1);
+    set((s) => ({ rangers: { ...s.rangers, [b]: ranger } }));
+  },
+  openRanger: (b) => {
+    const s = get();
+    const info = s.rangers[b];
+    if (!info) return;
+    const id = qual(b, info.term);
+    const old = s.terms.find((t) => t.id === id);
+    if (!old || old.exit !== undefined) {
+      // the repo id is the backend's alone, so the tab and its shell agree on whose they are
+      const tab: TermTab = { id, repoId: qual(b, ""), name: `@${info.handle}`, path: info.root, place: "strip", ranger: true };
+      set({
+        terms: old ? s.terms.map((t) => (t.id === id ? { ...tab, gen: (old.gen ?? 0) + 1 } : t)) : [...s.terms, tab],
+        hiddenTerms: s.hiddenTerms.filter((h) => h !== id),
+      });
+    }
+    set({ activeTerm: id });
+  },
   loadSprouts: async (backend) => {
     const b = backend ?? get().home;
     const stagesMark = stagesEvents.get(b) ?? 0;
@@ -3038,7 +3107,8 @@ export const useStore = create<CanopyState>((set, get) => ({
     const s = get();
     const tab = s.terms.find((t) => t.id === id);
     if (!tab) return;
-    if (!tab.task) endShells([tab]);
+    // a task's and the ranger's sessions belong to their hubs: closing the tab only leaves
+    if (!tab.task && !tab.ranger) endShells([tab]);
     const terms = s.terms.filter((t) => t.id !== id);
     set({ terms, activeTerm: nextStripTab(s.terms, id, s.activeTerm), front: keepFront(s.front, terms, s.panels) });
   },

@@ -358,6 +358,8 @@ export function parseCommand(input: string[]): Parsed {
       return { kind: "terminal", why: "this page is canopy ui already" };
     case "helper":
       return { kind: "terminal", why: "canopy helper runs on the machine whose desktop it lends: start it in a terminal there" };
+    case "ranger":
+      return { kind: "terminal", why: "the ranger has its own chip in the top bar (✦ ranger), and Settings has its switch; canopy ranger is for a terminal" };
   }
   return { kind: "error", text: `unknown command: ${verb}`, usage: "canopy help" };
 }

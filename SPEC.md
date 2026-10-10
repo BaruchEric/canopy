@@ -53,7 +53,7 @@ canopy ui ~/dev
 ## Data and state
 
 - Config, workspaces, sources, agent and launch settings: `~/.config/canopy/config.json`, or `$CANOPY_CONFIG_DIR`.
-- Next to it: `tmux.sock` (the shells' tmux server), `shells/` (kept-shell snapshots), `pastes/`, `tasks/` (state and logs), `builds/` (installed releases and PR worktrees), `library/<root-hash>/` (the project library).
+- Next to it: `tmux.sock` (the shells' tmux server), `shells/` (kept-shell snapshots), `pastes/`, `tasks/` (state and logs), `ranger/` (the always-on agent's conversation, wakes and brief), `builds/` (installed releases and PR worktrees), `library/<root-hash>/` (the project library).
 - In a repo: `.canopy/tasks.json`, `.canopy/workflows/` and `.canopy/spec.json`, all checked in by that repo's owner.
 - Per browser: preferences, open panels and shell tabs in localStorage.
 - Runs live in server memory; the last 60 finished ones stay until a restart.

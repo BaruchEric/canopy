@@ -14,6 +14,7 @@ import { Seg } from "./Seg";
 import { screenNow, screenWord, windowNow, windowWord } from "../screens";
 import { GearIcon } from "./Gear";
 import { ScreenLayoutsRow } from "./ScreenLayouts";
+import { RangerRow } from "./Ranger";
 import type { Palette } from "../settings";
 
 const LEVEL = [
@@ -292,6 +293,7 @@ export function SettingsMenu() {
               its continue (<code>claude --continue</code>, <code>codex resume --last</code>) instead.
             </p>
           </section>
+          <RangerRow backend={scope} />
           <section className="settings-row">
             <h3 className="panel-label">theme</h3>
             <Seg

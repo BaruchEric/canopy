@@ -760,6 +760,7 @@ describe("several backends", () => {
         "/api/incubator",
         "/api/incubator/advice",
         "/api/incubator/stages",
+        "/api/ranger",
         "/api/tasks",
         "/api/layouts",
       ].sort(),

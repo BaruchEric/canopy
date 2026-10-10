@@ -32,7 +32,7 @@ import {
   setLaunch,
   upsertWorkspace,
 } from "../core/store";
-import { effectivePrimary, type Job, type LaunchSettings, type SourceInput, type SpecHalf, type Sprout, type SproutDetail } from "../core/types";
+import { effectivePrimary, type Job, type LaunchSettings, type RangerInfo, type RangerWake, type SourceInput, type SpecHalf, type Sprout, type SproutDetail } from "../core/types";
 import { loadSpec, repoSpecState, syncRepo } from "../core/spec";
 import { parsePick, pickRefusal, SEEDS_DIR } from "../core/sprout";
 import { setSeedRoots } from "../core/seedgit";
@@ -87,6 +87,7 @@ async function scanOpts(): Promise<{ maxDepth: number; ignore: string[] }> {
 const COMMANDS = new Set([
   "new",
   "incubator",
+  "ranger",
   "library",
   "tree",
   "status",
@@ -714,6 +715,64 @@ export async function main(argv: string[]): Promise<void> {
         return;
       }
       return fail("usage: canopy incubator list | show <id> | pick-check");
+    }
+    case "ranger": {
+      const backend = (opt(args, "--backend") ?? process.env["CANOPY_API"] ?? "http://127.0.0.1:7850").replace(/\/+$/, "");
+      if (!/^https?:\/\/[^/\s]+$/.test(backend)) return fail(`--backend must be an http(s) origin, got ${backend}`);
+      const call = async <T>(method: string, path: string, body?: unknown): Promise<T> => {
+        let res: Response;
+        try {
+          res = await fetch(`${backend}${path}`, {
+            method,
+            ...(body !== undefined ? { body: JSON.stringify(body), headers: { "content-type": "application/json" } } : {}),
+          });
+        } catch (err) {
+          return fail(`${backend} did not answer: ${err instanceof Error ? err.message : String(err)}`);
+        }
+        const out = (await res.json().catch(() => ({}))) as T & { error?: string };
+        if (!res.ok) return fail(out.error ?? `the backend answered ${res.status}`);
+        return out;
+      };
+      const show = (r: RangerInfo) => {
+        console.log(`${bold(`@${r.handle}`)} on ${r.backend}: ${r.state}${r.why ? dim(` (${r.why})`) : ""}`);
+        if (r.session) console.log(dim(`conversation ${r.session}${r.transcriptBytes !== undefined ? `, ${Math.round(r.transcriptBytes / 1024)} KB` : ""}`));
+        if (r.telegram !== "off") console.log(dim(`telegram: ${r.telegram}`));
+        for (const w of r.wakes) {
+          const when = w.cron ? `cron ${w.cron}` : w.run ? `when run ${w.run} ends` : w.next !== undefined ? new Date(w.next).toLocaleString() : "";
+          console.log(`  ${moss(w.id)}  ${when.padEnd(22)} ${dim(`by ${w.by}`)}  ${w.prompt}`);
+        }
+      };
+      const sub = args[0] ?? "status";
+      if (sub === "status") return show(await call<RangerInfo>("GET", "/api/ranger"));
+      if (sub === "on" || sub === "off") return show(await call<RangerInfo>("POST", "/api/ranger", { on: sub === "on" }));
+      if (sub === "restart" || sub === "fresh") return show(await call<RangerInfo>("POST", `/api/ranger/${sub}`));
+      if (sub === "say") {
+        const text = args.slice(1).join(" ").trim();
+        if (!text) return fail('usage: canopy ranger say "message"');
+        const r = await call<RangerInfo>("GET", "/api/ranger");
+        await call("POST", "/api/tailchan/send", { target: `@${r.handle}`, body: text });
+        console.log(dim(`sent to @${r.handle}`));
+        return;
+      }
+      if (sub === "wake") {
+        const cron = opt(args, "--cron");
+        const run = opt(args, "--run");
+        const rest = args.slice(1);
+        const when = cron || run ? undefined : rest.shift();
+        const prompt = rest.join(" ").trim();
+        if (!prompt || (!cron && !run && !when)) return fail('usage: canopy ranger wake <when> "prompt" | --cron "0 8 * * *" "prompt" | --run <id> "prompt"');
+        // set from a terminal, it is Eric's: the ranger sets its own through the API
+        const w = await call<RangerWake>("POST", "/api/ranger/wakes", { prompt, by: "eric", ...(cron ? { cron } : run ? { run } : { when }) });
+        console.log(`${moss(w.id)} ${w.next !== undefined ? new Date(w.next).toLocaleString() : `when run ${w.run} ends`}`);
+        return;
+      }
+      if (sub === "unwake") {
+        const id = args[1];
+        if (!id) return fail("usage: canopy ranger unwake <id>");
+        show(await call<RangerInfo>("DELETE", `/api/ranger/wakes?id=${encodeURIComponent(id)}`));
+        return;
+      }
+      return fail("usage: canopy ranger [status] | on | off | restart | fresh | say <message> | wake <when> <prompt> | unwake <id>");
     }
     case "version":
     case "--version":

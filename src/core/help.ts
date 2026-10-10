@@ -51,6 +51,13 @@ usage:
                                      start a project in the incubator; prints its link
   canopy incubator list | show <id>  the incubator's projects, or one project
     --backend URL                    the backend (default: $CANOPY_API, else 127.0.0.1:7850)
+  canopy ranger [status]             the always-on agent on a backend, and its wakes
+    --backend URL                    the backend (default: $CANOPY_API, else 127.0.0.1:7850)
+  canopy ranger on | off | restart | fresh   turn it on or off, restart it, or a fresh conversation
+  canopy ranger say "message"        DM it through the backend's tailchan
+  canopy ranger wake <when> "prompt" wake it later: in 30m, 14:00, an ISO time
+    --cron "0 8 * * *" | --run <id>  on a cron line instead, or when a run ends
+  canopy ranger unwake <id>          remove a wake
   canopy spec status [dir]           every repo against the shared repo spec
   canopy spec sync <repo> [--visual | --doc]   write the spec's blocks into a repo
                                      --visual adds DESIGN.md, --doc keeps only SPEC.md

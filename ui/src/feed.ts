@@ -518,6 +518,8 @@ export function describeEvent(
     // the incubator view and the inbox say these; the feed has no line for them
     case "stages":
     case "advice":
+    // the ranger's chip says what it is doing
+    case "ranger":
     // a run's own timeline says what a remembered rule let through
     case "remembered":
       return [];

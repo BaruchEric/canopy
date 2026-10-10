@@ -141,6 +141,8 @@ export function qEvent(q: Q, ev: ServerEvent): ServerEvent {
     // retro lessons on offer are the home backend's alone
     case "stages":
     case "advice":
+    // the ranger's ids are its backend's own; the store qualifies its tab
+    case "ranger":
       return ev;
   }
 }

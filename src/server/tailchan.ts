@@ -107,6 +107,19 @@ export class ChanHub {
     this.say({ to: "human", text: `${repo}: task ${task} keeps failing; canopy stopped restarting it` });
   }
 
+  /** the ranger gave up restarting: a DM, since someone has to look */
+  onRangerGaveUp(text: string): void {
+    this.say({ to: "human", text });
+  }
+
+  /** A DM from canopy's bot to a handle, whatever the notify switch says:
+   *  how the ranger's wakes reach it. Throws when there is no broker or the
+   *  post fails, so the caller keeps the wake for the next try. */
+  async dm(to: string, text: string): Promise<void> {
+    if (!this.cfg || !this.chan) throw new Error("no tailchan broker");
+    await this.chan.send(this.cfg.bot, { to }, "text", text);
+  }
+
   /** a dismissed run, flow or fleet leaves the maps */
   forget(id: string): void {
     this.runs.delete(id);

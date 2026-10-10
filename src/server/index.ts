@@ -81,6 +81,7 @@ import {
   openFile,
   openGroup,
   openIn,
+  userShell,
 } from "../core/openers";
 import { clientKey, HELPER_PING, HELPER_TIMEOUT, helperRefusal, isLoopback, isLoopbackHost, parseDefaultGateway, parseHelperQuery, parseHelperReply, reachFrom, staleHelpers, type HelperAsk } from "../core/helper";
 import { devicesOf, parseStream, type Stream } from "../core/presence";
@@ -171,6 +172,7 @@ import {
   TERM_GONE,
 } from "../core/types";
 import type { About, AdviceAccepted, AdviceEntry, IncubatorStages, RepoStatus } from "../core/types";
+import { isRunActive } from "../core/types";
 import { holdQuiet, type QuietHold, seedGitThrough, StageClient } from "../core/stageclient";
 import { STAGE_AWAY } from "../core/stagewire";
 import { DEFAULT_IGNORE } from "../core/scan";
@@ -181,6 +183,7 @@ import { BODY_MAX as INTAKE_BODY_MAX, IncubatorHub, canopyRepoOf } from "./incub
 import { ScreenLayouts } from "./layouts";
 import { SCAN_EVERY, type AgentProc } from "../core/agentscan";
 import { TaskHub } from "./tasks";
+import { RangerHub, realTmux, type RangerTimings, type RangerTmux } from "./ranger";
 import type { TaskTimings } from "../core/tasks";
 import { shellHandle } from "../core/tailchan";
 import { loadChanConfig, type ChanConfig } from "../core/chan";
@@ -258,6 +261,8 @@ interface ServerState {
   chan: ChanHub;
   /** a repo's named processes on tmux (server/tasks) */
   tasks: TaskHub;
+  /** the ranger, canopy's always-on agent: one claude session of its own on tmux (server/ranger) */
+  ranger: RangerHub;
   /** open pull request counts by GitHub slug, from the last activity pass */
   pulls: Map<string, PullCount>;
   /** the paths of the repos archived in canopy, kept in step with the
@@ -557,10 +562,12 @@ async function listTerms(state: ServerState): Promise<TermInfo[]> {
         sockets: new Set(),
       });
     }
-    // deleting the current entry while iterating a Map is defined behaviour
-    for (const id of state.terms.keys()) if (!seen.has(id)) state.terms.delete(id);
+    // deleting the current entry while iterating a Map is defined behaviour;
+    // the ranger's session has no repo, so the list never names it, and the
+    // ranger's hub is what holds and drops it
+    for (const [id, t] of state.terms) if (!seen.has(id) && !t.info.ranger) state.terms.delete(id);
   }
-  return [...state.terms.values()].filter((t) => !t.info.task).map((t) => termInfo(state, t));
+  return [...state.terms.values()].filter((t) => !t.info.task && !t.info.ranger).map((t) => termInfo(state, t));
 }
 
 /** Ends a shell by id; false when there is none. On a pty the exit hook
@@ -593,7 +600,7 @@ async function snapshotShells(state: ServerState): Promise<void> {
   const tmux = state.tmux;
   if (!tmux) return;
   for (const live of state.terms.values()) {
-    if (live.info.task) continue;
+    if (live.info.task || live.info.ranger) continue;
     const { id, repoId, path, place, startedAt } = live.info;
     try {
       const [text, pane] = await Promise.all([snapshot(tmux, id), paneInfo(tmux, id)]);
@@ -1222,9 +1229,10 @@ function termInfo(state: ServerState, t: LiveTerm): TermInfo {
  *  GET does that. One being ended is left out, so no window adopts it in
  *  the moment before it goes. */
 function tellTerms(state: ServerState): void {
-  const terms = [...state.terms.values()].filter((t) => !t.ending && !t.info.task).map((t) => termInfo(state, t));
+  const terms = [...state.terms.values()].filter((t) => !t.ending && !t.info.task && !t.info.ranger).map((t) => termInfo(state, t));
   broadcast(state, { type: "terms", terms });
   state.tasks.refresh();
+  state.ranger.refresh();
 }
 
 function repoById(state: ServerState, id: string): Repo {
@@ -1986,6 +1994,8 @@ async function handleApi(
   if (chanRes) return chanRes;
   const registryRes = await state.registry.handle(req, url);
   if (registryRes) return registryRes;
+  const rangerRes = await state.ranger.handle(req, url);
+  if (rangerRes) return rangerRes;
   const askRes = await state.asks.handle(req, url);
   if (askRes) return askRes;
   const incubatorRes = await state.incubator.handle(req, url);
@@ -2243,6 +2253,7 @@ async function handleApi(
     const term = url.searchParams.get("term") ?? "";
     // a task's session, held or only on record, is stopped by the task routes alone
     if (state.terms.get(term)?.info.task || state.tasks.knows(term)) return json({ error: "that is a task; stop it from its repo's tasks" }, 400);
+    if (state.ranger.knows(term)) return json({ error: "that is the ranger; turn it off in settings" }, 400);
     if (!(await endTerm(state, term))) return json({ error: "no such shell" }, 404);
     return json({ ok: true });
   }
@@ -3031,6 +3042,8 @@ export async function startServer(opts: {
   chan?: ChanConfig | null;
   /** task timings, shrunk by tests */
   tasks?: Partial<TaskTimings>;
+  /** the ranger's tmux (a stand-in, or null for none) and timings; tests */
+  ranger?: { tmux?: RangerTmux | null; timings?: Partial<RangerTimings> };
   /** the line start=agent types into a new shell; tests swap in a stand-in */
   agentLine?: (repo: Repo, agent: AgentSettings, env: AgentEnv) => Promise<string>;
   /** the harnesses the backend has, in place of looking on PATH; tests */
@@ -3190,6 +3203,7 @@ export async function startServer(opts: {
       broadcast(state, { type: "run", run });
       state.flows.onRun(run);
       state.chan.onRun(run);
+      state.ranger.onRun(run.id, isRunActive(run));
     },
     onGone: (id) => {
       broadcast(state, { type: "run-gone", id });
@@ -3354,6 +3368,42 @@ export async function startServer(opts: {
       broadcast: (ev) => broadcast(state, ev),
       gaveUp: (repo, task) => state.chan.onTaskGaveUp(repo, task),
       ...(opts.tasks ? { timings: opts.tasks } : {}),
+    }),
+    ranger: new RangerHub({
+      tmux: opts.ranger?.tmux !== undefined ? opts.ranger.tmux : (() => {
+        const base = tmuxBase();
+        return base ? realTmux(base) : null;
+      })(),
+      root,
+      backend: () => state.backendName,
+      // what any canopy shell gets, less CANOPY_REPO: it is in no repo
+      env: (term) => ({ CANOPY_TERM: term, CANOPY_BACKEND: state.backendName, ...(state.apiUrl ? { CANOPY_API: state.apiUrl } : {}) }),
+      shell: userShell(),
+      hasClaude: () => state.harnesses().includes("claude"),
+      settings: async (profile) => agentFor(await loadConfig(), root, "shell", profile ? { profile } : undefined),
+      cards: () => state.registry.list(),
+      broker: () => state.chan.cfg !== null,
+      send: (handle, text) => state.chan.dm(handle, text),
+      gaveUp: (text) => state.chan.onRangerGaveUp(text),
+      run: (id) => {
+        const run = state.runner.get(id);
+        return run ? { status: run.status, repo: state.result.repos.find((r) => r.id === run.repoId)?.name ?? run.repoId, active: isRunActive(run) } : undefined;
+      },
+      viewers: (id) => {
+        const t = state.terms.get(id);
+        return t ? termInfo(state, t).viewers : [];
+      },
+      lastInput: (id) => state.terms.get(id)?.lastInput,
+      hold: (info) => {
+        const t = state.terms.get(info.id);
+        if (t) t.info = { ...info, ...(t.info.restoredAt ? { restoredAt: t.info.restoredAt } : {}) };
+        else state.terms.set(info.id, { info, pty: null, sockets: new Set() });
+      },
+      drop: (id) => {
+        if (state.terms.get(id)?.info.ranger) state.terms.delete(id);
+      },
+      broadcast: (ev) => broadcast(state, ev),
+      ...(opts.ranger?.timings ? { timings: opts.ranger.timings } : {}),
     }),
     pulls: new Map(),
     archived: new Set(cfg.archived),
@@ -3583,6 +3633,17 @@ export async function startServer(opts: {
       return json({ error: "a websocket is expected here" }, 426);
     }
     if (url.pathname === "/api/term") {
+      // The ranger's session has no repo: its id alone, and only to join.
+      const rangerTerm = url.searchParams.get("term");
+      if (rangerTerm && state.ranger.knows(rangerTerm)) {
+        if (url.searchParams.get("attach") !== "1") return json({ error: "the ranger's session is only joined (attach=1)" }, 400);
+        const size = termSize(url.searchParams.get("cols"), url.searchParams.get("rows"));
+        const dev = url.searchParams.get("client") ?? "";
+        const repo = { id: "", name: "ranger", path: root } as Repo;
+        const data: Socket = { kind: "term", repo, id: rangerTerm, place: "strip", attach: true, start: null, refused: null, prompt: "", device: /^[0-9a-f]{16}$/.test(dev) ? dev : null, ...size };
+        if (srv.upgrade(req, { data })) return undefined;
+        return json({ error: "a websocket is expected here" }, 426);
+      }
       // A shell in the browser: the socket carries the repo it lands in.
       // The same rules as the openers: a forge repo has no folder to be in.
       let repo: Repo;
@@ -3703,6 +3764,10 @@ export async function startServer(opts: {
           // (a task tab) may reach it, and never one that would start a shell.
           if (!attach && state.tasks.knows(id)) {
             term.close(TERM_GONE, "that is a task, not a shell");
+            return;
+          }
+          if (!attach && state.ranger.knows(id)) {
+            term.close(TERM_GONE, "that is the ranger, not a shell");
             return;
           }
           if (!held && (attach || state.kept.some((k) => k.id === id))) {
@@ -3883,6 +3948,8 @@ export async function startServer(opts: {
   void state.chan.start().catch((err) => console.error("canopy: tailchan", err));
   state.registry.start();
   state.asks.start();
+  // after the bind, so its session gets this server's CANOPY_API
+  void state.ranger.start().catch((err) => console.error("canopy: ranger", err));
   const keepTimer = setInterval(() => void keepPass(state), KEEP_EVERY);
 
   // A named event rather than an SSE comment, so the page sees it: a phone
@@ -3905,6 +3972,7 @@ export async function startServer(opts: {
     port: server.port ?? port,
     stop: () => {
       state.tasks.stop();
+      state.ranger.stop();
       clearInterval(heartbeat);
       clearInterval(helperTimer);
       clearInterval(keepTimer);

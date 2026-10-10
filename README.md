@@ -112,6 +112,22 @@ canopy finds tasks on its own in `package.json` scripts, a `Cargo.toml` and a `M
 
 The panel's **tasks** section lists them with start, stop, restart, a window of their own and edit. A card carries a chip for its running tasks, and the top bar lists every running task across the grove. In the project bench the tasks sit along the side and the picked one's live terminal or log fills the log pane.
 
+## The ranger
+
+The ranger is canopy's always-on agent: one interactive Claude Code session that a backend keeps running in its scan root, so it reads the workspace's own `CLAUDE.md` and sees every project. Turn it on in Settings ("ranger") or with `canopy ranger on`. It lives on canopy's tmux, in the shells container on the mini, so a redeploy never touches it; when claude exits for any reason canopy starts it again on the same conversation (`--resume`), backing off and giving up after five quick exits in a row. Canopy moves it to a fresh conversation by hand, daily at a set hour (04:00 by default) and once the transcript passes a size (25 MB), only while it is idle; the brief then names the previous transcript.
+
+It is told to look at the board through the API (`/api/tree`, `/api/runs`, `/api/tasks`, …) and to change a repo only by starting a run there. It never runs yolo, whatever its profile says, so anything its rules do not allow becomes an ask in the inbox. Three things wake it: a tailchan DM to its handle (`@ranger`, or the one set in Settings; each backend's must differ, and the second to start is told so), the crons set in Settings or with `canopy ranger wake --cron`, and the wakes it sets itself (`POST /api/ranger/wakes` with `when`, `cron` or `run`, which fires when that run ends). Canopy delivers a cron or a wake as a DM from its bot, tagged `[cron <id>]` or `[wake <id>]`, keeps them across restarts and holds them while there is no broker. With "it owns the Telegram bot" on, it starts with the telegram plugin and `--channels`; turn the plugin off in that machine's `~/.claude/settings.json`, or every other session there takes the bot back. Its first start in a folder Claude has never trusted stops at the trust prompt: open it from the chip once and accept.
+
+The top bar's `✦ ranger` chip (there while it is on) says what it is doing and opens its session, messages it, restarts it, starts a fresh conversation or turns it off, and lists its wakes.
+
+```bash
+canopy ranger [status]                     # what it is doing, its conversation and wakes
+canopy ranger on | off | restart | fresh
+canopy ranger say "look at the failing deploy"
+canopy ranger wake in 30m "check the deploy"   # or 14:00, --cron "0 8 * * *", --run <id>
+canopy ranger unwake <id>
+```
+
 ## Claude runs
 
 Each run is one Claude Code session in the repo's directory: canopy spawns the `claude` binary on your PATH in print mode with stream-json on stdin and stdout, so it runs on whatever your terminal `claude` runs on (a Claude Max login included), with no SDK and no API key. It loads your user and project settings and CLAUDE.md files the way a terminal session would, but no MCP servers. `ask claude…` pre-allows only read-only git; a workflow step pre-allows what its `tools:` line names (see Workflows); anything else asks in the console. The repo's agent settings ride along: `--model` and `--effort` as set, and yolo runs the session in `bypassPermissions` mode, so nothing asks. Runs live in server memory: the last 60 finished ones stay visible until dismissed or the server restarts. One run per repo at a time.
@@ -290,7 +306,7 @@ Cloudflare Access protecting the hostname); see "A public name" in
 
 - Config + workspaces: `~/.config/canopy/config.json` (override dir with `$CANOPY_CONFIG_DIR`). `historyBin` there points at the claude-history CLI when it is not on PATH; `fetch: false` turns the background fetch of your own repos off.
 - Generated workspace files (`.code-workspace`, kitty sessions): `~/.config/canopy/workspaces/`.
-- Next to the config: `tmux.sock` (the shells' tmux server), `shells/` (kept-shell snapshots, 0600), `pastes/` (images pasted into shells), `tasks/state.json` and `tasks/logs/` (what each task wants, how it last exited, its output).
+- Next to the config: `tmux.sock` (the shells' tmux server), `shells/` (kept-shell snapshots, 0600), `pastes/` (images pasted into shells), `tasks/state.json` and `tasks/logs/` (what each task wants, how it last exited, its output), `ranger/` (the ranger's `state.json`, `wakes.json` and the `brief.md` it was last started with; a `ranger.md` beside the config replaces the bundled brief).
 - Per-browser preferences (grouping, where a click opens, theme, level, text sizes, which sections show) live in that browser's localStorage, along with the open panels and shell tabs.
 - Workspaces store absolute repo paths, so they work from any scan root. A repo on another host is stored as `ssh://<host><path>`.
 - Agent settings live under `agents` in the same config, keyed the same way; a repo set back to the defaults loses its entry. Launch settings live under `launchers` the same way.

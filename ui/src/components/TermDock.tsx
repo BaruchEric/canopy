@@ -980,7 +980,7 @@ function TermTabs({
       })}
       {(() => {
         const showing = terms.find((t) => t.id === active);
-        return showing && showing.task === undefined && showing.exit === undefined ? <AgentButtons tab={showing} /> : null;
+        return showing && showing.task === undefined && !showing.ranger && showing.exit === undefined ? <AgentButtons tab={showing} /> : null;
       })()}
       {extra}
       {end}
@@ -1176,7 +1176,7 @@ function ShellGear({
     on: place === t,
     run: () => setSetting("shell", t),
   }));
-  const pop: GearEntry[] = showing && !showing.task
+  const pop: GearEntry[] = showing && !showing.task && !showing.ranger
     ? [
         { type: "item", label: "this shell in a new tab", run: () => popShell(showing.repoId, showing.id, "tab") },
         { type: "item", label: "this shell in a new window", run: () => popShell(showing.repoId, showing.id, "window") },

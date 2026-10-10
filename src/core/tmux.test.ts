@@ -23,6 +23,10 @@ import {
   taskCommand,
   parsePane,
   textArgs,
+  rangerSessionArgs,
+  rangerPanesArgs,
+  parseRangerPanes,
+  RANGER_FORMAT,
 } from "./tmux";
 
 const ID = "0123456789abcdef0123456789abcdef";
@@ -248,5 +252,58 @@ describe("tasks on tmux", () => {
     const line = `${name}\tapp\tstrip\t100\t/r/app\t\tdev`;
     expect(parseSessions(line)[0]?.task).toBe("dev");
     expect(parseSessions(`${name}\tapp\tstrip\t100\t/r/app\t\t`)[0]?.task).toBeUndefined();
+  });
+});
+
+describe("the ranger's session", () => {
+  const name = sessionName(ID);
+  test("a placeholder kept on exit, marked as the ranger's and never as a shell or task", () => {
+    expect(rangerSessionArgs(base, ID, "/home/eric/dev", { cols: 160, rows: 45 })).toEqual([
+      ...base,
+      "new-session",
+      "-d",
+      "-s",
+      name,
+      "-c",
+      "/home/eric/dev",
+      "-x",
+      "160",
+      "-y",
+      "45",
+      "'sleep' '2147483647'",
+      ";",
+      "set-option",
+      "-t",
+      name,
+      "@canopy_ranger",
+      "1",
+      ";",
+      "set-option",
+      "-t",
+      name,
+      "@canopy_path",
+      "/home/eric/dev",
+      ";",
+      "set-option",
+      "-w",
+      "-t",
+      name,
+      "remain-on-exit",
+      "on",
+    ]);
+    // no repo option: the shell and task lists both pass over it
+    expect(parseSessions(`${name}\t\tstrip\t100\t/home/eric/dev\t\t`)).toEqual([]);
+    expect(parseTaskPanes(`${name}\t\t\t/home/eric/dev\t0\t\t100`)).toEqual([]);
+  });
+  test("the respawn carries its environment", () => {
+    expect(respawnArgs(base, ID, ["bash", "-lic", "x"], "/d", { TAILCHAN_AS: "ranger" })).toEqual([...base, "respawn-pane", "-k", "-t", name, "-c", "/d", "-e", "TAILCHAN_AS=ranger", "'bash' '-lic' 'x'"]);
+  });
+  test("its list keeps the ranger's sessions with their exit and last output", () => {
+    expect(rangerPanesArgs(base)).toEqual([...base, "list-sessions", "-F", RANGER_FORMAT]);
+    const out = [`${name}\t1\t1\t0\t100\t160`, `${name.replace("0123", "ffff")}\t\t0\t\t100\t160`, `other\t1\t0\t\t100\t160`, `${name}\t1\t0\t\t100\t`].join("\n");
+    expect(parseRangerPanes(out)).toEqual([
+      { termId: ID, dead: true, code: 0, createdAt: 100_000, activityAt: 160_000 },
+      { termId: ID, dead: false, code: null, createdAt: 100_000, activityAt: null },
+    ]);
   });
 });

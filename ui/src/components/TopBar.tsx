@@ -25,6 +25,7 @@ import { NewProjectButton } from "./Incubator";
 import { DevicesChip } from "./Devices";
 import { KeptShells } from "./KeptShells";
 import { ShellsChip } from "./Shells";
+import { RangerChip } from "./Ranger";
 import { TasksChip } from "./Tasks";
 import { SourcesMenu } from "./Sources";
 
@@ -572,6 +573,7 @@ function Chips({ phone = false }: { phone?: boolean }) {
       <KeptShells />
       <ShellsChip />
       {!phone && <TasksChip />}
+      {!phone && <RangerChip />}
       <DevicesChip />
       {!phone && <InboxChip />}
       {!phone && <CliButton />}
@@ -601,6 +603,7 @@ export function TopBar({ nav }: { nav?: ReactNode }) {
               under this one go: it brings a task to the front from anywhere */}
           <ReloadChip />
           <TasksChip />
+          <RangerChip />
           <InboxChip />
           <CliButton />
           <WaitingButton />

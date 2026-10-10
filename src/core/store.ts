@@ -16,6 +16,7 @@ import { isDefaultLaunch, normalizeLaunch } from "./launch";
 import { normalizeBackends } from "./backends";
 import { normalizeTaskPatch } from "./tasks";
 import { DEFAULT_SEED, PEER_SYNC, isPeerName, normalizePeers, normalizeSeed } from "./peers";
+import { normalizeRanger } from "./ranger";
 import {
   DEFAULT_LAUNCH,
   LAUNCH_SOURCE,
@@ -27,6 +28,7 @@ import {
   type LaunchPick,
   type RepoAgent,
   type LaunchSettings,
+  type RangerSettings,
   type SourceInput,
   type StoredSource,
   type TaskPatch,
@@ -63,6 +65,7 @@ const defaults = (): CanopyConfig => ({
   seed: [...DEFAULT_SEED],
   backends: [],
   extendOwners: [],
+  ranger: normalizeRanger(undefined),
 });
 
 /** The launch settings the same way: only repos that differ from the defaults. */
@@ -168,6 +171,7 @@ function normalize(parsed: Partial<CanopyConfig>): CanopyConfig {
     extendOwners: (Array.isArray(cfg.extendOwners) ? cfg.extendOwners : []).filter(
       (o, i, all): o is string => typeof o === "string" && /^[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})$/.test(o) && all.indexOf(o) === i,
     ),
+    ranger: normalizeRanger(cfg.ranger),
   };
 }
 
@@ -402,6 +406,13 @@ export async function setFavorite(path: string, on: boolean): Promise<string[]> 
 export async function setKeepShells(on: boolean): Promise<void> {
   await withConfig((cfg) => {
     cfg.keepShells = on;
+  });
+}
+
+/** Stores the ranger's settings whole (core/ranger normalizes a patch first). */
+export async function setRanger(settings: RangerSettings): Promise<void> {
+  await withConfig((cfg) => {
+    cfg.ranger = normalizeRanger(settings);
   });
 }
 

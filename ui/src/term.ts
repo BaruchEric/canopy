@@ -27,6 +27,8 @@ export interface TermTab {
   /** the task this tab shows; closing the tab never stops it, and its
    *  socket only ever joins, never starts a shell under the task's id */
   task?: string;
+  /** the ranger's session (server/ranger): joined only, never ended by the tab */
+  ranger?: true;
   /** what the socket that starts this shell asks the backend to type in:
    *  the agent its shell route resolves to; never saved, since a shell that
    *  already exists ignores it */
@@ -85,9 +87,10 @@ export function loadTermTabs(v: unknown): TermTab[] {
 }
 
 /** Whether a tab's socket only joins a shell and never starts one: after a
- *  dropped connection, and always for a task's tab, since a task's session
- *  belongs to the task hub and a plain shell must never start under its id. */
-export const joinsOnly = (tab: TermTab, rejoin: boolean): boolean => rejoin || tab.task !== undefined;
+ *  dropped connection, and always for a task's or the ranger's tab, since
+ *  those sessions belong to their hubs and a plain shell must never start
+ *  under their ids. */
+export const joinsOnly = (tab: TermTab, rejoin: boolean): boolean => rejoin || tab.task !== undefined || tab.ranger === true;
 
 /**
  * The tabs a window shows once it knows what the server holds: the saved
