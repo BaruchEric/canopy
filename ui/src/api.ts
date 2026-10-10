@@ -775,7 +775,7 @@ export const api = {
    *  halves null keeps what the repo took before */
   specSync: async (id: string, halves: SpecHalf[] | null) => {
     const [b, plain] = on(id);
-    const got = await req<{ written: string[]; version: string; halves: SpecHalf[]; repo: Repo }>(b, `/api/repos/spec?${rq(plain)}`, {
+    const got = await req<{ written: string[]; removed?: string[]; version: string; halves: SpecHalf[]; repo: Repo }>(b, `/api/repos/spec?${rq(plain)}`, {
       method: "POST",
       body: JSON.stringify(halves === null ? {} : { halves }),
     });

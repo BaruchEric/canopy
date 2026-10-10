@@ -272,7 +272,9 @@ async function runInner(cmd: Command): Promise<Outcome> {
       const r = repoFor(cmd.repo);
       const got = await api.specSync(r.id, cmd.halves);
       st.applyEvent({ type: "repo", repo: got.repo });
-      const wrote = got.written.length ? `wrote ${got.written.join(", ")}` : "already in sync";
+      const removed = got.removed ?? [];
+      const did = [got.written.length ? `wrote ${got.written.join(", ")}` : "", removed.length ? `removed ${removed.join(", ")}` : ""].filter(Boolean).join("; ");
+      const wrote = did || "already in sync";
       return ok(mark("✓", "moss", { text: `spec v${got.version} (${got.halves.join(" + ")}): ${wrote} in ` }, link(r)));
     }
     case "spec-check": {

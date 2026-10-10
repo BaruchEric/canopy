@@ -2767,14 +2767,14 @@ async function handleApi(
       ) {
         throw new HttpError(400, 'halves must be ["doc"] or ["doc", "visual"]');
       }
-      const { written, record } = await syncSpec(repo.path, halves === undefined ? {} : { halves: [...new Set(halves as SpecHalf[])] });
+      const { written, removed, record } = await syncSpec(repo.path, halves === undefined ? {} : { halves: [...new Set(halves as SpecHalf[])] });
       const spec = await repoSpecState(repo.path);
       const { repo: fresh } = await refreshHeld(state, repo.id);
       const idx = state.result.repos.findIndex((r) => r.id === repo.id);
       const marked: Repo = spec === undefined ? fresh : { ...fresh, spec };
       if (idx !== -1) state.result.repos[idx] = marked;
       broadcast(state, { type: "repo", repo: marked });
-      return json({ written, version: record.version, halves: record.halves, repo: marked });
+      return json({ written, removed, version: record.version, halves: record.halves, repo: marked });
     }
     if (method === "POST" && action === "suggest") {
       const files = repo.status?.files ?? [];

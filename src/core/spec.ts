@@ -8,7 +8,7 @@
  *  the fs half at the bottom reads and writes a local checkout. */
 
 import { createHash } from "node:crypto";
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { basename, dirname, join } from "node:path";
 import type { SpecHalf, SpecState } from "./types";
 
@@ -102,15 +102,18 @@ export function parseRecord(text: string | null): SpecRecord | null {
   }
 }
 
-/** The bytes a sync writes, and the record it leaves. `current` holds each
- *  file's text, null when it is missing. A new SPEC.md starts from the
- *  template; its sections are the repo's to fill. */
+/** The bytes a sync writes, the files it removes, and the record it leaves.
+ *  `current` holds each file's text, null when it is missing. A new SPEC.md
+ *  starts from the template; its sections are the repo's to fill. A
+ *  DESIGN.md the last sync wrote (`old` records it) goes when the visual half
+ *  is dropped, unless it was edited since: then it is the repo's own. */
 export function planSync(
   spec: Spec,
   current: Record<string, string | null>,
   halves: readonly SpecHalf[],
   name: string,
-): { writes: Record<string, string>; record: SpecRecord } {
+  old: SpecRecord | null = null,
+): { writes: Record<string, string>; removes: string[]; record: SpecRecord } {
   const writes: Record<string, string> = {};
   const blocks: Record<string, string> = {};
   for (const file of managedFiles(halves, (f) => current[f] != null)) {
@@ -127,7 +130,11 @@ export function planSync(
     if (next !== current[file]) writes[file] = next;
     blocks[file] = sha256(ownedText(file, next) ?? "");
   }
-  return { writes, record: { version: spec.version, halves: [...halves], blocks } };
+  const removes: string[] = [];
+  const design = current[DESIGN] ?? null;
+  const wrote = old?.blocks[DESIGN];
+  if (!halves.includes("visual") && design !== null && wrote !== undefined && sha256(design) === wrote) removes.push(DESIGN);
+  return { writes, removes, record: { version: spec.version, halves: [...halves], blocks } };
 }
 
 /** Where a repo stands against the spec. Drift wins over behind: a hand
@@ -171,14 +178,15 @@ export async function repoSpecState(repo: string, spec?: Spec): Promise<SpecStat
 export async function syncRepo(
   repo: string,
   opts: { halves?: SpecHalf[]; spec?: Spec } = {},
-): Promise<{ written: string[]; record: SpecRecord }> {
+): Promise<{ written: string[]; removed: string[]; record: SpecRecord }> {
   const spec = opts.spec ?? (await loadSpec());
   const old = parseRecord(await readText(join(repo, RECORD)));
   const halves = opts.halves ?? old?.halves ?? ["doc"];
   const current = await readFiles(repo, ["SPEC.md", ...POINTERS, DESIGN]);
-  const { writes, record } = planSync(spec, current, halves, basename(repo));
+  const { writes, removes, record } = planSync(spec, current, halves, basename(repo), old);
   for (const [file, text] of Object.entries(writes)) await writeFile(join(repo, file), text);
+  for (const file of removes) await rm(join(repo, file), { force: true });
   await mkdir(dirname(join(repo, RECORD)), { recursive: true });
   await writeFile(join(repo, RECORD), `${JSON.stringify(record, null, 2)}\n`);
-  return { written: Object.keys(writes), record };
+  return { written: Object.keys(writes), removed: removes, record };
 }

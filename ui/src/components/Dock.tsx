@@ -1011,7 +1011,9 @@ function SpecSection({ repo, state }: { repo: Repo; state: SpecState }) {
       .specSync(repo.id, halves)
       .then((got) => {
         applyEvent({ type: "repo", repo: got.repo });
-        setNote({ kind: "ok", text: got.written.length ? `Wrote ${got.written.join(", ")} (spec v${got.version}).` : `Already in sync with spec v${got.version}.` });
+        const removed = got.removed ?? [];
+        const did = [got.written.length ? `Wrote ${got.written.join(", ")}` : "", removed.length ? `Removed ${removed.join(", ")}` : ""].filter(Boolean).join("; ");
+        setNote({ kind: "ok", text: did ? `${did} (spec v${got.version}).` : `Already in sync with spec v${got.version}.` });
       })
       .catch((err: unknown) => setNote({ kind: "err", text: String(err instanceof Error ? err.message : err) }))
       .finally(() => setBusy(null));

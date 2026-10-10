@@ -107,6 +107,23 @@ describe("on disk", () => {
     await writeFile(join(dir, "DESIGN.md"), "hand-made\n");
     expect(await repoSpecState(dir, next)).toBe("drifted");
   });
+
+  test("going back to the doc half removes the DESIGN.md it wrote, never one edited since", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "canopy-spec-"));
+    await syncRepo(dir, { spec, halves: ["doc", "visual"] });
+    const back = await syncRepo(dir, { spec, halves: ["doc"] });
+    expect(back.removed).toEqual(["DESIGN.md"]);
+    expect(back.record.blocks["DESIGN.md"]).toBeUndefined();
+    expect(await Bun.file(join(dir, "DESIGN.md")).exists()).toBe(false);
+    expect(await repoSpecState(dir, spec)).toBe("in-sync");
+
+    await syncRepo(dir, { spec, halves: ["doc", "visual"] });
+    await writeFile(join(dir, "DESIGN.md"), "the repo's own now\n");
+    const kept = await syncRepo(dir, { spec, halves: ["doc"] });
+    expect(kept.removed).toEqual([]);
+    expect(await readFile(join(dir, "DESIGN.md"), "utf8")).toBe("the repo's own now\n");
+    expect(await repoSpecState(dir, spec)).toBe("in-sync");
+  });
 });
 
 describe("the bundled spec", () => {

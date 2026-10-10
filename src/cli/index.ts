@@ -618,8 +618,9 @@ export async function main(argv: string[]): Promise<void> {
         if (visual && doc) return fail("pass --visual or --doc, not both");
         const repo = resolve(args[0] ?? fail("usage: canopy spec sync <repo> [--visual | --doc]"));
         const halves: SpecHalf[] | undefined = visual ? ["doc", "visual"] : doc ? ["doc"] : undefined;
-        const { written, record } = await syncRepo(repo, halves ? { halves } : {});
-        console.log(`spec v${record.version} (${record.halves.join(" + ")}): ${written.length ? `wrote ${written.join(", ")}` : "already in sync"}`);
+        const { written, removed, record } = await syncRepo(repo, halves ? { halves } : {});
+        const did = [written.length ? `wrote ${written.join(", ")}` : "", removed.length ? `removed ${removed.join(", ")}` : ""].filter(Boolean).join("; ");
+        console.log(`spec v${record.version} (${record.halves.join(" + ")}): ${did || "already in sync"}`);
         return;
       }
       if (sub === "check") {
