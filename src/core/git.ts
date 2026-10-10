@@ -882,10 +882,13 @@ export const NET_TIMEOUT_MS = 15 * 60_000;
 /** git's own words after its output, when it failed: a lock gets canopy's
  *  offer to clear it, and a run stopped at the timeout says so, since the
  *  output alone reads like a fetch that went fine. */
-function netError(stderr: string, what: string, tookMs: number): Error {
+export function netError(stderr: string, what: string, tookMs: number): Error {
   const words = stderr.trim() || `git ${what} failed`;
   if (isLockedIndex(words)) {
-    return new Error(`${words}\n\nA git process that died can leave this lock behind. canopy clears one that is over ${STALE_LOCK_MIN} minutes old.`);
+    // git's line naming the lock, then one sentence for its two paragraphs
+    // of advice, which assume a terminal
+    const line = words.split("\n").find(isLockedIndex)?.trim() ?? words;
+    return new Error(`${line}\nAnother git process may be running, or one that died left this lock behind; canopy clears one over ${STALE_LOCK_MIN} minutes old.`);
   }
   if (tookMs >= NET_TIMEOUT_MS) return new Error(`${words}\n\ngit ${what} ran past ${NET_TIMEOUT_MS / 60_000} minutes and was stopped.`);
   return new Error(words);

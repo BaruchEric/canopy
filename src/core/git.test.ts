@@ -23,6 +23,8 @@ import {
   parseStash,
   parseUserConfig,
   parseWorktreeList,
+  NET_TIMEOUT_MS,
+  netError,
   readElsewhere,
   stageFile,
 } from "./git";
@@ -300,6 +302,15 @@ describe("parseMtimes", () => {
 });
 
 describe("stale index locks", () => {
+  test("a refusal over the lock reads in two lines; a timeout and a plain failure as they are", () => {
+    const git = "error: Unable to create '/r/.git/index.lock': File exists.\n\nAnother git process seems to be running in this repository, e.g.\nan editor opened by 'git commit'. Please make sure all processes\nare terminated then try again. If it still fails, a git process\nmay have crashed in this repository earlier:\nremove the file manually to continue.";
+    expect(netError(git, "pull", 1000).message).toBe(
+      "error: Unable to create '/r/.git/index.lock': File exists.\nAnother git process may be running, or one that died left this lock behind; canopy clears one over 10 minutes old.",
+    );
+    expect(netError("From origin\n * main", "pull", NET_TIMEOUT_MS).message).toEndWith(`git pull ran past ${NET_TIMEOUT_MS / 60_000} minutes and was stopped.`);
+    expect(netError("", "push", 10).message).toBe("git push failed");
+  });
+
   test("git's lock refusal reads as one", () => {
     expect(isLockedIndex("fatal: Unable to create '/r/.git/index.lock': File exists.\n\nAnother git process seems to be running")).toBe(true);
     expect(isLockedIndex("fatal: not a git repository")).toBe(false);
