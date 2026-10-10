@@ -8773,3 +8773,15 @@ span.effective-flag:not(:first-child) {
 .spec-body .note {
   margin: 8px 0 0;
 }
+
+/* the page is older than the backend it talks to: a redeploy happened
+   under it, and a reload takes the new one */
+.mini.reload-chip {
+  gap: 5px;
+  color: var(--moss);
+  background: color-mix(in srgb, var(--moss) 13%, transparent);
+  font-weight: 600;
+}
+.mini.reload-chip:hover {
+  background: color-mix(in srgb, var(--moss) 22%, transparent);
+}

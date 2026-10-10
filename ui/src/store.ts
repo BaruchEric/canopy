@@ -757,6 +757,9 @@ interface CanopyState {
   drawerOpen: boolean;
   /** the command line's prompt is up over the page; this window's alone */
   cliOpen: boolean;
+  /** what home said it was the first time this page asked, for telling a
+   *  redeploy under an open page (`buildMoved`) */
+  aboutAtLoad: About | null;
   /** the command line's transcript, oldest first, at most CLI_KEEP;
    *  this window's alone, never saved */
   cliLog: CliEntry[];
@@ -1496,6 +1499,8 @@ function resync(get: () => CanopyState, set: (fn: (s: CanopyState) => Partial<Ca
   readTasks(get, set, b);
   // cards and asks the broker changed while the stream was down
   if (b === get().home) {
+    // a stream that dropped may be a redeploy: the build may have moved
+    void readAbout(get, set, b);
     void get().loadRegistry();
     void get().loadAsks();
   }
@@ -1513,6 +1518,20 @@ function resync(get: () => CanopyState, set: (fn: (s: CanopyState) => Partial<Ca
       }));
     })
     .catch(() => {});
+}
+
+/** Reads what a backend runs into its connection; home's first answer is
+ *  kept as the build the page loaded against. */
+async function readAbout(get: () => CanopyState, set: (fn: (s: CanopyState) => Partial<CanopyState>) => void, b: string): Promise<void> {
+  try {
+    const about = await api.about(b);
+    set((s) => ({
+      conns: connsIf(s, b, { about }),
+      ...(b === s.home && s.aboutAtLoad === null ? { aboutAtLoad: about } : {}),
+    }));
+  } catch {
+    // an older or unreachable backend: no about, nothing to compare
+  }
 }
 
 /** what a backend has running, for the top bar; a backend without tmux
@@ -1681,6 +1700,7 @@ export const useStore = create<CanopyState>((set, get) => ({
   drawerOpen: false,
   cliOpen: false,
   cliLog: [],
+  aboutAtLoad: null,
   collapsed: layout.collapsed,
   closedSections: layout.closedSections,
   settings: loadSettings(),
@@ -1856,14 +1876,9 @@ export const useStore = create<CanopyState>((set, get) => ({
     void get().loadSprouts();
     // the screen layouts, which a backend from before them does not have
     void get().loadScreenProfiles();
-    // what home runs, for naming the machines; a page with one backend
-    // names none, so it does not ask
-    if (order.length > 1) {
-      void api
-        .about()
-        .then((about) => set((s) => ({ conns: connsIf(s, home, { about }) })))
-        .catch(() => {});
-    }
+    // what home runs: it names the machines, and it is the build a later
+    // answer is held against to offer a reload after a redeploy
+    void readAbout(get, set, home);
     const refresh = setInterval(() => {
       for (const n of get().backendOrder) if (n === get().home || streams.has(n)) void get().loadHistory(false, n);
     }, HISTORY_REFRESH);

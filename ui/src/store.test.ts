@@ -733,8 +733,10 @@ describe("several backends", () => {
     await settle();
     expect(calls.filter((u) => /^https?:/.test(u))).toEqual([]);
     // what a page asked before there were several backends, plus the list
+    // and what home runs (held against a later answer to offer a reload)
     expect([...new Set(calls.map((u) => u.split("?")[0]))].sort()).toEqual(
       [
+        "/api/about",
         "/api/backends",
         "/api/tree",
         "/api/workspaces",

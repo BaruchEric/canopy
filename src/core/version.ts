@@ -39,3 +39,12 @@ export function sameBuild(a: BuildInfo, b: BuildInfo): boolean {
   if (a.commit && b.commit) return a.commit.startsWith(b.commit) || b.commit.startsWith(a.commit);
   return a.version === b.version;
 }
+
+/** Whether a backend came back as another build than the one it was when
+ *  the page loaded: a redeploy or a restart on new code while the page
+ *  stayed open, which a reload brings in. Measured against what the
+ *  backend first said rather than the page's own bundle, since a server
+ *  started from a checkout committed after its last build always differs
+ *  from its bundle and a reload would not change that. */
+export const buildMoved = (first: BuildInfo | null, now: BuildInfo | null): boolean =>
+  first !== null && now !== null && !sameBuild(first, now);

@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { buildFrom, sameBuild, shortCommit, versionLine } from "./version";
+import { buildFrom, buildMoved, sameBuild, shortCommit, versionLine } from "./version";
 
 const sha = "4b6ba30c9e1f0a1b2c3d4e5f60718293a4b5c6d7";
 const head = { commit: sha, committedAt: "2026-09-26T21:04:11-04:00", dirty: false };
@@ -49,5 +49,15 @@ describe("sameBuild", () => {
   test("versions when a commit is unknown", () => {
     expect(sameBuild({ ...a, commit: null }, a)).toBe(true);
     expect(sameBuild({ ...a, commit: null }, { ...a, version: "0.2.0" })).toBe(false);
+  });
+});
+
+describe("buildMoved", () => {
+  const a = { version: "0.2.0", commit: "7a35df2aaaa", committedAt: null, dirty: false };
+  test("only a known first build and a known later one that differ", () => {
+    expect(buildMoved(null, a)).toBe(false);
+    expect(buildMoved(a, null)).toBe(false);
+    expect(buildMoved(a, { ...a, commit: "7a35df2" })).toBe(false);
+    expect(buildMoved(a, { ...a, commit: "9975387" })).toBe(true);
   });
 });

@@ -13,7 +13,7 @@ import { baseName } from "../elsewhere";
 import { primaryRefusal } from "../workspaces";
 import { seenWord } from "../peers";
 import { PAGE_BUILD } from "../build";
-import { versionLine } from "../../../src/core/version";
+import { buildMoved, versionLine } from "../../../src/core/version";
 import { FilterMenu } from "./Filters";
 import { Gear, type GearEntry, type GearGroup } from "./Gear";
 import { Seg } from "./Seg";
@@ -503,6 +503,25 @@ function RescanButton() {
   );
 }
 
+/** Shown once home comes back as another build than the one this page
+ *  loaded against (a redeploy under an open tab): a reload brings the new
+ *  page in, and shells keep running through it. */
+function ReloadChip() {
+  const now = useStore((s) => homeConn(s).about);
+  const first = useStore((s) => s.aboutAtLoad);
+  if (now === null || first === null || !buildMoved(first, now)) return null;
+  return (
+    <button
+      type="button"
+      className="mini reload-chip"
+      title={`canopy ${versionLine(now)} is running; this page loaded against ${versionLine(first)}. Reload to take the new page; shells keep running.`}
+      onClick={() => location.reload()}
+    >
+      <span aria-hidden="true">↻</span> new build
+    </button>
+  );
+}
+
 /** Brings up the command line: canopy's CLI words, typed in the page.
  *  ⌘K and `:` do the same. */
 function CliButton() {
@@ -547,6 +566,7 @@ function WaitingButton() {
 function Chips({ phone = false }: { phone?: boolean }) {
   return (
     <>
+      <ReloadChip />
       <PeersChip />
       <BackendsChip />
       <KeptShells />
@@ -579,6 +599,7 @@ export function TopBar({ nav }: { nav?: ReactNode }) {
           <span className="spacer" />
           {/* the tasks' chip stays in reach with a repo open, when the rows
               under this one go: it brings a task to the front from anywhere */}
+          <ReloadChip />
           <TasksChip />
           <InboxChip />
           <CliButton />
