@@ -1130,7 +1130,8 @@ interface CanopyState {
   stopJob: (jobId: string) => Promise<void>;
   dismissJob: (jobId: string) => Promise<void>;
   /** takes a peer's WIP as a new local branch (or the given one) */
-  takeWip: (repoId: string, peer: string, branch: string) => Promise<void>;
+  /** answers where the WIP went, as the server put it */
+  takeWip: (repoId: string, peer: string, branch: string) => Promise<TakeResult | null>;
   /** tracks a branch that exists only on a peer, as a local branch here */
   trackBranch: (repoId: string, peer: string, branch: string) => Promise<void>;
   /** seeds the allow-listed files (.env and the like) from a peer that has them */
@@ -1357,7 +1358,16 @@ function flowRunsOf(flows: Flow[]): Record<string, string> {
  *  through applyEvent the way rescan/addSource/removeSource apply a fresh
  *  scan, so this window's own action reaches the feed and the update pulse
  *  too, and the SSE broadcast that follows finds nothing new to say. */
-function applyPeerRepo(get: () => CanopyState, result: Repo & { take?: { how: string; branch?: string } }): void {
+export type TakeResult = { how: string; branch?: string };
+
+/** What a take did, in the words the command line and the Dock both say. */
+export function takeWords(take: TakeResult | null | undefined): string {
+  if (take?.how === "present") return "WIP is already in HEAD: nothing to take";
+  if (take?.how === "files") return "WIP checked out as uncommitted files";
+  return `WIP is on branch ${take?.branch ?? "?"}`;
+}
+
+function applyPeerRepo(get: () => CanopyState, result: Repo & { take?: TakeResult }): void {
   const { take: _take, ...repo } = result;
   get().applyEvent({ type: "repo", repo });
 }
@@ -3266,7 +3276,9 @@ export const useStore = create<CanopyState>((set, get) => ({
     });
   },
   takeWip: async (repoId, peer, branch) => {
-    applyPeerRepo(get, await api.peerAction(repoId, { action: "take", peer, branch }));
+    const got = await api.peerAction(repoId, { action: "take", peer, branch });
+    applyPeerRepo(get, got);
+    return got.take ?? null;
   },
   trackBranch: async (repoId, peer, branch) => {
     applyPeerRepo(get, await api.peerAction(repoId, { action: "track", peer, branch }));

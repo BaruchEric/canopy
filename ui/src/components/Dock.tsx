@@ -28,6 +28,7 @@ import {
   multi,
   runFor,
   sectionsFor,
+  takeWords,
   tasksOf,
   useStore,
   dockless,
@@ -511,15 +512,18 @@ function PeerWipList({ repo, paths = false }: { repo: Repo; paths?: boolean }) {
   const takeWip = useStore((s) => s.takeWip);
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [took, setTook] = useState<string | null>(null);
   // One WIP's commit drill open at a time, by hash, the way History does.
   const [drilled, setDrilled] = useState<string | null>(null);
   const wip = repo.peers?.wip ?? [];
-  if (wip.length === 0) return null;
+  if (wip.length === 0) return took ? <p className="panel-hint">{took}</p> : null;
 
   const take = (peer: string, branch: string, hash: string) => {
     setBusy(hash);
     setError(null);
+    setTook(null);
     takeWip(repo.id, peer, branch)
+      .then((got) => setTook(takeWords(got)))
       .catch((err: unknown) => setError(String(err instanceof Error ? err.message : err)))
       .finally(() => setBusy(null));
   };
@@ -527,6 +531,7 @@ function PeerWipList({ repo, paths = false }: { repo: Repo; paths?: boolean }) {
   return (
     <>
       {error && <p className="panel-error">{error}</p>}
+      {took && <p className="panel-hint">{took}</p>}
       {wip.map((w) => {
         const listed = w.paths ?? [];
         return (

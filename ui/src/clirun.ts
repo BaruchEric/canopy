@@ -8,7 +8,7 @@
 
 import { api } from "./api";
 import { backendOf } from "./registry";
-import { helperFor, useStore } from "./store";
+import { helperFor, takeWords, useStore } from "./store";
 import { CLI_PANEL, ENTRIES, findRepo, parseCommand, quoteWord, tokenize, underDir, type Command } from "./cli";
 import { SPEC_TONE, SPEC_WORDS, specLines, treeLines, type Line, type Seg, type Tone } from "../../src/core/treelines";
 import { versionLine } from "../../src/core/version";
@@ -251,7 +251,7 @@ async function runInner(cmd: Command): Promise<Outcome> {
       const got = await api.peerAction(r.id, { action: "take", peer: cmd.peer, ...(cmd.branch === null ? {} : { branch: cmd.branch }) });
       const { take, ...repo } = got;
       st.applyEvent({ type: "repo", repo });
-      return ok(mark("✓", "moss", { text: take?.how === "files" ? "WIP checked out as uncommitted files" : `WIP is on branch ${take?.branch ?? "?"}` }));
+      return ok(mark("✓", "moss", { text: takeWords(take) }));
     }
     case "peers-track": {
       const r = repoFor(cmd.repo);
