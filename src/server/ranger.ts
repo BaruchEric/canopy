@@ -633,7 +633,8 @@ export class RangerHub {
     this.launchedAt = now;
     const exists = (file: string | null) => (file ? stat(file).then(() => true, () => false) : Promise.resolve(false));
     const home = this.homeDir();
-    await mkdir(home, { recursive: true });
+    // the scan root is already there; only its own folder may need making
+    if (this.settings.home !== "root") await mkdir(home, { recursive: true });
     // a conversation lives under the folder it ran in, so a move to another folder starts a new one
     const was = this.convHome();
     const moved = this.rec.session !== null && was !== home;
