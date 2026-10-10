@@ -254,6 +254,10 @@ services:
       # the stage runner's socket in the stages container (stage-sock below),
       # the one way canopy starts an agent, check or build in a seed
       - CANOPY_STAGE_SOCKET=/run/canopy-stage/runner.sock
+      # the host's time zone by name (America/Los_Angeles), which Bun needs:
+      # it reads the name, and the image's /etc/localtime names Etc/UTC
+      # whatever the mount below puts in the file; empty is UTC, as before
+      - TZ=${TZ:-}
     volumes:
       # the repos to scan, mounted at the SAME path they have on the host so
       # git in the container and VS Code Remote-SSH on the host agree
@@ -273,6 +277,9 @@ services:
       # git on the host leaves out (.claude/settings.local.json and the like);
       # the folder must exist on the host first or docker makes it as root
       - ${HOST_HOME:-/home/eric}/.config/git:/home/bun/.config/git:ro
+      # the host's time zone, as the shells have it, for what reads the file
+      # (glibc, sqlite's localtime); TZ above is what Bun reads
+      - /etc/localtime:/etc/localtime:ro
       # the stage runner's socket, shared with the stages service alone
       - stage-sock:/run/canopy-stage
     command:

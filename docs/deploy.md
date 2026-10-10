@@ -99,7 +99,13 @@ VERCEL_AI_GATEWAY_API_KEY=...   # optional: lets verdict gates evaluate
 # CANOPY_PREVIEW_PUBLIC=https://canopy-p{slot}.beric.ca   # optional: previews on the public page, see "A public name"
 # TAILCHAN_URL=http://100.68.139.95:7855   # optional: the tailchan broker, see "tailchan" below
 # TAILCHAN_HUMAN=eric                       # the handle the UI speaks tailchan as
+TZ=America/Los_Angeles          # the host's zone by name: canopy's local time (the ranger's crons and daily hour, the history's days)
 ```
+
+`TZ` is there because Bun takes the time zone from its name. The host's
+`/etc/localtime`, mounted into both containers, changes what `date` and sqlite
+read but not what Bun reads, since the image's file is a link named `Etc/UTC`.
+Without it canopy runs on UTC.
 
 `CANOPY_LISTEN` is where docker publishes the port. Leave it unset and canopy
 answers on the mini's loopback only, so a missing `.env` never puts it on the
