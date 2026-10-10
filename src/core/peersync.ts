@@ -332,18 +332,22 @@ export async function fastForward(repo: string, peers: string[], dry: boolean) {
   return out;
 }
 
-const ORIGIN_TRACKING = "refs/remotes/origin/";
+const TRACKING = "refs/remotes/";
 
-/** Carries a peer's view of `origin` forward onto this clone's own tracking
- *  refs. The pass fast-forwards a branch from the peer, but nothing here
- *  fetches origin itself when it is someone else's repo or one this machine
- *  has no credentials for, so `origin/main` would stay wherever the clone
- *  left it and every commit the pass brought in would read as unpushed.
+/** Carries a peer's view of a branch's upstream forward onto this clone's
+ *  own tracking ref: `origin`, or whatever remote the branch follows (a
+ *  `fork` the user pushes to, say). The pass fast-forwards a branch from
+ *  the peer, but nothing here fetches that remote when it is someone else's
+ *  repo or a private one this machine has no credentials for, so
+ *  `origin/main` would stay wherever the clone left it and every commit the
+ *  pass brought in would read as unpushed. A branch that follows a peer
+ *  remote itself (`peerRemotes`, `mac/main`) is the fast-forward's business.
  *
- *  Only a branch that reads ahead of (or diverged from) its origin upstream
- *  is looked at, and only that upstream is asked of the peer, by name: a
- *  glob over the peer's whole `refs/remotes/origin/*` would pull every
- *  branch the peer ever fetched, history and all into a shallow clone.
+ *  Only a branch that reads ahead of (or diverged from) its upstream is
+ *  looked at, and only that upstream is asked of the peer, by name: a glob
+ *  over the peer's whole `refs/remotes/origin/*` would pull every branch
+ *  the peer ever fetched, history and all into a shallow clone. The ref
+ *  name is the same on both sides, so the remote must be named alike.
  *  The upstream moves only forward (the current ref an ancestor of the
  *  peer's), by compare-and-swap, so a fresher fetch of origin here is never
  *  undone. Ancestry is also the only check that the peer's origin is the
@@ -357,15 +361,19 @@ export async function advanceUpstreams(
   peer: Peer,
   env: Record<string, string>,
   dry: boolean,
+  peerRemotes: readonly string[] = [],
 ): Promise<NonNullable<PeerState["upstreams"]>> {
   const out: NonNullable<PeerState["upstreams"]> = [];
   if (dry) return out;
+  const skip = new Set([peer.name, ...peerRemotes]);
   const r = await git(repo, ["for-each-ref", "--format=%(upstream)%00%(upstream:trackshort)", "refs/heads/"]);
   if (r.code !== 0) return out;
   const wanted = new Set<string>();
   for (const line of r.stdout.split("\n")) {
     const [up = "", track = ""] = line.split("\0");
-    if (up.startsWith(ORIGIN_TRACKING) && (track === ">" || track === "<>")) wanted.add(up);
+    if (!up.startsWith(TRACKING) || (track !== ">" && track !== "<>")) continue;
+    const remote = up.slice(TRACKING.length).split("/")[0] ?? "";
+    if (remote && !skip.has(remote)) wanted.add(up);
   }
   if (wanted.size === 0) return out;
   const fetchEnv = { GIT_TERMINAL_PROMPT: "0", ...env };
@@ -1125,7 +1133,7 @@ async function passOne(id: string, opts: PassOptions, seen: PassSeen): Promise<P
     // origin this machine never fetched. Peers in turn: each moves the ref
     // only forward from wherever the one before left it.
     const upstreams: NonNullable<PeerState["upstreams"]> = [];
-    for (const p of answered) upstreams.push(...(await advanceUpstreams(repo, id, p, env, opts.dry)));
+    for (const p of answered) upstreams.push(...(await advanceUpstreams(repo, id, p, env, opts.dry, names)));
     if (upstreams.length > 0) state.upstreams = upstreams;
     state.wip = await peerWips(repo, names);
   } catch (err) {

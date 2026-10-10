@@ -614,6 +614,29 @@ describe("origin tracking refs follow the peer's", () => {
     expect(await sh(mini, "rev-parse", "origin/main")).toBe(old);
   });
 
+  test("a branch following another remote (a fork) gets that remote's ref, a peer remote's is left alone", async () => {
+    const { up, mac, mini, macId, toMac } = await triangle("upfork");
+    const fork = join(root, "upfork-fork.git");
+    await exec(["git", "clone", "-q", "--bare", up, fork]);
+    for (const side of [mac, mini]) {
+      await sh(side, "remote", "add", "fork", fork);
+      await sh(side, "fetch", "-q", "fork");
+    }
+    // the Mac pushed its work to the fork; the mini has the commit but an old fork ref
+    const tip = await commit(mac, "mine.txt", "mine\n");
+    await sh(mac, "push", "-q", "fork", "main:main");
+    await sh(mini, "fetch", "-q", "mac", "main");
+    await sh(mini, "merge", "-q", "--ff-only", "mac/main");
+    const old = await sh(mini, "rev-parse", "fork/main");
+    await sh(mini, "branch", "-q", "-u", "fork/main");
+    expect(await advanceUpstreams(mini, macId, toMac, {}, false, ["mac"])).toEqual([{ ref: "fork/main", from: old, to: tip, peer: "mac" }]);
+    expect(await aheadOfUpstream(mini)).toBe(0);
+    // following the peer's own remote: nothing to ask the peer
+    await commit(mini, "more.txt", "more\n");
+    await sh(mini, "branch", "-q", "-u", "mac/main");
+    expect(await advanceUpstreams(mini, macId, toMac, {}, false, ["mac"])).toEqual([]);
+  });
+
   test("a peer branch named origin/main never stands in for the peer's origin", async () => {
     const { mac, mini, macId, toMac } = await triangle("upname");
     await sh(mac, "checkout", "-q", "-b", "origin/main");
