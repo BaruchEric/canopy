@@ -479,8 +479,12 @@ export function complete(line: string, ctx: CompleteCtx): { word: string; option
 
   let options: Suggestion[] = [];
   if (head.length === 0) {
-    const entries = ENTRIES;
-    options = VERBS.filter(starts).map((v) => ({ value: v, hint: entries.find((e) => e.verb === v)?.about ?? "" }));
+    // a verb with subcommands names them; the rest take the words of
+    // whichever of their lines has some, or, when the usage left no room
+    // (`library`), the first indented line that is not a flag
+    const words = (e: HelpEntry) => e.about || (e.more.find((m) => !m.startsWith("-")) ?? "");
+    const about = (v: string) => SUBS[v]?.join(", ") ?? ENTRIES.filter((e) => e.verb === v).map(words).find((w) => w !== "") ?? "";
+    options = VERBS.filter(starts).map((v) => ({ value: v, hint: about(v) }));
   } else {
     const verb = head[0]!;
     const subs = SUBS[verb];
@@ -505,7 +509,8 @@ export function complete(line: string, ctx: CompleteCtx): { word: string; option
       }
     }
   }
-  options = options.slice(0, LIMIT);
+  // the verbs are the whole menu, so they all stay; the rest are cut
+  if (head.length > 0) options = options.slice(0, LIMIT);
   const first = options[0];
   // nothing typed yet: the list is a menu, and a ghost would sit on the placeholder
   const ghost = first && line.trim() !== "" && starts(first.value) ? first.value.slice(word.length) : "";

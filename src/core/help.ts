@@ -16,8 +16,10 @@ usage:
   canopy commit <repo> -m "msg"     commit staged changes
   canopy commit <repo> --ai [--all] [--push]   AI message; --all stages everything
   canopy suggest <repo>              print an AI-suggested commit message
-  canopy push <repo> | pull <repo>
-  canopy open <repo> [--app kitty|terminal|code|finder|agent|herdr]
+  canopy push <repo>                 push the checked-out branch
+  canopy pull <repo>                 fast-forward the checked-out branch
+  canopy open <repo> [--app <app>]   open the repo in an app (default: kitty)
+    --app kitty|terminal|code|finder|agent|herdr
                                      agent: the repo's agent (claude or codex, as
                                      its shell route says) in a terminal
                                      herdr: the same, in a herdr workspace

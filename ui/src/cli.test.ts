@@ -118,11 +118,19 @@ describe("complete", () => {
     expect(c.ghost).toBe("");
   });
 
+  test("an empty line offers every verb, each with words", () => {
+    const c = complete("", ctx);
+    expect(c.options.map((o) => o.value)).toEqual([...VERBS]);
+    for (const v of ["push", "pull", "open", "ws", "library", "spec", "version"]) {
+      expect(c.options.find((o) => o.value === v)?.hint).not.toBe("");
+    }
+  });
+
   test("verbs first, with their words as hints", () => {
     const c = complete("sp", ctx);
     expect(c.options[0]?.value).toBe("spec");
     expect(c.ghost).toBe("ec");
-    expect(c.options[0]?.hint).toContain("spec");
+    expect(c.options[0]?.hint).toBe("status, sync, check");
   });
 
   test("subcommands, then repos by id and by name", () => {

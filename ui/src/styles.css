@@ -8548,6 +8548,9 @@ span.effective-flag:not(:first-child) {
   margin: 0;
   padding: 4px 6px 6px;
   border-top: 1px solid var(--hair);
+  max-height: min(320px, 45vh);
+  overflow-y: auto;
+  overscroll-behavior: contain;
 }
 .cli-prompt.compact .cli-options {
   border-top: 0;

@@ -54,6 +54,11 @@ export function Prompt({ autoFocus, onRan, compact }: { autoFocus?: boolean; onR
   const options = compact && (!focused || value === "") ? [] : done.options;
   const at = Math.min(pick, Math.max(0, options.length - 1));
   const chosen = options[at];
+  const listId = compact ? "cli-options-panel" : "cli-options-pop";
+  // the list scrolls once it outgrows its height: keep the picked row in it
+  useEffect(() => {
+    document.getElementById(`${listId}-${at}`)?.scrollIntoView({ block: "nearest" });
+  }, [listId, at]);
   const byId = useMemo(() => new Map(repos.map((r) => [r.id, r])), [repos]);
 
   const set = (v: string) => {
@@ -103,7 +108,6 @@ export function Prompt({ autoFocus, onRan, compact }: { autoFocus?: boolean; onR
     }
   };
 
-  const listId = compact ? "cli-options-panel" : "cli-options-pop";
   return (
     <div className={compact ? "cli-prompt compact" : "cli-prompt"}>
       <div className="cli-row">
