@@ -314,6 +314,7 @@ describe("the target half of a move", () => {
   test("check names an unknown peer", async () => {
     const r = await check({ from: "nobody", branch: "main", head: "x", transcriptBytes: 10, session: T, harness: "claude" });
     expect(r.status).toBe(404);
+    expect(((await r.json()) as { error: string }).error).toMatch(/no git peer named nobody/);
   });
 
   test.if(tmux)("load lands the work, writes the transcript under this repo's folder, and resumes", async () => {
