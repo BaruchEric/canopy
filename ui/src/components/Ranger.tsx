@@ -200,11 +200,27 @@ export function RangerRow({ backend }: { backend: string }) {
   const [cron, setCron] = useState("");
   const [prompt, setPrompt] = useState("");
   const [err, setErr] = useState<string | null>(null);
+  // the hour and the size as typed, saved on blur or Enter rather than each
+  // keystroke: "25" to "50" would otherwise pass through 5 MB on the way
+  const [daily, setDaily] = useState<string | null>(null);
+  const [maxMb, setMaxMb] = useState<string | null>(null);
   if (!info) return null;
   const s = info.settings;
   const save = (patch: Record<string, unknown>) => {
     setErr(null);
     void setRanger(backend, patch).catch((e) => setErr(errText(e)));
+  };
+  const commitDaily = () => {
+    if (daily === null) return;
+    const value = daily || null;
+    setDaily(null);
+    if (value !== s.fresh.daily) save({ fresh: { daily: value } });
+  };
+  const commitMaxMb = () => {
+    if (maxMb === null) return;
+    const value = maxMb.trim() ? Number(maxMb) : null;
+    setMaxMb(null);
+    if (value !== s.fresh.maxMb) save({ fresh: { maxMb: value } });
   };
   const add = () => {
     setErr(null);
@@ -263,8 +279,12 @@ export function RangerRow({ backend }: { backend: string }) {
           <input
             className="settings-input"
             type="time"
-            value={s.fresh.daily ?? ""}
-            onChange={(e) => save({ fresh: { daily: e.target.value || null } })}
+            value={daily ?? s.fresh.daily ?? ""}
+            onChange={(e) => setDaily(e.target.value)}
+            onBlur={commitDaily}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") commitDaily();
+            }}
           />
         </label>
         <label className="layout-field">
@@ -274,8 +294,12 @@ export function RangerRow({ backend }: { backend: string }) {
             type="number"
             min={1}
             max={1000}
-            value={s.fresh.maxMb ?? ""}
-            onChange={(e) => save({ fresh: { maxMb: e.target.value ? Number(e.target.value) : null } })}
+            value={maxMb ?? s.fresh.maxMb ?? ""}
+            onChange={(e) => setMaxMb(e.target.value)}
+            onBlur={commitMaxMb}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") commitMaxMb();
+            }}
           />
         </label>
       </div>

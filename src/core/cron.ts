@@ -2,8 +2,9 @@
  * Cron lines and one-shot times for the ranger's wakes, in the backend's
  * local time. Browser-safe and pure. A cron line has the five usual fields
  * (minute, hour, day of month, month, day of week) with `*`, lists, ranges
- * and steps, plus `@hourly`, `@daily`, `@weekly` and `@monthly`. As in cron,
- * when both day fields are restricted a day matching either one counts.
+ * and steps, plus `@hourly`, `@daily`, `@weekly` and `@monthly`. As in
+ * Vixie cron, when both day fields are restricted (neither starts with `*`)
+ * a day matching either one counts.
  */
 
 export interface Cron {
@@ -76,19 +77,24 @@ export function parseCron(line: string): Cron | { error: string } {
   }
   const [minutes, hours, days, months, rawWeekdays] = sets as [Set<number>, Set<number>, Set<number>, Set<number>, Set<number>];
   const weekdays = new Set([...rawWeekdays].map((d) => d % 7));
-  return { minutes, hours, days, months, weekdays, anyDay: parts[2] === "*", anyWeekday: parts[4] === "*" };
+  // as Vixie cron: a day field starting with * (a step over the whole range
+  // included) counts as unrestricted for the either-day rule
+  return { minutes, hours, days, months, weekdays, anyDay: (parts[2] ?? "").startsWith("*"), anyWeekday: (parts[4] ?? "").startsWith("*") };
 }
 
-/** Whether a cron line reads. */
-export const isCron = (line: unknown): line is string => typeof line === "string" && line.length <= 100 && !("error" in parseCron(line));
+/** the longest cron line taken */
+export const CRON_MAX = 100;
 
+/** Whether a cron line reads. */
+export const isCron = (line: unknown): line is string => typeof line === "string" && line.length <= CRON_MAX && !("error" in parseCron(line));
+
+/** Vixie cron's rule: with either day field starred both must match (a
+ *  plain * matches every day, so only the other field counts), and with
+ *  both restricted either one does. */
 function dayMatches(c: Cron, d: Date): boolean {
   const day = c.days.has(d.getDate());
   const weekday = c.weekdays.has(d.getDay());
-  if (c.anyDay && c.anyWeekday) return true;
-  if (c.anyDay) return weekday;
-  if (c.anyWeekday) return day;
-  return day || weekday;
+  return c.anyDay || c.anyWeekday ? day && weekday : day || weekday;
 }
 
 /** how far ahead `nextFire` looks before saying never (Feb 29 on a Monday is rare) */

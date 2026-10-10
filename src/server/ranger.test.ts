@@ -28,12 +28,16 @@ class FakeTmux implements RangerTmux {
   kills = 0;
   screen = "";
   answering = true;
+  reads = 0;
+  /** when set, a start waits for it, so a test can catch a launch in flight */
+  gate: Promise<void> | null = null;
   async list(): Promise<RangerPane[] | "no-server" | null> {
     if (!this.answering) return null;
     return [...this.panes.values()].map((p) => ({ ...p }));
   }
   async start(id: string, _root: string, command: string[], env: Record<string, string>): Promise<void> {
     this.starts.push({ command, env });
+    if (this.gate) await this.gate;
     this.panes.set(id, { termId: id, dead: false, code: null, createdAt: Date.now(), activityAt: Date.now() });
   }
   async kill(id: string): Promise<void> {
@@ -41,6 +45,7 @@ class FakeTmux implements RangerTmux {
     this.panes.delete(id);
   }
   async text(): Promise<string | null> {
+    this.reads += 1;
     return this.screen;
   }
   die(code: number | null = 1): void {
@@ -324,6 +329,85 @@ describe("its folder", () => {
     await h.start();
     await until(() => h.info().state === "trust", "trust");
     expect(h.info().why).toContain("also trusts every folder under it");
+  });
+});
+
+describe("what the review found", () => {
+  test("a handle live on another backend is refused before it is saved", async () => {
+    saved.on = true;
+    const h = hub();
+    await h.start();
+    await until(() => fake.starts.length === 1, "the first start");
+    cards = [{ id: "claude:o", handle: "ops", session: "22222222-2222-2222-2222-222222222222", state: "idle", where: { canopy: { backend: "mac" } } } as unknown as AgentCard];
+    const { status } = await call(h, "POST", "/api/ranger", { handle: "ops" });
+    expect(status).toBe(409);
+    expect(saved.handle).toBeNull();
+    expect(fake.starts).toHaveLength(1);
+  });
+
+  test("a restart refused while the old session runs says so, and goes through once it can", async () => {
+    saved.on = true;
+    let claude = true;
+    const h = hub({ hasClaude: () => claude });
+    await h.start();
+    await until(() => fake.starts.length === 1, "the first start");
+    claude = false;
+    await call(h, "POST", "/api/ranger/restart");
+    // ticks keep finding it running, and the refusal still stands over that
+    await Bun.sleep(60);
+    expect(h.info().state).toBe("no-claude");
+    expect(h.info().why).toContain("still runs as before");
+    claude = true;
+    await until(() => fake.starts.length === 2, "the restart once claude is back");
+    await until(() => h.info().state === "running", "running");
+    expect(h.info().why).toBeUndefined();
+  });
+
+  test("a fresh start asked for during another launch runs after it", async () => {
+    let open = () => {};
+    fake.gate = new Promise((r) => (open = r));
+    const h = hub();
+    await h.start();
+    const on = call(h, "POST", "/api/ranger", { on: true });
+    await until(() => fake.starts.length === 1, "the first start in flight");
+    const fresh = call(h, "POST", "/api/ranger/fresh");
+    fake.gate = null;
+    open();
+    await on;
+    expect((await fresh).status).toBe(200);
+    expect(fake.starts).toHaveLength(2);
+    expect(sessionIn(fake.line(1))).not.toBe(sessionIn(fake.line(0)));
+  });
+
+  test("two settings changes in flight both land", async () => {
+    const h = hub();
+    await h.start();
+    await Promise.all([call(h, "POST", "/api/ranger", { telegram: true }), call(h, "POST", "/api/ranger", { fresh: { daily: "05:30" } })]);
+    expect(saved.telegram).toBe(true);
+    expect(saved.fresh.daily).toBe("05:30");
+  });
+
+  test("a record from before its own folder ran in the scan root, so it starts a new conversation", async () => {
+    const old = "35adf21d-777e-428a-aec9-639404e23258";
+    await mkdir(dir(), { recursive: true });
+    await writeFile(join(dir(), "state.json"), JSON.stringify({ session: old, sessionAt: 1 }));
+    await mkdir(join(home(), "projects", projectFolder(ROOT)), { recursive: true });
+    await writeFile(transcriptOf(old, ROOT), "{}\n");
+    saved.on = true;
+    const h = hub();
+    await h.start();
+    await until(() => fake.starts.length === 1, "the first start");
+    expect(sessionIn(fake.line())).not.toBe(old);
+    expect((await record()).previous).toBe(transcriptOf(old, ROOT));
+  });
+
+  test("the pane is read for the trust dialog only for a while after a start", async () => {
+    saved.on = true;
+    const h = hub({ timings: { ...TIMINGS, trustWindow: 0 } });
+    await h.start();
+    await until(() => fake.starts.length === 1, "the first start");
+    await Bun.sleep(80);
+    expect(fake.reads).toBe(0);
   });
 });
 

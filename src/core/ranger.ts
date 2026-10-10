@@ -7,7 +7,7 @@
  * the hub that runs it is server/ranger.ts.
  */
 
-import { CLOCK_RE, isCron, lastClock, nextFire, parseCron, parseWhen } from "./cron";
+import { CLOCK_RE, CRON_MAX, isCron, lastClock, nextFire, parseCron, parseWhen } from "./cron";
 import { agentArgs, splitArgs } from "./harness";
 import { isProfileName } from "./route";
 import { HANDLE_RE } from "./tailchan";
@@ -304,6 +304,8 @@ export function readWake(body: unknown, by: RangerWakeBy, id: string, now: numbe
   if (kinds[0] === "cron") {
     const line = b["cron"];
     if (typeof line !== "string") return "cron is a five-field line";
+    // the same limit isCron holds a line to when it is read back off disk
+    if (line.length > CRON_MAX) return `a cron line is at most ${CRON_MAX} characters`;
     const c = parseCron(line);
     if ("error" in c) return c.error;
     const next = nextFire(c, now);

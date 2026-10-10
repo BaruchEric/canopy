@@ -144,6 +144,7 @@ describe("wakes", () => {
   });
 
   test("refuses a wake with none, two, a bad time or no prompt", () => {
+    expect(readWake({ prompt: "x", cron: `0 ${"1,".repeat(60)}2 * * *` }, "eric", "0000000e", now)).toContain("at most 100");
     for (const bad of [{ prompt: "x" }, { prompt: "x", cron: "0 8 * * *", run: "r" }, { prompt: "x", cron: "nope" }, { prompt: "x", when: "someday" }, { prompt: "", when: "in 5m" }, { prompt: "x", at: now - 1 }, { prompt: "x", run: "has space" }, null]) {
       expect(typeof readWake(bad, "eric", "0000000e", now)).toBe("string");
     }

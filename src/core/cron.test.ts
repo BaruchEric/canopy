@@ -53,6 +53,14 @@ describe("nextFire", () => {
     expect(iso(nextFire(cron("30 6 1 1 *"), at("2026-10-10T12:00")))).toBe("2027-01-01T06:30");
   });
 
+  test("a day field starting with * is unrestricted, as in Vixie cron", () => {
+    // */2 day of month with Monday: only Mondays that fall on an odd day
+    const c = cron("0 9 */2 * 1");
+    expect(c.anyDay).toBe(true);
+    // 2026-10-12 is a Monday on an even day; the next odd-day Monday is 2026-10-19
+    expect(iso(nextFire(c, at("2026-10-10T12:00")))).toBe("2026-10-19T09:00");
+  });
+
   test("both day fields restricted: either one matches", () => {
     // the 15th, or any Monday
     expect(iso(nextFire(cron("0 0 15 * 1"), at("2026-10-10T12:00")))).toBe("2026-10-12T00:00");

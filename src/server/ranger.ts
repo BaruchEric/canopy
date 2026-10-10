@@ -64,6 +64,9 @@ export interface RangerTimings {
   /** how long a start refused for a reason that is not a death (another
    *  backend has the handle, no claude, a codex profile) waits to try again */
   recheck: number;
+  /** how long after a start the pane is read for Claude's trust dialog
+   *  while no card has come (it is read for as long as the dialog shows) */
+  trustWindow: number;
 }
 
 export const RANGER_TIMINGS: RangerTimings = {
@@ -77,6 +80,7 @@ export const RANGER_TIMINGS: RangerTimings = {
   noServerGrace: 30_000,
   quiet: RANGER_QUIET,
   recheck: 30_000,
+  trustWindow: 2 * 60_000,
 };
 
 /** What the hub keeps across restarts. */
@@ -264,6 +268,11 @@ export class RangerHub {
   /** set when canopy itself ends the session, so the exit is not a death */
   private ending = false;
   private trust = false;
+  /** a restart or fresh start refused while the old session runs on: its
+   *  state and reason stand over "running" until a start goes through */
+  private held: { state: RangerState; why: string; kind: LaunchKind } | null = null;
+  /** settings changes, one at a time, so two in flight never lose one */
+  private patching: Promise<unknown> = Promise.resolve();
   private bytes: number | undefined;
   private contested = false;
   private told = "";
@@ -346,7 +355,13 @@ export class RangerHub {
     return s.home === "root" ? this.deps.root : join(this.dir, "home");
   }
 
-  private transcript(session: string | null, home: string = this.homeDir()): string | null {
+  /** the folder the current conversation runs in: where it was started, else
+   *  where the settings put it; a record from before `home` ran in the scan root */
+  private convHome(): string {
+    return this.rec.home ?? (this.rec.session ? this.deps.root : this.homeDir());
+  }
+
+  private transcript(session: string | null, home: string = this.convHome()): string | null {
     return session ? join(this.home, "projects", projectFolder(home), `${session}.jsonl`) : null;
   }
 
@@ -480,11 +495,14 @@ export class RangerHub {
     const file = this.transcript(this.rec.session);
     this.bytes = file ? await stat(file).then((s) => s.size, () => undefined) : undefined;
     const card = this.card();
-    if (!card && this.deps.tmux) {
-      // no hook runs before the trust dialog, so no card means it may be up
+    // no hook runs before the trust dialog, so no card means it may be up:
+    // read the pane while it shows, or for a while after a start, never
+    // every tick for good on a backend whose hooks never make a card
+    const fresh = this.rec.startedAt !== undefined && this.now() - this.rec.startedAt < this.t.trustWindow;
+    if (!card && this.deps.tmux && (this.trust || fresh)) {
       const text = await this.deps.tmux.text(this.termId);
       this.trust = text !== null && TRUST_RE.test(text);
-    } else this.trust = false;
+    } else if (card) this.trust = false;
     if (this.trust) {
       const home = this.homeDir();
       this.setState(
@@ -494,6 +512,7 @@ export class RangerHub {
           : `Claude asks once whether to trust ${home}, the ranger's own folder; open its shell and accept`,
       );
     }
+    else if (this.held) this.setState(this.held.state, this.held.why);
     else this.setState("running");
     if (this.rec.fails && this.rec.startedAt !== undefined && this.now() - this.rec.startedAt > this.t.uptime) {
       delete this.rec.fails;
@@ -535,12 +554,19 @@ export class RangerHub {
 
   /** a start refused for a reason that is not a death: the state says why,
    *  and the next try waits `recheck` rather than the next tick */
-  private refuse(state: RangerState, why: string): void {
+  private refuse(state: RangerState, why: string, kind: LaunchKind): void {
     this.setState(state, why);
+    // a restart or fresh start refused while the old session runs: that
+    // session is on the old settings, so say so until the start goes through
+    const live = this.running() && (kind === "restart" || kind === "fresh");
+    this.held = live ? { state, why: `${why} (it still runs as before)`, kind } : null;
+    if (this.held) this.why = this.held.why;
     if (this.retryTimer) clearTimeout(this.retryTimer);
     this.retryTimer = setTimeout(() => {
       this.retryTimer = undefined;
-      if (!this.stopped && this.settings.on && !this.running()) void this.launch(this.rec.fails ? "retry" : "start");
+      if (this.stopped || !this.settings.on) return;
+      if (this.held && this.running()) void this.launch(this.held.kind);
+      else if (!this.running()) void this.launch(this.rec.fails ? "retry" : "start");
     }, this.t.recheck);
   }
 
@@ -565,7 +591,9 @@ export class RangerHub {
    *  runs there: a first start, a retry after a death, a restart by hand
    *  (same conversation) or a fresh conversation. */
   private launch(kind: LaunchKind): Promise<void> {
-    if (this.launching) return this.launching;
+    // a fresh start or restart asked for while another launch runs is not
+    // that launch: it runs after it, never dropped
+    if (this.launching) return kind === "fresh" || kind === "restart" ? this.launching.then(() => this.launch(kind)) : this.launching;
     this.launching = this.doLaunch(kind)
       .catch(async (err: unknown) => {
         // a start that failed is a death of its own, so it backs off too
@@ -595,21 +623,22 @@ export class RangerHub {
     // tmux not answering may be its container restarting: a start now could
     // make a second server, or land on one about to go
     if (this.answering === false) return this.setState("starting", "waiting for tmux to answer");
-    if (!this.deps.hasClaude()) return this.refuse("no-claude", `Claude Code is not installed on ${this.deps.backend()}`);
+    if (!this.deps.hasClaude()) return this.refuse("no-claude", `Claude Code is not installed on ${this.deps.backend()}`, kind);
     const agent = await this.deps.settings(this.settings.profile);
-    if (agent.harness !== "claude") return this.refuse("error", `the ranger runs Claude Code; ${this.settings.profile ? `the profile ${this.settings.profile}` : "the shell route"} is ${agent.harness}`);
+    if (agent.harness !== "claude") return this.refuse("error", `the ranger runs Claude Code; ${this.settings.profile ? `the profile ${this.settings.profile}` : "the shell route"} is ${agent.harness}`, kind);
     const handle = rangerHandle(this.settings);
     const taken = this.takenBy(handle);
-    if (taken) return this.refuse("handle-taken", `@${handle} is live on ${taken.where.canopy?.backend ?? taken.node}; give this backend's ranger another handle`);
+    if (taken) return this.refuse("handle-taken", `@${handle} is live on ${taken.where.canopy?.backend ?? taken.node}; give this backend's ranger another handle`, kind);
     const now = this.now();
     this.launchedAt = now;
     const exists = (file: string | null) => (file ? stat(file).then(() => true, () => false) : Promise.resolve(false));
     const home = this.homeDir();
     await mkdir(home, { recursive: true });
     // a conversation lives under the folder it ran in, so a move to another folder starts a new one
-    const moved = this.rec.home !== undefined && this.rec.home !== home;
+    const was = this.convHome();
+    const moved = this.rec.session !== null && was !== home;
     if (!this.rec.session || kind === "fresh" || moved) {
-      const old = this.transcript(this.rec.session, this.rec.home ?? home);
+      const old = this.transcript(this.rec.session, was);
       if (await exists(old)) this.rec.previous = old;
       this.rec.session = randomUUID();
       this.rec.sessionAt = now;
@@ -651,6 +680,7 @@ export class RangerHub {
     }
     this.pane = { termId: this.termId, dead: false, code: null, createdAt: now, activityAt: now };
     this.trust = false;
+    this.held = null;
     this.deps.hold(this.holdInfo(now));
     this.setState("running");
     await this.save();
@@ -736,7 +766,15 @@ export class RangerHub {
 
   /** applies a settings change: on and off start and end it, and a change
    *  to what it runs as restarts a running one */
-  async patch(body: unknown): Promise<RangerInfo> {
+  /** applies settings changes one at a time: each is read against what the
+   *  last one left, so two saves in flight never undo each other */
+  patch(body: unknown): Promise<RangerInfo> {
+    const run = this.patching.then(() => this.applyPatch(body));
+    this.patching = run.catch(() => {});
+    return run;
+  }
+
+  private async applyPatch(body: unknown): Promise<RangerInfo> {
     const next = patchRanger(this.settings, body);
     if (typeof next === "string") throw new RangerError(400, next);
     if (next.on && !this.deps.tmux) throw new RangerError(503, "the ranger needs tmux on this backend");
@@ -746,12 +784,17 @@ export class RangerHub {
       const agent = await this.deps.settings(next.profile);
       if (agent.harness !== "claude") throw new RangerError(400, `the ranger runs Claude Code; ${next.profile ? `the profile ${next.profile}` : "the shell route"} is ${agent.harness}`);
     }
+    // the same for a handle another backend's ranger is live under
+    const handle = rangerHandle(next);
+    const taken = handle !== rangerHandle(this.settings) ? this.takenBy(handle) : undefined;
+    if (taken) throw new RangerError(409, `@${handle} is live on ${taken.where.canopy?.backend ?? taken.node}; pick another handle`);
     const was = this.settings;
     await this.saveSettings(next);
     this.settings = next;
     await this.readTelegram();
     const reshaped = was.profile !== next.profile || was.handle !== next.handle || was.telegram !== next.telegram || was.home !== next.home;
     if (!next.on) {
+      this.held = null;
       await this.end();
       this.setState("off");
     } else if (!was.on) {
