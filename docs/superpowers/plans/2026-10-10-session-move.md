@@ -29,6 +29,42 @@
 4. **A sibling folder with a shared prefix** (`/dev/app` vs `/dev/app2`). The `cwd` rewrite must not touch `/dev/app2`. Test in Task 1.
 5. **The pane runs the other harness** (a stale registry card says claude, the pane runs codex). `endAgent` refuses with 409 and sends no keys. Test in Task 2.
 
+Also pinned, from the plan review: a repo filed under different folders on the two machines (the card joins them by remote, but peer sync matches by folder) or a peer offline at check time. `movecheck` must refuse unless `refs/remotes/<from>/<branch>` equals the source's HEAD after its sync, so the move never stops an agent it cannot load. Test in Task 5. And a stop that quits the agent and then fails its snapshot still offers "resume here" (Tasks 4 and 6).
+
+Write protection needs nothing new: every `/api/` request, multipart included, passes `libraryOriginAllowed` (cross-site refused) before any route, and the CORS wrapper adds headers to every response, the raw transcript file included.
+
+---
+
+### Task 0: Probe the assumptions on the real machines (no code kept)
+
+Every later task depends on these. If one fails, stop and bring the result to Eric before writing code, since the design changes.
+
+- [ ] **Step 1: A hand-moved Claude session resumes on the mini.** On the Mac, pick a short real session in a scratch repo checked out on both machines (say `~/dev/<scratch>`). Tell it a codeword first. Then:
+
+```bash
+S=<session id>; SRC=/Users/ericbaruch/dev/<scratch>; DST=/home/eric/dev/<scratch>
+F=$(echo "$SRC" | sed 's/[^A-Za-z0-9]/-/g'); T=$(echo "$DST" | sed 's/[^A-Za-z0-9]/-/g')
+sed "s#\"cwd\":\"$SRC#\"cwd\":\"$DST#g" ~/.claude/projects/$F/$S.jsonl > /tmp/$S.jsonl
+scp /tmp/$S.jsonl macmini-ts:/home/eric/.claude/projects/$T/$S.jsonl
+```
+
+In a canopy shell on the mini (the `shells` container) at `$DST`, run `claude --resume $S` and ask for the codeword. Record: it resumes, it recalls the codeword, and `ls -ln` shows the file is readable by the container's user.
+
+- [ ] **Step 2: The session's sibling folder.** Look at `~/.claude/projects/$F/$S/` on the Mac (`tool-results/`, subagent transcripts). Step 1 ran without it. If the resumed session worked, note it in the spec's "Out of scope". If it broke, add moving that folder to Task 1 and the spec before going on.
+
+- [ ] **Step 3: The quit keys.** In a canopy tmux shell running Claude, send `Escape`, then `send-keys -l /exit`, then `Enter` as separate sends (tmux socket per the memory note "Driving sessions in canopy tmux"). Confirm the pane returns to the shell and slash autocomplete did not pick another command. Repeat with Codex and `/quit`. If either needs a different key sequence, change `QUIT` and `endAgent` in Task 2 to match.
+
+- [ ] **Step 4: Backend names are peer names.** On each machine, compare `GET /api/backends` (`self` and each backend's `name`) with `canopy peers` (or the peer config). The page sends `backendOf(tab.id)` as `from`, and the target looks it up among its peers. If any name differs, stop: the page needs a mapping, which is a design change.
+
+- [ ] **Step 5: Write the findings** into the spec under a new "What the probes showed" section and commit it.
+
+```bash
+git add docs/superpowers/specs/2026-10-10-session-move-design.md
+git commit -m "docs(move): what the probes showed
+
+Claude-Session: https://claude.ai/code/session_017bAKbn15p5hTdRozjwC7P7"
+```
+
 ---
 
 ### Task 1: Transcript rewrite and placement
@@ -95,6 +131,10 @@ describe("rewriteTranscript", () => {
   test("a line that is not JSON is refused, a cut-off last line included", () => {
     const good = JSON.stringify({ cwd: FROM });
     expect(() => rewriteTranscript(`${good}\n{"cwd":"/Us`, FROM, TO)).toThrow(MoveError);
+  });
+  test("a cwd written in a shape the rewrite cannot find is refused, not left behind", () => {
+    const spaced = `{"type":"user","cwd": "${FROM}"}`;
+    expect(() => rewriteTranscript(`${spaced}\n`, FROM, TO)).toThrow(MoveError);
   });
   test("a line with nothing to move comes back byte for byte", () => {
     const line = '{"type":"summary","summary":"caf\\u00e9"}';
@@ -214,9 +254,17 @@ export function rewriteTranscript(text: string, from: string, to: string): strin
       throw new MoveError(400, `line ${i + 1} of the transcript is not JSON (cut off?)`);
     }
     let next = line;
+    let changed = false;
     for (const cwd of new Set(cwdsOf(rec))) {
       const moved = movePath(cwd, from, to);
-      if (moved !== cwd) next = next.split(`"cwd":${JSON.stringify(cwd)}`).join(`"cwd":${JSON.stringify(moved)}`);
+      if (moved === cwd) continue;
+      next = next.split(`"cwd":${JSON.stringify(cwd)}`).join(`"cwd":${JSON.stringify(moved)}`);
+      changed = true;
+    }
+    // the rewrite matched the compact form both harnesses write; a line in
+    // any other shape would keep the old folder, so it fails loudly here
+    if (changed && cwdsOf(JSON.parse(next)).some((c) => movePath(c, from, to) !== c)) {
+      throw new MoveError(400, `line ${i + 1} of the transcript keeps a cwd the move could not rewrite`);
     }
     return next;
   });
@@ -891,16 +939,20 @@ Check `paneAgent`'s return type (`AgentKind`): if it is already `Harness | null`
       throw err;
     }
     if (!stopped) throw new HttpError(409, "the agent did not quit within 20 s; nothing else was touched");
+    // on record as soon as the agent is gone, so a snapshot that fails
+    // below still leaves "resume here" (move/undo) something to resume
+    const stoppedOut: MoveOut = { session: b.session, harness: b.harness, path: at, branch, head: "", name: found.name, wip: null };
+    state.moving.set(term, stoppedOut);
     const out = await withPeering(state, async (): Promise<MoveOut> => {
       const head = (await git(at, ["rev-parse", "HEAD"])).stdout.trim();
       let wip: string | null = null;
       if (await isDirty(at)) {
         await snapshotWip(at, s.self, false);
         const r = await git(at, ["rev-parse", "-q", "--verify", `refs/wip/${branch}`]);
-        if (r.code !== 0) throw new HttpError(500, "the snapshot was not written");
+        if (r.code !== 0) throw new HttpError(500, "the snapshot was not written; resume here to carry on");
         wip = r.stdout.trim();
       }
-      return { session: b.session as string, harness: b.harness as Harness, path: at, branch, head, name: found.name, wip };
+      return { ...stoppedOut, head, wip };
     });
     state.moving.set(term, out);
     return json(out);
@@ -935,12 +987,13 @@ Check `paneAgent`'s return type (`AgentKind`): if it is already `Harness | null`
   if (path === "/api/terms/move/undo" && method === "POST") {
     const term = url.searchParams.get("term") ?? "";
     const out = state.moving.get(term);
-    if (!out) throw new HttpError(409, "that shell is not moving");
+    // a stop that failed before the agent quit left nothing to undo
+    if (!out) return json({ ok: true, resumed: false });
     const { repo, tmux } = moveShell(state, term);
     const line = resumeLine(out.session, agentFor(await loadConfig(), repo.path, "shell", { harness: out.harness }), shellEnv(state, repo.id, repo.path, term));
     await sendLine(tmux, term, line);
     state.moving.delete(term);
-    return json({ ok: true });
+    return json({ ok: true, resumed: true });
   }
 ```
 
@@ -1052,6 +1105,19 @@ describe("the target half of a move", () => {
     }
   });
 
+  test("check refuses when the peer's copy cannot be fetched (filed elsewhere, or offline)", async () => {
+    const { out } = await sourceOut(true);
+    const before = process.env["CANOPY_PEERS_JSON"]!;
+    process.env["CANOPY_PEERS_JSON"] = JSON.stringify({ self: "mini", peerSync: "on", seed: [], peers: [{ name: SRC, alias: null, root: join(scratch, "nowhere"), role: "git" }] });
+    try {
+      const r = (await (await check({ from: SRC, branch: "main", head: out.head, transcriptBytes: 10, session: S, harness: "claude" })).json()) as MoveCheck;
+      expect(r.ok).toBe(false);
+      expect(r.reason).toMatch(/could not be reached/);
+    } finally {
+      process.env["CANOPY_PEERS_JSON"] = before;
+    }
+  });
+
   test("check refuses a transcript over the cap", async () => {
     const r = await check({ from: SRC, branch: "main", head: "x", transcriptBytes: 64 * 1024 * 1024 + 1, session: S, harness: "claude" });
     expect(r.status).toBe(413);
@@ -1109,8 +1175,15 @@ Expected: FAIL, `/api/repos/movecheck` answers 404.
 
 ```ts
 /** Why the target cannot take a move as it stands, or null when it can:
- *  on `branch`, at `head`, clean, and no merge or rebase in progress. */
-async function moveBlocker(path: string, name: string, branch: string, head: string): Promise<string | null> {
+ *  the peer's branch as fetched is `head` (which proves the fetch reached
+ *  the source under this repo's id and this peer's name, so the load's
+ *  fetch will too), and here is on `branch`, at `head`, clean, with no
+ *  merge or rebase in progress. */
+async function moveBlocker(path: string, name: string, from: string, branch: string, head: string): Promise<string | null> {
+  const theirs = await git(path, ["rev-parse", "-q", "--verify", `refs/remotes/${from}/${branch}`]);
+  if (theirs.code !== 0 || theirs.stdout.trim() !== head) {
+    return `${from} could not be reached for ${name}, or its ${branch} is not where the move says (is the repo filed under the same folder on both machines?)`;
+  }
   if (await isBusy(path)) return `${name} has a merge, rebase or similar in progress`;
   const on = await currentBranch(path);
   if (on !== branch) return `${name} is on ${on ?? "a detached HEAD"} here, not ${branch}`;
@@ -1139,7 +1212,7 @@ function movePeer(s: PeerSettings, from: unknown): Peer {
       }
       if (b.transcriptBytes > MOVE_MAX) throw new HttpError(413, "the transcript is over 64 MB");
       const s = await movePeers();
-      movePeer(s, b.from);
+      const peer = movePeer(s, b.from);
       const activeRun = state.runner.activeFor(repo.id);
       if (activeRun) throw new HttpError(409, busyWith(repo.name, activeRun.verb));
       if (state.flows.activeFor(repo.id)) throw new HttpError(409, "a workflow is running here");
@@ -1147,7 +1220,7 @@ function movePeer(s: PeerSettings, from: unknown): Peer {
         await initRepo(repo.path, repo.id, s.peers, false);
         applyPeerState(state, repo.id, await syncRepo(repo.id, { self: s.self, peers: s.peers, seed: s.seed, dry: false, root: state.root }, new PassSeen()));
       });
-      const reason = await moveBlocker(repo.path, repo.name, b.branch, b.head);
+      const reason = await moveBlocker(repo.path, repo.name, peer.name, b.branch, b.head);
       const check: MoveCheck = { ok: reason === null, ...(reason ? { reason } : {}), path: repo.path, existing: await hasAgentSession(b.harness, repo.path, b.session) };
       return json(check);
     }
@@ -1172,12 +1245,12 @@ function movePeer(s: PeerSettings, from: unknown): Peer {
           // a retry after a lost answer: the work is already here, exactly
           const landed = meta.wip !== null && (await isDirty(repo.path)) && (await treeIs(repo.path, meta.wip));
           if (!landed) {
-            const reason = await moveBlocker(repo.path, repo.name, meta.branch, meta.head);
+            const fetched = await fetchPeer(repo.path, repo.id, peer, { GIT_SSH_COMMAND: gitSshCommand(configDir()) });
+            if (fetched !== "ok") throw new HttpError(409, `could not fetch from ${peer.name}: ${fetched}`);
+            const reason = await moveBlocker(repo.path, repo.name, peer.name, meta.branch, meta.head);
             if (reason) throw new HttpError(409, reason);
           }
           if (meta.wip && !landed) {
-            const fetched = await fetchPeer(repo.path, repo.id, peer, { GIT_SSH_COMMAND: gitSshCommand(configDir()) });
-            if (fetched !== "ok") throw new HttpError(409, `could not fetch from ${peer.name}: ${fetched}`);
             const got = await git(repo.path, ["rev-parse", "-q", "--verify", `refs/peer-wip/${peer.name}/${meta.branch}`]);
             if (got.stdout.trim() !== meta.wip) throw new HttpError(409, `${peer.name}'s snapshot is not the one this move named`);
             const took = await takeWip(repo.path, peer.name, meta.branch);
@@ -1277,6 +1350,9 @@ describe("runMove", () => {
     expect(await runMove(d, () => {})).toEqual({ ok: false, step: "check", error: "dirty", stopped: false, loaded: null });
     expect(d.calls).toEqual(["check"]);
   });
+  test("a failed stop counts as stopped, so the sheet offers resume here", async () => {
+    expect(await runMove(deps("stop"), () => {})).toMatchObject({ ok: false, step: "stop", stopped: true, loaded: null });
+  });
   test("a failed load says the agent was stopped and nothing loaded", async () => {
     expect(await runMove(deps("load"), () => {})).toMatchObject({ ok: false, step: "load", stopped: true, loaded: null });
   });
@@ -1330,8 +1406,10 @@ export async function runMove(deps: MoveDeps, onStep: (s: MoveStep) => void): Pr
     const c = await deps.check();
     if (!c.ok) return { ok: false, step, error: c.reason ?? "the target cannot take it", stopped, loaded };
     onStep((step = "stop"));
-    const out = await deps.stop();
+    // the stop may quit the agent and then fail on the snapshot, so from
+    // here on the source counts as stopped (its undo is a no-op otherwise)
     stopped = true;
+    const out = await deps.stop();
     onStep((step = "transcript"));
     const blob = await deps.transcript(out);
     onStep((step = "load"));
@@ -1471,10 +1549,10 @@ import { useEffect, useState } from "react";
 import { createPortal } from "react-dom";
 import type { Harness, MoveCheck, MovePlan, TermInfo } from "../../../src/core/types";
 import { api } from "../api";
-import { backendOf } from "../backends";
+import { backendOf, qual } from "../registry";
 import { MOVE_STEPS, runMove, type MoveOutcome, type MoveStep } from "../move";
 import { cardOf, useStore } from "../store";
-import type { TermTab } from "../term";
+import { termId, type TermTab } from "../term";
 
 const STEP_TEXT: Record<MoveStep, string> = {
   check: "the target can take it",
@@ -1557,7 +1635,7 @@ function MoveSheet({ tab, harness, session, toRepoId, close }: { tab: TermTab; h
         check: () => api.moveCheck(toRepoId, { from, branch: plan.branch, head: plan.head, transcriptBytes: plan.transcriptBytes, session: plan.session, harness: plan.harness }),
         stop: () => api.moveOut(tab.id, plan.session, plan.harness),
         transcript: (out) => api.moveTranscript(tab.id, out.session),
-        load: (out, blob) => api.moveIn(toRepoId, out, blob, from, `${to}|${crypto.randomUUID().replace(/-/g, "")}`, tab.place === "strip" ? "strip" : "panel"),
+        load: (out, blob) => api.moveIn(toRepoId, out, blob, from, qual(to, termId()), tab.place === "strip" ? "strip" : "panel"),
         clean: async () => {
           await api.moveFinish(tab.id);
         },
@@ -1633,7 +1711,7 @@ function MoveSheet({ tab, harness, session, toRepoId, close }: { tab: TermTab; h
 }
 ```
 
-Check the names this uses against the code before typing: `cardOf` and `useStore` exports in `store.ts`, `TermTab` in `ui/src/term.ts`, how other code makes a term id (`termId()` in the store; use it instead of `crypto.randomUUID()` if it is exported, with `qual(to, termId())`), and the class names an existing primary button uses (grep `className="mini primary"` or the RunSheet's go button).
+The new tab's id is `qual(to, termId())`: `qual` leaves a home-backend id bare, as every other tab id is. Check the class names an existing primary button uses (grep `className="mini primary"` or the RunSheet's go button).
 
 - [ ] **Step 3: Add the styles** to `ui/src/styles.css`, after the `.sheet-foot` rules, using the existing tokens (look up the names used by `.sheet-empty` and the error text in `RunSheet` and use those):
 
