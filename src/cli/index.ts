@@ -582,7 +582,7 @@ export async function main(argv: string[]): Promise<void> {
           const resolvedBranch = branch ?? (await currentBranch(repo));
           if (!resolvedBranch) return fail("HEAD is detached; name a branch");
           const r = await takeWip(repo, peer, resolvedBranch);
-          console.log(r.how === "files" ? "WIP checked out as uncommitted files" : `WIP is on branch ${r.branch}`);
+          console.log(r.how === "present" ? "WIP is already in HEAD: nothing to take" : r.how === "files" ? "WIP checked out as uncommitted files" : `WIP is on branch ${r.branch}`);
           return;
         }
         case "track": {

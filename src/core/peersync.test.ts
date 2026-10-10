@@ -1147,6 +1147,28 @@ describe("take and track", () => {
     await sh(mac, "rev-parse", "wip/mini/main");
   });
 
+  test("a WIP whose changes HEAD already has lands nowhere", async () => {
+    const { mac, mini, toMini, miniId } = await pair("present");
+    await writeFile(join(mini, "a.txt"), "from mini\n");
+    await snapshotWip(mini, "mini", false);
+    await fetchPeer(mac, miniId, toMini, {});
+    // The same edit is committed here, then the tree moves on, before the take.
+    await commit(mac, "a.txt", "from mini\n");
+    await commit(mac, "b.txt", "later\n");
+    expect(await takeWip(mac, "mini", "main")).toEqual({ how: "present" });
+    expect(await hasRef(mac, "refs/heads/wip/mini/main")).toBe(false);
+  });
+
+  test("HEAD holding only some of a WIP's changes still lands it on a branch", async () => {
+    const { mac, mini, toMini, miniId } = await pair("partial");
+    await writeFile(join(mini, "a.txt"), "from mini\n");
+    await writeFile(join(mini, "n.txt"), "new\n");
+    await snapshotWip(mini, "mini", false);
+    await fetchPeer(mac, miniId, toMini, {});
+    await commit(mac, "a.txt", "from mini\n");
+    expect(await takeWip(mac, "mini", "main")).toEqual({ how: "branch", branch: "wip/mini/main" });
+  });
+
   test("an untouched earlier WIP branch is replaced by a later take", async () => {
     const { mac, mini, toMini, miniId } = await pair("replace");
     await writeFile(join(mini, "a.txt"), "from mini 1\n");

@@ -970,6 +970,19 @@ async function wipOccupiesPath(repo: string, wip: string): Promise<boolean> {
   return false;
 }
 
+/** Whether HEAD already holds every path the WIP changes, as the WIP has
+ *  it: the same edit was committed here while the WIP was in flight. A
+ *  take then has nothing to land, and a scratch branch for it would only
+ *  show up as one unmerged commit whose content is already on HEAD. Any
+ *  path that differs, or a git call that fails, counts as not present. */
+async function wipAlreadyInHead(repo: string, wip: string): Promise<boolean> {
+  const touched = await git(repo, ["diff-tree", "-r", "-z", "--name-only", "--no-renames", `${wip}^`, wip]);
+  const differs = await git(repo, ["diff-tree", "-r", "-z", "--name-only", "--no-renames", "HEAD", wip]);
+  if (touched.code !== 0 || differs.code !== 0) return false;
+  const off = new Set(differs.stdout.split("\0").filter(Boolean));
+  return touched.stdout.split("\0").filter(Boolean).every((p) => !off.has(p));
+}
+
 /** Creates branch `name` at `hash`. Returns the name on success; returns
  *  null only when someone else created that exact name in the meantime (a
  *  race a caller can retry under the next candidate name); any other
@@ -1035,10 +1048,11 @@ async function landWip(repo: string, peer: string, branch: string, hash: string)
   }
 }
 
-/** Lands a peer's WIP here: as uncommitted files when the tree is clean,
- *  HEAD is the WIP's parent, and nothing on disk already occupies a path
- *  it adds; otherwise as a scratch branch (see landWip). */
-export async function takeWip(repo: string, peer: string, branch: string): Promise<{ how: "files" | "branch"; branch?: string }> {
+/** Lands a peer's WIP here: nowhere when HEAD already has its changes
+ *  ("present"), as uncommitted files when the tree is clean, HEAD is the
+ *  WIP's parent, and nothing on disk already occupies a path it adds;
+ *  otherwise as a scratch branch (see landWip). */
+export async function takeWip(repo: string, peer: string, branch: string): Promise<{ how: "present" | "files" | "branch"; branch?: string }> {
   assertPeerName(peer);
   await assertBranchName(repo, branch);
   const ref = `refs/peer-wip/${peer}/${branch}`;
@@ -1047,7 +1061,8 @@ export async function takeWip(repo: string, peer: string, branch: string): Promi
   const hash = wip.stdout.trim();
   const parent = await git(repo, ["rev-parse", "-q", "--verify", `${hash}^`]);
   const head = await git(repo, ["rev-parse", "-q", "--verify", "HEAD"]);
-  const onParent = parent.code === 0 && head.code === 0 && head.stdout.trim() === parent.stdout.trim();
+  if (parent.code === 0 && head.code === 0 && (await wipAlreadyInHead(repo, hash))) return { how: "present" as const };
+  const onParent =parent.code === 0 && head.code === 0 && head.stdout.trim() === parent.stdout.trim();
   const clear = onParent && !(await isDirty(repo)) && !(await isBusy(repo)) && !(await wipOccupiesPath(repo, hash));
   if (clear) {
     const r = await git(repo, ["read-tree", "-u", "-m", "HEAD", hash]);
