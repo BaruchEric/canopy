@@ -1086,7 +1086,9 @@ export async function treeIs(repo: string, commit: string): Promise<boolean> {
 /** After a move: the source tree back to HEAD, its uncommitted work kept
  *  first under refs/canopy-moved/<session>, a namespace peer sync neither
  *  fetches nor prunes. Refuses when anything changed since the snapshot
- *  `wip`, so an edit made after the move began is never thrown away. */
+ *  `wip`, so an edit made after the move began is never thrown away. The
+ *  caller must hold the peer lock with the agent already stopped: a write
+ *  between the drift check and the clean would be lost. */
 export async function resetTree(repo: string, wip: string, session: string): Promise<"reset" | "clean"> {
   if (!isSessionId(session)) throw new Error("session must be a session id");
   const parent = await git(repo, ["rev-parse", "-q", "--verify", `${wip}^`]);
@@ -1095,14 +1097,23 @@ export async function resetTree(repo: string, wip: string, session: string): Pro
     throw new Error("HEAD moved since the move began; nothing was reset");
   }
   if (await isBusy(repo)) throw new Error("a merge, rebase or similar is in progress; nothing was reset");
+  const listed = await git(repo, ["ls-files", "-v", "-z"]);
+  if (listed.code !== 0) throw new Error(listed.stderr.trim() || "git ls-files failed; nothing was reset");
+  // assume-unchanged (lowercase tag) and skip-worktree (S) files hide edits
+  // from status and add -A, yet reset --hard would overwrite them
+  if (listed.stdout.split("\0").some((l) => /^[a-zS]/.test(l))) {
+    throw new Error("files marked assume-unchanged or skip-worktree; nothing was reset");
+  }
   const keep = await git(repo, ["update-ref", `refs/canopy-moved/${session}`, wip]);
   if (keep.code !== 0) throw new Error(keep.stderr.trim());
   if (!(await isDirty(repo))) return "clean";
   if (!(await treeIs(repo, wip))) throw new Error("the tree changed since the move began; nothing was reset");
-  const reset = await git(repo, ["reset", "--hard", "--quiet", "HEAD"]);
-  if (reset.code !== 0) throw new Error(reset.stderr.trim());
+  // clean first: it must see the same ignore rules the snapshot used, and
+  // reset --hard can restore an older .gitignore that un-ignores a file
   const clean = await git(repo, ["clean", "-f", "-d", "--quiet"]);
   if (clean.code !== 0) throw new Error(clean.stderr.trim());
+  const reset = await git(repo, ["-c", "submodule.recurse=false", "reset", "--hard", "--quiet", "HEAD"]);
+  if (reset.code !== 0) throw new Error(reset.stderr.trim());
   return "reset";
 }
 

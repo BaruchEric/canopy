@@ -1967,6 +1967,31 @@ describe("resetTree", () => {
     await expect(resetTree(r, wip, S)).rejects.toThrow(/in progress/);
     expect(existsSync(join(r, "new.txt"))).toBe(true);
   });
+  test("a file ignored only by an uncommitted rule survives", async () => {
+    const r = await repo("reset-newrule");
+    await commit(r, ".gitignore", "*.log\n");
+    await writeFile(join(r, ".gitignore"), "*.log\n.env\n");
+    await writeFile(join(r, ".env"), "k=v\n");
+    await writeFile(join(r, "new.txt"), "new\n");
+    const snap = await snapshotWip(r, "mac", false);
+    const wip = await sh(r, "rev-parse", `refs/wip/${snap!.branch}`);
+    expect(await resetTree(r, wip, S)).toBe("reset");
+    expect(existsSync(join(r, ".env"))).toBe(true);
+    expect(existsSync(join(r, "new.txt"))).toBe(false);
+  });
+  test("an assume-unchanged file is refused before anything is written", async () => {
+    const r = await repo("reset-assume");
+    await commit(r, "b.txt", "b\n");
+    await sh(r, "update-index", "--assume-unchanged", "b.txt");
+    await writeFile(join(r, "b.txt"), "hidden edit\n");
+    await writeFile(join(r, "new.txt"), "new\n");
+    const snap = await snapshotWip(r, "mac", false);
+    const wip = await sh(r, "rev-parse", `refs/wip/${snap!.branch}`);
+    await expect(resetTree(r, wip, S)).rejects.toThrow(/assume-unchanged/);
+    expect(await readFile(join(r, "b.txt"), "utf8")).toBe("hidden edit\n");
+    expect(existsSync(join(r, "new.txt"))).toBe(true);
+    expect(await hasRef(r, `refs/canopy-moved/${S}`)).toBe(false);
+  });
   test("a bad session id is refused before anything is written", async () => {
     const { r, wip } = await dirtied("reset-badid");
     await expect(resetTree(r, wip, "../x")).rejects.toThrow(/session id/);
