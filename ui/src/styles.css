@@ -8972,7 +8972,13 @@ span.effective-flag:not(:first-child) {
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 6px 8px;
 }
-.ranger-cron {
-  flex: 0 0 9em;
+/* beside the prompt box, not over it: the key row's own inputs grow */
+.key-row .settings-input.ranger-cron {
+  flex: 0 0 8.5em;
+  min-width: 0;
   font-family: var(--mono);
+}
+.key-row .settings-input.ranger-cron-prompt {
+  flex: 1 1 90px;
+  min-width: 0;
 }

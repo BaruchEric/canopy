@@ -121,12 +121,13 @@ function RangerBlock({ backend, info, close, showBackend }: { backend: string; i
 }
 
 /**
- * The ranger in the top bar: there only while a shown backend has one on.
+ * The ranger in the top bar: there only while a shown backend has one on,
+ * the glyph alone where room is short (a phone's first row).
  * Moss while it runs, rust while it needs someone (gave up, the trust
  * prompt, its handle taken, or waiting on an answer). Open, each backend's
  * ranger with what it is doing and its wakes.
  */
-export function RangerChip() {
+export function RangerChip({ compact = false }: { compact?: boolean }) {
   const rangers = useStore((s) => s.rangers);
   const order = useStore((s) => s.backendOrder);
   const registry = useStore((s) => s.registry);
@@ -166,7 +167,8 @@ export function RangerChip() {
         title={title}
         onClick={() => setOpen(!open)}
       >
-        <span aria-hidden="true">✦</span> {shown.length === 1 ? "ranger" : shown.length}
+        <span aria-hidden="true">✦</span>
+        {compact ? (shown.length > 1 ? ` ${shown.length}` : null) : ` ${shown.length === 1 ? "ranger" : shown.length}`}
       </button>
       {open && (
         <div className="settings-pop ranger-pop" role="dialog" aria-label="The ranger">
@@ -303,7 +305,7 @@ export function RangerRow({ backend }: { backend: string }) {
       <div className="key-row">
         <input className="settings-input ranger-cron" placeholder="0 8 * * *" value={cron} spellCheck={false} aria-label="Cron line" onChange={(e) => setCron(e.target.value)} />
         <input
-          className="settings-input"
+          className="settings-input ranger-cron-prompt"
           placeholder="what to do then"
           value={prompt}
           aria-label="What the ranger is told"

@@ -603,7 +603,7 @@ export function TopBar({ nav }: { nav?: ReactNode }) {
               under this one go: it brings a task to the front from anywhere */}
           <ReloadChip />
           <TasksChip />
-          <RangerChip />
+          <RangerChip compact />
           <InboxChip />
           <CliButton />
           <WaitingButton />
