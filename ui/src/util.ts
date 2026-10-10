@@ -16,6 +16,10 @@ export function stateOf(r: Repo): RepoState {
 export const needsAttention = (r: Repo): boolean =>
   isDirty(r) || Boolean(r.error);
 
+/** git refused over the index lock (`isLockedIndex` in core/git.ts, which
+ *  the page cannot import); canopy can clear a stale one */
+export const lockedIndex = (text: string): boolean => /index\.lock'?: File exists/.test(text);
+
 export function ago(unixSeconds: number | undefined): string {
   if (!unixSeconds) return "—";
   const s = Math.max(0, Date.now() / 1000 - unixSeconds);

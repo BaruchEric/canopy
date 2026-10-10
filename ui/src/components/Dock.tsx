@@ -49,7 +49,7 @@ import { dragStep, TOUCH_HOLD, type DragInput, type DragPhase } from "../drag";
 import { backendOf, homeName, isHome } from "../registry";
 import { signinUrl } from "../backends";
 import { IdLabel } from "./IdLabel";
-import { ago, GLYPH, stateOf } from "../util";
+import { ago, GLYPH, lockedIndex, stateOf } from "../util";
 import { ClaudeSection } from "./Claude";
 import { LaunchSection } from "./Launch";
 import { TasksSection } from "./Tasks";
@@ -979,10 +979,42 @@ function ChangesSection({ repo }: { repo: Repo }) {
           </div>
         </div>
       )}
-      {note && <p className={`note ${note.kind}`}>{note.text}</p>}
+      <GitNote id={id} note={note} setNote={setNote} />
 
       <Unpushed repo={repo} />
     </Section>
+  );
+}
+
+type Note = { kind: "ok" | "err"; text: string };
+
+/** A git move's note. When git refused over the index lock it offers to
+ *  clear a stale one (the server refuses a lock young enough that git may
+ *  still hold it), then runs `retry`, the move that hit it, when there is
+ *  one, or says to try again. */
+function GitNote({ id, note, setNote, retry }: { id: string; note: Note | null; setNote: (n: Note | null) => void; retry?: (() => void) | null }) {
+  const [busy, setBusy] = useState(false);
+  if (!note) return null;
+  const unlock = () => {
+    setBusy(true);
+    api
+      .unlock(id)
+      .then(({ cleared }) => {
+        if (retry) retry();
+        else setNote({ kind: "ok", text: `cleared ${cleared}; try again` });
+      })
+      .catch((err: unknown) => setNote({ kind: "err", text: String(err instanceof Error ? err.message : err) }))
+      .finally(() => setBusy(false));
+  };
+  return (
+    <p className={`note ${note.kind}`}>
+      {note.text}
+      {note.kind === "err" && lockedIndex(note.text) && (
+        <button type="button" className="mini note-act" disabled={busy} title="Remove the lock if it is stale" onClick={unlock}>
+          {busy ? "clearing…" : retry ? "clear lock and retry" : "clear lock"}
+        </button>
+      )}
+    </p>
   );
 }
 
@@ -2269,6 +2301,16 @@ export function RepoPanel({
       setBusy(null);
     }
   };
+  // the move a lock note retries once the lock is cleared
+  const [lastMove, setLastMove] = useState<(() => void) | null>(null);
+  const pull = () => {
+    setLastMove(() => pull);
+    void run("pull", async () => (await api.pull(id)).out);
+  };
+  const push = () => {
+    setLastMove(() => push);
+    void run("push", async () => (await api.push(id)).out);
+  };
 
   const modeClass = mode === "full" ? " surface-full" : bench ? " panel-bench" : "";
   // what the bench has to show one part at a time
@@ -2446,7 +2488,7 @@ export function RepoPanel({
               type="button"
               className="mini"
               disabled={busy !== null}
-              onClick={() => void run("pull", async () => (await api.pull(id)).out)}
+              onClick={pull}
             >
               pull
             </button>
@@ -2461,14 +2503,14 @@ export function RepoPanel({
                   ? `send ${st.ahead} commit${st.ahead === 1 ? "" : "s"} to ${st.upstream ?? "the remote"}; history marks them ↑ not pushed`
                   : undefined
               }
-              onClick={() => void run("push", async () => (await api.push(id)).out)}
+              onClick={push}
             >
               {busy === "push"
                 ? "pushing…"
                 : `push${st?.ahead ? ` ↑${st.ahead}` : ""}`}
             </button>
           </div>
-          {note && <p className={`note ${note.kind}`}>{note.text}</p>}
+          <GitNote id={id} note={note} setNote={setNote} retry={lastMove} />
 
           {access === "denied" && (
             <p className="panel-hint">

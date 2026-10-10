@@ -1269,6 +1269,10 @@ div.waiting-row {
   overflow-wrap: anywhere;
   white-space: pre-line;
 }
+.note .note-act {
+  display: block;
+  margin-top: 4px;
+}
 .waiting-err .mini {
   display: block;
   margin-top: 4px;

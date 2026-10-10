@@ -6,7 +6,7 @@ import { inboxTick } from "../inbox";
 import { qual } from "../registry";
 import { attentionItems, behindItems, canAnswer as canAnswerHere, closedIn, failedItems, idText, inboxItems, turnItems, useStore } from "../store";
 import type { Repo } from "../../../src/core/types";
-import { GLYPH, type RepoState } from "../util";
+import { GLYPH, lockedIndex, type RepoState } from "../util";
 import { ATTENTION_WORD, WAITING_PANEL, WAITING_WORD, isUnpushed, type AttentionRow, type BehindRow, type WaitingGroup } from "../waiting";
 import { InboxRow, useNow } from "./Inbox";
 import { IdLabel } from "./IdLabel";
@@ -46,10 +46,6 @@ function Group({ k, count, children }: { k: WaitingGroup; count: number; childre
 }
 
 const errText = (err: unknown) => String(err instanceof Error ? err.message : err);
-
-/** git refused over the index lock (`isLockedIndex` in core/git.ts, which
- *  the page cannot import) */
-const lockedIndex = (text: string) => /index\.lock'?: File exists/.test(text);
 
 /** a git move a row offers beside it */
 interface RowAct {
