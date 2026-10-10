@@ -1,12 +1,10 @@
 {
   "version": "1.0.0",
   "halves": [
-    "doc",
-    "visual"
+    "doc"
   ],
   "blocks": {
     "SPEC.md": "9df92ac846645b507381be97879d73058bbc9cf3ef9d47d2b0de156c6159dcf4",
-    "CLAUDE.md": "23acb0436610ac0f2cb2cb59aa095339ff1f2b6d38a87d23da33bdfac6e540fc",
-    "DESIGN.md": "f19b76ee7f77046a3137ec1d949f0a67ad47091ca52580b5b83841b569703af3"
+    "CLAUDE.md": "23acb0436610ac0f2cb2cb59aa095339ff1f2b6d38a87d23da33bdfac6e540fc"
   }
 }

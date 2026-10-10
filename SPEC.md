@@ -69,6 +69,7 @@ canopy ui ~/dev
 - 2026-09-21: Shells are tmux sessions on canopy's own server, because a shell must outlive a reload and a canopy restart.
 - 2026-09-22: Headless shared backend in containers, with shells in a container of their own, because a redeploy must not kill open shells.
 - 2026-09-24: Peers sync over git only, pull-only and fast-forward only, because work should move between machines through commits, never file copies.
+- 2026-10-09: canopy takes only the doc half of the shared spec and keeps its design system in `ui/src/styles.css`, because its own palettes and tokens predate the shared DESIGN.md and differ from it.
 
 ## Out of scope
 
