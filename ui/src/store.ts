@@ -3951,15 +3951,15 @@ export function behindItems(s: CanopyState): BehindRow[] {
   return behindOut;
 }
 
-let failedIn: { runs: Record<string, Run>; flowRuns: Record<string, string>; tasks: TaskInfo[] } | null = null;
+let failedIn: { runs: Record<string, Run>; flowRuns: Record<string, string>; tasks: TaskInfo[]; rangers: Record<string, RangerInfo> } | null = null;
 let failedOut: FailedRow[] = [];
 
-/** The runs and tasks that failed, newest first, for the same panel. */
+/** The runs, tasks and rangers that failed, newest first, for the same panel. */
 export function failedItems(s: CanopyState): FailedRow[] {
   const f = failedIn;
-  if (f && f.runs === s.runs && f.flowRuns === s.flowRuns && f.tasks === s.taskAll) return failedOut;
-  failedIn = { runs: s.runs, flowRuns: s.flowRuns, tasks: s.taskAll };
-  failedOut = failedRows(Object.values(s.runs), s.flowRuns, s.taskAll);
+  if (f && f.runs === s.runs && f.flowRuns === s.flowRuns && f.tasks === s.taskAll && f.rangers === s.rangers) return failedOut;
+  failedIn = { runs: s.runs, flowRuns: s.flowRuns, tasks: s.taskAll, rangers: s.rangers };
+  failedOut = failedRows(Object.values(s.runs), s.flowRuns, s.taskAll, Object.entries(s.rangers));
   return failedOut;
 }
 

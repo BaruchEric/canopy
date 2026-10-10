@@ -10,6 +10,7 @@ const info = (over: Partial<RangerInfo> = {}): RangerInfo => ({
   handle: "ranger",
   backend: "mini",
   root: "/home/eric/dev",
+  home: "/config/ranger/home",
   session: "35adf21d-777e-428a-aec9-639404e23258",
   transcript: null,
   fails: 0,

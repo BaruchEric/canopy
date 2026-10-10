@@ -170,6 +170,7 @@ export function WaitingBody({ hidden }: { hidden?: boolean }) {
   const [repos, unpushed] = useMemo(() => [attention.filter((r) => !isUnpushed(r)), attention.filter(isUnpushed)], [attention]);
   const openPanel = useStore((s) => s.openPanel);
   const showRun = useStore((s) => s.showRun);
+  const openRanger = useStore((s) => s.openRanger);
   const showAgents = useStore((s) => s.showAgents);
   const registry = useStore((s) => s.registry);
   const shown = useStore(useShallow((s) => s.backendOrder));
@@ -267,14 +268,14 @@ export function WaitingBody({ hidden }: { hidden?: boolean }) {
                 <button
                   type="button"
                   className="waiting-row s-error"
-                  title={f.kind === "run" ? "Open the run" : "Open its panel's tasks"}
-                  onClick={() => (f.kind === "run" ? showRun(f.id) : openTasks(f.repoId))}
+                  title={f.kind === "run" ? "Open the run" : f.kind === "ranger" ? "Open its session: what it printed last" : "Open its panel's tasks"}
+                  onClick={() => (f.kind === "run" ? showRun(f.id) : f.kind === "ranger" ? openRanger(f.id) : openTasks(f.repoId))}
                 >
                   <span className="glyph" aria-hidden="true">
                     {GLYPH.error}
                   </span>
-                  <span className="waiting-name">{repoName(f.repoId)}</span>
-                  <span className="waiting-state">{f.kind}</span>
+                  <span className="waiting-name">{f.kind === "ranger" ? f.name : repoName(f.repoId)}</span>
+                  <span className="waiting-state">{f.kind === "ranger" ? "ranger gave up" : f.kind}</span>
                   <span className="waiting-detail">{f.what}</span>
                   <span className="inbox-left dim">{agoMs(f.at, now)}</span>
                 </button>

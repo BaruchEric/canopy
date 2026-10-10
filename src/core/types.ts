@@ -2439,7 +2439,14 @@ export interface RangerSettings {
   /** whether it owns the Telegram bot through the channels plugin */
   telegram: boolean;
   fresh: RangerFresh;
+  /** where its session runs: a folder of its own under canopy's config
+   *  (`own`), with the scan root added through `--add-dir`, or the scan root
+   *  itself (`root`). Claude's trust in a folder covers every folder under
+   *  it, so `root` means trusting every project there. */
+  home: RangerHome;
 }
+
+export type RangerHome = "own" | "root";
 
 /**
  * What the ranger is doing, as the hub sees it:
@@ -2489,8 +2496,10 @@ export interface RangerInfo {
   handle: string;
   /** this backend's name */
   backend: string;
-  /** the folder it runs in, the scan root */
+  /** the scan root, every project it sees */
   root: string;
+  /** the folder its session runs in: its own, or the scan root */
+  home: string;
   /** the Claude conversation it is on */
   session: string | null;
   /** that conversation's transcript, once it has one */

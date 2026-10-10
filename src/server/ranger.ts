@@ -87,6 +87,8 @@ interface RangerRecord {
   sessionAt?: number;
   /** the conversation before it, which the brief points back to */
   previous?: string | null;
+  /** the folder the conversation runs in; a conversation is filed under it */
+  home?: string;
   startedAt?: number;
   exitedAt?: number;
   exitCode?: number | null;
@@ -220,6 +222,7 @@ function parseRecord(v: unknown): RangerRecord {
     ...num("exitedAt"),
     ...num("fails"),
     ...(typeof r["previous"] === "string" ? { previous: r["previous"] } : {}),
+    ...(typeof r["home"] === "string" ? { home: r["home"] } : {}),
     ...(typeof r["exitCode"] === "number" || r["exitCode"] === null ? { exitCode: r["exitCode"] as number | null } : {}),
     ...(r["gaveUp"] === true ? { gaveUp: true } : {}),
   };
@@ -338,8 +341,13 @@ export class RangerHub {
     this.contested = await (this.deps.telegramContested?.() ?? telegramInUserSettings(this.home)).catch(() => false);
   }
 
-  private transcript(session: string | null): string | null {
-    return session ? join(this.home, "projects", projectFolder(this.deps.root), `${session}.jsonl`) : null;
+  /** the folder its session runs in: its own under the config dir, or the scan root */
+  private homeDir(s: RangerSettings = this.settings): string {
+    return s.home === "root" ? this.deps.root : join(this.dir, "home");
+  }
+
+  private transcript(session: string | null, home: string = this.homeDir()): string | null {
+    return session ? join(this.home, "projects", projectFolder(home), `${session}.jsonl`) : null;
   }
 
   private async brief(): Promise<string> {
@@ -383,6 +391,7 @@ export class RangerHub {
       handle: rangerHandle(this.settings),
       backend: this.deps.backend(),
       root: this.deps.root,
+      home: this.homeDir(),
       session: this.rec.session,
       transcript: this.bytes !== undefined ? transcript : null,
       ...(this.bytes !== undefined ? { transcriptBytes: this.bytes } : {}),
@@ -420,7 +429,7 @@ export class RangerHub {
   }
 
   private holdInfo(startedAt: number): TermInfo {
-    return { id: this.termId, repoId: "", path: this.deps.root, place: "strip", attached: false, viewers: [], startedAt, ranger: true, handle: rangerHandle(this.settings) };
+    return { id: this.termId, repoId: "", path: this.homeDir(), place: "strip", attached: false, viewers: [], startedAt, ranger: true, handle: rangerHandle(this.settings) };
   }
 
   /* ---------- the supervisor ---------- */
@@ -476,7 +485,15 @@ export class RangerHub {
       const text = await this.deps.tmux.text(this.termId);
       this.trust = text !== null && TRUST_RE.test(text);
     } else this.trust = false;
-    if (this.trust) this.setState("trust", `Claude asks whether to trust ${this.deps.root}; open the ranger's shell once and accept`);
+    if (this.trust) {
+      const home = this.homeDir();
+      this.setState(
+        "trust",
+        this.settings.home === "root"
+          ? `Claude asks whether to trust ${home}, which also trusts every folder under it; open the ranger's shell and accept, or give it a folder of its own`
+          : `Claude asks once whether to trust ${home}, the ranger's own folder; open its shell and accept`,
+      );
+    }
     else this.setState("running");
     if (this.rec.fails && this.rec.startedAt !== undefined && this.now() - this.rec.startedAt > this.t.uptime) {
       delete this.rec.fails;
@@ -587,19 +604,25 @@ export class RangerHub {
     const now = this.now();
     this.launchedAt = now;
     const exists = (file: string | null) => (file ? stat(file).then(() => true, () => false) : Promise.resolve(false));
-    if (!this.rec.session || kind === "fresh") {
-      const old = this.transcript(this.rec.session);
+    const home = this.homeDir();
+    await mkdir(home, { recursive: true });
+    // a conversation lives under the folder it ran in, so a move to another folder starts a new one
+    const moved = this.rec.home !== undefined && this.rec.home !== home;
+    if (!this.rec.session || kind === "fresh" || moved) {
+      const old = this.transcript(this.rec.session, this.rec.home ?? home);
       if (await exists(old)) this.rec.previous = old;
       this.rec.session = randomUUID();
       this.rec.sessionAt = now;
       this.bytes = undefined;
     }
+    this.rec.home = home;
     // a conversation that never got a message has no file, and --resume finds nothing
     const first = !(await exists(this.transcript(this.rec.session)));
     const brief = rangerBrief(await this.brief(), {
       backend: this.deps.backend(),
       handle,
       root: this.deps.root,
+      home,
       previous: this.rec.previous ?? null,
       telegram: this.settings.telegram,
     });
@@ -609,11 +632,14 @@ export class RangerHub {
     const briefFile = join(this.dir, "brief.md");
     await writeFile(briefFile, brief + "\n", { mode: 0o600 });
     const hello = rangerHello(!first ? "resume" : this.rec.previous ? "fresh" : "new");
-    const argv = rangerArgv({ settings: agent, session: this.rec.session, first, briefFile, telegram: this.settings.telegram, hello });
-    const command = [this.deps.shell, "-lic", `cd -- ${shellQuote(this.deps.root)} && exec ${argv.map(shellQuote).join(" ")}`];
+    const own = home !== this.deps.root;
+    const argv = rangerArgv({ settings: agent, session: this.rec.session, first, briefFile, telegram: this.settings.telegram, hello, ...(own ? { addDir: this.deps.root } : {}) });
+    const command = [this.deps.shell, "-lic", `cd -- ${shellQuote(home)} && exec ${argv.map(shellQuote).join(" ")}`];
     this.setState("starting");
     this.tell();
-    await tmux.start(this.termId, this.deps.root, command, { ...this.deps.env(this.termId), TAILCHAN_AS: handle });
+    // in a folder of its own, the scan root's CLAUDE.md comes in through --add-dir only with this
+    const env = { ...this.deps.env(this.termId), TAILCHAN_AS: handle, ...(own ? { CLAUDE_CODE_ADDITIONAL_DIRECTORIES_CLAUDE_MD: "1" } : {}) };
+    await tmux.start(this.termId, home, command, env);
     this.rec.startedAt = now;
     delete this.rec.exitedAt;
     delete this.rec.exitCode;
@@ -718,7 +744,7 @@ export class RangerHub {
     await this.saveSettings(next);
     this.settings = next;
     await this.readTelegram();
-    const reshaped = was.profile !== next.profile || was.handle !== next.handle || was.telegram !== next.telegram;
+    const reshaped = was.profile !== next.profile || was.handle !== next.handle || was.telegram !== next.telegram || was.home !== next.home;
     if (!next.on) {
       await this.end();
       this.setState("off");

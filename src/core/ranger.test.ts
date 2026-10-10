@@ -22,13 +22,16 @@ const at = (iso: string): number => new Date(`${iso}Z`).getTime();
 describe("settings", () => {
   test("normalize keeps what reads and defaults the rest", () => {
     expect(normalizeRanger(undefined)).toEqual(RANGER_DEFAULTS);
-    expect(normalizeRanger({ on: true, profile: "review", handle: "ranger-mac", telegram: true, fresh: { daily: null, maxMb: 40 } })).toEqual({
+    expect(normalizeRanger({ on: true, profile: "review", handle: "ranger-mac", telegram: true, fresh: { daily: null, maxMb: 40 }, home: "root" })).toEqual({
       on: true,
       profile: "review",
       handle: "ranger-mac",
       telegram: true,
       fresh: { daily: null, maxMb: 40 },
+      home: "root",
     });
+    // a folder of its own unless root is asked for
+    expect(normalizeRanger({ home: "elsewhere" }).home).toBe("own");
     expect(normalizeRanger({ on: "yes", profile: "Bad Name", handle: "@x", fresh: { daily: "4am", maxMb: -1 } })).toEqual(RANGER_DEFAULTS);
   });
 
@@ -40,6 +43,8 @@ describe("settings", () => {
     expect(typeof patchRanger(RANGER_DEFAULTS, { handle: "Not OK" })).toBe("string");
     expect(typeof patchRanger(RANGER_DEFAULTS, { fresh: { daily: "25:00" } })).toBe("string");
     expect(typeof patchRanger(RANGER_DEFAULTS, [])).toBe("string");
+    expect(patchRanger(RANGER_DEFAULTS, { home: "root" })).toMatchObject({ home: "root" });
+    expect(typeof patchRanger(RANGER_DEFAULTS, { home: "/tmp" })).toBe("string");
     expect(rangerHandle(RANGER_DEFAULTS)).toBe("ranger");
     expect(rangerHandle({ ...RANGER_DEFAULTS, handle: "ranger-mac" })).toBe("ranger-mac");
   });
@@ -70,6 +75,11 @@ describe("rangerArgv", () => {
     expect(rangerHello("fresh")).toContain("brief names the last one");
   });
 
+  test("in a folder of its own, the scan root comes in ahead of --name", () => {
+    const argv = rangerArgv({ ...base, settings: { ...DEFAULT_AGENT, extra: "--add-dir /x" }, first: true, addDir: "/home/eric/dev" });
+    expect(argv.slice(1, 7)).toEqual(["--add-dir", "/x", "--add-dir", "/home/eric/dev", "--name", "ranger"]);
+  });
+
   test("extra flags lose whatever skips permissions or fights canopy's own", () => {
     expect(rangerExtra("--verbose --dangerously-skip-permissions --permission-mode bypassPermissions --resume abc -c --add-dir /x")).toEqual(["--verbose", "--add-dir", "/x"]);
     expect(rangerExtra("--permission-mode acceptEdits --permission-mode=bypassPermissions --session-id=1 --name x")).toEqual(["--permission-mode", "acceptEdits"]);
@@ -78,9 +88,10 @@ describe("rangerArgv", () => {
 });
 
 describe("rangerBrief", () => {
-  const vars = { backend: "mini", handle: "ranger", root: "/home/eric/dev", previous: null, telegram: false };
+  const vars = { backend: "mini", handle: "ranger", root: "/home/eric/dev", home: "/config/ranger/home", previous: null, telegram: false };
 
   test("fills the slots and keeps a block only when its var is set", () => {
+    expect(rangerBrief("{{home}} beside {{root}}", vars)).toBe("/config/ranger/home beside /home/eric/dev");
     const t = "You are {{handle}} on {{backend}} in {{root}}.\n\n{{#previous}}Before: {{previous}}{{/previous}}\n\n{{#telegram}}Telegram too.{{/telegram}}\n{{nope}}";
     expect(rangerBrief(t, vars)).toBe("You are ranger on mini in /home/eric/dev.\n\n{{nope}}");
     expect(rangerBrief(t, { ...vars, previous: "/t/a.jsonl", telegram: true })).toBe("You are ranger on mini in /home/eric/dev.\n\nBefore: /t/a.jsonl\n\nTelegram too.\n{{nope}}");

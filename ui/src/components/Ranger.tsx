@@ -234,6 +234,13 @@ export function RangerRow({ backend }: { backend: string }) {
           </select>
         </label>
         <label className="layout-field">
+          runs in
+          <select className="settings-input" value={s.home} onChange={(e) => save({ home: e.target.value })}>
+            <option value="own">a folder of its own</option>
+            <option value="root">the scan root</option>
+          </select>
+        </label>
+        <label className="layout-field">
           handle
           <input
             className="settings-input"
@@ -311,9 +318,11 @@ export function RangerRow({ backend }: { backend: string }) {
       </div>
       {err && <p className="settings-hint error">{err}</p>}
       <p className="settings-hint">
-        A backend setting. The ranger is one Claude Code session canopy keeps running in the scan root, restarting it when it exits and resuming
-        its conversation; a message to its handle wakes it, and so do these crons (five fields, {backend}'s local time) and the wakes it sets
-        itself. It never runs yolo, so what it is not allowed to do comes to the inbox.
+        A backend setting. The ranger is one Claude Code session canopy keeps running, restarting it when it exits and resuming its
+        conversation; a message to its handle wakes it, and so do these crons (five fields, {backend}'s local time) and the wakes it sets
+        itself. It never runs yolo, so what it is not allowed to do comes to the inbox. In a folder of its own ({info.home} now) it sees the
+        scan root through --add-dir and Claude's trust prompt covers that folder alone; in the scan root, accepting the prompt trusts every
+        project under it.
       </p>
     </section>
   );

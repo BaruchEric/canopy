@@ -250,9 +250,10 @@ Phases 1 and 2, and phase 3's Telegram switch, built in one pass. Where the buil
   - a canopy restart adopted the live session;
   - `/exit` came back with `--resume` on the same conversation;
   - turning it off ended the session.
+- **Its own folder by default (`ranger.home`).** Probed on 2026-10-10 while Eric slept: trusting a folder also trusts every folder under it. A session in a subfolder of a trusted folder skipped the dialog. Accepting the prompt for `~/dev` would therefore trust every project there, third-party clones included. The ranger now runs in `<config dir>/ranger/home` (`home: "own"`, the default), with `--add-dir <scan root>`. `CLAUDE_CODE_ADDITIONAL_DIRECTORIES_CLAUDE_MD=1` loads the root's `CLAUDE.md` (probed: without it the added folder's CLAUDE.md was not in context, with it it was). Accepting the trust prompt for its own folder did not trust the added one, and the added one raised no prompt. `home: "root"` is the design as first written, and Settings says what trusting it means. Moving between the two starts a new conversation, since Claude files a conversation under the folder it ran in.
+- **"Waiting on you" has the gave-up row.** It sits in the failed group and opens its session.
 - **A refusal is not a death.** No claude, a codex profile and a taken handle set the state and try again after 30 s, without spending the deaths that lead to `gave-up`.
 - **Not done yet:**
-  - the gave-up row in "waiting on you" (the chip goes rust instead, and Eric gets a DM when the notify switch is on);
   - turning the telegram plugin off in the mini's user settings (a deploy step, see below);
   - an inbound Telegram message (P4);
   - a long idle followed by a wake (P2, long form);
@@ -262,7 +263,7 @@ Deploy steps on the mini, in order:
 
 1. `bun run redeploy`.
 2. Turn the ranger on in Settings.
-3. Open it from the chip once and accept the trust prompt for `~/dev`.
+3. Open it from the chip once and accept the trust prompt for its own folder.
 4. DM `@ranger` from the phone to check the wake.
 5. For Telegram:
    - set `enabledPlugins["telegram@claude-plugins-official"]` to false in `~/.claude/settings.json`;

@@ -6,7 +6,7 @@
  * failed. Tested in waiting.test.ts.
  */
 
-import type { AgentCard, Ask, Repo, Run, TaskInfo } from "../../src/core/types";
+import type { AgentCard, Ask, RangerInfo, Repo, Run, TaskInfo } from "../../src/core/types";
 import { cardName, repoOfCard, whereWord } from "./agentcards";
 import { stateOf } from "./util";
 import { isCliPanel } from "./cli";
@@ -96,12 +96,19 @@ export function attentionRepos(repos: readonly Repo[]): AttentionRow[] {
 /** something that failed and is still there to look at */
 export type FailedRow =
   | { kind: "run"; id: string; repoId: string; what: string; at: number }
-  | { kind: "task"; id: string; repoId: string; what: string; at: number };
+  | { kind: "task"; id: string; repoId: string; what: string; at: number }
+  /** a backend's ranger that gave up restarting; `id` is the backend */
+  | { kind: "ranger"; id: string; repoId: string; name: string; what: string; at: number };
 
 /** The runs that failed and are not dismissed, less a flow's own steps
- *  (the flow speaks for them), and the tasks that failed or gave up
- *  restarting, newest first. */
-export function failedRows(runs: readonly Run[], flowRuns: Readonly<Record<string, string>>, tasks: readonly TaskInfo[]): FailedRow[] {
+ *  (the flow speaks for them), the tasks that failed or gave up
+ *  restarting, and each backend's ranger that gave up, newest first. */
+export function failedRows(
+  runs: readonly Run[],
+  flowRuns: Readonly<Record<string, string>>,
+  tasks: readonly TaskInfo[],
+  rangers: readonly (readonly [string, RangerInfo])[] = [],
+): FailedRow[] {
   const out: FailedRow[] = [];
   for (const r of runs) {
     if (r.status !== "failed" || flowRuns[r.id] !== undefined) continue;
@@ -110,6 +117,10 @@ export function failedRows(runs: readonly Run[], flowRuns: Readonly<Record<strin
   for (const t of tasks) {
     if (t.status !== "failed" && t.status !== "gave-up") continue;
     out.push({ kind: "task", id: `${t.repoId}\u0000${t.name}`, repoId: t.repoId, what: t.name, at: t.exitedAt ?? t.startedAt ?? 0 });
+  }
+  for (const [backend, r] of rangers) {
+    if (!r.on || r.state !== "gave-up") continue;
+    out.push({ kind: "ranger", id: backend, repoId: "", name: `@${r.handle}`, what: r.why ?? "it exited too often", at: r.lastExit?.at ?? 0 });
   }
   return out.sort((a, b) => b.at - a.at);
 }

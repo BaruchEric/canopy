@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import type { AgentCard, Ask, Repo, RepoStatus, Run, RunStep, TaskInfo } from "../../src/core/types";
+import type { AgentCard, Ask, RangerInfo, Repo, RepoStatus, Run, RunStep, TaskInfo } from "../../src/core/types";
 import { WAITING_PANEL, attentionRepos, behindRepos, failedRows, isUnpushed, isWaitingPanel, lastWords, turnRows } from "./waiting";
 
 function repo(id: string, status: Partial<RepoStatus> | null, error?: string): Repo {
@@ -100,6 +100,17 @@ describe("failedRows", () => {
       ["run", "ask", 205],
       ["task", "watch", 50],
     ]);
+  });
+
+  test("a ranger that gave up, and none that runs or is off", () => {
+    const ranger = (state: RangerInfo["state"], on = true): RangerInfo =>
+      ({ on, state, handle: "ranger", why: "it exited 5 times in a row; restart it by hand", lastExit: { at: 400, code: 1 } }) as RangerInfo;
+    const rows = failedRows([], {}, [task("dev", "failed", 300)], [["mini", ranger("gave-up")], ["mac", ranger("running")], ["old", ranger("gave-up", false)]]);
+    expect(rows.map((r) => [r.kind, r.id, r.at])).toEqual([
+      ["ranger", "mini", 400],
+      ["task", "r\u0000dev", 300],
+    ]);
+    expect(rows[0]).toMatchObject({ name: "@ranger", what: "it exited 5 times in a row; restart it by hand" });
   });
 });
 

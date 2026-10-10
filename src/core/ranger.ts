@@ -11,7 +11,7 @@ import { CLOCK_RE, isCron, lastClock, nextFire, parseCron, parseWhen } from "./c
 import { agentArgs, splitArgs } from "./harness";
 import { isProfileName } from "./route";
 import { HANDLE_RE } from "./tailchan";
-import type { AgentSettings, AgentState, RangerFresh, RangerSettings, RangerWake, RangerWakeBy } from "./types";
+import type { AgentSettings, AgentState, RangerFresh, RangerHome, RangerSettings, RangerWake, RangerWakeBy } from "./types";
 
 export const RANGER_HANDLE = "ranger";
 
@@ -20,7 +20,7 @@ export const RANGER_NAME = "ranger";
 
 export const RANGER_FRESH: RangerFresh = { daily: "04:00", maxMb: 25 };
 
-export const RANGER_DEFAULTS: RangerSettings = { on: false, profile: null, handle: null, telegram: false, fresh: { ...RANGER_FRESH } };
+export const RANGER_DEFAULTS: RangerSettings = { on: false, profile: null, handle: null, telegram: false, fresh: { ...RANGER_FRESH }, home: "own" };
 
 /** the plugin the ranger owns the Telegram bot through */
 export const TELEGRAM_PLUGIN = "telegram@claude-plugins-official";
@@ -48,8 +48,11 @@ export function normalizeRanger(v: unknown): RangerSettings {
     handle: typeof r["handle"] === "string" && HANDLE_RE.test(r["handle"]) ? r["handle"] : null,
     telegram: r["telegram"] === true,
     fresh: normalizeFresh(r["fresh"]),
+    home: r["home"] === "root" ? "root" : "own",
   };
 }
+
+const isHome = (v: unknown): v is RangerHome => v === "own" || v === "root";
 
 /**
  * A change to the settings as a request sends it, applied over `base`. Only
@@ -76,6 +79,10 @@ export function patchRanger(base: RangerSettings, body: unknown): RangerSettings
   if ("telegram" in b) {
     if (typeof b["telegram"] !== "boolean") return "telegram is true or false";
     out.telegram = b["telegram"];
+  }
+  if ("home" in b) {
+    if (!isHome(b["home"])) return "home is own (a folder of its own) or root (the scan root)";
+    out.home = b["home"];
   }
   if ("fresh" in b) {
     const f = b["fresh"];
@@ -165,6 +172,8 @@ export interface RangerLaunch {
   telegram: boolean;
   /** the opening prompt, last on the line (`rangerHello`) */
   hello?: string;
+  /** a folder beside its own to work in (`--add-dir`): the scan root, when it runs in a folder of its own */
+  addDir?: string;
 }
 
 /**
@@ -191,6 +200,8 @@ export function rangerArgv(l: RangerLaunch): string[] {
     "claude",
     ...flags,
     ...rangerExtra(l.settings.extra),
+    // ahead of --name: claude's --add-dir takes every plain word after it
+    ...(l.addDir ? ["--add-dir", l.addDir] : []),
     "--name",
     RANGER_NAME,
     "--append-system-prompt-file",
@@ -206,6 +217,8 @@ export interface BriefVars {
   backend: string;
   handle: string;
   root: string;
+  /** the folder it runs in */
+  home: string;
   /** the previous conversation's transcript, after a fresh start */
   previous: string | null;
   telegram: boolean;
@@ -220,7 +233,7 @@ export function rangerBrief(template: string, v: BriefVars): string {
   const blocks = template.replace(/\{\{#(previous|telegram)\}\}([\s\S]*?)\{\{\/\1\}\}/g, (_m, name: string, body: string) =>
     (name === "previous" ? v.previous : v.telegram) ? body : "",
   );
-  const vals: Record<string, string> = { backend: v.backend, handle: v.handle, root: v.root, previous: v.previous ?? "" };
+  const vals: Record<string, string> = { backend: v.backend, handle: v.handle, root: v.root, home: v.home, previous: v.previous ?? "" };
   return blocks
     .replace(/\{\{(\w+)\}\}/g, (m, name: string) => vals[name] ?? m)
     .replace(/\n{3,}/g, "\n\n")

@@ -70,7 +70,8 @@ let agent: AgentSettings;
 
 const home = () => join(scratch, "claude");
 const dir = () => join(scratch, "config", "ranger");
-const transcriptOf = (session: string) => join(home(), "projects", projectFolder(ROOT), `${session}.jsonl`);
+const own = () => join(dir(), "home");
+const transcriptOf = (session: string, folder = own()) => join(home(), "projects", projectFolder(folder), `${session}.jsonl`);
 
 async function until(pred: () => boolean | Promise<boolean>, what: string, ms = 5_000): Promise<void> {
   const start = Date.now();
@@ -105,7 +106,7 @@ function hub(over: Partial<RangerHubDeps> = {}): RangerHub {
     },
     dir: dir(),
     claudeHome: home(),
-    brief: async () => "You are {{handle}} on {{backend}} in {{root}}.{{#previous}} Before: {{previous}}{{/previous}}",
+    brief: async () => "You are {{handle}} on {{backend}} in {{home}} over {{root}}.{{#previous}} Before: {{previous}}{{/previous}}",
     telegramContested: async () => false,
     loadSettings: async () => saved,
     saveSettings: async (s) => {
@@ -165,16 +166,16 @@ describe("starting and keeping it", () => {
     expect(fake.starts).toHaveLength(1);
     const line = fake.line();
     expect(fake.starts[0]?.command.slice(0, 2)).toEqual(["/bin/bash", "-lic"]);
-    expect(line).toStartWith(`cd -- '${ROOT}' && exec 'claude' '--model' 'opus'`);
+    expect(line).toStartWith(`cd -- '${own()}' && exec 'claude' '--model' 'opus' '--add-dir' '${ROOT}' '--name' 'ranger'`);
     expect(line).toContain("'--session-id'");
     expect(line).toContain("'--append-system-prompt-file'");
     expect(line).toContain("'[canopy] this is your first conversation.");
     expect(line).not.toContain("dangerously");
-    expect(fake.starts[0]?.env).toMatchObject({ TAILCHAN_AS: "ranger", CANOPY_TERM: TERM, CANOPY_BACKEND: BACKEND });
+    expect(fake.starts[0]?.env).toMatchObject({ TAILCHAN_AS: "ranger", CANOPY_TERM: TERM, CANOPY_BACKEND: BACKEND, CLAUDE_CODE_ADDITIONAL_DIRECTORIES_CLAUDE_MD: "1" });
     expect(fake.starts[0]?.env["CANOPY_REPO"]).toBeUndefined();
-    expect(await readFile(join(dir(), "brief.md"), "utf8")).toBe(`You are ranger on mini in ${ROOT}.\n`);
+    expect(await readFile(join(dir(), "brief.md"), "utf8")).toBe(`You are ranger on mini in ${own()} over ${ROOT}.\n`);
     expect((await record()).session).toBe(sessionIn(line));
-    expect(held.at(-1)).toMatchObject({ id: TERM, ranger: true, repoId: "", path: ROOT, handle: "ranger" });
+    expect(held.at(-1)).toMatchObject({ id: TERM, ranger: true, repoId: "", path: own(), handle: "ranger" });
     expect(events.at(-1)?.state).toBe("running");
   });
 
@@ -184,7 +185,7 @@ describe("starting and keeping it", () => {
     await h.start();
     await until(() => fake.starts.length === 1, "the first start");
     const session = sessionIn(fake.line());
-    await mkdir(join(home(), "projects", projectFolder(ROOT)), { recursive: true });
+    await mkdir(join(home(), "projects", projectFolder(own())), { recursive: true });
     await writeFile(transcriptOf(session), "{}\n");
     // /exit is a clean 0 and still a restart
     fake.die(0);
@@ -274,7 +275,7 @@ describe("starting and keeping it", () => {
     await h.start();
     await until(() => fake.starts.length === 1, "the first start");
     const old = sessionIn(fake.line());
-    await mkdir(join(home(), "projects", projectFolder(ROOT)), { recursive: true });
+    await mkdir(join(home(), "projects", projectFolder(own())), { recursive: true });
     await writeFile(transcriptOf(old), "{}\n");
     await call(h, "POST", "/api/ranger/fresh");
     expect(fake.starts).toHaveLength(2);
@@ -284,6 +285,33 @@ describe("starting and keeping it", () => {
     expect(fake.line()).toContain("fresh conversation; your brief names the last one");
     expect((await record()).previous).toBe(transcriptOf(old));
     expect(await readFile(join(dir(), "brief.md"), "utf8")).toContain(`Before: ${transcriptOf(old)}`);
+  });
+});
+
+describe("its folder", () => {
+  test("the scan root itself: no --add-dir, and moving there starts a new conversation", async () => {
+    saved.on = true;
+    const h = hub();
+    await h.start();
+    await until(() => fake.starts.length === 1, "the first start");
+    const first = sessionIn(fake.line());
+    expect(h.info().home).toBe(own());
+    await call(h, "POST", "/api/ranger", { home: "root" });
+    expect(fake.starts).toHaveLength(2);
+    expect(fake.line()).toStartWith(`cd -- '${ROOT}' && exec 'claude' '--model' 'opus' '--name'`);
+    expect(fake.line()).not.toContain("--add-dir");
+    expect(fake.starts[1]?.env["CLAUDE_CODE_ADDITIONAL_DIRECTORIES_CLAUDE_MD"]).toBeUndefined();
+    expect(sessionIn(fake.line())).not.toBe(first);
+    expect(h.info().home).toBe(ROOT);
+  });
+
+  test("the trust prompt says what trusting the scan root means", async () => {
+    fake.screen = "   Yes, I trust this folder\n";
+    saved = { ...saved, on: true, home: "root" };
+    const h = hub();
+    await h.start();
+    await until(() => h.info().state === "trust", "trust");
+    expect(h.info().why).toContain("also trusts every folder under it");
   });
 });
 
