@@ -261,8 +261,9 @@ Phases 1 and 2, and phase 3's Telegram switch, built in one pass. Where the buil
   - Its card is `@ranger` with canopy's UUID, and its plugin holds the bot.
   - Two redeploys left it on the same process and conversation.
   - A DM from another agent's handle woke it. Per its brief, it asked Eric on tailchan before answering.
+- **P4 done, live.** At 03:07 Eric answered on Telegram. The message reached the ranger's session through the channels plugin (`← telegram · EricBaruch: Yes`). Its previous conversation had been replaced minutes before, but it read back through the transcript its brief names and matched the yes to the question it had asked there. It then replied on tailchan, told Eric on Telegram through the plugin's reply tool how it had read the answer, and saved a memory note. It answered the test question (`_control/`) from the workspace CLAUDE.md that `--add-dir` loads.
+- **A run wake, live.** A read-only ask run in canopy's repo ended, the wake fired, and the ranger fetched the run with a GET and reported its answer.
 - **Not done yet:**
-  - an inbound Telegram message (P4);
   - a long idle followed by a wake (P2, long form);
   - P5.
 

@@ -740,6 +740,12 @@ export class RangerHub {
     const next = patchRanger(this.settings, body);
     if (typeof next === "string") throw new RangerError(400, next);
     if (next.on && !this.deps.tmux) throw new RangerError(503, "the ranger needs tmux on this backend");
+    // refused here, not at the next start: a running ranger would keep its
+    // old claude while the settings named something it cannot run
+    if (next.profile !== this.settings.profile) {
+      const agent = await this.deps.settings(next.profile);
+      if (agent.harness !== "claude") throw new RangerError(400, `the ranger runs Claude Code; ${next.profile ? `the profile ${next.profile}` : "the shell route"} is ${agent.harness}`);
+    }
     const was = this.settings;
     await this.saveSettings(next);
     this.settings = next;

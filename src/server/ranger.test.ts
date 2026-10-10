@@ -257,6 +257,18 @@ describe("starting and keeping it", () => {
     expect((await record()).fails).toBeUndefined();
   });
 
+  test("a profile it cannot run is refused before anything is saved", async () => {
+    saved.on = true;
+    const h = hub({ settings: async (profile) => (profile === "codexy" ? { ...DEFAULT_AGENT, harness: "codex" } : agent) });
+    await h.start();
+    await until(() => fake.starts.length === 1, "the first start");
+    const { status, data } = await call(h, "POST", "/api/ranger", { profile: "codexy" });
+    expect(status).toBe(400);
+    expect((data as { error: string }).error).toContain("codex");
+    expect(saved.profile).toBeNull();
+    expect(fake.starts).toHaveLength(1);
+  });
+
   test("a change to what it runs as restarts a running one", async () => {
     saved.on = true;
     const h = hub();
