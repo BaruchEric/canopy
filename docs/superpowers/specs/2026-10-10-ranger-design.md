@@ -263,9 +263,11 @@ Phases 1 and 2, and phase 3's Telegram switch, built in one pass. Where the buil
   - A DM from another agent's handle woke it. Per its brief, it asked Eric on tailchan before answering.
 - **P4 done, live.** At 03:07 Eric answered on Telegram. The message reached the ranger's session through the channels plugin (`← telegram · EricBaruch: Yes`). Its previous conversation had been replaced minutes before, but it read back through the transcript its brief names and matched the yes to the question it had asked there. It then replied on tailchan, told Eric on Telegram through the plugin's reply tool how it had read the answer, and saved a memory note. It answered the test question (`_control/`) from the workspace CLAUDE.md that `--add-dir` loads.
 - **A run wake, live.** A read-only ask run in canopy's repo ended, the wake fired, and the ranger fetched the run with a GET and reported its answer.
+- **P2, longer form, live.** A wake 44 minutes after the ranger's last turn woke it within 13 s of delivery. Before that, a wake after 17 minutes idle and across two redeploys did the same.
+- **The daily fresh start, live, after a time zone fix.** It did not fire at 04:00: the canopy container ran on UTC. Bun takes the zone from its name, and the image's `/etc/localtime` is a link named `Etc/UTC`, so mounting the host's file changed `date` but not Bun. `TZ` now comes from `.env` (`America/Los_Angeles` on the mini; d6f4c78, documented in docs/deploy.md). The first check after that deploy started a fresh conversation at 04:20:30 local time, pointing back to the previous one. Claude Code in the shells container still stamps its turns in UTC for the same reason. Fixing it needs `TZ` on the shells service too, which recreates that container and ends every shell, so it waits for Eric.
 - **Not done yet:**
-  - a long idle followed by a wake (P2, long form);
-  - P5.
+  - P5 (a session several days long);
+  - `TZ` for the shells service.
 
 Deploy steps on the mini, in order:
 
