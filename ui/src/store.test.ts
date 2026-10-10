@@ -88,8 +88,8 @@ describe("per-repo folds", () => {
     const one = toggleIn({}, "a", "history");
     expect(sectionsFor(one, "a")).toEqual(["search", "claude", "launch", "peers", "spec", "preview", "agents"]);
     expect(sectionsFor(one, "b")).toEqual(["search", "history", "claude", "launch", "peers", "spec", "preview", "agents"]);
-    // the "waiting on you" panel starts with its unpushed repos folded
-    expect(sectionsFor({}, WAITING_PANEL)).toEqual(["unpushed"]);
+    // the "waiting on you" panel starts with its unpushed and behind repos folded
+    expect(sectionsFor({}, WAITING_PANEL)).toEqual(["unpushed", "behind"]);
     const two = toggleIn(one, "a", "changes");
     expect(closedIn({ closedSections: two }, "a", "changes")).toBe(true);
     expect(closedIn({ closedSections: two }, "b", "changes")).toBe(false);

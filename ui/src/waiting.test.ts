@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import type { AgentCard, Ask, Repo, RepoStatus, Run, RunStep, TaskInfo } from "../../src/core/types";
-import { WAITING_PANEL, attentionRepos, failedRows, isUnpushed, isWaitingPanel, lastWords, turnRows } from "./waiting";
+import { WAITING_PANEL, attentionRepos, behindRepos, failedRows, isUnpushed, isWaitingPanel, lastWords, turnRows } from "./waiting";
 
 function repo(id: string, status: Partial<RepoStatus> | null, error?: string): Repo {
   const st: RepoStatus | null = status && { branch: "main", upstream: "origin/main", ahead: 0, behind: 0, files: [], lastCommit: null, user: null, ...status };
@@ -39,6 +39,23 @@ describe("attentionRepos", () => {
     ]);
     // only the row with nothing but unpushed commits goes to the folded group
     expect(rows.filter(isUnpushed).map((r) => r.repo.id)).toEqual(["zed"]);
+  });
+});
+
+describe("behindRepos", () => {
+  test("lists clean checkouts behind their upstream, by name, and nothing with work of its own", () => {
+    const rows = behindRepos([
+      repo("zed", { behind: 1 }),
+      repo("alpha", { behind: 3 }),
+      repo("level", {}),
+      repo("diverged", { ahead: 1, behind: 2 }),
+      repo("dirty", { behind: 2, files: [file()] }),
+      repo("broken", null, "not a repo"),
+    ]);
+    expect(rows.map((r) => [r.repo.id, r.behind])).toEqual([
+      ["alpha", 3],
+      ["zed", 1],
+    ]);
   });
 });
 

@@ -28,12 +28,12 @@ export const WAITING_GLYPH = "⚑";
 
 /** the panel's foldable groups, top to bottom, under the panel's id in
  *  `closedSections` like a repo panel's sections */
-export const WAITING_GROUPS = ["turn", "inbox", "repos", "failed", "unpushed"] as const;
+export const WAITING_GROUPS = ["turn", "inbox", "repos", "failed", "unpushed", "behind"] as const;
 export type WaitingGroup = (typeof WAITING_GROUPS)[number];
 
-/** folded until the user opens them: unpushed commits wait without
- *  blocking anything, and a machine full of clones has dozens */
-export const WAITING_FOLDED: readonly WaitingGroup[] = ["unpushed"];
+/** folded until the user opens them: unpushed commits and commits to pull
+ *  wait without blocking anything, and a machine full of clones has dozens */
+export const WAITING_FOLDED: readonly WaitingGroup[] = ["unpushed", "behind"];
 
 export const WAITING_WORD: Record<WaitingGroup, string> = {
   turn: "your turn",
@@ -41,6 +41,7 @@ export const WAITING_WORD: Record<WaitingGroup, string> = {
   repos: "repos",
   failed: "failed",
   unpushed: "unpushed",
+  behind: "behind",
 };
 
 /** the states that need you, the most pressing first */
@@ -115,6 +116,25 @@ export function failedRows(runs: readonly Run[], flowRuns: Readonly<Record<strin
 
 /** a row that holds unpushed commits and nothing more pressing */
 export const isUnpushed = (row: Pick<AttentionRow, "state">): boolean => row.state === "ahead";
+
+/** a clean checkout its upstream has moved past */
+export interface BehindRow {
+  repo: Repo;
+  behind: number;
+}
+
+/** The checkouts with nothing of their own to lose and commits to pull, by
+ *  name: no changes, nothing unpushed, no error, behind their upstream. One
+ *  with work of its own is already a row above, where a pull is a choice to
+ *  make in its panel, not a click. */
+export function behindRepos(repos: readonly Repo[]): BehindRow[] {
+  const rows: BehindRow[] = [];
+  for (const repo of repos) {
+    const behind = repo.status?.behind ?? 0;
+    if (behind > 0 && stateOf(repo) === "clean") rows.push({ repo, behind });
+  }
+  return rows.sort((a, b) => a.repo.name.localeCompare(b.repo.name) || a.repo.id.localeCompare(b.repo.id));
+}
 
 /** The last paragraph the agent wrote in a run, on one line and without
  *  markdown's emphasis: where a chat hands over, it usually says what it

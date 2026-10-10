@@ -56,7 +56,21 @@ import { cleanKey, keyTestOf, readAnswerKey, writeAnswerKey, type KeyTest } from
 import { listedTask } from "../../src/core/tasks";
 import { startsDev } from "./tasks";
 import { CLI_KEEP, type CliEntry, type SproutDraft } from "./cli";
-import { WAITING_FOLDED, WAITING_GROUPS, attentionRepos, failedRows, isReservedPanel, isUnpushed, isWaitingPanel, turnRows, type AttentionRow, type FailedRow, type TurnRow } from "./waiting";
+import {
+  WAITING_FOLDED,
+  WAITING_GROUPS,
+  attentionRepos,
+  behindRepos,
+  failedRows,
+  isReservedPanel,
+  isUnpushed,
+  isWaitingPanel,
+  turnRows,
+  type AttentionRow,
+  type BehindRow,
+  type FailedRow,
+  type TurnRow,
+} from "./waiting";
 import { putScreen, screenNow, slotsNow, withScreen, writesFlat } from "./screens";
 import {
   DEFAULT_LAUNCH,
@@ -3840,6 +3854,19 @@ export function attentionItems(s: CanopyState): AttentionRow[] {
   attentionIn = { repos: s.repos, settings: s.settings, ws: s.activeWs, workspaces: s.workspaces };
   attentionOut = attentionRepos(scopedRepos(s));
   return attentionOut;
+}
+
+let behindIn: { repos: Repo[]; settings: Settings; ws: string | null; workspaces: Workspace[] } | null = null;
+let behindOut: BehindRow[] = [];
+
+/** The clean repos in scope behind their upstream, for the panel's folded
+ *  "behind" group, which the panel's count leaves out as it does unpushed. */
+export function behindItems(s: CanopyState): BehindRow[] {
+  const b = behindIn;
+  if (b && b.repos === s.repos && b.settings === s.settings && b.ws === s.activeWs && b.workspaces === s.workspaces) return behindOut;
+  behindIn = { repos: s.repos, settings: s.settings, ws: s.activeWs, workspaces: s.workspaces };
+  behindOut = behindRepos(scopedRepos(s));
+  return behindOut;
 }
 
 let failedIn: { runs: Record<string, Run>; flowRuns: Record<string, string>; tasks: TaskInfo[] } | null = null;
