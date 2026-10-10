@@ -1,16 +1,18 @@
 /**
- * Moving a shell's agent session, the source half: the plan, stopping a
+ * Moving a shell's agent session. The source half: the plan, stopping a
  * stub agent in a real tmux shell, the snapshot, the transcript, the
- * clean-up and the undo. A perl `claude` stub reads lines until /exit, so
+ * clean-up and the undo. The target half: the check and the load, with a
+ * clone standing in for the source machine. A perl `claude` stub reads lines until /exit, so
  * tmux sees an agent the way it sees the real one (by its script name).
  */
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
+import { existsSync } from "node:fs";
 import { chmod, mkdir, mkdtemp, readFile, realpath, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { projectFolder } from "../core/sessions";
 import { killServer, tmuxBase } from "../core/tmux";
-import type { MoveOut, MovePlan } from "../core/types";
+import type { MoveCheck, MoveOut, MovePlan } from "../core/types";
 import { startServer } from "./index";
 
 const S = "0f5e2c1a-1111-4222-8333-444455556666";
@@ -223,5 +225,135 @@ describe("the source half of a move", () => {
     const r = await fetch(url("/api/terms/move/plan?term=00000000000000000000000000000000"));
     expect(r.status).toBe(404);
     expect(((await r.json()) as { error: string }).error).toMatch(/no such shell/);
+  });
+});
+
+describe("the target half of a move", () => {
+  const SRC = "src";
+  // not S: the source half left a different conversation under S at root/app
+  const T = "0f5e2c1a-2222-4222-8333-444455556666";
+  let other = "";
+  let before: string | undefined;
+  beforeAll(async () => {
+    other = join(scratch, "other");
+    await mkdir(other, { recursive: true });
+    await Bun.$`git clone -q ${join(root, "app")} ${join(other, "app")}`.quiet();
+    await git(join(other, "app"), "config", "user.email", "t@t");
+    await git(join(other, "app"), "config", "user.name", "t");
+    before = process.env["CANOPY_PEERS_JSON"];
+    process.env["CANOPY_PEERS_JSON"] = JSON.stringify({ self: "mini", peerSync: "on", seed: [], peers: [{ name: SRC, alias: null, root: other, role: "git" }] });
+  });
+  afterAll(() => {
+    if (before === undefined) delete process.env["CANOPY_PEERS_JSON"];
+    else process.env["CANOPY_PEERS_JSON"] = before;
+  });
+
+  /** the source's half done by hand: a change, its snapshot, and its transcript */
+  async function sourceOut(dirty: boolean): Promise<{ out: MoveOut; text: string }> {
+    const src = join(other, "app");
+    if (dirty) await writeFile(join(src, "moved.txt"), "carried\n");
+    const { snapshotWip } = await import("../core/peersync");
+    await snapshotWip(src, SRC, false);
+    const wip = dirty ? (await git(src, "rev-parse", "refs/wip/main")).trim() : null;
+    const head = (await git(src, "rev-parse", "HEAD")).trim();
+    const text = `${JSON.stringify({ type: "user", cwd: src, message: { content: "carry on" } })}\n`;
+    return { out: { session: T, harness: "claude", path: src, branch: "main", head, name: `${T}.jsonl`, wip }, text };
+  }
+  const check = (body: Record<string, unknown>) => post("/api/repos/movecheck?id=app", body);
+  const load = (out: MoveOut, text: string, term: string) => {
+    const form = new FormData();
+    form.set("meta", JSON.stringify({ ...out, from: SRC, term, place: "panel", cols: 80, rows: 24 }));
+    form.set("transcript", new Blob([text]), "t.jsonl");
+    return fetch(url("/api/repos/movein?id=app"), { method: "POST", body: form });
+  };
+
+  test("check passes on a clean target at the same commit", async () => {
+    await git(join(root, "app"), "checkout", "-q", "--", ".");
+    await git(join(root, "app"), "clean", "-fdq");
+    const { out } = await sourceOut(true);
+    const r = (await (await check({ from: SRC, branch: "main", head: out.head, transcriptBytes: 10, session: T, harness: "claude" })).json()) as MoveCheck;
+    expect(r).toMatchObject({ ok: true, path: join(root, "app"), existing: false });
+  });
+
+  test("check refuses a dirty target and another branch, by reason, changing nothing", async () => {
+    const { out } = await sourceOut(true);
+    await writeFile(join(root, "app", "local.txt"), "mine\n");
+    const dirty = (await (await check({ from: SRC, branch: "main", head: out.head, transcriptBytes: 10, session: T, harness: "claude" })).json()) as MoveCheck;
+    expect(dirty.ok).toBe(false);
+    expect(dirty.reason).toMatch(/uncommitted/);
+    await rm(join(root, "app", "local.txt"));
+    await git(join(root, "app"), "checkout", "-qb", "side");
+    try {
+      const side = (await (await check({ from: SRC, branch: "main", head: out.head, transcriptBytes: 10, session: T, harness: "claude" })).json()) as MoveCheck;
+      expect(side.ok).toBe(false);
+      expect(side.reason).toMatch(/side.*main|main.*side/);
+      expect((await git(join(root, "app"), "branch", "--show-current")).trim()).toBe("side");
+    } finally {
+      await git(join(root, "app"), "checkout", "-q", "main");
+    }
+  });
+
+  test("check refuses when the peer's copy cannot be fetched (filed elsewhere, or offline)", async () => {
+    const { out } = await sourceOut(true);
+    const kept = process.env["CANOPY_PEERS_JSON"]!;
+    process.env["CANOPY_PEERS_JSON"] = JSON.stringify({ self: "mini", peerSync: "on", seed: [], peers: [{ name: SRC, alias: null, root: join(scratch, "nowhere"), role: "git" }] });
+    try {
+      const r = (await (await check({ from: SRC, branch: "main", head: out.head, transcriptBytes: 10, session: T, harness: "claude" })).json()) as MoveCheck;
+      expect(r.ok).toBe(false);
+      expect(r.reason).toMatch(/could not be reached/);
+    } finally {
+      process.env["CANOPY_PEERS_JSON"] = kept;
+    }
+  });
+
+  test("check refuses a transcript over the cap", async () => {
+    const r = await check({ from: SRC, branch: "main", head: "x", transcriptBytes: 64 * 1024 * 1024 + 1, session: T, harness: "claude" });
+    expect(r.status).toBe(413);
+  });
+
+  test("check names an unknown peer", async () => {
+    const r = await check({ from: "nobody", branch: "main", head: "x", transcriptBytes: 10, session: T, harness: "claude" });
+    expect(r.status).toBe(404);
+  });
+
+  test.if(tmux)("load lands the work, writes the transcript under this repo's folder, and resumes", async () => {
+    const { out, text } = await sourceOut(true);
+    const term = "1234567890abcdef1234567890abcdef";
+    const r = await load(out, text, term);
+    expect(r.status).toBe(201);
+    expect(await readFile(join(root, "app", "moved.txt"), "utf8")).toBe("carried\n");
+    const file = join(scratch, "claude", "projects", projectFolder(join(root, "app")), `${T}.jsonl`);
+    expect(JSON.parse((await readFile(file, "utf8")).trim()).cwd).toBe(join(root, "app"));
+    // a retry after a lost answer starts only the shell
+    const again = await load(out, text, term.replace("12", "34"));
+    expect(again.status).toBe(201);
+    const c = (await (await check({ from: SRC, branch: "main", head: out.head, transcriptBytes: 10, session: T, harness: "claude" })).json()) as MoveCheck;
+    expect(c.existing).toBe(true);
+    await git(join(root, "app"), "checkout", "-q", "--", ".");
+    await git(join(root, "app"), "clean", "-fdq");
+  });
+
+  test.if(tmux)("a clean source moves only the conversation", async () => {
+    await rm(join(other, "app", "moved.txt"), { force: true });
+    const { out, text } = await sourceOut(false);
+    expect(out.wip).toBeNull();
+    const r = await load(out, text, "5678567856785678567856785678abcd");
+    expect(r.status).toBe(201);
+    expect(await git(join(root, "app"), "status", "--porcelain")).toBe("");
+  });
+
+  test("load refuses a snapshot that is not the one the source named", async () => {
+    const { out, text } = await sourceOut(true);
+    const r = await load({ ...out, wip: "0".repeat(40) }, text, "9999999999999999999999999999abcd");
+    expect(r.status).toBe(409);
+    expect(existsSync(join(root, "app", "moved.txt"))).toBe(false);
+  });
+
+  test("load refuses malformed meta", async () => {
+    const form = new FormData();
+    form.set("meta", "{not json");
+    form.set("transcript", new Blob(["x"]), "t.jsonl");
+    const r = await fetch(url("/api/repos/movein?id=app"), { method: "POST", body: form });
+    expect(r.status).toBe(400);
   });
 });

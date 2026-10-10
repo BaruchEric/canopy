@@ -66,8 +66,8 @@ import { shipConfig, shipper, type Shipper } from "../core/shipper";
 import { seedSource, type SeedSource } from "../core/seedsource";
 import { vaultConfig, vaultNotes } from "../core/vault";
 import { linkPeers, NO_PUSH, peerUrl } from "../core/peers";
-import { currentBranch, initRepo, isDirty, PassSeen, resetTree, seedRepo, snapshotWip, syncAll, syncRepo, takeWip, trackBranch } from "../core/peersync";
-import { endAgent, MOVE_MAX, MoveError, type PaneDriver } from "../core/move";
+import { currentBranch, fetchPeer, gitSshCommand, initRepo, isBusy, isDirty, PassSeen, resetTree, seedRepo, snapshotWip, syncAll, syncRepo, takeWip, trackBranch, treeIs } from "../core/peersync";
+import { endAgent, MOVE_MAX, MoveError, placeTranscript, rewriteTranscript, type PaneDriver } from "../core/move";
 import { normalizeLaunch } from "../core/launch";
 import { repoSpecState, syncRepo as syncSpec } from "../core/spec";
 import { Launcher, LauncherError } from "../core/launcher";
@@ -101,6 +101,7 @@ import {
   addSource,
   agentFor,
   agentRoutes,
+  configDir,
   launchFor,
   loadConfig,
   rememberRoot,
@@ -138,6 +139,7 @@ import {
   type AgentTable,
   type CanopyConfig,
   type Harness,
+  type MoveCheck,
   type MoveOut,
   type MovePlan,
   type ClientInfo,
@@ -921,6 +923,32 @@ async function movePeers(): Promise<PeerSettings & { self: string }> {
   if (!s.self) throw new HttpError(400, "peers are not set up: no self in the config");
   if (s.peerSync === "off") throw new HttpError(409, "peer sync is off");
   return { ...s, self: s.self };
+}
+
+/** the git peer a move comes from, by the name the page gives */
+function movePeer(s: PeerSettings, from: unknown): Peer {
+  const peer = s.peers.find((p) => p.name === from && p.role === "git");
+  if (!peer) throw new HttpError(404, `no git peer named ${String(from)}`);
+  return peer;
+}
+
+/** Why the target cannot take a move as it stands, or null when it can:
+ *  the peer's branch as fetched is `head` (which proves the fetch reached
+ *  the source under this repo's id and this peer's name, so the load's
+ *  fetch will too), and here is on `branch`, at `head`, clean, with no
+ *  merge or rebase in progress. */
+async function moveBlocker(path: string, name: string, from: string, branch: string, head: string): Promise<string | null> {
+  const theirs = await git(path, ["rev-parse", "-q", "--verify", `refs/remotes/${from}/${branch}`]);
+  if (theirs.code !== 0 || theirs.stdout.trim() !== head) {
+    return `${from} could not be reached for ${name}, or its ${branch} is not where the move says (is the repo filed under the same folder on both machines?)`;
+  }
+  if (await isBusy(path)) return `${name} has a merge, rebase or similar in progress`;
+  const on = await currentBranch(path);
+  if (on !== branch) return `${name} is on ${on ?? "a detached HEAD"} here, not ${branch}`;
+  const here = (await git(path, ["rev-parse", "HEAD"])).stdout.trim();
+  if (here !== head) return `${name} is at ${here.slice(0, 7)} here and ${head.slice(0, 7)} there, and a sync could not bring it level`;
+  if (await isDirty(path)) return `${name} has uncommitted changes here`;
+  return null;
 }
 
 /** The session a move carries: the card's when the page names one this
@@ -3211,6 +3239,89 @@ async function handleApi(
       const fresh = await refreshAndBroadcast(state, repo.id);
       return json(take ? { ...fresh, take } : fresh);
     }
+    if (method === "POST" && action === "movecheck") {
+      if (!peerable(state, repo)) throw new HttpError(400, "a move covers local repos under the launch root");
+      const b = (await req.json().catch(() => null)) as { from?: unknown; branch?: unknown; head?: unknown; transcriptBytes?: unknown; session?: unknown; harness?: unknown } | null;
+      if (typeof b?.branch !== "string" || typeof b.head !== "string" || typeof b.transcriptBytes !== "number" || !isSessionId(b.session) || !isHarness(b.harness)) {
+        throw new HttpError(400, "from, branch, head, transcriptBytes, session and harness are required");
+      }
+      if (b.transcriptBytes > MOVE_MAX) throw new HttpError(413, "the transcript is over 64 MB");
+      const { branch, head } = b;
+      const s = await movePeers();
+      const peer = movePeer(s, b.from);
+      const activeRun = state.runner.activeFor(repo.id);
+      if (activeRun) throw new HttpError(409, busyWith(repo.name, activeRun.verb));
+      if (state.flows.activeFor(repo.id)) throw new HttpError(409, "a workflow is running here");
+      const fetched = await withPeering(state, async () => {
+        await initRepo(repo.path, repo.id, s.peers, false);
+        applyPeerState(state, repo.id, await syncRepo(repo.id, { self: s.self, peers: s.peers, seed: s.seed, dry: false, root: state.root }, new PassSeen()));
+        // syncRepo swallows a peer it cannot reach and keeps the refs from the
+        // last fetch, so this fetch is what proves the source answers now
+        return fetchPeer(repo.path, repo.id, peer, { GIT_SSH_COMMAND: gitSshCommand(configDir()) });
+      });
+      const reason = fetched !== "ok" ? `${peer.name} could not be reached for ${repo.name} (${typeof fetched === "string" ? fetched : fetched.error})` : await moveBlocker(repo.path, repo.name, peer.name, branch, head);
+      const check: MoveCheck = { ok: reason === null, ...(reason ? { reason } : {}), path: repo.path, existing: await hasAgentSession(b.harness, repo.path, b.session) };
+      return json(check);
+    }
+    if (method === "POST" && action === "movein") {
+      if (!peerable(state, repo)) throw new HttpError(400, "a move covers local repos under the launch root");
+      if (Number(req.headers.get("content-length") ?? 0) > MOVE_MAX + 1024 * 1024) throw new HttpError(413, "the transcript is over 64 MB");
+      const form = await req.formData().catch(() => null);
+      const raw = form?.get("meta");
+      const file = form?.get("transcript");
+      if (typeof raw !== "string" || !(file instanceof Blob)) throw new HttpError(400, "meta and transcript are required");
+      if (file.size > MOVE_MAX) throw new HttpError(413, "the transcript is over 64 MB");
+      let parsed: unknown;
+      try {
+        parsed = JSON.parse(raw);
+      } catch {
+        throw new HttpError(400, "malformed meta");
+      }
+      if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) throw new HttpError(400, "malformed meta");
+      const m = parsed as Partial<Record<keyof MoveOut | "from" | "term" | "place" | "cols" | "rows", unknown>>;
+      if (!isSessionId(m.session) || !isHarness(m.harness) || typeof m.path !== "string" || typeof m.branch !== "string" || typeof m.head !== "string" || typeof m.name !== "string" || !isTermId(m.term)) {
+        throw new HttpError(400, "malformed meta");
+      }
+      const wip = m.wip;
+      if (wip !== null && !(typeof wip === "string" && /^[0-9a-f]{40}$/.test(wip))) throw new HttpError(400, "wip must be a commit or null");
+      const meta: MoveOut = { session: m.session, harness: m.harness, path: m.path, branch: m.branch, head: m.head, name: m.name, wip };
+      const term = m.term;
+      const s = await movePeers();
+      const peer = movePeer(s, m.from);
+      const activeRun = state.runner.activeFor(repo.id);
+      if (activeRun) throw new HttpError(409, busyWith(repo.name, activeRun.verb));
+      if (state.flows.activeFor(repo.id)) throw new HttpError(409, "a workflow is running here");
+      const text = await file.text();
+      try {
+        await withPeering(state, async () => {
+          // a retry after a lost answer: the work is already here, exactly
+          const landed = meta.wip !== null && (await isDirty(repo.path)) && (await treeIs(repo.path, meta.wip));
+          if (!landed) {
+            const fetched = await fetchPeer(repo.path, repo.id, peer, { GIT_SSH_COMMAND: gitSshCommand(configDir()) });
+            if (fetched !== "ok") throw new HttpError(409, `could not fetch from ${peer.name}: ${typeof fetched === "string" ? fetched : fetched.error}`);
+            const reason = await moveBlocker(repo.path, repo.name, peer.name, meta.branch, meta.head);
+            if (reason) throw new HttpError(409, reason);
+          }
+          if (meta.wip && !landed) {
+            const got = await git(repo.path, ["rev-parse", "-q", "--verify", `refs/peer-wip/${peer.name}/${meta.branch}`]);
+            if (got.stdout.trim() !== meta.wip) throw new HttpError(409, `${peer.name}'s snapshot is not the one this move named`);
+            const took = await takeWip(repo.path, peer.name, meta.branch);
+            if (took.how === "branch") throw new HttpError(409, `the work landed on branch ${took.branch ?? "?"} instead of the tree; take it from there`);
+          }
+          // the transcript only after the work landed, so a refused take
+          // leaves none behind and a retry finds the work (landed) and skips
+          const moved = rewriteTranscript(text, meta.path, repo.path);
+          await placeTranscript({ harness: meta.harness, session: meta.session, text: moved, name: meta.name, to: repo.path });
+        });
+      } catch (err) {
+        if (err instanceof MoveError) throw new HttpError(err.status, err.message);
+        if (err instanceof HttpError) throw err;
+        throw new HttpError(409, String(err instanceof Error ? err.message : err));
+      }
+      const info = await resumeTerm(state, repo, term, termPlace(m.place), meta.session, meta.harness, termSize(m.cols, m.rows));
+      await refreshAndBroadcast(state, repo.id);
+      return json(info, 201);
+    }
   }
   return json({ error: "not found" }, 404);
 }
@@ -3943,8 +4054,8 @@ export async function startServer(opts: {
       hostname: bindHost,
       idleTimeout: 0,
       // just over the largest body a route takes: an intake, a file posted
-      // to tailchan, a pasted image
-      maxRequestBodySize: Math.max(INTAKE_BODY_MAX, PUT_MAX, PASTE_MAX) + 1024 * 1024,
+      // to tailchan, a pasted image, a moved transcript
+      maxRequestBodySize: Math.max(INTAKE_BODY_MAX, PUT_MAX, PASTE_MAX, MOVE_MAX) + 1024 * 1024,
       fetch: async (req, srv) => {
         const url = new URL(req.url);
         const api = url.pathname.startsWith("/api/");

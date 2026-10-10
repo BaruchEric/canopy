@@ -1975,6 +1975,16 @@ export interface MoveOut {
   wip: string | null;
 }
 
+/** The target's answer before anything stops. */
+export interface MoveCheck {
+  ok: boolean;
+  reason?: string;
+  /** the target repo's path */
+  path: string;
+  /** a copy of the session is already here (an earlier move the other way) */
+  existing: boolean;
+}
+
 /** One pty the server holds, as `GET /api/terms` lists it: a browser that
  *  comes back reattaches to the ones it knows and adopts the rest. */
 export interface TermInfo {
