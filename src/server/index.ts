@@ -67,6 +67,7 @@ import { vaultConfig, vaultNotes } from "../core/vault";
 import { linkPeers, NO_PUSH, peerUrl } from "../core/peers";
 import { initRepo, PassSeen, seedRepo, syncAll, syncRepo, takeWip, trackBranch } from "../core/peersync";
 import { normalizeLaunch } from "../core/launch";
+import { repoSpecState, syncRepo as syncSpec } from "../core/spec";
 import { Launcher, LauncherError } from "../core/launcher";
 import {
   agentLine,
@@ -152,6 +153,7 @@ import {
   type PeerState,
   type PullCount,
   type Repo,
+  type SpecHalf,
   type RunAction,
   type Run,
   type WorkspaceScope,
@@ -2751,6 +2753,28 @@ async function handleApi(
       const out = await pull(repo.path);
       await refreshAndBroadcast(state, repo.id);
       return json({ ok: true, out });
+    }
+    // `canopy spec sync <repo> [--visual | --doc]`: write the shared spec's
+    // blocks into a checkout on this machine. halves ["doc", "visual"] is
+    // --visual, ["doc"] is --doc, none keeps what the repo took before.
+    if (method === "POST" && action === "spec") {
+      if (repo.host) throw new HttpError(400, `${repo.name} is on ${repo.host}: sync its spec there`);
+      const b = (await req.json().catch(() => null)) as { halves?: unknown } | null;
+      const halves = b?.halves;
+      if (
+        halves !== undefined &&
+        !(Array.isArray(halves) && halves.length > 0 && halves.every((h) => h === "doc" || h === "visual") && halves.includes("doc"))
+      ) {
+        throw new HttpError(400, 'halves must be ["doc"] or ["doc", "visual"]');
+      }
+      const { written, record } = await syncSpec(repo.path, halves === undefined ? {} : { halves: [...new Set(halves as SpecHalf[])] });
+      const spec = await repoSpecState(repo.path);
+      const { repo: fresh } = await refreshHeld(state, repo.id);
+      const idx = state.result.repos.findIndex((r) => r.id === repo.id);
+      const marked: Repo = spec === undefined ? fresh : { ...fresh, spec };
+      if (idx !== -1) state.result.repos[idx] = marked;
+      broadcast(state, { type: "repo", repo: marked });
+      return json({ written, version: record.version, halves: record.halves, repo: marked });
     }
     if (method === "POST" && action === "suggest") {
       const files = repo.status?.files ?? [];

@@ -9,6 +9,7 @@
 import type { AgentCard, Ask, Repo, Run, TaskInfo } from "../../src/core/types";
 import { cardName, repoOfCard, whereWord } from "./agentcards";
 import { stateOf } from "./util";
+import { isCliPanel } from "./cli";
 
 /** The panel's id in the dock. Every other panel id is a repo's: a path
  *  relative to its scan root (`<source>:` ahead of it under an extra
@@ -17,6 +18,10 @@ import { stateOf } from "./util";
 export const WAITING_PANEL = "/waiting";
 
 export const isWaitingPanel = (id: string): boolean => id === WAITING_PANEL;
+
+/** a dock panel that is no repo's: "waiting on you" or the command line's
+ *  transcript. No scan prunes one, and neither pops out or takes a bench. */
+export const isReservedPanel = (id: string): boolean => isWaitingPanel(id) || isCliPanel(id);
 
 /** its mark, on its head, its tab and the top bar's button */
 export const WAITING_GLYPH = "⚑";

@@ -33,7 +33,9 @@ import {
   dockless,
   waitingCount,
 } from "../store";
-import { WAITING_GLYPH, WAITING_GROUPS, WAITING_PANEL, isWaitingPanel } from "../waiting";
+import { WAITING_GLYPH, WAITING_GROUPS, WAITING_PANEL, isReservedPanel, isWaitingPanel } from "../waiting";
+import { CLI_GLYPH, CLI_NAME, CLI_PANEL, isCliPanel } from "../cli";
+import { CliBody } from "./CommandLine";
 import { WaitingBody } from "./Waiting";
 import { benchHolds, benchIs, benchSolo } from "../front";
 import { devTask } from "../tasks";
@@ -88,7 +90,10 @@ import {
   type PushAccess,
   type Repo,
   type RepoFile,
+  type SpecHalf,
+  type SpecState,
 } from "../../../src/core/types";
+import { SPEC_TONE, SPEC_WORDS } from "../../../src/core/treelines";
 
 /** The width of each column, in the order the settings put them. The
  *  checkbox is always the first track. */
@@ -981,6 +986,67 @@ function ChangesSection({ repo }: { repo: Repo }) {
   );
 }
 
+/** what each spec state means for this checkout, in a sentence */
+const SPEC_SAYS: Record<SpecState, string> = {
+  "in-sync": "SPEC.md and its pointer blocks match the shared spec this canopy carries.",
+  behind: "The shared spec has moved on since this repo last took it.",
+  drifted: "Someone edited a block the spec owns. A sync puts the spec's text back.",
+  "not-adopted": "This repo has not taken the shared spec yet.",
+};
+
+/**
+ * Where the checkout stands against the shared repo spec, and the sync
+ * that `canopy spec sync <repo>` runs: as it took it before, with the
+ * DESIGN.md visual half (--visual), or SPEC.md alone (--doc). Folded by
+ * default; absent where the scan read no spec state.
+ */
+function SpecSection({ repo, state }: { repo: Repo; state: SpecState }) {
+  const applyEvent = useStore((s) => s.applyEvent);
+  const [busy, setBusy] = useState<string | null>(null);
+  const [note, setNote] = useState<{ kind: "ok" | "err"; text: string } | null>(null);
+  const sync = (key: string, halves: SpecHalf[] | null) => {
+    setBusy(key);
+    setNote(null);
+    api
+      .specSync(repo.id, halves)
+      .then((got) => {
+        applyEvent({ type: "repo", repo: got.repo });
+        setNote({ kind: "ok", text: got.written.length ? `Wrote ${got.written.join(", ")} (spec v${got.version}).` : `Already in sync with spec v${got.version}.` });
+      })
+      .catch((err: unknown) => setNote({ kind: "err", text: String(err instanceof Error ? err.message : err) }))
+      .finally(() => setBusy(null));
+  };
+  const adopted = state !== "not-adopted";
+  return (
+    <Section
+      repo={repo}
+      k="spec"
+      className="spec"
+      label="Spec"
+      head={<span className={`spec-state t-${SPEC_TONE[state]}`}>{SPEC_WORDS[state]}</span>}
+      title="Where this checkout stands against the shared repo spec"
+    >
+      <div className="spec-body">
+        <p className="spec-says">{SPEC_SAYS[state]}</p>
+        <div className="spec-acts">
+          {adopted && (
+            <button type="button" className="mini strong" disabled={busy !== null} onClick={() => sync("sync", null)} title="canopy spec sync, keeping the halves this repo took">
+              {busy === "sync" ? "syncing…" : "sync"}
+            </button>
+          )}
+          <button type="button" className={adopted ? "mini" : "mini strong"} disabled={busy !== null} onClick={() => sync("doc", ["doc"])} title="canopy spec sync --doc: SPEC.md and its pointers, no DESIGN.md">
+            {busy === "doc" ? "syncing…" : adopted ? "SPEC.md only" : "adopt SPEC.md"}
+          </button>
+          <button type="button" className="mini" disabled={busy !== null} onClick={() => sync("visual", ["doc", "visual"])} title="canopy spec sync --visual: SPEC.md and the DESIGN.md visual system">
+            {busy === "visual" ? "syncing…" : adopted ? "with DESIGN.md" : "adopt with DESIGN.md"}
+          </button>
+        </div>
+        {note && <p className={`note ${note.kind}`}>{note.text}</p>}
+      </div>
+    </Section>
+  );
+}
+
 /** One section of a repo's panel by its key, or nothing where it does not
  *  apply (a preview for a repo on another host). */
 export function PanelSection({ k, repo }: { k: SectionKey; repo: Repo }) {
@@ -993,6 +1059,9 @@ export function PanelSection({ k, repo }: { k: SectionKey; repo: Repo }) {
       return <History repo={repo} />;
     case "peers":
       return <PeersSection repo={repo} />;
+    case "spec":
+      // the scan reads the spec of a checkout on the backend's own disk only
+      return repo.spec === undefined ? null : <SpecSection repo={repo} state={repo.spec} />;
     case "preview":
       // the preview proxies the checkout's own backend's ports
       return repo.host ? null : <PreviewSection repo={repo} />;
@@ -1716,7 +1785,7 @@ function PanelWaiting({
 const WAITING_NAME = "waiting on you";
 
 /** a panel's name for a label: its repo's id, or the waiting panel's name */
-const panelText = (id: string): string => (isWaitingPanel(id) ? WAITING_NAME : idText(id));
+const panelText = (id: string): string => (isWaitingPanel(id) ? WAITING_NAME : isCliPanel(id) ? CLI_NAME : idText(id));
 
 /** The gear of the "waiting on you" panel: its zoom, the dock's layout and
  *  moves, the close setting, folding its groups, and sharing it. No pop
@@ -1839,6 +1908,112 @@ function WaitingPanel({
         </header>
         <div className="waiting-body" ref={bodyRef} style={zoomStyle(zoom)}>
           <WaitingBody hidden={hidden} />
+        </div>
+      </div>
+    </section>
+  );
+}
+
+/** The command line's gear: its zoom, the dock's layout and moves, the
+ *  close setting, emptying the transcript, and sharing it. */
+function CliGear({ zoom, body }: { zoom: GearEntry; body: () => HTMLElement | null }) {
+  const arranged = useStore(arrangementOf);
+  const arrangeDock = useStore((s) => s.arrangeDock);
+  const setSetting = useStore((s) => s.setSetting);
+  const carousel = useStore((s) => s.settings.dockCarousel);
+  const panelClose = useStore((s) => s.settings.panelClose);
+  const panels = useStore((s) => s.panels);
+  const dockLayout = useStore((s) => s.dockLayout);
+  const movePanel = useStore((s) => s.movePanel);
+  const cliClear = useStore((s) => s.cliClear);
+  const empty = useStore((s) => s.cliLog.length === 0);
+  const phone = useMedia(PHONE);
+  const layout: GearEntry[] = [
+    { type: "item", label: "panels side by side", on: arranged === "columns", run: () => arrangeDock("columns"), title: ARRANGE_TITLE },
+    { type: "item", label: "panels as tabs", on: arranged === "tabs", run: () => arrangeDock("tabs"), title: ARRANGE_TITLE },
+    ...(phone
+      ? []
+      : ([
+          { type: "item", label: "carousel", on: carousel, run: () => setSetting("dockCarousel", !carousel) },
+          ...stepEntries(CLI_PANEL, panels, dockLayout, movePanel),
+        ] satisfies GearEntry[])),
+    closeEntry(panelClose, setSetting),
+  ];
+  return (
+    <Gear
+      label={CLI_NAME}
+      groups={[
+        { label: "command line", entries: [zoom, { type: "item", label: "clear the transcript", title: "the clear command does this too", run: cliClear, off: empty ? "nothing to clear" : undefined }] },
+        { label: "layout", entries: layout },
+        { label: "share", entries: shareEntries({ el: body, label: CLI_NAME }) },
+      ]}
+    />
+  );
+}
+
+/** The command line's transcript (`CLI_PANEL`): each command as typed and
+ *  what it printed, with a prompt at its foot. It tabs, moves and sizes
+ *  like a repo's panel and obeys the close setting. */
+function CliPanel({
+  hidden,
+  order,
+  area,
+  cell,
+  strip,
+  movable,
+}: {
+  hidden?: boolean;
+  order?: number;
+  area?: string;
+  cell?: string;
+  strip?: boolean;
+  movable?: boolean;
+}) {
+  const id = CLI_PANEL;
+  const count = useStore((s) => s.cliLog.length);
+  const closable = useStore((s) => s.settings.panelClose);
+  const closePanel = useStore((s) => s.closePanel);
+  const wasTab = useWasTab(strip);
+  const box = useRef<HTMLElement>(null);
+  const bodyRef = useRef<HTMLDivElement>(null);
+  const { zoom, entry: zoomEntry } = useZoom("cli");
+  const forward = useStore((s) => s.activePanel === id);
+  const sideBySide = (area !== undefined && !hidden) || order !== undefined;
+  useEffect(() => {
+    if (!forward || !sideBySide) return;
+    const frame = requestAnimationFrame(() => revealHead(box.current?.querySelector(".panel-head") ?? null));
+    return () => cancelAnimationFrame(frame);
+  }, [forward, sideBySide, area]);
+  return (
+    <section
+      ref={box}
+      className={`panel cli-panel${strip ? " has-strip" : ""}${wasTab ? " was-tab" : ""}`}
+      aria-label={CLI_NAME}
+      hidden={hidden}
+      data-cell={cell}
+      style={{ order, gridArea: area }}
+    >
+      <div className="panel-body">
+        <header className="panel-head" {...panelHead(id, CLI_NAME, movable)}>
+          <span className="glyph" {...(movable && dragHandle(id, CLI_NAME))}>
+            {CLI_GLYPH}
+          </span>
+          <span className="panel-name" {...(movable && dragHandle(id, CLI_NAME))}>
+            {CLI_NAME}
+          </span>
+          <span className="waiting-count" aria-label={`${count} ${count === 1 ? "command" : "commands"}`}>
+            {count || ""}
+          </span>
+          <span className="spacer" />
+          <CliGear zoom={zoomEntry} body={() => bodyRef.current} />
+          {closable && (
+            <button type="button" className="mini close" onClick={() => closePanel(id)} aria-label={`Close ${CLI_NAME}`}>
+              ✕
+            </button>
+          )}
+        </header>
+        <div className="cli-zoom" ref={bodyRef} style={zoomStyle(zoom)}>
+          <CliBody hidden={hidden} />
         </div>
       </div>
     </section>
@@ -2389,13 +2564,13 @@ function CellStrip({
     >
       {panels.map((id) => {
         const repo = repos.find((r) => r.id === id);
-        // "waiting on you" is no repo's and keeps its tab, as another
+        // a reserved panel is no repo's and keeps its tab, as another
         // machine's panel that is waiting for it does
-        const waiting = isWaitingPanel(id);
+        const waiting = isReservedPanel(id);
         if (!repo && !waiting && idParts(id)[0] === homeName()) return null;
         const on = id === active;
         const state = repo ? stateOf(repo) : "clean";
-        const name = waiting ? WAITING_NAME : (repo?.name ?? idText(id));
+        const name = waiting ? panelText(id) : (repo?.name ?? idText(id));
         return (
           <div
             key={id}
@@ -2431,7 +2606,7 @@ function CellStrip({
             }}
           >
             <span className="glyph" aria-hidden="true">
-              {waiting ? WAITING_GLYPH : GLYPH[state]}
+              {isCliPanel(id) ? CLI_GLYPH : waiting ? WAITING_GLYPH : GLYPH[state]}
             </span>
             <span className="dock-tab-name">
               {waiting ? name : <IdLabel id={id} />}
@@ -2800,6 +2975,9 @@ export function Dock() {
         // the one panel that is no repo's
         if (isWaitingPanel(id)) {
           return <WaitingPanel key={id} area={p?.area} cell={p?.cell} order={p?.order} hidden={p?.hidden} strip={p?.strip} movable={movable} />;
+        }
+        if (isCliPanel(id)) {
+          return <CliPanel key={id} area={p?.area} cell={p?.cell} order={p?.order} hidden={p?.hidden} strip={p?.strip} movable={movable} />;
         }
         return (
           <RepoPanel

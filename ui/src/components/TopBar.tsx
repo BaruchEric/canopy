@@ -4,6 +4,7 @@ import { api } from "../api";
 import { ownRun } from "../flows";
 import { allRuns, attentionCount, capsFor, homeConn, pickedIds, useStore, waitingCount } from "../store";
 import { WAITING_GLYPH, WAITING_PANEL } from "../waiting";
+import { CLI_GLYPH } from "../cli";
 import { onBeat } from "../live";
 import { NARROW, PHONE, useMedia } from "../media";
 import { effectivePrimary, isRunActive, WS_COLORS, type RunAction, type Workspace } from "../../../src/core/types";
@@ -502,6 +503,24 @@ function RescanButton() {
   );
 }
 
+/** Brings up the command line: canopy's CLI words, typed in the page.
+ *  ⌘K and `:` do the same. */
+function CliButton() {
+  const setCliOpen = useStore((s) => s.setCliOpen);
+  return (
+    <button
+      type="button"
+      className="mini cli-btn"
+      aria-label="Command line"
+      aria-keyshortcuts="Meta+K"
+      title="Command line (⌘K or :): the canopy CLI's commands, run against this page"
+      onClick={() => setCliOpen(true)}
+    >
+      <span aria-hidden="true">{CLI_GLYPH}</span>
+    </button>
+  );
+}
+
 /** Opens the "waiting on you" panel in the dock, or brings it forward when
  *  it is open: everything that needs you in one place, counted beside its
  *  flag as the inbox chip counts its own. `w` does the same. */
@@ -535,6 +554,7 @@ function Chips({ phone = false }: { phone?: boolean }) {
       {!phone && <TasksChip />}
       <DevicesChip />
       {!phone && <InboxChip />}
+      {!phone && <CliButton />}
       {!phone && <WaitingButton />}
       <ChanChip />
     </>
@@ -561,6 +581,7 @@ export function TopBar({ nav }: { nav?: ReactNode }) {
               under this one go: it brings a task to the front from anywhere */}
           <TasksChip />
           <InboxChip />
+          <CliButton />
           <WaitingButton />
           <LiveDot />
           <SearchButton />

@@ -6,7 +6,7 @@ import { termFontSize } from "./touch";
 
 /** a panel's sections, in the order a panel shows them by default; the
  *  shells are not here, since they are the panel's footer */
-export const SECTION_KEYS = ["changes", "tasks", "search", "history", "peers", "preview", "launch", "claude", "agents"] as const;
+export const SECTION_KEYS = ["changes", "tasks", "search", "history", "peers", "spec", "preview", "launch", "claude", "agents"] as const;
 export type SectionKey = (typeof SECTION_KEYS)[number];
 
 export const SECTION_WORD: Record<SectionKey, string> = {
@@ -15,6 +15,7 @@ export const SECTION_WORD: Record<SectionKey, string> = {
   search: "search",
   history: "history",
   peers: "peers",
+  spec: "spec",
   preview: "preview",
   launch: "launch",
   claude: "claude",
@@ -27,7 +28,7 @@ export const isSectionKey = (v: unknown): v is SectionKey =>
 /** the surfaces with a zoom of their own; the shells zoom through the
  *  terminal's font size instead, since css zoom on an xterm puts its mouse
  *  and selection off by the factor */
-export const ZOOM_KINDS = ["panel", ...SECTION_KEYS, "feed", "inbox", "waiting", "sidebar", "board", "agents", "incubator", "library"] as const;
+export const ZOOM_KINDS = ["panel", ...SECTION_KEYS, "feed", "inbox", "waiting", "cli", "sidebar", "board", "agents", "incubator", "library"] as const;
 export type ZoomKind = (typeof ZOOM_KINDS)[number];
 export type Zooms = Partial<Record<ZoomKind, number>>;
 

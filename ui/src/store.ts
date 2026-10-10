@@ -55,7 +55,8 @@ import { flatAgent, hasRouting, NO_ROUTES } from "./agents";
 import { cleanKey, keyTestOf, readAnswerKey, writeAnswerKey, type KeyTest } from "./answerKey";
 import { listedTask } from "../../src/core/tasks";
 import { startsDev } from "./tasks";
-import { WAITING_FOLDED, WAITING_GROUPS, attentionRepos, failedRows, isUnpushed, isWaitingPanel, turnRows, type AttentionRow, type FailedRow, type TurnRow } from "./waiting";
+import { CLI_KEEP, type CliEntry, type SproutDraft } from "./cli";
+import { WAITING_FOLDED, WAITING_GROUPS, attentionRepos, failedRows, isReservedPanel, isUnpushed, isWaitingPanel, turnRows, type AttentionRow, type FailedRow, type TurnRow } from "./waiting";
 import { putScreen, screenNow, slotsNow, withScreen, writesFlat } from "./screens";
 import {
   DEFAULT_LAUNCH,
@@ -119,7 +120,7 @@ export const PANEL_TERM = { min: 60, max: 2400, initial: rowsPx(PANEL_TERM_ROWS)
 /** the event feed along the bottom, in px of height */
 export const FEED = { min: 100, max: 900, initial: 220 };
 /** sections that start folded, matching how the panel read before they could fold */
-const DEFAULT_CLOSED = ["search", "history", "claude", "launch", "peers", "preview", "agents"];
+const DEFAULT_CLOSED = ["search", "history", "claude", "launch", "peers", "spec", "preview", "agents"];
 /** the folded-by-default set a layout saved before `knownSections` existed
  *  had decided about; anything added to DEFAULT_CLOSED since folds for it */
 const OLD_KNOWN = ["search", "history", "claude"];
@@ -601,13 +602,13 @@ export function idText(id: string): string {
   return backend ? `${plain} on ${backend}` : plain;
 }
 
-/** whether an id is one backend's. The "waiting on you" panel reads as a
- *  home id but is no backend's, so no scan prunes it, nor its width or
- *  its folds. */
+/** whether an id is one backend's. A reserved panel ("waiting on you", the
+ *  command line's transcript) reads as a home id but is no backend's, so no
+ *  scan prunes it, nor its width or its folds. */
 const mineOf =
   (from: string) =>
   (id: string): boolean =>
-    ownerOf(id) === from && !isWaitingPanel(id);
+    ownerOf(id) === from && !isReservedPanel(id);
 
 /** a record by id with one backend's entries replaced by `list` */
 function recordIn<T extends { id: string }>(rec: Record<string, T>, from: string, list: readonly T[]): Record<string, T> {
@@ -754,6 +755,11 @@ interface CanopyState {
   /** the tree as a drawer over the page, below the width that has no room
    *  for it beside the cards; this window's alone, never saved */
   drawerOpen: boolean;
+  /** the command line's prompt is up over the page; this window's alone */
+  cliOpen: boolean;
+  /** the command line's transcript, oldest first, at most CLI_KEEP;
+   *  this window's alone, never saved */
+  cliLog: CliEntry[];
   /** folded sections in the tree and the grid, as sectionKey strings */
   collapsed: string[];
   /** folded panel sections (changes, shell, history, claude…) by repo id */
@@ -957,6 +963,10 @@ interface CanopyState {
   setSidebarWidth: (px: number) => void;
   toggleSidebar: () => void;
   setDrawer: (open: boolean) => void;
+  setCliOpen: (open: boolean) => void;
+  /** adds a command to the transcript, or replaces it by id */
+  cliPut: (entry: CliEntry) => void;
+  cliClear: () => void;
   /** folds or unfolds one section; the tree and the grid fold together */
   toggleGroup: (key: string) => void;
   /** folds (`fold`) or opens every group of `keys`, the ones showing */
@@ -1021,6 +1031,8 @@ interface CanopyState {
   dismissSprout: (id: string) => Promise<void>;
   showSprout: (id: string) => void;
   openNewSprout: () => void;
+  /** the new project form, filled in from the command line's `new` */
+  draftSprout: (draft: SproutDraft) => void;
   /** pins away, or clears it and is here */
   setAway: (away: boolean) => Promise<void>;
   /** someone is at this page: the human is here, at most once a minute,
@@ -1167,7 +1179,8 @@ export type Sheet =
   | { kind: "plan"; repoId: string; action: RunAction; workspace?: string }
   | { kind: "run"; runId: string }
   | { kind: "agent"; repoId: string }
-  | { kind: "new-sprout" }
+  /** `draft` fills the form, from the command line's `new` */
+  | { kind: "new-sprout"; draft?: SproutDraft }
   | { kind: "sprout"; id: string }
   | { kind: "launch"; repoId: string }
   | { kind: "task"; repoId: string; name: string | null }
@@ -1666,6 +1679,8 @@ export const useStore = create<CanopyState>((set, get) => ({
   dockWidth: layout.dockWidth,
   sidebarOpen: layout.sidebarOpen,
   drawerOpen: false,
+  cliOpen: false,
+  cliLog: [],
   collapsed: layout.collapsed,
   closedSections: layout.closedSections,
   settings: loadSettings(),
@@ -2413,8 +2428,8 @@ export const useStore = create<CanopyState>((set, get) => ({
   },
   popOut: (id) => {
     // the window first: a blocked popup leaves the panel where it was
-    // "waiting on you" is no repo's and has no window of its own
-    if (isWaitingPanel(id) || !get().panels.includes(id) || !popOutWindow(id)) return;
+    // a reserved panel is no repo's and has no window of its own
+    if (isReservedPanel(id) || !get().panels.includes(id) || !popOutWindow(id)) return;
     get().claimPanel(id);
     // a window closed before it loads never says hello: then it comes back
     poppedOut(id);
@@ -2635,6 +2650,14 @@ export const useStore = create<CanopyState>((set, get) => ({
   setSidebarWidth: (px) => set({ sidebarWidth: clamp(px, SIDEBAR.min, SIDEBAR.max) }),
   toggleSidebar: () => set((s) => ({ sidebarOpen: !s.sidebarOpen })),
   setDrawer: (drawerOpen) => set({ drawerOpen }),
+  setCliOpen: (cliOpen) => set({ cliOpen }),
+  cliPut: (entry) =>
+    set((s) => {
+      const at = s.cliLog.findIndex((e) => e.id === entry.id);
+      if (at !== -1) return { cliLog: s.cliLog.map((e, i) => (i === at ? entry : e)) };
+      return { cliLog: [...s.cliLog, entry].slice(-CLI_KEEP) };
+    }),
+  cliClear: () => set((s) => ({ cliLog: s.cliLog.filter((e) => e.status === "running") })),
   toggleGroup: (key) =>
     set((s) => ({
       collapsed: s.collapsed.includes(key)
@@ -2844,6 +2867,7 @@ export const useStore = create<CanopyState>((set, get) => ({
   },
   showSprout: (id) => set({ sheet: { kind: "sprout", id } }),
   openNewSprout: () => set({ sheet: { kind: "new-sprout" } }),
+  draftSprout: (draft) => set({ sheet: { kind: "new-sprout", draft } }),
   answerAdvice: async (key, accept) => {
     const { advice, accepted } = await api.answerAdvice(key, accept);
     adviceEvents += 1;
@@ -3050,7 +3074,7 @@ export const useStore = create<CanopyState>((set, get) => ({
   setFocusSize: (size) => set({ focusSize: size }),
   setFront: (front) => set({ front }),
   bringProject: (repoId) =>
-    set((s) => (repoId === null ? { front: null } : isWaitingPanel(repoId) ? {} : { ...dockPanel(s, repoId), front: projectFront(repoId) })),
+    set((s) => (repoId === null ? { front: null } : isReservedPanel(repoId) ? {} : { ...dockPanel(s, repoId), front: projectFront(repoId) })),
   soloBench: (repoId, pane) =>
     set((s) => {
       const front = withSolo(s.front, repoId, pane);

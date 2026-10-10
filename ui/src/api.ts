@@ -56,6 +56,7 @@ import type {
   ServerEvent,
   SourceInput,
   SourceState,
+  SpecHalf,
   TaskAction,
   TaskInfo,
   TaskLogPage,
@@ -766,6 +767,19 @@ export const api = {
       body: JSON.stringify(body),
     });
     return from(b, got, (q, r) => ({ ...qRepo(q, r), ...(r.take === undefined ? {} : { take: r.take }) }));
+  },
+  /** starts one peer pass over every repo on a backend; it answers before
+   *  the pass ends, and the repos it moves come back as events */
+  peersSync: (b: string = homeName()) => req<Record<string, never>>(b, "/api/peers/sync", { method: "POST" }),
+  /** `canopy spec sync`: writes the shared spec's blocks into a checkout;
+   *  halves null keeps what the repo took before */
+  specSync: async (id: string, halves: SpecHalf[] | null) => {
+    const [b, plain] = on(id);
+    const got = await req<{ written: string[]; version: string; halves: SpecHalf[]; repo: Repo }>(b, `/api/repos/spec?${rq(plain)}`, {
+      method: "POST",
+      body: JSON.stringify(halves === null ? {} : { halves }),
+    });
+    return { ...got, repo: from(b, got.repo, qRepo) };
   },
   /** archives a repo in canopy, or takes the mark off; answers the repo */
   archive: async (id: string, archived: boolean) => {

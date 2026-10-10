@@ -18,6 +18,7 @@ import { ago } from "../util";
 import { InboxChip } from "./Inbox";
 import { Questions } from "./Prompts";
 import { WidgetGear, shareEntries, useZoom, zoomStyle } from "./Surface";
+import type { SproutDraft } from "../cli";
 
 const errText = (err: unknown) => String(err instanceof Error ? err.message : err);
 /** the HTTP status `api` puts on its errors, when there is one */
@@ -306,6 +307,7 @@ function IntakeForm({
   lead,
   tail,
   allowRepo,
+  initial,
   busy,
   error,
   submitLabel,
@@ -316,15 +318,17 @@ function IntakeForm({
   /** under the inputs, above any error */
   tail?: ReactNode;
   allowRepo: boolean;
+  /** what the form starts filled with */
+  initial?: SproutDraft;
   busy: boolean;
   error: string | null;
   submitLabel: string;
   onSubmit: (form: FormData) => void;
   onCancel: () => void;
 }) {
-  const [text, setText] = useState("");
-  const [links, setLinks] = useState("");
-  const [repo, setRepo] = useState("");
+  const [text, setText] = useState(initial?.text ?? "");
+  const [links, setLinks] = useState(initial?.urls.join(" ") ?? "");
+  const [repo, setRepo] = useState(initial?.repo ?? "");
   const [files, setFiles] = useState<File[]>([]);
   const [refused, setRefused] = useState<string | null>(null);
   const [over, setOver] = useState(false);
@@ -530,7 +534,7 @@ function BackendPick({ value, onPick }: { value: string; onPick: (b: string) => 
   );
 }
 
-export function NewSproutSheet() {
+export function NewSproutSheet({ draft }: { draft?: SproutDraft }) {
   const close = useStore((s) => s.closeSheet);
   const create = useStore((s) => s.createSprout);
   const show = useStore((s) => s.showSprout);
@@ -559,6 +563,7 @@ export function NewSproutSheet() {
         lead={<p className="blurb">Clarify reads everything given here and asks at most four questions; research then looks for something to renovate or extend before anything new is built.</p>}
         tail={many && <BackendPick value={backend} onPick={setPicked} />}
         allowRepo
+        initial={draft}
         busy={busy}
         error={error}
         submitLabel="start"

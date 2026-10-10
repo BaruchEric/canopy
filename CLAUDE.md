@@ -20,9 +20,9 @@ The per-module detail lives in `docs/architecture.md`, one section per area. Rea
 
 - `src/core/` — pure logic, no HTTP: locators and ssh, git, scan, runs and their drivers (Claude and Codex), shells on tmux, workflows and flows, peers, launcher, search, history. Section "src/core".
 - `src/server/` — Bun.serve: REST + SSE (`/api/events`) + static, one `SourceRuntime` per scanned folder. Section "src/server".
-- `src/cli/` — `bin/canopy.ts` entry; `render.ts` holds the ANSI tree renderer.
+- `src/cli/` — `bin/canopy.ts` entry; `render.ts` paints `src/core/treelines.ts` lines (the tree, shared with the UI's command line) as ANSI.
 - `ui/` — React SPA, separate tsconfig, one Zustand store in `ui/src/store.ts`, server types imported from `src/core/types.ts` (keep that file browser-safe: no Bun/node imports). Sections "ui/", "Gears", "The project bench", "The guided panel", "Layout and motion".
-- Feature areas with their own sections: the in-app browser (preview), tailchan, the agent registry, asks and the inbox, guards and hand-off, tasks, the incubator, the Library, version, harnesses and routing, Codex headless.
+- Feature areas with their own sections: the command line, the in-app browser (preview), tailchan, the agent registry, asks and the inbox, guards and hand-off, tasks, the incubator, the Library, version, harnesses and routing, Codex headless.
 - Repo **ids** are paths relative to the scan root (prefixed `<source id>:` under an extra source); **workspaces store absolute paths** (stable across roots; a remote repo's is its `ssh://` locator). The API accepts ids and converts at the edge (`idToPath` in server).
 
 ## Conventions & gotchas

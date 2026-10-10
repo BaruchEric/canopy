@@ -21,6 +21,8 @@ import { dropAskHere, parseRoute } from "./routes";
 import { SORT_MODES, type Theme } from "./settings";
 import { SIDEBAR, dockless, useStore } from "./store";
 import { WAITING_PANEL } from "./waiting";
+import { bindNavigate } from "./clirun";
+import { CommandPop } from "./components/CommandLine";
 
 const route = parseRoute(window.location.search);
 
@@ -85,6 +87,7 @@ export function App() {
     setView(next);
     setProject(null);
   }, []);
+  useEffect(() => bindNavigate(navigate), [navigate]);
   const showRepo = useCallback((id: string) => {
     navigate("git");
     useStore.getState().openPanel(id);
@@ -238,7 +241,22 @@ export function App() {
         useStore.getState().openSearch();
         return;
       }
+      // ⌘K, the command line: from a box or a shell too, like the find
+      // chord; a window holding one panel or one shell has no prompt
+      const whole = !(route.repo && (route.solo || route.shell || route.section));
+      if (whole && (e.metaKey || e.ctrlKey) && !e.shiftKey && !e.altKey && e.key.toLowerCase() === "k") {
+        e.preventDefault();
+        const st = useStore.getState();
+        st.setCliOpen(!st.cliOpen);
+        return;
+      }
       if (t.tagName === "INPUT" || t.tagName === "TEXTAREA") return;
+      // `:`, the command line, as an editor's is
+      if (whole && e.key === ":" && !e.metaKey && !e.ctrlKey && !e.altKey && !document.querySelector(OVER_PAGE)) {
+        e.preventDefault();
+        useStore.getState().setCliOpen(true);
+        return;
+      }
       // n: a new project, from the board or the incubator (⌘N is the
       // browser's new window, which a page cannot take)
       if (e.key === "n" && !e.metaKey && !e.ctrlKey && !e.altKey && (view === "git" || view === "incubator")) {
@@ -387,6 +405,7 @@ export function App() {
       <FeedDock />
       <TermDock />
       <RunSheet />
+      <CommandPop />
     </div>
   );
 }
