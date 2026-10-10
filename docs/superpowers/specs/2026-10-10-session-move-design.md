@@ -7,7 +7,7 @@ Date: 2026-10-10. Status: design agreed with Eric in conversation, written spec 
 "transfer sessions between servers". Asked what that means, Eric picked:
 
 - what moves is the agent conversation (Claude Code or Codex) **and** the repo's uncommitted work, so the agent picks up mid-edit on the other machine;
-- it is a move, not a fork: the source agent stops, and the source tree is reset to clean once the target has taken over (the work stays recoverable in `refs/wip` and the reflog);
+- it is a move, not a fork: the source agent stops, and the source tree is reset to clean once the target has taken over (the work stays recoverable under `refs/canopy-moved/<session>`);
 - it starts from a live canopy shell's tab row, and only there (no registry row, sessions list or CLI entry in v1);
 - the browser carries the transcript between backends (approach A below), not the servers over ssh.
 
@@ -36,7 +36,7 @@ The uncommitted work still moves through peer sync: the target fetches from the 
 
 The page runs five steps, each one call to one backend.
 
-1. **Check** (target). `POST /api/repos/move/check?id=<target repo>` with `{from, branch, head, transcriptBytes}`. The target runs a peer sync of this repo, then requires:
+1. **Check** (target). `POST /api/repos/movecheck?id=<target repo>` with `{from, branch, head, transcriptBytes}`. The target runs a peer sync of this repo, then requires:
    - peer sync is not `off`, and `from` is a git peer of this repo;
    - no canopy run or workflow is active on the repo;
    - the tree is clean;
@@ -48,18 +48,18 @@ The page runs five steps, each one call to one backend.
 
 2. **Stop** (source). `POST /api/terms/move/out?term=` with `{session}`.
    - Marks the shell as moving; a second `out` for it is refused (409).
-   - Ends the agent with `endAgent`: Escape if a turn is running, then `/exit`, then waits up to 20 s for the pane's current command to be a shell again. If the agent does not exit, the step fails with nothing else touched.
+   - Ends the agent with `endAgent`: Escape (which stops a running turn and does nothing at an idle prompt), then `/exit` for Claude or `/quit` for Codex, typed and entered as two separate key sends, then waits up to 20 s for the pane's current command to be a shell again. If the agent does not exit, the step fails with nothing else touched.
    - Takes the repo's peer lock and runs `snapshotWip`. Returns `{session, harness, branch, head, wip}` (`wip` null for a clean tree).
 
 3. **Transcript** (source). `GET /api/terms/move/transcript?term=&session=` streams the session file as it now is (complete, since the agent has exited).
 
-4. **Load** (target). `POST /api/repos/move/in?id=` with a multipart body: the transcript file and `{from, session, harness, branch, head, wip, term, place, cols, rows}`. Under the repo's peer lock the target:
+4. **Load** (target). `POST /api/repos/movein?id=` with a multipart body: the transcript file and `{from, session, harness, branch, head, wip, term, place, cols, rows}`. Under the repo's peer lock the target:
    - fetches from `from` (`fetchPeer`);
    - if `wip` is set, lands it with `takeWip`, accepting only the clean landing (`how: "tree"`); any other outcome undoes nothing it did not do and fails the step;
    - writes the transcript (see below);
    - resumes the session in a new tmux shell (`resumeTerm`) and returns its term id.
 
-5. **Clean** (source). `POST /api/terms/move/finish?term=`. Under the peer lock, `resetTree` returns the tree to HEAD (tracked files restored, files untracked in the snapshot removed), then the old shell ends (`endTerm`). The snapshot stays as `refs/wip/<branch>` until the next sync pass sees the clean tree and deletes it, and in the reflog after that.
+5. **Clean** (source). `POST /api/terms/move/finish?term=`. Under the peer lock, `resetTree` returns the tree to HEAD (tracked files restored, files untracked in the snapshot removed), then the old shell ends (`endTerm`). Before the reset it points `refs/canopy-moved/<session>` at the snapshot commit. Peer sync never fetches that namespace and its pass never deletes it, so the work stays on the source after the pass drops `refs/wip/<branch>` (deleting a ref drops its reflog with it, so the reflog alone would not keep it).
 
 Gitignored files (`.env`, build output) are not in a WIP snapshot and do not move. The confirm sheet says so when the repo has any.
 
@@ -81,7 +81,7 @@ The mini's canopy container writes into the host's `~/.claude` through the bind 
 - **Progress.** The sheet lists the five steps and ticks each off. When load succeeds, the new tab takes the old tab's place in the same panel, and the panel's `checkoutPref` switches to the target.
 - **Failure.**
   - Before stop: everything is as it was; the sheet shows the reason.
-  - After stop, before load succeeds: "resume here" runs `resumeAgent` with the session id on the source. The source tree is still dirty, since nothing reset it.
+  - After stop, before load succeeds: "resume here" calls `POST /api/terms/move/undo`, which types the resume line back into the same source shell (the agent quit back to it) and forgets the move. The source tree is still dirty, since nothing reset it.
   - At clean: the session already runs on the target. The sheet says so and offers "clean source" to retry the step.
 - **Code.** A store action `moveShell(tabId, toBackend)` in `ui/src/store.ts` runs the steps; calls go in `ui/src/api.ts`. Styles use the existing tokens in `ui/src/styles.css`.
 
@@ -94,12 +94,12 @@ The mini's canopy container writes into the host's `~/.claude` through the bind 
 
 ## Files
 
-- New: `src/core/move.ts` and `move.test.ts`; `ui/src/components/MoveSheet.tsx`.
-- Changed: `src/core/tmux.ts` (`endAgent`), `src/core/peersync.ts` (`resetTree`), `src/server/index.ts` (the six routes: `move/plan`, `move/check`, `move/out`, `move/transcript`, `move/in`, `move/finish`), `ui/src/api.ts`, `ui/src/store.ts`, `ui/src/components/AgentButtons.tsx`, `ui/src/styles.css`, `docs/architecture.md` (a "Moving a session" section).
+- New: `src/core/move.ts` (the transcript rewrite and placement, and `endAgent`) and `move.test.ts`; `ui/src/move.ts` (the step runner) and `move.test.ts`; `ui/src/components/MoveSheet.tsx`.
+- Changed: `src/core/peersync.ts` (`resetTree`), `src/server/index.ts` (seven routes: `/api/terms/move/plan`, `/api/terms/move/out`, `/api/terms/move/transcript`, `/api/terms/move/finish`, `/api/terms/move/undo` on the source, `/api/repos/movecheck` and `/api/repos/movein` on the target, since `/api/repos/<action>` takes one lowercase word), `src/core/sessions.ts` (`transcriptFile`), `ui/src/api.ts`, `ui/src/store.ts`, `ui/src/components/AgentButtons.tsx`, `ui/src/styles.css`, `docs/architecture.md` (a "Moving a session" section).
 
 ## Testing
 
-- **Unit.** `move.test.ts`: the `cwd` rewrite at the repo root and in a subfolder, a `cwd` outside the repo left alone, the Codex `session_meta` line, the prefix rule (replace, refuse a split), a cut-off last line refused, the size cap. `tmux.test.ts`: `endAgent` against a fake pane, including an agent that never exits. `peersync.test.ts`: `resetTree` cleaning a tree that matches its snapshot and refusing one that drifted.
+- **Unit.** `move.test.ts`: the `cwd` rewrite at the repo root and in a subfolder, a `cwd` outside the repo left alone, the Codex `session_meta` line, the prefix rule (replace, refuse a split), a cut-off last line refused, the size cap. `move.test.ts` also: `endAgent` against a fake pane, including an agent that never exits. `peersync.test.ts`: `resetTree` cleaning a tree that matches its snapshot and refusing one that drifted.
 - **Server.** Two scratch checkouts set up as each other's peers with the existing peersync fixtures, and fixture transcripts under two separate homes. End to end: plan, check, out, transcript, in, finish. Then a dirty target refused at check, a target branch ahead refused at check, and a load failure leaving the source dirty and resumable.
 - **Live.** After the four gates, a throwaway Claude session in a scratch repo moves from the Mac to the mini and back, in a real browser. Each time, the resumed agent recalls an earlier turn, and the uncommitted files appear on the target and are gone from the source.
 
