@@ -1051,6 +1051,13 @@ body.resizing iframe {
   overflow-y: auto;
   overscroll-behavior: contain;
 }
+/* ahead of the phone rules, which make it a full-width sheet there */
+.ranger-pop {
+  width: 380px;
+  max-height: min(80vh, 760px);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
 /* the chip's clock-and-arrow, drawn rather than the ⟲ character, which the
    mono face lacks and its fallback draws at half the count's height */
 .kept-chip {
@@ -8896,12 +8903,6 @@ span.effective-flag:not(:first-child) {
   color: var(--rust);
   background: color-mix(in srgb, var(--rust) 12%, transparent);
   font-weight: 700;
-}
-.ranger-pop {
-  width: 380px;
-  max-height: min(80vh, 760px);
-  overflow-y: auto;
-  overscroll-behavior: contain;
 }
 .ranger-head {
   display: flex;
