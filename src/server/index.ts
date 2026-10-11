@@ -929,6 +929,9 @@ function moveShell(state: ServerState, term: string): { live: LiveTerm; repo: Re
   if (!live || live.ending) throw new HttpError(404, "no such shell");
   const repo = repoById(state, live.info.repoId);
   if (!peerable(state, repo)) throw new HttpError(400, "a move covers local repos under the launch root");
+  // a seed's agents start through the incubator alone, and a move's undo
+  // types the resume line, so a seed's shell never moves
+  if (isSeedPath(state.root, repo.path)) throw new HttpError(400, SEED_AGENT_REFUSAL);
   if (!state.tmux) throw new HttpError(400, "a move needs tmux shells");
   return { live, repo, tmux: state.tmux };
 }
@@ -3343,6 +3346,7 @@ async function handleApi(
     }
     if (method === "POST" && action === "movecheck") {
       if (!peerable(state, repo)) throw new HttpError(400, "a move covers local repos under the launch root");
+      if (isSeedPath(state.root, repo.path)) throw new HttpError(400, SEED_AGENT_REFUSAL);
       const b = (await req.json().catch(() => null)) as { from?: unknown; branch?: unknown; head?: unknown; transcriptBytes?: unknown; session?: unknown; harness?: unknown } | null;
       if (typeof b?.branch !== "string" || typeof b.head !== "string" || typeof b.transcriptBytes !== "number" || !isSessionId(b.session) || !isHarness(b.harness)) {
         throw new HttpError(400, "from, branch, head, transcriptBytes, session and harness are required");
@@ -3372,6 +3376,7 @@ async function handleApi(
     }
     if (method === "POST" && action === "movein") {
       if (!peerable(state, repo)) throw new HttpError(400, "a move covers local repos under the launch root");
+      if (isSeedPath(state.root, repo.path)) throw new HttpError(400, SEED_AGENT_REFUSAL);
       if (Number(req.headers.get("content-length") ?? 0) > MOVE_MAX + 1024 * 1024) throw new HttpError(413, "the transcript is over 64 MB");
       const form = await req.formData().catch(() => null);
       const raw = form?.get("meta");

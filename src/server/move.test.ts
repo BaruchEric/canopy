@@ -11,6 +11,7 @@ import { chmod, mkdir, mkdtemp, readFile, realpath, rm, writeFile } from "node:f
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { projectFolder } from "../core/sessions";
+import { SEED_AGENT_REFUSAL, SEEDS_DIR } from "../core/sprout";
 import { killServer, tmuxBase } from "../core/tmux";
 import type { MoveCheck, MoveOut, MovePlan } from "../core/types";
 import { startServer } from "./index";
@@ -45,10 +46,11 @@ const agentBecomes = async (term: string, want: string | null): Promise<string |
 const agentIn = async (term: string): Promise<string | null> =>
   ((await (await fetch(url(`/api/terms/agent?term=${term}`))).json()) as { agent: string | null }).agent;
 
-/** a shell at the repo with the stub agent typed into it, once tmux shows
- *  it; `attach` joins a shell the server already holds */
-async function shellWithAgent(term: string, attach = false): Promise<void> {
-  const ws = new WebSocket(url(`/api/term?id=app&term=${term}&place=panel${attach ? "&attach=1" : ""}`).replace("http", "ws"));
+/** a shell at the repo (app unless `repo` names another) with the stub
+ *  agent typed into it, once tmux shows it; `attach` joins a shell the
+ *  server already holds */
+async function shellWithAgent(term: string, attach = false, repo = "app"): Promise<void> {
+  const ws = new WebSocket(url(`/api/term?id=${encodeURIComponent(repo)}&term=${term}&place=panel${attach ? "&attach=1" : ""}`).replace("http", "ws"));
   await new Promise((r) => ws.addEventListener("open", r));
   ws.send(new TextEncoder().encode("claude\n"));
   for (let i = 0; i < 100; i++) {
@@ -96,6 +98,10 @@ beforeAll(async () => {
   await mkdir(join(root, "lib"));
   await git(join(root, "lib"), "init", "-q", "-b", "main");
   await git(join(root, "lib"), "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-q", "--allow-empty", "-m", "one");
+  // an incubator seed, whose agents start through the incubator alone
+  await mkdir(join(root, SEEDS_DIR, "seedy"), { recursive: true });
+  await git(join(root, SEEDS_DIR, "seedy"), "init", "-q", "-b", "main");
+  await git(join(root, SEEDS_DIR, "seedy"), "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-q", "--allow-empty", "-m", "one");
   const dir = join(scratch, "claude", "projects", projectFolder(join(root, "app")));
   await mkdir(dir, { recursive: true });
   await writeFile(join(dir, `${S}.jsonl`), `${JSON.stringify({ type: "user", cwd: join(root, "app"), message: { content: "fix the login" } })}\n`);
@@ -203,6 +209,21 @@ describe("the source half of a move", () => {
     } finally {
       await git(join(root, "app"), "checkout", "-q", "main");
     }
+  });
+
+  test.if(tmux)("a seed's shell does not move: plan, out and undo refuse, and its agent keeps running", async () => {
+    const term = TERM.replace("ab", "5e");
+    await shellWithAgent(term, false, `${SEEDS_DIR}/seedy`);
+    const m = mid();
+    const plan = await fetch(url(`/api/terms/move/plan?term=${term}&session=${S}&harness=claude`));
+    const out = await moveOut(term, m);
+    const back = await undo(term, m);
+    for (const r of [plan, out]) {
+      expect(r.status).toBe(400);
+      expect(((await r.json()) as { error: string }).error).toBe(SEED_AGENT_REFUSAL);
+    }
+    expect(await back.json()).toEqual({ ok: true, resumed: false });
+    expect(await agentIn(term)).toBe("claude");
   });
 
   test.if(tmux)("a half-typed draft is dropped, never sent ahead of the quit command", async () => {
@@ -632,6 +653,21 @@ describe("the target half of a move", () => {
       process.env["CANOPY_PEERS_JSON"] = kept;
     }
     await untouched();
+  });
+
+  test("a seed is no move's target: check and load refuse before the work lands", async () => {
+    const { out, text } = await sourceOut(true);
+    const seed = encodeURIComponent(`${SEEDS_DIR}/seedy`);
+    const c = await post(`/api/repos/movecheck?id=${seed}`, { from: SRC, branch: "main", head: out.head, transcriptBytes: 10, session: T, harness: "claude" });
+    const form = new FormData();
+    form.set("meta", JSON.stringify({ ...out, from: SRC, term: "5eed5eed5eed5eed5eed5eed5eed5eed", place: "panel", cols: 80, rows: 24 }));
+    form.set("transcript", new Blob([text]), "t.jsonl");
+    const l = await fetch(url(`/api/repos/movein?id=${seed}`), { method: "POST", body: form });
+    for (const r of [c, l]) {
+      expect(r.status).toBe(400);
+      expect(((await r.json()) as { error: string }).error).toBe(SEED_AGENT_REFUSAL);
+    }
+    expect(existsSync(join(root, SEEDS_DIR, "seedy", "moved.txt"))).toBe(false);
   });
 
   test("load refuses malformed meta", async () => {
