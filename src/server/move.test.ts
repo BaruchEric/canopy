@@ -5,7 +5,7 @@
  * clone standing in for the source machine. A perl `claude` stub reads lines until /exit, so
  * tmux sees an agent the way it sees the real one (by its script name).
  */
-import { afterAll, beforeAll, describe, expect, test } from "bun:test";
+import { afterAll, afterEach, beforeAll, describe, expect, test } from "bun:test";
 import { existsSync } from "node:fs";
 import { chmod, mkdir, mkdtemp, readFile, realpath, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -58,6 +58,15 @@ async function shellWithAgent(term: string, attach = false): Promise<void> {
   throw new Error("the stub agent never showed");
 }
 
+/** types `text` into a shell the server holds, as a browser would */
+async function typeInto(term: string, text: string): Promise<void> {
+  const ws = new WebSocket(url(`/api/term?id=app&term=${term}&place=panel&attach=1`).replace("http", "ws"));
+  await new Promise((r) => ws.addEventListener("open", r));
+  ws.send(new TextEncoder().encode(text));
+  await Bun.sleep(200);
+  ws.close();
+}
+
 beforeAll(async () => {
   // real, since the server files a repo under its real path (/private/var on macOS)
   scratch = await realpath(await mkdtemp(join(tmpdir(), "canopy-move-srv-")));
@@ -67,7 +76,9 @@ beforeAll(async () => {
   process.env["CODEX_HOME"] = join(scratch, "codex");
   const bin = join(scratch, "bin");
   await mkdir(bin);
-  await writeFile(join(bin, "claude"), "#!/usr/bin/env perl\nwhile (my $l = <STDIN>) { exit 0 if $l =~ m{/exit\\s*$}; }\n");
+  // it ignores SIGINT as Claude ignores one Ctrl-C at its prompt: the tty
+  // still drops the half-typed line, and only /exit alone on a line ends it
+  await writeFile(join(bin, "claude"), "#!/usr/bin/env perl\n$SIG{INT} = 'IGNORE';\nwhile (my $l = <STDIN>) { exit 0 if $l =~ m{^/exit\\s*$}; }\n");
   await chmod(join(bin, "claude"), 0o755);
   // the shell canopy starts as `$SHELL -l -i`: this one drops the -l and
   // puts the stub first itself, since neither a tmux session nor a Bun
@@ -103,6 +114,13 @@ afterAll(async () => {
 });
 
 describe("the source half of a move", () => {
+  // a shell left with its agent running would hold the next test's move,
+  // since a move refuses while another agent works in the same tree
+  afterEach(async () => {
+    const terms = (await (await fetch(url("/api/terms"))).json()) as { id: string }[];
+    for (const t of terms) await fetch(url(`/api/terms?term=${t.id}`), { method: "DELETE" });
+  });
+
   test.if(tmux)("plan, out, transcript, finish", async () => {
     await shellWithAgent(TERM);
     await writeFile(join(root, "app", "README.md"), "two\n");
@@ -185,6 +203,74 @@ describe("the source half of a move", () => {
     } finally {
       await git(join(root, "app"), "checkout", "-q", "main");
     }
+  });
+
+  test.if(tmux)("a half-typed draft is dropped, never sent ahead of the quit command", async () => {
+    const term = TERM.replace("ab", "b6");
+    await shellWithAgent(term);
+    await typeInto(term, "also fix the");
+    expect((await moveOut(term, mid())).status).toBe(200);
+    expect(await agentIn(term)).toBeNull();
+  });
+
+  test.if(tmux)("a conversation the page names that is not filed here is a 404, never the newest", async () => {
+    const term = TERM.replace("ab", "b1");
+    await shellWithAgent(term);
+    const other = S.replace("1111", "9999");
+    const r = await fetch(url(`/api/terms/move/plan?term=${term}&session=${other}&harness=claude`));
+    expect(r.status).toBe(404);
+    expect(((await r.json()) as { error: string }).error).toMatch(/not filed/);
+  });
+
+  test.if(tmux)("another agent at the repo holds plan and out, and both agents keep running", async () => {
+    const a = TERM.replace("ab", "b2");
+    const b = TERM.replace("ab", "b3");
+    await shellWithAgent(a);
+    await shellWithAgent(b);
+    const plan = await fetch(url(`/api/terms/move/plan?term=${a}&session=${S}&harness=claude`));
+    expect(plan.status).toBe(409);
+    expect(((await plan.json()) as { error: string }).error).toMatch(/another shell/);
+    const out = await moveOut(a, mid());
+    expect(out.status).toBe(409);
+    expect(((await out.json()) as { error: string }).error).toMatch(/another shell/);
+    expect(await agentIn(a)).toBe("claude");
+    expect(await agentIn(b)).toBe("claude");
+    // the refused out left no record behind
+    expect(await (await undo(a, mid())).json()).toEqual({ ok: true, resumed: false });
+  });
+
+  test.if(tmux)("a merge in progress under uncommitted work is refused before anything stops", async () => {
+    const term = TERM.replace("ab", "b4");
+    const app = join(root, "app");
+    await shellWithAgent(term);
+    await writeFile(join(app, "README.md"), "mid-merge\n");
+    const head = (await git(app, "rev-parse", "HEAD")).trim();
+    await writeFile(join(app, ".git", "MERGE_HEAD"), `${head}\n`);
+    try {
+      const plan = await fetch(url(`/api/terms/move/plan?term=${term}&session=${S}&harness=claude`));
+      expect(plan.status).toBe(409);
+      expect(((await plan.json()) as { error: string }).error).toMatch(/in progress/);
+      const out = await moveOut(term, mid());
+      expect(out.status).toBe(409);
+      expect(await agentIn(term)).toBe("claude");
+    } finally {
+      await rm(join(app, ".git", "MERGE_HEAD"), { force: true });
+    }
+  });
+
+  test.if(tmux)("a move no page can name any more gives way once the agent runs again", async () => {
+    const term = TERM.replace("ab", "b5");
+    await shellWithAgent(term);
+    await writeFile(join(root, "app", "README.md"), "lost tab\n");
+    const lost = mid();
+    expect((await moveOut(term, lost)).status).toBe(200);
+    // the page that held `lost` is gone; someone starts the agent again
+    await shellWithAgent(term, true);
+    const next = mid();
+    const r = await moveOut(term, next);
+    expect(r.status).toBe(200);
+    expect(((await r.json()) as MoveOut).move).toBe(next);
+    expect((await finish(term, lost)).status).toBe(409);
   });
 
   test.if(tmux)("a second out while the first waits on the agent is refused", async () => {

@@ -203,6 +203,23 @@ export function parseWhen(text: string, now: number): number | { error: string }
   return { error: `"${t}" is not a time: try "in 30m", "14:00" or an ISO date and time` };
 }
 
+/** an ISO date and time as a whole word or two, nothing after it */
+const ISO_WHEN = /^\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}:?\d{2})?$/;
+
+/**
+ * The time a command line starts with, in a form parseWhen reads, and the
+ * words after it. `in 30m`, `in 1 day`, `at 14:00` and `2026-10-11 09:00`
+ * run to more than one word unquoted, so the longest run of up to three
+ * leading words that has a time's shape wins. Null when none has.
+ */
+export function leadingWhen(words: readonly string[]): { when: string; rest: string[] } | null {
+  for (let n = Math.min(3, words.length); n >= 1; n--) {
+    const when = words.slice(0, n).join(" ");
+    if (IN.test(when) || CLOCK.test(when) || ISO_WHEN.test(when)) return { when, rest: words.slice(n) };
+  }
+  return null;
+}
+
 /** `HH:MM` on the 24-hour clock */
 export const CLOCK_RE = /^([01]\d|2[0-3]):([0-5]\d)$/;
 

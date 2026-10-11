@@ -191,34 +191,49 @@ export async function placeTranscript(o: PlaceTranscript): Promise<{ file: strin
 /** the size of a file, null when it is not there */
 export const sizeOf = async (file: string): Promise<number | null> => (await stat(file).catch(() => null))?.size ?? null;
 
-/** what a stop needs of a pane: keys in, and which agent runs there now */
+/** What a stop needs of a pane: keys in, and which agent runs there now:
+ *  null at a shell, "unread" when tmux would not say (it timed out, or the
+ *  session is gone). "unread" is truthy on purpose, so a check that only
+ *  asks whether an agent is there treats it as one and stops short. */
 export interface PaneDriver {
   keys(keys: string[], literal?: boolean): Promise<void>;
-  agent(): Promise<Harness | null>;
+  agent(): Promise<Harness | null | "unread">;
 }
 
 /** the command each harness quits on */
 export const QUIT: Record<Harness, string> = { claude: "/exit", codex: "/quit" };
 
-/** Quits the agent in a pane the way a person would: Escape (stops a turn
- *  in progress, nothing at an idle prompt), the quit command, then Enter on
- *  its own, since Codex swallows an Enter sent with the text. True once the
- *  pane is back at its shell; false if it is not within `waitMs`. */
-export async function endAgent(pane: PaneDriver, harness: Harness, o: { waitMs?: number; beatMs?: number } = {}): Promise<boolean> {
-  const waitMs = o.waitMs ?? 20_000;
-  const beat = o.beatMs ?? 300;
-  const now = await pane.agent();
-  if (now === null) return true;
-  if (now !== harness) throw new MoveError(409, `${now} runs in that shell, not ${harness}`);
-  await pane.keys(["Escape"]);
-  await Bun.sleep(beat);
-  await pane.keys([QUIT[harness]], true);
-  await Bun.sleep(beat);
-  await pane.keys(["Enter"]);
-  const until = Date.now() + waitMs;
+/** true once the pane is back at its shell before `until`; a read that
+ *  fails counts as not yet */
+async function backAtShell(pane: PaneDriver, until: number, beat: number): Promise<boolean> {
   while (Date.now() < until) {
     if ((await pane.agent()) === null) return true;
     await Bun.sleep(beat);
   }
   return false;
+}
+
+/** Quits the agent in a pane the way a person would. Escape stops a turn in
+ *  progress. Ctrl-C then clears a half-typed draft, which a single Escape
+ *  leaves in place in both harnesses, so the quit command is never appended
+ *  to it and sent as a prompt; Codex at an empty prompt quits on that Ctrl-C
+ *  alone, while Claude only asks for a second. Then the quit command, and
+ *  Enter on its own, since Codex swallows an Enter sent with the text. True
+ *  once the pane is back at its shell; false if it is not within `waitMs`.
+ *  A pane tmux will not read is refused before any key. */
+export async function endAgent(pane: PaneDriver, harness: Harness, o: { waitMs?: number; beatMs?: number } = {}): Promise<boolean> {
+  const waitMs = o.waitMs ?? 20_000;
+  const beat = o.beatMs ?? 300;
+  const now = await pane.agent();
+  if (now === "unread") throw new MoveError(409, "tmux would not say what runs in that shell; nothing was touched");
+  if (now === null) return true;
+  if (now !== harness) throw new MoveError(409, `${now} runs in that shell, not ${harness}`);
+  await pane.keys(["Escape"]);
+  await Bun.sleep(beat);
+  await pane.keys(["C-c"]);
+  if (await backAtShell(pane, Date.now() + 3 * beat, beat)) return true;
+  await pane.keys([QUIT[harness]], true);
+  await Bun.sleep(beat);
+  await pane.keys(["Enter"]);
+  return backAtShell(pane, Date.now() + waitMs, beat);
 }

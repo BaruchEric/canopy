@@ -14,6 +14,7 @@ import {
   parseSessionHead,
   projectFolder,
   resumeLine,
+  transcriptFile,
 } from "./sessions";
 import { DEFAULT_AGENT } from "./types";
 
@@ -241,5 +242,15 @@ describe("codex sessions off disk", () => {
     expect(await hasCodexSession(repo, OLD, home, now)).toBe(false);
     expect(await hasCodexSession("/srv/dev/other", Y, home, now)).toBe(false);
     expect(await hasCodexSession(repo, "../../x", home, now)).toBe(false);
+  });
+
+  test("a move carries a rollout with something typed in it, never one opened and quit", async () => {
+    expect(await transcriptFile("codex", repo, Y, { codex: home }, now)).toEqual({
+      file: join(home, "sessions", "2026/09/30", `rollout-2026-09-30T10-00-00-${Y}.jsonl`),
+      name: `2026/09/30/rollout-2026-09-30T10-00-00-${Y}.jsonl`,
+    });
+    // the meta alone: the target's resume would not find it among its sessions
+    expect(await transcriptFile("codex", repo, "01a0939c-51bd-7522-9511-0346d9bb8e98", { codex: home }, now)).toBeNull();
+    expect(await transcriptFile("codex", repo, SUB, { codex: home }, now)).toBeNull();
   });
 });

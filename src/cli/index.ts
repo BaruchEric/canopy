@@ -3,6 +3,7 @@ import { realpath } from "node:fs/promises";
 import { constants as osConstants } from "node:os";
 import { basename, join, resolve } from "node:path";
 import { exec } from "../core/exec";
+import { leadingWhen } from "../core/cron";
 import { commit, getStatus, pull, push } from "../core/git";
 import { isOpenerId, openGroup, openIn, type OpenerId } from "../core/openers";
 import { isSshHost } from "../core/host";
@@ -757,8 +758,16 @@ export async function main(argv: string[]): Promise<void> {
       if (sub === "wake") {
         const cron = opt(args, "--cron");
         const run = opt(args, "--run");
-        const rest = args.slice(1);
-        const when = cron || run ? undefined : rest.shift();
+        let rest = args.slice(1);
+        let when: string | undefined;
+        if (!cron && !run) {
+          // `in 30m` and `at 14:00` are two words unquoted: the time is the
+          // longest leading run that reads as one, else the first word,
+          // which the server then says it cannot read
+          const lead = leadingWhen(rest);
+          when = lead ? lead.when : rest[0];
+          rest = lead ? lead.rest : rest.slice(1);
+        }
         const prompt = rest.join(" ").trim();
         if (!prompt || (!cron && !run && !when)) return fail('usage: canopy ranger wake <when> "prompt" | --cron "0 8 * * *" "prompt" | --run <id> "prompt"');
         // set from a terminal, it is Eric's: the ranger sets its own through the API

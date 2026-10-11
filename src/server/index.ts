@@ -66,7 +66,7 @@ import { shipConfig, shipper, type Shipper } from "../core/shipper";
 import { seedSource, type SeedSource } from "../core/seedsource";
 import { vaultConfig, vaultNotes } from "../core/vault";
 import { linkPeers, NO_PUSH, peerUrl } from "../core/peers";
-import { currentBranch, fetchPeer, gitSshCommand, type FetchOutcome, initRepo, isBusy, isDirty, PassSeen, resetTree, seedRepo, snapshotWip, syncAll, syncRepo, takeWip, trackBranch, treeIs } from "../core/peersync";
+import { currentBranch, fetchPeer, gitSshCommand, type FetchOutcome, initRepo, isBusy, isDirty, PassSeen, resetBlocker, resetTree, seedRepo, snapshotWip, syncAll, syncRepo, takeWip, trackBranch, treeIs } from "../core/peersync";
 import { endAgent, MOVE_MAX, MoveError, moveFileList, placeTranscript, rewriteTranscript, transcriptConflict, type PaneDriver } from "../core/move";
 import { normalizeLaunch } from "../core/launch";
 import { repoSpecState, syncRepo as syncSpec } from "../core/spec";
@@ -979,12 +979,15 @@ async function moveBlocker(path: string, name: string, from: string, branch: str
   return null;
 }
 
-/** The session a move carries: the card's when the page names one this
- *  machine has, else the newest of the running harness at the repo. */
+/** The session a move carries: the card's when the page names one, which
+ *  must be filed under the repo here, else the newest of the running
+ *  harness at the repo. A named one that is not found is a 404, not the
+ *  newest, which may be another conversation. */
 async function moveSession(path: string, harness: Harness, asked: string | null): Promise<{ session: string; file: string; name: string }> {
-  if (asked && isSessionId(asked)) {
-    const got = await transcriptFile(harness, path, asked);
-    if (got) return { session: asked, ...got };
+  if (asked) {
+    const got = isSessionId(asked) ? await transcriptFile(harness, path, asked) : null;
+    if (!got) throw new HttpError(404, `that ${harness} conversation is not filed under ${path} here`);
+    return { session: asked, ...got };
   }
   const newest = await newestTranscript(harness, path);
   const id = newest?.match(/([0-9a-f-]{36})\.jsonl$/)?.[1];
@@ -1016,6 +1019,28 @@ function ownMove(state: ServerState, term: string, move: string | null): MoveRec
   return rec;
 }
 
+/** Another shell at the same repo with an agent running in it, by id, or
+ *  null: a move's snapshot and reset would pull the tree out from under
+ *  that agent. Task and ranger sessions and shells on their way out do not
+ *  count, nor does one tmux will not read, which is most often one gone. */
+async function otherAgentAt(state: ServerState, tmux: string[], term: string, path: string): Promise<string | null> {
+  for (const [id, t] of state.terms) {
+    if (id === term || t.ending || t.info.task || t.info.ranger || state.tasks.knows(id) || state.ranger.knows(id) || t.info.path !== path) continue;
+    const pane = await paneInfo(tmux, id);
+    if (pane && (await paneAgent(pane))) return id;
+  }
+  return null;
+}
+
+/** what plan and out both refuse before anything stops: another agent at
+ *  the repo, and a tree the move's finish could not reset after it */
+async function assertMovable(state: ServerState, tmux: string[], term: string, at: string): Promise<void> {
+  if (await otherAgentAt(state, tmux, term, at)) throw new HttpError(409, "an agent runs in another shell at this repo; a move would take the tree from under it");
+  if (!(await isDirty(at))) return;
+  const blocker = await resetBlocker(at);
+  if (blocker) throw new HttpError(409, `${blocker}, so the move could not clean up here after it`);
+}
+
 /** move/out up to the agent quitting: the checks, then the stop. Throws
  *  before anything is touched when one fails or the agent stays. */
 async function stopForMove(state: ServerState, req: Request, term: string, move: string, live: LiveTerm, repo: Repo, tmux: string[]): Promise<{ out: MoveOut; self: string }> {
@@ -1030,11 +1055,12 @@ async function stopForMove(state: ServerState, req: Request, term: string, move:
   const at = live.info.path;
   const branch = await currentBranch(at);
   if (!branch) throw new HttpError(409, "a detached HEAD: a move needs a branch");
+  await assertMovable(state, tmux, term, at);
   const found = await transcriptFile(harness, at, session);
   if (!found) throw new HttpError(404, `no ${harness} conversation under that id at this repo`);
   let stopped: boolean;
   try {
-    stopped = await endAgent(paneDriver(tmux, term), harness);
+    stopped = await endAgent(paneDriver(state, tmux, term), harness);
   } catch (err) {
     if (err instanceof MoveError) throw new HttpError(err.status, err.message);
     throw err;
@@ -1044,12 +1070,17 @@ async function stopForMove(state: ServerState, req: Request, term: string, move:
   return { out: { session, harness, path: at, branch, head, name: found.name, wip: null, move }, self: s.self };
 }
 
-/** the pane as a move's stop drives it */
-const paneDriver = (tmux: string[], term: string): PaneDriver => ({
+/** The pane as a move's stop drives it. A pane tmux will not read is
+ *  "unread", never taken for one at its shell, unless canopy is ending or
+ *  has ended the shell: no agent is left in a killed session, and the move
+ *  is then called off rather than refused. */
+const paneDriver = (state: ServerState, tmux: string[], term: string): PaneDriver => ({
   keys: (keys, literal) => sendKeys(tmux, term, keys, literal),
   agent: async () => {
     const pane = await paneInfo(tmux, term);
-    return pane ? await paneAgent(pane) : null;
+    if (pane) return await paneAgent(pane);
+    const live = state.terms.get(term);
+    return !live || live.ending ? null : "unread";
   },
 });
 
@@ -2424,11 +2455,13 @@ async function handleApi(
     const term = url.searchParams.get("term") ?? "";
     const { live, tmux } = moveShell(state, term);
     await movePeers();
-    const running = await paneDriver(tmux, term).agent();
+    const running = await paneDriver(state, tmux, term).agent();
+    if (running === "unread") throw new HttpError(502, "tmux did not answer");
     if (!running) throw new HttpError(409, "no agent runs in that shell");
     const at = live.info.path;
     const branch = await currentBranch(at);
     if (!branch) throw new HttpError(409, "a detached HEAD: a move needs a branch");
+    await assertMovable(state, tmux, term, at);
     const head = (await git(at, ["rev-parse", "HEAD"])).stdout.trim();
     const { session, file, name } = await moveSession(at, running, url.searchParams.get("session"));
     const st = await stat(file);
@@ -2442,8 +2475,17 @@ async function handleApi(
     const move = url.searchParams.get("move");
     const { live, repo, tmux } = moveShell(state, term);
     if (!isTermId(move)) throw new HttpError(400, "a move is named by 32 hex digits in move");
-    if (state.moving.has(term)) throw new HttpError(409, "that shell is already moving");
-    // held before the first await, so a second out while this one waits on
+    const before = state.moving.get(term);
+    if (before) {
+      // A record past its stop, with an agent running in the shell again, is
+      // one no page can name any more (a reload or a closed tab lost its id,
+      // and someone started the agent by hand): it gives way to this move,
+      // as undo would forget it. Anything else is another move's shell.
+      const there = before.stage === "stopping" ? null : await paneDriver(state, tmux, term).agent();
+      if (!there || there === "unread" || state.moving.get(term) !== before) throw new HttpError(409, "that shell is already moving");
+      state.moving.delete(term);
+    }
+    // held before any await below, so a second out while this one waits on
     // the agent is refused above; dropped again if the agent never stops
     const holding: MoveRecord = { stage: "stopping", move };
     state.moving.set(term, holding);
@@ -2503,19 +2545,34 @@ async function handleApi(
     if (rec.stage === "stopping") throw new HttpError(409, "the agent in that shell is still stopping");
     if (rec.stage === "stopped") throw new HttpError(409, NOT_SAVED);
     const { out } = rec;
-    // someone started the agent again by hand: ending the shell would end
+    const wip = out.wip;
+    const tmux = state.tmux;
+    // someone started the agent again by hand, in this shell or (when there
+    // is a tree to reset) another at the repo: ending the shell would end
     // that conversation, and the reset would pull the tree out from under it
-    if (state.tmux && (await paneDriver(state.tmux, term).agent())) throw new HttpError(409, "an agent runs in that shell again; nothing was reset");
+    const held = async (): Promise<void> => {
+      if (!tmux) return;
+      const here = await paneDriver(state, tmux, term).agent();
+      if (here === "unread") throw new HttpError(409, "tmux would not say what runs in that shell; nothing was reset");
+      if (here) throw new HttpError(409, "an agent runs in that shell again; nothing was reset");
+      if (wip && (await otherAgentAt(state, tmux, term, out.path))) throw new HttpError(409, "an agent runs in another shell at this repo; nothing was reset");
+    };
+    await held();
     const live = state.terms.get(term);
     const repoId = live?.info.repoId;
     let reset: "reset" | "clean" | "none" = "none";
-    const wip = out.wip;
     if (wip) {
-      try {
-        reset = await withPeering(state, () => resetTree(out.path, wip, out.session));
-      } catch (err) {
-        throw new HttpError(409, err instanceof Error ? err.message : String(err));
-      }
+      // asked again under the peer lock, since an agent can start, or the
+      // move be undone, while the reset waits its turn
+      reset = await withPeering(state, async () => {
+        if (state.moving.get(term) !== rec) throw new HttpError(409, CALLED_OFF);
+        await held();
+        try {
+          return await resetTree(out.path, wip, out.session);
+        } catch (err) {
+          throw new HttpError(409, err instanceof Error ? err.message : String(err));
+        }
+      });
     }
     await endTerm(state, term);
     state.moving.delete(term);
@@ -2531,8 +2588,11 @@ async function handleApi(
     const { out } = rec;
     const { repo, tmux } = moveShell(state, term);
     // an agent back in the pane (someone started one by hand) is left be:
-    // typing the resume line would land in its prompt
-    if (await paneDriver(tmux, term).agent()) {
+    // typing the resume line would land in its prompt. A pane tmux will not
+    // read might hold one, so the move stays on record for another try.
+    const there = await paneDriver(state, tmux, term).agent();
+    if (there === "unread") throw new HttpError(502, "tmux did not answer; nothing was typed");
+    if (there) {
       state.moving.delete(term);
       return json({ ok: true, resumed: false });
     }
@@ -3063,8 +3123,8 @@ async function handleApi(
       await refreshAndBroadcast(state, repo.id);
       return json({ ok: true, out });
     }
-    // a stale index.lock, cleared only when it is old enough that no git
-    // process can still hold it (clearStaleLock); 409 says why not
+    // a stale index.lock, cleared only when it is old and no git process is
+    // at work in the repo to hold it (clearStaleLock); 409 says why not
     if (method === "POST" && action === "unlock") {
       let cleared: string;
       try {

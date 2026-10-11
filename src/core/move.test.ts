@@ -112,43 +112,83 @@ describe("transcriptFile", () => {
   });
 });
 
-/** a pane whose agent exits once it has been sent its quit command and Enter */
-function fakePane(runs: "claude" | "codex" | null, exits = true): PaneDriver & { sent: string[][] } {
+/** A pane that behaves as the two harnesses do at their prompt: typed text
+ *  joins the draft (Escape leaves it), Ctrl-C clears it, and Codex quits on
+ *  a Ctrl-C at an empty prompt. Enter sends the draft: the quit command ends
+ *  the agent, anything else is a prompt it was `said`. `read` is what each
+ *  read of the pane answers instead, while set. */
+function fakePane(
+  runs: "claude" | "codex" | null,
+  o: { exits?: boolean; draft?: string; read?: () => "claude" | "codex" | null | "unread" } = {},
+): PaneDriver & { sent: string[][]; said: string[] } {
+  const exits = o.exits ?? true;
   let agent = runs;
-  let typed = "";
+  let draft = o.draft ?? "";
   const sent: string[][] = [];
+  const said: string[] = [];
   return {
     sent,
+    said,
     async keys(keys, literal) {
       sent.push(literal ? ["-l", ...keys] : keys);
-      if (literal) typed = keys.join("");
-      if (!literal && keys[0] === "Enter" && exits && agent && typed === QUIT[agent]) agent = null;
+      if (!agent) return;
+      if (literal) draft += keys.join("");
+      else if (keys[0] === "C-c") {
+        if (draft === "" && agent === "codex" && exits) agent = null;
+        draft = "";
+      } else if (keys[0] === "Enter") {
+        if (draft === QUIT[agent] && exits) agent = null;
+        else if (draft !== "") said.push(draft);
+        draft = "";
+      }
     },
     async agent() {
-      return agent;
+      return o.read ? o.read() : agent;
     },
   };
 }
 
 describe("endAgent", () => {
   const quick = { waitMs: 200, beatMs: 1 };
-  test("claude: Escape, then /exit and Enter as two sends, then back at the shell", async () => {
+  test("claude: Escape, Ctrl-C, then /exit and Enter as two sends, then back at the shell", async () => {
     const pane = fakePane("claude");
     expect(await endAgent(pane, "claude", quick)).toBe(true);
-    expect(pane.sent).toEqual([["Escape"], ["-l", "/exit"], ["Enter"]]);
+    expect(pane.sent).toEqual([["Escape"], ["C-c"], ["-l", "/exit"], ["Enter"]]);
+    expect(pane.said).toEqual([]);
   });
-  test("codex quits with /quit", async () => {
+  test("a half-typed draft is cleared, not sent with the quit command on its end", async () => {
+    const pane = fakePane("claude", { draft: "also fix the" });
+    expect(await endAgent(pane, "claude", quick)).toBe(true);
+    expect(pane.said).toEqual([]);
+  });
+  test("codex at an empty prompt quits on the Ctrl-C, and nothing is typed after", async () => {
     const pane = fakePane("codex");
     expect(await endAgent(pane, "codex", quick)).toBe(true);
-    expect(pane.sent[1]).toEqual(["-l", "/quit"]);
+    expect(pane.sent).toEqual([["Escape"], ["C-c"]]);
+  });
+  test("codex with a draft quits with /quit once the draft is gone", async () => {
+    const pane = fakePane("codex", { draft: "and then" });
+    expect(await endAgent(pane, "codex", quick)).toBe(true);
+    expect(pane.sent).toContainEqual(["-l", "/quit"]);
+    expect(pane.said).toEqual([]);
   });
   test("nothing running: done, no keys", async () => {
     const pane = fakePane(null);
     expect(await endAgent(pane, "claude", quick)).toBe(true);
     expect(pane.sent).toEqual([]);
   });
+  test("a pane tmux will not read is refused before any key, not taken for a quit agent", async () => {
+    const pane = fakePane("claude", { read: () => "unread" });
+    await expect(endAgent(pane, "claude", quick)).rejects.toMatchObject({ status: 409 });
+    expect(pane.sent).toEqual([]);
+  });
+  test("a read that fails while it waits is not taken for a quit agent", async () => {
+    let reads = 0;
+    const pane = fakePane("claude", { exits: false, read: () => (++reads === 1 ? "claude" : "unread") });
+    expect(await endAgent(pane, "claude", quick)).toBe(false);
+  });
   test("an agent that never exits times out", async () => {
-    expect(await endAgent(fakePane("claude", false), "claude", quick)).toBe(false);
+    expect(await endAgent(fakePane("claude", { exits: false }), "claude", quick)).toBe(false);
   });
   test("the other harness in the pane is refused before any key", async () => {
     const pane = fakePane("codex");

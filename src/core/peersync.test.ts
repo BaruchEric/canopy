@@ -19,6 +19,7 @@ import {
   isDirty,
   PassSeen,
   peerWips,
+  resetBlocker,
   resetTree,
   safeId,
   SEED_SERVED_AS,
@@ -1161,6 +1162,18 @@ describe("take and track", () => {
     expect(await hasRef(mac, "refs/heads/wip/mini/main")).toBe(false);
   });
 
+  test("a WIP made on another branch is never taken for present on this one", async () => {
+    const { mac, mini, toMini, miniId } = await pair("present-elsewhere");
+    await sh(mini, "checkout", "-q", "-b", "feature");
+    await commit(mini, "f.txt", "feature only\n");
+    await rm(join(mini, "f.txt"));
+    await snapshotWip(mini, "mini", false);
+    await fetchPeer(mac, miniId, toMini, {});
+    // main never had f.txt, so the WIP's deletion looks done here by chance
+    expect(await takeWip(mac, "mini", "feature")).toEqual({ how: "branch", branch: "wip/mini/feature" });
+    expect(await hasRef(mac, "refs/heads/wip/mini/feature")).toBe(true);
+  });
+
   test("HEAD holding only some of a WIP's changes still lands it on a branch", async () => {
     const { mac, mini, toMini, miniId } = await pair("partial");
     await writeFile(join(mini, "a.txt"), "from mini\n");
@@ -2011,6 +2024,20 @@ describe("resetTree", () => {
     expect(existsSync(join(r, "new.txt"))).toBe(true);
     expect(await hasRef(r, `refs/canopy-moved/${S}`)).toBe(false);
   });
+  test("resetBlocker names what would stop the reset, and null for a tree it can reset", async () => {
+    const r = await repo("reset-blocker");
+    expect(await resetBlocker(r)).toBeNull();
+    await sh(r, "checkout", "-q", "-b", "side");
+    await commit(r, "a.txt", "side\n");
+    await sh(r, "checkout", "-q", "main");
+    await commit(r, "a.txt", "main\n");
+    expect((await exec(["git", "merge", "-q", "side"], { cwd: r })).code).not.toBe(0);
+    expect(await resetBlocker(r)).toMatch(/in progress/);
+    // the merge's marker gone, its unmerged entries still in the index
+    await rm(join(r, ".git", "MERGE_HEAD"));
+    expect(await resetBlocker(r)).toMatch(/unmerged/);
+  });
+
   test("a bad session id is refused before anything is written", async () => {
     const { r, wip } = await dirtied("reset-badid");
     await expect(resetTree(r, wip, "../x")).rejects.toThrow(/session id/);

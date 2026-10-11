@@ -107,9 +107,11 @@ export class ChanHub {
     this.say({ to: "human", text: `${repo}: task ${task} keeps failing; canopy stopped restarting it` });
   }
 
-  /** the ranger gave up restarting: a DM, since someone has to look */
+  /** The ranger gave up restarting: a DM, since someone has to look, and
+   *  whatever the notify switch says, as the ranger's design promises; the
+   *  switch governs the posts about runs, flows and fleets. */
   onRangerGaveUp(text: string): void {
-    this.say({ to: "human", text });
+    this.post({ to: "human", text });
   }
 
   /** A DM from canopy's bot to a handle, whatever the notify switch says:
@@ -128,8 +130,14 @@ export class ChanHub {
     this.sprouts.delete(id);
   }
 
+  /** a notice, while the notify switch is on */
   private say(n: Notice | null): void {
-    if (!n || !this.notify || !this.cfg || !this.chan) return;
+    if (n && this.notify) this.post(n);
+  }
+
+  /** a notice posted whatever the notify switch says */
+  private post(n: Notice): void {
+    if (!this.cfg || !this.chan) return;
     const { cfg, chan } = this;
     const target = n.to === "human" ? { to: cfg.as } : { channel: cfg.channel };
     // a channel line is marked silent so a mention in a repo's name never pings

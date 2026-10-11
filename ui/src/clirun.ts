@@ -248,7 +248,12 @@ async function runInner(cmd: Command): Promise<Outcome> {
     }
     case "peers-take": {
       const r = repoFor(cmd.repo);
-      const got = await api.peerAction(r.id, { action: "take", peer: cmd.peer, ...(cmd.branch === null ? {} : { branch: cmd.branch }) });
+      // no branch typed: the WIP of the branch checked out there, as the
+      // CLI's `peers take` does, since the route needs one named
+      const here = r.status?.branch;
+      const branch = cmd.branch ?? (here && here !== "(detached)" ? here : null);
+      if (branch === null) return fail("HEAD is detached there; name a branch");
+      const got = await api.peerAction(r.id, { action: "take", peer: cmd.peer, branch });
       const { take, ...repo } = got;
       st.applyEvent({ type: "repo", repo });
       return ok(mark("✓", "moss", { text: takeWords(take) }));
@@ -302,7 +307,7 @@ function peerLines(r: Repo): Line[] {
   const p = r.peers;
   if (p === undefined) return [say("not synced yet", "dim")];
   const lines: Line[] = [
-    ...p.wip.map((w): Line => mark("◐", "sky", { text: `WIP on ${w.branch} at ${w.peer}` }, { text: `  peers take ${quoteWord(r.id)} ${w.peer}`, tone: "dim" })),
+    ...p.wip.map((w): Line => mark("◐", "sky", { text: `WIP on ${w.branch} at ${w.peer}` }, { text: `  peers take ${quoteWord(r.id)} ${w.peer} ${quoteWord(w.branch)}`, tone: "dim" })),
     ...p.diverged.map((d): Line => mark("◆", "rust", { text: `${d.branch} diverged from ${d.peer}` })),
     ...p.peerOnly.map((o): Line => mark("⑂", "sky", { text: `${o.peer}/${o.branch}` }, { text: `  peers track ${quoteWord(r.id)} ${o.peer} ${o.branch}`, tone: "dim" })),
   ];

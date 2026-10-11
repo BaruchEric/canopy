@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
-import { isCron, lastClock, nextFire, parseCron, parseWhen, type Cron } from "./cron";
+import { isCron, lastClock, leadingWhen, nextFire, parseCron, parseWhen, type Cron } from "./cron";
 
 // Bun pins JS Dates to UTC under test, so local time here is UTC
 const at = (iso: string): number => new Date(`${iso}Z`).getTime();
@@ -91,6 +91,30 @@ describe("parseWhen", () => {
     expect(parseWhen("2026-10-11T09:00", now)).toBe(new Date("2026-10-11T09:00").getTime());
     expect("error" in (parseWhen("2026-10-09 09:00", now) as object)).toBe(true);
     expect("error" in (parseWhen("tomorrow", now) as object)).toBe(true);
+  });
+});
+
+describe("leadingWhen", () => {
+  const w = (line: string) => leadingWhen(line.split(" "));
+  test("a time typed unquoted takes the words it needs, and the prompt is the rest", () => {
+    expect(w("in 30m check the deploy")).toEqual({ when: "in 30m", rest: ["check", "the", "deploy"] });
+    expect(w("in 1 day look again")).toEqual({ when: "in 1 day", rest: ["look", "again"] });
+    expect(w("at 14:00 standup")).toEqual({ when: "at 14:00", rest: ["standup"] });
+    expect(w("14:00 standup")).toEqual({ when: "14:00", rest: ["standup"] });
+    expect(w("2026-10-11 09:00 the release")).toEqual({ when: "2026-10-11 09:00", rest: ["the", "release"] });
+    expect(w("2026-10-11T09:00:00Z the release")).toEqual({ when: "2026-10-11T09:00:00Z", rest: ["the", "release"] });
+  });
+  test("a time quoted into one word still reads, and every one it takes parses", () => {
+    expect(leadingWhen(["in 30m", "check"])).toEqual({ when: "in 30m", rest: ["check"] });
+    const now = at("2026-10-10T08:30");
+    for (const line of ["in 30m x", "in 1 day x", "at 14:00 x", "14:00 x", "2026-10-11 09:00 x"]) {
+      expect(typeof parseWhen(w(line)?.when ?? "", now)).toBe("number");
+    }
+  });
+  test("no time at the front is null, for the server to refuse as typed", () => {
+    expect(w("tomorrow check")).toBeNull();
+    expect(w("in thirty minutes")).toBeNull();
+    expect(leadingWhen([])).toBeNull();
   });
 });
 

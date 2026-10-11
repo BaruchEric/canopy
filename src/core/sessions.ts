@@ -289,16 +289,23 @@ export async function codexSessions(path: string, limit = SESSION_LIMIT, home = 
   const out: AgentSession[] = [];
   for (const { file, s } of mine) {
     if (out.length >= limit) break;
-    if (!s.head) {
-      const text = await head(file, CODEX_HEAD_BYTES).catch(() => null);
-      // unreadable now: left out this time and read again the next
-      if (text === null) continue;
-      s.head = parseCodexHead(text);
-    }
-    if (!s.head.prompt && !s.head.turns) continue;
-    out.push({ harness: "codex", id: s.meta.id, at: s.mtime, size: s.size, prompt: s.head.prompt, summary: null, branch: s.meta.branch });
+    const typed = await typedHead(file, s);
+    if (!typed) continue;
+    out.push({ harness: "codex", id: s.meta.id, at: s.mtime, size: s.size, prompt: typed.prompt, summary: null, branch: s.meta.branch });
   }
   return out;
+}
+
+/** A rollout's head when anything was typed in it, read once and kept on
+ *  `s`; null when nothing was, and while it cannot be read (left out this
+ *  time and read again the next). */
+async function typedHead(file: string, s: CodexSeen): Promise<NonNullable<CodexSeen["head"]> | null> {
+  if (!s.head) {
+    const text = await head(file, CODEX_HEAD_BYTES).catch(() => null);
+    if (text === null) return null;
+    s.head = parseCodexHead(text);
+  }
+  return s.head.prompt || s.head.turns ? s.head : null;
 }
 
 /** Every rollout of the last `CODEX_DAYS` whose session started in `path`,
@@ -357,7 +364,9 @@ export async function newestTranscript(
 
 /** The file `session` of `harness` is kept in for `path` on this machine,
  *  with the name a move carries it under: `<id>.jsonl` for Claude, the
- *  path under `sessions/` for Codex. Null when there is none. */
+ *  path under `sessions/` for Codex. Null when there is none, and for a
+ *  Codex rollout with nothing typed in it, which the target's resume would
+ *  not find among its sessions (codexSessions leaves it out). */
 export async function transcriptFile(
   harness: Harness,
   path: string,
@@ -369,7 +378,8 @@ export async function transcriptFile(
   if (harness === "codex") {
     const home = homes.codex ?? codexHome();
     const hit = (await codexRollouts(path, home, now)).find((x) => x.s.meta.id === session);
-    return hit ? { file: hit.file, name: relative(join(home, "sessions"), hit.file) } : null;
+    if (!hit || !(await typedHead(hit.file, hit.s))) return null;
+    return { file: hit.file, name: relative(join(home, "sessions"), hit.file) };
   }
   const file = join(homes.claude ?? claudeHome(), "projects", projectFolder(path), `${session}.jsonl`);
   const s = await stat(file).catch(() => null);

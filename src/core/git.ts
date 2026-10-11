@@ -901,9 +901,40 @@ export async function pull(repoPath: string): Promise<string> {
   return r.stdout.trim();
 }
 
-/** A lock is stale past this: no git command canopy or a person runs holds
- *  the index that long, and a younger one may still be in use. */
+/** A lock younger than this may still be in use, so it is never cleared.
+ *  Age alone does not make one stale: `git commit -a` holds the lock for
+ *  as long as its editor stays open, so clearStaleLock also looks for a
+ *  git process at work in the repo. */
 export const STALE_LOCK_MIN = 10;
+
+/** A shell script that prints the pid of a git process whose working folder
+ *  is the repo top in $1 or under it, and exits 0; exits 1 when there is
+ *  none, 2 when it cannot tell (no /proc and no lsof). /proc on Linux, lsof
+ *  on macOS. No single quotes, since remoteCommand quotes each word with
+ *  them for ssh, and the case patterns open with "(" because bash 3.2 (the
+ *  Mac's sh) misreads a bare ")" inside $(...). */
+const GIT_AT_WORK = `PATH="$PATH:/usr/sbin:/sbin"
+top=$(cd "$1" && pwd -P) || exit 2
+if [ -r /proc/self/stat ]; then
+  for d in /proc/[0-9]*; do
+    read -r c 2>/dev/null < "$d/comm" || continue
+    case "$c" in (git|git-*) ;; (*) continue ;; esac
+    w=$(readlink "$d/cwd" 2>/dev/null) || continue
+    case "$w" in ("$top"|"$top"/*) echo "\${d#/proc/}"; exit 0 ;; esac
+  done
+  exit 1
+fi
+command -v lsof >/dev/null 2>&1 || exit 2
+found=$(lsof -a -c git -d cwd -Fpcn 2>/dev/null | while IFS= read -r l; do
+  case "$l" in
+    (p*) p=\${l#p}; c= ;;
+    (c*) c=\${l#c} ;;
+    (n*) case "$c" in (git|git-*) ;; (*) continue ;; esac
+      case "\${l#n}" in ("$top"|"$top"/*) echo "$p"; break ;; esac ;;
+  esac
+done)
+[ -n "$found" ] && { echo "$found"; exit 0; }
+exit 1`;
 
 /** git refused because another process holds, or held, the index lock */
 export function isLockedIndex(stderr: string): boolean {
@@ -911,11 +942,14 @@ export function isLockedIndex(stderr: string): boolean {
 }
 
 /** Remove the repo's index.lock when it is older than STALE_LOCK_MIN
- *  minutes, and say which file went. Throws when there is none, when it is
- *  younger, and for a seed, whose git belongs to its agents. The path comes
- *  from git (`--git-path`), so a submodule's or a worktree's lock is found
- *  where git keeps it; `find -mmin` reads its age the same on macOS and
- *  Linux, here or over ssh. */
+ *  minutes and no git process is at work in the repo, and say which file
+ *  went. Throws when there is none, when it is younger, when git still runs
+ *  there (a commit waiting on its editor keeps an old lock live) or that
+ *  cannot be told, and for a seed, whose git belongs to its agents. The
+ *  path comes from git (`--git-path`), so a submodule's or a worktree's
+ *  lock is found where git keeps it; `find -mmin` reads its age the same on
+ *  macOS and Linux, here or over ssh, and removes it in the same call, so
+ *  a fresh lock that replaced it in between is left alone. */
 export async function clearStaleLock(repoPath: string): Promise<string> {
   const { host, path } = parseLocator(repoPath);
   if (host === null && seedsRootOf(path, seedRootsNow()) !== null) throw new Error("a seed's git is its agents': canopy leaves its lock alone");
@@ -927,7 +961,15 @@ export async function clearStaleLock(repoPath: string): Promise<string> {
   if (found.code !== 0 || !found.stdout.trim()) throw new Error("there is no index.lock to clear");
   const old = await onHost(host, ["find", lock, "-maxdepth", "0", "-mmin", `+${STALE_LOCK_MIN}`]);
   if (!old.stdout.trim()) throw new Error(`the lock is under ${STALE_LOCK_MIN} minutes old, so git may still be using it`);
-  const gone = await onHost(host, ["rm", "-f", lock]);
+  const top = await git(repoPath, ["rev-parse", "--show-toplevel"]);
+  if (top.code !== 0 || !top.stdout.trim()) throw new Error(top.stderr.trim() || "git could not say where the repo's top is");
+  const busy = await onHost(host, ["sh", "-c", GIT_AT_WORK, "sh", top.stdout.trim()], { timeoutMs: 30_000 });
+  if (busy.code === 0) {
+    throw new Error(`git is still running in this repo (process ${busy.stdout.trim().split("\n")[0]}), perhaps a commit waiting on its editor: finish or quit it first`);
+  }
+  if (busy.code !== 1) throw new Error("canopy cannot tell whether a git process still holds the lock here, so it leaves it");
+  const gone = await onHost(host, ["find", lock, "-maxdepth", "0", "-mmin", `+${STALE_LOCK_MIN}`, "-delete", "-print"]);
   if (gone.code !== 0) throw new Error(gone.stderr.trim() || "could not remove the lock");
+  if (!gone.stdout.trim()) throw new Error("the lock changed while canopy looked at it; try again");
   return lock;
 }

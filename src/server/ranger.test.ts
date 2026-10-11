@@ -345,6 +345,24 @@ describe("what the review found", () => {
     expect(fake.starts).toHaveLength(1);
   });
 
+  test("a restart by hand refused while nothing runs stays a restart on the recheck, and clears a gave-up", async () => {
+    saved.on = true;
+    await mkdir(dir(), { recursive: true });
+    await writeFile(join(dir(), "state.json"), JSON.stringify({ session: "35adf21d-777e-428a-aec9-639404e23258", fails: 3, gaveUp: true }));
+    let claude = false;
+    const h = hub({ hasClaude: () => claude });
+    await h.start();
+    await until(() => h.info().state === "gave-up", "gave-up shown");
+    const { data } = await call(h, "POST", "/api/ranger/restart");
+    expect((data as RangerInfo).state).toBe("no-claude");
+    claude = true;
+    await until(() => fake.starts.length === 1, "the restart once claude is back");
+    await until(() => h.info().state === "running", "running");
+    // the launch says running before it saves, so wait on the file itself
+    await until(async () => (await record()).gaveUp === undefined, "the gave-up cleared on disk");
+    expect((await record()).fails).toBeUndefined();
+  });
+
   test("a restart refused while the old session runs says so, and goes through once it can", async () => {
     saved.on = true;
     let claude = true;
@@ -548,6 +566,21 @@ describe("wakes", () => {
 });
 
 describe("routes", () => {
+  test("a call before start() waits for what is stored, and never writes over it", async () => {
+    await mkdir(dir(), { recursive: true });
+    const later = Date.now() + 86_400_000;
+    await writeFile(join(dir(), "wakes.json"), JSON.stringify([{ id: "0000000b", by: "eric", prompt: "stored", created: Date.now(), at: later, next: later }]));
+    const h = hub();
+    // the port binds before the hub has read the disk
+    const early = call(h, "POST", "/api/ranger/wakes", { prompt: "early", when: "in 2h", by: "eric" });
+    await Bun.sleep(20);
+    await h.start();
+    expect((await early).status).toBe(201);
+    expect(h.info().wakes.map((w) => w.prompt).sort()).toEqual(["early", "stored"]);
+    const onDisk = JSON.parse(await readFile(join(dir(), "wakes.json"), "utf8")) as { prompt: string }[];
+    expect(onDisk.map((w) => w.prompt).sort()).toEqual(["early", "stored"]);
+  });
+
   test("refusals", async () => {
     const h = hub();
     await h.start();

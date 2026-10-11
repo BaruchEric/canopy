@@ -9027,6 +9027,11 @@ span.effective-flag:not(:first-child) {
   gap: 8px;
   font-size: 11px;
 }
+/* Settings' crons have no "by" column: three tracks, so the prompt takes
+   the free width and the remove button stays its own size */
+.ranger-wakes.ranger-crons li {
+  grid-template-columns: auto minmax(0, 1fr) auto;
+}
 .ranger-when {
   font-family: var(--mono);
   color: var(--ink);

@@ -268,6 +268,21 @@ describe("notices", () => {
     await fetch(api("/api/tailchan/notify"), { method: "POST", body: JSON.stringify({ on: false }) });
   });
 
+  test("the ranger giving up is a DM to the human with notify off; a task giving up waits on the switch", async () => {
+    const hub = new ChanHub({ url: BROKER, as: "eric", bot: "canopy", channel: "canopy" }, { broadcast: () => {}, repoName: (id) => id, isFlowRun: () => false });
+    await hub.start();
+    expect((await (await fetch(api("/api/tailchan"))).json()) as { notify: boolean }).toMatchObject({ notify: false });
+    const before = posts.length;
+    hub.onTaskGaveUp("app", "dev");
+    hub.onRangerGaveUp("the ranger on mac exited 3 times in a row; canopy stopped restarting it");
+    await until(() => posts.length >= before + 1, "the ranger's DM");
+    await Bun.sleep(100);
+    expect(posts.slice(before).map((m) => [m.handle, m.channel, m.body])).toEqual([
+      ["canopy", "dm.canopy+eric", "the ranger on mac exited 3 times in a row; canopy stopped restarting it"],
+    ]);
+    hub.close();
+  });
+
   test("a flow on a seed posts nothing of its own, even before the incubator owns it", async () => {
     await fetch(api("/api/tailchan/notify"), { method: "POST", body: JSON.stringify({ on: true }) });
     const hub = new ChanHub({ url: BROKER, as: "eric", bot: "canopy", channel: "canopy" }, {

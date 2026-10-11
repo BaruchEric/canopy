@@ -974,9 +974,13 @@ async function wipOccupiesPath(repo: string, wip: string): Promise<boolean> {
 /** Whether HEAD already holds every path the WIP changes, as the WIP has
  *  it: the same edit was committed here while the WIP was in flight. A
  *  take then has nothing to land, and a scratch branch for it would only
- *  show up as one unmerged commit whose content is already on HEAD. Any
- *  path that differs, or a git call that fails, counts as not present. */
+ *  show up as one unmerged commit whose content is already on HEAD. HEAD
+ *  must descend from the WIP's parent: on another branch the paths can
+ *  match by chance, as a deletion of a file that branch never had does.
+ *  Any path that differs, or a git call that fails, counts as not present. */
 async function wipAlreadyInHead(repo: string, wip: string): Promise<boolean> {
+  const based = await git(repo, ["merge-base", "--is-ancestor", `${wip}^`, "HEAD"]);
+  if (based.code !== 0) return false;
   const touched = await git(repo, ["diff-tree", "-r", "-z", "--name-only", "--no-renames", `${wip}^`, wip]);
   const differs = await git(repo, ["diff-tree", "-r", "-z", "--name-only", "--no-renames", "HEAD", wip]);
   if (touched.code !== 0 || differs.code !== 0) return false;
@@ -1102,6 +1106,24 @@ async function keepIndex(repo: string, wip: string, session: string): Promise<vo
   if (u.code !== 0) throw new Error(u.stderr.trim());
 }
 
+/** Why a move could not clean this tree up after its session went, or null
+ *  when it could: what resetTree refuses on before it writes anything. A
+ *  move asks before it stops the agent, so it never strands a session on
+ *  the target with a source it then refuses to reset. */
+export async function resetBlocker(repo: string): Promise<string | null> {
+  if (await isBusy(repo)) return "a merge, rebase or similar is in progress";
+  const listed = await git(repo, ["ls-files", "-v", "-z"]);
+  if (listed.code !== 0) return listed.stderr.trim() || "git ls-files failed";
+  // assume-unchanged (lowercase tag) and skip-worktree (S) files hide edits
+  // from status and add -A, yet reset --hard would overwrite them
+  if (listed.stdout.split("\0").some((l) => /^[a-zS]/.test(l))) return "files marked assume-unchanged or skip-worktree";
+  // the staged half is kept with write-tree, which an unmerged index fails
+  const unmerged = await git(repo, ["ls-files", "-u", "-z"]);
+  if (unmerged.code !== 0) return unmerged.stderr.trim() || "git ls-files failed";
+  if (unmerged.stdout !== "") return "the index has unmerged entries";
+  return null;
+}
+
 /** After a move: the source tree back to HEAD, its uncommitted work kept
  *  first under refs/canopy-moved/<session> (and what was staged under
  *  refs/canopy-moved-index/<session>), namespaces peer sync neither
@@ -1116,14 +1138,8 @@ export async function resetTree(repo: string, wip: string, session: string): Pro
   if (parent.code !== 0 || head.code !== 0 || parent.stdout.trim() !== head.stdout.trim()) {
     throw new Error("HEAD moved since the move began; nothing was reset");
   }
-  if (await isBusy(repo)) throw new Error("a merge, rebase or similar is in progress; nothing was reset");
-  const listed = await git(repo, ["ls-files", "-v", "-z"]);
-  if (listed.code !== 0) throw new Error(listed.stderr.trim() || "git ls-files failed; nothing was reset");
-  // assume-unchanged (lowercase tag) and skip-worktree (S) files hide edits
-  // from status and add -A, yet reset --hard would overwrite them
-  if (listed.stdout.split("\0").some((l) => /^[a-zS]/.test(l))) {
-    throw new Error("files marked assume-unchanged or skip-worktree; nothing was reset");
-  }
+  const blocker = await resetBlocker(repo);
+  if (blocker) throw new Error(`${blocker}; nothing was reset`);
   const keep = await git(repo, ["update-ref", `refs/canopy-moved/${session}`, wip]);
   if (keep.code !== 0) throw new Error(keep.stderr.trim());
   if (!(await isDirty(repo))) return "clean";

@@ -332,6 +332,31 @@ describe("stale index locks", () => {
       await rm(dir, { recursive: true, force: true });
     }
   });
+
+  test("an old lock a live git still holds stays: a commit waiting on its editor", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "canopy-stale-live-"));
+    const who = ["-c", "user.name=t", "-c", "user.email=t@t"];
+    let commit: ReturnType<typeof Bun.spawn> | null = null;
+    try {
+      await exec(["git", "-C", dir, "init", "-q"]);
+      await writeFile(join(dir, "f.txt"), "one\n");
+      await exec(["git", "-C", dir, "add", "f.txt"]);
+      await exec(["git", "-C", dir, ...who, "commit", "-q", "-m", "one"]);
+      await writeFile(join(dir, "f.txt"), "two\n");
+      // commit -a holds the lock for as long as its editor stays open
+      commit = Bun.spawn(["git", "-C", dir, ...who, "commit", "-a"], { env: { ...process.env, GIT_EDITOR: "sleep 8;:" }, stdout: "ignore", stderr: "ignore" });
+      const lock = join(dir, ".git", "index.lock");
+      for (let i = 0; i < 100 && !(await Bun.file(lock).exists()); i++) await Bun.sleep(50);
+      const old = new Date(Date.now() - 60 * 60_000);
+      await utimes(lock, old, old);
+      await expect(clearStaleLock(dir)).rejects.toThrow(/git is still running/);
+      expect(await Bun.file(lock).exists()).toBe(true);
+    } finally {
+      commit?.kill();
+      await commit?.exited;
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
 });
 
 describe("getStatus in the background", () => {

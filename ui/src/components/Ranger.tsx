@@ -312,7 +312,7 @@ export function RangerRow({ backend }: { backend: string }) {
       )}
       <h3 className="panel-label">crons</h3>
       {ericsCrons(info).length > 0 && (
-        <ul className="ranger-wakes">
+        <ul className="ranger-wakes ranger-crons">
           {ericsCrons(info).map((w) => (
             <li key={w.id}>
               <span className="ranger-when">{w.cron}</span>

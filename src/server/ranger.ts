@@ -276,6 +276,14 @@ export class RangerHub {
   private bytes: number | undefined;
   private contested = false;
   private told = "";
+  /** settled once start() has read the settings, record and wakes off disk
+   *  (or failed to): the routes wait for it, so a call that lands between
+   *  the bind and the reads never writes the defaults over what is stored */
+  private markDiskRead: () => void = () => {};
+  private diskRead = new Promise<void>((resolve) => {
+    this.markDiskRead = resolve;
+  });
+  private loaded = false;
 
   constructor(private readonly deps: RangerHubDeps) {
     this.t = { ...RANGER_TIMINGS, ...deps.timings };
@@ -298,12 +306,17 @@ export class RangerHub {
   }
 
   async start(): Promise<void> {
-    this.term = rangerTermId(this.deps.backend());
-    this.settings = await this.loadSettings();
-    this.rec = parseRecord(await readJson(join(this.dir, "state.json")));
-    const raw = await readJson(join(this.dir, "wakes.json"));
-    this.wakes = (Array.isArray(raw) ? raw : []).map(parseWake).filter((w): w is RangerWake => w !== null);
-    await this.readTelegram();
+    try {
+      this.term = rangerTermId(this.deps.backend());
+      this.settings = await this.loadSettings();
+      this.rec = parseRecord(await readJson(join(this.dir, "state.json")));
+      const raw = await readJson(join(this.dir, "wakes.json"));
+      this.wakes = (Array.isArray(raw) ? raw : []).map(parseWake).filter((w): w is RangerWake => w !== null);
+      await this.readTelegram();
+      this.loaded = true;
+    } finally {
+      this.markDiskRead();
+    }
     this.state = this.settings.on ? (this.deps.tmux ? "starting" : "no-tmux") : "off";
     this.tell();
     if (!this.deps.tmux) return;
@@ -566,7 +579,9 @@ export class RangerHub {
       this.retryTimer = undefined;
       if (this.stopped || !this.settings.on) return;
       if (this.held && this.running()) void this.launch(this.held.kind);
-      else if (!this.running()) void this.launch(this.rec.fails ? "retry" : "start");
+      // a restart or fresh start asked for by hand stays one on the recheck,
+      // so it still clears a gave-up and a fresh one still starts anew
+      else if (!this.running()) void this.launch(kind === "restart" || kind === "fresh" ? kind : this.rec.fails ? "retry" : "start");
     }, this.t.recheck);
   }
 
@@ -824,6 +839,8 @@ export class RangerHub {
   async handle(req: Request, url: URL): Promise<Response | null> {
     const path = url.pathname;
     if (path !== "/api/ranger" && !path.startsWith("/api/ranger/")) return null;
+    await this.diskRead;
+    if (!this.loaded) return json({ error: "the ranger's settings and wakes could not be read; see the server log" }, 503);
     const method = req.method;
     const body = async (): Promise<unknown> => req.json().catch(() => null);
     try {
