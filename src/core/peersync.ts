@@ -1083,8 +1083,28 @@ export async function treeIs(repo: string, commit: string): Promise<boolean> {
   return (await worktreeTree(repo, true)) === want.stdout.trim();
 }
 
+/** What was staged, when it is not just HEAD: the snapshot holds the
+ *  working copy only, so a staged version that differs from the file on
+ *  disk would go with the reset. Kept as a commit (the index's tree, the
+ *  snapshot as its parent) under refs/canopy-moved-index/<session> rather
+ *  than a bare tree ref, so log and show read it like any commit and the
+ *  parent says which snapshot it belongs to. Canopy's own identity from the
+ *  environment, as snapshotWip uses, since a machine may have none set. */
+async function keepIndex(repo: string, wip: string, session: string): Promise<void> {
+  const tree = await git(repo, ["write-tree"]);
+  if (tree.code !== 0) throw new Error("the index has unmerged entries; nothing was reset");
+  const head = await git(repo, ["rev-parse", "-q", "--verify", "HEAD^{tree}"]);
+  if (head.code === 0 && head.stdout.trim() === tree.stdout.trim()) return;
+  const identity = { GIT_AUTHOR_NAME: "canopy", GIT_AUTHOR_EMAIL: "canopy@canopy", GIT_COMMITTER_NAME: "canopy", GIT_COMMITTER_EMAIL: "canopy@canopy" };
+  const c = await git(repo, ["commit-tree", tree.stdout.trim(), "-p", wip, "-m", `index at move ${session}`], 30_000, identity);
+  if (c.code !== 0) throw new Error(c.stderr.trim() || "the staged changes could not be kept; nothing was reset");
+  const u = await git(repo, ["update-ref", `refs/canopy-moved-index/${session}`, c.stdout.trim()]);
+  if (u.code !== 0) throw new Error(u.stderr.trim());
+}
+
 /** After a move: the source tree back to HEAD, its uncommitted work kept
- *  first under refs/canopy-moved/<session>, a namespace peer sync neither
+ *  first under refs/canopy-moved/<session> (and what was staged under
+ *  refs/canopy-moved-index/<session>), namespaces peer sync neither
  *  fetches nor prunes. Refuses when anything changed since the snapshot
  *  `wip`, so an edit made after the move began is never thrown away. The
  *  caller must hold the peer lock with the agent already stopped: a write
@@ -1108,6 +1128,7 @@ export async function resetTree(repo: string, wip: string, session: string): Pro
   if (keep.code !== 0) throw new Error(keep.stderr.trim());
   if (!(await isDirty(repo))) return "clean";
   if (!(await treeIs(repo, wip))) throw new Error("the tree changed since the move began; nothing was reset");
+  await keepIndex(repo, wip, session);
   // clean first: it must see the same ignore rules the snapshot used, and
   // reset --hard can restore an older .gitignore that un-ignores a file
   const clean = await git(repo, ["clean", "-f", "-d", "--quiet"]);

@@ -1916,6 +1916,25 @@ describe("resetTree", () => {
     expect(existsSync(join(r, "new.txt"))).toBe(false);
     expect(existsSync(join(r, "secret.env"))).toBe(true);
   });
+  test("keeps a staged version that differs from the tree under refs/canopy-moved-index", async () => {
+    const r = await repo("reset-index");
+    await writeFile(join(r, "a.txt"), "staged A\n");
+    await sh(r, "add", "a.txt");
+    await writeFile(join(r, "a.txt"), "worktree B\n");
+    const snap = await snapshotWip(r, "mac", false);
+    const wip = await sh(r, "rev-parse", `refs/wip/${snap!.branch}`);
+    expect(await resetTree(r, wip, S)).toBe("reset");
+    const kept = `refs/canopy-moved-index/${S}`;
+    expect(await sh(r, "show", `${kept}:a.txt`)).toBe("staged A");
+    expect(await sh(r, "rev-parse", `${kept}^`)).toBe(wip);
+    expect(await sh(r, "log", "-1", "--format=%an <%ae>", kept)).toBe("canopy <canopy@canopy>");
+    expect(await readFile(join(r, "a.txt"), "utf8")).toBe("one\n");
+  });
+  test("nothing staged writes no index ref", async () => {
+    const { r, wip } = await dirtied("reset-noindex");
+    expect(await resetTree(r, wip, S)).toBe("reset");
+    expect(await hasRef(r, `refs/canopy-moved-index/${S}`)).toBe(false);
+  });
   test("treeIs is false for drift and writes no objects", async () => {
     const { r, wip } = await dirtied("reset-treeis");
     await writeFile(join(r, "new.txt"), "other\n");
