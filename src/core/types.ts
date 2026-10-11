@@ -1973,6 +1973,9 @@ export interface MoveOut {
   name: string;
   /** the snapshot commit, null for a clean tree */
   wip: string | null;
+  /** the id the page named this move by (32 hex digits), which the source's
+   *  later calls must name again; the target never sees it */
+  move: string;
 }
 
 /** The target's answer before anything stops. */

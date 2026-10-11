@@ -303,6 +303,9 @@ interface ServerState {
   /** shells a move has in hand, by term id, from the moment move/out
    *  takes one until the move finishes or is undone */
   moving: Map<string, MoveRecord>;
+  /** movein calls under way, by the term id they start: a retry that
+   *  arrives while the first still runs waits for it and answers the same */
+  moveLoads: Map<string, { repoId: string; done: Promise<TermInfo> }>;
   /** the whole-tree pass currently pending (queued or running), if any: a
    *  second refreshPeers call while this is set joins it instead of
    *  queueing a duplicate pass behind it */
@@ -348,8 +351,13 @@ interface ServerState {
 /** A move in hand on this machine: "stopping" while move/out waits on the
  *  agent (which may still run), "stopped" once the agent quit but before
  *  its work was saved (or after the save failed), "saved" once the
- *  snapshot is written and the target may load it. */
-type MoveRecord = { stage: "stopping" } | { stage: "stopped" | "saved"; out: MoveOut };
+ *  snapshot is written and the target may load it. `move` is the id the
+ *  page named the move by; every later call must name it again. */
+type MoveRecord = { stage: "stopping"; move: string } | { stage: "stopped" | "saved"; move: string; out: MoveOut };
+
+/** what the target's load is told: the source's answer less the move id,
+ *  which only the source checks */
+type MoveMeta = Omit<MoveOut, "move">;
 
 interface LiveTerm {
   info: TermInfo;
@@ -579,7 +587,11 @@ async function listTerms(state: ServerState): Promise<TermInfo[]> {
     // deleting the current entry while iterating a Map is defined behaviour;
     // the ranger's session has no repo, so the list never names it, and the
     // ranger's hub is what holds and drops it
-    for (const [id, t] of state.terms) if (!seen.has(id) && !t.info.ranger) state.terms.delete(id);
+    for (const [id, t] of state.terms) {
+      if (seen.has(id) || t.info.ranger) continue;
+      state.terms.delete(id);
+      state.moving.delete(id);
+    }
   }
   return [...state.terms.values()].filter((t) => !t.info.task && !t.info.ranger).map((t) => termInfo(state, t));
 }
@@ -597,6 +609,9 @@ async function endTerm(state: ServerState, id: string): Promise<boolean> {
   if (live) live.ending = true;
   await killSession(state.tmux, id);
   state.terms.delete(id);
+  // a move it was in the middle of is over: out sees it called off, and the
+  // next shell under this name starts with no record to refuse it
+  state.moving.delete(id);
   // a snapshot pass that had this shell in hand may still be writing its
   // record; forgetting after it is done is what makes the forget stick
   await state.keeping;
@@ -1002,9 +1017,23 @@ async function moveFiles(path: string): Promise<{ files: string[]; changed: numb
 /** what transcript and finish say when the agent quit but the snapshot did not land */
 const NOT_SAVED = "the agent stopped but its work was not saved; resume here";
 
+/** what out says when its record went (the shell ended, or the move was
+ *  undone) while it stopped the agent or saved the work */
+const CALLED_OFF = "the move was called off; nothing was reset";
+
+/** The move on record for a shell, null when there is none; a 409 when the
+ *  caller names another move, so one window can never finish or undo a
+ *  move another window started. */
+function ownMove(state: ServerState, term: string, move: string | null): MoveRecord | null {
+  const rec = state.moving.get(term);
+  if (!rec) return null;
+  if (rec.move !== move) throw new HttpError(409, "another move has that shell in hand");
+  return rec;
+}
+
 /** move/out up to the agent quitting: the checks, then the stop. Throws
  *  before anything is touched when one fails or the agent stays. */
-async function stopForMove(state: ServerState, req: Request, term: string, live: LiveTerm, repo: Repo, tmux: string[]): Promise<{ out: MoveOut; self: string }> {
+async function stopForMove(state: ServerState, req: Request, term: string, move: string, live: LiveTerm, repo: Repo, tmux: string[]): Promise<{ out: MoveOut; self: string }> {
   const b: unknown = await req.json().catch(() => null);
   const session = b && typeof b === "object" && "session" in b ? b.session : undefined;
   const harness = b && typeof b === "object" && "harness" in b ? b.harness : undefined;
@@ -1027,7 +1056,7 @@ async function stopForMove(state: ServerState, req: Request, term: string, live:
   }
   if (!stopped) throw new HttpError(409, "the agent did not quit within 20 s; nothing else was touched");
   const head = (await git(at, ["rev-parse", "HEAD"])).stdout.trim();
-  return { out: { session, harness, path: at, branch, head, name: found.name, wip: null }, self: s.self };
+  return { out: { session, harness, path: at, branch, head, name: found.name, wip: null, move }, self: s.self };
 }
 
 /** the pane as a move's stop drives it */
@@ -1123,6 +1152,7 @@ function openPtyTerm(state: ServerState, data: TermSocket, size: TermSize): Live
     },
     exit: (code) => {
       state.terms.delete(id);
+      state.moving.delete(id);
       for (const ws of sockets) {
         try {
           ws.send(JSON.stringify({ exit: code }));
@@ -1189,7 +1219,10 @@ async function joinTmuxTerm(state: ServerState, tmux: string[], ws: ServerWebSoc
             // no exit frame, so the browser rejoins and gets a new client
             ws.close(1000, "the client detached");
           } else {
-            if (state.terms.get(id) === held) state.terms.delete(id);
+            if (state.terms.get(id) === held) {
+              state.terms.delete(id);
+              state.moving.delete(id);
+            }
             // A shell that exited leaves nothing worth restoring, but the
             // session can also be gone because the tmux server went with its
             // container or its machine, which is the one case where what it
@@ -2421,23 +2454,29 @@ async function handleApi(
   }
   if (path === "/api/terms/move/out" && method === "POST") {
     const term = url.searchParams.get("term") ?? "";
+    const move = url.searchParams.get("move");
     const { live, repo, tmux } = moveShell(state, term);
+    if (!isTermId(move)) throw new HttpError(400, "a move is named by 32 hex digits in move");
     if (state.moving.has(term)) throw new HttpError(409, "that shell is already moving");
     // held before the first await, so a second out while this one waits on
     // the agent is refused above; dropped again if the agent never stops
-    state.moving.set(term, { stage: "stopping" });
+    const holding: MoveRecord = { stage: "stopping", move };
+    state.moving.set(term, holding);
     let stopped: { out: MoveOut; self: string };
     try {
-      stopped = await stopForMove(state, req, term, live, repo, tmux);
+      stopped = await stopForMove(state, req, term, move, live, repo, tmux);
     } catch (err) {
-      state.moving.delete(term);
+      if (state.moving.get(term) === holding) state.moving.delete(term);
       throw err;
     }
+    // the shell ended while the agent stopped: nothing is left to carry on
+    if (state.moving.get(term) !== holding) throw new HttpError(409, CALLED_OFF);
     // on record as soon as the agent is gone, so a snapshot that fails
     // below still leaves "resume here" (move/undo) something to resume
     const { self } = stopped;
     const { path: at, branch } = stopped.out;
-    state.moving.set(term, { stage: "stopped", out: stopped.out });
+    const quit: MoveRecord = { stage: "stopped", move, out: stopped.out };
+    state.moving.set(term, quit);
     const out = await withPeering(state, async (): Promise<MoveOut> => {
       const head = (await git(at, ["rev-parse", "HEAD"])).stdout.trim();
       let wip: string | null = null;
@@ -2456,12 +2495,15 @@ async function handleApi(
       }
       return { ...stopped.out, head, wip };
     });
-    state.moving.set(term, { stage: "saved", out });
+    // undone or ended while the snapshot was written: the work stays in
+    // refs/wip, and a record set now would bring back a move called off
+    if (state.moving.get(term) !== quit) throw new HttpError(409, CALLED_OFF);
+    state.moving.set(term, { stage: "saved", move, out });
     return json(out);
   }
   if (path === "/api/terms/move/transcript" && method === "GET") {
     const term = url.searchParams.get("term") ?? "";
-    const rec = state.moving.get(term);
+    const rec = ownMove(state, term, url.searchParams.get("move"));
     if (rec?.stage === "stopped") throw new HttpError(409, NOT_SAVED);
     if (rec?.stage !== "saved" || rec.out.session !== url.searchParams.get("session")) throw new HttpError(409, "stop the agent first (move/out)");
     const { out } = rec;
@@ -2471,11 +2513,14 @@ async function handleApi(
   }
   if (path === "/api/terms/move/finish" && method === "POST") {
     const term = url.searchParams.get("term") ?? "";
-    const rec = state.moving.get(term);
+    const rec = ownMove(state, term, url.searchParams.get("move"));
     if (!rec) throw new HttpError(409, "that shell is not moving");
     if (rec.stage === "stopping") throw new HttpError(409, "the agent in that shell is still stopping");
     if (rec.stage === "stopped") throw new HttpError(409, NOT_SAVED);
     const { out } = rec;
+    // someone started the agent again by hand: ending the shell would end
+    // that conversation, and the reset would pull the tree out from under it
+    if (state.tmux && (await paneDriver(state.tmux, term).agent())) throw new HttpError(409, "an agent runs in that shell again; nothing was reset");
     const live = state.terms.get(term);
     const repoId = live?.info.repoId;
     let reset: "reset" | "clean" | "none" = "none";
@@ -2494,7 +2539,7 @@ async function handleApi(
   }
   if (path === "/api/terms/move/undo" && method === "POST") {
     const term = url.searchParams.get("term") ?? "";
-    const rec = state.moving.get(term);
+    const rec = ownMove(state, term, url.searchParams.get("move"));
     // a stop that failed before the agent quit left nothing to undo, and
     // one still waiting on the agent is out's to finish or drop
     if (!rec || rec.stage === "stopping") return json({ ok: true, resumed: false });
@@ -3295,60 +3340,80 @@ async function handleApi(
         throw new HttpError(400, "malformed meta");
       }
       if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) throw new HttpError(400, "malformed meta");
-      const m = parsed as Partial<Record<keyof MoveOut | "from" | "term" | "place" | "cols" | "rows", unknown>>;
+      const m = parsed as Partial<Record<keyof MoveMeta | "from" | "term" | "place" | "cols" | "rows", unknown>>;
       if (!isSessionId(m.session) || !isHarness(m.harness) || typeof m.path !== "string" || typeof m.branch !== "string" || typeof m.head !== "string" || typeof m.name !== "string" || !isTermId(m.term)) {
         throw new HttpError(400, "malformed meta");
       }
       const wip = m.wip;
       if (wip !== null && !(typeof wip === "string" && /^[0-9a-f]{40}$/.test(wip))) throw new HttpError(400, "wip must be a commit or null");
-      const meta: MoveOut = { session: m.session, harness: m.harness, path: m.path, branch: m.branch, head: m.head, name: m.name, wip };
+      const meta: MoveMeta = { session: m.session, harness: m.harness, path: m.path, branch: m.branch, head: m.head, name: m.name, wip };
       const term = m.term;
       // the shell is the load's name: a retry after a lost answer finds the
       // shell the first one started and answers with it, touching nothing
       const started = state.terms.get(term);
       if (started && !started.ending && started.info.repoId === repo.id) return json(termInfo(state, started), 201);
-      // every refusal that can be known up front comes before the work
-      // lands, so none of them leaves it stranded here with the source stopped
-      await needHarness(state, meta.harness, repo.path);
-      const s = await movePeers();
-      const peer = movePeer(s, m.from);
-      if (s.peerSync === "dry") throw new HttpError(409, MOVE_DRY);
-      const activeRun = state.runner.activeFor(repo.id);
-      if (activeRun) throw new HttpError(409, busyWith(repo.name, activeRun.verb));
-      if (state.flows.activeFor(repo.id)) throw new HttpError(409, "a workflow is running here");
-      const text = await file.text();
-      try {
-        const moved = rewriteTranscript(text, meta.path, repo.path);
-        const place = { harness: meta.harness, session: meta.session, text: moved, name: meta.name, to: repo.path };
-        await withPeering(state, async () => {
-          const split = await transcriptConflict(place);
-          if (split) throw new HttpError(409, split);
-          // a retry after a lost answer: the work is already here, exactly
-          const landed = meta.wip !== null && (await isDirty(repo.path)) && (await treeIs(repo.path, meta.wip));
-          if (!landed) {
-            const fetched = await fetchPeer(repo.path, repo.id, peer, { GIT_SSH_COMMAND: gitSshCommand(configDir()) });
-            const reason = fetchRefusal(fetched, peer.name, repo.name, meta.branch) ?? (await moveBlocker(repo.path, repo.name, peer.name, meta.branch, meta.head));
-            if (reason) throw new HttpError(409, reason);
-          }
-          if (meta.wip && !landed) {
-            const got = await git(repo.path, ["rev-parse", "-q", "--verify", `refs/peer-wip/${peer.name}/${meta.branch}`]);
-            if (got.stdout.trim() !== meta.wip) throw new HttpError(409, `${peer.name}'s snapshot is not the one this move named`);
-            const took = await takeWip(repo.path, peer.name, meta.branch);
-            if (took.how === "branch") throw new HttpError(409, `the work landed on branch ${took.branch ?? "?"} instead of the tree; take it from there`);
-          }
-          // the transcript only after the work landed, so a refused take
-          // leaves none behind and a retry finds the work (landed) and skips;
-          // its own check here is the last guard, under the lock
-          await placeTranscript(place);
-        });
-      } catch (err) {
-        if (err instanceof MoveError) throw new HttpError(err.status, err.message);
-        if (err instanceof HttpError) throw err;
-        throw new HttpError(409, String(err instanceof Error ? err.message : err));
+      // a retry sent while the first is still at work (its answer lost on
+      // the way, not the call) waits for that one rather than racing it
+      const loading = state.moveLoads.get(term);
+      if (loading) {
+        if (loading.repoId !== repo.id) throw new HttpError(409, "that shell name is taken");
+        return json(await loading.done, 201);
       }
-      const info = await resumeTerm(state, repo, term, termPlace(m.place), meta.session, meta.harness, termSize(m.cols, m.rows));
-      await refreshAndBroadcast(state, repo.id);
-      return json(info, 201);
+      // a name some other shell holds, here or kept from a machine that went
+      // down, is refused now: resumeTerm would only find it after the work
+      // and the transcript landed, stranding them with the source stopped
+      if (state.terms.has(term) || state.kept.some((k) => k.id === term)) throw new HttpError(409, "that shell name is taken");
+      const load = async (): Promise<TermInfo> => {
+        // every refusal that can be known up front comes before the work
+        // lands, so none of them leaves it stranded here with the source stopped
+        await needHarness(state, meta.harness, repo.path);
+        const s = await movePeers();
+        const peer = movePeer(s, m.from);
+        if (s.peerSync === "dry") throw new HttpError(409, MOVE_DRY);
+        const activeRun = state.runner.activeFor(repo.id);
+        if (activeRun) throw new HttpError(409, busyWith(repo.name, activeRun.verb));
+        if (state.flows.activeFor(repo.id)) throw new HttpError(409, "a workflow is running here");
+        const text = await file.text();
+        try {
+          const moved = rewriteTranscript(text, meta.path, repo.path);
+          const place = { harness: meta.harness, session: meta.session, text: moved, name: meta.name, to: repo.path };
+          await withPeering(state, async () => {
+            const split = await transcriptConflict(place);
+            if (split) throw new HttpError(409, split);
+            // a retry after a lost answer: the work is already here, exactly
+            const landed = meta.wip !== null && (await isDirty(repo.path)) && (await treeIs(repo.path, meta.wip));
+            if (!landed) {
+              const fetched = await fetchPeer(repo.path, repo.id, peer, { GIT_SSH_COMMAND: gitSshCommand(configDir()) });
+              const reason = fetchRefusal(fetched, peer.name, repo.name, meta.branch) ?? (await moveBlocker(repo.path, repo.name, peer.name, meta.branch, meta.head));
+              if (reason) throw new HttpError(409, reason);
+            }
+            if (meta.wip && !landed) {
+              const got = await git(repo.path, ["rev-parse", "-q", "--verify", `refs/peer-wip/${peer.name}/${meta.branch}`]);
+              if (got.stdout.trim() !== meta.wip) throw new HttpError(409, `${peer.name}'s snapshot is not the one this move named`);
+              const took = await takeWip(repo.path, peer.name, meta.branch);
+              if (took.how === "branch") throw new HttpError(409, `the work landed on branch ${took.branch ?? "?"} instead of the tree; take it from there`);
+            }
+            // the transcript only after the work landed, so a refused take
+            // leaves none behind and a retry finds the work (landed) and skips;
+            // its own check here is the last guard, under the lock
+            await placeTranscript(place);
+          });
+        } catch (err) {
+          if (err instanceof MoveError) throw new HttpError(err.status, err.message);
+          if (err instanceof HttpError) throw err;
+          throw new HttpError(409, String(err instanceof Error ? err.message : err));
+        }
+        const info = await resumeTerm(state, repo, term, termPlace(m.place), meta.session, meta.harness, termSize(m.cols, m.rows));
+        await refreshAndBroadcast(state, repo.id);
+        return info;
+      };
+      const done = load();
+      state.moveLoads.set(term, { repoId: repo.id, done });
+      try {
+        return json(await done, 201);
+      } finally {
+        state.moveLoads.delete(term);
+      }
     }
   }
   return json({ error: "not found" }, 404);
@@ -3798,6 +3863,7 @@ export async function startServer(opts: {
     inited: new Set(),
     peering: null,
     moving: new Map(),
+    moveLoads: new Map(),
     pendingPass: null,
     mirrors: new SeedMirrors(root),
     seedsStayHome: stage !== null,
