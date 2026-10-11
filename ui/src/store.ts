@@ -1011,6 +1011,9 @@ interface CanopyState {
   /** a new shell at the repo with an agent conversation from it picked
    *  back up in it by its own harness */
   resumeAgent: (repoId: string, session: string, harness: Harness) => Promise<void>;
+  /** after a move: the old tab gone, the panel showing the target's
+   *  checkout, and the moved shell's tab in the old one's place */
+  landMove: (oldTab: string, fromRepoId: string, toRepoId: string, info: TermInfo) => void;
   showTerm: (id: string) => void;
   /** starts a kept shell again where it was, with what it had; `resume`
    *  also runs the line that picks its agent's conversation back up */
@@ -3175,6 +3178,16 @@ export const useStore = create<CanopyState>((set, get) => ({
       ...(place === "panel"
         ? { ...dockPanel(now, repoId), closedSections: unfoldIn(now.closedSections, repoId, "shell") }
         : {}),
+    }));
+  },
+  landMove: (oldTab, fromRepoId, toRepoId, info) => {
+    get().switchCheckout(fromRepoId, toRepoId);
+    const repo = get().repos.find((r) => r.id === toRepoId);
+    if (!repo) return;
+    const tab: TermTab = { id: info.id, repoId: repo.id, name: repo.name, path: repo.path, place: info.place };
+    set((now) => ({
+      terms: [...now.terms.filter((t) => t.id !== oldTab && t.id !== info.id), tab],
+      ...(info.place === "panel" ? { ...dockPanel(now, toRepoId), closedSections: unfoldIn(now.closedSections, toRepoId, "shell") } : { activeTerm: info.id }),
     }));
   },
   showTerm: (id) => set((s) => (s.terms.some((t) => t.id === id) ? { activeTerm: id } : {})),
