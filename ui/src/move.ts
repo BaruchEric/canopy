@@ -63,7 +63,7 @@ export async function runMove(deps: MoveDeps, onStep: (s: MoveStep) => void): Pr
     onStep((step = "stop"));
     // the stop may quit the agent and then fail on the snapshot, or quit it
     // and lose the answer, so the source counts as stopped unless it said
-    // no: a 4xx from out comes before anything is touched
+    // no: a 4xx from out comes before anything is touched, except the 409 for an agent that did not quit in time; the source dropped its record then, so an undo would find nothing either way
     stopped = true;
     let out: MoveOut;
     try {
