@@ -5,7 +5,7 @@
  * clone standing in for the source machine. A perl `claude` stub reads lines until /exit, so
  * tmux sees an agent the way it sees the real one (by its script name).
  */
-import { afterAll, afterEach, beforeAll, describe, expect, test } from "bun:test";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, test } from "bun:test";
 import { existsSync } from "node:fs";
 import { chmod, mkdir, mkdtemp, readFile, realpath, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -431,6 +431,15 @@ describe("the target half of a move", () => {
     if (before === undefined) delete process.env["CANOPY_PEERS_JSON"];
     else process.env["CANOPY_PEERS_JSON"] = before;
   });
+  // both copies back on main at HEAD with nothing uncommitted before every
+  // test, so one that fails halfway (or the source half before them) never
+  // leaves the next a dirty tree or another branch
+  beforeEach(async () => {
+    for (const r of [join(root, "app"), join(other, "app")]) {
+      await git(r, "checkout", "-qf", "main");
+      await git(r, "clean", "-fdq");
+    }
+  });
 
   /** the source's half done by hand: a change, its snapshot, and its transcript */
   async function sourceOut(dirty: boolean): Promise<{ out: Omit<MoveOut, "move">; text: string }> {
@@ -452,8 +461,6 @@ describe("the target half of a move", () => {
   };
 
   test("check passes on a clean target at the same commit", async () => {
-    await git(join(root, "app"), "checkout", "-q", "--", ".");
-    await git(join(root, "app"), "clean", "-fdq");
     const { out } = await sourceOut(true);
     const r = (await (await check({ from: SRC, branch: "main", head: out.head, transcriptBytes: 10, session: T, harness: "claude" })).json()) as MoveCheck;
     expect(r).toMatchObject({ ok: true, path: join(root, "app"), existing: false });
@@ -517,8 +524,6 @@ describe("the target half of a move", () => {
     expect(terms.filter((x) => x.id === term)).toHaveLength(1);
     const c = (await (await check({ from: SRC, branch: "main", head: out.head, transcriptBytes: 10, session: T, harness: "claude" })).json()) as MoveCheck;
     expect(c.existing).toBe(true);
-    await git(join(root, "app"), "checkout", "-q", "--", ".");
-    await git(join(root, "app"), "clean", "-fdq");
   });
 
   test.if(tmux)("a retry whose first try landed the work but started no shell skips the take", async () => {
@@ -527,21 +532,13 @@ describe("the target half of a move", () => {
     await writeFile(join(root, "app", "moved.txt"), "carried\n");
     // gone from the peer, so a take would fail: only the landed path answers 201
     await git(join(other, "app"), "update-ref", "-d", "refs/wip/main");
-    try {
-      const r = await load(out, text, "abab1234abab1234abab1234abab1234");
-      expect(r.status).toBe(201);
-    } finally {
-      await git(join(root, "app"), "clean", "-fdq");
-    }
+    const r = await load(out, text, "abab1234abab1234abab1234abab1234");
+    expect(r.status).toBe(201);
   });
 
   test.if(tmux)("a deletion lands as an unstaged deletion on the target", async () => {
     const src = join(other, "app");
     const app = join(root, "app");
-    for (const r of [src, app]) {
-      await git(r, "checkout", "-q", "--", ".");
-      await git(r, "clean", "-fdq");
-    }
     await rm(join(src, "README.md"));
     const { snapshotWip } = await import("../core/peersync");
     await snapshotWip(src, SRC, false);
@@ -553,11 +550,9 @@ describe("the target half of a move", () => {
     expect(r.status).toBe(201);
     expect(existsSync(join(app, "README.md"))).toBe(false);
     expect(await git(app, "status", "--porcelain")).toBe(" D README.md\n");
-    for (const r of [src, app]) await git(r, "checkout", "-q", "--", ".");
   });
 
   test.if(tmux)("a clean source moves only the conversation", async () => {
-    await rm(join(other, "app", "moved.txt"), { force: true });
     const { out, text } = await sourceOut(false);
     expect(out.wip).toBeNull();
     const r = await load(out, text, "5678567856785678567856785678abcd");
@@ -605,8 +600,6 @@ describe("the target half of a move", () => {
     expect(((await b.json()) as { id: string }).id).toBe(term);
     const terms = (await (await fetch(url("/api/terms"))).json()) as { id: string }[];
     expect(terms.filter((x) => x.id === term)).toHaveLength(1);
-    await git(join(root, "app"), "checkout", "-q", "--", ".");
-    await git(join(root, "app"), "clean", "-fdq");
   });
 
   test("load refuses a cut-off transcript before the work lands", async () => {
