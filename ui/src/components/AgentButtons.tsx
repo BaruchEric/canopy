@@ -6,6 +6,7 @@ import { cardOfShell } from "../handoff";
 import { backendOf, plainOf } from "../registry";
 import type { Harness } from "../../../src/core/types";
 import { HandoffButton } from "./Handoff";
+import { MoveButton } from "./MoveSheet";
 import { devTask } from "../tasks";
 import { agentCandidates, canSave, debugPrompt, devState, pendingAgent, SAVE_PROMPT, SETUP_PROMPT } from "../guided";
 import { LIVE, typeInto } from "../liveTerms";
@@ -65,7 +66,7 @@ const AGENT_POLL = 15_000;
 /** The agent running in a shell: what its registry card says (its hooks
  *  registered it), else what tmux says of the pane, asked again now and
  *  then since an agent starts and quits inside a shell that stays. */
-function useShellAgent(tab: TermTab): { harness: Harness | null; transcript: string | null } {
+function useShellAgent(tab: TermTab): { harness: Harness | null; transcript: string | null; session: string | null } {
   const backend = backendOf(tab.id);
   const card = useStore((s) => cardOfShell(s.registry, backend, plainOf(tab.id)));
   const [pane, setPane] = useState<Harness | null>(null);
@@ -85,7 +86,7 @@ function useShellAgent(tab: TermTab): { harness: Harness | null; transcript: str
     };
   }, [tab.id, tab.task]);
   const fromCard = card && card.harness !== "other" ? card.harness : null;
-  return { harness: fromCard ?? pane, transcript: card?.transcript ?? null };
+  return { harness: fromCard ?? pane, transcript: card?.transcript ?? null, session: card?.session ?? null };
 }
 
 /** ▶ ■ bug ✓ on a shell's tab row, for the repo of the tab showing, and
@@ -137,6 +138,8 @@ export function AgentButtons({ tab }: { tab: TermTab }) {
       {!seed && agent.harness && tab.task === undefined && (
         <HandoffButton className="term-new term-word" repoId={tab.repoId} backend={backendOf(tab.id)} from={agent.harness} transcript={agent.transcript} term={tab.id} />
       )}
+      {/* rendered without an agent too: an open move sheet outlives the agent its stop quits */}
+      {!seed && tab.task === undefined && <MoveButton tab={tab} harness={agent.harness} session={agent.session} />}
     </span>
   );
 }

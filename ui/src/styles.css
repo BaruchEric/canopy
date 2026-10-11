@@ -4206,6 +4206,71 @@ body.resizing-rows {
   margin: 0;
 }
 
+/* moving a shell's session to another backend: what it carries, then its steps */
+.move-sheet .move-prompt {
+  margin: 0 0 6px;
+  overflow-wrap: anywhere;
+}
+.move-sheet .move-meta {
+  margin: 2px 0;
+  font-size: 12px;
+  color: var(--ink-dim);
+  overflow-wrap: anywhere;
+}
+.move-sheet .move-meta .mini {
+  margin-left: 6px;
+}
+.move-sheet .move-files {
+  max-height: 160px;
+  overflow: auto;
+  margin: 4px 0;
+  padding-left: 18px;
+  font-family: var(--mono);
+  font-size: 11px;
+  overflow-wrap: anywhere;
+}
+.move-sheet .note {
+  margin: 8px 0;
+}
+.move-steps {
+  list-style: none;
+  margin: 10px 0 0;
+  padding: 0;
+}
+.move-step {
+  position: relative;
+  padding: 2px 0 2px 20px;
+  color: var(--ink-faint);
+}
+.move-step::before {
+  content: "○";
+  position: absolute;
+  left: 0;
+}
+.move-step.now {
+  color: var(--ink);
+}
+.move-step.now::before {
+  content: "◌";
+}
+.move-step.done {
+  color: var(--ink-dim);
+}
+.move-step.done::before {
+  content: "✓";
+  color: var(--moss);
+}
+.move-step.failed {
+  color: var(--rust);
+}
+.move-step.failed::before {
+  content: "✕";
+}
+.move-pick {
+  display: inline-flex;
+  gap: 4px;
+}
+
 /* the console: one trunk, a node per step, the same 3px as the leaf edge */
 .console {
   padding: 12px 16px 16px;
