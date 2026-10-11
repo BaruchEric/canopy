@@ -118,3 +118,24 @@ The mini's canopy container writes into the host's `~/.claude` through the bind 
 - **Claude quits on Escape, `/exit`, Enter** sent as three separate key sends in a tmux pane: back at the shell in 2 s, and slash autocomplete did not pick another command.
 - **Codex quits on `/quit` and on `/exit` alike**, back at the shell in 1 s. Codex 0.162 runs its work in a shared daemon, and quitting the TUI only disconnects: it prints "Any running work continues". So Escape before the quit command matters for Codex (it stops the turn in progress), and if a turn kept going in the daemon and edited files after the snapshot, `resetTree`'s drift check refuses the reset rather than losing those edits. Codex stays on `/quit`.
 - **Backend names are peer names.** The Mac's config has self `mac`, peer `mini`; the mini's has self `mini`, peer `mac`; both list backends `mini` and `mac`, and peer sync is on for both. The page's `backendOf(tab.id)` is what the target looks up among its peers, so no mapping is needed.
+
+## As built
+
+The design held in shape: five steps, the browser carrying the transcript, the snapshot kept before the reset. What the code does that the design did not say:
+
+- **Route names.** The source answers `/api/terms/move/plan`, `/move/out`, `/move/transcript`, `/move/finish` and `/move/undo`. The target answers `/api/repos/movecheck` and `/api/repos/movein`, because `/api/repos/<action>` takes one lowercase word.
+- **Undo.** `move/undo` types the resume line into the same shell instead of opening a new one, and does nothing when an agent is back in the pane.
+- **Codex.** It quits with `/quit` (Claude with `/exit`), after an Escape, with the text and the Enter sent as separate key sends.
+- **The snapshot.** `refs/canopy-moved/<session>` holds it. `resetTree` runs `git clean` before `git reset --hard`, so an uncommitted `.gitignore` rule cannot hide files from the clean. It refuses files marked assume-unchanged or skip-worktree, a HEAD that moved, and a merge or rebase in progress, and it resets with `submodule.recurse=false`.
+- **The source's record.** `state.moving` holds a stage union: `stopping` (held before the first await, so a second out is refused), `stopped` (the agent is gone, no snapshot yet), `saved` (the snapshot is in hand). `move/transcript` and `move/finish` refuse until the stage is `saved`.
+- **The target's load.** `movein` refuses everything it can before it takes the work: harness, dry mode, active runs, a split transcript, the fetch and the branch. The term id in its metadata is an idempotency key, so a retry after a lost answer finds the shell and touches nothing. The work lands first and the transcript second; a retry that finds the tree already equal to the snapshot skips the take. `movecheck` also refuses when peer sync is in dry mode.
+- **The sheet.** It keeps the tab, harness and session it opened on, since the stop quits the agent and the tab row may come to show another shell. Closing a failed sheet after the agent stopped runs the undo. A loaded tab lands exactly once (`landOnce`), whether by success, the clean retry, closing, or the sheet going away.
+
+### Live check
+
+Not run yet. It waits on the owner's go to push and redeploy the mini. It will cover, in a real browser on canopy.beric.ca with a scratch repo checked out on both machines:
+
+1. Start Claude in a Mac shell, tell it a codeword, and leave one modified and one new file.
+2. Move to the mini. The mini's tab opens, the agent returns the codeword, both files are on the mini uncommitted, the Mac's tree is clean, and `git rev-parse refs/canopy-moved/<session>` works on the Mac.
+3. Move it back to the Mac and repeat the checks the other way. The second move replaces the Mac's earlier transcript under the prefix rule.
+4. On the mini host, `ls -ln` on the moved transcript shows an owner the `claude` user in the shells container can read (the bind-mount question).
