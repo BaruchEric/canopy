@@ -23,8 +23,10 @@ const ago = (ms: number): string => {
 };
 
 /** what a move started with, kept while its sheet is open: the stop quits
- *  the agent, so the shell's harness and session go away mid-move */
+ *  the agent, so the shell's harness and session go away mid-move, and the
+ *  tab row this button sits on may come to show another shell */
 interface Moving {
+  tab: TermTab;
   toRepoId: string;
   harness: Harness;
   session: string | null;
@@ -42,7 +44,7 @@ export function MoveButton({ tab, harness, session }: { tab: TermTab; harness: H
   const open = (toRepoId: string) => {
     if (!harness) return;
     setPicking(false);
-    setMoving({ toRepoId, harness, session });
+    setMoving({ tab, toRepoId, harness, session });
   };
   return (
     <>
@@ -65,12 +67,12 @@ export function MoveButton({ tab, harness, session }: { tab: TermTab; harness: H
           ))}
         </span>
       )}
-      {moving && createPortal(<MoveSheet tab={tab} {...moving} close={() => setMoving(null)} />, document.body)}
+      {moving && createPortal(<MoveSheet {...moving} close={() => setMoving(null)} />, document.body)}
     </>
   );
 }
 
-function MoveSheet({ tab, harness, session, toRepoId, close }: Moving & { tab: TermTab; close: () => void }) {
+function MoveSheet({ tab, harness, session, toRepoId, close }: Moving & { close: () => void }) {
   const landMove = useStore((s) => s.landMove);
   const from = backendOf(tab.repoId);
   const to = backendOf(toRepoId);
