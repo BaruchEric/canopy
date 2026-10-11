@@ -2,7 +2,7 @@ import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { endAgent, MOVE_MAX, MoveError, movePath, placeTranscript, QUIT, rewriteTranscript, type PaneDriver } from "./move";
+import { endAgent, MOVE_MAX, MoveError, movePath, placeTranscript, QUIT, rewriteTranscript, transcriptConflict, type PaneDriver, type PlaceTranscript } from "./move";
 import { projectFolder, transcriptFile } from "./sessions";
 
 const S = "0f5e2c1a-1111-4222-8333-444455556666";
@@ -74,6 +74,16 @@ describe("placeTranscript", () => {
     expect(got.replaced).toBe(true);
     const split = placeTranscript({ harness: "claude", session: S, text: '{"a":1}\n', name: `${S}.jsonl`, to: TO, homes: homes() });
     await expect(split).rejects.toMatchObject({ status: 409 });
+  });
+  test("transcriptConflict answers what placeTranscript would, writing nothing", async () => {
+    const at: Omit<PlaceTranscript, "text"> = { harness: "claude", session: S, name: `${S}.jsonl`, to: TO, homes: homes() };
+    const file = join(scratch, "claude", "projects", projectFolder(TO), `${S}.jsonl`);
+    const was = await readFile(file, "utf8");
+    expect(await transcriptConflict({ ...at, text: `${was}{}\n` })).toBeNull();
+    expect(await transcriptConflict({ ...at, text: was })).toBeNull();
+    expect(await transcriptConflict({ ...at, text: '{"a":1}\n' })).toMatch(/different copy/);
+    expect(await readFile(file, "utf8")).toBe(was);
+    expect(await transcriptConflict({ ...at, session: "0e0e0e0e-0000-4000-8000-000000000000", text: "{}\n" })).toBeNull();
   });
   test("codex: keeps its day folders and file name", async () => {
     const name = `2026/10/10/rollout-2026-10-10T09-00-00-${S}.jsonl`;

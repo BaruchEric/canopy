@@ -70,7 +70,8 @@ beforeAll(async () => {
   await mkdir(dir, { recursive: true });
   await writeFile(join(dir, `${S}.jsonl`), `${JSON.stringify({ type: "user", cwd: join(root, "app"), message: { content: "fix the login" } })}\n`);
   process.env["CANOPY_PEERS_JSON"] = JSON.stringify({ self: "mac", peerSync: "on", seed: [], peers: [{ name: "mini", alias: null, root: join(scratch, "other"), role: "git" }] });
-  server = await startServer({ root, port: 0 });
+  // codex left out, so a target without the harness can be tested
+  server = await startServer({ root, port: 0, harnesses: ["claude"] });
 });
 
 afterAll(async () => {
@@ -300,7 +301,7 @@ describe("the target half of a move", () => {
     try {
       const r = (await (await check({ from: SRC, branch: "main", head: out.head, transcriptBytes: 10, session: T, harness: "claude" })).json()) as MoveCheck;
       expect(r.ok).toBe(false);
-      expect(r.reason).toMatch(/could not be reached/);
+      expect(r.reason).toMatch(/could not be reached.*same folder on both machines/);
     } finally {
       process.env["CANOPY_PEERS_JSON"] = kept;
     }
@@ -325,13 +326,30 @@ describe("the target half of a move", () => {
     expect(await readFile(join(root, "app", "moved.txt"), "utf8")).toBe("carried\n");
     const file = join(scratch, "claude", "projects", projectFolder(join(root, "app")), `${T}.jsonl`);
     expect(JSON.parse((await readFile(file, "utf8")).trim()).cwd).toBe(join(root, "app"));
-    // a retry after a lost answer starts only the shell
-    const again = await load(out, text, term.replace("12", "34"));
+    // a retry after a lost answer finds the shell the first one started
+    const again = await load(out, text, term);
     expect(again.status).toBe(201);
+    expect(((await again.json()) as { id: string }).id).toBe(term);
+    const terms = (await (await fetch(url("/api/terms"))).json()) as { id: string }[];
+    expect(terms.filter((x) => x.id === term)).toHaveLength(1);
     const c = (await (await check({ from: SRC, branch: "main", head: out.head, transcriptBytes: 10, session: T, harness: "claude" })).json()) as MoveCheck;
     expect(c.existing).toBe(true);
     await git(join(root, "app"), "checkout", "-q", "--", ".");
     await git(join(root, "app"), "clean", "-fdq");
+  });
+
+  test.if(tmux)("a retry whose first try landed the work but started no shell skips the take", async () => {
+    const { out, text } = await sourceOut(true);
+    // the first try's take, by hand: the snapshot's tree is here exactly
+    await writeFile(join(root, "app", "moved.txt"), "carried\n");
+    // gone from the peer, so a take would fail: only the landed path answers 201
+    await git(join(other, "app"), "update-ref", "-d", "refs/wip/main");
+    try {
+      const r = await load(out, text, "abab1234abab1234abab1234abab1234");
+      expect(r.status).toBe(201);
+    } finally {
+      await git(join(root, "app"), "clean", "-fdq");
+    }
   });
 
   test.if(tmux)("a clean source moves only the conversation", async () => {
@@ -347,7 +365,60 @@ describe("the target half of a move", () => {
     const { out, text } = await sourceOut(true);
     const r = await load({ ...out, wip: "0".repeat(40) }, text, "9999999999999999999999999999abcd");
     expect(r.status).toBe(409);
+    expect(((await r.json()) as { error: string }).error).toMatch(/snapshot is not the one/);
     expect(existsSync(join(root, "app", "moved.txt"))).toBe(false);
+  });
+
+  /** the target as it was: no work landed, nothing uncommitted */
+  async function untouched(): Promise<void> {
+    expect(existsSync(join(root, "app", "moved.txt"))).toBe(false);
+    expect(await git(join(root, "app"), "status", "--porcelain")).toBe("");
+  }
+
+  test("load refuses a cut-off transcript before the work lands", async () => {
+    const { out } = await sourceOut(true);
+    const r = await load(out, '{"type":"user","cwd":', "8888888888888888888888888888abcd");
+    expect(r.status).toBe(400);
+    expect(((await r.json()) as { error: string }).error).toMatch(/not JSON/);
+    await untouched();
+  });
+
+  test("load refuses a conversation this machine has a different copy of, before the work lands", async () => {
+    const U = "0f5e2c1a-3333-4222-8333-444455556666";
+    const dir = join(scratch, "claude", "projects", projectFolder(join(root, "app")));
+    await mkdir(dir, { recursive: true });
+    await writeFile(join(dir, `${U}.jsonl`), `${JSON.stringify({ type: "user", cwd: join(root, "app"), message: { content: "split" } })}\n`);
+    const { out, text } = await sourceOut(true);
+    const r = await load({ ...out, session: U, name: `${U}.jsonl` }, text, "7777777777777777777777777777abcd");
+    expect(r.status).toBe(409);
+    expect(((await r.json()) as { error: string }).error).toMatch(/different copy/);
+    await untouched();
+  });
+
+  test("a target without the harness: check says so, load refuses before the work lands", async () => {
+    const { out, text } = await sourceOut(true);
+    const c = (await (await check({ from: SRC, branch: "main", head: out.head, transcriptBytes: 10, session: T, harness: "codex" })).json()) as MoveCheck;
+    expect(c.ok).toBe(false);
+    expect(c.reason).toMatch(/codex/i);
+    const r = await load({ ...out, harness: "codex" }, text, "6666666666666666666666666666abcd");
+    expect(r.status).toBe(400);
+    await untouched();
+  });
+
+  test("peer sync in dry mode: check says so, load refuses", async () => {
+    const { out, text } = await sourceOut(true);
+    const kept = process.env["CANOPY_PEERS_JSON"]!;
+    process.env["CANOPY_PEERS_JSON"] = JSON.stringify({ self: "mini", peerSync: "dry", seed: [], peers: [{ name: SRC, alias: null, root: other, role: "git" }] });
+    try {
+      const c = (await (await check({ from: SRC, branch: "main", head: out.head, transcriptBytes: 10, session: T, harness: "claude" })).json()) as MoveCheck;
+      expect(c).toMatchObject({ ok: false, reason: "peer sync is in dry mode; a move needs it on" });
+      const r = await load(out, text, "5555555555555555555555555555abcd");
+      expect(r.status).toBe(409);
+      expect(((await r.json()) as { error: string }).error).toBe("peer sync is in dry mode; a move needs it on");
+    } finally {
+      process.env["CANOPY_PEERS_JSON"] = kept;
+    }
+    await untouched();
   });
 
   test("load refuses malformed meta", async () => {

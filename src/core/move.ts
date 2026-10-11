@@ -100,17 +100,22 @@ export function rewriteTranscript(text: string, from: string, to: string): strin
 const codexName = (name: string, session: string): boolean =>
   /^\d{4}\/\d{2}\/\d{2}\/rollout-[^/]+\.jsonl$/.test(name) && name.endsWith(`-${session}.jsonl`) && normalize(name) === name;
 
-/** Writes the transcript where the target's harness finds it. An earlier
- *  copy is replaced only when it is a line-for-line prefix of this one (the
- *  same conversation, moved here before); otherwise the two have split. */
-export async function placeTranscript(o: {
+/** what placeTranscript takes: the moved text and where it goes */
+export interface PlaceTranscript {
   harness: Harness;
   session: string;
   text: string;
   name: string;
   to: string;
   homes?: { claude?: string; codex?: string };
-}): Promise<{ file: string; replaced: boolean }> {
+}
+
+const SPLIT = "this machine already has a different copy of that conversation";
+
+/** where the transcript goes, what is there now, and whether the two have
+ *  split: an earlier copy may be replaced only when it is a line-for-line
+ *  prefix of this one (the same conversation, moved here before) */
+async function placing(o: PlaceTranscript): Promise<{ file: string; had: string | null; split: boolean }> {
   if (!isSessionId(o.session)) throw new MoveError(400, "session must be a session id");
   if (o.text.length > MOVE_MAX) throw new MoveError(413, "the transcript is over 64 MB");
   let file: string;
@@ -121,9 +126,23 @@ export async function placeTranscript(o: {
     file = join(o.homes?.claude ?? claudeHome(), "projects", projectFolder(o.to), `${o.session}.jsonl`);
   }
   const had = await readFile(file, "utf8").catch(() => null);
-  if (had !== null && had !== o.text && !(o.text.startsWith(had) && (had === "" || had.endsWith("\n")))) {
-    throw new MoveError(409, "this machine already has a different copy of that conversation");
-  }
+  const split = had !== null && had !== o.text && !(o.text.startsWith(had) && (had === "" || had.endsWith("\n")));
+  return { file, had, split };
+}
+
+/** Why placeTranscript would refuse this transcript, or null when it would
+ *  write it; writes nothing. A move asks before it lands any work, so a
+ *  refusal leaves the target as it was. Throws as placeTranscript does for
+ *  a bad session id, size or codex name. */
+export async function transcriptConflict(o: PlaceTranscript): Promise<string | null> {
+  return (await placing(o)).split ? SPLIT : null;
+}
+
+/** Writes the transcript where the target's harness finds it, refusing a
+ *  copy that has split from this one (see placing). */
+export async function placeTranscript(o: PlaceTranscript): Promise<{ file: string; replaced: boolean }> {
+  const { file, had, split } = await placing(o);
+  if (split) throw new MoveError(409, SPLIT);
   await mkdir(dirname(file), { recursive: true });
   const tmp = `${file}.moving-${process.pid}`;
   await writeFile(tmp, o.text);

@@ -66,8 +66,8 @@ import { shipConfig, shipper, type Shipper } from "../core/shipper";
 import { seedSource, type SeedSource } from "../core/seedsource";
 import { vaultConfig, vaultNotes } from "../core/vault";
 import { linkPeers, NO_PUSH, peerUrl } from "../core/peers";
-import { currentBranch, fetchPeer, gitSshCommand, initRepo, isBusy, isDirty, PassSeen, resetTree, seedRepo, snapshotWip, syncAll, syncRepo, takeWip, trackBranch, treeIs } from "../core/peersync";
-import { endAgent, MOVE_MAX, MoveError, placeTranscript, rewriteTranscript, type PaneDriver } from "../core/move";
+import { currentBranch, fetchPeer, gitSshCommand, type FetchOutcome, initRepo, isBusy, isDirty, PassSeen, resetTree, seedRepo, snapshotWip, syncAll, syncRepo, takeWip, trackBranch, treeIs } from "../core/peersync";
+import { endAgent, MOVE_MAX, MoveError, placeTranscript, rewriteTranscript, transcriptConflict, type PaneDriver } from "../core/move";
 import { normalizeLaunch } from "../core/launch";
 import { repoSpecState, syncRepo as syncSpec } from "../core/spec";
 import { Launcher, LauncherError } from "../core/launcher";
@@ -932,6 +932,20 @@ function movePeer(s: PeerSettings, from: unknown): Peer {
   return peer;
 }
 
+/** a peer that has no copy of the repo where this one looks, or one not where the move says */
+const notThere = (from: string, name: string, branch: string): string =>
+  `${from} could not be reached for ${name}, or its ${branch} is not where the move says (is the repo filed under the same folder on both machines?)`;
+
+/** why a move's fetch from the peer does not count, or null when it answered */
+function fetchRefusal(got: FetchOutcome, from: string, name: string, branch: string): string | null {
+  if (got === "ok") return null;
+  if (got === "missing") return notThere(from, name, branch);
+  return `${from} could not be reached for ${name} (${typeof got === "string" ? got : got.error})`;
+}
+
+/** what a move check and a load both answer when peer sync only reports */
+const MOVE_DRY = "peer sync is in dry mode; a move needs it on";
+
 /** Why the target cannot take a move as it stands, or null when it can:
  *  the peer's branch as fetched is `head` (which proves the fetch reached
  *  the source under this repo's id and this peer's name, so the load's
@@ -939,9 +953,7 @@ function movePeer(s: PeerSettings, from: unknown): Peer {
  *  merge or rebase in progress. */
 async function moveBlocker(path: string, name: string, from: string, branch: string, head: string): Promise<string | null> {
   const theirs = await git(path, ["rev-parse", "-q", "--verify", `refs/remotes/${from}/${branch}`]);
-  if (theirs.code !== 0 || theirs.stdout.trim() !== head) {
-    return `${from} could not be reached for ${name}, or its ${branch} is not where the move says (is the repo filed under the same folder on both machines?)`;
-  }
+  if (theirs.code !== 0 || theirs.stdout.trim() !== head) return notThere(from, name, branch);
   if (await isBusy(path)) return `${name} has a merge, rebase or similar in progress`;
   const on = await currentBranch(path);
   if (on !== branch) return `${name} is on ${on ?? "a detached HEAD"} here, not ${branch}`;
@@ -3252,6 +3264,11 @@ async function handleApi(
       const activeRun = state.runner.activeFor(repo.id);
       if (activeRun) throw new HttpError(409, busyWith(repo.name, activeRun.verb));
       if (state.flows.activeFor(repo.id)) throw new HttpError(409, "a workflow is running here");
+      const existing = await hasAgentSession(b.harness, repo.path, b.session);
+      const refuse = (reason: string): Response => json({ ok: false, reason, path: repo.path, existing } satisfies MoveCheck);
+      if (s.peerSync === "dry") return refuse(MOVE_DRY);
+      const noHarness = await harnessRefusal(state, b.harness, repo.path);
+      if (noHarness) return refuse(noHarness);
       const fetched = await withPeering(state, async () => {
         await initRepo(repo.path, repo.id, s.peers, false);
         applyPeerState(state, repo.id, await syncRepo(repo.id, { self: s.self, peers: s.peers, seed: s.seed, dry: false, root: state.root }, new PassSeen()));
@@ -3259,9 +3276,9 @@ async function handleApi(
         // last fetch, so this fetch is what proves the source answers now
         return fetchPeer(repo.path, repo.id, peer, { GIT_SSH_COMMAND: gitSshCommand(configDir()) });
       });
-      const reason = fetched !== "ok" ? `${peer.name} could not be reached for ${repo.name} (${typeof fetched === "string" ? fetched : fetched.error})` : await moveBlocker(repo.path, repo.name, peer.name, branch, head);
-      const check: MoveCheck = { ok: reason === null, ...(reason ? { reason } : {}), path: repo.path, existing: await hasAgentSession(b.harness, repo.path, b.session) };
-      return json(check);
+      const reason = fetchRefusal(fetched, peer.name, repo.name, branch) ?? (await moveBlocker(repo.path, repo.name, peer.name, branch, head));
+      if (reason) return refuse(reason);
+      return json({ ok: true, path: repo.path, existing } satisfies MoveCheck);
     }
     if (method === "POST" && action === "movein") {
       if (!peerable(state, repo)) throw new HttpError(400, "a move covers local repos under the launch root");
@@ -3286,20 +3303,31 @@ async function handleApi(
       if (wip !== null && !(typeof wip === "string" && /^[0-9a-f]{40}$/.test(wip))) throw new HttpError(400, "wip must be a commit or null");
       const meta: MoveOut = { session: m.session, harness: m.harness, path: m.path, branch: m.branch, head: m.head, name: m.name, wip };
       const term = m.term;
+      // the shell is the load's name: a retry after a lost answer finds the
+      // shell the first one started and answers with it, touching nothing
+      const started = state.terms.get(term);
+      if (started && !started.ending && started.info.repoId === repo.id) return json(termInfo(state, started), 201);
+      // every refusal that can be known up front comes before the work
+      // lands, so none of them leaves it stranded here with the source stopped
+      await needHarness(state, meta.harness, repo.path);
       const s = await movePeers();
       const peer = movePeer(s, m.from);
+      if (s.peerSync === "dry") throw new HttpError(409, MOVE_DRY);
       const activeRun = state.runner.activeFor(repo.id);
       if (activeRun) throw new HttpError(409, busyWith(repo.name, activeRun.verb));
       if (state.flows.activeFor(repo.id)) throw new HttpError(409, "a workflow is running here");
       const text = await file.text();
       try {
+        const moved = rewriteTranscript(text, meta.path, repo.path);
+        const place = { harness: meta.harness, session: meta.session, text: moved, name: meta.name, to: repo.path };
         await withPeering(state, async () => {
+          const split = await transcriptConflict(place);
+          if (split) throw new HttpError(409, split);
           // a retry after a lost answer: the work is already here, exactly
           const landed = meta.wip !== null && (await isDirty(repo.path)) && (await treeIs(repo.path, meta.wip));
           if (!landed) {
             const fetched = await fetchPeer(repo.path, repo.id, peer, { GIT_SSH_COMMAND: gitSshCommand(configDir()) });
-            if (fetched !== "ok") throw new HttpError(409, `could not fetch from ${peer.name}: ${typeof fetched === "string" ? fetched : fetched.error}`);
-            const reason = await moveBlocker(repo.path, repo.name, peer.name, meta.branch, meta.head);
+            const reason = fetchRefusal(fetched, peer.name, repo.name, meta.branch) ?? (await moveBlocker(repo.path, repo.name, peer.name, meta.branch, meta.head));
             if (reason) throw new HttpError(409, reason);
           }
           if (meta.wip && !landed) {
@@ -3309,9 +3337,9 @@ async function handleApi(
             if (took.how === "branch") throw new HttpError(409, `the work landed on branch ${took.branch ?? "?"} instead of the tree; take it from there`);
           }
           // the transcript only after the work landed, so a refused take
-          // leaves none behind and a retry finds the work (landed) and skips
-          const moved = rewriteTranscript(text, meta.path, repo.path);
-          await placeTranscript({ harness: meta.harness, session: meta.session, text: moved, name: meta.name, to: repo.path });
+          // leaves none behind and a retry finds the work (landed) and skips;
+          // its own check here is the last guard, under the lock
+          await placeTranscript(place);
         });
       } catch (err) {
         if (err instanceof MoveError) throw new HttpError(err.status, err.message);
