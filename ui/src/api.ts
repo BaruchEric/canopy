@@ -227,7 +227,7 @@ async function blobReq(b: string, path: string): Promise<Blob> {
   const r = await fetch(base + path, base ? { credentials: "include" } : {});
   if (!r.ok) {
     const body = (await r.json().catch(() => null)) as { error?: string } | null;
-    throw new Error(body?.error ?? `${r.status} ${r.statusText}`);
+    throw Object.assign(new Error(body?.error ?? `${r.status} ${r.statusText}`), { status: r.status });
   }
   return r.blob();
 }
@@ -475,25 +475,27 @@ export const api = {
   /** whether the target repo can take a move as it stands */
   moveCheck: (repoId: string, body: { from: string; branch: string; head: string; transcriptBytes: number; session: string; harness: Harness }) =>
     repoReq<MoveCheck>(repoId, (p) => `/api/repos/movecheck?${rq(p)}`, { method: "POST", body: JSON.stringify(body) }),
-  /** stops the shell's agent and snapshots its work */
-  moveOut: (term: string, session: string, harness: Harness) =>
-    repoReq<MoveOut>(term, (p) => `/api/terms/move/out?term=${encodeURIComponent(p)}`, { method: "POST", body: JSON.stringify({ session, harness }) }),
-  moveTranscript: (term: string, session: string) => {
+  /** stops the shell's agent and snapshots its work, under the move id the
+   *  later calls name again (32 hex digits, minted by the sheet) */
+  moveOut: (term: string, session: string, harness: Harness, move: string) =>
+    repoReq<MoveOut>(term, (p) => `/api/terms/move/out?term=${encodeURIComponent(p)}&move=${move}`, { method: "POST", body: JSON.stringify({ session, harness }) }),
+  moveTranscript: (term: string, session: string, move: string) => {
     const [b, plain] = on(term);
-    return blobReq(b, `/api/terms/move/transcript?term=${encodeURIComponent(plain)}&session=${encodeURIComponent(session)}`);
+    return blobReq(b, `/api/terms/move/transcript?term=${encodeURIComponent(plain)}&session=${encodeURIComponent(session)}&move=${move}`);
   },
   /** loads the moved work and conversation into a new shell `term` at the target repo */
   moveIn: async (repoId: string, out: MoveOut, transcript: Blob, source: string, term: string, place: ShellPlace, cols = 80, rows = 24) => {
     const [b, plain] = on(repoId);
     const form = new FormData();
-    form.set("meta", JSON.stringify({ ...out, from: source, term: plainOf(term), place, cols, rows }));
+    // the move id is the source's alone; left out, the target never sees it
+    form.set("meta", JSON.stringify({ ...out, move: undefined, from: source, term: plainOf(term), place, cols, rows }));
     form.set("transcript", transcript, "transcript.jsonl");
     return from(b, await req<TermInfo>(b, `/api/repos/movein?${rq(plain)}`, { method: "POST", body: form }), qTerm);
   },
-  moveFinish: (term: string) =>
-    repoReq<{ ok: true; reset: string }>(term, (p) => `/api/terms/move/finish?term=${encodeURIComponent(p)}`, { method: "POST" }),
-  moveUndo: (term: string) =>
-    repoReq<{ ok: true; resumed: boolean }>(term, (p) => `/api/terms/move/undo?term=${encodeURIComponent(p)}`, { method: "POST" }),
+  moveFinish: (term: string, move: string) =>
+    repoReq<{ ok: true; reset: string }>(term, (p) => `/api/terms/move/finish?term=${encodeURIComponent(p)}&move=${move}`, { method: "POST" }),
+  moveUndo: (term: string, move: string) =>
+    repoReq<{ ok: true; resumed: boolean }>(term, (p) => `/api/terms/move/undo?term=${encodeURIComponent(p)}&move=${move}`, { method: "POST" }),
   /** turns the recording on or off for this backend */
   setKeeping: (on: boolean, b: string = homeName()) =>
     req<{ keeping: boolean }>(b, "/api/keep", { method: "POST", body: JSON.stringify({ on }) }),

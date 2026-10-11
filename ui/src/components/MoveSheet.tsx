@@ -3,7 +3,7 @@ import { createPortal } from "react-dom";
 import type { Harness, MoveCheck, MovePlan, TermInfo } from "../../../src/core/types";
 import { api } from "../api";
 import { backendOf, qual } from "../registry";
-import { MOVE_STEPS, runMove, type MoveOutcome, type MoveStep } from "../move";
+import { closeUndoes, MOVE_STEPS, offersResume, runMove, statusOf, type MoveOutcome, type MoveStep } from "../move";
 import { cardOf, useStore } from "../store";
 import { termId, type TermTab } from "../term";
 
@@ -99,6 +99,9 @@ function MoveSheet({ tab, harness, session, toRepoId, close }: Moving & { close:
   // the tab row may stop showing this sheet's button (the shell exits, say)
   // while a failed clean waits: the term already loaded there lands then
   const loaded = useRef<TermInfo | null>(null);
+  /** this try's move id, which the source's later calls name, and the
+   *  shell name the target loads under, both minted once per go */
+  const run = useRef<{ move: string; target: string } | null>(null);
   const mounted = useRef(false);
   useEffect(() => {
     mounted.current = true;
@@ -127,17 +130,22 @@ function MoveSheet({ tab, harness, session, toRepoId, close }: Moving & { close:
   // a failed clean leaves the session running on the target: its tab lands
   // when the sheet closes, so the sheet stays up to retry the clean
   const landed: TermInfo | null = failed?.loaded ?? null;
+  // the load's answer never came: the target may run the session already
+  const unknown = failed?.unknown === true;
   // stopped and not loaded: the source holds a move record until undone
-  const unresumed = failed !== null && failed.stopped && !failed.loaded && undone === null;
+  const unresumed = failed !== null && offersResume(failed) && undone === null;
 
   /** "resume here": the source forgets the move and resumes its agent if
-   *  it had quit. Closing the sheet runs it too, so no record is left to
-   *  refuse the next move from this shell. */
+   *  it had quit. Closing the sheet runs it too (but not after a load that
+   *  may have run), so no record is left to refuse the next move from this
+   *  shell. */
   const undo = async (closing: boolean) => {
+    const move = run.current?.move;
+    if (!move) return;
     setBusy(true);
     setError(null);
     try {
-      const r = await api.moveUndo(tab.id);
+      const r = await api.moveUndo(tab.id, move);
       if (closing || r.resumed) {
         close();
         return;
@@ -153,7 +161,7 @@ function MoveSheet({ tab, harness, session, toRepoId, close }: Moving & { close:
 
   const finish = () => {
     if (running || busy) return;
-    if (unresumed) {
+    if (failed && closeUndoes(failed) && undone === null) {
       void undo(true);
       return;
     }
@@ -172,14 +180,19 @@ function MoveSheet({ tab, harness, session, toRepoId, close }: Moving & { close:
   const go = async () => {
     if (!plan) return;
     setError(null);
+    const move = termId();
+    // one name for every load of this try, so a retry finds what an earlier
+    // load whose answer was lost started instead of starting a second shell
+    const target = qual(to, termId());
+    run.current = { move, target };
     const result = await runMove(
       {
         check: () => api.moveCheck(toRepoId, { from, branch: plan.branch, head: plan.head, transcriptBytes: plan.transcriptBytes, session: plan.session, harness: plan.harness }),
-        stop: () => api.moveOut(tab.id, plan.session, plan.harness),
-        transcript: (out) => api.moveTranscript(tab.id, out.session),
-        load: (out, blob) => api.moveIn(toRepoId, out, blob, from, qual(to, termId()), tab.place),
+        stop: () => api.moveOut(tab.id, plan.session, plan.harness, move),
+        transcript: (out) => api.moveTranscript(tab.id, out.session, move),
+        load: (out, blob) => api.moveIn(toRepoId, out, blob, from, target, tab.place),
         clean: async () => {
-          await api.moveFinish(tab.id);
+          await api.moveFinish(tab.id, move);
         },
       },
       setStep,
@@ -190,26 +203,60 @@ function MoveSheet({ tab, harness, session, toRepoId, close }: Moving & { close:
       return;
     }
     loaded.current = result.loaded;
-    // gone while the steps ran: nothing is left to show the failure on
+    // gone while the steps ran: nothing is left to show the failure on, so
+    // it does what closing would have
     if (!mounted.current) {
       if (result.loaded) land(result.loaded);
+      else if (closeUndoes(result)) void api.moveUndo(tab.id, move).catch(() => {});
       return;
     }
     setOutcome(result);
   };
 
   const retryClean = async () => {
-    if (!landed) return;
+    const move = run.current?.move;
+    if (!landed || !move) return;
     setBusy(true);
     setError(null);
     try {
-      await api.moveFinish(tab.id);
+      await api.moveFinish(tab.id, move);
       land(landed);
       close();
     } catch (err) {
       setError(errText(err));
       setBusy(false);
     }
+  };
+
+  /** "check again" after a load with no answer: the same shell name again,
+   *  which the target answers with the shell it holds or by starting it */
+  const checkAgain = async () => {
+    const r = run.current;
+    if (!failed?.unknown || !failed.carried || !r) return;
+    setBusy(true);
+    setError(null);
+    let info: TermInfo;
+    try {
+      info = await api.moveIn(toRepoId, failed.carried.out, failed.carried.transcript, from, r.target, tab.place);
+    } catch (err) {
+      // an answer this time: the target did not take it, so the way back
+      // is the undo again; no answer still leaves it unknown
+      if (statusOf(err) !== null) setOutcome({ ...failed, unknown: false, error: errText(err) });
+      else setError(errText(err));
+      setBusy(false);
+      return;
+    }
+    loaded.current = info;
+    try {
+      await api.moveFinish(tab.id, r.move);
+    } catch (err) {
+      setStep("clean");
+      setOutcome({ ...failed, step: "clean", unknown: false, loaded: info, error: errText(err) });
+      setBusy(false);
+      return;
+    }
+    land(info);
+    close();
   };
 
   const at = step ? MOVE_STEPS.indexOf(step) : -1;
@@ -278,14 +325,24 @@ function MoveSheet({ tab, harness, session, toRepoId, close }: Moving & { close:
           )}
           {failed && <p className="note err">{failed.error}</p>}
           {landed && <p className="move-meta">the session already runs on {to}; this tree still has the work</p>}
+          {unknown && undone === null && (
+            <p className="move-meta">
+              {to} never answered the load, so it may already run the session. Check again first: resuming here while it runs there would split the conversation.
+            </p>
+          )}
           {undone === "nothing" && <p className="move-meta">nothing needed resuming here</p>}
           {error && <p className="note err">{error}</p>}
         </div>
         <footer className="sheet-foot">
           <span className="spacer" />
+          {unknown && undone === null && (
+            <button type="button" className="mini" disabled={busy} onClick={() => void checkAgain()}>
+              check again
+            </button>
+          )}
           {unresumed && (
             <button type="button" className="mini" disabled={busy} onClick={() => void undo(false)}>
-              resume here
+              {unknown ? "resume here anyway" : "resume here"}
             </button>
           )}
           {landed && (
