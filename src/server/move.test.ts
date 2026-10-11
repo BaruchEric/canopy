@@ -211,7 +211,7 @@ describe("the source half of a move", () => {
     }
   });
 
-  test.if(tmux)("a seed's shell does not move: plan, out and undo refuse, and its agent keeps running", async () => {
+  test.if(tmux)("a seed's shell does not move: plan and out refuse, undo finds nothing, and its agent keeps running", async () => {
     const term = TERM.replace("ab", "5e");
     await shellWithAgent(term, false, `${SEEDS_DIR}/seedy`);
     const m = mid();
