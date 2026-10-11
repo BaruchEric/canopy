@@ -4229,6 +4229,13 @@ body.resizing-rows {
   font-size: 11px;
   overflow-wrap: anywhere;
 }
+.move-sheet .move-file.deleted {
+  color: var(--rust);
+}
+.move-sheet .move-change {
+  margin-left: 8px;
+  color: var(--ink-faint);
+}
 .move-sheet .note {
   margin: 8px 0;
 }

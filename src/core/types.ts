@@ -1943,6 +1943,16 @@ export const TERM_GONE = 4404;
 export type ShellPlace = "panel" | "strip";
 
 /** What a move would carry from a shell, for the confirm sheet and the target's check. */
+/** One uncommitted path in a move's plan, as the target will get it: the
+ *  snapshot holds the working copy, so a deletion moves as a deletion and a
+ *  rename names the path it had. */
+export interface MoveFile {
+  path: string;
+  change: "added" | "modified" | "deleted" | "renamed";
+  /** the path a rename had */
+  from?: string;
+}
+
 export interface MovePlan {
   session: string;
   harness: Harness;
@@ -1957,7 +1967,7 @@ export interface MovePlan {
   /** ms, the transcript's last write */
   at: number;
   /** uncommitted paths, at most 200 */
-  files: string[];
+  files: MoveFile[];
   changed: number;
   /** gitignored entries that stay behind */
   ignored: number;

@@ -1,7 +1,7 @@
 import { mkdir, readFile, rename, stat, writeFile } from "node:fs/promises";
 import { dirname, join, normalize } from "node:path";
 import { claudeHome, codexHome, isSessionId, projectFolder } from "./sessions";
-import type { Harness } from "./types";
+import type { Harness, MoveFile } from "./types";
 
 /*
  * Moving an agent session to another machine: the transcript's working
@@ -11,6 +11,44 @@ import type { Harness } from "./types";
  * its `session_meta` line. Only `cwd` fields move: message text and tool
  * input keep the paths they had, since that is what was said.
  */
+
+/** A move plan's file list from `git status --porcelain=v1 -z
+ *  --untracked-files=all --ignored=traditional`: each change named the way
+ *  the working-copy snapshot carries it, ignored entries only counted. A
+ *  rename or copy in either column is followed by the path it had. A file
+ *  added and then deleted is in neither HEAD nor the working copy, so it
+ *  moves nothing and is left out. */
+export function moveFileList(status: string): { files: MoveFile[]; changed: number; ignored: number } {
+  const files: MoveFile[] = [];
+  let changed = 0;
+  let ignored = 0;
+  const parts = status.split("\0");
+  for (let i = 0; i < parts.length; i++) {
+    const e = parts[i] ?? "";
+    if (e.length < 4) continue;
+    const x = e[0];
+    const y = e[1];
+    const path = e.slice(3);
+    if (x === "!" && y === "!") {
+      ignored++;
+      continue;
+    }
+    let file: MoveFile | null;
+    if (x === "R" || y === "R") file = { path, change: "renamed", from: parts[++i] ?? "" };
+    else if (x === "C" || y === "C") {
+      i++; // the copy's source path
+      file = { path, change: "added" };
+    } else if (x === "?" && y === "?") file = { path, change: "added" };
+    else if (x === "A" && y === "D") file = null;
+    else if (x === "D" || y === "D") file = { path, change: "deleted" };
+    else if (x === "A") file = { path, change: "added" };
+    else file = { path, change: "modified" };
+    if (!file) continue;
+    changed++;
+    if (files.length < 200) files.push(file);
+  }
+  return { files, changed, ignored };
+}
 
 /** the largest transcript a move carries */
 export const MOVE_MAX = 64 * 1024 * 1024;

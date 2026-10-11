@@ -109,7 +109,7 @@ describe("the source half of a move", () => {
     await writeFile(join(root, "app", "new.txt"), "new\n");
     const plan = (await (await fetch(url(`/api/terms/move/plan?term=${TERM}&session=${S}&harness=claude`))).json()) as MovePlan;
     expect(plan).toMatchObject({ session: S, harness: "claude", branch: "main", changed: 2, prompt: "fix the login" });
-    expect(plan.files.sort()).toEqual(["README.md", "new.txt"]);
+    expect(plan.files.map((f) => `${f.change} ${f.path}`).sort()).toEqual(["added new.txt", "modified README.md"]);
 
     const m = mid();
     const early = await transcript(TERM, m);
@@ -132,6 +132,27 @@ describe("the source half of a move", () => {
     expect((await git(join(root, "app"), "rev-parse", `refs/canopy-moved/${S}`)).trim()).toBe(out.wip!);
     const terms = (await (await fetch(url("/api/terms"))).json()) as { id: string }[];
     expect(terms.some((x) => x.id === TERM)).toBe(false);
+  });
+
+  test.if(tmux)("a deleted file moves as a deletion, and the source's reset brings it back", async () => {
+    await shellWithAgent(TERM);
+    const app = join(root, "app");
+    await rm(join(app, "README.md"));
+    const plan = (await (await fetch(url(`/api/terms/move/plan?term=${TERM}&session=${S}&harness=claude`))).json()) as MovePlan;
+    expect(plan.files).toEqual([{ path: "README.md", change: "deleted" }]);
+    expect(plan.changed).toBe(1);
+
+    const m = mid();
+    const out = (await (await moveOut(TERM, m)).json()) as MoveOut;
+    expect(out.wip).toMatch(/^[0-9a-f]{40}$/);
+    // the snapshot holds the deletion: the file is in HEAD and not in it
+    expect(await git(app, "ls-tree", "--name-only", out.wip!)).not.toContain("README.md");
+    expect((await transcript(TERM, m)).status).toBe(200);
+
+    const fin = (await (await finish(TERM, m)).json()) as { reset: string };
+    expect(fin.reset).toBe("reset");
+    expect(existsSync(join(app, "README.md"))).toBe(true);
+    expect(await git(app, "status", "--porcelain")).toBe("");
   });
 
   test.if(tmux)("undo types the resume line back into the same shell and keeps the tree", async () => {
@@ -405,6 +426,27 @@ describe("the target half of a move", () => {
     } finally {
       await git(join(root, "app"), "clean", "-fdq");
     }
+  });
+
+  test.if(tmux)("a deletion lands as an unstaged deletion on the target", async () => {
+    const src = join(other, "app");
+    const app = join(root, "app");
+    for (const r of [src, app]) {
+      await git(r, "checkout", "-q", "--", ".");
+      await git(r, "clean", "-fdq");
+    }
+    await rm(join(src, "README.md"));
+    const { snapshotWip } = await import("../core/peersync");
+    await snapshotWip(src, SRC, false);
+    const wip = (await git(src, "rev-parse", "refs/wip/main")).trim();
+    const head = (await git(src, "rev-parse", "HEAD")).trim();
+    const text = `${JSON.stringify({ type: "user", cwd: src, message: { content: "carry on" } })}\n`;
+    const out = { session: T, harness: "claude" as const, path: src, branch: "main", head, name: `${T}.jsonl`, wip };
+    const r = await load(out, text, "d1e7ed0000000000000000000000d1e7");
+    expect(r.status).toBe(201);
+    expect(existsSync(join(app, "README.md"))).toBe(false);
+    expect(await git(app, "status", "--porcelain")).toBe(" D README.md\n");
+    for (const r of [src, app]) await git(r, "checkout", "-q", "--", ".");
   });
 
   test.if(tmux)("a clean source moves only the conversation", async () => {

@@ -298,7 +298,10 @@ function MoveSheet({ tab, harness, session, toRepoId, close }: Moving & { close:
               {showFiles && (
                 <ul className="move-files">
                   {plan.files.map((f) => (
-                    <li key={f}>{f}</li>
+                    <li key={f.path} className={`move-file ${f.change}`}>
+                      {f.path}
+                      {f.change !== "modified" && <span className="move-change">{f.change === "added" ? "new" : f.change === "renamed" ? `renamed from ${f.from ?? "?"}` : "deleted"}</span>}
+                    </li>
                   ))}
                 </ul>
               )}

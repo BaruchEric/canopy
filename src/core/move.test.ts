@@ -2,7 +2,7 @@ import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { endAgent, MOVE_MAX, MoveError, movePath, placeTranscript, QUIT, rewriteTranscript, transcriptConflict, type PaneDriver, type PlaceTranscript } from "./move";
+import { endAgent, MOVE_MAX, MoveError, moveFileList, movePath, placeTranscript, QUIT, rewriteTranscript, transcriptConflict, type PaneDriver, type PlaceTranscript } from "./move";
 import { projectFolder, transcriptFile } from "./sessions";
 
 const S = "0f5e2c1a-1111-4222-8333-444455556666";
@@ -154,5 +154,51 @@ describe("endAgent", () => {
     const pane = fakePane("codex");
     await expect(endAgent(pane, "claude", quick)).rejects.toMatchObject({ status: 409 });
     expect(pane.sent).toEqual([]);
+  });
+});
+
+describe("moveFileList", () => {
+  const z = (...entries: string[]) => `${entries.join("\0")}\0`;
+
+  test("names each change the way the move carries it", () => {
+    const r = moveFileList(z(" M changed.txt", "?? new.txt", " D gone.txt", "D  staged-gone.txt", "A  added.txt", "AM added-then-edited.txt", "MD edited-then-gone.txt"));
+    expect(r.files).toEqual([
+      { path: "changed.txt", change: "modified" },
+      { path: "new.txt", change: "added" },
+      { path: "gone.txt", change: "deleted" },
+      { path: "staged-gone.txt", change: "deleted" },
+      { path: "added.txt", change: "added" },
+      { path: "added-then-edited.txt", change: "added" },
+      { path: "edited-then-gone.txt", change: "deleted" },
+    ]);
+    expect(r.changed).toBe(7);
+  });
+
+  test("a rename in the index or the worktree carries the path it had", () => {
+    const r = moveFileList(z("R  to.txt", "from.txt", " R wt-to.txt", "wt-from.txt", " M after.txt"));
+    expect(r.files).toEqual([
+      { path: "to.txt", change: "renamed", from: "from.txt" },
+      { path: "wt-to.txt", change: "renamed", from: "wt-from.txt" },
+      { path: "after.txt", change: "modified" },
+    ]);
+    expect(r.changed).toBe(3);
+  });
+
+  test("a copy is an added file, and its source path is not read as an entry", () => {
+    expect(moveFileList(z("C  copy.txt", "orig.txt", "?? x")).files).toEqual([
+      { path: "copy.txt", change: "added" },
+      { path: "x", change: "added" },
+    ]);
+  });
+
+  test("ignored entries are counted, not listed; a file added then deleted moves nothing", () => {
+    const r = moveFileList(z("!! .env", "!! node_modules/", "AD never.txt", " M a"));
+    expect(r).toEqual({ files: [{ path: "a", change: "modified" }], changed: 1, ignored: 2 });
+  });
+
+  test("lists at most 200 but counts them all", () => {
+    const r = moveFileList(z(...Array.from({ length: 250 }, (_, i) => `?? f${i}`)));
+    expect(r.files).toHaveLength(200);
+    expect(r.changed).toBe(250);
   });
 });

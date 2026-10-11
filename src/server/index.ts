@@ -67,7 +67,7 @@ import { seedSource, type SeedSource } from "../core/seedsource";
 import { vaultConfig, vaultNotes } from "../core/vault";
 import { linkPeers, NO_PUSH, peerUrl } from "../core/peers";
 import { currentBranch, fetchPeer, gitSshCommand, type FetchOutcome, initRepo, isBusy, isDirty, PassSeen, resetTree, seedRepo, snapshotWip, syncAll, syncRepo, takeWip, trackBranch, treeIs } from "../core/peersync";
-import { endAgent, MOVE_MAX, MoveError, placeTranscript, rewriteTranscript, transcriptConflict, type PaneDriver } from "../core/move";
+import { endAgent, MOVE_MAX, MoveError, moveFileList, placeTranscript, rewriteTranscript, transcriptConflict, type PaneDriver } from "../core/move";
 import { normalizeLaunch } from "../core/launch";
 import { repoSpecState, syncRepo as syncSpec } from "../core/spec";
 import { Launcher, LauncherError } from "../core/launcher";
@@ -141,6 +141,7 @@ import {
   type Harness,
   type MoveCheck,
   type MoveOut,
+  type MoveFile,
   type MovePlan,
   type ClientInfo,
   type Device,
@@ -993,25 +994,9 @@ async function moveSession(path: string, harness: Harness, asked: string | null)
 }
 
 /** uncommitted paths and gitignored entries, off one porcelain listing */
-async function moveFiles(path: string): Promise<{ files: string[]; changed: number; ignored: number }> {
+async function moveFiles(path: string): Promise<{ files: MoveFile[]; changed: number; ignored: number }> {
   const r = await git(path, ["status", "--porcelain=v1", "-z", "--untracked-files=all", "--ignored=traditional"]);
-  const files: string[] = [];
-  let changed = 0;
-  let ignored = 0;
-  const parts = r.stdout.split("\0");
-  for (let i = 0; i < parts.length; i++) {
-    const e = parts[i] ?? "";
-    if (e.length < 4) continue;
-    const code = e.slice(0, 2);
-    if (code === "!!") {
-      ignored++;
-      continue;
-    }
-    changed++;
-    if (files.length < 200) files.push(e.slice(3));
-    if (code[0] === "R" || code[0] === "C") i++; // the original path follows a rename
-  }
-  return { files, changed, ignored };
+  return moveFileList(r.stdout);
 }
 
 /** what transcript and finish say when the agent quit but the snapshot did not land */
