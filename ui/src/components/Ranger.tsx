@@ -167,7 +167,7 @@ export function RangerChip({ compact = false }: { compact?: boolean }) {
         title={title}
         onClick={() => setOpen(!open)}
       >
-        <span className="ranger-icon" aria-hidden="true">✦</span>
+        <span className="chip-icon" aria-hidden="true">✦</span>
         {compact ? (shown.length > 1 ? ` ${shown.length}` : null) : ` ${shown.length === 1 ? "ranger" : shown.length}`}
       </button>
       {open && (

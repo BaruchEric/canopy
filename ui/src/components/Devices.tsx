@@ -85,7 +85,7 @@ export function DevicesChip() {
         title={others ? `${others} other ${others === 1 ? "device" : "devices"} on this backend` : "Only this browser is on the backend"}
         onClick={() => setOpen(!open)}
       >
-        <span aria-hidden="true">⌘</span> {devices.length || 1}
+        <span className="chip-icon" aria-hidden="true">⌘</span> {devices.length || 1}
       </button>
       {open && (
         <div className="settings-pop devices-pop" role="dialog" aria-label="Devices">

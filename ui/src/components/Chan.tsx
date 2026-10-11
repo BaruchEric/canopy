@@ -143,7 +143,7 @@ export function ChanChip() {
         title={unread ? `${unread} new on tailchan` : "tailchan: channels, DMs and the clipboard"}
         onClick={() => (open ? closeChan() : openChan())}
       >
-        <span aria-hidden="true">✉</span> {unread || ""}
+        <span className="chip-icon envelope" aria-hidden="true">✉</span> {unread || ""}
       </button>
       {open && (
         <div className="settings-pop chan-pop" role="dialog" aria-label="tailchan">

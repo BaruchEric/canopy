@@ -408,7 +408,7 @@ export function TasksChip() {
         title={chip?.title ?? "Tasks"}
         onClick={() => setOpen(!open)}
       >
-        <span aria-hidden="true">▶</span> {running}
+        <span className="chip-icon" aria-hidden="true">▶</span> {running}
       </button>
       {open && (
         <div className="settings-pop tasks-pop" role="dialog" aria-label="Tasks">

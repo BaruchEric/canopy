@@ -33,8 +33,8 @@ export function GroupHead({
       >
         <svg
           className="caret"
-          width="9"
-          height="9"
+          width="11"
+          height="11"
           viewBox="0 0 10 10"
           fill="currentColor"
           aria-hidden="true"

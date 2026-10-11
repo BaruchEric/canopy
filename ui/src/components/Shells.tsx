@@ -188,7 +188,7 @@ export function ShellsChip() {
         }
         onClick={() => setOpen(!open)}
       >
-        <span aria-hidden="true">▸_</span> {list.length}
+        <span className="chip-icon" aria-hidden="true">▸_</span> {list.length}
         {elsewhere > 0 && <span className="shells-dot" aria-hidden="true" />}
       </button>
       {open && (

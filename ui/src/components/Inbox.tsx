@@ -449,7 +449,7 @@ export function InboxChip({ onGit }: { onGit?: () => void } = {}) {
         title={inboxTitle(items)}
         onClick={() => (open ? closeInbox() : openInbox())}
       >
-        <span aria-hidden="true">?</span> {items.length || ""}
+        <span className="chip-icon letter" aria-hidden="true">?</span> {items.length || ""}
       </button>
       {open && (
         <div className="settings-pop inbox-pop" role="dialog" aria-label="Inbox" style={zoom === 1 ? undefined : { width: Math.round(460 * zoom) }}>

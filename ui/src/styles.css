@@ -727,7 +727,7 @@ body.resizing iframe {
 }
 .filter {
   width: 210px;
-  padding: 4px 30px 4px 29px;
+  padding: 4px 30px 4px 35px;
 }
 .filter::placeholder {
   color: var(--ink-faint);
@@ -820,6 +820,11 @@ body.resizing iframe {
 /* ---------- settings popover ---------- */
 .settings {
   position: relative;
+}
+/* a button that opens with an svg has its baseline at the svg's bottom edge,
+   which lifts it and grows the row; pin it to the top instead */
+.settings > button {
+  vertical-align: top;
 }
 .settings-pop {
   position: absolute;
@@ -2051,6 +2056,49 @@ a.chan-text {
   opacity: 0.45;
   cursor: default;
 }
+/* a chip's glyph: at the text's own size most glyphs ink smaller than the
+   letters beside them, so scale them up; line-height 1 keeps the row 28px */
+.chip-icon {
+  font-size: 1.45em;
+  line-height: 1;
+}
+/* ▸ inks about half as tall as the others at the same size, and sits low */
+.chip-icon.thin {
+  font-size: 1.9em;
+  line-height: 0.8;
+  transform: translateY(-1px);
+}
+/* ✉ is wide and sits low in the font */
+.chip-icon.envelope {
+  font-size: 1.6em;
+  transform: translateY(-1px);
+}
+/* ? is a letter, already cap height at the text's size */
+.chip-icon.letter {
+  font-size: 1.15em;
+}
+.mini:has(> .chip-icon) {
+  gap: 0.2em;
+}
+/* a phone's first row has no room to spare: the bigger glyphs cost the view
+   tabs their width, so the chips give some padding back */
+.topbar.phone .mini:has(> .chip-icon) {
+  padding-inline: 5px;
+}
+/* drawn icons match the glyphs: 1.45em of the text they sit in, over the
+   width and height the markup gives them */
+.icon-btn > svg,
+.root-btn > svg,
+.pill > svg,
+.search > svg,
+.mini > svg,
+.head-toggle > .caret,
+.gear > svg,
+.card-link > svg,
+.more > svg {
+  width: 1.45em;
+  height: 1.45em;
+}
 .mini.strong {
   color: var(--bark0);
   background: var(--moss);
@@ -2308,9 +2356,9 @@ a.chan-text {
   flex: none;
   display: inline-grid;
   place-items: center;
-  width: 18px;
-  height: 18px;
-  margin-left: -2px;
+  width: 22px;
+  height: 22px;
+  margin: -2px 0 -2px -2px;
   border-radius: var(--r);
   color: var(--ink-faint);
   opacity: 0.5;
@@ -8965,14 +9013,6 @@ span.effective-flag:not(:first-child) {
 }
 
 /* ---------- the ranger: its chip, popover and Settings row (Ranger.tsx) ---------- */
-/* the ✦ reads small at the chip's text size; scale it up without growing the row */
-.ranger-icon {
-  font-size: 1.45em;
-  line-height: 1;
-}
-.ranger > .mini {
-  gap: 0.2em;
-}
 .mini.ranger-chip.ranger-ok {
   color: var(--moss);
 }

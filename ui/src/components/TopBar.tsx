@@ -486,8 +486,8 @@ function RescanButton() {
       disabled={scanning}
     >
       <svg
-        width="12"
-        height="12"
+        width="13"
+        height="13"
         viewBox="0 0 24 24"
         fill="none"
         stroke="currentColor"
@@ -518,7 +518,7 @@ function ReloadChip() {
       title={`canopy ${versionLine(now)} is running; this page loaded against ${versionLine(first)}. Reload to take the new page; shells keep running.`}
       onClick={() => location.reload()}
     >
-      <span aria-hidden="true">↻</span> new build
+      <span className="chip-icon" aria-hidden="true">↻</span> new build
     </button>
   );
 }
@@ -536,7 +536,7 @@ function CliButton() {
       title="Command line (⌘K or :): the canopy CLI's commands, run against this page"
       onClick={() => setCliOpen(true)}
     >
-      <span aria-hidden="true">{CLI_GLYPH}</span>
+      <span className="chip-icon thin" aria-hidden="true">{CLI_GLYPH}</span>
     </button>
   );
 }
@@ -556,7 +556,7 @@ function WaitingButton() {
       title={`Waiting on you (w): asks, prompts, gates, the repos that need you and what failed, ${count} in all, in a dock panel`}
       onClick={() => openPanel(WAITING_PANEL)}
     >
-      <span aria-hidden="true">{WAITING_GLYPH}</span> {count || ""}
+      <span className="chip-icon" aria-hidden="true">{WAITING_GLYPH}</span> {count || ""}
     </button>
   );
 }
