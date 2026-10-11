@@ -120,12 +120,22 @@ export function realTmux(base: string[]): RangerTmux {
       return noServer(r.stderr) ? "no-server" : null;
     },
     async start(id, root, command, env) {
+      let madeSession = false;
       if (!(await hasSession(base, id))) {
         const made = await exec(rangerSessionArgs(base, id, root, { cols: 160, rows: 45 }), { timeoutMs: 15_000 });
         if (made.code !== 0 && !/duplicate session/.test(made.stderr)) throw new Error(made.stderr.trim() || "tmux could not make the ranger's session");
+        madeSession = made.code === 0;
       }
-      const r = await exec(respawnArgs(base, id, command, root, env), { timeoutMs: 10_000 });
-      if (r.code !== 0) throw new Error(r.stderr.trim() || "tmux could not start the ranger");
+      try {
+        const r = await exec(respawnArgs(base, id, command, root, env), { timeoutMs: 10_000 });
+        if (r.code !== 0) throw new Error(r.stderr.trim() || "tmux could not start the ranger");
+      } catch (err) {
+        // A failed respawn must not leave the placeholder sleep session that
+        // this call just created; an existing ranger session belongs to its
+        // previous launch and must survive a failed restart.
+        if (madeSession) await killSession(base, id).catch(say("failed start cleanup"));
+        throw err;
+      }
     },
     async kill(id) {
       await killSession(base, id);
@@ -259,6 +269,8 @@ export class RangerHub {
   private retryTimer: ReturnType<typeof setTimeout> | undefined;
   private restarts = 0;
   private launching: Promise<void> | null = null;
+  /** invalidates launches when the ranger is turned off or the hub stops */
+  private launchEpoch = 0;
   /** when the last launch began, so a list read before it is not believed over it */
   private launchedAt = -1;
   private ticking: Promise<void> | null = null;
@@ -586,12 +598,12 @@ export class RangerHub {
   }
 
   /** ends the session canopy's own way: not a death */
-  private async end(): Promise<void> {
+  private async end(force = false): Promise<void> {
     const tmux = this.deps.tmux;
     if (this.retryTimer) clearTimeout(this.retryTimer);
     this.retryTimer = undefined;
     this.retryAt = undefined;
-    if (!tmux || !this.pane) return;
+    if (!tmux || (!this.pane && !force)) return;
     this.ending = true;
     await tmux.kill(this.termId);
     this.pane = null;
@@ -605,12 +617,16 @@ export class RangerHub {
   /** Starts claude in the session, or puts a new one in place of whatever
    *  runs there: a first start, a retry after a death, a restart by hand
    *  (same conversation) or a fresh conversation. */
-  private launch(kind: LaunchKind): Promise<void> {
+  private launch(kind: LaunchKind, epoch = this.launchEpoch): Promise<void> {
+    if (!this.launchCurrent(epoch)) return Promise.resolve();
     // a fresh start or restart asked for while another launch runs is not
     // that launch: it runs after it, never dropped
-    if (this.launching) return kind === "fresh" || kind === "restart" ? this.launching.then(() => this.launch(kind)) : this.launching;
-    this.launching = this.doLaunch(kind)
+    if (this.launching) return kind === "fresh" || kind === "restart" ? this.launching.then(() => this.launch(kind, epoch)) : this.launching;
+    this.launching = this.doLaunch(kind, epoch)
       .catch(async (err: unknown) => {
+        // An off or stop that landed during an awaited launch owns its outcome;
+        // do not turn its cancellation into a retry or a recorded death.
+        if (!this.launchCurrent(epoch)) return;
         // a start that failed is a death of its own, so it backs off too
         const why = `could not start: ${err instanceof Error ? err.message : String(err)}`;
         this.rec.fails = (this.rec.fails ?? 0) + 1;
@@ -629,17 +645,23 @@ export class RangerHub {
     return this.launching;
   }
 
-  private async doLaunch(kind: LaunchKind): Promise<void> {
+  private launchCurrent(epoch: number): boolean {
+    return epoch === this.launchEpoch && !this.stopped && this.settings.on;
+  }
+
+  private async doLaunch(kind: LaunchKind, epoch: number): Promise<void> {
     const tmux = this.deps.tmux;
     if (this.retryTimer) clearTimeout(this.retryTimer);
     this.retryTimer = undefined;
     this.retryAt = undefined;
+    if (!this.launchCurrent(epoch)) return;
     if (!tmux) return this.setState("no-tmux", "the ranger needs tmux on this backend");
     // tmux not answering may be its container restarting: a start now could
     // make a second server, or land on one about to go
     if (this.answering === false) return this.setState("starting", "waiting for tmux to answer");
     if (!this.deps.hasClaude()) return this.refuse("no-claude", `Claude Code is not installed on ${this.deps.backend()}`, kind);
     const agent = await this.deps.settings(this.settings.profile);
+    if (!this.launchCurrent(epoch)) return;
     if (agent.harness !== "claude") return this.refuse("error", `the ranger runs Claude Code; ${this.settings.profile ? `the profile ${this.settings.profile}` : "the shell route"} is ${agent.harness}`, kind);
     const handle = rangerHandle(this.settings);
     const taken = this.takenBy(handle);
@@ -649,13 +671,17 @@ export class RangerHub {
     const exists = (file: string | null) => (file ? stat(file).then(() => true, () => false) : Promise.resolve(false));
     const home = this.homeDir();
     // the scan root is already there; only its own folder may need making
-    if (this.settings.home !== "root") await mkdir(home, { recursive: true });
+    if (this.settings.home !== "root") {
+      await mkdir(home, { recursive: true });
+      if (!this.launchCurrent(epoch)) return;
+    }
     // a conversation lives under the folder it ran in, so a move to another folder starts a new one
     const was = this.convHome();
     const moved = this.rec.session !== null && was !== home;
     if (!this.rec.session || kind === "fresh" || moved) {
       const old = this.transcript(this.rec.session, was);
       if (await exists(old)) this.rec.previous = old;
+      if (!this.launchCurrent(epoch)) return;
       this.rec.session = randomUUID();
       this.rec.sessionAt = now;
       this.bytes = undefined;
@@ -663,6 +689,7 @@ export class RangerHub {
     this.rec.home = home;
     // a conversation that never got a message has no file, and --resume finds nothing
     const first = !(await exists(this.transcript(this.rec.session)));
+    if (!this.launchCurrent(epoch)) return;
     const brief = rangerBrief(await this.brief(), {
       backend: this.deps.backend(),
       handle,
@@ -671,11 +698,14 @@ export class RangerHub {
       previous: this.rec.previous ?? null,
       telegram: this.settings.telegram,
     });
+    if (!this.launchCurrent(epoch)) return;
     // a file rather than an argument: the brief would make the tmux command
     // long, and the config dir is where the shells container sees it too
     await mkdir(this.dir, { recursive: true });
+    if (!this.launchCurrent(epoch)) return;
     const briefFile = join(this.dir, "brief.md");
     await writeFile(briefFile, brief + "\n", { mode: 0o600 });
+    if (!this.launchCurrent(epoch)) return;
     const hello = rangerHello(!first ? "resume" : this.rec.previous ? "fresh" : "new");
     const own = home !== this.deps.root;
     const argv = rangerArgv({ settings: agent, session: this.rec.session, first, briefFile, telegram: this.settings.telegram, hello, ...(own ? { addDir: this.deps.root } : {}) });
@@ -685,6 +715,22 @@ export class RangerHub {
     // in a folder of its own, the scan root's CLAUDE.md comes in through --add-dir only with this
     const env = { ...this.deps.env(this.termId), TAILCHAN_AS: handle, ...(own ? { CLAUDE_CODE_ADDITIONAL_DIRECTORIES_CLAUDE_MD: "1" } : {}) };
     await tmux.start(this.termId, home, command, env);
+    if (epoch !== this.launchEpoch || !this.settings.on) {
+      // tmux.start can finish after an off patch already ran its cleanup.
+      // Hub shutdown is different: this submitted session must survive so
+      // the next hub can adopt it.
+      this.ending = true;
+      try {
+        await tmux.kill(this.termId);
+      } finally {
+        this.pane = null;
+        this.trust = false;
+        this.held = null;
+        this.ending = false;
+        this.deps.drop(this.termId);
+      }
+      return;
+    }
     this.rec.startedAt = now;
     delete this.rec.exitedAt;
     delete this.rec.exitCode;
@@ -697,6 +743,12 @@ export class RangerHub {
     this.pane = { termId: this.termId, dead: false, code: null, createdAt: now, activityAt: now };
     this.trust = false;
     this.held = null;
+    if (this.stopped) {
+      // Shutdown stopped the hub from starting more work, but this launch was
+      // already submitted. Persist its conversation metadata for adoption.
+      await this.save();
+      return;
+    }
     this.deps.hold(this.holdInfo(now));
     this.setState("running");
     await this.save();
@@ -737,6 +789,9 @@ export class RangerHub {
         run = this.deps.run(w.run) ?? null;
         if (run?.active) continue;
       } else if (w.next === undefined || w.next > now) continue;
+      // The loop walks a snapshot. A previous awaited send may have allowed
+      // a caller to remove a later wake from the live list.
+      if (!this.wakes.some((current) => current.id === w.id)) continue;
       try {
         await this.deps.send(handle, wakeLine(w, run));
       } catch (err) {
@@ -807,11 +862,15 @@ export class RangerHub {
     const was = this.settings;
     await this.saveSettings(next);
     this.settings = next;
+    if (!next.on) this.launchEpoch += 1;
     await this.readTelegram();
     const reshaped = was.profile !== next.profile || was.handle !== next.handle || was.telegram !== next.telegram || was.home !== next.home;
     if (!next.on) {
       this.held = null;
-      await this.end();
+      if (this.launching) await this.launching;
+      // Also remove a session created by a tmux.start that rejected after
+      // making its placeholder, which is not represented by this.pane.
+      await this.end(true);
       this.setState("off");
     } else if (!was.on) {
       delete this.rec.gaveUp;

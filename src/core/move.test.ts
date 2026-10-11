@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
-import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { endAgent, MOVE_MAX, MoveError, moveFileList, movePath, placeTranscript, QUIT, rewriteTranscript, transcriptConflict, type PaneDriver, type PlaceTranscript } from "./move";
@@ -89,6 +89,23 @@ describe("placeTranscript", () => {
     const name = `2026/10/10/rollout-2026-10-10T09-00-00-${S}.jsonl`;
     const got = await placeTranscript({ harness: "codex", session: S, text: "{}\n", name, to: TO, homes: homes() });
     expect(got.file).toBe(join(scratch, "codex", "sessions", name));
+  });
+  test.if(process.getuid?.() !== 0)("an unreadable existing transcript is refused and preserved", async () => {
+    const home = join(scratch, "unreadable");
+    const dir = join(home, "projects", projectFolder(TO));
+    await mkdir(dir, { recursive: true });
+    const file = join(dir, `${S}.jsonl`);
+    const original = '{"different":"conversation"}\n';
+    await writeFile(file, original);
+    await chmod(file, 0);
+    const at: PlaceTranscript = { harness: "claude", session: S, name: `${S}.jsonl`, to: TO, text: "{}\n", homes: { claude: home } };
+    try {
+      await expect(transcriptConflict(at)).rejects.toMatchObject({ code: "EACCES" });
+      await expect(placeTranscript(at)).rejects.toMatchObject({ code: "EACCES" });
+    } finally {
+      await chmod(file, 0o600);
+    }
+    expect(await readFile(file, "utf8")).toBe(original);
   });
   test("codex: a name that climbs out or names another session is refused", async () => {
     for (const name of ["../../x.jsonl", `2026/10/10/rollout-x-${"1".repeat(8)}.jsonl`]) {

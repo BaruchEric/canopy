@@ -163,7 +163,10 @@ async function placing(o: PlaceTranscript): Promise<{ file: string; had: string 
   } else {
     file = join(o.homes?.claude ?? claudeHome(), "projects", projectFolder(o.to), `${o.session}.jsonl`);
   }
-  const had = await readFile(file, "utf8").catch(() => null);
+  const had = await readFile(file, "utf8").catch((err: unknown) => {
+    if (err && typeof err === "object" && "code" in err && err.code === "ENOENT") return null;
+    throw err;
+  });
   const split = had !== null && had !== o.text && !(o.text.startsWith(had) && (had === "" || had.endsWith("\n")));
   return { file, had, split };
 }

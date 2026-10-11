@@ -1943,6 +1943,59 @@ describe("resetTree", () => {
     expect(await sh(r, "log", "-1", "--format=%an <%ae>", kept)).toBe("canopy <canopy@canopy>");
     expect(await readFile(join(r, "a.txt"), "utf8")).toBe("one\n");
   });
+  test("refuses to restore HEAD over a formerly tracked file that is now ignored", async () => {
+    const r = await repo("reset-ignored-tracked");
+    await commit(r, ".env", "OLD=value\n");
+    await writeFile(join(r, ".gitignore"), ".env\n");
+    await sh(r, "rm", "--cached", ".env");
+    await writeFile(join(r, ".env"), "NEW=keep-this\n");
+    const snap = await snapshotWip(r, "mac", false);
+    const wip = await sh(r, "rev-parse", `refs/wip/${snap!.branch}`);
+    expect(await resetBlocker(r)).toMatch(/ignored/);
+    await expect(resetTree(r, wip, S)).rejects.toThrow(/ignored/);
+    expect(await readFile(join(r, ".env"), "utf8")).toBe("NEW=keep-this\n");
+    expect(await readFile(join(r, ".gitignore"), "utf8")).toBe(".env\n");
+    expect(await hasRef(r, `refs/canopy-moved/${S}`)).toBe(false);
+  });
+  test("refuses an ignored file blocking a HEAD directory", async () => {
+    const r = await repo("reset-ignored-parent");
+    await commit(r, "dir/tracked.txt", "tracked\n");
+    await writeFile(join(r, ".gitignore"), "dir\n");
+    await rm(join(r, "dir"), { recursive: true });
+    await writeFile(join(r, "dir"), "ignored contents\n");
+    const snap = await snapshotWip(r, "mac", false);
+    const wip = await sh(r, "rev-parse", `refs/wip/${snap!.branch}`);
+    expect(await resetBlocker(r)).toMatch(/ignored/);
+    await expect(resetTree(r, wip, S)).rejects.toThrow(/ignored/);
+    expect(await readFile(join(r, "dir"), "utf8")).toBe("ignored contents\n");
+  });
+  test("refuses an ignored case variant of a HEAD path when git ignores case", async () => {
+    const r = await repo("reset-ignored-case");
+    await commit(r, ".ENV", "OLD=value\n");
+    await sh(r, "config", "core.ignorecase", "true");
+    await writeFile(join(r, ".gitignore"), ".env\n");
+    await sh(r, "rm", "--cached", ".ENV");
+    await rm(join(r, ".ENV"));
+    await writeFile(join(r, ".env"), "NEW=keep-this\n");
+    const snap = await snapshotWip(r, "mac", false);
+    const wip = await sh(r, "rev-parse", `refs/wip/${snap!.branch}`);
+    expect(await resetBlocker(r)).toMatch(/ignored/);
+    await expect(resetTree(r, wip, S)).rejects.toThrow(/ignored/);
+    expect(await readFile(join(r, ".env"), "utf8")).toBe("NEW=keep-this\n");
+  });
+  test("refuses ignored contents blocking a HEAD file", async () => {
+    const r = await repo("reset-ignored-children");
+    await commit(r, "config", "tracked\n");
+    await writeFile(join(r, ".gitignore"), "config\n");
+    await rm(join(r, "config"));
+    await mkdir(join(r, "config"));
+    await writeFile(join(r, "config", "local.env"), "ignored contents\n");
+    const snap = await snapshotWip(r, "mac", false);
+    const wip = await sh(r, "rev-parse", `refs/wip/${snap!.branch}`);
+    expect(await resetBlocker(r)).toMatch(/ignored/);
+    await expect(resetTree(r, wip, S)).rejects.toThrow(/ignored/);
+    expect(await readFile(join(r, "config", "local.env"), "utf8")).toBe("ignored contents\n");
+  });
   test("nothing staged writes no index ref", async () => {
     const { r, wip } = await dirtied("reset-noindex");
     expect(await resetTree(r, wip, S)).toBe("reset");

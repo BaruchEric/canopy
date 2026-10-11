@@ -7,7 +7,7 @@
  */
 
 import { api } from "./api";
-import { backendOf } from "./registry";
+import { backendOf, isHome } from "./registry";
 import { helperFor, takeWords, useStore } from "./store";
 import { CLI_PANEL, ENTRIES, findRepo, parseCommand, quoteWord, tokenize, underDir, type Command } from "./cli";
 import { SPEC_TONE, SPEC_WORDS, specLines, treeLines, type Line, type Seg, type Tone } from "../../src/core/treelines";
@@ -67,6 +67,14 @@ function repoFor(word: string, loose = false): Repo {
   if ("error" in got) throw new Refused(got.error);
   if (got.repo.forge) throw new Refused(`${got.repo.id} is only on the forge: clone it first`);
   return got.repo;
+}
+
+/** Workspaces live on home and store local repo paths, so their members
+ *  must also be repos the home backend can resolve. */
+function homeRepoFor(word: string): Repo {
+  const repo = repoFor(word);
+  if (!isHome(repo.id)) throw new Refused("workspaces only support repos on the home backend");
+  return repo;
 }
 
 const helperOn = (r: Repo): string | undefined => helperFor(useStore.getState(), backendOf(r.id));
@@ -177,12 +185,12 @@ async function runInner(cmd: Command): Promise<Outcome> {
     }
     case "ws-add": {
       // the API takes repo ids and stores their paths
-      const ids = cmd.repos.map((w) => repoFor(w).id);
+      const ids = cmd.repos.map((w) => homeRepoFor(w).id);
       st.setWorkspaces(await api.wsAdd(cmd.name, ids));
       return ok(mark("✓", "moss", { text: "workspace " }, { text: cmd.name, tone: "bold" }, { text: " updated" }));
     }
     case "ws-rm": {
-      const id = cmd.repo === null ? undefined : repoFor(cmd.repo).id;
+      const id = cmd.repo === null ? undefined : homeRepoFor(cmd.repo).id;
       st.setWorkspaces(await api.wsRemove(cmd.name, id));
       return ok(mark("✓", "moss", { text: "removed" }));
     }

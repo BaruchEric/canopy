@@ -1121,6 +1121,31 @@ export async function resetBlocker(repo: string): Promise<string | null> {
   const unmerged = await git(repo, ["ls-files", "-u", "-z"]);
   if (unmerged.code !== 0) return unmerged.stderr.trim() || "git ls-files failed";
   if (unmerged.stdout !== "") return "the index has unmerged entries";
+  // clean leaves ignored files, but reset --hard can overwrite them when
+  // HEAD restores a removed tracked path or a file/directory obstruction.
+  // These bytes are in neither the working-copy nor the index snapshot.
+  const ignored = await git(repo, ["ls-files", "--others", "--ignored", "--exclude-standard", "-z"]);
+  if (ignored.code !== 0) return ignored.stderr.trim() || "git could not list ignored files";
+  const paths = ignored.stdout.split("\0").filter(Boolean);
+  if (paths.length > 0) {
+    const head = await git(repo, ["ls-tree", "-r", "--name-only", "-z", "HEAD"]);
+    if (head.code !== 0) return head.stderr.trim() || "git could not list HEAD's files";
+    const ignorecase = await git(repo, ["config", "--bool", "core.ignorecase"]);
+    if (ignorecase.code !== 0 && ignorecase.code !== 1) return ignorecase.stderr.trim() || "git could not read core.ignorecase";
+    const key = (path: string): string => ignorecase.stdout.trim() === "true" ? path.toLowerCase() : path;
+    const files = new Set(head.stdout.split("\0").filter(Boolean).map(key));
+    const dirs = new Set<string>();
+    for (const file of files) {
+      for (let slash = file.indexOf("/"); slash !== -1; slash = file.indexOf("/", slash + 1)) dirs.add(file.slice(0, slash));
+    }
+    for (const path of paths) {
+      const comparable = key(path);
+      if (files.has(comparable) || dirs.has(comparable)) return `ignored file ${path} would be replaced by HEAD`;
+      for (let slash = comparable.indexOf("/"); slash !== -1; slash = comparable.indexOf("/", slash + 1)) {
+        if (files.has(comparable.slice(0, slash))) return `ignored file ${path} would be replaced by HEAD`;
+      }
+    }
+  }
   return null;
 }
 

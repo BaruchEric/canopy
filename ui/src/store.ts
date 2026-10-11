@@ -1450,6 +1450,8 @@ const REGISTRY_RETRY_MAX = 5 * 60_000;
    closed while it was on its way */
 let sproutEvents = 0;
 const sproutHeard = new Map<string, number>();
+/** Only the newest sprout-list read per backend may replace its slice. */
+const sproutLoads = new Map<string, number>();
 /* and each backend's stages events, so a read on its way never undoes a newer one */
 const stagesEvents = new Map<string, number>();
 /* and each backend's ranger events, the same */
@@ -1462,7 +1464,7 @@ let adviceEvents = 0;
  *  answer adds no feed line either) */
 function sproutAnswered(get: () => CanopyState, sp: Sprout): void {
   if (staleSprout(get().sprouts, sp)) return;
-  get().applyEvent({ type: "incubator", sprout: sp });
+  get().applyEvent({ type: "incubator", sprout: sp }, ownerOf(sp.id));
 }
 let asksEvents = 0;
 const asksHeard = new Map<string, number>();
@@ -2107,6 +2109,7 @@ export const useStore = create<CanopyState>((set, get) => ({
     streams.get(name)?.off();
     streams.delete(name);
     stopRetry(name, true);
+    sproutLoads.set(name, (sproutLoads.get(name) ?? 0) + 1);
     // a load still on its way for it lands nothing
     connecting.set(name, (connecting.get(name) ?? 0) + 1);
     const mine = mineOf(name);
@@ -2915,6 +2918,8 @@ export const useStore = create<CanopyState>((set, get) => ({
   },
   loadSprouts: async (backend) => {
     const b = backend ?? get().home;
+    const load = (sproutLoads.get(b) ?? 0) + 1;
+    sproutLoads.set(b, load);
     const stagesMark = stagesEvents.get(b) ?? 0;
     void api
       .incubatorStages(b)
@@ -2940,7 +2945,7 @@ export const useStore = create<CanopyState>((set, get) => ({
     try {
       const list = await api.sprouts(b);
       // hidden while the list was on its way: it lands nothing
-      if (!isShown(get(), b)) return;
+      if (!isShown(get(), b) || sproutLoads.get(b) !== load) return;
       set((s) => {
         const mine = mineOf(b);
         const held = Object.fromEntries(Object.entries(s.sprouts).filter(([id]) => mine(id)));
@@ -2975,7 +2980,7 @@ export const useStore = create<CanopyState>((set, get) => ({
   },
   dismissSprout: async (id) => {
     await api.dismissSprout(id);
-    get().applyEvent({ type: "incubator-gone", id });
+    get().applyEvent({ type: "incubator-gone", id }, ownerOf(id));
   },
   showSprout: (id) => set({ sheet: { kind: "sprout", id } }),
   openNewSprout: () => set({ sheet: { kind: "new-sprout" } }),

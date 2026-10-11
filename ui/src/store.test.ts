@@ -1031,6 +1031,61 @@ describe("several backends", () => {
     expect(useStore.getState().feed.length).toBe(feed);
   });
 
+  test("an action response from a backend hidden while it was pending stays hidden", async () => {
+    const remote = sproutOf("sp_000000000003", 1);
+    let release: ((r: Response) => void) | undefined;
+    await start(
+      backendAnswers(scanOf("/a", [repo("proj")]), [], { "/api/backends": twoBackends, "/api/incubator": [] }),
+      (path, init) => {
+        if (path.startsWith("/api/incubator/stop")) return new Promise<Response>((resolve) => (release = resolve));
+        return backendAnswers(scanOf("/b", [repo("proj")]), [], { "/api/incubator": [remote] })(path, init);
+      },
+    );
+    await settle();
+    const stopping = useStore.getState().stopSprout(`b|${remote.id}`);
+    await settle();
+    if (!release) throw new Error("the remote stop did not reach the fetch stub");
+
+    useStore.getState().hideBackend("b", true);
+    expect(Object.keys(useStore.getState().sprouts)).toEqual([]);
+    release(new Response(JSON.stringify({ ...remote, status: "stopped", updatedAt: 2 }), { status: 200 }));
+    await stopping;
+
+    expect(Object.keys(useStore.getState().sprouts)).toEqual([]);
+  });
+
+  test("an older sprout list cannot restore a backend after it was hidden and reconnected", async () => {
+    const stale = sproutOf("sp_000000000004", 1);
+    let bLists = 0;
+    let releaseOld: ((r: Response) => void) | undefined;
+    await start(
+      backendAnswers(scanOf("/a", [repo("proj")]), [], { "/api/backends": twoBackends, "/api/incubator": [] }),
+      (path, init) => {
+        if (path.split("?")[0] === "/api/incubator") {
+          bLists += 1;
+          if (bLists === 2) return new Promise<Response>((resolve) => (releaseOld = resolve));
+          return backendAnswers(scanOf("/b", [repo("proj")]), [], { "/api/incubator": [] })(path, init);
+        }
+        return backendAnswers(scanOf("/b", [repo("proj")]), [])(path, init);
+      },
+    );
+    await settle();
+    const oldLoad = useStore.getState().loadSprouts("b");
+    await settle();
+    if (!releaseOld) throw new Error("the older list did not reach the fetch stub");
+
+    useStore.getState().hideBackend("b", true);
+    useStore.getState().hideBackend("b", false);
+    for (let i = 0; i < 40 && bLists < 3; i += 1) await settle();
+    if (bLists < 3) throw new Error("the reconnected backend did not reload its sprout list");
+    await settle();
+    expect(Object.keys(useStore.getState().sprouts)).toEqual([]);
+
+    releaseOld(new Response(JSON.stringify([stale]), { status: 200 }));
+    await oldLoad;
+    expect(Object.keys(useStore.getState().sprouts)).toEqual([]);
+  });
+
   test("a failed sprout reload keeps the sprouts held", async () => {
     const one = sproutOf("sp_000000000001", 1);
     let fail = false;

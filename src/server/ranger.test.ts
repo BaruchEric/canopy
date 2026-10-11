@@ -13,7 +13,7 @@ import { RANGER_DEFAULTS } from "../core/ranger";
 import { projectFolder } from "../core/sessions";
 import type { RangerPane } from "../core/tmux";
 import { DEFAULT_AGENT, type AgentCard, type AgentSettings, type RangerInfo, type RangerSettings, type RangerWake, type ServerEvent, type TermInfo } from "../core/types";
-import { RangerHub, rangerTermId, type RangerHubDeps, type RangerRun, type RangerTimings, type RangerTmux } from "./ranger";
+import { RangerHub, rangerTermId, realTmux, type RangerHubDeps, type RangerRun, type RangerTimings, type RangerTmux } from "./ranger";
 
 setDefaultTimeout(20_000);
 
@@ -31,6 +31,7 @@ class FakeTmux implements RangerTmux {
   reads = 0;
   /** when set, a start waits for it, so a test can catch a launch in flight */
   gate: Promise<void> | null = null;
+  failStart = false;
   async list(): Promise<RangerPane[] | "no-server" | null> {
     if (!this.answering) return null;
     return [...this.panes.values()].map((p) => ({ ...p }));
@@ -39,6 +40,7 @@ class FakeTmux implements RangerTmux {
     this.starts.push({ command, env });
     if (this.gate) await this.gate;
     this.panes.set(id, { termId: id, dead: false, code: null, createdAt: Date.now(), activityAt: Date.now() });
+    if (this.failStart) throw new Error("tmux start failed after creating its placeholder");
   }
   async kill(id: string): Promise<void> {
     this.kills += 1;
@@ -72,6 +74,8 @@ let dropped: string[];
 let events: RangerInfo[];
 let broker: boolean;
 let agent: AgentSettings;
+let testNow: number | null = null;
+let sendHook: ((handle: string, text: string) => Promise<void>) | null = null;
 
 const home = () => join(scratch, "claude");
 const dir = () => join(scratch, "config", "ranger");
@@ -98,6 +102,7 @@ function hub(over: Partial<RangerHubDeps> = {}): RangerHub {
     cards: () => cards,
     broker: () => broker,
     send: async (handle, text) => {
+      await sendHook?.(handle, text);
       sent.push({ handle, text });
     },
     gaveUp: (text) => gaveUp.push(text),
@@ -118,13 +123,14 @@ function hub(over: Partial<RangerHubDeps> = {}): RangerHub {
       saved = s;
     },
     timings: TIMINGS,
+    now: () => testNow ?? Date.now(),
     ...over,
   });
   hubs.push(h);
   return h;
 }
 
-const record = async () => JSON.parse(await readFile(join(dir(), "state.json"), "utf8")) as { session: string; previous?: string; fails?: number; gaveUp?: boolean };
+const record = async () => JSON.parse(await readFile(join(dir(), "state.json"), "utf8")) as { session: string; previous?: string; home?: string; sessionAt?: number; startedAt?: number; fails?: number; gaveUp?: boolean };
 const sessionIn = (line: string) => /--(?:session-id|resume)' '([0-9a-f-]{36})'/.exec(line)?.[1] ?? "";
 
 async function call(h: RangerHub, method: string, path: string, body?: unknown): Promise<{ status: number; data: unknown }> {
@@ -147,6 +153,8 @@ beforeEach(async () => {
   events = [];
   broker = true;
   agent = { ...DEFAULT_AGENT, model: "opus" };
+  testNow = null;
+  sendHook = null;
   hubs = [];
 });
 
@@ -260,6 +268,115 @@ describe("starting and keeping it", () => {
     await Bun.sleep(100);
     expect(fake.starts).toHaveLength(1);
     expect((await record()).fails).toBeUndefined();
+  });
+
+  test("turning it off waits for a restart in tmux.start and leaves no live session", async () => {
+    saved.on = true;
+    const h = hub();
+    await h.start();
+    await until(() => fake.starts.length === 1, "the first start");
+
+    let release!: () => void;
+    fake.gate = new Promise<void>((resolve) => (release = resolve));
+    const restarting = call(h, "POST", "/api/ranger/restart");
+    await until(() => fake.starts.length === 2, "the restart in tmux.start");
+    const turningOff = call(h, "POST", "/api/ranger", { on: false });
+    await until(() => saved.on === false, "off saved");
+    const returnedBeforeStartFinished = await Promise.race([turningOff.then(() => true), Bun.sleep(30).then(() => false)]);
+
+    release();
+    const [off] = await Promise.all([turningOff, restarting]);
+    expect(returnedBeforeStartFinished).toBe(false);
+    expect((off.data as RangerInfo).state).toBe("off");
+    expect(h.info().state).toBe("off");
+    expect(fake.panes.has(TERM)).toBe(false);
+    expect(fake.kills).toBe(2);
+  });
+
+  test("turning it off during profile resolution prevents the delayed start", async () => {
+    saved.on = true;
+    let resolveSettings!: () => void;
+    let enteredSettings!: () => void;
+    const settingsGate = new Promise<void>((resolve) => (resolveSettings = resolve));
+    const settingsEntered = new Promise<void>((resolve) => (enteredSettings = resolve));
+    let blockSettings = false;
+    const h = hub({
+      settings: async () => {
+        if (blockSettings) {
+          enteredSettings();
+          await settingsGate;
+        }
+        return agent;
+      },
+    });
+    await h.start();
+    await until(() => fake.starts.length === 1, "the first start");
+    blockSettings = true;
+    const restarting = call(h, "POST", "/api/ranger/restart");
+    await settingsEntered;
+    const turningOff = call(h, "POST", "/api/ranger", { on: false });
+    await until(() => saved.on === false, "off saved");
+    resolveSettings();
+    const [off, restart] = await Promise.all([turningOff, restarting]);
+
+    expect(off.status).toBe(200);
+    expect(restart.status).toBe(200);
+    expect(fake.starts).toHaveLength(1);
+    expect(h.info().state).toBe("off");
+    expect(fake.panes.has(TERM)).toBe(false);
+  });
+
+  test("an in-flight start failure after off does not undo off or count as a death", async () => {
+    saved.on = true;
+    const h = hub();
+    await h.start();
+    await until(() => fake.starts.length === 1, "the first start");
+
+    let release!: () => void;
+    fake.gate = new Promise<void>((resolve) => (release = resolve));
+    fake.failStart = true;
+    const restarting = call(h, "POST", "/api/ranger/restart");
+    await until(() => fake.starts.length === 2, "the restart in tmux.start");
+    const turningOff = call(h, "POST", "/api/ranger", { on: false });
+    await until(() => saved.on === false, "off saved");
+    release();
+    const [off, restart] = await Promise.all([turningOff, restarting]);
+
+    expect(off.status).toBe(200);
+    expect(restart.status).toBe(200);
+    expect(saved.on).toBe(false);
+    expect(h.info().state).toBe("off");
+    expect(fake.panes.has(TERM)).toBe(false);
+    expect((await record()).fails).toBeUndefined();
+  });
+
+  test("stop preserves a submitted fresh session and its record but blocks queued starts", async () => {
+    saved.on = true;
+    const h = hub();
+    await h.start();
+    await until(() => fake.starts.length === 1, "the first start");
+    const previous = sessionIn(fake.line());
+    const transcript = transcriptOf(previous);
+    await mkdir(join(home(), "projects", projectFolder(own())), { recursive: true });
+    await writeFile(transcript, "old transcript\n");
+
+    let release!: () => void;
+    fake.gate = new Promise<void>((resolve) => (release = resolve));
+    const fresh = call(h, "POST", "/api/ranger/fresh");
+    await until(() => fake.starts.length === 2, "the fresh start in tmux.start");
+    const session = sessionIn(fake.line());
+    const queuedRestart = call(h, "POST", "/api/ranger/restart");
+    h.stop();
+    release();
+    await Promise.all([fresh, queuedRestart]);
+    await h.settled();
+
+    expect(fake.panes.has(TERM)).toBe(true);
+    expect(fake.kills).toBe(0);
+    expect(fake.starts).toHaveLength(2);
+    expect(await record()).toMatchObject({ session, previous: transcript, home: own() });
+    expect((await record()).sessionAt).toBeGreaterThan(0);
+    expect((await record()).startedAt).toBeGreaterThan(0);
   });
 
   test("a profile it cannot run is refused before anything is saved", async () => {
@@ -519,6 +636,34 @@ describe("wakes", () => {
     await until(() => h.info().wakes.length === 0, "the wake gone");
   });
 
+  test("a wake removed while an earlier DM is pending is not sent", async () => {
+    testNow = Date.now();
+    let enter!: () => void;
+    let release!: () => void;
+    const entered = new Promise<void>((resolve) => (enter = resolve));
+    const gate = new Promise<void>((resolve) => (release = resolve));
+    sendHook = async (_handle, text) => {
+      if (text.includes("first wake")) {
+        enter();
+        await gate;
+      }
+    };
+    saved.on = true;
+    const h = hub();
+    await h.start();
+    await until(() => h.info().state === "running", "running");
+
+    const first = (await call(h, "POST", "/api/ranger/wakes", { prompt: "first wake", at: testNow + 1 })).data as RangerWake;
+    const second = (await call(h, "POST", "/api/ranger/wakes", { prompt: "cancelled wake", at: testNow + 2 })).data as RangerWake;
+    testNow += 3;
+    await entered;
+    expect((await call(h, "DELETE", `/api/ranger/wakes?id=${second.id}`)).status).toBe(200);
+    release();
+    await until(() => h.info().wakes.length === 0, "the remaining wake delivered");
+
+    expect(sent).toEqual([{ handle: "ranger", text: `[wake ${first.id}] first wake` }]);
+  });
+
   test("a cron wake due while it was down fires once and goes on", async () => {
     await mkdir(dir(), { recursive: true });
     const past = Date.now() - 3 * 86_400_000;
@@ -592,5 +737,47 @@ describe("routes", () => {
     expect(await h.handle(new Request(url.href), url)).toBeNull();
     expect(h.knows(TERM)).toBe(true);
     expect(h.knows("0".repeat(32))).toBe(false);
+  });
+});
+
+describe("real tmux startup", () => {
+  test("a failed respawn removes only the placeholder this call created", async () => {
+    const fakeDir = await mkdtemp(join(tmpdir(), "canopy-ranger-tmux-"));
+    try {
+      const binary = join(fakeDir, "tmux");
+      const session = join(fakeDir, "session");
+      const failedRespawn = join(fakeDir, "fail-respawn");
+      await writeFile(binary, `#!/bin/sh
+root=$(dirname "$0")
+state="$root/session"
+case "$1" in
+  has-session) test -f "$state"; exit $? ;;
+  new-session) : > "$state"; exit 0 ;;
+  respawn-pane) if test -f "$root/fail-respawn"; then echo "respawn failed" >&2; exit 1; fi; exit 0 ;;
+  kill-session) rm -f "$state"; exit 0 ;;
+  *) exit 0 ;;
+esac
+`, { mode: 0o755 });
+      await writeFile(failedRespawn, "fail");
+      const tmux = realTmux([binary]);
+      const startFails = async () => {
+        try {
+          await tmux.start(TERM, ROOT, ["claude"], {});
+          return false;
+        } catch {
+          return true;
+        }
+      };
+      const sessionExists = async () => readFile(session).then(() => true, () => false);
+
+      expect(await startFails()).toBe(true);
+      expect(await sessionExists()).toBe(false);
+
+      await writeFile(session, "existing ranger");
+      expect(await startFails()).toBe(true);
+      expect(await sessionExists()).toBe(true);
+    } finally {
+      await rm(fakeDir, { recursive: true, force: true });
+    }
   });
 });
