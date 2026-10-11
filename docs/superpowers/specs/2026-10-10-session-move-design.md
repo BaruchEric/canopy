@@ -136,9 +136,11 @@ The design held in shape: five steps, the browser carrying the transcript, the s
 
 ### Live check
 
-Not run yet. It waits on the owner's go to push and redeploy the mini. It will cover, in a real browser on canopy.beric.ca with a scratch repo checked out on both machines:
+Run on 2026-10-10 with both backends on 7d64994: the Mac's launchd server after a rebuild, the mini through `bun run redeploy`. The browser was the Mac's own page at 127.0.0.1:7850, which shows both backends. That is the same page canopy.beric.ca serves, from the other side. The scratch repo was `dev-tools/move-scratch`, made on the Mac and cloned to the mini by peer sync.
 
-1. Start Claude in a Mac shell, tell it a codeword, and leave one modified and one new file.
-2. Move to the mini. The mini's tab opens, the agent returns the codeword, both files are on the mini uncommitted, the Mac's tree is clean, and `git rev-parse refs/canopy-moved/<session>` works on the Mac.
-3. Move it back to the Mac and repeat the checks the other way. The second move replaces the Mac's earlier transcript under the prefix rule.
-4. On the mini host, `ls -ln` on the moved transcript shows an owner the `claude` user in the shells container can read (the bind-mount question).
+1. Claude in a Mac shell took the codeword PERIWINKLE-42, appended a line to `tracked.txt` and created `new.txt`. The tab row showed "move to mini". The sheet showed the prompt, the target path on the mini, branch main and 2 uncommitted files.
+2. Mac to mini. The mini's tab opened on `claude --resume <session>`, and the agent answered PERIWINKLE-42. Both files were on the mini, uncommitted (`M tracked.txt`, `?? new.txt`). The Mac's tree was clean and `refs/canopy-moved/<session>` resolved there. No index ref was written, since nothing was staged.
+3. Before moving back, `staged.txt` was staged on the mini as "staged A" and then edited to "worktree B". The sheet said the Mac had an earlier copy of the conversation. Mini to Mac then gave three uncommitted files on the Mac, with `staged.txt` untracked at "worktree B", and a clean mini tree. On the mini, `refs/canopy-moved/<session>` resolved and `refs/canopy-moved-index/<session>:staged.txt` read "staged A". The Mac's transcript held no `/home/eric` cwd. The resumed agent gave the codeword and named the question it was asked on the mini, so the copy that continued it had replaced the Mac's earlier one.
+4. On the mini host the transcript is `1000 1000`, the uid the shells container runs as. The agent resumed and wrote to it.
+
+What it showed beyond the plan: an agent resumed in a folder it has never opened on the target stops at Claude's "trust this folder" prompt, which the user answers in the new tab. The "check again" state for a load with no answer was not exercised. It needs a dropped connection between steps, and its rules are covered by unit tests.
