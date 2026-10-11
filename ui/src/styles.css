@@ -8965,6 +8965,14 @@ span.effective-flag:not(:first-child) {
 }
 
 /* ---------- the ranger: its chip, popover and Settings row (Ranger.tsx) ---------- */
+/* the ✦ reads small at the chip's text size; scale it up without growing the row */
+.ranger-icon {
+  font-size: 1.45em;
+  line-height: 1;
+}
+.ranger > .mini {
+  gap: 0.2em;
+}
 .mini.ranger-chip.ranger-ok {
   color: var(--moss);
 }
