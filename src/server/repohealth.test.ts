@@ -52,7 +52,8 @@ describe("probes", () => {
     expect((await at("running")).state).toBe("ok");
     expect((await at("backoff")).state).toBe("healing");
     expect((await at("gave-up")).state).toBe("gave-up");
-    expect(await at("exited")).toMatchObject({ state: "down", why: "exited 1" });
+    expect(await at("failed")).toMatchObject({ state: "down", why: "exited 1" });
+    expect(await at("exited")).toMatchObject({ state: "down", why: "exited cleanly" });
     expect(await at("stopped")).toMatchObject({ state: "off", why: "stopped by hand" });
     expect(await at("idle")).toMatchObject({ state: "off", why: "not started" });
     expect(await probeFor({ name: "a", kind: "task", task: "dev" }, repo(), noTasks)()).toMatchObject({ state: "down", why: "no task named dev" });
@@ -158,7 +159,7 @@ describe("RepoHealth", () => {
   });
 
   test("an auto task check restarts its task until it runs", async () => {
-    let status: TaskStatus = "exited";
+    let status: TaskStatus = "failed";
     const restarts: string[] = [];
     const hub = new HealthHub({ broadcast: () => {}, timings: { base: 5, cap: 20, resetAfter: 300_000, healMax: HEAL_MAX }, debounce: 5 });
     const rh = new RepoHealth({

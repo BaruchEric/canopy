@@ -98,8 +98,9 @@ async function probeTask(repo: Repo, task: string, deps: ProbeDeps): Promise<Pro
       return { state: "healing", why: "keep running restarts it" };
     case "gave-up":
       return { state: "gave-up", why: "keep running gave up on it" };
+    // the task hub's words: exited is a clean exit, failed any other
     case "exited":
-      return fail(`exited${t.exitCode !== undefined && t.exitCode !== null ? ` ${t.exitCode}` : ""}`);
+      return fail("exited cleanly");
     // a task nobody started, or one stopped by hand, is not a failure, and
     // healing it would start what the user meant to be down
     case "idle":
@@ -107,7 +108,7 @@ async function probeTask(repo: Repo, task: string, deps: ProbeDeps): Promise<Pro
     case "stopped":
       return { state: "off", why: "stopped by hand" };
     case "failed":
-      return fail("failed to start");
+      return fail(t.exitCode === undefined || t.exitCode === null ? "died" : `exited ${t.exitCode}`);
   }
 }
 
