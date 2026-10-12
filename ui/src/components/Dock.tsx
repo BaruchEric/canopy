@@ -1,3 +1,4 @@
+import { agentName, allAgents } from "../allagents";
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import type { CSSProperties, DragEvent, KeyboardEvent, PointerEvent as ReactPointerEvent, RefObject } from "react";
 import { api } from "../api";
@@ -37,6 +38,10 @@ import {
 import { WAITING_GLYPH, WAITING_GROUPS, WAITING_PANEL, isReservedPanel, isWaitingPanel } from "../waiting";
 import { CLI_GLYPH, CLI_NAME, CLI_PANEL, isCliPanel } from "../cli";
 import { HEALTH_GLYPH, HEALTH_NAME, HEALTH_PANEL, isHealthPanel } from "../health";
+import { AGENT_GLYPH, cardOfPanel, isAgentPanel } from "../agentpanel";
+import { machineOf } from "../agentcards";
+import { AgentScreen, AskHere, pageIds, useAgentCard, useShellProbe } from "./AgentFocus";
+import { AgentActions, useNow } from "./Registry";
 import { HealthList, HealthSection } from "./Health";
 import { CliBody } from "./CommandLine";
 import { WaitingBody } from "./Waiting";
@@ -1831,7 +1836,16 @@ function PanelWaiting({
 const WAITING_NAME = "waiting on you";
 
 /** a panel's name for a label: its repo's id, or the waiting panel's name */
-const panelText = (id: string): string => (isWaitingPanel(id) ? WAITING_NAME : isCliPanel(id) ? CLI_NAME : isHealthPanel(id) ? HEALTH_NAME : idText(id));
+const panelText = (id: string): string =>
+  isWaitingPanel(id) ? WAITING_NAME : isCliPanel(id) ? CLI_NAME : isHealthPanel(id) ? HEALTH_NAME : isAgentPanel(id) ? agentPanelName(id) : idText(id);
+
+/** what an agent's panel is called: its repo, else its handle */
+function agentPanelName(id: string): string {
+  const s = useStore.getState();
+  const want = cardOfPanel(id);
+  const card = s.registry[want ?? ""] ?? allAgents({ cards: [], runs: Object.values(s.runs), shells: s.shells, shellAgents: s.shellAgents, repos: s.repos, ids: pageIds }).find((c) => c.id === want);
+  return card ? agentName(card) : "agent";
+}
 
 /** The gear of the "waiting on you" panel: its zoom, the dock's layout and
  *  moves, the close setting, folding its groups, and sharing it. No pop
@@ -2054,6 +2068,126 @@ function HealthPanel({
         </header>
         <div className="health-body" ref={bodyRef} style={zoomStyle(zoom)}>
           {!hidden && <HealthList />}
+        </div>
+      </div>
+    </section>
+  );
+}
+
+/** An agent's panel's gear: its zoom, the dock's layout and moves, the
+ *  close setting, and sharing it. */
+function AgentGear({ id, name, zoom, body }: { id: string; name: string; zoom: GearEntry; body: () => HTMLElement | null }) {
+  const arranged = useStore(arrangementOf);
+  const arrangeDock = useStore((s) => s.arrangeDock);
+  const setSetting = useStore((s) => s.setSetting);
+  const carousel = useStore((s) => s.settings.dockCarousel);
+  const panelClose = useStore((s) => s.settings.panelClose);
+  const panels = useStore((s) => s.panels);
+  const dockLayout = useStore((s) => s.dockLayout);
+  const movePanel = useStore((s) => s.movePanel);
+  const phone = useMedia(PHONE);
+  const layout: GearEntry[] = [
+    { type: "item", label: "panels side by side", on: arranged === "columns", run: () => arrangeDock("columns"), title: ARRANGE_TITLE },
+    { type: "item", label: "panels as tabs", on: arranged === "tabs", run: () => arrangeDock("tabs"), title: ARRANGE_TITLE },
+    ...(phone
+      ? []
+      : ([
+          { type: "item", label: "carousel", on: carousel, run: () => setSetting("dockCarousel", !carousel) },
+          ...stepEntries(id, panels, dockLayout, movePanel),
+        ] satisfies GearEntry[])),
+    closeEntry(panelClose, setSetting),
+  ];
+  return (
+    <Gear
+      label={`the agent at ${name}`}
+      groups={[
+        { label: name, entries: [zoom] },
+        { label: "layout", entries: layout },
+        { label: "share", entries: shareEntries({ el: body, label: `agent ${name}` }) },
+      ]}
+    />
+  );
+}
+
+/** One agent as a dock panel (`/agent/<card id>`), the board's "your own
+ *  arrangement": its live shell, or its transcript and facts, and the ask
+ *  it waits on. It tabs, moves and sizes like a repo's panel; an agent no
+ *  longer on the registry says so and waits to be closed. */
+function AgentPanel({
+  id,
+  hidden,
+  order,
+  area,
+  cell,
+  strip,
+  movable,
+}: {
+  id: string;
+  hidden?: boolean;
+  order?: number;
+  area?: string;
+  cell?: string;
+  strip?: boolean;
+  movable?: boolean;
+}) {
+  useShellProbe();
+  const card = useAgentCard(cardOfPanel(id));
+  const closable = useStore((s) => s.settings.panelClose);
+  const closePanel = useStore((s) => s.closePanel);
+  const wasTab = useWasTab(strip);
+  const box = useRef<HTMLElement>(null);
+  const bodyRef = useRef<HTMLDivElement>(null);
+  const { zoom, entry: zoomEntry } = useZoom("agents");
+  const now = useNow(15_000);
+  const forward = useStore((s) => s.activePanel === id);
+  const sideBySide = (area !== undefined && !hidden) || order !== undefined;
+  useEffect(() => {
+    if (!forward || !sideBySide) return;
+    const frame = requestAnimationFrame(() => revealHead(box.current?.querySelector(".panel-head") ?? null));
+    return () => cancelAnimationFrame(frame);
+  }, [forward, sideBySide, area]);
+  const name = card ? agentName(card) : "agent";
+  return (
+    <section
+      ref={box}
+      className={`panel agent-panel${strip ? " has-strip" : ""}${wasTab ? " was-tab" : ""}`}
+      aria-label={`agent ${name}`}
+      hidden={hidden}
+      data-cell={cell}
+      style={{ order, gridArea: area }}
+    >
+      <div className="panel-body">
+        <header className="panel-head" {...panelHead(id, name, movable)}>
+          <span className="glyph" {...(movable && dragHandle(id, name))}>
+            {AGENT_GLYPH}
+          </span>
+          <span className="panel-name" {...(movable && dragHandle(id, name))}>
+            {name}
+          </span>
+          {card && <span className={`reg-state rs-${card.state}`}>{card.state}</span>}
+          {card && <span className="agents-fact">{machineOf(card)}</span>}
+          <span className="spacer" />
+          {card && (
+            <span className="reg-actions">
+              <AgentActions card={card} />
+            </span>
+          )}
+          <AgentGear id={id} name={name} zoom={zoomEntry} body={() => bodyRef.current} />
+          {closable && (
+            <button type="button" className="mini close" onClick={() => closePanel(id)} aria-label={`Close the agent at ${name}`}>
+              ✕
+            </button>
+          )}
+        </header>
+        <div className="agent-panel-body" ref={bodyRef} style={zoomStyle(zoom)}>
+          {card ? (
+            <>
+              <AskHere card={card} />
+              <AgentScreen card={card} live active={!hidden} now={now} />
+            </>
+          ) : (
+            <p className="agent-panel-gone">This agent is no longer on the registry. Close the panel when you are done with it.</p>
+          )}
         </div>
       </div>
     </section>
@@ -2762,7 +2896,7 @@ function CellStrip({
             }}
           >
             <span className="glyph" aria-hidden="true">
-              {isCliPanel(id) ? CLI_GLYPH : isHealthPanel(id) ? HEALTH_GLYPH : waiting ? WAITING_GLYPH : GLYPH[state]}
+              {isCliPanel(id) ? CLI_GLYPH : isHealthPanel(id) ? HEALTH_GLYPH : isAgentPanel(id) ? AGENT_GLYPH : waiting ? WAITING_GLYPH : GLYPH[state]}
             </span>
             <span className="dock-tab-name">
               {waiting ? name : <IdLabel id={id} />}
@@ -3137,6 +3271,9 @@ export function Dock() {
         }
         if (isHealthPanel(id)) {
           return <HealthPanel key={id} area={p?.area} cell={p?.cell} order={p?.order} hidden={p?.hidden} strip={p?.strip} movable={movable} />;
+        }
+        if (isAgentPanel(id)) {
+          return <AgentPanel key={id} id={id} area={p?.area} cell={p?.cell} order={p?.order} hidden={p?.hidden} strip={p?.strip} movable={movable} />;
         }
         return (
           <RepoPanel

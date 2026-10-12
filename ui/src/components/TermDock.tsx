@@ -193,14 +193,20 @@ export function TermView({
   tab,
   active,
   onExit,
+  quiet = false,
 }: {
   tab: TermTab;
   active: boolean;
   /** told when the shell ends, for a view whose tab is not in the store */
   onExit?: (code: number | null) => void;
+  /** never takes the keyboard by itself (the agents board's, whose own
+   *  keys must not land in an agent's prompt); a click still does */
+  quiet?: boolean;
 }) {
   const host = useRef<HTMLDivElement>(null);
   const termRef = useRef<Terminal | null>(null);
+  const quietRef = useRef(quiet);
+  quietRef.current = quiet;
   const fitRef = useRef<FitAddon | null>(null);
   const theme = useStore((s) => s.settings.theme);
   const palette = useStore((s) => s.settings.palette);
@@ -322,7 +328,7 @@ export function TermView({
         opened = true;
         tries = 0;
         saidAway = false;
-        term.focus();
+        if (!quietRef.current) term.focus();
       };
       sock.onmessage = (e: MessageEvent<ArrayBuffer | string>) => {
         if (typeof e.data === "string") {
@@ -615,7 +621,7 @@ export function TermView({
   useEffect(() => {
     if (!active) return;
     fitRef.current?.fit();
-    termRef.current?.focus();
+    if (!quietRef.current) termRef.current?.focus();
   }, [active]);
 
   // A pinch in any shell sizes every shell in the same spot, and moving the

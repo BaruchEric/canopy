@@ -1,7 +1,8 @@
 import { useEffect, useState } from "react";
 import { screenLayoutOf, useStore } from "../store";
 import { matchProfile, recommendLayout, type MatchHow } from "../../../src/core/screenlayouts";
-import type { ScreenProfile } from "../../../src/core/types";
+import { BOARD_LAYOUTS, type ScreenProfile } from "../../../src/core/types";
+import { LAYOUT_WORD } from "../board";
 import { detectModel, deviceHere, draftOf, fieldsOf, physicalNow, screenHere, type Draft, type Tri } from "../screenprofiles";
 
 const HOW: Record<MatchHow, string> = {
@@ -324,6 +325,17 @@ function ProfileForm({
           </select>
         </label>
         {tri("feedOpen", "event feed")}
+        <label className="layout-field">
+          <span>agents board</span>
+          <select className="settings-input" value={draft.agents} onChange={(e) => set("agents", BOARD_LAYOUTS.find((l) => l === e.target.value) ?? "")}>
+            <option value="">leave</option>
+            {BOARD_LAYOUTS.map((l) => (
+              <option key={l} value={l}>
+                {LAYOUT_WORD[l]}
+              </option>
+            ))}
+          </select>
+        </label>
         {text("sectionsHidden", "hidden sections", "peers, launch")}
       </div>
       <div className="key-row">
@@ -349,4 +361,5 @@ const LAYOUT_FIELDS = [
   "level",
   "sectionsHidden",
   "feedOpen",
+  "agents",
 ] as const satisfies readonly (keyof Draft)[];

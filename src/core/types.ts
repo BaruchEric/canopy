@@ -481,6 +481,22 @@ export interface ScreenLayout {
   sectionsHidden?: string[];
   /** the event feed along the bottom */
   feedOpen?: boolean;
+  /** the agents board's layout */
+  agents?: BoardLayout;
+}
+
+/** The agents board's layouts (ui/src/board.ts): a rail of rows beside one
+ *  agent in focus, a wall of equal tiles, a spotlight sized by need, a
+ *  dashboard, a board by state and lanes on the day's clock. Here so a
+ *  screen layout profile can name one. */
+export const BOARD_LAYOUTS = ["rail", "wall", "spotlight", "dashboard", "triage", "lanes"] as const;
+export type BoardLayout = (typeof BOARD_LAYOUTS)[number];
+
+/** `GET /api/terms/screen`: what a shell's pane shows now, colours kept as
+ *  escape codes, one line per row; null text on a plain pty, which has no
+ *  pane to read */
+export interface TermScreen {
+  text: string | null;
 }
 
 /** A screen layout profile: a screen it is for, by name and size, and the

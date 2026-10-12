@@ -6,7 +6,7 @@
  * matches and applies them. Tested in screenlayouts.test.ts.
  */
 
-import type { ScreenLayout, ScreenProfile } from "./types";
+import { BOARD_LAYOUTS, type ScreenLayout, type ScreenProfile } from "./types";
 
 /** The bounds a layout's values are held to, the page's own (SIDEBAR and
  *  PANEL in ui/src/store.ts, ZOOM_MIN and ZOOM_MAX in ui/src/surface.ts,
@@ -38,7 +38,7 @@ const clamp = (v: number, min: number, max: number): number => Math.min(max, Mat
  *  dock takes the cards' room and scrolls a column at a time. A screen
  *  1400 px tall or more keeps the event feed up. */
 export function recommendLayout(w: number, h: number): ScreenLayout {
-  if (w < PHONE) return { arrange: "tabs", carousel: false, sidebarOpen: false, feedOpen: false };
+  if (w < PHONE) return { arrange: "tabs", carousel: false, sidebarOpen: false, feedOpen: false, agents: "rail" };
   const tree = w >= NARROW;
   const sidebarWidth = clamp(Math.round((w * 0.12) / 8) * 8, 220, 320);
   const side = tree ? sidebarWidth + SEAM : 0;
@@ -55,8 +55,13 @@ export function recommendLayout(w: number, h: number): ScreenLayout {
     ...(tree ? { sidebarWidth } : {}),
     columnWidth,
     feedOpen: h >= 1400,
+    // a wall of shells reads where a wall fits; the rail everywhere else
+    agents: w >= WALL_FROM ? "wall" : "rail",
   };
 }
+
+/** the width, CSS px, from which the agents board starts on its wall */
+const WALL_FROM = 3200;
 
 /** the presets: physical size, pixel ratio, name, and the device it suits */
 const STEPS: readonly (readonly [number, number, number, string, string])[] = [
@@ -124,6 +129,11 @@ export function parseLayout(raw: unknown): { layout: ScreenLayout } | { error: s
   if (r["level"] !== undefined) {
     if (r["level"] !== "intermediate" && r["level"] !== "advanced") return { error: "level is intermediate or advanced" };
     out.level = r["level"];
+  }
+  if (r["agents"] !== undefined) {
+    const l = BOARD_LAYOUTS.find((b) => b === r["agents"]);
+    if (!l) return { error: `agents is one of ${BOARD_LAYOUTS.join(", ")}` };
+    out.agents = l;
   }
   if (r["sectionsHidden"] !== undefined) {
     const v: unknown = r["sectionsHidden"];

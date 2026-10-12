@@ -11,6 +11,15 @@ const features = (w: number, h: number): Record<string, number> => {
 };
 
 describe("parseRoute", () => {
+  test("an agent window: the card it starts on and whether it follows the board", () => {
+    expect(parseRoute("?view=agent&card=claude:abc-123&follow=1").agent).toEqual({ card: "claude:abc-123", follow: true });
+    expect(parseRoute("?view=agent").agent).toEqual({ card: null, follow: false });
+    expect(parseRoute("?view=agent&card=../../x").agent).toEqual({ card: null, follow: false });
+    // a repo's views are never an agent window
+    expect(parseRoute("?repo=a/b&view=agent").agent).toBeNull();
+    expect(parseRoute("?view=agents").agent).toBeNull();
+  });
+
   test("the agents view's ask link, the one the broker's away DM carries", () => {
     expect(parseRoute("?view=agents&ask=6b72e2c4-1f0a-4c1e-9a55-1b8f4f9d2a10").ask).toBe("6b72e2c4-1f0a-4c1e-9a55-1b8f4f9d2a10");
     // only on the agents view, and only an id the broker could have made
@@ -26,7 +35,7 @@ describe("parseRoute", () => {
     expect(parseRoute("?repo=web-apps/ripe&view=solo&section=history").section).toBeNull();
     expect(parseRoute("?view=section&section=history").section).toBeNull();
   });
-  const none = { repo: null, solo: false, shell: false, term: null, section: null, task: null, ask: null, popped: false };
+  const none = { repo: null, solo: false, shell: false, term: null, section: null, task: null, ask: null, popped: false, agent: null };
   test("reads the repo and the shell view", () => {
     expect(parseRoute("?repo=web-apps/ripe&view=shell")).toEqual({
       repo: "web-apps/ripe",
@@ -37,6 +46,7 @@ describe("parseRoute", () => {
       task: null,
       ask: null,
       popped: false,
+      agent: null,
     });
     expect(parseRoute("?view=shell")).toEqual(none);
   });
@@ -61,6 +71,7 @@ describe("parseRoute", () => {
       task: null,
       ask: null,
       popped: false,
+      agent: null,
     });
     expect(parseRoute("?repo=web-apps/ripe")).toEqual({
       repo: "web-apps/ripe",
@@ -71,6 +82,7 @@ describe("parseRoute", () => {
       task: null,
       ask: null,
       popped: false,
+      agent: null,
     });
     // solo needs a repo to be solo about
     expect(parseRoute("?view=solo")).toEqual(none);

@@ -57,19 +57,21 @@ export function screenNow(): Screen | null {
 
 /** What a window is for, which is its layout: the whole grove, one repo's
  *  panel, one section of it, or one shell. */
-export type WindowKind = "main" | "solo" | "section" | "shell";
+export type WindowKind = "main" | "solo" | "section" | "shell" | "agent";
 
 const WINDOW_WORD: Record<WindowKind, string> = {
   main: "main window",
   solo: "repo window",
   section: "section window",
   shell: "shell window",
+  agent: "agent window",
 };
 
 export const windowWord = (kind: WindowKind): string => WINDOW_WORD[kind];
 
 /** the kind of window a route (routes.ts) makes */
-export function windowKindOf(route: { solo: boolean; shell: boolean; section: string | null }): WindowKind {
+export function windowKindOf(route: { solo: boolean; shell: boolean; section: string | null; agent?: unknown }): WindowKind {
+  if (route.agent) return "agent";
   if (route.section !== null) return "section";
   if (route.shell) return "shell";
   if (route.solo) return "solo";

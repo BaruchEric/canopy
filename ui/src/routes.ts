@@ -1,3 +1,4 @@
+import { FOCUS_PANE } from "./panes";
 import { isSproutId } from "../../src/core/sprout";
 import { isSectionKey, type SectionKey } from "./surface";
 
@@ -22,7 +23,14 @@ export interface Route {
   /** `popped=1`: a solo window the dock popped its panel out to, the only
    *  kind that tells the dock it has the panel */
   popped: boolean;
+  /** `?view=agent`: one agent's screen in a window of its own, the agents
+   *  board's focus popped out; `card` names it, `follow=1` makes it show
+   *  whichever agent the board focuses */
+  agent: { card: string | null; follow: boolean } | null;
 }
+
+/** a registry card's id: a harness and a session, or a scan's */
+const CARD_ID = /^[A-Za-z0-9][\w:.@|-]{0,199}$/;
 
 /** a shell's name: 32 hex digits, after another backend's name for one of
  *  its shells */
@@ -44,7 +52,24 @@ export function parseRoute(search: string): Route {
     task: view === "shell" && task && /^[a-z0-9][a-z0-9._-]{0,39}$/.test(task) ? task : null,
     ask: askOf(q),
     popped: view === "solo" && q.get("popped") === "1",
+    agent: agentOf(q),
   };
+}
+
+function agentOf(q: URLSearchParams): Route["agent"] {
+  if (q.get("view") !== "agent" || q.get("repo")) return null;
+  const card = q.get("card");
+  return { card: card && CARD_ID.test(card) ? card : null, follow: q.get("follow") === "1" };
+}
+
+/** The agents board's focus popped out (`FOCUS_PANE` in panes.ts): a
+ *  window that shows the agent the board focuses (`follow=1`), starting
+ *  from `card`. Named like a popped panel's, so a second press brings the
+ *  same window forward. */
+export function popOutFocus(card: string | null): Window | null {
+  const q = new URLSearchParams({ view: "agent", follow: "1" });
+  if (card) q.set("card", card);
+  return openNamed(`canopy:pop:${FOCUS_PANE}`, `${window.location.pathname}?${q}`, "window");
 }
 
 /** an ask's id off `?view=agents&ask=`, the broker's id shape, or null */

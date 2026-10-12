@@ -12,6 +12,7 @@ import { Resizer } from "./components/Resizer";
 import { RunSheet } from "./components/RunSheet";
 import { SelectBar } from "./components/SelectBar";
 import { Sidebar } from "./components/Sidebar";
+import { AgentSolo } from "./components/AgentSolo";
 import { SectionSolo, Solo } from "./components/Solo";
 import { ShellSolo, TermDock } from "./components/TermDock";
 import { Crowns, TopBar } from "./components/TopBar";
@@ -352,6 +353,7 @@ export function App() {
       </div>
     );
   }
+  if (route.agent) return <AgentSolo card={route.agent.card} follow={route.agent.follow} />;
   if (route.solo && route.repo) return <Solo id={route.repo} />;
   if (route.shell && route.repo) return <ShellSolo id={route.repo} />;
   if (route.section && route.repo) return <SectionSolo id={route.repo} section={route.section} />;

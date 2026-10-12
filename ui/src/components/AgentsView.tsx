@@ -21,6 +21,7 @@ import {
 import { backendOf } from "../registry";
 import { connOf, multi, routesOf, useStore } from "../store";
 import { AgentSettingsForm, EffectiveTable, PickEditor } from "./AgentForm";
+import { BoardTab } from "./Board";
 import { ChanChip } from "./Chan";
 import { InboxChip } from "./Inbox";
 import { RegistryTab } from "./Registry";
@@ -29,10 +30,11 @@ import { WidgetGear, shareEntries, useZoom, zoomStyle } from "./Surface";
 
 const errText = (err: unknown) => String(err instanceof Error ? err.message : err);
 
-type Tab = "registry" | "routing";
+type Tab = "registry" | "board" | "routing";
 
 const TABS = [
   { value: "registry", label: "registry", title: "Every agent on the tailnet: running, waiting, and the day's ended ones" },
+  { value: "board", label: "board", title: "Every agent at once, live (the registry's, canopy's runs and chats, and agents in canopy shells): a rail beside one in focus, a wall, a spotlight, a dashboard, a board by state, or lanes" },
   { value: "routing", label: "routing", title: "Which agent starts for what: profiles, roles and repo overrides" },
 ] as const;
 
@@ -55,16 +57,18 @@ export function AgentsView({ onGit }: { onGit?: () => void } = {}) {
   const has = useStore((s) => harnessesOf(connOf(s, scope).backend));
   const routing = useStore((s) => hasRouting(connOf(s, scope).backend));
   const ready = useStore((s) => s.registryReady);
-  // the registry first when there is one: the broker's pages link here
+  // the registry first when there is one: the broker's pages link here.
+  // The board needs no broker: canopy's own runs, chats and shells are on it
   const [chosen, setTab] = useState<Tab | null>(null);
-  const tab: Tab = ready ? (chosen ?? "registry") : "routing";
+  const tab: Tab = ready ? (chosen ?? "registry") : chosen === "routing" ? "routing" : "board";
+  const tabs = ready ? TABS : TABS.filter((t) => t.value !== "registry");
   const body = useRef<HTMLDivElement>(null);
   const { zoom, entry: zoomEntry } = useZoom("agents");
 
   return (
     <section className="agents-view" aria-label="Agents">
       <div className="agents-bar">
-        {ready && <Seg label="Agents view" value={tab} options={TABS} onChange={setTab} />}
+        <Seg label="Agents view" value={tab} options={tabs} onChange={setTab} />
         {tab === "routing" && isMulti && (
           <Seg
             label="Backend"
@@ -73,10 +77,10 @@ export function AgentsView({ onGit }: { onGit?: () => void } = {}) {
             onChange={setPicked}
           />
         )}
-        {tab === "registry" && (
+        {(tab === "registry" || tab === "board") && (
           <span className="agents-has">
             <InboxChip onGit={onGit} />
-            <ChanChip />
+            {ready && <ChanChip />}
           </span>
         )}
         {tab === "routing" && <span className="agents-has" title="The harnesses this backend has installed">
@@ -90,8 +94,14 @@ export function AgentsView({ onGit }: { onGit?: () => void } = {}) {
         </span>}
         <WidgetGear label="the agents" what="agents" zoom={zoomEntry} share={shareEntries({ el: () => body.current, label: "agents" })} />
       </div>
-      <div ref={body} className="agents-body" style={zoomStyle(zoom)}>
-        {tab === "registry" ? <RegistryTab onGit={onGit} /> : <Routing scope={scope} routes={routes} has={has} routing={routing} />}
+      <div ref={body} className={tab === "board" ? "agents-body board-body" : "agents-body"} style={zoomStyle(zoom)}>
+        {tab === "registry" ? (
+          <RegistryTab onGit={onGit} />
+        ) : tab === "board" ? (
+          <BoardTab onGit={onGit} />
+        ) : (
+          <Routing scope={scope} routes={routes} has={has} routing={routing} />
+        )}
       </div>
     </section>
   );

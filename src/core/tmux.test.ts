@@ -24,6 +24,7 @@ import {
   taskCommand,
   parsePane,
   textArgs,
+  screenArgs,
   rangerSessionArgs,
   rangerPanesArgs,
   parseRangerPanes,
@@ -183,6 +184,8 @@ describe("a pane's text for a copy", () => {
       "capture-pane", "-p", "-J", "-t", sessionName(ID), "-S", "-50", "-E", "-",
     ]);
     expect(textArgs(base, ID, true).slice(base.length)).toEqual(["capture-pane", "-p", "-J", "-t", sessionName(ID)]);
+    // a peek: the screen alone, colours kept, rows as the pane wraps them
+    expect(screenArgs(base, ID).slice(base.length)).toEqual(["capture-pane", "-p", "-e", "-t", sessionName(ID)]);
   });
 });
 

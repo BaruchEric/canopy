@@ -1,8 +1,8 @@
 import { describe, expect, test } from "bun:test";
-import { listenPanes, parsePaneMsg, poppedOut, poppedOf, unclaimed, without, type PaneDock, type PaneLine, type PaneMsg } from "./panes";
+import { FOCUS_PANE, listenPanes, parsePaneMsg, poppedOut, poppedOf, unclaimed, without, type PaneDock, type PaneLine, type PaneMsg } from "./panes";
 
 describe("pane messages", () => {
-  test("parses the five kinds and refuses anything else", () => {
+  test("parses the six kinds and refuses anything else", () => {
     expect(parsePaneMsg({ type: "hello", id: "a" })).toEqual({ type: "hello", id: "a" });
     expect(parsePaneMsg({ type: "close", id: "a" })).toEqual({ type: "close", id: "a" });
     expect(parsePaneMsg({ type: "close" })).toBeNull();
@@ -10,6 +10,9 @@ describe("pane messages", () => {
     expect(parsePaneMsg({ type: "bye", id: "a" })).toEqual({ type: "bye", id: "a" });
     expect(parsePaneMsg({ type: "return", id: "a" })).toEqual({ type: "return", id: "a" });
     expect(parsePaneMsg({ type: "who" })).toEqual({ type: "who" });
+    expect(parsePaneMsg({ type: "show", id: FOCUS_PANE, card: "claude:s1" })).toEqual({ type: "show", id: FOCUS_PANE, card: "claude:s1" });
+    expect(parsePaneMsg({ type: "show", id: FOCUS_PANE, card: null })).toEqual({ type: "show", id: FOCUS_PANE, card: null });
+    expect(parsePaneMsg({ type: "show", id: FOCUS_PANE })).toBeNull();
     expect(parsePaneMsg({ type: "hello" })).toBeNull();
     expect(parsePaneMsg({ type: "hello", id: 3 })).toBeNull();
     expect(parsePaneMsg({ type: "hello", id: "" })).toBeNull();
@@ -63,6 +66,17 @@ function rig(popped: Record<string, number> = {}) {
 }
 
 describe("the main window's pane listener", () => {
+  test("passes over the board's focus pane: it is no dock panel", async () => {
+    const r = rig();
+    r.hear({ type: "hello", id: FOCUS_PANE });
+    r.hear({ type: "show", id: FOCUS_PANE, card: "a" });
+    r.hear({ type: "return", id: FOCUS_PANE });
+    r.hear({ type: "bye", id: FOCUS_PANE });
+    await Bun.sleep(50);
+    expect(r.did).toEqual([]);
+    r.stop();
+  });
+
   test("asks who is out there as it starts, and takes back a popped panel no window answers for", async () => {
     const r = rig({ a: 0, b: 1 });
     expect(r.sent).toEqual([{ type: "who" }]);

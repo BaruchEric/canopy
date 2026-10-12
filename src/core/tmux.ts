@@ -551,6 +551,16 @@ export const textArgs = (base: string[], id: string, fullscreen: boolean, lines 
   ...(fullscreen ? [] : ["-S", `-${lines}`, "-E", "-"]),
 ];
 
+/** the screen the pane shows now and nothing above it, colours kept and
+ *  lines left as the pane wraps them: what a peek at a shell draws */
+export const screenArgs = (base: string[], id: string): string[] => [...base, "capture-pane", "-p", "-e", "-t", sessionName(id)];
+
+/** the pane's screen for a peek, null when tmux will not say */
+export async function paneScreen(base: string[], id: string): Promise<string | null> {
+  const r = await exec(screenArgs(base, id), { timeoutMs: 10_000 });
+  return r.code === 0 ? r.stdout : null;
+}
+
 /** the pane's text for a copy, null when tmux will not say */
 export async function paneText(base: string[], id: string): Promise<{ text: string; fullscreen: boolean } | null> {
   const pane = await paneInfo(base, id);

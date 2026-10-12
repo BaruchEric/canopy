@@ -9758,3 +9758,485 @@ span.effective-flag:not(:first-child) {
 .section-head > .health-add {
   margin: 8px 4px 0 0;
 }
+
+/* ---------- the agents board (Board.tsx, board.ts) ----------
+   One grid that six layouts re-lay. A tile is a card (the one edge it
+   gets); everything inside it is flat: a head of coloured facts, a line,
+   and a well for the agent's screen. Tiles move only by grid-area, and
+   carry a view transition name each, so a change of layout slides them. */
+.agents-body.board-body {
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  padding: 8px 12px 6px;
+}
+.agents-body.board-body > * {
+  max-width: none;
+}
+.board {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.board-bar {
+  flex: none;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 12px;
+}
+.board-bar .spacer {
+  flex: 1;
+}
+.board-bar .mini.board-on {
+  color: var(--rust);
+  background: var(--wash);
+}
+/* a phone's focus head wraps its tools under the name, not off the edge */
+.board.narrow .bt.focused .bt-head {
+  flex-wrap: wrap;
+  row-gap: 4px;
+}
+.board.narrow .bt.focused .bt-tools {
+  flex-wrap: wrap;
+}
+/* six layouts outrun a phone's width: the row scrolls on its own */
+.board-bar .board-layouts {
+  max-width: 100%;
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+.board-bar .board-layouts button {
+  flex: none;
+}
+/* the keys need a keyboard */
+@media (hover: none) and (pointer: coarse) {
+  .board-keys {
+    display: none;
+  }
+}
+.board-keys {
+  flex: none;
+  margin: 0;
+  font-size: 11px;
+  color: var(--ink-faint);
+}
+.board-stage {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  display: grid;
+  gap: 6px;
+  align-content: stretch;
+  overscroll-behavior: contain;
+}
+.board.bl-lanes .board-stage {
+  row-gap: 0;
+  column-gap: 0;
+}
+
+.bt {
+  --tone: var(--ink-faint);
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  background: var(--bark1);
+  border: 1px solid var(--hair);
+  border-radius: var(--r-card);
+  cursor: pointer;
+}
+.bt[hidden] {
+  display: none;
+}
+.bt[data-state="working"] {
+  --tone: var(--sky);
+}
+.bt[data-state="idle"] {
+  --tone: var(--moss);
+}
+.bt[data-state="waiting"] {
+  --tone: var(--rust);
+  border-color: color-mix(in srgb, var(--rust) 45%, var(--hair));
+}
+.bt:hover {
+  border-color: var(--hair2);
+}
+.bt.focused {
+  border-color: var(--ink-faint);
+  background: var(--float);
+  cursor: default;
+}
+.bt.gone .bt-name {
+  color: var(--ink-dim);
+}
+.bt-head {
+  flex: none;
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  padding: 5px 10px;
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  font-size: 12px;
+}
+.bt-n {
+  font-size: 10px;
+  padding: 0 4px;
+  align-self: center;
+}
+.bt-dot {
+  flex: none;
+  align-self: center;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--tone);
+}
+.bt[data-state="lost"] .bt-dot {
+  background: transparent;
+  box-shadow: inset 0 0 0 1.5px var(--tone);
+}
+.bt-name {
+  flex: 0 1 auto;
+  min-width: 6ch;
+  max-width: 18ch;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font: inherit;
+  font-weight: 700;
+  color: var(--ink);
+  background: none;
+  border: 0;
+  padding: 0;
+  cursor: pointer;
+}
+.bt-name:hover {
+  text-decoration: underline;
+}
+.bt-branch {
+  min-width: 0;
+  flex: 0 1 auto;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  color: var(--moss);
+}
+.bt-machine {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  color: var(--lichen);
+}
+.bt-state {
+  flex: none;
+  margin-left: auto;
+}
+.bt-age {
+  flex: none;
+  color: var(--ink-faint);
+}
+.bt-tools {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+.bt-back {
+  flex: none;
+  font-size: 16px;
+  line-height: 1;
+}
+.bt-last {
+  flex: none;
+  padding: 0 10px 5px;
+  font-size: 12px;
+  color: var(--ink-dim);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.bt[data-state="waiting"] .bt-last {
+  color: var(--rust);
+}
+.bt-acts {
+  flex: none;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px;
+  padding: 0 8px 6px;
+}
+.bt-acts .bt-go {
+  color: var(--moss);
+}
+.bt-err {
+  font-size: 11px;
+  color: var(--rust);
+}
+.bt-turn {
+  padding: 0 10px 6px;
+  font-size: 11px;
+  color: var(--rust);
+}
+/* a row is as tall as its lines, even in a taller track (the dashboard's) */
+.bt-row {
+  align-self: start;
+}
+.bt-row .bt-head {
+  padding-bottom: 2px;
+}
+.bt-chip .bt-head {
+  padding: 4px 8px;
+}
+/* a chip or a lane gives up its machine before its name */
+.bt-chip .bt-name,
+.bt-lane .bt-name {
+  flex-shrink: 0;
+}
+.bt-body {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  margin: 0 6px 6px;
+  border-radius: var(--r);
+  background: var(--well);
+  overflow: hidden;
+}
+.bt-body[hidden] {
+  display: none;
+}
+/* a shell here takes the room under any ask, not the whole tile: the
+   dock's term-view is absolute, and the sticky tile would be its box */
+.bt-body > .term-view,
+.agent-panel-body > .term-view,
+.agent-solo-body > .term-view {
+  position: relative;
+  inset: auto;
+  flex: 1;
+  min-height: 0;
+}
+.bt-body > .term-view .term-screen {
+  height: 100%;
+}
+.bt-ask {
+  flex: none;
+  margin: 0;
+  max-height: 45%;
+  overflow: auto;
+}
+.bt-detail {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  padding: 6px 10px;
+}
+/* the rail's focus stays in sight while a long rail scrolls under it */
+.board.bl-rail .bt.bt-term.focused,
+.board.bl-spotlight .bt.bt-term.focused {
+  position: sticky;
+  top: 0;
+  align-self: start;
+  height: min(100%, var(--stage-h, 100%));
+  max-height: var(--stage-h, none);
+}
+.board.bl-rail .bt.bt-term.focused {
+  height: var(--stage-h, 100%);
+}
+.board.narrow .bt.bt-term.focused {
+  height: 100%;
+}
+
+/* a peek: the shell's screen, read only, its newest line at the bottom */
+.peek {
+  flex: 1;
+  min-height: 0;
+  margin: 0;
+  padding: 6px 8px;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-end;
+  font: 10.5px/1.35 var(--mono);
+  color: var(--ink);
+  white-space: pre;
+}
+.bl-wall .peek {
+  font-size: 11px;
+}
+.peek-line {
+  min-height: 1.35em;
+}
+.peek-note {
+  white-space: normal;
+  color: var(--ink-faint);
+}
+
+/* a lane on the clock */
+.bt.bt-lane {
+  display: grid;
+  grid-template-columns: minmax(10rem, 15rem) minmax(0, 1fr);
+  align-items: center;
+  border: 0;
+  border-bottom: 1px solid var(--hair);
+  border-radius: 0;
+  background: transparent;
+}
+.bt.bt-lane.focused {
+  background: var(--wash);
+}
+.bt-bar {
+  position: relative;
+  height: 12px;
+  margin-right: 8px;
+  border-radius: 3px;
+  background: var(--well);
+}
+.bt.bt-lane > .bt-head {
+  padding-block: 4px;
+}
+.lane-seg {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  border-radius: 2px;
+}
+.ls-working {
+  background: var(--sky);
+}
+.ls-idle {
+  background: color-mix(in srgb, var(--moss) 45%, transparent);
+}
+.ls-waiting {
+  background: var(--rust);
+}
+.ls-seen {
+  background: color-mix(in srgb, var(--ink-faint) 35%, transparent);
+}
+.ls-lost {
+  background: repeating-linear-gradient(135deg, var(--hair2) 0 3px, transparent 3px 6px);
+}
+
+/* headings and the like a layout places beside its tiles */
+.bf-head,
+.bf-group {
+  align-self: end;
+  padding: 2px 4px;
+  font-size: 12px;
+  white-space: nowrap;
+  overflow: hidden;
+}
+.bf-head b,
+.bf-group b {
+  font-weight: 500;
+}
+.bf-count {
+  color: var(--ink-faint);
+}
+.bf-head.tone-waiting b {
+  color: var(--rust);
+}
+.bf-head.tone-working b {
+  color: var(--sky);
+}
+.bf-head.tone-idle b {
+  color: var(--moss);
+}
+.bf-head.tone-done b,
+.bf-head.tone-none b {
+  color: var(--ink-dim);
+}
+.bf-group {
+  padding-top: 8px;
+  color: var(--lichen);
+}
+.bf-summary {
+  min-width: 0;
+  border-bottom: 1px solid var(--hair);
+  padding-bottom: 6px;
+}
+.bf-summary .reg-summary {
+  margin: 0;
+}
+.bf-axis {
+  position: relative;
+  height: 18px;
+  margin-right: 8px;
+  font-size: 11px;
+  color: var(--ink-faint);
+}
+.bf-axis span {
+  position: absolute;
+  bottom: 0;
+  transform: translateX(-50%);
+  white-space: nowrap;
+}
+.bf-axis .bf-now {
+  right: 0;
+  left: auto;
+  transform: none;
+  color: var(--rust);
+}
+
+::view-transition-group(*) {
+  animation-duration: 260ms;
+  animation-timing-function: var(--ease);
+}
+@media (prefers-reduced-motion: reduce) {
+  ::view-transition-group(*),
+  ::view-transition-old(*),
+  ::view-transition-new(*) {
+    animation: none !important;
+  }
+}
+
+/* an agent as a dock panel, and in a window of its own */
+/* a canopy run or chat on the board: its timeline fills, the box stays under it */
+.run-pane {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+.run-pane > .sheet-body {
+  flex: 1;
+}
+.run-pane > .composer {
+  flex: none;
+}
+.agent-panel-body,
+.agent-solo-body {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  background: var(--well);
+}
+.agent-panel-body > .bt-detail,
+.agent-solo-body > .bt-detail {
+  flex: 1;
+}
+.agent-panel-gone {
+  padding: 12px;
+  color: var(--ink-dim);
+}
+.agent-solo {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+}
+.agent-solo-head {
+  flex: none;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 6px 10px;
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--hair);
+  font-size: 12px;
+}

@@ -21,7 +21,21 @@ export type PaneMsg =
   | { type: "bye"; id: string }
   | { type: "return"; id: string }
   | { type: "close"; id: string }
-  | { type: "who" };
+  | { type: "who" }
+  /** the main window tells the focus pane which agent to show now */
+  | { type: "show"; id: string; card: string | null };
+
+/**
+ * The agents board's focus as a pane: the second-screen window that shows
+ * whichever agent the board focuses while the main window keeps the rail.
+ * It speaks this channel as a popped panel does (hello when it shows and on
+ * "who", bye when it goes, "return" to hand the focus back), but it is no
+ * dock panel: the dock's listener passes it over and the board listens for
+ * it instead. "show" is the board naming the agent; "return" from the board
+ * asks the pane to close, since either side saying it means the same thing.
+ * A leading slash never starts a repo id.
+ */
+export const FOCUS_PANE = "/agent-focus";
 
 export function parsePaneMsg(v: unknown): PaneMsg | null {
   if (!v || typeof v !== "object") return null;
@@ -30,6 +44,10 @@ export function parsePaneMsg(v: unknown): PaneMsg | null {
   const id = "id" in v ? v.id : undefined;
   if (typeof id !== "string" || !id) return null;
   if (type === "hello" || type === "bye" || type === "return" || type === "close") return { type, id };
+  if (type === "show") {
+    const card = "card" in v ? v.card : undefined;
+    if (typeof card === "string" || card === null) return { type, id, card };
+  }
   return null;
 }
 
@@ -100,7 +118,8 @@ export function listenPanes(
   };
   ch.listen((data) => {
     const m = parsePaneMsg(data);
-    if (!m || m.type === "who") return;
+    // the board's focus pane is the board's to hear, never a dock panel
+    if (!m || m.type === "who" || m.type === "show" || m.id === FOCUS_PANE) return;
     clearTimeout(byes.get(m.id));
     byes.delete(m.id);
     if (m.type === "hello") {

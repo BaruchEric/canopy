@@ -46,7 +46,7 @@ import { boardOrder, invertPick, pickWhere, rangeIds, setPick, togglePick } from
 import { appendFeed, describeEvent, type FeedEntry, type FeedSnapshot } from "./feed";
 import { mergeAction } from "./peers";
 import { convOf, isUnread, mergeMessages } from "./chan";
-import type { AdviceAccepted, AdviceOffer, AgentCard, Ask, ChanMessage, HealthCheck, IncubatorStages, Presence, RangerInfo, Sprout, TailchanInfo } from "../../src/core/types";
+import type { AdviceAccepted, AdviceOffer, AgentCard, AgentKind, Ask, ChanMessage, HealthCheck, IncubatorStages, Presence, RangerInfo, Sprout, TailchanInfo } from "../../src/core/types";
 import { mergeAsks, mergeInbox, replaceAsks, toAskAnswer, toRunAnswer, type InboxAnswer, type InboxItem } from "./inbox";
 import { replaceSprouts, staleSprout } from "./sprouts";
 import { cardsByRepoCard, markTrail, mergeCards, replaceCards, type TrailMark } from "./agentcards";
@@ -699,6 +699,10 @@ interface CanopyState {
   registryReady: boolean;
   /** the states this page saw each card take, by card id (`markTrail`) */
   registryTrail: Record<string, TrailMark[]>;
+  /** what runs in each shell no live registry card names, by shell id, as
+   *  tmux last said (`probeShells`): the agents board's cards for a Claude
+   *  or Codex with no hook */
+  shellAgents: Record<string, AgentKind | null>;
   /** the broker's asks as the home backend follows them, open and lately
    *  closed, by id */
   asks: Record<string, Ask>;
@@ -1031,6 +1035,10 @@ interface CanopyState {
   /** reads the agent registry off the home backend; a backend without a
    *  broker leaves it off */
   loadRegistry: () => Promise<void>;
+  /** asks each of these shells what runs in it and keeps the answers in
+   *  `shellAgents`, dropping shells no longer asked about; a shell that does
+   *  not answer counts as running nothing */
+  probeShells: (ids: readonly string[]) => Promise<void>;
   /** reads the asks, whether they can be answered, and presence off the
    *  home backend; a backend without a broker leaves them off */
   loadAsks: () => Promise<void>;
@@ -1369,6 +1377,13 @@ function feedView(s: CanopyState, from: string): FeedSnapshot {
   };
 }
 
+/** whether two shell probes say the same, so a probe that changes nothing
+ *  does not re-render the board */
+const sameAgents = (a: Record<string, AgentKind | null>, b: Record<string, AgentKind | null>): boolean => {
+  const ka = Object.keys(a);
+  return ka.length === Object.keys(b).length && ka.every((k) => Object.hasOwn(b, k) && a[k] === b[k]);
+};
+
 /** run id to flow id, for every run a flow owns. */
 function flowRunsOf(flows: Flow[]): Record<string, string> {
   const flowRuns: Record<string, string> = {};
@@ -1635,6 +1650,7 @@ export function screenLayoutOf(
     level: s.settings.level,
     sectionsHidden: [...s.settings.sectionsHidden],
     feedOpen: s.feedOpen,
+    ...(s.settings.agentsLayout ? { agents: s.settings.agentsLayout } : {}),
   };
 }
 
@@ -1721,6 +1737,7 @@ export const useStore = create<CanopyState>((set, get) => ({
   registry: {},
   registryReady: false,
   registryTrail: {},
+  shellAgents: {},
   asks: {},
   asksReady: false,
   answerKey: readAnswerKey(),
@@ -2326,6 +2343,7 @@ export const useStore = create<CanopyState>((set, get) => ({
     if (layout.panelZoom !== undefined) st.setSetting("zoom", withZoom(get().settings.zoom, "panel", clamp(layout.panelZoom, ZOOM_MIN, ZOOM_MAX)));
     if (layout.termFont !== undefined) st.setSetting("termFont", termFontSize(layout.termFont, TERM_FONT.size));
     if (layout.sectionsHidden) st.setSetting("sectionsHidden", sectionsHidden(layout.sectionsHidden));
+    if (layout.agents) st.setSetting("agentsLayout", layout.agents);
     set((s) => {
       const l = laidOut(s);
       const w = layout.columnWidth === undefined ? undefined : clamp(layout.columnWidth, PANEL.min, PANEL.max);
@@ -2845,6 +2863,11 @@ export const useStore = create<CanopyState>((set, get) => ({
     const b = backend ?? get().home;
     const { keeping } = await api.setKeeping(on, b);
     set((s) => ({ conns: connsIf(s, b, { keeping }) }));
+  },
+  probeShells: async (ids) => {
+    const got = await Promise.all(ids.map((id) => api.termAgent(id).then((r) => [id, r.agent] as const, () => [id, null] as const)));
+    const shellAgents = Object.fromEntries(got);
+    set((s) => (sameAgents(s.shellAgents, shellAgents) ? {} : { shellAgents }));
   },
   loadRegistry: async () => {
     if (registryRetry) clearTimeout(registryRetry);
@@ -3618,7 +3641,7 @@ function loneWindow(): boolean {
 export function dockless(): boolean {
   if (typeof window === "undefined") return false;
   const route = parseRoute(window.location.search);
-  return route.solo || route.shell || route.section !== null;
+  return route.solo || route.shell || route.section !== null || route.agent !== null;
 }
 
 // Whatever part of the layout a change touched is written as it happens, so

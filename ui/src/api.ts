@@ -5,6 +5,7 @@ import type {
   RepoHealthInfo,
   RangerInfo,
   RangerWake,
+  TermScreen,
   AgentActivity,
   AgentKind,
   About,
@@ -442,6 +443,8 @@ export const api = {
   /** what a shell is running, asked of tmux: claude, codex or neither */
   termAgent: (id: string) =>
     repoReq<{ agent: AgentKind | null }>(id, (p) => `/api/terms/agent?term=${encodeURIComponent(p)}`),
+  /** what a shell's pane shows now, for a peek; null text on a plain pty */
+  termScreen: (id: string) => repoReq<TermScreen>(id, (p) => `/api/terms/screen?term=${encodeURIComponent(p)}`),
   /** a shell's text as tmux holds it, for a copy; null text on a plain pty */
   termText: (id: string) =>
     repoReq<{ text: string | null; fullscreen: boolean }>(id, (p) => `/api/terms/text?term=${encodeURIComponent(p)}`),

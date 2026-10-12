@@ -45,7 +45,7 @@ import { runCheck } from "../core/check";
 import { exec, git, onHost, setSeedGit } from "../core/exec";
 import { fleetSkipReason, Flows } from "../core/flow";
 import { INHERITED_ENV, SECRET_ENV, isKeystroke, isTermId, parseTermMessage, Scrollback, shellArgs, startTerm, termPlace, termSize, type TermSession, type TermSize } from "../core/term";
-import { attachTmuxTerm, hasSession, history, killSession, listSessions, noServer, newSession, paneInfo, paneText, sendKeys, sendLine, serverUp, snapshot, tmuxBase } from "../core/tmux";
+import { attachTmuxTerm, hasSession, history, killSession, listSessions, noServer, newSession, paneInfo, paneScreen, paneText, sendKeys, sendLine, serverUp, snapshot, tmuxBase } from "../core/tmux";
 import { clip, continueLine, countLines, expiredShells, forgetKept, KEEP_EVERY, listKept, lostShells, readKeptHistory, replayCommand, replayFile, restoredBanner, writeKept } from "../core/keep";
 import { PASTE_MAX, pasteName, pasteText, savePaste } from "../core/paste";
 import { apiBase, ForgeAuthError, linkForgeClones, listForgeRepos } from "../core/forge";
@@ -2766,6 +2766,15 @@ async function handleApi(
     if (!state.tmux) return json({ text: null, fullscreen: false });
     const got = await paneText(state.tmux, term);
     return got ? json(got) : json({ error: "tmux did not answer" }, 502);
+  }
+  if (path === "/api/terms/screen" && method === "GET") {
+    const term = url.searchParams.get("term") ?? "";
+    const live = state.terms.get(term);
+    if (!live || live.ending) return json({ error: "no such shell" }, 404);
+    // a plain pty has no pane to read; the board shows its facts instead
+    if (!state.tmux) return json({ text: null });
+    const text = await paneScreen(state.tmux, term);
+    return text === null ? json({ error: "tmux did not answer" }, 502) : json({ text });
   }
   if (path === "/api/terms" && method === "DELETE") {
     const term = url.searchParams.get("term") ?? "";

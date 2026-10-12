@@ -41,7 +41,7 @@ import { Section } from "./Surface";
 const errText = (err: unknown) => String(err instanceof Error ? err.message : err);
 
 /** now, again every `ms`, for the ages a row shows */
-function useNow(ms = 30_000): number {
+export function useNow(ms = 30_000): number {
   const [now, setNow] = useState(() => Date.now());
   useEffect(() => {
     const t = setInterval(() => setNow(Date.now()), ms);
@@ -50,8 +50,8 @@ function useNow(ms = 30_000): number {
   return now;
 }
 
-const glyphOf = (c: AgentCard): string => (c.harness === "other" ? "·" : HARNESS[c.harness].glyph);
-const harnessWord = (c: AgentCard): string => (c.harness === "other" ? "another harness" : HARNESS[c.harness].label);
+export const glyphOf = (c: AgentCard): string => (c.harness === "other" ? "·" : HARNESS[c.harness].glyph);
+export const harnessWord = (c: AgentCard): string => (c.harness === "other" ? "another harness" : HARNESS[c.harness].label);
 
 /** the element id a card's row carries, so the timeline can bring it into view */
 const rowId = (id: string): string => `agent-${id.replace(/[^\w-]/g, "_")}`;
@@ -83,36 +83,10 @@ export function AgentRow({
   open?: boolean;
   onToggle?: () => void;
 }) {
-  const home = useStore((s) => s.home);
-  const shown = useStore(useShallow((s) => s.backendOrder));
-  const chanReady = useStore((s) => s.chan?.ready === true);
-  const target = joinTarget(card, shown, qual);
-  const held = useStore((s) => (target ? s.shells.find((t) => t.id === target)?.place : undefined));
-  const repos = useStore((s) => s.repos);
-  const transcript = useMemo(() => transcriptTarget(card, home, repos.filter((r) => backendOf(r.id) === home)), [card, home, repos]);
-  // the ask it waits on, a way into the inbox (an id, so the selector settles)
-  const ask = useStore((s) => Object.values(s.asks).find((a) => a.state === "open" && a.agent === card.id)?.id ?? null);
   const since = useStore((s) => stateSince(card, s.registryTrail[card.id]));
-  // a canopy shell or run on a backend here can hand its work to the other harness
-  const from = handoffFrom(card, shown);
-  const fromBackend = from?.backend ?? null;
-  const handRepo = useMemo(() => (fromBackend ? handoffRepo(card, repos.filter((r) => backendOf(r.id) === fromBackend)) : undefined), [fromBackend, card, repos]);
-  const [err, setErr] = useState<string | null>(null);
   const [ownOpen, setOwnOpen] = useState(false);
   const open = openProp ?? ownOpen;
   const toggle = onToggle ?? (() => setOwnOpen((o) => !o));
-
-  const message = () => useStore.getState().openChan(`@${card.handle}`);
-  const join = () => {
-    if (!target) return;
-    useStore.getState().bringTerm(target);
-    if (held === "panel") onGit?.();
-  };
-  const openTranscript = () => {
-    if (!transcript) return;
-    setErr(null);
-    api.openFile(transcript.repoId, transcript.file, 1, helperFor(useStore.getState(), home)).catch((e: unknown) => setErr(errText(e)));
-  };
   const started = new Date(card.startedAt).toLocaleString();
   const classes = ["agents-row", "reg-row", isLiveAgent(card) ? "" : "reg-gone", open ? "open" : ""].filter(Boolean).join(" ");
   return (
@@ -146,6 +120,60 @@ export function AgentRow({
         <span className="agents-fact" title={card.cwd}>
           {whereWord(card)}
         </span>
+        <AgentActions card={card} onGit={onGit} />
+      </div>
+      {(card.caps.length > 0 || card.offers.length > 0) && (
+        <div className="reg-more">
+          {card.caps.map((c) => (
+            <span key={c} className="reg-cap">
+              {c}
+            </span>
+          ))}
+          {card.offers.map((o) => (
+            <span key={o} className="reg-offer">
+              {o}
+            </span>
+          ))}
+        </div>
+      )}
+      {open && <AgentDetail card={card} now={now} />}
+    </li>
+  );
+}
+
+/** What can be done about an agent from here: answer the ask it waits on,
+ *  message it, join the canopy shell it runs in, open its transcript, hand
+ *  its work to the other harness. A registry row's buttons, and the
+ *  board's focus. */
+export function AgentActions({ card, onGit }: { card: AgentCard; onGit?: () => void }) {
+  const home = useStore((s) => s.home);
+  const shown = useStore(useShallow((s) => s.backendOrder));
+  const chanReady = useStore((s) => s.chan?.ready === true);
+  const target = joinTarget(card, shown, qual);
+  const held = useStore((s) => (target ? s.shells.find((t) => t.id === target)?.place : undefined));
+  const repos = useStore((s) => s.repos);
+  const transcript = useMemo(() => transcriptTarget(card, home, repos.filter((r) => backendOf(r.id) === home)), [card, home, repos]);
+  // the ask it waits on, a way into the inbox (an id, so the selector settles)
+  const ask = useStore((s) => Object.values(s.asks).find((a) => a.state === "open" && a.agent === card.id)?.id ?? null);
+  // a canopy shell or run on a backend here can hand its work to the other harness
+  const from = handoffFrom(card, shown);
+  const fromBackend = from?.backend ?? null;
+  const handRepo = useMemo(() => (fromBackend ? handoffRepo(card, repos.filter((r) => backendOf(r.id) === fromBackend)) : undefined), [fromBackend, card, repos]);
+  const [err, setErr] = useState<string | null>(null);
+
+  const message = () => useStore.getState().openChan(`@${card.handle}`);
+  const join = () => {
+    if (!target) return;
+    useStore.getState().bringTerm(target);
+    if (held === "panel") onGit?.();
+  };
+  const openTranscript = () => {
+    if (!transcript) return;
+    setErr(null);
+    api.openFile(transcript.repoId, transcript.file, 1, helperFor(useStore.getState(), home)).catch((e: unknown) => setErr(errText(e)));
+  };
+  return (
+    <>
         <span className="reg-actions">
           {ask && (
             <button
@@ -183,24 +211,8 @@ export function AgentRow({
             />
           )}
         </span>
-      </div>
-      {(card.caps.length > 0 || card.offers.length > 0) && (
-        <div className="reg-more">
-          {card.caps.map((c) => (
-            <span key={c} className="reg-cap">
-              {c}
-            </span>
-          ))}
-          {card.offers.map((o) => (
-            <span key={o} className="reg-offer">
-              {o}
-            </span>
-          ))}
-        </div>
-      )}
-      {err && <p className="settings-hint error">{err}</p>}
-      {open && <AgentDetail card={card} now={now} />}
-    </li>
+      {err && <span className="settings-hint error">{err}</span>}
+    </>
   );
 }
 
@@ -261,7 +273,7 @@ function noReaderWord(card: AgentCard): string {
  * what its transcript says it did (`ActivityView`), and the states this page
  * saw it take.
  */
-function AgentDetail({ card, now }: { card: AgentCard; now: number }) {
+export function AgentDetail({ card, now }: { card: AgentCard; now: number }) {
   const reader = useStore((s) => readerOf(card, s.backendOrder, Object.values(s.registry)));
   const marks = useStore((s) => s.registryTrail[card.id]);
   const read = useActivity(card, reader);
@@ -559,7 +571,7 @@ function PastCards({
 
 /** The registry at a glance: the live agents by state, where they run,
  *  every agent's time since midnight, the longest running, the harnesses. */
-function Summary({ s, now }: { s: RegistrySummary; now: number }) {
+export function Summary({ s, now }: { s: RegistrySummary; now: number }) {
   const inbox = () => useStore.getState().openInbox();
   return (
     <dl className="reg-summary" aria-label="Summary">

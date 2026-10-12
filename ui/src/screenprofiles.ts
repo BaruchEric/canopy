@@ -9,7 +9,7 @@
 
 import { deviceName } from "../../src/core/presence";
 import { parseProfile, type ProfileFields, type ScreenHere } from "../../src/core/screenlayouts";
-import type { ScreenLayout } from "../../src/core/types";
+import type { BoardLayout, ScreenLayout } from "../../src/core/types";
 
 /** the screen this page is on, in physical px; null where there is none */
 export function physicalNow(): { width: number; height: number; dpr: number } | null {
@@ -58,6 +58,7 @@ export interface Draft {
   level: "" | "intermediate" | "advanced";
   sectionsHidden: string;
   feedOpen: Tri;
+  agents: "" | BoardLayout;
 }
 
 const tri = (v: boolean | undefined): Tri => (v === undefined ? "" : v ? "on" : "off");
@@ -83,6 +84,7 @@ export function draftOf(p: { name?: string; device?: string; model?: string; wid
     level: l.level ?? "",
     sectionsHidden: (l.sectionsHidden ?? []).join(", "),
     feedOpen: tri(l.feedOpen),
+    agents: l.agents ?? "",
   };
 }
 
@@ -103,6 +105,7 @@ export function fieldsOf(d: Draft): { profile: ProfileFields } | { error: string
     level: d.level || undefined,
     sectionsHidden: d.sectionsHidden.trim() === "" ? undefined : d.sectionsHidden.split(/[\s,]+/).filter(Boolean),
     feedOpen: b(d.feedOpen),
+    agents: d.agents || undefined,
   };
   for (const k of Object.keys(layout)) if (layout[k] === undefined) delete layout[k];
   return parseProfile({

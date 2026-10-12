@@ -502,12 +502,44 @@ function Console({ run, repo }: { run: Run; repo: Repo | undefined }) {
   );
 }
 
+/**
+ * A run's timeline and, for a chat, its message box, with no sheet around
+ * them: what the agents board shows for a canopy run or chat. Its prompts
+ * answer here as they do in the sheet, and the box never takes the
+ * keyboard until clicked.
+ */
+export function RunPane({ run, repo }: { run: Run; repo: Repo | undefined }) {
+  const answerRun = useStore((s) => s.answerRun);
+  const sayRun = useStore((s) => s.sayRun);
+  const draft = useStore((s) => s.chatDrafts[run.id]);
+  const [error, setError] = useState<string | null>(null);
+  const act = (fn: () => Promise<void>, propagate = false) => {
+    setError(null);
+    return runConsoleAction(fn, setError, propagate);
+  };
+  return (
+    <div className="run-pane">
+      <Timeline run={run} repo={repo} error={error} onAnswer={(a, promptId) => void act(() => answerRun(run.id, promptId, a))} />
+      {run.chat && isRunActive(run) && (
+        <Composer
+          who={AGENT_NAME[harnessOf(run)]}
+          ready={run.status === "idle"}
+          onSend={(text) => act(() => sayRun(run.id, text), true)}
+          quiet
+          {...(draft ? { draft } : {})}
+        />
+      )}
+    </div>
+  );
+}
+
 /** The chat's message box. Enter sends, shift-enter breaks a line. */
 function Composer({
   who,
   ready,
   onSend,
   draft = "",
+  quiet = false,
 }: {
   /** the agent's name, for the box's placeholder while it replies */
   who: string;
@@ -515,6 +547,9 @@ function Composer({
   onSend: (text: string) => Promise<void>;
   /** what the box starts with: an accepted retro lesson, for the user to read and send */
   draft?: string;
+  /** never takes the keyboard on its own (the agents board, whose keys
+   *  would otherwise type into it) */
+  quiet?: boolean;
 }) {
   const [text, setText] = useState(draft);
   const [busy, setBusy] = useState(false);
@@ -523,8 +558,8 @@ function Composer({
 
   // Back to the box as soon as the agent has answered.
   useEffect(() => {
-    if (ready) box.current?.focus();
-  }, [ready]);
+    if (ready && !quiet) box.current?.focus();
+  }, [ready, quiet]);
 
   const send = async () => {
     if (!can) return;

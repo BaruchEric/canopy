@@ -15,6 +15,7 @@ import { termFontSize } from "./touch";
 import { PREVIEW_H, previewHeightOf } from "./preview";
 import { BENCH_DOCK, BENCH_SPLIT, benchRailOf, shareOf } from "./front";
 import { putScreen, slotsNow, withScreen, writesFlat } from "./screens";
+import { BOARD_GROUPINGS, BOARD_LAYOUTS, type BoardGrouping, type BoardLayout } from "./board";
 import {
   SECTION_KEYS,
   normalizeTermFonts,
@@ -172,6 +173,13 @@ export interface Settings {
   /** a docked panel can be closed: off, its ✕, its tab's × and a middle
    *  click on the tab are gone, so nothing closes one by accident */
   panelClose: boolean;
+  /** the agents board's layout on this kind of screen; null until picked,
+   *  when the screen's own recommendation applies (`recommendBoard`) */
+  agentsLayout: BoardLayout | null;
+  /** the board grouped by machine or repo, or not at all */
+  agentsGrouping: BoardGrouping;
+  /** the board's focus moves to an agent the moment it starts waiting */
+  agentsFollow: boolean;
 }
 
 /** the inbox command block's text size, px */
@@ -216,6 +224,9 @@ export const DEFAULT_SETTINGS: Settings = {
   inboxFold: true,
   dockCarousel: false,
   panelClose: true,
+  agentsLayout: null,
+  agentsGrouping: "none",
+  agentsFollow: false,
 };
 
 const KEY = "canopy.settings";
@@ -328,6 +339,7 @@ export const SCREEN_SETTINGS = [
   "inboxFold",
   "dockCarousel",
   "panelClose",
+  "agentsLayout",
 ] as const satisfies readonly (keyof Settings)[];
 
 /** what is stored under the key, an empty object for anything else */
@@ -379,6 +391,9 @@ export function loadSettings(): Settings {
       inboxFold: typeof saved.inboxFold === "boolean" ? saved.inboxFold : DEFAULT_SETTINGS.inboxFold,
       dockCarousel: typeof saved.dockCarousel === "boolean" ? saved.dockCarousel : DEFAULT_SETTINGS.dockCarousel,
       panelClose: typeof saved.panelClose === "boolean" ? saved.panelClose : DEFAULT_SETTINGS.panelClose,
+      agentsLayout: BOARD_LAYOUTS.find((l) => l === saved.agentsLayout) ?? null,
+      agentsGrouping: pick(BOARD_GROUPINGS, saved.agentsGrouping, DEFAULT_SETTINGS.agentsGrouping),
+      agentsFollow: typeof saved.agentsFollow === "boolean" ? saved.agentsFollow : DEFAULT_SETTINGS.agentsFollow,
       ...levelOf(saved),
     };
   } catch {
