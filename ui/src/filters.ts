@@ -12,6 +12,7 @@ export const REPO_FILTERS = [
   "no-upstream",
   "spec-drift",
   "no-spec",
+  "health",
   "unreadable",
 ] as const;
 export type RepoFilter = (typeof REPO_FILTERS)[number];
@@ -49,6 +50,10 @@ export const FILTER_INFO: Record<RepoFilter, { label: string; title: string }> =
     label: "no spec",
     title: "A local checkout that has not adopted the shared repo spec",
   },
+  health: {
+    label: "health",
+    title: "One of the repo's health checks is down or gave up",
+  },
   unreadable: {
     label: "unreadable",
     title: "git could not read the repo",
@@ -57,7 +62,12 @@ export const FILTER_INFO: Record<RepoFilter, { label: string; title: string }> =
 
 const DEFAULT_BRANCHES = new Set(["main", "master"]);
 
-export function matchesFilter(r: Repo, f: RepoFilter): boolean {
+/** what a facet needs beyond the repo: the ids of the repos with a check down */
+export interface FilterContext {
+  healthBad?: ReadonlySet<string>;
+}
+
+export function matchesFilter(r: Repo, f: RepoFilter, ctx: FilterContext = {}): boolean {
   const st = r.status;
   switch (f) {
     case "changes":
@@ -76,6 +86,8 @@ export function matchesFilter(r: Repo, f: RepoFilter): boolean {
       return r.spec === "behind" || r.spec === "drifted";
     case "no-spec":
       return r.spec === "not-adopted";
+    case "health":
+      return ctx.healthBad?.has(r.id) ?? false;
     case "unreadable":
       return Boolean(r.error);
   }
@@ -96,6 +108,8 @@ export interface RepoQuery {
   favorites?: boolean;
   /** substring of the repo id, case-insensitive */
   text: string;
+  /** the repos with a health check down, for the health facet */
+  healthBad?: ReadonlySet<string>;
 }
 
 /** Filters within one dimension add up; the dimensions all have to agree.
@@ -107,7 +121,7 @@ export function applyQuery(repos: readonly Repo[], q: RepoQuery, plain: (id: str
     (r) =>
       (!q.attention || needsAttention(r)) &&
       (!q.favorites || r.favorite === true) &&
-      (q.filters.length === 0 || q.filters.some((f) => matchesFilter(r, f))) &&
+      (q.filters.length === 0 || q.filters.some((f) => matchesFilter(r, f, q))) &&
       (q.users.length === 0 || q.users.includes(userKey(r) ?? NOBODY)) &&
       (!text || plain(r.id).toLowerCase().includes(text)),
   );
@@ -127,9 +141,9 @@ export interface Facets {
 
 /** Counts for the filter menu. Computed on the workspace scope, before any
  *  filter, so a chip says what it would show rather than what is left. */
-export function countFacets(repos: Repo[]): Facets {
+export function countFacets(repos: Repo[], ctx: FilterContext = {}): Facets {
   const filters = Object.fromEntries(
-    REPO_FILTERS.map((f) => [f, repos.filter((r) => matchesFilter(r, f)).length]),
+    REPO_FILTERS.map((f) => [f, repos.filter((r) => matchesFilter(r, f, ctx)).length]),
   ) as Record<RepoFilter, number>;
   const counts = new Map<string, number>();
   for (const r of repos) {

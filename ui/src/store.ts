@@ -46,7 +46,7 @@ import { boardOrder, invertPick, pickWhere, rangeIds, setPick, togglePick } from
 import { appendFeed, describeEvent, type FeedEntry, type FeedSnapshot } from "./feed";
 import { mergeAction } from "./peers";
 import { convOf, isUnread, mergeMessages } from "./chan";
-import type { AdviceAccepted, AdviceOffer, AgentCard, Ask, ChanMessage, IncubatorStages, Presence, RangerInfo, Sprout, TailchanInfo } from "../../src/core/types";
+import type { AdviceAccepted, AdviceOffer, AgentCard, Ask, ChanMessage, HealthCheck, IncubatorStages, Presence, RangerInfo, Sprout, TailchanInfo } from "../../src/core/types";
 import { mergeAsks, mergeInbox, replaceAsks, toAskAnswer, toRunAnswer, type InboxAnswer, type InboxItem } from "./inbox";
 import { replaceSprouts, staleSprout } from "./sprouts";
 import { cardsByRepoCard, markTrail, mergeCards, replaceCards, type TrailMark } from "./agentcards";
@@ -72,6 +72,7 @@ import {
   type FailedRow,
   type TurnRow,
 } from "./waiting";
+import { badRepoIds } from "./health";
 import { putScreen, screenNow, slotsNow, withScreen, writesFlat } from "./screens";
 import {
   DEFAULT_LAUNCH,
@@ -135,7 +136,7 @@ export const PANEL_TERM = { min: 60, max: 2400, initial: rowsPx(PANEL_TERM_ROWS)
 /** the event feed along the bottom, in px of height */
 export const FEED = { min: 100, max: 900, initial: 220 };
 /** sections that start folded, matching how the panel read before they could fold */
-const DEFAULT_CLOSED = ["search", "history", "claude", "launch", "peers", "spec", "preview", "agents", "files"];
+const DEFAULT_CLOSED = ["search", "history", "claude", "launch", "peers", "spec", "preview", "agents", "files", "health"];
 /** the folded-by-default set a layout saved before `knownSections` existed
  *  had decided about; anything added to DEFAULT_CLOSED since folds for it */
 const OLD_KNOWN = ["search", "history", "claude"];
@@ -719,6 +720,9 @@ interface CanopyState {
   stages: Record<string, IncubatorStages>;
   /** the ranger on each backend that has said, by backend name (server/ranger) */
   rangers: Record<string, RangerInfo>;
+  /** each backend's health checks, by backend name; an older backend that
+   *  has none is missing (server/health) */
+  health: Record<string, HealthCheck[]>;
   /** the retro lessons home has on offer, which the inbox shows as one item */
   advice: AdviceOffer[];
   /** an accepted lesson's text by chat run id, which that chat's message box
@@ -1040,6 +1044,10 @@ interface CanopyState {
   loadSprouts: (backend?: string) => Promise<void>;
   /** reads one backend's ranger, home by default; an older backend has none */
   loadRanger: (backend?: string) => Promise<void>;
+  /** reads one backend's health checks, home by default */
+  loadHealth: (backend?: string) => Promise<void>;
+  /** heals one check now; the error is the backend's words */
+  healCheck: (backend: string, id: string) => Promise<void>;
   /** a change to a backend's ranger: on, profile, handle, telegram, fresh */
   setRanger: (backend: string, patch: Record<string, unknown>) => Promise<void>;
   rangerAct: (backend: string, act: "restart" | "fresh") => Promise<void>;
@@ -1134,6 +1142,8 @@ interface CanopyState {
   showTasks: (repoId: string) => void;
   /** opens a repo's panel with its agents section unfolded */
   showAgents: (repoId: string) => void;
+  /** opens a repo's panel with its health section unfolded */
+  showHealth: (repoId: string) => void;
   /** brings a repo's bench to the front with `task`'s log in it (null for
    *  the one the bench picks) */
   bringTask: (repoId: string, task?: string | null) => void;
@@ -1456,6 +1466,8 @@ const sproutLoads = new Map<string, number>();
 const stagesEvents = new Map<string, number>();
 /* and each backend's ranger events, the same */
 const rangerEvents = new Map<string, number>();
+/* and each backend's health events, the same way */
+const healthEvents = new Map<string, number>();
 /** the same for the advice on offer */
 let adviceEvents = 0;
 
@@ -1550,6 +1562,7 @@ function resync(get: () => CanopyState, set: (fn: (s: CanopyState) => Partial<Ca
   // every backend's incubator, which may have moved on too
   void get().loadSprouts(b);
   void get().loadRanger(b);
+  void get().loadHealth(b);
   // the tasks a panel loaded may have moved while the stream was down
   for (const id of Object.keys(get().tasks)) if (backendOf(id) === b) void get().loadTasks(id).catch(() => {});
   void Promise.all([api.terms(b), api.kept(b), api.helpers(b)])
@@ -1716,6 +1729,7 @@ export const useStore = create<CanopyState>((set, get) => ({
   sproutsReady: false,
   stages: {},
   rangers: {},
+  health: {},
   advice: [],
   chatDrafts: {},
   adviceFile: null,
@@ -1920,6 +1934,7 @@ export const useStore = create<CanopyState>((set, get) => ({
     void get().loadAsks();
     void get().loadSprouts();
     void get().loadRanger();
+    void get().loadHealth();
     // the screen layouts, which a backend from before them does not have
     void get().loadScreenProfiles();
     // what home runs: it names the machines, and it is the build a later
@@ -2075,6 +2090,7 @@ export const useStore = create<CanopyState>((set, get) => ({
     readPeers(get, set, name);
     void get().loadSprouts(name);
     void get().loadRanger(name);
+    void get().loadHealth(name);
     void api
       .about(name)
       .then((about) => set((s) => ({ conns: connsIf(s, name, { about }) })))
@@ -2124,6 +2140,7 @@ export const useStore = create<CanopyState>((set, get) => ({
     const { [name]: _history, ...histories } = s.histories;
     const { [name]: _stages, ...stages } = s.stages;
     const { [name]: _ranger, ...rangers } = s.rangers;
+    const { [name]: _health, ...health } = s.health;
     const backendOrder = applyRegistry(s.home, registryEntries, hiddenBackends);
     set({
       settings,
@@ -2145,6 +2162,7 @@ export const useStore = create<CanopyState>((set, get) => ({
       sprouts: recordOut(s.sprouts, name),
       stages,
       rangers,
+      health,
       agents,
       launchers,
       remembered,
@@ -2596,6 +2614,11 @@ export const useStore = create<CanopyState>((set, get) => ({
       set((st) => ({ rangers: { ...st.rangers, [b]: ev.ranger } }));
       return;
     }
+    if (ev.type === "health") {
+      healthEvents.set(b, (healthEvents.get(b) ?? 0) + 1);
+      set((st) => ({ health: { ...st.health, [b]: ev.checks } }));
+      return;
+    }
     if (ev.type === "advice") {
       adviceEvents += 1;
       set({ advice: ev.advice });
@@ -2880,6 +2903,21 @@ export const useStore = create<CanopyState>((set, get) => ({
     } catch {
       // an older backend has no ranger; nothing shows for it
     }
+  },
+  loadHealth: async (backend) => {
+    const b = backend ?? get().home;
+    const mark = healthEvents.get(b) ?? 0;
+    try {
+      const checks = await api.health(b);
+      if ((healthEvents.get(b) ?? 0) === mark && isShown(get(), b)) set((s) => ({ health: { ...s.health, [b]: checks } }));
+    } catch {
+      // an older backend has no health; nothing shows for it
+    }
+  },
+  healCheck: async (b, id) => {
+    const check = await api.healCheck(b, id);
+    healthEvents.set(b, (healthEvents.get(b) ?? 0) + 1);
+    set((s) => ({ health: { ...s.health, [b]: (s.health[b] ?? []).map((c) => (c.id === check.id ? check : c)) } }));
   },
   setRanger: async (b, patch) => {
     const ranger = await api.setRanger(b, patch);
@@ -3313,6 +3351,11 @@ export const useStore = create<CanopyState>((set, get) => ({
       ...dockPanel(s, repoId),
       closedSections: unfoldIn(s.closedSections, repoId, "agents"),
     })),
+  showHealth: (repoId) =>
+    set((s) => ({
+      ...dockPanel(s, repoId),
+      closedSections: unfoldIn(s.closedSections, repoId, "health"),
+    })),
   bringTask: (repoId, task = null) =>
     set((s) => ({ ...dockPanel(s, repoId), front: frontForTask(s.front, repoId, task) })),
   dropBenchTask: (repoId) =>
@@ -3510,7 +3553,7 @@ export const useStore = create<CanopyState>((set, get) => ({
   pickNone: () => set({ selected: [] }),
   pickInvert: () => set((s) => ({ selected: invertPick(pickedIds(s), pickableIds(s)) })),
   pickGroup: (ids) => set((s) => ({ selected: togglePick(s.selected, ids) })),
-  pickFacet: (facet) => set((s) => ({ selected: pickWhere(visibleRepos(s), facet) })),
+  pickFacet: (facet) => set((s) => ({ selected: pickWhere(visibleRepos(s), facet, { healthBad: healthBad(s) }) })),
   planFleet: (workflow) => set({ sheet: { kind: "fleet-plan", workflow } }),
   startFleet: async (workflow, note) => {
     // one fleet per backend the picked repos are on; the sheet shows the
@@ -3970,15 +4013,23 @@ export function behindItems(s: CanopyState): BehindRow[] {
   return behindOut;
 }
 
-let failedIn: { runs: Record<string, Run>; flowRuns: Record<string, string>; tasks: TaskInfo[]; rangers: Record<string, RangerInfo> } | null = null;
+let failedIn: {
+  runs: Record<string, Run>;
+  flowRuns: Record<string, string>;
+  tasks: TaskInfo[];
+  rangers: Record<string, RangerInfo>;
+  health: Record<string, HealthCheck[]>;
+} | null = null;
 let failedOut: FailedRow[] = [];
 
-/** The runs, tasks and rangers that failed, newest first, for the same panel. */
+/** The runs, tasks, rangers and health checks that failed, newest first,
+ *  for the same panel. */
 export function failedItems(s: CanopyState): FailedRow[] {
   const f = failedIn;
-  if (f && f.runs === s.runs && f.flowRuns === s.flowRuns && f.tasks === s.taskAll && f.rangers === s.rangers) return failedOut;
-  failedIn = { runs: s.runs, flowRuns: s.flowRuns, tasks: s.taskAll, rangers: s.rangers };
-  failedOut = failedRows(Object.values(s.runs), s.flowRuns, s.taskAll, Object.entries(s.rangers));
+  if (f && f.runs === s.runs && f.flowRuns === s.flowRuns && f.tasks === s.taskAll && f.rangers === s.rangers && f.health === s.health) return failedOut;
+  failedIn = { runs: s.runs, flowRuns: s.flowRuns, tasks: s.taskAll, rangers: s.rangers, health: s.health };
+  const health = Object.entries(s.health).flatMap(([backend, checks]) => checks.map((check) => ({ backend, check })));
+  failedOut = failedRows(Object.values(s.runs), s.flowRuns, s.taskAll, Object.entries(s.rangers), health);
   return failedOut;
 }
 
@@ -4016,7 +4067,19 @@ export function cardOf(s: CanopyState, repoId: string): RepoCard | undefined {
   return cardIndex.get(repoId);
 }
 
-let viewIn: { cards: RepoCard[]; filters: unknown; users: unknown; attention: boolean; favorites: boolean; text: string } | null =
+let badIn: CanopyState["health"] | null = null;
+let badOut: ReadonlySet<string> = new Set();
+
+/** the qualified ids of the repos with a health check down or given up */
+export function healthBad(s: Pick<CanopyState, "health">): ReadonlySet<string> {
+  if (badIn !== s.health) {
+    badIn = s.health;
+    badOut = badRepoIds(s.health);
+  }
+  return badOut;
+}
+
+let viewIn: { cards: RepoCard[]; filters: unknown; users: unknown; attention: boolean; favorites: boolean; text: string; bad: ReadonlySet<string> } | null =
   null;
 let viewOut: RepoCard[] = [];
 
@@ -4032,11 +4095,14 @@ export function visibleCards(s: CanopyState): RepoCard[] {
     v.users === s.users &&
     v.attention === s.dirtyOnly &&
     v.favorites === s.favoritesOnly &&
-    v.text === s.filter
+    v.text === s.filter &&
+    // the health facet alone reads it: a check's tick does not rebuild the view
+    (v.bad === healthBad(s) || !s.filters.includes("health"))
   )
     return viewOut;
-  const q = { filters: s.filters, users: s.users, attention: s.dirtyOnly, favorites: s.favoritesOnly, text: s.filter };
-  viewIn = { cards, filters: s.filters, users: s.users, attention: s.dirtyOnly, favorites: s.favoritesOnly, text: s.filter };
+  const bad = healthBad(s);
+  const q = { filters: s.filters, users: s.users, attention: s.dirtyOnly, favorites: s.favoritesOnly, text: s.filter, healthBad: bad };
+  viewIn = { cards, filters: s.filters, users: s.users, attention: s.dirtyOnly, favorites: s.favoritesOnly, text: s.filter, bad };
   viewOut = same(viewOut, cards.filter((card) => applyQuery(card.checkouts, q, plainOf).length > 0));
   return viewOut;
 }

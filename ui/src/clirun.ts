@@ -30,6 +30,10 @@ interface RunEnv {
 /** the App's view switch; until it binds, a command stays on this view */
 const env: RunEnv = { navigate: () => {} };
 
+/** a view by name, from outside the command line (the health chip's "open
+ *  page") */
+export const openView = (view: string): void => env.navigate(view);
+
 /** the App hands over its view switch once it mounts */
 export function bindNavigate(navigate: (view: string) => void): void {
   env.navigate = navigate;

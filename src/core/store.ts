@@ -14,6 +14,7 @@ import {
 } from "./route";
 import { isDefaultLaunch, normalizeLaunch } from "./launch";
 import { normalizeBackends } from "./backends";
+import { normalizeChecks } from "./repohealth";
 import { normalizeTaskPatch } from "./tasks";
 import { DEFAULT_SEED, PEER_SYNC, isPeerName, normalizePeers, normalizeSeed } from "./peers";
 import { normalizeRanger } from "./ranger";
@@ -31,6 +32,7 @@ import {
   type RangerSettings,
   type SourceInput,
   type StoredSource,
+  type RepoCheckDef,
   type TaskPatch,
   type Workspace,
   type WsColor,
@@ -54,6 +56,7 @@ const defaults = (): CanopyConfig => ({
   agentRoles: {},
   launchers: {},
   tasks: {},
+  health: {},
   archived: [],
   favorites: [],
   fetch: true,
@@ -88,6 +91,17 @@ function normalizeTasks(v: unknown): Record<string, TaskPatch[]> {
     if (!Array.isArray(list)) continue;
     const kept = list.map(normalizeTaskPatch).filter((p): p is TaskPatch => typeof p !== "string" && Object.keys(p).length > 1);
     if (kept.length) out[path] = kept;
+  }
+  return out;
+}
+
+/** canopy's own checks per repo path; a bad entry drops, the rest stay */
+function normalizeHealth(v: unknown): Record<string, RepoCheckDef[]> {
+  if (!v || typeof v !== "object" || Array.isArray(v)) return {};
+  const out: Record<string, RepoCheckDef[]> = {};
+  for (const [path, list] of Object.entries(v as Record<string, unknown>)) {
+    const { checks } = normalizeChecks(list);
+    if (checks.length) out[path] = checks;
   }
   return out;
 }
@@ -158,6 +172,7 @@ function normalize(parsed: Partial<CanopyConfig>): CanopyConfig {
     agentRoles: normalizeRoles(cfg.agentRoles),
     launchers: normalizeLaunchers(cfg.launchers),
     tasks: normalizeTasks(cfg.tasks),
+    health: normalizeHealth(cfg.health),
     archived: paths(cfg.archived),
     favorites: paths(cfg.favorites),
     fetch: typeof cfg.fetch === "boolean" ? cfg.fetch : base.fetch,
@@ -454,6 +469,30 @@ export async function setTask(path: string, name: string, patch: TaskPatch | nul
     if (patch && Object.keys(patch).length > 1) list.push({ ...patch, name });
     if (list.length) cfg.tasks[path] = list;
     else delete cfg.tasks[path];
+    return list;
+  });
+}
+
+/* ---------- health checks ---------- */
+
+export const healthFor = (cfg: Pick<CanopyConfig, "health">, path: string): RepoCheckDef[] => cfg.health[path] ?? [];
+
+/** Stores or replaces one of canopy's checks for a repo. Returns its list. */
+export async function setHealthCheck(path: string, check: RepoCheckDef): Promise<RepoCheckDef[]> {
+  return withConfig((cfg) => {
+    const list = (cfg.health[path] ?? []).filter((c) => c.name !== check.name);
+    list.push(check);
+    cfg.health[path] = list;
+    return list;
+  });
+}
+
+/** Removes one of canopy's checks for a repo. Returns its list. */
+export async function removeHealthCheck(path: string, name: string): Promise<RepoCheckDef[]> {
+  return withConfig((cfg) => {
+    const list = (cfg.health[path] ?? []).filter((c) => c.name !== name);
+    if (list.length) cfg.health[path] = list;
+    else delete cfg.health[path];
     return list;
   });
 }

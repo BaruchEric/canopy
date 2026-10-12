@@ -119,6 +119,13 @@ describe("applyQuery", () => {
   });
 });
 
+test("the health facet keeps the repos with a check down", () => {
+  const bad = new Set([grove[0]!.id]);
+  expect(names(grove.filter((r) => matchesFilter(r, "health", { healthBad: bad })))).toEqual([grove[0]!.name]);
+  expect(grove.filter((r) => matchesFilter(r, "health")).length).toBe(0);
+  expect(countFacets(grove, { healthBad: bad }).filters.health).toBe(1);
+});
+
 describe("countFacets", () => {
   const facets = countFacets(grove);
 
@@ -132,6 +139,7 @@ describe("countFacets", () => {
       "no-upstream": 1,
       "spec-drift": 0,
       "no-spec": 0,
+      health: 0,
       unreadable: 1,
     });
   });

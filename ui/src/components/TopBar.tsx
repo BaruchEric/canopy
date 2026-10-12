@@ -1,3 +1,4 @@
+import { HealthChip } from "./Health";
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { useShallow } from "zustand/react/shallow";
 import { api } from "../api";
@@ -578,6 +579,7 @@ function Chips({ phone = false }: { phone?: boolean }) {
       {!phone && <InboxChip />}
       {!phone && <CliButton />}
       {!phone && <WaitingButton />}
+      {!phone && <HealthChip />}
       <ChanChip />
     </>
   );
@@ -604,6 +606,7 @@ export function TopBar({ nav }: { nav?: ReactNode }) {
           <ReloadChip />
           <TasksChip />
           <RangerChip compact />
+          <HealthChip />
           <InboxChip />
           <CliButton />
           <WaitingButton />

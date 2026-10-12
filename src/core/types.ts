@@ -534,6 +534,9 @@ export interface CanopyConfig {
   launchers: Record<string, LaunchSettings>;
   /** per-machine task overrides by repo path (core/tasks) */
   tasks: Record<string, TaskPatch[]>;
+  /** per-machine health checks by repo path, over the repo's own
+   *  `.canopy/health.json` (core/repohealth) */
+  health: Record<string, RepoCheckDef[]>;
   /** the repos archived in canopy, by path like agents */
   archived: string[];
   /** the repos starred in canopy, by path like agents */
@@ -1152,7 +1155,9 @@ export type ServerEvent =
    *  backend's alone, like `registry` */
   | { type: "asks"; asks: Ask[]; gone?: string[]; presence?: Presence }
   /** the ranger, whole, whenever anything about it changes (server/ranger.ts) */
-  | { type: "ranger"; ranger: RangerInfo };
+  | { type: "ranger"; ranger: RangerInfo }
+  /** every health check, whole, when any of them changed (server/health.ts) */
+  | { type: "health"; checks: HealthCheck[] };
 
 export type BuildChange = "installed" | "built" | "launched" | "exited" | "removed";
 
@@ -2596,4 +2601,99 @@ export interface RangerInfo {
   viewers: string[];
   /** whether this backend knows a broker, which a wake needs to be delivered */
   broker: boolean;
+}
+
+/**
+ * Health (docs/superpowers/specs/2026-10-12-health-design.md): one thing that
+ * can be well or not, a piece of canopy or a check a repo declared.
+ *
+ * - `ok`: the last probe passed;
+ * - `down`: it failed and nothing here is about to heal it;
+ * - `healing`: a heal is scheduled or running, or the piece is restarting
+ *   itself;
+ * - `gave-up`: heals kept failing, so canopy stopped trying until a manual
+ *   heal or a pass;
+ * - `off`: not set up on this backend, never counted bad;
+ * - `unknown`: nothing has answered yet.
+ */
+export type HealthState = "ok" | "down" | "healing" | "gave-up" | "off" | "unknown";
+
+/** What fixes a check: canopy on its own with backoff (`auto`), only the
+ *  button (`button`), the piece itself (`self`, health only reports), or
+ *  nothing here (`none`). */
+export type HealMode = "auto" | "button" | "self" | "none";
+
+export type HealthScope = { kind: "canopy" } | { kind: "repo"; repoId: string };
+
+/** a state change, kept in a check's history */
+export interface HealthEvent {
+  at: number;
+  state: HealthState;
+  why: string | null;
+}
+
+export interface HealthCheck {
+  /** "canopy:tailchan", "canopy:watch:<source>", "repo:<repoId>:<name>" */
+  id: string;
+  label: string;
+  scope: HealthScope;
+  state: HealthState;
+  /** the last failure in words the UI shows as they are; null when well */
+  why: string | null;
+  /** when the state last changed */
+  since: number;
+  /** when it last came well or stopped being well */
+  lastOk: number | null;
+  heal: HealMode;
+  /** heals in a row that did not bring it back */
+  fails: number;
+  /** when the next auto heal runs */
+  nextHeal: number | null;
+  /** what the last probe saw: "200 in 42ms" */
+  detail?: string;
+  /** whether the button can heal it here */
+  button: boolean;
+  /** state changes, oldest first, at most HISTORY_MAX */
+  history: HealthEvent[];
+}
+
+/** `GET /api/health` */
+export interface HealthInfo {
+  checks: HealthCheck[];
+}
+
+/** What a repo's health check looks at (core/repohealth). */
+export type RepoCheckKind = "http" | "port" | "task" | "compose" | "command";
+
+/** How far canopy may go on its own to heal a repo's check. */
+export type RepoHealMode = "auto" | "button" | "none";
+
+interface RepoCheckBase {
+  /** unique in the repo, a task name's shape */
+  name: string;
+  /** a command that heals it, run in the repo; instead of the kind's own heal */
+  fix?: string;
+  heal?: RepoHealMode;
+  /** seconds between probes, at least 5; 30 when unset */
+  every?: number;
+}
+
+/** A check a repo declares in `.canopy/health.json`, or canopy's config
+ *  over it, one variant per kind. */
+export type RepoCheckDef =
+  | (RepoCheckBase & { kind: "http"; url: string; expect?: number })
+  | (RepoCheckBase & { kind: "port"; port: number; host?: string })
+  | (RepoCheckBase & { kind: "task"; task: string })
+  | (RepoCheckBase & { kind: "compose"; service: string; file?: string })
+  | (RepoCheckBase & { kind: "command"; run: string });
+
+/** A repo's check as the layers merge it: which layer said it last, and why
+ *  canopy will not run it here when it will not. */
+export type MergedCheck = RepoCheckDef & { source: "repo" | "canopy"; blocked?: string };
+
+/** `GET /api/repos/health` */
+export interface RepoHealthInfo {
+  checks: MergedCheck[];
+  /** what was wrong with `.canopy/health.json` or the merge */
+  errors: string[];
 }

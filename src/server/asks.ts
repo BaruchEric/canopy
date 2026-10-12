@@ -97,6 +97,8 @@ export function parseAskAnswer(b: unknown): (AskAnswer & { id: string; client: s
 
 export interface AskHubDeps {
   broadcast: (ev: ServerEvent) => void;
+  /** whether the stream is connected, on every change, for health */
+  onStream?: (up: boolean) => void;
   /** a browser's device name by its client id, for who answered */
   deviceName: (client: string | null) => string | null;
   /** Checks a rule an allow asks to remember for `ask` (the session's own
@@ -139,6 +141,7 @@ export class AskHub {
       cfg.bot,
       (m) => this.onMessage(m),
       (up) => {
+        this.deps.onStream?.(up);
         if (up) this.relist().catch(() => {});
       },
       [ASKS_CHANNEL],

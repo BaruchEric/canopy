@@ -10,6 +10,7 @@ import type { AgentCard, Ask, RangerInfo, Repo, Run, TaskInfo } from "../../src/
 import { cardName, repoOfCard, whereWord } from "./agentcards";
 import { stateOf } from "./util";
 import { isCliPanel } from "./cli";
+import { isHealthPanel, type HealthRow } from "./health";
 
 /** The panel's id in the dock. Every other panel id is a repo's: a path
  *  relative to its scan root (`<source>:` ahead of it under an extra
@@ -21,7 +22,7 @@ export const isWaitingPanel = (id: string): boolean => id === WAITING_PANEL;
 
 /** a dock panel that is no repo's: "waiting on you" or the command line's
  *  transcript. No scan prunes one, and neither pops out or takes a bench. */
-export const isReservedPanel = (id: string): boolean => isWaitingPanel(id) || isCliPanel(id);
+export const isReservedPanel = (id: string): boolean => isWaitingPanel(id) || isCliPanel(id) || isHealthPanel(id);
 
 /** its mark, on its head, its tab and the top bar's button */
 export const WAITING_GLYPH = "⚑";
@@ -98,7 +99,9 @@ export type FailedRow =
   | { kind: "run"; id: string; repoId: string; what: string; at: number }
   | { kind: "task"; id: string; repoId: string; what: string; at: number }
   /** a backend's ranger that gave up restarting; `id` is the backend */
-  | { kind: "ranger"; id: string; repoId: string; name: string; what: string; at: number };
+  | { kind: "ranger"; id: string; repoId: string; name: string; what: string; at: number }
+  /** a health check canopy stopped healing; `id` is backend and check */
+  | { kind: "health"; id: string; repoId: string; backend: string; name: string; what: string; at: number };
 
 /** The runs that failed and are not dismissed, less a flow's own steps
  *  (the flow speaks for them), the tasks that failed or gave up
@@ -108,6 +111,7 @@ export function failedRows(
   flowRuns: Readonly<Record<string, string>>,
   tasks: readonly TaskInfo[],
   rangers: readonly (readonly [string, RangerInfo])[] = [],
+  health: readonly HealthRow[] = [],
 ): FailedRow[] {
   const out: FailedRow[] = [];
   for (const r of runs) {
@@ -121,6 +125,12 @@ export function failedRows(
   for (const [backend, r] of rangers) {
     if (!r.on || r.state !== "gave-up") continue;
     out.push({ kind: "ranger", id: backend, repoId: "", name: `@${r.handle}`, what: r.why ?? "it exited too often", at: r.lastExit?.at ?? 0 });
+  }
+  // the ranger's own give-up is its row above
+  for (const { backend, check } of health) {
+    if (check.state !== "gave-up" || check.id === "canopy:ranger") continue;
+    const repoId = check.scope.kind === "repo" ? check.scope.repoId : "";
+    out.push({ kind: "health", id: `${backend}\u0000${check.id}`, repoId, backend, name: check.label, what: check.why ?? "it kept failing", at: check.since });
   }
   return out.sort((a, b) => b.at - a.at);
 }

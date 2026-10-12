@@ -56,6 +56,8 @@ canopy helper [--backend URL]      # lend this machine's desktop openers to a sh
 canopy spec status [dir]           # every local repo against the shared repo spec
 canopy spec sync <repo> [--visual] # write the spec into a repo (--visual adds DESIGN.md)
 canopy spec check [repo]           # exit 1 unless the repo's spec text is in sync
+canopy health [--backend URL]      # what is broken on a backend; exit 1 when anything is down
+canopy health heal <id>            # heal one check now
 canopy version                     # the version and commit (also --version, -V)
 ```
 
@@ -128,6 +130,27 @@ canopy ranger say "look at the failing deploy"
 canopy ranger wake in 30m "check the deploy"   # or 14:00, --cron "0 8 * * *", --run <id>
 canopy ranger unwake <id>
 ```
+
+## Health
+
+Canopy watches its own pieces and says when one breaks: the tailchan, agent registry and asks streams, the ranger, the tmux server that holds the shells, the stage runner, each source's file watcher, the flows lock, and the fetch, remote and kept-shells passes. The pulse in the top bar is quiet while every check is well, lichen with a count while something heals and rust when something is down; open it for the list, or open the list as a dock panel or as its own page (`?view=health`, or `health` in the command line). Every row says why and since when, and opens to show its last 20 changes.
+
+Pieces that are safe to restart heal themselves: a watcher that stopped is started again at waits of 1 s doubling to a minute, and after five heals that did not hold canopy stops, lists it in "waiting on you" and DMs you when tailchan is up. A tailchan stream with no bytes for a minute (the broker pings every 20 s) is dropped and dialed again. The ranger, tasks and the stage runner keep healing themselves as before and only report here. Taking over the flows lock from a canopy that is gone reruns the flows it left mid-step, so that one is a button, never automatic. Nothing heals the tmux server from here: compose restarts its container.
+
+Repos can say what to check too. Put the checks in `.canopy/health.json`, or add them in the repo panel's health section, which keeps them in canopy's config for this machine:
+
+```json
+{
+  "checks": [
+    { "name": "site", "kind": "http", "url": "http://127.0.0.1:5173/" },
+    { "name": "dev", "kind": "task", "task": "dev", "heal": "auto" },
+    { "name": "db", "kind": "compose", "service": "postgres", "heal": "button" },
+    { "name": "smoke", "kind": "command", "run": "bun run smoke", "every": 300 }
+  ]
+}
+```
+
+A kind is `http` (2xx or 3xx, or `expect`), `port`, `task`, `compose` or `command` (exit 0). Any check may name a `fix` to run when it fails; without one a task check restarts its task and a compose check restarts its service. A task check is off while its task is idle or stopped by hand, so a heal never starts a task you stopped. `heal` is `button` by default, `auto` to heal on its own with the same backoff and give-up, or `none`. The card shows the result in a word (`up · 42ms`, `2 of 3 up`, `down 3m`) and the `health` filter keeps the repos with a check down. A repo that is not yours (no remote you can push to) runs only the `http`, `port` and `task` checks from its own file, and its `auto` is a button; a repo on another host runs only `http` and `port`, and not ones aimed at `127.0.0.1` or `localhost`, which would be this machine; an incubator seed runs none of the ones that run in the checkout.
 
 ## Claude runs
 

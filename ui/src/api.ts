@@ -1,4 +1,8 @@
 import type {
+  HealthCheck,
+  HealthInfo,
+  RepoCheckDef,
+  RepoHealthInfo,
   RangerInfo,
   RangerWake,
   AgentActivity,
@@ -92,6 +96,7 @@ import {
   qGrep,
   qHistory,
   qJob,
+  qCheck,
   qKept,
   qRepo,
   qRun,
@@ -552,6 +557,14 @@ export const api = {
     const [b, plain] = on(id);
     return req<{ ok: true }>(b, `/api/incubator?id=${encodeURIComponent(plain)}`, { method: "DELETE" });
   },
+  /** what is broken on one backend and what it is healing */
+  // a backend that answers something else (a proxy's page, an older build) has none
+  health: async (b: string = homeName()) => {
+    const r = await req<Partial<HealthInfo> | null>(b, "/api/health");
+    return fromAll(b, Array.isArray(r?.checks) ? r.checks : [], qCheck);
+  },
+  /** heal one check now, by its plain id on that backend */
+  healCheck: async (b: string, id: string) => from(b, await req<HealthCheck>(b, `/api/health/heal?id=${encodeURIComponent(id)}`, { method: "POST", body: "{}" }), qCheck),
   /** the ranger, canopy's always-on agent, one backend's */
   ranger: (b: string = homeName()) => req<RangerInfo>(b, "/api/ranger"),
   /** a change to its settings: on, profile, handle, telegram, fresh */
@@ -817,6 +830,12 @@ export const api = {
     const r = await req<TasksResult>(b, `/api/repos/tasks/def?${rq(plain)}`, { method: "POST", body: JSON.stringify({ name, def, target }) });
     return { ...r, tasks: fromAll(b, r.tasks, qTask) };
   },
+  /** a repo's checks, its file's and canopy's merged, with its file's errors */
+  repoHealth: (id: string) => repoReq<RepoHealthInfo>(id, (p) => `/api/repos/health?${rq(p)}`),
+  /** stores a check in canopy's layer for the repo, by its name */
+  saveRepoCheck: (id: string, check: RepoCheckDef) =>
+    repoReq<RepoHealthInfo>(id, (p) => `/api/repos/health?${rq(p)}`, { method: "POST", body: JSON.stringify(check) }),
+  removeRepoCheck: (id: string, name: string) => repoReq<RepoHealthInfo>(id, (p) => `/api/repos/health?${rq(p, { name })}`, { method: "DELETE" }),
   taskLog: (id: string, name: string, q = "", before?: number) =>
     repoReq<TaskLogPage>(id, (p) => `/api/repos/tasks/log?${rq(p, { name, q, ...(before ? { before: String(before) } : {}) })}`),
   allTasks: async (b: string = homeName()) => fromAll(b, await req<TaskInfo[]>(b, "/api/tasks"), qTask),

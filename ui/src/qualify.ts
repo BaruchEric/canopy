@@ -3,6 +3,7 @@ import type {
   Fleet,
   Flow,
   GrepRepoResult,
+  HealthCheck,
   HistoryOverview,
   Job,
   KeptShell,
@@ -144,8 +145,13 @@ export function qEvent(q: Q, ev: ServerEvent): ServerEvent {
     // the ranger's ids are its backend's own; the store qualifies its tab
     case "ranger":
       return ev;
+    case "health":
+      return { ...ev, checks: ev.checks.map((c) => qCheck(q, c)) };
   }
 }
+
+/** a repo's check names its repo as this page does */
+export const qCheck = (q: Q, c: HealthCheck): HealthCheck => (c.scope.kind === "repo" ? { ...c, scope: { kind: "repo", repoId: q(c.scope.repoId) } } : c);
 
 type Available = Extract<HistoryOverview, { available: true }>;
 

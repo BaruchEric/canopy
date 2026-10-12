@@ -45,7 +45,7 @@ import { runCheck } from "../core/check";
 import { exec, git, onHost, setSeedGit } from "../core/exec";
 import { fleetSkipReason, Flows } from "../core/flow";
 import { INHERITED_ENV, SECRET_ENV, isKeystroke, isTermId, parseTermMessage, Scrollback, shellArgs, startTerm, termPlace, termSize, type TermSession, type TermSize } from "../core/term";
-import { attachTmuxTerm, hasSession, history, killSession, listSessions, newSession, paneInfo, paneText, sendKeys, sendLine, serverUp, snapshot, tmuxBase } from "../core/tmux";
+import { attachTmuxTerm, hasSession, history, killSession, listSessions, noServer, newSession, paneInfo, paneText, sendKeys, sendLine, serverUp, snapshot, tmuxBase } from "../core/tmux";
 import { clip, continueLine, countLines, expiredShells, forgetKept, KEEP_EVERY, listKept, lostShells, readKeptHistory, replayCommand, replayFile, restoredBanner, writeKept } from "../core/keep";
 import { PASTE_MAX, pasteName, pasteText, savePaste } from "../core/paste";
 import { apiBase, ForgeAuthError, linkForgeClones, listForgeRepos } from "../core/forge";
@@ -192,6 +192,10 @@ import { ScreenLayouts } from "./layouts";
 import { SCAN_EVERY, type AgentProc } from "../core/agentscan";
 import { TaskHub } from "./tasks";
 import { RangerHub, realTmux, type RangerTimings, type RangerTmux } from "./ranger";
+import { HealthHub, rangerResult, streamResult } from "./health";
+import { RepoHealth } from "./repohealth";
+import { HEALTH_FILE } from "../core/repohealth";
+import type { ProbeResult } from "../core/health";
 import type { TaskTimings } from "../core/tasks";
 import { shellHandle } from "../core/tailchan";
 import { loadChanConfig, type ChanConfig } from "../core/chan";
@@ -207,6 +211,8 @@ interface SourceRuntime {
   probed: Set<string>;
   /** a scan of this source in flight, so callers share it */
   scanning: Promise<void> | null;
+  /** why its watcher could not start or stopped, for health */
+  watchError: string | null;
 }
 
 interface ServerState {
@@ -271,6 +277,12 @@ interface ServerState {
   tasks: TaskHub;
   /** the ranger, canopy's always-on agent: one claude session of its own on tmux (server/ranger) */
   ranger: RangerHub;
+  /** what is broken here and what canopy is fixing (server/health) */
+  health: HealthHub;
+  /** the checks repos declare, kept in the health hub (server/repohealth) */
+  repoHealth: RepoHealth;
+  /** a sync of the repos' checks waiting on a burst of rescans */
+  repoHealthTimer?: ReturnType<typeof setTimeout>;
   /** open pull request counts by GitHub slug, from the last activity pass */
   pulls: Map<string, PullCount>;
   /** the paths of the repos archived in canopy, kept in step with the
@@ -677,8 +689,11 @@ function keepPass(state: ServerState): Promise<void> {
     const cfg = await loadConfig();
     if (cfg.keepShells) await snapshotShells(state);
     await refreshKept(state);
+    passReport(state, "canopy:keep", cfg.keepShells ? { state: "ok" } : { state: "off" });
   })()
-    .catch(() => {})
+    .catch((err: unknown) => {
+      passReport(state, "canopy:keep", { state: "down", why: err instanceof Error ? err.message : String(err) });
+    })
     .finally(() => {
       state.keeping = null;
     });
@@ -1557,6 +1572,30 @@ function rebuildResult(state: ServerState, repos: Repo[]): void {
     scannedAt: Date.now(),
     backend: backendCaps(state.harnesses()),
   };
+  syncRepoHealthSoon(state);
+}
+
+/** the folder the health file sits in: its removal takes the file too */
+const HEALTH_DIR = HEALTH_FILE.split("/")[0];
+
+/** The repos' checks follow the tree, once a burst of rescans settles. */
+function syncRepoHealthSoon(state: ServerState): void {
+  // the first build of the tree runs inside the state's own construction
+  if (!state.repoHealth) return;
+  clearTimeout(state.repoHealthTimer);
+  state.repoHealthTimer = setTimeout(() => void state.repoHealth.sync().catch((err) => console.error("canopy: repo health", err)), 1_000);
+}
+
+/** Whether a repo is the user's, which is what lets its own files ask for
+ *  things to run on their own: its task file's auto flags, its health
+ *  file's commands and auto heals. */
+async function ownRepo(state: ServerState, repo: Repo): Promise<boolean> {
+  // a seed's files are the agents' to write: nothing in them runs on its own
+  if (isSeedPath(state.root, repo.path)) return false;
+  // no remote is never the user's by this test, and asking gh costs a process
+  if (!repo.remotes?.length) return false;
+  if (state.login === undefined) state.login = await githubLogin();
+  return (await accessFromUrls(repo.remotes ?? [], { login: state.login, permission: state.access })) === "ok";
 }
 
 /** Rescans one source and swaps its repos into the tree. A failed scan keeps
@@ -1713,11 +1752,104 @@ function startWatcher(state: ServerState, rt: SourceRuntime): void {
           return;
         }
         scheduleRefresh(state, match.id);
+        // a repo's checks follow its health file the moment it is saved
+        const rel = repoRel(match);
+        const inner = rel === "." ? filename : filename.slice(rel.length + 1);
+        if (inner === HEALTH_FILE || inner === HEALTH_DIR) syncRepoHealthSoon(state);
       },
     );
+    rt.watchError = null;
+    // A watcher that dies (out of inotify watches, the folder gone) says so
+    // here and nowhere else: it goes, and health heals it.
+    const mine = rt.watcher;
+    mine.on("error", (err) => {
+      console.error(`watcher for ${rt.src.label} stopped:`, err);
+      if (rt.watcher !== mine) return;
+      rt.watchError = `it stopped: ${err instanceof Error ? err.message : String(err)}`;
+      mine.close();
+      rt.watcher = null;
+      void state.health.probeNow(watchCheckId(rt));
+    });
   } catch (err) {
+    rt.watchError = `it could not start: ${err instanceof Error ? err.message : String(err)}`;
     console.error(`watcher unavailable for ${rt.src.label}:`, err);
   }
+}
+
+const watchCheckId = (rt: SourceRuntime): string => `canopy:watch:${rt.src.id}`;
+
+/** Canopy's own pieces as health checks (the flows and the stage runner are
+ *  added where they start). Most adapt a status the piece already keeps;
+ *  tmux and the watchers are polled. */
+function addCanopyChecks(state: ServerState, broker: boolean): void {
+  const canopy = { kind: "canopy" } as const;
+  const streams = [
+    ["canopy:tailchan", "tailchan stream"],
+    ["canopy:registry", "agent registry stream"],
+    ["canopy:asks", "asks stream"],
+  ] as const;
+  for (const [id, label] of streams) {
+    state.health.add({ id, label, scope: canopy, heal: "self" });
+    if (!broker) state.health.report(id, { state: "off" });
+  }
+  state.health.add({
+    id: "canopy:ranger",
+    label: "the ranger",
+    scope: canopy,
+    heal: "self",
+    doHeal: async () => {
+      await state.ranger.restart();
+    },
+  });
+  state.health.report("canopy:ranger", rangerResult(state.ranger.info()));
+  const base = state.tmux;
+  state.health.add({
+    id: "canopy:tmux",
+    label: "shells server (tmux)",
+    scope: canopy,
+    heal: "none",
+    every: 30_000,
+    timeout: 5_000,
+    probe: async () => {
+      if (!base) return { state: "off" };
+      const r = await exec([...base, "list-sessions"], { timeoutMs: 5_000 });
+      if (r.code === 0) return { state: "ok" };
+      if (!noServer(r.stderr)) return { state: "down", why: r.stderr.trim().split("\n")[0] || "tmux could not list its sessions" };
+      // no server is how a machine with no shells yet looks; with shells
+      // on record it is the server gone (its container restarted)
+      const held = [...state.terms.values()].filter((t) => t.pty === null).length;
+      return held ? { state: "down", why: `the tmux server is gone; ${held} ${held === 1 ? "shell was" : "shells were"} on it` } : { state: "ok", detail: "starts with the first shell" };
+    },
+  });
+  for (const rt of state.sources) watchCheck(state, rt);
+}
+
+const PASS_LABEL = { "canopy:activity": "fetch and pull request pass", "canopy:remote": "remote repos refresh", "canopy:keep": "kept shells" } as const;
+
+/** How a timed pass went. Its check appears with its first pass, so one
+ *  that runs every few minutes never sits "checking" in the meantime; the
+ *  next pass is its heal. */
+function passReport(state: ServerState, id: keyof typeof PASS_LABEL, r: ProbeResult): void {
+  if (!state.health.has(id)) state.health.add({ id, label: PASS_LABEL[id], scope: { kind: "canopy" }, heal: "self" });
+  state.health.report(id, r);
+}
+
+/** A local source's watcher as a check, healed by starting it again. */
+function watchCheck(state: ServerState, rt: SourceRuntime): void {
+  if (rt.src.kind !== "local") return;
+  state.health.add({
+    id: watchCheckId(rt),
+    label: `watching ${rt.src.label}`,
+    scope: { kind: "canopy" },
+    heal: "auto",
+    every: 30_000,
+    probe: async () => (rt.watcher ? { state: "ok" } : { state: "down", why: rt.watchError ?? "not watching" }),
+    doHeal: async () => {
+      rt.watcher?.close();
+      rt.watcher = null;
+      startWatcher(state, rt);
+    },
+  });
 }
 
 /** Re-reads every remote repo's status, a few at a time. Broadcast per
@@ -1871,8 +2003,10 @@ function refreshActivity(state: ServerState): Promise<void> {
       if (cfg.fetch) await fetchLocal(state);
       await refreshPeers(state).catch((err) => console.error("canopy: peer pass", err));
       await refreshPulls(state);
+      passReport(state, "canopy:activity", { state: "ok" });
     } catch (err) {
       console.error("activity refresh failed:", err);
+      passReport(state, "canopy:activity", { state: "down", why: err instanceof Error ? err.message : String(err) });
     }
   })().finally(() => {
     state.activity = null;
@@ -2219,6 +2353,10 @@ async function handleApi(
   if (registryRes) return registryRes;
   const rangerRes = await state.ranger.handle(req, url);
   if (rangerRes) return rangerRes;
+  const healthRes = await state.health.handle(req, url);
+  if (healthRes) return healthRes;
+  const repoHealthRes = await state.repoHealth.handle(req, url, (id) => state.result.repos.find((r) => r.id === id));
+  if (repoHealthRes) return repoHealthRes;
   const askRes = await state.asks.handle(req, url);
   if (askRes) return askRes;
   const incubatorRes = await state.incubator.handle(req, url);
@@ -2303,11 +2441,13 @@ async function handleApi(
       watcher: null,
       probed: new Set(),
       scanning: null,
+      watchError: null,
     };
     state.sources.push(rt);
     const opts = scanOpts(state, await loadConfig());
     await scanOne(state, rt, opts);
     startWatcher(state, rt);
+    watchCheck(state, rt);
     broadcast(state, { type: "scan", result: state.result });
     return json(state.result, 201);
   }
@@ -2318,6 +2458,7 @@ async function handleApi(
     if (rt.src.launch) throw new HttpError(400, "the launch folder stays; start canopy elsewhere to change it");
     await removeSource(id);
     rt.watcher?.close();
+    state.health.remove(watchCheckId(rt));
     clearTimeout(state.timers.get(rescanKey(id)));
     state.sources = state.sources.filter((s) => s !== rt);
     rebuildResult(state, state.result.repos.filter((r) => r.source !== id));
@@ -3625,6 +3766,7 @@ export async function startServer(opts: {
     watcher: null,
     probed: new Set(),
     scanning: null,
+    watchError: null,
   });
   // A stored source that is the launch root again would list every repo
   // twice; the launch root wins and keeps its bare ids.
@@ -3842,6 +3984,10 @@ export async function startServer(opts: {
   const sprouts = new SproutFiles(root);
   // the improvements list retros fold into, and the page hears of each change
   const adviceFiles = new AdviceFiles(undefined, (advice) => broadcast(state, { type: "advice", advice }));
+  const health = new HealthHub({
+    broadcast: (ev) => broadcast(state, ev),
+    onGaveUp: (c) => state.chan.onHealthGaveUp(c),
+  });
   const state: ServerState = {
     root,
     agentLine: opts.agentLine ?? (async (_repo, agent, env) => agentLine(agent, undefined, env)),
@@ -3874,8 +4020,20 @@ export async function startServer(opts: {
     remembered,
     flows,
     launcher,
+    health,
+    repoHealth: new RepoHealth({
+      hub: health,
+      repos: () => state.result.repos,
+      own: (repo) => ownRepo(state, repo),
+      seed: (repo) => isSeedPath(root, repo.path),
+      config: loadConfig,
+      taskStatus: async (repo, name) => (await state.tasks.tasksOf(repo, false)).tasks.find((t) => t.name === name),
+      restartTask: async (repo, name) => void (await state.tasks.act(repo, "restart", name)),
+      every: 60_000,
+    }),
     chan: new ChanHub(chanCfg, {
       broadcast: (ev) => broadcast(state, ev),
+      onStream: (up) => state.health.report("canopy:tailchan", streamResult(up)),
       repoName: (id) => state.result.repos.find((r) => r.id === id)?.name ?? id,
       isFlowRun: (runId) => state.flows.list().some((f) => f.steps.some((st) => st.runId === runId)),
       isSproutFlow: (flow) => state.incubator.speaksFor(flow),
@@ -3883,14 +4041,7 @@ export async function startServer(opts: {
     tasks: new TaskHub({
       tmux: tmuxBase(),
       repos: () => state.result.repos,
-      own: async (repo) => {
-        // a seed's tasks.json is the agents' to write: nothing in it starts on its own
-        if (isSeedPath(root, repo.path)) return false;
-        // no remote is never the user's by this test, and asking gh costs a process
-        if (!repo.remotes?.length) return false;
-        if (state.login === undefined) state.login = await githubLogin();
-        return (await accessFromUrls(repo.remotes ?? [], { login: state.login, permission: state.access })) === "ok";
-      },
+      own: (repo) => ownRepo(state, repo),
       viewers: (id) => {
         const t = state.terms.get(id);
         return t ? termInfo(state, t).viewers : [];
@@ -3941,7 +4092,10 @@ export async function startServer(opts: {
       drop: (id) => {
         if (state.terms.get(id)?.info.ranger) state.terms.delete(id);
       },
-      broadcast: (ev) => broadcast(state, ev),
+      broadcast: (ev) => {
+        broadcast(state, ev);
+        if (ev.type === "ranger") state.health.report("canopy:ranger", rangerResult(ev.ranger));
+      },
       ...(opts.ranger?.timings ? { timings: opts.ranger.timings } : {}),
     }),
     pulls: new Map(),
@@ -3970,6 +4124,7 @@ export async function startServer(opts: {
     preview: null,
     registry: new RegistryHub(chanCfg, {
       broadcast: (ev) => broadcast(state, ev),
+      onStream: (up) => state.health.report("canopy:registry", streamResult(up)),
       repos: () => state.result.repos,
       scanEvery: opts.registry?.scanEvery ?? (scanOff ? 0 : SCAN_EVERY),
       ...(opts.registry?.relistEvery !== undefined ? { relistEvery: opts.registry.relistEvery } : {}),
@@ -3978,6 +4133,7 @@ export async function startServer(opts: {
     }),
     asks: new AskHub(chanCfg, {
       broadcast: (ev) => broadcast(state, ev),
+      onStream: (up) => state.health.report("canopy:asks", streamResult(up)),
       deviceName: (client) => deviceNameOf(state, client),
       remember: (ask, rule) => rememberForAsk(state, ask, rule),
       ...opts.asks,
@@ -4417,7 +4573,7 @@ export async function startServer(opts: {
   // canopy that fails to bind must not rerun them), and only by the one
   // server holding the flows folder: two on one config dir would both rerun
   // every mid-step flow. Records written for another root stay for it.
-  const flowsLock = await lockFlows().catch((err): FlowsLock => {
+  let flowsLock = await lockFlows().catch((err): FlowsLock => {
     console.error(`flows: could not lock ${flowsDir()}: ${String(err instanceof Error ? err.message : err)}`);
     return { owner: false, holder: 0 };
   });
@@ -4426,7 +4582,10 @@ export async function startServer(opts: {
   // beside canopy. If it does not answer, that flow parks and the sprouts
   // wait; the watch below starts them once it does.
   if (stage) await stage.hello(10_000);
-  if (flowsLock.owner) {
+  /** the flows and sprouts the last server left, taken in by the one
+   *  holding the lock: at start, and from health's button once the server
+   *  that held it is gone */
+  const adoptFlows = async (): Promise<void> => {
     flowFiles = new FlowFiles(root);
     state.flows.restore(
       await loadFlowRecords(root),
@@ -4437,12 +4596,54 @@ export async function startServer(opts: {
     // the sprouts the last server left, once their flows are back; a server
     // without the lock lists them and takes nothing in (server/incubator.ts)
     await state.incubator.restore();
+  };
+  if (flowsLock.owner) {
+    await adoptFlows();
   } else {
     state.incubator.notKeeping(flowsLock.holder);
     if (flowsLock.holder) {
       console.error(`flows: canopy pid ${flowsLock.holder} keeps the records in ${flowsDir()}; flows started here are not kept across a restart`);
     }
   }
+  /** whether a pid is a live process, as far as this user can tell */
+  const pidAlive = (pid: number): boolean => {
+    try {
+      process.kill(pid, 0);
+      return true;
+    } catch (err) {
+      return (err as { code?: string }).code === "EPERM";
+    }
+  };
+  // Taking the lock reruns the flows that were mid-step, so it is the
+  // button's to do, never an auto heal.
+  state.health.add({
+    id: "canopy:flows",
+    label: "flows records",
+    scope: { kind: "canopy" },
+    heal: "button",
+    every: 60_000,
+    probe: async () => {
+      if (flowsLock.owner) return { state: "ok" };
+      const { holder } = flowsLock;
+      if (!holder) return { state: "down", why: "the flows lock could not be taken; flows started here are not kept across a restart" };
+      return pidAlive(holder)
+        ? { state: "down", why: `canopy pid ${holder} keeps the flows; flows started here are not kept across a restart` }
+        : { state: "down", why: `the canopy that kept the flows (pid ${holder}) is gone; take them over here` };
+    },
+    doHeal: async () => {
+      if (flowsLock.owner) return;
+      const next = await lockFlows();
+      if (!next.owner) {
+        flowsLock = next;
+        throw new Error(next.holder ? `canopy pid ${next.holder} still holds it` : "it could not be taken");
+      }
+      flowsLock = next;
+      await adoptFlows();
+    },
+  });
+  // the stage runner redials on its own watch; health only reports it
+  state.health.add({ id: "canopy:stages", label: "stage runner", scope: { kind: "canopy" }, heal: "self" });
+  if (!stage) state.health.report("canopy:stages", { state: "off" });
   /** whether the last good hello said fenced: a flip pumps the queue */
   let wasFenced = unfencedWhy() === null;
   const stopStageWatch = stage
@@ -4453,6 +4654,7 @@ export async function startServer(opts: {
           tellStages();
         },
         () => {
+          state.health.report("canopy:stages", { state: "down", why: STAGE_AWAY });
           state.incubator.inc.pump();
           tellStages();
         },
@@ -4462,7 +4664,9 @@ export async function startServer(opts: {
         // on a hello that says fenced; the resumed flows take their slots
         // back before the queue is pumped.
         () => {
-          const fenced = unfencedWhy() === null;
+          const unfenced = unfencedWhy();
+          state.health.report("canopy:stages", unfenced === null ? { state: "ok" } : { state: "down", why: unfenced });
+          const fenced = unfenced === null;
           const resumed = fenced ? state.flows.resumeStageParks() : 0;
           if (resumed > 0 || fenced !== wasFenced) state.incubator.inc.pump();
           wasFenced = fenced;
@@ -4475,7 +4679,13 @@ export async function startServer(opts: {
   const retroTimer = setInterval(() => state.incubator.inc.tick(), opts.incubator?.tickEvery ?? 10 * 60_000);
   const remoteTimer = setInterval(() => {
     void refreshRemote(state)
-      .catch((err) => console.error("canopy: remote refresh", err))
+      .then(
+        () => passReport(state, "canopy:remote", { state: "ok" }),
+        (err: unknown) => {
+          console.error("canopy: remote refresh", err);
+          passReport(state, "canopy:remote", { state: "down", why: err instanceof Error ? err.message : String(err) });
+        },
+      )
       .then(() => refreshActivity(state));
   }, REMOTE_REFRESH);
   // The first activity pass soon after the tree is up, not five minutes in:
@@ -4486,6 +4696,7 @@ export async function startServer(opts: {
 
   // What the shells have on their screens, written out while `keepShells`
   // is on, so a machine going down does not take them with the tmux server.
+  addCanopyChecks(state, chanCfg !== null);
   void state.chan.start().catch((err) => console.error("canopy: tailchan", err));
   state.registry.start();
   state.asks.start();
@@ -4512,6 +4723,9 @@ export async function startServer(opts: {
   return {
     port: server.port ?? port,
     stop: () => {
+      state.repoHealth.stop();
+      clearTimeout(state.repoHealthTimer);
+      state.health.stop();
       state.tasks.stop();
       state.ranger.stop();
       clearInterval(heartbeat);

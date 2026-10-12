@@ -78,10 +78,17 @@ type Fetch = (input: string, init?: RequestInit) => Promise<Response>;
 /** how long a plain call waits; a stream has no limit */
 const CALL_TIMEOUT = 10_000;
 
+/** How long a followed stream may stay silent before it is dropped and
+ *  dialed again. The broker writes a `: ping` every 20 s, so a minute with
+ *  no bytes at all is a stream that only looks open (a proxy that kept the
+ *  socket, a broker that hung). */
+export const FOLLOW_SILENCE = 60_000;
+
 export class Chan {
   constructor(
     readonly url: string,
     private readonly fetcher: Fetch = (i, init) => fetch(i, init),
+    private readonly silenceMs = FOLLOW_SILENCE,
   ) {}
 
   private async call<T>(
@@ -237,7 +244,9 @@ export class Chan {
    * when given, which pins the stream to them), calling `onMessage` for
    * each post, until the returned stop is called. A dropped stream is
    * dialed again at doubling waits up to 30s and resumes after the last id
-   * it saw, so a broker restart loses nothing. `onState` says whether it is
+   * it saw, so a broker restart loses nothing. A stream that sends no
+   * bytes at all for `FOLLOW_SILENCE` is dropped the same way: comments
+   * count, since the broker's ping is one. `onState` says whether it is
    * connected, for the UI's word on it.
    */
   follow(as: string, onMessage: (m: ChanMessage) => void, onState: (up: boolean) => void = () => {}, channels?: readonly string[]): () => void {
@@ -248,23 +257,31 @@ export class Chan {
     let timer: ReturnType<typeof setTimeout> | null = null;
     const dial = async () => {
       if (stopped) return;
-      ctrl = new AbortController();
+      const mine = new AbortController();
+      ctrl = mine;
+      let silence: ReturnType<typeof setTimeout> | null = null;
+      const arm = () => {
+        if (silence) clearTimeout(silence);
+        silence = setTimeout(() => mine.abort(), this.silenceMs);
+      };
       try {
         const params = new URLSearchParams();
         if (channels?.length) params.set("channels", channels.join(","));
         if (last) params.set("since", String(last));
         const qs = params.toString();
         const q = qs ? `?${qs}` : "";
-        const res = await this.fetcher(`${this.url}/v1/stream${q}`, { headers: { "x-tailchan-as": as, accept: "text/event-stream" }, signal: ctrl.signal });
+        const res = await this.fetcher(`${this.url}/v1/stream${q}`, { headers: { "x-tailchan-as": as, accept: "text/event-stream" }, signal: mine.signal });
         if (!res.ok || !res.body) throw new Error(`HTTP ${res.status}`);
         onState(true);
         wait = 1000;
+        arm();
         const reader = res.body.getReader();
         const dec = new TextDecoder();
         let buf = "";
         for (;;) {
           const { value, done } = await reader.read();
           if (done) break;
+          arm();
           buf += dec.decode(value, { stream: true });
           const { events, rest } = parseSse(buf);
           buf = rest;
@@ -283,7 +300,9 @@ export class Chan {
           }
         }
       } catch {
-        // dropped or refused; dialed again below
+        // dropped, refused or silent too long; dialed again below
+      } finally {
+        if (silence) clearTimeout(silence);
       }
       if (stopped) return;
       onState(false);

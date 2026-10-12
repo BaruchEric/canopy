@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import { useShallow } from "zustand/react/shallow";
 import { FILTER_INFO, type RepoFilter } from "../filters";
 import { PICK_FACETS, pickState, pickWhere, type PickState } from "../select";
-import { pickableIds, pickedIds, useStore, visibleRepos } from "../store";
+import { healthBad, pickableIds, pickedIds, useStore, visibleRepos } from "../store";
 
 /** A tri-state tick: a checkbox that can also say "some". It swallows its
  *  click so the card or heading it sits in does not act on it too. */
@@ -48,9 +48,10 @@ export function SelectBar() {
   );
   const [workflow, setWorkflow] = useState("");
   // how many repos each facet would pick, so the menu says which are worth a click
+  const bad = useStore(healthBad);
   const facetCounts = useMemo(
-    () => new Map<RepoFilter, number>(PICK_FACETS.map((f) => [f, pickWhere(visible, f).length])),
-    [visible],
+    () => new Map<RepoFilter, number>(PICK_FACETS.map((f) => [f, pickWhere(visible, f, { healthBad: bad }).length])),
+    [visible, bad],
   );
   useEffect(() => {
     if (!selecting || !first) return;

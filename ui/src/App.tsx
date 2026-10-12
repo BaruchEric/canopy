@@ -1,3 +1,4 @@
+import { HealthView } from "./components/Health";
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import type { CSSProperties } from "react";
 import { Library } from "./components/Library";
@@ -32,10 +33,11 @@ const VIEWS = [
   { key: "ports", label: "ports", title: "Ports: what is listening, and the dev servers" },
   { key: "agents", label: "agents", title: "Agents: which harness starts for what, per repo and role" },
   { key: "incubator", label: "incubator", title: "Incubator: new projects from an idea, clarified and researched before anything is built" },
+  { key: "health", label: "health", title: "Health: what is broken on each backend, and what canopy is fixing" },
 ] as const;
 
 /** the views that are not the git cockpit: their own bar, no board keys */
-const OTHER_VIEWS = ["library", "ports", "agents", "incubator"];
+const OTHER_VIEWS = ["library", "ports", "agents", "incubator", "health"];
 
 /** The views, one segmented row: in the top bar on the git view, the
  *  whole of the bar on the others. */
@@ -365,6 +367,8 @@ export function App() {
         <AgentsView onGit={() => navigate("git")} />
       ) : view === "incubator" ? (
         <IncubatorView onGit={() => navigate("git")} />
+      ) : view === "health" ? (
+        <HealthView />
       ) : (
         <Library ports={view === "ports"} project={project} onRepo={showRepo} onPorts={() => navigate("ports")} />
       )}

@@ -8,7 +8,7 @@
 import { Chan, ChanError, type ChanConfig } from "../core/chan";
 import { loadConfig, setTailchanNotify } from "../core/store";
 import { chanTarget, fleetNotice, flowNotice, retroNotice, runNotice, sproutNotice, type Notice } from "../core/tailchan";
-import type { ChanMessage, Fleet, Flow, RetroState, Run, ServerEvent, Sprout, SproutStatus, TailchanInfo } from "../core/types";
+import type { ChanMessage, Fleet, Flow, HealthCheck, RetroState, Run, ServerEvent, Sprout, SproutStatus, TailchanInfo } from "../core/types";
 
 /** a posted file's cap, the broker's own default */
 export const PUT_MAX = 100 * 1024 * 1024;
@@ -26,6 +26,8 @@ export interface ChanHubDeps {
   isSproutFlow?: (flow: Flow) => boolean;
   /** the client; tests pass one over a stand-in broker */
   chan?: Chan;
+  /** whether the stream is connected, on every change, for health */
+  onStream?: (up: boolean) => void;
 }
 
 export class ChanHub {
@@ -49,7 +51,8 @@ export class ChanHub {
   /** opens the stream, subscribes the UI's handle to canopy's channel, and
    *  reads the notify switch */
   async start(): Promise<void> {
-    if (!this.cfg || !this.chan) return;
+    // a second start would follow twice
+    if (!this.cfg || !this.chan || this.stop) return;
     const { cfg, chan } = this;
     // an unreadable config only costs the notify switch, never the stream
     this.notify = await loadConfig().then(
@@ -60,7 +63,12 @@ export class ChanHub {
       },
     );
     if (this.notify) this.subscribe();
-    this.stop = chan.follow(cfg.as, (message) => this.deps.broadcast({ type: "chan", message }));
+    if (this.stop) return;
+    this.stop = chan.follow(
+      cfg.as,
+      (message) => this.deps.broadcast({ type: "chan", message }),
+      (up) => this.deps.onStream?.(up),
+    );
   }
 
   /** the UI's handle joins canopy's channel, so its lines reach the popover
@@ -112,6 +120,14 @@ export class ChanHub {
    *  switch governs the posts about runs, flows and fleets. */
   onRangerGaveUp(text: string): void {
     this.post({ to: "human", text });
+  }
+
+  /** A health check gave up healing: a DM, since someone has to look,
+   *  whatever the notify switch says. Best effort: tailchan may be the
+   *  thing that is down, and the check is in Waiting either way. */
+  onHealthGaveUp(c: HealthCheck): void {
+    const what = c.scope.kind === "repo" ? `${this.deps.repoName(c.scope.repoId)}: ${c.label}` : c.label;
+    this.post({ to: "human", text: `${what} keeps failing (${c.why ?? c.state}); canopy stopped healing it` });
   }
 
   /** A DM from canopy's bot to a handle, whatever the notify switch says:

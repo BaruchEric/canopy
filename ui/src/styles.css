@@ -9560,3 +9560,201 @@ span.effective-flag:not(:first-child) {
   flex: 1 1 90px;
   min-width: 0;
 }
+
+/* ---------- health: the chip, its popover, the panel and the page ---------- */
+.health-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  color: var(--ink-faint);
+}
+.health-chip .health-pulse {
+  font-size: 1.45em;
+}
+.health-chip.warn {
+  color: var(--lichen);
+}
+.health-chip.bad {
+  color: var(--rust);
+}
+.health-count {
+  font-variant-numeric: tabular-nums;
+}
+.health-pop {
+  width: 420px;
+  max-height: min(70vh, 640px);
+  overflow: auto;
+  padding: 8px 14px 10px;
+}
+.health-pop-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  align-self: stretch;
+}
+.health-pop-head .panel-label {
+  margin: 0;
+}
+.health-list {
+  display: grid;
+  gap: 12px;
+  align-self: stretch;
+}
+.health-group ul {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+.health-row {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 6px 0;
+  font-size: 12px;
+}
+.health-row + .health-row {
+  border-top: 1px solid var(--hair);
+}
+.health-main {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 4px 10px;
+}
+.health-main .mini {
+  margin-left: auto;
+}
+.health-label {
+  font: inherit;
+  font-weight: 700;
+  color: var(--ink);
+  background: none;
+  border: 0;
+  padding: 0;
+  cursor: pointer;
+  text-align: left;
+}
+.health-label:hover {
+  text-decoration: underline;
+}
+.health-state.moss,
+.health-history .moss {
+  color: var(--moss);
+}
+.health-state.lichen,
+.health-history .lichen {
+  color: var(--lichen);
+}
+.health-state.rust,
+.health-history .rust {
+  color: var(--rust);
+}
+.health-state.faint,
+.health-history .faint {
+  color: var(--ink-faint);
+}
+.health-why {
+  color: var(--ink-dim);
+  overflow-wrap: anywhere;
+}
+.health-fact {
+  font-size: 11px;
+  color: var(--ink-faint);
+}
+.health-err {
+  flex-basis: 100%;
+  font-size: 11px;
+  color: var(--rust);
+}
+.health-history {
+  list-style: none;
+  margin: 4px 0 2px;
+  padding: 6px 10px;
+  background: var(--bark0);
+  font-size: 11px;
+  display: grid;
+  gap: 2px;
+}
+.health-empty {
+  margin: 0;
+  font-size: 12px;
+  color: var(--ink-faint);
+}
+.health-body {
+  padding: 4px 14px 12px;
+}
+.health-view {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  padding: 12px 16px 24px;
+  max-width: 900px;
+  width: 100%;
+  margin: 0 auto;
+  box-sizing: border-box;
+}
+.health-group .panel-label {
+  margin: 0 0 2px;
+  padding: 0;
+}
+
+/* a repo's checks: the card's word, its panel section */
+.health-card.moss {
+  --tone: var(--moss);
+}
+.health-card.lichen {
+  --tone: var(--lichen);
+}
+.health-card.rust {
+  --tone: var(--rust);
+}
+.health-section .moss {
+  color: var(--moss);
+}
+.health-section .lichen {
+  color: var(--lichen);
+}
+.health-section .rust {
+  color: var(--rust);
+}
+.health-form {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(10rem, 1fr));
+  gap: 6px 10px;
+  margin-top: 10px;
+}
+.health-form label {
+  display: grid;
+  gap: 2px;
+}
+.health-form-foot {
+  grid-column: 1 / -1;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+.health-defs {
+  list-style: none;
+  margin: 10px 0 0;
+  padding: 0;
+  display: grid;
+  gap: 2px;
+  font-size: 12px;
+}
+.health-defs li {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  min-width: 0;
+}
+.health-defs .health-fact {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.section-head > .health-add {
+  margin: 8px 4px 0 0;
+}

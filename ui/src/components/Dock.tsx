@@ -36,6 +36,8 @@ import {
 } from "../store";
 import { WAITING_GLYPH, WAITING_GROUPS, WAITING_PANEL, isReservedPanel, isWaitingPanel } from "../waiting";
 import { CLI_GLYPH, CLI_NAME, CLI_PANEL, isCliPanel } from "../cli";
+import { HEALTH_GLYPH, HEALTH_NAME, HEALTH_PANEL, isHealthPanel } from "../health";
+import { HealthList, HealthSection } from "./Health";
 import { CliBody } from "./CommandLine";
 import { WaitingBody } from "./Waiting";
 import { benchHolds, benchIs, benchSolo } from "../front";
@@ -1109,6 +1111,8 @@ export function PanelSection({ k, repo }: { k: SectionKey; repo: Repo }) {
       return repo.host ? null : <PreviewSection repo={repo} />;
     case "tasks":
       return repo.forge ? null : <TasksSection repo={repo} />;
+    case "health":
+      return <HealthSection repo={repo} />;
     case "launch":
       return <LaunchSection repo={repo} />;
     case "claude":
@@ -1827,7 +1831,7 @@ function PanelWaiting({
 const WAITING_NAME = "waiting on you";
 
 /** a panel's name for a label: its repo's id, or the waiting panel's name */
-const panelText = (id: string): string => (isWaitingPanel(id) ? WAITING_NAME : isCliPanel(id) ? CLI_NAME : idText(id));
+const panelText = (id: string): string => (isWaitingPanel(id) ? WAITING_NAME : isCliPanel(id) ? CLI_NAME : isHealthPanel(id) ? HEALTH_NAME : idText(id));
 
 /** The gear of the "waiting on you" panel: its zoom, the dock's layout and
  *  moves, the close setting, folding its groups, and sharing it. No pop
@@ -1950,6 +1954,106 @@ function WaitingPanel({
         </header>
         <div className="waiting-body" ref={bodyRef} style={zoomStyle(zoom)}>
           <WaitingBody hidden={hidden} />
+        </div>
+      </div>
+    </section>
+  );
+}
+
+/** The health panel's gear: its zoom, the dock's layout and moves, the
+ *  close setting, and sharing it. */
+function HealthGear({ zoom, body }: { zoom: GearEntry; body: () => HTMLElement | null }) {
+  const arranged = useStore(arrangementOf);
+  const arrangeDock = useStore((s) => s.arrangeDock);
+  const setSetting = useStore((s) => s.setSetting);
+  const carousel = useStore((s) => s.settings.dockCarousel);
+  const panelClose = useStore((s) => s.settings.panelClose);
+  const panels = useStore((s) => s.panels);
+  const dockLayout = useStore((s) => s.dockLayout);
+  const movePanel = useStore((s) => s.movePanel);
+  const phone = useMedia(PHONE);
+  const layout: GearEntry[] = [
+    { type: "item", label: "panels side by side", on: arranged === "columns", run: () => arrangeDock("columns"), title: ARRANGE_TITLE },
+    { type: "item", label: "panels as tabs", on: arranged === "tabs", run: () => arrangeDock("tabs"), title: ARRANGE_TITLE },
+    ...(phone
+      ? []
+      : ([
+          { type: "item", label: "carousel", on: carousel, run: () => setSetting("dockCarousel", !carousel) },
+          ...stepEntries(HEALTH_PANEL, panels, dockLayout, movePanel),
+        ] satisfies GearEntry[])),
+    closeEntry(panelClose, setSetting),
+  ];
+  return (
+    <Gear
+      label={HEALTH_NAME}
+      groups={[
+        { label: HEALTH_NAME, entries: [zoom] },
+        { label: "layout", entries: layout },
+        { label: "share", entries: shareEntries({ el: body, label: HEALTH_NAME }) },
+      ]}
+    />
+  );
+}
+
+/** Health as a dock panel (`HEALTH_PANEL`): every check on every backend
+ *  shown here, the broken first, each with its heal. It tabs, moves and
+ *  sizes like a repo's panel and obeys the close setting. */
+function HealthPanel({
+  hidden,
+  order,
+  area,
+  cell,
+  strip,
+  movable,
+}: {
+  hidden?: boolean;
+  order?: number;
+  area?: string;
+  cell?: string;
+  strip?: boolean;
+  movable?: boolean;
+}) {
+  const id = HEALTH_PANEL;
+  const closable = useStore((s) => s.settings.panelClose);
+  const closePanel = useStore((s) => s.closePanel);
+  const wasTab = useWasTab(strip);
+  const box = useRef<HTMLElement>(null);
+  const bodyRef = useRef<HTMLDivElement>(null);
+  const { zoom, entry: zoomEntry } = useZoom("health");
+  const forward = useStore((s) => s.activePanel === id);
+  const sideBySide = (area !== undefined && !hidden) || order !== undefined;
+  useEffect(() => {
+    if (!forward || !sideBySide) return;
+    const frame = requestAnimationFrame(() => revealHead(box.current?.querySelector(".panel-head") ?? null));
+    return () => cancelAnimationFrame(frame);
+  }, [forward, sideBySide, area]);
+  return (
+    <section
+      ref={box}
+      className={`panel health-panel${strip ? " has-strip" : ""}${wasTab ? " was-tab" : ""}`}
+      aria-label={HEALTH_NAME}
+      hidden={hidden}
+      data-cell={cell}
+      style={{ order, gridArea: area }}
+    >
+      <div className="panel-body">
+        <header className="panel-head" {...panelHead(id, HEALTH_NAME, movable)}>
+          <span className="glyph" {...(movable && dragHandle(id, HEALTH_NAME))}>
+            {HEALTH_GLYPH}
+          </span>
+          <span className="panel-name" {...(movable && dragHandle(id, HEALTH_NAME))}>
+            {HEALTH_NAME}
+          </span>
+          <span className="spacer" />
+          <HealthGear zoom={zoomEntry} body={() => bodyRef.current} />
+          {closable && (
+            <button type="button" className="mini close" onClick={() => closePanel(id)} aria-label={`Close ${HEALTH_NAME}`}>
+              ✕
+            </button>
+          )}
+        </header>
+        <div className="health-body" ref={bodyRef} style={zoomStyle(zoom)}>
+          {!hidden && <HealthList />}
         </div>
       </div>
     </section>
@@ -2658,7 +2762,7 @@ function CellStrip({
             }}
           >
             <span className="glyph" aria-hidden="true">
-              {isCliPanel(id) ? CLI_GLYPH : waiting ? WAITING_GLYPH : GLYPH[state]}
+              {isCliPanel(id) ? CLI_GLYPH : isHealthPanel(id) ? HEALTH_GLYPH : waiting ? WAITING_GLYPH : GLYPH[state]}
             </span>
             <span className="dock-tab-name">
               {waiting ? name : <IdLabel id={id} />}
@@ -3030,6 +3134,9 @@ export function Dock() {
         }
         if (isCliPanel(id)) {
           return <CliPanel key={id} area={p?.area} cell={p?.cell} order={p?.order} hidden={p?.hidden} strip={p?.strip} movable={movable} />;
+        }
+        if (isHealthPanel(id)) {
+          return <HealthPanel key={id} area={p?.area} cell={p?.cell} order={p?.order} hidden={p?.hidden} strip={p?.strip} movable={movable} />;
         }
         return (
           <RepoPanel

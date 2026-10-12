@@ -1,0 +1,5 @@
+{
+  "checks": [
+    { "name": "dev", "kind": "task", "task": "dev", "heal": "auto" }
+  ]
+}

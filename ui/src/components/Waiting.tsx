@@ -7,6 +7,7 @@ import { qual } from "../registry";
 import { attentionItems, behindItems, canAnswer as canAnswerHere, closedIn, failedItems, idText, inboxItems, turnItems, useStore } from "../store";
 import type { Repo } from "../../../src/core/types";
 import { GLYPH, lockedIndex, type RepoState } from "../util";
+import { HEALTH_PANEL } from "../health";
 import { ATTENTION_WORD, WAITING_PANEL, WAITING_WORD, isUnpushed, type AttentionRow, type BehindRow, type WaitingGroup } from "../waiting";
 import { InboxRow, useNow } from "./Inbox";
 import { IdLabel } from "./IdLabel";
@@ -268,14 +269,16 @@ export function WaitingBody({ hidden }: { hidden?: boolean }) {
                 <button
                   type="button"
                   className="waiting-row s-error"
-                  title={f.kind === "run" ? "Open the run" : f.kind === "ranger" ? "Open its session: what it printed last" : "Open its panel's tasks"}
-                  onClick={() => (f.kind === "run" ? showRun(f.id) : f.kind === "ranger" ? openRanger(f.id) : openTasks(f.repoId))}
+                  title={f.kind === "run" ? "Open the run" : f.kind === "ranger" ? "Open its session: what it printed last" : f.kind === "health" ? "Open health" : "Open its panel's tasks"}
+                  onClick={() =>
+                    f.kind === "run" ? showRun(f.id) : f.kind === "ranger" ? openRanger(f.id) : f.kind === "health" ? openPanel(HEALTH_PANEL) : openTasks(f.repoId)
+                  }
                 >
                   <span className="glyph" aria-hidden="true">
                     {GLYPH.error}
                   </span>
-                  <span className="waiting-name">{f.kind === "ranger" ? f.name : repoName(f.repoId)}</span>
-                  <span className="waiting-state">{f.kind === "ranger" ? "ranger gave up" : f.kind}</span>
+                  <span className="waiting-name">{f.kind === "ranger" ? f.name : f.kind === "health" ? (f.repoId ? `${repoName(f.repoId)}: ${f.name}` : f.name) : repoName(f.repoId)}</span>
+                  <span className="waiting-state">{f.kind === "ranger" ? "ranger gave up" : f.kind === "health" ? "gave up healing" : f.kind}</span>
                   <span className="waiting-detail">{f.what}</span>
                   <span className="inbox-left dim">{agoMs(f.at, now)}</span>
                 </button>

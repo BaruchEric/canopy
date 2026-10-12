@@ -1,5 +1,5 @@
 import type { Repo } from "../../src/core/types";
-import { matchesFilter, REPO_FILTERS, type RepoFilter } from "./filters";
+import { matchesFilter, REPO_FILTERS, type FilterContext, type RepoFilter } from "./filters";
 import { pickable } from "./flows";
 import { groupRepos, sectionKey } from "./grouping";
 import type { SortMode } from "./settings";
@@ -75,6 +75,6 @@ export function boardOrder(
 export const PICK_FACETS = REPO_FILTERS.filter((f) => f !== "unreadable");
 
 /** The pickable repos in `repos` that answer yes to the facet. */
-export function pickWhere(repos: Repo[], facet: RepoFilter): string[] {
-  return repos.filter((r) => pickable(r) && matchesFilter(r, facet)).map((r) => r.id);
+export function pickWhere(repos: Repo[], facet: RepoFilter, ctx: FilterContext = {}): string[] {
+  return repos.filter((r) => pickable(r) && matchesFilter(r, facet, ctx)).map((r) => r.id);
 }

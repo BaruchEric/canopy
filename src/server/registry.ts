@@ -35,6 +35,8 @@ const sig = (c: AgentCard): string => JSON.stringify({ ...c, seenAt: 0 });
 
 export interface RegistryDeps {
   broadcast: (ev: ServerEvent) => void;
+  /** whether the stream is connected, on every change, for health */
+  onStream?: (up: boolean) => void;
   /** the repos a scanned agent's folder is matched against */
   repos: () => Repo[];
   /** the client; tests pass one over a stand-in broker */
@@ -89,6 +91,7 @@ export class RegistryHub {
       cfg.bot,
       (m) => this.onMessage(m),
       (up) => {
+        this.deps.onStream?.(up);
         if (up) this.relist().catch(() => {});
       },
       [AGENTS_CHANNEL],

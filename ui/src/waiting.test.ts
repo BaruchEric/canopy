@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import type { AgentCard, Ask, RangerInfo, Repo, RepoStatus, Run, RunStep, TaskInfo } from "../../src/core/types";
+import type { AgentCard, Ask, HealthCheck, RangerInfo, Repo, RepoStatus, Run, RunStep, TaskInfo } from "../../src/core/types";
 import { WAITING_PANEL, attentionRepos, behindRepos, failedRows, isUnpushed, isWaitingPanel, lastWords, turnRows } from "./waiting";
 
 function repo(id: string, status: Partial<RepoStatus> | null, error?: string): Repo {
@@ -190,5 +190,32 @@ describe("lastWords", () => {
     ];
     expect(lastWords({ steps })).toBe("One choice is yours. Stop, or keep building?");
     expect(lastWords({ steps: [step("user", "hi")] })).toBe("");
+  });
+});
+
+describe("failedRows and health", () => {
+  const check = (id: string, state: HealthCheck["state"], over: Partial<HealthCheck> = {}): HealthCheck => ({
+    id,
+    label: id,
+    scope: { kind: "canopy" },
+    state,
+    why: "it kept failing",
+    since: 5,
+    lastOk: null,
+    heal: "auto",
+    fails: 5,
+    nextHeal: null,
+    button: true,
+    history: [],
+    ...over,
+  });
+  test("a check canopy stopped healing is a row; the ranger's is its own row already", () => {
+    const rows = failedRows([], {}, [], [], [
+      { backend: "mac", check: check("canopy:watch:x", "gave-up", { label: "watching x" }) },
+      { backend: "mac", check: check("canopy:ranger", "gave-up") },
+      { backend: "mac", check: check("canopy:tmux", "down") },
+      { backend: "mini", check: check("repo:app:site", "gave-up", { label: "site", scope: { kind: "repo", repoId: "mini|app" } }) },
+    ]);
+    expect(rows.map((r) => (r.kind === "health" ? `${r.backend}:${r.name}:${r.repoId}` : r.kind))).toEqual(["mac:watching x:", "mini:site:mini|app"]);
   });
 });

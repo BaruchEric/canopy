@@ -58,6 +58,9 @@ usage:
   canopy ranger wake <when> "prompt" wake it later: in 30m, 14:00, an ISO time
     --cron "0 8 * * *" | --run <id>  on a cron line instead, or when a run ends
   canopy ranger unwake <id>          remove a wake
+  canopy health                      what is broken on a backend, and what canopy is fixing
+    --backend URL                    the backend (default: $CANOPY_API, else 127.0.0.1:7850)
+  canopy health heal <id>            heal one check now
   canopy spec status [dir]           every repo against the shared repo spec
   canopy spec sync <repo> [--visual | --doc]   write the spec's blocks into a repo
                                      --visual adds DESIGN.md, --doc keeps only SPEC.md

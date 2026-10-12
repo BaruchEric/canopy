@@ -520,6 +520,8 @@ export function describeEvent(
     case "advice":
     // the ranger's chip says what it is doing
     case "ranger":
+    // health has its own chip, panel and page
+    case "health":
     // a run's own timeline says what a remembered rule let through
     case "remembered":
       return [];

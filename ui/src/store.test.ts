@@ -71,27 +71,28 @@ describe("closedSectionsOf", () => {
       "preview",
       "agents",
       "files",
+      "health",
     ]);
   });
   test("a section the reader unfolded stays unfolded once the layout knows it", () => {
     const saved = ["search", "history", "claude"];
-    expect(closedSectionsOf(saved, ["search", "history", "claude", "launch", "peers", "spec", "preview", "agents", "files"])).toBe(saved);
+    expect(closedSectionsOf(saved, ["search", "history", "claude", "launch", "peers", "spec", "preview", "agents", "files", "health"])).toBe(saved);
   });
   test("a stored fold is not doubled", () => {
-    expect(closedSectionsOf(["launch"], [])).toEqual(["launch", "search", "history", "claude", "peers", "spec", "preview", "agents", "files"]);
+    expect(closedSectionsOf(["launch"], [])).toEqual(["launch", "search", "history", "claude", "peers", "spec", "preview", "agents", "files", "health"]);
   });
 });
 
 describe("per-repo folds", () => {
   test("a repo nobody has touched folds the defaults", () => {
-    expect(sectionsFor({}, "a")).toEqual(["search", "history", "claude", "launch", "peers", "spec", "preview", "agents", "files"]);
+    expect(sectionsFor({}, "a")).toEqual(["search", "history", "claude", "launch", "peers", "spec", "preview", "agents", "files", "health"]);
     expect(closedIn({ closedSections: {} }, "a", "history")).toBe(true);
     expect(closedIn({ closedSections: {} }, "a", "changes")).toBe(false);
   });
   test("a toggle touches one repo and leaves the rest alone", () => {
     const one = toggleIn({}, "a", "history");
-    expect(sectionsFor(one, "a")).toEqual(["search", "claude", "launch", "peers", "spec", "preview", "agents", "files"]);
-    expect(sectionsFor(one, "b")).toEqual(["search", "history", "claude", "launch", "peers", "spec", "preview", "agents", "files"]);
+    expect(sectionsFor(one, "a")).toEqual(["search", "claude", "launch", "peers", "spec", "preview", "agents", "files", "health"]);
+    expect(sectionsFor(one, "b")).toEqual(["search", "history", "claude", "launch", "peers", "spec", "preview", "agents", "files", "health"]);
     // the "waiting on you" panel starts with its unpushed and behind repos folded
     expect(sectionsFor({}, WAITING_PANEL)).toEqual(["unpushed", "behind"]);
     const two = toggleIn(one, "a", "changes");
@@ -102,20 +103,20 @@ describe("per-repo folds", () => {
     const closed = { a: ["search"] };
     expect(unfoldIn(closed, "a", "history")).toBe(closed);
     expect(sectionsFor(unfoldIn(closed, "a", "search"), "a")).toEqual([]);
-    expect(sectionsFor(unfoldIn({}, "b", "launch"), "b")).toEqual(["search", "history", "claude", "peers", "spec", "preview", "agents", "files"]);
+    expect(sectionsFor(unfoldIn({}, "b", "launch"), "b")).toEqual(["search", "history", "claude", "peers", "spec", "preview", "agents", "files", "health"]);
   });
   test("folding every section keeps the other folds and writes the entry out", () => {
     const keys = ["changes", "tasks", "search", "shell"];
     const all = foldAllIn({}, "a", keys);
     // the defaults stay folded, and the new keys join them once each
-    expect(sectionsFor(all, "a")).toEqual(["search", "history", "claude", "launch", "peers", "spec", "preview", "agents", "files", "changes", "tasks", "shell"]);
+    expect(sectionsFor(all, "a")).toEqual(["search", "history", "claude", "launch", "peers", "spec", "preview", "agents", "files", "health", "changes", "tasks", "shell"]);
     expect(all["b"]).toBeUndefined();
     expect(foldAllIn(all, "a", keys)).toBe(all);
     // an absent entry folded to exactly the defaults is still written out
-    expect(foldAllIn({}, "c", ["search"])).toEqual({ c: ["search", "history", "claude", "launch", "peers", "spec", "preview", "agents", "files"] });
+    expect(foldAllIn({}, "c", ["search"])).toEqual({ c: ["search", "history", "claude", "launch", "peers", "spec", "preview", "agents", "files", "health"] });
   });
   test("unfolding every section leaves an empty list, not a missing entry", () => {
-    const keys = ["changes", "search", "history", "claude", "launch", "peers", "spec", "preview", "agents", "files", "tasks", "shell"];
+    const keys = ["changes", "search", "history", "claude", "launch", "peers", "spec", "preview", "agents", "files", "health", "tasks", "shell"];
     const none = unfoldAllIn({}, "a", keys);
     expect(none).toEqual({ a: [] });
     expect(closedIn({ closedSections: none }, "a", "search")).toBe(false);
@@ -765,6 +766,7 @@ describe("several backends", () => {
         "/api/incubator/advice",
         "/api/incubator/stages",
         "/api/ranger",
+        "/api/health",
         "/api/tasks",
         "/api/layouts",
       ].sort(),
