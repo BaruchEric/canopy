@@ -146,6 +146,8 @@ describe("parsers", () => {
   test("missing vs unreachable", () => {
     expect(peerMissing("fatal: '/x' does not appear to be a git repository")).toBe(true);
     expect(peerMissing("canopy-peer: not a repo: x")).toBe(true);
+    // a seed the peer's incubator has since ended: its clone here is an orphan
+    expect(peerMissing("canopy-peer: there is no such seed\nfatal: Could not read from remote repository.")).toBe(true);
     expect(peerUnreachable("ssh: connect to host mac-peer port 22: Operation timed out")).toBe(true);
     expect(peerUnreachable("ssh: Could not resolve hostname mac-peer")).toBe(true);
     expect(peerUnreachable("Connection closed by 100.1.2.3 port 22")).toBe(true);

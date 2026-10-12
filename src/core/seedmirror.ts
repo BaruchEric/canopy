@@ -11,6 +11,7 @@ import { lstat, mkdir, mkdtemp, realpath, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { basename, dirname, join } from "node:path";
 import { exec, git, gitToFile } from "./exec";
+import { NO_SUCH_SEED } from "./peers";
 import { inQuietSeed, seedHeld } from "./seedgit";
 import { SEEDS_DIR } from "./sprout";
 
@@ -82,7 +83,7 @@ async function isMirror(path: string): Promise<boolean> {
 export async function mirrorRefusal(root: string, slug: string): Promise<string | null> {
   // a mirror outlives its seed; a seed that is gone is not served from it
   const seed = await lstat(join(root, SEEDS_DIR, slug)).catch(() => null);
-  if (!seed?.isDirectory()) return "there is no such seed";
+  if (!seed?.isDirectory()) return NO_SUCH_SEED;
   const path = mirrorPath(root, slug);
   const real = await realpath(path).catch(() => null);
   if (real === null) return "canopy has no mirror of this seed yet";

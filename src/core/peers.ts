@@ -144,8 +144,12 @@ export function parseNameStatus(out: string, cap = WIP_PATHS): { files: number; 
   return { files, paths };
 }
 
+/** the gate's answer for a seed its incubator has ended; here so the
+ *  fetch side reads it as missing rather than as an error */
+export const NO_SUCH_SEED = "there is no such seed";
+
 export const peerMissing = (stderr: string): boolean =>
-  /does not appear to be a git repository|not a repo:|repository .* not found|No such file or directory/i.test(stderr);
+  /does not appear to be a git repository|not a repo:|repository .* not found|No such file or directory/i.test(stderr) || stderr.includes(NO_SUCH_SEED);
 
 export const peerUnreachable = (stderr: string): boolean =>
   /ssh: (connect to host|Could not resolve)|Connection (closed|refused|timed out|reset)|Operation timed out|Host is down|No route to host|Permission denied \(publickey/i.test(stderr);
