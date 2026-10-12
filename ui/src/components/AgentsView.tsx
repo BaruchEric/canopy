@@ -30,11 +30,11 @@ import { WidgetGear, shareEntries, useZoom, zoomStyle } from "./Surface";
 
 const errText = (err: unknown) => String(err instanceof Error ? err.message : err);
 
-type Tab = "registry" | "board" | "routing";
+type Tab = "board" | "registry" | "routing";
 
 const TABS = [
-  { value: "registry", label: "registry", title: "Every agent on the tailnet: running, waiting, and the day's ended ones" },
   { value: "board", label: "board", title: "Every agent at once, live (the registry's, canopy's runs and chats, and agents in canopy shells): a rail beside one in focus, a wall, a spotlight, a dashboard, a board by state, or lanes" },
+  { value: "registry", label: "registry", title: "Every agent on the tailnet: running, waiting, and the day's ended ones" },
   { value: "routing", label: "routing", title: "Which agent starts for what: profiles, roles and repo overrides" },
 ] as const;
 
@@ -57,10 +57,10 @@ export function AgentsView({ onGit }: { onGit?: () => void } = {}) {
   const has = useStore((s) => harnessesOf(connOf(s, scope).backend));
   const routing = useStore((s) => hasRouting(connOf(s, scope).backend));
   const ready = useStore((s) => s.registryReady);
-  // the registry first when there is one: the broker's pages link here.
-  // The board needs no broker: canopy's own runs, chats and shells are on it
+  // the board first: it needs no broker, since canopy's own runs, chats
+  // and shells are on it. The registry tab shows only with a broker
   const [chosen, setTab] = useState<Tab | null>(null);
-  const tab: Tab = ready ? (chosen ?? "registry") : chosen === "routing" ? "routing" : "board";
+  const tab: Tab = chosen === "registry" && !ready ? "board" : (chosen ?? "board");
   const tabs = ready ? TABS : TABS.filter((t) => t.value !== "registry");
   const body = useRef<HTMLDivElement>(null);
   const { zoom, entry: zoomEntry } = useZoom("agents");
