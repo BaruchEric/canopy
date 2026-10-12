@@ -59,6 +59,17 @@ describe("probes", () => {
     expect(await probeFor({ name: "a", kind: "task", task: "dev" }, repo(), noTasks)()).toMatchObject({ state: "down", why: "no task named dev" });
   });
 
+  test("while: off unless its task runs, then the kind's probe", async () => {
+    const server = Bun.serve({ port: 0, fetch: () => new Response("x") });
+    cleanups.push(() => server.stop(true));
+    let status: TaskStatus = "stopped";
+    const deps: ProbeDeps = { ...noTasks, taskStatus: async () => ({ status }) };
+    const probe = probeFor({ name: "site", kind: "http", url: `http://127.0.0.1:${server.port}/`, while: "dev" }, repo(), deps);
+    expect(await probe()).toEqual({ state: "off", why: "only while dev runs" });
+    status = "running";
+    expect((await probe()).state).toBe("ok");
+  });
+
   test("command: exit 0 passes with its last line, else its last line is why", async () => {
     const run: Run = async (argv) => (argv[2] === "good" ? ran(0, "a\nall fine\n") : ran(2, "", "boom\n"));
     expect(await probeFor({ name: "a", kind: "command", run: "good" }, repo(), { ...noTasks, run })()).toMatchObject({ state: "ok", detail: "all fine" });

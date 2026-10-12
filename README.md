@@ -56,8 +56,18 @@ canopy helper [--backend URL]      # lend this machine's desktop openers to a sh
 canopy spec status [dir]           # every local repo against the shared repo spec
 canopy spec sync <repo> [--visual] # write the spec into a repo (--visual adds DESIGN.md)
 canopy spec check [repo]           # exit 1 unless the repo's spec text is in sync
-canopy health [--backend URL]      # what is broken on a backend; exit 1 when anything is down
+canopy health [--bad] [--repo R] [--json]   # every check on every backend; exit 1 when anything is down
+canopy health show <id>            # one check: why, how it heals, its last 20 changes
 canopy health heal <id>            # heal one check now
+canopy health watch [--bad]        # follow the checks as they change
+canopy health checks <repo>        # a repo's checks as defined (<repo> is an id or a path)
+canopy health add <repo> <name> --http URL | --port N | --task T | --compose S | --command CMD
+                                   # [--fix CMD] [--heal auto|button|none] [--while TASK] [--every S]
+canopy health rm <repo> <name>     # take one of canopy's checks away
+canopy health lint [dir]           # read .canopy/health.json, exit 1 on a bad entry
+canopy health init [dir]           # write a starter file, the dev task when there is one
+# list, show, heal and watch ask every backend the home one lists (Mac and mini), by tailnet address first;
+# --on NAME keeps one, --backend URL asks only that address (default $CANOPY_API, else 127.0.0.1:7850)
 canopy version                     # the version and commit (also --version, -V)
 ```
 
@@ -142,7 +152,7 @@ Repos can say what to check too. Put the checks in `.canopy/health.json`, or add
 ```json
 {
   "checks": [
-    { "name": "site", "kind": "http", "url": "http://127.0.0.1:5173/" },
+    { "name": "site", "kind": "http", "url": "http://127.0.0.1:5173/", "while": "dev" },
     { "name": "dev", "kind": "task", "task": "dev", "heal": "auto" },
     { "name": "db", "kind": "compose", "service": "postgres", "heal": "button" },
     { "name": "smoke", "kind": "command", "run": "bun run smoke", "every": 300 }
@@ -150,7 +160,7 @@ Repos can say what to check too. Put the checks in `.canopy/health.json`, or add
 }
 ```
 
-A kind is `http` (2xx or 3xx, or `expect`), `port`, `task`, `compose` or `command` (exit 0). Any check may name a `fix` to run when it fails; without one a task check restarts its task and a compose check restarts its service. A task check is off while its task is idle or stopped by hand, so a heal never starts a task you stopped. `heal` is `button` by default, `auto` to heal on its own with the same backoff and give-up, or `none`. The card shows the result in a word (`up · 42ms`, `2 of 3 up`, `down 3m`) and the `health` filter keeps the repos with a check down. A repo that is not yours (no remote you can push to) runs only the `http`, `port` and `task` checks from its own file, and its `auto` is a button; a repo on another host runs only `http` and `port`, and not ones aimed at `127.0.0.1` or `localhost`, which would be this machine; an incubator seed runs none of the ones that run in the checkout.
+A kind is `http` (2xx or 3xx, or `expect`), `port`, `task`, `compose` or `command` (exit 0). Any check may name a `fix` to run when it fails; without one a task check restarts its task and a compose check restarts its service. Any other check can name `"while": "dev"` to run only while that task runs and be off otherwise, so a dev server's URL stays quiet on a machine where you have not started it. A task check is off while its task is idle or stopped by hand, so a heal never starts a task you stopped. `heal` is `button` by default, `auto` to heal on its own with the same backoff and give-up, or `none`. The card shows the result in a word (`up · 42ms`, `2 of 3 up`, `down 3m`) and the `health` filter keeps the repos with a check down. A repo that is not yours (no remote you can push to) runs only the `http`, `port` and `task` checks from its own file, and its `auto` is a button; a repo on another host runs only `http` and `port`, and not ones aimed at `127.0.0.1` or `localhost`, which would be this machine; an incubator seed runs none of the ones that run in the checkout.
 
 ## Claude runs
 

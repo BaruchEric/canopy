@@ -35,13 +35,19 @@ export function normalizeCheck(v: unknown): RepoCheckDef | string {
   if (!isTaskName(name)) return `bad check name: ${JSON.stringify(name)}`;
   const kind = o["kind"];
   if (typeof kind !== "string" || !(KINDS as readonly string[]).includes(kind)) return `${name}: kind is one of ${KINDS.join(", ")}`;
-  const base: { name: string; fix?: string; heal?: RepoHealMode; every?: number } = { name };
+  const base: { name: string; fix?: string; heal?: RepoHealMode; while?: string; every?: number } = { name };
   const fix = str(o["fix"]);
   if (fix) base.fix = fix;
   const heal = o["heal"];
   if (heal !== undefined) {
     if (typeof heal !== "string" || !(HEALS as readonly string[]).includes(heal)) return `${name}: heal is auto, button or none`;
     base.heal = heal as RepoHealMode;
+  }
+  const during = o["while"];
+  if (during !== undefined) {
+    if (!isTaskName(during)) return `${name}: while names a task`;
+    if (kind === "task") return `${name}: a task check needs no while`;
+    base.while = during;
   }
   const every = o["every"];
   if (every !== undefined) {

@@ -58,9 +58,20 @@ usage:
   canopy ranger wake <when> "prompt" wake it later: in 30m, 14:00, an ISO time
     --cron "0 8 * * *" | --run <id>  on a cron line instead, or when a run ends
   canopy ranger unwake <id>          remove a wake
-  canopy health                      what is broken on a backend, and what canopy is fixing
-    --backend URL                    the backend (default: $CANOPY_API, else 127.0.0.1:7850)
-  canopy health heal <id>            heal one check now
+  canopy health [--bad] [--repo R] [--canopy] [--json]
+                                     every check on every backend the home one lists; exit 1 while one is down
+    --on NAME                        only that backend (checks, add and rm speak to it too)
+    --backend URL                    the home backend, asked alone (default: $CANOPY_API, else 127.0.0.1:7850)
+  canopy health show <id>            one check: why, how it heals, its last 20 changes
+  canopy health heal <id>            heal one check now (--on NAME when two backends have it)
+  canopy health watch [--bad] [--repo R]   follow the checks as they change
+  canopy health checks <repo>        a repo's checks as defined, and its file's errors
+  canopy health add <repo> <name> --http URL | --port N | --task T | --compose S | --command CMD
+                    [--fix CMD] [--heal auto|button|none] [--while TASK] [--every S]
+                                     a check in canopy's config; --while runs it only while that task does
+  canopy health rm <repo> <name>     take one of canopy's checks away
+  canopy health lint [dir]           read a repo's .canopy/health.json, exit 1 on a bad entry
+  canopy health init [dir]           write a starter .canopy/health.json
   canopy spec status [dir]           every repo against the shared repo spec
   canopy spec sync <repo> [--visual | --doc]   write the spec's blocks into a repo
                                      --visual adds DESIGN.md, --doc keeps only SPEC.md

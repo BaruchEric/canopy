@@ -33,7 +33,7 @@ import {
   setLaunch,
   upsertWorkspace,
 } from "../core/store";
-import { effectivePrimary, type HealthCheck, type HealthInfo, type Job, type LaunchSettings, type RangerInfo, type RangerWake, type SourceInput, type SpecHalf, type Sprout, type SproutDetail } from "../core/types";
+import { effectivePrimary, type Job, type LaunchSettings, type RangerInfo, type RangerWake, type SourceInput, type SpecHalf, type Sprout, type SproutDetail } from "../core/types";
 import { loadSpec, repoSpecState, syncRepo } from "../core/spec";
 import { parsePick, pickRefusal, SEEDS_DIR } from "../core/sprout";
 import { setSeedRoots } from "../core/seedgit";
@@ -44,8 +44,9 @@ import { PortUnavailableError, startServer } from "../server/index";
 import { helperName, localOpeners, runHelper } from "../core/helperd";
 import { readBuild } from "../core/build";
 import { versionLine } from "../core/version";
-import { bold, dim, lichen, moss, paintLine, renderTree, rust, sky } from "./render";
+import { bold, dim, lichen, moss, paintLine, renderTree, sky } from "./render";
 import { HELP_TEXT } from "../core/help";
+import { healthCommand } from "./health";
 import { SPEC_WORDS, specLines } from "../core/treelines";
 
 const HELP = `${bold("canopy")}${HELP_TEXT.slice("canopy".length)}`;
@@ -784,40 +785,8 @@ export async function main(argv: string[]): Promise<void> {
       }
       return fail("usage: canopy ranger [status] | on | off | restart | fresh | say <message> | wake <when> <prompt> | unwake <id>");
     }
-    case "health": {
-      const backend = (opt(args, "--backend") ?? process.env["CANOPY_API"] ?? "http://127.0.0.1:7850").replace(/\/+$/, "");
-      if (!/^https?:\/\/[^/\s]+$/.test(backend)) return fail(`--backend must be an http(s) origin, got ${backend}`);
-      const call = async <T>(method: string, path: string): Promise<T> => {
-        let res: Response;
-        try {
-          res = await fetch(`${backend}${path}`, { method });
-        } catch (err) {
-          return fail(`${backend} did not answer: ${err instanceof Error ? err.message : String(err)}`);
-        }
-        const out = (await res.json().catch(() => ({}))) as T & { error?: string };
-        if (!res.ok) return fail(out.error ?? `the backend answered ${res.status}`);
-        return out;
-      };
-      const paint = (c: HealthCheck): string => {
-        const word = c.state === "gave-up" ? "gave up" : c.state === "unknown" ? "checking" : c.state;
-        return c.state === "ok" ? moss(word) : c.state === "down" || c.state === "gave-up" ? rust(word) : c.state === "off" ? dim(word) : lichen(word);
-      };
-      const line = (c: HealthCheck) => console.log(`${paint(c).padEnd(20)} ${bold(c.label)}${c.why ? dim(`  ${c.why}`) : ""}${c.detail ? dim(`  ${c.detail}`) : ""}  ${dim(c.id)}`);
-      if (args[0] === "heal") {
-        const id = args[1];
-        if (!id) return fail("usage: canopy health heal <id>");
-        const c = await call<HealthCheck>("POST", `/api/health/heal?id=${encodeURIComponent(id)}`);
-        line(c);
-        if (c.state === "down" || c.state === "gave-up") process.exitCode = 1;
-        return;
-      }
-      if (args[0] !== undefined && !args[0].startsWith("--")) return fail("usage: canopy health [--backend URL] | heal <id>");
-      const { checks } = await call<HealthInfo>("GET", "/api/health");
-      for (const c of checks) line(c);
-      // a script or a compose healthcheck reads the exit code
-      if (checks.some((c) => c.state === "down" || c.state === "gave-up")) process.exitCode = 1;
-      return;
-    }
+    case "health":
+      return healthCommand(args, { fail });
     case "version":
     case "--version":
     case "-V":

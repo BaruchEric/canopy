@@ -2674,6 +2674,8 @@ interface RepoCheckBase {
   /** a command that heals it, run in the repo; instead of the kind's own heal */
   fix?: string;
   heal?: RepoHealMode;
+  /** a task of the repo's: the check runs only while it does, and is off otherwise */
+  while?: string;
   /** seconds between probes, at least 5; 30 when unset */
   every?: number;
 }

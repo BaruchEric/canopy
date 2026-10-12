@@ -268,10 +268,18 @@ const KIND_FIELD: Record<RepoCheckKind, { label: string; hint: string }> = {
 };
 
 /** The check a form's fields make, through the same rules the server keeps */
-function formCheck(name: string, kind: RepoCheckKind, field: string, heal: RepoHealMode, fix: string, every: string) {
+function formCheck(name: string, kind: RepoCheckKind, field: string, heal: RepoHealMode, fix: string, every: string, during: string) {
   const value = kind === "port" ? Number(field) : field;
   const key = kind === "http" ? "url" : kind === "command" ? "run" : kind === "compose" ? "service" : kind;
-  return normalizeCheck({ name, kind, [key]: value, heal, ...(fix.trim() ? { fix } : {}), ...(every.trim() ? { every: Number(every) } : {}) });
+  return normalizeCheck({
+    name,
+    kind,
+    [key]: value,
+    heal,
+    ...(fix.trim() ? { fix } : {}),
+    ...(every.trim() ? { every: Number(every) } : {}),
+    ...(during.trim() && kind !== "task" ? { while: during.trim() } : {}),
+  });
 }
 
 function AddCheck({ repo, onSaved }: { repo: Repo; onSaved: (info: RepoHealthInfo) => void }) {
@@ -282,11 +290,12 @@ function AddCheck({ repo, onSaved }: { repo: Repo; onSaved: (info: RepoHealthInf
   const [heal, setHeal] = useState<RepoHealMode>("button");
   const [fix, setFix] = useState("");
   const [every, setEvery] = useState("");
+  const [during, setDuring] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const submit = (e: FormEvent) => {
     e.preventDefault();
-    const check = formCheck(name.trim(), kind, field.trim(), heal, fix, every);
+    const check = formCheck(name.trim(), kind, field.trim(), heal, fix, every, during);
     if (typeof check === "string") return setError(check);
     setBusy(true);
     setError("");
@@ -339,6 +348,12 @@ function AddCheck({ repo, onSaved }: { repo: Repo; onSaved: (info: RepoHealthInf
           <option value="none">never</option>
         </select>
       </label>
+      {kind !== "task" && (
+        <label>
+          <span className="health-fact">only while task runs</span>
+          <input className="settings-input" value={during} placeholder="dev" onChange={(e) => setDuring(e.target.value)} />
+        </label>
+      )}
       <label>
         <span className="health-fact">every (s)</span>
         <input className="settings-input" value={every} placeholder="30" inputMode="numeric" onChange={(e) => setEvery(e.target.value)} />

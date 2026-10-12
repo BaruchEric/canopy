@@ -165,8 +165,20 @@ async function probeCommand(repo: Repo, cmd: string, run: Run): Promise<ProbeRes
   return r.code === 0 ? pass(line || undefined) : fail(line || `exited ${r.code}`, `exit ${r.code}`);
 }
 
-/** what a check's probe does */
+/** what a check's probe does: with `while`, only while that task runs */
 export function probeFor(c: RepoCheckDef, repo: Repo, deps: ProbeDeps): () => Promise<ProbeResult> {
+  const probe = kindProbe(c, repo, deps);
+  const during = c.while;
+  if (during === undefined) return probe;
+  return async () => {
+    const t = await deps.taskStatus(repo, during);
+    // backoff is the task coming back: what it serves is meant to be up
+    if (t?.status === "running" || t?.status === "backoff") return probe();
+    return { state: "off", why: `only while ${during} runs` };
+  };
+}
+
+function kindProbe(c: RepoCheckDef, repo: Repo, deps: ProbeDeps): () => Promise<ProbeResult> {
   const run = deps.run ?? runHere;
   switch (c.kind) {
     case "http":

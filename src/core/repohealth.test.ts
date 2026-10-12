@@ -24,6 +24,12 @@ describe("normalizeCheck", () => {
     expect(normalizeCheck([1])).toContain("object");
   });
 
+  test("while names a task, and a task check needs none", () => {
+    expect(normalizeCheck({ name: "site", kind: "http", url: "http://a/", while: "dev" })).toEqual({ name: "site", kind: "http", url: "http://a/", while: "dev" });
+    expect(normalizeCheck({ name: "site", kind: "http", url: "http://a/", while: "Not A Task" })).toContain("while names a task");
+    expect(normalizeCheck({ name: "dev", kind: "task", task: "dev", while: "dev" })).toContain("needs no while");
+  });
+
   test("every is at least five seconds", () => {
     expect(normalizeCheck({ name: "x", kind: "port", port: 1, every: 1 })).toMatchObject({ every: 5 });
   });
