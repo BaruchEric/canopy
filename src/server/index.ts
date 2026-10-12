@@ -87,6 +87,8 @@ import {
 import { clientKey, HELPER_PING, HELPER_TIMEOUT, helperRefusal, isLoopback, isLoopbackHost, parseDefaultGateway, parseHelperQuery, parseHelperReply, reachFrom, staleHelpers, type HelperAsk } from "../core/helper";
 import { devicesOf, parseStream, type Stream } from "../core/presence";
 import { mapPool, searchRepo } from "../core/search";
+import { FinderError, listFiles, readRaw, RAW_MAX, safeRel } from "../core/finder";
+import { mimeOf } from "../core/filekind";
 import { readActivity } from "../core/activity";
 import { agentSessions, hasAgentSession, isSessionId, newestTranscript, resumeLine, transcriptFile } from "../core/sessions";
 import { BUNDLED_DIR, findWorkflow, loadWorkflows } from "../core/workflows";
@@ -1387,6 +1389,16 @@ class HttpError extends Error {
     message: string,
   ) {
     super(message);
+  }
+}
+
+/** a files-section call, its refusals as the HTTP errors they are */
+async function finding<T>(run: () => Promise<T>): Promise<T> {
+  try {
+    return await run();
+  } catch (err) {
+    if (err instanceof FinderError) throw new HttpError(err.status, err.message);
+    throw err;
   }
 }
 
@@ -3048,6 +3060,33 @@ async function handleApi(
     }
     if (method === "GET" && action === "grep") {
       return json(await searchRepo(repo.path, grepQuery(url.searchParams.get("q"))));
+    }
+    // the files section: the working tree's files, and one file's bytes
+    if (method === "GET" && action === "ls") {
+      return json(await finding(() => listFiles(repo.path)));
+    }
+    if (method === "GET" && action === "raw") {
+      const rel = safeRel(url.searchParams.get("path") ?? "");
+      if (rel === null) return json({ error: "path must be a file's path from the repo's root" }, 400);
+      // an incubator seed's files may live with its stage, not on this disk
+      if (isSeedPath(state.root, repo.path)) return json({ error: "the files view does not read an incubator seed" }, 400);
+      const asked = Number(url.searchParams.get("max"));
+      const max = Number.isFinite(asked) && asked > 0 ? asked : RAW_MAX.local;
+      const file = await finding(() => readRaw(repo.path, rel, max));
+      const name = rel.slice(rel.lastIndexOf("/") + 1);
+      const headers: Record<string, string> = {
+        "content-type": mimeOf(name),
+        "content-length": String(file.size),
+        "content-disposition": `inline; filename*=UTF-8''${encodeURIComponent(name)}`,
+        "cache-control": "no-store",
+        // A repo's HTML or SVG opened at this address must not run as a page
+        // of canopy's own origin, which can start shells: no sniffing it into
+        // something runnable, and a sandbox with nothing allowed if it is.
+        "x-content-type-options": "nosniff",
+        "content-security-policy": "sandbox; default-src 'none'",
+      };
+      if (file.mtime !== null) headers["last-modified"] = new Date(file.mtime).toUTCString();
+      return new Response(file.body, { headers });
     }
     if (method === "POST" && action === "openfile") {
       const b = (await req.json()) as { file?: unknown; line?: unknown; helper?: unknown };

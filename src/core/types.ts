@@ -1338,6 +1338,14 @@ export interface GrepResult {
   truncated: boolean;
 }
 
+/** every file in a repo's working tree that git does not ignore, for the
+ *  files section, as paths from the repo's root */
+export interface RepoFiles {
+  files: string[];
+  /** the repo held more than the cap and the list stops short */
+  truncated: boolean;
+}
+
 /** one repo's row in a search across many */
 export interface GrepRepoResult extends GrepResult {
   /** the repo id */

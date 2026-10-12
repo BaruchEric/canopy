@@ -56,6 +56,7 @@ import { LaunchSection } from "./Launch";
 import { TasksSection } from "./Tasks";
 import { AgentsSection } from "./Registry";
 import { PreviewSection } from "./Preview";
+import { FinderSection } from "./Finder";
 import { GuidedPanel } from "./Guided";
 import { Tour } from "./Tour";
 import { CommitRow } from "./Commit";
@@ -1094,6 +1095,8 @@ export function PanelSection({ k, repo }: { k: SectionKey; repo: Repo }) {
       return <ChangesSection repo={repo} />;
     case "search":
       return <SearchSection repo={repo} />;
+    case "files":
+      return repo.forge ? null : <FinderSection repo={repo} />;
     case "history":
       return <History repo={repo} />;
     case "peers":

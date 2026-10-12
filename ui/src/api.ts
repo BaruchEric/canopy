@@ -32,6 +32,7 @@ import type {
   FlowChoice,
   GrepRepoResult,
   GrepResult,
+  RepoFiles,
   HistoryHit,
   HistoryOverview,
   HistorySession,
@@ -397,6 +398,13 @@ export const api = {
       }),
     );
     return ids.map((id) => found.get(id) ?? { repo: id, hits: [], truncated: false, error: "no answer for this repo" });
+  },
+  /** every file of a repo's working tree that git does not ignore */
+  files: (id: string) => repoReq<RepoFiles>(id, (p) => `/api/repos/ls?${rq(p)}`),
+  /** one file's bytes, refused (413) past `max` */
+  rawFile: (id: string, path: string, max: number) => {
+    const [b, plain] = on(id);
+    return blobReq(b, `/api/repos/raw?${rq(plain, { path, max: String(max) })}`);
   },
   /** opens one file of a repo at a line in VS Code */
   openFile: (id: string, file: string, line: number, helper?: string) =>
