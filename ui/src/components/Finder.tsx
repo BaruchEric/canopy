@@ -8,21 +8,26 @@ import {
   dirOf,
   entriesAt,
   findFiles,
+  isMarkdown,
+  isRelative,
   linesOf,
   loadPlace,
   looksBinary,
   MEDIA_MAX,
+  resolveRel,
   savePlace,
   sizeWord,
   stepOf,
   TEXT_MAX,
+  withIgnored,
   type Entry,
 } from "../finder";
 import { backendOf } from "../registry";
+import { loadRich, type Rich } from "../rich";
 import { helperFor, useStore } from "../store";
 import { Section } from "./Surface";
 import { fileKind, type FileKind } from "../../../src/core/filekind";
-import type { Repo, RepoFiles } from "../../../src/core/types";
+import type { DirEntry, Repo, RepoFiles } from "../../../src/core/types";
 
 const errText = (err: unknown) => String(err instanceof Error ? err.message : err);
 
@@ -52,8 +57,13 @@ type Loaded =
  *  `stamp` changes when the file does, which reads it again. */
 function useFile(repoId: string, path: string, stamp: string): Loaded {
   const kind = fileKind(path);
-  const [got, setGot] = useState<Loaded>({ state: "loading" });
+  // what was read, tagged with the file and stamp it was read for: on the
+  // render that names a new file, the old one's bytes must not show under
+  // its name (a markdown page would fetch its images against the new path)
+  const key = `${repoId}\0${path}\0${stamp}`;
+  const [read, setRead] = useState<{ key: string; got: Loaded }>({ key: "", got: { state: "loading" } });
   useEffect(() => {
+    const setGot = (got: Loaded) => setRead({ key, got });
     if (kind === "binary") {
       setGot({ state: "binary", size: null });
       return;
@@ -80,22 +90,42 @@ function useFile(repoId: string, path: string, stamp: string): Loaded {
       live = false;
       if (url) URL.revokeObjectURL(url);
     };
-  }, [repoId, path, kind, stamp]);
-  return got;
+  }, [repoId, path, kind, stamp, key]);
+  return read.key === key ? read.got : { state: "loading" };
+}
+
+/** the rich half (colours, markdown), once it has loaded; null until then
+ *  and if it fails, when text is drawn plain */
+function useRich(): Rich | null {
+  const [rich, setRich] = useState<Rich | null>(null);
+  useEffect(() => {
+    let live = true;
+    loadRich()
+      .then((r) => live && setRich(r))
+      .catch(() => {});
+    return () => {
+      live = false;
+    };
+  }, []);
+  return rich;
 }
 
 /** Text with its line numbers in a gutter of their own, so a selection
- *  takes only the text. */
-function TextView({ text }: { text: string }) {
+ *  takes only the text, coloured by its language where it has one. */
+function CodeView({ text, path }: { text: string; path: string }) {
+  const rich = useRich();
   const { lines, total } = useMemo(() => linesOf(text), [text]);
   const gutter = useMemo(() => lines.map((_, i) => i + 1).join("\n"), [lines]);
+  const plain = useMemo(() => lines.join("\n"), [lines]);
+  // highlight.js escapes every character of the text it hands back
+  const html = useMemo(() => rich?.highlight(plain, path) ?? null, [rich, plain, path]);
   return (
     <div className="finder-text">
       <div className="finder-code">
         <pre className="finder-gutter" aria-hidden="true">
           {gutter}
         </pre>
-        <pre className="finder-lines">{lines.join("\n")}</pre>
+        {html === null ? <pre className="finder-lines">{plain}</pre> : <pre className="finder-lines hljs" dangerouslySetInnerHTML={{ __html: html }} />}
       </div>
       {total > lines.length && (
         <p className="panel-clean finder-more">
@@ -106,7 +136,75 @@ function TextView({ text }: { text: string }) {
   );
 }
 
-function FileBody({ repoId, path, stamp, big }: { repoId: string; path: string; stamp: string; big: boolean }) {
+/** Markdown drawn as a page. Its images come from the repo, fetched the way
+ *  any file is; a link to another file in the repo opens that file here, and
+ *  one off the page opens in a new tab. */
+function MarkdownView({ repoId, text, path, onOpen }: { repoId: string; text: string; path: string; onOpen: (path: string) => void }) {
+  const rich = useRich();
+  const box = useRef<HTMLDivElement>(null);
+  // sanitized by DOMPurify inside markdown()
+  const html = useMemo(() => rich?.markdown(text) ?? null, [rich, text]);
+  useEffect(() => {
+    const el = box.current;
+    if (!el || html === null) return;
+    let live = true;
+    const urls: string[] = [];
+    for (const img of el.querySelectorAll<HTMLImageElement>("img[data-src]")) {
+      const at = resolveRel(path, img.dataset["src"] ?? "");
+      if (at === null) continue;
+      api
+        .rawFile(repoId, at, MEDIA_MAX)
+        .then((blob) => {
+          if (!live) return;
+          const url = URL.createObjectURL(blob);
+          urls.push(url);
+          img.src = url;
+        })
+        .catch(() => img.setAttribute("data-missing", ""));
+    }
+    return () => {
+      live = false;
+      for (const u of urls) URL.revokeObjectURL(u);
+    };
+  }, [html, repoId, path]);
+  const click = (e: React.MouseEvent) => {
+    const a = e.target instanceof Element ? e.target.closest("a") : null;
+    const href = a?.getAttribute("href");
+    if (!href) return;
+    e.preventDefault();
+    if (href.startsWith("#")) return;
+    if (!isRelative(href)) {
+      window.open(href, "_blank", "noopener,noreferrer");
+      return;
+    }
+    const at = resolveRel(path, href);
+    if (at !== null) onOpen(at);
+  };
+  if (html === null) return <p className="panel-clean finder-note">Drawing {baseName(path)}…</p>;
+  return <div ref={box} className="finder-md" onClick={click} dangerouslySetInnerHTML={{ __html: html }} />;
+}
+
+/** A text file: markdown as a page with a switch to its source, the rest as
+ *  source. */
+function TextView({ repoId, text, path, onOpen }: { repoId: string; text: string; path: string; onOpen: (path: string) => void }) {
+  const [source, setSource] = useState(false);
+  if (!isMarkdown(path)) return <CodeView text={text} path={path} />;
+  return (
+    <div className="finder-text-wrap">
+      <div className="finder-text-bar" role="group" aria-label="Show as">
+        <button type="button" className={`mini${source ? "" : " on"}`} aria-pressed={!source} onClick={() => setSource(false)}>
+          page
+        </button>
+        <button type="button" className={`mini${source ? " on" : ""}`} aria-pressed={source} onClick={() => setSource(true)}>
+          source
+        </button>
+      </div>
+      {source ? <CodeView text={text} path={path} /> : <MarkdownView repoId={repoId} text={text} path={path} onOpen={onOpen} />}
+    </div>
+  );
+}
+
+function FileBody({ repoId, path, stamp, big, onOpen }: { repoId: string; path: string; stamp: string; big: boolean; onOpen: (path: string) => void }) {
   const kind = fileKind(path);
   const got = useFile(repoId, path, stamp);
   const [actual, setActual] = useState(false);
@@ -119,7 +217,7 @@ function FileBody({ repoId, path, stamp, big }: { repoId: string; path: string; 
       </p>
     );
   }
-  if (got.state === "text") return <TextView text={got.text} />;
+  if (got.state === "text") return <TextView repoId={repoId} text={got.text} path={path} onOpen={onOpen} />;
   if (kind === "image") {
     return (
       <div className={`finder-image${actual ? " actual" : ""}`}>
@@ -190,6 +288,7 @@ function Viewer({
   list,
   stamp,
   onPick,
+  onOpen,
   onClose,
 }: {
   repo: Repo;
@@ -197,6 +296,8 @@ function Viewer({
   list: string[];
   stamp: (path: string) => string;
   onPick: (path: string) => void;
+  /** a link in a markdown file to another file of the repo */
+  onOpen: (path: string) => void;
   onClose: () => void;
 }) {
   const [error, setError] = useState<string | null>(null);
@@ -246,7 +347,7 @@ function Viewer({
         </header>
         {error && <p className="panel-error">{error}</p>}
         <div className="finder-viewer-body">
-          <FileBody repoId={repo.id} path={path} stamp={stamp(path)} big />
+          <FileBody repoId={repo.id} path={path} stamp={stamp(path)} big onOpen={onOpen} />
         </div>
       </div>
     </div>,
@@ -267,8 +368,8 @@ function Row({ entry, picked, onClick, onOpen }: { entry: Entry; picked: boolean
         ref={ref}
         type="button"
         tabIndex={-1}
-        className={`finder-row${entry.dir ? " dir" : ""}${picked ? " picked" : ""}`}
-        title={entry.path}
+        className={`finder-row${entry.dir ? " dir" : ""}${entry.ignored ? " ignored" : ""}${picked ? " picked" : ""}`}
+        title={entry.ignored ? `${entry.path} (git ignores it, or it holds no files)` : entry.path}
         onClick={onClick}
         onDoubleClick={onOpen}
       >
@@ -276,7 +377,7 @@ function Row({ entry, picked, onClick, onOpen }: { entry: Entry; picked: boolean
           {entry.dir ? "▸" : KIND_GLYPH[fileKind(entry.name)]}
         </span>
         <span className="finder-name">{entry.name}</span>
-        {entry.dir && <span className="finder-count">{entry.count}</span>}
+        {entry.dir && entry.count !== null && <span className="finder-count">{entry.count}</span>}
       </button>
     </li>
   );
@@ -291,6 +392,9 @@ export function FinderSection({ repo }: { repo: Repo }) {
   const [place, setPlace] = useState(() => loadPlace(repo.id));
   const [query, setQuery] = useState("");
   const [hidden, setHidden] = useState(false);
+  const [ignored, setIgnored] = useState(false);
+  /** the folder as the disk has it, for "show ignored": null until read */
+  const [disk, setDisk] = useState<{ dir: string; entries: DirEntry[] } | null>(null);
   const [viewing, setViewing] = useState(false);
   const listRef = useRef<HTMLUListElement>(null);
   const { dir, file } = place;
@@ -311,6 +415,24 @@ export function FinderSection({ repo }: { repo: Repo }) {
   }, [repo.id]);
   useEffect(load, [load, treeKey]);
 
+  // "show ignored" reads the folder off the disk as well, each time it moves
+  const [diskTick, setDiskTick] = useState(0);
+  useEffect(() => {
+    if (!ignored) return;
+    let live = true;
+    api
+      .dir(repo.id, dir)
+      .then((entries) => live && setDisk({ dir, entries }))
+      .catch((err: unknown) => live && setError(errText(err)));
+    return () => {
+      live = false;
+    };
+  }, [ignored, repo.id, dir, treeKey, diskTick]);
+  const refresh = () => {
+    load();
+    setDiskTick((t) => t + 1);
+  };
+
   const go = (next: { dir: string; file: string | null }) => {
     setPlace(next);
     savePlace(repo.id, next);
@@ -319,14 +441,19 @@ export function FinderSection({ repo }: { repo: Repo }) {
   const files = listing?.files ?? [];
   // a folder that emptied out since it was left
   useEffect(() => {
-    if (listing && !dirExists(listing.files, dir)) go({ dir: "", file: null });
-  }, [listing, dir]);
+    // an ignored folder is not in the listing at all
+    if (listing && !ignored && !dirExists(listing.files, dir)) go({ dir: "", file: null });
+  }, [listing, dir, ignored]);
 
   const found = useMemo(() => findFiles(files, query, hidden), [files, query, hidden]);
   const searching = query.trim() !== "";
   const entries: Entry[] = useMemo(
-    () => (searching ? found.hits.map((p) => ({ name: p, path: p, dir: false, count: 0 })) : entriesAt(files, dir, hidden)),
-    [searching, found, files, dir, hidden],
+    () => {
+      if (searching) return found.hits.map((p) => ({ name: p, path: p, dir: false, count: 0 }));
+      const listed = entriesAt(files, dir, hidden);
+      return ignored && disk?.dir === dir ? withIgnored(listed, disk.entries, dir, hidden) : listed;
+    },
+    [searching, found, files, dir, hidden, ignored, disk],
   );
   // the files the viewer steps through: the search's, or the folder's
   const steps = useMemo(() => entries.filter((e) => !e.dir).map((e) => e.path), [entries]);
@@ -342,6 +469,11 @@ export function FinderSection({ repo }: { repo: Repo }) {
       go({ dir: searching ? dir : dirOf(e.path), file: e.path });
       setViewing(true);
     }
+  };
+  /** a file named by a link: its folder, with it picked */
+  const openPath = (p: string) => {
+    setQuery("");
+    go({ dir: dirOf(p), file: p });
   };
   const pick = (e: Entry) => (e.dir ? open(e) : go({ dir, file: e.path }));
   const up = () => dir !== "" && go({ dir: dirOf(dir), file: dir });
@@ -409,7 +541,16 @@ export function FinderSection({ repo }: { repo: Repo }) {
         <button type="button" className={`mini${hidden ? " on" : ""}`} onClick={() => setHidden((h) => !h)} title={hidden ? "Hide dotfiles" : "Show dotfiles"} aria-pressed={hidden}>
           .*
         </button>
-        <button type="button" className="mini" disabled={busy} onClick={load} title="List the files again" aria-label="Refresh">
+        <button
+          type="button"
+          className={`mini${ignored ? " on" : ""}`}
+          onClick={() => setIgnored((v) => !v)}
+          title={ignored ? "Hide what git ignores" : "Show what git ignores too (node_modules, dist, .env), read off the disk folder by folder"}
+          aria-pressed={ignored}
+        >
+          ignored
+        </button>
+        <button type="button" className="mini" disabled={busy} onClick={refresh} title="List the files again" aria-label="Refresh">
           ↻
         </button>
       </div>
@@ -442,7 +583,7 @@ export function FinderSection({ repo }: { repo: Repo }) {
                 <FileActions repo={repo} path={picked} onError={setError} onView={() => setViewing(true)} />
               </div>
               <div className="finder-look-body">
-                <FileBody repoId={repo.id} path={picked} stamp={stamp(picked)} big={false} />
+                <FileBody repoId={repo.id} path={picked} stamp={stamp(picked)} big={false} onOpen={openPath} />
               </div>
             </>
           ) : (
@@ -457,6 +598,7 @@ export function FinderSection({ repo }: { repo: Repo }) {
           list={steps}
           stamp={stamp}
           onPick={(p) => go({ dir, file: p })}
+          onOpen={openPath}
           onClose={() => {
             setViewing(false);
             listRef.current?.focus();

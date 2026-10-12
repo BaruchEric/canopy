@@ -6,7 +6,7 @@ import { realpath, stat } from "node:fs/promises";
 import { join, sep } from "node:path";
 import { git, onHost } from "./exec";
 import { parseLocator, tildeQuote } from "./host";
-import type { RepoFiles } from "./types";
+import type { DirEntry, RepoFiles } from "./types";
 
 /** how many paths one listing hands back before it is cut */
 export const FILES_LIMIT = 50_000;
@@ -48,6 +48,52 @@ export async function listFiles(repoPath: string, limit = FILES_LIMIT): Promise<
   const r = await git(repoPath, ["ls-files", "-z", "--cached", "--others", "--exclude-standard"], 30_000);
   if (r.code !== 0) throw new FinderError(500, r.stderr.trim() || "git ls-files failed");
   return parseFiles(r.stdout, limit);
+}
+
+/** how many entries one folder listing hands back */
+export const DIR_LIMIT = 5_000;
+
+/** One shell script for here and over ssh: the folder must resolve inside
+ *  the repo (exit 3 no repo folder, 4 no such folder, 5 outside it), then
+ *  one NUL-ended `d/name` or `f/name` per entry, hidden ones included. */
+export function dirCommand(root: string, rel: string): string[] {
+  const script = [
+    `cd ${tildeQuote(root)} 2>/dev/null || exit 3`,
+    "top=$(pwd -P)",
+    'if [ -n "$1" ]; then cd "./$1" 2>/dev/null || exit 4; fi',
+    'here=$(pwd -P)',
+    'case "$here" in "$top"|"$top"/*) ;; *) exit 5 ;; esac',
+    'for f in * .[!.]* ..?*; do',
+    '  [ -e "$f" ] || [ -L "$f" ] || continue',
+    '  [ "$here" = "$top" ] && [ "$f" = .git ] && continue',
+    '  if [ -d "$f" ]; then printf \'d/%s\\0\' "$f"; else printf \'f/%s\\0\' "$f"; fi',
+    "done",
+  ].join("\n");
+  return ["sh", "-c", script, "sh", rel];
+}
+
+export function parseDir(out: string, limit = DIR_LIMIT): DirEntry[] {
+  const entries: DirEntry[] = [];
+  for (const rec of out.split("\0")) {
+    if (entries.length >= limit) break;
+    const kind = rec.slice(0, 2);
+    const name = rec.slice(2);
+    if (!name || (kind !== "d/" && kind !== "f/")) continue;
+    entries.push({ name, dir: kind === "d/" });
+  }
+  return entries;
+}
+
+/** The entries of one folder (`""` is the repo's root), wherever the repo is. */
+export async function listDir(repoPath: string, rel: string): Promise<DirEntry[]> {
+  const { host, path } = parseLocator(repoPath);
+  const r = await onHost(host, dirCommand(path, rel), { timeoutMs: 30_000 });
+  if (r.code === 3) throw new FinderError(404, `no folder at ${path}`);
+  if (r.code === 4) throw new FinderError(404, `no folder at ${rel}`);
+  if (r.code === 5) throw new FinderError(403, `${rel} leads outside the repo`);
+  if (r.code === 255 && host) throw new FinderError(502, `ssh ${host}: ${r.stderr.trim() || "connection failed"}`);
+  if (r.code !== 0) throw new FinderError(500, r.stderr.trim() || `could not list ${rel || "the repo"}`);
+  return parseDir(r.stdout);
 }
 
 /** One file's bytes, its size and when it last changed. */

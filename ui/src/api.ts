@@ -33,6 +33,7 @@ import type {
   GrepRepoResult,
   GrepResult,
   RepoFiles,
+  DirEntry,
   HistoryHit,
   HistoryOverview,
   HistorySession,
@@ -401,6 +402,8 @@ export const api = {
   },
   /** every file of a repo's working tree that git does not ignore */
   files: (id: string) => repoReq<RepoFiles>(id, (p) => `/api/repos/ls?${rq(p)}`),
+  /** one folder straight off the disk, what git ignores included */
+  dir: (id: string, path: string) => repoReq<DirEntry[]>(id, (p) => `/api/repos/dir?${rq(p, { path })}`),
   /** one file's bytes, refused (413) past `max` */
   rawFile: (id: string, path: string, max: number) => {
     const [b, plain] = on(id);

@@ -21,8 +21,11 @@ export interface Entry {
   /** from the repo's root; a folder's has no trailing slash */
   path: string;
   dir: boolean;
-  /** a folder's files, however deep */
-  count: number;
+  /** a folder's files, however deep; null for an ignored folder, which
+   *  the listing does not reach into */
+  count: number | null;
+  /** git ignores it, so only the "show ignored" view lists it */
+  ignored?: true;
 }
 
 /** A dotfile or dotfolder, which the section hides until asked. */
@@ -58,11 +61,54 @@ export function entriesAt(files: readonly string[], dir: string, hidden = false)
       continue;
     }
     const at = folders.get(name);
-    if (at) at.count += 1;
+    if (at) at.count = (at.count ?? 0) + 1;
     else folders.set(name, { name, path: prefix + name, dir: true, count: 1 });
   }
   return [...folders.values(), ...out].sort(byName);
 }
+
+/** `entries` with what the disk holds in `dir` that git ignores, marked as
+ *  such. A name the listing already has is the listing's; a hidden one
+ *  stays out unless `hidden`. */
+export function withIgnored(entries: readonly Entry[], disk: readonly { name: string; dir: boolean }[], dir: string, hidden = false): Entry[] {
+  const known = new Set(entries.map((e) => e.name));
+  const prefix = dir === "" ? "" : `${dir}/`;
+  const extra: Entry[] = disk
+    .filter((d) => !known.has(d.name) && (hidden || !isHidden(d.name)))
+    .map((d) => ({ name: d.name, path: prefix + d.name, dir: d.dir, count: null, ignored: true }));
+  return [...entries, ...extra].sort(byName);
+}
+
+/** an address in the repo, not one with a scheme, a host or only a
+ *  fragment; on this page it would point at canopy */
+export const isRelative = (href: string): boolean => !/^([a-z][a-z0-9+.-]*:|\/\/|#)/i.test(href);
+
+/** Where a link or image in a markdown file at `from` points in the repo:
+ *  relative to its folder, or to the root for a leading slash, with `.` and
+ *  `..` worked out and any query or fragment dropped. Null for an address
+ *  off the page (a scheme, `//host`, a bare fragment) or one above the root. */
+export function resolveRel(from: string, href: string): string | null {
+  if (!isRelative(href)) return null;
+  let raw = href.replace(/[?#].*$/, "");
+  try {
+    raw = decodeURIComponent(raw);
+  } catch {
+    // a stray % reads as itself
+  }
+  if (raw === "") return null;
+  const parts = raw.startsWith("/") ? [] : dirOf(from).split("/").filter(Boolean);
+  for (const p of raw.split("/")) {
+    if (p === "" || p === ".") continue;
+    if (p === "..") {
+      if (parts.length === 0) return null;
+      parts.pop();
+    } else parts.push(p);
+  }
+  return parts.length ? parts.join("/") : null;
+}
+
+/** markdown, which the viewer draws as a page with a switch to its source */
+export const isMarkdown = (path: string): boolean => /\.(md|markdown|mdx)$/i.test(path);
 
 /** Whether `dir` still holds anything: a folder can empty out between two
  *  listings, and the section goes back to the root then. */

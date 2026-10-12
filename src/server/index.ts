@@ -87,7 +87,7 @@ import {
 import { clientKey, HELPER_PING, HELPER_TIMEOUT, helperRefusal, isLoopback, isLoopbackHost, parseDefaultGateway, parseHelperQuery, parseHelperReply, reachFrom, staleHelpers, type HelperAsk } from "../core/helper";
 import { devicesOf, parseStream, type Stream } from "../core/presence";
 import { mapPool, searchRepo } from "../core/search";
-import { FinderError, listFiles, readRaw, RAW_MAX, safeRel } from "../core/finder";
+import { FinderError, listDir, listFiles, readRaw, RAW_MAX, safeRel } from "../core/finder";
 import { mimeOf } from "../core/filekind";
 import { readActivity } from "../core/activity";
 import { agentSessions, hasAgentSession, isSessionId, newestTranscript, resumeLine, transcriptFile } from "../core/sessions";
@@ -3064,6 +3064,14 @@ async function handleApi(
     // the files section: the working tree's files, and one file's bytes
     if (method === "GET" && action === "ls") {
       return json(await finding(() => listFiles(repo.path)));
+    }
+    // one folder straight off the disk, ignored entries included
+    if (method === "GET" && action === "dir") {
+      const asked = url.searchParams.get("path") ?? "";
+      const rel = asked === "" ? "" : safeRel(asked);
+      if (rel === null) return json({ error: "path must be a folder's path from the repo's root" }, 400);
+      if (isSeedPath(state.root, repo.path)) return json({ error: "the files view does not read an incubator seed" }, 400);
+      return json(await finding(() => listDir(repo.path, rel)));
     }
     if (method === "GET" && action === "raw") {
       const rel = safeRel(url.searchParams.get("path") ?? "");

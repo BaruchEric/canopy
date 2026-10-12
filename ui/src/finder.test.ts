@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { crumbs, dirExists, dirOf, entriesAt, findFiles, linesOf, looksBinary, placeOf, sizeWord, stepOf } from "./finder";
+import { crumbs, dirExists, dirOf, entriesAt, findFiles, linesOf, looksBinary, placeOf, resolveRel, sizeWord, stepOf, withIgnored } from "./finder";
 
 const FILES = [".github/workflows/ci.yml", ".gitignore", "README.md", "src/a.ts", "src/b.ts", "src/deep/c.ts", "src/file10.ts", "src/file2.ts", "ui/x.tsx"];
 
@@ -80,4 +80,37 @@ test("a saved place takes only what it should", () => {
   expect(placeOf({ dir: "src", file: "src/a.ts" })).toEqual({ dir: "src", file: "src/a.ts" });
   expect(placeOf({ dir: 3 })).toEqual({ dir: "", file: null });
   expect(placeOf(null)).toEqual({ dir: "", file: null });
+});
+
+describe("show ignored", () => {
+  test("adds what only the disk has, marked, in name order", () => {
+    const listed = entriesAt(FILES, "");
+    const disk = [
+      { name: "src", dir: true },
+      { name: "node_modules", dir: true },
+      { name: ".env", dir: false },
+      { name: "dist", dir: true },
+    ];
+    expect(withIgnored(listed, disk, "").map((e) => [e.name, e.ignored ?? false, e.count])).toEqual([
+      ["dist", true, null],
+      ["node_modules", true, null],
+      ["src", false, 5],
+      ["ui", false, 1],
+      ["README.md", false, 0],
+    ]);
+    expect(withIgnored([], disk, "x", true).map((e) => e.path)).toContain("x/.env");
+  });
+});
+
+describe("resolveRel", () => {
+  test("relative to the file's folder, or the root for a slash", () => {
+    expect(resolveRel("docs/a.md", "img/x.png")).toBe("docs/img/x.png");
+    expect(resolveRel("docs/a.md", "./b.md#part")).toBe("docs/b.md");
+    expect(resolveRel("docs/a.md", "../README.md")).toBe("README.md");
+    expect(resolveRel("docs/a.md", "/ui/x.tsx")).toBe("ui/x.tsx");
+    expect(resolveRel("a.md", "my%20file.md")).toBe("my file.md");
+  });
+  test("nothing for an address off the page or above the root", () => {
+    for (const h of ["https://x.y/z", "//cdn/x", "#top", "mailto:a@b", "../../x", ""]) expect(resolveRel("docs/a.md", h)).toBeNull();
+  });
 });

@@ -5901,6 +5901,187 @@ body:has(.focus-grip.se.dragging) {
   border: 0;
   background: var(--bark1);
 }
+.finder-row.ignored {
+  opacity: 0.6;
+}
+.finder-row.ignored .finder-name {
+  font-style: italic;
+}
+.finder-text-wrap {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+.finder-text-bar {
+  display: flex;
+  gap: 4px;
+  justify-content: flex-end;
+  padding: 4px 8px;
+  border-bottom: 1px solid var(--hair);
+}
+
+/* syntax colours, from the theme's own tokens so they follow every palette */
+.hljs-comment,
+.hljs-quote,
+.hljs-doctag {
+  color: var(--ink-faint);
+  font-style: italic;
+}
+.hljs-keyword,
+.hljs-selector-tag,
+.hljs-meta .hljs-keyword {
+  color: var(--term-magenta);
+}
+.hljs-string,
+.hljs-regexp,
+.hljs-addition,
+.hljs-meta .hljs-string {
+  color: var(--moss);
+}
+.hljs-number,
+.hljs-literal,
+.hljs-symbol,
+.hljs-bullet {
+  color: var(--lichen);
+}
+.hljs-title,
+.hljs-section,
+.hljs-name,
+.hljs-selector-id,
+.hljs-selector-class {
+  color: var(--sky);
+}
+.hljs-type,
+.hljs-built_in,
+.hljs-attr,
+.hljs-attribute,
+.hljs-property,
+.hljs-tag {
+  color: var(--term-cyan);
+}
+.hljs-variable,
+.hljs-template-variable,
+.hljs-params,
+.hljs-subst {
+  color: var(--ink);
+}
+.hljs-deletion {
+  color: var(--rust);
+}
+.hljs-meta {
+  color: var(--ink-dim);
+}
+.hljs-emphasis {
+  font-style: italic;
+}
+.hljs-strong {
+  font-weight: 700;
+}
+
+/* markdown drawn as a page */
+.finder-md {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  padding: 14px 20px 24px;
+  font-size: 13.5px;
+  line-height: 1.6;
+  color: var(--ink);
+  overflow-wrap: anywhere;
+}
+.finder-viewer .finder-md {
+  padding: 20px max(24px, calc((100% - 820px) / 2)) 40px;
+  font-size: 14.5px;
+}
+.finder-md > :first-child {
+  margin-top: 0;
+}
+.finder-md h1,
+.finder-md h2,
+.finder-md h3,
+.finder-md h4 {
+  margin: 1.4em 0 0.5em;
+  line-height: 1.25;
+}
+.finder-md h1 {
+  font-size: 1.6em;
+  padding-bottom: 0.25em;
+  border-bottom: 1px solid var(--hair);
+}
+.finder-md h2 {
+  font-size: 1.3em;
+  padding-bottom: 0.2em;
+  border-bottom: 1px solid var(--hair);
+}
+.finder-md h3 {
+  font-size: 1.1em;
+}
+.finder-md p,
+.finder-md ul,
+.finder-md ol,
+.finder-md blockquote,
+.finder-md table,
+.finder-md pre {
+  margin: 0 0 0.9em;
+}
+.finder-md ul,
+.finder-md ol {
+  padding-left: 1.6em;
+}
+.finder-md a {
+  color: var(--sky);
+}
+.finder-md code {
+  font-family: var(--mono);
+  font-size: 0.88em;
+  padding: 0.1em 0.35em;
+  border-radius: 4px;
+  background: var(--wash);
+}
+.finder-md pre {
+  padding: 10px 12px;
+  border-radius: var(--r);
+  background: var(--bark1);
+  border: 1px solid var(--hair);
+  overflow-x: auto;
+}
+.finder-md pre code {
+  padding: 0;
+  background: none;
+  font-size: 0.85em;
+  line-height: 1.5;
+}
+.finder-md blockquote {
+  padding: 0 1em;
+  color: var(--ink-dim);
+  border-left: 3px solid var(--hair2);
+}
+.finder-md table {
+  border-collapse: collapse;
+  display: block;
+  overflow-x: auto;
+}
+.finder-md th,
+.finder-md td {
+  padding: 4px 10px;
+  border: 1px solid var(--hair);
+}
+.finder-md th {
+  background: var(--wash);
+}
+.finder-md img {
+  max-width: 100%;
+}
+.finder-md img[data-missing] {
+  display: none;
+}
+.finder-md hr {
+  border: 0;
+  border-top: 1px solid var(--hair);
+  margin: 1.5em 0;
+}
+
 .sheet.finder-viewer {
   width: min(1280px, 100%);
   height: min(90vh, 1400px);

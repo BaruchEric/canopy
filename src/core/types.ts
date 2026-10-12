@@ -1346,6 +1346,13 @@ export interface RepoFiles {
   truncated: boolean;
 }
 
+/** one entry of a folder straight off the disk, ignored ones included, for
+ *  the files section's "show ignored" view; `.git` stays out */
+export interface DirEntry {
+  name: string;
+  dir: boolean;
+}
+
 /** one repo's row in a search across many */
 export interface GrepRepoResult extends GrepResult {
   /** the repo id */

@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { exec } from "./exec";
 import { fileKind, mimeOf } from "./filekind";
-import { FinderError, listFiles, parseFiles, rawCommand, readRaw, safeRel } from "./finder";
+import { FinderError, listDir, listFiles, parseDir, parseFiles, rawCommand, readRaw, safeRel } from "./finder";
 
 let scratch: string;
 let repo: string;
@@ -99,5 +99,28 @@ describe("file kinds", () => {
     expect(mimeOf("index.html")).toBe("text/plain; charset=utf-8");
     expect(mimeOf("logo.svg")).toBe("image/svg+xml");
     expect(mimeOf("a.zip")).toBe("application/octet-stream");
+  });
+});
+
+describe("one folder off the disk", () => {
+  test("lists ignored entries and dotfiles, never .git, and stays in the repo", async () => {
+    const top = await listDir(repo, "");
+    const names = top.map((e) => `${e.dir ? "d" : "f"}:${e.name}`).sort();
+    expect(names).toContain("d:node_modules");
+    expect(names).toContain("f:.env");
+    expect(names).toContain("d:src");
+    expect(names).not.toContain("d:.git");
+    expect((await listDir(repo, "node_modules/x")).map((e) => e.name)).toEqual(["i.js"]);
+    const status = (p: Promise<unknown>) => p.then(() => 0, (e: unknown) => (e instanceof FinderError ? e.status : -1));
+    expect(await status(listDir(repo, "nope"))).toBe(404);
+    await symlink(scratch, join(repo, "outdir"));
+    expect(await status(listDir(repo, "outdir"))).toBe(403);
+    expect(await status(listDir(join(scratch, "gone"), ""))).toBe(404);
+  });
+  test("parseDir skips anything malformed", () => {
+    expect(parseDir("d/a\0f/b\0x/c\0f/\0")).toEqual([
+      { name: "a", dir: true },
+      { name: "b", dir: false },
+    ]);
   });
 });
