@@ -109,6 +109,15 @@ export function resolveRel(from: string, href: string): string | null {
 
 /** markdown, which the viewer draws as a page with a switch to its source */
 export const isMarkdown = (path: string): boolean => /\.(md|markdown|mdx)$/i.test(path);
+/** HTML, which the viewer can draw in a sandbox with nothing allowed */
+export const isHtml = (path: string): boolean => /\.(html?|xhtml)$/i.test(path);
+
+/** The page a sandboxed frame shows for a repo's HTML: a policy first that
+ *  lets it fetch nothing (the frame's own sandbox already stops scripts,
+ *  forms and popups), so opening it never calls out to anywhere. A meta
+ *  ahead of any content lands in the implied head, where it applies. */
+export const HTML_POLICY = `<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; img-src data:; font-src data:">`;
+export const sandboxedPage = (html: string): string => HTML_POLICY + html;
 
 /** Whether `dir` still holds anything: a folder can empty out between two
  *  listings, and the section goes back to the root then. */
@@ -175,17 +184,22 @@ export function sizeWord(n: number): string {
   return `${v < 10 ? v.toFixed(1) : Math.round(v)} ${units[i]}`;
 }
 
-/** where a repo's section was left: the folder, and the file picked in it */
+/** where a repo's section was left: the folder, the file picked in it, and
+ *  whether dotfiles and what git ignores were showing */
 export interface FinderPlace {
   dir: string;
   file: string | null;
+  hidden: boolean;
+  ignored: boolean;
 }
 
 export function placeOf(v: unknown): FinderPlace {
-  if (!v || typeof v !== "object") return { dir: "", file: null };
+  if (!v || typeof v !== "object") return { dir: "", file: null, hidden: false, ignored: false };
   const dir = "dir" in v && typeof v.dir === "string" ? v.dir : "";
   const file = "file" in v && typeof v.file === "string" ? v.file : null;
-  return { dir, file };
+  const hidden = "hidden" in v && v.hidden === true;
+  const ignored = "ignored" in v && v.ignored === true;
+  return { dir, file, hidden, ignored };
 }
 
 function readAll(): Record<string, unknown> {

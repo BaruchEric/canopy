@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { crumbs, dirExists, dirOf, entriesAt, findFiles, linesOf, looksBinary, placeOf, resolveRel, sizeWord, stepOf, withIgnored } from "./finder";
+import { crumbs, dirExists, dirOf, entriesAt, findFiles, linesOf, looksBinary, isHtml, placeOf, resolveRel, sandboxedPage, sizeWord, stepOf, withIgnored } from "./finder";
 
 const FILES = [".github/workflows/ci.yml", ".gitignore", "README.md", "src/a.ts", "src/b.ts", "src/deep/c.ts", "src/file10.ts", "src/file2.ts", "ui/x.tsx"];
 
@@ -77,9 +77,9 @@ describe("the viewer", () => {
 });
 
 test("a saved place takes only what it should", () => {
-  expect(placeOf({ dir: "src", file: "src/a.ts" })).toEqual({ dir: "src", file: "src/a.ts" });
-  expect(placeOf({ dir: 3 })).toEqual({ dir: "", file: null });
-  expect(placeOf(null)).toEqual({ dir: "", file: null });
+  expect(placeOf({ dir: "src", file: "src/a.ts", ignored: true })).toEqual({ dir: "src", file: "src/a.ts", hidden: false, ignored: true });
+  expect(placeOf({ dir: 3, hidden: "yes" })).toEqual({ dir: "", file: null, hidden: false, ignored: false });
+  expect(placeOf(null)).toEqual({ dir: "", file: null, hidden: false, ignored: false });
 });
 
 describe("show ignored", () => {
@@ -113,4 +113,13 @@ describe("resolveRel", () => {
   test("nothing for an address off the page or above the root", () => {
     for (const h of ["https://x.y/z", "//cdn/x", "#top", "mailto:a@b", "../../x", ""]) expect(resolveRel("docs/a.md", h)).toBeNull();
   });
+});
+
+test("a repo's HTML goes in behind a policy that fetches nothing", () => {
+  const page = sandboxedPage("<h1>hi</h1>");
+  expect(page.startsWith("<meta http-equiv=\"Content-Security-Policy\"")).toBe(true);
+  expect(page).toContain("default-src 'none'");
+  expect(page.endsWith("<h1>hi</h1>")).toBe(true);
+  expect(isHtml("a/index.HTML")).toBe(true);
+  expect(isHtml("a.htmx")).toBe(false);
 });

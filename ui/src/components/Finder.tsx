@@ -8,6 +8,7 @@ import {
   dirOf,
   entriesAt,
   findFiles,
+  isHtml,
   isMarkdown,
   isRelative,
   linesOf,
@@ -15,12 +16,14 @@ import {
   looksBinary,
   MEDIA_MAX,
   resolveRel,
+  sandboxedPage,
   savePlace,
   sizeWord,
   stepOf,
   TEXT_MAX,
   withIgnored,
   type Entry,
+  type FinderPlace,
 } from "../finder";
 import { backendOf } from "../registry";
 import { loadRich, type Rich } from "../rich";
@@ -184,11 +187,20 @@ function MarkdownView({ repoId, text, path, onOpen }: { repoId: string; text: st
   return <div ref={box} className="finder-md" onClick={click} dangerouslySetInnerHTML={{ __html: html }} />;
 }
 
-/** A text file: markdown as a page with a switch to its source, the rest as
- *  source. */
+/** A repo's HTML drawn in a frame with every sandbox flag off, so no script
+ *  runs and the page has no origin of its own, behind a policy that lets it
+ *  fetch nothing. Its own images and styles from other files do not load. */
+function HtmlView({ text, path }: { text: string; path: string }) {
+  const doc = useMemo(() => sandboxedPage(text), [text]);
+  return <iframe className="finder-html" sandbox="" srcDoc={doc} title={baseName(path)} />;
+}
+
+/** A text file: markdown and HTML as a page with a switch to the source,
+ *  the rest as source. */
 function TextView({ repoId, text, path, onOpen }: { repoId: string; text: string; path: string; onOpen: (path: string) => void }) {
   const [source, setSource] = useState(false);
-  if (!isMarkdown(path)) return <CodeView text={text} path={path} />;
+  const md = isMarkdown(path);
+  if (!md && !isHtml(path)) return <CodeView text={text} path={path} />;
   return (
     <div className="finder-text-wrap">
       <div className="finder-text-bar" role="group" aria-label="Show as">
@@ -199,7 +211,13 @@ function TextView({ repoId, text, path, onOpen }: { repoId: string; text: string
           source
         </button>
       </div>
-      {source ? <CodeView text={text} path={path} /> : <MarkdownView repoId={repoId} text={text} path={path} onOpen={onOpen} />}
+      {source ? (
+        <CodeView text={text} path={path} />
+      ) : md ? (
+        <MarkdownView repoId={repoId} text={text} path={path} onOpen={onOpen} />
+      ) : (
+        <HtmlView text={text} path={path} />
+      )}
     </div>
   );
 }
@@ -391,13 +409,11 @@ export function FinderSection({ repo }: { repo: Repo }) {
   const [busy, setBusy] = useState(false);
   const [place, setPlace] = useState(() => loadPlace(repo.id));
   const [query, setQuery] = useState("");
-  const [hidden, setHidden] = useState(false);
-  const [ignored, setIgnored] = useState(false);
   /** the folder as the disk has it, for "show ignored": null until read */
   const [disk, setDisk] = useState<{ dir: string; entries: DirEntry[] } | null>(null);
   const [viewing, setViewing] = useState(false);
   const listRef = useRef<HTMLUListElement>(null);
-  const { dir, file } = place;
+  const { dir, file, hidden, ignored } = place;
 
   // a commit, or a file coming or going, lists the tree again
   const status = repo.status;
@@ -433,10 +449,13 @@ export function FinderSection({ repo }: { repo: Repo }) {
     setDiskTick((t) => t + 1);
   };
 
-  const go = (next: { dir: string; file: string | null }) => {
-    setPlace(next);
-    savePlace(repo.id, next);
-  };
+  /** where the section is, kept per repo in this browser */
+  const go = (patch: Partial<FinderPlace>) =>
+    setPlace((prev) => {
+      const next = { ...prev, ...patch };
+      savePlace(repo.id, next);
+      return next;
+    });
 
   const files = listing?.files ?? [];
   // a folder that emptied out since it was left
@@ -538,13 +557,13 @@ export function FinderSection({ repo }: { repo: Repo }) {
             }
           }}
         />
-        <button type="button" className={`mini${hidden ? " on" : ""}`} onClick={() => setHidden((h) => !h)} title={hidden ? "Hide dotfiles" : "Show dotfiles"} aria-pressed={hidden}>
+        <button type="button" className={`mini${hidden ? " on" : ""}`} onClick={() => go({ hidden: !hidden })} title={hidden ? "Hide dotfiles" : "Show dotfiles"} aria-pressed={hidden}>
           .*
         </button>
         <button
           type="button"
           className={`mini${ignored ? " on" : ""}`}
-          onClick={() => setIgnored((v) => !v)}
+          onClick={() => go({ ignored: !ignored })}
           title={ignored ? "Hide what git ignores" : "Show what git ignores too (node_modules, dist, .env), read off the disk folder by folder"}
           aria-pressed={ignored}
         >

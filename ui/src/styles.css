@@ -5885,6 +5885,15 @@ body:has(.focus-grip.se.dragging) {
   max-width: none;
   cursor: zoom-out;
 }
+.finder-html {
+  flex: 1;
+  min-height: 0;
+  width: 100%;
+  border: 0;
+  /* a page with no background of its own reads as one on white */
+  background: #fff;
+  color-scheme: light;
+}
 .finder-media {
   flex: 1;
   min-height: 0;
