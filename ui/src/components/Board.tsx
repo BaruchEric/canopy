@@ -157,7 +157,7 @@ export function BoardTab({ onGit }: { onGit?: () => void }) {
   const follow = useStore((s) => s.settings.agentsFollow);
   const setSetting = useStore((s) => s.setSetting);
   const scr = screenNow();
-  const layout: BoardLayout = saved ?? (scr ? recommendBoard(scr.w, scr.h) : "rail");
+  const layout: BoardLayout = saved ?? (scr ? recommendBoard(scr.w, scr.h) : "wall");
   const now = useNow(15_000);
   const cards = useMemo(() => boardCards(all, now), [all, now]);
   const groups = useMemo(() => boardGroups(cards, grouping, trail), [cards, grouping, trail]);

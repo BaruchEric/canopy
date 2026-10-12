@@ -4,13 +4,13 @@ import type { ScreenProfile } from "./types";
 
 describe("recommendLayout", () => {
   test("a phone gets tabs and no tree", () => {
-    expect(recommendLayout(393, 852)).toEqual({ arrange: "tabs", carousel: false, sidebarOpen: false, feedOpen: false, agents: "rail" });
+    expect(recommendLayout(393, 852)).toEqual({ arrange: "tabs", carousel: false, sidebarOpen: false, feedOpen: false, agents: "wall" });
   });
   test("a small laptop turns the carousel on, the dock one wide column", () => {
-    expect(recommendLayout(1280, 800)).toEqual({ arrange: "columns", carousel: true, sidebarOpen: true, sidebarWidth: 220, columnWidth: 1048, feedOpen: false, agents: "rail" });
+    expect(recommendLayout(1280, 800)).toEqual({ arrange: "columns", carousel: true, sidebarOpen: true, sidebarWidth: 220, columnWidth: 1048, feedOpen: false, agents: "wall" });
   });
   test("full HD keeps the cards and splits the rest in two", () => {
-    expect(recommendLayout(1920, 1080)).toEqual({ arrange: "columns", carousel: false, sidebarOpen: true, sidebarWidth: 232, columnWidth: 675, feedOpen: false, agents: "rail" });
+    expect(recommendLayout(1920, 1080)).toEqual({ arrange: "columns", carousel: false, sidebarOpen: true, sidebarWidth: 232, columnWidth: 675, feedOpen: false, agents: "wall" });
   });
   test("a 7680 double-wide gets a dozen columns, the widest tree and the feed", () => {
     expect(recommendLayout(7680, 2160)).toEqual({ arrange: "columns", carousel: false, sidebarOpen: true, sidebarWidth: 320, columnWidth: 580, feedOpen: true, agents: "wall" });

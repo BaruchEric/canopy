@@ -331,10 +331,10 @@ describe("laneSegs", () => {
 });
 
 describe("recommendBoard", () => {
-  test("the wall on wide screens, the rail elsewhere", () => {
+  test("the wall on every screen", () => {
     expect(recommendBoard(3840, 1600)).toBe("wall");
-    expect(recommendBoard(1512, 982)).toBe("rail");
-    expect(recommendBoard(390, 844)).toBe("rail");
+    expect(recommendBoard(1512, 982)).toBe("wall");
+    expect(recommendBoard(390, 844)).toBe("wall");
   });
 });
 

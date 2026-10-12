@@ -38,7 +38,7 @@ const clamp = (v: number, min: number, max: number): number => Math.min(max, Mat
  *  dock takes the cards' room and scrolls a column at a time. A screen
  *  1400 px tall or more keeps the event feed up. */
 export function recommendLayout(w: number, h: number): ScreenLayout {
-  if (w < PHONE) return { arrange: "tabs", carousel: false, sidebarOpen: false, feedOpen: false, agents: "rail" };
+  if (w < PHONE) return { arrange: "tabs", carousel: false, sidebarOpen: false, feedOpen: false, agents: "wall" };
   const tree = w >= NARROW;
   const sidebarWidth = clamp(Math.round((w * 0.12) / 8) * 8, 220, 320);
   const side = tree ? sidebarWidth + SEAM : 0;
@@ -55,13 +55,11 @@ export function recommendLayout(w: number, h: number): ScreenLayout {
     ...(tree ? { sidebarWidth } : {}),
     columnWidth,
     feedOpen: h >= 1400,
-    // a wall of shells reads where a wall fits; the rail everywhere else
-    agents: w >= WALL_FROM ? "wall" : "rail",
+    // the agents board opens on its wall of every agent, on any screen
+    agents: "wall",
   };
 }
 
-/** the width, CSS px, from which the agents board starts on its wall */
-const WALL_FROM = 3200;
 
 /** the presets: physical size, pixel ratio, name, and the device it suits */
 const STEPS: readonly (readonly [number, number, number, string, string])[] = [

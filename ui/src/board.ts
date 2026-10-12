@@ -544,10 +544,9 @@ export function laneSegs(c: AgentCard, marks: readonly TrailMark[] | undefined, 
 /* ---------- a layout per screen ---------- */
 
 /** The layout a screen `w` by `h` starts on, the same one its recommended
- *  profile sets (`recommendLayout`): the wall where a wall of shells reads,
- *  the rail everywhere else (a phone's rail is the list). */
+ *  profile sets (`recommendLayout`): the wall, on every screen. */
 export function recommendBoard(w: number, h: number): BoardLayout {
-  return recommendLayout(w, h).agents ?? "rail";
+  return recommendLayout(w, h).agents ?? "wall";
 }
 
 /* ---------- the focus in a window of its own ---------- */
