@@ -5,7 +5,7 @@ import { Library, libraryOriginAllowed, openBind, tailnetHost } from "../core/li
 import { PreviewProxy, parsePortRange, previewHostOk, previewable } from "../core/preview";
 import { parsePreviewHost, parsePreviewPublic } from "../core/previewPublic";
 import { listeningPorts, repoOfCwd } from "../core/ports";
-import { watch, type FSWatcher } from "node:fs";
+import { existsSync, watch, type FSWatcher } from "node:fs";
 import { readFile, realpath, stat } from "node:fs/promises";
 import { arch, homedir, hostname } from "node:os";
 import { CANOPY_DIR, readBuild, readPkg } from "../core/build";
@@ -1506,7 +1506,33 @@ async function refreshHeld(state: ServerState, id: string): Promise<{ repo: Repo
   const idx = state.result.repos.findIndex((r) => r.id === id);
   if (idx !== -1) state.result.repos[idx] = fresh;
   broadcast(state, { type: "repo", repo: fresh });
+  if (goneRepo(fresh)) healGone(state, fresh);
   return { repo: fresh, held: false };
+}
+
+const GONE_CHECK = "canopy:gone";
+
+/** A local repo whose checkout is no longer on disk: its folder moved,
+ *  was renamed or deleted, or lost its .git. Its file events still match
+ *  the old card, so it would read "not a readable repo" until something
+ *  rescanned the source. A corrupt .git or a permission error leaves the
+ *  checkout there, and stays a visible error rather than a heal. */
+const goneRepo = (r: Repo): boolean => r.error !== undefined && !r.host && !r.forge && !existsSync(join(r.path, ".git"));
+
+/** The heal: rescan the repo's source, which drops the card and finds the
+ *  folder wherever it went under a source. It cannot loop, since a scan
+ *  only finds checkouts that are there. */
+function healGone(state: ServerState, repo: Repo): void {
+  const rt = state.sources.find((s) => s.src.id === repo.source);
+  if (!rt) return;
+  state.health.report(GONE_CHECK, { state: "healing", why: `${repo.id} is gone from disk, rescanning ${rt.src.label}` });
+  scheduleRescan(state, rt);
+}
+
+/** after a rescan: ok once no card is left for a checkout that is gone */
+function reportGone(state: ServerState): void {
+  const left = state.result.repos.filter(goneRepo).map((r) => r.id);
+  state.health.report(GONE_CHECK, left.length === 0 ? { state: "ok" } : { state: "down", why: `still on the tree after a rescan: ${left.join(", ")}` });
 }
 
 const WATCH_GIT_HINTS = ["HEAD", "index", "ORIG_HEAD", "refs", "worktrees"];
@@ -1653,6 +1679,7 @@ function scheduleRescan(state: ServerState, rt: SourceRuntime): void {
         } catch {
           // a rescan that fails leaves the previous tree in place
         }
+        reportGone(state);
       })();
     }, 1_000),
   );
@@ -1802,6 +1829,8 @@ function addCanopyChecks(state: ServerState, broker: boolean): void {
     },
   });
   state.health.report("canopy:ranger", rangerResult(state.ranger.info()));
+  state.health.add({ id: GONE_CHECK, label: "cards for checkouts that are gone", scope: canopy, heal: "self" });
+  state.health.report(GONE_CHECK, { state: "ok" });
   const base = state.tmux;
   state.health.add({
     id: "canopy:tmux",

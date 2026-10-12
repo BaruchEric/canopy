@@ -162,6 +162,7 @@ Most checks adapt status canopy already computes. Few new probes.
 | `canopy:activity` activity pass | the pass's outcome | `self` (the next pass) |
 | `canopy:remote` remote refresh | the pass's outcome | `self` |
 | `canopy:keep` keepShells | the pass's outcome | `self` |
+| `canopy:gone` cards for checkouts that are gone | a repo's refresh errors and its `.git` is not on disk (moved, renamed, deleted) | `self`: rescan its source, which drops the card |
 
 Checks for things not set up here (no broker, no stage runner, keepShells off)
 report `off`.

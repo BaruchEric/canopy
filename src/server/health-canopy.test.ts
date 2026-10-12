@@ -4,7 +4,7 @@
  * once the first one is gone.
  */
 import { afterAll, beforeAll, expect, spyOn, test } from "bun:test";
-import { mkdir, mkdtemp, realpath, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, realpath, rename, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { killServer, tmuxBase } from "../core/tmux";
@@ -115,5 +115,33 @@ test("a saved health file reaches the checks without a rescan", async () => {
   await until(async () => (await one(s.port, "repo:app:site")) !== undefined, "the first sync");
   await Bun.write(join(root, "app", ".canopy", "health.json"), JSON.stringify({ checks: [{ name: "late", kind: "port", port: 1 }] }));
   await until(async () => (await one(s.port, "repo:app:late")) !== undefined && (await one(s.port, "repo:app:site")) === undefined, "the saved file's checks");
+  s.stop();
+});
+
+test("a card for a checkout that moved heals by a rescan, and a broken .git stays an error", async () => {
+  const top = join(scratch, "gone");
+  await mkdir(join(top, "mods"), { recursive: true });
+  await mkdir(join(top, "broken"), { recursive: true });
+  await Bun.$`git -C ${join(top, "mods")} init -q && git -C ${join(top, "broken")} init -q`.quiet();
+  const s = await startServer({ root: await realpath(top), port: 0, harnesses: ["claude"], chan: null });
+  servers.push(s);
+  const ids = async () => ((await (await fetch(`http://127.0.0.1:${s.port}/api/tree`)).json()) as { repos: { id: string; error?: string }[] }).repos;
+  const refresh = (id: string) => fetch(`http://127.0.0.1:${s.port}/api/repos/refresh?id=${encodeURIComponent(id)}`, { method: "POST" });
+  expect(await one(s.port, "canopy:gone")).toMatchObject({ state: "ok", heal: "self" });
+
+  await mkdir(join(top, "playground"));
+  await rename(join(top, "mods"), join(top, "playground", "mods"));
+  await refresh("mods");
+  await until(async () => {
+    const list = (await ids()).map((r) => r.id);
+    return !list.includes("mods") && list.includes("playground/mods");
+  }, "the rescan dropping the old card and finding the new one");
+  await until(async () => (await one(s.port, "canopy:gone"))?.state === "ok", "the gone check settling");
+  expect((await one(s.port, "canopy:gone"))?.history.some((h) => h.state === "healing")).toBe(true);
+
+  await rm(join(top, "broken", ".git", "HEAD"));
+  expect(((await (await refresh("broken")).json()) as { error?: string }).error).toBeTruthy();
+  await Bun.sleep(1_500);
+  expect((await ids()).find((r) => r.id === "broken")?.error).toBeTruthy();
   s.stop();
 });
