@@ -67,6 +67,12 @@ export async function kitCommand(argv: string[], { fail }: { fail: (msg: string)
       failed = true;
       continue;
     }
+    if (!info.ok) {
+      // machine lines name themselves; a whole backend's error needs its name
+      console.log(`${t.name}: ${info.error ?? "kit not read"}`);
+      if (sub === "apply") failed = true;
+      continue;
+    }
     if (sub === "status") {
       for (const line of kitStatusLines(info, machine)) console.log(line);
       continue;

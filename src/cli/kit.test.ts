@@ -66,4 +66,29 @@ describe("kit cli over several backends", () => {
     expect(process.exitCode).toBe(1);
     process.exitCode = before;
   });
+  test("a backend whose kit.json cannot be read is named on its error line", async () => {
+    const mini = Bun.serve({ port: 0, fetch: () => Response.json({ ok: false, error: "kit.json: ENOENT", machines: [], cells: [] }) });
+    const home = Bun.serve({
+      port: 0,
+      fetch: (req) => {
+        const p = new URL(req.url).pathname;
+        if (p === "/api/backends") return Response.json({ self: "mac", backends: [{ name: "mini", tailnet: `http://127.0.0.1:${mini.port}` }] });
+        return Response.json(info);
+      },
+    });
+    const lines: string[] = [];
+    const log = console.log;
+    console.log = (s: string) => { lines.push(s); };
+    const api = process.env["CANOPY_API"];
+    process.env["CANOPY_API"] = `http://127.0.0.1:${home.port}`;
+    try {
+      await kitCommand(["status"], { fail: (m) => { throw new Error(m); } });
+    } finally {
+      console.log = log;
+      if (api === undefined) delete process.env["CANOPY_API"]; else process.env["CANOPY_API"] = api;
+      home.stop(true);
+      mini.stop(true);
+    }
+    expect(lines.at(-1)).toBe("mini: kit.json: ENOENT");
+  });
 });
