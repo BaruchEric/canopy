@@ -271,6 +271,11 @@ services:
       # mount of a missing file would make it a directory)
       - ${HOST_HOME:-/home/eric}/.claude.json:/home/bun/.claude.json
       - ${HOST_HOME:-/home/eric}/.codex:/home/bun/.codex
+      # Hermes' skills folder, for the kit's links (docs/superpowers/specs/
+      # 2026-10-14-kit-design.md); under /home/bun like ~/.claude so a
+      # relative link means the same inside and out. The folder must exist
+      # on the host first or docker makes it as root
+      - ${HOST_HOME:-/home/eric}/.hermes:/home/bun/.hermes
       # keys and config for any repos kept on other hosts (ssh sources)
       - ${HOST_HOME:-/home/eric}/.ssh:/home/bun/.ssh:ro
       # the host's global git ignore, so a peer wip snapshot leaves out what

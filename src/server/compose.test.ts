@@ -166,3 +166,12 @@ describe("the Firebase deploy's settings", () => {
     expect(docker).not.toMatch(/bun add -g firebase-tools/);
   });
 });
+
+describe("the kit", () => {
+  test("the canopy service, and only it, mounts the host's ~/.hermes under /home/bun", () => {
+    const want = "${HOST_HOME:-/home/eric}/.hermes:/home/bun/.hermes";
+    expect(compose.services["canopy"]!.volumes).toContain(want);
+    expect(compose.services["shells"]!.volumes ?? []).not.toContain(want);
+    expect(compose.services["stages"]!.volumes ?? []).not.toContain(want);
+  });
+});

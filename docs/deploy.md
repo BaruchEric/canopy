@@ -763,6 +763,62 @@ grep -E '^(HOST_GID|STAGECALLER_GID)=7850 It runs the incubator only with
 `CANOPY_INCUBATOR_UNISOLATED=1`, which gives up all of part 3: stages run as
 canopy, in its pid namespace and network. Parts 1 and 2 still hold.
 
+## The kit
+
+The kit links one set of skills into every agent's folder on every machine
+(`docs/superpowers/specs/2026-10-14-kit-design.md`, "The kit" in
+`docs/architecture.md`). On the mini the `canopy` service reads and writes
+`~/.claude`, `~/.codex` and `~/.hermes` through its `/home/bun` mounts.
+`~/.hermes` must exist on the host before `compose up`, or docker creates it
+as root and Hermes can no longer write there:
+
+```bash
+ssh macmini-ts 'mkdir -p ~/.hermes/skills'
+```
+
+The mini needs a one-time setup before the kit can manage it. As of
+2026-10-14 these steps are written but not yet run. Update this section with
+what actually happened when they are.
+
+1. A read-only deploy key, so the mini can fetch dotclaude (it has no GitHub
+   login):
+
+   ```bash
+   ssh macmini-ts 'ssh-keygen -q -t ed25519 -N "" -C "macmini-2018 dotclaude read" -f ~/.ssh/dotclaude_read && cat ~/.ssh/dotclaude_read.pub' > /tmp/claude-501/dotclaude_read.pub
+   gh repo deploy-key add /tmp/claude-501/dotclaude_read.pub -R eric-M3Max/dotclaude --title "macmini-2018 read"
+   ```
+
+   plus a `Host github-dotclaude` entry in the mini's `~/.ssh/config`
+   (`HostName github.com`, `User git`, `IdentityFile ~/.ssh/dotclaude_read`,
+   `IdentitiesOnly yes`). `git ls-remote git@github-dotclaude:eric-M3Max/dotclaude.git HEAD`
+   prints one hash when it works.
+
+2. The mini's `~/.claude` becomes a sparse dotclaude checkout that leaves out
+   `settings.json`, `settings.local.json` and `skills/omarchy/`, so the mini
+   keeps its own settings and Omarchy's skill link. Rehearse on a copy first,
+   then convert after a backup to `~/.claude.pre-kit-<date>`:
+
+   ```bash
+   cd ~/.claude
+   git init -q -b main
+   git remote add origin git@github-dotclaude:eric-M3Max/dotclaude.git
+   git config core.sparseCheckout true
+   git config sparse.expectFilesOutsideOfPatterns true
+   git sparse-checkout set --no-cone "/*" "!/settings.json" "!/settings.local.json" "!/skills/omarchy/"
+   git fetch -q origin main
+   git reset -q --mixed origin/main
+   git branch -q -u origin/main
+   git ls-files -d -z | xargs -0 -r git checkout --
+   ```
+
+   The rehearsal copy holds `.credentials.json` and `oauth-token.txt`; delete
+   it when done.
+
+3. gpd is already a checkout: `ssh gpd 'git -C ~/.claude pull --ff-only'`.
+
+Then `canopy kit status`, `canopy kit apply --dry-run` and
+`canopy kit apply --machine <name>` per machine.
+
 ## Codex
 
 The Dockerfile installs `codex` via `bun add -g @openai/codex` and `nodejs`
