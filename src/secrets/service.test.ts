@@ -94,8 +94,8 @@ const ok = async (a: SecretAct): Promise<unknown> => {
   if (!r.ok) throw new Error(r.error);
   return r.data;
 };
-const info = async (): Promise<SecretsInfo> => {
-  const r = await svc.handle({ t: "info", token: null });
+const info = async (tok: string | null = null): Promise<SecretsInfo> => {
+  const r = await svc.handle({ t: "info", token: tok });
   if (!r.ok) throw new Error(r.error);
   return r.data as SecretsInfo;
 };
@@ -230,7 +230,7 @@ describe("proposals", () => {
       ],
     });
     expect(r).toEqual({ ok: true, data: { added: 2, dropped: 1 } });
-    const list = (await info()).proposals;
+    const list = (await info(token)).proposals;
     expect(list.find((x) => x.key === "CF_TOKEN")?.same).toBe("cf_token");
     const openai = list.find((x) => x.key === "OPENAI_API_KEY");
     expect(openai?.suggested).toBe("openai_api_key");
@@ -238,6 +238,14 @@ describe("proposals", () => {
     expect(await ok({ a: "reveal", name: "openai_api_key" })).toMatchObject({ value: "sk-other" });
     expect((await info()).proposals.map((x) => x.key)).toEqual(["CF_TOKEN"]);
     expect(JSON.stringify(await info())).not.toContain("sk-other");
+  });
+
+  test("without a session a proposal names no match, so a sealed guess tells the caller nothing", async () => {
+    await add();
+    const p = { from: "mac", source: "/Users/e/dev/.env", key: "GUESS" };
+    await svc.handle({ t: "propose", items: [{ ...p, sealed: await sealProposal(p, V, store.recipient), merges: null }] });
+    expect((await info()).proposals.find((x) => x.key === "GUESS")?.same).toBeNull();
+    expect((await info(token)).proposals.find((x) => x.key === "GUESS")?.same).toBe("cf_token");
   });
 
   test("a names-only proposal needs a value; proposals expire after a day", async () => {

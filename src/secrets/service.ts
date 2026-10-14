@@ -447,6 +447,9 @@ export class SecretsService {
     this.expire();
     const s = this.d.store;
     const f = s.file;
+    // a match only reaches a session: without one, posting a sealed guess
+    // and reading `same` back would test it against every stored value
+    const session = this.d.gate.session(token) !== null;
     return {
       ok: true,
       error: null,
@@ -476,12 +479,12 @@ export class SecretsService {
         key: q.p.key,
         suggested: q.suggested,
         merges: q.p.merges,
-        same: q.same,
+        same: session ? q.same : null,
         namesOnly: q.p.sealed === "",
         expires: q.expires,
       })),
       passkeys: this.d.gate.passkeys(),
-      session: this.d.gate.session(token) !== null,
+      session,
       firstPasskey: this.d.gate.firstPasskey(),
       gate: this.d.gateUrl,
       unpushed: s.unpushed,
