@@ -247,7 +247,8 @@ function spliceJson(text: string, path: string[], v: string): string {
 export function decideKey(applied: string | undefined, rotated: string, file: string | undefined, value: string): "same" | "write" | "drift" {
   if (file !== undefined && sameValue(file, value)) return "same";
   if (file === undefined) return "write";
-  if (applied !== undefined && applied !== rotated) return "write";
+  // only a newer stamp than the one written: an older one is a file put back
+  if (applied !== undefined && applied < rotated) return "write";
   return "drift";
 }
 

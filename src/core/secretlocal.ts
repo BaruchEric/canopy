@@ -147,6 +147,11 @@ export class SecretsReader {
       this.o.log(`secrets: ${this.refused}`);
       return;
     }
+    if (this.file && parsed.file.seq <= this.file.seq) {
+      this.refused = `the newest commit (${tip}) holds an older file (seq ${parsed.file.seq}, not after ${this.file.seq}); ${this.head ?? "nothing"} stays`;
+      this.o.log(`secrets: ${this.refused}`);
+      return;
+    }
     const moved = this.head ? await this.git(["merge", "-q", "--ff-only", "origin/main"]) : await this.git(["checkout", "-q", "-B", "main", "origin/main"]);
     if (moved.code !== 0) {
       this.error = `the checkout did not move: ${firstLine(moved.stderr)}`;

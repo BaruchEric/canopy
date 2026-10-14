@@ -48,6 +48,9 @@ export interface SecretSignature {
 
 export interface SecretFile {
   version: 1;
+  /** raised by one at every signed write, so a reader can refuse an older
+   *  signed file put back on top of a newer one */
+  seq: number;
   /** machine name to age recipient; `mini` and `breakglass` always */
   keys: Record<string, string>;
   secrets: Record<string, SecretEntry>;
@@ -76,13 +79,13 @@ export function canonical(v: unknown): string {
 
 /** what the signature covers: everything but the signature */
 const signedBytes = (f: SecretFile): Uint8Array<ArrayBuffer> =>
-  new TextEncoder().encode(canonical({ version: f.version, keys: f.keys, secrets: f.secrets, sinks: f.sinks }));
+  new TextEncoder().encode(canonical({ version: f.version, seq: f.seq, keys: f.keys, secrets: f.secrets, sinks: f.sinks }));
 
 /** The file as written to disk: canonical order, two-space indent, so a diff
  *  in Forgejo reads line by line. */
 export const serializeFile = (f: SecretFile): string => `${JSON.stringify(JSON.parse(canonical(f)), null, 2)}\n`;
 
-export const emptyFile = (keys: Record<string, string>): SecretFile => ({ version: 1, keys: { ...keys }, secrets: {}, sinks: {}, signature: null });
+export const emptyFile = (keys: Record<string, string>): SecretFile => ({ version: 1, seq: 0, keys: { ...keys }, secrets: {}, sinks: {}, signature: null });
 
 const toB64 = (b: Uint8Array): string => btoa(String.fromCharCode(...b));
 const fromB64 = (s: string): Uint8Array<ArrayBuffer> => Uint8Array.from(atob(s), (c) => c.charCodeAt(0));
@@ -149,7 +152,8 @@ export function parseSecretFile(text: string): { file: SecretFile } | { error: s
   }
   if (!isObj(raw)) return { error: "secrets.json is not an object" };
   if (raw["version"] !== 1) return { error: "secrets.json has a version this canopy does not read" };
-  const { keys, secrets, sinks, signature } = raw;
+  const { seq, keys, secrets, sinks, signature } = raw;
+  if (typeof seq !== "number" || !Number.isSafeInteger(seq) || seq < 0) return { error: "secrets.json needs seq, a whole number from 0" };
   if (!isObj(keys) || !isObj(secrets) || !isObj(sinks)) return { error: "secrets.json needs keys, secrets and sinks objects" };
   const outKeys: Record<string, string> = {};
   for (const [m, r] of Object.entries(keys)) {
@@ -176,7 +180,7 @@ export function parseSecretFile(text: string): { file: SecretFile } | { error: s
     }
     sig = { by: signature["by"], alg: "ed25519", sig: signature["sig"] };
   }
-  return { file: { version: 1, keys: outKeys, secrets: outSecrets, sinks: outSinks, signature: sig } };
+  return { file: { version: 1, seq, keys: outKeys, secrets: outSecrets, sinks: outSinks, signature: sig } };
 }
 
 /** the sinks that map a key to `name`, sorted */

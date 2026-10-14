@@ -20,8 +20,9 @@ const run = (cwd: string, ...args: string[]) => {
   return r.stdout.toString().trim();
 };
 
-async function publish(f: SecretFile, key: CryptoKey, msg = "change", force = false): Promise<void> {
-  await writeFile(join(work, "secrets.json"), serializeFile(await signFile(f, key, "mini")));
+let published = 0;
+async function publish(f: SecretFile, key: CryptoKey, msg = "change", force = false, seq = ++published): Promise<void> {
+  await writeFile(join(work, "secrets.json"), serializeFile(await signFile({ ...f, seq }, key, "mini")));
   run(work, "add", "secrets.json");
   run(work, "commit", "-qm", msg);
   run(work, "push", "-q", ...(force ? ["-f"] : []), "origin", "HEAD:main");
@@ -50,6 +51,7 @@ beforeEach(async () => {
   remote = join(dir, "remote.git");
   work = join(dir, "work");
   waits = [];
+  published = 0;
   Bun.spawnSync(["git", "init", "-q", "--bare", "-b", "main", remote]);
   Bun.spawnSync(["git", "init", "-q", "-b", "main", work]);
   run(work, "remote", "add", "origin", remote);
@@ -105,6 +107,20 @@ describe("pulling", () => {
     await r.pull();
     expect(r.refused).toContain("not signed");
     expect(r.info("mac").secrets[0]?.description).toBe("dns");
+  });
+
+  test("refuses an older signed file committed on top, and keeps the newer one", async () => {
+    const f = await base();
+    await publish(f, signer, "one");
+    await publish({ ...f, secrets: {} }, signer, "two");
+    const r = await reader();
+    const good = r.head;
+    expect(r.info("mac").secrets).toEqual([]);
+    await publish(f, signer, "put back", false, 1);
+    await r.pull();
+    expect(r.head).toBe(good);
+    expect(r.refused).toContain("older");
+    expect(r.info("mac").secrets).toEqual([]);
   });
 
   test("refuses a history that is not a fast-forward", async () => {

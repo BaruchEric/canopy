@@ -56,7 +56,7 @@ describe("the signature", () => {
     const { priv, pub } = await keyPair();
     const signed = await signFile(fixture(), priv, "mini");
     const reordered = JSON.parse(serializeFile(signed)) as Record<string, unknown>;
-    const shuffled = JSON.stringify({ signature: reordered["signature"], sinks: reordered["sinks"], secrets: reordered["secrets"], keys: reordered["keys"], version: 1 }, null, 4);
+    const shuffled = JSON.stringify({ signature: reordered["signature"], sinks: reordered["sinks"], secrets: reordered["secrets"], keys: reordered["keys"], seq: reordered["seq"], version: 1 }, null, 4);
     const back = parseSecretFile(shuffled);
     if ("error" in back) throw new Error(back.error);
     expect(await verifyFile(back.file, pub)).toBe(true);
@@ -69,6 +69,13 @@ describe("the signature", () => {
     const back = parseSecretFile(text);
     if ("error" in back) throw new Error(back.error);
     expect(await verifyFile(back.file, pub)).toBe(false);
+  });
+
+  test("the sequence number is signed: a file with its seq changed fails", async () => {
+    const { priv, pub } = await keyPair();
+    const signed = await signFile({ ...fixture(), seq: 7 }, priv, "mini");
+    expect(await verifyFile(signed, pub)).toBe(true);
+    expect(await verifyFile({ ...signed, seq: 8 }, pub)).toBe(false);
   });
 
   test("another key's signature, a missing one, or a broken public key fails", async () => {
@@ -97,6 +104,8 @@ describe("parseSecretFile", () => {
   test("refuses each broken part by name", () => {
     expect("error" in parseSecretFile("{")).toBe(true);
     refuses((f) => (f["version"] = 2), "version");
+    refuses((f) => delete f["seq"], "seq");
+    refuses((f) => (f["seq"] = -1), "seq");
     refuses((f) => delete (f["keys"] as Record<string, unknown>)["breakglass"], "breakglass");
     refuses((f) => ((f["keys"] as Record<string, unknown>)["mac"] = "age1short"), "key mac");
     refuses((f) => ((f["secrets"] as Record<string, unknown>)["9bad"] = {}), "9bad");

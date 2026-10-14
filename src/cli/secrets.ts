@@ -79,7 +79,7 @@ export async function recoverFile(
   if ("error" in parsed) return parsed;
   const mini = await newIdentity();
   const signing = await newSigningKey();
-  const next: SecretFile = { ...parsed.file, keys: { ...parsed.file.keys, mini: mini.recipient }, secrets: { ...parsed.file.secrets }, signature: null };
+  const next: SecretFile = { ...parsed.file, seq: parsed.file.seq + 1, keys: { ...parsed.file.keys, mini: mini.recipient }, secrets: { ...parsed.file.secrets }, signature: null };
   for (const [name, e] of Object.entries(parsed.file.secrets)) {
     let value: string;
     try {

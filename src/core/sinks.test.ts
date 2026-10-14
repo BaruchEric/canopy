@@ -93,6 +93,7 @@ describe("decideKey", () => {
     ["missing key", T1, T1, undefined, "v", "write"],
     ["rotated since the last write", T1, T2, "old", "v", "write"],
     ["changed by hand after a write", T1, T1, "hand", "v", "drift"],
+    ["an older stamp than the one written (a file put back)", T2, T1, "newer", "old", "drift"],
     ["different before canopy ever wrote it", undefined, T1, "theirs", "v", "drift"],
   ] as const)("%s", (_label, applied, rotated, file, value, want) => {
     expect(decideKey(applied, rotated, file, value)).toBe(want);

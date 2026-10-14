@@ -144,11 +144,27 @@ export class SecretStore {
     }
     const ahead = await this.git(["merge-base", "--is-ancestor", "HEAD", "origin/main"]);
     if (ahead.code === 0) {
-      await this.git(["merge", "-q", "--ff-only", "origin/main"]);
+      const why = await this.refusal("origin/main");
+      if (why) this.opts.log(`secrets: Forgejo's main is not taken: ${why}; pushes will fail until it is reset`);
+      else await this.git(["merge", "-q", "--ff-only", "origin/main"]);
       return;
     }
     const behind = await this.git(["merge-base", "--is-ancestor", "origin/main", "HEAD"]);
     if (behind.code !== 0) this.opts.log("secrets: Forgejo's history and this checkout have split; pushes will fail until one is reset");
+  }
+
+  /** why `rev`'s file may not replace HEAD's: unsigned by this key, or not
+   *  newer. Null when it may. Checked before a merge, never after. */
+  private async refusal(rev: string): Promise<string | null> {
+    const ours = await this.git(["show", "HEAD:secrets.json"]);
+    const theirs = await this.git(["show", `${rev}:secrets.json`]);
+    if (theirs.code !== 0) return ours.code === 0 ? "it has no secrets.json" : null;
+    const parsed = parseSecretFile(theirs.stdout);
+    if ("error" in parsed) return `its secrets.json does not parse (${parsed.error})`;
+    if (!(await verifyFile(parsed.file, this.publicB64))) return "its secrets.json is not signed by this mini's key";
+    const mine = ours.code === 0 ? parseSecretFile(ours.stdout) : null;
+    if (mine && "file" in mine && parsed.file.seq <= mine.file.seq) return `it holds an older file (seq ${parsed.file.seq}, not after ${mine.file.seq})`;
+    return null;
   }
 
   private async refreshHead(): Promise<void> {
@@ -166,7 +182,7 @@ export class SecretStore {
   /** Sign `next`, write it, commit it with `message` (names only, never a
    *  value), and push. */
   async commit(next: SecretFile, message: string): Promise<void> {
-    const signed = await signFile({ ...next, signature: null }, this.signer, "mini");
+    const signed = await signFile({ ...next, seq: next.seq + 1, signature: null }, this.signer, "mini");
     const tmp = `${this.paths.file}.tmp-${process.pid}`;
     await writeFile(tmp, serializeFile(signed), { mode: 0o644 });
     await rename(tmp, this.paths.file);

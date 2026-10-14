@@ -67,6 +67,36 @@ describe("SecretStore", () => {
     await expect(SecretStore.open({ data: join(dir, "data"), remote, breakglass: BREAKGLASS, log: quiet })).rejects.toThrow("not signed by this mini's key");
   });
 
+  test("a start does not merge an older signed file, or an unsigned one, pushed on top", async () => {
+    const logs: string[] = [];
+    const s = await SecretStore.open({ data: join(dir, "data"), remote, breakglass: BREAKGLASS, log: quiet });
+    await s.commit({ ...s.file, keys: { ...s.file.keys, mac: BREAKGLASS } }, "secrets: add the mac key");
+    const seq = s.file.seq;
+    const work = join(dir, "work");
+    Bun.spawnSync(["git", "clone", "-q", remote, work]);
+    const id = ["-c", "user.name=t", "-c", "user.email=t@t"];
+    await writeFile(join(work, "secrets.json"), git(work, "show", "HEAD~1:secrets.json") + "\n");
+    Bun.spawnSync(["git", "-C", work, ...id, "commit", "-qam", "put back"]);
+    Bun.spawnSync(["git", "-C", work, "push", "-q", "origin", "HEAD:main"]);
+    const b = await SecretStore.open({ data: join(dir, "data"), remote, breakglass: BREAKGLASS, log: (l) => logs.push(l) });
+    expect(b.file.seq).toBe(seq);
+    expect(b.file.keys["mac"]).toBe(BREAKGLASS);
+    expect(logs.join("\n")).toContain("older");
+    await writeFile(join(work, "secrets.json"), (await readFile(join(work, "secrets.json"), "utf8")).replace('"seq": 1', '"seq": 99'));
+    Bun.spawnSync(["git", "-C", work, ...id, "commit", "-qam", "unsigned"]);
+    Bun.spawnSync(["git", "-C", work, "push", "-q", "origin", "HEAD:main"]);
+    const c = await SecretStore.open({ data: join(dir, "data"), remote, breakglass: BREAKGLASS, log: (l) => logs.push(l) });
+    expect(c.file.seq).toBe(seq);
+    expect(logs.join("\n")).toContain("not signed");
+  });
+
+  test("each commit raises the signed sequence number", async () => {
+    const s = await SecretStore.open({ data: join(dir, "data"), remote, breakglass: BREAKGLASS, log: quiet });
+    const first = s.file.seq;
+    await s.commit({ ...s.file, keys: { ...s.file.keys, mac: BREAKGLASS } }, "secrets: add the mac key");
+    expect(s.file.seq).toBe(first + 1);
+  });
+
   test("works with no remote at all", async () => {
     const s = await SecretStore.open({ data: join(dir, "data"), remote: null, breakglass: BREAKGLASS, log: quiet });
     expect(s.unpushed).toBe(0);
