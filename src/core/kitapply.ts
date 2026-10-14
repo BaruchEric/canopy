@@ -7,7 +7,9 @@ import type { KitAction, KitApplyResult, KitSeen } from "./types";
 
 /** args: the store dir, then one op per action as 4 words
  *  (`mkdir dir - -`, `link dir name text`, `relink …`, `remove dir name -`,
- *  `pull - - -`). Prints `ok <i>` or `err <i> <why>` per op. */
+ *  `pull - - -`). Prints `ok <i>` or `err <i> <why>` per op. The pull says
+ *  `--no-rebase` because a machine's `pull.rebase=true` (the mini's) makes
+ *  git refuse any pull over a store with local edits. */
 export const APPLY_SCRIPT = String.raw`
 store=$1; shift; i=0
 while [ $# -ge 4 ]; do
@@ -20,7 +22,7 @@ while [ $# -ge 4 ]; do
             elif rm -f "$d/$n" && ln -s "$l" "$d/$n"; then echo "ok $i"; else echo "err $i ln failed"; fi ;;
     remove) if [ ! -L "$d/$n" ]; then echo "err $i not a link"
             elif rm -f "$d/$n"; then echo "ok $i"; else echo "err $i rm failed"; fi ;;
-    pull) out=$(git -C "$store" pull --ff-only -q 2>&1)
+    pull) out=$(git -C "$store" pull --ff-only --no-rebase -q 2>&1)
           if [ $? -eq 0 ]; then echo "ok $i"; else echo "err $i $(printf %s "$out" | tr '\n' ' ')"; fi ;;
   esac
   i=$((i + 1))

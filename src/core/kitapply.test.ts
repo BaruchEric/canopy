@@ -85,6 +85,29 @@ describe("applyKit on a scratch home", () => {
   });
 });
 
+describe("pull under pull.rebase", () => {
+  test("still fast-forwards over a local edit when the machine sets pull.rebase=true (the mini does)", async () => {
+    const { h, seen } = scratch();
+    const origin = join(h, "o.git");
+    const store = join(h, ".claude");
+    const other = join(h, "other");
+    const g = (dir: string, ...a: string[]) => exec(["git", "-C", dir, "-c", "user.name=t", "-c", "user.email=t@t", ...a]);
+    await exec(["git", "init", "-q", "--bare", "-b", "main", origin]);
+    await exec(["git", "clone", "-q", origin, other]);
+    await Bun.write(join(other, "a.md"), "1"); await Bun.write(join(other, "b.md"), "1");
+    await g(other, "add", "."); await g(other, "commit", "-qm", "one"); await g(other, "push", "-q", "origin", "HEAD:main");
+    rmSync(store, { recursive: true, force: true });
+    await exec(["git", "clone", "-q", origin, store]);
+    await g(store, "config", "pull.rebase", "true");
+    await Bun.write(join(other, "a.md"), "2");
+    await g(other, "commit", "-qam", "two"); await g(other, "push", "-q", "origin", "HEAD:main");
+    await Bun.write(join(store, "b.md"), "local");
+    expect((await applyKit(seen, null, [{ kind: "pull" }])).failed).toEqual([]);
+    expect(readFileSync(join(store, "a.md"), "utf8")).toBe("2");
+    expect(readFileSync(join(store, "b.md"), "utf8")).toBe("local");
+  });
+});
+
 describe("nextPlaced", () => {
   test("adds links, drops removes, keeps the rest", () => {
     const { seen } = scratch();
