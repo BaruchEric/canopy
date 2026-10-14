@@ -64,7 +64,7 @@ describe("kit cli over several backends", () => {
     expect(lines[0]).toBe("mac  store main, 2 behind, 3 changed");
     expect(lines.at(-1)).toBe("mini: not found");
     expect(process.exitCode).toBe(1);
-    process.exitCode = before;
+    process.exitCode = before ?? 0;
   });
   test("a backend whose kit.json cannot be read is named on its error line", async () => {
     const mini = Bun.serve({ port: 0, fetch: () => Response.json({ ok: false, error: "kit.json: ENOENT", machines: [], cells: [] }) });
