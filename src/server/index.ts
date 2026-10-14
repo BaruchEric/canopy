@@ -195,6 +195,7 @@ import { RangerHub, realTmux, type RangerTimings, type RangerTmux } from "./rang
 import { HealthHub, rangerResult, streamResult } from "./health";
 import { KitHub, kitPath } from "./kit";
 import { RepoHealth } from "./repohealth";
+import { createSecretsHub, type SecretsHub } from "./secrets";
 import { HEALTH_FILE } from "../core/repohealth";
 import type { ProbeResult } from "../core/health";
 import type { TaskTimings } from "../core/tasks";
@@ -282,6 +283,8 @@ interface ServerState {
   health: HealthHub;
   /** the kit: shared skills for every agent (server/kit) */
   kit: KitHub;
+  /** the Secrets view: the relay to the secrets service on the mini, the verified copy elsewhere */
+  secrets: SecretsHub;
   /** the checks repos declare, kept in the health hub (server/repohealth) */
   repoHealth: RepoHealth;
   /** a sync of the repos' checks waiting on a burst of rescans */
@@ -2389,6 +2392,8 @@ async function handleApi(
   if (kitRes) return kitRes;
   const healthRes = await state.health.handle(req, url);
   if (healthRes) return healthRes;
+  const secretsRes = await state.secrets.handle(req, url);
+  if (secretsRes) return secretsRes;
   const repoHealthRes = await state.repoHealth.handle(req, url, (id) => state.result.repos.find((r) => r.id === id));
   if (repoHealthRes) return repoHealthRes;
   const askRes = await state.asks.handle(req, url);
@@ -4252,6 +4257,13 @@ export async function startServer(opts: {
       kitPath: kitPath(),
       broadcast: (ev) => broadcast(state, ev),
     }),
+    // the same name as backendName below; the reader writes this machine's sinks by it
+    secrets: createSecretsHub({
+      backend: selfName(cfg.self, hostname()),
+      root,
+      repoRoots: () => state.result.repos.filter((r) => !r.host).map((r) => r.path),
+      broadcast: (ev) => broadcast(state, ev),
+    }),
     apiUrl: null,
   };
   /** where stages run now, for the route and the `stages` event */
@@ -4750,6 +4762,8 @@ export async function startServer(opts: {
   state.registry.start();
   if (process.env["NODE_ENV"] !== "test") state.kit.start();
   state.asks.start();
+  // a test server pulls nothing and asks no socket
+  if (process.env["NODE_ENV"] !== "test") state.secrets.start();
   // after the bind, so its session gets this server's CANOPY_API
   void state.ranger.start().catch((err) => console.error("canopy: ranger", err));
   const keepTimer = setInterval(() => void keepPass(state), KEEP_EVERY);
@@ -4777,6 +4791,7 @@ export async function startServer(opts: {
       clearTimeout(state.repoHealthTimer);
       state.health.stop();
       state.kit.stop();
+      state.secrets.stop();
       state.tasks.stop();
       state.ranger.stop();
       clearInterval(heartbeat);
