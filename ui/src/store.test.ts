@@ -769,6 +769,7 @@ describe("several backends", () => {
         "/api/health",
         "/api/tasks",
         "/api/layouts",
+        "/api/kit",
       ].sort(),
     );
     const s = useStore.getState();
