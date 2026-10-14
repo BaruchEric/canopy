@@ -1174,7 +1174,8 @@ export type ServerEvent =
   | { type: "ranger"; ranger: RangerInfo }
   /** every health check, whole, when any of them changed (server/health.ts) */
   | { type: "health"; checks: HealthCheck[] }
-  | { type: "kit"; kit: KitInfo };
+  | { type: "kit"; kit: KitInfo }
+  | { type: "secrets"; info: SecretsInfo };
 
 export type BuildChange = "installed" | "built" | "launched" | "exited" | "removed";
 
@@ -2834,4 +2835,110 @@ export interface KitApplyResult {
   machine: string;
   done: KitAction[];
   failed: { action: KitAction; why: string }[];
+}
+
+/* ---------- the secret store (docs/superpowers/specs/2026-10-14-secrets-design.md) ---------- */
+
+export type SecretSinkFormat = "dotenv" | "json";
+
+/** One secret without its value: what every backend may show. */
+export interface SecretMeta {
+  name: string;
+  description: string;
+  tags: string[];
+  /** ISO stamps, UTC */
+  created: string;
+  rotated: string;
+  /** the machines the value is sealed to */
+  to: string[];
+  /** `sink:<id>` and (phase 2) `mcp:<server>#<sha256>` entries */
+  allow: string[];
+  /** the sinks that map a key to it */
+  usedBy: string[];
+}
+
+/** One sink key as its owner sees it. `waiting`: the owner's key is locked
+ *  or the value changed and is not written yet. `phase 3`: a gpd sink. */
+export type SecretKeyState = "same" | "drift" | "missing" | "waiting" | "unknown" | "phase 3";
+
+export interface SecretSinkInfo {
+  id: string;
+  machine: string;
+  path: string;
+  format: SecretSinkFormat;
+  /** file key (dotenv name or dotted JSON path) to secret name */
+  keys: Record<string, string>;
+  /** per key, filled only by the backend that owns the sink */
+  state: Record<string, SecretKeyState>;
+  error: string | null;
+}
+
+/** A value found in a source file, sealed to the mini alone, on its way to
+ *  an approval on the mini's page. `sealed` is empty for a source canopy
+ *  can only list (a sops file): the approval then carries the value. */
+export interface SecretProposalIn {
+  from: string;
+  source: string;
+  key: string;
+  sealed: string;
+  /** the secret this would update, when it is a "take this value" */
+  merges: string | null;
+}
+
+export interface SecretProposalInfo {
+  id: string;
+  from: string;
+  source: string;
+  key: string;
+  /** the name canopy suggests for it */
+  suggested: string;
+  merges: string | null;
+  /** another pending proposal or a secret that holds the same value */
+  same: string | null;
+  namesOnly: boolean;
+  /** epoch ms */
+  expires: number;
+}
+
+export interface SecretPasskeyInfo {
+  id: string;
+  label: string;
+  created: string;
+  lastUsed: string | null;
+}
+
+export interface SecretAuditEntry {
+  at: string;
+  action: string;
+  name: string | null;
+  ok: boolean;
+  /** the passkey label that held the session */
+  by: string | null;
+  detail: string | null;
+}
+
+export interface SecretsInfo {
+  ok: boolean;
+  error: string | null;
+  backend: string;
+  /** the mini through its service, or a pulled and verified copy */
+  role: "writer" | "reader";
+  /** the commit this backend reads, short */
+  head: string | null;
+  /** why the newest commit was refused, when one was */
+  refused: string | null;
+  /** this machine's age key: open, waiting for its passphrase, or none here */
+  lock: "open" | "locked" | "none";
+  secrets: SecretMeta[];
+  sinks: SecretSinkInfo[];
+  proposals: SecretProposalInfo[];
+  passkeys: SecretPasskeyInfo[];
+  /** the request came with an open passkey session (writer only) */
+  session: boolean;
+  /** no passkey yet: the service printed a first-passkey code to its log */
+  firstPasskey: boolean;
+  /** the page where gated actions live */
+  gate: string;
+  /** commits Forgejo has not taken yet (writer only) */
+  unpushed: number;
 }
