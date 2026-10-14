@@ -152,6 +152,8 @@ export class SecretStore {
       this.opts.log(`secrets: fetch failed, going on with the local checkout: ${f.stderr.trim().split("\n")[0] ?? ""}`);
       return;
     }
+    // an empty Forgejo repo has no main yet: nothing to take, nothing split
+    if ((await this.git(["rev-parse", "-q", "--verify", "refs/remotes/origin/main"])).code !== 0) return;
     const ahead = await this.git(["merge-base", "--is-ancestor", "HEAD", "origin/main"]);
     if (ahead.code === 0) {
       const why = await this.refusal("origin/main");

@@ -100,8 +100,11 @@ describe("SecretStore", () => {
   test("a remote set after a start without one is added, and the waiting commits go up", async () => {
     const a = await SecretStore.open({ data: join(dir, "data"), remote: null, breakglass: BREAKGLASS, log: quiet });
     await a.commit({ ...a.file, keys: { ...a.file.keys, mac: BREAKGLASS } }, "secrets: add the mac key");
-    const b = await SecretStore.open({ data: join(dir, "data"), remote, breakglass: BREAKGLASS, log: quiet });
+    const logs: string[] = [];
+    const b = await SecretStore.open({ data: join(dir, "data"), remote, breakglass: BREAKGLASS, log: (l) => logs.push(l) });
     expect(b.unpushed).toBe(0);
+    // an empty remote has not split from anything
+    expect(logs.join("\n")).not.toContain("split");
     expect(git(remote, "log", "-1", "--format=%s", "main")).toBe("secrets: add the mac key");
     const c = await SecretStore.open({ data: join(dir, "data"), remote: join(dir, "moved.git"), breakglass: BREAKGLASS, log: quiet });
     expect(git(join(dir, "data", "repo"), "remote", "get-url", "origin")).toBe(join(dir, "moved.git"));
