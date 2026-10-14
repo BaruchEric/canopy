@@ -216,8 +216,13 @@ JSON file, or, through the kit, an MCP server's env.
 - A sink path inside a repo canopy scans is refused unless git ignores it
   there, since a peer WIP snapshot takes untracked files
   (`~/dev/dev-tools/canopy/.env` is ignored, so it is allowed).
-- **Drift:** each scan compares a sink's keys with the store by hash, without
-  showing either value, and the view marks a sink edited in place. "Take
+- **Drift:** each scan compares a sink's values with the store's in the
+  memory of the process that decrypted them (the `secrets` service on the
+  mini, the unlocked Mac canopy on the Mac). No hash of a value is stored,
+  logged or sent, since a hash of a short secret can be brute-forced. Only
+  the verdict leaves: in step or drifted, and the view marks a sink edited
+  in place. A value that differs before canopy ever wrote that file reads as
+  drift, never as something to overwrite. "Take
   this value" (gated) imports the file's value as a new rotation.
 - **Restart:** a sink may name a compose stack. After a write the view lists
   the stacks to restart. The restart button (gated, with a confirm) has the
@@ -259,8 +264,12 @@ table above, plus `~/.claude.json` MCP env and headers and
   send the values elsewhere, but they are Mac files it can already read, so
   nothing new leaks. Nothing enters the store until a human approves the
   proposal on the mini's page. A proposal no one approves expires after 24
-  hours.
-- Identical values merge by hash, and the view suggests one name for them.
+  hours. Since a proposal arrives without a passkey session, the service
+  caps it: at most 200 values per proposal, 16 KiB per sealed value and 500
+  values waiting in all. Waiting proposals live in the service's memory, so a
+  restart drops them and the Mac proposes again on its next import.
+- Identical values merge when the service finds them equal in memory, and the
+  view suggests one name for them.
 - Each source file can become a sink in the same step, so it stays generated
   from the store from then on.
 - Values never pass through an agent: no part of import prints a value, and
@@ -296,7 +305,8 @@ no `get`.
 - `src/core/secretcrypt.ts`: age encryption and decryption with the
   name-bound plaintext, identity wrapping with a passphrase.
 - `src/core/sinks.ts`: dotenv and JSON reading and writing that keep
-  unmanaged keys, hashing for drift, the scanned-repo refusal.
+  unmanaged keys, drift by comparing values in memory, the scanned-repo
+  refusal.
 - `src/core/secretwire.ts` (pure): the socket frames and their refusals.
 - `src/secrets/` : the service (store, git writer, WebAuthn, sessions, audit,
   sinks, restart) and `main.ts`.
@@ -360,11 +370,12 @@ no `get`.
 - `secretcrypt.test.ts`: round trip to several recipients, passphrase wrap
   and unwrap, a wrong passphrase.
 - `sinks.test.ts`: dotenv and JSON keep unmanaged keys byte for byte, the
-  scanned-repo refusal, drift by hash.
+  scanned-repo refusal, drift found by comparing values with no hash of one
+  anywhere in the output.
 - `secrets/*.test.ts`: every gated request refused without a session (a test
   that walks the request table, so a new request cannot skip the gate), the
   first-passkey code, the audit log carrying no value, the 24-hour proposal
-  expiry, recovery from a break-glass key.
+  expiry and the proposal caps, recovery from a break-glass key.
 - `server/compose.test.ts`: the `secrets` service shares no pid namespace
   and no volume with `shells`, and only `canopy` has the socket's group.
 - A test that scans every log line and response in the suite for a known
