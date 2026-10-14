@@ -157,6 +157,17 @@ describe("the mini's sinks", () => {
     expect((await info()).sinks[0]?.state).toEqual({ CF_TOKEN: "same" });
   });
 
+  test("a write the sync makes on its own goes in the audit log, with no value", async () => {
+    await add();
+    await ok(dnsSink());
+    await writeFile(sinkFile(), "");
+    await svc.syncSinks();
+    const lines = (await audit.last(50)).filter((e) => e.action === "sink-sync");
+    expect(lines.length).toBe(2);
+    expect(lines[0]).toMatchObject({ name: "cf_token", ok: true, by: null, detail: "sink dns, key CF_TOKEN" });
+    expect(JSON.stringify(lines)).not.toContain(V);
+  });
+
   test("a value that differs before canopy wrote it is drift and stays until sink-write", async () => {
     await writeFile(sinkFile(), "CF_TOKEN=theirs\n");
     await add();

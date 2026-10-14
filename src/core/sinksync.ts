@@ -22,6 +22,8 @@ export const FILE_IO: SinkIO = { read: readSinkFile, write: writeSinkFile };
 export interface SinkState {
   state: Record<string, SecretKeyState>;
   error: string | null;
+  /** the keys this sync tried to write, for the audit log */
+  writes: { key: string; ok: boolean }[];
 }
 
 const errText = (err: unknown): string => (err instanceof Error ? err.message : "failed");
@@ -30,6 +32,7 @@ const errText = (err: unknown): string => (err instanceof Error ? err.message : 
 export const waitingState = (sink: SinkDef): SinkState => ({
   state: Object.fromEntries(Object.keys(sink.keys).map((k) => [k, "waiting" as const])),
   error: null,
+  writes: [],
 });
 
 /** Sync one sink. `applied` is updated in place for this sink's id. */
@@ -42,16 +45,17 @@ export async function syncSink(
   io: SinkIO,
   refusal: string | null,
 ): Promise<SinkState> {
-  if (refusal) return { state: {}, error: refusal };
+  if (refusal) return { state: {}, error: refusal, writes: [] };
   const read = await io.read(sink.path);
-  if ("error" in read) return { state: {}, error: read.error };
+  if ("error" in read) return { state: {}, error: read.error, writes: [] };
   const keys = Object.keys(sink.keys);
   const have = read.text === null ? { values: {} as Record<string, string | undefined> } : readKeys(read.text, sink.format, keys);
-  if ("error" in have) return { state: {}, error: `${sink.path}: ${have.error}; left as it is` };
+  if ("error" in have) return { state: {}, error: `${sink.path}: ${have.error}; left as it is`, writes: [] };
   const stamps = { ...applied[id] };
   const state: Record<string, SecretKeyState> = {};
   const updates: Record<string, string> = {};
   let error: string | null = null;
+  let writes: { key: string; ok: boolean }[] = [];
   for (const [key, name] of Object.entries(sink.keys)) {
     const e = f.secrets[name];
     if (!e) {
@@ -73,7 +77,8 @@ export async function syncSink(
   }
   if (Object.keys(updates).length > 0) {
     const next = applyKeys(read.text, sink.format, updates);
-    if ("error" in next) return { state, error: `${sink.path}: ${next.error}` };
+    if ("error" in next) return { state, error: `${sink.path}: ${next.error}`, writes };
+    writes = Object.keys(updates).map((key) => ({ key, ok: false }));
     try {
       await io.write(sink.path, next.text);
       for (const key of Object.keys(updates)) {
@@ -82,10 +87,11 @@ export async function syncSink(
         if (e) stamps[key] = e.rotated;
         state[key] = "same";
       }
+      writes = writes.map((w) => ({ ...w, ok: true }));
     } catch (err) {
       error = `${sink.path} could not be written: ${errText(err)}`;
     }
   }
   applied[id] = stamps;
-  return { state, error };
+  return { state, error, writes };
 }

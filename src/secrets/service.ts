@@ -436,7 +436,10 @@ export class SecretsService {
     const state: Record<string, SinkState> = {};
     for (const [id, sink] of Object.entries(f.sinks)) {
       if (sink.machine !== this.d.machine) continue;
-      state[id] = await syncSink(f, id, sink, this.d.store.identity(), applied, this.io, this.rootRefusal(sink.path));
+      const r = await syncSink(f, id, sink, this.d.store.identity(), applied, this.io, this.rootRefusal(sink.path));
+      state[id] = r;
+      // every write lands in the audit log, not only the act that caused it
+      for (const w of r.writes) await this.d.audit.add({ action: "sink-sync", name: sink.keys[w.key] ?? null, ok: w.ok, by: null, detail: `sink ${id}, key ${w.key}` });
     }
     for (const id of Object.keys(applied)) if (!state[id]) delete applied[id];
     await this.d.applied.write(applied);
