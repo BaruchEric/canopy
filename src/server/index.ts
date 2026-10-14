@@ -193,6 +193,7 @@ import { SCAN_EVERY, type AgentProc } from "../core/agentscan";
 import { TaskHub } from "./tasks";
 import { RangerHub, realTmux, type RangerTimings, type RangerTmux } from "./ranger";
 import { HealthHub, rangerResult, streamResult } from "./health";
+import { KitHub, kitPath } from "./kit";
 import { RepoHealth } from "./repohealth";
 import { HEALTH_FILE } from "../core/repohealth";
 import type { ProbeResult } from "../core/health";
@@ -279,6 +280,8 @@ interface ServerState {
   ranger: RangerHub;
   /** what is broken here and what canopy is fixing (server/health) */
   health: HealthHub;
+  /** the kit: shared skills for every agent (server/kit) */
+  kit: KitHub;
   /** the checks repos declare, kept in the health hub (server/repohealth) */
   repoHealth: RepoHealth;
   /** a sync of the repos' checks waiting on a burst of rescans */
@@ -2382,6 +2385,8 @@ async function handleApi(
   if (registryRes) return registryRes;
   const rangerRes = await state.ranger.handle(req, url);
   if (rangerRes) return rangerRes;
+  const kitRes = await state.kit.handle(req, url);
+  if (kitRes) return kitRes;
   const healthRes = await state.health.handle(req, url);
   if (healthRes) return healthRes;
   const repoHealthRes = await state.repoHealth.handle(req, url, (id) => state.result.repos.find((r) => r.id === id));
@@ -4241,6 +4246,12 @@ export async function startServer(opts: {
     ),
     layouts: new ScreenLayouts(),
     backendName: selfName(cfg.self, hostname()),
+    kit: new KitHub({
+      self: selfName(cfg.self, hostname()),
+      devRoot: root,
+      kitPath: kitPath(),
+      broadcast: (ev) => broadcast(state, ev),
+    }),
     apiUrl: null,
   };
   /** where stages run now, for the route and the `stages` event */
@@ -4737,6 +4748,7 @@ export async function startServer(opts: {
   addCanopyChecks(state, chanCfg !== null);
   void state.chan.start().catch((err) => console.error("canopy: tailchan", err));
   state.registry.start();
+  if (process.env["NODE_ENV"] !== "test") state.kit.start();
   state.asks.start();
   // after the bind, so its session gets this server's CANOPY_API
   void state.ranger.start().catch((err) => console.error("canopy: ranger", err));
@@ -4764,6 +4776,7 @@ export async function startServer(opts: {
       state.repoHealth.stop();
       clearTimeout(state.repoHealthTimer);
       state.health.stop();
+      state.kit.stop();
       state.tasks.stop();
       state.ranger.stop();
       clearInterval(heartbeat);
