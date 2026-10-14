@@ -10240,3 +10240,30 @@ span.effective-flag:not(:first-child) {
   border-bottom: 1px solid var(--hair);
   font-size: 12px;
 }
+
+/* the kit view: a skill × machine × agent matrix (components/Kit.tsx) */
+.kit-view {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 12px 16px 24px;
+  box-sizing: border-box;
+  width: 100%;
+}
+.kit-bar { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.kit-bar .settings-input { width: auto; max-width: 100%; }
+.kit-bar .kit-search { min-width: 12rem; flex: 1 1 12rem; max-width: 24rem; }
+.kit-said { color: var(--ink-dim); font-size: 12px; }
+.kit-error, .kit-away { color: var(--rust); }
+.kit-machines { display: flex; flex-wrap: wrap; gap: 16px; font-size: 12px; }
+.kit-machine { display: flex; gap: 8px; align-items: center; }
+.kit-scroll { overflow: auto; min-height: 0; flex: 1; }
+.kit-grid { border-collapse: collapse; font-variant-numeric: tabular-nums; font-size: 12px; }
+.kit-grid th, .kit-grid td { padding: 2px 8px; text-align: center; white-space: nowrap; }
+.kit-grid tbody th { text-align: left; font-weight: normal; font-family: var(--mono); position: sticky; left: 0; background: var(--bark0); }
+.kit-grid thead th { position: sticky; top: 0; background: var(--bark0); color: var(--ink-dim); font-weight: normal; }
+.kit-ok { color: var(--moss); }
+.kit-problem { color: var(--rust); }
+.kit-local, .kit-off, .kit-noagent { color: var(--ink-faint); }

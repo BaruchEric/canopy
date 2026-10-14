@@ -1,5 +1,7 @@
 import type {
   HealthCheck,
+  KitApplyResult,
+  KitInfo,
   HealthInfo,
   RepoCheckDef,
   RepoHealthInfo,
@@ -566,6 +568,11 @@ export const api = {
     const r = await req<Partial<HealthInfo> | null>(b, "/api/health");
     return fromAll(b, Array.isArray(r?.checks) ? r.checks : [], qCheck);
   },
+  /** the kit on one backend: the machines it reaches, their cells and plans */
+  kit: (b: string = homeName()) => req<KitInfo>(b, "/api/kit"),
+  kitScan: (b: string) => req<KitInfo>(b, "/api/kit/scan", { method: "POST", body: "{}" }),
+  kitApply: (b: string, machine: string) =>
+    req<KitApplyResult>(b, "/api/kit/apply", { method: "POST", body: JSON.stringify({ machine }) }),
   /** heal one check now, by its plain id on that backend */
   healCheck: async (b: string, id: string) => from(b, await req<HealthCheck>(b, `/api/health/heal?id=${encodeURIComponent(id)}`, { method: "POST", body: "{}" }), qCheck),
   /** the ranger, canopy's always-on agent, one backend's */

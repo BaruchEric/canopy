@@ -166,6 +166,14 @@ describe("cellsOf", () => {
     expect(at("claude", "omarchy")).toBe("local");
     expect(at("claude", "craft")).toBe("no-source");
   });
+  test("an entry that is no kit skill reads local, never foreign (Omarchy's own links, Codex's own skills)", () => {
+    const s = seen();
+    s.targets[1]!.entries = [{ name: "diagnose-crash", kind: "link", link: "/usr/share/omarchy/x" }, { name: "qnap-nas-control", kind: "dir", link: null }];
+    const cells = cellsOf(kit(), [{ seen: s, dev: "/d" }]);
+    const at = (skill: string) => cells.find((c) => c.agent === "codex" && c.skill === skill);
+    expect(at("diagnose-crash")).toMatchObject({ state: "local", why: "not in the store; canopy leaves it alone" });
+    expect(at("qnap-nas-control")?.state).toBe("local");
+  });
   test("an away machine is one away cell per agent", () => {
     const cells = cellsOf(kit(), [{ seen: seen({ machine: "gpd", away: "ssh exited 255", targets: [], store: null }), dev: "/d" }]);
     expect(cells.every((c) => c.state === "away" && c.skill === "*")).toBe(true);

@@ -147,7 +147,7 @@ export type Command =
   | { kind: "help"; verb: string | null }
   | { kind: "clear" }
   /** `sprout` is `new`'s words, for the new project form to start from */
-  | { kind: "view"; view: "library" | "incubator" | "health"; sprout: SproutDraft | null }
+  | { kind: "view"; view: "library" | "incubator" | "health" | "kit"; sprout: SproutDraft | null }
   /** a command that belongs in a terminal on the machine, not in a page */
   | { kind: "terminal"; why: string };
 
@@ -337,6 +337,8 @@ export function parseCommand(input: string[]): Parsed {
       return { kind: "view", view: "incubator", sprout: null };
     case "health":
       return { kind: "view", view: "health", sprout: null };
+    case "kit":
+      return { kind: "view", view: "kit", sprout: null };
     case "new": {
       const words: string[] = [];
       const urls: string[] = [];

@@ -159,8 +159,11 @@ export function planKit(kit: KitManifest, seen: KitSeen, dev: string): KitAction
   return out;
 }
 
-function cell(kit: KitManifest, seen: KitSeen, t: KitSeenTarget, isStore: boolean, skill: string, dev: string): { state: KitCellState; why: string } {
+function cell(kit: KitManifest, seen: KitSeen, t: KitSeenTarget, isStore: boolean, skill: string, dev: string, names: string[]): { state: KitCellState; why: string } {
   const e = t.entries.find((x) => x.name === skill);
+  // a name the store does not hold is someone else's (Omarchy's links, an
+  // agent's own skills): shown, never managed, and no problem
+  if (!isStore && !names.includes(skill)) return { state: "local", why: "not in the store; canopy leaves it alone" };
   const managed = !isStore || isSource(kit, skill);
   const isWanted = wanted(kit, skill, t.agent, seen.machine);
   if (isStore && !managed) {
@@ -188,7 +191,7 @@ export function cellsOf(kit: KitManifest, views: { seen: KitSeen; dev: string }[
     seen.targets.forEach((t, i) => {
       const local = t.entries.map((e) => e.name).filter((n) => !names.includes(n) && !excluded(kit, n));
       for (const skill of [...names, ...local]) {
-        out.push({ machine: seen.machine, agent: t.agent, skill, ...cell(kit, seen, t, i === 0, skill, dev) });
+        out.push({ machine: seen.machine, agent: t.agent, skill, ...cell(kit, seen, t, i === 0, skill, dev, names) });
       }
     });
   }

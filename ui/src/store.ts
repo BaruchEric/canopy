@@ -46,7 +46,7 @@ import { boardOrder, invertPick, pickWhere, rangeIds, setPick, togglePick } from
 import { appendFeed, describeEvent, type FeedEntry, type FeedSnapshot } from "./feed";
 import { mergeAction } from "./peers";
 import { convOf, isUnread, mergeMessages } from "./chan";
-import type { AdviceAccepted, AdviceOffer, AgentCard, AgentKind, Ask, ChanMessage, HealthCheck, IncubatorStages, Presence, RangerInfo, Sprout, TailchanInfo } from "../../src/core/types";
+import type { AdviceAccepted, AdviceOffer, AgentCard, AgentKind, Ask, ChanMessage, HealthCheck, IncubatorStages, KitInfo, Presence, RangerInfo, Sprout, TailchanInfo } from "../../src/core/types";
 import { mergeAsks, mergeInbox, replaceAsks, toAskAnswer, toRunAnswer, type InboxAnswer, type InboxItem } from "./inbox";
 import { replaceSprouts, staleSprout } from "./sprouts";
 import { cardsByRepoCard, markTrail, mergeCards, replaceCards, type TrailMark } from "./agentcards";
@@ -727,6 +727,8 @@ interface CanopyState {
   /** each backend's health checks, by backend name; an older backend that
    *  has none is missing (server/health) */
   health: Record<string, HealthCheck[]>;
+  /** each backend's kit: the machines it reaches and their skills (server/kit) */
+  kit: Record<string, KitInfo>;
   /** the retro lessons home has on offer, which the inbox shows as one item */
   advice: AdviceOffer[];
   /** an accepted lesson's text by chat run id, which that chat's message box
@@ -1054,6 +1056,8 @@ interface CanopyState {
   loadRanger: (backend?: string) => Promise<void>;
   /** reads one backend's health checks, home by default */
   loadHealth: (backend?: string) => Promise<void>;
+  /** reads one backend's kit, home by default */
+  loadKit: (backend?: string) => Promise<void>;
   /** heals one check now; the error is the backend's words */
   healCheck: (backend: string, id: string) => Promise<void>;
   /** a change to a backend's ranger: on, profile, handle, telegram, fresh */
@@ -1483,6 +1487,8 @@ const stagesEvents = new Map<string, number>();
 const rangerEvents = new Map<string, number>();
 /* and each backend's health events, the same way */
 const healthEvents = new Map<string, number>();
+/* and each backend's kit events, the same way */
+const kitEvents = new Map<string, number>();
 /** the same for the advice on offer */
 let adviceEvents = 0;
 
@@ -1578,6 +1584,7 @@ function resync(get: () => CanopyState, set: (fn: (s: CanopyState) => Partial<Ca
   void get().loadSprouts(b);
   void get().loadRanger(b);
   void get().loadHealth(b);
+  void get().loadKit(b);
   // the tasks a panel loaded may have moved while the stream was down
   for (const id of Object.keys(get().tasks)) if (backendOf(id) === b) void get().loadTasks(id).catch(() => {});
   void Promise.all([api.terms(b), api.kept(b), api.helpers(b)])
@@ -1747,6 +1754,7 @@ export const useStore = create<CanopyState>((set, get) => ({
   stages: {},
   rangers: {},
   health: {},
+  kit: {},
   advice: [],
   chatDrafts: {},
   adviceFile: null,
@@ -1952,6 +1960,7 @@ export const useStore = create<CanopyState>((set, get) => ({
     void get().loadSprouts();
     void get().loadRanger();
     void get().loadHealth();
+    void get().loadKit();
     // the screen layouts, which a backend from before them does not have
     void get().loadScreenProfiles();
     // what home runs: it names the machines, and it is the build a later
@@ -2108,6 +2117,7 @@ export const useStore = create<CanopyState>((set, get) => ({
     void get().loadSprouts(name);
     void get().loadRanger(name);
     void get().loadHealth(name);
+    void get().loadKit(name);
     void api
       .about(name)
       .then((about) => set((s) => ({ conns: connsIf(s, name, { about }) })))
@@ -2158,6 +2168,7 @@ export const useStore = create<CanopyState>((set, get) => ({
     const { [name]: _stages, ...stages } = s.stages;
     const { [name]: _ranger, ...rangers } = s.rangers;
     const { [name]: _health, ...health } = s.health;
+    const { [name]: _kit, ...kit } = s.kit;
     const backendOrder = applyRegistry(s.home, registryEntries, hiddenBackends);
     set({
       settings,
@@ -2180,6 +2191,7 @@ export const useStore = create<CanopyState>((set, get) => ({
       stages,
       rangers,
       health,
+      kit,
       agents,
       launchers,
       remembered,
@@ -2632,6 +2644,11 @@ export const useStore = create<CanopyState>((set, get) => ({
       set((st) => ({ rangers: { ...st.rangers, [b]: ev.ranger } }));
       return;
     }
+    if (ev.type === "kit") {
+      kitEvents.set(b, (kitEvents.get(b) ?? 0) + 1);
+      set((st) => ({ kit: { ...st.kit, [b]: ev.kit } }));
+      return;
+    }
     if (ev.type === "health") {
       healthEvents.set(b, (healthEvents.get(b) ?? 0) + 1);
       set((st) => ({ health: { ...st.health, [b]: ev.checks } }));
@@ -2935,6 +2952,16 @@ export const useStore = create<CanopyState>((set, get) => ({
       if ((healthEvents.get(b) ?? 0) === mark && isShown(get(), b)) set((s) => ({ health: { ...s.health, [b]: checks } }));
     } catch {
       // an older backend has no health; nothing shows for it
+    }
+  },
+  loadKit: async (backend) => {
+    const b = backend ?? get().home;
+    const mark = kitEvents.get(b) ?? 0;
+    try {
+      const kit = await api.kit(b);
+      if ((kitEvents.get(b) ?? 0) === mark && isShown(get(), b)) set((s) => ({ kit: { ...s.kit, [b]: kit } }));
+    } catch {
+      // an older backend has no kit; nothing shows for it
     }
   },
   healCheck: async (b, id) => {
