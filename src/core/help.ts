@@ -72,6 +72,12 @@ usage:
   canopy health rm <repo> <name>     take one of canopy's checks away
   canopy kit [status|apply]          the skills every agent has on every machine, and linking them
     --machine M | --dry-run          one machine only; apply says what it would do and changes nothing
+  canopy secrets [list] [--json]     the secret store's names, tags, rotation dates and sinks; never a value
+  canopy secrets status [--json]     this backend's copy: commit, refusals, the key's lock, sink drift; exit 1 on drift
+  canopy secrets unlock              unlock this machine's key (asks for its passphrase); its sinks are written then
+  canopy secrets pin <key> [--remote URL]   trust the mini's signing key, and where to pull eric/secrets from
+  canopy secrets recover <checkout> --breakglass FILE --out DIR
+                                     rebuild the mini's keys from the break-glass identity; commits nothing
   canopy health lint [dir]           read a repo's .canopy/health.json, exit 1 on a bad entry
   canopy health init [dir]           write a starter .canopy/health.json
   canopy spec status [dir]           every repo against the shared repo spec

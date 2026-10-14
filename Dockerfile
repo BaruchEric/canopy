@@ -30,6 +30,8 @@ RUN CANOPY_COMMIT="$CANOPY_COMMIT" CANOPY_COMMITTED="$CANOPY_COMMITTED" bun run 
 RUN bun build src/stage/main.ts --target=bun --outfile /app/dist/stage-runner.js
 # the fence check (docs/deploy.md, "Stages"), run inside the stages container
 RUN bun build src/stage/fencecheck.ts --target=bun --outfile /app/dist/fence-check.js
+# the secret store's service as one file, the only canopy code its image carries
+RUN bun build src/secrets/main.ts --target=bun --outfile /app/dist/secrets-service.js
 
 FROM oven/bun:1 AS shells
 # git for the scan and every mutation; tmux so a shell outlives a canopy
@@ -220,6 +222,21 @@ ENV BUN_RUNTIME_TRANSPILER_CACHE_PATH=0
 # CMD, not ENTRYPOINT: the shells stage's tmux CMD would otherwise be appended
 # to the runner's argv
 CMD ["bun", "/app/stage-runner.js"]
+
+# The secret store's service (src/secrets/, docs/deploy.md "Secrets"): the one
+# process on the mini that holds the store's age identity and signing key.
+# Plain bun, not the shells image: no tmux, no claude, no shell anyone types
+# in. git and ssh (with ssh-keygen) for the eric/secrets checkout, its deploy
+# key and its push. Root, since it writes sinks under /opt/stacks that other
+# users own and chowns each back (src/core/sinks.ts).
+FROM oven/bun:1 AS secrets
+RUN apt-get update && apt-get install -y --no-install-recommends \
+      git openssh-client ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+COPY --from=build /app/dist/secrets-service.js /app/secrets-service.js
+# read-only root filesystem (docker-compose.yml): no transpiler cache
+ENV BUN_RUNTIME_TRANSPILER_CACHE_PATH=0
+CMD ["bun", "/app/secrets-service.js"]
 
 FROM shells
 # The firebase CLI, for the incubator's vercel+firebase deploy, in the canopy

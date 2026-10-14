@@ -137,7 +137,7 @@ describe("the stages container is read-only", () => {
 describe("the stage runner's socket", () => {
   const services = compose.services as Record<string, { group_add?: string[]; build?: { args?: Record<string, string> } }>;
   test("canopy holds the stagecaller group, and the stages image is built with the same gid", () => {
-    expect(services["canopy"]?.group_add).toEqual(["${STAGECALLER_GID:-7850}"]);
+    expect(services["canopy"]?.group_add).toContain("${STAGECALLER_GID:-7850}");
     expect(services["stages"]?.build?.args?.["STAGECALLER_GID"]).toBe("${STAGECALLER_GID:-7850}");
   });
   test("neither the shells nor the stages hold it", () => {
@@ -173,5 +173,83 @@ describe("the kit", () => {
     expect(compose.services["canopy"]!.volumes).toContain(want);
     expect(compose.services["shells"]!.volumes ?? []).not.toContain(want);
     expect(compose.services["stages"]!.volumes ?? []).not.toContain(want);
+  });
+});
+
+describe("the secrets service", () => {
+  const secrets = compose.services["secrets"];
+  const canopy = compose.services["canopy"];
+  const named = (v: string): string => v.split(":")[0] ?? v;
+
+  test("exists in a network and process namespace of its own", () => {
+    expect(secrets).toBeDefined();
+    expect(secrets?.network_mode).toBeUndefined();
+    expect(secrets?.pid).toBeUndefined();
+  });
+  test("inherits nothing: no env_file, no merge key, no extends", async () => {
+    const raw = await Bun.file(new URL("../../docker-compose.yml", import.meta.url)).text();
+    const start = raw.indexOf("\n  secrets:\n");
+    expect(start).toBeGreaterThan(-1);
+    const rest = raw.slice(start + 1);
+    const next = rest.slice(1).search(/\n  [a-z][\w-]*:\n/);
+    const block = next === -1 ? rest : rest.slice(0, next + 1);
+    expect(block).not.toMatch(/<<:|env_file|extends:/);
+    expect(secrets).not.toHaveProperty("env_file");
+  });
+  test("its env is its own settings and no token, key or password", () => {
+    for (const e of envOf(secrets ?? {})) {
+      const name = e.split("=")[0] ?? "";
+      expect(name === "LANG" || name.startsWith("CANOPY_SECRETS_")).toBe(true);
+      expect(name).not.toMatch(/TOKEN|KEY|PASSWORD|PASSPHRASE/);
+    }
+    expect(envOf(secrets ?? {})).toContain("CANOPY_SECRETS_CALLER_GID=${SECRETSCALLER_GID:-7851}");
+  });
+  test("mounts its data, the stacks, canopy's .env read-only and the socket, and nothing the shells mount", () => {
+    const vols = secrets?.volumes ?? [];
+    expect(vols).toContain("secrets-data:/data");
+    expect(vols).toContain("/opt/stacks:/opt/stacks");
+    expect(vols).toContain("./.env:/import/canopy.env:ro");
+    expect(vols).toContain("secrets-sock:/run/canopy-secrets");
+    const shells = (compose.services["shells"]?.volumes ?? []).map(named);
+    for (const v of vols) expect(shells).not.toContain(named(v));
+  });
+  test("shares only the socket with canopy, and only canopy holds it", () => {
+    const mine = (secrets?.volumes ?? []).map(named);
+    expect((canopy?.volumes ?? []).filter((v) => mine.includes(named(v)))).toEqual(["secrets-sock:/run/canopy-secrets"]);
+    for (const [name, s] of Object.entries(compose.services)) {
+      if (name === "canopy" || name === "secrets") continue;
+      expect((s.volumes ?? []).map(named)).not.toContain("secrets-sock");
+      expect((s.volumes ?? []).map(named)).not.toContain("secrets-data");
+    }
+  });
+  test("canopy holds the caller group and the socket path, and does not wait on the service's health", () => {
+    expect((canopy as { group_add?: string[] }).group_add).toContain("${SECRETSCALLER_GID:-7851}");
+    expect(envOf(canopy ?? {})).toContain("CANOPY_SECRETS_SOCKET=/run/canopy-secrets/secrets.sock");
+    expect((canopy?.depends_on as Record<string, { condition?: string }>)?.["secrets"]?.condition).toBe("service_started");
+    for (const [name, s] of Object.entries(compose.services)) {
+      if (name === "canopy") continue;
+      expect(envOf(s).some((e) => e.startsWith("CANOPY_SECRETS_SOCKET="))).toBe(false);
+    }
+  });
+  test("is read-only with a small tmpfs /tmp, and answers a healthcheck", () => {
+    const s = secrets as { read_only?: boolean; tmpfs?: string[]; healthcheck?: { test?: string[] } };
+    expect(s.read_only).toBe(true);
+    expect(s.tmpfs).toEqual(["/tmp:mode=1777,size=64m"]);
+    expect(s.healthcheck?.test).toEqual(["CMD", "bun", "/app/secrets-service.js", "--health"]);
+  });
+});
+
+describe("the secrets image", () => {
+  test("is plain bun with git and ssh, and carries only the service's bundle", async () => {
+    const text = await Bun.file(new URL("../../Dockerfile", import.meta.url)).text();
+    expect(text).toContain("RUN bun build src/secrets/main.ts --target=bun --outfile /app/dist/secrets-service.js");
+    const start = text.indexOf("FROM oven/bun:1 AS secrets");
+    expect(start).toBeGreaterThan(-1);
+    const end = text.indexOf("\nFROM ", start + 1);
+    const stage = end === -1 ? text.slice(start) : text.slice(start, end);
+    expect(stage).toContain("git openssh-client ca-certificates");
+    expect(stage.match(/^COPY .*$/gm)).toEqual(["COPY --from=build /app/dist/secrets-service.js /app/secrets-service.js"]);
+    expect(stage).toContain('CMD ["bun", "/app/secrets-service.js"]');
+    expect(stage).not.toMatch(/^USER /m);
   });
 });

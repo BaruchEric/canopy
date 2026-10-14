@@ -526,6 +526,7 @@ export function describeEvent(
     case "remembered":
     // the kit has its own page
     case "kit":
+    case "secrets":
       return [];
   }
 }

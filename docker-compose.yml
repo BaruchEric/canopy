@@ -138,6 +138,46 @@ services:
       retries: 3
       start_period: 5s
 
+  # The secret store's service (src/secrets/, docs/deploy.md "Secrets"): the
+  # store's keys, its checkout of eric/secrets, the passkeys, the audit log
+  # and the mini's sinks. A network and process namespace of its own, since
+  # canopy shares the shells'; canopy reaches it only through the socket.
+  secrets:
+    build:
+      context: .
+      target: secrets
+    image: canopy-secrets:latest
+    environment:
+      # the group the socket's folder lets in (root:gid 0750, set at every
+      # start); canopy holds it through group_add. Set it in .env only when
+      # 7851 is taken.
+      - CANOPY_SECRETS_CALLER_GID=${SECRETSCALLER_GID:-7851}
+      # ssh://git@<host>:<port>/eric/secrets.git, set in .env. Unset, the
+      # store stays in its volume and every change counts as unpushed.
+      - CANOPY_SECRETS_REMOTE=${CANOPY_SECRETS_REMOTE:-}
+      # the page passkeys are bound to; changing it orphans every passkey
+      - CANOPY_SECRETS_ORIGIN=${CANOPY_SECRETS_ORIGIN:-https://canopy.beric.ca}
+      - LANG=C.UTF-8
+    volumes:
+      - secrets-data:/data
+      # the stacks: the mini's sinks, and the import scan's sources
+      - /opt/stacks:/opt/stacks
+      # canopy's own .env, an import source only; read-only, so never a sink.
+      # It must exist before `up`, or docker makes a folder in its place.
+      - ./.env:/import/canopy.env:ro
+      - secrets-sock:/run/canopy-secrets
+    read_only: true
+    tmpfs:
+      - /tmp:mode=1777,size=64m
+    init: true
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "bun", "/app/secrets-service.js", "--health"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
   canopy:
     build:
       context: .
@@ -160,6 +200,11 @@ services:
       # the incubator's stages run there, through the runner's socket
       stages:
         condition: service_healthy
+      # the secret store's service, through its socket. Started, not healthy:
+      # a service that cannot reach Forgejo must not keep canopy down, and
+      # the hub answers "away" until the socket does
+      secrets:
+        condition: service_started
     # In the shells container's network and process namespaces: the in-app
     # browser dials a dev server on the loopback the shells listen on, and
     # reads /proc to tell which repo each listening process runs in. The
@@ -168,7 +213,9 @@ services:
     pid: "service:shells"
     # the stagecaller group, the only one the stage runner's socket folder
     # lets in (root:stagecaller 0750); a stage holds no group at all
-    group_add: ["${STAGECALLER_GID:-7850}"]
+    # and the secretscaller group, the only one the secrets service's socket
+    # folder lets in
+    group_add: ["${STAGECALLER_GID:-7850}", "${SECRETSCALLER_GID:-7851}"]
     environment:
       - CANOPY_CONFIG_DIR=/config
       # how a client reaches THIS host over ssh for VS Code Remote-SSH; the
@@ -254,6 +301,10 @@ services:
       # the stage runner's socket in the stages container (stage-sock below),
       # the one way canopy starts an agent, check or build in a seed
       - CANOPY_STAGE_SOCKET=/run/canopy-stage/runner.sock
+      # the secrets service's socket (secrets-sock below); set on this
+      # backend alone, so its hub relays to the service instead of reading a
+      # pulled copy
+      - CANOPY_SECRETS_SOCKET=/run/canopy-secrets/secrets.sock
       # the host's time zone by name (America/Los_Angeles), which Bun needs:
       # it reads the name, and the image's /etc/localtime names Etc/UTC
       # whatever the mount below puts in the file; empty is UTC, as before
@@ -287,6 +338,8 @@ services:
       - /etc/localtime:/etc/localtime:ro
       # the stage runner's socket, shared with the stages service alone
       - stage-sock:/run/canopy-stage
+      # the secrets service's socket, shared with that service alone
+      - secrets-sock:/run/canopy-secrets
     command:
       - bun
       - bin/canopy.ts
@@ -322,6 +375,11 @@ volumes:
   canopy-config:
   # the stage runner's socket folder, owned by the stages' user (Dockerfile)
   stage-sock:
+  # the secret store's checkout, keys, passkeys, audit log and applied
+  # stamps; only the secrets service mounts it
+  secrets-data:
+  # the secrets service's socket folder (root:secretscaller 0750)
+  secrets-sock:
 
 networks:
   # the stages' own bridge, off docker's default pools (ufw's docker range and
