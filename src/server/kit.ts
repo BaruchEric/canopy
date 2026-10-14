@@ -103,7 +103,11 @@ export class KitHub {
   }
 
   private async scanOne(kit: KitManifest, m: Mine): Promise<void> {
-    const seen = await seeKit(kit, m, { run: this.deps.run, env: this.deps.env, now: this.deps.now });
+    // a throw here would reject the scan, and nothing awaits the timer's
+    // scans: an unhandled rejection ends the server
+    const seen = await seeKit(kit, m, { run: this.deps.run, env: this.deps.env, now: this.deps.now }).catch(
+      (err: unknown): KitSeen => ({ machine: m.name, at: (this.deps.now ?? Date.now)(), away: err instanceof Error ? err.message : String(err), home: "", store: null, targets: [], sources: {} }),
+    );
     this.views.set(m.name, { seen, dev: m.dev });
     this.publish(kit);
   }

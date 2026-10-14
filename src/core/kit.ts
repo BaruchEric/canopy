@@ -39,6 +39,7 @@ export function parseKit(raw: unknown): { kit: KitManifest } | { errors: string[
     const mode = t["mode"] as KitMode;
     if (!agent || !skills || !MODES.includes(mode)) { errors.push(`targets[${i}]: needs agent, skills and mode`); return; }
     if (targets.some((x) => x.agent === agent)) { errors.push(`targets[${i}]: agent ${agent} appears twice`); return; }
+    if (mode === "store" && t["machines"] !== undefined) { errors.push(`targets[${i}]: the store target is on every machine, so it takes no machines`); }
     targets.push({ agent, skills, mode, machines: t["machines"] === undefined ? null : strs(t["machines"]) });
   });
   if (targets.filter((t) => t.mode === "store").length !== 1) errors.push("targets: exactly one target has mode store");

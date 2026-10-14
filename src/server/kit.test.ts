@@ -55,6 +55,17 @@ describe("KitHub", () => {
     expect(info.machines[0]!.plan).toEqual([{ kind: "link", agent: "codex", name: "ship", link: "../../.claude/skills/ship" }]);
     expect(events.at(-1)).toEqual({ type: "kit", kit: info });
   });
+  test("a machine whose scan throws reads away, and the scan still resolves (an unhandled rejection would end the server)", async () => {
+    const { h } = await setup();
+    const run = async (host: string | null, cmd: string[], opts?: { env?: Record<string, string>; timeoutMs?: number }) => {
+      if (host === "gpd") throw new Error("spawn failed");
+      return exec(cmd, opts);
+    };
+    const hub = new KitHub({ self: "mac", devRoot: join(h, "dev"), kitPath: join(h, ".claude/kit.json"), broadcast: () => {}, run, env: { HOME: h }, every: 0 });
+    hubs.push(hub);
+    const info = await hub.scan();
+    expect(info.machines.map((m) => [m.machine, m.seen.away])).toEqual([["mac", null], ["gpd", "spawn failed"]]);
+  });
   test("apply carries out the plan and rescans; a dry run changes nothing", async () => {
     const { hub } = await setup();
     await hub.scan();

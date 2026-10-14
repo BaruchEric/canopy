@@ -61,6 +61,10 @@ describe("parseKit", () => {
     expect(bad([{ agent: "codex", skills: "~/x", mode: "link" }])).toEqual({ errors: ["targets: exactly one target has mode store"] });
     expect("errors" in bad([...RAW.targets, { agent: "codex", skills: "~/y", mode: "link" }])).toBe(true);
   });
+  test("refuses a store target limited to some machines: every machine's first target must be the store", () => {
+    const targets = [{ agent: "claude", skills: "~/.claude/skills", mode: "store", machines: ["mac"] }, { agent: "codex", skills: "~/.codex/skills", mode: "link" }];
+    expect(parseKit({ ...RAW, targets })).toEqual({ errors: ["targets[0]: the store target is on every machine, so it takes no machines"] });
+  });
   test("refuses an ssh machine without via or dev, and a non-object", () => {
     expect("errors" in parseKit({ ...RAW, machines: { gpd: { ssh: "gpd" } } })).toBe(true);
     expect(parseKit(null)).toEqual({ errors: ["kit.json is not an object"] });
