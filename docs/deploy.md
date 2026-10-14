@@ -165,6 +165,20 @@ canopy alone. Plan either for a moment when nothing is running in a shell.
 `docker compose up -d --force-recreate --no-deps canopy` is the crash
 rehearsal: canopy alone comes back and the shells stay.
 
+## Host control
+
+Since 2026-10-14 canopy and its shells control the mini the way a canopy running on it directly would: `ssh mini-host` from either container is a shell on the host as `eric`, with Docker (eric is in the `docker` group, so this is root in effect), `systemctl`, `/opt/stacks` and the rest of the home folder. The key is `~/.ssh/canopy_host`, which the containers see through the read-only `~/.ssh` mount. Its `authorized_keys` line carries `from="192.168.48.0/20"` (the `canopy_default` network), so it works from those containers only: not from the stages network, and not from the tailnet or the LAN. `~/.ssh/config` has `Host mini-host` (192.168.48.1, the host's address on that network) and a `canopy_host_known_hosts` file pinned to the host's ed25519 key, since the containers cannot write to `known_hosts`.
+
+To make it again by hand on the mini:
+
+```bash
+cd ~/.ssh && ssh-keygen -q -t ed25519 -N "" -C canopy-shells-to-host@mini -f canopy_host
+printf 'from="192.168.48.0/20",no-agent-forwarding %s\n' "$(cat canopy_host.pub)" >> authorized_keys
+printf '192.168.48.1 %s\n' "$(cut -d' ' -f1,2 /etc/ssh/ssh_host_ed25519_key.pub)" > canopy_host_known_hosts
+```
+
+then add the `Host mini-host` block. If Docker ever gives `canopy_default` another subnet, the key stops working until both the `from=` and the `HostName` follow it. To take control away, delete the `authorized_keys` line; `authorized_keys.bak-canopy-host` is the file from before.
+
 ## Previews (the in-app browser)
 
 A repo panel's **preview** section frames the repo's dev server. The dev
@@ -1261,4 +1275,4 @@ Recovery when the mini's keys are gone: `canopy secrets recover <checkout of eri
 
 Rollback: `docker compose stop secrets`. canopy shows the store as away; sinks keep what was last written. `docker compose rm secrets` and dropping the two volumes removes it for good, keys included, so take a copy of `secrets-data` first.
 
-Nothing secret goes into canopy's environment: canopy shares the shells' pid namespace, and a shell can read `/proc/<canopy>/environ`.
+Nothing secret goes into canopy's environment: canopy shares the shells' pid namespace, and a shell can read `/proc/<canopy>/environ`. Host control (above) goes further: an agent in a shell can `ssh mini-host` and read the `secrets-data` volume, which holds the mini's age identity and signing key, and `docker compose logs secrets`, which prints the first-passkey code. On the mini the store keeps its values away from the API and out of every container's environment, but not away from an agent that sets out to read them. Eric chose that on 2026-10-14 so canopy would control the mini as a native install would.
