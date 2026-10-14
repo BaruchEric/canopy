@@ -62,6 +62,21 @@ describe("json", () => {
   });
 });
 
+describe("json keys canopy does not manage", () => {
+  test("keep every byte through a write: key order, number spelling, escapes, inline arrays, big numbers", () => {
+    const before = '{\n  "b": 1.0,\n  "10": "\\u00e9",\n  "list": [1,2,  3],\n  "big": 12345678901234567890,\n  "auth": {"token": "old", "z": true}\n}\n';
+    const r = applyKeys(before, "json", { "auth.token": "new" });
+    if ("error" in r) throw new Error(r.error);
+    expect(r.text).toBe(before.replace('"old"', '"new"'));
+  });
+
+  test("a missing key goes in after the last member, the rest untouched", () => {
+    const r = applyKeys('{\n    "b": 1.0,\n    "auth": {}\n}', "json", { "auth.token": "t", "x.y": "z" });
+    if ("error" in r) throw new Error(r.error);
+    expect(r.text).toBe('{\n    "b": 1.0,\n    "auth": {"token": "t"},\n    "x": {"y":"z"}\n}');
+  });
+});
+
 describe("json with a top-level error key", () => {
   test("is read and written like any other object, not taken for a parse failure", () => {
     expect(readKeys('{"error": "x", "auth": {"token": "t"}}', "json", ["auth.token"])).toEqual({ values: { "auth.token": "t" } });

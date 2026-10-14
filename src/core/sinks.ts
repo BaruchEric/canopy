@@ -149,9 +149,97 @@ export function applyKeys(text: string | null, format: SecretSinkFormat, updates
     }
     at[segs[segs.length - 1] ?? k] = v;
   }
-  const indent = text === null ? "  " : (/\n([ \t]+)"/.exec(text)?.[1] ?? "  ");
-  const newline = text === null || text.endsWith("\n");
-  return { text: JSON.stringify(obj, null, indent) + (newline ? "\n" : "") };
+  if (text === null) return { text: JSON.stringify(obj, null, "  ") + "\n" };
+  // splice each value into the text, so every byte canopy does not manage
+  // (key order, number spelling, escapes, layout) stays as it was
+  let out = text;
+  for (const [k, v] of Object.entries(updates)) out = spliceJson(out, k.split("."), v);
+  return { text: out };
+}
+
+type JNode = { kind: "obj"; open: number; close: number; members: { key: string; keyStart: number; value: JNode }[] } | { kind: "other"; start: number; end: number };
+
+/** Where each value sits in a JSON text that JSON.parse already accepted. */
+function jsonTree(text: string): JNode {
+  let i = 0;
+  const ws = () => {
+    while (i < text.length && " \t\n\r".includes(text.charAt(i))) i++;
+  };
+  const str = (): string => {
+    const s = i++;
+    while (text.charAt(i) !== '"') i += text.charAt(i) === "\\" ? 2 : 1;
+    i++;
+    return JSON.parse(text.slice(s, i)) as string;
+  };
+  const value = (): JNode => {
+    ws();
+    const start = i;
+    const c = text.charAt(i);
+    if (c === "{") {
+      i++;
+      const members: { key: string; keyStart: number; value: JNode }[] = [];
+      ws();
+      while (text.charAt(i) !== "}") {
+        ws();
+        const keyStart = i;
+        const key = str();
+        ws();
+        i++;
+        members.push({ key, keyStart, value: value() });
+        ws();
+        if (text.charAt(i) === ",") i++;
+        ws();
+      }
+      return { kind: "obj", open: start, close: i++, members };
+    }
+    if (c === "[") {
+      i++;
+      ws();
+      while (text.charAt(i) !== "]") {
+        value();
+        ws();
+        if (text.charAt(i) === ",") i++;
+        ws();
+      }
+      i++;
+      return { kind: "other", start, end: i };
+    }
+    if (c === '"') {
+      str();
+      return { kind: "other", start, end: i };
+    }
+    while (i < text.length && !",}] \t\n\r".includes(text.charAt(i))) i++;
+    return { kind: "other", start, end: i };
+  };
+  return value();
+}
+
+const startOf = (n: JNode): number => (n.kind === "obj" ? n.open : n.start);
+const endOf = (n: JNode): number => (n.kind === "obj" ? n.close + 1 : n.end);
+
+/** `text` with the string `v` at `path`, made where it is missing; the
+ *  caller has checked that the path runs through objects only */
+function spliceJson(text: string, path: string[], v: string): string {
+  let node = jsonTree(text);
+  for (let n = 0; n < path.length; n++) {
+    if (node.kind !== "obj") return text;
+    const seg = path[n] ?? "";
+    const hit = node.members.filter((m) => m.key === seg).pop();
+    if (hit && n === path.length - 1) return text.slice(0, startOf(hit.value)) + JSON.stringify(v) + text.slice(endOf(hit.value));
+    if (hit) {
+      node = hit.value;
+      continue;
+    }
+    let val: unknown = v;
+    for (const s of path.slice(n + 1).reverse()) val = { [s]: val };
+    const member = `${JSON.stringify(seg)}: ${JSON.stringify(val)}`;
+    const first = node.members[0];
+    const last = node.members[node.members.length - 1];
+    if (!first || !last) return text.slice(0, node.open + 1) + member + text.slice(node.open + 1);
+    const at = endOf(last.value);
+    return `${text.slice(0, at)},${text.slice(node.open + 1, first.keyStart)}${member}${text.slice(at)}`;
+  }
+  return text;
 }
 
 /** What the owner does with one sink key. `applied` is the rotation stamp
