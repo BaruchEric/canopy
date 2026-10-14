@@ -46,7 +46,7 @@ import { boardOrder, invertPick, pickWhere, rangeIds, setPick, togglePick } from
 import { appendFeed, describeEvent, type FeedEntry, type FeedSnapshot } from "./feed";
 import { mergeAction } from "./peers";
 import { convOf, isUnread, mergeMessages } from "./chan";
-import type { AdviceAccepted, AdviceOffer, AgentCard, AgentKind, Ask, ChanMessage, HealthCheck, IncubatorStages, KitInfo, Presence, RangerInfo, Sprout, TailchanInfo } from "../../src/core/types";
+import type { AdviceAccepted, AdviceOffer, AgentCard, AgentKind, Ask, ChanMessage, HealthCheck, IncubatorStages, KitInfo, Presence, RangerInfo, SecretsInfo, Sprout, TailchanInfo } from "../../src/core/types";
 import { mergeAsks, mergeInbox, replaceAsks, toAskAnswer, toRunAnswer, type InboxAnswer, type InboxItem } from "./inbox";
 import { replaceSprouts, staleSprout } from "./sprouts";
 import { cardsByRepoCard, markTrail, mergeCards, replaceCards, type TrailMark } from "./agentcards";
@@ -1058,6 +1058,11 @@ interface CanopyState {
   loadHealth: (backend?: string) => Promise<void>;
   /** reads one backend's kit, home by default */
   loadKit: (backend?: string) => Promise<void>;
+  /** each backend's secret store, by backend name: names, sinks and
+   *  proposals, never a value; an older backend that has none is missing */
+  secrets: Record<string, SecretsInfo>;
+  /** reads one backend's secret store, home by default */
+  loadSecrets: (backend?: string) => Promise<void>;
   /** heals one check now; the error is the backend's words */
   healCheck: (backend: string, id: string) => Promise<void>;
   /** a change to a backend's ranger: on, profile, handle, telegram, fresh */
@@ -1489,6 +1494,8 @@ const rangerEvents = new Map<string, number>();
 const healthEvents = new Map<string, number>();
 /* and each backend's kit events, the same way */
 const kitEvents = new Map<string, number>();
+/* and each backend's secrets events */
+const secretsEvents = new Map<string, number>();
 /** the same for the advice on offer */
 let adviceEvents = 0;
 
@@ -1585,6 +1592,7 @@ function resync(get: () => CanopyState, set: (fn: (s: CanopyState) => Partial<Ca
   void get().loadRanger(b);
   void get().loadHealth(b);
   void get().loadKit(b);
+  void get().loadSecrets(b);
   // the tasks a panel loaded may have moved while the stream was down
   for (const id of Object.keys(get().tasks)) if (backendOf(id) === b) void get().loadTasks(id).catch(() => {});
   void Promise.all([api.terms(b), api.kept(b), api.helpers(b)])
@@ -1755,6 +1763,7 @@ export const useStore = create<CanopyState>((set, get) => ({
   rangers: {},
   health: {},
   kit: {},
+  secrets: {},
   advice: [],
   chatDrafts: {},
   adviceFile: null,
@@ -1961,6 +1970,7 @@ export const useStore = create<CanopyState>((set, get) => ({
     void get().loadRanger();
     void get().loadHealth();
     void get().loadKit();
+    void get().loadSecrets();
     // the screen layouts, which a backend from before them does not have
     void get().loadScreenProfiles();
     // what home runs: it names the machines, and it is the build a later
@@ -2118,6 +2128,7 @@ export const useStore = create<CanopyState>((set, get) => ({
     void get().loadRanger(name);
     void get().loadHealth(name);
     void get().loadKit(name);
+    void get().loadSecrets(name);
     void api
       .about(name)
       .then((about) => set((s) => ({ conns: connsIf(s, name, { about }) })))
@@ -2169,6 +2180,7 @@ export const useStore = create<CanopyState>((set, get) => ({
     const { [name]: _ranger, ...rangers } = s.rangers;
     const { [name]: _health, ...health } = s.health;
     const { [name]: _kit, ...kit } = s.kit;
+    const { [name]: _secrets, ...secrets } = s.secrets;
     const backendOrder = applyRegistry(s.home, registryEntries, hiddenBackends);
     set({
       settings,
@@ -2192,6 +2204,7 @@ export const useStore = create<CanopyState>((set, get) => ({
       rangers,
       health,
       kit,
+      secrets,
       agents,
       launchers,
       remembered,
@@ -2649,6 +2662,12 @@ export const useStore = create<CanopyState>((set, get) => ({
       set((st) => ({ kit: { ...st.kit, [b]: ev.kit } }));
       return;
     }
+    if (ev.type === "secrets") {
+      secretsEvents.set(b, (secretsEvents.get(b) ?? 0) + 1);
+      // a broadcast carries nobody's session; keep what this page last read
+      set((st) => ({ secrets: { ...st.secrets, [b]: { ...ev.info, session: st.secrets[b]?.session ?? false } } }));
+      return;
+    }
     if (ev.type === "health") {
       healthEvents.set(b, (healthEvents.get(b) ?? 0) + 1);
       set((st) => ({ health: { ...st.health, [b]: ev.checks } }));
@@ -2962,6 +2981,23 @@ export const useStore = create<CanopyState>((set, get) => ({
       if ((kitEvents.get(b) ?? 0) === mark && isShown(get(), b)) set((s) => ({ kit: { ...s.kit, [b]: kit } }));
     } catch {
       // an older backend has no kit; nothing shows for it
+    }
+  },
+  loadSecrets: async (backend) => {
+    const b = backend ?? get().home;
+    const mark = secretsEvents.get(b) ?? 0;
+    try {
+      const info = await api.secrets(b);
+      // a read carries this page's session, so it wins over any event that
+      // came in meanwhile on that one field
+      if ((secretsEvents.get(b) ?? 0) === mark && isShown(get(), b)) set((s) => ({ secrets: { ...s.secrets, [b]: info } }));
+      else if (isShown(get(), b))
+        set((s) => {
+          const cur = s.secrets[b];
+          return cur ? { secrets: { ...s.secrets, [b]: { ...cur, session: info.session } } } : {};
+        });
+    } catch {
+      // an older backend has no secret store; nothing shows for it
     }
   },
   healCheck: async (b, id) => {

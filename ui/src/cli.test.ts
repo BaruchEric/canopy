@@ -82,6 +82,7 @@ describe("parseCommand", () => {
     expect(parse("library doctor")).toEqual({ kind: "view", view: "library", sprout: null });
     expect(parse("health")).toEqual({ kind: "view", view: "health", sprout: null });
     expect(parse("kit")).toEqual({ kind: "view", view: "kit", sprout: null });
+    expect(parse("secrets")).toEqual({ kind: "view", view: "secrets", sprout: null });
     expect(parse(`new "an idea" for laundry --url https://a.example --repo https://git.example/x`)).toEqual({
       kind: "view",
       view: "incubator",

@@ -3,6 +3,9 @@ import type {
   KitApplyResult,
   KitInfo,
   HealthInfo,
+  SecretAuditEntry,
+  SecretProposalIn,
+  SecretsInfo,
   RepoCheckDef,
   RepoHealthInfo,
   RangerInfo,
@@ -87,6 +90,7 @@ import type {
   AdviceOffer,
   ScreenProfile,
 } from "../../src/core/types";
+import type { SecretAct } from "../../src/core/secretwire";
 import type { ProfileFields } from "../../src/core/screenlayouts";
 import { pickUrl, split, wsUrl, type BackendSignal } from "./backends";
 import { normalizeRoutes } from "../../src/core/route";
@@ -575,6 +579,25 @@ export const api = {
     req<KitApplyResult>(b, "/api/kit/apply", { method: "POST", body: JSON.stringify({ machine }) }),
   /** heal one check now, by its plain id on that backend */
   healCheck: async (b: string, id: string) => from(b, await req<HealthCheck>(b, `/api/health/heal?id=${encodeURIComponent(id)}`, { method: "POST", body: "{}" }), qCheck),
+  /* the secret store (server/secrets.ts); no answer here ever holds a value
+     but a reveal's, and none carries ids, so nothing is qualified */
+  secrets: (b: string = homeName()) => req<SecretsInfo>(b, "/api/secrets"),
+  secretsAudit: (b: string) => req<SecretAuditEntry[]>(b, "/api/secrets/audit"),
+  secretsBegin: (b: string, kind: "login" | "register", code: string | null) =>
+    req<unknown>(b, "/api/secrets/gate/begin", { method: "POST", body: JSON.stringify({ kind, code }) }),
+  secretsFinish: (b: string, kind: "login" | "register", code: string | null, response: unknown, label: string) =>
+    req<{ ok: true }>(b, "/api/secrets/gate/finish", { method: "POST", body: JSON.stringify({ kind, code, response, label }) }),
+  secretsLogout: (b: string) => req<{ ok: true }>(b, "/api/secrets/logout", { method: "POST", body: "{}" }),
+  secretsAct: (b: string, act: SecretAct) => req<unknown>(b, "/api/secrets/act", { method: "POST", body: JSON.stringify({ act }) }),
+  secretsPropose: (b: string, items: SecretProposalIn[]) =>
+    req<{ added: number; dropped: number }>(b, "/api/secrets/proposals", { method: "POST", body: JSON.stringify({ items }) }),
+  secretsPull: (b: string) => req<SecretsInfo>(b, "/api/secrets/pull", { method: "POST", body: "{}" }),
+  secretsScan: (b: string) => req<{ items: SecretProposalIn[]; missing: string[] }>(b, "/api/secrets/scan", { method: "POST", body: "{}" }),
+  secretsTake: (b: string, id: string, key: string) => req<SecretProposalIn>(b, "/api/secrets/take", { method: "POST", body: JSON.stringify({ id, key }) }),
+  secretsUnlock: (b: string, passphrase: string) => req<{ ok: true }>(b, "/api/secrets/unlock", { method: "POST", body: JSON.stringify({ passphrase }) }),
+  secretsLock: (b: string) => req<{ ok: true }>(b, "/api/secrets/lock", { method: "POST", body: "{}" }),
+  secretsKey: (b: string, passphrase: string, replace: boolean) =>
+    req<{ recipient: string }>(b, "/api/secrets/key", { method: "POST", body: JSON.stringify({ passphrase, replace }) }),
   /** the ranger, canopy's always-on agent, one backend's */
   ranger: (b: string = homeName()) => req<RangerInfo>(b, "/api/ranger"),
   /** a change to its settings: on, profile, handle, telegram, fresh */

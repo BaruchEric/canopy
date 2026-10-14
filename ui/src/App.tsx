@@ -1,5 +1,6 @@
 import { HealthView } from "./components/Health";
 import { KitView } from "./components/Kit";
+import { SecretsView } from "./components/Secrets";
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import type { CSSProperties } from "react";
 import { Library } from "./components/Library";
@@ -37,10 +38,11 @@ const VIEWS = [
   { key: "incubator", label: "incubator", title: "Incubator: new projects from an idea, clarified and researched before anything is built" },
   { key: "health", label: "health", title: "Health: what is broken on each backend, and what canopy is fixing" },
   { key: "kit", label: "kit", title: "Kit: the skills every agent has on every machine" },
+  { key: "secrets", label: "secrets", title: "Secrets: names, sinks and imports; values only behind a passkey on the mini's page" },
 ] as const;
 
 /** the views that are not the git cockpit: their own bar, no board keys */
-const OTHER_VIEWS = ["library", "ports", "agents", "incubator", "health", "kit"];
+const OTHER_VIEWS = ["library", "ports", "agents", "incubator", "health", "kit", "secrets"];
 
 /** The views, one segmented row: in the top bar on the git view, the
  *  whole of the bar on the others. */
@@ -375,6 +377,8 @@ export function App() {
         <HealthView />
       ) : view === "kit" ? (
         <KitView />
+      ) : view === "secrets" ? (
+        <SecretsView />
       ) : (
         <Library ports={view === "ports"} project={project} onRepo={showRepo} onPorts={() => navigate("ports")} />
       )}

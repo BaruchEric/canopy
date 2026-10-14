@@ -10267,3 +10267,149 @@ span.effective-flag:not(:first-child) {
 .kit-ok { color: var(--moss); }
 .kit-problem { color: var(--rust); }
 .kit-local, .kit-off, .kit-noagent { color: var(--ink-faint); }
+
+/* the secret store's view (components/Secrets.tsx), built like .health-view */
+.secrets-view {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  padding: 12px 16px 24px;
+  max-width: 900px;
+  width: 100%;
+  margin: 0 auto;
+  box-sizing: border-box;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.secrets-bar,
+.secrets-filter,
+.secrets-form,
+.secrets-gate,
+.secrets-line {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+}
+.secrets-bar {
+  gap: 6px 12px;
+}
+.secrets-head,
+.secrets-meta,
+.secrets-desc,
+.secrets-note,
+.secrets-history {
+  color: var(--ink-dim);
+  font-size: 12px;
+}
+.secrets-note {
+  margin: 0;
+}
+.secrets-err {
+  color: var(--rust);
+  font-size: 12px;
+  margin: 0;
+}
+.secrets-form input:not([type="checkbox"]),
+.secrets-form select,
+.secrets-form textarea,
+.secrets-filter input {
+  flex: 1 1 140px;
+  min-width: 0;
+  padding: 2px 6px;
+  border: 1px solid var(--hair);
+  border-radius: var(--r);
+  background: transparent;
+  color: var(--ink);
+  font: inherit;
+}
+.secrets-form textarea {
+  flex-basis: 100%;
+  font-family: var(--mono);
+}
+.secrets-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+.secrets-list > li {
+  border-bottom: 1px solid var(--hair);
+  padding: 6px 0;
+}
+.secrets-row {
+  display: grid;
+  grid-template-columns: minmax(120px, 1fr) 2fr;
+  gap: 2px 12px;
+  width: 100%;
+  padding: 2px 4px;
+  border-radius: var(--r);
+  text-align: left;
+}
+.secrets-row:hover {
+  background: var(--wash);
+}
+.secrets-row .secrets-meta {
+  grid-column: 1 / -1;
+}
+.secrets-name,
+.secrets-value,
+.secrets-recipient {
+  font-family: var(--mono);
+  overflow-wrap: anywhere;
+}
+.secrets-value,
+.secrets-recipient {
+  user-select: all;
+}
+.secrets-sheet {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 8px 4px 4px 16px;
+}
+.secrets-facts {
+  display: grid;
+  grid-template-columns: max-content 1fr;
+  gap: 2px 12px;
+  margin: 0;
+  font-size: 12px;
+}
+.secrets-facts dt {
+  color: var(--ink-dim);
+}
+.secrets-facts dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+.secrets-keys {
+  list-style: none;
+  margin: 4px 0 0;
+  padding: 0 0 0 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  font-size: 12px;
+}
+.secrets-history {
+  margin: 0;
+  padding-left: 16px;
+}
+.secrets-check {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+.secrets-view .moss {
+  color: var(--moss);
+}
+.secrets-view .lichen {
+  color: var(--lichen);
+}
+.secrets-view .rust {
+  color: var(--rust);
+}
+.secrets-view .sky {
+  color: var(--sky);
+}
