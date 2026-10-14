@@ -145,15 +145,18 @@ export function planKit(kit: KitManifest, seen: KitSeen, dev: string): KitAction
       else return;
     }
     const byName = new Map(t.entries.map((e) => [e.name, e]));
+    // a placed link whose text is no longer what the kit wrote was edited by
+    // hand: drift, shown and left for a person (the spec's "apply asks")
+    const asPlaced = (name: string) => { const e = byName.get(name); return e?.kind === "link" && e.link === t.placed[name]; };
     for (const name of want) {
       const link = wantLink(kit, seen, t, name, dev);
       const e = byName.get(name);
       if (!e) out.push({ kind: "link", agent: t.agent, name, link });
-      else if (name in t.placed && e.kind === "link" && e.link !== link) out.push({ kind: "relink", agent: t.agent, name, link });
+      else if (name in t.placed && asPlaced(name) && e.link !== link) out.push({ kind: "relink", agent: t.agent, name, link });
     }
     for (const name of Object.keys(t.placed)) {
       if (want.includes(name)) continue;
-      if (byName.get(name)?.kind === "link") out.push({ kind: "remove", agent: t.agent, name });
+      if (asPlaced(name)) out.push({ kind: "remove", agent: t.agent, name });
     }
   });
   return out;

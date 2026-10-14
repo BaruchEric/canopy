@@ -1,8 +1,8 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { parseKit } from "./kit";
+import { parseKit, planKit } from "./kit";
 import { parseScan, seeKit } from "./kitscan";
 import { exec } from "./exec";
 
@@ -66,6 +66,36 @@ describe("seeKit on a scratch home", () => {
     const s = await seeKit(kit(), { name: "gpd", host: "gpd", dev: "/d" }, { run, now: () => 1 });
     expect(s.away).toBe("Tailscale SSH requires an additional check.");
     expect(s.store).toBeNull();
+  });
+  test("a host ssh cannot reach is asked once, not fetched and then scanned", async () => {
+    let calls = 0;
+    const run = async () => { calls++; return { code: 255, stdout: "", stderr: "ssh: connect to host gpd port 22: Connection refused\n" }; };
+    const s = await seeKit(kit(), { name: "gpd", host: "gpd", dev: "/d" }, { run, now: () => 1 });
+    expect(calls).toBe(1);
+    expect(s.away).toBe("ssh: connect to host gpd port 22: Connection refused");
+  });
+  test("a fetch that never reached the host reads away without a second try", async () => {
+    let calls = 0;
+    const run = async () => { calls++; return { code: 143, stdout: "", stderr: "" }; };
+    const s = await seeKit(kit(), { name: "gpd", host: "gpd", dev: "/d" }, { run, now: () => 1 });
+    expect(calls).toBe(1);
+    expect(s.away).toMatch(/no answer/);
+  });
+  test("a store git cannot read reads away, so nothing is planned against an empty list", async () => {
+    const h = await home();
+    writeFileSync(join(h, ".claude/.git/HEAD"), "garbage\n");
+    const s = await seeKit(kit(), { name: "mac", host: null, dev: join(h, "dev") }, { env: { HOME: h }, now: () => 7 });
+    expect(s.away).toMatch(/^store: /);
+    expect(planKit(kit(), s, join(h, "dev"))).toEqual([]);
+  });
+  test("the store path from the manifest is never evaluated by the shell", async () => {
+    const h = await home();
+    const raw = structuredClone(RAW);
+    raw.targets[0]!.skills = `~/.claude$(touch ${h}/pwned)/skills`;
+    const r = parseKit(raw);
+    if ("errors" in r) throw new Error(r.errors.join());
+    await seeKit(r.kit, { name: "mac", host: null, dev: join(h, "dev") }, { env: { HOME: h }, now: () => 7 });
+    expect(existsSync(join(h, "pwned"))).toBe(false);
   });
 });
 

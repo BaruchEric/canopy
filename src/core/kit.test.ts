@@ -113,13 +113,23 @@ describe("planKit", () => {
     s.targets[1]!.entries = [{ name: "ship", kind: "dir", link: null }];
     expect(planKit(kit(), s, "/d")).toEqual([]);
   });
-  test("relinks a placed link with the wrong text, never a placed name that became a folder (review focus 4)", () => {
+  test("relinks a placed link still as placed whose wanted text moved, never a placed name that became a folder (review focus 4)", () => {
     const s = seen();
-    s.targets[1]!.placed = { ship: "../../.claude/skills/ship", gone: "../../.claude/skills/gone" };
-    s.targets[1]!.entries = [{ name: "ship", kind: "link", link: "/elsewhere" }, { name: "gone", kind: "dir", link: null }];
+    s.targets[1]!.placed = { ship: "../old/skills/ship", gone: "../../.claude/skills/gone" };
+    s.targets[1]!.entries = [{ name: "ship", kind: "link", link: "../old/skills/ship" }, { name: "gone", kind: "dir", link: null }];
     expect(planKit(kit(), s, "/d")).toEqual([
       { kind: "relink", agent: "codex", name: "ship", link: "../../.claude/skills/ship" },
     ]);
+  });
+  test("a placed link someone pointed elsewhere by hand is drift, left for a person: never relinked or removed", () => {
+    const s = seen();
+    s.targets[1]!.placed = { ship: "../../.claude/skills/ship", desk: "../../.claude/skills/desk" };
+    s.targets[1]!.entries = [
+      { name: "desk", kind: "link", link: "/mine/desk" },
+      { name: "ship", kind: "link", link: "/elsewhere" },
+    ];
+    expect(planKit(kit(), s, "/d")).toEqual([]);
+    expect(cellsOf(kit(), [{ seen: s, dev: "/d" }]).find((c) => c.agent === "codex" && c.skill === "ship")?.state).toBe("drift");
   });
   test("removes a placed link no longer wanted", () => {
     const s = seen();

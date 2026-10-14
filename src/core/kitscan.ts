@@ -10,10 +10,20 @@ const FETCH_TIMEOUT = 20_000;
 
 /** args: store dir, then `t <agent> <dir>` per target and `s <name> <path>`
  *  per source. Prints tab lines: H home, K tracked skill, G porcelain line,
- *  F fetch failed, N no checkout, D agent dir exists parentExists,
- *  E agent name kind link, P agent placed-json, R name 0|1. */
-export const SCAN_SCRIPT = String.raw`
-exp() { case $1 in "~") printf %s "$HOME";; "~/"*) printf '%s/%s' "$HOME" "$(printf %s "$1" | cut -c3-)";; *) printf %s "$1";; esac; }
+ *  F fetch failed, N no checkout, X git's first error line in the store,
+ *  D agent dir exists parentExists, E agent name kind link,
+ *  P agent placed-json, R name 0|1. */
+/** a leading ~ to $HOME, and nothing else expanded: the paths come from a
+ *  manifest any agent can edit, so they never pass through eval */
+const EXP = String.raw`exp() { case $1 in "~") printf %s "$HOME";; "~/"*) printf '%s/%s' "$HOME" "$(printf %s "$1" | cut -c3-)";; *) printf %s "$1";; esac; }`;
+
+/** "up" first, so a run that never reached the host is told apart from a
+ *  fetch that failed there */
+const FETCH_SCRIPT = `${EXP}
+echo up
+cd "$(exp "$1")" && git fetch -q origin`;
+
+export const SCAN_SCRIPT = EXP + String.raw`
 list() {
   for p in "$2"/*; do
     [ -e "$p" ] || [ -L "$p" ] || continue
@@ -26,9 +36,17 @@ list() {
 placed() { [ -f "$2/${KIT_FILE}" ] && printf 'P\t%s\t%s\n' "$1" "$(tr -d '\n' < "$2/${KIT_FILE}")"; return 0; }
 store=$(exp "$1"); shift
 printf 'H\t%s\n' "$HOME"
+# a git that fails must say so: an empty tracked list would plan the
+# removal of every placed link
+gitq() { out=$(git -C "$store" "$@" 2>/dev/null) && return 0; printf 'X\t%s\n' "$(git -C "$store" "$@" 2>&1 >/dev/null | grep -v '^$' | head -n 1)"; return 1; }
 if [ -d "$store/.git" ]; then
-  git -C "$store" ls-files -- skills | cut -d/ -f2 | sort -u | while IFS= read -r l; do printf 'K\t%s\n' "$l"; done
-  git -C "$store" status --porcelain=v2 --branch | while IFS= read -r l; do printf 'G\t%s\n' "$l"; done
+  if gitq ls-files -- skills; then
+    k=$out
+    if gitq status --porcelain=v2 --branch; then
+      printf '%s\n' "$k" | cut -d/ -f2 | sort -u | while IFS= read -r l; do [ -n "$l" ] && printf 'K\t%s\n' "$l"; done
+      printf '%s\n' "$out" | while IFS= read -r l; do [ -n "$l" ] && printf 'G\t%s\n' "$l"; done
+    fi
+  fi
 else
   printf 'N\n'
 fi
@@ -68,6 +86,7 @@ export function parseScan(machine: string, stdout: string, at: number): KitSeen 
   let behind = 0;
   let dirty = 0;
   let checkout = true;
+  let gitError: string | null = null;
   const targets: KitSeenTarget[] = [];
   const sources: Record<string, boolean> = {};
   const byAgent = (a: string) => targets.find((t) => t.agent === a);
@@ -76,6 +95,7 @@ export function parseScan(machine: string, stdout: string, at: number): KitSeen 
     switch (f[0]) {
       case "H": home = f[1] ?? ""; break;
       case "N": checkout = false; break;
+      case "X": gitError = f.slice(1).join("\t").trim() || "git failed"; break;
       case "K": if (SKILL_NAME.test(f[1] ?? "")) tracked.push(f[1]!); break;
       case "G": {
         const g = f.slice(1).join("\t");
@@ -109,6 +129,7 @@ export function parseScan(machine: string, stdout: string, at: number): KitSeen 
     }
   }
   for (const t of targets) t.entries.sort((a, b) => a.name.localeCompare(b.name));
+  if (gitError !== null) return { machine, at, away: `store: ${gitError}`, home, store: null, targets, sources };
   const store: KitStoreState | null = checkout ? { tracked, branch, ahead, behind, dirty, fetchFailed: false } : null;
   return { machine, at, away: null, home, store, targets, sources };
 }
@@ -125,9 +146,15 @@ export async function seeKit(
   const run = opts.run ?? onHost;
   const now = opts.now ?? Date.now;
   const store = storeDir(targetsFor(kit, m.name)[0]!.skills);
-  const fetched = await run(m.host, ["sh", "-c", `cd "$(eval printf %s "$1")" && git fetch -q origin`, "kit-fetch", store], {
+  const fetched = await run(m.host, ["sh", "-c", FETCH_SCRIPT, "kit-fetch", store], {
     env: opts.env, timeoutMs: FETCH_TIMEOUT,
   });
+  // ssh that never ran the command (a refused connection, Tailscale's
+  // browser check hanging until the timeout) would only hang the scan too
+  if (m.host !== null && !/^up$/m.test(fetched.stdout)) {
+    const why = fetched.stderr.trim() ? reason(fetched.stderr, fetched.code) : `no answer from ${m.host} within ${FETCH_TIMEOUT / 1000} s`;
+    return { machine: m.name, at: now(), away: why, home: "", store: null, targets: [], sources: {} };
+  }
   const r = await run(m.host, ["sh", "-c", SCAN_SCRIPT, "kit-scan", ...scanArgs(kit, m.name, m.dev)], {
     env: opts.env, timeoutMs: opts.timeoutMs ?? SCAN_TIMEOUT,
   });
