@@ -305,6 +305,9 @@ services:
       # backend alone, so its hub relays to the service instead of reading a
       # pulled copy
       - CANOPY_SECRETS_SOCKET=/run/canopy-secrets/secrets.sock
+      # the gate page's origin, the same as the service's: canopy refuses a
+      # gated act from any other, so a different value here answers 403
+      - CANOPY_SECRETS_ORIGIN=${CANOPY_SECRETS_ORIGIN:-https://canopy.beric.ca}
       # the host's time zone by name (America/Los_Angeles), which Bun needs:
       # it reads the name, and the image's /etc/localtime names Etc/UTC
       # whatever the mount below puts in the file; empty is UTC, as before

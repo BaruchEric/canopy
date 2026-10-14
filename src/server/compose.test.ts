@@ -225,6 +225,10 @@ describe("the secrets service", () => {
   test("canopy holds the caller group and the socket path, and does not wait on the service's health", () => {
     expect((canopy as { group_add?: string[] }).group_add).toContain("${SECRETSCALLER_GID:-7851}");
     expect(envOf(canopy ?? {})).toContain("CANOPY_SECRETS_SOCKET=/run/canopy-secrets/secrets.sock");
+    // the same origin as the service's, or every gated act answers 403
+    const origin = envOf(secrets ?? {}).find((e) => e.startsWith("CANOPY_SECRETS_ORIGIN="));
+    expect(origin).toBeTruthy();
+    expect(envOf(canopy ?? {})).toContain(origin ?? "");
     expect((canopy?.depends_on as Record<string, { condition?: string }>)?.["secrets"]?.condition).toBe("service_started");
     for (const [name, s] of Object.entries(compose.services)) {
       if (name === "canopy") continue;
