@@ -119,6 +119,14 @@ export class SecretStore {
       // an empty clone's unborn branch follows the client's default; pin it
       await this.git(["symbolic-ref", "HEAD", "refs/heads/main"]);
     } else if (this.opts.remote) {
+      // a checkout made before the remote was set, or with another URL
+      const url = await this.git(["remote", "get-url", "origin"]);
+      if (url.code !== 0) await this.git(["remote", "add", "origin", this.opts.remote]);
+      else if (url.stdout.trim() !== this.opts.remote) {
+        await this.git(["remote", "set-url", "origin", this.opts.remote]);
+        // the old remote's main says nothing about what the new one holds
+        await this.git(["update-ref", "-d", "refs/remotes/origin/main"]);
+      }
       await this.fastForward();
     }
     if (!(await exists(p.file))) {
@@ -133,6 +141,8 @@ export class SecretStore {
     if (parsed.file.keys["mini"] !== this.recipient) throw new Error("secrets.json names another mini key; restore the key or run canopy secrets recover");
     this.file = parsed.file;
     await this.refreshHead();
+    // commits made while Forgejo was away or not set yet go up now
+    if (this.opts.remote && this.unpushed > 0) await this.push();
   }
 
   /** take Forgejo's commits when they only add to ours (a recovery pushed from elsewhere) */
