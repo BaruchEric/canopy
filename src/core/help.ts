@@ -70,6 +70,8 @@ usage:
                     [--fix CMD] [--heal auto|button|none] [--while TASK] [--every S]
                                      a check in canopy's config; --while runs it only while that task does
   canopy health rm <repo> <name>     take one of canopy's checks away
+  canopy kit [status|apply]          the skills every agent has on every machine, and linking them
+    --machine M | --dry-run          one machine only; apply says what it would do and changes nothing
   canopy health lint [dir]           read a repo's .canopy/health.json, exit 1 on a bad entry
   canopy health init [dir]           write a starter .canopy/health.json
   canopy spec status [dir]           every repo against the shared repo spec

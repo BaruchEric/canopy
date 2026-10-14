@@ -47,6 +47,7 @@ import { versionLine } from "../core/version";
 import { bold, dim, lichen, moss, paintLine, renderTree, sky } from "./render";
 import { HELP_TEXT } from "../core/help";
 import { healthCommand } from "./health";
+import { kitCommand } from "./kit";
 import { SPEC_WORDS, specLines } from "../core/treelines";
 
 const HELP = `${bold("canopy")}${HELP_TEXT.slice("canopy".length)}`;
@@ -91,6 +92,7 @@ const COMMANDS = new Set([
   "incubator",
   "ranger",
   "health",
+  "kit",
   "library",
   "tree",
   "status",
@@ -787,6 +789,8 @@ export async function main(argv: string[]): Promise<void> {
     }
     case "health":
       return healthCommand(args, { fail });
+    case "kit":
+      return kitCommand(args, { fail });
     case "version":
     case "--version":
     case "-V":

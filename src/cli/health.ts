@@ -32,7 +32,7 @@ export const HEALTH_USAGE = `usage: canopy health [list] [--bad] [--repo R] [--c
 const KIND_FLAGS = { "--http": "http", "--port": "port", "--task": "task", "--compose": "compose", "--command": "command" } as const;
 
 /** Pulls `--name value` out of `args`, or undefined. */
-function take(args: string[], name: string): string | undefined {
+export function take(args: string[], name: string): string | undefined {
   const i = args.indexOf(name);
   if (i === -1) return undefined;
   const [, value] = args.splice(i, 2);
@@ -40,7 +40,7 @@ function take(args: string[], name: string): string | undefined {
 }
 
 /** Pulls a bare `--name` out of `args`. */
-function has(args: string[], name: string): boolean {
+export function has(args: string[], name: string): boolean {
   const i = args.indexOf(name);
   if (i === -1) return false;
   args.splice(i, 1);
@@ -189,13 +189,13 @@ export function targetsOf(home: string, self: string, list: readonly BackendEntr
   return out;
 }
 
-class Unreachable extends Error {}
+export class Unreachable extends Error {}
 
-const errText = (err: unknown): string => (err instanceof Error ? err.message : String(err));
+export const errText = (err: unknown): string => (err instanceof Error ? err.message : String(err));
 
 /** One request to a backend at the first of its addresses that answers;
  *  a refusal by the backend is the answer, not a reason to try the next. */
-async function ask<T>(t: Target, method: string, path: string, body?: unknown): Promise<T> {
+export async function ask<T>(t: Target, method: string, path: string, body?: unknown): Promise<T> {
   const tried: string[] = [];
   for (const url of t.urls) {
     let res: Response;
