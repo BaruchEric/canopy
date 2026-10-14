@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { actionWord, kitApplyLines, kitStatusLines } from "./kit";
+import { actionWord, kitApplyLines, kitCommand, kitStatusLines } from "./kit";
 import type { KitInfo } from "../core/types";
 
 const info: KitInfo = {
@@ -32,5 +32,38 @@ describe("kit cli", () => {
     expect(actionWord({ kind: "remove", agent: "codex", name: "x" })).toBe("remove codex/x");
     expect(kitApplyLines({ machine: "mac", done: [{ kind: "pull" }], failed: [{ action: { kind: "mkdir", agent: "hermes" }, why: "cannot make /x" }] }))
       .toEqual(["mac: pull done", "mac: mkdir hermes failed: cannot make /x"]);
+  });
+});
+
+describe("kit cli over several backends", () => {
+  test("a backend with no kit (an older canopy) is named and skipped, and the rest still report", async () => {
+    const older = Bun.serve({ port: 0, fetch: () => Response.json({ error: "not found" }, { status: 404 }) });
+    const home = Bun.serve({
+      port: 0,
+      fetch: (req) => {
+        const p = new URL(req.url).pathname;
+        if (p === "/api/backends") return Response.json({ self: "mac", backends: [{ name: "mini", tailnet: `http://127.0.0.1:${older.port}` }] });
+        if (p === "/api/kit") return Response.json(info);
+        return new Response("no", { status: 404 });
+      },
+    });
+    const lines: string[] = [];
+    const log = console.log;
+    console.log = (s: string) => { lines.push(s); };
+    const before = process.exitCode;
+    const api = process.env["CANOPY_API"];
+    process.env["CANOPY_API"] = `http://127.0.0.1:${home.port}`;
+    try {
+      await kitCommand(["status"], { fail: (m) => { throw new Error(m); } });
+    } finally {
+      console.log = log;
+      if (api === undefined) delete process.env["CANOPY_API"]; else process.env["CANOPY_API"] = api;
+      home.stop(true);
+      older.stop(true);
+    }
+    expect(lines[0]).toBe("mac  store main, 2 behind, 3 changed");
+    expect(lines.at(-1)).toBe("mini: not found");
+    expect(process.exitCode).toBe(1);
+    process.exitCode = before;
   });
 });

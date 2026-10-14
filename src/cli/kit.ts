@@ -57,7 +57,16 @@ export async function kitCommand(argv: string[], { fail }: { fail: (msg: string)
   if (sub !== "status" && sub !== "apply") return fail(KIT_USAGE);
   let failed = false;
   for (const t of targets) {
-    const info = await call<KitInfo>(t, "GET", "/api/kit");
+    // one backend that cannot answer (unreachable, or a canopy from before
+    // the kit) is named and skipped; the others still report
+    let info: KitInfo;
+    try {
+      info = await ask<KitInfo>(t, "GET", "/api/kit");
+    } catch (err) {
+      console.log(`${t.name}: ${err instanceof Unreachable ? `did not answer: ${err.message}` : errText(err)}`);
+      failed = true;
+      continue;
+    }
     if (sub === "status") {
       for (const line of kitStatusLines(info, machine)) console.log(line);
       continue;
