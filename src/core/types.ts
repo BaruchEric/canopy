@@ -1173,7 +1173,8 @@ export type ServerEvent =
   /** the ranger, whole, whenever anything about it changes (server/ranger.ts) */
   | { type: "ranger"; ranger: RangerInfo }
   /** every health check, whole, when any of them changed (server/health.ts) */
-  | { type: "health"; checks: HealthCheck[] };
+  | { type: "health"; checks: HealthCheck[] }
+  | { type: "kit"; kit: KitInfo };
 
 export type BuildChange = "installed" | "built" | "launched" | "exited" | "removed";
 
@@ -2714,4 +2715,123 @@ export interface RepoHealthInfo {
   checks: MergedCheck[];
   /** what was wrong with `.canopy/health.json` or the merge */
   errors: string[];
+}
+
+/** The kit (docs/superpowers/specs/2026-10-14-kit-design.md): one set of
+ *  skills for every agent on every machine. */
+export type KitMode = "store" | "link" | "copy";
+
+export interface KitMachine {
+  name: string;
+  /** the canopy backend that owns this machine (`selfName`) */
+  backend: string | null;
+  /** an ssh host, for a machine no backend runs on */
+  ssh: string | null;
+  /** the backend that reaches an ssh machine */
+  via: string | null;
+  /** an ssh machine's dev root; a backend's own is its scan root */
+  dev: string | null;
+}
+
+export interface KitTarget {
+  agent: string;
+  /** `~/…` or absolute */
+  skills: string;
+  mode: KitMode;
+  /** null: every machine */
+  machines: string[] | null;
+}
+
+export interface KitRule {
+  /** `*` for all */
+  agents: string[];
+  machines: string[];
+}
+
+export interface KitManifest {
+  machines: KitMachine[];
+  targets: KitTarget[];
+  default: KitRule;
+  only: Record<string, Partial<KitRule> & { source?: string }>;
+  exclude: string[];
+}
+
+export type KitEntryKind = "dir" | "link" | "file";
+
+export interface KitEntry {
+  name: string;
+  kind: KitEntryKind;
+  /** a link's text, as readlink prints it */
+  link: string | null;
+}
+
+export interface KitSeenTarget {
+  agent: string;
+  /** the dir, with `~` expanded on that machine */
+  dir: string;
+  exists: boolean;
+  parentExists: boolean;
+  entries: KitEntry[];
+  /** name → link text canopy placed */
+  placed: Record<string, string>;
+}
+
+export interface KitStoreState {
+  /** skill names git tracks under skills/ */
+  tracked: string[];
+  branch: string | null;
+  ahead: number;
+  behind: number;
+  /** changed or untracked paths */
+  dirty: number;
+  fetchFailed: boolean;
+}
+
+export interface KitSeen {
+  machine: string;
+  at: number;
+  /** why the machine could not be read; null when it was */
+  away: string | null;
+  home: string;
+  store: KitStoreState | null;
+  /** one per target that applies to this machine, the store's first */
+  targets: KitSeenTarget[];
+  /** source skill name → whether its path exists there */
+  sources: Record<string, boolean>;
+}
+
+export type KitAction =
+  | { kind: "mkdir"; agent: string }
+  | { kind: "link"; agent: string; name: string; link: string }
+  | { kind: "relink"; agent: string; name: string; link: string }
+  | { kind: "remove"; agent: string; name: string }
+  | { kind: "pull" };
+
+export type KitCellState = "ok" | "missing" | "drift" | "foreign" | "local" | "off" | "no-source" | "noagent" | "away";
+
+export interface KitCell {
+  machine: string;
+  agent: string;
+  skill: string;
+  state: KitCellState;
+  why: string;
+}
+
+export interface KitMachineView {
+  machine: string;
+  seen: KitSeen;
+  plan: KitAction[];
+}
+
+export interface KitInfo {
+  ok: boolean;
+  error: string | null;
+  machines: KitMachineView[];
+  cells: KitCell[];
+}
+
+export interface KitApplyResult {
+  machine: string;
+  done: KitAction[];
+  failed: { action: KitAction; why: string }[];
 }

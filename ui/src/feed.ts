@@ -524,6 +524,8 @@ export function describeEvent(
     case "health":
     // a run's own timeline says what a remembered rule let through
     case "remembered":
+    // the kit has its own page
+    case "kit":
       return [];
   }
 }

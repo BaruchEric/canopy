@@ -147,6 +147,9 @@ export function qEvent(q: Q, ev: ServerEvent): ServerEvent {
       return ev;
     case "health":
       return { ...ev, checks: ev.checks.map((c) => qCheck(q, c)) };
+    // the kit names machines, not repos: nothing to qualify
+    case "kit":
+      return ev;
   }
 }
 
