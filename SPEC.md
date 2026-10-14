@@ -32,6 +32,7 @@ One developer (the owner) across a laptop, an always-on Linux backend, a tablet 
 - oxlint 1.86.0 for lint, configured in `.oxlintrc.json`; a hook called after an early return fails lint (`react/rules-of-hooks`).
 - Plain CSS in `ui/src/styles.css`; no CSS framework.
 - git, gh and the `claude` CLI are shelled out to, never linked.
+- age-encryption 0.3.1 seals the secret store's values; @simplewebauthn/server 14.0.3 and @simplewebauthn/browser 14.0.0 are its passkey gate.
 
 ## How it is built and run
 
@@ -47,7 +48,7 @@ canopy ui ~/dev
 
 - Development: `bun run dev` (API on :7850) and `bun run dev:web` (Vite on :7851, proxying `/api`).
 - Production: the Bun server on :7850 serves the built `dist/web`, so a stale build shows a stale UI.
-- Shared backend: docker compose (`canopy`, `shells`, `stages`, and `tunnel` under its profile). Deploy committed `main` with `bun run redeploy`; `bun run redeploy status` says what is running. See `docs/deploy.md`.
+- Shared backend: docker compose (`canopy`, `shells`, `stages`, `secrets`, and `tunnel` under its profile). Deploy committed `main` with `bun run redeploy`; `bun run redeploy status` says what is running. See `docs/deploy.md`.
 - Run `bun test` with `SHELL=/bin/bash` when an interactive zsh config slows shells down.
 
 ## Data and state
@@ -58,6 +59,7 @@ canopy ui ~/dev
 - Per browser: preferences, open panels and shell tabs in localStorage.
 - Runs live in server memory; the last 60 finished ones stay until a restart.
 - Session history is read from claude-history's CLI (`--json`), never its sqlite file.
+- The secret store: `secrets.json` in the private Forgejo repo `eric/secrets`, its values sealed with age and the file signed. On the mini the `secrets-data` volume holds the checkout, the keys, `passkeys.json`, `audit.jsonl` and `applied.json`. On every other backend, next to the config: `secrets/` (a pulled copy), `secrets-config.json` (the pinned key and remote), `secrets-key.age` (that machine's passphrase-wrapped key) and `secrets-applied.json`.
 - No database of its own: git and the files above are the state.
 
 ## Decisions
@@ -70,6 +72,7 @@ canopy ui ~/dev
 - 2026-09-22: Headless shared backend in containers, with shells in a container of their own, because a redeploy must not kill open shells.
 - 2026-09-24: Peers sync over git only, pull-only and fast-forward only, because work should move between machines through commits, never file copies.
 - 2026-10-09: canopy takes only the doc half of the shared spec and keeps its design system in `ui/src/styles.css`, because its own palettes and tokens predate the shared DESIGN.md and differ from it.
+- 2026-10-14: Secrets live in one signed, age-sealed file in Forgejo, written only by a service on the mini behind passkeys, because a value must never sit in a container that shares the shells' namespaces or in a repo canopy syncs.
 
 ## Out of scope
 
