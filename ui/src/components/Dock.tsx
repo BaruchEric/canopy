@@ -3310,6 +3310,9 @@ export function Dock() {
           // the column to the left, which a shrink at the dock's widest
           // widens so the seam stays under the pointer; the first has none
           const left = at > 0 ? layout.columns[at - 1] : undefined;
+          // the first has the last column instead, whose hidden part it
+          // pulls in so the dock can narrow under the pointer
+          const last = at === 0 ? layout.columns.at(-1) : undefined;
           const lead = col?.cells[0]?.active;
           return (
             <Resizer
@@ -3329,7 +3332,14 @@ export function Dock() {
               hold={holdSeam}
               follow
               neighbour={left && { cssVar: columnVar(left.id), value: left.width }}
-              onCommit={(px, wider) => (left && wider !== undefined ? resizeColumns({ [column]: px, [left.id]: wider }) : resizeColumn(column, px))}
+              trailing={last && { cssVar: columnVar(last.id), value: last.width }}
+              onCommit={(px, wider, trail) =>
+                left && wider !== undefined
+                  ? resizeColumns({ [column]: px, [left.id]: wider })
+                  : last && trail !== undefined
+                    ? resizeColumns({ [column]: px, [last.id]: trail })
+                    : resizeColumn(column, px)
+              }
             />
           );
         })}

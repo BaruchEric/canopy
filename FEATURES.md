@@ -40,7 +40,7 @@ The gear still marks "panels side by side" once the dock is a grid of split cell
 
 ### FR-003 · Bug: a column seam lags the pointer when the dock is scrolled to its start
 P1 · added 2026-10-07 · source: dock pass · shipped 2026-10-14
-With nothing scrolled off the left (scrollLeft 0) and the overflow hidden on the right, a shrink moved the column's far edge, and the seam lagged by the hidden overflow (43px with two default columns at 1440x900). Fixed: at the dock's widest, the part of a shrink the scroll cannot take back now widens the column's left neighbour, so the seam stays under the pointer; the first column's seam, which has no neighbour, still lags as before.
+With nothing scrolled off the left (scrollLeft 0) and the overflow hidden on the right, a shrink moved the column's far edge, and the seam lagged by the hidden overflow (43px with two default columns at 1440x900). Fixed: at the dock's widest, the part of a shrink the scroll cannot take back now widens the column's left neighbour, so the seam stays under the pointer; the first column's seam, which has no neighbour, pulls the hidden overflow in from the last column the moment its shrink outruns the scroll, so the dock narrows under the pointer (2026-10-15).
 
 ### FR-006 · Touch drag for tabs on tablet-size screens
 P2 · added 2026-10-07 · source: dock pass · shipped 2026-10-07

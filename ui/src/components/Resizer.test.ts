@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { followBy, keyedWidth, lentLeft } from "./Resizer";
+import { followBy, keyedWidth, lentLeft, pulledIn } from "./Resizer";
 
 const at = (key: string, value: number, shift = false) => keyedWidth({ key, shiftKey: shift }, { value, min: 240, top: 1200, dir: -1 });
 
@@ -67,4 +67,30 @@ test("a widening lends nothing, and the neighbour takes no more than it has room
   expect(lentLeft({ ...capped, next: 500 })).toBe(0);
   expect(lentLeft({ ...capped, room: 25, next: 400 })).toBe(25);
   expect(lentLeft({ ...capped, room: 0, next: 400 })).toBe(0);
+});
+
+// the first column's seam is the dock's own left edge: a 539px and a 440px
+// column in an 893px dock, 98px hidden on the right, the last one with room
+const first = { startValue: 539, scrolled: 0, hidden: 98, trailRoom: 200, min: 240 };
+
+test("the first seam's shrink pulls the whole hidden overflow in from the last column at once", () => {
+  expect(pulledIn({ ...first, next: 538 })).toEqual({ trail: 98, self: 0 });
+  expect(pulledIn({ ...first, next: 450 })).toEqual({ trail: 98, self: 0 });
+});
+
+test("a shrink the scroll still gives back pulls nothing, and the rest pulls it all", () => {
+  expect(pulledIn({ ...first, scrolled: 30, hidden: 68, next: 520 })).toEqual({ trail: 0, self: 0 });
+  expect(pulledIn({ ...first, scrolled: 30, hidden: 68, next: 500 })).toEqual({ trail: 68, self: 0 });
+});
+
+test("a widening, or nothing hidden, pulls nothing", () => {
+  expect(pulledIn({ ...first, next: 600 })).toEqual({ trail: 0, self: 0 });
+  expect(pulledIn({ ...first, next: 539 })).toEqual({ trail: 0, self: 0 });
+  expect(pulledIn({ ...first, hidden: 0.5, next: 450 })).toEqual({ trail: 0, self: 0 });
+});
+
+test("what the last column has no room for comes off the dragged column, down to its minimum", () => {
+  expect(pulledIn({ ...first, trailRoom: 60, next: 450 })).toEqual({ trail: 60, self: 38 });
+  expect(pulledIn({ ...first, trailRoom: 0, next: 450 })).toEqual({ trail: 0, self: 98 });
+  expect(pulledIn({ ...first, trailRoom: 0, next: 300 })).toEqual({ trail: 0, self: 60 });
 });

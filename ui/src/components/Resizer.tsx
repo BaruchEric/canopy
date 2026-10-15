@@ -40,8 +40,14 @@ interface ResizerProps {
    *  with `follow`, a shrink the scroll cannot take back widens it instead
    *  (`lentLeft`), written live to its own `cssVar`. */
   neighbour?: { cssVar: string; value: number };
-  /** `left` is the neighbour's new width, only when the drag lent it any */
-  onCommit: (px: number, left?: number) => void;
+  /** For a seam with `follow` and no `neighbour`, the pane at the far end
+   *  of the row, the dock's last column: a shrink the scroll cannot take
+   *  back pulls the hidden overflow in from it (`pulledIn`), written live to
+   *  its own `cssVar`. The dragged pane itself when it is the only one. */
+  trailing?: { cssVar: string; value: number };
+  /** `left` is the neighbour's new width, only when the drag lent it any;
+   *  `trail` is the trailing pane's, only when the drag pulled from it */
+  onCommit: (px: number, left?: number, trail?: number) => void;
 }
 
 const SIZE_KEYS = new Set(["ArrowLeft", "ArrowRight", "Home", "End"]);
@@ -90,6 +96,26 @@ export function lentLeft({
   return clamp(startValue - next - scrolled, 0, Math.max(0, room));
 }
 
+/** What a seam with no neighbour (the first column's, the dock's own left
+ *  edge) pulls in from the overflow hidden on the right, so the seam stays
+ *  under the pointer. The dock narrows, moving that edge, only once its
+ *  tracks fit it, so the moment a shrink outruns the scroll it can give
+ *  back, the whole `hidden` part comes off at once: from the last column
+ *  first, which is the part nobody sees, up to its `trailRoom`, then off the
+ *  dragged column, down to `min`. Nothing for a widening, which scrolls. */
+export function pulledIn({
+  startValue,
+  next,
+  scrolled,
+  hidden,
+  trailRoom,
+  min,
+}: { startValue: number; next: number; scrolled: number; hidden: number; trailRoom: number; min: number }): { trail: number; self: number } {
+  if (hidden < 1 || startValue - next <= scrolled) return { trail: 0, self: 0 };
+  const trail = clamp(hidden, 0, Math.max(0, trailRoom));
+  return { trail, self: clamp(hidden - trail, 0, Math.max(0, next - min)) };
+}
+
 /**
  * A drag strip between two panes. The drag writes `cssVar` straight to the DOM
  * and only calls `onCommit` on release — routing every pointermove through the
@@ -111,6 +137,7 @@ export function Resizer({
   hold,
   follow = false,
   neighbour,
+  trailing,
   onCommit,
 }: ResizerProps) {
   const [dragging, setDragging] = useState(false);
@@ -155,6 +182,12 @@ export function Resizer({
     const room = lender ? top - lender.value : 0;
     const lenderBefore = lender ? owner?.style.getPropertyValue(lender.cssVar) ?? "" : "";
     let lent = 0;
+    // a seam with no neighbour pulls the hidden overflow in instead, from
+    // the trailing pane unless that is the dragged one itself
+    const puller = follow && owner && !neighbour ? trailing : undefined;
+    const trail = puller && puller.cssVar !== cssVar ? puller : undefined;
+    const trailBefore = trail ? owner?.style.getPropertyValue(trail.cssVar) ?? "" : "";
+    let pulled = 0;
     // Capture keeps the moves coming once the cursor outruns a 6px strip.
     handle.setPointerCapture(pointerId);
     setDragging(true);
@@ -166,9 +199,14 @@ export function Resizer({
         min,
         top,
       );
-      live.current = next;
+      // every move, a pull of 0 too, so a drag back within the scroll puts
+      // the trailing pane back
+      const pull = puller ? pulledIn({ startValue, next, scrolled, hidden, trailRoom: trail ? trail.value - min : 0, min }) : { trail: 0, self: 0 };
+      pulled = pull.trail;
+      live.current = next - pull.self;
       const el = target(handle);
-      el?.style.setProperty(cssVar, `${next}px`);
+      el?.style.setProperty(cssVar, `${live.current}px`);
+      if (trail) el?.style.setProperty(trail.cssVar, `${trail.value - pulled}px`);
       // every move, a lent 0 too, so a drag back from lending puts it back,
       // and before the follow reads where the handle has got to
       if (lender) {
@@ -189,7 +227,7 @@ export function Resizer({
     };
     const up = () => {
       end();
-      onCommit(live.current, lender && lent > 0 ? lender.value + lent : undefined);
+      onCommit(live.current, lender && lent > 0 ? lender.value + lent : undefined, trail && pulled > 0 ? trail.value - pulled : undefined);
     };
     handle.addEventListener("pointermove", move);
     handle.addEventListener("pointerup", up);
@@ -202,6 +240,8 @@ export function Resizer({
         else owner?.style.removeProperty(cssVar);
         if (lender && lenderBefore) owner?.style.setProperty(lender.cssVar, lenderBefore);
         else if (lender) owner?.style.removeProperty(lender.cssVar);
+        if (trail && trailBefore) owner?.style.setProperty(trail.cssVar, trailBefore);
+        else if (trail) owner?.style.removeProperty(trail.cssVar);
         if (follow && owner) owner.scrollLeft = scrolled;
       });
     }
