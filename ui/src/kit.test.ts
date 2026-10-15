@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
-import { cellAt, columns, mergeKit, rows } from "./kit";
-import type { KitCell, KitInfo } from "../../src/core/types";
+import { adoptableIn, allowAct, cellAt, columns, homesFor, mcpViewsOf, mergeKit, rows, serverAt, serverRows } from "./kit";
+import { parseAct } from "../../src/core/secretwire";
+import type { KitCell, KitInfo, KitMachineView, KitMcpView } from "../../src/core/types";
 
 const c = (machine: string, agent: string, skill: string, state: KitCell["state"]): KitCell => ({ machine, agent, skill, state, why: "" });
 const info = (cells: KitCell[]): KitInfo => ({ ok: true, error: null, machines: [], cells });
@@ -34,5 +35,31 @@ describe("kit view helpers", () => {
   test("cellAt", () => {
     expect(cellAt(mergeKit(byBackend).cells, "ship", "mac", "codex")?.state).toBe("missing");
     expect(cellAt(mergeKit(byBackend).cells, "ship", "mini", "hermes")).toBeNull();
+  });
+});
+
+describe("server rows", () => {
+  const s = (machine: string, agent: string, name: string, state: KitCell["state"]): KitCell => ({ ...c(machine, agent, name, state), kind: "mcp" });
+  const cells = [c("mac", "claude", "ship", "ok"), s("mac", "claude", "github", "adoptable"), s("mac", "codex", "github", "missing"), s("mac", "claude", "ship", "local")];
+  const all = { agent: null, machine: null, problems: false, text: "" };
+  test("skills and servers keep to their own tables, even with one name", () => {
+    expect(rows(cells, all)).toEqual(["ship"]);
+    expect(serverRows(cells, all)).toEqual(["github", "ship"]);
+    expect(cellAt(cells, "ship", "mac", "claude")?.state).toBe("ok");
+    expect(serverAt(cells, "ship", "mac", "claude")?.state).toBe("local");
+  });
+  test("adoptableIn lists one column's adoptable servers", () => {
+    expect(adoptableIn(cells, "mac", "claude")).toEqual(["github"]);
+    expect(adoptableIn(cells, "mac", "codex")).toEqual([]);
+  });
+  test("the allow act carries every machine's home, and parses as the service will read it", () => {
+    const v: KitMcpView = { name: "github", def: { command: "bunx", args: ["-y", "@modelcontextprotocol/server-github"], url: null, env: ["GITHUB_PERSONAL_ACCESS_TOKEN"], headers: [] }, hash: "a".repeat(64), env: { GITHUB_PERSONAL_ACCESS_TOKEN: "gh_token" }, headers: {}, machines: ["mac", "mini"], later: ["gpd"] };
+    const view = (machine: string, home?: string): KitMachineView => ({ machine, seen: { machine, at: 1, away: null, home: "", store: null, targets: [], sources: {} }, plan: [], ...(home ? { home } : {}) });
+    expect(homesFor(v, [view("mac", "/Users/e")])).toEqual({ missing: ["mini"] });
+    const h = homesFor(v, [view("mac", "/Users/e"), view("mini", "/home/eric")]);
+    if (!("homes" in h)) throw new Error("no homes");
+    const act = allowAct(v, h.homes);
+    expect(parseAct(act)).toEqual(act);
+    expect(mcpViewsOf({ mac: { ...info([]), mcp: [v] }, mini: { ...info([]), mcp: [v] } })).toEqual([v]);
   });
 });

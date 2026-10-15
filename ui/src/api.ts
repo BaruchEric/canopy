@@ -2,6 +2,7 @@ import type {
   HealthCheck,
   KitApplyResult,
   KitInfo,
+  KitMcpPreview,
   HealthInfo,
   SecretAuditEntry,
   SecretProposalIn,
@@ -577,6 +578,13 @@ export const api = {
   kitScan: (b: string) => req<KitInfo>(b, "/api/kit/scan", { method: "POST", body: "{}" }),
   kitApply: (b: string, machine: string) =>
     req<KitApplyResult>(b, "/api/kit/apply", { method: "POST", body: JSON.stringify({ machine }) }),
+  kitAdopt: (b: string, machine: string, agent: string, names?: string[]) =>
+    req<KitApplyResult>(b, "/api/kit/adopt", { method: "POST", body: JSON.stringify({ machine, agent, names }) }),
+  kitRestore: (b: string, machine: string, agent: string, name: string) =>
+    req<KitApplyResult>(b, "/api/kit/restore", { method: "POST", body: JSON.stringify({ machine, agent, name }) }),
+  /** what adopt would change, both sides masked */
+  kitPreview: (b: string, machine: string, agent: string, name: string) =>
+    req<KitMcpPreview>(b, `/api/kit/preview?${new URLSearchParams({ machine, agent, name }).toString()}`),
   /** heal one check now, by its plain id on that backend */
   healCheck: async (b: string, id: string) => from(b, await req<HealthCheck>(b, `/api/health/heal?id=${encodeURIComponent(id)}`, { method: "POST", body: "{}" }), qCheck),
   /* the secret store (server/secrets.ts); no answer here ever holds a value
