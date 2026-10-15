@@ -37,9 +37,10 @@ export function kitStatusLines(info: KitInfo, machine: string | null): string[] 
   return out;
 }
 
-export function kitApplyLines(r: KitApplyResult): string[] {
+/** a dry run's `done` holds the plan, so it reads as what would run */
+export function kitApplyLines(r: KitApplyResult, dryRun = false): string[] {
   return [
-    ...r.done.map((a) => `${r.machine}: ${actionWord(a)} done`),
+    ...r.done.map((a) => `${r.machine}: ${actionWord(a)} ${dryRun ? "would run" : "done"}`),
     ...r.failed.map((f) => `${r.machine}: ${actionWord(f.action)} failed: ${f.why}`),
   ];
 }
@@ -84,7 +85,7 @@ export async function kitCommand(argv: string[], { fail }: { fail: (msg: string)
     for (const m of info.machines) {
       if ((machine && m.machine !== machine) || m.seen.away || m.plan.length === 0) continue;
       const r = await call<KitApplyResult>(t, "POST", "/api/kit/apply", { machine: m.machine, dryRun });
-      for (const line of kitApplyLines(r)) console.log(line);
+      for (const line of kitApplyLines(r, dryRun)) console.log(line);
       if (r.failed.length) failed = true;
     }
   }

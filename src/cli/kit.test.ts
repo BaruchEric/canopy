@@ -33,6 +33,10 @@ describe("kit cli", () => {
     expect(kitApplyLines({ machine: "mac", done: [{ kind: "pull" }], failed: [{ action: { kind: "mkdir", agent: "hermes" }, why: "cannot make /x" }] }))
       .toEqual(["mac: pull done", "mac: mkdir hermes failed: cannot make /x"]);
   });
+  test("a dry run says what would run, not that it was done", () => {
+    expect(kitApplyLines({ machine: "mini", done: [{ kind: "mcp-set", agent: "codex", name: "github" }], failed: [] }, true))
+      .toEqual(["mini: mcp-set codex/github would run"]);
+  });
 });
 
 describe("kit cli over several backends", () => {
