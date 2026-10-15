@@ -49,6 +49,8 @@ export class KitHub {
   private scanning: Promise<KitInfo> | null = null;
   private views = new Map<string, View>();
   private hashes: Record<string, string> = {};
+  /** counts publishes begun, so one that answers late gives way to a newer one */
+  private publishes = 0;
   /** per machine, every entry the kit would write there; never leaves this process */
   private entries = new Map<string, Record<string, KitMcpEntry>>();
   private mcpSeen = new Map<string, KitMcpSeen>();
@@ -128,6 +130,9 @@ export class KitHub {
     );
     // after the skills scan, so an ssh machine that is away is not waited on twice
     const mcp = seen.away ? null : await seeMcp(kit, m, { run: this.deps.run, env: this.deps.env }).catch(() => null);
+    // kit.json changed during the read (an apply's rescan racing a scan):
+    // this read follows the old manifest, and the new one's scan paints it
+    if (kit !== this.kit) return;
     this.views.set(m.name, { seen, dev: m.dev, mcp, ssh: m.host !== null });
     await this.publish(kit);
   }
@@ -160,7 +165,12 @@ export class KitHub {
   }
 
   private async publish(kit: KitManifest): Promise<void> {
+    const n = ++this.publishes;
     const secrets = this.deps.secrets ? await this.deps.secrets().catch(() => null) : null;
+    // During the read, kit.json may have changed (this.hashes are the new
+    // kit's then), or a newer publish may have begun. That one reads every
+    // view this one would and newer store metadata, so this result is dropped.
+    if (kit !== this.kit || n !== this.publishes) return;
     const vs = this.mine(kit).map((m) => this.views.get(m.name)).filter((v): v is View => !!v);
     const machines: KitMachineView[] = [];
     const cellViews: { seen: KitSeen; dev: string; ctx?: KitMcpCtx }[] = [];

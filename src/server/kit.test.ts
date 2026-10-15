@@ -129,6 +129,9 @@ function storeInfo(allow: string[], sink: "same" | "waiting" = "same"): SecretsI
   };
 }
 
+/** no digits, so maskEntry leaves the path as it is */
+const HOST = "/home/hostside";
+
 async function setupMcp() {
   const h = mkdtempSync(join(tmpdir(), "kithub-mcp-"));
   dirs.push(h);
@@ -144,10 +147,18 @@ async function setupMcp() {
   const kitPath = join(store, "kit.json");
   writeFileSync(kitPath, JSON.stringify(MCP_MANIFEST));
   let secrets = storeInfo([]);
+  // a held read answers only when the test releases it, with what the test gives
+  const held: Promise<SecretsInfo>[] = [];
+  const hold = () => {
+    let release: (info: SecretsInfo) => void = () => {};
+    held.push(new Promise<SecretsInfo>((r) => { release = r; }));
+    return release;
+  };
   const events: ServerEvent[] = [];
   const hub = new KitHub({
     self: "mac", devRoot: join(h, "dev"), kitPath, broadcast: (e) => events.push(e), env: { HOME: h, KIT_CLAUDE: fakeClaude(h) }, every: 0,
-    secrets: async () => secrets, hostHome: h, procEnv: {},
+    // the host's home differs from the scan's HOME, as on the mini (/home/eric beside /home/bun)
+    secrets: () => held.shift() ?? Promise.resolve(secrets), hostHome: HOST, procEnv: {},
   });
   hubs.push(hub);
   const grants = async () => [`mcp:github#${await mcpHash(GH_DEF)}`, "sink:mcp-github-mac"];
@@ -160,7 +171,7 @@ async function setupMcp() {
     return { status: res.status, text: await res.text() };
   };
   const claudeServers = () => (JSON.parse(readFileSync(join(h, ".claude.json"), "utf8")) as { mcpServers: Record<string, unknown> }).mcpServers;
-  return { h, hub, events, allow, route, claudeServers };
+  return { h, kitPath, hub, events, allow, grants, hold, route, claudeServers };
 }
 
 describe("KitHub and MCP servers", () => {
@@ -172,7 +183,8 @@ describe("KitHub and MCP servers", () => {
     expect(cell("claude", "github")?.state).toBe("not-allowed");
     expect(cell("claude", "excalidraw")?.state).toBe("missing");
     expect(info.machines[0]?.plan).toContainEqual({ kind: "mcp-set", agent: "claude", name: "excalidraw" });
-    expect(info.machines[0]?.home).toBeTruthy();
+    expect(info.machines[0]?.home).toBe(HOST);
+    expect(info.machines[0]?.seen.home).not.toBe(HOST);
     expect(info.mcp).toEqual([{ name: "github", def: GH_DEF, hash: await mcpHash(GH_DEF), env: { GITHUB_PERSONAL_ACCESS_TOKEN: "gh_token" }, headers: {}, machines: ["mac"], later: [] }]);
     expect(JSON.stringify(info)).not.toContain("hand-literal-0x6b");
     expect(JSON.stringify(events)).not.toContain("hand-literal-0x6b");
@@ -189,7 +201,7 @@ describe("KitHub and MCP servers", () => {
     expect(hub.info().cells.find((c) => c.agent === "claude" && c.skill === "github")?.state).toBe("adoptable");
     const r = await route("POST", "/api/kit/adopt", { machine: "mac", agent: "claude", names: ["github"] });
     expect(r.status).toBe(200);
-    expect(claudeServers()["github"]).toMatchObject({ command: expect.stringContaining("/.claude/bin/canopy-mcp-env"), args: ["github", "--", "bunx", "-y", "@modelcontextprotocol/server-github"] });
+    expect(claudeServers()["github"]).toMatchObject({ command: `${HOST}/.claude/bin/canopy-mcp-env`, args: ["github", "--", "bunx", "-y", "@modelcontextprotocol/server-github"] });
     expect(hub.info().cells.find((c) => c.agent === "claude" && c.skill === "github")).toMatchObject({ state: "ok", restore: true });
     expect((await route("POST", "/api/kit/restore", { machine: "mac", agent: "claude", name: "github" })).status).toBe(200);
     expect(claudeServers()["github"]).toEqual(HAND);
@@ -219,7 +231,7 @@ describe("KitHub and MCP servers", () => {
     const p = JSON.parse(r.text) as KitMcpPreview;
     expect(p.state).toBe("adoptable");
     expect(p.have).toMatchObject({ env: { GITHUB_PERSONAL_ACCESS_TOKEN: "•••" } });
-    expect(p.want).toMatchObject({ args: ["github", "--", "bunx", "-y", "@modelcontextprotocol/server-github"] });
+    expect(p.want).toMatchObject({ command: `${HOST}/.claude/bin/canopy-mcp-env`, args: ["github", "--", "bunx", "-y", "@modelcontextprotocol/server-github"] });
     expect(r.text).not.toContain("hand-literal-0x6b");
   });
 
@@ -251,5 +263,51 @@ describe("KitHub and MCP servers", () => {
     expect((await route("GET", "/api/kit/preview?machine=mac&agent=claude&name=nope")).status).toBe(404);
     // adopt and put back are never in a plan, so apply refuses them
     expect((await route("POST", "/api/kit/apply", { machine: "mac", actions: [{ kind: "mcp-adopt", agent: "claude", name: "github" }] })).status).toBe(409);
+  });
+
+  test("the host's home is what the kit writes; the scan still reads under HOME (ruling 6)", async () => {
+    const { h, hub, allow, route } = await setupMcp();
+    await allow();
+    const info = await hub.scan();
+    expect(info.machines[0]).toMatchObject({ home: HOST, seen: { home: h } });
+    const p = JSON.parse((await route("GET", "/api/kit/preview?machine=mac&agent=claude&name=github")).text) as KitMcpPreview;
+    // the hand-made entry came from HOME's .claude.json, the planned wrapper from the host's home
+    expect(p.have).toMatchObject({ command: "bunx" });
+    expect(p.want).toMatchObject({ command: `${HOST}/.claude/bin/canopy-mcp-env` });
+  });
+
+  test("a republish that waits on the store while kit.json changes leaves the new kit's plan (fix round 1)", async () => {
+    const { hub, kitPath, hold, route } = await setupMcp();
+    await hub.scan();
+    const release = hold();
+    const late = hub.republish();
+    // kit.json drops excalidraw and gains fetch while that republish waits
+    const { excalidraw: _, ...rest } = MCP_MANIFEST.mcp;
+    writeFileSync(kitPath, JSON.stringify({ ...MCP_MANIFEST, mcp: { ...rest, fetch: { command: "uvx", args: ["mcp-server-fetch"], agents: ["claude"] } } }));
+    await hub.scan();
+    release(storeInfo([]));
+    await late;
+    const mcp = hub.info().cells.filter((c) => c.kind === "mcp" && c.agent === "claude").map((c) => c.skill);
+    expect(mcp).toContain("fetch");
+    expect(mcp).not.toContain("excalidraw");
+    expect(hub.info().machines[0]?.plan).toContainEqual({ kind: "mcp-set", agent: "claude", name: "fetch" });
+    expect(hub.info().machines[0]?.plan).not.toContainEqual({ kind: "mcp-set", agent: "claude", name: "excalidraw" });
+    expect((await route("GET", "/api/kit/preview?machine=mac&agent=claude&name=excalidraw")).status).toBe(404);
+    expect((await route("GET", "/api/kit/preview?machine=mac&agent=claude&name=fetch")).status).toBe(200);
+  });
+
+  test("two publishes that answer out of order leave the newer one's result (fix round 1)", async () => {
+    const { hub, grants, hold } = await setupMcp();
+    await hub.scan();
+    const allowed = storeInfo(await grants());
+    const releaseOlder = hold();
+    const older = hub.republish();
+    const releaseNewer = hold();
+    const newer = hub.republish();
+    releaseNewer(allowed);
+    await newer;
+    releaseOlder(storeInfo([]));
+    await older;
+    expect(hub.info().cells.find((c) => c.kind === "mcp" && c.agent === "claude" && c.skill === "github")?.state).toBe("adoptable");
   });
 });
