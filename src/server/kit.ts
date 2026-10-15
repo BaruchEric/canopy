@@ -111,8 +111,9 @@ export class KitHub {
       this.deps.broadcast({ type: "kit", kit: this.last });
       return this.last;
     }
-    this.kit = kit;
+    // the hashes before the manifest, so a republish during the await never plans a new kit against old hashes
     this.hashes = Object.fromEntries(await Promise.all(kit.mcp.map(async (s) => [s.name, await mcpHash(mcpDefOf(s))] as const)));
+    this.kit = kit;
     const mine = this.mine(kit);
     for (const name of this.views.keys()) if (!mine.some((m) => m.name === name)) this.views.delete(name);
     await Promise.all(mine.map((m) => this.scanOne(kit, m)));
