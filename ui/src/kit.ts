@@ -4,9 +4,12 @@ export interface KitFilter { agent: string | null; machine: string | null; probl
 
 export const GLYPH: Record<KitCellState, string> = {
   ok: "●", missing: "○", drift: "≠", foreign: "◆", local: "·", off: "", "no-source": "∅", noagent: "–", away: "?",
+  "not-allowed": "⊘", "stale-allowance": "⊘", "no-sink": "◌", adoptable: "◇", unsupported: "×", "phase-3": "…", unresolved: "∅",
 };
 
-export const PROBLEM: ReadonlySet<KitCellState> = new Set(["missing", "drift", "foreign", "no-source", "away"]);
+export const PROBLEM: ReadonlySet<KitCellState> = new Set([
+  "missing", "drift", "foreign", "no-source", "away", "not-allowed", "stale-allowance", "no-sink", "adoptable", "unresolved",
+]);
 
 export function mergeKit(byBackend: Record<string, KitInfo>) {
   const cells: KitCell[] = [];

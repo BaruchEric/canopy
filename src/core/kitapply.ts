@@ -2,6 +2,7 @@
  *  It acts only on links (and on the dirs it makes), so a real folder is
  *  never replaced or removed. */
 import { onHost } from "./exec";
+import { isMcpAction } from "./kit";
 import { KIT_FILE } from "./kitscan";
 import type { KitAction, KitApplyResult, KitSeen } from "./types";
 
@@ -44,6 +45,7 @@ const storeOf = (seen: KitSeen) => seen.targets[0]!.dir.replace(/\/skills\/?$/, 
 export function applyArgs(seen: KitSeen, actions: KitAction[]): string[] {
   const args = [storeOf(seen)];
   for (const a of actions) {
+    if (isMcpAction(a)) continue;
     if (a.kind === "pull") args.push("pull", "-", "-", "-");
     else if (a.kind === "mkdir") args.push("mkdir", dirOf(seen, a.agent), "-", "-");
     else if (a.kind === "remove") args.push("remove", dirOf(seen, a.agent), a.name, "-");
@@ -55,7 +57,7 @@ export function applyArgs(seen: KitSeen, actions: KitAction[]): string[] {
 export function nextPlaced(seen: KitSeen, done: KitAction[]): Record<string, Record<string, string>> {
   const out: Record<string, Record<string, string>> = {};
   for (const a of done) {
-    if (a.kind === "pull" || a.kind === "mkdir") continue;
+    if (a.kind === "pull" || a.kind === "mkdir" || isMcpAction(a)) continue;
     const t = seen.targets.find((x) => x.agent === a.agent);
     if (!t) continue;
     const p = (out[a.agent] ??= { ...t.placed });

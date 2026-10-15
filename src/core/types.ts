@@ -2838,9 +2838,20 @@ export type KitAction =
   | { kind: "link"; agent: string; name: string; link: string }
   | { kind: "relink"; agent: string; name: string; link: string }
   | { kind: "remove"; agent: string; name: string }
-  | { kind: "pull" };
+  | { kind: "pull" }
+  /** an MCP server written as the kit defines it (phase 2); the entry stays in KitHub */
+  | { kind: "mcp-set"; agent: string; name: string }
+  | { kind: "mcp-remove"; agent: string; name: string }
+  /** a hand-made entry replaced by the kit's, the old one kept for put back */
+  | { kind: "mcp-adopt"; agent: string; name: string }
+  | { kind: "mcp-restore"; agent: string; name: string };
 
-export type KitCellState = "ok" | "missing" | "drift" | "foreign" | "local" | "off" | "no-source" | "noagent" | "away";
+export type KitMcpAction = Extract<KitAction, { kind: "mcp-set" | "mcp-remove" | "mcp-adopt" | "mcp-restore" }>;
+
+export type KitCellState =
+  | "ok" | "missing" | "drift" | "foreign" | "local" | "off" | "no-source" | "noagent" | "away"
+  /** MCP servers (phase 2) */
+  | "not-allowed" | "stale-allowance" | "no-sink" | "adoptable" | "unsupported" | "phase-3" | "unresolved";
 
 export interface KitCell {
   machine: string;
@@ -2848,6 +2859,10 @@ export interface KitCell {
   skill: string;
   state: KitCellState;
   why: string;
+  /** an MCP server's cell; absent for a skill (and from a backend before phase 2) */
+  kind?: "mcp";
+  /** canopy keeps the hand-made entry adopt replaced here: put back restores it */
+  restore?: boolean;
 }
 
 export interface KitMachineView {
@@ -2867,6 +2882,59 @@ export interface KitApplyResult {
   machine: string;
   done: KitAction[];
   failed: { action: KitAction; why: string }[];
+}
+
+/** an MCP entry as an agent's file holds it, or as the kit would write it */
+export type KitMcpEntry = Record<string, unknown>;
+
+/** an agent's MCP file as the scan read it. Raw: it stays in KitHub and
+ *  never reaches KitInfo, a route or an event. */
+export interface KitMcpFileSeen {
+  agent: string;
+  /** with ~ expanded on that machine */
+  path: string;
+  /** "<mtime> <size>" for the in-place write's check; "" when the file is missing */
+  stamp: string;
+  exists: boolean;
+  text: string;
+  /** server name to entry; null when the file does not parse */
+  entries: Record<string, KitMcpEntry> | null;
+  /** canopy's words for why it did not parse, never the parser's */
+  error: string | null;
+}
+
+/** ~/.claude/.canopy-kit-mcp.json: what canopy wrote, and what adopt replaced */
+export interface KitMcpOwned {
+  /** agent to the server names canopy wrote there */
+  placed: Record<string, string[]>;
+  /** agent to name to the hand-made entry adopt replaced */
+  adoptedFrom: Record<string, Record<string, KitMcpEntry>>;
+}
+
+export interface KitMcpSeen {
+  /** the claude binary the scan found, absolute; null when none */
+  claude: string | null;
+  /** dotclaude's git ignores mcp-env/ on this machine */
+  ignored: boolean;
+  /** ~/.claude/bin/canopy-mcp-env is there and runs */
+  wrapper: boolean;
+  owned: KitMcpOwned;
+  files: KitMcpFileSeen[];
+}
+
+/** what MCP planning needs beyond the scan */
+export interface KitMcpCtx {
+  mcp: KitMcpSeen;
+  /** server name to its definition hash */
+  hashes: Record<string, string>;
+  /** the store's metadata as this backend sees it; null when it has none */
+  secrets: SecretsInfo | null;
+  /** the home ~ stands for in what the kit writes: the host's, on the mini */
+  home: string;
+  /** where ${env:NAME} resolves */
+  env: Record<string, string | undefined>;
+  /** reached over ssh (gpd): a server with secrets waits for secrets phase 3 */
+  ssh: boolean;
 }
 
 /** The part of an MCP server the definition hash covers (phase 2 spec,

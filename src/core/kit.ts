@@ -2,10 +2,10 @@
  *  the manifest, what each machine should hold, and what to do about it.
  *  Browser-safe: no node imports. */
 import type {
-  KitAction, KitCell, KitCellState, KitMachine, KitManifest, KitMcpDef, KitMcpFormat, KitMcpOption, KitMcpServer, KitMcpTarget, KitMcpValue,
-  KitMode, KitRule, KitSeen, KitSeenTarget, KitTarget,
+  KitAction, KitCell, KitCellState, KitMachine, KitManifest, KitMcpAction, KitMcpCtx, KitMcpDef, KitMcpEntry, KitMcpFormat, KitMcpOption,
+  KitMcpServer, KitMcpTarget, KitMcpValue, KitMode, KitRule, KitSeen, KitSeenTarget, KitTarget, SecretsInfo,
 } from "./types";
-import { canonical, DOTENV_KEY, HEADER_NAME, MCP_SERVER, MCP_SERVER_SRC, mcpSinkId, SECRET_NAME, SINK_ID } from "./secretfile";
+import { canonical, DOTENV_KEY, HEADER_NAME, MCP_SERVER, MCP_SERVER_SRC, mcpSinkId, parseMcpAllow, SECRET_NAME, SINK_ID } from "./secretfile";
 
 export const SKILL_NAME = /^[a-z0-9][a-z0-9._-]*$/;
 const MODES: readonly KitMode[] = ["store", "link", "copy"];
@@ -249,7 +249,7 @@ export function wantLink(kit: KitManifest, seen: KitSeen, target: KitSeenTarget,
 /** whether a skill can exist on this machine at all */
 const present = (kit: KitManifest, seen: KitSeen, skill: string) => !isSource(kit, skill) || seen.sources[skill] === true;
 
-export function planKit(kit: KitManifest, seen: KitSeen, dev: string): KitAction[] {
+function planSkills(kit: KitManifest, seen: KitSeen, dev: string): KitAction[] {
   if (seen.away || !seen.store) return [];
   const out: KitAction[] = [];
   if (seen.store.behind > 0 && seen.store.ahead === 0) out.push({ kind: "pull" });
@@ -301,9 +301,15 @@ function cell(kit: KitManifest, seen: KitSeen, t: KitSeenTarget, isStore: boolea
   return { state: "ok", why: "" };
 }
 
-export function cellsOf(kit: KitManifest, views: { seen: KitSeen; dev: string }[]): KitCell[] {
+export function planKit(kit: KitManifest, seen: KitSeen, dev: string, ctx?: KitMcpCtx): KitAction[] {
+  const skills = planSkills(kit, seen, dev);
+  if (!ctx || seen.away || !seen.store) return skills;
+  return [...skills, ...planMcp(kit, seen, ctx).actions];
+}
+
+export function cellsOf(kit: KitManifest, views: { seen: KitSeen; dev: string; ctx?: KitMcpCtx }[]): KitCell[] {
   const out: KitCell[] = [];
-  for (const { seen, dev } of views) {
+  for (const { seen, dev, ctx } of views) {
     if (seen.away || !seen.store) {
       for (const t of targetsFor(kit, seen.machine)) out.push({ machine: seen.machine, agent: t.agent, skill: "*", state: "away", why: seen.away ?? "no store" });
       continue;
@@ -315,6 +321,222 @@ export function cellsOf(kit: KitManifest, views: { seen: KitSeen; dev: string }[
         out.push({ machine: seen.machine, agent: t.agent, skill, ...cell(kit, seen, t, i === 0, skill, dev, names) });
       }
     });
+    if (ctx) out.push(...mcpCells(kit, seen, ctx));
+  }
+  return out;
+}
+
+/* ---------- MCP servers (docs/superpowers/specs/2026-10-14-kit-secrets-phase-2-design.md) ---------- */
+
+export const WRAPPER = "~/.claude/bin/canopy-mcp-env";
+
+export const isMcpAction = (a: KitAction): a is KitMcpAction => a.kind.startsWith("mcp-");
+
+export const mcpTargets = (kit: KitManifest, machine: string): (KitTarget & { mcp: KitMcpTarget })[] =>
+  targetsFor(kit, machine).filter((t): t is KitTarget & { mcp: KitMcpTarget } => t.mcp !== null);
+
+export const mcpWanted = (s: KitMcpServer, agent: string, machine: string): boolean =>
+  (s.agents === null || s.agents.includes(agent)) && (s.machines === null || s.machines.includes(machine));
+
+/** literal and ${env:} values resolved; secrets left to the wrapper. The
+ *  values sit under `vals` so a key named `unset` cannot pass for the signal
+ *  and carry its value into a why. */
+function resolved(vals: Record<string, KitMcpValue>, env: Record<string, string | undefined>): { vals: Record<string, string> } | { unset: string } {
+  const out: Record<string, string> = {};
+  for (const [k, v] of Object.entries(vals)) {
+    if ("secret" in v) continue;
+    if ("literal" in v) out[k] = v.literal;
+    else {
+      const x = env[v.env];
+      if (x === undefined) return { unset: v.env };
+      out[k] = x;
+    }
+  }
+  return { vals: out };
+}
+
+/** the entry one agent's config should hold on this machine, or why it holds none */
+export function buildEntry(s: KitMcpServer, agent: string, format: KitMcpFormat, home: string, env: Record<string, string | undefined>): { entry: KitMcpEntry } | { state: KitCellState; why: string } {
+  const exp = (v: string) => expandHome(v, home);
+  const re = resolved(s.env, env);
+  const rh = resolved(s.headers, env);
+  if ("unset" in re) return { state: "unresolved", why: `\${env:${re.unset}} is not set for canopy here` };
+  if ("unset" in rh) return { state: "unresolved", why: `\${env:${rh.unset}} is not set for canopy here` };
+  const e = re.vals;
+  const h = rh.vals;
+  const sec = secretsOf(s);
+  const wrapper = exp(WRAPPER);
+  const opts = Object.fromEntries(Object.entries(s.options[agent] ?? {}).map(([k, v]) => [k, typeof v === "string" ? exp(v) : v]));
+  if (s.command !== null) {
+    const viaWrapper = Object.keys(sec.env).length > 0;
+    const command = viaWrapper ? wrapper : exp(s.command);
+    const args = viaWrapper ? [s.name, "--", exp(s.command), ...s.args.map(exp)] : s.args.map(exp);
+    const entry: KitMcpEntry = format === "claude-json" ? { type: "stdio", command, args } : { command, args };
+    if (Object.keys(e).length > 0) entry["env"] = e;
+    return { entry: { ...entry, ...opts } };
+  }
+  const secretHeaders = Object.keys(sec.headers).length > 0;
+  if (format === "codex-toml") {
+    if (secretHeaders) return { state: "unsupported", why: "not supported for codex: a url server with secret headers" };
+    const entry: KitMcpEntry = { url: s.url };
+    if (Object.keys(h).length > 0) entry["http_headers"] = h;
+    return { entry: { ...entry, ...opts } };
+  }
+  const entry: KitMcpEntry = { type: "http", url: s.url };
+  if (Object.keys(h).length > 0) entry["headers"] = h;
+  if (secretHeaders) entry["headersHelper"] = `${wrapper} --headers ${s.name}`;
+  return { entry: { ...entry, ...opts } };
+}
+
+const bare = (e: KitMcpEntry): KitMcpEntry =>
+  Object.fromEntries(Object.entries(e).filter(([k, v]) => !(k === "type" && v === "stdio") && !(Array.isArray(v) && v.length === 0) && !(isObj(v) && Object.keys(v).length === 0)));
+
+/** the same server: `type: "stdio"` and empty lists and tables are what each CLI leaves out or adds */
+export const sameEntry = (a: KitMcpEntry, b: KitMcpEntry): boolean => canonical(bare(a)) === canonical(bare(b));
+
+/** whether each of the server's secrets allows this definition, an older one, or none */
+export function allowanceOf(s: KitMcpServer, hash: string, info: SecretsInfo): "allowed" | "stale" | "none" {
+  const sec = secretsOf(s);
+  const names = [...Object.values(sec.env), ...Object.values(sec.headers)];
+  const hashes = names.map((n) => info.secrets.find((m) => m.name === n)?.allow.map(parseMcpAllow).find((p) => p?.server === s.name)?.hash ?? null);
+  if (hashes.every((x) => x === hash)) return "allowed";
+  return hashes.some((x) => x !== null) ? "stale" : "none";
+}
+
+function sinkReady(info: SecretsInfo, id: string, keys: string[]): { ok: true } | { waiting: true } | { why: string } {
+  const k = info.sinks.find((x) => x.id === id);
+  if (!k) return { why: `no sink ${id}; allow it again` };
+  if (k.error) return { why: `sink ${id}: ${k.error}` };
+  const states = keys.map((key) => k.state[key] ?? "unknown");
+  if (states.every((x) => x === "same")) return { ok: true };
+  if (states.some((x) => x === "waiting")) return { waiting: true };
+  return { why: `sink ${id} reads ${states.join(", ")}` };
+}
+
+/** whether a server's secrets can reach it on this machine now */
+export function serverReady(s: KitMcpServer, machine: string, ctx: KitMcpCtx): { ok: true } | { waiting: true } | { state: KitCellState; why: string } {
+  if (!hasSecrets(s)) return { ok: true };
+  if (ctx.ssh) return { state: "phase-3", why: "a server with secrets on an ssh machine waits for secrets phase 3" };
+  if (!ctx.secrets?.ok) return { state: "no-sink", why: "this backend cannot read the secret store" };
+  const a = allowanceOf(s, ctx.hashes[s.name] ?? "", ctx.secrets);
+  if (a === "none") return { state: "not-allowed", why: "not allowed; allow it from the kit view" };
+  if (a === "stale") return { state: "stale-allowance", why: "allowed for an older definition; allow it again" };
+  if (!ctx.mcp.ignored) return { state: "no-sink", why: "dotclaude does not ignore mcp-env/ here; pull dotclaude" };
+  if (!ctx.mcp.wrapper) return { state: "no-sink", why: "~/.claude/bin/canopy-mcp-env is missing; pull dotclaude" };
+  const sec = secretsOf(s);
+  let waiting = false;
+  for (const [id, keys] of [[mcpSinkId(s.name, machine), Object.keys(sec.env)], [mcpSinkId(s.name, machine, true), Object.keys(sec.headers)]] as const) {
+    if (keys.length === 0) continue;
+    const r = sinkReady(ctx.secrets, id, keys);
+    if ("why" in r) return { state: "no-sink", why: r.why };
+    if ("waiting" in r) waiting = true;
+  }
+  return waiting ? { waiting: true } : { ok: true };
+}
+
+interface McpRow { agent: string; name: string; state: KitCellState; why: string; want: KitMcpEntry | null; restore: boolean; action: KitAction | null }
+
+function mcpRows(kit: KitManifest, seen: KitSeen, ctx: KitMcpCtx): McpRow[] {
+  const out: McpRow[] = [];
+  for (const t of mcpTargets(kit, seen.machine)) {
+    const file = ctx.mcp.files.find((x) => x.agent === t.agent);
+    const placed = ctx.mcp.owned.placed[t.agent] ?? [];
+    const adopted = ctx.mcp.owned.adoptedFrom[t.agent] ?? {};
+    const mine = kit.mcp.filter((s) => mcpWanted(s, t.agent, seen.machine));
+    const row = (name: string, state: KitCellState, why: string, extra: Partial<McpRow> = {}): McpRow =>
+      ({ agent: t.agent, name, state, why, want: null, restore: name in adopted, action: null, ...extra });
+    if (!file || file.entries === null) {
+      for (const s of mine) out.push(row(s.name, "drift", file?.error ?? `${t.mcp.file} was not read`));
+      continue;
+    }
+    if (t.mcp.format === "claude-json" && !ctx.mcp.claude) {
+      for (const s of mine) out.push(row(s.name, "noagent", "no claude binary found here"));
+      continue;
+    }
+    const entries = file.entries;
+    for (const name of [...new Set([...kit.mcp.map((s) => s.name), ...Object.keys(entries), ...placed, ...Object.keys(adopted)])].sort()) {
+      const s = mine.find((x) => x.name === name);
+      const have = entries[name] ?? null;
+      const owned = placed.includes(name);
+      const remove: Partial<McpRow> = owned && have ? { action: { kind: "mcp-remove", agent: t.agent, name } } : {};
+      if (!s) {
+        const known = kit.mcp.some((x) => x.name === name);
+        if (owned && have) out.push(row(name, "drift", "kit.json no longer gives it here; apply removes it", remove));
+        else if (have) out.push(row(name, "local", known ? "here, but the manifest does not give it to this agent" : "hand-made; kit.json does not define it"));
+        else if (name in adopted) out.push(row(name, "off", "canopy took it out; put back restores the hand-made one"));
+        else if (known) out.push(row(name, "off", ""));
+        continue;
+      }
+      const built = buildEntry(s, t.agent, t.mcp.format, ctx.home, ctx.env);
+      if ("state" in built) {
+        out.push(row(name, built.state, built.why, remove));
+        continue;
+      }
+      const ready = serverReady(s, seen.machine, ctx);
+      if ("state" in ready) {
+        out.push(row(name, ready.state, have && !owned ? `${ready.why}; a hand-made entry is there` : ready.why, remove));
+        continue;
+      }
+      if ("waiting" in ready) {
+        // the sink file keeps the last value while the Mac is locked, so a written server stays (review focus 1)
+        out.push(owned && have ? row(name, "ok", "waiting for unlock; keeps what it has") : row(name, "no-sink", "waiting for unlock"));
+        continue;
+      }
+      const want = built.entry;
+      const set: KitAction = { kind: "mcp-set", agent: t.agent, name };
+      if (!have) out.push(row(name, "missing", "", { want, action: set }));
+      else if (!owned) out.push(row(name, "adoptable", sameEntry(have, want) ? "a hand-made entry the same as the kit's; adopt to manage it" : "a hand-made entry; adopt shows both", { want }));
+      else if (sameEntry(have, want)) out.push(row(name, "ok", "", { want }));
+      else out.push(row(name, "drift", "differs from kit.json; apply writes the kit's version", { want, action: set }));
+    }
+  }
+  return out;
+}
+
+/** the MCP actions apply all takes (never an adopt), and every entry the
+ *  kit would write here, keyed "<agent>/<name>", for apply and adopt */
+export function planMcp(kit: KitManifest, seen: KitSeen, ctx: KitMcpCtx): { actions: KitAction[]; entries: Record<string, KitMcpEntry> } {
+  if (seen.away) return { actions: [], entries: {} };
+  const rows = mcpRows(kit, seen, ctx);
+  return {
+    actions: rows.flatMap((r) => (r.action ? [r.action] : [])),
+    entries: Object.fromEntries(rows.flatMap((r) => (r.want ? [[`${r.agent}/${r.name}`, r.want]] : []))),
+  };
+}
+
+export function mcpCells(kit: KitManifest, seen: KitSeen, ctx: KitMcpCtx): KitCell[] {
+  if (seen.away) return [];
+  return mcpRows(kit, seen, ctx).map((r) => ({ machine: seen.machine, agent: r.agent, skill: r.name, state: r.state, why: r.why, kind: "mcp" as const, ...(r.restore ? { restore: true } : {}) }));
+}
+
+const SECRETISH = /token|secret|password|passwd|auth|bearer|cookie|key/i;
+const LONG = /[A-Za-z0-9_\-+/=]{24,}/g;
+const DOT = "•••";
+/** a run of 24 or more token characters holding both a digit and a letter reads as a token */
+const maskText = (v: string): string => v.replace(LONG, (m) => (/\d/.test(m) && /[A-Za-z]/.test(m) ? DOT : m));
+const maskArg = (v: string): string => {
+  const i = v.indexOf("=");
+  return i > 0 && SECRETISH.test(v.slice(0, i)) ? `${v.slice(0, i + 1)}${DOT}` : maskText(v);
+};
+function maskUrl(u: string): string {
+  const i = u.indexOf("?");
+  if (i < 0) return maskText(u);
+  const q = u.slice(i + 1).split("&").map((p) => (p.includes("=") ? `${p.slice(0, p.indexOf("="))}=${DOT}` : p));
+  return `${maskText(u.slice(0, i))}?${q.join("&")}`;
+}
+
+/** An entry with every value that could be a secret hidden: env and
+ *  header values, url query values, `name=` args and options whose name
+ *  says token, and anything token-shaped. Names stay. For the adopt
+ *  preview, which may show a hand-made entry holding a literal value. */
+export function maskEntry(e: KitMcpEntry): KitMcpEntry {
+  const out: KitMcpEntry = {};
+  for (const [k, v] of Object.entries(e)) {
+    if (["env", "headers", "http_headers", "env_http_headers"].includes(k) && isObj(v)) out[k] = Object.fromEntries(Object.keys(v).map((n) => [n, DOT]));
+    else if (k === "url" && typeof v === "string") out[k] = maskUrl(v);
+    else if (typeof v === "string") out[k] = SECRETISH.test(k) && !k.endsWith("_env_var") && k !== "headersHelper" ? DOT : maskText(v);
+    else if (Array.isArray(v)) out[k] = v.map((x) => (typeof x === "string" ? maskArg(x) : isObj(x) ? maskEntry(x) : x));
+    else out[k] = isObj(v) ? maskEntry(v) : v;
   }
   return out;
 }
