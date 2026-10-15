@@ -1,12 +1,16 @@
 import { afterEach, beforeEach, expect, test } from "bun:test";
-import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { chmod, copyFile, mkdir, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { Applied } from "../core/applied";
+import { exec } from "../core/exec";
+import { mcpHash } from "../core/kit";
+import { fakeClaude } from "../core/kitfake";
 import { newIdentity, sealProposal } from "../core/secretcrypt";
 import { emptyFile, type SecretFile } from "../core/secretfile";
 import type { Found } from "../core/secretimport";
 import type { SecretsInfo, ServerEvent } from "../core/types";
+import { KitHub } from "../server/kit";
 import { SecretsHub } from "../server/secrets";
 import { Audit } from "./audit";
 import { Gate, type WebAuthn } from "./gate";
@@ -65,6 +69,7 @@ beforeEach(async () => {
   stacks = join(dir, "stacks");
   await mkdir(join(stacks, "dns"), { recursive: true });
   await mkdir(join(stacks, "broken"), { recursive: true });
+  await mkdir(join(dir, "home", ".claude", "mcp-env"), { recursive: true });
   logs = [];
   seen = [];
   events = [];
@@ -80,7 +85,7 @@ beforeEach(async () => {
     audit: new Audit(join(dir, "audit.jsonl")),
     machine: "mini",
     gateUrl: `${GATE}/?view=secrets`,
-    sinkRoots: [stacks],
+    sinkRoots: [stacks, join(dir, "home", ".claude", "mcp-env")],
     applied: { read: async () => structuredClone(applied), write: async (a) => void (applied = structuredClone(a)) },
     scan: async () => found,
     log,
@@ -197,4 +202,125 @@ test("a reveal answers the value, and only the reveal", async () => {
   expect(audit).not.toContain(V);
   expect(JSON.stringify(events)).not.toContain(V);
   expect(logs.join("\n")).not.toContain(V);
+});
+
+interface KitRig {
+  h: string;
+  claudeDir: string;
+  argvLog: string;
+  kitEvents: ServerEvent[];
+  kitSend: (method: string, path: string, body?: unknown) => Promise<{ status: number; text: string }>;
+}
+
+/** a scratch home with a git-ignored dotclaude, a hand-made github holding a literal token and a hand-made
+ *  hooky with a token in its url, a kit manifest with github's secret allowed, and a KitHub on the fake claude */
+async function kitRig(): Promise<KitRig> {
+  const h = join(dir, "home");
+  const claudeDir = join(h, ".claude");
+  await exec(["git", "init", "-q", "-b", "main", claudeDir]);
+  await writeFile(join(claudeDir, ".gitignore"), "mcp-env/\n.canopy-kit-mcp.json\n");
+  await mkdir(join(claudeDir, "skills"), { recursive: true });
+  await mkdir(join(claudeDir, "bin"), { recursive: true });
+  await copyFile(join(import.meta.dir, "..", "..", "scripts", "canopy-mcp-env"), join(claudeDir, "bin", "canopy-mcp-env"));
+  await chmod(join(claudeDir, "bin", "canopy-mcp-env"), 0o755);
+  await mkdir(join(h, ".codex", "skills"), { recursive: true });
+  await writeFile(join(h, ".codex", "config.toml"), "");
+  await writeFile(join(h, ".claude.json"), JSON.stringify({ mcpServers: {
+    github: { type: "stdio", command: "bunx", args: ["-y", "@modelcontextprotocol/server-github"], env: { GITHUB_PERSONAL_ACCESS_TOKEN: V2 } },
+    hooky: { type: "http", url: `https://h.example/mcp?token=${V3}` },
+  } }));
+  const kitPath = join(claudeDir, "kit.json");
+  await writeFile(kitPath, JSON.stringify({
+    version: 1,
+    machines: { mini: { backend: "mini" } },
+    targets: [
+      { agent: "claude", skills: "~/.claude/skills", mode: "store", mcp: { file: "~/.claude.json", format: "claude-json" } },
+      { agent: "codex", skills: "~/.codex/skills", mode: "link", mcp: { file: "~/.codex/config.toml", format: "codex-toml" } },
+    ],
+    mcp: { github: { command: "bunx", args: ["-y", "@modelcontextprotocol/server-github"], env: { GITHUB_PERSONAL_ACCESS_TOKEN: "${secret:gh_token}" } } },
+  }));
+
+  await act({ a: "add", name: "gh_token", value: V, description: "", tags: [] });
+  const def = { command: "bunx", args: ["-y", "@modelcontextprotocol/server-github"], url: null, env: ["GITHUB_PERSONAL_ACCESS_TOKEN"], headers: [] };
+  await act({ a: "mcp-allow", server: "github", hash: await mcpHash(def), def, env: { GITHUB_PERSONAL_ACCESS_TOKEN: "gh_token" }, headers: {}, homes: { mini: h } });
+
+  const argvLog = join(dir, "argv.log");
+  const kitEvents: ServerEvent[] = [];
+  const kit = new KitHub({
+    self: "mini", devRoot: join(h, "dev"), kitPath, broadcast: (e) => kitEvents.push(e), every: 0,
+    env: { HOME: h, KIT_CLAUDE: fakeClaude(dir), FAKE_CLAUDE_LOG: argvLog }, secrets: () => hub.info(null), hostHome: h, procEnv: {},
+  });
+  const kitSend = async (method: string, path: string, body?: unknown): Promise<{ status: number; text: string }> => {
+    const req = new Request(`http://127.0.0.1:7850${path}`, { method, body: body === undefined ? undefined : JSON.stringify(body) });
+    const res = await kit.handle(req, new URL(req.url));
+    if (!res) throw new Error(`${path} not handled`);
+    const text = await res.text();
+    seen.push(text);
+    return { status: res.status, text };
+  };
+  await kit.scan();
+  return { h, claudeDir, argvLog, kitEvents, kitSend };
+}
+
+test("no value reaches a kit route, a kit event, an apply result, claude's argv or either config file", async () => {
+  const { h, claudeDir, argvLog, kitEvents, kitSend } = await kitRig();
+  await kitSend("GET", "/api/kit");
+  const preview = await kitSend("GET", "/api/kit/preview?machine=mini&agent=claude&name=github");
+  expect(preview.status).toBe(200);
+  expect((await kitSend("POST", "/api/kit/adopt", { machine: "mini", agent: "claude", names: ["github"] })).status).toBe(200);
+  expect((await kitSend("POST", "/api/kit/apply", { machine: "mini" })).status).toBe(200);
+
+  // the server starts with the value, which reaches it through the wrapper alone
+  const started = await exec(["sh", join(claudeDir, "bin", "canopy-mcp-env"), "github", "--", "printenv", "GITHUB_PERSONAL_ACCESS_TOKEN"], { env: { HOME: h } });
+  expect(started.stdout).toBe(`${V}\n`);
+
+  const claudeJson = await readFile(join(h, ".claude.json"), "utf8");
+  const toml = await readFile(join(h, ".codex", "config.toml"), "utf8");
+  const owned = await readFile(join(claudeDir, ".canopy-kit-mcp.json"), "utf8");
+  expect(toml).toContain("canopy-mcp-env");
+  // the hand-made entry adopt replaced is kept for put back, in a 0600 file git ignores
+  expect(owned).toContain(V2);
+  expect((await stat(join(claudeDir, ".canopy-kit-mcp.json"))).mode & 0o777).toBe(0o600);
+  expect((await exec(["git", "-C", claudeDir, "check-ignore", "-q", ".canopy-kit-mcp.json"])).code).toBe(0);
+
+  const outside = [...seen, JSON.stringify(events), JSON.stringify(kitEvents), logs.join("\n"), await readFile(argvLog, "utf8")].join("\n");
+  for (const v of VALUES) {
+    expect(outside).not.toContain(v);
+    expect(outside).not.toContain(sha(v));
+    expect(outside).not.toContain(b64(v));
+  }
+  // the configs hold no store value and no adopted literal; hooky is hand-made and stays as it was
+  for (const text of [claudeJson, toml]) {
+    expect(text).not.toContain(V);
+    expect(text).not.toContain(V2);
+  }
+  expect(claudeJson).toContain("canopy-mcp-env");
+  expect(owned).not.toContain(V);
+});
+
+test("a foreign entry's literal is masked before adopt, and put back is the one place it reaches claude's argv", async () => {
+  const { h, claudeDir, argvLog, kitEvents, kitSend } = await kitRig();
+  // before adoption: the preview, KitInfo and the kit event mask the hand-made literal
+  const preview = await kitSend("GET", "/api/kit/preview?machine=mini&agent=claude&name=github");
+  const infoText = (await kitSend("GET", "/api/kit")).text;
+  expect(preview.text).not.toContain(V2);
+  expect(infoText).not.toContain(V2);
+  expect(infoText).not.toContain(V3);
+  expect(JSON.stringify(kitEvents)).not.toContain(V2);
+
+  const adopted = await kitSend("POST", "/api/kit/adopt", { machine: "mini", agent: "claude", names: ["github"] });
+  expect(adopted.status).toBe(200);
+  expect(adopted.text).not.toContain(V2);
+  // after adoption the literal lives only in the 0600 ownership file
+  expect(await readFile(join(claudeDir, ".canopy-kit-mcp.json"), "utf8")).toContain(V2);
+  expect((await stat(join(claudeDir, ".canopy-kit-mcp.json"))).mode & 0o777).toBe(0o600);
+  expect(await readFile(join(h, ".claude.json"), "utf8")).not.toContain(V2);
+
+  const restored = await kitSend("POST", "/api/kit/restore", { machine: "mini", agent: "claude", name: "github" });
+  expect(restored.status).toBe(200);
+  // the accepted exception: claude mcp add-json takes the entry as argv
+  expect(await readFile(argvLog, "utf8")).toContain(V2);
+  const outside = [...seen, JSON.stringify(events), JSON.stringify(kitEvents), logs.join("\n")].join("\n");
+  for (const v of VALUES) expect(outside).not.toContain(v);
+  expect(await readFile(join(claudeDir, ".canopy-kit-mcp.json"), "utf8")).not.toContain(V);
 });
