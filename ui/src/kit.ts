@@ -85,3 +85,22 @@ export function homesFor(v: KitMcpView, machines: KitMachineView[]): { homes: Re
 
 export const allowAct = (v: KitMcpView, homes: Record<string, string>): SecretAct =>
   ({ a: "mcp-allow", server: v.name, hash: v.hash, def: v.def, env: v.env, headers: v.headers, homes });
+
+/** the sheet a server cell or header opens */
+export type KitSheet =
+  | { kind: "adopt"; machine: string; agent: string; names: string[] }
+  | { kind: "restore"; machine: string; agent: string; name: string }
+  | { kind: "allow"; name: string };
+
+/** one key per sheet, so React mounts a fresh one for another server or column */
+export const sheetKey = (s: KitSheet): string =>
+  s.kind === "allow" ? `allow/${s.name}` : s.kind === "adopt" ? `adopt/${s.machine}/${s.agent}/${s.names.join(",")}` : `restore/${s.machine}/${s.agent}/${s.name}`;
+
+/** what a server cell opens; an allow needs the kit's view of the server */
+export function sheetFor(cell: KitCell | null, name: string, hasView: boolean): KitSheet | null {
+  if (!cell) return null;
+  if (cell.state === "adoptable") return { kind: "adopt", machine: cell.machine, agent: cell.agent, names: [name] };
+  if (cell.restore) return { kind: "restore", machine: cell.machine, agent: cell.agent, name };
+  if ((cell.state === "not-allowed" || cell.state === "stale-allowance") && hasView) return { kind: "allow", name };
+  return null;
+}

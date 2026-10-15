@@ -1,8 +1,8 @@
 import { useEffect, useMemo, useState } from "react";
 import { api } from "../api";
 import { useStore } from "../store";
-import { GLYPH, PROBLEM, adoptableIn, allowAct, cellAt, columns, homesFor, mcpViewsOf, mergeKit, rows, serverAt, serverRows, type KitFilter } from "../kit";
-import { errorText, gateHere, isGateClosed, writerOf } from "../secrets";
+import { GLYPH, PROBLEM, adoptableIn, allowAct, cellAt, columns, homesFor, mcpViewsOf, mergeKit, rows, serverAt, serverRows, sheetFor, sheetKey, type KitFilter, type KitSheet } from "../kit";
+import { errorText, gateHere, hostOf, isGateClosed, writerOf } from "../secrets";
 import type { KitApplyResult, KitMachineView, KitMcpPreview, KitMcpView } from "../../../src/core/types";
 import type { SecretAct } from "../../../src/core/secretwire";
 
@@ -12,11 +12,6 @@ function ownerOf(byBackend: Record<string, { machines: KitMachineView[] }>, mach
   return null;
 }
 
-type Sheet =
-  | { kind: "adopt"; machine: string; agent: string; names: string[] }
-  | { kind: "restore"; machine: string; agent: string; name: string }
-  | { kind: "allow"; name: string };
-
 function outcome(machine: string, r: KitApplyResult): string {
   const [first] = r.failed;
   return first ? `${machine}: ${r.failed.length} failed, first: ${first.why}` : `${machine}: ${r.done.length} done`;
@@ -24,21 +19,28 @@ function outcome(machine: string, r: KitApplyResult): string {
 
 const shown = (e: Record<string, unknown> | null): string => (e ? JSON.stringify(e, null, 2) : "(none)");
 
+const pairs = (m: Record<string, string>): string => Object.entries(m).map(([k, n]) => `${k} from ${n}`).join(", ");
+
 /** Adopt one server or a column's: each hand-made entry beside what the
  *  kit would write, masked by the server, then one confirm. */
 function AdoptSheet({ backend, machine, agent, names, onDone }: { backend: string; machine: string; agent: string; names: string[]; onDone: (msg: string) => void }) {
   const key = names.join(",");
-  const [previews, setPreviews] = useState<Record<string, KitMcpPreview>>({});
+  const [previews, setPreviews] = useState<Record<string, KitMcpPreview | { error: string }>>({});
   const [busy, setBusy] = useState(false);
   useEffect(() => {
     let live = true;
     for (const n of key.split(",")) {
-      api.kitPreview(backend, machine, agent, n).then((p) => live && setPreviews((x) => ({ ...x, [n]: p })), () => {});
+      api.kitPreview(backend, machine, agent, n).then(
+        (p) => live && setPreviews((x) => ({ ...x, [n]: p })),
+        (e: unknown) => live && setPreviews((x) => ({ ...x, [n]: { error: errorText(e) } })),
+      );
     }
     return () => {
       live = false;
     };
   }, [backend, machine, agent, key]);
+  // adopt waits until every entry it takes has been shown
+  const ready = names.every((n) => { const p = previews[n]; return p !== undefined && !("error" in p); });
   const go = async () => {
     setBusy(true);
     try {
@@ -53,20 +55,24 @@ function AdoptSheet({ backend, machine, agent, names, onDone }: { backend: strin
     <div className="kit-sheet">
       <h4>Adopt {names.length === 1 ? names[0] : `${names.length} servers`} for {agent} on {machine}</h4>
       <p className="kit-note">Canopy keeps each hand-made entry, so put back restores it. Values are hidden here.</p>
-      {names.map((n) => (
-        <div key={n} className="kit-compare">
-          <div>
-            <span className="kit-note">{n} now</span>
-            <pre>{shown(previews[n]?.have ?? null)}</pre>
+      {names.map((n) => {
+        const p = previews[n];
+        if (p && "error" in p) return <p key={n} className="kit-error">{n}: {p.error}</p>;
+        return (
+          <div key={n} className="kit-compare">
+            <div>
+              <span className="kit-note">{n} now{p ? ` (${p.state}${p.why ? `: ${p.why}` : ""})` : ""}</span>
+              <pre>{p ? shown(p.have) : "loading…"}</pre>
+            </div>
+            <div>
+              <span className="kit-note">what the kit writes</span>
+              <pre>{p ? shown(p.want) : "loading…"}</pre>
+            </div>
           </div>
-          <div>
-            <span className="kit-note">what the kit writes</span>
-            <pre>{shown(previews[n]?.want ?? null)}</pre>
-          </div>
-        </div>
-      ))}
+        );
+      })}
       <div className="kit-line">
-        <button type="button" className="mini" disabled={busy} onClick={() => void go()}>adopt</button>
+        <button type="button" className="mini" disabled={busy || !ready} onClick={() => void go()}>adopt</button>
         <button type="button" className="mini" onClick={() => onDone("")}>cancel</button>
       </div>
     </div>
@@ -122,7 +128,6 @@ function AllowSheet({ view, machines, onDone }: { view: KitMcpView; machines: Ki
       setBusy(false);
     }
   };
-  const names = Object.entries({ ...view.env, ...view.headers }).map(([k, n]) => `${k} from ${n}`).join(", ");
   return (
     <div className="kit-sheet">
       <h4>Allow {view.name} its secrets</h4>
@@ -131,8 +136,18 @@ function AllowSheet({ view, machines, onDone }: { view: KitMcpView; machines: Ki
         <dd><code>{view.def.command !== null ? [view.def.command, ...view.def.args].join(" ") : view.def.url}</code></dd>
         <dt>definition</dt>
         <dd><code>{view.hash.slice(0, 16)}</code></dd>
-        <dt>secrets</dt>
-        <dd>{names}</dd>
+        {Object.keys(view.env).length > 0 && (
+          <>
+            <dt>env</dt>
+            <dd>{pairs(view.env)}</dd>
+          </>
+        )}
+        {Object.keys(view.headers).length > 0 && (
+          <>
+            <dt>headers</dt>
+            <dd>{pairs(view.headers)}</dd>
+          </>
+        )}
         <dt>machines</dt>
         <dd>{view.machines.join(", ") || "none"}{view.later.length > 0 ? `; ${view.later.join(", ")} waits for secrets phase 3` : ""}</dd>
       </dl>
@@ -140,7 +155,11 @@ function AllowSheet({ view, machines, onDone }: { view: KitMcpView; machines: Ki
       {!writer || !info ? (
         <p className="kit-error">No backend on this page is the secret store's writer (the mini), so nothing here can allow a server.</p>
       ) : !here ? (
-        <p className="kit-note">Allowing needs the passkey gate: <a href={new URL("/?view=kit", info.gate).toString()}>open the kit on the gate page</a>.</p>
+        hostOf(info.gate) !== "" ? (
+          <p className="kit-note">Allowing needs the passkey gate: <a href={new URL("/?view=kit", info.gate).toString()}>open the kit on the gate page</a>.</p>
+        ) : (
+          <p className="kit-error">Allowing needs the passkey gate, and the store names no gate page.</p>
+        )
       ) : !info.session ? (
         <p className="kit-note">Open the passkey session in <a href="/?view=secrets">the secrets view</a> first.</p>
       ) : "missing" in homes ? (
@@ -179,9 +198,10 @@ export function KitView() {
   const agents = [...new Set(columns(merged.cells).map((c) => c.agent))];
   const serverNames = useMemo(() => serverRows(merged.cells, f), [merged, f]);
   const views = useMemo(() => mcpViewsOf(byBackend), [byBackend]);
-  const [sheet, setSheet] = useState<Sheet | null>(null);
-  const close = (msg: string) => {
-    setSheet(null);
+  const [sheet, setSheet] = useState<KitSheet | null>(null);
+  // a sheet closes only itself, so one that answers late leaves a newer sheet open
+  const closer = (key: string) => (msg: string) => {
+    setSheet((s) => (s && sheetKey(s) === key ? null : s));
     if (msg) setSaid(msg);
   };
   const sheetOwner = sheet && sheet.kind !== "allow" ? ownerOf(byBackend, sheet.machine) : null;
@@ -299,14 +319,12 @@ export function KitView() {
                   {cols.map((col) => {
                     const cell = serverAt(merged.cells, name, col.machine, col.agent);
                     const state = cell?.state ?? "off";
-                    const open: Sheet | null = !cell ? null
-                      : state === "adoptable" ? { kind: "adopt", machine: col.machine, agent: col.agent, names: [name] }
-                      : cell.restore ? { kind: "restore", machine: col.machine, agent: col.agent, name }
-                      : state === "not-allowed" || state === "stale-allowance" ? { kind: "allow", name }
-                      : null;
+                    const hasView = views.some((v) => v.name === name);
+                    const open = sheetFor(cell, name, hasView);
+                    const noView = !hasView && (state === "not-allowed" || state === "stale-allowance") ? " (no backend on this page gives its definition, so it cannot be allowed here)" : "";
                     return (
                       <td key={`mcp/${col.machine}/${col.agent}`} className={`kit-cell kit-${state}${PROBLEM.has(state) ? " kit-problem" : ""}`}
-                        title={cell ? `${state}${cell.why ? `: ${cell.why}` : ""}${cell.restore ? " (put back available)" : ""}` : ""}>
+                        title={cell ? `${state}${cell.why ? `: ${cell.why}` : ""}${cell.restore ? " (put back available)" : ""}${noView}` : ""}>
                         {open ? <button type="button" className="kit-cell-button" onClick={() => setSheet(open)}>{GLYPH[state]}</button> : GLYPH[state]}
                       </td>
                     );
@@ -318,12 +336,12 @@ export function KitView() {
         )}
       </div>
       {sheet?.kind === "adopt" && sheetOwner && (
-        <AdoptSheet backend={sheetOwner} machine={sheet.machine} agent={sheet.agent} names={sheet.names} onDone={close} />
+        <AdoptSheet key={sheetKey(sheet)} backend={sheetOwner} machine={sheet.machine} agent={sheet.agent} names={sheet.names} onDone={closer(sheetKey(sheet))} />
       )}
       {sheet?.kind === "restore" && sheetOwner && (
-        <RestoreSheet backend={sheetOwner} machine={sheet.machine} agent={sheet.agent} name={sheet.name} onDone={close} />
+        <RestoreSheet key={sheetKey(sheet)} backend={sheetOwner} machine={sheet.machine} agent={sheet.agent} name={sheet.name} onDone={closer(sheetKey(sheet))} />
       )}
-      {sheetView && <AllowSheet view={sheetView} machines={merged.machines} onDone={close} />}
+      {sheet?.kind === "allow" && sheetView && <AllowSheet key={sheetKey(sheet)} view={sheetView} machines={merged.machines} onDone={closer(sheetKey(sheet))} />}
     </main>
   );
 }

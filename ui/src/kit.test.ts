@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { adoptableIn, allowAct, cellAt, columns, homesFor, mcpViewsOf, mergeKit, rows, serverAt, serverRows } from "./kit";
+import { adoptableIn, allowAct, cellAt, columns, homesFor, mcpViewsOf, mergeKit, rows, serverAt, serverRows, sheetFor, sheetKey } from "./kit";
 import { parseAct } from "../../src/core/secretwire";
 import type { KitCell, KitInfo, KitMachineView, KitMcpView } from "../../src/core/types";
 
@@ -61,5 +61,25 @@ describe("server rows", () => {
     const act = allowAct(v, h.homes);
     expect(parseAct(act)).toEqual(act);
     expect(mcpViewsOf({ mac: { ...info([]), mcp: [v] }, mini: { ...info([]), mcp: [v] } })).toEqual([v]);
+  });
+});
+
+describe("server sheets", () => {
+  const s = (state: KitCell["state"], restore?: boolean): KitCell => ({ ...c("mac", "claude", "github", state), kind: "mcp", ...(restore ? { restore } : {}) });
+  test("each sheet has its own key, so a sheet for another server or column starts fresh", () => {
+    expect(sheetKey({ kind: "allow", name: "github" })).not.toBe(sheetKey({ kind: "allow", name: "wiki-memory" }));
+    expect(sheetKey({ kind: "adopt", machine: "mac", agent: "claude", names: ["a"] })).not.toBe(sheetKey({ kind: "adopt", machine: "mac", agent: "codex", names: ["a"] }));
+    expect(sheetKey({ kind: "adopt", machine: "mac", agent: "claude", names: ["a"] })).not.toBe(sheetKey({ kind: "adopt", machine: "mac", agent: "claude", names: ["a", "b"] }));
+    expect(sheetKey({ kind: "restore", machine: "mac", agent: "claude", name: "a" })).not.toBe(sheetKey({ kind: "adopt", machine: "mac", agent: "claude", names: ["a"] }));
+    expect(sheetKey({ kind: "allow", name: "github" })).toBe(sheetKey({ kind: "allow", name: "github" }));
+  });
+  test("a cell opens the sheet its state calls for, and an allow only when the kit has the server's view", () => {
+    expect(sheetFor(null, "github", true)).toBeNull();
+    expect(sheetFor(s("adoptable"), "github", true)).toEqual({ kind: "adopt", machine: "mac", agent: "claude", names: ["github"] });
+    expect(sheetFor(s("ok", true), "github", true)).toEqual({ kind: "restore", machine: "mac", agent: "claude", name: "github" });
+    expect(sheetFor(s("not-allowed"), "github", true)).toEqual({ kind: "allow", name: "github" });
+    expect(sheetFor(s("stale-allowance"), "github", true)).toEqual({ kind: "allow", name: "github" });
+    expect(sheetFor(s("not-allowed"), "github", false)).toBeNull();
+    expect(sheetFor(s("ok"), "github", true)).toBeNull();
   });
 });
