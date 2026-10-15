@@ -217,7 +217,10 @@ CLI: `canopy kit status [--machine m]`, `canopy kit apply [--machine m]
 
 1. Manifest, scan, the read-only matrix (view and CLI), skill projection for
    Claude, Codex and Hermes, the mini conversion and the gpd pull.
-2. MCP projection, using the secret store for references.
+2. MCP projection, using the secret store for references, and MCP adopt.
+   `2026-10-14-kit-secrets-phase-2-design.md` settles the details and wins
+   where it differs from this file (Claude's servers go through `claude mcp`,
+   Codex's file is written in place).
 3. Tools, OpenClaw copies, adopt, and the per-cell apply buttons in the UI (phase 1's apply is
    the CLI's). OpenClaw is unverified: `openclaw.json` has a `skills` block
    with no load paths, and `/opt/stacks/openclaw/data/config/skills` (the

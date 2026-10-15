@@ -340,7 +340,9 @@ no `get`.
    dotenv and JSON sinks with drift, import from every source in the table,
    and recovery.
 2. The kit's MCP references with allowlists (with the kit's phase 2), and
-   rotation with its impact list.
+   rotation with its impact list. `2026-10-14-kit-secrets-phase-2-design.md`
+   settles the details (one gated `mcp-allow` per server that also makes its
+   env sinks).
 3. Stack restarts through the forced-command key, and gpd's sinks over ssh.
 
 ## Out of scope
