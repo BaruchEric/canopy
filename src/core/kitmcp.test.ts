@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { appendFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readlinkSync, rmSync, statSync, utimesSync, writeFileSync } from "node:fs";
+import { appendFileSync, chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, readlinkSync, rmSync, statSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { exec, onHost } from "./exec";
@@ -7,7 +7,7 @@ import { applyKit } from "./kitapply";
 import { fakeClaude } from "./kitfake";
 import { applyMcp, claudeRemove, claudeSet, codexBlocks, codexServers, inplaceWrite, MARKER, spliceCodex, STAT_FN, type McpIO } from "./kitmcp";
 import { MCP_SCAN_SCRIPT, parseMcpScan } from "./kitscan";
-import type { KitAction, KitMcpEntry, KitMcpSeen, KitSeen } from "./types";
+import type { KitAction, KitMcpAction, KitMcpEntry, KitMcpSeen, KitSeen } from "./types";
 
 let dirs: string[] = [];
 afterEach(() => {
@@ -299,6 +299,78 @@ describe("applyMcp", () => {
     expect(back.failed.map((f) => f.why)[0]).toStartWith("Invalid configuration");
     expect(JSON.stringify(back)).not.toContain("literal-value-0x43");
     expect(owned(h)).toEqual({ placed: { claude: ["github"] }, adoptedFrom: { claude: { github: lit } } });
+  });
+
+  test("a table canopy marked stays canopy's when the ownership file is lost, so set and remove still work", async () => {
+    const { h, io, rescan } = await machine();
+    const toml = join(h, ".codex", "config.toml");
+    const set: KitMcpAction = { kind: "mcp-set", agent: "codex", name: "wiki-memory" };
+    expect((await applyMcp(await rescan(), h, [set], { "codex/wiki-memory": { command: "bash" } }, FORMATS, io)).failed).toEqual([]);
+    rmSync(ownedPath(h));
+    const lost = await rescan();
+    // what planning reads too: the marked table counts, the hand-made node_repl does not
+    expect(lost.owned.placed["codex"]).toEqual(["wiki-memory"]);
+    const again = await applyMcp(lost, h, [set], { "codex/wiki-memory": { command: "bash", args: ["/y.sh"] } }, FORMATS, io);
+    expect(again.failed).toEqual([]);
+    expect(codexServers(readFileSync(toml, "utf8"))?.["wiki-memory"]).toEqual({ command: "bash", args: ["/y.sh"] });
+    rmSync(ownedPath(h));
+    const gone = await applyMcp(await rescan(), h, [{ kind: "mcp-remove", agent: "codex", name: "wiki-memory" }], {}, FORMATS, io);
+    expect(gone.failed).toEqual([]);
+    expect(readFileSync(toml, "utf8")).toBe(ORIG);
+    expect(owned(h)).toEqual({ placed: { codex: [] }, adoptedFrom: {} });
+  });
+
+  test("an adopt that cannot keep the hand-made entry first replaces nothing", async () => {
+    const { h, io, log, rescan } = await machine();
+    const seen = await rescan();
+    chmodSync(join(h, ".claude"), 0o500);
+    let r: Awaited<ReturnType<typeof applyMcp>>;
+    try {
+      r = await applyMcp(seen, h, [
+        { kind: "mcp-adopt", agent: "claude", name: "github" },
+        { kind: "mcp-adopt", agent: "codex", name: "node_repl" },
+      ], { "claude/github": KIT_GH, "codex/node_repl": { command: "node", args: ["r2.js"] } }, FORMATS, io);
+    } finally {
+      chmodSync(join(h, ".claude"), 0o700);
+    }
+    expect(r.done).toEqual([]);
+    expect(r.failed.map((f) => f.why.split(":")[0])).toEqual(["the hand-made entry could not be kept in ~/.claude/.canopy-kit-mcp.json; left as it is", "the hand-made entry could not be kept in ~/.claude/.canopy-kit-mcp.json; left as it is"]);
+    expect(servers(h)["github"]).toEqual(HAND);
+    expect(readFileSync(join(h, ".codex", "config.toml"), "utf8")).toBe(ORIG);
+    expect(existsSync(log)).toBe(false);
+    expect(existsSync(ownedPath(h))).toBe(false);
+  });
+
+  test("a successful adopt writes the kept entry before the agent's config, and placed after", async () => {
+    const { h, io, rescan } = await machine();
+    const calls: unknown[] = [];
+    const run: typeof onHost = (host, argv, o) => {
+      calls.push(argv[3] === "kit-owned" ? JSON.parse(o?.input ?? "null") : argv.slice(1, 3).join(" "));
+      return onHost(host, argv, o);
+    };
+    const r = await applyMcp(await rescan(), h, [{ kind: "mcp-adopt", agent: "claude", name: "github" }], { "claude/github": KIT_GH }, FORMATS, { ...io, run });
+    expect(r.failed).toEqual([]);
+    expect(calls).toEqual([
+      { placed: {}, adoptedFrom: { claude: { github: HAND } } },
+      "mcp remove",
+      "mcp add-json",
+      { placed: { claude: ["github"] }, adoptedFrom: { claude: { github: HAND } } },
+    ]);
+  });
+
+  test("an ownership write that fails leaves no staged copy behind", async () => {
+    const { h, io, rescan } = await machine();
+    // a folder in the file's place that cannot be written: the mv fails
+    mkdirSync(ownedPath(h), { mode: 0o500 });
+    let r: Awaited<ReturnType<typeof applyMcp>>;
+    try {
+      r = await applyMcp(await rescan(), h, [{ kind: "mcp-set", agent: "claude", name: "excalidraw" }], { "claude/excalidraw": { command: "npx" } }, FORMATS, io);
+    } finally {
+      chmodSync(ownedPath(h), 0o700);
+    }
+    expect(r.failed.map((f) => f.why)[0]).toStartWith("written, but ~/.claude/.canopy-kit-mcp.json was not");
+    expect(readdirSync(join(h, ".claude")).filter((n) => n.includes(".tmp-"))).toEqual([]);
+    expect(readdirSync(ownedPath(h))).toEqual([]);
   });
 
   test("applyKit sends skills to the skills script and MCP actions here, merged in the order asked", async () => {

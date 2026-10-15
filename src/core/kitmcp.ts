@@ -243,10 +243,13 @@ export async function claudeRemove(io: McpIO, claude: string, name: string, old:
 
 /** writes ~/.claude/.canopy-kit-mcp.json from stdin, 0600. ~/.claude is a
  *  folder mount on the mini, not a single-file one, so a rename inside it
- *  is safe there and the file is never seen half written. */
+ *  is safe there and the file is never seen half written. The staged copy
+ *  goes on any exit, since it can hold a kept entry's literal value. */
 const OWNED_WRITE = `f=$1
+tmp="$f.tmp-$$"
 umask 077
-cat > "$f.tmp-$$" && mv -f "$f.tmp-$$" "$f" && chmod 600 "$f" && echo ok`;
+trap 'rm -f "$tmp"' EXIT
+cat > "$tmp" && mv -f "$tmp" "$f" && chmod 600 "$f" && echo ok`;
 
 type Failed = { action: KitAction; why: string };
 
@@ -256,8 +259,9 @@ const fileLabel = (format: KitMcpFormat): string => (format === "claude-json" ? 
  *  its CLI; each Codex file is spliced in memory and written once, so a
  *  file that moved fails every action on it and changes nothing. A set or
  *  remove touches only what canopy wrote, an adopt only what it did not.
- *  The ownership file is written last, from what was done, and never
- *  leaves this machine: the result names actions only. */
+ *  The ownership file takes an adopt's kept entry before the adopt writes,
+ *  and what was placed last, from what was done. It never leaves this
+ *  machine: the result names actions only. */
 export async function applyMcp(mcp: KitMcpSeen, home: string, actions: KitMcpAction[], entries: Record<string, KitMcpEntry>, formats: Record<string, KitMcpFormat>, io: McpIO): Promise<{ done: KitAction[]; failed: Failed[] }> {
   const done: KitAction[] = [];
   const failed: Failed[] = [];
@@ -267,6 +271,26 @@ export async function applyMcp(mcp: KitMcpSeen, home: string, actions: KitMcpAct
   const own = (agent: string, name: string, on: boolean) => {
     const p = (placed[agent] ??= []).filter((n) => n !== name);
     placed[agent] = on ? [...p, name].sort() : p;
+  };
+  const kept = () => Object.values(adoptedFrom).flatMap((x) => Object.values(x));
+  /** the ownership file as it now stands in memory; null when written */
+  const save = async (): Promise<string | null> => {
+    const r = await io.run(io.host, ["sh", "-c", OWNED_WRITE, "kit-owned", `${home}/.claude/${OWNED_FILE}`], {
+      env: io.env, input: `${JSON.stringify({ placed, adoptedFrom }, null, 2)}\n`, timeoutMs: 30_000,
+    });
+    return r.stdout.trim() === "ok" ? null : scrub(firstLine(r.stderr), [...Object.values(entries), ...kept()]) || `exited ${r.code}`;
+  };
+  /** An adopt keeps the hand-made entry on disk before it replaces it, so
+   *  the worst a failure after that leaves is an entry kept but not placed,
+   *  which put back still restores. When it cannot be kept, nothing changes. */
+  const keep = async (a: KitMcpAction, entry: KitMcpEntry): Promise<string | null> => {
+    const was = adoptedFrom[a.agent]?.[a.name];
+    (adoptedFrom[a.agent] ??= {})[a.name] = entry;
+    const why = await save();
+    if (!why) return null;
+    if (was) adoptedFrom[a.agent]![a.name] = was;
+    else delete adoptedFrom[a.agent]![a.name];
+    return `the hand-made entry could not be kept in ~/.claude/${OWNED_FILE}; left as it is: ${why}`;
   };
 
   for (const a of actions) {
@@ -318,6 +342,11 @@ export async function applyMcp(mcp: KitMcpSeen, home: string, actions: KitMcpAct
         failed.push({ action: a, why: "no claude binary found here" });
         continue;
       }
+      const notKept = a.kind === "mcp-adopt" && current ? await keep(a, current) : null;
+      if (notKept) {
+        failed.push({ action: a, why: notKept });
+        continue;
+      }
       // put back sends the kept entry, which may hold a literal value,
       // through add-json's argv; claudeSet scrubs what comes back
       const why =
@@ -339,6 +368,11 @@ export async function applyMcp(mcp: KitMcpSeen, home: string, actions: KitMcpAct
       failed.push({ action: a, why: next.error });
       continue;
     }
+    const notKept = a.kind === "mcp-adopt" && current ? await keep(a, current) : null;
+    if (notKept) {
+      failed.push({ action: a, why: notKept });
+      continue;
+    }
     c.text = next.text;
     c.actions.push(a);
     c.owned.push(record);
@@ -356,12 +390,9 @@ export async function applyMcp(mcp: KitMcpSeen, home: string, actions: KitMcpAct
   }
 
   if (done.length > 0) {
-    const r = await io.run(io.host, ["sh", "-c", OWNED_WRITE, "kit-owned", `${home}/.claude/${OWNED_FILE}`], {
-      env: io.env, input: `${JSON.stringify({ placed, adoptedFrom }, null, 2)}\n`, timeoutMs: 30_000,
-    });
-    if (r.stdout.trim() !== "ok") {
-      const kept = Object.values(adoptedFrom).flatMap((x) => Object.values(x));
-      const why = `written, but ~/.claude/${OWNED_FILE} was not: ${scrub(firstLine(r.stderr), [...Object.values(entries), ...kept]) || `exited ${r.code}`}`;
+    const not = await save();
+    if (not) {
+      const why = `written, but ~/.claude/${OWNED_FILE} was not: ${not}`;
       return { done: [], failed: [...failed, ...done.map((action) => ({ action, why }))] };
     }
   }

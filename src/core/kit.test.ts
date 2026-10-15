@@ -1,5 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { buildEntry, cellsOf, expandHome, hasSecrets, maskEntry, mcpCells, mcpDefOf, mcpHash, parseKit, parseMcpValue, planKit, planMcp, relPath, sameEntry, secretsOf, skillNames, sourcePath, targetsFor, wanted } from "./kit";
+import { codexTable } from "./kitmcp";
+import { parseMcpScan } from "./kitscan";
 import type { KitAction, KitCell, KitManifest, KitMcpCtx, KitMcpOwned, KitSeen, KitSeenTarget, SecretKeyState, SecretsInfo } from "./types";
 
 const RAW = {
@@ -438,6 +440,14 @@ describe("MCP planning", () => {
     const cells = mcpCells(k, seen(), c);
     expect(mcell(cells, "claude", "github")).toMatchObject({ state: "adoptable", why: "a hand-made entry; adopt shows both" });
     expect(mcell(cells, "codex", "node_repl")).toMatchObject({ state: "local", why: "hand-made; kit.json does not define it" });
+  });
+
+  test("a Codex table canopy marked reads as canopy's with no ownership file, so it is not offered for adopt", async () => {
+    const k = mkit();
+    const text = `model = "m"\n\n${codexTable("github", { command: WRAP, args: GH_ARGS })}\n`;
+    const out = ["C\t/Users/e/.local/bin/claude", "I\t1", "W\t1", `M\tcodex\t/Users/e/.codex/config.toml\t1 2 3\t${Buffer.from(text).toString("base64")}`].join("\n");
+    const c = { ...(await mctx(k)), mcp: parseMcpScan(out, { claude: "claude-json", codex: "codex-toml" }) };
+    expect(mcell(mcpCells(k, seen(), c), "codex", "github")?.state).toBe("ok");
   });
 
   test("a managed entry that differs is rewritten, one the kit dropped is removed, and an adopted one can be put back", async () => {

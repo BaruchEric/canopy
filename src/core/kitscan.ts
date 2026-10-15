@@ -2,7 +2,7 @@
  *  a local machine and an ssh one read the same way. */
 import { onHost } from "./exec";
 import { mcpTargets, SKILL_NAME, sourcePath, targetsFor } from "./kit";
-import { codexServers, OWNED_FILE, STAT_FN } from "./kitmcp";
+import { codexBlocks, codexServers, OWNED_FILE, STAT_FN } from "./kitmcp";
 import type { KitEntry, KitEntryKind, KitManifest, KitMcpEntry, KitMcpFileSeen, KitMcpFormat, KitMcpOwned, KitMcpSeen, KitSeen, KitSeenTarget, KitStoreState } from "./types";
 
 export const KIT_FILE = ".canopy-kit.json";
@@ -243,6 +243,15 @@ export function parseMcpScan(stdout: string, formats: Record<string, KitMcpForma
         break;
       }
     }
+  }
+  // A table carrying canopy's marker says who wrote it, so it stays
+  // canopy's when the ownership file is lost (a crash, a failed write);
+  // otherwise it would read as hand-made and an adopt of it always fails.
+  for (const f of seen.files) {
+    if (formats[f.agent] !== "codex-toml" || f.entries === null) continue;
+    const marked = codexBlocks(f.text).map((b) => b.name).filter((n) => n in (f.entries ?? {}));
+    const placed = seen.owned.placed[f.agent] ?? [];
+    if (marked.some((n) => !placed.includes(n))) seen.owned.placed[f.agent] = [...new Set([...placed, ...marked])].sort();
   }
   return seen;
 }
