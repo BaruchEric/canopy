@@ -59,3 +59,32 @@ test("a missing file and a bad call exit 1 with one line naming the file, and pr
   expect((await exec(["sh", WRAPPER, "../etc", "--", "true"], { env: { HOME: h } })).stderr).toContain("usage");
   expect((await exec(["sh", WRAPPER, "demo", "true"], { env: { HOME: h } })).stderr).toContain("usage");
 });
+
+const REFUSED = ["PATH", "LD_PRELOAD", "LD_LIBRARY_PATH", "LD_AUDIT", "DYLD_INSERT_LIBRARIES", "DYLD_FRAMEWORK_PATH", "BASH_ENV", "ENV", "IFS", "SHELLOPTS", "BASHOPTS", "PS4", "NODE_OPTIONS", "BUN_OPTIONS"];
+
+test("a name that changes how the server starts is refused, naming the variable and the file, never a value", async () => {
+  for (const name of REFUSED) {
+    const h = home();
+    const file = join(h, ".claude", "mcp-env", "demo.env");
+    writeFileSync(file, `OK=fine\n${name}=/tmp/hostile-value\n`);
+    const marker = join(h, "reached");
+    const r = await exec(["sh", WRAPPER, "demo", "--", "sh", "-c", `echo reached > ${marker}`], { env: { HOME: h } });
+    expect(r.code).toBe(1);
+    expect(r.stdout).toBe("");
+    expect(r.stderr).toBe(`canopy-mcp-env: refusing ${name} in ${file}\n`);
+    expect(existsSync(marker)).toBe(false);
+  }
+});
+
+test("a malformed name never reaches the server, and a normal name still does", async () => {
+  const h = home();
+  const dir = join(h, ".claude", "mcp-env");
+  writeFileSync(join(dir, "bad.env"), "A B=1\n'A=B'=2\n1X=3\nA-B=4\n=5\nGOOD=yes\n");
+  const probe = `process.stdout.write(JSON.stringify(Object.keys(process.env).filter((k) => /^(A B|A|1X|A-B|)$|=|^'/.test(k) || k === "GOOD").sort().concat(String(process.env.A))))`;
+  const r = await exec(["sh", WRAPPER, "bad", "--", process.execPath, "-e", probe], { env: { HOME: h } });
+  expect(r.code).toBe(0);
+  expect(JSON.parse(r.stdout)).toEqual(["GOOD", "undefined"]);
+  writeFileSync(join(dir, "good.env"), "GOOD=yes\n");
+  const g = await exec(["sh", WRAPPER, "good", "--", process.execPath, "-e", "process.stdout.write(process.env.GOOD ?? '')"], { env: { HOME: h } });
+  expect(g.stdout).toBe("yes");
+});

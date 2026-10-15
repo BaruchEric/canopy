@@ -75,6 +75,11 @@ while IFS= read -r line || [ -n "$line" ]; do
   k=${line%%=*}
   [ "$k" = "$line" ] && continue
   case $k in '' | [0-9]* | *[!A-Za-z0-9_]*) continue ;; esac
+  # names that change how the server starts, not what it is given
+  case $k in
+    PATH | LD_PRELOAD | LD_LIBRARY_PATH | LD_AUDIT | DYLD_* | BASH_ENV | ENV | IFS | SHELLOPTS | BASHOPTS | PS4 | NODE_OPTIONS | BUN_OPTIONS)
+      die "refusing $k in $f" ;;
+  esac
   decode "${line#*=}"
   export "$k=$val"
 done <"$f"
