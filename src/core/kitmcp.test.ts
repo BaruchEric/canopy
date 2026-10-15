@@ -110,6 +110,21 @@ describe("inplaceWrite", () => {
     expect(readFileSync(f, "utf8")).toBe(`${ORIG}# codex wrote this\n`);
   });
 
+  test("a final copy that fails names the staged copy, which holds the whole new text (final review 8)", async () => {
+    const d = scratch();
+    const f = join(d, "config.toml");
+    writeFileSync(f, ORIG);
+    const seen = await stamp(f);
+    // chmod moves only ctime, so the stamp still matches and the copy over the file is what fails
+    chmodSync(f, 0o444);
+    const why = await inplaceWrite(io, f, seen, `${ORIG}x = 1\n`);
+    const staged = /the new text is in (\S+); copy it over config\.toml/.exec(why ?? "")?.[1] ?? "";
+    expect(why).toBe(`config.toml was not written in full; the new text is in ${staged}; copy it over config.toml to restore it`);
+    expect(staged.startsWith(`${f}.canopy-`)).toBe(true);
+    expect(readFileSync(staged, "utf8")).toBe(`${ORIG}x = 1\n`);
+    expect(statSync(staged).mode & 0o777).toBe(0o600);
+  });
+
   test("a same-size rewrite within the same second is caught too, by the checksum", async () => {
     const d = scratch();
     const f = join(d, "config.toml");

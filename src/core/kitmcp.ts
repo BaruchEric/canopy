@@ -179,14 +179,15 @@ export const STAT_FN = `st() {
 
 /** args: the file and the stamp the scan saw ("" for a missing file); the
  *  new text on stdin. Staged beside the file, then copied over it with
- *  cat, so the inode (and a bind mount of it) stays. */
+ *  cat, so the inode (and a bind mount of it) stays. A copy that fails
+ *  may leave the file cut short, so the staged copy stays and is named. */
 const INPLACE_SCRIPT = `${STAT_FN}
 f=$1; want=$2
 tmp="$f.canopy-$$"
 umask 077
 cat > "$tmp" || { rm -f "$tmp"; echo "could not stage the new text"; exit 0; }
 if [ "$(st "$f")" != "$want" ]; then rm -f "$tmp"; echo moved; exit 0; fi
-cat "$tmp" > "$f" && rm -f "$tmp" && echo ok
+if cat "$tmp" > "$f"; then rm -f "$tmp"; echo ok; else printf 'staged %s\\n' "$tmp"; fi
 `;
 
 export async function inplaceWrite(io: McpIO, path: string, stamp: string, text: string): Promise<string | null> {
@@ -194,6 +195,7 @@ export async function inplaceWrite(io: McpIO, path: string, stamp: string, text:
   const said = r.stdout.trim();
   if (said === "ok") return null;
   if (said === "moved") return "config.toml changed since the scan; rescan and apply again";
+  if (said.startsWith("staged ")) return `config.toml was not written in full; the new text is in ${said.slice(7)}; copy it over config.toml to restore it`;
   return said || firstLine(r.stderr) || `the write exited ${r.code}`;
 }
 
