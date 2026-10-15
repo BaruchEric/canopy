@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, readdir, readFile, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { newIdentity, newSigningKey, openProposal, sealValue, signingKey } from "./secretcrypt";
@@ -84,6 +84,38 @@ describe("pulling", () => {
     const r = await reader([], [], { mcpEnvDir: mcpDir });
     await r.syncSinks();
     await expect(readFile(join(mcpDir, "github.env"), "utf8")).rejects.toThrow();
+  });
+
+  test("a directory and a symlink in mcp-env survive the pass, which still finishes with sinksAt set", async () => {
+    await publish(await base(), signer);
+    const mcpDir = join(dir, "mcp-env");
+    await mkdir(join(mcpDir, "stale.env"), { recursive: true });
+    await writeFile(join(dir, "elsewhere"), "kept");
+    await symlink(join(dir, "elsewhere"), join(mcpDir, "linked.env"));
+    const lines: string[] = [];
+    const r = await reader([], [], { mcpEnvDir: mcpDir, log: (l) => lines.push(l) });
+    await r.syncSinks();
+    expect(r.info("mac").sinksAt).toBe(r.head);
+    expect((await readdir(mcpDir)).sort()).toEqual(["linked.env", "stale.env"]);
+    expect(await readFile(join(dir, "elsewhere"), "utf8")).toBe("kept");
+  });
+
+  test("an env file it cannot remove is logged by name, and the pass still finishes", async () => {
+    await publish(await base(), signer);
+    const mcpDir = join(dir, "mcp-env");
+    await mkdir(mcpDir, { recursive: true });
+    await writeFile(join(mcpDir, "github.env"), "GITHUB_PERSONAL_ACCESS_TOKEN=x\n");
+    await chmod(mcpDir, 0o500);
+    const lines: string[] = [];
+    try {
+      const r = await reader([], [], { mcpEnvDir: mcpDir, log: (l) => lines.push(l) });
+      await r.syncSinks();
+      expect(r.info("mac").sinksAt).toBe(r.head);
+      expect(lines).toContain(`secrets: could not remove ${mcpDir}/github.env, which no sink names`);
+      expect(lines.join("\n")).not.toContain("GITHUB_PERSONAL_ACCESS_TOKEN=x");
+    } finally {
+      await chmod(mcpDir, 0o700);
+    }
   });
 
   test("takes a signed fast-forward and lists names without values", async () => {

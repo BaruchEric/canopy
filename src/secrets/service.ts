@@ -470,14 +470,18 @@ export class SecretsService {
     }
     for (const id of Object.keys(applied)) if (!state[id]) delete applied[id];
     await this.d.applied.write(applied);
+    // the pass is done before the prune, so a prune that fails never leaves sinksAt behind
+    this.sinkState = state;
+    this.sinksAt = at;
     // the mcp-env folders this machine owns outright: an env file no sink names is a revoked value
     for (const root of this.d.sinkRoots) {
       const d = root.replace(/\/+$/, "");
       if (!d.endsWith("/.claude/mcp-env")) continue;
-      for (const n of await pruneMcpEnv(d, mcpEnvKeep(f, this.d.machine, d))) await this.d.audit.add({ action: "sink-prune", name: null, ok: true, by: null, detail: `${d}/${n}` });
+      const p = await pruneMcpEnv(d, mcpEnvKeep(f, this.d.machine, d));
+      for (const [names, ok] of [[p.removed, true], [p.failed, false]] as const) {
+        for (const n of names) await this.d.audit.add({ action: "sink-prune", name: null, ok, by: null, detail: `${d}/${n}` }).catch(() => {});
+      }
     }
-    this.sinkState = state;
-    this.sinksAt = at;
   }
 
   info(token: string | null): SecretsInfo {

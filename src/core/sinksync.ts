@@ -6,7 +6,7 @@
  * error here holds a value.
  */
 
-import { readdir, rm } from "node:fs/promises";
+import { lstat, readdir, rm } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import type { Applied } from "./applied";
 import { openValue } from "./secretcrypt";
@@ -107,15 +107,28 @@ export const mcpEnvKeep = (f: SecretFile, machine: string, dir: string): string[
 
 /** Delete the files in a machine's mcp-env folder that no sink names any
  *  more, so a revoke takes the value off disk (phase 2 plan, call 8).
- *  Returns the names deleted; a missing folder deletes nothing. */
-export async function pruneMcpEnv(dir: string, keep: readonly string[]): Promise<string[]> {
+ *  Only a regular file goes: a directory or a symlink of such a name is
+ *  left (lstat, so a link is never followed). Never rejects, since the
+ *  passes that call it run unawaited and Bun ends on an unhandled
+ *  rejection; a file it could not remove is named in `failed`. A missing
+ *  folder deletes nothing. */
+export async function pruneMcpEnv(dir: string, keep: readonly string[]): Promise<{ removed: string[]; failed: string[] }> {
+  const out = { removed: [] as string[], failed: [] as string[] };
   let names: string[];
   try {
     names = await readdir(dir);
   } catch {
-    return [];
+    return out;
   }
-  const gone = names.filter((n) => MCP_ENV_FILE.test(n) && !keep.includes(join(dir, n)));
-  for (const n of gone) await rm(join(dir, n), { force: true });
-  return gone;
+  for (const n of names.filter((x) => MCP_ENV_FILE.test(x) && !keep.includes(join(dir, x))).sort()) {
+    const p = join(dir, n);
+    try {
+      if (!(await lstat(p)).isFile()) continue;
+      await rm(p, { force: true });
+      out.removed.push(n);
+    } catch {
+      out.failed.push(n);
+    }
+  }
+  return out;
 }

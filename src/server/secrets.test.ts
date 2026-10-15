@@ -168,6 +168,21 @@ describe("a reader", () => {
     expect(await w.text()).not.toContain("nope");
   });
 
+  test("a reader whose start or pull rejects is logged, not left to end the server", async () => {
+    const lines: string[] = [];
+    const stub = {
+      info: (b: string) => ({ ok: true, backend: b, role: "reader", secrets: [] }),
+      start: () => Promise.reject(new Error("prune broke")),
+      pull: () => Promise.reject(new Error("pull broke")),
+    } as unknown as SecretsReader;
+    const hub = new SecretsHub({ backend: "mac", socket: null, gateOrigin: GATE, reader: stub, broadcast: () => {}, pullMs: 5, log: (l) => lines.push(l) });
+    hub.start();
+    await Bun.sleep(30);
+    hub.stop();
+    expect(lines).toContain("secrets: the reader's start failed: prune broke");
+    expect(lines).toContain("secrets: the reader's pull failed: pull broke");
+  });
+
   test("the writer's routes point at the gate page", async () => {
     const { hub } = reader();
     const r = await call(hub, new Request("http://127.0.0.1:7850/api/secrets/audit"));

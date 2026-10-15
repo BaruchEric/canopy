@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, readdir, readFile, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { Applied } from "../core/applied";
@@ -333,6 +333,28 @@ describe("MCP allowances", () => {
     await ok({ a: "mcp-revoke", server: "github" });
     await expect(readFile(envFile(), "utf8")).rejects.toThrow();
     expect((await audit.last(5)).some((e) => e.action === "sink-prune" && e.detail?.endsWith("github.env"))).toBe(true);
+  });
+
+  test("a directory and a symlink in mcp-env survive, an rm failure does not reject the pass, and sinksAt is set", async () => {
+    const mcp = join(home(), ".claude", "mcp-env");
+    await mkdir(join(mcp, "stale.env"));
+    await writeFile(join(dir, "elsewhere"), "kept");
+    await symlink(join(dir, "elsewhere"), join(mcp, "linked.env"));
+    store.head = "ccc3333";
+    await svc.tick();
+    expect(svc.info(token).sinksAt).toBe("ccc3333");
+    expect((await readdir(mcp)).sort()).toEqual(["linked.env", "stale.env"]);
+    expect(await readFile(join(dir, "elsewhere"), "utf8")).toBe("kept");
+    await writeFile(join(mcp, "old.env"), "x");
+    await chmod(mcp, 0o500);
+    store.head = "ddd4444";
+    try {
+      await svc.tick();
+    } finally {
+      await chmod(mcp, 0o700);
+    }
+    expect(svc.info(token).sinksAt).toBe("ddd4444");
+    expect((await audit.last(5)).some((e) => e.action === "sink-prune" && !e.ok && e.detail === `${mcp}/old.env`)).toBe(true);
   });
 
   test("a hash that does not match its definition, gpd, and a home outside the roots are refused, with no commit", async () => {

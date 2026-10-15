@@ -100,6 +100,8 @@ export interface SecretsHubDeps {
   /** the writer's accident guard before an mcp-allow: why this machine's
    *  dotclaude would commit the env file, or null (phase 2 plan, call 5) */
   mcpIgnored?: (server: string) => Promise<string | null>;
+  /** console.log unless a test listens */
+  log?: (line: string) => void;
   pollMs?: number;
   pullMs?: number;
 }
@@ -122,8 +124,10 @@ export class SecretsHub {
   start(): void {
     const r = this.d.reader;
     if (r) {
-      void r.start().then(() => this.announce());
-      this.timer = setInterval(() => void r.pull().then(() => this.announce()), this.d.pullMs ?? 5 * 60_000);
+      // nothing awaits these, and Bun ends the server on an unhandled rejection
+      const failed = (what: string) => (err: unknown) => (this.d.log ?? console.log)(`secrets: the reader's ${what} failed: ${err instanceof Error ? err.message : "failed"}`);
+      r.start().then(() => this.announce()).catch(failed("start"));
+      this.timer = setInterval(() => void r.pull().then(() => this.announce()).catch(failed("pull")), this.d.pullMs ?? 5 * 60_000);
     } else if (this.d.socket) {
       void this.announce();
       this.timer = setInterval(() => void this.announce(), this.d.pollMs ?? 30_000);

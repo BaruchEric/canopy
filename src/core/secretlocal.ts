@@ -213,7 +213,8 @@ export class SecretsReader {
   lockNow(): void {
     this.ident = null;
     this.recip = null;
-    void this.syncSinks();
+    // nothing waits on this pass, and Bun ends on an unhandled rejection
+    this.syncSinks().catch((err: unknown) => this.o.log(`secrets: the sink pass after a lock failed: ${err instanceof Error ? err.message : "failed"}`));
   }
 
   async createKey(passphrase: string, replace: boolean): Promise<{ recipient: string } | { error: string }> {
@@ -262,7 +263,10 @@ export class SecretsReader {
     this.sinkState = state;
     this.sinksAt = at;
     const d = this.o.mcpEnvDir;
-    if (d) for (const n of await pruneMcpEnv(d, mcpEnvKeep(f, this.o.machine, d))) this.o.log(`secrets: removed ${d}/${n}, which no sink names`);
+    if (!d) return;
+    const p = await pruneMcpEnv(d, mcpEnvKeep(f, this.o.machine, d));
+    for (const n of p.removed) this.o.log(`secrets: removed ${d}/${n}, which no sink names`);
+    for (const n of p.failed) this.o.log(`secrets: could not remove ${d}/${n}, which no sink names`);
   }
 
   /** this machine's sources, each value sealed to the mini alone */
