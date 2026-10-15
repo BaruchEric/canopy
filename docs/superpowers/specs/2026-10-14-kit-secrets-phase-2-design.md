@@ -62,7 +62,8 @@ voids it.
 
 **Claude.** Apply runs `claude mcp add-json --scope user <name> <json>` and
 `claude mcp remove --scope user <name>`, with the `claude` path the scan
-found (`command -v claude` in a login shell, then `~/.local/bin/claude`),
+found (`command -v claude`, then `~/.local/bin/claude`, and only then
+`command -v claude` in a login shell, which can be slow to start),
 since gpd's non-interactive PATH lacks it. The scan still reads
 `~/.claude.json` directly to see what is there. Ownership stays in
 `~/.claude/.canopy-kit-mcp.json`. The plan's first task checks that
