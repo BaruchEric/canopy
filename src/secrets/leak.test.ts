@@ -262,13 +262,34 @@ async function kitRig(): Promise<KitRig> {
   return { h, claudeDir, argvLog, kitEvents, kitSend };
 }
 
+/** every form a value could take on its way out: itself, its sha256 and its base64 */
+function expectNone(text: string, values: string[]): void {
+  for (const v of values) {
+    expect(text).not.toContain(v);
+    expect(text).not.toContain(sha(v));
+    expect(text).not.toContain(b64(v));
+  }
+}
+
+/** the kit-managed github entry in a written config must be the wrapper alone: no env, no value */
+function expectWrapperEntry(entry: Record<string, unknown> | undefined): void {
+  if (!entry) throw new Error("the kit-managed github entry is missing");
+  expect(String(entry["command"])).toEndWith("/canopy-mcp-env");
+  expect((entry["args"] as unknown[]).slice(0, 2)).toEqual(["github", "--"]);
+  expect(JSON.stringify(entry)).not.toContain("GITHUB_PERSONAL_ACCESS_TOKEN");
+  expect(entry["env"]).toBeUndefined();
+}
+
+// KitHub has no log dependency, so `logs` covers the secrets service only.
 test("no value reaches a kit route, a kit event, an apply result, claude's argv or either config file", async () => {
   const { h, claudeDir, argvLog, kitEvents, kitSend } = await kitRig();
   await kitSend("GET", "/api/kit");
   const preview = await kitSend("GET", "/api/kit/preview?machine=mini&agent=claude&name=github");
   expect(preview.status).toBe(200);
   expect((await kitSend("POST", "/api/kit/adopt", { machine: "mini", agent: "claude", names: ["github"] })).status).toBe(200);
-  expect((await kitSend("POST", "/api/kit/apply", { machine: "mini" })).status).toBe(200);
+  const applied = await kitSend("POST", "/api/kit/apply", { machine: "mini" });
+  expect(applied.status).toBe(200);
+  expect(applied.text.length).toBeGreaterThan(0);
 
   // the server starts with the value, which reaches it through the wrapper alone
   const started = await exec(["sh", join(claudeDir, "bin", "canopy-mcp-env"), "github", "--", "printenv", "GITHUB_PERSONAL_ACCESS_TOKEN"], { env: { HOME: h } });
@@ -277,24 +298,32 @@ test("no value reaches a kit route, a kit event, an apply result, claude's argv 
   const claudeJson = await readFile(join(h, ".claude.json"), "utf8");
   const toml = await readFile(join(h, ".codex", "config.toml"), "utf8");
   const owned = await readFile(join(claudeDir, ".canopy-kit-mcp.json"), "utf8");
-  expect(toml).toContain("canopy-mcp-env");
   // the hand-made entry adopt replaced is kept for put back, in a 0600 file git ignores
   expect(owned).toContain(V2);
   expect((await stat(join(claudeDir, ".canopy-kit-mcp.json"))).mode & 0o777).toBe(0o600);
   expect((await exec(["git", "-C", claudeDir, "check-ignore", "-q", ".canopy-kit-mcp.json"])).code).toBe(0);
 
-  const outside = [...seen, JSON.stringify(events), JSON.stringify(kitEvents), logs.join("\n"), await readFile(argvLog, "utf8")].join("\n");
-  for (const v of VALUES) {
-    expect(outside).not.toContain(v);
-    expect(outside).not.toContain(sha(v));
-    expect(outside).not.toContain(b64(v));
-  }
-  // the configs hold no store value and no adopted literal; hooky is hand-made and stays as it was
+  // the kit-managed entries hold only the wrapper: no secret-named key, no value
+  const parsedJson = JSON.parse(claudeJson) as { mcpServers: Record<string, Record<string, unknown>> };
+  expectWrapperEntry(parsedJson.mcpServers["github"]);
+  const parsedToml = Bun.TOML.parse(toml) as { mcp_servers: Record<string, Record<string, unknown>> };
+  expectWrapperEntry(parsedToml.mcp_servers["github"]);
+  // hooky is hand-made and stays as it was
+  expect(parsedJson.mcpServers["hooky"]?.["url"]).toBe(`https://h.example/mcp?token=${V3}`);
+
+  // the captures the absent checks read are not empty
+  const argv = await readFile(argvLog, "utf8");
+  expect(argv).toContain("add-json");
+  expect(seen.length).toBeGreaterThan(0);
+  expect(kitEvents.some((e) => e.type === "kit")).toBe(true);
+
+  // hooky's url holds V3 by design, in ~/.claude.json only
+  const outside = [...seen, JSON.stringify(events), JSON.stringify(kitEvents), logs.join("\n"), argv].join("\n");
+  expectNone(outside, VALUES);
   for (const text of [claudeJson, toml]) {
     expect(text).not.toContain(V);
     expect(text).not.toContain(V2);
   }
-  expect(claudeJson).toContain("canopy-mcp-env");
   expect(owned).not.toContain(V);
 });
 
@@ -302,14 +331,22 @@ test("a foreign entry's literal is masked before adopt, and put back is the one 
   const { h, claudeDir, argvLog, kitEvents, kitSend } = await kitRig();
   // before adoption: the preview, KitInfo and the kit event mask the hand-made literal
   const preview = await kitSend("GET", "/api/kit/preview?machine=mini&agent=claude&name=github");
-  const infoText = (await kitSend("GET", "/api/kit")).text;
+  expect(preview.status).toBe(200);
+  const body = JSON.parse(preview.text) as { have: { env: Record<string, string> } | null };
+  expect(Object.keys(body.have?.env ?? {})).toEqual(["GITHUB_PERSONAL_ACCESS_TOKEN"]);
+  expect(body.have?.env["GITHUB_PERSONAL_ACCESS_TOKEN"]).toBe("•••");
+  const infoRes = await kitSend("GET", "/api/kit");
+  expect(infoRes.status).toBe(200);
+  expect(infoRes.text).toContain("hooky");
   expect(preview.text).not.toContain(V2);
-  expect(infoText).not.toContain(V2);
-  expect(infoText).not.toContain(V3);
+  expect(infoRes.text).not.toContain(V2);
+  expect(infoRes.text).not.toContain(V3);
+  expect(kitEvents.some((e) => e.type === "kit")).toBe(true);
   expect(JSON.stringify(kitEvents)).not.toContain(V2);
 
   const adopted = await kitSend("POST", "/api/kit/adopt", { machine: "mini", agent: "claude", names: ["github"] });
   expect(adopted.status).toBe(200);
+  expect(adopted.text.length).toBeGreaterThan(0);
   expect(adopted.text).not.toContain(V2);
   // after adoption the literal lives only in the 0600 ownership file
   expect(await readFile(join(claudeDir, ".canopy-kit-mcp.json"), "utf8")).toContain(V2);
@@ -318,9 +355,14 @@ test("a foreign entry's literal is masked before adopt, and put back is the one 
 
   const restored = await kitSend("POST", "/api/kit/restore", { machine: "mini", agent: "claude", name: "github" });
   expect(restored.status).toBe(200);
-  // the accepted exception: claude mcp add-json takes the entry as argv
-  expect(await readFile(argvLog, "utf8")).toContain(V2);
-  const outside = [...seen, JSON.stringify(events), JSON.stringify(kitEvents), logs.join("\n")].join("\n");
-  for (const v of VALUES) expect(outside).not.toContain(v);
+  // policy: put back restores the hand-made entry, so ~/.claude.json holds V2 again. It was there before
+  // canopy touched it, and claude mcp add-json takes the entry as argv, the one accepted exception.
+  const argv = await readFile(argvLog, "utf8");
+  expect(argv).toContain("add-json");
+  expect(argv).toContain(V2);
+  expect(await readFile(join(h, ".claude.json"), "utf8")).toContain(V2);
+  expect(await readFile(join(h, ".codex", "config.toml"), "utf8")).not.toContain(V2);
+  expect(seen.length).toBeGreaterThan(0);
+  expectNone([...seen, JSON.stringify(events), JSON.stringify(kitEvents), logs.join("\n")].join("\n"), VALUES);
   expect(await readFile(join(claudeDir, ".canopy-kit-mcp.json"), "utf8")).not.toContain(V);
 });
