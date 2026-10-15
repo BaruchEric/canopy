@@ -132,6 +132,15 @@ describe("login and sessions", () => {
     expect(g.passkeys()).toHaveLength(1);
   });
 
+  test("a passkey takes a new label; an unknown id is refused", async () => {
+    const g = await registered();
+    expect(await g.relabel("cred1", "  roboform  ")).toEqual({ ok: true, data: { relabeled: "cred1" } });
+    expect(g.passkeys()[0]?.label).toBe("roboform");
+    const again = await Gate.open({ file: join(dir, "passkeys.json"), rpID: "canopy.beric.ca", origin: "https://canopy.beric.ca", now: () => t, wa: fake(true), log: () => {} });
+    expect(again.passkeys()[0]?.label).toBe("roboform");
+    expect((await g.relabel("nope", "x")).ok).toBe(false);
+  });
+
   test("logout ends the session; the last passkey cannot be removed", async () => {
     const g = await registered();
     const token = await login(g);

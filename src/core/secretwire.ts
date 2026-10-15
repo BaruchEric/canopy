@@ -28,13 +28,14 @@ export type SecretAct =
   | { a: "reject"; proposal: string }
   /** a machine's age recipient (the Mac's, after `mac-key`); never the mini's */
   | { a: "machine-key"; machine: string; recipient: string }
-  | { a: "passkey-remove"; id: string };
+  | { a: "passkey-remove"; id: string }
+  | { a: "passkey-label"; id: string; label: string };
 
 export type ActKind = SecretAct["a"];
 
 export const ACT_KINDS: readonly ActKind[] = [
   "reveal", "add", "edit", "rotate", "delete", "allow", "sink-set", "sink-remove", "sink-write", "take",
-  "import-scan", "approve", "reject", "machine-key", "passkey-remove",
+  "import-scan", "approve", "reject", "machine-key", "passkey-remove", "passkey-label",
 ];
 
 export type SecretsRequest =
@@ -81,7 +82,7 @@ const absPath = (v: unknown): v is string => typeof v === "string" && v.startsWi
 export function parseAct(v: unknown): SecretAct | { error: string } {
   if (!isObj(v)) return { error: "an act is an object" };
   // every field pulled into a const first, so each guard narrows it
-  const { a, name, id, key, machine, path, format, keys, allow, description, proposal, sink, recipient } = v;
+  const { a, name, id, key, machine, path, format, keys, allow, description, proposal, sink, recipient, label } = v;
   const given = v["value"];
   const tagList = v["tags"];
   const bad = (what: string) => ({ error: `${String(a)}: ${what}` });
@@ -142,6 +143,8 @@ export function parseAct(v: unknown): SecretAct | { error: string } {
         : bad("a machine other than mini or breakglass, and an age recipient");
     case "passkey-remove":
       return str(id, ID) ? { a, id } : bad("a passkey id");
+    case "passkey-label":
+      return str(id, ID) && typeof label === "string" && label.trim() !== "" && label.length <= 60 ? { a, id, label: label.trim() } : bad("a passkey id and a label of 1 to 60 characters");
     default:
       return { error: `unknown act ${String(a)}` };
   }

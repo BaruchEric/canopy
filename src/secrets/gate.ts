@@ -216,6 +216,14 @@ export class Gate {
     return { ok: true, data: { removed: id } };
   }
 
+  async relabel(id: string, label: string): Promise<GateResult> {
+    const key = this.keys.find((k) => k.id === id);
+    if (!key) return { ok: false, error: "no such passkey" };
+    key.label = label.trim().slice(0, 60) || key.label;
+    await this.save();
+    return { ok: true, data: { relabeled: id } };
+  }
+
   private async save(): Promise<void> {
     const tmp = `${this.opts.file}.tmp-${process.pid}`;
     await writeFile(tmp, `${JSON.stringify(this.keys, null, 2)}\n`, { mode: 0o600 });

@@ -28,4 +28,5 @@ export const SAMPLES: Record<ActKind, { good: SecretAct; bad: Record<string, unk
   reject: { good: { a: "reject", proposal: "p1" }, bad: { a: "reject", proposal: "" } },
   "machine-key": { good: { a: "machine-key", machine: "mac", recipient: R }, bad: { a: "machine-key", machine: "mini", recipient: R } },
   "passkey-remove": { good: { a: "passkey-remove", id: "abc" }, bad: { a: "passkey-remove", id: "" } },
+  "passkey-label": { good: { a: "passkey-label", id: "abc", label: "roboform" }, bad: { a: "passkey-label", id: "abc", label: "  " } },
 };

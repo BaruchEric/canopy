@@ -761,6 +761,8 @@ function PasskeysTab({ info, home, open }: { info: SecretsInfo; home: string; op
   const [label, setLabel] = useState("");
   const [machine, setMachine] = useState("mac");
   const [recipient, setRecipient] = useState("");
+  const [renaming, setRenaming] = useState<string | null>(null);
+  const [newLabel, setNewLabel] = useState("");
   const [audit, setAudit] = useState<SecretAuditEntry[]>([]);
   useEffect(() => {
     let live = true;
@@ -781,11 +783,42 @@ function PasskeysTab({ info, home, open }: { info: SecretsInfo; home: string; op
           <ul className="secrets-list">
             {info.passkeys.map((k) => (
               <li key={k.id} className="secrets-line">
-                <span className="secrets-name">{k.label}</span>
+                {renaming === k.id ? (
+                  <form
+                    className="secrets-form"
+                    onSubmit={(e: FormEvent) => {
+                      e.preventDefault();
+                      void act.run({ a: "passkey-label", id: k.id, label: newLabel }).then((r) => r && setRenaming(null));
+                    }}
+                  >
+                    <input aria-label={`New label for ${k.label}`} value={newLabel} onChange={(e) => setNewLabel(e.target.value)} />
+                    <button type="submit" className="mini" disabled={act.busy || newLabel.trim() === ""}>
+                      save
+                    </button>
+                    <button type="button" className="mini" onClick={() => setRenaming(null)}>
+                      cancel
+                    </button>
+                  </form>
+                ) : (
+                  <span className="secrets-name">{k.label}</span>
+                )}
                 <span className="secrets-meta">
                   added {since(k.created)}
                   {k.lastUsed ? ` · used ${since(k.lastUsed)}` : ""}
                 </span>
+                {renaming !== k.id && (
+                  <button
+                    type="button"
+                    className="mini"
+                    disabled={act.busy}
+                    onClick={() => {
+                      setNewLabel(k.label);
+                      setRenaming(k.id);
+                    }}
+                  >
+                    rename
+                  </button>
+                )}
                 <button
                   type="button"
                   className="mini"

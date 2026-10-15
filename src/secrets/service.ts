@@ -69,6 +69,7 @@ function subject(act: SecretAct): string | null {
     case "sink-set":
     case "sink-remove":
     case "passkey-remove":
+    case "passkey-label":
       return act.id;
     case "sink-write":
     case "take":
@@ -208,6 +209,8 @@ export class SecretsService {
         return this.change({ ...f, keys: { ...f.keys, [act.machine]: act.recipient } }, `secrets: key for ${act.machine}`);
       case "passkey-remove":
         return this.d.gate.remove(act.id);
+      case "passkey-label":
+        return this.d.gate.relabel(act.id, act.label);
     }
   }
 
