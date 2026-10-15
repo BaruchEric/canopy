@@ -2741,6 +2741,8 @@ export interface KitTarget {
   mode: KitMode;
   /** null: every machine */
   machines: string[] | null;
+  /** where this agent keeps its MCP servers; null: the kit writes none for it */
+  mcp: KitMcpTarget | null;
 }
 
 export interface KitRule {
@@ -2755,6 +2757,36 @@ export interface KitManifest {
   default: KitRule;
   only: Record<string, Partial<KitRule> & { source?: string }>;
   exclude: string[];
+  /** the MCP servers, in manifest order */
+  mcp: KitMcpServer[];
+}
+
+export type KitMcpFormat = "claude-json" | "codex-toml";
+
+export interface KitMcpTarget {
+  /** `~/.claude.json` for claude; `~/.codex/config.toml` for codex */
+  file: string;
+  format: KitMcpFormat;
+}
+
+/** a value in a server's env or headers, as kit.json writes it */
+export type KitMcpValue = { literal: string } | { env: string } | { secret: string };
+
+export type KitMcpOption = string | number | boolean;
+
+export interface KitMcpServer {
+  name: string;
+  command: string | null;
+  args: string[];
+  url: string | null;
+  env: Record<string, KitMcpValue>;
+  headers: Record<string, KitMcpValue>;
+  /** null: every agent with an mcp target */
+  agents: string[] | null;
+  /** null: every machine */
+  machines: string[] | null;
+  /** agent to fields written into that agent's entry as they are (a leading ~/ expands); only on servers without secrets */
+  options: Record<string, Record<string, KitMcpOption>>;
 }
 
 export type KitEntryKind = "dir" | "link" | "file";

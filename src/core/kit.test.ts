@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { cellsOf, expandHome, mcpHash, parseKit, planKit, relPath, skillNames, sourcePath, targetsFor, wanted } from "./kit";
+import { cellsOf, expandHome, hasSecrets, mcpDefOf, mcpHash, parseKit, parseMcpValue, planKit, relPath, secretsOf, skillNames, sourcePath, targetsFor, wanted } from "./kit";
 import type { KitManifest, KitSeen, KitSeenTarget } from "./types";
 
 const RAW = {
@@ -218,5 +218,75 @@ describe("mcpHash", () => {
       { ...DEF, env: ["GITHUB_TOKEN"] },
       { ...DEF, headers: ["Authorization"] },
     ]) expect(await mcpHash(d)).not.toBe(base);
+  });
+});
+
+const MCP_TARGETS = [
+  { agent: "claude", skills: "~/.claude/skills", mode: "store", mcp: { file: "~/.claude.json", format: "claude-json" } },
+  { agent: "codex", skills: "~/.codex/skills", mode: "link", mcp: { file: "~/.codex/config.toml", format: "codex-toml" } },
+  { agent: "hermes", skills: "~/.hermes/skills", mode: "link", machines: ["mini"] },
+];
+
+describe("the mcp block", () => {
+  const parse = (mcp: unknown, over: Record<string, unknown> = {}) => parseKit({ ...RAW, targets: MCP_TARGETS, mcp, ...over });
+  const ok = (mcp: unknown) => {
+    const r = parse(mcp);
+    if ("errors" in r) throw new Error(r.errors.join("; "));
+    return r.kit;
+  };
+  const errs = (mcp: unknown, over: Record<string, unknown> = {}) => {
+    const r = parse(mcp, over);
+    return "errors" in r ? r.errors.join("; ") : "";
+  };
+
+  test("values are a literal, an env reference or a secret reference, and nothing in between", () => {
+    expect(parseMcpValue("info")).toEqual({ literal: "info" });
+    expect(parseMcpValue("${env:PATH}")).toEqual({ env: "PATH" });
+    expect(parseMcpValue("${secret:gh_token}")).toEqual({ secret: "gh_token" });
+    expect(parseMcpValue("Bearer ${secret:gh_token}")).toContain("not one whole");
+    expect(parseMcpValue("${secret:../x}")).toContain("not a secret name");
+    expect(parseMcpValue(5)).toBe("is not a string");
+  });
+
+  test("reads command and url servers, filters and options", () => {
+    const k = ok({
+      github: { command: "bunx", args: ["-y", "@modelcontextprotocol/server-github"], env: { GITHUB_PERSONAL_ACCESS_TOKEN: "${secret:gh_token}", LOG: "info", PATH_X: "${env:PATH}" } },
+      executor: { url: "https://mini.example/mcp", options: { claude: { headersHelper: "~/.config/executor/mcp-headers.sh" }, codex: { bearer_token_env_var: "EXECUTOR_API_KEY" } } },
+      excalidraw: { command: "npx", args: ["-y", "excalidraw-render"], agents: ["claude"], machines: ["mac"] },
+    });
+    expect(k.targets.find((t) => t.agent === "claude")?.mcp).toEqual({ file: "~/.claude.json", format: "claude-json" });
+    expect(k.targets.find((t) => t.agent === "hermes")?.mcp).toBeNull();
+    const gh = k.mcp.find((s) => s.name === "github");
+    if (!gh) throw new Error("no github");
+    expect(gh.env).toEqual({ GITHUB_PERSONAL_ACCESS_TOKEN: { secret: "gh_token" }, LOG: { literal: "info" }, PATH_X: { env: "PATH" } });
+    expect(hasSecrets(gh)).toBe(true);
+    expect(secretsOf(gh)).toEqual({ env: { GITHUB_PERSONAL_ACCESS_TOKEN: "gh_token" }, headers: {} });
+    expect(mcpDefOf(gh)).toEqual({ command: "bunx", args: ["-y", "@modelcontextprotocol/server-github"], url: null, env: ["GITHUB_PERSONAL_ACCESS_TOKEN", "LOG", "PATH_X"], headers: [] });
+    expect(k.mcp.find((s) => s.name === "executor")?.options).toEqual({ claude: { headersHelper: "~/.config/executor/mcp-headers.sh" }, codex: { bearer_token_env_var: "EXECUTOR_API_KEY" } });
+    expect(k.mcp.find((s) => s.name === "excalidraw")).toMatchObject({ agents: ["claude"], machines: ["mac"], args: ["-y", "excalidraw-render"] });
+    expect(ok(undefined).mcp).toEqual([]);
+  });
+
+  test("refuses what it cannot write", () => {
+    expect(errs({ x: { command: "a", url: "https://b" } })).toContain("needs command or url");
+    expect(errs({ x: { url: "https://b", env: { A: "1" } } })).toContain("env is for a command");
+    expect(errs({ x: { command: "a", headers: { A: "1" } } })).toContain("headers are for a url");
+    expect(errs({ x: { url: "ftp://b" } })).toContain("http or https");
+    expect(errs({ x: { command: "a", env: { A: "pre${secret:gh_token}" } } })).toContain("not one whole");
+    expect(errs({ "x.y": { command: "a", env: { A: "${secret:gh_token}" } } })).toContain("a server with secrets");
+    expect(errs({ x: { command: "a", env: { A: "${secret:gh_token}" }, options: { claude: { timeout: 5 } } } })).toContain("options are for servers without secrets");
+    expect(errs({ x: { command: "a", options: { claude: { command: "b" } } } })).toContain("reserved");
+    expect(errs({ x: { command: "a", options: { claude: { deep: { a: 1 } } } } })).toContain("a string, a number or a boolean");
+    const long = { ...RAW.machines, "a-very-long-machine-name-xx": { backend: "far" } };
+    expect(errs({ ["a".repeat(32)]: { command: "a", env: { A: "${secret:gh_token}" } } }, { machines: long })).toContain("too long");
+  });
+
+  test("an mcp target fits its agent, and Claude's is ~/.claude.json", () => {
+    const one = (mcp: unknown) => {
+      const r = parseKit({ ...RAW, targets: [{ agent: "claude", skills: "~/.claude/skills", mode: "store", mcp }] });
+      return "errors" in r ? r.errors.join("; ") : "";
+    };
+    expect(one({ file: "~/.codex/config.toml", format: "codex-toml" })).toContain("claude-json for claude");
+    expect(one({ file: "~/other.json", format: "claude-json" })).toContain("~/.claude.json");
   });
 });
