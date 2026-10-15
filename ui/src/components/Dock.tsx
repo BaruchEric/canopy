@@ -3224,6 +3224,7 @@ export function Dock() {
   const panels = useStore((s) => s.panels);
   const layout = useStore((s) => s.dockLayout);
   const resizeColumn = useStore((s) => s.resizeColumn);
+  const resizeColumns = useStore((s) => s.resizeColumns);
   const carousel = useStore((s) => s.settings.dockCarousel);
   const setSetting = useStore((s) => s.setSetting);
   // below PHONE the dock stays as it was: no grid, nothing drags or moves
@@ -3304,7 +3305,11 @@ export function Dock() {
       {gridded &&
         !fill &&
         g.colSeams.map(({ column, area }) => {
-          const col = layout.columns.find((c) => c.id === column);
+          const at = layout.columns.findIndex((c) => c.id === column);
+          const col = layout.columns[at];
+          // the column to the left, which a shrink at the dock's widest
+          // widens so the seam stays under the pointer; the first has none
+          const left = at > 0 ? layout.columns[at - 1] : undefined;
           const lead = col?.cells[0]?.active;
           return (
             <Resizer
@@ -3323,7 +3328,8 @@ export function Dock() {
               fit={(h) => dockRoom(h.parentElement)}
               hold={holdSeam}
               follow
-              onCommit={(px) => resizeColumn(column, px)}
+              neighbour={left && { cssVar: columnVar(left.id), value: left.width }}
+              onCommit={(px, wider) => (left && wider !== undefined ? resizeColumns({ [column]: px, [left.id]: wider }) : resizeColumn(column, px))}
             />
           );
         })}

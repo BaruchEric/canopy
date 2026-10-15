@@ -36,7 +36,12 @@ interface ResizerProps {
    *  edge, and once the dock is as wide as it may get and scrolls, a width
    *  change moves the column's far edge while the seam stays put. */
   follow?: boolean;
-  onCommit: (px: number) => void;
+  /** The pane on the handle's far side, a column seam's left neighbour:
+   *  with `follow`, a shrink the scroll cannot take back widens it instead
+   *  (`lentLeft`), written live to its own `cssVar`. */
+  neighbour?: { cssVar: string; value: number };
+  /** `left` is the neighbour's new width, only when the drag lent it any */
+  onCommit: (px: number, left?: number) => void;
 }
 
 const SIZE_KEYS = new Set(["ArrowLeft", "ArrowRight", "Home", "End"]);
@@ -67,6 +72,24 @@ export function followBy(
   return now - (startLeft + ((next - startValue) * dir) / factor);
 }
 
+/** How much wider a column seam's left neighbour gets for a shrink, so the
+ *  seam stays under the pointer. Only at the dock's widest with overflow
+ *  hidden on the right: there the dock's left edge is fixed, and once the
+ *  scroll off the left (`scrolled`, at the drag's start) is given back,
+ *  nothing else can move the seam rightwards. The rest of the shrink goes
+ *  to the neighbour, up to its `room`, so the tracks' total holds and the
+ *  dock stays at its widest. Nothing for a widening, which scrolls. */
+export function lentLeft({
+  startValue,
+  next,
+  scrolled,
+  hidden,
+  room,
+}: { startValue: number; next: number; scrolled: number; hidden: number; room: number }): number {
+  if (hidden < 1) return 0;
+  return clamp(startValue - next - scrolled, 0, Math.max(0, room));
+}
+
 /**
  * A drag strip between two panes. The drag writes `cssVar` straight to the DOM
  * and only calls `onCommit` on release — routing every pointermove through the
@@ -87,6 +110,7 @@ export function Resizer({
   fit,
   hold,
   follow = false,
+  neighbour,
   onCommit,
 }: ResizerProps) {
   const [dragging, setDragging] = useState(false);
@@ -124,6 +148,13 @@ export function Resizer({
     const before = owner?.style.getPropertyValue(cssVar) ?? "";
     const scrolled = owner?.scrollLeft ?? 0;
     const startLeft = handle.getBoundingClientRect().left;
+    // only a seam that follows lends its neighbour width; it grows no wider
+    // than a pane may, and its own width goes back on a cancel
+    const lender = follow && owner && neighbour ? neighbour : undefined;
+    const hidden = owner ? owner.scrollWidth - owner.clientWidth - scrolled : 0;
+    const room = lender ? top - lender.value : 0;
+    const lenderBefore = lender ? owner?.style.getPropertyValue(lender.cssVar) ?? "" : "";
+    let lent = 0;
     // Capture keeps the moves coming once the cursor outruns a 6px strip.
     handle.setPointerCapture(pointerId);
     setDragging(true);
@@ -138,6 +169,12 @@ export function Resizer({
       live.current = next;
       const el = target(handle);
       el?.style.setProperty(cssVar, `${next}px`);
+      // every move, a lent 0 too, so a drag back from lending puts it back,
+      // and before the follow reads where the handle has got to
+      if (lender) {
+        lent = lentLeft({ startValue, next, scrolled, hidden, room });
+        el?.style.setProperty(lender.cssVar, `${lender.value + lent}px`);
+      }
       if (follow && el) el.scrollLeft += followBy(handle.getBoundingClientRect().left, { startLeft, startValue, next, dir, factor });
     };
     let release = () => {};
@@ -152,7 +189,7 @@ export function Resizer({
     };
     const up = () => {
       end();
-      onCommit(live.current);
+      onCommit(live.current, lender && lent > 0 ? lender.value + lent : undefined);
     };
     handle.addEventListener("pointermove", move);
     handle.addEventListener("pointerup", up);
@@ -163,6 +200,8 @@ export function Resizer({
         if (handle.isConnected && handle.hasPointerCapture(pointerId)) handle.releasePointerCapture(pointerId);
         if (before) owner?.style.setProperty(cssVar, before);
         else owner?.style.removeProperty(cssVar);
+        if (lender && lenderBefore) owner?.style.setProperty(lender.cssVar, lenderBefore);
+        else if (lender) owner?.style.removeProperty(lender.cssVar);
         if (follow && owner) owner.scrollLeft = scrolled;
       });
     }

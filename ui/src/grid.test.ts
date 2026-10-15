@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { activate, cellOf, clipBox, columnOf, cssId, dropTarget, dropZone, fromLegacy, gearDrops, gridOf, gridTemplate, moveCell, moveColumn, moveTo, moveWithin, normalizeLayout, panelsOf, placements, place, regroup, rename, resizeColumn, resizeSeam, rowsTemplate, seamDrag, seamLabel, seamRange, seamStart, stepPanel, stripDrop, zoneRect } from "./grid";
+import { activate, cellOf, clipBox, columnOf, cssId, dropTarget, dropZone, fromLegacy, gearDrops, gridOf, gridTemplate, moveCell, moveColumn, moveTo, moveWithin, normalizeLayout, panelsOf, placements, place, regroup, rename, resizeColumn, resizeColumns, resizeSeam, rowsTemplate, seamDrag, seamLabel, seamRange, seamStart, stepPanel, stripDrop, zoneRect } from "./grid";
 import type { DockLayout } from "./grid";
 
 const W = 440;
@@ -135,6 +135,16 @@ describe("regroup, seams and the active tab", () => {
     expect(resizeColumn(l, col, W, 240, 2400)).toBe(l);
     const wide = resizeColumn(l, col, 9000, 240, 2400);
     expect(resizeColumn(wide, col, 9500, 240, 2400)).toBe(wide);
+  });
+  test("two columns sized at once, as a seam lending its left neighbour does, are one layout", () => {
+    const l = place(empty, ["a", "b"], "a", "columns", W);
+    const [one, two] = l.columns.map((c) => c.id);
+    const both = resizeColumns(l, { [one ?? ""]: 480, [two ?? ""]: 400 }, 240, 2400);
+    expect(both.columns.map((c) => c.width)).toEqual([480, 400]);
+    expect(resizeColumns(l, { [one ?? ""]: 9000, [two ?? ""]: 10 }, 240, 2400).columns.map((c) => c.width)).toEqual([2400, 240]);
+    expect(resizeColumns(l, { [one ?? ""]: W, [two ?? ""]: W }, 240, 2400)).toBe(l);
+    // a bad width or an unknown column is left out, the rest still sized
+    expect(resizeColumns(l, { [one ?? ""]: Number.NaN, [two ?? ""]: 400, nope: 500 }, 240, 2400).columns.map((c) => c.width)).toEqual([W, 400]);
   });
   test("activate shows the panel in its cell", () => {
     const l = place(place(empty, ["a"], "a", "tabs", W), ["a", "b"], "b", "tabs", W);

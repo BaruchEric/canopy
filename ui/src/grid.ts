@@ -277,11 +277,24 @@ export function regroup(l: DockLayout, into: Arrangement, width: number): DockLa
 /** A column's width to `px`, clamped to [min, max]. A width that stays
  *  what it was (held at its limit, say) gives back `l` itself. */
 export function resizeColumn(l: DockLayout, column: string, px: number, min: number, max: number): DockLayout {
-  const col = l.columns.find((c) => c.id === column);
-  if (!Number.isFinite(px) || !col) return l;
-  const width = Math.max(min, Math.min(max, px));
-  if (width === col.width) return l;
-  return { columns: l.columns.map((c) => (c.id === column ? { ...c, width } : c)) };
+  return resizeColumns(l, { [column]: px }, min, max);
+}
+
+/** Each column in `widths` to its px, clamped to [min, max], in one
+ *  layout: a column seam at the dock's widest sizes its column and the
+ *  left neighbour together. A width that is not finite, or names no
+ *  column, is left out; when no width changes it gives back `l` itself. */
+export function resizeColumns(l: DockLayout, widths: Record<string, number>, min: number, max: number): DockLayout {
+  let changed = false;
+  const columns = l.columns.map((c) => {
+    const px = widths[c.id];
+    if (px === undefined || !Number.isFinite(px)) return c;
+    const width = Math.max(min, Math.min(max, px));
+    if (width === c.width) return c;
+    changed = true;
+    return { ...c, width };
+  });
+  return changed ? { columns } : l;
 }
 
 /** Moves the boundary between cells `index` and `index + 1` to `at`, a

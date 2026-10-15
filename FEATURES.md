@@ -2,6 +2,18 @@
 
 ## Open
 
+### FR-014 · A standing watcher agent per component
+P3 · added 2026-10-14 · source: Eric (Anthropic "Redesigning source control" post)
+One long-lived agent per component (the mini's compose stack, peer sync, tailchan) reads that component's logs and health on a schedule and posts to the inbox when something looks off, catching the slow, odd drift a fixed alert misses. Reference: the "superfans" in https://www.anthropic.com/engineering/redesigning-source-control.
+
+### FR-013 · Review rules that tell a comment-only change from a logic change
+P2 · added 2026-10-14 · source: Eric (Anthropic "Redesigning source control" post)
+Before a run's diff reaches Eric, canopy sorts it by what it touches: a change to comments, docs or formatting alone can land without a look, while anything under a sensitive path (the secret store, the peer gate) always waits for an explicit approval. The rules are set per repo. Reference: Antique's semantic approval constraints in https://www.anthropic.com/engineering/redesigning-source-control.
+
+### FR-012 · A landing queue for finished runs
+P2 · added 2026-10-14 · source: Eric (Anthropic "Redesigning source control" post)
+Finished runs land on main one at a time: canopy rebases each branch onto the current main, runs the repo's gates, and fast-forwards only when they pass, sending a conflict or a red gate back to that run instead of blocking the next. Two runs that each pass alone can still break main together, and the queue catches that. Reference: the Antique merge queue in https://www.anthropic.com/engineering/redesigning-source-control.
+
 ### FR-011 · A run keeps watching the PR it opened
 P2 · added 2026-10-09 · source: Eric (Claude Code Projects video)
 When a run opens a PR, its footer shows the PR number, the diff size and a CI chip whose popover lists checks in progress and passed. Two toggles there: "auto-fix CI and address comments" (the run pushes fixes when checks fail and answers review comments) and "auto-merge when ready". Reference: https://www.youtube.com/watch?v=omihvjf0A2k at 2:15.
@@ -22,13 +34,13 @@ At 412 wide, "side by side" is a snap-scrolled row with no strip or dots, so not
 P3 · added 2026-10-07 · source: dock pass
 The gear still marks "panels side by side" once the dock is a grid of split cells.
 
-### FR-003 · Bug: a column seam lags the pointer when the dock is scrolled to its start
-P1 · added 2026-10-07 · source: dock pass
-Mostly fixed on 2026-10-07: a seam drag now scrolls the dock to keep the seam under the pointer once the dock is at its widest. What is left: with nothing scrolled off the left (scrollLeft 0) and the overflow hidden on the right, a shrink moves the column's far edge, and the seam lags by the hidden overflow (43px with two default columns at 1440x900). Closing that needs the seam to take width from its left neighbour at the cap, which changes what a seam owns. Waiting on Eric's call.
-
 ## In Progress
 
 ## Shipped
+
+### FR-003 · Bug: a column seam lags the pointer when the dock is scrolled to its start
+P1 · added 2026-10-07 · source: dock pass · shipped 2026-10-14
+With nothing scrolled off the left (scrollLeft 0) and the overflow hidden on the right, a shrink moved the column's far edge, and the seam lagged by the hidden overflow (43px with two default columns at 1440x900). Fixed: at the dock's widest, the part of a shrink the scroll cannot take back now widens the column's left neighbour, so the seam stays under the pointer; the first column's seam, which has no neighbour, still lags as before.
 
 ### FR-006 · Touch drag for tabs on tablet-size screens
 P2 · added 2026-10-07 · source: dock pass · shipped 2026-10-07

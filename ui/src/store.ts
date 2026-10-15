@@ -26,6 +26,7 @@ import {
   regroup,
   rename,
   resizeColumn as sizeColumn,
+  resizeColumns as sizeColumns,
   resizeSeam as moveSeam,
   stepPanel,
   type Arrangement,
@@ -969,6 +970,9 @@ interface CanopyState {
   dropTab: (id: string, cell: string, index: number) => void;
   /** a column's width, clamped to PANEL */
   resizeColumn: (column: string, px: number) => void;
+  /** several columns' widths at once, each clamped to PANEL: a column seam
+   *  that lent its left neighbour width */
+  resizeColumns: (widths: Record<string, number>) => void;
   /** the boundary under cell `index` of a column, to `at` of its height */
   resizeSeam: (column: string, index: number, at: number) => void;
   /** the gear's "side by side" or "as tabs": the open target, and every
@@ -2511,6 +2515,12 @@ export const useStore = create<CanopyState>((set, get) => ({
     set((s) => {
       const l = laidOut(s);
       const dockLayout = sizeColumn(l, column, px, PANEL.min, PANEL.max);
+      return dockLayout === l ? s : { dockLayout };
+    }),
+  resizeColumns: (widths) =>
+    set((s) => {
+      const l = laidOut(s);
+      const dockLayout = sizeColumns(l, widths, PANEL.min, PANEL.max);
       return dockLayout === l ? s : { dockLayout };
     }),
   resizeSeam: (column, index, at) =>
