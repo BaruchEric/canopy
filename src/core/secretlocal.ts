@@ -89,6 +89,7 @@ export class SecretsReader {
   private failures = 0;
   private sinkState: Record<string, SinkState> = {};
   private pulling: Promise<void> | null = null;
+  private passes: Promise<void> = Promise.resolve();
   private readonly io: SinkIO;
   private readonly sleep: (ms: number) => Promise<void>;
 
@@ -100,6 +101,8 @@ export class SecretsReader {
   async start(): Promise<void> {
     this.hasKey = await exists(this.o.paths.identity);
     await this.pull();
+    // a restart on a head with no news runs no pull pass; sinksAt says whether a pass has finished since
+    if (this.file && this.sinksAt === null) await this.syncSinks();
   }
 
   private git(args: string[]): Promise<ExecResult> {
@@ -234,7 +237,14 @@ export class SecretsReader {
     return this.ident ? identityToRecipient(this.ident) : null;
   }
 
-  async syncSinks(): Promise<void> {
+  /** one pass at a time: an older pass finishing last would move sinksAt back */
+  syncSinks(): Promise<void> {
+    const run = this.passes.then(() => this.passNow());
+    this.passes = run.catch(() => {});
+    return run;
+  }
+
+  private async passNow(): Promise<void> {
     const f = this.file;
     if (!f) return;
     const at = this.head;

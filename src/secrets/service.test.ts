@@ -158,6 +158,17 @@ describe("the mini's sinks", () => {
     expect((await info()).sinks[0]?.state).toEqual({ CF_TOKEN: "same" });
   });
 
+  test("sinksAt is the commit the pass started from, and the store's head moving mid-pass does not change it", async () => {
+    expect(svc.info(token).sinksAt).toBeNull();
+    store.head = "aaa1111";
+    const pass = svc.syncSinks();
+    store.head = "bbb2222";
+    await pass;
+    expect(svc.info(token).sinksAt).toBe("aaa1111");
+    await svc.syncSinks();
+    expect(svc.info(token).sinksAt).toBe("bbb2222");
+  });
+
   test("a write the sync makes on its own goes in the audit log, with no value", async () => {
     await add();
     await ok(dnsSink());

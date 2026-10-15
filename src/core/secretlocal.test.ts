@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { newIdentity, newSigningKey, openProposal, sealValue, signingKey } from "./secretcrypt";
 import { emptyFile, serializeFile, signFile, type SecretFile } from "./secretfile";
+import { FILE_IO, type SinkIO } from "./sinksync";
 import { localPaths, SecretsReader, writeLocalConfig, type ReaderOptions } from "./secretlocal";
 
 const BREAKGLASS = "age1xtc4cftnu55fn3enurt9jexnrenmru3w0xl93uz5q20e34mefs6stg2vra";
@@ -150,6 +151,31 @@ describe("pulling", () => {
     expect(r.refused).toContain("not a fast-forward");
   });
 
+  test("sinksAt is the commit a finished pass read, locked or not, and a refused commit leaves it", async () => {
+    const f = await base();
+    await publish(f, signer);
+    const r = await reader();
+    const good = r.head;
+    expect(good).not.toBeNull();
+    expect(r.info("mac").sinksAt).toBe(good);
+    await publish({ ...f, secrets: {} }, await signingKey((await newSigningKey()).privateB64), "forged");
+    await r.pull();
+    expect(r.refused).not.toBeNull();
+    expect(r.info("mac").sinksAt).toBe(good);
+    await publish(f, signer, "next");
+    await r.pull();
+    expect(r.head).not.toBe(good);
+    expect(r.info("mac").sinksAt).toBe(r.head);
+  });
+
+  test("a reader started on a head it already has still runs a pass", async () => {
+    await publish(await base(), signer);
+    await reader();
+    const again = await reader();
+    expect(again.info("mac").head).not.toBeNull();
+    expect(again.info("mac").sinksAt).toBe(again.info("mac").head);
+  });
+
   test("with nothing pinned, it says what to run", async () => {
     await writeLocalConfig(localPaths(join(dir, "config")).config, { pin: null, remote: null });
     const r = await reader();
@@ -209,6 +235,36 @@ describe("the Mac's sinks", () => {
     const sinks = r.info("mac").sinks;
     expect(sinks.find((s) => s.id === "laptop")?.state).toEqual({ CF_TOKEN: "same" });
     expect(sinks.find((s) => s.id === "inrepo")?.error).toContain("does not ignore");
+  });
+});
+
+describe("sink passes", () => {
+  test("overlapping passes run one after the other", async () => {
+    const r0 = await reader();
+    const made = await r0.createKey("correct horse battery", false);
+    if (!("recipient" in made)) throw new Error(made.error);
+    const mini = await newIdentity();
+    const f = emptyFile({ mini: mini.recipient, mac: made.recipient, breakglass: BREAKGLASS });
+    f.secrets["cf_token"] = { description: "", tags: [], created: STAMP, rotated: STAMP, to: ["breakglass", "mac", "mini"], allow: ["sink:laptop"], value: await sealValue("cf_token", V, STAMP, [mini.recipient, made.recipient]) };
+    f.sinks["laptop"] = { machine: "mac", path: join(dir, "app.env"), format: "dotenv", keys: { CF_TOKEN: "cf_token" } };
+    await publish(f, signer);
+    let live = 0;
+    let most = 0;
+    const io: SinkIO = {
+      read: async (p) => {
+        live += 1;
+        most = Math.max(most, live);
+        await new Promise((res) => setTimeout(res, 5));
+        live -= 1;
+        return FILE_IO.read(p);
+      },
+      write: (p, t) => FILE_IO.write(p, t),
+    };
+    const r = await reader([], [], { io });
+    await r.unlock("correct horse battery");
+    most = 0;
+    await Promise.all([r.syncSinks(), r.syncSinks(), r.syncSinks()]);
+    expect(most).toBe(1);
   });
 });
 
