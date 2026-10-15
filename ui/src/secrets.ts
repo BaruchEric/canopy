@@ -2,7 +2,7 @@
    the gate, the list's filter, and the sinks with their owners' states.
    Nothing here ever sees a value. */
 
-import { DOTENV_KEY, JSON_PATH, SECRET_NAME } from "../../src/core/secretfile";
+import { DOTENV_KEY, JSON_PATH, SECRET_NAME, joinList, reachList } from "../../src/core/secretfile";
 import type { SecretKeyState, SecretMeta, SecretSinkFormat, SecretSinkInfo, SecretsInfo } from "../../src/core/types";
 
 /** the backend whose info comes from the mini's service, in page order */
@@ -100,3 +100,42 @@ export const KEY_TONE: Record<SecretKeyState, string> = {
   unknown: "",
   "phase 3": "",
 };
+
+/** the line that restarts a stack, until phase 3's button */
+export const restartLine = (stack: string): string => `cd /opt/stacks/${stack} && docker compose up -d`;
+
+export interface ReachRow {
+  kind: "sink" | "server" | "stack";
+  name: string;
+  machine: string;
+  detail: string;
+  /** a sink's key states from its owner's last pass, or its error; null for the rest */
+  state: string | null;
+}
+
+function sinkState(rows: readonly SinkRow[], id: string, keys: readonly string[]): string | null {
+  const s = rows.find((r) => r.sink.id === id)?.sink;
+  if (!s) return null;
+  if (s.error) return s.error;
+  return [...new Set(keys.map((k) => s.state[k] ?? "unknown"))].join(", ");
+}
+
+/** everything a rotation of `meta` reaches, for the preview and for after the write */
+export function reachRows(meta: SecretMeta, rows: readonly SinkRow[]): ReachRow[] {
+  const r = meta.impact;
+  if (!r) {
+    return meta.usedBy.map((id) => {
+      const s = rows.find((x) => x.sink.id === id)?.sink;
+      return { kind: "sink", name: id, machine: s?.machine ?? "", detail: "", state: sinkState(rows, id, Object.keys(s?.keys ?? {})) };
+    });
+  }
+  return [
+    ...r.sinks.map((s): ReachRow => ({ kind: "sink", name: s.id, machine: s.machine, detail: `${s.path}, ${s.keys.join(", ")}`, state: sinkState(rows, s.id, s.keys) })),
+    ...r.servers.map((s): ReachRow => ({ kind: "server", name: s.server, machine: s.machines.join(", "), detail: "new agent sessions get the new value; running ones keep the old one", state: null })),
+    ...r.stacks.map((st): ReachRow => ({ kind: "stack", name: st, machine: "mini", detail: restartLine(st), state: null })),
+  ];
+}
+
+/** the sheet's "used by" line; a backend from before the reach lists sinks only */
+export const usedByText = (meta: SecretMeta): string =>
+  meta.impact ? joinList(reachList(meta.impact)) || "nothing" : meta.usedBy.join(", ") || "no sink";

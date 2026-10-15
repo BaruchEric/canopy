@@ -10429,3 +10429,26 @@ span.effective-flag:not(:first-child) {
 .secrets-view .sky {
   color: var(--sky);
 }
+.secrets-reach {
+  margin: 0;
+  padding-left: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 12px;
+}
+.secrets-reach code {
+  font-family: var(--mono);
+  font-size: 11px;
+  overflow-wrap: anywhere;
+}
+.secrets-reach-kind {
+  color: var(--ink-dim);
+  text-transform: lowercase;
+}
+.secrets-reach-ok {
+  color: var(--moss);
+}
+.secrets-reach-bad {
+  color: var(--rust);
+}

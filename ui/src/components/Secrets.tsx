@@ -3,7 +3,8 @@ import { useEffect, useState, type FormEvent } from "react";
 import type { SecretAct } from "../../../src/core/secretwire";
 import type { SecretAuditEntry, SecretMeta, SecretProposalInfo, SecretSinkFormat, SecretSinkInfo, SecretsInfo } from "../../../src/core/types";
 import { api } from "../api";
-import { KEY_TONE, errorText, filterSecrets, gateHere, hostOf, isGateClosed, keysText, parseKeysText, sinkRows, tagsOf, writerOf, type SinkRow } from "../secrets";
+import { KEY_TONE, errorText, filterSecrets, gateHere, hostOf, isGateClosed, keysText, parseKeysText, reachRows, sinkRows, tagsOf, usedByText, writerOf, type ReachRow, type SinkRow } from "../secrets";
+import { reachRefusal } from "../../../src/core/secretfile";
 import { bulkAct, pick } from "../secretsbulk";
 import { newKeyProblem } from "../secretsform";
 import { useStore } from "../store";
@@ -141,7 +142,7 @@ export function SecretsView() {
         ))}
       </div>
       {shown === "secrets" ? (
-        <SecretsTab info={info} home={home} open={open} />
+        <SecretsTab info={info} home={home} open={open} sinks={sinkRows(all, order, writer)} />
       ) : shown === "sinks" ? (
         <SinksTab rows={sinkRows(all, order, writer)} home={home} writer={writer} open={open} />
       ) : shown === "import" ? (
@@ -287,7 +288,7 @@ function MachineKey({ info, home }: { info: SecretsInfo; home: string }) {
   );
 }
 
-function SecretsTab({ info, home, open }: { info: SecretsInfo; home: string; open: boolean }) {
+function SecretsTab({ info, home, open, sinks }: { info: SecretsInfo; home: string; open: boolean; sinks: SinkRow[] }) {
   const [text, setText] = useState("");
   const [tag, setTag] = useState<string | null>(null);
   const [picked, setPicked] = useState<string | null>(null);
@@ -315,7 +316,7 @@ function SecretsTab({ info, home, open }: { info: SecretsInfo; home: string; ope
                 {m.tags.length > 0 ? ` · ${m.tags.join(", ")}` : ""}
               </span>
             </button>
-            {picked === m.name && <SecretSheet key={`${m.name}@${m.rotated}`} meta={m} home={home} open={open} />}
+            {picked === m.name && <SecretSheet key={m.name} meta={m} home={home} open={open} sinks={sinks} />}
           </li>
         ))}
       </ul>
@@ -354,10 +355,36 @@ function AddSecret({ home }: { home: string }) {
   );
 }
 
+function ReachList({ rows }: { rows: ReachRow[] }) {
+  if (rows.length === 0) return <p className="secrets-note">Nothing uses it; a rotation changes only the store.</p>;
+  return (
+    <ul className="secrets-reach">
+      {rows.map((r) => (
+        <li key={`${r.kind}:${r.name}`}>
+          <span className="secrets-reach-kind">{r.kind}</span> <strong>{r.name}</strong>
+          {r.machine ? ` on ${r.machine}` : ""}
+          {r.kind === "stack" ? (
+            <>
+              {" "}
+              <code>{r.detail}</code>{" "}
+              <button type="button" className="mini" onClick={() => void navigator.clipboard.writeText(r.detail)}>
+                copy
+              </button>
+            </>
+          ) : r.detail ? (
+            <span className="secrets-note"> · {r.detail}</span>
+          ) : null}
+          {r.state ? <span className={r.state === "same" ? "secrets-reach-ok" : "secrets-reach-bad"}> · {r.state}</span> : null}
+        </li>
+      ))}
+    </ul>
+  );
+}
+
 /** one secret opened: its facts for anyone, and behind the session its
  *  value (shown for 20 s), its words, a new value, its allowlist, delete
  *  and its history */
-function SecretSheet({ meta, home, open }: { meta: SecretMeta; home: string; open: boolean }) {
+function SecretSheet({ meta, home, open, sinks }: { meta: SecretMeta; home: string; open: boolean; sinks: SinkRow[] }) {
   const act = useAct(home);
   const [shown, setShown] = useState<{ value: string; until: number } | null>(null);
   const [description, setDescription] = useState(meta.description);
@@ -365,6 +392,8 @@ function SecretSheet({ meta, home, open }: { meta: SecretMeta; home: string; ope
   const [allow, setAllow] = useState(meta.allow.join("\n"));
   const [next, setNext] = useState("");
   const [confirm, setConfirm] = useState(false);
+  const [reach, setReach] = useState<"no" | "preview" | "after">("no");
+  const rows = reachRows(meta, sinks);
   const [history, setHistory] = useState<SecretAuditEntry[]>([]);
   useEffect(() => {
     if (!shown) return;
@@ -387,7 +416,8 @@ function SecretSheet({ meta, home, open }: { meta: SecretMeta; home: string; ope
     const d = r?.data as { value?: unknown; hideAfterMs?: unknown } | null | undefined;
     if (d && typeof d.value === "string") setShown({ value: d.value, until: Date.now() + (typeof d.hideAfterMs === "number" ? d.hideAfterMs : 20_000) });
   };
-  const used = meta.usedBy.length > 0;
+  const used = meta.impact ? meta.impact.sinks.length + meta.impact.servers.length > 0 : meta.usedBy.length > 0;
+  const usedTitle = meta.impact ? reachRefusal(meta.name, meta.impact) : `used by ${meta.usedBy.join(", ")}; take it out of those sinks first`;
   return (
     <div className="secrets-sheet">
       <dl className="secrets-facts">
@@ -398,7 +428,7 @@ function SecretSheet({ meta, home, open }: { meta: SecretMeta; home: string; ope
         <dt>sealed to</dt>
         <dd>{meta.to.join(", ") || "nobody"}</dd>
         <dt>used by</dt>
-        <dd>{meta.usedBy.join(", ") || "no sink"}</dd>
+        <dd>{usedByText(meta)}</dd>
         <dt>allowed</dt>
         <dd>{meta.allow.join(", ") || "nothing"}</dd>
       </dl>
@@ -440,14 +470,40 @@ function SecretSheet({ meta, home, open }: { meta: SecretMeta; home: string; ope
             className="secrets-form"
             onSubmit={(e) => {
               e.preventDefault();
-              void act.run({ a: "rotate", name: meta.name, value: next }).then(() => setNext(""));
+              if (reach !== "preview") {
+                setReach("preview");
+                return;
+              }
+              void act.run({ a: "rotate", name: meta.name, value: next }).then((r) => {
+                if (r) {
+                  setNext("");
+                  setReach("after");
+                }
+              });
             }}
           >
             <input type="password" aria-label={`New value for ${meta.name}`} placeholder="new value" autoComplete="off" value={next} onChange={(e) => setNext(e.target.value)} />
             <button type="submit" className="mini" disabled={act.busy || next === ""}>
-              rotate
+              {reach === "preview" ? "rotate now" : "rotate…"}
             </button>
+            {reach === "preview" && (
+              <button type="button" className="mini" onClick={() => setReach("no")}>
+                cancel
+              </button>
+            )}
           </form>
+          {reach === "preview" && (
+            <>
+              <p className="secrets-note">Rotating {meta.name} writes the new value here:</p>
+              <ReachList rows={rows} />
+            </>
+          )}
+          {reach === "after" && (
+            <>
+              <p className="secrets-note">Written. Each sink's state from its owner's next pass:</p>
+              <ReachList rows={rows} />
+            </>
+          )}
           <form
             className="secrets-form"
             onSubmit={(e) => {
@@ -480,13 +536,14 @@ function SecretSheet({ meta, home, open }: { meta: SecretMeta; home: string; ope
                 type="button"
                 className="mini"
                 disabled={used}
-                title={used ? `used by ${meta.usedBy.join(", ")}; take it out of those sinks first` : `delete ${meta.name}`}
+                title={used ? usedTitle : `delete ${meta.name}`}
                 onClick={() => setConfirm(true)}
               >
                 delete…
               </button>
             )}
           </div>
+          {used && <ReachList rows={rows} />}
           <Err text={act.error} />
           {history.length > 0 && (
             <ol className="secrets-history">

@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import type { SecretMeta, SecretSinkInfo, SecretsInfo } from "../../src/core/types";
-import { filterSecrets, gateHere, hostOf, isGateClosed, keysText, parseKeysText, sinkRows, tagsOf, writerOf } from "./secrets";
+import { filterSecrets, gateHere, hostOf, isGateClosed, keysText, parseKeysText, reachRows, restartLine, sinkRows, tagsOf, usedByText, writerOf, type SinkRow } from "./secrets";
 
 const info = (over: Partial<SecretsInfo> = {}): SecretsInfo => ({
   ok: true,
@@ -117,5 +117,41 @@ describe("sinks", () => {
   test("keysText writes what parseKeysText reads", () => {
     const keys = { A_KEY: "cf_token", DB: "immich_db" };
     expect(parseKeysText(keysText(keys), "dotenv")).toEqual(keys);
+  });
+});
+
+describe("a rotation's reach", () => {
+  const H = "a".repeat(64);
+  const meta = (over: Partial<SecretMeta> = {}): SecretMeta => ({
+    name: "gh_token", description: "", tags: [], created: "2026-10-14T12:00:00.000Z", rotated: "2026-10-14T12:00:00.000Z", to: ["mac", "mini"], allow: [], usedBy: ["dev-env", "mcp-github-mac"],
+    impact: {
+      sinks: [{ id: "dev-env", machine: "mini", path: "/opt/stacks/dev/.env", keys: ["GH_TOKEN"] }, { id: "mcp-github-mac", machine: "mac", path: "/Users/e/.claude/mcp-env/github.env", keys: ["GITHUB_PERSONAL_ACCESS_TOKEN"] }],
+      servers: [{ server: "github", hash: H, machines: ["mac"] }],
+      stacks: ["dev"],
+    },
+    ...over,
+  });
+  const sink = (id: string, state: SecretSinkInfo["state"], error: string | null = null): SinkRow => ({ sink: { id, machine: "mac", path: "/x", format: "dotenv", keys: {}, state, error }, owner: "mac" });
+
+  test("the restart line is the stack's compose up", () => {
+    expect(restartLine("dev")).toBe("cd /opt/stacks/dev && docker compose up -d");
+  });
+
+  test("lists sinks with their states, servers with the session note, and stacks with their line", () => {
+    const r = reachRows(meta(), [sink("dev-env", { GH_TOKEN: "same" }), sink("mcp-github-mac", { GITHUB_PERSONAL_ACCESS_TOKEN: "waiting" })]);
+    expect(r).toEqual([
+      { kind: "sink", name: "dev-env", machine: "mini", detail: "/opt/stacks/dev/.env, GH_TOKEN", state: "same" },
+      { kind: "sink", name: "mcp-github-mac", machine: "mac", detail: "/Users/e/.claude/mcp-env/github.env, GITHUB_PERSONAL_ACCESS_TOKEN", state: "waiting" },
+      { kind: "server", name: "github", machine: "mac", detail: "new agent sessions get the new value; running ones keep the old one", state: null },
+      { kind: "stack", name: "dev", machine: "mini", detail: "cd /opt/stacks/dev && docker compose up -d", state: null },
+    ]);
+    expect(reachRows(meta(), [sink("dev-env", {}, "cannot write")])[0]?.state).toBe("cannot write");
+  });
+
+  test("used by reads the reach, or the sinks from a backend without it", () => {
+    expect(usedByText(meta())).toBe("dev-env, mcp-github-mac and the MCP server github");
+    const { impact: _, ...old } = meta();
+    expect(usedByText(old)).toBe("dev-env, mcp-github-mac");
+    expect(usedByText(meta({ usedBy: [], impact: { sinks: [], servers: [], stacks: [] } }))).toBe("nothing");
   });
 });
