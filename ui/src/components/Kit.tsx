@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import { api } from "../api";
 import { useStore } from "../store";
 import { GLYPH, PROBLEM, adoptableIn, allowAct, cellAt, columns, homesFor, mcpViewsOf, mergeKit, rows, serverAt, serverRows, sheetFor, sheetKey, type KitFilter, type KitSheet } from "../kit";
-import { errorText, gateHere, hostOf, isGateClosed, writerOf } from "../secrets";
+import { errorText, gateHere, hostOf, isGateClosed, readersOf, writerOf } from "../secrets";
 import type { KitApplyResult, KitMachineView, KitMcpPreview, KitMcpView } from "../../../src/core/types";
 import type { SecretAct } from "../../../src/core/secretwire";
 
@@ -121,6 +121,8 @@ function AllowSheet({ view, machines, onDone }: { view: KitMcpView; machines: Ki
     setError(null);
     try {
       await api.secretsAct(writer, act);
+      // the act answers once Forgejo has the commit, so a pull now brings each reader's cells up to date
+      for (const b of readersOf(all, order)) void api.secretsPull(b).catch(() => {});
       onDone(done);
     } catch (e) {
       setError(isGateClosed(e) ? "the passkey session has ended; open it again in the secrets view" : errorText(e));

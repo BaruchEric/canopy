@@ -10,6 +10,13 @@ export function writerOf(all: Readonly<Record<string, SecretsInfo>>, order: read
   return order.find((b) => all[b]?.role === "writer") ?? null;
 }
 
+/** the backends reading a pulled copy, in page order: after an allow or a
+ *  revoke the page asks each to pull, so its kit cells catch up without
+ *  waiting for the pull interval */
+export function readersOf(all: Readonly<Record<string, SecretsInfo>>, order: readonly string[]): string[] {
+  return order.filter((b) => all[b]?.role === "reader");
+}
+
 /** gated actions answer only on the writer's gate page (`info.gate`, a full
  *  URL), so the view offers them only on that page's origin */
 export const gateHere = (info: SecretsInfo | undefined, origin: string): boolean => info?.role === "writer" && originOf(info.gate) === origin;

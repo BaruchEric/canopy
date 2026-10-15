@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import type { SecretMeta, SecretSinkInfo, SecretsInfo } from "../../src/core/types";
-import { filterSecrets, gateHere, hostOf, isGateClosed, keysText, parseKeysText, markOf, passedOver, reachRows, restartLine, sinkRows, stateTone, tagsOf, usedByText, writerOf, type SinkRow } from "./secrets";
+import { filterSecrets, gateHere, hostOf, isGateClosed, keysText, parseKeysText, markOf, passedOver, reachRows, readersOf, restartLine, sinkRows, stateTone, tagsOf, usedByText, writerOf, type SinkRow } from "./secrets";
 
 const info = (over: Partial<SecretsInfo> = {}): SecretsInfo => ({
   ok: true,
@@ -47,6 +47,12 @@ describe("where the store and its gate are", () => {
     const all = { mac: info({ backend: "mac", role: "reader" }), mini: info() };
     expect(writerOf(all, ["mac", "mini"])).toBe("mini");
     expect(writerOf({ mac: all.mac }, ["mac", "mini"])).toBeNull();
+  });
+
+  test("the readers, which the page asks to pull after an allow or a revoke (final review 6)", () => {
+    const all = { mac: info({ backend: "mac", role: "reader" }), mini: info(), gpd: info({ backend: "gpd", role: "reader" }) };
+    expect(readersOf(all, ["mini", "mac", "gpd"])).toEqual(["mac", "gpd"]);
+    expect(readersOf({ mini: all.mini }, ["mini"])).toEqual([]);
   });
 
   test("gated actions are offered only on the writer's own gate origin", () => {

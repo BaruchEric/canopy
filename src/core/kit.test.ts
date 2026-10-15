@@ -449,7 +449,7 @@ describe("MCP planning", () => {
     const written = { github: { type: "stdio", command: WRAP, args: GH_ARGS } };
     const stale = await mctx(k, { allow: "old", claude: written, owned: { placed: { claude: ["github"] } } });
     expect(kinds(planMcp(k, seen(), stale))).toContain("mcp-remove claude/github");
-    expect(mcell(mcpCells(k, seen(), stale), "claude", "github")).toMatchObject({ state: "stale-allowance", why: "allowed for an older definition; allow it again" });
+    expect(mcell(mcpCells(k, seen(), stale), "claude", "github")).toMatchObject({ state: "stale-allowance", why: "allowed for an older definition in the store this machine last pulled; if it was allowed just now, wait for the next pull, and otherwise allow it from the kit view" });
   });
 
   test("a locked Mac: a server not yet written stays out, one already written stays in (review focus 1)", async () => {
@@ -465,7 +465,7 @@ describe("MCP planning", () => {
   test("no sink, no ignore line, no wrapper, and gpd each keep the server out and say why", async () => {
     const k = mkit();
     const why = async (o: CtxOver, machine = "mac") => mcell(mcpCells(k, seen({ machine }), await mctx(k, o)), "claude", "github");
-    expect(await why({ sink: null })).toMatchObject({ state: "no-sink", why: "no sink mcp-github-mac; allow it again" });
+    expect(await why({ sink: null })).toMatchObject({ state: "no-sink", why: "no sink mcp-github-mac in the store this machine last pulled; if it was allowed just now, wait for the next pull, and otherwise allow it from the kit view" });
     expect(await why({ ignored: false })).toMatchObject({ state: "no-sink", why: "dotclaude does not ignore mcp-env/ here; pull dotclaude" });
     expect(await why({ wrapper: false })).toMatchObject({ state: "no-sink", why: "~/.claude/bin/canopy-mcp-env is missing; pull dotclaude" });
     expect((await why({ ssh: true }, "gpd"))?.state).toBe("phase-3");
@@ -515,11 +515,28 @@ describe("MCP planning", () => {
     expect(all.filter((a) => a.kind === "mcp-adopt" || a.kind === "mcp-restore")).toEqual([]);
   });
 
+  test("straight after an allow, a reader that has not pulled or passed yet says so and does not ask for another allow (final review 6)", async () => {
+    const k = mkit();
+    const cellOf = async (o: CtxOver, edit: (c: KitMcpCtx) => void = () => {}) => {
+      const c = await mctx(k, o);
+      edit(c);
+      return mcell(mcpCells(k, seen(), c), "claude", "github");
+    };
+    expect(await cellOf({ allow: "none" })).toMatchObject({ state: "not-allowed", why: "not allowed in the store this machine last pulled; if it was allowed just now, wait for the next pull, and otherwise allow it from the kit view" });
+    // the reader pulled the allowance, but its sink pass has not run over it yet
+    expect(await cellOf({}, (c) => { c.secrets!.sinks[0]!.state = {}; })).toMatchObject({ state: "no-sink", why: "sink mcp-github-mac is not written here yet; this machine writes it on its next sink pass" });
+    // the writer reads the newest store, so its copy stays plain
+    const writer = (c: KitMcpCtx) => { c.secrets = { ...c.secrets!, role: "writer" }; };
+    expect(await cellOf({ allow: "none" }, writer)).toMatchObject({ why: "not allowed; allow it from the kit view" });
+    expect(await cellOf({ allow: "old" }, writer)).toMatchObject({ why: "allowed for an older definition; allow it again" });
+    expect(await cellOf({ sink: null }, writer)).toMatchObject({ why: "no sink mcp-github-mac; allow it again" });
+  });
+
   test("adopt waits for the allowance: a hand-made entry gets no kit entry until the kit's could be written", async () => {
     const k = mkit();
     const hand = { github: { command: "bash" } };
     const none = await mctx(k, { allow: "none", claude: hand });
-    expect(mcell(mcpCells(k, seen(), none), "claude", "github")).toMatchObject({ state: "not-allowed", why: "not allowed; allow it from the kit view; a hand-made entry is there" });
+    expect(mcell(mcpCells(k, seen(), none), "claude", "github")).toMatchObject({ state: "not-allowed", why: "not allowed in the store this machine last pulled; if it was allowed just now, wait for the next pull, and otherwise allow it from the kit view; a hand-made entry is there" });
     expect(planMcp(k, seen(), none).entries["claude/github"]).toBeUndefined();
     const waiting = await mctx(k, { sink: "waiting", claude: hand });
     expect(mcell(mcpCells(k, seen(), waiting), "claude", "github")).toMatchObject({ state: "no-sink", why: "waiting for unlock" });

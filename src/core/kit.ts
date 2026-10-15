@@ -419,10 +419,18 @@ export function allowanceOf(s: KitMcpServer, hash: string, info: SecretsInfo): "
   return hashes.some((x) => x !== null) ? "stale" : "none";
 }
 
+/** A reader's copy of the store trails the writer's until its next pull,
+ *  so straight after an allow it can read "not allowed" or "no sink".
+ *  Its words say so, rather than asking for a second passkey commit. */
+const PULLED = "in the store this machine last pulled";
+const OR_WAIT = "if it was allowed just now, wait for the next pull, and otherwise allow it from the kit view";
+
 function sinkReady(info: SecretsInfo, id: string, keys: string[]): { ok: true } | { waiting: true } | { why: string } {
   const k = info.sinks.find((x) => x.id === id);
-  if (!k) return { why: `no sink ${id}; allow it again` };
+  if (!k) return { why: info.role === "writer" ? `no sink ${id}; allow it again` : `no sink ${id} ${PULLED}; ${OR_WAIT}` };
   if (k.error) return { why: `sink ${id}: ${k.error}` };
+  // no state at all: this machine's sink pass has not run over the commit that made the sink
+  if (keys.some((key) => k.state[key] === undefined)) return { why: `sink ${id} is not written here yet; this machine writes it on its next sink pass` };
   const states = keys.map((key) => k.state[key] ?? "unknown");
   if (states.every((x) => x === "same")) return { ok: true };
   if (states.some((x) => x === "waiting")) return { waiting: true };
@@ -435,8 +443,9 @@ export function serverReady(s: KitMcpServer, machine: string, ctx: KitMcpCtx): {
   if (ctx.ssh) return { state: "phase-3", why: "a server with secrets on an ssh machine waits for secrets phase 3" };
   if (!ctx.secrets?.ok) return { state: "no-sink", why: "this backend cannot read the secret store" };
   const a = allowanceOf(s, ctx.hashes[s.name] ?? "", ctx.secrets);
-  if (a === "none") return { state: "not-allowed", why: "not allowed; allow it from the kit view" };
-  if (a === "stale") return { state: "stale-allowance", why: "allowed for an older definition; allow it again" };
+  const writer = ctx.secrets.role === "writer";
+  if (a === "none") return { state: "not-allowed", why: writer ? "not allowed; allow it from the kit view" : `not allowed ${PULLED}; ${OR_WAIT}` };
+  if (a === "stale") return { state: "stale-allowance", why: writer ? "allowed for an older definition; allow it again" : `allowed for an older definition ${PULLED}; ${OR_WAIT}` };
   if (!ctx.mcp.ignored) return { state: "no-sink", why: "dotclaude does not ignore mcp-env/ here; pull dotclaude" };
   if (!ctx.mcp.wrapper) return { state: "no-sink", why: "~/.claude/bin/canopy-mcp-env is missing; pull dotclaude" };
   const sec = secretsOf(s);
