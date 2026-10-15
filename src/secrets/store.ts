@@ -154,6 +154,9 @@ export class SecretStore {
     }
     // an empty Forgejo repo has no main yet: nothing to take, nothing split
     if ((await this.git(["rev-parse", "-q", "--verify", "refs/remotes/origin/main"])).code !== 0) return;
+    const same = await this.git(["rev-parse", "HEAD", "refs/remotes/origin/main"]);
+    const [here, there] = same.stdout.trim().split("\n");
+    if (same.code === 0 && here === there) return;
     const ahead = await this.git(["merge-base", "--is-ancestor", "HEAD", "origin/main"]);
     if (ahead.code === 0) {
       const why = await this.refusal("origin/main");

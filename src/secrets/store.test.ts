@@ -36,7 +36,10 @@ describe("SecretStore", () => {
 
   test("a second start keeps the same keys and reads the file back", async () => {
     const a = await SecretStore.open({ data: join(dir, "data"), remote, breakglass: BREAKGLASS, log: quiet });
-    const b = await SecretStore.open({ data: join(dir, "data"), remote, breakglass: BREAKGLASS, log: quiet });
+    const logs: string[] = [];
+    const b = await SecretStore.open({ data: join(dir, "data"), remote, breakglass: BREAKGLASS, log: (l) => logs.push(l) });
+    // Forgejo at the same commit is nothing to take and nothing to warn about
+    expect(logs.filter((l) => !l.includes("recipient"))).toEqual([]);
     expect(b.recipient).toBe(a.recipient);
     expect(b.publicB64).toBe(a.publicB64);
     expect(b.head).toBe(a.head);
