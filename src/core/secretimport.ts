@@ -101,7 +101,10 @@ export function suggestName(source: string, key: string): string {
   const parts = key.split(".");
   const server = parts[0] === "mcpServers" || parts[0] === "mcp_servers" ? parts[parts.length - 3] : parts[0] === "projects" ? parts[parts.length - 3] : undefined;
   const last = parts.length > 1 && !server ? parts.join("_") : (parts[parts.length - 1] ?? key);
-  const raw = [stack, server, last].filter(Boolean).join("_").toLowerCase().replace(/[^a-z0-9_.-]+/g, "_").slice(0, 100);
+  // a key that already starts with its stack or server is not prefixed twice
+  const words = [stack, server, last].filter((w): w is string => Boolean(w)).map((w) => w.toLowerCase());
+  const kept = words.filter((w, i) => !words.slice(i + 1).some((later) => later.startsWith(`${w}_`)));
+  const raw = kept.join("_").replace(/[^a-z0-9_.-]+/g, "_").slice(0, 100);
   return SECRET_NAME.test(raw) ? raw : `s_${raw}`.slice(0, 100);
 }
 

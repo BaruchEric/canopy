@@ -10329,6 +10329,12 @@ span.effective-flag:not(:first-child) {
   flex-basis: 100%;
   font-family: var(--mono);
 }
+.secrets-bulk {
+  display: grid;
+  gap: 6px;
+  border-bottom: 1px solid var(--hair);
+  padding: 6px 0;
+}
 .secrets-list {
   list-style: none;
   margin: 0;

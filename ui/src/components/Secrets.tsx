@@ -4,6 +4,7 @@ import type { SecretAct } from "../../../src/core/secretwire";
 import type { SecretAuditEntry, SecretMeta, SecretProposalInfo, SecretSinkFormat, SecretSinkInfo, SecretsInfo } from "../../../src/core/types";
 import { api } from "../api";
 import { KEY_TONE, errorText, filterSecrets, gateHere, hostOf, isGateClosed, keysText, parseKeysText, sinkRows, tagsOf, writerOf, type SinkRow } from "../secrets";
+import { bulkAct, pick } from "../secretsbulk";
 import { newKeyProblem } from "../secretsform";
 import { useStore } from "../store";
 import { ago } from "../util";
@@ -643,6 +644,7 @@ function ImportTab({ info, home, writer, here, open }: { info: SecretsInfo; home
   const act = useAct(home);
   const [busy, setBusy] = useState(false);
   const [note, setNote] = useState<string | null>(null);
+  const [picked, setPicked] = useState<Set<string>>(() => new Set());
   const scanMini = async () => {
     const r = await act.run({ a: "import-scan" });
     const d = r?.data as { added?: unknown; dropped?: unknown } | null | undefined;
@@ -683,10 +685,11 @@ function ImportTab({ info, home, writer, here, open }: { info: SecretsInfo; home
       <Err text={act.error} />
       {note && <p className="secrets-note">{note}</p>}
       {here && !open && info.proposals.length > 0 && <p className="secrets-note">{info.proposals.length} waiting; open a passkey session to approve them.</p>}
+      {here && open && info.proposals.length > 0 && <Bulk proposals={info.proposals} home={home} picked={picked} setPicked={setPicked} />}
       {here && open && (
         <ul className="secrets-list">
           {info.proposals.map((p) => (
-            <Proposal key={p.id} p={p} home={home} />
+            <Proposal key={p.id} p={p} home={home} picked={picked.has(p.id)} onPick={(on) => setPicked((s) => toggled(s, p.id, on))} />
           ))}
         </ul>
       )}
@@ -694,7 +697,86 @@ function ImportTab({ info, home, writer, here, open }: { info: SecretsInfo; home
   );
 }
 
-function Proposal({ p, home }: { p: SecretProposalInfo; home: string }) {
+const toggled = (s: ReadonlySet<string>, id: string, on: boolean): Set<string> => {
+  const next = new Set(s);
+  if (on) next.add(id);
+  else next.delete(id);
+  return next;
+};
+
+/** Pick many proposals and approve or reject them in one go. An approve
+ *  takes each one's suggested name, its stack as tag and sink; a source
+ *  that only lists names still needs its value typed on its own row. */
+function Bulk({ proposals, home, picked, setPicked }: { proposals: SecretProposalInfo[]; home: string; picked: ReadonlySet<string>; setPicked: (s: Set<string>) => void }) {
+  const load = useStore((s) => s.loadSecrets);
+  const [busy, setBusy] = useState(false);
+  const [note, setNote] = useState<string | null>(null);
+  const chosen = proposals.filter((p) => picked.has(p.id));
+  const approvable = chosen.filter((p) => bulkAct(p) !== null);
+  const run = async (verb: "approve" | "reject") => {
+    setBusy(true);
+    setNote(null);
+    const list = verb === "approve" ? approvable : chosen;
+    const failed: string[] = [];
+    let done = 0;
+    try {
+      for (const p of list) {
+        const act: SecretAct | null = verb === "approve" ? bulkAct(p) : { a: "reject", proposal: p.id };
+        if (!act) continue;
+        setNote(`${verb === "approve" ? "approving" : "rejecting"} ${done + failed.length + 1} of ${list.length}`);
+        try {
+          await api.secretsAct(home, act);
+          done++;
+        } catch (e) {
+          if (isGateClosed(e)) {
+            failed.push("the passkey session ended; open it again and pick up where this stopped");
+            break;
+          }
+          failed.push(`${p.key}: ${errorText(e)}`);
+        }
+      }
+    } finally {
+      const skipped = verb === "approve" ? chosen.length - approvable.length : 0;
+      setNote(
+        `${done} ${verb === "approve" ? "approved" : "rejected"}${skipped > 0 ? `, ${skipped} left for a typed value` : ""}${failed.length > 0 ? `; ${failed.length} failed: ${failed.join("; ")}` : ""}`,
+      );
+      setPicked(new Set());
+      setBusy(false);
+      void load(home);
+    }
+  };
+  return (
+    <div className="secrets-bulk">
+      <div className="secrets-line">
+        <span className="secrets-note">pick</span>
+        <button type="button" className="mini" disabled={busy} onClick={() => setPicked(pick(proposals, "secrets"))}>
+          secret-looking
+        </button>
+        <button type="button" className="mini" disabled={busy} onClick={() => setPicked(pick(proposals, "settings"))}>
+          setting-looking
+        </button>
+        <button type="button" className="mini" disabled={busy} onClick={() => setPicked(new Set(proposals.map((p) => p.id)))}>
+          all
+        </button>
+        <button type="button" className="mini" disabled={busy || picked.size === 0} onClick={() => setPicked(pick(proposals, "none"))}>
+          none
+        </button>
+      </div>
+      <div className="secrets-line">
+        <button type="button" className="mini" disabled={busy || approvable.length === 0} onClick={() => void run("approve")}>
+          approve {approvable.length} as sinks
+        </button>
+        <button type="button" className="mini" disabled={busy || chosen.length === 0} onClick={() => void run("reject")}>
+          reject {chosen.length}
+        </button>
+        <span className="secrets-note">{chosen.length} of {proposals.length} picked; the pick goes by key name, so check it before you approve</span>
+      </div>
+      {note && <p className="secrets-note">{note}</p>}
+    </div>
+  );
+}
+
+function Proposal({ p, home, picked, onPick }: { p: SecretProposalInfo; home: string; picked: boolean; onPick: (on: boolean) => void }) {
   const act = useAct(home);
   const [name, setName] = useState(p.merges ?? p.suggested);
   const [description, setDescription] = useState("");
@@ -705,6 +787,7 @@ function Proposal({ p, home }: { p: SecretProposalInfo; home: string }) {
   return (
     <li>
       <div className="secrets-line">
+        <input type="checkbox" aria-label={`Pick ${p.key} from ${p.source}`} checked={picked} onChange={(e) => onPick(e.target.checked)} />
         <span className="secrets-name">{p.key}</span>
         <span className="secrets-meta">
           {p.from} · {p.source}

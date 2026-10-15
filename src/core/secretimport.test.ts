@@ -46,7 +46,9 @@ describe("suggestName", () => {
     ["/opt/stacks/immich/.env", "DB_PASSWORD", "immich_db_password"],
     ["/Users/e/.claude/credentials/.credentials.json", "cloudflare.api_token", "cloudflare_api_token"],
     ["/Users/e/dev/.env", "OPENAI_API_KEY", "openai_api_key"],
-    ["/Users/e/.claude.json", "mcpServers.github.env.GITHUB_TOKEN", "github_github_token"],
+    ["/Users/e/.claude.json", "mcpServers.github.env.GITHUB_TOKEN", "github_token"],
+    ["/opt/stacks/executor/.env", "EXECUTOR_SECRET_KEY", "executor_secret_key"],
+    ["/opt/stacks/beric-gate/.env", "GATE_OWNER_EMAIL", "beric-gate_gate_owner_email"],
     ["/Users/e/dev/.env", "9LIVES", "s_9lives"],
   ])("%s %s", (source, key, want) => {
     expect(suggestName(source, key)).toBe(want);
