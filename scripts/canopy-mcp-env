@@ -1,0 +1,81 @@
+#!/bin/sh
+# canopy-mcp-env: start an MCP server with its secrets from the kit's env
+# sink, never evaluating them (canopy's docs/superpowers/specs/
+# 2026-10-14-kit-secrets-phase-2-design.md). The source is canopy's
+# scripts/canopy-mcp-env; dotclaude's bin/canopy-mcp-env is a copy.
+#
+#   canopy-mcp-env <server> -- <command> [args...]
+#   canopy-mcp-env --headers <server>
+#
+# It reads the dialect canopy's dotenv sink writer emits: KEY=bare,
+# KEY='single quoted' (literal) and KEY="double quoted" (\\ \" \n \r \t).
+set -u
+dir="$HOME/.claude/mcp-env"
+nl='
+'
+cr=$(printf '\r')
+tab=$(printf '\t')
+
+die() { printf 'canopy-mcp-env: %s\n' "$1" >&2; exit 1; }
+
+name_ok() {
+  case $1 in [a-z]*) ;; *) return 1 ;; esac
+  case $1 in *[!a-z0-9-]*) return 1 ;; esac
+  return 0
+}
+
+# val becomes the value written after KEY=. No eval and no command
+# substitution: nothing in it runs, and a trailing newline stays.
+decode() {
+  v=$1
+  val=
+  case $v in
+    "'"*)
+      v=${v#"'"}
+      val=${v%%"'"*}
+      ;;
+    '"'*)
+      v=${v#'"'}
+      while [ -n "$v" ]; do
+        c=${v%"${v#?}"}
+        v=${v#?}
+        # shellcheck disable=SC1003  # a backslash in single quotes, not an escaped quote
+        case $c in
+          '"') break ;;
+          '\')
+            c=${v%"${v#?}"}
+            v=${v#?}
+            case $c in n) c=$nl ;; r) c=$cr ;; t) c=$tab ;; esac
+            ;;
+        esac
+        val=$val$c
+      done
+      ;;
+    *) val=$v ;;
+  esac
+}
+
+if [ "${1:-}" = "--headers" ]; then
+  name_ok "${2:-}" || die "usage: canopy-mcp-env --headers <server>"
+  f="$dir/$2.headers.json"
+  [ -r "$f" ] || die "cannot read $f"
+  exec cat "$f"
+fi
+
+server=${1:-}
+if ! name_ok "$server" || [ "${2:-}" != "--" ] || [ $# -lt 3 ]; then
+  die "usage: canopy-mcp-env <server> -- <command> [args...]"
+fi
+shift 2
+f="$dir/$server.env"
+[ -r "$f" ] || die "cannot read $f"
+while IFS= read -r line || [ -n "$line" ]; do
+  case $line in '' | '#'*) continue ;; esac
+  line=${line#export }
+  k=${line%%=*}
+  [ "$k" = "$line" ] && continue
+  case $k in '' | [0-9]* | *[!A-Za-z0-9_]*) continue ;; esac
+  decode "${line#*=}"
+  export "$k=$val"
+done <"$f"
+exec "$@"
