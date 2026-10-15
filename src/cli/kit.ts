@@ -7,7 +7,11 @@ export function actionWord(a: KitAction): string {
   return `${a.kind} ${a.agent}/${a.name}`;
 }
 
-const PROBLEMS = new Set(["missing", "drift", "foreign", "no-source", "noagent", "away"]);
+/** phase-3 is left out: on gpd every server with secrets would read it until secrets phase 3 */
+const PROBLEMS = new Set([
+  "missing", "drift", "foreign", "no-source", "noagent", "away",
+  "not-allowed", "stale-allowance", "no-sink", "adoptable", "unsupported", "unresolved",
+]);
 
 export function kitStatusLines(info: KitInfo, machine: string | null): string[] {
   if (!info.ok) return [info.error ?? "kit not read"];

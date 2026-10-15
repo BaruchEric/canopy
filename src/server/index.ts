@@ -4256,13 +4256,21 @@ export async function startServer(opts: {
       devRoot: root,
       kitPath: kitPath(),
       broadcast: (ev) => broadcast(state, ev),
+      // the store's metadata: allowances and sink states, no session needed
+      secrets: () => state.secrets.info(null),
+      // the mini's canopy writes for the host's home, not the container's /home/bun (docker-compose.yml)
+      hostHome: process.env["CANOPY_HOST_HOME"] || homedir(),
     }),
     // the same name as backendName below; the reader writes this machine's sinks by it
     secrets: createSecretsHub({
       backend: selfName(cfg.self, hostname()),
       root,
       repoRoots: () => state.result.repos.filter((r) => !r.host).map((r) => r.path),
-      broadcast: (ev) => broadcast(state, ev),
+      broadcast: (ev) => {
+        broadcast(state, ev);
+        // an allowance or a sink state moved: the kit's MCP cells follow without a rescan
+        if (ev.type === "secrets") void state.kit.republish();
+      },
     }),
     apiUrl: null,
   };

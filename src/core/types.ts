@@ -2869,6 +2869,8 @@ export interface KitMachineView {
   machine: string;
   seen: KitSeen;
   plan: KitAction[];
+  /** the home ~ stands for in what the kit writes there (phase 2); the mcp-allow act's homes come from here */
+  home?: string;
 }
 
 export interface KitInfo {
@@ -2876,6 +2878,8 @@ export interface KitInfo {
   error: string | null;
   machines: KitMachineView[];
   cells: KitCell[];
+  /** the servers with secrets, for the allow sheet (phase 2) */
+  mcp?: KitMcpView[];
 }
 
 export interface KitApplyResult {
@@ -2935,6 +2939,29 @@ export interface KitMcpCtx {
   env: Record<string, string | undefined>;
   /** reached over ssh (gpd): a server with secrets waits for secrets phase 3 */
   ssh: boolean;
+}
+
+/** one server with secrets as the allow sheet shows it: names and the hash, never a value */
+export interface KitMcpView {
+  name: string;
+  def: KitMcpDef;
+  hash: string;
+  /** env name to secret name */
+  env: Record<string, string>;
+  /** header name to secret name */
+  headers: Record<string, string>;
+  /** the machines it is placed on that an allowance covers now */
+  machines: string[];
+  /** the machines it is placed on that wait for secrets phase 3 (ssh machines: gpd) */
+  later: string[];
+}
+
+/** what adopt would change, masked */
+export interface KitMcpPreview {
+  state: KitCellState;
+  why: string;
+  have: KitMcpEntry | null;
+  want: KitMcpEntry | null;
 }
 
 /** The part of an MCP server the definition hash covers (phase 2 spec,
