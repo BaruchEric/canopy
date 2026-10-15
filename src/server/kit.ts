@@ -233,7 +233,11 @@ export class KitHub {
       run: this.deps.run, env: this.deps.env,
       mcp: seen ? { seen, entries: this.entries.get(machine) ?? {}, formats } : undefined,
     });
-    await this.scanOne(kit, m);
+    // rescan against the manifest as it is now: one that changed during the
+    // write has a scan in flight that read ownership before the write, and
+    // only a newer scan numbered after it makes scanOf drop that one
+    const now = this.kit ?? kit;
+    await this.scanOne(now, this.mine(now).find((x) => x.name === machine) ?? m);
     return r;
   }
 

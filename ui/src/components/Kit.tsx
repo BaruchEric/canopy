@@ -164,13 +164,16 @@ function AllowSheet({ view, machines, onDone }: { view: KitMcpPick; machines: Ki
         )
       ) : !info.session ? (
         <p className="kit-note">Open the passkey session in <a href="/?view=secrets">the secrets view</a> first.</p>
-      ) : view.split ? (
-        <p className="kit-error">The backends read different definitions of {view.name} ({view.split.join(", ")}), so one allowance cannot fit them all. Pull dotclaude where it is behind and rescan.</p>
-      ) : "why" in homes ? (
-        <p className="kit-error">{homes.why}</p>
       ) : (
         <div className="kit-line">
-          <button type="button" className="mini" disabled={busy} onClick={() => void run(allowAct(view, homes.homes), `${view.name}: allowed`)}>allow</button>
+          {/* revoke needs neither the hash nor the homes, so only allow waits on them */}
+          {view.split ? (
+            <span className="kit-error">The backends read different definitions of {view.name} ({view.split.join(", ")}), so one allowance cannot fit them all. Pull dotclaude where it is behind and rescan.</span>
+          ) : "why" in homes ? (
+            <span className="kit-error">{homes.why}</span>
+          ) : (
+            <button type="button" className="mini" disabled={busy} onClick={() => void run(allowAct(view, homes.homes), `${view.name}: allowed`)}>allow</button>
+          )}
           {sure ? (
             <>
               <span className="kit-error">Revoke takes the allow entries and the env sinks out.</span>
