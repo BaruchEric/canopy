@@ -64,23 +64,44 @@ export const serverAt = (cells: KitCell[], name: string, machine: string, agent:
 export const adoptableIn = (cells: KitCell[], machine: string, agent: string): string[] =>
   cells.filter((c) => isServer(c) && c.machine === machine && c.agent === agent && c.state === "adoptable").map((c) => c.skill).sort();
 
-/** the servers with secrets, once each: every backend reads the same kit.json */
-export function mcpViewsOf(byBackend: Record<string, KitInfo>): KitMcpView[] {
-  const out = new Map<string, KitMcpView>();
-  for (const info of Object.values(byBackend)) for (const v of info.mcp ?? []) if (!out.has(v.name)) out.set(v.name, v);
-  return [...out.values()];
+/** a server with secrets as the allow sheet takes it; `split` names the
+ *  backends when they hash it apart (one has not pulled dotclaude) */
+export type KitMcpPick = KitMcpView & { split?: string[] };
+
+/** the servers with secrets, once each. Every backend should read the same
+ *  kit.json; when their hashes differ, the allowance would fit only some
+ *  of them, so the view carries the backends and the sheet blocks. */
+export function mcpViewsOf(byBackend: Record<string, KitInfo>): KitMcpPick[] {
+  const out = new Map<string, KitMcpPick>();
+  const by = new Map<string, Map<string, string>>();
+  for (const [backend, info] of Object.entries(byBackend)) {
+    for (const v of info.mcp ?? []) {
+      if (!out.has(v.name)) out.set(v.name, v);
+      by.set(v.name, (by.get(v.name) ?? new Map<string, string>()).set(backend, v.hash));
+    }
+  }
+  return [...out.values()].map((v) => {
+    const hashes = by.get(v.name) ?? new Map<string, string>();
+    return new Set(hashes.values()).size > 1 ? { ...v, split: [...hashes.keys()].sort() } : v;
+  });
 }
 
-/** each machine's home, from the backend that owns it; a machine not seen yet blocks the allow */
-export function homesFor(v: KitMcpView, machines: KitMachineView[]): { homes: Record<string, string> } | { missing: string[] } {
+/** each machine's home, from the backend that owns it; a machine not seen
+ *  yet, or seen by a backend too old to report its home, blocks the allow */
+export function homesFor(v: KitMcpView, machines: KitMachineView[]): { homes: Record<string, string> } | { why: string } {
   const homes: Record<string, string> = {};
-  const missing: string[] = [];
+  const unseen: string[] = [];
+  const old: string[] = [];
   for (const m of v.machines) {
-    const home = machines.find((x) => x.machine === m)?.home;
-    if (home) homes[m] = home;
-    else missing.push(m);
+    const view = machines.find((x) => x.machine === m);
+    if (view?.home) homes[m] = view.home;
+    else (view ? old : unseen).push(m);
   }
-  return missing.length > 0 ? { missing } : { homes };
+  const why = [
+    ...(old.length > 0 ? [`The backend for ${old.join(", ")} reports no home, so it runs an older canopy; update it to the new build, then allow.`] : []),
+    ...(unseen.length > 0 ? [`No home known yet for ${unseen.join(", ")}; rescan.`] : []),
+  ];
+  return why.length > 0 ? { why: why.join(" ") } : { homes };
 }
 
 export const allowAct = (v: KitMcpView, homes: Record<string, string>): SecretAct =>

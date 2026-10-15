@@ -55,12 +55,19 @@ describe("server rows", () => {
   test("the allow act carries every machine's home, and parses as the service will read it", () => {
     const v: KitMcpView = { name: "github", def: { command: "bunx", args: ["-y", "@modelcontextprotocol/server-github"], url: null, env: ["GITHUB_PERSONAL_ACCESS_TOKEN"], headers: [] }, hash: "a".repeat(64), env: { GITHUB_PERSONAL_ACCESS_TOKEN: "gh_token" }, headers: {}, machines: ["mac", "mini"], later: ["gpd"] };
     const view = (machine: string, home?: string): KitMachineView => ({ machine, seen: { machine, at: 1, away: null, home: "", store: null, targets: [], sources: {} }, plan: [], ...(home ? { home } : {}) });
-    expect(homesFor(v, [view("mac", "/Users/e")])).toEqual({ missing: ["mini"] });
+    expect(homesFor(v, [view("mac", "/Users/e")])).toEqual({ why: "No home known yet for mini; rescan." });
     const h = homesFor(v, [view("mac", "/Users/e"), view("mini", "/home/eric")]);
     if (!("homes" in h)) throw new Error("no homes");
     const act = allowAct(v, h.homes);
     expect(parseAct(act)).toEqual(act);
     expect(mcpViewsOf({ mac: { ...info([]), mcp: [v] }, mini: { ...info([]), mcp: [v] } })).toEqual([v]);
+  });
+  test("a backend from before machine homes needs the new build, and backends that hash a server apart block its allow (final review 7)", () => {
+    const v: KitMcpView = { name: "github", def: { command: "bunx", args: [], url: null, env: ["T"], headers: [] }, hash: "a".repeat(64), env: { T: "gh_token" }, headers: {}, machines: ["mac", "mini"], later: [] };
+    const view = (machine: string, home?: string): KitMachineView => ({ machine, seen: { machine, at: 1, away: null, home: "", store: null, targets: [], sources: {} }, plan: [], ...(home ? { home } : {}) });
+    expect(homesFor(v, [view("mac", "/Users/e"), view("mini")])).toEqual({ why: "The backend for mini reports no home, so it runs an older canopy; update it to the new build, then allow." });
+    const older = { ...v, hash: "b".repeat(64), def: { ...v.def, args: ["-y"] } };
+    expect(mcpViewsOf({ mac: { ...info([]), mcp: [v] }, mini: { ...info([]), mcp: [older] } })).toEqual([{ ...v, split: ["mac", "mini"] }]);
   });
 });
 

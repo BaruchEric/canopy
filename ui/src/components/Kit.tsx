@@ -1,9 +1,9 @@
 import { useEffect, useMemo, useState } from "react";
 import { api } from "../api";
 import { useStore } from "../store";
-import { GLYPH, PROBLEM, adoptableIn, allowAct, cellAt, columns, homesFor, mcpViewsOf, mergeKit, rows, serverAt, serverRows, sheetFor, sheetKey, type KitFilter, type KitSheet } from "../kit";
+import { GLYPH, PROBLEM, adoptableIn, allowAct, cellAt, columns, homesFor, mcpViewsOf, mergeKit, rows, serverAt, serverRows, sheetFor, sheetKey, type KitFilter, type KitMcpPick, type KitSheet } from "../kit";
 import { errorText, gateHere, hostOf, isGateClosed, readersOf, writerOf } from "../secrets";
-import type { KitApplyResult, KitMachineView, KitMcpPreview, KitMcpView } from "../../../src/core/types";
+import type { KitApplyResult, KitMachineView, KitMcpPreview } from "../../../src/core/types";
 import type { SecretAct } from "../../../src/core/secretwire";
 
 /** which backend reaches a machine: the one whose info lists it */
@@ -105,7 +105,7 @@ function RestoreSheet({ backend, machine, agent, name, onDone }: { backend: stri
 
 /** One gated allowance for every machine, sent to the secrets service
  *  from the gate page with an open passkey session. */
-function AllowSheet({ view, machines, onDone }: { view: KitMcpView; machines: KitMachineView[]; onDone: (msg: string) => void }) {
+function AllowSheet({ view, machines, onDone }: { view: KitMcpPick; machines: KitMachineView[]; onDone: (msg: string) => void }) {
   const all = useStore((s) => s.secrets);
   const order = useStore((s) => s.backendOrder);
   const writer = writerOf(all, order);
@@ -164,8 +164,10 @@ function AllowSheet({ view, machines, onDone }: { view: KitMcpView; machines: Ki
         )
       ) : !info.session ? (
         <p className="kit-note">Open the passkey session in <a href="/?view=secrets">the secrets view</a> first.</p>
-      ) : "missing" in homes ? (
-        <p className="kit-error">No home known yet for {homes.missing.join(", ")}; rescan.</p>
+      ) : view.split ? (
+        <p className="kit-error">The backends read different definitions of {view.name} ({view.split.join(", ")}), so one allowance cannot fit them all. Pull dotclaude where it is behind and rescan.</p>
+      ) : "why" in homes ? (
+        <p className="kit-error">{homes.why}</p>
       ) : (
         <div className="kit-line">
           <button type="button" className="mini" disabled={busy} onClick={() => void run(allowAct(view, homes.homes), `${view.name}: allowed`)}>allow</button>
