@@ -40,7 +40,7 @@ const json = (data: unknown, status = 200) => new Response(JSON.stringify(data),
 
 interface Mine { name: string; host: string | null; dev: string }
 
-interface View { seen: KitSeen; dev: string; mcp: KitMcpSeen | null; ssh: boolean }
+interface View { seen: KitSeen; dev: string; mcp: KitMcpSeen | null; ssh: boolean; mcpError: string | null }
 
 export class KitHub {
   private last: KitInfo = { ok: false, error: "not scanned yet", machines: [], cells: [] };
@@ -135,13 +135,17 @@ export class KitHub {
       (err: unknown): KitSeen => ({ machine: m.name, at: (this.deps.now ?? Date.now)(), away: err instanceof Error ? err.message : String(err), home: "", store: null, targets: [], sources: {} }),
     );
     // after the skills scan, so an ssh machine that is away is not waited on twice
-    const mcp = seen.away ? null : await seeMcp(kit, m, { run: this.deps.run, env: this.deps.env }).catch(() => null);
+    let mcpError: string | null = null;
+    const mcp = seen.away ? null : await seeMcp(kit, m, { run: this.deps.run, env: this.deps.env }).catch((err: unknown) => {
+      mcpError = err instanceof Error ? err.message : String(err);
+      return null;
+    });
     // kit.json changed during the read (an apply's rescan racing a scan):
     // this read follows the old manifest, and the new one's scan paints it
     if (kit !== this.kit) return;
     if ((this.scanOf.get(m.name) ?? 0) > n) return;
     this.scanOf.set(m.name, n);
-    this.views.set(m.name, { seen, dev: m.dev, mcp, ssh: m.host !== null });
+    this.views.set(m.name, { seen, dev: m.dev, mcp, ssh: m.host !== null, mcpError });
     await this.publish(kit);
   }
 
@@ -181,7 +185,7 @@ export class KitHub {
     if (kit !== this.kit || n !== this.publishes) return;
     const vs = this.mine(kit).map((m) => this.views.get(m.name)).filter((v): v is View => !!v);
     const machines: KitMachineView[] = [];
-    const cellViews: { seen: KitSeen; dev: string; ctx?: KitMcpCtx }[] = [];
+    const cellViews: { seen: KitSeen; dev: string; ctx?: KitMcpCtx; mcpError?: string | null }[] = [];
     for (const v of vs) {
       const ctx = this.ctxOf(v, secrets);
       if (ctx) {
@@ -192,7 +196,7 @@ export class KitHub {
         this.mcpSeen.delete(v.seen.machine);
       }
       machines.push({ machine: v.seen.machine, seen: v.seen, plan: planKit(kit, v.seen, v.dev, ctx), home: this.homeOf(v) });
-      cellViews.push({ seen: v.seen, dev: v.dev, ctx });
+      cellViews.push({ seen: v.seen, dev: v.dev, ctx, mcpError: v.mcpError });
     }
     this.last = { ok: true, error: null, machines, cells: cellsOf(kit, cellViews), mcp: this.mcpViews(kit) };
     this.deps.broadcast({ type: "kit", kit: this.last });

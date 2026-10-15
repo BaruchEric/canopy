@@ -426,6 +426,15 @@ describe("MCP planning", () => {
     expect(mcell(cells, "codex", "executor")).toMatchObject({ state: "drift", why });
   });
 
+  test("a failed MCP scan paints every wanted server away with the reason (final review 5)", () => {
+    const k = mkit();
+    const cells = cellsOf(k, [{ seen: seen(), dev: "/d", mcpError: "the MCP scan failed: x" }]).filter((c) => c.kind === "mcp");
+    expect(cells.map((c) => `${c.agent}/${c.skill} ${c.state}`).sort()).toEqual([
+      "claude/excalidraw away", "claude/executor away", "claude/github away", "claude/hook away", "codex/executor away", "codex/github away", "codex/hook away",
+    ]);
+    expect(new Set(cells.map((c) => c.why))).toEqual(new Set(["the MCP scan failed: x"]));
+  });
+
   test("an adoptable cell says adopt waits while dotclaude does not ignore the ownership file (final review 9)", async () => {
     const k = mkit();
     const hand = { github: { type: "stdio", command: "bash", args: ["-c", "x"] } };

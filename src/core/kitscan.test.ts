@@ -194,6 +194,24 @@ describe("the MCP scan", () => {
     }
   });
 
+  test("~/.local/bin/claude is found before a login shell is started, and a failed scan throws its reason (final review 5)", async () => {
+    const h = mkdtempSync(join(tmpdir(), "mcpscan-"));
+    try {
+      mkdirSync(join(h, ".local", "bin"), { recursive: true });
+      writeFileSync(join(h, ".local", "bin", "claude"), "#!/bin/sh\n", { mode: 0o755 });
+      const marker = join(h, "login-shell-ran");
+      const shell = join(h, "shell");
+      writeFileSync(shell, `#!/bin/sh\ntouch '${marker}'\n`, { mode: 0o755 });
+      const m = await seeMcp(mkKit(), { name: "mac", host: null }, { env: { HOME: h, PATH: "/usr/bin:/bin", SHELL: shell, KIT_CLAUDE: "" } });
+      expect(m?.claude).toBe(join(h, ".local", "bin", "claude"));
+      expect(existsSync(marker)).toBe(false);
+      const fail = async () => ({ code: 2, stdout: "", stderr: "sh: base64: not found\n" });
+      await expect(seeMcp(mkKit(), { name: "mac", host: null }, { run: fail })).rejects.toThrow("the MCP scan failed: sh: base64: not found");
+    } finally {
+      rmSync(h, { recursive: true, force: true });
+    }
+  });
+
   test("a file that does not parse reads null with canopy's words, never the file's text", () => {
     const b64 = (s: string) => Buffer.from(s).toString("base64");
     const out = [

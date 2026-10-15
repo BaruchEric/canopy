@@ -179,8 +179,8 @@ b64() { base64 < "$1" | tr -d '\\n'; }
 abs() { case $1 in /*) [ -x "$1" ] && printf %s "$1";; esac; }
 c=$(abs "\${KIT_CLAUDE:-}")
 [ -n "$c" ] || c=$(abs "$(command -v claude 2>/dev/null)")
-[ -n "$c" ] || c=$(abs "$("\${SHELL:-sh}" -lc 'command -v claude' 2>/dev/null </dev/null)")
 [ -n "$c" ] || c=$(abs "$HOME/.local/bin/claude")
+[ -n "$c" ] || c=$(abs "$("\${SHELL:-sh}" -lc 'command -v claude' 2>/dev/null </dev/null)")
 printf 'C\\t%s\\n' "$c"
 i=0; git -C "$HOME/.claude" check-ignore -q mcp-env/probe.env 2>/dev/null && i=1
 printf 'I\\t%s\\n' "$i"
@@ -271,6 +271,7 @@ export function parseMcpScan(stdout: string, formats: Record<string, KitMcpForma
   return seen;
 }
 
+/** null when the machine has no MCP target; throws when the scan fails */
 export async function seeMcp(
   kit: KitManifest,
   m: { name: string; host: string | null },
@@ -280,6 +281,7 @@ export async function seeMcp(
   if (ts.length === 0) return null;
   const run = opts.run ?? onHost;
   const r = await run(m.host, ["sh", "-c", MCP_SCAN_SCRIPT, "kit-mcp-scan", ...mcpScanArgs(kit, m.name)], { env: opts.env, timeoutMs: SCAN_TIMEOUT });
-  if (r.code !== 0) return null;
+  // a throw, not null: null means no MCP target here, and the kit view says why a scan failed
+  if (r.code !== 0) throw new Error(`the MCP scan failed: ${reason(r.stderr, r.code)}`);
   return parseMcpScan(r.stdout, Object.fromEntries(ts.map((t) => [t.agent, t.mcp.format])));
 }

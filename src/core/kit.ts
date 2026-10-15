@@ -314,9 +314,9 @@ export function planKit(kit: KitManifest, seen: KitSeen, dev: string, ctx?: KitM
   return [...skills, ...planMcp(kit, seen, ctx).actions];
 }
 
-export function cellsOf(kit: KitManifest, views: { seen: KitSeen; dev: string; ctx?: KitMcpCtx }[]): KitCell[] {
+export function cellsOf(kit: KitManifest, views: { seen: KitSeen; dev: string; ctx?: KitMcpCtx; mcpError?: string | null }[]): KitCell[] {
   const out: KitCell[] = [];
-  for (const { seen, dev, ctx } of views) {
+  for (const { seen, dev, ctx, mcpError } of views) {
     if (seen.away || !seen.store) {
       for (const t of targetsFor(kit, seen.machine)) out.push({ machine: seen.machine, agent: t.agent, skill: "*", state: "away", why: seen.away ?? "no store" });
       continue;
@@ -329,6 +329,12 @@ export function cellsOf(kit: KitManifest, views: { seen: KitSeen; dev: string; c
       }
     });
     if (ctx) out.push(...mcpCells(kit, seen, ctx));
+    // a failed MCP scan plans nothing, and its servers say why rather than leaving the table empty
+    else if (mcpError) {
+      for (const t of mcpTargets(kit, seen.machine)) {
+        for (const s of kit.mcp.filter((x) => mcpWanted(x, t.agent, seen.machine))) out.push({ machine: seen.machine, agent: t.agent, skill: s.name, state: "away", why: mcpError, kind: "mcp" });
+      }
+    }
   }
   return out;
 }

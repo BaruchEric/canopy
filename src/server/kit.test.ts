@@ -6,7 +6,7 @@ import { exec } from "../core/exec";
 import { mcpHash } from "../core/kit";
 import { fakeClaude } from "../core/kitfake";
 import type { KitApplyResult, KitMcpPreview, SecretsInfo, ServerEvent } from "../core/types";
-import { KitHub } from "./kit";
+import { KitHub, type KitHubDeps } from "./kit";
 
 let dirs: string[] = [];
 let hubs: KitHub[] = [];
@@ -132,7 +132,7 @@ function storeInfo(allow: string[], sink: "same" | "waiting" = "same"): SecretsI
 /** no digits, so maskEntry leaves the path as it is */
 const HOST = "/home/hostside";
 
-async function setupMcp() {
+async function setupMcp(over: Partial<KitHubDeps> = {}) {
   const h = mkdtempSync(join(tmpdir(), "kithub-mcp-"));
   dirs.push(h);
   const store = join(h, ".claude");
@@ -159,6 +159,7 @@ async function setupMcp() {
     self: "mac", devRoot: join(h, "dev"), kitPath, broadcast: (e) => events.push(e), env: { HOME: h, KIT_CLAUDE: fakeClaude(h) }, every: 0,
     // the host's home differs from the scan's HOME, as on the mini (/home/eric beside /home/bun)
     secrets: () => held.shift() ?? Promise.resolve(secrets), hostHome: HOST, procEnv: {},
+    ...over,
   });
   hubs.push(hub);
   const grants = async () => [`mcp:github#${await mcpHash(GH_DEF)}`, "sink:mcp-github-mac"];
@@ -302,6 +303,17 @@ describe("KitHub and MCP servers", () => {
       expect(r.text).toContain("dotclaude does not ignore .canopy-kit-mcp.json here");
     }
     expect(claudeServers()["github"]).toEqual(HAND);
+  });
+
+  test("an MCP scan that fails paints each server the reason instead of an empty table (final review 5)", async () => {
+    const run: KitHubDeps["run"] = async (host, cmd, opts) =>
+      cmd[3] === "kit-mcp-scan" ? { code: 2, stdout: "", stderr: "sh: base64: not found\n" } : exec(cmd, opts);
+    const { hub } = await setupMcp({ run });
+    const info = await hub.scan();
+    const servers = info.cells.filter((c) => c.kind === "mcp");
+    expect(servers.map((c) => `${c.agent}/${c.skill} ${c.state}`).sort()).toEqual(["claude/excalidraw away", "claude/github away", "codex/github away"]);
+    expect(servers[0]?.why).toBe("the MCP scan failed: sh: base64: not found");
+    expect(info.machines[0]?.plan.filter((a) => a.kind.startsWith("mcp-"))).toEqual([]);
   });
 
   test("the host's home is what the kit writes; the scan still reads under HOME (ruling 6)", async () => {
