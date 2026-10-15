@@ -672,11 +672,11 @@ function ImportTab({ info, home, writer, here, open }: { info: SecretsInfo; home
     <section className="secrets-tab">
       <div className="secrets-line">
         {here ? (
-          <button type="button" className="mini" disabled={!open || act.busy} onClick={() => void scanMini()}>
+          <button type="button" className="mini strong" disabled={!open || act.busy} onClick={() => void scanMini()}>
             scan the mini's sources
           </button>
         ) : (
-          <button type="button" className="mini" disabled={busy} onClick={() => void scanHere()}>
+          <button type="button" className="mini strong" disabled={busy} onClick={() => void scanHere()}>
             scan this machine's sources
           </button>
         )}
@@ -763,13 +763,15 @@ function Bulk({ proposals, home, picked, setPicked }: { proposals: SecretProposa
         </button>
       </div>
       <div className="secrets-line">
-        <button type="button" className="mini" disabled={busy || approvable.length === 0} onClick={() => void run("approve")}>
-          approve {approvable.length} as sinks
+        <button type="button" className="mini strong" disabled={busy || approvable.length === 0} onClick={() => void run("approve")}>
+          approve {approvable.length}
         </button>
-        <button type="button" className="mini" disabled={busy || chosen.length === 0} onClick={() => void run("reject")}>
+        <button type="button" className="mini strong" disabled={busy || chosen.length === 0} onClick={() => void run("reject")}>
           reject {chosen.length}
         </button>
-        <span className="secrets-note">{chosen.length} of {proposals.length} picked; the pick goes by key name, so check it before you approve</span>
+        <span className="secrets-note">
+          {chosen.length} of {proposals.length} picked; the pick goes by key name, so check it before you approve. A file canopy can write becomes a sink.
+        </span>
       </div>
       {note && <p className="secrets-note">{note}</p>}
     </div>
@@ -807,7 +809,7 @@ function Proposal({ p, home, picked, onPick }: { p: SecretProposalInfo; home: st
             description: description.trim(),
             tags: words(tags),
             value: p.namesOnly ? value : null,
-            sink: asSink && sinkId.trim() !== "" ? { id: sinkId.trim() } : null,
+            sink: p.sinkable && asSink && sinkId.trim() !== "" ? { id: sinkId.trim() } : null,
           });
         }}
       >
@@ -821,11 +823,13 @@ function Proposal({ p, home, picked, onPick }: { p: SecretProposalInfo; home: st
         {p.namesOnly && (
           <input type="password" aria-label={`Value for ${p.key}`} placeholder="value (this source lists names only)" autoComplete="off" value={value} onChange={(e) => setValue(e.target.value)} />
         )}
-        <label className="secrets-check">
-          <input type="checkbox" checked={asSink} onChange={(e) => setAsSink(e.target.checked)} />
-          keep this file in step as a sink
-        </label>
-        {asSink && <input aria-label="Sink id" placeholder="sink id" spellCheck={false} value={sinkId} onChange={(e) => setSinkId(e.target.value)} />}
+        {p.sinkable && (
+          <label className="secrets-check">
+            <input type="checkbox" checked={asSink} onChange={(e) => setAsSink(e.target.checked)} />
+            keep this file in step as a sink
+          </label>
+        )}
+        {p.sinkable && asSink && <input aria-label="Sink id" placeholder="sink id" spellCheck={false} value={sinkId} onChange={(e) => setSinkId(e.target.value)} />}
         <button type="submit" className="mini" disabled={act.busy || name.trim() === "" || (p.namesOnly && value === "")}>
           approve
         </button>

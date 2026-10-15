@@ -269,6 +269,19 @@ describe("proposals", () => {
     expect((await info()).proposals).toEqual([]);
   });
 
+  test("a proposal says whether its file can be a sink: inside the roots here, any dotenv or json elsewhere", async () => {
+    found = [
+      { source: join(stacks, "app", ".env"), key: "A", value: "1" },
+      { source: "/import/canopy.env", key: "B", value: "2" },
+      { source: join(stacks, "memory", "env.sops.yaml"), key: "C", value: null },
+    ];
+    await ok({ a: "import-scan" });
+    const m = { from: "mac", source: "/Users/e/dev/.env", key: "D" };
+    await svc.handle({ t: "propose", items: [{ ...m, sealed: await sealProposal(m, "4", store.recipient), merges: null }] });
+    const by = Object.fromEntries((await info()).proposals.map((x) => [x.key, x.sinkable]));
+    expect(by).toEqual({ A: true, B: false, C: false, D: true });
+  });
+
   test("at most 500 wait at once", async () => {
     const batch = (n: number) => Array.from({ length: 200 }, (_, i) => ({ from: "mac", source: "/Users/e/dev/.env", key: `K${n}_${i}`, sealed: "", merges: null }));
     expect((await svc.handle({ t: "propose", items: batch(1) })).ok).toBe(true);

@@ -34,7 +34,8 @@ function placeOf(source: string): string {
   return (source.split("/").pop() ?? source).replace(/^\.+/, "").replace(/\..*$/, "") || source;
 }
 
-/** the act a bulk approve sends, null for a source that only lists names */
+/** the act a bulk approve sends, null for a source that only lists names;
+ *  a file the writer cannot write is approved without a sink */
 export function bulkAct(p: SecretProposalInfo): Extract<SecretAct, { a: "approve" }> | null {
   if (p.namesOnly) return null;
   const place = placeOf(p.source);
@@ -47,7 +48,7 @@ export function bulkAct(p: SecretProposalInfo): Extract<SecretAct, { a: "approve
     description: `${p.key} in ${place}`,
     tags: [place],
     value: null,
-    sink: id && fits ? { id } : null,
+    sink: p.sinkable && id && fits ? { id } : null,
   };
 }
 

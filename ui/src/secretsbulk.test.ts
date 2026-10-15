@@ -11,6 +11,7 @@ const P = (over: Partial<SecretProposalInfo> = {}): SecretProposalInfo => ({
   merges: null,
   same: null,
   namesOnly: false,
+  sinkable: true,
   expires: 0,
   ...over,
 });
@@ -87,6 +88,11 @@ describe("bulkAct", () => {
   });
   test("a key a dotenv sink cannot hold is approved without a sink", () => {
     expect(bulkAct(P({ key: "a.b-c" }))?.sink).toBeNull();
+  });
+  test("a file the writer cannot write is approved without a sink, so the approve still goes through", () => {
+    const act = bulkAct(P({ source: "/import/canopy.env", key: "GH_TOKEN", suggested: "gh_token", sinkable: false }));
+    expect(act?.sink).toBeNull();
+    expect(act?.tags).toEqual(["canopy"]);
   });
   test("a toml source is approved without a sink", () => {
     const act = bulkAct(P({ source: "/home/eric/.codex/config.toml", key: "mcp_servers.x.env.API_KEY", suggested: "x_api_key" }));

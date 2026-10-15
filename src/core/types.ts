@@ -2896,6 +2896,8 @@ export interface SecretProposalInfo {
   /** another pending proposal or a secret that holds the same value */
   same: string | null;
   namesOnly: boolean;
+  /** its file can become a sink: dotenv or json, and inside the writer's sink roots when it is the writer's own file */
+  sinkable: boolean;
   /** epoch ms */
   expires: number;
 }

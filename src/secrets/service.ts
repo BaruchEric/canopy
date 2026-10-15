@@ -488,6 +488,7 @@ export class SecretsService {
         merges: q.p.merges,
         same: session ? q.same : null,
         namesOnly: q.p.sealed === "",
+        sinkable: formatOf(q.p.source) !== null && (q.p.from !== this.d.machine || this.rootRefusal(q.p.source) === null),
         expires: q.expires,
       })),
       passkeys: this.d.gate.passkeys(),
