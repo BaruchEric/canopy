@@ -5,10 +5,11 @@
  * back. No error here holds a value.
  */
 
-import { chmod, chown, lstat, readFile, rename, rm, stat, writeFile } from "node:fs/promises";
+import { chmod, chown, lstat, mkdir, readFile, rename, rm, stat, writeFile } from "node:fs/promises";
 import { basename, dirname, join } from "node:path";
 import { exec } from "./exec";
 import { sameValue } from "./secretcrypt";
+import { mcpEnvPath } from "./secretfile";
 import type { SecretSinkFormat } from "./types";
 
 export type EnvLine = { kind: "pair"; key: string; value: string; exported: boolean; raw: string } | { kind: "other"; raw: string };
@@ -267,6 +268,17 @@ export async function readSinkFile(path: string): Promise<{ text: string | null 
 
 let writes = 0;
 
+/** the one folder a sink write makes when it is missing: ~/.claude/mcp-env */
+export const MCP_ENV_DIR = "mcp-env";
+
+/** a missing mcp-env folder, made 0700 and owned like its parent (~/.claude) */
+async function makeMcpEnv(dir: string): Promise<void> {
+  const parent = await stat(dirname(dir));
+  await mkdir(dir, { mode: 0o700 });
+  await chmod(dir, 0o700);
+  if (process.getuid?.() === 0) await chown(dir, parent.uid, parent.gid);
+}
+
 /** Temp file in the same folder at 0600, the old file's owner (or the
  *  folder's, for a new file) when this runs as root, renamed over. */
 export async function writeSinkFile(path: string, text: string): Promise<void> {
@@ -278,7 +290,11 @@ export async function writeSinkFile(path: string, text: string): Promise<void> {
     owner = { uid: s.uid, gid: s.gid };
   } catch (err) {
     if (code(err) !== "ENOENT") throw err;
-    const d = await stat(dir);
+    let d = await stat(dir).catch((e: unknown) => (code(e) === "ENOENT" && basename(dir) === MCP_ENV_DIR ? null : Promise.reject(e)));
+    if (!d) {
+      await makeMcpEnv(dir);
+      d = await stat(dir);
+    }
     owner = { uid: d.uid, gid: d.gid };
   }
   const tmp = join(dir, `.${basename(path)}.canopy-${process.pid}-${++writes}`);
@@ -304,3 +320,8 @@ export async function repoRefusal(path: string, repoRoots: readonly string[]): P
   if (r.code === 0) return null;
   return `${path} is inside the repo ${root} and git does not ignore it there`;
 }
+
+/** Whether dotclaude ignores a server's env file on this machine: the
+ *  accident guard before an mcp-allow (phase 2 plan, call 5). */
+export const mcpIgnoreRefusal = (home: string, server: string): Promise<string | null> =>
+  repoRefusal(mcpEnvPath(home, server), [join(home, ".claude")]);

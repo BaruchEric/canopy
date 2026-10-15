@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import type { SecretsReader } from "../core/secretlocal";
 import type { SecretsReply, SecretsRequest } from "../core/secretwire";
 import type { SecretsInfo, ServerEvent } from "../core/types";
+import { SAMPLES } from "../core/secretwire.samples";
 import { clearCookie, gateOriginOk, sameOriginOk, SecretsHub, sessionCookie, tokenFrom } from "./secrets";
 
 const GATE = "https://canopy.beric.ca";
@@ -75,6 +76,22 @@ describe("the writer relays", () => {
     expect(r.headers.get("set-cookie")).toBe(sessionCookie(TOKEN, 3600));
     expect(await r.text()).not.toContain(TOKEN);
     expect(r.headers.get("cache-control")).toBe("no-store");
+  });
+
+  test("an mcp-allow waits for dotclaude's ignore on the writer's machine, and answers 409 without asking", async () => {
+    const asked: SecretsRequest[] = [];
+    const hub = new SecretsHub({
+      backend: "mini", socket: "/run/canopy-secrets/secrets.sock", gateOrigin: GATE, reader: null, broadcast: () => {},
+      ask: async (r) => (asked.push(r), { ok: true, data: {} }),
+      mcpIgnored: async (server) => (server === "github" ? "/home/bun/.claude/mcp-env/github.env is inside the repo /home/bun/.claude and git does not ignore it there" : null),
+    });
+    const act = SAMPLES["mcp-allow"].good;
+    const r = await call(hub, post("/api/secrets/act", { act }, { cookie: `canopy_secrets=${TOKEN}` }));
+    expect(r.status).toBe(409);
+    expect(((await r.json()) as { error: string }).error).toContain("pull dotclaude");
+    expect(asked).toEqual([]);
+    const other = await call(hub, post("/api/secrets/act", { act: { ...act, server: "other" } }, { cookie: `canopy_secrets=${TOKEN}` }));
+    expect(other.status).toBe(200);
   });
 
   test("an act carries the cookie's token down the socket", async () => {

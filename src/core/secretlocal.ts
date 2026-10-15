@@ -19,7 +19,7 @@ import { metaList, parseSecretFile, verifyFile, type SecretFile } from "./secret
 import { scanFiles, type ImportSource } from "./secretimport";
 import { LIMITS } from "./secretwire";
 import { readKeys, repoRefusal } from "./sinks";
-import { FILE_IO, syncSink, waitingState, type SinkIO, type SinkState } from "./sinksync";
+import { FILE_IO, mcpEnvKeep, pruneMcpEnv, syncSink, waitingState, type SinkIO, type SinkState } from "./sinksync";
 import { configDir } from "./store";
 import type { SecretKeyState, SecretProposalIn, SecretsInfo } from "./types";
 
@@ -65,6 +65,8 @@ export interface ReaderOptions {
   /** the scanned repos: a sink inside one must be ignored there */
   repoRoots: () => readonly string[];
   io?: SinkIO;
+  /** this machine's ~/.claude/mcp-env, pruned after each pass even while locked */
+  mcpEnvDir?: string;
   sleep?: (ms: number) => Promise<void>;
   /** scrypt's work factor for a new key: 18 unless a test lowers it */
   scryptLogN?: number;
@@ -246,6 +248,8 @@ export class SecretsReader {
     }
     if (this.ident) await writeApplied(this.o.paths.applied, Object.fromEntries(Object.entries(applied).filter(([id]) => state[id])));
     this.sinkState = state;
+    const d = this.o.mcpEnvDir;
+    if (d) for (const n of await pruneMcpEnv(d, mcpEnvKeep(f, this.o.machine, d))) this.o.log(`secrets: removed ${d}/${n}, which no sink names`);
   }
 
   /** this machine's sources, each value sealed to the mini alone */

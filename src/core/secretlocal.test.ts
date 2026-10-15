@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { newIdentity, newSigningKey, openProposal, sealValue, signingKey } from "./secretcrypt";
 import { emptyFile, serializeFile, signFile, type SecretFile } from "./secretfile";
-import { localPaths, SecretsReader, writeLocalConfig } from "./secretlocal";
+import { localPaths, SecretsReader, writeLocalConfig, type ReaderOptions } from "./secretlocal";
 
 const BREAKGLASS = "age1xtc4cftnu55fn3enurt9jexnrenmru3w0xl93uz5q20e34mefs6stg2vra";
 const STAMP = "2026-10-14T12:00:00.000Z";
@@ -28,7 +28,7 @@ async function publish(f: SecretFile, key: CryptoKey, msg = "change", force = fa
   run(work, "push", "-q", ...(force ? ["-f"] : []), "origin", "HEAD:main");
 }
 
-async function reader(sources: string[] = [], roots: string[] = []): Promise<SecretsReader> {
+async function reader(sources: string[] = [], roots: string[] = [], over: Partial<ReaderOptions> = {}): Promise<SecretsReader> {
   const r = new SecretsReader({
     paths: localPaths(join(dir, "config")),
     machine: "mac",
@@ -38,6 +38,7 @@ async function reader(sources: string[] = [], roots: string[] = []): Promise<Sec
     sleep: async (ms) => void waits.push(ms),
     scryptLogN: 10,
     log: () => {},
+    ...over,
   });
   await r.start();
   return r;
@@ -73,6 +74,17 @@ const base = async (): Promise<SecretFile> => {
 };
 
 describe("pulling", () => {
+  test("a locked Mac still prunes an env file no sink names (review focus 5)", async () => {
+    await publish(await base(), signer);
+    const mcpDir = join(dir, "mcp-env");
+    await mkdir(mcpDir, { recursive: true });
+    await writeFile(join(mcpDir, "github.env"), "GITHUB_PERSONAL_ACCESS_TOKEN=x\n");
+    // no key was made here, so the reader is locked and every sink of its own would read waiting
+    const r = await reader([], [], { mcpEnvDir: mcpDir });
+    await r.syncSinks();
+    await expect(readFile(join(mcpDir, "github.env"), "utf8")).rejects.toThrow();
+  });
+
   test("takes a signed fast-forward and lists names without values", async () => {
     await publish(await base(), signer);
     const r = await reader();

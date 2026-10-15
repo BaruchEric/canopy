@@ -6,9 +6,11 @@
  * error here holds a value.
  */
 
+import { readdir, rm } from "node:fs/promises";
+import { dirname, join } from "node:path";
 import type { Applied } from "./applied";
 import { openValue } from "./secretcrypt";
-import type { SecretFile, SinkDef } from "./secretfile";
+import { MCP_SERVER_STRICT_SRC, type SecretFile, type SinkDef } from "./secretfile";
 import { applyKeys, decideKey, readKeys, readSinkFile, writeSinkFile } from "./sinks";
 import type { SecretKeyState } from "./types";
 
@@ -94,4 +96,26 @@ export async function syncSink(
   }
   applied[id] = stamps;
   return { state, error, writes };
+}
+
+/** only names the kit's sinks could have: <server>.env and <server>.headers.json */
+const MCP_ENV_FILE = new RegExp(`^${MCP_SERVER_STRICT_SRC}\\.(env|headers\\.json)$`);
+
+/** the sink paths on `machine` inside `dir`, which a prune keeps */
+export const mcpEnvKeep = (f: SecretFile, machine: string, dir: string): string[] =>
+  Object.values(f.sinks).filter((s) => s.machine === machine && dirname(s.path) === dir).map((s) => s.path);
+
+/** Delete the files in a machine's mcp-env folder that no sink names any
+ *  more, so a revoke takes the value off disk (phase 2 plan, call 8).
+ *  Returns the names deleted; a missing folder deletes nothing. */
+export async function pruneMcpEnv(dir: string, keep: readonly string[]): Promise<string[]> {
+  let names: string[];
+  try {
+    names = await readdir(dir);
+  } catch {
+    return [];
+  }
+  const gone = names.filter((n) => MCP_ENV_FILE.test(n) && !keep.includes(join(dir, n)));
+  for (const n of gone) await rm(join(dir, n), { force: true });
+  return gone;
 }

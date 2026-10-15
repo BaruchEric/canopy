@@ -10,10 +10,12 @@
  */
 
 import { homedir } from "node:os";
+import { join } from "node:path";
 import { macSources } from "../core/secretimport";
 import { localPaths, SecretsReader } from "../core/secretlocal";
 import { askSecrets, SECRETS_AWAY } from "../core/secretsclient";
 import { parseAct, parseProposals, PASSKEY, type SecretsReply, type SecretsRequest } from "../core/secretwire";
+import { mcpIgnoreRefusal } from "../core/sinks";
 import type { SecretsInfo, ServerEvent } from "../core/types";
 
 export const COOKIE = "canopy_secrets";
@@ -95,6 +97,9 @@ export interface SecretsHubDeps {
   reader: SecretsReader | null;
   broadcast: (ev: ServerEvent) => void;
   ask?: (req: SecretsRequest) => Promise<SecretsReply>;
+  /** the writer's accident guard before an mcp-allow: why this machine's
+   *  dotclaude would commit the env file, or null (phase 2 plan, call 5) */
+  mcpIgnored?: (server: string) => Promise<string | null>;
   pollMs?: number;
   pullMs?: number;
 }
@@ -192,6 +197,10 @@ export class SecretsHub {
       case "/api/secrets/act": {
         const act = parseAct(body?.["act"]);
         if ("error" in act) return json(act, 400);
+        if (act.a === "mcp-allow" && this.d.mcpIgnored) {
+          const why = await this.d.mcpIgnored(act.server);
+          if (why) return json({ error: `${why}; pull dotclaude on this machine first` }, 409);
+        }
         const r = await this.ask({ t: "act", token, act });
         if (r.ok && act.a !== "reveal") await this.announce();
         return reply(r);
@@ -265,8 +274,17 @@ export function createSecretsHub(o: {
         machine: o.backend,
         gateUrl: `${gateOrigin}/?view=secrets`,
         sources: () => macSources(homedir(), o.root),
-        repoRoots: o.repoRoots,
+        repoRoots: () => [...o.repoRoots(), join(homedir(), ".claude")],
+        mcpEnvDir: join(homedir(), ".claude", "mcp-env"),
         log: (line) => console.log(line),
       });
-  return new SecretsHub({ backend: o.backend, socket, gateOrigin, reader, broadcast: o.broadcast });
+  return new SecretsHub({
+    backend: o.backend,
+    socket,
+    gateOrigin,
+    reader,
+    broadcast: o.broadcast,
+    // on the mini, this is the canopy container's /home/bun/.claude: the same dotclaude checkout as the host's
+    mcpIgnored: socket ? (server) => mcpIgnoreRefusal(homedir(), server) : undefined,
+  });
 }

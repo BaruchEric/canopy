@@ -15,7 +15,7 @@ import { mcpAllowFile, mcpRevokeFile } from "../core/secretmcp";
 import { formatOf, suggestName, type Found } from "../core/secretimport";
 import { LIMITS, PASSKEY, type SecretAct, type SecretsReply, type SecretsRequest } from "../core/secretwire";
 import { applyKeys, readKeys } from "../core/sinks";
-import { FILE_IO, syncSink, type SinkIO, type SinkState } from "../core/sinksync";
+import { FILE_IO, mcpEnvKeep, pruneMcpEnv, syncSink, type SinkIO, type SinkState } from "../core/sinksync";
 import type { SecretKeyState, SecretProposalIn, SecretsInfo } from "../core/types";
 import type { Audit } from "./audit";
 import type { Gate } from "./gate";
@@ -468,6 +468,12 @@ export class SecretsService {
     }
     for (const id of Object.keys(applied)) if (!state[id]) delete applied[id];
     await this.d.applied.write(applied);
+    // the mcp-env folders this machine owns outright: an env file no sink names is a revoked value
+    for (const root of this.d.sinkRoots) {
+      const d = root.replace(/\/+$/, "");
+      if (!d.endsWith("/.claude/mcp-env")) continue;
+      for (const n of await pruneMcpEnv(d, mcpEnvKeep(f, this.d.machine, d))) await this.d.audit.add({ action: "sink-prune", name: null, ok: true, by: null, detail: `${d}/${n}` });
+    }
     this.sinkState = state;
   }
 

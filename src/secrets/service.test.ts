@@ -316,6 +316,14 @@ describe("MCP allowances", () => {
     expect((await info()).sinks.find((s) => s.id === "mcp-github-mini")?.state).toEqual({ GITHUB_PERSONAL_ACCESS_TOKEN: "same" });
   });
 
+  test("after a revoke the next sync deletes the env file (review focus 5)", async () => {
+    await allow();
+    expect(await readFile(envFile(), "utf8")).toContain("GITHUB_PERSONAL_ACCESS_TOKEN");
+    await ok({ a: "mcp-revoke", server: "github" });
+    await expect(readFile(envFile(), "utf8")).rejects.toThrow();
+    expect((await audit.last(5)).some((e) => e.action === "sink-prune" && e.detail?.endsWith("github.env"))).toBe(true);
+  });
+
   test("a hash that does not match its definition, gpd, and a home outside the roots are refused, with no commit", async () => {
     expect(await allow({ hash: "b".repeat(64) })).toEqual({ ok: false, error: "the hash does not match the definition of github that came with it" });
     const gpd = await allow({ homes: { gpd: "/home/eric" } });

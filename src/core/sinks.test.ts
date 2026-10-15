@@ -1,8 +1,10 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { mkdirSync, mkdtempSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { lstat, mkdir, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { applyKeys, decideKey, parseDotenv, readKeys, readSinkFile, repoRefusal, writeSinkFile } from "./sinks";
+import { exec } from "./exec";
+import { applyKeys, decideKey, parseDotenv, readKeys, mcpIgnoreRefusal, readSinkFile, repoRefusal, writeSinkFile } from "./sinks";
 
 describe("dotenv", () => {
   const FILE = "# the dns stack\nexport CF_TOKEN=old # rotated by hand\n\nKEEP_ME='as is'\nPLAIN=x\n";
@@ -135,5 +137,32 @@ describe("files", () => {
     expect(await repoRefusal(join(repo, ".env"), [repo])).toBeNull();
     expect(await repoRefusal(join(repo, "config.json"), [repo])).toContain("does not ignore");
     expect(await repoRefusal(join(dir, "elsewhere.env"), [repo])).toBeNull();
+  });
+});
+
+describe("the mcp-env folder", () => {
+  test("writeSinkFile makes a missing mcp-env folder 0700, and only that folder", async () => {
+    const h = mkdtempSync(join(tmpdir(), "mcpenv-"));
+    try {
+      mkdirSync(join(h, ".claude"));
+      await writeSinkFile(join(h, ".claude", "mcp-env", "github.env"), "A=b\n");
+      expect(statSync(join(h, ".claude", "mcp-env")).mode & 0o777).toBe(0o700);
+      expect(statSync(join(h, ".claude", "mcp-env", "github.env")).mode & 0o777).toBe(0o600);
+      await expect(writeSinkFile(join(h, "other", "x.env"), "A=b\n")).rejects.toThrow();
+    } finally {
+      rmSync(h, { recursive: true, force: true });
+    }
+  });
+
+  test("mcpIgnoreRefusal passes only when dotclaude's git ignores mcp-env/", async () => {
+    const h = mkdtempSync(join(tmpdir(), "mcpignore-"));
+    try {
+      await exec(["git", "init", "-q", join(h, ".claude")]);
+      expect(await mcpIgnoreRefusal(h, "github")).toContain("git does not ignore it");
+      writeFileSync(join(h, ".claude", ".gitignore"), "mcp-env/\n");
+      expect(await mcpIgnoreRefusal(h, "github")).toBeNull();
+    } finally {
+      rmSync(h, { recursive: true, force: true });
+    }
   });
 });

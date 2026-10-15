@@ -20,7 +20,8 @@ export const HASH_SRC = "[0-9a-f]{64}";
 export const ALLOW = new RegExp(`^(sink:[a-z][a-z0-9-]{0,62}|mcp:${MCP_SERVER_SRC}#${HASH_SRC})$`);
 const MCP_ALLOW = new RegExp(`^mcp:(${MCP_SERVER_SRC})#(${HASH_SRC})$`);
 /** a kit MCP server that may hold secrets: its sink ids must pass SINK_ID */
-export const MCP_SERVER = /^[a-z][a-z0-9-]{0,31}$/;
+export const MCP_SERVER_STRICT_SRC = "[a-z][a-z0-9-]{0,31}";
+export const MCP_SERVER = new RegExp(`^${MCP_SERVER_STRICT_SRC}$`);
 /** an http header a secret can fill; also a one-segment JSON_PATH */
 export const HEADER_NAME = /^[A-Za-z][A-Za-z0-9-]{0,63}$/;
 /** an X25519 recipient; a post-quantum one is longer and not taken yet */
