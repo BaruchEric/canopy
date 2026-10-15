@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { exec, KILL_GRACE } from "./exec";
+import { exec, KILL_GRACE, onHost } from "./exec";
 
 /** whether a pid is still running (a zombie waiting on its reaper counts as gone) */
 async function alive(pid: number): Promise<boolean> {
@@ -16,6 +16,11 @@ describe("exec", () => {
       stderr: "err\n",
     });
     expect((await exec(["sh", "-c", "exit 4"])).code).toBe(4);
+  });
+
+  test("input goes to the child's stdin, so a file's text never sits in argv", async () => {
+    expect(await exec(["cat"], { input: "a\nb $(no)" })).toMatchObject({ code: 0, stdout: "a\nb $(no)" });
+    expect(await onHost(null, ["cat"], { input: "x" })).toMatchObject({ code: 0, stdout: "x" });
   });
 
   test("a missing binary is a result, not a throw", async () => {

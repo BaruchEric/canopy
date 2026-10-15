@@ -17,7 +17,12 @@ export interface ExecOptions {
   env?: Record<string, string>;
   /** the environment `env` is laid over, in place of the server's live one */
   base?: Readonly<Record<string, string | undefined>>;
+  /** text for the child's stdin; without it stdin is closed */
+  input?: string;
 }
+
+/** a command's first line of output, for an error message */
+export const firstLine = (s: string): string => s.trim().split("\n")[0] ?? "";
 
 /** How long a timed-out command gets after SIGTERM before SIGKILL, and
  *  after that before its pipes stop being waited on. */
@@ -94,7 +99,7 @@ export async function exec(
       env: { ...(opts.base ?? process.env), ...opts.env },
       stdout: "pipe",
       stderr: "pipe",
-      stdin: "ignore",
+      stdin: opts.input === undefined ? "ignore" : new TextEncoder().encode(opts.input),
       detached: !!opts.timeoutMs,
     });
     const out = collect(proc.stdout);
@@ -139,8 +144,9 @@ export async function onHost(
   opts: Omit<ExecOptions, "cwd"> = {},
 ): Promise<ExecResult> {
   if (host === null) return exec(cmd, opts);
-  // The env is this machine's; a remote command sees the host's own.
-  return exec([...sshArgs(host, sshControlDir()), remoteCommand(cmd)], { timeoutMs: opts.timeoutMs });
+  // The env is this machine's; a remote command sees the host's own. ssh
+  // forwards its stdin to the remote command, so input travels.
+  return exec([...sshArgs(host, sshControlDir()), remoteCommand(cmd)], { timeoutMs: opts.timeoutMs, input: opts.input });
 }
 
 /** Where canopy's git in a seed runs instead of here: on an isolated

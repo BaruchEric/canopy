@@ -13,7 +13,7 @@ import { chmod, readFile, rename, stat, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { identityToRecipient } from "age-encryption";
 import { readApplied, writeApplied } from "./applied";
-import { exec, type ExecResult } from "./exec";
+import { exec, firstLine, type ExecResult } from "./exec";
 import { newIdentity, sealProposal, unwrapIdentity, wrapIdentity } from "./secretcrypt";
 import { metaList, parseSecretFile, verifyFile, type SecretFile } from "./secretfile";
 import { scanFiles, type ImportSource } from "./secretimport";
@@ -74,7 +74,6 @@ export interface ReaderOptions {
 }
 
 const exists = (p: string): Promise<boolean> => stat(p).then(() => true, () => false);
-const firstLine = (s: string): string => s.trim().split("\n")[0] ?? "";
 
 export class SecretsReader {
   file: SecretFile | null = null;

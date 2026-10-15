@@ -2893,7 +2893,7 @@ export interface KitMcpFileSeen {
   agent: string;
   /** with ~ expanded on that machine */
   path: string;
-  /** "<mtime> <size>" for the in-place write's check; "" when the file is missing */
+  /** "<mtime> <size> <cksum crc>" (kitmcp STAT_FN) for the in-place write's check; "" when the file is missing */
   stamp: string;
   exists: boolean;
   text: string;
