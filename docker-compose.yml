@@ -39,6 +39,9 @@ services:
       - ${DEV_ROOT:-/home/eric/dev}:${DEV_ROOT:-/home/eric/dev}
       - canopy-config:/config
       - ${HOST_HOME:-/home/eric}/.claude:/home/bun/.claude
+      # the same folder at its host path, so a kit server written as
+      # /home/eric/.claude/bin/canopy-mcp-env runs here and on the host
+      - ${HOST_HOME:-/home/eric}/.claude:${HOST_HOME:-/home/eric}/.claude
       - ${HOST_HOME:-/home/eric}/.claude.json:/home/bun/.claude.json
       - ${HOST_HOME:-/home/eric}/.codex:/home/bun/.codex
       # the convex CLI's login (config.json), so `convex dev` in a shell
@@ -157,11 +160,17 @@ services:
       - CANOPY_SECRETS_REMOTE=${CANOPY_SECRETS_REMOTE:-}
       # the page passkeys are bound to; changing it orphans every passkey
       - CANOPY_SECRETS_ORIGIN=${CANOPY_SECRETS_ORIGIN:-https://canopy.beric.ca}
+      # where the service may write sinks: the stacks, and the MCP env files
+      # the kit's servers read (mcp-allow writes them at the host path)
+      - CANOPY_SECRETS_SINK_ROOTS=/opt/stacks:${HOST_HOME:-/home/eric}/.claude/mcp-env
       - LANG=C.UTF-8
     volumes:
       - secrets-data:/data
       # the stacks: the mini's sinks, and the import scan's sources
       - /opt/stacks:/opt/stacks
+      # the MCP env files only, at the host path the sinks name; redeploy
+      # makes the folder 0700 first, or docker would make it as root
+      - ${HOST_HOME:-/home/eric}/.claude/mcp-env:${HOST_HOME:-/home/eric}/.claude/mcp-env
       # canopy's own .env, an import source only; read-only, so never a sink.
       # It must exist before `up`, or docker makes a folder in its place.
       - ./.env:/import/canopy.env:ro
@@ -308,6 +317,9 @@ services:
       # the gate page's origin, the same as the service's: canopy refuses a
       # gated act from any other, so a different value here answers 403
       - CANOPY_SECRETS_ORIGIN=${CANOPY_SECRETS_ORIGIN:-https://canopy.beric.ca}
+      # the host's home: ~ in a kit MCP server and every mcp-env sink path
+      # resolve against it, since ~/.claude.json is shared with the host
+      - CANOPY_HOST_HOME=${HOST_HOME:-/home/eric}
       # the host's time zone by name (America/Los_Angeles), which Bun needs:
       # it reads the name, and the image's /etc/localtime names Etc/UTC
       # whatever the mount below puts in the file; empty is UTC, as before
@@ -320,6 +332,9 @@ services:
       - canopy-config:/config
       # subscription logins, no API keys; refreshed by logging in on the host
       - ${HOST_HOME:-/home/eric}/.claude:/home/bun/.claude
+      # the same folder at its host path, so a kit server written as
+      # /home/eric/.claude/bin/canopy-mcp-env runs here and on the host
+      - ${HOST_HOME:-/home/eric}/.claude:${HOST_HOME:-/home/eric}/.claude
       # claude's onboarding state and per-project trust live beside the dir;
       # `claude` on the host must have run once so the file exists (a bind
       # mount of a missing file would make it a directory)

@@ -179,7 +179,11 @@ describe("the kit", () => {
 describe("the secrets service", () => {
   const secrets = compose.services["secrets"];
   const canopy = compose.services["canopy"];
-  const named = (v: string): string => v.split(":")[0] ?? v;
+  /** a volume's host side, with ${HOST_HOME:-x} read as its default, so two
+   *  HOST_HOME mounts compare by path and not by the text "${HOST_HOME" */
+  const named = (v: string): string => v.replace(/\$\{HOST_HOME:-([^}]*)\}/g, "$1").split(":")[0] ?? v;
+  const MCP_ENV = "${HOST_HOME:-/home/eric}/.claude/mcp-env";
+  const HOST_CLAUDE = "${HOST_HOME:-/home/eric}/.claude:${HOST_HOME:-/home/eric}/.claude";
 
   test("exists in a network and process namespace of its own", () => {
     expect(secrets).toBeDefined();
@@ -221,6 +225,22 @@ describe("the secrets service", () => {
       expect((s.volumes ?? []).map(named)).not.toContain("secrets-sock");
       expect((s.volumes ?? []).map(named)).not.toContain("secrets-data");
     }
+  });
+  test("writes the MCP env files at their host path, a sink root, and nothing else of ~/.claude", () => {
+    expect(secrets?.volumes).toContain(`${MCP_ENV}:${MCP_ENV}`);
+    expect(envOf(secrets ?? {})).toContain(`CANOPY_SECRETS_SINK_ROOTS=/opt/stacks:${MCP_ENV}`);
+    expect((secrets?.volumes ?? []).filter((v) => v.includes(".claude"))).toEqual([`${MCP_ENV}:${MCP_ENV}`]);
+  });
+  test("canopy and the shells see ~/.claude at its host path too, so the wrapper's path runs in both", () => {
+    for (const name of ["canopy", "shells"]) {
+      const vols = compose.services[name]?.volumes ?? [];
+      expect(vols).toContain("${HOST_HOME:-/home/eric}/.claude:/home/bun/.claude");
+      expect(vols).toContain(HOST_CLAUDE);
+      // the env files reach them only inside ~/.claude, never as a mount of their own
+      expect(vols.map(named)).not.toContain(named(MCP_ENV));
+    }
+    expect(compose.services["stages"]?.volumes ?? []).not.toContain(HOST_CLAUDE);
+    expect(envOf(canopy ?? {})).toContain("CANOPY_HOST_HOME=${HOST_HOME:-/home/eric}");
   });
   test("canopy holds the caller group and the socket path, and does not wait on the service's health", () => {
     expect((canopy as { group_add?: string[] }).group_add).toContain("${SECRETSCALLER_GID:-7851}");

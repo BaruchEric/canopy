@@ -32,6 +32,7 @@ docker() {
   return 0
 }
 mkdir() { :; }
+chmod() { :; }
 sleep() { :; }
 seq() { printf '1\\n'; }
 ${job}
@@ -77,6 +78,7 @@ docker() {
   return 0
 }
 mkdir() { :; }
+chmod() { :; }
 sleep() { :; }
 seq() { printf '1\\n'; }
 ${job}

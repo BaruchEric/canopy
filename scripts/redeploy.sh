@@ -181,6 +181,11 @@ job() {
   mkdir -p "$STAGE_DEV_ROOT/_incubator" "$STAGE_DEV_ROOT/_incubator/.shared" \
     "$STAGE_HOST_HOME/.config/canopy-stages/claude" "$STAGE_HOST_HOME/.config/canopy-stages/codex" ||
     { echo "could not make the stages folders; up would make them as root"; return 1; }
+  # the secrets service writes the MCP env files here as root and chowns each
+  # to the folder's owner; a folder docker made would be root's, and 0700
+  # keeps every other user out
+  mkdir -p "$STAGE_HOST_HOME/.claude/mcp-env" && chmod 700 "$STAGE_HOST_HOME/.claude/mcp-env" ||
+    { echo "could not make $STAGE_HOST_HOME/.claude/mcp-env; up would make it as root"; return 1; }
   if docker compose --dry-run up -d 2>&1 | grep -q 'canopy-shells-1.*Recreate'; then
     if [ "$shells" != 1 ]; then
       echo "this deploy recreates the shells container, which ends every shell."

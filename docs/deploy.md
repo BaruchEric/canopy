@@ -901,6 +901,8 @@ what actually happened when they are.
 Then `canopy kit status`, `canopy kit apply --dry-run` and
 `canopy kit apply --machine <name>` per machine.
 
+MCP servers (phase 2) write through `claude mcp` and an in-place splice of `~/.codex/config.toml`, so both bind mounts stay single-file mounts with their inode. The `canopy` and `shells` services also mount `${HOST_HOME}/.claude` at its host path, and `canopy` gets `CANOPY_HOST_HOME`, so a server written as `/home/eric/.claude/bin/canopy-mcp-env` runs inside the containers and on the host. That wrapper is dotclaude's `bin/canopy-mcp-env`, a copy of canopy's `scripts/canopy-mcp-env`; pull dotclaude on the mini and gpd after it changes. A server with secrets is written only after its allowance (the allow sheet in the kit view, on the gate page with a passkey session) and once its env sink on that machine is in step. The new mounts change the `canopy`, `shells` and `secrets` containers' config, so the first deploy after this change recreates all three and `redeploy` stops with exit 3 until it runs with `--shells`, which ends every shell on the mini. Run it when nothing needs them.
+
 ## Codex
 
 The Dockerfile installs `codex` via `bun add -g @openai/codex` and `nodejs`
@@ -1096,3 +1098,5 @@ Recovery when the mini's keys are gone: `canopy secrets recover <checkout of eri
 Rollback: `docker compose stop secrets`. canopy shows the store as away; sinks keep what was last written. `docker compose rm secrets` and dropping the two volumes removes it for good, keys included, so take a copy of `secrets-data` first.
 
 Nothing secret goes into canopy's environment: canopy shares the shells' pid namespace, and a shell can read `/proc/<canopy>/environ`. Host control (above) goes further: an agent in a shell can `ssh mini-host` and read the `secrets-data` volume, which holds the mini's age identity and signing key, and `docker compose logs secrets`, which prints the first-passkey code. On the mini the store keeps its values away from the API and out of every container's environment, but not away from an agent that sets out to read them. Eric chose that on 2026-10-14 so canopy would control the mini as a native install would. The store's keys stay in `secrets-data` with no passphrase, also by choice (2026-10-14): a passphrase unlocked after each start would keep them from an agent, but the store would stay shut after every restart until someone unlocked it.
+
+**MCP env files.** The `secrets` service mounts `${HOST_HOME}/.claude/mcp-env` at that host path and lists it in `CANOPY_SECRETS_SINK_ROOTS` beside `/opt/stacks`. `redeploy` makes the folder 0700 before `up`; the service runs as root and chowns each file to the folder's owner. dotclaude's `.gitignore` must ignore `mcp-env/` on every machine before the first `mcp-allow`, and canopy's relay refuses the act until it does. A rotation reaches a server only when a new agent session starts it; sessions already running keep the old value.
