@@ -552,6 +552,13 @@ describe("MCP planning keeps a written server unless it is known to be unwanted"
     expect(why).toContain("keeps what it has");
     expect(kinds(planMcp(r.kit, seen(), await mctx(r.kit)))).not.toContain("mcp-set claude/x");
   });
+  test("a definition that became unsupported for its agent takes it out", async () => {
+    const k = mkit();
+    const c = await mctx(k, { codex: { hook: { url: "https://hook.example/mcp", http_headers: { Authorization: "old" } } }, owned: { placed: { codex: ["hook"] } } });
+    expect(kinds(planMcp(k, seen(), c))).toContain("mcp-remove codex/hook");
+    expect(mcell(mcpCells(k, seen(), c), "codex", "hook")).toMatchObject({ state: "unsupported", why: "not supported for codex: a url server with secret headers" });
+  });
+
   test("not allowed (revoked) and allowed for an older definition still take it out", async () => {
     const k = mkit();
     for (const allow of ["none", "old"] as const) {

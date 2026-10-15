@@ -468,12 +468,13 @@ function mcpRows(kit: KitManifest, seen: KitSeen, ctx: KitMcpCtx): McpRow[] {
         continue;
       }
       // a written server comes out only on positive knowledge (not allowed,
-      // allowed for an older definition, or dropped from the manifest above);
-      // anything else that keeps it from being written keeps what it has
+      // allowed for an older definition, a definition this agent cannot take,
+      // or dropped from the manifest above); anything else that keeps it from
+      // being written keeps what it has
       const kept = (why: string) => (owned && have ? `${why}; keeps what it has` : have ? `${why}; a hand-made entry is there` : why);
       const built = buildEntry(s, t.agent, t.mcp.format, ctx.home, ctx.env);
       if ("state" in built) {
-        out.push(row(name, built.state, kept(built.why)));
+        out.push(built.state === "unsupported" ? row(name, built.state, have && !owned ? `${built.why}; a hand-made entry is there` : built.why, remove) : row(name, built.state, kept(built.why)));
         continue;
       }
       const ready = serverReady(s, seen.machine, ctx);
