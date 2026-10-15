@@ -3,8 +3,9 @@ import { existsSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync 
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { parseKit, planKit } from "./kit";
-import { parseScan, seeKit } from "./kitscan";
+import { parseMcpScan, parseScan, seeKit, seeMcp } from "./kitscan";
 import { exec } from "./exec";
+import { fakeClaude } from "./kitfake";
 
 const RAW = {
   version: 1,
@@ -116,5 +117,63 @@ describe("parseScan", () => {
     const s = parseScan("mac", out, 3);
     expect(s.store).toEqual({ tracked: ["ship"], branch: "main", ahead: 1, behind: 2, dirty: 2, fetchFailed: false });
     expect(s.targets[0]!.entries).toEqual([{ name: "ship", kind: "dir", link: null }]);
+  });
+});
+
+describe("the MCP scan", () => {
+  const KIT = {
+    version: 1,
+    machines: { mac: { backend: "mac" } },
+    targets: [
+      { agent: "claude", skills: "~/.claude/skills", mode: "store", mcp: { file: "~/.claude.json", format: "claude-json" } },
+      { agent: "codex", skills: "~/.codex/skills", mode: "link", mcp: { file: "~/.codex/config.toml", format: "codex-toml" } },
+    ],
+    mcp: { excalidraw: { command: "npx" } },
+  };
+  const mkKit = () => {
+    const r = parseKit(KIT);
+    if ("errors" in r) throw new Error(r.errors.join());
+    return r.kit;
+  };
+
+  test("reads the claude path, the ignore line, the wrapper, the ownership file and both config files", async () => {
+    const h = mkdtempSync(join(tmpdir(), "mcpscan-"));
+    try {
+      const claude = fakeClaude(h);
+      await exec(["git", "init", "-q", join(h, ".claude")]);
+      writeFileSync(join(h, ".claude", ".gitignore"), "mcp-env/\n");
+      mkdirSync(join(h, ".claude", "bin"));
+      writeFileSync(join(h, ".claude", "bin", "canopy-mcp-env"), "#!/bin/sh\n", { mode: 0o755 });
+      writeFileSync(join(h, ".claude", ".canopy-kit-mcp.json"), JSON.stringify({ placed: { claude: ["excalidraw"] }, adoptedFrom: { claude: { excalidraw: { command: "old" } } } }));
+      writeFileSync(join(h, ".claude.json"), JSON.stringify({ numStartups: 1, mcpServers: { excalidraw: { type: "stdio", command: "npx" } } }));
+      mkdirSync(join(h, ".codex"));
+      writeFileSync(join(h, ".codex", "config.toml"), '[mcp_servers.node_repl]\ncommand = "node"\n');
+      const m = await seeMcp(mkKit(), { name: "mac", host: null }, { env: { HOME: h, KIT_CLAUDE: claude } });
+      expect(m?.claude).toBe(claude);
+      expect(m?.ignored).toBe(true);
+      expect(m?.wrapper).toBe(true);
+      expect(m?.owned).toEqual({ placed: { claude: ["excalidraw"] }, adoptedFrom: { claude: { excalidraw: { command: "old" } } } });
+      const [c, x] = m?.files ?? [];
+      expect(c).toMatchObject({ agent: "claude", path: join(h, ".claude.json"), exists: true, entries: { excalidraw: { type: "stdio", command: "npx" } }, error: null });
+      expect(c?.stamp).toMatch(/^\d+ \d+ \d+$/);
+      expect(x).toMatchObject({ agent: "codex", entries: { node_repl: { command: "node" } } });
+    } finally {
+      rmSync(h, { recursive: true, force: true });
+    }
+  });
+
+  test("a file that does not parse reads null with canopy's words, never the file's text", () => {
+    const b64 = (s: string) => Buffer.from(s).toString("base64");
+    const out = [
+      "C\t", "I\t0", "W\t0",
+      `M\tclaude\t/h/.claude.json\t1 9\t${b64('{"mcpServers": {"x": {"env": {"T": "tok-0x55"')}`,
+      `M\tcodex\t/h/.codex/config.toml\t\t`,
+    ].join("\n");
+    const m = parseMcpScan(out, { claude: "claude-json", codex: "codex-toml" });
+    expect(m.claude).toBeNull();
+    expect(m.files[0]).toMatchObject({ entries: null, error: "~/.claude.json does not parse" });
+    expect(JSON.stringify(m.files[0]?.error)).not.toContain("tok-0x55");
+    expect(m.files[1]).toMatchObject({ exists: false, entries: {}, stamp: "", text: "" });
+    expect(m.owned).toEqual({ placed: {}, adoptedFrom: {} });
   });
 });

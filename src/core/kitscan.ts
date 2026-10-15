@@ -1,8 +1,9 @@
 /** Reading one machine for the kit: one POSIX sh script through onHost, so
  *  a local machine and an ssh one read the same way. */
 import { onHost } from "./exec";
-import { SKILL_NAME, sourcePath, targetsFor } from "./kit";
-import type { KitEntry, KitEntryKind, KitManifest, KitSeen, KitSeenTarget, KitStoreState } from "./types";
+import { mcpTargets, SKILL_NAME, sourcePath, targetsFor } from "./kit";
+import { codexServers, OWNED_FILE, STAT_FN } from "./kitmcp";
+import type { KitEntry, KitEntryKind, KitManifest, KitMcpEntry, KitMcpFileSeen, KitMcpFormat, KitMcpOwned, KitMcpSeen, KitSeen, KitSeenTarget, KitStoreState } from "./types";
 
 export const KIT_FILE = ".canopy-kit.json";
 const SCAN_TIMEOUT = 30_000;
@@ -164,4 +165,97 @@ export async function seeKit(
   const seen = parseScan(m.name, r.stdout, now());
   if (seen.store && fetched.code !== 0) seen.store.fetchFailed = true;
   return seen;
+}
+
+/** args: `m <agent> <file>` per MCP target. Prints tab lines: C the claude
+ *  path (absolute, or empty), I 1 when dotclaude ignores mcp-env/, W 1 when
+ *  the wrapper runs, O the ownership file as base64, M agent path stamp
+ *  base64 per file (stamp and text empty when it is missing). The text
+ *  goes out as base64 on one line, so no value is ever parsed by sh. */
+export const MCP_SCAN_SCRIPT = `${EXP}
+${STAT_FN}
+b64() { base64 < "$1" | tr -d '\\n'; }
+abs() { case $1 in /*) [ -x "$1" ] && printf %s "$1";; esac; }
+c=$(abs "\${KIT_CLAUDE:-}")
+[ -n "$c" ] || c=$(abs "$(command -v claude 2>/dev/null)")
+[ -n "$c" ] || c=$(abs "$("\${SHELL:-sh}" -lc 'command -v claude' 2>/dev/null </dev/null)")
+[ -n "$c" ] || c=$(abs "$HOME/.local/bin/claude")
+printf 'C\\t%s\\n' "$c"
+i=0; git -C "$HOME/.claude" check-ignore -q mcp-env/probe.env 2>/dev/null && i=1
+printf 'I\\t%s\\n' "$i"
+w=0; [ -x "$HOME/.claude/bin/canopy-mcp-env" ] && w=1
+printf 'W\\t%s\\n' "$w"
+o="$HOME/.claude/${OWNED_FILE}"
+[ -f "$o" ] && printf 'O\\t%s\\n' "$(b64 "$o")"
+while [ $# -ge 3 ]; do
+  a=$2; p=$(exp "$3"); shift 3
+  if [ -f "$p" ]; then printf 'M\\t%s\\t%s\\t%s\\t%s\\n' "$a" "$p" "$(st "$p")" "$(b64 "$p")"
+  else printf 'M\\t%s\\t%s\\t\\t\\n' "$a" "$p"; fi
+done
+`;
+
+export const mcpScanArgs = (kit: KitManifest, machine: string): string[] =>
+  mcpTargets(kit, machine).flatMap((t) => ["m", t.agent, t.mcp.file]);
+
+const unb64 = (s: string): string => Buffer.from(s, "base64").toString("utf8");
+const isObj = (v: unknown): v is Record<string, unknown> => typeof v === "object" && v !== null && !Array.isArray(v);
+
+function ownedOf(text: string): KitMcpOwned {
+  try {
+    const j = JSON.parse(text) as { placed?: unknown; adoptedFrom?: unknown };
+    const placed = isObj(j.placed) ? Object.fromEntries(Object.entries(j.placed).filter(([, v]) => Array.isArray(v)).map(([k, v]) => [k, (v as unknown[]).filter((x): x is string => typeof x === "string")])) : {};
+    const adoptedFrom = isObj(j.adoptedFrom) ? (Object.fromEntries(Object.entries(j.adoptedFrom).filter(([, v]) => isObj(v))) as KitMcpOwned["adoptedFrom"]) : {};
+    return { placed, adoptedFrom };
+  } catch {
+    return { placed: {}, adoptedFrom: {} };
+  }
+}
+
+function entriesOf(text: string, format: KitMcpFormat): Record<string, KitMcpEntry> | null {
+  if (format === "codex-toml") return codexServers(text);
+  try {
+    const j = JSON.parse(text) as { mcpServers?: unknown };
+    return isObj(j.mcpServers) ? (Object.fromEntries(Object.entries(j.mcpServers).filter(([, v]) => isObj(v))) as Record<string, KitMcpEntry>) : {};
+  } catch {
+    return null;
+  }
+}
+
+/** Everything stays in memory: the result goes to KitHub, never to KitInfo. */
+export function parseMcpScan(stdout: string, formats: Record<string, KitMcpFormat>): KitMcpSeen {
+  const seen: KitMcpSeen = { claude: null, ignored: false, wrapper: false, owned: { placed: {}, adoptedFrom: {} }, files: [] };
+  for (const line of stdout.split("\n")) {
+    const f = line.split("\t");
+    switch (f[0]) {
+      case "C": seen.claude = f[1]?.startsWith("/") ? f[1] : null; break;
+      case "I": seen.ignored = f[1] === "1"; break;
+      case "W": seen.wrapper = f[1] === "1"; break;
+      case "O": seen.owned = ownedOf(unb64(f[1] ?? "")); break;
+      case "M": {
+        const agent = f[1] ?? "";
+        const format = formats[agent];
+        if (!format) break;
+        const exists = (f[3] ?? "") !== "";
+        const text = exists ? unb64(f[4] ?? "") : "";
+        const entries = exists ? entriesOf(text, format) : {};
+        const file: KitMcpFileSeen = { agent, path: f[2] ?? "", stamp: f[3] ?? "", exists, text, entries, error: entries === null ? `${format === "claude-json" ? "~/.claude.json" : "config.toml"} does not parse` : null };
+        seen.files.push(file);
+        break;
+      }
+    }
+  }
+  return seen;
+}
+
+export async function seeMcp(
+  kit: KitManifest,
+  m: { name: string; host: string | null },
+  opts: { run?: typeof onHost; env?: Record<string, string> } = {},
+): Promise<KitMcpSeen | null> {
+  const ts = mcpTargets(kit, m.name);
+  if (ts.length === 0) return null;
+  const run = opts.run ?? onHost;
+  const r = await run(m.host, ["sh", "-c", MCP_SCAN_SCRIPT, "kit-mcp-scan", ...mcpScanArgs(kit, m.name)], { env: opts.env, timeoutMs: SCAN_TIMEOUT });
+  if (r.code !== 0) return null;
+  return parseMcpScan(r.stdout, Object.fromEntries(ts.map((t) => [t.agent, t.mcp.format])));
 }
