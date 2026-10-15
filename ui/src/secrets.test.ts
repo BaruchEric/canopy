@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import type { SecretMeta, SecretSinkInfo, SecretsInfo } from "../../src/core/types";
-import { filterSecrets, gateHere, hostOf, isGateClosed, keysText, parseKeysText, reachRows, restartLine, sinkRows, tagsOf, usedByText, writerOf, type SinkRow } from "./secrets";
+import { filterSecrets, gateHere, hostOf, isGateClosed, keysText, parseKeysText, markOf, passedOver, reachRows, restartLine, sinkRows, stateTone, tagsOf, usedByText, writerOf, type SinkRow } from "./secrets";
 
 const info = (over: Partial<SecretsInfo> = {}): SecretsInfo => ({
   ok: true,
@@ -153,5 +153,62 @@ describe("a rotation's reach", () => {
     const { impact: _, ...old } = meta();
     expect(usedByText(old)).toBe("dev-env, mcp-github-mac");
     expect(usedByText(meta({ usedBy: [], impact: { sinks: [], servers: [], stacks: [] } }))).toBe("nothing");
+  });
+
+  test("without the reach, a backend from before lists the sinks it has", () => {
+    const { impact: _, ...old } = meta();
+    const r = reachRows(old, [{ sink: { id: "dev-env", machine: "mini", path: "/x", format: "dotenv", keys: { GH_TOKEN: "gh_token" }, state: { GH_TOKEN: "drift" }, error: null }, owner: "mini" }]);
+    expect(r).toEqual([
+      { kind: "sink", name: "dev-env", machine: "mini", detail: "", state: "drift" },
+      { kind: "sink", name: "mcp-github-mac", machine: "", detail: "", state: null },
+    ]);
+  });
+
+  test("a sink missing from the rows has no state, and several states join once each", () => {
+    expect(reachRows(meta(), [])[0]?.state).toBeNull();
+    const two = meta({ impact: { sinks: [{ id: "s", machine: "mac", path: "/x", keys: ["A", "B", "C"] }], servers: [], stacks: [] } });
+    expect(reachRows(two, [sink("s", { A: "same", B: "waiting", C: "same" })])[0]?.state).toBe("same, waiting");
+    expect(reachRows(two, [sink("s", { A: "same" })])[0]?.state).toBe("same, unknown");
+  });
+
+  test("a sink whose owner has not passed over the write reads as waiting for it", () => {
+    const rows = [sink("dev-env", { GH_TOKEN: "same" }), sink("mcp-github-mac", { GITHUB_PERSONAL_ACCESS_TOKEN: "same" })];
+    const r = reachRows(meta(), rows, (owner) => owner === "mac");
+    expect(r.map((x) => x.state)).toEqual(["waiting for mac's pass", "waiting for mac's pass", null, null]);
+    expect(reachRows(meta(), rows, () => false)[0]?.state).toBe("same");
+  });
+
+  test("the key states wear the worst tone, and an error or a wait is not a drift", () => {
+    expect(stateTone("same")).toBe("moss");
+    expect(stateTone("same, waiting")).toBe("sky");
+    expect(stateTone("same, drift")).toBe("rust");
+    expect(stateTone("missing, waiting")).toBe("lichen");
+    expect(stateTone("waiting for mac's pass")).toBe("sky");
+    expect(stateTone("cannot write")).toBe("rust");
+    expect(stateTone("phase 3")).toBe("");
+    expect(stateTone(null)).toBe("");
+  });
+});
+
+describe("whether an owner has passed over a write", () => {
+  const at = (sinksAt: string | null | undefined, head = "x"): SecretsInfo => ({ ...info(), head, sinksAt });
+  test("the mark takes the act's commit and each backend's last finished pass", () => {
+    expect(markOf({ head: "bbb2222" }, { mac: at("aaa1111"), mini: at(undefined) })).toEqual({ head: "bbb2222", at: { mac: "aaa1111", mini: undefined } });
+    expect(markOf("nothing", { mac: at("aaa1111") }).head).toBeNull();
+  });
+  test("passed once the owner's pass reached the commit, or moved on from where it was", () => {
+    const mark = { head: "bbb2222", at: { mac: "aaa1111" } };
+    expect(passedOver(mark, "mac", at("aaa1111", "bbb2222"))).toBe(false); // head moved, pass not finished
+    expect(passedOver(mark, "mac", at(null, "bbb2222"))).toBe(false);
+    expect(passedOver(mark, "mac", at("bbb2222"))).toBe(true);
+    expect(passedOver(mark, "mac", at("ccc3333"))).toBe(true);
+    expect(passedOver({ head: "bbb2222", at: { mac: "bbb2222" } }, "mac", at("bbb2222"))).toBe(true);
+  });
+  test("passed when nothing can be known", () => {
+    expect(passedOver(null, "mac", at("a"))).toBe(true);
+    expect(passedOver({ head: null, at: {} }, "mac", at("a"))).toBe(true);
+    expect(passedOver({ head: "b", at: {} }, null, at("a"))).toBe(true);
+    expect(passedOver({ head: "b", at: {} }, "mac", at(undefined))).toBe(true);
+    expect(passedOver({ head: "b", at: {} }, "mac", undefined)).toBe(true);
   });
 });

@@ -10446,9 +10446,3 @@ span.effective-flag:not(:first-child) {
   color: var(--ink-dim);
   text-transform: lowercase;
 }
-.secrets-reach-ok {
-  color: var(--moss);
-}
-.secrets-reach-bad {
-  color: var(--rust);
-}

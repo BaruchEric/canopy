@@ -121,16 +121,21 @@ function sinkState(rows: readonly SinkRow[], id: string, keys: readonly string[]
 }
 
 /** everything a rotation of `meta` reaches, for the preview and for after the write */
-export function reachRows(meta: SecretMeta, rows: readonly SinkRow[]): ReachRow[] {
+export function reachRows(meta: SecretMeta, rows: readonly SinkRow[], awaited: (owner: string | null) => boolean = () => false): ReachRow[] {
+  // a sink's states are its owner's last pass: while that owner has not passed over the write, they are the old ones
+  const stateOf = (id: string, keys: readonly string[]): string | null => {
+    const owner = rows.find((x) => x.sink.id === id)?.owner ?? null;
+    return owner !== null && awaited(owner) ? `waiting for ${owner}'s pass` : sinkState(rows, id, keys);
+  };
   const r = meta.impact;
   if (!r) {
     return meta.usedBy.map((id) => {
       const s = rows.find((x) => x.sink.id === id)?.sink;
-      return { kind: "sink", name: id, machine: s?.machine ?? "", detail: "", state: sinkState(rows, id, Object.keys(s?.keys ?? {})) };
+      return { kind: "sink", name: id, machine: s?.machine ?? "", detail: "", state: stateOf(id, Object.keys(s?.keys ?? {})) };
     });
   }
   return [
-    ...r.sinks.map((s): ReachRow => ({ kind: "sink", name: s.id, machine: s.machine, detail: `${s.path}, ${s.keys.join(", ")}`, state: sinkState(rows, s.id, s.keys) })),
+    ...r.sinks.map((s): ReachRow => ({ kind: "sink", name: s.id, machine: s.machine, detail: `${s.path}, ${s.keys.join(", ")}`, state: stateOf(s.id, s.keys) })),
     ...r.servers.map((s): ReachRow => ({ kind: "server", name: s.server, machine: s.machines.join(", "), detail: "new agent sessions get the new value; running ones keep the old one", state: null })),
     ...r.stacks.map((st): ReachRow => ({ kind: "stack", name: st, machine: "mini", detail: restartLine(st), state: null })),
   ];
@@ -139,3 +144,37 @@ export function reachRows(meta: SecretMeta, rows: readonly SinkRow[]): ReachRow[
 /** the sheet's "used by" line; a backend from before the reach lists sinks only */
 export const usedByText = (meta: SecretMeta): string =>
   meta.impact ? joinList(reachList(meta.impact)) || "nothing" : meta.usedBy.join(", ") || "no sink";
+
+const TONE_ORDER = ["rust", "lichen", "sky", "", "moss"];
+
+/** the tone of a reach row's state: each key state wears its KEY_TONE, a wait
+ *  is sky, anything else (a sink's error) is rust, and a joined list takes
+ *  its worst */
+export function stateTone(state: string | null): string {
+  if (state === null) return "";
+  const tones = state.split(", ").map((p) => (p in KEY_TONE ? KEY_TONE[p as SecretKeyState] : p.startsWith("waiting for ") ? "sky" : "rust"));
+  return TONE_ORDER.find((t) => tones.includes(t)) ?? "";
+}
+
+/** what a successful write left behind: its commit and each backend's last finished sink pass */
+export interface WriteMark {
+  head: string | null;
+  at: Record<string, string | null | undefined>;
+}
+
+export function markOf(data: unknown, all: Readonly<Record<string, SecretsInfo>>): WriteMark {
+  const head = typeof data === "object" && data !== null ? (data as { head?: unknown }).head : null;
+  return { head: typeof head === "string" ? head : null, at: Object.fromEntries(Object.entries(all).map(([b, i]) => [b, i.sinksAt])) };
+}
+
+/** Has `owner` finished a sink pass over the write? A reader publishes its
+ *  new head before it runs the pass, so the head says nothing; `sinksAt` is
+ *  the commit its last finished pass read. Passed when that reached the
+ *  write's commit or moved off where it was; true when nothing can be known
+ *  (no mark, no commit, a backend that does not report `sinksAt`). */
+export function passedOver(mark: WriteMark | null, owner: string | null, info: SecretsInfo | undefined): boolean {
+  if (!mark || mark.head === null || owner === null || !info || info.sinksAt === undefined) return true;
+  const done = info.sinksAt;
+  if (done === null) return false;
+  return done.startsWith(mark.head) || mark.head.startsWith(done) || done !== mark.at[owner];
+}

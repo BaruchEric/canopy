@@ -3,7 +3,7 @@ import { useEffect, useState, type FormEvent } from "react";
 import type { SecretAct } from "../../../src/core/secretwire";
 import type { SecretAuditEntry, SecretMeta, SecretProposalInfo, SecretSinkFormat, SecretSinkInfo, SecretsInfo } from "../../../src/core/types";
 import { api } from "../api";
-import { KEY_TONE, errorText, filterSecrets, gateHere, hostOf, isGateClosed, keysText, parseKeysText, reachRows, sinkRows, tagsOf, usedByText, writerOf, type ReachRow, type SinkRow } from "../secrets";
+import { KEY_TONE, errorText, filterSecrets, gateHere, hostOf, isGateClosed, keysText, markOf, parseKeysText, passedOver, reachRows, sinkRows, stateTone, tagsOf, usedByText, writerOf, type ReachRow, type SinkRow, type WriteMark } from "../secrets";
 import { reachRefusal } from "../../../src/core/secretfile";
 import { bulkAct, pick } from "../secretsbulk";
 import { newKeyProblem } from "../secretsform";
@@ -142,7 +142,7 @@ export function SecretsView() {
         ))}
       </div>
       {shown === "secrets" ? (
-        <SecretsTab info={info} home={home} open={open} sinks={sinkRows(all, order, writer)} />
+        <SecretsTab info={info} home={home} open={open} sinks={sinkRows(all, order, writer)} all={all} />
       ) : shown === "sinks" ? (
         <SinksTab rows={sinkRows(all, order, writer)} home={home} writer={writer} open={open} />
       ) : shown === "import" ? (
@@ -288,7 +288,7 @@ function MachineKey({ info, home }: { info: SecretsInfo; home: string }) {
   );
 }
 
-function SecretsTab({ info, home, open, sinks }: { info: SecretsInfo; home: string; open: boolean; sinks: SinkRow[] }) {
+function SecretsTab({ info, home, open, sinks, all }: { info: SecretsInfo; home: string; open: boolean; sinks: SinkRow[]; all: Readonly<Record<string, SecretsInfo>> }) {
   const [text, setText] = useState("");
   const [tag, setTag] = useState<string | null>(null);
   const [picked, setPicked] = useState<string | null>(null);
@@ -316,7 +316,7 @@ function SecretsTab({ info, home, open, sinks }: { info: SecretsInfo; home: stri
                 {m.tags.length > 0 ? ` · ${m.tags.join(", ")}` : ""}
               </span>
             </button>
-            {picked === m.name && <SecretSheet key={m.name} meta={m} home={home} open={open} sinks={sinks} />}
+            {picked === m.name && <SecretSheet key={m.name} meta={m} home={home} open={open} sinks={sinks} all={all} />}
           </li>
         ))}
       </ul>
@@ -374,7 +374,7 @@ function ReachList({ rows }: { rows: ReachRow[] }) {
           ) : r.detail ? (
             <span className="secrets-note"> · {r.detail}</span>
           ) : null}
-          {r.state ? <span className={r.state === "same" ? "secrets-reach-ok" : "secrets-reach-bad"}> · {r.state}</span> : null}
+          {r.state ? <span className={stateTone(r.state)}> · {r.state}</span> : null}
         </li>
       ))}
     </ul>
@@ -384,7 +384,7 @@ function ReachList({ rows }: { rows: ReachRow[] }) {
 /** one secret opened: its facts for anyone, and behind the session its
  *  value (shown for 20 s), its words, a new value, its allowlist, delete
  *  and its history */
-function SecretSheet({ meta, home, open, sinks }: { meta: SecretMeta; home: string; open: boolean; sinks: SinkRow[] }) {
+function SecretSheet({ meta, home, open, sinks, all }: { meta: SecretMeta; home: string; open: boolean; sinks: SinkRow[]; all: Readonly<Record<string, SecretsInfo>> }) {
   const act = useAct(home);
   const [shown, setShown] = useState<{ value: string; until: number } | null>(null);
   const [description, setDescription] = useState(meta.description);
@@ -393,8 +393,13 @@ function SecretSheet({ meta, home, open, sinks }: { meta: SecretMeta; home: stri
   const [next, setNext] = useState("");
   const [confirm, setConfirm] = useState(false);
   const [reach, setReach] = useState<"no" | "preview" | "after">("no");
-  const rows = reachRows(meta, sinks);
+  const [mark, setMark] = useState<WriteMark | null>(null);
+  const rows = reachRows(meta, sinks, reach === "after" ? (owner) => !passedOver(mark, owner, owner === null ? undefined : all[owner]) : undefined);
   const [history, setHistory] = useState<SecretAuditEntry[]>([]);
+  // a rotation from anywhere makes a revealed value stale
+  useEffect(() => {
+    setShown(null);
+  }, [meta.rotated]);
   useEffect(() => {
     if (!shown) return;
     const t = setTimeout(() => setShown(null), Math.max(0, shown.until - Date.now()));
@@ -477,6 +482,8 @@ function SecretSheet({ meta, home, open, sinks }: { meta: SecretMeta; home: stri
               void act.run({ a: "rotate", name: meta.name, value: next }).then((r) => {
                 if (r) {
                   setNext("");
+                  setShown(null);
+                  setMark(markOf(r.data, all));
                   setReach("after");
                 }
               });

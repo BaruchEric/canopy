@@ -78,6 +78,8 @@ const exists = (p: string): Promise<boolean> => stat(p).then(() => true, () => f
 export class SecretsReader {
   file: SecretFile | null = null;
   head: string | null = null;
+  /** the commit the last finished sink pass read */
+  private sinksAt: string | null = null;
   refused: string | null = null;
   error: string | null = null;
   private ident: string | null = null;
@@ -235,6 +237,7 @@ export class SecretsReader {
   async syncSinks(): Promise<void> {
     const f = this.file;
     if (!f) return;
+    const at = this.head;
     const applied = await readApplied(this.o.paths.applied);
     const state: Record<string, SinkState> = {};
     for (const [id, sink] of Object.entries(f.sinks)) {
@@ -247,6 +250,7 @@ export class SecretsReader {
     }
     if (this.ident) await writeApplied(this.o.paths.applied, Object.fromEntries(Object.entries(applied).filter(([id]) => state[id])));
     this.sinkState = state;
+    this.sinksAt = at;
     const d = this.o.mcpEnvDir;
     if (d) for (const n of await pruneMcpEnv(d, mcpEnvKeep(f, this.o.machine, d))) this.o.log(`secrets: removed ${d}/${n}, which no sink names`);
   }
@@ -309,6 +313,7 @@ export class SecretsReader {
       backend,
       role: "reader",
       head: this.head,
+      sinksAt: this.sinksAt,
       refused: this.refused,
       lock: this.lock(),
       recipient: this.recip,

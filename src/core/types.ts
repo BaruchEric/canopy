@@ -3079,6 +3079,8 @@ export interface SecretsInfo {
   role: "writer" | "reader";
   /** the commit this backend reads, short */
   head: string | null;
+  /** the commit this backend's last finished sink pass read; a reader's `head` moves before its pass runs. Absent from a backend before it. */
+  sinksAt?: string | null;
   /** why the newest commit was refused, when one was */
   refused: string | null;
   /** this machine's age key: open, waiting for its passphrase, or none here */

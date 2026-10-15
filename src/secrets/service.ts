@@ -93,6 +93,7 @@ function subject(act: SecretAct): string | null {
 export class SecretsService {
   private readonly proposals = new Map<string, Pending>();
   private sinkState: Record<string, SinkState> = {};
+  private sinksAt: string | null = null;
   private readonly io: SinkIO;
   private readonly now: () => number;
   private queue: Promise<unknown> = Promise.resolve();
@@ -456,6 +457,7 @@ export class SecretsService {
   /** Write the sinks this machine owns where the store changed, and read
    *  the rest as same, drift or missing. */
   async syncSinks(): Promise<void> {
+    const at = this.d.store.head;
     const f = this.d.store.file;
     const applied = await this.d.applied.read();
     const state: Record<string, SinkState> = {};
@@ -475,6 +477,7 @@ export class SecretsService {
       for (const n of await pruneMcpEnv(d, mcpEnvKeep(f, this.d.machine, d))) await this.d.audit.add({ action: "sink-prune", name: null, ok: true, by: null, detail: `${d}/${n}` });
     }
     this.sinkState = state;
+    this.sinksAt = at;
   }
 
   info(token: string | null): SecretsInfo {
@@ -490,6 +493,7 @@ export class SecretsService {
       backend: this.d.machine,
       role: "writer",
       head: s.head,
+      sinksAt: this.sinksAt,
       refused: null,
       lock: "open",
       recipient: null,
