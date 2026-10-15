@@ -20,7 +20,7 @@ Success: the Mac's 16 Claude servers and its Codex `wiki-memory` and `executor` 
 and unchanged in behaviour; `github` gets its token from the store through
 `canopy-mcp-env`; the mini's servers come from the same manifest; no value
 appears in `~/.claude.json`, `config.toml`, a route, a log line or the
-transcript; rotating `github-token` lists its sinks, the server and the
+transcript; rotating `gh_token` lists its sinks, the server and the
 machines before the write.
 
 ## Calls made on 2026-10-14
@@ -227,6 +227,34 @@ server's env sink; and the distinct `restart` stacks of those sinks.
 - A live check on the Mac and the mini: `github` adopted, allowed, started
   by a fresh Claude session, `gh` calls through it working, and the token
   absent from both config files.
+
+## Settled while planning
+
+The plan (`docs/superpowers/plans/2026-10-14-kit-secrets-phase-2.md`) read
+the code and found these, which this file now follows:
+
+- github's secret is `gh_token`, not `github-token`.
+- `mcp-allow` carries the server's definition, env and header names and
+  each machine's home, so the service recomputes the hash itself and
+  builds each sink's absolute path.
+- The mini's canopy scans as `/home/bun`, but server commands and sink
+  paths use the host home (`CANOPY_HOST_HOME`), and the `canopy` and
+  `shells` services also mount `~/.claude` at its host path.
+- The `secrets` service cannot run git, so canopy's relay runs `git
+  check-ignore` on `mcp-env/<server>.env` in dotclaude before it forwards
+  `mcp-allow`, and answers 409 when the file is not ignored. dotclaude
+  already ignores `mcp-env/`; it gains a line for `.canopy-kit-mcp.json`,
+  which holds an adopted entry's old definition.
+- A server may carry per-agent `options` (executor's `headersHelper` and
+  `bearer_token_env_var`, wiki-memory's Codex timeouts), allowed only on
+  servers without secrets, so the hash stays as defined above.
+- Adopting a server with secrets is refused until it is allowed, so a
+  working hand-made entry is never swapped for one that stays out.
+- A server already written stays while its env sink reads "waiting"
+  (a locked Mac after a restart), instead of being removed and added back.
+- Revoke's env files are pruned by each writer's next pass.
+- "No value in an agent config file" holds for kit-managed entries; a
+  foreign entry is left as it is, and an adopt preview masks its values.
 
 ## Out of scope
 
