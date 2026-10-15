@@ -2,8 +2,9 @@
  *  the manifest, what each machine should hold, and what to do about it.
  *  Browser-safe: no node imports. */
 import type {
-  KitAction, KitCell, KitCellState, KitMachine, KitManifest, KitMode, KitRule, KitSeen, KitSeenTarget, KitTarget,
+  KitAction, KitCell, KitCellState, KitMachine, KitMcpDef, KitManifest, KitMode, KitRule, KitSeen, KitSeenTarget, KitTarget,
 } from "./types";
+import { canonical } from "./secretfile";
 
 export const SKILL_NAME = /^[a-z0-9][a-z0-9._-]*$/;
 const MODES: readonly KitMode[] = ["store", "link", "copy"];
@@ -71,6 +72,15 @@ export function parseKit(raw: unknown): { kit: KitManifest } | { errors: string[
 export function expandHome(path: string, home: string): string {
   if (path === "~") return home;
   return path.startsWith("~/") ? `${home}/${path.slice(2)}` : path;
+}
+
+/** The definition hash (phase 2 spec): SHA-256 over the canonical JSON of
+ *  the names-only definition, so the same on every machine. WebCrypto, so
+ *  the page and the server compute it alike. */
+export async function mcpHash(def: KitMcpDef): Promise<string> {
+  const bytes = new TextEncoder().encode(canonical({ command: def.command, args: def.args, url: def.url, env: def.env, headers: def.headers }));
+  const d = new Uint8Array(await crypto.subtle.digest("SHA-256", bytes));
+  return [...d].map((b) => b.toString(16).padStart(2, "0")).join("");
 }
 
 const parts = (p: string) => p.split("/").filter((x) => x !== "" && x !== ".");

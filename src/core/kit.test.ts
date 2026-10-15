@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { cellsOf, expandHome, parseKit, planKit, relPath, skillNames, sourcePath, targetsFor, wanted } from "./kit";
+import { cellsOf, expandHome, mcpHash, parseKit, planKit, relPath, skillNames, sourcePath, targetsFor, wanted } from "./kit";
 import type { KitManifest, KitSeen, KitSeenTarget } from "./types";
 
 const RAW = {
@@ -192,5 +192,25 @@ describe("cellsOf", () => {
     const cells = cellsOf(kit(), [{ seen: seen({ machine: "gpd", away: "ssh exited 255", targets: [], store: null }), dev: "/d" }]);
     expect(cells.every((c) => c.state === "away" && c.skill === "*")).toBe(true);
     expect(cells.map((c) => c.agent)).toEqual(["claude", "codex"]);
+  });
+});
+
+describe("mcpHash", () => {
+  const DEF = { command: "bunx", args: ["-y", "@modelcontextprotocol/server-github"], url: null, env: ["GITHUB_PERSONAL_ACCESS_TOKEN"], headers: [] };
+  test("is SHA-256 over the canonical JSON, the same for any key order", async () => {
+    const text = '{"args":["-y","@modelcontextprotocol/server-github"],"command":"bunx","env":["GITHUB_PERSONAL_ACCESS_TOKEN"],"headers":[],"url":null}';
+    const want = new Bun.CryptoHasher("sha256").update(text).digest("hex");
+    expect(await mcpHash(DEF)).toBe(want);
+    expect(await mcpHash({ headers: [], env: DEF.env, url: null, args: DEF.args, command: "bunx" })).toBe(want);
+  });
+  test("changes with each hashed field", async () => {
+    const base = await mcpHash(DEF);
+    for (const d of [
+      { ...DEF, command: "npx" },
+      { ...DEF, args: ["-y"] },
+      { ...DEF, command: null, args: [], url: "https://example.invalid/mcp" },
+      { ...DEF, env: ["GITHUB_TOKEN"] },
+      { ...DEF, headers: ["Authorization"] },
+    ]) expect(await mcpHash(d)).not.toBe(base);
   });
 });
