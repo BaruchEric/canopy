@@ -4,7 +4,8 @@
  *  refusing an add over an existing name with claude's own words.
  *  FAKE_CLAUDE_FAIL=add-once makes the first add fail with an error that
  *  echoes its JSON, as a CLI might; a marker file beside the script makes
- *  every later add (a rollback's re-add) go through. */
+ *  every later add (a rollback's re-add) go through. FAKE_CLAUDE_FAIL=add
+ *  makes every add fail that way, the rollback's included. */
 import { writeFileSync } from "node:fs";
 import { join } from "node:path";
 
@@ -19,7 +20,8 @@ const at = args.indexOf("--scope");
 if (args[0] !== "mcp" || at < 0 || args[at + 1] !== "user") { console.error("usage"); process.exit(2); }
 const rest = args.filter((_, i) => i > 1 && i !== at && i !== at + 1);
 if (args[1] === "add-json") {
-  if (process.env.FAKE_CLAUDE_FAIL === "add-once" && !fs.existsSync(${JSON.stringify(marker)})) {
+  const fail = process.env.FAKE_CLAUDE_FAIL;
+  if (fail === "add" || (fail === "add-once" && !fs.existsSync(${JSON.stringify(marker)}))) {
     fs.writeFileSync(${JSON.stringify(marker)}, "");
     console.error("Invalid configuration: " + rest[1]);
     process.exit(1);

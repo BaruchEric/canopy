@@ -59,7 +59,9 @@ export function codexServers(text: string): Record<string, KitMcpEntry> | null {
 
 /** Where a [mcp_servers.<name>] table that starts its body at `from` ends:
  *  at the next marker, array table or table not under it, with the blank
- *  lines before that left outside. */
+ *  and comment lines before that left outside, since a comment there heads
+ *  the next table. Canopy writes no comment inside its own tables but the
+ *  marker, which is never one of these. */
 function tableEnd(lines: string[], from: number, name: string): number {
   let j = from;
   for (; j < lines.length; j++) {
@@ -68,7 +70,10 @@ function tableEnd(lines: string[], from: number, name: string): number {
     const p = tomlPath(l);
     if (p && !under(p, name)) break;
   }
-  while (j > from && (lines[j - 1] ?? "").trim() === "") j--;
+  for (; j > from; j--) {
+    const l = (lines[j - 1] ?? "").trim();
+    if (l !== "" && (!l.startsWith("#") || l === MARKER)) break;
+  }
   return j;
 }
 
@@ -202,7 +207,8 @@ function sensitive(e: KitMcpEntry | null): string[] {
   }
   if (typeof e["url"] === "string") out.push(e["url"]);
   if (Array.isArray(e["args"])) for (const a of e["args"]) if (typeof a === "string" && a.length >= 16) out.push(a);
-  return out;
+  // and each as it reads inside a JSON echo, quotes and backslashes escaped
+  return out.flatMap((s) => [s, JSON.stringify(s).slice(1, -1)]);
 }
 
 /** an error line with every such string taken out, since a CLI may echo what it was given */
@@ -223,8 +229,10 @@ export async function claudeSet(io: McpIO, claude: string, name: string, entry: 
   const r = await cli(["add-json", "--scope", "user", name, JSON.stringify(entry)]);
   if (r.code === 0) return null;
   const why = scrub(firstLine(r.stderr), [entry, old]) || `claude mcp add-json exited ${r.code}`;
-  if (old) await cli(["add-json", "--scope", "user", name, JSON.stringify(old)]);
-  return why;
+  if (!old) return why;
+  const back = await cli(["add-json", "--scope", "user", name, JSON.stringify(old)]);
+  if (back.code === 0) return why;
+  return `${why}; the old entry could not be put back: ${scrub(firstLine(back.stderr), [entry, old]) || `claude mcp add-json exited ${back.code}`}`;
 }
 
 export async function claudeRemove(io: McpIO, claude: string, name: string, old: KitMcpEntry | null): Promise<string | null> {

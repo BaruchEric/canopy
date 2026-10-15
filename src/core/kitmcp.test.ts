@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { appendFileSync, copyFileSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { appendFileSync, mkdtempSync, readFileSync, rmSync, statSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { exec, onHost } from "./exec";
@@ -62,6 +62,17 @@ describe("spliceCodex", () => {
     expect(codexBlocks(back)).toEqual([]);
   });
 
+  test("a comment heading the next table stays when canopy's table is updated, removed or adopted", () => {
+    const tail = '\n# my profiles\n[profiles.x]\nmodel = "m"\n';
+    const added = one(spliceCodex(ORIG, "wiki-memory", { command: "bash" }));
+    const withUser = added + tail;
+    const updated = one(spliceCodex(withUser, "wiki-memory", { command: "bash", args: ["/y.sh"] }));
+    expect(updated).toBe(`${one(spliceCodex(ORIG, "wiki-memory", { command: "bash", args: ["/y.sh"] }))}${tail}`);
+    expect(one(spliceCodex(withUser, "wiki-memory", null))).toBe(`${ORIG}${tail}`);
+    const hand = '[mcp_servers.w]\ncommand = "bash"\n\n# my profiles\n[profiles.x]\nmodel = "m"\n';
+    expect(one(spliceCodex(hand, "w", { command: "bash", args: ["/y.sh"] }, "adopt"))).toBe(`${MARKER}\n[mcp_servers.w]\ncommand = "bash"\nargs = ["/y.sh"]\n\n# my profiles\n[profiles.x]\nmodel = "m"\n`);
+  });
+
   test("refuses a file that does not parse, a hand-made table of the same name, and a split table", () => {
     expect(spliceCodex("a = [", "x", { command: "c" })).toEqual({ error: "config.toml does not parse; left as it is" });
     expect(spliceCodex(ORIG, "node_repl", { command: "x" })).toEqual({ error: "config.toml has a [mcp_servers.node_repl] canopy did not write; adopt it instead" });
@@ -100,12 +111,16 @@ describe("inplaceWrite", () => {
     const d = scratch();
     const f = join(d, "config.toml");
     writeFileSync(f, ORIG);
-    copyFileSync(f, join(d, "was"));
+    const was = statSync(f);
     const seen = await stamp(f);
     const other = ORIG.replace("gpt-5", "gpt-6");
     expect(other.length).toBe(ORIG.length);
     writeFileSync(f, other);
-    expect((await exec(["touch", "-r", join(d, "was"), f])).code).toBe(0);
+    utimesSync(f, was.atime, was.mtime);
+    const now = await stamp(f);
+    // mtime and size read the same, so only the checksum can tell
+    expect(now.split(" ").slice(0, 2)).toEqual(seen.split(" ").slice(0, 2));
+    expect(now).not.toBe(seen);
     expect(await inplaceWrite(io, f, seen, "clobbered\n")).toBe("config.toml changed since the scan; rescan and apply again");
     expect(readFileSync(f, "utf8")).toBe(other);
   });
@@ -117,7 +132,7 @@ describe("the claude CLI writer", () => {
     const claude = fakeClaude(h);
     const log = join(h, "argv.log");
     writeFileSync(join(h, ".claude.json"), JSON.stringify({ numStartups: 3, mcpServers: { github: { type: "stdio", command: "bash", args: ["-c", "x"] } } }));
-    const io = (fail = false): McpIO => ({ run: onHost, host: null, env: { HOME: h, FAKE_CLAUDE_LOG: log, ...(fail ? { FAKE_CLAUDE_FAIL: "add-once" } : {}) } });
+    const io = (fail?: "add-once" | "add"): McpIO => ({ run: onHost, host: null, env: { HOME: h, FAKE_CLAUDE_LOG: log, ...(fail ? { FAKE_CLAUDE_FAIL: fail } : {}) } });
     const servers = () => (JSON.parse(readFileSync(join(h, ".claude.json"), "utf8")) as { mcpServers: Record<string, unknown> }).mcpServers;
     const argv = () => readFileSync(log, "utf8").trim().split("\n").map((l) => JSON.parse(l) as string[]);
     return { h, claude, io, servers, argv };
@@ -138,9 +153,31 @@ describe("the claude CLI writer", () => {
     const { claude, io, servers } = setup();
     const old = servers()["github"] as Record<string, unknown>;
     const want = { type: "stdio", command: "x", args: [], env: { TOKEN: "literal-value-0x41" } };
-    const why = await claudeSet(io(true), claude, "github", want, old);
+    const why = await claudeSet(io("add-once"), claude, "github", want, old);
     expect(why).toContain("Invalid configuration");
     expect(why).not.toContain("literal-value-0x41");
     expect(servers()["github"]).toEqual(old);
+  });
+
+  test("a put back that fails too is said, without the old entry's values", async () => {
+    const { h, claude, io, servers } = setup();
+    const old = { type: "stdio", command: "bash", env: { OLD: "old-literal-0x42" } };
+    writeFileSync(join(h, ".claude.json"), JSON.stringify({ mcpServers: { github: old } }));
+    const want = { type: "stdio", command: "x", env: { TOKEN: "literal-value-0x41" } };
+    const why = await claudeSet(io("add"), claude, "github", want, old);
+    expect(why).toStartWith("Invalid configuration");
+    expect(why).toContain("; the old entry could not be put back: Invalid configuration");
+    expect(why).not.toContain("literal-value-0x41");
+    expect(why).not.toContain("old-literal-0x42");
+    expect(servers()["github"]).toBeUndefined();
+  });
+
+  test("a value the CLI echoes as JSON, quotes and backslashes escaped, is taken out too", async () => {
+    const { claude, io, servers } = setup();
+    const old = servers()["github"] as Record<string, unknown>;
+    const want = { type: "stdio", command: "x", env: { TOKEN: 'ab"cd\\efgh-PROBE' } };
+    const why = await claudeSet(io("add-once"), claude, "github", want, old);
+    expect(why).toContain("Invalid configuration");
+    expect(why).not.toContain("efgh-PROBE");
   });
 });
