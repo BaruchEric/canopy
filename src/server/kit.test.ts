@@ -265,6 +265,32 @@ describe("KitHub and MCP servers", () => {
     expect((await route("POST", "/api/kit/apply", { machine: "mac", actions: [{ kind: "mcp-adopt", agent: "claude", name: "github" }] })).status).toBe(409);
   });
 
+  test("two adopts that overlap on one machine both keep their hand-made entries (final review 1)", async () => {
+    const { h, hub, allow } = await setupMcp();
+    writeFileSync(join(h, ".codex", "config.toml"), '[mcp_servers.github]\ncommand = "bunx"\nargs = ["-y", "@modelcontextprotocol/server-github"]\n');
+    await allow();
+    await hub.scan();
+    const [a, b] = await Promise.all([hub.adopt("mac", "claude", ["github"]), hub.adopt("mac", "codex", ["github"])]);
+    expect([a.failed, b.failed]).toEqual([[], []]);
+    const owned = JSON.parse(readFileSync(join(h, ".claude", ".canopy-kit-mcp.json"), "utf8")) as { placed: Record<string, string[]>; adoptedFrom: Record<string, Record<string, unknown>> };
+    expect(owned.placed).toEqual({ claude: ["github"], codex: ["github"] });
+    expect(Object.keys(owned.adoptedFrom.claude ?? {})).toEqual(["github"]);
+    expect(Object.keys(owned.adoptedFrom.codex ?? {})).toEqual(["github"]);
+  });
+
+  test("an apply that overlaps an adopt keeps the adopt's record, and a refused call does not stop the next (final review 1)", async () => {
+    const { h, hub, allow } = await setupMcp();
+    await allow();
+    await hub.scan();
+    const [bad, a, b] = await Promise.allSettled([hub.adopt("mac", "claude", ["nope"]), hub.adopt("mac", "claude", ["github"]), hub.apply("mac")]);
+    expect(bad.status).toBe("rejected");
+    expect(a.status).toBe("fulfilled");
+    expect(b.status).toBe("fulfilled");
+    const owned = JSON.parse(readFileSync(join(h, ".claude", ".canopy-kit-mcp.json"), "utf8")) as { placed: Record<string, string[]>; adoptedFrom: Record<string, Record<string, unknown>> };
+    expect(owned.placed["claude"]).toEqual(["excalidraw", "github"]);
+    expect(Object.keys(owned.adoptedFrom.claude ?? {})).toEqual(["github"]);
+  });
+
   test("the host's home is what the kit writes; the scan still reads under HOME (ruling 6)", async () => {
     const { h, hub, allow, route } = await setupMcp();
     await allow();

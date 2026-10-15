@@ -54,6 +54,11 @@ export class KitHub {
   /** per machine, every entry the kit would write there; never leaves this process */
   private entries = new Map<string, Record<string, KitMcpEntry>>();
   private mcpSeen = new Map<string, KitMcpSeen>();
+  /** per machine, the last write in line: executes run one at a time */
+  private chains = new Map<string, Promise<unknown>>();
+  /** counts scans begun, and per machine the one its view came from, so a scan that began before a write never lands after the write's rescan */
+  private scans = 0;
+  private scanOf = new Map<string, number>();
 
   constructor(private readonly deps: KitHubDeps) {}
 
@@ -123,6 +128,7 @@ export class KitHub {
   }
 
   private async scanOne(kit: KitManifest, m: Mine): Promise<void> {
+    const n = ++this.scans;
     // a throw here would reject the scan, and nothing awaits the timer's
     // scans: an unhandled rejection ends the server
     const seen = await seeKit(kit, m, { run: this.deps.run, env: this.deps.env, now: this.deps.now }).catch(
@@ -133,6 +139,8 @@ export class KitHub {
     // kit.json changed during the read (an apply's rescan racing a scan):
     // this read follows the old manifest, and the new one's scan paints it
     if (kit !== this.kit) return;
+    if ((this.scanOf.get(m.name) ?? 0) > n) return;
+    this.scanOf.set(m.name, n);
     this.views.set(m.name, { seen, dev: m.dev, mcp, ssh: m.host !== null });
     await this.publish(kit);
   }
@@ -200,9 +208,22 @@ export class KitHub {
     return { kit: this.kit, view, m };
   }
 
+  /** One write at a time per machine, each call from its reach and checks
+   *  on. applyMcp writes the whole ownership file from the scan it was
+   *  given, so two overlapping writes would each save their own copy and
+   *  the last would wipe the other's records. A refused call leaves the
+   *  line for the next. */
+  private serial<T>(machine: string, fn: () => Promise<T>): Promise<T> {
+    const run = (this.chains.get(machine) ?? Promise.resolve()).then(fn);
+    this.chains.set(machine, run.catch(() => {}));
+    return run;
+  }
+
   private async execute(machine: string, todo: KitAction[]): Promise<KitApplyResult> {
     const { kit, view, m } = this.reach(machine);
-    const seen = this.mcpSeen.get(machine);
+    // the view, not mcpSeen: scanOne sets it before it publishes, and a
+    // publish that gives way to a newer one leaves mcpSeen behind
+    const seen = this.views.get(machine)?.mcp;
     const formats: Record<string, KitMcpFormat> = Object.fromEntries(mcpTargets(kit, machine).map((t) => [t.agent, t.mcp.format]));
     const r = await applyKit(view.seen, m.host, todo, {
       run: this.deps.run, env: this.deps.env,
@@ -213,13 +234,15 @@ export class KitHub {
   }
 
   /** the plan, or the part of it asked for; adopt and put back are never in a plan */
-  async apply(machine: string, actions?: KitAction[], dryRun = false): Promise<KitApplyResult> {
-    const { view } = this.reach(machine);
-    const planned = new Set(view.plan.map((a) => JSON.stringify(a)));
-    if (actions && !actions.every((a) => planned.has(JSON.stringify(a)))) throw new KitError("an action is not in the current plan; rescan first", 409);
-    const todo = actions ?? view.plan;
-    if (dryRun) return { machine, done: todo, failed: [] };
-    return this.execute(machine, todo);
+  apply(machine: string, actions?: KitAction[], dryRun = false): Promise<KitApplyResult> {
+    return this.serial(machine, async () => {
+      const { view } = this.reach(machine);
+      const planned = new Set(view.plan.map((a) => JSON.stringify(a)));
+      if (actions && !actions.every((a) => planned.has(JSON.stringify(a)))) throw new KitError("an action is not in the current plan; rescan first", 409);
+      const todo = actions ?? view.plan;
+      if (dryRun) return { machine, done: todo, failed: [] };
+      return this.execute(machine, todo);
+    });
   }
 
   private mcpCell(machine: string, agent: string, name: string) {
@@ -232,22 +255,26 @@ export class KitHub {
    *  working server replaced by nothing (phase 2 plan, call 10). The
    *  batch holds adopts alone, since a set after an adopt in one batch
    *  would read the scan, not the adopt's result. */
-  async adopt(machine: string, agent: string, names?: string[]): Promise<KitApplyResult> {
-    this.reach(machine);
-    const all = this.last.cells.filter((c) => c.kind === "mcp" && c.machine === machine && c.agent === agent);
-    const pick = [...new Set(names ?? all.filter((c) => c.state === "adoptable").map((c) => c.skill))];
-    if (pick.length === 0) throw new KitError(`nothing to adopt for ${agent} on ${machine}`, 409);
-    for (const n of pick) {
-      const c = this.mcpCell(machine, agent, n);
-      if (c?.state !== "adoptable") throw new KitError(`${n} cannot be adopted: ${c ? c.why || c.state : "the kit has no such server here"}`, 409);
-    }
-    return this.execute(machine, pick.map((name): KitAction => ({ kind: "mcp-adopt", agent, name })));
+  adopt(machine: string, agent: string, names?: string[]): Promise<KitApplyResult> {
+    return this.serial(machine, async () => {
+      this.reach(machine);
+      const all = this.last.cells.filter((c) => c.kind === "mcp" && c.machine === machine && c.agent === agent);
+      const pick = [...new Set(names ?? all.filter((c) => c.state === "adoptable").map((c) => c.skill))];
+      if (pick.length === 0) throw new KitError(`nothing to adopt for ${agent} on ${machine}`, 409);
+      for (const n of pick) {
+        const c = this.mcpCell(machine, agent, n);
+        if (c?.state !== "adoptable") throw new KitError(`${n} cannot be adopted: ${c ? c.why || c.state : "the kit has no such server here"}`, 409);
+      }
+      return this.execute(machine, pick.map((name): KitAction => ({ kind: "mcp-adopt", agent, name })));
+    });
   }
 
-  async restore(machine: string, agent: string, name: string): Promise<KitApplyResult> {
-    this.reach(machine);
-    if (!this.mcpCell(machine, agent, name)?.restore) throw new KitError(`canopy keeps no hand-made ${name} for ${agent} on ${machine}`, 409);
-    return this.execute(machine, [{ kind: "mcp-restore", agent, name }]);
+  restore(machine: string, agent: string, name: string): Promise<KitApplyResult> {
+    return this.serial(machine, async () => {
+      this.reach(machine);
+      if (!this.mcpCell(machine, agent, name)?.restore) throw new KitError(`canopy keeps no hand-made ${name} for ${agent} on ${machine}`, 409);
+      return this.execute(machine, [{ kind: "mcp-restore", agent, name }]);
+    });
   }
 
   /** what adopt would change, both sides masked */
