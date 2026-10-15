@@ -80,6 +80,8 @@ export class SecretsReader {
   refused: string | null = null;
   error: string | null = null;
   private ident: string | null = null;
+  /** the open identity's public half, kept beside it so info() can stay synchronous */
+  private recip: string | null = null;
   private hasKey = false;
   private failures = 0;
   private sinkState: Record<string, SinkState> = {};
@@ -191,6 +193,7 @@ export class SecretsReader {
     }
     try {
       this.ident = await unwrapIdentity(armored, passphrase);
+      this.recip = await identityToRecipient(this.ident);
     } catch {
       this.failures += 1;
       return { ok: false, error: "wrong passphrase" };
@@ -203,6 +206,7 @@ export class SecretsReader {
   /** forget the identity; the sinks keep their contents */
   lockNow(): void {
     this.ident = null;
+    this.recip = null;
     void this.syncSinks();
   }
 
@@ -217,6 +221,7 @@ export class SecretsReader {
     await rename(tmp, this.o.paths.identity);
     this.hasKey = true;
     this.ident = identity;
+    this.recip = recipient;
     this.failures = 0;
     return { recipient };
   }
@@ -303,6 +308,7 @@ export class SecretsReader {
       head: this.head,
       refused: this.refused,
       lock: this.lock(),
+      recipient: this.recip,
       secrets: f ? metaList(f) : [],
       sinks,
       proposals: [],

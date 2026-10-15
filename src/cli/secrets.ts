@@ -47,7 +47,7 @@ export function statusLines(info: SecretsInfo): string[] {
   const out = [`${bold(info.backend)}: ${info.role === "writer" ? "the writer" : "a verified copy"}, commit ${info.head ?? "none"}`];
   if (info.error) out.push(rust(info.error));
   if (info.refused) out.push(rust(`refused: ${info.refused}`));
-  out.push(LOCK_WORD[info.lock]);
+  out.push(info.lock === "open" && info.recipient ? `${LOCK_WORD.open}, recipient ${info.recipient}` : LOCK_WORD[info.lock]);
   if (info.unpushed > 0) out.push(lichen(`${info.unpushed} commit${info.unpushed === 1 ? "" : "s"} waiting for Forgejo`));
   if (info.firstPasskey) out.push(lichen("no passkey yet: the first-passkey code is in the secrets service's log"));
   for (const s of info.sinks) {

@@ -16,6 +16,7 @@ const info = (over: Partial<SecretsInfo> = {}): SecretsInfo => ({
   passkeys: [],
   session: false,
   firstPasskey: false,
+  recipient: null,
   gate: "https://canopy.beric.ca/?view=secrets",
   unpushed: 0,
   ...over,

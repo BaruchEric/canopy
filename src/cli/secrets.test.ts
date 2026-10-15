@@ -21,6 +21,7 @@ const info = (over: Partial<SecretsInfo> = {}): SecretsInfo => ({
   passkeys: [],
   session: false,
   firstPasskey: false,
+  recipient: null,
   gate: "https://canopy.beric.ca/?view=secrets",
   unpushed: 0,
   ...over,
@@ -41,6 +42,11 @@ describe("lines", () => {
     expect(text).toContain("canopy secrets unlock");
     expect(text).toContain("CF_TOKEN drift");
     expect(text).toContain("not signed");
+  });
+
+  test("an open key names its recipient, so it can be set as a machine key later", () => {
+    const text = statusLines(info({ lock: "open", recipient: "age1example" })).join("\n");
+    expect(text).toContain("this machine's key is open, recipient age1example");
   });
 
   test("status exits 1 on a refusal, a sink error or drift, 0 otherwise", () => {

@@ -4,6 +4,7 @@ import type { SecretAct } from "../../../src/core/secretwire";
 import type { SecretAuditEntry, SecretMeta, SecretProposalInfo, SecretSinkFormat, SecretSinkInfo, SecretsInfo } from "../../../src/core/types";
 import { api } from "../api";
 import { KEY_TONE, errorText, filterSecrets, gateHere, hostOf, isGateClosed, keysText, parseKeysText, sinkRows, tagsOf, writerOf, type SinkRow } from "../secrets";
+import { newKeyProblem } from "../secretsform";
 import { useStore } from "../store";
 import { ago } from "../util";
 
@@ -226,6 +227,14 @@ function MachineKey({ info, home }: { info: SecretsInfo; home: string }) {
     return (
       <span className="secrets-gate">
         <span className="moss">this machine's key is open</span>
+        {info.recipient && (
+          <>
+            <code className="secrets-recipient">{info.recipient}</code>
+            <button type="button" className="mini" onClick={() => void navigator.clipboard.writeText(info.recipient ?? "")}>
+              copy
+            </button>
+          </>
+        )}
         <button type="button" className="mini" disabled={busy} onClick={() => void step(async () => void (await api.secretsLock(home)))}>
           lock
         </button>
@@ -255,8 +264,9 @@ function MachineKey({ info, home }: { info: SecretsInfo; home: string }) {
       className="secrets-form"
       onSubmit={(e: FormEvent) => {
         e.preventDefault();
-        if (pass !== again) {
-          setError("the two passphrases differ");
+        const problem = newKeyProblem(pass, again);
+        if (problem) {
+          setError(problem);
           return;
         }
         void step(async () => {
@@ -268,7 +278,7 @@ function MachineKey({ info, home }: { info: SecretsInfo; home: string }) {
       <span>No key on this machine.</span>
       <input type="password" aria-label="New key passphrase, 12 characters or more" placeholder="passphrase, 12 or more characters" autoComplete="new-password" value={pass} onChange={(e) => setPass(e.target.value)} />
       <input type="password" aria-label="The passphrase again" placeholder="the same again" autoComplete="new-password" value={again} onChange={(e) => setAgain(e.target.value)} />
-      <button type="submit" className="mini" disabled={busy || pass.length < 12}>
+      <button type="submit" className="mini" disabled={busy || pass === ""}>
         make a key
       </button>
       <Err text={error} />

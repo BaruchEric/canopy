@@ -67,6 +67,7 @@ const emptyInfo = (backend: string, gate: string, role: SecretsInfo["role"], err
   head: null,
   refused: null,
   lock: "none",
+  recipient: null,
   secrets: [],
   sinks: [],
   proposals: [],

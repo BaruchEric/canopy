@@ -2929,6 +2929,8 @@ export interface SecretsInfo {
   refused: string | null;
   /** this machine's age key: open, waiting for its passphrase, or none here */
   lock: "open" | "locked" | "none";
+  /** this machine's age recipient while its key is open (reader only); public, so it can be set as a machine key at any time */
+  recipient: string | null;
   secrets: SecretMeta[];
   sinks: SecretSinkInfo[];
   proposals: SecretProposalInfo[];

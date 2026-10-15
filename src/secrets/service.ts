@@ -461,6 +461,7 @@ export class SecretsService {
       head: s.head,
       refused: null,
       lock: "open",
+      recipient: null,
       secrets: metaList(f),
       sinks: Object.keys(f.sinks)
         .sort()
