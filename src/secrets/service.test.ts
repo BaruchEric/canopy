@@ -3,6 +3,7 @@ import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { Applied } from "../core/applied";
+import { mcpHash } from "../core/kit";
 import { newIdentity, openValue, sealProposal } from "../core/secretcrypt";
 import { emptyFile, type SecretFile } from "../core/secretfile";
 import { ACT_KINDS, LIMITS, type SecretAct, type SecretsReply } from "../core/secretwire";
@@ -71,7 +72,7 @@ beforeEach(async () => {
     audit,
     machine: "mini",
     gateUrl: "https://canopy.beric.ca/?view=secrets",
-    sinkRoots: [stacks],
+    sinkRoots: [stacks, join(dir, "home", ".claude", "mcp-env")],
     applied: { read: async () => structuredClone(applied), write: async (a) => void (applied = structuredClone(a)) },
     scan: async () => found,
     now: () => t,
@@ -287,5 +288,52 @@ describe("proposals", () => {
     expect((await svc.handle({ t: "propose", items: batch(1) })).ok).toBe(true);
     expect((await svc.handle({ t: "propose", items: batch(2) })).ok).toBe(true);
     expect((await svc.handle({ t: "propose", items: batch(3) })).ok).toBe(false);
+  });
+});
+
+describe("MCP allowances", () => {
+  const DEF = { command: "bunx", args: ["-y", "@modelcontextprotocol/server-github"], url: null, env: ["GITHUB_PERSONAL_ACCESS_TOKEN"], headers: [] };
+  const home = () => join(dir, "home");
+  const envFile = () => join(home(), ".claude", "mcp-env", "github.env");
+  const allow = async (over: Partial<Extract<SecretAct, { a: "mcp-allow" }>> = {}): Promise<SecretsReply> =>
+    act({ a: "mcp-allow", server: "github", hash: await mcpHash(DEF), def: DEF, env: { GITHUB_PERSONAL_ACCESS_TOKEN: "gh_token" }, headers: {}, homes: { mini: home(), mac: "/Users/e" }, ...over });
+
+  beforeEach(async () => {
+    await mkdir(join(home(), ".claude", "mcp-env"), { recursive: true });
+    await add("gh_token", V);
+    await ok({ a: "machine-key", machine: "mac", recipient: (await newIdentity()).recipient });
+    store.commits = [];
+  });
+
+  test("one commit adds the allow entry and both machines' sinks, and the mini's file is written", async () => {
+    expect((await allow()).ok).toBe(true);
+    expect(store.commits).toEqual(["secrets: allow MCP server github"]);
+    const e = store.file.secrets["gh_token"];
+    expect(e?.allow).toEqual([`mcp:github#${await mcpHash(DEF)}`, "sink:mcp-github-mac", "sink:mcp-github-mini"]);
+    expect(e?.to).toEqual(["breakglass", "mac", "mini"]);
+    expect(store.file.sinks["mcp-github-mac"]?.path).toBe("/Users/e/.claude/mcp-env/github.env");
+    expect(await readFile(envFile(), "utf8")).toContain(`GITHUB_PERSONAL_ACCESS_TOKEN=${V}`);
+    expect((await info()).sinks.find((s) => s.id === "mcp-github-mini")?.state).toEqual({ GITHUB_PERSONAL_ACCESS_TOKEN: "same" });
+  });
+
+  test("a hash that does not match its definition, gpd, and a home outside the roots are refused, with no commit", async () => {
+    expect(await allow({ hash: "b".repeat(64) })).toEqual({ ok: false, error: "the hash does not match the definition of github that came with it" });
+    const gpd = await allow({ homes: { gpd: "/home/eric" } });
+    expect(gpd.ok ? "" : gpd.error).toContain("phase 3");
+    const out = await allow({ homes: { mini: "/elsewhere" } });
+    expect(out.ok ? "" : out.error).toContain("outside");
+    expect(store.commits).toEqual([]);
+  });
+
+  test("revoke takes the allow entry and the sinks out in one commit; delete names the server until then", async () => {
+    await allow();
+    const refused = await act({ a: "delete", name: "gh_token" });
+    expect(refused.ok ? "" : refused.error).toBe("gh_token is used by mcp-github-mac, mcp-github-mini and the MCP server github; take it out of those first");
+    store.commits = [];
+    await ok({ a: "mcp-revoke", server: "github" });
+    expect(store.commits).toEqual(["secrets: revoke MCP server github"]);
+    expect(store.file.sinks).toEqual({});
+    expect(store.file.secrets["gh_token"]?.allow).toEqual([]);
+    await ok({ a: "delete", name: "gh_token" });
   });
 });

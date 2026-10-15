@@ -4,8 +4,8 @@
  * Every act needs a passkey session, so ACT_KINDS is the whole gated list.
  */
 
-import { AGE_HEAD, AGE_RECIPIENT, ALLOW, DOTENV_KEY, JSON_PATH, MACHINE, SECRET_NAME, SINK_ID } from "./secretfile";
-import type { SecretProposalIn, SecretSinkFormat } from "./types";
+import { AGE_HEAD, AGE_RECIPIENT, ALLOW, DOTENV_KEY, HASH_SRC, HEADER_NAME, JSON_PATH, MACHINE, MCP_SERVER, SECRET_NAME, SINK_ID } from "./secretfile";
+import type { KitMcpDef, SecretProposalIn, SecretSinkFormat } from "./types";
 
 export type GateKind = "login" | "register";
 
@@ -26,6 +26,9 @@ export type SecretAct =
   /** `value` only for a names-only proposal; `sink` makes the source a sink */
   | { a: "approve"; proposal: string; name: string; description: string; tags: string[]; value: string | null; sink: { id: string } | null }
   | { a: "reject"; proposal: string }
+  /** one server's allowance for every machine, with its env and headers sinks (phase 2) */
+  | { a: "mcp-allow"; server: string; hash: string; def: KitMcpDef; env: Record<string, string>; headers: Record<string, string>; homes: Record<string, string> }
+  | { a: "mcp-revoke"; server: string }
   /** a machine's age recipient (the Mac's, after `mac-key`); never the mini's */
   | { a: "machine-key"; machine: string; recipient: string }
   | { a: "passkey-remove"; id: string }
@@ -34,7 +37,7 @@ export type SecretAct =
 export type ActKind = SecretAct["a"];
 
 export const ACT_KINDS: readonly ActKind[] = [
-  "reveal", "add", "edit", "rotate", "delete", "allow", "sink-set", "sink-remove", "sink-write", "take",
+  "reveal", "add", "edit", "rotate", "delete", "allow", "sink-set", "sink-remove", "mcp-allow", "mcp-revoke", "sink-write", "take",
   "import-scan", "approve", "reject", "machine-key", "passkey-remove", "passkey-label",
 ];
 
@@ -79,10 +82,38 @@ const text = (v: unknown): v is string => typeof v === "string" && v.length <= L
 const tags = (v: unknown): v is string[] => Array.isArray(v) && v.length <= LIMITS.tags && v.every((t) => str(t, TAG));
 const absPath = (v: unknown): v is string => typeof v === "string" && v.startsWith("/") && v.length <= LIMITS.field && !v.split("/").includes("..");
 
+const HASH = new RegExp(`^${HASH_SRC}$`);
+
+/** the hashed part of a server, names sorted as the kit hashes them */
+function mcpDef(v: unknown): KitMcpDef | null {
+  if (!isObj(v)) return null;
+  const { command, args, url, env, headers } = v;
+  const names = (x: unknown, re: RegExp): string[] | null => (Array.isArray(x) && x.length <= 64 && x.every((s) => str(s, re)) ? x.map(String).sort() : null);
+  const argList = Array.isArray(args) && args.length <= 64 && args.every((s) => typeof s === "string" && s.length <= LIMITS.field) ? args.map(String) : null;
+  const e = names(env, DOTENV_KEY);
+  const h = names(headers, HEADER_NAME);
+  if (!argList || !e || !h) return null;
+  const cmd = command === null ? null : typeof command === "string" && command !== "" && command.length <= LIMITS.field ? command : undefined;
+  const link = url === null ? null : typeof url === "string" && /^https?:\/\//.test(url) && url.length <= 2048 ? url : undefined;
+  if (cmd === undefined || link === undefined || (cmd === null) === (link === null)) return null;
+  return { command: cmd, args: argList, url: link, env: e, headers: h };
+}
+
+/** names to secrets, every name one the definition holds */
+function nameMap(v: unknown, re: RegExp, within: readonly string[]): Record<string, string> | null {
+  if (!isObj(v) || Object.keys(v).length > 64) return null;
+  const out: Record<string, string> = {};
+  for (const [k, n] of Object.entries(v)) {
+    if (!re.test(k) || !within.includes(k) || !str(n, SECRET_NAME)) return null;
+    out[k] = n;
+  }
+  return out;
+}
+
 export function parseAct(v: unknown): SecretAct | { error: string } {
   if (!isObj(v)) return { error: "an act is an object" };
   // every field pulled into a const first, so each guard narrows it
-  const { a, name, id, key, machine, path, format, keys, allow, description, proposal, sink, recipient, label } = v;
+  const { a, name, id, key, machine, path, format, keys, allow, description, proposal, sink, recipient, label, server, hash, def, env, headers, homes } = v;
   const given = v["value"];
   const tagList = v["tags"];
   const bad = (what: string) => ({ error: `${String(a)}: ${what}` });
@@ -137,6 +168,22 @@ export function parseAct(v: unknown): SecretAct | { error: string } {
     }
     case "reject":
       return str(proposal, ID) ? { a, proposal } : bad("a proposal");
+    case "mcp-allow": {
+      const d = mcpDef(def);
+      if (!str(server, MCP_SERVER) || !str(hash, HASH) || !d) return bad("a server, a hash and the definition it covers");
+      const e = nameMap(env, DOTENV_KEY, d.env);
+      const h = nameMap(headers, HEADER_NAME, d.headers);
+      if (!e || !h || Object.keys(e).length + Object.keys(h).length === 0) return bad("env and headers mapping the definition's names to secrets");
+      if (!isObj(homes) || Object.keys(homes).length === 0 || Object.keys(homes).length > 8) return bad("the home of each machine");
+      const hs: Record<string, string> = {};
+      for (const [m, p] of Object.entries(homes)) {
+        if (!str(m, MACHINE) || !absPath(p)) return bad(`the home of ${m}`);
+        hs[m] = p;
+      }
+      return { a, server, hash, def: d, env: e, headers: h, homes: hs };
+    }
+    case "mcp-revoke":
+      return str(server, MCP_SERVER) ? { a, server } : bad("a server name");
     case "machine-key":
       return str(machine, MACHINE) && machine !== "mini" && machine !== "breakglass" && str(recipient, AGE_RECIPIENT)
         ? { a, machine, recipient }

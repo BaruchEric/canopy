@@ -242,6 +242,9 @@ export const reachList = (r: SecretImpact): string[] => [...r.sinks.map((s) => s
 export const joinList = (parts: string[]): string => (parts.length > 1 ? `${parts.slice(0, -1).join(", ")} and ${parts[parts.length - 1]}` : (parts[0] ?? ""));
 
 /** the reach in one line, for a refused delete */
+/** why a secret cannot be deleted while something reaches it */
+export const reachRefusal = (name: string, r: SecretImpact): string => `${reachText(name, r)}; take it out of those first`;
+
 export function reachText(name: string, r: SecretImpact): string {
   const parts = reachList(r);
   return parts.length === 0 ? `${name} is used by nothing` : `${name} is used by ${joinList(parts)}`;

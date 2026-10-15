@@ -8,8 +8,10 @@
 
 import { randomBytes } from "node:crypto";
 import type { Applied } from "../core/applied";
+import { mcpHash } from "../core/kit";
 import { openProposal, openValue, resealValue, sameValue, sealProposal, sealValue } from "../core/secretcrypt";
-import { DOTENV_KEY, JSON_PATH, metaList, nowStamp, recipientKeys, recipientsFor, usedBy, type SecretFile, type SinkDef } from "../core/secretfile";
+import { DOTENV_KEY, JSON_PATH, metaList, impactOf, mcpEnvPath, nowStamp, reachRefusal, recipientKeys, recipientsFor, usedBy, type SecretFile, type SinkDef } from "../core/secretfile";
+import { mcpAllowFile, mcpRevokeFile } from "../core/secretmcp";
 import { formatOf, suggestName, type Found } from "../core/secretimport";
 import { LIMITS, PASSKEY, type SecretAct, type SecretsReply, type SecretsRequest } from "../core/secretwire";
 import { applyKeys, readKeys } from "../core/sinks";
@@ -78,6 +80,9 @@ function subject(act: SecretAct): string | null {
       return act.name;
     case "reject":
       return act.proposal;
+    case "mcp-allow":
+    case "mcp-revoke":
+      return act.server;
     case "machine-key":
       return act.machine;
     case "import-scan":
@@ -171,8 +176,8 @@ export class SecretsService {
         return this.change(await this.withValue(f, act.name, act.value, null), `secrets: rotate ${act.name}`);
       case "delete": {
         if (!f.secrets[act.name]) return fail(`no secret named ${act.name}`);
-        const users = usedBy(f, act.name);
-        if (users.length > 0) return fail(`${act.name} is used by ${users.join(", ")}; take it out of those sinks first`);
+        const reach = impactOf(f, act.name);
+        if (reach.sinks.length > 0 || reach.servers.length > 0) return fail(reachRefusal(act.name, reach));
         const secrets = Object.fromEntries(Object.entries(f.secrets).filter(([n]) => n !== act.name));
         return this.change({ ...f, secrets }, `secrets: delete ${act.name}`);
       }
@@ -188,6 +193,23 @@ export class SecretsService {
       case "sink-remove":
         if (!f.sinks[act.id]) return fail(`no sink named ${act.id}`);
         return this.setSink(f, act.id, null, `secrets: remove sink ${act.id}`);
+      case "mcp-allow": {
+        // the hash the allow entry carries must be the one the human saw for this definition
+        if ((await mcpHash(act.def)) !== act.hash) return fail(`the hash does not match the definition of ${act.server} that came with it`);
+        const own = act.homes[this.d.machine];
+        if (own !== undefined) {
+          const refused = this.rootRefusal(mcpEnvPath(own, act.server));
+          if (refused) return fail(refused);
+        }
+        const next = mcpAllowFile(f, act);
+        if ("error" in next) return fail(next.error);
+        return this.change(next.file, `secrets: allow MCP server ${act.server}`);
+      }
+      case "mcp-revoke": {
+        const next = mcpRevokeFile(f, act.server);
+        if ("error" in next) return fail(next.error);
+        return this.change(next.file, `secrets: revoke MCP server ${act.server}`);
+      }
       case "sink-write":
         return this.forceWrite(act.id, act.key);
       case "take":

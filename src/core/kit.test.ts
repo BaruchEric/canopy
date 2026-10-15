@@ -203,6 +203,12 @@ describe("mcpHash", () => {
     expect(await mcpHash(DEF)).toBe(want);
     expect(await mcpHash({ headers: [], env: DEF.env, url: null, args: DEF.args, command: "bunx" })).toBe(want);
   });
+  test("sorts the env and header names itself, so the caller need not", async () => {
+    const a = { ...DEF, env: ["B_TOKEN", "A_TOKEN"], headers: ["X-B", "Authorization"] };
+    const b = { ...DEF, env: ["A_TOKEN", "B_TOKEN"], headers: ["Authorization", "X-B"] };
+    expect(await mcpHash(a)).toBe(await mcpHash(b));
+    expect(a.env).toEqual(["B_TOKEN", "A_TOKEN"]);
+  });
   test("changes with each hashed field", async () => {
     const base = await mcpHash(DEF);
     for (const d of [

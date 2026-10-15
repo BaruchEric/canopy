@@ -78,7 +78,7 @@ export function expandHome(path: string, home: string): string {
  *  the names-only definition, so the same on every machine. WebCrypto, so
  *  the page and the server compute it alike. */
 export async function mcpHash(def: KitMcpDef): Promise<string> {
-  const bytes = new TextEncoder().encode(canonical({ command: def.command, args: def.args, url: def.url, env: def.env, headers: def.headers }));
+  const bytes = new TextEncoder().encode(canonical({ command: def.command, args: def.args, url: def.url, env: [...def.env].sort(), headers: [...def.headers].sort() }));
   const d = new Uint8Array(await crypto.subtle.digest("SHA-256", bytes));
   return [...d].map((b) => b.toString(16).padStart(2, "0")).join("");
 }
