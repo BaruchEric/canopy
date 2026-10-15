@@ -1,10 +1,13 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { appendFileSync, mkdtempSync, readFileSync, rmSync, statSync, utimesSync, writeFileSync } from "node:fs";
+import { appendFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readlinkSync, rmSync, statSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { exec, onHost } from "./exec";
+import { applyKit } from "./kitapply";
 import { fakeClaude } from "./kitfake";
-import { claudeRemove, claudeSet, codexBlocks, codexServers, inplaceWrite, MARKER, spliceCodex, STAT_FN, type McpIO } from "./kitmcp";
+import { applyMcp, claudeRemove, claudeSet, codexBlocks, codexServers, inplaceWrite, MARKER, spliceCodex, STAT_FN, type McpIO } from "./kitmcp";
+import { MCP_SCAN_SCRIPT, parseMcpScan } from "./kitscan";
+import type { KitAction, KitMcpEntry, KitMcpSeen, KitSeen } from "./types";
 
 let dirs: string[] = [];
 afterEach(() => {
@@ -179,5 +182,150 @@ describe("the claude CLI writer", () => {
     const why = await claudeSet(io("add-once"), claude, "github", want, old);
     expect(why).toContain("Invalid configuration");
     expect(why).not.toContain("efgh-PROBE");
+  });
+});
+
+describe("applyMcp", () => {
+  const HAND = { type: "stdio", command: "bash", args: ["-c", "GITHUB_PERSONAL_ACCESS_TOKEN=$(gh auth token) exec bunx -y @modelcontextprotocol/server-github"] };
+  const KIT_GH = { type: "stdio", command: "/h/.claude/bin/canopy-mcp-env", args: ["github", "--", "bunx", "-y", "@modelcontextprotocol/server-github"] };
+  const FORMATS = { claude: "claude-json", codex: "codex-toml" } as const;
+
+  async function machine(hand: KitMcpEntry = HAND): Promise<{ h: string; io: McpIO; log: string; rescan: () => Promise<KitMcpSeen> }> {
+    const h = scratch();
+    const claude = fakeClaude(h);
+    const log = join(h, "argv.log");
+    mkdirSync(join(h, ".claude"));
+    mkdirSync(join(h, ".codex"));
+    writeFileSync(join(h, ".claude.json"), JSON.stringify({ mcpServers: { github: hand } }));
+    writeFileSync(join(h, ".codex", "config.toml"), ORIG);
+    const io: McpIO = { run: onHost, host: null, env: { HOME: h, KIT_CLAUDE: claude, FAKE_CLAUDE_LOG: log } };
+    const rescan = async () => {
+      const r = await exec(["sh", "-c", MCP_SCAN_SCRIPT, "s", "m", "claude", "~/.claude.json", "m", "codex", "~/.codex/config.toml"], { env: io.env });
+      return parseMcpScan(r.stdout, FORMATS);
+    };
+    return { h, io, log, rescan };
+  }
+  const servers = (h: string) => (JSON.parse(readFileSync(join(h, ".claude.json"), "utf8")) as { mcpServers: Record<string, unknown> }).mcpServers;
+  const ownedPath = (h: string) => join(h, ".claude", ".canopy-kit-mcp.json");
+  const owned = (h: string) => JSON.parse(readFileSync(ownedPath(h), "utf8")) as unknown;
+
+  test("set writes both agents and records ownership, 0600", async () => {
+    const { h, io, rescan } = await machine();
+    const ex = { type: "stdio", command: "npx", args: ["-y", "excalidraw-render"] };
+    const r = await applyMcp(await rescan(), h, [
+      { kind: "mcp-set", agent: "claude", name: "excalidraw" },
+      { kind: "mcp-set", agent: "codex", name: "wiki-memory" },
+    ], { "claude/excalidraw": ex, "codex/wiki-memory": { command: "bash", args: ["/w.sh"] } }, FORMATS, io);
+    expect(r.failed).toEqual([]);
+    expect(servers(h)["excalidraw"]).toEqual(ex);
+    expect(readFileSync(join(h, ".codex", "config.toml"), "utf8").startsWith(ORIG)).toBe(true);
+    expect(owned(h)).toEqual({ placed: { claude: ["excalidraw"], codex: ["wiki-memory"] }, adoptedFrom: {} });
+    expect(statSync(ownedPath(h)).mode & 0o777).toBe(0o600);
+  });
+
+  test("adopt keeps the hand-made entry, and put back restores it exactly", async () => {
+    const { h, io, rescan } = await machine();
+    const adopt = await applyMcp(await rescan(), h, [{ kind: "mcp-adopt", agent: "claude", name: "github" }], { "claude/github": KIT_GH }, FORMATS, io);
+    expect(adopt.failed).toEqual([]);
+    expect(servers(h)["github"]).toEqual(KIT_GH);
+    expect(owned(h)).toEqual({ placed: { claude: ["github"] }, adoptedFrom: { claude: { github: HAND } } });
+    // the kept entry stays on that machine: the result names the action only
+    expect(JSON.stringify(adopt)).not.toContain("adoptedFrom");
+    expect(JSON.stringify(adopt)).not.toContain("gh auth token");
+    const back = await applyMcp(await rescan(), h, [{ kind: "mcp-restore", agent: "claude", name: "github" }], {}, FORMATS, io);
+    expect(back.failed).toEqual([]);
+    expect(servers(h)["github"]).toEqual(HAND);
+    expect(owned(h)).toEqual({ placed: { claude: [] }, adoptedFrom: { claude: {} } });
+  });
+
+  test("a config.toml that moved fails its actions and records nothing for them (review focus 4)", async () => {
+    const { h, io, rescan } = await machine();
+    const seen = await rescan();
+    appendFileSync(join(h, ".codex", "config.toml"), "# codex wrote this\n");
+    const r = await applyMcp(seen, h, [{ kind: "mcp-set", agent: "codex", name: "wiki-memory" }], { "codex/wiki-memory": { command: "bash" } }, FORMATS, io);
+    expect(r.failed.map((f) => f.why)).toEqual(["config.toml changed since the scan; rescan and apply again"]);
+    expect(readFileSync(join(h, ".codex", "config.toml"), "utf8")).toBe(`${ORIG}# codex wrote this\n`);
+    expect(existsSync(ownedPath(h))).toBe(false);
+  });
+
+  test("a file the scan could not read is never written, whichever agent's (review focus 4)", async () => {
+    const { h, io, log, rescan } = await machine();
+    const seen = await rescan();
+    // what STAT_FN prints when cksum cannot read the file
+    for (const f of seen.files) f.stamp = f.stamp.replace(/\S+$/, "?");
+    const before = readFileSync(join(h, ".claude.json"), "utf8");
+    const r = await applyMcp(seen, h, [
+      { kind: "mcp-set", agent: "codex", name: "wiki-memory" },
+      { kind: "mcp-set", agent: "claude", name: "excalidraw" },
+    ], { "codex/wiki-memory": { command: "bash" }, "claude/excalidraw": { command: "npx" } }, FORMATS, io);
+    expect(r.done).toEqual([]);
+    expect(r.failed.map((f) => f.why)).toEqual(["config.toml is not readable here; left as it is", "~/.claude.json is not readable here; left as it is"]);
+    expect(readFileSync(join(h, ".codex", "config.toml"), "utf8")).toBe(ORIG);
+    expect(readFileSync(join(h, ".claude.json"), "utf8")).toBe(before);
+    expect(existsSync(log)).toBe(false);
+    expect(existsSync(ownedPath(h))).toBe(false);
+  });
+
+  test("set, remove and adopt keep to what canopy owns: a hand-made entry stays", async () => {
+    const { h, io, log, rescan } = await machine();
+    const r = await applyMcp(await rescan(), h, [
+      { kind: "mcp-set", agent: "claude", name: "github" },
+      { kind: "mcp-remove", agent: "claude", name: "github" },
+      { kind: "mcp-restore", agent: "claude", name: "github" },
+    ], { "claude/github": KIT_GH }, FORMATS, io);
+    expect(r.done).toEqual([]);
+    expect(r.failed.map((f) => f.why)).toEqual([
+      "a hand-made entry canopy did not write; adopt it instead",
+      "a hand-made entry canopy did not write; left as it is",
+      "canopy keeps no hand-made entry for it",
+    ]);
+    expect(servers(h)["github"]).toEqual(HAND);
+    expect(existsSync(log)).toBe(false);
+    const adopted = await applyMcp(await rescan(), h, [{ kind: "mcp-adopt", agent: "claude", name: "github" }], { "claude/github": KIT_GH }, FORMATS, io);
+    expect(adopted.failed).toEqual([]);
+    // a second adopt would keep canopy's own entry as the hand-made one
+    const again = await applyMcp(await rescan(), h, [{ kind: "mcp-adopt", agent: "claude", name: "github" }], { "claude/github": KIT_GH }, FORMATS, io);
+    expect(again.failed.map((f) => f.why)).toEqual(["canopy manages it already"]);
+    expect(owned(h)).toEqual({ placed: { claude: ["github"] }, adoptedFrom: { claude: { github: HAND } } });
+  });
+
+  test("a put back that fails says so without the kept entry's values, and keeps it for another try", async () => {
+    const lit = { type: "stdio", command: "bash", env: { TOKEN: "literal-value-0x43" } };
+    const { h, io, rescan } = await machine(lit);
+    expect((await applyMcp(await rescan(), h, [{ kind: "mcp-adopt", agent: "claude", name: "github" }], { "claude/github": KIT_GH }, FORMATS, io)).failed).toEqual([]);
+    const failing: McpIO = { ...io, env: { ...io.env, FAKE_CLAUDE_FAIL: "add" } };
+    const back = await applyMcp(await rescan(), h, [{ kind: "mcp-restore", agent: "claude", name: "github" }], {}, FORMATS, failing);
+    expect(back.done).toEqual([]);
+    expect(back.failed.map((f) => f.why)[0]).toStartWith("Invalid configuration");
+    expect(JSON.stringify(back)).not.toContain("literal-value-0x43");
+    expect(owned(h)).toEqual({ placed: { claude: ["github"] }, adoptedFrom: { claude: { github: lit } } });
+  });
+
+  test("applyKit sends skills to the skills script and MCP actions here, merged in the order asked", async () => {
+    const { h, io, rescan } = await machine();
+    mkdirSync(join(h, ".claude", "skills", "ship"), { recursive: true });
+    const seen: KitSeen = { machine: "mac", at: 1, away: null, home: h, store: null, targets: [{ agent: "claude", dir: join(h, ".claude", "skills"), exists: true, parentExists: true, entries: [], placed: {} }], sources: {} };
+    const setClaude: KitAction = { kind: "mcp-set", agent: "claude", name: "excalidraw" };
+    const linkShip: KitAction = { kind: "link", agent: "claude", name: "ship", link: "../../x/ship" };
+    const setCodex: KitAction = { kind: "mcp-set", agent: "codex", name: "wiki-memory" };
+    const linkOther: KitAction = { kind: "link", agent: "claude", name: "other", link: "../../x/other" };
+    const r = await applyKit(seen, null, [setClaude, linkShip, setCodex, linkOther], {
+      env: io.env,
+      mcp: { seen: await rescan(), entries: { "claude/excalidraw": { command: "npx" }, "codex/wiki-memory": { command: "bash" } }, formats: FORMATS },
+    });
+    expect(r).toEqual({ machine: "mac", done: [setClaude, setCodex, linkOther], failed: [{ action: linkShip, why: "exists" }] });
+    expect(readlinkSync(join(h, ".claude", "skills", "other"))).toBe("../../x/other");
+    expect(servers(h)["excalidraw"]).toEqual({ command: "npx" });
+    expect(owned(h)).toEqual({ placed: { claude: ["excalidraw"], codex: ["wiki-memory"] }, adoptedFrom: {} });
+  });
+
+  test("applyKit without an MCP scan fails only the MCP actions", async () => {
+    const { h, io } = await machine();
+    mkdirSync(join(h, ".claude", "skills"));
+    const seen: KitSeen = { machine: "mac", at: 1, away: null, home: h, store: null, targets: [{ agent: "claude", dir: join(h, ".claude", "skills"), exists: true, parentExists: true, entries: [], placed: {} }], sources: {} };
+    const set: KitAction = { kind: "mcp-set", agent: "claude", name: "excalidraw" };
+    const link: KitAction = { kind: "link", agent: "claude", name: "other", link: "../../x/other" };
+    const r = await applyKit(seen, null, [set, link], { env: io.env });
+    expect(r).toEqual({ machine: "mac", done: [link], failed: [{ action: set, why: "no MCP scan for this machine; rescan" }] });
   });
 });

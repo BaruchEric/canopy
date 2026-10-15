@@ -9,7 +9,7 @@
  */
 
 import { firstLine, type onHost } from "./exec";
-import type { KitMcpEntry } from "./types";
+import type { KitAction, KitMcpAction, KitMcpEntry, KitMcpFormat, KitMcpSeen } from "./types";
 
 export const MARKER = "# canopy-kit: managed";
 
@@ -238,4 +238,132 @@ export async function claudeSet(io: McpIO, claude: string, name: string, entry: 
 export async function claudeRemove(io: McpIO, claude: string, name: string, old: KitMcpEntry | null): Promise<string | null> {
   const r = await io.run(io.host, [claude, "mcp", "remove", "--scope", "user", name], { env: io.env, timeoutMs: 60_000 });
   return r.code === 0 ? null : scrub(firstLine(r.stderr), [old]) || `claude mcp remove exited ${r.code}`;
+}
+
+
+/** writes ~/.claude/.canopy-kit-mcp.json from stdin, 0600. ~/.claude is a
+ *  folder mount on the mini, not a single-file one, so a rename inside it
+ *  is safe there and the file is never seen half written. */
+const OWNED_WRITE = `f=$1
+umask 077
+cat > "$f.tmp-$$" && mv -f "$f.tmp-$$" "$f" && chmod 600 "$f" && echo ok`;
+
+type Failed = { action: KitAction; why: string };
+
+const fileLabel = (format: KitMcpFormat): string => (format === "claude-json" ? "~/.claude.json" : "config.toml");
+
+/** Carry out MCP actions on one machine. Claude's go one by one through
+ *  its CLI; each Codex file is spliced in memory and written once, so a
+ *  file that moved fails every action on it and changes nothing. A set or
+ *  remove touches only what canopy wrote, an adopt only what it did not.
+ *  The ownership file is written last, from what was done, and never
+ *  leaves this machine: the result names actions only. */
+export async function applyMcp(mcp: KitMcpSeen, home: string, actions: KitMcpAction[], entries: Record<string, KitMcpEntry>, formats: Record<string, KitMcpFormat>, io: McpIO): Promise<{ done: KitAction[]; failed: Failed[] }> {
+  const done: KitAction[] = [];
+  const failed: Failed[] = [];
+  const placed: Record<string, string[]> = structuredClone(mcp.owned.placed);
+  const adoptedFrom: KitMcpSeen["owned"]["adoptedFrom"] = structuredClone(mcp.owned.adoptedFrom);
+  const codex = new Map<string, { text: string; actions: KitMcpAction[]; owned: (() => void)[] }>();
+  const own = (agent: string, name: string, on: boolean) => {
+    const p = (placed[agent] ??= []).filter((n) => n !== name);
+    placed[agent] = on ? [...p, name].sort() : p;
+  };
+
+  for (const a of actions) {
+    const file = mcp.files.find((f) => f.agent === a.agent);
+    const format = formats[a.agent];
+    if (!file || !format) {
+      failed.push({ action: a, why: `${a.agent} has no MCP file here` });
+      continue;
+    }
+    // "?" is STAT_FN's word for a part it could not read; such a file's
+    // text read as empty, and writing from it would replace the file
+    if (file.stamp.includes("?")) {
+      failed.push({ action: a, why: `${fileLabel(format)} is not readable here; left as it is` });
+      continue;
+    }
+    if (file.entries === null) {
+      failed.push({ action: a, why: file.error ?? `${fileLabel(format)} does not parse` });
+      continue;
+    }
+    const current = file.entries[a.name] ?? null;
+    const mine = (mcp.owned.placed[a.agent] ?? []).includes(a.name);
+    const want = entries[`${a.agent}/${a.name}`] ?? null;
+    const before = adoptedFrom[a.agent]?.[a.name] ?? null;
+    const refuse =
+      (a.kind === "mcp-set" || a.kind === "mcp-adopt") && !want ? "nothing to write for it; rescan"
+      : a.kind === "mcp-set" && current && !mine ? "a hand-made entry canopy did not write; adopt it instead"
+      : a.kind === "mcp-remove" && current && !mine ? "a hand-made entry canopy did not write; left as it is"
+      : a.kind === "mcp-adopt" && mine ? "canopy manages it already"
+      : a.kind === "mcp-adopt" && !current ? "no hand-made entry to adopt; rescan"
+      : a.kind === "mcp-restore" && !before ? "canopy keeps no hand-made entry for it"
+      : null;
+    if (refuse) {
+      failed.push({ action: a, why: refuse });
+      continue;
+    }
+    const record = () => {
+      if (a.kind === "mcp-set") own(a.agent, a.name, true);
+      else if (a.kind === "mcp-remove") own(a.agent, a.name, false);
+      else if (a.kind === "mcp-adopt" && current) {
+        own(a.agent, a.name, true);
+        (adoptedFrom[a.agent] ??= {})[a.name] = current;
+      } else if (a.kind === "mcp-restore") {
+        own(a.agent, a.name, false);
+        delete (adoptedFrom[a.agent] ??= {})[a.name];
+      }
+    };
+    if (format === "claude-json") {
+      if (!mcp.claude) {
+        failed.push({ action: a, why: "no claude binary found here" });
+        continue;
+      }
+      // put back sends the kept entry, which may hold a literal value,
+      // through add-json's argv; claudeSet scrubs what comes back
+      const why =
+        a.kind === "mcp-remove" ? (current ? await claudeRemove(io, mcp.claude, a.name, current) : null)
+        : a.kind === "mcp-restore" ? await claudeSet(io, mcp.claude, a.name, before ?? {}, current)
+        : await claudeSet(io, mcp.claude, a.name, want ?? {}, current);
+      if (why) failed.push({ action: a, why });
+      else {
+        record();
+        done.push(a);
+      }
+      continue;
+    }
+    const c = codex.get(file.path) ?? { text: file.text, actions: [], owned: [] };
+    codex.set(file.path, c);
+    const how = a.kind === "mcp-adopt" ? "adopt" : a.kind === "mcp-restore" ? "restore" : "kit";
+    const next = spliceCodex(c.text, a.name, a.kind === "mcp-remove" ? null : a.kind === "mcp-restore" ? before : want, how);
+    if ("error" in next) {
+      failed.push({ action: a, why: next.error });
+      continue;
+    }
+    c.text = next.text;
+    c.actions.push(a);
+    c.owned.push(record);
+  }
+
+  for (const [path, c] of codex) {
+    if (c.actions.length === 0) continue;
+    const file = mcp.files.find((f) => f.path === path);
+    const why = await inplaceWrite(io, path, file?.stamp ?? "", c.text);
+    if (why) for (const a of c.actions) failed.push({ action: a, why });
+    else {
+      for (const r of c.owned) r();
+      done.push(...c.actions);
+    }
+  }
+
+  if (done.length > 0) {
+    const r = await io.run(io.host, ["sh", "-c", OWNED_WRITE, "kit-owned", `${home}/.claude/${OWNED_FILE}`], {
+      env: io.env, input: `${JSON.stringify({ placed, adoptedFrom }, null, 2)}\n`, timeoutMs: 30_000,
+    });
+    if (r.stdout.trim() !== "ok") {
+      const kept = Object.values(adoptedFrom).flatMap((x) => Object.values(x));
+      const why = `written, but ~/.claude/${OWNED_FILE} was not: ${scrub(firstLine(r.stderr), [...Object.values(entries), ...kept]) || `exited ${r.code}`}`;
+      return { done: [], failed: [...failed, ...done.map((action) => ({ action, why }))] };
+    }
+  }
+  return { done, failed };
 }
