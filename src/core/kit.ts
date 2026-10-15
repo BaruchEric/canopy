@@ -467,14 +467,19 @@ function mcpRows(kit: KitManifest, seen: KitSeen, ctx: KitMcpCtx): McpRow[] {
         else if (known) out.push(row(name, "off", ""));
         continue;
       }
+      // a written server comes out only on positive knowledge (not allowed,
+      // allowed for an older definition, or dropped from the manifest above);
+      // anything else that keeps it from being written keeps what it has
+      const kept = (why: string) => (owned && have ? `${why}; keeps what it has` : have ? `${why}; a hand-made entry is there` : why);
       const built = buildEntry(s, t.agent, t.mcp.format, ctx.home, ctx.env);
       if ("state" in built) {
-        out.push(row(name, built.state, built.why, remove));
+        out.push(row(name, built.state, kept(built.why)));
         continue;
       }
       const ready = serverReady(s, seen.machine, ctx);
       if ("state" in ready) {
-        out.push(row(name, ready.state, have && !owned ? `${ready.why}; a hand-made entry is there` : ready.why, remove));
+        const unwanted = ready.state === "not-allowed" || ready.state === "stale-allowance";
+        out.push(unwanted ? row(name, ready.state, have && !owned ? `${ready.why}; a hand-made entry is there` : ready.why, remove) : row(name, ready.state, kept(ready.why)));
         continue;
       }
       if ("waiting" in ready) {
@@ -513,11 +518,26 @@ const SECRETISH = /token|secret|password|passwd|auth|bearer|cookie|key/i;
 const LONG = /[A-Za-z0-9_\-+/=]{24,}/g;
 const DOT = "•••";
 /** a run of 24 or more token characters holding both a digit and a letter reads as a token */
-const maskText = (v: string): string => v.replace(LONG, (m) => (/\d/.test(m) && /[A-Za-z]/.test(m) ? DOT : m));
+/** a url's userinfo, up to the last @ before the host's end */
+const USERINFO = /([a-z][a-z0-9+.-]*:\/\/)[^\s/?#]*@/gi;
+const maskText = (v: string): string =>
+  v.replace(USERINFO, `$1${DOT}@`).replace(LONG, (m) => (/\d/.test(m) && /[A-Za-z]/.test(m) ? DOT : m));
+/** a header written as one arg, `Name: value` */
+const HEADER_ARG = /^([A-Za-z][A-Za-z0-9_-]*):\s/;
 const maskArg = (v: string): string => {
   const i = v.indexOf("=");
-  return i > 0 && SECRETISH.test(v.slice(0, i)) ? `${v.slice(0, i + 1)}${DOT}` : maskText(v);
+  if (i > 0 && SECRETISH.test(v.slice(0, i))) return `${v.slice(0, i + 1)}${DOT}`;
+  const h = HEADER_ARG.exec(v);
+  if (h && SECRETISH.test(h[1] ?? "")) return `${h[1]}: ${DOT}`;
+  return maskText(v);
 };
+/** args with the word after a secret-named flag (`--api-key VALUE`) hidden whole */
+const maskArgs = (xs: unknown[]): unknown[] =>
+  xs.map((x, i) => {
+    const prev = xs[i - 1];
+    if (typeof x === "string" && typeof prev === "string" && prev.startsWith("-") && !prev.includes("=") && SECRETISH.test(prev)) return DOT;
+    return typeof x === "string" ? maskArg(x) : isObj(x) ? maskEntry(x) : x;
+  });
 function maskUrl(u: string): string {
   const i = u.indexOf("?");
   if (i < 0) return maskText(u);
@@ -526,7 +546,8 @@ function maskUrl(u: string): string {
 }
 
 /** An entry with every value that could be a secret hidden: env and
- *  header values, url query values, `name=` args and options whose name
+ *  header values, a url's userinfo and query values, `name=` args, the
+ *  word after a `--name` flag, `Name: value` args and options whose name
  *  says token, and anything token-shaped. Names stay. For the adopt
  *  preview, which may show a hand-made entry holding a literal value. */
 export function maskEntry(e: KitMcpEntry): KitMcpEntry {
@@ -535,7 +556,7 @@ export function maskEntry(e: KitMcpEntry): KitMcpEntry {
     if (["env", "headers", "http_headers", "env_http_headers"].includes(k) && isObj(v)) out[k] = Object.fromEntries(Object.keys(v).map((n) => [n, DOT]));
     else if (k === "url" && typeof v === "string") out[k] = maskUrl(v);
     else if (typeof v === "string") out[k] = SECRETISH.test(k) && !k.endsWith("_env_var") && k !== "headersHelper" ? DOT : maskText(v);
-    else if (Array.isArray(v)) out[k] = v.map((x) => (typeof x === "string" ? maskArg(x) : isObj(x) ? maskEntry(x) : x));
+    else if (Array.isArray(v)) out[k] = maskArgs(v);
     else out[k] = isObj(v) ? maskEntry(v) : v;
   }
   return out;

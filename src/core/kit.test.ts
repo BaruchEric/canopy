@@ -506,3 +506,76 @@ describe("MCP planning", () => {
     expect(cellsOf(k, [{ seen: seen(), dev: "/Users/e/dev", ctx: c }]).some((x) => x.kind === "mcp")).toBe(true);
   });
 });
+
+describe("MCP planning keeps a written server unless it is known to be unwanted", () => {
+  const WRITTEN = { github: { type: "stdio", command: WRAP, args: GH_ARGS } };
+  const OWNED = { placed: { claude: ["github"] } };
+  const removes = (r: { actions: KitAction[] }, name = "github") => kinds(r).filter((x) => x === `mcp-remove claude/${name}`);
+  const keeps = async (label: string, reason: string, over: CtxOver, edit: (c: KitMcpCtx) => void = () => {}) => {
+    const k = mkit();
+    const c = await mctx(k, { ...over, claude: WRITTEN, owned: OWNED });
+    edit(c);
+    expect(removes(planMcp(k, seen(), c)), label).toEqual([]);
+    const why = mcell(mcpCells(k, seen(), c), "claude", "github")?.why ?? "";
+    expect(why, label).toContain(reason);
+    expect(why, label).toContain("keeps what it has");
+    const fresh = await mctx(k, over);
+    edit(fresh);
+    expect(kinds(planMcp(k, seen(), fresh)), label).not.toContain("mcp-set claude/github");
+  };
+
+  test("the store cannot be read", async () => {
+    await keeps("unreadable", "this backend cannot read the secret store", {}, (c) => { c.secrets = { ...c.secrets!, ok: false }; });
+  });
+  test("its sink has an error", async () => {
+    await keeps("sink error", "sink mcp-github-mac: boom", {}, (c) => { c.secrets!.sinks[0]!.error = "boom"; });
+  });
+  test("its sink reads drift, as it does after every rotate until the writer's next pass", async () => {
+    await keeps("drift", "sink mcp-github-mac reads drift", { sink: "drift" });
+  });
+  test("its sink reads unknown", async () => {
+    await keeps("unknown", "sink mcp-github-mac reads unknown", { sink: "unknown" });
+  });
+  test("dotclaude does not ignore mcp-env here", async () => {
+    await keeps("ignored", "dotclaude does not ignore mcp-env/ here", { ignored: false });
+  });
+  test("the wrapper is missing", async () => {
+    await keeps("wrapper", "~/.claude/bin/canopy-mcp-env is missing", { wrapper: false });
+  });
+  test("an ${env:} reference does not resolve", async () => {
+    const r = parseKit({ ...MCP_RAW, mcp: { x: { command: "a", env: { T: "${env:NOT_SET_HERE}" } } } });
+    if ("errors" in r) throw new Error(r.errors.join());
+    const c = await mctx(r.kit, { claude: { x: { type: "stdio", command: "a", args: [], env: { T: "v" } } }, owned: { placed: { claude: ["x"] } } });
+    expect(removes(planMcp(r.kit, seen(), c), "x")).toEqual([]);
+    const why = mcell(mcpCells(r.kit, seen(), c), "claude", "x")?.why ?? "";
+    expect(why).toContain("${env:NOT_SET_HERE} is not set for canopy here");
+    expect(why).toContain("keeps what it has");
+    expect(kinds(planMcp(r.kit, seen(), await mctx(r.kit)))).not.toContain("mcp-set claude/x");
+  });
+  test("not allowed (revoked) and allowed for an older definition still take it out", async () => {
+    const k = mkit();
+    for (const allow of ["none", "old"] as const) {
+      const c = await mctx(k, { allow, claude: WRITTEN, owned: OWNED });
+      expect(removes(planMcp(k, seen(), c)), allow).toEqual(["mcp-remove claude/github"]);
+    }
+  });
+});
+
+describe("maskEntry hides a secret wherever an arg or a url carries it", () => {
+  test("the word after a secret-named flag", () => {
+    const m = maskEntry({ command: "x", args: ["--api-key", "s3cret99", "-y", "plain"] });
+    expect(JSON.stringify(m)).not.toContain("s3cret99");
+    expect(m["args"]).toEqual(["--api-key", "•••", "-y", "plain"]);
+  });
+  test("the value of a secret-named Name: value arg", () => {
+    const m = maskEntry({ command: "x", args: ["-H", "Authorization: Bearer abc123def", "-H", "Accept: text/plain"] });
+    expect(JSON.stringify(m)).not.toContain("abc123def");
+    expect(m["args"]).toEqual(["-H", "Authorization: •••", "-H", "Accept: text/plain"]);
+  });
+  test("a url's userinfo, in the url field and in an arg", () => {
+    const m = maskEntry({ url: "https://user:pa55word@h.example/mcp", args: ["https://tok3n@git.example/x"] });
+    expect(JSON.stringify(m)).not.toContain("pa55word");
+    expect(JSON.stringify(m)).not.toContain("tok3n");
+    expect(m).toEqual({ url: "https://•••@h.example/mcp", args: ["https://•••@git.example/x"] });
+  });
+});
