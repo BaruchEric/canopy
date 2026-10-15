@@ -283,6 +283,14 @@ describe("the mcp block", () => {
     expect(errs({ ["a".repeat(32)]: { command: "a", env: { A: "${secret:gh_token}" } } }, { machines: long })).toContain("too long");
   });
 
+  test("an mcp block that is not an object, and filters naming no agent or machine, are errors (final review 4)", () => {
+    for (const bad of [[], null, "github", 5]) expect(errs(bad)).toBe("mcp: an object of server name to definition");
+    expect(errs({ x: { command: "a", agents: ["claud"] } })).toBe("mcp.x: agents names claud, which no target with an mcp file declares");
+    expect(errs({ x: { command: "a", agents: ["hermes"] } })).toBe("mcp.x: agents names hermes, which no target with an mcp file declares");
+    expect(errs({ x: { command: "a", machines: ["mac", "macbook"] } })).toBe("mcp.x: machines names macbook, which machines does not declare");
+    expect(errs({ x: { command: "a", agents: ["codex"], machines: ["mini"] } })).toBe("");
+  });
+
   test("an mcp target fits its agent, and Claude's is ~/.claude.json", () => {
     const one = (mcp: unknown) => {
       const r = parseKit({ ...RAW, targets: [{ agent: "claude", skills: "~/.claude/skills", mode: "store", mcp }] });

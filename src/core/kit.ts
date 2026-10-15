@@ -45,7 +45,7 @@ export const mcpDefOf = (s: KitMcpServer): KitMcpDef => ({
   command: s.command, args: [...s.args], url: s.url, env: Object.keys(s.env).sort(), headers: Object.keys(s.headers).sort(),
 });
 
-function parseServer(name: string, s: Record<string, unknown>, machines: KitMachine[], errors: string[]): KitMcpServer | null {
+function parseServer(name: string, s: Record<string, unknown>, machines: KitMachine[], targets: KitTarget[], errors: string[]): KitMcpServer | null {
   const at = `mcp.${name}`;
   const fail = (why: string): null => {
     errors.push(`${at}: ${why}`);
@@ -78,6 +78,11 @@ function parseServer(name: string, s: Record<string, unknown>, machines: KitMach
   const agents = s["agents"] === undefined ? null : strs(s["agents"]);
   const ms = s["machines"] === undefined ? null : strs(s["machines"]);
   if ((s["agents"] !== undefined && !agents) || (s["machines"] !== undefined && !ms)) return fail("agents and machines are lists of names");
+  // a name that matches nothing would quietly keep the server off everywhere it was meant for
+  const noAgent = agents?.find((a) => !targets.some((t) => t.agent === a && t.mcp !== null));
+  if (noAgent !== undefined) return fail(`agents names ${noAgent}, which no target with an mcp file declares`);
+  const noMachine = ms?.find((m) => !machines.some((x) => x.name === m));
+  if (noMachine !== undefined) return fail(`machines names ${noMachine}, which machines does not declare`);
   const options: Record<string, Record<string, KitMcpOption>> = {};
   const rawOpts = s["options"] === undefined ? {} : s["options"];
   if (!isObj(rawOpts)) return fail("options is an object of agent to fields");
@@ -165,9 +170,11 @@ export function parseKit(raw: unknown): { kit: KitManifest } | { errors: string[
     only[name] = entry;
   }
   const mcp: KitMcpServer[] = [];
+  // dropped quietly, a block that is not an object would plan the removal of every server canopy wrote
+  if (raw["mcp"] !== undefined && !isObj(raw["mcp"])) errors.push("mcp: an object of server name to definition");
   for (const [name, s] of Object.entries(isObj(raw["mcp"]) ? raw["mcp"] : {})) {
     if (!MCP_NAME.test(name) || !isObj(s)) { errors.push(`mcp.${name}: bad name or not an object`); continue; }
-    const server = parseServer(name, s, machines, errors);
+    const server = parseServer(name, s, machines, targets, errors);
     if (server) mcp.push(server);
   }
   if (errors.length) return { errors };
