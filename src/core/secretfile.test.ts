@@ -4,8 +4,13 @@ import {
   canonical,
   emptyFile,
   fileProblems,
+  impactOf,
+  mcpEnvPath,
+  mcpSinkId,
   metaOf,
+  parseMcpAllow,
   parseSecretFile,
+  reachText,
   recipientsFor,
   serializeFile,
   signFile,
@@ -142,5 +147,47 @@ describe("recipients and problems", () => {
     const m = metaOf(fixture(), "cloudflare_token");
     expect(JSON.stringify(m)).not.toContain(AGE_HEAD);
     expect(m?.usedBy).toEqual([]);
+  });
+});
+
+describe("a secret's reach", () => {
+  const H = "a".repeat(64);
+  function reach(): SecretFile {
+    const f = fixture();
+    f.secrets["gh_token"] = { description: "", tags: [], created: STAMP, rotated: STAMP, to: ["breakglass", "mac", "mini"], allow: [`mcp:github#${H}`, "sink:dev-env", "sink:mcp-github-mac", "sink:mcp-github-mini"], value: SEALED };
+    f.sinks["dev-env"] = { machine: "mini", path: "/opt/stacks/dev/.env", format: "dotenv", keys: { GH_TOKEN: "gh_token", OTHER: "cloudflare_token" }, restart: "dev" };
+    f.sinks["mcp-github-mac"] = { machine: "mac", path: mcpEnvPath("/Users/e", "github"), format: "dotenv", keys: { GITHUB_PERSONAL_ACCESS_TOKEN: "gh_token" } };
+    f.sinks["mcp-github-mini"] = { machine: "mini", path: mcpEnvPath("/home/eric", "github"), format: "dotenv", keys: { GITHUB_PERSONAL_ACCESS_TOKEN: "gh_token" } };
+    return f;
+  }
+
+  test("ids and paths for a server's sinks", () => {
+    expect(mcpSinkId("github", "mac")).toBe("mcp-github-mac");
+    expect(mcpSinkId("hook", "mini", true)).toBe("mcp-hook-mini-headers");
+    expect(mcpEnvPath("/home/eric/", "github")).toBe("/home/eric/.claude/mcp-env/github.env");
+    expect(mcpEnvPath("/Users/e", "hook", true)).toBe("/Users/e/.claude/mcp-env/hook.headers.json");
+    expect(parseMcpAllow(`mcp:github#${H}`)).toEqual({ server: "github", hash: H });
+    expect(parseMcpAllow("sink:dns")).toBeNull();
+  });
+
+  test("lists every sink by machine with its keys, every server with the machines holding its env sink, and the stacks", () => {
+    expect(impactOf(reach(), "gh_token")).toEqual({
+      sinks: [
+        { id: "dev-env", machine: "mini", path: "/opt/stacks/dev/.env", keys: ["GH_TOKEN"] },
+        { id: "mcp-github-mac", machine: "mac", path: "/Users/e/.claude/mcp-env/github.env", keys: ["GITHUB_PERSONAL_ACCESS_TOKEN"] },
+        { id: "mcp-github-mini", machine: "mini", path: "/home/eric/.claude/mcp-env/github.env", keys: ["GITHUB_PERSONAL_ACCESS_TOKEN"] },
+      ],
+      servers: [{ server: "github", hash: H, machines: ["mac", "mini"] }],
+      stacks: ["dev"],
+    });
+    expect(impactOf(reach(), "cloudflare_token").servers).toEqual([]);
+    expect(impactOf(reach(), "gone")).toEqual({ sinks: [], servers: [], stacks: [] });
+  });
+
+  test("metadata carries the reach; the words name sinks and servers", () => {
+    const r = impactOf(reach(), "gh_token");
+    expect(metaOf(reach(), "gh_token")?.impact).toEqual(r);
+    expect(reachText("gh_token", r)).toBe("gh_token is used by dev-env, mcp-github-mac, mcp-github-mini and the MCP server github");
+    expect(reachText("x", { sinks: [], servers: [], stacks: [] })).toBe("x is used by nothing");
   });
 });

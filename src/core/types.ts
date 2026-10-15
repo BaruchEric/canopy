@@ -2837,6 +2837,18 @@ export interface KitApplyResult {
   failed: { action: KitAction; why: string }[];
 }
 
+/** The part of an MCP server the definition hash covers (phase 2 spec,
+ *  "The definition hash"): names only, as the manifest writes them. */
+export interface KitMcpDef {
+  command: string | null;
+  args: string[];
+  url: string | null;
+  /** sorted env names */
+  env: string[];
+  /** sorted header names */
+  headers: string[];
+}
+
 /* ---------- the secret store (docs/superpowers/specs/2026-10-14-secrets-design.md) ---------- */
 
 export type SecretSinkFormat = "dotenv" | "json";
@@ -2855,6 +2867,19 @@ export interface SecretMeta {
   allow: string[];
   /** the sinks that map a key to it */
   usedBy: string[];
+  /** every sink, MCP server and stack a change to it reaches (phase 2); absent from a backend before it */
+  impact?: SecretImpact;
+}
+
+/** A secret's reach (phase 2 spec, "Rotation's reach"): what a rotation
+ *  writes, and what still uses it when a delete is refused. */
+export interface SecretImpact {
+  /** each sink that maps it, with the file keys that do */
+  sinks: { id: string; machine: string; path: string; keys: string[] }[];
+  /** each MCP server it is allowed for, with the machines holding that server's env sink */
+  servers: { server: string; hash: string; machines: string[] }[];
+  /** the distinct `restart` stacks of those sinks */
+  stacks: string[];
 }
 
 /** One sink key as its owner sees it. `waiting`: the owner's key is locked

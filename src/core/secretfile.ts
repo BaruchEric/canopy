@@ -5,7 +5,7 @@
  * is the only thing it calls, and Bun and the browser both have it.
  */
 
-import type { SecretMeta, SecretSinkFormat } from "./types";
+import type { SecretImpact, SecretMeta, SecretSinkFormat } from "./types";
 
 export const AGE_HEAD = "-----BEGIN AGE ENCRYPTED FILE-----";
 /** a letter first, so no name is an integer-like key that JSON reorders */
@@ -14,7 +14,15 @@ export const SINK_ID = /^[a-z][a-z0-9-]{0,62}$/;
 export const MACHINE = /^[a-z][a-z0-9-]{0,29}$/;
 export const DOTENV_KEY = /^[A-Za-z_][A-Za-z0-9_]{0,127}$/;
 export const JSON_PATH = /^[A-Za-z_][A-Za-z0-9_-]*(\.[A-Za-z_][A-Za-z0-9_-]*){0,15}$/;
-export const ALLOW = /^(sink:[a-z][a-z0-9-]{0,62}|mcp:[a-z0-9][a-z0-9._-]{0,63}#[0-9a-f]{64})$/;
+/** the server part of an `mcp:<server>#<hash>` entry, and the hash part: one source each */
+export const MCP_SERVER_SRC = "[a-z0-9][a-z0-9._-]{0,63}";
+export const HASH_SRC = "[0-9a-f]{64}";
+export const ALLOW = new RegExp(`^(sink:[a-z][a-z0-9-]{0,62}|mcp:${MCP_SERVER_SRC}#${HASH_SRC})$`);
+const MCP_ALLOW = new RegExp(`^mcp:(${MCP_SERVER_SRC})#(${HASH_SRC})$`);
+/** a kit MCP server that may hold secrets: its sink ids must pass SINK_ID */
+export const MCP_SERVER = /^[a-z][a-z0-9-]{0,31}$/;
+/** an http header a secret can fill; also a one-segment JSON_PATH */
+export const HEADER_NAME = /^[A-Za-z][A-Za-z0-9-]{0,63}$/;
 /** an X25519 recipient; a post-quantum one is longer and not taken yet */
 export const AGE_RECIPIENT = /^age1[02-9ac-hj-np-z]{58}$/;
 const STAMP = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d{3})?Z$/;
@@ -191,6 +199,54 @@ export function usedBy(f: SecretFile, name: string): string[] {
     .sort();
 }
 
+/** the sink that carries one MCP server's env, or its headers, on one machine */
+export const mcpSinkId = (server: string, machine: string, headers = false): string => `mcp-${server}-${machine}${headers ? "-headers" : ""}`;
+
+/** where that sink lives under a machine's home */
+export const mcpEnvPath = (home: string, server: string, headers = false): string =>
+  `${home.replace(/\/+$/, "")}/.claude/mcp-env/${server}${headers ? ".headers.json" : ".env"}`;
+
+export function parseMcpAllow(entry: string): { server: string; hash: string } | null {
+  const m = MCP_ALLOW.exec(entry);
+  return m ? { server: m[1] ?? "", hash: m[2] ?? "" } : null;
+}
+
+/** whether a sink id is one of this server's env or headers sinks on that machine */
+export const isServerSink = (id: string, server: string, machine: string): boolean =>
+  id === mcpSinkId(server, machine) || id === mcpSinkId(server, machine, true);
+
+/** Everything a change to `name` reaches: its sinks, the MCP servers its
+ *  allowlist names with the machines holding their env sinks, and the
+ *  stacks those sinks restart. */
+export function impactOf(f: SecretFile, name: string): SecretImpact {
+  const sinks = usedBy(f, name).flatMap((id) => {
+    const s = f.sinks[id];
+    if (!s) return [];
+    const keys = Object.entries(s.keys).filter(([, n]) => n === name).map(([k]) => k).sort();
+    return [{ id, machine: s.machine, path: s.path, keys }];
+  });
+  const servers = (f.secrets[name]?.allow ?? []).flatMap((a) => {
+    const p = parseMcpAllow(a);
+    if (!p) return [];
+    const machines = [...new Set(Object.entries(f.sinks).filter(([id, s]) => isServerSink(id, p.server, s.machine)).map(([, s]) => s.machine))].sort();
+    return [{ server: p.server, hash: p.hash, machines }];
+  });
+  const stacks = [...new Set(sinks.flatMap((s) => f.sinks[s.id]?.restart ?? []))].sort();
+  return { sinks, servers, stacks };
+}
+
+/** the reach as a list of names: sink ids, then "the MCP server <name>" */
+export const reachList = (r: SecretImpact): string[] => [...r.sinks.map((s) => s.id), ...r.servers.map((s) => `the MCP server ${s.server}`)];
+
+/** a list joined as "a, b and c" */
+export const joinList = (parts: string[]): string => (parts.length > 1 ? `${parts.slice(0, -1).join(", ")} and ${parts[parts.length - 1]}` : (parts[0] ?? ""));
+
+/** the reach in one line, for a refused delete */
+export function reachText(name: string, r: SecretImpact): string {
+  const parts = reachList(r);
+  return parts.length === 0 ? `${name} is used by nothing` : `${name} is used by ${joinList(parts)}`;
+}
+
 /** The machines a value is sealed to: the mini and the break-glass key
  *  always, and each machine that owns a sink using it. The Mac writes gpd's
  *  sinks (phase 3), so a gpd sink adds the Mac. Sorted. */
@@ -232,7 +288,7 @@ export function fileProblems(f: SecretFile): string[] {
 export function metaOf(f: SecretFile, name: string): SecretMeta | null {
   const e = f.secrets[name];
   if (!e) return null;
-  return { name, description: e.description, tags: [...e.tags], created: e.created, rotated: e.rotated, to: [...e.to], allow: [...e.allow], usedBy: usedBy(f, name) };
+  return { name, description: e.description, tags: [...e.tags], created: e.created, rotated: e.rotated, to: [...e.to], allow: [...e.allow], usedBy: usedBy(f, name), impact: impactOf(f, name) };
 }
 
 export const metaList = (f: SecretFile): SecretMeta[] =>
