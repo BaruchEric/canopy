@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { existsSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { parseKit, planKit } from "./kit";
@@ -157,6 +157,38 @@ describe("the MCP scan", () => {
       expect(c).toMatchObject({ agent: "claude", path: join(h, ".claude.json"), exists: true, entries: { excalidraw: { type: "stdio", command: "npx" } }, error: null });
       expect(c?.stamp).toMatch(/^\d+ \d+ \d+$/);
       expect(x).toMatchObject({ agent: "codex", entries: { node_repl: { command: "node" } } });
+    } finally {
+      rmSync(h, { recursive: true, force: true });
+    }
+  });
+
+  test("an ownership file that does not parse, is not an object or cannot be read is an error; J is the ignore probe (final review 3, 9)", () => {
+    const b64 = (x: string) => Buffer.from(x).toString("base64");
+    const scan = (o: string | null, j = "1") => parseMcpScan(["C\t", "I\t1", "W\t1", `J\t${j}`, ...(o === null ? [] : [`O\t${o}`])].join("\n"), {});
+    const why = "~/.claude/.canopy-kit-mcp.json cannot be read or does not parse; fix or remove it by hand, since a write would lose what it records";
+    for (const bad of [b64('{"placed": {"claude": ["git'), b64("[]"), b64("null"), b64(""), "?"]) expect(scan(bad).ownedError).toBe(why);
+    expect(scan(b64('{"placed": {}, "adoptedFrom": {}}')).ownedError ?? null).toBeNull();
+    expect(scan(null).ownedError ?? null).toBeNull();
+    expect(scan(null).ownedIgnored).toBe(true);
+    expect(scan(null, "0").ownedIgnored).toBe(false);
+  });
+
+  test("the scan probes git's ignore for the ownership file, and marks one it cannot read", async () => {
+    const h = mkdtempSync(join(tmpdir(), "mcpscan-"));
+    try {
+      await exec(["git", "init", "-q", join(h, ".claude")]);
+      writeFileSync(join(h, ".claude", ".gitignore"), "mcp-env/\n");
+      const o = join(h, ".claude", ".canopy-kit-mcp.json");
+      writeFileSync(o, JSON.stringify({ placed: {}, adoptedFrom: {} }));
+      const env = { HOME: h, KIT_CLAUDE: fakeClaude(h) };
+      const open = await seeMcp(mkKit(), { name: "mac", host: null }, { env });
+      expect(open?.ownedIgnored).toBe(false);
+      expect(open?.ownedError ?? null).toBeNull();
+      writeFileSync(join(h, ".claude", ".gitignore"), "mcp-env/\n.canopy-kit-mcp.json\n");
+      chmodSync(o, 0o000);
+      const shut = await seeMcp(mkKit(), { name: "mac", host: null }, { env });
+      expect(shut?.ownedIgnored).toBe(true);
+      expect(shut?.ownedError).toContain("cannot be read or does not parse");
     } finally {
       rmSync(h, { recursive: true, force: true });
     }

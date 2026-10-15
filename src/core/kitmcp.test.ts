@@ -6,7 +6,7 @@ import { exec, onHost } from "./exec";
 import { applyKit } from "./kitapply";
 import { fakeClaude } from "./kitfake";
 import { applyMcp, claudeRemove, claudeSet, codexBlocks, codexServers, inplaceWrite, MARKER, spliceCodex, STAT_FN, type McpIO } from "./kitmcp";
-import { MCP_SCAN_SCRIPT, parseMcpScan } from "./kitscan";
+import { MCP_SCAN_SCRIPT, OWNED_ERROR, parseMcpScan } from "./kitscan";
 import type { KitAction, KitMcpAction, KitMcpEntry, KitMcpSeen, KitSeen } from "./types";
 
 let dirs: string[] = [];
@@ -236,6 +236,23 @@ describe("applyMcp", () => {
     expect(back.failed).toEqual([]);
     expect(servers(h)["github"]).toEqual(HAND);
     expect(owned(h)).toEqual({ placed: { claude: [] }, adoptedFrom: { claude: {} } });
+  });
+
+  test("an ownership file that does not parse fails every action and writes nothing (final review 3)", async () => {
+    const { h, io, log, rescan } = await machine();
+    writeFileSync(ownedPath(h), '{"placed": {"claude": ["git');
+    const seen = await rescan();
+    const before = readFileSync(join(h, ".claude.json"), "utf8");
+    const r = await applyMcp(seen, h, [
+      { kind: "mcp-adopt", agent: "claude", name: "github" },
+      { kind: "mcp-set", agent: "codex", name: "wiki-memory" },
+    ], { "claude/github": KIT_GH, "codex/wiki-memory": { command: "bash" } }, FORMATS, io);
+    expect(r.done).toEqual([]);
+    expect(r.failed.map((f) => f.why)).toEqual([OWNED_ERROR, OWNED_ERROR]);
+    expect(readFileSync(join(h, ".claude.json"), "utf8")).toBe(before);
+    expect(readFileSync(join(h, ".codex", "config.toml"), "utf8")).toBe(ORIG);
+    expect(readFileSync(ownedPath(h), "utf8")).toBe('{"placed": {"claude": ["git');
+    expect(existsSync(log)).toBe(false);
   });
 
   test("a config.toml that moved fails its actions and records nothing for them (review focus 4)", async () => {

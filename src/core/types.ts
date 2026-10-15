@@ -2923,6 +2923,10 @@ export interface KitMcpSeen {
   /** ~/.claude/bin/canopy-mcp-env is there and runs */
   wrapper: boolean;
   owned: KitMcpOwned;
+  /** the ownership file is there but cannot be read or does not parse: no MCP write here, since its save would drop what it records */
+  ownedError?: string | null;
+  /** dotclaude's git ignores the ownership file, which adopt fills with hand-made entries */
+  ownedIgnored?: boolean;
   files: KitMcpFileSeen[];
 }
 

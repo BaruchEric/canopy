@@ -3,7 +3,7 @@
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { onHost } from "../core/exec";
-import { cellsOf, hasSecrets, maskEntry, mcpDefOf, mcpHash, mcpTargets, mcpWanted, parseKit, planKit, planMcp, secretsOf } from "../core/kit";
+import { cellsOf, hasSecrets, maskEntry, OWNED_NOT_IGNORED, mcpDefOf, mcpHash, mcpTargets, mcpWanted, parseKit, planKit, planMcp, secretsOf } from "../core/kit";
 import { applyKit } from "../core/kitapply";
 import { seeKit, seeMcp } from "../core/kitscan";
 import type {
@@ -258,6 +258,7 @@ export class KitHub {
   adopt(machine: string, agent: string, names?: string[]): Promise<KitApplyResult> {
     return this.serial(machine, async () => {
       this.reach(machine);
+      if (this.views.get(machine)?.mcp?.ownedIgnored === false) throw new KitError(`adopt keeps the hand-made entry in ~/.claude/.canopy-kit-mcp.json, and ${OWNED_NOT_IGNORED}`, 409);
       const all = this.last.cells.filter((c) => c.kind === "mcp" && c.machine === machine && c.agent === agent);
       const pick = [...new Set(names ?? all.filter((c) => c.state === "adoptable").map((c) => c.skill))];
       if (pick.length === 0) throw new KitError(`nothing to adopt for ${agent} on ${machine}`, 409);

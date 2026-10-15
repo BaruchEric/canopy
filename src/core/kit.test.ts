@@ -332,6 +332,8 @@ interface CtxOver {
   wrapper?: boolean;
   ssh?: boolean;
   env?: Record<string, string>;
+  ownedError?: string;
+  ownedIgnored?: boolean;
 }
 async function mctx(k: KitManifest, o: CtxOver = {}): Promise<KitMcpCtx> {
   const hashes: Record<string, string> = {};
@@ -344,6 +346,8 @@ async function mctx(k: KitManifest, o: CtxOver = {}): Promise<KitMcpCtx> {
       claude: "/Users/e/.local/bin/claude", ignored: o.ignored ?? true, wrapper: o.wrapper ?? true,
       owned: { placed: {}, adoptedFrom: {}, ...o.owned },
       files: [file("claude", "/Users/e/.claude.json", o.claude), file("codex", "/Users/e/.codex/config.toml", o.codex)],
+      ...(o.ownedError !== undefined ? { ownedError: o.ownedError } : {}),
+      ...(o.ownedIgnored !== undefined ? { ownedIgnored: o.ownedIgnored } : {}),
     },
     hashes, secrets: secretsInfo(allow, o.sink === undefined ? "same" : o.sink), home: "/Users/e", env: o.env ?? {}, ssh: o.ssh ?? false,
   };
@@ -401,6 +405,25 @@ describe("MCP planning", () => {
     expect(mcell(cells, "claude", "hook")).toMatchObject({ state: "not-allowed", kind: "mcp" });
     expect(mcell(cells, "codex", "hook")?.state).toBe("unsupported");
     expect(mcell(cells, "codex", "excalidraw")?.state).toBe("off");
+  });
+
+  test("an ownership file that does not parse plans no MCP write, and every server cell says why (final review 3)", async () => {
+    const k = mkit();
+    const why = "~/.claude/.canopy-kit-mcp.json cannot be read or does not parse; fix or remove it by hand";
+    const c = await mctx(k, { ownedError: why, claude: { github: { type: "stdio", command: WRAP, args: GH_ARGS } } });
+    expect(planMcp(k, seen(), c).actions).toEqual([]);
+    const cells = mcpCells(k, seen(), c);
+    expect(mcell(cells, "claude", "github")).toMatchObject({ state: "drift", why });
+    expect(mcell(cells, "claude", "excalidraw")).toMatchObject({ state: "drift", why });
+    expect(mcell(cells, "codex", "executor")).toMatchObject({ state: "drift", why });
+  });
+
+  test("an adoptable cell says adopt waits while dotclaude does not ignore the ownership file (final review 9)", async () => {
+    const k = mkit();
+    const hand = { github: { type: "stdio", command: "bash", args: ["-c", "x"] } };
+    expect(mcell(mcpCells(k, seen(), await mctx(k, { claude: hand })), "claude", "github")?.why).toBe("a hand-made entry; adopt shows both");
+    const c = mcell(mcpCells(k, seen(), await mctx(k, { claude: hand, ownedIgnored: false })), "claude", "github");
+    expect(c).toMatchObject({ state: "adoptable", why: "a hand-made entry; adopt waits: dotclaude does not ignore .canopy-kit-mcp.json here; pull dotclaude" });
   });
 
   test("not allowed, or allowed for an older definition: no write, and a written one comes out (review focus 2)", async () => {

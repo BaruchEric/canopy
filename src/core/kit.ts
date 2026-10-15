@@ -330,6 +330,9 @@ export function cellsOf(kit: KitManifest, views: { seen: KitSeen; dev: string; c
 
 export const WRAPPER = "~/.claude/bin/canopy-mcp-env";
 
+/** why adopt waits: it keeps a hand-made entry in ~/.claude/.canopy-kit-mcp.json */
+export const OWNED_NOT_IGNORED = "dotclaude does not ignore .canopy-kit-mcp.json here; pull dotclaude";
+
 export const isMcpAction = (a: KitAction): a is KitMcpAction => a.kind.startsWith("mcp-");
 
 export const mcpTargets = (kit: KitManifest, machine: string): (KitTarget & { mcp: KitMcpTarget })[] =>
@@ -445,8 +448,9 @@ function mcpRows(kit: KitManifest, seen: KitSeen, ctx: KitMcpCtx): McpRow[] {
     const mine = kit.mcp.filter((s) => mcpWanted(s, t.agent, seen.machine));
     const row = (name: string, state: KitCellState, why: string, extra: Partial<McpRow> = {}): McpRow =>
       ({ agent: t.agent, name, state, why, want: null, restore: name in adopted, action: null, ...extra });
-    if (!file || file.entries === null) {
-      for (const s of mine) out.push(row(s.name, "drift", file?.error ?? `${t.mcp.file} was not read`));
+    if (!file || file.entries === null || ctx.mcp.ownedError) {
+      const why = ctx.mcp.ownedError || (file?.error ?? `${t.mcp.file} was not read`);
+      for (const s of mine) out.push(row(s.name, "drift", why));
       continue;
     }
     if (t.mcp.format === "claude-json" && !ctx.mcp.claude) {
@@ -491,7 +495,12 @@ function mcpRows(kit: KitManifest, seen: KitSeen, ctx: KitMcpCtx): McpRow[] {
       const want = built.entry;
       const set: KitAction = { kind: "mcp-set", agent: t.agent, name };
       if (!have) out.push(row(name, "missing", "", { want, action: set }));
-      else if (!owned) out.push(row(name, "adoptable", sameEntry(have, want) ? "a hand-made entry the same as the kit's; adopt to manage it" : "a hand-made entry; adopt shows both", { want }));
+      else if (!owned) {
+        const hand = sameEntry(have, want) ? "a hand-made entry the same as the kit's" : "a hand-made entry";
+        // adopt keeps the hand-made entry, which may hold a value, in the ownership file
+        const why = ctx.mcp.ownedIgnored === false ? `${hand}; adopt waits: ${OWNED_NOT_IGNORED}` : sameEntry(have, want) ? `${hand}; adopt to manage it` : `${hand}; adopt shows both`;
+        out.push(row(name, "adoptable", why, { want }));
+      }
       else if (sameEntry(have, want)) out.push(row(name, "ok", "", { want }));
       else out.push(row(name, "drift", "differs from kit.json; apply writes the kit's version", { want, action: set }));
     }

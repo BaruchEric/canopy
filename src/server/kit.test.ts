@@ -291,6 +291,19 @@ describe("KitHub and MCP servers", () => {
     expect(Object.keys(owned.adoptedFrom.claude ?? {})).toEqual(["github"]);
   });
 
+  test("adopt and adopt all are refused while dotclaude does not ignore the ownership file (final review 9)", async () => {
+    const { h, hub, allow, route, claudeServers } = await setupMcp();
+    writeFileSync(join(h, ".claude", ".gitignore"), "mcp-env/\n");
+    await allow();
+    await hub.scan();
+    for (const body of [{ machine: "mac", agent: "claude", names: ["github"] }, { machine: "mac", agent: "claude" }]) {
+      const r = await route("POST", "/api/kit/adopt", body);
+      expect(r.status).toBe(409);
+      expect(r.text).toContain("dotclaude does not ignore .canopy-kit-mcp.json here");
+    }
+    expect(claudeServers()["github"]).toEqual(HAND);
+  });
+
   test("the host's home is what the kit writes; the scan still reads under HOME (ruling 6)", async () => {
     const { h, hub, allow, route } = await setupMcp();
     await allow();

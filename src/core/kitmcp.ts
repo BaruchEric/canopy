@@ -293,6 +293,8 @@ export async function applyMcp(mcp: KitMcpSeen, home: string, actions: KitMcpAct
     return `the hand-made entry could not be kept in ~/.claude/${OWNED_FILE}; left as it is: ${why}`;
   };
 
+  // read as empty, the ownership file's next save would wipe what it records
+  if (mcp.ownedError) return { done, failed: actions.map((action) => ({ action, why: mcp.ownedError ?? "" })) };
   for (const a of actions) {
     const file = mcp.files.find((f) => f.agent === a.agent);
     const format = formats[a.agent];

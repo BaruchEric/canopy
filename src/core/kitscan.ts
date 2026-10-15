@@ -168,8 +168,9 @@ export async function seeKit(
 }
 
 /** args: `m <agent> <file>` per MCP target. Prints tab lines: C the claude
- *  path (absolute, or empty), I 1 when dotclaude ignores mcp-env/, W 1 when
- *  the wrapper runs, O the ownership file as base64, M agent path stamp
+ *  path (absolute, or empty), I 1 when dotclaude ignores mcp-env/, J 1 when
+ *  it ignores the ownership file, W 1 when the wrapper runs, O the
+ *  ownership file as base64 (? when it cannot be read), M agent path stamp
  *  base64 per file (stamp and text empty when it is missing). The text
  *  goes out as base64 on one line, so no value is ever parsed by sh. */
 export const MCP_SCAN_SCRIPT = `${EXP}
@@ -183,10 +184,14 @@ c=$(abs "\${KIT_CLAUDE:-}")
 printf 'C\\t%s\\n' "$c"
 i=0; git -C "$HOME/.claude" check-ignore -q mcp-env/probe.env 2>/dev/null && i=1
 printf 'I\\t%s\\n' "$i"
+j=0; git -C "$HOME/.claude" check-ignore -q ${OWNED_FILE} 2>/dev/null && j=1
+printf 'J\\t%s\\n' "$j"
 w=0; [ -x "$HOME/.claude/bin/canopy-mcp-env" ] && w=1
 printf 'W\\t%s\\n' "$w"
 o="$HOME/.claude/${OWNED_FILE}"
-[ -f "$o" ] && printf 'O\\t%s\\n' "$(b64 "$o")"
+if [ -f "$o" ]; then
+  if [ -r "$o" ]; then printf 'O\\t%s\\n' "$(b64 "$o")"; else printf 'O\\t?\\n'; fi
+fi
 while [ $# -ge 3 ]; do
   a=$2; p=$(exp "$3"); shift 3
   if [ -f "$p" ]; then printf 'M\\t%s\\t%s\\t%s\\t%s\\n' "$a" "$p" "$(st "$p")" "$(b64 "$p")"
@@ -200,14 +205,18 @@ export const mcpScanArgs = (kit: KitManifest, machine: string): string[] =>
 const unb64 = (s: string): string => Buffer.from(s, "base64").toString("utf8");
 const isObj = (v: unknown): v is Record<string, unknown> => typeof v === "object" && v !== null && !Array.isArray(v);
 
-function ownedOf(text: string): KitMcpOwned {
+export const OWNED_ERROR = `~/.claude/${OWNED_FILE} cannot be read or does not parse; fix or remove it by hand, since a write would lose what it records`;
+
+/** null for a file that is not an object of JSON: read as empty, the next save would wipe adoptedFrom */
+function ownedOf(text: string): KitMcpOwned | null {
   try {
-    const j = JSON.parse(text) as { placed?: unknown; adoptedFrom?: unknown };
+    const j: unknown = JSON.parse(text);
+    if (!isObj(j)) return null;
     const placed = isObj(j.placed) ? Object.fromEntries(Object.entries(j.placed).filter(([, v]) => Array.isArray(v)).map(([k, v]) => [k, (v as unknown[]).filter((x): x is string => typeof x === "string")])) : {};
     const adoptedFrom = isObj(j.adoptedFrom) ? (Object.fromEntries(Object.entries(j.adoptedFrom).filter(([, v]) => isObj(v))) as KitMcpOwned["adoptedFrom"]) : {};
     return { placed, adoptedFrom };
   } catch {
-    return { placed: {}, adoptedFrom: {} };
+    return null;
   }
 }
 
@@ -230,7 +239,13 @@ export function parseMcpScan(stdout: string, formats: Record<string, KitMcpForma
       case "C": seen.claude = f[1]?.startsWith("/") ? f[1] : null; break;
       case "I": seen.ignored = f[1] === "1"; break;
       case "W": seen.wrapper = f[1] === "1"; break;
-      case "O": seen.owned = ownedOf(unb64(f[1] ?? "")); break;
+      case "J": seen.ownedIgnored = f[1] === "1"; break;
+      case "O": {
+        const o = f[1] === "?" ? null : ownedOf(unb64(f[1] ?? ""));
+        if (o) seen.owned = o;
+        else seen.ownedError = OWNED_ERROR;
+        break;
+      }
       case "M": {
         const agent = f[1] ?? "";
         const format = formats[agent];
