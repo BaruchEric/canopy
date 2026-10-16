@@ -36,9 +36,22 @@ const GIT_CONFIG_PAIR = /^GIT_CONFIG_(COUNT|KEY_\d+|VALUE_\d+)$/;
 /** whether an incubator stage's process goes without the variable */
 export const stageDrops = (name: string): boolean => STAGE_DROPPED.includes(name) || GIT_CONFIG_PAIR.test(name) || name.startsWith("TAILCHAN_");
 
-/** `env` without what a stage's process never gets, and without unset entries */
-export function stageEnv(env: Readonly<Record<string, string | undefined>>): Record<string, string> {
+/** What a landing gate's process never gets, and the setup a branch run
+ *  starts with: all a stage goes without, every `CANOPY_` setting of the
+ *  server's own (its config dir, its tmux server, the stage and secret
+ *  sockets, where it binds) and its `NODE_ENV`. A gate runs the repo's own
+ *  lines over a branch an agent wrote, with nobody asked first, so it gets
+ *  neither canopy's logins nor its live state. */
+export const gateDrops = (name: string): boolean => stageDrops(name) || name.startsWith("CANOPY_") || name === "NODE_ENV";
+
+function keep(env: Readonly<Record<string, string | undefined>>, drops: (name: string) => boolean): Record<string, string> {
   const out: Record<string, string> = {};
-  for (const [k, v] of Object.entries(env)) if (v !== undefined && !stageDrops(k)) out[k] = v;
+  for (const [k, v] of Object.entries(env)) if (v !== undefined && !drops(k)) out[k] = v;
   return out;
 }
+
+/** `env` without what a stage's process never gets, and without unset entries */
+export const stageEnv = (env: Readonly<Record<string, string | undefined>>): Record<string, string> => keep(env, stageDrops);
+
+/** `env` without what a gate's process never gets, and without unset entries */
+export const gateEnv = (env: Readonly<Record<string, string | undefined>>): Record<string, string> => keep(env, gateDrops);

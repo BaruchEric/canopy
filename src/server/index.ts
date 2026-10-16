@@ -41,7 +41,7 @@ import {
 } from "../core/history";
 import { browseLocal, browseRemote, expandHome, SshError } from "../core/browse";
 import { builtinCheck, isBuiltinCheck } from "../core/builtincheck";
-import { runCheck } from "../core/check";
+import { runCheck, runGate } from "../core/check";
 import { exec, git, onHost, setSeedGit } from "../core/exec";
 import { fleetSkipReason, Flows } from "../core/flow";
 import { INHERITED_ENV, SECRET_ENV, isKeystroke, isTermId, parseTermMessage, Scrollback, shellArgs, startTerm, termPlace, termSize, type TermSession, type TermSize } from "../core/term";
@@ -817,7 +817,7 @@ async function startBranchRun(state: ServerState, repo: Repo, action: RunAction,
     if (gatesWhy) say(`no setup run: ${gatesWhy}`);
     if (!setup) return;
     say(`$ ${setup}`);
-    const r = await runCheck({ path: dir }, setup);
+    const r = await runGate(dir, setup);
     if (r.exit !== 0) throw new Error(`${setup} exited ${r.exit ?? "on a signal"}${r.output ? `: ${r.output.split("\n").slice(-3).join(" ")}` : ""}`);
   };
   try {
@@ -4352,7 +4352,7 @@ export async function startServer(opts: {
       broadcast: (ev) => broadcast(state, ev),
       repo: (id) => state.result.repos.find((r) => r.id === id),
       repoByPath: (path) => state.result.repos.find((r) => r.path === path),
-      check: (cwd, line) => runCheck({ path: cwd }, line),
+      check: (cwd, line) => runGate(cwd, line),
       startFix: (rec, entry) => startFixRun(state, rec, entry),
       runActive: (id) => {
         const run = state.runner.get(id);

@@ -4,7 +4,7 @@ import { mkdir, mkdtemp, realpath, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { builtinCheck } from "./builtincheck";
-import { runCheck } from "./check";
+import { runCheck, runGate } from "./check";
 import { CANOPY_CLI_PATH } from "./cli";
 import { startStageRunner } from "../stage/runner";
 import { StageClient } from "./stageclient";
@@ -125,6 +125,45 @@ describe("a seed's check starts without canopy's GitHub login", () => {
     // canopy's own check variables are there either way
     expect(stage.output).toContain("CANOPY_CLI=");
     expect(stage.output).toContain("PATH=");
+  });
+
+  test("a landing gate has none of them, nor the server's own settings", async () => {
+    plant();
+    const server: Record<string, string> = {
+      CANOPY_CONFIG_DIR: "/sentinel-config",
+      CANOPY_TMUX: "1",
+      CANOPY_STAGE_SOCKET: "/sentinel/runner.sock",
+      NODE_ENV: "production",
+    };
+    for (const [k, v] of Object.entries(server)) {
+      saved.set(k, process.env[k]);
+      process.env[k] = v;
+    }
+    const dir = await mkdtemp(join(tmpdir(), "canopy-gate-env-"));
+    scratch.push(dir);
+    const names = [...Object.keys(SENTINELS), ...Object.keys(server), "CANOPY_CLI", "CANOPY_BUN", "PATH"];
+    const gate = await runGate(dir, `env | grep -E '^(${names.join("|")})='`);
+    for (const [k, v] of Object.entries({ ...SENTINELS, ...server })) expect(gate.output).not.toContain(`${k}=${v}`);
+    expect(gate.output).not.toContain("CANOPY_CLI=");
+    expect(gate.output).not.toContain("CANOPY_BUN=");
+    expect(gate.output).toContain("PATH=");
+  });
+});
+
+// field 6 of /proc/<pid>/stat is the session id; Linux only
+describe.skipIf(!existsSync("/proc/self/stat"))("a line never leads its own session", () => {
+  const line = `s=$(cut -d" " -f6 /proc/$$/stat); [ "$s" = "$$" ] && echo leads || echo led`;
+  test("a gate and a local check both run under a shell that waits", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "canopy-check-led-"));
+    scratch.push(dir);
+    expect((await runGate(dir, line)).output).toBe("led");
+    expect((await runCheck({ path: dir }, line)).output).toBe("led");
+  });
+
+  test("the line's exit and output come through the outer shell", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "canopy-check-led-"));
+    scratch.push(dir);
+    expect(await runGate(dir, `echo "it's \\"quoted\\" $0"; exit 3`)).toEqual({ exit: 3, output: `it's "quoted" sh` });
   });
 });
 
