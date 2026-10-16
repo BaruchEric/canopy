@@ -65,11 +65,13 @@ plan). It builds on plan 1, merged into main as 6f6be30.
    whose text holds a macro import attribute (`type: "macro"` in any quote
    or spacing) is logic before the transpiler sees it. A throw on either
    side is logic.
-4. **`docs/` means a folder named `docs` at any depth, for files that are
-   not code or config.** A file there with a script or config extension
-   (`.js`, `.ts` and their kin, `.sh`, `.py`, `.json`, `.yml`, `.yaml`,
-   `.toml`) sorts as it would anywhere else, since docs sites build from
-   code kept there.
+4. **Docs means `.md`, `.markdown`, `.rst` and `.adoc`, and some `.txt`.**
+   A `.txt` file is docs only inside a `docs` folder (one at any depth) or
+   when named `README`, `LICENSE`, `CHANGELOG`, `NOTICE` or `AUTHORS`.
+   Anywhere else it is logic, since `requirements.txt`, `CMakeLists.txt`
+   and `robots.txt` are read by programs. A `.mdx` file is code, since it
+   imports and renders JSX. Any other file in a `docs` folder sorts as it
+   would anywhere else, since docs sites build from code kept there.
 5. **An added file sorts like any other**, so a new `.md` is docs. A
    deleted, renamed or copied file, a mode change, a symlink, a submodule,
    a binary file and a file over 512 KB are logic.
@@ -95,10 +97,14 @@ plan). It builds on plan 1, merged into main as 6f6be30.
 11. **The CLI approves by the id it printed.** `canopy land <run>` on an
     `approve` run prints the sensitive files, each with its reason, and the
     command `canopy land <run> --approve <id>`. A different id is a 409.
-12. **Canopy's own `approve` list adds `src/cli/index.ts` and `scripts/**`**
-    to the spec's: the peer gate's env handling sits in `src/cli/index.ts`,
-    and `scripts/` holds the redeploy gate and `canopy-mcp-env`. Moving the
-    gate to its own file is a change to the gate, so this plan leaves it.
+12. **Canopy's own `approve` list adds `src/cli/index.ts`, `scripts/**`,
+    `lib/**` and `spec/**`** to the spec's: the peer gate's env handling
+    sits in `src/cli/index.ts`, and `scripts/` holds the redeploy gate and
+    `canopy-mcp-env`. Moving the gate to its own file is a change to the
+    gate, so this plan leaves it. `lib/**` takes the place of
+    `lib/workflows/**` (call 17) and holds the workflow prompts, the
+    ranger's prompt and the tmux config the shells load. `spec/**` holds
+    the blocks canopy writes into other repos' `CLAUDE.md`.
 13. **A "fix it" run rejoins on its own only when the sort allows it:** the
     verdict is `auto`, or it is `land` and the entry was queued by Eric's
     "land", or it is `approve` and the entry's approved id still matches.
@@ -109,6 +115,18 @@ plan). It builds on plan 1, merged into main as 6f6be30.
 15. **The diff route serves only files the sort listed.**
     `GET /api/landing/diff?id=&path=` refuses a path that is not in the
     run's current sort, so it never reads an arbitrary file.
+16. **The sensitive check covers both sides of a rename or copy and the
+    old path of a delete**, so deleting `.canopy/review.json` or moving a
+    file out of `scripts/` asks for approval.
+17. **The built-in agent instruction list adds `.cursor/**`, `.agents/**`,
+    `.github/copilot-instructions.md`, `.github/instructions/**`,
+    `.windsurfrules` and `.clinerules`.** `.claude` and `.codex` are
+    already covered through the guarded dirs. `lib/workflows/**` leaves the
+    built-in list, since only canopy reads that path, and moves to canopy's
+    own `review.json` (call 12).
+18. **When the repo's `core.ignorecase` is true (a Mac checkout), the
+    repo's `approve` globs match case-folded**, as the built-in names
+    already do.
 
 ## Tasks
 
@@ -137,26 +155,40 @@ plan). It builds on plan 1, merged into main as 6f6be30.
   first: the guarded dirs and files (export a `guardedWhy` from
   `explain.ts` rather than the sets), `handOffFlag`, `LOCKFILES`,
   `CLAUDE.md`, `AGENTS.md`, `GEMINI.md`, `SKILL.md`, `SPEC.md` and
-  `DESIGN.md` at any depth with case folded, and `lib/workflows/**`. Then
-  the repo's globs. `.canopy/review.json` and `.canopy/gates.json` are
+  `DESIGN.md` at any depth with case folded, and `.cursor/**`, `.agents/**`,
+  `.github/copilot-instructions.md`, `.github/instructions/**`,
+  `.windsurfrules` and `.clinerules` (call 17). Then the repo's globs.
+  Both sides of a rename or copy are checked, and the old path of a
+  delete (call 16). `.canopy/review.json` and `.canopy/gates.json` are
   sensitive through `.canopy/`, and a test says so.
 - [ ] `review.test.ts` (rules half): a good file, `logic` refused, a bad
   glob named, not JSON, no file. Sensitive: `.github/workflows/ci.yml`,
-  `bun.lock`, `docs/CLAUDE.md`, `lib/workflows/ship.md`,
-  `.canopy/review.json`, a repo glob, and `README.md` not sensitive.
+  `bun.lock`, `docs/CLAUDE.md`, `.cursor/rules/style.mdc`, `.clinerules`,
+  `.canopy/review.json`, a repo glob, a deleted `.canopy/review.json`, a
+  file renamed out of `scripts/` under a `scripts/**` glob, and
+  `README.md` and `lib/workflows/ship.md` not sensitive.
 
 ### 3. The sort (`src/core/review.ts`)
 - [ ] `classify(file)` for one file, from its `git diff --raw` entry, its
   old and new text and its changed lines. Order: status and mode (call 5),
-  size, extension (`.md` and `.txt` are docs, `docs/` per call 4, a
-  non-JS file is logic), then for a JS or TS file: a changed line holding a
-  directive (`@ts-nocheck`, `@ts-ignore`, `@ts-expect-error`,
-  `eslint-disable`, `biome-ignore`, `prettier-ignore`, `/// <reference`,
-  `"use client"`, `"use server"`, a shebang) is logic; the macro guard
-  (call 3); then comments when every changed line is blank or a comment
-  line and both sides transpile to the same text, format when the two
-  texts match with all whitespace taken out and transpile the same, else
-  logic.
+  size, extension (call 4: `.md`, `.markdown`, `.rst` and `.adoc` are
+  docs, a `.txt` only in a `docs` folder or named `README`, `LICENSE`,
+  `CHANGELOG`, `NOTICE` or `AUTHORS`, and any other non-JS file, `.mdx`
+  included, is logic), then for a JS or TS file: a changed line matching
+  the directive pattern is logic; the macro guard (call 3); then comments
+  when every changed line is blank or a comment line and both sides
+  transpile to the same text, format when the two texts match with all
+  whitespace taken out and transpile the same, else logic. The directives
+  are one case-insensitive pattern covering `@ts-nocheck`, `@ts-check`,
+  `@ts-ignore`, `@ts-expect-error`, `eslint-disable` and `eslint-enable`,
+  `oxlint-disable` and `oxlint-enable`, `biome-ignore`, `deno-lint-ignore`,
+  `prettier-ignore`, `c8 ignore`, `istanbul ignore`, `@jsx`,
+  `@jsxImportSource`, `@jsxFrag`, `@jsxRuntime`, `@vite-ignore`, webpack
+  magic comments, `@__PURE__`, `#__PURE__`, `__NO_SIDE_EFFECTS__`,
+  `sourceMappingURL`, a triple-slash reference (`/// <reference`),
+  `"use client"`, `"use server"` and a shebang. Canopy lints with oxlint,
+  so an `oxlint-disable` sorted as a comment would land a lint rule turned
+  off unseen.
 - [ ] The transpiler is one `Bun.Transpiler` per loader (`ts`, `tsx`, `js`,
   `jsx`; `.mjs` and `.cjs` as `js`) with the options in call 3.
 - [ ] `sortBranch(dir, target, rules, hasGates)`: the merge base with
@@ -168,13 +200,14 @@ plan). It builds on plan 1, merged into main as 6f6be30.
   only when there are sensitive files.
 - [ ] `review.test.ts` (sort half), on scratch repos: each class; a block
   comment closed early; `// x` inside a template string; a type-only
-  change (logic); a reflowed function (format); an added `@ts-ignore` and
-  an `eslint-disable` (logic); an end-of-line comment (logic); a macro
-  import whose module writes a sentinel file, which stays absent and sorts
-  logic; rename, delete, mode change, symlink and binary (logic); a new
-  `.md` (docs); `docs/build.ts` (sorted as code); the sensitive id the same
-  after main gains lines above the change and different after a
-  trailing-space edit; no gates turns `auto` into `land`.
+  change (logic); a reflowed function (format); an added `@ts-ignore`, an
+  `eslint-disable` and an `oxlint-disable` (logic); an end-of-line comment
+  (logic); a macro import whose module writes a sentinel file, which stays
+  absent and sorts logic; rename, delete, mode change, symlink and binary
+  (logic); a new `.md` (docs); `docs/build.ts` (sorted as code); the
+  sensitive id the same after main gains lines above the change and
+  different after a trailing-space edit; no gates turns `auto` into
+  `land`.
 
 ### 4. The model (`src/core/landing.ts`)
 - [ ] `enqueue(entries, run, now, {auto?, approved?})` keeps the flags on
@@ -217,10 +250,12 @@ plan). It builds on plan 1, merged into main as 6f6be30.
 ### 6. Canopy's own rules (`.canopy/review.json`)
 - [ ] `autoLand: ["docs", "comments", "format"]`, and `approve` holding
   the spec's list plus `src/secrets/**`, `src/server/secrets.ts`,
-  `src/core/peers.ts`, `src/server/peers.ts`, `src/cli/index.ts` and
-  `scripts/**` (call 12). Check each glob matches a file in the tree.
-- [ ] A test reads the file and checks `src/core/peersync.ts` and
-  `src/cli/index.ts` are sensitive and `README.md` is docs.
+  `src/core/peers.ts`, `src/server/peers.ts`, `src/cli/index.ts`,
+  `scripts/**`, `lib/**` and `spec/**` (call 12). Check each glob matches
+  a file in the tree.
+- [ ] A test reads the file and checks `src/core/peersync.ts`,
+  `src/cli/index.ts`, `lib/ranger.md` and `spec/blocks/agents.md` are
+  sensitive and `README.md` is docs.
 
 ### 7. UI
 - [ ] `ui/src/landing.ts`: the verdict word for a ready row and the run
