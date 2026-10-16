@@ -54,6 +54,21 @@ test("each ready run's verdict, and an entry that joined on its own", () => {
   ]);
 });
 
+test("a run a restart stopped shows as one that can land only when its work is whole", () => {
+  const entries = enqueue([], rec("q"), 1);
+  const info: LandingInfo = {
+    runs: [
+      rec("a", { state: "stopped", whole: { ok: true }, review: sorted("land") }),
+      rec("b", { state: "stopped", whole: { ok: false, why: "changes left uncommitted" } }),
+      rec("c", { state: "stopped" }),
+      rec("q", { state: "stopped", whole: { ok: true } }),
+    ],
+    entries,
+    orphans: [],
+  };
+  expect(queueLines(info, null)).toEqual(["dev-tools/canopy", "  queued 1st       run/x-q", "  stopped          run/x-a  can land: needs your land  canopy land r-a"]);
+});
+
 test("what land prints for a run that needs an approval: the files, how to look, the command with the id", () => {
   const review = sorted("approve", {
     sensitiveId: "abc123",

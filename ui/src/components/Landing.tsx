@@ -1,6 +1,6 @@
 import { useState } from "react";
 import type { LandEntry, LandingRun, Repo } from "../../../src/core/types";
-import { approveFiles, backLine, chipWords, landAllOf, landWord, needsApproval, noticeLine, repoLanding, repoOrphans, hasLanding, verdictTone, verdictWord } from "../landing";
+import { approveFiles, backLine, chipWords, landAllOf, landWord, needsApproval, noticeLine, repoLanding, repoOrphans, hasLanding, stoppedLandTitle, stoppedWhole, verdictTone, verdictWord } from "../landing";
 import { backendOf } from "../registry";
 import { idText, landingAll, useStore } from "../store";
 import { keepKeys } from "../surface";
@@ -36,7 +36,9 @@ export function LandingChip({ repoId }: { repoId: string }) {
 
 /** A repo's branch runs and landing queue: what is queued in order, what
  *  came back and why, what is ready to land, what landed lately, and any
- *  run worktree no record names. Shows only when there is something. */
+ *  run worktree no record names. A run a restart stopped lands from the
+ *  rest once its work is whole, or says why not. Shows only when there is
+ *  something. */
 export function LandingSection({ repo }: { repo: Repo }) {
   const info = useStore((s) => landingAll(s));
   const landRun = useStore((s) => s.landRun);
@@ -91,6 +93,7 @@ export function LandingSection({ repo }: { repo: Repo }) {
           ...l.queue.map((e) => `${e.branch}  ${landWord(e, info.entries)}`),
           ...l.back.map((e) => `${e.branch}  ${landWord(e, info.entries)}  ${backLine(e)}`),
           ...l.ready.map((r) => `${r.branch}  ready`),
+          ...l.other.filter(stoppedWhole).map((r) => `${r.branch}  stopped, can land`),
         ].join("\n")
       }
     >
@@ -196,13 +199,29 @@ export function LandingSection({ repo }: { repo: Repo }) {
               <li key={r.id} className={`landing-row st-${r.state}`}>
                 {runLink(r)}
                 <span className="landing-state">{r.state === "working" ? "working" : r.state === "uncommitted" ? "changes left uncommitted" : r.state === "stopped" ? "stopped by a restart" : "no commits"}</span>
+                {stoppedWhole(r) && (
+                  <span className={`landing-state ${verdictTone(r)}`} title={r.review?.why ?? "What its sort says: the review rules in the repo's .canopy/review.json"}>
+                    {verdictWord(r)}
+                  </span>
+                )}
                 {r.state !== "working" && (
                   <span className="landing-tools">
+                    {stoppedWhole(r) &&
+                      (needsApproval(r) ? (
+                        <button type="button" className="mini strong" disabled={busy !== null} title="Open its sensitive files and their diffs, then approve and land" onClick={() => showApprove(r.id)}>
+                          look and land
+                        </button>
+                      ) : (
+                        <button type="button" className="mini strong" disabled={busy !== null} title={stoppedLandTitle(r.target)} onClick={() => act(r.id, () => landRun(r.id))}>
+                          {busy === r.id ? "queueing…" : "land"}
+                        </button>
+                      ))}
                     <button type="button" className="mini" disabled={busy !== null} title="Remove the branch and its worktree" onClick={() => act(`drop:${r.id}`, () => dropLanding(r.id))}>
                       drop
                     </button>
                   </span>
                 )}
+                {r.state === "stopped" && r.whole && !r.whole.ok && <span className="landing-why">{r.whole.why}</span>}
               </li>
             ))}
           </ul>

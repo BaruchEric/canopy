@@ -1242,7 +1242,14 @@ export interface LandingRun {
   endedAt?: number;
   /** its diff's latest sort, once it settled ready (FR-013) */
   review?: RunReview;
+  /** a stopped run only: whether its work is whole as the hub last looked,
+   *  so "land" applies. Never saved: the worktree can change after. */
+  whole?: RunWhole;
 }
+
+/** Whether a run a restart stopped may land as its worktree is now: clean,
+ *  nothing untracked that is not ignored, and commits its target lacks. */
+export type RunWhole = { ok: true } | { ok: false; why: string };
 
 /** A run worktree on disk that no record names. */
 export interface LandingOrphan {

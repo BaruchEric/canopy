@@ -2,7 +2,7 @@
  *  a repo's part of it, a run's word and buttons, the card chip. Pure; the
  *  words for an entry's state are `core/landing.ts`'s, shared with the CLI. */
 
-import { inQueue, landAllPick, landCounts, landWord, queueOf, reviewWord, sentBack } from "../../src/core/landing";
+import { inQueue, landAllPick, landCounts, landWord, queueOf, reviewWord, sentBack, stoppedWhole } from "../../src/core/landing";
 import type { LandEntry, LandingInfo, LandingOrphan, LandingRun, LandNotice, ReviewFile, Run, RunAction } from "../../src/core/types";
 
 export const EMPTY_LANDING: LandingInfo = { runs: [], entries: [], orphans: [], notices: [] };
@@ -32,6 +32,10 @@ export const verdictTone = (r: Pick<LandingRun, "review">): "moss" | "lichen" | 
 /** The ready runs "land all" would take in a repo, and the ones it leaves
  *  for an approval; the button shows with two or more ready. */
 export const landAllOf = (info: LandingInfo, repoId: string) => landAllPick(info.runs, info.entries, repoId);
+
+/** The title of a stopped run's land, in the list and its sheet. */
+export const stoppedLandTitle = (target: string): string =>
+  `A restart stopped this run with its work committed. Land it and its commits go through the gates like any other: rebase onto ${target}, the gates, then a fast-forward of ${target}; nothing is pushed`;
 
 /** The files the approve sheet lists first: the sensitive ones, or every
  *  file when the rules are broken and none can be called safe. */
@@ -105,6 +109,10 @@ export interface RunLanding {
   verdict?: string;
   /** its land opens the approve sheet */
   approve?: boolean;
+  /** a restart stopped it: its land says so */
+  stopped?: boolean;
+  /** why a run a restart stopped cannot land */
+  why?: string;
 }
 
 const BRANCH_WORD: Record<NonNullable<Run["branch"]>["state"], string> = {
@@ -116,7 +124,8 @@ const BRANCH_WORD: Record<NonNullable<Run["branch"]>["state"], string> = {
 };
 
 /** Where a branch run's work stands, for its sheet: the queue's word when
- *  it has an entry, else the branch's own. */
+ *  it has an entry, else the branch's own. A run a restart stopped lands
+ *  as a ready one does once the hub found its work whole. */
 export function runLanding(run: Run, info: LandingInfo): RunLanding | null {
   const b = run.branch;
   if (!b) return null;
@@ -132,9 +141,12 @@ export function runLanding(run: Run, info: LandingInfo): RunLanding | null {
   }
   const rec = info.runs.find((r) => r.id === b.origin);
   const state = rec && rec.runId === run.id ? rec.state : b.state;
-  const canLand = state === "ready" && run.status !== "working" && run.status !== "waiting" && run.status !== "idle";
+  const stopped = state === "stopped" && rec !== undefined && stoppedWhole(rec);
+  // a page that missed the restart may still hold the run as working; the hub's stopped says it ended
+  const canLand = stopped || (state === "ready" && run.status !== "working" && run.status !== "waiting" && run.status !== "idle");
   const sorted = canLand && rec?.review ? { verdict: verdictWord(rec), approve: needsApproval(rec) } : {};
-  return { word: BRANCH_WORD[state], canLand, canFix: false, ...sorted };
+  const whole = state === "stopped" && rec?.whole && !rec.whole.ok ? { why: rec.whole.why } : {};
+  return { word: BRANCH_WORD[state], canLand, canFix: false, ...sorted, ...(canLand && stopped ? { stopped: true } : {}), ...whole };
 }
 
 /** Whether a new run starts on a branch unless the toggle says otherwise:
@@ -147,4 +159,4 @@ export function backLine(e: LandEntry): string {
   return e.reason ?? e.state;
 }
 
-export { inQueue, landWord, sentBack };
+export { inQueue, landWord, sentBack, stoppedWhole };

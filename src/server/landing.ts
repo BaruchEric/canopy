@@ -37,10 +37,10 @@ import {
 } from "../core/landing";
 import { foldsCase, readRules, sortBranch } from "../core/review";
 import { configDir } from "../core/store";
-import type { LandEntry, LandingInfo, LandingOrphan, LandingRun, LandNotice, Repo, Run, RunBranchState, RunReview, ServerEvent } from "../core/types";
+import type { LandEntry, LandingInfo, LandingOrphan, LandingRun, LandNotice, Repo, Run, RunBranchState, RunReview, RunWhole, ServerEvent } from "../core/types";
 import { isRunActive } from "../core/types";
 import { git } from "../core/exec";
-import { aheadOf, currentBranch, defaultBranch, dirtyFiles, ffMain, listRunTreeDirs, rebaseOnto, removeRunTree, repoKey, revOf, treeRepo, worktreesRoot } from "../core/worktree";
+import { aheadOf, currentBranch, defaultBranch, dirtyFiles, ffMain, listRunTreeDirs, rebaseOnto, removeRunTree, repoKey, revOf, treeRepo, treeState, worktreesRoot } from "../core/worktree";
 
 export const landingDir = (): string => join(configDir(), "landing");
 /** how often entries waiting on a busy checkout look again */
@@ -82,6 +82,20 @@ export async function sortRun(rec: LandingRun, now: number): Promise<RunReview> 
   return sortBranch(rec.dir, rec.target, rules, hasGates, await foldsCase(rec.repoPath), now);
 }
 
+/** Whether a run a restart stopped may land as its worktree is now: clean,
+ *  nothing untracked that is not ignored, and commits its target lacks. */
+export async function wholeOf(rec: Pick<LandingRun, "dir" | "target">): Promise<RunWhole> {
+  if (!existsSync(rec.dir)) return { ok: false, why: "its worktree is gone" };
+  switch (await treeState(rec.dir, rec.target)) {
+    case "ready":
+      return { ok: true };
+    case "uncommitted":
+      return { ok: false, why: "changes left uncommitted" };
+    case "nothing":
+      return { ok: false, why: `no commits ${rec.target} lacks` };
+  }
+}
+
 const json = (data: unknown, status = 200) => new Response(JSON.stringify(data), { status, headers: { "content-type": "application/json" } });
 const isRecord = (v: unknown): v is Record<string, unknown> => typeof v === "object" && v !== null && !Array.isArray(v);
 const errText = (err: unknown): string => String(err instanceof Error ? err.message : err);
@@ -106,6 +120,11 @@ export class LandingHub {
   private written = new Map<string, string>();
   /** each record file's pending writes, in order */
   private chains = new Map<string, Promise<void>>();
+  /** each stopped run's worktree as the last look found it; never saved */
+  private whole = new Map<string, RunWhole>();
+  /** the look at the stopped runs going now, and whether another is asked for */
+  private looking: Promise<void> | null = null;
+  private lookAgain = false;
 
   constructor(private deps: LandingDeps) {}
 
@@ -117,11 +136,52 @@ export class LandingHub {
   }
 
   info(): LandingInfo {
-    return { runs: [...this.runs.values()], entries: this.entries, orphans: this.orphans, notices: this.notices };
+    const runs = [...this.runs.values()].map((r) => {
+      const whole = r.state === "stopped" ? this.whole.get(r.id) : undefined;
+      return whole ? { ...r, whole } : r;
+    });
+    return { runs, entries: this.entries, orphans: this.orphans, notices: this.notices };
   }
 
+  /** Sends the info, then looks at the stopped runs' worktrees again. */
   private publish(): void {
     this.deps.broadcast({ type: "landing", landing: this.info() });
+    void this.lookStopped();
+  }
+
+  /** Looks at the worktree of every stopped run with no entry, after any
+   *  look going now, and sends the info again when one changed: whether it
+   *  may land is asked each time, since the worktree can change after the
+   *  restart. A whole one with no sort is sorted, as a ready one is at
+   *  adopt. */
+  private lookStopped(): Promise<void> {
+    if (this.looking) {
+      this.lookAgain = true;
+      return this.looking;
+    }
+    // one with an entry is the queue's: its turn works the worktree
+    const open = (): LandingRun[] => [...this.runs.values()].filter((r) => r.state === "stopped" && !this.entries.some((e) => e.id === r.id));
+    if (open().length === 0 && this.whole.size === 0) return Promise.resolve();
+    const look = async (): Promise<void> => {
+      do {
+        this.lookAgain = false;
+        const next = new Map<string, RunWhole>();
+        for (const r of open()) next.set(r.id, await wholeOf(r));
+        const changed = JSON.stringify([...next]) !== JSON.stringify([...this.whole]);
+        this.whole = next;
+        for (const [id, w] of next) if (w.ok && !this.runs.get(id)?.review && !this.sorting.has(id)) this.track(this.resort(id).then(() => undefined));
+        // straight to the clients, not through publish, which would look again
+        if (changed) this.deps.broadcast({ type: "landing", landing: this.info() });
+      } while (this.lookAgain);
+    };
+    const p = look().finally(() => {
+      this.looking = null;
+      // asked for between the last pass and here
+      if (this.lookAgain) void this.lookStopped();
+    });
+    this.looking = p;
+    this.track(p);
+    return p;
   }
 
   /* ---------- records ---------- */
@@ -431,13 +491,14 @@ export class LandingHub {
   }
 
   /** The checks "land" makes before it spends a sort: the run exists,
-   *  has ended, is ready, and is not queued or landed already. */
+   *  has ended, is ready (or a restart stopped it), and is not queued or
+   *  landed already. */
   private landable(id: string): LandingRun {
     const rec = this.find(id);
     if (!rec) throw new LandError("no branch run by that id", 404);
     const had = this.entries.find((e) => e.id === rec.id);
     if (this.deps.runActive(rec.runId) || (had?.fixing && this.deps.runActive(had.fixing))) throw new LandError("the run is still going; land it once it ends");
-    if (rec.state !== "ready") throw new LandError(`only a ready run lands; this one is ${rec.state}`);
+    if (rec.state !== "ready" && rec.state !== "stopped") throw new LandError(`only a ready run lands, or one a restart stopped with its work whole; this one is ${rec.state}`);
     if (had && inQueue(had)) throw new LandError("it is in the queue already");
     if (had?.state === "landed") throw new LandError("it has landed already");
     return rec;
@@ -446,16 +507,26 @@ export class LandingHub {
   /** "land" on a ready run: sorted again with the rules main holds now
    *  (call 14), then the end of its repo's queue. A run that needs an
    *  approval lands only with `approve`, the sensitive patch id the sheet
-   *  showed, and the entry keeps it. */
+   *  showed, and the entry keeps it. A run a restart stopped lands the same
+   *  way once its worktree, looked at now, is whole. */
   async land(id: string, approve?: string): Promise<LandEntry> {
     const rec = this.landable(id);
+    if (rec.state === "stopped") {
+      const whole = await wholeOf(rec);
+      if (!whole.ok) {
+        this.whole.set(rec.id, whole);
+        this.publish();
+        throw new LandError(`a restart stopped it and it cannot land: ${whole.why}`);
+      }
+    }
     const review = await this.resort(rec.id);
     if (!review) throw new LandError("its diff could not be sorted; the log says why");
     canLand(review, approve);
     // a second "land" may have queued it while this one sorted
     const cur = this.landable(rec.id);
     const flags: QueueFlags = review.verdict === "approve" && approve ? { approved: approve } : {};
-    this.entries = enqueue(this.entries, cur, this.now(), flags);
+    // a stopped run found whole joins as a ready one; its record stays stopped
+    this.entries = enqueue(this.entries, { ...cur, state: "ready" }, this.now(), flags);
     void this.saveQueue(cur.repoPath);
     this.publish();
     this.kick(cur.repoId);
@@ -746,7 +817,10 @@ export class LandingHub {
     const path = url.pathname;
     if (!path.startsWith("/api/landing")) return null;
     try {
-      if (path === "/api/landing" && req.method === "GET") return json(this.info());
+      if (path === "/api/landing" && req.method === "GET") {
+        await this.lookStopped();
+        return json(this.info());
+      }
       if (path === "/api/landing/diff" && req.method === "GET") {
         const id = url.searchParams.get("id");
         const file = url.searchParams.get("path");

@@ -54,7 +54,13 @@ The queue needs something to rebase, so a run can start on a branch:
   `<configDir>/worktrees/`, and shows a worktree with no record as
   "orphaned" with "remove" and "queue anyway" (when it is clean and ahead).
   A run that was working when canopy stopped reads `stopped`; its worktree
-  stays.
+  stays. When that worktree is whole (clean, nothing untracked that is not
+  ignored, and commits its target lacks) the run lands with the same sort,
+  approval and queue as a `ready` one, though never on its own. Whether it
+  is whole is worked out when it is asked for, on "land" and whenever the
+  queue's info goes out, not once at start, since the worktree can change
+  after. A stopped run that is dirty or has no commits offers only "drop",
+  with the reason.
 
 ### The queue
 
