@@ -144,7 +144,17 @@ that key once. The compose run is detached and logged under
 says what is running, and a deploy that would recreate the shells container
 stops unless given `--shells`. A deploy of the commit already running changes
 nothing, so compose leaves every container up; `--restart` recreates the
-canopy container anyway, and the shells stay. By hand it is the same command as above; the
+canopy container anyway, and the shells stay. Before an `up` that may recreate
+the canopy container, the host asks canopy on its published port what it has
+going: a run working or waiting on a prompt (`/api/runs`), a flow working or
+waiting (`/api/flows`), a fleet working (`/api/fleets`), and a landing entry
+rebasing, in setup, at its gate or landing (`/api/landing`). Any of those stops
+the deploy with exit 4 and a line for each (its id, repo and what it is doing);
+wait for them to finish, or rerun with `--force` to cut them off. `--force`
+does not stand in for `--shells`. The check is skipped when the dry run shows
+the canopy container staying up and `--restart` is not given, and a canopy that
+does not answer has nothing going, so the deploy carries on. The host needs
+`curl` and `jq` for it. By hand it is the same command as above; the
 canopy image rebuilds and its container is replaced. The rsync no longer
 carries canopy's checkout, so an uncommitted change on the Mac never reaches
 the mini's build, and a dirty checkout on the mini is not fast-forwarded. Config in
