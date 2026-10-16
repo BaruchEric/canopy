@@ -2,6 +2,10 @@
 
 ## Open
 
+### FR-015 · A cards width that holds
+P3 · added 2026-10-15 · source: FR-003 fix
+The cards area only gets what the dock leaves over: at least `--cards-min` (320px), and more only while the dock's columns fit inside its widest. Widening a column takes room from the cards until they reach the minimum, and nothing remembers a width Eric chose for them. A resizer between the cards and the dock, saved per screen layout profile like the sidebar's width, would let the cards keep a set width while the dock scrolls.
+
 ### FR-014 · A standing watcher agent per component
 P3 · added 2026-10-14 · source: Eric (Anthropic "Redesigning source control" post)
 One long-lived agent per component (the mini's compose stack, peer sync, tailchan) reads that component's logs and health on a schedule and posts to the inbox when something looks off, catching the slow, odd drift a fixed alert misses. Reference: the "superfans" in https://www.anthropic.com/engineering/redesigning-source-control.
