@@ -137,6 +137,32 @@ describe("sensitive paths", () => {
   });
 });
 
+describe("canopy's own rules", () => {
+  const here = join(import.meta.dir, "..", "..");
+
+  test("the file reads, and every glob in it matches a file in the tree", async () => {
+    const rules = await readRules(here);
+    if (rules.source !== "file") throw new Error(`canopy's review.json: ${JSON.stringify(rules)}`);
+    expect(rules.autoLand).toEqual(["docs", "comments", "format"]);
+    const tracked = (await exec(["git", "ls-files"], { cwd: here })).stdout.split("\n").filter(Boolean);
+    for (const g of rules.approve) {
+      const glob = new Bun.Glob(g);
+      expect([g, tracked.some((f) => glob.match(f))]).toEqual([g, true]);
+    }
+  });
+
+  test("the peer gate, the secret store, lib and spec need approval; the readme is docs", async () => {
+    const rules = await readRules(here);
+    const approve = rules.source === "file" ? rules.approve : [];
+    for (const p of ["src/core/peersync.ts", "src/cli/index.ts", "src/core/secretcrypt.ts", "src/server/secrets.ts", "scripts/redeploy.sh", "lib/ranger.md", "lib/workflows/ship.md", "spec/blocks/agents.md", "Dockerfile", ".canopy/review.json"]) {
+      expect([p, sensitiveWhy(p, approve) !== null]).toEqual([p, true]);
+    }
+    expect(sensitiveWhy("README.md", approve)).toBeNull();
+    expect(sensitiveWhy("docs/architecture.md", approve)).toBeNull();
+    expect(classify("README.md", { old: "a\n", new: "b\n", changed: [] }).cls).toBe("docs");
+  });
+});
+
 describe("the pieces of the sort", () => {
   test("raw entries, renames included", () => {
     const z = ":100644 100644 aaa bbb M\0a.ts\0:100644 100644 ccc ddd R087\0old.md\0new.md\0:000000 100644 000 eee A\0n.md\0";
