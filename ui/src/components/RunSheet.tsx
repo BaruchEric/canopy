@@ -3,7 +3,7 @@ import { ACTIONS, planWords, repoFacts } from "../../../src/core/actions";
 import { describeAgent, isDefaultAgent } from "../../../src/core/agent";
 import { describeLaunch, isDefaultLaunch } from "../../../src/core/launch";
 import { agentFor, connOf, idText, landingAll, launchFor, routesOf, tasksOf, useStore, type Sheet } from "../store";
-import { branchByDefault, runLanding } from "../landing";
+import { branchByDefault, runLanding, stoppedLandTitle } from "../landing";
 import { backendOf } from "../registry";
 import { resolveAgent } from "../../../src/core/route";
 import { effectiveRows, harnessesOf, hasRouting, ROLE_LABEL, ROLE_TITLE, withPick } from "../agents";
@@ -520,7 +520,8 @@ function Console({ run, repo }: { run: Run; repo: Repo | undefined }) {
 }
 
 /** A branch run's branch and where its work stands in the landing queue,
- *  with "land" once it is ready and "fix it" once the queue sent it back. */
+ *  with "land" once it is ready (or a restart stopped it with its work
+ *  whole) and "fix it" once the queue sent it back. */
 function BranchBlock({ run, act }: { run: Run; act: (fn: () => Promise<void>) => Promise<void> }) {
   const info = useStore((s) => landingAll(s));
   const landRun = useStore((s) => s.landRun);
@@ -536,6 +537,7 @@ function BranchBlock({ run, act }: { run: Run; act: (fn: () => Promise<void>) =>
       </span>
       <span className="run-branch-word">{l.word}</span>
       {l.verdict && <span className="run-branch-why">{l.verdict}</span>}
+      {l.why && <span className="run-branch-why">{l.why}</span>}
       {l.entry?.reason && l.entry.state !== "red" && <span className="run-branch-why">{l.entry.reason}</span>}
       <span className="spacer" />
       {l.canLand && l.approve && (
@@ -544,7 +546,7 @@ function BranchBlock({ run, act }: { run: Run; act: (fn: () => Promise<void>) =>
         </button>
       )}
       {l.canLand && !l.approve && (
-        <button type="button" className="mini strong" title={`Rebase onto ${b.target}, run the gates, fast-forward ${b.target}; nothing is pushed`} onClick={() => void act(() => landRun(run.id))}>
+        <button type="button" className="mini strong" title={l.stopped ? stoppedLandTitle(b.target) : `Rebase onto ${b.target}, run the gates, fast-forward ${b.target}; nothing is pushed`} onClick={() => void act(() => landRun(run.id))}>
           land
         </button>
       )}

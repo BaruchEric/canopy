@@ -1,8 +1,9 @@
-/** `canopy land` and `canopy queue`: a ready branch run into its repo's
- *  landing queue, every ready run of a repo at once, and where every queue
- *  stands, over the API of every backend the home one lists. */
+/** `canopy land` and `canopy queue`: a ready branch run (or one a restart
+ *  stopped with its work whole) into its repo's landing queue, every ready
+ *  run of a repo at once, and where every queue stands, over the API of
+ *  every backend the home one lists. */
 
-import { inQueue, landWord, queueOf, reviewWord, sentBack } from "../core/landing";
+import { inQueue, landWord, queueOf, reviewWord, sentBack, stoppedWhole } from "../core/landing";
 import type { BackendEntry, LandEntry, LandingInfo, LandingRun } from "../core/types";
 import { ask, errText, has, take, targetsOf, Unreachable, type Target } from "./health";
 
@@ -16,8 +17,8 @@ const named = (repo: string | null, id: string, path: string): boolean => repo =
 
 /** Where one backend's queues stand, a repo at a time: each entry in
  *  order, then what came back and why, then ready runs not queued yet with
- *  what their sort says. `repo` keeps one repo, by id or by its folder's
- *  name. */
+ *  what their sort says, then runs a restart stopped whose work is whole
+ *  enough to land. `repo` keeps one repo, by id or by its folder's name. */
 export function queueLines(info: LandingInfo, repo: string | null, backend = ""): string[] {
   const where = backend ? ` on ${backend}` : "";
   const repos = [...new Set([...info.entries.map((e) => e.repoId), ...info.runs.map((r) => r.repoId)])].sort();
@@ -30,7 +31,8 @@ export function queueLines(info: LandingInfo, repo: string | null, backend = "")
     const back = mine.filter(sentBack);
     const taken = new Set(mine.filter((e) => inQueue(e) || e.state === "landed" || sentBack(e)).map((e) => e.id));
     const ready = info.runs.filter((r) => r.repoId === id && r.state === "ready" && !taken.has(r.id));
-    if (queued.length + back.length + ready.length === 0) continue;
+    const stopped = info.runs.filter((r) => r.repoId === id && stoppedWhole(r) && !taken.has(r.id));
+    if (queued.length + back.length + ready.length + stopped.length === 0) continue;
     out.push(`${id}${where}`);
     for (const e of queued) {
       const marks = [e.auto ? "joined on its own" : "", e.approved ? "approved" : "", e.reason ?? ""].filter(Boolean).join(", ");
@@ -38,6 +40,7 @@ export function queueLines(info: LandingInfo, repo: string | null, backend = "")
     }
     for (const e of back) out.push(`  ${landWord(e, info.entries).padEnd(16)} ${e.branch}  ${backWords(e).split("\n").pop() ?? ""}`);
     for (const r of ready) out.push(`  ${"ready".padEnd(16)} ${r.branch}  ${r.review ? reviewWord(r.review) : "sorting"}  canopy land ${r.runId}`);
+    for (const r of stopped) out.push(`  ${"stopped".padEnd(16)} ${r.branch}  can land: ${r.review ? reviewWord(r.review) : "sorting"}  canopy land ${r.runId}`);
   }
   return out;
 }

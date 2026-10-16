@@ -169,6 +169,10 @@ export function landAllPick(runs: readonly LandingRun[], entries: readonly LandE
   return { take: ready.filter((r) => r.review?.verdict !== "approve"), skip: ready.filter((r) => r.review?.verdict === "approve") };
 }
 
+/** A run a restart stopped whose worktree the hub last found whole: "land"
+ *  takes it as it takes a ready one. */
+export const stoppedWhole = (r: Pick<LandingRun, "state" | "whole">): boolean => r.state === "stopped" && r.whole?.ok === true;
+
 /** The entry the loop takes next in one repo: the first queued one in
  *  order. Waiting entries keep their place but are passed over. */
 export function nextEntry(entries: readonly LandEntry[], repoId: string): LandEntry | undefined {

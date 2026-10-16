@@ -4,7 +4,7 @@ import { mkdir, mkdtemp, readdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { exec } from "../core/exec";
-import type { LandEntry, LandingRun, Repo, Run, RunBranchState, ServerEvent } from "../core/types";
+import type { LandEntry, LandingInfo, LandingRun, Repo, Run, RunBranchState, ServerEvent } from "../core/types";
 import { addRunTree, revOf, runTreeDir } from "../core/worktree";
 import { LandingHub, type CheckOutcome } from "./landing";
 
@@ -115,6 +115,21 @@ async function readyRun(w: World, id: string, file: string, body: string): Promi
 }
 
 const entryOf = (w: World, id: string): LandEntry | undefined => w.hub.info().entries.find((e) => e.id === id);
+
+/** A second hub on the same records and worktrees, as after a restart. */
+const rehub = (w: World): LandingHub =>
+  new LandingHub({
+    broadcast: () => {},
+    repo: (id) => (id === w.repo.id ? w.repo : undefined),
+    repoByPath: (p) => (p === w.repo.path ? w.repo : undefined),
+    check: async () => ({ exit: 0, output: "" }),
+    startFix: () => {
+      throw new Error("no fix here");
+    },
+    runActive: () => false,
+    dir: w.dir,
+    worktrees: w.wts,
+  });
 
 beforeAll(async () => {
   root = await mkdtemp(join(tmpdir(), "canopy-land-"));
@@ -304,6 +319,23 @@ const rulesOn = async (w: World, rules: unknown): Promise<void> => {
   await mkdir(join(w.repo.path, ".canopy"), { recursive: true });
   await commit(w.repo.path, ".canopy/review.json", JSON.stringify(rules));
 };
+/** A branch run still working when canopy stopped, its worktree left as
+ *  `leave` makes it, and the hub that took the records back after. */
+async function stoppedRun(w: World, id: string, leave: (dir: string) => Promise<unknown>): Promise<{ hub: LandingHub; dir: string }> {
+  await w.hub.adopt();
+  w.hub.stop();
+  const dir = runTreeDir(w.repo.path, id, w.wts);
+  const base = (await revOf(w.repo.path, "main"))!;
+  await addRunTree(w.repo.path, dir, `run/x-${id}`, base);
+  w.hub.onRun(fakeRun(w.repo.id, { name: `run/x-${id}`, target: "main", base, dir, origin: id }, "working"));
+  await leave(dir);
+  await w.hub.flushed();
+  const hub = rehub(w);
+  await hub.adopt();
+  await hub.idle();
+  return { hub, dir };
+}
+
 const recOf = (w: World, id: string): LandingRun | undefined => w.hub.info().runs.find((r) => r.id === id);
 const RULES = { autoLand: ["docs", "comments", "format"], approve: ["secret/**"] };
 
@@ -444,18 +476,7 @@ describe("review rules", () => {
     const file = join(w.dir, "runs", "rh02.json");
     const { review: _r, ...plain } = JSON.parse(await Bun.file(file).text()) as LandingRun;
     await writeFile(file, JSON.stringify(plain));
-    const again = new LandingHub({
-      broadcast: () => {},
-      repo: (id) => (id === w.repo.id ? w.repo : undefined),
-      repoByPath: (p) => (p === w.repo.path ? w.repo : undefined),
-      check: async () => ({ exit: 0, output: "" }),
-      startFix: () => {
-        throw new Error("no fix here");
-      },
-      runActive: () => false,
-      dir: w.dir,
-      worktrees: w.wts,
-    });
+    const again = rehub(w);
     await again.adopt();
     await again.idle();
     again.stop();
@@ -491,19 +512,7 @@ describe("restarts", () => {
     await addRunTree(w.repo.path, orphanDir, "run/x-oo11", "main");
     await commit(orphanDir, "o.txt", "o\n");
 
-    const events: ServerEvent[] = [];
-    const again = new LandingHub({
-      broadcast: (ev) => events.push(ev),
-      repo: (id) => (id === w.repo.id ? w.repo : undefined),
-      repoByPath: (p) => (p === w.repo.path ? w.repo : undefined),
-      check: async () => ({ exit: 0, output: "" }),
-      startFix: () => {
-        throw new Error("no fix here");
-      },
-      runActive: () => false,
-      dir: w.dir,
-      worktrees: w.wts,
-    });
+    const again = rehub(w);
     await again.adopt();
     await again.idle();
     const info = again.info();
@@ -514,6 +523,59 @@ describe("restarts", () => {
     await again.idle();
     expect(again.info().entries.find((e) => e.id === "oo11")?.state).toBe("landed");
     expect(again.info().orphans).toEqual([]);
+  });
+
+  test("a run a restart stopped lands when its work is whole: committed, with only ignored files left", async () => {
+    const w = await world();
+    const { hub, dir } = await stoppedRun(w, "sa11", async (d) => {
+      await commit(d, ".gitignore", "*.log\n");
+      await commit(d, "b.txt", "b\n");
+      await writeFile(join(d, "out.log"), "noise\n");
+    });
+    const rec = hub.info().runs.find((r) => r.id === "sa11");
+    expect(rec).toMatchObject({ state: "stopped", whole: { ok: true }, review: { verdict: "land" } });
+    // looked at, not saved
+    expect(JSON.parse(await Bun.file(join(w.dir, "runs", "sa11.json")).text())).not.toHaveProperty("whole");
+    const tip = await revOf(dir, "HEAD");
+    await hub.land("sa11");
+    await hub.idle();
+    hub.stop();
+    expect(hub.info().entries.find((e) => e.id === "sa11")).toMatchObject({ state: "landed", head: tip });
+    expect(await sh(w.repo.path, "show", "HEAD:b.txt")).toBe("b");
+    expect(existsSync(dir)).toBe(false);
+    expect(hub.info().runs).toEqual([]);
+  });
+
+  test("a stopped run with changes left uncommitted is refused with the reason, and lands once they are committed", async () => {
+    const w = await world();
+    const { hub, dir } = await stoppedRun(w, "sb11", async (d) => {
+      await commit(d, "b.txt", "b\n");
+      await writeFile(join(d, "half.txt"), "half\n");
+    });
+    expect(hub.info().runs.find((r) => r.id === "sb11")?.whole).toEqual({ ok: false, why: "changes left uncommitted" });
+    await expect(hub.land("sb11")).rejects.toThrow("a restart stopped it and it cannot land: changes left uncommitted");
+    expect(hub.info().entries).toEqual([]);
+    // the worktree is looked at when land asks, not once at adopt
+    await sh(dir, "add", "-A");
+    await sh(dir, "commit", "-q", "-m", "the rest");
+    await hub.land("sb11");
+    await hub.idle();
+    hub.stop();
+    expect(hub.info().entries.find((e) => e.id === "sb11")?.state).toBe("landed");
+    expect(await sh(w.repo.path, "show", "HEAD:half.txt")).toBe("half");
+  });
+
+  test("a stopped run with no commits is refused, and the info says so until it has one", async () => {
+    const w = await world();
+    const { hub, dir } = await stoppedRun(w, "sc11", async () => {});
+    await expect(hub.land("sc11")).rejects.toThrow("a restart stopped it and it cannot land: no commits main lacks");
+    expect(hub.info().entries).toEqual([]);
+    const get = async () => ((await (await hub.handle(new Request("http://x/api/landing"), new URL("http://x/api/landing")))!.json()) as LandingInfo).runs.find((r) => r.id === "sc11");
+    expect((await get())?.whole).toEqual({ ok: false, why: "no commits main lacks" });
+    await commit(dir, "b.txt", "b\n");
+    expect((await get())?.whole).toEqual({ ok: true });
+    await hub.idle();
+    hub.stop();
   });
 
   test("a hub that never adopted keeps nothing on disk", async () => {

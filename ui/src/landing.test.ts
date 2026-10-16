@@ -58,6 +58,12 @@ describe("a repo's landing", () => {
     expect(backLine(l.back[0]!)).toBe("test failed");
   });
 
+  test("a run a restart stopped stays out of ready, whole or not", () => {
+    const l = repoLanding(info([rec("a", { state: "stopped", whole: { ok: true } }), rec("b", { state: "stopped", whole: { ok: false, why: "changes left uncommitted" } }), rec("c")]), "canopy");
+    expect(l.ready.map((r) => r.id)).toEqual(["c"]);
+    expect(l.other.map((r) => r.id).sort()).toEqual(["a", "b"]);
+  });
+
   test("two backends' queues read as one", () => {
     const m = mergeLanding({ home: info([rec("a")]), mini: info([rec("mini:b")]) });
     expect(m.runs.map((r) => r.id)).toEqual(["a", "mini:b"]);
@@ -127,6 +133,18 @@ describe("review rules in the page", () => {
     expect([r.canLand, r.verdict, r.approve]).toEqual([true, "needs your approval: 1 sensitive file", true]);
     expect(runLanding(run("b"), info([rec("b")]))).toMatchObject({ canLand: true });
     expect(runLanding(run("b"), info([rec("b")]))?.verdict).toBeUndefined();
+  });
+
+  test("a run a restart stopped lands once its work is whole, or says why not", () => {
+    const stoppedBranch = { ...run("s").branch!, state: "stopped" as const };
+    for (const [branch, status] of [[stoppedBranch, "done"], [{ ...stoppedBranch, state: "working" as const }, "working"]] as const) {
+      const l = runLanding(run("s", { status, branch }), info([rec("s", { state: "stopped", whole: { ok: true }, review: sorted("land") })]))!;
+      expect(l).toMatchObject({ word: "stopped by a restart", canLand: true, stopped: true, verdict: "needs your land", approve: false });
+      expect(l.why).toBeUndefined();
+    }
+    const dirty = runLanding(run("s", { status: "done", branch: stoppedBranch }), info([rec("s", { state: "stopped", whole: { ok: false, why: "changes left uncommitted" } })]))!;
+    expect(dirty).toMatchObject({ word: "stopped by a restart", canLand: false, why: "changes left uncommitted" });
+    expect(dirty.stopped).toBeUndefined();
   });
 
   test("notices: one line each, merged newest first across backends", () => {
