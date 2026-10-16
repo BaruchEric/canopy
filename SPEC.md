@@ -54,8 +54,8 @@ canopy ui ~/dev
 ## Data and state
 
 - Config, workspaces, sources, agent and launch settings: `~/.config/canopy/config.json`, or `$CANOPY_CONFIG_DIR`.
-- Next to it: `tmux.sock` (the shells' tmux server), `shells/` (kept-shell snapshots), `pastes/`, `tasks/` (state and logs), `ranger/` (the always-on agent's conversation, wakes and brief), `builds/` (installed releases and PR worktrees), `worktrees/<repo key>/<id>/` (branch runs' worktrees), `landing/` (`runs/<id>.json` per branch run and `queue/<repo key>.json` per repo, written only by the server holding the flows lock), `library/<root-hash>/` (the project library).
-- In a repo: `.canopy/tasks.json`, `.canopy/workflows/`, `.canopy/spec.json` and `.canopy/gates.json` (the landing queue's gates and setup line), all checked in by that repo's owner.
+- Next to it: `tmux.sock` (the shells' tmux server), `shells/` (kept-shell snapshots), `pastes/`, `tasks/` (state and logs), `ranger/` (the always-on agent's conversation, wakes and brief), `builds/` (installed releases and PR worktrees), `worktrees/<repo key>/<id>/` (branch runs' worktrees), `landing/` (`runs/<id>.json` per branch run with its latest sort, `queue/<repo key>.json` per repo and `notices.json` for the queue's quiet lines, written only by the server holding the flows lock), `library/<root-hash>/` (the project library).
+- In a repo: `.canopy/tasks.json`, `.canopy/workflows/`, `.canopy/spec.json`, `.canopy/gates.json` (the landing queue's gates and setup line) and `.canopy/review.json` (what lands on its own and what needs an approval), all checked in by that repo's owner.
 - Per browser: preferences, open panels and shell tabs in localStorage.
 - Runs live in server memory; the last 60 finished ones stay until a restart. A branch run's record and its landing queue entry outlive a restart in `landing/`.
 - Session history is read from claude-history's CLI (`--json`), never its sqlite file.

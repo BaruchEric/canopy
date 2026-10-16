@@ -12,6 +12,7 @@ import { qual } from "../registry";
 import { INBOX_TEXT } from "../settings";
 import { canAnswer as canAnswerHere, inboxItems, useStore } from "../store";
 import { Gear, type GearEntry, type GearGroup } from "./Gear";
+import { LandingNotices } from "./Landing";
 import { PermissionForm, plainWords, Questions, useCommandView, type RememberChoice } from "./Prompts";
 import { useZoom, zoomStyle } from "./Surface";
 
@@ -507,6 +508,7 @@ export function InboxChip({ onGit }: { onGit?: () => void } = {}) {
               </ul>
             )}
           </section>
+          <LandingNotices />
           {recent.length > 0 && (
             <section className="settings-row">
               <h3 className="panel-label">lately</h3>

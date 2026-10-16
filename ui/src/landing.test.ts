@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { advance, enqueue } from "../../src/core/landing";
-import type { LandEntry, LandingInfo, LandingRun, Run } from "../../src/core/types";
-import { backLine, branchByDefault, chipWords, mergeLanding, repoLanding, runLanding } from "./landing";
+import type { LandEntry, LandingInfo, LandingRun, LandNotice, Run, RunReview } from "../../src/core/types";
+import { approveFiles, backLine, branchByDefault, chipWords, landAllOf, mergeLanding, needsApproval, noticeLine, repoLanding, runLanding, verdictTone, verdictWord } from "./landing";
 
 const rec = (id: string, over: Partial<LandingRun> = {}): LandingRun => ({
   id,
@@ -94,5 +94,46 @@ describe("a run's word and buttons", () => {
     expect(branchByDefault("propose")).toBe(true);
     expect(branchByDefault("propose", "ws")).toBe(false);
     expect(branchByDefault("ask")).toBe(false);
+  });
+});
+
+const sorted = (verdict: RunReview["verdict"], files: RunReview["files"] = [], over: Partial<RunReview> = {}): RunReview => ({ verdict, files, base: "b0", head: "h1", at: 1, ...over });
+
+describe("review rules in the page", () => {
+  test("a ready run's verdict, its tone, and whether land opens the approve sheet", () => {
+    expect([verdictWord(rec("a")), needsApproval(rec("a"))]).toEqual(["sorting", false]);
+    const auto = rec("b", { review: sorted("auto") });
+    expect([verdictWord(auto), verdictTone(auto), needsApproval(auto)]).toEqual(["lands on its own", "moss", false]);
+    const land = rec("c", { review: sorted("land", [], { why: "no review rules" }) });
+    expect([verdictWord(land), verdictTone(land)]).toEqual(["needs your land: no review rules", "lichen"]);
+    const look = rec("d", { review: sorted("approve", [{ path: "s", cls: "docs", sensitive: "x" }]) });
+    expect([verdictWord(look), verdictTone(look), needsApproval(look)]).toEqual(["needs your approval: 1 sensitive file", "rust", true]);
+  });
+
+  test("the approve sheet lists the sensitive files first, or every file when the rules are broken", () => {
+    const doc: RunReview["files"][number] = { path: "a.md", cls: "docs" };
+    const touchy: RunReview["files"][number] = { path: "s.ts", cls: "logic", sensitive: "x" };
+    expect(approveFiles(rec("a", { review: sorted("approve", [doc, touchy]) }))).toEqual({ look: [touchy], rest: [doc] });
+    expect(approveFiles(rec("a", { review: sorted("approve", [doc], { why: "bad" }) }))).toEqual({ look: [doc], rest: [] });
+  });
+
+  test("land all takes what needs no approval", () => {
+    const l = landAllOf(info([rec("a", { review: sorted("land") }), rec("b", { review: sorted("approve") }), rec("c")]), "canopy");
+    expect([l.take.map((r) => r.id), l.skip.map((r) => r.id)]).toEqual([["a", "c"], ["b"]]);
+  });
+
+  test("a run sheet's land knows its verdict", () => {
+    const r = runLanding(run("a"), info([rec("a", { review: sorted("approve", [{ path: "s", cls: "docs", sensitive: "x" }]) })]))!;
+    expect([r.canLand, r.verdict, r.approve]).toEqual([true, "needs your approval: 1 sensitive file", true]);
+    expect(runLanding(run("b"), info([rec("b")]))).toMatchObject({ canLand: true });
+    expect(runLanding(run("b"), info([rec("b")]))?.verdict).toBeUndefined();
+  });
+
+  test("notices: one line each, merged newest first across backends", () => {
+    const n = (id: string, at: number, over: Partial<LandNotice> = {}): LandNotice => ({ id, entry: "e", repoId: "canopy", branch: "run/x-e", note: "", kind: "landed", at, ...over });
+    expect(noticeLine(n("a", 1, { head: "abcdef1234" }))).toBe("run/x-e landed on its own at abcdef1");
+    expect(noticeLine(n("b", 1, { kind: "held", why: "after the rebase it needs your land" }))).toBe("run/x-e held back: after the rebase it needs your land");
+    const merged = mergeLanding({ mini: { ...info([]), notices: [n("m1", 1)] }, mac: { ...info([]), notices: [n("c1", 5)] } });
+    expect(merged.notices?.map((x) => x.id)).toEqual(["c1", "m1"]);
   });
 });

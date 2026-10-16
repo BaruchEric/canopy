@@ -10,12 +10,6 @@ The cards area only gets what the dock leaves over: at least `--cards-min` (320p
 P3 · added 2026-10-14 · source: Eric (Anthropic "Redesigning source control" post)
 One long-lived agent per component (the mini's compose stack, peer sync, tailchan) reads that component's logs and health on a schedule and posts to the inbox when something looks off, catching the slow, odd drift a fixed alert misses. Reference: the "superfans" in https://www.anthropic.com/engineering/redesigning-source-control.
 
-### FR-013 · Review rules that tell a comment-only change from a logic change
-P2 · added 2026-10-14 · source: Eric (Anthropic "Redesigning source control" post)
-Before a run's diff reaches Eric, canopy sorts it by what it touches: a change to comments, docs or formatting alone can land without a look, while anything under a sensitive path (the secret store, the peer gate) always waits for an explicit approval. The rules are set per repo. Reference: Antique's semantic approval constraints in https://www.anthropic.com/engineering/redesigning-source-control.
-Spec: docs/superpowers/specs/2026-10-15-landing-queue-design.md (2026-10-15), not built.
-Plan: docs/superpowers/plans/2026-10-16-landing-queue-2.md, not started.
-
 ### FR-011 · A run keeps watching the PR it opened
 P2 · added 2026-10-09 · source: Eric (Claude Code Projects video)
 When a run opens a PR, its footer shows the PR number, the diff size and a CI chip whose popover lists checks in progress and passed. Two toggles there: "auto-fix CI and address comments" (the run pushes fixes when checks fail and answers review comments) and "auto-merge when ready". Reference: https://www.youtube.com/watch?v=omihvjf0A2k at 2:15.
@@ -37,6 +31,12 @@ P3 · added 2026-10-07 · source: dock pass
 The gear still marks "panels side by side" once the dock is a grid of split cells.
 
 ## In Progress
+
+### FR-013 · Review rules that tell a comment-only change from a logic change
+P2 · added 2026-10-14 · source: Eric (Anthropic "Redesigning source control" post)
+Before a run's diff reaches Eric, canopy sorts it by what it touches: a change to comments, docs or formatting alone can land without a look, while anything under a sensitive path (the secret store, the peer gate) always waits for an explicit approval. The rules are set per repo. Reference: Antique's semantic approval constraints in https://www.anthropic.com/engineering/redesigning-source-control.
+Spec: docs/superpowers/specs/2026-10-15-landing-queue-design.md (2026-10-15).
+Plan: docs/superpowers/plans/2026-10-16-landing-queue-2.md, built 2026-10-16 on its own branch, waiting to be merged.
 
 ## Shipped
 

@@ -678,13 +678,38 @@ export const api = {
   /** one backend's branch runs and landing queue; an older backend has none */
   landing: async (b: string = homeName()) => {
     const r = await req<Partial<LandingInfo> | null>(b, "/api/landing");
-    const info: LandingInfo = { runs: Array.isArray(r?.runs) ? r.runs : [], entries: Array.isArray(r?.entries) ? r.entries : [], orphans: Array.isArray(r?.orphans) ? r.orphans : [] };
+    const info: LandingInfo = {
+      runs: Array.isArray(r?.runs) ? r.runs : [],
+      entries: Array.isArray(r?.entries) ? r.entries : [],
+      orphans: Array.isArray(r?.orphans) ? r.orphans : [],
+      notices: Array.isArray(r?.notices) ? r.notices : [],
+    };
     return from(b, info, qLanding);
   },
-  /** "land" on a ready branch run, by its run's or its branch's id */
-  land: async (id: string) => {
+  /** "land" on a ready branch run, by its run's or its branch's id;
+   *  `approve` is the sensitive patch id the approve sheet showed */
+  land: async (id: string, approve?: string) => {
     const [b, plain] = on(id);
-    await req<LandEntry>(b, "/api/landing/land", { method: "POST", body: JSON.stringify({ run: plain }) });
+    await req<LandEntry>(b, "/api/landing/land", { method: "POST", body: JSON.stringify({ run: plain, ...(approve ? { approve } : {}) }) });
+  },
+  /** "land all" in one repo: the ready runs that need no approval */
+  landAll: async (repoId: string) => {
+    const [b, plain] = on(repoId);
+    return req<{ queued: string[]; skipped: { id: string; branch: string; why: string }[] }>(b, "/api/landing/land-all", { method: "POST", body: JSON.stringify({ repo: plain }) });
+  },
+  /** one file's diff as a branch run's latest sort saw it */
+  landingDiff: async (id: string, path: string) => {
+    const [b, plain] = on(id);
+    return req<{ path: string; diff: string }>(b, `/api/landing/diff?${rq(plain, { path })}`);
+  },
+  /** "seen" on landing notices, each sent to its own backend */
+  seenLanding: async (ids: readonly string[]) => {
+    const by = new Map<string, string[]>();
+    for (const id of ids) {
+      const [b, plain] = on(id);
+      by.set(b, [...(by.get(b) ?? []), plain]);
+    }
+    await Promise.all([...by].map(([b, list]) => req<{ ok: true }>(b, "/api/landing/seen", { method: "POST", body: JSON.stringify({ ids: list }) })));
   },
   /** "fix it" on a sent-back branch: the run it starts */
   fixLanding: async (id: string) => {

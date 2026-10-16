@@ -1,6 +1,22 @@
 # Landing queue, plan 2: review rules and auto-land (FR-013)
 
-**Status:** not started.
+**Status:** built 2026-10-16 on branch worktree-agent-ae6d48a4cc8d79d7e
+(45684c6..63053b0 and this status commit), with the six amendments of the
+review that is landing on main separately, not merged into main, not
+deployed. Gates green: typecheck, lint, 4000 tests pass with 9 skipped,
+build. The live check passed against a scratch canopy at 63053b0 with the
+real claude CLI doing every run: a README edit and a doc-comment edit to
+a `.ts` file each joined on their own, landed and left a landed notice,
+with nothing pushed; a new function waited for land; an
+`oxlint-disable` comment sorted as logic ("a directive"); an edit under
+`secret/**` and a `git rm` of `.canopy/review.json` each needed approval;
+the diff route served the listed file and refused another; land without
+the id and with a stale one were refused; an approval given before main
+moved landed after the rebase with the same id; land all took the two
+logic runs and named the approval one; and `canopy land` printed the file,
+how to look and the `--approve` command, which then landed it. The Mac's
+git was not reachable to check for `patch-id --verbatim`; the SHA-256
+fallback is in place either way.
 
 **Goal:** before a branch run reaches Eric, canopy sorts every file in its
 diff into docs, comments, format or logic and marks the ones under a
@@ -315,3 +331,40 @@ plan). It builds on plan 1, merged into main as 6f6be30.
   git in task 3. If it is missing there, fall back to SHA-256 over
   `git diff -U0` with the hunk headers' line numbers taken out, and say so
   in the plan's status line.
+
+## Calls the build made
+
+1. **Canopy checks the globs itself.** `Bun.Glob` takes any pattern
+   without throwing, so `parseRules` refuses a glob that starts with `/`,
+   climbs out with `..`, or leaves a bracket or brace open. An unknown key
+   is a parse error too, since a misspelt `approve` would drop every glob.
+2. **With the rules broken, an approval names the whole diff.** No file can
+   be called safe, so `sensitiveId` is the patch id of every file.
+3. **Format is checked before comments**, so a change that is whitespace
+   alone sorts as format even when its changed lines are blank.
+4. **In a docs folder, a file is docs unless its extension is code,
+   config, or markup or styles a site builds from** (`.html`, `.svg`,
+   `.mdx`, `.vue`, `.css` and their kin). A file with no extension there is
+   logic. A new executable file is logic, like a mode change.
+5. **The macro guard also takes a quoted key** (`"type": "macro"`). An
+   escaped attribute it misses reaches the transpiler, which refuses it
+   with `macro: false`, and that is logic. The test proves with a sentinel
+   module that neither form runs.
+6. **Past 300 files the paths are still checked**, so a huge run that
+   touches a sensitive file still needs approval rather than land.
+7. **Any entry whose rebase sort says `approve` without a matching
+   approval leaves the queue**, Eric's plain "land" included, so rules that
+   narrowed on main hold it too, not only `auto` and approved entries.
+8. **A sort that fails holds.** `land` answers 409, a fix does not rejoin,
+   and a turn takes the entry out with a held notice.
+9. **"Land all" takes runs in the order they finished**, and the button
+   shows with two or more ready and at least one it would take.
+10. **Canopy's approve list adds `src/core/sinkssh.ts`** (the secret
+    store's ssh sinks) and leaves out `src/server/peers.ts`, which does not
+    exist. The peer routes sit in `src/server/index.ts`, which is not on
+    the list, since nearly every server change would then need approval.
+11. **`canopy land` on an `approve` run also prints a `git diff` line** to
+    look with before the `--approve` command.
+12. **`LandingInfo.notices` is optional**, since an older backend sends
+    none. A queued entry with an approval reads "approved" in the page and
+    in `canopy queue`.

@@ -409,4 +409,10 @@ describe("the landing queue's sent-back branches", () => {
     expect(toRunAnswer({ landing: "fix" })).toBeNull();
     expect(toAskAnswer({ landing: "drop" })).toBeNull();
   });
+
+  test("a notice is never an item: it asks nothing", () => {
+    const notices = [{ id: "n1", entry: "b1", repoId: "app", branch: "run/x-b1", note: "", kind: "held" as const, why: "x", at: 1 }];
+    const ctx = { repos: [repo("app")], cards: {}, landing: { ...landing([]), notices } };
+    expect(mergeInbox([], {}, {}, 0, ctx)).toEqual([]);
+  });
 });

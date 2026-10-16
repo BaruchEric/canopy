@@ -1,19 +1,43 @@
-/** The landing queue's server half (FR-012): the branch run records, one
- *  loop per repo that lands queued entries one at a time, the routes, and
- *  the `landing` event. The model and its words are `core/landing.ts`; the
- *  git is `core/worktree.ts`; the gates are `core/gates.ts`.
+/** The landing queue's server half (FR-012, FR-013): the branch run
+ *  records, one loop per repo that lands queued entries one at a time, the
+ *  sort that decides what may join on its own, the routes, and the
+ *  `landing` event. The model and its words are `core/landing.ts`; the git
+ *  is `core/worktree.ts`; the gates are `core/gates.ts`; the review rules
+ *  and the sort are `core/review.ts`.
  *
  *  Records live under `<configDir>/landing/`: `runs/<id>.json` per branch
- *  run and `queue/<repo key>.json` per repo. Only the server holding the
- *  flows lock writes them (`adopt`), so two canopies on one config dir never
- *  both work one queue. The queue never pushes. */
+ *  run, `queue/<repo key>.json` per repo and `notices.json`. Only the server
+ *  holding the flows lock writes them (`adopt`), so two canopies on one
+ *  config dir never both work one queue. The queue never pushes. */
 
+import { existsSync } from "node:fs";
 import { mkdir, readdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import { basename, join } from "node:path";
 import { readGates, touchesLockfile, type Gates } from "../core/gates";
-import { advance, enqueue, holdAll, inQueue, LandError, nextEntry, pruneLanded, restartWorking, retryWaiting, sentBack, WORKING, type LandEvent } from "../core/landing";
+import {
+  addNotice,
+  advance,
+  canLand,
+  enqueue,
+  holdAll,
+  inQueue,
+  LandError,
+  MAX_NOTICES,
+  nextEntry,
+  pruneLanded,
+  rejoins,
+  restartWorking,
+  retryWaiting,
+  reviewWord,
+  sentBack,
+  unqueue,
+  WORKING,
+  type LandEvent,
+  type QueueFlags,
+} from "../core/landing";
+import { foldsCase, readRules, sortBranch } from "../core/review";
 import { configDir } from "../core/store";
-import type { LandEntry, LandingInfo, LandingOrphan, LandingRun, Repo, Run, RunBranchState, ServerEvent } from "../core/types";
+import type { LandEntry, LandingInfo, LandingOrphan, LandingRun, LandNotice, Repo, Run, RunBranchState, RunReview, ServerEvent } from "../core/types";
 import { isRunActive } from "../core/types";
 import { git } from "../core/exec";
 import { aheadOf, currentBranch, defaultBranch, dirtyFiles, ffMain, listRunTreeDirs, rebaseOnto, removeRunTree, repoKey, revOf, treeRepo, worktreesRoot } from "../core/worktree";
@@ -39,10 +63,23 @@ export interface LandingDeps {
   startFix: (rec: LandingRun, entry: LandEntry) => Run | Promise<Run>;
   /** whether a run is still going, by id; a fix waits for it */
   runActive: (id: string) => boolean;
+  /** sorts a branch run's diff; `sortRun` unless a test says otherwise */
+  sort?: (rec: LandingRun, now: number) => Promise<RunReview>;
   dir?: string;
   worktrees?: string;
   now?: () => number;
   retryEvery?: number;
+}
+
+/** Sorts a branch run's worktree against its target, with the rules and
+ *  gates its main checkout holds at this moment. */
+export async function sortRun(rec: LandingRun, now: number): Promise<RunReview> {
+  const rules = await readRules(rec.repoPath);
+  const hasGates = await readGates(rec.repoPath).then(
+    (g) => g.source !== "none",
+    () => false,
+  );
+  return sortBranch(rec.dir, rec.target, rules, hasGates, await foldsCase(rec.repoPath), now);
 }
 
 const json = (data: unknown, status = 200) => new Response(JSON.stringify(data), { status, headers: { "content-type": "application/json" } });
@@ -54,6 +91,11 @@ export class LandingHub {
   private runs = new Map<string, LandingRun>();
   private entries: LandEntry[] = [];
   private orphans: LandingOrphan[] = [];
+  private notices: LandNotice[] = [];
+  /** each branch's sort going now; the next waits for it */
+  private sorting = new Map<string, Promise<RunReview | null>>();
+  /** work started off a run's event (a sort, then a join), for `idle` */
+  private pending = new Set<Promise<void>>();
   /** set while this server holds the flows lock: only then are records written */
   private keeping = false;
   private loops = new Map<string, Promise<void>>();
@@ -75,7 +117,7 @@ export class LandingHub {
   }
 
   info(): LandingInfo {
-    return { runs: [...this.runs.values()], entries: this.entries, orphans: this.orphans };
+    return { runs: [...this.runs.values()], entries: this.entries, orphans: this.orphans, notices: this.notices };
   }
 
   private publish(): void {
@@ -126,6 +168,26 @@ export class LandingHub {
     });
   }
 
+  private saveNotices(): Promise<void> {
+    return this.persist(join(this.dir, "notices.json"), () => (this.notices.length === 0 ? null : this.notices));
+  }
+
+  /** A quiet line: a run that landed on its own, or one held back. */
+  private notify(n: Omit<LandNotice, "id" | "at">): void {
+    this.notices = addNotice(this.notices, { ...n, id: crypto.randomUUID().slice(0, 8), at: this.now() });
+    void this.saveNotices();
+  }
+
+  /** "seen" on notices: they go. */
+  seen(ids: readonly string[]): void {
+    const drop = new Set(ids);
+    const left = this.notices.filter((n) => !drop.has(n.id));
+    if (left.length === this.notices.length) return;
+    this.notices = left;
+    void this.saveNotices();
+    this.publish();
+  }
+
   /** Resolves once every record write asked for so far is on disk. */
   async flushed(): Promise<void> {
     while (this.chains.size > 0) await Promise.all(this.chains.values());
@@ -151,9 +213,17 @@ export class LandingHub {
 
   /** Takes the records the last server left, as the holder of the flows
    *  lock: a run that was working reads `stopped` with its worktree kept,
-   *  an entry cut off mid-turn starts its turn again, and a run worktree no
-   *  record names is an orphan. Writes from now on. */
+   *  an entry cut off mid-turn starts its turn again, a ready run with no
+   *  sort (a plan 1 record) is sorted, and a run worktree no record names
+   *  is an orphan. Writes from now on. */
   async adopt(): Promise<void> {
+    const kept = await readFile(join(this.dir, "notices.json"), "utf8").then(
+      (t) => JSON.parse(t) as unknown,
+      () => [],
+    );
+    const known = new Set(this.notices.map((x) => x.id));
+    const read = Array.isArray(kept) ? (kept.filter((x) => isRecord(x) && typeof x["id"] === "string" && !known.has(x["id"])) as LandNotice[]) : [];
+    this.notices = [...this.notices, ...read].sort((a, b) => b.at - a.at).slice(0, MAX_NOTICES);
     this.keeping = true;
     const runs = await this.readDir("runs", (v) => (isRecord(v) && typeof v["id"] === "string" ? [v as unknown as LandingRun] : []));
     for (const r of runs) {
@@ -162,12 +232,13 @@ export class LandingHub {
       if (rec !== r) await this.saveRun(rec);
     }
     const entries = await this.readDir("queue", (v) => (Array.isArray(v) ? (v.filter((e) => isRecord(e) && typeof e["id"] === "string") as LandEntry[]) : []));
-    const known = new Set(this.entries.map((e) => e.id));
-    this.entries = restartWorking([...this.entries, ...entries.filter((e) => !known.has(e.id))], this.now());
+    const had = new Set(this.entries.map((e) => e.id));
+    this.entries = restartWorking([...this.entries, ...entries.filter((e) => !had.has(e.id))], this.now());
     for (const p of new Set(this.entries.map((e) => e.repoPath))) await this.saveQueue(p);
     await this.findOrphans();
     this.publish();
     for (const repoId of new Set(this.entries.map((e) => e.repoId))) this.kick(repoId);
+    for (const r of this.runs.values()) if (r.state === "ready" && !r.review) this.track(this.resort(r.id).then(() => undefined));
   }
 
   /** Stops writing: the server is going down or gave the lock up. */
@@ -216,8 +287,79 @@ export class LandingHub {
 
   /* ---------- runs ---------- */
 
-  /** A run changed: a branch run's record follows it. When a "fix it" run
-   *  settles ready, its sent-back entry rejoins the queue at the end. */
+  /** Work started off an event, kept so `idle` can wait for it. */
+  private track(p: Promise<void>): void {
+    const kept = p.catch((err) => console.error(`landing: ${errText(err)}`));
+    this.pending.add(kept);
+    void kept.finally(() => this.pending.delete(kept));
+  }
+
+  /** Sorts a branch run again, after any sort of it still going, and keeps
+   *  the result on its record. Null when it has no record or worktree, or
+   *  the sort failed (which the log says). */
+  private resort(id: string): Promise<RunReview | null> {
+    const prev = this.sorting.get(id) ?? Promise.resolve(null);
+    const next = prev.then(async (): Promise<RunReview | null> => {
+      const rec = this.runs.get(id);
+      if (!rec || !existsSync(rec.dir)) return null;
+      try {
+        const review = await (this.deps.sort ?? sortRun)(rec, this.now());
+        const cur = this.runs.get(id);
+        if (cur) {
+          const upd = { ...cur, review };
+          this.runs.set(id, upd);
+          this.written.set(id, JSON.stringify(upd));
+          void this.saveRun(upd);
+          this.publish();
+        }
+        return review;
+      } catch (err) {
+        console.error(`landing: sorting ${rec.branch}: ${errText(err)}`);
+        return null;
+      }
+    });
+    this.sorting.set(id, next);
+    void next.then(() => {
+      if (this.sorting.get(id) === next) this.sorting.delete(id);
+    });
+    return next;
+  }
+
+  /** A fresh run settled ready: sorted, and in the queue on its own when
+   *  the sort says `auto` and nobody queued it meanwhile. */
+  private async settled(id: string): Promise<void> {
+    const review = await this.resort(id);
+    const rec = this.runs.get(id);
+    if (!review || review.verdict !== "auto" || !rec || rec.state !== "ready") return;
+    if (this.entries.some((e) => e.id === id) || this.deps.runActive(rec.runId)) return;
+    this.entries = enqueue(this.entries, rec, this.now(), { auto: true });
+    void this.saveQueue(rec.repoPath);
+    this.publish();
+    this.kick(rec.repoId);
+  }
+
+  /** A "fix it" run settled ready: its entry rejoins the queue when the
+   *  sort allows it (call 13), else the branch waits as ready with a notice. */
+  private async rejoin(id: string): Promise<void> {
+    const review = await this.resort(id);
+    const rec = this.runs.get(id);
+    const entry = this.entries.find((e) => e.id === id);
+    if (!rec || !entry || inQueue(entry) || rec.state !== "ready") return;
+    const ok = review ? rejoins(review, entry) : { ok: false as const, why: "its diff could not be sorted" };
+    if (ok.ok) {
+      this.entries = enqueue(this.entries, rec, this.now());
+      this.kick(rec.repoId);
+    } else {
+      this.entries = unqueue(this.entries, id);
+      this.notify({ entry: id, repoId: rec.repoId, branch: rec.branch, note: rec.note, kind: "held", why: ok.why });
+    }
+    void this.saveQueue(rec.repoPath);
+    this.publish();
+  }
+
+  /** A run changed: a branch run's record follows it. A run that settles
+   *  ready is sorted and may join on its own; a "fix it" run that settles
+   *  ready may take its sent-back entry back into the queue. */
   onRun(run: Run): void {
     const b = run.branch;
     if (!b) return;
@@ -251,8 +393,9 @@ export class LandingHub {
     };
     const ended = !isRunActive(run);
     const text = JSON.stringify(next);
-    let moved = text !== this.written.get(next.id);
-    if (moved) {
+    const changed = text !== this.written.get(next.id);
+    let moved = changed;
+    if (changed) {
       this.runs.set(next.id, next);
       this.written.set(next.id, text);
       void this.saveRun(next);
@@ -261,12 +404,11 @@ export class LandingHub {
     if (ended && entry?.fixing === run.id && next.state !== "working") {
       const { fixing: _f, ...rest } = entry;
       this.entries = this.entries.map((e) => (e.id === entry.id ? rest : e));
-      if (next.state === "ready") {
-        this.entries = enqueue(this.entries, next, this.now());
-        this.kick(next.repoId);
-      }
+      if (next.state === "ready") this.track(this.rejoin(next.id));
       void this.saveQueue(next.repoPath);
       moved = true;
+    } else if (ended && changed && !entry && next.state === "ready") {
+      this.track(this.settled(next.id));
     }
     if (moved) this.publish();
   }
@@ -288,17 +430,64 @@ export class LandingHub {
     return this.runs.get(id) ?? [...this.runs.values()].find((r) => r.runId === id);
   }
 
-  /** "land" on a ready run: the end of its repo's queue. */
-  land(id: string): LandEntry {
+  /** The checks "land" makes before it spends a sort: the run exists,
+   *  has ended, is ready, and is not queued or landed already. */
+  private landable(id: string): LandingRun {
     const rec = this.find(id);
     if (!rec) throw new LandError("no branch run by that id", 404);
-    const fixing = this.entries.find((e) => e.id === rec.id)?.fixing;
-    if (this.deps.runActive(rec.runId) || (fixing && this.deps.runActive(fixing))) throw new LandError("the run is still going; land it once it ends");
-    this.entries = enqueue(this.entries, rec, this.now());
-    void this.saveQueue(rec.repoPath);
+    const had = this.entries.find((e) => e.id === rec.id);
+    if (this.deps.runActive(rec.runId) || (had?.fixing && this.deps.runActive(had.fixing))) throw new LandError("the run is still going; land it once it ends");
+    if (rec.state !== "ready") throw new LandError(`only a ready run lands; this one is ${rec.state}`);
+    if (had && inQueue(had)) throw new LandError("it is in the queue already");
+    if (had?.state === "landed") throw new LandError("it has landed already");
+    return rec;
+  }
+
+  /** "land" on a ready run: sorted again with the rules main holds now
+   *  (call 14), then the end of its repo's queue. A run that needs an
+   *  approval lands only with `approve`, the sensitive patch id the sheet
+   *  showed, and the entry keeps it. */
+  async land(id: string, approve?: string): Promise<LandEntry> {
+    const rec = this.landable(id);
+    const review = await this.resort(rec.id);
+    if (!review) throw new LandError("its diff could not be sorted; the log says why");
+    canLand(review, approve);
+    // a second "land" may have queued it while this one sorted
+    const cur = this.landable(rec.id);
+    const flags: QueueFlags = review.verdict === "approve" && approve ? { approved: approve } : {};
+    this.entries = enqueue(this.entries, cur, this.now(), flags);
+    void this.saveQueue(cur.repoPath);
     this.publish();
-    this.kick(rec.repoId);
-    return this.entries.find((e) => e.id === rec.id)!;
+    this.kick(cur.repoId);
+    return this.entries.find((e) => e.id === cur.id)!;
+  }
+
+  /** "land all" in one repo: every ready run that needs no approval joins
+   *  the queue, each sorted again first; the ones that need it are named. */
+  async landAll(repoId: string): Promise<{ queued: string[]; skipped: { id: string; branch: string; why: string }[] }> {
+    const has = new Set(this.entries.filter((e) => e.repoId === repoId).map((e) => e.id));
+    const ready = [...this.runs.values()].filter((r) => r.repoId === repoId && r.state === "ready" && !has.has(r.id) && !this.deps.runActive(r.runId));
+    const queued: string[] = [];
+    const skipped: { id: string; branch: string; why: string }[] = [];
+    for (const r of ready.sort((a, b) => (a.endedAt ?? a.startedAt) - (b.endedAt ?? b.startedAt))) {
+      const review = await this.resort(r.id);
+      if (!review || review.verdict === "approve") {
+        skipped.push({ id: r.id, branch: r.branch, why: review ? reviewWord(review) : "its diff could not be sorted" });
+        continue;
+      }
+      try {
+        this.entries = enqueue(this.entries, this.runs.get(r.id) ?? r, this.now(), {});
+        queued.push(r.id);
+      } catch (err) {
+        skipped.push({ id: r.id, branch: r.branch, why: errText(err) });
+      }
+    }
+    if (queued.length > 0) {
+      void this.saveQueue(ready[0]!.repoPath);
+      this.publish();
+      this.kick(repoId);
+    }
+    return { queued, skipped };
   }
 
   /** "fix it" on a sent-back entry: a run on the same branch that resumes
@@ -368,7 +557,7 @@ export class LandingHub {
     this.runs.set(id, rec);
     await this.saveRun(rec);
     this.orphans = this.orphans.filter((x) => x.dir !== dir);
-    this.land(id);
+    await this.land(id);
   }
 
   /** Works a repo's queue, one loop at a time; a kick while it runs asks
@@ -388,9 +577,10 @@ export class LandingHub {
     this.loops.set(repoId, loop);
   }
 
-  /** Resolves once every loop running now is done, for tests and shutdown. */
+  /** Resolves once every loop, sort and join running now is done, for
+   *  tests and shutdown. */
   async idle(): Promise<void> {
-    while (this.loops.size > 0) await Promise.all(this.loops.values());
+    while (this.loops.size + this.pending.size + this.sorting.size > 0) await Promise.all([...this.loops.values(), ...this.pending, ...this.sorting.values()]);
   }
 
   private update(e: LandEntry): LandEntry {
@@ -430,6 +620,20 @@ export class LandingHub {
     }
   }
 
+  /** Why an entry may not land as rebased, or null: one that joined on
+   *  its own must still sort `auto`, and one that needs an approval must
+   *  still carry the id Eric approved. */
+  private async recheck(e: LandEntry): Promise<string | null> {
+    if (!this.runs.has(e.id)) return null;
+    const review = await this.resort(e.id);
+    if (!review) return "its diff could not be sorted after the rebase";
+    if (e.auto && review.verdict !== "auto") return `after the rebase it ${reviewWord(review)}`;
+    if (review.verdict === "approve" && e.approved !== review.sensitiveId) {
+      return e.approved ? "the sensitive files changed since you approved them; look again" : `after the rebase it ${reviewWord(review)}`;
+    }
+    return null;
+  }
+
   /** One entry's turn: rebase, setup, gates, fast-forward. */
   private async turn(start: LandEntry, gates: Gates): Promise<void> {
     let e = this.step(start, { t: "begin" });
@@ -447,6 +651,16 @@ export class LandingHub {
       }
       if ("error" in rb) {
         this.step(e, { t: "hold", why: `rebase failed: ${rb.error}` });
+        return;
+      }
+      // sorted again on the new main with the rules it holds now (call 2):
+      // rules may have narrowed since the run settled
+      const held = await this.recheck(e);
+      if (held) {
+        this.entries = unqueue(this.entries, e.id);
+        this.notify({ entry: e.id, repoId: e.repoId, branch: e.branch, note: e.note, kind: "held", why: held });
+        void this.saveQueue(e.repoPath);
+        this.publish();
         return;
       }
       const after = await revOf(e.dir, "HEAD");
@@ -499,11 +713,26 @@ export class LandingHub {
       }
       const landed = (await revOf(e.repoPath, "HEAD")) ?? after ?? "";
       this.step(e, { t: "landed", head: landed });
+      if (e.auto) this.notify({ entry: e.id, repoId: e.repoId, branch: e.branch, note: e.note, kind: "landed", head: landed });
       await removeRunTree(e.repoPath, e.dir, e.branch);
       await this.dropRun(e.id);
       this.publish();
       return;
     }
+  }
+
+  /** One file's diff as the run's latest sort saw it, for the approve
+   *  sheet. Only a path the sort listed (call 15), so the route never reads
+   *  any other file. */
+  async diff(id: string, path: string): Promise<{ path: string; diff: string }> {
+    const rec = this.find(id);
+    if (!rec) throw new LandError("no branch run by that id", 404);
+    const f = rec.review?.files.find((x) => x.path === path);
+    if (!rec.review || !f) throw new LandError("that file is not in the run's sorted diff", 404);
+    const paths = f.from !== undefined ? [f.from, f.path] : [f.path];
+    const r = await git(rec.dir, ["diff", "--no-ext-diff", "--no-textconv", rec.review.base, rec.review.head, "--", ...paths], 60_000);
+    if (r.code !== 0) throw new LandError(`git diff: ${r.stderr.trim().split("\n").pop() ?? `exited ${r.code}`}`, 500);
+    return { path, diff: r.stdout };
   }
 
   /** Whether anything is mid-turn: the server's shutdown can say so. */
@@ -518,12 +747,30 @@ export class LandingHub {
     if (!path.startsWith("/api/landing")) return null;
     try {
       if (path === "/api/landing" && req.method === "GET") return json(this.info());
+      if (path === "/api/landing/diff" && req.method === "GET") {
+        const id = url.searchParams.get("id");
+        const file = url.searchParams.get("path");
+        if (!id || !file) return json({ error: "id and path are required" }, 400);
+        return json(await this.diff(id, file));
+      }
       if (req.method !== "POST") return json({ error: "not found" }, 404);
       const body: unknown = await req.json().catch(() => null);
       if (!isRecord(body)) return json({ error: "malformed body" }, 400);
       if (path === "/api/landing/land") {
         if (typeof body["run"] !== "string") return json({ error: "run is required" }, 400);
-        return json(this.land(body["run"]));
+        const approve = body["approve"];
+        if (approve !== undefined && typeof approve !== "string") return json({ error: "approve must be the id the sheet showed" }, 400);
+        return json(await this.land(body["run"], approve));
+      }
+      if (path === "/api/landing/land-all") {
+        if (typeof body["repo"] !== "string") return json({ error: "repo is required" }, 400);
+        return json(await this.landAll(body["repo"]));
+      }
+      if (path === "/api/landing/seen") {
+        const ids = body["ids"];
+        if (!Array.isArray(ids) || !ids.every((x) => typeof x === "string")) return json({ error: "ids must be a list" }, 400);
+        this.seen(ids as string[]);
+        return json({ ok: true });
       }
       if (path === "/api/landing/fix") {
         if (typeof body["id"] !== "string") return json({ error: "id is required" }, 400);

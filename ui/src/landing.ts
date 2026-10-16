@@ -2,10 +2,10 @@
  *  a repo's part of it, a run's word and buttons, the card chip. Pure; the
  *  words for an entry's state are `core/landing.ts`'s, shared with the CLI. */
 
-import { inQueue, landCounts, landWord, queueOf, sentBack } from "../../src/core/landing";
-import type { LandEntry, LandingInfo, LandingOrphan, LandingRun, Run, RunAction } from "../../src/core/types";
+import { inQueue, landAllPick, landCounts, landWord, queueOf, reviewWord, sentBack } from "../../src/core/landing";
+import type { LandEntry, LandingInfo, LandingOrphan, LandingRun, LandNotice, ReviewFile, Run, RunAction } from "../../src/core/types";
 
-export const EMPTY_LANDING: LandingInfo = { runs: [], entries: [], orphans: [] };
+export const EMPTY_LANDING: LandingInfo = { runs: [], entries: [], orphans: [], notices: [] };
 
 /** Every backend's queue as one; ids are already qualified per backend. */
 export function mergeLanding(byBackend: Readonly<Record<string, LandingInfo>>): LandingInfo {
@@ -15,7 +15,36 @@ export function mergeLanding(byBackend: Readonly<Record<string, LandingInfo>>): 
     runs: parts.flatMap((p) => p.runs),
     entries: parts.flatMap((p) => p.entries),
     orphans: parts.flatMap((p) => p.orphans),
+    notices: parts.flatMap((p) => p.notices ?? []).sort((a, b) => b.at - a.at),
   };
+}
+
+/** A ready run's verdict in words; "sorting" until its sort is in. */
+export const verdictWord = (r: Pick<LandingRun, "review">): string => (r.review ? reviewWord(r.review) : "sorting");
+
+/** Whether a ready run's land goes through the approve sheet. */
+export const needsApproval = (r: Pick<LandingRun, "review">): boolean => r.review?.verdict === "approve";
+
+/** The verdict's tone in the list: moss lands on its own, rust needs a look. */
+export const verdictTone = (r: Pick<LandingRun, "review">): "moss" | "lichen" | "rust" =>
+  r.review?.verdict === "auto" ? "moss" : r.review?.verdict === "approve" ? "rust" : "lichen";
+
+/** The ready runs "land all" would take in a repo, and the ones it leaves
+ *  for an approval; the button shows with two or more ready. */
+export const landAllOf = (info: LandingInfo, repoId: string) => landAllPick(info.runs, info.entries, repoId);
+
+/** The files the approve sheet lists first: the sensitive ones, or every
+ *  file when the rules are broken and none can be called safe. */
+export function approveFiles(r: Pick<LandingRun, "review">): { look: ReviewFile[]; rest: ReviewFile[] } {
+  const files = r.review?.files ?? [];
+  const sensitive = files.filter((f) => f.sensitive);
+  if (sensitive.length === 0) return { look: files, rest: [] };
+  return { look: sensitive, rest: files.filter((f) => !f.sensitive) };
+}
+
+/** A notice in one line: "run/x landed on its own at abc1234". */
+export function noticeLine(n: LandNotice): string {
+  return n.kind === "landed" ? `${n.branch} landed on its own${n.head ? ` at ${n.head.slice(0, 7)}` : ""}` : `${n.branch} held back: ${n.why ?? "its sort changed"}`;
 }
 
 export interface RepoLanding {
@@ -72,6 +101,10 @@ export interface RunLanding {
   /** sent back: "fix it" applies */
   canFix: boolean;
   entry?: LandEntry;
+  /** a ready run's verdict in words, once sorted */
+  verdict?: string;
+  /** its land opens the approve sheet */
+  approve?: boolean;
 }
 
 const BRANCH_WORD: Record<NonNullable<Run["branch"]>["state"], string> = {
@@ -99,7 +132,9 @@ export function runLanding(run: Run, info: LandingInfo): RunLanding | null {
   }
   const rec = info.runs.find((r) => r.id === b.origin);
   const state = rec && rec.runId === run.id ? rec.state : b.state;
-  return { word: BRANCH_WORD[state], canLand: state === "ready" && run.status !== "working" && run.status !== "waiting" && run.status !== "idle", canFix: false };
+  const canLand = state === "ready" && run.status !== "working" && run.status !== "waiting" && run.status !== "idle";
+  const sorted = canLand && rec?.review ? { verdict: verdictWord(rec), approve: needsApproval(rec) } : {};
+  return { word: BRANCH_WORD[state], canLand, canFix: false, ...sorted };
 }
 
 /** Whether a new run starts on a branch unless the toggle says otherwise:

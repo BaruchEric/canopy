@@ -1,0 +1,18 @@
+{
+  "autoLand": ["docs", "comments", "format"],
+  "approve": [
+    "src/secrets/**",
+    "src/core/secret*.ts",
+    "src/server/secrets.ts",
+    "src/core/sinkssh.ts",
+    "src/core/peersync.ts",
+    "src/core/peers.ts",
+    "src/cli/index.ts",
+    "scripts/**",
+    "lib/**",
+    "spec/**",
+    "docker/**",
+    "Dockerfile",
+    "docker-compose*.yml"
+  ]
+}

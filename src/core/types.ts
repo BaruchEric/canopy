@@ -1160,6 +1160,64 @@ export interface LandEntry {
   noGates?: true;
   /** the "fix it" run working on it now */
   fixing?: string;
+  /** joined the queue on its own: its sort said `auto` (FR-013) */
+  auto?: true;
+  /** the sensitive files' patch id Eric approved when he landed it */
+  approved?: string;
+}
+
+/** What one file in a branch run's diff is, for the review rules (FR-013):
+ *  prose, comments alone, whitespace alone, or anything else. */
+export type ReviewClass = "docs" | "comments" | "format" | "logic";
+
+/** What a sort says a branch run needs: nothing (it joins the queue on its
+ *  own), Eric's "land", or his approval of its sensitive files. */
+export type ReviewVerdict = "auto" | "land" | "approve";
+
+export interface ReviewFile {
+  path: string;
+  /** the path it had before a rename or copy */
+  from?: string;
+  cls: ReviewClass;
+  /** why it is logic when that is not just its content: "deleted",
+   *  "a directive: @ts-ignore", "over 512 KB" */
+  why?: string;
+  /** why it is sensitive; absent when it is not */
+  sensitive?: string;
+}
+
+/** A branch run's diff sorted against its target's rules at one moment. */
+export interface RunReview {
+  verdict: ReviewVerdict;
+  files: ReviewFile[];
+  /** why the verdict is what it is beyond the files: "no gates to run",
+   *  "no review rules", a broken rules file's error */
+  why?: string;
+  /** the patch id of the sensitive files' diff, which an approval names */
+  sensitiveId?: string;
+  /** the commit the diff starts at (the merge base) and the branch's head */
+  base: string;
+  head: string;
+  /** unix ms */
+  at: number;
+}
+
+/** A line about the queue that asks nothing: a run that landed on its own,
+ *  or one held back from doing so. Kept outside the inbox's count. */
+export interface LandNotice {
+  id: string;
+  /** the branch's id */
+  entry: string;
+  repoId: string;
+  branch: string;
+  note: string;
+  kind: "landed" | "held";
+  /** why it was held */
+  why?: string;
+  /** the commit main fast-forwarded to */
+  head?: string;
+  /** unix ms */
+  at: number;
 }
 
 /** A branch run as the landing records keep it, across restarts. */
@@ -1182,6 +1240,8 @@ export interface LandingRun {
   state: RunBranchState;
   startedAt: number;
   endedAt?: number;
+  /** its diff's latest sort, once it settled ready (FR-013) */
+  review?: RunReview;
 }
 
 /** A run worktree on disk that no record names. */
@@ -1199,6 +1259,8 @@ export interface LandingInfo {
   /** queued, working, waiting, sent back, and the last few landed */
   entries: LandEntry[];
   orphans: LandingOrphan[];
+  /** landed on its own and held back, newest first; an older backend has none */
+  notices?: LandNotice[];
 }
 
 /** The parts of a status a run is expected to move: the working tree and

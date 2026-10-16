@@ -9,6 +9,7 @@ import { resolveAgent } from "../../../src/core/route";
 import { effectiveRows, harnessesOf, hasRouting, ROLE_LABEL, ROLE_TITLE, withPick } from "../agents";
 import { EffectiveTable, PickEditor } from "./AgentForm";
 import { FleetPlan, FleetSheet, FlowConsole, FlowPlan } from "./FlowSheet";
+import { ApproveSheet } from "./Landing";
 import { SearchSheet } from "./Search";
 import { NewSproutSheet, SproutSheet } from "./Incubator";
 import { RunPromptForm } from "./Prompts";
@@ -147,6 +148,7 @@ function Body({ sheet }: { sheet: Sheet }) {
   if (sheet.kind === "flow") return <FlowConsole flowId={sheet.flowId} />;
   if (sheet.kind === "fleet-plan") return <FleetPlan workflow={sheet.workflow} />;
   if (sheet.kind === "fleet") return <FleetSheet fleetId={sheet.fleetId} />;
+  if (sheet.kind === "approve") return <ApproveSheet key={sheet.id} id={sheet.id} />;
   if (!run) return <Missing what="That run is gone." onClose={close} />;
   return <Console run={run} repo={repo} />;
 }
@@ -522,6 +524,7 @@ function Console({ run, repo }: { run: Run; repo: Repo | undefined }) {
 function BranchBlock({ run, act }: { run: Run; act: (fn: () => Promise<void>) => Promise<void> }) {
   const info = useStore((s) => landingAll(s));
   const landRun = useStore((s) => s.landRun);
+  const showApprove = useStore((s) => s.showApprove);
   const fixLanding = useStore((s) => s.fixLanding);
   const b = run.branch;
   const l = runLanding(run, info);
@@ -532,9 +535,15 @@ function BranchBlock({ run, act }: { run: Run; act: (fn: () => Promise<void>) =>
         {b.name}
       </span>
       <span className="run-branch-word">{l.word}</span>
+      {l.verdict && <span className="run-branch-why">{l.verdict}</span>}
       {l.entry?.reason && l.entry.state !== "red" && <span className="run-branch-why">{l.entry.reason}</span>}
       <span className="spacer" />
-      {l.canLand && (
+      {l.canLand && l.approve && (
+        <button type="button" className="mini strong" title="Open its sensitive files and their diffs, then approve and land" onClick={() => showApprove(b.origin)}>
+          look and land
+        </button>
+      )}
+      {l.canLand && !l.approve && (
         <button type="button" className="mini strong" title={`Rebase onto ${b.target}, run the gates, fast-forward ${b.target}; nothing is pushed`} onClick={() => void act(() => landRun(run.id))}>
           land
         </button>

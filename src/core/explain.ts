@@ -351,6 +351,17 @@ export function guardedPath(p: string, root: string | null, cwd: string = root ?
   });
 }
 
+/** Why a path inside a project (relative to it) is in a place code runs
+ *  from, in words, or null. Case is folded, as in `guardedPath`. */
+export function guardedWhy(rel: string): string | null {
+  for (const x of rel.split("/")) {
+    const low = x.toLowerCase();
+    if (GUARDED_DIRS.has(low)) return `under ${low}/, whose files run code`;
+    if (GUARDED_FILES.has(low)) return `${low}, which names programs that run`;
+  }
+  return null;
+}
+
 /* ---------- reading one simple command ---------- */
 
 interface Part {

@@ -8,7 +8,7 @@
  *  gates one at a time, then fast-forward main. A conflict, a red gate, or
  *  main moving under it three times sends the entry back to its run. */
 
-import type { LandEntry, LandingRun, LandState } from "./types";
+import type { LandEntry, LandingRun, LandNotice, LandState, RunReview } from "./types";
 
 /** how many times main may move under one entry before it is sent back */
 export const MAX_TRIES = 3;
@@ -103,14 +103,70 @@ export class LandError extends Error {
   }
 }
 
+/** How an entry came to be queued: on its own (`auto`), and with which
+ *  sensitive patch id Eric approved. Neither is Eric's plain "land". */
+export interface QueueFlags {
+  auto?: boolean;
+  approved?: string;
+}
+
 /** Puts a ready run at the end of the queue: a new entry, or one that was
- *  sent back rejoining. Refused while it is already queued or landed. */
-export function enqueue(entries: readonly LandEntry[], run: LandingRun, now: number): LandEntry[] {
+ *  sent back rejoining. Refused while it is already queued or landed. A
+ *  rejoining entry keeps the flags it had unless new ones are given. */
+export function enqueue(entries: readonly LandEntry[], run: LandingRun, now: number, flags?: QueueFlags): LandEntry[] {
   if (run.state !== "ready") throw new LandError(`only a ready run lands; this one is ${run.state}`);
   const had = entries.find((e) => e.id === run.id);
   if (had && inQueue(had)) throw new LandError("it is in the queue already");
   if (had?.state === "landed") throw new LandError("it has landed already");
-  return [...entries.filter((e) => e.id !== run.id), entryFor(run, now)];
+  const f = flags ?? { ...(had?.auto ? { auto: true } : {}), ...(had?.approved ? { approved: had.approved } : {}) };
+  const entry: LandEntry = { ...entryFor(run, now), ...(f.auto ? { auto: true as const } : {}), ...(f.approved ? { approved: f.approved } : {}) };
+  return [...entries.filter((e) => e.id !== run.id), entry];
+}
+
+/** Takes an entry out of the queue: its run waits as ready again. */
+export const unqueue = (entries: readonly LandEntry[], id: string): LandEntry[] => entries.filter((e) => e.id !== id);
+
+/** Whether a "fix it" run that settled ready goes back in the queue on its
+ *  own: its sort allows it with no new say from Eric. `auto` always does;
+ *  `land` only when Eric's own "land" queued the entry; `approve` only
+ *  while the id he approved still matches. */
+export function rejoins(review: RunReview, entry: Pick<LandEntry, "auto" | "approved">): { ok: true } | { ok: false; why: string } {
+  if (review.verdict === "auto") return { ok: true };
+  if (review.verdict === "land") return entry.auto ? { ok: false, why: "the fix changed more than docs, comments or format, so it needs your land" } : { ok: true };
+  if (entry.approved && entry.approved === review.sensitiveId) return { ok: true };
+  return { ok: false, why: entry.approved ? "the fix changed the sensitive files you approved; look again" : "the fix touches sensitive files; look at them and approve" };
+}
+
+/** Whether "land" may queue a run as sorted now; `approve` is the id the
+ *  sheet was opened with. Throws a 409 that says to look again. */
+export function canLand(review: RunReview, approve?: string): void {
+  if (review.verdict !== "approve") return;
+  if (!approve) throw new LandError(`it ${reviewWord(review)}; look at the files and approve`);
+  if (approve !== review.sensitiveId) throw new LandError("the branch changed since you looked; look again");
+}
+
+/** What a sort says, in a few words: "lands on its own", "needs your
+ *  land", "needs your approval: 2 sensitive files", with its why. */
+export function reviewWord(r: Pick<RunReview, "verdict" | "why" | "files">): string {
+  const why = r.why ? `: ${r.why}` : "";
+  if (r.verdict === "auto") return "lands on its own";
+  if (r.verdict === "land") return `needs your land${why}`;
+  const n = r.files.filter((f) => f.sensitive).length;
+  return n > 0 ? `needs your approval: ${n} sensitive file${n === 1 ? "" : "s"}` : `needs your approval${why}`;
+}
+
+/** notices kept, newest first */
+export const MAX_NOTICES = 50;
+
+/** A notice at the head of the list, which keeps the newest `MAX_NOTICES`. */
+export const addNotice = (list: readonly LandNotice[], n: LandNotice): LandNotice[] => [n, ...list.filter((x) => x.id !== n.id)].slice(0, MAX_NOTICES);
+
+/** A repo's ready runs not in the queue yet, split as "land all" takes
+ *  them: every one but those that need an approval. */
+export function landAllPick(runs: readonly LandingRun[], entries: readonly LandEntry[], repoId: string): { take: LandingRun[]; skip: LandingRun[] } {
+  const has = new Set(entries.filter((e) => e.repoId === repoId).map((e) => e.id));
+  const ready = runs.filter((r) => r.repoId === repoId && r.state === "ready" && !has.has(r.id));
+  return { take: ready.filter((r) => r.review?.verdict !== "approve"), skip: ready.filter((r) => r.review?.verdict === "approve") };
 }
 
 /** The entry the loop takes next in one repo: the first queued one in
