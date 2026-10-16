@@ -9,13 +9,16 @@
 #                     script, and deploy the checkout the shell sees
 #   on the mini       deploy directly
 #
-# Usage: redeploy.sh [--pull] [--shells] [--restart] [--expect SHA] | status | log
+# Usage: redeploy.sh [--pull] [--shells] [--restart] [--force] [--expect SHA] | status | log
 #   --pull    fast-forward the mini's checkout to the Mac's main first
 #             (always on from the Mac)
 #   --shells  go ahead when the deploy would recreate the shells container,
 #             which ends every shell, the one running this included
 #   --restart recreate the canopy container even when the deploy changes
 #             nothing in it; the shells stay
+#   --force   go ahead when recreating the canopy container would cut off
+#             work it has going (runs, flows, fleets, the landing queue);
+#             it does not stand in for --shells
 #   --expect  refuse unless the checkout's HEAD is this commit after pulling
 #   status    what is deployed and running
 #   log       the last deploy's log
@@ -45,7 +48,7 @@ if [ "${1:-}" = "--gate" ]; then
     w=${words[$i]}
     case $w in
       redeploy | redeploy.sh) ;;
-      --pull | --shells | --restart | status | log) args+=("$w") ;;
+      --pull | --shells | --restart | --force | status | log) args+=("$w") ;;
       --expect)
         i=$((i + 1))
         sha=${words[$i]:-}
@@ -84,13 +87,14 @@ if [ -z "${CANOPY_DEPLOY_HOST_SIDE:-}" ] && ! command -v docker >/dev/null 2>&1;
 fi
 
 # ---------- the host
-pull=0 shells=0 restart=0 expect=""
+pull=0 shells=0 restart=0 force=0 expect=""
 cmd=deploy
 while [ $# -gt 0 ]; do
   case $1 in
     --pull) pull=1 ;;
     --shells) shells=1 ;;
     --restart) restart=1 ;;
+    --force) force=1 ;;
     --expect) expect=${2:-}; shift ;;
     status | log) cmd=$1 ;;
     *) die "unknown argument: $1" ;;
@@ -140,6 +144,7 @@ if [ $pull = 1 ]; then
     again=()
     [ "$shells" = 1 ] && again+=(--shells)
     [ "$restart" = 1 ] && again+=(--restart)
+    [ "$force" = 1 ] && again+=(--force)
     [ -n "$expect" ] && again+=(--expect "$expect")
     exec 9>&-
     exec bash "$HERE/scripts/redeploy.sh" "${again[@]}"
@@ -190,13 +195,63 @@ job() {
   # secrets service mounts it read-only, so a root-made one would stay empty
   mkdir -p "$STAGE_HOST_HOME/.config/canopy-restart" && chmod 700 "$STAGE_HOST_HOME/.config/canopy-restart" ||
     { echo "could not make $STAGE_HOST_HOME/.config/canopy-restart; up would make it as root"; return 1; }
-  if docker compose --dry-run up -d 2>&1 | grep -q 'canopy-shells-1.*Recreate'; then
+  # what up would do, read once; a grep -q on the pipe itself can exit before
+  # compose has written everything, and pipefail turns that SIGPIPE into a miss
+  plan=$(docker compose --dry-run up -d 2>&1 || true)
+  if grep -q 'canopy-shells-1.*Recreate' <<<"$plan"; then
     if [ "$shells" != 1 ]; then
       echo "this deploy recreates the shells container, which ends every shell."
       echo "run it again with --shells when nothing needs them."
       return 3
     fi
     echo "recreating the shells container: every shell ends"
+  fi
+  # Recreating canopy cuts off what it has going: a run working or waiting on
+  # a prompt, a flow or fleet mid-step, a landing entry rebasing, in setup, at
+  # its gate or landing. Any of those stops the deploy with exit 4 unless
+  # --force. Only a plan that leaves canopy running as it is (the same commit
+  # rebuilds to the same image) without --restart skips the check; a plan
+  # this cannot read is checked. A canopy that does not answer has nothing going.
+  if [ "$force" != 1 ] && { [ "$restart" = 1 ] || ! grep -q 'canopy-canopy-1.*Running' <<<"$plan" ||
+    grep -Eq 'canopy-(canopy|shells)-1.*Recreate' <<<"$plan"; }; then
+    addr=$(docker port canopy-shells-1 7850 2>/dev/null | head -1 || true)
+    got=0
+    if [ -n "$addr" ]; then
+      runs=$(curl -fsS -m 10 "http://$addr/api/runs" 2>/dev/null) || got=$?
+    fi
+    if [ -z "$addr" ] || { [ "$got" != 0 ] && [ "$got" != 22 ]; }; then
+      echo "canopy is not answering${addr:+ on $addr}, so nothing there is cut off"
+    elif [ "$got" = 22 ]; then
+      echo "canopy answers on $addr but would not list its runs, so this cannot tell what it has going."
+      echo "check canopy, or run it again with --force."
+      return 1
+    elif ! command -v jq >/dev/null 2>&1; then
+      echo "canopy answers on $addr, but this host has no jq to read what it has going."
+      echo "install jq, or run it again with --force."
+      return 1
+    else
+      # a route that does not answer (an older backend) has nothing going
+      work=$(
+        jq -r '.[] | select(.status == "working" or .status == "waiting")
+          | "  run \(.id)  \(.repoId)  \(.verb), \(if .status == "waiting" then "waiting on a prompt"
+            elif (.progress // "") != "" then .progress else "working" end)"' <<<"$runs"
+        curl -fsS -m 10 "http://$addr/api/flows" 2>/dev/null | jq -r '.[] | select(.status == "working" or .status == "waiting")
+          | "  flow \(.id)  \(.repoId)  \(.verb), at step \(.steps[.current].name // .current)\(if .status == "waiting" then ", waiting on a prompt" else "" end)"'
+        curl -fsS -m 10 "http://$addr/api/fleets" 2>/dev/null | jq -r '.[] | select(.status == "working")
+          | [.repos[].repoId] as $r
+          | "  fleet \(.id)  \($r[:3] | join(", "))\(if ($r | length) > 3 then " and \(($r | length) - 3) more" else "" end)  \(.verb)"'
+        curl -fsS -m 10 "http://$addr/api/landing" 2>/dev/null | jq -r '.entries[]?
+          | select(.state == "rebasing" or .state == "setup" or .state == "gate" or .state == "landing")
+          | "  landing \(.id)  \(.repoId)  \(.state)\(if .gate then " (\(.gate))" else "" end), \(.branch)"'
+      )
+      if [ -n "$work" ]; then
+        echo "canopy has work going that recreating its container would cut off:"
+        printf '%s\n' "$work"
+        echo "wait for it to finish, or run it again with --force to cut it off."
+        return 4
+      fi
+      echo "canopy has no work going that recreating it would cut off"
+    fi
   fi
   before=$(docker inspect -f '{{.Id}}' canopy-canopy-1 2>/dev/null || true)
   docker compose up -d || {
@@ -235,7 +290,7 @@ job() {
   echo "== deployed $sha on $port"
 }
 export -f job
-export sha shells restart LOGS CANOPY_COMMIT CANOPY_COMMITTED STAGE_DEV_ROOT STAGE_HOST_HOME
+export sha shells restart force LOGS CANOPY_COMMIT CANOPY_COMMITTED STAGE_DEV_ROOT STAGE_HOST_HOME
 setsid nohup bash -c 'job; echo $? > "$0"' "$rc" >"$log" 2>&1 </dev/null &
 
 # follow along; if this session goes, the deploy carries on
