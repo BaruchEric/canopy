@@ -1098,6 +1098,106 @@ export interface Run {
   /** whether git status differed after the run from before it; set when
    *  the run ends, for actions that are supposed to change something */
   outcome?: "changed" | "unchanged";
+  /** a branch run's own branch and worktree (the landing queue) */
+  branch?: RunBranch;
+}
+
+/** Where a branch run's work stands: still going, commits and a clean
+ *  worktree (`ready`, the one state the queue takes), changes left
+ *  uncommitted, nothing at all, or cut off by a canopy restart. */
+export type RunBranchState = "working" | "ready" | "uncommitted" | "nothing" | "stopped";
+
+export interface RunBranch {
+  /** `run/<slug>-<run id>` */
+  name: string;
+  /** the default branch it was cut from and lands on */
+  target: string;
+  /** the commit it was cut from */
+  base: string;
+  /** its worktree, under the config dir */
+  dir: string;
+  state: RunBranchState;
+  /** the branch's first run: a "fix it" run on the same branch carries
+   *  that id, and the landing record is kept under it */
+  origin: string;
+}
+
+/** A queue entry's state. `conflict`, `red` and `moved` are sent back: the
+ *  entry has left the queue and waits for "fix it". `waiting` holds its
+ *  place until what it names clears. */
+export type LandState = "queued" | "rebasing" | "setup" | "gate" | "landing" | "landed" | "waiting" | "conflict" | "red" | "moved";
+
+export interface LandEntry {
+  /** the branch's origin run id */
+  id: string;
+  repoId: string;
+  /** the main checkout */
+  repoPath: string;
+  branch: string;
+  /** the branch it lands on */
+  target: string;
+  /** the run's worktree */
+  dir: string;
+  /** the run's note, to name the entry in a list */
+  note: string;
+  state: LandState;
+  /** the gate running, or the one that went red */
+  gate?: string;
+  /** why it waits or came back, in words; a red gate's output tail */
+  reason?: string;
+  /** the files a conflict or a busy main checkout named */
+  files?: string[];
+  /** how many times main moved under it in this turn */
+  tries: number;
+  /** unix ms; the queue's order */
+  queuedAt: number;
+  updatedAt: number;
+  landedAt?: number;
+  /** the commit main fast-forwarded to */
+  head?: string;
+  /** landed with no gates to run, which the entry says */
+  noGates?: true;
+  /** the "fix it" run working on it now */
+  fixing?: string;
+}
+
+/** A branch run as the landing records keep it, across restarts. */
+export interface LandingRun {
+  /** the origin run id */
+  id: string;
+  /** the latest run on the branch: the origin or its last "fix it" */
+  runId: string;
+  repoId: string;
+  repoPath: string;
+  branch: string;
+  target: string;
+  base: string;
+  dir: string;
+  note: string;
+  verb: string;
+  harness: Harness;
+  /** the latest run's session, which "fix it" resumes */
+  session?: string;
+  state: RunBranchState;
+  startedAt: number;
+  endedAt?: number;
+}
+
+/** A run worktree on disk that no record names. */
+export interface LandingOrphan {
+  dir: string;
+  /** the main checkout it belongs to; null when git no longer knows it */
+  repoPath: string | null;
+  branch: string | null;
+  /** clean and with commits its target has not: "queue anyway" applies */
+  queueable: boolean;
+}
+
+export interface LandingInfo {
+  runs: LandingRun[];
+  /** queued, working, waiting, sent back, and the last few landed */
+  entries: LandEntry[];
+  orphans: LandingOrphan[];
 }
 
 /** The parts of a status a run is expected to move: the working tree and
@@ -1137,6 +1237,8 @@ export type ServerEvent =
   | { type: "incubator-gone"; id: string }
   /** the retro advice on offer, whole, whenever it changes; home backend only */
   | { type: "advice"; advice: AdviceOffer[] }
+  /** the landing queue and branch runs, whole, whenever they change */
+  | { type: "landing"; landing: LandingInfo }
   /** where the incubator's stages run, whenever that changes; home backend only */
   | { type: "stages"; stages: IncubatorStages }
   | { type: "job"; job: Job }
