@@ -200,7 +200,7 @@ import { LandingHub } from "./landing";
 import { getPeers, PeerError, postPeersSync, postRepoPeer, queuePass, withPeering, type PeerDeps } from "./peers";
 import { fixPrompt, landWord } from "../core/landing";
 import { GATES_CHECK, readGates } from "../core/gates";
-import { addRunTree, defaultBranch, removeRunTree, revOf, runBranchName, runTreeDir } from "../core/worktree";
+import { addRunTree, defaultBranch, removeRunTree, repoAtPath, revOf, runBranchName, runTreeDir } from "../core/worktree";
 import { RepoHealth } from "./repohealth";
 import { createSecretsHub, type SecretsHub } from "./secrets";
 import { HEALTH_FILE } from "../core/repohealth";
@@ -4253,7 +4253,7 @@ export async function startServer(opts: {
     landing: new LandingHub({
       broadcast: (ev) => broadcast(state, ev),
       repo: (id) => state.result.repos.find((r) => r.id === id),
-      repoByPath: (path) => state.result.repos.find((r) => r.path === path),
+      repoByPath: (path) => repoAtPath(state.result.repos, path),
       check: (cwd, line) => runGate(cwd, line),
       startFix: (rec, entry) => startFixRun(state, rec, entry),
       runActive: (id) => {

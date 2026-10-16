@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { exec } from "../core/exec";
 import type { LandEntry, LandingInfo, LandingRun, Repo, Run, RunBranchState, ServerEvent } from "../core/types";
-import { addRunTree, revOf, runTreeDir } from "../core/worktree";
+import { addRunTree, repoAtPath, revOf, runTreeDir } from "../core/worktree";
 import { LandingHub, type CheckOutcome } from "./landing";
 
 let root = "";
@@ -63,7 +63,7 @@ async function world(opts: { gates?: string[]; noPackage?: boolean } = {}): Prom
   w.hub = new LandingHub({
     broadcast: (ev) => w.events.push(ev),
     repo: (id) => (id === repo.id ? repo : undefined),
-    repoByPath: (p) => (p === repo.path ? repo : undefined),
+    repoByPath: (p) => repoAtPath([repo], p),
     check: async (cwd, line) => {
       w.checks.push([cwd, line]);
       const a = w.answers.get(line);
@@ -121,7 +121,7 @@ const rehub = (w: World): LandingHub =>
   new LandingHub({
     broadcast: () => {},
     repo: (id) => (id === w.repo.id ? w.repo : undefined),
-    repoByPath: (p) => (p === w.repo.path ? w.repo : undefined),
+    repoByPath: (p) => repoAtPath([w.repo], p),
     check: async () => ({ exit: 0, output: "" }),
     startFix: () => {
       throw new Error("no fix here");

@@ -1,6 +1,6 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { existsSync } from "node:fs";
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, realpath, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { exec } from "./exec";
@@ -16,6 +16,7 @@ import {
   overwrittenFiles,
   rebaseOnto,
   removeRunTree,
+  repoAtPath,
   repoKey,
   revOf,
   runBranchName,
@@ -147,5 +148,20 @@ describe("run worktrees", () => {
     const r = await repo();
     await sh(r, "checkout", "-q", "--detach");
     expect(await currentBranch(r)).toBeNull();
+  });
+});
+
+describe("repoAtPath", () => {
+  test("a repo scanned through a symlink matches git's real path, and an exact path wins", async () => {
+    const real = await realpath(await mkdtemp(join(tmpdir(), "canopy-wt-real-")));
+    const link = join(root, "linked");
+    await symlink(real, link);
+    const viaLink = { id: "a", path: link };
+    const remote = { id: "r", path: "ssh://box/x" };
+    expect(repoAtPath([remote, viaLink], real)).toBe(viaLink);
+    const exact = { id: "b", path: real };
+    expect(repoAtPath([viaLink, exact], real)).toBe(exact);
+    expect(repoAtPath([remote, viaLink], "/nowhere")).toBeUndefined();
+    await rm(real, { recursive: true, force: true });
   });
 });

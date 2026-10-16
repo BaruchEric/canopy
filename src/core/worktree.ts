@@ -7,7 +7,7 @@
  *  forwards the main checkout to it, and removes both. */
 
 import { createHash } from "node:crypto";
-import { existsSync } from "node:fs";
+import { existsSync, realpathSync } from "node:fs";
 import { mkdir, readdir, rm, stat } from "node:fs/promises";
 import { basename, dirname, join, resolve } from "node:path";
 import { git } from "./exec";
@@ -133,6 +133,20 @@ export async function treeRepo(dir: string): Promise<string | null> {
   if (r.code !== 0) return null;
   const common = out(r);
   return basename(common) === ".git" ? dirname(resolve(common)) : null;
+}
+
+/** The repo whose path is `path`, or whose real path is: `treeRepo` gives
+ *  git's path, with symlinks resolved (macOS's /var, WSL's /Users link),
+ *  so a repo scanned through one matches by its real path. */
+export function repoAtPath<R extends { path: string }>(repos: readonly R[], path: string): R | undefined {
+  const real = (p: string): string => {
+    try {
+      return realpathSync(p);
+    } catch {
+      return p;
+    }
+  };
+  return repos.find((r) => r.path === path) ?? repos.find((r) => r.path.startsWith("/") && real(r.path) === path);
 }
 
 /** How many commits `dir`'s HEAD has that `base` has not. */
