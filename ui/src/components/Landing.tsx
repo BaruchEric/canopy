@@ -1,10 +1,11 @@
 import { useState } from "react";
 import type { LandEntry, LandingRun, Repo } from "../../../src/core/types";
-import { backLine, chipWords, landWord, repoLanding, repoOrphans, hasLanding } from "../landing";
+import { approveFiles, backLine, chipWords, landAllOf, landWord, needsApproval, noticeLine, repoLanding, repoOrphans, hasLanding, verdictTone, verdictWord } from "../landing";
 import { backendOf } from "../registry";
-import { landingAll, useStore } from "../store";
+import { idText, landingAll, useStore } from "../store";
 import { keepKeys } from "../surface";
 import { ago } from "../util";
+import { DiffView } from "./DiffView";
 import { Section } from "./Surface";
 
 const errText = (err: unknown) => String(err instanceof Error ? err.message : err);
@@ -39,14 +40,18 @@ export function LandingChip({ repoId }: { repoId: string }) {
 export function LandingSection({ repo }: { repo: Repo }) {
   const info = useStore((s) => landingAll(s));
   const landRun = useStore((s) => s.landRun);
+  const landAll = useStore((s) => s.landAll);
+  const showApprove = useStore((s) => s.showApprove);
   const fixLanding = useStore((s) => s.fixLanding);
   const dropLanding = useStore((s) => s.dropLanding);
   const orphanLanding = useStore((s) => s.orphanLanding);
   const showRun = useStore((s) => s.showRun);
   const runs = useStore((s) => s.runs);
   const [error, setError] = useState("");
+  const [skipped, setSkipped] = useState("");
   const [busy, setBusy] = useState<string | null>(null);
   const l = repoLanding(info, repo.id);
+  const all = landAllOf(info, repo.id);
   const orphans = repo.host ? [] : repoOrphans(info, repo.path);
   if (!hasLanding(l) && orphans.length === 0) return null;
   const act = (key: string, fn: () => Promise<void>) => {
@@ -96,6 +101,8 @@ export function LandingSection({ repo }: { repo: Repo }) {
               <li key={e.id} className={`landing-row st-${e.state}`}>
                 {runLink(entryRun(e))}
                 <span className="landing-state">{landWord(e, info.entries)}</span>
+                {e.auto && <span className="landing-state moss" title="Its sort found only changes the repo's review rules let land unseen">joined on its own</span>}
+                {e.approved && <span className="landing-state" title="You approved its sensitive files">approved</span>}
                 {e.reason && <span className="landing-why">{e.reason}</span>}
                 {e.noGates && <span className="landing-why">no gates to run</span>}
                 <span className="landing-note">{e.note}</span>
@@ -135,16 +142,48 @@ export function LandingSection({ repo }: { repo: Repo }) {
             ))}
           </ul>
         )}
+        {l.ready.length >= 2 && all.take.length > 0 && (
+          <div className="landing-row">
+            <span className="landing-state">{l.ready.length} ready</span>
+            <span className="landing-tools">
+              <button
+                type="button"
+                className="mini strong"
+                disabled={busy !== null}
+                title={all.skip.length > 0 ? `Queue every ready run but ${all.skip.length} that need your approval` : "Queue every ready run, in the order they finished"}
+                onClick={() =>
+                  act("all", async () => {
+                    setSkipped("");
+                    const got = await landAll(repo.id);
+                    if (got.skipped.length > 0) setSkipped(`Left for you: ${got.skipped.map((x) => `${x.branch} (${x.why})`).join(", ")}`);
+                  })
+                }
+              >
+                {busy === "all" ? "queueing…" : `land all ${all.take.length}`}
+              </button>
+            </span>
+            {skipped && <span className="landing-why">{skipped}</span>}
+          </div>
+        )}
         {l.ready.length > 0 && (
           <ul className="landing-list">
             {l.ready.map((r) => (
               <li key={r.id} className="landing-row st-ready">
                 {runLink(r)}
                 <span className="landing-state moss">ready</span>
+                <span className={`landing-state ${verdictTone(r)}`} title={r.review?.why ?? "What its sort says: the review rules in the repo's .canopy/review.json"}>
+                  {verdictWord(r)}
+                </span>
                 <span className="landing-tools">
-                  <button type="button" className="mini strong" disabled={busy !== null} title={`Rebase onto ${r.target}, run the gates, fast-forward ${r.target}`} onClick={() => act(r.id, () => landRun(r.id))}>
-                    {busy === r.id ? "queueing…" : "land"}
-                  </button>
+                  {needsApproval(r) ? (
+                    <button type="button" className="mini strong" disabled={busy !== null} title="Open its sensitive files and their diffs, then approve and land" onClick={() => showApprove(r.id)}>
+                      look and land
+                    </button>
+                  ) : (
+                    <button type="button" className="mini strong" disabled={busy !== null} title={`Rebase onto ${r.target}, run the gates, fast-forward ${r.target}`} onClick={() => act(r.id, () => landRun(r.id))}>
+                      {busy === r.id ? "queueing…" : "land"}
+                    </button>
+                  )}
                 </span>
                 <span className="landing-note">{r.note}</span>
               </li>
@@ -204,5 +243,146 @@ export function LandingSection({ repo }: { repo: Repo }) {
         {error && <p className="landing-err">{error}</p>}
       </div>
     </Section>
+  );
+}
+
+/** A branch run's sensitive files, each unfolding to its diff, and
+ *  "approve and land", which sends the patch id this sheet opened with. A
+ *  branch that changed since answers 409, and the sheet says to look again
+ *  rather than approving what was never shown. */
+export function ApproveSheet({ id }: { id: string }) {
+  const info = useStore((s) => landingAll(s));
+  const close = useStore((s) => s.closeSheet);
+  const landRun = useStore((s) => s.landRun);
+  const landingDiff = useStore((s) => s.landingDiff);
+  const loadLanding = useStore((s) => s.loadLanding);
+  const rec = info.runs.find((r) => r.id === id);
+  const [shown, setShown] = useState(rec?.review?.sensitiveId);
+  /** each unfolded file's diff; null while it is read */
+  const [diffs, setDiffs] = useState<Record<string, string | null>>({});
+  const [error, setError] = useState("");
+  const [busy, setBusy] = useState(false);
+  if (!rec?.review) {
+    return (
+      <>
+        <p className="sheet-empty">{rec ? "Its sort is not in yet." : "That branch run is gone: it landed, or was dropped."}</p>
+        <footer className="sheet-foot">
+          <span className="spacer" />
+          <button type="button" className="mini" onClick={close}>
+            close
+          </button>
+        </footer>
+      </>
+    );
+  }
+  const review = rec.review;
+  const { look, rest } = approveFiles(rec);
+  const moved = review.sensitiveId !== shown;
+  const read = (path: string) => {
+    if (diffs[path] !== undefined) return;
+    setDiffs((d) => ({ ...d, [path]: null }));
+    landingDiff(rec.id, path).then(
+      (diff) => setDiffs((d) => ({ ...d, [path]: diff })),
+      (err: unknown) => setDiffs((d) => ({ ...d, [path]: `could not read the diff: ${errText(err)}` })),
+    );
+  };
+  const again = () => {
+    setShown(review.sensitiveId);
+    setDiffs({});
+    setError("");
+  };
+  const approve = async () => {
+    setBusy(true);
+    setError("");
+    try {
+      await landRun(rec.id, shown);
+      close();
+    } catch (err) {
+      setBusy(false);
+      setError(errText(err));
+      void loadLanding(backendOf(rec.repoId));
+    }
+  };
+  return (
+    <>
+      <header className="sheet-head">
+        <div>
+          <div className="eyebrow">needs your approval · {idText(rec.repoId)}</div>
+          <h2 className="sheet-title">{rec.branch}</h2>
+        </div>
+        <button type="button" className="mini close" onClick={close} aria-label="Close">
+          ✕
+        </button>
+      </header>
+      <div className="sheet-body approve">
+        <p className="blurb">{rec.note}</p>
+        {review.why && <p className="note err">{review.why}</p>}
+        <ul className="approve-files">
+          {look.map((f) => (
+            <li key={f.path}>
+              <details onToggle={(e) => e.currentTarget.open && read(f.path)}>
+                <summary>
+                  <span className="landing-branch">{f.from ? `${f.from} → ${f.path}` : f.path}</span>
+                  <span className="approve-why">{f.sensitive ?? f.why ?? f.cls}</span>
+                </summary>
+                {typeof diffs[f.path] === "string" ? <DiffView diff={diffs[f.path]!} /> : <p className="sheet-hint">reading the diff…</p>}
+              </details>
+            </li>
+          ))}
+        </ul>
+        {rest.length > 0 && (
+          <p className="sheet-hint">
+            Also on the branch: {rest.map((f) => `${f.path} (${f.cls})`).join(", ")}
+          </p>
+        )}
+        {moved && (
+          <p className="note err">
+            The branch changed since this sheet opened.{" "}
+            <button type="button" className="mini" onClick={again}>
+              look again
+            </button>
+          </p>
+        )}
+        {error && <p className="note err">{error}</p>}
+      </div>
+      <footer className="sheet-foot">
+        <span className="sheet-hint">Approving names these files as they are now; a later change to them needs a new look.</span>
+        <span className="spacer" />
+        <button type="button" className="mini" onClick={close}>
+          cancel
+        </button>
+        <button type="button" className="mini strong" disabled={busy || moved || !shown} onClick={() => void approve()}>
+          {busy ? "queueing…" : "approve and land"}
+        </button>
+      </footer>
+    </>
+  );
+}
+
+/** The queue's quiet lines at the inbox's foot: runs that landed on their
+ *  own and runs held back from it. Outside the inbox's count; "seen"
+ *  clears them. */
+export function LandingNotices() {
+  const info = useStore((s) => landingAll(s));
+  const seenLanding = useStore((s) => s.seenLanding);
+  const [error, setError] = useState("");
+  const notices = info.notices ?? [];
+  if (notices.length === 0) return null;
+  return (
+    <section className="settings-row">
+      <h3 className="panel-label">landed on its own</h3>
+      <ul className="inbox-recent">
+        {notices.slice(0, 12).map((n) => (
+          <li key={n.id} title={n.note}>
+            <span className={n.kind === "held" ? "landing-held" : undefined}>{noticeLine(n)}</span>
+            <span className="inbox-left dim">{ago(Math.floor(n.at / 1000))}</span>
+          </li>
+        ))}
+      </ul>
+      <button type="button" className="mini" onClick={() => void seenLanding(notices.map((n) => n.id)).catch((err: unknown) => setError(errText(err)))}>
+        seen
+      </button>
+      {error && <p className="settings-hint error">{error}</p>}
+    </section>
   );
 }

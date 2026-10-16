@@ -57,6 +57,7 @@ export const qLanding = (q: Q, l: LandingInfo): LandingInfo => ({
   runs: l.runs.map((r) => ({ ...r, id: q(r.id), runId: q(r.runId), repoId: q(r.repoId) })),
   entries: l.entries.map((e) => ({ ...e, id: q(e.id), repoId: q(e.repoId), ...(e.fixing !== undefined ? { fixing: q(e.fixing) } : {}) })),
   orphans: l.orphans,
+  notices: (l.notices ?? []).map((n) => ({ ...n, id: q(n.id), entry: q(n.entry), repoId: q(n.repoId) })),
 });
 
 export const qFlow = (q: Q, f: Flow): Flow => ({

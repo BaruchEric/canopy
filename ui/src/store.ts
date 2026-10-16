@@ -1068,8 +1068,17 @@ interface CanopyState {
   loadKit: (backend?: string) => Promise<void>;
   /** reads one backend's landing queue, home by default */
   loadLanding: (backend?: string) => Promise<void>;
-  /** "land" on a ready branch run, by its run's or branch's id */
-  landRun: (id: string) => Promise<void>;
+  /** "land" on a ready branch run, by its run's or branch's id; `approve`
+   *  is the sensitive patch id the approve sheet showed */
+  landRun: (id: string, approve?: string) => Promise<void>;
+  /** "land all" in a repo; the answer names the runs it skipped */
+  landAll: (repoId: string) => Promise<{ queued: string[]; skipped: { id: string; branch: string; why: string }[] }>;
+  /** one file's diff from a branch run's latest sort */
+  landingDiff: (id: string, path: string) => Promise<string>;
+  /** "seen" on landing notices */
+  seenLanding: (ids: readonly string[]) => Promise<void>;
+  /** opens the approve sheet for a branch run that needs one */
+  showApprove: (id: string) => void;
   /** "fix it" on a sent-back branch: starts the fix and opens its sheet */
   fixLanding: (id: string) => Promise<void>;
   /** gives a sent-back branch up, with its worktree */
@@ -1269,7 +1278,9 @@ export type Sheet =
   | { kind: "flow-plan"; repoId: string; workflow: string }
   | { kind: "flow"; flowId: string }
   | { kind: "fleet-plan"; workflow: string }
-  | { kind: "fleet"; fleetId: string };
+  | { kind: "fleet"; fleetId: string }
+  /** a branch run's sensitive files and their diffs, then "approve and land" */
+  | { kind: "approve"; id: string };
 
 export interface ClickModifiers {
   metaKey?: boolean;
@@ -3033,9 +3044,15 @@ export const useStore = create<CanopyState>((set, get) => ({
       // an older backend has no landing queue; nothing shows for it
     }
   },
-  landRun: async (id) => {
-    await api.land(id);
+  landRun: async (id, approve) => {
+    await api.land(id, approve);
   },
+  landAll: (repoId) => api.landAll(repoId),
+  landingDiff: async (id, path) => (await api.landingDiff(id, path)).diff,
+  seenLanding: async (ids) => {
+    await api.seenLanding(ids);
+  },
+  showApprove: (id) => set({ sheet: { kind: "approve", id } }),
   fixLanding: async (id) => {
     const run = await api.fixLanding(id);
     set((s) => ({ runs: { ...s.runs, [run.id]: run }, sheet: { kind: "run", runId: run.id } }));

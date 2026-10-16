@@ -4358,6 +4358,33 @@ button.landing-open:hover {
 .landing-section .rust {
   color: var(--rust);
 }
+.landing-held {
+  color: var(--rust);
+}
+/* the approve sheet: a branch run's sensitive files, each unfolding to its diff */
+.approve-files {
+  list-style: none;
+  margin: 8px 0;
+  padding: 0;
+  display: grid;
+  gap: 6px;
+}
+.approve-files summary {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 2px 10px;
+  cursor: pointer;
+}
+.approve-why {
+  font-size: 11px;
+  color: var(--rust);
+}
+.approve-files .diff {
+  max-height: 22em;
+  overflow: auto;
+  margin: 6px 0 0;
+}
 .sheet-foot {
   display: flex;
   align-items: center;
