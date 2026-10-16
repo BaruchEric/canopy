@@ -1,6 +1,6 @@
 # Kit and secrets phase 3, part A: stack restarts and gpd's sinks
 
-**Status:** built 2026-10-15, not yet committed or deployed. The live steps (run `scripts/restart-setup.sh` on the mini, redeploy, allow gpd's servers with secrets) wait for the commit.
+**Status:** shipped 2026-10-15 (f97d39a), deployed to the mini the same day. The restart key is installed and lists 22 projects. The live rotate-and-restart and gpd's first allow wait on a passkey sign-in.
 
 **Goal:** rotating a stack's secret ends with a restart button that brings the
 right compose project up on the new value, and gpd's servers with secrets get

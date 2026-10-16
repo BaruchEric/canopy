@@ -4,7 +4,8 @@ Each plan here is a checklist written before the work began, for the agent or pe
 
 | Plan | Status | Shipped | Spec |
 | --- | --- | --- | --- |
-| [Kit and secrets phase 3, part A](2026-10-15-kit-secrets-phase-3a.md) | built, not deployed | | [kit and secrets phase 3](../specs/2026-10-15-kit-secrets-phase-3-design.md) |
+| [Kit phase 3, part B: per-cell apply, skill adopt, tools](2026-10-15-kit-phase-3b.md) | not started | | [kit and secrets phase 3](../specs/2026-10-15-kit-secrets-phase-3-design.md) |
+| [Kit and secrets phase 3, part A](2026-10-15-kit-secrets-phase-3a.md) | shipped | 2026-10-15 | [kit and secrets phase 3](../specs/2026-10-15-kit-secrets-phase-3-design.md) |
 | [Kit and secrets phase 2](2026-10-14-kit-secrets-phase-2.md) | shipped | 2026-10-15 | [kit and secrets phase 2](../specs/2026-10-14-kit-secrets-phase-2-design.md) |
 | [Secret store phase 1](2026-10-14-secrets-phase-1.md) | shipped | 2026-10-14 | [secrets](../specs/2026-10-14-secrets-design.md) |
 | [Kit phase 1](2026-10-14-kit-phase-1.md) | shipped | 2026-10-14 | [kit](../specs/2026-10-14-kit-design.md) |

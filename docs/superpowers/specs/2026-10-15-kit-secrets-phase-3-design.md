@@ -7,8 +7,8 @@ and the calls still open. Where this file and the earlier specs disagree,
 this file wins.
 
 Phase 3 comes in two parts. Part A (restarts, gpd's sinks, gpd's servers with
-secrets) has its own plan. Part B (per-cell apply, skill adopt, tools) gets a
-plan after part A; OpenClaw stays out for now.
+secrets) has its own plan. Part B (per-cell apply, skill adopt, tools) has
+`docs/superpowers/plans/2026-10-15-kit-phase-3b.md`; OpenClaw stays out for now.
 
 ## Why
 
