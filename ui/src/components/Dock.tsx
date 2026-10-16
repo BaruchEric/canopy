@@ -43,6 +43,7 @@ import { machineOf } from "../agentcards";
 import { AgentScreen, AskHere, pageIds, useAgentCard, useShellProbe } from "./AgentFocus";
 import { AgentActions, useNow } from "./Registry";
 import { HealthList, HealthSection } from "./Health";
+import { LandingSection } from "./Landing";
 import { CliBody } from "./CommandLine";
 import { WaitingBody } from "./Waiting";
 import { benchHolds, benchIs, benchSolo } from "../front";
@@ -1100,6 +1101,9 @@ export function PanelSection({ k, repo }: { k: SectionKey; repo: Repo }) {
   switch (k) {
     case "changes":
       return <ChangesSection repo={repo} />;
+    case "landing":
+      // a branch run works in a worktree on the backend's own disk
+      return repo.forge ? null : <LandingSection repo={repo} />;
     case "search":
       return <SearchSection repo={repo} />;
     case "files":

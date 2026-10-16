@@ -128,7 +128,7 @@ export class LandingHub {
 
   /** Resolves once every record write asked for so far is on disk. */
   async flushed(): Promise<void> {
-    while (this.chains.size > 0) await Promise.all([...this.chains.values()]);
+    while (this.chains.size > 0) await Promise.all(this.chains.values());
   }
 
   private async readDir<T>(sub: string, parse: (v: unknown) => T[]): Promise<T[]> {
@@ -390,7 +390,7 @@ export class LandingHub {
 
   /** Resolves once every loop running now is done, for tests and shutdown. */
   async idle(): Promise<void> {
-    while (this.loops.size > 0) await Promise.all([...this.loops.values()]);
+    while (this.loops.size > 0) await Promise.all(this.loops.values());
   }
 
   private update(e: LandEntry): LandEntry {

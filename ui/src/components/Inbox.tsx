@@ -38,8 +38,8 @@ export function useNow(on: boolean, ms = 1000): number {
   return now;
 }
 
-const KIND_GLYPH: Record<InboxItem["kind"], string> = { permission: "⚿", question: "?", proposal: "≡", guard: "⛨", gate: "⏸", clarify: "✎", park: "⏸", advice: "↺", "hand-off": "⇪" };
-const SOURCE_WORD: Record<InboxItem["source"], string> = { ask: "agent", run: "run", flow: "workflow", sprout: "incubator", advice: "incubator" };
+const KIND_GLYPH: Record<InboxItem["kind"], string> = { permission: "⚿", question: "?", proposal: "≡", guard: "⛨", gate: "⏸", clarify: "✎", park: "⏸", advice: "↺", "hand-off": "⇪", "sent-back": "↩" };
+const SOURCE_WORD: Record<InboxItem["source"], string> = { ask: "agent", run: "run", flow: "workflow", sprout: "incubator", advice: "incubator", landing: "landing queue" };
 
 /** The retro lessons on offer, each with its own accept and dismiss.
  *  Accepting never edits anything itself: it opens a chat on canopy's own
@@ -149,6 +149,7 @@ export function InboxRow({
     if (item.source === "run") st.showRun(item.id);
     else if (item.source === "flow") st.showFlow(item.id);
     else if (item.source === "sprout") st.showSprout(item.id);
+    else if (item.source === "landing" && item.repoId) st.showLanding(item.repoId);
   };
   const join = () => {
     if (!target) return;
@@ -246,6 +247,28 @@ export function InboxRow({
                 </button>
               </div>
             </div>
+          ) : item.kind === "sent-back" ? (
+            <div className="ask">
+              <div className="eyebrow">
+                {item.repo} {item.title}
+              </div>
+              {detail && <pre className="ask-detail">{detail}</pre>}
+              <div className="ask-row">
+                <button
+                  type="button"
+                  className="mini strong"
+                  disabled={busy}
+                  title="The run continues on its branch with this reason as its next message, and rejoins the queue once it is ready again"
+                  onClick={() => answer({ landing: "fix" })}
+                >
+                  fix it
+                </button>
+                <span className="spacer" />
+                <button type="button" className="mini" disabled={busy} title="Give the branch up: its worktree and its commits go" onClick={() => answer({ landing: "drop" })}>
+                  drop
+                </button>
+              </div>
+            </div>
           ) : item.kind === "gate" || item.kind === "park" ? (
             <div className="ask">
               <div className="eyebrow">{item.who} {item.title}</div>
@@ -329,7 +352,7 @@ export function InboxRow({
           <div className="kept-acts">
             {item.source !== "ask" && item.source !== "advice" && (
               <button type="button" className="mini" onClick={openSheet}>
-                open the {item.source === "run" ? "run" : item.source === "sprout" ? "project" : "workflow"}
+                open the {item.source === "run" ? "run" : item.source === "sprout" ? "project" : item.source === "landing" ? "landing section" : "workflow"}
               </button>
             )}
             {held && (

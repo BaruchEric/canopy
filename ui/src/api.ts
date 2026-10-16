@@ -3,6 +3,8 @@ import type {
   KitAction,
   KitApplyResult,
   KitInfo,
+  LandEntry,
+  LandingInfo,
   KitInstallResult,
   KitMcpPreview,
   HealthInfo,
@@ -109,6 +111,7 @@ import {
   qCheck,
   qKept,
   qRepo,
+  qLanding,
   qRun,
   qScan,
   qSource,
@@ -661,17 +664,41 @@ export const api = {
     req<{ notify: boolean }>(homeName(), "/api/tailchan/notify", { method: "POST", body: JSON.stringify({ on }) }),
   runs: async (b: string = homeName()) => fromAll(b, await req<Run[]>(b, "/api/runs"), qRun),
   /** `client` is this browser's id, so the run says which device started it */
-  run: async (id: string, action: RunAction, note: string, client?: string) => {
+  run: async (id: string, action: RunAction, note: string, client?: string, branch?: boolean) => {
     const [b, plain] = on(id);
     return from(
       b,
       await req<Run>(b, `/api/repos/run?${rq(plain)}`, {
         method: "POST",
-        body: JSON.stringify({ action, note, client }),
+        body: JSON.stringify({ action, note, client, ...(branch !== undefined ? { branch } : {}) }),
       }),
       qRun,
     );
   },
+  /** one backend's branch runs and landing queue; an older backend has none */
+  landing: async (b: string = homeName()) => {
+    const r = await req<Partial<LandingInfo> | null>(b, "/api/landing");
+    const info: LandingInfo = { runs: Array.isArray(r?.runs) ? r.runs : [], entries: Array.isArray(r?.entries) ? r.entries : [], orphans: Array.isArray(r?.orphans) ? r.orphans : [] };
+    return from(b, info, qLanding);
+  },
+  /** "land" on a ready branch run, by its run's or its branch's id */
+  land: async (id: string) => {
+    const [b, plain] = on(id);
+    await req<LandEntry>(b, "/api/landing/land", { method: "POST", body: JSON.stringify({ run: plain }) });
+  },
+  /** "fix it" on a sent-back branch: the run it starts */
+  fixLanding: async (id: string) => {
+    const [b, plain] = on(id);
+    return from(b, await req<Run>(b, "/api/landing/fix", { method: "POST", body: JSON.stringify({ id: plain }) }), qRun);
+  },
+  /** gives a sent-back branch up, with its worktree */
+  dropLanding: async (id: string) => {
+    const [b, plain] = on(id);
+    await req<{ ok: true }>(b, "/api/landing/drop", { method: "POST", body: JSON.stringify({ id: plain }) });
+  },
+  /** an orphaned run worktree on backend `b`: removed, or queued */
+  orphanLanding: (b: string, dir: string, action: "remove" | "queue") =>
+    req<{ ok: true }>(b, "/api/landing/orphan", { method: "POST", body: JSON.stringify({ dir, action }) }),
   /** `key`, sent to the home backend alone, makes a remembered rule good
    *  for agents in a terminal too (core/sessionrules.ts) */
   answerRun: async (id: string, promptId: string, answer: RunAnswer, key?: string | null) => {

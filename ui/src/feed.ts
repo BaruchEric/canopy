@@ -527,6 +527,8 @@ export function describeEvent(
     // the kit has its own page
     case "kit":
     case "secrets":
+    // the repo's landing section and the inbox say where the queue stands
+    case "landing":
       return [];
   }
 }

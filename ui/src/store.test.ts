@@ -770,6 +770,7 @@ describe("several backends", () => {
         "/api/tasks",
         "/api/layouts",
         "/api/kit",
+        "/api/landing",
         "/api/secrets",
       ].sort(),
     );

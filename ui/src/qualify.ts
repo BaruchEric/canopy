@@ -7,6 +7,7 @@ import type {
   HistoryOverview,
   Job,
   KeptShell,
+  LandingInfo,
   Repo,
   RepoHistory,
   Run,
@@ -43,7 +44,20 @@ export const qScan = (q: Q, t: ScanResult): ScanResult => ({
   sources: t.sources.map((s) => qSource(q, s)),
 });
 
-export const qRun = (q: Q, r: Run): Run => ({ ...r, id: q(r.id), repoId: q(r.repoId) });
+export const qRun = (q: Q, r: Run): Run => ({
+  ...r,
+  id: q(r.id),
+  repoId: q(r.repoId),
+  ...(r.branch ? { branch: { ...r.branch, origin: q(r.branch.origin) } } : {}),
+});
+
+/** The landing queue: a branch's id, its runs' and its repo's under the
+ *  backend's name. Folders stay the backend's own. */
+export const qLanding = (q: Q, l: LandingInfo): LandingInfo => ({
+  runs: l.runs.map((r) => ({ ...r, id: q(r.id), runId: q(r.runId), repoId: q(r.repoId) })),
+  entries: l.entries.map((e) => ({ ...e, id: q(e.id), repoId: q(e.repoId), ...(e.fixing !== undefined ? { fixing: q(e.fixing) } : {}) })),
+  orphans: l.orphans,
+});
 
 export const qFlow = (q: Q, f: Flow): Flow => ({
   ...f,
@@ -147,6 +161,8 @@ export function qEvent(q: Q, ev: ServerEvent): ServerEvent {
       return ev;
     case "health":
       return { ...ev, checks: ev.checks.map((c) => qCheck(q, c)) };
+    case "landing":
+      return { ...ev, landing: qLanding(q, ev.landing) };
     // the kit names machines, not repos: nothing to qualify
     case "kit":
     case "secrets":

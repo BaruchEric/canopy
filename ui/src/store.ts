@@ -47,7 +47,8 @@ import { boardOrder, invertPick, pickWhere, rangeIds, setPick, togglePick } from
 import { appendFeed, describeEvent, type FeedEntry, type FeedSnapshot } from "./feed";
 import { mergeAction } from "./peers";
 import { convOf, isUnread, mergeMessages } from "./chan";
-import type { AdviceAccepted, AdviceOffer, AgentCard, AgentKind, Ask, ChanMessage, HealthCheck, IncubatorStages, KitInfo, Presence, RangerInfo, SecretsInfo, Sprout, TailchanInfo } from "../../src/core/types";
+import type { AdviceAccepted, AdviceOffer, AgentCard, AgentKind, Ask, ChanMessage, HealthCheck, IncubatorStages, KitInfo, LandingInfo, Presence, RangerInfo, SecretsInfo, Sprout, TailchanInfo } from "../../src/core/types";
+import { mergeLanding } from "./landing";
 import { mergeAsks, mergeInbox, replaceAsks, toAskAnswer, toRunAnswer, type InboxAnswer, type InboxItem } from "./inbox";
 import { replaceSprouts, staleSprout } from "./sprouts";
 import { cardsByRepoCard, markTrail, mergeCards, replaceCards, type TrailMark } from "./agentcards";
@@ -730,6 +731,9 @@ interface CanopyState {
   health: Record<string, HealthCheck[]>;
   /** each backend's kit: the machines it reaches and their skills (server/kit) */
   kit: Record<string, KitInfo>;
+  /** each backend's branch runs and landing queue (server/landing); an
+   *  older backend that has none is missing */
+  landing: Record<string, LandingInfo>;
   /** the retro lessons home has on offer, which the inbox shows as one item */
   advice: AdviceOffer[];
   /** an accepted lesson's text by chat run id, which that chat's message box
@@ -1062,6 +1066,18 @@ interface CanopyState {
   loadHealth: (backend?: string) => Promise<void>;
   /** reads one backend's kit, home by default */
   loadKit: (backend?: string) => Promise<void>;
+  /** reads one backend's landing queue, home by default */
+  loadLanding: (backend?: string) => Promise<void>;
+  /** "land" on a ready branch run, by its run's or branch's id */
+  landRun: (id: string) => Promise<void>;
+  /** "fix it" on a sent-back branch: starts the fix and opens its sheet */
+  fixLanding: (id: string) => Promise<void>;
+  /** gives a sent-back branch up, with its worktree */
+  dropLanding: (id: string) => Promise<void>;
+  /** an orphaned run worktree on a backend: removed or queued */
+  orphanLanding: (backend: string, dir: string, action: "remove" | "queue") => Promise<void>;
+  /** opens a repo's panel with its landing section unfolded */
+  showLanding: (repoId: string) => void;
   /** each backend's secret store, by backend name: names, sinks and
    *  proposals, never a value; an older backend that has none is missing */
   secrets: Record<string, SecretsInfo>;
@@ -1195,7 +1211,8 @@ interface CanopyState {
   searchIn: (repoId: string, q: string) => void;
   /** the section took its term */
   takePendingSearch: () => void;
-  startRun: (repoId: string, action: RunAction, note: string) => Promise<void>;
+  /** `branch` puts the run on a branch of its own; unset, the backend's default for the action */
+  startRun: (repoId: string, action: RunAction, note: string, branch?: boolean) => Promise<void>;
   /** a run on a workspace's primary that sees its other members too */
   startWsRun: (name: string, action: RunAction, note: string) => Promise<void>;
   answerRun: (runId: string, promptId: string, answer: RunAnswer) => Promise<void>;
@@ -1498,6 +1515,8 @@ const rangerEvents = new Map<string, number>();
 const healthEvents = new Map<string, number>();
 /* and each backend's kit events, the same way */
 const kitEvents = new Map<string, number>();
+/* and each backend's landing events */
+const landingEvents = new Map<string, number>();
 /* and each backend's secrets events */
 const secretsEvents = new Map<string, number>();
 /** the same for the advice on offer */
@@ -1596,6 +1615,7 @@ function resync(get: () => CanopyState, set: (fn: (s: CanopyState) => Partial<Ca
   void get().loadRanger(b);
   void get().loadHealth(b);
   void get().loadKit(b);
+  void get().loadLanding(b);
   void get().loadSecrets(b);
   // the tasks a panel loaded may have moved while the stream was down
   for (const id of Object.keys(get().tasks)) if (backendOf(id) === b) void get().loadTasks(id).catch(() => {});
@@ -1767,6 +1787,7 @@ export const useStore = create<CanopyState>((set, get) => ({
   rangers: {},
   health: {},
   kit: {},
+  landing: {},
   secrets: {},
   advice: [],
   chatDrafts: {},
@@ -1974,6 +1995,7 @@ export const useStore = create<CanopyState>((set, get) => ({
     void get().loadRanger();
     void get().loadHealth();
     void get().loadKit();
+    void get().loadLanding();
     void get().loadSecrets();
     // the screen layouts, which a backend from before them does not have
     void get().loadScreenProfiles();
@@ -2132,6 +2154,7 @@ export const useStore = create<CanopyState>((set, get) => ({
     void get().loadRanger(name);
     void get().loadHealth(name);
     void get().loadKit(name);
+    void get().loadLanding(name);
     void get().loadSecrets(name);
     void api
       .about(name)
@@ -2184,6 +2207,7 @@ export const useStore = create<CanopyState>((set, get) => ({
     const { [name]: _ranger, ...rangers } = s.rangers;
     const { [name]: _health, ...health } = s.health;
     const { [name]: _kit, ...kit } = s.kit;
+    const { [name]: _landing, ...landing } = s.landing;
     const { [name]: _secrets, ...secrets } = s.secrets;
     const backendOrder = applyRegistry(s.home, registryEntries, hiddenBackends);
     set({
@@ -2208,6 +2232,7 @@ export const useStore = create<CanopyState>((set, get) => ({
       rangers,
       health,
       kit,
+      landing,
       secrets,
       agents,
       launchers,
@@ -2672,6 +2697,11 @@ export const useStore = create<CanopyState>((set, get) => ({
       set((st) => ({ kit: { ...st.kit, [b]: ev.kit } }));
       return;
     }
+    if (ev.type === "landing") {
+      landingEvents.set(b, (landingEvents.get(b) ?? 0) + 1);
+      set((st) => ({ landing: { ...st.landing, [b]: ev.landing } }));
+      return;
+    }
     if (ev.type === "secrets") {
       secretsEvents.set(b, (secretsEvents.get(b) ?? 0) + 1);
       // a broadcast carries nobody's session; keep what this page last read
@@ -2993,6 +3023,30 @@ export const useStore = create<CanopyState>((set, get) => ({
       // an older backend has no kit; nothing shows for it
     }
   },
+  loadLanding: async (backend) => {
+    const b = backend ?? get().home;
+    const mark = landingEvents.get(b) ?? 0;
+    try {
+      const landing = await api.landing(b);
+      if ((landingEvents.get(b) ?? 0) === mark && isShown(get(), b)) set((s) => ({ landing: { ...s.landing, [b]: landing } }));
+    } catch {
+      // an older backend has no landing queue; nothing shows for it
+    }
+  },
+  landRun: async (id) => {
+    await api.land(id);
+  },
+  fixLanding: async (id) => {
+    const run = await api.fixLanding(id);
+    set((s) => ({ runs: { ...s.runs, [run.id]: run }, sheet: { kind: "run", runId: run.id } }));
+  },
+  dropLanding: async (id) => {
+    await api.dropLanding(id);
+  },
+  orphanLanding: async (backend, dir, action) => {
+    await api.orphanLanding(backend, dir, action);
+    await get().loadLanding(backend);
+  },
   loadSecrets: async (backend) => {
     const b = backend ?? get().home;
     const mark = secretsEvents.get(b) ?? 0;
@@ -3138,6 +3192,12 @@ export const useStore = create<CanopyState>((set, get) => ({
     return accepted ?? null;
   },
   answerInbox: async (item, answer) => {
+    if (item.source === "landing") {
+      if (!("landing" in answer)) throw new Error("a sent-back branch takes fix it or drop");
+      if (answer.landing === "drop") return get().dropLanding(item.id);
+      get().closeInbox();
+      return get().fixLanding(item.id);
+    }
     if (item.source === "advice") {
       if (!("advice" in answer)) throw new Error("a lesson takes accept or dismiss");
       await get().answerAdvice(answer.advice, answer.accept);
@@ -3452,6 +3512,11 @@ export const useStore = create<CanopyState>((set, get) => ({
       ...dockPanel(s, repoId),
       closedSections: unfoldIn(s.closedSections, repoId, "health"),
     })),
+  showLanding: (repoId) =>
+    set((s) => ({
+      ...dockPanel(s, repoId),
+      closedSections: unfoldIn(s.closedSections, repoId, "landing"),
+    })),
   bringTask: (repoId, task = null) =>
     set((s) => ({ ...dockPanel(s, repoId), front: frontForTask(s.front, repoId, task) })),
   dropBenchTask: (repoId) =>
@@ -3529,8 +3594,8 @@ export const useStore = create<CanopyState>((set, get) => ({
       closedSections: unfoldIn(s.closedSections, repoId, "search"),
     })),
   takePendingSearch: () => set({ pendingSearch: null }),
-  startRun: async (repoId, action, note) => {
-    const run = await api.run(repoId, action, note, clientId());
+  startRun: async (repoId, action, note, branch) => {
+    const run = await api.run(repoId, action, note, clientId(), branch);
     set((s) => ({
       runs: { ...s.runs, [run.id]: run },
       sheet: { kind: "run", runId: run.id },
@@ -4060,6 +4125,7 @@ let inboxIn: {
   registry: Record<string, AgentCard>;
   sprouts: Record<string, Sprout>;
   advice: AdviceOffer[];
+  landing: Record<string, LandingInfo>;
 } | null = null;
 let inboxOut: InboxItem[] = [];
 
@@ -4068,10 +4134,10 @@ let inboxOut: InboxItem[] = [];
  *  once per change of what it reads, so a selector over it settles; a
  *  countdown keeps its own time off each item's `until`. */
 export function inboxItems(s: CanopyState): InboxItem[] {
-  if (inboxIn && inboxIn.asks === s.asks && inboxIn.runs === s.runs && inboxIn.flows === s.flows && inboxIn.repos === s.repos && inboxIn.registry === s.registry && inboxIn.sprouts === s.sprouts && inboxIn.advice === s.advice) {
+  if (inboxIn && inboxIn.asks === s.asks && inboxIn.runs === s.runs && inboxIn.flows === s.flows && inboxIn.repos === s.repos && inboxIn.registry === s.registry && inboxIn.sprouts === s.sprouts && inboxIn.advice === s.advice && inboxIn.landing === s.landing) {
     return inboxOut;
   }
-  inboxIn = { asks: s.asks, runs: s.runs, flows: s.flows, repos: s.repos, registry: s.registry, sprouts: s.sprouts, advice: s.advice };
+  inboxIn = { asks: s.asks, runs: s.runs, flows: s.flows, repos: s.repos, registry: s.registry, sprouts: s.sprouts, advice: s.advice, landing: s.landing };
   inboxOut = mergeInbox(Object.values(s.asks), s.runs, s.flows, Date.now(), {
     repos: s.repos,
     cards: s.registry,
@@ -4079,6 +4145,7 @@ export function inboxItems(s: CanopyState): InboxItem[] {
     askRepos: s.repos.filter((r) => backendOf(r.id) === s.home),
     sprouts: Object.values(s.sprouts),
     advice: s.advice,
+    landing: landingAll(s),
   });
   return inboxOut;
 }
@@ -4297,3 +4364,15 @@ export function foldStartedFleets(
 const NO_TASKS: TaskInfo[] = [];
 /** a repo's tasks as last read or told; a stable empty list when none */
 export const tasksOf = (s: CanopyState, repoId: string): TaskInfo[] => s.tasks[repoId] ?? NO_TASKS;
+
+let landingIn: Record<string, LandingInfo> | null = null;
+let landingOut: LandingInfo = { runs: [], entries: [], orphans: [] };
+
+/** Every backend's landing queue as one, worked out once per change. */
+export function landingAll(s: Pick<CanopyState, "landing">): LandingInfo {
+  if (landingIn !== s.landing) {
+    landingIn = s.landing;
+    landingOut = mergeLanding(s.landing);
+  }
+  return landingOut;
+}
