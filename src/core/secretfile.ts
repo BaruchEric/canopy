@@ -5,7 +5,7 @@
  * is the only thing it calls, and Bun and the browser both have it.
  */
 
-import type { SecretImpact, SecretMeta, SecretSinkFormat } from "./types";
+import type { SecretImpact, SecretMeta, SecretSinkFormat, SecretStack } from "./types";
 
 export const AGE_HEAD = "-----BEGIN AGE ENCRYPTED FILE-----";
 /** a letter first, so no name is an integer-like key that JSON reorders */
@@ -27,7 +27,13 @@ export const HEADER_NAME = /^[A-Za-z][A-Za-z0-9-]{0,63}$/;
 /** an X25519 recipient; a post-quantum one is longer and not taken yet */
 export const AGE_RECIPIENT = /^age1[02-9ac-hj-np-z]{58}$/;
 const STAMP = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d{3})?Z$/;
-const RESTART = /^[a-z0-9][a-z0-9_-]{0,63}$/;
+/** a compose project name; also what the canopy-restart script accepts */
+export const PROJECT = /^[a-z0-9][a-z0-9_-]{0,63}$/;
+const RESTART = PROJECT;
+/** a sink's `restart` that turns the derived project off */
+export const NO_RESTART = "none";
+/** where the mini's stacks live; a sink in one restarts its project */
+export const STACKS_ROOT = "/opt/stacks";
 
 export interface SecretEntry {
   description: string;
@@ -45,7 +51,8 @@ export interface SinkDef {
   path: string;
   format: SecretSinkFormat;
   keys: Record<string, string>;
-  /** phase 3: the stack restarted after a change; kept, never run here */
+  /** the compose project a write restarts, or "none"; unset, the writer
+   *  finds it from the sink's folder (phase 3, `stackFor`) */
   restart?: string;
 }
 
@@ -216,10 +223,33 @@ export function parseMcpAllow(entry: string): { server: string; hash: string } |
 export const isServerSink = (id: string, server: string, machine: string): boolean =>
   id === mcpSinkId(server, machine) || id === mcpSinkId(server, machine, true);
 
+/** which project a sink restarts, given its id and definition */
+export type StackOf = (id: string, sink: SinkDef) => string | null;
+
+/** the project set on the sink, when one is; a reader with no project list knows no more */
+export const setStack: StackOf = (_id, s) => (s.restart && s.restart !== NO_RESTART ? s.restart : null);
+
+const parentOf = (p: string): string => p.slice(0, Math.max(0, p.lastIndexOf("/")));
+
+/** The compose project a write to this sink restarts (phase 3 spec, part
+ *  A1): a set `restart` wins and "none" turns it off. Otherwise, for a
+ *  sink on `machine` at /opt/stacks/<dir>/…, the one running project whose
+ *  first config file sits directly in /opt/stacks/<dir>. None or several
+ *  is null. */
+export function stackFor(sink: SinkDef, machine: string, projects: readonly SecretStack[]): string | null {
+  if (sink.restart !== undefined) return sink.restart === NO_RESTART ? null : sink.restart;
+  if (sink.machine !== machine) return null;
+  const m = new RegExp(`^${STACKS_ROOT}/([^/]+)/`).exec(sink.path);
+  if (!m) return null;
+  const dir = `${STACKS_ROOT}/${m[1]}`;
+  const hits = projects.filter((p) => p.files[0] !== undefined && parentOf(p.files[0]) === dir);
+  return hits.length === 1 ? (hits[0]?.name ?? null) : null;
+}
+
 /** Everything a change to `name` reaches: its sinks, the MCP servers its
  *  allowlist names with the machines holding their env sinks, and the
- *  stacks those sinks restart. */
-export function impactOf(f: SecretFile, name: string): SecretImpact {
+ *  projects those sinks restart. */
+export function impactOf(f: SecretFile, name: string, stackOf: StackOf = setStack): SecretImpact {
   const sinks = usedBy(f, name).flatMap((id) => {
     const s = f.sinks[id];
     if (!s) return [];
@@ -232,7 +262,11 @@ export function impactOf(f: SecretFile, name: string): SecretImpact {
     const machines = [...new Set(Object.entries(f.sinks).filter(([id, s]) => isServerSink(id, p.server, s.machine)).map(([, s]) => s.machine))].sort();
     return [{ server: p.server, hash: p.hash, machines }];
   });
-  const stacks = [...new Set(sinks.flatMap((s) => f.sinks[s.id]?.restart ?? []))].sort();
+  const stacks = [...new Set(sinks.flatMap((s) => {
+    const def = f.sinks[s.id];
+    const p = def ? stackOf(s.id, def) : null;
+    return p ? [p] : [];
+  }))].sort();
   return { sinks, servers, stacks };
 }
 
@@ -289,16 +323,16 @@ export function fileProblems(f: SecretFile): string[] {
   return out;
 }
 
-export function metaOf(f: SecretFile, name: string): SecretMeta | null {
+export function metaOf(f: SecretFile, name: string, stackOf: StackOf = setStack): SecretMeta | null {
   const e = f.secrets[name];
   if (!e) return null;
-  return { name, description: e.description, tags: [...e.tags], created: e.created, rotated: e.rotated, to: [...e.to], allow: [...e.allow], usedBy: usedBy(f, name), impact: impactOf(f, name) };
+  return { name, description: e.description, tags: [...e.tags], created: e.created, rotated: e.rotated, to: [...e.to], allow: [...e.allow], usedBy: usedBy(f, name), impact: impactOf(f, name, stackOf) };
 }
 
-export const metaList = (f: SecretFile): SecretMeta[] =>
+export const metaList = (f: SecretFile, stackOf: StackOf = setStack): SecretMeta[] =>
   Object.keys(f.secrets)
     .sort()
     .flatMap((n) => {
-      const m = metaOf(f, n);
+      const m = metaOf(f, n, stackOf);
       return m ? [m] : [];
     });

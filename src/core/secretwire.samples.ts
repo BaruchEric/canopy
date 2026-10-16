@@ -38,4 +38,5 @@ export const SAMPLES: Record<ActKind, { good: SecretAct; bad: Record<string, unk
   "mcp-revoke": { good: { a: "mcp-revoke", server: "github" }, bad: { a: "mcp-revoke", server: "Git Hub" } },
   "passkey-remove": { good: { a: "passkey-remove", id: "abc" }, bad: { a: "passkey-remove", id: "" } },
   "passkey-label": { good: { a: "passkey-label", id: "abc", label: "roboform" }, bad: { a: "passkey-label", id: "abc", label: "  " } },
+  "stack-restart": { good: { a: "stack-restart", project: "buzz-prod" }, bad: { a: "stack-restart", project: "buzz; rm -rf /" } },
 };

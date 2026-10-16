@@ -186,6 +186,10 @@ job() {
   # keeps every other user out
   mkdir -p "$STAGE_HOST_HOME/.claude/mcp-env" && chmod 700 "$STAGE_HOST_HOME/.claude/mcp-env" ||
     { echo "could not make $STAGE_HOST_HOME/.claude/mcp-env; up would make it as root"; return 1; }
+  # the restart key's folder (scripts/restart-setup.sh fills it); the
+  # secrets service mounts it read-only, so a root-made one would stay empty
+  mkdir -p "$STAGE_HOST_HOME/.config/canopy-restart" && chmod 700 "$STAGE_HOST_HOME/.config/canopy-restart" ||
+    { echo "could not make $STAGE_HOST_HOME/.config/canopy-restart; up would make it as root"; return 1; }
   if docker compose --dry-run up -d 2>&1 | grep -q 'canopy-shells-1.*Recreate'; then
     if [ "$shells" != 1 ]; then
       echo "this deploy recreates the shells container, which ends every shell."

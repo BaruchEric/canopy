@@ -77,6 +77,12 @@ export class KitHub {
     return this.last;
   }
 
+  /** the machines this backend reaches over ssh (gpd from the Mac): the
+   *  secrets reader writes their sinks (phase 3) */
+  sshMachines(): { name: string; host: string }[] {
+    return this.kit ? this.mine(this.kit).flatMap((m) => (m.host === null ? [] : [{ name: m.name, host: m.host }])) : [];
+  }
+
   private mine(kit: KitManifest): Mine[] {
     const out: Mine[] = [];
     for (const m of kit.machines) {
@@ -162,7 +168,7 @@ export class KitHub {
 
   private ctxOf(v: View, secrets: SecretsInfo | null): KitMcpCtx | undefined {
     if (!v.mcp) return undefined;
-    return { mcp: v.mcp, hashes: this.hashes, secrets, home: this.homeOf(v), env: this.deps.procEnv ?? process.env, ssh: v.ssh };
+    return { mcp: v.mcp, hashes: this.hashes, secrets, home: this.homeOf(v), env: this.deps.procEnv ?? process.env };
   }
 
   private mcpViews(kit: KitManifest): KitMcpView[] {
@@ -170,8 +176,7 @@ export class KitHub {
       const on = kit.machines.filter((m) => mcpTargets(kit, m.name).some((t) => mcpWanted(s, t.agent, m.name)));
       return {
         name: s.name, def: mcpDefOf(s), hash: this.hashes[s.name] ?? "", ...secretsOf(s),
-        machines: on.filter((m) => !m.ssh).map((m) => m.name),
-        later: on.filter((m) => m.ssh).map((m) => m.name),
+        machines: on.map((m) => m.name),
       };
     });
   }

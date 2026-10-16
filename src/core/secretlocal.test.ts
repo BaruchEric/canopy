@@ -4,6 +4,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { newIdentity, newSigningKey, openProposal, sealValue, signingKey } from "./secretcrypt";
 import { emptyFile, serializeFile, signFile, type SecretFile } from "./secretfile";
+import { onHost } from "./exec";
+import { sshSinks, type RemoteSinks } from "./sinkssh";
 import { FILE_IO, type SinkIO } from "./sinksync";
 import { localPaths, SecretsReader, writeLocalConfig, type ReaderOptions } from "./secretlocal";
 
@@ -322,5 +324,60 @@ describe("proposals", () => {
     if ("error" in take) throw new Error(take.error);
     expect(take.merges).toBe("cf_token");
     expect(await openProposal(take.sealed, mini.identity, take)).toBe("by-hand");
+  });
+});
+
+describe("gpd's sinks, written by the Mac over ssh (phase 3)", () => {
+  /** gpd's scripts run here against a scratch home; `down` makes it away */
+  function gpd(home: string, state: { down: string | null; calls: number }): RemoteSinks {
+    const inner = sshSinks("gpd", "gpd", (_h, cmd, o) => {
+      state.calls += 1;
+      return onHost(null, cmd, o);
+    });
+    return { ...inner, probe: async () => (state.down ? { away: state.down } : { home }) };
+  }
+
+  test("waiting while locked with no ssh at all, written once unlocked, away with the reason and tried again on the next pull", async () => {
+    const r0 = await reader();
+    const made = await r0.createKey("correct horse battery", false);
+    if (!("recipient" in made)) throw new Error(made.error);
+    const mini = await newIdentity();
+    const home = join(dir, "gpd-home");
+    await mkdir(join(home, ".claude", "mcp-env"), { recursive: true });
+    await writeFile(join(home, ".claude", "mcp-env", "revoked.env"), "OLD=1\n");
+    const f = emptyFile({ mini: mini.recipient, mac: made.recipient, breakglass: BREAKGLASS });
+    f.secrets["gh_token"] = { description: "", tags: [], created: STAMP, rotated: STAMP, to: ["breakglass", "mac", "mini"], allow: ["sink:mcp-github-gpd"], value: await sealValue("gh_token", V, STAMP, [mini.recipient, made.recipient]) };
+    const path = join(home, ".claude", "mcp-env", "github.env");
+    f.sinks["mcp-github-gpd"] = { machine: "gpd", path, format: "dotenv", keys: { GITHUB_PERSONAL_ACCESS_TOKEN: "gh_token" } };
+    await publish(f, signer);
+
+    const st = { down: null as string | null, calls: 0 };
+    const remote = gpd(home, st);
+    const r = await reader([], [], { remotes: () => [remote] });
+    r.lockNow();
+    await r.syncSinks();
+    expect(r.info("mac").sinks.find((s) => s.id === "mcp-github-gpd")?.state).toEqual({ GITHUB_PERSONAL_ACCESS_TOKEN: "waiting" });
+    expect(st.calls).toBe(0);
+
+    st.down = "ssh: connect to host gpd port 22: Operation timed out";
+    expect(await r.unlock("correct horse battery")).toEqual({ ok: true });
+    expect(r.info("mac").sinks.find((s) => s.id === "mcp-github-gpd")).toMatchObject({ state: {}, error: "gpd is away: ssh: connect to host gpd port 22: Operation timed out" });
+    expect(await readFile(path, "utf8").catch(() => null)).toBeNull();
+
+    // the same head, but gpd was away: the next pull passes again
+    st.down = null;
+    await r.pull();
+    expect(await readFile(path, "utf8")).toBe(`GITHUB_PERSONAL_ACCESS_TOKEN=${V}\n`);
+    expect(r.info("mac").sinks.find((s) => s.id === "mcp-github-gpd")).toMatchObject({ state: { GITHUB_PERSONAL_ACCESS_TOKEN: "same" }, error: null });
+    // an env file no sink names is pruned on gpd too
+    expect((await readdir(join(home, ".claude", "mcp-env"))).sort()).toEqual(["github.env"]);
+  });
+
+  test("a reader with no ssh machines reports no state for gpd's sinks", async () => {
+    const f = await base();
+    f.sinks["gpd-env"] = { machine: "gpd", path: "/home/eric/app.env", format: "dotenv", keys: { CF_TOKEN: "cf_token" } };
+    await publish(f, signer);
+    const r = await reader();
+    expect(r.info("mac").sinks.find((s) => s.id === "gpd-env")).toMatchObject({ state: {}, error: null });
   });
 });

@@ -175,6 +175,10 @@ services:
       # It must exist before `up`, or docker makes a folder in its place.
       - ./.env:/import/canopy.env:ro
       - secrets-sock:/run/canopy-secrets
+      # the canopy-restart key and the host key it trusts
+      # (scripts/restart-setup.sh); redeploy makes the folder first, or
+      # docker would make it as root. Empty, the view says how to fill it.
+      - ${HOST_HOME:-/home/eric}/.config/canopy-restart:/restart:ro
     read_only: true
     tmpfs:
       - /tmp:mode=1777,size=64m

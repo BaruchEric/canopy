@@ -100,8 +100,8 @@ describe("kit cli over several backends", () => {
     const info: KitInfo = { ok: true, error: null, cells: [{ machine: "mac", agent: "claude", skill: "github", state: "not-allowed", why: "not allowed; allow it from the kit view", kind: "mcp" }], machines: [{ machine: "mac", seen: { machine: "mac", at: 1, away: null, home: "/h", store: null, targets: [], sources: {} }, plan: [{ kind: "mcp-set", agent: "codex", name: "github" }] }] };
     expect(kitStatusLines(info, null)).toEqual(["  claude  github  not-allowed  not allowed; allow it from the kit view", "  plan: mcp-set codex/github"]);
   });
-  test("every MCP problem state prints; ok, local, off and phase-3 do not", () => {
-    const states = ["not-allowed", "stale-allowance", "no-sink", "adoptable", "unsupported", "unresolved", "ok", "local", "off", "phase-3"] as const;
+  test("every MCP problem state prints; ok, local and off do not", () => {
+    const states = ["not-allowed", "stale-allowance", "no-sink", "adoptable", "unsupported", "unresolved", "ok", "local", "off"] as const;
     const info: KitInfo = {
       ok: true, error: null,
       cells: states.map((state) => ({ machine: "mac", agent: "codex", skill: state, state, why: "", kind: "mcp" as const })),

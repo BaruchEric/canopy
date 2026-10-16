@@ -137,21 +137,33 @@ describe("a rotation's reach", () => {
     },
     ...over,
   });
-  const sink = (id: string, state: SecretSinkInfo["state"], error: string | null = null): SinkRow => ({ sink: { id, machine: "mac", path: "/x", format: "dotenv", keys: {}, state, error }, owner: "mac" });
+  const sink = (id: string, state: SecretSinkInfo["state"], error: string | null = null, stack?: string): SinkRow => ({ sink: { id, machine: "mac", path: "/x", format: "dotenv", keys: {}, state, error, ...(stack ? { stack } : {}) }, owner: "mac" });
+  const STACKS = [{ name: "dev", files: ["/opt/stacks/dev/compose.yml", "/opt/stacks/dev/compose.mini.yml"] }];
 
-  test("the restart line is the stack's compose up", () => {
-    expect(restartLine("dev")).toBe("cd /opt/stacks/dev && docker compose up -d");
+  test("the restart line names the project and every file it was started with; an unlisted one has none", () => {
+    expect(restartLine("dev", STACKS)).toBe("docker compose -p dev -f /opt/stacks/dev/compose.yml -f /opt/stacks/dev/compose.mini.yml up -d");
+    expect(restartLine("gone", STACKS)).toBeNull();
+    expect(restartLine("dev", undefined)).toBeNull();
   });
 
   test("lists sinks with their states, servers with the session note, and stacks with their line", () => {
-    const r = reachRows(meta(), [sink("dev-env", { GH_TOKEN: "same" }), sink("mcp-github-mac", { GITHUB_PERSONAL_ACCESS_TOKEN: "waiting" })]);
+    const r = reachRows(meta(), [sink("dev-env", { GH_TOKEN: "same" }, null, "dev"), sink("mcp-github-mac", { GITHUB_PERSONAL_ACCESS_TOKEN: "waiting" })], undefined, STACKS);
     expect(r).toEqual([
       { kind: "sink", name: "dev-env", machine: "mini", detail: "/opt/stacks/dev/.env, GH_TOKEN", state: "same" },
       { kind: "sink", name: "mcp-github-mac", machine: "mac", detail: "/Users/e/.claude/mcp-env/github.env, GITHUB_PERSONAL_ACCESS_TOKEN", state: "waiting" },
       { kind: "server", name: "github", machine: "mac", detail: "new agent sessions get the new value; running ones keep the old one", state: null },
-      { kind: "stack", name: "dev", machine: "mini", detail: "cd /opt/stacks/dev && docker compose up -d", state: null },
+      { kind: "stack", name: "dev", machine: "mini", detail: "docker compose -p dev -f /opt/stacks/dev/compose.yml -f /opt/stacks/dev/compose.mini.yml up -d", state: null, ready: true },
     ]);
     expect(reachRows(meta(), [sink("dev-env", {}, "cannot write")])[0]?.state).toBe("cannot write");
+  });
+
+  test("a stack is ready only once its own sinks have written, and only when the mini lists it", () => {
+    const stack = (rows: SinkRow[], awaited?: (o: string | null) => boolean, stacks = STACKS) => reachRows(meta(), rows, awaited, stacks).find((x) => x.kind === "stack");
+    expect(stack([sink("dev-env", { GH_TOKEN: "waiting" }, null, "dev")])?.ready).toBe(false);
+    expect(stack([sink("dev-env", { GH_TOKEN: "same" }, null, "dev")], () => true)?.ready).toBe(false);
+    expect(stack([sink("dev-env", {}, "cannot write", "dev")])?.ready).toBe(false);
+    expect(stack([sink("dev-env", { GH_TOKEN: "drift" }, null, "dev")])?.ready).toBe(true);
+    expect(stack([sink("dev-env", { GH_TOKEN: "same" }, null, "dev")], undefined, [])).toMatchObject({ ready: false, detail: "not in the mini's list of running projects" });
   });
 
   test("used by reads the reach, or the sinks from a backend without it", () => {
@@ -191,7 +203,6 @@ describe("a rotation's reach", () => {
     expect(stateTone("missing, waiting")).toBe("lichen");
     expect(stateTone("waiting for mac's pass")).toBe("sky");
     expect(stateTone("cannot write")).toBe("rust");
-    expect(stateTone("phase 3")).toBe("");
     expect(stateTone(null)).toBe("");
   });
 });

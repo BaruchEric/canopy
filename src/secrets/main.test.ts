@@ -21,6 +21,9 @@ describe("serviceEnv", () => {
       breakglass: DEFAULT_BREAKGLASS,
       sinkRoots: ["/opt/stacks"],
       extra: ["/import/canopy.env"],
+      restartDir: "/restart",
+      restartHost: "192.168.48.1",
+      restartUser: "eric",
     });
   });
 

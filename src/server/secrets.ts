@@ -14,6 +14,7 @@ import { join } from "node:path";
 import { macSources } from "../core/secretimport";
 import { localPaths, SecretsReader } from "../core/secretlocal";
 import { askSecrets, SECRETS_AWAY } from "../core/secretsclient";
+import { sshSinks, type RemoteSinks } from "../core/sinkssh";
 import { parseAct, parseProposals, PASSKEY, type SecretsReply, type SecretsRequest } from "../core/secretwire";
 import { mcpIgnoreRefusal } from "../core/sinks";
 import type { SecretsInfo, ServerEvent } from "../core/types";
@@ -266,9 +267,18 @@ export function createSecretsHub(o: {
   root: string;
   repoRoots: () => readonly string[];
   broadcast: (ev: ServerEvent) => void;
+  /** the machines this backend reaches over ssh, from the kit's manifest */
+  sshMachines?: () => { name: string; host: string }[];
   env?: Record<string, string | undefined>;
 }): SecretsHub {
   const env = o.env ?? process.env;
+  const remotes = new Map<string, RemoteSinks>();
+  const remoteFor = (m: { name: string; host: string }): RemoteSinks => {
+    const key = `${m.name}\t${m.host}`;
+    let r = remotes.get(key);
+    if (!r) remotes.set(key, (r = sshSinks(m.name, m.host)));
+    return r;
+  };
   const socket = env["CANOPY_SECRETS_SOCKET"] || null;
   const gateOrigin = env["CANOPY_SECRETS_ORIGIN"] ?? "https://canopy.beric.ca";
   const reader = socket
@@ -280,6 +290,7 @@ export function createSecretsHub(o: {
         sources: () => macSources(homedir(), o.root),
         repoRoots: () => [...o.repoRoots(), join(homedir(), ".claude")],
         mcpEnvDir: join(homedir(), ".claude", "mcp-env"),
+        remotes: () => (o.sshMachines?.() ?? []).map(remoteFor),
         log: (line) => console.log(line),
       });
   return new SecretsHub({

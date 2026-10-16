@@ -41,7 +41,6 @@ export function mcpAllowFile(f: SecretFile, x: McpAllowance): Result {
   if (gone) return { error: `${x.server} names ${gone}, which the store does not hold` };
   const machines = Object.keys(x.homes).sort();
   if (machines.length === 0) return { error: `${x.server} is placed on no machine` };
-  if (machines.includes("gpd")) return { error: "gpd's sinks are secrets phase 3; allow the server without gpd" };
   if (machines.includes("breakglass")) return { error: "breakglass is a key, not a machine with sinks" };
   const sinks: Record<string, SinkDef> = Object.fromEntries(Object.entries(f.sinks).filter(([id, s]) => !isServerSink(id, x.server, s.machine)));
   const touched = new Set(Object.keys(f.sinks).filter((id) => !(id in sinks)));

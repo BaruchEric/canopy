@@ -13,6 +13,7 @@ import type { SecretsInfo } from "../core/types";
 import { Audit } from "./audit";
 import { Gate, type WebAuthn } from "./gate";
 import { SecretsService, type StoreLike } from "./service";
+import type { StackRunner } from "./stacks";
 
 const BREAKGLASS = "age1xtc4cftnu55fn3enurt9jexnrenmru3w0xl93uz5q20e34mefs6stg2vra";
 const V = "fixture-value-0x5eed";
@@ -53,6 +54,19 @@ let found: Found[] = [];
 let svc: SecretsService;
 let store: MemStore;
 let audit: Audit;
+/** the host's projects as the restart key would list them, and the restarts asked for */
+let projects: { name: string; files: string[] }[] = [];
+let restarts: string[] = [];
+let restartCode = 0;
+let restartThrows: string | null = null;
+const fakeStacks: StackRunner = {
+  list: async () => ({ stacks: projects }),
+  restart: async (p) => {
+    restarts.push(p);
+    if (restartThrows !== null) throw new Error(restartThrows);
+    return { code: restartCode, containers: [{ service: "redis", state: "running", health: "healthy" }] };
+  },
+};
 
 beforeEach(async () => {
   dir = await mkdtemp(join(tmpdir(), "canopy-service-"));
@@ -61,6 +75,10 @@ beforeEach(async () => {
   t = Date.parse("2026-10-14T12:00:00.000Z");
   logs = [];
   found = [];
+  projects = [{ name: "dns-prod", files: ["/opt/stacks/dns/compose.yml", "/opt/stacks/dns/compose.mini.yml"] }];
+  restarts = [];
+  restartCode = 0;
+  restartThrows = null;
   const mini = await newIdentity();
   store = new MemStore(mini.recipient, mini.identity);
   const gate = await Gate.open({ file: join(dir, "passkeys.json"), rpID: "canopy.beric.ca", origin: "https://canopy.beric.ca", now: () => t, wa, log: (l) => logs.push(l) });
@@ -75,6 +93,7 @@ beforeEach(async () => {
     sinkRoots: [stacks, join(dir, "home", ".claude", "mcp-env")],
     applied: { read: async () => structuredClone(applied), write: async (a) => void (applied = structuredClone(a)) },
     scan: async () => found,
+    stacks: fakeStacks,
     now: () => t,
     log: (l) => logs.push(l),
   });
@@ -357,10 +376,8 @@ describe("MCP allowances", () => {
     expect((await audit.last(5)).some((e) => e.action === "sink-prune" && !e.ok && e.detail === `${mcp}/old.env`)).toBe(true);
   });
 
-  test("a hash that does not match its definition, gpd, and a home outside the roots are refused, with no commit", async () => {
+  test("a hash that does not match its definition and a home outside the roots are refused, with no commit", async () => {
     expect(await allow({ hash: "b".repeat(64) })).toEqual({ ok: false, error: "the hash does not match the definition of github that came with it" });
-    const gpd = await allow({ homes: { gpd: "/home/eric" } });
-    expect(gpd.ok ? "" : gpd.error).toContain("phase 3");
     const out = await allow({ homes: { mini: "/elsewhere" } });
     expect(out.ok ? "" : out.error).toContain("outside");
     expect(store.commits).toEqual([]);
@@ -376,5 +393,63 @@ describe("MCP allowances", () => {
     expect(store.file.sinks).toEqual({});
     expect(store.file.secrets["gh_token"]?.allow).toEqual([]);
     await ok({ a: "delete", name: "gh_token" });
+  });
+});
+
+describe("stack restarts (phase 3)", () => {
+  const restartSink = (restart?: string): SecretAct => ({ ...(dnsSink() as Extract<SecretAct, { a: "sink-set" }>), ...(restart !== undefined ? { restart } : {}) });
+
+  test("a sink carries its project; info lists the host's projects and each sink's stack", async () => {
+    await add();
+    await ok(restartSink("dns-prod"));
+    await svc.tick();
+    const i = await info();
+    expect(i.stacks).toEqual(projects);
+    expect(i.stacksError).toBeNull();
+    expect(i.sinks.find((x) => x.id === "dns")).toMatchObject({ restart: "dns-prod", stack: "dns-prod" });
+    expect(i.secrets.find((m) => m.name === "cf_token")?.impact?.stacks).toEqual(["dns-prod"]);
+    await ok(restartSink("none"));
+    expect((await info()).secrets.find((m) => m.name === "cf_token")?.impact?.stacks).toEqual([]);
+  });
+
+  test("restart runs once every sink of the project is written, and comes back with each container", async () => {
+    await add();
+    await ok(restartSink("dns-prod"));
+    expect(await act({ a: "stack-restart", project: "dns-prod" })).toEqual({ ok: true, data: { project: "dns-prod", code: 0, containers: [{ service: "redis", state: "running", health: "healthy" }] } });
+    expect(restarts).toEqual(["dns-prod"]);
+    const log = await audit.last(5);
+    expect(log.find((e) => e.action === "stack-restart")).toMatchObject({ name: "dns-prod", ok: true, by: "phone" });
+  });
+
+  test("refuses a project no sink restarts, one the host does not list, a sink with an error, and a failed up", async () => {
+    await add();
+    await ok(dnsSink());
+    expect(await act({ a: "stack-restart", project: "dns-prod" })).toEqual({ ok: false, error: "no sink restarts dns-prod" });
+    expect(await act({ a: "stack-restart", project: "ghost" })).toEqual({ ok: false, error: "no compose project named ghost under /opt/stacks" });
+    await ok(restartSink("dns-prod"));
+    await writeFile(sinkFile(), "not a dotenv line\n");
+    await svc.tick();
+    const blocked = await act({ a: "stack-restart", project: "dns-prod" });
+    expect(blocked.ok ? "" : blocked.error).toStartWith("sink dns: ");
+    await writeFile(sinkFile(), "");
+    await svc.tick();
+    restartCode = 1;
+    expect(await act({ a: "stack-restart", project: "dns-prod" })).toEqual({ ok: false, error: "docker compose up for dns-prod exited 1; redis running (healthy)" });
+    expect(store.commits.filter((c) => c.includes("restart"))).toEqual([]);
+  });
+
+  test("a runner that throws fails the act with its reason instead of rejecting", async () => {
+    await add();
+    await ok(restartSink("dns-prod"));
+    restartThrows = "spawn ssh ENOENT";
+    expect(await act({ a: "stack-restart", project: "dns-prod" })).toEqual({ ok: false, error: "spawn ssh ENOENT" });
+    expect((await audit.last(5)).find((e) => e.action === "stack-restart")).toMatchObject({ name: "dns-prod", ok: false });
+  });
+
+  test("without the key every restart says how to get one, and the view says why there are no buttons", async () => {
+    const bare = new SecretsService({ store, gate: (svc as unknown as { d: { gate: Gate } }).d.gate, audit, machine: "mini", gateUrl: "", sinkRoots: [stacks], applied: { read: async () => ({}), write: async () => {} }, scan: async () => [], stacks: "no canopy-restart key at /restart/key", now: () => t, log: () => {} });
+    await bare.tick();
+    expect(bare.info(null).stacksError).toBe("no canopy-restart key at /restart/key");
+    expect(await bare.handle({ t: "act", token, act: { a: "stack-restart", project: "dns-prod" } })).toEqual({ ok: false, error: "no canopy-restart key at /restart/key" });
   });
 });

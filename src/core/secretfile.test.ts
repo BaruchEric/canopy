@@ -14,8 +14,10 @@ import {
   recipientsFor,
   serializeFile,
   signFile,
+  stackFor,
   verifyFile,
   type SecretFile,
+  type SinkDef,
 } from "./secretfile";
 
 // a real recipient's shape (the break-glass key from the spec); the file
@@ -182,6 +184,31 @@ describe("a secret's reach", () => {
     });
     expect(impactOf(reach(), "cloudflare_token").servers).toEqual([]);
     expect(impactOf(reach(), "gone")).toEqual({ sinks: [], servers: [], stacks: [] });
+  });
+
+  test("the project a sink restarts: set, none, or found from its folder (phase 3)", () => {
+    const projects = [
+      { name: "buzz-prod", files: ["/opt/stacks/buzz/compose.yml", "/opt/stacks/buzz/compose.mini.yml"] },
+      { name: "music-assistant", files: ["/opt/stacks/music-assistant/compose.yaml"] },
+      { name: "music-assistant-alexa", files: ["/opt/stacks/music-assistant/alexa/compose.yaml"] },
+      { name: "twin-a", files: ["/opt/stacks/twin/a.yml"] },
+      { name: "twin-b", files: ["/opt/stacks/twin/b.yml"] },
+    ];
+    const sink = (path: string, over: Partial<SinkDef> = {}): SinkDef => ({ machine: "mini", path, format: "dotenv", keys: {}, ...over });
+    expect(stackFor(sink("/opt/stacks/buzz/.env"), "mini", projects)).toBe("buzz-prod");
+    // the alexa project's file is a folder down, so only music-assistant sits in the folder
+    expect(stackFor(sink("/opt/stacks/music-assistant/.env"), "mini", projects)).toBe("music-assistant");
+    expect(stackFor(sink("/opt/stacks/twin/.env"), "mini", projects)).toBeNull();
+    expect(stackFor(sink("/opt/stacks/nothing/.env"), "mini", projects)).toBeNull();
+    expect(stackFor(sink("/home/eric/.claude/mcp-env/github.env"), "mini", projects)).toBeNull();
+    expect(stackFor(sink("/opt/stacks/buzz/.env", { machine: "mac" }), "mini", projects)).toBeNull();
+    expect(stackFor(sink("/opt/stacks/buzz/.env", { restart: "none" }), "mini", projects)).toBeNull();
+    expect(stackFor(sink("/opt/stacks/buzz/.env", { restart: "buzz-dev" }), "mini", projects)).toBe("buzz-dev");
+    // a writer's reach names the found project; a reader knows only the set one
+    const f = reach();
+    delete f.sinks["dev-env"]?.restart;
+    expect(impactOf(f, "gh_token").stacks).toEqual([]);
+    expect(impactOf(f, "gh_token", (_id, s) => stackFor(s, "mini", [{ name: "dev-prod", files: ["/opt/stacks/dev/compose.yml"] }])).stacks).toEqual(["dev-prod"]);
   });
 
   test("metadata carries the reach; the words name sinks and servers", () => {

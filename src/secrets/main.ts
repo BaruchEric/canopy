@@ -8,7 +8,7 @@
  * answers. Nothing secret comes in through the environment.
  */
 
-import { chmod, chown, mkdir, rm } from "node:fs/promises";
+import { access, chmod, chown, mkdir, rm } from "node:fs/promises";
 import { createServer, type Server } from "node:net";
 import { dirname } from "node:path";
 import { readApplied, writeApplied } from "../core/applied";
@@ -19,6 +19,7 @@ import { encodeLine, LIMITS, parseRequest, type SecretsReply, type SecretsReques
 import { Audit } from "./audit";
 import { Gate } from "./gate";
 import { SecretsService } from "./service";
+import { sshStacks, type StackRunner } from "./stacks";
 import { SecretStore, storePaths } from "./store";
 
 /** the break-glass recipient from the spec; its identity is offline */
@@ -36,6 +37,11 @@ export interface ServiceEnv {
   sinkRoots: string[];
   stacks: string;
   extra: string[];
+  /** the folder restart-setup.sh fills on the host, mounted read-only */
+  restartDir: string;
+  /** the host as this container reaches it, and its user */
+  restartHost: string;
+  restartUser: string;
 }
 
 const paths = (v: string): string[] => v.split(":").filter(Boolean);
@@ -68,6 +74,9 @@ export function serviceEnv(env: Record<string, string | undefined>): ServiceEnv 
     sinkRoots,
     stacks: env["CANOPY_SECRETS_STACKS"] ?? "/opt/stacks",
     extra: paths(env["CANOPY_SECRETS_IMPORT"] ?? "/import/canopy.env"),
+    restartDir: env["CANOPY_RESTART_DIR"] ?? "/restart",
+    restartHost: env["CANOPY_RESTART_HOST"] ?? "192.168.48.1",
+    restartUser: env["CANOPY_RESTART_USER"] ?? "eric",
   };
 }
 
@@ -130,6 +139,11 @@ async function main(): Promise<void> {
   const p = storePaths(env.data);
   const store = await SecretStore.open({ data: env.data, remote: env.remote, breakglass: env.breakglass, log });
   const gate = await Gate.open({ file: p.passkeys, rpID: env.rpID, origin: env.origin, log });
+  // the key restart-setup.sh made; without it the view says how to get one
+  const keyed = await access(`${env.restartDir}/key`).then(() => true, () => false);
+  const stacks: StackRunner | string = keyed
+    ? sshStacks({ dir: env.restartDir, host: env.restartHost, user: env.restartUser })
+    : `no canopy-restart key at ${env.restartDir}/key; run scripts/restart-setup.sh on the mini, then redeploy`;
   const svc = new SecretsService({
     store,
     gate,
@@ -139,6 +153,7 @@ async function main(): Promise<void> {
     sinkRoots: env.sinkRoots,
     applied: { read: () => readApplied(p.applied), write: (a) => writeApplied(p.applied, a) },
     scan: async () => (await scanFiles(await miniSources(env.stacks, env.extra))).found,
+    stacks,
     log,
   });
   await svc.tick();

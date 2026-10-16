@@ -4,7 +4,7 @@
  * Every act needs a passkey session, so ACT_KINDS is the whole gated list.
  */
 
-import { AGE_HEAD, AGE_RECIPIENT, ALLOW, DOTENV_KEY, HASH_SRC, HEADER_NAME, JSON_PATH, MACHINE, MCP_SERVER, SECRET_NAME, SINK_ID } from "./secretfile";
+import { AGE_HEAD, AGE_RECIPIENT, ALLOW, DOTENV_KEY, HASH_SRC, HEADER_NAME, JSON_PATH, MACHINE, MCP_SERVER, PROJECT, SECRET_NAME, SINK_ID } from "./secretfile";
 import type { KitMcpDef, SecretProposalIn, SecretSinkFormat } from "./types";
 
 export type GateKind = "login" | "register";
@@ -16,7 +16,8 @@ export type SecretAct =
   | { a: "rotate"; name: string; value: string }
   | { a: "delete"; name: string }
   | { a: "allow"; name: string; allow: string[] }
-  | { a: "sink-set"; id: string; machine: string; path: string; format: SecretSinkFormat; keys: Record<string, string> }
+  /** `restart`: the compose project a write restarts, "none", or absent to find it from the folder */
+  | { a: "sink-set"; id: string; machine: string; path: string; format: SecretSinkFormat; keys: Record<string, string>; restart?: string }
   | { a: "sink-remove"; id: string }
   /** the store's value over a drifted mini sink key */
   | { a: "sink-write"; id: string; key: string }
@@ -32,13 +33,15 @@ export type SecretAct =
   /** a machine's age recipient (the Mac's, after `mac-key`); never the mini's */
   | { a: "machine-key"; machine: string; recipient: string }
   | { a: "passkey-remove"; id: string }
-  | { a: "passkey-label"; id: string; label: string };
+  | { a: "passkey-label"; id: string; label: string }
+  /** `docker compose up -d` for one project under /opt/stacks, through the canopy-restart key (phase 3) */
+  | { a: "stack-restart"; project: string };
 
 export type ActKind = SecretAct["a"];
 
 export const ACT_KINDS: readonly ActKind[] = [
   "reveal", "add", "edit", "rotate", "delete", "allow", "sink-set", "sink-remove", "mcp-allow", "mcp-revoke", "sink-write", "take",
-  "import-scan", "approve", "reject", "machine-key", "passkey-remove", "passkey-label",
+  "import-scan", "approve", "reject", "machine-key", "passkey-remove", "passkey-label", "stack-restart",
 ];
 
 export type SecretsRequest =
@@ -113,7 +116,7 @@ function nameMap(v: unknown, re: RegExp, within: readonly string[]): Record<stri
 export function parseAct(v: unknown): SecretAct | { error: string } {
   if (!isObj(v)) return { error: "an act is an object" };
   // every field pulled into a const first, so each guard narrows it
-  const { a, name, id, key, machine, path, format, keys, allow, description, proposal, sink, recipient, label, server, hash, def, env, headers, homes } = v;
+  const { a, name, id, key, machine, path, format, keys, allow, description, proposal, sink, recipient, label, server, hash, def, env, headers, homes, restart, project } = v;
   const given = v["value"];
   const tagList = v["tags"];
   const bad = (what: string) => ({ error: `${String(a)}: ${what}` });
@@ -142,7 +145,8 @@ export function parseAct(v: unknown): SecretAct | { error: string } {
         if (!(format === "dotenv" ? DOTENV_KEY : JSON_PATH).test(k) || !str(n, SECRET_NAME)) return bad(`the key ${k}`);
         out[k] = n;
       }
-      return { a, id, machine, path, format, keys: out };
+      if (restart === undefined) return { a, id, machine, path, format, keys: out };
+      return str(restart, PROJECT) ? { a, id, machine, path, format, keys: out, restart } : bad("restart, a compose project name or none");
     }
     case "sink-remove":
       return str(id, SINK_ID) ? { a, id } : bad("a sink id");
@@ -190,6 +194,8 @@ export function parseAct(v: unknown): SecretAct | { error: string } {
         : bad("a machine other than mini or breakglass, and an age recipient");
     case "passkey-remove":
       return str(id, ID) ? { a, id } : bad("a passkey id");
+    case "stack-restart":
+      return str(project, PROJECT) ? { a, project } : bad("a compose project name");
     case "passkey-label":
       return str(id, ID) && typeof label === "string" && label.trim() !== "" && label.length <= 60 ? { a, id, label: label.trim() } : bad("a passkey id and a label of 1 to 60 characters");
     default:

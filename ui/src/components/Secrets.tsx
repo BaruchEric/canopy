@@ -1,7 +1,7 @@
 import { startAuthentication, startRegistration } from "@simplewebauthn/browser";
 import { useEffect, useState, type FormEvent } from "react";
 import type { SecretAct } from "../../../src/core/secretwire";
-import type { SecretAuditEntry, SecretMeta, SecretProposalInfo, SecretSinkFormat, SecretSinkInfo, SecretsInfo } from "../../../src/core/types";
+import type { SecretAuditEntry, SecretMeta, SecretProposalInfo, SecretRestartResult, SecretSinkFormat, SecretSinkInfo, SecretsInfo } from "../../../src/core/types";
 import { api } from "../api";
 import { KEY_TONE, errorText, filterSecrets, gateHere, hostOf, isGateClosed, keysText, markOf, parseKeysText, passedOver, reachRows, sinkRows, stateTone, tagsOf, usedByText, writerOf, type ReachRow, type SinkRow, type WriteMark } from "../secrets";
 import { reachRefusal } from "../../../src/core/secretfile";
@@ -355,8 +355,20 @@ function AddSecret({ home }: { home: string }) {
   );
 }
 
-function ReachList({ rows }: { rows: ReachRow[] }) {
+/** A rotation's reach. With `restartOn` (the gate page, a session open) a
+ *  stack row gets a restart button, enabled once its sinks have written,
+ *  and shows each container's state after it. */
+function ReachList({ rows, restartOn }: { rows: ReachRow[]; restartOn?: string }) {
+  const act = useAct(restartOn ?? "");
+  const [done, setDone] = useState<Record<string, SecretRestartResult>>({});
+  const [asked, setAsked] = useState<string | null>(null);
   if (rows.length === 0) return <p className="secrets-note">Nothing uses it; a rotation changes only the store.</p>;
+  const restart = async (project: string) => {
+    setAsked(null);
+    const r = await act.run({ a: "stack-restart", project });
+    const d = r?.data as SecretRestartResult | undefined;
+    if (d && Array.isArray(d.containers)) setDone((x) => ({ ...x, [project]: d }));
+  };
   return (
     <ul className="secrets-reach">
       {rows.map((r) => (
@@ -367,9 +379,39 @@ function ReachList({ rows }: { rows: ReachRow[] }) {
             <>
               {" "}
               <code>{r.detail}</code>{" "}
-              <button type="button" className="mini" onClick={() => void navigator.clipboard.writeText(r.detail)}>
-                copy
-              </button>
+              {r.detail.startsWith("docker ") && (
+                <button type="button" className="mini" onClick={() => void navigator.clipboard.writeText(r.detail)}>
+                  copy
+                </button>
+              )}
+              {restartOn && asked !== r.name && (
+                <button
+                  type="button"
+                  className="mini"
+                  disabled={act.busy || !r.ready}
+                  title={r.ready ? `docker compose up -d for ${r.name} on the mini` : "waits until every sink that restarts it has written the new value"}
+                  onClick={() => setAsked(r.name)}
+                >
+                  restart…
+                </button>
+              )}
+              {restartOn && asked === r.name && (
+                <>
+                  <span className="rust">Restart {r.name}?</span>{" "}
+                  <button type="button" className="mini" disabled={act.busy} onClick={() => void restart(r.name)}>
+                    {act.busy ? "restarting…" : "restart"}
+                  </button>
+                  <button type="button" className="mini" disabled={act.busy} onClick={() => setAsked(null)}>
+                    keep it running
+                  </button>
+                </>
+              )}
+              {done[r.name] && (
+                <span className="secrets-note">
+                  {" "}
+                  · {done[r.name]?.containers.map((c) => `${c.service} ${c.state}${c.health ? ` (${c.health})` : ""}`).join(", ") || "no containers"}
+                </span>
+              )}
             </>
           ) : r.detail ? (
             <span className="secrets-note"> · {r.detail}</span>
@@ -377,6 +419,11 @@ function ReachList({ rows }: { rows: ReachRow[] }) {
           {r.state ? <span className={stateTone(r.state)}> · {r.state}</span> : null}
         </li>
       ))}
+      {act.error && (
+        <li>
+          <Err text={act.error} />
+        </li>
+      )}
     </ul>
   );
 }
@@ -394,7 +441,8 @@ function SecretSheet({ meta, home, open, sinks, all }: { meta: SecretMeta; home:
   const [confirm, setConfirm] = useState(false);
   const [reach, setReach] = useState<"no" | "preview" | "after">("no");
   const [mark, setMark] = useState<WriteMark | null>(null);
-  const rows = reachRows(meta, sinks, reach === "after" ? (owner) => !passedOver(mark, owner, owner === null ? undefined : all[owner]) : undefined);
+  const writerInfo = Object.values(all).find((i) => i.role === "writer");
+  const rows = reachRows(meta, sinks, reach === "after" ? (owner) => !passedOver(mark, owner, owner === null ? undefined : all[owner]) : undefined, writerInfo?.stacks);
   const [history, setHistory] = useState<SecretAuditEntry[]>([]);
   // a rotation from anywhere makes a revealed value stale
   useEffect(() => {
@@ -503,12 +551,14 @@ function SecretSheet({ meta, home, open, sinks, all }: { meta: SecretMeta; home:
             <>
               <p className="secrets-note">Rotating {meta.name} writes the new value here:</p>
               <ReachList rows={rows} />
+              {writerInfo?.stacksError && <p className="secrets-note">No restart buttons: {writerInfo.stacksError}</p>}
             </>
           )}
           {reach === "after" && (
             <>
-              <p className="secrets-note">Written. Each sink's state from its owner's next pass:</p>
-              <ReachList rows={rows} />
+              <p className="secrets-note">Written. Each sink's state from its owner's next pass, then restart what reads it:</p>
+              <ReachList rows={rows} restartOn={home} />
+              {writerInfo?.stacksError && <p className="secrets-note">No restart buttons: {writerInfo.stacksError}</p>}
             </>
           )}
           <form
@@ -599,6 +649,7 @@ function SinksTab({ rows, home, writer, open }: { rows: SinkRow[]; home: string;
               <span className="secrets-name">{sink.id}</span>
               <span className="secrets-meta">
                 {sink.machine} · {sink.path} · {sink.format}
+                {sink.stack ? ` · restarts ${sink.stack}${sink.restart === undefined ? " (from its folder)" : ""}` : sink.restart === "none" ? " · restarts nothing" : ""}
                 {owner === null ? " · no backend reports it" : ""}
               </span>
               {open && (
@@ -658,6 +709,7 @@ function SinkEditor({ home, start, onDone }: { home: string; start: SecretSinkIn
   const [path, setPath] = useState(start?.path ?? "");
   const [format, setFormat] = useState<SecretSinkFormat>(start?.format ?? "dotenv");
   const [keys, setKeys] = useState(start ? keysText(start.keys) : "");
+  const [restart, setRestart] = useState(start?.restart ?? "");
   const [error, setError] = useState<string | null>(null);
   const submit = async (e: FormEvent) => {
     e.preventDefault();
@@ -667,7 +719,8 @@ function SinkEditor({ home, start, onDone }: { home: string; start: SecretSinkIn
       return;
     }
     setError(null);
-    const r = await act.run({ a: "sink-set", id: id.trim(), machine, path: path.trim(), format, keys: parsed });
+    const project = restart.trim();
+    const r = await act.run({ a: "sink-set", id: id.trim(), machine, path: path.trim(), format, keys: parsed, ...(project ? { restart: project } : {}) });
     if (r) {
       setId("");
       setPath("");
@@ -691,6 +744,13 @@ function SinkEditor({ home, start, onDone }: { home: string; start: SecretSinkIn
         <option value="json">json</option>
       </select>
       <textarea aria-label="Keys, one KEY=secret_name a line" rows={3} spellCheck={false} placeholder="DB_PASSWORD=immich_db" value={keys} onChange={(e) => setKeys(e.target.value)} />
+      <input
+        aria-label="Compose project a write restarts"
+        placeholder={start?.stack && start.restart === undefined ? `restarts ${start.stack}, found from its folder` : "project to restart, none, or empty to find it"}
+        spellCheck={false}
+        value={restart}
+        onChange={(e) => setRestart(e.target.value)}
+      />
       <button type="submit" className="mini" disabled={act.busy || id.trim() === "" || path.trim() === ""}>
         {start ? "save sink" : "add sink"}
       </button>

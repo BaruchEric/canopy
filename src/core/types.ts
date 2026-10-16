@@ -2851,7 +2851,7 @@ export type KitMcpAction = Extract<KitAction, { kind: "mcp-set" | "mcp-remove" |
 export type KitCellState =
   | "ok" | "missing" | "drift" | "foreign" | "local" | "off" | "no-source" | "noagent" | "away"
   /** MCP servers (phase 2) */
-  | "not-allowed" | "stale-allowance" | "no-sink" | "adoptable" | "unsupported" | "phase-3" | "unresolved";
+  | "not-allowed" | "stale-allowance" | "no-sink" | "adoptable" | "unsupported" | "unresolved";
 
 export interface KitCell {
   machine: string;
@@ -2941,8 +2941,6 @@ export interface KitMcpCtx {
   home: string;
   /** where ${env:NAME} resolves */
   env: Record<string, string | undefined>;
-  /** reached over ssh (gpd): a server with secrets waits for secrets phase 3 */
-  ssh: boolean;
 }
 
 /** one server with secrets as the allow sheet shows it: names and the hash, never a value */
@@ -2954,10 +2952,8 @@ export interface KitMcpView {
   env: Record<string, string>;
   /** header name to secret name */
   headers: Record<string, string>;
-  /** the machines it is placed on that an allowance covers now */
+  /** the machines it is placed on, each of which an allowance covers */
   machines: string[];
-  /** the machines it is placed on that wait for secrets phase 3 (ssh machines: gpd) */
-  later: string[];
 }
 
 /** what adopt would change, masked */
@@ -3009,13 +3005,35 @@ export interface SecretImpact {
   sinks: { id: string; machine: string; path: string; keys: string[] }[];
   /** each MCP server it is allowed for, with the machines holding that server's env sink */
   servers: { server: string; hash: string; machines: string[] }[];
-  /** the distinct `restart` stacks of those sinks */
+  /** the distinct compose projects those sinks restart (phase 3: set on
+   *  the sink, or found from its folder by the writer) */
   stacks: string[];
 }
 
 /** One sink key as its owner sees it. `waiting`: the owner's key is locked
- *  or the value changed and is not written yet. `phase 3`: a gpd sink. */
-export type SecretKeyState = "same" | "drift" | "missing" | "waiting" | "unknown" | "phase 3";
+ *  or the value changed and is not written yet. */
+export type SecretKeyState = "same" | "drift" | "missing" | "waiting" | "unknown";
+
+/** A running compose project under /opt/stacks on the mini, as the
+ *  canopy-restart key lists it (phase 3) */
+export interface SecretStack {
+  name: string;
+  /** the config files it was started with, in order */
+  files: string[];
+}
+
+/** one container after a restart */
+export interface SecretContainer {
+  service: string;
+  state: string;
+  health: string;
+}
+
+export interface SecretRestartResult {
+  project: string;
+  code: number;
+  containers: SecretContainer[];
+}
 
 export interface SecretSinkInfo {
   id: string;
@@ -3027,6 +3045,10 @@ export interface SecretSinkInfo {
   /** per key, filled only by the backend that owns the sink */
   state: Record<string, SecretKeyState>;
   error: string | null;
+  /** the compose project set on the sink, or "none"; absent when unset */
+  restart?: string;
+  /** the project a write restarts, set or found from the folder (writer only; phase 3) */
+  stack?: string | null;
 }
 
 /** A value found in a source file, sealed to the mini alone, on its way to
@@ -3103,4 +3125,8 @@ export interface SecretsInfo {
   gate: string;
   /** commits Forgejo has not taken yet (writer only) */
   unpushed: number;
+  /** the compose projects the restart key lists (writer only; phase 3) */
+  stacks?: SecretStack[];
+  /** why there is no list: the key is not installed, or the host did not answer */
+  stacksError?: string | null;
 }

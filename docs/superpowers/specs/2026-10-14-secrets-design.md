@@ -344,6 +344,8 @@ no `get`.
    settles the details (one gated `mcp-allow` per server that also makes its
    env sinks).
 3. Stack restarts through the forced-command key, and gpd's sinks over ssh.
+   `2026-10-15-kit-secrets-phase-3-design.md` settles the details (restart by
+   compose project with its own files; gpd's sinks through an ssh `SinkIO`).
 
 ## Out of scope
 

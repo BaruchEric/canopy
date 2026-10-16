@@ -179,6 +179,16 @@ printf '192.168.48.1 %s\n' "$(cut -d' ' -f1,2 /etc/ssh/ssh_host_ed25519_key.pub)
 
 then add the `Host mini-host` block. If Docker ever gives `canopy_default` another subnet, the key stops working until both the `from=` and the `HostName` follow it. To take control away, delete the `authorized_keys` line; `authorized_keys.bak-canopy-host` is the file from before.
 
+### The restart key
+
+The `secrets` service lists the mini's compose projects and restarts one after a rotation through a second, narrower key. `scripts/restart-setup.sh`, run once on the mini from the canopy checkout, makes `~/.config/canopy-restart/{key,key.pub,known_hosts}` and adds one `authorized_keys` line, keeping a copy at `authorized_keys.bak-canopy-restart`:
+
+```
+restrict,command="<checkout>/scripts/canopy-restart",from="192.168.48.0/20" ssh-ed25519 … canopy-restart
+```
+
+Run the setup script before the first `docker compose up` that carries the mount, or `mkdir -m 700 ~/.config/canopy-restart` as eric first: a missing bind source is made by Docker as root, and the script, running as eric, then cannot write the key into it. The forced command answers two requests and nothing else: `list` and `restart <project>`, for projects whose config files all sit under `/opt/stacks`. It needs `jq` on the host. The compose file mounts the folder read-only at `/restart`, and `redeploy.sh` keeps it 0700. Without the key the service still runs; the page shows why it cannot list projects and offers the copy line only. To take the key away, delete its `authorized_keys` line and the folder. The same subnet caveat as `mini-host` applies to its `from=` and to the pinned `192.168.48.1`.
+
 ## Previews (the in-app browser)
 
 A repo panel's **preview** section frames the repo's dev server. The dev

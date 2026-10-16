@@ -5,7 +5,7 @@ export interface KitFilter { agent: string | null; machine: string | null; probl
 
 export const GLYPH: Record<KitCellState, string> = {
   ok: "●", missing: "○", drift: "≠", foreign: "◆", local: "·", off: "", "no-source": "∅", noagent: "–", away: "?",
-  "not-allowed": "⊘", "stale-allowance": "⊘", "no-sink": "◌", adoptable: "◇", unsupported: "×", "phase-3": "…", unresolved: "∅",
+  "not-allowed": "⊘", "stale-allowance": "⊘", "no-sink": "◌", adoptable: "◇", unsupported: "×", unresolved: "∅",
 };
 
 export const PROBLEM: ReadonlySet<KitCellState> = new Set([

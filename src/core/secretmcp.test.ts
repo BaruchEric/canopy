@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { AGE_HEAD, emptyFile, fileProblems, type SecretFile } from "./secretfile";
+import { AGE_HEAD, emptyFile, fileProblems, recipientsFor, type SecretFile } from "./secretfile";
 import { mcpAllowFile, mcpRevokeFile, type McpAllowance } from "./secretmcp";
 
 const R = "age1xtc4cftnu55fn3enurt9jexnrenmru3w0xl93uz5q20e34mefs6stg2vra";
@@ -49,9 +49,14 @@ describe("mcpAllowFile", () => {
     expect(twice.sinks["mcp-github-mac"]).toBeUndefined();
   });
 
-  test("refuses gpd, a secret the store lacks, no secrets at all, and a path another sink writes", () => {
+  test("gpd gets its own sink, which also seals the value to the Mac that writes it (phase 3)", () => {
+    const f = file(mcpAllowFile(base(), github({ homes: { gpd: "/home/eric", mini: "/home/eric" } })));
+    expect(f.sinks["mcp-github-gpd"]).toEqual({ machine: "gpd", path: "/home/eric/.claude/mcp-env/github.env", format: "dotenv", keys: { GITHUB_PERSONAL_ACCESS_TOKEN: "gh_token" } });
+    expect(recipientsFor(f, "gh_token")).toEqual(["breakglass", "mac", "mini"]);
+  });
+
+  test("refuses a secret the store lacks, no secrets at all, and a path another sink writes", () => {
     const err = (r: { file: SecretFile } | { error: string }) => ("error" in r ? r.error : "");
-    expect(err(mcpAllowFile(base(), github({ homes: { gpd: "/home/eric" } })))).toContain("phase 3");
     expect(err(mcpAllowFile(base(), github({ env: { X: "gone" } })))).toContain("gone");
     expect(err(mcpAllowFile(base(), github({ env: {} })))).toContain("names no secret");
     const f = base();

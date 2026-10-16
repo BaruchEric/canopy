@@ -226,6 +226,8 @@ CLI: `canopy kit status [--machine m]`, `canopy kit apply [--machine m]
    with no load paths, and `/opt/stacks/openclaw/data/config/skills` (the
    container's `~/.openclaw/skills`) does not exist yet. Phase 3 starts by
    confirming OpenClaw loads skills from that folder before copying anything.
+   `2026-10-15-kit-secrets-phase-3-design.md` records that probe (OpenClaw
+   2026.9.2 ignores a folder placed there) and the calls still open.
 
 ## Out of scope
 

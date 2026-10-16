@@ -1,0 +1,94 @@
+#!/bin/sh
+# The forced command of the canopy-restart key (scripts/restart-setup.sh):
+# the secrets service restarts a compose project after it rewrote that
+# project's .env. The request comes in SSH_ORIGINAL_COMMAND, never as shell
+# words:
+#
+#   list               each project whose config files all sit under the
+#                      stacks root, one line each: name, a tab, the files
+#                      joined by commas
+#   restart <project>  docker compose up -d with exactly the files the
+#                      project was started with, then one line per
+#                      container: service, state, health (tab separated)
+#
+# Nothing compose prints goes out: `up` echoes interpolated values when it
+# fails, and `ps --format json` carries each container's command line,
+# which can hold a password (buzz's redis takes --requirepass).
+set -eu
+set -f
+
+ROOT=${CANOPY_RESTART_ROOT:-/opt/stacks}
+WAIT=${CANOPY_RESTART_WAIT:-60}
+TAB=$(printf '\t')
+
+die() {
+  printf 'canopy-restart: %s\n' "$*" >&2
+  exit 2
+}
+
+command -v jq >/dev/null 2>&1 || die "jq is not installed on the host"
+
+# name<TAB>files, for every project compose knows, running or not
+projects() {
+  docker compose ls -a --format json | jq -r '.[] | [.Name, .ConfigFiles] | @tsv'
+}
+
+# 0 when every comma-separated file is a plain path under the root
+inside() {
+  IFS=,
+  for f in $1; do
+    case $f in
+      "$ROOT"/*) ;;
+      *) unset IFS; return 1 ;;
+    esac
+    case $f in
+      */../* | */./*) unset IFS; return 1 ;;
+    esac
+  done
+  unset IFS
+  return 0
+}
+
+req=${SSH_ORIGINAL_COMMAND:-}
+verb=${req%% *}
+arg=""
+[ "$verb" = "$req" ] || arg=${req#* }
+
+case $verb in
+  list)
+    [ -z "$arg" ] || die "list takes nothing"
+    projects | while IFS="$TAB" read -r name files; do
+      if inside "$files"; then printf '%s\t%s\n' "$name" "$files"; fi
+    done
+    exit 0
+    ;;
+  restart) ;;
+  *) die "refused: only list and restart <project>" ;;
+esac
+
+printf '%s\n' "$arg" | grep -Eq '^[a-z0-9][a-z0-9_-]{0,63}$' || die "refused: $arg is not a project name"
+files=$(projects | while IFS="$TAB" read -r name f; do if [ "$name" = "$arg" ]; then printf '%s\n' "$f"; fi; done)
+[ -n "$files" ] || die "no compose project named $arg"
+inside "$files" || die "refused: $arg has a config file outside $ROOT"
+
+set --
+IFS=,
+for f in $files; do set -- "$@" -f "$f"; done
+unset IFS
+
+code=0
+docker compose -p "$arg" "$@" up -d >/dev/null 2>&1 || code=$?
+
+# wait for the containers to leave starting, at most WAIT seconds
+state() { docker compose -p "$arg" "$@" ps -a --format '{{.Service}}\t{{.State}}\t{{.Health}}' 2>/dev/null; }
+waited=0
+while [ "$code" = 0 ] && [ "$waited" -lt "$WAIT" ]; do
+  now=$(state "$@")
+  printf '%s\n' "$now" | grep -Eq "${TAB}(created|restarting)${TAB}|${TAB}starting\$" || break
+  sleep 3
+  waited=$((waited + 3))
+done
+state "$@" | while IFS="$TAB" read -r svc st health; do
+  printf '%s\t%s\t%s\n' "$svc" "$st" "$health"
+done
+exit "$code"

@@ -10,15 +10,16 @@ import { randomBytes } from "node:crypto";
 import type { Applied } from "../core/applied";
 import { mcpHash } from "../core/kit";
 import { openProposal, openValue, resealValue, sameValue, sealProposal, sealValue } from "../core/secretcrypt";
-import { DOTENV_KEY, JSON_PATH, metaList, impactOf, mcpEnvPath, nowStamp, reachRefusal, recipientKeys, recipientsFor, usedBy, type SecretFile, type SinkDef } from "../core/secretfile";
+import { DOTENV_KEY, JSON_PATH, metaList, impactOf, mcpEnvPath, nowStamp, reachRefusal, recipientKeys, recipientsFor, stackFor, usedBy, type SecretFile, type SinkDef, type StackOf } from "../core/secretfile";
 import { mcpAllowFile, mcpRevokeFile } from "../core/secretmcp";
 import { formatOf, suggestName, type Found } from "../core/secretimport";
 import { LIMITS, PASSKEY, type SecretAct, type SecretsReply, type SecretsRequest } from "../core/secretwire";
 import { applyKeys, readKeys } from "../core/sinks";
 import { FILE_IO, mcpEnvKeep, pruneMcpEnv, syncSink, type SinkIO, type SinkState } from "../core/sinksync";
-import type { SecretKeyState, SecretProposalIn, SecretsInfo } from "../core/types";
+import type { SecretKeyState, SecretProposalIn, SecretRestartResult, SecretsInfo, SecretStack } from "../core/types";
 import type { Audit } from "./audit";
 import type { Gate } from "./gate";
+import type { StackRunner } from "./stacks";
 
 export interface StoreLike {
   file: SecretFile;
@@ -43,9 +44,15 @@ export interface ServiceDeps {
   /** this machine's import sources */
   scan: () => Promise<Found[]>;
   io?: SinkIO;
+  /** the host's compose projects through the canopy-restart key; a string
+   *  says why there is none (the key not installed) */
+  stacks?: StackRunner | string;
   now?: () => number;
   log: (line: string) => void;
 }
+
+/** how long a project list stands before a tick asks the host again */
+const STACKS_TTL = 5 * 60_000;
 
 interface Pending {
   id: string;
@@ -85,6 +92,8 @@ function subject(act: SecretAct): string | null {
       return act.server;
     case "machine-key":
       return act.machine;
+    case "stack-restart":
+      return act.project;
     case "import-scan":
       return null;
   }
@@ -97,6 +106,9 @@ export class SecretsService {
   private readonly io: SinkIO;
   private readonly now: () => number;
   private queue: Promise<unknown> = Promise.resolve();
+  private projects: SecretStack[] = [];
+  private projectsError: string | null = null;
+  private projectsAt = 0;
 
   constructor(private readonly d: ServiceDeps) {
     this.io = d.io ?? FILE_IO;
@@ -147,7 +159,9 @@ export class SecretsService {
     }
     let r: SecretsReply;
     try {
-      r = await this.serial(() => this.run(act));
+      // a restart waits on compose for up to a minute and changes nothing in
+      // the store, so it does not hold the other acts back
+      r = act.a === "stack-restart" ? await this.restart(act.project) : await this.serial(() => this.run(act));
     } catch (err) {
       r = fail(errText(err));
     }
@@ -190,7 +204,7 @@ export class SecretsService {
         return this.change({ ...f, secrets: { ...f.secrets, [act.name]: { ...e, allow: [...new Set(act.allow)].sort() } } }, `secrets: allowlist ${act.name}`);
       }
       case "sink-set":
-        return this.setSink(f, act.id, { machine: act.machine, path: act.path, format: act.format, keys: act.keys }, `secrets: sink ${act.id}`);
+        return this.setSink(f, act.id, { machine: act.machine, path: act.path, format: act.format, keys: act.keys, ...(act.restart !== undefined ? { restart: act.restart } : {}) }, `secrets: sink ${act.id}`);
       case "sink-remove":
         if (!f.sinks[act.id]) return fail(`no sink named ${act.id}`);
         return this.setSink(f, act.id, null, `secrets: remove sink ${act.id}`);
@@ -234,7 +248,65 @@ export class SecretsService {
         return this.d.gate.remove(act.id);
       case "passkey-label":
         return this.d.gate.relabel(act.id, act.label);
+      case "stack-restart":
+        return this.restart(act.project);
     }
+  }
+
+  /** the project a sink of this store restarts, from the last list */
+  private readonly stackOf: StackOf = (_id, sink) => stackFor(sink, this.d.machine, this.projects);
+
+  /** Ask the host for its projects when the list is older than its TTL,
+   *  or now. Never rejects: a failure is kept as the reason. */
+  async refreshStacks(force = false): Promise<void> {
+    const runner = this.d.stacks;
+    if (runner === undefined || typeof runner === "string") {
+      this.projectsError = runner ?? "the canopy-restart key is not installed; run scripts/restart-setup.sh on the mini, then redeploy";
+      return;
+    }
+    if (!force && this.now() - this.projectsAt < STACKS_TTL) return;
+    try {
+      const r = await runner.list();
+      if ("error" in r) this.projectsError = r.error;
+      else {
+        this.projects = r.stacks;
+        this.projectsError = null;
+        this.projectsAt = this.now();
+      }
+    } catch (err) {
+      this.projectsError = errText(err);
+    }
+  }
+
+  /** `docker compose up -d` for one project a sink of this store restarts,
+   *  once every such sink has written what the store holds */
+  private async restart(project: string): Promise<SecretsReply> {
+    const runner = this.d.stacks;
+    if (runner === undefined || typeof runner === "string") return fail(runner ?? "the canopy-restart key is not installed; run scripts/restart-setup.sh on the mini, then redeploy");
+    if (!this.projects.some((p) => p.name === project)) await this.refreshStacks(true);
+    if (!this.projects.some((p) => p.name === project)) return fail(`no compose project named ${project} under /opt/stacks`);
+    const f = this.d.store.file;
+    const sinks = Object.entries(f.sinks).filter(([id, s]) => s.machine === this.d.machine && this.stackOf(id, s) === project);
+    if (sinks.length === 0) return fail(`no sink restarts ${project}`);
+    for (const [id, s] of sinks) {
+      const st = this.sinkState[id];
+      if (!st) return fail(`sink ${id} has not been written yet; restart after the next pass`);
+      if (st.error) return fail(`sink ${id}: ${st.error}`);
+      const waiting = Object.keys(s.keys).filter((k) => st.state[k] === "waiting");
+      if (waiting.length > 0) return fail(`sink ${id} has not written ${waiting.join(", ")} yet; restart after its pass`);
+    }
+    let r: Awaited<ReturnType<typeof runner.restart>>;
+    try {
+      r = await runner.restart(project);
+    } catch (err) {
+      r = { error: errText(err) };
+    }
+    await this.refreshStacks(true);
+    if ("error" in r) return fail(r.error);
+    const states = r.containers.map((c) => `${c.service} ${c.state}${c.health ? ` (${c.health})` : ""}`).join(", ");
+    if (r.code !== 0) return fail(`docker compose up for ${project} exited ${r.code}${states ? `; ${states}` : ""}`);
+    const data: SecretRestartResult = { project, code: r.code, containers: r.containers };
+    return { ok: true, data };
   }
 
   /** `name` holding `value`, sealed now; the stamp always moves forward */
@@ -449,8 +521,10 @@ export class SecretsService {
     return this.change(next, q.p.merges ? `secrets: take ${target} from ${q.p.from}` : `secrets: import ${target}`);
   }
 
-  /** the timer's sync, queued behind any act in flight */
-  tick(): Promise<void> {
+  /** the timer's sync, queued behind any act in flight; the project list
+   *  is asked for first, outside the queue, since it is an ssh call */
+  async tick(): Promise<void> {
+    await this.refreshStacks();
     return this.serial(() => this.syncSinks());
   }
 
@@ -501,19 +575,20 @@ export class SecretsService {
       refused: null,
       lock: "open",
       recipient: null,
-      secrets: metaList(f),
+      secrets: metaList(f, this.stackOf),
       sinks: Object.keys(f.sinks)
         .sort()
         .flatMap((id) => {
           const k = f.sinks[id];
           if (!k) return [];
           const own = k.machine === this.d.machine;
-          const state: Record<string, SecretKeyState> = own
-            ? (this.sinkState[id]?.state ?? {})
-            : k.machine === "gpd"
-              ? Object.fromEntries(Object.keys(k.keys).map((key) => [key, "phase 3" as const]))
-              : {};
-          return [{ id, machine: k.machine, path: k.path, format: k.format, keys: { ...k.keys }, state, error: own ? (this.sinkState[id]?.error ?? null) : null }];
+          // only the owner reports key states; gpd's come from the Mac's canopy, which writes them
+          const state: Record<string, SecretKeyState> = own ? (this.sinkState[id]?.state ?? {}) : {};
+          return [{
+            id, machine: k.machine, path: k.path, format: k.format, keys: { ...k.keys }, state, error: own ? (this.sinkState[id]?.error ?? null) : null,
+            ...(k.restart !== undefined ? { restart: k.restart } : {}),
+            stack: this.stackOf(id, k),
+          }];
         }),
       proposals: [...this.proposals.values()].map((q) => ({
         id: q.id,
@@ -532,6 +607,8 @@ export class SecretsService {
       firstPasskey: this.d.gate.firstPasskey(),
       gate: this.d.gateUrl,
       unpushed: s.unpushed,
+      stacks: this.projects.map((p) => ({ name: p.name, files: [...p.files] })),
+      stacksError: this.projectsError,
     };
   }
 }

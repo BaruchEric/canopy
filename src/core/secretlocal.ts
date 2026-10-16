@@ -6,7 +6,9 @@
  * its own age key, the key is wrapped by a passphrase and held in memory
  * only after an unlock; the reader then writes this machine's sinks, and
  * seals import proposals and "take this value" to the mini's key for the
- * mini's page to approve. Locked, the sinks keep their contents.
+ * mini's page to approve. Locked, the sinks keep their contents. It also
+ * writes the sinks of the machines it reaches over ssh with no backend of
+ * their own (gpd, phase 3), through `RemoteSinks`.
  */
 
 import { chmod, readFile, rename, stat, writeFile } from "node:fs/promises";
@@ -19,6 +21,7 @@ import { metaList, parseSecretFile, verifyFile, type SecretFile } from "./secret
 import { scanFiles, type ImportSource } from "./secretimport";
 import { LIMITS } from "./secretwire";
 import { readKeys, repoRefusal } from "./sinks";
+import type { RemoteSinks } from "./sinkssh";
 import { FILE_IO, mcpEnvKeep, pruneMcpEnv, syncSink, waitingState, type SinkIO, type SinkState } from "./sinksync";
 import { configDir } from "./store";
 import type { SecretKeyState, SecretProposalIn, SecretsInfo } from "./types";
@@ -67,6 +70,8 @@ export interface ReaderOptions {
   io?: SinkIO;
   /** this machine's ~/.claude/mcp-env, pruned after each pass even while locked */
   mcpEnvDir?: string;
+  /** the machines this backend writes over ssh (gpd from the Mac) */
+  remotes?: () => readonly RemoteSinks[];
   sleep?: (ms: number) => Promise<void>;
   /** scrypt's work factor for a new key: 18 unless a test lowers it */
   scryptLogN?: number;
@@ -88,6 +93,12 @@ export class SecretsReader {
   private hasKey = false;
   private failures = 0;
   private sinkState: Record<string, SinkState> = {};
+  /** an ssh machine was away in the last pass: the next pull passes again even with no news */
+  private retry = false;
+  /** the ssh machines a pass has written for, so a revoke's prune still reaches one with no sinks left */
+  private readonly remoteSeen = new Set<string>();
+  /** the ssh machines the last pass knew of: the kit's manifest can name them after it */
+  private passedRemotes = "";
   private pulling: Promise<void> | null = null;
   private passes: Promise<void> = Promise.resolve();
   private readonly io: SinkIO;
@@ -141,7 +152,10 @@ export class SecretsReader {
       return;
     }
     const tip = (await this.git(["rev-parse", "--short", "origin/main"])).stdout.trim();
-    if (tip === this.head) return;
+    if (tip === this.head) {
+      if (this.retry || this.remotesKey() !== this.passedRemotes) await this.syncSinks();
+      return;
+    }
     if (this.head && (await this.git(["merge-base", "--is-ancestor", "HEAD", "origin/main"])).code !== 0) {
       this.refused = `Forgejo's main (${tip}) does not follow ${this.head}: not a fast-forward, so ${this.head} stays`;
       this.o.log(`secrets: ${this.refused}`);
@@ -259,14 +273,54 @@ export class SecretsReader {
       }
       state[id] = await syncSink(f, id, sink, this.ident, applied, this.io, await repoRefusal(sink.path, this.o.repoRoots()));
     }
+    const prunes = await this.passRemotes(f, applied, state);
     if (this.ident) await writeApplied(this.o.paths.applied, Object.fromEntries(Object.entries(applied).filter(([id]) => state[id])));
     this.sinkState = state;
     this.sinksAt = at;
     const d = this.o.mcpEnvDir;
-    if (!d) return;
-    const p = await pruneMcpEnv(d, mcpEnvKeep(f, this.o.machine, d));
-    for (const n of p.removed) this.o.log(`secrets: removed ${d}/${n}, which no sink names`);
-    for (const n of p.failed) this.o.log(`secrets: could not remove ${d}/${n}, which no sink names`);
+    if (d) {
+      const p = await pruneMcpEnv(d, mcpEnvKeep(f, this.o.machine, d));
+      for (const n of p.removed) this.o.log(`secrets: removed ${d}/${n}, which no sink names`);
+      for (const n of p.failed) this.o.log(`secrets: could not remove ${d}/${n}, which no sink names`);
+    }
+    for (const run of prunes) await run();
+  }
+
+  /** The sinks of each ssh machine, filled into `state`: waiting while
+   *  locked, away with the reason when it does not answer, else synced like
+   *  this machine's own. Returns the prunes to run once the pass is done. */
+  private async passRemotes(f: SecretFile, applied: Awaited<ReturnType<typeof readApplied>>, state: Record<string, SinkState>): Promise<(() => Promise<void>)[]> {
+    const prunes: (() => Promise<void>)[] = [];
+    let away = false;
+    this.passedRemotes = this.remotesKey();
+    for (const r of this.o.remotes?.() ?? []) {
+      const sinks = Object.entries(f.sinks).filter(([, s]) => s.machine === r.machine);
+      if (sinks.length === 0 && !this.remoteSeen.has(r.machine)) continue;
+      if (!this.ident) {
+        for (const [id, sink] of sinks) state[id] = waitingState(sink);
+        continue;
+      }
+      const probe = await r.probe();
+      if ("away" in probe) {
+        away = true;
+        for (const [id] of sinks) state[id] = { state: {}, error: `${r.machine} is away: ${probe.away}`, writes: [] };
+        continue;
+      }
+      this.remoteSeen.add(r.machine);
+      for (const [id, sink] of sinks) state[id] = await syncSink(f, id, sink, this.ident, applied, r.io, await r.refusal(sink.path));
+      const dir = `${probe.home.replace(/\/+$/, "")}/.claude/mcp-env`;
+      prunes.push(async () => {
+        const p = await r.prune(dir, mcpEnvKeep(f, r.machine, dir));
+        for (const n of p.removed) this.o.log(`secrets: removed ${dir}/${n} on ${r.machine}, which no sink names`);
+        for (const n of p.failed) this.o.log(`secrets: could not remove ${dir}/${n} on ${r.machine}, which no sink names`);
+      });
+    }
+    this.retry = away;
+    return prunes;
+  }
+
+  private remotesKey(): string {
+    return (this.o.remotes?.() ?? []).map((r) => r.machine).sort().join(",");
   }
 
   /** this machine's sources, each value sealed to the mini alone */
@@ -312,13 +366,13 @@ export class SecretsReader {
           .flatMap((id) => {
             const k = f.sinks[id];
             if (!k) return [];
-            const own = k.machine === this.o.machine;
-            const state: Record<string, SecretKeyState> = own
-              ? (this.sinkState[id]?.state ?? {})
-              : k.machine === "gpd" && this.o.machine === "mac"
-                ? Object.fromEntries(Object.keys(k.keys).map((key) => [key, "phase 3" as const]))
-                : {};
-            return [{ id, machine: k.machine, path: k.path, format: k.format, keys: { ...k.keys }, state, error: own ? (this.sinkState[id]?.error ?? null) : null }];
+            // this machine's sinks and its ssh machines' are the ones it writes, so it reports their states
+            const own = k.machine === this.o.machine || (this.o.remotes?.() ?? []).some((r) => r.machine === k.machine);
+            const state: Record<string, SecretKeyState> = own ? (this.sinkState[id]?.state ?? {}) : {};
+            return [{
+              id, machine: k.machine, path: k.path, format: k.format, keys: { ...k.keys }, state, error: own ? (this.sinkState[id]?.error ?? null) : null,
+              ...(k.restart !== undefined ? { restart: k.restart } : {}),
+            }];
           })
       : [];
     return {

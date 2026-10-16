@@ -7,7 +7,7 @@ export function actionWord(a: KitAction): string {
   return `${a.kind} ${a.agent}/${a.name}`;
 }
 
-/** phase-3 is left out: on gpd every server with secrets would read it until secrets phase 3 */
+/** the states a status line reports; ok, local and off are not problems */
 const PROBLEMS = new Set([
   "missing", "drift", "foreign", "no-source", "noagent", "away",
   "not-allowed", "stale-allowance", "no-sink", "adoptable", "unsupported", "unresolved",

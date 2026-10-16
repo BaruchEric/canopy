@@ -151,7 +151,7 @@ function AllowSheet({ view, machines, onDone }: { view: KitMcpPick; machines: Ki
           </>
         )}
         <dt>machines</dt>
-        <dd>{view.machines.join(", ") || "none"}{view.later.length > 0 ? `; ${view.later.join(", ")} waits for secrets phase 3` : ""}</dd>
+        <dd>{view.machines.join(", ") || "none"}</dd>
       </dl>
       <p className="kit-note">One allowance covers every machine and makes each one's env sink. Editing the command, args, url or the names voids it.</p>
       {!writer || !info ? (

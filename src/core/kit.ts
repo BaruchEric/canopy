@@ -440,7 +440,6 @@ function sinkReady(info: SecretsInfo, id: string, keys: string[]): { ok: true } 
 /** whether a server's secrets can reach it on this machine now */
 export function serverReady(s: KitMcpServer, machine: string, ctx: KitMcpCtx): { ok: true } | { waiting: true } | { state: KitCellState; why: string } {
   if (!hasSecrets(s)) return { ok: true };
-  if (ctx.ssh) return { state: "phase-3", why: "a server with secrets on an ssh machine waits for secrets phase 3" };
   if (!ctx.secrets?.ok) return { state: "no-sink", why: "this backend cannot read the secret store" };
   const a = allowanceOf(s, ctx.hashes[s.name] ?? "", ctx.secrets);
   const writer = ctx.secrets.role === "writer";

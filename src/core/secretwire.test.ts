@@ -14,6 +14,14 @@ describe("parseAct", () => {
     expect("error" in (parseAct(s.bad) as object)).toBe(true);
   });
 
+  test("sink-set carries a restart project or none, and refuses anything else there", () => {
+    const base = { a: "sink-set", id: "dns", machine: "mini", path: "/opt/stacks/dns/.env", format: "dotenv", keys: { CF_TOKEN: "cf_token" } } as const;
+    expect(parseAct({ ...base, restart: "dns-prod" })).toEqual({ ...base, restart: "dns-prod" });
+    expect(parseAct({ ...base, restart: "none" })).toEqual({ ...base, restart: "none" });
+    expect(parseAct(base)).toEqual(base);
+    expect(parseAct({ ...base, restart: "Dns Prod" })).toEqual({ error: "sink-set: restart, a compose project name or none" });
+  });
+
   test("an unknown kind is refused", () => {
     expect(parseAct({ a: "get-all" })).toEqual({ error: "unknown act get-all" });
   });

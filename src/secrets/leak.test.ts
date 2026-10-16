@@ -88,6 +88,11 @@ beforeEach(async () => {
     sinkRoots: [stacks, join(dir, "home", ".claude", "mcp-env")],
     applied: { read: async () => structuredClone(applied), write: async (a) => void (applied = structuredClone(a)) },
     scan: async () => found,
+    // the host's answer as the restart key's script gives it: names and states only
+    stacks: {
+      list: async () => ({ stacks: [{ name: "dns-prod", files: ["/opt/stacks/dns/compose.yml"] }] }),
+      restart: async () => ({ code: 0, containers: [{ service: "dns", state: "running", health: "healthy" }] }),
+    },
     log,
   });
   hub = new SecretsHub({ backend: "mini", socket: null, gateOrigin: GATE, reader: null, broadcast: (e) => events.push(e), ask: (r) => svc.handle(r) });
@@ -170,6 +175,11 @@ test("no value, its sha256 or its base64 leaves the service but through a reveal
   expect(proposed.status).toBe(200);
   expect((await info()).proposals.find((x) => x.key === "OTHER_KEY")?.same).toBe("openai_key");
 
+  // the sink restarts a project: a refused restart while it waits, then one that runs
+  await act({ a: "sink-set", id: "dns", machine: "mini", path: env, format: "dotenv", keys: { CF_API_TOKEN: "cf_token" }, restart: "dns-prod" });
+  await act({ a: "stack-restart", project: "dns-prod" });
+  await send("POST", "/api/secrets/act", { act: { a: "stack-restart", project: "nope" } });
+
   // a refused act and an audit read
   await send("POST", "/api/secrets/act", { act: { a: "delete", name: "cf_token" } });
   await send("GET", "/api/secrets/audit");
@@ -185,6 +195,7 @@ test("no value, its sha256 or its base64 leaves the service but through a reveal
   const everything = [...seen, JSON.stringify(events), logs.join("\n"), audit, JSON.stringify(after.sinks)].join("\n");
   expect(events.length).toBeGreaterThan(0);
   expect(audit).toContain("sink-write");
+  expect(audit).toContain("stack-restart");
   for (const v of VALUES) {
     expect(everything).not.toContain(v);
     expect(everything).not.toContain(sha(v));

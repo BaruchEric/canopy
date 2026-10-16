@@ -338,7 +338,6 @@ interface CtxOver {
   owned?: Partial<KitMcpOwned>;
   ignored?: boolean;
   wrapper?: boolean;
-  ssh?: boolean;
   env?: Record<string, string>;
   ownedError?: string;
   ownedIgnored?: boolean;
@@ -357,7 +356,7 @@ async function mctx(k: KitManifest, o: CtxOver = {}): Promise<KitMcpCtx> {
       ...(o.ownedError !== undefined ? { ownedError: o.ownedError } : {}),
       ...(o.ownedIgnored !== undefined ? { ownedIgnored: o.ownedIgnored } : {}),
     },
-    hashes, secrets: secretsInfo(allow, o.sink === undefined ? "same" : o.sink), home: "/Users/e", env: o.env ?? {}, ssh: o.ssh ?? false,
+    hashes, secrets: secretsInfo(allow, o.sink === undefined ? "same" : o.sink), home: "/Users/e", env: o.env ?? {},
   };
 }
 const kinds = (r: { actions: KitAction[] }) => r.actions.map((a) => ("name" in a ? `${a.kind} ${a.agent}/${a.name}` : a.kind));
@@ -462,13 +461,14 @@ describe("MCP planning", () => {
     expect(mcell(mcpCells(k, seen(), kept), "claude", "github")?.state).toBe("ok");
   });
 
-  test("no sink, no ignore line, no wrapper, and gpd each keep the server out and say why", async () => {
+  test("no sink, no ignore line, no wrapper, and gpd without its own sink each keep the server out and say why", async () => {
     const k = mkit();
     const why = async (o: CtxOver, machine = "mac") => mcell(mcpCells(k, seen({ machine }), await mctx(k, o)), "claude", "github");
     expect(await why({ sink: null })).toMatchObject({ state: "no-sink", why: "no sink mcp-github-mac in the store this machine last pulled; if it was allowed just now, wait for the next pull, and otherwise allow it from the kit view" });
     expect(await why({ ignored: false })).toMatchObject({ state: "no-sink", why: "dotclaude does not ignore mcp-env/ here; pull dotclaude" });
     expect(await why({ wrapper: false })).toMatchObject({ state: "no-sink", why: "~/.claude/bin/canopy-mcp-env is missing; pull dotclaude" });
-    expect((await why({ ssh: true }, "gpd"))?.state).toBe("phase-3");
+    // gpd is planned like any machine: the Mac's sink is not gpd's
+    expect(await why({}, "gpd")).toMatchObject({ state: "no-sink", why: expect.stringContaining("no sink mcp-github-gpd") });
   });
 
   test("a hand-made entry of a kit name is adoptable and never planned; one the kit lacks is local", async () => {

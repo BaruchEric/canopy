@@ -186,7 +186,7 @@ describe("KitHub and MCP servers", () => {
     expect(info.machines[0]?.plan).toContainEqual({ kind: "mcp-set", agent: "claude", name: "excalidraw" });
     expect(info.machines[0]?.home).toBe(HOST);
     expect(info.machines[0]?.seen.home).not.toBe(HOST);
-    expect(info.mcp).toEqual([{ name: "github", def: GH_DEF, hash: await mcpHash(GH_DEF), env: { GITHUB_PERSONAL_ACCESS_TOKEN: "gh_token" }, headers: {}, machines: ["mac"], later: [] }]);
+    expect(info.mcp).toEqual([{ name: "github", def: GH_DEF, hash: await mcpHash(GH_DEF), env: { GITHUB_PERSONAL_ACCESS_TOKEN: "gh_token" }, headers: {}, machines: ["mac"] }]);
     expect(JSON.stringify(info)).not.toContain("hand-literal-0x6b");
     expect(JSON.stringify(events)).not.toContain("hand-literal-0x6b");
   });

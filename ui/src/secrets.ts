@@ -3,7 +3,7 @@
    Nothing here ever sees a value. */
 
 import { DOTENV_KEY, JSON_PATH, SECRET_NAME, joinList, reachList } from "../../src/core/secretfile";
-import type { SecretKeyState, SecretMeta, SecretSinkFormat, SecretSinkInfo, SecretsInfo } from "../../src/core/types";
+import type { SecretKeyState, SecretMeta, SecretSinkFormat, SecretSinkInfo, SecretsInfo, SecretStack } from "../../src/core/types";
 
 /** the backend whose info comes from the mini's service, in page order */
 export function writerOf(all: Readonly<Record<string, SecretsInfo>>, order: readonly string[]): string | null {
@@ -105,11 +105,15 @@ export const KEY_TONE: Record<SecretKeyState, string> = {
   missing: "lichen",
   waiting: "sky",
   unknown: "",
-  "phase 3": "",
 };
 
-/** the line that restarts a stack, until phase 3's button */
-export const restartLine = (stack: string): string => `cd /opt/stacks/${stack} && docker compose up -d`;
+/** The line that restarts a project by hand, with exactly the files it was
+ *  started with, so an overlay that was off stays off; null when the
+ *  writer's list does not hold it */
+export function restartLine(project: string, stacks: readonly SecretStack[] | undefined): string | null {
+  const p = stacks?.find((x) => x.name === project);
+  return p ? `docker compose -p ${project} ${p.files.map((f) => `-f ${f}`).join(" ")} up -d` : null;
+}
 
 export interface ReachRow {
   kind: "sink" | "server" | "stack";
@@ -118,6 +122,8 @@ export interface ReachRow {
   detail: string;
   /** a sink's key states from its owner's last pass, or its error; null for the rest */
   state: string | null;
+  /** a stack: every sink of this reach that restarts it has written what the store holds */
+  ready?: boolean;
 }
 
 function sinkState(rows: readonly SinkRow[], id: string, keys: readonly string[]): string | null {
@@ -128,7 +134,7 @@ function sinkState(rows: readonly SinkRow[], id: string, keys: readonly string[]
 }
 
 /** everything a rotation of `meta` reaches, for the preview and for after the write */
-export function reachRows(meta: SecretMeta, rows: readonly SinkRow[], awaited: (owner: string | null) => boolean = () => false): ReachRow[] {
+export function reachRows(meta: SecretMeta, rows: readonly SinkRow[], awaited: (owner: string | null) => boolean = () => false, stacks?: readonly SecretStack[]): ReachRow[] {
   // a sink's states are its owner's last pass: while that owner has not passed over the write, they are the old ones
   const stateOf = (id: string, keys: readonly string[]): string | null => {
     const owner = rows.find((x) => x.sink.id === id)?.owner ?? null;
@@ -144,7 +150,16 @@ export function reachRows(meta: SecretMeta, rows: readonly SinkRow[], awaited: (
   return [
     ...r.sinks.map((s): ReachRow => ({ kind: "sink", name: s.id, machine: s.machine, detail: `${s.path}, ${s.keys.join(", ")}`, state: stateOf(s.id, s.keys) })),
     ...r.servers.map((s): ReachRow => ({ kind: "server", name: s.server, machine: s.machines.join(", "), detail: "new agent sessions get the new value; running ones keep the old one", state: null })),
-    ...r.stacks.map((st): ReachRow => ({ kind: "stack", name: st, machine: "mini", detail: restartLine(st), state: null })),
+    ...r.stacks.map((st): ReachRow => {
+      // the sinks of this reach that restart it; a restart before they are written would start on the old value
+      const mine = r.sinks.filter((s) => rows.find((x) => x.sink.id === s.id)?.sink.stack === st);
+      const ready = mine.every((s) => {
+        const state = stateOf(s.id, s.keys);
+        return state !== null && state.split(", ").every((k) => k !== "waiting" && !k.startsWith("waiting for ") && k in KEY_TONE);
+      });
+      const line = restartLine(st, stacks);
+      return { kind: "stack", name: st, machine: "mini", detail: line ?? "not in the mini's list of running projects", state: null, ready: ready && line !== null };
+    }),
   ];
 }
 

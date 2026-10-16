@@ -4266,6 +4266,8 @@ export async function startServer(opts: {
       backend: selfName(cfg.self, hostname()),
       root,
       repoRoots: () => state.result.repos.filter((r) => !r.host).map((r) => r.path),
+      // gpd's sinks: the kit's ssh machines this backend reaches (phase 3)
+      sshMachines: () => state.kit.sshMachines(),
       broadcast: (ev) => {
         broadcast(state, ev);
         // an allowance or a sink state moved: the kit's MCP cells follow without a rescan

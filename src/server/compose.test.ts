@@ -231,6 +231,12 @@ describe("the secrets service", () => {
     expect(envOf(secrets ?? {})).toContain(`CANOPY_SECRETS_SINK_ROOTS=/opt/stacks:${MCP_ENV}`);
     expect((secrets?.volumes ?? []).filter((v) => v.includes(".claude"))).toEqual([`${MCP_ENV}:${MCP_ENV}`]);
   });
+  test("reads the restart key's folder and nothing else of the host's home config, read-only", () => {
+    const restart = "${HOST_HOME:-/home/eric}/.config/canopy-restart:/restart:ro";
+    expect(secrets?.volumes).toContain(restart);
+    expect((secrets?.volumes ?? []).filter((v) => v.includes(".config") || v.includes(".ssh"))).toEqual([restart]);
+    for (const name of ["canopy", "shells", "stages"]) expect(compose.services[name]?.volumes ?? []).not.toContain(restart);
+  });
   test("canopy and the shells see ~/.claude at its host path too, so the wrapper's path runs in both", () => {
     for (const name of ["canopy", "shells"]) {
       const vols = compose.services[name]?.volumes ?? [];
