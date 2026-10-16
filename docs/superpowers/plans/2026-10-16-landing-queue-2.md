@@ -1,10 +1,11 @@
 # Landing queue, plan 2: review rules and auto-land (FR-013)
 
-**Status:** built 2026-10-16 on branch worktree-agent-ae6d48a4cc8d79d7e
-(45684c6..63053b0 and this status commit), with the six amendments of the
-review that is landing on main separately, not merged into main, not
-deployed. Gates green: typecheck, lint, 4000 tests pass with 9 skipped,
-build. The live check passed against a scratch canopy at 63053b0 with the
+**Status:** shipped 2026-10-16. Built on branch
+worktree-agent-ae6d48a4cc8d79d7e (45684c6..68ef4a5) with the six
+amendments of the review, which landed on main through plan 1's queue as
+1f83e21; merged into main as e8f5e79 and deployed to the mini the same
+day. Gates green on the merge: typecheck, lint, 4003 tests pass with 9
+skipped, build. The live check passed against a scratch canopy at 63053b0 with the
 real claude CLI doing every run: a README edit and a doc-comment edit to
 a `.ts` file each joined on their own, landed and left a landed notice,
 with nothing pushed; a new function waited for land; an

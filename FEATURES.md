@@ -32,13 +32,13 @@ The gear still marks "panels side by side" once the dock is a grid of split cell
 
 ## In Progress
 
+## Shipped
+
 ### FR-013 · Review rules that tell a comment-only change from a logic change
-P2 · added 2026-10-14 · source: Eric (Anthropic "Redesigning source control" post)
+P2 · added 2026-10-14 · source: Eric (Anthropic "Redesigning source control" post) · shipped 2026-10-16
 Before a run's diff reaches Eric, canopy sorts it by what it touches: a change to comments, docs or formatting alone can land without a look, while anything under a sensitive path (the secret store, the peer gate) always waits for an explicit approval. The rules are set per repo. Reference: Antique's semantic approval constraints in https://www.anthropic.com/engineering/redesigning-source-control.
 Spec: docs/superpowers/specs/2026-10-15-landing-queue-design.md (2026-10-15).
-Plan: docs/superpowers/plans/2026-10-16-landing-queue-2.md, built 2026-10-16 on its own branch, waiting to be merged.
-
-## Shipped
+Plan: docs/superpowers/plans/2026-10-16-landing-queue-2.md, merged into main as e8f5e79 and deployed to the mini on 2026-10-16.
 
 ### FR-012 · A landing queue for finished runs
 P2 · added 2026-10-14 · source: Eric (Anthropic "Redesigning source control" post) · shipped 2026-10-16
