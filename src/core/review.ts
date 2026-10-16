@@ -348,6 +348,9 @@ export async function sortBranch(dir: string, target: string, rules: Rules, hasG
     return { verdict: "land" };
   };
   const review: RunReview = { ...verdictOf(), files, base, head, at: now };
-  if (touchy.length > 0) review.sensitiveId = await sensitivePatchId(dir, base, head, [...new Set(touchy.flatMap((f) => (f.from !== undefined ? [f.from, f.path] : [f.path])))]);
+  // with the rules broken no file can be called safe, so an approval
+  // names the whole diff
+  const bound = touchy.length > 0 ? touchy : rules.source === "error" ? files : [];
+  if (bound.length > 0) review.sensitiveId = await sensitivePatchId(dir, base, head, [...new Set(bound.flatMap((f) => (f.from !== undefined ? [f.from, f.path] : [f.path])))]);
   return review;
 }

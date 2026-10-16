@@ -284,7 +284,7 @@ describe("the sort", () => {
     const dir = await branchWith({ "README.md": "a\n" }, { "README.md": "b\n" });
     expect(await sortOf(dir, { source: "none" })).toMatchObject({ verdict: "land", why: "no review rules" });
     expect(await sortOf(dir, RULES, false)).toMatchObject({ verdict: "land", why: "no gates to run" });
-    expect(await sortOf(dir, { source: "error", error: "bad" })).toMatchObject({ verdict: "approve", why: "bad" });
+    expect(await sortOf(dir, { source: "error", error: "bad" })).toMatchObject({ verdict: "approve", why: "bad", sensitiveId: expect.stringMatching(/^[0-9a-f]{40}$/) });
     expect(await sortOf(dir, { source: "file", autoLand: ["comments"], approve: [] })).toMatchObject({ verdict: "land" });
     const many = await sortOf(await branchWith({}, Object.fromEntries(Array.from({ length: MAX_FILES + 1 }, (_, i) => [`n/${i}.md`, "x\n"]))));
     expect([many.verdict, many.why, many.files.length, many.files[0]?.why]).toEqual(["land", `over ${MAX_FILES} files, not read`, MAX_FILES + 1, `not read: over ${MAX_FILES} files`]);

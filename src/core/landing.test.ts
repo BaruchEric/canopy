@@ -1,8 +1,15 @@
 import { describe, expect, test } from "bun:test";
 import {
+  addNotice,
   advance,
+  canLand,
   enqueue,
   fixPrompt,
+  landAllPick,
+  MAX_NOTICES,
+  rejoins,
+  reviewWord,
+  unqueue,
   holdAll,
   inQueue,
   landCounts,
@@ -17,7 +24,7 @@ import {
   sentBack,
   TAIL_CHARS,
 } from "./landing";
-import type { LandEntry, LandingRun } from "./types";
+import type { LandEntry, LandingRun, LandNotice, RunReview } from "./types";
 
 const run = (id: string, over: Partial<LandingRun> = {}): LandingRun => ({
   id,
@@ -198,5 +205,75 @@ describe("words", () => {
     expect(fixPrompt(advance(e, { t: "conflict", files: ["a.ts"] }, 1))).toContain("conflicts in a.ts");
     expect(fixPrompt(advance(e, { t: "red", gate: "test", output: "1 fail" }, 1))).toContain("1 fail");
     expect(fixPrompt(advance(e, { t: "red", gate: "test", output: "1 fail" }, 1))).toContain("Do not push.");
+  });
+});
+
+const review = (verdict: RunReview["verdict"], over: Partial<RunReview> = {}): RunReview => ({ verdict, files: [], base: "b0", head: "h1", at: 1, ...over });
+const sensitive = (n: number): RunReview["files"] => Array.from({ length: n }, (_, i) => ({ path: `s${i}`, cls: "logic" as const, sensitive: "x" }));
+
+describe("review rules in the queue", () => {
+  test("the flags ride on the entry through its turn and a restart", () => {
+    const [e] = enqueue([], run("a"), 1, { auto: true, approved: "p1" });
+    expect(e).toMatchObject({ auto: true, approved: "p1" });
+    const mid = advance(advance(e!, { t: "begin" }, 2), { t: "rebased", setup: false, first: "test", noGates: false }, 3);
+    expect(mid).toMatchObject({ state: "gate", auto: true, approved: "p1" });
+    expect(restartWorking([mid], 4)[0]).toMatchObject({ state: "queued", auto: true, approved: "p1" });
+    // a sent-back entry rejoining keeps them unless new ones are given
+    const back = advance(mid, { t: "red", gate: "test", output: "x" }, 5);
+    expect(enqueue([back], run("a"), 6)[0]).toMatchObject({ auto: true, approved: "p1" });
+    expect(enqueue([back], run("a"), 6, {})[0]?.auto).toBeUndefined();
+    expect(enqueue([], run("b"), 1)[0]).not.toHaveProperty("auto");
+  });
+
+  test("unqueue takes an entry out", () => {
+    expect(unqueue(queued(["a", "b"]), "a").map((e) => e.id)).toEqual(["b"]);
+  });
+
+  test("a fix rejoins on its own only when its sort allows it", () => {
+    expect(rejoins(review("auto"), { auto: true })).toEqual({ ok: true });
+    expect(rejoins(review("land"), {})).toEqual({ ok: true });
+    expect(rejoins(review("land"), { auto: true })).toMatchObject({ ok: false, why: expect.stringContaining("needs your land") });
+    expect(rejoins(review("approve", { sensitiveId: "p1" }), { approved: "p1" })).toEqual({ ok: true });
+    expect(rejoins(review("approve", { sensitiveId: "p2" }), { approved: "p1" })).toMatchObject({ ok: false, why: expect.stringContaining("changed the sensitive files") });
+    expect(rejoins(review("approve", { sensitiveId: "p1" }), {})).toMatchObject({ ok: false, why: expect.stringContaining("touches sensitive files") });
+  });
+
+  test("land with a good, stale and missing approval", () => {
+    expect(() => canLand(review("auto"))).not.toThrow();
+    expect(() => canLand(review("land"))).not.toThrow();
+    const r = review("approve", { sensitiveId: "p1", files: sensitive(2) });
+    expect(() => canLand(r, "p1")).not.toThrow();
+    expect(() => canLand(r, "p0")).toThrow("the branch changed since you looked");
+    expect(() => canLand(r)).toThrow("it needs your approval: 2 sensitive files; look at the files and approve");
+    let status = 0;
+    try {
+      canLand(r);
+    } catch (err) {
+      status = (err as LandError).status;
+    }
+    expect(status).toBe(409);
+  });
+
+  test("the words", () => {
+    expect(reviewWord(review("auto"))).toBe("lands on its own");
+    expect(reviewWord(review("land"))).toBe("needs your land");
+    expect(reviewWord(review("land", { why: "no gates to run" }))).toBe("needs your land: no gates to run");
+    expect(reviewWord(review("approve", { files: sensitive(1) }))).toBe("needs your approval: 1 sensitive file");
+    expect(reviewWord(review("approve", { files: sensitive(2) }))).toBe("needs your approval: 2 sensitive files");
+    expect(reviewWord(review("approve", { why: "review.json is not JSON" }))).toBe("needs your approval: review.json is not JSON");
+  });
+
+  test("notices keep the newest fifty", () => {
+    let list: LandNotice[] = [];
+    for (let i = 0; i < MAX_NOTICES + 5; i++) list = addNotice(list, { id: `n${i}`, entry: "a", repoId: "canopy", branch: "run/x", note: "", kind: "landed", at: i });
+    expect(list.length).toBe(MAX_NOTICES);
+    expect(list[0]?.id).toBe(`n${MAX_NOTICES + 4}`);
+    expect(addNotice(list, { ...list[3]!, at: 99 }).filter((x) => x.id === list[3]!.id).length).toBe(1);
+  });
+
+  test("land all takes ready runs that need no approval", () => {
+    const runs = [run("a", { review: review("auto") }), run("b", { review: review("land") }), run("c", { review: review("approve") }), run("d"), run("e", { state: "working" }), run("f", { repoId: "other" })];
+    const pick = landAllPick(runs, queued(["d"]), "canopy");
+    expect([pick.take.map((r) => r.id), pick.skip.map((r) => r.id)]).toEqual([["a", "b"], ["c"]]);
   });
 });
