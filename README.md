@@ -74,6 +74,8 @@ canopy land --all [repo]           # every ready run that needs no approval; nam
 canopy queue [repo]                # every landing queue: queued in order, sent back and why, ready to land and its verdict
 # a repo's .canopy/review.json ({"autoLand": ["docs", "comments", "format"], "approve": [globs]}) lets a run of
 # prose, comments or whitespace land on its own once its gates pass, and holds the globs for an approval
+# a repo's gates come from .canopy/gates.json, else package.json's typecheck, lint, test and build; they run in the
+# branch's worktree in their own shell, without canopy's logins (GH_TOKEN, git's credential helper) or CANOPY_ settings
 canopy version                     # the version and commit (also --version, -V)
 ```
 
