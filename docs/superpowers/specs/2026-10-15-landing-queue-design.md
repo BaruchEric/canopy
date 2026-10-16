@@ -187,6 +187,16 @@ comment-only change to a sensitive file is still sensitive.
 
 Canopy's own repo gets a `review.json` with the `approve` list above.
 
+Changed by plan 2's review (2026-10-16): a `.txt` file is docs only in a
+docs folder or under a README, LICENSE, CHANGELOG, NOTICE or AUTHORS name,
+since `requirements.txt` and `CMakeLists.txt` are read by programs; the
+directive list grew to one pattern that also takes `oxlint-disable`, JSX
+pragmas, bundler magic comments and pure annotations; a rename or copy is
+judged by both its paths; the agent instruction list adds `.cursor/`,
+`.agents/`, Copilot's instructions, `.windsurfrules` and `.clinerules`,
+while `lib/workflows/**` moved to canopy's own `review.json` with `lib/**`
+and `spec/**`; and a checkout that folds case matches the globs folded.
+
 ## Components
 
 - `src/core/worktree.ts` (new): add, remove and list run worktrees, rebase,
