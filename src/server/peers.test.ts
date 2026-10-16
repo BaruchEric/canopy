@@ -6,7 +6,8 @@ import { join } from "node:path";
 import { peerUrl } from "../core/peers";
 import { seedRootsNow, setSeedRoots } from "../core/seedgit";
 import type { Peer, PeerBranch, Repo } from "../core/types";
-import { isPeerRemote, newDivergences, notePeerList, ownRemotesOf, peerSettingsFromEnv, queuePass, runPeerAction, startServer, withPeering } from "./index";
+import { isPeerRemote, newDivergences, notePeerList, ownRemotesOf, peerSettingsFromEnv, startServer } from "./index";
+import { queuePass, runPeerAction, withPeering } from "./peers";
 
 let scratch: string;
 let root: string;

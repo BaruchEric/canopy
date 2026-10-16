@@ -66,7 +66,7 @@ import { shipConfig, shipper, type Shipper } from "../core/shipper";
 import { seedSource, type SeedSource } from "../core/seedsource";
 import { vaultConfig, vaultNotes } from "../core/vault";
 import { linkPeers, NO_PUSH, peerUrl } from "../core/peers";
-import { currentBranch, fetchPeer, gitSshCommand, type FetchOutcome, initRepo, isBusy, isDirty, PassSeen, resetBlocker, resetTree, seedRepo, snapshotWip, syncAll, syncRepo, takeWip, trackBranch, treeIs } from "../core/peersync";
+import { currentBranch, fetchPeer, gitSshCommand, type FetchOutcome, initRepo, isBusy, isDirty, PassSeen, resetBlocker, resetTree, snapshotWip, syncAll, syncRepo, takeWip, treeIs } from "../core/peersync";
 import { endAgent, MOVE_MAX, MoveError, moveFileList, placeTranscript, rewriteTranscript, transcriptConflict, type PaneDriver } from "../core/move";
 import { normalizeLaunch } from "../core/launch";
 import { repoSpecState, syncRepo as syncSpec } from "../core/spec";
@@ -197,6 +197,7 @@ import { RangerHub, realTmux, type RangerTimings, type RangerTmux } from "./rang
 import { HealthHub, rangerResult, streamResult } from "./health";
 import { KitHub, kitPath } from "./kit";
 import { LandingHub } from "./landing";
+import { getPeers, PeerError, postPeersSync, postRepoPeer, queuePass, withPeering, type PeerDeps } from "./peers";
 import { fixPrompt, landWord } from "../core/landing";
 import { readGates } from "../core/gates";
 import { addRunTree, defaultBranch, removeRunTree, revOf, runBranchName, runTreeDir } from "../core/worktree";
@@ -327,7 +328,8 @@ interface ServerState {
    *  process, so a restart or a dry-to-on flip sets them up again */
   inited: Set<string>;
   /** the current occupant of the peering queue (a whole-tree pass, or a
-   *  route action), whichever is running or next in line; see withPeering */
+   *  route action), whichever is running or next in line; see withPeering
+   *  in server/peers */
   peering: Promise<void> | null;
   /** shells a move has in hand, by term id, from the moment move/out
    *  takes one until the move finishes or is undone */
@@ -2146,24 +2148,6 @@ function refreshActivity(state: ServerState): Promise<void> {
 const peerable = (state: ServerState, r: Repo): boolean =>
   r.source === LAUNCH_SOURCE && !r.host && !r.forge && !r.error && !(state.seedsStayHome && isSeedRepoId(r.id));
 
-/** Runs `job` through the peering queue (withPeering), but coalesces
- *  repeat calls: while a job started this way is still pending (queued
- *  behind something else, or running), a second call returns that same
- *  promise instead of enqueueing job() again behind it. `pending` is a
- *  separate field from the queue itself (state.peering), since the queue
- *  alone cannot tell "a pass is next in line" from "a pass is one of
- *  several things next in line" - only this call site knows which of its
- *  own requests are for the same job. Exported for a direct unit test of
- *  the coalescing, alongside withPeering. */
-export function queuePass(state: { peering: Promise<void> | null; pendingPass: Promise<void> | null }, job: () => Promise<void>): Promise<void> {
-  if (state.pendingPass) return state.pendingPass;
-  const run = withPeering(state, job);
-  state.pendingPass = run.finally(() => {
-    state.pendingPass = null;
-  });
-  return state.pendingPass;
-}
-
 /** Pulls from every peer: snapshot, fetch, fast-forward, clone what is
  *  missing. Repos with a run under way are skipped, like the fetch. A timer
  *  pass, a manual /api/peers/sync, and every route action (sync, take,
@@ -2243,51 +2227,15 @@ export function notePeerList(state: { own: Map<string, string[]>; peerNamesSeen:
   state.peerNamesSeen = peers;
 }
 
-const PEER_ACTIONS = ["sync", "take", "track", "seed"] as const;
-export type PeerAction = (typeof PEER_ACTIONS)[number];
-const isPeerAction = (v: unknown): v is PeerAction => (PEER_ACTIONS as readonly unknown[]).includes(v);
-
-/** Runs one /api/repos/peer action through the peering queue, every
- *  action and not only sync: a pass running alongside a take could
- *  fast-forward the branch between takeWip's HEAD check and its read-tree,
- *  and a track or seed writes to the same repo the pass is working in.
- *  Exported for a direct unit test of the queue ordering. */
-export function runPeerAction<T>(state: { peering: Promise<void> | null }, action: PeerAction, ops: Record<PeerAction, () => Promise<T>>): Promise<T> {
-  return withPeering(state, ops[action]);
-}
-
-/** A true FIFO queue over `state.peering`, not just a wait-then-run: every
- *  writer of `state.peering` goes through here, the whole-tree pass
- *  (queuePass, wrapping this) included, so it is the one and only queue,
- *  never bypassed by a direct write. Each caller chains itself onto
- *  whatever the field currently holds (the pass, or an earlier queued
- *  caller here) and replaces it with its own tail *synchronously*, before
- *  awaiting the one it replaced. Two callers arriving back to back
- *  therefore never both see the same holder and race to run `fn`
- *  together: the second always sees the first's tail, not the original
- *  holder. A route action (sync's initRepo and syncRepo, a take, a track,
- *  a seed) must never touch the same repo's config, refs or files as the
- *  pass, or another queued action, at the same time. Exported for a direct unit test of
- *  the queue ordering: takes just the slice of ServerState it needs, so a
- *  test can drive it against a bare `{ peering: null }`. */
-export async function withPeering<T>(state: { peering: Promise<void> | null }, fn: () => Promise<T>): Promise<T> {
-  const prev = state.peering;
-  const run = (async () => {
-    if (prev) await prev.catch(() => {});
-    return fn();
-  })();
-  const tail: Promise<void> = run.then(
-    () => undefined,
-    () => undefined,
-  );
-  state.peering = tail;
-  void tail.finally(() => {
-    // Only clear the field if nothing has queued behind us since: a later
-    // caller's own tail is what state.peering must still point to.
-    if (state.peering === tail) state.peering = null;
-  });
-  return run;
-}
+/** What the peer routes (server/peers) reach of this server. */
+const peerDeps = (state: ServerState): PeerDeps => ({
+  state,
+  peerSettings,
+  refreshPeers: () => refreshPeers(state),
+  peerable: (repo) => peerable(state, repo),
+  applyPeerState: (id, st) => applyPeerState(state, id, st),
+  refreshAndBroadcast: (id) => refreshAndBroadcast(state, id),
+});
 
 /** The divergences in a repo's new peer state not reported yet. `seen`
  *  keeps exactly the pairs diverged now, so one that settles and later
@@ -3132,14 +3080,8 @@ async function handleApi(
     return json({ self: selfName(cfg.self, hostname()), backends: cfg.backends });
   }
 
-  if (path === "/api/peers" && method === "GET") {
-    const s = await peerSettings();
-    return json({ self: s.self, peers: s.peers, seen: state.peerSeen, sync: s.peerSync });
-  }
-  if (path === "/api/peers/sync" && method === "POST") {
-    void refreshPeers(state).catch((err) => console.error("canopy: peer pass", err));
-    return json({}, 202);
-  }
+  if (path === "/api/peers" && method === "GET") return getPeers(peerDeps(state));
+  if (path === "/api/peers/sync" && method === "POST") return postPeersSync(peerDeps(state));
 
   if (path === "/api/workspaces" && method === "GET") {
     return json((await loadConfig()).workspaces);
@@ -3625,55 +3567,7 @@ async function handleApi(
       if (b.branch !== undefined && typeof b.branch !== "boolean") return json({ error: "branch must be true or false" }, 400);
       return json(await startRepoRun(state, repo, b.action, note, b.client, undefined, b.branch), 201);
     }
-    if (method === "POST" && action === "peer") {
-      if (!peerable(state, repo)) throw new HttpError(400, "peer sync covers local repos under the launch root");
-      const raw: unknown = await req.json().catch(() => null);
-      if (!raw || typeof raw !== "object" || Array.isArray(raw)) throw new HttpError(400, "malformed body");
-      const body = raw as { action?: unknown; peer?: unknown; branch?: unknown };
-      const bodyAction = body.action;
-      if (!isPeerAction(bodyAction)) throw new HttpError(400, `unknown action: ${String(body.action)}`);
-      const s = await peerSettings();
-      if (!s.self) throw new HttpError(400, "peers are not set up: no self in the config");
-      const self = s.self;
-      // Off blocks every action; dry (below) governs only the background
-      // pass and this route's own "sync" — take and track are explicit user
-      // actions and always run for real.
-      if (s.peerSync === "off") throw new HttpError(409, "peer sync is off");
-      const needPeer = bodyAction === "take" || bodyAction === "track";
-      if (needPeer) {
-        if (typeof body.peer !== "string" || body.peer === "") throw new HttpError(400, "peer is required");
-        if (typeof body.branch !== "string" || body.branch === "") throw new HttpError(400, "branch is required");
-      }
-      const peer = s.peers.find((p) => p.name === body.peer);
-      if (needPeer && !peer) throw new HttpError(404, `unknown peer: ${String(body.peer)}`);
-      // The same conflicts the run action refuses on: a Claude run or a
-      // workflow already has this repo, and initRepo/syncRepo/takeWip could
-      // step on files or refs either of those is using.
-      const activeRun = state.runner.activeFor(repo.id);
-      if (activeRun) throw new HttpError(409, busyWith(repo.name, activeRun.verb));
-      if (state.flows.activeFor(repo.id)) throw new HttpError(409, "a workflow is running here");
-      const dry = s.peerSync === "dry";
-      let take: unknown;
-      try {
-        // Only take answers with something; the rest answer the repo alone.
-        take = await runPeerAction<unknown>(state, bodyAction, {
-          sync: async () => {
-            await initRepo(repo.path, repo.id, s.peers, dry);
-            applyPeerState(state, repo.id, await syncRepo(repo.id, { self, peers: s.peers, seed: s.seed, dry, root: state.root }, new PassSeen()));
-          },
-          take: () => takeWip(repo.path, peer!.name, body.branch as string),
-          track: () => trackBranch(repo.path, peer!.name, body.branch as string),
-          seed: async () => {
-            await seedRepo(repo.path, repo.id, s.peers, s.seed, dry);
-          },
-        });
-      } catch (err) {
-        if (err instanceof HttpError) throw err;
-        throw new HttpError(409, String(err instanceof Error ? err.message : err));
-      }
-      const fresh = await refreshAndBroadcast(state, repo.id);
-      return json(take ? { ...fresh, take } : fresh);
-    }
+    if (method === "POST" && action === "peer") return postRepoPeer(peerDeps(state), repo, req);
     if (method === "POST" && action === "movecheck") {
       if (!peerable(state, repo)) throw new HttpError(400, "a move covers local repos under the launch root");
       if (isSeedPath(state.root, repo.path)) throw new HttpError(400, SEED_AGENT_REFUSAL);
@@ -4556,7 +4450,7 @@ export async function startServer(opts: {
         return await handleApi(state, req, url, clientKey(srv.requestIP(req)?.address ?? "127.0.0.1"));
       } catch (err) {
         const status =
-          err instanceof HttpError || err instanceof HistoryError || err instanceof LauncherError
+          err instanceof HttpError || err instanceof HistoryError || err instanceof LauncherError || err instanceof PeerError
             ? err.status
             : // a stage while the stage runner is away waits; matched by name across modules
               err instanceof Error && err.name === "StageAwayError"
