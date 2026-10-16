@@ -1,6 +1,6 @@
 # Landing queue, plan 1: branch runs and the queue (FR-012)
 
-**Status:** built 2026-10-16 on branch worktree-agent-ad4813a44eb20ebf6 (d8322df..cf68fc9 and this status commit), not merged into main, not deployed. Gates green: typecheck, lint, 3949 tests pass with 9 skipped, build. The live check passed against a scratch canopy with the real claude CLI doing every run: a doc edit landed with nothing pushed, a same-line pair sent the second back as a conflict and its fix it resumed the session and landed, a red gate came back with its output's tail, and a restart landed an entry that was waiting.
+**Status:** shipped 2026-10-16. Built on branch worktree-agent-ad4813a44eb20ebf6 (d8322df..5575c2f), merged into main as 6f6be30 and deployed to the mini the same day. Gates green on the merge: typecheck, lint, 3951 tests pass with 9 skipped, build. The live check passed against a scratch canopy with the real claude CLI doing every run: a doc edit landed with nothing pushed, a same-line pair sent the second back as a conflict and its fix it resumed the session and landed, a red gate came back with its output's tail, and a restart landed an entry that was waiting.
 
 **Goal:** a run can work on its own branch in its own worktree, and a
 finished one lands on the repo's default branch through a per-repo queue

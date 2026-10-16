@@ -13,7 +13,8 @@ One long-lived agent per component (the mini's compose stack, peer sync, tailcha
 ### FR-013 · Review rules that tell a comment-only change from a logic change
 P2 · added 2026-10-14 · source: Eric (Anthropic "Redesigning source control" post)
 Before a run's diff reaches Eric, canopy sorts it by what it touches: a change to comments, docs or formatting alone can land without a look, while anything under a sensitive path (the secret store, the peer gate) always waits for an explicit approval. The rules are set per repo. Reference: Antique's semantic approval constraints in https://www.anthropic.com/engineering/redesigning-source-control.
-Spec: docs/superpowers/specs/2026-10-15-landing-queue-design.md (2026-10-15), not built. Plan 2 of the landing queue, after FR-012's.
+Spec: docs/superpowers/specs/2026-10-15-landing-queue-design.md (2026-10-15), not built.
+Plan: docs/superpowers/plans/2026-10-16-landing-queue-2.md, not started.
 
 ### FR-011 · A run keeps watching the PR it opened
 P2 · added 2026-10-09 · source: Eric (Claude Code Projects video)
@@ -37,13 +38,13 @@ The gear still marks "panels side by side" once the dock is a grid of split cell
 
 ## In Progress
 
+## Shipped
+
 ### FR-012 · A landing queue for finished runs
-P2 · added 2026-10-14 · source: Eric (Anthropic "Redesigning source control" post)
+P2 · added 2026-10-14 · source: Eric (Anthropic "Redesigning source control" post) · shipped 2026-10-16
 Finished runs land on main one at a time: canopy rebases each branch onto the current main, runs the repo's gates, and fast-forwards only when they pass, sending a conflict or a red gate back to that run instead of blocking the next. Two runs that each pass alone can still break main together, and the queue catches that. Reference: the Antique merge queue in https://www.anthropic.com/engineering/redesigning-source-control.
 Spec: docs/superpowers/specs/2026-10-15-landing-queue-design.md (2026-10-15), calls made the same day.
-Plan: docs/superpowers/plans/2026-10-15-landing-queue-1.md, built 2026-10-16 on its own branch, waiting to be merged.
-
-## Shipped
+Plan: docs/superpowers/plans/2026-10-15-landing-queue-1.md, merged into main as 6f6be30 and deployed to the mini on 2026-10-16.
 
 ### FR-003 · Bug: a column seam lags the pointer when the dock is scrolled to its start
 P1 · added 2026-10-07 · source: dock pass · shipped 2026-10-14
