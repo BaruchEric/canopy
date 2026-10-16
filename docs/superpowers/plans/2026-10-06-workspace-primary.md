@@ -1,5 +1,7 @@
 # Workspace primary, color and workspace runs. Implementation plan
 
+**Status:** shipped 2026-10-06 (a8eee60..3564b89).
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** a workspace can mark one member primary and carry a color. An ask, chat or (once plan 2 ships) propose run can start from a workspace. That run works in the primary, with every other local member added through `--add-dir`.

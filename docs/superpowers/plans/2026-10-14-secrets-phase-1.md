@@ -1,5 +1,7 @@
 # Secret store phase 1 implementation plan
 
+**Status:** shipped 2026-10-14 (17e4f4a..173bf06).
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** one signed `secrets.json` in the private Forgejo repo `eric/secrets`, written only by a new `secrets` service on the mini behind a passkey, read and verified by every other backend; values sealed one by one with age to the machines that need them; dotenv and JSON sink files kept in step on the mini and the Mac with drift shown; every existing secret source offered for import; a Secrets view and a `canopy secrets` CLI.

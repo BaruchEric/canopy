@@ -1,5 +1,7 @@
 # Incubator phase 3: scout, build-new and Vercel. Implementation plan
 
+**Status:** shipped 2026-10-02 (ce46099..b179e76).
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** a clarified sprout goes on to research and an eval, a `new` pick is built, tested and accepted by agents, and canopy itself creates the private GitHub repo, pushes it and deploys it to Vercel. The result is a live URL on the sprout, in its vault note and in the daily note.

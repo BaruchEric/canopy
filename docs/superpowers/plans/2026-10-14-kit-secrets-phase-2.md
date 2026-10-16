@@ -1,5 +1,7 @@
 # Kit and secrets phase 2 implementation plan
 
+**Status:** shipped 2026-10-15 (0266e66..f272641).
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** `~/.claude/kit.json` defines every MCP server for Claude and Codex on every machine; a server with secrets gets them from the store through `~/.claude/bin/canopy-mcp-env` after one gated allowance, so no agent config file holds a value; foreign servers can be adopted and put back; rotating a secret shows its full reach before the write.

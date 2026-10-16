@@ -1,5 +1,7 @@
 # Agent workflows implementation plan
 
+**Status:** shipped 2026-09-17 (70cff94..a1ca93e).
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Markdown-defined, multi-step Claude workflows on one repo with gates between steps, runnable across many repos at once, replacing the hard-coded commit, push and deploy actions.

@@ -1,5 +1,7 @@
 # Tasks Implementation Plan
 
+**Status:** shipped 2026-09-28 (36639f8..407c74d).
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** A repo's named processes (dev, test, typecheck, build) that canopy starts, stops, restarts and supervises on tmux, each with a joinable terminal and a log on disk, shown in a panel section, a card chip, a top bar chip and the feed.

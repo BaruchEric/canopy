@@ -1,5 +1,7 @@
 # Token-free incubator stages: implementation plan
 
+**Status:** shipped 2026-10-02 (42e8d10..1559633).
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** canopy never runs code an incubator stage could have written while canopy holds a token. It never runs a seed's git config. It never lets one stage's files give the next stage settings. Every stage agent and every stage check runs in a separate container that has no token, its own pid namespace and a fenced network.

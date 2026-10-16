@@ -1,5 +1,7 @@
 # Review fixes, 2026-10-10
 
+**Status:** shipped 2026-10-10 (aeb7c7e).
+
 Scope: the six findings from the review of `492135f..49ba8dc`.
 Execution is authorized by the user's instruction to fix all findings.
 

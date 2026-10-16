@@ -1,5 +1,7 @@
 # Incubator phase 5: retro, advice and the improvements list. Implementation plan
 
+**Status:** shipped 2026-10-03 (92b52b0..ca58b01).
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** every sprout that ends, and every park left 24 hours, gets a retro: an agent reads the sprout's record and writes `.canopy/retro.md` and `.canopy/advice.json`. Canopy checks the advice in code, folds it into `incubator/improvements.md` counting repeats by key, adds the retro to the vault note and the project sheet, and offers the advice in one inbox item. Accepting a piece opens a chat on the repo that owns the file, or the file itself.

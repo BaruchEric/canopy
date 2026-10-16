@@ -1,5 +1,7 @@
 # Multi-backend, plan 1: every backend reachable Implementation Plan
 
+**Status:** shipped 2026-09-26 (0b61585..40d212b).
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Closing a panel stops killing its shells, and every canopy backend (the mini and the Mac) can be driven from another canopy origin, on the tailnet over https ts.net names and off it through the beric-gate edge.

@@ -1,5 +1,7 @@
 # The movable dock, phase B: groups and splits. Implementation plan
 
+**Status:** shipped 2026-10-07 (682e503..c6e74ca).
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 > **Gate:** start this plan only after Eric says go. Phase A must have shipped first.

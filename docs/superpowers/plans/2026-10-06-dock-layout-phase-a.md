@@ -1,5 +1,7 @@
 # The movable dock, phase A: reorder, carousel, full screen, pop out and back. Implementation plan
 
+**Status:** shipped 2026-10-06 (b6bae01..9ae67ef).
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** dock panels can be:

@@ -1,5 +1,7 @@
 # Incubator phase 2: intake and clarify, implementation plan
 
+**Status:** shipped 2026-10-02 (c83b9c3..b588878).
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** A project goes into canopy as text, links, files, voice or a repo, gets a seed repo and a sprout record, is clarified by an agent that may ask up to four questions through the inbox, and is written up in the vault, with a + project sheet and an incubator view to drive it.

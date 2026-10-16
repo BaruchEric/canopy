@@ -1,5 +1,7 @@
 # Incubator hardening: implementation plan
 
+**Status:** shipped 2026-10-03 (ce4550f..decdbb8).
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** on an isolated backend canopy runs no git in a seed: every git call it makes there runs in the stages container as the token-free stage user. With that, a seed is busy only while its own stage is, so one sprout's long build no longer stalls another's transitions. The stage runner runs as root behind a group-gated socket, and the stages container is read-only with a tmpfs home.

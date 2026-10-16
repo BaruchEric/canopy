@@ -1,5 +1,7 @@
 # Plan, then build: the propose action. Implementation plan
 
+**Status:** shipped 2026-10-06 (0f08960..c105bf2).
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** a run starts Claude in plan mode. When Claude presents its plan, the run shows it with "approve, ask before commands", "approve, run on its own" and "revise". On approval the same session builds it, with a live todo checklist and each subagent's steps folded under its call. On the way, runs stop breaking when Claude starts a background subagent.

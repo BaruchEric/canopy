@@ -1,5 +1,7 @@
 # Session move implementation plan
 
+**Status:** shipped 2026-10-10 (f635c8b..49ba8dc).
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** a "move to <backend>" button on a live agent shell that carries the Claude or Codex conversation and the repo's uncommitted work to the same repo on another canopy backend, resumes it there, and cleans the source.

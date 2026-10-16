@@ -1,5 +1,7 @@
 # Several canopy backends, one frontend: plan 2, the client
 
+**Status:** shipped 2026-09-27 (f709abd..520fd5f).
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** One canopy page connects to every backend in the registry at once, shows a repo that lives on several machines as one card with a machine strip, and drives each checkout on its own backend.

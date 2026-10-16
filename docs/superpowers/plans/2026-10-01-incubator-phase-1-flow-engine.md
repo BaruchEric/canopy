@@ -1,5 +1,7 @@
 # Incubator phase 1: the flow engine, implementation plan
 
+**Status:** shipped 2026-10-01 (841139e..8b7a388).
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Flows survive a canopy restart, retry and rewind on their own, stop at a budget, and can be judged against an intent through a new `judge` gate.

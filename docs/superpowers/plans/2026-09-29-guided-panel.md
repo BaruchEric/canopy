@@ -1,5 +1,7 @@
 # Guided panel implementation plan
 
+**Status:** shipped 2026-09-29 (4b44f45..506532c).
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** An intermediate (vibe-coding) level for the repo panel, the default for a new browser, with a three-step tour, a Claude shell that opens on its own, and agent buttons on the shell tab row.

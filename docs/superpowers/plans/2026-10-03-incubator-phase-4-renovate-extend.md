@@ -1,5 +1,7 @@
 # Incubator phase 4: renovate and extend. Implementation plan
 
+**Status:** shipped 2026-10-03 (7155d62..7f97796).
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** a scout pick of `renovate` or `extend` is carried out. A renovate pick of a github.com project under an allowed license becomes a private repo built from the upstream and deployed like a `new` one. An extend pick of one of the user's own repos becomes a branch `new/<slug>` pushed to that repo's GitHub remote, and the sprout ends `handed-off`. A `vercel+firebase` pick gets its Firebase project, Firestore rules and web config from canopy. An answer the user gives inside a stage's run is an input the judge reads.
