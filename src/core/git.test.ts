@@ -496,6 +496,31 @@ describe("readElsewhere", () => {
       await rm(dir, { recursive: true, force: true });
     }
   });
+
+  test("a branch run's worktree and branch are the landing section's, not the card's", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "canopy-elsewhere-run-"));
+    const prev = process.env["CANOPY_CONFIG_DIR"];
+    process.env["CANOPY_CONFIG_DIR"] = join(dir, "config");
+    const main = join(dir, "main");
+    const wt = join(dir, "config", "worktrees", "main-1234abcd", "ab12cd34");
+    try {
+      const run = (cwd: string, ...args: string[]) => exec(["git", "-C", cwd, "-c", "user.name=t", "-c", "user.email=t@t", ...args]);
+      await exec(["git", "init", "-q", "-b", "main", main]);
+      await writeFile(join(main, "f.txt"), "one\n");
+      await run(main, "add", "f.txt");
+      await run(main, "commit", "-q", "-m", "one");
+      await run(main, "worktree", "add", "-q", "-b", "run/x-ab12cd34", wt);
+      await writeFile(join(wt, "g.txt"), "run\n");
+      await run(wt, "add", "g.txt");
+      await run(wt, "commit", "-q", "-m", "run work");
+      await writeFile(join(wt, "h.txt"), "more\n");
+      expect(await readElsewhere(main)).toBeUndefined();
+    } finally {
+      if (prev === undefined) delete process.env["CANOPY_CONFIG_DIR"];
+      else process.env["CANOPY_CONFIG_DIR"] = prev;
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
 });
 
 describe("stageFile", () => {

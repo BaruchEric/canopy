@@ -1,3 +1,4 @@
+import { existsSync } from "node:fs";
 import { realpath, stat } from "node:fs/promises";
 import { isAbsolute, join, resolve, sep } from "node:path";
 import { git, onHost } from "./exec";
@@ -324,9 +325,10 @@ export async function readElsewhere(repoPath: string): Promise<Elsewhere | undef
   const unmergedOf = new Map(lines.map((b) => [b.name, b.unmerged ?? 0]));
   // git prints real paths, so a config dir reached through a symlink is
   // matched in both spellings.
-  const buildsAt = join(configDir(), "builds");
-  const builds =
-    host === null ? [buildsAt, await realpath(buildsAt).catch(() => buildsAt)].map((b) => b + sep) : [];
+  // Branch runs' worktrees (the landing queue) are canopy's own too, and the
+  // repo's landing section lists them.
+  const spellings = async (at: string): Promise<string[]> => [at, await realpath(at).catch(() => at)].map((b) => b + sep);
+  const builds = host === null ? [...(await spellings(join(configDir(), "builds"))), ...(await spellings(join(configDir(), "worktrees")))] : [];
   const linked = (list.code === 0 ? parseWorktreeList(list.stdout) : [])
     .slice(1)
     .filter((w) => !w.bare && !w.prunable)
@@ -350,6 +352,8 @@ export async function readElsewhere(repoPath: string): Promise<Elsewhere | undef
   // worktreepath, and its commits must not drop out of both lists.
   const branches: BranchWip[] = lines
     .filter((b) => !read.has(b.worktree))
+    // a live run worktree's branch is the landing section's to show
+    .filter((b) => !(b.worktree && builds.some((at) => b.worktree.startsWith(at)) && existsSync(b.worktree)))
     .slice(0, BRANCH_WIP_CAP)
     .map(({ worktree: _, ...b }) => b);
   const stash = stashes.code === 0 ? parseStash(stashes.stdout) : undefined;

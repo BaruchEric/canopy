@@ -1117,8 +1117,9 @@ export interface RunBranch {
   /** its worktree, under the config dir */
   dir: string;
   state: RunBranchState;
-  /** the branch's first run: a "fix it" run on the same branch carries
-   *  that id, and the landing record is kept under it */
+  /** the branch's own id, in its name and its worktree's folder: every run
+   *  on the branch (the first, and each "fix it") carries it, and the
+   *  landing record is kept under it */
   origin: string;
 }
 
@@ -1128,7 +1129,7 @@ export interface RunBranch {
 export type LandState = "queued" | "rebasing" | "setup" | "gate" | "landing" | "landed" | "waiting" | "conflict" | "red" | "moved";
 
 export interface LandEntry {
-  /** the branch's origin run id */
+  /** the branch's id (`RunBranch.origin`) */
   id: string;
   repoId: string;
   /** the main checkout */
@@ -1163,7 +1164,7 @@ export interface LandEntry {
 
 /** A branch run as the landing records keep it, across restarts. */
 export interface LandingRun {
-  /** the origin run id */
+  /** the branch's id (`RunBranch.origin`) */
   id: string;
   /** the latest run on the branch: the origin or its last "fix it" */
   runId: string;
