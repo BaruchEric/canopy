@@ -2,10 +2,12 @@
  *  checkout, else the `package.json` scripts named typecheck, lint, test and
  *  build that exist, run with `bun run`. Always read from the main
  *  checkout's folder, never from a run's branch, so a run cannot loosen the
- *  gates it is held to. */
+ *  gates it is held to. A workflow step checked by `@gates` runs the same
+ *  list (`gatesCheck` in check.ts). */
 
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
+import { shellQuote } from "./host";
 
 export interface Gate {
   name: string;
@@ -84,6 +86,30 @@ export async function readGates(mainPath: string): Promise<Gates> {
   const pkg = await readText(join(mainPath, "package.json"));
   const gates = pkg === null ? [] : packageGates(pkg);
   return gates.length > 0 ? { gates, source: "package" } : { gates: [], source: "none" };
+}
+
+/** A workflow step's check line that runs the repo's gates (the bundled
+ *  ship's Gates step). The server's check hook turns it into `gatesScript`. */
+export const GATES_CHECK = "@gates";
+
+/** The gates as one shell script that names each before it runs and stops
+ *  at the first that fails, with that gate's exit. Each run line sits in a
+ *  subshell on lines of its own, so a trailing comment in one cuts nothing
+ *  off. The script is a single brace group, so `cd dir && script` (a remote
+ *  check) holds for all of it. */
+export function gatesScript(gates: readonly Gate[], source: Gates["source"], note = ""): string {
+  const say = (s: string): string => `printf '%s\\n' ${shellQuote(s)}`;
+  const lines = note ? [say(note)] : [];
+  if (gates.length === 0) {
+    lines.push(say("no gates: no .canopy/gates.json and no typecheck, lint, test or build script in package.json"));
+  } else {
+    lines.push(say(`gates from ${source === "file" ? GATES_FILE : "package.json"}: ${gates.map((g) => g.name).join(", ")}`));
+    for (const g of gates) {
+      lines.push(say(`== ${g.name}: ${g.run}`), "(", g.run, `) || { s=$?; ${say(`gate ${g.name} failed`)}; exit $s; }`);
+    }
+    lines.push(say("every gate passed"));
+  }
+  return ["{", ...lines, "}"].join("\n");
 }
 
 /** The lockfiles whose change in a rebase runs `setup` again. */

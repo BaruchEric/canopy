@@ -76,6 +76,7 @@ canopy queue [repo]                # every landing queue: queued in order, sent 
 # prose, comments or whitespace land on its own once its gates pass, and holds the globs for an approval
 # a repo's gates come from .canopy/gates.json, else package.json's typecheck, lint, test and build; they run in the
 # branch's worktree in their own shell, without canopy's logins (GH_TOKEN, git's credential helper) or CANOPY_ settings
+# the ship workflow's Gates step checks the same list (.canopy/gates.json as the last commit holds it)
 canopy version                     # the version and commit (also --version, -V)
 ```
 

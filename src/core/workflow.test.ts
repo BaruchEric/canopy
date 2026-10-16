@@ -132,17 +132,24 @@ describe("parseWorkflow", () => {
   });
 });
 
-describe("the bundled ship file", () => {
-  // The Gates check is one shell line with quotes, braces and a $ in it. The
+describe("a check line", () => {
+  // A check can be one shell line with quotes, braces and a $ in it. The
   // parser takes a key line's value raw, and this proves it stays that way.
   const CHECK =
     '[ ! -f package.json ] || for s in typecheck lint test build; do grep -q "\\"$s\\"" package.json && { bun run "$s" || exit 1; }; done; exit 0';
-  test("parses with its check kept character for character", async () => {
+  test("parses with its check kept character for character", () => {
+    const e = parseWorkflow(`---\nblurb: b\n---\n\n## Gates\ncheck: ${CHECK}\n\nRun them.\n`, meta);
+    expect(e.ok).toBe(true);
+    if (!e.ok) return;
+    expect(e.workflow.steps[0]?.check).toBe(CHECK);
+  });
+
+  test("the bundled ship file checks its Gates step with the repo's gates", async () => {
     const file = join(import.meta.dir, "../../lib/workflows/ship.md");
     const e = parseWorkflow(await readFile(file, "utf8"), { name: "ship", source: "bundled", file });
     expect(e.ok).toBe(true);
     if (!e.ok) return;
-    expect(e.workflow.steps[0]?.check).toBe(CHECK);
+    expect(e.workflow.steps[0]?.check).toBe("@gates");
   });
 });
 

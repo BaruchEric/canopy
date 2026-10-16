@@ -10,9 +10,9 @@ expects-change: true
 ## Gates
 tools: bun, read
 turns: 40
-check: [ ! -f package.json ] || for s in typecheck lint test build; do grep -q "\"$s\"" package.json && { bun run "$s" || exit 1; }; done; exit 0
+check: @gates
 
-Task: run this project's own gates (typecheck, lint, tests, build, in whatever form the project defines them; look at package.json scripts, a Makefile, or CLAUDE.md). If a gate fails and the fix is obvious and inside this repo, fix it and run the gates again. Otherwise stop and say exactly what failed. Do not commit anything in this step. The check that runs after you does the same thing for a package.json project, running whichever of the typecheck, lint, test and build scripts that file defines.
+Task: run this project's own gates. When .canopy/gates.json exists, run each gate's run line in its order; otherwise run the typecheck, lint, test and build scripts package.json defines, with bun run. A project with neither may still define gates in a Makefile or CLAUDE.md, so run those. If a gate fails and the fix is obvious and inside this repo, fix it and run the gates again. Otherwise stop and say exactly what failed. Do not commit anything in this step, and do not edit .canopy/gates.json. The check that runs after you runs the same list: .canopy/gates.json as the last commit holds it, else those package.json scripts.
 
 ## Commit
 tools: git-read, git-commit

@@ -63,7 +63,7 @@ describe("loadWorkflows", () => {
     const list = await loadWorkflows({ path: "/nonexistent" });
     const ship = findWorkflow(list, "ship");
     expect(ship?.steps.map((s) => s.name)).toEqual(["Gates", "Commit", "Push"]);
-    expect(ship?.steps[0]?.check).toContain("package.json");
+    expect(ship?.steps[0]?.check).toBe("@gates");
     expect(ship?.when).toBe("dirty-or-unpushed");
     expect(findWorkflow(list, "commit")?.when).toBe("dirty");
     expect(findWorkflow(list, "commit")?.expectsChange).toBe(true);

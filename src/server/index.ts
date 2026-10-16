@@ -41,7 +41,7 @@ import {
 } from "../core/history";
 import { browseLocal, browseRemote, expandHome, SshError } from "../core/browse";
 import { builtinCheck, isBuiltinCheck } from "../core/builtincheck";
-import { runCheck, runGate } from "../core/check";
+import { gatesCheck, runCheck, runGate } from "../core/check";
 import { exec, git, onHost, setSeedGit } from "../core/exec";
 import { fleetSkipReason, Flows } from "../core/flow";
 import { INHERITED_ENV, SECRET_ENV, isKeystroke, isTermId, parseTermMessage, Scrollback, shellArgs, startTerm, termPlace, termSize, type TermSession, type TermSize } from "../core/term";
@@ -199,7 +199,7 @@ import { KitHub, kitPath } from "./kit";
 import { LandingHub } from "./landing";
 import { getPeers, PeerError, postPeersSync, postRepoPeer, queuePass, withPeering, type PeerDeps } from "./peers";
 import { fixPrompt, landWord } from "../core/landing";
-import { readGates } from "../core/gates";
+import { GATES_CHECK, readGates } from "../core/gates";
 import { addRunTree, defaultBranch, removeRunTree, revOf, runBranchName, runTreeDir } from "../core/worktree";
 import { RepoHealth } from "./repohealth";
 import { createSecretsHub, type SecretsHub } from "./secrets";
@@ -3949,7 +3949,14 @@ export async function startServer(opts: {
       state.chan.forget(id);
     },
     // a seed's check starts without canopy's GitHub login, like its runs
-    check: async (repo, command) => {
+    check: async (repo, line) => {
+      // @gates becomes the repo's gates as a script, then runs like any other line
+      let command = line;
+      if (command === GATES_CHECK) {
+        const script = await gatesCheck(repo.path);
+        if (typeof script !== "string") return script;
+        command = script;
+      }
       // @name is a built-in canopy runs itself over readSeed, never a shell line
       if (isBuiltinCheck(command)) return builtinCheck(command, repo.path);
       if (!isSeedPath(root, repo.path)) return runCheck(repo, command, false);

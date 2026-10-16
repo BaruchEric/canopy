@@ -112,7 +112,8 @@ that needs a `.env` names it in `setup` (for example, a symlink to the main
 checkout's file), so the repo decides what crosses over. The gates are read
 from the main checkout, never from
 the run's branch, so a run cannot loosen its own gates. The bundled
-workflows' inline gate loop can move to read the same list later.
+ship workflow's Gates step reads the same list through its `@gates`
+check (2026-10-16).
 
 ### The view
 
