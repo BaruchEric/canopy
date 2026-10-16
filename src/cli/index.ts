@@ -21,6 +21,7 @@ import {
   takeWip,
   trackBranch,
 } from "../core/peersync";
+import { HIDE_RUNS } from "../core/peers";
 import { DEFAULT_IGNORE, launchSource, scan, scanSource } from "../core/scan";
 import {
   addSource,
@@ -48,6 +49,7 @@ import { bold, dim, lichen, moss, paintLine, renderTree, sky } from "./render";
 import { HELP_TEXT } from "../core/help";
 import { healthCommand } from "./health";
 import { kitCommand } from "./kit";
+import { landCommand } from "./land";
 import { secretsCommand } from "./secrets";
 import { SPEC_WORDS, specLines } from "../core/treelines";
 
@@ -94,6 +96,8 @@ const COMMANDS = new Set([
   "ranger",
   "health",
   "kit",
+  "land",
+  "queue",
   "secrets",
   "library",
   "tree",
@@ -525,7 +529,10 @@ export async function main(argv: string[]): Promise<void> {
             }
             // a mirror is opened as itself, with no suffix probed past it
             const strict = cmd.mirror !== undefined ? ["--strict"] : [];
-            const p = Bun.spawn(["git-upload-pack", ...strict, cmd.path], { env, stdin: "inherit", stdout: "inherit", stderr: "inherit" });
+            // `git -c` rather than the env: the env above stays exactly
+            // what upload-pack needs. The flag hides a branch run's run/*
+            // branches from every peer, an older canopy's fetch included.
+            const p = Bun.spawn(["git", "-c", HIDE_RUNS, "upload-pack", ...strict, cmd.path], { env, stdin: "inherit", stdout: "inherit", stderr: "inherit" });
             const code = await p.exited;
             const n = p.signalCode ? osConstants.signals[p.signalCode] : undefined;
             process.exit(n !== undefined ? 128 + n : code);
@@ -793,6 +800,9 @@ export async function main(argv: string[]): Promise<void> {
       return healthCommand(args, { fail });
     case "kit":
       return kitCommand(args, { fail });
+    case "land":
+    case "queue":
+      return landCommand(cmd, args, { fail });
     case "secrets":
       return secretsCommand(args, { fail });
     case "version":

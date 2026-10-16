@@ -72,6 +72,8 @@ usage:
   canopy health rm <repo> <name>     take one of canopy's checks away
   canopy kit [status|apply]          the skills every agent has on every machine, and linking them
     --machine M | --dry-run          one machine only; apply says what it would do and changes nothing
+  canopy land <run>                  a ready branch run into its repo's landing queue: rebase, gates, fast-forward; never a push
+  canopy queue [repo]                every landing queue: queued in order, sent back and why, ready to land
   canopy secrets [list] [--json]     the secret store's names, tags, rotation dates and sinks; never a value
   canopy secrets status [--json]     this backend's copy: commit, refusals, the key's lock, sink drift; exit 1 on drift
   canopy secrets unlock              unlock this machine's key (asks for its passphrase); its sinks are written then

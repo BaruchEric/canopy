@@ -1,5 +1,5 @@
 import { parseAnswer } from "./answers";
-import { ACTIONS, busyWith, splitMembers } from "../core/actions";
+import { ACTIONS, branchLine, branchPrompt, busyWith, splitMembers } from "../core/actions";
 import { PREFLIGHT_HEADERS, corsHeaders, parseOrigins } from "../core/cors";
 import { Library, libraryOriginAllowed, openBind, tailnetHost } from "../core/library";
 import { PreviewProxy, parsePortRange, previewHostOk, previewable } from "../core/preview";
@@ -122,7 +122,7 @@ import {
 } from "../core/store";
 import { RememberedRules, scopeOf } from "../core/remember";
 import { repoHolding, sessionAsk, sessionRemember, sessionRule } from "../core/sessionrules";
-import { QUIET_WAIT, Runner } from "../core/runner";
+import { BRANCH_RUNS_PER_REPO, QUIET_WAIT, Runner } from "../core/runner";
 import { NotWaitingError, type RunDriver } from "../core/driver";
 import { ANSWERS_FILE, isSeedRepoId, SEED_AGENT_REFUSAL, SEEDS_DIR, withStoredAnswers } from "../core/sprout";
 import { SeedMirrors } from "../core/seedmirror";
@@ -166,6 +166,8 @@ import {
   type SpecHalf,
   type RunAction,
   type Run,
+  type LandEntry,
+  type LandingRun,
   type WorkspaceScope,
   type ScanResult,
   type ServerEvent,
@@ -194,6 +196,10 @@ import { TaskHub } from "./tasks";
 import { RangerHub, realTmux, type RangerTimings, type RangerTmux } from "./ranger";
 import { HealthHub, rangerResult, streamResult } from "./health";
 import { KitHub, kitPath } from "./kit";
+import { LandingHub } from "./landing";
+import { fixPrompt, landWord } from "../core/landing";
+import { readGates } from "../core/gates";
+import { addRunTree, defaultBranch, removeRunTree, revOf, runBranchName, runTreeDir } from "../core/worktree";
 import { RepoHealth } from "./repohealth";
 import { createSecretsHub, type SecretsHub } from "./secrets";
 import { HEALTH_FILE } from "../core/repohealth";
@@ -283,6 +289,8 @@ interface ServerState {
   health: HealthHub;
   /** the kit: shared skills for every agent (server/kit) */
   kit: KitHub;
+  /** branch runs and the landing queue (server/landing) */
+  landing: LandingHub;
   /** the Secrets view: the relay to the secrets service on the mini, the verified copy elsewhere */
   secrets: SecretsHub;
   /** the checks repos declare, kept in the health hub (server/repohealth) */
@@ -740,6 +748,7 @@ async function startRepoRun(
   note: string,
   client: unknown,
   scope?: WorkspaceScope,
+  branch?: boolean,
 ): Promise<Run> {
   // The runner spawns the agent here, at the repo's path; there is no
   // agent to spawn at a folder on another host.
@@ -748,11 +757,27 @@ async function startRepoRun(
   // route's own gate stops it first; a workspace whose primary was put
   // there by hand reaches here.
   if (repo.forge) throw new HttpError(400, `${repo.name} is on the forge; an agent runs in a folder on this machine`);
-  // A workflow owns the repo while it runs, gate included: a second
-  // agent here would make the flow's next step throw and die.
-  if (state.flows.activeFor(repo.id)) throw new HttpError(409, "a workflow is running here");
-  const busy = state.runner.activeFor(repo.id);
-  if (busy) throw new HttpError(409, busyWith(repo.name, busy.verb));
+  // A propose run goes on a branch unless the sheet's toggle is off, every
+  // other action only when it is on, and a workspace run or an incubator
+  // seed never does (the landing queue's calls of 2026-10-15).
+  const seed = isSeedPath(state.root, repo.path);
+  let onBranch = branch ?? (action === "propose" && !scope && !seed);
+  // the default gives way in a repo with no main or master to cut from yet;
+  // a branch asked for outright says why it cannot have one
+  if (onBranch && branch === undefined && !(await defaultBranch(repo.path))) onBranch = false;
+  if (onBranch && scope) throw new HttpError(400, "a workspace run works in its folders, not on a branch");
+  if (onBranch && seed) throw new HttpError(400, "an incubator seed's runs work in the seed, not on a branch");
+  if (onBranch) {
+    const going = state.runner.branchRunsFor(repo.id).length;
+    if (going >= BRANCH_RUNS_PER_REPO) throw new HttpError(409, `${repo.name} has ${going} branch runs going; wait for one to end`);
+  } else {
+    // A workflow owns the repo while it runs, gate included: a second
+    // agent here would make the flow's next step throw and die. A branch
+    // run shares nothing with the checkout, so neither stops one.
+    if (state.flows.activeFor(repo.id)) throw new HttpError(409, "a workflow is running here");
+    const busy = state.runner.activeFor(repo.id);
+    if (busy) throw new HttpError(409, busyWith(repo.name, busy.verb));
+  }
   const agent = agentFor(await loadConfig(), repo.path, action === "chat" ? "chat" : "job");
   // Before the workspace and install checks, so a workspace propose on
   // Codex hears what is wrong with the action, not with the workspace.
@@ -761,7 +786,73 @@ async function startRepoRun(
   await needHarness(state, agent.harness, repo.path);
   // the device it was started from, when the browser said and is on the stream
   const by = deviceNameOf(state, typeof client === "string" ? client : null) ?? undefined;
+  if (onBranch) return startBranchRun(state, repo, action, note, agent, by);
   return state.runner.start(repo, action, ACTIONS[action], note, agent, by, scope);
+}
+
+/** A run on a branch of its own: a worktree under the config dir on
+ *  `run/<slug>-<id>`, cut from the default branch's tip, where the gates'
+ *  setup runs before the agent starts. The landing queue lands it later. */
+async function startBranchRun(state: ServerState, repo: Repo, action: RunAction, note: string, agent: AgentSettings, by: string | undefined): Promise<Run> {
+  const target = await defaultBranch(repo.path);
+  const base = target ? await revOf(repo.path, `refs/heads/${target}`) : null;
+  if (!target || !base) throw new HttpError(400, `${repo.name} has no main or master branch to cut a run's branch from`);
+  const id = crypto.randomUUID().slice(0, 8);
+  const name = runBranchName(note, id);
+  const dir = runTreeDir(repo.path, id);
+  try {
+    await addRunTree(repo.path, dir, name, base);
+  } catch (err) {
+    throw new HttpError(500, `could not make the run's worktree: ${String(err instanceof Error ? err.message : err)}`);
+  }
+  // read from the main checkout, so a run cannot change its own setup
+  let setup: string | undefined;
+  let gatesWhy: string | null = null;
+  try {
+    setup = (await readGates(repo.path)).setup;
+  } catch (err) {
+    gatesWhy = String(err instanceof Error ? err.message : err);
+  }
+  const prepare = async (say: (text: string) => void): Promise<void> => {
+    if (gatesWhy) say(`no setup run: ${gatesWhy}`);
+    if (!setup) return;
+    say(`$ ${setup}`);
+    const r = await runCheck({ path: dir }, setup);
+    if (r.exit !== 0) throw new Error(`${setup} exited ${r.exit ?? "on a signal"}${r.output ? `: ${r.output.split("\n").slice(-3).join(" ")}` : ""}`);
+  };
+  try {
+    return state.runner.start(repo, action, ACTIONS[action], note, agent, by, undefined, {
+      branch: { name, target, base, dir, state: "working", origin: id },
+      prepare,
+    });
+  } catch (err) {
+    await removeRunTree(repo.path, dir, name);
+    if (err instanceof Error && err.name === "StageAwayError") throw err;
+    throw new HttpError(400, String(err instanceof Error ? err.message : err));
+  }
+}
+
+/** A "fix it" run on a branch the landing queue sent back: Claude resumes
+ *  the branch's last session with the reason; anything else starts fresh
+ *  with the run's note and the reason. Same worktree, same branch. */
+async function startFixRun(state: ServerState, rec: LandingRun, entry: LandEntry): Promise<Run> {
+  const repo = state.result.repos.find((r) => r.id === rec.repoId);
+  if (!repo) throw new HttpError(404, `${rec.repoId} is not in the tree`);
+  const agent = agentFor(await loadConfig(), repo.path, "job");
+  await needHarness(state, agent.harness, repo.path);
+  const b = { name: rec.branch, target: rec.target, base: rec.base, dir: rec.dir, state: "working" as const, origin: rec.id };
+  const resume = agent.harness === "claude" && rec.harness === "claude" ? rec.session : undefined;
+  const message = resume ? `${fixPrompt(entry)}\n\n${branchLine(b)}` : branchPrompt(repo, ACTIONS.ask, `${rec.note}\n\n${fixPrompt(entry)}`, b);
+  try {
+    return state.runner.start(repo, "ask", ACTIONS.ask, `fix it: ${landWord(entry, [entry])}`, agent, undefined, undefined, {
+      branch: b,
+      message,
+      ...(resume ? { resume } : {}),
+    });
+  } catch (err) {
+    if (err instanceof Error && err.name === "StageAwayError") throw err;
+    throw new HttpError(400, String(err instanceof Error ? err.message : err));
+  }
 }
 
 const isRecord = (v: unknown): v is Record<string, unknown> => typeof v === "object" && v !== null && !Array.isArray(v);
@@ -2390,6 +2481,8 @@ async function handleApi(
   if (rangerRes) return rangerRes;
   const kitRes = await state.kit.handle(req, url);
   if (kitRes) return kitRes;
+  const landingRes = await state.landing.handle(req, url);
+  if (landingRes) return landingRes;
   const healthRes = await state.health.handle(req, url);
   if (healthRes) return healthRes;
   const secretsRes = await state.secrets.handle(req, url);
@@ -3529,7 +3622,8 @@ async function handleApi(
       const b = await objectBody(req);
       if (!isRunAction(b.action)) return json({ error: "unknown action" }, 400);
       const note = typeof b.note === "string" ? b.note : "";
-      return json(await startRepoRun(state, repo, b.action, note, b.client), 201);
+      if (b.branch !== undefined && typeof b.branch !== "boolean") return json({ error: "branch must be true or false" }, 400);
+      return json(await startRepoRun(state, repo, b.action, note, b.client, undefined, b.branch), 201);
     }
     if (method === "POST" && action === "peer") {
       if (!peerable(state, repo)) throw new HttpError(400, "peer sync covers local repos under the launch root");
@@ -3927,6 +4021,7 @@ export async function startServer(opts: {
       state.flows.onRun(run);
       state.chan.onRun(run);
       state.ranger.onRun(run.id, isRunActive(run));
+      state.landing.onRun(run);
     },
     onGone: (id) => {
       broadcast(state, { type: "run-gone", id });
@@ -3935,6 +4030,8 @@ export async function startServer(opts: {
     // Re-read status directly rather than waiting on the watcher's
     // debounce: the card and the run's outcome should agree at once.
     status: (repoId) => freshStatus(state, repoId),
+    // a branch run reads its worktree: commits ahead of its target and clean is ready
+    branchState: (run) => LandingHub.branchState(run),
   }, runnerOpts);
   // set once this server holds the flows folder (after the bind); without it
   // no record is written or removed
@@ -4251,6 +4348,17 @@ export async function startServer(opts: {
     ),
     layouts: new ScreenLayouts(),
     backendName: selfName(cfg.self, hostname()),
+    landing: new LandingHub({
+      broadcast: (ev) => broadcast(state, ev),
+      repo: (id) => state.result.repos.find((r) => r.id === id),
+      repoByPath: (path) => state.result.repos.find((r) => r.path === path),
+      check: (cwd, line) => runCheck({ path: cwd }, line),
+      startFix: (rec, entry) => startFixRun(state, rec, entry),
+      runActive: (id) => {
+        const run = state.runner.get(id);
+        return run !== undefined && isRunActive(run);
+      },
+    }),
     kit: new KitHub({
       self: selfName(cfg.self, hostname()),
       devRoot: root,
@@ -4667,6 +4775,8 @@ export async function startServer(opts: {
     // the sprouts the last server left, once their flows are back; a server
     // without the lock lists them and takes nothing in (server/incubator.ts)
     await state.incubator.restore();
+    // the branch runs and queues the last server left, by the same lock
+    await state.landing.adopt();
   };
   if (flowsLock.owner) {
     await adoptFlows();
@@ -4771,6 +4881,7 @@ export async function startServer(opts: {
   void state.chan.start().catch((err) => console.error("canopy: tailchan", err));
   state.registry.start();
   if (process.env["NODE_ENV"] !== "test") state.kit.start();
+  if (process.env["NODE_ENV"] !== "test") state.landing.start();
   state.asks.start();
   // a test server pulls nothing and asks no socket
   if (process.env["NODE_ENV"] !== "test") state.secrets.start();
@@ -4801,6 +4912,7 @@ export async function startServer(opts: {
       clearTimeout(state.repoHealthTimer);
       state.health.stop();
       state.kit.stop();
+      state.landing.stop();
       state.secrets.stop();
       state.tasks.stop();
       state.ranger.stop();
@@ -4818,6 +4930,7 @@ export async function startServer(opts: {
       state.incubator.detach();
       state.flows.detach();
       flowFiles = null;
+      state.landing.detach();
       if (flowsLock.owner) flowsLock.release();
       state.flows.stopAll();
       state.runner.stopAll();

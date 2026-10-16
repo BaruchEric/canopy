@@ -135,6 +135,18 @@ describe("qEvent", () => {
       [{ type: "kept", kept: [kept] }, (e) => (e.type === "kept" ? e.kept.flatMap((k) => [k.id, k.repoId]) : [])],
       [{ type: "incubator", sprout }, (e) => (e.type === "incubator" ? [e.sprout.id, e.sprout.repoId, ...e.sprout.flows.map((f) => f.flowId)] : [])],
       [{ type: "incubator-gone", id: "sp_000000000001" }, (e) => (e.type === "incubator-gone" ? [e.id] : [])],
+      [
+        {
+          type: "landing",
+          landing: {
+            runs: [{ id: "b1", runId: "r1", repoId: "a/b", repoPath: "/x/a/b", branch: "run/x-b1", target: "main", base: "h", dir: "/w/b1", note: "", verb: "Ask", harness: "claude", state: "ready", startedAt: 1 }],
+            entries: [{ id: "b1", repoId: "a/b", repoPath: "/x/a/b", branch: "run/x-b1", target: "main", dir: "/w/b1", note: "", state: "red", tries: 0, queuedAt: 1, updatedAt: 1, fixing: "r2" }],
+            orphans: [],
+          },
+        },
+        (e) => (e.type === "landing" ? [...e.landing.runs.flatMap((r) => [r.id, r.runId, r.repoId]), ...e.landing.entries.flatMap((x) => [x.id, x.repoId, x.fixing ?? ""])] : []),
+      ],
+      [{ type: "run", run: { ...run, branch: { name: "run/x-b1", target: "main", base: "h", dir: "/w/b1", state: "ready", origin: "b1" } } }, (e) => (e.type === "run" && e.run.branch ? [e.run.branch.origin] : [])],
     ];
     for (const [ev, ids] of cases) {
       const out = ids(qEvent(q, ev));

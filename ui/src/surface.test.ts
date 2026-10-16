@@ -94,7 +94,7 @@ describe("sectionOrder", () => {
   });
   test("keeps a saved order, dropping unknown and repeated keys", () => {
     const saved = ["claude", "changes", "claude", "wat", "search", "history", "peers", "preview", "launch"];
-    expect(sectionOrder(saved)).toEqual(["claude", "agents", "changes", "tasks", "health", "search", "files", "history", "peers", "spec", "preview", "launch"]);
+    expect(sectionOrder(saved)).toEqual(["claude", "agents", "changes", "landing", "tasks", "health", "search", "files", "history", "peers", "spec", "preview", "launch"]);
   });
   test("a key the saved order lacks lands after its default predecessor", () => {
     expect(sectionOrder(["history", "changes", "search", "claude"])).toEqual([
@@ -104,6 +104,7 @@ describe("sectionOrder", () => {
       "preview",
       "launch",
       "changes",
+      "landing",
       "tasks",
       "health",
       "search",
@@ -116,7 +117,7 @@ describe("sectionOrder", () => {
   });
   test("moveSection swaps with a neighbour and holds at the ends", () => {
     const order = [...SECTION_KEYS];
-    expect(moveSection(order, "tasks", -1).slice(0, 2)).toEqual(["tasks", "changes"]);
+    expect(moveSection(order, "landing", -1).slice(0, 2)).toEqual(["landing", "changes"]);
     expect(moveSection(order, "changes", -1)).toBe(order);
     expect(moveSection(order, "agents", 1)).toBe(order);
   });

@@ -2,7 +2,8 @@ import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { ACTIONS, planWords, repoFacts } from "../../../src/core/actions";
 import { describeAgent, isDefaultAgent } from "../../../src/core/agent";
 import { describeLaunch, isDefaultLaunch } from "../../../src/core/launch";
-import { agentFor, connOf, idText, launchFor, routesOf, tasksOf, useStore, type Sheet } from "../store";
+import { agentFor, connOf, idText, landingAll, launchFor, routesOf, tasksOf, useStore, type Sheet } from "../store";
+import { branchByDefault, runLanding } from "../landing";
 import { backendOf } from "../registry";
 import { resolveAgent } from "../../../src/core/route";
 import { effectiveRows, harnessesOf, hasRouting, ROLE_LABEL, ROLE_TITLE, withPick } from "../agents";
@@ -179,13 +180,19 @@ function Plan({ repo, action, workspace }: { repo: Repo; action: RunAction; work
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const ready = !busy && (!spec.noteRequired || note.trim().length > 0);
+  // a branch of its own: on for propose, off for the rest, never for a
+  // workspace run or a checkout on another host or the forge
+  const branchable = !workspace && !repo.host && !repo.forge;
+  const byDefault = branchByDefault(action, workspace);
+  const [onBranch, setOnBranch] = useState(byDefault);
 
   const go = async () => {
     if (!ready) return;
     setBusy(true);
     setError(null);
     try {
-      await (workspace ? startWsRun(workspace, action, note) : startRun(repo.id, action, note));
+      // the default is the backend's to apply, so a repo with no main yet keeps its propose in the checkout
+      await (workspace ? startWsRun(workspace, action, note) : startRun(repo.id, action, note, branchable && onBranch !== byDefault ? onBranch : undefined));
     } catch (err) {
       setError(errText(err));
       setBusy(false);
@@ -233,6 +240,12 @@ function Plan({ repo, action, workspace }: { repo: Repo; action: RunAction; work
           }}
           aria-label={spec.noteRequired ? `What ${name} should do` : `Note for ${name}`}
         />
+        {branchable && (
+          <label className="plan-branch" title="The agent works in a worktree of its own on a run/ branch and commits there; the landing queue lands it on main once you say land">
+            <input type="checkbox" checked={onBranch} onChange={(e) => setOnBranch(e.target.checked)} />
+            on a branch of its own
+          </label>
+        )}
         {error && <p className="note err">{error}</p>}
       </div>
       <footer className="sheet-foot">
@@ -457,6 +470,8 @@ function Console({ run, repo }: { run: Run; repo: Repo | undefined }) {
         </button>
       </header>
 
+      {run.branch && <BranchBlock run={run} act={act} />}
+
       <Timeline
         run={run}
         repo={repo}
@@ -499,6 +514,37 @@ function Console({ run, repo }: { run: Run; repo: Repo | undefined }) {
         </button>
       </footer>
     </>
+  );
+}
+
+/** A branch run's branch and where its work stands in the landing queue,
+ *  with "land" once it is ready and "fix it" once the queue sent it back. */
+function BranchBlock({ run, act }: { run: Run; act: (fn: () => Promise<void>) => Promise<void> }) {
+  const info = useStore((s) => landingAll(s));
+  const landRun = useStore((s) => s.landRun);
+  const fixLanding = useStore((s) => s.fixLanding);
+  const b = run.branch;
+  const l = runLanding(run, info);
+  if (!b || !l) return null;
+  return (
+    <div className="run-branch">
+      <span className="branch" title={b.dir}>
+        {b.name}
+      </span>
+      <span className="run-branch-word">{l.word}</span>
+      {l.entry?.reason && l.entry.state !== "red" && <span className="run-branch-why">{l.entry.reason}</span>}
+      <span className="spacer" />
+      {l.canLand && (
+        <button type="button" className="mini strong" title={`Rebase onto ${b.target}, run the gates, fast-forward ${b.target}; nothing is pushed`} onClick={() => void act(() => landRun(run.id))}>
+          land
+        </button>
+      )}
+      {l.canFix && (
+        <button type="button" className="mini strong" title="Continue on the branch with the reason as the next message" onClick={() => void act(() => fixLanding(b.origin))}>
+          fix it
+        </button>
+      )}
+    </div>
   );
 }
 

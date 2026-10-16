@@ -15,6 +15,8 @@ import type {
   Flow,
   FlowChoice,
   FlowStepName,
+  LandEntry,
+  LandingInfo,
   PermissionAsk,
   RememberAsk,
   RememberScope,
@@ -27,9 +29,10 @@ import type {
 import { repoOfCard, repoWord, whereWord } from "./agentcards";
 import { agentWord, harnessOf } from "./runs";
 import { handOffText } from "../../src/core/sprout";
+import { sentBack } from "../../src/core/landing";
 import { scopeWords } from "../../src/core/shellwords";
 
-export type InboxSource = "ask" | "run" | "flow" | "sprout" | "advice";
+export type InboxSource = "ask" | "run" | "flow" | "sprout" | "advice" | "landing";
 
 export interface InboxItem {
   /** `${source}:${id}`, unique across the five */
@@ -38,7 +41,7 @@ export interface InboxItem {
   /** the broker's ask id (the home backend's), or a run's or flow's
    *  qualified id */
   id: string;
-  kind: "permission" | "question" | "proposal" | "guard" | "gate" | "clarify" | "park" | "advice" | "hand-off";
+  kind: "permission" | "question" | "proposal" | "guard" | "gate" | "clarify" | "park" | "advice" | "hand-off" | "sent-back";
   /** the repo it is about, by the page's id, when the page has it */
   repoId: string | null;
   /** the repo in words: the checkout's name, else what the agent's card says */
@@ -95,6 +98,8 @@ export interface InboxContext {
   sprouts?: readonly Sprout[];
   /** the retro lessons on offer, home's alone; any make one item */
   advice?: readonly AdviceOffer[];
+  /** every backend's landing queue: a sent-back branch with no fix going is an item */
+  landing?: LandingInfo;
 }
 
 /** "asks to use Bash", "has a question", "hit a guard on Bash" */
@@ -302,6 +307,30 @@ function adviceItem(advice: readonly AdviceOffer[]): InboxItem | null {
   };
 }
 
+/** A branch the landing queue sent back, while no fix is going: "fix it"
+ *  continues the run with the reason, "drop" gives the branch up. */
+function landingItem(e: LandEntry, ctx: InboxContext): InboxItem | null {
+  if (!sentBack(e) || e.fixing !== undefined) return null;
+  const repo = ctx.repos.find((r) => r.id === e.repoId);
+  const backend = ctx.backendOf?.(e.id) ?? "";
+  const why = e.state === "conflict" ? `conflicts with ${e.target}` : e.state === "red" ? `${e.gate ?? "a gate"} failed` : `${e.target} kept moving`;
+  return {
+    key: `landing:${e.id}`,
+    source: "landing",
+    id: e.id,
+    kind: "sent-back",
+    repoId: repo ? repo.id : null,
+    repo: repo?.name ?? e.repoPath.split("/").pop() ?? "",
+    who: "landing",
+    where: `landing queue${backend ? ` on ${backend}` : ""}`,
+    title: `sent ${e.branch} back: ${why}`,
+    detail: e.reason ?? "",
+    at: e.updatedAt,
+    left: null,
+    until: null,
+  };
+}
+
 /** Everything waiting on the human, oldest first: open asks, waiting runs
  *  (a flow's step run named by its flow), gated flows. */
 export function mergeInbox(
@@ -329,6 +358,10 @@ export function mergeInbox(
   }
   const advice = adviceItem(ctx.advice ?? []);
   if (advice) items.push(advice);
+  for (const e of ctx.landing?.entries ?? []) {
+    const it = landingItem(e, ctx);
+    if (it) items.push(it);
+  }
   return items.sort((a, b) => a.at - b.at || a.key.localeCompare(b.key));
 }
 
@@ -355,12 +388,14 @@ export type InboxAnswer =
   /** a retro lesson accepted or dismissed, by its key */
   | { advice: string; accept: boolean }
   /** an extend's push: yes or no, for the head the item shows */
-  | { handOff: boolean };
+  | { handOff: boolean }
+  /** a sent-back branch: continue the run with the reason, or give it up */
+  | { landing: "fix" | "drop" };
 
 /** a run's answer: "allow always" is "allow all" for the rest of the run;
  *  a run's deny carries no message */
 export function toRunAnswer(a: InboxAnswer): RunAnswer | null {
-  if ("choice" in a || "skip" in a || "advice" in a || "handOff" in a) return null;
+  if ("choice" in a || "skip" in a || "advice" in a || "handOff" in a || "landing" in a) return null;
   if ("answers" in a) return { kind: "answers", answers: a.answers };
   if (a.behavior === "deny") return { kind: "deny" };
   if (a.always) return { kind: "allow-all" };
@@ -370,7 +405,7 @@ export function toRunAnswer(a: InboxAnswer): RunAnswer | null {
 /** the broker's answer: a question's answers go as an allow; a remember's
  *  rule rides along for the home backend to keep (the broker never sees it) */
 export function toAskAnswer(a: InboxAnswer): (AskAnswer & { remember?: string }) | null {
-  if ("choice" in a || "skip" in a || "advice" in a || "handOff" in a) return null;
+  if ("choice" in a || "skip" in a || "advice" in a || "handOff" in a || "landing" in a) return null;
   if ("answers" in a) return { behavior: "allow", answers: a.answers };
   if (a.behavior === "deny") return { behavior: "deny", ...(a.message?.trim() ? { message: a.message.trim() } : {}) };
   return { behavior: "allow", ...(a.always ? { always: true } : {}), ...(a.remember ? { remember: a.remember.rule } : {}) };

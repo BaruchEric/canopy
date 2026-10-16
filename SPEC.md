@@ -54,10 +54,10 @@ canopy ui ~/dev
 ## Data and state
 
 - Config, workspaces, sources, agent and launch settings: `~/.config/canopy/config.json`, or `$CANOPY_CONFIG_DIR`.
-- Next to it: `tmux.sock` (the shells' tmux server), `shells/` (kept-shell snapshots), `pastes/`, `tasks/` (state and logs), `ranger/` (the always-on agent's conversation, wakes and brief), `builds/` (installed releases and PR worktrees), `library/<root-hash>/` (the project library).
-- In a repo: `.canopy/tasks.json`, `.canopy/workflows/` and `.canopy/spec.json`, all checked in by that repo's owner.
+- Next to it: `tmux.sock` (the shells' tmux server), `shells/` (kept-shell snapshots), `pastes/`, `tasks/` (state and logs), `ranger/` (the always-on agent's conversation, wakes and brief), `builds/` (installed releases and PR worktrees), `worktrees/<repo key>/<id>/` (branch runs' worktrees), `landing/` (`runs/<id>.json` per branch run and `queue/<repo key>.json` per repo, written only by the server holding the flows lock), `library/<root-hash>/` (the project library).
+- In a repo: `.canopy/tasks.json`, `.canopy/workflows/`, `.canopy/spec.json` and `.canopy/gates.json` (the landing queue's gates and setup line), all checked in by that repo's owner.
 - Per browser: preferences, open panels and shell tabs in localStorage.
-- Runs live in server memory; the last 60 finished ones stay until a restart.
+- Runs live in server memory; the last 60 finished ones stay until a restart. A branch run's record and its landing queue entry outlive a restart in `landing/`.
 - Session history is read from claude-history's CLI (`--json`), never its sqlite file.
 - The secret store: `secrets.json` in the private Forgejo repo `eric/secrets`, its values sealed with age and the file signed. On the mini the `secrets-data` volume holds the checkout, the keys, `passkeys.json`, `audit.jsonl` and `applied.json`. On every other backend, next to the config: `secrets/` (a pulled copy), `secrets-config.json` (the pinned key and remote), `secrets-key.age` (that machine's passphrase-wrapped key) and `secrets-applied.json`.
 - No database of its own: git and the files above are the state.

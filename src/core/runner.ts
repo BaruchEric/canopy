@@ -9,7 +9,7 @@
  *  queue, the result, how an exit becomes a status) is a `RunCtx`
  *  (`driver.ts`), and the server broadcasts the `Run` whole on every change. */
 
-import { buildPrompt, busyWith, type ActionSpec } from "./actions";
+import { branchPrompt, buildPrompt, busyWith, type ActionSpec } from "./actions";
 import { ClaudeDriver } from "./claudedrive";
 import type { RpcProc } from "./codexrpc";
 import { CodexDriver, runsInside } from "./codexrun";
@@ -30,8 +30,26 @@ import {
   type RememberedRule,
   type Run,
   type RunAnswer,
+  type RunBranch,
+  type RunBranchState,
   type WorkspaceScope,
 } from "./types";
+
+/** at most this many branch runs going at once in one repo */
+export const BRANCH_RUNS_PER_REPO = 3;
+
+/** What a branch run starts with beyond a plain run's arguments. */
+export interface BranchStart {
+  /** the branch and worktree, made before the run starts */
+  branch: RunBranch;
+  /** Runs in the worktree before the agent starts: the gates' setup line.
+   *  `say` adds a note to the run's timeline. A throw fails the run. */
+  prepare?: (say: (text: string) => void) => Promise<void>;
+  /** a Claude session to resume: a "fix it" run on a sent-back branch */
+  resume?: string;
+  /** the whole first message, in place of the built prompt ("fix it") */
+  message?: string;
+}
 
 export { claudeBinary, cliArgs } from "./claudedrive";
 
@@ -48,6 +66,9 @@ export interface RunnerHooks {
   /** a fresh git status for the repo, read when a run ends, to tell whether
    *  the run changed anything the card shows; null when unreadable */
   status?: (repoId: string) => Promise<RepoStatus | null>;
+  /** what a branch run's worktree holds once it ends, read in place of the
+   *  repo's status */
+  branchState?: (run: Run) => Promise<RunBranchState>;
 }
 
 export interface RunnerOptions {
@@ -122,6 +143,10 @@ interface Live {
    *  let its seed go (`holdQuiet`'s release); the end-of-run status read
    *  waits on these too, so a run's outcome is read from a quiet seed */
   releases: Promise<unknown>[];
+  /** a branch run's start: its prepare runs before the first message */
+  branch?: BranchStart;
+  /** a branch run's prepare is going and the driver has not started */
+  preparing?: boolean;
 }
 
 export class Runner {
@@ -144,11 +169,18 @@ export class Runner {
     return this.live.get(id)?.ctx.run;
   }
 
+  /** The run going in the repo's checkout. A branch run works in its own
+   *  worktree, shares nothing with the checkout, and is not counted. */
   activeFor(repoId: string): Run | undefined {
     for (const l of this.live.values()) {
-      if (l.ctx.run.repoId === repoId && isRunActive(l.ctx.run)) return l.ctx.run;
+      if (l.ctx.run.repoId === repoId && !l.ctx.run.branch && isRunActive(l.ctx.run)) return l.ctx.run;
     }
     return undefined;
+  }
+
+  /** The branch runs going in the repo, each in its own worktree. */
+  branchRunsFor(repoId: string): Run[] {
+    return [...this.live.values()].map((l) => l.ctx.run).filter((r) => r.repoId === repoId && r.branch && isRunActive(r));
   }
 
   /** Whether a stage run's process is alive in the repo at `path`: from its
@@ -200,15 +232,25 @@ export class Runner {
     agent: AgentSettings = DEFAULT_AGENT,
     by?: string,
     scope?: WorkspaceScope,
+    branch?: BranchStart,
   ): Run {
-    const busy = this.activeFor(repo.id);
-    if (busy) {
-      throw new Error(busyWith(repo.name, busy.verb));
+    if (branch) {
+      if (scope) throw new Error("a workspace run works in its folders, not on a branch");
+      if (this.branchRunsFor(repo.id).length >= BRANCH_RUNS_PER_REPO) {
+        throw new Error(`${repo.name} has ${BRANCH_RUNS_PER_REPO} branch runs going; wait for one to end`);
+      }
+    } else {
+      const busy = this.activeFor(repo.id);
+      if (busy) {
+        throw new Error(busyWith(repo.name, busy.verb));
+      }
     }
-    if (spec.noteRequired && !note.trim()) {
+    if (spec.noteRequired && !note.trim() && !branch?.message) {
       throw new Error("write what the agent should do first");
     }
     const stage = this.opts.stage?.(repo) ?? false;
+    if (branch && stage) throw new Error("an incubator stage works in its seed, not on a branch");
+    const cwd = branch ? branch.branch.dir : repo.path;
     const client = stage && this.opts.stageExec ? this.opts.stageExec() : undefined;
     if (client === null) throw new StageAwayError(this.opts.stageAway?.());
     const make = this.opts.driver ?? ((h: Harness) => defaultDriver(h, this.opts.version));
@@ -235,15 +277,19 @@ export class Runner {
     if (by) run.by = by;
     if (scope) run.workspace = scope.workspace;
     if (spec.flowStep) run.flowStep = { ...spec.flowStep };
+    if (branch) run.branch = { ...branch.branch, state: "working" };
     // a stage's run never takes a remembered rule (amendment 4, ruling 16):
-    // a rule kept on one seed, or for one step, must not hold for the next
-    const remember = stage ? null : this.rememberHook(run, repo.path);
+    // a rule kept on one seed, or for one step, must not hold for the next.
+    // A branch run's rules are judged by its worktree, so a repo rule kept
+    // for the checkout's path does not answer there.
+    const remember = stage ? null : this.rememberHook(run, cwd);
+    const driveSpec = { ...spec, ...(scope ? { addDirs: scope.others } : {}), ...(branch?.resume ? { resume: branch.resume } : {}) };
     const ctx = new RunCtx(
       run,
       {
-        cwd: repo.path,
+        cwd,
         agent,
-        spec: scope ? { ...spec, addDirs: scope.others } : spec,
+        spec: driveSpec,
         env: runEnv(run, this.opts.backend),
         stage,
         label: driver.label,
@@ -255,19 +301,38 @@ export class Runner {
       // `live` is read only once the run has ended, long after it is set
       { emit: (r) => this.hooks.onChange(r), ended: () => void this.settle(live) },
     );
-    const live: Live = { ctx, driver, started: false, repo, spec, ...(scope ? { scope } : {}), before: statusFingerprint(repo.status), drains: [], releases: [] };
+    const live: Live = {
+      ctx,
+      driver,
+      started: false,
+      repo,
+      spec,
+      ...(scope ? { scope } : {}),
+      ...(branch ? { branch } : {}),
+      before: statusFingerprint(repo.status),
+      drains: [],
+      releases: [],
+    };
     this.live.set(run.id, live);
     this.prune();
     if (scope?.skipped.length) live.ctx.step({ kind: "note", text: `left out of this run: ${scope.skipped.join("; ")}` });
+    if (branch) live.ctx.step({ kind: "note", text: `on branch ${branch.branch.name} in ${branch.branch.dir}` });
     if (chat) {
       if (note.trim()) live.ctx.step({ kind: "user", text: note.trim() });
       this.hooks.onChange(run);
-      if (note.trim()) this.begin(live, buildPrompt(repo, spec, note, scope));
+      if (note.trim()) this.begin(live, this.firstMessage(live, note));
       return run;
     }
     this.hooks.onChange(run);
-    this.begin(live, buildPrompt(repo, spec, run.note, scope));
+    this.begin(live, branch?.message ?? this.firstMessage(live, run.note));
     return run;
+  }
+
+  /** The prompt a run's first message is wrapped in: the repo's framing, or
+   *  a branch run's, which names its worktree and how its work lands. */
+  private firstMessage(live: Live, note: string): string {
+    const b = live.ctx.run.branch;
+    return b ? branchPrompt(live.repo, live.spec, note, b) : buildPrompt(live.repo, live.spec, note, live.scope);
   }
 
   /** The user's next message in a chat. The first one starts the agent
@@ -285,7 +350,7 @@ export class Runner {
     run.status = "working";
     this.hooks.onChange(run);
     if (live.started) live.driver.say(message);
-    else this.begin(live, buildPrompt(live.repo, live.spec, message, live.scope));
+    else this.begin(live, this.firstMessage(live, message));
     return run;
   }
 
@@ -361,6 +426,11 @@ export class Runner {
     if (!live) throw new Error(`unknown run: ${id}`);
     const run = live.ctx.run;
     if (!isRunActive(run)) return run;
+    // a branch run still setting up has no driver to stop yet
+    if (live.preparing) {
+      live.ctx.finish("stopped");
+      return run;
+    }
     if (run.status === "idle") {
       if (!live.started) {
         live.ctx.finish("done");
@@ -395,7 +465,24 @@ export class Runner {
 
   private begin(live: Live, message: string): void {
     live.started = true;
-    live.driver.start(live.ctx, message);
+    const prepare = live.branch?.prepare;
+    if (!prepare) {
+      live.driver.start(live.ctx, message);
+      return;
+    }
+    // once: a chat's later turns never set up again
+    live.branch = { ...live.branch!, prepare: undefined };
+    live.preparing = true;
+    void prepare((text) => live.ctx.note(text)).then(
+      () => {
+        live.preparing = false;
+        if (isRunActive(live.ctx.run)) live.driver.start(live.ctx, message);
+      },
+      (err: unknown) => {
+        live.preparing = false;
+        if (isRunActive(live.ctx.run)) live.ctx.finish("failed", `setup failed: ${String(err instanceof Error ? err.message : err)}`);
+      },
+    );
   }
 
   private prune(): void {
@@ -461,8 +548,26 @@ export class Runner {
     return { stdin: proc.stdin, stdout: proc.stdout, stderr: proc.stderr, exited, kill: () => proc.kill() };
   }
 
-  /** Reads git status once the run is over and records whether it moved. */
+  /** Reads git status once the run is over and records whether it moved.
+   *  A branch run reads its worktree instead: commits and nothing left over
+   *  is `ready`, the one state the landing queue takes. */
   private async settle(live: Live): Promise<void> {
+    const b = live.ctx.run.branch;
+    if (b) {
+      const readBranch = this.hooks.branchState;
+      let state: RunBranchState = "nothing";
+      try {
+        state = readBranch ? await readBranch(live.ctx.run) : "nothing";
+      } catch {
+        state = "nothing";
+      }
+      const run = live.ctx.run;
+      if (isRunActive(run)) return;
+      run.branch = { ...b, state };
+      run.outcome = state === "nothing" ? "unchanged" : "changed";
+      this.hooks.onChange(run);
+      return;
+    }
     const read = this.hooks.status;
     if (!read) return;
     // a stage run's processes first: the seed is read only once it is quiet,

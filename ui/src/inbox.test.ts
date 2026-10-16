@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import type { AdviceOffer, AgentCard, Ask, Flow, Repo, Run, Sprout } from "../../src/core/types";
+import type { AdviceOffer, AgentCard, Ask, Flow, LandEntry, LandingInfo, Repo, Run, Sprout } from "../../src/core/types";
 import { rememberOffer } from "../../src/core/offer";
 import {
   askPermission,
@@ -380,5 +380,33 @@ describe("the incubator in the inbox", () => {
     expect(mergeInbox([], {}, {}, 30_000, { ...ctx, advice: [offer("a", 1)] })[0]?.title).toBe("1 lesson from retros");
     expect(toRunAnswer({ advice: "a", accept: true })).toBeNull();
     expect(toAskAnswer({ advice: "a", accept: false })).toBeNull();
+  });
+});
+
+describe("the landing queue's sent-back branches", () => {
+  const entry = (over: Partial<LandEntry> = {}): LandEntry => ({
+    id: "b1",
+    repoId: "app",
+    repoPath: "/dev/app",
+    branch: "run/x-b1",
+    target: "main",
+    dir: "/w/b1",
+    note: "n",
+    state: "red",
+    gate: "test",
+    reason: "1 fail",
+    tries: 0,
+    queuedAt: 1,
+    updatedAt: 5,
+    ...over,
+  });
+  const landing = (entries: LandEntry[]): LandingInfo => ({ runs: [], entries, orphans: [] });
+
+  test("one item per sent-back branch with no fix going, answered fix it or drop", () => {
+    const ctx = { repos: [repo("app")], cards: {}, landing: landing([entry(), entry({ id: "b2", state: "queued" }), entry({ id: "b3", state: "conflict", fixing: "r9" })]) };
+    const items = mergeInbox([], {}, {}, 0, ctx);
+    expect(items.map((i) => [i.key, i.kind, i.repoId, i.title, i.detail])).toEqual([["landing:b1", "sent-back", "app", "sent run/x-b1 back: test failed", "1 fail"]]);
+    expect(toRunAnswer({ landing: "fix" })).toBeNull();
+    expect(toAskAnswer({ landing: "drop" })).toBeNull();
   });
 });

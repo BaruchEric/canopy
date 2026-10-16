@@ -30,6 +30,7 @@ import {
 } from "./launch";
 import { userShell } from "./openers";
 import { configDir } from "./store";
+import { detachedTree, removeRunTree } from "./worktree";
 import {
   JOB_TAIL,
   type Build,
@@ -388,18 +389,7 @@ export class Launcher {
         const rev = await git(repo.path, ["rev-parse", "FETCH_HEAD"]);
         if (rev.code !== 0) throw new Error("could not resolve FETCH_HEAD");
         head = rev.stdout.trim();
-        if (await exists(join(dir, ".git"))) {
-          this.say(live, `$ git checkout --detach ${head.slice(0, 10)} (in the worktree)`);
-          const co = await git(dir, ["checkout", "--detach", head]);
-          if (co.code !== 0) throw new Error(co.stderr.trim() || "checkout failed");
-        } else {
-          await rm(dir, { recursive: true, force: true });
-          await mkdir(join(base, "pr"), { recursive: true });
-          await git(repo.path, ["worktree", "prune"]);
-          this.say(live, `$ git worktree add --detach ${dir} ${head.slice(0, 10)}`);
-          const wt = await git(repo.path, ["worktree", "add", "--detach", dir, head], 120_000);
-          if (wt.code !== 0) throw new Error(wt.stderr.trim() || "worktree add failed");
-        }
+        for (const line of await detachedTree(repo.path, dir, head)) this.say(live, line);
       }
       if (settings.build) {
         this.say(live, `$ ${settings.build}`);
@@ -535,10 +525,7 @@ export class Launcher {
     this.stopLaunch(repo, key);
     const base = await repoDir(repo);
     if (ref.kind === "pr") {
-      const dir = join(base, "pr", String(ref.number));
-      const r = await git(repo.path, ["worktree", "remove", "--force", dir], 60_000);
-      if (r.code !== 0) await rm(dir, { recursive: true, force: true });
-      await git(repo.path, ["worktree", "prune"]);
+      await removeRunTree(repo.path, join(base, "pr", String(ref.number)));
     } else {
       await rm(join(base, "release", ref.tag), { recursive: true, force: true });
     }
