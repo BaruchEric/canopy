@@ -170,6 +170,7 @@ export function cliArgs(spec: DriveSpec, agent: AgentSettings = DEFAULT_AGENT, s
     "--strict-mcp-config",
     ...(spec.allowedTools.length ? ["--allowedTools", spec.allowedTools.join(",")] : []),
     ...(spec.addDirs ?? []).flatMap((d) => ["--add-dir", d]),
+    ...(spec.resume ? ["--resume", spec.resume] : []),
     // spec P8: a switch to bypass after the plan is refused without it; a
     // run that starts in bypass needs no switch
     ...(spec.permissionMode === "plan" && agent.yolo ? ["--allow-dangerously-skip-permissions"] : []),

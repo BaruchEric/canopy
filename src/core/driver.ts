@@ -59,6 +59,8 @@ export interface DriveSpec {
   unattended?: string;
   /** start Claude in this permission mode instead of the agent's own */
   permissionMode?: "plan";
+  /** a Claude session to resume rather than start: a landing "fix it" run */
+  resume?: string;
 }
 
 /** A prompt before the Runner numbers it. */

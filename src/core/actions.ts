@@ -202,6 +202,19 @@ export function repoFacts(repo: Repo): string[] {
   return facts;
 }
 
+/** The paragraph a branch run's prompt ends with: where it works, and how
+ *  its work reaches the branch it was cut from. */
+export function branchLine(b: { name: string; dir: string; target: string }): string {
+  return `You work on the branch ${b.name}, in a worktree of its own at ${b.dir}, cut from ${b.target}. Commit your work on this branch with a message that says what changed, and do not push. Being ahead of ${b.target} here is expected: canopy's landing queue rebases the branch and lands it on ${b.target} once the user says so.`;
+}
+
+/** A branch run's first message: the usual prompt, framed by the worktree
+ *  rather than the main checkout (whose state is not the run's), with the
+ *  branch paragraph last. */
+export function branchPrompt(repo: Repo, spec: ActionSpec, note: string, b: { name: string; dir: string; target: string }): string {
+  return `${buildPrompt({ ...repo, path: b.dir, status: null }, spec, note)}\n\n${branchLine(b)}`;
+}
+
 /** What a start refused for a run already going on the repo says. The kind
  *  rides in brackets, since a workflow step's verb is free text and no one
  *  article fits every kind ("a ask run"). */
