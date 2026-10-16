@@ -8,7 +8,7 @@ import { checkEnv } from "./cli";
 import { gateEnv, stageEnv } from "./envnames";
 import { exec, firstLine, git, onHost, type ExecResult } from "./exec";
 import type { CheckResult } from "./flow";
-import { GATES_FILE, gatesScript, packageGates, parseGatesFile } from "./gates";
+import { GATES_FILE, gatesScript, packageGates, parseGatesFile, type Gate, type Gates } from "./gates";
 import { parseLocator, shellQuote } from "./host";
 import type { StageClient } from "./stageclient";
 import { STAGE_AWAY } from "./stagewire";
@@ -66,32 +66,46 @@ export async function runCheck(
   return { exit: r.code, output };
 }
 
-/** `@gates` as the shell script to run in its place, or why it cannot run.
+/** The gates `@gates` runs, or why they cannot be read.
  *  `.canopy/gates.json` is read as HEAD holds it, so the step before the
  *  check cannot loosen the gates by editing the file; the package.json
  *  scripts are read from the working tree, since that step may be what adds
  *  them, and a script's body runs from the tree either way. `setup` is left
  *  out: the checkout a workflow runs in is the one already installed. Read
  *  through git and `cat`, so a remote repo's come from its host. */
-export async function gatesCheck(repoPath: string): Promise<string | CheckResult> {
+export async function checkGates(repoPath: string): Promise<{ gates: Gate[]; source: Gates["source"]; note: string } | CheckResult> {
   const { host, path } = parseLocator(repoPath);
   const file = await git(repoPath, ["show", `HEAD:${GATES_FILE}`]);
-  let note = "";
   if (file.code === 0) {
     const parsed = parseGatesFile(file.stdout);
     if ("error" in parsed) return { exit: 1, output: parsed.error };
-    return gatesScript(parsed.gates, "file");
+    return { gates: parsed.gates, source: "file", note: "" };
   }
   if (!/does not exist|exists on disk|invalid object name|bad revision|unknown revision/i.test(file.stderr)) {
     return { exit: 1, output: `could not read ${GATES_FILE}: ${firstLine(file.stderr) || `git exit ${file.code}`}` };
   }
-  if (/exists on disk/i.test(file.stderr)) note = `${GATES_FILE} is not committed, so it does not count yet`;
+  const note = /exists on disk/i.test(file.stderr) ? `${GATES_FILE} is not committed, so it does not count yet` : "";
   const pkg = await onHost(host, ["cat", `${path}/package.json`]);
   if (pkg.code !== 0 && !/no such file/i.test(pkg.stderr)) {
     return { exit: 1, output: `could not read package.json: ${firstLine(pkg.stderr) || `exit ${pkg.code}`}` };
   }
   const gates = pkg.code === 0 ? packageGates(pkg.stdout) : [];
-  return gatesScript(gates, gates.length > 0 ? "package" : "none", note);
+  return { gates, source: gates.length > 0 ? "package" : "none", note };
+}
+
+/** `@gates` as the shell script to run in its place, or why it cannot run. */
+export async function gatesCheck(repoPath: string): Promise<string | CheckResult> {
+  const read = await checkGates(repoPath);
+  return "gates" in read ? gatesScript(read.gates, read.source, read.note) : read;
+}
+
+/** The permission rules that let a step checked by `@gates` run each gate's
+ *  line without asking: the same list its check runs, so an agent told to
+ *  run the gates can, whatever tool a repo's gates use. Nothing when the
+ *  gates cannot be read; the check says why. */
+export async function gateTools(repoPath: string): Promise<string[]> {
+  const read = await checkGates(repoPath);
+  return "gates" in read ? read.gates.map((g) => `Bash(${g.run})`) : [];
 }
 
 /** A landing gate, or the setup a branch run starts with: the repo's own

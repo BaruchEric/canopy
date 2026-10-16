@@ -2,7 +2,7 @@ import { afterAll, describe, expect, test } from "bun:test";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { gatesCheck, runCheck } from "./check";
+import { gatesCheck, gateTools, runCheck } from "./check";
 import { exec } from "./exec";
 
 const scratch: string[] = [];
@@ -116,5 +116,17 @@ describe("a workflow's @gates check runs the repo's gates", () => {
     scratch.push(dir);
     const r = await gatesCheck(dir);
     expect(r).toMatchObject({ exit: 1 });
+  });
+});
+
+describe("a step checked by @gates may run each gate's line", () => {
+  test("the committed gates file's lines, as Bash rules", async () => {
+    const dir = await repo({ ".canopy/gates.json": gatesFile([{ name: "rs", run: "cargo test" }, { name: "fmt", run: "cargo fmt --check" }]) });
+    expect(await gateTools(dir)).toEqual(["Bash(cargo test)", "Bash(cargo fmt --check)"]);
+  });
+
+  test("a broken gates file gives none, and the check says why", async () => {
+    const dir = await repo({ ".canopy/gates.json": "{" });
+    expect(await gateTools(dir)).toEqual([]);
   });
 });

@@ -98,6 +98,10 @@ export interface FlowHooks {
   onFleetGone: (id: string) => void;
   /** runs a step's check in the repo */
   check: (repo: Repo, command: string) => Promise<CheckResult>;
+  /** tools a step gets for its check line on top of its own (`@gates`
+   *  gives each gate's line); null, as for most lines, adds none and starts
+   *  the run without waiting */
+  checkTools?: (repo: Repo, command: string) => Promise<string[]> | null;
   /** null when there is no gateway key: verdict gates then ask */
   evaluator: ((state: string) => Promise<VerdictAnswers>) | null;
   /** null or absent when there is no gateway key: judge gates then ask */
@@ -721,7 +725,13 @@ export class Flows {
       await this.check(live);
       return;
     }
-    const spec = stepSpec(workflow, flow.current, this.summaries(live), flow.retryReason, restarted);
+    let spec = stepSpec(workflow, flow.current, this.summaries(live), flow.retryReason, restarted);
+    const tools = def.check ? this.hooks.checkTools?.(live.repo, def.check) : null;
+    if (tools) {
+      const extra = await tools.catch(() => []);
+      if (!isFlowActive(flow)) return;
+      if (extra.length > 0) spec = { ...spec, allowedTools: [...new Set([...spec.allowedTools, ...extra])] };
+    }
     let run: Run;
     try {
       run = this.runner.start(live.repo, workflow.name, spec, flow.note, live.agent(def.agent));

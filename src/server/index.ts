@@ -41,7 +41,7 @@ import {
 } from "../core/history";
 import { browseLocal, browseRemote, expandHome, SshError } from "../core/browse";
 import { builtinCheck, isBuiltinCheck } from "../core/builtincheck";
-import { gatesCheck, runCheck, runGate } from "../core/check";
+import { gatesCheck, gateTools, runCheck, runGate } from "../core/check";
 import { exec, git, onHost, setSeedGit } from "../core/exec";
 import { fleetSkipReason, Flows } from "../core/flow";
 import { INHERITED_ENV, SECRET_ENV, isKeystroke, isTermId, parseTermMessage, Scrollback, shellArgs, startTerm, termPlace, termSize, type TermSession, type TermSize } from "../core/term";
@@ -3949,6 +3949,7 @@ export async function startServer(opts: {
       state.chan.forget(id);
     },
     // a seed's check starts without canopy's GitHub login, like its runs
+    checkTools: (repo, line) => (line === GATES_CHECK ? gateTools(repo.path) : null),
     check: async (repo, line) => {
       // @gates becomes the repo's gates as a script, then runs like any other line
       let command = line;

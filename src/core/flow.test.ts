@@ -94,6 +94,7 @@ class FakeRunner implements FlowRunner {
 
 function setup(opts: {
   check?: (cmd: string) => CheckResult;
+  checkTools?: (repo: Repo, cmd: string) => Promise<string[]> | null;
   evaluator?: ((state: string) => Promise<VerdictAnswers>) | null;
   judge?: ((state: string) => Promise<JudgeAnswers>) | null;
   evidence?: (repo: Repo, paths: string[]) => Promise<EvidenceFile[]>;
@@ -117,6 +118,7 @@ function setup(opts: {
       checks.push(command);
       return opts.check ? opts.check(command) : { exit: 0, output: "" };
     },
+    checkTools: opts.checkTools,
     evaluator: opts.evaluator ?? null,
     judge: opts.judge ?? null,
     evidence: opts.evidence,
@@ -359,6 +361,42 @@ describe("Flows", () => {
     expect(f?.status).toBe("stopped");
     expect(f?.steps.map((s) => s.status)).toEqual(["failed", "skipped"]);
     expect(runner.specs.length).toBe(1);
+  });
+});
+
+describe("a check line's own tools", () => {
+  const GATED = wf(`---
+name: gated
+verb: gate
+blurb: b
+---
+
+## Gates
+tools: read
+check: @gates
+
+Run them.
+`);
+
+  test("a step whose check names tools gets them on top of its own", async () => {
+    const asked: string[] = [];
+    const { runner, flows } = setup({
+      checkTools: (_r, c) => {
+        asked.push(c);
+        return Promise.resolve(["Bash(cargo test)"]);
+      },
+    });
+    flows.start(repo(), GATED, "", DEFAULT_AGENT);
+    await flush();
+    expect(asked).toEqual(["@gates"]);
+    expect(runner.specs[0]?.allowedTools).toContain("Bash(cargo test)");
+    expect(runner.specs[0]?.allowedTools).toContain("Read");
+  });
+
+  test("null starts the run at once, with the step's tools alone", () => {
+    const { runner, flows } = setup({ checkTools: () => null });
+    flows.start(repo(), GATED, "", DEFAULT_AGENT);
+    expect(runner.specs[0]?.allowedTools).not.toContain("Bash(cargo test)");
   });
 });
 
