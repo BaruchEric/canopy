@@ -1,7 +1,9 @@
 import type {
   HealthCheck,
+  KitAction,
   KitApplyResult,
   KitInfo,
+  KitInstallResult,
   KitMcpPreview,
   HealthInfo,
   SecretAuditEntry,
@@ -576,8 +578,16 @@ export const api = {
   /** the kit on one backend: the machines it reaches, their cells and plans */
   kit: (b: string = homeName()) => req<KitInfo>(b, "/api/kit"),
   kitScan: (b: string) => req<KitInfo>(b, "/api/kit/scan", { method: "POST", body: "{}" }),
-  kitApply: (b: string, machine: string) =>
-    req<KitApplyResult>(b, "/api/kit/apply", { method: "POST", body: JSON.stringify({ machine }) }),
+  /** the machine's whole plan, or the actions given (one cell's) */
+  kitApply: (b: string, machine: string, actions?: KitAction[]) =>
+    req<KitApplyResult>(b, "/api/kit/apply", { method: "POST", body: JSON.stringify({ machine, actions }) }),
+  kitSkillAdopt: (b: string, machine: string, agent: string, name: string) =>
+    req<KitApplyResult>(b, "/api/kit/skill-adopt", { method: "POST", body: JSON.stringify({ machine, agent, name }) }),
+  kitSkillRestore: (b: string, machine: string, agent: string, name: string) =>
+    req<KitApplyResult>(b, "/api/kit/skill-restore", { method: "POST", body: JSON.stringify({ machine, agent, name }) }),
+  /** runs the install line the page showed; the server refuses one that has changed */
+  kitInstall: (b: string, machine: string, tool: string, line: string) =>
+    req<KitInstallResult>(b, "/api/kit/install", { method: "POST", body: JSON.stringify({ machine, tool, line }) }),
   kitAdopt: (b: string, machine: string, agent: string, names?: string[]) =>
     req<KitApplyResult>(b, "/api/kit/adopt", { method: "POST", body: JSON.stringify({ machine, agent, names }) }),
   kitRestore: (b: string, machine: string, agent: string, name: string) =>

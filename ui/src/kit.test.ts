@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
-import { adoptableIn, allowAct, cellAt, columns, homesFor, mcpViewsOf, mergeKit, rows, serverAt, serverRows, sheetFor, sheetKey } from "./kit";
+import { actionText, adoptableIn, allowAct, cellActions, cellAt, columns, homesFor, machineSpans, mcpViewsOf, mergeKit, rows, serverAt, serverRows, serverSheetFor, sheetFor, sheetKey, skillSheetFor, toolAt, toolRows, toolSheetFor } from "./kit";
 import { parseAct } from "../../src/core/secretwire";
-import type { KitCell, KitInfo, KitMachineView, KitMcpView } from "../../src/core/types";
+import type { KitAction, KitCell, KitInfo, KitMachineView, KitMcpView } from "../../src/core/types";
 
 const c = (machine: string, agent: string, skill: string, state: KitCell["state"]): KitCell => ({ machine, agent, skill, state, why: "" });
 const info = (cells: KitCell[]): KitInfo => ({ ok: true, error: null, machines: [], cells });
@@ -89,5 +89,80 @@ describe("server sheets", () => {
     expect(sheetFor(s("stale-allowance"), "github", true)).toEqual({ kind: "allow", name: "github" });
     expect(sheetFor(s("not-allowed"), "github", false)).toBeNull();
     expect(sheetFor(s("ok"), "github", true)).toBeNull();
+  });
+});
+
+describe("per-cell apply", () => {
+  const view = (plan: KitAction[], away: string | null = null): KitMachineView => ({
+    machine: "mac", plan,
+    seen: { machine: "mac", at: 1, away, home: "/h", store: null, sources: {}, targets: [
+      { agent: "claude", dir: "/h/.claude/skills", exists: true, parentExists: true, entries: [], placed: {} },
+      { agent: "hermes", dir: "/h/.hermes/skills", exists: false, parentExists: true, entries: [], placed: {} },
+    ] },
+  });
+  const link: KitAction = { kind: "link", agent: "codex", name: "ship", link: "../../.claude/skills/ship" };
+  const other: KitAction = { kind: "link", agent: "codex", name: "desk", link: "../../.claude/skills/desk" };
+  const mkdir: KitAction = { kind: "mkdir", agent: "hermes" };
+  const relink: KitAction = { kind: "relink", agent: "hermes", name: "ship", link: "../../.claude/skills/ship" };
+  const set: KitAction = { kind: "mcp-set", agent: "codex", name: "ship" };
+  test("a missing link: that link alone", () => {
+    expect(cellActions(view([link, other, set]), c("mac", "codex", "ship", "missing"))).toEqual([link]);
+  });
+  test("a drifted link goes after its agent's mkdir", () => {
+    expect(cellActions(view([link, mkdir, relink]), c("mac", "hermes", "ship", "drift"))).toEqual([mkdir, relink]);
+  });
+  test("an MCP cell takes its server's action, never the skill of the same name", () => {
+    expect(cellActions(view([link, set]), { ...c("mac", "codex", "ship", "missing"), kind: "mcp" })).toEqual([set]);
+  });
+  test("a store cell whose fix is the pull gets the pull alone", () => {
+    expect(cellActions(view([{ kind: "pull" }, link]), c("mac", "claude", "desk", "missing"))).toEqual([{ kind: "pull" }]);
+    expect(cellActions(view([{ kind: "pull" }]), c("mac", "codex", "desk", "missing"))).toEqual([]);
+  });
+  test("nothing to do: empty, so no button and no sheet", () => {
+    const ok = c("mac", "codex", "ship", "ok");
+    expect(cellActions(view([other]), ok)).toEqual([]);
+    expect(cellActions(view([link], "ssh exited 255"), c("mac", "codex", "ship", "missing"))).toEqual([]);
+    expect(cellActions(undefined, ok)).toEqual([]);
+    expect(skillSheetFor(ok, [])).toBeNull();
+  });
+  test("a skill cell opens its sheet to apply, adopt or put back", () => {
+    expect(skillSheetFor(c("mac", "codex", "ship", "missing"), [link])).toEqual({ kind: "cell", of: "skill", machine: "mac", agent: "codex", name: "ship" });
+    expect(skillSheetFor(c("mac", "codex", "ship", "adoptable"), [])?.kind).toBe("cell");
+    expect(skillSheetFor({ ...c("mac", "codex", "ship", "ok"), restore: true }, [])?.kind).toBe("cell");
+    const server = { ...c("mac", "codex", "ship", "missing"), kind: "mcp" as const };
+    expect(serverSheetFor(server, "ship", false, [set])).toEqual({ kind: "cell", of: "mcp", machine: "mac", agent: "codex", name: "ship" });
+    expect(serverSheetFor({ ...server, state: "adoptable" }, "ship", false, [])?.kind).toBe("adopt");
+    expect(sheetKey({ kind: "cell", of: "skill", machine: "mac", agent: "codex", name: "ship" })).not.toBe(sheetKey({ kind: "cell", of: "mcp", machine: "mac", agent: "codex", name: "ship" }));
+  });
+  test("actions read as words", () => {
+    expect([mkdir, link, relink, set, { kind: "pull" } as KitAction].map(actionText)).toEqual([
+      "make hermes's skills dir", "link ship to ../../.claude/skills/ship", "point ship at ../../.claude/skills/ship", "write ship", "pull dotclaude",
+    ]);
+  });
+});
+
+describe("tools", () => {
+  const t = (machine: string, name: string, state: KitCell["state"], extra: Partial<KitCell> = {}): KitCell => ({ machine, agent: "", skill: name, state, why: "", kind: "tool", ...extra });
+  const cells = [c("mac", "claude", "ship", "ok"), c("mac", "codex", "ship", "ok"), c("gpd", "claude", "ship", "ok"), t("mac", "jq", "ok"), t("gpd", "jq", "missing", { install: "mise use -g jq" }), t("gpd", "sops", "no-install")];
+  const all = { agent: null, machine: null, problems: false, text: "" };
+  test("tool cells make no column and no skill row", () => {
+    expect(columns(cells)).toEqual([{ machine: "gpd", agent: "claude" }, { machine: "mac", agent: "claude" }, { machine: "mac", agent: "codex" }]);
+    expect(rows(cells, all)).toEqual(["ship"]);
+    expect(serverRows(cells, all)).toEqual([]);
+  });
+  test("tool rows filter by machine, problems and text, not by agent", () => {
+    expect(toolRows(cells, all)).toEqual(["jq", "sops"]);
+    expect(toolRows(cells, { ...all, agent: "codex" })).toEqual(["jq", "sops"]);
+    expect(toolRows(cells, { ...all, machine: "mac" })).toEqual(["jq"]);
+    expect(toolRows(cells, { ...all, problems: true, machine: "mac" })).toEqual([]);
+    expect(toolAt(cells, "jq", "gpd")?.state).toBe("missing");
+  });
+  test("each machine spans its columns", () => {
+    expect(machineSpans(columns(cells))).toEqual([{ machine: "gpd", span: 1 }, { machine: "mac", span: 2 }]);
+  });
+  test("only a missing tool with a line opens a sheet", () => {
+    expect(toolSheetFor(toolAt(cells, "jq", "gpd"))).toEqual({ kind: "tool", machine: "gpd", name: "jq" });
+    expect(toolSheetFor(toolAt(cells, "sops", "gpd"))).toBeNull();
+    expect(toolSheetFor(toolAt(cells, "jq", "mac"))).toBeNull();
   });
 });

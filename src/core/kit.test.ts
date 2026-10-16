@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { buildEntry, cellsOf, expandHome, hasSecrets, maskEntry, mcpCells, mcpDefOf, mcpHash, parseKit, parseMcpValue, planKit, planMcp, relPath, sameEntry, secretsOf, skillNames, sourcePath, targetsFor, wanted } from "./kit";
+import { buildEntry, cellsOf, expandHome, hasSecrets, installLine, maskEntry, mcpCells, mcpDefOf, mcpHash, needsSudo, parseKit, parseMcpValue, planKit, planMcp, relPath, sameEntry, secretsOf, skillNames, sourcePath, targetsFor, toolCells, wanted } from "./kit";
 import { codexTable } from "./kitmcp";
 import { parseMcpScan } from "./kitscan";
 import type { KitAction, KitCell, KitManifest, KitMcpCtx, KitMcpOwned, KitSeen, KitSeenTarget, SecretKeyState, SecretsInfo } from "./types";
@@ -189,6 +189,35 @@ describe("cellsOf", () => {
     const at = (skill: string) => cells.find((c) => c.agent === "codex" && c.skill === skill);
     expect(at("diagnose-crash")).toMatchObject({ state: "local", why: "not in the store; canopy leaves it alone" });
     expect(at("qnap-nas-control")?.state).toBe("local");
+  });
+  test("a link target's own entry for a store skill is adoptable; the store's and an unwanted one are not", () => {
+    const s = seen();
+    s.targets[1]!.entries = [{ name: "ship", kind: "dir", link: null }];
+    s.targets[0]!.entries.push({ name: "craft", kind: "dir", link: null });
+    const cells = cellsOf(kit(), [{ seen: { ...s, sources: { craft: true } }, dev: "/d" }]);
+    const at = (agent: string, skill: string) => cells.find((c) => c.agent === agent && c.skill === skill);
+    expect(at("codex", "ship")).toMatchObject({ state: "adoptable", why: "a hand-made dir; adopt moves it aside and links the kit's" });
+    expect(at("claude", "craft")).toMatchObject({ state: "foreign", why: "a dir canopy did not place" });
+  });
+  test("a copy target's entry stays foreign", () => {
+    const r = parseKit({ ...RAW, targets: [...RAW.targets.slice(0, 2), { agent: "openclaw", skills: "~/.openclaw/skills", mode: "copy" }] });
+    if ("errors" in r) throw new Error(r.errors.join("; "));
+    const s = seen();
+    s.targets.push(tgt("openclaw", "/Users/e/.openclaw/skills", { entries: [{ name: "ship", kind: "dir", link: null }] }));
+    expect(cellsOf(r.kit, [{ seen: s, dev: "/d" }]).find((c) => c.agent === "openclaw" && c.skill === "ship")?.state).toBe("foreign");
+  });
+  test("an adopted skill offers put back, and keeps a row after its skill leaves the store", () => {
+    const s = seen();
+    s.targets[1] = tgt("codex", "/Users/e/.codex/skills", {
+      entries: [{ name: "ship", kind: "link", link: "../../.claude/skills/ship" }],
+      placed: { ship: "../../.claude/skills/ship" },
+      adoptedFrom: { ship: "/Users/e/.codex/.canopy-kit-adopted/ship", gone: "/Users/e/.codex/.canopy-kit-adopted/gone" },
+    });
+    const cells = cellsOf(kit(), [{ seen: s, dev: "/d" }]);
+    const at = (skill: string) => cells.find((c) => c.agent === "codex" && c.skill === skill);
+    expect(at("ship")).toMatchObject({ state: "ok", restore: true });
+    expect(at("gone")).toMatchObject({ state: "off", restore: true });
+    expect(at("desk")?.restore).toBeUndefined();
   });
   test("an away machine is one away cell per agent", () => {
     const cells = cellsOf(kit(), [{ seen: seen({ machine: "gpd", away: "ssh exited 255", targets: [], store: null }), dev: "/d" }]);
@@ -651,5 +680,69 @@ describe("maskEntry hides a secret wherever an arg or a url carries it", () => {
     expect(JSON.stringify(m)).not.toContain("pa55word");
     expect(JSON.stringify(m)).not.toContain("tok3n");
     expect(m).toEqual({ url: "https://•••@h.example/mcp", args: ["https://•••@git.example/x"] });
+  });
+});
+
+describe("tools", () => {
+  const withTools = (tools: unknown) => parseKit({ ...RAW, tools });
+  test("parses check and per-os install lines", () => {
+    const r = withTools({ jq: { check: "jq --version", install: { darwin: "brew install jq", arch: "sudo pacman -S --noconfirm jq" } }, sops: { check: "sops --version" } });
+    if ("errors" in r) throw new Error(r.errors.join("; "));
+    expect(r.kit.tools).toEqual([
+      { name: "jq", check: "jq --version", install: { darwin: "brew install jq", arch: "sudo pacman -S --noconfirm jq" } },
+      { name: "sops", check: "sops --version", install: {} },
+    ]);
+    const none = parseKit(RAW);
+    expect("kit" in none && none.kit.tools).toEqual([]);
+  });
+  test("names each bad field", () => {
+    expect(withTools([])).toEqual({ errors: ["tools: an object of tool name to check and install"] });
+    expect(withTools({ jq: { check: "" } })).toEqual({ errors: ["tools.jq.check: a non-empty string"] });
+    expect(withTools({ "Bad Name": { check: "x" } })).toEqual({ errors: ["tools.Bad Name: bad name or not an object"] });
+    expect(withTools({ jq: { check: "x", install: "brew install jq" } })).toEqual({ errors: ["tools.jq.install: an object of os to line"] });
+    expect(withTools({ jq: { check: "x", install: { windows: "winget jq", darwin: 3 } } })).toEqual({
+      errors: ["tools.jq.install.windows: not darwin, arch or debian", "tools.jq.install.darwin: a non-empty string"],
+    });
+  });
+  test("sudo is a word: sudo and a path to it count, pseudo-tool does not", () => {
+    expect(needsSudo("sudo pacman -S jq")).toBe(true);
+    expect(needsSudo("/usr/bin/sudo apt-get install -y jq")).toBe(true);
+    expect(needsSudo("brew update && sudo port install jq")).toBe(true);
+    expect(needsSudo("echo $(sudo id)")).toBe(true);
+    expect(needsSudo("pseudo-tool install jq")).toBe(false);
+    expect(needsSudo("brew install sudoku")).toBe(false);
+  });
+  test("installLine takes the os, then an ID_LIKE word", () => {
+    const t = { name: "jq", check: "jq --version", install: { darwin: "brew install jq", debian: "sudo apt-get install -y jq" } };
+    expect(installLine(t, "darwin")).toBe("brew install jq");
+    expect(installLine(t, "ubuntu", ["debian"])).toBe("sudo apt-get install -y jq");
+    expect(installLine(t, "arch")).toBeNull();
+  });
+  test("cells: ok, missing with its line, missing with a sudo line, no install line, a failed check and a slow one", () => {
+    const r = withTools({
+      jq: { check: "jq --version", install: { arch: "mise use -g jq" } },
+      sops: { check: "sops --version", install: { arch: "sudo pacman -S sops" } },
+      age: { check: "age --version" },
+      git: { check: "git --version" },
+      bad: { check: "bad" },
+      slow: { check: "slow" },
+    });
+    if ("errors" in r) throw new Error(r.errors.join("; "));
+    const s = seen({ machine: "gpd", os: "arch", osLike: [], tools: [
+      { name: "jq", code: 127, err: "sh: jq: not found" }, { name: "sops", code: 127, err: "" }, { name: "age", code: 127, err: "" },
+      { name: "git", code: 0, err: "" }, { name: "bad", code: 2, err: "boom" }, { name: "slow", code: null, err: "" },
+    ] });
+    const cells = toolCells(r.kit, s);
+    const at = (n: string) => cells.find((c) => c.skill === n);
+    expect(at("jq")).toEqual({ machine: "gpd", agent: "", skill: "jq", kind: "tool", state: "missing", why: "missing; install runs its line", install: "mise use -g jq" });
+    expect(at("sops")).toMatchObject({ state: "missing", install: "sudo pacman -S sops", sudo: true });
+    expect(at("age")).toMatchObject({ state: "no-install", why: "missing, and kit.json has no install line for arch" });
+    expect(at("git")?.state).toBe("ok");
+    expect(at("bad")).toMatchObject({ state: "check-failed", why: "the check exited 2: boom" });
+    expect(at("slow")).toMatchObject({ state: "check-failed", why: "the check ran past 10 s" });
+    expect(toolCells(r.kit, seen({ toolsError: "the tools check failed: exited 255" }))[0]).toMatchObject({ state: "away", why: "the tools check failed: exited 255" });
+    expect(toolCells(r.kit, seen({ away: "ssh exited 255", store: null, targets: [] }))[0]).toMatchObject({ state: "away", why: "ssh exited 255" });
+    // cellsOf carries them, away machines too
+    expect(cellsOf(r.kit, [{ seen: s, dev: "/d" }]).filter((c) => c.kind === "tool")).toHaveLength(6);
   });
 });

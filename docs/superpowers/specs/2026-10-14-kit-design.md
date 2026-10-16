@@ -228,6 +228,11 @@ CLI: `canopy kit status [--machine m]`, `canopy kit apply [--machine m]
    confirming OpenClaw loads skills from that folder before copying anything.
    `2026-10-15-kit-secrets-phase-3-design.md` records that probe (OpenClaw
    2026.9.2 ignores a folder placed there) and the calls still open.
+   Part B (per-cell apply, skill adopt, tools) is built by
+   `docs/superpowers/plans/2026-10-15-kit-phase-3b.md`. Skill adopt moves a
+   hand-made entry to `.canopy-kit-adopted/<name>` beside the agent's
+   skills dir, not under `~`, and records it in that dir's
+   `.canopy-kit.json`; that plan says why.
 
 ## Out of scope
 

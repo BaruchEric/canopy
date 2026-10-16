@@ -25,6 +25,10 @@ describe("kit cli", () => {
       "  plan: pull, link codex/ship",
     ]);
   });
+  test("a tool's problem names it as a tool", () => {
+    const withTool: KitInfo = { ...info, cells: [{ machine: "mac", agent: "", skill: "jq", state: "no-install", why: "missing, and kit.json has no install line for darwin", kind: "tool" }] };
+    expect(kitStatusLines(withTool, null)).toContain("  tool  jq  no-install  missing, and kit.json has no install line for darwin");
+  });
   test("an error reads as one line", () => {
     expect(kitStatusLines({ ok: false, error: "kit.json: bad", machines: [], cells: [] }, null)).toEqual(["kit.json: bad"]);
   });

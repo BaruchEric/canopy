@@ -3,7 +3,7 @@
  *  Browser-safe: no node imports. */
 import type {
   KitAction, KitCell, KitCellState, KitMachine, KitManifest, KitMcpAction, KitMcpCtx, KitMcpDef, KitMcpEntry, KitMcpFormat, KitMcpOption,
-  KitMcpServer, KitMcpTarget, KitMcpValue, KitMode, KitRule, KitSeen, KitSeenTarget, KitTarget, SecretsInfo,
+  KitMcpServer, KitMcpTarget, KitMcpValue, KitMode, KitRule, KitSeen, KitSeenTarget, KitTarget, KitTool, KitToolOs, SecretsInfo,
 } from "./types";
 import { canonical, DOTENV_KEY, HEADER_NAME, MCP_SERVER, MCP_SERVER_SRC, mcpSinkId, parseMcpAllow, SECRET_NAME, SINK_ID } from "./secretfile";
 
@@ -109,6 +109,32 @@ function parseServer(name: string, s: Record<string, unknown>, machines: KitMach
   return server;
 }
 
+const TOOL_OS: readonly KitToolOs[] = ["darwin", "arch", "debian"];
+
+function parseTools(raw: unknown, errors: string[]): KitTool[] {
+  if (raw === undefined) return [];
+  if (!isObj(raw)) { errors.push("tools: an object of tool name to check and install"); return []; }
+  const out: KitTool[] = [];
+  for (const [name, t] of Object.entries(raw)) {
+    const at = `tools.${name}`;
+    if (!SKILL_NAME.test(name) || !isObj(t)) { errors.push(`${at}: bad name or not an object`); continue; }
+    const check = str(t["check"]);
+    if (!check) { errors.push(`${at}.check: a non-empty string`); continue; }
+    const install: KitTool["install"] = {};
+    const rawInstall = t["install"] === undefined ? {} : t["install"];
+    if (!isObj(rawInstall)) { errors.push(`${at}.install: an object of os to line`); continue; }
+    let bad = false;
+    for (const [os, line] of Object.entries(rawInstall)) {
+      if (!TOOL_OS.includes(os as KitToolOs)) { errors.push(`${at}.install.${os}: not darwin, arch or debian`); bad = true; continue; }
+      const l = str(line);
+      if (!l) { errors.push(`${at}.install.${os}: a non-empty string`); bad = true; continue; }
+      install[os as KitToolOs] = l;
+    }
+    if (!bad) out.push({ name, check, install });
+  }
+  return out;
+}
+
 export function parseKit(raw: unknown): { kit: KitManifest } | { errors: string[] } {
   if (!isObj(raw)) return { errors: ["kit.json is not an object"] };
   if (raw["version"] !== 1) return { errors: ["version: only 1 is known"] };
@@ -177,9 +203,10 @@ export function parseKit(raw: unknown): { kit: KitManifest } | { errors: string[
     const server = parseServer(name, s, machines, targets, errors);
     if (server) mcp.push(server);
   }
+  const tools = parseTools(raw["tools"], errors);
   if (errors.length) return { errors };
   return {
-    kit: { machines, targets, default: rule(rawSkills["default"], all), only, exclude: strs(rawSkills["exclude"]) ?? [], mcp },
+    kit: { machines, targets, default: rule(rawSkills["default"], all), only, exclude: strs(rawSkills["exclude"]) ?? [], mcp, tools },
   };
 }
 
@@ -287,6 +314,13 @@ function planSkills(kit: KitManifest, seen: KitSeen, dev: string): KitAction[] {
   return out;
 }
 
+/** where adopt moves a hand-made skill: beside the skills dir, in the
+ *  agent's own folder, so the move stays on one filesystem (on the mini
+ *  that folder is a mount, and the container's ~ is not) */
+export const adoptedPath = (dir: string, name: string): string => `${dir.replace(/\/+$/, "").replace(/\/[^/]*$/, "")}/.canopy-kit-adopted/${name}`;
+
+const modeOf = (kit: KitManifest, agent: string): KitMode | null => kit.targets.find((t) => t.agent === agent)?.mode ?? null;
+
 function cell(kit: KitManifest, seen: KitSeen, t: KitSeenTarget, isStore: boolean, skill: string, dev: string, names: string[]): { state: KitCellState; why: string } {
   const e = t.entries.find((x) => x.name === skill);
   // a name the store does not hold is someone else's (Omarchy's links, an
@@ -302,7 +336,12 @@ function cell(kit: KitManifest, seen: KitSeen, t: KitSeenTarget, isStore: boolea
   if (!present(kit, seen, skill)) return { state: "no-source", why: `no ${kit.only[skill]!.source} here` };
   if (!t.exists && !t.parentExists) return { state: "noagent", why: `${t.dir} has no parent; agent not installed` };
   if (!e) return { state: "missing", why: "" };
-  if (!(skill in t.placed)) return { state: "foreign", why: `a ${e.kind} canopy did not place` };
+  if (!(skill in t.placed)) {
+    // a link target's own copy of a store skill: adopt moves it aside and
+    // links the kit's. The store target and copy targets keep theirs.
+    if (!isStore && modeOf(kit, t.agent) === "link") return { state: "adoptable", why: `a hand-made ${e.kind}; adopt moves it aside and links the kit's` };
+    return { state: "foreign", why: `a ${e.kind} canopy did not place` };
+  }
   const link = wantLink(kit, seen, t, skill, dev);
   if (e.kind !== "link" || e.link !== link) return { state: "drift", why: e.kind === "link" ? `points at ${e.link}` : `now a ${e.kind}` };
   return { state: "ok", why: "" };
@@ -319,15 +358,22 @@ export function cellsOf(kit: KitManifest, views: { seen: KitSeen; dev: string; c
   for (const { seen, dev, ctx, mcpError } of views) {
     if (seen.away || !seen.store) {
       for (const t of targetsFor(kit, seen.machine)) out.push({ machine: seen.machine, agent: t.agent, skill: "*", state: "away", why: seen.away ?? "no store" });
+      out.push(...toolCells(kit, seen));
       continue;
     }
     const names = skillNames(kit, seen);
     seen.targets.forEach((t, i) => {
       const local = t.entries.map((e) => e.name).filter((n) => !names.includes(n) && !excluded(kit, n));
+      const adopted = t.adoptedFrom ?? {};
       for (const skill of [...names, ...local]) {
-        out.push({ machine: seen.machine, agent: t.agent, skill, ...cell(kit, seen, t, i === 0, skill, dev, names) });
+        out.push({ machine: seen.machine, agent: t.agent, skill, ...cell(kit, seen, t, i === 0, skill, dev, names), ...(skill in adopted ? { restore: true } : {}) });
+      }
+      // a folder adopt moved aside stays reachable for put back after its skill leaves the store
+      for (const skill of Object.keys(adopted).filter((n) => SKILL_NAME.test(n) && !names.includes(n) && !local.includes(n)).sort()) {
+        out.push({ machine: seen.machine, agent: t.agent, skill, state: "off", why: "canopy moved a hand-made one aside; put back restores it", restore: true });
       }
     });
+    out.push(...toolCells(kit, seen));
     if (ctx) out.push(...mcpCells(kit, seen, ctx));
     // a failed MCP scan plans nothing, and its servers say why rather than leaving the table empty
     else if (mcpError) {
@@ -591,4 +637,41 @@ export function maskEntry(e: KitMcpEntry): KitMcpEntry {
     else out[k] = isObj(v) ? maskEntry(v) : v;
   }
   return out;
+}
+
+/* ---------- tools (docs/superpowers/specs/2026-10-15-kit-secrets-phase-3-design.md, part B) ---------- */
+
+export const TOOL_TIMEOUT_S = 10;
+
+/** a sudo line cannot answer its password prompt over a non-interactive
+ *  ssh, so it is shown to copy and never run. `sudo` counts as a word, a
+ *  path ending in /sudo too; `pseudo-tool` does not. */
+export function needsSudo(line: string): boolean {
+  return line.split(/[\s;&|()`]+/).some((w) => w === "sudo" || w.endsWith("/sudo"));
+}
+
+/** the tool's install line for an os: its own key first, then the first ID_LIKE word that has one (ubuntu takes debian's) */
+export function installLine(t: KitTool, os: string, like: string[] = []): string | null {
+  for (const k of [os, ...like]) {
+    const l = TOOL_OS.includes(k as KitToolOs) ? t.install[k as KitToolOs] : undefined;
+    if (l) return l;
+  }
+  return null;
+}
+
+export function toolCells(kit: KitManifest, seen: KitSeen): KitCell[] {
+  return kit.tools.map((t): KitCell => {
+    const base = { machine: seen.machine, agent: "", skill: t.name, kind: "tool" as const };
+    if (seen.away) return { ...base, state: "away", why: seen.away };
+    if (seen.toolsError) return { ...base, state: "away", why: seen.toolsError };
+    const r = seen.tools?.find((x) => x.name === t.name);
+    if (!r) return { ...base, state: "away", why: "not checked yet; rescan" };
+    if (r.code === 0) return { ...base, state: "ok", why: "" };
+    if (r.code === null) return { ...base, state: "check-failed", why: `the check ran past ${TOOL_TIMEOUT_S} s` };
+    if (r.code !== 127) return { ...base, state: "check-failed", why: `the check exited ${r.code}${r.err ? `: ${r.err}` : ""}` };
+    const line = installLine(t, seen.os ?? "", seen.osLike);
+    if (!line) return { ...base, state: "no-install", why: `missing, and kit.json has no install line for ${seen.os || "this os"}` };
+    const sudo = needsSudo(line);
+    return { ...base, state: "missing", why: sudo ? "missing; its install line needs sudo, so run it in a terminal there" : "missing; install runs its line", install: line, ...(sudo ? { sudo: true } : {}) };
+  });
 }

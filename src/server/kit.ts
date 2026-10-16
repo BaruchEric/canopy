@@ -3,14 +3,23 @@
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { onHost } from "../core/exec";
-import { cellsOf, hasSecrets, maskEntry, OWNED_NOT_IGNORED, mcpDefOf, mcpHash, mcpTargets, mcpWanted, parseKit, planKit, planMcp, secretsOf } from "../core/kit";
+import { cellsOf, hasSecrets, maskEntry, needsSudo, OWNED_NOT_IGNORED, mcpDefOf, mcpHash, mcpTargets, mcpWanted, parseKit, planKit, planMcp, secretsOf, wantLink } from "../core/kit";
 import { applyKit } from "../core/kitapply";
-import { seeKit, seeMcp } from "../core/kitscan";
+import { seeKit, seeMcp, seeTools } from "../core/kitscan";
 import type {
-  KitAction, KitApplyResult, KitInfo, KitManifest, KitMachineView, KitMcpCtx, KitMcpEntry, KitMcpFormat, KitMcpPreview, KitMcpSeen, KitMcpView, KitSeen, SecretsInfo, ServerEvent,
+  KitAction, KitApplyResult, KitInfo, KitInstallResult, KitManifest, KitMachineView, KitMcpCtx, KitMcpEntry, KitMcpFormat, KitMcpPreview, KitMcpSeen, KitMcpView, KitSeen, SecretsInfo, ServerEvent,
 } from "../core/types";
 
 export const KIT_EVERY = 10 * 60_000;
+/** an install line's time: a package manager can take a while */
+export const INSTALL_TIMEOUT = 10 * 60_000;
+
+/** runs one install line in the machine's login shell, so it sees the PATH a person's terminal has */
+export const INSTALL_SCRIPT = String.raw`ls=$SHELL; [ -n "$ls" ] || ls=sh
+exec "$ls" -lc "$1" </dev/null 2>&1`;
+
+/** the last lines of an install's output */
+const tail = (text: string, n = 40): string => text.trimEnd().split("\n").slice(-n).join("\n");
 
 export const kitPath = (): string => process.env["CANOPY_KIT"] ?? join(homedir(), ".claude", "kit.json");
 
@@ -141,6 +150,12 @@ export class KitHub {
       (err: unknown): KitSeen => ({ machine: m.name, at: (this.deps.now ?? Date.now)(), away: err instanceof Error ? err.message : String(err), home: "", store: null, targets: [], sources: {} }),
     );
     // after the skills scan, so an ssh machine that is away is not waited on twice
+    if (!seen.away && kit.tools.length > 0) {
+      await seeTools(kit, m, { run: this.deps.run, env: this.deps.env }).then(
+        (t) => Object.assign(seen, t, { toolsError: null }),
+        (err: unknown) => { seen.toolsError = err instanceof Error ? err.message : String(err); },
+      );
+    }
     let mcpError: string | null = null;
     const mcp = seen.away ? null : await seeMcp(kit, m, { run: this.deps.run, env: this.deps.env }).catch((err: unknown) => {
       mcpError = err instanceof Error ? err.message : String(err);
@@ -291,6 +306,50 @@ export class KitHub {
     });
   }
 
+  private skillCell(machine: string, agent: string, name: string) {
+    return this.last.cells.find((c) => c.kind === undefined && c.machine === machine && c.agent === agent && c.skill === name);
+  }
+
+  /** Move a hand-made skill aside and link the kit's. Only an adoptable
+   *  cell qualifies: a link target's own entry for a store skill. */
+  adoptSkill(machine: string, agent: string, name: string): Promise<KitApplyResult> {
+    return this.serial(machine, async () => {
+      const { kit, view, m } = this.reach(machine);
+      const c = this.skillCell(machine, agent, name);
+      if (c?.state !== "adoptable") throw new KitError(`${name} cannot be adopted for ${agent} on ${machine}: ${c ? c.why || c.state : "the kit has no such skill there"}`, 409);
+      const t = view.seen.targets.find((x) => x.agent === agent);
+      if (!t) throw new KitError(`${agent} is not a target on ${machine}`, 409);
+      return this.execute(machine, [{ kind: "skill-adopt", agent, name, link: wantLink(kit, view.seen, t, name, m.dev) }]);
+    });
+  }
+
+  restoreSkill(machine: string, agent: string, name: string): Promise<KitApplyResult> {
+    return this.serial(machine, async () => {
+      this.reach(machine);
+      if (!this.skillCell(machine, agent, name)?.restore) throw new KitError(`canopy keeps no hand-made ${name} for ${agent} on ${machine}`, 409);
+      return this.execute(machine, [{ kind: "skill-restore", agent, name }]);
+    });
+  }
+
+  /** Run a missing tool's install line on its machine, then check again.
+   *  The line comes from kit.json; the page sends the line it showed, and
+   *  one that has changed since is refused rather than run unseen. A sudo
+   *  line is never run: it cannot prompt over a non-interactive ssh. */
+  install(machine: string, tool: string, line: string): Promise<KitInstallResult> {
+    return this.serial(machine, async () => {
+      const { kit, m } = this.reach(machine);
+      if (!kit.tools.some((t) => t.name === tool)) throw new KitError(`${tool} is not a tool kit.json lists`, 404);
+      const c = this.last.cells.find((x) => x.kind === "tool" && x.machine === machine && x.skill === tool);
+      if (c?.state !== "missing" || !c.install) throw new KitError(`${tool} on ${machine} has nothing to install: ${c ? c.why || c.state : "not checked yet"}`, 409);
+      if (c.sudo || needsSudo(c.install)) throw new KitError(`${tool}'s install line uses sudo, which cannot prompt over a non-interactive ssh; run it in a terminal on ${machine}`, 409);
+      if (c.install !== line) throw new KitError(`${tool}'s install line has changed since it was shown; look at it again`, 409);
+      const r = await (this.deps.run ?? onHost)(m.host, ["sh", "-c", INSTALL_SCRIPT, "kit-install", line], { env: this.deps.env, timeoutMs: INSTALL_TIMEOUT });
+      const now = this.kit ?? kit;
+      await this.scanOne(now, this.mine(now).find((x) => x.name === machine) ?? m);
+      return { machine, tool, code: r.code, output: tail(`${r.stdout}${r.stderr}`) };
+    });
+  }
+
   /** what adopt would change, both sides masked */
   preview(machine: string, agent: string, name: string): KitMcpPreview {
     this.reach(machine);
@@ -316,6 +375,16 @@ export class KitHub {
       if (path === "/api/kit/preview" && req.method === "GET") {
         const q = url.searchParams;
         return json(this.preview(q.get("machine") ?? "", q.get("agent") ?? "", q.get("name") ?? ""));
+      }
+      if ((path === "/api/kit/skill-adopt" || path === "/api/kit/skill-restore") && req.method === "POST") {
+        const body = (await req.json().catch(() => ({}))) as { machine?: unknown; agent?: unknown; name?: unknown };
+        if (typeof body.machine !== "string" || typeof body.agent !== "string" || typeof body.name !== "string") return json({ error: "machine, agent and name are required" }, 400);
+        return json(path === "/api/kit/skill-adopt" ? await this.adoptSkill(body.machine, body.agent, body.name) : await this.restoreSkill(body.machine, body.agent, body.name));
+      }
+      if (path === "/api/kit/install" && req.method === "POST") {
+        const body = (await req.json().catch(() => ({}))) as { machine?: unknown; tool?: unknown; line?: unknown };
+        if (typeof body.machine !== "string" || typeof body.tool !== "string" || typeof body.line !== "string") return json({ error: "machine, tool and line are required" }, 400);
+        return json(await this.install(body.machine, body.tool, body.line));
       }
       if ((path === "/api/kit/adopt" || path === "/api/kit/restore") && req.method === "POST") {
         const body = (await req.json().catch(() => ({}))) as { machine?: unknown; agent?: unknown; name?: unknown; names?: unknown };

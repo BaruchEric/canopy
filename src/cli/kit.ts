@@ -11,6 +11,7 @@ export function actionWord(a: KitAction): string {
 const PROBLEMS = new Set([
   "missing", "drift", "foreign", "no-source", "noagent", "away",
   "not-allowed", "stale-allowance", "no-sink", "adoptable", "unsupported", "unresolved",
+  "check-failed", "no-install",
 ]);
 
 export function kitStatusLines(info: KitInfo, machine: string | null): string[] {
@@ -30,7 +31,8 @@ export function kitStatusLines(info: KitInfo, machine: string | null): string[] 
     }
     for (const c of info.cells) {
       if (c.machine !== m.machine || !PROBLEMS.has(c.state) || c.state === "away") continue;
-      out.push(`  ${c.agent}  ${c.skill}  ${c.state}${c.why ? `  ${c.why}` : ""}`);
+      // a tool's cell is the machine's and has no agent
+      out.push(`  ${c.kind === "tool" ? "tool" : c.agent}  ${c.skill}  ${c.state}${c.why ? `  ${c.why}` : ""}`);
     }
     if (m.plan.length) out.push(`  plan: ${m.plan.map(actionWord).join(", ")}`);
   }

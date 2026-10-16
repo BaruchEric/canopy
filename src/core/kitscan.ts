@@ -1,9 +1,9 @@
 /** Reading one machine for the kit: one POSIX sh script through onHost, so
  *  a local machine and an ssh one read the same way. */
 import { onHost } from "./exec";
-import { mcpTargets, SKILL_NAME, sourcePath, targetsFor } from "./kit";
+import { mcpTargets, SKILL_NAME, sourcePath, targetsFor, TOOL_TIMEOUT_S } from "./kit";
 import { codexBlocks, codexServers, OWNED_FILE, STAT_FN } from "./kitmcp";
-import type { KitEntry, KitEntryKind, KitManifest, KitMcpEntry, KitMcpFileSeen, KitMcpFormat, KitMcpOwned, KitMcpSeen, KitSeen, KitSeenTarget, KitStoreState } from "./types";
+import type { KitEntry, KitEntryKind, KitManifest, KitMcpEntry, KitMcpFileSeen, KitMcpFormat, KitMcpOwned, KitMcpSeen, KitSeen, KitSeenTarget, KitStoreState, KitToolSeen } from "./types";
 
 export const KIT_FILE = ".canopy-kit.json";
 const SCAN_TIMEOUT = 30_000;
@@ -121,8 +121,11 @@ export function parseScan(machine: string, stdout: string, at: number): KitSeen 
       case "P": {
         const t = byAgent(f[1]!);
         try {
-          const j = JSON.parse(f.slice(2).join("\t")) as { placed?: Record<string, string> };
+          const j = JSON.parse(f.slice(2).join("\t")) as { placed?: Record<string, string>; adoptedFrom?: unknown };
           if (t && j.placed && typeof j.placed === "object") t.placed = j.placed;
+          if (t && isObj(j.adoptedFrom)) {
+            t.adoptedFrom = Object.fromEntries(Object.entries(j.adoptedFrom).filter((e): e is [string, string] => typeof e[1] === "string"));
+          }
         } catch { /* a broken placed file reads as nothing placed */ }
         break;
       }
@@ -284,4 +287,67 @@ export async function seeMcp(
   // a throw, not null: null means no MCP target here, and the kit view says why a scan failed
   if (r.code !== 0) throw new Error(`the MCP scan failed: ${reason(r.stderr, r.code)}`);
   return parseMcpScan(r.stdout, Object.fromEntries(ts.map((t) => [t.agent, t.mcp.format])));
+}
+
+/** args: `<name> <check>` per tool. Prints O os id_like (darwin, or
+ *  /etc/os-release's ID, read and never sourced), then T name code err per
+ *  tool, code `t` for a check that ran past its time. The login shell's
+ *  PATH is read once, so a check sees what an install put on it; each
+ *  check then runs in sh, on its own, with its stdout dropped. */
+export const TOOLS_SCRIPT = String.raw`
+if [ "$(uname -s)" = Darwin ]; then os=darwin; like=
+else
+  os=$(sed -n 's/^ID=//p' /etc/os-release 2>/dev/null | tr -d '"' | head -n 1)
+  like=$(sed -n 's/^ID_LIKE=//p' /etc/os-release 2>/dev/null | tr -d '"' | head -n 1)
+fi
+printf 'O\t%s\t%s\n' "$os" "$like"
+ls=$SHELL; [ -n "$ls" ] || ls=sh
+# a profile that prints would land in the capture, so the PATH rides on a marked line
+p=$("$ls" -lc 'printf "\n%s\n" "kit-path:$PATH"' 2>/dev/null </dev/null | sed -n 's/^kit-path://p' | tail -n 1)
+[ -n "$p" ] && PATH=$p && export PATH
+t=$(mktemp) || exit 1
+while [ $# -ge 2 ]; do
+  n=$1; c=$2; shift 2
+  rm -f "$t.to"
+  sh -c "$c" </dev/null >/dev/null 2>"$t" &
+  pid=$!
+  ( sleep ${TOOL_TIMEOUT_S}; kill -0 $pid 2>/dev/null && { : > "$t.to"; kill -9 $pid; } ) </dev/null >/dev/null 2>&1 &
+  k=$!
+  wait $pid; code=$?
+  kill $k 2>/dev/null
+  [ -f "$t.to" ] && code=t
+  printf 'T\t%s\t%s\t%s\n' "$n" "$code" "$(grep -v '^$' "$t" | head -n 1 | tr '\t' ' ' | cut -c1-200)"
+done
+rm -f "$t" "$t.to"
+`;
+
+export const toolsArgs = (kit: KitManifest): string[] => kit.tools.flatMap((t) => [t.name, t.check]);
+
+export function parseTools(stdout: string): { os: string; osLike: string[]; tools: KitToolSeen[] } {
+  let os = "";
+  let osLike: string[] = [];
+  const tools: KitToolSeen[] = [];
+  for (const line of stdout.split("\n")) {
+    const f = line.split("\t");
+    if (f[0] === "O") {
+      os = f[1] ?? "";
+      osLike = (f[2] ?? "").split(/\s+/).filter(Boolean);
+    } else if (f[0] === "T" && SKILL_NAME.test(f[1] ?? "")) {
+      const code = f[2] === "t" ? null : Number(f[2]);
+      if (code === null || Number.isInteger(code)) tools.push({ name: f[1]!, code, err: f.slice(3).join("\t").trim() });
+    }
+  }
+  return { os, osLike, tools };
+}
+
+/** each tool's check on one machine; throws when the script fails */
+export async function seeTools(
+  kit: KitManifest,
+  m: { host: string | null },
+  opts: { run?: typeof onHost; env?: Record<string, string> } = {},
+): Promise<{ os: string; osLike: string[]; tools: KitToolSeen[] }> {
+  const run = opts.run ?? onHost;
+  const r = await run(m.host, ["sh", "-c", TOOLS_SCRIPT, "kit-tools", ...toolsArgs(kit)], { env: opts.env, timeoutMs: 15_000 + TOOL_TIMEOUT_S * 1000 * kit.tools.length });
+  if (r.code !== 0) throw new Error(`the tools check failed: ${reason(r.stderr, r.code)}`);
+  return parseTools(r.stdout);
 }

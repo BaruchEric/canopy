@@ -2759,6 +2759,28 @@ export interface KitManifest {
   exclude: string[];
   /** the MCP servers, in manifest order */
   mcp: KitMcpServer[];
+  /** the tools each machine should have (phase 3), in manifest order */
+  tools: KitTool[];
+}
+
+/** the operating systems an install line can be for: `darwin`, or an
+ *  /etc/os-release `ID` (or one of its `ID_LIKE` words) */
+export type KitToolOs = "darwin" | "arch" | "debian";
+
+export interface KitTool {
+  name: string;
+  /** a shell line: exit 0 is there, 127 is missing, anything else a failed check */
+  check: string;
+  install: Partial<Record<KitToolOs, string>>;
+}
+
+/** one tool's check as a machine ran it */
+export interface KitToolSeen {
+  name: string;
+  /** the check's exit code; null when it ran past its 10 s */
+  code: number | null;
+  /** the first line of its stderr */
+  err: string;
 }
 
 export type KitMcpFormat = "claude-json" | "codex-toml";
@@ -2807,6 +2829,8 @@ export interface KitSeenTarget {
   entries: KitEntry[];
   /** name → link text canopy placed */
   placed: Record<string, string>;
+  /** name → where adopt moved the hand-made entry (phase 3); absent before any adopt */
+  adoptedFrom?: Record<string, string>;
 }
 
 export interface KitStoreState {
@@ -2831,6 +2855,14 @@ export interface KitSeen {
   targets: KitSeenTarget[];
   /** source skill name → whether its path exists there */
   sources: Record<string, boolean>;
+  /** `darwin`, or `ID` from /etc/os-release, when the tools scan ran (phase 3) */
+  os?: string;
+  /** /etc/os-release `ID_LIKE`, split */
+  osLike?: string[];
+  /** each tool's check, when the manifest lists tools */
+  tools?: KitToolSeen[];
+  /** why the tools scan failed */
+  toolsError?: string | null;
 }
 
 export type KitAction =
@@ -2844,14 +2876,19 @@ export type KitAction =
   | { kind: "mcp-remove"; agent: string; name: string }
   /** a hand-made entry replaced by the kit's, the old one kept for put back */
   | { kind: "mcp-adopt"; agent: string; name: string }
-  | { kind: "mcp-restore"; agent: string; name: string };
+  | { kind: "mcp-restore"; agent: string; name: string }
+  /** a hand-made skill moved aside for the kit's link (phase 3); never in a plan */
+  | { kind: "skill-adopt"; agent: string; name: string; link: string }
+  | { kind: "skill-restore"; agent: string; name: string };
 
 export type KitMcpAction = Extract<KitAction, { kind: "mcp-set" | "mcp-remove" | "mcp-adopt" | "mcp-restore" }>;
 
 export type KitCellState =
   | "ok" | "missing" | "drift" | "foreign" | "local" | "off" | "no-source" | "noagent" | "away"
   /** MCP servers (phase 2) */
-  | "not-allowed" | "stale-allowance" | "no-sink" | "adoptable" | "unsupported" | "unresolved";
+  | "not-allowed" | "stale-allowance" | "no-sink" | "adoptable" | "unsupported" | "unresolved"
+  /** tools (phase 3) */
+  | "check-failed" | "no-install";
 
 export interface KitCell {
   machine: string;
@@ -2859,10 +2896,14 @@ export interface KitCell {
   skill: string;
   state: KitCellState;
   why: string;
-  /** an MCP server's cell; absent for a skill (and from a backend before phase 2) */
-  kind?: "mcp";
+  /** an MCP server's or a tool's cell; absent for a skill (and from a backend before phase 2). A tool's cell is the machine's, so its agent is "" */
+  kind?: "mcp" | "tool";
   /** canopy keeps the hand-made entry adopt replaced here: put back restores it */
   restore?: boolean;
+  /** a tool's install line for this machine's os, as kit.json writes it */
+  install?: string;
+  /** that line uses sudo, so it is shown to copy and never run */
+  sudo?: boolean;
 }
 
 export interface KitMachineView {
@@ -2886,6 +2927,14 @@ export interface KitApplyResult {
   machine: string;
   done: KitAction[];
   failed: { action: KitAction; why: string }[];
+}
+
+/** a tool's install line as it ran, and its output's last lines */
+export interface KitInstallResult {
+  machine: string;
+  tool: string;
+  code: number;
+  output: string;
 }
 
 /** an MCP entry as an agent's file holds it, or as the kit would write it */

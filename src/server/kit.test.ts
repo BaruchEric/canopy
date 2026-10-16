@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { exec } from "../core/exec";
@@ -360,5 +360,114 @@ describe("KitHub and MCP servers", () => {
     releaseOlder(storeInfo([]));
     await older;
     expect(hub.info().cells.find((c) => c.kind === "mcp" && c.agent === "claude" && c.skill === "github")?.state).toBe("adoptable");
+  });
+});
+
+describe("skill adopt, put back and tools (phase 3 part B)", () => {
+  /** a scratch home with a store holding ship, for the backend's machine or for gpd */
+  async function scratchHome(prefix: string): Promise<string> {
+    const h = mkdtempSync(join(tmpdir(), prefix));
+    dirs.push(h);
+    const store = join(h, ".claude");
+    await exec(["git", "init", "-q", "-b", "main", store]);
+    mkdirSync(join(store, "skills/ship"), { recursive: true });
+    writeFileSync(join(store, "skills/ship/SKILL.md"), "x");
+    await exec(["git", "-C", store, "add", "."]);
+    await exec(["git", "-C", store, "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qm", "init"]);
+    mkdirSync(join(h, ".codex/skills"), { recursive: true });
+    return h;
+  }
+  const ALL_OS = (line: string) => ({ darwin: line, arch: line, debian: line });
+  async function setupB(tools: unknown = {}) {
+    const mac = await scratchHome("kithub-b-mac-");
+    const gpd = await scratchHome("kithub-b-gpd-");
+    const manifest = { ...MANIFEST, tools };
+    const kitPath = join(mac, ".claude/kit.json");
+    writeFileSync(kitPath, JSON.stringify(manifest));
+    // gpd runs on its own scratch home, as ssh would run it there
+    const hosts: (string | null)[] = [];
+    const run = async (host: string | null, cmd: string[], opts?: { env?: Record<string, string>; timeoutMs?: number; input?: string }) => {
+      hosts.push(host);
+      return exec(cmd, host === "gpd" ? { ...opts, env: { HOME: gpd } } : opts);
+    };
+    const hub = new KitHub({ self: "mac", devRoot: join(mac, "dev"), kitPath, broadcast: () => {}, run, env: { HOME: mac }, every: 0 });
+    hubs.push(hub);
+    const route = async (method: string, path: string, body?: unknown) =>
+      (await hub.handle(new Request(`http://x${path}`, { method, body: body ? JSON.stringify(body) : undefined }), new URL(`http://x${path}`)))!;
+    const cell = (machine: string, skill: string, kind?: "tool") => hub.info().cells.find((c) => c.machine === machine && c.skill === skill && c.kind === kind && (kind === "tool" || c.agent === "codex"));
+    return { mac, gpd, hub, route, cell, hosts };
+  }
+
+  test("adopt over ssh moves gpd's hand-made skill aside and links; put back brings it back", async () => {
+    const { gpd, hub, route, cell, hosts } = await setupB();
+    mkdirSync(join(gpd, ".codex/skills/ship"));
+    writeFileSync(join(gpd, ".codex/skills/ship/SKILL.md"), "gpd's own");
+    await hub.scan();
+    expect(cell("gpd", "ship")?.state).toBe("adoptable");
+    // never in a plan, so apply all leaves it alone
+    expect(hub.info().machines.find((m) => m.machine === "gpd")?.plan).toEqual([]);
+    const r = await route("POST", "/api/kit/skill-adopt", { machine: "gpd", agent: "codex", name: "ship" });
+    expect(r.status).toBe(200);
+    expect(((await r.json()) as KitApplyResult).failed).toEqual([]);
+    expect(hosts).toContain("gpd");
+    expect(readFileSync(join(gpd, ".codex/.canopy-kit-adopted/ship/SKILL.md"), "utf8")).toBe("gpd's own");
+    expect(cell("gpd", "ship")).toMatchObject({ state: "ok", restore: true });
+    expect((await route("POST", "/api/kit/skill-adopt", { machine: "gpd", agent: "codex", name: "ship" })).status).toBe(409);
+    const back = await route("POST", "/api/kit/skill-restore", { machine: "gpd", agent: "codex", name: "ship" });
+    expect(((await back.json()) as KitApplyResult).failed).toEqual([]);
+    expect(readFileSync(join(gpd, ".codex/skills/ship/SKILL.md"), "utf8")).toBe("gpd's own");
+    expect(cell("gpd", "ship")?.state).toBe("adoptable");
+    expect(cell("gpd", "ship")?.restore).toBeUndefined();
+  });
+  test("adopt and put back are refused where the cell does not offer them, and an adopt is never an apply action", async () => {
+    const { hub, route } = await setupB();
+    await hub.scan();
+    expect((await route("POST", "/api/kit/skill-adopt", { machine: "mac", agent: "codex", name: "ship" })).status).toBe(409);
+    expect((await route("POST", "/api/kit/skill-restore", { machine: "mac", agent: "codex", name: "ship" })).status).toBe(409);
+    expect((await route("POST", "/api/kit/skill-adopt", { machine: "mac", agent: "codex" })).status).toBe(400);
+    await expect(hub.apply("mac", [{ kind: "skill-adopt", agent: "codex", name: "ship", link: "../../.claude/skills/ship" }])).rejects.toThrow("not in the current plan");
+  });
+  test("apply takes one cell's actions alone", async () => {
+    const { mac, hub } = await setupB();
+    mkdirSync(join(mac, ".claude/skills/desk"), { recursive: true });
+    writeFileSync(join(mac, ".claude/skills/desk/SKILL.md"), "x");
+    await exec(["git", "-C", join(mac, ".claude"), "add", "."]);
+    await exec(["git", "-C", join(mac, ".claude"), "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qm", "desk"]);
+    await hub.scan();
+    expect(hub.info().machines[0]!.plan).toHaveLength(2);
+    const r = await hub.apply("mac", [{ kind: "link", agent: "codex", name: "desk", link: "../../.claude/skills/desk" }]);
+    expect(r.done).toHaveLength(1);
+    expect(hub.info().machines[0]!.plan).toEqual([{ kind: "link", agent: "codex", name: "ship", link: "../../.claude/skills/ship" }]);
+  });
+
+  test("tools: a missing tool installs from its line and checks again; ok, sudo and unknown tools are refused", async () => {
+    const { mac, hub, route, cell } = await setupB({
+      marker: { check: "[ -f \"$HOME/installed\" ] || exit 127", install: ALL_OS("touch \"$HOME/installed\"") },
+      rooted: { check: "kit-no-such-tool-x9", install: ALL_OS("sudo pacman -S --noconfirm x9") },
+      fine: { check: "true" },
+    });
+    await hub.scan();
+    expect(cell("mac", "marker", "tool")).toMatchObject({ state: "missing", install: "touch \"$HOME/installed\"" });
+    expect(cell("mac", "rooted", "tool")).toMatchObject({ state: "missing", sudo: true });
+    expect(cell("mac", "fine", "tool")?.state).toBe("ok");
+    // gpd's tools come from its own run
+    expect(cell("gpd", "fine", "tool")?.state).toBe("ok");
+    const refused = async (body: unknown, status: number, text: string) => {
+      const r = await route("POST", "/api/kit/install", body);
+      expect(r.status).toBe(status);
+      expect(((await r.json()) as { error: string }).error).toContain(text);
+    };
+    await refused({ machine: "mac", tool: "rooted", line: "sudo pacman -S --noconfirm x9" }, 409, "uses sudo");
+    await refused({ machine: "mac", tool: "nope", line: "x" }, 404, "not a tool kit.json lists");
+    await refused({ machine: "mac", tool: "fine", line: "true" }, 409, "nothing to install");
+    await refused({ machine: "mac", tool: "marker", line: "touch \"$HOME/other\"" }, 409, "has changed since it was shown");
+    await refused({ machine: "mac", tool: "marker" }, 400, "required");
+    const r = await route("POST", "/api/kit/install", { machine: "mac", tool: "marker", line: "touch \"$HOME/installed\"" });
+    expect(r.status).toBe(200);
+    expect(((await r.json()) as { code: number }).code).toBe(0);
+    expect(existsSync(join(mac, "installed"))).toBe(true);
+    expect(cell("mac", "marker", "tool")?.state).toBe("ok");
+    // never part of apply all
+    expect(hub.info().machines[0]!.plan.every((a) => a.kind === "link")).toBe(true);
   });
 });

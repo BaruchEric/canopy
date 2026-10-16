@@ -3,7 +3,7 @@ import { chmodSync, existsSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, wri
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { parseKit, planKit } from "./kit";
-import { parseMcpScan, parseScan, seeKit, seeMcp } from "./kitscan";
+import { parseMcpScan, parseScan, parseTools, seeKit, seeMcp, seeTools } from "./kitscan";
 import { exec } from "./exec";
 import { fakeClaude } from "./kitfake";
 
@@ -117,6 +117,53 @@ describe("parseScan", () => {
     const s = parseScan("mac", out, 3);
     expect(s.store).toEqual({ tracked: ["ship"], branch: "main", ahead: 1, behind: 2, dirty: 2, fetchFailed: false });
     expect(s.targets[0]!.entries).toEqual([{ name: "ship", kind: "dir", link: null }]);
+  });
+  test("reads adoptedFrom beside placed, and only string paths", () => {
+    const s = parseScan("mac", [
+      "D\tcodex\t/h/.codex/skills\t1\t1",
+      `P\tcodex\t${JSON.stringify({ placed: { ship: "L" }, adoptedFrom: { ship: "/h/.codex/.canopy-kit-adopted/ship", bad: 3 } })}`,
+    ].join("\n"), 3);
+    expect(s.targets[0]).toMatchObject({ placed: { ship: "L" }, adoptedFrom: { ship: "/h/.codex/.canopy-kit-adopted/ship" } });
+  });
+});
+
+describe("the tools scan", () => {
+  const toolKit = (tools: unknown) => { const r = parseKit({ ...RAW, tools }); if ("errors" in r) throw new Error(r.errors.join("; ")); return r.kit; };
+  test("reads the os and each check's exit: 0 ok, 127 not found, anything else with its first stderr line", async () => {
+    const h = mkdtempSync(join(tmpdir(), "kit-tools-"));
+    dirs.push(h);
+    const k = toolKit({
+      sh: { check: "sh -c true" },
+      gone: { check: "kit-no-such-tool-x9 --version" },
+      bad: { check: "echo; echo boom >&2; echo more >&2; exit 3" },
+      noisy: { check: "echo out; true" },
+    });
+    const r = await seeTools(k, { host: null }, { env: { HOME: h, SHELL: "/bin/sh", PATH: process.env["PATH"] ?? "/usr/bin:/bin" } });
+    expect(r.os).not.toBe("");
+    expect(r.tools).toEqual([
+      { name: "sh", code: 0, err: "" },
+      { name: "gone", code: 127, err: expect.stringContaining("kit-no-such-tool-x9") as unknown as string },
+      { name: "bad", code: 3, err: "boom" },
+      { name: "noisy", code: 0, err: "" },
+    ]);
+  });
+  test("a check is a word to sh, never part of the script", async () => {
+    const h = mkdtempSync(join(tmpdir(), "kit-tools-"));
+    dirs.push(h);
+    const k = toolKit({ x: { check: `touch ${join(h, "ran")}; exit 0` } });
+    const r = await seeTools(k, { host: null }, { env: { HOME: h, SHELL: "/bin/sh", PATH: process.env["PATH"] ?? "/usr/bin:/bin" } });
+    expect(r.tools[0]!.code).toBe(0);
+    expect(existsSync(join(h, "ran"))).toBe(true);
+  });
+  test("parseTools: a slow check, ID_LIKE words, and lines that are not tools", () => {
+    expect(parseTools(["O\tubuntu\tdebian", "T\tjq\tt\t", "T\tBad Name\t0\t", "T\tsops\tx\t", "junk"].join("\n"))).toEqual({
+      os: "ubuntu", osLike: ["debian"], tools: [{ name: "jq", code: null, err: "" }],
+    });
+  });
+  test("a script that fails throws its reason", async () => {
+    const k = toolKit({ jq: { check: "jq --version" } });
+    const run = async () => ({ code: 255, stdout: "", stderr: "ssh: connect to host gpd port 22: Connection refused" });
+    await expect(seeTools(k, { host: "gpd" }, { run })).rejects.toThrow("the tools check failed: ssh: connect to host gpd port 22: Connection refused");
   });
 });
 

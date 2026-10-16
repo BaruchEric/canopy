@@ -1,9 +1,12 @@
 import { useEffect, useMemo, useState } from "react";
 import { api } from "../api";
 import { useStore } from "../store";
-import { GLYPH, PROBLEM, adoptableIn, allowAct, cellAt, columns, homesFor, mcpViewsOf, mergeKit, rows, serverAt, serverRows, sheetFor, sheetKey, type KitFilter, type KitMcpPick, type KitSheet } from "../kit";
+import {
+  GLYPH, PROBLEM, actionText, adoptableIn, allowAct, cellActions, cellAt, columns, homesFor, machineSpans, mcpViewsOf, mergeKit, rows, serverAt, serverRows,
+  serverSheetFor, sheetKey, skillSheetFor, toolAt, toolRows, toolSheetFor, type KitFilter, type KitMcpPick, type KitSheet,
+} from "../kit";
 import { errorText, gateHere, hostOf, isGateClosed, readersOf, writerOf } from "../secrets";
-import type { KitApplyResult, KitMachineView, KitMcpPreview } from "../../../src/core/types";
+import type { KitAction, KitApplyResult, KitCell, KitInstallResult, KitMachineView, KitMcpPreview } from "../../../src/core/types";
 import type { SecretAct } from "../../../src/core/secretwire";
 
 /** which backend reaches a machine: the one whose info lists it */
@@ -18,6 +21,131 @@ function outcome(machine: string, r: KitApplyResult): string {
 }
 
 const shown = (e: Record<string, unknown> | null): string => (e ? JSON.stringify(e, null, 2) : "(none)");
+
+const statusOf = (e: unknown): number | undefined => (e instanceof Error && "status" in e && typeof e.status === "number" ? e.status : undefined);
+
+/** One cell's own apply, and for a skill in a link target its adopt and
+ *  put back. The apply sends that cell's actions alone; a 409 means the
+ *  plan moved, so the sheet rescans and says so rather than trying again. */
+function CellSheet({ backend, cell, actions, adoptedTo, onDone }: { backend: string; cell: KitCell; actions: KitAction[]; adoptedTo: string | null; onDone: (msg: string) => void }) {
+  const { machine, agent, skill: name } = cell;
+  const [busy, setBusy] = useState(false);
+  const [sure, setSure] = useState(false);
+  const run = async (call: () => Promise<KitApplyResult>) => {
+    setBusy(true);
+    try {
+      onDone(outcome(machine, await call()));
+    } catch (e) {
+      if (statusOf(e) === 409 && actions.length > 0) {
+        await api.kitScan(backend).catch(() => {});
+        onDone(`${machine}: the plan moved; rescanned`);
+      } else onDone(`${machine}: ${errorText(e)}`);
+    } finally {
+      setBusy(false);
+    }
+  };
+  const skill = cell.kind === undefined;
+  return (
+    <div className="kit-sheet">
+      <h4>{name} for {agent} on {machine}</h4>
+      <p className="kit-note">{cell.state}{cell.why ? `: ${cell.why}` : ""}</p>
+      {actions.length > 0 && (
+        <>
+          <ul className="kit-actions">{actions.map((a) => <li key={JSON.stringify(a)}>{actionText(a)}</li>)}</ul>
+          <div className="kit-line">
+            <button type="button" className="mini" disabled={busy} onClick={() => void run(() => api.kitApply(backend, machine, actions))}>apply</button>
+          </div>
+        </>
+      )}
+      {skill && cell.state === "adoptable" && (
+        <div className="kit-line">
+          <span className="kit-note">Adopt moves the hand-made {name} to {agent}'s .canopy-kit-adopted folder and links the kit's. Put back reverses it.</span>
+          <button type="button" className="mini" disabled={busy} onClick={() => void run(() => api.kitSkillAdopt(backend, machine, agent, name))}>adopt</button>
+        </div>
+      )}
+      {skill && cell.restore && (
+        sure ? (
+          <div className="kit-line">
+            <span className="kit-error">Put back {adoptedTo ?? `the hand-made ${name}`} as {name}? It takes out the kit's link.</span>
+            <button type="button" className="mini" disabled={busy} onClick={() => void run(() => api.kitSkillRestore(backend, machine, agent, name))}>put back</button>
+            <button type="button" className="mini" onClick={() => setSure(false)}>keep the kit's</button>
+          </div>
+        ) : (
+          <div className="kit-line">
+            <button type="button" className="mini" disabled={busy} onClick={() => setSure(true)}>put back…</button>
+          </div>
+        )
+      )}
+      <div className="kit-line">
+        <button type="button" className="mini" onClick={() => onDone("")}>close</button>
+      </div>
+    </div>
+  );
+}
+
+/** A missing tool: a sudo line to copy, or its line run behind a confirm
+ *  that shows it exactly, since kit.json is a file any agent can edit. */
+function ToolSheet({ backend, cell, onDone }: { backend: string; cell: KitCell; onDone: (msg: string) => void }) {
+  const { machine, skill: name } = cell;
+  const line = cell.install ?? "";
+  const [busy, setBusy] = useState(false);
+  const [sure, setSure] = useState(false);
+  const [result, setResult] = useState<KitInstallResult | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const go = async () => {
+    setBusy(true);
+    setError(null);
+    try {
+      const r = await api.kitInstall(backend, machine, name, line);
+      setResult(r);
+      if (r.code === 0) onDone(`${machine}: ${name} installed; checked again`);
+    } catch (e) {
+      setError(errorText(e));
+    } finally {
+      setBusy(false);
+      setSure(false);
+    }
+  };
+  return (
+    <div className="kit-sheet">
+      <h4>{name} on {machine}</h4>
+      <p className="kit-note">{cell.why}</p>
+      {cell.sudo ? (
+        <>
+          <p className="kit-note">This line uses sudo, which cannot prompt over canopy's non-interactive ssh. Run it in a terminal on {machine}, then rescan:</p>
+          <pre className="kit-command">{line}</pre>
+          <div className="kit-line">
+            <button type="button" className="mini" onClick={() => void navigator.clipboard?.writeText(line).catch(() => {})}>copy</button>
+          </div>
+        </>
+      ) : sure ? (
+        <>
+          <p className="kit-error">Run this on {machine}, in its login shell? The line comes from kit.json, which any agent can edit, so read it first.</p>
+          <pre className="kit-command">{line}</pre>
+          <div className="kit-line">
+            <button type="button" className="mini" disabled={busy} onClick={() => void go()}>{busy ? "running…" : "run it"}</button>
+            <button type="button" className="mini" disabled={busy} onClick={() => setSure(false)}>cancel</button>
+          </div>
+        </>
+      ) : (
+        <div className="kit-line">
+          <code>{line}</code>
+          <button type="button" className="mini" onClick={() => setSure(true)}>install…</button>
+        </div>
+      )}
+      {result && (
+        <>
+          <p className={result.code === 0 ? "kit-note" : "kit-error"}>exited {result.code}</p>
+          {result.output && <pre className="kit-command">{result.output}</pre>}
+        </>
+      )}
+      {error && <p className="kit-error">{error}</p>}
+      <div className="kit-line">
+        <button type="button" className="mini" onClick={() => onDone("")}>close</button>
+      </div>
+    </div>
+  );
+}
 
 const pairs = (m: Record<string, string>): string => Object.entries(m).map(([k, n]) => `${k} from ${n}`).join(", ");
 
@@ -213,6 +341,12 @@ export function KitView() {
   };
   const sheetOwner = sheet && sheet.kind !== "allow" ? ownerOf(byBackend, sheet.machine) : null;
   const sheetView = sheet?.kind === "allow" ? views.find((v) => v.name === sheet.name) : undefined;
+  const toolNames = useMemo(() => toolRows(merged.cells, f), [merged, f]);
+  const viewOf = (machine: string) => merged.machines.find((x) => x.machine === machine);
+  // the sheet reads its cell from the live cells, so a rescan shows the new state
+  const sheetCell = sheet?.kind === "cell"
+    ? (sheet.of === "mcp" ? serverAt(merged.cells, sheet.name, sheet.machine, sheet.agent) : cellAt(merged.cells, sheet.name, sheet.machine, sheet.agent))
+    : sheet?.kind === "tool" ? toolAt(merged.cells, sheet.name, sheet.machine) : null;
 
   async function apply(machine: string) {
     const b = ownerOf(byBackend, machine);
@@ -285,10 +419,11 @@ export function KitView() {
                   const cell = cellAt(merged.cells, skill, col.machine, col.agent)
                     ?? cellAt(merged.cells, "*", col.machine, col.agent);
                   const state = cell?.state ?? "off";
+                  const open = cell?.skill === skill ? skillSheetFor(cell, cellActions(viewOf(col.machine), cell)) : null;
                   return (
                     <td key={`${col.machine}/${col.agent}`} className={`kit-cell kit-${state}${PROBLEM.has(state) ? " kit-problem" : ""}`}
-                      title={cell ? `${state}${cell.why ? `: ${cell.why}` : ""}` : ""}>
-                      {GLYPH[state]}
+                      title={cell ? `${state}${cell.why ? `: ${cell.why}` : ""}${cell.restore ? " (put back available)" : ""}` : ""}>
+                      {open ? <button type="button" className="kit-cell-button" onClick={() => setSheet(open)}>{GLYPH[state]}</button> : GLYPH[state]}
                     </td>
                   );
                 })}
@@ -327,7 +462,7 @@ export function KitView() {
                     const cell = serverAt(merged.cells, name, col.machine, col.agent);
                     const state = cell?.state ?? "off";
                     const hasView = views.some((v) => v.name === name);
-                    const open = sheetFor(cell, name, hasView);
+                    const open = serverSheetFor(cell, name, hasView, cellActions(viewOf(col.machine), cell));
                     const noView = !hasView && (state === "not-allowed" || state === "stale-allowance") ? " (no backend on this page gives its definition, so it cannot be allowed here)" : "";
                     return (
                       <td key={`mcp/${col.machine}/${col.agent}`} className={`kit-cell kit-${state}${PROBLEM.has(state) ? " kit-problem" : ""}`}
@@ -341,7 +476,42 @@ export function KitView() {
             </tbody>
           </table>
         )}
+        {toolNames.length > 0 && (
+          <table className="kit-grid kit-tools">
+            <thead>
+              <tr>
+                <th>tools</th>
+                {machineSpans(cols).map((m) => <th key={`tool/${m.machine}`} colSpan={m.span}>{m.machine}</th>)}
+              </tr>
+            </thead>
+            <tbody>
+              {toolNames.map((name) => (
+                <tr key={`tool/${name}`}>
+                  <th scope="row">{name}</th>
+                  {machineSpans(cols).map((m) => {
+                    const cell = toolAt(merged.cells, name, m.machine);
+                    const state = cell?.state ?? "off";
+                    const open = toolSheetFor(cell);
+                    return (
+                      <td key={`tool/${m.machine}`} colSpan={m.span} className={`kit-cell kit-${state}${PROBLEM.has(state) ? " kit-problem" : ""}`}
+                        title={cell ? `${state}${cell.why ? `: ${cell.why}` : ""}` : ""}>
+                        {open ? <button type="button" className="kit-cell-button" onClick={() => setSheet(open)}>{GLYPH[state]}</button> : GLYPH[state]}
+                      </td>
+                    );
+                  })}
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
       </div>
+      {sheet?.kind === "cell" && sheetOwner && sheetCell && (
+        <CellSheet key={sheetKey(sheet)} backend={sheetOwner} cell={sheetCell} actions={cellActions(viewOf(sheet.machine), sheetCell)}
+          adoptedTo={viewOf(sheet.machine)?.seen.targets.find((t) => t.agent === sheet.agent)?.adoptedFrom?.[sheet.name] ?? null} onDone={closer(sheetKey(sheet))} />
+      )}
+      {sheet?.kind === "tool" && sheetOwner && sheetCell && (
+        <ToolSheet key={sheetKey(sheet)} backend={sheetOwner} cell={sheetCell} onDone={closer(sheetKey(sheet))} />
+      )}
       {sheet?.kind === "adopt" && sheetOwner && (
         <AdoptSheet key={sheetKey(sheet)} backend={sheetOwner} machine={sheet.machine} agent={sheet.agent} names={sheet.names} onDone={closer(sheetKey(sheet))} />
       )}
