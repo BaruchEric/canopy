@@ -128,7 +128,7 @@ describe("landing", () => {
     const w = await world();
     const run = await readyRun(w, "aa11", "b.txt", "b\n");
     const tip = await revOf(run.branch!.dir, "HEAD");
-    w.hub.land("aa11");
+    await w.hub.land("aa11");
     await w.hub.idle();
     const e = entryOf(w, "aa11")!;
     expect(e.state).toBe("landed");
@@ -150,19 +150,19 @@ describe("landing", () => {
     const w = await world();
     const run = await readyRun(w, "bb22", "b.txt", "b\n");
     w.hub.onRun({ ...run, branch: { ...run.branch!, state: "uncommitted" } });
-    expect(() => w.hub.land("bb22")).toThrow("only a ready run lands");
+    await expect(w.hub.land("bb22")).rejects.toThrow("only a ready run lands");
     w.hub.onRun(run);
     w.active.add(run.id);
-    expect(() => w.hub.land("bb22")).toThrow("still going");
-    expect(() => w.hub.land("nope")).toThrow("no branch run");
+    await expect(w.hub.land("bb22")).rejects.toThrow("still going");
+    await expect(w.hub.land("nope")).rejects.toThrow("no branch run");
   });
 
   test("two runs on the same line: the first lands, the second comes back with the file", async () => {
     const w = await world();
     await readyRun(w, "cc01", "a.txt", "one\nTWO first\nthree\n");
     await readyRun(w, "cc02", "a.txt", "one\nTWO second\nthree\n");
-    w.hub.land("cc01");
-    w.hub.land("cc02");
+    await w.hub.land("cc01");
+    await w.hub.land("cc02");
     await w.hub.idle();
     expect(entryOf(w, "cc01")?.state).toBe("landed");
     const back = entryOf(w, "cc02")!;
@@ -177,15 +177,15 @@ describe("landing", () => {
     const w = await world();
     await readyRun(w, "dd01", "a.txt", "one\nTWO first\nthree\n");
     const second = await readyRun(w, "dd02", "a.txt", "one\nTWO second\nthree\n");
-    w.hub.land("dd01");
-    w.hub.land("dd02");
+    await w.hub.land("dd01");
+    await w.hub.land("dd02");
     await w.hub.idle();
     const fix = await w.hub.fix("dd02");
     expect(w.fixes.map(([r, e]) => [r.id, r.session, e.state])).toEqual([["dd02", "sess-dd02", "conflict"]]);
     expect(entryOf(w, "dd02")?.fixing).toBe(fix.id);
     w.active.add(fix.id);
     await expect(w.hub.fix("dd02")).rejects.toThrow("a fix is going already");
-    expect(() => w.hub.land("dd02")).toThrow("still going");
+    await expect(w.hub.land("dd02")).rejects.toThrow("still going");
     w.active.delete(fix.id);
     // the fix rebases and resolves in the worktree, then settles ready
     const dir = second.branch!.dir;
@@ -201,7 +201,7 @@ describe("landing", () => {
     const w = await world();
     await readyRun(w, "ee11", "b.txt", "b\n");
     w.answers.set("bun run test", () => ({ exit: 1, output: "x".repeat(5000) + "\n1 fail" }));
-    w.hub.land("ee11");
+    await w.hub.land("ee11");
     await w.hub.idle();
     const e = entryOf(w, "ee11")!;
     expect([e.state, e.gate]).toEqual(["red", "test"]);
@@ -221,7 +221,7 @@ describe("landing", () => {
       }
       return { exit: 0, output: "" };
     });
-    w.hub.land("ff11");
+    await w.hub.land("ff11");
     await w.hub.idle();
     const e = entryOf(w, "ff11")!;
     expect([e.state, e.tries]).toEqual(["landed", 1]);
@@ -232,7 +232,7 @@ describe("landing", () => {
     const w = await world();
     await readyRun(w, "gg11", "a.txt", "one\nchanged\nthree\n");
     await writeFile(join(w.repo.path, "a.txt"), "one\nlocal\nthree\n");
-    w.hub.land("gg11");
+    await w.hub.land("gg11");
     await w.hub.idle();
     const e = entryOf(w, "gg11")!;
     expect([e.state, e.reason]).toEqual(["waiting", "main checkout busy: a.txt"]);
@@ -246,7 +246,7 @@ describe("landing", () => {
     const w = await world();
     await readyRun(w, "hh11", "b.txt", "b\n");
     await sh(w.repo.path, "checkout", "-q", "-b", "elsewhere");
-    w.hub.land("hh11");
+    await w.hub.land("hh11");
     await w.hub.idle();
     expect(entryOf(w, "hh11")).toMatchObject({ state: "waiting", reason: "checkout not on main" });
     expect(w.checks).toEqual([]);
@@ -255,7 +255,7 @@ describe("landing", () => {
   test("a repo with no gates lands and the entry says so", async () => {
     const w = await world({ noPackage: true });
     await readyRun(w, "ii11", "b.txt", "b\n");
-    w.hub.land("ii11");
+    await w.hub.land("ii11");
     await w.hub.idle();
     expect(entryOf(w, "ii11")).toMatchObject({ state: "landed", noGates: true });
   });
@@ -265,7 +265,7 @@ describe("landing", () => {
     await mkdir(join(w.repo.path, ".canopy"), { recursive: true });
     await writeFile(join(w.repo.path, ".canopy", "gates.json"), "{");
     await readyRun(w, "jj11", "b.txt", "b\n");
-    w.hub.land("jj11");
+    await w.hub.land("jj11");
     await w.hub.idle();
     expect(entryOf(w, "jj11")?.state).toBe("waiting");
     expect(entryOf(w, "jj11")?.reason).toContain("not JSON");
@@ -277,7 +277,7 @@ describe("landing", () => {
     await commit(w.repo.path, ".canopy/gates.json", JSON.stringify({ setup: "bun install", gates: [{ name: "test", run: "bun test" }] }));
     await readyRun(w, "kk11", "b.txt", "b\n");
     await commit(w.repo.path, "bun.lock", "lock\n");
-    w.hub.land("kk11");
+    await w.hub.land("kk11");
     await w.hub.idle();
     expect(w.checks.map(([, l]) => l)).toEqual(["bun install", "bun test"]);
     expect(entryOf(w, "kk11")?.state).toBe("landed");
@@ -299,6 +299,174 @@ describe("landing", () => {
   });
 });
 
+/** `.canopy/review.json` committed on main. */
+const rulesOn = async (w: World, rules: unknown): Promise<void> => {
+  await mkdir(join(w.repo.path, ".canopy"), { recursive: true });
+  await commit(w.repo.path, ".canopy/review.json", JSON.stringify(rules));
+};
+const recOf = (w: World, id: string): LandingRun | undefined => w.hub.info().runs.find((r) => r.id === id);
+const RULES = { autoLand: ["docs", "comments", "format"], approve: ["secret/**"] };
+
+describe("review rules", () => {
+  test("a docs run joins on its own, lands, and leaves a notice", async () => {
+    const w = await world();
+    await rulesOn(w, RULES);
+    await readyRun(w, "ra11", "notes.md", "words\n");
+    await w.hub.idle();
+    const e = entryOf(w, "ra11")!;
+    expect([e.state, e.auto]).toEqual(["landed", true]);
+    expect(w.hub.info().notices).toEqual([expect.objectContaining({ kind: "landed", entry: "ra11", branch: "run/x-ra11", head: e.head })]);
+    expect(await sh(w.repo.path, "show", "HEAD:notes.md")).toBe("words");
+  });
+
+  test("a logic run waits for land, and Eric's land queues it with no flags", async () => {
+    const w = await world();
+    await rulesOn(w, RULES);
+    await readyRun(w, "rb11", "b.ts", "export const b = 1;\n");
+    await w.hub.idle();
+    expect(entryOf(w, "rb11")).toBeUndefined();
+    expect(recOf(w, "rb11")?.review).toMatchObject({ verdict: "land", files: [{ path: "b.ts", cls: "logic" }] });
+    const e = await w.hub.land("rb11");
+    expect([e.auto, e.approved]).toEqual([undefined, undefined]);
+    await w.hub.idle();
+    expect(entryOf(w, "rb11")?.state).toBe("landed");
+    expect(w.hub.info().notices).toEqual([]);
+  });
+
+  test("a sensitive run lands only with the id it was sorted at, and the approval survives a rebase", async () => {
+    const w = await world();
+    await rulesOn(w, RULES);
+    await readyRun(w, "rc11", "secret/k.txt", "k\n");
+    await w.hub.idle();
+    const review = recOf(w, "rc11")!.review!;
+    expect([review.verdict, review.files[0]?.sensitive]).toEqual(["approve", "matches secret/** in .canopy/review.json"]);
+    await expect(w.hub.land("rc11")).rejects.toThrow("it needs your approval: 1 sensitive file; look at the files and approve");
+    await expect(w.hub.land("rc11", "stale")).rejects.toThrow("the branch changed since you looked");
+    // main moves before its turn: the rebase leaves the sensitive diff alone
+    w.hub.stop();
+    const e = await w.hub.land("rc11", review.sensitiveId);
+    expect(e.approved).toBe(review.sensitiveId!);
+    await commit(w.repo.path, "other.txt", "o\n");
+    w.hub.start();
+    w.hub.kick(w.repo.id);
+    await w.hub.idle();
+    w.hub.stop();
+    expect(entryOf(w, "rc11")?.state).toBe("landed");
+    expect(await sh(w.repo.path, "show", "HEAD:secret/k.txt")).toBe("k");
+  });
+
+  test("land all queues the runs that need no approval and names the one that does", async () => {
+    const w = await world();
+    await rulesOn(w, RULES);
+    await readyRun(w, "rd01", "b.ts", "export const b = 1;\n");
+    await readyRun(w, "rd02", "c.ts", "export const c = 1;\n");
+    await readyRun(w, "rd03", "secret/k.txt", "k\n");
+    await w.hub.idle();
+    w.hub.stop();
+    const got = await w.hub.landAll(w.repo.id);
+    expect(got).toEqual({ queued: ["rd01", "rd02"], skipped: [{ id: "rd03", branch: "run/x-rd03", why: "needs your approval: 1 sensitive file" }] });
+    expect(w.hub.info().entries.map((e) => [e.id, e.state])).toEqual([
+      ["rd01", "queued"],
+      ["rd02", "queued"],
+    ]);
+  });
+
+  test("rules narrowed on main while an auto entry waits hold it back with a notice", async () => {
+    const w = await world();
+    await rulesOn(w, RULES);
+    w.hub.stop();
+    await readyRun(w, "re11", "notes.md", "words\n");
+    await w.hub.idle();
+    expect(entryOf(w, "re11")).toMatchObject({ state: "queued", auto: true });
+    await rulesOn(w, { autoLand: [], approve: [] });
+    w.hub.start();
+    w.hub.kick(w.repo.id);
+    await w.hub.idle();
+    w.hub.stop();
+    expect(entryOf(w, "re11")).toBeUndefined();
+    expect(recOf(w, "re11")).toMatchObject({ state: "ready", review: { verdict: "land" } });
+    expect(w.hub.info().notices).toEqual([expect.objectContaining({ kind: "held", entry: "re11", why: "after the rebase it needs your land" })]);
+    expect(await sh(w.repo.path, "log", "--format=%s", "-1")).toBe("c .canopy/review.json");
+  });
+
+  test("a fix that changes an approved sensitive file waits for a new approval", async () => {
+    const w = await world();
+    await rulesOn(w, RULES);
+    const run = await readyRun(w, "rf11", "secret/k.txt", "k\n");
+    await w.hub.idle();
+    w.answers.set("bun run test", () => ({ exit: 1, output: "1 fail" }));
+    await w.hub.land("rf11", recOf(w, "rf11")!.review!.sensitiveId);
+    await w.hub.idle();
+    expect(entryOf(w, "rf11")?.state).toBe("red");
+    w.answers.delete("bun run test");
+    const fix = await w.hub.fix("rf11");
+    await commit(run.branch!.dir, "secret/k.txt", "k2\n");
+    w.hub.onRun({ ...fix, status: "done", endedAt: 5, branch: { ...fix.branch!, state: "ready" } });
+    await w.hub.idle();
+    expect(entryOf(w, "rf11")).toBeUndefined();
+    expect(recOf(w, "rf11")?.state).toBe("ready");
+    expect(w.hub.info().notices?.[0]).toMatchObject({ kind: "held", entry: "rf11", why: "the fix changed the sensitive files you approved; look again" });
+  });
+
+  test("the routes: land with an id, land all, the diff of a listed file only, seen", async () => {
+    const w = await world();
+    await rulesOn(w, RULES);
+    await readyRun(w, "rg11", "secret/k.txt", "k\n");
+    await w.hub.idle();
+    w.hub.stop();
+    const call = (method: string, path: string, body?: unknown) =>
+      w.hub.handle(new Request(`http://x${path}`, { method, ...(body === undefined ? {} : { body: JSON.stringify(body) }) }), new URL(`http://x${path}`));
+    const diff = await call("GET", "/api/landing/diff?id=rg11&path=secret/k.txt");
+    expect(diff!.status).toBe(200);
+    expect(((await diff!.json()) as { diff: string }).diff).toContain("+k");
+    expect((await call("GET", "/api/landing/diff?id=rg11&path=a.txt"))!.status).toBe(404);
+    expect((await call("GET", "/api/landing/diff?id=rg11&path=../../etc/passwd"))!.status).toBe(404);
+    expect((await call("GET", "/api/landing/diff?id=rg11"))!.status).toBe(400);
+    expect((await call("POST", "/api/landing/land", { run: "rg11" }))!.status).toBe(409);
+    expect((await call("POST", "/api/landing/land", { run: "rg11", approve: 3 }))!.status).toBe(400);
+    expect((await call("POST", "/api/landing/land", { run: "rg11", approve: recOf(w, "rg11")!.review!.sensitiveId }))!.status).toBe(200);
+    expect((await call("POST", "/api/landing/land-all", {}))!.status).toBe(400);
+    expect(await (await call("POST", "/api/landing/land-all", { repo: w.repo.id }))!.json()).toEqual({ queued: [], skipped: [] });
+    expect((await call("POST", "/api/landing/seen", { ids: "x" }))!.status).toBe(400);
+    expect((await call("POST", "/api/landing/seen", { ids: ["x"] }))!.status).toBe(200);
+  });
+
+  test("notices and sorts read back after a restart, and a plan 1 record is sorted at adopt", async () => {
+    const w = await world();
+    await w.hub.adopt();
+    await rulesOn(w, RULES);
+    await readyRun(w, "rh01", "notes.md", "words\n");
+    await readyRun(w, "rh02", "b.ts", "export const b = 1;\n");
+    await w.hub.idle();
+    w.hub.stop();
+    await w.hub.flushed();
+    // a record from plan 1 has no sort
+    const file = join(w.dir, "runs", "rh02.json");
+    const { review: _r, ...plain } = JSON.parse(await Bun.file(file).text()) as LandingRun;
+    await writeFile(file, JSON.stringify(plain));
+    const again = new LandingHub({
+      broadcast: () => {},
+      repo: (id) => (id === w.repo.id ? w.repo : undefined),
+      repoByPath: (p) => (p === w.repo.path ? w.repo : undefined),
+      check: async () => ({ exit: 0, output: "" }),
+      startFix: () => {
+        throw new Error("no fix here");
+      },
+      runActive: () => false,
+      dir: w.dir,
+      worktrees: w.wts,
+    });
+    await again.adopt();
+    await again.idle();
+    again.stop();
+    expect(again.info().notices).toEqual([expect.objectContaining({ kind: "landed", entry: "rh01" })]);
+    expect(again.info().runs.find((r) => r.id === "rh02")?.review?.verdict).toBe("land");
+    again.seen([again.info().notices![0]!.id]);
+    await again.flushed();
+    expect(existsSync(join(w.dir, "notices.json"))).toBe(false);
+  });
+});
+
 describe("restarts", () => {
   test("records come back: a working run reads stopped, a mid-turn entry starts again and lands, an unknown worktree is an orphan", async () => {
     const w = await world();
@@ -311,7 +479,7 @@ describe("restarts", () => {
     w.hub.onRun(fakeRun(w.repo.id, { name: "run/x-mm22", target: "main", base: "main", dir: dir2, origin: "mm22" }, "working"));
     // the first entry was mid-gate when the server died: the stopped hub
     // takes it into its queue without working it, and the file says gate
-    w.hub.land("mm11");
+    await w.hub.land("mm11");
     await w.hub.flushed();
     const queueFile = join(w.dir, "queue", (await readdir(join(w.dir, "queue")))[0]!);
     const entries = JSON.parse(await Bun.file(queueFile).text()) as LandEntry[];
@@ -351,7 +519,7 @@ describe("restarts", () => {
   test("a hub that never adopted keeps nothing on disk", async () => {
     const w = await world();
     await readyRun(w, "nn11", "b.txt", "b\n");
-    w.hub.land("nn11");
+    await w.hub.land("nn11");
     await w.hub.idle();
     expect(existsSync(w.dir)).toBe(false);
   });
@@ -360,7 +528,7 @@ describe("restarts", () => {
     const w = await world();
     await readyRun(w, "pp11", "b.txt", "b\n");
     w.answers.set("bun run lint", () => ({ exit: 1, output: "lint failed" }));
-    w.hub.land("pp11");
+    await w.hub.land("pp11");
     await w.hub.idle();
     expect(entryOf(w, "pp11")?.state).toBe("red");
     await w.hub.drop("pp11");
