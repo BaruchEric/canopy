@@ -21,6 +21,7 @@ import {
   takeWip,
   trackBranch,
 } from "../core/peersync";
+import { HIDE_RUNS } from "../core/peers";
 import { DEFAULT_IGNORE, launchSource, scan, scanSource } from "../core/scan";
 import {
   addSource,
@@ -525,7 +526,10 @@ export async function main(argv: string[]): Promise<void> {
             }
             // a mirror is opened as itself, with no suffix probed past it
             const strict = cmd.mirror !== undefined ? ["--strict"] : [];
-            const p = Bun.spawn(["git-upload-pack", ...strict, cmd.path], { env, stdin: "inherit", stdout: "inherit", stderr: "inherit" });
+            // `git -c` rather than the env: the env above stays exactly
+            // what upload-pack needs. The flag hides a branch run's run/*
+            // branches from every peer, an older canopy's fetch included.
+            const p = Bun.spawn(["git", "-c", HIDE_RUNS, "upload-pack", ...strict, cmd.path], { env, stdin: "inherit", stdout: "inherit", stderr: "inherit" });
             const code = await p.exited;
             const n = p.signalCode ? osConstants.signals[p.signalCode] : undefined;
             process.exit(n !== undefined ? 128 + n : code);

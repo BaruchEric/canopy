@@ -4,7 +4,7 @@ import { existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { exec } from "./exec";
-import { NO_PUSH, peerUrl } from "./peers";
+import { HIDE_RUNS, NO_PUSH, peerUrl } from "./peers";
 import {
   advanceUpstreams,
   cloneMissing,
@@ -323,7 +323,7 @@ describe("initRepo", () => {
   test("adds the remote with refspecs, no tags and a push url that fails", async () => {
     const { mac } = await pair("init");
     expect(await sh(mac, "config", "--get-all", "remote.mini.fetch")).toBe(
-      "+refs/heads/*:refs/remotes/mini/*\n+refs/wip/*:refs/peer-wip/mini/*",
+      "+refs/heads/*:refs/remotes/mini/*\n+refs/wip/*:refs/peer-wip/mini/*\n^refs/heads/run/*",
     );
     expect(await sh(mac, "config", "remote.mini.tagOpt")).toBe("--no-tags");
     expect(await sh(mac, "config", "remote.mini.pushurl")).toBe(NO_PUSH);
@@ -332,7 +332,7 @@ describe("initRepo", () => {
   test("is safe to run twice", async () => {
     const mac = join(root, "init-mac");
     await initRepo(mac, "init-mini", [{ name: "mini", alias: null, root, role: "git" }], false);
-    expect((await sh(mac, "config", "--get-all", "remote.mini.fetch")).split("\n")).toHaveLength(2);
+    expect((await sh(mac, "config", "--get-all", "remote.mini.fetch")).split("\n")).toHaveLength(3);
   });
   test("leaves a same-named remote alone when it is not the no-push marker: it is the user's own", async () => {
     const mac = await repo("init-userowned-mac");
@@ -358,7 +358,7 @@ describe("initRepo", () => {
 
     expect(await sh(mac, "config", "remote.mini.pushurl")).toBe(NO_PUSH);
     expect(await sh(mac, "config", "--get-all", "remote.mini.fetch")).toBe(
-      "+refs/heads/*:refs/remotes/mini/*\n+refs/wip/*:refs/peer-wip/mini/*",
+      "+refs/heads/*:refs/remotes/mini/*\n+refs/wip/*:refs/peer-wip/mini/*\n^refs/heads/run/*",
     );
     expect(await sh(mac, "config", "remote.mini.tagOpt")).toBe("--no-tags");
   });
@@ -373,6 +373,46 @@ describe("fetch and fast-forward", () => {
     const r = await fastForward(mac, ["mini"], false);
     expect(r.moved).toEqual([{ branch: "main", from: before, to: tip, peer: "mini" }]);
     expect(await sh(mac, "rev-parse", "HEAD")).toBe(tip);
+  });
+
+  test("a branch run's run/* branch on the peer is not fetched and not fast-forwarded", async () => {
+    const { mac, mini, toMini, miniId } = await pair("runs");
+    // the same run branch on both sides, the peer's ahead: neither is touched
+    await sh(mac, "branch", "run/x-ab12");
+    await sh(mini, "branch", "run/x-ab12");
+    await sh(mini, "checkout", "-q", "-b", "run/y-cd34");
+    await commit(mini, "y.txt", "y\n");
+    await sh(mini, "checkout", "-q", "run/x-ab12");
+    await commit(mini, "x.txt", "x\n");
+    await sh(mini, "checkout", "-q", "main");
+    const mine = await sh(mac, "rev-parse", "run/x-ab12");
+    expect(await fetchPeer(mac, miniId, toMini, {})).toBe("ok");
+    expect((await exec(["git", "rev-parse", "-q", "--verify", "refs/remotes/mini/run/y-cd34"], { cwd: mac })).code).not.toBe(0);
+    expect((await exec(["git", "rev-parse", "-q", "--verify", "refs/remotes/mini/run/x-ab12"], { cwd: mac })).code).not.toBe(0);
+    expect(await sh(mac, "rev-parse", "refs/remotes/mini/main")).toBe(await sh(mini, "rev-parse", "main"));
+    const r = await fastForward(mac, ["mini"], false);
+    expect(r.moved).toEqual([]);
+    expect(r.peerOnly).toEqual([]);
+    expect(await sh(mac, "rev-parse", "run/x-ab12")).toBe(mine);
+  });
+
+  test("the gate's upload-pack flag hides run/* even from a fetch without the negative refspec", async () => {
+    const { mac, mini } = await pair("runs-hide");
+    await sh(mini, "branch", "run/z-9f9f");
+    const r = await exec(
+      ["git", "fetch", "-q", "--upload-pack", `git -c ${HIDE_RUNS} upload-pack`, mini, "+refs/heads/*:refs/remotes/old/*"],
+      { cwd: mac },
+    );
+    expect(r.code).toBe(0);
+    expect(await sh(mac, "rev-parse", "refs/remotes/old/main")).toBe(await sh(mini, "rev-parse", "main"));
+    expect((await exec(["git", "rev-parse", "-q", "--verify", "refs/remotes/old/run/z-9f9f"], { cwd: mac })).code).not.toBe(0);
+  });
+
+  test("a stale run/* remote ref from before the refspec is ignored all the same", async () => {
+    const { mac } = await pair("runs-stale");
+    await sh(mac, "update-ref", "refs/remotes/mini/run/old-ef56", await sh(mac, "rev-parse", "HEAD"));
+    const r = await fastForward(mac, ["mini"], false);
+    expect(r.peerOnly).toEqual([]);
   });
 
   test("a dirty tree keeps its branch where it is", async () => {

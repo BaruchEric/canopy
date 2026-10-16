@@ -8,7 +8,7 @@ import { dirname, isAbsolute, join, normalize, relative, resolve, sep } from "no
 import { parseRemote } from "./access";
 import { git, onHost } from "./exec";
 import { shellQuote } from "./host";
-import { BUSY_MARKERS, ffTarget, isPeerName, isSafeRel, NO_PUSH, parseNameStatus, parseQuotedWords, parseRefLines, parseWipLines, peerMissing, peerRefspecs, peerUnreachable, peerUrl, repoWanted, seedWanted } from "./peers";
+import { BUSY_MARKERS, ffTarget, isPeerName, isRunBranch, isSafeRel, NO_PUSH, parseNameStatus, parseQuotedWords, parseRefLines, parseWipLines, PEER_SKIP_RUNS, peerMissing, peerRefspecs, peerUnreachable, peerUrl, repoWanted, seedWanted } from "./peers";
 import { isSessionId } from "./sessions";
 import { seedsDirOf, seedsRootOf } from "./seedgit";
 import { MIRRORS_DIR, mirrorPath, mirrorSlug } from "./seedmirror";
@@ -149,7 +149,8 @@ export async function snapshotWip(
   dry: boolean,
 ): Promise<{ branch: string; at: number; wrote: boolean } | null> {
   const branch = await currentBranch(repo);
-  if (!branch) return null;
+  // a checkout on a run branch keeps its work here, like the branch itself
+  if (!branch || isRunBranch(branch)) return null;
   // First, so a stale ref in the way of this branch's (refs/wip/feat under
   // feat/x) is gone before the write below.
   if (!dry) await dropStaleWips(repo, branch);
@@ -245,6 +246,7 @@ export async function initRepo(repo: string, id: string, peers: Peer[], dry: boo
     const [heads, wip] = peerRefspecs(p.name);
     await git(repo, ["config", "--replace-all", `remote.${p.name}.fetch`, heads]);
     await git(repo, ["config", "--add", `remote.${p.name}.fetch`, wip]);
+    await git(repo, ["config", "--add", `remote.${p.name}.fetch`, PEER_SKIP_RUNS]);
     await git(repo, ["config", `remote.${p.name}.tagOpt`, "--no-tags"]);
   }
 }
@@ -257,7 +259,7 @@ export type FetchOutcome = "ok" | "missing" | "unreachable" | { error: string };
  *  "missing" for having no such remote. */
 export async function fetchPeer(repo: string, id: string, peer: Peer, env: Record<string, string>): Promise<FetchOutcome> {
   const [heads, wip] = peerRefspecs(peer.name);
-  const r = await git(repo, ["fetch", "--prune", "--no-tags", "--quiet", peerUrl(peer, id), heads, wip], 60_000, { GIT_TERMINAL_PROMPT: "0", ...env });
+  const r = await git(repo, ["fetch", "--prune", "--no-tags", "--quiet", peerUrl(peer, id), heads, wip, PEER_SKIP_RUNS], 60_000, { GIT_TERMINAL_PROMPT: "0", ...env });
   if (r.code === 0) return "ok";
   if (peerUnreachable(r.stderr)) return "unreachable";
   if (peerMissing(r.stderr)) return "missing";
@@ -266,15 +268,18 @@ export async function fetchPeer(repo: string, id: string, peer: Peer, env: Recor
 
 export async function peerTips(repo: string, peers: string[]) {
   const local = new Map<string, string>();
+  // run/* branches are a branch run's own and stay out on both sides
   for (const { ref, hash } of parseRefLines((await git(repo, ["for-each-ref", "--format=%(objectname) %(refname)", "refs/heads/"])).stdout)) {
-    local.set(ref.slice("refs/heads/".length), hash);
+    const name = ref.slice("refs/heads/".length);
+    if (!isRunBranch(name)) local.set(name, hash);
   }
   const byPeer = new Map<string, Map<string, string>>();
   for (const p of peers) {
     const m = new Map<string, string>();
     const prefix = `refs/remotes/${p}/`;
     for (const { ref, hash } of parseRefLines((await git(repo, ["for-each-ref", "--format=%(objectname) %(refname)", prefix])).stdout)) {
-      if (ref !== `${prefix}HEAD`) m.set(ref.slice(prefix.length), hash);
+      const name = ref.slice(prefix.length);
+      if (ref !== `${prefix}HEAD` && !isRunBranch(name)) m.set(name, hash);
     }
     byPeer.set(p, m);
   }

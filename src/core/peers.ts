@@ -52,6 +52,15 @@ export const peerRefspecs = (name: string): [string, string] => [
   `+refs/wip/*:refs/peer-wip/${name}/*`,
 ];
 
+/** A branch run's branches (`run/<slug>-<id>`, the landing queue) never
+ *  ride peer sync: a half-done run stays on the machine it runs on. */
+export const RUN_BRANCH_PREFIX = "run/";
+export const isRunBranch = (branch: string): boolean => branch.startsWith(RUN_BRANCH_PREFIX);
+/** the negative refspec a peer fetch adds, so a peer's run branches stay there */
+export const PEER_SKIP_RUNS = `^refs/heads/${RUN_BRANCH_PREFIX}*`;
+/** the gate's upload-pack hides them too, for a fetch from an older canopy */
+export const HIDE_RUNS = `uploadpack.hideRefs=refs/heads/${RUN_BRANCH_PREFIX}`;
+
 export function globMatch(glob: string, s: string): boolean {
   let re = "";
   for (let i = 0; i < glob.length; i++) {
