@@ -49,6 +49,7 @@ import { bold, dim, lichen, moss, paintLine, renderTree, sky } from "./render";
 import { HELP_TEXT } from "../core/help";
 import { healthCommand } from "./health";
 import { kitCommand } from "./kit";
+import { landCommand } from "./land";
 import { secretsCommand } from "./secrets";
 import { SPEC_WORDS, specLines } from "../core/treelines";
 
@@ -95,6 +96,8 @@ const COMMANDS = new Set([
   "ranger",
   "health",
   "kit",
+  "land",
+  "queue",
   "secrets",
   "library",
   "tree",
@@ -797,6 +800,9 @@ export async function main(argv: string[]): Promise<void> {
       return healthCommand(args, { fail });
     case "kit":
       return kitCommand(args, { fail });
+    case "land":
+    case "queue":
+      return landCommand(cmd, args, { fail });
     case "secrets":
       return secretsCommand(args, { fail });
     case "version":
