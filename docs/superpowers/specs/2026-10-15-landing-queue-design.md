@@ -204,17 +204,18 @@ Canopy's own repo gets a `review.json` with the `approve` list above.
 - UI: the run sheet's branch block, the landing section, the card chip, the
   sensitive-files sheet, inbox items.
 
-## Open calls
+## Calls made on 2026-10-15
 
-1. **Branch runs by default.** Off by default with a toggle on the run sheet,
-   or on by default for `propose`, whose output is most often a feature.
-2. **Auto-land at all.** FR-013's `autoLand` lets a run change main with no
-   human click. It is opt-in per repo, but it is the first thing in canopy
-   that commits to main on its own.
-3. **The commit message.** The run writes it (as above), or canopy squashes
-   the branch into one commit with a message from the run's result.
-4. **Workflows and fleets.** Whether a workflow's steps can run on a branch
-   too. Left out of the first plan.
+1. **Branch runs by default for `propose` only.** A `propose` run starts on
+   a branch unless the run sheet's toggle is off. Every other action starts
+   in the checkout unless the toggle is on.
+2. **Auto-land waits for the second plan.** The first plan builds FR-012
+   alone, so every landing takes Eric's "land". FR-013, `autoLand` included,
+   is the second plan.
+3. **The run writes the commit message.** Canopy does not squash. The branch
+   lands with the run's own commits.
+4. **Workflows and fleets stay in their checkouts.** Neither runs on a
+   branch in either plan.
 
 ## Testing
 
