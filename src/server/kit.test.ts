@@ -378,7 +378,8 @@ describe("skill adopt, put back and tools (phase 3 part B)", () => {
     return h;
   }
   const ALL_OS = (line: string) => ({ darwin: line, arch: line, debian: line });
-  async function setupB(tools: unknown = {}) {
+  // the tests may run in a container themselves; the mac and gpd here are hosts unless a test says
+  async function setupB(tools: unknown = {}, container = "0") {
     const mac = await scratchHome("kithub-b-mac-");
     const gpd = await scratchHome("kithub-b-gpd-");
     const manifest = { ...MANIFEST, tools };
@@ -388,9 +389,9 @@ describe("skill adopt, put back and tools (phase 3 part B)", () => {
     const hosts: (string | null)[] = [];
     const run = async (host: string | null, cmd: string[], opts?: { env?: Record<string, string>; timeoutMs?: number; input?: string }) => {
       hosts.push(host);
-      return exec(cmd, host === "gpd" ? { ...opts, env: { HOME: gpd } } : opts);
+      return exec(cmd, host === "gpd" ? { ...opts, env: { HOME: gpd, KIT_CONTAINER: "0" } } : opts);
     };
-    const hub = new KitHub({ self: "mac", devRoot: join(mac, "dev"), kitPath, broadcast: () => {}, run, env: { HOME: mac }, every: 0 });
+    const hub = new KitHub({ self: "mac", devRoot: join(mac, "dev"), kitPath, broadcast: () => {}, run, env: { HOME: mac, KIT_CONTAINER: container }, every: 0 });
     hubs.push(hub);
     const route = async (method: string, path: string, body?: unknown) =>
       (await hub.handle(new Request(`http://x${path}`, { method, body: body ? JSON.stringify(body) : undefined }), new URL(`http://x${path}`)))!;
@@ -469,5 +470,17 @@ describe("skill adopt, put back and tools (phase 3 part B)", () => {
     expect(cell("mac", "marker", "tool")?.state).toBe("ok");
     // never part of apply all
     expect(hub.info().machines[0]!.plan.every((a) => a.kind === "link")).toBe(true);
+  });
+
+  test("tools: a machine that checks in a container shows its line and refuses the install", async () => {
+    const { mac, hub, route, cell } = await setupB({ marker: { check: "[ -f \"$HOME/installed\" ] || exit 127", install: ALL_OS("touch \"$HOME/installed\"") } }, "1");
+    await hub.scan();
+    expect(cell("mac", "marker", "tool")).toMatchObject({ state: "missing", container: true });
+    // gpd is a host, so its line still runs
+    expect(cell("gpd", "marker", "tool")?.container).toBeUndefined();
+    const r = await route("POST", "/api/kit/install", { machine: "mac", tool: "marker", line: "touch \"$HOME/installed\"" });
+    expect(r.status).toBe(409);
+    expect(((await r.json()) as { error: string }).error).toContain("add marker to the image");
+    expect(existsSync(join(mac, "installed"))).toBe(false);
   });
 });

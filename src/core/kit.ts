@@ -671,6 +671,7 @@ export function toolCells(kit: KitManifest, seen: KitSeen): KitCell[] {
     if (r.code !== 127) return { ...base, state: "check-failed", why: `the check exited ${r.code}${r.err ? `: ${r.err}` : ""}` };
     const line = installLine(t, seen.os ?? "", seen.osLike);
     if (!line) return { ...base, state: "no-install", why: `missing, and kit.json has no install line for ${seen.os || "this os"}` };
+    if (seen.container) return { ...base, state: "missing", why: "missing from canopy's image; an install in the container would be gone at the next recreate", install: line, container: true };
     const sudo = needsSudo(line);
     return { ...base, state: "missing", why: sudo ? "missing; its install line needs sudo, so run it in a terminal there" : "missing; install runs its line", install: line, ...(sudo ? { sudo: true } : {}) };
   });

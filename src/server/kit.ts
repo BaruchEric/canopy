@@ -341,6 +341,7 @@ export class KitHub {
       if (!kit.tools.some((t) => t.name === tool)) throw new KitError(`${tool} is not a tool kit.json lists`, 404);
       const c = this.last.cells.find((x) => x.kind === "tool" && x.machine === machine && x.skill === tool);
       if (c?.state !== "missing" || !c.install) throw new KitError(`${tool} on ${machine} has nothing to install: ${c ? c.why || c.state : "not checked yet"}`, 409);
+      if (c.container) throw new KitError(`${machine} checks its tools in canopy's container, where an install would be gone at the next recreate; add ${tool} to the image`, 409);
       if (c.sudo || needsSudo(c.install)) throw new KitError(`${tool}'s install line uses sudo, which cannot prompt over a non-interactive ssh; run it in a terminal on ${machine}`, 409);
       if (c.install !== line) throw new KitError(`${tool}'s install line has changed since it was shown; look at it again`, 409);
       const r = await (this.deps.run ?? onHost)(m.host, ["sh", "-c", INSTALL_SCRIPT, "kit-install", line], { env: this.deps.env, timeoutMs: INSTALL_TIMEOUT });

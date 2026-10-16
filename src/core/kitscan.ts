@@ -289,8 +289,10 @@ export async function seeMcp(
   return parseMcpScan(r.stdout, Object.fromEntries(ts.map((t) => [t.agent, t.mcp.format])));
 }
 
-/** args: `<name> <check>` per tool. Prints O os id_like (darwin, or
- *  /etc/os-release's ID, read and never sourced), then T name code err per
+/** args: `<name> <check>` per tool. Prints O os id_like container (darwin,
+ *  or /etc/os-release's ID, read and never sourced; container is 1 under
+ *  `/.dockerenv` or `/run/.containerenv`, or as `KIT_CONTAINER` says when
+ *  set, which the tests use), then T name code err per
  *  tool, code `t` for a check that ran past its time. The login shell's
  *  PATH is read once, so a check sees what an install put on it; each
  *  check then runs in sh, on its own, with its stdout dropped. */
@@ -300,7 +302,9 @@ else
   os=$(sed -n 's/^ID=//p' /etc/os-release 2>/dev/null | tr -d '"' | head -n 1)
   like=$(sed -n 's/^ID_LIKE=//p' /etc/os-release 2>/dev/null | tr -d '"' | head -n 1)
 fi
-printf 'O\t%s\t%s\n' "$os" "$like"
+ct=$KIT_CONTAINER
+[ -n "$ct" ] || { ct=0; { [ -e /.dockerenv ] || [ -e /run/.containerenv ]; } && ct=1; }
+printf 'O\t%s\t%s\t%s\n' "$os" "$like" "$ct"
 ls=$SHELL; [ -n "$ls" ] || ls=sh
 # a profile that prints would land in the capture, so the PATH rides on a marked line
 p=$("$ls" -lc 'printf "\n%s\n" "kit-path:$PATH"' 2>/dev/null </dev/null | sed -n 's/^kit-path://p' | tail -n 1)
@@ -323,21 +327,23 @@ rm -f "$t" "$t.to"
 
 export const toolsArgs = (kit: KitManifest): string[] => kit.tools.flatMap((t) => [t.name, t.check]);
 
-export function parseTools(stdout: string): { os: string; osLike: string[]; tools: KitToolSeen[] } {
+export function parseTools(stdout: string): { os: string; osLike: string[]; container: boolean; tools: KitToolSeen[] } {
   let os = "";
   let osLike: string[] = [];
+  let container = false;
   const tools: KitToolSeen[] = [];
   for (const line of stdout.split("\n")) {
     const f = line.split("\t");
     if (f[0] === "O") {
       os = f[1] ?? "";
       osLike = (f[2] ?? "").split(/\s+/).filter(Boolean);
+      container = f[3] === "1";
     } else if (f[0] === "T" && SKILL_NAME.test(f[1] ?? "")) {
       const code = f[2] === "t" ? null : Number(f[2]);
       if (code === null || Number.isInteger(code)) tools.push({ name: f[1]!, code, err: f.slice(3).join("\t").trim() });
     }
   }
-  return { os, osLike, tools };
+  return { os, osLike, container, tools };
 }
 
 /** each tool's check on one machine; throws when the script fails */
@@ -345,7 +351,7 @@ export async function seeTools(
   kit: KitManifest,
   m: { host: string | null },
   opts: { run?: typeof onHost; env?: Record<string, string> } = {},
-): Promise<{ os: string; osLike: string[]; tools: KitToolSeen[] }> {
+): Promise<{ os: string; osLike: string[]; container: boolean; tools: KitToolSeen[] }> {
   const run = opts.run ?? onHost;
   const r = await run(m.host, ["sh", "-c", TOOLS_SCRIPT, "kit-tools", ...toolsArgs(kit)], { env: opts.env, timeoutMs: 15_000 + TOOL_TIMEOUT_S * 1000 * kit.tools.length });
   if (r.code !== 0) throw new Error(`the tools check failed: ${reason(r.stderr, r.code)}`);

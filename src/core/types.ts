@@ -2859,6 +2859,9 @@ export interface KitSeen {
   os?: string;
   /** /etc/os-release `ID_LIKE`, split */
   osLike?: string[];
+  /** the tools scan ran inside a container: the mini's canopy, whose image is
+   *  the shells' own, so its checks hold for the agents there */
+  container?: boolean;
   /** each tool's check, when the manifest lists tools */
   tools?: KitToolSeen[];
   /** why the tools scan failed */
@@ -2904,6 +2907,10 @@ export interface KitCell {
   install?: string;
   /** that line uses sudo, so it is shown to copy and never run */
   sudo?: boolean;
+  /** the machine checks its tools in a container, where an install lands in
+   *  canopy's container alone and is gone at the next recreate: the line is
+   *  shown, and the tool belongs in the image */
+  container?: boolean;
 }
 
 export interface KitMachineView {

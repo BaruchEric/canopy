@@ -740,6 +740,12 @@ describe("tools", () => {
     expect(at("git")?.state).toBe("ok");
     expect(at("bad")).toMatchObject({ state: "check-failed", why: "the check exited 2: boom" });
     expect(at("slow")).toMatchObject({ state: "check-failed", why: "the check ran past 10 s" });
+    // in a container the line is shown, never run, sudo or not
+    const inBox = toolCells(r.kit, { ...s, container: true });
+    expect(inBox.find((c) => c.skill === "jq")).toMatchObject({ state: "missing", install: "mise use -g jq", container: true });
+    expect(inBox.find((c) => c.skill === "jq")?.why).toContain("canopy's image");
+    expect(inBox.find((c) => c.skill === "sops")).toMatchObject({ container: true });
+    expect(inBox.find((c) => c.skill === "git")?.state).toBe("ok");
     expect(toolCells(r.kit, seen({ toolsError: "the tools check failed: exited 255" }))[0]).toMatchObject({ state: "away", why: "the tools check failed: exited 255" });
     expect(toolCells(r.kit, seen({ away: "ssh exited 255", store: null, targets: [] }))[0]).toMatchObject({ state: "away", why: "ssh exited 255" });
     // cellsOf carries them, away machines too

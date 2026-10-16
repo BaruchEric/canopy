@@ -83,7 +83,8 @@ function CellSheet({ backend, cell, actions, adoptedTo, onDone }: { backend: str
   );
 }
 
-/** A missing tool: a sudo line to copy, or its line run behind a confirm
+/** A missing tool: a line to copy (sudo, or a container whose image should
+ *  carry the tool), or its line run behind a confirm
  *  that shows it exactly, since kit.json is a file any agent can edit. */
 function ToolSheet({ backend, cell, onDone }: { backend: string; cell: KitCell; onDone: (msg: string) => void }) {
   const { machine, skill: name } = cell;
@@ -110,7 +111,15 @@ function ToolSheet({ backend, cell, onDone }: { backend: string; cell: KitCell; 
     <div className="kit-sheet">
       <h4>{name} on {machine}</h4>
       <p className="kit-note">{cell.why}</p>
-      {cell.sudo ? (
+      {cell.container ? (
+        <>
+          <p className="kit-note">canopy on {machine} runs in a container built from the same image as the shells there. An install in it would land in canopy's container alone and be gone at the next recreate, so add the tool to the shells stage of canopy's Dockerfile and redeploy. Its install line:</p>
+          <pre className="kit-command">{line}</pre>
+          <div className="kit-line">
+            <button type="button" className="mini" onClick={() => void navigator.clipboard?.writeText(line).catch(() => {})}>copy</button>
+          </div>
+        </>
+      ) : cell.sudo ? (
         <>
           <p className="kit-note">This line uses sudo, which cannot prompt over canopy's non-interactive ssh. Run it in a terminal on {machine}, then rescan:</p>
           <pre className="kit-command">{line}</pre>

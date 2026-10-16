@@ -157,8 +157,15 @@ describe("the tools scan", () => {
   });
   test("parseTools: a slow check, ID_LIKE words, and lines that are not tools", () => {
     expect(parseTools(["O\tubuntu\tdebian", "T\tjq\tt\t", "T\tBad Name\t0\t", "T\tsops\tx\t", "junk"].join("\n"))).toEqual({
-      os: "ubuntu", osLike: ["debian"], tools: [{ name: "jq", code: null, err: "" }],
+      os: "ubuntu", osLike: ["debian"], container: false, tools: [{ name: "jq", code: null, err: "" }],
     });
+    expect(parseTools("O\tdebian\t\t1\n").container).toBe(true);
+  });
+  test("the script says whether it ran in a container, as KIT_CONTAINER says when set", async () => {
+    const k = toolKit({ fine: { check: "true" } });
+    const run = (v: string) => async (_h: string | null, cmd: string[]) => exec(cmd, { env: { KIT_CONTAINER: v } });
+    expect((await seeTools(k, { host: null }, { run: run("1") })).container).toBe(true);
+    expect((await seeTools(k, { host: null }, { run: run("0") })).container).toBe(false);
   });
   test("a script that fails throws its reason", async () => {
     const k = toolKit({ jq: { check: "jq --version" } });
