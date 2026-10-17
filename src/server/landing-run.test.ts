@@ -150,5 +150,23 @@ describe("branch runs over the API", () => {
   test("a bad branch flag is a 400", async () => {
     expect((await call("/api/repos/run?id=proj", { action: "ask", note: "x", branch: "yes" })).status).toBe(400);
   });
+
+  test("pr: true marks the branch to open a PR when ready; with no remote it waits as ready with a notice", async () => {
+    expect((await call("/api/repos/run?id=proj", { action: "ask", note: "x", pr: "yes" })).status).toBe(400);
+    const off = await call("/api/repos/run?id=proj", { action: "ask", note: "x", branch: false, pr: true });
+    expect(off.status).toBe(400);
+    expect(((await off.json()) as { error: string }).error).toBe("only a run on a branch of its own can open a PR");
+    const start = await call("/api/repos/run?id=proj", { action: "ask", note: "open a pr", branch: true, pr: true });
+    expect(start.status).toBe(201);
+    const run = (await start.json()) as Run;
+    expect(run.branch?.openPr).toBe(true);
+    const held = await until(async () => (await landing()).notices?.find((n) => n.entry === run.branch!.origin), "the held notice");
+    expect(held.why).toBe("its PR did not open: its repo has no remote to push to");
+    const rec = (await landing()).runs.find((r) => r.id === run.branch!.origin);
+    expect([rec?.state, rec?.openPr, rec?.pr]).toEqual(["ready", true, undefined]);
+    expect(await (await fetch(url("/api/prs"))).json()).toEqual([]);
+    const open = await call("/api/prs/open", { run: run.id });
+    expect(open.status).toBe(409);
+  });
 });
 

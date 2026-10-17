@@ -197,6 +197,7 @@ import { RangerHub, realTmux, type RangerTimings, type RangerTmux } from "./rang
 import { HealthHub, rangerResult, streamResult } from "./health";
 import { KitHub, kitPath } from "./kit";
 import { LandingHub } from "./landing";
+import { PrHub } from "./prs";
 import { getPeers, PeerError, postPeersSync, postRepoPeer, queuePass, withPeering, type PeerDeps } from "./peers";
 import { fixPrompt, landWord } from "../core/landing";
 import { GATES_CHECK, readGates } from "../core/gates";
@@ -292,6 +293,8 @@ interface ServerState {
   kit: KitHub;
   /** branch runs and the landing queue (server/landing) */
   landing: LandingHub;
+  /** the PRs branch runs opened and the watch on them (server/prs) */
+  prs: PrHub;
   /** the Secrets view: the relay to the secrets service on the mini, the verified copy elsewhere */
   secrets: SecretsHub;
   /** the checks repos declare, kept in the health hub (server/repohealth) */
@@ -751,6 +754,8 @@ async function startRepoRun(
   client: unknown,
   scope?: WorkspaceScope,
   branch?: boolean,
+  /** open a PR when it settles ready instead of landing here (FR-011) */
+  pr = false,
 ): Promise<Run> {
   // The runner spawns the agent here, at the repo's path; there is no
   // agent to spawn at a folder on another host.
@@ -769,6 +774,7 @@ async function startRepoRun(
   if (onBranch && branch === undefined && !(await defaultBranch(repo.path))) onBranch = false;
   if (onBranch && scope) throw new HttpError(400, "a workspace run works in its folders, not on a branch");
   if (onBranch && seed) throw new HttpError(400, "an incubator seed's runs work in the seed, not on a branch");
+  if (pr && !onBranch) throw new HttpError(400, "only a run on a branch of its own can open a PR");
   if (onBranch) {
     const going = state.runner.branchRunsFor(repo.id).length;
     if (going >= BRANCH_RUNS_PER_REPO) throw new HttpError(409, `${repo.name} has ${going} branch runs going; wait for one to end`);
@@ -788,14 +794,14 @@ async function startRepoRun(
   await needHarness(state, agent.harness, repo.path);
   // the device it was started from, when the browser said and is on the stream
   const by = deviceNameOf(state, typeof client === "string" ? client : null) ?? undefined;
-  if (onBranch) return startBranchRun(state, repo, action, note, agent, by);
+  if (onBranch) return startBranchRun(state, repo, action, note, agent, by, pr);
   return state.runner.start(repo, action, ACTIONS[action], note, agent, by, scope);
 }
 
 /** A run on a branch of its own: a worktree under the config dir on
  *  `run/<slug>-<id>`, cut from the default branch's tip, where the gates'
  *  setup runs before the agent starts. The landing queue lands it later. */
-async function startBranchRun(state: ServerState, repo: Repo, action: RunAction, note: string, agent: AgentSettings, by: string | undefined): Promise<Run> {
+async function startBranchRun(state: ServerState, repo: Repo, action: RunAction, note: string, agent: AgentSettings, by: string | undefined, pr = false): Promise<Run> {
   const target = await defaultBranch(repo.path);
   const base = target ? await revOf(repo.path, `refs/heads/${target}`) : null;
   if (!target || !base) throw new HttpError(400, `${repo.name} has no main or master branch to cut a run's branch from`);
@@ -824,7 +830,7 @@ async function startBranchRun(state: ServerState, repo: Repo, action: RunAction,
   };
   try {
     return state.runner.start(repo, action, ACTIONS[action], note, agent, by, undefined, {
-      branch: { name, target, base, dir, state: "working", origin: id },
+      branch: { name, target, base, dir, state: "working", origin: id, ...(pr ? { openPr: true as const } : {}) },
       prepare,
     });
   } catch (err) {
@@ -838,15 +844,23 @@ async function startBranchRun(state: ServerState, repo: Repo, action: RunAction,
  *  the branch's last session with the reason; anything else starts fresh
  *  with the run's note and the reason. Same worktree, same branch. */
 async function startFixRun(state: ServerState, rec: LandingRun, entry: LandEntry): Promise<Run> {
+  return startBranchFix(state, rec, fixPrompt(entry), `fix it: ${landWord(entry, [entry])}`, true);
+}
+
+/** A fix on a branch: Claude resumes the branch's last session with
+ *  `reason`; anything else starts fresh with the run's note and it. Same
+ *  worktree, same branch. A PR's fix (FR-011) says canopy pushes, so the
+ *  landing queue's branch paragraph stays off its resumed message. */
+async function startBranchFix(state: ServerState, rec: LandingRun, reason: string, note: string, queueLine: boolean): Promise<Run> {
   const repo = state.result.repos.find((r) => r.id === rec.repoId);
   if (!repo) throw new HttpError(404, `${rec.repoId} is not in the tree`);
   const agent = agentFor(await loadConfig(), repo.path, "job");
   await needHarness(state, agent.harness, repo.path);
   const b = { name: rec.branch, target: rec.target, base: rec.base, dir: rec.dir, state: "working" as const, origin: rec.id };
   const resume = agent.harness === "claude" && rec.harness === "claude" ? rec.session : undefined;
-  const message = resume ? `${fixPrompt(entry)}\n\n${branchLine(b)}` : branchPrompt(repo, ACTIONS.ask, `${rec.note}\n\n${fixPrompt(entry)}`, b);
+  const message = resume ? (queueLine ? `${reason}\n\n${branchLine(b)}` : reason) : branchPrompt(repo, ACTIONS.ask, `${rec.note}\n\n${reason}`, b);
   try {
-    return state.runner.start(repo, "ask", ACTIONS.ask, `fix it: ${landWord(entry, [entry])}`, agent, undefined, undefined, {
+    return state.runner.start(repo, "ask", ACTIONS.ask, note, agent, undefined, undefined, {
       branch: b,
       message,
       ...(resume ? { resume } : {}),
@@ -1930,6 +1944,9 @@ function addCanopyChecks(state: ServerState, broker: boolean): void {
   state.health.report("canopy:ranger", rangerResult(state.ranger.info()));
   state.health.add({ id: GONE_CHECK, label: "cards for checkouts that are gone", scope: canopy, heal: "self" });
   state.health.report(GONE_CHECK, { state: "ok" });
+  // reported by the PR loop after each read; ok until it reads one
+  state.health.add({ id: PRS_CHECK, label: "PR watch (gh)", scope: canopy, heal: "self" });
+  state.health.report(PRS_CHECK, { state: "ok" });
   const base = state.tmux;
   state.health.add({
     id: "canopy:tmux",
@@ -1951,6 +1968,8 @@ function addCanopyChecks(state: ServerState, broker: boolean): void {
   });
   for (const rt of state.sources) watchCheck(state, rt);
 }
+
+const PRS_CHECK = "canopy:prs";
 
 const PASS_LABEL = { "canopy:activity": "fetch and pull request pass", "canopy:remote": "remote repos refresh", "canopy:keep": "kept shells" } as const;
 
@@ -2431,6 +2450,8 @@ async function handleApi(
   if (kitRes) return kitRes;
   const landingRes = await state.landing.handle(req, url);
   if (landingRes) return landingRes;
+  const prsRes = await state.prs.handle(req, url);
+  if (prsRes) return prsRes;
   const healthRes = await state.health.handle(req, url);
   if (healthRes) return healthRes;
   const secretsRes = await state.secrets.handle(req, url);
@@ -3565,7 +3586,8 @@ async function handleApi(
       if (!isRunAction(b.action)) return json({ error: "unknown action" }, 400);
       const note = typeof b.note === "string" ? b.note : "";
       if (b.branch !== undefined && typeof b.branch !== "boolean") return json({ error: "branch must be true or false" }, 400);
-      return json(await startRepoRun(state, repo, b.action, note, b.client, undefined, b.branch), 201);
+      if (b.pr !== undefined && typeof b.pr !== "boolean") return json({ error: "pr must be true or false" }, 400);
+      return json(await startRepoRun(state, repo, b.action, note, b.client, undefined, b.branch, b.pr === true), 201);
     }
     if (method === "POST" && action === "peer") return postRepoPeer(peerDeps(state), repo, req);
     if (method === "POST" && action === "movecheck") {
@@ -3916,6 +3938,7 @@ export async function startServer(opts: {
       state.chan.onRun(run);
       state.ranger.onRun(run.id, isRunActive(run));
       state.landing.onRun(run);
+      state.prs.onRun(run);
     },
     onGone: (id) => {
       broadcast(state, { type: "run-gone", id });
@@ -4260,6 +4283,23 @@ export async function startServer(opts: {
         const run = state.runner.get(id);
         return run !== undefined && isRunActive(run);
       },
+      openPr: (id) => state.prs.open(id),
+      dropped: (id) => state.prs.forgetBranch(id),
+    }),
+    prs: new PrHub({
+      broadcast: (ev) => broadcast(state, ev),
+      record: (id) => state.landing.record(id),
+      queueHold: (id) => state.landing.queueHold(id),
+      markPr: (id, pr) => state.landing.markPr(id, pr),
+      forget: (id) => state.landing.forget(id),
+      startFix: (rec, prompt, label) => startBranchFix(state, rec, prompt, label, false),
+      runActive: (id) => {
+        const run = state.runner.get(id);
+        return run !== undefined && isRunActive(run);
+      },
+      // a run a restart took is unknown here, which counts as not finished
+      runOk: (id) => state.runner.get(id)?.status === "done",
+      report: (r) => state.health.report(PRS_CHECK, r),
     }),
     kit: new KitHub({
       self: selfName(cfg.self, hostname()),
@@ -4679,6 +4719,8 @@ export async function startServer(opts: {
     await state.incubator.restore();
     // the branch runs and queues the last server left, by the same lock
     await state.landing.adopt();
+    // and the PRs they opened
+    await state.prs.adopt();
   };
   if (flowsLock.owner) {
     await adoptFlows();
@@ -4784,6 +4826,7 @@ export async function startServer(opts: {
   state.registry.start();
   if (process.env["NODE_ENV"] !== "test") state.kit.start();
   if (process.env["NODE_ENV"] !== "test") state.landing.start();
+  if (process.env["NODE_ENV"] !== "test") state.prs.start();
   state.asks.start();
   // a test server pulls nothing and asks no socket
   if (process.env["NODE_ENV"] !== "test") state.secrets.start();
@@ -4815,6 +4858,7 @@ export async function startServer(opts: {
       state.health.stop();
       state.kit.stop();
       state.landing.stop();
+      state.prs.stop();
       state.secrets.stop();
       state.tasks.stop();
       state.ranger.stop();
@@ -4833,6 +4877,7 @@ export async function startServer(opts: {
       state.flows.detach();
       flowFiles = null;
       state.landing.detach();
+      state.prs.detach();
       if (flowsLock.owner) flowsLock.release();
       state.flows.stopAll();
       state.runner.stopAll();

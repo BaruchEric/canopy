@@ -2,7 +2,8 @@ import { useState } from "react";
 import type { LandEntry, LandingRun, Repo } from "../../../src/core/types";
 import { approveFiles, backLine, chipWords, landAllOf, landWord, needsApproval, noticeLine, repoLanding, repoOrphans, hasLanding, stoppedLandTitle, stoppedWhole, verdictTone, verdictWord } from "../landing";
 import { backendOf } from "../registry";
-import { idText, landingAll, useStore } from "../store";
+import { idText, landingAll, prsAll, useStore } from "../store";
+import { repoPrChip } from "../prs";
 import { keepKeys } from "../surface";
 import { ago } from "../util";
 import { DiffView } from "./DiffView";
@@ -30,6 +31,30 @@ export function LandingChip({ repoId }: { repoId: string }) {
       onKeyDown={keepKeys}
     >
       {words.text}
+    </button>
+  );
+}
+
+/** The card's word for a repo's open PRs and their checks (FR-011).
+ *  Clicking it opens the run whose PR needs a look most. */
+export function PrChip({ repoId }: { repoId: string }) {
+  const prs = useStore((s) => prsAll(s));
+  const showRun = useStore((s) => s.showRun);
+  const chip = repoPrChip(prs, repoId);
+  if (!chip) return null;
+  return (
+    <button
+      type="button"
+      className={`run-chip pr-card ${chip.tone}`}
+      title="PRs that branch runs opened on GitHub; canopy watches their checks and reviews"
+      onClick={(e) => {
+        e.stopPropagation();
+        showRun(chip.runId);
+      }}
+      onPointerDown={(e) => e.stopPropagation()}
+      onKeyDown={keepKeys}
+    >
+      {chip.text}
     </button>
   );
 }

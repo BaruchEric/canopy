@@ -10,15 +10,10 @@ The cards area only gets what the dock leaves over: at least `--cards-min` (320p
 P3 · added 2026-10-14 · source: Eric (Anthropic "Redesigning source control" post)
 One long-lived agent per component (the mini's compose stack, peer sync, tailchan) reads that component's logs and health on a schedule and posts to the inbox when something looks off, catching the slow, odd drift a fixed alert misses. Reference: the "superfans" in https://www.anthropic.com/engineering/redesigning-source-control.
 
-### FR-011 · A run keeps watching the PR it opened
-P2 · added 2026-10-09 · source: Eric (Claude Code Projects video)
-When a run opens a PR, its footer shows the PR number, the diff size and a CI chip whose popover lists checks in progress and passed. Two toggles there: "auto-fix CI and address comments" (the run pushes fixes when checks fail and answers review comments) and "auto-merge when ready". Reference: https://www.youtube.com/watch?v=omihvjf0A2k at 2:15.
-Spec: docs/superpowers/specs/2026-10-16-pr-watch-design.md; plan: docs/superpowers/plans/2026-10-16-pr-watch.md (2026-10-16; the spec's calls made the same day).
-
 ### FR-010 · A coordinator that splits a goal into runs, on its own model and effort
 P2 · added 2026-10-09 · source: Eric (Claude Code Projects video)
 One chat takes a goal, proposes the tasks, and starts a run per task, showing each as a card with a live one-line status. The coordinator gets its own model and effort (default low, since it mostly routes work), separate from the per-role settings the runs use. Reference: https://www.youtube.com/watch?v=omihvjf0A2k at 1:52 and 3:24.
-Spec: docs/superpowers/specs/2026-10-16-coordinator-design.md (2026-10-16); its plan follows FR-011, and a per-caller credential on the run routes ships before it (Eric, 2026-10-16).
+Spec: docs/superpowers/specs/2026-10-16-coordinator-design.md (2026-10-16); its plan follows FR-011, and a per-caller credential on the run routes ships before it (Eric, 2026-10-16). That credential's spec is docs/superpowers/specs/2026-10-16-caller-credential-design.md, with six calls open for Eric.
 
 ### FR-009 · Wider first columns on an ultrawide
 P3 · added 2026-10-07 · source: dock pass
@@ -35,6 +30,11 @@ The gear still marks "panels side by side" once the dock is a grid of split cell
 ## In Progress
 
 ## Shipped
+
+### FR-011 · A run keeps watching the PR it opened
+P2 · added 2026-10-09 · source: Eric (Claude Code Projects video) · shipped 2026-10-16
+When a run opens a PR, its footer shows the PR number, the diff size and a CI chip whose popover lists checks in progress and passed. Two toggles there: "auto-fix CI and address comments" (the run pushes fixes when checks fail and answers review comments) and "auto-merge when ready". Reference: https://www.youtube.com/watch?v=omihvjf0A2k at 2:15.
+Spec: docs/superpowers/specs/2026-10-16-pr-watch-design.md; plan: docs/superpowers/plans/2026-10-16-pr-watch.md. Shipped as a branch run that lands or opens a PR, never both; canopy pushes every fix itself, and the PR shows under the run's branch line rather than in its footer.
 
 ### FR-013 · Review rules that tell a comment-only change from a logic change
 P2 · added 2026-10-14 · source: Eric (Anthropic "Redesigning source control" post) · shipped 2026-10-16

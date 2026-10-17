@@ -8,6 +8,7 @@ import type {
   Job,
   KeptShell,
   LandingInfo,
+  PrWatch,
   Repo,
   RepoHistory,
   Run,
@@ -59,6 +60,11 @@ export const qLanding = (q: Q, l: LandingInfo): LandingInfo => ({
   orphans: l.orphans,
   notices: (l.notices ?? []).map((n) => ({ ...n, id: q(n.id), entry: q(n.entry), repoId: q(n.repoId) })),
 });
+
+/** The PR watches: a branch's id, its run's and its repo's under the
+ *  backend's name, and the fix run going. Folders stay the backend's own. */
+export const qPrs = (q: Q, prs: readonly PrWatch[]): PrWatch[] =>
+  prs.map((w) => ({ ...w, id: q(w.id), runId: q(w.runId), repoId: q(w.repoId), ...(w.fixing ? { fixing: { ...w.fixing, run: q(w.fixing.run) } } : {}) }));
 
 export const qFlow = (q: Q, f: Flow): Flow => ({
   ...f,
@@ -164,6 +170,8 @@ export function qEvent(q: Q, ev: ServerEvent): ServerEvent {
       return { ...ev, checks: ev.checks.map((c) => qCheck(q, c)) };
     case "landing":
       return { ...ev, landing: qLanding(q, ev.landing) };
+    case "prs":
+      return { ...ev, prs: qPrs(q, ev.prs) };
     // the kit names machines, not repos: nothing to qualify
     case "kit":
     case "secrets":

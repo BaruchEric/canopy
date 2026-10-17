@@ -174,6 +174,40 @@ export async function treeState(dir: string, base: string): Promise<"ready" | "u
   return (await aheadOf(dir, base)) > 0 ? "ready" : "nothing";
 }
 
+export type PushResult = { ok: true } | { rejected: string };
+
+/** Pushes a run's branch to `remote` under its own name, never with
+ *  force: a remote branch someone else moved refuses it. */
+export async function pushBranch(dir: string, remote: string, branch: string): Promise<PushResult> {
+  const r = await git(dir, ["push", "--porcelain", remote, `refs/heads/${branch}:refs/heads/${branch}`], 120_000);
+  return r.code === 0 ? { ok: true } : { rejected: why(r, "git push") };
+}
+
+/** The remote a run's branch is pushed to: the one `target`'s upstream
+ *  names, else `origin`, else the only remote; null when there is none. */
+export async function pushRemote(repo: string, target: string): Promise<string | null> {
+  const up = await git(repo, ["config", "--get", `branch.${target}.remote`]);
+  const named = out(up);
+  const list = (await git(repo, ["remote"])).stdout.split("\n").filter(Boolean);
+  if (named && list.includes(named)) return named;
+  if (list.includes("origin")) return "origin";
+  return list.length === 1 ? list[0]! : null;
+}
+
+/** A file's text as `HEAD` holds it, not as the folder does; null when
+ *  HEAD has no such file. */
+export async function showAtHead(repo: string, path: string): Promise<string | null> {
+  const r = await git(repo, ["show", `HEAD:${path}`]);
+  return r.code === 0 ? r.stdout : null;
+}
+
+/** The subjects of the commits `dir`'s HEAD has that `base` has not,
+ *  oldest first. */
+export async function subjectsSince(dir: string, base: string): Promise<string[]> {
+  const r = await git(dir, ["log", "--reverse", "--format=%s", `${base}..HEAD`]);
+  return r.code === 0 ? r.stdout.split("\n").filter(Boolean) : [];
+}
+
 export type RebaseResult = { ok: true } | { conflict: string[] } | { error: string };
 
 /** Rebases the worktree's branch onto `onto`. A conflict is aborted, and

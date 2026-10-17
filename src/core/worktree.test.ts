@@ -14,12 +14,16 @@ import {
   ffMain,
   listRunTreeDirs,
   overwrittenFiles,
+  pushBranch,
+  pushRemote,
   rebaseOnto,
   removeRunTree,
   repoAtPath,
   repoKey,
   revOf,
   runBranchName,
+  showAtHead,
+  subjectsSince,
   runTreeDir,
   treeRepo,
   treeState,
@@ -163,5 +167,63 @@ describe("repoAtPath", () => {
     expect(repoAtPath([viaLink, exact], real)).toBe(exact);
     expect(repoAtPath([remote, viaLink], "/nowhere")).toBeUndefined();
     await rm(real, { recursive: true, force: true });
+  });
+});
+
+describe("pushing a run's branch", () => {
+  /** A repo with a bare remote named `name` it has pushed main to. */
+  const withRemote = async (name = "origin"): Promise<{ r: string; bare: string }> => {
+    const r = await repo();
+    const bare = join(root, `bare${++n}.git`);
+    await exec(["git", "init", "-q", "--bare", bare]);
+    await sh(r, "remote", "add", name, bare);
+    await sh(r, "push", "-q", name, "main");
+    return { r, bare };
+  };
+
+  test("pushes the branch under its own name, and refuses a push that is not a fast-forward", async () => {
+    const { r, bare } = await withRemote();
+    const dir = runTreeDir(r, "p1", join(root, "wts-push"));
+    await addRunTree(r, dir, "run/p-p1", "main");
+    const head = await commit(dir, "b.txt", "b\n");
+    expect(await pushBranch(dir, "origin", "run/p-p1")).toEqual({ ok: true });
+    expect(await sh(bare, "rev-parse", "refs/heads/run/p-p1")).toBe(head);
+    // someone else moved the branch on the remote: no force, so it is refused
+    const other = join(root, `clone${++n}`);
+    await exec(["git", "clone", "-q", "-b", "run/p-p1", bare, other]);
+    await sh(other, "config", "user.email", "t@t");
+    await sh(other, "config", "user.name", "t");
+    await commit(other, "c.txt", "c\n");
+    await sh(other, "push", "-q", "origin", "run/p-p1");
+    await commit(dir, "d.txt", "d\n");
+    const res = await pushBranch(dir, "origin", "run/p-p1");
+    expect("rejected" in res).toBe(true);
+  });
+
+  test("pushRemote: the target's upstream remote, else origin, else the only one, else none", async () => {
+    const { r } = await withRemote("up");
+    expect(await pushRemote(r, "main")).toBe("up");
+    await sh(r, "branch", "-q", "--set-upstream-to=up/main", "main");
+    await sh(r, "remote", "add", "origin", join(root, "nowhere.git"));
+    expect(await pushRemote(r, "main")).toBe("up");
+    await sh(r, "branch", "-q", "--unset-upstream", "main");
+    expect(await pushRemote(r, "main")).toBe("origin");
+    expect(await pushRemote(await repo(), "main")).toBeNull();
+  });
+
+  test("showAtHead reads a file as HEAD holds it, not as the folder does", async () => {
+    const r = await repo();
+    await commit(r, ".canopy/prs.json", '{"autoMerge": true}');
+    await writeFile(join(r, ".canopy/prs.json"), "{}");
+    expect(await showAtHead(r, ".canopy/prs.json")).toBe('{"autoMerge": true}');
+    expect(await showAtHead(r, ".canopy/none.json")).toBeNull();
+  });
+
+  test("subjectsSince lists the branch's commit subjects, oldest first", async () => {
+    const r = await repo();
+    await sh(r, "checkout", "-q", "-b", "topic");
+    await commit(r, "x.txt", "x");
+    await commit(r, "y.txt", "y");
+    expect(await subjectsSince(r, "main")).toEqual(["c x.txt", "c y.txt"]);
   });
 });

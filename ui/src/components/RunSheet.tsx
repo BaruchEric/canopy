@@ -2,7 +2,8 @@ import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { ACTIONS, planWords, repoFacts } from "../../../src/core/actions";
 import { describeAgent, isDefaultAgent } from "../../../src/core/agent";
 import { describeLaunch, isDefaultLaunch } from "../../../src/core/launch";
-import { agentFor, connOf, idText, landingAll, launchFor, routesOf, tasksOf, useStore, type Sheet } from "../store";
+import { agentFor, connOf, idText, landingAll, launchFor, prsAll, routesOf, tasksOf, useStore, type Sheet } from "../store";
+import { ciChip, mergeWhy, prLine, prOfRun, prWord } from "../prs";
 import { branchByDefault, runLanding, stoppedLandTitle } from "../landing";
 import { backendOf } from "../registry";
 import { resolveAgent } from "../../../src/core/route";
@@ -187,6 +188,9 @@ function Plan({ repo, action, workspace }: { repo: Repo; action: RunAction; work
   const branchable = !workspace && !repo.host && !repo.forge;
   const byDefault = branchByDefault(action, workspace);
   const [onBranch, setOnBranch] = useState(byDefault);
+  // FR-011: a PR in place of the landing queue, so only on a branch
+  const [asPr, setAsPr] = useState(false);
+  const pr = branchable && onBranch && asPr;
 
   const go = async () => {
     if (!ready) return;
@@ -194,7 +198,7 @@ function Plan({ repo, action, workspace }: { repo: Repo; action: RunAction; work
     setError(null);
     try {
       // the default is the backend's to apply, so a repo with no main yet keeps its propose in the checkout
-      await (workspace ? startWsRun(workspace, action, note) : startRun(repo.id, action, note, branchable && onBranch !== byDefault ? onBranch : undefined));
+      await (workspace ? startWsRun(workspace, action, note) : startRun(repo.id, action, note, pr ? true : branchable && onBranch !== byDefault ? onBranch : undefined, pr ? true : undefined));
     } catch (err) {
       setError(errText(err));
       setBusy(false);
@@ -246,6 +250,12 @@ function Plan({ repo, action, workspace }: { repo: Repo; action: RunAction; work
           <label className="plan-branch" title="The agent works in a worktree of its own on a run/ branch and commits there; the landing queue lands it on main once you say land">
             <input type="checkbox" checked={onBranch} onChange={(e) => setOnBranch(e.target.checked)} />
             on a branch of its own
+          </label>
+        )}
+        {branchable && onBranch && (
+          <label className="plan-branch" title="Once the run is ready, canopy pushes its branch and opens a PR on GitHub instead of landing it here, then watches its checks and reviews">
+            <input type="checkbox" checked={asPr} onChange={(e) => setAsPr(e.target.checked)} />
+            open a PR when done
           </label>
         )}
         {error && <p className="note err">{error}</p>}
@@ -473,6 +483,7 @@ function Console({ run, repo }: { run: Run; repo: Repo | undefined }) {
       </header>
 
       {run.branch && <BranchBlock run={run} act={act} />}
+      {run.branch && <PrBlock run={run} act={act} />}
 
       <Timeline
         run={run}
@@ -527,6 +538,7 @@ function BranchBlock({ run, act }: { run: Run; act: (fn: () => Promise<void>) =>
   const landRun = useStore((s) => s.landRun);
   const showApprove = useStore((s) => s.showApprove);
   const fixLanding = useStore((s) => s.fixLanding);
+  const openPr = useStore((s) => s.openPr);
   const b = run.branch;
   const l = runLanding(run, info);
   if (!b || !l) return null;
@@ -554,6 +566,98 @@ function BranchBlock({ run, act }: { run: Run; act: (fn: () => Promise<void>) =>
         <button type="button" className="mini strong" title="Continue on the branch with the reason as the next message" onClick={() => void act(() => fixLanding(b.origin))}>
           fix it
         </button>
+      )}
+      {l.canPr && (
+        <button
+          type="button"
+          className="mini"
+          title={`Push ${b.name} and open a PR against ${b.target} on GitHub instead of landing it here. Canopy watches its checks and reviews from then on`}
+          onClick={() => void act(() => openPr(b.origin))}
+        >
+          open PR
+        </button>
+      )}
+    </div>
+  );
+}
+
+/** The PR a branch run opened: its line, the CI chip with every check
+ *  under it, the auto-fix and auto-merge toggles, what auto-merge waits
+ *  on, and comments from people canopy will not act for. */
+function PrBlock({ run, act }: { run: Run; act: (fn: () => Promise<void>) => Promise<void> }) {
+  const prs = useStore((s) => prsAll(s));
+  const setPr = useStore((s) => s.setPr);
+  const closePr = useStore((s) => s.closePr);
+  const w = prOfRun(run, prs);
+  if (!w) return null;
+  const chip = ciChip(w);
+  const open = w.state?.status !== "merged" && w.state?.status !== "closed";
+  const why = mergeWhy(w);
+  return (
+    <div className="run-pr">
+      <div className="run-pr-head">
+        <a className="run-pr-link" href={w.url} target="_blank" rel="noreferrer" title={`${w.slug} #${w.number}`}>
+          {prLine(w)}
+        </a>
+        <span className="run-branch-word">{prWord(w)}</span>
+        {chip && (
+          <details className={`run-pr-ci ${chip.tone}`}>
+            <summary>{chip.text}</summary>
+            <ul>
+              {w.state?.checks.map((c) => (
+                <li key={c.name} className={c.state}>
+                  {c.url ? (
+                    <a href={c.url} target="_blank" rel="noreferrer">
+                      {c.name}
+                    </a>
+                  ) : (
+                    c.name
+                  )}{" "}
+                  <span className="dim">{c.state}</span>
+                </li>
+              ))}
+            </ul>
+          </details>
+        )}
+        <span className="spacer" />
+        {open && (
+          <button type="button" className="mini" title="Close the PR on GitHub. The branch stays, and the run may land here again" onClick={() => void act(() => closePr(w.id))}>
+            close PR
+          </button>
+        )}
+      </div>
+      {open && (
+        <div className="run-pr-toggles">
+          <label title="A failed check or a review comment from someone with write access starts a fix run on the branch, which canopy pushes. Up to 3 tries each">
+            <input type="checkbox" checked={w.autoFix} onChange={(e) => void act(() => setPr(w.id, { autoFix: e.target.checked }))} />
+            auto-fix CI and address comments
+          </label>
+          <label title="Merge on GitHub once every check passes, the review approves or asks nothing, and GitHub says it merges clean">
+            <input type="checkbox" checked={w.autoMerge} onChange={(e) => void act(() => setPr(w.id, { autoMerge: e.target.checked }))} />
+            auto-merge when ready
+          </label>
+        </div>
+      )}
+      {w.fixing && <span className="run-pr-note">a fix is going for {w.fixing.key.replace(/^check:/, "check ").replace(/^comment:/, "comment ")}</span>}
+      {why && <span className="run-pr-note">{why}</span>}
+      {w.gaveUp && <span className="run-branch-why">auto-fix gave up: {w.gaveUp}</span>}
+      {w.error && <span className="run-branch-why">{w.error}</span>}
+      {w.untrusted && w.untrusted.length > 0 && (
+        <details className="run-pr-untrusted">
+          <summary>
+            {w.untrusted.length} {w.untrusted.length === 1 ? "comment" : "comments"} from people without write access, not acted on
+          </summary>
+          <ul>
+            {w.untrusted.map((c) => (
+              <li key={c.id}>
+                <a href={c.url} target="_blank" rel="noreferrer">
+                  {c.author}
+                </a>
+                : {c.body.length > 200 ? `${c.body.slice(0, 200)}…` : c.body}
+              </li>
+            ))}
+          </ul>
+        </details>
       )}
     </div>
   );

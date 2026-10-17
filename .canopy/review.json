@@ -12,6 +12,7 @@
     "scripts/**",
     "lib/**",
     "spec/**",
+    ".canopy/prs.json",
     "docker/**",
     "Dockerfile",
     "docker-compose*.yml"

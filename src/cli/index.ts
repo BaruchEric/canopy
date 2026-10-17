@@ -50,6 +50,7 @@ import { HELP_TEXT } from "../core/help";
 import { healthCommand } from "./health";
 import { kitCommand } from "./kit";
 import { landCommand } from "./land";
+import { prCommand } from "./pr";
 import { secretsCommand } from "./secrets";
 import { SPEC_WORDS, specLines } from "../core/treelines";
 
@@ -98,6 +99,8 @@ const COMMANDS = new Set([
   "kit",
   "land",
   "queue",
+  "pr",
+  "prs",
   "secrets",
   "library",
   "tree",
@@ -803,6 +806,9 @@ export async function main(argv: string[]): Promise<void> {
     case "land":
     case "queue":
       return landCommand(cmd, args, { fail });
+    case "pr":
+    case "prs":
+      return prCommand(cmd, args, { fail });
     case "secrets":
       return secretsCommand(args, { fail });
     case "version":

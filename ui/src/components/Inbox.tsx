@@ -10,7 +10,7 @@ import { askWord, detailText, endingWord, inboxTick, inboxTitle, leftWord, recen
 import { useFitPop } from "../pop";
 import { qual } from "../registry";
 import { INBOX_TEXT } from "../settings";
-import { canAnswer as canAnswerHere, inboxItems, useStore } from "../store";
+import { canAnswer as canAnswerHere, inboxItems, prsAll, useStore } from "../store";
 import { Gear, type GearEntry, type GearGroup } from "./Gear";
 import { LandingNotices } from "./Landing";
 import { PermissionForm, plainWords, Questions, useCommandView, type RememberChoice } from "./Prompts";
@@ -39,8 +39,8 @@ export function useNow(on: boolean, ms = 1000): number {
   return now;
 }
 
-const KIND_GLYPH: Record<InboxItem["kind"], string> = { permission: "⚿", question: "?", proposal: "≡", guard: "⛨", gate: "⏸", clarify: "✎", park: "⏸", advice: "↺", "hand-off": "⇪", "sent-back": "↩" };
-const SOURCE_WORD: Record<InboxItem["source"], string> = { ask: "agent", run: "run", flow: "workflow", sprout: "incubator", advice: "incubator", landing: "landing queue" };
+const KIND_GLYPH: Record<InboxItem["kind"], string> = { permission: "⚿", question: "?", proposal: "≡", guard: "⛨", gate: "⏸", clarify: "✎", park: "⏸", advice: "↺", "hand-off": "⇪", "sent-back": "↩", ci: "✗", "gave-up": "✗" };
+const SOURCE_WORD: Record<InboxItem["source"], string> = { ask: "agent", run: "run", flow: "workflow", sprout: "incubator", advice: "incubator", landing: "landing queue", pr: "PR watch" };
 
 /** The retro lessons on offer, each with its own accept and dismiss.
  *  Accepting never edits anything itself: it opens a chat on canopy's own
@@ -151,6 +151,10 @@ export function InboxRow({
     else if (item.source === "flow") st.showFlow(item.id);
     else if (item.source === "sprout") st.showSprout(item.id);
     else if (item.source === "landing" && item.repoId) st.showLanding(item.repoId);
+    else if (item.source === "pr") {
+      const w = prsAll(st).find((p) => p.id === item.id);
+      if (w) st.showRun(w.runId);
+    }
   };
   const join = () => {
     if (!target) return;
@@ -270,6 +274,26 @@ export function InboxRow({
                 </button>
               </div>
             </div>
+          ) : item.kind === "ci" || item.kind === "gave-up" ? (
+            <div className="ask">
+              <div className="eyebrow">
+                {item.repo} {item.title}
+              </div>
+              {detail && <pre className="ask-detail">{detail}</pre>}
+              {item.kind === "ci" && (
+                <div className="ask-row">
+                  <button
+                    type="button"
+                    className="mini strong"
+                    disabled={busy}
+                    title="Canopy starts a fix run on the branch with the failed check's log, and pushes its commits to the PR. Up to 3 tries per check"
+                    onClick={() => answer({ pr: "auto-fix" })}
+                  >
+                    auto-fix it
+                  </button>
+                </div>
+              )}
+            </div>
           ) : item.kind === "gate" || item.kind === "park" ? (
             <div className="ask">
               <div className="eyebrow">{item.who} {item.title}</div>
@@ -353,7 +377,7 @@ export function InboxRow({
           <div className="kept-acts">
             {item.source !== "ask" && item.source !== "advice" && (
               <button type="button" className="mini" onClick={openSheet}>
-                open the {item.source === "run" ? "run" : item.source === "sprout" ? "project" : item.source === "landing" ? "landing section" : "workflow"}
+                open the {item.source === "run" ? "run" : item.source === "sprout" ? "project" : item.source === "landing" ? "landing section" : item.source === "pr" ? "run" : "workflow"}
               </button>
             )}
             {held && (
