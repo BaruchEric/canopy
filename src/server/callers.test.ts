@@ -1,5 +1,5 @@
-import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { mkdtempSync, readFileSync, rmSync, statSync } from "node:fs";
+import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
+import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { CallerBook } from "./callers";
@@ -41,12 +41,70 @@ describe("mint and check", () => {
     expect(book.check(null)).toBeNull();
   });
 
-  test("revoke ends a token", () => {
+  test("revoke ends a token", async () => {
     const book = open();
     const { token, caller } = book.mint("cli", { label: "cli a" });
-    expect(book.revoke(caller.id)).toBe(true);
-    expect(book.revoke(caller.id)).toBe(false);
+    expect(await book.revoke(caller.id)).toBe(true);
+    expect(await book.revoke(caller.id)).toBe(false);
     expect(book.check(token)).toBeNull();
+  });
+});
+
+describe("a bad disk", () => {
+  test("a failed write rejects the revoke's promise, bites in memory, and leaves no unhandled rejection", async () => {
+    const unhandled: unknown[] = [];
+    const seen = (e: unknown) => unhandled.push(e);
+    process.on("unhandledRejection", seen);
+    try {
+      // the parent of the file is a regular file, so every write fails
+      const blocker = join(dir, "blocker");
+      writeFileSync(blocker, "x");
+      const quiet = spyOn(console, "error").mockImplementation(() => {});
+      const book = new CallerBook({ file: join(blocker, "callers.json"), now });
+      books.push(book);
+      const { token, caller } = book.mint("cli", { label: "cli a" });
+      await book.flush();
+      let failed = false;
+      await book.revoke(caller.id).catch(() => {
+        failed = true;
+      });
+      expect(failed).toBe(true);
+      expect(quiet.mock.calls.some((c) => String(c[0]).startsWith("callers:"))).toBe(true);
+      quiet.mockRestore();
+      expect(book.check(token)).toBeNull();
+      await new Promise((r) => setTimeout(r, 10));
+      expect(unhandled).toEqual([]);
+    } finally {
+      process.off("unhandledRejection", seen);
+    }
+  });
+
+  test("a corrupt file is moved aside with its content, and the book starts empty", () => {
+    writeFileSync(file, "{corrupt");
+    const quiet = spyOn(console, "error").mockImplementation(() => {});
+    const book = open();
+    expect(String(quiet.mock.calls[0]?.[0])).toContain("every page, CLI and helper must sign in again");
+    quiet.mockRestore();
+    expect(book.list()).toEqual([]);
+    const aside = readdirSync(dir).filter((f) => f.startsWith("callers.json.corrupt-"));
+    expect(aside).toHaveLength(1);
+    expect(readFileSync(join(dir, aside[0] as string), "utf8")).toBe("{corrupt");
+    expect(existsSync(file)).toBe(false);
+  });
+
+  test("a file that is JSON but not an array is moved aside too, a missing file is just empty", () => {
+    writeFileSync(file, '{"a":1}');
+    const quiet = spyOn(console, "error").mockImplementation(() => {});
+    open();
+    quiet.mockRestore();
+    expect(readdirSync(dir).some((f) => f.startsWith("callers.json.corrupt-"))).toBe(true);
+    rmSync(join(dir, "callers.json.corrupt-x"), { force: true });
+    const fresh = mkdtempSync(join(tmpdir(), "canopy-callers-"));
+    const spy = spyOn(console, "error");
+    new CallerBook({ file: join(fresh, "callers.json"), now });
+    expect(spy).not.toHaveBeenCalled();
+    spy.mockRestore();
+    rmSync(fresh, { recursive: true, force: true });
   });
 });
 

@@ -7,7 +7,7 @@
  * drops them, which is what they should do.
  */
 
-import { readFileSync } from "node:fs";
+import { readFileSync, renameSync } from "node:fs";
 import { mkdir, rename, writeFile } from "node:fs/promises";
 import { basename, dirname, join } from "node:path";
 import { createHash, randomBytes, randomInt } from "node:crypto";
@@ -36,15 +36,16 @@ const b64 = (n: number): string => randomBytes(n).toString("base64url");
 const code = (): string => Array.from({ length: 6 }, () => CODE_CHARS[randomInt(CODE_CHARS.length)]).join("");
 const isSession = (kind: CallerKind): boolean => kind === "page" || kind === "cli";
 
-/** The file read back; an entry that does not check out is left out. */
-function parseKept(raw: string): Kept[] {
+/** The file read back; an entry that does not check out is left out. Null
+ *  when the file is not a JSON array at all. */
+function parseKept(raw: string): Kept[] | null {
   let v: unknown;
   try {
     v = JSON.parse(raw);
   } catch {
-    return [];
+    return null;
   }
-  if (!Array.isArray(v)) return [];
+  if (!Array.isArray(v)) return null;
   const out: Kept[] = [];
   for (const e of v) {
     if (!e || typeof e !== "object") continue;
@@ -80,35 +81,56 @@ export class CallerBook {
   constructor(opts: { file?: string; now?: () => number } = {}) {
     this.file = opts.file ?? join(configDir(), "callers.json");
     this.now = opts.now ?? Date.now;
-    let raw: string | null = null;
-    try {
-      raw = readFileSync(this.file, "utf8");
-    } catch {
-      raw = null;
-    }
-    this.callers = raw === null ? [] : parseKept(raw);
+    this.callers = this.load();
     this.lastSave = this.now();
   }
 
-  /** Resolves once every write queued so far has landed. */
+  /** Only a missing file is an empty book. A file that cannot be read or
+   *  parsed is moved aside, not overwritten, and the book starts empty. */
+  private load(): Kept[] {
+    let reason: string;
+    try {
+      const parsed = parseKept(readFileSync(this.file, "utf8"));
+      if (parsed) return parsed;
+      reason = "not a JSON array";
+    } catch (err) {
+      if (typeof err === "object" && err !== null && "code" in err && err.code === "ENOENT") return [];
+      reason = err instanceof Error ? err.message : String(err);
+    }
+    const aside = `${this.file}.corrupt-${Date.now()}`;
+    let moved = aside;
+    try {
+      renameSync(this.file, aside);
+    } catch (err) {
+      moved = `${aside} (move failed: ${err instanceof Error ? err.message : String(err)})`;
+    }
+    console.error(`callers: ${this.file} could not be read (${reason}); moved to ${moved}; every page, CLI and helper must sign in again`);
+    return [];
+  }
+
+  /** Resolves once every write queued so far has settled, failed or not. */
   async flush(): Promise<void> {
-    await this.chain.catch(() => {});
+    await this.chain;
   }
 
   /** Queue a write of what the book holds when the write runs: one after
    *  another, through a temp file and a rename. Memory changes first, so a
-   *  revoke bites at once even while the write waits. */
-  private save(): void {
+   *  revoke bites at once even while the write waits. A failure is logged
+   *  here and rejects the returned promise; `chain` itself never rejects. */
+  private save(): Promise<void> {
     this.lastSave = this.now();
-    this.chain = this.chain
-      .catch(() => {})
-      .then(async () => {
-        const dir = dirname(this.file);
-        await mkdir(dir, { recursive: true, mode: 0o700 });
-        const tmp = join(dir, `.${basename(this.file)}.${process.pid}.${Date.now()}.${randomBytes(4).toString("hex")}.tmp`);
-        await writeFile(tmp, `${JSON.stringify(this.callers, null, 2)}\n`, { mode: 0o600 });
-        await rename(tmp, this.file);
-      });
+    const run = this.chain.then(async () => {
+      const dir = dirname(this.file);
+      await mkdir(dir, { recursive: true, mode: 0o700 });
+      const tmp = join(dir, `.${basename(this.file)}.${process.pid}.${Date.now()}.${randomBytes(4).toString("hex")}.tmp`);
+      await writeFile(tmp, `${JSON.stringify(this.callers, null, 2)}\n`, { mode: 0o600 });
+      await rename(tmp, this.file);
+    });
+    this.chain = run.catch(() => {});
+    return run.catch((err: unknown) => {
+      console.error(`callers: could not write ${this.file}: ${err instanceof Error ? err.message : String(err)}`);
+      throw err;
+    });
   }
 
   private strip({ hash: _h, ...caller }: Kept): Caller {
@@ -129,7 +151,7 @@ export class CallerBook {
       ...(opts.run !== undefined ? { run: opts.run } : {}),
     };
     this.callers.push(kept);
-    this.save();
+    this.save().catch(() => {});
     return { token, caller: this.strip(kept) };
   }
 
@@ -143,37 +165,40 @@ export class CallerBook {
     if (!kept) return null;
     const at = this.now();
     if (isSession(kept.kind) && at - kept.used > SESSION_IDLE) {
-      this.remove((c) => c === kept);
+      this.remove((c) => c === kept).catch(() => {});
       return null;
     }
     kept.used = at;
-    if (at - this.lastSave >= SAVE_EVERY) this.save();
+    if (at - this.lastSave >= SAVE_EVERY) this.save().catch(() => {});
     return this.strip(kept);
   }
 
-  private remove(drop: (c: Kept) => boolean): boolean {
+  /** Drops at once in memory; the promise settles with the write and
+   *  rejects when it fails, so a route can say so. Nobody has to await it,
+   *  but one that does not should add its own catch. */
+  private remove(drop: (c: Kept) => boolean): Promise<boolean> {
     const before = this.callers.length;
     this.callers = this.callers.filter((c) => !drop(c));
-    if (this.callers.length === before) return false;
-    this.save();
-    return true;
+    if (this.callers.length === before) return Promise.resolve(false);
+    return this.save().then(() => true);
   }
 
-  revoke(id: string): boolean {
+  /** resolves true when there was such a caller */
+  revoke(id: string): Promise<boolean> {
     return this.remove((c) => c.id === id);
   }
 
-  dropTerm(term: string): void {
-    this.remove((c) => c.term === term);
+  dropTerm(term: string): Promise<void> {
+    return this.remove((c) => c.term === term).then(() => {});
   }
 
-  dropRun(run: string): void {
-    this.remove((c) => c.run === run);
+  dropRun(run: string): Promise<void> {
+    return this.remove((c) => c.run === run).then(() => {});
   }
 
   /** drops shell callers whose terminal is gone */
-  prune(liveTerms: ReadonlySet<string>): void {
-    this.remove((c) => c.kind === "shell" && (c.term === undefined || !liveTerms.has(c.term)));
+  prune(liveTerms: ReadonlySet<string>): Promise<void> {
+    return this.remove((c) => c.kind === "shell" && (c.term === undefined || !liveTerms.has(c.term))).then(() => {});
   }
 
   list(): Caller[] {
