@@ -198,6 +198,7 @@ import { HealthHub, rangerResult, streamResult } from "./health";
 import { KitHub, kitPath } from "./kit";
 import { LandingHub } from "./landing";
 import { PrHub } from "./prs";
+import { authRoute, CallerBook, callerOf, CallerGate, callersMode, type Caller } from "./callers";
 import { getPeers, PeerError, postPeersSync, postRepoPeer, queuePass, withPeering, type PeerDeps } from "./peers";
 import { fixPrompt, landWord } from "../core/landing";
 import { GATES_CHECK, readGates } from "../core/gates";
@@ -295,6 +296,10 @@ interface ServerState {
   landing: LandingHub;
   /** the PRs branch runs opened and the watch on them (server/prs) */
   prs: PrHub;
+  /** the tokens this backend knows and the pairing that hands them out (server/callers) */
+  callers: CallerBook;
+  /** the caller check at the top of route(), and what it refused */
+  gate: CallerGate;
   /** the Secrets view: the relay to the secrets service on the mini, the verified copy elsewhere */
   secrets: SecretsHub;
   /** the checks repos declare, kept in the health hub (server/repohealth) */
@@ -428,6 +433,8 @@ interface TermSocket {
   rows: number;
   /** the device this socket belongs to, by its stream's id, for `viewers` */
   device: string | null;
+  /** who opened it, by token or ticket; null when nothing is enforced and none came */
+  caller: Caller | null;
   live?: LiveTerm;
   /** on tmux, this socket's own client on the session */
   client?: TermSession;
@@ -451,6 +458,8 @@ interface Helper {
 interface HelperSocket {
   kind: "helper";
   info: HelperInfo;
+  /** who dialled in, by token or ticket; null when nothing is enforced and none came */
+  caller: Caller | null;
 }
 
 type Socket = (TermSocket & { kind: "term" }) | HelperSocket;
@@ -1044,7 +1053,7 @@ async function resumeTerm(
     await Bun.sleep(400);
     await sendLine(tmux, id, line);
   } else {
-    live = openPtyTerm(state, { repo, id, place, attach: false, start: null, refused: null, prompt: "", device: null, ...size }, size);
+    live = openPtyTerm(state, { repo, id, place, attach: false, start: null, refused: null, prompt: "", device: null, caller: null, ...size }, size);
     await Bun.sleep(400);
     live.pty?.session.write(`${line}\r`);
   }
@@ -1947,6 +1956,22 @@ function addCanopyChecks(state: ServerState, broker: boolean): void {
   // reported by the PR loop after each read; ok until it reads one
   state.health.add({ id: PRS_CHECK, label: "PR watch (gh)", scope: canopy, heal: "self" });
   state.health.report(PRS_CHECK, { state: "ok" });
+  // Health has no warning state of its own; `healing` is what reads as one,
+  // and on a check nothing heals it schedules no heal.
+  state.health.add({
+    id: CALLERS_CHECK,
+    label: "caller check",
+    scope: canopy,
+    heal: "none",
+    every: 30_000,
+    probe: async () => {
+      const { mode, refused } = state.gate;
+      if (mode === "off") return { state: "off", why: "CANOPY_CALLERS=off: no caller is checked" };
+      const n = `${refused.count} ${refused.count === 1 ? "call" : "calls"}`;
+      if (mode === "log" && refused.count) return { state: "healing", why: `${n} would be refused under CANOPY_CALLERS=enforce; GET /api/auth lists the latest` };
+      return { state: "ok", detail: mode === "log" ? "log mode, nothing would be refused" : `enforce mode, ${n} refused` };
+    },
+  });
   const base = state.tmux;
   state.health.add({
     id: "canopy:tmux",
@@ -1970,6 +1995,7 @@ function addCanopyChecks(state: ServerState, broker: boolean): void {
 }
 
 const PRS_CHECK = "canopy:prs";
+const CALLERS_CHECK = "canopy:callers";
 
 const PASS_LABEL = { "canopy:activity": "fetch and pull request pass", "canopy:remote": "remote repos refresh", "canopy:keep": "kept shells" } as const;
 
@@ -3809,7 +3835,7 @@ export async function startServer(opts: {
   /** `quietWait` shortens how long a stage run's or check's end waits for
    *  the stage runner to call its seed quiet, for tests */
   runner?: { driver?: (harness: Harness) => RunDriver; quietWait?: number };
-}): Promise<{ port: number; stop: () => void }> {
+}): Promise<{ port: number; stop: () => Promise<void> }> {
   const cfg = await loadConfig();
   const root = await realpath(opts.root);
   // canopy's git in a seed goes through the guard (seedgit.ts)
@@ -4058,6 +4084,7 @@ export async function startServer(opts: {
     broadcast: (ev) => broadcast(state, ev),
     onGaveUp: (c) => state.chan.onHealthGaveUp(c),
   });
+  const callers = new CallerBook();
   const state: ServerState = {
     root,
     agentLine: opts.agentLine ?? (async (_repo, agent, env) => agentLine(agent, undefined, env)),
@@ -4286,6 +4313,17 @@ export async function startServer(opts: {
       openPr: (id) => state.prs.open(id),
       dropped: (id) => state.prs.forgetBranch(id),
     }),
+    callers,
+    gate: new CallerGate({
+      book: callers,
+      mode: callersMode(),
+      log: (line) => console.log(line),
+      onPairs: (pending) => broadcast(state, { type: "auth", pending }),
+      // the check is polled; the first refusal is worth a probe at once
+      onRefused: () => {
+        if (state.gate.refused.count === 1) void state.health.probeNow(CALLERS_CHECK);
+      },
+    }),
     prs: new PrHub({
       broadcast: (ev) => broadcast(state, ev),
       record: (id) => state.landing.record(id),
@@ -4435,18 +4473,26 @@ export async function startServer(opts: {
       })
     : null;
   const route = async (req: Request, srv: Bun.Server<Socket>, url: URL): Promise<Response | undefined> => {
+    // Who is calling comes first, so the Library is checked like the rest.
+    // The pairing routes wait until after the origin gate: a rebound or
+    // foreign page must not read the callers or fill the pair slots.
+    const caller = callerOf(state.callers, req, url);
+    const denied = state.gate.gate(req, url, caller);
+    if (denied) return denied;
     if (url.pathname === "/api/library" || url.pathname === "/library" || url.pathname.startsWith("/library/")) return library.handle(req);
     if (url.pathname.startsWith("/api/") && !libraryOriginAllowed(req, publicOrigin, beyondLoopback, origins)) {
       return json({ error: "Foreign origin" }, 403);
     }
     const key = clientKey(srv.requestIP(req)?.address ?? "127.0.0.1");
+    const auth = await authRoute(state.callers, state.gate, req, url, caller, key);
+    if (auth) return auth;
     if (url.pathname === "/api/events") return sse(state, parseStream(url.searchParams, key));
     if (url.pathname === "/api/helper") {
       // a helper dialling in from a client machine: its registration
       // rides in the query, one helper per name (a newer one wins)
       const info = parseHelperQuery(url.searchParams, key);
       if ("error" in info) return json({ error: info.error }, 400);
-      const data: HelperSocket = { kind: "helper", info };
+      const data: HelperSocket = { kind: "helper", info, caller };
       if (srv.upgrade(req, { data })) return undefined;
       return json({ error: "a websocket is expected here" }, 426);
     }
@@ -4458,7 +4504,7 @@ export async function startServer(opts: {
         const size = termSize(url.searchParams.get("cols"), url.searchParams.get("rows"));
         const dev = url.searchParams.get("client") ?? "";
         const repo = { id: "", name: "ranger", path: root } as Repo;
-        const data: Socket = { kind: "term", repo, id: rangerTerm, place: "strip", attach: true, start: null, refused: null, prompt: "", device: /^[0-9a-f]{16}$/.test(dev) ? dev : null, ...size };
+        const data: Socket = { kind: "term", repo, id: rangerTerm, place: "strip", attach: true, start: null, refused: null, prompt: "", device: /^[0-9a-f]{16}$/.test(dev) ? dev : null, caller, ...size };
         if (srv.upgrade(req, { data })) return undefined;
         return json({ error: "a websocket is expected here" }, 426);
       }
@@ -4489,7 +4535,7 @@ export async function startServer(opts: {
       const size = termSize(url.searchParams.get("cols"), url.searchParams.get("rows"));
       const dev = url.searchParams.get("client") ?? "";
       const device = /^[0-9a-f]{16}$/.test(dev) ? dev : null;
-      const data: Socket = { kind: "term", repo, id, place, attach, start, refused, prompt, device, ...size };
+      const data: Socket = { kind: "term", repo, id, place, attach, start, refused, prompt, device, caller, ...size };
       if (srv.upgrade(req, { data })) return undefined;
       return json({ error: "a websocket is expected here" }, 426);
     }
@@ -4822,6 +4868,8 @@ export async function startServer(opts: {
   // What the shells have on their screens, written out while `keepShells`
   // is on, so a machine going down does not take them with the tmux server.
   addCanopyChecks(state, chanCfg !== null);
+  // while no page or CLI is signed in, the way in is a code only this log shows
+  state.gate.announce();
   void state.chan.start().catch((err) => console.error("canopy: tailchan", err));
   state.registry.start();
   if (process.env["NODE_ENV"] !== "test") state.kit.start();
@@ -4901,6 +4949,8 @@ export async function startServer(opts: {
       process.off("exit", stopLibrary);
       for (const rt of state.sources) rt.watcher?.close();
       server.stop(true);
+      // a revoke or a mint may still be on its way to callers.json
+      return state.callers.flush();
     },
   };
 }

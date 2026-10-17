@@ -11,8 +11,9 @@ import { readFileSync, renameSync } from "node:fs";
 import { mkdir, rename, writeFile } from "node:fs/promises";
 import { basename, dirname, join } from "node:path";
 import { createHash, randomBytes, randomInt } from "node:crypto";
-import type { CallerKind } from "../core/callers";
+import { allows, needs, type CallerKind, type Right } from "../core/callers";
 import { configDir } from "../core/store";
+import type { PendingPair } from "../core/types";
 
 export type Caller = { id: string; kind: CallerKind; label: string; term?: string; run?: string; created: number; used: number };
 
@@ -241,7 +242,7 @@ export class CallerBook {
     return { id: p.id, code: p.code, secret: p.secret };
   }
 
-  pending(): { id: string; label: string; addr: string; code: string; at: number }[] {
+  pending(): PendingPair[] {
     return this.waiting().map(({ id, label, addr, code, at }) => ({ id, label, addr, code, at }));
   }
 
@@ -288,5 +289,242 @@ export class CallerBook {
     if (!this.approve(pairId)) return false;
     this.first = null;
     return true;
+  }
+}
+
+export type CallersMode = "off" | "log" | "enforce";
+
+/** `CANOPY_CALLERS`, log unless it says off or enforce. Anything else is a
+ *  typo, said once and read as log. */
+export function callersMode(env: Record<string, string | undefined> = process.env): CallersMode {
+  const raw = env["CANOPY_CALLERS"]?.trim() ?? "";
+  if (raw === "off" || raw === "log" || raw === "enforce") return raw;
+  if (raw) console.warn(`callers: CANOPY_CALLERS=${raw} is not off, log or enforce; checking in log mode`);
+  return "log";
+}
+
+/** The two sockets a browser opens cannot carry a header, so each takes a
+ *  ticket in the query instead, for the right it needs. */
+const upgradeRight = (path: string): Ticketed | null => (path === "/api/term" ? "shell" : path === "/api/helper" ? "helper" : null);
+
+/** Who is calling: the `X-Canopy-Token` header, else a ticket on one of the
+ *  two upgrades. Null for nobody known. A ticket is spent here, so this runs
+ *  once per request. */
+export function callerOf(book: CallerBook, req: Request, url: URL): Caller | null {
+  const token = req.headers.get("x-canopy-token");
+  if (token) return book.check(token);
+  const right = upgradeRight(url.pathname);
+  const ticket = url.searchParams.get("ticket");
+  return right && ticket ? book.redeem(ticket, right) : null;
+}
+
+export type Refused = { kind: CallerKind; route: string; origin: string; ua: string; at: number };
+
+const RECENT = 20;
+const GUESS_WINDOW = 10 * 60 * 1000;
+const MOST_GUESSES = 10;
+
+const isAuth = (path: string): boolean => path === "/api/auth" || path.startsWith("/api/auth/");
+
+/** A 401 for nobody known, a 403 for a caller without the right. Never a
+ *  `login` key: the page reads that as the edge gate's sign-in. */
+function refusal(right: Right, caller: Caller | null): Response {
+  return Response.json(
+    { error: `this call needs the ${right} right; run canopy auth login, or open a new shell`, need: right },
+    { status: caller ? 403 : 401 },
+  );
+}
+
+/** The check at the top of route(), what it refused, the guesses at the
+ *  pairing routes, and the first code as last printed. */
+export class CallerGate {
+  readonly book: CallerBook;
+  readonly mode: CallersMode;
+  /** every refusal since start, would-refuse ones in log mode included; the newest 20, newest first */
+  readonly refused: { count: number; recent: Refused[] } = { count: 0, recent: [] };
+  private readonly log: (line: string) => void;
+  private readonly onPairs: (pending: PendingPair[]) => void;
+  private readonly onRefused: () => void;
+  private readonly now: () => number;
+  /** the would-refuse lines already logged, by kind, method and path */
+  private readonly said = new Set<string>();
+  /** failed guesses by route and address, as times */
+  private readonly misses = new Map<string, number[]>();
+  private shown: string | null = null;
+
+  constructor(opts: {
+    book: CallerBook;
+    mode: CallersMode;
+    log: (line: string) => void;
+    onPairs?: (pending: PendingPair[]) => void;
+    onRefused?: () => void;
+    now?: () => number;
+  }) {
+    this.book = opts.book;
+    this.mode = opts.mode;
+    this.log = opts.log;
+    this.onPairs = opts.onPairs ?? (() => {});
+    this.onRefused = opts.onRefused ?? (() => {});
+    this.now = opts.now ?? Date.now;
+  }
+
+  /** Null lets the request through, anything else is the answer. The auth
+   *  routes are checked in every mode, so a token nobody approved while
+   *  nothing was enforced cannot be one later. */
+  gate(req: Request, url: URL, caller: Caller | null): Response | null {
+    const auth = isAuth(url.pathname);
+    if (this.mode === "off" && !auth) return null;
+    // a HEAD is a GET without the body
+    const right = needs(req.method === "HEAD" ? "GET" : req.method, url.pathname);
+    if (right === "open") return null;
+    const kind = caller?.kind ?? "none";
+    if (allows(kind, right)) return null;
+    this.refused.count++;
+    this.refused.recent.unshift({
+      kind,
+      route: `${req.method} ${url.pathname}`,
+      origin: req.headers.get("origin") ?? "",
+      ua: req.headers.get("user-agent") ?? "",
+      at: this.now(),
+    });
+    if (this.refused.recent.length > RECENT) this.refused.recent.length = RECENT;
+    this.onRefused();
+    if (this.mode === "log" && !auth) {
+      const key = `${kind} ${req.method} ${url.pathname}`;
+      if (!this.said.has(key)) {
+        this.said.add(key);
+        this.log(`callers: would refuse ${key} (needs ${right})`);
+      }
+      return null;
+    }
+    return refusal(right, caller);
+  }
+
+  /** whether `addr` has missed at `route` ten times in the last ten minutes */
+  locked(route: string, addr: string): boolean {
+    const at = this.now();
+    for (const [key, times] of this.misses) {
+      const recent = times.filter((t) => at - t < GUESS_WINDOW);
+      if (recent.length) this.misses.set(key, recent);
+      else this.misses.delete(key);
+    }
+    return (this.misses.get(`${route} ${addr}`)?.length ?? 0) >= MOST_GUESSES;
+  }
+
+  missed(route: string, addr: string): void {
+    const key = `${route} ${addr}`;
+    this.misses.set(key, [...(this.misses.get(key) ?? []), this.now()]);
+  }
+
+  pairsChanged(): void {
+    this.onPairs(this.book.pending());
+  }
+
+  /** Prints the first sign-in code when there is one not printed yet. */
+  announce(): void {
+    const code = this.book.firstCode();
+    if (code && code !== this.shown) this.log(`canopy: first sign-in code ${code} (good until a page or the CLI signs in)`);
+    this.shown = code;
+  }
+}
+
+type Body = Record<string, unknown>;
+
+const isBody = (v: unknown): v is Body => typeof v === "object" && v !== null && !Array.isArray(v);
+
+const field = (b: Body, k: string): string | null => {
+  const v = b[k];
+  return typeof v === "string" && v !== "" ? v : null;
+};
+
+const ticketRight = (v: unknown): Ticketed | null => (v === "term" ? "shell" : v === "helper" ? "helper" : null);
+
+/** `/api/auth` and below, after the gate has passed the request; null for
+ *  any other path. `addr` is the client's address, which a pair request
+ *  shows and the guess limit counts by. */
+export async function authRoute(book: CallerBook, gate: CallerGate, req: Request, url: URL, caller: Caller | null, addr: string): Promise<Response | null> {
+  if (!isAuth(url.pathname)) return null;
+  const json = (body: unknown, status = 200): Response => Response.json(body, { status });
+  if (url.pathname === "/api/auth") {
+    if (req.method !== "GET") return json({ error: "/api/auth only answers a GET" }, 405);
+    return json({ mode: gate.mode, refused: gate.refused, callers: book.list(), pending: book.pending(), you: caller?.kind ?? "none" });
+  }
+  if (req.method !== "POST") return json({ error: "the auth routes take a POST" }, 405);
+  const raw: unknown = await req.json().catch(() => null);
+  const b: Body = isBody(raw) ? raw : {};
+  const route = url.pathname.slice("/api/auth/".length);
+  const tooMany = (): Response => json({ error: "too many wrong tries from this address; try again in ten minutes" }, 429);
+  switch (route) {
+    case "pair": {
+      const label = field(b, "label");
+      if (!label) return json({ error: "a pair request needs a label" }, 400);
+      const got = book.pair(label, addr);
+      if ("error" in got) return json({ error: got.error }, 429);
+      gate.pairsChanged();
+      gate.announce();
+      return json(got);
+    }
+    case "claim": {
+      if (gate.locked(route, addr)) return tooMany();
+      const id = field(b, "id");
+      const secret = field(b, "secret");
+      if (!id || !secret) return json({ error: "id and secret are required" }, 400);
+      const got = book.claim(id, secret);
+      if (got === "waiting") return json({ waiting: true });
+      if (got === null) {
+        gate.missed(route, addr);
+        return json({ error: "no such pair request: it was denied, claimed, or has expired" }, 404);
+      }
+      gate.announce();
+      return json({ token: got });
+    }
+    case "first": {
+      if (gate.locked(route, addr)) return tooMany();
+      const id = field(b, "id");
+      const given = field(b, "code");
+      if (!id || !given) return json({ error: "id and code are required" }, 400);
+      if (!book.useFirst(given.trim().toUpperCase(), id)) {
+        gate.missed(route, addr);
+        return json({ error: "that is not the first sign-in code, or the pair request is not waiting" }, 403);
+      }
+      gate.pairsChanged();
+      return json({ ok: true });
+    }
+    case "approve":
+    case "deny": {
+      const id = field(b, "id");
+      if (!id) return json({ error: "id is required" }, 400);
+      if (!(route === "approve" ? book.approve(id) : book.deny(id))) return json({ error: "no such pair request waiting" }, 404);
+      gate.pairsChanged();
+      return json({ ok: true });
+    }
+    case "revoke": {
+      const id = field(b, "id");
+      if (!id) return json({ error: "id is required" }, 400);
+      let had: boolean;
+      try {
+        had = await book.revoke(id);
+      } catch (err) {
+        gate.announce();
+        const why = err instanceof Error ? err.message : String(err);
+        return json({ error: `revoked until canopy restarts, but callers.json could not be written (${why})` }, 500);
+      }
+      if (!had) return json({ error: "no such caller" }, 404);
+      gate.announce();
+      return json({ ok: true });
+    }
+    case "ticket": {
+      const right = ticketRight(b["for"]);
+      if (!right) return json({ error: `for is "term" or "helper"` }, 400);
+      if (!caller || !allows(caller.kind, right)) return refusal(right, caller);
+      try {
+        return json({ ticket: book.ticket(caller.id, right) });
+      } catch {
+        // revoked since the check
+        return refusal(right, null);
+      }
+    }
+    default:
+      return json({ error: `no such auth route: ${route}` }, 404);
   }
 }

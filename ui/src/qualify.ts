@@ -175,6 +175,8 @@ export function qEvent(q: Q, ev: ServerEvent): ServerEvent {
     // the kit names machines, not repos: nothing to qualify
     case "kit":
     case "secrets":
+    // pair ids are the backend's own and name no repo
+    case "auth":
       return ev;
   }
 }

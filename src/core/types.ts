@@ -1389,6 +1389,17 @@ export function statusFingerprint(st: RepoStatus | null): string {
 export const isRunActive = (r: Run): boolean =>
   r.status === "working" || r.status === "waiting" || r.status === "idle";
 
+/** A page or CLI asking to be let in, as an admin sees it to approve: the
+ *  code is the one the asker shows, so the two can be matched by eye. */
+export interface PendingPair {
+  id: string;
+  label: string;
+  /** the address it asked from */
+  addr: string;
+  code: string;
+  at: number;
+}
+
 export type ServerEvent =
   | { type: "repo"; repo: Repo }
   | { type: "scan"; result: ScanResult }
@@ -1409,6 +1420,8 @@ export type ServerEvent =
   | { type: "landing"; landing: LandingInfo }
   /** the PRs branch runs opened, whole, whenever one changes (FR-011) */
   | { type: "prs"; prs: PrWatch[] }
+  /** the pair requests still waiting, whole, whenever one comes, is answered or is claimed */
+  | { type: "auth"; pending: PendingPair[] }
   /** where the incubator's stages run, whenever that changes; home backend only */
   | { type: "stages"; stages: IncubatorStages }
   | { type: "job"; job: Job }
