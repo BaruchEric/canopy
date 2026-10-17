@@ -148,4 +148,12 @@ describe("the shell's token in a typed line", () => {
     expect(line).not.toContain("cnp_");
     expect(agentLine(claude(), undefined, { CANOPY_TOKEN: TOKEN_REF })).not.toContain("CANOPY_TOKEN");
   });
+
+  test("no other word is ever left raw, from settings or a prompt", async () => {
+    const { agentLine, agentShellCommand } = await import("./openers");
+    const pwned = claude({ yolo: false, extra: "\u0001;echo pwned" });
+    expect(agentLine(pwned)).toBe("claude '\u0001;echo' pwned");
+    expect(agentShellCommand("/bin/zsh", pwned).at(-1)).toBe("claude '\u0001;echo' pwned");
+    expect(agentLine(claude({ yolo: false }), "\u0001;echo pwned")).toBe("claude '\u0001;echo pwned'");
+  });
 });

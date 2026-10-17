@@ -18,6 +18,11 @@ describe("agent settings", () => {
     });
   });
 
+  test("control characters are stripped from extra", () => {
+    expect(normalizeAgent({ extra: "\u0001;echo pwned" }).extra).toBe(";echo pwned");
+    expect(normalizeAgent({ extra: "--verbose\u0000\u001b[2J" }).extra).toBe("--verbose[2J");
+  });
+
   test("an entry from before harnesses reads as claude", () => {
     expect(normalizeAgent({ model: "fable", effort: "max", yolo: false, extra: "" })).toEqual({
       harness: "claude",

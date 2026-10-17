@@ -9,7 +9,7 @@
  * (openers, sessions, keep), since that module is not browser-safe.
  */
 
-import { RAW_WORD, TOKEN_REF } from "./host";
+import { TOKEN_REF, TOKEN_SET_WORD } from "./host";
 import { AGENT_MODELS, HARNESSES, type AgentEffort, type AgentSettings, type Harness } from "./types";
 
 export { HARNESSES, type Harness };
@@ -115,7 +115,7 @@ const CODEX: HarnessInfo = {
         // the shell's own token rides as a reference the typed line's shell
         // expands inside the toml quotes, never as a value
         k === "CANOPY_TOKEN" && v === TOKEN_REF
-          ? ["-c", `${RAW_WORD}'shell_environment_policy.set.${k}="'"${TOKEN_REF}"'"'`]
+          ? ["-c", TOKEN_SET_WORD]
           : ["-c", `shell_environment_policy.set.${k}=${tomlString(v)}`],
       ),
   resume: (flags, session) => ["resume", ...flags, session],

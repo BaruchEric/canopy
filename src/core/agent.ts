@@ -21,7 +21,10 @@ export function normalizeAgent(v: unknown): AgentSettings {
     model: takesModel(harness, o["model"]) ? o["model"] : "default",
     effort: takesEffort(harness, o["effort"]) ? o["effort"] : "default",
     yolo: typeof o["yolo"] === "boolean" ? o["yolo"] : DEFAULT_AGENT.yolo,
-    extra: typeof o["extra"] === "string" ? o["extra"].trim() : "",
+    // no control character reaches a command line: a terminal would act on
+    // it, and a shell line has no use for one
+    // eslint-disable-next-line no-control-regex
+    extra: typeof o["extra"] === "string" ? o["extra"].replace(/[\u0000-\u001f]/g, "").trim() : "",
   };
 }
 

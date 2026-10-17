@@ -41,19 +41,23 @@ export function shellQuote(s: string): string {
 /** A word a POSIX shell reads as itself. */
 const PLAIN_WORD = /^[A-Za-z0-9_@%+=:,./-]+$/;
 
-/** A word starting with this is left as written, minus the prefix, for the
- *  one case that needs the shell to expand something at run time. */
-export const RAW_WORD = "\u0001";
-
 /** What a line typed into a canopy shell uses for that shell's own
  *  CANOPY_TOKEN: the shell expands it, so no token value is ever typed. */
 export const TOKEN_REF = "$CANOPY_TOKEN";
 
+/** Marks the one word `shellLine` leaves as written. */
+const RAW_WORD = "\u0001";
+
+/** Codex's `-c` value that sets its commands' CANOPY_TOKEN from the shell's
+ *  own, which the shell expands inside the toml quotes at run time: the one
+ *  case that needs shell syntax in a line. `shellLine` matches it whole, so
+ *  no other word, from settings, a prompt or anywhere else, is left raw. */
+export const TOKEN_SET_WORD = `${RAW_WORD}'shell_environment_policy.set.CANOPY_TOKEN="'"${TOKEN_REF}"'"'`;
+
 /** Words as one shell line, quoting only what needs it, so a command a
- *  person will see (in a terminal tab, a held window) stays readable. A
- *  `RAW_WORD` word is the caller's own shell syntax. */
+ *  person will see (in a terminal tab, a held window) stays readable. */
 export function shellLine(words: string[]): string {
-  return words.map((w) => (w.startsWith(RAW_WORD) ? w.slice(RAW_WORD.length) : PLAIN_WORD.test(w) ? w : shellQuote(w))).join(" ");
+  return words.map((w) => (w === TOKEN_SET_WORD ? w.slice(RAW_WORD.length) : PLAIN_WORD.test(w) ? w : shellQuote(w))).join(" ");
 }
 
 /** Quote a path for a remote shell while letting a leading `~` expand, so a
