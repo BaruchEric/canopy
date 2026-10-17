@@ -241,8 +241,8 @@ describe("revoking a caller", () => {
     other.set("ticket", await ticket(admin, "term"));
     const theirs = await held(`/api/term?${other}`);
     expect((await post(s, "/api/auth/revoke", { id: holder.id }, admin)).status).toBe(200);
-    const got = await mine.closed(2_000);
-    expect(got).not.toBe("still open");
+    // 1008, which the dock reads as a drop and rejoins, so its tabs stay
+    expect(await mine.closed(2_000)).toEqual({ code: 1008 });
     expect(await theirs.closed(200)).toBe("still open");
   });
 
@@ -251,7 +251,7 @@ describe("revoking a caller", () => {
     q.set("ticket", await ticket(helper.token, "helper"));
     const sock = await held(`/api/helper?${q}`);
     expect((await post(s, "/api/auth/revoke", { id: helper.id }, admin)).status).toBe(200);
-    expect(await sock.closed(2_000)).not.toBe("still open");
+    expect(await sock.closed(2_000)).toEqual({ code: 1008 });
   });
 });
 
