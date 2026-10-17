@@ -49,7 +49,7 @@ interface World {
   hub: PrHub;
   gh: Gh;
   events: ServerEvent[];
-  fixes: { id: string; prompt: string }[];
+  fixes: { id: string; prompt: string; label: string }[];
   active: Set<string>;
   forgot: string[];
   held: string | null;
@@ -133,9 +133,9 @@ async function world(opts: { repoDefault?: string } = {}): Promise<World> {
         w.forgot.push(x);
         records.delete(x);
       },
-      startFix: async (r, prompt) => {
+      startFix: async (r, prompt, label) => {
         const runId = `fix${++fixN}`;
-        w.fixes.push({ id: runId, prompt });
+        w.fixes.push({ id: runId, prompt, label });
         w.active.add(runId);
         const cur = records.get(r.id);
         if (cur) records.set(r.id, { ...cur, runId });
@@ -272,6 +272,7 @@ describe("auto-fix", () => {
     expect(w.fixes).toHaveLength(1);
     expect(w.fixes[0]!.prompt).toContain("The check test failed");
     expect(w.fixes[0]!.prompt).toContain("Error: expected 2, got 3");
+    expect(w.fixes[0]!.label).toBe("fix PR #7: test failed (1/3)");
     expect(pr.fixing).toEqual({ run: "fix1", key: "check:test" });
     expect(pr.attempts).toEqual({ "check:test": 1 });
     pr = await pollNow(w);

@@ -21,6 +21,7 @@ import {
   exhausted,
   fixPromptForCheck,
   fixPromptForComment,
+  MAX_ATTEMPTS,
   mergeMethod,
   nextPoll,
   parseComments,
@@ -68,8 +69,8 @@ export interface PrDeps {
   markPr: (id: string, pr: number | null) => void;
   /** a merged PR's branch: its landing record goes */
   forget: (id: string) => Promise<void>;
-  /** starts a fix run on the branch with this message */
-  startFix: (rec: LandingRun, prompt: string) => Promise<Run>;
+  /** starts a fix run on the branch with this message; `label` is its note */
+  startFix: (rec: LandingRun, prompt: string, label: string) => Promise<Run>;
   /** whether a run is still going, by id */
   runActive: (id: string) => boolean;
   /** the `canopy:prs` health check */
@@ -447,8 +448,9 @@ export class PrHub {
     const rec = this.deps.record(w.id);
     if (!rec) return { ...w, error: "its branch run's record is gone" };
     const attempts = { ...w.attempts, [key]: (w.attempts[key] ?? 0) + 1 };
+    const what = key.startsWith("check:") ? `${key.slice("check:".length)} failed` : "a review comment";
     try {
-      const run = await this.deps.startFix(rec, prompt);
+      const run = await this.deps.startFix(rec, prompt, `fix PR #${w.number}: ${what} (${attempts[key]}/${MAX_ATTEMPTS})`);
       return { ...w, attempts, runId: run.id, fixing: { run: run.id, key } };
     } catch (err) {
       return { ...w, attempts, error: `could not start a fix: ${errText(err)}` };

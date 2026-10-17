@@ -65,6 +65,10 @@ export interface LandingDeps {
   runActive: (id: string) => boolean;
   /** sorts a branch run's diff; `sortRun` unless a test says otherwise */
   sort?: (rec: LandingRun, now: number) => Promise<RunReview>;
+  /** a run whose pre-flight said "open a PR" settled ready (FR-011) */
+  openPr?: (id: string) => Promise<unknown> | void;
+  /** a branch was dropped with its worktree: its PR watch goes too */
+  dropped?: (id: string) => void;
   dir?: string;
   worktrees?: string;
   now?: () => number;
@@ -388,6 +392,19 @@ export class LandingHub {
   /** A fresh run settled ready: sorted, and in the queue on its own when
    *  the sort says `auto` and nobody queued it meanwhile. */
   private async settled(id: string): Promise<void> {
+    const opening = this.runs.get(id);
+    // a PR run lands on GitHub, never here (call 1)
+    if (opening?.pr !== undefined) return;
+    if (opening?.openPr) {
+      try {
+        await this.deps.openPr?.(id);
+      } catch (err) {
+        // it waits as ready; the notice says why its PR did not open
+        this.notify({ entry: id, repoId: opening.repoId, branch: opening.branch, note: opening.note, kind: "held", why: `its PR did not open: ${errText(err)}` });
+        this.publish();
+      }
+      return;
+    }
     const review = await this.resort(id);
     const rec = this.runs.get(id);
     if (!review || review.verdict !== "auto" || !rec || rec.state !== "ready") return;
@@ -442,6 +459,7 @@ export class LandingHub {
         harness: run.harness,
         state: b.state,
         startedAt: run.startedAt,
+        ...(b.openPr ? { openPr: true as const } : {}),
       };
     }
     const next: LandingRun = {
@@ -490,12 +508,54 @@ export class LandingHub {
     return this.runs.get(id) ?? [...this.runs.values()].find((r) => r.runId === id);
   }
 
+  /** A branch run's record, by the branch's id or its latest run's. */
+  record(id: string): LandingRun | undefined {
+    return this.find(id);
+  }
+
+  /** Why the queue has a branch, so it may not open a PR: queued or
+   *  landed. A sent-back branch may; opening its PR takes it off the list. */
+  queueHold(id: string): string | null {
+    const e = this.entries.find((x) => x.id === (this.find(id)?.id ?? id));
+    if (e && inQueue(e)) return "it is in the queue already";
+    if (e?.state === "landed") return "it has landed already";
+    return null;
+  }
+
+  /** Puts the PR a branch opened on its record, or takes it off (the PR
+   *  closed: the run may land here again). A sent-back entry goes when the
+   *  PR is put on. */
+  markPr(id: string, pr: number | null): void {
+    const rec = this.find(id);
+    if (!rec) return;
+    const { pr: _p, ...rest } = rec;
+    const next: LandingRun = pr === null ? rest : { ...rest, pr };
+    this.runs.set(rec.id, next);
+    this.written.set(rec.id, JSON.stringify(next));
+    void this.saveRun(next);
+    if (pr !== null && this.entries.some((e) => e.id === rec.id && sentBack(e))) {
+      this.entries = unqueue(this.entries, rec.id);
+      void this.saveQueue(rec.repoPath);
+    }
+    this.publish();
+  }
+
+  /** A branch whose PR merged: its record goes. The PR hub removed the
+   *  worktree and the branch already. */
+  async forget(id: string): Promise<void> {
+    const rec = this.find(id);
+    if (!rec) return;
+    await this.dropRun(rec.id);
+    this.publish();
+  }
+
   /** The checks "land" makes before it spends a sort: the run exists,
    *  has ended, is ready (or a restart stopped it), and is not queued or
    *  landed already. */
   private landable(id: string): LandingRun {
     const rec = this.find(id);
     if (!rec) throw new LandError("no branch run by that id", 404);
+    if (rec.pr !== undefined) throw new LandError(`it opened PR #${rec.pr}; a run lands or opens a PR, never both`);
     const had = this.entries.find((e) => e.id === rec.id);
     if (this.deps.runActive(rec.runId) || (had?.fixing && this.deps.runActive(had.fixing))) throw new LandError("the run is still going; land it once it ends");
     if (rec.state !== "ready" && rec.state !== "stopped") throw new LandError(`only a ready run lands, or one a restart stopped with its work whole; this one is ${rec.state}`);
@@ -537,7 +597,7 @@ export class LandingHub {
    *  the queue, each sorted again first; the ones that need it are named. */
   async landAll(repoId: string): Promise<{ queued: string[]; skipped: { id: string; branch: string; why: string }[] }> {
     const has = new Set(this.entries.filter((e) => e.repoId === repoId).map((e) => e.id));
-    const ready = [...this.runs.values()].filter((r) => r.repoId === repoId && r.state === "ready" && !has.has(r.id) && !this.deps.runActive(r.runId));
+    const ready = [...this.runs.values()].filter((r) => r.repoId === repoId && r.state === "ready" && r.pr === undefined && !has.has(r.id) && !this.deps.runActive(r.runId));
     const queued: string[] = [];
     const skipped: { id: string; branch: string; why: string }[] = [];
     for (const r of ready.sort((a, b) => (a.endedAt ?? a.startedAt) - (b.endedAt ?? b.startedAt))) {
@@ -590,6 +650,7 @@ export class LandingHub {
     this.entries = this.entries.filter((e) => e.id !== target.id);
     await this.dropRun(target.id);
     await this.saveQueue(target.repoPath);
+    this.deps.dropped?.(target.id);
     this.publish();
   }
 

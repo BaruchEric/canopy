@@ -162,10 +162,11 @@ export const MAX_NOTICES = 50;
 export const addNotice = (list: readonly LandNotice[], n: LandNotice): LandNotice[] => [n, ...list.filter((x) => x.id !== n.id)].slice(0, MAX_NOTICES);
 
 /** A repo's ready runs not in the queue yet, split as "land all" takes
- *  them: every one but those that need an approval. */
+ *  them: every one but those that need an approval. A run with a PR lands
+ *  there, so it is neither. */
 export function landAllPick(runs: readonly LandingRun[], entries: readonly LandEntry[], repoId: string): { take: LandingRun[]; skip: LandingRun[] } {
   const has = new Set(entries.filter((e) => e.repoId === repoId).map((e) => e.id));
-  const ready = runs.filter((r) => r.repoId === repoId && r.state === "ready" && !has.has(r.id));
+  const ready = runs.filter((r) => r.repoId === repoId && r.state === "ready" && r.pr === undefined && !has.has(r.id));
   return { take: ready.filter((r) => r.review?.verdict !== "approve"), skip: ready.filter((r) => r.review?.verdict === "approve") };
 }
 

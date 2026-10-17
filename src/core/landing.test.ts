@@ -272,7 +272,7 @@ describe("review rules in the queue", () => {
   });
 
   test("land all takes ready runs that need no approval", () => {
-    const runs = [run("a", { review: review("auto") }), run("b", { review: review("land") }), run("c", { review: review("approve") }), run("d"), run("e", { state: "working" }), run("f", { repoId: "other" })];
+    const runs = [run("a", { review: review("auto") }), run("b", { review: review("land") }), run("c", { review: review("approve") }), run("d"), run("e", { state: "working" }), run("f", { repoId: "other" }), run("g", { review: review("auto"), pr: 4 })];
     const pick = landAllPick(runs, queued(["d"]), "canopy");
     expect([pick.take.map((r) => r.id), pick.skip.map((r) => r.id)]).toEqual([["a", "b"], ["c"]]);
   });

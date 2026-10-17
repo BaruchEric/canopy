@@ -34,6 +34,9 @@ interface World {
   /** gate line → what it answers; a function may act first (move main) */
   answers: Map<string, (cwd: string) => Promise<CheckOutcome> | CheckOutcome>;
   active: Set<string>;
+  /** branches the hub asked to open a PR for, and ones it dropped */
+  opened: string[];
+  dropped: string[];
 }
 
 /** A repo with one commit on main, gates from package.json, and a hub. */
@@ -57,6 +60,8 @@ async function world(opts: { gates?: string[]; noPackage?: boolean } = {}): Prom
     dir: join(root, `landing${n}`),
     answers: new Map(),
     active: new Set(),
+    opened: [],
+    dropped: [],
     hub: null as unknown as LandingHub,
   };
   let fixN = 0;
@@ -77,6 +82,10 @@ async function world(opts: { gates?: string[]; noPackage?: boolean } = {}): Prom
       return run;
     },
     runActive: (id) => w.active.has(id),
+    openPr: (id) => {
+      w.opened.push(id);
+    },
+    dropped: (id) => w.dropped.push(id),
     dir: w.dir,
     worktrees: w.wts,
   });
@@ -597,5 +606,71 @@ describe("restarts", () => {
     expect(entryOf(w, "pp11")).toBeUndefined();
     expect(existsSync(runTreeDir(w.repo.path, "pp11", w.wts))).toBe(false);
     expect(await revOf(w.repo.path, "run/x-pp11")).toBeNull();
+    expect(w.dropped).toEqual(["pp11"]);
+  });
+});
+
+describe("PR runs (FR-011)", () => {
+  test("a run with a PR never lands: land refuses, land all skips it, and it never joins on its own", async () => {
+    const w = await world();
+    await rulesOn(w, RULES);
+    await readyRun(w, "pr01", "b.ts", "export const b = 1;\n");
+    await readyRun(w, "pr02", "c.ts", "export const c = 1;\n");
+    await w.hub.idle();
+    w.hub.stop();
+    w.hub.markPr("pr01", 12);
+    expect(recOf(w, "pr01")?.pr).toBe(12);
+    await expect(w.hub.land("pr01")).rejects.toThrow("it opened PR #12; a run lands or opens a PR, never both");
+    expect((await w.hub.landAll(w.repo.id)).queued).toEqual(["pr02"]);
+    expect(w.hub.queueHold("pr02")).toBe("it is in the queue already");
+    expect(w.hub.queueHold("pr01")).toBeNull();
+    // a docs fix on the PR's branch settles ready: no auto join
+    const dir = runTreeDir(w.repo.path, "pr01", w.wts);
+    await commit(dir, "notes.md", "n\n");
+    w.hub.onRun({ ...fakeRun(w.repo.id, { name: "run/x-pr01", target: "main", base: "", dir, origin: "pr01" }, "ready"), id: "fix-pr01" });
+    await w.hub.idle();
+    expect(entryOf(w, "pr01")).toBeUndefined();
+    w.hub.markPr("pr01", null);
+    expect(recOf(w, "pr01")?.pr).toBeUndefined();
+  });
+
+  test("a run whose pre-flight said open a PR asks for one when it settles ready, and does not queue", async () => {
+    const w = await world();
+    await rulesOn(w, RULES);
+    const dir = runTreeDir(w.repo.path, "pr11", w.wts);
+    const base = (await revOf(w.repo.path, "main"))!;
+    await addRunTree(w.repo.path, dir, "run/x-pr11", base);
+    await commit(dir, "notes.md", "words\n");
+    const run = fakeRun(w.repo.id, { name: "run/x-pr11", target: "main", base, dir, origin: "pr11" }, "ready");
+    w.hub.onRun({ ...run, branch: { ...run.branch!, openPr: true } });
+    await w.hub.idle();
+    expect(recOf(w, "pr11")?.openPr).toBe(true);
+    expect(w.opened).toEqual(["pr11"]);
+    expect(entryOf(w, "pr11")).toBeUndefined();
+  });
+
+  test("a PR that fails to open on its own leaves the run ready with a notice that says why", async () => {
+    const w = await world();
+    (w.hub as unknown as { deps: { openPr: () => Promise<void> } }).deps.openPr = async () => {
+      throw new Error("gh is not logged in on this machine");
+    };
+    const dir = runTreeDir(w.repo.path, "pr12", w.wts);
+    const base = (await revOf(w.repo.path, "main"))!;
+    await addRunTree(w.repo.path, dir, "run/x-pr12", base);
+    await commit(dir, "notes.md", "words\n");
+    const run = fakeRun(w.repo.id, { name: "run/x-pr12", target: "main", base, dir, origin: "pr12" }, "ready");
+    w.hub.onRun({ ...run, branch: { ...run.branch!, openPr: true } });
+    await w.hub.idle();
+    expect(recOf(w, "pr12")?.state).toBe("ready");
+    expect(w.hub.info().notices).toEqual([expect.objectContaining({ kind: "held", entry: "pr12", why: "its PR did not open: gh is not logged in on this machine" })]);
+  });
+
+  test("forget takes a merged branch's record away and leaves the queue alone", async () => {
+    const w = await world();
+    await readyRun(w, "pr21", "b.txt", "b\n");
+    w.hub.markPr("pr21", 3);
+    await w.hub.forget("pr21");
+    expect(recOf(w, "pr21")).toBeUndefined();
+    expect(w.hub.record("pr21")).toBeUndefined();
   });
 });
