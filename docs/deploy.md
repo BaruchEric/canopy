@@ -1109,13 +1109,20 @@ Every call to the API carries a caller token (`docs/architecture.md`, "Callers a
 
 Rollback is `log`, or `off`. The `canopy:callers` health check always reads ok, with the refused count in its detail. `GET /api/auth` (or `canopy auth status`) lists the newest 20 refusals by kind, route, Origin and user agent, which is how to find a caller outside this repo that writes, such as a Claude hook or a script in `~/dev`.
 
-**Where the first code prints.** While a backend holds no page or CLI session it logs `canopy: first sign-in code XXXXXX` at start, and logs a new one when a pair request is made after the old code was spent. On the Mac that is `~/Library/Logs/canopy-server.log`; on the mini, `docker compose logs canopy` (from a canopy shell, `ssh mini-host` first). A page's sign-in strip or `canopy auth login --code XXXXXX` spends it, once. After the first session exists, a signed-in page approves new pairs from its inbox.
+**Where the first code prints.** While a backend holds no live page or CLI session (one unused for 30 days has expired and does not count) it logs `canopy: first sign-in code XXXXXX` at start, and logs a new one when a pair request is made after the old code was spent. On the Mac that is `~/Library/Logs/canopy-server.log`; on the mini, `docker compose logs canopy` (from a canopy shell, `ssh mini-host` first). A page's sign-in strip or `canopy auth login --code XXXXXX` spends it, once. After the first session exists, a signed-in page approves new pairs from its inbox.
+
+**Locked out.** When no signed-in page or CLI is left to approve a pair and no first code prints (the book still holds a session that has not expired, but nobody has its token), start the book over: stop canopy, move `callers.json` aside, and start it again. The first code prints again at start. Every page, CLI and helper then pairs again, and shells that are already running lose their tokens until they are reopened.
+
+- The Mac: `launchctl bootout gui/$(id -u)/ca.beric.canopy-server`, then `mv ~/.config/canopy/callers.json ~/.config/canopy/callers.json.aside`, then `launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/ca.beric.canopy-server.plist`. Killing the bun pid is not enough here, since launchd restarts it at once and it would read the old file.
+- The mini (on the host, in the canopy checkout): `docker compose stop canopy`, then `docker compose run --rm --no-deps --entrypoint mv canopy /config/callers.json /config/callers.json.aside`, then `docker compose start canopy`. The book lives in the `canopy-config` volume, not on the host's disk.
+
+Run `canopy ranger fresh` afterwards, once a CLI has signed in again, so the ranger's session carries a token the new book knows.
 
 **Rollout**, in this order:
 
 1. Ship with `CANOPY_CALLERS` unset, so `log`. Pair the Mac page, the phone and the CLI on both machines: open each page and press the sign-in strip, and run `canopy auth login --backend <url>` on each machine for the backend it uses (the mini's address from the Mac, the loopback one on the mini). A helper runs `canopy helper --pair` once.
 2. Restart the ranger fresh on both machines (`canopy ranger fresh`, an admin call), so its session carries a token.
-3. Watch `GET /api/auth` for a week on each. Shells opened before the release hold no token. They work in `log`, and under `enforce` their CLI writes get a 401 that says to open a new shell.
+3. Watch `GET /api/auth` for a week on each. Shells opened before the release hold no token. They work in `log`, and under `enforce` their CLI writes get a 401 that says to open a new shell, but only on a machine with no CLI token file for that backend. The token file comes before `$CANOPY_TOKEN` on purpose, so `canopy secrets unlock` typed in a canopy shell carries admin: on a machine where `canopy auth login` has run, a CLI call inside any canopy shell, old or new, carries the CLI's admin token, not the shell's.
 4. Set `CANOPY_CALLERS=enforce` on both and restart. The coordinator (FR-010) merges only once both machines enforce.
 
 Pairing needs a reachable page or CLI per backend, and a page signs in to each backend it calls on its own, so the Mac page signs in to the mini separately.

@@ -20,7 +20,7 @@ A workbench for building software with Claude across every repo and machine you 
 
 ## Who uses it
 
-One developer (the owner) across a laptop, an always-on Linux backend, a tablet and a phone, all on one tailnet. Agents use it too: Claude sessions run inside its shells and drive it through the CLI and the HTTP API. It is not built for teams. A public name is served only behind an authenticating proxy (Cloudflare Access), since canopy's caller tokens guard what a call may change, not who may read.
+One developer (the owner) across a laptop, an always-on Linux backend, a tablet and a phone, all on one tailnet. Agents use it too: Claude sessions run inside its shells and drive it through the CLI and the HTTP API. It is not built for teams. A public name is served only behind an authenticating proxy (Cloudflare Access). The proxy is still needed with caller tokens on: they guard what a call may change, but reads stay open and canopy has no sign-in for reading, so without the proxy anyone who reaches the name can read everything canopy shows.
 
 ## Stack and versions
 
