@@ -2,14 +2,53 @@ import { describe, expect, test } from "bun:test";
 import { allows, needs } from "./callers";
 
 describe("needs", () => {
-  test("a GET needs read, bar the two upgrades and the Library's /open", () => {
-    for (const p of ["/api/runs", "/api/repos", "/api/events", "/library/x", "/api/library", "/library/api/dev/state", "/library/opener"]) {
+  test("a GET needs read, bar the two upgrades and the Library", () => {
+    for (const p of ["/api/runs", "/api/repos", "/api/events"]) {
       expect(needs("GET", p)).toBe("read");
     }
     expect(needs("GET", "/api/term")).toBe("shell");
     expect(needs("GET", "/api/helper")).toBe("helper");
     expect(needs("GET", "/library/open")).toBe("admin");
-    expect(needs("GET", "/library/open/")).toBe("admin");
+  });
+
+  test("each read-only Library path is read", () => {
+    for (const p of [
+      "/api/library",
+      "/library",
+      "/library/",
+      "/library/index.html",
+      "/library/ports",
+      "/library/ping",
+      "/library/manifest",
+      "/library/api/dev/state",
+      "/library/api/ports/state",
+      "/library/api/files",
+    ]) {
+      expect(needs("GET", p)).toBe("read");
+    }
+  });
+
+  test("a Library GET off the allowlist needs admin", () => {
+    for (const p of ["/library/x", "/library/opener", "/library/api/git", "/library/api/library", "/api/library/x"]) {
+      expect(needs("GET", p)).toBe("admin");
+    }
+  });
+
+  test("a Library path that is not already in normal form needs admin", () => {
+    for (const p of [
+      "/library/open;x",
+      "/library//open",
+      "/library/open%3Bx",
+      "/library/open/",
+      "/library/ports;x",
+      "/library//ports",
+      "/library/ports/",
+      "/library/api%2Fdev%2Fstate",
+      "/library/%70ing",
+      "/library/ping%zz",
+    ]) {
+      expect(needs("GET", p)).toBe("admin");
+    }
   });
 
   test("a trailing slash is ignored", () => {

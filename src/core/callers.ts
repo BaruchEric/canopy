@@ -76,20 +76,52 @@ for (const r of RULES) {
   }
 }
 
+/** The Library GETs that only read: the dashboard and its ports page (the
+ *  Library view's iframe loads both, and a frame's load carries no token),
+ *  the engine's ping, manifest and state reads, and its file listing, which
+ *  stays inside the root. Every other Library GET needs `admin`: `/open`
+ *  launches an editor, a terminal or a dev server, and a path the engine
+ *  reads differently from this table (`/open;x` is `/open` to Python's
+ *  urlparse) must not slip past it. */
+const LIBRARY_READS: ReadonlySet<string> = new Set([
+  "/api/library",
+  "/library",
+  "/library/",
+  "/library/index.html",
+  "/library/ports",
+  "/library/ping",
+  "/library/manifest",
+  "/library/api/dev/state",
+  "/library/api/ports/state",
+  "/library/api/files",
+]);
+
+/** A path cut at `;` and `?`, its repeated slashes collapsed and
+ *  percent-decoded once; null when it will not decode. */
+export function normalPath(path: string): string | null {
+  const cut = path.split(/[;?]/, 1)[0] ?? "";
+  try {
+    return decodeURIComponent(cut.replace(/\/{2,}/g, "/"));
+  } catch {
+    return null;
+  }
+}
+
+/** Whether a Library GET only reads: a path already in normal form, on the
+ *  allowlist as written. */
+const libraryRead = (path: string): boolean => normalPath(path) === path && LIBRARY_READS.has(path);
+
 /** The right a request needs. `path` is the URL path, with or without a
- *  trailing slash. */
+ *  trailing slash outside the Library, where the path must match exactly. */
 export function needs(method: string, path: string): Right | "open" {
+  const isLibrary = path === "/api/library" || path.startsWith("/api/library/") || path === "/library" || path.startsWith("/library/");
+  if (isLibrary) return method === "GET" && libraryRead(path) ? "read" : "admin";
   const clean = path.length > 1 && path.endsWith("/") ? path.slice(0, -1) : path;
-  const isLibrary = clean === "/api/library" || clean.startsWith("/api/library/") || clean.startsWith("/library/");
   if (method === "GET") {
     if (clean === "/api/term") return "shell";
     if (clean === "/api/helper") return "helper";
-    // the Library engine's /open launches an editor, a terminal or a dev
-    // server: a GET that runs a command is a write
-    if (clean === "/library/open") return "admin";
     return "read";
   }
-  if (isLibrary) return "admin";
   if (!clean.startsWith("/api/")) return "admin";
   const rel = clean.slice("/api/".length);
   const hit = exact.get(`${method} ${rel}`);

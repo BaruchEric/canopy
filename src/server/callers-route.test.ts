@@ -134,6 +134,15 @@ describe("enforce", () => {
     expect(((await lacks.json()) as Refusal).need).toBe("admin");
   });
 
+  test("a Library path the engine would read as /open needs admin too", async () => {
+    const q = `?action=finder&path=${encodeURIComponent(join(scratch, "root", "app"))}`;
+    for (const p of ["/library/open;x", "/library//open", "/library/open%3Bx"]) {
+      const bare = await call(s, `${p}${q}`);
+      expect(bare.status).toBe(401);
+      expect(((await bare.json()) as Refusal).need).toBe("admin");
+    }
+  });
+
   test("reads stay open", async () => {
     expect((await call(s, "/api/runs")).status).toBe(200);
     const auth = (await (await call(s, "/api/auth", { token: page })).json()) as AuthInfo;
