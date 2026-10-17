@@ -48,6 +48,7 @@ import { appendFeed, describeEvent, type FeedEntry, type FeedSnapshot } from "./
 import { mergeAction } from "./peers";
 import { convOf, isUnread, mergeMessages } from "./chan";
 import type { AdviceAccepted, AdviceOffer, AgentCard, AgentKind, Ask, ChanMessage, HealthCheck, IncubatorStages, KitInfo, LandingInfo, PendingPair, Presence, PrWatch, RangerInfo, SecretsInfo, Sprout, TailchanInfo } from "../../src/core/types";
+import type { Delivery, TriggersInfo } from "../../src/core/trigger";
 import { mergeLanding } from "./landing";
 import { mergePrs } from "./prs";
 import { mergeAsks, mergeInbox, replaceAsks, toAskAnswer, toRunAnswer, type InboxAnswer, type InboxItem } from "./inbox";
@@ -740,6 +741,9 @@ export interface CanopyState {
   /** each backend's PRs that branch runs opened (server/prs); an older
    *  backend that has none is missing */
   prs: Record<string, PrWatch[]>;
+  /** each backend's trigger rules and events (server/triggers); an older
+   *  backend that has none is missing */
+  triggers: Record<string, TriggersInfo>;
   /** each backend's caller check as this page last read it (server/callers),
    *  with whether this page holds a token for it; an older backend that has
    *  none is missing */
@@ -1101,6 +1105,14 @@ export interface CanopyState {
   showLanding: (repoId: string) => void;
   /** reads one backend's PRs, home by default */
   loadPrs: (backend?: string) => Promise<void>;
+  /** reads one backend's trigger rules and events, home by default */
+  loadTriggers: (backend?: string) => Promise<void>;
+  /** fires a made-up issue through one backend's rule */
+  fireTrigger: (backend: string, rule: string, title: string) => Promise<Delivery>;
+  /** resume, retry or stop a trigger event, by its id */
+  triggerAct: (id: string, act: "resume" | "retry" | "stop") => Promise<void>;
+  /** drops an ended trigger event from the list */
+  dismissTrigger: (id: string) => Promise<void>;
   /** "open PR" on a ready branch run, by its run's or branch's id */
   openPr: (id: string, draft?: boolean) => Promise<void>;
   /** the PR footer's toggles, by the branch's id */
@@ -1566,6 +1578,8 @@ const kitEvents = new Map<string, number>();
 const landingEvents = new Map<string, number>();
 /* and each backend's PR events */
 const prsEvents = new Map<string, number>();
+/* and each backend's trigger events */
+const triggersEvents = new Map<string, number>();
 /* and each backend's pair events */
 const authEvents = new Map<string, number>();
 /* each sign-in's poll, by backend, so one in flight is not started twice
@@ -1708,6 +1722,7 @@ function resync(get: () => CanopyState, set: (fn: (s: CanopyState) => Partial<Ca
   void get().loadKit(b);
   void get().loadLanding(b);
   void get().loadPrs(b);
+  void get().loadTriggers(b);
   void get().loadAuth(b);
   // a sign-in this tab left waiting before a reload picks up where it was
   void get().signIn(b, true);
@@ -1884,6 +1899,7 @@ export const useStore = create<CanopyState>((set, get) => ({
   kit: {},
   landing: {},
   prs: {},
+  triggers: {},
   authByBackend: {},
   signIns: {},
   secrets: {},
@@ -2096,6 +2112,7 @@ export const useStore = create<CanopyState>((set, get) => ({
     void get().loadKit();
     void get().loadLanding();
     void get().loadPrs();
+    void get().loadTriggers();
     void get().loadAuth();
     void get().signIn(get().home, true);
     void get().loadSecrets();
@@ -2258,6 +2275,7 @@ export const useStore = create<CanopyState>((set, get) => ({
     void get().loadKit(name);
     void get().loadLanding(name);
     void get().loadPrs(name);
+    void get().loadTriggers(name);
     void get().loadAuth(name);
     void get().signIn(name, true);
     void get().loadSecrets(name);
@@ -2314,6 +2332,7 @@ export const useStore = create<CanopyState>((set, get) => ({
     const { [name]: _kit, ...kit } = s.kit;
     const { [name]: _landing, ...landing } = s.landing;
     const { [name]: _prs, ...prs } = s.prs;
+    const { [name]: _triggers, ...triggers } = s.triggers;
     const { [name]: _auth, ...authByBackend } = s.authByBackend;
     const { [name]: _signIn, ...signIns } = s.signIns;
     signingIn.delete(name);
@@ -2343,6 +2362,7 @@ export const useStore = create<CanopyState>((set, get) => ({
       kit,
       landing,
       prs,
+      triggers,
       authByBackend,
       signIns,
       secrets,
@@ -2814,6 +2834,10 @@ export const useStore = create<CanopyState>((set, get) => ({
       set((st) => ({ landing: { ...st.landing, [b]: ev.landing } }));
       return;
     }
+    if (ev.type === "triggers") {
+      triggersEvents.set(b, (triggersEvents.get(b) ?? 0) + 1);
+      set((st) => ({ triggers: { ...st.triggers, [b]: { ...(st.triggers[b] ?? { rules: [], problems: [], keeping: true }), events: ev.events } } }));
+    }
     if (ev.type === "prs") {
       prsEvents.set(b, (prsEvents.get(b) ?? 0) + 1);
       set((st) => ({ prs: { ...st.prs, [b]: ev.prs } }));
@@ -3188,6 +3212,29 @@ export const useStore = create<CanopyState>((set, get) => ({
     } catch {
       // an older backend has no PR watch; nothing shows for it
     }
+  },
+  loadTriggers: async (backend) => {
+    const b = backend ?? get().home;
+    const mark = triggersEvents.get(b) ?? 0;
+    try {
+      const info = await api.triggers(b);
+      if (!info || !isShown(get(), b)) return;
+      // an event that came while the read was out is newer than its list
+      set((s) => ({ triggers: { ...s.triggers, [b]: (triggersEvents.get(b) ?? 0) === mark ? info : { ...info, events: s.triggers[b]?.events ?? info.events } } }));
+    } catch {
+      // an older backend has no triggers; nothing shows for it
+    }
+  },
+  fireTrigger: async (backend, rule, title) => {
+    const d = await api.fireTrigger(backend, rule, title);
+    void get().loadTriggers(backend);
+    return d;
+  },
+  triggerAct: async (id, act) => {
+    await api.triggerAct(id, act);
+  },
+  dismissTrigger: async (id) => {
+    await api.dismissTrigger(id);
   },
   openPr: async (id, draft) => {
     await api.openPr(id, draft);

@@ -1,5 +1,5 @@
 import { parseAnswer } from "./answers";
-import { ACTIONS, branchLine, branchPrompt, busyWith, splitMembers } from "../core/actions";
+import { ACTIONS, branchLine, branchPrompt, busyWith, splitMembers, type ActionSpec } from "../core/actions";
 import { PREFLIGHT_HEADERS, corsHeaders, parseOrigins } from "../core/cors";
 import { Library, libraryOriginAllowed, openBind, tailnetHost } from "../core/library";
 import { PreviewProxy, parsePortRange, previewHostOk, previewable } from "../core/preview";
@@ -199,6 +199,9 @@ import { HealthHub, rangerResult, streamResult } from "./health";
 import { KitHub, kitPath } from "./kit";
 import { LandingHub } from "./landing";
 import { PrHub } from "./prs";
+import { TriggerHub, type StartOutcome } from "./triggers";
+import { takeTriggerSecrets } from "../core/envnames";
+import { triggerStep, type TriggerEvent } from "../core/trigger";
 import { authRoute, CallerBook, callerOf, CallerGate, callersMode, type Caller } from "./callers";
 import { getPeers, PeerError, postPeersSync, postRepoPeer, queuePass, withPeering, type PeerDeps } from "./peers";
 import { fixPrompt, landWord } from "../core/landing";
@@ -297,6 +300,8 @@ interface ServerState {
   landing: LandingHub;
   /** the PRs branch runs opened and the watch on them (server/prs) */
   prs: PrHub;
+  /** outside events (Sentry) that start branch runs, and what became of each (server/triggers) */
+  triggers: TriggerHub;
   /** the tokens this backend knows and the pairing that hands them out (server/callers) */
   callers: CallerBook;
   /** the caller check at the top of route(), and what it refused */
@@ -816,7 +821,7 @@ async function startRepoRun(
 /** A run on a branch of its own: a worktree under the config dir on
  *  `run/<slug>-<id>`, cut from the default branch's tip, where the gates'
  *  setup runs before the agent starts. The landing queue lands it later. */
-async function startBranchRun(state: ServerState, repo: Repo, action: RunAction, note: string, agent: AgentSettings, by: string | undefined, pr = false): Promise<Run> {
+async function startBranchRun(state: ServerState, repo: Repo, action: RunAction, note: string, agent: AgentSettings, by: string | undefined, pr = false, spec: ActionSpec = ACTIONS[action]): Promise<Run> {
   const target = await defaultBranch(repo.path);
   const base = target ? await revOf(repo.path, `refs/heads/${target}`) : null;
   if (!target || !base) throw new HttpError(400, `${repo.name} has no main or master branch to cut a run's branch from`);
@@ -844,7 +849,7 @@ async function startBranchRun(state: ServerState, repo: Repo, action: RunAction,
     if (r.exit !== 0) throw new Error(`${setup} exited ${r.exit ?? "on a signal"}${r.output ? `: ${r.output.split("\n").slice(-3).join(" ")}` : ""}`);
   };
   try {
-    return state.runner.start(repo, action, ACTIONS[action], note, agent, by, undefined, {
+    return state.runner.start(repo, action, spec, note, agent, by, undefined, {
       branch: { name, target, base, dir, state: "working", origin: id, ...(pr ? { openPr: true as const } : {}) },
       prepare,
     });
@@ -884,6 +889,50 @@ async function startBranchFix(state: ServerState, rec: LandingRun, reason: strin
     if (err instanceof Error && err.name === "StageAwayError") throw err;
     throw new HttpError(400, String(err instanceof Error ? err.message : err));
   }
+}
+
+/** A trigger's one-step workflow as the action its branch run starts with:
+ *  the step's task, tools and turns, no one to answer it, and a PR when it
+ *  settles ready. Read from the bundled and user workflows only, like a
+ *  fleet's, so a repo cannot rewrite what its own trigger runs. */
+async function triggerSpec(name: string): Promise<{ spec: ActionSpec; workflow: string } | string> {
+  const wf = findWorkflow(await loadWorkflows({ path: "", host: "none" }), name);
+  if (!wf) return `unknown workflow: ${name}`;
+  const step = triggerStep(wf);
+  if (typeof step === "string") return step;
+  return {
+    workflow: wf.name,
+    spec: {
+      ...ACTIONS.ask,
+      label: wf.label,
+      verb: wf.verb,
+      blurb: wf.blurb,
+      allowedTools: step.tools,
+      maxTurns: step.turns,
+      expectsChange: wf.expectsChange,
+      task: step.task,
+      unattended: TRIGGER_UNATTENDED,
+    },
+  };
+}
+
+const TRIGGER_UNATTENDED =
+  "No one answers this run: it is canopy's trigger run, started by an outside event. Do not ask questions or use tools outside your allowed list. When you cannot finish, commit nothing you are unsure of and say what stopped you.";
+
+/** A trigger event's branch run, after the checks a branch run route makes;
+ *  a repo whose branch slots are full answers busy, and the event waits. */
+async function startTriggerRun(state: ServerState, event: TriggerEvent, repo: Repo): Promise<StartOutcome> {
+  if (repo.host) throw new Error(`${repo.name} is on ${repo.host}; a trigger runs only on this machine`);
+  if (repo.forge) throw new Error(`${repo.name} is on the forge; a trigger runs in a folder on this machine`);
+  if (isSeedPath(state.root, repo.path)) throw new Error(`${repo.name} is an incubator seed`);
+  const got = await triggerSpec(event.workflow);
+  if (typeof got === "string") throw new Error(got);
+  const going = state.runner.branchRunsFor(repo.id).length;
+  if (going >= BRANCH_RUNS_PER_REPO) return { busy: `${repo.name} has ${going} branch runs going` };
+  const agent = agentFor(await loadConfig(), repo.path, "job");
+  if (agent.harness !== "claude") throw new Error(`${repo.name}'s job route starts ${agent.harness}; a trigger run needs Claude Code`);
+  await needHarness(state, agent.harness, repo.path);
+  return { run: await startBranchRun(state, repo, "ask", event.note, agent, `trigger ${event.rule}`, true, got.spec) };
 }
 
 const isRecord = (v: unknown): v is Record<string, unknown> => typeof v === "object" && v !== null && !Array.isArray(v);
@@ -2517,6 +2566,8 @@ async function handleApi(
   if (landingRes) return landingRes;
   const prsRes = await state.prs.handle(req, url);
   if (prsRes) return prsRes;
+  const triggersRes = await state.triggers.handle(req, url);
+  if (triggersRes) return triggersRes;
   const healthRes = await state.health.handle(req, url);
   if (healthRes) return healthRes;
   const secretsRes = await state.secrets.handle(req, url);
@@ -4045,6 +4096,7 @@ export async function startServer(opts: {
       state.ranger.onRun(run.id, isRunActive(run));
       state.landing.onRun(run);
       state.prs.onRun(run);
+      state.triggers.onRun(run);
     },
     onGone: (id) => {
       broadcast(state, { type: "run-gone", id });
@@ -4149,6 +4201,8 @@ export async function startServer(opts: {
   // `termEnv` pass the live env). /proc/<pid>/environ still shows the
   // values canopy was started with, which deletion cannot reach.
   for (const k of SECRET_ENV) delete process.env[k];
+  // the trigger rules' secrets, the same way: the hub holds them, the env does not
+  const triggerSecrets = takeTriggerSecrets(process.env);
   if (process.env["NODE_ENV"] !== "test") {
     if (!vault) console.error("incubator: no CANOPY_VAULT_TOKEN, so no vault notes");
     if (!speech) console.error("incubator: no CANOPY_TRANSCRIBE_URL, so voice memos stay untranscribed");
@@ -4388,7 +4442,10 @@ export async function startServer(opts: {
     layouts: new ScreenLayouts(),
     backendName: selfName(cfg.self, hostname()),
     landing: new LandingHub({
-      broadcast: (ev) => broadcast(state, ev),
+      broadcast: (ev) => {
+        broadcast(state, ev);
+        if (ev.type === "landing") state.triggers.onLanding(ev.landing.notices ?? []);
+      },
       repo: (id) => state.result.repos.find((r) => r.id === id),
       repoByPath: (path) => repoAtPath(state.result.repos, path),
       check: (cwd, line) => runGate(cwd, line),
@@ -4413,7 +4470,10 @@ export async function startServer(opts: {
       },
     }),
     prs: new PrHub({
-      broadcast: (ev) => broadcast(state, ev),
+      broadcast: (ev) => {
+        broadcast(state, ev);
+        if (ev.type === "prs") state.triggers.onPrs(ev.prs);
+      },
       record: (id) => state.landing.record(id),
       queueHold: (id) => state.landing.queueHold(id),
       markPr: (id, pr) => state.landing.markPr(id, pr),
@@ -4426,6 +4486,23 @@ export async function startServer(opts: {
       // a run a restart took is unknown here, which counts as not finished
       runOk: (id) => state.runner.get(id)?.status === "done",
       report: (r) => state.health.report(PRS_CHECK, r),
+    }),
+    triggers: new TriggerHub({
+      broadcast: (ev) => broadcast(state, ev),
+      repo: (ref) => state.result.repos.find((r) => r.id === ref) ?? repoAtPath(state.result.repos, ref),
+      workflowProblem: async (name) => {
+        const got = await triggerSpec(name);
+        return typeof got === "string" ? got : null;
+      },
+      start: (event, repo) => startTriggerRun(state, event, repo),
+      resume: async (event) => {
+        const rec = event.branch ? state.landing.record(event.branch) : undefined;
+        if (!rec) throw new HttpError(404, "its branch is gone, so start it again instead");
+        return startBranchFix(state, rec, "Carry on with the task from where you stopped.", "resume", true);
+      },
+      stopRun: (id) => state.runner.stop(id),
+      runKnown: (id) => state.runner.get(id) !== undefined,
+      env: (name) => triggerSecrets.get(name),
     }),
     kit: new KitHub({
       self: selfName(cfg.self, hostname()),
@@ -4868,6 +4945,8 @@ export async function startServer(opts: {
     await state.landing.adopt();
     // and the PRs they opened
     await state.prs.adopt();
+    // and the trigger events waiting on both
+    await state.triggers.adopt();
   };
   if (flowsLock.owner) {
     await adoptFlows();
@@ -4976,6 +5055,7 @@ export async function startServer(opts: {
   if (process.env["NODE_ENV"] !== "test") state.kit.start();
   if (process.env["NODE_ENV"] !== "test") state.landing.start();
   if (process.env["NODE_ENV"] !== "test") state.prs.start();
+  if (process.env["NODE_ENV"] !== "test") state.triggers.start();
   state.asks.start();
   // a test server pulls nothing and asks no socket
   if (process.env["NODE_ENV"] !== "test") state.secrets.start();
@@ -5008,6 +5088,7 @@ export async function startServer(opts: {
       state.kit.stop();
       state.landing.stop();
       state.prs.stop();
+      state.triggers.stop();
       state.secrets.stop();
       state.tasks.stop();
       state.ranger.stop();
@@ -5027,6 +5108,7 @@ export async function startServer(opts: {
       flowFiles = null;
       state.landing.detach();
       state.prs.detach();
+      state.triggers.detach();
       if (flowsLock.owner) flowsLock.release();
       state.flows.stopAll();
       state.runner.stopAll();

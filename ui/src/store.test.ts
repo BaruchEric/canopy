@@ -763,6 +763,7 @@ describe("several backends", () => {
         "/api/history",
         "/api/peers",
         "/api/prs",
+        "/api/triggers",
         "/api/auth",
         "/api/tailchan",
         "/api/registry",

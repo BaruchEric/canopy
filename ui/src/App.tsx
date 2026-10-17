@@ -12,6 +12,8 @@ import { FeedDock } from "./components/Feed";
 import { RepoGrid } from "./components/RepoGrid";
 import { Resizer } from "./components/Resizer";
 import { RunSheet } from "./components/RunSheet";
+import { TriggersView } from "./components/Triggers";
+import { triggersBadge } from "./triggers";
 import { SelectBar } from "./components/SelectBar";
 import { Sidebar } from "./components/Sidebar";
 import { AgentSolo } from "./components/AgentSolo";
@@ -39,12 +41,13 @@ const VIEWS = [
   { key: "agents", label: "agents", title: "Agents: which harness starts for what, per repo and role" },
   { key: "incubator", label: "incubator", title: "Incubator: new projects from an idea, clarified and researched before anything is built" },
   { key: "health", label: "health", title: "Health: what is broken on each backend, and what canopy is fixing" },
+  { key: "triggers", label: "triggers", title: "Triggers: Sentry issues that start a fix on a branch with nobody typing, and what became of each" },
   { key: "kit", label: "kit", title: "Kit: the skills every agent has on every machine" },
   { key: "secrets", label: "secrets", title: "Secrets: names, sinks and imports; values only behind a passkey on the mini's page" },
 ] as const;
 
 /** the views that are not the git cockpit: their own bar, no board keys */
-const OTHER_VIEWS = ["library", "ports", "agents", "incubator", "health", "kit", "secrets"];
+const OTHER_VIEWS = ["library", "ports", "agents", "incubator", "health", "triggers", "kit", "secrets"];
 
 /** A view tab's live count, or null where its view has nothing waiting. */
 function badgeOf(s: CanopyState, key: string): Badge | null {
@@ -57,6 +60,8 @@ function badgeOf(s: CanopyState, key: string): Badge | null {
       return healthBadge(s.health);
     case "incubator":
       return incubatorBadge(Object.values(s.sprouts));
+    case "triggers":
+      return triggersBadge(s.triggers);
     default:
       return null;
   }
@@ -443,6 +448,8 @@ export function App() {
         <IncubatorView onGit={() => navigate("git")} />
       ) : view === "health" ? (
         <HealthView />
+      ) : view === "triggers" ? (
+        <TriggersView />
       ) : view === "kit" ? (
         <KitView />
       ) : view === "secrets" ? (

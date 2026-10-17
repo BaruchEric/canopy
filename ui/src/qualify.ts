@@ -20,6 +20,7 @@ import type {
   SproutDetail,
   TermInfo,
 } from "../../src/core/types";
+import type { TriggerEvent } from "../../src/core/trigger";
 
 /* What one backend sends, with every id it minted given the backend's name
    (through `q`), so two backends' ids never meet. Pure; the api layer is
@@ -65,6 +66,17 @@ export const qLanding = (q: Q, l: LandingInfo): LandingInfo => ({
  *  backend's name, and the fix run going. Folders stay the backend's own. */
 export const qPrs = (q: Q, prs: readonly PrWatch[]): PrWatch[] =>
   prs.map((w) => ({ ...w, id: q(w.id), runId: q(w.runId), repoId: q(w.repoId), ...(w.fixing ? { fixing: { ...w.fixing, run: q(w.fixing.run) } } : {}) }));
+
+/** Trigger events: the event's id, its repo's, its run's and its branch's
+ *  under the backend's name. */
+export const qTriggers = (q: Q, events: readonly TriggerEvent[]): TriggerEvent[] =>
+  events.map((e) => ({
+    ...e,
+    id: q(e.id),
+    repoId: q(e.repoId),
+    ...(e.runId !== undefined ? { runId: q(e.runId) } : {}),
+    ...(e.branch !== undefined ? { branch: q(e.branch) } : {}),
+  }));
 
 export const qFlow = (q: Q, f: Flow): Flow => ({
   ...f,
@@ -172,6 +184,8 @@ export function qEvent(q: Q, ev: ServerEvent): ServerEvent {
       return { ...ev, landing: qLanding(q, ev.landing) };
     case "prs":
       return { ...ev, prs: qPrs(q, ev.prs) };
+    case "triggers":
+      return { ...ev, events: qTriggers(q, ev.events) };
     // the kit names machines, not repos: nothing to qualify
     case "kit":
     case "secrets":

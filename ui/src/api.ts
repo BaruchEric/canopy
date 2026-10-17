@@ -98,6 +98,7 @@ import type {
   ScreenProfile,
 } from "../../src/core/types";
 import type { SecretAct } from "../../src/core/secretwire";
+import type { Delivery, TriggerEvent, TriggersInfo } from "../../src/core/trigger";
 import type { ProfileFields } from "../../src/core/screenlayouts";
 import { pickUrl, split, wsUrl, type BackendSignal } from "./backends";
 import { normalizeRoutes } from "../../src/core/route";
@@ -116,6 +117,7 @@ import {
   qRepo,
   qLanding,
   qPrs,
+  qTriggers,
   qRun,
   qScan,
   qSource,
@@ -698,6 +700,24 @@ export const api = {
   prs: async (b: string = homeName()) => {
     const r = await req<PrWatch[] | null>(b, "/api/prs");
     return from(b, Array.isArray(r) ? r : [], qPrs);
+  },
+  /** one backend's trigger rules and events; null from a backend from before triggers */
+  triggers: async (b: string = homeName()): Promise<TriggersInfo | null> => {
+    const r = await req<TriggersInfo | null>(b, "/api/triggers");
+    if (!r || !Array.isArray(r.events)) return null;
+    return { ...r, events: from(b, r.events, qTriggers) };
+  },
+  /** fires a made-up issue through a rule, as if its source had sent it */
+  fireTrigger: (b: string, rule: string, title: string) =>
+    req<Delivery>(b, "/api/triggers/fire", { method: "POST", body: JSON.stringify({ rule, title }) }),
+  /** resume, retry or stop a trigger event, by its qualified id */
+  triggerAct: async (id: string, act: "resume" | "retry" | "stop") => {
+    const [b, plain] = on(id);
+    await req<TriggerEvent>(b, `/api/triggers/${act}`, { method: "POST", body: JSON.stringify({ id: plain }) });
+  },
+  dismissTrigger: async (id: string) => {
+    const [b, plain] = on(id);
+    await req<{ ok: true }>(b, `/api/triggers/events?id=${encodeURIComponent(plain)}`, { method: "DELETE" });
   },
   /** "open PR" on a ready branch run, by its run's or its branch's id */
   openPr: async (id: string, draft = false) => {

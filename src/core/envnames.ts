@@ -7,6 +7,24 @@
  *  canopy's env */
 export const SECRET_ENV = ["CANOPY_VAULT_TOKEN", "CANOPY_TRANSCRIBE_KEY", "VERCEL_TOKEN", "FIREBASE_TOKEN"] as const;
 
+/** A trigger rule's secrets (a Sentry hook secret, a token that resolves
+ *  issues) must carry this prefix. The server takes every such variable at
+ *  start (`takeTriggerSecrets`) and deletes it from its own env, so no run,
+ *  shell or gate inherits it: a trigger's run reads error text anyone can
+ *  shape, and must not hold the token that answers for it. */
+export const TRIGGER_ENV_PREFIX = "CANOPY_TRIGGER_";
+
+/** Every `CANOPY_TRIGGER_` variable, taken out of `env` (deleted from it) into a map. */
+export function takeTriggerSecrets(env: Record<string, string | undefined>): Map<string, string> {
+  const out = new Map<string, string>();
+  for (const [k, v] of Object.entries(env)) {
+    if (!k.startsWith(TRIGGER_ENV_PREFIX)) continue;
+    if (v !== undefined && v.trim()) out.set(k, v.trim());
+    delete env[k];
+  }
+  return out;
+}
+
 /** never in a shell's environment: the answer token a deploy from before
  *  browser-held answer keys may still set (canopy no longer reads it), and
  *  the incubator's secrets */

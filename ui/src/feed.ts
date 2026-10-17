@@ -530,6 +530,8 @@ export function describeEvent(
     // the repo's landing section and the inbox say where the queue stands
     case "landing":
     case "prs":
+    // the triggers view lists every event and what became of it
+    case "triggers":
     // a pair request is answered where callers are listed, not in the feed
     case "auth":
       return [];

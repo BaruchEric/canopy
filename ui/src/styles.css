@@ -10115,6 +10115,162 @@ span.effective-flag:not(:first-child) {
   padding: 0;
 }
 
+/* the triggers view: rules with their hook, then events by section */
+.trigger-view {
+  display: grid;
+  gap: 16px;
+  align-content: start;
+}
+.trigger-group ul {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+.trigger-group .panel-label {
+  margin: 0 0 2px;
+  padding: 0;
+}
+.trigger-count {
+  color: var(--ink-faint);
+  font-weight: 400;
+}
+.trigger-row,
+.trigger-rule {
+  display: grid;
+  gap: 3px;
+  padding: 8px 0 8px 10px;
+  border-left: 2px solid var(--tone, var(--hair));
+  font-size: 12px;
+}
+.trigger-row + .trigger-row,
+.trigger-rule + .trigger-rule {
+  border-top: 1px solid var(--hair);
+}
+.trigger-row.moss {
+  --tone: var(--moss);
+}
+.trigger-row.sky {
+  --tone: var(--sky);
+}
+.trigger-row.lichen {
+  --tone: var(--lichen);
+}
+.trigger-row.rust {
+  --tone: var(--rust);
+}
+.trigger-main {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 4px 12px;
+}
+.trigger-title,
+.trigger-rule-name {
+  font: inherit;
+  font-weight: 700;
+  color: var(--ink);
+  background: none;
+  border: 0;
+  padding: 0;
+  text-align: left;
+  overflow-wrap: anywhere;
+  min-width: 0;
+}
+button.trigger-title {
+  cursor: pointer;
+}
+button.trigger-title:hover {
+  text-decoration: underline;
+}
+.trigger-pr {
+  color: var(--sky);
+  white-space: nowrap;
+}
+.trigger-facts {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 2px 10px;
+  font-size: 11px;
+  color: var(--ink-faint);
+}
+.trigger-facts a {
+  color: inherit;
+}
+.trigger-facts .moss,
+.trigger-state.moss,
+.trigger-outcome.moss {
+  color: var(--moss);
+}
+.trigger-facts .rust,
+.trigger-state.rust {
+  color: var(--rust);
+}
+.trigger-state.lichen {
+  color: var(--lichen);
+}
+.trigger-state.sky {
+  color: var(--sky);
+}
+.trigger-state {
+  font-weight: 700;
+}
+.trigger-id,
+.trigger-hook code {
+  font-family: var(--mono);
+}
+.trigger-acts {
+  display: inline-flex;
+  gap: 4px;
+  margin-left: auto;
+}
+.trigger-outcome {
+  color: var(--ink-dim);
+  overflow-wrap: anywhere;
+}
+.trigger-err {
+  color: var(--rust);
+  font-size: 11px;
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+.trigger-note {
+  color: var(--ink-faint);
+  font-size: 12px;
+  margin: 0;
+}
+.trigger-hook {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+.trigger-hook code {
+  padding: 2px 6px;
+  background: var(--bark0);
+  border-radius: var(--r);
+  font-size: 11px;
+  overflow-wrap: anywhere;
+  min-width: 0;
+}
+.trigger-fire {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
+.trigger-fire input {
+  flex: 1 1 200px;
+  min-width: 0;
+  padding: 2px 6px;
+  border: 1px solid var(--hair);
+  border-radius: var(--r);
+  background: transparent;
+  color: var(--ink);
+  font: inherit;
+}
+
 /* a repo's checks: the card's word, its panel section */
 .health-card.moss {
   --tone: var(--moss);

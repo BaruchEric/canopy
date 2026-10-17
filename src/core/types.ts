@@ -1,4 +1,5 @@
 import type { PairKind } from "./callers";
+import type { TriggerEvent } from "./trigger";
 
 export interface RepoFile {
   /** path relative to the repo root */
@@ -1438,6 +1439,8 @@ export type ServerEvent =
   | { type: "landing"; landing: LandingInfo }
   /** the PRs branch runs opened, whole, whenever one changes (FR-011) */
   | { type: "prs"; prs: PrWatch[] }
+  /** every trigger event kept, whole, whenever one changes */
+  | { type: "triggers"; events: TriggerEvent[] }
   /** the pair requests still waiting, whole, whenever one comes, is answered or is claimed */
   | { type: "auth"; pending: PendingPair[] }
   /** where the incubator's stages run, whenever that changes; home backend only */

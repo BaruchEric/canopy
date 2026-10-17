@@ -119,6 +119,17 @@ describe("needs", () => {
   test("pairing routes are open", () => {
     for (const a of ["pair", "claim", "first"]) expect(needs("POST", `/api/auth/${a}`)).toBe("open");
   });
+
+  test("a trigger's hook is open, since it checks the sender's signature itself", () => {
+    expect(needs("POST", "/api/hooks/sentry/shop")).toBe("open");
+    expect(needs("GET", "/api/hooks/sentry/shop")).toBe("read");
+    expect(needs("POST", "/api/hooksx")).toBe("admin");
+  });
+
+  test("acting on a trigger's events operates", () => {
+    for (const a of ["fire", "resume", "retry", "stop"]) expect(needs("POST", `/api/triggers/${a}`)).toBe("operate");
+    expect(needs("DELETE", "/api/triggers/events")).toBe("operate");
+  });
 });
 
 describe("allows", () => {
