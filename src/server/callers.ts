@@ -284,9 +284,11 @@ export class CallerBook {
   }
 
   /** The code shown in the server's own log while nobody can approve a pair:
-   *  there is one only while the book holds no page or cli caller. */
+   *  there is one only while the book holds no live page or cli session. One
+   *  unused for 30 days counts for nothing, since its token no longer works. */
   firstCode(): string | null {
-    if (this.callers.some((c) => isSession(c.kind))) return null;
+    const at = this.now();
+    if (this.callers.some((c) => isSession(c.kind) && at - c.used <= SESSION_IDLE)) return null;
     this.first ??= code();
     return this.first;
   }

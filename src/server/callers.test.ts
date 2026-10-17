@@ -306,4 +306,15 @@ describe("first code", () => {
     await book.flush();
     expect(open().firstCode()).toBeNull();
   });
+
+  test("an expired session does not count, so the first code is offered", async () => {
+    const book = open();
+    book.mint("page", { label: "p" });
+    book.mint("cli", { label: "cli a" });
+    await book.flush();
+    t += 30 * DAY + 1;
+    const code = open().firstCode();
+    expect(code).not.toBeNull();
+    expect(book.firstCode()).not.toBeNull();
+  });
 });
