@@ -58,6 +58,10 @@ export interface RepoStatus {
    *  main checkout (a linked worktree's card leaves it to the main one) and
    *  absent when there is none */
   elsewhere?: Elsewhere;
+  /** the lines the tracked changes add and remove against HEAD, staged and
+   *  not, a binary file counting toward neither; untracked files are not in
+   *  it. Absent on a clean tree, an unborn HEAD, or a backend from before it */
+  lines?: { added: number; deleted: number };
 }
 
 /** A linked worktree of the repo (`git worktree add`, Claude's agent
@@ -107,6 +111,16 @@ export interface Elsewhere {
   /** newest first, at most BRANCH_WIP_CAP of them */
   branches: BranchWip[];
   stash?: StashWip;
+}
+
+/** What the changes section's drill shows for one worktree or branch of
+ *  Elsewhere: the commits on its branch that this checkout's HEAD lacks,
+ *  newest first, and for a worktree the entries in its tree. */
+export interface ElsewhereDetail {
+  commits: LogEntry[];
+  /** commits past the ones listed */
+  more: number;
+  files: RepoFile[];
 }
 
 /** Open pull requests on the repo's GitHub page, counted for the repos the

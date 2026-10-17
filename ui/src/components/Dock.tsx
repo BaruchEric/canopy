@@ -69,7 +69,7 @@ import { GuidedPanel } from "./Guided";
 import { Tour } from "./Tour";
 import { CommitRow } from "./Commit";
 import { DiffView } from "./DiffView";
-import { baseName, branchText, pushText, worktreeText } from "../elsewhere";
+import { baseName, branchText, changesHead, pushText, worktreeText } from "../elsewhere";
 import { ElsewhereChips, PeerChips, Pulls, RemoteTipChip } from "./RemoteTip";
 import { RepoLink } from "./RepoLink";
 import { Star } from "./Star";
@@ -96,6 +96,7 @@ import { enterFull, fullWord, leaveFull, lockEscape, unlockKeys, useFullscreenEx
 import { copyText } from "../share";
 import {
   OPENER_IDS,
+  type ElsewhereDetail,
   type LogEntry,
   type PushAccess,
   type Repo,
@@ -462,44 +463,184 @@ function WorkspaceMenu({
   );
 }
 
+type DrillAt = { worktree: string } | { branch: string };
+
+/** One changed entry in a drilled worktree: a click shows its diff there,
+ *  staged and unstaged together the way the changes list does. An untracked
+ *  folder (the count reads them whole) has no diff of its own. */
+function WorktreeFile({ repo, worktree, file, stamp }: { repo: Repo; worktree: string; file: RepoFile; stamp: string }) {
+  const [diff, setDiff] = useState<string | null>(null);
+  const [open, setOpen] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const { staged, split } = stagingOf(file);
+  const folder = file.path.endsWith("/");
+
+  useEffect(() => {
+    if (!open) return;
+    let live = true;
+    Promise.all([
+      api.diff(repo.id, file.path, staged, file.untracked, worktree),
+      split ? api.diff(repo.id, file.path, false, false, worktree) : null,
+    ])
+      .then(([r, rest]) => {
+        if (!live) return;
+        setError(null);
+        setDiff(rest ? [r.diff, rest.diff].filter((d) => d.trim()).join("\n") : r.diff);
+      })
+      .catch((err: unknown) => {
+        if (live) setError(String(err instanceof Error ? err.message : err));
+      });
+    return () => {
+      live = false;
+    };
+  }, [open, repo.id, file.path, file.untracked, staged, split, worktree, stamp]);
+
+  return (
+    <li className="worktree-file" title={file.orig ? `${file.orig} → ${file.path}` : file.path}>
+      <div className="worktree-file-row">
+        <span className="peer-path-mark">{markOf(file)}</span>
+        {folder ? (
+          <span className="peer-path-name">{file.path}</span>
+        ) : (
+          <button type="button" className="peer-path-name elsewhere-drill" aria-expanded={open} onClick={() => setOpen(!open)}>
+            {file.path}
+          </button>
+        )}
+      </div>
+      {open && error && <p className="panel-error">{error}</p>}
+      {open && diff !== null && <DiffView diff={diff} />}
+    </li>
+  );
+}
+
+/**
+ * One worktree's or branch's work, under its row once clicked: a
+ * worktree's changed entries, then the commits on its branch that this
+ * checkout lacks, each opening in place the way History's do (the commits
+ * share this repo's objects). Read again whenever the row's own counts or
+ * the repo move.
+ */
+function ElsewhereDrill({ repo, at, stamp }: { repo: Repo; at: DrillAt; stamp: string }) {
+  const updatedAt = useStore((s) => s.updatedAt[repo.id]);
+  const [detail, setDetail] = useState<ElsewhereDetail | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [drilled, setDrilled] = useState<string | null>(null);
+  const worktree = "worktree" in at ? at.worktree : null;
+  const branch = "branch" in at ? at.branch : null;
+
+  useEffect(() => {
+    let live = true;
+    setError(null);
+    api
+      .elsewhere(repo.id, worktree !== null ? { worktree } : { branch: branch ?? "" })
+      .then((d) => {
+        if (live) setDetail(d);
+      })
+      .catch((e: unknown) => {
+        if (live) setError(e instanceof Error ? e.message : String(e));
+      });
+    return () => {
+      live = false;
+    };
+  }, [repo.id, worktree, branch, stamp, updatedAt]);
+
+  if (error) return <p className="panel-error elsewhere-drilled">{error}</p>;
+  if (!detail) return <p className="panel-clean elsewhere-drilled">Reading…</p>;
+  if (detail.files.length === 0 && detail.commits.length === 0) {
+    return <p className="panel-clean elsewhere-drilled">Nothing waiting here now.</p>;
+  }
+  return (
+    <div className="elsewhere-drilled">
+      {detail.files.length > 0 && worktree !== null && (
+        <ul className="peer-paths">
+          {detail.files.map((f) => (
+            <WorktreeFile key={f.path} repo={repo} worktree={worktree} file={f} stamp={`${stamp}:${updatedAt ?? ""}`} />
+          ))}
+        </ul>
+      )}
+      {detail.commits.length > 0 && (
+        <ul className="log peers-drill">
+          {detail.commits.map((c) => (
+            <CommitRow
+              key={c.hash}
+              repo={repo}
+              hash={c.hash}
+              subject={c.subject}
+              meta={`${c.author} · ${c.when}`}
+              open={drilled === c.hash}
+              onToggle={() => setDrilled(drilled === c.hash ? null : c.hash)}
+            />
+          ))}
+        </ul>
+      )}
+      {detail.more > 0 && <p className="panel-clean">and {detail.more} more</p>}
+    </div>
+  );
+}
+
 /**
  * What the repo holds outside this checkout, a row each: a linked worktree
  * with work in it, an unmerged branch checked out nowhere, the stash. A
- * worktree that is a card of its own opens that card's panel.
+ * click on a worktree or branch drills into its files and commits, one at
+ * a time; a worktree that is a card of its own also opens that card's panel.
  */
 function ElsewhereList({ repo }: { repo: Repo }) {
   const e = repo.status?.elsewhere;
   const here = repo.status?.branch || "HEAD";
   const cards = useStore((s) => s.repos);
   const openPanel = useStore((s) => s.openPanel);
+  const [drilled, setDrilled] = useState<string | null>(null);
   if (!e) return null;
+  const toggle = (key: string) => setDrilled(drilled === key ? null : key);
   return (
     <>
       {e.worktrees.map((w) => {
         const card = cards.find((r) => r.path === w.path);
+        const key = `wt:${w.path}`;
         return (
-          <div key={`wt:${w.path}`} className="peers-row">
-            <span className="peers-text elsewhere-worktree" title={worktreeText(w, here)}>
-              ⧉ {w.branch ?? "detached"} · {baseName(w.path)}
-              {w.files > 0 && ` · ${w.files} changed`}
-              {w.unmerged > 0 && ` · ${w.unmerged} unmerged`}
-            </span>
-            {card && (
-              <button type="button" className="mini" onClick={() => openPanel(card.id)}>
-                open
+          <Fragment key={key}>
+            <div className="peers-row">
+              <button
+                type="button"
+                className="peers-text elsewhere-worktree elsewhere-drill"
+                title={`${worktreeText(w, here)}. Click for its files and commits.`}
+                aria-expanded={drilled === key}
+                onClick={() => toggle(key)}
+              >
+                {drilled === key ? "▾" : "▸"} ⧉ {w.branch ?? "detached"} · {baseName(w.path)}
+                {w.files > 0 && ` · ${w.files} changed`}
+                {w.unmerged > 0 && ` · ${w.unmerged} unmerged`}
               </button>
-            )}
-          </div>
+              {card && (
+                <button type="button" className="mini" onClick={() => openPanel(card.id)}>
+                  open
+                </button>
+              )}
+            </div>
+            {drilled === key && <ElsewhereDrill repo={repo} at={{ worktree: w.path }} stamp={`${w.files}:${w.unmerged}`} />}
+          </Fragment>
         );
       })}
-      {e.branches.map((b) => (
-        <div key={`br:${b.name}`} className="peers-row">
-          <span className="peers-text elsewhere-branch" title={branchText(b, here)}>
-            ⑂ {b.name}
-            {b.unmerged !== undefined && ` · ${b.unmerged} unmerged`} · {pushText(b)} · {ago(b.at)}
-          </span>
-        </div>
-      ))}
+      {e.branches.map((b) => {
+        const key = `br:${b.name}`;
+        return (
+          <Fragment key={key}>
+            <div className="peers-row">
+              <button
+                type="button"
+                className="peers-text elsewhere-branch elsewhere-drill"
+                title={`${branchText(b, here)}. Click for its commits.`}
+                aria-expanded={drilled === key}
+                onClick={() => toggle(key)}
+              >
+                {drilled === key ? "▾" : "▸"} ⑂ {b.name}
+                {b.unmerged !== undefined && ` · ${b.unmerged} unmerged`} · {pushText(b)} · {ago(b.at)}
+              </button>
+            </div>
+            {drilled === key && <ElsewhereDrill repo={repo} at={{ branch: b.name }} stamp={`${b.at}:${b.unmerged ?? ""}`} />}
+          </Fragment>
+        );
+      })}
       {e.stash && (
         <div className="peers-row">
           <span className="peers-text elsewhere-stash" title={e.stash.subject}>
@@ -928,12 +1069,15 @@ function ChangesSection({ repo }: { repo: Repo }) {
       k="changes"
       className="changes-section"
       label="Changes"
-      head={[
-        String(files.length),
-        ...peerWipCounts(repo.peers).map((c) => c.text),
-        ...((st?.ahead ?? 0) > 0 ? [`↑${st?.ahead} not pushed`] : []),
-        ...(st?.elsewhere?.worktrees.length ? [`⧉ ${st.elsewhere.worktrees.length} in worktrees`] : []),
-      ].join(" · ")}
+      head={changesHead(st, peerWipCounts(repo.peers)).map((p, i, all) => (
+        <Fragment key={i}>
+          {/* +12 −3 read as one figure, the rest apart */}
+          {i > 0 && (p.cls && all[i - 1]?.cls ? " " : " · ")}
+          <span className={p.cls} title={p.title}>
+            {p.text}
+          </span>
+        </Fragment>
+      ))}
       layout={views}
       copy={() => files.map((f) => `${markOf(f)} ${f.orig ? `${f.orig} → ${f.path}` : f.path}`).join("\n")}
       // a paste lands in the commit message, after what is there

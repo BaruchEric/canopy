@@ -12,6 +12,7 @@ import {
   type CommitDetail,
   type CommitFile,
   type Elsewhere,
+  type ElsewhereDetail,
   type GitUser,
   type LogEntry,
   type RemoteTip,
@@ -411,7 +412,7 @@ export interface StatusOptions {
 }
 
 export async function getStatus(repoPath: string, opts: StatusOptions = {}): Promise<RepoStatus> {
-  const [st, log, cfg, tips, elsewhere] = await Promise.all([
+  const [st, log, cfg, tips, elsewhere, numstat] = await Promise.all([
     // -uall lists untracked files individually; without it a new directory
     // arrives as a single "dir/" entry that no per-file diff can render.
     git(repoPath, [
@@ -430,9 +431,15 @@ export async function getStatus(repoPath: string, opts: StatusOptions = {}): Pro
       ? Promise.resolve({ code: 1, stdout: "", stderr: "" })
       : git(repoPath, tipArgs(opts.tipRemotes)),
     readElsewhere(repoPath).catch(() => undefined),
+    // against HEAD, so a file staged and edited again counts once; fails on
+    // an unborn HEAD, which just means no counts. The plumbing diff-index,
+    // since porcelain diff refreshes the index and writes it back, which
+    // the watcher would answer with another read
+    git(repoPath, ["diff-index", "--numstat", "-z", "--no-ext-diff", "--no-textconv", "HEAD", "--"]),
   ]);
   if (st.code !== 0) throw new Error(st.stderr.trim() || "git status failed");
   const status = parsePorcelainV2(st.stdout);
+  const lines = numstat.code === 0 && status.files.some((f) => !f.untracked) ? sumNumstat(parseNumstatZ(numstat.stdout)) : undefined;
   if (status.files.length > 0) {
     const times = await fileMtimes(
       repoPath,
@@ -450,7 +457,33 @@ export async function getStatus(repoPath: string, opts: StatusOptions = {}): Pro
   }
   const user = cfg.code === 0 ? parseUserConfig(cfg.stdout) : null;
   const tip = tips.code === 0 ? parseRemoteTip(tips.stdout) : undefined;
-  return { ...status, lastCommit, user, ...(tip ? { tip } : {}), ...(elsewhere ? { elsewhere } : {}) };
+  return { ...status, lastCommit, user, ...(tip ? { tip } : {}), ...(elsewhere ? { elsewhere } : {}), ...(lines ? { lines } : {}) };
+}
+
+/** How many of a branch's commits the changes section's drill lists. */
+const DRILL_LOG = 20;
+
+/** What the changes section's drill shows for a worktree or branch the
+ *  status's Elsewhere named: the commits on its branch that HEAD lacks, and
+ *  a worktree's tree entries, read as readElsewhere counted them. The server
+ *  passes only a name or path it found in that Elsewhere, never one a page
+ *  sent, so neither reaches git as anything but a branch under refs/heads. */
+export async function elsewhereDetail(repoPath: string, at: { branch: string | null; worktree?: string }): Promise<ElsewhereDetail> {
+  const { host } = parseLocator(repoPath);
+  const range = at.branch === null ? null : `HEAD..refs/heads/${at.branch}`;
+  const none = Promise.resolve(null);
+  const [log, count, tree] = await Promise.all([
+    range ? git(repoPath, ["log", `-${DRILL_LOG}`, "--pretty=%h%x00%s%x00%an%x00%ar%x00%H", range, "--"]) : none,
+    range ? git(repoPath, ["rev-list", "--count", range, "--"]) : none,
+    at.worktree === undefined ? none : git(toLocator(host, at.worktree), ["-c", "core.quotePath=false", "status", "--porcelain=v2", "-unormal"]),
+  ]);
+  const commits = log?.code === 0 ? parseLog(log.stdout, new Set()) : [];
+  const total = count?.code === 0 ? Number(count.stdout.trim()) || 0 : commits.length;
+  return {
+    commits,
+    more: Math.max(0, total - commits.length),
+    files: tree?.code === 0 ? parsePorcelainV2(tree.stdout).files : [],
+  };
 }
 
 /** A fetch may sit on a dead host or a credential lookup; a minute is long
@@ -531,7 +564,7 @@ function zFields(text: string): string[] {
   return parts;
 }
 
-interface Numstat {
+export interface Numstat {
   path: string;
   orig?: string;
   added: number | null;
@@ -556,6 +589,17 @@ export function parseNumstatZ(text: string): Numstat[] {
     out.push({ path: dest, orig, added: count(a), deleted: count(d) });
   }
   return out;
+}
+
+/** The lines a numstat adds and removes in all; a binary file counts as none. */
+export function sumNumstat(rows: Numstat[]): { added: number; deleted: number } {
+  let added = 0;
+  let deleted = 0;
+  for (const r of rows) {
+    added += r.added ?? 0;
+    deleted += r.deleted ?? 0;
+  }
+  return { added, deleted };
 }
 
 interface NameStatus {

@@ -73,6 +73,17 @@ export const liveCount = (cards: readonly AgentCard[]): number => cards.filter(i
 
 export const anyWaiting = (cards: readonly AgentCard[]): boolean => cards.some((c) => c.state === "waiting");
 
+/** The agents section's header: the running agents by state, waiting first
+ *  ("1 waiting · 2 working"), or with none running how many stopped within
+ *  the day ("3 earlier"), or nothing. */
+export function agentsHead(live: readonly AgentCard[], past: readonly AgentCard[]): { state: AgentState | "past"; text: string }[] {
+  const by = new Map<AgentState, number>();
+  for (const c of orderCards(live)) by.set(c.state, (by.get(c.state) ?? 0) + 1);
+  const out: { state: AgentState | "past"; text: string }[] = [...by].map(([state, n]) => ({ state, text: `${n} ${state}` }));
+  if (out.length === 0 && past.length > 0) out.push({ state: "past", text: `${past.length} earlier` });
+  return out;
+}
+
 /** The running cards, and the ones that ended or were lost within `span`
  *  of `now`; anything older is left out. */
 export function splitRecent(cards: readonly AgentCard[], now: number, span = DAY): { live: AgentCard[]; past: AgentCard[] } {

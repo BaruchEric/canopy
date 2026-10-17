@@ -1,7 +1,7 @@
 /** What a repo holds outside this checkout (RepoStatus.elsewhere), as card
  *  chips, panel rows and feed lines. Pure and browser-safe. */
 
-import { BRANCH_WIP_CAP, type BranchWip, type Elsewhere, type WorktreeWip } from "../../src/core/types";
+import { BRANCH_WIP_CAP, type BranchWip, type Elsewhere, type RepoStatus, type WorktreeWip } from "../../src/core/types";
 import { ago } from "./util";
 
 export interface ElsewhereChip {
@@ -67,6 +67,35 @@ export function elsewhereChips(e: Elsewhere | undefined, here: string): Elsewher
       title: `newest ${ago(e.stash.at)}: ${e.stash.subject}`,
     });
   }
+  return out;
+}
+
+/** One piece of the changes section's header: its words, the class that
+ *  tints it, and its tooltip. */
+export interface HeadPart {
+  text: string;
+  cls?: "n-add" | "n-del";
+  title: string;
+}
+
+/** The changes section's header after its name, live off the status: this
+ *  tree's file count and lines, how far it is from its upstream, each
+ *  peer's uncommitted files, then the card's own chips for what waits in
+ *  worktrees, branches and the stash, so header and card never disagree. */
+export function changesHead(st: RepoStatus | null | undefined, peers: readonly { text: string; title: string }[]): HeadPart[] {
+  const files = st?.files ?? [];
+  const out: HeadPart[] = [{ text: String(files.length), title: plural(files.length, "changed file") }];
+  const lines = st?.lines;
+  const linesTitle = "lines added and removed against HEAD, staged or not; new untracked files are not counted";
+  if (lines && lines.added > 0) out.push({ text: `+${lines.added}`, cls: "n-add", title: linesTitle });
+  if (lines && lines.deleted > 0) out.push({ text: `−${lines.deleted}`, cls: "n-del", title: linesTitle });
+  const ahead = st?.ahead ?? 0;
+  const behind = st?.behind ?? 0;
+  const up = st?.upstream ?? "the upstream";
+  if (ahead > 0) out.push({ text: `↑${ahead} not pushed`, title: `${plural(ahead, "commit")} past ${up}` });
+  if (behind > 0) out.push({ text: `↓${behind} behind`, title: `${plural(behind, "commit")} on ${up} not here yet` });
+  for (const p of peers) out.push({ text: p.text, title: p.title });
+  for (const c of elsewhereChips(st?.elsewhere, st?.branch || "HEAD")) out.push({ text: c.text, title: c.title });
   return out;
 }
 

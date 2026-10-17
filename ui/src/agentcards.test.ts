@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import type { AgentCard, Repo } from "../../src/core/types";
 import {
   ageWord,
+  agentsHead,
   anyWaiting,
   cardName,
   cardOnRepo,
@@ -279,6 +280,17 @@ describe("order and groups", () => {
     expect(liveCount([ended, lost, idleNew, working, waiting])).toBe(3);
     expect(anyWaiting([working, waiting])).toBe(true);
     expect(anyWaiting([working])).toBe(false);
+  });
+
+  test("the section header counts the running ones by state, waiting first, or the day's past ones", () => {
+    const working2 = card({ state: "working", node: "mini", startedAt: 7 });
+    expect(agentsHead([working, idleNew, waiting, working2], [ended])).toEqual([
+      { state: "waiting", text: "1 waiting" },
+      { state: "working", text: "2 working" },
+      { state: "idle", text: "1 idle" },
+    ]);
+    expect(agentsHead([], [lost, ended])).toEqual([{ state: "past", text: "2 earlier" }]);
+    expect(agentsHead([], [])).toEqual([]);
   });
 
   test("the running ones, and the day's ended and lost; older ones left out", () => {

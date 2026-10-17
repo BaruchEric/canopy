@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
-import type { BranchWip, Elsewhere, WorktreeWip } from "../../src/core/types";
-import { elsewhereChips, elsewhereLines } from "./elsewhere";
+import type { BranchWip, Elsewhere, RepoStatus, WorktreeWip } from "../../src/core/types";
+import { changesHead, elsewhereChips, elsewhereLines } from "./elsewhere";
 
 const wt = (path: string, files: number, unmerged = 0, branch: string | null = "agent"): WorktreeWip => ({
   path,
@@ -56,5 +56,44 @@ describe("elsewhereLines", () => {
     ]);
     expect(elsewhereLines(after, after)).toEqual([]);
     expect(elsewhereLines(after, { ...after, stash: undefined })).toEqual(["stash empty"]);
+  });
+});
+
+describe("changesHead", () => {
+  const status = (over: Partial<RepoStatus> = {}): RepoStatus => ({
+    branch: "main",
+    upstream: "origin/main",
+    ahead: 0,
+    behind: 0,
+    files: [],
+    lastCommit: null,
+    user: null,
+    ...over,
+  });
+  const file = { path: "a.ts", index: ".", worktree: "M", untracked: false, conflicted: false };
+  const words = (st: RepoStatus | undefined, peers: { text: string; title: string }[] = []) => changesHead(st, peers).map((p) => p.text);
+
+  test("a clean tree is its count alone", () => {
+    expect(words(status())).toEqual(["0"]);
+    expect(words(undefined)).toEqual(["0"]);
+  });
+
+  test("lines, upstream, peers, then the card's chips, in that order", () => {
+    const st = status({
+      files: [file, { ...file, path: "b.ts" }],
+      lines: { added: 12, deleted: 3 },
+      ahead: 2,
+      behind: 1,
+      elsewhere: { worktrees: [wt("/r/.claude/worktrees/x", 2)], branches: [br("idea", 1)], stash: { count: 1, subject: "s", at: 1 } },
+    });
+    expect(words(st, [{ text: "mini 4", title: "" }])).toEqual(["2", "+12", "−3", "↑2 not pushed", "↓1 behind", "mini 4", "⧉ agent", "⑂ idea +1", "≡ 1 stashed"]);
+    const parts = changesHead(st, []);
+    expect(parts[1]?.cls).toBe("n-add");
+    expect(parts[2]?.cls).toBe("n-del");
+  });
+
+  test("a side with no lines, or a backend that sends none, says nothing of them", () => {
+    expect(words(status({ files: [file], lines: { added: 0, deleted: 5 } }))).toEqual(["1", "−5"]);
+    expect(words(status({ files: [file] }))).toEqual(["1"]);
   });
 });

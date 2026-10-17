@@ -61,6 +61,7 @@ import type {
   KeptShell,
   PortsResult,
   PreviewSlot,
+  ElsewhereDetail,
   LogEntry,
   Build,
   Peer,
@@ -303,6 +304,9 @@ export const api = {
       `/api/browse?${new URLSearchParams({ path, ...(host ? { host } : {}) }).toString()}`,
     ),
   log: (id: string) => repoReq<LogEntry[]>(id, (p) => `/api/repos/log?${rq(p)}`),
+  /** a worktree's or a branch's work, for the changes section's drill */
+  elsewhere: (id: string, at: { worktree: string } | { branch: string }) =>
+    repoReq<ElsewhereDetail>(id, (p) => `/api/repos/elsewhere?${rq(p, at)}`),
   show: (id: string, hash: string) =>
     repoReq<CommitDetail>(id, (p) => `/api/repos/commit?${rq(p, { hash })}`),
   commitDiff: (id: string, hash: string, file: string, orig?: string) =>
@@ -317,7 +321,8 @@ export const api = {
     ),
   access: (id: string) =>
     repoReq<{ access: PushAccess }>(id, (p) => `/api/repos/access?${rq(p)}`),
-  diff: (id: string, file: string, staged: boolean, untracked: boolean) =>
+  /** `worktree` reads the file in one of the repo's linked worktrees */
+  diff: (id: string, file: string, staged: boolean, untracked: boolean, worktree?: string) =>
     repoReq<{ diff: string }>(
       id,
       (p) =>
@@ -325,6 +330,7 @@ export const api = {
           file,
           staged: staged ? "1" : "0",
           untracked: untracked ? "1" : "0",
+          ...(worktree === undefined ? {} : { worktree }),
         })}`,
     ),
   /** `orig` is a rename's old path, which goes on or off the index with it */

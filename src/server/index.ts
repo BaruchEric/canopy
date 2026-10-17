@@ -18,6 +18,7 @@ import {
   getCommit,
   getDiff,
   getLog,
+  elsewhereDetail,
   isHash,
   pull,
   clearStaleLock,
@@ -49,7 +50,7 @@ import { attachTmuxTerm, hasSession, history, killSession, listSessions, noServe
 import { clip, continueLine, countLines, expiredShells, forgetKept, KEEP_EVERY, listKept, lostShells, readKeptHistory, replayCommand, replayFile, restoredBanner, writeKept } from "../core/keep";
 import { PASTE_MAX, pasteName, pasteText, savePaste } from "../core/paste";
 import { apiBase, ForgeAuthError, linkForgeClones, listForgeRepos } from "../core/forge";
-import { isSshHost, parseLocator, parseSshHosts, shellQuote, tildeQuote, TOKEN_REF } from "../core/host";
+import { isSshHost, parseLocator, parseSshHosts, shellQuote, tildeQuote, toLocator, TOKEN_REF } from "../core/host";
 import { readEvidence } from "../core/evidence";
 import { FlowFiles, flowsDir, loadFlowRecords, lockFlows, type FlowsLock } from "../core/flowstore";
 import { hasGatewayKey, jev, jevJudge } from "../core/jev";
@@ -3330,6 +3331,24 @@ async function handleApi(
     if (method === "GET" && action === "log") {
       return json(await getLog(repo.path));
     }
+    // the changes section's drill into a worktree or branch: only one the
+    // repo's last status named, so a page cannot point git anywhere else
+    if (method === "GET" && action === "elsewhere") {
+      const e = repo.status?.elsewhere;
+      const path = url.searchParams.get("worktree");
+      const name = url.searchParams.get("branch");
+      if (path !== null) {
+        const w = e?.worktrees.find((x) => x.path === path);
+        if (!w) throw new HttpError(404, "that worktree holds no work this repo's status knows of");
+        return json(await elsewhereDetail(repo.path, { branch: w.branch, worktree: w.path }));
+      }
+      if (name !== null) {
+        const b = e?.branches.find((x) => x.name === name);
+        if (!b) throw new HttpError(404, "that branch holds no work this repo's status knows of");
+        return json(await elsewhereDetail(repo.path, { branch: b.name }));
+      }
+      return json({ error: "name a worktree or a branch" }, 400);
+    }
     if (method === "GET" && action === "access") {
       // Resolve the identity once per server, not once per request.
       if (state.login === undefined) state.login = await githubLogin();
@@ -3460,7 +3479,16 @@ async function handleApi(
           staged: url.searchParams.get("staged") === "1",
         };
       }
-      const diff = await getDiff(repo.path, file, target);
+      // a linked worktree's file, for the changes section's drill: only a
+      // worktree the repo's last status named, as the elsewhere route
+      const wt = url.searchParams.get("worktree");
+      let at = repo.path;
+      if (wt !== null) {
+        const w = repo.status?.elsewhere?.worktrees.find((x) => x.path === wt);
+        if (!w) throw new HttpError(404, "that worktree holds no work this repo's status knows of");
+        at = toLocator(parseLocator(repo.path).host, w.path);
+      }
+      const diff = await getDiff(at, file, target);
       return json({ diff });
     }
     if (method === "POST" && action === "stage") {

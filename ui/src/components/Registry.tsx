@@ -1,17 +1,17 @@
-import { useEffect, useMemo, useState } from "react";
+import { Fragment, useEffect, useMemo, useState } from "react";
 import { keepKeys } from "../surface";
 import { useShallow } from "zustand/react/shallow";
 import { HARNESS } from "../../../src/core/harness";
 import { isLiveAgent, type ActivityEvent, type AgentActivity, type AgentCard, type Repo } from "../../../src/core/types";
 import {
   ageWord,
+  agentsHead,
   anyWaiting,
   cardName,
   clockWord,
   durationWord,
   groupCards,
   joinTarget,
-  liveCount,
   readerOf,
   registrySummary,
   relPath,
@@ -795,14 +795,19 @@ export function AgentsSection({ repo }: { repo: Repo }) {
   const now = useNow();
   const { live, past } = useMemo(() => splitRecent(cards, now), [cards, now]);
   if (!ready) return null;
-  const count = liveCount(live);
+  const head = agentsHead(live, past);
   return (
     <Section
       repo={repo}
       k="agents"
       className="reg-section"
       label="Agents"
-      head={count ? <span className={anyWaiting(live) ? "reg-head-waiting" : undefined}>{count}</span> : null}
+      head={head.map((h, i) => (
+        <Fragment key={h.state}>
+          {i > 0 && " · "}
+          <span className={`reg-head-${h.state}`}>{h.text}</span>
+        </Fragment>
+      ))}
       title="The agents working in this repo, on any machine"
     >
       <div className="reg-body">

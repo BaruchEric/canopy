@@ -26,7 +26,9 @@ import {
   NET_TIMEOUT_MS,
   netError,
   readElsewhere,
+  elsewhereDetail,
   stageFile,
+  sumNumstat,
 } from "./git";
 import { heuristicMessage } from "./suggest";
 import type { RepoFile } from "./types";
@@ -359,6 +361,35 @@ describe("stale index locks", () => {
   });
 });
 
+describe("line counts", () => {
+  test("a numstat's lines in all, a binary file counting as none", () => {
+    expect(sumNumstat(parseNumstatZ("3\t1\ta.ts\0-\t-\tlogo.png\0" + "2\t0\t\0old.ts\0new.ts\0"))).toEqual({ added: 5, deleted: 1 });
+    expect(sumNumstat([])).toEqual({ added: 0, deleted: 0 });
+  });
+
+  test("a status counts tracked changes against HEAD, staged and not, and leaves them out on a clean tree", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "canopy-lines-"));
+    try {
+      const run = (...args: string[]) => exec(["git", "-C", dir, "-c", "user.name=t", "-c", "user.email=t@t", ...args]);
+      await run("init", "-q");
+      await writeFile(join(dir, "f.txt"), "one\ntwo\n");
+      await run("add", "f.txt");
+      await run("commit", "-q", "-m", "one");
+      expect((await getStatus(dir, { tipRemotes: [] })).lines).toBeUndefined();
+      await writeFile(join(dir, "f.txt"), "one\nthree\nfour\n");
+      await run("add", "f.txt");
+      await writeFile(join(dir, "f.txt"), "one\nthree\nfour\nfive\n");
+      // an untracked file is in the files, not the lines
+      await writeFile(join(dir, "new.txt"), "a\nb\n");
+      const st = await getStatus(dir, { tipRemotes: [] });
+      expect(st.files).toHaveLength(2);
+      expect(st.lines).toEqual({ added: 3, deleted: 1 });
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+});
+
 describe("getStatus in the background", () => {
   test("leaves the index alone, so it never holds index.lock against the user", async () => {
     const dir = await mkdtemp(join(tmpdir(), "canopy-locks-"));
@@ -481,6 +512,13 @@ describe("readElsewhere", () => {
         ["idea", 1, "local", "an idea"],
       ]);
       expect(e?.stash).toMatchObject({ count: 1, subject: "On main: parked" });
+      // the drill: a branch's commits HEAD lacks, a worktree's entries
+      const idea = await elsewhereDetail(main, { branch: "idea" });
+      expect(idea.commits.map((c) => c.subject)).toEqual(["an idea"]);
+      expect(idea).toMatchObject({ more: 0, files: [] });
+      const agent = await elsewhereDetail(main, { branch: "agent", worktree: e?.worktrees[0]?.path ?? "" });
+      expect(agent.commits).toEqual([]);
+      expect(agent.files.map((f) => [f.path, f.untracked])).toEqual([["new.txt", true]]);
       // the linked worktree's own card does not repeat what the main one shows
       expect(await readElsewhere(wt)).toBeUndefined();
 

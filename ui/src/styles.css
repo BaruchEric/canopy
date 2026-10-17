@@ -2493,6 +2493,37 @@ a.chan-text {
 .elsewhere-stash {
   color: var(--ink-faint);
 }
+/* a worktree's or branch's row in the changes: a click drills into it */
+.elsewhere-drill {
+  background: none;
+  border: 0;
+  padding: 0;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.elsewhere-drill:hover,
+.elsewhere-drill[aria-expanded="true"] {
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+.elsewhere-drilled {
+  margin: 0 0 4px;
+}
+.worktree-file {
+  flex-direction: column;
+}
+.worktree-file-row {
+  display: flex;
+  gap: 8px;
+  min-width: 0;
+}
+.worktree-file .diff {
+  margin: 2px 0 6px;
+}
+p.elsewhere-drilled {
+  padding: 0 14px 0 28px;
+}
 .pulls {
   color: var(--sky);
   text-decoration: none;
@@ -3010,6 +3041,9 @@ body.resizing-rows {
 .solo {
   display: grid;
   grid-template-rows: auto 1fr;
+  /* the window's width, not the widest row's: an implicit auto column grew
+     to the panel's min-content and scrolled a phone sideways */
+  grid-template-columns: minmax(0, 1fr);
   height: 100vh;
 }
 .solo-id {
@@ -3692,6 +3726,9 @@ body.resizing-rows {
   width: calc(100% - 28px);
   cursor: pointer;
   justify-content: flex-start;
+  /* not stretched: the caret's turn spins about its own box, which a
+     header wrapped to two lines would otherwise drag down to the middle */
+  align-items: flex-start;
   gap: 6px;
   text-align: left;
 }
@@ -3705,6 +3742,8 @@ body.resizing-rows {
 }
 .fold > span {
   margin-left: auto;
+  /* a long header (the changes section's) wraps flush right, under itself */
+  text-align: right;
 }
 .claude {
   padding-bottom: 8px;
@@ -8548,10 +8587,12 @@ span.effective-flag:not(:first-child) {
   overflow: hidden;
   text-overflow: ellipsis;
 }
-.reg-state.rs-working {
+.reg-state.rs-working,
+.reg-head-working {
   color: var(--sky);
 }
-.reg-state.rs-idle {
+.reg-state.rs-idle,
+.reg-head-idle {
   color: var(--moss);
 }
 .reg-state.rs-waiting,
@@ -8563,7 +8604,8 @@ span.effective-flag:not(:first-child) {
   color: var(--ink-faint);
   font-style: italic;
 }
-.reg-state.rs-ended {
+.reg-state.rs-ended,
+.reg-head-past {
   color: var(--ink-faint);
 }
 .reg-actions {
