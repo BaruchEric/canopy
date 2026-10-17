@@ -113,8 +113,13 @@ merge, canopy removes the worktree and the local branch, and the main
 checkout fetches.
 
 A merge to a branch that deploys is a deploy. That is why auto-merge is off
-for every run until Eric turns it on, and never defaults on from a repo or
-a setting.
+for every run until Eric turns it on, unless the repo says otherwise:
+`.canopy/prs.json` with `{"autoMerge": true}` makes the toggle start on for
+that repo's PRs (canopy's own main does not deploy, so it can). Canopy
+reads the file from the main checkout's HEAD when the PR opens, never from
+the run's worktree, so a run cannot turn auto-merge on for itself by
+editing it. The file sits in canopy's own `.canopy/review.json` approve
+list for the same reason. There is no global setting.
 
 ## Components
 
@@ -133,19 +138,19 @@ a setting.
 - UI: the footer block, the CI chip and popover, the two toggles, the
   pre-flight choice, the card chip, the inbox rows.
 
-## Calls for Eric
+## Calls made (Eric, 2026-10-16)
 
 1. **Land or PR, never both.** A branch run either lands locally through
    the queue or opens a PR. Changing course means dropping the PR.
-2. **Auto-merge is per run and off by default.** No repo-level or global
-   default. Is that right, or does a repo like canopy itself, whose main
-   does not deploy, deserve a repo default?
+2. **Auto-merge is per run, off by default, with a repo default.**
+   `.canopy/prs.json` can turn it on for a repo's PRs, read from the main
+   checkout's HEAD (see Auto-merge). No global default.
 3. **Only comments from people with write access reach a run.** Everyone
    else's are shown, never acted on.
 4. **Three fix attempts per check or comment, then stop.**
-5. **The mini needs `gh` logged in inside the canopy container** (or a
-   `GH_TOKEN` from the secret store) before open PR works there. The Mac
-   uses Eric's own `gh` login.
+5. **`gh` on the mini is already logged in.** The canopy container has
+   `gh` at `/usr/bin/gh`, logged in as BaruchEric through `GH_TOKEN`
+   (checked 2026-10-16). The Mac uses Eric's own `gh` login.
 
 ## Testing
 

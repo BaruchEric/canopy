@@ -13,12 +13,12 @@ One long-lived agent per component (the mini's compose stack, peer sync, tailcha
 ### FR-011 · A run keeps watching the PR it opened
 P2 · added 2026-10-09 · source: Eric (Claude Code Projects video)
 When a run opens a PR, its footer shows the PR number, the diff size and a CI chip whose popover lists checks in progress and passed. Two toggles there: "auto-fix CI and address comments" (the run pushes fixes when checks fail and answers review comments) and "auto-merge when ready". Reference: https://www.youtube.com/watch?v=omihvjf0A2k at 2:15.
-Spec: docs/superpowers/specs/2026-10-16-pr-watch-design.md; plan: docs/superpowers/plans/2026-10-16-pr-watch.md (2026-10-16, waiting on the spec's calls).
+Spec: docs/superpowers/specs/2026-10-16-pr-watch-design.md; plan: docs/superpowers/plans/2026-10-16-pr-watch.md (2026-10-16; the spec's calls made the same day).
 
 ### FR-010 · A coordinator that splits a goal into runs, on its own model and effort
 P2 · added 2026-10-09 · source: Eric (Claude Code Projects video)
 One chat takes a goal, proposes the tasks, and starts a run per task, showing each as a card with a live one-line status. The coordinator gets its own model and effort (default low, since it mostly routes work), separate from the per-role settings the runs use. Reference: https://www.youtube.com/watch?v=omihvjf0A2k at 1:52 and 3:24.
-Spec: docs/superpowers/specs/2026-10-16-coordinator-design.md (2026-10-16); its plan follows FR-011.
+Spec: docs/superpowers/specs/2026-10-16-coordinator-design.md (2026-10-16); its plan follows FR-011, and a per-caller credential on the run routes ships before it (Eric, 2026-10-16).
 
 ### FR-009 · Wider first columns on an ultrawide
 P3 · added 2026-10-07 · source: dock pass

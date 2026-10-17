@@ -103,9 +103,11 @@ A child's asks go to the inbox as they do today, not to the coordinator.
 1. **The coordinator proposes and Eric starts.** No child run starts
    without "start these", and the server enforces it (the token above). A
    later setting could let it start follow-ups on its own, but not in the
-   first version. Open question: the API has no auth inside canopy's own
-   network today, so whether the header check is enough, or the run routes
-   need a real per-caller credential, is a call to make in the plan.
+   first version. The header check alone is not enough (Eric,
+   2026-10-16): the run routes get a real per-caller credential first
+   (the page's session, a shell's or the ranger's token), as its own
+   piece of work that ships before the coordinator, and the coordinator's
+   token carries none of those rights.
 2. **Children are branch runs.** Each lands through the queue (or opens a
    PR with FR-011). None works in the main checkout.
 3. **Three children at once**, the fleet cap.
