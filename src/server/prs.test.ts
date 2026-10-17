@@ -266,6 +266,16 @@ describe("the watch", () => {
     expect((await pollNow(w, again)).state?.checks[0]?.state).toBe("pass");
   });
 
+  test("a head canopy just pushed is read every 30 s, even before CI has queued a check", async () => {
+    const w = await world();
+    await w.hub.open(w.rec.id);
+    w.gh.head = await revOf(w.dir, "HEAD");
+    // the first read: GitHub has not queued the workflow yet
+    await pollNow(w);
+    const due = (w.hub as unknown as { due: Map<string, number> }).due.get(w.rec.id)!;
+    expect(due - Date.now()).toBeLessThanOrEqual(30_000);
+  });
+
   test("a read gh fails keeps the last state and says why", async () => {
     const w = await world();
     await w.hub.open(w.rec.id);

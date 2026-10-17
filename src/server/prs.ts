@@ -43,6 +43,8 @@ import { sortRun } from "./landing";
 export const prsDir = (): string => join(configDir(), "prs");
 /** how often the loop looks for a PR that is due a read */
 export const TICK_EVERY = 5_000;
+/** how long after a push canopy made the PR is read at the busy pace */
+export const FRESH_FOR = 10 * 60_000;
 /** merged and closed PRs kept for the list */
 export const KEEP_DONE = 20;
 /** the file a repo turns auto-merge on with, read from its main checkout's HEAD */
@@ -109,6 +111,9 @@ export class PrHub {
   private timer: ReturnType<typeof setInterval> | null = null;
   private ticking = false;
   private stopped = false;
+  /** until when each PR is read every 30 s after canopy pushed to it, so
+   *  CI that GitHub has not queued yet is seen soon; kept in memory only */
+  private fresh = new Map<string, number>();
   /** collaborator permissions by `slug login`, asked once per server */
   private perms = new Map<string, string | null>();
   private chains = new Map<string, Promise<void>>();
@@ -293,6 +298,7 @@ export class PrHub {
       this.save(w);
       this.deps.markPr(rec.id, number);
       this.due.set(w.id, now);
+      this.fresh.set(w.id, now + FRESH_FOR);
       this.publish();
       return w;
     });
@@ -439,7 +445,9 @@ export class PrHub {
     }
     w.updatedAt = this.now();
     this.save(w);
-    const next = nextPoll(w);
+    if (w.pushed !== had.pushed) this.fresh.set(id, this.now() + FRESH_FOR);
+    let next = nextPoll(w);
+    if (next !== null && (this.fresh.get(id) ?? 0) > this.now()) next = Math.min(next, POLL_BUSY);
     if (next === null) this.due.delete(id);
     else this.due.set(id, this.now() + next);
     this.prune();
