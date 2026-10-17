@@ -479,7 +479,7 @@ describe("PRs that need a look", () => {
 });
 
 describe("pair requests", () => {
-  const pair = (id: string, over: Partial<PendingPair> = {}): PendingPair => ({ id, label: "Chrome on Mac", addr: "100.64.0.9", code: "K7QX", at: 5, ...over });
+  const pair = (id: string, over: Partial<PendingPair> = {}): PendingPair => ({ id, label: "Chrome on Mac", addr: "100.64.0.9", code: "K7QX", at: 5, kind: "page", ...over });
 
   test("each pending pair on a backend this page signed in to is an auth item keyed by its backend", () => {
     const items = mergeInbox([], {}, {}, 0, { repos: [], cards: {}, pairs: { b: [pair("p1"), pair("p2", { label: "cli mini", at: 3 })] } });

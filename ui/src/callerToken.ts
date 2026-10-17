@@ -7,7 +7,7 @@
    for the storage calls, which take the storage as an argument; tested. */
 
 import type { PendingPair } from "../../src/core/types";
-import type { CallerKind } from "../../src/core/callers";
+import { KIND_RIGHTS, type CallerKind, type Right } from "../../src/core/callers";
 
 /** the header a token rides in */
 export const TOKEN_HEADER = "X-Canopy-Token";
@@ -68,13 +68,28 @@ export function tokenHeaders(origin: string, init?: HeadersInit, store: Store | 
   return h;
 }
 
-/** A page's pair label: the server mints a CLI or helper token for a label
- *  that starts with "cli " or "helper ", so a device named that way is
- *  marked as a page. */
+/** A page's pair label. The request names its kind, but a server from before
+ *  that still reads the kind from a "cli " or "helper " prefix, so a device
+ *  named that way is marked as a page. */
 export function pairLabel(device: string): string {
   const d = device.trim();
   if (!d) return "a browser";
   return /^(cli|helper) /.test(d) ? `page ${d}` : d;
+}
+
+/** How a pair request reads to the person who approves it: the heading with
+ *  the kind it asks to sign in as, and the rights that grants. `admin` is
+ *  flagged, since one approval of it lets the asker approve and revoke. */
+export function pairAsk(p: PendingPair, backend: string): { head: string; rights: readonly Right[]; admin: boolean } {
+  const rights = KIND_RIGHTS[p.kind];
+  return { head: `${p.label} asks to sign in${backend ? ` to ${backend}` : ""} as ${p.kind}:`, rights, admin: rights.includes("admin") };
+}
+
+/** Whether what was typed in the first-code box is the pair's own code, which
+ *  is shown to match and is not the first code. */
+export function isOwnCode(typed: string, own: string): boolean {
+  const t = typed.trim().toUpperCase();
+  return t !== "" && t === own.trim().toUpperCase();
 }
 
 /** What `GET /api/auth` answers: the mode, the refusals so far, the callers

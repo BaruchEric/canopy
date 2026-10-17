@@ -1,12 +1,13 @@
 import { useEffect, useRef, useState } from "react";
 import { escapeCloses } from "../surface";
 import { useShallow } from "zustand/react/shallow";
-import type { AdviceOffer, Ask } from "../../../src/core/types";
+import type { AdviceOffer, Ask, PendingPair } from "../../../src/core/types";
 import { joinTarget } from "../agentcards";
 import { api } from "../api";
 import { rememberOffer } from "../../../src/core/offer";
 import { ruleWords, scopeWords } from "../../../src/core/shellwords";
 import { askWord, detailText, endingWord, inboxTick, inboxTitle, leftWord, recentAsks, scopeOffers, type InboxAnswer, type InboxItem } from "../inbox";
+import { pairAsk } from "../callerToken";
 import { useFitPop } from "../pop";
 import { qual } from "../registry";
 import { INBOX_TEXT } from "../settings";
@@ -277,7 +278,7 @@ export function InboxRow({
           ) : item.kind === "pair" && item.pair ? (
             <div className="ask">
               <div className="eyebrow">
-                {item.pair.label} asks to sign in{item.backend ? ` to ${item.backend}` : ""}, from {item.pair.addr}
+                <PairAsk pair={item.pair} backend={item.backend ?? ""} />, from {item.pair.addr}
               </div>
               <p className="pair-code">
                 code <b>{item.pair.code}</b>
@@ -413,6 +414,23 @@ export function InboxRow({
 
 /** An ask a link named that is no longer waiting: how it went, read from
  *  what the page holds or asked of the broker. */
+/** What a pair request asks to be: the kind and each right it grants, with
+ *  admin in the warning colour, since one approval of it hands that over. */
+function PairAsk({ pair, backend }: { pair: PendingPair; backend: string }) {
+  const { head, rights } = pairAsk(pair, backend);
+  return (
+    <>
+      {head}{" "}
+      {rights.map((r, i) => (
+        <span key={r}>
+          {i > 0 && ", "}
+          {r === "admin" ? <b className="pair-admin">{r}</b> : r}
+        </span>
+      ))}
+    </>
+  );
+}
+
 function GoneAsk({ id }: { id: string }) {
   const held = useStore((s) => s.asks[id]);
   const [read, setRead] = useState<Ask | null | "missing">(null);

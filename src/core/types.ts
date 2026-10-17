@@ -1,3 +1,5 @@
+import type { PairKind } from "./callers";
+
 export interface RepoFile {
   /** path relative to the repo root */
   path: string;
@@ -1398,6 +1400,8 @@ export interface PendingPair {
   addr: string;
   code: string;
   at: number;
+  /** what it asks to sign in as, and so what one approval grants */
+  kind: PairKind;
 }
 
 export type ServerEvent =

@@ -417,3 +417,37 @@ describe("pairing over HTTP", () => {
     expect((await post(s, "/api/auth/first", { id: paired.id, code: "AAAAAA" })).status).toBe(429);
   });
 });
+
+describe("the pair request names its kind", () => {
+  let s: Up;
+  beforeAll(async () => {
+    s = await up("pair-kind", "enforce");
+  });
+  afterAll(async () => {
+    await s.stop();
+  });
+
+  test("an unknown kind is a 400 and makes no pair", async () => {
+    for (const kind of ["admin", "shell", 3, ""]) expect((await post(s, "/api/auth/pair", { label: "x", kind })).status).toBe(400);
+    const auth = (await (await call(s, "/api/auth")).json()) as { pending: unknown[] };
+    expect(auth.pending).toHaveLength(0);
+  });
+
+  test("a kind is kept and shown, and a missing one falls back to the label", async () => {
+    expect((await post(s, "/api/auth/pair", { label: "cli looks", kind: "page" })).status).toBe(200);
+    expect((await post(s, "/api/auth/pair", { label: "helper old" })).status).toBe(200);
+    const auth = (await (await call(s, "/api/auth")).json()) as { pending: { label: string; kind: string }[] };
+    expect(auth.pending.map((p) => [p.label, p.kind])).toEqual([
+      ["cli looks", "page"],
+      ["helper old", "helper"],
+    ]);
+  });
+
+  test("the 7th new pair in a minute is a 429 with an error and makes no pair", async () => {
+    // two went above; the same label each time, so the waiting cap stays out of it
+    for (let i = 0; i < 4; i++) expect((await post(s, "/api/auth/pair", { label: "loop", kind: "page" })).status).toBe(200);
+    const res = await post(s, "/api/auth/pair", { label: "loop", kind: "page" });
+    expect(res.status).toBe(429);
+    expect(typeof ((await res.json()) as { error: unknown }).error).toBe("string");
+  });
+});

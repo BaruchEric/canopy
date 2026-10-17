@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { dialPlan, originOf, pairLabel, readToken, TOKEN_HEADER, tokenHeaders, tokenKey, writeToken } from "./callerToken";
+import { dialPlan, isOwnCode, originOf, pairAsk, pairLabel, readToken, TOKEN_HEADER, tokenHeaders, tokenKey, writeToken } from "./callerToken";
 
 /** a localStorage stand-in, or one that throws the way a blocked one does */
 function storage(blocked = false) {
@@ -77,3 +77,41 @@ describe("this page's caller tokens", () => {
     expect(pairLabel("  ")).toBe("a browser");
   });
 });
+
+describe("the pair card", () => {
+  const ask = (label: string, kind: "page" | "cli" | "helper") => pairAsk({ id: "i", label, addr: "10.0.0.2", code: "CLVKN6", at: 1, kind }, "mini");
+  const text = (a: ReturnType<typeof ask>) => `${a.head} ${a.rights.join(", ")}`;
+
+  test("names the kind and the rights it grants", () => {
+    expect(text(ask("cli Erics-MacBook-Pro", "cli"))).toBe("cli Erics-MacBook-Pro asks to sign in to mini as cli: read, operate, admin");
+    expect(text(ask("helper mac", "helper"))).toBe("helper mac asks to sign in to mini as helper: helper");
+    expect(text(ask("Chrome on Mac", "page"))).toBe("Chrome on Mac asks to sign in to mini as page: read, operate, shell, admin");
+  });
+
+  test("a label that poses as another kind does not hide the kind", () => {
+    expect(text(ask("cli mac", "page"))).toContain("as page: read, operate, shell, admin");
+  });
+
+  test("admin is flagged, and a helper has none", () => {
+    expect(ask("x", "cli").admin).toBe(true);
+    expect(ask("x", "helper").admin).toBe(false);
+  });
+
+  test("no backend name leaves the 'to' out", () => {
+    expect(pairAsk({ id: "i", label: "x", addr: "a", code: "C", at: 1, kind: "cli" }, "").head).toBe("x asks to sign in as cli:");
+  });
+});
+
+describe("the first code box", () => {
+  test("typing the pair's own code is caught, in any case and with spaces", () => {
+    expect(isOwnCode("CLVKN6", "CLVKN6")).toBe(true);
+    expect(isOwnCode("  clvkn6 ", "CLVKN6")).toBe(true);
+  });
+
+  test("another code, an empty box and no pair are not", () => {
+    expect(isOwnCode("ABCDEF", "CLVKN6")).toBe(false);
+    expect(isOwnCode("", "CLVKN6")).toBe(false);
+    expect(isOwnCode("CLVKN6", "")).toBe(false);
+  });
+});
+

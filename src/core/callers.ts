@@ -8,6 +8,11 @@
 export type Right = "read" | "plan" | "operate" | "shell" | "admin" | "helper";
 export type CallerKind = "page" | "cli" | "shell" | "ranger" | "coordinator" | "helper" | "none";
 
+/** the kinds a pair request may ask for: the ones a person or a helper
+ *  signs in as, and never a shell, ranger or coordinator */
+export type PairKind = "page" | "cli" | "helper";
+export const PAIR_KINDS: readonly PairKind[] = ["page", "cli", "helper"];
+
 export const KIND_RIGHTS: Record<CallerKind, readonly Right[]> = {
   page: ["read", "operate", "shell", "admin"],
   cli: ["read", "operate", "admin"],

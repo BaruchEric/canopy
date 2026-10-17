@@ -89,8 +89,15 @@ describe("pairFlow", () => {
   test("a helper label claims a helper token; the window ends a pair nobody approves", async () => {
     const said: string[] = [];
     // the first code is spent by now, so nobody can approve: the window must end it
-    await expect(pairFlow({ base: base(), label: "helper test", poll: 5, window: 40, say: (l) => said.push(l) })).rejects.toThrow("timed out");
+    await expect(pairFlow({ base: base(), label: "helper test", kind: "helper", poll: 5, window: 40, say: (l) => said.push(l) })).rejects.toThrow("timed out");
     expect(said.join("\n")).toContain("approve");
+  });
+
+  test("the request names its kind, whatever the label starts with", async () => {
+    await expect(pairFlow({ base: base(), label: "laptop", kind: "cli", poll: 5, window: 40 })).rejects.toThrow("timed out");
+    const auth = (await (await fetch(`${base()}/api/auth`)).json()) as { pending: { label: string; kind: string }[] };
+    expect(auth.pending.find((p) => p.label === "laptop")?.kind).toBe("cli");
+    expect(auth.pending.find((p) => p.label === "helper test")?.kind).toBe("helper");
   });
 
   test("helperTokenFile is named for the helper, host and port", () => {

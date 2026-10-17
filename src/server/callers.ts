@@ -11,7 +11,7 @@ import { readFileSync, renameSync } from "node:fs";
 import { mkdir, rename, writeFile } from "node:fs/promises";
 import { basename, dirname, join } from "node:path";
 import { createHash, randomBytes, randomInt } from "node:crypto";
-import { allows, needs, type CallerKind, type Right } from "../core/callers";
+import { allows, needs, PAIR_KINDS, type CallerKind, type PairKind, type Right } from "../core/callers";
 import { configDir } from "../core/store";
 import type { PendingPair } from "../core/types";
 
@@ -19,7 +19,7 @@ export type Caller = { id: string; kind: CallerKind; label: string; term?: strin
 
 type Kept = Caller & { hash: string };
 type Ticketed = "shell" | "helper";
-type Pair = { id: string; label: string; addr: string; code: string; secret: string; at: number; state: "waiting" | "approved" | "denied" };
+type Pair = { id: string; label: string; addr: string; kind: PairKind; code: string; secret: string; at: number; state: "waiting" | "approved" | "denied" };
 
 const KINDS: readonly CallerKind[] = ["page", "cli", "shell", "ranger", "coordinator", "helper", "none"];
 const CODE_CHARS = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
@@ -29,6 +29,9 @@ const SESSION_IDLE = 30 * DAY;
 const TICKET_LIFE = 60 * 1000;
 const PAIR_LIFE = 10 * 60 * 1000;
 const MOST_PAIRS = 3;
+/** new pair requests the whole server takes in one rolling minute */
+const MOST_NEW_PAIRS = 6;
+const PAIR_RATE = 60 * 1000;
 /** how often a bump of `used` is worth a write */
 const SAVE_EVERY = 60 * 1000;
 
@@ -73,6 +76,8 @@ export class CallerBook {
   private callers: Kept[];
   private pairs = new Map<string, Pair>();
   private tickets = new Map<string, { callerId: string; right: Ticketed; at: number }>();
+  /** when each recent new pair request came, for the per-minute cap */
+  private pairTimes: number[] = [];
   private first: string | null = null;
   private lastSave = 0;
   private chain: Promise<unknown> = Promise.resolve();
@@ -239,15 +244,26 @@ export class CallerBook {
     return [...this.pairs.values()].filter((p) => p.state === "waiting");
   }
 
-  pair(label: string, addr: string): { id: string; code: string; secret: string } | { error: string } {
+  /** A new request. The server takes at most 6 a minute, whoever they come
+   *  from, since docker-proxy gives every client one address. One with the
+   *  label and address of a waiting request replaces it, whose claim then
+   *  answers as a dead pair. `kind` is what the asker says it signs in as; a
+   *  caller that sends none (an older CLI) gets the one its label names. */
+  pair(label: string, addr: string, kind?: PairKind): { id: string; code: string; secret: string } | { error: string } {
+    const at = this.now();
+    this.pairTimes = this.pairTimes.filter((t) => at - t < PAIR_RATE);
+    if (this.pairTimes.length >= MOST_NEW_PAIRS) return { error: `more than ${MOST_NEW_PAIRS} pair requests in a minute; try again shortly` };
+    const name = label.slice(0, 80);
+    for (const [id, old] of this.pairs) if (old.state === "waiting" && old.label === name && old.addr === addr) this.pairs.delete(id);
     if (this.waiting().length >= MOST_PAIRS) return { error: `${MOST_PAIRS} pair requests already wait; answer one or try again in a few minutes` };
-    const p: Pair = { id: b64(6), label: label.slice(0, 80), addr, code: code(), secret: b64(32), at: this.now(), state: "waiting" };
+    this.pairTimes.push(at);
+    const p: Pair = { id: b64(6), label: name, addr, kind: kind ?? (name.startsWith("cli ") ? "cli" : name.startsWith("helper ") ? "helper" : "page"), code: code(), secret: b64(32), at, state: "waiting" };
     this.pairs.set(p.id, p);
     return { id: p.id, code: p.code, secret: p.secret };
   }
 
   pending(): PendingPair[] {
-    return this.waiting().map(({ id, label, addr, code, at }) => ({ id, label, addr, code, at }));
+    return this.waiting().map(({ id, label, addr, code, at, kind }) => ({ id, label, addr, code, at, kind }));
   }
 
   approve(id: string): boolean {
@@ -266,7 +282,7 @@ export class CallerBook {
 
   /** What the asker holding the secret gets: its token once approved (once
    *  only), "waiting" until then, null for a wrong secret, a denial or an
-   *  unknown or expired pair. The kind comes from the label it sent. */
+   *  unknown or expired pair. The kind is the one the request asked for. */
   claim(id: string, secret: string): string | "waiting" | null {
     this.sweepPairs();
     const p = this.pairs.get(id);
@@ -274,8 +290,7 @@ export class CallerBook {
     if (p.state === "waiting") return "waiting";
     this.pairs.delete(id);
     if (p.state === "denied") return null;
-    const kind: CallerKind = p.label.startsWith("cli ") ? "cli" : p.label.startsWith("helper ") ? "helper" : "page";
-    return this.mint(kind, { label: p.label }).token;
+    return this.mint(p.kind, { label: p.label }).token;
   }
 
   /** Whether a claim with this secret is a wrong guess at a live pair, the
@@ -473,7 +488,9 @@ export async function authRoute(book: CallerBook, gate: CallerGate, req: Request
     case "pair": {
       const label = field(b, "label");
       if (!label) return json({ error: "a pair request needs a label" }, 400);
-      const got = book.pair(label, addr);
+      const kind = b["kind"] === undefined ? undefined : PAIR_KINDS.find((k) => k === b["kind"]);
+      if (b["kind"] !== undefined && !kind) return json({ error: `kind is one of ${PAIR_KINDS.join(", ")}` }, 400);
+      const got = book.pair(label, addr, kind);
       if ("error" in got) return json({ error: got.error }, 429);
       gate.pairsChanged();
       gate.announce();

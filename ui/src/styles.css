@@ -7401,6 +7401,25 @@ button.machine:hover {
   .app-nav .view-nav button {
     padding: 1px 7px;
   }
+  /* the sign-in chip and strip are part of the first row but take a line of their own
+     above its buttons, which have no room to give: the code and the box,
+     without the words that explain them (the chip's title still does) */
+  .tb-line:has(> .signin-strip, > .signin-chip) {
+    flex-wrap: wrap;
+  }
+  .tb-line .signin-chip,
+  .tb-line .signin-strip {
+    flex: 1 1 100%;
+    order: -1;
+    min-width: 0;
+  }
+  .signin-strip .signin-hint {
+    display: none;
+  }
+  .signin-input {
+    width: 6.5em;
+    min-width: 0;
+  }
   .tb-line .search {
     flex: 1 1 auto;
     min-width: 0;
@@ -9758,6 +9777,10 @@ span.effective-flag:not(:first-child) {
 }
 .signin-err {
   color: var(--rust);
+}
+.pair-admin {
+  color: var(--rust);
+  font-weight: 700;
 }
 .pair-code {
   margin: 4px 0;

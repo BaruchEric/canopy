@@ -19,8 +19,9 @@ const WINDOW = 10 * 60_000;
 
 export interface PairOptions {
   base: string;
-  /** `cli <host>` or `helper <host>`: the server mints the token kind from the prefix */
   label: string;
+  /** what the token is for; the server mints exactly this kind */
+  kind: "cli" | "helper";
   /** the first sign-in code from the server's log, when nobody can approve in a page */
   code?: string;
   poll?: number;
@@ -47,7 +48,7 @@ const message = (r: { status: number; body: Record<string, unknown> }): string =
  *  for a refusal, a denied or expired request, or the window running out. */
 export async function pairFlow(opts: PairOptions): Promise<string> {
   const say = opts.say ?? (() => {});
-  const pair = await post(opts.base, "/api/auth/pair", { label: opts.label });
+  const pair = await post(opts.base, "/api/auth/pair", { label: opts.label, kind: opts.kind });
   const { id, code, secret } = pair.body;
   if (pair.status !== 200 || typeof id !== "string" || typeof secret !== "string") throw new Error(message(pair));
   say(`pair code ${typeof code === "string" ? code : "?"}: approve it in the canopy inbox, or pass the first code from the server log with --code`);
@@ -122,7 +123,7 @@ export async function authCommand(argv: string[], { fail }: AuthDeps): Promise<v
     case "login": {
       let token: string;
       try {
-        token = await pairFlow({ base, label: pairLabel("cli"), ...(code ? { code } : {}), say: (l) => console.log(`${lichen("canopy auth")} ${l}`) });
+        token = await pairFlow({ base, label: pairLabel("cli"), kind: "cli", ...(code ? { code } : {}), say: (l) => console.log(`${lichen("canopy auth")} ${l}`) });
       } catch (e) {
         return fail(`sign-in failed: ${e instanceof Error ? e.message : String(e)}`);
       }

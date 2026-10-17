@@ -15,6 +15,7 @@ import { primaryRefusal } from "../workspaces";
 import { seenWord } from "../peers";
 import { PAGE_BUILD } from "../build";
 import { buildMoved, versionLine } from "../../../src/core/version";
+import { isOwnCode } from "../callerToken";
 import { FilterMenu } from "./Filters";
 import { Gear, type GearEntry, type GearGroup } from "./Gear";
 import { Seg } from "./Seg";
@@ -546,8 +547,9 @@ function SignInChip({ backend }: { backend: string }) {
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   if (signIn?.state === "waiting") {
+    const own = isOwnCode(code, signIn.code);
     const send = () => {
-      if (!code.trim()) return;
+      if (!code.trim() || own) return;
       setBusy(true);
       setErr(null);
       useStore
@@ -559,10 +561,12 @@ function SignInChip({ backend }: { backend: string }) {
     };
     return (
       <span className="signin-strip" role="status" aria-label={`Signing in to ${backend}`}>
-        <span className="signin-code" title="The code this page's pair request shows: match it where you approve it">
+        <span className="signin-hint">match</span>
+        <span className="signin-code" title="The code this page's pair request shows: match it where the request is approved">
           {signIn.code}
         </span>
-        <span className="signin-hint">waiting for approval, or enter the first code from the server log</span>
+        <span className="signin-hint">in a signed-in page's inbox</span>
+        <span className="signin-hint signin-or">or enter the first code from {backend}'s server log</span>
         <input
           className="signin-input"
           value={code}
@@ -576,7 +580,11 @@ function SignInChip({ backend }: { backend: string }) {
             if (e.key === "Enter") send();
           }}
         />
-        {err && <span className="signin-err">{err}</span>}
+        {own ? (
+          <span className="signin-err">that is this request's code; the first code is a different one, printed in the server's log</span>
+        ) : (
+          err && <span className="signin-err">{err}</span>
+        )}
       </span>
     );
   }
@@ -642,7 +650,7 @@ function Chips({ phone = false }: { phone?: boolean }) {
   return (
     <>
       <ReloadChip />
-      <SignInChips />
+      {!phone && <SignInChips />}
       <PeersChip />
       <BackendsChip />
       <KeptShells />
@@ -677,6 +685,7 @@ export function TopBar({ nav }: { nav?: ReactNode }) {
           <span className="spacer" />
           {/* the tasks' chip stays in reach with a repo open, when the rows
               under this one go: it brings a task to the front from anywhere */}
+          <SignInChips />
           <ReloadChip />
           <TasksChip />
           <RangerChip compact />

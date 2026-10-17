@@ -715,7 +715,7 @@ export const api = {
     return isAuthInfo(r) ? r : null;
   },
   /** asks a backend to let this page in; the secret claims the token once approved */
-  pair: (b: string, label: string) => req<{ id: string; code: string; secret: string }>(b, "/api/auth/pair", { method: "POST", body: JSON.stringify({ label }) }),
+  pair: (b: string, label: string) => req<{ id: string; code: string; secret: string }>(b, "/api/auth/pair", { method: "POST", body: JSON.stringify({ label, kind: "page" }) }),
   /** the token once someone approved the pair, or waiting until then */
   claim: (b: string, id: string, secret: string) =>
     req<{ token: string } | { waiting: true }>(b, "/api/auth/claim", { method: "POST", body: JSON.stringify({ id, secret }) }),

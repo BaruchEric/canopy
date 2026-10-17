@@ -231,7 +231,7 @@ export async function main(argv: string[]): Promise<void> {
       const tokenPath = helperTokenFile(backend);
       if (flag(args, "--pair")) {
         try {
-          const token = await pairFlow({ base: backend, label: pairLabel("helper"), ...(pairCode ? { code: pairCode } : {}), say: (l) => console.log(`${stamp()} ${l}`) });
+          const token = await pairFlow({ base: backend, label: pairLabel("helper"), kind: "helper", ...(pairCode ? { code: pairCode } : {}), say: (l) => console.log(`${stamp()} ${l}`) });
           await saveToken(tokenPath, token);
           console.log(`${stamp()} ${moss("paired")} ${dim(`(helper token kept in ${tokenPath})`)}`);
         } catch (e) {
