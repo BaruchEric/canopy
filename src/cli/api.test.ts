@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { CallerBook } from "../server/callers";
 import { startServer } from "../server/index";
-import { apiBase, callerHeaders, callerToken, setTokenFlag, tokenFile } from "./api";
+import { apiBase, callerHeaders, callerToken, setHomeBase, setTokenFlag, tokenFile } from "./api";
 import { ask } from "./health";
 
 let scratch: string;
@@ -82,6 +82,52 @@ describe("callerToken", () => {
   });
 });
 
+describe("a token goes only where it was meant", () => {
+  test("the flag and the environment reach the home base, a peer needs its own file", async () => {
+    const home = "http://127.0.0.1:7850";
+    const peer = "http://mini:7850";
+    process.env["CANOPY_TOKEN"] = "from-env";
+    setTokenFlag("from-flag");
+    expect(callerHeaders(home).get("x-canopy-token")).toBe("from-flag");
+    expect(callerHeaders(peer).has("x-canopy-token")).toBe(false);
+    setTokenFlag(undefined);
+    expect(callerHeaders(home).get("x-canopy-token")).toBe("from-env");
+    expect(callerHeaders(peer).has("x-canopy-token")).toBe(false);
+    setHomeBase(peer);
+    expect(callerHeaders(peer).get("x-canopy-token")).toBe("from-env");
+    expect(callerHeaders(home).has("x-canopy-token")).toBe(false);
+    setHomeBase(undefined);
+    await mkdir(join(scratch, "cfg"), { recursive: true });
+    await writeFile(tokenFile(peer), "peer-own\n");
+    expect(callerHeaders(peer).get("x-canopy-token")).toBe("peer-own");
+    await rm(tokenFile(peer), { force: true });
+    delete process.env["CANOPY_TOKEN"];
+  });
+});
+
+describe("a redirect never carries the token on", () => {
+  test("the second stub never sees the header", async () => {
+    const seen: (string | null)[] = [];
+    const other = Bun.serve({ port: 0, fetch: (req) => (seen.push(req.headers.get("x-canopy-token")), Response.json({ ok: true })) });
+    const first = Bun.serve({ port: 0, fetch: () => Response.redirect(`http://127.0.0.1:${other.port}/signin`, 302) });
+    const a = `http://127.0.0.1:${first.port}`;
+    try {
+      process.env["CANOPY_TOKEN"] = "cnp_cli_env";
+      setHomeBase(a);
+      // the raw-fetch shape the commands use
+      const res = await fetch(`${a}/api/x`, { redirect: "manual", headers: callerHeaders(a) });
+      expect(res.status).toBe(302);
+      await expect(ask({ name: "x", urls: [a] }, "GET", "/api/x")).rejects.toThrow("needs a sign-in");
+      expect(seen).toEqual([]);
+    } finally {
+      setHomeBase(undefined);
+      delete process.env["CANOPY_TOKEN"];
+      first.stop(true);
+      other.stop(true);
+    }
+  });
+});
+
 describe("ask against a stub", () => {
   test("a 403 with need is final, a 401 without need tries the next address", async () => {
     const hits: string[] = [];
@@ -107,9 +153,12 @@ describe("ask against a stub", () => {
       hits.length = 0;
       await expect(ask({ name: "x", urls: [a, a] }, "GET", "/gate")).rejects.toThrow("needs a sign-in");
       expect(hits).toEqual(["/gate", "/gate"]);
+      // the stub is the home backend here, so the environment's token goes to it
       process.env["CANOPY_TOKEN"] = "cnp_cli_env";
+      setHomeBase(a);
       await ask({ name: "x", urls: [a] }, "GET", "/fine");
       expect(seen.at(-1)).toBe("cnp_cli_env");
+      setHomeBase(undefined);
       delete process.env["CANOPY_TOKEN"];
     } finally {
       stub.stop(true);
@@ -158,6 +207,6 @@ describe("canopy land against an enforce server", () => {
     expect(bare.out).toContain("needs the operate right");
     const withToken = await run("--token", cli);
     expect(withToken.code).toBe(1);
-    expect(withToken.out).not.toContain("right");
+    expect(withToken.out.trim()).toBe("no branch run by that id");
   });
 });

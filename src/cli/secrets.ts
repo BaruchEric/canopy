@@ -151,7 +151,7 @@ export async function secretsCommand(argv: string[], { fail }: SecretsDeps): Pro
   const ask = async <T>(method: string, path: string, body?: unknown): Promise<T> => {
     let r: Response;
     try {
-      r = await fetch(home + path, { method, headers: callerHeaders(home, undefined, body === undefined ? undefined : { "content-type": "application/json" }), ...(body === undefined ? {} : { body: JSON.stringify(body) }) });
+      r = await fetch(home + path, { method, redirect: "manual", headers: callerHeaders(home, undefined, body === undefined ? undefined : { "content-type": "application/json" }), ...(body === undefined ? {} : { body: JSON.stringify(body) }) });
     } catch {
       return fail(`${home} did not answer`);
     }
@@ -191,7 +191,7 @@ export async function secretsCommand(argv: string[], { fail }: SecretsDeps): Pro
       await writeLocalConfig(p.config, { pin: key, remote: remote ?? cur.remote });
       console.log(`pinned the mini's signing key; Forgejo: ${remote ?? cur.remote ?? "not set, add --remote URL"}`);
       // a pull now, when the home backend runs; the pin stands either way
-      const info = await fetch(`${home}/api/secrets/pull`, { method: "POST", headers: callerHeaders(home) })
+      const info = await fetch(`${home}/api/secrets/pull`, { method: "POST", redirect: "manual", headers: callerHeaders(home) })
         .then((r) => (r.ok ? (r.json() as Promise<SecretsInfo>) : null))
         .catch(() => null);
       if (info) console.log(statusLines(info).join("\n"));

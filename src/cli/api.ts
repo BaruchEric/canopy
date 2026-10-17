@@ -26,9 +26,27 @@ export function tokenFile(base: string): string {
   return join(configDir(), `token-${u.hostname}-${port}`);
 }
 
-/** The flag, else the backend's token file, else $CANOPY_TOKEN; a blank value is no token. */
+/** The backend this command was pointed at (`--backend`), set once by main(). */
+let homeBase: string | undefined;
+
+export function setHomeBase(given: string | undefined): void {
+  homeBase = given;
+}
+
+const sameOrigin = (a: string, b: string): boolean => {
+  try {
+    return new URL(a).origin === new URL(b).origin;
+  } catch {
+    return false;
+  }
+};
+
+/** The backend's own token file first for any base; the flag and $CANOPY_TOKEN
+ *  only for the home base, so a peer or a fallback address never gets a token
+ *  that was meant for another backend. */
 export function callerToken(base: string, flag?: string): string | null {
-  const given = (flag ?? flagToken)?.trim();
+  const home = sameOrigin(base, apiBase(homeBase));
+  const given = (flag ?? (home ? flagToken : undefined))?.trim();
   if (given) return given;
   try {
     const filed = readFileSync(tokenFile(base), "utf8").trim();
@@ -36,7 +54,7 @@ export function callerToken(base: string, flag?: string): string | null {
   } catch {
     // no file, or an unreadable one: the environment is next
   }
-  return process.env["CANOPY_TOKEN"]?.trim() || null;
+  return (home ? process.env["CANOPY_TOKEN"]?.trim() : "") || null;
 }
 
 /** `extra` plus the caller's token, when there is one. */

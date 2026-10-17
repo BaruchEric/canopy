@@ -49,7 +49,7 @@ import { bold, dim, lichen, moss, paintLine, renderTree, sky } from "./render";
 import { HELP_TEXT } from "../core/help";
 import { healthCommand } from "./health";
 import { kitCommand } from "./kit";
-import { apiBase, callerHeaders, setTokenFlag } from "./api";
+import { apiBase, callerHeaders, setHomeBase, setTokenFlag } from "./api";
 import { landCommand } from "./land";
 import { prCommand } from "./pr";
 import { secretsCommand } from "./secrets";
@@ -136,6 +136,9 @@ export async function main(argv: string[]): Promise<void> {
   // --token is every command's, except `source add --forgejo --token`, which
   // carries a Forgejo token and not a caller's
   if (cmd !== "source") setTokenFlag(opt(args, "--token"));
+  // the flag and $CANOPY_TOKEN belong to the backend this command was pointed at
+  const pointed = args.indexOf("--backend");
+  setHomeBase(pointed !== -1 ? args[pointed + 1] : undefined);
 
   switch (cmd) {
     case "library": {
@@ -675,7 +678,7 @@ export async function main(argv: string[]): Promise<void> {
       form.append("via", "cli");
       let res: Response;
       try {
-        res = await fetch(`${parsed.backend}/api/incubator`, { method: "POST", body: form, headers: callerHeaders(parsed.backend) });
+        res = await fetch(`${parsed.backend}/api/incubator`, { method: "POST", body: form, redirect: "manual", headers: callerHeaders(parsed.backend) });
       } catch (err) {
         return fail(`${parsed.backend} did not answer: ${err instanceof Error ? err.message : String(err)}`);
       }
@@ -691,7 +694,7 @@ export async function main(argv: string[]): Promise<void> {
       const get = async <T>(path: string): Promise<T> => {
         let res: Response;
         try {
-          res = await fetch(`${backend}${path}`, { headers: callerHeaders(backend) });
+          res = await fetch(`${backend}${path}`, { redirect: "manual", headers: callerHeaders(backend) });
         } catch (err) {
           return fail(`${backend} did not answer: ${err instanceof Error ? err.message : String(err)}`);
         }
@@ -745,6 +748,7 @@ export async function main(argv: string[]): Promise<void> {
         try {
           res = await fetch(`${backend}${path}`, {
             method,
+            redirect: "manual",
             headers: callerHeaders(backend, undefined, body !== undefined ? { "content-type": "application/json" } : undefined),
             ...(body !== undefined ? { body: JSON.stringify(body) } : {}),
           });
