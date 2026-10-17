@@ -23,7 +23,7 @@ import { backendOf, isHome } from "../registry";
 import { isPrimary, wsOf } from "../workspaces";
 import type { RepoCard as Card } from "../checkouts";
 import { ago, GLYPH, stateOf } from "../util";
-import { GroupHead } from "./GroupHead";
+import { GroupHead, GroupSummary } from "./GroupHead";
 import { WidgetGear, shareEntries, useGroupFolds, useZoom, zoomStyle } from "./Surface";
 import { Tick } from "./SelectBar";
 import { RepoLink } from "./RepoLink";
@@ -397,7 +397,10 @@ export function RepoGrid() {
               {selecting ? (
                 <GroupPick label={label} ids={members.filter(pickable).map((r) => r.id)} total={members.length} />
               ) : (
-                <span className="grid-count">{members.length}</span>
+                <>
+                  <GroupSummary repos={members} />
+                  <span className="grid-count">{members.length}</span>
+                </>
               )}
             </GroupHead>
             {open && (

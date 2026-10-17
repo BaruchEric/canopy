@@ -1,4 +1,8 @@
 import type { ReactNode } from "react";
+import { useShallow } from "zustand/react/shallow";
+import { groupSum, sumParts, sumTitle } from "../badges";
+import { agentsOn, useStore } from "../store";
+import type { Repo } from "../../../src/core/types";
 
 /** A section heading in the tree or the grid. The name is a button that
  *  folds the section; the counts stay in place, so a folded section still
@@ -45,5 +49,26 @@ export function GroupHead({
       </button>
       {children}
     </h2>
+  );
+}
+
+/** A group heading's live sum: the grid's whole line (dirty, lines, not
+ *  pushed, worktrees, agents), or the narrow tree's dirty count and agents
+ *  with the rest in the tooltip. Nothing when the group is quiet. */
+export function GroupSummary({ repos, compact = false }: { repos: readonly Repo[]; compact?: boolean }) {
+  // each repo's agent list is the store's own memoized array, so a shallow
+  // compare holds while nothing changed
+  const agents = useStore(useShallow((s) => repos.map((r) => agentsOn(s, r.id))));
+  const sum = groupSum(repos, agents);
+  const parts = sumParts(sum, compact);
+  if (parts.length === 0) return null;
+  return (
+    <span className="group-sum" title={compact ? sumTitle(sum) : undefined}>
+      {parts.map((p) => (
+        <span key={p.text} className={p.cls} title={compact ? undefined : p.title}>
+          {p.text}
+        </span>
+      ))}
+    </span>
   );
 }

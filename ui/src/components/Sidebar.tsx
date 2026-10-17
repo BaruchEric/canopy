@@ -7,7 +7,7 @@ import { pickCount, pickState } from "../select";
 import { boardChangedAt, boardFavorite, cardOf, isFavorite, idText, multi, useStore, visibleCards, visibleRepos } from "../store";
 import { backendOf } from "../registry";
 import { GLYPH, stateOf } from "../util";
-import { GroupHead } from "./GroupHead";
+import { GroupHead, GroupSummary } from "./GroupHead";
 import { WidgetGear, shareEntries, useGroupFolds, useZoom, zoomStyle } from "./Surface";
 import { Tick } from "./SelectBar";
 import type { Repo } from "../../../src/core/types";
@@ -147,9 +147,6 @@ export function Sidebar({ drawer = false }: { drawer?: boolean }) {
         </div>
       )}
       {groups.map(({ key, label, hint, repos: members }, i) => {
-        const dirty = members.filter(
-          (r) => (r.status?.files.length ?? 0) > 0,
-        ).length;
         const id = sectionKey(sort, key);
         const open = !collapsed.includes(id);
         return (
@@ -176,7 +173,7 @@ export function Sidebar({ drawer = false }: { drawer?: boolean }) {
                   <TreePick label={label} ids={members.filter(pickable).map((r) => r.id)} total={members.length} />
                 ) : (
                   <>
-                    {dirty > 0 && <em className="c-dirty">{dirty}●</em>}
+                    <GroupSummary repos={members} compact />
                     <span>{members.length}</span>
                   </>
                 )}

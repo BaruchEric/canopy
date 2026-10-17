@@ -661,7 +661,7 @@ function pruneHiddenOf(hidden: string[], from: string, live: TermInfo[]): string
   return kept.length === hidden.length ? hidden : kept;
 }
 
-interface CanopyState {
+export interface CanopyState {
   root: string;
   /** every scanned folder, the launch root first */
   sources: SourceState[];

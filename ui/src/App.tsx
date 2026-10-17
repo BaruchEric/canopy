@@ -23,7 +23,9 @@ import { PANES_CHANNEL, listenPanes, parsePaneMsg, type PaneMsg } from "./panes"
 import { OVER_PAGE } from "./surface";
 import { dropAskHere, parseRoute } from "./routes";
 import { SORT_MODES, type Theme } from "./settings";
-import { SIDEBAR, dockless, useStore } from "./store";
+import { SIDEBAR, attentionCount, dockless, useStore, type CanopyState } from "./store";
+import { useShallow } from "zustand/react/shallow";
+import { agentsBadge, gitBadge, healthBadge, incubatorBadge, type Badge } from "./badges";
 import { WAITING_PANEL } from "./waiting";
 import { bindNavigate } from "./clirun";
 import { CommandPop } from "./components/CommandLine";
@@ -44,11 +46,76 @@ const VIEWS = [
 /** the views that are not the git cockpit: their own bar, no board keys */
 const OTHER_VIEWS = ["library", "ports", "agents", "incubator", "health", "kit", "secrets"];
 
-/** The views, one segmented row: in the top bar on the git view, the
- *  whole of the bar on the others. */
-function ViewNav({ view, navigate }: { view: string; navigate: (next: string) => void }) {
+/** A view tab's live count, or null where its view has nothing waiting. */
+function badgeOf(s: CanopyState, key: string): Badge | null {
+  switch (key) {
+    case "git":
+      return gitBadge(attentionCount(s));
+    case "agents":
+      return s.registryReady ? agentsBadge(Object.values(s.registry)) : null;
+    case "health":
+      return healthBadge(s.health);
+    case "incubator":
+      return incubatorBadge(Object.values(s.sprouts));
+    default:
+      return null;
+  }
+}
+
+function ViewBadge({ k }: { k: string }) {
+  const b = useStore(useShallow((s) => badgeOf(s, k)));
+  if (!b) return null;
   return (
-    <nav className="view-nav" aria-label="Canopy views">
+    <span className={`view-badge t-${b.tone}`} title={b.title}>
+      {b.text}
+    </span>
+  );
+}
+
+/** The views, one segmented row: in the top bar on the git view, the
+ *  whole of the bar on the others. Each tab carries its view's live count. */
+function ViewNav({ view, navigate }: { view: string; navigate: (next: string) => void }) {
+  // On a phone the row scrolls rather than pushing the bar wide: the
+  // current tab is kept in sight, and an edge with tabs past it fades.
+  const row = useRef<HTMLElement>(null);
+  const [more, setMore] = useState({ start: false, end: false });
+  useEffect(() => {
+    const el = row.current;
+    if (!el) return;
+    // placed again whenever the row's size changes: the badges and the
+    // fonts arrive after the first paint and widen it. A swipe is a scroll,
+    // not a resize, so it is left where the finger put it.
+    const place = () => {
+      const on = el.querySelector<HTMLElement>("button.on");
+      if (!on || el.scrollWidth <= el.clientWidth) return;
+      // the row alone, never the page: scrollIntoView would move the window too
+      const left = on.getBoundingClientRect().left - el.getBoundingClientRect().left + el.scrollLeft;
+      const right = left + on.offsetWidth;
+      if (right > el.scrollLeft + el.clientWidth) el.scrollLeft = right - el.clientWidth + 28;
+      else if (left < el.scrollLeft) el.scrollLeft = left - 28;
+    };
+    const measure = () => {
+      const start = el.scrollLeft > 1;
+      const end = el.scrollLeft + el.clientWidth < el.scrollWidth - 1;
+      setMore((m) => (m.start === start && m.end === end ? m : { start, end }));
+    };
+    const settle = () => {
+      place();
+      measure();
+    };
+    settle();
+    el.addEventListener("scroll", measure, { passive: true });
+    const seen = new ResizeObserver(settle);
+    seen.observe(el);
+    for (const b of el.children) seen.observe(b);
+    return () => {
+      el.removeEventListener("scroll", measure);
+      seen.disconnect();
+    };
+  }, [view]);
+  const fade = [more.start ? "more-start" : "", more.end ? "more-end" : ""].filter(Boolean).join(" ");
+  return (
+    <nav ref={row} className={fade ? `view-nav ${fade}` : "view-nav"} aria-label="Canopy views">
       {VIEWS.map(({ key, label, title }) => (
         <button
           type="button"
@@ -59,6 +126,7 @@ function ViewNav({ view, navigate }: { view: string; navigate: (next: string) =>
           onClick={() => navigate(key)}
         >
           {label}
+          <ViewBadge k={key} />
         </button>
       ))}
     </nav>
