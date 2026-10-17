@@ -98,6 +98,31 @@ A child's asks go to the inbox as they do today, not to the coordinator.
 - UI: the action in the card menu, the task cards in the run sheet, start
   these, the parent link on a child's sheet.
 
+## Pairing gaps to close first
+
+The caller credential shipped on 2026-10-17 (main 1ba99cb) with two gaps
+in pairing that matter once a coordinator run can reach canopy's port.
+`POST /api/auth/pair` is open by design, since a device with no token has
+to start there, so isolation does not stop a run from calling it.
+
+- **The kind comes from the label.** `CallerBook.claim`
+  (`src/server/callers.ts`) mints `cli` for a label starting "cli ",
+  `helper` for "helper ", and `page` for anything else, and the inbox card
+  shows only the label and address. A run that asks with the label "cli mac"
+  gets a card that looks like Eric's own CLI, and one approve gives it
+  admin. Fix: the pair request names its kind (page, cli or helper), the
+  book stores it, and the card says what it grants, for example "helper
+  asks to sign in: helper right only" or "page asks to sign in: read,
+  operate, shell, admin".
+- **Three shared slots, no limit.** At most 3 requests wait at once, and
+  nothing limits who fills them, so a looping caller keeps them full and
+  fills the inbox for 10 minutes at a time. Per-address limits do not help
+  on the mini, where docker-proxy gives every client the same address. Fix:
+  a new request with the same label and address replaces the older one,
+  plus a server-wide cap of 6 new requests a minute.
+
+Both ship before the coordinator, in its plan's first task.
+
 ## Calls for Eric
 
 1. **The coordinator proposes and Eric starts.** No child run starts
