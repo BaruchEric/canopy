@@ -1,6 +1,7 @@
 # A credential for every caller of canopy's API
 
-Date: 2026-10-16. Status: design, awaiting Eric's calls below. This blocks
+Date: 2026-10-16. Status: calls made, plan in
+`docs/superpowers/plans/2026-10-16-caller-credential.md`. This blocks
 the coordinator (FR-010, `2026-10-16-coordinator-design.md`, call 1).
 Line numbers are at commit `1a5c5eb`.
 
@@ -189,6 +190,12 @@ is logged (kind or "none", route, Origin, user agent) and counted on
 - `docs/deploy.md` and `docs/architecture.md`: the flag and a section.
 
 ## Calls for Eric
+
+Eric took every recommendation on 2026-10-16. Call 1 means coordinator
+runs are isolated. That isolation is the coordinator's work (FR-010), not
+this spec's: it gets its own design with the coordinator plan, and the
+coordinator stays off the Mac until a sandbox there is checked. This spec
+ships tokens alone, in `log` and then `enforce`.
 
 1. **The bar for the coordinator.** Tokens close bare calls. They do not
    stop a run that reads another caller's token or reaches tmux or `ssh

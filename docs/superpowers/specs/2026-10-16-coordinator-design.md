@@ -107,7 +107,13 @@ A child's asks go to the inbox as they do today, not to the coordinator.
    2026-10-16): the run routes get a real per-caller credential first
    (the page's session, a shell's or the ranger's token), as its own
    piece of work that ships before the coordinator, and the coordinator's
-   token carries none of those rights.
+   token carries none of those rights. That piece is
+   `2026-10-16-caller-credential-design.md`. Its call 1 (Eric,
+   2026-10-16) adds a requirement here: coordinator runs run isolated, as
+   the stage runner runs incubator stages (own pid namespace, no `~/.ssh`,
+   no canopy config, no tmux socket), with a network rule that reaches
+   canopy's port alone, and the coordinator stays off the Mac until a
+   sandbox there is checked. The coordinator plan designs that.
 2. **Children are branch runs.** Each lands through the queue (or opens a
    PR with FR-011). None works in the main checkout.
 3. **Three children at once**, the fleet cap.
