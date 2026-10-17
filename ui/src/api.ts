@@ -163,11 +163,14 @@ async function req<T>(b: string, path: string, init: RequestInit = {}): Promise<
   if (!reachable(b)) throw new Error(`${b} has not answered yet`);
   const base = baseOf(b);
   const opts: RequestInit = { ...init };
-  // The backend's own token, when this page signed in to it, on every call
-  // so a GET says who asks too. A GET with neither it nor a Content-Type is a
-  // simple request, with no preflight to another origin; one with the token
-  // is preflighted, which the server's CORS answers for x-canopy-token.
-  const headers = tokenHeaders(originOf(base), init.headers);
+  // The backend's own token, when this page signed in to it. To another
+  // origin it rides only where it is needed: a write, and /api/auth, which
+  // says who this page is. A read is open to anyone, and a GET with no
+  // custom header and no Content-Type is a simple request with no preflight,
+  // whose failing at an edge gate would mark the whole backend offline.
+  const method = (init.method ?? "GET").toUpperCase();
+  const keyed = !base || (method !== "GET" && method !== "HEAD") || path.split("?")[0] === "/api/auth";
+  const headers = keyed ? tokenHeaders(originOf(base), init.headers) : new Headers(init.headers);
   if (typeof init.body === "string" && init.headers === undefined) headers.set("Content-Type", "application/json");
   const sent = headers.get(TOKEN_HEADER);
   opts.headers = headers;
@@ -253,8 +256,8 @@ async function repoReq<T>(id: string, path: (plain: string) => string, init?: Re
 async function blobReq(b: string, path: string): Promise<Blob> {
   if (!reachable(b)) throw new Error(`${b} has not answered yet`);
   const base = baseOf(b);
-  const headers = tokenHeaders(originOf(base));
-  const r = await fetch(base + path, base ? { credentials: "include", headers } : { headers });
+  // a read: the token rides on the page's own origin alone, as in req
+  const r = await fetch(base + path, base ? { credentials: "include" } : { headers: tokenHeaders(originOf(base)) });
   if (!r.ok) {
     const body = (await r.json().catch(() => null)) as { error?: string } | null;
     throw Object.assign(new Error(body?.error ?? `${r.status} ${r.statusText}`), { status: r.status });

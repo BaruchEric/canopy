@@ -1410,8 +1410,10 @@ describe("several backends", () => {
     });
     const json = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status });
     const bAnswers = backendAnswers(scanOf("/b", [repo("x")]), []);
+    const heard: [string, string | null][] = [];
     const b: Answer = (path, init) => {
       const p = path.split("?")[0] ?? "";
+      heard.push([`${init?.method ?? "GET"} ${p}`, new Headers(init?.headers).get("x-canopy-token")]);
       if (p === "/api/auth/pair") {
         pairs += 1;
         return json({ id: "p1", code: "K7QX", secret: "s3" });
@@ -1437,6 +1439,34 @@ describe("several backends", () => {
       expect(kept.get(B_TOKEN)).toBe("cnp_page_b");
       expect(useStore.getState().signIns["b"]).toBeUndefined();
       expect(useStore.getState().authByBackend["b"]).toMatchObject({ you: "page", hasToken: true, needed: false });
+    });
+
+    test("to another origin the token rides on writes and /api/auth alone, so a read is never preflighted", async () => {
+      kept.set(B_TOKEN, "cnp_page_b");
+      heard.length = 0;
+      await go();
+      await settle();
+      await api.rescan("b").catch(() => {});
+      const of = (call: string) => heard.filter(([c]) => c === call).map(([, t]) => t);
+      expect(of("GET /api/tree").length).toBeGreaterThan(0);
+      expect(heard.filter(([c]) => c.startsWith("GET ") && c !== "GET /api/auth").every(([, t]) => t === null)).toBe(true);
+      expect(of("GET /api/auth")).toContain("cnp_page_b");
+      expect(of("POST /api/rescan")).toEqual(["cnp_page_b"]);
+    });
+
+    test("a browser that will not keep the token fails the sign-in rather than leave it unkept", async () => {
+      await go();
+      await settle();
+      g.localStorage = {
+        getItem: () => null,
+        setItem: () => {
+          throw new Error("QuotaExceededError");
+        },
+        removeItem: () => {},
+      };
+      claims = [json({ token: "cnp_page_b" })];
+      await useStore.getState().signIn("b");
+      expect(useStore.getState().signIns["b"]).toEqual({ state: "failed", why: "this browser would not keep the token" });
     });
 
     test("denied or expired: the sign-in fails and keeps no token", async () => {

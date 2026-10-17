@@ -100,6 +100,19 @@ export interface BackendAuth extends AuthInfo {
  *  that ended without a token. */
 export type SignIn = { state: "waiting"; id: string; code: string } | { state: "failed"; why: string };
 
+/** How a shell's socket dials: with the ticket it got, bare where the
+ *  backend lets a ticketless shell through (log, off, or no caller check at
+ *  all), or not until this page signs in. A refused ticket on a backend whose
+ *  mode is not read yet counts as enforce, since only a check refuses. */
+export type DialPlan = { kind: "ticket"; ticket: string } | { kind: "bare" } | { kind: "wait" };
+
+export function dialPlan(mode: AuthInfo["mode"] | undefined, ticket: string | null, refused: boolean): DialPlan {
+  if (ticket) return { kind: "ticket", ticket };
+  if (mode === "enforce") return { kind: "wait" };
+  if (refused && mode === undefined) return { kind: "wait" };
+  return { kind: "bare" };
+}
+
 /** whether a reply is `/api/auth`'s, not an older backend's 404 or a stub's */
 export const isAuthInfo = (v: unknown): v is AuthInfo =>
   typeof v === "object" && v !== null && typeof (v as { mode?: unknown }).mode === "string" && Array.isArray((v as { pending?: unknown }).pending);

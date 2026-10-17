@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { originOf, pairLabel, readToken, TOKEN_HEADER, tokenHeaders, tokenKey, writeToken } from "./callerToken";
+import { dialPlan, originOf, pairLabel, readToken, TOKEN_HEADER, tokenHeaders, tokenKey, writeToken } from "./callerToken";
 
 /** a localStorage stand-in, or one that throws the way a blocked one does */
 function storage(blocked = false) {
@@ -53,6 +53,21 @@ describe("this page's caller tokens", () => {
     expect(originOf("https://canopy-mac.beric.ca")).toBe("https://canopy-mac.beric.ca");
     // no page here (bun test): the empty base has no origin of its own
     expect(originOf("")).toBe("");
+  });
+
+  test("a shell's dial: with its ticket, bare where nothing is enforced, else it waits for a sign-in", () => {
+    expect(dialPlan("enforce", "t1", false)).toEqual({ kind: "ticket", ticket: "t1" });
+    expect(dialPlan("log", "t1", false)).toEqual({ kind: "ticket", ticket: "t1" });
+    expect(dialPlan("enforce", null, false)).toEqual({ kind: "wait" });
+    expect(dialPlan("enforce", null, true)).toEqual({ kind: "wait" });
+    // a refused ticket on a backend whose mode is not read yet is enforce's
+    expect(dialPlan(undefined, null, true)).toEqual({ kind: "wait" });
+    // log and off let a bare dial through, even after a refused ticket
+    expect(dialPlan("log", null, false)).toEqual({ kind: "bare" });
+    expect(dialPlan("log", null, true)).toEqual({ kind: "bare" });
+    expect(dialPlan("off", null, true)).toEqual({ kind: "bare" });
+    // an older backend with no caller check
+    expect(dialPlan(undefined, null, false)).toEqual({ kind: "bare" });
   });
 
   test("a page's pair label never reads as the CLI's or the helper's", () => {

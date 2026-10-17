@@ -3233,7 +3233,9 @@ export const useStore = create<CanopyState>((set, get) => ({
         }
         if (!live()) return;
         if (got && "token" in got) {
-          writeToken(originOf(baseOf(backend)), got.token);
+          // storage that refuses would leave a caller no page can use, and a
+          // sign-in after it another one
+          if (!writeToken(originOf(baseOf(backend)), got.token)) throw new Error("this browser would not keep the token");
           say(null);
           await get().loadAuth(backend);
           return;

@@ -6,7 +6,7 @@ import "@xterm/xterm/css/xterm.css";
 import { api, reachable, socketUrl as backendSocket } from "../api";
 import { copyText } from "../share";
 import { backendOf, baseOf, plainOf, qual } from "../registry";
-import { originOf, readToken } from "../callerToken";
+import { dialPlan, originOf, readToken } from "../callerToken";
 import { groveUrl, nameShellHere, parseRoute, popShell } from "../routes";
 import {
   PANEL_TERM,
@@ -169,6 +169,8 @@ function socketUrl(tab: TermTab, cols: number, rows: number, rejoin: boolean, ti
 
 /** how often a shell whose machine has no URL yet looks again */
 const UNREACHABLE_WAIT = 1000;
+/** how often a shell waiting for a sign-in looks for the token */
+const SIGNIN_WAIT = 2000;
 
 /** how long to wait before the n-th try at rejoining a dropped shell */
 const rejoinWait = (n: number): number => Math.min(30_000, 1000 * 2 ** Math.min(n, 5));
@@ -291,6 +293,8 @@ export function TermView({
     let opened = false;
     // said once per spell away, when the shell's machine is what went
     let saidAway = false;
+    // said once per wait for this page to sign in to the shell's backend
+    let saidSignIn = false;
     // only for a machine known to be away, not one still being reached
     const sayAway = () => {
       const s = useStore.getState();
@@ -319,13 +323,33 @@ export function TermView({
         return;
       }
       const rejoin = opened;
-      // A ticket works once, so every dial asks for its own. A page with no
-      // token for the backend dials bare, which log and off let through;
-      // one whose ticket is refused dials bare too, and enforce says no.
+      // A ticket works once, so every dial asks for its own. With none, a
+      // backend that lets a bare shell through (log, off) is dialled bare;
+      // one that enforces would only refuse it, so the tab says to sign in
+      // and looks again, quietly, until this page holds a token for it.
       const b = backendOf(tab.id);
-      const ticket = readToken(originOf(baseOf(b))) ? await api.ticket(b, "term").catch(() => null) : null;
+      let ticket: string | null = null;
+      let refused = false;
+      if (readToken(originOf(baseOf(b)))) {
+        try {
+          ticket = await api.ticket(b, "term");
+        } catch (err) {
+          const status = (err as { status?: unknown }).status;
+          refused = status === 401 || status === 403;
+        }
+      }
       if (gone || ended) return;
-      const sock = new WebSocket(socketUrl(tab, term.cols, term.rows, rejoin, ticket));
+      const plan = dialPlan(useStore.getState().authByBackend[b]?.mode, ticket, refused);
+      if (plan.kind === "wait") {
+        if (!saidSignIn) {
+          saidSignIn = true;
+          note(`[sign in to ${b} to open this shell]`);
+        }
+        retry = setTimeout(() => void connect(), SIGNIN_WAIT);
+        return;
+      }
+      saidSignIn = false;
+      const sock = new WebSocket(socketUrl(tab, term.cols, term.rows, rejoin, plan.kind === "ticket" ? plan.ticket : null));
       sock.binaryType = "arraybuffer";
       ws = sock;
       // A rejoined shell's output arrives again from the start of its
