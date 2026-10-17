@@ -529,6 +529,7 @@ export function describeEvent(
     case "secrets":
     // the repo's landing section and the inbox say where the queue stands
     case "landing":
+    case "prs":
       return [];
   }
 }

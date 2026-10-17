@@ -1121,6 +1121,94 @@ export interface RunBranch {
    *  on the branch (the first, and each "fix it") carries it, and the
    *  landing record is kept under it */
   origin: string;
+  /** the pre-flight said to open a PR when it settles ready, instead of
+   *  landing here (FR-011) */
+  openPr?: true;
+}
+
+/** One check on a PR's head, as canopy reads it: still going, passed,
+ *  failed, or skipped (neutral and skipped conclusions). */
+export type PrCheckState = "pending" | "pass" | "fail" | "skip";
+
+export interface PrCheck {
+  name: string;
+  state: PrCheckState;
+  /** where GitHub shows it */
+  url?: string;
+  /** a GitHub Actions run's id, for its failed log */
+  actionsRun?: string;
+}
+
+/** A PR as one `gh pr view` read it (FR-011). */
+export interface PrState {
+  number: number;
+  url: string;
+  status: "open" | "merged" | "closed";
+  draft: boolean;
+  additions: number;
+  deletions: number;
+  files: number;
+  /** the commit the checks ran on */
+  head: string;
+  /** GitHub's `mergeable`: MERGEABLE, CONFLICTING or UNKNOWN */
+  mergeable: string;
+  /** GitHub's `mergeStateStatus`: CLEAN, BLOCKED, BEHIND, DIRTY, ... */
+  mergeState: string;
+  review: "approved" | "changes" | "none";
+  checks: PrCheck[];
+}
+
+/** A review comment on a PR's diff. */
+export interface PrComment {
+  id: number;
+  author: string;
+  body: string;
+  path?: string;
+  line?: number;
+  url: string;
+}
+
+/** A PR a branch run opened and canopy watches (FR-011), kept under
+ *  `<configDir>/prs/<id>.json`. */
+export interface PrWatch {
+  /** the branch's id (`RunBranch.origin`), as in the landing records */
+  id: string;
+  /** the latest run on the branch */
+  runId: string;
+  repoId: string;
+  repoPath: string;
+  branch: string;
+  target: string;
+  dir: string;
+  note: string;
+  /** `owner/name` on GitHub */
+  slug: string;
+  /** the remote the branch was pushed to */
+  remote: string;
+  number: number;
+  url: string;
+  autoFix: boolean;
+  autoMerge: boolean;
+  /** the last read; absent until the first poll */
+  state?: PrState;
+  /** the commit canopy pushed last */
+  pushed: string;
+  /** fix attempts per check (`check:<name>`) or comment (`comment:<id>`) */
+  attempts: Record<string, number>;
+  /** the fix run going now and what it works on */
+  fixing?: { run: string; key: string };
+  /** the highest comment id canopy has looked at */
+  seenComment: number;
+  /** comments from people without write access: shown, never acted on */
+  untrusted?: PrComment[];
+  /** why auto-fix stopped for this PR */
+  gaveUp?: string;
+  /** the last poll's or merge's error */
+  error?: string;
+  /** unix ms */
+  openedAt: number;
+  updatedAt: number;
+  polledAt?: number;
 }
 
 /** A queue entry's state. `conflict`, `red` and `moved` are sent back: the
@@ -1245,6 +1333,10 @@ export interface LandingRun {
   /** a stopped run only: whether its work is whole as the hub last looked,
    *  so "land" applies. Never saved: the worktree can change after. */
   whole?: RunWhole;
+  /** the PR it opened: it lands there, never through the queue (FR-011) */
+  pr?: number;
+  /** it opens a PR on its own once it settles ready */
+  openPr?: true;
 }
 
 /** Whether a run a restart stopped may land as its worktree is now: clean,
@@ -1309,6 +1401,8 @@ export type ServerEvent =
   | { type: "advice"; advice: AdviceOffer[] }
   /** the landing queue and branch runs, whole, whenever they change */
   | { type: "landing"; landing: LandingInfo }
+  /** the PRs branch runs opened, whole, whenever one changes (FR-011) */
+  | { type: "prs"; prs: PrWatch[] }
   /** where the incubator's stages run, whenever that changes; home backend only */
   | { type: "stages"; stages: IncubatorStages }
   | { type: "job"; job: Job }
