@@ -49,6 +49,7 @@ import { bold, dim, lichen, moss, paintLine, renderTree, sky } from "./render";
 import { HELP_TEXT } from "../core/help";
 import { healthCommand } from "./health";
 import { kitCommand } from "./kit";
+import { apiBase, callerHeaders, setTokenFlag } from "./api";
 import { landCommand } from "./land";
 import { prCommand } from "./pr";
 import { secretsCommand } from "./secrets";
@@ -132,6 +133,9 @@ export async function main(argv: string[]): Promise<void> {
   // to the default tree view (`canopy ~/dev`).
   const cmd =
     args[0] !== undefined && COMMANDS.has(args[0]) ? args.shift() : undefined;
+  // --token is every command's, except `source add --forgejo --token`, which
+  // carries a Forgejo token and not a caller's
+  if (cmd !== "source") setTokenFlag(opt(args, "--token"));
 
   switch (cmd) {
     case "library": {
@@ -671,7 +675,7 @@ export async function main(argv: string[]): Promise<void> {
       form.append("via", "cli");
       let res: Response;
       try {
-        res = await fetch(`${parsed.backend}/api/incubator`, { method: "POST", body: form });
+        res = await fetch(`${parsed.backend}/api/incubator`, { method: "POST", body: form, headers: callerHeaders(parsed.backend) });
       } catch (err) {
         return fail(`${parsed.backend} did not answer: ${err instanceof Error ? err.message : String(err)}`);
       }
@@ -682,12 +686,12 @@ export async function main(argv: string[]): Promise<void> {
       return;
     }
     case "incubator": {
-      const backend = (opt(args, "--backend") ?? process.env["CANOPY_API"] ?? "http://127.0.0.1:7850").replace(/\/+$/, "");
+      const backend = apiBase(opt(args, "--backend"));
       if (!/^https?:\/\/[^/\s]+$/.test(backend)) return fail(`--backend must be an http(s) origin, got ${backend}`);
       const get = async <T>(path: string): Promise<T> => {
         let res: Response;
         try {
-          res = await fetch(`${backend}${path}`);
+          res = await fetch(`${backend}${path}`, { headers: callerHeaders(backend) });
         } catch (err) {
           return fail(`${backend} did not answer: ${err instanceof Error ? err.message : String(err)}`);
         }
@@ -734,14 +738,15 @@ export async function main(argv: string[]): Promise<void> {
       return fail("usage: canopy incubator list | show <id> | pick-check");
     }
     case "ranger": {
-      const backend = (opt(args, "--backend") ?? process.env["CANOPY_API"] ?? "http://127.0.0.1:7850").replace(/\/+$/, "");
+      const backend = apiBase(opt(args, "--backend"));
       if (!/^https?:\/\/[^/\s]+$/.test(backend)) return fail(`--backend must be an http(s) origin, got ${backend}`);
       const call = async <T>(method: string, path: string, body?: unknown): Promise<T> => {
         let res: Response;
         try {
           res = await fetch(`${backend}${path}`, {
             method,
-            ...(body !== undefined ? { body: JSON.stringify(body), headers: { "content-type": "application/json" } } : {}),
+            headers: callerHeaders(backend, undefined, body !== undefined ? { "content-type": "application/json" } : undefined),
+            ...(body !== undefined ? { body: JSON.stringify(body) } : {}),
           });
         } catch (err) {
           return fail(`${backend} did not answer: ${err instanceof Error ? err.message : String(err)}`);

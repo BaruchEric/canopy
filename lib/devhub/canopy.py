@@ -168,6 +168,17 @@ def serve():
     hub.cmd_serve(argparse.Namespace(port=0))
 
 
+def caller_token(port):
+    """The CLI's caller token for this backend: the token file named for host and
+    port in canopy's config dir, else CANOPY_TOKEN; a blank value is no token."""
+    config = os.environ.get('CANOPY_CONFIG_DIR') or str(Path.home() / '.config' / 'canopy')
+    try:
+        filed = (Path(config) / f'token-127.0.0.1-{int(port)}').read_text().strip()
+    except OSError:
+        filed = ''
+    return filed or os.environ.get('CANOPY_TOKEN', '').strip()
+
+
 def announce(args):
     """Self-register with Canopy's live worker, best effort like the old CLI."""
     import urllib.request
@@ -175,10 +186,15 @@ def announce(args):
         headers = {'Content-Type': 'application/json'}
         if args.helper_port:
             url = f'http://127.0.0.1:{args.helper_port}/library/api/dev/register'
+            port = args.helper_port
         else:
             worker = json.loads((hub.HERE / '.worker.json').read_text())
             headers['X-Canopy-Library'] = worker['token']
             url = f"http://127.0.0.1:{int(worker['port'])}/api/dev/register"
+            port = worker['port']
+        token = caller_token(port)
+        if token:
+            headers['X-Canopy-Token'] = token
         payload = json.dumps({'project': args.project, 'port': int(args.port)}).encode()
         req = urllib.request.Request(url, data=payload, headers=headers, method='POST')
         with urllib.request.urlopen(req, timeout=3) as response:

@@ -89,4 +89,7 @@ usage:
                                      --visual adds DESIGN.md, --doc keeps only SPEC.md
   canopy spec check [repo]           exit 1 unless the repo's spec text is in sync
   canopy version                     the version and the commit this canopy was built from
+
+every command except source also takes:
+    --token T                        the caller token to send (default: the token file for the backend, else $CANOPY_TOKEN)
 `;

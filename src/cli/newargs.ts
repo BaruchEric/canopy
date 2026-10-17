@@ -1,4 +1,5 @@
 /** `canopy new`'s arguments, read without touching the disk or the network. */
+import { apiBase } from "./api";
 
 export interface NewArgs {
   text: string;
@@ -30,7 +31,7 @@ export function parseNewArgs(argv: string[], env: Record<string, string | undefi
     else if (a === "--repo") repo = v;
     else backend = v;
   }
-  const origin = (backend ?? env["CANOPY_API"] ?? "http://127.0.0.1:7850").replace(/\/+$/, "");
+  const origin = apiBase(backend ?? env["CANOPY_API"]);
   if (!/^https?:\/\/[^/\s]+$/.test(origin)) return { error: `--backend must be an http(s) origin, got ${backend ?? origin}` };
   const text = words.join(" ").trim();
   if (!text && files.length === 0 && urls.length === 0 && !repo) return { error: "give an idea, --file, --url or --repo" };

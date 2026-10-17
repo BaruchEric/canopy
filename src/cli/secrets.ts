@@ -11,6 +11,7 @@ import { newIdentity, newSigningKey, openValue, sealValue, signingKey } from "..
 import { parseSecretFile, recipientKeys, recipientsFor, serializeFile, signFile, type SecretFile } from "../core/secretfile";
 import { localPaths, PIN, readLocalConfig, writeLocalConfig } from "../core/secretlocal";
 import type { SecretsInfo } from "../core/types";
+import { apiBase, callerHeaders } from "./api";
 import { bold, dim, lichen, rust } from "./render";
 
 export const SECRETS_USAGE = `usage: canopy secrets [list] [--json]
@@ -143,14 +144,14 @@ export interface SecretsDeps {
 
 export async function secretsCommand(argv: string[], { fail }: SecretsDeps): Promise<void> {
   const args = [...argv];
-  const home = (process.env["CANOPY_API"] ?? "http://127.0.0.1:7850").replace(/\/+$/, "");
+  const home = apiBase();
   const asJson = args.includes("--json");
   const rest = args.filter((a) => a !== "--json");
   const sub = rest[0] ?? "list";
   const ask = async <T>(method: string, path: string, body?: unknown): Promise<T> => {
     let r: Response;
     try {
-      r = await fetch(home + path, body === undefined ? { method } : { method, headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
+      r = await fetch(home + path, { method, headers: callerHeaders(home, undefined, body === undefined ? undefined : { "content-type": "application/json" }), ...(body === undefined ? {} : { body: JSON.stringify(body) }) });
     } catch {
       return fail(`${home} did not answer`);
     }
@@ -190,7 +191,7 @@ export async function secretsCommand(argv: string[], { fail }: SecretsDeps): Pro
       await writeLocalConfig(p.config, { pin: key, remote: remote ?? cur.remote });
       console.log(`pinned the mini's signing key; Forgejo: ${remote ?? cur.remote ?? "not set, add --remote URL"}`);
       // a pull now, when the home backend runs; the pin stands either way
-      const info = await fetch(`${home}/api/secrets/pull`, { method: "POST" })
+      const info = await fetch(`${home}/api/secrets/pull`, { method: "POST", headers: callerHeaders(home) })
         .then((r) => (r.ok ? (r.json() as Promise<SecretsInfo>) : null))
         .catch(() => null);
       if (info) console.log(statusLines(info).join("\n"));

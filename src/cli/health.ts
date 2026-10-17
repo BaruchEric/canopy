@@ -11,6 +11,7 @@ import { dirname, join, resolve } from "node:path";
 import { checkTarget, HEALTH_FILE, normalizeCheck, parseHealthFile } from "../core/repohealth";
 import { detectTasks, parseTaskFile, TASK_FILES, type TaskFiles } from "../core/tasks";
 import type { BackendEntry, HealthCheck, HealthInfo, MergedCheck, RepoCheckDef, RepoHealthInfo, ScanResult, ServerEvent } from "../core/types";
+import { apiBase, callerHeaders } from "./api";
 import { bold, dim, lichen, moss, rust } from "./render";
 
 export const HEALTH_USAGE = `usage: canopy health [list] [--bad] [--repo R] [--canopy] [--json]
@@ -204,18 +205,22 @@ export async function ask<T>(t: Target, method: string, path: string, body?: unk
         method,
         redirect: "manual",
         signal: AbortSignal.timeout(8_000),
-        ...(body !== undefined ? { body: JSON.stringify(body), headers: { "content-type": "application/json" } } : {}),
+        headers: callerHeaders(url, undefined, body !== undefined ? { "content-type": "application/json" } : undefined),
+        ...(body !== undefined ? { body: JSON.stringify(body) } : {}),
       });
     } catch (err) {
       tried.push(`${url}: ${errText(err)}`);
       continue;
     }
+    const redirected = res.status >= 300 && res.status < 400;
+    const out = redirected ? ({} as T & { error?: string; need?: string }) : ((await res.json().catch(() => ({}))) as T & { error?: string; need?: string });
+    // canopy's own refusal names the right it wanted: that is the answer
+    if ((res.status === 401 || res.status === 403) && typeof out.need === "string") throw new Error(out.error ?? `${t.name} refused: it needs the ${out.need} right`);
     // a sign-in gate or a redirect is not canopy answering
-    if (res.status === 401 || (res.status >= 300 && res.status < 400)) {
+    if (res.status === 401 || redirected) {
       tried.push(`${url}: needs a sign-in`);
       continue;
     }
-    const out = (await res.json().catch(() => ({}))) as T & { error?: string };
     if (!res.ok) throw new Error(out.error ?? `${t.name} answered ${res.status}`);
     return out;
   }
@@ -226,7 +231,7 @@ export async function healthCommand(argv: string[], { fail }: HealthDeps): Promi
   const args = [...argv];
   const given = take(args, "--backend");
   const on = take(args, "--on");
-  const home = (given ?? process.env["CANOPY_API"] ?? "http://127.0.0.1:7850").replace(/\/+$/, "");
+  const home = apiBase(given);
   if (!/^https?:\/\/[^/\s]+$/.test(home)) return fail(`--backend must be an http(s) origin, got ${home}`);
   const json = has(args, "--json");
   const sub = args[0] !== undefined && !args[0].startsWith("--") ? (args.shift() ?? "list") : "list";
@@ -406,7 +411,7 @@ async function follow(t: Target, f: ListFilter, prefix: string): Promise<void> {
   for (const c of first) console.log(`${prefix}${checkLine(c)}`);
   let last = new Map(first.map((c) => [c.id, c]));
   for (const url of t.urls) {
-    const res = await fetch(`${url}/api/events`, { redirect: "manual" }).catch(() => null);
+    const res = await fetch(`${url}/api/events`, { redirect: "manual", headers: callerHeaders(url) }).catch(() => null);
     if (!res?.ok || !res.body) continue;
     const reader = res.body.getReader();
     const dec = new TextDecoder();
