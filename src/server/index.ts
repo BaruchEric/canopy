@@ -300,6 +300,9 @@ interface ServerState {
   callers: CallerBook;
   /** the caller check at the top of route(), and what it refused */
   gate: CallerGate;
+  /** every open shell and helper socket that came with a caller, so a
+   *  dropped caller's sockets close at once rather than outliving its token */
+  callerSockets: Set<ServerWebSocket<Socket>>;
   /** the Secrets view: the relay to the secrets service on the mini, the verified copy elsewhere */
   secrets: SecretsHub;
   /** the checks repos declare, kept in the health hub (server/repohealth) */
@@ -4360,6 +4363,7 @@ export async function startServer(opts: {
       dropped: (id) => state.prs.forgetBranch(id),
     }),
     callers,
+    callerSockets: new Set(),
     gate: new CallerGate({
       book: callers,
       mode: callersMode(),
@@ -4409,6 +4413,14 @@ export async function startServer(opts: {
       },
     }),
     apiUrl: null,
+  };
+  // a caller dropped for any reason takes its open sockets with it; the
+  // page's dock and the helper read 1008 as a drop and dial again, which
+  // under enforce now needs a token that still works
+  callers.onDrop = (ids) => {
+    for (const ws of state.callerSockets) {
+      if (ws.data.caller && ids.includes(ws.data.caller.id)) ws.close(1008, "caller revoked");
+    }
   };
   /** where stages run now, for the route and the `stages` event */
   const stagesNow = (): IncubatorStages => ({
@@ -4651,6 +4663,7 @@ export async function startServer(opts: {
         // a full-screen program repaints. One that asked only to rejoin and
         // names a shell not here is told so and closed.
         open(ws) {
+          if (ws.data.caller) state.callerSockets.add(ws);
           if (ws.data.kind === "helper") {
             const { info } = ws.data;
             const old = state.helpers.get(info.name);
@@ -4768,6 +4781,7 @@ export async function startServer(opts: {
         // closed tab or a lost connection comes back to it by name. Ending a
         // shell is DELETE /api/terms. On tmux the socket's own client goes.
         close(ws) {
+          state.callerSockets.delete(ws);
           if (ws.data.kind === "helper") {
             dropHelper(state, ws.data.info.name, ws);
             return;

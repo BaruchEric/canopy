@@ -78,6 +78,9 @@ export class CallerBook {
   private chain: Promise<unknown> = Promise.resolve();
   private readonly file: string;
   private readonly now: () => number;
+  /** told the ids of the callers just dropped (a revoke, a shell or run
+   *  ending, prune, expiry), so the server can close the sockets they hold */
+  onDrop: (ids: readonly string[]) => void = () => {};
 
   constructor(opts: { file?: string; now?: () => number } = {}) {
     this.file = opts.file ?? join(configDir(), "callers.json");
@@ -178,9 +181,10 @@ export class CallerBook {
    *  rejects when it fails, so a route can say so. Nobody has to await it,
    *  but one that does not should add its own catch. */
   private remove(drop: (c: Kept) => boolean): Promise<boolean> {
-    const before = this.callers.length;
+    const gone = this.callers.filter(drop);
+    if (gone.length === 0) return Promise.resolve(false);
     this.callers = this.callers.filter((c) => !drop(c));
-    if (this.callers.length === before) return Promise.resolve(false);
+    this.onDrop(gone.map((c) => c.id));
     return this.save().then(() => true);
   }
 

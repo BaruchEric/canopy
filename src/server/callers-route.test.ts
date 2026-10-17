@@ -194,6 +194,67 @@ describe("enforce", () => {
   });
 });
 
+describe("revoking a caller", () => {
+  let s: Up;
+  let holder = { token: "", id: "" };
+  let helper = { token: "", id: "" };
+  let admin = "";
+  beforeAll(async () => {
+    s = await up("revoke", "enforce", (book) => {
+      const a = book.mint("page", { label: "a page with a shell open" });
+      holder = { token: a.token, id: a.caller.id };
+      const h = book.mint("helper", { label: "helper mbp" });
+      helper = { token: h.token, id: h.caller.id };
+      admin = book.mint("page", { label: "the page that revokes" }).token;
+    });
+  });
+  afterAll(async () => {
+    await s.stop();
+  });
+
+  const ticket = async (token: string, what: "term" | "helper"): Promise<string> => {
+    const res = await post(s, "/api/auth/ticket", { for: what }, token);
+    expect(res.status).toBe(200);
+    return ((await res.json()) as { ticket: string }).ticket;
+  };
+
+  /** a socket opened with a ticket, and how long it waited for its close */
+  async function held(path: string): Promise<{ closed: (ms: number) => Promise<{ code: number } | "still open"> }> {
+    const ws = new WebSocket(`ws://127.0.0.1:${s.port}${path}`);
+    const closed = new Promise<{ code: number }>((resolve) => {
+      ws.onclose = (e) => resolve({ code: e.code });
+    });
+    await new Promise<void>((resolve, reject) => {
+      ws.onopen = () => resolve();
+      ws.onerror = () => reject(new Error("the socket failed"));
+    });
+    return {
+      closed: (ms) => Promise.race([closed, Bun.sleep(ms).then((): "still open" => "still open")]),
+    };
+  }
+
+  test("closes the shell socket it opened, and leaves another caller's open", async () => {
+    const q = new URLSearchParams({ id: "app", term: "aaaabbbbccccdddd0000111122223333", place: "strip", cols: "80", rows: "24" });
+    q.set("ticket", await ticket(holder.token, "term"));
+    const mine = await held(`/api/term?${q}`);
+    const other = new URLSearchParams({ id: "app", term: "aaaabbbbccccdddd4444555566667777", place: "strip", cols: "80", rows: "24" });
+    other.set("ticket", await ticket(admin, "term"));
+    const theirs = await held(`/api/term?${other}`);
+    expect((await post(s, "/api/auth/revoke", { id: holder.id }, admin)).status).toBe(200);
+    const got = await mine.closed(2_000);
+    expect(got).not.toBe("still open");
+    expect(await theirs.closed(200)).toBe("still open");
+  });
+
+  test("closes a helper's socket", async () => {
+    const q = new URLSearchParams({ name: "mbp", platform: "darwin", openers: "finder" });
+    q.set("ticket", await ticket(helper.token, "helper"));
+    const sock = await held(`/api/helper?${q}`);
+    expect((await post(s, "/api/auth/revoke", { id: helper.id }, admin)).status).toBe(200);
+    expect(await sock.closed(2_000)).not.toBe("still open");
+  });
+});
+
 describe("log", () => {
   let s: Up;
   beforeAll(async () => {
