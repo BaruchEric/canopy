@@ -202,4 +202,13 @@ describe("a page with two backends", () => {
   test("a foreign backend's socket is on its own host", () => {
     expect(socketUrl("b", "/api/term?id=x")).toBe("ws://b.test/api/term?id=x");
   });
+
+  test("the page asks to sign in as a page, and renews with the last pair's id and secret", async () => {
+    reply = () => json({ id: "i", code: "C", secret: "s" });
+    await api.pair("b", "Chrome");
+    await api.pair("b", "Chrome", { id: "old", secret: "sec" });
+    const bodies = calls.map((c) => JSON.parse(String(c.init?.body)) as Record<string, unknown>);
+    expect(bodies[0]).toEqual({ label: "Chrome", kind: "page" });
+    expect(bodies[1]).toEqual({ label: "Chrome", kind: "page", id: "old", secret: "sec" });
+  });
 });

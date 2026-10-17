@@ -11,7 +11,7 @@ import { readFileSync, renameSync } from "node:fs";
 import { mkdir, rename, writeFile } from "node:fs/promises";
 import { basename, dirname, join } from "node:path";
 import { createHash, randomBytes, randomInt } from "node:crypto";
-import { allows, needs, PAIR_KINDS, type CallerKind, type PairKind, type Right } from "../core/callers";
+import { allows, kindOfLabel, needs, PAIR_KINDS, type CallerKind, type PairKind, type Right } from "../core/callers";
 import { configDir } from "../core/store";
 import type { PendingPair } from "../core/types";
 
@@ -78,6 +78,8 @@ export class CallerBook {
   private tickets = new Map<string, { callerId: string; right: Ticketed; at: number }>();
   /** when each recent new pair request came, for the per-minute cap */
   private pairTimes: number[] = [];
+  /** the pairs a renewal replaced, with their secrets, so only their asker is told */
+  private replacedPairs = new Map<string, { secret: string; at: number }>();
   private first: string | null = null;
   private lastSave = 0;
   private chain: Promise<unknown> = Promise.resolve();
@@ -245,21 +247,34 @@ export class CallerBook {
   }
 
   /** A new request. The server takes at most 6 a minute, whoever they come
-   *  from, since docker-proxy gives every client one address. One with the
-   *  label and address of a waiting request replaces it, whose claim then
-   *  answers as a dead pair. `kind` is what the asker says it signs in as; a
-   *  caller that sends none (an older CLI) gets the one its label names. */
-  pair(label: string, addr: string, kind?: PairKind): { id: string; code: string; secret: string } | { error: string } {
+   *  from, since docker-proxy gives every client one address. `renew` is the
+   *  id and secret of the asker's own waiting request: with both right, that
+   *  one is replaced and its claim then says so. Anything else is a new
+   *  request, so nobody can cancel another's by sending the same label.
+   *  `kind` is what the asker says it signs in as; a caller that sends none
+   *  (an older CLI) gets the one its label names. */
+  pair(label: string, addr: string, kind?: PairKind, renew?: { id: string; secret: string }): { id: string; code: string; secret: string } | { error: string } {
     const at = this.now();
     this.pairTimes = this.pairTimes.filter((t) => at - t < PAIR_RATE);
-    if (this.pairTimes.length >= MOST_NEW_PAIRS) return { error: `more than ${MOST_NEW_PAIRS} pair requests in a minute; try again shortly` };
-    const name = label.slice(0, 80);
-    for (const [id, old] of this.pairs) if (old.state === "waiting" && old.label === name && old.addr === addr) this.pairs.delete(id);
-    if (this.waiting().length >= MOST_PAIRS) return { error: `${MOST_PAIRS} pair requests already wait; answer one or try again in a few minutes` };
+    if (this.pairTimes.length >= MOST_NEW_PAIRS) return { error: `more than ${MOST_NEW_PAIRS} pair requests in a minute; deny the ones you do not recognize from a signed-in page's inbox, or wait for them to expire` };
+    const old = renew ? this.pairs.get(renew.id) : undefined;
+    if (renew && old && old.state === "waiting" && old.secret === renew.secret) {
+      this.pairs.delete(old.id);
+      this.replacedPairs.set(old.id, { secret: old.secret, at });
+    }
+    if (this.waiting().length >= MOST_PAIRS) return { error: `${MOST_PAIRS} pair requests already wait; deny the ones you do not recognize from a signed-in page's inbox, or wait for them to expire` };
     this.pairTimes.push(at);
-    const p: Pair = { id: b64(6), label: name, addr, kind: kind ?? (name.startsWith("cli ") ? "cli" : name.startsWith("helper ") ? "helper" : "page"), code: code(), secret: b64(32), at, state: "waiting" };
+    const name = label.slice(0, 80);
+    const p: Pair = { id: b64(6), label: name, addr, kind: kind ?? kindOfLabel(name), code: code(), secret: b64(32), at, state: "waiting" };
     this.pairs.set(p.id, p);
     return { id: p.id, code: p.code, secret: p.secret };
+  }
+
+  /** Whether this pair was replaced by a renewal, told only to its own asker. */
+  replaced(id: string, secret: string): boolean {
+    const at = this.now();
+    for (const [k, v] of this.replacedPairs) if (at - v.at > PAIR_LIFE) this.replacedPairs.delete(k);
+    return this.replacedPairs.get(id)?.secret === secret;
   }
 
   pending(): PendingPair[] {
@@ -490,7 +505,8 @@ export async function authRoute(book: CallerBook, gate: CallerGate, req: Request
       if (!label) return json({ error: "a pair request needs a label" }, 400);
       const kind = b["kind"] === undefined ? undefined : PAIR_KINDS.find((k) => k === b["kind"]);
       if (b["kind"] !== undefined && !kind) return json({ error: `kind is one of ${PAIR_KINDS.join(", ")}` }, 400);
-      const got = book.pair(label, addr, kind);
+      const renew = field(b, "id") && field(b, "secret") ? { id: field(b, "id") as string, secret: field(b, "secret") as string } : undefined;
+      const got = book.pair(label, addr, kind, renew);
       if ("error" in got) return json({ error: got.error }, 429);
       gate.pairsChanged();
       gate.announce();
@@ -506,6 +522,7 @@ export async function authRoute(book: CallerBook, gate: CallerGate, req: Request
       if (got === "waiting") return json({ waiting: true });
       if (got === null) {
         if (guess) gate.missed(route, addr);
+        if (book.replaced(id, secret)) return json({ error: "this request was replaced by a newer one from the same asker" }, 404);
         return json({ error: "no such pair request: it was denied, claimed, or has expired" }, 404);
       }
       gate.announce();

@@ -105,7 +105,7 @@ in pairing that matter once a coordinator run can reach canopy's port.
 `POST /api/auth/pair` is open by design, since a device with no token has
 to start there, so isolation does not stop a run from calling it.
 
-- **The kind comes from the label.** (Done, commit 0b28448.) `CallerBook.claim`
+- **The kind comes from the label.** (Done, branch `pairing`.) `CallerBook.claim`
   (`src/server/callers.ts`) mints `cli` for a label starting "cli ",
   `helper` for "helper ", and `page` for anything else, and the inbox card
   shows only the label and address. A run that asks with the label "cli mac"
@@ -114,12 +114,16 @@ to start there, so isolation does not stop a run from calling it.
   book stores it, and the card says what it grants, for example "helper
   asks to sign in: helper right only" or "page asks to sign in: read,
   operate, shell, admin".
-- **Three shared slots, no limit.** (Done, commit 0b28448.) At most 3 requests wait at once, and
-  nothing limits who fills them, so a looping caller keeps them full and
-  fills the inbox for 10 minutes at a time. Per-address limits do not help
-  on the mini, where docker-proxy gives every client the same address. Fix:
-  a new request with the same label and address replaces the older one,
-  plus a server-wide cap of 6 new requests a minute.
+- **Three shared slots, no limit.** (Partly done, branch `pairing`.) At
+  most 3 requests wait at once, and nothing limits who fills them, so a
+  looping caller keeps them full and fills the inbox for 10 minutes at a
+  time. Per-address limits do not help on the mini, where docker-proxy gives
+  every client the same address. What shipped: a server-wide cap of 6 new
+  requests a minute, and a renewal that carries the waiting request's own id
+  and secret replaces it. Matching on label and address was dropped, since
+  anyone could then cancel another's request. A hostile asker under
+  different labels can still hold the slots; Eric frees them by denying from
+  a signed-in page, and the refusals say so.
 
 Both ship before the coordinator, in its plan's first task.
 

@@ -7412,13 +7412,17 @@ button.machine:hover {
     flex: 1 1 100%;
     order: -1;
     min-width: 0;
+    /* a long error takes the line under the code and the box */
+    flex-wrap: wrap;
   }
   .signin-strip .signin-hint {
     display: none;
   }
-  .signin-input {
-    width: 6.5em;
+  .signin-err {
+    flex: 1 1 100%;
     min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
   }
   .tb-line .search {
     flex: 1 1 auto;

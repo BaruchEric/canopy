@@ -106,3 +106,27 @@ describe("pairFlow", () => {
     process.env["CANOPY_CONFIG_DIR"] = join(scratch, "server");
   });
 });
+
+describe("each asker names its kind", () => {
+  let fake: ReturnType<typeof Bun.serve>;
+  const bodies: Record<string, unknown>[] = [];
+  beforeAll(() => {
+    // answers every pair with a refusal, so each command ends at once
+    fake = Bun.serve({
+      port: 0,
+      fetch: async (req) => {
+        bodies.push((await req.json().catch(() => ({}))) as Record<string, unknown>);
+        return Response.json({ error: "no" }, { status: 429 });
+      },
+    });
+  });
+  afterAll(() => fake.stop(true));
+
+  test("canopy auth login sends cli, and canopy helper --pair sends helper", async () => {
+    const url = `http://127.0.0.1:${fake.port}`;
+    expect((await cli("auth", "login", "--backend", url)).code).toBe(1);
+    expect((await cli("helper", "--pair", "--backend", url)).code).toBe(1);
+    expect(bodies.map((b) => b["kind"])).toEqual(["cli", "helper"]);
+  });
+});
+

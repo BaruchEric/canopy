@@ -1399,11 +1399,13 @@ describe("several backends", () => {
     const B_TOKEN = "canopy.token.http://b.test";
     let claims: Response[] = [];
     let pairs = 0;
+    const pairBodies: Record<string, unknown>[] = [];
     let authGate: Promise<void> | null = null;
     beforeEach(() => {
       kept.clear();
       claims = [];
       pairs = 0;
+      pairBodies.length = 0;
       authGate = null;
       setClaimEvery(5);
       g.localStorage = { getItem: (k: string) => kept.get(k) ?? null, setItem: (k: string, v: string) => void kept.set(k, v), removeItem: (k: string) => void kept.delete(k) };
@@ -1416,6 +1418,7 @@ describe("several backends", () => {
       heard.push([`${init?.method ?? "GET"} ${p}`, new Headers(init?.headers).get("x-canopy-token")]);
       if (p === "/api/auth/pair") {
         pairs += 1;
+        pairBodies.push(JSON.parse(String(init?.body)) as Record<string, unknown>);
         return json({ id: "p1", code: "K7QX", secret: "s3" });
       }
       if (p === "/api/auth/claim") return claims.shift() ?? json({ waiting: true });
@@ -1476,6 +1479,19 @@ describe("several backends", () => {
       await useStore.getState().signIn("b");
       expect(useStore.getState().signIns["b"]).toEqual({ state: "failed", why: "no such pair request" });
       expect(kept.has(B_TOKEN)).toBe(false);
+    });
+
+    test("asking again after a failed sign-in renews the last pair; once signed in, the next asks fresh", async () => {
+      await go();
+      await settle();
+      claims = [json({ error: "expired" }, 404)];
+      await useStore.getState().signIn("b");
+      claims = [json({ token: "cnp_page_b" })];
+      await useStore.getState().signIn("b");
+      expect(pairBodies.at(-1)).toMatchObject({ kind: "page", id: "p1", secret: "s3" });
+      claims = [json({ token: "cnp_page_b" })];
+      await useStore.getState().signIn("b");
+      expect(pairBodies.at(-1)).not.toHaveProperty("id");
     });
 
     test("a second press while one waits asks for no second pair", async () => {

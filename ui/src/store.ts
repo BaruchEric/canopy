@@ -1569,6 +1569,9 @@ const authEvents = new Map<string, number>();
    (a backend holds at most three pair requests) and a hide stops it */
 const signingIn = new Map<string, number>();
 let signInSeq = 0;
+/** each backend's last pair request, offered with the next one as a renewal
+ *  so the server replaces it instead of keeping both; gone once signed in */
+const lastPairs = new Map<string, { id: string; secret: string }>();
 /** how often a sign-in asks whether it was approved, and for how long */
 let claimEvery = 2_000;
 const CLAIM_WINDOW = 10 * 60_000;
@@ -3218,8 +3221,9 @@ export const useStore = create<CanopyState>((set, get) => ({
       });
     try {
       const ua = typeof navigator === "undefined" ? "" : navigator.userAgent;
-      const { id, code, secret } = await api.pair(backend, pairLabel(get().settings.device || deviceName(ua)));
+      const { id, code, secret } = await api.pair(backend, pairLabel(get().settings.device || deviceName(ua)), lastPairs.get(backend));
       if (!live()) return;
+      lastPairs.set(backend, { id, secret });
       say({ state: "waiting", id, code });
       const until = Date.now() + CLAIM_WINDOW;
       for (;;) {
@@ -3236,6 +3240,7 @@ export const useStore = create<CanopyState>((set, get) => ({
           // storage that refuses would leave a caller no page can use, and a
           // sign-in after it another one
           if (!writeToken(originOf(baseOf(backend)), got.token)) throw new Error("this browser would not keep the token");
+          lastPairs.delete(backend);
           say(null);
           await get().loadAuth(backend);
           return;

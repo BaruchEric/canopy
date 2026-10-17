@@ -13,6 +13,10 @@ export type CallerKind = "page" | "cli" | "shell" | "ranger" | "coordinator" | "
 export type PairKind = "page" | "cli" | "helper";
 export const PAIR_KINDS: readonly PairKind[] = ["page", "cli", "helper"];
 
+/** The kind a label names, for a request that does not say: "cli " a CLI,
+ *  "helper " a helper, anything else a page. */
+export const kindOfLabel = (label: string): PairKind => (label.startsWith("cli ") ? "cli" : label.startsWith("helper ") ? "helper" : "page");
+
 export const KIND_RIGHTS: Record<CallerKind, readonly Right[]> = {
   page: ["read", "operate", "shell", "admin"],
   cli: ["read", "operate", "admin"],

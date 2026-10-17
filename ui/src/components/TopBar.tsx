@@ -541,6 +541,8 @@ function SignInChips() {
   );
 }
 
+const OWN_CODE = "that is this request's code; the first code is a different one, printed in the server's log";
+
 function SignInChip({ backend }: { backend: string }) {
   const signIn = useStore((s) => s.signIns[backend]);
   const [code, setCode] = useState("");
@@ -580,10 +582,10 @@ function SignInChip({ backend }: { backend: string }) {
             if (e.key === "Enter") send();
           }}
         />
-        {own ? (
-          <span className="signin-err">that is this request's code; the first code is a different one, printed in the server's log</span>
-        ) : (
-          err && <span className="signin-err">{err}</span>
+        {(own || err) && (
+          <span className="signin-err" title={own ? OWN_CODE : (err ?? "")}>
+            {own ? OWN_CODE : err}
+          </span>
         )}
       </span>
     );

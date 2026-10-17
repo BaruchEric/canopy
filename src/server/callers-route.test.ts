@@ -420,34 +420,67 @@ describe("pairing over HTTP", () => {
 
 describe("the pair request names its kind", () => {
   let s: Up;
+  let admin = "";
   beforeAll(async () => {
-    s = await up("pair-kind", "enforce");
+    s = await up("pair-kind", "enforce", (book) => {
+      admin = book.mint("page", { label: "admin page" }).token;
+    });
   });
   afterAll(async () => {
     await s.stop();
   });
 
+  const pending = async (): Promise<{ id: string; label: string; kind: string }[]> =>
+    ((await (await call(s, "/api/auth")).json()) as { pending: { id: string; label: string; kind: string }[] }).pending;
+  const asked = async (body: unknown): Promise<{ id: string; secret: string }> => {
+    const res = await post(s, "/api/auth/pair", body);
+    expect(res.status).toBe(200);
+    return (await res.json()) as { id: string; secret: string };
+  };
+
   test("an unknown kind is a 400 and makes no pair", async () => {
     for (const kind of ["admin", "shell", 3, ""]) expect((await post(s, "/api/auth/pair", { label: "x", kind })).status).toBe(400);
-    const auth = (await (await call(s, "/api/auth")).json()) as { pending: unknown[] };
-    expect(auth.pending).toHaveLength(0);
+    expect(await pending()).toHaveLength(0);
   });
 
   test("a kind is kept and shown, and a missing one falls back to the label", async () => {
-    expect((await post(s, "/api/auth/pair", { label: "cli looks", kind: "page" })).status).toBe(200);
-    expect((await post(s, "/api/auth/pair", { label: "helper old" })).status).toBe(200);
-    const auth = (await (await call(s, "/api/auth")).json()) as { pending: { label: string; kind: string }[] };
-    expect(auth.pending.map((p) => [p.label, p.kind])).toEqual([
+    const a = await asked({ label: "cli looks", kind: "page" });
+    const b = await asked({ label: "helper old" });
+    expect((await pending()).map((p) => [p.label, p.kind])).toEqual([
       ["cli looks", "page"],
       ["helper old", "helper"],
     ]);
+    for (const p of [a, b]) expect((await post(s, "/api/auth/deny", { id: p.id }, admin)).status).toBe(200);
+  });
+
+  test("a renewal replaces, and the old claim says so; a bare repeat does not", async () => {
+    const a = await asked({ label: "renew", kind: "page" });
+    const bare = await asked({ label: "renew", kind: "page" });
+    expect((await pending()).map((p) => p.id)).toEqual([a.id, bare.id]);
+    const b = await asked({ label: "renew", kind: "page", id: a.id, secret: a.secret });
+    expect((await pending()).map((p) => p.id)).toEqual([bare.id, b.id]);
+    const old = await post(s, "/api/auth/claim", { id: a.id, secret: a.secret });
+    expect(old.status).toBe(404);
+    expect(((await old.json()) as { error: string }).error).toContain("replaced by a newer one");
+    for (const p of [bare, b]) expect((await post(s, "/api/auth/deny", { id: p.id }, admin)).status).toBe(200);
   });
 
   test("the 7th new pair in a minute is a 429 with an error and makes no pair", async () => {
-    // two went above; the same label each time, so the waiting cap stays out of it
-    for (let i = 0; i < 4; i++) expect((await post(s, "/api/auth/pair", { label: "loop", kind: "page" })).status).toBe(200);
-    const res = await post(s, "/api/auth/pair", { label: "loop", kind: "page" });
-    expect(res.status).toBe(429);
-    expect(typeof ((await res.json()) as { error: unknown }).error).toBe("string");
+    // each is denied at once, so the waiting cap stays out of it; earlier tests made some
+    let made = 0;
+    let refused: Response | null = null;
+    for (let i = 0; i < 8 && !refused; i++) {
+      const res = await post(s, "/api/auth/pair", { label: "loop", kind: "page" });
+      if (res.status === 429) refused = res;
+      else {
+        made++;
+        const p = (await res.json()) as { id: string };
+        await post(s, "/api/auth/deny", { id: p.id }, admin);
+      }
+    }
+    expect(refused).not.toBeNull();
+    expect(made).toBeLessThan(7);
+    expect(typeof ((await (refused as Response).json()) as { error: unknown }).error).toBe("string");
+    expect(await pending()).toHaveLength(0);
   });
 });

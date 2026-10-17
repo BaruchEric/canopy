@@ -280,43 +280,78 @@ describe("pairing", () => {
     expect(kinds).toEqual(["page", "cli", "helper"]);
   });
 
-  test("a pair with the same label and address replaces the waiting one", () => {
+  test("a renewal with the waiting pair's own id and secret replaces it", () => {
+    const book = open();
+    const a = book.pair("laptop", "1.2.3.4", "page");
+    if ("error" in a) throw new Error(a.error);
+    const b = book.pair("laptop", "1.2.3.4", "page", { id: a.id, secret: a.secret });
+    if ("error" in b) throw new Error(b.error);
+    expect(book.pending().map((x) => x.id)).toEqual([b.id]);
+    expect(book.claim(a.id, a.secret)).toBeNull();
+    expect(book.replaced(a.id, a.secret)).toBe(true);
+    expect(book.replaced(a.id, "wrong")).toBe(false);
+    expect(book.replaced(b.id, b.secret)).toBe(false);
+    expect(book.claim(b.id, b.secret)).toBe("waiting");
+  });
+
+  test("the same label and address without the secret does not replace", () => {
     const book = open();
     const a = book.pair("laptop", "1.2.3.4", "page");
     const b = book.pair("laptop", "1.2.3.4", "page");
     if ("error" in a || "error" in b) throw new Error("pair");
-    expect(book.pending().map((x) => x.id)).toEqual([b.id]);
-    expect(book.claim(a.id, a.secret)).toBeNull();
-    expect(book.claim(b.id, b.secret)).toBe("waiting");
+    expect(book.pending().map((x) => x.id)).toEqual([a.id, b.id]);
+    expect(book.claim(a.id, a.secret)).toBe("waiting");
   });
 
-  test("a different label from the same address does not replace", () => {
+  test("a renewal with a wrong secret makes a new pair and replaces nothing", () => {
     const book = open();
-    expect("id" in book.pair("one", "1.2.3.4", "page")).toBe(true);
-    expect("id" in book.pair("two", "1.2.3.4", "page")).toBe(true);
+    const a = book.pair("laptop", "1.2.3.4", "page");
+    if ("error" in a) throw new Error(a.error);
+    const b = book.pair("laptop", "1.2.3.4", "page", { id: a.id, secret: "wrong" });
+    expect("id" in b).toBe(true);
     expect(book.pending()).toHaveLength(2);
+    expect(book.claim(a.id, a.secret)).toBe("waiting");
   });
 
-  test("a replacement still leaves room under the waiting cap", () => {
+  test("a renewal leaves room under the waiting cap", () => {
     const book = open();
-    for (let i = 0; i < 3; i++) expect("id" in book.pair(`p${i}`, "a", "page")).toBe(true);
-    expect("id" in book.pair("p0", "a", "page")).toBe(true);
+    const first = book.pair("p0", "a", "page");
+    if ("error" in first) throw new Error(first.error);
+    for (let i = 1; i < 3; i++) expect("id" in book.pair(`p${i}`, "a", "page")).toBe(true);
+    expect("error" in book.pair("p3", "a", "page")).toBe(true);
+    expect("id" in book.pair("p0", "a", "page", first)).toBe(true);
     expect(book.pending()).toHaveLength(3);
   });
 
   test("the 7th new pair inside a minute is refused, and one is allowed after it", () => {
     const book = open();
     for (let i = 0; i < 6; i++) {
-      // the same label each time, so the waiting cap never gets in the way
       t += 1000;
-      expect("id" in book.pair("loop", "a", "page")).toBe(true);
+      const p = book.pair("loop", "a", "page");
+      if ("error" in p) throw new Error(p.error);
+      // denying frees the slot, so only the rate cap is in the way
+      book.deny(p.id);
     }
     t += 1000;
     const seventh = book.pair("loop", "a", "page");
     expect("error" in seventh).toBe(true);
-    expect(book.pending()).toHaveLength(1);
+    expect(book.pending()).toHaveLength(0);
     t += MIN;
     expect("id" in book.pair("loop", "a", "page")).toBe(true);
+  });
+
+  test("both refusals say how to free the slots", () => {
+    const book = open();
+    for (let i = 0; i < 3; i++) book.pair(`p${i}`, "a", "page");
+    const full = book.pair("p3", "a", "page");
+    expect("error" in full && full.error).toContain("deny");
+    const burst = open();
+    for (let i = 0; i < 6; i++) {
+      const p = burst.pair("x", "a", "page");
+      if ("id" in p) burst.deny(p.id);
+    }
+    const limited = burst.pair("x", "a", "page");
+    expect("error" in limited && limited.error).toContain("deny");
   });
 
   test("deny makes claim null", () => {

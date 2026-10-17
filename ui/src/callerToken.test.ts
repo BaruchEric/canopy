@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import type { PendingPair } from "../../src/core/types";
 import { dialPlan, isOwnCode, originOf, pairAsk, pairLabel, readToken, TOKEN_HEADER, tokenHeaders, tokenKey, writeToken } from "./callerToken";
 
 /** a localStorage stand-in, or one that throws the way a blocked one does */
@@ -83,13 +84,13 @@ describe("the pair card", () => {
   const text = (a: ReturnType<typeof ask>) => `${a.head} ${a.rights.join(", ")}`;
 
   test("names the kind and the rights it grants", () => {
-    expect(text(ask("cli Erics-MacBook-Pro", "cli"))).toBe("cli Erics-MacBook-Pro asks to sign in to mini as cli: read, operate, admin");
-    expect(text(ask("helper mac", "helper"))).toBe("helper mac asks to sign in to mini as helper: helper");
-    expect(text(ask("Chrome on Mac", "page"))).toBe("Chrome on Mac asks to sign in to mini as page: read, operate, shell, admin");
+    expect(text(ask("cli Erics-MacBook-Pro", "cli"))).toBe("cli Erics-MacBook-Pro asks to sign in to mini, from 10.0.0.2. It would get cli rights: read, operate, admin");
+    expect(text(ask("helper mac", "helper"))).toBe("helper mac asks to sign in to mini, from 10.0.0.2. It would get helper rights: helper");
+    expect(text(ask("Chrome on Mac", "page"))).toBe("Chrome on Mac asks to sign in to mini, from 10.0.0.2. It would get page rights: read, operate, shell, admin");
   });
 
   test("a label that poses as another kind does not hide the kind", () => {
-    expect(text(ask("cli mac", "page"))).toContain("as page: read, operate, shell, admin");
+    expect(text(ask("cli mac", "page"))).toContain("It would get page rights: read, operate, shell, admin");
   });
 
   test("admin is flagged, and a helper has none", () => {
@@ -98,7 +99,22 @@ describe("the pair card", () => {
   });
 
   test("no backend name leaves the 'to' out", () => {
-    expect(pairAsk({ id: "i", label: "x", addr: "a", code: "C", at: 1, kind: "cli" }, "").head).toBe("x asks to sign in as cli:");
+    expect(pairAsk({ id: "i", label: "x", addr: "a", code: "C", at: 1, kind: "cli" }, "").head).toBe("x asks to sign in, from a. It would get cli rights:");
+  });
+
+  test("a pending pair from an older backend has no kind: the label rule applies", () => {
+    const old = (label: string) => pairAsk({ id: "i", label, addr: "a", code: "C", at: 1 } as unknown as PendingPair, "mini");
+    expect(old("cli mac").rights).toEqual(["read", "operate", "admin"]);
+    expect(old("helper mac").rights).toEqual(["helper"]);
+    expect(old("Chrome").rights).toEqual(["read", "operate", "shell", "admin"]);
+    expect(old("cli mac").head).toContain("It would get cli rights");
+  });
+
+  test("a long label is cut for the card and kept whole for the title", () => {
+    const long = "x".repeat(60);
+    const a = ask(long, "page");
+    expect(a.head.startsWith(`${"x".repeat(39)}\u2026 asks`)).toBe(true);
+    expect(a.title).toBe(long);
   });
 });
 

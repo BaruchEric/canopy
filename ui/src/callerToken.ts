@@ -7,7 +7,7 @@
    for the storage calls, which take the storage as an argument; tested. */
 
 import type { PendingPair } from "../../src/core/types";
-import { KIND_RIGHTS, type CallerKind, type Right } from "../../src/core/callers";
+import { kindOfLabel, KIND_RIGHTS, type CallerKind, type PairKind, type Right } from "../../src/core/callers";
 
 /** the header a token rides in */
 export const TOKEN_HEADER = "X-Canopy-Token";
@@ -77,12 +77,19 @@ export function pairLabel(device: string): string {
   return /^(cli|helper) /.test(d) ? `page ${d}` : d;
 }
 
+const LABEL_SHOWN = 40;
+
 /** How a pair request reads to the person who approves it: the heading with
- *  the kind it asks to sign in as, and the rights that grants. `admin` is
- *  flagged, since one approval of it lets the asker approve and revoke. */
-export function pairAsk(p: PendingPair, backend: string): { head: string; rights: readonly Right[]; admin: boolean } {
-  const rights = KIND_RIGHTS[p.kind];
-  return { head: `${p.label} asks to sign in${backend ? ` to ${backend}` : ""} as ${p.kind}:`, rights, admin: rights.includes("admin") };
+ *  who asks, from where, and the kind it would get, then the rights that
+ *  grants. `admin` is flagged, since one approval of it lets the asker
+ *  approve and revoke. The label is cut for the card and whole in `title`. A
+ *  request from a backend older than the kind has none, so the label rule
+ *  the backend itself applies is used. */
+export function pairAsk(p: PendingPair, backend: string): { head: string; title: string; rights: readonly Right[]; admin: boolean } {
+  const kind: PairKind = (p as { kind?: PairKind }).kind ?? kindOfLabel(p.label);
+  const rights = KIND_RIGHTS[kind];
+  const label = p.label.length > LABEL_SHOWN ? `${p.label.slice(0, LABEL_SHOWN - 1)}\u2026` : p.label;
+  return { head: `${label} asks to sign in${backend ? ` to ${backend}` : ""}, from ${p.addr}. It would get ${kind} rights:`, title: p.label, rights, admin: rights.includes("admin") };
 }
 
 /** Whether what was typed in the first-code box is the pair's own code, which

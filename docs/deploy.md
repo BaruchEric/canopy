@@ -1116,6 +1116,8 @@ Rollback is `log`, or `off`. The `canopy:callers` health check always reads ok, 
 - The Mac: `launchctl bootout gui/$(id -u)/ca.beric.canopy-server`, then `mv ~/.config/canopy/callers.json ~/.config/canopy/callers.json.aside`, then `launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/ca.beric.canopy-server.plist`. Killing the bun pid is not enough here, since launchd restarts it at once and it would read the old file.
 - The mini (on the host, in the canopy checkout): `docker compose stop canopy`, then `docker compose run --rm --no-deps --entrypoint mv canopy /config/callers.json /config/callers.json.aside`, then `docker compose start canopy`. The book lives in the `canopy-config` volume, not on the host's disk.
 
+A stream of pair requests blocks the first code too: it approves a waiting request, and at most three wait at once. To find the asker, read the address on the inbox cards, or in `GET /api/auth` (`pending`, each with its label, address and kind). On the mini, docker-proxy gives every client one address, so the label is the only other clue. A signed-in page frees a slot by denying a request; without one, the requests expire after 10 minutes.
+
 Run `canopy ranger fresh` afterwards, once a CLI has signed in again, so the ranger's session carries a token the new book knows.
 
 **Rollout**, in this order:

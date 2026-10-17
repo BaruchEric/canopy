@@ -277,8 +277,8 @@ export function InboxRow({
             </div>
           ) : item.kind === "pair" && item.pair ? (
             <div className="ask">
-              <div className="eyebrow">
-                <PairAsk pair={item.pair} backend={item.backend ?? ""} />, from {item.pair.addr}
+              <div className="eyebrow" title={item.pair.label}>
+                <PairAsk pair={item.pair} backend={item.backend ?? ""} />
               </div>
               <p className="pair-code">
                 code <b>{item.pair.code}</b>
@@ -412,10 +412,8 @@ export function InboxRow({
   );
 }
 
-/** An ask a link named that is no longer waiting: how it went, read from
- *  what the page holds or asked of the broker. */
-/** What a pair request asks to be: the kind and each right it grants, with
- *  admin in the warning colour, since one approval of it hands that over. */
+/** What a pair request asks for: who, from where, the kind it would get and
+ *  each right that grants, admin in the warning colour. */
 function PairAsk({ pair, backend }: { pair: PendingPair; backend: string }) {
   const { head, rights } = pairAsk(pair, backend);
   return (
@@ -431,6 +429,8 @@ function PairAsk({ pair, backend }: { pair: PendingPair; backend: string }) {
   );
 }
 
+/** An ask a link named that is no longer waiting: how it went, read from
+ *  what the page holds or asked of the broker. */
 function GoneAsk({ id }: { id: string }) {
   const held = useStore((s) => s.asks[id]);
   const [read, setRead] = useState<Ask | null | "missing">(null);
