@@ -74,6 +74,8 @@ usage:
     --machine M | --dry-run          one machine only; apply says what it would do and changes nothing
   canopy land <run>                  a ready branch run into its repo's landing queue: rebase, gates, fast-forward; never a push
   canopy queue [repo]                every landing queue: queued in order, sent back and why, ready to land
+  canopy pr <run> [--draft]          push a ready branch run and open a PR on GitHub in place of landing it
+  canopy prs [repo]                  every PR branch runs opened: where it stands, its checks, auto-fix and auto-merge
   canopy secrets [list] [--json]     the secret store's names, tags, rotation dates and sinks; never a value
   canopy secrets status [--json]     this backend's copy: commit, refusals, the key's lock, sink drift; exit 1 on drift
   canopy secrets unlock              unlock this machine's key (asks for its passphrase); its sinks are written then
