@@ -189,6 +189,33 @@ describe("a helper with a token", () => {
     expect(asked).toEqual(["cnp_helper_x", "cnp_helper_x"]);
   });
 
+  test("a ticket fetch that never answers times out and counts as a failed dial", async () => {
+    let asked = 0;
+    const server = Bun.serve({
+      port: 0,
+      hostname: "127.0.0.1",
+      fetch(req) {
+        if (new URL(req.url).pathname === "/api/auth/ticket") asked += 1;
+        return new Promise<Response>(() => {});
+      },
+    });
+    stops.push(() => server.stop(true));
+    const lines: string[] = [];
+    const helper = runHelper({
+      backend: `http://127.0.0.1:${server.port}`,
+      name: "mbp",
+      openers: [],
+      token: () => "cnp_helper_x",
+      ticketTimeout: 100,
+      log: (line) => lines.push(line),
+      run: async () => {},
+    });
+    stops.push(helper.stop);
+    await until(() => asked === 2, "a second ticket request after the first timed out", 3_000);
+    expect(lines.some((l) => l.includes("no ticket"))).toBe(true);
+    expect(helper.connected).toBe(false);
+  });
+
   test("no token means no ticket request", async () => {
     let posts = 0;
     let ticket: string | null = "unset";

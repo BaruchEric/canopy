@@ -32,7 +32,13 @@ export interface HelperOptions {
   /** the helper token, read before every dial; with none the helper dials
    *  without a ticket, which a backend not enforcing callers lets through */
   token?: () => string | null | Promise<string | null>;
+  /** how long a ticket fetch may take before the dial counts as failed;
+   *  `TICKET_TIMEOUT` by default, short in tests */
+  ticketTimeout?: number;
 }
+
+/** A ticket fetch slower than this is a failed dial, retried after the wait. */
+export const TICKET_TIMEOUT = 8_000;
 
 /** the backend origin as the websocket url the helper dials; `harnesses`
  *  tells the backend this helper reads an intent's harness (every one this
@@ -139,7 +145,8 @@ export function runHelper(opts: HelperOptions): { stop: () => void; readonly con
   };
 
   /** A one-use ticket for this dial, or null when there is no token. A
-   *  refusal or a dead backend throws: the caller retries at the next wait. */
+   *  refusal, a dead backend or one that does not answer in time throws: the
+   *  caller retries at the next wait. */
   const ticketFor = async (): Promise<string | null> => {
     const token = await opts.token?.();
     if (!token) return null;
@@ -148,6 +155,7 @@ export function runHelper(opts: HelperOptions): { stop: () => void; readonly con
       redirect: "manual",
       headers: { "content-type": "application/json", "x-canopy-token": token },
       body: JSON.stringify({ for: "helper" }),
+      signal: AbortSignal.timeout(opts.ticketTimeout ?? TICKET_TIMEOUT),
     });
     const body: unknown = await res.json().catch(() => null);
     const got = typeof body === "object" && body !== null ? (body as { ticket?: unknown; error?: unknown }) : {};
