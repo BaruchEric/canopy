@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import type { AdviceOffer, AgentCard, Ask, Flow, LandEntry, LandingInfo, PrState, PrWatch, Repo, Run, Sprout } from "../../src/core/types";
+import type { AdviceOffer, AgentCard, Ask, Flow, LandEntry, LandingInfo, PendingPair, PrState, PrWatch, Repo, Run, Sprout } from "../../src/core/types";
 import { rememberOffer } from "../../src/core/offer";
 import {
   askPermission,
@@ -475,5 +475,20 @@ describe("PRs that need a look", () => {
     const prs = [watch({ autoFix: true, gaveUp: "test failed 3 times", state: state({ checks: [] }) })];
     const items = mergeInbox([], {}, {}, 0, { repos: [repo("app")], cards: {}, prs });
     expect(items.map((i) => [i.key, i.kind, i.title, i.detail])).toEqual([["pr:b1", "gave-up", "PR #7: auto-fix gave up", "test failed 3 times"]]);
+  });
+});
+
+describe("pair requests", () => {
+  const pair = (id: string, over: Partial<PendingPair> = {}): PendingPair => ({ id, label: "Chrome on Mac", addr: "100.64.0.9", code: "K7QX", at: 5, ...over });
+
+  test("each pending pair on a backend this page signed in to is an auth item keyed by its backend", () => {
+    const items = mergeInbox([], {}, {}, 0, { repos: [], cards: {}, pairs: { b: [pair("p1"), pair("p2", { label: "cli mini", at: 3 })] } });
+    expect(items.map((i) => [i.key, i.source, i.kind, i.id, i.backend, i.who, i.detail])).toEqual([
+      ["auth:b:p2", "auth", "pair", "p2", "b", "cli mini", "K7QX"],
+      ["auth:b:p1", "auth", "pair", "p1", "b", "Chrome on Mac", "K7QX"],
+    ]);
+    expect(items[0]?.pair).toEqual(pair("p2", { label: "cli mini", at: 3 }));
+    expect(toRunAnswer({ pair: "allow" })).toBeNull();
+    expect(toAskAnswer({ pair: "deny" })).toBeNull();
   });
 });

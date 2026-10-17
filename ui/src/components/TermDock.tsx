@@ -5,7 +5,8 @@ import { FitAddon } from "@xterm/addon-fit";
 import "@xterm/xterm/css/xterm.css";
 import { api, reachable, socketUrl as backendSocket } from "../api";
 import { copyText } from "../share";
-import { backendOf, plainOf, qual } from "../registry";
+import { backendOf, baseOf, plainOf, qual } from "../registry";
+import { originOf, readToken } from "../callerToken";
 import { groveUrl, nameShellHere, parseRoute, popShell } from "../routes";
 import {
   PANEL_TERM,
@@ -141,8 +142,9 @@ function xtermTheme(): ITheme {
  *  that name or starts one; a socket after a dropped connection (`rejoin`)
  *  only joins, since a shell that is gone should say so rather than start
  *  over under the same name. The socket goes to the shell's own backend,
- *  with the ids that backend knows. */
-function socketUrl(tab: TermTab, cols: number, rows: number, rejoin: boolean): string {
+ *  with the ids that backend knows, and with a one-use ticket when this page
+ *  signed in to it, since a socket cannot carry the token's header. */
+function socketUrl(tab: TermTab, cols: number, rows: number, rejoin: boolean, ticket: string | null): string {
   const q = new URLSearchParams({
     id: plainOf(tab.repoId),
     term: plainOf(tab.id),
@@ -161,6 +163,7 @@ function socketUrl(tab: TermTab, cols: number, rows: number, rejoin: boolean): s
     else if (tab.harness) q.set("harness", tab.harness);
     if (tab.prompt) q.set("prompt", tab.prompt);
   }
+  if (ticket) q.set("ticket", ticket);
   return backendSocket(backendOf(tab.id), `/api/term?${q}`);
 }
 
@@ -297,7 +300,7 @@ export function TermView({
         note("[backend offline]");
       }
     };
-    const connect = () => {
+    const connect = async () => {
       if (gone || ended) return;
       // a tab's shell and its repo must be the same backend's; a mismatch
       // (a stale tab, a bug elsewhere) must never open a socket that sends
@@ -312,11 +315,17 @@ export function TermView({
       // real dial and its notes go as they would have
       if (!reachable(backendOf(tab.id))) {
         sayAway();
-        retry = setTimeout(connect, UNREACHABLE_WAIT);
+        retry = setTimeout(() => void connect(), UNREACHABLE_WAIT);
         return;
       }
       const rejoin = opened;
-      const sock = new WebSocket(socketUrl(tab, term.cols, term.rows, rejoin));
+      // A ticket works once, so every dial asks for its own. A page with no
+      // token for the backend dials bare, which log and off let through;
+      // one whose ticket is refused dials bare too, and enforce says no.
+      const b = backendOf(tab.id);
+      const ticket = readToken(originOf(baseOf(b))) ? await api.ticket(b, "term").catch(() => null) : null;
+      if (gone || ended) return;
+      const sock = new WebSocket(socketUrl(tab, term.cols, term.rows, rejoin, ticket));
       sock.binaryType = "arraybuffer";
       ws = sock;
       // A rejoined shell's output arrives again from the start of its
@@ -356,11 +365,11 @@ export function TermView({
         }
         sayAway();
         if (tries === 0) note(opened ? "[the connection dropped; rejoining]" : "[could not reach the canopy server; retrying]");
-        retry = setTimeout(connect, rejoinWait(tries));
+        retry = setTimeout(() => void connect(), rejoinWait(tries));
         tries += 1;
       };
     };
-    connect();
+    void connect();
 
     // what the key bar sends goes the same way as a typed key
     sendRef.current = (data) => send(enc.encode(data));

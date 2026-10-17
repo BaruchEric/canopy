@@ -101,6 +101,7 @@ import type { ProfileFields } from "../../src/core/screenlayouts";
 import { pickUrl, split, wsUrl, type BackendSignal } from "./backends";
 import { normalizeRoutes } from "../../src/core/route";
 import { keyHeaders } from "./answerKey";
+import { isAuthInfo, originOf, TOKEN_HEADER, tokenHeaders, type AuthInfo } from "./callerToken";
 import {
   qDevice,
   qEvent,
@@ -162,10 +163,14 @@ async function req<T>(b: string, path: string, init: RequestInit = {}): Promise<
   if (!reachable(b)) throw new Error(`${b} has not answered yet`);
   const base = baseOf(b);
   const opts: RequestInit = { ...init };
-  // a GET with no Content-Type is a simple request: no preflight to another origin
-  if (typeof init.body === "string" && init.headers === undefined) {
-    opts.headers = { "Content-Type": "application/json" };
-  }
+  // The backend's own token, when this page signed in to it, on every call
+  // so a GET says who asks too. A GET with neither it nor a Content-Type is a
+  // simple request, with no preflight to another origin; one with the token
+  // is preflighted, which the server's CORS answers for x-canopy-token.
+  const headers = tokenHeaders(originOf(base), init.headers);
+  if (typeof init.body === "string" && init.headers === undefined) headers.set("Content-Type", "application/json");
+  const withToken = headers.has(TOKEN_HEADER);
+  opts.headers = headers;
   // another origin: the gate's cookie has to ride along
   if (base) opts.credentials = "include";
   let r: Response;
@@ -179,9 +184,9 @@ async function req<T>(b: string, path: string, init: RequestInit = {}): Promise<
   // Parse defensively: a dead API or a proxy error page is not JSON, and
   // letting that SyntaxError escape would hide the real status.
   const text = await r.text();
-  let body: (T & { error?: string; login?: unknown }) | undefined;
+  let body: (T & { error?: string; login?: unknown; need?: unknown }) | undefined;
   try {
-    body = JSON.parse(text) as T & { error?: string; login?: unknown };
+    body = JSON.parse(text) as T & { error?: string; login?: unknown; need?: unknown };
   } catch {
     signal(b, { kind: "answered" });
     if (!r.ok) throw new Error(`${r.status} ${r.statusText}`);
@@ -191,7 +196,9 @@ async function req<T>(b: string, path: string, init: RequestInit = {}): Promise<
     signal(b, { kind: "signin", login: body.login });
     throw new Error(body.error ?? `${r.status} ${r.statusText}`);
   }
-  signal(b, { kind: "answered" });
+  // canopy's own caller check: never the gate's sign-in, which carries a login
+  if ((r.status === 401 || r.status === 403) && typeof body.need === "string") signal(b, { kind: "refused", status: r.status, need: body.need, withToken });
+  else signal(b, { kind: "answered" });
   // the status rides on the error for a caller that tells a refusal apart
   // (a backend with no broker answers 503) from a failure
   if (!r.ok) throw Object.assign(new Error(body.error ?? `${r.status} ${r.statusText}`), { status: r.status });
@@ -246,7 +253,8 @@ async function repoReq<T>(id: string, path: (plain: string) => string, init?: Re
 async function blobReq(b: string, path: string): Promise<Blob> {
   if (!reachable(b)) throw new Error(`${b} has not answered yet`);
   const base = baseOf(b);
-  const r = await fetch(base + path, base ? { credentials: "include" } : {});
+  const headers = tokenHeaders(originOf(base));
+  const r = await fetch(base + path, base ? { credentials: "include", headers } : { headers });
   if (!r.ok) {
     const body = (await r.json().catch(() => null)) as { error?: string } | null;
     throw Object.assign(new Error(body?.error ?? `${r.status} ${r.statusText}`), { status: r.status });
@@ -697,6 +705,24 @@ export const api = {
     const [b, plain] = on(id);
     await req<{ ok: true }>(b, "/api/prs/close", { method: "POST", body: JSON.stringify({ run: plain }) });
   },
+  /** one backend's caller check: its mode, callers, pair requests and who
+   *  this page is to it; null from a backend from before there was one */
+  auth: async (b: string = homeName()): Promise<AuthInfo | null> => {
+    const r = await req<unknown>(b, "/api/auth");
+    return isAuthInfo(r) ? r : null;
+  },
+  /** asks a backend to let this page in; the secret claims the token once approved */
+  pair: (b: string, label: string) => req<{ id: string; code: string; secret: string }>(b, "/api/auth/pair", { method: "POST", body: JSON.stringify({ label }) }),
+  /** the token once someone approved the pair, or waiting until then */
+  claim: (b: string, id: string, secret: string) =>
+    req<{ token: string } | { waiting: true }>(b, "/api/auth/claim", { method: "POST", body: JSON.stringify({ id, secret }) }),
+  /** approves a waiting pair with the first sign-in code from the server's log */
+  firstCode: (b: string, id: string, code: string) => req<{ ok: true }>(b, "/api/auth/first", { method: "POST", body: JSON.stringify({ id, code }) }),
+  approvePair: (b: string, id: string) => req<{ ok: true }>(b, "/api/auth/approve", { method: "POST", body: JSON.stringify({ id }) }),
+  denyPair: (b: string, id: string) => req<{ ok: true }>(b, "/api/auth/deny", { method: "POST", body: JSON.stringify({ id }) }),
+  revokeCaller: (b: string, id: string) => req<{ ok: true }>(b, "/api/auth/revoke", { method: "POST", body: JSON.stringify({ id }) }),
+  /** a one-use ticket for a socket the browser cannot put a header on */
+  ticket: async (b: string, what: "term" | "helper") => (await req<{ ticket: string }>(b, "/api/auth/ticket", { method: "POST", body: JSON.stringify({ for: what }) })).ticket,
   /** one backend's branch runs and landing queue; an older backend has none */
   landing: async (b: string = homeName()) => {
     const r = await req<Partial<LandingInfo> | null>(b, "/api/landing");

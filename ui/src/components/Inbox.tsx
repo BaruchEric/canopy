@@ -39,8 +39,8 @@ export function useNow(on: boolean, ms = 1000): number {
   return now;
 }
 
-const KIND_GLYPH: Record<InboxItem["kind"], string> = { permission: "⚿", question: "?", proposal: "≡", guard: "⛨", gate: "⏸", clarify: "✎", park: "⏸", advice: "↺", "hand-off": "⇪", "sent-back": "↩", ci: "✗", "gave-up": "✗" };
-const SOURCE_WORD: Record<InboxItem["source"], string> = { ask: "agent", run: "run", flow: "workflow", sprout: "incubator", advice: "incubator", landing: "landing queue", pr: "PR watch" };
+const KIND_GLYPH: Record<InboxItem["kind"], string> = { permission: "⚿", question: "?", proposal: "≡", guard: "⛨", gate: "⏸", clarify: "✎", park: "⏸", advice: "↺", "hand-off": "⇪", "sent-back": "↩", ci: "✗", "gave-up": "✗", pair: "⚷" };
+const SOURCE_WORD: Record<InboxItem["source"], string> = { ask: "agent", run: "run", flow: "workflow", sprout: "incubator", advice: "incubator", landing: "landing queue", pr: "PR watch", auth: "sign-in" };
 
 /** The retro lessons on offer, each with its own accept and dismiss.
  *  Accepting never edits anything itself: it opens a chat on canopy's own
@@ -274,6 +274,24 @@ export function InboxRow({
                 </button>
               </div>
             </div>
+          ) : item.kind === "pair" && item.pair ? (
+            <div className="ask">
+              <div className="eyebrow">
+                {item.pair.label} asks to sign in{item.backend ? ` to ${item.backend}` : ""}, from {item.pair.addr}
+              </div>
+              <p className="pair-code">
+                code <b>{item.pair.code}</b>
+                <span className="settings-hint"> allow it only when the asker shows the same code</span>
+              </p>
+              <div className="ask-row">
+                <button type="button" className="mini strong" disabled={busy} title="Let it in: it gets a token of its own, which Settings can revoke" onClick={() => answer({ pair: "allow" })}>
+                  allow
+                </button>
+                <button type="button" className="mini" disabled={busy} onClick={() => answer({ pair: "deny" })}>
+                  deny
+                </button>
+              </div>
+            </div>
           ) : item.kind === "ci" || item.kind === "gave-up" ? (
             <div className="ask">
               <div className="eyebrow">
@@ -375,7 +393,7 @@ export function InboxRow({
             />
           )}
           <div className="kept-acts">
-            {item.source !== "ask" && item.source !== "advice" && (
+            {item.source !== "ask" && item.source !== "advice" && item.source !== "auth" && (
               <button type="button" className="mini" onClick={openSheet}>
                 open the {item.source === "run" ? "run" : item.source === "sprout" ? "project" : item.source === "landing" ? "landing section" : item.source === "pr" ? "run" : "workflow"}
               </button>

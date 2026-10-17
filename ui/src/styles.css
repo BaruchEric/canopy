@@ -9704,6 +9704,90 @@ span.effective-flag:not(:first-child) {
   background: color-mix(in srgb, var(--moss) 22%, transparent);
 }
 
+/* ---------- signing in to a backend: the top bar's chip and strip, the
+   inbox's pair row and Settings' callers (callerToken.ts) ---------- */
+.mini.signin-chip {
+  color: var(--sky);
+  background: color-mix(in srgb, var(--sky) 12%, transparent);
+  font-weight: 600;
+}
+.mini.signin-chip:hover:not(:disabled) {
+  color: var(--sky);
+  background: color-mix(in srgb, var(--sky) 20%, transparent);
+}
+.mini.signin-chip.failed {
+  color: var(--rust);
+  background: color-mix(in srgb, var(--rust) 12%, transparent);
+}
+.signin-strip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 2px 4px 2px 8px;
+  border-radius: var(--r);
+  color: var(--ink-dim);
+  background: color-mix(in srgb, var(--sky) 10%, transparent);
+  white-space: nowrap;
+  max-width: 100%;
+}
+.signin-code,
+.pair-code b {
+  font-family: var(--mono);
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  color: var(--sky);
+}
+.signin-hint {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  min-width: 0;
+}
+.signin-input {
+  width: 7.5em;
+  padding: 1px 6px;
+  font: inherit;
+  font-family: var(--mono);
+  color: var(--ink);
+  background: var(--bark1);
+  border: 1px solid var(--hair);
+  border-radius: 6px;
+}
+.signin-input:focus {
+  outline: none;
+  border-color: var(--sky);
+}
+.signin-err {
+  color: var(--rust);
+}
+.pair-code {
+  margin: 4px 0;
+}
+.callers {
+  list-style: none;
+  margin: 4px 0 0;
+  padding: 0;
+}
+.caller-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 2px 0;
+}
+.caller-label {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--ink);
+}
+.caller-kind,
+.caller-used {
+  color: var(--ink-faint);
+  font-size: 11px;
+  white-space: nowrap;
+}
+
 /* ---------- the ranger: its chip, popover and Settings row (Ranger.tsx) ---------- */
 .mini.ranger-chip.ranger-ok {
   color: var(--moss);

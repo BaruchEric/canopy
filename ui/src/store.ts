@@ -1,6 +1,6 @@
 import { create } from "zustand";
 import { api, onBackendSignal, PartialFleetError, resolveBase, subscribe } from "./api";
-import { backendOf, homeName, isHome, plainOf, qual, registry, setBase, setRegistry } from "./registry";
+import { backendOf, baseOf, homeName, isHome, plainOf, qual, registry, setBase, setRegistry } from "./registry";
 import { rangerSessions } from "./ranger";
 import { backendState, RETRY_FIRST, retryWait, sliceIn, split, type BackendStatus, type Reg } from "./backends";
 import { mergeHistory } from "./qualify";
@@ -47,7 +47,7 @@ import { boardOrder, invertPick, pickWhere, rangeIds, setPick, togglePick } from
 import { appendFeed, describeEvent, type FeedEntry, type FeedSnapshot } from "./feed";
 import { mergeAction } from "./peers";
 import { convOf, isUnread, mergeMessages } from "./chan";
-import type { AdviceAccepted, AdviceOffer, AgentCard, AgentKind, Ask, ChanMessage, HealthCheck, IncubatorStages, KitInfo, LandingInfo, Presence, PrWatch, RangerInfo, SecretsInfo, Sprout, TailchanInfo } from "../../src/core/types";
+import type { AdviceAccepted, AdviceOffer, AgentCard, AgentKind, Ask, ChanMessage, HealthCheck, IncubatorStages, KitInfo, LandingInfo, PendingPair, Presence, PrWatch, RangerInfo, SecretsInfo, Sprout, TailchanInfo } from "../../src/core/types";
 import { mergeLanding } from "./landing";
 import { mergePrs } from "./prs";
 import { mergeAsks, mergeInbox, replaceAsks, toAskAnswer, toRunAnswer, type InboxAnswer, type InboxItem } from "./inbox";
@@ -57,6 +57,8 @@ import { clientCaps } from "../../src/core/client";
 import { normalizeRoutes, resolveAgent } from "../../src/core/route";
 import { flatAgent, hasRouting, NO_ROUTES } from "./agents";
 import { cleanKey, keyTestOf, readAnswerKey, writeAnswerKey, type KeyTest } from "./answerKey";
+import { originOf, pairLabel, readToken, writeToken, type AuthInfo, type BackendAuth, type SignIn } from "./callerToken";
+import { deviceName } from "../../src/core/presence";
 import { listedTask } from "../../src/core/tasks";
 import { startsDev } from "./tasks";
 import { CLI_KEEP, type CliEntry, type SproutDraft } from "./cli";
@@ -738,6 +740,12 @@ interface CanopyState {
   /** each backend's PRs that branch runs opened (server/prs); an older
    *  backend that has none is missing */
   prs: Record<string, PrWatch[]>;
+  /** each backend's caller check as this page last read it (server/callers),
+   *  with whether this page holds a token for it; an older backend that has
+   *  none is missing */
+  authByBackend: Record<string, BackendAuth>;
+  /** a sign-in on its way, or one that failed, by backend */
+  signIns: Record<string, SignIn>;
   /** the retro lessons home has on offer, which the inbox shows as one item */
   advice: AdviceOffer[];
   /** an accepted lesson's text by chat run id, which that chat's message box
@@ -1099,6 +1107,18 @@ interface CanopyState {
   setPr: (id: string, change: { autoFix?: boolean; autoMerge?: boolean }) => Promise<void>;
   /** closes a branch's PR; the run may land here again */
   closePr: (id: string) => Promise<void>;
+  /** reads one backend's caller check, home by default */
+  loadAuth: (backend?: string) => Promise<void>;
+  /** asks a backend to let this page in, waits for someone to approve it,
+   *  and keeps the token it mints */
+  signIn: (backend: string) => Promise<void>;
+  /** approves this page's own waiting sign-in with the first code from the
+   *  backend's log */
+  useFirstCode: (backend: string, code: string) => Promise<void>;
+  approvePair: (backend: string, id: string) => Promise<void>;
+  denyPair: (backend: string, id: string) => Promise<void>;
+  /** ends a caller's token; this page's own forgets it here too */
+  revokeCaller: (backend: string, id: string) => Promise<void>;
   /** each backend's secret store, by backend name: names, sinks and
    *  proposals, never a value; an older backend that has none is missing */
   secrets: Record<string, SecretsInfo>;
@@ -1543,6 +1563,19 @@ const kitEvents = new Map<string, number>();
 const landingEvents = new Map<string, number>();
 /* and each backend's PR events */
 const prsEvents = new Map<string, number>();
+/* and each backend's pair events */
+const authEvents = new Map<string, number>();
+/* each sign-in's poll, by backend, so one in flight is not started twice
+   (a backend holds at most three pair requests) and a hide stops it */
+const signingIn = new Map<string, number>();
+let signInSeq = 0;
+/** how often a sign-in asks whether it was approved, and for how long */
+let claimEvery = 2_000;
+const CLAIM_WINDOW = 10 * 60_000;
+/** for tests: a shorter wait between claims */
+export function setClaimEvery(ms: number): void {
+  claimEvery = ms;
+}
 /* and each backend's secrets events */
 const secretsEvents = new Map<string, number>();
 /** the same for the advice on offer */
@@ -1619,6 +1652,31 @@ function openSavedPanels(
   return { panels, closedSections, popped };
 }
 
+/** A backend refused a call for want of a token: the top bar offers to sign
+ *  in to it. A 401 to a call that carried one means the backend no longer
+ *  knows it (revoked, or a month unused), so it is forgotten here. */
+function refusedHere(set: (fn: (s: CanopyState) => Partial<CanopyState>) => void, b: string, deadToken: boolean): void {
+  if (deadToken) writeToken(originOf(baseOf(b)), null);
+  set((s) => {
+    const was = s.authByBackend[b];
+    if (!was || (was.needed && !deadToken)) return {};
+    return { authByBackend: { ...s.authByBackend, [b]: { ...was, needed: true, ...(deadToken ? { hasToken: false, you: "none" as const, youId: null } : {}) } } };
+  });
+}
+
+/** One backend's caller check as the store keeps it, from what it answered:
+ *  a token the backend no longer knows (it says this page is nobody) is
+ *  forgotten, so the top bar offers to sign in again. */
+function authOf(b: string, info: AuthInfo, needed: boolean): BackendAuth {
+  const origin = originOf(baseOf(b));
+  let hasToken = readToken(origin) !== null;
+  if (hasToken && info.you === "none") {
+    writeToken(origin, null);
+    hasToken = false;
+  }
+  return { ...info, hasToken, needed: needed && info.you === "none" };
+}
+
 /** What a backend's stream coming back after a drop re-reads: the server
  *  replays nothing. Its tree and records, the shells it holds, the ones a
  *  reboot left to restore (worked out before it listened, so never
@@ -1643,6 +1701,7 @@ function resync(get: () => CanopyState, set: (fn: (s: CanopyState) => Partial<Ca
   void get().loadKit(b);
   void get().loadLanding(b);
   void get().loadPrs(b);
+  void get().loadAuth(b);
   void get().loadSecrets(b);
   // the tasks a panel loaded may have moved while the stream was down
   for (const id of Object.keys(get().tasks)) if (backendOf(id) === b) void get().loadTasks(id).catch(() => {});
@@ -1816,6 +1875,8 @@ export const useStore = create<CanopyState>((set, get) => ({
   kit: {},
   landing: {},
   prs: {},
+  authByBackend: {},
+  signIns: {},
   secrets: {},
   advice: [],
   chatDrafts: {},
@@ -1915,6 +1976,7 @@ export const useStore = create<CanopyState>((set, get) => ({
       if (!c) return;
       const status = backendState(c.status, sig);
       if (status !== c.status) set((s) => ({ conns: withConn(s, name, { status }) }));
+      if (sig.kind === "refused") refusedHere(set, name, sig.status === 401 && sig.withToken);
     });
     const e = ++epoch;
     try {
@@ -2025,6 +2087,7 @@ export const useStore = create<CanopyState>((set, get) => ({
     void get().loadKit();
     void get().loadLanding();
     void get().loadPrs();
+    void get().loadAuth();
     void get().loadSecrets();
     // the screen layouts, which a backend from before them does not have
     void get().loadScreenProfiles();
@@ -2185,6 +2248,7 @@ export const useStore = create<CanopyState>((set, get) => ({
     void get().loadKit(name);
     void get().loadLanding(name);
     void get().loadPrs(name);
+    void get().loadAuth(name);
     void get().loadSecrets(name);
     void api
       .about(name)
@@ -2239,6 +2303,9 @@ export const useStore = create<CanopyState>((set, get) => ({
     const { [name]: _kit, ...kit } = s.kit;
     const { [name]: _landing, ...landing } = s.landing;
     const { [name]: _prs, ...prs } = s.prs;
+    const { [name]: _auth, ...authByBackend } = s.authByBackend;
+    const { [name]: _signIn, ...signIns } = s.signIns;
+    signingIn.delete(name);
     const { [name]: _secrets, ...secrets } = s.secrets;
     const backendOrder = applyRegistry(s.home, registryEntries, hiddenBackends);
     set({
@@ -2265,6 +2332,8 @@ export const useStore = create<CanopyState>((set, get) => ({
       kit,
       landing,
       prs,
+      authByBackend,
+      signIns,
       secrets,
       agents,
       launchers,
@@ -2739,6 +2808,15 @@ export const useStore = create<CanopyState>((set, get) => ({
       set((st) => ({ prs: { ...st.prs, [b]: ev.prs } }));
       return;
     }
+    if (ev.type === "auth") {
+      authEvents.set(b, (authEvents.get(b) ?? 0) + 1);
+      // the event carries the pairs alone: it updates a backend already read
+      set((st) => {
+        const was = st.authByBackend[b];
+        return was ? { authByBackend: { ...st.authByBackend, [b]: { ...was, pending: ev.pending } } } : {};
+      });
+      return;
+    }
     if (ev.type === "secrets") {
       secretsEvents.set(b, (secretsEvents.get(b) ?? 0) + 1);
       // a broadcast carries nobody's session; keep what this page last read
@@ -3109,6 +3187,84 @@ export const useStore = create<CanopyState>((set, get) => ({
   closePr: async (id) => {
     await api.closePr(id);
   },
+  loadAuth: async (backend) => {
+    const b = backend ?? get().home;
+    const mark = authEvents.get(b) ?? 0;
+    let info: AuthInfo | null;
+    try {
+      info = await api.auth(b);
+    } catch {
+      // an older backend has no caller check; nothing shows for it
+      return;
+    }
+    if (!info || !isShown(get(), b)) return;
+    const was = get().authByBackend[b];
+    // a pair event since the read is newer than the read's own list
+    const pending = was && (authEvents.get(b) ?? 0) !== mark ? was.pending : info.pending;
+    const auth = authOf(b, { ...info, pending }, was?.needed ?? false);
+    set((s) => ({ authByBackend: { ...s.authByBackend, [b]: auth } }));
+  },
+  signIn: async (backend) => {
+    if (signingIn.has(backend) || !isShown(get(), backend)) return;
+    const mine = ++signInSeq;
+    signingIn.set(backend, mine);
+    const live = () => signingIn.get(backend) === mine && isShown(get(), backend);
+    const say = (signIn: SignIn | null) =>
+      set((s) => {
+        const { [backend]: _was, ...rest } = s.signIns;
+        return { signIns: signIn ? { ...rest, [backend]: signIn } : rest };
+      });
+    try {
+      const ua = typeof navigator === "undefined" ? "" : navigator.userAgent;
+      const { id, code, secret } = await api.pair(backend, pairLabel(get().settings.device || deviceName(ua)));
+      if (!live()) return;
+      say({ state: "waiting", id, code });
+      const until = Date.now() + CLAIM_WINDOW;
+      for (;;) {
+        let got: { token: string } | { waiting: true } | null = null;
+        try {
+          got = await api.claim(backend, id, secret);
+        } catch (err) {
+          // denied, expired or claimed (404), or too many tries (429): over.
+          // No answer at all is the network's, and the next try may get one
+          if (typeof (err as { status?: unknown }).status === "number") throw err;
+        }
+        if (!live()) return;
+        if (got && "token" in got) {
+          writeToken(originOf(baseOf(backend)), got.token);
+          say(null);
+          await get().loadAuth(backend);
+          return;
+        }
+        if (Date.now() >= until) throw new Error("no one approved it within ten minutes");
+        await new Promise((r) => setTimeout(r, claimEvery));
+        if (!live()) return;
+      }
+    } catch (err) {
+      if (live()) say({ state: "failed", why: err instanceof Error ? err.message : String(err) });
+    } finally {
+      if (signingIn.get(backend) === mine) signingIn.delete(backend);
+    }
+  },
+  useFirstCode: async (backend, code) => {
+    const s = get().signIns[backend];
+    if (s?.state !== "waiting") throw new Error("no sign-in is waiting");
+    // the poll picks the token up on its next claim
+    await api.firstCode(backend, s.id, code.trim());
+  },
+  approvePair: async (backend, id) => {
+    await api.approvePair(backend, id);
+    await get().loadAuth(backend);
+  },
+  denyPair: async (backend, id) => {
+    await api.denyPair(backend, id);
+    await get().loadAuth(backend);
+  },
+  revokeCaller: async (backend, id) => {
+    await api.revokeCaller(backend, id);
+    if (get().authByBackend[backend]?.youId === id) writeToken(originOf(baseOf(backend)), null);
+    await get().loadAuth(backend);
+  },
   loadSecrets: async (backend) => {
     const b = backend ?? get().home;
     const mark = secretsEvents.get(b) ?? 0;
@@ -3263,6 +3419,10 @@ export const useStore = create<CanopyState>((set, get) => ({
     if (item.source === "pr") {
       if (!("pr" in answer)) throw new Error("a PR's red check takes auto-fix");
       return get().setPr(item.id, { autoFix: true });
+    }
+    if (item.source === "auth") {
+      if (!("pair" in answer) || item.backend === undefined) throw new Error("a pair request takes allow or deny");
+      return answer.pair === "allow" ? get().approvePair(item.backend, item.id) : get().denyPair(item.backend, item.id);
     }
     if (item.source === "advice") {
       if (!("advice" in answer)) throw new Error("a lesson takes accept or dismiss");
@@ -4193,6 +4353,7 @@ let inboxIn: {
   advice: AdviceOffer[];
   landing: Record<string, LandingInfo>;
   prs: Record<string, PrWatch[]>;
+  auth: Record<string, BackendAuth>;
 } | null = null;
 let inboxOut: InboxItem[] = [];
 
@@ -4201,10 +4362,10 @@ let inboxOut: InboxItem[] = [];
  *  once per change of what it reads, so a selector over it settles; a
  *  countdown keeps its own time off each item's `until`. */
 export function inboxItems(s: CanopyState): InboxItem[] {
-  if (inboxIn && inboxIn.asks === s.asks && inboxIn.runs === s.runs && inboxIn.flows === s.flows && inboxIn.repos === s.repos && inboxIn.registry === s.registry && inboxIn.sprouts === s.sprouts && inboxIn.advice === s.advice && inboxIn.landing === s.landing && inboxIn.prs === s.prs) {
+  if (inboxIn && inboxIn.asks === s.asks && inboxIn.runs === s.runs && inboxIn.flows === s.flows && inboxIn.repos === s.repos && inboxIn.registry === s.registry && inboxIn.sprouts === s.sprouts && inboxIn.advice === s.advice && inboxIn.landing === s.landing && inboxIn.prs === s.prs && inboxIn.auth === s.authByBackend) {
     return inboxOut;
   }
-  inboxIn = { asks: s.asks, runs: s.runs, flows: s.flows, repos: s.repos, registry: s.registry, sprouts: s.sprouts, advice: s.advice, landing: s.landing, prs: s.prs };
+  inboxIn = { asks: s.asks, runs: s.runs, flows: s.flows, repos: s.repos, registry: s.registry, sprouts: s.sprouts, advice: s.advice, landing: s.landing, prs: s.prs, auth: s.authByBackend };
   inboxOut = mergeInbox(Object.values(s.asks), s.runs, s.flows, Date.now(), {
     repos: s.repos,
     cards: s.registry,
@@ -4214,6 +4375,7 @@ export function inboxItems(s: CanopyState): InboxItem[] {
     advice: s.advice,
     landing: landingAll(s),
     prs: prsAll(s),
+    pairs: pairsOf(s.authByBackend),
   });
   return inboxOut;
 }
@@ -4456,3 +4618,17 @@ export function prsAll(s: Pick<CanopyState, "prs">): PrWatch[] {
   }
   return prsOut;
 }
+
+/** The pair requests the inbox shows: each backend's where this page holds
+ *  a page token, the one kind of caller that may approve them. */
+export function pairsOf(auth: Record<string, BackendAuth>): Record<string, PendingPair[]> {
+  const out: Record<string, PendingPair[]> = {};
+  for (const [b, a] of Object.entries(auth)) if (a.you === "page" && a.pending.length) out[b] = a.pending;
+  return out;
+}
+
+/** Whether the top bar offers to sign in to a backend: its check is on, it
+ *  does not know this page, and this page holds no token for it or a call
+ *  was just refused for want of one. */
+export const wantsSignIn = (a: BackendAuth | undefined): boolean =>
+  a !== undefined && a.mode !== "off" && a.you === "none" && (!a.hasToken || a.needed);

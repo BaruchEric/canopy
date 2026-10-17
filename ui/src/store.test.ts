@@ -38,7 +38,7 @@ import {
 import { applyQuery } from "./filters";
 import { cellOf, columnOf, panelsOf, type DockLayout } from "./grid";
 import { projectFront } from "./front";
-import { onBackendSignal } from "./api";
+import { api, onBackendSignal } from "./api";
 import { setBase, setRegistry } from "./registry";
 import { hasOtherBackend, RETRY_FIRST } from "./backends";
 import { WAITING_PANEL } from "./waiting";
@@ -702,7 +702,7 @@ const twoBackends = { self: "a", backends: [{ name: "a", tailnet: "http://a.test
 describe("several backends", () => {
   const pristine = useStore.getState();
   const realFetch = globalThis.fetch;
-  const g = globalThis as unknown as { EventSource?: unknown; localStorage?: unknown };
+  const g = globalThis as unknown as { EventSource?: unknown; localStorage?: unknown; location?: unknown };
   const realES = g.EventSource;
   const calls: string[] = [];
   let cleanup: (() => void) | null = null;
@@ -718,6 +718,7 @@ describe("several backends", () => {
     globalThis.fetch = realFetch;
     g.EventSource = realES;
     delete g.localStorage;
+    delete g.location;
     calls.length = 0;
     setRegistry("", []);
     setBase("b", "");
@@ -760,6 +761,7 @@ describe("several backends", () => {
         "/api/history",
         "/api/peers",
         "/api/prs",
+        "/api/auth",
         "/api/tailchan",
         "/api/registry",
         "/api/asks",
@@ -1346,6 +1348,47 @@ describe("several backends", () => {
     const b = connOf(useStore.getState(), "b").status;
     expect(b.state).toBe("signin");
     expect(b.login).toBe("https://gate.test/login");
+    expect(connOf(useStore.getState(), "a").status.state).toBe("online");
+  });
+
+  test("a backend's token rides to that backend alone", async () => {
+    g.location = { origin: "http://a.test", protocol: "http:", host: "a.test", href: "http://a.test/", search: "" };
+    const kept = new Map([["canopy.token.http://a.test", "cnp_page_a"]]);
+    g.localStorage = { getItem: (k: string) => kept.get(k) ?? null, setItem: (k: string, v: string) => void kept.set(k, v), removeItem: (k: string) => void kept.delete(k) };
+    const sent: [string, string | null][] = [];
+    const heard = (who: string, answers: Answer): Answer => (path, init) => {
+      sent.push([who, new Headers(init?.headers).get("x-canopy-token")]);
+      return answers(path, init);
+    };
+    const auth = { mode: "log", refused: { count: 0, recent: [] }, callers: [], pending: [], you: "page", youId: "c1" };
+    await start(
+      heard("a", backendAnswers(scanOf("/a", [repo("proj")]), [], { "/api/backends": twoBackends, "/api/auth": auth })),
+      heard("b", backendAnswers(scanOf("/b", [repo("x")]), [])),
+    );
+    await settle();
+    await api.rescan("b").catch(() => {});
+    await api.rescan("a").catch(() => {});
+    const a = sent.filter(([w]) => w === "a");
+    const b = sent.filter(([w]) => w === "b");
+    expect(a.length).toBeGreaterThan(0);
+    expect(b.length).toBeGreaterThan(0);
+    expect(a.every(([, t]) => t === "cnp_page_a")).toBe(true);
+    expect(b.every(([, t]) => t === null)).toBe(true);
+    expect(useStore.getState().authByBackend["a"]?.you).toBe("page");
+  });
+
+  test("a refusal that names the right it wanted marks the backend's sign-in, not the gate's", async () => {
+    const auth = { mode: "enforce", refused: { count: 0, recent: [] }, callers: [], pending: [], you: "none", youId: null };
+    const bAnswers = backendAnswers(scanOf("/b", [repo("x")]), [], { "/api/auth": auth });
+    await start(backendAnswers(scanOf("/a", [repo("proj")]), [], { "/api/backends": twoBackends }), (path, init) =>
+      init?.method === "POST" ? new Response(JSON.stringify({ error: "sign in to canopy", need: "admin" }), { status: 403 }) : bAnswers(path, init),
+    );
+    await settle();
+    expect(useStore.getState().authByBackend["b"]).toMatchObject({ mode: "enforce", you: "none", needed: false });
+    await expect(api.rescan("b")).rejects.toThrow("sign in to canopy");
+    await settle();
+    expect(useStore.getState().authByBackend["b"]?.needed).toBe(true);
+    expect(connOf(useStore.getState(), "b").status.state).toBe("online");
     expect(connOf(useStore.getState(), "a").status.state).toBe("online");
   });
 

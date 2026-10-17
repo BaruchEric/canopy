@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { useStore } from "../store";
+import { originOf, tokenHeaders } from "../callerToken";
 import { WidgetGear, shareEntries, useZoom } from "./Surface";
 
 export function Library({ ports, project, onRepo, onPorts }: {
@@ -27,7 +28,7 @@ export function Library({ ports, project, onRepo, onPorts }: {
     const controller = new AbortController();
     setReady(false);
     setError("");
-    void fetch("/api/library", { signal: controller.signal }).then(async (response) => {
+    void fetch("/api/library", { signal: controller.signal, headers: tokenHeaders(originOf("")) }).then(async (response) => {
       const result = await response.json() as { error?: string };
       if (!response.ok) throw new Error(result.error || "Could not load library");
       setReady(true);
@@ -54,7 +55,8 @@ export function Library({ ports, project, onRepo, onPorts }: {
     setRefreshing(true);
     setError("");
     try {
-      const response = await fetch("/library/refresh", { method: "POST" });
+      // a write to the Library engine needs admin: the page token rides along
+      const response = await fetch("/library/refresh", { method: "POST", headers: tokenHeaders(originOf("")) });
       if (!response.ok) {
         const result = await response.json() as { error?: string };
         throw new Error(result.error || "Refresh failed");

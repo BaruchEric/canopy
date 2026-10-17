@@ -3,7 +3,7 @@ import { useEffect, useRef, useState, type ReactNode } from "react";
 import { useShallow } from "zustand/react/shallow";
 import { api } from "../api";
 import { ownRun } from "../flows";
-import { allRuns, attentionCount, capsFor, homeConn, pickedIds, useStore, waitingCount } from "../store";
+import { allRuns, attentionCount, capsFor, homeConn, pickedIds, useStore, waitingCount, wantsSignIn } from "../store";
 import { WAITING_GLYPH, WAITING_PANEL } from "../waiting";
 import { CLI_GLYPH } from "../cli";
 import { onBeat } from "../live";
@@ -524,6 +524,79 @@ function ReloadChip() {
   );
 }
 
+/** One chip per backend whose caller check is on and does not know this
+ *  page. Pressing it asks the backend to let this page in; while that waits
+ *  the chip shows the code to match where it is approved, and a box for the
+ *  first sign-in code from the server's log, for when no page is signed in
+ *  to approve it. */
+function SignInChips() {
+  const names = useStore(useShallow((s) => s.backendOrder.filter((n) => wantsSignIn(s.authByBackend[n]) || s.signIns[n]?.state === "waiting")));
+  return (
+    <>
+      {names.map((n) => (
+        <SignInChip key={n} backend={n} />
+      ))}
+    </>
+  );
+}
+
+function SignInChip({ backend }: { backend: string }) {
+  const signIn = useStore((s) => s.signIns[backend]);
+  const [code, setCode] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+  if (signIn?.state === "waiting") {
+    const send = () => {
+      if (!code.trim()) return;
+      setBusy(true);
+      setErr(null);
+      useStore
+        .getState()
+        .useFirstCode(backend, code)
+        .then(() => setCode(""))
+        .catch((e: unknown) => setErr(e instanceof Error ? e.message : String(e)))
+        .finally(() => setBusy(false));
+    };
+    return (
+      <span className="signin-strip" role="status" aria-label={`Signing in to ${backend}`}>
+        <span className="signin-code" title="The code this page's pair request shows: match it where you approve it">
+          {signIn.code}
+        </span>
+        <span className="signin-hint">waiting for approval, or enter the first code from the server log</span>
+        <input
+          className="signin-input"
+          value={code}
+          disabled={busy}
+          spellCheck={false}
+          autoComplete="off"
+          placeholder="first code"
+          aria-label={`The first sign-in code from ${backend}'s server log`}
+          onChange={(e) => setCode(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === "Enter") send();
+          }}
+        />
+        {err && <span className="signin-err">{err}</span>}
+      </span>
+    );
+  }
+  const failed = signIn?.state === "failed" ? signIn.why : null;
+  return (
+    <button
+      type="button"
+      className={failed ? "mini signin-chip failed" : "mini signin-chip"}
+      title={
+        failed
+          ? `The last sign-in did not finish: ${failed}. Press to ask again`
+          : `${backend} checks who calls it and does not know this page. Signing in asks it to let this page in; approve it from a signed-in page's inbox or with the first code from its log`
+      }
+      onClick={() => void useStore.getState().signIn(backend)}
+    >
+      sign in to {backend}
+    </button>
+  );
+}
+
 /** Brings up the command line: canopy's CLI words, typed in the page.
  *  ⌘K and `:` do the same. */
 function CliButton() {
@@ -569,6 +642,7 @@ function Chips({ phone = false }: { phone?: boolean }) {
   return (
     <>
       <ReloadChip />
+      <SignInChips />
       <PeersChip />
       <BackendsChip />
       <KeptShells />

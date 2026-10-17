@@ -280,6 +280,7 @@ export function SettingsMenu() {
             </p>
           </section>
           <AnswerKeyRow />
+          <SignedInRow name={scope} />
           <section className="settings-row">
             <h3 className="panel-label">keep shell history</h3>
             <label className="settings-line">
@@ -409,6 +410,63 @@ function AnswerKeyRow() {
         {!ready && " This page's backend has no broker, so there is nothing to answer here."}
       </p>
       {note && <p className={note.ok ? "settings-hint" : "settings-hint error"}>{note.text}</p>}
+    </section>
+  );
+}
+
+/**
+ * Who may call a backend: its caller check's mode, how many calls it has
+ * refused (or would have, in log mode), and each caller it knows with its
+ * kind and last use. Revoking ends that caller's token; revoking this page's
+ * own forgets it here too, and the top bar offers to sign in again.
+ */
+function SignedInRow({ name }: { name: string }) {
+  const auth = useStore((s) => s.authByBackend[name]);
+  const [busy, setBusy] = useState<string | null>(null);
+  const [err, setErr] = useState<string | null>(null);
+  // a caller that claimed its token since the last read shows when Settings opens
+  useEffect(() => {
+    void useStore.getState().loadAuth(name);
+  }, [name]);
+  if (!auth) return null;
+  const revoke = (id: string) => {
+    setBusy(id);
+    setErr(null);
+    useStore
+      .getState()
+      .revokeCaller(name, id)
+      .catch((e: unknown) => setErr(e instanceof Error ? e.message : String(e)))
+      .finally(() => setBusy(null));
+  };
+  const admin = auth.you === "page" || auth.you === "cli";
+  return (
+    <section className="settings-row">
+      <h3 className="panel-label">signed in</h3>
+      <p className="settings-hint">
+        {name} checks callers in <b>{auth.mode}</b> mode
+        {auth.mode === "off" ? ": it lets every call through and keeps no count" : auth.mode === "log" ? ": it lets every call through and counts the ones enforce would refuse" : ": it refuses a call without the right token"}
+        . {auth.refused.count} {auth.refused.count === 1 ? "call" : "calls"} {auth.mode === "enforce" ? "refused" : "would have been refused"} since it started. This page is{" "}
+        {auth.you === "none" ? "not signed in" : `signed in as a ${auth.you}`}.
+      </p>
+      {auth.callers.length > 0 && (
+        <ul className="callers">
+          {auth.callers.map((c) => (
+            <li key={c.id} className="caller-row">
+              <span className="caller-label">{c.label}</span>
+              <span className="caller-kind">{c.kind}</span>
+              <span className="caller-used" title={new Date(c.used).toLocaleString()}>
+                {c.id === auth.youId ? "this page" : `used ${ago(Math.floor(c.used / 1000))}`}
+              </span>
+              {admin && (
+                <button type="button" className="mini" disabled={busy !== null} onClick={() => revoke(c.id)}>
+                  {busy === c.id ? "revoking…" : "revoke"}
+                </button>
+              )}
+            </li>
+          ))}
+        </ul>
+      )}
+      {err && <p className="settings-hint error">{err}</p>}
     </section>
   );
 }

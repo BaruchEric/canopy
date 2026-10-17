@@ -102,6 +102,9 @@ export type BackendSignal =
   | { kind: "unreachable"; reason: string }
   /** the gate answered 401 with where to sign in */
   | { kind: "signin"; login: string }
+  /** canopy's own caller check refused a call for want of a token or a
+   *  right: the backend answered, and this page should sign in to it */
+  | { kind: "refused"; status: number; need: string; withToken: boolean }
   | { kind: "stream-open" }
   | { kind: "stream-lost" }
   /** the page is trying again */
@@ -113,6 +116,7 @@ export type BackendSignal =
 export function backendState(prev: BackendStatus, sig: BackendSignal): BackendStatus {
   switch (sig.kind) {
     case "answered":
+    case "refused":
     case "stream-open":
       return prev.state === "online" ? prev : { state: "online" };
     case "signin":
