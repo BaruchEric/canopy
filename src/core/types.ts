@@ -2197,6 +2197,10 @@ export interface FlowStep {
   summary?: string;
   /** why a gate parked or a step failed, for the sheet */
   reason?: string;
+  /** the step's run's session and the harness that named it, kept so a
+   *  restart can resume a Claude session instead of starting over */
+  session?: string;
+  harness?: Harness;
 }
 
 /** A check or gate that said no and sent the flow back. */
@@ -2247,6 +2251,8 @@ export interface Flow {
   grace?: number;
   /** set between a restore and the rerun of the step the restart cut short */
   restarted?: boolean;
+  /** the id the client minted for the start, so a start sent again finds this flow */
+  request?: string;
 }
 
 /** A flow with a live step: running, waiting on a prompt, or parked at a gate. */
@@ -2270,8 +2276,12 @@ export interface Fleet {
   note: string;
   repos: FleetRepo[];
   status: "working" | "done" | "stopped";
+  /** stop was asked and its flows are still winding down */
+  stopping?: boolean;
   startedAt: number;
   endedAt?: number;
+  /** the id the client minted for the start, so a start sent again finds this fleet */
+  request?: string;
 }
 
 /* ---------- shells: the ptys the server keeps for browser terminals ---------- */

@@ -36,6 +36,10 @@ export interface ActionSpec {
   permissionMode?: "plan";
   /** a flow's step: which workflow and step, the run's `flowStep` */
   flowStep?: FlowStepName;
+  /** a Claude session to resume rather than start: a flow step a restart cut short */
+  resume?: string;
+  /** the whole first message, in place of the built prompt (a resumed session already has it) */
+  message?: string;
 }
 
 const safetyFor = (where: string) => `- ${where}

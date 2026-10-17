@@ -6,6 +6,7 @@ import { fleetSkipReason } from "../../../src/core/flow";
 import { isFlowActive, type Fleet, type Flow, type FlowStep, type Judgment, type Repo, type Verdict } from "../../../src/core/types";
 import { budgetWord, fleetCounts, flowWord, oldestParked, rewindLines, stepWord } from "../flows";
 import { agentFor, idText, pickedIds, useStore } from "../store";
+import { termId } from "../term";
 import { BackendWord } from "./IdLabel";
 import { AGENT_NAME, harnessOf } from "../runs";
 import { Timeline } from "./RunSheet";
@@ -26,6 +27,9 @@ export function FlowPlan({ repo, workflow }: { repo: Repo; workflow: string }) {
   const name = AGENT_NAME[agent.harness];
   const verdictReady = useStore((s) => s.verdictReady);
   const entry = useStore((s) => s.workflows[repo.id]?.find((e) => e.ok && e.workflow.name === workflow));
+  // one id for every try from this sheet: a retry after a lost answer finds
+  // the flow the first try started (the sheet is keyed by repo and workflow)
+  const [request] = useState(termId);
   const [note, setNote] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -44,7 +48,7 @@ export function FlowPlan({ repo, workflow }: { repo: Repo; workflow: string }) {
     setBusy(true);
     setError(null);
     try {
-      await startFlow(repo.id, w.name, note);
+      await startFlow(repo.id, w.name, note, request);
     } catch (err) {
       setError(errText(err));
       setBusy(false);
@@ -328,6 +332,8 @@ export function FleetPlan({ workflow }: { workflow: string }) {
   const selected = useStore(useShallow(pickedIds));
   const repos = useStore(useShallow((s) => s.repos.filter((r) => selected.includes(r.id))));
   const entry = useStore((s) => Object.values(s.workflows).flat().find((e) => e.ok && e.workflow.name === workflow));
+  // as FlowPlan's: every try from this sheet is one start
+  const [request] = useState(termId);
   const [note, setNote] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -343,7 +349,7 @@ export function FleetPlan({ workflow }: { workflow: string }) {
     setBusy(true);
     setError(null);
     try {
-      await startFleet(workflow, note);
+      await startFleet(workflow, note, request);
     } catch (err) {
       setError(errText(err));
       setBusy(false);
@@ -425,7 +431,9 @@ export function FleetSheet({ fleetId }: { fleetId: string }) {
         </div>
         <span className={`status st-${counts.needsYou ? "waiting" : working ? "working" : "done"}`}>
           <span className="dot" />
-          {working
+          {working && fleet.stopping
+            ? `stopping, ${counts.active} still winding down`
+            : working
             ? `${counts.active} running, ${counts.pending} to go${counts.needsYou ? `, ${counts.needsYou} need${counts.needsYou === 1 ? "s" : ""} you` : ""}`
             : `${counts.done} done, ${counts.failed} failed, ${counts.skipped} skipped`}
         </span>
@@ -465,7 +473,9 @@ export function FleetSheet({ fleetId }: { fleetId: string }) {
       <footer className="sheet-foot">
         <span className="spacer" />
         {working ? (
-          <button type="button" className="mini" onClick={() => void act(() => stopFleet(fleet.id))}>stop all</button>
+          <button type="button" className="mini" disabled={fleet.stopping === true} onClick={() => void act(() => stopFleet(fleet.id))}>
+            {fleet.stopping ? "stopping" : "stop all"}
+          </button>
         ) : (
           <button type="button" className="mini" onClick={() => void act(() => dismissFleet(fleet.id))}>dismiss</button>
         )}

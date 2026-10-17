@@ -245,7 +245,7 @@ export class Runner {
         throw new Error(busyWith(repo.name, busy.verb));
       }
     }
-    if (spec.noteRequired && !note.trim() && !branch?.message) {
+    if (spec.noteRequired && !note.trim() && !branch?.message && !spec.message) {
       throw new Error("write what the agent should do first");
     }
     const stage = this.opts.stage?.(repo) ?? false;
@@ -324,7 +324,7 @@ export class Runner {
       return run;
     }
     this.hooks.onChange(run);
-    this.begin(live, branch?.message ?? this.firstMessage(live, run.note));
+    this.begin(live, branch?.message ?? spec.message ?? this.firstMessage(live, run.note));
     return run;
   }
 

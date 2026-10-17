@@ -1,5 +1,5 @@
 import { describe, expect, spyOn, test } from "bun:test";
-import { Flows, overBudget, RESTART_NOTE, stepSpec, summaryOf, type CheckResult, type FlowRecord, type FlowRunner } from "./flow";
+import { Flows, overBudget, RESTART_NOTE, RESUME_NOTE, stepSpec, summaryOf, type CheckResult, type FlowRecord, type FlowRunner } from "./flow";
 import { STAGE_AWAY, StageAwayError } from "./stagewire";
 import { parseWorkflow } from "./workflow";
 import { DEFAULT_AGENT, type AgentSettings, type EvidenceFile, type Fleet, type Flow, type JudgeAnswers, type Repo, type Run, type VerdictAnswers, type Workflow } from "./types";
@@ -54,7 +54,7 @@ class FakeRunner implements FlowRunner {
     this.n += 1;
     const run: Run = {
       id: `run${this.n}`, repoId: r.id, action, verb: spec.verb, progress: spec.progress,
-      expectsChange: spec.expectsChange, chat: false, harness: "claude", note, status: "working",
+      expectsChange: spec.expectsChange, chat: false, harness: agent.harness, note, status: "working",
       startedAt: 0, steps: [], prompt: null,
     };
     this.runs.set(run.id, run);
@@ -88,18 +88,26 @@ class FakeRunner implements FlowRunner {
     run.status = status;
     this.onChange(run);
   }
+  /** the harness names the run's session, as its first message does */
+  session(id: string, session: string): void {
+    const run = this.runs.get(id);
+    if (!run) throw new Error(id);
+    run.session = session;
+    this.onChange(run);
+  }
   /** the last started run's id */
   last(): string { return `run${this.n}`; }
 }
 
 function setup(opts: {
-  check?: (cmd: string) => CheckResult;
+  check?: (cmd: string, signal: AbortSignal) => CheckResult | Promise<CheckResult>;
   checkTools?: (repo: Repo, cmd: string) => Promise<string[]> | null;
   evaluator?: ((state: string) => Promise<VerdictAnswers>) | null;
   judge?: ((state: string) => Promise<JudgeAnswers>) | null;
   evidence?: (repo: Repo, paths: string[]) => Promise<EvidenceFile[]>;
   status?: () => Promise<Repo["status"]>;
   now?: () => number;
+  stopGraceMs?: number;
 } = {}) {
   const runner = new FakeRunner();
   const changes: Flow[] = [];
@@ -114,9 +122,9 @@ function setup(opts: {
     onGone: (id) => gone.push(id),
     onFleet: (f) => fleets.push(structuredClone(f)),
     onFleetGone: (id) => fleetGone.push(id),
-    check: async (_repo, command) => {
+    check: async (_repo, command, signal) => {
       checks.push(command);
-      return opts.check ? opts.check(command) : { exit: 0, output: "" };
+      return opts.check ? opts.check(command, signal) : { exit: 0, output: "" };
     },
     checkTools: opts.checkTools,
     evaluator: opts.evaluator ?? null,
@@ -124,6 +132,7 @@ function setup(opts: {
     evidence: opts.evidence,
     status: opts.status,
     now: opts.now,
+    ...(opts.stopGraceMs !== undefined ? { stopGraceMs: opts.stopGraceMs } : {}),
     // the record is the one this hook was just handed; the round trip copies it
     save: (rec) => saved.push(JSON.parse(JSON.stringify(rec)) as FlowRecord),
     forget: (id) => forgotten.push(id),
@@ -1283,5 +1292,209 @@ Ship it.
     flows.resume(f.id, "continue");
     await flush();
     expect(flows.get(f.id)?.steps[0]).toMatchObject({ status: "running", runId: "run2" });
+  });
+});
+
+describe("resuming the session a restart cut short", () => {
+  const codex = (): AgentSettings => ({ ...DEFAULT_AGENT, harness: "codex" });
+
+  test("the step's session is saved as soon as the harness names it", () => {
+    const a = setup();
+    const flow = a.flows.start(repo(), TWO, "", DEFAULT_AGENT);
+    a.runner.session("run1", "s1");
+    expect(lastRecord(a.saved, flow.id).flow.steps[0]).toMatchObject({ session: "s1", harness: "claude" });
+  });
+
+  test("a flow caught mid-step resumes the step's Claude session with the resume note", () => {
+    const a = setup();
+    const flow = a.flows.start(repo(), TWO, "", DEFAULT_AGENT);
+    a.runner.session("run1", "s1");
+    const b = setup();
+    b.flows.restore([lastRecord(a.saved, flow.id)], () => repo(), sameAgent);
+    expect(b.runner.specs[0]?.resume).toBe("s1");
+    expect(b.runner.specs[0]?.message).toBe(RESUME_NOTE);
+    expect(b.flows.get(flow.id)?.steps[0]).toMatchObject({ status: "running", runId: "run1" });
+  });
+
+  test("a Codex session, or a step that would now run on Codex, starts fresh with the restart note", () => {
+    const a = setup();
+    const ca = a.flows.start(repo(), TWO, "", codex());
+    a.runner.session("run1", "t1");
+    const b = setup();
+    b.flows.restore([lastRecord(a.saved, ca.id)], () => repo(), () => codex);
+    expect(b.runner.specs[0]?.resume).toBeUndefined();
+    expect(b.runner.specs[0]?.task.startsWith(RESTART_NOTE)).toBe(true);
+
+    const c = setup();
+    const cc = c.flows.start(repo(), TWO, "", DEFAULT_AGENT);
+    c.runner.session("run1", "s1");
+    const d = setup();
+    d.flows.restore([lastRecord(c.saved, cc.id)], () => repo(), () => codex);
+    expect(d.runner.specs[0]?.resume).toBeUndefined();
+    expect(d.runner.specs[0]?.task.startsWith(RESTART_NOTE)).toBe(true);
+  });
+
+  test("a resume that fails before a turn falls back once to a fresh run with the restart note", async () => {
+    const a = setup();
+    const flow = a.flows.start(repo(), TWO, "", DEFAULT_AGENT);
+    a.runner.session("run1", "s1");
+    const b = setup();
+    b.flows.restore([lastRecord(a.saved, flow.id)], () => repo(), sameAgent);
+    // Claude Code's answer to a session it cannot find: a result with no turns
+    b.runner.session("run1", "s1");
+    b.runner.end("run1", "failed", "", "No conversation found with session ID: s1");
+    await flush();
+    expect(b.runner.specs).toHaveLength(2);
+    expect(b.runner.specs[1]?.resume).toBeUndefined();
+    expect(b.runner.specs[1]?.task.startsWith(RESTART_NOTE)).toBe(true);
+    expect(b.flows.get(flow.id)?.steps[0]).toMatchObject({ status: "running", runId: "run2" });
+    b.runner.end("run2", "failed", "", "boom");
+    await flush();
+    expect(b.runner.specs).toHaveLength(2);
+    expect(b.flows.get(flow.id)?.status).toBe("failed");
+  });
+
+  test("a resumed run that fails after it worked, or is stopped, does not fall back", async () => {
+    const a = setup();
+    const flow = a.flows.start(repo(), TWO, "", DEFAULT_AGENT);
+    a.runner.session("run1", "s1");
+    const b = setup();
+    b.flows.restore([lastRecord(a.saved, flow.id)], () => repo(), sameAgent);
+    b.runner.end("run1", "failed", "half done", "boom");
+    await flush();
+    expect(b.runner.specs).toHaveLength(1);
+    expect(b.flows.get(flow.id)?.status).toBe("failed");
+
+    const c = setup();
+    c.flows.restore([lastRecord(a.saved, flow.id)], () => repo(), sameAgent);
+    c.flows.stop(flow.id);
+    await flush();
+    expect(c.runner.specs).toHaveLength(1);
+    expect(c.flows.get(flow.id)?.status).toBe("stopped");
+  });
+
+  test("a rewind after a resumed step starts its rerun fresh", async () => {
+    const a = setup({ check: () => ({ exit: 1, output: "fail" }) });
+    const flow = a.flows.start(repo(), CHECKED_RETRY, "", DEFAULT_AGENT);
+    a.runner.session("run1", "s1");
+    const b = setup({ check: () => ({ exit: 1, output: "fail" }) });
+    b.flows.restore([lastRecord(a.saved, flow.id)], () => repo(), sameAgent);
+    expect(b.runner.specs[0]?.resume).toBe("s1");
+    b.runner.end("run1", "done", "built");
+    await flush();
+    expect(b.runner.specs).toHaveLength(2);
+    expect(b.runner.specs[1]?.resume).toBeUndefined();
+    expect(b.runner.specs[1]?.task).not.toContain(RESTART_NOTE);
+  });
+
+  test("a restored step that parks for the stage runner keeps its session for the rerun", async () => {
+    const seed = (): Repo => ({ ...repo(), id: "_incubator/coin", name: "coin", path: "/tmp/_incubator/coin" });
+    const a = setup();
+    const flow = a.flows.start(seed(), TWO, "", DEFAULT_AGENT);
+    a.runner.session("run1", "s1");
+    const b = setup();
+    let away = true;
+    const start = b.runner.start.bind(b.runner);
+    b.runner.start = (...args) => {
+      if (away) throw new StageAwayError();
+      return start(...args);
+    };
+    b.flows.restore([lastRecord(a.saved, flow.id)], () => seed(), sameAgent);
+    await flush();
+    expect(b.flows.get(flow.id)).toMatchObject({ status: "gated", parkedFor: "stage" });
+    away = false;
+    b.flows.resume(flow.id, "continue");
+    await flush();
+    expect(b.runner.specs[0]?.resume).toBe("s1");
+  });
+});
+
+describe("a start sent twice", () => {
+  test("the same request finds the flow it started instead of starting another", () => {
+    const { runner, flows } = setup();
+    const first = flows.start(repo(), TWO, "", DEFAULT_AGENT, { request: "req-1" });
+    const again = flows.start(repo(), TWO, "", DEFAULT_AGENT, { request: "req-1" });
+    expect(again.id).toBe(first.id);
+    expect(runner.specs).toHaveLength(1);
+    expect(flows.forRequest("req-1")?.id).toBe(first.id);
+    expect(() => flows.start({ ...repo(), id: "other", name: "other" }, TWO, "", DEFAULT_AGENT, { request: "req-1" })).toThrow("another repo");
+  });
+
+  test("a restored flow keeps its request", () => {
+    const a = setup();
+    const flow = a.flows.start(repo(), TWO, "", DEFAULT_AGENT, { request: "req-1" });
+    const b = setup();
+    b.flows.restore([lastRecord(a.saved, flow.id)], () => repo(), sameAgent);
+    expect(b.flows.start(repo(), TWO, "", DEFAULT_AGENT, { request: "req-1" }).id).toBe(flow.id);
+    expect(b.runner.specs).toHaveLength(1);
+  });
+
+  test("the same request finds the fleet it started", () => {
+    const { runner, flows } = setup();
+    const repos = [{ ...repo(), id: "a", name: "a" }, { ...repo(), id: "b", name: "b" }];
+    const first = flows.startFleet(repos, TWO, "", () => DEFAULT_AGENT, "req-2");
+    const again = flows.startFleet(repos, TWO, "", () => DEFAULT_AGENT, "req-2");
+    expect(again.id).toBe(first.id);
+    expect(flows.fleets()).toHaveLength(1);
+    expect(runner.specs).toHaveLength(2);
+    expect(flows.fleetForRequest("req-2")?.id).toBe(first.id);
+  });
+});
+
+describe("stopping from the bottom up", () => {
+  const CHECK_ONLY = wf(`---\nblurb: b\n---\n\n## Test\ncheck: bun test\n`);
+  /** a check that runs until its signal aborts it */
+  const untilAborted = (_cmd: string, signal: AbortSignal): Promise<CheckResult> =>
+    new Promise((resolve) => signal.addEventListener("abort", () => resolve({ exit: 143, output: "killed" }), { once: true }));
+
+  test("a stop during a check aborts the check and ends the flow once it has exited", async () => {
+    let signal: AbortSignal | null = null;
+    let exit: (() => void) | null = null;
+    const { flows } = setup({
+      check: (_cmd, s) => {
+        signal = s;
+        return new Promise((resolve) => (exit = () => resolve({ exit: 143, output: "killed" })));
+      },
+    });
+    const flow = flows.start(repo(), CHECK_ONLY, "", DEFAULT_AGENT);
+    await flush();
+    flows.stop(flow.id);
+    expect((signal as AbortSignal | null)?.aborted).toBe(true);
+    expect(flows.get(flow.id)?.status).toBe("working");
+    // a second stop while it winds down changes nothing
+    flows.stop(flow.id);
+    (exit as (() => void) | null)?.();
+    await flush();
+    const f = flows.get(flow.id);
+    expect(f?.status).toBe("stopped");
+    expect(f?.steps[0]).toMatchObject({ status: "failed", reason: "stopped" });
+    expect(f?.steps[0]?.check).toBeUndefined();
+  });
+
+  test("a check that ignores the abort stops being waited on after the grace", async () => {
+    const { flows } = setup({ check: () => new Promise<CheckResult>(() => {}), stopGraceMs: 5 });
+    const flow = flows.start(repo(), CHECK_ONLY, "", DEFAULT_AGENT);
+    await flush();
+    flows.stop(flow.id);
+    expect(flows.get(flow.id)?.status).toBe("working");
+    await new Promise((r) => setTimeout(r, 20));
+    expect(flows.get(flow.id)?.status).toBe("stopped");
+  });
+
+  test("a fleet stopping waits for every flow to end before it says stopped", async () => {
+    const DIRTY_CHECK = wf(`---\nblurb: b\n---\n\n## Test\ncheck: bun test\n`);
+    const { flows, fleets } = setup({ check: untilAborted, stopGraceMs: 1_000 });
+    const repos = [{ ...repo(), id: "a", name: "a" }, { ...repo(), id: "b", name: "b" }];
+    const fleet = flows.startFleet(repos, DIRTY_CHECK, "", () => DEFAULT_AGENT);
+    await flush();
+    flows.stopFleet(fleet.id);
+    // the aborted checks settle on a later tick: until then the fleet is stopping
+    expect(flows.getFleet(fleet.id)).toMatchObject({ status: "working", stopping: true });
+    expect(() => flows.dismissFleet(fleet.id)).toThrow();
+    await flush();
+    expect(flows.getFleet(fleet.id)?.status).toBe("stopped");
+    expect(flows.getFleet(fleet.id)?.stopping).toBeUndefined();
+    expect(fleets.at(-1)?.status).toBe("stopped");
+    expect(flows.list().every((f) => f.status === "stopped")).toBe(true);
   });
 });

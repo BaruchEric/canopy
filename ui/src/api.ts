@@ -814,13 +814,15 @@ export const api = {
   dismissRun: (id: string) =>
     repoReq<{ ok: true }>(id, (p) => `/api/runs?${rq(p)}`, { method: "DELETE" }),
   workflows: (id: string) => repoReq<WorkflowEntry[]>(id, (p) => `/api/repos/workflows?${rq(p)}`),
-  startFlow: async (id: string, workflow: string, note: string) => {
+  /** `request` is the sheet's own id for this start, so sending it again
+   *  after a lost answer finds the flow instead of starting another */
+  startFlow: async (id: string, workflow: string, note: string, request?: string) => {
     const [b, plain] = on(id);
     return from(
       b,
       await req<Flow>(b, `/api/repos/flow?${rq(plain)}`, {
         method: "POST",
-        body: JSON.stringify({ workflow, note }),
+        body: JSON.stringify({ workflow, note, ...(request ? { request } : {}) }),
       }),
       qFlow,
     );
@@ -864,15 +866,17 @@ export const api = {
    *  others' outcome (`allSettled`, not `all`), so one backend failing does
    *  not cost what the others started; a failure is thrown as a
    *  `PartialFleetError` naming each failed backend and carrying the fleets
-   *  that did start, once every backend has been heard from. */
-  startFleet: async (workflow: string, ids: string[], note: string): Promise<Fleet[]> => {
+   *  that did start, once every backend has been heard from. `request`
+   *  works as it does for `startFlow`, on each backend. */
+  startFleet: async (workflow: string, ids: string[], note: string, request?: string): Promise<Fleet[]> => {
     const groups = byBackend(ids);
+    const body = (plain: string[]) => JSON.stringify({ workflow, ids: plain, note, ...(request ? { request } : {}) });
     const one = groups.length === 1 ? groups[0] : undefined;
     if (one) {
       const [b, plain] = one;
       const fleet = await req<Fleet>(b, "/api/fleet", {
         method: "POST",
-        body: JSON.stringify({ workflow, ids: plain, note }),
+        body: body(plain),
       });
       return [from(b, fleet, qFleet)];
     }
@@ -883,7 +887,7 @@ export const api = {
             b,
             await req<Fleet>(b, "/api/fleet", {
               method: "POST",
-              body: JSON.stringify({ workflow, ids: plain, note }),
+              body: body(plain),
             }),
             qFleet,
           );

@@ -1273,7 +1273,8 @@ export interface CanopyState {
   loadWorkflows: (repoId: string) => Promise<void>;
   /** opens the pre-flight for a workflow on a repo, or its live flow/run */
   planFlow: (repoId: string, workflow: string) => void;
-  startFlow: (repoId: string, workflow: string, note: string) => Promise<void>;
+  /** `request`: the plan sheet's id for this start (see api.startFlow) */
+  startFlow: (repoId: string, workflow: string, note: string, request?: string) => Promise<void>;
   resumeFlow: (flowId: string, choice: FlowChoice) => Promise<void>;
   stopFlow: (flowId: string) => Promise<void>;
   dismissFlow: (flowId: string) => Promise<void>;
@@ -1293,7 +1294,7 @@ export interface CanopyState {
   pickFacet: (facet: RepoFilter) => void;
   /** opens the pre-flight for a fleet workflow over the selected repos */
   planFleet: (workflow: string) => void;
-  startFleet: (workflow: string, note: string) => Promise<void>;
+  startFleet: (workflow: string, note: string, request?: string) => Promise<void>;
   stopFleet: (fleetId: string) => Promise<void>;
   dismissFleet: (fleetId: string) => Promise<void>;
   showFleet: (fleetId: string) => void;
@@ -3915,8 +3916,8 @@ export const useStore = create<CanopyState>((set, get) => ({
     const run = activeRunFor(get(), repoId);
     set({ sheet: run ? { kind: "run", runId: run.id } : { kind: "flow-plan", repoId, workflow } });
   },
-  startFlow: async (repoId, workflow, note) => {
-    const flow = await api.startFlow(repoId, workflow, note);
+  startFlow: async (repoId, workflow, note, request) => {
+    const flow = await api.startFlow(repoId, workflow, note, request);
     set((s) => ({
       flows: { ...s.flows, [flow.id]: flow },
       flowRuns: { ...s.flowRuns, ...flowRunsOf([flow]) },
@@ -3968,7 +3969,7 @@ export const useStore = create<CanopyState>((set, get) => ({
   pickGroup: (ids) => set((s) => ({ selected: togglePick(s.selected, ids) })),
   pickFacet: (facet) => set((s) => ({ selected: pickWhere(visibleRepos(s), facet, { healthBad: healthBad(s) }) })),
   planFleet: (workflow) => set({ sheet: { kind: "fleet-plan", workflow } }),
-  startFleet: async (workflow, note) => {
+  startFleet: async (workflow, note, request) => {
     // one fleet per backend the picked repos are on; the sheet shows the
     // first. api.startFleet keeps asking every backend even once one has
     // failed, so a partial failure still hands back the fleets that did
@@ -3978,7 +3979,7 @@ export const useStore = create<CanopyState>((set, get) => ({
     // full start clears the whole pick, as it always did.
     let started: Fleet[];
     try {
-      started = await api.startFleet(workflow, pickedIds(get()), note);
+      started = await api.startFleet(workflow, pickedIds(get()), note, request);
     } catch (err) {
       if (err instanceof PartialFleetError) set((s) => foldStartedFleets(s, err.started));
       throw err;

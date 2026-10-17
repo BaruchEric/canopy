@@ -214,8 +214,11 @@ export class StageClient {
   /** a check: the command to its end or the timeout, then code, stdout and
    *  stderr; 126 for a refusal and 127 when the runner is not answering;
    *  `unfenced` holds the runner's words when it refused for its fence */
-  async exec(argv: string[], opts: { cwd: string; timeoutMs: number; env?: Record<string, string> }): Promise<ExecResult & { unfenced?: string }> {
-    const r = await this.collect(this.open({ t: "spawn", argv, cwd: opts.cwd, env: opts.env ?? {} }), opts.timeoutMs);
+  async exec(
+    argv: string[],
+    opts: { cwd: string; timeoutMs: number; env?: Record<string, string>; signal?: AbortSignal },
+  ): Promise<ExecResult & { unfenced?: string }> {
+    const r = await this.collect(this.open({ t: "spawn", argv, cwd: opts.cwd, env: opts.env ?? {} }), opts.timeoutMs, null, opts.signal);
     return { code: r.code, stdout: r.stdout, stderr: r.stderr, ...(r.unfenced !== null ? { unfenced: r.unfenced } : {}) };
   }
 
@@ -238,18 +241,22 @@ export class StageClient {
     return { code: r.code, stdout: r.stdout, stderr: r.stderr, ...(away !== null ? { away } : {}) };
   }
 
-  /** a process's stdout, stderr and code at its end or the timeout's kill;
-   *  stdout into `file` when one is named */
-  private async collect(p: RpcProc, timeoutMs: number, file: string | null = null): Promise<ExecResult & { unfenced: string | null }> {
+  /** a process's stdout, stderr and code at its end or the kill of the
+   *  timeout or of `signal`; stdout into `file` when one is named */
+  private async collect(p: RpcProc, timeoutMs: number, file: string | null = null, signal?: AbortSignal): Promise<ExecResult & { unfenced: string | null }> {
     p.stdin.end();
     let timedOut = false;
     const timer = setTimeout(() => {
       timedOut = true;
       p.kill();
     }, timeoutMs);
+    const aborted = (): void => p.kill();
+    if (signal?.aborted) p.kill();
+    else signal?.addEventListener("abort", aborted, { once: true });
     const out = file === null ? new Response(p.stdout).text() : Bun.write(file, new Response(p.stdout)).then(() => "");
     const [stdout, stderr, code] = await Promise.all([out, new Response(p.stderr ?? null).text(), p.exited]);
     clearTimeout(timer);
+    signal?.removeEventListener("abort", aborted);
     const said = timedOut ? `${stderr}timed out after ${timeoutMs} ms\n` : stderr;
     return { code: code ?? KILLED, stdout, stderr: said, unfenced: this.fenceRefusal(p) };
   }

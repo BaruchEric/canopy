@@ -82,6 +82,17 @@ export interface FlowRecord {
 
 export const RESTART_NOTE = "canopy restarted during this step; read the repo's state and finish the step";
 
+/** The whole message that continues a step's Claude session after a restart:
+ *  the session already holds the step's prompt and its own work so far. */
+export const RESUME_NOTE =
+  "canopy restarted while you were working on this step, so your last turn may have been cut short. Read the repo's state and finish the step.";
+
+/** what the browser mints for a flow or fleet start: 32 hex digits */
+export const isRequestId = (v: unknown): v is string => typeof v === "string" && /^[0-9a-f]{32}$/.test(v);
+
+/** how long a stop waits for an aborted check to exit before the flow ends anyway */
+export const STOP_GRACE = 10_000;
+
 /** What Flows needs from the Runner; the real one satisfies it. */
 export interface FlowRunner {
   start(repo: Repo, action: string, spec: ActionSpec, note: string, agent: AgentSettings): Run;
@@ -96,8 +107,9 @@ export interface FlowHooks {
   onGone: (id: string) => void;
   onFleet: (fleet: Fleet) => void;
   onFleetGone: (id: string) => void;
-  /** runs a step's check in the repo */
-  check: (repo: Repo, command: string) => Promise<CheckResult>;
+  /** runs a step's check in the repo; the signal aborts when the flow is
+   *  stopped, and the check should then kill what it started and settle */
+  check: (repo: Repo, command: string, signal: AbortSignal) => Promise<CheckResult>;
   /** tools a step gets for its check line on top of its own (`@gates`
    *  gives each gate's line); null, as for most lines, adds none and starts
    *  the run without waiting */
@@ -112,6 +124,8 @@ export interface FlowHooks {
   status?: (repoId: string) => Promise<RepoStatus | null>;
   /** the clock, for tests; Date.now otherwise */
   now?: () => number;
+  /** `STOP_GRACE` unless a test shortens it */
+  stopGraceMs?: number;
   /** keeps a flow on disk; called on every change with the live objects, so
    *  it must serialize at once */
   save?: (rec: FlowRecord) => void;
@@ -133,6 +147,12 @@ interface LiveFlow {
   before: string;
   /** when the working clock last started; absent while it is stopped */
   since?: number;
+  /** the run that resumes the step's session after a restart, while it goes */
+  resuming?: string;
+  /** aborts the step's check while one runs */
+  checking?: AbortController;
+  /** a stop waiting for the aborted check to exit, and the grace that ends it */
+  stopping?: ReturnType<typeof setTimeout>;
 }
 
 /** The agent's closing words: the result, else the last text step. */
@@ -223,9 +243,31 @@ export class Flows {
     return undefined;
   }
 
+  /** The flow a start with this client-minted id made, while it is kept. */
+  forRequest(request: string): Flow | undefined {
+    for (const l of this.live.values()) if (l.flow.request === request) return l.flow;
+    return undefined;
+  }
+
   /** Starts a workflow on a repo. `agent` is every step's settings, or how
-   *  to pick them by the profile a step names. */
-  start(repo: Repo, workflow: Workflow, note: string, agent: AgentSettings | StepAgent, fleetId?: string): Flow {
+   *  to pick them by the profile a step names. A `request` the client
+   *  minted makes a start sent twice (a retry after the answer was lost)
+   *  find the flow the first one made. */
+  start(
+    repo: Repo,
+    workflow: Workflow,
+    note: string,
+    agent: AgentSettings | StepAgent,
+    opts: { fleetId?: string; request?: string } = {},
+  ): Flow {
+    const { fleetId, request } = opts;
+    if (request) {
+      const again = this.forRequest(request);
+      if (again) {
+        if (again.repoId !== repo.id) throw new Error("that request started a flow on another repo");
+        return again;
+      }
+    }
     const busyFlow = this.activeFor(repo.id);
     if (busyFlow) throw new Error(`${repo.name} already has ${busyFlow.verb} going`);
     const busyRun = this.runner.activeFor(repo.id);
@@ -244,6 +286,7 @@ export class Flows {
       startedAt: Date.now(),
       ...(workflow.budget ? { budget: workflow.budget } : {}),
       spent: { runs: 0, workMs: 0 },
+      ...(request ? { request } : {}),
     };
     const live: LiveFlow = {
       flow,
@@ -265,6 +308,12 @@ export class Flows {
     if (!live) return;
     const step = live.flow.steps[live.flow.current];
     if (!step || step.runId !== run.id) return;
+    if (run.session && (step.session !== run.session || step.harness !== run.harness)) {
+      // saved at once: a restart in the middle of this run resumes it
+      step.session = run.session;
+      step.harness = run.harness;
+      this.emit(live);
+    }
     if (run.status === "working" || run.status === "waiting" || run.status === "idle") {
       const status = run.status === "waiting" ? "waiting" : "working";
       this.clock(live, status === "working");
@@ -281,6 +330,17 @@ export class Flows {
       // the stage's own stderr and so whatever it chose to print.
       live.flow.parkedFor = "stage";
       this.park(live, run.awayWhy ?? STAGE_AWAY);
+      return;
+    }
+    const resumed = live.resuming === run.id;
+    delete live.resuming;
+    if (run.status === "failed" && resumed && (run.result?.turns ?? 0) === 0) {
+      // The session could not be taken up (Claude Code answers one it
+      // cannot find with an error and no turns): the step starts over,
+      // once, with the restart note, the session forgotten.
+      this.resetStep(step);
+      live.flow.restarted = true;
+      void this.runStep(live);
       return;
     }
     if (run.status === "failed") {
@@ -309,7 +369,8 @@ export class Flows {
       // continue and retry both mean: allow one more step, and run the one that was waiting
       delete live.flow.parkedFor;
       live.flow.grace = (live.flow.grace ?? 0) + 1;
-      this.resetStep(step);
+      // a step a restart cut short keeps its session for the rerun
+      this.resetStep(step, live.flow.restarted === true);
       void this.runStep(live);
       return live.flow;
     }
@@ -327,7 +388,8 @@ export class Flows {
         void this.check(live);
         return live.flow;
       }
-      this.resetStep(step);
+      // a step a restart cut short keeps its session for the rerun
+      this.resetStep(step, live.flow.restarted === true);
       void this.runStep(live);
       return live.flow;
     }
@@ -372,22 +434,38 @@ export class Flows {
     if (!live) throw new Error(`unknown flow: ${id}`);
     if (!isFlowActive(live.flow)) return live.flow;
     if (live.flow.status === "gated") return this.resume(id, "stop");
+    if (live.stopping) return live.flow;
     const step = live.flow.steps[live.flow.current];
     const run = step && step.runId ? this.runner.get(step.runId) : undefined;
     if (step && step.runId && run && isRunActive(run)) {
       // the run's stopped status comes back through onRun and ends the flow
       this.runner.stop(step.runId);
+    } else if (live.checking) {
+      // the check is killed and the flow ends once it has exited, so the
+      // repo is not free while its test runner still runs; one that will
+      // not exit stops being waited on after the grace
+      live.stopping = setTimeout(() => this.stopped(live), this.hooks.stopGraceMs ?? STOP_GRACE);
+      live.checking.abort();
     } else {
-      // the run already ended (or never started) while we were awaiting a
-      // check or the evaluator: nothing more will come back through onRun,
-      // so end the flow here instead of waiting for an event that will not arrive
-      if (step) {
-        step.status = "failed";
-        step.reason = "stopped";
-      }
-      this.end(live, "stopped");
+      // the run already ended (or never started) while we were awaiting the
+      // evaluator: nothing more will come back through onRun, so end the
+      // flow here instead of waiting for an event that will not arrive
+      this.stopped(live);
     }
     return live.flow;
+  }
+
+  /** Ends a flow its stop has reached: the step failed as stopped. */
+  private stopped(live: LiveFlow): void {
+    clearTimeout(live.stopping);
+    delete live.stopping;
+    if (!isFlowActive(live.flow)) return;
+    const step = live.flow.steps[live.flow.current];
+    if (step) {
+      step.status = "failed";
+      step.reason = "stopped";
+    }
+    this.end(live, "stopped");
   }
 
   dismiss(id: string): void {
@@ -454,7 +532,7 @@ export class Flows {
       return;
     }
     if (flow.status === "gated") return;
-    this.resetStep(flow.steps[flow.current]);
+    this.resetStep(flow.steps[flow.current], true);
     flow.restarted = true;
     flow.status = "working";
     void this.runStep(live);
@@ -473,9 +551,24 @@ export class Flows {
     return this.fleetsLive.get(id)?.fleet;
   }
 
+  /** The fleet a start with this client-minted id made, while it is kept. */
+  fleetForRequest(request: string): Fleet | undefined {
+    for (const f of this.fleetsLive.values()) if (f.fleet.request === request) return f.fleet;
+    return undefined;
+  }
+
   /** Starts a workflow over many repos. `agentFor` gives each repo's
-   *  settings for a step, by the profile the step names, if any. */
-  startFleet(repos: Repo[], workflow: Workflow, note: string, agentFor: (repo: Repo, profile?: string) => AgentSettings): Fleet {
+   *  settings for a step, by the profile the step names, if any. A
+   *  `request` works as it does for `start`. */
+  startFleet(
+    repos: Repo[],
+    workflow: Workflow,
+    note: string,
+    agentFor: (repo: Repo, profile?: string) => AgentSettings,
+    request?: string,
+  ): Fleet {
+    const again = request ? this.fleetForRequest(request) : undefined;
+    if (again) return again;
     const fleet: Fleet = {
       id: crypto.randomUUID().slice(0, 8),
       workflow: workflow.name,
@@ -487,6 +580,7 @@ export class Flows {
       }),
       status: "working",
       startedAt: Date.now(),
+      ...(request ? { request } : {}),
     };
     const pending = repos.filter((r) => !fleetSkipReason(r, workflow));
     this.fleetsLive.set(fleet.id, { fleet, workflow, note, pending, agentFor });
@@ -497,20 +591,23 @@ export class Flows {
   stopFleet(id: string): Fleet {
     const lf = this.fleetsLive.get(id);
     if (!lf) throw new Error(`unknown fleet: ${id}`);
-    if (lf.fleet.status !== "working") return lf.fleet;
+    if (lf.fleet.status !== "working" || lf.fleet.stopping) return lf.fleet;
     for (const r of lf.pending) {
       const entry = lf.fleet.repos.find((x) => x.repoId === r.id);
       if (entry) entry.skipped = "stopped before it started";
     }
     lf.pending = [];
-    // Marked stopped before the flows end, or the last flow's end would
-    // pump the fleet and finish it as done.
-    lf.fleet.status = "stopped";
-    lf.fleet.endedAt = Date.now();
+    // Marked stopping before the flows are stopped, so the last flow's end
+    // pumps the fleet into stopped, not done. Until then it is working:
+    // a flow still killing its check holds the fleet open.
+    lf.fleet.stopping = true;
     for (const l of this.live.values()) {
       if (l.flow.fleetId === id && isFlowActive(l.flow)) this.stop(l.flow.id);
     }
-    this.hooks.onFleet(lf.fleet);
+    if (lf.fleet.status === "working") {
+      if (this.running(id) === 0) this.finishFleet(lf, "stopped");
+      else this.hooks.onFleet(lf.fleet);
+    }
     return lf.fleet;
   }
 
@@ -561,7 +658,7 @@ export class Flows {
     const lf = this.fleetsLive.get(fleetId);
     if (!lf || lf.fleet.status !== "working") return;
     if (!lf.pending.length && this.running(fleetId) === 0) {
-      this.finishFleet(lf, "done");
+      this.finishFleet(lf, lf.fleet.stopping ? "stopped" : "done");
       return;
     }
     this.hooks.onFleet(lf.fleet);
@@ -575,7 +672,7 @@ export class Flows {
       if (!repo) break;
       const entry = lf.fleet.repos.find((x) => x.repoId === repo.id);
       try {
-        const flow = this.start(repo, lf.workflow, lf.note, (profile) => lf.agentFor(repo, profile), fleetId);
+        const flow = this.start(repo, lf.workflow, lf.note, (profile) => lf.agentFor(repo, profile), { fleetId });
         if (entry) entry.flowId = flow.id;
       } catch (err) {
         if (entry) entry.skipped = String(err instanceof Error ? err.message : err);
@@ -586,6 +683,7 @@ export class Flows {
   private finishFleet(lf: { fleet: Fleet }, status: "done" | "stopped"): void {
     if (lf.fleet.status !== "working") return;
     lf.fleet.status = status;
+    delete lf.fleet.stopping;
     lf.fleet.endedAt = Date.now();
     this.hooks.onFleet(lf.fleet);
   }
@@ -648,8 +746,9 @@ export class Flows {
     return { runs: s.runs, workMs: s.workMs + (live.since === undefined ? 0 : this.now() - live.since) };
   }
 
-  /** Back to pending, its run dismissed and everything it said dropped. */
-  private resetStep(step: FlowStep | undefined): void {
+  /** Back to pending, its run dismissed and everything it said dropped;
+   *  its session too unless `keepSession` (a restart, which resumes it). */
+  private resetStep(step: FlowStep | undefined, keepSession = false): void {
     if (!step) return;
     if (step.runId) {
       try {
@@ -664,6 +763,10 @@ export class Flows {
     delete step.judgment;
     delete step.summary;
     delete step.reason;
+    if (!keepSession) {
+      delete step.session;
+      delete step.harness;
+    }
     step.status = "pending";
   }
 
@@ -725,7 +828,12 @@ export class Flows {
       await this.check(live);
       return;
     }
+    const agent = live.agent(def.agent);
+    // A restart resumes the step's Claude session, which holds the prompt
+    // and the work so far; anything else starts fresh with the restart note.
+    const resume = restarted && step.session && step.harness === "claude" && agent.harness === "claude" ? step.session : undefined;
     let spec = stepSpec(workflow, flow.current, this.summaries(live), flow.retryReason, restarted);
+    if (resume) spec = { ...spec, resume, message: RESUME_NOTE };
     const tools = def.check ? this.hooks.checkTools?.(live.repo, def.check) : null;
     if (tools) {
       const extra = await tools.catch(() => []);
@@ -734,7 +842,7 @@ export class Flows {
     }
     let run: Run;
     try {
-      run = this.runner.start(live.repo, workflow.name, spec, flow.note, live.agent(def.agent));
+      run = this.runner.start(live.repo, workflow.name, spec, flow.note, agent);
     } catch (err) {
       // The stage runner is away: the step waits for it, and keeps the
       // restart note for when it runs. By name, not class, as a thrown
@@ -750,6 +858,7 @@ export class Flows {
       return;
     }
     delete flow.restarted;
+    if (resume) live.resuming = run.id;
     step.status = "running";
     step.runId = run.id;
     spentOf(flow).runs += 1;
@@ -777,7 +886,19 @@ export class Flows {
     if (!def?.check || !step) return;
     step.status = "checking";
     this.emit(live);
-    const r = await this.hooks.check(live.repo, def.check);
+    const ctl = new AbortController();
+    live.checking = ctl;
+    let r: CheckResult;
+    try {
+      r = await this.hooks.check(live.repo, def.check, ctl.signal);
+    } finally {
+      if (live.checking === ctl) delete live.checking;
+    }
+    // stopped while it ran: the check has exited now, so the stop lands
+    if (live.stopping) {
+      this.stopped(live);
+      return;
+    }
     if (!isFlowActive(live.flow)) return;
     if (r.away && isSeedId(live.repo.id)) {
       // the check never ran: it waits for the stage runner, and no retry is spent

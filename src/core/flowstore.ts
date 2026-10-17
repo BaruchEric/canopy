@@ -6,8 +6,9 @@ import { readFileSync, rmSync } from "node:fs";
 import { link, mkdir, readdir, readFile, rename, rm, stat, writeFile } from "node:fs/promises";
 import { uptime } from "node:os";
 import { join } from "node:path";
-import type { FlowRecord } from "./flow";
+import { isRequestId, type FlowRecord } from "./flow";
 import { configDir } from "./store";
+import { isHarness } from "./types";
 
 export const flowsDir = (): string => join(configDir(), "flows");
 
@@ -26,12 +27,22 @@ export interface FlowFile extends FlowRecord {
   root: string;
 }
 
-const isStep = (s: unknown): boolean => isObject(s) && typeof s["name"] === "string" && typeof s["status"] === "string";
+/** a harness's session id: a UUID in practice, never something argv reads as a flag */
+const SESSION = /^[0-9A-Za-z][0-9A-Za-z_-]{0,127}$/;
+
+/** a step's name and status, and the session it may hand to `--resume` */
+const isStep = (s: unknown): boolean =>
+  isObject(s) &&
+  typeof s["name"] === "string" &&
+  typeof s["status"] === "string" &&
+  (s["session"] === undefined || (typeof s["session"] === "string" && SESSION.test(s["session"]))) &&
+  (s["harness"] === undefined || isHarness(s["harness"]));
 
 /** A record this canopy can run, or null. Checks the shape the engine relies
  *  on (an id fit for a filename, one flow step per workflow step, each an
  *  object with a name and a status, a current step in range, the repo's path
- *  and the root); the rest is the engine's own output. */
+ *  and the root, and a session, harness and request of the right shape where
+ *  there is one); the rest is the engine's own output. */
 export function parseFlowRecord(text: string): FlowFile | null {
   let v: unknown;
   try {
@@ -51,6 +62,7 @@ export function parseFlowRecord(text: string): FlowFile | null {
   if (typeof id !== "string" || !ID.test(id) || typeof flow["repoId"] !== "string") return null;
   if (!Array.isArray(steps) || !Array.isArray(wsteps) || steps.length !== wsteps.length) return null;
   if (!steps.every(isStep)) return null;
+  if (flow["request"] !== undefined && !isRequestId(flow["request"])) return null;
   if (typeof current !== "number" || !Number.isInteger(current) || current < 0 || current >= steps.length) return null;
   // the checks above cover every field the engine reads before trusting it
   return v as unknown as FlowFile;

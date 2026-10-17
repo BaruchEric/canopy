@@ -44,7 +44,7 @@ import { browseLocal, browseRemote, expandHome, SshError } from "../core/browse"
 import { builtinCheck, isBuiltinCheck } from "../core/builtincheck";
 import { gatesCheck, gateTools, runCheck, runGate } from "../core/check";
 import { exec, git, onHost, setSeedGit } from "../core/exec";
-import { fleetSkipReason, Flows } from "../core/flow";
+import { fleetSkipReason, Flows, isRequestId } from "../core/flow";
 import { INHERITED_ENV, SECRET_ENV, isKeystroke, isTermId, parseTermMessage, Scrollback, shellArgs, startTerm, termPlace, termSize, type TermSession, type TermSize } from "../core/term";
 import { attachTmuxTerm, hasSession, history, killSession, listSessions, noServer, newSession, paneInfo, paneScreen, paneText, sendKeys, sendLine, serverUp, snapshot, tmuxBase } from "../core/tmux";
 import { clip, continueLine, countLines, expiredShells, forgetKept, KEEP_EVERY, listKept, lostShells, readKeptHistory, replayCommand, replayFile, restoredBanner, writeKept } from "../core/keep";
@@ -3064,10 +3064,15 @@ async function handleApi(
 
   if (path === "/api/fleets" && method === "GET") return json(state.flows.fleets());
   if (path === "/api/fleet" && method === "POST") {
-    const b = (await req.json()) as { workflow?: unknown; ids?: unknown; note?: unknown };
+    const b = (await req.json()) as { workflow?: unknown; ids?: unknown; note?: unknown; request?: unknown };
     if (typeof b.workflow !== "string" || !Array.isArray(b.ids) || !b.ids.every((x) => typeof x === "string")) {
       return json({ error: "missing workflow or ids" }, 400);
     }
+    // a start sent again (its answer lost) finds the fleet the first one made
+    if (b.request !== undefined && !isRequestId(b.request)) return json({ error: "request must be 32 hex digits" }, 400);
+    const request = b.request;
+    const again = request ? state.flows.fleetForRequest(request) : undefined;
+    if (again) return json(again);
     const ids = b.ids as string[];
     const repos = ids.map((id) => state.result.repos.find((r) => r.id === id)).filter((r): r is Repo => r !== undefined);
     if (!repos.length) return json({ error: "no known repos in ids" }, 400);
@@ -3083,7 +3088,7 @@ async function handleApi(
     const refused = stepProfileRefusal(cfg, wf);
     if (refused) return json({ error: refused }, 400);
     await needStepHarnesses(state, cfg, wf, repos.filter((r) => !fleetSkipReason(r, wf)).map((r) => r.path));
-    return json(state.flows.startFleet(repos, wf, note, (r, profile) => stepAgentFor(cfg, r.path, profile)), 201);
+    return json(state.flows.startFleet(repos, wf, note, (r, profile) => stepAgentFor(cfg, r.path, profile), request), 201);
   }
   if (path === "/api/fleet/stop" && method === "POST") {
     const b = (await req.json()) as { id?: unknown };
@@ -3653,8 +3658,13 @@ async function handleApi(
     }
     if (method === "POST" && action === "flow") {
       if (repo.host) return json({ error: `agent runs only work on this machine; ${repo.name} is on ${repo.host}` }, 400);
-      const b = (await req.json()) as { workflow?: unknown; note?: unknown };
+      const b = (await req.json()) as { workflow?: unknown; note?: unknown; request?: unknown };
       if (typeof b.workflow !== "string") return json({ error: "missing workflow" }, 400);
+      // a start sent again (its answer lost) finds the flow the first one made
+      if (b.request !== undefined && !isRequestId(b.request)) return json({ error: "request must be 32 hex digits" }, 400);
+      const request = b.request;
+      const again = request ? state.flows.forRequest(request) : undefined;
+      if (again) return again.repoId === repo.id ? json(again) : json({ error: "that request started a flow on another repo" }, 409);
       const entries = await loadWorkflows(repo);
       const wf = findWorkflow(entries, b.workflow);
       if (wf?.listed === false) return json({ error: `${wf.name} runs only inside the incubator` }, 400);
@@ -3668,7 +3678,7 @@ async function handleApi(
       if (refused) return json({ error: refused }, 400);
       await needStepHarnesses(state, cfg, wf, [repo.path]);
       try {
-        return json(state.flows.start(repo, wf, note, (profile) => stepAgentFor(cfg, repo.path, profile)), 201);
+        return json(state.flows.start(repo, wf, note, (profile) => stepAgentFor(cfg, repo.path, profile), request ? { request } : {}), 201);
       } catch (err) {
         throw new HttpError(400, String(err instanceof Error ? err.message : err));
       }
@@ -4069,7 +4079,7 @@ export async function startServer(opts: {
     },
     // a seed's check starts without canopy's GitHub login, like its runs
     checkTools: (repo, line) => (line === GATES_CHECK ? gateTools(repo.path) : null),
-    check: async (repo, line) => {
+    check: async (repo, line, signal) => {
       // @gates becomes the repo's gates as a script, then runs like any other line
       let command = line;
       if (command === GATES_CHECK) {
@@ -4079,7 +4089,7 @@ export async function startServer(opts: {
       }
       // @name is a built-in canopy runs itself over readSeed, never a shell line
       if (isBuiltinCheck(command)) return builtinCheck(command, repo.path);
-      if (!isSeedPath(root, repo.path)) return runCheck(repo, command, false);
+      if (!isSeedPath(root, repo.path)) return runCheck(repo, command, false, undefined, undefined, signal);
       // canopy runs no git in any seed while a check runs in one (seedgit.ts),
       // nor after it while the stage runner still says something runs there
       seedChecks.set(repo.path, (seedChecks.get(repo.path) ?? 0) + 1);
@@ -4091,7 +4101,7 @@ export async function startServer(opts: {
       const client = stageFor();
       let held = false;
       try {
-        const result = await runCheck(repo, command, true, client, stageAway());
+        const result = await runCheck(repo, command, true, client, stageAway(), signal);
         if (client) {
           const hold = holdQuiet(client, repo.path, runnerOpts.quietWait ?? QUIET_WAIT, "check");
           checkHolds.add(hold);

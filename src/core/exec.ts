@@ -19,6 +19,8 @@ export interface ExecOptions {
   base?: Readonly<Record<string, string | undefined>>;
   /** text for the child's stdin; without it stdin is closed */
   input?: string;
+  /** ends the command the way the timeout does when it aborts */
+  signal?: AbortSignal;
 }
 
 /** a command's first line of output, for an error message */
@@ -50,16 +52,21 @@ function collect(stream: ReadableStream<Uint8Array>) {
   };
 }
 
-/** whether `p` settles within `ms` */
-async function settles(p: Promise<unknown>, ms: number): Promise<boolean> {
+/** whether `p` settles within `ms` (no limit when undefined) and before `signal` aborts */
+async function settles(p: Promise<unknown>, ms: number | undefined, signal?: AbortSignal): Promise<boolean> {
+  if (signal?.aborted) return false;
   let timer: ReturnType<typeof setTimeout> | undefined;
+  let aborted = (): void => {};
   const expired = new Promise<false>((resolve) => {
-    timer = setTimeout(() => resolve(false), ms);
+    if (ms !== undefined) timer = setTimeout(() => resolve(false), ms);
+    aborted = () => resolve(false);
+    signal?.addEventListener("abort", aborted, { once: true });
   });
   try {
     return await Promise.race([p.then(() => true), expired]);
   } finally {
     clearTimeout(timer);
+    signal?.removeEventListener("abort", aborted);
   }
 }
 
@@ -84,7 +91,8 @@ function signal(proc: { pid: number; kill: (sig?: NodeJS.Signals) => void }, sig
  *  started (git fetch's per-remote child, its transport helper, the test
  *  runner a check line ran) holding the pipes, and the call waiting on them
  *  for as long as those lived. A process that leaves the group and keeps a
- *  pipe (a daemon) is stopped being waited on after `KILL_GRACE`. */
+ *  pipe (a daemon) is stopped being waited on after `KILL_GRACE`. An
+ *  aborted `signal` ends it the same way. */
 export async function exec(
   cmd: string[],
   opts: ExecOptions = {},
@@ -100,12 +108,12 @@ export async function exec(
       stdout: "pipe",
       stderr: "pipe",
       stdin: opts.input === undefined ? "ignore" : new TextEncoder().encode(opts.input),
-      detached: !!opts.timeoutMs,
+      detached: !!opts.timeoutMs || !!opts.signal,
     });
     const out = collect(proc.stdout);
     const err = collect(proc.stderr);
     const all = Promise.all([out.done, err.done, proc.exited]);
-    if (opts.timeoutMs && !(await settles(all, opts.timeoutMs))) {
+    if ((opts.timeoutMs || opts.signal) && !(await settles(all, opts.timeoutMs || undefined, opts.signal))) {
       signal(proc, "SIGTERM");
       if (!(await settles(all, KILL_GRACE))) {
         signal(proc, "SIGKILL");
@@ -146,7 +154,12 @@ export async function onHost(
   if (host === null) return exec(cmd, opts);
   // The env is this machine's; a remote command sees the host's own. ssh
   // forwards its stdin to the remote command, so input travels.
-  return exec([...sshArgs(host, sshControlDir()), remoteCommand(cmd)], { timeoutMs: opts.timeoutMs, input: opts.input });
+  // An abort ends the ssh client here; the remote command may run on.
+  return exec([...sshArgs(host, sshControlDir()), remoteCommand(cmd)], {
+    timeoutMs: opts.timeoutMs,
+    input: opts.input,
+    ...(opts.signal ? { signal: opts.signal } : {}),
+  });
 }
 
 /** Where canopy's git in a seed runs instead of here: on an isolated

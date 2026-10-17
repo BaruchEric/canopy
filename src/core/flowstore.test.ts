@@ -41,6 +41,13 @@ describe("parseFlowRecord", () => {
   test("takes a well-formed record", () => {
     expect(parseFlowRecord(JSON.stringify(rec("abcdef01")))?.flow.id).toBe("abcdef01");
   });
+  test("keeps a step's session and harness and the flow's request, which a restart reads", () => {
+    const r = rec("abcdef01");
+    const text = JSON.stringify({ ...r, flow: { ...r.flow, request: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", steps: [{ name: "One", status: "running", session: "s1", harness: "claude" }] } });
+    const back = parseFlowRecord(text);
+    expect(back?.flow.request).toBe("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
+    expect(back?.flow.steps[0]).toMatchObject({ session: "s1", harness: "claude" });
+  });
   test.each<[string, string]>([
     ["truncated JSON", JSON.stringify(rec("abcdef01")).slice(0, 40)],
     ["another version", JSON.stringify({ ...rec("abcdef01"), v: 2 })],
@@ -50,6 +57,10 @@ describe("parseFlowRecord", () => {
     ["a step that is no object", JSON.stringify({ ...rec("abcdef01"), flow: { ...rec("abcdef01").flow, steps: ["x"] } })],
     ["a step with no status", JSON.stringify({ ...rec("abcdef01"), flow: { ...rec("abcdef01").flow, steps: [{ name: "One" }] } })],
     ["a step with no name", JSON.stringify({ ...rec("abcdef01"), flow: { ...rec("abcdef01").flow, steps: [{ status: "gated" }] } })],
+    ["a session that is no string", JSON.stringify({ ...rec("abcdef01"), flow: { ...rec("abcdef01").flow, steps: [{ name: "One", status: "gated", session: ["--x"] }] } })],
+    ["a session that reads as a flag", JSON.stringify({ ...rec("abcdef01"), flow: { ...rec("abcdef01").flow, steps: [{ name: "One", status: "gated", session: "--settings=x" }] } })],
+    ["a harness canopy does not know", JSON.stringify({ ...rec("abcdef01"), flow: { ...rec("abcdef01").flow, steps: [{ name: "One", status: "gated", harness: "x" }] } })],
+    ["a request of the wrong shape", JSON.stringify({ ...rec("abcdef01"), flow: { ...rec("abcdef01").flow, request: "../x" } })],
     ["no repo path", JSON.stringify({ ...rec("abcdef01"), repoPath: undefined })],
     ["no launch root", JSON.stringify({ ...rec("abcdef01"), root: undefined })],
   ])("refuses %s", (_what, text) => {

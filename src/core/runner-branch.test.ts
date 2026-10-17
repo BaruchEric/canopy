@@ -160,6 +160,13 @@ describe("a branch run", () => {
     expect(made[0]?.stops).toBe(0);
   });
 
+  test("a spec's resume and message start a plain run on that session with that message", () => {
+    const { runner, made } = setup();
+    runner.start(repo("a"), "ask", { ...ACTIONS.ask, resume: "sess-2", message: "canopy restarted" }, "", DEFAULT_AGENT);
+    expect(made[0]?.started).toEqual(["canopy restarted"]);
+    expect(made[0]?.ctx?.spec.resume).toBe("sess-2");
+  });
+
   test("a fix-it run resumes the session with its own first message", () => {
     const { runner, made } = setup();
     runner.start(repo("a"), "ask", ACTIONS.ask, "", DEFAULT_AGENT, undefined, undefined, branchOf("a", { resume: "sess-1", message: "the queue sent it back" }));

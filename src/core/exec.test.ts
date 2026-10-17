@@ -38,6 +38,18 @@ describe("exec", () => {
     expect(r.stdout).toBe("early\n");
   });
 
+  test("an abort ends the command and what it started, as the timeout does", async () => {
+    const ctl = new AbortController();
+    setTimeout(() => ctl.abort(), 200);
+    const start = Date.now();
+    const r = await exec(["sh", "-c", "sleep 30 & echo $!; wait; true"], { timeoutMs: 60_000, signal: ctl.signal });
+    expect(Date.now() - start).toBeLessThan(200 + KILL_GRACE);
+    expect(r.code).not.toBe(0);
+    const pid = Number(r.stdout.trim());
+    await Bun.sleep(200);
+    expect(await alive(pid)).toBe(false);
+  });
+
   test("the whole group goes, not just the command", async () => {
     const r = await exec(["sh", "-c", "sleep 30 & echo $!; wait; true"], { timeoutMs: 300 });
     const pid = Number(r.stdout.trim());

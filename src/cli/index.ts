@@ -200,6 +200,19 @@ export async function main(argv: string[]): Promise<void> {
       const url = `http://127.0.0.1:${server.port}`;
       console.log(`${moss("canopy")} ${dim("→")} ${sky(url)} ${dim(`(root: ${root}, ${versionLine(readBuild())})`)}`);
       if (!noOpen) await exec(["open", url]);
+      // A stop signal (launchd, docker stop, Ctrl-C) stops the server the way
+      // its tests do: every run and check is killed before the process goes,
+      // so no agent outlives it to work on beside the step a restart resumes.
+      // A second signal, or a stop that hangs, exits at once.
+      let stopping = false;
+      const bye = () => {
+        if (stopping) process.exit(0);
+        stopping = true;
+        setTimeout(() => process.exit(0), 5_000).unref();
+        void server.stop().finally(() => process.exit(0));
+      };
+      process.on("SIGINT", bye);
+      process.on("SIGTERM", bye);
       return; // keeps running — Bun.serve holds the process open
     }
     case "helper": {
