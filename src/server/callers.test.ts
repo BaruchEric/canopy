@@ -239,6 +239,21 @@ describe("pairing", () => {
     expect(book.claim(p.id, p.secret)).toBeNull();
   });
 
+  test("wrongSecret is a wrong guess at a live pair only", () => {
+    const book = open();
+    const p = book.pair("laptop", "1.2.3.4");
+    if ("error" in p) throw new Error(p.error);
+    expect(book.wrongSecret(p.id, "wrong")).toBe(true);
+    expect(book.wrongSecret(p.id, p.secret)).toBe(false);
+    expect(book.wrongSecret("nope", "wrong")).toBe(false);
+    expect(book.deny(p.id)).toBe(true);
+    // denied but not yet told: still a live pair to guess at
+    expect(book.wrongSecret(p.id, "wrong")).toBe(true);
+    expect(book.claim(p.id, p.secret)).toBeNull();
+    // told, and gone
+    expect(book.wrongSecret(p.id, "wrong")).toBe(false);
+  });
+
   test("the label prefix picks the kind", () => {
     const book = open();
     const kinds: string[] = [];

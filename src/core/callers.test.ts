@@ -2,12 +2,14 @@ import { describe, expect, test } from "bun:test";
 import { allows, needs } from "./callers";
 
 describe("needs", () => {
-  test("a GET needs read, bar the two upgrades", () => {
-    for (const p of ["/api/runs", "/api/repos", "/api/events", "/library/x", "/api/library"]) {
+  test("a GET needs read, bar the two upgrades and the Library's /open", () => {
+    for (const p of ["/api/runs", "/api/repos", "/api/events", "/library/x", "/api/library", "/library/api/dev/state", "/library/opener"]) {
       expect(needs("GET", p)).toBe("read");
     }
     expect(needs("GET", "/api/term")).toBe("shell");
     expect(needs("GET", "/api/helper")).toBe("helper");
+    expect(needs("GET", "/library/open")).toBe("admin");
+    expect(needs("GET", "/library/open/")).toBe("admin");
   });
 
   test("a trailing slash is ignored", () => {

@@ -274,6 +274,15 @@ export class CallerBook {
     return this.mint(kind, { label: p.label }).token;
   }
 
+  /** Whether a claim with this secret is a wrong guess at a live pair, the
+   *  one kind of failed claim worth counting: a page still polling a pair
+   *  that was denied, claimed or has expired is not guessing. */
+  wrongSecret(id: string, secret: string): boolean {
+    this.sweepPairs();
+    const p = this.pairs.get(id);
+    return p !== undefined && p.secret !== secret;
+  }
+
   /** The code shown in the server's own log while nobody can approve a pair:
    *  there is one only while the book holds no page or cli caller. */
   firstCode(): string | null {
@@ -469,10 +478,11 @@ export async function authRoute(book: CallerBook, gate: CallerGate, req: Request
       const id = field(b, "id");
       const secret = field(b, "secret");
       if (!id || !secret) return json({ error: "id and secret are required" }, 400);
+      const guess = book.wrongSecret(id, secret);
       const got = book.claim(id, secret);
       if (got === "waiting") return json({ waiting: true });
       if (got === null) {
-        gate.missed(route, addr);
+        if (guess) gate.missed(route, addr);
         return json({ error: "no such pair request: it was denied, claimed, or has expired" }, 404);
       }
       gate.announce();

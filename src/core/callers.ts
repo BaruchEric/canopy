@@ -82,6 +82,9 @@ export function needs(method: string, path: string): Right | "open" {
   if (method === "GET") {
     if (clean === "/api/term") return "shell";
     if (clean === "/api/helper") return "helper";
+    // the Library engine's /open launches an editor, a terminal or a dev
+    // server: a GET that runs a command is a write
+    if (clean === "/library/open") return "admin";
     return "read";
   }
   if (isLibrary) return "admin";

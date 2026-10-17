@@ -5,7 +5,7 @@
  * server reads the file once. Plain ptys (`CANOPY_TMUX=0`), so nothing here
  * touches a tmux server.
  */
-import { afterAll, beforeAll, describe, expect, spyOn, test } from "bun:test";
+import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -51,15 +51,8 @@ async function up(name: string, mode: string, mint: (book: CallerBook) => void =
   mint(book);
   await book.flush();
   const lines: string[] = [];
-  const spy = spyOn(console, "log").mockImplementation((...args: unknown[]) => {
-    lines.push(args.map(String).join(" "));
-  });
-  try {
-    const s = await startServer({ root: join(scratch, "root"), port: 0 });
-    return { ...s, lines };
-  } finally {
-    spy.mockRestore();
-  }
+  const s = await startServer({ root: join(scratch, "root"), port: 0, callersLog: (line) => lines.push(line) });
+  return { ...s, lines };
 }
 
 const call = (s: Up, path: string, init: RequestInit & { token?: string } = {}): Promise<Response> => {
@@ -128,6 +121,16 @@ describe("enforce", () => {
     expect((await call(s, "/library/refresh", { method: "POST", token: shell })).status).toBe(403);
   });
 
+  test("the Library's /open runs a command, so even its GET needs admin", async () => {
+    const q = `?action=finder&path=${encodeURIComponent(join(scratch, "root", "app"))}`;
+    const bare = await call(s, `/library/open${q}`);
+    expect(bare.status).toBe(401);
+    expect(((await bare.json()) as Refusal).need).toBe("admin");
+    const lacks = await call(s, `/library/open${q}`, { token: shell });
+    expect(lacks.status).toBe(403);
+    expect(((await lacks.json()) as Refusal).need).toBe("admin");
+  });
+
   test("reads stay open", async () => {
     expect((await call(s, "/api/runs")).status).toBe(200);
     const auth = (await (await call(s, "/api/auth", { token: page })).json()) as AuthInfo;
@@ -174,7 +177,8 @@ describe("enforce", () => {
     const checks = ((await (await call(s, "/api/health")).json()) as { checks: HealthCheck[] }).checks;
     const c = checks.find((x) => x.id === "canopy:callers");
     expect(c?.state).toBe("ok");
-    expect(c?.detail).toContain("enforce");
+    expect(c?.detail).toContain("enforce mode");
+    expect(c?.detail).toContain("refused");
   });
 });
 
@@ -201,17 +205,25 @@ describe("log", () => {
     expect((await post(s, "/api/auth/approve", { id: "x" })).status).toBe(401);
   });
 
-  test("the health check warns while refusals pile up", async () => {
+  test("the health check stays ok and counts the would-refuse calls", async () => {
     // the first refusal asks the polled check for a probe at once
     let c: HealthCheck | undefined;
+    const counted = (x: HealthCheck | undefined): boolean => !!x?.detail && !x.detail.includes(" 0 calls");
     const until = Date.now() + 2_000;
-    while (c?.state !== "healing" && Date.now() < until) {
+    while (!counted(c) && Date.now() < until) {
       const checks = ((await (await call(s, "/api/health")).json()) as { checks: HealthCheck[] }).checks;
       c = checks.find((x) => x.id === "canopy:callers");
-      if (c?.state !== "healing") await Bun.sleep(50);
+      if (!counted(c)) await Bun.sleep(50);
     }
-    expect(c?.state).toBe("healing");
-    expect(c?.why).toContain("would be refused");
+    expect(c?.state).toBe("ok");
+    expect(c?.detail).toContain("log mode");
+    expect(c?.detail).toContain("would be refused");
+    expect(counted(c)).toBe(true);
+  });
+
+  test("its lines go to the log sink, once per kind, method and path", async () => {
+    await post(s, "/api/repos/run?id=app", {});
+    expect(s.lines.filter((l) => l === "callers: would refuse none POST /api/repos/run (needs operate)")).toHaveLength(1);
   });
 });
 
@@ -237,6 +249,8 @@ describe("pairing over HTTP", () => {
   let s: Up;
   let shell = "";
   let shellId = "";
+  /** the page token the first pairing test claims */
+  let page = "";
   beforeAll(async () => {
     s = await up("pair", "enforce", (book) => {
       const minted = book.mint("shell", { label: "a shell", term: TERM });
@@ -296,6 +310,7 @@ describe("pairing over HTTP", () => {
     expect(claimed.status).toBe(200);
     const { token } = (await claimed.json()) as { token: string };
     expect(token).toStartWith("cnp_page_");
+    page = token;
 
     const role = await post(s, "/api/agents/role", {}, token);
     expect([401, 403]).not.toContain(role.status);
@@ -312,6 +327,12 @@ describe("pairing over HTTP", () => {
   test("a claimed pair is gone, and a wrong secret gets nothing", async () => {
     const paired = (await (await post(s, "/api/auth/pair", { label: "page two" })).json()) as { id: string; secret: string };
     expect((await post(s, "/api/auth/claim", { id: paired.id, secret: "wrong" })).status).toBe(404);
+  });
+
+  test("a page polling a denied pair is not guessing", async () => {
+    const paired = (await (await post(s, "/api/auth/pair", { label: "page denied" })).json()) as { id: string; secret: string };
+    expect((await post(s, "/api/auth/deny", { id: paired.id }, page)).status).toBe(200);
+    for (let i = 0; i < 15; i++) expect((await post(s, "/api/auth/claim", { id: paired.id, secret: paired.secret })).status).toBe(404);
   });
 
   test("guessing is cut off after ten misses", async () => {

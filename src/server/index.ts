@@ -1956,8 +1956,8 @@ function addCanopyChecks(state: ServerState, broker: boolean): void {
   // reported by the PR loop after each read; ok until it reads one
   state.health.add({ id: PRS_CHECK, label: "PR watch (gh)", scope: canopy, heal: "self" });
   state.health.report(PRS_CHECK, { state: "ok" });
-  // Health has no warning state of its own; `healing` is what reads as one,
-  // and on a check nothing heals it schedules no heal.
+  // ok in both modes, the count in words: a log week would otherwise keep
+  // the top bar on a warning the whole time
   state.health.add({
     id: CALLERS_CHECK,
     label: "caller check",
@@ -1968,8 +1968,10 @@ function addCanopyChecks(state: ServerState, broker: boolean): void {
       const { mode, refused } = state.gate;
       if (mode === "off") return { state: "off", why: "CANOPY_CALLERS=off: no caller is checked" };
       const n = `${refused.count} ${refused.count === 1 ? "call" : "calls"}`;
-      if (mode === "log" && refused.count) return { state: "healing", why: `${n} would be refused under CANOPY_CALLERS=enforce; GET /api/auth lists the latest` };
-      return { state: "ok", detail: mode === "log" ? "log mode, nothing would be refused" : `enforce mode, ${n} refused` };
+      return {
+        state: "ok",
+        detail: mode === "log" ? `log mode: ${n} would be refused under enforce; GET /api/auth lists the latest` : `enforce mode: ${n} refused`,
+      };
     },
   });
   const base = state.tmux;
@@ -3835,6 +3837,10 @@ export async function startServer(opts: {
   /** `quietWait` shortens how long a stage run's or check's end waits for
    *  the stage runner to call its seed quiet, for tests */
   runner?: { driver?: (harness: Harness) => RunDriver; quietWait?: number };
+  /** where the caller check's lines go (the first sign-in code, the
+   *  would-refuse lines): stdout, or nowhere under `bun test` unless a test
+   *  passes its own */
+  callersLog?: (line: string) => void;
 }): Promise<{ port: number; stop: () => Promise<void> }> {
   const cfg = await loadConfig();
   const root = await realpath(opts.root);
@@ -4317,7 +4323,7 @@ export async function startServer(opts: {
     gate: new CallerGate({
       book: callers,
       mode: callersMode(),
-      log: (line) => console.log(line),
+      log: opts.callersLog ?? (process.env["NODE_ENV"] === "test" ? () => {} : (line) => console.log(line)),
       onPairs: (pending) => broadcast(state, { type: "auth", pending }),
       // the check is polled; the first refusal is worth a probe at once
       onRefused: () => {
@@ -4949,8 +4955,11 @@ export async function startServer(opts: {
       process.off("exit", stopLibrary);
       for (const rt of state.sources) rt.watcher?.close();
       server.stop(true);
-      // a revoke or a mint may still be on its way to callers.json
-      return state.callers.flush();
+      // a revoke or a mint may still be on its way to callers.json; a caller
+      // that ignores the promise must never get a rejection from it
+      return state.callers.flush().catch((err: unknown) => {
+        console.error(`callers: flush at stop: ${err instanceof Error ? err.message : String(err)}`);
+      });
     },
   };
 }
