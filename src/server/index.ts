@@ -49,7 +49,7 @@ import { attachTmuxTerm, hasSession, history, killSession, listSessions, noServe
 import { clip, continueLine, countLines, expiredShells, forgetKept, KEEP_EVERY, listKept, lostShells, readKeptHistory, replayCommand, replayFile, restoredBanner, writeKept } from "../core/keep";
 import { PASTE_MAX, pasteName, pasteText, savePaste } from "../core/paste";
 import { apiBase, ForgeAuthError, linkForgeClones, listForgeRepos } from "../core/forge";
-import { isSshHost, parseLocator, parseSshHosts, shellQuote, tildeQuote } from "../core/host";
+import { isSshHost, parseLocator, parseSshHosts, shellQuote, tildeQuote, TOKEN_REF } from "../core/host";
 import { readEvidence } from "../core/evidence";
 import { FlowFiles, flowsDir, loadFlowRecords, lockFlows, type FlowsLock } from "../core/flowstore";
 import { hasGatewayKey, jev, jevJudge } from "../core/jev";
@@ -975,7 +975,7 @@ async function restoreTerm(state: ServerState, id: string, size: TermSize, resum
   if (resume && rec.agent) {
     if (isSeedPath(state.root, rec.path)) throw new HttpError(400, SEED_AGENT_REFUSAL);
     await needHarness(state, rec.agent, rec.path);
-    const env = shellEnv(state, rec.repoId, rec.path, id);
+    const env = lineEnv(state, rec.repoId, rec.path, id);
     line = continueLine(rec.agent, agentFor(await loadConfig(), rec.path, "shell", { harness: rec.agent }), env);
   }
   // The replay runs in the pane, ahead of the shell, so what the lost shell
@@ -1037,7 +1037,7 @@ async function resumeTerm(
   if (!(await hasAgentSession(harness, repo.path, session))) throw new HttpError(404, `no ${harness} conversation under that id at this repo`);
   if (state.terms.has(id) || state.kept.some((k) => k.id === id)) throw new HttpError(409, "that shell name is taken");
   await needHarness(state, harness, repo.path);
-  const env = shellEnv(state, repo.id, repo.path, id);
+  const env = lineEnv(state, repo.id, repo.path, id);
   const line = resumeLine(session, agentFor(await loadConfig(), repo.path, "shell", { harness }), env);
   const tmux = state.tmux;
   let live: LiveTerm;
@@ -1237,7 +1237,7 @@ const PROMPT_MAX = 6000;
  *  once its own start-up (the folder trust question among it) is through,
  *  which typing it in later cannot be sure of. */
 async function typeAgent(state: ServerState, live: LiveTerm, repo: Repo, agent: AgentSettings, prompt: string): Promise<void> {
-  const base = await state.agentLine(repo, agent, shellEnv(state, live.info.repoId, live.info.path, live.info.id));
+  const base = await state.agentLine(repo, agent, lineEnv(state, live.info.repoId, live.info.path, live.info.id));
   const line = prompt ? `${base} ${shellQuote(prompt)}` : base;
   await Bun.sleep(400);
   if (state.tmux) await sendLine(state.tmux, live.info.id, line);
@@ -1247,10 +1247,20 @@ async function typeAgent(state: ServerState, live: LiveTerm, repo: Repo, agent: 
 /** What the agent in a canopy shell hands its own commands, beside what the
  *  shell already has: its tailchan handle and where it runs (`canopyEnv`),
  *  which a harness that filters its commands' environment (codex) would
- *  otherwise drop. */
+ *  otherwise drop. This is for a line typed into a shell that is already
+ *  running, so it never mints: the token is the reference TOKEN_REF, which
+ *  the shell expands to its own, and no token value reaches the pane. */
+function lineEnv(state: ServerState, repoId: string, path: string, id: string): AgentEnv {
+  const handle = handleOf(state, repoId, path, id).handle;
+  const local = parseLocator(path).host === null;
+  return { ...(handle ? { TAILCHAN_AS: handle } : {}), ...canopyEnv(state, repoId, path, id), ...(local ? { CANOPY_TOKEN: TOKEN_REF } : {}) };
+}
+
+/** The environment of a new pty shell: its tailchan handle and `newProcessEnv`'s
+ *  own token. */
 function shellEnv(state: ServerState, repoId: string, path: string, id: string): AgentEnv {
   const handle = handleOf(state, repoId, path, id).handle;
-  return { ...(handle ? { TAILCHAN_AS: handle } : {}), ...canopyEnv(state, repoId, path, id) };
+  return { ...(handle ? { TAILCHAN_AS: handle } : {}), ...newProcessEnv(state, repoId, path, id) };
 }
 
 /** Drops the tokens a shell's id held. Memory changes at once; a failed
@@ -1259,27 +1269,34 @@ function dropTermToken(state: ServerState, id: string): void {
   state.callers.dropTerm(id).catch(() => {});
 }
 
-/** Where a new shell runs, in its environment, so an agent's hook can put
+/** Where a shell runs, in its environment, so an agent's hook can put
  *  it on the registry card (`where.canopy`) and call back: the shell's id,
  *  this backend's name, the repo's id here, and this server's address on
  *  the machine's loopback. None for an ssh line, which would leave them on
  *  this side of the connection. */
 function canopyEnv(state: ServerState, repoId: string, path: string, id: string): Record<string, string> {
   if (parseLocator(path).host !== null) return {};
-  // The book keeps hashes and cannot hand an old token back, so a process
-  // started under an id the book already knows (a resume, a restore) gets a
-  // new one and the old goes.
-  dropTermToken(state, id);
   return {
     CANOPY_TERM: id,
-    CANOPY_TOKEN: state.callers.mint("shell", { label: `shell ${repoId}`, term: id }).token,
     CANOPY_BACKEND: state.backendName,
     CANOPY_REPO: repoId,
     ...(state.apiUrl ? { CANOPY_API: state.apiUrl } : {}),
   };
 }
 
-/** What a new tmux session's environment adds to `canopyEnv`: canopy's own
+/** `canopyEnv` and a token, for a process that is starting now (a pty
+ *  shell, a tmux session). The book keeps hashes and cannot hand an old
+ *  token back, so a start under an id the book already knows (a restore, a
+ *  resume) drops the old token and mints a new one. Only a new process env
+ *  may call this: a line typed into a running shell uses `lineEnv`. */
+function newProcessEnv(state: ServerState, repoId: string, path: string, id: string): Record<string, string> {
+  const env = canopyEnv(state, repoId, path, id);
+  if (parseLocator(path).host !== null) return env;
+  dropTermToken(state, id);
+  return { ...env, CANOPY_TOKEN: state.callers.mint("shell", { label: `shell ${repoId}`, term: id }).token };
+}
+
+/** What a new tmux session's environment adds to `newProcessEnv`: canopy's own
  *  `TZ` when it has one. The tmux server lives in the shells container,
  *  whose processes would otherwise read the zone off `/etc/localtime`, and
  *  Bun, so Claude Code too, takes that name (the image's says `Etc/UTC`);
@@ -1287,7 +1304,7 @@ function canopyEnv(state: ServerState, repoId: string, path: string, id: string)
  *  recreating that container. A plain pty inherits canopy's env already. */
 function sessionEnv(state: ServerState, repoId: string, path: string, id: string): Record<string, string> {
   const tz = process.env["TZ"];
-  return { ...canopyEnv(state, repoId, path, id), ...(tz && parseLocator(path).host === null ? { TZ: tz } : {}) };
+  return { ...newProcessEnv(state, repoId, path, id), ...(tz && parseLocator(path).host === null ? { TZ: tz } : {}) };
 }
 
 /** `CANOPY_API` off the address the server binds: loopback for a loopback
@@ -2897,7 +2914,7 @@ async function handleApi(
       state.moving.delete(term);
       return json({ ok: true, resumed: false });
     }
-    const line = resumeLine(out.session, agentFor(await loadConfig(), repo.path, "shell", { harness: out.harness }), shellEnv(state, repo.id, repo.path, term));
+    const line = resumeLine(out.session, agentFor(await loadConfig(), repo.path, "shell", { harness: out.harness }), lineEnv(state, repo.id, repo.path, term));
     await sendLine(tmux, term, line);
     state.moving.delete(term);
     return json({ ok: true, resumed: true });

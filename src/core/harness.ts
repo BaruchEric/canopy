@@ -9,6 +9,7 @@
  * (openers, sessions, keep), since that module is not browser-safe.
  */
 
+import { RAW_WORD, TOKEN_REF } from "./host";
 import { AGENT_MODELS, HARNESSES, type AgentEffort, type AgentSettings, type Harness } from "./types";
 
 export { HARNESSES, type Harness };
@@ -110,7 +111,13 @@ const CODEX: HarnessInfo = {
   envArgs: (env) =>
     Object.entries(env)
       .filter(([k, v]) => ENV_NAME.test(k) && ![...v].some((c) => c.charCodeAt(0) < 0x20))
-      .flatMap(([k, v]) => ["-c", `shell_environment_policy.set.${k}=${tomlString(v)}`]),
+      .flatMap(([k, v]) =>
+        // the shell's own token rides as a reference the typed line's shell
+        // expands inside the toml quotes, never as a value
+        k === "CANOPY_TOKEN" && v === TOKEN_REF
+          ? ["-c", `${RAW_WORD}'shell_environment_policy.set.${k}="'"${TOKEN_REF}"'"'`]
+          : ["-c", `shell_environment_policy.set.${k}=${tomlString(v)}`],
+      ),
   resume: (flags, session) => ["resume", ...flags, session],
   continue: (flags) => ["resume", "--last", ...flags],
   yoloTitle: "Skip every approval and the sandbox (--dangerously-bypass-approvals-and-sandbox)",

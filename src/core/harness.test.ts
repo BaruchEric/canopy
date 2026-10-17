@@ -138,3 +138,14 @@ describe("the argv table", () => {
     expect(presentHarnesses(() => false)).toEqual([]);
   });
 });
+
+describe("the shell's token in a typed line", () => {
+  test("codex gets the reference, which the shell expands, and never a value", async () => {
+    const { agentLine } = await import("./openers");
+    const { TOKEN_REF } = await import("./host");
+    const line = agentLine(codex(), undefined, { CANOPY_TERM: "t1", CANOPY_TOKEN: TOKEN_REF });
+    expect(line).toContain(`-c 'shell_environment_policy.set.CANOPY_TOKEN="'"$CANOPY_TOKEN"'"'`);
+    expect(line).not.toContain("cnp_");
+    expect(agentLine(claude(), undefined, { CANOPY_TOKEN: TOKEN_REF })).not.toContain("CANOPY_TOKEN");
+  });
+});

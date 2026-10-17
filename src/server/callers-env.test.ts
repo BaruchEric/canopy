@@ -12,6 +12,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { spawnEnv } from "../core/driver";
 import { runEnv } from "../core/runner";
+import { CallerBook } from "./callers";
 import { startServer } from "./index";
 
 setDefaultTimeout(30_000);
@@ -65,9 +66,10 @@ async function held(token: string, want: boolean): Promise<boolean> {
   return !want;
 }
 
-/** a shell on a pty that prints its CANOPY_TOKEN; resolves the token */
-async function shellToken(s: Up, id: string): Promise<{ token: string; ws: WebSocket }> {
-  const q = new URLSearchParams({ id: "app", cols: "200", rows: "24", term: id, place: "strip" });
+/** a shell on a pty that prints its CANOPY_TOKEN; resolves the token. `extra`
+ *  rides on the socket's query (a start, a ticket). */
+async function shellToken(s: Up, id: string, extra: Record<string, string> = {}): Promise<{ token: string; ws: WebSocket }> {
+  const q = new URLSearchParams({ id: "app", cols: "200", rows: "24", term: id, place: "strip", ...extra });
   const ws = new WebSocket(`ws://127.0.0.1:${s.port}/api/term?${q}`);
   ws.binaryType = "arraybuffer";
   let out = "";
@@ -130,6 +132,37 @@ describe("tokens in a child's env", () => {
       expect(await held(token, false)).toBe(false);
     } finally {
       await second.stop();
+    }
+  });
+
+  test("a shell that started an agent keeps its token, and the gate takes it", async () => {
+    const dir = join(scratch, "enforce");
+    const was = config;
+    config = dir;
+    process.env["CANOPY_CONFIG_DIR"] = dir;
+    process.env["CANOPY_CALLERS"] = "enforce";
+    const book = new CallerBook({ file: join(dir, "callers.json") });
+    const page = book.mint("page", { label: "a page" }).token;
+    await book.flush();
+    const s = await startServer({ root: join(scratch, "root"), port: 0, agentLine: async () => "echo agent-line-ran" });
+    try {
+      const api = (path: string, init: RequestInit & { token: string }): Promise<Response> => {
+        const { token, ...rest } = init;
+        return fetch(`http://127.0.0.1:${s.port}${path}`, { ...rest, headers: { "x-canopy-token": token, "content-type": "application/json" } });
+      };
+      const ticket = ((await (await api("/api/auth/ticket", { method: "POST", body: JSON.stringify({ for: "term" }), token: page })).json()) as { ticket: string }).ticket;
+      const { token, ws } = await shellToken(s, "abcdefabcdefabcdefabcdefabcdef13", { start: "agent", ticket });
+      // the agent line was typed after the shell's own env was set
+      await Bun.sleep(1500);
+      expect(await held(token, true)).toBe(true);
+      const res = await api("/api/repos/refresh?id=app", { method: "POST", token });
+      expect([401, 403]).not.toContain(res.status);
+      ws.close();
+    } finally {
+      await s.stop();
+      config = was;
+      process.env["CANOPY_CONFIG_DIR"] = was;
+      process.env["CANOPY_CALLERS"] = "log";
     }
   });
 });
