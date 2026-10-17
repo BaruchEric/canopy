@@ -20,6 +20,9 @@ const saved: Record<string, string | undefined> = {};
 const ENV = ["CANOPY_CONFIG_DIR", "CANOPY_TMUX", "CANOPY_BIND", "CANOPY_PUBLIC_ORIGIN", "CANOPY_ORIGINS", "CANOPY_CALLERS"];
 const LISTED = "https://canopy-mac.example";
 const EVIL = "https://evil.example";
+/** The "shell" tokens below are minted as rangers: they hold the same rights
+ *  (read, operate), and a server pruning at start-up drops a shell token
+ *  whose shell it does not hold, which a pre-minted one never has. */
 const TERM = "0123456789abcdef0123456789abcdef";
 
 beforeAll(async () => {
@@ -86,7 +89,7 @@ describe("enforce", () => {
   let page = "";
   beforeAll(async () => {
     s = await up("enforce", "enforce", (book) => {
-      shell = book.mint("shell", { label: "a shell", term: TERM }).token;
+      shell = book.mint("ranger", { label: "a shell", term: TERM }).token;
       page = book.mint("page", { label: "a page" }).token;
     });
   });
@@ -139,7 +142,7 @@ describe("enforce", () => {
   });
 
   test("a shell socket needs a ticket, and a page token gets one", async () => {
-    const q = new URLSearchParams({ id: "app", term: TERM, place: "strip", cols: "80", rows: "24" });
+    const q = new URLSearchParams({ id: "app", term: "fedcba9876543210fedcba9876543210", place: "strip", cols: "80", rows: "24" });
     expect(await opens(s, `/api/term?${q}`)).toBe(false);
     const res = await post(s, "/api/auth/ticket", { for: "term" }, page);
     expect(res.status).toBe(200);
@@ -253,7 +256,7 @@ describe("pairing over HTTP", () => {
   let page = "";
   beforeAll(async () => {
     s = await up("pair", "enforce", (book) => {
-      const minted = book.mint("shell", { label: "a shell", term: TERM });
+      const minted = book.mint("ranger", { label: "a shell", term: TERM });
       shell = minted.token;
       shellId = minted.caller.id;
     });

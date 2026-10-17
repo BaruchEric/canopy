@@ -142,17 +142,21 @@ describe("resuming a conversation", () => {
     // the shell runs rides as its -c flags
     const env = Object.entries({
       CANOPY_TERM: TERM2,
+      CANOPY_TOKEN: "\0",
       CANOPY_BACKEND: selfName(null, hostname()),
       CANOPY_REPO: "app",
       CANOPY_API: `http://127.0.0.1:${server.port}`,
     })
       .map(([k, v]) => `-c shell_environment_policy.set.${k}="${v}"`)
       .join(" ");
-    const typed = `stub-codex resume --dangerously-bypass-approvals-and-sandbox --no-daemon ${env} ${CODEX}`;
+    // the shell's token is minted per start, so it is matched, not spelled
+    const typed = new RegExp(
+      `stub-codex resume --dangerously-bypass-approvals-and-sandbox --no-daemon ${env.replace(/[.*+?^${}()|[\]\\]/g, "\\$&").replace("\0", "cnp_shell_[A-Za-z0-9_-]+")} ${CODEX}`,
+    );
     const start = Date.now();
-    while (!out.includes(typed) && Date.now() - start < 15_000) await Bun.sleep(50);
+    while (!typed.test(out) && Date.now() - start < 15_000) await Bun.sleep(50);
     ws.close();
-    expect(out).toContain(typed);
+    expect(out).toMatch(typed);
     await fetch(url(`/api/terms?term=${TERM2}`), { method: "DELETE" });
   }, 20_000);
 });

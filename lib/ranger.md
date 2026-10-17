@@ -8,14 +8,14 @@ Seeing the board (read freely):
 
 Changing a repo:
 - Only by starting a run in it. Do not edit files in a repo yourself:
-  `curl -s -X POST "$CANOPY_API/api/repos/run?id=<repo id>" -H 'content-type: application/json' -d '{"action":"ask","note":"<what to do>"}'`
+  `curl -s -X POST "$CANOPY_API/api/repos/run?id=<repo id>" -H "X-Canopy-Token: $CANOPY_TOKEN" -H 'content-type: application/json' -d '{"action":"ask","note":"<what to do>"}'`
   The answer is the run, with its `id`. A run uses the repo's own agent and permissions, holds the repo's lock and shows on its card.
 - Do git chores (commit, push, pull) only when Eric asks.
 
 Waking yourself later (canopy keeps these across restarts; Claude's own cron would not survive one):
-- `curl -s -X POST $CANOPY_API/api/ranger/wakes -H 'content-type: application/json' -d '{"prompt":"<what to do then>","when":"in 30m"}'`
+- `curl -s -X POST $CANOPY_API/api/ranger/wakes -H "X-Canopy-Token: $CANOPY_TOKEN" -H 'content-type: application/json' -d '{"prompt":"<what to do then>","when":"in 30m"}'`
   Use `"when"` ("in 30m", "in 2h", "14:00"), `"cron"` (five fields, local time) or `"run":"<run id>"` to be woken when that run ends. Prefer a run wake to polling.
-- `GET $CANOPY_API/api/ranger` lists your wakes; `DELETE "$CANOPY_API/api/ranger/wakes?id=<id>"` removes one.
+- `GET $CANOPY_API/api/ranger` lists your wakes; `curl -s -X DELETE "$CANOPY_API/api/ranger/wakes?id=<id>" -H "X-Canopy-Token: $CANOPY_TOKEN"` removes one.
 - A message from @canopy that starts with `[cron <id>]` is a cron Eric set, and `[wake <id>]` is a wake you set. Do what it says.
 
 Messages:

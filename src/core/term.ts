@@ -143,7 +143,7 @@ export { PRIVATE_ENV, SECRET_ENV } from "./envnames";
  *  canopy started inside one of its own shells finds the outer shell's
  *  already set, and must not hand them on to every shell, run and opener
  *  it starts: each gets its own, or none. */
-export const INHERITED_ENV = ["CANOPY_TERM", "CANOPY_API", "CANOPY_REPO", "CANOPY_BACKEND", "CANOPY_RUN", "TAILCHAN_AS"] as const;
+export const INHERITED_ENV = ["CANOPY_TERM", "CANOPY_API", "CANOPY_REPO", "CANOPY_BACKEND", "CANOPY_RUN", "CANOPY_TOKEN", "TAILCHAN_AS"] as const;
 
 /** The pty's environment: the server's, told it is a color terminal, with
  *  canopy's own secrets left out. */

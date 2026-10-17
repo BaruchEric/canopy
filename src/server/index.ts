@@ -633,6 +633,7 @@ async function listTerms(state: ServerState): Promise<TermInfo[]> {
     for (const [id, t] of state.terms) {
       if (seen.has(id) || t.info.ranger) continue;
       state.terms.delete(id);
+      dropTermToken(state, id);
       state.moving.delete(id);
     }
   }
@@ -652,6 +653,7 @@ async function endTerm(state: ServerState, id: string): Promise<boolean> {
   if (live) live.ending = true;
   await killSession(state.tmux, id);
   state.terms.delete(id);
+  dropTermToken(state, id);
   // a move it was in the middle of is over: out sees it called off, and the
   // next shell under this name starts with no record to refuse it
   state.moving.delete(id);
@@ -1251,6 +1253,12 @@ function shellEnv(state: ServerState, repoId: string, path: string, id: string):
   return { ...(handle ? { TAILCHAN_AS: handle } : {}), ...canopyEnv(state, repoId, path, id) };
 }
 
+/** Drops the tokens a shell's id held. Memory changes at once; a failed
+ *  write is logged by the book, and the shell's end goes on regardless. */
+function dropTermToken(state: ServerState, id: string): void {
+  state.callers.dropTerm(id).catch(() => {});
+}
+
 /** Where a new shell runs, in its environment, so an agent's hook can put
  *  it on the registry card (`where.canopy`) and call back: the shell's id,
  *  this backend's name, the repo's id here, and this server's address on
@@ -1258,8 +1266,13 @@ function shellEnv(state: ServerState, repoId: string, path: string, id: string):
  *  this side of the connection. */
 function canopyEnv(state: ServerState, repoId: string, path: string, id: string): Record<string, string> {
   if (parseLocator(path).host !== null) return {};
+  // The book keeps hashes and cannot hand an old token back, so a process
+  // started under an id the book already knows (a resume, a restore) gets a
+  // new one and the old goes.
+  dropTermToken(state, id);
   return {
     CANOPY_TERM: id,
+    CANOPY_TOKEN: state.callers.mint("shell", { label: `shell ${repoId}`, term: id }).token,
     CANOPY_BACKEND: state.backendName,
     CANOPY_REPO: repoId,
     ...(state.apiUrl ? { CANOPY_API: state.apiUrl } : {}),
@@ -1310,6 +1323,7 @@ function openPtyTerm(state: ServerState, data: TermSocket, size: TermSize): Live
     },
     exit: (code) => {
       state.terms.delete(id);
+      dropTermToken(state, id);
       state.moving.delete(id);
       for (const ws of sockets) {
         try {
@@ -1355,6 +1369,7 @@ async function joinTmuxTerm(state: ServerState, tmux: string[], ws: ServerWebSoc
     if (start) void typeAgent(state, live, repo, start, ws.data.prompt).catch(() => {});
   } else if (!(await hasSession(tmux, id))) {
     state.terms.delete(id);
+    dropTermToken(state, id);
     tellTerms(state);
     ws.close(TERM_GONE, "that shell is gone");
     return;
@@ -1379,6 +1394,7 @@ async function joinTmuxTerm(state: ServerState, tmux: string[], ws: ServerWebSoc
           } else {
             if (state.terms.get(id) === held) {
               state.terms.delete(id);
+              dropTermToken(state, id);
               state.moving.delete(id);
             }
             // A shell that exited leaves nothing worth restoring, but the
@@ -4164,13 +4180,17 @@ export async function startServer(opts: {
       root,
       backend: () => state.backendName,
       // what any canopy shell gets, less CANOPY_REPO: it is in no repo
-      env: (term) => ({
-        CANOPY_TERM: term,
-        CANOPY_BACKEND: state.backendName,
-        ...(state.apiUrl ? { CANOPY_API: state.apiUrl } : {}),
-        // the host's local time for its claude, as sessionEnv gives a shell
-        ...(process.env["TZ"] ? { TZ: process.env["TZ"] } : {}),
-      }),
+      env: (term) => {
+        dropTermToken(state, term);
+        return {
+          CANOPY_TERM: term,
+          CANOPY_TOKEN: state.callers.mint("ranger", { label: "ranger", term }).token,
+          CANOPY_BACKEND: state.backendName,
+          ...(state.apiUrl ? { CANOPY_API: state.apiUrl } : {}),
+          // the host's local time for its claude, as sessionEnv gives a shell
+          ...(process.env["TZ"] ? { TZ: process.env["TZ"] } : {}),
+        };
+      },
       shell: userShell(),
       hasClaude: () => state.harnesses().includes("claude"),
       settings: async (profile) => agentFor(await loadConfig(), root, "shell", profile ? { profile } : undefined),
@@ -4193,7 +4213,10 @@ export async function startServer(opts: {
         else state.terms.set(info.id, { info, pty: null, sockets: new Set() });
       },
       drop: (id) => {
-        if (state.terms.get(id)?.info.ranger) state.terms.delete(id);
+        if (state.terms.get(id)?.info.ranger) {
+          state.terms.delete(id);
+          dropTermToken(state, id);
+        }
       },
       broadcast: (ev) => {
         broadcast(state, ev);
@@ -4420,6 +4443,9 @@ export async function startServer(opts: {
   // browser rejoining finds them held. Said out loud, since a missing
   // tmux falls back to plain ptys and looks the same until a restart.
   await listTerms(state);
+  // a shell token whose shell did not come back is stale; one a tmux shell
+  // outlived canopy with stays, since that shell still carries it
+  state.callers.prune(new Set(state.terms.keys())).catch(() => {});
   // and the ones a machine going down left behind, which are offered to
   // restore rather than held
   const kept = await refreshKept(state);
