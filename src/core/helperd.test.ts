@@ -8,7 +8,12 @@
  */
 import { afterEach, describe, expect, test } from "bun:test";
 import { createHash } from "node:crypto";
-import { runHelper } from "./helperd";
+import { mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { CallerBook } from "../server/callers";
+import { startServer } from "../server/index";
+import { helperUrl, runHelper } from "./helperd";
 
 const GUID = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11";
 const accept = (key: string): string => createHash("sha1").update(key + GUID).digest("base64");
@@ -144,5 +149,106 @@ describe("a helper on a backend that went with its host", () => {
     // handshake that never landed
     expect(lines.some((l) => l.startsWith("lost the backend: it stopped answering"))).toBe(true);
     await until(() => peer.handshakes > 1, "the helper to dial again");
+  });
+});
+
+describe("a helper with a token", () => {
+  test("fetches a fresh ticket for every dial and adds it to the url", async () => {
+    const tickets: Array<string | null> = [];
+    const asked: Array<string | null> = [];
+    let issued = 0;
+    let first: { close: (code?: number, reason?: string) => unknown } | undefined;
+    const server = Bun.serve<{ n: number }>({
+      port: 0,
+      hostname: "127.0.0.1",
+      async fetch(req, srv) {
+        const u = new URL(req.url);
+        if (u.pathname === "/api/auth/ticket") {
+          asked.push(req.headers.get("x-canopy-token"));
+          expect(await req.json()).toEqual({ for: "helper" });
+          issued += 1;
+          return Response.json({ ticket: `t${issued}` });
+        }
+        tickets.push(u.searchParams.get("ticket"));
+        return srv.upgrade(req, { data: { n: tickets.length } }) ? undefined : new Response("no");
+      },
+      websocket: {
+        open(ws) {
+          if (ws.data.n === 1) first = ws;
+        },
+        message() {},
+      },
+    });
+    stops.push(() => server.stop(true));
+    const helper = runHelper({ backend: `http://127.0.0.1:${server.port}`, name: "mbp", openers: [], token: () => "cnp_helper_x", log: () => {}, run: async () => {} });
+    stops.push(helper.stop);
+    await until(() => helper.connected, "the first registration");
+    first?.close(1001, "again");
+    await until(() => tickets.length === 2, "the second dial");
+    expect(tickets).toEqual(["t1", "t2"]);
+    expect(asked).toEqual(["cnp_helper_x", "cnp_helper_x"]);
+  });
+
+  test("no token means no ticket request", async () => {
+    let posts = 0;
+    let ticket: string | null = "unset";
+    const server = Bun.serve({
+      port: 0,
+      hostname: "127.0.0.1",
+      fetch(req, srv) {
+        if (req.method === "POST") posts += 1;
+        ticket = new URL(req.url).searchParams.get("ticket");
+        return srv.upgrade(req) ? undefined : new Response("no");
+      },
+      websocket: { message() {} },
+    });
+    stops.push(() => server.stop(true));
+    const helper = runHelper({ backend: `http://127.0.0.1:${server.port}`, name: "mbp", openers: [], token: () => null, log: () => {}, run: async () => {} });
+    stops.push(helper.stop);
+    await until(() => helper.connected, "the registration");
+    expect(posts).toBe(0);
+    expect(ticket).toBeNull();
+  });
+
+  test("against an enforce server a ticket opens the socket once", async () => {
+    const saved = { dir: process.env["CANOPY_CONFIG_DIR"], calls: process.env["CANOPY_CALLERS"], tmux: process.env["CANOPY_TMUX"] };
+    const dir = await mkdtemp(join(tmpdir(), "canopy-helperd-"));
+    process.env["CANOPY_CONFIG_DIR"] = dir;
+    process.env["CANOPY_CALLERS"] = "enforce";
+    process.env["CANOPY_TMUX"] = "0";
+    try {
+      const book = new CallerBook({ file: join(dir, "callers.json") });
+      const token = book.mint("helper", { label: "helper test" }).token;
+      await book.flush();
+      const s = await startServer({ root: dir, port: 0, callersLog: () => {} });
+      try {
+        const base = `http://127.0.0.1:${s.port}`;
+        const ticket = async (): Promise<string> => {
+          const r = await fetch(`${base}/api/auth/ticket`, { method: "POST", headers: { "content-type": "application/json", "x-canopy-token": token }, body: JSON.stringify({ for: "helper" }) });
+          return ((await r.json()) as { ticket: string }).ticket;
+        };
+        const a = await ticket();
+        const b = await ticket();
+        expect(a).not.toBe(b);
+        const url = helperUrl(base, "mbp", "linux", []);
+        const opens = (t: string) =>
+          new Promise<boolean>((resolve) => {
+            const ws = new WebSocket(`${url}&ticket=${t}`);
+            ws.onopen = () => (ws.close(), resolve(true));
+            ws.onerror = () => resolve(false);
+          });
+        expect(await opens(a)).toBe(true);
+        expect(await opens(a)).toBe(false);
+        expect(await opens(b)).toBe(true);
+      } finally {
+        await s.stop();
+      }
+    } finally {
+      for (const [k, v] of [["CANOPY_CONFIG_DIR", saved.dir], ["CANOPY_CALLERS", saved.calls], ["CANOPY_TMUX", saved.tmux]] as const) {
+        if (v === undefined) delete process.env[k];
+        else process.env[k] = v;
+      }
+      await rm(dir, { recursive: true, force: true });
+    }
   });
 });

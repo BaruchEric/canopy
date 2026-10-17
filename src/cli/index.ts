@@ -49,7 +49,8 @@ import { bold, dim, lichen, moss, paintLine, renderTree, sky } from "./render";
 import { HELP_TEXT } from "../core/help";
 import { healthCommand } from "./health";
 import { kitCommand } from "./kit";
-import { apiBase, callerHeaders, setHomeBase, setTokenFlag } from "./api";
+import { apiBase, callerHeaders, helperTokenFile, setHomeBase, setTokenFlag } from "./api";
+import { authCommand, pairFlow, pairLabel, readHelperToken, saveToken } from "./auth";
 import { landCommand } from "./land";
 import { prCommand } from "./pr";
 import { secretsCommand } from "./secrets";
@@ -108,6 +109,7 @@ const COMMANDS = new Set([
   "status",
   "ui",
   "helper",
+  "auth",
   "commit",
   "suggest",
   "push",
@@ -212,6 +214,7 @@ export async function main(argv: string[]): Promise<void> {
       const backend = opt(args, "--backend") ?? envOrigin ?? "http://127.0.0.1:7850";
       if (!/^https?:\/\//.test(backend)) return fail(`--backend must be an http(s) origin, got ${backend}`);
       const name = opt(args, "--name") ?? helperName();
+      const pairCode = opt(args, "--code");
       const listed = opt(args, "--openers");
       let openers: OpenerId[];
       if (listed === undefined) openers = localOpeners();
@@ -225,7 +228,17 @@ export async function main(argv: string[]): Promise<void> {
         }
       }
       const stamp = () => dim(new Date().toLocaleTimeString());
-      const handle = runHelper({ backend, name, openers, log: (line) => console.log(`${stamp()} ${line}`) });
+      const tokenPath = helperTokenFile(backend);
+      if (flag(args, "--pair")) {
+        try {
+          const token = await pairFlow({ base: backend, label: pairLabel("helper"), ...(pairCode ? { code: pairCode } : {}), say: (l) => console.log(`${stamp()} ${l}`) });
+          await saveToken(tokenPath, token);
+          console.log(`${stamp()} ${moss("paired")} ${dim(`(helper token kept in ${tokenPath})`)}`);
+        } catch (e) {
+          return fail(`pairing failed: ${e instanceof Error ? e.message : String(e)}`);
+        }
+      }
+      const handle = runHelper({ backend, name, openers, token: () => readHelperToken(tokenPath), log: (line) => console.log(`${stamp()} ${line}`) });
       console.log(`${moss("canopy helper")} ${dim("→")} ${sky(backend)} ${dim(`as ${name}: ${openers.join(", ") || "no openers"}`)}`);
       const bye = () => {
         handle.stop();
@@ -812,6 +825,8 @@ export async function main(argv: string[]): Promise<void> {
       return healthCommand(args, { fail });
     case "kit":
       return kitCommand(args, { fail });
+    case "auth":
+      return authCommand(args, { fail });
     case "land":
     case "queue":
       return landCommand(cmd, args, { fail });

@@ -31,8 +31,10 @@ const REPO_OPERATE = ["run", "flow", "resume", "stage", "commit", "push", "pull"
 
 /** Paths are written without `/api/`. A trailing `/*` matches anything below. */
 const RULES: readonly Rule[] = [
-  { methods: POST, paths: ["auth/pair", "auth/claim", "auth/first"], right: "open" },
-  { methods: POST, paths: ["grep", "remembered/check", "repos/movecheck", "auth/ticket"], right: "read" },
+  // auth/ticket is open here because its route checks the right the ticket is
+  // for (shell or helper); a helper token has no read right to pass this table with
+  { methods: POST, paths: ["auth/pair", "auth/claim", "auth/first", "auth/ticket"], right: "open" },
+  { methods: POST, paths: ["grep", "remembered/check", "repos/movecheck"], right: "read" },
   { methods: POST, paths: ["runs/answer", "runs/stop", "runs/say"], right: "operate" },
   { methods: DEL, paths: ["runs", "flows", "jobs"], right: "operate" },
   { methods: POST, paths: ["flows/resume", "flows/stop", "fleet/stop", "jobs/stop"], right: "operate" },

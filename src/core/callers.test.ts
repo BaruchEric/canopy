@@ -55,7 +55,10 @@ describe("needs", () => {
   test("POSTs that change nothing need read", () => {
     expect(needs("POST", "/api/grep")).toBe("read");
     expect(needs("POST", "/api/remembered/check")).toBe("read");
-    expect(needs("POST", "/api/auth/ticket")).toBe("read");
+  });
+
+  test("the ticket route is open to the table because it checks its own right", () => {
+    expect(needs("POST", "/api/auth/ticket")).toBe("open");
   });
 
   test("admin rows and the default", () => {

@@ -456,7 +456,7 @@ export async function authRoute(book: CallerBook, gate: CallerGate, req: Request
   const json = (body: unknown, status = 200): Response => Response.json(body, { status });
   if (url.pathname === "/api/auth") {
     if (req.method !== "GET") return json({ error: "/api/auth only answers a GET" }, 405);
-    return json({ mode: gate.mode, refused: gate.refused, callers: book.list(), pending: book.pending(), you: caller?.kind ?? "none" });
+    return json({ mode: gate.mode, refused: gate.refused, callers: book.list(), pending: book.pending(), you: caller?.kind ?? "none", youId: caller?.id ?? null });
   }
   if (req.method !== "POST") return json({ error: "the auth routes take a POST" }, 405);
   const raw: unknown = await req.json().catch(() => null);

@@ -29,6 +29,9 @@ export interface HelperOptions {
   ping?: number;
   /** how long unanswered before the backend counts as gone; `HELPER_DEAD` */
   dead?: number;
+  /** the helper token, read before every dial; with none the helper dials
+   *  without a ticket, which a backend not enforcing callers lets through */
+  token?: () => string | null | Promise<string | null>;
 }
 
 /** the backend origin as the websocket url the helper dials; `harnesses`
@@ -125,15 +128,46 @@ export function runHelper(opts: HelperOptions): { stop: () => void; readonly con
     sock.onmessage = null;
     sock.onerror = null;
     sock.terminate();
+    retry(was, why);
+  };
+
+  const retry = (was: boolean, why: string) => {
     if (stopped) return;
     log(was ? `lost the backend${why}, retrying in ${wait / 1000}s` : `cannot reach ${opts.backend}${why}, retrying in ${wait / 1000}s`);
-    timer = setTimeout(dial, wait);
+    timer = setTimeout(() => void dial(), wait);
     wait = Math.min(wait * 2, 30_000);
   };
 
-  const dial = () => {
+  /** A one-use ticket for this dial, or null when there is no token. A
+   *  refusal or a dead backend throws: the caller retries at the next wait. */
+  const ticketFor = async (): Promise<string | null> => {
+    const token = await opts.token?.();
+    if (!token) return null;
+    const res = await fetch(new URL("/api/auth/ticket", opts.backend), {
+      method: "POST",
+      redirect: "manual",
+      headers: { "content-type": "application/json", "x-canopy-token": token },
+      body: JSON.stringify({ for: "helper" }),
+    });
+    const body: unknown = await res.json().catch(() => null);
+    const got = typeof body === "object" && body !== null ? (body as { ticket?: unknown; error?: unknown }) : {};
+    if (!res.ok || typeof got.ticket !== "string") {
+      throw new Error(`${res.status}${typeof got.error === "string" ? ` ${got.error}` : ""}`);
+    }
+    return got.ticket;
+  };
+
+  const dial = async (): Promise<void> => {
     if (stopped) return;
-    const sock = new WebSocket(url);
+    let ticket: string | null;
+    try {
+      ticket = await ticketFor();
+    } catch (e) {
+      retry(false, `: no ticket (${e instanceof Error ? e.message : String(e)})`);
+      return;
+    }
+    if (stopped) return;
+    const sock = new WebSocket(ticket === null ? url : `${url}&ticket=${encodeURIComponent(ticket)}`);
     ws = sock;
     // Anything from the other end, a pong included, is proof its host is
     // still up; without one inside the deadline the socket is half-open and
@@ -190,7 +224,7 @@ export function runHelper(opts: HelperOptions): { stop: () => void; readonly con
     };
   };
 
-  dial();
+  void dial();
   return {
     stop() {
       stopped = true;

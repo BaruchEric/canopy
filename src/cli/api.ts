@@ -4,7 +4,7 @@
  * X-Canopy-Token header every call carries.
  */
 import { readFileSync } from "node:fs";
-import { join } from "node:path";
+import { basename, dirname, join } from "node:path";
 import { configDir } from "../core/store";
 
 /** The `--backend` value, else $CANOPY_API, else the local backend, without trailing slashes. */
@@ -24,6 +24,11 @@ export function tokenFile(base: string): string {
   const u = new URL(base);
   const port = u.port || (u.protocol === "https:" ? "443" : "80");
   return join(configDir(), `token-${u.hostname}-${port}`);
+}
+
+/** Where `canopy helper --pair` keeps the helper's own token for a backend. */
+export function helperTokenFile(base: string): string {
+  return join(dirname(tokenFile(base)), `token-helper-${basename(tokenFile(base)).slice("token-".length)}`);
 }
 
 /** The backend this command was pointed at (`--backend`), set once by main(). */
