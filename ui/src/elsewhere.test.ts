@@ -90,6 +90,7 @@ describe("changesHead", () => {
     const parts = changesHead(st, []);
     expect(parts[1]?.cls).toBe("n-add");
     expect(parts[2]?.cls).toBe("n-del");
+    expect(parts.map((p) => p.cls).slice(3)).toEqual(["head-ahead", "head-behind", "elsewhere-worktree", "elsewhere-branch", "elsewhere-stash"]);
   });
 
   test("a side with no lines, or a backend that sends none, says nothing of them", () => {

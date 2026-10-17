@@ -71,10 +71,10 @@ export function elsewhereChips(e: Elsewhere | undefined, here: string): Elsewher
 }
 
 /** One piece of the changes section's header: its words, the class that
- *  tints it, and its tooltip. */
+ *  tints it (the card's own colours for the chips), and its tooltip. */
 export interface HeadPart {
   text: string;
-  cls?: "n-add" | "n-del";
+  cls?: "n-add" | "n-del" | "head-ahead" | "head-behind" | `elsewhere-${ElsewhereChip["kind"]}`;
   title: string;
 }
 
@@ -92,10 +92,10 @@ export function changesHead(st: RepoStatus | null | undefined, peers: readonly {
   const ahead = st?.ahead ?? 0;
   const behind = st?.behind ?? 0;
   const up = st?.upstream ?? "the upstream";
-  if (ahead > 0) out.push({ text: `↑${ahead} not pushed`, title: `${plural(ahead, "commit")} past ${up}` });
-  if (behind > 0) out.push({ text: `↓${behind} behind`, title: `${plural(behind, "commit")} on ${up} not here yet` });
+  if (ahead > 0) out.push({ text: `↑${ahead} not pushed`, cls: "head-ahead", title: `${plural(ahead, "commit")} past ${up}` });
+  if (behind > 0) out.push({ text: `↓${behind} behind`, cls: "head-behind", title: `${plural(behind, "commit")} on ${up} not here yet` });
   for (const p of peers) out.push({ text: p.text, title: p.title });
-  for (const c of elsewhereChips(st?.elsewhere, st?.branch || "HEAD")) out.push({ text: c.text, title: c.title });
+  for (const c of elsewhereChips(st?.elsewhere, st?.branch || "HEAD")) out.push({ text: c.text, cls: `elsewhere-${c.kind}`, title: c.title });
   return out;
 }
 

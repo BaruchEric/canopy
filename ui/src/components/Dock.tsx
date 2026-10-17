@@ -1072,7 +1072,7 @@ function ChangesSection({ repo }: { repo: Repo }) {
       head={changesHead(st, peerWipCounts(repo.peers)).map((p, i, all) => (
         <Fragment key={i}>
           {/* +12 −3 read as one figure, the rest apart */}
-          {i > 0 && (p.cls && all[i - 1]?.cls ? " " : " · ")}
+          {i > 0 && (p.cls === "n-del" && all[i - 1]?.cls === "n-add" ? " " : " · ")}
           <span className={p.cls} title={p.title}>
             {p.text}
           </span>

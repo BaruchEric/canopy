@@ -3458,6 +3458,12 @@ body.resizing-rows {
 .n-del {
   color: var(--rust);
 }
+.head-ahead {
+  color: var(--sky);
+}
+.head-behind {
+  color: var(--rust);
+}
 .n-bin {
   color: var(--ink-faint);
 }
