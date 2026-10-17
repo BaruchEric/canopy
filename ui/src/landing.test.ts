@@ -82,7 +82,7 @@ describe("the card chip", () => {
 
 describe("a run's word and buttons", () => {
   test("a ready run that ended can land", () => {
-    expect(runLanding(run("a"), info([rec("a")]))).toEqual({ word: "ready to land", canLand: true, canFix: false });
+    expect(runLanding(run("a"), info([rec("a")]))).toEqual({ word: "ready to land", canLand: true, canFix: false, canPr: true });
     expect(runLanding(run("a", { status: "working", branch: { ...run("a").branch!, state: "working" } }), info([rec("a", { state: "working" })]))?.canLand).toBe(false);
     expect(runLanding(run("a", { branch: undefined }), info([]))).toBeNull();
   });
@@ -94,6 +94,11 @@ describe("a run's word and buttons", () => {
     expect(runLanding(run("a"), info([rec("a")], entries))).toMatchObject({ word: "conflict", canFix: true });
     entries = entries.map((e) => (e.id === "a" ? { ...e, fixing: "r-fix" } : e));
     expect(runLanding(run("a"), info([rec("a")], entries))).toMatchObject({ word: "conflict, a fix is going", canFix: false });
+  });
+
+  test("a run that opened a PR neither lands nor opens another; a stopped one opens none", () => {
+    expect(runLanding(run("a"), info([rec("a", { pr: 12 })]))).toEqual({ word: "PR #12", canLand: false, canFix: false, canPr: false });
+    expect(runLanding(run("a"), info([rec("a", { state: "stopped", whole: { ok: true } })]))).toMatchObject({ canLand: true, canPr: false });
   });
 
   test("propose starts on a branch by default, a workspace run never", () => {

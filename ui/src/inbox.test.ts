@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import type { AdviceOffer, AgentCard, Ask, Flow, LandEntry, LandingInfo, Repo, Run, Sprout } from "../../src/core/types";
+import type { AdviceOffer, AgentCard, Ask, Flow, LandEntry, LandingInfo, PrState, PrWatch, Repo, Run, Sprout } from "../../src/core/types";
 import { rememberOffer } from "../../src/core/offer";
 import {
   askPermission,
@@ -414,5 +414,66 @@ describe("the landing queue's sent-back branches", () => {
     const notices = [{ id: "n1", entry: "b1", repoId: "app", branch: "run/x-b1", note: "", kind: "held" as const, why: "x", at: 1 }];
     const ctx = { repos: [repo("app")], cards: {}, landing: { ...landing([]), notices } };
     expect(mergeInbox([], {}, {}, 0, ctx)).toEqual([]);
+  });
+});
+
+describe("PRs that need a look", () => {
+  const state = (over: Partial<PrState> = {}): PrState => ({
+    number: 7,
+    url: "u",
+    status: "open",
+    draft: false,
+    additions: 1,
+    deletions: 0,
+    files: 1,
+    head: "h1",
+    mergeable: "MERGEABLE",
+    mergeState: "CLEAN",
+    review: "none",
+    checks: [{ name: "test", state: "fail" }],
+    ...over,
+  });
+  const watch = (over: Partial<PrWatch> = {}): PrWatch => ({
+    id: "b1",
+    runId: "r1",
+    repoId: "app",
+    repoPath: "/dev/app",
+    branch: "run/x-b1",
+    target: "main",
+    dir: "/w/b1",
+    note: "n",
+    slug: "o/app",
+    remote: "origin",
+    number: 7,
+    url: "u",
+    autoFix: false,
+    autoMerge: false,
+    pushed: "h1",
+    attempts: {},
+    seenComment: 0,
+    openedAt: 1,
+    updatedAt: 5,
+    state: state(),
+    ...over,
+  });
+
+  test("a red check with auto-fix off, on the head canopy pushed, asks to auto-fix", () => {
+    const prs = [
+      watch(),
+      watch({ id: "b2", autoFix: true }),
+      watch({ id: "b3", state: state({ head: "h2" }) }),
+      watch({ id: "b4", state: state({ checks: [{ name: "test", state: "pass" }] }) }),
+      watch({ id: "b5", state: state({ status: "merged" }) }),
+    ];
+    const items = mergeInbox([], {}, {}, 0, { repos: [repo("app")], cards: {}, prs });
+    expect(items.map((i) => [i.key, i.kind, i.repoId, i.title, i.id])).toEqual([["pr:b1", "ci", "app", "PR #7: test failed", "b1"]]);
+    expect(toRunAnswer({ pr: "auto-fix" })).toBeNull();
+    expect(toAskAnswer({ pr: "auto-fix" })).toBeNull();
+  });
+
+  test("auto-fix giving up is an item, whatever the checks say", () => {
+    const prs = [watch({ autoFix: true, gaveUp: "test failed 3 times", state: state({ checks: [] }) })];
+    const items = mergeInbox([], {}, {}, 0, { repos: [repo("app")], cards: {}, prs });
+    expect(items.map((i) => [i.key, i.kind, i.title, i.detail])).toEqual([["pr:b1", "gave-up", "PR #7: auto-fix gave up", "test failed 3 times"]]);
   });
 });

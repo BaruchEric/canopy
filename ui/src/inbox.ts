@@ -18,6 +18,7 @@ import type {
   LandEntry,
   LandingInfo,
   PermissionAsk,
+  PrWatch,
   RememberAsk,
   RememberScope,
   Repo,
@@ -32,7 +33,7 @@ import { handOffText } from "../../src/core/sprout";
 import { sentBack } from "../../src/core/landing";
 import { scopeWords } from "../../src/core/shellwords";
 
-export type InboxSource = "ask" | "run" | "flow" | "sprout" | "advice" | "landing";
+export type InboxSource = "ask" | "run" | "flow" | "sprout" | "advice" | "landing" | "pr";
 
 export interface InboxItem {
   /** `${source}:${id}`, unique across the five */
@@ -41,7 +42,7 @@ export interface InboxItem {
   /** the broker's ask id (the home backend's), or a run's or flow's
    *  qualified id */
   id: string;
-  kind: "permission" | "question" | "proposal" | "guard" | "gate" | "clarify" | "park" | "advice" | "hand-off" | "sent-back";
+  kind: "permission" | "question" | "proposal" | "guard" | "gate" | "clarify" | "park" | "advice" | "hand-off" | "sent-back" | "ci" | "gave-up";
   /** the repo it is about, by the page's id, when the page has it */
   repoId: string | null;
   /** the repo in words: the checkout's name, else what the agent's card says */
@@ -100,6 +101,9 @@ export interface InboxContext {
   advice?: readonly AdviceOffer[];
   /** every backend's landing queue: a sent-back branch with no fix going is an item */
   landing?: LandingInfo;
+  /** every backend's PRs: a red check auto-fix is off for, or auto-fix
+   *  giving up, is an item */
+  prs?: readonly PrWatch[];
 }
 
 /** "asks to use Bash", "has a question", "hit a guard on Bash" */
@@ -331,6 +335,34 @@ function landingItem(e: LandEntry, ctx: InboxContext): InboxItem | null {
   };
 }
 
+/** A PR that needs a look: auto-fix gave up, or a check went red on the
+ *  head canopy pushed while auto-fix is off, which its answer turns on.
+ *  A head someone else pushed is theirs to watch. */
+function prItem(w: PrWatch, ctx: InboxContext): InboxItem | null {
+  const s = w.state;
+  if (!s || s.status !== "open") return null;
+  const red = s.checks.filter((c) => c.state === "fail").map((c) => c.name);
+  const asks = w.gaveUp !== undefined || (!w.autoFix && red.length > 0 && s.head === w.pushed);
+  if (!asks) return null;
+  const repo = ctx.repos.find((r) => r.id === w.repoId);
+  const backend = ctx.backendOf?.(w.id) ?? "";
+  return {
+    key: `pr:${w.id}`,
+    source: "pr",
+    id: w.id,
+    kind: w.gaveUp !== undefined ? "gave-up" : "ci",
+    repoId: repo ? repo.id : null,
+    repo: repo?.name ?? w.repoPath.split("/").pop() ?? "",
+    who: "PR watch",
+    where: `${w.slug}${backend ? ` via ${backend}` : ""}`,
+    title: w.gaveUp !== undefined ? `PR #${w.number}: auto-fix gave up` : `PR #${w.number}: ${red.join(", ")} failed`,
+    detail: w.gaveUp ?? "",
+    at: w.updatedAt,
+    left: null,
+    until: null,
+  };
+}
+
 /** Everything waiting on the human, oldest first: open asks, waiting runs
  *  (a flow's step run named by its flow), gated flows. */
 export function mergeInbox(
@@ -362,6 +394,10 @@ export function mergeInbox(
     const it = landingItem(e, ctx);
     if (it) items.push(it);
   }
+  for (const w of ctx.prs ?? []) {
+    const it = prItem(w, ctx);
+    if (it) items.push(it);
+  }
   return items.sort((a, b) => a.at - b.at || a.key.localeCompare(b.key));
 }
 
@@ -390,12 +426,14 @@ export type InboxAnswer =
   /** an extend's push: yes or no, for the head the item shows */
   | { handOff: boolean }
   /** a sent-back branch: continue the run with the reason, or give it up */
-  | { landing: "fix" | "drop" };
+  | { landing: "fix" | "drop" }
+  /** a PR with a red check: turn auto-fix on */
+  | { pr: "auto-fix" };
 
 /** a run's answer: "allow always" is "allow all" for the rest of the run;
  *  a run's deny carries no message */
 export function toRunAnswer(a: InboxAnswer): RunAnswer | null {
-  if ("choice" in a || "skip" in a || "advice" in a || "handOff" in a || "landing" in a) return null;
+  if ("choice" in a || "skip" in a || "advice" in a || "handOff" in a || "landing" in a || "pr" in a) return null;
   if ("answers" in a) return { kind: "answers", answers: a.answers };
   if (a.behavior === "deny") return { kind: "deny" };
   if (a.always) return { kind: "allow-all" };
@@ -405,7 +443,7 @@ export function toRunAnswer(a: InboxAnswer): RunAnswer | null {
 /** the broker's answer: a question's answers go as an allow; a remember's
  *  rule rides along for the home backend to keep (the broker never sees it) */
 export function toAskAnswer(a: InboxAnswer): (AskAnswer & { remember?: string }) | null {
-  if ("choice" in a || "skip" in a || "advice" in a || "handOff" in a || "landing" in a) return null;
+  if ("choice" in a || "skip" in a || "advice" in a || "handOff" in a || "landing" in a || "pr" in a) return null;
   if ("answers" in a) return { behavior: "allow", answers: a.answers };
   if (a.behavior === "deny") return { behavior: "deny", ...(a.message?.trim() ? { message: a.message.trim() } : {}) };
   return { behavior: "allow", ...(a.always ? { always: true } : {}), ...(a.remember ? { remember: a.remember.rule } : {}) };

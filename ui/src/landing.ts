@@ -104,6 +104,8 @@ export interface RunLanding {
   canLand: boolean;
   /** sent back: "fix it" applies */
   canFix: boolean;
+  /** ready, with no PR yet: "open PR" applies (FR-011) */
+  canPr: boolean;
   entry?: LandEntry;
   /** a ready run's verdict in words, once sorted */
   verdict?: string;
@@ -132,21 +134,26 @@ export function runLanding(run: Run, info: LandingInfo): RunLanding | null {
   const entry = info.entries.find((e) => e.id === b.origin);
   if (entry) {
     const fixing = entry.fixing !== undefined && entry.fixing !== run.id;
+    const back = sentBack(entry) && entry.fixing === undefined;
     return {
       word: fixing && sentBack(entry) ? `${landWord(entry, info.entries)}, a fix is going` : landWord(entry, info.entries),
       canLand: false,
-      canFix: sentBack(entry) && entry.fixing === undefined,
+      canFix: back,
+      // a sent-back branch may change course to a PR
+      canPr: back,
       entry,
     };
   }
   const rec = info.runs.find((r) => r.id === b.origin);
+  // it lands on GitHub, never through the queue
+  if (rec?.pr !== undefined) return { word: `PR #${rec.pr}`, canLand: false, canFix: false, canPr: false };
   const state = rec && rec.runId === run.id ? rec.state : b.state;
   const stopped = state === "stopped" && rec !== undefined && stoppedWhole(rec);
   // a page that missed the restart may still hold the run as working; the hub's stopped says it ended
   const canLand = stopped || (state === "ready" && run.status !== "working" && run.status !== "waiting" && run.status !== "idle");
   const sorted = canLand && rec?.review ? { verdict: verdictWord(rec), approve: needsApproval(rec) } : {};
   const whole = state === "stopped" && rec?.whole && !rec.whole.ok ? { why: rec.whole.why } : {};
-  return { word: BRANCH_WORD[state], canLand, canFix: false, ...sorted, ...(canLand && stopped ? { stopped: true } : {}), ...whole };
+  return { word: BRANCH_WORD[state], canLand, canFix: false, canPr: canLand && !stopped, ...sorted, ...(canLand && stopped ? { stopped: true } : {}), ...whole };
 }
 
 /** Whether a new run starts on a branch unless the toggle says otherwise:

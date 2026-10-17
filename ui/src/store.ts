@@ -47,8 +47,9 @@ import { boardOrder, invertPick, pickWhere, rangeIds, setPick, togglePick } from
 import { appendFeed, describeEvent, type FeedEntry, type FeedSnapshot } from "./feed";
 import { mergeAction } from "./peers";
 import { convOf, isUnread, mergeMessages } from "./chan";
-import type { AdviceAccepted, AdviceOffer, AgentCard, AgentKind, Ask, ChanMessage, HealthCheck, IncubatorStages, KitInfo, LandingInfo, Presence, RangerInfo, SecretsInfo, Sprout, TailchanInfo } from "../../src/core/types";
+import type { AdviceAccepted, AdviceOffer, AgentCard, AgentKind, Ask, ChanMessage, HealthCheck, IncubatorStages, KitInfo, LandingInfo, Presence, PrWatch, RangerInfo, SecretsInfo, Sprout, TailchanInfo } from "../../src/core/types";
 import { mergeLanding } from "./landing";
+import { mergePrs } from "./prs";
 import { mergeAsks, mergeInbox, replaceAsks, toAskAnswer, toRunAnswer, type InboxAnswer, type InboxItem } from "./inbox";
 import { replaceSprouts, staleSprout } from "./sprouts";
 import { cardsByRepoCard, markTrail, mergeCards, replaceCards, type TrailMark } from "./agentcards";
@@ -734,6 +735,9 @@ interface CanopyState {
   /** each backend's branch runs and landing queue (server/landing); an
    *  older backend that has none is missing */
   landing: Record<string, LandingInfo>;
+  /** each backend's PRs that branch runs opened (server/prs); an older
+   *  backend that has none is missing */
+  prs: Record<string, PrWatch[]>;
   /** the retro lessons home has on offer, which the inbox shows as one item */
   advice: AdviceOffer[];
   /** an accepted lesson's text by chat run id, which that chat's message box
@@ -1087,6 +1091,14 @@ interface CanopyState {
   orphanLanding: (backend: string, dir: string, action: "remove" | "queue") => Promise<void>;
   /** opens a repo's panel with its landing section unfolded */
   showLanding: (repoId: string) => void;
+  /** reads one backend's PRs, home by default */
+  loadPrs: (backend?: string) => Promise<void>;
+  /** "open PR" on a ready branch run, by its run's or branch's id */
+  openPr: (id: string, draft?: boolean) => Promise<void>;
+  /** the PR footer's toggles, by the branch's id */
+  setPr: (id: string, change: { autoFix?: boolean; autoMerge?: boolean }) => Promise<void>;
+  /** closes a branch's PR; the run may land here again */
+  closePr: (id: string) => Promise<void>;
   /** each backend's secret store, by backend name: names, sinks and
    *  proposals, never a value; an older backend that has none is missing */
   secrets: Record<string, SecretsInfo>;
@@ -1220,8 +1232,9 @@ interface CanopyState {
   searchIn: (repoId: string, q: string) => void;
   /** the section took its term */
   takePendingSearch: () => void;
-  /** `branch` puts the run on a branch of its own; unset, the backend's default for the action */
-  startRun: (repoId: string, action: RunAction, note: string, branch?: boolean) => Promise<void>;
+  /** `branch` puts the run on a branch of its own; unset, the backend's
+   *  default for the action. `pr` opens a PR once it is ready (FR-011) */
+  startRun: (repoId: string, action: RunAction, note: string, branch?: boolean, pr?: true) => Promise<void>;
   /** a run on a workspace's primary that sees its other members too */
   startWsRun: (name: string, action: RunAction, note: string) => Promise<void>;
   answerRun: (runId: string, promptId: string, answer: RunAnswer) => Promise<void>;
@@ -1528,6 +1541,8 @@ const healthEvents = new Map<string, number>();
 const kitEvents = new Map<string, number>();
 /* and each backend's landing events */
 const landingEvents = new Map<string, number>();
+/* and each backend's PR events */
+const prsEvents = new Map<string, number>();
 /* and each backend's secrets events */
 const secretsEvents = new Map<string, number>();
 /** the same for the advice on offer */
@@ -1627,6 +1642,7 @@ function resync(get: () => CanopyState, set: (fn: (s: CanopyState) => Partial<Ca
   void get().loadHealth(b);
   void get().loadKit(b);
   void get().loadLanding(b);
+  void get().loadPrs(b);
   void get().loadSecrets(b);
   // the tasks a panel loaded may have moved while the stream was down
   for (const id of Object.keys(get().tasks)) if (backendOf(id) === b) void get().loadTasks(id).catch(() => {});
@@ -1799,6 +1815,7 @@ export const useStore = create<CanopyState>((set, get) => ({
   health: {},
   kit: {},
   landing: {},
+  prs: {},
   secrets: {},
   advice: [],
   chatDrafts: {},
@@ -2007,6 +2024,7 @@ export const useStore = create<CanopyState>((set, get) => ({
     void get().loadHealth();
     void get().loadKit();
     void get().loadLanding();
+    void get().loadPrs();
     void get().loadSecrets();
     // the screen layouts, which a backend from before them does not have
     void get().loadScreenProfiles();
@@ -2166,6 +2184,7 @@ export const useStore = create<CanopyState>((set, get) => ({
     void get().loadHealth(name);
     void get().loadKit(name);
     void get().loadLanding(name);
+    void get().loadPrs(name);
     void get().loadSecrets(name);
     void api
       .about(name)
@@ -2219,6 +2238,7 @@ export const useStore = create<CanopyState>((set, get) => ({
     const { [name]: _health, ...health } = s.health;
     const { [name]: _kit, ...kit } = s.kit;
     const { [name]: _landing, ...landing } = s.landing;
+    const { [name]: _prs, ...prs } = s.prs;
     const { [name]: _secrets, ...secrets } = s.secrets;
     const backendOrder = applyRegistry(s.home, registryEntries, hiddenBackends);
     set({
@@ -2244,6 +2264,7 @@ export const useStore = create<CanopyState>((set, get) => ({
       health,
       kit,
       landing,
+      prs,
       secrets,
       agents,
       launchers,
@@ -2713,6 +2734,11 @@ export const useStore = create<CanopyState>((set, get) => ({
       set((st) => ({ landing: { ...st.landing, [b]: ev.landing } }));
       return;
     }
+    if (ev.type === "prs") {
+      prsEvents.set(b, (prsEvents.get(b) ?? 0) + 1);
+      set((st) => ({ prs: { ...st.prs, [b]: ev.prs } }));
+      return;
+    }
     if (ev.type === "secrets") {
       secretsEvents.set(b, (secretsEvents.get(b) ?? 0) + 1);
       // a broadcast carries nobody's session; keep what this page last read
@@ -3064,6 +3090,25 @@ export const useStore = create<CanopyState>((set, get) => ({
     await api.orphanLanding(backend, dir, action);
     await get().loadLanding(backend);
   },
+  loadPrs: async (backend) => {
+    const b = backend ?? get().home;
+    const mark = prsEvents.get(b) ?? 0;
+    try {
+      const prs = await api.prs(b);
+      if ((prsEvents.get(b) ?? 0) === mark && isShown(get(), b)) set((s) => ({ prs: { ...s.prs, [b]: prs } }));
+    } catch {
+      // an older backend has no PR watch; nothing shows for it
+    }
+  },
+  openPr: async (id, draft) => {
+    await api.openPr(id, draft);
+  },
+  setPr: async (id, change) => {
+    await api.setPr(id, change);
+  },
+  closePr: async (id) => {
+    await api.closePr(id);
+  },
   loadSecrets: async (backend) => {
     const b = backend ?? get().home;
     const mark = secretsEvents.get(b) ?? 0;
@@ -3214,6 +3259,10 @@ export const useStore = create<CanopyState>((set, get) => ({
       if (answer.landing === "drop") return get().dropLanding(item.id);
       get().closeInbox();
       return get().fixLanding(item.id);
+    }
+    if (item.source === "pr") {
+      if (!("pr" in answer)) throw new Error("a PR's red check takes auto-fix");
+      return get().setPr(item.id, { autoFix: true });
     }
     if (item.source === "advice") {
       if (!("advice" in answer)) throw new Error("a lesson takes accept or dismiss");
@@ -3611,8 +3660,8 @@ export const useStore = create<CanopyState>((set, get) => ({
       closedSections: unfoldIn(s.closedSections, repoId, "search"),
     })),
   takePendingSearch: () => set({ pendingSearch: null }),
-  startRun: async (repoId, action, note, branch) => {
-    const run = await api.run(repoId, action, note, clientId(), branch);
+  startRun: async (repoId, action, note, branch, pr) => {
+    const run = await api.run(repoId, action, note, clientId(), branch, pr);
     set((s) => ({
       runs: { ...s.runs, [run.id]: run },
       sheet: { kind: "run", runId: run.id },
@@ -4143,6 +4192,7 @@ let inboxIn: {
   sprouts: Record<string, Sprout>;
   advice: AdviceOffer[];
   landing: Record<string, LandingInfo>;
+  prs: Record<string, PrWatch[]>;
 } | null = null;
 let inboxOut: InboxItem[] = [];
 
@@ -4151,10 +4201,10 @@ let inboxOut: InboxItem[] = [];
  *  once per change of what it reads, so a selector over it settles; a
  *  countdown keeps its own time off each item's `until`. */
 export function inboxItems(s: CanopyState): InboxItem[] {
-  if (inboxIn && inboxIn.asks === s.asks && inboxIn.runs === s.runs && inboxIn.flows === s.flows && inboxIn.repos === s.repos && inboxIn.registry === s.registry && inboxIn.sprouts === s.sprouts && inboxIn.advice === s.advice && inboxIn.landing === s.landing) {
+  if (inboxIn && inboxIn.asks === s.asks && inboxIn.runs === s.runs && inboxIn.flows === s.flows && inboxIn.repos === s.repos && inboxIn.registry === s.registry && inboxIn.sprouts === s.sprouts && inboxIn.advice === s.advice && inboxIn.landing === s.landing && inboxIn.prs === s.prs) {
     return inboxOut;
   }
-  inboxIn = { asks: s.asks, runs: s.runs, flows: s.flows, repos: s.repos, registry: s.registry, sprouts: s.sprouts, advice: s.advice, landing: s.landing };
+  inboxIn = { asks: s.asks, runs: s.runs, flows: s.flows, repos: s.repos, registry: s.registry, sprouts: s.sprouts, advice: s.advice, landing: s.landing, prs: s.prs };
   inboxOut = mergeInbox(Object.values(s.asks), s.runs, s.flows, Date.now(), {
     repos: s.repos,
     cards: s.registry,
@@ -4163,6 +4213,7 @@ export function inboxItems(s: CanopyState): InboxItem[] {
     sprouts: Object.values(s.sprouts),
     advice: s.advice,
     landing: landingAll(s),
+    prs: prsAll(s),
   });
   return inboxOut;
 }
@@ -4392,4 +4443,16 @@ export function landingAll(s: Pick<CanopyState, "landing">): LandingInfo {
     landingOut = mergeLanding(s.landing);
   }
   return landingOut;
+}
+
+let prsIn: Record<string, PrWatch[]> | null = null;
+let prsOut: PrWatch[] = [];
+
+/** Every backend's PRs as one list, worked out once per change. */
+export function prsAll(s: Pick<CanopyState, "prs">): PrWatch[] {
+  if (prsIn !== s.prs) {
+    prsIn = s.prs;
+    prsOut = mergePrs(s.prs);
+  }
+  return prsOut;
 }

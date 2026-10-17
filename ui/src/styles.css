@@ -4265,6 +4265,98 @@ body.resizing-rows {
   overflow-wrap: anywhere;
 }
 
+/* a repo card's open PRs, toned by the worst one's checks */
+.pr-card {
+  --tone: var(--lichen);
+}
+.pr-card.moss {
+  --tone: var(--moss);
+}
+.pr-card.sky {
+  --tone: var(--sky);
+}
+.pr-card.rust {
+  --tone: var(--rust);
+}
+
+/* the PR a branch run opened (FR-011): its line, CI chip, toggles, notes */
+.run-pr {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 6px 16px;
+  border-bottom: 1px solid var(--hair);
+  font-size: 12px;
+}
+.run-pr-head {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px 10px;
+}
+.run-pr-link {
+  color: var(--ink);
+  font-variant-numeric: tabular-nums;
+}
+.run-pr-ci {
+  --tone: var(--lichen);
+  position: relative;
+}
+.run-pr-ci.moss {
+  --tone: var(--moss);
+}
+.run-pr-ci.sky {
+  --tone: var(--sky);
+}
+.run-pr-ci.rust {
+  --tone: var(--rust);
+}
+.run-pr-ci > summary {
+  cursor: pointer;
+  list-style: none;
+  padding: 1px 8px;
+  border-radius: 999px;
+  color: var(--tone);
+  background: color-mix(in srgb, var(--tone) 12%, transparent);
+}
+.run-pr-ci > summary::-webkit-details-marker {
+  display: none;
+}
+.run-pr-ci ul,
+.run-pr-untrusted ul {
+  margin: 4px 0 0;
+  padding-left: 16px;
+}
+.run-pr-ci li.fail {
+  color: var(--rust);
+}
+.run-pr-ci li.pending {
+  color: var(--sky);
+}
+.run-pr-toggles {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 16px;
+  color: var(--ink-dim);
+}
+.run-pr-toggles label {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.run-pr-note {
+  font-size: 11px;
+  color: var(--ink-dim);
+}
+.run-pr-untrusted {
+  font-size: 11px;
+  color: var(--ink-dim);
+  overflow-wrap: anywhere;
+}
+.run-pr-untrusted > summary {
+  cursor: pointer;
+}
+
 /* a repo's landing queue: the card's word, its panel section */
 .landing-card.queued {
   --tone: var(--lichen);

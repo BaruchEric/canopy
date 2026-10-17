@@ -5,6 +5,7 @@ import type {
   KitInfo,
   LandEntry,
   LandingInfo,
+  PrWatch,
   KitInstallResult,
   KitMcpPreview,
   HealthInfo,
@@ -112,6 +113,7 @@ import {
   qKept,
   qRepo,
   qLanding,
+  qPrs,
   qRun,
   qScan,
   qSource,
@@ -664,16 +666,36 @@ export const api = {
     req<{ notify: boolean }>(homeName(), "/api/tailchan/notify", { method: "POST", body: JSON.stringify({ on }) }),
   runs: async (b: string = homeName()) => fromAll(b, await req<Run[]>(b, "/api/runs"), qRun),
   /** `client` is this browser's id, so the run says which device started it */
-  run: async (id: string, action: RunAction, note: string, client?: string, branch?: boolean) => {
+  run: async (id: string, action: RunAction, note: string, client?: string, branch?: boolean, pr?: boolean) => {
     const [b, plain] = on(id);
     return from(
       b,
       await req<Run>(b, `/api/repos/run?${rq(plain)}`, {
         method: "POST",
-        body: JSON.stringify({ action, note, client, ...(branch !== undefined ? { branch } : {}) }),
+        body: JSON.stringify({ action, note, client, ...(branch !== undefined ? { branch } : {}), ...(pr ? { pr } : {}) }),
       }),
       qRun,
     );
+  },
+  /** one backend's PRs that branch runs opened; an older backend has none */
+  prs: async (b: string = homeName()) => {
+    const r = await req<PrWatch[] | null>(b, "/api/prs");
+    return from(b, Array.isArray(r) ? r : [], qPrs);
+  },
+  /** "open PR" on a ready branch run, by its run's or its branch's id */
+  openPr: async (id: string, draft = false) => {
+    const [b, plain] = on(id);
+    await req<PrWatch>(b, "/api/prs/open", { method: "POST", body: JSON.stringify({ run: plain, ...(draft ? { draft } : {}) }) });
+  },
+  /** the PR footer's toggles */
+  setPr: async (id: string, change: { autoFix?: boolean; autoMerge?: boolean }) => {
+    const [b, plain] = on(id);
+    await req<PrWatch>(b, "/api/prs/set", { method: "POST", body: JSON.stringify({ run: plain, ...change }) });
+  },
+  /** closes the PR and its remote branch; the run may land here again */
+  closePr: async (id: string) => {
+    const [b, plain] = on(id);
+    await req<{ ok: true }>(b, "/api/prs/close", { method: "POST", body: JSON.stringify({ run: plain }) });
   },
   /** one backend's branch runs and landing queue; an older backend has none */
   landing: async (b: string = homeName()) => {
