@@ -13,7 +13,7 @@ One long-lived agent per component (the mini's compose stack, peer sync, tailcha
 ### FR-010 · A coordinator that splits a goal into runs, on its own model and effort
 P2 · added 2026-10-09 · source: Eric (Claude Code Projects video)
 One chat takes a goal, proposes the tasks, and starts a run per task, showing each as a card with a live one-line status. The coordinator gets its own model and effort (default low, since it mostly routes work), separate from the per-role settings the runs use. Reference: https://www.youtube.com/watch?v=omihvjf0A2k at 1:52 and 3:24.
-Spec: docs/superpowers/specs/2026-10-16-coordinator-design.md (2026-10-16); its plan follows FR-011, and a per-caller credential on the run routes ships before it (Eric, 2026-10-16). That credential's spec is docs/superpowers/specs/2026-10-16-caller-credential-design.md, with six calls open for Eric.
+Spec: docs/superpowers/specs/2026-10-16-coordinator-design.md (2026-10-16); its plan follows FR-011, and a per-caller credential on the run routes ships before it (Eric, 2026-10-16). That credential's spec is docs/superpowers/specs/2026-10-16-caller-credential-design.md, with six calls open for Eric. Built on branch `callers` and shipping in `log` mode first; the coordinator waits for both machines to run `enforce` (docs/deploy.md, "Caller tokens").
 
 ### FR-009 · Wider first columns on an ultrawide
 P3 · added 2026-10-07 · source: dock pass

@@ -280,6 +280,9 @@ services:
       # tailscale serve) allowed to drive this backend; see the
       # multi-backend spec. Empty when there are none.
       - CANOPY_ORIGINS=${CANOPY_ORIGINS:-}
+      # off, log or enforce: whether a call needs a caller token (docs/deploy.md,
+      # "Caller tokens"). Empty reads as log
+      - CANOPY_CALLERS=${CANOPY_CALLERS:-}
       # The incubator. The vault token is the memory gateway's, scoped
       # `agent`; transcription is any OpenAI-style /v1/audio/transcriptions
       # server (LiteLLM on the mini), the URL its origin. Every value here is

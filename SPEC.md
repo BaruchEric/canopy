@@ -20,7 +20,7 @@ A workbench for building software with Claude across every repo and machine you 
 
 ## Who uses it
 
-One developer (the owner) across a laptop, an always-on Linux backend, a tablet and a phone, all on one tailnet. Agents use it too: Claude sessions run inside its shells and drive it through the CLI and the HTTP API. It is not built for teams. A public name is served only behind an authenticating proxy (Cloudflare Access), since canopy has no sign-in of its own.
+One developer (the owner) across a laptop, an always-on Linux backend, a tablet and a phone, all on one tailnet. Agents use it too: Claude sessions run inside its shells and drive it through the CLI and the HTTP API. It is not built for teams. A public name is served only behind an authenticating proxy (Cloudflare Access), since canopy's caller tokens guard what a call may change, not who may read.
 
 ## Stack and versions
 
@@ -54,7 +54,7 @@ canopy ui ~/dev
 ## Data and state
 
 - Config, workspaces, sources, agent and launch settings: `~/.config/canopy/config.json`, or `$CANOPY_CONFIG_DIR`.
-- Next to it: `tmux.sock` (the shells' tmux server), `shells/` (kept-shell snapshots), `pastes/`, `tasks/` (state and logs), `ranger/` (the always-on agent's conversation, wakes and brief), `builds/` (installed releases and PR worktrees), `worktrees/<repo key>/<id>/` (branch runs' worktrees), `landing/` (`runs/<id>.json` per branch run with its latest sort, `queue/<repo key>.json` per repo and `notices.json` for the queue's quiet lines, written only by the server holding the flows lock), `prs/` (`<branch id>.json` per PR a branch run opened, written only by the server holding the flows lock), `library/<root-hash>/` (the project library).
+- Next to it: `tmux.sock` (the shells' tmux server), `shells/` (kept-shell snapshots), `pastes/`, `callers.json` (the token hashes of every signed-in page, CLI, helper, shell and the ranger, 0600) and, written by `canopy auth login` and `canopy helper --pair`, `token-<host>-<port>` and `token-helper-<host>-<port>` (0600), `tasks/` (state and logs), `ranger/` (the always-on agent's conversation, wakes and brief), `builds/` (installed releases and PR worktrees), `worktrees/<repo key>/<id>/` (branch runs' worktrees), `landing/` (`runs/<id>.json` per branch run with its latest sort, `queue/<repo key>.json` per repo and `notices.json` for the queue's quiet lines, written only by the server holding the flows lock), `prs/` (`<branch id>.json` per PR a branch run opened, written only by the server holding the flows lock), `library/<root-hash>/` (the project library).
 - In a repo: `.canopy/tasks.json`, `.canopy/workflows/`, `.canopy/spec.json`, `.canopy/gates.json` (the landing queue's gates and setup line) and `.canopy/review.json` (what lands on its own and what needs an approval), all checked in by that repo's owner.
 - Per browser: preferences, open panels and shell tabs in localStorage.
 - Runs live in server memory; the last 60 finished ones stay until a restart. A branch run's record and its landing queue entry outlive a restart in `landing/`.
@@ -72,6 +72,7 @@ canopy ui ~/dev
 - 2026-09-22: Headless shared backend in containers, with shells in a container of their own, because a redeploy must not kill open shells.
 - 2026-09-24: Peers sync over git only, pull-only and fast-forward only, because work should move between machines through commits, never file copies.
 - 2026-10-09: canopy takes only the doc half of the shared spec and keeps its design system in `ui/src/styles.css`, because its own palettes and tokens predate the shared DESIGN.md and differ from it.
+- 2026-10-16: Every API call carries a caller token with rights (read, plan, operate, shell, admin, helper), checked at the top of `route()`, because a bare `curl -X POST` from a run must not be able to start or stop a run. It ships in `log` first, then `enforce`.
 - 2026-10-14: Secrets live in one signed, age-sealed file in Forgejo, written only by a service on the mini behind passkeys, because a value must never sit in a container that shares the shells' namespaces or in a repo canopy syncs.
 
 ## Out of scope

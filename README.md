@@ -53,6 +53,10 @@ canopy source add ~/dev --host wsl # …or one on an ssh host
 canopy source add --forgejo https://git.example.com --token ~/secrets/forgejo.txt
 canopy source rm <id>              # stop scanning it
 canopy helper [--backend URL]      # lend this machine's desktop openers to a shared backend
+canopy helper --pair [--code C]    # first get a helper token from the backend, then dial
+canopy auth login [--backend URL] [--code C]   # sign this CLI in to a backend
+canopy auth status | logout        # the mode and who you are | revoke this CLI's session
+canopy <any command> --token T     # send this caller token (default: the token file, else $CANOPY_TOKEN)
 canopy spec status [dir]           # every local repo against the shared repo spec
 canopy spec sync <repo> [--visual] # write the spec into a repo (--visual adds DESIGN.md)
 canopy spec check [repo]           # exit 1 unless the repo's spec text is in sync
@@ -338,6 +342,10 @@ Library after CLI changes. Dev-server launching retains macOS Terminal/iTerm/Kit
 support. Canopy starts and stops its own library helper; no separate helper or
 LaunchAgent is needed. Personal DNS setup and standalone gallery/endpoint-site
 publishing stay in `_devhub`.
+
+## Caller tokens
+
+Every write to the API needs a caller token in `X-Canopy-Token`; reads stay open. A page, the CLI and a helper get theirs by pairing: the asker shows a code, a page that is already signed in approves it from the inbox, and `canopy auth login` or `canopy helper --pair` writes the token to a 0600 file in the config dir. While nobody is signed in, the backend prints a one-time first code to its log, which the sign-in strip (or `--code`) takes in place of an approval. Shells and the ranger carry their own token as `$CANOPY_TOKEN`. `CANOPY_CALLERS=off|log|enforce` sets the mode; `log`, the default, counts what `enforce` would refuse and refuses nothing. `canopy auth status` and `GET /api/auth` show the count. See `docs/deploy.md`, "Caller tokens", for the rollout.
 
 ## A public name
 

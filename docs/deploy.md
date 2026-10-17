@@ -1100,6 +1100,26 @@ backend:
    machine chips, and clicking the non-home one should open that checkout's
    panel and, from there, a shell on the other machine.
 
+## Caller tokens
+
+Every call to the API carries a caller token (`docs/architecture.md`, "Callers and tokens"). `CANOPY_CALLERS` sets what the backend does about it: `off` checks nothing, `log` (the default, and what an empty or unknown value reads as) lets every call through and counts the ones `enforce` would refuse, `enforce` answers them 401 or 403. Set it where the backend's environment lives:
+
+- The mini: `CANOPY_CALLERS=enforce` in `.env`. `docker-compose.yml` passes it to the canopy container; `bun run redeploy --restart` picks up a change.
+- The Mac: an `EnvironmentVariables` entry `CANOPY_CALLERS` in the launchd plist `ca.beric.canopy-server`, then reload the agent (kill the bun pid, as for any change there).
+
+Rollback is `log`, or `off`. The `canopy:callers` health check always reads ok, with the refused count in its detail. `GET /api/auth` (or `canopy auth status`) lists the newest 20 refusals by kind, route, Origin and user agent, which is how to find a caller outside this repo that writes, such as a Claude hook or a script in `~/dev`.
+
+**Where the first code prints.** While a backend holds no page or CLI session it logs `canopy: first sign-in code XXXXXX` at start, and logs a new one when a pair request is made after the old code was spent. On the Mac that is `~/Library/Logs/canopy-server.log`; on the mini, `docker compose logs canopy` (from a canopy shell, `ssh mini-host` first). A page's sign-in strip or `canopy auth login --code XXXXXX` spends it, once. After the first session exists, a signed-in page approves new pairs from its inbox.
+
+**Rollout**, in this order:
+
+1. Ship with `CANOPY_CALLERS` unset, so `log`. Pair the Mac page, the phone and the CLI on both machines: open each page and press the sign-in strip, and run `canopy auth login --backend <url>` on each machine for the backend it uses (the mini's address from the Mac, the loopback one on the mini). A helper runs `canopy helper --pair` once.
+2. Restart the ranger fresh on both machines (`canopy ranger fresh`, an admin call), so its session carries a token.
+3. Watch `GET /api/auth` for a week on each. Shells opened before the release hold no token. They work in `log`, and under `enforce` their CLI writes get a 401 that says to open a new shell.
+4. Set `CANOPY_CALLERS=enforce` on both and restart. The coordinator (FR-010) merges only once both machines enforce.
+
+Pairing needs a reachable page or CLI per backend, and a page signs in to each backend it calls on its own, so the Mac page signs in to the mini separately.
+
 ## Secrets
 
 The secret store's writer is the `secrets` service. These steps run once, in order, and each one marked "ask" waits for Eric.
