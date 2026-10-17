@@ -169,7 +169,7 @@ async function req<T>(b: string, path: string, init: RequestInit = {}): Promise<
   // is preflighted, which the server's CORS answers for x-canopy-token.
   const headers = tokenHeaders(originOf(base), init.headers);
   if (typeof init.body === "string" && init.headers === undefined) headers.set("Content-Type", "application/json");
-  const withToken = headers.has(TOKEN_HEADER);
+  const sent = headers.get(TOKEN_HEADER);
   opts.headers = headers;
   // another origin: the gate's cookie has to ride along
   if (base) opts.credentials = "include";
@@ -197,7 +197,7 @@ async function req<T>(b: string, path: string, init: RequestInit = {}): Promise<
     throw new Error(body.error ?? `${r.status} ${r.statusText}`);
   }
   // canopy's own caller check: never the gate's sign-in, which carries a login
-  if ((r.status === 401 || r.status === 403) && typeof body.need === "string") signal(b, { kind: "refused", status: r.status, need: body.need, withToken });
+  if ((r.status === 401 || r.status === 403) && typeof body.need === "string") signal(b, { kind: "refused", status: r.status, need: body.need, token: sent });
   else signal(b, { kind: "answered" });
   // the status rides on the error for a caller that tells a refusal apart
   // (a backend with no broker answers 503) from a failure

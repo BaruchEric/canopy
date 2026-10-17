@@ -1654,9 +1654,12 @@ function openSavedPanels(
 
 /** A backend refused a call for want of a token: the top bar offers to sign
  *  in to it. A 401 to a call that carried one means the backend no longer
- *  knows it (revoked, or a month unused), so it is forgotten here. */
-function refusedHere(set: (fn: (s: CanopyState) => Partial<CanopyState>) => void, b: string, deadToken: boolean): void {
-  if (deadToken) writeToken(originOf(baseOf(b)), null);
+ *  knows it (revoked, or a month unused), so it is forgotten here, unless a
+ *  sign-in has kept a new one since that call went out. */
+function refusedHere(set: (fn: (s: CanopyState) => Partial<CanopyState>) => void, b: string, sent: string | null): void {
+  const origin = originOf(baseOf(b));
+  const deadToken = sent !== null && readToken(origin) === sent;
+  if (deadToken) writeToken(origin, null);
   set((s) => {
     const was = s.authByBackend[b];
     if (!was || (was.needed && !deadToken)) return {};
@@ -1666,15 +1669,13 @@ function refusedHere(set: (fn: (s: CanopyState) => Partial<CanopyState>) => void
 
 /** One backend's caller check as the store keeps it, from what it answered:
  *  a token the backend no longer knows (it says this page is nobody) is
- *  forgotten, so the top bar offers to sign in again. */
-function authOf(b: string, info: AuthInfo, needed: boolean): BackendAuth {
+ *  forgotten, so the top bar offers to sign in again. `sent` is the token
+ *  the read carried: one kept since (a sign-in that finished meanwhile) is
+ *  not the one the backend said it does not know. */
+function authOf(b: string, info: AuthInfo, needed: boolean, sent: string | null): BackendAuth {
   const origin = originOf(baseOf(b));
-  let hasToken = readToken(origin) !== null;
-  if (hasToken && info.you === "none") {
-    writeToken(origin, null);
-    hasToken = false;
-  }
-  return { ...info, hasToken, needed: needed && info.you === "none" };
+  if (sent !== null && info.you === "none" && readToken(origin) === sent) writeToken(origin, null);
+  return { ...info, hasToken: readToken(origin) !== null, needed: needed && info.you === "none" };
 }
 
 /** What a backend's stream coming back after a drop re-reads: the server
@@ -1976,7 +1977,7 @@ export const useStore = create<CanopyState>((set, get) => ({
       if (!c) return;
       const status = backendState(c.status, sig);
       if (status !== c.status) set((s) => ({ conns: withConn(s, name, { status }) }));
-      if (sig.kind === "refused") refusedHere(set, name, sig.status === 401 && sig.withToken);
+      if (sig.kind === "refused") refusedHere(set, name, sig.status === 401 ? sig.token : null);
     });
     const e = ++epoch;
     try {
@@ -3190,6 +3191,7 @@ export const useStore = create<CanopyState>((set, get) => ({
   loadAuth: async (backend) => {
     const b = backend ?? get().home;
     const mark = authEvents.get(b) ?? 0;
+    const sent = readToken(originOf(baseOf(b)));
     let info: AuthInfo | null;
     try {
       info = await api.auth(b);
@@ -3201,7 +3203,7 @@ export const useStore = create<CanopyState>((set, get) => ({
     const was = get().authByBackend[b];
     // a pair event since the read is newer than the read's own list
     const pending = was && (authEvents.get(b) ?? 0) !== mark ? was.pending : info.pending;
-    const auth = authOf(b, { ...info, pending }, was?.needed ?? false);
+    const auth = authOf(b, { ...info, pending }, was?.needed ?? false, sent);
     set((s) => ({ authByBackend: { ...s.authByBackend, [b]: auth } }));
   },
   signIn: async (backend) => {

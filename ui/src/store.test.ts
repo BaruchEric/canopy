@@ -23,6 +23,7 @@ import {
   pruneByRepo,
   scopedRepos,
   sectionsFor,
+  setClaimEvery,
   setRetryFirst,
   foldAllIn,
   toggleIn,
@@ -723,6 +724,7 @@ describe("several backends", () => {
     setRegistry("", []);
     setBase("b", "");
     setRetryFirst(RETRY_FIRST);
+    setClaimEvery(2_000);
     onBackendSignal(() => {});
     useStore.setState(pristine, true);
   });
@@ -1390,6 +1392,89 @@ describe("several backends", () => {
     expect(useStore.getState().authByBackend["b"]?.needed).toBe(true);
     expect(connOf(useStore.getState(), "b").status.state).toBe("online");
     expect(connOf(useStore.getState(), "a").status.state).toBe("online");
+  });
+
+  describe("signing in to b", () => {
+    const kept = new Map<string, string>();
+    const B_TOKEN = "canopy.token.http://b.test";
+    let claims: Response[] = [];
+    let pairs = 0;
+    let authGate: Promise<void> | null = null;
+    beforeEach(() => {
+      kept.clear();
+      claims = [];
+      pairs = 0;
+      authGate = null;
+      setClaimEvery(5);
+      g.localStorage = { getItem: (k: string) => kept.get(k) ?? null, setItem: (k: string, v: string) => void kept.set(k, v), removeItem: (k: string) => void kept.delete(k) };
+    });
+    const json = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status });
+    const bAnswers = backendAnswers(scanOf("/b", [repo("x")]), []);
+    const b: Answer = (path, init) => {
+      const p = path.split("?")[0] ?? "";
+      if (p === "/api/auth/pair") {
+        pairs += 1;
+        return json({ id: "p1", code: "K7QX", secret: "s3" });
+      }
+      if (p === "/api/auth/claim") return claims.shift() ?? json({ waiting: true });
+      if (p === "/api/auth") {
+        const token = new Headers(init?.headers).get("x-canopy-token");
+        const body = { mode: "enforce", refused: { count: 0, recent: [] }, callers: [], pending: [], you: token === "cnp_page_b" ? "page" : "none", youId: token === "cnp_page_b" ? "c1" : null };
+        return authGate ? authGate.then(() => json(body)) : body;
+      }
+      return bAnswers(path, init);
+    };
+    const go = () => start(backendAnswers(scanOf("/a", [repo("proj")]), [], { "/api/backends": twoBackends }), b);
+
+    test("approved: the token is kept for b, the sign-in clears and b is read again", async () => {
+      await go();
+      await settle();
+      claims = [json({ waiting: true }), json({ token: "cnp_page_b" })];
+      const done = useStore.getState().signIn("b");
+      await settle(2);
+      expect(useStore.getState().signIns["b"]).toEqual({ state: "waiting", id: "p1", code: "K7QX" });
+      await done;
+      expect(kept.get(B_TOKEN)).toBe("cnp_page_b");
+      expect(useStore.getState().signIns["b"]).toBeUndefined();
+      expect(useStore.getState().authByBackend["b"]).toMatchObject({ you: "page", hasToken: true, needed: false });
+    });
+
+    test("denied or expired: the sign-in fails and keeps no token", async () => {
+      await go();
+      await settle();
+      claims = [json({ error: "no such pair request" }, 404)];
+      await useStore.getState().signIn("b");
+      expect(useStore.getState().signIns["b"]).toEqual({ state: "failed", why: "no such pair request" });
+      expect(kept.has(B_TOKEN)).toBe(false);
+    });
+
+    test("a second press while one waits asks for no second pair", async () => {
+      await go();
+      await settle();
+      claims = [json({ waiting: true }), json({ waiting: true }), json({ token: "cnp_page_b" })];
+      await Promise.all([useStore.getState().signIn("b"), useStore.getState().signIn("b")]);
+      expect(pairs).toBe(1);
+    });
+
+    test("a token b no longer knows is forgotten; one kept while the read was out stays", async () => {
+      kept.set(B_TOKEN, "cnp_dead");
+      await go();
+      await settle();
+      expect(kept.has(B_TOKEN)).toBe(false);
+      expect(useStore.getState().authByBackend["b"]).toMatchObject({ you: "none", hasToken: false });
+
+      // a read that went out with no token, answered after a sign-in kept one
+      let open = () => {};
+      authGate = new Promise<void>((r) => {
+        open = r;
+      });
+      const read = useStore.getState().loadAuth("b");
+      kept.set(B_TOKEN, "cnp_page_b");
+      open();
+      await read;
+      expect(kept.get(B_TOKEN)).toBe("cnp_page_b");
+      expect(useStore.getState().authByBackend["b"]?.hasToken).toBe(true);
+    });
   });
 
   test("a backend down at load comes in by itself once it answers", async () => {

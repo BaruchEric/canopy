@@ -104,7 +104,7 @@ export type BackendSignal =
   | { kind: "signin"; login: string }
   /** canopy's own caller check refused a call for want of a token or a
    *  right: the backend answered, and this page should sign in to it */
-  | { kind: "refused"; status: number; need: string; withToken: boolean }
+  | { kind: "refused"; status: number; need: string; token: string | null }
   | { kind: "stream-open" }
   | { kind: "stream-lost" }
   /** the page is trying again */
