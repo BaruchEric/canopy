@@ -27,6 +27,7 @@ import {
   parseComments,
   parsePrView,
   parseRepoDefault,
+  POLL_BUSY,
   prBody,
   prNumberOf,
   PR_FIELDS,
@@ -34,9 +35,10 @@ import {
   trusted,
 } from "../core/pr";
 import { configDir } from "../core/store";
-import type { LandingRun, PrComment, PrState, PrWatch, Run, ServerEvent } from "../core/types";
+import type { LandingRun, PrComment, PrState, PrWatch, Run, RunReview, ServerEvent } from "../core/types";
 import { isRunActive } from "../core/types";
 import { dirtyFiles, pushBranch, pushRemote, removeRunTree, revOf, showAtHead, subjectsSince } from "../core/worktree";
+import { sortRun } from "./landing";
 
 export const prsDir = (): string => join(configDir(), "prs");
 /** how often the loop looks for a PR that is due a read */
@@ -73,6 +75,11 @@ export interface PrDeps {
   startFix: (rec: LandingRun, prompt: string, label: string) => Promise<Run>;
   /** whether a run is still going, by id */
   runActive: (id: string) => boolean;
+  /** whether a run ended with the agent finishing; false for one stopped,
+   *  failed, or no longer known (a restart took it) */
+  runOk: (id: string) => boolean;
+  /** sorts a branch run's worktree by its repo's review rules */
+  sort?: (rec: LandingRun, now: number) => Promise<RunReview>;
   /** the `canopy:prs` health check */
   report?: (r: ProbeResult) => void;
   dir?: string;
@@ -406,15 +413,27 @@ export class PrHub {
       this.publish();
       return why;
     }
-    if (w.fixing && !this.deps.runActive(w.fixing.run)) w = await this.finishFix(w);
     if (w.state?.status === "merged") {
-      await this.merged(w);
+      // merged on GitHub while a run works the branch: its worktree stays until it ends
+      if ([w.fixing?.run, w.runId].some((r) => r !== undefined && this.deps.runActive(r))) {
+        this.save({ ...w, updatedAt: this.now() });
+        this.due.set(id, this.now() + POLL_BUSY);
+        this.publish();
+        return null;
+      }
+      // nothing is pushed to a merged PR; what the fix committed is kept below
+      const { fixing: _f, ...rest } = w;
+      await this.merged(rest);
       return null;
     }
+    if (w.fixing && !this.deps.runActive(w.fixing.run)) w = await this.finishFix(w);
+    // closed on GitHub: the run may land here again
+    if (w.state?.status === "closed" && had.state?.status !== "closed") this.deps.markPr(w.id, null);
     if (w.state?.status === "open") {
       if (w.autoFix && !w.fixing) w = await this.autoFix(w);
       if (w.autoMerge && !w.fixing && w.state && readyToMerge(w.state, w).ok) {
-        w = await this.merge(w, w.state);
+        w = await this.screen(w, w.state);
+        if (w.state && readyToMerge(w.state, w).ok) w = await this.merge(w, w.state);
         if (w.state?.status === "merged") return null;
       }
     }
@@ -428,18 +447,28 @@ export class PrHub {
     return null;
   }
 
-  /** A fix run ended: what it committed is pushed to the PR. One that left
-   *  changes uncommitted, or nothing new, counts as a failed attempt (its
-   *  attempt was counted when it started). */
+  /** A fix run ended: what it committed is pushed to the PR, but only when
+   *  the agent finished. A run stopped, failed or cut off by a restart
+   *  pushes nothing and pauses auto-fix for Eric. One that left changes
+   *  uncommitted, or nothing new, counts as a failed attempt (its attempt
+   *  was counted when it started), and a comment's is tried again. */
   private async finishFix(w: PrWatch): Promise<PrWatch> {
-    const { fixing: _f, error: _e, ...rest } = w;
-    const done: PrWatch = rest;
+    const { fixing, error: _e, ...done } = w;
+    if (!fixing) return w;
+    const failed = (error: string): PrWatch => {
+      // a comment's failed fix: read it again, so its next attempt starts
+      const id = fixing.key.startsWith("comment:") ? Number(fixing.key.slice("comment:".length)) : NaN;
+      return { ...done, error, ...(Number.isFinite(id) ? { seenComment: Math.min(done.seenComment, id - 1) } : {}) };
+    };
+    if (!this.deps.runOk(fixing.run)) {
+      return { ...done, error: "the fix run did not finish; nothing was pushed", gaveUp: "a fix run did not finish, so nothing was pushed; turn auto-fix on again to go on" };
+    }
     const dirty = await dirtyFiles(w.dir).catch(() => ["?"]);
-    if (dirty.length > 0) return { ...done, error: "the fix left changes not committed; nothing was pushed" };
+    if (dirty.length > 0) return failed("the fix left changes not committed; nothing was pushed");
     const head = await revOf(w.dir, "HEAD");
-    if (!head || head === w.pushed) return { ...done, error: "the fix ended with nothing new to push" };
+    if (!head || head === w.pushed) return failed("the fix ended with nothing new to push");
     const pushed = await pushBranch(w.dir, w.remote, w.branch);
-    if ("rejected" in pushed) return { ...done, error: `the push was refused: ${pushed.rejected}` };
+    if ("rejected" in pushed) return failed(`the push was refused: ${pushed.rejected}`);
     return { ...done, pushed: head };
   }
 
@@ -478,13 +507,20 @@ export class PrHub {
     }
     let cur = w;
     for (const c of comments) {
-      if (!trusted(await this.permission(w.slug, c.author))) {
+      let perm: string | null;
+      try {
+        perm = await this.permission(w.slug, c.author);
+      } catch (err) {
+        // gh could not say: this comment and the ones after it wait for the next read
+        return { ...cur, error: errText(err) };
+      }
+      if (!trusted(perm)) {
         cur = { ...cur, seenComment: c.id, untrusted: [...(cur.untrusted ?? []).filter((x) => x.id !== c.id), c].slice(-20) };
         continue;
       }
       const key = commentKey(c.id);
       cur = { ...cur, seenComment: c.id };
-      if (exhausted(cur, key)) continue;
+      if (exhausted(cur, key)) return { ...cur, gaveUp: `a review comment by ${c.author} is still not addressed after ${MAX_ATTEMPTS} fixes` };
       return this.startFix(cur, key, fixPromptForComment(cur, c));
     }
     return cur;
@@ -496,7 +532,9 @@ export class PrHub {
     return parseComments(JSON.parse(r.stdout));
   }
 
-  /** A login's permission on the repo, asked once; null when gh could not say. */
+  /** A login's permission on the repo, kept once GitHub answers; null for
+   *  no access (a 404, as for a bot or a deleted user). Throws when gh
+   *  could not say, so a rate limit or an outage never marks anyone. */
   private async permission(slug: string, login: string): Promise<string | null> {
     const key = `${slug} ${login}`;
     if (this.perms.has(key)) return this.perms.get(key) ?? null;
@@ -509,9 +547,29 @@ export class PrHub {
       } catch {
         // not an answer: not trusted
       }
+    } else if (!/HTTP 404|Not Found/i.test(r.stderr)) {
+      throw new Error(`checking ${login}'s access: ${lastLine(r, "gh api")}`);
     }
     this.perms.set(key, perm);
     return perm;
+  }
+
+  /** Auto-merge's last look before it merges: the head's files sorted by
+   *  the repo's review rules, as a land would. A head that needs Eric's
+   *  approval is held for him, and so is one that cannot be sorted. */
+  private async screen(w: PrWatch, s: PrState): Promise<PrWatch> {
+    const hold = (why: string): PrWatch => ({ ...w, approve: { head: s.head, why } });
+    const rec = this.deps.record(w.id);
+    if (!rec) return hold("its branch run's record is gone, so its files cannot be sorted");
+    try {
+      const review = await (this.deps.sort ?? sortRun)(rec, this.now());
+      if (review.head !== s.head) return hold("its worktree is not at the PR's head");
+      if (review.verdict !== "approve") return w;
+      const files = review.files.filter((f) => f.sensitive).map((f) => f.path);
+      return hold(files.length > 0 ? files.join(", ") : (review.why ?? "its review rules"));
+    } catch (err) {
+      return hold(`its files could not be sorted: ${errText(err)}`);
+    }
   }
 
   /** Merges on the head just read, with the repo's own method; the head
@@ -527,21 +585,37 @@ export class PrHub {
     const method = mergeMethod(parsed);
     const r = await this.gh(["pr", "merge", String(w.number), "-R", w.slug, "--match-head-commit", s.head, `--${method}`]);
     if (r.code !== 0) return { ...w, error: `merging: ${lastLine(r, "gh pr merge")}` };
-    const merged: PrWatch = { ...w, state: { ...s, status: "merged" } };
+    // exit 0 may only mean GitHub queued it (a merge queue, or its own
+    // auto-merge): clean up once a read says merged
+    const after = await this.gh(["pr", "view", String(w.number), "-R", w.slug, "--json", PR_FIELDS]);
+    let read: PrState | null = null;
+    try {
+      read = after.code === 0 ? parsePrView(JSON.parse(after.stdout)) : null;
+    } catch {
+      // read again on the next poll
+    }
+    if (read?.status !== "merged") return { ...w, ...(read ? { state: read } : {}), queued: s.head };
+    const merged: PrWatch = { ...w, state: read };
     await this.merged(merged);
     return merged;
   }
 
-  /** A merged PR: its remote branch, worktree and local branch go, the
-   *  main checkout fetches, and the landing record goes. The watch stays
+  /** A merged PR: its remote branch goes, its worktree and local branch go
+   *  unless they hold work the PR never got (a fix that ended after the
+   *  merge), the main checkout fetches, and the landing record goes. A kept
+   *  worktree is then an orphan the landing section offers. The watch stays
    *  for the list. */
   private async merged(w: PrWatch): Promise<void> {
     await git(w.repoPath, ["push", w.remote, "--delete", w.branch]);
-    await removeRunTree(w.repoPath, w.dir, w.branch);
+    const ahead = await git(w.repoPath, ["rev-list", "--count", `${w.pushed}..refs/heads/${w.branch}`]);
+    const dirty = await dirtyFiles(w.dir).catch(() => []);
+    const keep = (ahead.code === 0 && Number(ahead.stdout.trim()) > 0) || dirty.length > 0;
+    if (!keep) await removeRunTree(w.repoPath, w.dir, w.branch);
     await git(w.repoPath, ["fetch", "--quiet", w.remote], 120_000);
     await this.deps.forget(w.id).catch((err) => console.error(`prs: forgetting ${w.branch}: ${errText(err)}`));
     const { fixing: _f, ...rest } = w;
-    this.save({ ...rest, updatedAt: this.now() });
+    const kept = keep ? { error: `merged; ${w.branch} has work the PR never got, so it and ${w.dir} were kept` } : {};
+    this.save({ ...rest, ...kept, updatedAt: this.now() });
     this.due.delete(w.id);
     this.prune();
     this.publish();

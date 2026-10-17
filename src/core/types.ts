@@ -1203,6 +1203,12 @@ export interface PrWatch {
   untrusted?: PrComment[];
   /** why auto-fix stopped for this PR */
   gaveUp?: string;
+  /** the head GitHub took into its merge queue or its own auto-merge: not
+   *  merged yet, and not asked again */
+  queued?: string;
+  /** a head whose files the repo's review rules hold for Eric's approval,
+   *  which auto-merge leaves for him; `why` names the files */
+  approve?: { head: string; why: string };
   /** the last poll's or merge's error */
   error?: string;
   /** unix ms */

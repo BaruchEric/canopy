@@ -37,6 +37,10 @@ interface Gh {
   comments: unknown[];
   perms: Record<string, string>;
   mergeFails: boolean;
+  /** the repo has a merge queue: a merge only queues it */
+  mergeQueued: boolean;
+  /** the permission endpoint answers 502 */
+  permDown: boolean;
 }
 
 let n = 0;
@@ -51,6 +55,8 @@ interface World {
   events: ServerEvent[];
   fixes: { id: string; prompt: string; label: string }[];
   active: Set<string>;
+  /** runs that ended stopped or failed */
+  failed: Set<string>;
   forgot: string[];
   held: string | null;
   recDir: string;
@@ -94,21 +100,26 @@ async function world(opts: { repoDefault?: string } = {}): Promise<World> {
   await addRunTree(path, dir, branch, "main");
   await commit(dir, "b.txt", "two\n");
   const rec: LandingRun = { id, runId: id, repoId: `repo${n}`, repoPath: path, branch, target: "main", base: "", dir, note: "make the thing", verb: "propose", harness: "claude", state: "ready", startedAt: 1 };
-  const g: Gh = { calls: [], auth: true, checks: [], head: null, state: "OPEN", review: "", mergeable: "MERGEABLE", comments: [], perms: {}, mergeFails: false };
+  const g: Gh = { calls: [], auth: true, checks: [], head: null, state: "OPEN", review: "", mergeable: "MERGEABLE", comments: [], perms: {}, mergeFails: false, mergeQueued: false, permDown: false };
   const records = new Map([[id, rec]]);
   const recDir = join(root, `prs${n}`);
-  const w = { path, bare, dir, rec, records, gh: g, events: [], fixes: [], active: new Set<string>(), forgot: [], held: null, recDir } as unknown as World;
+  const w = { path, bare, dir, rec, records, gh: g, events: [], fixes: [], active: new Set<string>(), failed: new Set<string>(), forgot: [], held: null, recDir } as unknown as World;
   const fake = async (args: string[]): Promise<ExecResult> => {
     g.calls.push(args);
     const [a, b] = args;
     if (a === "auth") return g.auth ? ok("Logged in") : no("not logged in");
     if (a === "pr" && b === "create") return ok(`https://github.com/o/r/pull/7\n`);
     if (a === "pr" && b === "view") return ok(JSON.stringify(view(g)));
-    if (a === "pr" && b === "merge") return g.mergeFails ? no("Head branch was modified") : ok("");
+    if (a === "pr" && b === "merge") {
+      if (g.mergeFails) return no("Head branch was modified");
+      if (!g.mergeQueued) g.state = "MERGED";
+      return ok("");
+    }
     if (a === "pr" && b === "close") return ok("");
     if (a === "run" && b === "view") return ok("lots of log\nError: expected 2, got 3\n");
     if (a === "repo" && b === "view") return ok(JSON.stringify({ squashMergeAllowed: true, mergeCommitAllowed: false, rebaseMergeAllowed: false }));
     if (a === "api" && b?.endsWith("/permission")) {
+      if (g.permDown) return no("gh: Bad Gateway (HTTP 502)");
       const login = decodeURIComponent(b.split("/collaborators/")[1]!.split("/")[0]!);
       return ok(JSON.stringify({ permission: g.perms[login] ?? "read" }));
     }
@@ -142,6 +153,7 @@ async function world(opts: { repoDefault?: string } = {}): Promise<World> {
         return { id: runId, repoId: r.repoId, branch: { name: r.branch, target: r.target, base: r.base, dir: r.dir, state: "working", origin: r.id } } as unknown as Run;
       },
       runActive: (x) => w.active.has(x),
+      runOk: (x) => !w.active.has(x) && !w.failed.has(x),
       dir: recDir,
       tickEvery: 60_000,
     });
@@ -165,10 +177,12 @@ const pollNow = async (w: World, hub = w.hub): Promise<PrWatch> => {
   return hub.info()[0]!;
 };
 
-/** A fix run ends, with or without a commit of its own. */
-const endFix = async (w: World, runId: string, change?: string): Promise<void> => {
+/** A fix run ends, with or without a commit of its own; `stopped` is Eric's
+ *  stop or a failure rather than the agent finishing. */
+const endFix = async (w: World, runId: string, change?: string, stopped = false): Promise<void> => {
   if (change) await commit(w.dir, change, change);
   w.active.delete(runId);
+  if (stopped) w.failed.add(runId);
   w.hub.onRun({ id: runId, status: "done", branch: { name: w.rec.branch, target: "main", base: "", dir: w.dir, state: "ready", origin: w.rec.id } } as unknown as Run);
   await w.hub.idle();
 };
@@ -343,6 +357,63 @@ describe("auto-fix", () => {
     expect(pr.seenComment).toBe(6);
   });
 
+  test("a fix run that was stopped pushes nothing, however much it committed", async () => {
+    const w = await world();
+    await w.hub.open(w.rec.id);
+    await w.hub.set(w.rec.id, { autoFix: true });
+    const head = await revOf(w.dir, "HEAD");
+    w.gh.head = head;
+    w.gh.checks = [checkRun("test", "COMPLETED", "FAILURE")];
+    await pollNow(w);
+    await endFix(w, "fix1", "half.txt", true);
+    const pr = w.hub.info()[0]!;
+    expect(pr.pushed).toBe(head!);
+    expect(await sh(w.bare, "rev-parse", `refs/heads/${w.rec.branch}`)).toBe(head!);
+    // a stop is a "not like that": auto-fix waits for Eric rather than trying again
+    expect(pr.gaveUp).toBe("a fix run did not finish, so nothing was pushed; turn auto-fix on again to go on");
+    expect(pr.fixing).toBeUndefined();
+    await pollNow(w);
+    expect(w.fixes).toHaveLength(1);
+  });
+
+  test("a review comment gets three fixes like a check, then auto-fix gives up on it", async () => {
+    const w = await world();
+    await w.hub.open(w.rec.id);
+    await w.hub.set(w.rec.id, { autoFix: true });
+    w.gh.head = await revOf(w.dir, "HEAD");
+    w.gh.checks = [checkRun("test", "COMPLETED", "SUCCESS")];
+    w.gh.perms = { BaruchEric: "admin" };
+    w.gh.comments = [{ id: 6, user: { login: "BaruchEric" }, body: "rename this", path: "b.txt", line: 1, html_url: "u6" }];
+    await pollNow(w);
+    expect(w.fixes.map((f) => f.label)).toEqual(["fix PR #7: a review comment (1/3)"]);
+    await endFix(w, "fix1");
+    await endFix(w, "fix2");
+    await endFix(w, "fix3");
+    expect(w.fixes.map((f) => f.label.slice(-5))).toEqual(["(1/3)", "(2/3)", "(3/3)"]);
+    const pr = await pollNow(w);
+    expect(w.fixes).toHaveLength(3);
+    expect(pr.gaveUp).toContain("comment");
+  });
+
+  test("a permission lookup gh could not answer is asked again, and its comment waits", async () => {
+    const w = await world();
+    await w.hub.open(w.rec.id);
+    await w.hub.set(w.rec.id, { autoFix: true });
+    w.gh.head = await revOf(w.dir, "HEAD");
+    w.gh.checks = [checkRun("test", "COMPLETED", "SUCCESS")];
+    w.gh.perms = { BaruchEric: "admin" };
+    w.gh.comments = [{ id: 6, user: { login: "BaruchEric" }, body: "rename this", path: "b.txt", line: 1, html_url: "u6" }];
+    w.gh.permDown = true;
+    let pr = await pollNow(w);
+    expect(w.fixes).toHaveLength(0);
+    expect(pr.untrusted ?? []).toEqual([]);
+    expect(pr.seenComment).toBe(0);
+    expect(pr.error).toContain("BaruchEric");
+    w.gh.permDown = false;
+    pr = await pollNow(w);
+    expect(w.fixes).toHaveLength(1);
+  });
+
   test("auto-fix off: a failed check starts nothing", async () => {
     const w = await world();
     await w.hub.open(w.rec.id);
@@ -385,11 +456,67 @@ describe("auto-merge", () => {
     const w = await world();
     await w.hub.open(w.rec.id);
     w.gh.head = await revOf(w.dir, "HEAD");
+    w.gh.checks = [checkRun("test", "COMPLETED", "SUCCESS")];
     w.gh.mergeFails = true;
     await w.hub.set(w.rec.id, { autoMerge: true });
     const pr = await pollNow(w);
     expect(pr.error).toContain("merging: Head branch was modified");
     expect(existsSync(w.dir)).toBe(true);
+  });
+
+  test("a merge GitHub only queued cleans up nothing and is not asked again, until it merges", async () => {
+    const w = await world();
+    await w.hub.open(w.rec.id);
+    w.gh.head = await revOf(w.dir, "HEAD");
+    w.gh.checks = [checkRun("test", "COMPLETED", "SUCCESS")];
+    w.gh.mergeQueued = true;
+    await w.hub.set(w.rec.id, { autoMerge: true });
+    let pr = await pollNow(w);
+    expect(pr.state?.status).toBe("open");
+    expect(pr.queued).toBe(w.gh.head!);
+    expect(existsSync(w.dir)).toBe(true);
+    expect(w.forgot).toEqual([]);
+    await pollNow(w);
+    expect(w.gh.calls.filter((c) => c[1] === "merge")).toHaveLength(1);
+    w.gh.state = "MERGED";
+    pr = await pollNow(w);
+    expect(pr.state?.status).toBe("merged");
+    expect(existsSync(w.dir)).toBe(false);
+  });
+
+  test("never merges a head whose files the review rules hold for approval", async () => {
+    const w = await world();
+    await commit(w.dir, "CLAUDE.md", "be careful\n");
+    await w.hub.open(w.rec.id);
+    w.gh.head = await revOf(w.dir, "HEAD");
+    w.gh.checks = [checkRun("test", "COMPLETED", "SUCCESS")];
+    await w.hub.set(w.rec.id, { autoMerge: true });
+    const pr = await pollNow(w);
+    expect(w.gh.calls.some((c) => c[1] === "merge")).toBe(false);
+    expect(pr.approve).toMatchObject({ head: w.gh.head, why: expect.stringContaining("CLAUDE.md") });
+    expect(existsSync(w.dir)).toBe(true);
+  });
+
+  test("a PR merged by hand while a fix runs waits for it, then keeps what the PR lacks", async () => {
+    const w = await world();
+    await w.hub.open(w.rec.id);
+    await w.hub.set(w.rec.id, { autoFix: true });
+    const head = await revOf(w.dir, "HEAD");
+    w.gh.head = head;
+    w.gh.checks = [checkRun("test", "COMPLETED", "FAILURE")];
+    await pollNow(w);
+    w.gh.state = "MERGED";
+    let pr = await pollNow(w);
+    expect(existsSync(w.dir)).toBe(true);
+    expect(w.forgot).toEqual([]);
+    await endFix(w, "fix1", "late.txt");
+    pr = await pollNow(w);
+    expect(pr.state?.status).toBe("merged");
+    // the fix's commit never reached the PR: the worktree and branch stay
+    expect(existsSync(w.dir)).toBe(true);
+    expect(await sh(w.path, "rev-parse", "--verify", `refs/heads/${w.rec.branch}`)).toBe((await revOf(w.dir, "HEAD"))!);
+    expect(pr.error).toContain("kept");
+    expect(await sh(w.bare, "for-each-ref", `refs/heads/${w.rec.branch}`)).toBe("");
   });
 
   test("a PR merged by hand cleans up the same way", async () => {
@@ -413,6 +540,17 @@ describe("close", () => {
     expect((await exec(["git", "rev-parse", "-q", "--verify", `refs/heads/${w.rec.branch}`], { cwd: w.bare })).code).not.toBe(0);
     expect(w.records.get(w.rec.id)?.pr).toBeUndefined();
     expect(w.hub.info()).toEqual([]);
+    expect(existsSync(w.dir)).toBe(true);
+  });
+
+  test("a PR closed on GitHub frees its run to land here again", async () => {
+    const w = await world();
+    await w.hub.open(w.rec.id);
+    w.gh.head = await revOf(w.dir, "HEAD");
+    w.gh.state = "CLOSED";
+    const pr = await pollNow(w);
+    expect(pr.state?.status).toBe("closed");
+    expect(w.records.get(w.rec.id)?.pr).toBeUndefined();
     expect(existsSync(w.dir)).toBe(true);
   });
 });

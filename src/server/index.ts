@@ -4297,6 +4297,8 @@ export async function startServer(opts: {
         const run = state.runner.get(id);
         return run !== undefined && isRunActive(run);
       },
+      // a run a restart took is unknown here, which counts as not finished
+      runOk: (id) => state.runner.get(id)?.status === "done",
       report: (r) => state.health.report(PRS_CHECK, r),
     }),
     kit: new KitHub({

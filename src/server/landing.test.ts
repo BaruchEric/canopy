@@ -647,6 +647,14 @@ describe("PR runs (FR-011)", () => {
     expect(recOf(w, "pr11")?.openPr).toBe(true);
     expect(w.opened).toEqual(["pr11"]);
     expect(entryOf(w, "pr11")).toBeUndefined();
+    // the PR closed: the run may land here, and never opens another on its own
+    w.hub.markPr("pr11", 4);
+    w.hub.markPr("pr11", null);
+    expect(recOf(w, "pr11")?.openPr).toBeUndefined();
+    await commit(dir, "more.md", "more\n");
+    w.hub.onRun({ ...fakeRun(w.repo.id, { name: "run/x-pr11", target: "main", base, dir, origin: "pr11" }, "ready"), id: "fix-pr11" });
+    await w.hub.idle();
+    expect(w.opened).toEqual(["pr11"]);
   });
 
   test("a PR that fails to open on its own leaves the run ready with a notice that says why", async () => {

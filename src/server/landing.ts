@@ -523,13 +523,14 @@ export class LandingHub {
   }
 
   /** Puts the PR a branch opened on its record, or takes it off (the PR
-   *  closed: the run may land here again). A sent-back entry goes when the
-   *  PR is put on. */
+   *  closed: the run may land here again, and its pre-flight's "open a PR"
+   *  is spent, so it never opens another on its own). A sent-back entry
+   *  goes when the PR is put on. */
   markPr(id: string, pr: number | null): void {
     const rec = this.find(id);
     if (!rec) return;
-    const { pr: _p, ...rest } = rec;
-    const next: LandingRun = pr === null ? rest : { ...rest, pr };
+    const { pr: _p, openPr: _o, ...rest } = rec;
+    const next: LandingRun = pr === null ? rest : { ...rest, ...(rec.openPr ? { openPr: rec.openPr } : {}), pr };
     this.runs.set(rec.id, next);
     this.written.set(rec.id, JSON.stringify(next));
     void this.saveRun(next);
