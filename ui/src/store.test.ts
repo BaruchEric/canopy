@@ -703,7 +703,7 @@ const twoBackends = { self: "a", backends: [{ name: "a", tailnet: "http://a.test
 describe("several backends", () => {
   const pristine = useStore.getState();
   const realFetch = globalThis.fetch;
-  const g = globalThis as unknown as { EventSource?: unknown; localStorage?: unknown; location?: unknown };
+  const g = globalThis as unknown as { EventSource?: unknown; localStorage?: unknown; sessionStorage?: unknown; location?: unknown };
   const realES = g.EventSource;
   const calls: string[] = [];
   let cleanup: (() => void) | null = null;
@@ -1492,6 +1492,21 @@ describe("several backends", () => {
       claims = [json({ token: "cnp_page_b" })];
       await useStore.getState().signIn("b");
       expect(pairBodies.at(-1)).not.toHaveProperty("id");
+    });
+
+    test("a sign-in left waiting before a reload goes on with the same request, and lets go of it once signed in", async () => {
+      const held = new Map<string, string>([["canopy.pair.http://b.test", JSON.stringify({ id: "p1", secret: "s3", code: "K7QX", until: Date.now() + 60_000 })]]);
+      g.sessionStorage = { getItem: (k: string) => held.get(k) ?? null, setItem: (k: string, v: string) => void held.set(k, v), removeItem: (k: string) => void held.delete(k) };
+      try {
+        claims = [json({ waiting: true }), json({ token: "cnp_page_b" })];
+        await go();
+        for (let i = 0; i < 50 && !kept.has(B_TOKEN); i++) await settle();
+        expect(pairs).toBe(0);
+        expect(kept.get(B_TOKEN)).toBe("cnp_page_b");
+        expect(held.size).toBe(0);
+      } finally {
+        delete g.sessionStorage;
+      }
     });
 
     test("a second press while one waits asks for no second pair", async () => {

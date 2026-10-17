@@ -59,6 +59,55 @@ export function writeToken(origin: string, token: string | null, store: Store | 
   }
 }
 
+/** A sign-in still waiting for approval. Kept for the tab's session, so a
+ *  reload (a phone that drops the tab while its owner approves the code on
+ *  another screen) goes on polling the same request instead of asking a
+ *  new one with a new code. */
+export interface HeldPair {
+  id: string;
+  secret: string;
+  code: string;
+  /** when the page stops asking, unix ms */
+  until: number;
+}
+
+/** where a backend's waiting sign-in is held, by its origin */
+export const pairKey = (origin: string): string => `canopy.pair.${origin}`;
+
+const session = (): Store | null => {
+  try {
+    return globalThis.sessionStorage ?? null;
+  } catch {
+    return null;
+  }
+};
+
+/** the sign-in this tab left waiting for a backend, or null when none is or
+ *  its window has passed */
+export function readPair(origin: string, now: number, store: Store | null = session()): HeldPair | null {
+  try {
+    const raw = store?.getItem(pairKey(origin));
+    if (!raw) return null;
+    const v: unknown = JSON.parse(raw);
+    if (typeof v !== "object" || v === null) return null;
+    const { id, secret, code, until } = v as Record<string, unknown>;
+    if (typeof id !== "string" || typeof secret !== "string" || typeof code !== "string" || typeof until !== "number") return null;
+    return until > now ? { id, secret, code, until } : null;
+  } catch {
+    return null;
+  }
+}
+
+/** Holds a backend's waiting sign-in for the session; null lets it go. */
+export function writePair(origin: string, pair: HeldPair | null, store: Store | null = session()): void {
+  try {
+    if (pair === null) store?.removeItem(pairKey(origin));
+    else store?.setItem(pairKey(origin), JSON.stringify(pair));
+  } catch {
+    // a tab that cannot hold it asks again after a reload, as before
+  }
+}
+
 /** The headers a call to a backend carries: what the caller passed, and the
  *  token when this page holds one for that origin. */
 export function tokenHeaders(origin: string, init?: HeadersInit, store: Store | null = local()): Headers {

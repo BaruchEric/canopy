@@ -57,7 +57,7 @@ import { clientCaps } from "../../src/core/client";
 import { normalizeRoutes, resolveAgent } from "../../src/core/route";
 import { flatAgent, hasRouting, NO_ROUTES } from "./agents";
 import { cleanKey, keyTestOf, readAnswerKey, writeAnswerKey, type KeyTest } from "./answerKey";
-import { originOf, pairLabel, readToken, writeToken, type AuthInfo, type BackendAuth, type SignIn } from "./callerToken";
+import { originOf, pairLabel, readPair, readToken, writePair, writeToken, type AuthInfo, type BackendAuth, type SignIn } from "./callerToken";
 import { deviceName } from "../../src/core/presence";
 import { listedTask } from "../../src/core/tasks";
 import { startsDev } from "./tasks";
@@ -1111,7 +1111,9 @@ export interface CanopyState {
   loadAuth: (backend?: string) => Promise<void>;
   /** asks a backend to let this page in, waits for someone to approve it,
    *  and keeps the token it mints */
-  signIn: (backend: string) => Promise<void>;
+  /** asks a backend to let this page in and polls until someone approves;
+   *  `resume` only picks up a sign-in this tab left waiting before a reload */
+  signIn: (backend: string, resume?: boolean) => Promise<void>;
   /** approves this page's own waiting sign-in with the first code from the
    *  backend's log */
   useFirstCode: (backend: string, code: string) => Promise<void>;
@@ -1706,6 +1708,8 @@ function resync(get: () => CanopyState, set: (fn: (s: CanopyState) => Partial<Ca
   void get().loadLanding(b);
   void get().loadPrs(b);
   void get().loadAuth(b);
+  // a sign-in this tab left waiting before a reload picks up where it was
+  void get().signIn(b, true);
   void get().loadSecrets(b);
   // the tasks a panel loaded may have moved while the stream was down
   for (const id of Object.keys(get().tasks)) if (backendOf(id) === b) void get().loadTasks(id).catch(() => {});
@@ -2092,6 +2096,7 @@ export const useStore = create<CanopyState>((set, get) => ({
     void get().loadLanding();
     void get().loadPrs();
     void get().loadAuth();
+    void get().signIn(get().home, true);
     void get().loadSecrets();
     // the screen layouts, which a backend from before them does not have
     void get().loadScreenProfiles();
@@ -2253,6 +2258,7 @@ export const useStore = create<CanopyState>((set, get) => ({
     void get().loadLanding(name);
     void get().loadPrs(name);
     void get().loadAuth(name);
+    void get().signIn(name, true);
     void get().loadSecrets(name);
     void api
       .about(name)
@@ -3209,8 +3215,14 @@ export const useStore = create<CanopyState>((set, get) => ({
     const auth = authOf(b, { ...info, pending }, was?.needed ?? false, sent);
     set((s) => ({ authByBackend: { ...s.authByBackend, [b]: auth } }));
   },
-  signIn: async (backend) => {
+  signIn: async (backend, resume = false) => {
     if (signingIn.has(backend) || !isShown(get(), backend)) return;
+    const origin = originOf(baseOf(backend));
+    const held = readPair(origin, Date.now());
+    if (resume && (!held || readToken(origin))) {
+      if (held) writePair(origin, null);
+      return;
+    }
     const mine = ++signInSeq;
     signingIn.set(backend, mine);
     const live = () => signingIn.get(backend) === mine && isShown(get(), backend);
@@ -3221,11 +3233,13 @@ export const useStore = create<CanopyState>((set, get) => ({
       });
     try {
       const ua = typeof navigator === "undefined" ? "" : navigator.userAgent;
-      const { id, code, secret } = await api.pair(backend, pairLabel(get().settings.device || deviceName(ua)), lastPairs.get(backend));
+      // a sign-in the tab held over a reload goes on with the same code
+      const { id, code, secret, until } =
+        held ?? { ...(await api.pair(backend, pairLabel(get().settings.device || deviceName(ua)), lastPairs.get(backend))), until: Date.now() + CLAIM_WINDOW };
       if (!live()) return;
       lastPairs.set(backend, { id, secret });
+      writePair(origin, { id, secret, code, until });
       say({ state: "waiting", id, code });
-      const until = Date.now() + CLAIM_WINDOW;
       for (;;) {
         let got: { token: string } | { waiting: true } | null = null;
         try {
@@ -3239,8 +3253,9 @@ export const useStore = create<CanopyState>((set, get) => ({
         if (got && "token" in got) {
           // storage that refuses would leave a caller no page can use, and a
           // sign-in after it another one
-          if (!writeToken(originOf(baseOf(backend)), got.token)) throw new Error("this browser would not keep the token");
+          if (!writeToken(origin, got.token)) throw new Error("this browser would not keep the token");
           lastPairs.delete(backend);
+          writePair(origin, null);
           say(null);
           await get().loadAuth(backend);
           return;
@@ -3250,6 +3265,8 @@ export const useStore = create<CanopyState>((set, get) => ({
         if (!live()) return;
       }
     } catch (err) {
+      // over: denied, expired, claimed or out of time, so a reload asks anew
+      writePair(origin, null);
       if (live()) say({ state: "failed", why: err instanceof Error ? err.message : String(err) });
     } finally {
       if (signingIn.get(backend) === mine) signingIn.delete(backend);

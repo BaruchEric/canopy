@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import type { PendingPair } from "../../src/core/types";
-import { dialPlan, isOwnCode, originOf, pairAsk, pairLabel, readToken, TOKEN_HEADER, tokenHeaders, tokenKey, writeToken } from "./callerToken";
+import { dialPlan, isOwnCode, originOf, pairAsk, pairKey, pairLabel, readPair, readToken, TOKEN_HEADER, tokenHeaders, tokenKey, writePair, writeToken } from "./callerToken";
 
 /** a localStorage stand-in, or one that throws the way a blocked one does */
 function storage(blocked = false) {
@@ -28,6 +28,21 @@ describe("this page's caller tokens", () => {
     expect(writeToken("http://a:7850", null, st)).toBe(true);
     expect(readToken("http://a:7850", st)).toBeNull();
     expect(readToken("http://b:7850", st)).toBe("cnp_page_b");
+  });
+
+  test("a waiting sign-in is held per origin until its window passes, and a bad entry reads as none", () => {
+    const st = storage();
+    const pair = { id: "p1", secret: "s3", code: "K7QX", until: 1_000 };
+    writePair("http://a:7850", pair, st);
+    expect(readPair("http://a:7850", 999, st)).toEqual(pair);
+    expect(readPair("http://b:7850", 999, st)).toBeNull();
+    expect(readPair("http://a:7850", 1_000, st)).toBeNull();
+    st.m.set(pairKey("http://b:7850"), '{"id":"p1"}');
+    expect(readPair("http://b:7850", 0, st)).toBeNull();
+    st.m.set(pairKey("http://b:7850"), "not json");
+    expect(readPair("http://b:7850", 0, st)).toBeNull();
+    writePair("http://a:7850", null, st);
+    expect(st.m.has(pairKey("http://a:7850"))).toBe(false);
   });
 
   test("tokenHeaders adds the token when there is one and nothing when there is none, keeping what was passed", () => {
