@@ -151,7 +151,7 @@ describe("the stage runner's socket", () => {
 
 describe("the coordinator's runner", () => {
   const coord = compose.services["coord"] as
-    | { image?: string; build?: { target?: string }; read_only?: boolean; networks?: string[]; dns?: string[]; volumes?: string[]; profiles?: string[]; healthcheck?: { test?: string[] } }
+    | { environment?: string[] | Record<string, string>; image?: string; build?: { target?: string }; read_only?: boolean; networks?: string[]; dns?: string[]; volumes?: string[]; profiles?: string[]; healthcheck?: { test?: string[] } }
     | undefined;
   const net = compose.networks?.["coord-net"];
   const gateway = net?.ipam?.config?.[0]?.gateway;
