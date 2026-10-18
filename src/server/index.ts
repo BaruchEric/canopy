@@ -4263,8 +4263,14 @@ export async function startServer(opts: {
     stageAway,
     // the coordinator's runner is the second stage client: a coordinate run
     // starts only while it answers behind its fence, never unisolated
-    coordExec: (): StageClient | null => (coord && coord.harnessesNow() && coordUnfenced() === null ? coord : null),
-    coordAway: () => (!coord ? COORD_REFUSAL : coord.harnessesNow() ? (coordUnfenced() ?? STAGE_AWAY) : "the isolated coordinator runner is not answering"),
+    // and only under enforce, whatever path a coordinate run came by
+    coordExec: (): StageClient | null =>
+      coord && coordinatorRefusal(callerMode, coordNet.error) === null && coord.harnessesNow() && coordUnfenced() === null ? coord : null,
+    coordAway: () =>
+      !coord
+        ? COORD_REFUSAL
+        : (coordinatorRefusal(callerMode, coordNet.error) ??
+          (coord.harnessesNow() ? (coordUnfenced() ?? STAGE_AWAY) : "the isolated coordinator runner is not answering")),
     ...(opts.runner?.driver ? { driver: opts.runner.driver } : {}),
     ...(opts.runner?.quietWait !== undefined ? { quietWait: opts.runner.quietWait } : {}),
   };
