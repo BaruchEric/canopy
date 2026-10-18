@@ -9,6 +9,28 @@ import { readFileSync } from "node:fs";
 process.env["NODE_ENV"] = "test";
 for (const k of ["CANOPY_BIND", "CANOPY_PUBLIC_ORIGIN", "CANOPY_SSH_HOST", "CANOPY_NO_DESKTOP"]) delete process.env[k];
 
+// A canopy shell on the Mac carries the launchd server's settings too:
+// CANOPY_CALLERS=enforce makes every test server refuse the suite's calls
+// with a 401 (and its sockets with a failed upgrade), and CANOPY_ORIGINS and
+// CANOPY_PREVIEW_PUBLIC change what it allows. The shell's own names
+// (INHERITED_ENV in core/term.ts, listed here since importing it would load
+// modules before this file is done) would name another server's API and
+// token to every CLI call and shell a test starts.
+for (const k of [
+  "CANOPY_CALLERS",
+  "CANOPY_ORIGINS",
+  "CANOPY_PREVIEW_PUBLIC",
+  "CANOPY_TERM",
+  "CANOPY_API",
+  "CANOPY_REPO",
+  "CANOPY_BACKEND",
+  "CANOPY_RUN",
+  "CANOPY_TOKEN",
+  "TAILCHAN_AS",
+]) {
+  delete process.env[k];
+}
+
 // Bun loads the checkout's .env before this runs. On the mini that is the
 // compose settings (docs/deploy.md): TAILCHAN_URL, which gives every test
 // server a broker and its shells a tailchan handle, and the deploy's tokens.
