@@ -3,8 +3,8 @@
  *  chat. Browser-safe: the hub in `server/coordinator.ts` keeps the state
  *  and calls these, and the UI may name a card's outcome with them. */
 
-import { landWord, sentBack } from "./landing";
-import { isRunActive, type CoordTask, type LandEntry, type Run, type RunBranchState } from "./types";
+import { inQueue, landWord, sentBack } from "./landing";
+import { isRunActive, type CoordTask, type LandEntry, type ReviewVerdict, type Run, type RunBranchState } from "./types";
 
 /** tasks one plan call may add */
 export const MAX_PLAN = 8;
@@ -94,14 +94,15 @@ export interface ChildLanding {
 }
 
 /** How a child settled, in the words a card and its note use. */
-export type ChildOutcomeWord = "landed" | "ready" | "sent back" | "failed" | "stopped" | "uncommitted" | "no change";
+export type ChildOutcomeWord = "landed" | "ready" | "PR opened" | "sent back" | "failed" | "stopped" | "uncommitted" | "no change";
 
 /** A settled child as its card's state and outcome word. Null while the
  *  child is going, or ended with its branch still being read (its first
  *  change after the end still says `working`; the next one has the state).
  *  The queue's word beats the branch's once the branch has an entry: landed
- *  is done, sent back failed. A branch with nothing on it is done, since an
- *  ask may only answer; one left uncommitted failed. */
+ *  is done, sent back failed, and a ready branch with a PR open is done. A
+ *  branch with nothing on it is done, since an ask may only answer; one left
+ *  uncommitted failed. */
 export function childOutcome(run: Run, landing: ChildLanding = {}): { state: "done" | "failed"; outcome: ChildOutcomeWord } | null {
   if (isRunActive(run)) return null;
   if (run.status === "failed") return { state: "failed", outcome: "failed" };
@@ -111,10 +112,49 @@ export function childOutcome(run: Run, landing: ChildLanding = {}): { state: "do
   const e = landing.entry;
   if (e?.state === "landed") return { state: "done", outcome: "landed" };
   if (e && sentBack(e)) return { state: "failed", outcome: "sent back" };
+  if (b === "ready" && landing.prUrl) return { state: "done", outcome: "PR opened" };
   if (b === "ready") return { state: "done", outcome: "ready" };
   if (b === "uncommitted") return { state: "failed", outcome: "uncommitted" };
   if (b === "stopped") return { state: "failed", outcome: "stopped" };
   return { state: "done", outcome: "no change" };
+}
+
+/** What the hub reads of a child's branch: the queue's entry and the PR as
+ *  `ChildLanding` has them, the sort's verdict once the landing queue has
+ *  sorted the branch, and whether the branch opens a PR in place of the
+ *  queue. */
+export interface ChildBranch extends ChildLanding {
+  verdict?: ReviewVerdict;
+  openPr?: boolean;
+}
+
+/** Whether a child has settled for its card and its note, and how. A child
+ *  that failed, stopped, or left its branch uncommitted or empty settles
+ *  the moment its branch is read. A ready branch is handed to the landing
+ *  queue, so its card waits for the queue's last word: landed, sent back,
+ *  or a PR open. It also settles as `ready` once the sort leaves it to
+ *  Eric (a `land` or `approve` verdict, so nothing lands it on its own),
+ *  or once `overdue` (the sort failed or the PR never opened). An `auto`
+ *  verdict with no entry yet waits, since the queue takes it next, and an
+ *  entry still in the queue waits however long it takes. Null while it
+ *  should wait. */
+export function childSettled(run: Run, b: ChildBranch, overdue: boolean): { state: "done" | "failed"; outcome: ChildOutcomeWord } | null {
+  const out = childOutcome(run, b);
+  if (!out || out.outcome !== "ready") return out;
+  if (b.entry && inQueue(b.entry)) return null;
+  if (overdue) return out;
+  if (b.openPr || b.verdict === undefined || b.verdict === "auto") return null;
+  return out;
+}
+
+/** The note a card that could not start sends into the chat. */
+export function startNote(task: CoordTask, error: string): string {
+  return [
+    "canopy: a task you started could not start",
+    `task ${task.id}: ${task.title} (repo ${task.repo})`,
+    "outcome: failed",
+    `result: ${oneLine(error) || "(none)"}`,
+  ].join("\n");
 }
 
 /** a branch's own state in words, as the run sheet says it */

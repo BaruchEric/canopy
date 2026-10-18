@@ -123,7 +123,7 @@ import {
 } from "../core/store";
 import { RememberedRules, scopeOf } from "../core/remember";
 import { repoHolding, sessionAsk, sessionRemember, sessionRule } from "../core/sessionrules";
-import { BRANCH_RUNS_PER_REPO, QUIET_WAIT, Runner, type BranchStart } from "../core/runner";
+import { BRANCH_RUNS_PER_REPO, QUIET_WAIT, Runner, type BranchStart, type StartExtras } from "../core/runner";
 import { NotWaitingError, type RunDriver } from "../core/driver";
 import { ANSWERS_FILE, isSeedRepoId, SEED_AGENT_REFUSAL, SEEDS_DIR, withStoredAnswers } from "../core/sprout";
 import { SeedMirrors } from "../core/seedmirror";
@@ -182,7 +182,7 @@ import {
   type WsColor,
   TERM_GONE,
 } from "../core/types";
-import type { About, AdviceAccepted, AdviceEntry, IncubatorStages, RepoStatus } from "../core/types";
+import type { About, AdviceAccepted, AdviceEntry, CoordTask, IncubatorStages, RepoStatus } from "../core/types";
 import { isFlowActive, isRunActive } from "../core/types";
 import { holdQuiet, type QuietHold, seedGitThrough, StageClient } from "../core/stageclient";
 import { STAGE_AWAY } from "../core/stagewire";
@@ -200,6 +200,7 @@ import { KitHub, kitPath } from "./kit";
 import { LandingHub } from "./landing";
 import { PrHub } from "./prs";
 import { TriggerHub, type StartOutcome } from "./triggers";
+import { CoordinatorHub, type ChildStart } from "./coordinator";
 import { takeTriggerSecrets } from "../core/envnames";
 import { triggerPlan, type TriggerEvent } from "../core/trigger";
 import { authRoute, CallerBook, callerOf, CallerGate, callersMode, type Caller } from "./callers";
@@ -302,6 +303,8 @@ interface ServerState {
   prs: PrHub;
   /** outside events (Sentry) that start branch runs, and what became of each (server/triggers) */
   triggers: TriggerHub;
+  /** a coordinator's cards, start these and the notes back into its chat (server/coordinator) */
+  coordinator: CoordinatorHub;
   /** the tokens this backend knows and the pairing that hands them out (server/callers) */
   callers: CallerBook;
   /** the caller check at the top of route(), and what it refused */
@@ -824,10 +827,20 @@ async function startRepoRun(
 /** A run on a branch of its own: a worktree under the config dir on
  *  `run/<slug>-<id>`, cut from the default branch's tip, where the gates'
  *  setup runs before the agent starts. The landing queue lands it later. */
-async function startBranchRun(state: ServerState, repo: Repo, action: RunAction, note: string, agent: AgentSettings, by: string | undefined, pr = false, spec: ActionSpec = ACTIONS[action]): Promise<Run> {
+async function startBranchRun(
+  state: ServerState,
+  repo: Repo,
+  action: RunAction,
+  note: string,
+  agent: AgentSettings,
+  by: string | undefined,
+  pr = false,
+  spec: ActionSpec = ACTIONS[action],
+  extras: StartExtras = {},
+): Promise<Run> {
   const start = await cutBranch(repo, note, pr);
   try {
-    return state.runner.start(repo, action, spec, note, agent, by, undefined, start);
+    return state.runner.start(repo, action, spec, note, agent, by, undefined, start, extras);
   } catch (err) {
     await removeRunTree(repo.path, start.branch.dir, start.branch.name);
     if (err instanceof Error && err.name === "StageAwayError") throw err;
@@ -1014,6 +1027,32 @@ async function startTriggerRun(state: ServerState, event: TriggerEvent, repo: Re
     await removeRunTree(repo.path, start.branch.dir, start.branch.name);
     throw err;
   }
+}
+
+/** The repo's branch slots taken, as a trigger counts them: its branch runs
+ *  outside a flow, and each branch flow from its start to its end. */
+function branchSlotsTaken(state: ServerState, repoId: string): number {
+  const runs = state.runner.branchRunsFor(repoId).filter((r) => !r.branch?.held).length;
+  return runs + state.flows.list().filter((f) => f.repoId === repoId && f.branch && isFlowActive(f)).length;
+}
+
+/** A coordinator's card as a branch run (FR-010): the repo's agent on its
+ *  job route, `by` coordinator and `parent` the coordinator, set before the
+ *  run is first heard of. It lands through the landing queue, never opening
+ *  a PR on its own: canopy has no per-repo setting for that yet, and "open
+ *  PR" on the ready run still can. A repo whose branch slots are full
+ *  answers busy, and the card waits. */
+async function startCoordChild(state: ServerState, coordId: string, task: CoordTask): Promise<ChildStart> {
+  const repo = state.result.repos.find((r) => r.id === task.repo);
+  if (!repo) throw new Error(`${task.repo} is no longer in the tree`);
+  if (repo.host || repo.forge) throw new Error(`${repo.name} is not a folder on this machine`);
+  if (isSeedPath(state.root, repo.path)) throw new Error(`${repo.name} is an incubator seed; its runs work in the seed, not on a branch`);
+  const going = branchSlotsTaken(state, repo.id);
+  if (going >= BRANCH_RUNS_PER_REPO) return { busy: `${repo.name} has ${going} branch runs going` };
+  const agent = agentFor(await loadConfig(), repo.path, "job");
+  if (task.action === "propose" && agent.harness !== "claude") throw new Error("plan, then build needs Claude Code");
+  await needHarness(state, agent.harness, repo.path);
+  return { run: await startBranchRun(state, repo, task.action, task.note, agent, "coordinator", false, ACTIONS[task.action], { parent: coordId }) };
 }
 
 const isRecord = (v: unknown): v is Record<string, unknown> => typeof v === "object" && v !== null && !Array.isArray(v);
@@ -2646,6 +2685,8 @@ async function handleApi(
   if (prsRes) return prsRes;
   const triggersRes = await state.triggers.handle(req, url);
   if (triggersRes) return triggersRes;
+  const coordRes = await state.coordinator.handle(req, url, callerOf(state.callers, req, url));
+  if (coordRes) return coordRes;
   const healthRes = await state.health.handle(req, url);
   if (healthRes) return healthRes;
   const secretsRes = await state.secrets.handle(req, url);
@@ -4184,6 +4225,7 @@ export async function startServer(opts: {
       state.landing.onRun(run);
       state.prs.onRun(run);
       state.triggers.onRun(run);
+      state.coordinator.onRun(run);
       // a coordinator's token lives exactly as long as its run
       if (run.action === "coordinate" && !isRunActive(run)) state.callers.dropRun(run.id).catch(() => {});
     },
@@ -4546,6 +4588,7 @@ export async function startServer(opts: {
       broadcast: (ev) => {
         broadcast(state, ev);
         if (ev.type === "landing") state.triggers.onLanding(ev.landing.notices ?? []);
+        if (ev.type === "landing") state.coordinator.recheck();
       },
       repo: (id) => state.result.repos.find((r) => r.id === id),
       repoByPath: (path) => repoAtPath(state.result.repos, path),
@@ -4574,6 +4617,7 @@ export async function startServer(opts: {
       broadcast: (ev) => {
         broadcast(state, ev);
         if (ev.type === "prs") state.triggers.onPrs(ev.prs);
+        if (ev.type === "prs") state.coordinator.recheck();
       },
       record: (id) => state.landing.record(id),
       queueHold: (id) => state.landing.queueHold(id),
@@ -4610,6 +4654,32 @@ export async function startServer(opts: {
       runKnown: (id) => state.runner.get(id) !== undefined,
       flowKnown: (id) => state.flows.get(id) !== undefined,
       env: (name) => triggerSecrets.get(name),
+    }),
+    coordinator: new CoordinatorHub({
+      run: (id) => state.runner.get(id),
+      runs: () => state.runner.list(),
+      startChild: (coordId, task) => startCoordChild(state, coordId, task),
+      say: (id, text) => void state.runner.say(id, text),
+      repoFull: (repo) => branchSlotsTaken(state, repo) >= BRANCH_RUNS_PER_REPO,
+      known: (repo) => {
+        const r = state.result.repos.find((x) => x.id === repo);
+        return !r ? null : r.host || r.forge ? "remote" : "local";
+      },
+      landing: (run) => {
+        const id = run.branch?.origin;
+        if (!id) return {};
+        const rec = state.landing.record(id);
+        const entries = state.landing.info().entries;
+        const entry = entries.find((e) => e.id === id);
+        const pr = state.prs.info().find((w) => w.id === id);
+        return {
+          ...(entry ? { entry, entries } : {}),
+          ...(pr ? { prUrl: pr.url } : {}),
+          ...(rec?.review ? { verdict: rec.review.verdict } : {}),
+          ...(rec?.openPr ? { openPr: true } : {}),
+        };
+      },
+      broadcast: (run) => broadcast(state, { type: "run", run }),
     }),
     kit: new KitHub({
       self: selfName(cfg.self, hostname()),

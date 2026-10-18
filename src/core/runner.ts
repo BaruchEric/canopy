@@ -60,6 +60,9 @@ export interface StartExtras {
   /** more names for the run's process, over `runEnv`'s; they reach it
    *  through a stage spawn's filter too (`DriveCtx.pass`) */
   env?: Record<string, string>;
+  /** the coordinator that started it, set before the run's first change is
+   *  heard, so every listener sees a child as one */
+  parent?: string;
 }
 
 export { claudeBinary, cliArgs } from "./claudedrive";
@@ -318,6 +321,7 @@ export class Runner {
       prompt: null,
     };
     if (by) run.by = by;
+    if (extras.parent) run.parent = extras.parent;
     if (scope) run.workspace = scope.workspace;
     if (spec.flowStep) run.flowStep = { ...spec.flowStep };
     if (branch) run.branch = { ...branch.branch, state: "working" };

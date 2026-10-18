@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { childOutcome, COORD_AT_ONCE, MAX_PLAN, MAX_TASKS, nextToStart, settleNote, validatePlan, type ChildLanding } from "./coordinator";
+import { childOutcome, childSettled, COORD_AT_ONCE, MAX_PLAN, MAX_TASKS, nextToStart, settleNote, startNote, validatePlan, type ChildLanding } from "./coordinator";
 import { FLEET_CONCURRENCY } from "./flow";
 import type { CoordTask, LandEntry, Run, RunBranch } from "./types";
 
@@ -125,6 +125,10 @@ describe("childOutcome", () => {
     expect(childOutcome(child(), { entry: entry(), entries: [entry()] })).toEqual({ state: "done", outcome: "ready" });
   });
 
+  test("a ready branch with a PR open says so", () => {
+    expect(childOutcome(child(), { prUrl: "https://github.com/x/web/pull/7" })).toEqual({ state: "done", outcome: "PR opened" });
+  });
+
   test("a failure, a stop and a branch with nothing to land are failed or empty", () => {
     expect(childOutcome(child({ status: "failed", error: "boom", branch: branch({ state: "nothing" }) }))).toEqual({ state: "failed", outcome: "failed" });
     expect(childOutcome(child({ status: "stopped", branch: branch({ state: "uncommitted" }) }))).toEqual({ state: "failed", outcome: "stopped" });
@@ -168,5 +172,55 @@ describe("settleNote", () => {
     expect(note).toContain("result: Opened it. All green.");
     expect(note).toContain("PR: https://github.com/x/web/pull/7");
     expect(note).not.toContain("branch: ");
+  });
+});
+
+describe("childSettled", () => {
+  const queued = { entry: entry(), entries: [entry()] };
+
+  test("an end that needs no landing settles at once", () => {
+    expect(childSettled(child({ status: "failed", branch: branch({ state: "nothing" }) }), {}, false)).toEqual({ state: "failed", outcome: "failed" });
+    expect(childSettled(child({ branch: branch({ state: "uncommitted" }) }), {}, false)).toEqual({ state: "failed", outcome: "uncommitted" });
+    expect(childSettled(child({ branch: branch({ state: "nothing" }) }), {}, false)).toEqual({ state: "done", outcome: "no change" });
+  });
+
+  test("a going child, or one whose branch is still being read, waits", () => {
+    expect(childSettled(child({ status: "working" }), {}, true)).toBeNull();
+    expect(childSettled(child({ branch: branch({ state: "working" }) }), {}, true)).toBeNull();
+  });
+
+  test("a ready branch waits for its sort, and for the queue once the sort lands it on its own", () => {
+    expect(childSettled(child(), {}, false)).toBeNull();
+    expect(childSettled(child(), { verdict: "auto" }, false)).toBeNull();
+    expect(childSettled(child(), { verdict: "auto", ...queued }, false)).toBeNull();
+    expect(childSettled(child(), { verdict: "auto", ...queued }, true)).toBeNull();
+    expect(childSettled(child(), { openPr: true }, false)).toBeNull();
+  });
+
+  test("the queue's last word, a PR, or a branch left to Eric settles a ready child", () => {
+    expect(childSettled(child(), landed(), false)).toEqual({ state: "done", outcome: "landed" });
+    expect(childSettled(child(), landed({ state: "conflict" }), false)).toEqual({ state: "failed", outcome: "sent back" });
+    expect(childSettled(child(), { prUrl: "https://github.com/x/web/pull/7", openPr: true }, false)).toEqual({ state: "done", outcome: "PR opened" });
+    expect(childSettled(child(), { verdict: "approve" }, false)).toEqual({ state: "done", outcome: "ready" });
+    expect(childSettled(child(), { verdict: "land" }, false)).toEqual({ state: "done", outcome: "ready" });
+  });
+
+  test("a ready branch the queue never took settles ready once overdue", () => {
+    expect(childSettled(child(), {}, true)).toEqual({ state: "done", outcome: "ready" });
+    expect(childSettled(child(), { verdict: "auto" }, true)).toEqual({ state: "done", outcome: "ready" });
+  });
+});
+
+describe("startNote", () => {
+  test("a card that could not start says why", () => {
+    const t: CoordTask = { id: "t3", title: "tidy the docs", repo: "api", note: "n", action: "ask", state: "failed" };
+    expect(startNote(t, "api has no main or master branch to cut a run's branch from")).toBe(
+      [
+        "canopy: a task you started could not start",
+        "task t3: tidy the docs (repo api)",
+        "outcome: failed",
+        "result: api has no main or master branch to cut a run's branch from",
+      ].join("\n"),
+    );
   });
 });
