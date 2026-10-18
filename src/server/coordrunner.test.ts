@@ -112,6 +112,12 @@ const postAs = (s: Up, path: string, body: unknown, token?: string): Promise<Res
   call(s, path, token, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
 
 const API = "http://10.250.14.1:7850";
+
+const exists = (path: string): Promise<boolean> =>
+  stat(path).then(
+    () => true,
+    () => false,
+  );
 const COORD_ENV = { CANOPY_COORD_SOCKET: "/run/canopy-coord/runner.sock", CANOPY_COORD_API: API };
 
 describe("without a coordinator's runner", () => {
@@ -202,6 +208,10 @@ describe("with a coordinator's runner", () => {
     expect((await postAs(s, "/api/coordinator/start", { run: run.id }, token)).status).toBe(403);
     const stopped = await postAs(s, "/api/runs/stop", { id: run.id }, s.page);
     expect(((await stopped.json()) as Run).status).not.toBe("working");
+    // its folder goes with it, and the seeds folder stays
+    for (let i = 0; i < 50 && (await exists(dir)); i++) await Bun.sleep(10);
+    expect(await exists(dir)).toBe(false);
+    expect(await exists(s.seeds)).toBe(true);
   });
 
   test("a runner whose fence is not confirmed holds the run in its words, and leaves no folder", async () => {

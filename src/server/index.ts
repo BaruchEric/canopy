@@ -6,12 +6,12 @@ import { PreviewProxy, parsePortRange, previewHostOk, previewable } from "../cor
 import { parsePreviewHost, parsePreviewPublic } from "../core/previewPublic";
 import { listeningPorts, repoOfCwd } from "../core/ports";
 import { existsSync, watch, type FSWatcher } from "node:fs";
-import { chmod, mkdir, readFile, realpath, rm, stat } from "node:fs/promises";
+import { chmod, lstat, mkdir, readFile, realpath, rm, stat } from "node:fs/promises";
 import { arch, homedir, hostname } from "node:os";
 import { CANOPY_DIR, readBuild, readPkg } from "../core/build";
 import { AdviceFiles } from "../core/improvements";
 import { adviceMessage } from "../core/retro";
-import { basename, dirname, join, relative, resolve, sep } from "node:path";
+import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import {
   commit,
   fetchRepo,
@@ -904,6 +904,22 @@ async function startCoordinator(state: ServerState, repo: Repo, goal: string, cl
     if (err instanceof Error && err.name === "StageAwayError") throw err;
     throw new HttpError(400, String(err instanceof Error ? err.message : err));
   }
+}
+
+/** Removes a coordinator's folder, `<CANOPY_COORD_ROOT>/<run id>`, once its
+ *  run has ended or gone: that exact directory under the root and nothing
+ *  else, never a link, and nothing for an id that is not a run id. */
+async function dropCoordFolder(id: string): Promise<void> {
+  const seeds = process.env["CANOPY_COORD_ROOT"]?.trim();
+  if (!seeds || !isAbsolute(seeds) || !/^[0-9a-f]{8}$/.test(id)) return;
+  const dir = join(seeds, id);
+  if (dirname(dir) !== resolve(seeds)) return;
+  try {
+    if (!(await lstat(dir)).isDirectory()) return;
+  } catch {
+    return;
+  }
+  await rm(dir, { recursive: true, force: true }).catch(() => {});
 }
 
 /** A new branch off the default branch, its worktree made, and the setup
@@ -4264,13 +4280,17 @@ export async function startServer(opts: {
       state.prs.onRun(run);
       state.triggers.onRun(run);
       state.coordinator.onRun(run);
-      // a coordinator's token lives exactly as long as its run
-      if (run.action === "coordinate" && !isRunActive(run)) state.callers.dropRun(run.id).catch(() => {});
+      // a coordinator's token and folder live exactly as long as its run
+      if (run.action === "coordinate" && !isRunActive(run)) {
+        state.callers.dropRun(run.id).catch(() => {});
+        void dropCoordFolder(run.id);
+      }
     },
     onGone: (id) => {
       broadcast(state, { type: "run-gone", id });
       state.chan.forget(id);
       state.callers.dropRun(id).catch(() => {});
+      void dropCoordFolder(id);
     },
     // Re-read status directly rather than waiting on the watcher's
     // debounce: the card and the run's outcome should agree at once.

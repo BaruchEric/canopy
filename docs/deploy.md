@@ -883,7 +883,8 @@ action is refused with 409 and `/api/about` says `coordinator: false` too.
 from `stages`:
 
 - its root is `~/.local/share/canopy-coord/seeds`, where canopy makes a 0700
-  folder per run (`<seeds>/<run id>`) and starts the run there; it mounts
+  folder per run (`<seeds>/<run id>`), starts the run there, and removes the
+  folder when the run ends or is deleted; it mounts
   nothing of the workspace, the incubator or `.shared`;
 - its own claude and codex logins, `~/.config/canopy-coord/claude` and
   `~/.config/canopy-coord/codex`, never the stages' or the host's;
