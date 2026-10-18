@@ -7,6 +7,8 @@ import { allRuns, attentionCount, capsFor, homeConn, pickedIds, useStore, waitin
 import { WAITING_GLYPH, WAITING_PANEL } from "../waiting";
 import { CLI_GLYPH } from "../cli";
 import { onBeat } from "../live";
+import { useFitPop } from "../pop";
+import { escapeCloses } from "../surface";
 import { NARROW, PHONE, useMedia } from "../media";
 import { effectivePrimary, isRunActive, WS_COLORS, type RunAction, type Workspace } from "../../../src/core/types";
 import { isHome } from "../registry";
@@ -18,7 +20,6 @@ import { buildMoved, versionLine } from "../../../src/core/version";
 import { isOwnCode } from "../callerToken";
 import { FilterMenu } from "./Filters";
 import { Gear, type GearEntry, type GearGroup } from "./Gear";
-import { Seg } from "./Seg";
 import { SettingsMenu } from "./Settings";
 import { BackendsChip } from "./Backends";
 import { ChanChip } from "./Chan";
@@ -79,7 +80,7 @@ const SORT = [
   },
   { value: "name", label: "name", title: "One flat list, a to z" },
   { value: "user", label: "user", title: "By the git identity each repo commits as" },
-  { value: "favorites", label: "★", title: "Favorites first, then everything else, each newest change first" },
+  { value: "favorites", label: "★ favorites", title: "Favorites first, then everything else, each newest change first" },
 ] as const;
 
 /** Live runs across the grove. Absent when nothing is going; a click opens
@@ -391,17 +392,83 @@ function SelectPill() {
   );
 }
 
-function SortSeg() {
+/** The grouping as one word, the one in use; the rest are a click away, each
+ *  with the line that says what it does. `s` steps through them. */
+function SortMenu() {
   const sort = useStore((s) => s.settings.sort);
   const setSetting = useStore((s) => s.setSetting);
+  const [open, setOpen] = useState(false);
+  const ref = useRef<HTMLDivElement>(null);
+  useFitPop(ref, open);
+
+  useEffect(() => {
+    if (!open) return;
+    const onDown = (e: PointerEvent) => {
+      if (!ref.current?.contains(e.target as Node)) setOpen(false);
+    };
+    const onKey = (e: KeyboardEvent) => {
+      escapeCloses(e, () => setOpen(false));
+    };
+    document.addEventListener("pointerdown", onDown);
+    window.addEventListener("keydown", onKey);
+    return () => {
+      document.removeEventListener("pointerdown", onDown);
+      window.removeEventListener("keydown", onKey);
+    };
+  }, [open]);
+
+  const current = SORT.find((o) => o.value === sort) ?? SORT[0];
   return (
-    <Seg
-      className="seg-sort"
-      label="Group repos by"
-      value={sort}
-      options={SORT}
-      onChange={(v) => setSetting("sort", v)}
-    />
+    <div className="settings sort-menu" ref={ref}>
+      <button
+        type="button"
+        className={open ? "pill open" : "pill"}
+        aria-expanded={open}
+        aria-haspopup="dialog"
+        title={`Grouped by ${current.label}: ${current.title} (s for the next)`}
+        onClick={() => setOpen(!open)}
+      >
+        <svg
+          width="13"
+          height="13"
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke="currentColor"
+          strokeWidth="2.2"
+          strokeLinecap="round"
+          strokeLinejoin="round"
+          aria-hidden="true"
+        >
+          <path d="M7 4v16M3 8l4-4 4 4M17 20V4M13 16l4 4 4-4" />
+        </svg>
+        {current.label}
+      </button>
+      {open && (
+        <div className="settings-pop sort-pop" role="dialog" aria-label="Group repos by">
+          <section className="settings-row">
+            <h3 className="panel-label">group by</h3>
+            <div className="sort-list" role="radiogroup" aria-label="Group repos by">
+              {SORT.map((o) => (
+                <button
+                  key={o.value}
+                  type="button"
+                  role="radio"
+                  aria-checked={o.value === sort}
+                  onClick={() => {
+                    setSetting("sort", o.value);
+                    setOpen(false);
+                  }}
+                >
+                  <span className="sort-name">{o.label}</span>
+                  <span className="sort-what">{o.title}</span>
+                </button>
+              ))}
+            </div>
+            <p className="settings-hint">s steps to the next one from anywhere on the page.</p>
+          </section>
+        </div>
+      )}
+    </div>
   );
 }
 
@@ -481,8 +548,8 @@ function RescanButton() {
   return (
     <button
       type="button"
-      className={scanning ? "mini rescan busy" : "mini rescan"}
-      title="Walk every folder again for repos"
+      className={scanning ? "icon-btn rescan busy" : "icon-btn rescan"}
+      title={scanning ? "Scanning every folder for repos…" : "Rescan: walk every folder again for repos"}
       aria-label={scanning ? "scanning" : "rescan"}
       onClick={() => void doRescan()}
       disabled={scanning}
@@ -493,7 +560,7 @@ function RescanButton() {
         viewBox="0 0 24 24"
         fill="none"
         stroke="currentColor"
-        strokeWidth="2.4"
+        strokeWidth="2"
         strokeLinecap="round"
         strokeLinejoin="round"
         aria-hidden="true"
@@ -501,7 +568,6 @@ function RescanButton() {
         <path d="M20 11a8 8 0 1 0-2.3 5.7" />
         <path d="M20 4v7h-7" />
       </svg>
-      <span className="rescan-word">{scanning ? "scanning…" : "rescan"}</span>
     </button>
   );
 }
@@ -645,27 +711,14 @@ function WaitingButton() {
   );
 }
 
-/** Who else is here and what is running: each chip is absent when it has
- *  nothing to say. A phone keeps the tasks' chip and the inbox on its first
- *  row instead, where a thumb finds them without scrolling. */
-function Chips({ phone = false }: { phone?: boolean }) {
+/** A run of controls that belong together. The bar draws a hairline between
+ *  one run and the next on a row, and a run whose chips all have nothing to
+ *  say takes no room. */
+function Cluster({ label, children }: { label: string; children: ReactNode }) {
   return (
-    <>
-      <ReloadChip />
-      {!phone && <SignInChips />}
-      <PeersChip />
-      <BackendsChip />
-      <KeptShells />
-      <ShellsChip />
-      {!phone && <TasksChip />}
-      {!phone && <RangerChip />}
-      <DevicesChip />
-      {!phone && <InboxChip />}
-      {!phone && <CliButton />}
-      {!phone && <WaitingButton />}
-      {!phone && <HealthChip />}
-      <ChanChip />
-    </>
+    <span className="tb-cluster" role="group" aria-label={label}>
+      {children}
+    </span>
   );
 }
 
@@ -673,7 +726,9 @@ function Chips({ phone = false }: { phone?: boolean }) {
  *  window as wide as a laptop's gets two rows, the views and the scope
  *  above the grouping and the filters; a phone gets three short ones, the
  *  views and the few buttons a thumb reaches for first, then the filter
- *  box, then everything else in one row that scrolls sideways. */
+ *  box, then everything else in one row that scrolls sideways. On both the
+ *  chips come in runs: what wants you, what is running, and the backend
+ *  itself, each chip absent when it has nothing to say. */
 export function TopBar({ nav }: { nav?: ReactNode }) {
   const phone = useMedia(PHONE);
 
@@ -685,19 +740,21 @@ export function TopBar({ nav }: { nav?: ReactNode }) {
           <Wordmark />
           {nav}
           <span className="spacer" />
-          {/* the tasks' chip stays in reach with a repo open, when the rows
-              under this one go: it brings a task to the front from anywhere */}
           <SignInChips />
           <ReloadChip />
-          <TasksChip />
-          <RangerChip compact />
-          <HealthChip />
-          <InboxChip />
-          <CliButton />
-          <WaitingButton />
-          <LiveDot />
-          <SearchButton />
-          <SettingsMenu />
+          {/* few enough that the views keep room to show: what waits on you
+              and the tasks stay in reach with a repo open, when the rows
+              under this one go (the tasks' chip brings a task to the front
+              from anywhere); the rest ride in the row that scrolls */}
+          <Cluster label="Waiting and tasks">
+            <WaitingButton />
+            <TasksChip />
+          </Cluster>
+          <Cluster label="This page">
+            <LiveDot />
+            <SearchButton />
+            <SettingsMenu />
+          </Cluster>
         </div>
         <div className="tb-line tb-tools">
           <FilterBox />
@@ -705,15 +762,36 @@ export function TopBar({ nav }: { nav?: ReactNode }) {
           <FilterMenu />
         </div>
         <div className="tb-line tb-tools tb-scroll">
-          <NewProjectButton />
-          <SortSeg />
-          <SelectPill />
-          <RunsPill />
-          <FeedButton />
-          <RescanButton />
-          <SourcesMenu />
+          <Cluster label="Make">
+            <NewProjectButton />
+            <SelectPill />
+          </Cluster>
+          <Cluster label="Show">
+            <SortMenu />
+            <FeedButton />
+            <CliButton />
+          </Cluster>
+          <Cluster label="Scanned folders">
+            <SourcesMenu />
+            <RescanButton />
+          </Cluster>
           <WsTabs />
-          <Chips phone />
+          <Cluster label="For you">
+            <InboxChip />
+            <ChanChip />
+          </Cluster>
+          <Cluster label="Running">
+            <RunsPill />
+            <ShellsChip />
+            <KeptShells />
+            <RangerChip compact />
+          </Cluster>
+          <Cluster label="This backend">
+            <BackendsChip />
+            <PeersChip />
+            <DevicesChip />
+            <HealthChip />
+          </Cluster>
         </div>
       </header>
     );
@@ -724,32 +802,61 @@ export function TopBar({ nav }: { nav?: ReactNode }) {
       <SideToggle />
       <Wordmark version />
       {nav}
-      <SourcesMenu />
+      <Cluster label="Scanned folders">
+        <SourcesMenu />
+        <RescanButton />
+      </Cluster>
       <WsTabs />
 
       <span className="spacer" />
 
-      {/* feed, search and select wrap as one, so a narrow bar never splits them */}
+      {/* the finders and the makers wrap as one, so a narrow bar never splits them */}
       <span className="topbar-group">
-        <LiveDot />
-        <FeedButton />
-        <SearchButton />
-        <NewProjectButton />
-        <SelectPill />
+        <Cluster label="Find">
+          <SearchButton />
+          <CliButton />
+          <FeedButton />
+        </Cluster>
+        <Cluster label="Make">
+          <NewProjectButton />
+          <SelectPill />
+        </Cluster>
       </span>
       <span className="topbar-break" aria-hidden="true" />
 
-      <SortSeg />
-      <RunsPill />
-      <AttentionPill />
-      <FilterMenu />
-      <FilterBox />
+      <Cluster label="Show">
+        <SortMenu />
+        <AttentionPill />
+        <FilterMenu />
+        <FilterBox />
+      </Cluster>
 
-      {/* rescan and the chips keep to the right end of whichever row they land on */}
+      {/* the chips keep to the right end of whichever row they land on */}
       <span className="topbar-group topbar-tail">
-        <RescanButton />
-        <Chips />
-        <SettingsMenu />
+        <SignInChips />
+        <ReloadChip />
+        <Cluster label="For you">
+          <WaitingButton />
+          <InboxChip />
+          <ChanChip />
+        </Cluster>
+        <Cluster label="Running">
+          <RunsPill />
+          <ShellsChip />
+          <KeptShells />
+          <TasksChip />
+          <RangerChip />
+        </Cluster>
+        <Cluster label="This backend">
+          <LiveDot />
+          <BackendsChip />
+          <PeersChip />
+          <DevicesChip />
+          <HealthChip />
+        </Cluster>
+        <Cluster label="Settings">
+          <SettingsMenu />
+        </Cluster>
       </span>
     </header>
   );

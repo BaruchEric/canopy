@@ -122,7 +122,7 @@ function RangerBlock({ backend, info, close, showBackend }: { backend: string; i
 
 /**
  * The ranger in the top bar: there only while a shown backend has one on,
- * the glyph alone where room is short (a phone's first row).
+ * the glyph alone where room is short (a phone's bar).
  * Moss while it runs, rust while it needs someone (gave up, the trust
  * prompt, its handle taken, or waiting on an answer). Open, each backend's
  * ranger with what it is doing and its wakes.
