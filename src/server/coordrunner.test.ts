@@ -1,7 +1,8 @@
 /**
  * The server's side of the coordinator's runner (FR-010): /api/about's flag,
  * a coordinate run's own folder under the runner's seeds and its start
- * there, and the origin gate on the address a coordinator calls canopy at.
+ * there, the origin gate on the address a coordinator calls canopy at, the
+ * refusal outside enforce, and the coordinator's lane.
  * The runner is a stand-in client and the harness a driver that runs
  * nothing, so nothing here needs docker or a claude login.
  */
@@ -12,9 +13,10 @@ import { join } from "node:path";
 import type { DriveCtx, RunDriver } from "../core/driver";
 import type { StageClient } from "../core/stageclient";
 import type { About, Harness, Run } from "../core/types";
+import { CallerBook } from "./callers";
 import { startServer } from "./index";
 
-const ENV = ["CANOPY_CONFIG_DIR", "CANOPY_TMUX", "CANOPY_BIND", "CANOPY_CALLERS", "CANOPY_COORD_SOCKET", "CANOPY_COORD_API", "CANOPY_COORD_ROOT"];
+const ENV = ["CANOPY_CONFIG_DIR", "CANOPY_TMUX", "CANOPY_BIND", "CANOPY_CALLERS", "CANOPY_COORD_SOCKET", "CANOPY_COORD_API", "CANOPY_COORD_ROOT", "CANOPY_COORD_NET"];
 const saved: Record<string, string | undefined> = {};
 let scratch = "";
 
@@ -55,7 +57,6 @@ beforeAll(async () => {
   scratch = await mkdtemp(join(tmpdir(), "canopy-coordrunner-"));
   for (const k of ENV) saved[k] = process.env[k];
   process.env["CANOPY_TMUX"] = "0";
-  process.env["CANOPY_CALLERS"] = "off";
   delete process.env["CANOPY_BIND"];
   const repo = join(scratch, "root", "app");
   await Bun.$`mkdir -p ${repo} && git -C ${repo} init -q`.quiet();
@@ -68,14 +69,20 @@ afterAll(async () => {
   await rm(scratch, { recursive: true, force: true });
 });
 
-type Up = { port: number; stop: () => Promise<void>; made: Recorder[]; seeds: string };
+type Up = { port: number; stop: () => Promise<void>; made: Recorder[]; seeds: string; page: string };
 
+/** A server with its own config dir, in enforce unless `env` says otherwise,
+ *  with a page token minted into its book before it starts. */
 async function up(name: string, client: StageClient | null, env: Record<string, string> = {}): Promise<Up> {
-  process.env["CANOPY_CONFIG_DIR"] = join(scratch, name);
+  const config = join(scratch, name);
+  process.env["CANOPY_CONFIG_DIR"] = config;
+  const book = new CallerBook({ file: join(config, "callers.json") });
+  const page = book.mint("page", { label: "a page" }).token;
+  await book.flush();
   const seeds = join(scratch, `${name}-seeds`);
   await mkdir(seeds);
-  for (const k of ["CANOPY_COORD_SOCKET", "CANOPY_COORD_API", "CANOPY_COORD_ROOT"]) delete process.env[k];
-  Object.assign(process.env, { CANOPY_COORD_ROOT: seeds, ...env });
+  for (const k of ["CANOPY_COORD_SOCKET", "CANOPY_COORD_API", "CANOPY_COORD_ROOT", "CANOPY_COORD_NET"]) delete process.env[k];
+  Object.assign(process.env, { CANOPY_CALLERS: "enforce", CANOPY_COORD_ROOT: seeds, ...env });
   const made: Recorder[] = [];
   const s = await startServer({
     root: join(scratch, "root"),
@@ -89,11 +96,23 @@ async function up(name: string, client: StageClient | null, env: Record<string, 
       },
     },
   });
-  return { ...s, made, seeds };
+  return { ...s, made, seeds, page };
 }
 
 const about = async (s: Up, host?: string): Promise<Response> =>
   fetch(`http://127.0.0.1:${s.port}/api/about`, host ? { headers: { host } } : {});
+
+const call = (s: Up, path: string, token?: string, init: RequestInit = {}): Promise<Response> => {
+  const headers = new Headers(init.headers);
+  if (token) headers.set("x-canopy-token", token);
+  return fetch(`http://127.0.0.1:${s.port}${path}`, { ...init, headers });
+};
+
+const postAs = (s: Up, path: string, body: unknown, token?: string): Promise<Response> =>
+  call(s, path, token, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
+
+const API = "http://10.250.14.1:7850";
+const COORD_ENV = { CANOPY_COORD_SOCKET: "/run/canopy-coord/runner.sock", CANOPY_COORD_API: API };
 
 describe("without a coordinator's runner", () => {
   let s: Up;
@@ -107,12 +126,40 @@ describe("without a coordinator's runner", () => {
   });
 });
 
+describe("with a coordinator's runner, outside enforce", () => {
+  for (const mode of ["log", "off"]) {
+    test(`${mode}: /api/about says no coordinator, and a coordinate run is refused saying why`, async () => {
+      const s = await up(`unsafe-${mode}`, fakeRunner({ answers: true, fenced: true }), { ...COORD_ENV, CANOPY_CALLERS: mode });
+      try {
+        expect(((await (await about(s)).json()) as About).coordinator).toBe(false);
+        const res = await postAs(s, "/api/repos/run?id=app", { action: "coordinate", note: "ship it" }, s.page);
+        expect(res.status).toBe(409);
+        expect(((await res.json()) as { error: string }).error).toContain("CANOPY_CALLERS=enforce");
+        expect(await readdir(s.seeds)).toEqual([]);
+      } finally {
+        await s.stop();
+      }
+    });
+  }
+
+  test("a CANOPY_COORD_NET that is no network keeps coordinators off too", async () => {
+    const s = await up("badnet", fakeRunner({ answers: true, fenced: true }), { ...COORD_ENV, CANOPY_COORD_NET: "10.250.14.0/99" });
+    try {
+      expect(((await (await about(s)).json()) as About).coordinator).toBe(false);
+      const res = await postAs(s, "/api/repos/run?id=app", { action: "coordinate", note: "ship it" }, s.page);
+      expect(res.status).toBe(409);
+      expect(((await res.json()) as { error: string }).error).toContain("CANOPY_COORD_NET");
+    } finally {
+      await s.stop();
+    }
+  });
+});
+
 describe("with a coordinator's runner", () => {
   const state = { answers: true, fenced: true };
-  const API = "http://10.250.14.1:7850";
   let s: Up;
   beforeAll(async () => {
-    s = await up("coord", fakeRunner(state), { CANOPY_COORD_SOCKET: "/run/canopy-coord/runner.sock", CANOPY_COORD_API: API });
+    s = await up("coord", fakeRunner(state), COORD_ENV);
   });
   afterAll(() => s.stop());
 
@@ -135,11 +182,7 @@ describe("with a coordinator's runner", () => {
   });
 
   test("a coordinate run starts in a folder of its own under the seeds, 0700, with the address and a token", async () => {
-    const res = await fetch(`http://127.0.0.1:${s.port}/api/repos/run?id=app`, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ action: "coordinate", note: "ship it" }),
-    });
+    const res = await postAs(s, "/api/repos/run?id=app", { action: "coordinate", note: "ship it" }, s.page);
     expect(res.status).toBe(201);
     const run = (await res.json()) as Run;
     const ctx = s.made.at(-1)?.ctx;
@@ -147,12 +190,17 @@ describe("with a coordinator's runner", () => {
     expect(ctx?.cwd).toBe(dir);
     expect((await stat(dir)).mode & 0o777).toBe(0o700);
     expect(ctx?.pass?.["CANOPY_API"]).toBe(API);
-    expect(ctx?.pass?.["CANOPY_TOKEN"]).toMatch(/\S/);
-    const stopped = await fetch(`http://127.0.0.1:${s.port}/api/runs/stop`, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ id: run.id }),
-    });
+    const token = ctx?.pass?.["CANOPY_TOKEN"] ?? "";
+    expect(token).toMatch(/\S/);
+    // the token keeps to the lane from any address: the brief's reads and its plan
+    expect((await call(s, "/api/runs", token)).status).toBe(200);
+    expect((await call(s, "/api/tree", token)).status).toBe(200);
+    expect((await call(s, "/api/repos/diff?id=app&untracked=1&file=.env", token)).status).toBe(403);
+    expect((await call(s, "/api/flows", token)).status).toBe(403);
+    const plan = await postAs(s, "/api/coordinator/plan", { tasks: [{ title: "t", repo: "app", note: "n", action: "ask" }] }, token);
+    expect(plan.status).toBe(200);
+    expect((await postAs(s, "/api/coordinator/start", { run: run.id }, token)).status).toBe(403);
+    const stopped = await postAs(s, "/api/runs/stop", { id: run.id }, s.page);
     expect(((await stopped.json()) as Run).status).not.toBe("working");
   });
 
@@ -160,16 +208,43 @@ describe("with a coordinator's runner", () => {
     state.fenced = false;
     const before = await readdir(s.seeds);
     try {
-      const res = await fetch(`http://127.0.0.1:${s.port}/api/repos/run?id=app`, {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ action: "coordinate", note: "again" }),
-      });
+      const res = await postAs(s, "/api/repos/run?id=app", { action: "coordinate", note: "again" }, s.page);
       expect(res.status).toBe(503);
       expect(((await res.json()) as { error: string }).error).toContain("the fence is unchecked");
       expect(await readdir(s.seeds)).toEqual(before);
     } finally {
       state.fenced = true;
     }
+  });
+});
+
+describe("the coordinator's lane", () => {
+  let s: Up;
+  beforeAll(async () => {
+    // every local call is from the coordinator's network here
+    s = await up("lane", fakeRunner({ answers: true, fenced: true }), { ...COORD_ENV, CANOPY_COORD_NET: "127.0.0.0/8" });
+  });
+  afterAll(() => s.stop());
+
+  test("a call from its network without a coordinator's token is refused, a page's token or none, on any path", async () => {
+    for (const path of ["/api/about", "/api/runs", "/api/repos/diff?id=app&untracked=1&file=.env", "/api/events", "/library", "/"]) {
+      for (const token of [undefined, s.page]) {
+        const res = await call(s, path, token);
+        expect([path, token ? "page" : "none", res.status]).toEqual([path, token ? "page" : "none", 403]);
+      }
+    }
+    expect((await postAs(s, "/api/repos/run?id=app", { action: "ask", note: "x" }, s.page)).status).toBe(403);
+  });
+
+  test("a shell socket from its network does not open", async () => {
+    const q = new URLSearchParams({ id: "app", term: "fedcba9876543210fedcba9876543210", place: "strip", cols: "80", rows: "24" });
+    const ws = new WebSocket(`ws://127.0.0.1:${s.port}/api/term?${q}`);
+    const opened = await new Promise<boolean>((resolve) => {
+      ws.onopen = () => resolve(true);
+      ws.onerror = () => resolve(false);
+      ws.onclose = () => resolve(false);
+    });
+    if (opened) ws.close();
+    expect(opened).toBe(false);
   });
 });

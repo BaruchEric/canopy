@@ -203,7 +203,7 @@ import { TriggerHub, type StartOutcome } from "./triggers";
 import { CoordinatorHub, type ChildStart } from "./coordinator";
 import { takeTriggerSecrets } from "../core/envnames";
 import { triggerPlan, type TriggerEvent } from "../core/trigger";
-import { authRoute, CallerBook, callerOf, CallerGate, callersMode, type Caller } from "./callers";
+import { authRoute, CallerBook, callerOf, CallerGate, callersMode, coordinatorRefusal, coordLane, type Caller } from "./callers";
 import { getPeers, PeerError, postPeersSync, postRepoPeer, queuePass, withPeering, type PeerDeps } from "./peers";
 import { fixPrompt, landWord } from "../core/landing";
 import { GATES_CHECK, readGates } from "../core/gates";
@@ -871,6 +871,8 @@ async function startCoordinator(state: ServerState, repo: Repo, goal: string, cl
   if (repo.forge) throw new HttpError(400, `${repo.name} is on the forge; a coordinator starts at a repo on this machine`);
   if (isSeedPath(state.root, repo.path)) throw new HttpError(400, SEED_AGENT_REFUSAL);
   if (!process.env["CANOPY_COORD_SOCKET"]) throw new HttpError(409, COORD_REFUSAL);
+  const unsafe = coordinatorRefusal(state.gate.mode, coordLane().error);
+  if (unsafe) throw new HttpError(409, unsafe);
   const api = process.env["CANOPY_COORD_API"]?.trim();
   if (!api) throw new HttpError(409, "CANOPY_COORD_API is not set, so a coordinator would have no address to reach canopy at");
   if (!goal.trim()) throw new HttpError(400, "write the goal first");
@@ -4167,6 +4169,11 @@ export async function startServer(opts: {
   // socket; none, and every coordinate run is refused
   const coordSocket = process.env["CANOPY_COORD_SOCKET"];
   const coord: StageClient | null = opts.coordinator?.client !== undefined ? opts.coordinator.client : coordSocket ? new StageClient(coordSocket) : null;
+  // read once: the gate's mode, which a coordinator needs to be enforce, and
+  // the coordinator's network, the lane at the top of route()
+  const callerMode = callersMode();
+  const coordNet = coordLane();
+  if (coordNet.error) console.warn(`callers: ${coordNet.error}`);
   /** why the coordinator's runner may not start one though it answers: its
    *  fence is not confirmed, in its own words; null once it is */
   const coordUnfenced = (): string | null => {
@@ -4410,7 +4417,7 @@ export async function startServer(opts: {
       homepage: readPkg().homepage ?? null,
       // read at each /api/about: a runner set up that has answered a hello
       get coordinator(): boolean {
-        return coord !== null && coord.harnessesNow() !== null;
+        return coord !== null && coordinatorRefusal(callerMode, coordNet.error) === null && coord.harnessesNow() !== null;
       },
     },
     sources: [runtime(launchSource(root)), ...extras.map((s) => runtime({ ...s, launch: false }))],
@@ -4641,7 +4648,9 @@ export async function startServer(opts: {
     callerSockets: new Set(),
     gate: new CallerGate({
       book: callers,
-      mode: callersMode(),
+      mode: callerMode,
+      lane: coordNet.net,
+      laneHost: coord ? coordApiHost(process.env["CANOPY_COORD_API"]) : null,
       log: opts.callersLog ?? (process.env["NODE_ENV"] === "test" ? () => {} : (line) => console.log(line)),
       onPairs: (pending) => broadcast(state, { type: "auth", pending }),
       // the check is polled; the first refusal is worth a probe at once
@@ -4872,6 +4881,9 @@ export async function startServer(opts: {
     // The pairing routes wait until after the origin gate: a rebound or
     // foreign page must not read the callers or fill the pair slots.
     const caller = callerOf(state.callers, req, url);
+    // the coordinator's lane goes first, in every mode
+    const laned = state.gate.lane(req, url, caller, srv.requestIP(req)?.address ?? "");
+    if (laned) return laned;
     const denied = state.gate.gate(req, url, caller);
     if (denied) return denied;
     if (url.pathname === "/api/library" || url.pathname === "/library" || url.pathname.startsWith("/library/")) return library.handle(req);

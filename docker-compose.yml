@@ -386,6 +386,10 @@ services:
       # folder.
       - CANOPY_COORD_SOCKET=${CANOPY_COORD_SOCKET:-}
       - CANOPY_COORD_API=${CANOPY_COORD_API:-}
+      # the coordinator's lane: coord-net (10.250.14.0/24) from .env. A call
+      # from it needs a coordinator's token and reaches only the brief's
+      # reads and the plan. Empty, there is no lane (docs/deploy.md)
+      - CANOPY_COORD_NET=${CANOPY_COORD_NET:-}
       - CANOPY_COORD_ROOT=${HOST_HOME:-/home/eric}/.local/share/canopy-coord/seeds
       # the secrets service's socket (secrets-sock below); set on this
       # backend alone, so its hub relays to the service instead of reading a
