@@ -100,10 +100,10 @@ export interface RunnerOptions {
    *  runner's absence by default, or the env to set when none is set up */
   stageAway?: () => string;
   /** The coordinator's runner, a second stage runner, for a coordinate
-   *  run: null while it is away or not set up, so the run refuses with
-   *  `StageAwayError`, and undefined only where no server set it (tests).
-   *  Asked once per coordinate run, at its start. */
-  coordExec?: () => StageClient | null | undefined;
+   *  run. Null while it is away or not set up, and an unset option alike,
+   *  refuse the run with `StageAwayError`: a coordinator never runs here,
+   *  unisolated. Asked once per coordinate run, at its start. */
+  coordExec?: () => StageClient | null;
   /** why a coordinate run cannot start when `coordExec` gives null */
   coordAway?: () => string;
   /** how long a stage run's end waits for the runner to call its seed
@@ -294,7 +294,7 @@ export class Runner {
     if (branch && stage) throw new Error("an incubator stage works in its seed, not on a branch");
     const cwd = branch ? branch.branch.dir : repo.path;
     // a coordinator runs through its own runner, never the stages'
-    const client = coordinate ? this.opts.coordExec?.() : stage && this.opts.stageExec ? this.opts.stageExec() : undefined;
+    const client = coordinate ? (this.opts.coordExec?.() ?? null) : stage && this.opts.stageExec ? this.opts.stageExec() : undefined;
     if (client === null) throw new StageAwayError(coordinate ? this.opts.coordAway?.() : this.opts.stageAway?.());
     const make = this.opts.driver ?? ((h: Harness) => defaultDriver(h, this.opts.version));
     const driver = make(agent.harness);

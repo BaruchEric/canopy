@@ -175,6 +175,11 @@ describe("allows", () => {
     expect(allows("helper", "read")).toBe(false);
   });
 
+  test("plan is the coordinator's, and comes with operate", () => {
+    for (const kind of ["coordinator", "page", "cli", "shell", "ranger"] as const) expect([kind, allows(kind, "plan")]).toEqual([kind, true]);
+    for (const kind of ["none", "helper"] as const) expect([kind, allows(kind, "plan")]).toEqual([kind, false]);
+  });
+
   test("open is allowed to every kind", () => {
     expect(allows("none", "open")).toBe(true);
   });

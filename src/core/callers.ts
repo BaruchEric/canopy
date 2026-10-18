@@ -27,9 +27,11 @@ export const KIND_RIGHTS: Record<CallerKind, readonly Right[]> = {
   none: ["read"],
 };
 
-/** `open` routes are the ones pairing needs before a caller has a token. */
+/** `open` routes are the ones pairing needs before a caller has a token.
+ *  Whoever may operate may also plan: a page or the CLI posts a plan for any
+ *  coordinator, which a coordinator's own token may do for its run alone. */
 export const allows = (kind: CallerKind, right: Right | "open"): boolean =>
-  right === "open" || KIND_RIGHTS[kind].includes(right);
+  right === "open" || KIND_RIGHTS[kind].includes(right) || (right === "plan" && KIND_RIGHTS[kind].includes("operate"));
 
 type Rule = { methods: readonly string[]; paths: readonly string[]; right: Right | "open" };
 

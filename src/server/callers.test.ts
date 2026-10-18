@@ -454,4 +454,14 @@ describe("a coordinator at the gate", () => {
       expect([m, p, at(m, p)]).toEqual([m, p, 403]);
     }
   });
+
+  test("a page may post a plan too, and a bare caller may not", () => {
+    const book = open();
+    const page = book.check(book.mint("page", { label: "a page" }).token);
+    const gate = new CallerGate({ book, mode: "enforce", log: () => {} });
+    const post = (caller: typeof page): number | null =>
+      gate.gate(new Request("http://x/api/coordinator/plan", { method: "POST" }), new URL("http://x/api/coordinator/plan"), caller)?.status ?? null;
+    expect(post(page)).toBeNull();
+    expect(post(null)).toBe(401);
+  });
 });

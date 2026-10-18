@@ -60,7 +60,7 @@ const CHANGED: RepoStatus = {
   user: null,
 };
 
-function setup(opts: RunnerOptions = {}) {
+function setupRunner(opts: RunnerOptions = {}) {
   const made: FakeDriver[] = [];
   const changes: Run[] = [];
   const runner = new Runner(
@@ -81,6 +81,7 @@ function setup(opts: RunnerOptions = {}) {
   };
   return { runner, made, changes, ctxOf };
 }
+const setup = setupRunner;
 
 const flush = () => new Promise<void>((r) => setTimeout(r, 0));
 
@@ -145,6 +146,15 @@ describe("a run's own extras", () => {
 
 describe("a coordinate run", () => {
   const coord = { ...ACTIONS.coordinate, task: "Task: coordinate." };
+  /** the coordinator's runner as far as a FakeDriver needs one: it never spawns */
+  const coordClient = { harnessesNow: () => ["claude"], spawn: (() => { throw new Error("no spawn"); }) as RpcSpawn } as unknown as StageClient;
+  const setup = (opts: RunnerOptions = {}) => setupRunner({ coordExec: () => coordClient, ...opts });
+
+  test("never runs here: without a coordinator's runner it refuses before a run exists", () => {
+    const { runner } = setupRunner();
+    expect(() => runner.start(repo("a"), "coordinate", coord, "ship it", DEFAULT_AGENT)).toThrow(StageAwayError);
+    expect(runner.list()).toEqual([]);
+  });
 
   test("holds no repo: a plain run starts beside it either way round, and activeFor skips it", () => {
     const { runner } = setup();
@@ -172,6 +182,7 @@ describe("a coordinate run", () => {
     const runner = new Runner(
       { onChange: () => {}, onGone: () => {}, status: async () => ((reads += 1), CHANGED) },
       {
+        coordExec: () => coordClient,
         driver: (h) => {
           const d = new FakeDriver(h);
           made.push(d);

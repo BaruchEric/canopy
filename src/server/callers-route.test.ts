@@ -197,6 +197,20 @@ describe("enforce", () => {
     expect(branch.status).toBe(400);
   });
 
+  test("with the coordinator's env set but no runner to take it, a coordinate run waits and nothing starts", async () => {
+    process.env["CANOPY_COORD_SOCKET"] = "/nonexistent/runner.sock";
+    process.env["CANOPY_COORD_API"] = "http://10.250.14.1:7850";
+    try {
+      const res = await post(s, "/api/repos/run?id=app", { action: "coordinate", note: "ship it" }, shell);
+      expect(res.status).toBe(503);
+      const runs = (await (await call(s, "/api/runs")).json()) as { action: string }[];
+      expect(runs.filter((r) => r.action === "coordinate")).toEqual([]);
+    } finally {
+      delete process.env["CANOPY_COORD_SOCKET"];
+      delete process.env["CANOPY_COORD_API"];
+    }
+  });
+
   test("the health check says enforce", async () => {
     const checks = ((await (await call(s, "/api/health")).json()) as { checks: HealthCheck[] }).checks;
     const c = checks.find((x) => x.id === "canopy:callers");
@@ -221,9 +235,9 @@ describe("a coordinator's token from before a restart", () => {
   });
 
   test("is dropped at start, and a caller of another kind is kept", async () => {
-    // unknown to the book is a 401; a known caller without the right is a 403
-    expect((await post(s, "/api/coordinator/plan", { run: "gone1234", tasks: [] }, coordinator)).status).toBe(401);
-    expect((await post(s, "/api/coordinator/plan", { run: "gone1234", tasks: [] }, ranger)).status).toBe(403);
+    // an admin route neither holds: unknown to the book is a 401, a known caller without the right a 403
+    expect((await post(s, "/api/agents/role", {}, coordinator)).status).toBe(401);
+    expect((await post(s, "/api/agents/role", {}, ranger)).status).toBe(403);
   });
 });
 
