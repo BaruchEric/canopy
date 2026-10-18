@@ -21,8 +21,12 @@ const RANGES = [
   "255.255.255.255/32",
   "0.0.0.0/8",
 ];
-const V4 = RANGES.map((d) => `-i ${BRIDGE} -d ${d} -j DROP`);
-const V6 = [`-i ${BRIDGE} -j DROP`];
+const COORD = "br-canopy-crd";
+const drops = (bridge: string) => RANGES.map((d) => `-i ${bridge} -d ${d} -j DROP`);
+const ACCEPT = `-i ${COORD} -d 10.250.14.1/32 -p tcp --dport 7850 -j ACCEPT`;
+/** every v4 rule, in the order the script prints and inserts them */
+const V4 = [...drops(BRIDGE), ...drops(COORD), ACCEPT];
+const V6 = [`-i ${BRIDGE} -j DROP`, `-i ${COORD} -j DROP`];
 const SBIN = "usr/local/sbin/canopy-stages-fence";
 const UNIT = "etc/systemd/system/canopy-stages-fence.service";
 
@@ -40,7 +44,8 @@ function run(script: string, args: string[], env: Record<string, string> = {}) {
 const lines = (f: string) => (existsSync(f) ? readFileSync(f, "utf8").split("\n").filter(Boolean) : []);
 
 // a stand-in for iptables or ip6tables over the raw table's PREROUTING,
-// kept as lines in a file, top first; every call is logged
+// kept as lines in a file, top first; every call is logged. -S prints the
+// chain the way iptables does: -d ahead of -i, and -m tcp before --dport.
 function fake(name: string, at = dir): { bin: string; chain: () => string[]; calls: () => string[] } {
   const state = join(at, `${name}.chain`);
   const log = join(at, `${name}.calls`);
@@ -56,6 +61,10 @@ op=$3; chain=$4; shift 4; rule="$*"
 case $op in
   -C) grep -qxF -- "$rule" "${state}" ;;
   -I) { printf '%s\\n' "$rule"; cat "${state}"; } > "${state}.new" && mv "${state}.new" "${state}" ;;
+  -D) grep -qxF -- "$rule" "${state}" || exit 1
+      awk -v r="$rule" '!d && $0 == r { d = 1; next } { print }' "${state}" > "${state}.new" && mv "${state}.new" "${state}" ;;
+  -S) echo "-P PREROUTING ACCEPT"
+      sed -E -e 's/^-i ([^ ]+) -d ([^ ]+)/-d \\2 -i \\1/' -e 's/-p tcp --dport/-p tcp -m tcp --dport/' -e 's/^/-A PREROUTING /' "${state}" ;;
   *) exit 2 ;;
 esac
 `,
@@ -91,11 +100,22 @@ describe("stages-fence.sh", () => {
       return { v4, v6, env: { CANOPY_FENCE_IPTABLES: v4.bin, CANOPY_FENCE_IP6TABLES: v6.bin } };
     }
 
-    test("inserts every drop into raw PREROUTING, v4 and v6", () => {
+    /** the coordinator bridge's rules, top first, as the chain holds them */
+    const coordRules = (chain: string[]) => chain.filter((r) => r.startsWith(`-i ${COORD} `));
+    const sorted = (xs: string[]) => xs.slice().sort();
+
+    test("inserts every rule into raw PREROUTING, v4 and v6", () => {
       const f = both();
       expect(run(SCRIPT, ["--apply"], f.env).code).toBe(0);
-      expect(f.v4.chain().slice().sort()).toEqual(V4.slice().sort());
-      expect(f.v6.chain()).toEqual(V6);
+      expect(sorted(f.v4.chain())).toEqual(sorted(V4));
+      expect(sorted(f.v6.chain())).toEqual(sorted(V6));
+    });
+
+    test("the coordinator's one ACCEPT sits above every drop on its bridge", () => {
+      const f = both();
+      run(SCRIPT, ["--apply"], f.env);
+      expect(coordRules(f.v4.chain())[0]).toBe(ACCEPT);
+      expect(f.v4.chain().filter((r) => r.includes("ACCEPT"))).toEqual([ACCEPT]);
     });
 
     test("a second run only checks", () => {
@@ -103,22 +123,54 @@ describe("stages-fence.sh", () => {
       run(SCRIPT, ["--apply"], f.env);
       const n4 = f.v4.calls().length;
       const n6 = f.v6.calls().length;
+      const before = f.v4.chain();
       expect(run(SCRIPT, ["--apply"], f.env).code).toBe(0);
-      for (const c of [...f.v4.calls().slice(n4), ...f.v6.calls().slice(n6)]) expect(c).toStartWith("-t raw -C PREROUTING ");
-      expect(f.v4.chain()).toHaveLength(V4.length);
-      expect(f.v6.chain()).toEqual(V6);
+      for (const c of [...f.v4.calls().slice(n4), ...f.v6.calls().slice(n6)]) expect(c).toMatch(/^-t raw -[CS] PREROUTING/);
+      expect(f.v4.chain()).toEqual(before);
+      expect(sorted(f.v6.chain())).toEqual(sorted(V6));
     });
 
     test("puts back only the rule that went missing", () => {
       const f = both();
       run(SCRIPT, ["--apply"], f.env);
-      writeFileSync(join(dir, "ipt.chain"), f.v4.chain().filter((r) => !r.includes("224.0.0.0/4")).join("\n") + "\n");
+      const gone = `-i ${BRIDGE} -d 224.0.0.0/4 -j DROP`;
+      writeFileSync(join(dir, "ipt.chain"), f.v4.chain().filter((r) => r !== gone).join("\n") + "\n");
       const n4 = f.v4.calls().length;
       expect(run(SCRIPT, ["--apply"], f.env).code).toBe(0);
-      expect(f.v4.calls().slice(n4).filter((c) => c.includes(" -I "))).toEqual([
-        `-t raw -I PREROUTING -i ${BRIDGE} -d 224.0.0.0/4 -j DROP`,
-      ]);
-      expect(f.v4.chain().slice().sort()).toEqual(V4.slice().sort());
+      expect(f.v4.calls().slice(n4).filter((c) => c.includes(" -I "))).toEqual([`-t raw -I PREROUTING ${gone}`]);
+      expect(sorted(f.v4.chain())).toEqual(sorted(V4));
+    });
+
+    test("a coordinator drop put back goes in on top, and the ACCEPT goes back above it", () => {
+      const f = both();
+      run(SCRIPT, ["--apply"], f.env);
+      const gone = `-i ${COORD} -d 10.0.0.0/8 -j DROP`;
+      writeFileSync(join(dir, "ipt.chain"), f.v4.chain().filter((r) => r !== gone).join("\n") + "\n");
+      expect(run(SCRIPT, ["--apply"], f.env).code).toBe(0);
+      const chain = f.v4.chain();
+      expect(sorted(chain)).toEqual(sorted(V4));
+      expect(coordRules(chain)[0]).toBe(ACCEPT);
+      expect(chain.indexOf(ACCEPT)).toBeLessThan(chain.indexOf(gone));
+    });
+
+    test("an ACCEPT found below the drops, or twice, ends up once and on top", () => {
+      const f = both();
+      // drops on top, then two ACCEPTs under them, as an append would leave it
+      writeFileSync(join(dir, "ipt.chain"), [...drops(BRIDGE), ...drops(COORD), ACCEPT, ACCEPT].join("\n") + "\n");
+      expect(run(SCRIPT, ["--apply"], f.env).code).toBe(0);
+      const chain = f.v4.chain();
+      expect(chain[0]).toBe(ACCEPT);
+      expect(chain.filter((r) => r === ACCEPT)).toHaveLength(1);
+      expect(sorted(chain)).toEqual(sorted(V4));
+    });
+
+    test("an ACCEPT that went missing alone comes back on top", () => {
+      const f = both();
+      run(SCRIPT, ["--apply"], f.env);
+      writeFileSync(join(dir, "ipt.chain"), f.v4.chain().filter((r) => r !== ACCEPT).join("\n") + "\n");
+      expect(run(SCRIPT, ["--apply"], f.env).code).toBe(0);
+      expect(f.v4.chain()[0]).toBe(ACCEPT);
+      expect(sorted(f.v4.chain())).toEqual(sorted(V4));
     });
 
     test("an iptables that fails stops the script with its exit status", () => {
@@ -153,7 +205,7 @@ describe("stages-fence.sh", () => {
     test("writes a oneshot unit that runs the copy's --apply before docker starts", () => {
       const { root } = install();
       expect(readFileSync(join(root, UNIT), "utf8")).toBe(`[Unit]
-Description=Fence the canopy stages bridge (${BRIDGE}) in the raw table
+Description=Fence the canopy stages and coordinator bridges (${BRIDGE}, ${COORD}) in the raw table
 Before=docker.service
 
 [Service]
@@ -206,7 +258,7 @@ WantedBy=docker.service
       });
       expect(r.code).toBe(0);
       expect(v4.chain()).toHaveLength(V4.length);
-      expect(v6.chain()).toEqual(V6);
+      expect(v6.chain()).toHaveLength(V6.length);
       expect(o4.calls()).toEqual([]);
       expect(o6.calls()).toEqual([]);
     });
@@ -248,7 +300,7 @@ WantedBy=docker.service
         });
         expect(r.code).toBe(0);
         expect(v4.chain()).toHaveLength(V4.length);
-        expect(v6.chain()).toEqual(V6);
+        expect(v6.chain()).toHaveLength(V6.length);
         expect(o4.calls()).toEqual([]);
         expect(o6.calls()).toEqual([]);
       });

@@ -1,21 +1,29 @@
 #!/bin/sh
-# Fences the stages network: every packet that comes in on its bridge
-# (br-canopy-stg, named in docker-compose.yml) for a private, tailnet,
-# link-local, multicast, broadcast or 0.0.0.0/8 address is dropped, and the
-# internet stays open; every IPv6 packet from it is dropped.
+# Fences the stages network and the coordinator's: every packet that comes
+# in on either bridge (br-canopy-stg and br-canopy-crd, named in
+# docker-compose.yml) for a private, tailnet, link-local, multicast,
+# broadcast or 0.0.0.0/8 address is dropped, and the internet stays open;
+# every IPv6 packet from either is dropped. The coordinator's bridge has one
+# way through: canopy's port on that bridge's own gateway address
+# (10.250.14.1:7850, where docker-compose.yml publishes it), accepted ahead
+# of its drops.
 #
-# The drops sit in the raw table's PREROUTING, which runs before routing,
+# The rules sit in the raw table's PREROUTING, which runs before routing,
 # docker's DNAT and every filter chain, so they cover the host's own
 # addresses as well as forwarded traffic, and no filter chain's order
 # (docker's, ufw's, tailscale's ts-forward) can get a packet past them. They
 # match on the interface a packet arrived on, which nothing inside the
 # container can change. Replies to the container's own connections arrive
 # on the uplink or tailscale0, never on the bridge, so they pass.
-# Container-to-container traffic on the bridge is dropped too (10.0.0.0/8);
-# stages is alone on its network and nothing needs it.
+# Container-to-container traffic on each bridge is dropped too (10.0.0.0/8);
+# stages and coord are each alone on their network and nothing needs it.
+#
+# Every rule goes in with -I, at the top, so the ACCEPT goes in after the
+# drops, and --apply puts it back on top whenever it is not the first rule
+# for its bridge (a drop that went missing comes back in above it).
 #
 # Usage: stages-fence.sh [--apply | --install]
-#   (none)     print the rules
+#   (none)     print the rules, in the order they go in
 #   --apply    insert the ones that are missing (root); a rerun changes
 #              nothing
 #   --install  write a root-owned copy of this script to
@@ -39,6 +47,7 @@ case ${0##*/} in
 esac
 
 BRIDGE=br-canopy-stg
+COORD_BRIDGE=br-canopy-crd
 COPY=/usr/local/sbin/canopy-stages-fence
 UNIT_NAME=canopy-stages-fence.service
 UNIT=/etc/systemd/system/$UNIT_NAME
@@ -55,15 +64,24 @@ else
   ROOT=
 fi
 
-V4="-i $BRIDGE -d 10.0.0.0/8 -j DROP
--i $BRIDGE -d 172.16.0.0/12 -j DROP
--i $BRIDGE -d 192.168.0.0/16 -j DROP
--i $BRIDGE -d 100.64.0.0/10 -j DROP
--i $BRIDGE -d 169.254.0.0/16 -j DROP
--i $BRIDGE -d 224.0.0.0/4 -j DROP
--i $BRIDGE -d 255.255.255.255/32 -j DROP
--i $BRIDGE -d 0.0.0.0/8 -j DROP"
-V6="-i $BRIDGE -j DROP"
+# the v4 drops for the bridge $1
+drops() {
+  printf '%s\n' \
+    "-i $1 -d 10.0.0.0/8 -j DROP" \
+    "-i $1 -d 172.16.0.0/12 -j DROP" \
+    "-i $1 -d 192.168.0.0/16 -j DROP" \
+    "-i $1 -d 100.64.0.0/10 -j DROP" \
+    "-i $1 -d 169.254.0.0/16 -j DROP" \
+    "-i $1 -d 224.0.0.0/4 -j DROP" \
+    "-i $1 -d 255.255.255.255/32 -j DROP" \
+    "-i $1 -d 0.0.0.0/8 -j DROP"
+}
+V4=$(drops "$BRIDGE")
+COORD_V4=$(drops "$COORD_BRIDGE")
+# canopy's port on the coordinator bridge's gateway, and nothing else there
+COORD_ACCEPT="-i $COORD_BRIDGE -d 10.250.14.1/32 -p tcp --dport 7850 -j ACCEPT"
+V6="-i $BRIDGE -j DROP
+-i $COORD_BRIDGE -j DROP"
 
 die() { printf 'stages-fence: %s\n' "$*" >&2; exit 1; }
 
@@ -76,7 +94,7 @@ for a in "$@"; do
   esac
 done
 
-printf '%s\n' "$V4" | sed 's/^/iptables -t raw -I PREROUTING /'
+printf '%s\n%s\n%s\n' "$V4" "$COORD_V4" "$COORD_ACCEPT" | sed 's/^/iptables -t raw -I PREROUTING /'
 printf '%s\n' "$V6" | sed 's/^/ip6tables -t raw -I PREROUTING /'
 
 # insert each rule of $2 with the command $1 unless it is already there
@@ -90,10 +108,29 @@ $2
 EOF
 }
 
+# The ACCEPT must be the first rule for the coordinator's bridge, or a drop
+# above it (10.0.0.0/8) takes canopy's port too. iptables -S prints the
+# chain top first; a rule's words may come in another order there (-d ahead
+# of -i) and gain an -m tcp, so the first line for the bridge is matched by
+# its parts. Unless it is the ACCEPT, every copy of the ACCEPT goes and one
+# goes back in on top.
+accept_on_top() {
+  first=$($IPT -t raw -S PREROUTING | grep -F -- " -i $COORD_BRIDGE " | grep -vF -- "! -i $COORD_BRIDGE " | head -n 1)
+  case $first in
+    *"-d 10.250.14.1/32"*"--dport 7850"*"-j ACCEPT"*) return 0 ;;
+  esac
+  # shellcheck disable=SC2086
+  while $IPT -t raw -C PREROUTING $COORD_ACCEPT 2>/dev/null; do
+    $IPT -t raw -D PREROUTING $COORD_ACCEPT
+  done
+  # shellcheck disable=SC2086
+  $IPT -t raw -I PREROUTING $COORD_ACCEPT
+}
+
 unit() {
   cat <<EOF
 [Unit]
-Description=Fence the canopy stages bridge ($BRIDGE) in the raw table
+Description=Fence the canopy stages and coordinator bridges ($BRIDGE, $COORD_BRIDGE) in the raw table
 Before=docker.service
 
 [Service]
@@ -119,6 +156,8 @@ put() {
 case $mode in
   apply)
     ensure "$IPT" "$V4"
+    ensure "$IPT" "$COORD_V4"
+    accept_on_top
     ensure "$IP6T" "$V6"
     echo "applied"
     ;;
