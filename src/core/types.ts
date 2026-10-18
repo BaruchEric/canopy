@@ -1141,6 +1141,9 @@ export interface RunBranch {
   /** the pre-flight said to open a PR when it settles ready, instead of
    *  landing here (FR-011) */
   openPr?: true;
+  /** a step of a flow on this branch: the landing queue keeps its record
+   *  but sorts nothing until the flow ends and hands the branch over */
+  held?: true;
 }
 
 /** One check on a PR's head, as canopy reads it: still going, passed,
@@ -2256,6 +2259,10 @@ export interface Flow {
   restarted?: boolean;
   /** the id the client minted for the start, so a start sent again finds this flow */
   request?: string;
+  /** a flow on a branch of its own: every step runs in the branch's worktree,
+   *  and the landing queue takes the branch once the flow is done. Its state
+   *  stays working until the flow ends and the worktree is read. */
+  branch?: RunBranch;
 }
 
 /** A flow with a live step: running, waiting on a prompt, or parked at a gate. */

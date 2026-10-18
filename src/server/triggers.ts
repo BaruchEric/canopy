@@ -18,6 +18,7 @@ import { configDir } from "../core/store";
 import {
   afterRestart,
   existing,
+  fromFlow,
   fromLanding,
   fromPr,
   fromRun,
@@ -37,7 +38,7 @@ import {
   type TriggerRuleInfo,
   type TriggersInfo,
 } from "../core/trigger";
-import type { LandNotice, PrWatch, Repo, Run, ServerEvent } from "../core/types";
+import type { Flow, LandNotice, PrWatch, Repo, Run, ServerEvent } from "../core/types";
 
 export const triggersFile = (): string => join(configDir(), "triggers.json");
 export const triggersDir = (): string => join(configDir(), "triggers");
@@ -56,7 +57,7 @@ export class TriggerError extends Error {
 }
 
 /** What starting an event's run came to: a run, or the repo's branch slots are full. */
-export type StartOutcome = { run: Run } | { busy: string };
+export type StartOutcome = { run: Run } | { flow: Flow } | { busy: string };
 
 export interface TriggerDeps {
   broadcast: (ev: ServerEvent) => void;
@@ -64,14 +65,20 @@ export interface TriggerDeps {
   repo: (ref: string) => Repo | undefined;
   /** why a rule's workflow cannot run as a trigger, or null */
   workflowProblem: (name: string, repo: Repo) => Promise<string | null>;
-  /** starts the event's branch run, which opens a PR when it settles ready */
+  /** starts the event's branch run, or its flow on a branch, which opens a
+   *  PR when it settles ready */
   start: (event: TriggerEvent, repo: Repo) => Promise<StartOutcome>;
-  /** resumes the stopped run on the event's branch */
-  resume: (event: TriggerEvent) => Promise<Run>;
+  /** resumes the stopped work on the event's branch: its flow picked up
+   *  where it stopped, or a run resuming the branch's last session */
+  resume: (event: TriggerEvent) => Promise<{ run: Run } | { flow: Flow }>;
   /** stops a run by id */
   stopRun: (id: string) => void;
   /** whether this server holds a run by id */
   runKnown: (id: string) => boolean;
+  /** stops a flow by id */
+  stopFlow?: (id: string) => void;
+  /** whether this server holds a flow by id: one is taken back after a restart */
+  flowKnown?: (id: string) => boolean;
   /** a trigger secret's value: the `CANOPY_TRIGGER_` variables the server
    *  took out of its env at start (`takeTriggerSecrets`) */
   env: (name: string) => string | undefined;
@@ -239,7 +246,7 @@ export class TriggerHub {
       const list = isRecord(v) && Array.isArray(v["events"]) ? v["events"] : [];
       for (const e of list) {
         if (isRecord(e) && typeof e["id"] === "string" && typeof e["key"] === "string" && typeof e["status"] === "string") {
-          const ev = afterRestart(e as unknown as TriggerEvent, this.deps.runKnown);
+          const ev = afterRestart(e as unknown as TriggerEvent, this.deps.runKnown, this.deps.flowKnown);
           this.events.set(ev.id, ev);
         }
       }
@@ -299,11 +306,17 @@ export class TriggerHub {
         this.set(queued);
         return queued;
       }
-      const next: TriggerEvent = { ...event, status: "working", runId: out.run.id, ...(out.run.branch ? { branch: out.run.branch.origin } : {}) };
+      const next: TriggerEvent =
+        "flow" in out
+          ? { ...event, status: "working", flowId: out.flow.id, ...(out.flow.branch ? { branch: out.flow.branch.origin } : {}) }
+          : { ...event, status: "working", runId: out.run.id, ...(out.run.branch ? { branch: out.run.branch.origin } : {}) };
       delete next.reason;
       delete next.endedAt;
-      this.set(next);
-      return next;
+      // a flow's first step can end inside its start, before the event knew
+      // its id; the flow is the live object, so read where it is now
+      const now = "flow" in out ? fromFlow(next, out.flow, this.now()) : next;
+      this.set(now);
+      return now;
     } catch (err) {
       const failed: TriggerEvent = { ...event, status: "failed", reason: errText(err), endedAt: this.now() };
       this.set(failed);
@@ -345,6 +358,18 @@ export class TriggerHub {
     }
     // a run ending may free a branch slot a queued event waits for
     if (run.status !== "working" && run.status !== "waiting" && run.status !== "idle") void this.pump();
+  }
+
+  /** The flows' every change: the event following that flow moves with it. */
+  onFlow(flow: Flow): void {
+    if (!flow.branch) return;
+    for (const e of this.events.values()) {
+      if (e.flowId !== flow.id) continue;
+      const next = fromFlow(e, flow, this.now());
+      if (next !== e && JSON.stringify(next) !== JSON.stringify(e)) this.set(next);
+    }
+    // a flow ending may free a branch slot a queued event waits for
+    if (flow.status === "done" || flow.status === "failed" || flow.status === "stopped") void this.pump();
   }
 
   /** The PR watch's every change: an event follows its branch's PR, and a
@@ -401,12 +426,18 @@ export class TriggerHub {
       const e = this.events.get(id);
       if (!e) throw new TriggerError(`no trigger event ${id}`, 404);
       if (!resumable(e)) throw new TriggerError(`${e.short ?? e.title} is ${e.status}, not stopped on a branch`);
-      const run = await this.deps.resume(e);
-      const next: TriggerEvent = { ...e, status: "working", runId: run.id };
+      const out = await this.deps.resume(e);
+      const next: TriggerEvent = "flow" in out ? { ...e, status: "working", flowId: out.flow.id } : { ...e, status: "working", runId: out.run.id };
+      // a run in place of a flow the server no longer keeps: the event follows that run
+      if ("run" in out) {
+        delete next.flowId;
+        delete next.step;
+      }
       delete next.reason;
       delete next.endedAt;
-      this.set(next);
-      return next;
+      const now = "flow" in out ? fromFlow(next, out.flow, this.now()) : next;
+      this.set(now);
+      return now;
     });
   }
 
@@ -418,7 +449,7 @@ export class TriggerHub {
       const repo = this.deps.repo(e.repoId);
       if (!repo) throw new TriggerError(`${e.repoId} is no longer in the tree`, 404);
       const fresh: TriggerEvent = { ...e, status: "queued", lastAt: this.now() };
-      for (const k of ["runId", "branch", "reason", "endedAt", "pr", "resolved"] as const) delete fresh[k];
+      for (const k of ["runId", "flowId", "step", "branch", "reason", "endedAt", "pr", "resolved"] as const) delete fresh[k];
       this.set(fresh);
       return this.begin(fresh, repo);
     });
@@ -432,6 +463,10 @@ export class TriggerHub {
         const next: TriggerEvent = { ...e, status: "stopped", reason: "taken off the queue", endedAt: this.now() };
         this.set(next);
         return next;
+      }
+      if (eventLive(e) && e.flowId && this.deps.stopFlow) {
+        this.deps.stopFlow(e.flowId);
+        return this.events.get(id) ?? e;
       }
       if (!eventLive(e) || !e.runId) throw new TriggerError(`${e.short ?? e.title} has no run going`);
       this.deps.stopRun(e.runId);

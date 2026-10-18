@@ -35,6 +35,8 @@ import {
   arrangementOf,
   failedItems,
   turnItems,
+  flowFor,
+  activeFlowFor,
 } from "./store";
 import { applyQuery } from "./filters";
 import { cellOf, columnOf, panelsOf, type DockLayout } from "./grid";
@@ -2587,5 +2589,17 @@ describe("the ranger in waiting on you", () => {
     const s = { ...base, runs: {}, registry: { [card.id]: card, [other.id]: other }, asks: {}, rangers: { mini: ranger } };
     expect(turnItems(s).map((r) => r.id)).toEqual(["claude:o"]);
     expect(failedItems(s).map((r) => [r.kind, r.id])).toEqual([["ranger", "mini"]]);
+  });
+});
+
+describe("flowFor", () => {
+  test("a flow on a branch of its own is not the checkout's, so it never holds the card", () => {
+    const flow = (id: string, over: Record<string, unknown> = {}) => ({ id, repoId: "app", status: "working", startedAt: 1, steps: [], current: 0, ...over });
+    const branch = { name: "run/x", target: "main", base: "b", dir: "/d", state: "working", origin: "o" };
+    const s = { ...useStore.getState(), flows: { t: flow("t", { branch, startedAt: 2 }) } } as unknown as Parameters<typeof flowFor>[0];
+    expect(flowFor(s, "app")).toBeUndefined();
+    expect(activeFlowFor(s, "app")).toBeUndefined();
+    const both = { ...s, flows: { t: flow("t", { branch, startedAt: 2 }), c: flow("c", { status: "done" }) } } as unknown as typeof s;
+    expect(flowFor(both, "app")?.id).toBe("c");
   });
 });

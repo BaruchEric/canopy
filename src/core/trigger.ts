@@ -6,7 +6,7 @@
 
 import { TRIGGER_ENV_PREFIX } from "./envnames";
 import { fence } from "./pr";
-import type { LandNotice, PrWatch, Run, Workflow } from "./types";
+import type { Flow, LandNotice, PrWatch, Run, Workflow } from "./types";
 
 export const TRIGGER_SOURCES = ["sentry"] as const;
 export type TriggerSource = (typeof TRIGGER_SOURCES)[number];
@@ -102,6 +102,11 @@ export interface TriggerEvent {
   lastAt: number;
   /** the latest run on its branch */
   runId?: string;
+  /** the flow on its branch, while the event follows one: a workflow of
+   *  several steps, or one with a check or a gate */
+  flowId?: string;
+  /** the flow's step in progress, while the flow is going */
+  step?: string;
   /** the branch's id (`RunBranch.origin`), which the landing record and the PR watch use */
   branch?: string;
   pr?: { number: number; url: string };
@@ -352,21 +357,26 @@ export function newEvent(rule: TriggerRule, inc: Incoming, repoId: string, sourc
   };
 }
 
-/** A one-step workflow as what a trigger's branch run needs: its task, its
- *  tools and its turns. A workflow of several steps is a flow, which runs in
- *  the main checkout, so a trigger refuses it. */
-export function triggerStep(wf: Workflow): { task: string; tools: string[]; turns: number } | string {
-  if (wf.steps.length !== 1) return `${wf.name} has ${wf.steps.length} steps; a trigger runs a one-step workflow on a branch`;
-  const step = wf.steps[0];
-  if (!step?.body) return `${wf.name}'s step has no prompt`;
-  if (step.check) return `${wf.name}'s step has a check line; a trigger's run is checked by the landing queue's sort and the PR's checks`;
-  return { task: step.body, tools: step.tools, turns: step.turns };
+/** How a trigger runs a workflow. One step with a prompt and nothing after
+ *  it is a branch run, with that step's task, tools and turns. Anything more
+ *  (several steps, a check line, a gate) is a flow on a branch of its own.
+ *  A step that asks before the next one starts is refused, since no one is
+ *  there to answer; a verdict or judge gate with no gateway key parks the
+ *  same way, and the event then waits on Eric. */
+export function triggerPlan(wf: Workflow): { kind: "run"; task: string; tools: string[]; turns: number } | { kind: "flow" } | string {
+  if (wf.steps.length === 0) return `${wf.name} has no steps`;
+  if (!wf.steps.some((s) => s.body)) return `${wf.name} has no step with a prompt`;
+  const asks = wf.steps.find((s) => s.gate === "ask");
+  if (asks) return `${wf.name}'s ${asks.name} step asks before the next one starts, and no one answers a trigger's run`;
+  const only = wf.steps.length === 1 ? wf.steps[0] : undefined;
+  if (only?.body && !only.check && only.gate === "continue") return { kind: "run", task: only.body, tools: only.tools, turns: only.turns };
+  return { kind: "flow" };
 }
 
 /** The event's state as its latest run says. Only moves an event that is
  *  waiting on its run; once a PR is open the PR speaks. */
 export function fromRun(e: TriggerEvent, run: Run, now: number): TriggerEvent {
-  if (e.runId !== run.id || e.pr) return e;
+  if (e.runId !== run.id || e.pr || e.flowId) return e;
   const next: TriggerEvent = { ...e };
   if (run.branch) next.branch = run.branch.origin;
   if (run.status === "working" || run.status === "idle") next.status = "working";
@@ -383,6 +393,49 @@ export function fromRun(e: TriggerEvent, run: Run, now: number): TriggerEvent {
     if (state === "nothing") next.reason = "the agent committed nothing: it found no fix to make";
     else if (state === "uncommitted") next.reason = "the run ended with changes it did not commit";
     else next.reason = "committed; canopy opens the PR once the landing queue has sorted the branch";
+  }
+  if (next.status === "no-fix" || next.status === "failed") next.endedAt = now;
+  else delete next.endedAt;
+  return next;
+}
+
+/** The event's state as its flow says, while it follows one. A done flow
+ *  reads as working until its worktree has been read into the branch's state. */
+export function fromFlow(e: TriggerEvent, flow: Flow, now: number): TriggerEvent {
+  if (e.flowId !== flow.id || e.pr) return e;
+  const next: TriggerEvent = { ...e };
+  const runId = [...flow.steps].reverse().find((s) => s.runId)?.runId;
+  if (runId) next.runId = runId;
+  if (flow.branch) next.branch = flow.branch.origin;
+  delete next.reason;
+  const going = flow.status === "working" || flow.status === "waiting" || flow.status === "gated";
+  const step = flow.steps[flow.current]?.name;
+  if (going && step && flow.steps.length > 1) next.step = step;
+  else delete next.step;
+  if (flow.status === "working") next.status = "working";
+  else if (flow.status === "waiting") next.status = "waiting";
+  else if (flow.status === "gated") {
+    next.status = "waiting";
+    next.reason = flow.steps[flow.current]?.reason ?? "the flow waits at a gate";
+  } else if (flow.status === "stopped") {
+    next.status = "stopped";
+    next.reason = "stopped before it finished";
+  } else if (flow.status === "failed") {
+    next.status = "failed";
+    next.reason = flow.error ?? "the flow failed";
+  } else {
+    const state = flow.branch?.state;
+    if (state === "working" || state === undefined) next.status = "working";
+    else if (state === "nothing") {
+      next.status = "no-fix";
+      next.reason = "the agent committed nothing: it found no fix to make";
+    } else if (state === "uncommitted" || state === "stopped") {
+      next.status = "stopped";
+      next.reason = "the flow ended with changes it did not commit";
+    } else {
+      next.status = "ready";
+      next.reason = "committed; canopy opens the PR once the landing queue has sorted the branch";
+    }
   }
   if (next.status === "no-fix" || next.status === "failed") next.endedAt = now;
   else delete next.endedAt;
@@ -412,9 +465,12 @@ export function fromLanding(e: TriggerEvent, notices: readonly LandNotice[]): Tr
 }
 
 /** An event whose run the last server held, after a restart: a run it was
- *  waiting on is gone, so it reads as stopped and resume picks it up. */
-export function afterRestart(e: TriggerEvent, runKnown: (id: string) => boolean): TriggerEvent {
-  if ((e.status === "working" || e.status === "waiting") && (!e.runId || !runKnown(e.runId))) {
+ *  waiting on is gone, so it reads as stopped and resume picks it up. A
+ *  flow is kept on disk and taken back by the new server, so an event
+ *  following one stays as it is while that flow is known. */
+export function afterRestart(e: TriggerEvent, runKnown: (id: string) => boolean, flowKnown: (id: string) => boolean = () => false): TriggerEvent {
+  if (e.flowId && flowKnown(e.flowId)) return e;
+  if ((e.status === "working" || e.status === "waiting") && (e.flowId || !e.runId || !runKnown(e.runId))) {
     return { ...e, status: "stopped", reason: "a restart cut the run short" };
   }
   return e;

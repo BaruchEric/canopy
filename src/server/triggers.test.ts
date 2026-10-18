@@ -4,7 +4,7 @@ import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { TriggerEvent, TriggerRule } from "../core/trigger";
-import type { PrWatch, Repo, Run } from "../core/types";
+import type { Flow, PrWatch, Repo, Run } from "../core/types";
 import { signatureOk, TriggerHub, type StartOutcome, type TriggerDeps } from "./triggers";
 
 const SECRET = "s3cret";
@@ -47,7 +47,7 @@ function hub(over: Partial<TriggerDeps> = {}): TriggerHub {
     resume: async () => {
       const r = run();
       runs.push(r);
-      return r;
+      return { run: r };
     },
     stopRun: (id) => stopped.push(id),
     runKnown: (id) => runs.some((r) => r.id === id),
@@ -219,6 +219,57 @@ describe("runs, PRs and resolve", () => {
     expect(h.get(e?.id ?? "")?.status).toBe("stopped");
     const back = await h.resume(e?.id ?? "");
     expect(back).toMatchObject({ status: "working", runId: "r2" });
+  });
+
+  test("a flow on a branch: the event follows it, a stop stops the flow, and resume picks the branch up with a run", async () => {
+    const flow = {
+      id: "f1",
+      repoId: "web/shop",
+      status: "working",
+      steps: [{ name: "Fix", status: "running", runId: "r9" }],
+      current: 0,
+      branch: { name: "run/x", target: "main", base: "b", dir: "/d", state: "working", origin: "brf" },
+    } as unknown as Flow;
+    const stoppedFlows: string[] = [];
+    const h = hub({ start: async () => ({ flow }), stopFlow: (id) => stoppedFlows.push(id), flowKnown: (id) => id === "f1" });
+    await h.adopt();
+    await h.fire("shop", "boom");
+    const [e] = h.list();
+    expect(e).toMatchObject({ status: "working", flowId: "f1", branch: "brf", runId: "r9" });
+    // a step's run is the flow's to follow, not the event's
+    h.onRun({ ...run({ id: "r9" }), status: "done" });
+    expect(h.get(e?.id ?? "")?.status).toBe("working");
+    await h.stopEvent(e?.id ?? "");
+    expect(stoppedFlows).toEqual(["f1"]);
+    expect(stopped).toEqual([]);
+    h.onFlow({ ...flow, status: "stopped", branch: { ...flow.branch!, state: "uncommitted" } });
+    expect(h.get(e?.id ?? "")).toMatchObject({ status: "stopped", reason: "stopped before it finished" });
+    const back = await h.resume(e?.id ?? "");
+    expect(back).toMatchObject({ status: "working", runId: runs[0]?.id, branch: "brf" });
+    expect(back.flowId).toBeUndefined();
+  });
+
+  test("resume picks a kept flow up, and the event keeps following it", async () => {
+    const flow = { id: "f3", repoId: "web/shop", status: "working", steps: [{ name: "Fix", status: "running", runId: "r7" }], current: 0, branch: { name: "run/x", target: "main", base: "b", dir: "/d", state: "working", origin: "brh" } } as unknown as Flow;
+    const h = hub({ start: async () => ({ flow }), resume: async () => ({ flow: { ...flow, status: "working" } }), stopFlow: () => {} });
+    await h.adopt();
+    await h.fire("shop", "boom");
+    const [e] = h.list();
+    h.onFlow({ ...flow, status: "stopped" });
+    const back = await h.resume(e?.id ?? "");
+    expect(back).toMatchObject({ status: "working", flowId: "f3", branch: "brh" });
+  });
+
+  test("a done flow is ready once its worktree is read", async () => {
+    const flow = { id: "f2", repoId: "web/shop", status: "working", steps: [], current: 0, branch: { name: "run/x", target: "main", base: "b", dir: "/d", state: "working", origin: "brg" } } as unknown as Flow;
+    const h = hub({ start: async () => ({ flow }) });
+    await h.adopt();
+    await h.fire("shop", "boom");
+    const [e] = h.list();
+    h.onFlow({ ...flow, status: "done" });
+    expect(h.get(e?.id ?? "")?.status).toBe("working");
+    h.onFlow({ ...flow, status: "done", branch: { ...flow.branch!, state: "ready" } });
+    expect(h.get(e?.id ?? "")?.status).toBe("ready");
   });
 
   test("the PR's merge resolves the Sentry issue with the rule's token", async () => {

@@ -55,6 +55,7 @@ function EventRow({ row, many }: { row: TriggerRow; many: boolean }) {
       </div>
       <div className="trigger-facts">
         <span className={`trigger-state ${STATUS_TONE[e.status]}`}>{STATUS_WORD[e.status]}</span>
+        {e.step && <span title="the workflow's step in progress">{e.step}</span>}
         <span className="trigger-id">{e.short ?? e.key}</span>
         <span>{repo}</span>
         {many && <span>on {backend}</span>}

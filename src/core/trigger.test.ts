@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import {
   afterRestart,
   existing,
+  fromFlow,
   fromLanding,
   fromPr,
   fromRun,
@@ -12,12 +13,12 @@ import {
   parseSentry,
   pruneEvents,
   KEEP_EVENTS,
-  triggerStep,
+  triggerPlan,
   type Incoming,
   type TriggerEvent,
   type TriggerRule,
 } from "./trigger";
-import type { LandNotice, PrWatch, Run, Workflow, WorkflowStep } from "./types";
+import type { Flow, LandNotice, PrWatch, Run, Workflow, WorkflowStep } from "./types";
 
 const RULE: TriggerRule = {
   name: "shop",
@@ -268,6 +269,11 @@ describe("afterRestart", () => {
     const queued = event({ status: "queued" });
     expect(afterRestart(queued, () => false)).toBe(queued);
   });
+  test("a flow the new server took back keeps its event; one it did not reads as stopped", () => {
+    const e = event({ status: "working", flowId: "f1", runId: "gone" });
+    expect(afterRestart(e, () => false, () => true)).toBe(e);
+    expect(afterRestart(e, () => true, () => false).status).toBe("stopped");
+  });
 });
 
 describe("pruneEvents", () => {
@@ -281,15 +287,71 @@ describe("pruneEvents", () => {
   });
 });
 
-describe("triggerStep", () => {
+describe("triggerPlan", () => {
   const step = (over: Partial<WorkflowStep> = {}): WorkflowStep => ({ name: "Fix", tools: ["Read"], turns: 60, check: null, gate: "continue", body: "fix it", retries: 0, back: "Fix", evidence: [], ...over });
   const wf = (steps: WorkflowStep[]): Workflow => ({ name: "sentry-fix", steps }) as Workflow;
-  test("one step with a prompt is a trigger's run", () => {
-    expect(triggerStep(wf([step()]))).toEqual({ task: "fix it", tools: ["Read"], turns: 60 });
+  test("one plain step with a prompt is a trigger's run", () => {
+    expect(triggerPlan(wf([step()]))).toEqual({ kind: "run", task: "fix it", tools: ["Read"], turns: 60 });
   });
-  test("several steps, a check line or no prompt is refused", () => {
-    expect(triggerStep(wf([step(), step({ name: "Two" })]))).toContain("2 steps");
-    expect(triggerStep(wf([step({ check: "bun test" })]))).toContain("check line");
-    expect(triggerStep(wf([step({ body: "" })]))).toContain("no prompt");
+  test("several steps, a check line or a judge gate is a flow on a branch", () => {
+    expect(triggerPlan(wf([step(), step({ name: "Two" })]))).toEqual({ kind: "flow" });
+    expect(triggerPlan(wf([step({ check: "@gates", retries: 2 })]))).toEqual({ kind: "flow" });
+    expect(triggerPlan(wf([step({ gate: "judge" })]))).toEqual({ kind: "flow" });
+    expect(triggerPlan(wf([step(), step({ name: "Verify", body: "", check: "@gates" })]))).toEqual({ kind: "flow" });
+  });
+  test("a step that asks, or no prompt anywhere, is refused", () => {
+    expect(triggerPlan(wf([step({ gate: "ask" }), step({ name: "Two" })]))).toContain("no one answers");
+    expect(triggerPlan(wf([step({ body: "", check: "bun test" })]))).toContain("no step with a prompt");
+    expect(triggerPlan(wf([]))).toContain("no steps");
+  });
+});
+
+describe("fromFlow", () => {
+  const branch = { name: "run/x", target: "main", base: "b", dir: "/d", origin: "br1" };
+  const flow = (over: Partial<Flow> = {}): Flow =>
+    ({
+      id: "f1",
+      repoId: "app",
+      workflow: "sentry-fix",
+      verb: "fix",
+      note: "n",
+      status: "working",
+      steps: [
+        { name: "Triage", status: "passed", runId: "r1" },
+        { name: "Fix", status: "running", runId: "r2" },
+      ],
+      current: 1,
+      startedAt: 1,
+      branch: { ...branch, state: "working" },
+      ...over,
+    }) as Flow;
+  test("follows the flow's status and its latest step run", () => {
+    const e = event({ flowId: "f1", status: "working" });
+    expect(fromFlow(e, flow(), 5)).toMatchObject({ status: "working", runId: "r2", branch: "br1", step: "Fix" });
+    expect(fromFlow(e, flow({ status: "stopped" }), 5).step).toBeUndefined();
+    const gated = flow({ status: "gated", steps: [{ name: "Triage", status: "passed" }, { name: "Fix", status: "gated", reason: "no gateway key" }] });
+    expect(fromFlow(e, gated, 5)).toMatchObject({ status: "waiting", reason: "no gateway key" });
+  });
+  test("a done flow waits for its worktree to be read, then reads like a run", () => {
+    const e = event({ flowId: "f1", status: "working" });
+    expect(fromFlow(e, flow({ status: "done" }), 5).status).toBe("working");
+    expect(fromFlow(e, flow({ status: "done", branch: { ...branch, state: "ready" } }), 5).status).toBe("ready");
+    expect(fromFlow(e, flow({ status: "done", branch: { ...branch, state: "nothing" } }), 5)).toMatchObject({ status: "no-fix", endedAt: 5 });
+    expect(fromFlow(e, flow({ status: "done", branch: { ...branch, state: "uncommitted" } }), 5).status).toBe("stopped");
+  });
+  test("stopped and failed say why", () => {
+    const e = event({ flowId: "f1", status: "working" });
+    expect(fromFlow(e, flow({ status: "stopped" }), 5)).toMatchObject({ status: "stopped", reason: "stopped before it finished" });
+    expect(fromFlow(e, flow({ status: "failed", error: "check failed with exit 1" }), 5)).toMatchObject({ status: "failed", reason: "check failed with exit 1", endedAt: 5 });
+  });
+  test("another flow, or an event with a PR, is left alone", () => {
+    const e = event({ flowId: "f2", status: "working" });
+    expect(fromFlow(e, flow(), 5)).toBe(e);
+    const withPr = event({ flowId: "f1", pr: { number: 3, url: "u" }, status: "review" });
+    expect(fromFlow(withPr, flow(), 5)).toBe(withPr);
+  });
+  test("a flow's step runs leave the event to the flow", () => {
+    const e = event({ flowId: "f1", runId: "r2", status: "working" });
+    expect(fromRun(e, run({ id: "r2", status: "done" }), 5)).toBe(e);
   });
 });

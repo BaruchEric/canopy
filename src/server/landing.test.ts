@@ -170,6 +170,26 @@ describe("landing", () => {
     expect([...new Set(states)]).toEqual(["queued", "rebasing", "gate:lint", "gate:test", "landing", "landed"]);
   });
 
+  test("a flow's held steps keep the record but sort nothing until the flow hands the branch over", async () => {
+    const w = await world();
+    const dir = runTreeDir(w.repo.path, "fl11", w.wts);
+    const base = (await revOf(w.repo.path, "main"))!;
+    await addRunTree(w.repo.path, dir, "run/x-fl11", base);
+    await commit(dir, "b.txt", "b\n");
+    const b = { name: "run/x-fl11", target: "main", base, dir, origin: "fl11", openPr: true as const };
+    const step = fakeRun(w.repo.id, b, "ready");
+    w.hub.onRun({ ...step, branch: { ...b, state: "ready", held: true } });
+    await w.hub.idle();
+    expect(recOf(w, "fl11")).toMatchObject({ state: "ready", openPr: true });
+    expect(w.opened).toEqual([]);
+    w.hub.handOver({ ...step, branch: { ...b, state: "ready", held: true } });
+    await w.hub.idle();
+    expect(w.opened).toEqual([]);
+    w.hub.handOver({ ...step, branch: { ...b, state: "ready" } });
+    await w.hub.idle();
+    expect(w.opened).toEqual(["fl11"]);
+  });
+
   test("only a ready run lands, and not while it runs", async () => {
     const w = await world();
     const run = await readyRun(w, "bb22", "b.txt", "b\n");

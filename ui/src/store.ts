@@ -4220,11 +4220,13 @@ export function activeRunFor(s: CanopyState, repoId: string): Run | undefined {
   return r && isRunActive(r) ? r : undefined;
 }
 
-/** A repo's newest flow, active first. */
+/** A repo's newest flow in its checkout, active first. A flow on a branch
+ *  of its own (a trigger's) is not the checkout's, as on the server, so it
+ *  never holds the card's controls; the triggers view shows it. */
 export function flowFor(s: CanopyState, repoId: string): Flow | undefined {
   let best: Flow | undefined;
   for (const f of Object.values(s.flows)) {
-    if (f.repoId !== repoId) continue;
+    if (f.repoId !== repoId || f.branch) continue;
     if (!best || (isFlowActive(f) && !isFlowActive(best)) || (isFlowActive(f) === isFlowActive(best) && f.startedAt > best.startedAt)) best = f;
   }
   return best;

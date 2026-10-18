@@ -123,7 +123,7 @@ import {
 } from "../core/store";
 import { RememberedRules, scopeOf } from "../core/remember";
 import { repoHolding, sessionAsk, sessionRemember, sessionRule } from "../core/sessionrules";
-import { BRANCH_RUNS_PER_REPO, QUIET_WAIT, Runner } from "../core/runner";
+import { BRANCH_RUNS_PER_REPO, QUIET_WAIT, Runner, type BranchStart } from "../core/runner";
 import { NotWaitingError, type RunDriver } from "../core/driver";
 import { ANSWERS_FILE, isSeedRepoId, SEED_AGENT_REFUSAL, SEEDS_DIR, withStoredAnswers } from "../core/sprout";
 import { SeedMirrors } from "../core/seedmirror";
@@ -183,7 +183,7 @@ import {
   TERM_GONE,
 } from "../core/types";
 import type { About, AdviceAccepted, AdviceEntry, IncubatorStages, RepoStatus } from "../core/types";
-import { isRunActive } from "../core/types";
+import { isFlowActive, isRunActive } from "../core/types";
 import { holdQuiet, type QuietHold, seedGitThrough, StageClient } from "../core/stageclient";
 import { STAGE_AWAY } from "../core/stagewire";
 import { DEFAULT_IGNORE } from "../core/scan";
@@ -201,7 +201,7 @@ import { LandingHub } from "./landing";
 import { PrHub } from "./prs";
 import { TriggerHub, type StartOutcome } from "./triggers";
 import { takeTriggerSecrets } from "../core/envnames";
-import { triggerStep, type TriggerEvent } from "../core/trigger";
+import { triggerPlan, type TriggerEvent } from "../core/trigger";
 import { authRoute, CallerBook, callerOf, CallerGate, callersMode, type Caller } from "./callers";
 import { getPeers, PeerError, postPeersSync, postRepoPeer, queuePass, withPeering, type PeerDeps } from "./peers";
 import { fixPrompt, landWord } from "../core/landing";
@@ -822,6 +822,20 @@ async function startRepoRun(
  *  `run/<slug>-<id>`, cut from the default branch's tip, where the gates'
  *  setup runs before the agent starts. The landing queue lands it later. */
 async function startBranchRun(state: ServerState, repo: Repo, action: RunAction, note: string, agent: AgentSettings, by: string | undefined, pr = false, spec: ActionSpec = ACTIONS[action]): Promise<Run> {
+  const start = await cutBranch(repo, note, pr);
+  try {
+    return state.runner.start(repo, action, spec, note, agent, by, undefined, start);
+  } catch (err) {
+    await removeRunTree(repo.path, start.branch.dir, start.branch.name);
+    if (err instanceof Error && err.name === "StageAwayError") throw err;
+    throw new HttpError(400, String(err instanceof Error ? err.message : err));
+  }
+}
+
+/** A new branch off the default branch, its worktree made, and the setup
+ *  line to run there before the first agent: what a branch run, or a flow
+ *  on a branch, starts with. */
+async function cutBranch(repo: Repo, note: string, pr: boolean): Promise<BranchStart> {
   const target = await defaultBranch(repo.path);
   const base = target ? await revOf(repo.path, `refs/heads/${target}`) : null;
   if (!target || !base) throw new HttpError(400, `${repo.name} has no main or master branch to cut a run's branch from`);
@@ -848,16 +862,10 @@ async function startBranchRun(state: ServerState, repo: Repo, action: RunAction,
     const r = await runGate(dir, setup);
     if (r.exit !== 0) throw new Error(`${setup} exited ${r.exit ?? "on a signal"}${r.output ? `: ${r.output.split("\n").slice(-3).join(" ")}` : ""}`);
   };
-  try {
-    return state.runner.start(repo, action, spec, note, agent, by, undefined, {
-      branch: { name, target, base, dir, state: "working", origin: id, ...(pr ? { openPr: true as const } : {}) },
-      prepare,
-    });
-  } catch (err) {
-    await removeRunTree(repo.path, dir, name);
-    if (err instanceof Error && err.name === "StageAwayError") throw err;
-    throw new HttpError(400, String(err instanceof Error ? err.message : err));
-  }
+  return {
+    branch: { name, target, base, dir, state: "working", origin: id, ...(pr ? { openPr: true as const } : {}) },
+    prepare,
+  };
 }
 
 /** A "fix it" run on a branch the landing queue sent back: Claude resumes
@@ -891,16 +899,20 @@ async function startBranchFix(state: ServerState, rec: LandingRun, reason: strin
   }
 }
 
-/** A trigger's one-step workflow as the action its branch run starts with:
- *  the step's task, tools and turns, no one to answer it, and a PR when it
- *  settles ready. Read from the bundled and user workflows only, like a
- *  fleet's, so a repo cannot rewrite what its own trigger runs. */
-async function triggerSpec(name: string): Promise<{ spec: ActionSpec; workflow: string } | string> {
+/** How a trigger runs its workflow. A plain one-step workflow is the action
+ *  its branch run starts with: the step's task, tools and turns, no one to
+ *  answer it, and a PR when it settles ready. Anything more is a flow on a
+ *  branch, every step unattended the same way. Read from the bundled and
+ *  user workflows only, like a fleet's, so a repo cannot rewrite what its
+ *  own trigger runs. */
+async function triggerSpec(name: string): Promise<{ kind: "run"; spec: ActionSpec; workflow: string } | { kind: "flow"; workflow: Workflow } | string> {
   const wf = findWorkflow(await loadWorkflows({ path: "", host: "none" }), name);
   if (!wf) return `unknown workflow: ${name}`;
-  const step = triggerStep(wf);
+  const step = triggerPlan(wf);
   if (typeof step === "string") return step;
+  if (step.kind === "flow") return { kind: "flow", workflow: { ...wf, unattended: TRIGGER_UNATTENDED } };
   return {
+    kind: "run",
     workflow: wf.name,
     spec: {
       ...ACTIONS.ask,
@@ -919,20 +931,33 @@ async function triggerSpec(name: string): Promise<{ spec: ActionSpec; workflow: 
 const TRIGGER_UNATTENDED =
   "No one answers this run: it is canopy's trigger run, started by an outside event. Do not ask questions or use tools outside your allowed list. When you cannot finish, commit nothing you are unsure of and say what stopped you.";
 
-/** A trigger event's branch run, after the checks a branch run route makes;
- *  a repo whose branch slots are full answers busy, and the event waits. */
+/** A trigger event's branch run, or its flow on a branch, after the checks a
+ *  branch run route makes; a repo whose branch slots are full answers busy,
+ *  and the event waits. A flow counts for a slot from its start to its end,
+ *  checks and gates between steps included. */
 async function startTriggerRun(state: ServerState, event: TriggerEvent, repo: Repo): Promise<StartOutcome> {
   if (repo.host) throw new Error(`${repo.name} is on ${repo.host}; a trigger runs only on this machine`);
   if (repo.forge) throw new Error(`${repo.name} is on the forge; a trigger runs in a folder on this machine`);
   if (isSeedPath(state.root, repo.path)) throw new Error(`${repo.name} is an incubator seed`);
   const got = await triggerSpec(event.workflow);
   if (typeof got === "string") throw new Error(got);
-  const going = state.runner.branchRunsFor(repo.id).length;
+  const runs = state.runner.branchRunsFor(repo.id).filter((r) => !r.branch?.held).length;
+  const flowsGoing = state.flows.list().filter((f) => f.repoId === repo.id && f.branch && isFlowActive(f)).length;
+  const going = runs + flowsGoing;
   if (going >= BRANCH_RUNS_PER_REPO) return { busy: `${repo.name} has ${going} branch runs going` };
   const agent = agentFor(await loadConfig(), repo.path, "job");
   if (agent.harness !== "claude") throw new Error(`${repo.name}'s job route starts ${agent.harness}; a trigger run needs Claude Code`);
   await needHarness(state, agent.harness, repo.path);
-  return { run: await startBranchRun(state, repo, "ask", event.note, agent, `trigger ${event.rule}`, true, got.spec) };
+  if (got.kind === "run") return { run: await startBranchRun(state, repo, "ask", event.note, agent, `trigger ${event.rule}`, true, got.spec) };
+  // every step on the job route, whatever profile it names: a trigger's
+  // steps need Claude Code, checked above, for their unattended permissions
+  const start = await cutBranch(repo, event.note, true);
+  try {
+    return { flow: state.flows.start(repo, got.workflow, event.note, agent, { branch: start }) };
+  } catch (err) {
+    await removeRunTree(repo.path, start.branch.dir, start.branch.name);
+    throw err;
+  }
 }
 
 const isRecord = (v: unknown): v is Record<string, unknown> => typeof v === "object" && v !== null && !Array.isArray(v);
@@ -4116,6 +4141,7 @@ export async function startServer(opts: {
       broadcast(state, { type: "flow", flow });
       state.chan.onFlow(flow);
       state.incubator.onFlow(flow);
+      state.triggers.onFlow(flow);
     },
     onGone: (id) => {
       broadcast(state, { type: "flow-gone", id });
@@ -4180,6 +4206,16 @@ export async function startServer(opts: {
     },
     save: (rec) => flowFiles?.save(rec),
     forget: (id) => flowFiles?.forget(id),
+    branchState: (b) => LandingHub.stateOf(b),
+    // the last step's run carries the session a "fix it" resumes
+    onBranchEnd: (flow, runId) => {
+      const run = runId ? runner.get(runId) : undefined;
+      if (!run || !flow.branch) {
+        console.error(`flows: ${flow.id} ended on ${flow.branch?.name ?? "no branch"} with no run to hand the branch over by`);
+        return;
+      }
+      state.landing.handOver({ ...run, branch: flow.branch });
+    },
     // a step's run ends on its result, while its process may still be going;
     // a seed's gate reads status once that process is gone and the seed quiet
     status: async (repoId) => {
@@ -4496,12 +4532,18 @@ export async function startServer(opts: {
       },
       start: (event, repo) => startTriggerRun(state, event, repo),
       resume: async (event) => {
+        // a flow still kept is picked up at the step it stopped in; one the
+        // server has let go of leaves its branch to a run, like a branch run's
+        const flow = event.flowId ? state.flows.get(event.flowId) : undefined;
+        if (flow?.branch && flow.status === "stopped") return { flow: state.flows.pickUp(flow.id) };
         const rec = event.branch ? state.landing.record(event.branch) : undefined;
         if (!rec) throw new HttpError(404, "its branch is gone, so start it again instead");
-        return startBranchFix(state, rec, "Carry on with the task from where you stopped.", "resume", true);
+        return { run: await startBranchFix(state, rec, "Carry on with the task from where you stopped.", "resume", true) };
       },
       stopRun: (id) => state.runner.stop(id),
+      stopFlow: (id) => state.flows.stop(id),
       runKnown: (id) => state.runner.get(id) !== undefined,
+      flowKnown: (id) => state.flows.get(id) !== undefined,
       env: (name) => triggerSecrets.get(name),
     }),
     kit: new KitHub({

@@ -37,7 +37,7 @@ import {
 } from "../core/landing";
 import { foldsCase, readRules, sortBranch } from "../core/review";
 import { configDir } from "../core/store";
-import type { LandEntry, LandingInfo, LandingOrphan, LandingRun, LandNotice, Repo, Run, RunBranchState, RunReview, RunWhole, ServerEvent } from "../core/types";
+import type { LandEntry, LandingInfo, LandingOrphan, LandingRun, LandNotice, Repo, Run, RunBranch, RunBranchState, RunReview, RunWhole, ServerEvent } from "../core/types";
 import { isRunActive } from "../core/types";
 import { git } from "../core/exec";
 import { aheadOf, currentBranch, defaultBranch, dirtyFiles, ffMain, listRunTreeDirs, rebaseOnto, removeRunTree, repoKey, revOf, treeRepo, treeState, worktreesRoot } from "../core/worktree";
@@ -469,7 +469,9 @@ export class LandingHub {
       ...(run.session ? { session: run.session } : {}),
       ...(run.endedAt ? { endedAt: run.endedAt } : {}),
     };
-    const ended = !isRunActive(run);
+    // a flow's step: the record follows it, but the branch is sorted only
+    // once the flow is done and hands it over without the mark
+    const ended = !isRunActive(run) && !b.held;
     const text = JSON.stringify(next);
     const changed = text !== this.written.get(next.id);
     let moved = changed;
@@ -491,11 +493,24 @@ export class LandingHub {
     if (moved) this.publish();
   }
 
+  /** A flow on a branch is done: its last step's run, carrying the branch as
+   *  the flow read it (no longer held), settles as a branch run ending does.
+   *  The record is written again even when nothing in it changed, since the
+   *  held steps already wrote the same state without sorting it. */
+  handOver(run: Run): void {
+    if (!run.branch || run.branch.held || isRunActive(run)) return;
+    this.written.delete(run.branch.origin);
+    this.onRun(run);
+  }
+
   /** What a branch run's worktree holds once it ends: ready when it has
    *  commits its target has not and nothing left over. */
   static async branchState(run: Run): Promise<RunBranchState> {
-    const b = run.branch;
-    if (!b) return "nothing";
+    return run.branch ? LandingHub.stateOf(run.branch) : "nothing";
+  }
+
+  /** What a branch's worktree holds, as `branchState` reads it for a run. */
+  static async stateOf(b: RunBranch): Promise<RunBranchState> {
     const dirty = await dirtyFiles(b.dir).catch(() => null);
     if (dirty === null) return "nothing";
     if (dirty.length > 0) return "uncommitted";

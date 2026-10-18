@@ -1,9 +1,10 @@
 import { describe, expect, spyOn, test } from "bun:test";
-import { Flows, overBudget, RESTART_NOTE, RESUME_NOTE, stepSpec, summaryOf, type CheckResult, type FlowRecord, type FlowRunner } from "./flow";
+import { Flows, overBudget, PICKED_UP_NOTE, RESTART_NOTE, RESUME_NOTE, stepSpec, summaryOf, type CheckResult, type FlowRecord, type FlowRunner } from "./flow";
 import { STAGE_AWAY, StageAwayError } from "./stagewire";
 import { parseWorkflow } from "./workflow";
 import { DEFAULT_AGENT, type AgentSettings, type EvidenceFile, type Fleet, type Flow, type JudgeAnswers, type Repo, type Run, type VerdictAnswers, type Workflow } from "./types";
 import type { ActionSpec } from "./actions";
+import type { BranchStart } from "./runner";
 
 const flush = () => new Promise<void>((r) => setTimeout(r, 0));
 
@@ -47,15 +48,18 @@ class FakeRunner implements FlowRunner {
   agents: AgentSettings[] = [];
   stopped: string[] = [];
   dismissed: string[] = [];
+  branches: (BranchStart | undefined)[] = [];
   onChange: (run: Run) => void = () => {};
   private n = 0;
-  start(r: Repo, action: string, spec: ActionSpec, note: string, agent: AgentSettings = DEFAULT_AGENT): Run {
+  start(r: Repo, action: string, spec: ActionSpec, note: string, agent: AgentSettings = DEFAULT_AGENT, _by?: string, _scope?: undefined, branch?: BranchStart): Run {
     this.agents.push(agent);
+    this.branches.push(branch);
     this.n += 1;
     const run: Run = {
       id: `run${this.n}`, repoId: r.id, action, verb: spec.verb, progress: spec.progress,
       expectsChange: spec.expectsChange, chat: false, harness: agent.harness, note, status: "working",
       startedAt: 0, steps: [], prompt: null,
+      ...(branch ? { branch: { ...branch.branch, state: "working" as const } } : {}),
     };
     this.runs.set(run.id, run);
     this.specs.push(spec);
@@ -1496,5 +1500,143 @@ describe("stopping from the bottom up", () => {
     expect(flows.getFleet(fleet.id)?.stopping).toBeUndefined();
     expect(fleets.at(-1)?.status).toBe("stopped");
     expect(flows.list().every((f) => f.status === "stopped")).toBe(true);
+  });
+});
+
+describe("a flow on a branch", () => {
+  const CHECKED = wf(`---
+name: checked
+verb: fix
+blurb: b
+expects-change: true
+---
+
+## Triage
+
+Look first.
+
+## Fix
+check: bun test
+retries: 1
+
+Fix it.
+`);
+  const cut = (): BranchStart => ({
+    branch: { name: "run/fix-b1", target: "main", base: "abc", dir: "/cfg/worktrees/r-b1", state: "working", origin: "b1", openPr: true },
+    prepare: async () => {},
+  });
+  function branchSetup(state: () => "ready" | "nothing" | "uncommitted" = () => "ready") {
+    const runner = new FakeRunner();
+    const checkedIn: string[] = [];
+    const handed: { flow: Flow; runId: string | undefined }[] = [];
+    const flows = new Flows(runner, {
+      onChange: () => {},
+      onGone: () => {},
+      onFleet: () => {},
+      onFleetGone: () => {},
+      check: async (r) => {
+        checkedIn.push(r.path);
+        return { exit: 0, output: "" };
+      },
+      evaluator: null,
+      branchState: async () => state(),
+      onBranchEnd: (flow, runId) => handed.push({ flow: structuredClone(flow), runId }),
+    });
+    runner.onChange = (run) => flows.onRun(run);
+    return { runner, flows, checkedIn, handed };
+  }
+
+  test("every step runs held on the branch, the setup only before the first, and checks run in the worktree", async () => {
+    const { runner, flows, checkedIn } = branchSetup();
+    const flow = flows.start(repo(), CHECKED, "an issue", DEFAULT_AGENT, { branch: cut() });
+    expect(flow.branch).toMatchObject({ origin: "b1", state: "working" });
+    expect(flow.branch?.held).toBeUndefined();
+    expect(runner.branches[0]?.branch).toMatchObject({ origin: "b1", held: true, openPr: true });
+    expect(runner.branches[0]?.prepare).toBeDefined();
+    runner.end("run1", "done", "triaged");
+    await flush();
+    expect(runner.branches[1]?.branch.held).toBe(true);
+    expect(runner.branches[1]?.prepare).toBeUndefined();
+    runner.end("run2", "done", "fixed");
+    await flush();
+    expect(checkedIn).toEqual(["/cfg/worktrees/r-b1"]);
+  });
+
+  test("a done flow reads its worktree and hands the branch over by its last step's run", async () => {
+    const { runner, flows, handed } = branchSetup();
+    const flow = flows.start(repo(), CHECKED, "an issue", DEFAULT_AGENT, { branch: cut() });
+    runner.end("run1", "done", "triaged");
+    await flush();
+    runner.end("run2", "done", "fixed");
+    await flush();
+    await flush();
+    expect(flow.status).toBe("done");
+    expect(flow.branch).toMatchObject({ state: "ready" });
+    expect(flow.outcome).toBe("changed");
+    expect(handed).toHaveLength(1);
+    expect(handed[0]?.runId).toBe("run2");
+    expect(handed[0]?.flow.branch?.held).toBeUndefined();
+  });
+
+  test("a stopped flow keeps its branch and hands nothing over", async () => {
+    const { runner, flows, handed } = branchSetup(() => "uncommitted");
+    const flow = flows.start(repo(), CHECKED, "an issue", DEFAULT_AGENT, { branch: cut() });
+    flows.stop(flow.id);
+    await flush();
+    await flush();
+    expect(runner.stopped).toEqual(["run1"]);
+    expect(flow.status).toBe("stopped");
+    expect(flow.branch?.state).toBe("uncommitted");
+    expect(handed).toHaveLength(0);
+  });
+
+  test("the checkout's own run or flow does not stand in its way, and it does not count as the checkout's flow", () => {
+    const { runner, flows } = branchSetup();
+    runner.start(repo(), "ask", { verb: "ask" } as ActionSpec, "busy");
+    const flow = flows.start(repo(), CHECKED, "an issue", DEFAULT_AGENT, { branch: cut() });
+    expect(flow.status).toBe("working");
+    expect(flows.activeFor("r")).toBeUndefined();
+    expect(() => flows.start(repo(), CHECKED, "plain", DEFAULT_AGENT)).toThrow();
+  });
+
+  test("a stopped flow is picked up at its step, resuming that step's session, and the steps after it follow", async () => {
+    const { runner, flows, handed } = branchSetup();
+    const flow = flows.start(repo(), CHECKED, "an issue", DEFAULT_AGENT, { branch: cut() });
+    runner.end("run1", "done", "triaged");
+    await flush();
+    runner.session("run2", "sess-fix");
+    flows.stop(flow.id);
+    await flush();
+    await flush();
+    expect(flow.status).toBe("stopped");
+    expect(flow.steps[1]?.status).toBe("failed");
+    flows.pickUp(flow.id);
+    expect(flow.status).toBe("working");
+    expect(flow.branch?.state).toBe("working");
+    expect(runner.specs[2]).toMatchObject({ resume: "sess-fix", message: PICKED_UP_NOTE });
+    expect(runner.branches[2]?.branch).toMatchObject({ origin: "b1", held: true });
+    runner.end("run3", "done", "fixed");
+    await flush();
+    await flush();
+    expect(flow.status).toBe("done");
+    expect(handed.map((x) => x.runId)).toEqual(["run3"]);
+  });
+
+  test("only a stopped flow on a branch is picked up", () => {
+    const { flows } = branchSetup();
+    const going = flows.start(repo(), CHECKED, "an issue", DEFAULT_AGENT, { branch: cut() });
+    expect(() => flows.pickUp(going.id)).toThrow("not stopped");
+    expect(() => flows.pickUp("nope")).toThrow("unknown flow");
+  });
+
+  test("a restart reruns the step on the same branch, with no setup", () => {
+    const { runner, flows } = branchSetup();
+    const flow = flows.start(repo(), CHECKED, "an issue", DEFAULT_AGENT, { branch: cut() });
+    const rec: FlowRecord = { v: 1, flow: structuredClone(flow), repoPath: "/tmp/r", workflow: CHECKED, before: "", savedAt: 0 };
+    const { runner: r2, flows: f2 } = branchSetup();
+    f2.restore([rec], () => repo(), () => () => DEFAULT_AGENT);
+    expect(r2.branches[0]?.branch).toMatchObject({ origin: "b1", held: true });
+    expect(r2.branches[0]?.prepare).toBeUndefined();
+    expect(runner.branches).toHaveLength(1);
   });
 });

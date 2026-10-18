@@ -4,6 +4,7 @@
  *  tests drive it with a fake runner. */
 
 import { busyWith, checkWhen, type ActionSpec } from "./actions";
+import type { BranchStart } from "./runner";
 import { isSeedId } from "./sprout";
 import { STAGE_AWAY } from "./stagewire";
 import { decide, decideJudge, judgeState, verdictState } from "./verdict";
@@ -22,6 +23,8 @@ import {
   type Repo,
   type RepoStatus,
   type Run,
+  type RunBranch,
+  type RunBranchState,
   type Workflow,
   type VerdictAnswers,
   type FlowBudget,
@@ -87,15 +90,21 @@ export const RESTART_NOTE = "canopy restarted during this step; read the repo's 
 export const RESUME_NOTE =
   "canopy restarted while you were working on this step, so your last turn may have been cut short. Read the repo's state and finish the step.";
 
+/** The whole message that continues a step's Claude session when a stopped
+ *  flow on a branch is picked up again. */
+export const PICKED_UP_NOTE =
+  "You were stopped partway through this step, and are now picked up again on the same branch. Read the repo's state and finish the step.";
+
 /** what the browser mints for a flow or fleet start: 32 hex digits */
 export const isRequestId = (v: unknown): v is string => typeof v === "string" && /^[0-9a-f]{32}$/.test(v);
 
 /** how long a stop waits for an aborted check to exit before the flow ends anyway */
 export const STOP_GRACE = 10_000;
 
-/** What Flows needs from the Runner; the real one satisfies it. */
+/** What Flows needs from the Runner; the real one satisfies it. A flow on a
+ *  branch passes the branch as the runner's last argument. */
 export interface FlowRunner {
-  start(repo: Repo, action: string, spec: ActionSpec, note: string, agent: AgentSettings): Run;
+  start(repo: Repo, action: string, spec: ActionSpec, note: string, agent: AgentSettings, by?: string, scope?: undefined, branch?: BranchStart): Run;
   get(id: string): Run | undefined;
   activeFor(repoId: string): Run | undefined;
   stop(id: string): Run;
@@ -131,6 +140,19 @@ export interface FlowHooks {
   save?: (rec: FlowRecord) => void;
   /** drops a flow's record */
   forget?: (id: string) => void;
+  /** what a flow's branch holds, read from its worktree: the verdict's
+   *  "changed", and the state the branch is handed over in */
+  branchState?: (branch: RunBranch) => Promise<RunBranchState>;
+  /** a flow on a branch is done and its worktree read: the landing queue
+   *  takes the branch, through the last step run's record. Only a done flow
+   *  hands its branch over; a stopped or failed one leaves it as it is. */
+  onBranchEnd?: (flow: Flow, runId: string | undefined) => void;
+}
+
+/** The branch as a flow keeps it: in this state, never held (only its steps' runs are). */
+function branchOf(b: RunBranch, state: RunBranchState): RunBranch {
+  const { held: _held, ...rest } = b;
+  return { ...rest, state };
 }
 
 const errText = (err: unknown): string => String(err instanceof Error ? err.message : err);
@@ -153,7 +175,16 @@ interface LiveFlow {
   checking?: AbortController;
   /** a stop waiting for the aborted check to exit, and the grace that ends it */
   stopping?: ReturnType<typeof setTimeout>;
+  /** a branch flow's setup line, run before its first step's agent; gone
+   *  once that run starts, and never there after a restore */
+  prepare?: BranchStart["prepare"];
+  /** set by a pick-up until its step's run starts: the resumed session is
+   *  told it was stopped, not cut short by a restart */
+  pickedUp?: boolean;
 }
+
+/** Where a flow's checks and evidence read: the branch's worktree, else the repo. */
+const workRepo = (live: LiveFlow): Repo => (live.flow.branch ? { ...live.repo, path: live.flow.branch.dir } : live.repo);
 
 /** The agent's closing words: the result, else the last text step. */
 export function summaryOf(run: Run): string {
@@ -236,9 +267,11 @@ export class Flows {
     return this.live.get(id)?.flow;
   }
 
+  /** The flow going in the repo's checkout. A flow on a branch works in its
+   *  own worktree and is not counted. */
   activeFor(repoId: string): Flow | undefined {
     for (const l of this.live.values()) {
-      if (l.flow.repoId === repoId && isFlowActive(l.flow)) return l.flow;
+      if (l.flow.repoId === repoId && !l.flow.branch && isFlowActive(l.flow)) return l.flow;
     }
     return undefined;
   }
@@ -252,15 +285,17 @@ export class Flows {
   /** Starts a workflow on a repo. `agent` is every step's settings, or how
    *  to pick them by the profile a step names. A `request` the client
    *  minted makes a start sent twice (a retry after the answer was lost)
-   *  find the flow the first one made. */
+   *  find the flow the first one made. A `branch` (cut by the caller, its
+   *  worktree made) runs every step there instead of the repo's checkout,
+   *  so the checkout's own run or flow does not stand in the way. */
   start(
     repo: Repo,
     workflow: Workflow,
     note: string,
     agent: AgentSettings | StepAgent,
-    opts: { fleetId?: string; request?: string } = {},
+    opts: { fleetId?: string; request?: string; branch?: BranchStart } = {},
   ): Flow {
-    const { fleetId, request } = opts;
+    const { fleetId, request, branch } = opts;
     if (request) {
       const again = this.forRequest(request);
       if (again) {
@@ -268,9 +303,10 @@ export class Flows {
         return again;
       }
     }
-    const busyFlow = this.activeFor(repo.id);
+    if (branch && fleetId) throw new Error("a fleet's flows run in each repo's checkout, not on a branch");
+    const busyFlow = branch ? undefined : this.activeFor(repo.id);
     if (busyFlow) throw new Error(`${repo.name} already has ${busyFlow.verb} going`);
-    const busyRun = this.runner.activeFor(repo.id);
+    const busyRun = branch ? undefined : this.runner.activeFor(repo.id);
     if (busyRun) throw new Error(busyWith(repo.name, busyRun.verb));
     if (workflow.noteRequired && !note.trim()) throw new Error("write what the agent should do first");
     const flow: Flow = {
@@ -287,6 +323,7 @@ export class Flows {
       ...(workflow.budget ? { budget: workflow.budget } : {}),
       spent: { runs: 0, workMs: 0 },
       ...(request ? { request } : {}),
+      ...(branch ? { branch: branchOf(branch.branch, "working") } : {}),
     };
     const live: LiveFlow = {
       flow,
@@ -294,6 +331,7 @@ export class Flows {
       workflow,
       agent: stepAgent(agent),
       before: statusFingerprint(repo.status),
+      ...(branch?.prepare ? { prepare: branch.prepare } : {}),
     };
     this.live.set(flow.id, live);
     this.prune();
@@ -427,6 +465,30 @@ export class Flows {
       }
     }
     return n;
+  }
+
+  /** Picks a stopped flow on a branch up where it ended: the step it ended
+   *  in runs again, resuming that step's Claude session when it has one, and
+   *  the steps after it follow. Only a flow on a branch, whose worktree no one
+   *  else works in, can be picked up. */
+  pickUp(id: string): Flow {
+    const live = this.live.get(id);
+    if (!live) throw new Error(`unknown flow: ${id}`);
+    const { flow } = live;
+    if (!flow.branch) throw new Error("only a flow on a branch can be picked up");
+    if (flow.status !== "stopped") throw new Error(`the flow is ${flow.status}, not stopped`);
+    for (const s of flow.steps) if (s.status === "skipped") s.status = "pending";
+    this.resetStep(flow.steps[flow.current], true);
+    flow.restarted = true;
+    live.pickedUp = true;
+    flow.status = "working";
+    flow.branch = branchOf(flow.branch, "working");
+    delete flow.endedAt;
+    delete flow.error;
+    delete flow.outcome;
+    this.emit(live);
+    void this.runStep(live);
+    return flow;
   }
 
   stop(id: string): Flow {
@@ -833,16 +895,22 @@ export class Flows {
     // and the work so far; anything else starts fresh with the restart note.
     const resume = restarted && step.session && step.harness === "claude" && agent.harness === "claude" ? step.session : undefined;
     let spec = stepSpec(workflow, flow.current, this.summaries(live), flow.retryReason, restarted);
-    if (resume) spec = { ...spec, resume, message: RESUME_NOTE };
+    if (resume) spec = { ...spec, resume, message: live.pickedUp ? PICKED_UP_NOTE : RESUME_NOTE };
     const tools = def.check ? this.hooks.checkTools?.(live.repo, def.check) : null;
     if (tools) {
       const extra = await tools.catch(() => []);
       if (!isFlowActive(flow)) return;
       if (extra.length > 0) spec = { ...spec, allowedTools: [...new Set([...spec.allowedTools, ...extra])] };
     }
+    // every step runs on the flow's branch, held from the landing queue
+    // until the flow is done; the setup line runs before the first only
+    const onBranch: BranchStart | undefined = flow.branch
+      ? { branch: { ...branchOf(flow.branch, "working"), held: true }, ...(live.prepare ? { prepare: live.prepare } : {}) }
+      : undefined;
     let run: Run;
     try {
-      run = this.runner.start(live.repo, workflow.name, spec, flow.note, agent);
+      run = this.runner.start(live.repo, workflow.name, spec, flow.note, agent, undefined, undefined, onBranch);
+      delete live.prepare;
     } catch (err) {
       // The stage runner is away: the step waits for it, and keeps the
       // restart note for when it runs. By name, not class, as a thrown
@@ -858,6 +926,7 @@ export class Flows {
       return;
     }
     delete flow.restarted;
+    delete live.pickedUp;
     if (resume) live.resuming = run.id;
     step.status = "running";
     step.runId = run.id;
@@ -890,7 +959,7 @@ export class Flows {
     live.checking = ctl;
     let r: CheckResult;
     try {
-      r = await this.hooks.check(live.repo, def.check, ctl.signal);
+      r = await this.hooks.check(workRepo(live), def.check, ctl.signal);
     } finally {
       if (live.checking === ctl) delete live.checking;
     }
@@ -941,7 +1010,10 @@ export class Flows {
           return;
         }
         let changed: boolean | null = null;
-        if (this.hooks.status) {
+        if (live.flow.branch) {
+          const read = await this.readBranch(live.flow.branch);
+          changed = read === null ? null : read !== "nothing";
+        } else if (this.hooks.status) {
           try {
             const st = await this.hooks.status(live.flow.repoId);
             changed = st ? statusFingerprint(st) !== live.before : null;
@@ -976,7 +1048,7 @@ export class Flows {
         let files: EvidenceFile[] = [];
         if (def.evidence.length > 0 && this.hooks.evidence) {
           try {
-            files = await this.hooks.evidence(live.repo, def.evidence);
+            files = await this.hooks.evidence(workRepo(live), def.evidence);
           } catch {
             files = def.evidence.map((path) => ({ path, text: null }));
           }
@@ -1048,7 +1120,32 @@ export class Flows {
     if (flow.fleetId) this.pump(flow.fleetId);
   }
 
+  /** What the branch's worktree holds, or null when it cannot be read. */
+  private async readBranch(b: RunBranch): Promise<RunBranchState | null> {
+    if (!this.hooks.branchState) return null;
+    try {
+      return await this.hooks.branchState(b);
+    } catch {
+      return null;
+    }
+  }
+
+  /** A flow on a branch, ended: its worktree read into the branch's state
+   *  and outcome, and a done flow's branch handed to the landing queue. */
+  private async settleBranch(live: LiveFlow, b: RunBranch): Promise<void> {
+    const read = (await this.readBranch(b)) ?? "nothing";
+    // dismissed or pruned while the read was out: saving it would bring it back
+    if (this.live.get(live.flow.id) !== live || isFlowActive(live.flow)) return;
+    live.flow.branch = branchOf(b, read);
+    live.flow.outcome = read === "nothing" ? "unchanged" : "changed";
+    this.emit(live);
+    if (live.flow.status !== "done") return;
+    const last = [...live.flow.steps].reverse().find((s) => s.runId)?.runId;
+    this.hooks.onBranchEnd?.(live.flow, last);
+  }
+
   private async settle(live: LiveFlow): Promise<void> {
+    if (live.flow.branch) return this.settleBranch(live, live.flow.branch);
     if (!live.workflow.expectsChange || !this.hooks.status) return;
     let after: string | null = null;
     try {
