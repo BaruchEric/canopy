@@ -4426,13 +4426,40 @@ body.resizing-rows {
 }
 
 /* a coordinator's cards, between its timeline and its composer. The block
-   scrolls on its own so twenty cards never squeeze the chat out. */
+   scrolls on its own so twenty cards never squeeze the chat out, and folds
+   to its head (the list hidden). On a phone (the page sets phone, by media.ts's
+   PHONE) the sheet keeps one height and shows the cards or the chat: the
+   cards view (fill) takes the timeline's room and hides the composer, and
+   the chat view keeps only the block's head, with its switch. */
 .coord-tasks {
   display: flex;
   flex-direction: column;
   min-height: 0;
   max-height: 40vh;
   border-top: 1px solid var(--hair);
+}
+/* the head alone never gives way to a long timeline */
+.coord-tasks:not(:has(> .coord-list:not([hidden]))) {
+  flex: none;
+}
+.coord-tasks.fill {
+  flex: 1 1 auto;
+  max-height: none;
+  border-top: 0;
+}
+.coord-list[hidden],
+.composer[hidden] {
+  display: none;
+}
+.sheet:has(> .coord-tasks.phone) {
+  height: 92vh;
+}
+.sheet:has(> .coord-tasks.phone) > .sheet-body {
+  flex: 1 1 auto;
+}
+.coord-views {
+  display: flex;
+  gap: 2px;
 }
 .coord-head {
   display: flex;

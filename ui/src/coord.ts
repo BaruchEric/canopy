@@ -107,6 +107,21 @@ export function coordTurn(run: Pick<Run, "tasks">): string | null {
   return n ? `${n} ${n === 1 ? "card waits" : "cards wait"} for start these` : null;
 }
 
+/** The two views a coordinator's sheet takes on a phone, where the
+ *  timeline and the cards do not both fit. */
+export type CoordView = "cards" | "chat";
+
+/** The view a phone opens a coordinator's sheet on: the chat while it has
+ *  no cards, while a question waits in the timeline, or while it works on
+ *  cards already started; the cards while any waits for start these, and
+ *  between turns or once it ended. */
+export function coordView(run: Pick<Run, "status" | "tasks">): CoordView {
+  const tasks = run.tasks ?? [];
+  if (tasks.length === 0 || run.status === "waiting") return "chat";
+  if (tasks.some((t) => t.state === "proposed")) return "cards";
+  return run.status === "working" ? "chat" : "cards";
+}
+
 /** The card a coordinator started a child for, when the page has the parent. */
 export const parentCard = (parent: Pick<Run, "tasks"> | undefined, childId: string): CoordTask | undefined =>
   parent?.tasks?.find((t) => t.run === childId);

@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { isSeedId } from "../../../src/core/sprout";
 import { isRunActive, type CoordTask, type Run } from "../../../src/core/types";
-import { canStartCards, cardCounts, cardStatus, parentCard, type CoordEdit } from "../coord";
+import { canStartCards, cardCounts, cardStatus, parentCard, type CoordEdit, type CoordView } from "../coord";
 import { ciChip, prLine } from "../prs";
 import { backendOf, plainOf } from "../registry";
 import { idText, landingAll, prsAll, useStore } from "../store";
@@ -19,19 +19,33 @@ const ACTION_WORD: Record<CoordTask["action"], string> = {
 const TITLE_MAX = 120;
 const NOTE_MAX = 4000;
 
+/** How the cards block sits in the sheet. On a phone the sheet shows the
+ *  cards or the chat, and the block's head switches between them; wider,
+ *  the block sits under the timeline and folds to its head. */
+export type CoordLayout =
+  | { kind: "phone"; view: CoordView; onView: (view: CoordView) => void }
+  | { kind: "wide"; folded: boolean; onFold: (folded: boolean) => void };
+
+const VIEWS: readonly CoordView[] = ["cards", "chat"];
+
 /**
  * A coordinator's cards (FR-010), above its composer: each card's title,
  * repo, note and state, an edit form and remove while it is proposed, and
  * once it started, its child's newest step, landing word or PR and a link
  * to the child's sheet. "start these" shows while any card is proposed.
+ * Showing only its head, the list stays mounted, so an open edit form
+ * keeps what was typed. `error` is the sheet's, for the phone's cards
+ * view, where the timeline that shows it is gone.
  */
-export function CoordTasks({ run, act }: { run: Run; act: Act }) {
+export function CoordTasks({ run, act, layout, error = null }: { run: Run; act: Act; layout: CoordLayout; error?: string | null }) {
   const coordStart = useStore((s) => s.coordStart);
   const tasks = run.tasks ?? [];
   const active = isRunActive(run);
   if (tasks.length === 0 && !active) return null;
+  const headOnly = layout.kind === "phone" ? layout.view === "chat" : layout.folded;
+  const fill = layout.kind === "phone" && layout.view === "cards";
   return (
-    <section className="coord-tasks" aria-label="The coordinator's cards">
+    <section className={`coord-tasks${layout.kind === "phone" ? " phone" : ""}${fill ? " fill" : ""}`} aria-label="The coordinator's cards">
       <div className="coord-head">
         <span className="coord-count">{tasks.length ? cardCounts(tasks) : "No cards yet. The coordinator proposes them here."}</span>
         <span className="spacer" />
@@ -45,14 +59,43 @@ export function CoordTasks({ run, act }: { run: Run; act: Act }) {
             start these
           </button>
         )}
+        {layout.kind === "phone" ? (
+          <div className="coord-views" role="group" aria-label="Show">
+            {VIEWS.map((v) => (
+              <button
+                key={v}
+                type="button"
+                className={`mini${layout.view === v ? " on" : ""}`}
+                aria-pressed={layout.view === v}
+                onClick={() => layout.onView(v)}
+              >
+                {v}
+              </button>
+            ))}
+          </div>
+        ) : (
+          tasks.length > 0 && (
+            <button
+              type="button"
+              className="mini"
+              aria-expanded={!layout.folded}
+              aria-controls={`coord-list-${run.id}`}
+              title={layout.folded ? "Show the cards" : "Fold the cards to this line, for more of the chat"}
+              onClick={() => layout.onFold(!layout.folded)}
+            >
+              {layout.folded ? "show cards" : "hide cards"}
+            </button>
+          )
+        )}
       </div>
       {tasks.length > 0 && (
-        <ol className="coord-list">
+        <ol className="coord-list" id={`coord-list-${run.id}`} hidden={headOnly}>
           {tasks.map((t) => (
             <CoordCard key={t.id} run={run} task={t} act={act} />
           ))}
         </ol>
       )}
+      {error && !headOnly && <p className="note err">{error}</p>}
     </section>
   );
 }

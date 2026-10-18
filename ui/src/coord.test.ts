@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import type { CoordTask, LandingInfo, PrWatch, Run, RunStep } from "../../src/core/types";
-import { canStartCards, cardCounts, cardStatus, childLine, coordTurn, isCoordinator, parentCard, stepLine } from "./coord";
+import { canStartCards, cardCounts, cardStatus, childLine, coordTurn, coordView, isCoordinator, parentCard, stepLine } from "./coord";
 
 const run = (id: string, over: Partial<Run> = {}): Run => ({
   id,
@@ -122,5 +122,27 @@ describe("the coordinator's run", () => {
     expect(parentCard(undefined, "c3")).toBeUndefined();
     expect(cardCounts(tasks)).toBe("3 cards · 1 proposed, 2 running");
     expect(cardCounts([])).toBe("0 cards");
+  });
+});
+
+describe("the view a phone opens a coordinator on", () => {
+  const coord = (status: Run["status"], tasks: CoordTask[]) => run("c1", { action: "coordinate", chat: true, status, tasks });
+
+  test("the chat while there are no cards or a question waits", () => {
+    expect(coordView(coord("idle", []))).toBe("chat");
+    expect(coordView(run("c1", { action: "coordinate", status: "idle" }))).toBe("chat");
+    expect(coordView(coord("waiting", [card()]))).toBe("chat");
+  });
+
+  test("the cards while any waits for start these, even mid-turn", () => {
+    expect(coordView(coord("working", [card({ state: "done" }), card({ id: "t2" })]))).toBe("cards");
+    expect(coordView(coord("idle", [card()]))).toBe("cards");
+  });
+
+  test("the chat while it works on cards already started, the cards between turns and once it ended", () => {
+    const started = [card({ state: "running", run: "k1" }), card({ id: "t2", state: "failed" })];
+    expect(coordView(coord("working", started))).toBe("chat");
+    expect(coordView(coord("idle", started))).toBe("cards");
+    expect(coordView(coord("done", started))).toBe("cards");
   });
 });

@@ -15,7 +15,8 @@ import { SearchSheet } from "./Search";
 import { NewSproutSheet, SproutSheet } from "./Incubator";
 import { RunPromptForm } from "./Prompts";
 import { CoordTasks, ParentLine } from "./CoordTasks";
-import { isCoordinator } from "../coord";
+import { coordView, isCoordinator, type CoordView } from "../coord";
+import { PHONE, useMedia } from "../media";
 import { scopeOffers } from "../inbox";
 import {
   AGENT_ROLES,
@@ -154,7 +155,8 @@ function Body({ sheet }: { sheet: Sheet }) {
   if (sheet.kind === "fleet") return <FleetSheet fleetId={sheet.fleetId} />;
   if (sheet.kind === "approve") return <ApproveSheet key={sheet.id} id={sheet.id} />;
   if (!run) return <Missing what="That run is gone." onClose={close} />;
-  return <Console run={run} repo={repo} />;
+  // keyed, so a coordinator's view and fold never carry over to the next run shown
+  return <Console key={run.id} run={run} repo={repo} />;
 }
 
 function Missing({ what, onClose }: { what: string; onClose: () => void }) {
@@ -440,7 +442,7 @@ export function Timeline({
 
 /* ---------- the console ---------- */
 
-function Console({ run, repo }: { run: Run; repo: Repo | undefined }) {
+export function Console({ run, repo }: { run: Run; repo: Repo | undefined }) {
   const close = useStore((s) => s.closeSheet);
   const stopRun = useStore((s) => s.stopRun);
   const dismissRun = useStore((s) => s.dismissRun);
@@ -460,6 +462,15 @@ function Console({ run, repo }: { run: Run; repo: Repo | undefined }) {
   };
   const harness = harnessOf(run);
   const name = AGENT_NAME[harness];
+
+  // A coordinator's cards: on a phone the sheet shows them or the chat,
+  // opening on the view coordView picks; wider, they sit under the
+  // timeline and fold to their head.
+  const phone = useMedia(PHONE);
+  const [view, setView] = useState<CoordView>(() => coordView(run));
+  const [folded, setFolded] = useState(false);
+  const cards = isCoordinator(run) && ((run.tasks?.length ?? 0) > 0 || active);
+  const cardsOnly = cards && phone && view === "cards";
 
   return (
     <>
@@ -493,20 +504,33 @@ function Console({ run, repo }: { run: Run; repo: Repo | undefined }) {
       {run.branch && <BranchBlock run={run} act={act} />}
       {run.branch && <PrBlock run={run} act={act} />}
 
-      <Timeline
-        run={run}
-        repo={repo}
-        error={error}
-        onAnswer={(a, promptId) => void act(() => answerRun(run.id, promptId, a))}
-      />
+      {/* gone rather than hidden in the cards view, so it comes back
+          following the newest step */}
+      {!cardsOnly && (
+        <Timeline
+          run={run}
+          repo={repo}
+          error={error}
+          onAnswer={(a, promptId) => void act(() => answerRun(run.id, promptId, a))}
+        />
+      )}
 
-      {isCoordinator(run) && <CoordTasks run={run} act={act} />}
+      {cards && (
+        <CoordTasks
+          run={run}
+          act={act}
+          layout={phone ? { kind: "phone", view, onView: setView } : { kind: "wide", folded, onFold: setFolded }}
+          error={cardsOnly ? error : null}
+        />
+      )}
 
+      {/* hidden, not gone, in the cards view, so what was typed stays */}
       {chat && active && (
         <Composer
           who={name}
           ready={run.status === "idle"}
           onSend={(text) => act(() => sayRun(run.id, text), true)}
+          hidden={cardsOnly}
           {...(draft ? { draft } : {})}
         />
       )}
@@ -711,6 +735,7 @@ function Composer({
   onSend,
   draft = "",
   quiet = false,
+  hidden = false,
 }: {
   /** the agent's name, for the box's placeholder while it replies */
   who: string;
@@ -721,15 +746,23 @@ function Composer({
   /** never takes the keyboard on its own (the agents board, whose keys
    *  would otherwise type into it) */
   quiet?: boolean;
+  /** out of sight but kept, with what was typed (a coordinator's cards view) */
+  hidden?: boolean;
 }) {
   const [text, setText] = useState(draft);
   const [busy, setBusy] = useState(false);
   const box = useRef<HTMLTextAreaElement>(null);
   const can = ready && !busy && text.trim().length > 0;
 
-  // Back to the box as soon as the agent has answered.
+  // Back to the box as soon as the agent has answered, unless it is out of
+  // sight. Coming back into sight is no answer, so it takes no focus: on a
+  // phone that would raise the keyboard over the chat just switched to.
+  const shown = useRef(!hidden);
   useEffect(() => {
-    if (ready && !quiet) box.current?.focus();
+    shown.current = !hidden;
+  }, [hidden]);
+  useEffect(() => {
+    if (ready && !quiet && shown.current) box.current?.focus();
   }, [ready, quiet]);
 
   const send = async () => {
@@ -748,7 +781,7 @@ function Composer({
   };
 
   return (
-    <div className="composer">
+    <div className="composer" hidden={hidden}>
       <textarea
         ref={box}
         className="composer-box"
