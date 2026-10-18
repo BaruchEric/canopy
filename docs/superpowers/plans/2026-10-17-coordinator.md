@@ -2,8 +2,14 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Status:** planned 2026-10-17. Caller tokens run `enforce` on the Mac and
-the mini since 2026-10-17, which was the spec's gate for the merge.
+**Status:** built and deployed to the mini on 2026-10-17 (main 0efb28e).
+Caller tokens run `enforce` on the Mac and the mini since that day, which
+was the spec's gate for the merge. The fence and the lane were checked live
+from inside `coord`. The first live check deployed a source-address lane,
+and it did not hold, because docker-proxy rewrites every client to
+192.168.48.1. The lane now uses a listener of its own (`CANOPY_COORD_PORT`).
+Task 8's live run, a real coordinator with three cards, has not been done
+yet. It needs an operate token on the mini.
 
 **Goal:** a `coordinate` run is a chat that proposes tasks through
 `POST /api/coordinator/plan`. Eric edits the cards and presses **start
