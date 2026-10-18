@@ -1,0 +1,7 @@
+# Mini-only, untracked: the trigger secrets canopy reads at start. The values
+# live outside the checkout, so peer sync never copies them.
+services:
+  canopy:
+    env_file:
+      - path: /home/eric/.config/canopy-triggers/triggers.env
+        required: false
