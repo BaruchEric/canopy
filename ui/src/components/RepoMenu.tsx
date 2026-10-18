@@ -414,7 +414,7 @@ export function RepoMenu({
                   </button>
                 );
               })()}
-              {!repo.host && !seed && coordHere && (() => {
+              {!repo.host && !seed && (coordHere || coordinator) && (() => {
                 // a coordinator holds no repo, so nothing else going here stops one
                 const off = !coordinator && coordAgent.harness !== "claude";
                 return (

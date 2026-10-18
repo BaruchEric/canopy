@@ -88,9 +88,10 @@ export function RunSheet() {
       close();
     };
     window.addEventListener("keydown", onKey);
-    // Focus lands inside, so the keyboard user is in the dialog, not behind it.
-    ref.current
-      ?.querySelector<HTMLElement>("input[type=search], textarea, button:not(.close)")
+    // Focus lands inside, so the keyboard user is in the dialog, not behind
+    // it. Never on a coordinator's cards, where one Enter would start them.
+    [...(ref.current?.querySelectorAll<HTMLElement>("input[type=search], textarea, button:not(.close)") ?? [])]
+      .find((el) => !el.closest(".coord-tasks"))
       ?.focus();
     return () => window.removeEventListener("keydown", onKey);
   }, [sheet, close]);
