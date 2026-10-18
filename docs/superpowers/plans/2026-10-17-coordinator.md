@@ -33,7 +33,9 @@ numbers below are at `8ff6cbf`.
 - Runs live in memory, so `Run.tasks` and `Run.parent` die with a restart like the rest of a run. A child that a restart stopped is still sorted by the landing queue as today.
 - The token is minted when the run starts and revoked when the run ends or is deleted (`CallerBook.dropRun`). At start the server drops every `coordinator` caller left in the book, since no run survives a restart.
 - No isolated runner means no coordinator. When `CANOPY_COORD_SOCKET` is unset (the Mac), `coordinate` is refused with 409 "the coordinator runs only where an isolated coordinator runner is set up (docs/deploy.md, The coordinator)". `/api/about` reports `coordinator: boolean` so the UI can hide the action.
-- Routing gets a `coordinate` role. With nothing set for it, it is the default agent at effort `low`.
+- Routing gets a `coordinate` role. With nothing set for it, it is the default agent at effort `low`. Its harness must be Claude Code.
+- A coordinate run does not hold its repo. `Runner.activeFor` skips coordinate runs, and starting one skips the busy and workflow checks. One coordinate run per repo at a time. The run has `expectsChange: false`, so no outcome fingerprint reads the repo. It starts through its own `startCoordinator(state, repo, goal)`, not `startRepoRun`.
+- The coordinator's process runs with `bypassPermissions`. The sandbox is the guard: it has no checkout, no canopy config, and a network that reaches canopy's port and nothing else private. Without that mode, every curl would become an inbox prompt.
 - UI work follows DESIGN.md and `ui/src/styles.css` tokens. No CSS framework.
 
 ## Task 1: types, the action and the role
@@ -84,15 +86,19 @@ numbers below are at `8ff6cbf`.
   - `CANOPY_STAGE_PASS_ENV=CANOPY_API,CANOPY_TOKEN`;
   - its own claude login at `${HOST_HOME}/.config/canopy-coord/claude` mounted at `/home/bun/.stage-claude`, and codex the same way;
   - no `_incubator` or `.shared` mounts, only the seeds folder;
-  - network `coord-net`, bridge `br-canopy-crd`, subnet `10.250.14.0/24`.
-  
-  The shells service joins `coord-net` at `ipv4_address: 10.250.14.10`. Canopy shares the shells container's network namespace, so canopy answers there. The canopy service mounts the seeds folder at the same path and `coord-sock`. It gets `CANOPY_COORD_SOCKET=/run/canopy-coord/runner.sock` and `CANOPY_COORD_API=http://10.250.14.10:7850`, both passed from `.env` and empty when unset.
-- [ ] Check that canopy accepts a request on `10.250.14.10:7850`:
+  - network `coord-net`, bridge `br-canopy-crd`, subnet `10.250.14.0/24`, gateway `10.250.14.1`, `dns: [1.1.1.1, 9.9.9.9]` as stages has.
+
+  The shells service does **not** join `coord-net`. A second network on shells could move canopy's default route behind the fence. Shells instead publishes `10.250.14.1:7850:7850`, canopy on the coord bridge's gateway. The fence accepts that one destination. Replies leave through host routing, not into the bridge. This was spiked on the mini on 2026-10-17 with throwaway containers and a throwaway bridge:
+  - the gateway's published port answered;
+  - the server container's own address, the LAN router, the tailnet address and another port on the gateway all timed out.
+
+  For `up` to bind the published address, the network has to exist first, so `coord` must be in the same `up` as shells. Also mount the seeds folder at the same path and `coord-sock` on the canopy service. Pass it `CANOPY_COORD_SOCKET=/run/canopy-coord/runner.sock` and `CANOPY_COORD_API=http://10.250.14.1:7850`, both from `.env` and empty when unset.
+- [ ] Check that canopy accepts a request on `10.250.14.1:7850`:
   - the bind address in the container;
   - any Host or origin gate (`previewHostOk`, `libraryOriginAllowed`, the DNS rebinding check).
 
   If a gate refuses, allow exactly the `CANOPY_COORD_API` host and add a test.
-- [ ] Extend `stages-fence.sh` with the coordinator bridge. On `br-canopy-crd` the drops are the same as on stages, plus one ACCEPT ahead of them: `-i br-canopy-crd -d 10.250.14.10/32 -p tcp --dport 7850 -j ACCEPT`. IPv6 is dropped. `--apply` must stay idempotent and must put the ACCEPT above the drops, so it has to account for `-I` order. Extend the script's test (the stand-in iptables) to pin the order.
+- [ ] Extend `stages-fence.sh` with the coordinator bridge. On `br-canopy-crd` the drops are the same as on stages, plus one ACCEPT ahead of them: `-i br-canopy-crd -d 10.250.14.1/32 -p tcp --dport 7850 -j ACCEPT`. IPv6 is dropped. `--apply` must stay idempotent and must put the ACCEPT above the drops, so it has to account for `-I` order. Extend the script's test (the stand-in iptables) to pin the order.
 - [ ] In the server, when `CANOPY_COORD_SOCKET` is set, build a second `StageClient` on it. A `coordinate` run makes `<seeds>/<runId>` (mode 0700) and starts through that client with that cwd. Any other path refuses the action as in Global constraints. `/api/about` gets `coordinator: true` only when the socket is set and the client says hello.
 - [ ] In `docs/deploy.md`, add a section "The coordinator":
   1. Make the host folders.
@@ -164,7 +170,7 @@ numbers below are at `8ff6cbf`.
   A **start these** button shows while any card is `proposed`.
 - [ ] A child's sheet shows "started by coordinator <title>" with a link to the parent.
 - [ ] The store gets `coordPlanEdit`, `coordRemove` and `coordStart`, which call the routes with the caller token like every other write.
-- [ ] Run the UI typecheck and build. Check it in a real browser against a scratch server (the memory "Scratch canopy server for UI checks"), with a fake coordinate run made by posting a plan with the CLI token.
+- [ ] Run the UI typecheck and build, and test any pure helpers (the card's one-line status, its words). A browser check needs a real coordinate run, and the Mac refuses those, so it happens on the mini during Task 8's live check. Do not add a seam that runs a coordinator unsandboxed.
 
 ## Task 8: docs and the live check
 
@@ -185,5 +191,5 @@ numbers below are at `8ff6cbf`.
 ## Risks
 
 - **Fence order.** The ACCEPT must sit above the drops, or the coordinator cannot reach canopy. Worse, a misplaced ACCEPT can open more than one port. The script test pins it.
-- **The claude login in `coord`.** Copying the stages login works only if that login is not tied to the container's hostname. If it is, Eric logs in once, and that step is his.
+- **The claude login in `coord`.** The stages' login is a Max OAuth `.credentials.json`. A copy may be fine, but two copies that each refresh can invalidate each other if the refresh token rotates. Sharing the stages' folder is worse, because a stage could plant a hook there that runs inside the coordinator. If the copy breaks, Eric logs in once inside `coord`, and that step is his.
 - **`BRANCH_RUNS_PER_REPO`.** Triggers and Eric's own branch runs share it, so a coordinator's card can wait a long time. The card says "waiting for a branch slot in <repo>".
