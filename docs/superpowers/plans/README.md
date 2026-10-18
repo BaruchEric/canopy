@@ -4,7 +4,8 @@ Each plan here is a checklist written before the work began, for the agent or pe
 
 | Plan | Status | Shipped | Spec |
 | --- | --- | --- | --- |
-| [PR watch: a branch run opens a PR and keeps watching it](2026-10-16-pr-watch.md) | written, waiting on the spec's calls | | [PR watch](../specs/2026-10-16-pr-watch-design.md) |
+| [The coordinator: one chat splits a goal into branch runs](2026-10-17-coordinator.md) | planned | | [coordinator](../specs/2026-10-16-coordinator-design.md) |
+| [PR watch: a branch run opens a PR and keeps watching it](2026-10-16-pr-watch.md) | shipped | 2026-10-16 | [PR watch](../specs/2026-10-16-pr-watch-design.md) |
 | [Landing queue, plan 2: review rules and auto-land](2026-10-16-landing-queue-2.md) | shipped | 2026-10-16 | [landing queue](../specs/2026-10-15-landing-queue-design.md) |
 | [Landing queue, plan 1: branch runs and the queue](2026-10-15-landing-queue-1.md) | shipped | 2026-10-16 | [landing queue](../specs/2026-10-15-landing-queue-design.md) |
 | [Kit phase 3, part B: per-cell apply, skill adopt, tools](2026-10-15-kit-phase-3b.md) | shipped | 2026-10-16 | [kit and secrets phase 3](../specs/2026-10-15-kit-secrets-phase-3-design.md) |
