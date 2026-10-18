@@ -1,31 +1,27 @@
 import { HealthChip } from "./Health";
-import { useEffect, useRef, useState, type ReactNode } from "react";
+import { useState, type ReactNode } from "react";
 import { useShallow } from "zustand/react/shallow";
 import { api } from "../api";
 import { ownRun } from "../flows";
 import { allRuns, attentionCount, capsFor, homeConn, pickedIds, useStore, waitingCount, wantsSignIn } from "../store";
 import { WAITING_GLYPH, WAITING_PANEL } from "../waiting";
 import { CLI_GLYPH } from "../cli";
-import { onBeat } from "../live";
-import { useFitPop } from "../pop";
-import { escapeCloses } from "../surface";
 import { NARROW, PHONE, useMedia } from "../media";
 import { effectivePrimary, isRunActive, WS_COLORS, type RunAction, type Workspace } from "../../../src/core/types";
 import { isHome } from "../registry";
 import { baseName } from "../elsewhere";
 import { primaryRefusal } from "../workspaces";
-import { seenWord } from "../peers";
 import { PAGE_BUILD } from "../build";
 import { buildMoved, versionLine } from "../../../src/core/version";
 import { isOwnCode } from "../callerToken";
 import { FilterMenu } from "./Filters";
+import { PickMenu, type PickGroup, type PickOption } from "./PickMenu";
 import { Gear, type GearEntry, type GearGroup } from "./Gear";
 import { SettingsMenu } from "./Settings";
-import { BackendsChip } from "./Backends";
+import { BackendMenu } from "./BackendMenu";
 import { ChanChip } from "./Chan";
 import { InboxChip } from "./Inbox";
 import { NewProjectButton } from "./Incubator";
-import { DevicesChip } from "./Devices";
 import { KeptShells } from "./KeptShells";
 import { ShellsChip } from "./Shells";
 import { RangerChip } from "./Ranger";
@@ -110,56 +106,6 @@ function RunsPill() {
   );
 }
 
-/** Who this backend last reached in the peer pass, one word per peer, an
- *  unreachable one in the rust colour. Absent with no peers configured. */
-function PeersChip() {
-  const peerSeen = useStore((s) => s.peerSeen);
-  if (peerSeen.length === 0) return null;
-  return (
-    <span className="peers-chip" title="Peers this backend pulls from">
-      {peerSeen.map((p) => (
-        <span key={p.name} className={p.ok ? "peer-seen" : "peer-seen offline"}>
-          {seenWord(p)}
-        </span>
-      ))}
-    </span>
-  );
-}
-
-/** The home backend's stream, as one light: moss while it is live, and a
- *  flash on every event it sends, so a change that lands off screen still
- *  shows that the page heard it. Rust when the stream is down. */
-function LiveDot() {
-  const state = useStore((s) => homeConn(s).status.state);
-  const reason = useStore((s) => homeConn(s).status.reason);
-  const ref = useRef<HTMLSpanElement>(null);
-  useEffect(
-    () =>
-      onBeat(() => {
-        const el = ref.current;
-        if (!el) return;
-        // restart the flash: drop the class, let a frame see it gone, add it
-        el.classList.remove("beat");
-        void el.offsetWidth;
-        el.classList.add("beat");
-      }),
-    [],
-  );
-  const word =
-    state === "online"
-      ? "live: changes show as they happen"
-      : state === "connecting"
-        ? "connecting to the backend…"
-        : state === "signin"
-          ? "sign in to the backend"
-          : `offline${reason ? `: ${reason}` : ""}; showing what it last said`;
-  return (
-    <span ref={ref} className={`live-dot ${state}`} role="status" title={word} aria-label={word}>
-      <i aria-hidden="true" />
-    </span>
-  );
-}
-
 function SideToggle() {
   const narrow = useMedia(NARROW);
   const sidebarOpen = useStore((s) => s.sidebarOpen);
@@ -197,7 +143,12 @@ function SideToggle() {
   );
 }
 
-function WsTabs() {
+/** The workspaces as one word, the one in use, with every repo when none
+ *  is; the menu lists each with its count and the repos it holds. The
+ *  active one's openers and gear sit beside the word, outside the menu: a
+ *  gear opens in a portal, and a press in it would close a menu it sat in.
+ *  Absent until a workspace exists, since there is nothing to choose. */
+function WsMenu() {
   // the workspace openers go where this browser can open: nothing on a
   // phone, the helper on a laptop next to a headless backend
   const caps = useStore(useShallow(capsFor));
@@ -206,56 +157,80 @@ function WsTabs() {
   const workspaces = useStore((s) => s.workspaces);
   const activeWs = useStore((s) => s.activeWs);
   const setActiveWs = useStore((s) => s.setActiveWs);
+  if (workspaces.length === 0) return null;
+  const w = workspaces.find((x) => x.name === activeWs) ?? null;
+  const groups: PickGroup[] = [
+    {
+      label: "workspace",
+      options: [
+        { value: "", label: "all repos", what: "Every repo in the tree, no workspace" },
+        ...workspaces.map((x): PickOption => {
+          const names = x.repos.map(baseName);
+          return {
+            value: x.name,
+            label: (
+              <>
+                <span className="ws-dot" data-color={x.color ?? ""} aria-hidden="true" />
+                {x.name}
+                <span className="tab-count">{x.repos.length}</span>
+              </>
+            ),
+            what: names.slice(0, 4).join(", ") + (names.length > 4 ? `, +${names.length - 4}` : ""),
+            title: x.repos.join("\n"),
+          };
+        }),
+      ],
+    },
+  ];
   return (
-    <nav className="ws-tabs" aria-label="Workspaces">
-      <button
-        type="button"
-        className={activeWs === null ? "tab active" : "tab"}
-        onClick={() => setActiveWs(null)}
-      >
-        all
-      </button>
-      {workspaces.map((w) => (
-        <span key={w.name} className="ws-tab-wrap">
-          <button
-            type="button"
-            className={activeWs === w.name ? "tab active" : "tab"}
-            onClick={() => setActiveWs(activeWs === w.name ? null : w.name)}
-          >
-            <span className="ws-dot" data-color={w.color ?? ""} aria-hidden="true" />
-            {w.name}
-            <span className="tab-count">{w.repos.length}</span>
-          </button>
-          {/* the gear shows everywhere, a phone too: asking and chatting
-              work anywhere; only the openers need a laptop */}
-          {activeWs === w.name && (
-            <span className="ws-actions">
-              {canOpen.includes("code") && (
-                <button
-                  type="button"
-                  className="mini"
-                  title="Open all repos in one VS Code window"
-                  onClick={() => void api.wsOpen(w.name, "code", helper)}
-                >
-                  code
-                </button>
-              )}
-              {canOpen.includes("kitty") && (
-                <button
-                  type="button"
-                  className="mini"
-                  title="Open a kitty tab per repo"
-                  onClick={() => void api.wsOpen(w.name, "kitty", helper)}
-                >
-                  kitty
-                </button>
-              )}
-              <WsGear ws={w} />
-            </span>
+    <span className="ws-pick">
+      <PickMenu
+        className={w ? "ws-on" : ""}
+        label="Workspace"
+        value={activeWs ?? ""}
+        groups={groups}
+        onPick={(v) => setActiveWs(v || null)}
+        title={w ? `Showing the ${w.name} workspace, ${w.repos.length} repos` : "Showing every repo; pick a workspace to see only its repos"}
+        trigger={
+          w ? (
+            <>
+              <span className="ws-dot" data-color={w.color ?? ""} aria-hidden="true" />
+              {w.name}
+              <span className="tab-count">{w.repos.length}</span>
+            </>
+          ) : (
+            <span className="pick-dim">all repos</span>
+          )
+        }
+      />
+      {/* the gear shows everywhere, a phone too: asking and chatting work
+          anywhere; only the openers need a laptop */}
+      {w && (
+        <span className="ws-actions">
+          {canOpen.includes("code") && (
+            <button
+              type="button"
+              className="mini"
+              title="Open all repos in one VS Code window"
+              onClick={() => void api.wsOpen(w.name, "code", helper)}
+            >
+              code
+            </button>
           )}
+          {canOpen.includes("kitty") && (
+            <button
+              type="button"
+              className="mini"
+              title="Open a kitty tab per repo"
+              onClick={() => void api.wsOpen(w.name, "kitty", helper)}
+            >
+              kitty
+            </button>
+          )}
+          <WsGear ws={w} />
         </span>
-      ))}
-    </nav>
+      )}
+    </span>
   );
 }
 
@@ -397,78 +372,37 @@ function SelectPill() {
 function SortMenu() {
   const sort = useStore((s) => s.settings.sort);
   const setSetting = useStore((s) => s.setSetting);
-  const [open, setOpen] = useState(false);
-  const ref = useRef<HTMLDivElement>(null);
-  useFitPop(ref, open);
-
-  useEffect(() => {
-    if (!open) return;
-    const onDown = (e: PointerEvent) => {
-      if (!ref.current?.contains(e.target as Node)) setOpen(false);
-    };
-    const onKey = (e: KeyboardEvent) => {
-      escapeCloses(e, () => setOpen(false));
-    };
-    document.addEventListener("pointerdown", onDown);
-    window.addEventListener("keydown", onKey);
-    return () => {
-      document.removeEventListener("pointerdown", onDown);
-      window.removeEventListener("keydown", onKey);
-    };
-  }, [open]);
-
   const current = SORT.find((o) => o.value === sort) ?? SORT[0];
   return (
-    <div className="settings sort-menu" ref={ref}>
-      <button
-        type="button"
-        className={open ? "pill open" : "pill"}
-        aria-expanded={open}
-        aria-haspopup="dialog"
-        title={`Grouped by ${current.label}: ${current.title} (s for the next)`}
-        onClick={() => setOpen(!open)}
-      >
-        <svg
-          width="13"
-          height="13"
-          viewBox="0 0 24 24"
-          fill="none"
-          stroke="currentColor"
-          strokeWidth="2.2"
-          strokeLinecap="round"
-          strokeLinejoin="round"
-          aria-hidden="true"
-        >
-          <path d="M7 4v16M3 8l4-4 4 4M17 20V4M13 16l4 4 4-4" />
-        </svg>
-        {current.label}
-      </button>
-      {open && (
-        <div className="settings-pop sort-pop" role="dialog" aria-label="Group repos by">
-          <section className="settings-row">
-            <h3 className="panel-label">group by</h3>
-            <div className="sort-list" role="radiogroup" aria-label="Group repos by">
-              {SORT.map((o) => (
-                <button
-                  key={o.value}
-                  type="button"
-                  role="radio"
-                  aria-checked={o.value === sort}
-                  onClick={() => {
-                    setSetting("sort", o.value);
-                    setOpen(false);
-                  }}
-                >
-                  <span className="sort-name">{o.label}</span>
-                  <span className="sort-what">{o.title}</span>
-                </button>
-              ))}
-            </div>
-            <p className="settings-hint">s steps to the next one from anywhere on the page.</p>
-          </section>
-        </div>
-      )}
-    </div>
+    <PickMenu
+      label="Group repos by"
+      value={sort}
+      groups={[{ label: "group by", options: SORT.map((o) => ({ value: o.value, label: o.label, what: o.title })) }]}
+      onPick={(v) => {
+        const o = SORT.find((x) => x.value === v);
+        if (o) setSetting("sort", o.value);
+      }}
+      title={`Grouped by ${current.label}: ${current.title} (s for the next)`}
+      hint="s steps to the next one from anywhere on the page."
+      trigger={
+        <>
+          <svg
+            width="13"
+            height="13"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="2.2"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+            aria-hidden="true"
+          >
+            <path d="M7 4v16M3 8l4-4 4 4M17 20V4M13 16l4 4 4-4" />
+          </svg>
+          {current.label}
+        </>
+      }
+    />
   );
 }
 
@@ -751,7 +685,7 @@ export function TopBar({ nav }: { nav?: ReactNode }) {
             <TasksChip />
           </Cluster>
           <Cluster label="This page">
-            <LiveDot />
+            <BackendMenu />
             <SearchButton />
             <SettingsMenu />
           </Cluster>
@@ -775,7 +709,7 @@ export function TopBar({ nav }: { nav?: ReactNode }) {
             <SourcesMenu />
             <RescanButton />
           </Cluster>
-          <WsTabs />
+          <WsMenu />
           <Cluster label="For you">
             <InboxChip />
             <ChanChip />
@@ -786,10 +720,7 @@ export function TopBar({ nav }: { nav?: ReactNode }) {
             <KeptShells />
             <RangerChip compact />
           </Cluster>
-          <Cluster label="This backend">
-            <BackendsChip />
-            <PeersChip />
-            <DevicesChip />
+          <Cluster label="Health">
             <HealthChip />
           </Cluster>
         </div>
@@ -806,7 +737,7 @@ export function TopBar({ nav }: { nav?: ReactNode }) {
         <SourcesMenu />
         <RescanButton />
       </Cluster>
-      <WsTabs />
+      <WsMenu />
 
       <span className="spacer" />
 
@@ -848,11 +779,8 @@ export function TopBar({ nav }: { nav?: ReactNode }) {
           <RangerChip />
         </Cluster>
         <Cluster label="This backend">
-          <LiveDot />
-          <BackendsChip />
-          <PeersChip />
-          <DevicesChip />
           <HealthChip />
+          <BackendMenu />
         </Cluster>
         <Cluster label="Settings">
           <SettingsMenu />

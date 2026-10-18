@@ -27,24 +27,53 @@ import { dropAskHere, parseRoute } from "./routes";
 import { SORT_MODES, type Theme } from "./settings";
 import { SIDEBAR, attentionCount, dockless, useStore, type CanopyState } from "./store";
 import { useShallow } from "zustand/react/shallow";
-import { agentsBadge, gitBadge, healthBadge, incubatorBadge, type Badge } from "./badges";
+import { agentsBadge, gitBadge, healthBadge, incubatorBadge, type Badge, type BadgeTone } from "./badges";
+import { PickMenu, type PickGroup } from "./components/PickMenu";
 import { WAITING_PANEL } from "./waiting";
 import { bindNavigate } from "./clirun";
 import { CommandPop } from "./components/CommandLine";
 
 const route = parseRoute(window.location.search);
 
-const VIEWS = [
-  { key: "git", label: "git", title: "Git cockpit: every repo, live" },
-  { key: "library", label: "library", title: "Library: tags, notes, links and dev servers" },
-  { key: "ports", label: "ports", title: "Ports: what is listening, and the dev servers" },
-  { key: "agents", label: "agents", title: "Agents: which harness starts for what, per repo and role" },
-  { key: "incubator", label: "incubator", title: "Incubator: new projects from an idea, clarified and researched before anything is built" },
-  { key: "health", label: "health", title: "Health: what is broken on each backend, and what canopy is fixing" },
-  { key: "triggers", label: "triggers", title: "Triggers: Sentry issues that start a fix on a branch with nobody typing, and what became of each" },
-  { key: "kit", label: "kit", title: "Kit: the skills every agent has on every machine" },
-  { key: "secrets", label: "secrets", title: "Secrets: names, sinks and imports; values only behind a passkey on the mini's page" },
-] as const;
+interface ViewDef {
+  key: string;
+  label: string;
+  /** what the view is for, the line under its name in the menu */
+  what: string;
+}
+
+const GIT_VIEW: ViewDef = { key: "git", label: "git", what: "Every repo, live" };
+
+/** The views in the menus they sit under: the repos and what serves them,
+ *  the agents and what starts them, and the machines underneath. */
+const VIEW_GROUPS: { label: string; views: ViewDef[] }[] = [
+  {
+    label: "repos",
+    views: [
+      GIT_VIEW,
+      { key: "library", label: "library", what: "Tags, notes, links and dev servers" },
+      { key: "ports", label: "ports", what: "What is listening, and the dev servers" },
+    ],
+  },
+  {
+    label: "agents",
+    views: [
+      { key: "agents", label: "agents", what: "Which harness starts for what, per repo and role" },
+      { key: "incubator", label: "incubator", what: "New projects from an idea, clarified and researched before anything is built" },
+      { key: "triggers", label: "triggers", what: "Sentry issues that start a fix on a branch with nobody typing, and what became of each" },
+      { key: "kit", label: "kit", what: "The skills every agent has on every machine" },
+    ],
+  },
+  {
+    label: "system",
+    views: [
+      { key: "health", label: "health", what: "What is broken on each backend, and what canopy is fixing" },
+      { key: "secrets", label: "secrets", what: "Names, sinks and imports; values only behind a passkey on the mini's page" },
+    ],
+  },
+];
+
+const VIEWS: ViewDef[] = VIEW_GROUPS.flatMap((g) => g.views);
 
 /** the views that are not the git cockpit: their own bar, no board keys */
 const OTHER_VIEWS = ["library", "ports", "agents", "incubator", "health", "triggers", "kit", "secrets"];
@@ -77,64 +106,55 @@ function ViewBadge({ k }: { k: string }) {
   );
 }
 
-/** The views, one segmented row: in the top bar on the git view, the
- *  whole of the bar on the others. Each tab carries its view's live count. */
-function ViewNav({ view, navigate }: { view: string; navigate: (next: string) => void }) {
-  // On a phone the row scrolls rather than pushing the bar wide: the
-  // current tab is kept in sight, and an edge with tabs past it fades.
-  const row = useRef<HTMLElement>(null);
-  const [more, setMore] = useState({ start: false, end: false });
-  useEffect(() => {
-    const el = row.current;
-    if (!el) return;
-    // placed again whenever the row's size changes: the badges and the
-    // fonts arrive after the first paint and widen it. A swipe is a scroll,
-    // not a resize, so it is left where the finger put it.
-    const place = () => {
-      const on = el.querySelector<HTMLElement>("button.on");
-      if (!on || el.scrollWidth <= el.clientWidth) return;
-      // the row alone, never the page: scrollIntoView would move the window too
-      const left = on.getBoundingClientRect().left - el.getBoundingClientRect().left + el.scrollLeft;
-      const right = left + on.offsetWidth;
-      if (right > el.scrollLeft + el.clientWidth) el.scrollLeft = right - el.clientWidth + 28;
-      else if (left < el.scrollLeft) el.scrollLeft = left - 28;
-    };
-    const measure = () => {
-      const start = el.scrollLeft > 1;
-      const end = el.scrollLeft + el.clientWidth < el.scrollWidth - 1;
-      setMore((m) => (m.start === start && m.end === end ? m : { start, end }));
-    };
-    const settle = () => {
-      place();
-      measure();
-    };
-    settle();
-    el.addEventListener("scroll", measure, { passive: true });
-    const seen = new ResizeObserver(settle);
-    seen.observe(el);
-    for (const b of el.children) seen.observe(b);
-    return () => {
-      el.removeEventListener("scroll", measure);
-      seen.disconnect();
-    };
-  }, [view]);
-  const fade = [more.start ? "more-start" : "", more.end ? "more-end" : ""].filter(Boolean).join(" ");
+/** The most pressing tone among the views other than `view` that carry a
+ *  count: rust before lichen before sky. A string, so the selector settles. */
+function elsewhereTone(s: CanopyState, view: string): BadgeTone | null {
+  let worst: BadgeTone | null = null;
+  for (const { key } of VIEWS) {
+    if (key === view) continue;
+    const t = badgeOf(s, key)?.tone;
+    if (t && (worst === null || TONE_RANK[t] > TONE_RANK[worst])) worst = t;
+  }
+  return worst;
+}
+
+const TONE_RANK: Record<BadgeTone, number> = { sky: 0, lichen: 1, rust: 2 };
+
+/** The views as one word, the one showing, with its count; the menu lists
+ *  every view under its group, each with its count and what it is for. A
+ *  dot after the word says another view has something to show. */
+function ViewMenu({ view, navigate }: { view: string; navigate: (next: string) => void }) {
+  const current = VIEWS.find((v) => v.key === view) ?? GIT_VIEW;
+  const elsewhere = useStore((s) => elsewhereTone(s, view));
+  const groups: PickGroup[] = VIEW_GROUPS.map((g) => ({
+    label: g.label,
+    options: g.views.map((v) => ({
+      value: v.key,
+      label: (
+        <>
+          {v.label}
+          <ViewBadge k={v.key} />
+        </>
+      ),
+      what: v.what,
+    })),
+  }));
   return (
-    <nav ref={row} className={fade ? `view-nav ${fade}` : "view-nav"} aria-label="Canopy views">
-      {VIEWS.map(({ key, label, title }) => (
-        <button
-          type="button"
-          key={key}
-          title={title}
-          aria-current={view === key ? "page" : undefined}
-          className={view === key ? "on" : ""}
-          onClick={() => navigate(key)}
-        >
-          {label}
-          <ViewBadge k={key} />
-        </button>
-      ))}
-    </nav>
+    <PickMenu
+      className="view-pick"
+      label="Canopy views"
+      value={current.key}
+      groups={groups}
+      onPick={navigate}
+      title={`${current.label}: ${current.what}. Every view is in this menu`}
+      trigger={
+        <>
+          {current.label}
+          <ViewBadge k={current.key} />
+          {elsewhere && <span className={`dot view-elsewhere t-${elsewhere}`} aria-label="another view has something to show" />}
+        </>
+      }
+    />
   );
 }
 
@@ -434,7 +454,7 @@ export function App() {
   if (route.solo && route.repo) return <Solo id={route.repo} />;
   if (route.shell && route.repo) return <ShellSolo id={route.repo} />;
   if (route.section && route.repo) return <SectionSolo id={route.repo} section={route.section} />;
-  const nav = <ViewNav view={view} navigate={navigate} />;
+  const nav = <ViewMenu view={view} navigate={navigate} />;
   return (
     <div className="app">
       {OTHER_VIEWS.includes(view) ? <>
