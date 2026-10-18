@@ -1,9 +1,9 @@
-import { join } from "node:path";
-
 /** Repo paths are plain absolute paths on this machine, or a locator
  *  `ssh://<host><abs path>` for a folder on another host. Everything that
  *  runs git takes the locator and routes through `onHost`, so the rest of
- *  the code never has to know where a repo lives. */
+ *  the code never has to know where a repo lives.
+ *  The page reaches this file (through harness.ts), so it imports nothing
+ *  from node: Vite's dev server throws on a node import a browser loads. */
 export const SSH_SCHEME = "ssh://";
 
 export interface Locator {
@@ -80,7 +80,7 @@ export function sshArgs(host: string, controlDir: string): string[] {
     "-o",
     "ControlMaster=auto",
     "-o",
-    `ControlPath=${join(controlDir, "ssh-%C")}`,
+    `ControlPath=${controlDir.replace(/\/+$/, "")}/ssh-%C`,
     "-o",
     "ControlPersist=120",
     "--",

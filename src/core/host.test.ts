@@ -65,6 +65,10 @@ describe("quoting", () => {
     // the host comes after "--", so a name can never read as an option
     expect(args.slice(-2)).toEqual(["--", "wsl"]);
   });
+
+  test("a config dir given with a trailing slash still makes one socket path", () => {
+    expect(sshArgs("wsl", "/tmp/cfg/")).toContain("ControlPath=/tmp/cfg/ssh-%C");
+  });
 });
 
 describe("ssh config", () => {
