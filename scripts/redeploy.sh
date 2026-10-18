@@ -120,8 +120,9 @@ if [ "$cmd" = status ]; then
   for c in canopy-shells-1 canopy-canopy-1 canopy-coord-1 canopy-tunnel-1; do
     docker inspect -f "$c  {{.State.Status}} since {{.State.StartedAt}}" "$c" 2>/dev/null || echo "$c  missing"
   done
-  # the shells also publish 7850 on the coordinator bridge's gateway
-  # (10.250.14.1), which is not the address to report
+  # the shells also publish the coordinator bridge's gateway
+  # (10.250.14.1:7850), onto the coordinator's own listener, not 7850; the
+  # filter keeps it out should that mapping ever name 7850 again
   echo "port      $(docker port canopy-shells-1 7850 2>/dev/null | grep -v '^10\.250\.14\.1:' | head -1 || true)"
   echo "running   $(docker exec canopy-canopy-1 bun bin/canopy.ts version 2>/dev/null || echo unknown)"
   docker compose logs canopy --tail 3 --no-log-prefix 2>/dev/null | sed 's/^/log       /'
@@ -225,8 +226,9 @@ job() {
   # this cannot read is checked. A canopy that does not answer has nothing going.
   if [ "$force" != 1 ] && { [ "$restart" = 1 ] || ! grep -q 'canopy-canopy-1.*Running' <<<"$plan" ||
     grep -Eq 'canopy-(canopy|shells)-1.*Recreate' <<<"$plan"; }; then
-    # not the coordinator bridge's gateway, which the shells publish 7850 on
-    # too: this host's checks go to canopy's own address
+    # not the coordinator bridge's gateway (published onto the
+    # coordinator's own listener, which refuses this host's checks): they
+    # go to canopy's own address
     addr=$(docker port canopy-shells-1 7850 2>/dev/null | grep -v '^10\.250\.14\.1:' | head -1 || true)
     got=0
     if [ -n "$addr" ]; then

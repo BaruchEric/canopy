@@ -373,55 +373,27 @@ export type Refused = { kind: CallerKind; route: string; origin: string; ua: str
 
 /* ---------- the coordinator's lane ---------- */
 
-/** An IPv4 network, as `CANOPY_COORD_NET` writes one. */
-export type Cidr = { base: number; bits: number; text: string };
-
-/** a dotted IPv4 address as a number, or null */
-function ipv4(s: string): number | null {
-  const m = /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/.exec(s);
-  if (!m) return null;
-  const parts = m.slice(1).map(Number);
-  if (parts.some((p) => p > 255)) return null;
-  return parts.reduce((acc, p) => acc * 256 + p, 0);
-}
-
-/** the first `bits` bits of an address, as a number */
-const prefix = (addr: number, bits: number): number => (bits === 0 ? 0 : Math.floor(addr / 2 ** (32 - bits)));
-
-/** `a.b.c.d/n`, or a bare address as its own /32; null for anything else. */
-export function parseCidr(raw: string): Cidr | null {
-  const m = /^([0-9.]+)(?:\/(\d{1,2}))?$/.exec(raw);
-  if (!m?.[1]) return null;
-  const base = ipv4(m[1]);
-  const bits = m[2] === undefined ? 32 : Number(m[2]);
-  if (base === null || bits > 32) return null;
-  return { base, bits, text: `${m[1]}/${bits}` };
-}
-
-/** whether an address (as Bun's requestIP gives it, IPv4-mapped included) is in `net` */
-export function inCidr(addr: string, net: Cidr): boolean {
-  const a = ipv4(addr.startsWith("::ffff:") ? addr.slice("::ffff:".length) : addr);
-  return a !== null && prefix(a, net.bits) === prefix(net.base, net.bits);
-}
-
-/** `CANOPY_COORD_NET`: the coordinator container's network, unset for no
- *  lane. A value that is no network is said once and is no lane, and the
- *  error keeps every coordinator from starting. */
-export function coordLane(env: Record<string, string | undefined> = process.env): { net: Cidr | null; error: string | null } {
-  const raw = env["CANOPY_COORD_NET"]?.trim() ?? "";
-  if (!raw) return { net: null, error: null };
-  const net = parseCidr(raw);
-  return net ? { net, error: null } : { net: null, error: `CANOPY_COORD_NET=${raw} is not an IPv4 network like 10.250.14.0/24, so no coordinator starts` };
+/** `CANOPY_COORD_PORT`: the port of the coordinator's own listener, the one
+ *  socket its lane holds on. Unset or not a port, there is no listener, and
+ *  the error keeps every coordinator from starting. */
+export function coordPort(env: Record<string, string | undefined> = process.env): { port: number | null; error: string | null } {
+  const raw = env["CANOPY_COORD_PORT"]?.trim() ?? "";
+  if (!raw) return { port: null, error: "CANOPY_COORD_PORT is not set, so the coordinator has no listener of its own and none starts" };
+  const port = /^\d{1,5}$/.test(raw) ? Number(raw) : 0;
+  return port >= 1 && port <= 65535
+    ? { port, error: null }
+    : { port: null, error: `CANOPY_COORD_PORT=${raw} is not a port like 7859, so no coordinator starts` };
 }
 
 /** Why no coordinator may start here, or null. Its agent runs with its
  *  permissions bypassed, so outside enforce nothing would keep it from any
- *  route: log and off let every call through. */
-export function coordinatorRefusal(mode: CallersMode, laneError: string | null): string | null {
+ *  route: log and off let every call through. `laneDown` is why its own
+ *  listener is not up, null once it is. */
+export function coordinatorRefusal(mode: CallersMode, laneDown: string | null): string | null {
   if (mode !== "enforce") {
     return `the coordinator runs only while canopy enforces caller tokens (CANOPY_CALLERS=enforce; it is ${mode} here), since in ${mode} mode nothing stops its agent, which runs with its permissions bypassed, from calling any route`;
   }
-  return laneError;
+  return laneDown;
 }
 
 /** What a coordinator may call, method and exact path: the reads its brief
@@ -431,12 +403,11 @@ const LANE: ReadonlySet<string> = new Set(["GET /api/about", "GET /api/tree", "G
 /** whether the lane lets a request through; a HEAD is a GET without the body */
 export const laneAllows = (method: string, path: string): boolean => LANE.has(`${method === "HEAD" ? "GET" : method} ${path}`);
 
-/** The lane's word on a request: null to let it on to the gate, `token` for
- *  a caller in the coordinator's network that is not a coordinator, `route`
- *  for a coordinator (from anywhere) off its routes. */
-export function laneVerdict(addr: string, net: Cidr | null, kind: CallerKind, method: string, path: string): "token" | "route" | null {
-  const inLane = net !== null && inCidr(addr, net);
-  if (!inLane && kind !== "coordinator") return null;
+/** The lane's word on a request: null to let it on to the gate, `token`
+ *  for a caller on the coordinator's listener that is not a coordinator,
+ *  `route` for a coordinator (on either listener) off its routes. */
+export function laneVerdict(onLane: boolean, kind: CallerKind, method: string, path: string): "token" | "route" | null {
+  if (!onLane && kind !== "coordinator") return null;
   if (kind !== "coordinator") return "token";
   return laneAllows(method, path) ? null : "route";
 }
@@ -472,11 +443,7 @@ export class CallerGate {
   /** failed guesses by route and address, as times */
   private readonly misses = new Map<string, number[]>();
   private shown: string | null = null;
-  /** the coordinator's network, null for no lane */
-  readonly laneNet: Cidr | null;
-  /** the host a coordinator calls canopy at (`CANOPY_COORD_API`'s) */
-  private readonly laneHost: string | null;
-  /** the addresses the lane has spoken of, so each is said once */
+  /** the lane's refusals already logged, by kind, method and path */
   private readonly laneSaid = new Set<string>();
 
   constructor(opts: {
@@ -486,13 +453,9 @@ export class CallerGate {
     onPairs?: (pending: PendingPair[]) => void;
     onRefused?: () => void;
     now?: () => number;
-    lane?: Cidr | null;
-    laneHost?: string | null;
   }) {
     this.book = opts.book;
     this.mode = opts.mode;
-    this.laneNet = opts.lane ?? null;
-    this.laneHost = opts.laneHost ?? null;
     this.log = opts.log;
     this.onPairs = opts.onPairs ?? (() => {});
     this.onRefused = opts.onRefused ?? (() => {});
@@ -536,30 +499,25 @@ export class CallerGate {
     this.onRefused();
   }
 
-  /** The coordinator's lane, ahead of `gate` and in every mode: a request
-   *  from `CANOPY_COORD_NET` must carry a coordinator's token, and a
-   *  coordinator's token, from anywhere, reaches only `laneAllows`'s routes.
-   *  Null lets the request on. A call to the coordinator's address from
-   *  outside the network is said once per address, since then canopy sees
-   *  some other source for the coordinator and the lane never engages. */
-  lane(req: Request, url: URL, caller: Caller | null, addr: string): Response | null {
+  /** The coordinator's lane, ahead of `gate` and in every mode. A request
+   *  on the coordinator's own listener (`onLane`) must carry a coordinator's
+   *  token, and a coordinator's token, on either listener, reaches only
+   *  `laneAllows`'s routes. Null lets the request on. The lane goes by the
+   *  socket a request came in on, never by its source address: docker's
+   *  userland proxy hands canopy one gateway address for every client. */
+  lane(req: Request, url: URL, caller: Caller | null, addr: string, onLane: boolean): Response | null {
     const kind = caller?.kind ?? "none";
-    const verdict = laneVerdict(addr, this.laneNet, kind, req.method, url.pathname);
-    if (!verdict) {
-      if (this.laneNet && this.laneHost && req.headers.get("host") === this.laneHost && !inCidr(addr, this.laneNet) && !this.laneSaid.has(addr)) {
-        this.laneSaid.add(addr);
-        this.log(`callers: a call to the coordinator's address ${this.laneHost} came from ${addr}, outside CANOPY_COORD_NET ${this.laneNet.text}; the coordinator's lane does not hold for it`);
-      }
-      return null;
-    }
+    const verdict = laneVerdict(onLane, kind, req.method, url.pathname);
+    if (!verdict) return null;
     this.record(kind, req, url);
-    if (!this.laneSaid.has(addr)) {
-      this.laneSaid.add(addr);
-      this.log(`callers: coordinator lane refused ${kind} ${req.method} ${url.pathname} from ${addr}`);
+    const key = `${kind} ${req.method} ${url.pathname}`;
+    if (!this.laneSaid.has(key)) {
+      this.laneSaid.add(key);
+      this.log(`callers: coordinator lane refused ${key} from ${addr}`);
     }
     const error =
       verdict === "token"
-        ? "a call from the coordinator's network needs a coordinator's token"
+        ? "a call on the coordinator's listener needs a coordinator's token"
         : "a coordinator's token reads the tree, runs and landing queue and posts its plan, and nothing else";
     return Response.json({ error }, { status: 403 });
   }

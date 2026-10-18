@@ -101,7 +101,7 @@ VERCEL_AI_GATEWAY_API_KEY=...   # optional: lets verdict gates evaluate
 # TAILCHAN_HUMAN=eric                       # the handle the UI speaks tailchan as
 # CANOPY_COORD_SOCKET=/run/canopy-coord/runner.sock   # optional: the coordinator, see "The coordinator" below
 # CANOPY_COORD_API=http://10.250.14.1:7850
-# CANOPY_COORD_NET=10.250.14.0/24                     # the coordinator's lane; it needs CANOPY_CALLERS=enforce too
+# CANOPY_COORD_PORT=7859                              # the coordinator's own listener, its lane; it needs CANOPY_CALLERS=enforce too
 TZ=America/Los_Angeles          # the host's zone by name: canopy's local time (the ranger's crons and daily hour, the history's days)
 ```
 
@@ -896,12 +896,14 @@ from `stages`:
 
 The fence (`scripts/stages-fence.sh`, the same script and unit as the
 stages') drops the same ranges on `br-canopy-crd` and lets one thing through
-ahead of them: TCP to 10.250.14.1:7850. The shells publish canopy's port on
-that address (`10.250.14.1:7850:7850` beside the tailnet one) without joining
+ahead of them: TCP to 10.250.14.1:7850. The shells publish that address onto
+the coordinator's own listener (`10.250.14.1:7850:${CANOPY_COORD_PORT:-7859}`
+beside the tailnet one, which stays on canopy's main port) without joining
 `coord-net`, since a second network on the shells could move canopy's default
 route behind the fence. The reply goes out through host routing, not into the
 bridge. canopy's origin gate lets that exact host through, from
-`CANOPY_COORD_API`, since 10.250.14.1 is neither a local nor a tailnet name.
+`CANOPY_COORD_API`, on the coordinator's listener alone, since 10.250.14.1 is
+neither a local nor a tailnet name.
 
 **No profile, on purpose.** The shells' bind on 10.250.14.1 needs the bridge,
 and the bridge exists only once a service on `coord-net` is part of an `up`.
@@ -953,26 +955,37 @@ docker compose exec -u bun -it coord claude   # then /login
 CANOPY_CALLERS=enforce
 CANOPY_COORD_SOCKET=/run/canopy-coord/runner.sock
 CANOPY_COORD_API=http://10.250.14.1:7850
-CANOPY_COORD_NET=10.250.14.0/24
+CANOPY_COORD_PORT=7859
 ```
 
 `CANOPY_CALLERS=enforce` is already there on the mini ("Callers and
-tokens"); without it no coordinator starts. `CANOPY_COORD_NET` is the
-coordinator's lane. Every GET is the `read` right, which a caller with no
-token holds, so without the lane anything in `coord` could read any repo
-file through `GET /api/repos/diff` with no token at all. With it, a call
-whose source address is in that network must carry a coordinator's token
-and may only `GET /api/about`, `/api/tree`, `/api/runs` and `/api/landing`
-and `POST /api/coordinator/plan`, the reads the brief names and the plan.
-Anything else from there is a 403. A coordinator's token keeps to the same
-list from any address. A value that is not an IPv4 network keeps every
-coordinator off, and says so in canopy's log.
+tokens"); without it no coordinator starts. `CANOPY_COORD_PORT` is the
+coordinator's lane: canopy opens a second listener on that port inside the
+container, and the shells publish 10.250.14.1:7850 onto it, so a call from
+`coord` lands there and nowhere else. `CANOPY_COORD_API` keeps the address
+the coordinator dials, 10.250.14.1:7850; only the container port behind it
+changes. Every GET is the `read` right, which a caller with no token holds,
+so without the lane anything in `coord` could read any repo file through
+`GET /api/repos/diff` with no token at all. On the coordinator's listener a
+call must carry a coordinator's token and may only `GET /api/about`,
+`/api/tree`, `/api/runs` and `/api/landing` and `POST
+/api/coordinator/plan`, the reads the brief names and the plan. Anything
+else there is a 403, `/api/about` with no token included, and the listener
+serves no event stream, socket, static file or Library. A coordinator's
+token keeps to the same list on canopy's main port too. Unset, or not a
+port, no listener starts and no coordinator either, and canopy's log says
+why; so does a port the listener cannot take.
 
-The lane cannot fail closed. canopy matches the source address it sees, and
-if that is not the `coord` container's own address the lane never engages
-and nothing says so on its own: the coordinator still works, since its
-token is good from anywhere, and tokenless reads from `coord` go through
-again. Step 6 checks it.
+The lane holds by which socket a call came in on, which nothing inside
+`coord` can forge. An earlier version matched the source address against
+`CANOPY_COORD_NET` (coord-net, 10.250.14.0/24), and it never engaged on the
+mini: docker's userland proxy (`docker-proxy`, docker 29.7.2) carries the
+published port and hands canopy the shells network's gateway, 192.168.48.1,
+for every client, so a tokenless `GET /api/about` from `coord` answered 200
+and every tokenless read was open from the coordinator's sandbox. Turning
+the userland proxy off is host-wide, and a Host header check is the
+coordinator's to forge, so the listener replaced both. `CANOPY_COORD_NET` is
+gone; drop it from `.env`.
 
 `CANOPY_FENCE_PROBE` (the stages' step 4) is the coordinator runner's probe
 target too, and needs nothing new: the LAN router is past the fence from
@@ -1012,7 +1025,11 @@ sudo ip route del 10.250.14.1/32
 
 **5. Deploy.** The first deploy with `coord` adds a port to the shells, so
 it recreates the shells container and ends every shell; `bun run redeploy`
-stops with exit 3 without `--shells`. When nothing needs the shells:
+stops with exit 3 without `--shells`. The deploy that moves the
+10.250.14.1:7850 mapping from container port 7850 to the coordinator's
+listener recreates the shells the same way, and until it does, `coord`
+still reaches canopy's main listener, where its tokenless reads go through. When nothing needs the
+shells:
 
 ```
 bun run redeploy --shells --restart
@@ -1026,7 +1043,7 @@ status` lists `canopy-coord-1`.
 the gateway answers, with the lane's refusal, and nothing else private does:
 
 ```
-docker compose exec coord curl -sS -m 5 http://10.250.14.1:7850/api/about   # 403 {"error":"a call from the coordinator's network needs a coordinator's token"}
+docker compose exec coord curl -sS -m 5 http://10.250.14.1:7850/api/about   # 403 {"error":"a call on the coordinator's listener needs a coordinator's token"}
 docker compose exec coord curl -sS -m 5 http://192.168.1.1/                 # curl: (28) timed out
 docker compose exec coord curl -sS -m 5 http://10.250.14.1:7851/            # times out: only 7850 is let through
 docker compose exec coord curl -sS -m 5 "http://$(tailscale ip -4):7850/"   # times out
@@ -1040,40 +1057,32 @@ the fence down: the coordinator's runner then starts nothing, since its own
 probe gets the same answer.
 
 The first must be the 403. JSON with `"coordinator":true` instead means
-the fence let the call through but canopy saw a source outside
-`CANOPY_COORD_NET`, so the lane did not engage. canopy's log says which
-address it saw, once per address:
+the call reached canopy's main listener: the shells still carry the old
+mapping onto container port 7850 (step 5 did not recreate them), or
+`CANOPY_COORD_PORT` in `.env` differs from what the shells were created
+with. A connection refused or reset means nothing listens on the
+coordinator's port: `CANOPY_COORD_PORT` unset or not a port, or the listener
+could not take it. Look with:
 
 ```
-docker compose logs canopy | grep -E "coordinator lane refused|outside CANOPY_COORD_NET"
-canopy auth status   # the refused count goes up by one for each lane refusal
+docker port canopy-shells-1 7859    # 10.250.14.1:7850, and nothing on 7850 names 10.250.14.1
+docker compose logs canopy | grep -E "coordinator: its listener|coordinator's listener|coordinator lane refused|CANOPY_COORD_PORT"
+canopy auth status                  # the refused count goes up by one for each lane refusal
 ```
 
-`coordinator lane refused none GET /api/about from 10.250.14.x` is the lane
-working. `a call to the coordinator's address 10.250.14.1:7850 came from
-<addr>, outside CANOPY_COORD_NET` names the source canopy saw instead. The
-published port normally reaches canopy through docker's DNAT, which keeps
-the `coord` container's own address. Two things would replace it with a
-gateway address: docker's userland proxy (`docker-proxy`) carrying the
-connection instead of the DNAT rule, and docker's MASQUERADE rule for the
-bridge (`-s 10.250.14.0/24 ! -o br-canopy-crd -j MASQUERADE`) catching the
-packet on its way out to the shells' bridge. Look at both with:
-
-```
-sudo iptables -t nat -S DOCKER | grep 10.250.14.1        # the DNAT for 10.250.14.1:7850
-sudo iptables -t nat -S POSTROUTING | grep 10.250.14     # the bridge's MASQUERADE
-```
-
-Do not widen `CANOPY_COORD_NET` to cover whatever gateway address shows up
-instead. Host-side callers come from such addresses too (`bun run
-redeploy`'s check of `/api/runs` among them), and they would all start to
-answer 403. Fix the path so canopy sees `coord`'s address, or leave the
-coordinator off.
+`coordinator: its listener is on 0.0.0.0:7859` is the listener up, and
+`coordinator lane refused none GET /api/about from <addr>` is the lane
+working, said once for each kind, method and path. The address there is
+whatever docker hands canopy (192.168.48.1 behind the userland proxy) and
+decides nothing.
 
 **Back out** by emptying `CANOPY_COORD_SOCKET` and `CANOPY_COORD_API` and
 `bun run redeploy --restart`: canopy refuses `coordinate` again, and `coord`
-idles. Keep `CANOPY_COORD_NET`, so `coord` stays unable to read through
-canopy while it idles.
+idles. With no runner set up canopy opens no coordinator's listener, so
+10.250.14.1:7850 has nothing behind it and `coord` stays unable to read
+through canopy while it idles. Keep `CANOPY_COORD_PORT` and the shells'
+mapping as they are; moving the mapping back onto 7850 would hand `coord`
+the main listener.
 
 ## The kit
 

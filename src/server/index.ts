@@ -203,7 +203,7 @@ import { TriggerHub, type StartOutcome } from "./triggers";
 import { CoordinatorHub, type ChildStart } from "./coordinator";
 import { takeTriggerSecrets } from "../core/envnames";
 import { triggerPlan, type TriggerEvent } from "../core/trigger";
-import { authRoute, CallerBook, callerOf, CallerGate, callersMode, coordinatorRefusal, coordLane, type Caller } from "./callers";
+import { authRoute, CallerBook, callerOf, CallerGate, callersMode, coordinatorRefusal, coordPort, type Caller } from "./callers";
 import { getPeers, PeerError, postPeersSync, postRepoPeer, queuePass, withPeering, type PeerDeps } from "./peers";
 import { fixPrompt, landWord } from "../core/landing";
 import { GATES_CHECK, readGates } from "../core/gates";
@@ -247,6 +247,10 @@ interface ServerState {
   harnessMissing: (h: Harness) => Promise<boolean>;
   /** which canopy this is, read once at start */
   about: About;
+  /** why no coordinator may start here though its runner is set up: canopy
+   *  not enforcing caller tokens, or the coordinator's own listener not up
+   *  (`coordinatorRefusal`); null when one may */
+  coordRefusal: () => string | null;
   /** every source, the launch root first */
   sources: SourceRuntime[];
   /** all sources' repos in one tree, rebuilt after any source scan */
@@ -871,7 +875,7 @@ async function startCoordinator(state: ServerState, repo: Repo, goal: string, cl
   if (repo.forge) throw new HttpError(400, `${repo.name} is on the forge; a coordinator starts at a repo on this machine`);
   if (isSeedPath(state.root, repo.path)) throw new HttpError(400, SEED_AGENT_REFUSAL);
   if (!process.env["CANOPY_COORD_SOCKET"]) throw new HttpError(409, COORD_REFUSAL);
-  const unsafe = coordinatorRefusal(state.gate.mode, coordLane().error);
+  const unsafe = state.coordRefusal();
   if (unsafe) throw new HttpError(409, unsafe);
   const api = process.env["CANOPY_COORD_API"]?.trim();
   if (!api) throw new HttpError(409, "CANOPY_COORD_API is not set, so a coordinator would have no address to reach canopy at");
@@ -4125,13 +4129,14 @@ export async function startServer(opts: {
    *  the stage runner to call its seed quiet, for tests */
   runner?: { driver?: (harness: Harness) => RunDriver; quietWait?: number };
   /** the coordinator's runner: `client` in place of CANOPY_COORD_SOCKET's
-   *  (null for none), and how often it is asked whether it answers */
-  coordinator?: { client?: StageClient | null; every?: number };
+   *  (null for none), how often it is asked whether it answers, and `port`
+   *  in place of CANOPY_COORD_PORT's (0 for any free one) */
+  coordinator?: { client?: StageClient | null; every?: number; port?: number };
   /** where the caller check's lines go (the first sign-in code, the
    *  would-refuse lines): stdout, or nowhere under `bun test` unless a test
    *  passes its own */
   callersLog?: (line: string) => void;
-}): Promise<{ port: number; stop: () => Promise<void> }> {
+}): Promise<{ port: number; coordPort: number | null; stop: () => Promise<void> }> {
   const cfg = await loadConfig();
   const root = await realpath(opts.root);
   // canopy's git in a seed goes through the guard (seedgit.ts)
@@ -4188,10 +4193,14 @@ export async function startServer(opts: {
   const coordSocket = process.env["CANOPY_COORD_SOCKET"];
   const coord: StageClient | null = opts.coordinator?.client !== undefined ? opts.coordinator.client : coordSocket ? new StageClient(coordSocket) : null;
   // read once: the gate's mode, which a coordinator needs to be enforce, and
-  // the coordinator's network, the lane at the top of route()
+  // the port of the coordinator's own listener, where its lane holds
   const callerMode = callersMode();
-  const coordNet = coordLane();
-  if (coordNet.error) console.warn(`callers: ${coordNet.error}`);
+  const coordListen = opts.coordinator?.port !== undefined ? { port: opts.coordinator.port, error: null } : coordPort();
+  /** why the coordinator's listener is not up, null once it is */
+  let coordDown: string | null = coordListen.error ?? "the coordinator's listener has not started yet";
+  /** no coordinator outside enforce or without its listener; with no
+   *  runner set up the runner's own refusal says why */
+  const coordRefusal = (): string | null => coordinatorRefusal(callerMode, coord ? coordDown : null);
   /** why the coordinator's runner may not start one though it answers: its
    *  fence is not confirmed, in its own words; null once it is */
   const coordUnfenced = (): string | null => {
@@ -4265,11 +4274,11 @@ export async function startServer(opts: {
     // starts only while it answers behind its fence, never unisolated
     // and only under enforce, whatever path a coordinate run came by
     coordExec: (): StageClient | null =>
-      coord && coordinatorRefusal(callerMode, coordNet.error) === null && coord.harnessesNow() && coordUnfenced() === null ? coord : null,
+      coord && coordRefusal() === null && coord.harnessesNow() && coordUnfenced() === null ? coord : null,
     coordAway: () =>
       !coord
         ? COORD_REFUSAL
-        : (coordinatorRefusal(callerMode, coordNet.error) ??
+        : (coordRefusal() ??
           (coord.harnessesNow() ? (coordUnfenced() ?? STAGE_AWAY) : "the isolated coordinator runner is not answering")),
     ...(opts.runner?.driver ? { driver: opts.runner.driver } : {}),
     ...(opts.runner?.quietWait !== undefined ? { quietWait: opts.runner.quietWait } : {}),
@@ -4443,11 +4452,13 @@ export async function startServer(opts: {
       hostname: hostname(),
       root,
       homepage: readPkg().homepage ?? null,
-      // read at each /api/about: a runner set up that has answered a hello
+      // read at each /api/about: a runner set up that has answered a hello,
+      // under enforce, with the coordinator's listener up
       get coordinator(): boolean {
-        return coord !== null && coordinatorRefusal(callerMode, coordNet.error) === null && coord.harnessesNow() !== null;
+        return coord !== null && coordRefusal() === null && coord.harnessesNow() !== null;
       },
     },
+    coordRefusal,
     sources: [runtime(launchSource(root)), ...extras.map((s) => runtime({ ...s, launch: false }))],
     result: { root, sources: [], repos: [], scannedAt: 0, backend: backendCaps(harnesses()) },
     ignore: [...DEFAULT_IGNORE, ...cfg.ignore],
@@ -4677,8 +4688,6 @@ export async function startServer(opts: {
     gate: new CallerGate({
       book: callers,
       mode: callerMode,
-      lane: coordNet.net,
-      laneHost: coord ? coordApiHost(process.env["CANOPY_COORD_API"]) : null,
       log: opts.callersLog ?? (process.env["NODE_ENV"] === "test" ? () => {} : (line) => console.log(line)),
       onPairs: (pending) => broadcast(state, { type: "auth", pending }),
       // the check is polled; the first refusal is worth a probe at once
@@ -4883,7 +4892,8 @@ export async function startServer(opts: {
   }
   const beyondLoopback = openBind();
   // the coordinator's address on its bridge's gateway is neither local nor a
-  // tailnet name, so the gate lets that exact host through as well
+  // tailnet name, so the gate lets that exact host through as well, on the
+  // coordinator's own listener alone
   const coordHost = coord ? coordApiHost(process.env["CANOPY_COORD_API"]) : null;
   const coordHosts = coordHost ? [coordHost] : [];
   const library = new Library(root, publicOrigin, beyondLoopback, origins);
@@ -4904,18 +4914,22 @@ export async function startServer(opts: {
         hostFor: async (p) => (await listeningPorts()).find((l) => l.port === p)?.host,
       })
     : null;
-  const route = async (req: Request, srv: Bun.Server<Socket>, url: URL): Promise<Response | undefined> => {
+  /** Every request on both listeners. `lane` is true on the coordinator's
+   *  own listener, where the lane takes only a coordinator's token and its
+   *  routes, so nothing past the lane check (the Library, the event stream,
+   *  a socket, a static file) is reached from there. */
+  const route = async (req: Request, srv: Bun.Server<Socket>, url: URL, lane: boolean): Promise<Response | undefined> => {
     // Who is calling comes first, so the Library is checked like the rest.
     // The pairing routes wait until after the origin gate: a rebound or
     // foreign page must not read the callers or fill the pair slots.
     const caller = callerOf(state.callers, req, url);
     // the coordinator's lane goes first, in every mode
-    const laned = state.gate.lane(req, url, caller, srv.requestIP(req)?.address ?? "");
+    const laned = state.gate.lane(req, url, caller, srv.requestIP(req)?.address ?? "", lane);
     if (laned) return laned;
     const denied = state.gate.gate(req, url, caller);
     if (denied) return denied;
     if (url.pathname === "/api/library" || url.pathname === "/library" || url.pathname.startsWith("/library/")) return library.handle(req);
-    if (url.pathname.startsWith("/api/") && !libraryOriginAllowed(req, publicOrigin, beyondLoopback, origins, coordHosts)) {
+    if (url.pathname.startsWith("/api/") && !libraryOriginAllowed(req, publicOrigin, beyondLoopback, origins, lane ? coordHosts : [])) {
       return json({ error: "Foreign origin" }, 403);
     }
     const key = clientKey(srv.requestIP(req)?.address ?? "127.0.0.1");
@@ -5021,7 +5035,7 @@ export async function startServer(opts: {
         // method check of its own. Refuse it here, before route runs, rather
         // than letting it fall through to a 200 with the SPA or an asset.
         if (!api && req.method === "OPTIONS") return new Response(null, { status: 405 });
-        const res = await route(req, srv, url);
+        const res = await route(req, srv, url, false);
         if (!res || !cors) return res;
         // a proxied or streamed answer may hold immutable headers; rewrap it
         const out = new Response(res.body, res);
@@ -5170,6 +5184,34 @@ export async function startServer(opts: {
   );
   boundPort = server.port ?? port;
   state.apiUrl = apiUrlFor(bindHost, boundPort);
+  // The coordinator's own listener, bound like the main one, where every
+  // request is in its lane: which socket a call came in on is something
+  // nothing in the coordinator's container can forge, unlike its source
+  // address (docker's userland proxy hands canopy one gateway address for
+  // every client) or a Host header. No CORS, no sockets, no static files;
+  // the lane refuses all of that before it is reached. A port it cannot
+  // take leaves the coordinator off, not canopy down.
+  let coordServer: Bun.Server<Socket> | null = null;
+  if (coord && coordListen.port !== null) {
+    const want = coordListen.port;
+    try {
+      if (want !== 0 && want === boundPort) throw new Error("it is canopy's own port");
+      coordServer = Bun.serve<Socket>({
+        port: want,
+        hostname: bindHost,
+        // a plan is the largest body a coordinator sends
+        maxRequestBodySize: 1024 * 1024,
+        fetch: async (req, srv) => (await route(req, srv, new URL(req.url), true)) ?? json({ error: "nothing answers that here" }, 404),
+      });
+      coordDown = null;
+      if (process.env["NODE_ENV"] !== "test") console.log(`coordinator: its listener is on ${bindHost}:${coordServer.port ?? want}`);
+    } catch (err) {
+      coordDown = `the coordinator's listener could not take port ${want} (${String(err instanceof Error ? err.message : err)}), so no coordinator starts`;
+      console.error(`callers: ${coordDown}`);
+    }
+  } else if (coord && coordListen.error) {
+    console.warn(`callers: ${coordListen.error}`);
+  }
   // Only after the bind succeeds: a watcher started earlier would outlive a
   // failed listen and hold the process open.
   for (const rt of state.sources) startWatcher(state, rt);
@@ -5349,6 +5391,7 @@ export async function startServer(opts: {
   process.on("exit", stopLibrary);
   return {
     port: server.port ?? port,
+    coordPort: coordServer?.port ?? null,
     stop: () => {
       state.repoHealth.stop();
       clearTimeout(state.repoHealthTimer);
@@ -5400,6 +5443,7 @@ export async function startServer(opts: {
       state.preview?.stop();
       process.off("exit", stopLibrary);
       for (const rt of state.sources) rt.watcher?.close();
+      coordServer?.stop(true);
       server.stop(true);
       // a revoke or a mint may still be on its way to callers.json; a caller
       // that ignores the promise must never get a rejection from it

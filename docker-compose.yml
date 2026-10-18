@@ -71,11 +71,15 @@ services:
       - "${CANOPY_LISTEN:-127.0.0.1}:7850:7850"
       - "${CANOPY_LISTEN:-127.0.0.1}:7860-7869:7860-7869"
       # canopy's port on coord-net's gateway, the one address the
-      # coordinator's fence lets it reach (scripts/stages-fence.sh). The
-      # shells never join coord-net: a second network here could move
-      # canopy's default route behind that fence. The bind needs the
-      # bridge, so coord must come up in the same `up` as the shells.
-      - "10.250.14.1:7850:7850"
+      # coordinator's fence lets it reach (scripts/stages-fence.sh). It
+      # lands on the coordinator's own listener (CANOPY_COORD_PORT), never
+      # canopy's main one, since docker's userland proxy hands canopy one
+      # gateway address for every client and only the socket tells the
+      # coordinator apart. The shells never join coord-net: a second
+      # network here could move canopy's default route behind that fence.
+      # The bind needs the bridge, so coord must come up in the same `up`
+      # as the shells.
+      - "10.250.14.1:7850:${CANOPY_COORD_PORT:-7859}"
     # the name the tunnel's ingress (http://canopy:7850) dials, which is
     # canopy's port in this namespace
     networks:
@@ -386,10 +390,11 @@ services:
       # folder.
       - CANOPY_COORD_SOCKET=${CANOPY_COORD_SOCKET:-}
       - CANOPY_COORD_API=${CANOPY_COORD_API:-}
-      # the coordinator's lane: coord-net (10.250.14.0/24) from .env. A call
-      # from it needs a coordinator's token and reaches only the brief's
-      # reads and the plan. Empty, there is no lane (docs/deploy.md)
-      - CANOPY_COORD_NET=${CANOPY_COORD_NET:-}
+      # the coordinator's own listener (7859 in .env), what the shells
+      # publish on 10.250.14.1:7850: every call on it needs a coordinator's
+      # token and reaches only the brief's reads and the plan. Empty, no
+      # listener starts and no coordinator either (docs/deploy.md)
+      - CANOPY_COORD_PORT=${CANOPY_COORD_PORT:-}
       - CANOPY_COORD_ROOT=${HOST_HOME:-/home/eric}/.local/share/canopy-coord/seeds
       # the secrets service's socket (secrets-sock below); set on this
       # backend alone, so its hub relays to the service instead of reading a

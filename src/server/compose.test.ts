@@ -200,9 +200,10 @@ describe("the coordinator's runner", () => {
     // the fence's one ACCEPT is canopy's port on this gateway
     expect(script).toContain(`-d ${gateway}/32 -p tcp --dport 7850 -j ACCEPT`);
   });
-  test("the shells publish canopy's port on coord-net's gateway, without joining it", () => {
+  test("the shells publish canopy's port on coord-net's gateway onto the coordinator's own listener, without joining it", () => {
     const shells = compose.services["shells"];
-    expect(shells?.ports ?? []).toContain(`${gateway}:7850:7850`);
+    expect(shells?.ports ?? []).toContain(`${gateway}:7850:\${CANOPY_COORD_PORT:-7859}`);
+    expect(shells?.ports ?? []).not.toContain(`${gateway}:7850:7850`);
     expect(JSON.stringify(shells?.networks ?? null)).not.toContain("coord-net");
   });
   test("canopy reaches it through its socket, with the seeds at the same path, and the coordinator's settings from .env", () => {
@@ -210,6 +211,8 @@ describe("the coordinator's runner", () => {
     const env = envOf(canopy ?? {});
     expect(env).toContain("CANOPY_COORD_SOCKET=${CANOPY_COORD_SOCKET:-}");
     expect(env).toContain("CANOPY_COORD_API=${CANOPY_COORD_API:-}");
+    expect(env).toContain("CANOPY_COORD_PORT=${CANOPY_COORD_PORT:-}");
+    expect(env.some((e) => e.startsWith("CANOPY_COORD_NET="))).toBe(false);
     expect(env).toContain("CANOPY_COORD_ROOT=${HOST_HOME:-/home/eric}/.local/share/canopy-coord/seeds");
     expect(canopy?.volumes ?? []).toContain("coord-sock:/run/canopy-coord");
     expect(canopy?.volumes ?? []).toContain("${HOST_HOME:-/home/eric}/.local/share/canopy-coord/seeds:${HOST_HOME:-/home/eric}/.local/share/canopy-coord/seeds");

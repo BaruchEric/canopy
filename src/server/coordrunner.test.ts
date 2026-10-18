@@ -2,7 +2,7 @@
  * The server's side of the coordinator's runner (FR-010): /api/about's flag,
  * a coordinate run's own folder under the runner's seeds and its start
  * there, the origin gate on the address a coordinator calls canopy at, the
- * refusal outside enforce, and the coordinator's lane.
+ * refusal outside enforce, and the coordinator's lane on its own listener.
  * The runner is a stand-in client and the harness a driver that runs
  * nothing, so nothing here needs docker or a claude login.
  */
@@ -16,7 +16,7 @@ import type { About, Harness, Run } from "../core/types";
 import { CallerBook } from "./callers";
 import { startServer } from "./index";
 
-const ENV = ["CANOPY_CONFIG_DIR", "CANOPY_TMUX", "CANOPY_BIND", "CANOPY_CALLERS", "CANOPY_COORD_SOCKET", "CANOPY_COORD_API", "CANOPY_COORD_ROOT", "CANOPY_COORD_NET"];
+const ENV = ["CANOPY_CONFIG_DIR", "CANOPY_TMUX", "CANOPY_BIND", "CANOPY_CALLERS", "CANOPY_COORD_SOCKET", "CANOPY_COORD_API", "CANOPY_COORD_ROOT", "CANOPY_COORD_PORT"];
 const saved: Record<string, string | undefined> = {};
 let scratch = "";
 
@@ -69,11 +69,13 @@ afterAll(async () => {
   await rm(scratch, { recursive: true, force: true });
 });
 
-type Up = { port: number; stop: () => Promise<void>; made: Recorder[]; seeds: string; page: string };
+type Up = { port: number; coordPort: number | null; stop: () => Promise<void>; made: Recorder[]; seeds: string; page: string };
 
 /** A server with its own config dir, in enforce unless `env` says otherwise,
- *  with a page token minted into its book before it starts. */
-async function up(name: string, client: StageClient | null, env: Record<string, string> = {}): Promise<Up> {
+ *  with a page token minted into its book before it starts. The
+ *  coordinator's listener takes any free port unless `coordPort` is
+ *  null, which leaves it to CANOPY_COORD_PORT. */
+async function up(name: string, client: StageClient | null, env: Record<string, string> = {}, coordPort: number | null = 0): Promise<Up> {
   const config = join(scratch, name);
   process.env["CANOPY_CONFIG_DIR"] = config;
   const book = new CallerBook({ file: join(config, "callers.json") });
@@ -81,13 +83,13 @@ async function up(name: string, client: StageClient | null, env: Record<string, 
   await book.flush();
   const seeds = join(scratch, `${name}-seeds`);
   await mkdir(seeds);
-  for (const k of ["CANOPY_COORD_SOCKET", "CANOPY_COORD_API", "CANOPY_COORD_ROOT", "CANOPY_COORD_NET"]) delete process.env[k];
+  for (const k of ["CANOPY_COORD_SOCKET", "CANOPY_COORD_API", "CANOPY_COORD_ROOT", "CANOPY_COORD_PORT"]) delete process.env[k];
   Object.assign(process.env, { CANOPY_CALLERS: "enforce", CANOPY_COORD_ROOT: seeds, ...env });
   const made: Recorder[] = [];
   const s = await startServer({
     root: join(scratch, "root"),
     port: 0,
-    coordinator: { client },
+    coordinator: { client, ...(coordPort !== null ? { port: coordPort } : {}) },
     runner: {
       driver: (h) => {
         const d = new Recorder(h);
@@ -102,14 +104,20 @@ async function up(name: string, client: StageClient | null, env: Record<string, 
 const about = async (s: Up, host?: string): Promise<Response> =>
   fetch(`http://127.0.0.1:${s.port}/api/about`, host ? { headers: { host } } : {});
 
-const call = (s: Up, path: string, token?: string, init: RequestInit = {}): Promise<Response> => {
+const call = (s: Up, path: string, token?: string, init: RequestInit = {}, port = s.port): Promise<Response> => {
   const headers = new Headers(init.headers);
   if (token) headers.set("x-canopy-token", token);
-  return fetch(`http://127.0.0.1:${s.port}${path}`, { ...init, headers });
+  return fetch(`http://127.0.0.1:${port}${path}`, { ...init, headers });
 };
 
-const postAs = (s: Up, path: string, body: unknown, token?: string): Promise<Response> =>
-  call(s, path, token, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
+const postAs = (s: Up, path: string, body: unknown, token?: string, port = s.port): Promise<Response> =>
+  call(s, path, token, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) }, port);
+
+/** the coordinator's own listener's port, which these servers all have */
+const lanePort = (s: Up): number => {
+  if (s.coordPort === null) throw new Error("no coordinator's listener");
+  return s.coordPort;
+};
 
 const API = "http://10.250.14.1:7850";
 
@@ -148,15 +156,36 @@ describe("with a coordinator's runner, outside enforce", () => {
     });
   }
 
-  test("a CANOPY_COORD_NET that is no network keeps coordinators off too", async () => {
-    const s = await up("badnet", fakeRunner({ answers: true, fenced: true }), { ...COORD_ENV, CANOPY_COORD_NET: "10.250.14.0/99" });
+  for (const [why, port] of [
+    ["no CANOPY_COORD_PORT", undefined],
+    ["a CANOPY_COORD_PORT that is no port", "78a9"],
+  ] as const) {
+    test(`${why} leaves the coordinator without its listener, and so off`, async () => {
+      const s = await up(`noport-${port ?? "unset"}`, fakeRunner({ answers: true, fenced: true }), { ...COORD_ENV, ...(port ? { CANOPY_COORD_PORT: port } : {}) }, null);
+      try {
+        expect(s.coordPort).toBeNull();
+        expect(((await (await about(s)).json()) as About).coordinator).toBe(false);
+        const res = await postAs(s, "/api/repos/run?id=app", { action: "coordinate", note: "ship it" }, s.page);
+        expect(res.status).toBe(409);
+        expect(((await res.json()) as { error: string }).error).toContain("CANOPY_COORD_PORT");
+        expect(await readdir(s.seeds)).toEqual([]);
+      } finally {
+        await s.stop();
+      }
+    });
+  }
+
+  test("a port the listener cannot take leaves the coordinator off, and canopy up", async () => {
+    const held = Bun.serve({ port: 0, hostname: "127.0.0.1", fetch: () => new Response("held") });
+    const s = await up("taken", fakeRunner({ answers: true, fenced: true }), COORD_ENV, held.port);
     try {
-      expect(((await (await about(s)).json()) as About).coordinator).toBe(false);
-      const res = await postAs(s, "/api/repos/run?id=app", { action: "coordinate", note: "ship it" }, s.page);
-      expect(res.status).toBe(409);
-      expect(((await res.json()) as { error: string }).error).toContain("CANOPY_COORD_NET");
+      expect(s.coordPort).toBeNull();
+      const res = await about(s);
+      expect(res.status).toBe(200);
+      expect(((await res.json()) as About).coordinator).toBe(false);
     } finally {
       await s.stop();
+      await held.stop(true);
     }
   });
 });
@@ -179,12 +208,22 @@ describe("with a coordinator's runner", () => {
     }
   });
 
-  test("the coordinator's own address passes the origin gate, and a neighbour of it does not", async () => {
-    const ok = await about(s, "10.250.14.1:7850");
-    expect(ok.status).toBe(200);
-    expect(((await ok.json()) as About).coordinator).toBe(true);
-    expect((await about(s, "10.250.14.2:7850")).status).toBe(403);
-    expect((await about(s, "10.250.14.1:7851")).status).toBe(403);
+  test("the coordinator's own address passes the origin gate on its listener alone, and a neighbour of it nowhere", async () => {
+    expect((await about(s, "10.250.14.1:7850")).status).toBe(403);
+    const res = await postAs(s, "/api/repos/run?id=app", { action: "coordinate", note: "origin" }, s.page);
+    expect(res.status).toBe(201);
+    const run = (await res.json()) as Run;
+    const token = s.made.at(-1)?.ctx?.pass?.["CANOPY_TOKEN"] ?? "";
+    try {
+      const at = (host: string): Promise<Response> => call(s, "/api/about", token, { headers: { host } }, lanePort(s));
+      const ok = await at("10.250.14.1:7850");
+      expect(ok.status).toBe(200);
+      expect(((await ok.json()) as About).coordinator).toBe(true);
+      expect((await at("10.250.14.2:7850")).status).toBe(403);
+      expect((await at("10.250.14.1:7851")).status).toBe(403);
+    } finally {
+      await postAs(s, "/api/runs/stop", { id: run.id }, s.page);
+    }
   });
 
   test("a coordinate run starts in a folder of its own under the seeds, 0700, with the address and a token", async () => {
@@ -228,27 +267,49 @@ describe("with a coordinator's runner", () => {
   });
 });
 
-describe("the coordinator's lane", () => {
+describe("the coordinator's lane, on its own listener", () => {
   let s: Up;
+  let token = "";
   beforeAll(async () => {
-    // every local call is from the coordinator's network here
-    s = await up("lane", fakeRunner({ answers: true, fenced: true }), { ...COORD_ENV, CANOPY_COORD_NET: "127.0.0.0/8" });
+    s = await up("lane", fakeRunner({ answers: true, fenced: true }), COORD_ENV);
+    const res = await postAs(s, "/api/repos/run?id=app", { action: "coordinate", note: "lane" }, s.page);
+    if (res.status !== 201) throw new Error(`no coordinator: ${res.status}`);
+    token = s.made.at(-1)?.ctx?.pass?.["CANOPY_TOKEN"] ?? "";
   });
   afterAll(() => s.stop());
 
-  test("a call from its network without a coordinator's token is refused, a page's token or none, on any path", async () => {
-    for (const path of ["/api/about", "/api/runs", "/api/repos/diff?id=app&untracked=1&file=.env", "/api/events", "/library", "/"]) {
-      for (const token of [undefined, s.page]) {
-        const res = await call(s, path, token);
-        expect([path, token ? "page" : "none", res.status]).toEqual([path, token ? "page" : "none", 403]);
+  test("a call there without a coordinator's token is refused, a page's token or none, on any path, /api/about too", async () => {
+    for (const path of ["/api/about", "/api/runs", "/api/repos/diff?id=app&untracked=1&file=.env", "/api/events", "/api/auth", "/library", "/api/library", "/"]) {
+      for (const who of [undefined, s.page]) {
+        const res = await call(s, path, who, {}, lanePort(s));
+        expect([path, who ? "page" : "none", res.status]).toEqual([path, who ? "page" : "none", 403]);
       }
     }
-    expect((await postAs(s, "/api/repos/run?id=app", { action: "ask", note: "x" }, s.page)).status).toBe(403);
+    const tokenless = await call(s, "/api/about", undefined, {}, lanePort(s));
+    expect(((await tokenless.json()) as { error: string }).error).toContain("needs a coordinator's token");
+    expect((await postAs(s, "/api/repos/run?id=app", { action: "ask", note: "x" }, s.page, lanePort(s))).status).toBe(403);
+    expect((await call(s, "/api/runs", token, { method: "OPTIONS" }, lanePort(s))).status).toBe(403);
   });
 
-  test("a shell socket from its network does not open", async () => {
+  test("a coordinator's token reads the brief's routes and posts its plan there, and nothing else", async () => {
+    for (const path of ["/api/about", "/api/tree", "/api/runs", "/api/landing"]) {
+      expect([path, (await call(s, path, token, {}, lanePort(s))).status]).toEqual([path, 200]);
+    }
+    const plan = await postAs(s, "/api/coordinator/plan", { tasks: [{ title: "t", repo: "app", note: "n", action: "ask" }] }, token, lanePort(s));
+    expect(plan.status).toBe(200);
+    for (const path of ["/api/repos/diff?id=app&untracked=1&file=.env", "/api/flows", "/api/events", "/library", "/"]) {
+      expect([path, (await call(s, path, token, {}, lanePort(s))).status]).toEqual([path, 403]);
+    }
+    expect((await postAs(s, "/api/coordinator/start", { run: "x" }, token, lanePort(s))).status).toBe(403);
+  });
+
+  test("the main listener is as it was: a tokenless read still answers there", async () => {
+    expect((await call(s, "/api/about")).status).toBe(200);
+  });
+
+  test("a shell socket on its listener does not open", async () => {
     const q = new URLSearchParams({ id: "app", term: "fedcba9876543210fedcba9876543210", place: "strip", cols: "80", rows: "24" });
-    const ws = new WebSocket(`ws://127.0.0.1:${s.port}/api/term?${q}`);
+    const ws = new WebSocket(`ws://127.0.0.1:${lanePort(s)}/api/term?${q}`);
     const opened = await new Promise<boolean>((resolve) => {
       ws.onopen = () => resolve(true);
       ws.onerror = () => resolve(false);

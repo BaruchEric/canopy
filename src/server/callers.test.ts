@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
 import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { CallerBook, CallerGate, coordLane, coordinatorRefusal, inCidr, laneAllows, laneVerdict, parseCidr } from "./callers";
+import { CallerBook, CallerGate, coordinatorRefusal, coordPort, laneAllows, laneVerdict } from "./callers";
 
 const DAY = 24 * 60 * 60 * 1000;
 const MIN = 60 * 1000;
@@ -467,35 +467,18 @@ describe("a coordinator at the gate", () => {
 });
 
 describe("the coordinator's lane", () => {
-  test("CANOPY_COORD_NET is an IPv4 network; a bare address is its own /32, and anything else is no network", () => {
-    expect(parseCidr("10.250.14.0/24")).toMatchObject({ bits: 24, text: "10.250.14.0/24" });
-    expect(parseCidr("10.250.14.7")).toMatchObject({ bits: 32 });
-    for (const bad of ["", "10.250.14.0/33", "10.250.14/24", "300.1.1.1/8", "fd00::/8", "10.250.14.0/x", "10.250.14.0/24 "]) expect([bad, parseCidr(bad)]).toEqual([bad, null]);
-  });
-
-  test("an address is in the network by its prefix, an IPv4-mapped one too", () => {
-    const net = parseCidr("10.250.14.0/24");
-    if (!net) throw new Error("no net");
-    expect(inCidr("10.250.14.2", net)).toBe(true);
-    expect(inCidr("10.250.14.255", net)).toBe(true);
-    expect(inCidr("::ffff:10.250.14.2", net)).toBe(true);
-    expect(inCidr("10.250.15.2", net)).toBe(false);
-    expect(inCidr("127.0.0.1", net)).toBe(false);
-    expect(inCidr("::1", net)).toBe(false);
-    expect(inCidr("", net)).toBe(false);
-    const all = parseCidr("0.0.0.0/0");
-    if (!all) throw new Error("no net");
-    expect(inCidr("192.168.1.9", all)).toBe(true);
-  });
-
-  test("the env: unset is no lane, a bad value is no lane and an error that keeps coordinators off", () => {
-    expect(coordLane({})).toEqual({ net: null, error: null });
-    expect(coordLane({ CANOPY_COORD_NET: " 10.250.14.0/24 " }).net?.text).toBe("10.250.14.0/24");
-    const bad = coordLane({ CANOPY_COORD_NET: "10.250.14.0/99" });
-    expect(bad.net).toBeNull();
-    expect(bad.error).toContain("CANOPY_COORD_NET");
+  test("CANOPY_COORD_PORT: unset or not a port is no listener, and an error that keeps coordinators off", () => {
+    expect(coordPort({ CANOPY_COORD_PORT: " 7859 " })).toEqual({ port: 7859, error: null });
+    const unset = coordPort({});
+    expect(unset.port).toBeNull();
+    expect(unset.error).toContain("CANOPY_COORD_PORT is not set");
+    for (const bad of ["0", "65536", "78a9", "-1", "7859.5", "123456"]) {
+      const got = coordPort({ CANOPY_COORD_PORT: bad });
+      expect([bad, got.port]).toEqual([bad, null]);
+      expect(got.error).toContain(`CANOPY_COORD_PORT=${bad}`);
+    }
     expect(coordinatorRefusal("enforce", null)).toBeNull();
-    expect(coordinatorRefusal("enforce", bad.error)).toBe(bad.error);
+    expect(coordinatorRefusal("enforce", unset.error)).toBe(unset.error);
     for (const mode of ["log", "off"] as const) expect(coordinatorRefusal(mode, null)).toContain("CANOPY_CALLERS=enforce");
   });
 
@@ -531,45 +514,33 @@ describe("the coordinator's lane", () => {
     }
   });
 
-  test("from the network only a coordinator's token is taken, and a coordinator's token keeps to the lane from anywhere", () => {
-    const net = parseCidr("10.250.14.0/24");
-    if (!net) throw new Error("no net");
-    const lane = "10.250.14.2";
-    const lan = "192.168.1.20";
-    expect(laneVerdict(lane, net, "coordinator", "GET", "/api/runs")).toBeNull();
-    expect(laneVerdict(lane, net, "none", "GET", "/api/runs")).toBe("token");
-    expect(laneVerdict(lane, net, "page", "GET", "/api/runs")).toBe("token");
-    expect(laneVerdict(lane, net, "coordinator", "GET", "/api/repos/diff")).toBe("route");
-    expect(laneVerdict(lan, net, "coordinator", "GET", "/api/repos/diff")).toBe("route");
-    expect(laneVerdict(lan, null, "coordinator", "POST", "/api/coordinator/plan")).toBeNull();
-    expect(laneVerdict(lan, net, "none", "GET", "/api/repos/diff")).toBeNull();
-    expect(laneVerdict(lane, null, "none", "GET", "/api/repos/diff")).toBeNull();
+  test("on its listener only a coordinator's token is taken, and a coordinator's token keeps to the lane on either listener", () => {
+    expect(laneVerdict(true, "coordinator", "GET", "/api/runs")).toBeNull();
+    expect(laneVerdict(true, "none", "GET", "/api/about")).toBe("token");
+    expect(laneVerdict(true, "page", "GET", "/api/runs")).toBe("token");
+    expect(laneVerdict(true, "cli", "GET", "/api/runs")).toBe("token");
+    expect(laneVerdict(true, "coordinator", "GET", "/api/repos/diff")).toBe("route");
+    expect(laneVerdict(false, "coordinator", "GET", "/api/repos/diff")).toBe("route");
+    expect(laneVerdict(false, "coordinator", "POST", "/api/coordinator/plan")).toBeNull();
+    expect(laneVerdict(false, "none", "GET", "/api/repos/diff")).toBeNull();
+    expect(laneVerdict(false, "page", "GET", "/api/repos/diff")).toBeNull();
   });
 
-  test("the gate refuses in every mode, counts the refusal, and says the address once", () => {
+  test("the gate refuses in every mode, counts the refusal, and says each kind, method and path once", () => {
     const book = open();
-    const net = parseCidr("10.250.14.0/24");
     const lines: string[] = [];
     let told = 0;
-    const gate = new CallerGate({ book, mode: "off", log: (l) => lines.push(l), onRefused: () => told++, lane: net });
-    const ask = (path: string, addr: string): Response | null => gate.lane(new Request(`http://x${path}`), new URL(`http://x${path}`), null, addr);
-    const res = ask("/api/repos/diff", "10.250.14.2");
+    const gate = new CallerGate({ book, mode: "off", log: (l) => lines.push(l), onRefused: () => told++ });
+    const ask = (path: string, onLane: boolean): Response | null => gate.lane(new Request(`http://x${path}`), new URL(`http://x${path}`), null, "192.168.48.1", onLane);
+    const res = ask("/api/repos/diff", true);
     expect(res?.status).toBe(403);
-    ask("/api/repos/diff", "10.250.14.2");
-    expect(gate.refused.count).toBe(2);
-    expect(gate.refused.recent[0]).toMatchObject({ kind: "none", route: "GET /api/repos/diff" });
-    expect(told).toBe(2);
-    expect(lines.filter((l) => l.includes("10.250.14.2"))).toHaveLength(1);
-    expect(ask("/api/repos/diff", "100.64.0.9")).toBeNull();
-  });
-
-  test("a call to the coordinator's address from outside the network is said once per address", () => {
-    const book = open();
-    const lines: string[] = [];
-    const gate = new CallerGate({ book, mode: "enforce", log: (l) => lines.push(l), lane: parseCidr("10.250.14.0/24"), laneHost: "10.250.14.1:7850" });
-    const req = () => new Request("http://10.250.14.1:7850/api/runs", { headers: { host: "10.250.14.1:7850" } });
-    expect(gate.lane(req(), new URL("http://10.250.14.1:7850/api/runs"), null, "172.20.0.1")).toBeNull();
-    expect(gate.lane(req(), new URL("http://10.250.14.1:7850/api/runs"), null, "172.20.0.1")).toBeNull();
-    expect(lines.filter((l) => l.includes("172.20.0.1"))).toHaveLength(1);
+    ask("/api/repos/diff", true);
+    ask("/api/about", true);
+    expect(gate.refused.count).toBe(3);
+    expect(gate.refused.recent[0]).toMatchObject({ kind: "none", route: "GET /api/about" });
+    expect(told).toBe(3);
+    expect(lines.filter((l) => l.includes("GET /api/repos/diff"))).toHaveLength(1);
+    expect(lines.filter((l) => l.includes("GET /api/about"))).toHaveLength(1);
+    expect(ask("/api/repos/diff", false)).toBeNull();
   });
 });
