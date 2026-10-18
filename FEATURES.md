@@ -2,6 +2,10 @@
 
 ## Open
 
+### FR-016 · One Library across backends
+P2 · added 2026-10-18 · source: Eric (Mac vs mini Library compare)
+A link, tag, note, move or new category made in one backend's Library shows up in the other's. Today each backend keeps its own copy of categories.json, references.json, tags.json, relations.json and health.json, and peer sync carries only commits, so the mini started from defaults and drifts again after every edit. Host-specific keys (host_root, terminal_app, trusted_origins) stay per machine.
+
 ### FR-015 · A cards width that holds
 P3 · added 2026-10-15 · source: FR-003 fix
 The cards area only gets what the dock leaves over: at least `--cards-min` (320px), and more only while the dock's columns fit inside its widest. Widening a column takes room from the cards until they reach the minimum, and nothing remembers a width Eric chose for them. A resizer between the cards and the dock, saved per screen layout profile like the sidebar's width, would let the cards keep a set width while the dock scrolls.
