@@ -827,17 +827,7 @@ async function startRepoRun(
 /** A run on a branch of its own: a worktree under the config dir on
  *  `run/<slug>-<id>`, cut from the default branch's tip, where the gates'
  *  setup runs before the agent starts. The landing queue lands it later. */
-async function startBranchRun(
-  state: ServerState,
-  repo: Repo,
-  action: RunAction,
-  note: string,
-  agent: AgentSettings,
-  by: string | undefined,
-  pr = false,
-  spec: ActionSpec = ACTIONS[action],
-  extras: StartExtras = {},
-): Promise<Run> {
+async function startBranchRun(state: ServerState, repo: Repo, action: RunAction, note: string, agent: AgentSettings, by: string | undefined, pr = false, spec: ActionSpec = ACTIONS[action], extras: StartExtras = {}): Promise<Run> {
   const start = await cutBranch(repo, note, pr);
   try {
     return state.runner.start(repo, action, spec, note, agent, by, undefined, start, extras);

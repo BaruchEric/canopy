@@ -54,15 +54,15 @@ export interface BranchStart {
 /** What a run the server sets up itself starts with beyond the plain
  *  arguments. */
 export interface StartExtras {
+  /** the coordinator that started it, set before the run's first change is
+   *  heard, so every listener sees a child as one */
+  parent?: string;
   /** the run's id, chosen first: a coordinator's token is minted for it
    *  before the run exists */
   id?: string;
   /** more names for the run's process, over `runEnv`'s; they reach it
    *  through a stage spawn's filter too (`DriveCtx.pass`) */
   env?: Record<string, string>;
-  /** the coordinator that started it, set before the run's first change is
-   *  heard, so every listener sees a child as one */
-  parent?: string;
 }
 
 export { claudeBinary, cliArgs } from "./claudedrive";
