@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { ACTIONS, buildPrompt, busyWith, checkWhen, describeTool, planWords, repoFacts, splitMembers, toolDetail } from "./actions";
-import { RUN_ACTIONS, statusFingerprint, type Repo, type RepoStatus } from "./types";
+import { isRunAction, RUN_ACTIONS, statusFingerprint, type Repo, type RepoStatus } from "./types";
 
 function repo(over: Partial<Repo["status"] & { error: string }> = {}): Repo {
   const { error, ...status } = over;
@@ -81,6 +81,31 @@ test("the plan sheet's words name the workspace on a workspace run and stay as t
     expect(ws.notePlaceholder).toContain("workspace bike");
     expect(`${ws.blurb} ${ws.notePlaceholder}`).not.toContain("this repo");
   }
+});
+
+describe("the coordinate action", () => {
+  test("is a chat that changes nothing and needs a goal", () => {
+    expect(ACTIONS.coordinate).toMatchObject({ mode: "chat", expectsChange: false, noteRequired: true, verb: "coordinate" });
+  });
+
+  test("its plan sheet keeps its own words, workspace or not", () => {
+    const words = { blurb: ACTIONS.coordinate.blurb, notePlaceholder: ACTIONS.coordinate.notePlaceholder };
+    expect(planWords("coordinate")).toEqual(words);
+    expect(planWords("coordinate", "bike")).toEqual(words);
+  });
+
+  test("its prompt is the brief and the goal, without the repo's framing or ground rules", () => {
+    const spec = { ...ACTIONS.coordinate, task: "You are the coordinator." };
+    const p = buildPrompt(repo({ files: [file] }), spec, "ship the thing");
+    expect(p).toBe("You are the coordinator.\n\nFirst message from the user:\nship the thing");
+  });
+});
+
+test("isRunAction knows every run action and nothing else", () => {
+  for (const a of RUN_ACTIONS) expect(isRunAction(a)).toBe(true);
+  expect(isRunAction("coordinate")).toBe(true);
+  expect(isRunAction("fleet")).toBe(false);
+  expect(isRunAction(undefined)).toBe(false);
 });
 
 describe("checkWhen", () => {

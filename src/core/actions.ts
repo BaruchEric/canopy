@@ -40,6 +40,10 @@ export interface ActionSpec {
   resume?: string;
   /** the whole first message, in place of the built prompt (a resumed session already has it) */
   message?: string;
+  /** The agent works away from the repo (a coordinator has no checkout), so
+   *  its prompt is the task and the first message alone, without the repo's
+   *  facts or the ground rules about working inside it. */
+  detached?: true;
 }
 
 const safetyFor = (where: string) => `- ${where}
@@ -145,6 +149,22 @@ export const ACTIONS: Record<RunAction, ActionSpec> = {
     mode: "chat",
     task: `Task: hold a conversation. The user is chatting with you about this repository from canopy's chat box, and every later message arrives the same way. Answer each message on its own; when a message asks for work, do it. Keep replies short and in plain prose unless the user asks for more. Ask with AskUserQuestion when a choice is theirs to make.`,
   },
+  coordinate: {
+    label: "coordinate…",
+    verb: "coordinate",
+    blurb:
+      "A chat that turns your goal into tasks, each one a branch run in one repo, and proposes them as cards you can edit. Nothing starts until you press start these; at most 3 run at once, and each one's outcome comes back into the chat.",
+    notePlaceholder: "what should get done, across which repos?",
+    noteRequired: true,
+    allowedTools: [],
+    maxTurns: 100,
+    progress: "coordinating",
+    expectsChange: false,
+    mode: "chat",
+    detached: true,
+    // the server puts the brief (lib/coordinator.md) here when it starts one
+    task: `Task: you are canopy's coordinator. Turn the user's goal into tasks, each one branch run's worth of work in one repo, and propose them to canopy. Start nothing yourself.`,
+  },
 };
 
 /** The plan sheet's words for a built-in action. A workspace run speaks of
@@ -169,6 +189,10 @@ export function planWords(action: RunAction, workspace?: string): { blurb: strin
         blurb: `The agent reads across workspace ${workspace}'s folders and proposes a step-by-step plan without changing anything. You approve it, send it back with notes, or turn it down. Once approved it builds the plan in the same session.`,
         notePlaceholder: `what should be built in workspace ${workspace}?`,
       };
+    // a coordinator starts at a repo and works from no checkout, so a
+    // workspace changes nothing it says
+    case "coordinate":
+      return { blurb: spec.blurb, notePlaceholder: spec.notePlaceholder };
   }
 }
 
@@ -255,6 +279,10 @@ export function splitMembers(
  *  ground rules name Claude's AskUserQuestion; a Codex run is told its own
  *  tool for the same thing (codexrun.ts). */
 export function buildPrompt(repo: Repo, spec: ActionSpec, note: string, scope?: WorkspaceScope): string {
+  if (spec.detached) {
+    const first = note.trim();
+    return first ? `${spec.task}\n\nFirst message from the user:\n${first}` : spec.task;
+  }
   const facts = repoFacts(repo);
   const rules = scope ? WS_RULES : RULES;
   const head = (

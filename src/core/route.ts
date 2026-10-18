@@ -56,12 +56,14 @@ export const hasProfile = (profiles: Readonly<Record<string, AgentSettings>>, na
 export const DEFAULT_PROFILE = "default";
 
 /**
- * Which harnesses each role can run. Every role runs both: a shell starts
- * either CLI, the runner drives Claude Code's stream-json or Codex's
- * app-server (chats, jobs and workflow steps), and the commit message comes
- * from `claude -p` or `codex exec`. A harness added later that some role
- * cannot run yet is left out of that role here, and the refusals below say
- * so; a harness a backend lacks is a separate check (`Backend.harnesses`).
+ * Which harnesses each role can run. Every role but the coordinator's runs
+ * both: a shell starts either CLI, the runner drives Claude Code's
+ * stream-json or Codex's app-server (chats, jobs and workflow steps), and
+ * the commit message comes from `claude -p` or `codex exec`. A coordinator
+ * runs on Claude Code alone, with its permissions bypassed inside its
+ * sandbox. A harness added later that some role cannot run yet is left out
+ * of that role here, and the refusals below say so; a harness a backend
+ * lacks is a separate check (`Backend.harnesses`).
  */
 export const ROLE_HARNESSES: Record<AgentRole, readonly Harness[]> = {
   shell: ["claude", "codex"],
@@ -69,6 +71,7 @@ export const ROLE_HARNESSES: Record<AgentRole, readonly Harness[]> = {
   job: ["claude", "codex"],
   flow: ["claude", "codex"],
   suggest: ["claude", "codex"],
+  coordinate: ["claude"],
 };
 
 export const roleTakes = (role: AgentRole, h: Harness): boolean => ROLE_HARNESSES[role].includes(h);
@@ -80,6 +83,7 @@ export const ROLE_WORDS: Record<AgentRole, string> = {
   job: "jobs",
   flow: "workflow steps",
   suggest: "commit messages",
+  coordinate: "coordinators",
 };
 
 /** why a role passes a harness over, for the UI and the refusals */
@@ -254,7 +258,7 @@ function profilesOf(routes: AgentRoutes, h: Harness): [string, AgentSettings][] 
 export function resolveAgent(routes: AgentRoutes, path: string, role: AgentRole, explicit?: LaunchPick): ResolvedAgent {
   const skipped: AgentSkip[] = [];
   const done = (r: ResolvedAgent): ResolvedAgent => {
-    const out = role === "suggest" ? forSuggest(r) : r;
+    const out = role === "suggest" ? forSuggest(r) : role === "coordinate" ? forCoordinate(r) : r;
     return skipped.length ? { ...out, skipped } : out;
   };
   if (explicit && "profile" in explicit) {
@@ -294,6 +298,13 @@ const SUGGEST_LAYERS: readonly AgentLayer[] = ["explicit", "repo-role", "role"];
 function forSuggest(r: ResolvedAgent): ResolvedAgent {
   if (SUGGEST_LAYERS.includes(r.from)) return r;
   return { ...r, settings: { ...DEFAULT_AGENT, harness: r.settings.harness } };
+}
+
+/** A coordinator mostly routes work, so it runs at effort low unless the
+ *  settings it resolved to set an effort of their own. */
+function forCoordinate(r: ResolvedAgent): ResolvedAgent {
+  if (r.settings.effort !== "default") return r;
+  return { ...r, settings: { ...r.settings, effort: "low" } };
 }
 
 /** Every role's resolution for one repo: the effective table. */

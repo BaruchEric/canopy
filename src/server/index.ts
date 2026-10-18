@@ -133,10 +133,10 @@ import { suggestMessage } from "../core/suggest";
 import {
   HISTORY_WINDOWS,
   LAUNCH_SOURCE,
-  RUN_ACTIONS,
   effectivePrimary,
   isAgentRole,
   isHarness,
+  isRunAction,
   isWsColor,
   type AgentSettings,
   type AgentTable,
@@ -777,6 +777,9 @@ async function startRepoRun(
   /** open a PR when it settles ready instead of landing here (FR-011) */
   pr = false,
 ): Promise<Run> {
+  // A coordinator runs only through its own start, in its sandbox with its
+  // token; this path would spawn it here, unisolated.
+  if (action === "coordinate") throw new HttpError(400, "a coordinator starts through its own path, not as a plain run");
   // The runner spawns the agent here, at the repo's path; there is no
   // agent to spawn at a folder on another host.
   if (repo.host) throw new HttpError(400, `agent runs only work on this machine; ${repo.name} is on ${repo.host}`);
@@ -1533,9 +1536,6 @@ interface HistoryCache {
 /** claude-history syncs hourly; a five-minute memo keeps the two CLI calls
  *  behind the overview off every reload. */
 const HISTORY_TTL = 5 * 60_000;
-
-const isRunAction = (v: unknown): v is RunAction =>
-  typeof v === "string" && (RUN_ACTIONS as readonly string[]).includes(v);
 
 const isFlowChoice = (v: unknown): v is FlowChoice => v === "continue" || v === "retry" || v === "stop";
 
@@ -3321,6 +3321,7 @@ async function handleApi(
     const b = await objectBody(req);
     if (typeof b.name !== "string") return json({ error: "missing workspace name" }, 400);
     if (!isRunAction(b.action)) return json({ error: "unknown action" }, 400);
+    if (b.action === "coordinate") return json({ error: "a coordinator starts at a repo, not at a workspace" }, 400);
     const ws = (await loadConfig()).workspaces.find((w) => w.name === b.name);
     if (!ws) return json({ error: "unknown workspace" }, 404);
     const primaryPath = effectivePrimary(ws);

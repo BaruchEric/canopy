@@ -117,8 +117,8 @@ describe("resolving a role", () => {
     expect(normalizeProfiles(JSON.parse('{"constructor": {"model": "opus"}, "__proto__": {"model": "opus"}, "ok": {}}'))).toEqual({ ok: DEFAULT_AGENT });
   });
 
-  test("every role may be codex", () => {
-    for (const role of AGENT_ROLES) expect(ROLE_HARNESSES[role]).toEqual(["claude", "codex"]);
+  test("every role but the coordinator's may be codex", () => {
+    for (const role of AGENT_ROLES) expect(ROLE_HARNESSES[role]).toEqual(role === "coordinate" ? ["claude"] : ["claude", "codex"]);
     const r = full();
     r.repos[P] = { all: { profile: "review" } };
     expect(resolveAgent(r, P, "shell")).toMatchObject({ settings: review, from: "repo" });
@@ -240,8 +240,8 @@ describe("what is stored", () => {
     expect(now.roles).toEqual({ chat: { profile: "deep" } });
   });
 
-  test("codex settings of their own are taken for every role", () => {
-    for (const role of AGENT_ROLES) expect(pickRefusal(role, codex())).toBeNull();
+  test("codex settings of their own are taken for every role but the coordinator's", () => {
+    for (const role of AGENT_ROLES) expect(pickRefusal(role, codex()) === null).toBe(role !== "coordinate");
     expect(repoAgentRefusal({ all: codex(), roles: { shell: codex(), chat: codex(), job: codex(), flow: codex(), suggest: codex() } })).toBeNull();
   });
 
@@ -252,5 +252,32 @@ describe("what is stored", () => {
       expect(pickRefusal("flow", { profile: "review" })).toBeNull();
       expect(repoAgentRefusal({ roles: { flow: codex() } })).toContain("workflow steps");
     });
+  });
+});
+
+describe("the coordinate role", () => {
+  const none = (): AgentRoutes => normalizeRoutes({});
+
+  test("runs at effort low when nothing sets an effort", () => {
+    expect(resolveAgent(none(), P, "coordinate")).toEqual({ settings: claude({ effort: "low" }), from: "default", profile: "default" });
+    expect(resolveAgent({ profiles: {}, roles: {}, repos: {} }, P, "coordinate")).toEqual({ settings: claude({ effort: "low" }), from: "builtin" });
+    // a pick that names a model but leaves the effort alone still runs low
+    const r: AgentRoutes = { ...none(), roles: { coordinate: claude({ model: "sonnet" }) } };
+    expect(resolveAgent(r, P, "coordinate").settings).toEqual(claude({ model: "sonnet", effort: "low" }));
+  });
+
+  test("honours an effort a role pick, a repo or a profile sets", () => {
+    expect(resolveAgent({ ...none(), roles: { coordinate: claude({ effort: "high" }) } }, P, "coordinate")).toEqual({ settings: claude({ effort: "high" }), from: "role" });
+    expect(resolveAgent(full(), P, "coordinate")).toEqual({ settings: deep, from: "repo", profile: "deep" });
+    const medium: AgentRoutes = { ...none(), profiles: withDefaultProfile({ default: claude({ effort: "medium" }) }) };
+    expect(resolveAgent(medium, P, "coordinate").settings.effort).toBe("medium");
+  });
+
+  test("runs on Claude Code alone: a codex pick falls through with a note", () => {
+    const r: AgentRoutes = { ...none(), roles: { coordinate: codex() } };
+    const got = resolveAgent(r, P, "coordinate");
+    expect(got.settings).toEqual(claude({ effort: "low" }));
+    expect(got.skipped?.[0]).toMatchObject({ from: "role" });
+    expect(pickRefusal("coordinate", codex())).toContain("coordinators");
   });
 });

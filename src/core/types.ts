@@ -757,8 +757,9 @@ export const DEFAULT_AGENT: AgentSettings = {
 /** The kinds of work canopy starts an agent for: an interactive shell (the
  *  panel's own, a new agent shell, resume, the agent and herdr openers, the
  *  guided panel's asks), a chat and a job (the runner's two modes), a
- *  workflow step, and a commit-message suggestion. */
-export const AGENT_ROLES = ["shell", "chat", "job", "flow", "suggest"] as const;
+ *  workflow step, a commit-message suggestion, and a coordinator, whose
+ *  model and effort are kept apart from the runs it proposes. */
+export const AGENT_ROLES = ["shell", "chat", "job", "flow", "suggest", "coordinate"] as const;
 export type AgentRole = (typeof AGENT_ROLES)[number];
 
 export const isAgentRole = (v: unknown): v is AgentRole => typeof v === "string" && (AGENT_ROLES as readonly string[]).includes(v);
@@ -875,8 +876,30 @@ export const AGENT_OPENERS: readonly OpenerId[] = ["agent", "herdr"];
 
 /* ---------- runs: a job handed to Claude Code for one repo ---------- */
 
-export const RUN_ACTIONS = ["ask", "chat", "propose"] as const;
+export const RUN_ACTIONS = ["ask", "chat", "propose", "coordinate"] as const;
 export type RunAction = (typeof RUN_ACTIONS)[number];
+
+export const isRunAction = (v: unknown): v is RunAction => typeof v === "string" && (RUN_ACTIONS as readonly string[]).includes(v);
+
+/** One card a coordinator proposed (FR-010): a branch run's worth of work in
+ *  one repo. It waits as `proposed` until the user presses start these, then
+ *  `queued` until a slot frees, `running` as its child run, and settles
+ *  `done` or `failed`; `dropped` when the coordinator ended first. */
+export interface CoordTask {
+  /** `t1`, `t2`, ... in the order the coordinator proposed them */
+  id: string;
+  title: string;
+  /** a repo id this backend knows, a local one */
+  repo: string;
+  /** the whole of what the child is told: it sees nothing else */
+  note: string;
+  action: "propose" | "ask";
+  state: "proposed" | "queued" | "running" | "done" | "failed" | "dropped";
+  /** the child run's id, once it started */
+  run?: string;
+  /** how it settled, in a word or two: "landed", "sent back", or a start's error */
+  outcome?: string;
+}
 
 export type RunStatus =
   /** the process is starting or Claude is working */
@@ -1117,6 +1140,10 @@ export interface Run {
   outcome?: "changed" | "unchanged";
   /** a branch run's own branch and worktree (the landing queue) */
   branch?: RunBranch;
+  /** the coordinator run that started this one, for a coordinator's child */
+  parent?: string;
+  /** a coordinator's cards, in the order it proposed them */
+  tasks?: CoordTask[];
 }
 
 /** Where a branch run's work stands: still going, commits and a clean

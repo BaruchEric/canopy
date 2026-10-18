@@ -28,6 +28,7 @@ export const ROLE_LABEL: Record<AgentRole, string> = {
   job: "job",
   flow: "workflow step",
   suggest: "commit message",
+  coordinate: "coordinator",
 };
 
 export const ROLE_TITLE: Record<AgentRole, string> = {
@@ -36,6 +37,7 @@ export const ROLE_TITLE: Record<AgentRole, string> = {
   job: "A job handed over in canopy (ask, and the like)",
   flow: "A workflow step",
   suggest: "The commit-message suggestion",
+  coordinate: "A coordinator: the chat that splits a goal into branch runs (Claude Code only, effort low unless set)",
 };
 
 const CLAUDE_ONLY: readonly Harness[] = Object.freeze(["claude"]);
