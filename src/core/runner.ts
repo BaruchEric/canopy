@@ -38,6 +38,13 @@ import {
 /** at most this many branch runs going at once in one repo */
 export const BRANCH_RUNS_PER_REPO = 3;
 
+/** A branch run refused because its repo has `BRANCH_RUNS_PER_REPO` going.
+ *  The runner counts every active branch run, held ones too, which a
+ *  caller's own slot count may not. */
+export class BranchCapError extends Error {
+  override name = "BranchCapError";
+}
+
 /** What a branch run starts with beyond a plain run's arguments. */
 export interface BranchStart {
   /** the branch and worktree, made before the run starts */
@@ -289,7 +296,7 @@ export class Runner {
     } else if (branch) {
       if (scope) throw new Error("a workspace run works in its folders, not on a branch");
       if (this.branchRunsFor(repo.id).length >= BRANCH_RUNS_PER_REPO) {
-        throw new Error(`${repo.name} has ${BRANCH_RUNS_PER_REPO} branch runs going; wait for one to end`);
+        throw new BranchCapError(`${repo.name} has ${BRANCH_RUNS_PER_REPO} branch runs going; wait for one to end`);
       }
     } else {
       const busy = this.activeFor(repo.id);

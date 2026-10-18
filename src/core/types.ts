@@ -2296,7 +2296,7 @@ export interface Flow {
 }
 
 /** A flow with a live step: running, waiting on a prompt, or parked at a gate. */
-export const isFlowActive = (f: Flow): boolean =>
+export const isFlowActive = (f: Pick<Flow, "status">): boolean =>
   f.status === "working" || f.status === "waiting" || f.status === "gated";
 
 /* ---------- fleets: one workflow over many repos ---------- */

@@ -396,6 +396,65 @@ describe("settle notes", () => {
     h.recheck();
     expect(card("t1")).toMatchObject({ state: "done", outcome: "ready" });
   });
+
+  test("a child still in the queue past the wait sets no timer, and waits on the queue's own word", async () => {
+    let looks = 0;
+    const h = hub({
+      landing: (run) => {
+        looks++;
+        return branches.get(run.id) ?? {};
+      },
+      // the wait has passed the moment the child ends
+      readyWait: 0,
+    });
+    await post(h, "plan", { run: "co1", tasks: [task()] });
+    await post(h, "start", { run: "co1" });
+    branches.set("c1", { verdict: "auto", entry: entry("t1", "queued"), entries: [entry("t1", "queued")] });
+    end(h, "t1");
+    await settled(h);
+    const after = looks;
+    await new Promise((r) => setTimeout(r, 200));
+    expect(looks).toBe(after);
+    expect(h.waiting()).toBe(0);
+    expect(card("t1")?.state).toBe("running");
+    branches.set("c1", { verdict: "auto", entry: entry("t1", "landed"), entries: [entry("t1", "landed")] });
+    h.recheck();
+    expect(card("t1")).toMatchObject({ state: "done", outcome: "landed" });
+  });
+
+  test("a coordinator ending clears the timers its children's cards waited on", async () => {
+    const h = hub();
+    await post(h, "plan", { run: "co1", tasks: [task()] });
+    await post(h, "start", { run: "co1" });
+    end(h, "t1");
+    await settled(h);
+    expect(h.waiting()).toBe(1);
+    const co = runs.get("co1");
+    if (!co) throw new Error("no co1");
+    co.status = "stopped";
+    h.onRun(co);
+    expect(h.waiting()).toBe(0);
+  });
+});
+
+describe("a branch flow ending", () => {
+  test("pumps a coordinator whose card waits for a slot in its repo", async () => {
+    const h = hub();
+    full.add("web");
+    await post(h, "plan", { run: "co1", tasks: [task()] });
+    await post(h, "start", { run: "co1" });
+    expect(card("t1")).toMatchObject({ state: "queued", outcome: "waiting for a branch slot in web" });
+    full.delete("web");
+    h.onFlow({ status: "working", branch: {} });
+    await settled(h);
+    expect(card("t1")?.state).toBe("queued");
+    h.onFlow({ status: "done" });
+    await settled(h);
+    expect(card("t1")?.state).toBe("queued");
+    h.onFlow({ status: "done", branch: {} });
+    await settled(h);
+    expect(card("t1")?.state).toBe("running");
+  });
 });
 
 describe("the coordinator ending", () => {

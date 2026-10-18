@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { ACTIONS } from "./actions";
 import { cliArgs } from "./claudedrive";
 import type { DriveCtx, RunDriver } from "./driver";
-import { BRANCH_RUNS_PER_REPO, Runner, type BranchStart } from "./runner";
+import { BRANCH_RUNS_PER_REPO, BranchCapError, Runner, type BranchStart } from "./runner";
 import { DEFAULT_AGENT, type Harness, type Repo, type Run, type RunBranchState } from "./types";
 
 /* Branch runs: a run in a worktree of its own on a run/ branch, for the
@@ -86,6 +86,8 @@ describe("a branch run", () => {
     }
     expect(runner.branchRunsFor("a")).toHaveLength(BRANCH_RUNS_PER_REPO);
     expect(() => runner.start(repo("a"), "ask", ACTIONS.ask, "x", DEFAULT_AGENT, undefined, undefined, branchOf("b9"))).toThrow("3 branch runs going");
+    // its own kind, so a coordinator's card can wait for a slot instead of failing
+    expect(() => runner.start(repo("a"), "ask", ACTIONS.ask, "x", DEFAULT_AGENT, undefined, undefined, branchOf("b8"))).toThrow(BranchCapError);
     // a branch run alone does not make the checkout busy
     const { runner: r2 } = setup();
     r2.start(repo("c"), "ask", ACTIONS.ask, "x", DEFAULT_AGENT, undefined, undefined, branchOf("c1"));

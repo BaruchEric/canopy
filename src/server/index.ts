@@ -123,7 +123,7 @@ import {
 } from "../core/store";
 import { RememberedRules, scopeOf } from "../core/remember";
 import { repoHolding, sessionAsk, sessionRemember, sessionRule } from "../core/sessionrules";
-import { BRANCH_RUNS_PER_REPO, QUIET_WAIT, Runner, type BranchStart, type StartExtras } from "../core/runner";
+import { BRANCH_RUNS_PER_REPO, BranchCapError, QUIET_WAIT, Runner, type BranchStart, type StartExtras } from "../core/runner";
 import { NotWaitingError, type RunDriver } from "../core/driver";
 import { ANSWERS_FILE, isSeedRepoId, SEED_AGENT_REFUSAL, SEEDS_DIR, withStoredAnswers } from "../core/sprout";
 import { SeedMirrors } from "../core/seedmirror";
@@ -834,6 +834,7 @@ async function startBranchRun(state: ServerState, repo: Repo, action: RunAction,
   } catch (err) {
     await removeRunTree(repo.path, start.branch.dir, start.branch.name);
     if (err instanceof Error && err.name === "StageAwayError") throw err;
+    if (err instanceof BranchCapError) throw new SlotsFullError(err.message);
     throw new HttpError(400, String(err instanceof Error ? err.message : err));
   }
 }
@@ -1049,12 +1050,19 @@ async function startCoordChild(state: ServerState, coordId: string, task: CoordT
   if (!repo) throw new Error(`${task.repo} is no longer in the tree`);
   if (repo.host || repo.forge) throw new Error(`${repo.name} is not a folder on this machine`);
   if (isSeedPath(state.root, repo.path)) throw new Error(`${repo.name} is an incubator seed; its runs work in the seed, not on a branch`);
-  const going = branchSlotsTaken(state, repo.id);
+  // the runner's own count takes held branch runs too, so both are asked
+  const going = Math.max(branchSlotsTaken(state, repo.id), state.runner.branchRunsFor(repo.id).length);
   if (going >= BRANCH_RUNS_PER_REPO) return { busy: `${repo.name} has ${going} branch runs going` };
   const agent = agentFor(await loadConfig(), repo.path, "job");
   if (task.action === "propose" && agent.harness !== "claude") throw new Error("plan, then build needs Claude Code");
   await needHarness(state, agent.harness, repo.path);
-  return { run: await startBranchRun(state, repo, task.action, task.note, agent, "coordinator", false, ACTIONS[task.action], { parent: coordId }) };
+  try {
+    return { run: await startBranchRun(state, repo, task.action, task.note, agent, "coordinator", false, ACTIONS[task.action], { parent: coordId }) };
+  } catch (err) {
+    // another branch run took the last slot while this one got ready
+    if (err instanceof SlotsFullError) return { busy: err.message };
+    throw err;
+  }
 }
 
 const isRecord = (v: unknown): v is Record<string, unknown> => typeof v === "object" && v !== null && !Array.isArray(v);
@@ -1731,6 +1739,14 @@ class HttpError extends Error {
     message: string,
   ) {
     super(message);
+  }
+}
+
+/** A branch run the runner refused because its repo's branch slots are
+ *  full: a 409 to a route, and a card that waits to a coordinator. */
+class SlotsFullError extends HttpError {
+  constructor(message: string) {
+    super(409, message);
   }
 }
 
@@ -4264,6 +4280,7 @@ export async function startServer(opts: {
       state.chan.onFlow(flow);
       state.incubator.onFlow(flow);
       state.triggers.onFlow(flow);
+      state.coordinator.onFlow(flow);
     },
     onGone: (id) => {
       broadcast(state, { type: "flow-gone", id });

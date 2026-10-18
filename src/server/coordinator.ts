@@ -9,7 +9,7 @@
  *  like the rest of it. The notes waiting for an idle turn live here. */
 
 import { childSettled, nextToStart, settleNote, startNote, validatePlan, type ChildBranch } from "../core/coordinator";
-import { isRunActive, type CoordTask, type Run } from "../core/types";
+import { isFlowActive, isRunActive, type CoordTask, type Flow, type Run } from "../core/types";
 import type { Caller } from "./callers";
 
 /** how long a ready child's card waits for the landing queue to sort or
@@ -95,6 +95,11 @@ export class CoordinatorHub {
   stop(): void {
     for (const t of this.timers.values()) clearTimeout(t);
     this.timers.clear();
+  }
+
+  /** how many ready children's waits have a timer set */
+  waiting(): number {
+    return this.timers.size;
   }
 
   /* ---------- the cards ---------- */
@@ -274,15 +279,21 @@ export class CoordinatorHub {
    *  a PR opens for it, or the sort leaves it to Eric. A ready branch that
    *  none of those reach within `readyWait` settles as ready. The card
    *  takes the state and outcome, and while the coordinator is going a
-   *  note waits for its next idle turn. */
+   *  note waits for its next idle turn.
+   *
+   *  A timer waits only for `readyWait` to pass. A child still unsettled
+   *  after that has an entry in the queue, which can take any time, so it
+   *  waits on the landing and PR broadcasts' `recheck` and sets none. */
   private settle(coord: Run, task: CoordTask, child: Run): void {
     if (isRunActive(child)) return;
     const branch = this.deps.landing(child);
     const ended = child.endedAt ?? this.now();
     const wait = this.deps.readyWait ?? READY_WAIT;
-    const got = childSettled(child, branch, this.now() - ended >= wait);
+    const left = ended + wait - this.now();
+    const got = childSettled(child, branch, left <= 0);
     if (!got) {
-      this.later(child.id, ended + wait - this.now());
+      if (left > 0) this.later(child.id, left);
+      else this.cancel(child.id);
       return;
     }
     this.cancel(child.id);
@@ -311,7 +322,7 @@ export class CoordinatorHub {
         this.timers.delete(childId);
         this.recheck();
       },
-      Math.max(0, ms) + 50,
+      ms + 50,
     );
     timer.unref?.();
     this.timers.set(childId, timer);
@@ -365,6 +376,9 @@ export class CoordinatorHub {
   private end(coord: Run): void {
     this.notes.delete(coord.id);
     const tasks = coord.tasks ?? [];
+    // its children's cards still settle on the broadcasts' recheck, with
+    // nothing said, so no timer need outlive it
+    for (const t of tasks) if (t.run) this.cancel(t.run);
     if (!tasks.some((t) => t.state === "proposed" || t.state === "queued")) return;
     this.setTasks(
       coord,
@@ -380,6 +394,13 @@ export class CoordinatorHub {
       else if (run.status === "idle" && this.notes.has(run.id)) this.flushSoon(run.id);
     }
     if (!isRunActive(run)) this.pumpAll();
+  }
+
+  /** The flows' every change: a branch flow holds one of its repo's branch
+   *  slots from its start to its end, so its end may free one a card waits
+   *  for. */
+  onFlow(flow: Pick<Flow, "status"> & { branch?: object }): void {
+    if (flow.branch && !isFlowActive(flow)) this.pumpAll();
   }
 
   /* ---------- routes ---------- */
