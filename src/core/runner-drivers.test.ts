@@ -142,6 +142,14 @@ describe("a run's own extras", () => {
     expect(runner.start(repo("a"), "ask", ACTIONS.ask, "go", DEFAULT_AGENT, undefined, undefined, undefined, { id: "co123456" }).id).toBe("co123456");
     expect(() => runner.start(repo("b"), "ask", ACTIONS.ask, "go", DEFAULT_AGENT, undefined, undefined, undefined, { id: "co123456" })).toThrow("a run co123456 exists already");
   });
+
+  test("a parent given at the start is on the run before its first change is heard", () => {
+    const heard: (string | undefined)[] = [];
+    const runner = new Runner({ onChange: (r) => heard.push(r.parent), onGone: () => {} }, { driver: (h) => new FakeDriver(h) });
+    const run = runner.start(repo("a"), "ask", ACTIONS.ask, "go", DEFAULT_AGENT, "coordinator", undefined, undefined, { parent: "co123456" });
+    expect(run.parent).toBe("co123456");
+    expect(heard[0]).toBe("co123456");
+  });
 });
 
 describe("a coordinate run", () => {

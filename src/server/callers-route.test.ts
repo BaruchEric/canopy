@@ -218,6 +218,14 @@ describe("enforce", () => {
     }
   });
 
+  test("the coordinator routes reach the hub past the gate", async () => {
+    const plan = await post(s, "/api/coordinator/plan", { run: "nope", tasks: [] }, shell);
+    expect(plan.status).toBe(404);
+    expect(((await plan.json()) as { error: string }).error).toBe("no run nope");
+    expect((await post(s, "/api/coordinator/start", { run: "nope" }, shell)).status).toBe(404);
+    expect((await post(s, "/api/coordinator/plan", { run: "nope", tasks: [] })).status).toBe(401);
+  });
+
   test("the health check says enforce", async () => {
     const checks = ((await (await call(s, "/api/health")).json()) as { checks: HealthCheck[] }).checks;
     const c = checks.find((x) => x.id === "canopy:callers");

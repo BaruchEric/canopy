@@ -54,6 +54,9 @@ export interface BranchStart {
 /** What a run the server sets up itself starts with beyond the plain
  *  arguments. */
 export interface StartExtras {
+  /** the coordinator that started it, set before the run's first change is
+   *  heard, so every listener sees a child as one */
+  parent?: string;
   /** the run's id, chosen first: a coordinator's token is minted for it
    *  before the run exists */
   id?: string;
@@ -325,6 +328,7 @@ export class Runner {
       prompt: null,
     };
     if (by) run.by = by;
+    if (extras.parent) run.parent = extras.parent;
     if (scope) run.workspace = scope.workspace;
     if (spec.flowStep) run.flowStep = { ...spec.flowStep };
     if (branch) run.branch = { ...branch.branch, state: "working" };
