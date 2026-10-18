@@ -297,15 +297,26 @@ const SUGGEST_LAYERS: readonly AgentLayer[] = ["explicit", "repo-role", "role"];
  */
 function forSuggest(r: ResolvedAgent): ResolvedAgent {
   if (SUGGEST_LAYERS.includes(r.from)) return r;
-  return { ...r, settings: { ...DEFAULT_AGENT, harness: r.settings.harness } };
+  const h = r.settings.harness;
+  let settings = suggestDefaults.get(h);
+  if (!settings) suggestDefaults.set(h, (settings = { ...DEFAULT_AGENT, harness: h }));
+  return { ...r, settings };
 }
 
 /** A coordinator mostly routes work, so it runs at effort low unless the
  *  settings it resolved to set an effort of their own. */
 function forCoordinate(r: ResolvedAgent): ResolvedAgent {
   if (r.settings.effort !== "default") return r;
-  return { ...r, settings: { ...r.settings, effort: "low" } };
+  let settings = lowEffort.get(r.settings);
+  if (!settings) lowEffort.set(r.settings, (settings = { ...r.settings, effort: "low" }));
+  return { ...r, settings };
 }
+
+// The settings forSuggest and forCoordinate make, kept so the same routing
+// hands back the same object: the UI selects them straight from its store,
+// and a fresh object on every read loops React's render.
+const suggestDefaults = new Map<Harness, AgentSettings>();
+const lowEffort = new WeakMap<AgentSettings, AgentSettings>();
 
 /** Every role's resolution for one repo: the effective table. */
 export function effectiveAgents(routes: AgentRoutes, path: string): Record<AgentRole, ResolvedAgent> {

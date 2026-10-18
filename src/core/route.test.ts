@@ -280,4 +280,14 @@ describe("the coordinate role", () => {
     expect(got.skipped?.[0]).toMatchObject({ from: "role" });
     expect(pickRefusal("coordinate", codex())).toContain("coordinators");
   });
+
+  // the UI selects these settings straight from the store, and a fresh
+  // object on every read loops React's render (error #185)
+  test("hands back the same settings object for the same routing", () => {
+    const r = none();
+    expect(resolveAgent(r, P, "coordinate").settings).toBe(resolveAgent(r, P, "coordinate").settings);
+    const builtin: AgentRoutes = { profiles: {}, roles: {}, repos: {} };
+    expect(resolveAgent(builtin, P, "coordinate").settings).toBe(resolveAgent(builtin, P, "coordinate").settings);
+    expect(resolveAgent(full(), P, "suggest").settings).toBe(resolveAgent(full(), P, "suggest").settings);
+  });
 });
