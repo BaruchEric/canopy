@@ -535,13 +535,12 @@ body.resizing iframe {
 }
 
 /* ---------- top bar ---------- */
-/* rows are spaced by each item's own margin rather than a row gap, so the
-   zero-height break between the two rows adds no space of its own */
+/* two rows on anything wider than a phone (TopBar), each a .tb-line; a row's
+   items are spaced by their own margin rather than a row gap, so a row that
+   has to wrap keeps the same rhythm */
 .topbar {
   display: flex;
-  align-items: center;
-  flex-wrap: wrap;
-  gap: 0 12px;
+  flex-direction: column;
   min-height: 46px;
   padding: 2px 14px;
   border-bottom: 1px solid var(--hair);
@@ -559,13 +558,42 @@ body.resizing iframe {
 .topbar-tail {
   margin-left: auto;
 }
-.topbar > :not(.topbar-break) {
+.tb-line {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0 12px;
+  min-width: 0;
+}
+.tb-line > * {
   margin-block: 4px;
 }
-/* the second row starts here at every width */
-.topbar-break {
-  flex-basis: 100%;
-  height: 0;
+/* the grouping and the filters take what the row has spare, the filter box
+   growing into it, and give it back before the row wraps: the run is as
+   narrow as its buttons and the box at its least */
+.tb-show {
+  flex: 1 1 0;
+  min-width: min-content;
+}
+.tb-show > .search {
+  flex: 1 1 auto;
+  min-width: 120px;
+  max-width: 340px;
+}
+.tb-show .filter {
+  width: 100%;
+}
+@media (prefers-reduced-motion: no-preference) {
+  .tb-fold {
+    transition:
+      grid-template-rows 220ms var(--ease),
+      margin-top 220ms var(--ease);
+  }
+  .tb-fold-in {
+    transition:
+      margin 220ms var(--ease),
+      padding 220ms var(--ease);
+  }
 }
 /* a run of controls that belong together: close inside, and on a row of
    runs a short hairline before each one after the first. A run whose chips
@@ -7551,17 +7579,46 @@ button.machine:hover {
   box-shadow: 0 0 0 3px color-mix(in srgb, var(--moss) 20%, transparent);
 }
 
-/* a laptop-narrow bar: the attention pill keeps its count, so the second
-   row keeps to one line */
-@media (max-width: 1100px) {
-  .attention .pill-words {
+/* the top bar narrowing: as the window does, the words that repeat what a
+   glyph or a tooltip already says go first, so each row keeps to one line
+   down to a phone's width. The ranger's word goes in TopBar (NARROW). */
+@media (max-width: 1240px) {
+  .attention .pill-words,
+  .topbar:not(.phone) .quiet-all,
+  .topbar:not(.phone) #filters-btn .pill-words,
+  .topbar .wordmark-ver {
     display: none;
-  }
-  .filter {
-    width: 128px;
   }
   .attention {
     padding-right: 10px;
+  }
+}
+@media (max-width: 1100px) {
+  .topbar:not(.phone) .signin-to {
+    display: none;
+  }
+  /* the hairlines between runs draw closer */
+  .topbar-group > .tb-cluster:not(:empty) ~ .tb-cluster:not(:empty)::before {
+    margin-right: 4px;
+  }
+  .topbar-group {
+    column-gap: 8px;
+  }
+  .tb-line {
+    column-gap: 8px;
+  }
+}
+@media (max-width: 940px) {
+  /* the crowns say canopy, as on a phone */
+  .topbar .wordmark {
+    font-size: 0;
+    gap: 0;
+  }
+  .topbar .backend-names {
+    display: none;
+  }
+  .tb-show > .search {
+    min-width: 96px;
   }
 }
 /* a folded section is its head alone: the room some sections keep below
@@ -7647,13 +7704,36 @@ button.machine:hover {
     margin-block: 0;
   }
   .tb-line {
-    display: flex;
-    align-items: center;
+    flex-wrap: nowrap;
     gap: 6px;
-    min-width: 0;
   }
   .tb-line > * {
     flex: none;
+    margin-block: 0;
+  }
+  /* the two lower rows fold away while the cards scroll down (useTuck):
+     the fold's row shrinks to nothing and its box clips what it holds, with
+     room around the rows for the focus rings the clip would cut */
+  .tb-fold {
+    display: grid;
+    grid-template-rows: 1fr;
+  }
+  .tb-fold-in {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    min-height: 0;
+    overflow: hidden;
+    margin: -4px -10px;
+    padding: 4px 10px;
+  }
+  .topbar.phone.tucked .tb-fold {
+    grid-template-rows: 0fr;
+    margin-top: -6px;
+  }
+  .topbar.phone.tucked .tb-fold-in {
+    margin-block: 0;
+    padding-block: 0;
   }
   .tb-line .spacer {
     flex: 1;
@@ -7705,12 +7785,22 @@ button.machine:hover {
   .tb-line .filter {
     width: 100%;
   }
+  /* faded only at an end with more past it (useScrollEdges), wider at the
+     far end, which is the one a reader has not seen yet */
   .tb-scroll {
+    --fade-start: 0px;
+    --fade-end: 0px;
     overflow-x: auto;
     scrollbar-width: none;
     margin-inline: -10px;
     padding-inline: 10px;
-    mask-image: linear-gradient(to right, transparent, #000 10px, #000 calc(100% - 18px), transparent);
+    mask-image: linear-gradient(to right, transparent, #000 var(--fade-start), #000 calc(100% - var(--fade-end)), transparent);
+  }
+  .tb-scroll[data-more-start] {
+    --fade-start: 22px;
+  }
+  .tb-scroll[data-more-end] {
+    --fade-end: 40px;
   }
   .tb-scroll::-webkit-scrollbar {
     display: none;
@@ -7724,7 +7814,7 @@ button.machine:hover {
     display: none;
   }
   /* a repo open on a phone has the page: the filter rows go with the cards */
-  .app:has(> .body > .dock) .topbar.phone .tb-tools {
+  .app:has(> .body > .dock) .topbar.phone .tb-fold {
     display: none;
   }
 

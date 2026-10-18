@@ -51,6 +51,7 @@ export function FilterMenu() {
         className={active > 0 ? "pill on" : "pill"}
         aria-expanded={open}
         aria-haspopup="dialog"
+        aria-label={active === 0 ? "Filters" : `${active} filter${active === 1 ? "" : "s"} on`}
         title="Filter by status or by the identity a repo commits as (f)"
         onClick={() => setOpen(!open)}
       >
@@ -67,7 +68,14 @@ export function FilterMenu() {
         >
           <path d="M3 5h18l-7 8v6l-4 2v-8z" />
         </svg>
-        {active === 0 ? "filters" : `${active} filter${active === 1 ? "" : "s"}`}
+        {active === 0 ? (
+          <span className="pill-words">filters</span>
+        ) : (
+          <>
+            <span className="pill-n">{active}</span>
+            <span className="pill-words"> filter{active === 1 ? "" : "s"}</span>
+          </>
+        )}
       </button>
       {open && (
         <div className="settings-pop filters-pop" role="dialog" aria-label="Filters">

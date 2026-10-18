@@ -1,5 +1,6 @@
 import { HealthChip } from "./Health";
-import { useState, type ReactNode } from "react";
+import { useCallback, useEffect, useRef, useState, type ReactNode, type RefObject } from "react";
+import { flushSync } from "react-dom";
 import { useShallow } from "zustand/react/shallow";
 import { api } from "../api";
 import { ownRun } from "../flows";
@@ -12,6 +13,7 @@ import { isHome } from "../registry";
 import { baseName } from "../elsewhere";
 import { primaryRefusal } from "../workspaces";
 import { PAGE_BUILD } from "../build";
+import { TUCK_START, nextTuck, scrollEdges, type Tuck } from "../topbar";
 import { buildMoved, versionLine } from "../../../src/core/version";
 import { isOwnCode } from "../callerToken";
 import { FilterMenu } from "./Filters";
@@ -417,12 +419,15 @@ function AttentionPill() {
       type="button"
       className={dirtyOnly ? "pill attention on" : "pill attention"}
       aria-pressed={dirtyOnly}
+      aria-label={attention === 0 ? "All quiet" : `${attention} need${attention === 1 ? "s" : ""} attention`}
       title="Only repos with changes, unpushed commits, or errors (d)"
       onClick={() => setDirtyOnly(!dirtyOnly)}
     >
       <span className={attention > 0 ? "dot lichen" : "dot moss"} />
       {attention === 0 ? (
-        "all quiet"
+        <>
+          <span className="quiet-all">all </span>quiet
+        </>
       ) : (
         <>
           <span className="pill-n">{attention}</span>
@@ -600,9 +605,10 @@ function SignInChip({ backend }: { backend: string }) {
           ? `The last sign-in did not finish: ${failed}. Press to ask again`
           : `${backend} checks who calls it and does not know this page. Signing in asks it to let this page in; approve it from a signed-in page's inbox or with the first code from its log`
       }
+      aria-label={`Sign in to ${backend}`}
       onClick={() => void useStore.getState().signIn(backend)}
     >
-      sign in to {backend}
+      sign in<span className="signin-to">{"\u00a0"}to {backend}</span>
     </button>
   );
 }
@@ -648,69 +654,223 @@ function WaitingButton() {
 /** A run of controls that belong together. The bar draws a hairline between
  *  one run and the next on a row, and a run whose chips all have nothing to
  *  say takes no room. */
-function Cluster({ label, children }: { label: string; children: ReactNode }) {
+function Cluster({ label, className, children }: { label: string; className?: string; children: ReactNode }) {
   return (
-    <span className="tb-cluster" role="group" aria-label={label}>
+    <span className={className ? `tb-cluster ${className}` : "tb-cluster"} role="group" aria-label={label}>
       {children}
     </span>
   );
 }
 
+/** Whether the focus is somewhere text is typed. */
+const typing = (el: Element | null): boolean =>
+  el instanceof HTMLInputElement || el instanceof HTMLTextAreaElement || (el instanceof HTMLElement && el.isContentEditable);
+
+/** The phone's tool rows fold away while the cards scroll down and come
+ *  back on the way up (`nextTuck`), and never while the filter box has the
+ *  focus or a menu in the bar is open. A tap leaves the focus on the button
+ *  it pressed, so a button's focus does not hold them. Only `.main`'s
+ *  scrolls count: the dock, the shells and the panels scroll on their own.
+ *  `/` and `f` reach into the folded rows, so either key brings them back
+ *  before the page's own handler looks for the box or the button. */
+function useTuck(head: RefObject<HTMLElement | null>, fold: RefObject<HTMLElement | null>): [boolean, () => void] {
+  const [tucked, setTucked] = useState(false);
+  const state = useRef<Tuck>(TUCK_START);
+  useEffect(() => {
+    const onScroll = (e: Event) => {
+      const el = e.target;
+      if (!(el instanceof HTMLElement) || !el.classList.contains("main")) return;
+      const bar = head.current;
+      const focus = document.activeElement;
+      const held = bar !== null && ((bar.contains(focus) && typing(focus)) || bar.querySelector(".settings-pop, .shells-pop") !== null);
+      const t = held
+        ? { tucked: false, anchor: el.scrollTop, hold: 0 }
+        : nextTuck(state.current, {
+            top: el.scrollTop,
+            range: el.scrollHeight - el.clientHeight,
+            room: fold.current?.scrollHeight ?? 0,
+            now: performance.now(),
+          });
+      state.current = t;
+      setTucked(t.tucked);
+    };
+    // the capture phase runs before App's keydown on the window, and
+    // flushSync drops `inert` before that handler moves the focus
+    const onKey = (e: KeyboardEvent) => {
+      if (!state.current.tucked || e.metaKey || e.ctrlKey || e.altKey) return;
+      if ((e.key === "/" || e.key === "f") && !typing(e.target instanceof Element ? e.target : null)) {
+        state.current = { ...state.current, tucked: false };
+        flushSync(() => setTucked(false));
+      }
+    };
+    document.addEventListener("scroll", onScroll, { capture: true, passive: true });
+    window.addEventListener("keydown", onKey, { capture: true });
+    return () => {
+      document.removeEventListener("scroll", onScroll, { capture: true });
+      window.removeEventListener("keydown", onKey, { capture: true });
+    };
+  }, [head, fold]);
+  const show = useCallback(() => {
+    state.current = { ...state.current, tucked: false };
+    setTucked(false);
+  }, []);
+  return [tucked, show];
+}
+
+/** Marks a row that scrolls sideways with which of its ends hold more, so
+ *  its fade shows only where there is something past the edge. */
+function useScrollEdges(row: RefObject<HTMLElement | null>) {
+  useEffect(() => {
+    const el = row.current;
+    if (!el) return;
+    const mark = () => {
+      const { start, end } = scrollEdges(el.scrollLeft, el.scrollWidth, el.clientWidth);
+      el.toggleAttribute("data-more-start", start);
+      el.toggleAttribute("data-more-end", end);
+    };
+    mark();
+    el.addEventListener("scroll", mark, { passive: true });
+    // the chips come and go, which changes the width with no scroll
+    const seen = new ResizeObserver(mark);
+    seen.observe(el);
+    const kids = new MutationObserver(mark);
+    kids.observe(el, { childList: true, subtree: true });
+    return () => {
+      el.removeEventListener("scroll", mark);
+      seen.disconnect();
+      kids.disconnect();
+    };
+  }, [row]);
+}
+
+/** The phone's bar: three short rows, the views and the few buttons a thumb
+ *  reaches for first, then the filter box, then everything else in one row
+ *  that scrolls sideways, faded at whichever end has more. The two lower
+ *  rows fold away while the cards scroll down. */
+function PhoneBar({ nav }: { nav?: ReactNode }) {
+  const head = useRef<HTMLElement>(null);
+  const fold = useRef<HTMLDivElement>(null);
+  const scroller = useRef<HTMLDivElement>(null);
+  const [tucked, show] = useTuck(head, fold);
+  useScrollEdges(scroller);
+  return (
+    <header ref={head} className={tucked ? "topbar phone tucked" : "topbar phone"} onFocus={show}>
+      <div className="tb-line">
+        <SideToggle />
+        <Wordmark />
+        {nav}
+        <span className="spacer" />
+        <SignInChips />
+        <ReloadChip />
+        {/* few enough that the views keep room to show: what waits on you
+            and the tasks stay in reach with a repo open, when the rows
+            under this one go (the tasks' chip brings a task to the front
+            from anywhere); the rest ride in the row that scrolls */}
+        <Cluster label="Waiting and tasks">
+          <WaitingButton />
+          <TasksChip />
+        </Cluster>
+        <Cluster label="This page">
+          <BackendMenu />
+          <SearchButton />
+          <SettingsMenu />
+        </Cluster>
+      </div>
+      <div className="tb-fold" inert={tucked}>
+        <div ref={fold} className="tb-fold-in">
+          <div className="tb-line tb-tools">
+            <FilterBox />
+            <AttentionPill />
+            <FilterMenu />
+          </div>
+          <div ref={scroller} className="tb-line tb-tools tb-scroll">
+            <Cluster label="Make">
+              <NewProjectButton />
+              <SelectPill />
+            </Cluster>
+            <Cluster label="Show">
+              <SortMenu />
+              <FeedButton />
+              <CliButton />
+            </Cluster>
+            <Cluster label="Scanned folders">
+              <SourcesMenu />
+              <RescanButton />
+            </Cluster>
+            <WsMenu />
+            <Cluster label="For you">
+              <InboxChip />
+              <ChanChip />
+            </Cluster>
+            <Cluster label="Running">
+              <RunsPill />
+              <ShellsChip />
+              <KeptShells />
+              <RangerChip compact />
+            </Cluster>
+            <Cluster label="Health">
+              <HealthChip />
+            </Cluster>
+          </div>
+        </div>
+      </div>
+    </header>
+  );
+}
+
 /** The top bar: `nav` is the view switcher, which sits beside the name. A
- *  window as wide as a laptop's gets two rows, the views and the scope
- *  above the grouping and the filters; a phone gets three short ones, the
- *  views and the few buttons a thumb reaches for first, then the filter
- *  box, then everything else in one row that scrolls sideways. On both the
- *  chips come in runs: what wants you, what is running, and the backend
- *  itself, each chip absent when it has nothing to say. */
+ *  window wider than a phone gets two rows that stay two: the views, the
+ *  scope, the finders and the makers above; the grouping and the filters,
+ *  then the chips, below. The filter box takes the room the row has spare
+ *  and gives it back first, and the words shorten as the window narrows
+ *  (styles.css, "the top bar narrowing"); only a row that still cannot fit
+ *  wraps. A phone gets `PhoneBar`. The chips come in runs: what wants you,
+ *  what is running, and the backend itself, each chip absent when it has
+ *  nothing to say. */
 export function TopBar({ nav }: { nav?: ReactNode }) {
   const phone = useMedia(PHONE);
+  const narrow = useMedia(NARROW);
+  if (phone) return <PhoneBar nav={nav} />;
 
-  if (phone) {
-    return (
-      <header className="topbar phone">
-        <div className="tb-line">
-          <SideToggle />
-          <Wordmark />
-          {nav}
-          <span className="spacer" />
-          <SignInChips />
-          <ReloadChip />
-          {/* few enough that the views keep room to show: what waits on you
-              and the tasks stay in reach with a repo open, when the rows
-              under this one go (the tasks' chip brings a task to the front
-              from anywhere); the rest ride in the row that scrolls */}
-          <Cluster label="Waiting and tasks">
-            <WaitingButton />
-            <TasksChip />
-          </Cluster>
-          <Cluster label="This page">
-            <BackendMenu />
+  return (
+    <header className="topbar">
+      <div className="tb-line tb-top">
+        <SideToggle />
+        <Wordmark version />
+        {nav}
+        <Cluster label="Scanned folders">
+          <SourcesMenu />
+          <RescanButton />
+        </Cluster>
+        <WsMenu />
+        {/* the finders and the makers wrap as one, so a narrow bar never splits them */}
+        <span className="topbar-group topbar-tail">
+          <Cluster label="Find">
             <SearchButton />
-            <SettingsMenu />
+            <CliButton />
+            <FeedButton />
           </Cluster>
-        </div>
-        <div className="tb-line tb-tools">
-          <FilterBox />
-          <AttentionPill />
-          <FilterMenu />
-        </div>
-        <div className="tb-line tb-tools tb-scroll">
           <Cluster label="Make">
             <NewProjectButton />
             <SelectPill />
           </Cluster>
-          <Cluster label="Show">
-            <SortMenu />
-            <FeedButton />
-            <CliButton />
-          </Cluster>
-          <Cluster label="Scanned folders">
-            <SourcesMenu />
-            <RescanButton />
-          </Cluster>
-          <WsMenu />
+        </span>
+      </div>
+
+      <div className="tb-line tb-tools">
+        <Cluster label="Show" className="tb-show">
+          <SortMenu />
+          <AttentionPill />
+          <FilterMenu />
+          <FilterBox />
+        </Cluster>
+
+        {/* the chips keep to the right end of whichever row they land on */}
+        <span className="topbar-group topbar-tail">
+          <SignInChips />
+          <ReloadChip />
           <Cluster label="For you">
+            <WaitingButton />
             <InboxChip />
             <ChanChip />
           </Cluster>
@@ -718,74 +878,18 @@ export function TopBar({ nav }: { nav?: ReactNode }) {
             <RunsPill />
             <ShellsChip />
             <KeptShells />
-            <RangerChip compact />
+            <TasksChip />
+            <RangerChip compact={narrow} />
           </Cluster>
-          <Cluster label="Health">
+          <Cluster label="This backend">
             <HealthChip />
+            <BackendMenu />
           </Cluster>
-        </div>
-      </header>
-    );
-  }
-
-  return (
-    <header className="topbar">
-      <SideToggle />
-      <Wordmark version />
-      {nav}
-      <Cluster label="Scanned folders">
-        <SourcesMenu />
-        <RescanButton />
-      </Cluster>
-      <WsMenu />
-
-      <span className="spacer" />
-
-      {/* the finders and the makers wrap as one, so a narrow bar never splits them */}
-      <span className="topbar-group">
-        <Cluster label="Find">
-          <SearchButton />
-          <CliButton />
-          <FeedButton />
-        </Cluster>
-        <Cluster label="Make">
-          <NewProjectButton />
-          <SelectPill />
-        </Cluster>
-      </span>
-      <span className="topbar-break" aria-hidden="true" />
-
-      <Cluster label="Show">
-        <SortMenu />
-        <AttentionPill />
-        <FilterMenu />
-        <FilterBox />
-      </Cluster>
-
-      {/* the chips keep to the right end of whichever row they land on */}
-      <span className="topbar-group topbar-tail">
-        <SignInChips />
-        <ReloadChip />
-        <Cluster label="For you">
-          <WaitingButton />
-          <InboxChip />
-          <ChanChip />
-        </Cluster>
-        <Cluster label="Running">
-          <RunsPill />
-          <ShellsChip />
-          <KeptShells />
-          <TasksChip />
-          <RangerChip />
-        </Cluster>
-        <Cluster label="This backend">
-          <HealthChip />
-          <BackendMenu />
-        </Cluster>
-        <Cluster label="Settings">
-          <SettingsMenu />
-        </Cluster>
-      </span>
+          <Cluster label="Settings">
+            <SettingsMenu />
+          </Cluster>
+        </span>
+      </div>
     </header>
   );
 }
