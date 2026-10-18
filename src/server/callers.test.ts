@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
 import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { CallerBook } from "./callers";
+import { CallerBook, CallerGate } from "./callers";
 
 const DAY = 24 * 60 * 60 * 1000;
 const MIN = 60 * 1000;
@@ -162,6 +162,32 @@ describe("drops", () => {
     expect(book.check(a.token)).toBeNull();
     expect(book.check(c.token)).toBeNull();
     expect(book.check(b.token)).not.toBeNull();
+  });
+
+  test("a coordinator's token carries its run, and dropRun revokes it", async () => {
+    const book = open();
+    const { token, caller } = book.mint("coordinator", { label: "coordinator web", run: "co1" });
+    expect(caller).toMatchObject({ kind: "coordinator", run: "co1" });
+    expect(book.check(token)?.run).toBe("co1");
+    await book.dropRun("co1");
+    expect(book.check(token)).toBeNull();
+  });
+
+  test("dropKind drops every caller of that kind, kept on disk too, and leaves the rest", async () => {
+    const book = open();
+    const a = book.mint("coordinator", { label: "coordinator web", run: "co1" });
+    const b = book.mint("coordinator", { label: "coordinator api", run: "co2" });
+    const c = book.mint("ranger", { label: "ranger", term: "t1" });
+    await book.flush();
+    const dropped: string[] = [];
+    const again = open();
+    again.onDrop = (ids) => dropped.push(...ids);
+    await again.dropKind("coordinator");
+    expect(dropped).toEqual([a.caller.id, b.caller.id]);
+    expect(again.check(a.token)).toBeNull();
+    expect(again.check(b.token)).toBeNull();
+    expect(again.check(c.token)).not.toBeNull();
+    expect(open().check(a.token)).toBeNull();
   });
 
   test("prune drops shell callers whose term is gone", () => {
@@ -403,5 +429,29 @@ describe("first code", () => {
     const code = open().firstCode();
     expect(code).not.toBeNull();
     expect(book.firstCode()).not.toBeNull();
+  });
+});
+
+describe("a coordinator at the gate", () => {
+  test("its token posts a plan and reads, and is refused on every route that starts, stops or answers", () => {
+    const book = open();
+    const caller = book.check(book.mint("coordinator", { label: "coordinator web", run: "co1" }).token);
+    const gate = new CallerGate({ book, mode: "enforce", log: () => {} });
+    const at = (method: string, path: string): number | null => gate.gate(new Request(`http://x${path}`, { method }), new URL(`http://x${path}`), caller)?.status ?? null;
+    expect(at("POST", "/api/coordinator/plan")).toBeNull();
+    expect(at("GET", "/api/tree")).toBeNull();
+    for (const [m, p] of [
+      ["POST", "/api/coordinator/tasks"],
+      ["POST", "/api/coordinator/start"],
+      ["POST", "/api/repos/run"],
+      ["POST", "/api/runs/say"],
+      ["POST", "/api/runs/stop"],
+      ["POST", "/api/runs/answer"],
+      ["POST", "/api/asks/answer"],
+      ["POST", "/api/landing/land"],
+      ["POST", "/api/auth/approve"],
+    ] as const) {
+      expect([m, p, at(m, p)]).toEqual([m, p, 403]);
+    }
   });
 });

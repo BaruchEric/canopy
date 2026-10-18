@@ -11,13 +11,13 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { HealthCheck } from "../core/types";
 import { CallerBook } from "./callers";
-import { startServer } from "./index";
+import { COORD_REFUSAL, startServer } from "./index";
 
 type Up = { port: number; stop: () => void | Promise<void>; lines: string[] };
 
 let scratch: string;
 const saved: Record<string, string | undefined> = {};
-const ENV = ["CANOPY_CONFIG_DIR", "CANOPY_TMUX", "CANOPY_BIND", "CANOPY_PUBLIC_ORIGIN", "CANOPY_ORIGINS", "CANOPY_CALLERS"];
+const ENV = ["CANOPY_CONFIG_DIR", "CANOPY_TMUX", "CANOPY_BIND", "CANOPY_PUBLIC_ORIGIN", "CANOPY_ORIGINS", "CANOPY_CALLERS", "CANOPY_COORD_SOCKET", "CANOPY_COORD_API"];
 const LISTED = "https://canopy-mac.example";
 const EVIL = "https://evil.example";
 /** The "shell" tokens below are minted as rangers: they hold the same rights
@@ -31,6 +31,8 @@ beforeAll(async () => {
   process.env["CANOPY_TMUX"] = "0";
   delete process.env["CANOPY_BIND"];
   delete process.env["CANOPY_PUBLIC_ORIGIN"];
+  delete process.env["CANOPY_COORD_SOCKET"];
+  delete process.env["CANOPY_COORD_API"];
   process.env["CANOPY_ORIGINS"] = LISTED;
   const repo = join(scratch, "root", "app");
   await Bun.$`mkdir -p ${repo} && git -C ${repo} init -q`.quiet();
@@ -185,12 +187,43 @@ describe("enforce", () => {
     expect(res.headers.get("access-control-allow-headers")).toContain("x-canopy-token");
   });
 
+  test("a coordinate run is refused where no isolated coordinator runner is set up", async () => {
+    const res = await post(s, "/api/repos/run?id=app", { action: "coordinate", note: "ship it" }, shell);
+    expect(res.status).toBe(409);
+    expect(((await res.json()) as { error: string }).error).toBe(COORD_REFUSAL);
+    const ws = await post(s, "/api/workspaces/run", { name: "w", action: "coordinate", note: "ship it" }, shell);
+    expect(ws.status).toBe(400);
+    const branch = await post(s, "/api/repos/run?id=app", { action: "coordinate", note: "ship it", branch: true }, shell);
+    expect(branch.status).toBe(400);
+  });
+
   test("the health check says enforce", async () => {
     const checks = ((await (await call(s, "/api/health")).json()) as { checks: HealthCheck[] }).checks;
     const c = checks.find((x) => x.id === "canopy:callers");
     expect(c?.state).toBe("ok");
     expect(c?.detail).toContain("enforce mode");
     expect(c?.detail).toContain("refused");
+  });
+});
+
+describe("a coordinator's token from before a restart", () => {
+  let s: Up;
+  let coordinator = "";
+  let ranger = "";
+  beforeAll(async () => {
+    s = await up("sweep", "enforce", (book) => {
+      coordinator = book.mint("coordinator", { label: "coordinator app", run: "gone1234" }).token;
+      ranger = book.mint("ranger", { label: "a shell", term: TERM }).token;
+    });
+  });
+  afterAll(async () => {
+    await s.stop();
+  });
+
+  test("is dropped at start, and a caller of another kind is kept", async () => {
+    // unknown to the book is a 401; a known caller without the right is a 403
+    expect((await post(s, "/api/coordinator/plan", { run: "gone1234", tasks: [] }, coordinator)).status).toBe(401);
+    expect((await post(s, "/api/coordinator/plan", { run: "gone1234", tasks: [] }, ranger)).status).toBe(403);
   });
 });
 

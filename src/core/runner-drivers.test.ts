@@ -8,7 +8,7 @@ import { ClaudeDriver } from "./claudedrive";
 import { bunSpawn, type RpcSpawn } from "./codexrpc";
 import { CodexDriver } from "./codexrun";
 import { Flows } from "./flow";
-import type { DriveCtx, RunDriver } from "./driver";
+import { spawnEnv, type DriveCtx, type RunDriver } from "./driver";
 import { defaultDriver, Runner, runEnv, type RunnerOptions } from "./runner";
 import { StageClient } from "./stageclient";
 import { parseWorkflow } from "./workflow";
@@ -120,6 +120,74 @@ describe("the driver a run gets", () => {
     expect(defaultDriver("claude").label).toBe("Claude Code");
     expect(defaultDriver("codex", "1.2.3").label).toBe("Codex");
     expect(runEnv({ id: "r", repoId: "x" })).toEqual({ CANOPY_RUN: "r", CANOPY_REPO: "x" });
+  });
+});
+
+describe("a run's own extras", () => {
+  const extra = { CANOPY_API: "http://10.250.14.1:7850", CANOPY_TOKEN: "cnp_coordinator_x" };
+
+  test("its env reaches the process over runEnv's, and through a stage filter too", () => {
+    const { runner, ctxOf } = setup({ backend: "mini" });
+    const run = runner.start(repo("a"), "ask", ACTIONS.ask, "go", DEFAULT_AGENT, undefined, undefined, undefined, { env: extra });
+    expect(runEnv(run, "mini", extra)).toEqual({ CANOPY_RUN: run.id, CANOPY_REPO: "a", CANOPY_BACKEND: "mini", ...extra });
+    expect(ctxOf(0).env).toEqual(runEnv(run, "mini", extra));
+    // a stage's filter drops CANOPY_API from canopy's own env, never from what the run was handed
+    expect(spawnEnv({ ...ctxOf(0), stage: true }, { CANOPY_API: "http://127.0.0.1:7850" })).toMatchObject(extra);
+    expect(spawnEnv({ env: ctxOf(0).env, spawn: bunSpawn, pass: ctxOf(0).pass })).toMatchObject(extra);
+  });
+
+  test("an id given at the start names the run, and one in use is refused", () => {
+    const { runner } = setup();
+    expect(runner.start(repo("a"), "ask", ACTIONS.ask, "go", DEFAULT_AGENT, undefined, undefined, undefined, { id: "co123456" }).id).toBe("co123456");
+    expect(() => runner.start(repo("b"), "ask", ACTIONS.ask, "go", DEFAULT_AGENT, undefined, undefined, undefined, { id: "co123456" })).toThrow("a run co123456 exists already");
+  });
+});
+
+describe("a coordinate run", () => {
+  const coord = { ...ACTIONS.coordinate, task: "Task: coordinate." };
+
+  test("holds no repo: a plain run starts beside it either way round, and activeFor skips it", () => {
+    const { runner } = setup();
+    const co = runner.start(repo("a"), "coordinate", coord, "ship it", DEFAULT_AGENT);
+    expect(runner.activeFor("a")).toBeUndefined();
+    const plain = runner.start(repo("a"), "ask", ACTIONS.ask, "go", DEFAULT_AGENT);
+    expect(runner.activeFor("a")?.id).toBe(plain.id);
+    expect(runner.coordinatorFor("a")?.id).toBe(co.id);
+    const { runner: other } = setup();
+    other.start(repo("b"), "ask", ACTIONS.ask, "go", DEFAULT_AGENT);
+    expect(other.start(repo("b"), "coordinate", coord, "ship it", DEFAULT_AGENT).action).toBe("coordinate");
+  });
+
+  test("one at a time per repo", () => {
+    const { runner } = setup();
+    const co = runner.start(repo("a"), "coordinate", coord, "ship it", DEFAULT_AGENT);
+    expect(() => runner.start(repo("a"), "coordinate", coord, "more", DEFAULT_AGENT)).toThrow("a already has a coordinator going");
+    runner.start(repo("b"), "coordinate", coord, "ship it", DEFAULT_AGENT);
+    runner.stop(co.id);
+  });
+
+  test("its prompt is the brief and the goal, and its end reads no status", async () => {
+    let reads = 0;
+    const made: FakeDriver[] = [];
+    const runner = new Runner(
+      { onChange: () => {}, onGone: () => {}, status: async () => ((reads += 1), CHANGED) },
+      {
+        driver: (h) => {
+          const d = new FakeDriver(h);
+          made.push(d);
+          return d;
+        },
+      },
+    );
+    const co = runner.start(repo("a"), "coordinate", coord, "ship it", DEFAULT_AGENT);
+    expect(made[0]?.started[0]).toBe("Task: coordinate.\n\nFirst message from the user:\nship it");
+    made[0]?.ctx?.result({ text: "proposed", durationMs: 1, turns: 1 }, null);
+    runner.stop(co.id);
+    made[0]?.ctx?.exited({ code: 0, stderr: "" });
+    await flush();
+    expect(isRunActive(co)).toBe(false);
+    expect(reads).toBe(0);
+    expect(co.outcome).toBeUndefined();
   });
 });
 
@@ -397,6 +465,26 @@ describe("a stage run goes through the stage runner", () => {
     expect(seen[0]?.cwd).toBe(seed.path);
     // the runner builds the child's env; canopy sends only the run's own names
     expect(seen[0]?.env).toEqual({ CANOPY_RUN: a.id, CANOPY_REPO: seed.id });
+  });
+
+  test("a coordinate run starts through the coordinator's runner with its API and token, past the stage filter", async () => {
+    const { plain } = await folders();
+    const { client, seen } = recordingClient();
+    const runner = new Runner({ onChange: () => {}, onGone: () => {} }, { stage: isSeed, coordExec: () => client, driver: localClaude });
+    const extra = { CANOPY_API: "http://10.250.14.1:7850", CANOPY_TOKEN: "cnp_coordinator_x" };
+    const co = runner.start(plain, "coordinate", { ...ACTIONS.coordinate, task: "Task: coordinate." }, "ship it", { ...DEFAULT_AGENT }, undefined, undefined, undefined, { env: extra });
+    await waitFor(() => seen.length > 0, "the spawn");
+    expect(seen[0]?.argv[0]).toBe("claude");
+    expect(seen[0]?.env).toEqual({ CANOPY_RUN: co.id, CANOPY_REPO: plain.id, ...extra });
+    runner.stop(co.id);
+    await waitFor(() => !isRunActive(co), "the run to end");
+  });
+
+  test("a coordinate run whose runner is away or not set up refuses in coordAway's words", () => {
+    const why = "the coordinator runs only where an isolated coordinator runner is set up";
+    const runner = new Runner({ onChange: () => {}, onGone: () => {} }, { coordExec: () => null, coordAway: () => why, driver: (h) => new FakeDriver(h) });
+    expect(() => runner.start(repo("a"), "coordinate", ACTIONS.coordinate, "go", { ...DEFAULT_AGENT })).toThrow(why);
+    expect(runner.list()).toEqual([]);
   });
 
   test("a stage run with no stage runner refuses before a run exists", () => {

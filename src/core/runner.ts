@@ -51,6 +51,17 @@ export interface BranchStart {
   message?: string;
 }
 
+/** What a run the server sets up itself starts with beyond the plain
+ *  arguments. */
+export interface StartExtras {
+  /** the run's id, chosen first: a coordinator's token is minted for it
+   *  before the run exists */
+  id?: string;
+  /** more names for the run's process, over `runEnv`'s; they reach it
+   *  through a stage spawn's filter too (`DriveCtx.pass`) */
+  env?: Record<string, string>;
+}
+
 export { claudeBinary, cliArgs } from "./claudedrive";
 
 /** finished runs kept for late-joining browsers */
@@ -88,6 +99,13 @@ export interface RunnerOptions {
   /** why a stage run cannot start when `stageExec` gives null: the
    *  runner's absence by default, or the env to set when none is set up */
   stageAway?: () => string;
+  /** The coordinator's runner, a second stage runner, for a coordinate
+   *  run: null while it is away or not set up, so the run refuses with
+   *  `StageAwayError`, and undefined only where no server set it (tests).
+   *  Asked once per coordinate run, at its start. */
+  coordExec?: () => StageClient | null | undefined;
+  /** why a coordinate run cannot start when `coordExec` gives null */
+  coordAway?: () => string;
   /** how long a stage run's end waits for the runner to call its seed
    *  quiet before the run ends anyway; tests shorten it */
   quietWait?: number;
@@ -112,15 +130,22 @@ export function defaultDriver(harness: Harness, version = "0"): RunDriver {
 }
 
 /** What every run's process gets on top of canopy's own environment: which
- *  run, repo and backend it is. A harness hook reads them (tailchan's stays
- *  out of a canopy run's permission prompts, which canopy answers itself). */
-export function runEnv(run: Pick<Run, "id" | "repoId">, backend?: string): Record<string, string> {
+ *  run, repo and backend it is, and any names the run was started with (a
+ *  coordinator's API and token). A harness hook reads them (tailchan's
+ *  stays out of a canopy run's permission prompts, which canopy answers
+ *  itself). */
+export function runEnv(run: Pick<Run, "id" | "repoId">, backend?: string, extra?: Readonly<Record<string, string>>): Record<string, string> {
   return {
     CANOPY_RUN: run.id,
     CANOPY_REPO: run.repoId,
     ...(backend ? { CANOPY_BACKEND: backend } : {}),
+    ...extra,
   };
 }
+
+/** A coordinator works from no checkout: it holds no repo, so it is never
+ *  the run going there, and no status read judges its end. */
+const isCoordinate = (run: Pick<Run, "action">): boolean => run.action === "coordinate";
 
 interface Live {
   ctx: RunCtx;
@@ -170,10 +195,21 @@ export class Runner {
   }
 
   /** The run going in the repo's checkout. A branch run works in its own
-   *  worktree, shares nothing with the checkout, and is not counted. */
+   *  worktree, shares nothing with the checkout, and is not counted; nor is
+   *  a coordinator, which has no checkout at all. */
   activeFor(repoId: string): Run | undefined {
     for (const l of this.live.values()) {
-      if (l.ctx.run.repoId === repoId && !l.ctx.run.branch && isRunActive(l.ctx.run)) return l.ctx.run;
+      const r = l.ctx.run;
+      if (r.repoId === repoId && !r.branch && !isCoordinate(r) && isRunActive(r)) return r;
+    }
+    return undefined;
+  }
+
+  /** The coordinator going at the repo, one at a time. */
+  coordinatorFor(repoId: string): Run | undefined {
+    for (const l of this.live.values()) {
+      const r = l.ctx.run;
+      if (r.repoId === repoId && isCoordinate(r) && isRunActive(r)) return r;
     }
     return undefined;
   }
@@ -233,8 +269,14 @@ export class Runner {
     by?: string,
     scope?: WorkspaceScope,
     branch?: BranchStart,
+    extras: StartExtras = {},
   ): Run {
-    if (branch) {
+    const coordinate = isCoordinate({ action });
+    if (extras.id !== undefined && this.live.has(extras.id)) throw new Error(`a run ${extras.id} exists already`);
+    if (coordinate) {
+      if (scope || branch) throw new Error("a coordinator starts at a repo, not on a workspace or a branch");
+      if (this.coordinatorFor(repo.id)) throw new Error(`${repo.name} already has a coordinator going`);
+    } else if (branch) {
       if (scope) throw new Error("a workspace run works in its folders, not on a branch");
       if (this.branchRunsFor(repo.id).length >= BRANCH_RUNS_PER_REPO) {
         throw new Error(`${repo.name} has ${BRANCH_RUNS_PER_REPO} branch runs going; wait for one to end`);
@@ -251,15 +293,16 @@ export class Runner {
     const stage = this.opts.stage?.(repo) ?? false;
     if (branch && stage) throw new Error("an incubator stage works in its seed, not on a branch");
     const cwd = branch ? branch.branch.dir : repo.path;
-    const client = stage && this.opts.stageExec ? this.opts.stageExec() : undefined;
-    if (client === null) throw new StageAwayError(this.opts.stageAway?.());
+    // a coordinator runs through its own runner, never the stages'
+    const client = coordinate ? this.opts.coordExec?.() : stage && this.opts.stageExec ? this.opts.stageExec() : undefined;
+    if (client === null) throw new StageAwayError(coordinate ? this.opts.coordAway?.() : this.opts.stageAway?.());
     const make = this.opts.driver ?? ((h: Harness) => defaultDriver(h, this.opts.version));
     const driver = make(agent.harness);
     const missing = client ? stageRefusal(client, agent.harness) : driver.check();
     if (missing) throw new Error(missing);
     const chat = spec.mode === "chat";
     const run: Run = {
-      id: crypto.randomUUID().slice(0, 8),
+      id: extras.id ?? crypto.randomUUID().slice(0, 8),
       repoId: repo.id,
       action,
       verb: spec.verb,
@@ -290,7 +333,8 @@ export class Runner {
         cwd,
         agent,
         spec: driveSpec,
-        env: runEnv(run, this.opts.backend),
+        env: runEnv(run, this.opts.backend, extras.env),
+        ...(extras.env ? { pass: extras.env } : {}),
         stage,
         label: driver.label,
         ...(remember ? { remember } : {}),
@@ -552,6 +596,7 @@ export class Runner {
    *  A branch run reads its worktree instead: commits and nothing left over
    *  is `ready`, the one state the landing queue takes. */
   private async settle(live: Live): Promise<void> {
+    if (isCoordinate(live.ctx.run)) return;
     const b = live.ctx.run.branch;
     if (b) {
       const readBranch = this.hooks.branchState;

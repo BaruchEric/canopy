@@ -835,6 +835,59 @@ async function startBranchRun(state: ServerState, repo: Repo, action: RunAction,
   }
 }
 
+/** What a coordinate run says where no isolated coordinator runner is set
+ *  up (the Mac): it never runs unsandboxed. */
+export const COORD_REFUSAL = "the coordinator runs only where an isolated coordinator runner is set up (docs/deploy.md, The coordinator)";
+/** the coordinator's brief bundled with canopy; `<config dir>/coordinator.md` replaces it */
+const COORD_BRIEF = join(import.meta.dir, "../../lib/coordinator.md");
+
+/** The coordinator's brief, the prompt it starts from: the config dir's
+ *  copy, else the bundled one, else the action's own line. */
+async function coordinatorBrief(): Promise<string> {
+  for (const file of [join(configDir(), "coordinator.md"), COORD_BRIEF]) {
+    try {
+      const text = (await readFile(file, "utf8")).trim();
+      if (text) return text;
+    } catch {
+      // the next one
+    }
+  }
+  return ACTIONS.coordinate.task;
+}
+
+/** Starts a coordinator at a repo (FR-010). It holds no repo, so no busy or
+ *  workflow check applies, but a repo has one at a time. It runs only
+ *  through the isolated coordinator runner, on Claude Code with its
+ *  permissions bypassed inside that sandbox, and gets a `coordinator`
+ *  token bound to its run (read and plan, nothing more) and the address it
+ *  reaches canopy at. The token is minted for the run's id before the run
+ *  exists, and revoked if the start fails. */
+async function startCoordinator(state: ServerState, repo: Repo, goal: string, client?: unknown): Promise<Run> {
+  if (repo.host) throw new HttpError(400, `a coordinator runs only on this machine; ${repo.name} is on ${repo.host}`);
+  if (repo.forge) throw new HttpError(400, `${repo.name} is on the forge; a coordinator starts at a repo on this machine`);
+  if (isSeedPath(state.root, repo.path)) throw new HttpError(400, SEED_AGENT_REFUSAL);
+  if (!process.env["CANOPY_COORD_SOCKET"]) throw new HttpError(409, COORD_REFUSAL);
+  const api = process.env["CANOPY_COORD_API"]?.trim();
+  if (!api) throw new HttpError(409, "CANOPY_COORD_API is not set, so a coordinator would have no address to reach canopy at");
+  if (!goal.trim()) throw new HttpError(400, "write the goal first");
+  const going = state.runner.coordinatorFor(repo.id);
+  if (going) throw new HttpError(409, `${repo.name} already has a coordinator going`);
+  // Claude Code alone, in bypass mode; a route's extra flags are dropped,
+  // since they could change the mode or bring MCP servers in
+  const agent: AgentSettings = { ...agentFor(await loadConfig(), repo.path, "coordinate"), harness: "claude", yolo: true, extra: "" };
+  const spec: ActionSpec = { ...ACTIONS.coordinate, task: await coordinatorBrief() };
+  const by = deviceNameOf(state, typeof client === "string" ? client : null) ?? undefined;
+  const id = crypto.randomUUID().slice(0, 8);
+  const { token, caller } = state.callers.mint("coordinator", { label: `coordinator ${repo.id}`, run: id });
+  try {
+    return state.runner.start(repo, "coordinate", spec, goal, agent, by, undefined, undefined, { id, env: { CANOPY_API: api, CANOPY_TOKEN: token } });
+  } catch (err) {
+    state.callers.revoke(caller.id).catch(() => {});
+    if (err instanceof Error && err.name === "StageAwayError") throw err;
+    throw new HttpError(400, String(err instanceof Error ? err.message : err));
+  }
+}
+
 /** A new branch off the default branch, its worktree made, and the setup
  *  line to run there before the first agent: what a branch run, or a flow
  *  on a branch, starts with. */
@@ -3766,6 +3819,10 @@ async function handleApi(
       const note = typeof b.note === "string" ? b.note : "";
       if (b.branch !== undefined && typeof b.branch !== "boolean") return json({ error: "branch must be true or false" }, 400);
       if (b.pr !== undefined && typeof b.pr !== "boolean") return json({ error: "pr must be true or false" }, 400);
+      if (b.action === "coordinate") {
+        if (b.branch === true || b.pr === true) return json({ error: "a coordinator works on no branch; each of its tasks gets one" }, 400);
+        return json(await startCoordinator(state, repo, note, b.client), 201);
+      }
       return json(await startRepoRun(state, repo, b.action, note, b.client, undefined, b.branch, b.pr === true), 201);
     }
     if (method === "POST" && action === "peer") return postRepoPeer(peerDeps(state), repo, req);
@@ -4107,6 +4164,10 @@ export async function startServer(opts: {
     stage: (repo: Repo) => isSeedPath(root, repo.path),
     stageExec: stageFor,
     stageAway,
+    // the coordinator's runner is the second stage client; until it is
+    // built here, every coordinate run refuses rather than run unisolated
+    coordExec: (): StageClient | null => null,
+    coordAway: () => (process.env["CANOPY_COORD_SOCKET"] ? "the isolated coordinator runner is not answering" : COORD_REFUSAL),
     ...(opts.runner?.driver ? { driver: opts.runner.driver } : {}),
     ...(opts.runner?.quietWait !== undefined ? { quietWait: opts.runner.quietWait } : {}),
   };
@@ -4123,10 +4184,13 @@ export async function startServer(opts: {
       state.landing.onRun(run);
       state.prs.onRun(run);
       state.triggers.onRun(run);
+      // a coordinator's token lives exactly as long as its run
+      if (run.action === "coordinate" && !isRunActive(run)) state.callers.dropRun(run.id).catch(() => {});
     },
     onGone: (id) => {
       broadcast(state, { type: "run-gone", id });
       state.chan.forget(id);
+      state.callers.dropRun(id).catch(() => {});
     },
     // Re-read status directly rather than waiting on the watcher's
     // debounce: the card and the run's outcome should agree at once.
@@ -4633,6 +4697,8 @@ export async function startServer(opts: {
   // a shell token whose shell did not come back is stale; one a tmux shell
   // outlived canopy with stays, since that shell still carries it
   state.callers.prune(new Set(state.terms.keys())).catch(() => {});
+  // and every coordinator's: no run outlives a restart to hold one
+  state.callers.dropKind("coordinator").catch(() => {});
   // and the ones a machine going down left behind, which are offered to
   // restore rather than held
   const kept = await refreshKept(state);

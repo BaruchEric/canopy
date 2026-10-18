@@ -132,6 +132,32 @@ describe("needs", () => {
   });
 });
 
+describe("the coordinator's routes", () => {
+  test("a plan needs plan; editing a card and start these need operate", () => {
+    expect(needs("POST", "/api/coordinator/plan")).toBe("plan");
+    expect(needs("POST", "/api/coordinator/tasks")).toBe("operate");
+    expect(needs("POST", "/api/coordinator/start")).toBe("operate");
+  });
+
+  test("a coordinator may post a plan and read, and nothing that starts, stops or answers", () => {
+    expect(allows("coordinator", needs("POST", "/api/coordinator/plan"))).toBe(true);
+    expect(allows("coordinator", needs("GET", "/api/runs"))).toBe(true);
+    const refused: [string, string][] = [
+      ["POST", "/api/coordinator/tasks"],
+      ["POST", "/api/coordinator/start"],
+      ["POST", "/api/repos/run"],
+      ["POST", "/api/runs/say"],
+      ["POST", "/api/runs/stop"],
+      ["POST", "/api/runs/answer"],
+      ["POST", "/api/asks/answer"],
+      ["POST", "/api/landing/land"],
+      ["POST", "/api/landing/fix"],
+      ["POST", "/api/auth/approve"],
+    ];
+    for (const [m, p] of refused) expect([m, p, allows("coordinator", needs(m, p))]).toEqual([m, p, false]);
+  });
+});
+
 describe("allows", () => {
   test("each kind holds what the table gives it", () => {
     expect(allows("page", "shell")).toBe(true);

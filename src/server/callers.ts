@@ -208,6 +208,12 @@ export class CallerBook {
     return this.remove((c) => c.run === run).then(() => {});
   }
 
+  /** Drops every caller of one kind: at start, the coordinators', since no
+   *  run outlives a restart to hold one. */
+  dropKind(kind: CallerKind): Promise<void> {
+    return this.remove((c) => c.kind === kind).then(() => {});
+  }
+
   /** drops shell callers whose terminal is gone */
   prune(liveTerms: ReadonlySet<string>): Promise<void> {
     return this.remove((c) => c.kind === "shell" && (c.term === undefined || !liveTerms.has(c.term))).then(() => {});

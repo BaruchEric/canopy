@@ -105,6 +105,9 @@ export interface DriveCtx {
   readonly spec: DriveSpec;
   /** extra environment for the process, on top of canopy's own */
   readonly env: Readonly<Record<string, string>>;
+  /** names the server handed this one run on purpose (a coordinator's
+   *  CANOPY_API and token), laid over the env after any stage filter */
+  readonly pass?: Readonly<Record<string, string>>;
   /** an incubator stage's run: its process starts without what `stageEnv`
    *  drops (canopy's GitHub login, the callback API, tailchan) */
   readonly stage?: boolean;
@@ -158,13 +161,14 @@ export interface DriveCtx {
  *  `stageEnv` drops, so the harness and every command it runs go without
  *  canopy's GitHub login. A stage started through the stage runner gets the
  *  run's own names alone: none of canopy's env crosses the socket, and the
- *  runner builds the child's env from its own. */
+ *  runner builds the child's env from its own. What the run was handed on
+ *  purpose (`pass`) goes over either filter. */
 export function spawnEnv(
-  ctx: Pick<DriveCtx, "env" | "stage" | "spawn">,
+  ctx: Pick<DriveCtx, "env" | "stage" | "spawn" | "pass">,
   base: Readonly<Record<string, string | undefined>> = process.env,
 ): Record<string, string | undefined> {
-  if (ctx.spawn) return { ...stageEnv(ctx.env) };
-  return ctx.stage ? { ...stageEnv(base), ...stageEnv(ctx.env) } : { ...base, ...ctx.env };
+  if (ctx.spawn) return { ...stageEnv(ctx.env), ...ctx.pass };
+  return ctx.stage ? { ...stageEnv(base), ...stageEnv(ctx.env), ...ctx.pass } : { ...base, ...ctx.env, ...ctx.pass };
 }
 
 /** One run's process and wire. One instance per run. */
@@ -282,6 +286,8 @@ export interface RunCtxInit {
   agent: DriveAgent;
   spec: DriveSpec;
   env?: Record<string, string>;
+  /** names handed to this run on purpose (`DriveCtx.pass`) */
+  pass?: Record<string, string>;
   /** an incubator stage's run (`DriveCtx.stage`) */
   stage?: boolean;
   /** the stage runner's spawn (`DriveCtx.spawn`) */
@@ -321,6 +327,7 @@ export class RunCtx implements DriveCtx {
   readonly agent: DriveAgent;
   readonly spec: DriveSpec;
   readonly env: Readonly<Record<string, string>>;
+  readonly pass?: Readonly<Record<string, string>>;
   readonly stage: boolean;
   readonly spawn?: RpcSpawn;
   readonly track?: (proc: RpcProc) => RpcProc;
@@ -343,6 +350,7 @@ export class RunCtx implements DriveCtx {
     this.spec = init.spec;
     this.stage = init.stage ?? false;
     this.env = this.stage ? stageEnv(init.env ?? {}) : (init.env ?? {});
+    if (init.pass) this.pass = init.pass;
     if (init.spawn) this.spawn = init.spawn;
     if (init.track) this.track = init.track;
     this.label = init.label;
