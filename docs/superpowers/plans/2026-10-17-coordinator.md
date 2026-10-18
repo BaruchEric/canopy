@@ -105,8 +105,8 @@ numbers below are at `8ff6cbf`.
   2. Seed the claude login by copying `~/.config/canopy-stages/claude`.
   3. Set the `.env` names.
   4. Re-run `stages-fence.sh --install` as root.
-  5. `bun run redeploy --restart`.
-  6. Check that a curl from the coord container reaches `http://10.250.14.10:7850/api/about` and times out on the LAN router.
+  5. `bun run redeploy --shells --restart` (the first deploy adds a port to the shells, which recreates them).
+  6. Check that a curl from the coord container reaches `http://10.250.14.1:7850/api/about` and times out on the LAN router.
 
 ## Task 5: the hub and its routes
 

@@ -99,6 +99,8 @@ VERCEL_AI_GATEWAY_API_KEY=...   # optional: lets verdict gates evaluate
 # CANOPY_PREVIEW_PUBLIC=https://canopy-p{slot}.beric.ca   # optional: previews on the public page, see "A public name"
 # TAILCHAN_URL=http://100.68.139.95:7855   # optional: the tailchan broker, see "tailchan" below
 # TAILCHAN_HUMAN=eric                       # the handle the UI speaks tailchan as
+# CANOPY_COORD_SOCKET=/run/canopy-coord/runner.sock   # optional: the coordinator, see "The coordinator" below
+# CANOPY_COORD_API=http://10.250.14.1:7850
 TZ=America/Los_Angeles          # the host's zone by name: canopy's local time (the ranger's crons and daily hour, the history's days)
 ```
 
@@ -582,8 +584,8 @@ sh /usr/local/sbin/canopy-stages-fence.new   # prints the rules, changes nothing
 sudo sh /usr/local/sbin/canopy-stages-fence.new --install
 diff /usr/local/sbin/canopy-stages-fence.new /usr/local/sbin/canopy-stages-fence   # only the CHECKOUT line differs
 sudo rm /usr/local/sbin/canopy-stages-fence.new
-sudo iptables -t raw -S PREROUTING      # the eight drops on -i br-canopy-stg, no ACCEPT above them
-sudo ip6tables -t raw -S PREROUTING     # the one v6 drop
+sudo iptables -t raw -S PREROUTING      # eight drops on each of br-canopy-stg and br-canopy-crd, and one ACCEPT (see "The coordinator") above the crd ones
+sudo ip6tables -t raw -S PREROUTING     # the two v6 drops
 sudo ufw reload && sudo iptables -t raw -S PREROUTING   # still there
 ```
 
@@ -864,6 +866,136 @@ can stay; nothing reads it then.
 **A Mac backend** has no stages container. It runs the incubator only with
 `CANOPY_INCUBATOR_UNISOLATED=1`, which gives up all of part 3: stages run as
 canopy, in its pid namespace and network. Parts 1 and 2 still hold.
+
+## The coordinator
+
+A `coordinate` run (FR-010, `docs/superpowers/specs/2026-10-16-coordinator-design.md`)
+is a chat that proposes branch runs through canopy's API. It runs only in the
+`coord` container, never in canopy's and never on the Mac: a backend without
+`CANOPY_COORD_SOCKET` refuses the action with 409, and `/api/about` says
+`coordinator: false` so the UI hides it.
+
+`coord` is a second stage runner from the stages image. What sets it apart
+from `stages`:
+
+- its root is `~/.local/share/canopy-coord/seeds`, where canopy makes a 0700
+  folder per run (`<seeds>/<run id>`) and starts the run there; it mounts
+  nothing of the workspace, the incubator or `.shared`;
+- its own claude and codex logins, `~/.config/canopy-coord/claude` and
+  `~/.config/canopy-coord/codex`, never the stages' or the host's;
+- `CANOPY_STAGE_PASS_ENV=CANOPY_API,CANOPY_TOKEN`, so the run gets the address
+  it calls canopy at and a `coordinator` token bound to its run (read and
+  plan, nothing more). The runner refuses to start on any other name there;
+- the network `coord-net` (10.250.14.0/24, v4 only, gateway 10.250.14.1) on
+  the host bridge `br-canopy-crd`, with the stages' public `dns:`.
+
+The fence (`scripts/stages-fence.sh`, the same script and unit as the
+stages') drops the same ranges on `br-canopy-crd` and lets one thing through
+ahead of them: TCP to 10.250.14.1:7850. The shells publish canopy's port on
+that address (`10.250.14.1:7850:7850` beside the tailnet one) without joining
+`coord-net`, since a second network on the shells could move canopy's default
+route behind the fence. The reply goes out through host routing, not into the
+bridge. canopy's origin gate lets that exact host through, from
+`CANOPY_COORD_API`, since 10.250.14.1 is neither a local nor a tailnet name.
+
+**No profile, on purpose.** The shells' bind on 10.250.14.1 needs the bridge,
+and the bridge exists only once a service on `coord-net` is part of an `up`.
+A profile cannot take a port off the shells, so `coord` under a profile would
+leave an `up` without it unable to start the shells. `coord` therefore always
+runs. Without the `.env` names below it starts nothing: canopy never connects
+to it, and its runner refuses every spawn until its fence probe times out.
+Bring the stack up with a plain `docker compose up -d` (or `bun run
+redeploy`), not `up` on a list of services that leaves `coord` out, on a host
+where the network does not exist yet.
+
+Setting it up on the mini, once:
+
+**1. The host folders.** `bun run redeploy` makes them before compose runs,
+the same as the stages', since docker would make a missing one as root. By
+hand:
+
+```
+mkdir -p ~/.local/share/canopy-coord/seeds ~/.config/canopy-coord/claude ~/.config/canopy-coord/codex
+chmod 700 ~/.local/share/canopy-coord/seeds
+stat -c '%U %n' ~/.local/share/canopy-coord/seeds ~/.config/canopy-coord/claude ~/.config/canopy-coord/codex   # all yours, none root
+```
+
+**2. The claude login.** Seed it from the stages' login, copying only the
+account files, never the whole folder: a stage can write the stages' folder,
+and a hook planted there would run inside the coordinator.
+
+```
+install -m 0600 ~/.config/canopy-stages/claude/.credentials.json ~/.config/canopy-coord/claude/.credentials.json
+install -m 0600 ~/.config/canopy-stages/claude/.claude.json ~/.config/canopy-coord/claude/.claude.json
+```
+
+Two copies of one Max login each refresh on their own, and when the refresh
+token rotates, the first to refresh can leave the other's copy invalid. If
+the coordinator (or the stages) starts saying the login expired, log in
+again inside `coord`, in a real terminal (it is interactive):
+
+```
+docker compose exec -u bun -it coord claude   # then /login
+```
+
+**3. The `.env` names:**
+
+```
+CANOPY_COORD_SOCKET=/run/canopy-coord/runner.sock
+CANOPY_COORD_API=http://10.250.14.1:7850
+```
+
+`CANOPY_FENCE_PROBE` (the stages' step 4) is the coordinator runner's probe
+target too, and needs nothing new: the LAN router is past the fence from
+either bridge.
+
+**4. The fence.** Install the updated script as the stages' steps 1 and 2 do,
+as root, from a root-owned copy:
+
+```
+sudo install -m 0755 -o root -g root scripts/stages-fence.sh /usr/local/sbin/canopy-stages-fence.new
+less /usr/local/sbin/canopy-stages-fence.new
+sudo sh /usr/local/sbin/canopy-stages-fence.new --install
+sudo rm /usr/local/sbin/canopy-stages-fence.new
+sudo iptables -t raw -S PREROUTING | grep br-canopy-crd   # the ACCEPT for 10.250.14.1/32 port 7850 first, then the eight drops
+sudo ip6tables -t raw -S PREROUTING | grep br-canopy-crd  # one drop
+```
+
+The rules match the bridge by name, so they can go in before it exists. A
+rerun of `--apply` puts the ACCEPT back on top if a drop was put back above
+it.
+
+**5. Deploy.** The first deploy with `coord` adds a port to the shells, so
+it recreates the shells container and ends every shell; `bun run redeploy`
+stops with exit 3 without `--shells`. When nothing needs the shells:
+
+```
+bun run redeploy --shells --restart
+```
+
+Later deploys need neither flag for the coordinator. `ip -br addr show
+br-canopy-crd` shows the bridge with 10.250.14.1, and `bun run redeploy
+status` lists `canopy-coord-1`.
+
+**6. Check the fence from inside `coord`.** canopy's port on the gateway
+answers, and nothing else private does:
+
+```
+docker compose exec coord curl -sS -m 5 http://10.250.14.1:7850/api/about   # JSON, with "coordinator":true
+docker compose exec coord curl -sS -m 5 http://192.168.1.1/                 # curl: (28) timed out
+docker compose exec coord curl -sS -m 5 http://10.250.14.1:7851/            # times out: only 7850 is let through
+docker compose exec coord curl -sS -m 5 "http://$(tailscale ip -4):7850/"   # times out
+docker compose exec coord curl -sS -m 5 -o /dev/null -w '%{http_code}\n' https://api.anthropic.com/   # a status code: the internet is open
+```
+
+The first answering and the second timing out is the pair that matters. A
+first that times out is the ACCEPT missing or below a drop (step 4), or a
+host firewall in the way of the published port. A second that answers is
+the fence down: the coordinator's runner then starts nothing, since its own
+probe gets the same answer.
+
+**Back out** by emptying the two `.env` names and `bun run redeploy
+--restart`: canopy refuses `coordinate` again, and `coord` idles.
 
 ## The kit
 
