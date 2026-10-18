@@ -73,6 +73,18 @@ describe("shapes", () => {
   });
   test("runs, flows, fleets, jobs, shells, kept shells, devices", () => {
     expect(qRun(q, run)).toMatchObject({ id: "mac|r1", repoId: "mac|a/b" });
+    const coord = qRun(q, {
+      ...run,
+      tasks: [
+        { id: "t1", title: "x", repo: "a/b", note: "n", action: "ask", state: "running", run: "r2" },
+        { id: "t2", title: "y", repo: "c", note: "n", action: "propose", state: "proposed" },
+      ],
+    } as Run);
+    expect(coord.tasks?.map((t) => [t.id, t.repo, t.run])).toEqual([
+      ["t1", "mac|a/b", "mac|r2"],
+      ["t2", "mac|c", undefined],
+    ]);
+    expect(qRun(q, { ...run, parent: "r0" } as Run).parent).toBe("mac|r0");
     const f = qFlow(q, flow);
     expect(f).toMatchObject({ id: "mac|f1", repoId: "mac|a/b", fleetId: "mac|fl1" });
     expect(f.steps[0]?.runId).toBe("mac|r1");

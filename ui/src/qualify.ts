@@ -51,6 +51,9 @@ export const qRun = (q: Q, r: Run): Run => ({
   id: q(r.id),
   repoId: q(r.repoId),
   ...(r.branch ? { branch: { ...r.branch, origin: q(r.branch.origin) } } : {}),
+  // a coordinator's child names it, and its cards name their repos and runs
+  ...(r.parent !== undefined ? { parent: q(r.parent) } : {}),
+  ...(r.tasks ? { tasks: r.tasks.map((t) => ({ ...t, repo: q(t.repo), ...(t.run !== undefined ? { run: q(t.run) } : {}) })) } : {}),
 });
 
 /** The landing queue: a branch's id, its runs' and its repo's under the
