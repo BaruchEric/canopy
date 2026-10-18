@@ -133,9 +133,54 @@ export function passEnvNames(raw: string | undefined): { names: string[] } | { r
   return { names };
 }
 
+/** The children's proxy env from a runner's `CANOPY_STAGE_PROXY`, or why
+ *  the runner must not start. The coordinator's runner sets it to the
+ *  egress proxy on its bridge's gateway (src/egress/), the one way out its
+ *  fence leaves. It goes to the children alone: the runner's own fetch
+ *  follows HTTP_PROXY, so the proxy names in the container's env would send
+ *  its fence probe through the proxy, which answers, and the fence would
+ *  read as down. The value must be http://<IPv4 address>:<port>: the
+ *  coordinator has no DNS, and a value this cannot read would leave a child
+ *  dialing out unproxied, so it is refused rather than dropped. NO_PROXY is
+ *  the proxy's own host (where canopy listens too) and loopback. claude's
+ *  nonessential traffic and updater are off, since behind the proxy they
+ *  would only be refused. Unset or empty is no proxy and nothing added. */
+export function proxyEnv(raw: string | undefined): { env: Record<string, string> } | { refused: string } {
+  const v = (raw ?? "").trim();
+  if (!v) return { env: {} };
+  const refused = { refused: `CANOPY_STAGE_PROXY must be http://<IPv4 address>:<port>, not ${v}` };
+  const m = /^http:\/\/(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3}):(\d{1,5})\/?$/.exec(v);
+  if (!m) return refused;
+  const [, ...parts] = m;
+  const nums = parts.map(Number);
+  const port = nums.pop() ?? 0;
+  if (nums.some((n) => n > 255) || port < 1 || port > 65535) return refused;
+  const host = nums.join(".");
+  const url = `http://${host}:${port}`;
+  const no = `${host},127.0.0.1,localhost`;
+  return {
+    env: {
+      HTTPS_PROXY: url,
+      https_proxy: url,
+      HTTP_PROXY: url,
+      http_proxy: url,
+      NO_PROXY: no,
+      no_proxy: no,
+      CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: "1",
+      DISABLE_AUTOUPDATER: "1",
+    },
+  };
+}
+
 /** A spawn's env: the runner's own base, then `STAGE_PASSED_ENV` and any
- *  `extra` names (from `passEnvNames`) out of what canopy sent. */
-export function childEnv(own: Record<string, string | undefined>, asked: Record<string, string>, extra: readonly string[] = []): Record<string, string> {
+ *  `extra` names (from `passEnvNames`) out of what canopy sent, then the
+ *  runner's `net` (from `proxyEnv`), last so nothing canopy sent sets it. */
+export function childEnv(
+  own: Record<string, string | undefined>,
+  asked: Record<string, string>,
+  extra: readonly string[] = [],
+  net: Record<string, string> = {},
+): Record<string, string> {
   const out: Record<string, string> = {};
   for (const k of STAGE_BASE_ENV) {
     const v = own[k];
@@ -145,7 +190,7 @@ export function childEnv(own: Record<string, string | undefined>, asked: Record<
     const v = Object.hasOwn(asked, k) ? asked[k] : undefined;
     if (v !== undefined) out[k] = v;
   }
-  return out;
+  return Object.assign(out, net);
 }
 
 /** A git request's env: the runner's PATH and locale, no home, no global or

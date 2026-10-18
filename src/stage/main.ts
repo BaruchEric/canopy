@@ -5,7 +5,7 @@ import { readFileSync } from "node:fs";
 import { chmod, chown } from "node:fs/promises";
 import { dirname } from "node:path";
 import { StageClient } from "../core/stageclient";
-import { passEnvNames } from "../core/stagewire";
+import { passEnvNames, proxyEnv } from "../core/stagewire";
 import { ownPidNamespace, rootStart, socketModes, stageChores, startStageRunner } from "./runner";
 
 // --stage-chores <seeds as JSON>: the sweep and settings check a root
@@ -42,6 +42,13 @@ if (!socket || !root) {
 const pass = passEnvNames(process.env["CANOPY_STAGE_PASS_ENV"]);
 if ("refused" in pass) {
   console.error(`canopy-stage-runner: ${pass.refused}`);
+  process.exit(2);
+}
+// the coordinator's children reach the internet through its egress proxy;
+// a value the runner cannot read stops it here, as a bad name above does
+const net = proxyEnv(process.env["CANOPY_STAGE_PROXY"]);
+if ("refused" in net) {
+  console.error(`canopy-stage-runner: ${net.refused}`);
   process.exit(2);
 }
 if (process.argv.includes("--health")) {
@@ -90,5 +97,6 @@ await startStageRunner({ socket, root, sweepOrphans, ...(as ? { as } : {}) });
 if (callerGid !== null) await socketModes(dirname(socket), socket, callerGid, { chown, chmod });
 console.log(`canopy-stage-runner on ${socket}, seeds under ${root}`);
 if (pass.names.length) console.log(`children also get ${pass.names.join(" and ")} from canopy`);
+if (net.env["HTTPS_PROXY"]) console.log(`children reach the internet through ${net.env["HTTPS_PROXY"]}`);
 if (as) console.log(`stages run as ${as.uid}:${as.gid} with no groups; the socket is for group ${callerGid} alone`);
 console.log(sweepOrphans ? "orphans are swept at each run's end and every 30 s" : "no pid namespace of its own: orphans are not swept");

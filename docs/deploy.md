@@ -585,7 +585,7 @@ sh /usr/local/sbin/canopy-stages-fence.new   # prints the rules, changes nothing
 sudo sh /usr/local/sbin/canopy-stages-fence.new --install
 diff /usr/local/sbin/canopy-stages-fence.new /usr/local/sbin/canopy-stages-fence   # only the CHECKOUT line differs
 sudo rm /usr/local/sbin/canopy-stages-fence.new
-sudo iptables -t raw -S PREROUTING      # eight drops on each of br-canopy-stg and br-canopy-crd, and one ACCEPT (see "The coordinator") above the crd ones
+sudo iptables -t raw -S PREROUTING      # eight drops on each of br-canopy-stg and br-canopy-crd, two ACCEPTs above the crd ones and a crd catch-all below them (see "The coordinator")
 sudo ip6tables -t raw -S PREROUTING     # the two v6 drops
 sudo ufw reload && sudo iptables -t raw -S PREROUTING   # still there
 ```
@@ -892,11 +892,23 @@ from `stages`:
   it calls canopy at and a `coordinator` token bound to its run (read and
   plan, nothing more). The runner refuses to start on any other name there;
 - the network `coord-net` (10.250.14.0/24, v4 only, gateway 10.250.14.1) on
-  the host bridge `br-canopy-crd`, with the stages' public `dns:`.
+  the host bridge `br-canopy-crd`, with the stages' public `dns:`, which the
+  fence drops (below): the container has no DNS;
+- `CANOPY_STAGE_PROXY=http://10.250.14.1:3128`: the runner hands each child
+  `HTTPS_PROXY`, `HTTP_PROXY` and `NO_PROXY` (both cases, `NO_PROXY` the
+  gateway and loopback) pointing at the egress proxy, with
+  `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1` and `DISABLE_AUTOUPDATER=1`.
+  The container's own env does not carry the proxy names: the runner's
+  fetch follows `HTTP_PROXY`, so its fence probe would reach the proxy, get
+  an answer and read the fence as down. A value that is not
+  `http://<IPv4>:<port>` stops the runner at start.
 
 The fence (`scripts/stages-fence.sh`, the same script and unit as the
-stages') drops the same ranges on `br-canopy-crd` and lets one thing through
-ahead of them: TCP to 10.250.14.1:7850. The shells publish that address onto
+stages') drops the same ranges on `br-canopy-crd`, lets two things through
+ahead of them, and drops everything else from that bridge after them, the
+public internet and DNS included (`-i br-canopy-crd -j DROP`, appended at
+the bottom of the chain). The two: TCP to 10.250.14.1:7850, canopy, and TCP
+to 10.250.14.1:3128, the egress proxy (below). The shells publish 7850 onto
 the coordinator's own listener (`10.250.14.1:7850:${CANOPY_COORD_PORT:-7859}`
 beside the tailnet one, which stays on canopy's main port) without joining
 `coord-net`, since a second network on the shells could move canopy's default
@@ -905,10 +917,36 @@ bridge. canopy's origin gate lets that exact host through, from
 `CANOPY_COORD_API`, on the coordinator's listener alone, since 10.250.14.1 is
 neither a local nor a tailnet name.
 
+**The egress proxy.** `coord-proxy` (`src/egress/`, the Dockerfile's
+`egress` target: plain bun and one bundled file, as the bun user, read-only,
+no capabilities, no mounts) is an HTTPS CONNECT proxy on a network of its
+own, `egress-net` (10.250.15.0/24, bridge `br-canopy-egr`), with its port
+published on 10.250.14.1:3128 alone. It tunnels `CONNECT <name>:443` for
+exactly `api.anthropic.com`, `console.anthropic.com`,
+`statsig.anthropic.com`, `claude.ai` and `platform.claude.com`
+(`ALLOWED_HOSTS` in `src/egress/allow.ts`), and answers anything else with
+a refusal: another method 405, another port, an address in place of a name
+or a name off the list 403. It resolves the name itself, refuses (403) when
+any address it got is private, loopback, tailnet, link-local, reserved or
+multicast, and dials the address it checked, so a second lookup cannot
+rebind the name. TLS runs end to end; the proxy reads nothing past the
+CONNECT head. It holds at most 64 connections, gives a head 10 s and a
+connect 10 s, and closes a tunnel idle for 10 minutes. Each refusal is
+logged once per host (`docker compose logs coord-proxy`), so a name claude
+turns out to need shows up there; add it to `ALLOWED_HOSTS` and redeploy.
+
+What this does not close: claude's own traffic goes to api.anthropic.com,
+and so would a request made with someone else's API key. A prompt
+injection that gets the coordinator to call the API with a key of its
+choosing can still post what it read to that account. A host allowlist
+cannot tell the two apart; the coordinator's token reads and plans and
+nothing more, which bounds what there is to read.
+
 **No profile, on purpose.** The shells' bind on 10.250.14.1 needs the bridge,
-and the bridge exists only once a service on `coord-net` is part of an `up`.
-A profile cannot take a port off the shells, so `coord` under a profile would
-leave an `up` without it unable to start the shells. `coord` therefore always
+and so does `coord-proxy`'s, and the bridge exists only once a service on
+`coord-net` is part of an `up`. A profile cannot take a port off the
+shells, so `coord` under a profile would leave an `up` without it unable to
+start the shells. `coord` therefore always
 runs. Without the `.env` names below it starts nothing: canopy never connects
 to it, and its runner refuses every spawn until its fence probe times out.
 Bring the stack up with a plain `docker compose up -d` (or `bun run
@@ -946,8 +984,11 @@ the coordinator (or the stages) starts saying the login expired, log in
 again inside `coord`, in a real terminal (it is interactive):
 
 ```
-docker compose exec -u bun -it coord claude   # then /login
+docker compose exec -u bun -it -e HTTPS_PROXY=http://10.250.14.1:3128 -e NO_PROXY=10.250.14.1 coord claude   # then /login
 ```
+
+The `-e` names matter: an exec gets the container's env, which has no
+proxy, and the fence drops everything else.
 
 **3. The `.env` names:**
 
@@ -999,14 +1040,25 @@ sudo install -m 0755 -o root -g root scripts/stages-fence.sh /usr/local/sbin/can
 less /usr/local/sbin/canopy-stages-fence.new
 sudo sh /usr/local/sbin/canopy-stages-fence.new --install
 sudo rm /usr/local/sbin/canopy-stages-fence.new
-sudo iptables -t raw -S PREROUTING | grep br-canopy-crd   # the ACCEPT for 10.250.14.1/32 port 7850 first, then the eight drops, and the "! -i" drop
-sudo iptables -t raw -S PREROUTING | grep 10.250.14.1     # the -i lo ACCEPT above the "! -i br-canopy-crd" DROP, and the bridge's ACCEPT
+sudo iptables -t raw -S PREROUTING | grep br-canopy-crd   # the two ACCEPTs for 10.250.14.1/32 (ports 3128 and 7850) first, then the eight drops, the two "! -i" drops, and "-i br-canopy-crd -j DROP" last
+sudo iptables -t raw -S PREROUTING | grep 10.250.14.1     # for each port, the -i lo ACCEPT above its "! -i br-canopy-crd" DROP, and the bridge's ACCEPT
 sudo ip6tables -t raw -S PREROUTING | grep br-canopy-crd  # one drop
 ```
 
 The rules match the bridge by name, so they can go in before it exists. A
-rerun of `--apply` puts the ACCEPT back on top if a drop was put back above
-it.
+rerun of `--apply` puts both ACCEPTs back on top if a drop was put back
+above either. On a host the earlier fence covers, `--apply` adds the
+proxy's rules at the top and the catch-all at the bottom and moves nothing,
+so canopy's port never drops out.
+
+**The fence and the deploy go together.** The catch-all takes the
+coordinator off the internet until the deploy that brings up `coord-proxy`
+and gives `coord` its `CANOPY_STAGE_PROXY`; a deploy before the fence leaves
+`coord` sending its claude to 10.250.14.1:3128, which the earlier fence
+drops (10.0.0.0/8). Either way the coordinator is down between the two,
+so do both back to back with no `coordinate` run going. Fence first: on its
+own it only takes away, and the deploy right after it gives back the one
+way out.
 
 The published address 10.250.14.1:7850 is the host's own, and Linux takes a
 packet for any of its addresses on any interface, while docker's DNAT for
@@ -1020,10 +1072,16 @@ another LAN machine:
 ```
 sudo ip route add 10.250.14.1/32 via <the mini's LAN address>   # on that machine, for the check only
 curl -sS -m 5 http://10.250.14.1:7850/api/about                 # times out
+curl -sS -m 5 -x http://10.250.14.1:3128 https://api.anthropic.com/   # times out too
 sudo ip route del 10.250.14.1/32
 ```
 
-**5. Deploy.** The first deploy with `coord` adds a port to the shells, so
+**5. Deploy.** The deploy that adds `coord-proxy` (with the fence of step
+4) changes nothing on the shells, so it needs no `--shells`: compose builds
+the `egress` image and starts `coord-proxy`, and recreates `coord` and
+`stages`, whose image carries the changed stage runner. An incubator stage
+running then ends, so deploy while none is. Nothing else on the mini may hold 3128 on all addresses (`ss -ltn |
+grep ':3128 '` is empty first). The first deploy with `coord` adds a port to the shells, so
 it recreates the shells container and ends every shell; `bun run redeploy`
 stops with exit 3 without `--shells`. The deploy that moves the
 10.250.14.1:7850 mapping from container port 7850 to the coordinator's
@@ -1037,7 +1095,7 @@ bun run redeploy --shells --restart
 
 Later deploys need neither flag for the coordinator. `ip -br addr show
 br-canopy-crd` shows the bridge with 10.250.14.1, and `bun run redeploy
-status` lists `canopy-coord-1`.
+status` lists `canopy-coord-1` and `canopy-coord-proxy-1`.
 
 **6. Check the fence and the lane from inside `coord`.** canopy's port on
 the gateway answers, with the lane's refusal, and nothing else private does:
@@ -1047,8 +1105,23 @@ docker compose exec coord curl -sS -m 5 http://10.250.14.1:7850/api/about   # 40
 docker compose exec coord curl -sS -m 5 http://192.168.1.1/                 # curl: (28) timed out
 docker compose exec coord curl -sS -m 5 http://10.250.14.1:7851/            # times out: only 7850 is let through
 docker compose exec coord curl -sS -m 5 "http://$(tailscale ip -4):7850/"   # times out
-docker compose exec coord curl -sS -m 5 -o /dev/null -w '%{http_code}\n' https://api.anthropic.com/   # a status code: the internet is open
+docker compose exec coord curl -sS -m 5 https://example.com/                 # times out: no internet past the proxy (and no DNS)
+docker compose exec coord curl -sS -m 5 --noproxy '*' https://api.anthropic.com/   # times out, Anthropic included
+docker compose exec coord getent hosts example.com                           # nothing, after a wait: no DNS
+docker compose exec coord curl -sS -m 8 -x http://10.250.14.1:3128 -o /dev/null -w '%{http_code}\n' https://api.anthropic.com/   # a status code (404): through the proxy
+docker compose exec coord curl -sS -m 5 -x http://10.250.14.1:3128 https://example.com/             # CONNECT tunnel failed, response 403
+docker compose exec coord curl -sS -m 5 -x http://10.250.14.1:3128 http://example.com/              # 405: CONNECT only
+docker compose logs coord-proxy | grep refused                              # example.com and GET, once each
 ```
+
+The exec has no proxy in its env (only the runner's children do), so the
+checks through the proxy name it with `-x`. To see the env a child gets,
+start a coordinator and read `/proc/<claude pid>/environ` as `-u bun`
+(`HTTPS_PROXY`, `NO_PROXY`, never print the token). Claude's own calls to
+canopy go direct: `NO_PROXY` names 10.250.14.1. A proxy check that times
+out is the 3128 ACCEPT missing (step 4) or a host firewall in the way of
+the published port, as with 7850 below; `docker compose ps coord-proxy`
+says whether the proxy is up and healthy.
 
 The first answering and the second timing out is the pair that matters. A
 first that times out is the ACCEPT missing or below a drop (step 4), or a
@@ -1075,6 +1148,12 @@ canopy auth status                  # the refused count goes up by one for each 
 working, said once for each kind, method and path. The address there is
 whatever docker hands canopy (192.168.48.1 behind the userland proxy) and
 decides nothing.
+
+**Back out of the proxy** by reverting the commit that added it and
+installing that fence (step 4) with its deploy: the earlier fence has no
+catch-all. Removing the catch-all alone (`sudo iptables -t raw -D
+PREROUTING -i br-canopy-crd -j DROP`) gives `coord` the open internet again
+until the unit's next `--apply` puts it back.
 
 **Back out** by emptying `CANOPY_COORD_SOCKET` and `CANOPY_COORD_API` and
 `bun run redeploy --restart`: canopy refuses `coordinate` again, and `coord`

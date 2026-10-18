@@ -211,6 +211,30 @@ describe("the stage runner", () => {
     expect(env).not.toContain("GH_TOKEN");
   });
 
+  test("a runner with CANOPY_STAGE_PROXY hands its children the proxy, whatever canopy sends", async () => {
+    const path = await extra("proxied", { env: { CANOPY_STAGE_PROXY: "http://10.250.14.1:3128" } });
+    const sent = { CANOPY_RUN: "r1", HTTPS_PROXY: "http://evil:1", NO_PROXY: "*" };
+    const fs = await talk({ t: "spawn", argv: ["sh", "-c", "env"], cwd: join(root, "coin"), env: sent }, [], 8000, path);
+    const env = text(fs, "out").split("\n");
+    expect(env).toContain("HTTPS_PROXY=http://10.250.14.1:3128");
+    expect(env).toContain("http_proxy=http://10.250.14.1:3128");
+    expect(env).toContain("NO_PROXY=10.250.14.1,127.0.0.1,localhost");
+    expect(env).toContain("CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1");
+    expect(env.join("\n")).not.toContain("evil");
+  });
+
+  test("a runner without CANOPY_STAGE_PROXY passes no proxy name, even one in its own env", async () => {
+    const path = await extra("plain", { env: { HTTPS_PROXY: "http://own:1", http_proxy: "http://own:1" } });
+    const fs = await talk({ t: "spawn", argv: ["sh", "-c", "env"], cwd: join(root, "coin"), env: { CANOPY_RUN: "r1" } }, [], 8000, path);
+    expect(text(fs, "out").toLowerCase()).not.toContain("proxy");
+  });
+
+  test("a runner with a CANOPY_STAGE_PROXY it cannot read refuses to start", async () => {
+    await expect(
+      startStageRunner({ socket: join(dir, "badproxy.sock"), root, probe: blocked, writable: notWritable, env: { PATH: process.env["PATH"], CANOPY_STAGE_PROXY: "http://proxy:3128" } }),
+    ).rejects.toThrow("CANOPY_STAGE_PROXY");
+  });
+
   test("a runner told to pass any other name refuses to start", async () => {
     await expect(
       startStageRunner({ socket: join(dir, "wide.sock"), root, probe: blocked, writable: notWritable, env: { PATH: process.env["PATH"], CANOPY_STAGE_PASS_ENV: "CANOPY_TOKEN,GH_TOKEN" } }),
