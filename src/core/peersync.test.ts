@@ -31,6 +31,8 @@ import {
   syncAll,
   syncRepo,
   treeIs,
+  isLinkedWorktree,
+  WORKTREE_NOT_SERVED,
   takeWip,
   trackBranch,
 } from "./peersync";
@@ -755,6 +757,8 @@ describe("gateCommand", () => {
     await mkdir(x, { recursive: true });
     await writeFile(join(x, ".git"), `gitdir: ${outsideGitDir}\n`);
     expect(gateCommand(`git-upload-pack '${x}'`, ws, home)).toHaveProperty("error");
+    // asked for as the gitfile itself, which enter_repo opens and follows
+    expect(gateCommand(`git-upload-pack '${x}/.git'`, ws, home)).toHaveProperty("error");
   });
   test("a directory under the root whose gitfile points at a repo inside it is accepted", async () => {
     const ws = join(root, "gate-gitfile-ws2");
@@ -777,7 +781,7 @@ describe("gateCommand", () => {
     await writeFile(join(checkout, ".git"), `gitdir: ${wtGitDir}\n`);
     expect(gateCommand(`git-upload-pack '${checkout}'`, ws, home)).toHaveProperty("error");
   });
-  test("a real git worktree add under the root is accepted", async () => {
+  test("a real git worktree add under the root is refused: peer sync leaves linked worktrees alone", async () => {
     const ws = join(root, "gate-worktree-ws");
     await mkdir(ws, { recursive: true });
     const main = join(ws, "main");
@@ -788,7 +792,7 @@ describe("gateCommand", () => {
     const wt = join(ws, "wt");
     const wr = await exec(["git", "worktree", "add", "-q", "-b", "feat", wt], { cwd: main });
     if (wr.code !== 0) throw new Error(wr.stderr);
-    expect(gateCommand(`git-upload-pack '${wt}'`, ws, home)).toEqual({ kind: "upload-pack", path: wt });
+    expect(gateCommand(`git-upload-pack '${wt}'`, ws, home)).toEqual({ error: WORKTREE_NOT_SERVED });
   });
 });
 
@@ -2135,5 +2139,120 @@ describe("resetTree", () => {
     const { r, wip } = await dirtied("reset-badid");
     await expect(resetTree(r, wip, "../x")).rejects.toThrow(/session id/);
     expect(existsSync(join(r, "new.txt"))).toBe(true);
+  });
+});
+
+describe("linked worktrees are left alone", () => {
+  // The 2026-10-17 shape: `git worktree add` checkouts of a repo, filed
+  // under the scan root beside it. A linked worktree shares its main
+  // repo's config and refs, so anything the pass writes in one lands in
+  // the main repo.
+  const ident = async (dir: string): Promise<void> => {
+    await sh(dir, "config", "user.email", "t@t");
+    await sh(dir, "config", "user.name", "t");
+  };
+  const setup = async (name: string) => {
+    const wsMac = join(root, `${name}-wsmac`);
+    const wsMini = join(root, `${name}-wsmini`);
+    await mkdir(wsMac, { recursive: true });
+    await mkdir(wsMini, { recursive: true });
+    const main = join(wsMac, "proj");
+    await exec(["git", "init", "-q", "-b", "main", main]);
+    await ident(main);
+    await commit(main, "a.txt", "one\n");
+    const wt = join(wsMac, "proj-wt");
+    await sh(main, "worktree", "add", "-q", "-b", "feat", wt);
+    const mini = join(wsMini, "proj");
+    await exec(["git", "clone", "-q", main, mini]);
+    // what the bug left on the mini: a clone of the worktree under its id,
+    // carrying a branch the main repo here never had
+    const miniWt = join(wsMini, "proj-wt");
+    await exec(["git", "clone", "-q", main, miniWt]);
+    await ident(miniWt);
+    await sh(miniWt, "checkout", "-q", "-b", "only-wt");
+    await commit(miniWt, "w.txt", "w\n");
+    const peer: Peer = { name: "mini", alias: null, root: wsMini, role: "git" };
+    return { wsMac, wsMini, main, wt, peer };
+  };
+
+  test("serveList never offers one, and cloneMissing on the other side never clones one", async () => {
+    const { wsMac, main } = await setup("lw-list");
+    expect(isLinkedWorktree(main)).toBe(false);
+    expect(isLinkedWorktree(join(wsMac, "proj-wt"))).toBe(true);
+    expect(await serveList(wsMac)).toEqual([{ id: "proj", origin: null }]);
+    const ours = join(root, "lw-list-ours");
+    await mkdir(ours, { recursive: true });
+    const mac: Peer = { name: "mac", alias: null, root: wsMac, role: "git" };
+    expect(await cloneMissing(ours, [mac], [], false, {})).toEqual({ cloned: ["proj"], failed: [] });
+    expect(existsSync(join(ours, "proj-wt"))).toBe(false);
+  });
+
+  test("initRepo and a pass over the worktree leave the main repo's remote, refs and wips alone", async () => {
+    const { wsMac, main, wt, peer } = await setup("lw-pass");
+    const peers = [peer];
+    await initRepo(main, "proj", peers, false);
+    const url = await sh(main, "config", "remote.mini.url");
+    expect(url).toBe(peerUrl(peer, "proj"));
+    const config = await readFile(join(main, ".git", "config"), "utf8");
+
+    await initRepo(wt, "proj-wt", peers, false);
+    expect(await readFile(join(main, ".git", "config"), "utf8")).toBe(config);
+
+    await writeFile(join(wt, "dirty.txt"), "uncommitted\n");
+    const r = await syncAll(["proj", "proj-wt"], { self: "mac", peers, seed: [], dry: false, root: wsMac }, 2);
+    expect([...r.states.keys()]).toEqual(["proj"]);
+    expect(await sh(main, "config", "remote.mini.url")).toBe(url);
+    expect(await hasRef(main, "refs/remotes/mini/only-wt")).toBe(false);
+    expect(await hasRef(main, "refs/wip/feat")).toBe(false);
+
+    // asked for by id, as a route or `canopy peers sync <id>` would
+    const one = await syncRepo("proj-wt", { self: "mac", peers, seed: [], dry: false, root: wsMac }, new PassSeen());
+    expect(one.error).toMatch(/linked worktree/);
+    expect(await hasRef(main, "refs/remotes/mini/only-wt")).toBe(false);
+    expect(await hasRef(main, "refs/wip/feat")).toBe(false);
+    expect(await readFile(join(main, ".git", "config"), "utf8")).toBe(config);
+  });
+
+  test("the gate refuses a worktree's checkout and its gitdir, and safeId refuses its id", async () => {
+    const { wsMac, main, wt } = await setup("lw-gate");
+    const home = dirname(wsMac);
+    expect(gateCommand(`git-upload-pack '${main}'`, wsMac, home)).toEqual({ kind: "upload-pack", path: main });
+    expect(gateCommand(`git-upload-pack '${wt}'`, wsMac, home)).toEqual({ error: WORKTREE_NOT_SERVED });
+    expect(gateCommand(`git-upload-pack '${wt}/.git'`, wsMac, home)).toEqual({ error: WORKTREE_NOT_SERVED });
+    expect(gateCommand(`git-upload-pack '${join(main, ".git", "worktrees", "proj-wt")}'`, wsMac, home)).toEqual({ error: WORKTREE_NOT_SERVED });
+    expect(safeId(wsMac, "proj")).toBe(main);
+    expect(safeId(wsMac, "proj-wt")).toBeNull();
+    await expect(serveSeeds(wsMac, "proj-wt", [".env"])).rejects.toThrow();
+  });
+
+  test("a separate-git-dir repo and a checked-out submodule are still listed, served and set up", async () => {
+    const ws = join(root, "lw-gitfiles-ws");
+    await mkdir(ws, { recursive: true });
+    const sep = join(ws, "sep");
+    await mkdir(join(ws, ".gitdirs"), { recursive: true });
+    await exec(["git", "init", "-q", "-b", "main", "--separate-git-dir", join(ws, ".gitdirs", "sep.git"), sep]);
+    await ident(sep);
+    await commit(sep, "a.txt", "one\n");
+    const src = await repo("lw-gitfiles-subsrc");
+    const sup = join(ws, "super");
+    await exec(["git", "init", "-q", "-b", "main", sup]);
+    await ident(sup);
+    await commit(sup, "a.txt", "one\n");
+    await sh(sup, "-c", "protocol.file.allow=always", "submodule", "add", "-q", src, "sub");
+    const sub = join(sup, "sub");
+    expect(isLinkedWorktree(sep)).toBe(false);
+    expect(isLinkedWorktree(sub)).toBe(false);
+
+    expect(await serveList(ws)).toEqual([{ id: "sep", origin: null }, { id: "super", origin: null }]);
+    const home = dirname(ws);
+    expect(gateCommand(`git-upload-pack '${sep}'`, ws, home)).toEqual({ kind: "upload-pack", path: sep });
+    expect(gateCommand(`git-upload-pack '${sub}'`, ws, home)).toEqual({ kind: "upload-pack", path: sub });
+
+    const peer: Peer = { name: "mini", alias: null, root: join(root, "lw-gitfiles-mini"), role: "git" };
+    await initRepo(sep, "sep", [peer], false);
+    expect(await sh(sep, "config", "remote.mini.url")).toBe(peerUrl(peer, "sep"));
+    await initRepo(sub, "super/sub", [peer], false);
+    expect(await sh(sub, "config", "remote.mini.url")).toBe(peerUrl(peer, "super/sub"));
+    expect((await exec(["git", "config", "--get", "remote.mini.url"], { cwd: sup })).code).not.toBe(0);
   });
 });

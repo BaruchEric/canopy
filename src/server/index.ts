@@ -67,7 +67,7 @@ import { shipConfig, shipper, type Shipper } from "../core/shipper";
 import { seedSource, type SeedSource } from "../core/seedsource";
 import { vaultConfig, vaultNotes } from "../core/vault";
 import { linkPeers, NO_PUSH, peerUrl } from "../core/peers";
-import { currentBranch, fetchPeer, gitSshCommand, type FetchOutcome, initRepo, isBusy, isDirty, PassSeen, resetBlocker, resetTree, snapshotWip, syncAll, syncRepo, takeWip, treeIs } from "../core/peersync";
+import { currentBranch, fetchPeer, gitSshCommand, type FetchOutcome, initRepo, isBusy, isDirty, isLinkedWorktree, PassSeen, resetBlocker, resetTree, snapshotWip, syncAll, syncRepo, takeWip, treeIs } from "../core/peersync";
 import { endAgent, MOVE_MAX, MoveError, moveFileList, placeTranscript, rewriteTranscript, transcriptConflict, type PaneDriver } from "../core/move";
 import { normalizeLaunch } from "../core/launch";
 import { repoSpecState, syncRepo as syncSpec } from "../core/spec";
@@ -2433,10 +2433,11 @@ function refreshActivity(state: ServerState): Promise<void> {
 }
 
 /** A repo peer sync covers: a local repo under the launch root, with no
- *  ongoing scan error, and not a seed on an isolated backend, where canopy
- *  runs no git in one (amendment 4, ruling 9). */
+ *  ongoing scan error, not a seed on an isolated backend, where canopy
+ *  runs no git in one (amendment 4, ruling 9), and not a linked worktree,
+ *  whose config and refs are its main checkout's (isLinkedWorktree). */
 const peerable = (state: ServerState, r: Repo): boolean =>
-  r.source === LAUNCH_SOURCE && !r.host && !r.forge && !r.error && !(state.seedsStayHome && isSeedRepoId(r.id));
+  r.source === LAUNCH_SOURCE && !r.host && !r.forge && !r.error && !(state.seedsStayHome && isSeedRepoId(r.id)) && !isLinkedWorktree(r.path);
 
 /** Pulls from every peer: snapshot, fetch, fast-forward, clone what is
  *  missing. Repos with a run under way are skipped, like the fetch. A timer
