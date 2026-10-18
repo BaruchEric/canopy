@@ -233,6 +233,10 @@ services:
     ports:
       - "10.250.14.1:3128:3128"
     networks: [egress-net]
+    # docker's embedded resolver answered SERVFAIL here on the mini (its
+    # upstream is the host's, the tailnet's 100.100.100.100, which this
+    # network does not reach), so the proxy asks public servers, as stages do
+    dns: [1.1.1.1, 9.9.9.9]
     read_only: true
     cap_drop: [ALL]
     security_opt: ["no-new-privileges:true"]
