@@ -1,5 +1,7 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import type { ChildBranch } from "../core/coordinator";
+import { readFile } from "node:fs/promises";
+import { join } from "node:path";
+import { validatePlan, type ChildBranch } from "../core/coordinator";
 import type { CoordTask, LandEntry, Run, RunBranch } from "../core/types";
 import type { Caller } from "./callers";
 import { CoordinatorHub, type CoordinatorDeps } from "./coordinator";
@@ -424,5 +426,19 @@ describe("the coordinator ending", () => {
     expect(card("t2")?.state).toBe("failed");
     expect(said).toEqual([]);
     expect(started.length).toBe(4);
+  });
+});
+
+describe("the brief", () => {
+  test("sends the token, names the plan route, and its example is a plan canopy takes", async () => {
+    const brief = await readFile(join(import.meta.dir, "../../lib/coordinator.md"), "utf8");
+    // the server uses it as is: nothing in it is filled in
+    expect(brief).not.toContain("{{");
+    expect(brief).toContain('-H "X-Canopy-Token: $CANOPY_TOKEN"');
+    expect(brief).toContain("$CANOPY_API/api/coordinator/plan");
+    const example = /<<'EOF'\n([\s\S]*?)\n\s*EOF\n/.exec(brief)?.[1];
+    if (!example) throw new Error("no example in the brief");
+    const body = JSON.parse(example) as { tasks: unknown };
+    expect("tasks" in validatePlan(body.tasks, { known: () => "local", have: 0 })).toBe(true);
   });
 });
