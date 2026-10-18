@@ -1,8 +1,11 @@
 import { describe, expect, test } from "bun:test";
 
 const compose = Bun.YAML.parse(await Bun.file(new URL("../../docker-compose.yml", import.meta.url)).text()) as {
-  services: Record<string, { environment?: string[] | Record<string, string>; volumes?: string[]; network_mode?: string; pid?: string; networks?: unknown; depends_on?: unknown }>;
-  networks?: Record<string, { enable_ipv6?: boolean; driver_opts?: Record<string, string>; ipam?: { config?: { subnet?: string }[] } }>;
+  services: Record<
+    string,
+    { environment?: string[] | Record<string, string>; volumes?: string[]; network_mode?: string; pid?: string; networks?: unknown; depends_on?: unknown; ports?: string[]; profiles?: string[] }
+  >;
+  networks?: Record<string, { enable_ipv6?: boolean; driver_opts?: Record<string, string>; ipam?: { config?: { subnet?: string; gateway?: string }[] } }>;
 };
 const envOf = (s: { environment?: string[] | Record<string, string> }): string[] =>
   Array.isArray(s.environment) ? s.environment : Object.entries(s.environment ?? {}).map(([k, v]) => `${k}=${v}`);
@@ -143,6 +146,74 @@ describe("the stage runner's socket", () => {
   test("neither the shells nor the stages hold it", () => {
     expect(services["shells"]?.group_add).toBeUndefined();
     expect(services["stages"]?.group_add).toBeUndefined();
+  });
+});
+
+describe("the coordinator's runner", () => {
+  const coord = compose.services["coord"] as
+    | { image?: string; build?: { target?: string }; read_only?: boolean; networks?: string[]; dns?: string[]; volumes?: string[]; profiles?: string[]; healthcheck?: { test?: string[] } }
+    | undefined;
+  const net = compose.networks?.["coord-net"];
+  const gateway = net?.ipam?.config?.[0]?.gateway;
+  test("is the stages image on a read-only container, with no profile so its network is always there", () => {
+    expect(coord?.build?.target).toBe("stages");
+    expect(coord?.image).toBe("canopy-stages:latest");
+    expect(coord?.read_only).toBe(true);
+    expect(coord?.profiles).toBeUndefined();
+    expect(coord?.healthcheck?.test).toEqual(["CMD", "bun", "/app/stage-runner.js", "--health"]);
+  });
+  test("passes the run's address and token on, and nothing else more", () => {
+    const env = envOf(coord ?? {});
+    expect(env).toContain("CANOPY_STAGE_PASS_ENV=CANOPY_API,CANOPY_TOKEN");
+    expect(env).toContain("CANOPY_FENCE_PROBE=${CANOPY_FENCE_PROBE:-}");
+    expect(env).toContain("CANOPY_STAGE_SOCKET=/run/canopy-coord/runner.sock");
+    // the names are passed through, never held: no value of its own
+    for (const e of env) if (!e.startsWith("CANOPY_STAGE_PASS_ENV=")) expect(e.split("=")[0]).not.toMatch(/TOKEN|KEY|SECRET|PASSWORD/);
+  });
+  test("mounts its seeds, its own logins and its socket, and nothing of the workspace, the stages or the host's logins", () => {
+    const vols = coord?.volumes ?? [];
+    expect(vols).toContain("coord-sock:/run/canopy-coord");
+    expect(vols.some((v) => v.includes("/.config/canopy-coord/claude:/home/bun/.stage-claude"))).toBe(true);
+    for (const v of vols) expect(v).not.toMatch(/DEV_ROOT|_incubator|canopy-stages|\.ssh|\.config\/git|\.env|docker\.sock|canopy-config|stage-sock|\/\.claude[:/]|\/\.codex[:/]/);
+    const root = envOf(coord ?? {}).find((e) => e.startsWith("CANOPY_STAGE_ROOT="))?.split("=")[1];
+    expect(root).toBe("${HOST_HOME:-/home/eric}/.local/share/canopy-coord/seeds");
+    expect(vols).toContain(`${root}:${root}`);
+  });
+  test("sits alone on coord-net, with public resolvers", () => {
+    expect(coord?.networks).toEqual(["coord-net"]);
+    expect(coord?.dns).toEqual(["1.1.1.1", "9.9.9.9"]);
+    for (const [name, svc] of Object.entries(compose.services)) {
+      if (name === "coord") continue;
+      expect(JSON.stringify(svc.networks ?? null)).not.toContain("coord-net");
+    }
+  });
+  test("coord-net is v4 only, on its own subnet, with the bridge name the fence matches", async () => {
+    expect(net?.enable_ipv6).toBe(false);
+    expect(net?.ipam?.config?.[0]?.subnet).toBe("10.250.14.0/24");
+    expect(gateway).toBe("10.250.14.1");
+    const script = await Bun.file(new URL("../../scripts/stages-fence.sh", import.meta.url)).text();
+    const fenced = /^COORD_BRIDGE=(\S+)$/m.exec(script)?.[1];
+    const name = net?.driver_opts?.["com.docker.network.bridge.name"];
+    expect(name).toBe("br-canopy-crd");
+    expect(name).toBe(fenced);
+    expect((name ?? "").length).toBeLessThanOrEqual(15);
+    // the fence's one ACCEPT is canopy's port on this gateway
+    expect(script).toContain(`-d ${gateway}/32 -p tcp --dport 7850 -j ACCEPT`);
+  });
+  test("the shells publish canopy's port on coord-net's gateway, without joining it", () => {
+    const shells = compose.services["shells"];
+    expect(shells?.ports ?? []).toContain(`${gateway}:7850:7850`);
+    expect(JSON.stringify(shells?.networks ?? null)).not.toContain("coord-net");
+  });
+  test("canopy reaches it through its socket, with the seeds at the same path, and the coordinator's settings from .env", () => {
+    const canopy = compose.services["canopy"];
+    const env = envOf(canopy ?? {});
+    expect(env).toContain("CANOPY_COORD_SOCKET=${CANOPY_COORD_SOCKET:-}");
+    expect(env).toContain("CANOPY_COORD_API=${CANOPY_COORD_API:-}");
+    expect(env).toContain("CANOPY_COORD_ROOT=${HOST_HOME:-/home/eric}/.local/share/canopy-coord/seeds");
+    expect(canopy?.volumes ?? []).toContain("coord-sock:/run/canopy-coord");
+    expect(canopy?.volumes ?? []).toContain("${HOST_HOME:-/home/eric}/.local/share/canopy-coord/seeds:${HOST_HOME:-/home/eric}/.local/share/canopy-coord/seeds");
+    expect(compose.services["shells"]?.volumes ?? []).not.toContain("coord-sock:/run/canopy-coord");
   });
 });
 

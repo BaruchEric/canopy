@@ -116,10 +116,12 @@ fi
 if [ "$cmd" = status ]; then
   echo "checkout  $(git log -1 --format='%h %s' HEAD)"
   [ -f "$LOGS/deployed" ] && echo "deployed  $(cat "$LOGS/deployed")"
-  for c in canopy-shells-1 canopy-canopy-1 canopy-tunnel-1; do
+  for c in canopy-shells-1 canopy-canopy-1 canopy-coord-1 canopy-tunnel-1; do
     docker inspect -f "$c  {{.State.Status}} since {{.State.StartedAt}}" "$c" 2>/dev/null || echo "$c  missing"
   done
-  echo "port      $(docker port canopy-shells-1 7850 2>/dev/null | head -1 || true)"
+  # the shells also publish 7850 on the coordinator bridge's gateway
+  # (10.250.14.1), which is not the address to report
+  echo "port      $(docker port canopy-shells-1 7850 2>/dev/null | grep -v '^10\.250\.14\.1:' | head -1 || true)"
   echo "running   $(docker exec canopy-canopy-1 bun bin/canopy.ts version 2>/dev/null || echo unknown)"
   docker compose logs canopy --tail 3 --no-log-prefix 2>/dev/null | sed 's/^/log       /'
   exit 0
@@ -186,6 +188,14 @@ job() {
   mkdir -p "$STAGE_DEV_ROOT/_incubator" "$STAGE_DEV_ROOT/_incubator/.shared" \
     "$STAGE_HOST_HOME/.config/canopy-stages/claude" "$STAGE_HOST_HOME/.config/canopy-stages/codex" ||
     { echo "could not make the stages folders; up would make them as root"; return 1; }
+  # the coordinator's runner: its seeds (canopy makes a 0700 folder per run
+  # there) and its own claude and codex logins. Made whether or not .env
+  # turns the coordinator on, since coord always runs and canopy always
+  # mounts the seeds
+  mkdir -p "$STAGE_HOST_HOME/.local/share/canopy-coord/seeds" \
+    "$STAGE_HOST_HOME/.config/canopy-coord/claude" "$STAGE_HOST_HOME/.config/canopy-coord/codex" &&
+    chmod 700 "$STAGE_HOST_HOME/.local/share/canopy-coord/seeds" ||
+    { echo "could not make the coordinator's folders; up would make them as root"; return 1; }
   # the secrets service writes the MCP env files here as root and chowns each
   # to the folder's owner; a folder docker made would be root's, and 0700
   # keeps every other user out
@@ -214,7 +224,9 @@ job() {
   # this cannot read is checked. A canopy that does not answer has nothing going.
   if [ "$force" != 1 ] && { [ "$restart" = 1 ] || ! grep -q 'canopy-canopy-1.*Running' <<<"$plan" ||
     grep -Eq 'canopy-(canopy|shells)-1.*Recreate' <<<"$plan"; }; then
-    addr=$(docker port canopy-shells-1 7850 2>/dev/null | head -1 || true)
+    # not the coordinator bridge's gateway, which the shells publish 7850 on
+    # too: this host's checks go to canopy's own address
+    addr=$(docker port canopy-shells-1 7850 2>/dev/null | grep -v '^10\.250\.14\.1:' | head -1 || true)
     got=0
     if [ -n "$addr" ]; then
       runs=$(curl -fsS -m 10 "http://$addr/api/runs" 2>/dev/null) || got=$?
@@ -283,7 +295,7 @@ job() {
     docker compose logs canopy --tail 20 --no-log-prefix
     return 1
   fi
-  port=$(docker port canopy-shells-1 7850 2>/dev/null | head -1 || true)
+  port=$(docker port canopy-shells-1 7850 2>/dev/null | grep -v '^10\.250\.14\.1:' | head -1 || true)
   [ -n "$port" ] || { echo "the shells container has no published port; free 7850 and run: docker compose up -d --force-recreate shells canopy"; return 1; }
   docker compose logs canopy --tail 4 --no-log-prefix
   echo "$sha on $port, $(date)" >"$LOGS/deployed"

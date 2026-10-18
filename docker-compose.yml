@@ -5,7 +5,11 @@
 # docs/deploy.md for the first run. For a host that is NOT on the tailnet,
 # add docker-compose.sidecar.yml, which joins canopy to a tailscale sidecar.
 # The `tunnel` service (profile `tunnel`, off unless .env turns it on) also
-# puts canopy on a public name through a Cloudflare Tunnel.
+# puts canopy on a public name through a Cloudflare Tunnel. The `coord`
+# service has no profile: the shells publish canopy's port on its network's
+# gateway, which exists only while coord is part of the same `up`, so it
+# always runs and canopy uses it only once .env sets CANOPY_COORD_SOCKET and
+# CANOPY_COORD_API (docs/deploy.md, "The coordinator").
 services:
   # The tmux server that holds every shell, in a container of its own so a
   # canopy redeploy (which recreates the canopy container) leaves the shells
@@ -66,6 +70,12 @@ services:
     ports:
       - "${CANOPY_LISTEN:-127.0.0.1}:7850:7850"
       - "${CANOPY_LISTEN:-127.0.0.1}:7860-7869:7860-7869"
+      # canopy's port on coord-net's gateway, the one address the
+      # coordinator's fence lets it reach (scripts/stages-fence.sh). The
+      # shells never join coord-net: a second network here could move
+      # canopy's default route behind that fence. The bind needs the
+      # bridge, so coord must come up in the same `up` as the shells.
+      - "10.250.14.1:7850:7850"
     # the name the tunnel's ingress (http://canopy:7850) dials, which is
     # canopy's port in this namespace
     networks:
@@ -131,6 +141,57 @@ services:
     # namespace, through the fenced bridge, so the host's upstream (the
     # router, tailscale's 100.100.100.100) would be dropped; public servers
     # are not
+    dns: [1.1.1.1, 9.9.9.9]
+    init: true
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "bun", "/app/stage-runner.js", "--health"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 5s
+
+  # The coordinator's runner (FR-010, docs/deploy.md "The coordinator"): a
+  # second stage runner from the stages image, which starts a coordinate
+  # run's claude in a folder of its own under the seeds folder. Like stages
+  # but: no workspace at all, its own claude and codex logins, the run's
+  # CANOPY_API and CANOPY_TOKEN let through to the child, and coord-net,
+  # whose fence reaches canopy's port on its gateway and nothing else
+  # private. Idle until canopy's CANOPY_COORD_SOCKET points at its socket.
+  coord:
+    build:
+      context: .
+      target: stages
+      args:
+        UID: ${HOST_UID:-1000}
+        GID: ${HOST_GID:-1000}
+        STAGECALLER_GID: ${STAGECALLER_GID:-7850}
+    image: canopy-stages:latest
+    environment:
+      - CANOPY_STAGE_ROOT=${HOST_HOME:-/home/eric}/.local/share/canopy-coord/seeds
+      - CANOPY_STAGE_SOCKET=/run/canopy-coord/runner.sock
+      # the only extras a runner accepts; any other name stops it at start
+      - CANOPY_STAGE_PASS_ENV=CANOPY_API,CANOPY_TOKEN
+      # the same probe target as the stages': nothing starts until it times
+      # out from this bridge
+      - CANOPY_FENCE_PROBE=${CANOPY_FENCE_PROBE:-}
+      - LANG=C.UTF-8
+    volumes:
+      # made by scripts/redeploy.sh before `up`, owned by the host user;
+      # docker would make a missing one as root
+      - ${HOST_HOME:-/home/eric}/.local/share/canopy-coord/seeds:${HOST_HOME:-/home/eric}/.local/share/canopy-coord/seeds
+      # the coordinator's own logins, never the stages' or the host's: a
+      # stage could plant a hook in the stages' folder
+      - ${HOST_HOME:-/home/eric}/.config/canopy-coord/claude:/home/bun/.stage-claude
+      - ${HOST_HOME:-/home/eric}/.config/canopy-coord/codex:/home/bun/.stage-codex
+      - coord-sock:/run/canopy-coord
+    read_only: true
+    tmpfs:
+      - /home/bun:uid=${HOST_UID:-1000},gid=${HOST_GID:-1000},mode=0700,size=1g,exec
+      - /tmp:mode=1777,size=512m,exec
+    networks: [coord-net]
+    # public resolvers, as the stages have, since the fence drops the
+    # embedded resolver's upstream
     dns: [1.1.1.1, 9.9.9.9]
     init: true
     restart: unless-stopped
@@ -317,6 +378,15 @@ services:
       # the stage runner's socket in the stages container (stage-sock below),
       # the one way canopy starts an agent, check or build in a seed
       - CANOPY_STAGE_SOCKET=/run/canopy-stage/runner.sock
+      # The coordinator (docs/deploy.md, "The coordinator"): the coord
+      # runner's socket (/run/canopy-coord/runner.sock) and the address a
+      # coordinator reaches canopy at (http://10.250.14.1:7850), both from
+      # .env. Empty, a coordinate run is refused. The seeds folder is the
+      # coord runner's root at the same path, where canopy makes each run's
+      # folder.
+      - CANOPY_COORD_SOCKET=${CANOPY_COORD_SOCKET:-}
+      - CANOPY_COORD_API=${CANOPY_COORD_API:-}
+      - CANOPY_COORD_ROOT=${HOST_HOME:-/home/eric}/.local/share/canopy-coord/seeds
       # the secrets service's socket (secrets-sock below); set on this
       # backend alone, so its hub relays to the service instead of reading a
       # pulled copy
@@ -363,6 +433,10 @@ services:
       - /etc/localtime:/etc/localtime:ro
       # the stage runner's socket, shared with the stages service alone
       - stage-sock:/run/canopy-stage
+      # the coordinator's runner: its socket, and its seeds folder at the
+      # same path it has there
+      - coord-sock:/run/canopy-coord
+      - ${HOST_HOME:-/home/eric}/.local/share/canopy-coord/seeds:${HOST_HOME:-/home/eric}/.local/share/canopy-coord/seeds
       # the secrets service's socket, shared with that service alone
       - secrets-sock:/run/canopy-secrets
     command:
@@ -400,6 +474,9 @@ volumes:
   canopy-config:
   # the stage runner's socket folder, owned by the stages' user (Dockerfile)
   stage-sock:
+  # the coordinator runner's socket folder; the runner sets it to
+  # root:stagecaller 0750 at every start, as the stages' runner does its own
+  coord-sock:
   # the secret store's checkout, keys, passkeys, audit log and applied
   # stamps; only the secrets service mounts it
   secrets-data:
@@ -421,3 +498,16 @@ networks:
     ipam:
       config:
         - subnet: 10.250.13.0/24
+  # The coordinator's bridge, like stages-net: named for the fence
+  # (scripts/stages-fence.sh), v4 only. Its gateway is where the shells
+  # publish canopy's port for the coordinator; the fence accepts that one
+  # address and port and drops the rest of the private ranges.
+  coord-net:
+    driver: bridge
+    driver_opts:
+      com.docker.network.bridge.name: br-canopy-crd
+    enable_ipv6: false
+    ipam:
+      config:
+        - subnet: 10.250.14.0/24
+          gateway: 10.250.14.1

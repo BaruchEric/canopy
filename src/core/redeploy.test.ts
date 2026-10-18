@@ -209,3 +209,40 @@ job
     }
   });
 }
+
+test("redeploy reports and probes canopy's own address, not the coordinator bridge's gateway", async () => {
+  const logs = await mkdtemp(join(tmpdir(), "canopy-redeploy-test-"));
+  try {
+    const source = await readFile(script, "utf8");
+    const job = source.slice(source.indexOf("\njob() {") + 1, source.indexOf("\nexport -f job"));
+    const probed = join(logs, "probed");
+    const harness = `
+docker() {
+  # the gateway binding first, as docker may list it
+  if [ "$1" = port ]; then printf '10.250.14.1:7850\\n100.64.0.1:7850\\n'; return 0; fi
+  if [ "$1" = compose ] && [ "$2" = exec ]; then return 0; fi
+  return 0
+}
+mkdir() { :; }
+chmod() { :; }
+sleep() { :; }
+seq() { printf '1\\n'; }
+curl() { printf '%s\\n' "$*" >>${shellQuote(probed)}; return 7; }
+${job}
+job
+`;
+    const child = Bun.spawn(["bash", "-c", harness], {
+      stdout: "pipe", stderr: "pipe",
+      env: { ...process.env, LOGS: logs, sha: "fixture revision", shells: "0", restart: "1", CANOPY_COMMIT: commit },
+    });
+    const [code, , stderr] = await Promise.all([child.exited, new Response(child.stdout).text(), new Response(child.stderr).text()]);
+    expect(stderr).toBe("");
+    expect(code).toBe(0);
+    expect(await Bun.file(join(logs, "deployed")).text()).toContain("fixture revision on 100.64.0.1:7850");
+    const calls = await readFile(probed, "utf8");
+    expect(calls).toContain("http://100.64.0.1:7850/api/runs");
+    expect(calls).not.toContain("10.250.14.1");
+  } finally {
+    await rm(logs, { recursive: true, force: true });
+  }
+});
