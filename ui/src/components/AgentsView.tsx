@@ -394,6 +394,8 @@ function Profiles({ scope, routes, has }: { scope: string; routes: AgentRoutes; 
 
 function Roles({ scope, routes }: { scope: string; routes: AgentRoutes; has: readonly Harness[] }) {
   const setRole = useStore((s) => s.setRole);
+  // the coordinate role is read only where the backend runs coordinators
+  const coordHere = useStore((s) => connOf(s, scope).about?.coordinator === true);
   const [error, setError] = useState<string | null>(null);
   const choose = async (role: AgentRole, value: string) => {
     setError(null);
@@ -434,6 +436,7 @@ function Roles({ scope, routes }: { scope: string; routes: AgentRoutes; has: rea
                 </select>
               </div>
               {passed && <p className="settings-hint warn">{passed}; it is passed over.</p>}
+              {role === "coordinate" && !coordHere && <p className="settings-hint">{scope} has no coordinator runner, so this route is not used there.</p>}
             </li>
           );
         })}

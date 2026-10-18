@@ -4405,6 +4405,137 @@ body.resizing-rows {
   cursor: pointer;
 }
 
+/* a coordinator's child: who started it, with a way back (FR-010) */
+.run-parent {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px 10px;
+  padding: 6px 16px;
+  border-bottom: 1px solid var(--hair);
+  font-size: 12px;
+  color: var(--ink-dim);
+}
+.run-parent-text {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.run-parent-text b {
+  color: var(--ink);
+  font-weight: 500;
+}
+
+/* a coordinator's cards, between its timeline and its composer. The block
+   scrolls on its own so twenty cards never squeeze the chat out. */
+.coord-tasks {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  max-height: 40vh;
+  border-top: 1px solid var(--hair);
+}
+.coord-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 16px;
+  font-size: 12px;
+  color: var(--ink-dim);
+}
+.coord-count {
+  min-width: 0;
+}
+.coord-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-height: 0;
+  overflow-y: auto;
+  margin: 0;
+  padding: 0 16px 10px;
+  list-style: none;
+}
+.coord-card {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 8px 10px;
+  border: 1px solid var(--hair);
+  border-radius: var(--r);
+  font-size: 12px;
+}
+.coord-card-head {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+}
+.coord-title {
+  flex: 1;
+  min-width: 0;
+  color: var(--ink);
+  font-weight: 500;
+  overflow-wrap: anywhere;
+}
+.coord-chip {
+  --tone: var(--lichen);
+  flex: none;
+  padding: 1px 8px;
+  border-radius: 999px;
+  font-size: 11px;
+  white-space: nowrap;
+  color: var(--tone);
+  background: color-mix(in srgb, var(--tone) 12%, transparent);
+}
+.coord-chip.moss {
+  --tone: var(--moss);
+}
+.coord-chip.sky {
+  --tone: var(--sky);
+}
+.coord-chip.rust {
+  --tone: var(--rust);
+}
+.coord-chip.faint {
+  --tone: var(--ink-faint);
+}
+.coord-note {
+  max-height: 7.5em;
+  overflow-y: auto;
+  margin: 0;
+  color: var(--ink-dim);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.coord-line {
+  margin: 0;
+  font-size: 11px;
+  color: var(--ink-dim);
+  overflow-wrap: anywhere;
+}
+.coord-line.err {
+  color: var(--rust);
+}
+.coord-actions {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.coord-form {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.coord-form-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.coord-form-row > select {
+  flex: 1 1 140px;
+  min-width: 0;
+}
+
 /* a repo's landing queue: the card's word, its panel section */
 .landing-card.queued {
   --tone: var(--lichen);

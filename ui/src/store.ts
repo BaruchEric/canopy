@@ -50,6 +50,7 @@ import { convOf, isUnread, mergeMessages } from "./chan";
 import type { AdviceAccepted, AdviceOffer, AgentCard, AgentKind, Ask, ChanMessage, HealthCheck, IncubatorStages, KitInfo, LandingInfo, PendingPair, Presence, PrWatch, RangerInfo, SecretsInfo, Sprout, TailchanInfo } from "../../src/core/types";
 import type { Delivery, TriggersInfo } from "../../src/core/trigger";
 import { mergeLanding } from "./landing";
+import { isCoordinator, type CoordEdit } from "./coord";
 import { mergePrs } from "./prs";
 import { mergeAsks, mergeInbox, replaceAsks, toAskAnswer, toRunAnswer, type InboxAnswer, type InboxItem } from "./inbox";
 import { replaceSprouts, staleSprout } from "./sprouts";
@@ -1280,6 +1281,12 @@ export interface CanopyState {
   sayRun: (runId: string, text: string) => Promise<void>;
   stopRun: (runId: string) => Promise<void>;
   dismissRun: (runId: string) => Promise<void>;
+  /** edits a coordinator's proposed card; the run's broadcast brings it back */
+  coordPlanEdit: (runId: string, taskId: string, change: CoordEdit) => Promise<void>;
+  /** removes a coordinator's proposed card */
+  coordRemove: (runId: string, taskId: string) => Promise<void>;
+  /** start these: a coordinator's proposed cards join its queue */
+  coordStart: (runId: string) => Promise<void>;
 
   /** loads (or reloads) the workflows a repo can run, for the menu */
   loadWorkflows: (repoId: string) => Promise<void>;
@@ -3723,7 +3730,8 @@ export const useStore = create<CanopyState>((set, get) => ({
 
   plan: (repoId, action) => {
     // A repo with a run going shows that run instead of starting a second.
-    const active = activeRunFor(get(), repoId);
+    // A coordinator holds no repo, so only a coordinator going stops a new one.
+    const active = action === "coordinate" ? coordinatorFor(get(), repoId) : activeRunFor(get(), repoId);
     set({ sheet: active ? { kind: "run", runId: active.id } : { kind: "plan", repoId, action } });
   },
   openWsPlan: (name, action) => {
@@ -3940,6 +3948,9 @@ export const useStore = create<CanopyState>((set, get) => ({
     const run = await api.stopRun(runId);
     set((s) => ({ runs: { ...s.runs, [run.id]: run } }));
   },
+  coordPlanEdit: (runId, taskId, change) => api.coordTask(runId, taskId, change),
+  coordRemove: (runId, taskId) => api.coordTask(runId, taskId, { remove: true }),
+  coordStart: (runId) => api.coordStart(runId),
   dismissRun: async (runId) => {
     await api.dismissRun(runId);
     set((s) => {
@@ -4217,7 +4228,24 @@ export function runFor(s: CanopyState, repoId: string): Run | undefined {
 
 export function activeRunFor(s: CanopyState, repoId: string): Run | undefined {
   const r = runFor(s, repoId);
-  return r && isRunActive(r) ? r : undefined;
+  if (!r || !isRunActive(r)) return undefined;
+  if (!isCoordinator(r)) return r;
+  // A coordinator holds no repo, as on the server: the run going there is
+  // the newest other one, if any.
+  let best: Run | undefined;
+  for (const o of Object.values(s.runs)) {
+    if (o.repoId !== repoId || isCoordinator(o) || !isRunActive(o) || !ownRun(s.flowRuns, o)) continue;
+    if (!best || o.startedAt > best.startedAt) best = o;
+  }
+  return best;
+}
+
+/** The coordinator going at a repo, one at a time (FR-010). */
+export function coordinatorFor(s: CanopyState, repoId: string): Run | undefined {
+  for (const r of Object.values(s.runs)) {
+    if (r.repoId === repoId && isCoordinator(r) && isRunActive(r)) return r;
+  }
+  return undefined;
 }
 
 /** A repo's newest flow in its checkout, active first. A flow on a branch

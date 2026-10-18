@@ -129,6 +129,7 @@ import {
 } from "./qualify";
 import { baseOf, homeName, plainOf, qual, registry } from "./registry";
 import { clientId } from "./client";
+import type { CoordEdit } from "./coord";
 
 /* Every call goes to the backend its id names, with the id that backend
    knows, and whatever carries ids comes back under that backend's name. The
@@ -833,6 +834,18 @@ export const api = {
   },
   dismissRun: (id: string) =>
     repoReq<{ ok: true }>(id, (p) => `/api/runs?${rq(p)}`, { method: "DELETE" }),
+  /** edits or removes a coordinator's proposed card (FR-010); the run's
+   *  broadcast carries the change, so the answer is not read */
+  coordTask: async (runId: string, id: string, change: CoordEdit | { remove: true }) => {
+    const [b, plain] = on(runId);
+    const body = "remove" in change ? { run: plain, id, remove: true } : { run: plain, id, ...change, ...(change.repo !== undefined ? { repo: on(change.repo)[1] } : {}) };
+    await req<{ ok: true }>(b, "/api/coordinator/tasks", { method: "POST", body: JSON.stringify(body) });
+  },
+  /** start these: every proposed card of a coordinator joins its queue */
+  coordStart: async (runId: string) => {
+    const [b, plain] = on(runId);
+    await req<{ ok: true }>(b, "/api/coordinator/start", { method: "POST", body: JSON.stringify({ run: plain }) });
+  },
   workflows: (id: string) => repoReq<WorkflowEntry[]>(id, (p) => `/api/repos/workflows?${rq(p)}`),
   /** `request` is the sheet's own id for this start, so sending it again
    *  after a lost answer finds the flow instead of starting another */

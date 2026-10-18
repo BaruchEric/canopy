@@ -11,7 +11,7 @@ import { AGENT_NAME } from "../runs";
 import { describeLaunch } from "../../../src/core/launch";
 import { flowWord } from "../flows";
 import { useShallow } from "zustand/react/shallow";
-import { activeFlowFor, activeRunFor, agentFor, capsFor, connOf, isFavorite, launchFor, routesOf, useStore } from "../store";
+import { activeFlowFor, activeRunFor, agentFor, capsFor, connOf, coordinatorFor, isFavorite, launchFor, routesOf, useStore } from "../store";
 import { oneMenu } from "../menus";
 import { backendOf } from "../registry";
 import { triggerKeeps } from "../surface";
@@ -63,6 +63,10 @@ export function RepoMenu({
   // a chat and a job start on whatever the repo's routes say for them
   const chatAgent = useStore((s) => agentFor(s, repo, "chat"));
   const jobAgent = useStore((s) => agentFor(s, repo, "job"));
+  // a coordinator (FR-010) only where the backend has its isolated runner
+  const coordHere = useStore((s) => connOf(s, backendOf(repo.id)).about?.coordinator === true);
+  const coordAgent = useStore((s) => agentFor(s, repo, "coordinate"));
+  const coordinator = useStore((s) => coordinatorFor(s, repo.id));
   const has = useStore((s) => harnessesOf(connOf(s, backendOf(repo.id)).backend));
   // a shell's agent: on another host for a repo there
   const shellHas = useStore((s) => startHarnesses(connOf(s, backendOf(repo.id)).backend, repo.host));
@@ -407,6 +411,46 @@ export function RepoMenu({
                     <span className="menu-fact">
                       {activeFlow ? "workflow running" : active ? "show" : missing ? "not installed" : "in canopy"}
                     </span>
+                  </button>
+                );
+              })()}
+              {!repo.host && !seed && coordHere && (() => {
+                // a coordinator holds no repo, so nothing else going here stops one
+                const off = !coordinator && coordAgent.harness !== "claude";
+                return (
+                  <button
+                    type="button"
+                    role="menuitem"
+                    className={coordinator ? "menu-item live" : "menu-item"}
+                    aria-disabled={off}
+                    tabIndex={off ? -1 : 0}
+                    title={
+                      coordinator
+                        ? "Show the coordinator going at this repo"
+                        : off
+                          ? "the coordinator needs Claude Code"
+                          : "A chat that splits your goal into branch runs across repos, proposed as cards you edit before anything starts"
+                    }
+                    onClick={() => {
+                      if (off) return;
+                      setOpen(false);
+                      plan(repo.id, "coordinate");
+                    }}
+                  >
+                    {coordinator && <span className="dot sky" />}
+                    <span className="menu-text">
+                      {coordinator ? (
+                        coordinator.status === "waiting" ? "coordinator needs you" : "coordinator going"
+                      ) : (
+                        <>
+                          <span className={`harness-glyph h-${coordAgent.harness}`} aria-hidden="true">
+                            {HARNESS[coordAgent.harness].glyph}
+                          </span>{" "}
+                          {ACTIONS.coordinate.label}
+                        </>
+                      )}
+                    </span>
+                    <span className="menu-fact">{coordinator ? "show" : off ? "needs Claude Code" : "in a sandbox"}</span>
                   </button>
                 );
               })()}

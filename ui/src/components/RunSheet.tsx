@@ -14,6 +14,8 @@ import { ApproveSheet } from "./Landing";
 import { SearchSheet } from "./Search";
 import { NewSproutSheet, SproutSheet } from "./Incubator";
 import { RunPromptForm } from "./Prompts";
+import { CoordTasks, ParentLine } from "./CoordTasks";
+import { isCoordinator } from "../coord";
 import { scopeOffers } from "../inbox";
 import {
   AGENT_ROLES,
@@ -177,15 +179,17 @@ function Plan({ repo, action, workspace }: { repo: Repo; action: RunAction; work
   const startWsRun = useStore((s) => s.startWsRun);
   const spec = ACTIONS[action];
   const words = planWords(action, workspace);
-  const agent = useStore((s) => agentFor(s, repo, spec.mode === "chat" ? "chat" : "job"));
+  const coordinate = action === "coordinate";
+  const agent = useStore((s) => agentFor(s, repo, coordinate ? "coordinate" : spec.mode === "chat" ? "chat" : "job"));
   const name = AGENT_NAME[agent.harness];
   const [note, setNote] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const ready = !busy && (!spec.noteRequired || note.trim().length > 0);
   // a branch of its own: on for propose, off for the rest, never for a
-  // workspace run or a checkout on another host or the forge
-  const branchable = !workspace && !repo.host && !repo.forge;
+  // workspace run or a checkout on another host or the forge; a coordinator
+  // works from no checkout and branches through its cards
+  const branchable = !coordinate && !workspace && !repo.host && !repo.forge;
   const byDefault = branchByDefault(action, workspace);
   const [onBranch, setOnBranch] = useState(byDefault);
   // FR-011: a PR in place of the landing queue, so only on a branch
@@ -262,9 +266,11 @@ function Plan({ repo, action, workspace }: { repo: Repo; action: RunAction; work
       </div>
       <footer className="sheet-foot">
         <span className="sheet-hint">
-          {agent.yolo
-            ? `Yolo is on for this repo: ${name} runs without asking.`
-            : `${name} asks before running anything that is not part of the job.`}
+          {coordinate
+            ? `${name} works in a sandbox of its own and only proposes cards; nothing starts until you press start these.`
+            : agent.yolo
+              ? `Yolo is on for this repo: ${name} runs without asking.`
+              : `${name} asks before running anything that is not part of the job.`}
         </span>
         <button type="button" className="mini" onClick={close}>
           cancel
@@ -482,6 +488,7 @@ function Console({ run, repo }: { run: Run; repo: Repo | undefined }) {
         </button>
       </header>
 
+      {run.parent && <ParentLine run={run} />}
       {run.branch && <BranchBlock run={run} act={act} />}
       {run.branch && <PrBlock run={run} act={act} />}
 
@@ -491,6 +498,8 @@ function Console({ run, repo }: { run: Run; repo: Repo | undefined }) {
         error={error}
         onAnswer={(a, promptId) => void act(() => answerRun(run.id, promptId, a))}
       />
+
+      {isCoordinator(run) && <CoordTasks run={run} act={act} />}
 
       {chat && active && (
         <Composer
