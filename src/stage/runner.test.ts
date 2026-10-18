@@ -198,6 +198,23 @@ describe("the stage runner", () => {
     expect(env).not.toContain("GH_TOKEN");
     expect(env).not.toContain("own-secret");
     expect(env).toContain("CANOPY_RUN=r1");
+    expect(env).not.toContain("CANOPY_TOKEN");
+  });
+
+  test("a runner with CANOPY_STAGE_PASS_ENV passes those names from canopy, and nothing else more", async () => {
+    const path = await extra("pass", { env: { CANOPY_STAGE_PASS_ENV: "CANOPY_API,CANOPY_TOKEN" } });
+    const sent = { CANOPY_RUN: "r1", CANOPY_API: "http://10.250.14.1:7850", CANOPY_TOKEN: "cnp_run", GH_TOKEN: "sent" };
+    const fs = await talk({ t: "spawn", argv: ["sh", "-c", "env"], cwd: join(root, "coin"), env: sent }, [], 8000, path);
+    const env = text(fs, "out");
+    expect(env).toContain("CANOPY_API=http://10.250.14.1:7850");
+    expect(env).toContain("CANOPY_TOKEN=cnp_run");
+    expect(env).not.toContain("GH_TOKEN");
+  });
+
+  test("a runner told to pass any other name refuses to start", async () => {
+    await expect(
+      startStageRunner({ socket: join(dir, "wide.sock"), root, probe: blocked, writable: notWritable, env: { PATH: process.env["PATH"], CANOPY_STAGE_PASS_ENV: "CANOPY_TOKEN,GH_TOKEN" } }),
+    ).rejects.toThrow("CANOPY_STAGE_PASS_ENV");
   });
 
   test.each([

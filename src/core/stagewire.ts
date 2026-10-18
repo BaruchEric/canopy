@@ -111,13 +111,37 @@ export function requestRefusal(req: StageRequest): string | null {
   return null;
 }
 
-export function childEnv(own: Record<string, string | undefined>, asked: Record<string, string>): Record<string, string> {
+/** The only names a runner may be told to pass on top of
+ *  `STAGE_PASSED_ENV` (`CANOPY_STAGE_PASS_ENV`): the coordinator's runner
+ *  passes the address it reaches canopy at and its run's token. */
+export const STAGE_EXTRA_ENV: readonly string[] = ["CANOPY_API", "CANOPY_TOKEN"];
+
+/** The extra names in a runner's `CANOPY_STAGE_PASS_ENV`, comma separated,
+ *  or why the runner must not start: any name outside `STAGE_EXTRA_ENV` is
+ *  refused rather than dropped, so a typo cannot widen a child's env.
+ *  Unset or empty is no extra name. */
+export function passEnvNames(raw: string | undefined): { names: string[] } | { refused: string } {
+  const names: string[] = [];
+  for (const part of (raw ?? "").split(",")) {
+    const name = part.trim();
+    if (!name) continue;
+    if (!STAGE_EXTRA_ENV.includes(name)) {
+      return { refused: `CANOPY_STAGE_PASS_ENV names ${name}, but a runner passes only ${STAGE_EXTRA_ENV.join(" and ")} on top of its own names` };
+    }
+    if (!names.includes(name)) names.push(name);
+  }
+  return { names };
+}
+
+/** A spawn's env: the runner's own base, then `STAGE_PASSED_ENV` and any
+ *  `extra` names (from `passEnvNames`) out of what canopy sent. */
+export function childEnv(own: Record<string, string | undefined>, asked: Record<string, string>, extra: readonly string[] = []): Record<string, string> {
   const out: Record<string, string> = {};
   for (const k of STAGE_BASE_ENV) {
     const v = own[k];
     if (v !== undefined) out[k] = v;
   }
-  for (const k of STAGE_PASSED_ENV) {
+  for (const k of [...STAGE_PASSED_ENV, ...extra]) {
     const v = Object.hasOwn(asked, k) ? asked[k] : undefined;
     if (v !== undefined) out[k] = v;
   }

@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { childEnv, chunkB64, encodeFrame, fromB64, gitEnv, lineSplitter, parseFrame, requestRefusal, StageAwayError, STAGE_AWAY, type StageRequest } from "./stagewire";
+import { childEnv, chunkB64, encodeFrame, fromB64, gitEnv, lineSplitter, parseFrame, passEnvNames, requestRefusal, StageAwayError, STAGE_AWAY, type StageRequest } from "./stagewire";
 
 describe("stage wire", () => {
   test("frames round-trip one per line", () => {
@@ -29,6 +29,31 @@ describe("stage wire", () => {
     const own = { PATH: "/usr/bin", HOME: "/home/bun", CLAUDE_CONFIG_DIR: "/c", SECRET: "no", GH_TOKEN: "no" };
     const asked = { CANOPY_RUN: "r1", CANOPY_REPO: "_incubator/coin", GH_TOKEN: "ghp_x", VERCEL_TOKEN: "v", PATH: "/evil", LD_PRELOAD: "/x.so" };
     expect(childEnv(own, asked)).toEqual({ PATH: "/usr/bin", HOME: "/home/bun", CLAUDE_CONFIG_DIR: "/c", CANOPY_RUN: "r1", CANOPY_REPO: "_incubator/coin" });
+  });
+  test("a runner told to pass more names lets those through as well, and only those", () => {
+    const own = { PATH: "/usr/bin", HOME: "/home/bun", CANOPY_TOKEN: "own" };
+    const asked = { CANOPY_RUN: "r1", CANOPY_API: "http://10.250.14.1:7850", CANOPY_TOKEN: "cnp_x", GH_TOKEN: "ghp_x" };
+    expect(childEnv(own, asked, ["CANOPY_API", "CANOPY_TOKEN"])).toEqual({
+      PATH: "/usr/bin",
+      HOME: "/home/bun",
+      CANOPY_RUN: "r1",
+      CANOPY_API: "http://10.250.14.1:7850",
+      CANOPY_TOKEN: "cnp_x",
+    });
+    // without the extra names the token stays out, whatever canopy sends
+    expect(childEnv(own, asked)).toEqual({ PATH: "/usr/bin", HOME: "/home/bun", CANOPY_RUN: "r1" });
+  });
+  test("CANOPY_STAGE_PASS_ENV: unset or empty passes nothing more, CANOPY_API and CANOPY_TOKEN are the only extras", () => {
+    expect(passEnvNames(undefined)).toEqual({ names: [] });
+    expect(passEnvNames("")).toEqual({ names: [] });
+    expect(passEnvNames(" ")).toEqual({ names: [] });
+    expect(passEnvNames("CANOPY_API,CANOPY_TOKEN")).toEqual({ names: ["CANOPY_API", "CANOPY_TOKEN"] });
+    expect(passEnvNames(" CANOPY_TOKEN , CANOPY_API,")).toEqual({ names: ["CANOPY_TOKEN", "CANOPY_API"] });
+    expect(passEnvNames("CANOPY_API,CANOPY_API")).toEqual({ names: ["CANOPY_API"] });
+    for (const bad of ["GH_TOKEN", "CANOPY_API,GH_TOKEN", "canopy_api", "CANOPY_TOKENS", "PATH", "LD_PRELOAD"]) {
+      const r = passEnvNames(bad);
+      expect("refused" in r ? r.refused : "").toContain("CANOPY_STAGE_PASS_ENV");
+    }
   });
   test("big output goes in 64 KiB slices", () => {
     const bytes = new Uint8Array(150_000).fill(65);

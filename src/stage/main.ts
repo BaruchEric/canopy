@@ -5,6 +5,7 @@ import { readFileSync } from "node:fs";
 import { chmod, chown } from "node:fs/promises";
 import { dirname } from "node:path";
 import { StageClient } from "../core/stageclient";
+import { passEnvNames } from "../core/stagewire";
 import { ownPidNamespace, rootStart, socketModes, stageChores, startStageRunner } from "./runner";
 
 // --stage-chores <seeds as JSON>: the sweep and settings check a root
@@ -34,6 +35,13 @@ const socket = process.env["CANOPY_STAGE_SOCKET"];
 const root = process.env["CANOPY_STAGE_ROOT"];
 if (!socket || !root) {
   console.error("canopy-stage-runner needs CANOPY_STAGE_SOCKET and CANOPY_STAGE_ROOT");
+  process.exit(2);
+}
+// the coordinator's runner passes its run's address and token on; any other
+// name here is a typo or worse, and the runner does not start on it
+const pass = passEnvNames(process.env["CANOPY_STAGE_PASS_ENV"]);
+if ("refused" in pass) {
+  console.error(`canopy-stage-runner: ${pass.refused}`);
   process.exit(2);
 }
 if (process.argv.includes("--health")) {
@@ -81,5 +89,6 @@ if (process.getuid?.() === 0) {
 await startStageRunner({ socket, root, sweepOrphans, ...(as ? { as } : {}) });
 if (callerGid !== null) await socketModes(dirname(socket), socket, callerGid, { chown, chmod });
 console.log(`canopy-stage-runner on ${socket}, seeds under ${root}`);
+if (pass.names.length) console.log(`children also get ${pass.names.join(" and ")} from canopy`);
 if (as) console.log(`stages run as ${as.uid}:${as.gid} with no groups; the socket is for group ${callerGid} alone`);
 console.log(sweepOrphans ? "orphans are swept at each run's end and every 30 s" : "no pid namespace of its own: orphans are not swept");

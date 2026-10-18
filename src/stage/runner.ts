@@ -7,7 +7,9 @@
  * outside the stage root, only in a seed (a direct, non-dot child of the
  * stage root, by realpath, which the child enters itself after the drop,
  * `enterSeed`), with an env built
- * from its own base and three CANOPY_* names, never what canopy sends.
+ * from its own base and three CANOPY_* names (plus CANOPY_API and CANOPY_TOKEN
+ * when CANOPY_STAGE_PASS_ENV names them: the coordinator's runner), never
+ * anything else canopy sends.
  * Every refusal is answered before anything starts.
  *
  * A run's end, a kill frame, or the connection closing ends the process and
@@ -38,6 +40,7 @@ import {
   fromB64,
   lineSplitter,
   parseFrame,
+  passEnvNames,
   requestRefusal,
   STAGE_PROGRAMS,
   type StageFrame,
@@ -373,6 +376,10 @@ interface Live {
 
 export async function startStageRunner(opts: RunnerOptions): Promise<{ stop(): Promise<void> }> {
   const own = opts.env ?? process.env;
+  // the names canopy may hand a child on top of the usual three; a name
+  // outside the allowed two stops the runner here, before the socket
+  const pass = passEnvNames(own["CANOPY_STAGE_PASS_ENV"]);
+  if ("refused" in pass) throw new Error(pass.refused);
   const procs = opts.procs ?? allProcs;
   const as = opts.as;
   const stageWrites = (a: { uid: number; gid: number }) => (path: string): Promise<boolean> =>
@@ -579,7 +586,7 @@ export async function startStageRunner(opts: RunnerOptions): Promise<{ stop(): P
       const seeds = [...new Set([opts.root, where.root])];
       const unsettled = as ? await choresAs(as, seeds) : await stageChores(own, seeds);
       if (unsettled) return finish({ t: "refused", reason: unsettled });
-      launch(name, [program, ...req.argv.slice(1)], where.seed, childEnv(own, req.env), false, sh.program);
+      launch(name, [program, ...req.argv.slice(1)], where.seed, childEnv(own, req.env, pass.names), false, sh.program);
     };
 
     /** canopy's own git in a seed: the seed's top folder only, behind the
