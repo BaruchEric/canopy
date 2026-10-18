@@ -33,9 +33,13 @@ const coordinator = (over: Partial<Run> = {}): Run => ({
   ...over,
 });
 
+// Bun has no matchMedia; each test that stubs it takes it away again, so
+// no later file sees a stub.
+const hadMatchMedia = "matchMedia" in globalThis;
 const realMatchMedia = globalThis.matchMedia;
 afterEach(() => {
-  globalThis.matchMedia = realMatchMedia;
+  if (hadMatchMedia) globalThis.matchMedia = realMatchMedia;
+  else Reflect.deleteProperty(globalThis, "matchMedia");
 });
 
 /** useMedia reads matchMedia as it first renders, so this decides the layout. */
