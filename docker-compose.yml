@@ -6,10 +6,11 @@
 # add docker-compose.sidecar.yml, which joins canopy to a tailscale sidecar.
 # The `tunnel` service (profile `tunnel`, off unless .env turns it on) also
 # puts canopy on a public name through a Cloudflare Tunnel. The `coord`
-# service has no profile: the shells publish canopy's port on its network's
-# gateway, which exists only while coord is part of the same `up`, so it
-# always runs and canopy uses it only once .env sets CANOPY_COORD_SOCKET and
-# CANOPY_COORD_API (docs/deploy.md, "The coordinator").
+# service has no profile: the shells publish canopy's port, and
+# `coord-proxy` its own, on its network's gateway, which exists only while
+# coord is part of the same `up`, so it always runs and canopy uses it only
+# once .env sets CANOPY_COORD_SOCKET and CANOPY_COORD_API (docs/deploy.md,
+# "The coordinator").
 services:
   # The tmux server that holds every shell, in a container of its own so a
   # canopy redeploy (which recreates the canopy container) leaves the shells
@@ -160,8 +161,9 @@ services:
   # run's claude in a folder of its own under the seeds folder. Like stages
   # but: no workspace at all, its own claude and codex logins, the run's
   # CANOPY_API and CANOPY_TOKEN let through to the child, and coord-net,
-  # whose fence reaches canopy's port on its gateway and nothing else
-  # private. Idle until canopy's CANOPY_COORD_SOCKET points at its socket.
+  # whose fence reaches canopy's port and the egress proxy's on its gateway
+  # and nothing else, the internet included. Idle until canopy's
+  # CANOPY_COORD_SOCKET points at its socket.
   coord:
     build:
       context: .
@@ -176,6 +178,12 @@ services:
       - CANOPY_STAGE_SOCKET=/run/canopy-coord/runner.sock
       # the only extras a runner accepts; any other name stops it at start
       - CANOPY_STAGE_PASS_ENV=CANOPY_API,CANOPY_TOKEN
+      # the egress proxy (coord-proxy below), the coordinator's one way to
+      # the internet. The runner hands its children HTTPS_PROXY and the rest
+      # (proxyEnv, src/core/stagewire.ts) rather than this env holding them:
+      # its own fetch follows HTTP_PROXY, so its fence probe would go
+      # through the proxy, get an answer, and read the fence as down
+      - CANOPY_STAGE_PROXY=http://10.250.14.1:3128
       # the same probe target as the stages': nothing starts until it times
       # out from this bridge
       - CANOPY_FENCE_PROBE=${CANOPY_FENCE_PROBE:-}
@@ -194,13 +202,44 @@ services:
       - /home/bun:uid=${HOST_UID:-1000},gid=${HOST_GID:-1000},mode=0700,size=1g,exec
       - /tmp:mode=1777,size=512m,exec
     networks: [coord-net]
-    # public resolvers, as the stages have, since the fence drops the
-    # embedded resolver's upstream
+    # No DNS: the proxy resolves the names claude asks it for. These public
+    # resolvers keep docker's embedded resolver forwarding from the
+    # container's own namespace, through the bridge, where the fence's
+    # catch-all drops it; left to the host's resolver, a loopback one would
+    # be asked from the host's namespace, past the fence, and a lookup is
+    # enough to carry data out
     dns: [1.1.1.1, 9.9.9.9]
     init: true
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "bun", "/app/stage-runner.js", "--health"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 5s
+
+  # The coordinator's egress proxy (src/egress/, docs/deploy.md "The
+  # coordinator"): coord's one way to the internet. It tunnels CONNECT to
+  # Anthropic's names on 443 and refuses the rest, a name that resolves to a
+  # private address included, and dials the address it checked. Its port is
+  # published on coord-net's gateway alone, so like the shells' bind there it
+  # needs coord in the same `up`. A network of its own rather than the
+  # default one: a flaw in it is then no step toward canopy's main port.
+  coord-proxy:
+    build:
+      context: .
+      target: egress
+    image: canopy-egress:latest
+    ports:
+      - "10.250.14.1:3128:3128"
+    networks: [egress-net]
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    init: true
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "bun", "/app/egress-proxy.js", "--health"]
       interval: 10s
       timeout: 5s
       retries: 3
@@ -520,3 +559,14 @@ networks:
       config:
         - subnet: 10.250.14.0/24
           gateway: 10.250.14.1
+  # The egress proxy's own network, off docker's default pools like the two
+  # above so ufw's docker range does not cover it. Not fenced: the proxy
+  # checks every address it dials itself.
+  egress-net:
+    driver: bridge
+    driver_opts:
+      com.docker.network.bridge.name: br-canopy-egr
+    enable_ipv6: false
+    ipam:
+      config:
+        - subnet: 10.250.15.0/24

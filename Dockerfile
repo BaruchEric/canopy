@@ -4,7 +4,7 @@
 # them and the UI drops them); the in-browser core is the whole point. See
 # docs/prd-shared-backend.md and docs/deploy.md.
 #
-# Three images come out of this file. `shells` is everything a shell needs
+# Five images come out of this file. `shells` is everything a shell needs
 # (git, tmux, claude, codex, the user, the PATH) and no canopy code: the
 # tmux server runs in a container of its own off it (the `shells` service in
 # docker-compose.yml), so a canopy redeploy, which recreates the canopy
@@ -14,6 +14,7 @@
 # alone does not. `stages` is the shells image without gh or the Vercel CLI,
 # plus the bundled stage runner: where the incubator's agents run, with no
 # token (the `stages` service).
+# `secrets` and `egress` are plain bun with one bundled service each.
 
 FROM oven/bun:1 AS build
 WORKDIR /app
@@ -32,6 +33,9 @@ RUN bun build src/stage/main.ts --target=bun --outfile /app/dist/stage-runner.js
 RUN bun build src/stage/fencecheck.ts --target=bun --outfile /app/dist/fence-check.js
 # the secret store's service as one file, the only canopy code its image carries
 RUN bun build src/secrets/main.ts --target=bun --outfile /app/dist/secrets-service.js
+# the coordinator's egress proxy as one file, the only canopy code its image
+# carries
+RUN bun build src/egress/main.ts --target=bun --outfile /app/dist/egress-proxy.js
 
 FROM oven/bun:1 AS shells
 # git for the scan and every mutation; tmux so a shell outlives a canopy
@@ -237,6 +241,18 @@ COPY --from=build /app/dist/secrets-service.js /app/secrets-service.js
 # read-only root filesystem (docker-compose.yml): no transpiler cache
 ENV BUN_RUNTIME_TRANSPILER_CACHE_PATH=0
 CMD ["bun", "/app/secrets-service.js"]
+
+# The coordinator's egress proxy (src/egress/, docs/deploy.md "The
+# coordinator"): plain bun and one bundled file, as the bun user. The
+# coord-proxy service runs it on a network of its own, with its port
+# published on the coordinator bridge's gateway alone; it holds no login and
+# no token, and tunnels CONNECT to Anthropic's names on 443 and nothing else.
+FROM oven/bun:1 AS egress
+COPY --from=build /app/dist/egress-proxy.js /app/egress-proxy.js
+# read-only root filesystem (docker-compose.yml): no transpiler cache
+ENV BUN_RUNTIME_TRANSPILER_CACHE_PATH=0
+USER bun
+CMD ["bun", "/app/egress-proxy.js"]
 
 FROM shells
 # The firebase CLI, for the incubator's vercel+firebase deploy, in the canopy

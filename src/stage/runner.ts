@@ -41,6 +41,7 @@ import {
   lineSplitter,
   parseFrame,
   passEnvNames,
+  proxyEnv,
   requestRefusal,
   STAGE_PROGRAMS,
   type StageFrame,
@@ -380,6 +381,9 @@ export async function startStageRunner(opts: RunnerOptions): Promise<{ stop(): P
   // outside the allowed two stops the runner here, before the socket
   const pass = passEnvNames(own["CANOPY_STAGE_PASS_ENV"]);
   if ("refused" in pass) throw new Error(pass.refused);
+  // the coordinator's egress proxy, for the children alone (proxyEnv)
+  const net = proxyEnv(own["CANOPY_STAGE_PROXY"]);
+  if ("refused" in net) throw new Error(net.refused);
   const procs = opts.procs ?? allProcs;
   const as = opts.as;
   const stageWrites = (a: { uid: number; gid: number }) => (path: string): Promise<boolean> =>
@@ -586,7 +590,7 @@ export async function startStageRunner(opts: RunnerOptions): Promise<{ stop(): P
       const seeds = [...new Set([opts.root, where.root])];
       const unsettled = as ? await choresAs(as, seeds) : await stageChores(own, seeds);
       if (unsettled) return finish({ t: "refused", reason: unsettled });
-      launch(name, [program, ...req.argv.slice(1)], where.seed, childEnv(own, req.env, pass.names), false, sh.program);
+      launch(name, [program, ...req.argv.slice(1)], where.seed, childEnv(own, req.env, pass.names, net.env), false, sh.program);
     };
 
     /** canopy's own git in a seed: the seed's top folder only, behind the

@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { childEnv, chunkB64, encodeFrame, fromB64, gitEnv, lineSplitter, parseFrame, passEnvNames, requestRefusal, StageAwayError, STAGE_AWAY, type StageRequest } from "./stagewire";
+import { childEnv, chunkB64, encodeFrame, fromB64, gitEnv, lineSplitter, parseFrame, passEnvNames, proxyEnv, requestRefusal, StageAwayError, STAGE_AWAY, type StageRequest } from "./stagewire";
 
 describe("stage wire", () => {
   test("frames round-trip one per line", () => {
@@ -54,6 +54,54 @@ describe("stage wire", () => {
       const r = passEnvNames(bad);
       expect("refused" in r ? r.refused : "").toContain("CANOPY_STAGE_PASS_ENV");
     }
+  });
+  test("CANOPY_STAGE_PROXY: unset or empty adds nothing, so a stages runner's children get the env they always had", () => {
+    expect(proxyEnv(undefined)).toEqual({ env: {} });
+    expect(proxyEnv("")).toEqual({ env: {} });
+    expect(proxyEnv("  ")).toEqual({ env: {} });
+    const own = { PATH: "/usr/bin", HOME: "/home/bun", HTTPS_PROXY: "http://own:1" };
+    expect(childEnv(own, { CANOPY_RUN: "r1" }, [], {})).toEqual({ PATH: "/usr/bin", HOME: "/home/bun", CANOPY_RUN: "r1" });
+  });
+  test("CANOPY_STAGE_PROXY: an http proxy at an address and port sets both cases of the proxy names, a no-proxy list for its own host, and claude's quiet switches", () => {
+    const url = "http://10.250.14.1:3128";
+    const no = "10.250.14.1,127.0.0.1,localhost";
+    const want = {
+      HTTPS_PROXY: url,
+      https_proxy: url,
+      HTTP_PROXY: url,
+      http_proxy: url,
+      NO_PROXY: no,
+      no_proxy: no,
+      CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: "1",
+      DISABLE_AUTOUPDATER: "1",
+    };
+    expect(proxyEnv(url)).toEqual({ env: want });
+    expect(proxyEnv(` ${url}/ `)).toEqual({ env: want });
+  });
+  test("CANOPY_STAGE_PROXY: anything but http://<IPv4>:<port> stops the runner rather than leave a child unproxied", () => {
+    for (const bad of [
+      "10.250.14.1:3128",
+      "https://10.250.14.1:3128",
+      "http://proxy:3128",
+      "http://10.250.14.1",
+      "http://10.250.14.1:0",
+      "http://10.250.14.1:65536",
+      "http://10.250.14.256:3128",
+      "http://user:pw@10.250.14.1:3128",
+      "http://10.250.14.1:3128/path",
+      "http://10.250.14.1:3128?x=1",
+      "http://[::1]:3128",
+    ]) {
+      const r = proxyEnv(bad);
+      expect("refused" in r ? r.refused : `${bad} passed`).toContain("CANOPY_STAGE_PROXY");
+    }
+  });
+  test("the proxy names come from the runner alone: what canopy sends never sets or clears them", () => {
+    const net = proxyEnv("http://10.250.14.1:3128");
+    if (!("env" in net)) throw new Error(net.refused);
+    const asked = { CANOPY_RUN: "r1", HTTPS_PROXY: "http://evil:1", NO_PROXY: "*", no_proxy: "*", http_proxy: "" };
+    const env = childEnv({ PATH: "/usr/bin" }, asked, ["CANOPY_API", "CANOPY_TOKEN"], net.env);
+    expect(env).toEqual({ PATH: "/usr/bin", CANOPY_RUN: "r1", ...net.env });
   });
   test("big output goes in 64 KiB slices", () => {
     const bytes = new Uint8Array(150_000).fill(65);
