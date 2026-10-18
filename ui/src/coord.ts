@@ -99,6 +99,14 @@ export function cardStatus(
 export const canStartCards = (run: Run): boolean =>
   isRunActive(run) && (run.tasks ?? []).some((t) => t.state === "proposed");
 
+/** What an idle coordinator waits on you for: its cards waiting for start
+ *  these, or null when none is. Between turns it is otherwise waiting on
+ *  its children, not on you. */
+export function coordTurn(run: Pick<Run, "tasks">): string | null {
+  const n = (run.tasks ?? []).filter((t) => t.state === "proposed").length;
+  return n ? `${n} ${n === 1 ? "card waits" : "cards wait"} for start these` : null;
+}
+
 /** The card a coordinator started a child for, when the page has the parent. */
 export const parentCard = (parent: Pick<Run, "tasks"> | undefined, childId: string): CoordTask | undefined =>
   parent?.tasks?.find((t) => t.run === childId);

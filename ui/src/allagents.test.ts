@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import type { AgentCard, Repo, Run, TermInfo } from "../../src/core/types";
+import type { AgentCard, CoordTask, Repo, Run, TermInfo } from "../../src/core/types";
 import { agentName, allAgents, madeWord, runCard, runOfCard, runState, shellsToProbe, type Ids } from "./allagents";
 
 // home is "mac"; another backend's ids carry "mini|"
@@ -72,6 +72,14 @@ describe("runCard", () => {
 
   test("a chat between turns waits on your turn", () => {
     expect(runCard(run({ chat: true, status: "idle" }), repo, ids).waiting).toBe("your turn");
+  });
+
+  test("an idle coordinator waits on you only while its cards wait for start these", () => {
+    const task = (state: CoordTask["state"]): CoordTask => ({ id: "t1", title: "t", repo: "app", note: "n", action: "ask", state });
+    const waits = runCard(run({ action: "coordinate", chat: true, status: "idle", tasks: [task("proposed")] }), repo, ids);
+    expect([waits.state, waits.waiting]).toEqual(["waiting", "1 card waits for start these"]);
+    const quiet = runCard(run({ action: "coordinate", chat: true, status: "idle", tasks: [task("running")] }), repo, ids);
+    expect([quiet.state, quiet.waiting]).toEqual(["idle", null]);
   });
 });
 

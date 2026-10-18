@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import type { CoordTask, LandingInfo, PrWatch, Run, RunStep } from "../../src/core/types";
-import { canStartCards, cardCounts, cardStatus, childLine, isCoordinator, parentCard, stepLine } from "./coord";
+import { canStartCards, cardCounts, cardStatus, childLine, coordTurn, isCoordinator, parentCard, stepLine } from "./coord";
 
 const run = (id: string, over: Partial<Run> = {}): Run => ({
   id,
@@ -108,6 +108,13 @@ describe("the coordinator's run", () => {
     expect(canStartCards(coord)).toBe(true);
     expect(canStartCards({ ...coord, status: "stopped" })).toBe(false);
     expect(canStartCards({ ...coord, tasks: [card({ state: "running" })] })).toBe(false);
+  });
+  test("its turn is the user's only while cards wait for start these", () => {
+    const coord = run("k", { action: "coordinate", status: "idle", chat: true, tasks: [card(), card({ id: "t2" }), card({ id: "t3", state: "running" })] });
+    expect(coordTurn(coord)).toBe("2 cards wait for start these");
+    expect(coordTurn({ ...coord, tasks: [card()] })).toBe("1 card waits for start these");
+    expect(coordTurn({ ...coord, tasks: [card({ state: "running" })] })).toBeNull();
+    expect(coordTurn({ ...coord, tasks: undefined })).toBeNull();
   });
   test("a child finds its card, and the counts read in order", () => {
     const tasks = [card(), card({ id: "t2", state: "running", run: "c2" }), card({ id: "t3", state: "running", run: "c3" })];

@@ -1,6 +1,7 @@
 import type { AgentCard, AgentKind, AgentState, Repo, Run, RunStatus, TermInfo } from "../../src/core/types";
 import { isLiveAgent } from "../../src/core/types";
 import { cardName, repoName } from "./agentcards";
+import { coordTurn, isCoordinator } from "./coord";
 
 /* Every agent the board shows, not only the broker's. The registry knows an
    agent through its tailchan hook, so a canopy run or chat, or a Claude or
@@ -49,7 +50,7 @@ export function runState(s: RunStatus): AgentState {
 }
 
 const runWaits = (r: Run): string | null => {
-  if (r.status === "idle") return "your turn";
+  if (r.status === "idle") return isCoordinator(r) ? coordTurn(r) : "your turn";
   const p = r.prompt;
   if (r.status !== "waiting" || !p) return null;
   if (p.kind === "permission") return `permission: ${p.title}`;
@@ -87,7 +88,9 @@ function base(id: string, backend: string, harness: AgentCard["harness"], repo: 
  *  run id, as a hook would have written it. */
 export function runCard(r: Run, repo: Repo | undefined, ids: Ids): AgentCard {
   const [backend, plain] = ids.split(r.id);
-  const state = runState(r.status);
+  // an idle coordinator waits on its children, not on you, unless cards
+  // wait for start these
+  const state = r.status === "idle" && isCoordinator(r) && !coordTurn(r) ? "idle" : runState(r.status);
   const last = r.steps.at(-1)?.at ?? r.startedAt;
   const c = base(`${RUN_CARD}${r.id}`, backend, r.harness, repo, repo?.path ?? "");
   return {

@@ -8,6 +8,7 @@
 
 import type { AgentCard, Ask, RangerInfo, Repo, Run, TaskInfo } from "../../src/core/types";
 import { cardName, repoOfCard, whereWord } from "./agentcards";
+import { coordTurn, isCoordinator } from "./coord";
 import { stateOf } from "./util";
 import { isCliPanel } from "./cli";
 import { isHealthPanel, type HealthRow } from "./health";
@@ -181,7 +182,8 @@ export type TurnRow =
  * (status "idle", less a flow's own steps), and the hooked agents whose
  * harness said it waits on the user (tailchan's "waiting", Claude's idle
  * prompt). A card for a canopy run is the run's, already here or in the
- * inbox, and a card with an open ask is the inbox's.
+ * inbox, and a card with an open ask is the inbox's. An idle coordinator is
+ * here only while its cards wait for start these.
  */
 export function turnRows(
   runs: readonly Run[],
@@ -193,7 +195,9 @@ export function turnRows(
   const out: TurnRow[] = [];
   for (const r of runs) {
     if (r.status !== "idle" || flowRuns[r.id] !== undefined) continue;
-    out.push({ kind: "chat", id: r.id, repoId: r.repoId, what: lastWords(r) || r.action, at: r.steps.at(-1)?.at ?? r.startedAt });
+    const coord = isCoordinator(r) ? coordTurn(r) : null;
+    if (isCoordinator(r) && !coord) continue;
+    out.push({ kind: "chat", id: r.id, repoId: r.repoId, what: coord ?? (lastWords(r) || r.action), at: r.steps.at(-1)?.at ?? r.startedAt });
   }
   const asking = new Set(asks.filter((a) => a.state === "open").map((a) => a.agent));
   for (const c of cards) {

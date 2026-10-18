@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import type { AgentCard, Ask, HealthCheck, RangerInfo, Repo, RepoStatus, Run, RunStep, TaskInfo } from "../../src/core/types";
+import type { AgentCard, Ask, CoordTask, HealthCheck, RangerInfo, Repo, RepoStatus, Run, RunStep, TaskInfo } from "../../src/core/types";
 import { WAITING_PANEL, attentionRepos, behindRepos, failedRows, isUnpushed, isWaitingPanel, lastWords, turnRows } from "./waiting";
 
 function repo(id: string, status: Partial<RepoStatus> | null, error?: string): Repo {
@@ -176,6 +176,16 @@ describe("turnRows", () => {
     expect(rows.filter((r) => r.kind === "chat").map((r) => r.what)).toEqual(["chat", "over to you"]);
     const term = rows.find((r) => r.id === "term");
     expect(term?.kind === "agent" && [term.what, term.where]).toEqual(["your turn", "kitty on mac"]);
+  });
+
+  test("an idle coordinator is your turn only while its cards wait for start these", () => {
+    const coord = (id: string, states: CoordTask["state"][]): Run => ({
+      ...run(id, "idle", 100, 200),
+      action: "coordinate",
+      tasks: states.map((state, i) => ({ id: `t${i + 1}`, title: "t", repo: "app", note: "n", action: "ask", state })),
+    });
+    const rows = turnRows([coord("waits", ["proposed", "running"]), coord("busy", ["running", "queued"]), coord("none", [])], {}, [], [], [app]);
+    expect(rows.map((r) => [r.id, r.what])).toEqual([["waits", "1 card waits for start these"]]);
   });
 });
 
