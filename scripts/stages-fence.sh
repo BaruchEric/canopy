@@ -8,6 +8,12 @@
 # (10.250.14.1:7850, where docker-compose.yml publishes it), accepted ahead
 # of its drops.
 #
+# Linux takes a packet for any of its own addresses on any interface, and
+# docker's DNAT for that published port matches anything not from the
+# shells' own bridge, so 10.250.14.1:7850 would answer the LAN too. A drop
+# for it from anywhere but br-canopy-crd and loopback closes that, with an
+# ACCEPT for loopback above it (iptables takes one -i per rule).
+#
 # The rules sit in the raw table's PREROUTING, which runs before routing,
 # docker's DNAT and every filter chain, so they cover the host's own
 # addresses as well as forwarded traffic, and no filter chain's order
@@ -20,7 +26,8 @@
 #
 # Every rule goes in with -I, at the top, so the ACCEPT goes in after the
 # drops, and --apply puts it back on top whenever it is not the first rule
-# for its bridge (a drop that went missing comes back in above it).
+# for its bridge (a drop that went missing comes back in above it). The
+# loopback ACCEPT is kept above the gateway's drop the same way.
 #
 # Usage: stages-fence.sh [--apply | --install]
 #   (none)     print the rules, in the order they go in
@@ -80,6 +87,9 @@ V4=$(drops "$BRIDGE")
 COORD_V4=$(drops "$COORD_BRIDGE")
 # canopy's port on the coordinator bridge's gateway, and nothing else there
 COORD_ACCEPT="-i $COORD_BRIDGE -d 10.250.14.1/32 -p tcp --dport 7850 -j ACCEPT"
+# that port from anywhere else but loopback, the LAN and tailnet included
+GW_DROP="! -i $COORD_BRIDGE -d 10.250.14.1/32 -p tcp --dport 7850 -j DROP"
+LO_ACCEPT="-i lo -d 10.250.14.1/32 -p tcp --dport 7850 -j ACCEPT"
 V6="-i $BRIDGE -j DROP
 -i $COORD_BRIDGE -j DROP"
 
@@ -94,7 +104,7 @@ for a in "$@"; do
   esac
 done
 
-printf '%s\n%s\n%s\n' "$V4" "$COORD_V4" "$COORD_ACCEPT" | sed 's/^/iptables -t raw -I PREROUTING /'
+printf '%s\n%s\n%s\n%s\n%s\n' "$V4" "$COORD_V4" "$COORD_ACCEPT" "$GW_DROP" "$LO_ACCEPT" | sed 's/^/iptables -t raw -I PREROUTING /'
 printf '%s\n' "$V6" | sed 's/^/ip6tables -t raw -I PREROUTING /'
 
 # insert each rule of $2 with the command $1 unless it is already there
@@ -125,6 +135,23 @@ accept_on_top() {
   done
   # shellcheck disable=SC2086
   $IPT -t raw -I PREROUTING $COORD_ACCEPT
+}
+
+# The loopback ACCEPT must sit above the gateway's drop, or the drop takes
+# loopback too. Of the rules for 10.250.14.1 that are not the bridge's own
+# (the drop's "! -i" and the ACCEPT's "-i lo"), the first must be the
+# ACCEPT; otherwise every copy of it goes and one goes back in on top.
+lo_above_drop() {
+  first=$($IPT -t raw -S PREROUTING | grep -F -- "-d 10.250.14.1/32 " | grep -F -e "! -i $COORD_BRIDGE " -e " -i lo " | head -n 1)
+  case $first in
+    *" -i lo "*"--dport 7850"*"-j ACCEPT"*) return 0 ;;
+  esac
+  # shellcheck disable=SC2086
+  while $IPT -t raw -C PREROUTING $LO_ACCEPT 2>/dev/null; do
+    $IPT -t raw -D PREROUTING $LO_ACCEPT
+  done
+  # shellcheck disable=SC2086
+  $IPT -t raw -I PREROUTING $LO_ACCEPT
 }
 
 unit() {
@@ -158,6 +185,8 @@ case $mode in
     ensure "$IPT" "$V4"
     ensure "$IPT" "$COORD_V4"
     accept_on_top
+    ensure "$IPT" "$GW_DROP"
+    lo_above_drop
     ensure "$IP6T" "$V6"
     echo "applied"
     ;;

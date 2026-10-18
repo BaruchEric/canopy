@@ -985,13 +985,29 @@ sudo install -m 0755 -o root -g root scripts/stages-fence.sh /usr/local/sbin/can
 less /usr/local/sbin/canopy-stages-fence.new
 sudo sh /usr/local/sbin/canopy-stages-fence.new --install
 sudo rm /usr/local/sbin/canopy-stages-fence.new
-sudo iptables -t raw -S PREROUTING | grep br-canopy-crd   # the ACCEPT for 10.250.14.1/32 port 7850 first, then the eight drops
+sudo iptables -t raw -S PREROUTING | grep br-canopy-crd   # the ACCEPT for 10.250.14.1/32 port 7850 first, then the eight drops, and the "! -i" drop
+sudo iptables -t raw -S PREROUTING | grep 10.250.14.1     # the -i lo ACCEPT above the "! -i br-canopy-crd" DROP, and the bridge's ACCEPT
 sudo ip6tables -t raw -S PREROUTING | grep br-canopy-crd  # one drop
 ```
 
 The rules match the bridge by name, so they can go in before it exists. A
 rerun of `--apply` puts the ACCEPT back on top if a drop was put back above
 it.
+
+The published address 10.250.14.1:7850 is the host's own, and Linux takes a
+packet for any of its addresses on any interface, while docker's DNAT for
+the port matches anything not from the shells' bridge. So without more, a
+LAN machine with a route to 10.250.14.0/24 through the mini would reach
+canopy there. The fence drops TCP to 10.250.14.1:7850 from every interface
+but `br-canopy-crd` and loopback (`! -i br-canopy-crd ... -j DROP`, with a
+`-i lo` ACCEPT kept above it, since a rule takes one `-i`). Check it from
+another LAN machine:
+
+```
+sudo ip route add 10.250.14.1/32 via <the mini's LAN address>   # on that machine, for the check only
+curl -sS -m 5 http://10.250.14.1:7850/api/about                 # times out
+sudo ip route del 10.250.14.1/32
+```
 
 **5. Deploy.** The first deploy with `coord` adds a port to the shells, so
 it recreates the shells container and ends every shell; `bun run redeploy`

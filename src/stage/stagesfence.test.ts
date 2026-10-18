@@ -24,8 +24,11 @@ const RANGES = [
 const COORD = "br-canopy-crd";
 const drops = (bridge: string) => RANGES.map((d) => `-i ${bridge} -d ${d} -j DROP`);
 const ACCEPT = `-i ${COORD} -d 10.250.14.1/32 -p tcp --dport 7850 -j ACCEPT`;
+/** canopy's port on the coordinator's gateway from anywhere but its bridge and loopback */
+const ELSEWHERE = `! -i ${COORD} -d 10.250.14.1/32 -p tcp --dport 7850 -j DROP`;
+const LOOPBACK = "-i lo -d 10.250.14.1/32 -p tcp --dport 7850 -j ACCEPT";
 /** every v4 rule, in the order the script prints and inserts them */
-const V4 = [...drops(BRIDGE), ...drops(COORD), ACCEPT];
+const V4 = [...drops(BRIDGE), ...drops(COORD), ACCEPT, ELSEWHERE, LOOPBACK];
 const V6 = [`-i ${BRIDGE} -j DROP`, `-i ${COORD} -j DROP`];
 const SBIN = "usr/local/sbin/canopy-stages-fence";
 const UNIT = "etc/systemd/system/canopy-stages-fence.service";
@@ -64,7 +67,7 @@ case $op in
   -D) grep -qxF -- "$rule" "${state}" || exit 1
       awk -v r="$rule" '!d && $0 == r { d = 1; next } { print }' "${state}" > "${state}.new" && mv "${state}.new" "${state}" ;;
   -S) echo "-P PREROUTING ACCEPT"
-      sed -E -e 's/^-i ([^ ]+) -d ([^ ]+)/-d \\2 -i \\1/' -e 's/-p tcp --dport/-p tcp -m tcp --dport/' -e 's/^/-A PREROUTING /' "${state}" ;;
+      sed -E -e 's/^(! )?-i ([^ ]+) -d ([^ ]+)/-d \\3 \\1-i \\2/' -e 's/-p tcp --dport/-p tcp -m tcp --dport/' -e 's/^/-A PREROUTING /' "${state}" ;;
   *) exit 2 ;;
 esac
 `,
@@ -115,7 +118,37 @@ describe("stages-fence.sh", () => {
       const f = both();
       run(SCRIPT, ["--apply"], f.env);
       expect(coordRules(f.v4.chain())[0]).toBe(ACCEPT);
-      expect(f.v4.chain().filter((r) => r.includes("ACCEPT"))).toEqual([ACCEPT]);
+      expect(f.v4.chain().filter((r) => r.startsWith(`-i ${COORD} `) && r.includes("ACCEPT"))).toEqual([ACCEPT]);
+    });
+
+    test("canopy's port on the coordinator's gateway is dropped from anywhere but its bridge and loopback, loopback's ACCEPT above", () => {
+      const f = both();
+      run(SCRIPT, ["--apply"], f.env);
+      const chain = f.v4.chain();
+      expect(chain.filter((r) => r === ELSEWHERE)).toHaveLength(1);
+      expect(chain.filter((r) => r === LOOPBACK)).toHaveLength(1);
+      expect(chain.indexOf(LOOPBACK)).toBeLessThan(chain.indexOf(ELSEWHERE));
+    });
+
+    test("the drop put back goes in on top, and loopback's ACCEPT goes back above it", () => {
+      const f = both();
+      run(SCRIPT, ["--apply"], f.env);
+      writeFileSync(join(dir, "ipt.chain"), f.v4.chain().filter((r) => r !== ELSEWHERE).join("\n") + "\n");
+      expect(run(SCRIPT, ["--apply"], f.env).code).toBe(0);
+      const chain = f.v4.chain();
+      expect(sorted(chain)).toEqual(sorted(V4));
+      expect(chain.indexOf(LOOPBACK)).toBeLessThan(chain.indexOf(ELSEWHERE));
+      expect(coordRules(chain)[0]).toBe(ACCEPT);
+    });
+
+    test("loopback's ACCEPT found below the drop, or twice, ends up once and above it", () => {
+      const f = both();
+      writeFileSync(join(dir, "ipt.chain"), [ELSEWHERE, LOOPBACK, LOOPBACK, ACCEPT, ...drops(BRIDGE), ...drops(COORD)].join("\n") + "\n");
+      expect(run(SCRIPT, ["--apply"], f.env).code).toBe(0);
+      const chain = f.v4.chain();
+      expect(chain.filter((r) => r === LOOPBACK)).toHaveLength(1);
+      expect(chain.indexOf(LOOPBACK)).toBeLessThan(chain.indexOf(ELSEWHERE));
+      expect(sorted(chain)).toEqual(sorted(V4));
     });
 
     test("a second run only checks", () => {
@@ -159,7 +192,7 @@ describe("stages-fence.sh", () => {
       writeFileSync(join(dir, "ipt.chain"), [...drops(BRIDGE), ...drops(COORD), ACCEPT, ACCEPT].join("\n") + "\n");
       expect(run(SCRIPT, ["--apply"], f.env).code).toBe(0);
       const chain = f.v4.chain();
-      expect(chain[0]).toBe(ACCEPT);
+      expect(coordRules(chain)[0]).toBe(ACCEPT);
       expect(chain.filter((r) => r === ACCEPT)).toHaveLength(1);
       expect(sorted(chain)).toEqual(sorted(V4));
     });
@@ -169,7 +202,7 @@ describe("stages-fence.sh", () => {
       run(SCRIPT, ["--apply"], f.env);
       writeFileSync(join(dir, "ipt.chain"), f.v4.chain().filter((r) => r !== ACCEPT).join("\n") + "\n");
       expect(run(SCRIPT, ["--apply"], f.env).code).toBe(0);
-      expect(f.v4.chain()[0]).toBe(ACCEPT);
+      expect(coordRules(f.v4.chain())[0]).toBe(ACCEPT);
       expect(sorted(f.v4.chain())).toEqual(sorted(V4));
     });
 
