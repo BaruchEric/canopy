@@ -27,8 +27,16 @@ const ACCEPT = `-i ${COORD} -d 10.250.14.1/32 -p tcp --dport 7850 -j ACCEPT`;
 /** canopy's port on the coordinator's gateway from anywhere but its bridge and loopback */
 const ELSEWHERE = `! -i ${COORD} -d 10.250.14.1/32 -p tcp --dport 7850 -j DROP`;
 const LOOPBACK = "-i lo -d 10.250.14.1/32 -p tcp --dport 7850 -j ACCEPT";
-/** every v4 rule, in the order the script prints and inserts them */
-const V4 = [...drops(BRIDGE), ...drops(COORD), ACCEPT, ELSEWHERE, LOOPBACK];
+/** the egress proxy's port on the same gateway, with the same pair of rules */
+const PROXY = `-i ${COORD} -d 10.250.14.1/32 -p tcp --dport 3128 -j ACCEPT`;
+const PROXY_ELSEWHERE = `! -i ${COORD} -d 10.250.14.1/32 -p tcp --dport 3128 -j DROP`;
+const PROXY_LOOPBACK = "-i lo -d 10.250.14.1/32 -p tcp --dport 3128 -j ACCEPT";
+/** everything else from the coordinator's bridge, appended at the bottom */
+const ALL = `-i ${COORD} -j DROP`;
+/** every v4 rule that goes in with -I, in the order the script prints them */
+const V4 = [...drops(BRIDGE), ...drops(COORD), ACCEPT, PROXY, ELSEWHERE, LOOPBACK, PROXY_ELSEWHERE, PROXY_LOOPBACK];
+/** the whole v4 chain once applied */
+const CHAIN = [...V4, ALL];
 const V6 = [`-i ${BRIDGE} -j DROP`, `-i ${COORD} -j DROP`];
 const SBIN = "usr/local/sbin/canopy-stages-fence";
 const UNIT = "etc/systemd/system/canopy-stages-fence.service";
@@ -64,6 +72,7 @@ op=$3; chain=$4; shift 4; rule="$*"
 case $op in
   -C) grep -qxF -- "$rule" "${state}" ;;
   -I) { printf '%s\\n' "$rule"; cat "${state}"; } > "${state}.new" && mv "${state}.new" "${state}" ;;
+  -A) printf '%s\\n' "$rule" >> "${state}" ;;
   -D) grep -qxF -- "$rule" "${state}" || exit 1
       awk -v r="$rule" '!d && $0 == r { d = 1; next } { print }' "${state}" > "${state}.new" && mv "${state}.new" "${state}" ;;
   -S) echo "-P PREROUTING ACCEPT"
@@ -83,6 +92,7 @@ describe("stages-fence.sh", () => {
     expect(r.code).toBe(0);
     expect(r.out.trim().split("\n")).toEqual([
       ...V4.map((x) => `iptables -t raw -I PREROUTING ${x}`),
+      `iptables -t raw -A PREROUTING ${ALL}`,
       ...V6.map((x) => `ip6tables -t raw -I PREROUTING ${x}`),
     ]);
     expect(v4.calls()).toEqual([]);
@@ -110,15 +120,77 @@ describe("stages-fence.sh", () => {
     test("inserts every rule into raw PREROUTING, v4 and v6", () => {
       const f = both();
       expect(run(SCRIPT, ["--apply"], f.env).code).toBe(0);
-      expect(sorted(f.v4.chain())).toEqual(sorted(V4));
+      expect(sorted(f.v4.chain())).toEqual(sorted(CHAIN));
       expect(sorted(f.v6.chain())).toEqual(sorted(V6));
     });
 
-    test("the coordinator's one ACCEPT sits above every drop on its bridge", () => {
+    test("the coordinator's two ACCEPTs sit above every drop on its bridge, and the catch-all is its last rule", () => {
       const f = both();
       run(SCRIPT, ["--apply"], f.env);
-      expect(coordRules(f.v4.chain())[0]).toBe(ACCEPT);
-      expect(f.v4.chain().filter((r) => r.startsWith(`-i ${COORD} `) && r.includes("ACCEPT"))).toEqual([ACCEPT]);
+      const rules = coordRules(f.v4.chain());
+      expect(sorted(rules.slice(0, 2))).toEqual(sorted([ACCEPT, PROXY]));
+      expect(rules.filter((r) => r.includes("ACCEPT"))).toHaveLength(2);
+      expect(rules.at(-1)).toBe(ALL);
+      expect(f.v4.chain().at(-1)).toBe(ALL);
+    });
+
+    test("the catch-all goes in with -A, never -I", () => {
+      const f = both();
+      run(SCRIPT, ["--apply"], f.env);
+      expect(f.v4.calls().filter((c) => c.includes(` ${ALL}`) && !c.includes(" -C "))).toEqual([`-t raw -A PREROUTING ${ALL}`]);
+    });
+
+    test("on a host fenced before the proxy, --apply adds the proxy's rules and the catch-all and moves nothing", () => {
+      const f = both();
+      // the chain the last fence left: its ACCEPT on top of the drops
+      const old = [LOOPBACK, ELSEWHERE, ACCEPT, ...drops(COORD), ...drops(BRIDGE)];
+      writeFileSync(join(dir, "ipt.chain"), old.join("\n") + "\n");
+      expect(run(SCRIPT, ["--apply"], f.env).code).toBe(0);
+      expect(f.v4.calls().filter((c) => c.includes(" -D "))).toEqual([]);
+      const chain = f.v4.chain();
+      expect(sorted(chain)).toEqual(sorted(CHAIN));
+      expect(chain.at(-1)).toBe(ALL);
+      expect(sorted(coordRules(chain).slice(0, 2))).toEqual(sorted([ACCEPT, PROXY]));
+    });
+
+    test("a catch-all found on top goes below both ACCEPTs again", () => {
+      const f = both();
+      run(SCRIPT, ["--apply"], f.env);
+      writeFileSync(join(dir, "ipt.chain"), [ALL, ...f.v4.chain().filter((r) => r !== ALL)].join("\n") + "\n");
+      expect(run(SCRIPT, ["--apply"], f.env).code).toBe(0);
+      const chain = f.v4.chain();
+      expect(sorted(chain)).toEqual(sorted(CHAIN));
+      const rules = coordRules(chain);
+      expect(sorted(rules.slice(0, 2))).toEqual(sorted([ACCEPT, PROXY]));
+      expect(rules.filter((r) => r === ALL)).toHaveLength(1);
+      expect(chain.filter((r) => r === PROXY)).toHaveLength(1);
+    });
+
+    test("the proxy's ACCEPT found below a drop comes back on top, once", () => {
+      const f = both();
+      run(SCRIPT, ["--apply"], f.env);
+      const rest = f.v4.chain().filter((r) => r !== PROXY);
+      writeFileSync(join(dir, "ipt.chain"), [...rest.slice(0, -1), PROXY, PROXY, ALL].join("\n") + "\n");
+      expect(run(SCRIPT, ["--apply"], f.env).code).toBe(0);
+      const chain = f.v4.chain();
+      expect(sorted(chain)).toEqual(sorted(CHAIN));
+      expect(sorted(coordRules(chain).slice(0, 2))).toEqual(sorted([ACCEPT, PROXY]));
+    });
+
+    test("the proxy's port is dropped from anywhere but the bridge and loopback, loopback's ACCEPT above", () => {
+      const f = both();
+      run(SCRIPT, ["--apply"], f.env);
+      let chain = f.v4.chain();
+      expect(chain.filter((r) => r === PROXY_ELSEWHERE)).toHaveLength(1);
+      expect(chain.indexOf(PROXY_LOOPBACK)).toBeLessThan(chain.indexOf(PROXY_ELSEWHERE));
+      // the loopback ACCEPT moved below its drop goes back above it
+      writeFileSync(join(dir, "ipt.chain"), [PROXY_ELSEWHERE, PROXY_LOOPBACK, ...chain.filter((r) => r !== PROXY_ELSEWHERE && r !== PROXY_LOOPBACK)].join("\n") + "\n");
+      expect(run(SCRIPT, ["--apply"], f.env).code).toBe(0);
+      chain = f.v4.chain();
+      expect(chain.filter((r) => r === PROXY_LOOPBACK)).toHaveLength(1);
+      expect(chain.indexOf(PROXY_LOOPBACK)).toBeLessThan(chain.indexOf(PROXY_ELSEWHERE));
+      expect(chain.indexOf(LOOPBACK)).toBeLessThan(chain.indexOf(ELSEWHERE));
+      expect(sorted(chain)).toEqual(sorted(CHAIN));
     });
 
     test("canopy's port on the coordinator's gateway is dropped from anywhere but its bridge and loopback, loopback's ACCEPT above", () => {
@@ -136,9 +208,9 @@ describe("stages-fence.sh", () => {
       writeFileSync(join(dir, "ipt.chain"), f.v4.chain().filter((r) => r !== ELSEWHERE).join("\n") + "\n");
       expect(run(SCRIPT, ["--apply"], f.env).code).toBe(0);
       const chain = f.v4.chain();
-      expect(sorted(chain)).toEqual(sorted(V4));
+      expect(sorted(chain)).toEqual(sorted(CHAIN));
       expect(chain.indexOf(LOOPBACK)).toBeLessThan(chain.indexOf(ELSEWHERE));
-      expect(coordRules(chain)[0]).toBe(ACCEPT);
+      expect(sorted(coordRules(chain).slice(0, 2))).toEqual(sorted([ACCEPT, PROXY]));
     });
 
     test("loopback's ACCEPT found below the drop, or twice, ends up once and above it", () => {
@@ -148,7 +220,7 @@ describe("stages-fence.sh", () => {
       const chain = f.v4.chain();
       expect(chain.filter((r) => r === LOOPBACK)).toHaveLength(1);
       expect(chain.indexOf(LOOPBACK)).toBeLessThan(chain.indexOf(ELSEWHERE));
-      expect(sorted(chain)).toEqual(sorted(V4));
+      expect(sorted(chain)).toEqual(sorted(CHAIN));
     });
 
     test("a second run only checks", () => {
@@ -171,7 +243,7 @@ describe("stages-fence.sh", () => {
       const n4 = f.v4.calls().length;
       expect(run(SCRIPT, ["--apply"], f.env).code).toBe(0);
       expect(f.v4.calls().slice(n4).filter((c) => c.includes(" -I "))).toEqual([`-t raw -I PREROUTING ${gone}`]);
-      expect(sorted(f.v4.chain())).toEqual(sorted(V4));
+      expect(sorted(f.v4.chain())).toEqual(sorted(CHAIN));
     });
 
     test("a coordinator drop put back goes in on top, and the ACCEPT goes back above it", () => {
@@ -181,8 +253,8 @@ describe("stages-fence.sh", () => {
       writeFileSync(join(dir, "ipt.chain"), f.v4.chain().filter((r) => r !== gone).join("\n") + "\n");
       expect(run(SCRIPT, ["--apply"], f.env).code).toBe(0);
       const chain = f.v4.chain();
-      expect(sorted(chain)).toEqual(sorted(V4));
-      expect(coordRules(chain)[0]).toBe(ACCEPT);
+      expect(sorted(chain)).toEqual(sorted(CHAIN));
+      expect(sorted(coordRules(chain).slice(0, 2))).toEqual(sorted([ACCEPT, PROXY]));
       expect(chain.indexOf(ACCEPT)).toBeLessThan(chain.indexOf(gone));
     });
 
@@ -192,9 +264,9 @@ describe("stages-fence.sh", () => {
       writeFileSync(join(dir, "ipt.chain"), [...drops(BRIDGE), ...drops(COORD), ACCEPT, ACCEPT].join("\n") + "\n");
       expect(run(SCRIPT, ["--apply"], f.env).code).toBe(0);
       const chain = f.v4.chain();
-      expect(coordRules(chain)[0]).toBe(ACCEPT);
+      expect(sorted(coordRules(chain).slice(0, 2))).toEqual(sorted([ACCEPT, PROXY]));
       expect(chain.filter((r) => r === ACCEPT)).toHaveLength(1);
-      expect(sorted(chain)).toEqual(sorted(V4));
+      expect(sorted(chain)).toEqual(sorted(CHAIN));
     });
 
     test("an ACCEPT that went missing alone comes back on top", () => {
@@ -202,8 +274,8 @@ describe("stages-fence.sh", () => {
       run(SCRIPT, ["--apply"], f.env);
       writeFileSync(join(dir, "ipt.chain"), f.v4.chain().filter((r) => r !== ACCEPT).join("\n") + "\n");
       expect(run(SCRIPT, ["--apply"], f.env).code).toBe(0);
-      expect(coordRules(f.v4.chain())[0]).toBe(ACCEPT);
-      expect(sorted(f.v4.chain())).toEqual(sorted(V4));
+      expect(sorted(coordRules(f.v4.chain()).slice(0, 2))).toEqual(sorted([ACCEPT, PROXY]));
+      expect(sorted(f.v4.chain())).toEqual(sorted(CHAIN));
     });
 
     test("an iptables that fails stops the script with its exit status", () => {
@@ -290,7 +362,7 @@ WantedBy=docker.service
         CANOPY_FENCE_IP6TABLES: o6.bin,
       });
       expect(r.code).toBe(0);
-      expect(v4.chain()).toHaveLength(V4.length);
+      expect(v4.chain()).toHaveLength(CHAIN.length);
       expect(v6.chain()).toHaveLength(V6.length);
       expect(o4.calls()).toEqual([]);
       expect(o6.calls()).toEqual([]);
@@ -332,7 +404,7 @@ WantedBy=docker.service
           CANOPY_FENCE_IP6TABLES: o6.bin,
         });
         expect(r.code).toBe(0);
-        expect(v4.chain()).toHaveLength(V4.length);
+        expect(v4.chain()).toHaveLength(CHAIN.length);
         expect(v6.chain()).toHaveLength(V6.length);
         expect(o4.calls()).toEqual([]);
         expect(o6.calls()).toEqual([]);
