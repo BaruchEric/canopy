@@ -10,7 +10,7 @@
  */
 import { busyWith } from "../core/actions";
 import type { Flows } from "../core/flow";
-import { initRepo, PassSeen, seedRepo, syncRepo, takeWip, trackBranch } from "../core/peersync";
+import { initRepo, isLinkedWorktree, PassSeen, seedRepo, syncRepo, takeWip, trackBranch, WORKTREE_NOT_SYNCED } from "../core/peersync";
 import type { Runner } from "../core/runner";
 import type { CanopyConfig, PeerSeen, PeerState, Repo } from "../core/types";
 
@@ -122,7 +122,7 @@ export function postPeersSync(d: PeerDeps): Response {
 /** POST /api/repos/peer, for the repo the id named */
 export async function postRepoPeer(d: PeerDeps, repo: Repo, req: Request): Promise<Response> {
   const state = d.state;
-  if (!d.peerable(repo)) throw new PeerError(400, "peer sync covers local repos under the launch root");
+  if (!d.peerable(repo)) throw new PeerError(400, isLinkedWorktree(repo.path) ? WORKTREE_NOT_SYNCED : "peer sync covers local repos under the launch root");
   const raw: unknown = await req.json().catch(() => null);
   if (!raw || typeof raw !== "object" || Array.isArray(raw)) throw new PeerError(400, "malformed body");
   const body = raw as { action?: unknown; peer?: unknown; branch?: unknown };

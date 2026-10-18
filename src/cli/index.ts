@@ -13,6 +13,7 @@ import {
   currentBranch,
   gateCommand,
   initRepo,
+  isLinkedWorktree,
   seedRepo,
   serveList,
   serveSeed,
@@ -595,10 +596,13 @@ export async function main(argv: string[]): Promise<void> {
       const rootDir = await realpath(resolve(rootFlag ?? process.cwd()));
       const opts = { self: cfg.self, peers: cfg.peers, seed: cfg.seed, dry: cfg.peerSync !== "on", root: rootDir };
       // Repo ids under the launch root, read the same way the `tree` case
-      // scans it. Only `init` and a bare `sync` need every id; the others
-      // work on one repo the caller already named.
+      // scans it, less the linked worktrees peer sync leaves alone. Only
+      // `init` and a bare `sync` need every id; the others work on one repo
+      // the caller already named.
       const launchIds = async (): Promise<string[]> =>
-        (await scanSource(launchSource(rootDir), { maxDepth: cfg.maxDepth, ignore: [...DEFAULT_IGNORE, ...cfg.ignore] })).map((r) => r.id);
+        (await scanSource(launchSource(rootDir), { maxDepth: cfg.maxDepth, ignore: [...DEFAULT_IGNORE, ...cfg.ignore] }))
+          .filter((r) => !isLinkedWorktree(r.path))
+          .map((r) => r.id);
       switch (sub) {
         case "init": {
           const ids = await launchIds();

@@ -213,9 +213,24 @@ export async function snapshotWip(
 export const gitSshCommand = (controlDir: string): string =>
   `ssh -o BatchMode=yes -o ConnectTimeout=10 -o ControlMaster=auto -o ${shellQuote(`ControlPath=${join(controlDir, "ssh-%C")}`)} -o ControlPersist=120`;
 
-/** Adds or repairs each git peer's remote. Safe to repeat. */
+/** Whether the repo at `repo` keeps a config of its own: its gitdir is its
+ *  common dir. A linked worktree's common dir is its main repo's .git, so a
+ *  remote written there would rewrite the main repo's. A checked-out
+ *  submodule or a --separate-git-dir repo keeps its gitdir somewhere else,
+ *  but that gitdir is its own common dir too, so both still pass. */
+async function ownsConfig(repo: string): Promise<boolean> {
+  const r = await git(repo, ["rev-parse", "--path-format=absolute", "--git-dir", "--git-common-dir"]);
+  if (r.code !== 0) return false;
+  const [gitDir, common] = r.stdout.trim().split("\n");
+  if (!gitDir || !common) return false;
+  try { return realpathSync(gitDir) === realpathSync(common); } catch { return false; }
+}
+
+/** Adds or repairs each git peer's remote. Safe to repeat. Writes nothing in
+ *  a repo whose config is not its own (`ownsConfig`), whatever led here. */
 export async function initRepo(repo: string, id: string, peers: Peer[], dry: boolean): Promise<void> {
   if (dry) return;
+  if (!(await ownsConfig(repo))) return;
   for (const p of peers) {
     if (p.role !== "git") continue;
     const url = peerUrl(p, id);
@@ -469,6 +484,30 @@ function commondirReal(gitDir: string): string | null | undefined {
   try { return realpathSync(target); } catch { return null; }
 }
 
+/** Whether `dir` is a linked worktree's checkout (`git worktree add`): its
+ *  `.git` is a gitfile whose gitdir has a `commondir` file. Such a checkout
+ *  shares its main repo's config, refs and objects, so a remote, a fetch or
+ *  a wip snapshot made there lands in the main repo, and a peer already
+ *  reaches its branches through that main repo. Peer sync leaves it alone.
+ *  A checked-out submodule and a --separate-git-dir repo have a gitfile
+ *  too, but it points at a full gitdir with no commondir, whose config is
+ *  their own: neither counts. A gitfile that can't be read or leads nowhere
+ *  does count, since nothing tells it apart from one. */
+export function isLinkedWorktree(dir: string): boolean {
+  const gitEntry = join(dir, ".git");
+  let st;
+  try { st = statSync(gitEntry); } catch { return false; }
+  if (!st.isFile()) return false;
+  const target = gitfileTarget(gitEntry);
+  return target === null || !existsSync(target) || existsSync(join(target, "commondir"));
+}
+
+/** the gate's answer for a linked worktree, its checkout or its gitdir */
+export const WORKTREE_NOT_SERVED = "a linked worktree is not served: peers reach its branches through its main checkout";
+
+/** a pass's answer for a linked worktree asked for by id */
+export const WORKTREE_NOT_SYNCED = "a linked worktree: peer sync covers its main checkout instead";
+
 /** Every real path a candidate repo directory leads git to once gitfiles
  *  and commondirs are followed: `dir` itself (already real), which may be a
  *  gitdir with a commondir, and `dir/.git`, which may be a gitfile pointing
@@ -509,6 +548,18 @@ function candidateReach(dir: string): string[] | null {
 function candidateEscapes(dir: string, realRoot: string): boolean {
   const reach = candidateReach(dir);
   return reach === null || reach.some((p) => escapes(realRoot, p));
+}
+
+/** What a gitfile itself, opened as a repo path, leads git to: the file and
+ *  every real path its gitdir reaches (candidateReach). Null when the file
+ *  is not a readable gitfile or its gitdir is missing, which refuses. */
+function gitfileReach(file: string): string[] | null {
+  const target = gitfileTarget(file);
+  if (target === null) return null;
+  let real: string;
+  try { real = realpathSync(target); } catch { return null; }
+  const inner = candidateReach(real);
+  return inner === null ? null : [file, ...inner];
 }
 
 /** the gate's answer for any path into the seeds dir but a seed's own */
@@ -564,6 +615,7 @@ export function safeId(root: string, id: string): string | null {
   }
   if (escapes(realRoot, realDir)) return null;
   if (candidateEscapes(realDir, realRoot)) return null;
+  if (isLinkedWorktree(realDir)) return null;
   return dir;
 }
 
@@ -592,7 +644,9 @@ export function networkOrigin(url: string): boolean {
 
 /** The repos under `root` a peer may list. A seed is listed with no origin
  *  and no git run in it (a seed never has an origin, and its config is the
- *  agents' to write), and so is any repo that leads git into one. */
+ *  agents' to write), and so is any repo that leads git into one. A linked
+ *  worktree is not listed at all: a peer would clone it as a repo of its
+ *  own, and clone it back after it is removed here. */
 export async function serveList(root: string, maxDepth = 4): Promise<PeerListing[]> {
   const out: PeerListing[] = [];
   const walk = async (dir: string, depth: number): Promise<void> => {
@@ -602,6 +656,7 @@ export async function serveList(root: string, maxDepth = 4): Promise<PeerListing
         out.push({ id, origin: null });
         return;
       }
+      if (isLinkedWorktree(dir)) return;
       const o = await git(dir, ["remote", "get-url", "origin"]);
       out.push({ id, origin: o.code === 0 ? withoutUserinfo(o.stdout.trim()) : null });
       return; // never below a repo
@@ -697,16 +752,20 @@ export function gateCommand(line: string, root: string, home: string): GateComma
       const candidate = path + suffix;
       let st;
       try { st = statSync(candidate); } catch { continue; }
-      if (!st.isDirectory()) continue;
+      // enter_repo opens a regular file it lands on as a gitfile, so a path
+      // asked for as `<checkout>/.git` is followed to its gitdir here too
+      if (!st.isDirectory() && !st.isFile()) continue;
       if (realRoot === null) {
         try { realRoot = realpathSync(root); } catch { return { error: "outside the workspace" }; } // root itself is gone
       }
       let realCandidate: string;
       try { realCandidate = realpathSync(candidate); } catch { continue; } // gone between the stat and here
       const within = realRoot;
-      const reach = candidateReach(realCandidate);
+      const reach = st.isFile() ? gitfileReach(realCandidate) : candidateReach(realCandidate);
       if (escapes(within, realCandidate) || reach === null || reach.some((p) => escapes(within, p))) return { error: "outside the workspace" };
       if (reach.some((p) => inSeeds(p, closed))) return { error: SEED_SERVED_AS };
+      // a gitdir with a commondir is a linked worktree's (isLinkedWorktree)
+      if (reach.some((p) => existsSync(join(p, "commondir")))) return { error: WORKTREE_NOT_SERVED };
     }
     return { kind: "upload-pack", path };
   }
@@ -1233,6 +1292,9 @@ export function syncRepo(id: string, opts: PassOptions, seen: PassSeen): Promise
 async function passOne(id: string, opts: PassOptions, seen: PassSeen): Promise<PeerState> {
   const repo = join(opts.root, id);
   const state: PeerState = { moved: [], diverged: [], wip: [], peerOnly: [], onlyHere: false, at: Date.now() };
+  // A linked worktree shares its main repo's refs: a snapshot or a fetch
+  // here would write into the main repo's, from a url naming the worktree.
+  if (isLinkedWorktree(repo)) return { ...state, error: WORKTREE_NOT_SYNCED };
   try {
     const own = await snapshotWip(repo, opts.self, opts.dry);
     if (own) state.ownWip = { branch: own.branch, at: own.at };
@@ -1296,7 +1358,9 @@ async function syncAllOnce(ids: string[], opts: PassOptions, concurrency: number
   const seen = new PassSeen();
   const { cloned, failed } = await cloneMissing(opts.root, opts.peers, opts.seed, opts.dry, { GIT_SSH_COMMAND: gitSshCommand(configDir()) }, opts.skip);
   const skip = opts.skip;
-  const here = skip ? ids.filter((id) => !skip(id)) : ids;
+  // A linked worktree is left out rather than answered with an error: its
+  // branches already sync through its main checkout.
+  const here = ids.filter((id) => !skip?.(id) && !isLinkedWorktree(join(opts.root, id)));
   const states = new Map<string, PeerState>();
   // In dry mode, cloneMissing lists what it would clone without making the
   // folder; syncing one of those ids would run git against a path that does
