@@ -926,8 +926,12 @@ and a hook planted there would run inside the coordinator.
 
 ```
 install -m 0600 ~/.config/canopy-stages/claude/.credentials.json ~/.config/canopy-coord/claude/.credentials.json
-install -m 0600 ~/.config/canopy-stages/claude/.claude.json ~/.config/canopy-coord/claude/.claude.json
+f=~/.config/canopy-stages/claude/.claude.json; [ -f "$f" ] && install -m 0600 "$f" ~/.config/canopy-coord/claude/.claude.json
 ```
+
+Where the stages' account file sits at `~/.config/canopy-stages/claude.json`
+instead (the stages' step 7 fallback), copy the credentials alone and log in
+once inside `coord` as below.
 
 Two copies of one Max login each refresh on their own, and when the refresh
 token rotates, the first to refresh can leave the other's copy invalid. If
