@@ -94,15 +94,15 @@ export interface ChildLanding {
 }
 
 /** How a child settled, in the words a card and its note use. */
-export type ChildOutcomeWord = "landed" | "ready" | "PR opened" | "sent back" | "failed" | "stopped" | "uncommitted" | "no change";
+export type ChildOutcomeWord = "landed" | "ready" | "PR opened" | "sent back" | "failed" | "stopped" | "uncommitted" | "plan turned down" | "no change";
 
 /** A settled child as its card's state and outcome word. Null while the
  *  child is going, or ended with its branch still being read (its first
  *  change after the end still says `working`; the next one has the state).
  *  The queue's word beats the branch's once the branch has an entry: landed
  *  is done, sent back failed, and a ready branch with a PR open is done. A
- *  branch with nothing on it is done, since an ask may only answer; one left
- *  uncommitted failed. */
+ *  branch with nothing on it is done, since an ask may only answer, unless
+ *  Eric turned its plan down; one left uncommitted failed. */
 export function childOutcome(run: Run, landing: ChildLanding = {}): { state: "done" | "failed"; outcome: ChildOutcomeWord } | null {
   if (isRunActive(run)) return null;
   if (run.status === "failed") return { state: "failed", outcome: "failed" };
@@ -116,6 +116,7 @@ export function childOutcome(run: Run, landing: ChildLanding = {}): { state: "do
   if (b === "ready") return { state: "done", outcome: "ready" };
   if (b === "uncommitted") return { state: "failed", outcome: "uncommitted" };
   if (b === "stopped") return { state: "failed", outcome: "stopped" };
+  if (run.proposalState === "turned down") return { state: "failed", outcome: "plan turned down" };
   return { state: "done", outcome: "no change" };
 }
 

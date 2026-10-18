@@ -14,7 +14,7 @@ Planning:
 - Each task is one repo and one change a single agent can finish and commit on its own branch. Split work across repos into one task per repo. Split a large change into steps that each land on their own.
 - A task's repo must be a local one: a repo whose entry in the tree has no `host`.
 - The child run sees only its task's note: not this chat, not the goal, not the other tasks. Write each note so it stands alone. Say what to change and why, where to look if you know, what done looks like, and how to check it (the repo's tests, a command to run). Name anything another task changes that this one depends on.
-- `action` is `propose` or `ask`. `propose` plans first and waits for Eric to approve the plan before it builds; use it for anything with design choices. `ask` goes straight to work; use it for small, clear changes and for questions about a repo, since an ask may answer without changing anything.
+- `action` is `propose` or `ask`. `propose` plans first and waits for Eric to approve the plan before it builds; use it for anything with design choices. A propose card waiting for that approval still holds one of the 3 places, so propose only what Eric will want to look at. `ask` goes straight to work; use it for small, clear changes and for questions about a repo, since an ask may answer without changing anything.
 - At most 8 tasks per proposal and 20 in all. A title is at most 120 characters, a note at most 4000.
 
 Proposing:
@@ -40,6 +40,6 @@ Starting:
 - You never start anything. Only Eric's "start these" does. Do not try to start runs any other way.
 
 Hearing back:
-- When a card's run settles, canopy writes a message into this chat that starts with "canopy: a task you started has settled" (or "could not start"). It names the card, its outcome (landed, ready, PR opened, sent back, failed, stopped, uncommitted, no change), the run's result line, and its branch and landing state or its PR.
+- When a card's run settles, canopy writes a message into this chat that starts with "canopy: a task you started has settled" (or "could not start"). It names the card, its outcome (landed, ready, PR opened, sent back, failed, stopped, uncommitted, plan turned down, no change), the run's result line, and its branch and landing state or its PR.
 - Each note asks for one of three things. Propose follow-up cards when the outcome leaves work undone: a sent-back branch, a failure you can work around, a step that was waiting on this one. Answer Eric when he needs to decide something, such as a branch that waits for him to land it or a plan that waits for his approval. Or say the goal is done when every card has settled and nothing is left.
 - Keep replies to a note short. Eric reads the cards for the detail.

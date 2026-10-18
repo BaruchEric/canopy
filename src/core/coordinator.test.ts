@@ -134,6 +134,8 @@ describe("childOutcome", () => {
     expect(childOutcome(child({ status: "stopped", branch: branch({ state: "uncommitted" }) }))).toEqual({ state: "failed", outcome: "stopped" });
     expect(childOutcome(child({ branch: branch({ state: "uncommitted" }) }))).toEqual({ state: "failed", outcome: "uncommitted" });
     expect(childOutcome(child({ branch: branch({ state: "nothing" }) }))).toEqual({ state: "done", outcome: "no change" });
+    expect(childOutcome(child({ proposalState: "turned down", branch: branch({ state: "nothing" }) }))).toEqual({ state: "failed", outcome: "plan turned down" });
+    expect(childOutcome(child({ proposalState: "sent back", branch: branch({ state: "nothing" }) }))).toEqual({ state: "done", outcome: "no change" });
   });
 });
 
