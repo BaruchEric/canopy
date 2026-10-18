@@ -2696,6 +2696,8 @@ async function handleApi(
   req: Request,
   url: URL,
   key: string,
+  /** who is calling, as route() read it; read once, since a ticket is spent there */
+  caller: Caller | null,
 ): Promise<Response> {
   const path = url.pathname;
   const method = req.method;
@@ -2721,7 +2723,7 @@ async function handleApi(
   if (prsRes) return prsRes;
   const triggersRes = await state.triggers.handle(req, url);
   if (triggersRes) return triggersRes;
-  const coordRes = await state.coordinator.handle(req, url, callerOf(state.callers, req, url));
+  const coordRes = await state.coordinator.handle(req, url, caller);
   if (coordRes) return coordRes;
   const healthRes = await state.health.handle(req, url);
   if (healthRes) return healthRes;
@@ -4968,7 +4970,7 @@ export async function startServer(opts: {
     }
     if (url.pathname.startsWith("/api/")) {
       try {
-        return await handleApi(state, req, url, clientKey(srv.requestIP(req)?.address ?? "127.0.0.1"));
+        return await handleApi(state, req, url, clientKey(srv.requestIP(req)?.address ?? "127.0.0.1"), caller);
       } catch (err) {
         const status =
           err instanceof HttpError || err instanceof HistoryError || err instanceof LauncherError || err instanceof PeerError
