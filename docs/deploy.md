@@ -1078,8 +1078,9 @@ sudo ip route del 10.250.14.1/32
 
 **5. Deploy.** The deploy that adds `coord-proxy` (with the fence of step
 4) changes nothing on the shells, so it needs no `--shells`: compose builds
-the `egress` image, starts `coord-proxy`, and recreates `coord` for its new
-env. Nothing else on the mini may hold 3128 on all addresses (`ss -ltn |
+the `egress` image and starts `coord-proxy`, and recreates `coord` and
+`stages`, whose image carries the changed stage runner. An incubator stage
+running then ends, so deploy while none is. Nothing else on the mini may hold 3128 on all addresses (`ss -ltn |
 grep ':3128 '` is empty first). The first deploy with `coord` adds a port to the shells, so
 it recreates the shells container and ends every shell; `bun run redeploy`
 stops with exit 3 without `--shells`. The deploy that moves the
@@ -1107,10 +1108,9 @@ docker compose exec coord curl -sS -m 5 "http://$(tailscale ip -4):7850/"   # ti
 docker compose exec coord curl -sS -m 5 https://example.com/                 # times out: no internet past the proxy (and no DNS)
 docker compose exec coord curl -sS -m 5 --noproxy '*' https://api.anthropic.com/   # times out, Anthropic included
 docker compose exec coord getent hosts example.com                           # nothing, after a wait: no DNS
-P='-x http://10.250.14.1:3128'
-docker compose exec coord curl -sS -m 8 $P -o /dev/null -w '%{http_code}\n' https://api.anthropic.com/   # a status code (404): through the proxy
-docker compose exec coord curl -sS -m 5 $P https://example.com/             # CONNECT tunnel failed, response 403
-docker compose exec coord curl -sS -m 5 $P http://example.com/              # 405: CONNECT only
+docker compose exec coord curl -sS -m 8 -x http://10.250.14.1:3128 -o /dev/null -w '%{http_code}\n' https://api.anthropic.com/   # a status code (404): through the proxy
+docker compose exec coord curl -sS -m 5 -x http://10.250.14.1:3128 https://example.com/             # CONNECT tunnel failed, response 403
+docker compose exec coord curl -sS -m 5 -x http://10.250.14.1:3128 http://example.com/              # 405: CONNECT only
 docker compose logs coord-proxy | grep refused                              # example.com and GET, once each
 ```
 
