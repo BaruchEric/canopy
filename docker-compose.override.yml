@@ -1,5 +1,7 @@
-# Mini-only, untracked: the trigger secrets canopy reads at start. The values
-# live outside the checkout, so peer sync never copies them.
+# The trigger secrets canopy reads at start, on the mini. compose loads this
+# file beside docker-compose.yml on its own. The values live outside the
+# checkout, so peer sync never copies them, and the file is optional, so a
+# host without it (the Mac, a fresh checkout) starts canopy all the same.
 services:
   canopy:
     env_file:
