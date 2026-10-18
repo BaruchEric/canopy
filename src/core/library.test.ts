@@ -3,7 +3,7 @@ import { mkdtemp, mkdir, readFile, realpath, rm, writeFile } from "node:fs/promi
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Script } from "node:vm";
-import { Library, libraryArgs, libraryOriginAllowed, openBind, tailnetHost } from "./library";
+import { coordApiHost, Library, libraryArgs, libraryOriginAllowed, openBind, tailnetHost } from "./library";
 
 interface Manifest { categories: Record<string, { projects: Array<{name: string; tags: string[]}> }>; references: Array<{title: string}> }
 let base: string;
@@ -102,6 +102,29 @@ describe("workspace library integration", () => {
     expect(libraryOriginAllowed(req("erics-macbook-pro.tail2d2c60.ts.net:7850", { "sec-fetch-site": "cross-site" }), undefined, false, listed)).toBe(false);
     // no list, no change from before
     expect(libraryOriginAllowed(req("127.0.0.1:7850", { origin: "https://canopy.beric.ca" }))).toBe(false);
+  });
+  test("the coordinator's address (CANOPY_COORD_API's host) passes by its exact host, and nothing near it does", () => {
+    const req = (host: string, headers: Record<string, string> = {}) => new Request(`http://${host}/api/about`, { headers });
+    const hosts = [coordApiHost("http://10.250.14.1:7850")].filter((h): h is string => h !== null);
+    expect(hosts).toEqual(["10.250.14.1:7850"]);
+    // curl from the coord container: no Origin, nothing marked cross-site
+    expect(libraryOriginAllowed(req("10.250.14.1:7850"), undefined, true)).toBe(false);
+    expect(libraryOriginAllowed(req("10.250.14.1:7850"), undefined, true, [], hosts)).toBe(true);
+    expect(libraryOriginAllowed(req("10.250.14.1:7850", { origin: "http://10.250.14.1:7850" }), undefined, true, [], hosts)).toBe(true);
+    // a page elsewhere, a rebound name or another port is refused
+    expect(libraryOriginAllowed(req("10.250.14.1:7850", { origin: "http://evil.example" }), undefined, true, [], hosts)).toBe(false);
+    expect(libraryOriginAllowed(req("10.250.14.1:7850", { "sec-fetch-site": "cross-site" }), undefined, true, [], hosts)).toBe(false);
+    expect(libraryOriginAllowed(req("10.250.14.1:7851"), undefined, true, [], hosts)).toBe(false);
+    expect(libraryOriginAllowed(req("10.250.14.2:7850"), undefined, true, [], hosts)).toBe(false);
+    expect(libraryOriginAllowed(req("rebound.example:7850"), undefined, true, [], hosts)).toBe(false);
+  });
+  test("coordApiHost takes an http(s) URL's host and nothing else", () => {
+    expect(coordApiHost("http://10.250.14.1:7850")).toBe("10.250.14.1:7850");
+    expect(coordApiHost(" http://10.250.14.1:7850/ ")).toBe("10.250.14.1:7850");
+    expect(coordApiHost(undefined)).toBe(null);
+    expect(coordApiHost("")).toBe(null);
+    expect(coordApiHost("10.250.14.1:7850")).toBe(null);
+    expect(coordApiHost("ftp://10.250.14.1:7850")).toBe(null);
   });
   test("a Library given origins lets its own listed ts.net page through the gate", async () => {
     const served = "https://box.tail0000.ts.net:7850";

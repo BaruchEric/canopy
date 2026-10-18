@@ -48,17 +48,22 @@ export function tailnetHost(hostname: string): boolean {
  *  (`CANOPY_ORIGINS`). A listed Origin passes even cross-site, which two
  *  tailnet names are to a browser; a request with no Origin passes when its
  *  Host is a listed origin's host and it is not marked cross-site, which is
- *  a listed page's own same-origin GET behind `tailscale serve`. */
+ *  a listed page's own same-origin GET behind `tailscale serve`.
+ *  `hosts` are exact hosts (name or address and port) a caller may name
+ *  with no Origin or its own: the coordinator's address on its bridge's
+ *  gateway (`coordApiHost`), which is neither local nor a tailnet name. */
 export function libraryOriginAllowed(
   req: Request,
   publicOrigin?: string,
   open = false,
   origins: readonly string[] = [],
+  hosts: readonly string[] = [],
 ): boolean {
   const url = new URL(req.url);
   const origin = req.headers.get("origin");
   const site = req.headers.get("sec-fetch-site");
   if (origin && origins.includes(origin)) return true;
+  if (hosts.includes(url.host) && site !== "cross-site" && (!origin || origin === url.origin)) return true;
   if (!origin && site !== "cross-site" && origins.some((o) => new URL(o).host === url.host)) return true;
   const local = ["localhost", "127.0.0.1", "[::1]"].includes(url.hostname);
   if (site === "cross-site") return false;
@@ -72,6 +77,20 @@ export function libraryOriginAllowed(
       (!origin || origin === configured.origin);
   } catch {
     return false;
+  }
+}
+
+/** The host (address and port) of `CANOPY_COORD_API`, the URL a
+ *  coordinator reaches canopy at, for the origin gate; null when it is
+ *  unset or not an http(s) URL. */
+export function coordApiHost(api: string | undefined): string | null {
+  const raw = api?.trim();
+  if (!raw) return null;
+  try {
+    const url = new URL(raw);
+    return url.protocol === "http:" || url.protocol === "https:" ? url.host : null;
+  } catch {
+    return null;
   }
 }
 

@@ -6,7 +6,7 @@
  * touches a tmux server.
  */
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, readdir, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { HealthCheck } from "../core/types";
@@ -17,7 +17,7 @@ type Up = { port: number; stop: () => void | Promise<void>; lines: string[] };
 
 let scratch: string;
 const saved: Record<string, string | undefined> = {};
-const ENV = ["CANOPY_CONFIG_DIR", "CANOPY_TMUX", "CANOPY_BIND", "CANOPY_PUBLIC_ORIGIN", "CANOPY_ORIGINS", "CANOPY_CALLERS", "CANOPY_COORD_SOCKET", "CANOPY_COORD_API"];
+const ENV = ["CANOPY_CONFIG_DIR", "CANOPY_TMUX", "CANOPY_BIND", "CANOPY_PUBLIC_ORIGIN", "CANOPY_ORIGINS", "CANOPY_CALLERS", "CANOPY_COORD_SOCKET", "CANOPY_COORD_API", "CANOPY_COORD_ROOT"];
 const LISTED = "https://canopy-mac.example";
 const EVIL = "https://evil.example";
 /** The "shell" tokens below are minted as rangers: they hold the same rights
@@ -33,6 +33,7 @@ beforeAll(async () => {
   delete process.env["CANOPY_PUBLIC_ORIGIN"];
   delete process.env["CANOPY_COORD_SOCKET"];
   delete process.env["CANOPY_COORD_API"];
+  delete process.env["CANOPY_COORD_ROOT"];
   process.env["CANOPY_ORIGINS"] = LISTED;
   const repo = join(scratch, "root", "app");
   await Bun.$`mkdir -p ${repo} && git -C ${repo} init -q`.quiet();
@@ -200,14 +201,20 @@ describe("enforce", () => {
   test("with the coordinator's env set but no runner to take it, a coordinate run waits and nothing starts", async () => {
     process.env["CANOPY_COORD_SOCKET"] = "/nonexistent/runner.sock";
     process.env["CANOPY_COORD_API"] = "http://10.250.14.1:7850";
+    const seeds = join(scratch, "coord-seeds");
+    await mkdir(seeds);
+    process.env["CANOPY_COORD_ROOT"] = seeds;
     try {
       const res = await post(s, "/api/repos/run?id=app", { action: "coordinate", note: "ship it" }, shell);
       expect(res.status).toBe(503);
       const runs = (await (await call(s, "/api/runs")).json()) as { action: string }[];
       expect(runs.filter((r) => r.action === "coordinate")).toEqual([]);
+      // the run's folder made for it goes with the refusal
+      expect(await readdir(seeds)).toEqual([]);
     } finally {
       delete process.env["CANOPY_COORD_SOCKET"];
       delete process.env["CANOPY_COORD_API"];
+      delete process.env["CANOPY_COORD_ROOT"];
     }
   });
 

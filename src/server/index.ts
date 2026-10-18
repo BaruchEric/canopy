@@ -1,12 +1,12 @@
 import { parseAnswer } from "./answers";
 import { ACTIONS, branchLine, branchPrompt, busyWith, splitMembers, type ActionSpec } from "../core/actions";
 import { PREFLIGHT_HEADERS, corsHeaders, parseOrigins } from "../core/cors";
-import { Library, libraryOriginAllowed, openBind, tailnetHost } from "../core/library";
+import { coordApiHost, Library, libraryOriginAllowed, openBind, tailnetHost } from "../core/library";
 import { PreviewProxy, parsePortRange, previewHostOk, previewable } from "../core/preview";
 import { parsePreviewHost, parsePreviewPublic } from "../core/previewPublic";
 import { listeningPorts, repoOfCwd } from "../core/ports";
 import { existsSync, watch, type FSWatcher } from "node:fs";
-import { readFile, realpath, stat } from "node:fs/promises";
+import { chmod, mkdir, readFile, realpath, rm, stat } from "node:fs/promises";
 import { arch, homedir, hostname } from "node:os";
 import { CANOPY_DIR, readBuild, readPkg } from "../core/build";
 import { AdviceFiles } from "../core/improvements";
@@ -878,11 +878,23 @@ async function startCoordinator(state: ServerState, repo: Repo, goal: string, cl
   const spec: ActionSpec = { ...ACTIONS.coordinate, task: await coordinatorBrief() };
   const by = deviceNameOf(state, typeof client === "string" ? client : null) ?? undefined;
   const id = crypto.randomUUID().slice(0, 8);
+  // its own folder under the coord runner's seeds, the same path in both
+  // containers: no checkout, nothing of the repo's
+  const seeds = process.env["CANOPY_COORD_ROOT"]?.trim();
+  if (!seeds) throw new HttpError(409, "CANOPY_COORD_ROOT is not set, so a coordinator would have no folder to start in");
+  const cwd = join(seeds, id);
+  try {
+    await mkdir(cwd, { mode: 0o700 });
+    await chmod(cwd, 0o700);
+  } catch (err) {
+    throw new HttpError(500, `could not make the coordinator's folder ${cwd}: ${String(err instanceof Error ? err.message : err)}`);
+  }
   const { token, caller } = state.callers.mint("coordinator", { label: `coordinator ${repo.id}`, run: id });
   try {
-    return state.runner.start(repo, "coordinate", spec, goal, agent, by, undefined, undefined, { id, env: { CANOPY_API: api, CANOPY_TOKEN: token } });
+    return state.runner.start(repo, "coordinate", spec, goal, agent, by, undefined, undefined, { id, cwd, env: { CANOPY_API: api, CANOPY_TOKEN: token } });
   } catch (err) {
     state.callers.revoke(caller.id).catch(() => {});
+    await rm(cwd, { recursive: true, force: true }).catch(() => {});
     if (err instanceof Error && err.name === "StageAwayError") throw err;
     throw new HttpError(400, String(err instanceof Error ? err.message : err));
   }
@@ -4045,6 +4057,9 @@ export async function startServer(opts: {
   /** `quietWait` shortens how long a stage run's or check's end waits for
    *  the stage runner to call its seed quiet, for tests */
   runner?: { driver?: (harness: Harness) => RunDriver; quietWait?: number };
+  /** the coordinator's runner: `client` in place of CANOPY_COORD_SOCKET's
+   *  (null for none), and how often it is asked whether it answers */
+  coordinator?: { client?: StageClient | null; every?: number };
   /** where the caller check's lines go (the first sign-in code, the
    *  would-refuse lines): stdout, or nowhere under `bun test` unless a test
    *  passes its own */
@@ -4101,6 +4116,16 @@ export async function startServer(opts: {
   const socket = process.env["CANOPY_STAGE_SOCKET"];
   const stage: StageClient | null = opts.incubator?.stage !== undefined ? opts.incubator.stage : socket ? new StageClient(socket) : null;
   const unisolated = opts.incubator?.unisolated ?? process.env["CANOPY_INCUBATOR_UNISOLATED"] === "1";
+  // The coordinator's runner (FR-010), a second stage runner on its own
+  // socket; none, and every coordinate run is refused
+  const coordSocket = process.env["CANOPY_COORD_SOCKET"];
+  const coord: StageClient | null = opts.coordinator?.client !== undefined ? opts.coordinator.client : coordSocket ? new StageClient(coordSocket) : null;
+  /** why the coordinator's runner may not start one though it answers: its
+   *  fence is not confirmed, in its own words; null once it is */
+  const coordUnfenced = (): string | null => {
+    const f = coord?.fenceNow();
+    return f?.fenced === true ? null : (f?.reason ?? "the coordinator's runner says nothing of its fence");
+  };
   /** Why an answering runner may not start a stage: its fence is not
    *  confirmed (no probe target, the first probe still out, or a probe that
    *  got through), in its own words. Null once its probe timed out. */
@@ -4164,10 +4189,10 @@ export async function startServer(opts: {
     stage: (repo: Repo) => isSeedPath(root, repo.path),
     stageExec: stageFor,
     stageAway,
-    // the coordinator's runner is the second stage client; until it is
-    // built here, every coordinate run refuses rather than run unisolated
-    coordExec: (): StageClient | null => null,
-    coordAway: () => (process.env["CANOPY_COORD_SOCKET"] ? "the isolated coordinator runner is not answering" : COORD_REFUSAL),
+    // the coordinator's runner is the second stage client: a coordinate run
+    // starts only while it answers behind its fence, never unisolated
+    coordExec: (): StageClient | null => (coord && coord.harnessesNow() && coordUnfenced() === null ? coord : null),
+    coordAway: () => (!coord ? COORD_REFUSAL : coord.harnessesNow() ? (coordUnfenced() ?? STAGE_AWAY) : "the isolated coordinator runner is not answering"),
     ...(opts.runner?.driver ? { driver: opts.runner.driver } : {}),
     ...(opts.runner?.quietWait !== undefined ? { quietWait: opts.runner.quietWait } : {}),
   };
@@ -4334,6 +4359,10 @@ export async function startServer(opts: {
       hostname: hostname(),
       root,
       homepage: readPkg().homepage ?? null,
+      // read at each /api/about: a runner set up that has answered a hello
+      get coordinator(): boolean {
+        return coord !== null && coord.harnessesNow() !== null;
+      },
     },
     sources: [runtime(launchSource(root)), ...extras.map((s) => runtime({ ...s, launch: false }))],
     result: { root, sources: [], repos: [], scannedAt: 0, backend: backendCaps(harnesses()) },
@@ -4739,6 +4768,10 @@ export async function startServer(opts: {
     }
   }
   const beyondLoopback = openBind();
+  // the coordinator's address on its bridge's gateway is neither local nor a
+  // tailnet name, so the gate lets that exact host through as well
+  const coordHost = coord ? coordApiHost(process.env["CANOPY_COORD_API"]) : null;
+  const coordHosts = coordHost ? [coordHost] : [];
   const library = new Library(root, publicOrigin, beyondLoopback, origins);
   // The in-app browser's ports, each listener started on first use. A
   // preview dials the backend's loopback, which in the container is the
@@ -4765,7 +4798,7 @@ export async function startServer(opts: {
     const denied = state.gate.gate(req, url, caller);
     if (denied) return denied;
     if (url.pathname === "/api/library" || url.pathname === "/library" || url.pathname.startsWith("/library/")) return library.handle(req);
-    if (url.pathname.startsWith("/api/") && !libraryOriginAllowed(req, publicOrigin, beyondLoopback, origins)) {
+    if (url.pathname.startsWith("/api/") && !libraryOriginAllowed(req, publicOrigin, beyondLoopback, origins, coordHosts)) {
       return json({ error: "Foreign origin" }, 403);
     }
     const key = clientKey(srv.requestIP(req)?.address ?? "127.0.0.1");
@@ -5135,6 +5168,15 @@ export async function startServer(opts: {
       )
     : null;
   tellStages();
+  // the coordinator's runner redials on a watch of its own, so harnessesNow
+  // and the fence stay fresh for a coordinate run's start and /api/about
+  const stopCoordWatch = coord
+    ? coord.watch(
+        opts.coordinator?.every ?? 15_000,
+        () => process.env["NODE_ENV"] !== "test" && console.log("coordinator: its runner answers"),
+        () => process.env["NODE_ENV"] !== "test" && console.log("coordinator: its runner is not answering"),
+      )
+    : null;
   // a park waits a day for its retro with nothing else happening to pump the queue
   const retroTimer = setInterval(() => state.incubator.inc.tick(), opts.incubator?.tickEvery ?? 10 * 60_000);
   const remoteTimer = setInterval(() => {
@@ -5209,6 +5251,7 @@ export async function startServer(opts: {
       clearTimeout(firstActivity);
       for (const t of state.timers.values()) clearTimeout(t);
       stopStageWatch?.();
+      stopCoordWatch?.();
       // the hook stays, answering SEED_AWAY for this root's seeds
       stopped = true;
       // before the flows stop, so their ends park no sprout

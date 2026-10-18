@@ -318,6 +318,9 @@ export interface About extends BuildInfo {
   /** the scan root the server was started on */
   root: string;
   homepage: string | null;
+  /** an isolated coordinator runner is set up (CANOPY_COORD_SOCKET) and
+   *  has answered, so a coordinate run can start here (FR-010) */
+  coordinator: boolean;
 }
 
 /** What the backend knows about one browser: the address it sees it at, and

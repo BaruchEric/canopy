@@ -491,6 +491,55 @@ describe("a stage run goes through the stage runner", () => {
     await waitFor(() => !isRunActive(co), "the run to end");
   });
 
+  test("a coordinate run starts in the folder it is given, held there and never at its repo", async () => {
+    const { plain } = await folders();
+    const runPath = join(plain.path, "..", "seeds", "co123456");
+    await mkdir(runPath, { recursive: true });
+    const { client, seen, busyAsked } = recordingClient();
+    const runner = new Runner({ onChange: () => {}, onGone: () => {} }, { stage: isSeed, coordExec: () => client, driver: localClaude });
+    const co = runner.start(plain, "coordinate", { ...ACTIONS.coordinate, task: "Task: coordinate." }, "ship it", { ...DEFAULT_AGENT }, undefined, undefined, undefined, { id: "co123456", cwd: runPath });
+    await waitFor(() => seen.length > 0, "the spawn");
+    expect(seen[0]?.cwd).toBe(runPath);
+    // its process is tracked by its own folder, so the repo is never held
+    expect(runner.liveIn(runPath)).toBe(true);
+    expect(runner.liveIn(plain.path)).toBe(false);
+    expect(runner.liveAny()).toBe(false);
+    runner.stop(co.id);
+    await waitFor(() => !isRunActive(co) && !runner.liveIn(runPath), "the run to end and its folder to go quiet");
+    expect(busyAsked).toEqual([runPath]);
+  });
+
+  test("a coordinate spawn its runner refuses for the fence ends the run as away, in the runner's words", async () => {
+    const dir = await realpath(await mkdtemp(join(tmpdir(), "canopy-runner-coordfence-")));
+    scratch.push(dir);
+    const root = join(dir, "seeds");
+    const runPath = join(root, "co123456");
+    await mkdir(runPath, { recursive: true });
+    await mkdir(join(dir, "a"));
+    const socket = join(dir, "c.sock");
+    // no probe target: the coordinator's runner refuses every spawn for its fence
+    const coord = await startStageRunner({ socket, root, env: { PATH: process.env["PATH"], HOME: dir, CANOPY_STAGE_PASS_ENV: "CANOPY_API,CANOPY_TOKEN" }, programs: { claude: "/nonexistent/claude" } });
+    /** a client that still believes the runner fenced, as one does between two hellos */
+    class Stale extends StageClient {
+      override harnessesNow(): string[] {
+        return ["claude"];
+      }
+    }
+    try {
+      const runner = new Runner(
+        { onChange: () => {}, onGone: () => {}, status: async () => null },
+        { coordExec: () => new Stale(socket), driver: () => new ClaudeDriver({ command: ["/nonexistent/claude"] }) },
+      );
+      const co = runner.start(repo("a", join(dir, "a")), "coordinate", { ...ACTIONS.coordinate, task: "Task: coordinate." }, "ship it", { ...DEFAULT_AGENT, yolo: true }, undefined, undefined, undefined, { id: "co123456", cwd: runPath });
+      await waitFor(() => !isRunActive(co) && !runner.liveIn(runPath), "the run to end");
+      expect(co.status).toBe("failed");
+      expect(co.away).toBe(true);
+      expect(co.error).toBe("the fence is unchecked: set CANOPY_FENCE_PROBE");
+    } finally {
+      await coord.stop();
+    }
+  }, 20_000);
+
   test("a coordinate run whose runner is away or not set up refuses in coordAway's words", () => {
     const why = "the coordinator runs only where an isolated coordinator runner is set up";
     const runner = new Runner({ onChange: () => {}, onGone: () => {} }, { coordExec: () => null, coordAway: () => why, driver: (h) => new FakeDriver(h) });

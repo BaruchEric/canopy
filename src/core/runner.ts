@@ -60,6 +60,9 @@ export interface StartExtras {
   /** more names for the run's process, over `runEnv`'s; they reach it
    *  through a stage spawn's filter too (`DriveCtx.pass`) */
   env?: Record<string, string>;
+  /** where the run's process starts, in place of the repo's checkout: a
+   *  coordinator's own folder under its runner's seeds */
+  cwd?: string;
 }
 
 export { claudeBinary, cliArgs } from "./claudedrive";
@@ -178,6 +181,9 @@ export class Runner {
   private live = new Map<string, Live>();
   /** repo path → how many stage processes are alive there */
   private procs = new Map<string, number>();
+  /** a coordinator's folder → how many of its processes are alive there;
+   *  apart from `procs`, since a coordinator holds no seed or repo */
+  private coordProcs = new Map<string, number>();
   /** every seed a stage run left still busy, let go of on `stopAll` */
   private holds = new Set<QuietHold>();
 
@@ -219,12 +225,13 @@ export class Runner {
     return [...this.live.values()].map((l) => l.ctx.run).filter((r) => r.repoId === repoId && r.branch && isRunActive(r));
   }
 
-  /** Whether a stage run's process is alive in the repo at `path`: from its
+  /** Whether a stage run's process (or a coordinator's, by its folder) is
+   *  alive in the repo at `path`: from its
    *  spawn until it has exited and the stage runner says nothing is left
    *  running there, past `quietWait` while the runner keeps saying busy.
    *  The run's end-of-run status read waits for that. */
   liveIn(path: string): boolean {
-    return (this.procs.get(path) ?? 0) > 0;
+    return (this.procs.get(path) ?? 0) > 0 || (this.coordProcs.get(path) ?? 0) > 0;
   }
 
   /** Whether anything of the stages is alive anywhere: a stage run that is
@@ -292,7 +299,7 @@ export class Runner {
     }
     const stage = this.opts.stage?.(repo) ?? false;
     if (branch && stage) throw new Error("an incubator stage works in its seed, not on a branch");
-    const cwd = branch ? branch.branch.dir : repo.path;
+    const cwd = extras.cwd ?? (branch ? branch.branch.dir : repo.path);
     // a coordinator runs through its own runner, never the stages'
     const client = coordinate ? (this.opts.coordExec?.() ?? null) : stage && this.opts.stageExec ? this.opts.stageExec() : undefined;
     if (client === null) throw new StageAwayError(coordinate ? this.opts.coordAway?.() : this.opts.stageAway?.());
@@ -325,7 +332,9 @@ export class Runner {
     // a rule kept on one seed, or for one step, must not hold for the next.
     // A branch run's rules are judged by its worktree, so a repo rule kept
     // for the checkout's path does not answer there.
-    const remember = stage ? null : this.rememberHook(run, cwd);
+    // nor does a coordinator's, which runs with its permissions bypassed in
+    // a folder no rule was kept for
+    const remember = stage || coordinate ? null : this.rememberHook(run, cwd);
     const driveSpec = { ...spec, ...(scope ? { addDirs: scope.others } : {}), ...(branch?.resume ? { resume: branch.resume } : {}) };
     const ctx = new RunCtx(
       run,
@@ -341,6 +350,9 @@ export class Runner {
         ...(client ? { spawn: client.spawn } : {}),
         // `live` is set before the driver starts anything
         ...(stage ? { track: (proc: RpcProc) => this.track(live, repo.path, proc, client) } : {}),
+        // a coordinator's process is tracked like a stage's, by its own
+        // folder: a spawn its runner refuses for the fence ends the run away
+        ...(coordinate && client ? { track: (proc: RpcProc) => this.track(live, cwd, proc, client, this.coordProcs) } : {}),
       },
       // `live` is read only once the run has ended, long after it is set
       { emit: (r) => this.hooks.onChange(r), ended: () => void this.settle(live) },
@@ -544,9 +556,11 @@ export class Runner {
   /** Holds the seed busy (`liveIn`) for one of a stage run's processes.
    *  The proc handed back resolves `exited` only once the process is gone
    *  and, through the stage runner, nothing else runs in the seed, so the
-   *  driver's exit and the status read after it both find the seed quiet. */
-  private track(live: Live, path: string, proc: RpcProc, client: StageClient | undefined): RpcProc {
-    this.procs.set(path, (this.procs.get(path) ?? 0) + 1);
+   *  driver's exit and the status read after it both find the seed quiet.
+   *  A coordinator's processes count in `coordProcs` by its own folder,
+   *  which `liveIn` sees and `liveAny` does not. */
+  private track(live: Live, path: string, proc: RpcProc, client: StageClient | undefined, counts = this.procs): RpcProc {
+    counts.set(path, (counts.get(path) ?? 0) + 1);
     const exited = (async () => {
       try {
         const code = await proc.exited;
@@ -572,9 +586,9 @@ export class Runner {
         // the stage runner still says something runs there
         const hold = client ? holdQuiet(client, path, this.opts.quietWait ?? QUIET_WAIT, "runner") : null;
         const drop = (): void => {
-          const n = (this.procs.get(path) ?? 1) - 1;
-          if (n > 0) this.procs.set(path, n);
-          else this.procs.delete(path);
+          const n = (counts.get(path) ?? 1) - 1;
+          if (n > 0) counts.set(path, n);
+          else counts.delete(path);
         };
         if (hold) {
           this.holds.add(hold);
