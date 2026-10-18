@@ -116,6 +116,10 @@ const busy = {
     { id: "r1", repoId: "web/app", verb: "fix", status: "working", progress: "editing" },
     { id: "r2", repoId: "web/site", verb: "ask", status: "waiting", progress: "" },
     { id: "r3", repoId: "web/app", verb: "fix", status: "done", progress: "" },
+    // a coordinator between turns with cards still to start or still working
+    { id: "r4", repoId: "web/app", action: "coordinate", verb: "coordinate", status: "idle", progress: "", tasks: [{ state: "queued" }, { state: "running" }, { state: "done" }] },
+    // and one whose cards all settled or wait for start these
+    { id: "r5", repoId: "web/site", action: "coordinate", verb: "coordinate", status: "idle", progress: "", tasks: [{ state: "proposed" }, { state: "done" }] },
   ],
   flows: [
     { id: "f1", repoId: "tools/cli", verb: "ship", status: "working", current: 1, steps: [{ name: "Build" }, { name: "Gates" }] },
@@ -134,7 +138,7 @@ const busy = {
     ],
   },
 };
-const idle = { runs: [busy.runs[2]], flows: [busy.flows[1]], fleets: [busy.fleets[1]], landing: { ...busy.landing, entries: [busy.landing.entries[2]] } };
+const idle = { runs: [busy.runs[2], busy.runs[4]], flows: [busy.flows[1]], fleets: [busy.fleets[1]], landing: { ...busy.landing, entries: [busy.landing.entries[2]] } };
 
 for (const [name, opts, expected] of [
   ["stops with exit 4 naming the work a recreate cuts off", { plan: recreate, api: busy }, { code: 4, asked: true, up: false }],
@@ -198,11 +202,12 @@ job
       if (expected.code === 4) {
         expect(stdout).toContain("  run r1  web/app  fix, editing");
         expect(stdout).toContain("  run r2  web/site  ask, waiting on a prompt");
+        expect(stdout).toContain("  run r4  web/app  coordinate, idle with 2 cards queued or running");
         expect(stdout).toContain("  flow f1  tools/cli  ship, at step Gates");
         expect(stdout).toContain("  fleet fl1  a, b, c and 2 more  bump");
         expect(stdout).toContain("  landing l1  web/app  gate (typecheck), run/x");
         expect(stdout).toContain("--force");
-        for (const quiet of ["r3", "f2", "fl2", "l2", "l3"]) expect(stdout).not.toContain(` ${quiet} `);
+        for (const quiet of ["r3", "r5", "f2", "fl2", "l2", "l3"]) expect(stdout).not.toContain(` ${quiet} `);
       }
     } finally {
       await rm(logs, { recursive: true, force: true });

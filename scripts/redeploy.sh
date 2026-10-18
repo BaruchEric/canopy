@@ -17,7 +17,8 @@
 #   --restart recreate the canopy container even when the deploy changes
 #             nothing in it; the shells stay
 #   --force   go ahead when recreating the canopy container would cut off
-#             work it has going (runs, flows, fleets, the landing queue);
+#             work it has going (runs, coordinators' cards, flows, fleets,
+#             the landing queue);
 #             it does not stand in for --shells
 #   --expect  refuse unless the checkout's HEAD is this commit after pulling
 #   status    what is deployed and running
@@ -217,8 +218,8 @@ job() {
     echo "recreating the shells container: every shell ends"
   fi
   # Recreating canopy cuts off what it has going: a run working or waiting on
-  # a prompt, a flow or fleet mid-step, a landing entry rebasing, in setup, at
-  # its gate or landing. Any of those stops the deploy with exit 4 unless
+  # a prompt, a coordinator with cards queued or running, a flow or fleet
+  # mid-step, a landing entry rebasing, in setup, at its gate or landing. Any of those stops the deploy with exit 4 unless
   # --force. Only a plan that leaves canopy running as it is (the same commit
   # rebuilds to the same image) without --restart skips the check; a plan
   # this cannot read is checked. A canopy that does not answer has nothing going.
@@ -243,9 +244,13 @@ job() {
       return 1
     else
       # a route that does not answer (an older backend) has nothing going
+      # a coordinator between turns still has work going while any of its
+      # cards is queued or running: recreating canopy drops its queue
       work=$(
-        jq -r '.[] | select(.status == "working" or .status == "waiting")
+        jq -r '.[] | ([.tasks[]? | select(.state == "queued" or .state == "running")] | length) as $cards
+          | select(.status == "working" or .status == "waiting" or (.action == "coordinate" and .status == "idle" and $cards > 0))
           | "  run \(.id)  \(.repoId)  \(.verb), \(if .status == "waiting" then "waiting on a prompt"
+            elif .status == "idle" then "idle with \($cards) card\(if $cards == 1 then "" else "s" end) queued or running"
             elif (.progress // "") != "" then .progress else "working" end)"' <<<"$runs"
         curl -fsS -m 10 "http://$addr/api/flows" 2>/dev/null | jq -r '.[] | select(.status == "working" or .status == "waiting")
           | "  flow \(.id)  \(.repoId)  \(.verb), at step \(.steps[.current].name // .current)\(if .status == "waiting" then ", waiting on a prompt" else "" end)"'
